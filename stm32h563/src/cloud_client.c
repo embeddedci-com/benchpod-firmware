@@ -658,6 +658,7 @@ static bool cl_send_capabilities(void) {
         "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
         "\"dac_cotrig\":%s,"
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"power_profile\":true,"
+        "\"capture_b64\":true,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),

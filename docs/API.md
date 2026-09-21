@@ -120,6 +120,15 @@ Commands that return large arrays (`capture`, `stream`) send the data in multipl
 
 A client must read until it receives a packet with `"more":false` to know the transfer is complete.
 
+#### Base64 samples (`"enc":"b64"`)
+
+Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. `status.caps` contains `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
+
+```json
+{"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
+{"status":"chunk", "b64":"NBL_f...", "more":false}\n
+```
+
 ---
 
 ## Commands
@@ -843,7 +852,7 @@ Returns current firmware version, WiFi connection state, and IP address. No para
 | `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the three features that differ between the two boards — the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if the strap was not measured — e.g. a v2 pod, where the pad is not connected). Diagnostic only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
-| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+). The last two depend on the **running** gateware image, so they can appear and disappear across an image swap. |
+| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64). The last two depend on the **running** gateware image, so they can appear and disappear across an image swap. |
 
 #### `wifi` state values
 

@@ -233,6 +233,7 @@ static struct {
     int    conn_id;
     size_t samples;
     bool   stop_dac;   /* measure: stop the DAC sequencer once captured */
+    bool   b64;        /* reply dense samples as base64 ("enc":"b64", see bulk.b64) */
 } v2cap;
 
 /* ---- v2 async deep LA→PSRAM capture ----
@@ -258,6 +259,7 @@ static struct {
     float  adc_rate_hz;   /* ACHIEVED rates (24MHz/divider), not the requested ones — */
     float  la_rate_hz;    /* the server needs these for a correct, aligned timebase.   */
     bool   stop_dac;      /* HW-cut a concurrently-running DAC during this capture; free it after */
+    bool   b64;           /* reply the ADC region as base64 ("enc":"b64", see bulk.b64) */
 } dualcap;
 
 /* ---- Resume support for a stalled capture_dual read-back ----
@@ -365,7 +367,25 @@ static struct {
     bool     trig_present;/* this capture was triggered: the LAST chunk carries "trigger":{...} */
     la_trigger_t trig;
     bool     trig_fired;
+    bool     b64;         /* dense 16-bit chunks carry "b64":"<base64url of little-endian
+                             uint16>" instead of "data":[decimal,...] (see wants_b64) */
 } bulk;
+
+/* ---- compact dense read-back ("enc":"b64", advertised as caps[] "capture_b64") ----
+   Decimal JSON costs up to 6 B per 16-bit sample ("65535,") plus a snprintf per sample, and
+   that text, not the capture, was the read-back bottleneck (2M ADC samples = ~12 MB).  Base64url
+   (unpadded, RFC 4648 §5) of the raw little-endian words is 8/3 B per sample, a fixed cost, and
+   stays inside the same newline-delimited JSON chunk, so the LAN socket, the USB console and the
+   cloud tunnel all carry it unchanged.  It is OPT-IN per request: a client that does not send
+   "enc":"b64" (older SDKs, the server) keeps getting "data":[...].  Only the dense region
+   changes; LA run-length frames ("la_edges") are already compact and stay as they are. */
+static bool wants_b64(const char *json) {
+    char enc[8] = {0};
+    return json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "b64") == 0;
+}
+/* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_rate_hz":NNNNNNNNNN,
+   "la_rate_hz":NNNNNNNNNN,"b64":" is 91 B. */
+#define BULK_B64_HEADER_MAX 96u
 
 /* ---- capture trigger (gateware >= CAPTURE_TRIGGER_MIN_GW) -----------------
    A triggered capture's producers load on the arm but do not sample until the fabric sees
@@ -486,6 +506,7 @@ static void bulk_begin(int conn_id, size_t total, bool is16) {
     bulk.adc_samples = 0;
     bulk.adc_rate_hz = 0;   /* default: omit; a rate-aware caller sets these after */
     bulk.la_rate_hz  = 0;
+    bulk.b64         = false;   /* default: decimal; an "enc":"b64" caller sets it after */
     bulk_take_trigger();
 }
 
@@ -506,6 +527,7 @@ static void bulk_begin_capture16(int conn_id, size_t adc_samples, size_t la_samp
     bulk.adc_rate_hz = 0;
     bulk.la_rate_hz  = 0;
     bulk.la_last     = -1;   /* LA region streams transitions; first LA sample is an edge */
+    bulk.b64         = false;
     bulk_take_trigger();
 }
 
@@ -525,6 +547,7 @@ static void bulk_begin_capture16_resume(int conn_id, size_t offset) {
     bulk.la_rate_hz  = last_cap.la_rate_hz;
     bulk.la_last     = -1;   /* re-reading LA from `offset`: emit its first sample as an edge */
     bulk.trig_present = false;   /* a resume is a read-back, not a capture: no trigger outcome */
+    bulk.b64         = false;
 }
 
 
@@ -608,8 +631,15 @@ static void bulk_pump(void) {
         }
 
         size_t reserve = bulk_footer_reserve();
-        if (avail <= reserve + 7) return;
-        size_t room = (avail - reserve) / 7;       /* samples that fit right now */
+        size_t room;                               /* samples that fit right now */
+        if (bulk.b64 && bulk.is16) {
+            /* 2 B/sample -> 8/3 chars: whole samples in (avail - framing) chars. */
+            if (avail <= reserve + BULK_B64_HEADER_MAX + 8) return;
+            room = (avail - reserve - BULK_B64_HEADER_MAX) * 3u / 8u;
+        } else {
+            if (avail <= reserve + 7) return;
+            room = (avail - reserve) / 7;
+        }
         if (room == 0) return;
         size_t remaining  = bulk.total - bulk.sent;
         size_t this_chunk = remaining < CHUNK_SAMPLES ? remaining : CHUNK_SAMPLES;
@@ -652,19 +682,29 @@ static void bulk_pump(void) {
             if (bulk.la_rate_hz)
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
                                 "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
-            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"data\":[");
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
+                            (bulk.b64 && bulk.is16) ? "\"b64\":\"" : "\"data\":[");
         } else {
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                            "{\"status\":\"chunk\",\"data\":[");
+                            (bulk.b64 && bulk.is16) ? "{\"status\":\"chunk\",\"b64\":\""
+                                                    : "{\"status\":\"chunk\",\"data\":[");
         }
-        for (size_t i = 0; i < this_chunk; i++) {
-            unsigned v = bulk.from_psram ? (bulk.is16 ? psram_chunk16[i] : psram_chunk[i])
-                       : bulk.is16       ? adc_buf16[bulk.sent + i]
-                                         : adc_cmd_buf[bulk.sent + i];
-            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                            "%u%s", v, (i < this_chunk - 1) ? "," : "");
+        if (bulk.b64 && bulk.is16) {
+            /* The words are already little-endian in memory (Cortex-M33), so encode them as is. */
+            const uint16_t *w = bulk.from_psram ? psram_chunk16 : &adc_buf16[bulk.sent];
+            pos += (int)b64url_encode((const uint8_t *)w, this_chunk * 2u,
+                                      chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos);
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"");
+        } else {
+            for (size_t i = 0; i < this_chunk; i++) {
+                unsigned v = bulk.from_psram ? (bulk.is16 ? psram_chunk16[i] : psram_chunk[i])
+                           : bulk.is16       ? adc_buf16[bulk.sent + i]
+                                             : adc_cmd_buf[bulk.sent + i];
+                pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
+                                "%u%s", v, (i < this_chunk - 1) ? "," : "");
+            }
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "]");
         }
-        pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "]");
         if (last) pos += bulk_emit_trigger(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos);
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
                         ",\"more\":%s}\n", last ? "false" : "true");
@@ -956,6 +996,7 @@ void command_handler_poll(void) {
             if (stopdac) dac_stop();           /* measure: release the DAC loop */
             if (r > 0) {
                 bulk_begin(cid, nsamp, true);  /* paced send; frees the gate when done */
+                bulk.b64 = v2cap.b64;
             } else {
                 trig_reply.present = false;
                 send_error(cid, "capture failed");
@@ -1044,6 +1085,7 @@ void command_handler_poll(void) {
                 last_cap.adc_rate_hz = adc_n ? adc_hz : 0;
                 last_cap.la_rate_hz  = la_n  ? la_hz  : 0;
                 bulk_begin_capture16(cid, adc_n, la_n);   /* paced send; frees bus+gate when done */
+                bulk.b64 = dualcap.b64;
                 /* report the ACHIEVED rates (0 for a stream with 0 samples) so the
                    server can label each lane's timebase correctly + aligned. */
                 bulk.adc_rate_hz = adc_n ? adc_hz : 0;
@@ -1239,6 +1281,7 @@ static void handle_capture(int conn_id, const char *json) {
     v2cap.conn_id  = conn_id;
     v2cap.samples  = samples;
     v2cap.stop_dac = false;
+    v2cap.b64      = wants_b64(json);
     replay_len     = samples;
     return;            /* gate stays claimed until poll completes it */
 }
@@ -1330,6 +1373,7 @@ static void handle_capture_dual(int conn_id, const char *json) {
     dualcap.adc_rate_hz = adc_actual;   /* achieved rates -> reported in the reply */
     dualcap.la_rate_hz  = la_actual;
     dualcap.stop_dac    = stop_dac_armed;   /* free the HW-cut DAC when this capture completes */
+    dualcap.b64         = wants_b64(json);
     /* Log the ACHIEVED rate as integer kHz — newlib-nano's printf has no %f, so the
        old "@%.3fMS/s" silently printed nothing (the frequency vanished from the
        console). Integer kHz via %lu prints correctly. */
@@ -1365,6 +1409,7 @@ static void handle_capture_read(int conn_id, const char *json) {
     }
     psram_bus_acquire();                              /* hold the bus for the read-back */
     bulk_begin_capture16_resume(conn_id, offset);
+    bulk.b64 = wants_b64(json);
     printf("[cmd] capture_read: resuming from %u/%u samples over websocket...\n",
            (unsigned)offset, (unsigned)total);
 }
@@ -1393,6 +1438,7 @@ static void handle_stream(int conn_id, const char *json) {
     v2cap.conn_id  = conn_id;
     v2cap.samples  = samples;
     v2cap.stop_dac = false;
+    v2cap.b64      = wants_b64(json);
     replay_len     = samples;
 }
 
@@ -1469,6 +1515,7 @@ static void handle_test(int conn_id, const char *json) {
            pattern, (unsigned)samples);
 
     bulk_begin(conn_id, samples, true);   /* paced send; frees the gate when done */
+    bulk.b64 = wants_b64(json);
 }
 
 static void handle_measure(int conn_id, const char *json) {
@@ -1522,6 +1569,7 @@ static void handle_measure(int conn_id, const char *json) {
     v2cap.conn_id  = conn_id;
     v2cap.samples  = samples;
     v2cap.stop_dac = true;
+    v2cap.b64      = wants_b64(json);
     replay_len     = samples;
 }
 
@@ -2076,7 +2124,7 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\"");
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
