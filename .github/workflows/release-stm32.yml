@@ -80,6 +80,22 @@ jobs:
             https://github.com/STMicroelectronics/STM32CubeH5.git \
             "${{ runner.temp }}/STM32CubeH5"
 
+      # The STM32 build .incbin's the ESP32-C3 esp-hosted slave image; it's a
+      # vendored binary and intentionally not committed (gitignored *.bin), so a
+      # fresh checkout must produce it first (stm32h563/Makefile, `fetch` target)
+      # or the STM32 build fails loudly asking for exactly this. Cache it keyed on
+      # the build recipe so only a recipe change re-runs the ESP-IDF Docker build.
+      - name: Cache ESP32-C3 esp-hosted slave image
+        id: esp-slave-cache
+        uses: actions/cache@v6
+        with:
+          path: esp32-hosted-slave/prebuilt
+          key: esp32c3-hosted-slave-${{ hashFiles('esp32-hosted-slave/build.sh', 'esp32-hosted-slave/sdkconfig.defaults*') }}
+
+      - name: Build ESP32-C3 esp-hosted slave image
+        if: steps.esp-slave-cache.outputs.cache-hit != 'true'
+        run: make -C stm32h563 fetch
+
       # BOTH runtime images (image 0 = closed-loop, image 1 = deep DAC replay) on their
       # pinned seeds — what pods run and what hardware verification covers.  The default `make`
       # target builds a single image, and the firmware then embeds only that one, so
