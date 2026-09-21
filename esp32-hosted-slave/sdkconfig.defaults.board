@@ -8,3 +8,12 @@
 CONFIG_ESP_SPI_HOST_INTERFACE=y
 CONFIG_ESP_SPI_GPIO_HANDSHAKE=0
 CONFIG_ESP_SPI_GPIO_DATA_READY=1
+
+# Without this, ESP-IDF embeds the compile date/time (__DATE__/__TIME__) into the
+# app image header, so two builds of identical source at different times produce
+# different bytes and `make fetch`'s sha256 check (build.sh / Makefile `fetch`)
+# can never pass on a fresh rebuild — only a byte-for-byte copy of the committed
+# blob. This is the file build.sh actually copies into the project (sdkconfig.defaults
+# at repo top level is not read by the build — its settings just happen to already
+# match the upstream template's defaults).
+CONFIG_APP_REPRODUCIBLE_BUILD=y
