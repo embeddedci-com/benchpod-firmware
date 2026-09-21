@@ -105,8 +105,26 @@ jobs:
           key: esp32c3-hosted-slave-${{ hashFiles('esp32-hosted-slave/build.sh', 'esp32-hosted-slave/sdkconfig.defaults*') }}
 
       - name: Build ESP32-C3 esp-hosted slave image
+        id: esp-slave-build
         if: steps.esp-slave-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: make -C stm32h563 fetch
+
+      # TEMPORARY debug aid: the sha256 check has failed on CI even with a pinned
+      # dependencies.lock, despite matching locally. Upload the actual bytes so they
+      # can be diffed against a local build instead of guessing further. Remove once
+      # root-caused.
+      - name: Upload ESP32-C3 build artifact for diffing
+        if: always() && steps.esp-slave-build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32c3-hosted-slave-ci-build
+          path: esp32-hosted-slave/prebuilt/
+          retention-days: 3
+
+      - name: Fail if ESP32-C3 build actually failed
+        if: steps.esp-slave-build.outcome == 'failure'
+        run: exit 1
 
       # BOTH runtime images (image 0 = closed-loop, image 1 = deep DAC replay) on their
       # pinned seeds — what pods run and what hardware verification covers.  The default `make`
