@@ -73,6 +73,7 @@ static void net_task(void *arg)
 {
     (void)arg;
     const bool safe = boot_guard_safe_mode();
+    boot_guard_test_loop_point();   /* no-op unless `test-bootloop` armed it */
     if (!safe) {
         boot_guard_stage(BOOT_STAGE_NET_INIT);
         net_init();

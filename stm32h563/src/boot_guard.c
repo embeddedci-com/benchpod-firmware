@@ -24,7 +24,7 @@ static const char *const s_names[BOOT_STAGE_COUNT] = {
     [BOOT_STAGE_EARLY_HW]  = "early hardware",
     [BOOT_STAGE_IDENTITY]  = "device identity",
     [BOOT_STAGE_USB]       = "usb",
-    [BOOT_STAGE_SCHEDULER] = "scheduler",
+    [BOOT_STAGE_SCHEDULER] = "starting tasks",
     [BOOT_STAGE_NET_INIT]  = "network",
     [BOOT_STAGE_HW_INIT]   = "ice40/psram",
     [BOOT_STAGE_RUNNING]   = "running",
@@ -78,3 +78,26 @@ bool boot_hw_ready(void) { return s_hw_ready; }
 
 /* Called by boot_deferred_hw_init() when it is done. */
 void boot_guard_set_hw_ready(void) { s_hw_ready = true; }
+
+/* ---- deliberate boot-loop test (console: test-bootloop) ----------------------------------- */
+#define BOOT_TEST_MAGIC 0x544c4f4fu   /* "TLOO" */
+static volatile uint32_t s_test_magic __attribute__((section(".noinit")));
+static volatile uint32_t s_test_left __attribute__((section(".noinit")));
+
+void boot_guard_arm_test_loop(uint32_t boots) {
+    s_test_left = boots;
+    s_test_magic = BOOT_TEST_MAGIC;
+    __DSB();
+}
+
+void boot_guard_test_loop_point(void) {
+    if (s_test_magic != BOOT_TEST_MAGIC) return;
+    if (s_safe || s_test_left == 0) {   /* safe mode reached (or done): the test is over */
+        s_test_magic = 0;
+        return;
+    }
+    s_test_left--;
+    __DSB();
+    printf("[boot] test-bootloop: crashing on purpose (%lu more)\r\n", (unsigned long)s_test_left);
+    __builtin_trap();   /* a real fault, recorded like any other */
+}

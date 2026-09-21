@@ -23,6 +23,7 @@
 #include "lwip/netif.h"
 #include "netif/etharp.h"
 #include "ethernetif.h"
+#include "board_uid.h"
 #include "lan8742.h"
 #include "board_pins.h"
 #include <string.h>
@@ -126,15 +127,11 @@ void pbuf_free_custom(struct pbuf *p);
    whose other five bytes hash the STM32's 96-bit unique device ID.  A fixed address made every
    pod on a LAN share one MAC, so two pods fought over a single DHCP lease.  Stable across
    reboots and reflashes (the UID is factory-programmed).
-   The UID is read as three 32-bit WORDS, as usbd_desc.c does for the USB serial number: an
-   earlier byte-wise read of this area crashed the pod on every boot. */
+   The UID is read as whole words through board_uid.h. */
 static void board_eth_mac(uint8_t mac[6])
 {
-  const uint32_t w[3] = {
-    *(const volatile uint32_t *)(UID_BASE),
-    *(const volatile uint32_t *)(UID_BASE + 4U),
-    *(const volatile uint32_t *)(UID_BASE + 8U),
-  };
+  uint32_t w[3];
+  board_uid_words(w);   /* whole words: see board_uid.h */
   uint32_t h = 2166136261u;                    /* FNV-1a over the 12 UID bytes */
   for (int i = 0; i < 3; i++) {
     for (int b = 0; b < 4; b++) {

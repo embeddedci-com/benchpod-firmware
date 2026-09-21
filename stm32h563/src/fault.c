@@ -1,5 +1,7 @@
 #include "fault.h"
 #include "stm32h5xx_hal.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -25,14 +27,31 @@ static fault_record_t s_rec __attribute__((section(".noinit")));
 static const char *volatile s_task_hint;
 
 static char s_reset_str[24] = "unknown";
-static char s_crash_str[96] = "none";
+static char s_crash_str[144] = "none";
 static int  s_was_iwdg;
 
 void fault_set_task_hint(const char *name) { s_task_hint = name; }
 
-/* Copy the task hint into the record (fault context — no allocation, bounded). */
+/* "0x%08lx" into a static buffer (the crash summary is built once, at boot). */
+static const char *addr_str(uint32_t v) {
+    static char b[12];
+    snprintf(b, sizeof(b), "0x%08lx", (unsigned long)v);
+    return b;
+}
+
+/* Copy the crashing task's name into the record (fault context: no allocation, bounded).
+   It is the task that was RUNNING (FreeRTOS's current task), not the last one to send a
+   watchdog heartbeat: the hint named "net" for a fault in the hw worker during the v3
+   bring-up.  Before the scheduler runs there is no task: "boot".  The hint is the fallback. */
 static void record_task_name(void) {
-    const char *n = s_task_hint;
+    const char *n = NULL;
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        n = "boot";
+    } else {
+        TaskHandle_t cur = xTaskGetCurrentTaskHandle();   /* a plain read, safe here */
+        if (cur) n = pcTaskGetName(cur);
+    }
+    if (!n) n = s_task_hint;
     if (!n) { s_rec.task[0] = '\0'; return; }
     size_t i = 0;
     for (; n[i] && i < sizeof(s_rec.task) - 1; i++) s_rec.task[i] = n[i];
@@ -130,10 +149,14 @@ void fault_boot_init(void) {
 
     if (s_rec.magic == FAULT_MAGIC) {
         snprintf(s_crash_str, sizeof(s_crash_str),
-                 "%s pc=0x%08lx lr=0x%08lx cfsr=0x%08lx task=%s",
+                 "%s pc=0x%08lx lr=0x%08lx cfsr=0x%08lx hfsr=0x%08lx%s%s task=%s",
                  reason_name(s_rec.reason),
                  (unsigned long)s_rec.pc, (unsigned long)s_rec.lr,
-                 (unsigned long)s_rec.cfsr,
+                 (unsigned long)s_rec.cfsr, (unsigned long)s_rec.hfsr,
+                 /* BFAR/MMFAR hold an address only when CFSR says so; otherwise they are
+                    stale and would point the reader at a bogus location. */
+                 (s_rec.cfsr & SCB_CFSR_BFARVALID_Msk) ? " bfar=" : "",
+                 (s_rec.cfsr & SCB_CFSR_BFARVALID_Msk) ? addr_str(s_rec.bfar) : "",
                  s_rec.task[0] ? s_rec.task : "?");
         /* Leave the record in place so the summary persists across subsequent
            clean reboots until the next crash overwrites it, but clear the magic

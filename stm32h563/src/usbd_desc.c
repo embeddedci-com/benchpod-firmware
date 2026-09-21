@@ -4,6 +4,7 @@
  */
 #include "usbd_core.h"
 #include "usbd_desc.h"
+#include "board_uid.h"
 #include "usbd_conf.h"
 
 #define USBD_VID            0x0483
@@ -69,9 +70,9 @@ static void IntToUnicode(uint32_t value, uint8_t *pbuf, uint8_t len)
 
 static void Get_SerialNum(void)
 {
-    uint32_t d0 = *(uint32_t *)(UID_BASE);
-    uint32_t d1 = *(uint32_t *)(UID_BASE + 4U);
-    uint32_t d2 = *(uint32_t *)(UID_BASE + 8U);
+    uint32_t uid[3];
+    board_uid_words(uid);
+    uint32_t d0 = uid[0], d1 = uid[1], d2 = uid[2];
     d0 += d2;
     if (d0 != 0U) {
         IntToUnicode(d0, &USBD_StringSerial[2], 8U);

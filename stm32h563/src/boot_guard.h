@@ -2,6 +2,7 @@
 #define BOOT_GUARD_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* ============================================================================
  * boot_guard: a pod must always come back with a USB console, whatever breaks.
@@ -41,6 +42,12 @@ bool boot_guard_safe_mode(void);
 void boot_guard_healthy(void);
 /* "" normally; in safe mode a one-line reason for `status`. */
 const char *boot_guard_report(void);
+
+/* Test the safeguard itself: make the next `boots` boots crash in the net task (as the
+   byte-wise UID read did), so safe mode must engage.  Console: test-bootloop. */
+void boot_guard_arm_test_loop(uint32_t boots);
+/* Called by the net task after the safe-mode check: crashes while a test loop is armed. */
+void boot_guard_test_loop_point(void);
 
 /* Deferred hardware bring-up (iCE40, PSRAM, self-test), run once on the hw worker task. */
 void boot_deferred_hw_init(void);

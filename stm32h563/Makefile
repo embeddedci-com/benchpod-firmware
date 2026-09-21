@@ -335,8 +335,17 @@ fetch:
 	@echo "==> OK: $(ESP_SLAVE_BIN)"
 
 .PHONY: all flash flash-dfu flash-dfu-code flash-dfu-blobs clean help test fetch
-all: $(GEN_BITSTREAM) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
+all: check-uid $(GEN_BITSTREAM) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
      $(BUILD_DIR)/$(TARGET).bin $(CODE_BIN) $(BLOBS_BIN)
+
+# The unique-ID area must be read as whole words (a byte read is a bus fault on the H5 and
+# once left a pod crashing before USB came up).  Only board_uid.h may touch UID_BASE.
+.PHONY: check-uid
+check-uid:
+	@if grep -rn 'UID_BASE' src port bsp | grep -v '^src/board_uid.h:' ; then \
+	  echo 'check-uid: read the unique ID through board_uid_words() (src/board_uid.h), never UID_BASE directly' >&2; \
+	  exit 1; \
+	fi
 
 # Host unit tests for the platform-independent logic (no STM32 HAL, native cc).
 test:

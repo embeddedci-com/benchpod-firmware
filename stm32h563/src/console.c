@@ -21,6 +21,9 @@
 #include "psram.h"
 #include "ice40_flash.h"
 #include "boot_guard.h"
+#include "board_uid.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 bool clock_on_hsi(void);   /* main.c */
 #include "command_handler.h"   /* mirror re-sync after a reconfiguration */
@@ -118,6 +121,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  la-voltage [1800|3300] set/show the LA I/O-bank voltage (required for LA ops)\r\n"
         "  usb-cc              USB-C CC lines: orientation + source current (v3)\r\n"
         "  nrst [assert|release|<ms>]  drive the target reset pin, J1 pin 22 (v3)\r\n"
+        "  uid                  the chip's unique ID\r\n"
+        "  test-bootloop yes    crash 2 boots on purpose to prove safe mode\r\n"
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|amp]       route ADC source + read calibrated mV (def ext)\r\n"
         "  measure              read the ADC input SMA in volts (= adc ext, ÷12)\r\n"
@@ -490,6 +495,24 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  CC1=%d mV  CC2=%d mV  orientation=%s  source=%s (%d mA)\r\n",
                cc.cc1_mv, cc.cc2_mv, orient[cc.orientation], cc.advertised,
                cc.advertised_ma);
+        }
+    } else if (!strcmp(argv[0], "uid")) {
+        /* uid: the 96-bit unique ID.  Words only: a byte read of this area is a precise bus
+           fault on the H5 (proven on the v3, bfar=0x08fff800; see board_uid.h). */
+        uint32_t w[3];
+        board_uid_words(w);
+        op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
+           (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
+    } else if (!strcmp(argv[0], "test-bootloop")) {
+        /* Prove the safe-mode safeguard: the next two boots crash in the net task, the third
+           comes up in safe mode (USB console only).  A power cycle then returns to normal. */
+        if (argc < 2 || strcmp(argv[1], "yes")) {
+            op(out, ctx, "  test-bootloop yes : crash the next 2 boots on purpose; the 3rd must come up in safe mode\r\n");
+        } else {
+            boot_guard_arm_test_loop(BOOT_GUARD_SAFE_AFTER);
+            op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
+            vTaskDelay(pdMS_TO_TICKS(200));
+            NVIC_SystemReset();
         }
     } else if (!strcmp(argv[0], "nrst")) {
         /* Drive /NRST_CONTROL (J1 pin 22): nrst [assert|release|<pulse ms>]. */
