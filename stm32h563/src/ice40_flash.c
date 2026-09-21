@@ -200,6 +200,14 @@ void ice40_prepare_reconfig(void) {
 }
 
 /* Wait for CDONE to (re)assert after a warmboot.  0 = configured, -1 = timeout. */
+int ice40_is_configured(void) {
+    GPIO_InitTypeDef g = {0};
+    __HAL_RCC_GPIOF_CLK_ENABLE();
+    g.Mode = GPIO_MODE_INPUT; g.Pull = GPIO_NOPULL; g.Pin = ICE_CDONE_PIN;
+    HAL_GPIO_Init(ICE_CDONE_PORT, &g);   /* out of reset it is analog, which reads 0 */
+    return HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_SET;
+}
+
 int ice40_wait_cdone(uint32_t timeout_ms) {
     uint32_t t0 = HAL_GetTick();
     while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {

@@ -48,6 +48,19 @@ void watchdog_init(void) {
            (unsigned long)((IWDG_RELOAD_VAL + 1) * 256u * 1000u / 32000u));
 }
 
+void watchdog_arm_early(void) {
+    s_iwdg.Instance       = IWDG;
+    s_iwdg.Init.Prescaler = IWDG_PRESCALER_VAL;
+    s_iwdg.Init.Reload    = IWDG_RELOAD_VAL;
+    s_iwdg.Init.Window    = IWDG_WINDOW_DISABLE;
+    if (HAL_IWDG_Init(&s_iwdg) != HAL_OK)
+        printf("[wdg] early IWDG arm failed\n");
+}
+
+void watchdog_early_refresh(void) {
+    if (s_iwdg.Instance == IWDG) (void)HAL_IWDG_Refresh(&s_iwdg);
+}
+
 void watchdog_heartbeat(int task, const char *task_name) {
     if (task < 0 || task >= WD_TASK_COUNT) return;
     s_hb[task]++;

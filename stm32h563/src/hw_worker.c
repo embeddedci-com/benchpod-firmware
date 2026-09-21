@@ -1,4 +1,5 @@
 #include "hw_worker.h"
+#include "boot_guard.h"
 #include "command_handler.h"
 #include "signal_engine.h"
 #include "target_power.h"
@@ -179,6 +180,9 @@ static void handle_work(cmd_work_t *w) {
 static void worker_task(void *arg) {
     (void)arg;
     static cmd_work_t w;   /* static: the item is ~1.6 KB, keep it off the stack */
+    /* iCE40 / PSRAM bring-up happens here, after USB and the scheduler are up, so however it
+       goes the USB console is already there.  Commands queue until it is done. */
+    boot_deferred_hw_init();
     for (;;) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
         /* Drain a bounded batch so the periodic polls still run promptly even

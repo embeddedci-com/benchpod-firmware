@@ -20,6 +20,9 @@
 #include "can_bus.h"
 #include "psram.h"
 #include "ice40_flash.h"
+#include "boot_guard.h"
+
+bool clock_on_hsi(void);   /* main.c */
 #include "command_handler.h"   /* mirror re-sync after a reconfiguration */
 #include "esp_rom_flash.h"
 #include "esp_hosted_spi.h"   /* stop the Wi-Fi transport before flashing the C3 */
@@ -366,6 +369,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=read-failed\r\n",
                gw, fpga_ok ? "reachable" : "UNREACHABLE");
+        /* Separate keys ("hint", "safe", "clock"), so a host parsing "fpga : gateware vN"
+           keeps working. */
+        if (!fpga_ok && boot_hw_ready() && !ice40_is_configured())
+            op(out, ctx, "  hint   : the iCE40 never configured (blank config flash?): run flash-ice40\r\n");
+        if (boot_guard_report()[0] != '\0')
+            op(out, ctx, "  safe   : %s\r\n", boot_guard_report());
+        if (clock_on_hsi())
+            op(out, ctx, "  clock  : the 25 MHz crystal did not start; running from the internal HSI\r\n");
         op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
            ADC_BITS, ADC_CHANNELS, ADC_FULLSCALE_MV);
         op(out, ctx, "  dac    : ac=%s replay=%s dc=%s  gen %d-bit / replay %d-bit x%d, %d mV FS\r\n",

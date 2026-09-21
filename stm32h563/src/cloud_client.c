@@ -7,7 +7,8 @@
 #include "ws_frame.h"
 #include "cloud_ca.h"
 #include "board_info.h"
-#include "signal_engine.h"   /* signal_engine_fpga_version / DAC_DEEP_REPLAY_MIN_GW / SIGNAL_MAX_SAMPLES */
+#include "signal_engine.h"
+#include "boot_guard.h"   /* signal_engine_fpga_version / DAC_DEEP_REPLAY_MIN_GW / SIGNAL_MAX_SAMPLES */
 #include "fpga_config.h"     /* FPGA_DAC_REPLAY_MAX_SAMPLES */
 #include "cal_data.h"        /* ADC_CAL_EXT — front-SMA cal shipped in capabilities */
 #include "target_power.h"
@@ -626,7 +627,9 @@ static bool cl_send_capabilities(void) {
        race the iCE40 configuring from flash and cache v0, which would wrongly advertise
        deep=false and make the server fall back to shallow replay (load_bin "total out of
        range").  By connect time the FPGA is up, so refresh from it (hw_lock-guarded). */
-    signal_engine_refresh_version();
+    /* Only once the hw worker has brought the iCE40 up: before that SPI1 is not initialised
+       (and the worker may be using it).  It re-announces when it is done. */
+    if (boot_hw_ready()) signal_engine_refresh_version();
     /* Feature flags come from signal_engine_caps() — the SAME call the `status` reply uses, so
        a cloud client and a direct LAN/serial client cannot disagree about what this pod can do.
        (They used to: status carried a hardcoded caps[] literal that named none of these.) */

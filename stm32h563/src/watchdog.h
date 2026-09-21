@@ -29,6 +29,12 @@ enum {
    running and MUST be serviced within its timeout or the pod resets. */
 void watchdog_init(void);
 
+/* Arm the IWDG (same ~30 s timeout) at the start of boot, before watchdog_init(), so a hang
+   before the scheduler resets the chip instead of leaving it dark.  watchdog_early_refresh()
+   restarts the countdown; watchdog_init() takes over from there. */
+void watchdog_arm_early(void);
+void watchdog_early_refresh(void);
+
 /* Called by each task at the top of its loop to prove it is alive.  Also updates
    the fault task hint so a crash is attributed to the right task. */
 void watchdog_heartbeat(int task, const char *task_name);

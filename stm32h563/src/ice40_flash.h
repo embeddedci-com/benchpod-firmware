@@ -22,6 +22,10 @@ int ice40_flash_program(const uint8_t *data, size_t len);
 void ice40_prepare_reconfig(void);
 int  ice40_wait_cdone(uint32_t timeout_ms);
 
+/* CDONE right now: 1 = the iCE40 loaded a bitstream, 0 = it never configured (e.g. a new
+   board whose config flash is blank).  Configures PF14 as an input first. */
+int  ice40_is_configured(void);
+
 /* Runtime gateware IMAGE SWITCH: reprogram the config flash with image n (0=closed-loop,
    1=deep-DAC-replay) and reconfigure.  Defined in console.c (holds the embedded
    images).  ~2 s.  Returns 0 ok, -1 fail. */

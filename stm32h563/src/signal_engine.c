@@ -783,15 +783,21 @@ void signal_engine_psram_report_wedge(void) {
    `psram_recover` command (which just reboots) restores a wedged pod without a physical
    power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported. */
 void psram_boot_selftest_with_recovery(void) {
+    /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up.  A new board's
+       config flash is blank: the iCE40 never configured (CDONE low) and, still hunting its
+       flash for a bitstream, it also fails step 1 below, so the step-2 reflash never triggers.
+       Check CDONE as well. */
+    const bool configured = ice40_is_configured() != 0;
     psram_boot_selftest();
-    if (psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        printf("[psram-selftest] iCE40->PSRAM inoperable at boot — auto-reflashing iCE40 (image 0)...\n");
+    if (!configured || psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
+        printf("[psram-selftest] %s: loading the embedded gateware (image 0)...\n",
+               configured ? "iCE40->PSRAM inoperable" : "iCE40 not configured (blank config flash?)");
         if (ice40_reflash_image(0) == 0) {
             sleep_ms(5);
             signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
             psram_boot_selftest();   /* re-test after the reflash */
         } else {
-            printf("[psram-selftest] auto-reflash failed — PSRAM stays inoperable\n");
+            printf("[psram-selftest] gateware load failed, run flash-ice40 on the console\n");
         }
     }
 }

@@ -33,14 +33,20 @@
 #include "dfu_boot.h"
 #include "fault.h"
 #include "watchdog.h"
+#include "boot_guard.h"
+#include "cloud_client.h"
 #include "sys_health.h"
 #include "hw_worker.h"
 #include "version.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 UART_HandleTypeDef huart2;
+
+/* Set when the crystal did not start and the clock runs from the internal HSI instead. */
+static bool s_clock_on_hsi;
 
 static void SystemClock_Config(void);
 static void MX_USART2_UART_Init(void);
@@ -66,11 +72,22 @@ static void console_task(void *arg)
 static void net_task(void *arg)
 {
     (void)arg;
-    net_init();
+    const bool safe = boot_guard_safe_mode();
+    if (!safe) {
+        boot_guard_stage(BOOT_STAGE_NET_INIT);
+        net_init();
+    }
+    bool healthy = false;
     for (;;) {
         watchdog_heartbeat(WD_TASK_NET, "net");
-        net_poll();
-        watchdog_service();   /* refresh IWDG only if BOTH tasks are alive */
+        if (!safe) net_poll();
+        watchdog_service();   /* refresh IWDG only if ALL tasks are alive */
+        /* Fifteen seconds up with every task cycling: this boot is good, so a later reset does
+           not count toward safe mode. */
+        if (!healthy && boot_hw_ready() && HAL_GetTick() > 15000u) {
+            boot_guard_healthy();
+            healthy = true;
+        }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -101,8 +118,22 @@ int main(void)
     printf(" reset: %s   last crash: %s\r\n",
            fault_last_reset_str(), fault_last_crash_str());
     printf("========================================\r\n");
+    if (s_clock_on_hsi)
+        printf("[boot] WARNING: the 25 MHz crystal did not start; running from the internal HSI\r\n");
 
-    /* Bring up the hardware subsystems. */
+    /* Count this boot (safe mode after repeated failures) and arm the watchdog: from here a
+       hang resets the chip instead of leaving it dark.  A power-on or the reset button starts
+       the failed-boot count over. */
+    {
+        const char *why = fault_last_reset_str();
+        boot_guard_begin(strcmp(why, "power-on") == 0 || strcmp(why, "pin") == 0);
+    }
+    boot_guard_stage(BOOT_STAGE_EARLY_HW);
+
+    /* Bring up the hardware subsystems.  Only what must happen at once runs here: the power
+       bus and the target rails (a stray DUT rail is dangerous).  The iCE40, PSRAM and their
+       self-test run later on the hw worker task (boot_deferred_hw_init), AFTER USB and the
+       scheduler are up, so nothing they do can keep the USB console from appearing. */
     hw_lock_init();         /* serializes console + TCP command dispatch */
 
     /* Identify the PCB revision FIRST: it decides the TPS2116 LA-bank mux
@@ -126,25 +157,9 @@ int main(void)
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
     analog_switch_init();   /* U55 DAC mux + U58 cal switching, all off */
     can_bus_init();         /* FDCAN1 term GPIO safe (core stays down until can_config) */
-    signal_engine_init();   /* SPI1 to the iCE40 */
-    /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
-       the iCE40 config flash, and the config flash must be reachable (flash-ice40)
-       even when the FPGA is unconfigured.  Gating this behind fpga_is_v2() was a
-       bootstrap deadlock — the bus that flashes the FPGA only came up once the
-       FPGA was already running.  psram_init() sets up the XSPI peripheral before
-       it probes the PSRAM; then release the bus so the iCE40 can configure from
-       its (now flashable) config flash. */
-    (void)psram_init();
-    psram_bus_release();
-    /* Layered PSRAM datapath boot self-test: STM32<->PSRAM, iCE40->PSRAM write, and
-       (if that fails) whether the iCE40 even reaches the shared /CE net — so a
-       shared-bus write fault is flagged as such, never mis-read as a dead ADC.
-       Console 'psram-selftest' re-runs it once the USB console is up.  The _recovery
-       variant auto-reflashes the iCE40 if the write layer is faulted, so a reboot (the
-       cloud `psram_recover` command) self-heals a wedged pod without a power-cycle. */
-    psram_boot_selftest_with_recovery();
-    i2c_bus_status();       /* scan + name known devices */
+    boot_guard_stage(BOOT_STAGE_IDENTITY);
     device_identity_init(); /* Ed25519 identity (internal flash + RNG) */
+    boot_guard_stage(BOOT_STAGE_USB);
     MX_USB_DEVICE_Init();   /* USB-CDC virtual COM port */
 
     /* The net task runs the lwIP poll loop AND the mbedTLS handshake for the
@@ -171,6 +186,7 @@ int main(void)
        scheduler never starts (out of heap) the watchdog still resets the pod.
        The net task refreshes it once both tasks are cycling. */
     watchdog_init();
+    boot_guard_stage(BOOT_STAGE_SCHEDULER);
 
     vTaskStartScheduler();
 
@@ -179,15 +195,42 @@ int main(void)
     return 0;
 }
 
-/* --- clock tree: HSI 64 MHz -> PLL1 -> 250 MHz SYSCLK -------------------- */
+/* --- deferred hardware bring-up (hw worker task, after USB is up) ------------ */
+void boot_deferred_hw_init(void)
+{
+    if (boot_guard_safe_mode()) {
+        printf("[boot] safe mode: iCE40/PSRAM bring-up skipped\r\n");
+        return;
+    }
+    boot_guard_stage(BOOT_STAGE_HW_INIT);
+    signal_engine_init();   /* SPI1 to the iCE40 */
+    /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
+       the iCE40 config flash, and the config flash must be reachable (flash-ice40)
+       even when the FPGA is unconfigured. */
+    (void)psram_init();
+    psram_bus_release();
+    /* Layered PSRAM datapath self-test; loads the embedded gateware when the iCE40 never
+       configured (a new board) or cannot write the PSRAM. */
+    psram_boot_selftest_with_recovery();
+    i2c_bus_status();       /* scan + name known devices */
+    boot_guard_set_hw_ready();
+    boot_guard_stage(BOOT_STAGE_RUNNING);
+    cloud_client_request_caps_resend();   /* a cloud session may have announced before this */
+}
+
+/* --- clock tree: 25 MHz crystal (or HSI 64 MHz) -> PLL1 -> 250 MHz SYSCLK --- */
+
+bool clock_on_hsi(void) { return s_clock_on_hsi; }
+
 static void SystemClock_Config(void)
 {
     RCC_OscInitTypeDef osc = {0};
     RCC_ClkInitTypeDef clk = {0};
 
-    /* VOS0 is required for SYSCLK > 200 MHz. */
+    /* VOS0 is required for SYSCLK > 200 MHz.  Bounded: an endless spin here would hang the
+       pod before anything could report it. */
     __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE0);
-    while (!__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY)) { }
+    for (uint32_t spin = 0; !__HAL_PWR_GET_FLAG(PWR_FLAG_VOSRDY) && spin < 10000000u; spin++) { }
 
     osc.OscillatorType = RCC_OSCILLATORTYPE_HSE;
     osc.HSEState = RCC_HSE_ON;                   /* 25 MHz crystal on PH0/PH1 */
@@ -202,7 +245,30 @@ static void SystemClock_Config(void)
     osc.PLL.PLLVCOSEL = RCC_PLL1_VCORANGE_WIDE; /* 192..836 MHz VCO */
     osc.PLL.PLLFRACN = 0;
     if (HAL_RCC_OscConfig(&osc) != HAL_OK) {
-        Error_Handler();
+        /* The crystal did not start.  Nothing needs it (USB runs from HSI48, Ethernet from
+           the PHY's clock), so fall back to the internal 64 MHz HSI with the SAME PLL outputs
+           rather than Error_Handler(): that reset would repeat on every boot and the pod would
+           never show up, not even to say what is wrong. */
+        s_clock_on_hsi = true;
+        RCC_OscInitTypeDef hsi = {0};
+        hsi.OscillatorType = RCC_OSCILLATORTYPE_HSE | RCC_OSCILLATORTYPE_HSI;
+        hsi.HSEState = RCC_HSE_OFF;
+        hsi.HSIState = RCC_HSI_ON;
+        hsi.HSIDiv = RCC_HSI_DIV1;                   /* 64 MHz */
+        hsi.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+        hsi.PLL.PLLState = RCC_PLL_ON;
+        hsi.PLL.PLLSource = RCC_PLL1_SOURCE_HSI;
+        hsi.PLL.PLLM = 16;                           /* 64/16 = 4 MHz PLL input */
+        hsi.PLL.PLLN = 125;                          /* 4 * 125 = 500 MHz VCO */
+        hsi.PLL.PLLP = 2;                            /* 250 MHz, as with the crystal */
+        hsi.PLL.PLLQ = 2;
+        hsi.PLL.PLLR = 2;
+        hsi.PLL.PLLRGE = RCC_PLL1_VCIRANGE_2;        /* 4..8 MHz input */
+        hsi.PLL.PLLVCOSEL = RCC_PLL1_VCORANGE_WIDE;
+        hsi.PLL.PLLFRACN = 0;
+        if (HAL_RCC_OscConfig(&hsi) != HAL_OK) {
+            Error_Handler();
+        }
     }
 
     clk.ClockType = RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK |

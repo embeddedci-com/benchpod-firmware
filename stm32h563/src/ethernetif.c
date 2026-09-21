@@ -122,9 +122,39 @@ void pbuf_free_custom(struct pbuf *p);
   * @param netif the already initialized lwip network interface structure
   *        for this ethernetif
   */
+/* The MAC address, unique per pod: a locally administered unicast address (first byte 0x02)
+   whose other five bytes hash the STM32's 96-bit unique device ID.  A fixed address made every
+   pod on a LAN share one MAC, so two pods fought over a single DHCP lease.  Stable across
+   reboots and reflashes (the UID is factory-programmed).
+   The UID is read as three 32-bit WORDS, as usbd_desc.c does for the USB serial number: an
+   earlier byte-wise read of this area crashed the pod on every boot. */
+static void board_eth_mac(uint8_t mac[6])
+{
+  const uint32_t w[3] = {
+    *(const volatile uint32_t *)(UID_BASE),
+    *(const volatile uint32_t *)(UID_BASE + 4U),
+    *(const volatile uint32_t *)(UID_BASE + 8U),
+  };
+  uint32_t h = 2166136261u;                    /* FNV-1a over the 12 UID bytes */
+  for (int i = 0; i < 3; i++) {
+    for (int b = 0; b < 4; b++) {
+      h ^= (w[i] >> (8 * b)) & 0xFFu;
+      h *= 16777619u;
+    }
+  }
+  uint32_t h2 = (h ^ 0x45u) * 16777619u;       /* one more round for the fifth byte */
+  mac[0] = 0x02;
+  mac[1] = (uint8_t)(h >> 24);
+  mac[2] = (uint8_t)(h >> 16);
+  mac[3] = (uint8_t)(h >> 8);
+  mac[4] = (uint8_t)h;
+  mac[5] = (uint8_t)(h2 >> 24);
+}
+
 static void low_level_init(struct netif *netif)
 {
-  uint8_t macaddress[6]= {ETH_MAC_ADDR0, ETH_MAC_ADDR1, ETH_MAC_ADDR2, ETH_MAC_ADDR3, ETH_MAC_ADDR4, ETH_MAC_ADDR5};
+  static uint8_t macaddress[6];   /* HAL keeps the pointer: must outlive this call */
+  board_eth_mac(macaddress);
 
   EthHandle.Instance = ETH;
   EthHandle.Init.MACAddr = macaddress;
@@ -140,12 +170,8 @@ static void low_level_init(struct netif *netif)
   netif->hwaddr_len = ETH_HWADDR_LEN;
 
   /* set MAC hardware address */
-  netif->hwaddr[0] =  ETH_MAC_ADDR0;
-  netif->hwaddr[1] =  ETH_MAC_ADDR1;
-  netif->hwaddr[2] =  ETH_MAC_ADDR2;
-  netif->hwaddr[3] =  ETH_MAC_ADDR3;
-  netif->hwaddr[4] =  ETH_MAC_ADDR4;
-  netif->hwaddr[5] =  ETH_MAC_ADDR5;
+  for (int i = 0; i < 6; i++)
+    netif->hwaddr[i] = macaddress[i];
 
   /* maximum transfer unit */
   netif->mtu = ETH_MAX_PAYLOAD;
