@@ -28,6 +28,7 @@ static const char *volatile s_task_hint;
 
 static char s_reset_str[24] = "unknown";
 static char s_crash_str[144] = "none";
+static char s_crash_task[16];
 static int  s_was_iwdg;
 
 void fault_set_task_hint(const char *name) { s_task_hint = name; }
@@ -158,6 +159,8 @@ void fault_boot_init(void) {
                  (s_rec.cfsr & SCB_CFSR_BFARVALID_Msk) ? " bfar=" : "",
                  (s_rec.cfsr & SCB_CFSR_BFARVALID_Msk) ? addr_str(s_rec.bfar) : "",
                  s_rec.task[0] ? s_rec.task : "?");
+        memcpy(s_crash_task, s_rec.task, sizeof(s_crash_task));
+        s_crash_task[sizeof(s_crash_task) - 1] = '\0';
         /* Leave the record in place so the summary persists across subsequent
            clean reboots until the next crash overwrites it, but clear the magic
            so a stale record isn't re-attributed to a future unrelated reset. */
@@ -169,4 +172,5 @@ void fault_boot_init(void) {
 
 const char *fault_last_reset_str(void) { return s_reset_str; }
 const char *fault_last_crash_str(void) { return s_crash_str; }
+const char *fault_last_crash_task(void) { return s_crash_task; }
 int         fault_was_watchdog(void)   { return s_was_iwdg; }

@@ -122,7 +122,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  usb-cc              USB-C CC lines: orientation + source current (v3)\r\n"
         "  nrst [assert|release|<ms>]  drive the target reset pin, J1 pin 22 (v3)\r\n"
         "  uid                  the chip's unique ID\r\n"
-        "  test-bootloop yes    crash 2 boots on purpose to prove safe mode\r\n"
+        "  test-bootloop [net|hw] yes  crash 2 boots on purpose to prove safe mode\r\n"
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|amp]       route ADC source + read calibrated mV (def ext)\r\n"
         "  measure              read the ADC input SMA in volts (= adc ext, ÷12)\r\n"
@@ -504,12 +504,18 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
            (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
     } else if (!strcmp(argv[0], "test-bootloop")) {
-        /* Prove the safe-mode safeguard: the next two boots crash in the net task, the third
-           comes up in safe mode (USB console only).  A power cycle then returns to normal. */
-        if (argc < 2 || strcmp(argv[1], "yes")) {
-            op(out, ctx, "  test-bootloop yes : crash the next 2 boots on purpose; the 3rd must come up in safe mode\r\n");
+        /* Prove the safe-mode safeguard: the next two boots crash in the net task (net) or the
+           iCE40/PSRAM bring-up (hw), the third comes up in safe mode with only that part off.
+           A power cycle then returns to normal.  `test-bootloop yes` is the net test. */
+        const char *target = argc >= 3 ? argv[1] : "net";
+        const char *confirm = argc >= 3 ? argv[2] : (argc >= 2 ? argv[1] : "");
+        uint32_t sub = !strcmp(target, "net") ? BOOT_SUB_NET
+                     : !strcmp(target, "hw")  ? BOOT_SUB_HW : 0;
+        if (!sub || strcmp(confirm, "yes")) {
+            op(out, ctx, "  test-bootloop net yes : crash the next 2 boots in the net task; the 3rd comes up in safe mode, network off\r\n");
+            op(out, ctx, "  test-bootloop hw yes  : same, in the iCE40/PSRAM bring-up; the 3rd has iCE40/PSRAM off\r\n");
         } else {
-            boot_guard_arm_test_loop(BOOT_GUARD_SAFE_AFTER);
+            boot_guard_arm_test_loop(BOOT_GUARD_SAFE_AFTER, sub);
             op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
             vTaskDelay(pdMS_TO_TICKS(200));
             NVIC_SystemReset();

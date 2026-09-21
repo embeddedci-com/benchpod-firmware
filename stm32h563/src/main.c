@@ -72,16 +72,21 @@ static void console_task(void *arg)
 static void net_task(void *arg)
 {
     (void)arg;
-    const bool safe = boot_guard_safe_mode();
-    boot_guard_test_loop_point();   /* no-op unless `test-bootloop` armed it */
-    if (!safe) {
+    const bool skip = boot_guard_skip_net();
+    if (skip) {
+        printf("[boot] safe mode: networking off\r\n");
+    } else {
+        /* Stage first: anything below that crashes or hangs counts as the network's. */
         boot_guard_stage(BOOT_STAGE_NET_INIT);
+        boot_guard_sub_start(BOOT_SUB_NET);
+        boot_guard_test_loop_point(BOOT_SUB_NET);   /* no-op unless `test-bootloop` armed it */
         net_init();
+        boot_guard_sub_done(BOOT_SUB_NET);
     }
     bool healthy = false;
     for (;;) {
         watchdog_heartbeat(WD_TASK_NET, "net");
-        if (!safe) net_poll();
+        if (!skip) net_poll();
         watchdog_service();   /* refresh IWDG only if ALL tasks are alive */
         /* Fifteen seconds up with every task cycling: this boot is good, so a later reset does
            not count toward safe mode. */
@@ -199,11 +204,13 @@ int main(void)
 /* --- deferred hardware bring-up (hw worker task, after USB is up) ------------ */
 void boot_deferred_hw_init(void)
 {
-    if (boot_guard_safe_mode()) {
+    if (boot_guard_skip_hw()) {
         printf("[boot] safe mode: iCE40/PSRAM bring-up skipped\r\n");
         return;
     }
     boot_guard_stage(BOOT_STAGE_HW_INIT);
+    boot_guard_sub_start(BOOT_SUB_HW);
+    boot_guard_test_loop_point(BOOT_SUB_HW);   /* no-op unless `test-bootloop hw` armed it */
     signal_engine_init();   /* SPI1 to the iCE40 */
     /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
@@ -214,6 +221,7 @@ void boot_deferred_hw_init(void)
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();
     i2c_bus_status();       /* scan + name known devices */
+    boot_guard_sub_done(BOOT_SUB_HW);
     boot_guard_set_hw_ready();
     boot_guard_stage(BOOT_STAGE_RUNNING);
     cloud_client_request_caps_resend();   /* a cloud session may have announced before this */

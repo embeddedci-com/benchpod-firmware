@@ -46,6 +46,10 @@ const char *fault_last_reset_str(void);
    a recorded fault.  e.g. "HardFault pc=0x08001234 lr=0x0800abcd cfsr=0x00020000 task=net". */
 const char *fault_last_crash_str(void);
 
+/* The task the last crash happened in ("net", "hw", "boot", ...), or "" if the last reset
+   was not a recorded fault. */
+const char *fault_last_crash_task(void);
+
 /* True if the last reset was caused by the independent watchdog. */
 int fault_was_watchdog(void);
 

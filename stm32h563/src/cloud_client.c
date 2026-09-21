@@ -9,6 +9,7 @@
 #include "board_info.h"
 #include "signal_engine.h"
 #include "boot_guard.h"   /* signal_engine_fpga_version / DAC_DEEP_REPLAY_MIN_GW / SIGNAL_MAX_SAMPLES */
+#include "fault.h"        /* reset cause + last crash, announced with the capabilities */
 #include "fpga_config.h"     /* FPGA_DAC_REPLAY_MAX_SAMPLES */
 #include "cal_data.h"        /* ADC_CAL_EXT — front-SMA cal shipped in capabilities */
 #include "target_power.h"
@@ -642,7 +643,9 @@ static bool cl_send_capabilities(void) {
     bool loop_map  = caps.loop_input_map;
     unsigned long replay_max = deep ? (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES
                                     : (unsigned long)SIGNAL_MAX_SAMPLES;
-    char f[1024];   /* 768 until the pin/trigger/power flags; the frame is ~700 B with them */
+    /* 1024 held the ~700 B of feature flags; the boot health below adds up to ~330 B (a
+       free-form crash line and safe-mode reason).  Static: net-task only. */
+    static char f[1280];
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,"
@@ -655,7 +658,7 @@ static bool cl_send_capabilities(void) {
         "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
         "\"dac_cotrig\":%s,"
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"power_profile\":true,"
-        "\"board\":\"%s\"}",
+        "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
         DAC_AC ? "true" : "false", DAC_REPLAY ? "true" : "false", DAC_DC ? "true" : "false",
@@ -666,7 +669,18 @@ static bool cl_send_capabilities(void) {
         caps.gpio_read ? "true" : "false", caps.capture_trigger ? "true" : "false",
         BOARD_NAME);
     if (n <= 0 || (size_t)n >= sizeof(f)) return false;
-    return cl_ws_send(WS_OP_TEXT, f, (size_t)n);
+    /* Boot health, sent on every connect so the server always holds the current boot's
+       values: last_crash is "none" and safe_reason "" after a clean start, which clears an
+       old warning. */
+    bp_emit_t e;
+    bp_emit_init(&e, f + n, sizeof(f) - (size_t)n);
+    bp_emit(&e, "\"safe_mode\":%s,\"safe_reason\":", boot_guard_safe_mode() ? "true" : "false");
+    bp_emit_jstr(&e, boot_guard_reason());
+    bp_emit(&e, ",\"reset_cause\":\"%s\",\"last_crash\":", fault_last_reset_str());
+    bp_emit_jstr(&e, fault_last_crash_str());
+    bp_emit_raw(&e, "}");
+    if (!bp_emit_ok(&e)) return false;
+    return cl_ws_send(WS_OP_TEXT, f, (size_t)n + bp_emit_len(&e));
 }
 
 /* Build + push one efuse.event WS frame (efuse is 1 or 2).  Net-task only. */

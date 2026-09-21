@@ -35,6 +35,7 @@
 #include "bp_limits.h"   /* coupled cloud/command buffer sizes */
 #include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
 #include "fault.h"       /* reset cause + last-crash summary for status */
+#include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
@@ -2036,8 +2037,9 @@ static void handle_status(int conn_id) {
     /* 1024, not 768: caps[] below is now the full, dynamically-built feature set (was a
        7-name literal), which adds ~150 B on a v2 pod.  The emitter is bounds-tracked and
        last_crash is free-form, so keep real headroom rather than sizing to today's payload. */
-    /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[]. */
-    char resp[1152];
+    /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[].
+       1344: safe_mode + safe_reason (up to ~130 B). */
+    char resp[1344];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
@@ -2060,6 +2062,10 @@ static void handle_status(int conn_id) {
             sys_health_heap_free(), sys_health_heap_min_free(),
             sys_health_stack_min_free(), fault_last_reset_str());
     bp_emit_jstr(&e, fault_last_crash_str());
+    /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
+    bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":",
+            boot_guard_safe_mode() ? "true" : "false");
+    bp_emit_jstr(&e, boot_guard_reason());
     /* caps[]: the pod's ADVERTISED feature set, and the ONLY capability source a client on a
        direct LAN/serial connection ever sees (the richer `capabilities` frame goes to the cloud
        server alone).  It used to be a hardcoded 7-name literal that named no DAC feature at all,
@@ -3223,6 +3229,23 @@ static bool cmd_is_noisy_poll(const char *cmd) {
            strcmp(cmd, "target_status") == 0;
 }
 
+/* Commands that need neither the iCE40 nor the PSRAM, so they still run in a safe mode that
+   turned those off (boot_guard.h).  Everything else is refused with a clear reason instead of
+   driving an uninitialised SPI1/XSPI. */
+static bool cmd_ok_without_hw(const char *cmd) {
+    static const char *const ok[] = {
+        "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
+        "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
+        "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
+        "power_profile", "identity_public", "identity_pop",
+        "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
+        "can_disable",
+    };
+    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+        if (strcmp(cmd, ok[i]) == 0) return true;
+    return false;
+}
+
 static void dispatch_line(int conn_id, const char *buf) {
     char cmd[32] = {0};
     if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
@@ -3232,6 +3255,11 @@ static void dispatch_line(int conn_id, const char *buf) {
 
     if (!cmd_is_noisy_poll(cmd))
         printf("[cmd] <- \"%s\" (id=%d)\n", cmd, conn_id);
+
+    if (boot_guard_skip_hw() && !cmd_ok_without_hw(cmd)) {
+        send_error(conn_id, "safe mode: iCE40/PSRAM are off. Unplug and replug the pod");
+        return;
+    }
 
     if      (strcmp(cmd, "ping")      == 0) handle_ping(conn_id);
     else if (strcmp(cmd, "generate")  == 0) handle_generate(conn_id, buf);

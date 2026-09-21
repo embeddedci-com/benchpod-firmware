@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "boot_policy.h"
 
 /* ============================================================================
  * boot_guard: a pod must always come back with a USB console, whatever breaks.
@@ -15,9 +16,10 @@
  *   - boot_guard_stage() records which step is running (for the report);
  *   - boot_guard_healthy() clears the counter once the pod has run for a while.
  * A crash loop (hang -> watchdog, fault -> software reset) never reaches "healthy", so after
- * BOOT_GUARD_SAFE_AFTER failed boots in a row the next one runs in SAFE MODE: no networking,
- * no iCE40/PSRAM bring-up, just USB + the console, and `status` says why.  A power-on or a
- * reset-button press starts the count again.
+ * BOOT_GUARD_SAFE_AFTER failed boots in a row the next one runs in SAFE MODE: it turns off
+ * what failed (networking, the iCE40/PSRAM bring-up, or both when unclear; see boot_policy.h),
+ * keeps USB + the console, and `status` (and the cloud, when the network is on) says why.
+ * A power-on or a reset-button press starts the count again.
  * ==========================================================================*/
 
 typedef enum {
@@ -37,17 +39,28 @@ typedef enum {
 /* After fault_boot_init(): fresh_start is true for a power-on or reset-button reset. */
 void boot_guard_begin(bool fresh_start);
 void boot_guard_stage(boot_stage_t stage);
+/* A subsystem's bring-up (BOOT_SUB_NET / BOOT_SUB_HW) starts / finishes: a boot that dies
+   in between points at it (boot_policy.h). */
+void boot_guard_sub_start(uint32_t sub);
+void boot_guard_sub_done(uint32_t sub);
 bool boot_guard_safe_mode(void);
+/* In safe mode: networking / the iCE40+PSRAM bring-up are off this boot. */
+bool boot_guard_skip_net(void);
+bool boot_guard_skip_hw(void);
 /* The pod has been up long enough: this boot counts as good. */
 void boot_guard_healthy(void);
-/* "" normally; in safe mode a one-line reason for `status`. */
+/* "" normally; in safe mode "safe mode: <reason>" for the console `status`. */
 const char *boot_guard_report(void);
+/* "" normally; in safe mode the reason alone, e.g. `2 failed boots in a row, the last in
+   "ice40/psram"; iCE40/PSRAM off` (JSON status, cloud capabilities). */
+const char *boot_guard_reason(void);
 
-/* Test the safeguard itself: make the next `boots` boots crash in the net task (as the
-   byte-wise UID read did), so safe mode must engage.  Console: test-bootloop. */
-void boot_guard_arm_test_loop(uint32_t boots);
-/* Called by the net task after the safe-mode check: crashes while a test loop is armed. */
-void boot_guard_test_loop_point(void);
+/* Test the safeguard itself: make the next `boots` boots crash in `sub`'s bring-up
+   (BOOT_SUB_NET: the net task, as the byte-wise UID read did; BOOT_SUB_HW: the hw worker's
+   iCE40/PSRAM bring-up), so safe mode must engage.  Console: test-bootloop. */
+void boot_guard_arm_test_loop(uint32_t boots, uint32_t sub);
+/* Called inside `sub`'s bring-up: crashes while a test loop for `sub` is armed. */
+void boot_guard_test_loop_point(uint32_t sub);
 
 /* Deferred hardware bring-up (iCE40, PSRAM, self-test), run once on the hw worker task. */
 void boot_deferred_hw_init(void);
