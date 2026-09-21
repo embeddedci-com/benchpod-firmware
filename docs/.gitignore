@@ -1,0 +1,7 @@
+# Vendor datasheets and board schematics kept here for reference while working on
+# the firmware (STM32H563 datasheet, BenchPod schematic export, …).  They are
+# large binaries and, in the vendors' case, redistributable only from the vendor —
+# so they stay local.  The authoritative schematic lives in the `benchpod`
+# hardware repo; the netlist checked in at the repo root is what the firmware is
+# actually derived from.
+*.pdf

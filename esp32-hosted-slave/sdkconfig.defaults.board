@@ -1,0 +1,10 @@
+# vbench-pod ESP32-C3 (U4) esp-hosted slave — board-specific overrides.
+# Symbol names verified against the slave's main/Kconfig.projbuild (registry
+# esp_hosted 2.12.9). Only what differs from stock esp32c3 slave defaults:
+#   HANDSHAKE  IO3 -> IO0  (host PB0)
+#   DATA_READY IO4 -> IO1  (host PB1)
+# Already correct by default: SPI full-duplex host interface, mode 3,
+# MOSI=7, MISO=2, CLK=6, CS=10.
+CONFIG_ESP_SPI_HOST_INTERFACE=y
+CONFIG_ESP_SPI_GPIO_HANDSHAKE=0
+CONFIG_ESP_SPI_GPIO_DATA_READY=1

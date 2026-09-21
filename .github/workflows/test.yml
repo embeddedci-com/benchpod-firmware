@@ -1,0 +1,50 @@
+# Run the firmware test suites on every push / PR so a broken test (or a stale
+# generated protocol file) is caught before a release tag is cut. The release
+# workflow (release-stm32.yml) only BUILDS; this one TESTS.
+#
+#   • ice40 gateware sims  — `make -C ice40 test` (iverilog/vvp/yosys) + the
+#     tools/gen_protocol.py --check the target already runs.
+#   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ice40-sim:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up OSS CAD Suite (yosys / nextpnr-ice40 / icestorm / iverilog)
+        uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          # PIN yosys/nextpnr to the 0.65 toolchain the design is validated on. yosys 0.66's
+          # abc9 change places the up5k ~7 MHz worse (docs / ice40 LUT-optimization notes), which
+          # dropped the razor-thin deep-DAC-replay image's clk48 below 48 MHz on the drifting
+          # `latest` OSS CAD Suite. 2026-05-13 is the first build after yosys 0.65 (2026-05-12).
+          version: '2026-05-13'
+      - name: Toolchain versions (confirm the 0.65 pin)
+        run: yosys --version && nextpnr-ice40 --version
+      - name: Run gateware testbenches + protocol check
+        # `test` also places both runtime images (multiboot).  ICE40_PNR_STRICT is a repository
+        # variable: unset/0 = a fallback seed or a thin clk48 only WARNS (this runner's toolchain
+        # can place differently from the local one the seeds are pinned on); set it to 1 to make
+        # either one fail the job (ice40/Makefile, PNR_STRICT).
+        env:
+          ICE40_PNR_STRICT: ${{ vars.ICE40_PNR_STRICT || '0' }}
+        run: make -C ice40 test PNR_STRICT="$ICE40_PNR_STRICT"
+
+  stm32-host:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules — host tests include esp_hosted headers)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Run STM32H563 host unit tests
+        run: make -C stm32h563/test

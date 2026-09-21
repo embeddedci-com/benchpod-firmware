@@ -1,0 +1,21 @@
+[submodule "rp2350/lib/scpi-parser"]
+	path = rp2350/lib/scpi-parser
+	url = https://github.com/j123b567/scpi-parser
+[submodule "rp2350/lib/monocypher"]
+	path = rp2350/lib/monocypher
+	url = https://github.com/LoupVaillant/Monocypher
+[submodule "stm32h563/lib/FreeRTOS-Kernel"]
+	path = stm32h563/lib/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "stm32h563/lib/stm32_mw_usb_device"]
+	path = stm32h563/lib/stm32_mw_usb_device
+	url = https://github.com/STMicroelectronics/stm32_mw_usb_device.git
+[submodule "stm32h563/lib/stm32_mw_lwip"]
+	path = stm32h563/lib/stm32_mw_lwip
+	url = https://github.com/STMicroelectronics/stm32_mw_lwip.git
+[submodule "stm32h563/lib/scpi-parser"]
+	path = stm32h563/lib/scpi-parser
+	url = https://github.com/j123b567/scpi-parser
+[submodule "stm32h563/lib/monocypher"]
+	path = stm32h563/lib/monocypher
+	url = https://github.com/LoupVaillant/Monocypher

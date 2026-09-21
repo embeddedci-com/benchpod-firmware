@@ -1,0 +1,7 @@
+# Raspberry Pi (bench_server.py). Install with: pip install -r requirements-pi.txt
+#
+# The linux-gpib python bindings (`import Gpib`) are NOT on pip — they are built
+# and installed from source together with the linux-gpib driver. See
+# ../pi-gpib-setup.md.
+Flask>=2.0
+pyserial>=3.5

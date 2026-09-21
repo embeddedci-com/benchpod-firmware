@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+dac_cal.json
+adc_cal.json
+*.cal.json

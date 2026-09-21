@@ -1,0 +1,57 @@
+# CMake build output
+build/
+build-*/
+cmake-build-*/
+
+# CMake in-source debris (if cmake is accidentally run from the project root)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Compiled outputs (if produced outside build/)
+*.elf
+*.bin
+*.uf2
+*.hex
+*.dis
+*.map
+
+# iCE40 / IceStorm build artefacts
+# yosys produces .json (netlist) and nextpnr produces .asc (ASCII bitstream)
+# in ice40/.  Scoped to that subtree so unrelated .json elsewhere in the repo
+# (e.g. tool configs) is not silently ignored.
+ice40/*.json
+ice40/*.asc
+# nextpnr per-target place & route logs (Makefile keeps the last run's log
+# next to the .asc so a failed seed can be inspected).
+ice40/*.pnr.log
+
+# ESP32-C3 esp-hosted slave: 'make fetch' builds the merged image into
+# prebuilt/ (a *.bin, already ignored above) using the ESP-IDF Docker image,
+# which materialises the IDF project under work/.  Both are build scratch.
+esp32-hosted-slave/work/
+
+# macOS
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# Editor temp files
+*~
+*.swp
+*.swo
+.#*
+\#*#
+
+# IDE project files
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+
+# VS Code — uncomment to commit workspace settings (e.g. IntelliSense config)
+# .vscode/
+
+.claude/
+# kicad .net files
+/*.net

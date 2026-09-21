@@ -1,0 +1,67 @@
+## ============================================================================
+## vbench_pod.pcf — pin constraints for the STM32H563 "vbench-pod" board
+## (iCE40UP5K-SG48), VERSION=v2 gateware.
+##
+## Extracted from the board netlist (bench-pod-firmware/vbench-pod.net, U1).
+## This board replaces the RP2350 carriers: 16-bit SERIAL ADC (MCP33131D-10) +
+## serial DAC (DAC8551), an external 48 MHz oscillator, and an APS6404L PSRAM on
+## the shared quad-SPI bus.  Select with:  make BOARD=vbench_pod VERSION=v2
+## ============================================================================
+
+# ---- 48 MHz external oscillator (SX3M48) — global clock pad ----
+set_io clk48      44   # IOB_3b_G6  /ICE_CLOCK
+
+# ---- Operational SPI link from the STM32 (SPI1) ----
+set_io sck        11   # IOB_20a   /ICE_STM32_SCK    (STM32 PA5)
+set_io mosi        6   # IOB_13b   /ICE_STM32_MOSI   (STM32 PB5)
+set_io miso        9   # IOB_16a   /ICE_STM32_MISO   (STM32 PA6)
+set_io csn        10   # IOB_18a   /ICE_STM32_CS0    (STM32 PB10, active low)
+
+# ---- Handshake lines to the STM32 ----
+set_io busy       46   # IOB_0a    /ICE_STM32_OTHER0 (STM32 PG1, capture-busy/done)
+set_io bus_own    47   # IOB_2a    /ICE_STM32_OTHER1 (STM32 PG0, 1 = STM32 owns the
+                       #            shared quad bus -> iCE40 must tristate it)
+
+# ---- Serial ADC: MCP33131D-10 (16-bit, 1 MSPS SAR) ----
+set_io adc_sdi    12   # IOB_22a   /ADC_SDI
+set_io adc_sclk   13   # IOB_24a   /ADC_SCLK
+set_io adc_sdo    18   # IOB_31b   /ADC_SDO   (data out from the ADC)
+set_io adc_cnvst  19   # IOB_29b   /ADC_CNVST (convert-start)
+
+# ---- Shared quad-SPI bus to the APS6404L PSRAM (iCE40 is QSPI master here) ----
+# SCLK/IO0/IO1 are also the iCE40 config-SPI pins; IO2/IO3 are the extra quad
+# lines.  The iCE40 tristates all of these when bus_own (STM32) is asserted.
+set_io psram_sclk 15   # IOB_34a_SPI_SCK /ICE_SCLK
+set_io psram_io0  14   # IOB_32a_SPI_SO  /ICE_SPI_SO
+set_io psram_io1  17   # IOB_33b_SPI_SI  /ICE_SPI_SI
+set_io psram_io2  20   # IOB_25b_G3      /ICE_IO2
+set_io psram_io3  21   # IOB_23b         /ICE_IO3
+set_io psram_cs   45   # IOB_5b          /ICE_SS_PSRAM (PSRAM chip-select)
+
+# ---- Serial DAC (DAC8551) ----
+set_io dac_din    2    # IOB_6a   /DAC_DIN
+set_io dac_sclk   3    # IOB_9b   /DAC_SCLK
+set_io dac_sync   4    # IOB_8a   /DAC_SYNC
+
+# ---- Logic-Analyzer bank (14 channels, la[0..13] = LA_OUT1..14) ----
+set_io la[0]  42   # /LA_OUT1
+set_io la[1]  43   # /LA_OUT2
+set_io la[2]  37   # /LA_OUT3
+set_io la[3]  38   # /LA_OUT4
+set_io la[4]  36   # /LA_OUT5
+set_io la[5]  35   # /LA_OUT6
+set_io la[6]  34   # /LA_OUT7
+set_io la[7]  32   # /LA_OUT8
+set_io la[8]  31   # /LA_OUT9
+set_io la[9]  28   # /LA_OUT10
+set_io la[10] 26   # /LA_OUT11
+set_io la[11] 27   # /LA_OUT12
+set_io la[12] 25   # /LA_OUT13
+set_io la[13] 23   # /LA_OUT14
+
+# ---- Onboard status LEDs (SB_RGBA_DRV dedicated current-driver pads) ----
+# Fixed by silicon — the RGB hardmacro can only route to these pads.  Driven by
+# top_v2's SB_RGBA_DRV from the host SET_LED command (green = eFuse ON).
+set_io led_g 39   # GREEN
+set_io led_b 40   # YELLOW
+set_io led_r 41   # RED

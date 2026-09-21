@@ -1,0 +1,24 @@
+# sdkconfig.defaults — ESP32-C3 esp-hosted-mcu *slave* (Wi-Fi co-processor) for
+# the vbench-pod board. Pairs with the STM32H563 lean host (stm32h563/src/esp_*).
+#
+# These must agree with the host's stm32h563/src/esp_hosted_spi.h:
+#   - SPI mode 3, 1600-byte transfer buffer (ESP_TRANSPORT_SPI_MAX_BUF_SIZE).
+# The GPIO numbers below are the ESP32-C3's own IO pins, taken from the netlist
+# (vbench-pod.net, U4) — see README.md for the STM32<->ESP32 wiring table.
+
+CONFIG_IDF_TARGET="esp32c3"
+
+# Transport = SPI full-duplex (the menuconfig choice; symbol name may vary by
+# esp-hosted-mcu version — verify under "Example Configuration -> Transport").
+CONFIG_ESP_SPI_CONTROLLER=1
+
+# SPI mode (CPOL/CPHA) — must match the host (ESP_HOSTED_SPI_MODE).
+CONFIG_ESP_SPI_MODE=3
+
+# ESP32-C3 SPI-slave + status GPIOs (IO numbers on U4).
+CONFIG_ESP_SPI_GPIO_MOSI=7
+CONFIG_ESP_SPI_GPIO_MISO=2
+CONFIG_ESP_SPI_GPIO_CLK=6
+CONFIG_ESP_SPI_GPIO_CS=10
+CONFIG_ESP_SPI_GPIO_HANDSHAKE=0
+CONFIG_ESP_SPI_GPIO_DATA_READY=1

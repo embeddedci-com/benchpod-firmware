@@ -1,0 +1,9 @@
+# Host (Mac) cal client. Python 3.8+.
+#
+# The cal client itself (cal_client.py, the linfit) is stdlib-only.
+#
+# Driving the DMM directly on the host (Mac-direct, no Pi) needs the user-space
+# NI GPIB-USB-HS driver in ni_gpib_usb.py, which uses pyusb + libusb:
+#     brew install libusb          # native libusb (Apple Silicon ok)
+#     pip install -r requirements-host.txt
+pyusb>=1.2

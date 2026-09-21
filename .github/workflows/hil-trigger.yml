@@ -1,0 +1,51 @@
+# Ask embeddedci-server to run its hardware-in-the-loop suites after a firmware release.
+#
+# Why a TRIGGER and not a copy of the tests: this repo's CI is deliberately toolchain-only
+# (iverilog sims + native C host units in test.yml) and needs no network, no bench and no
+# credentials. The real-device suites live where their clients live — the Go hwe2e suites in
+# embeddedci-server, the pytest suites in embeddedci-python. Vendoring them here would drag a
+# server URL, an API key and a Python toolchain into a firmware repo, and would leave two
+# copies to drift apart. So this file does one thing: after a release image is published,
+# it tells embeddedci-server's hil.yml to prove that image end to end.
+#
+# Flow:  push tag stm32-v* -> release-stm32.yml builds + publishes -> this dispatches HIL.
+#
+# Prerequisite (one-time): a secret `HIL_DISPATCH_TOKEN` — a fine-grained PAT with
+# `contents: write` on embeddedci-com/embeddedci-server (repository_dispatch is gated on the
+# contents scope). The default GITHUB_TOKEN cannot dispatch into another repository.
+name: Trigger HIL
+
+on:
+  # Chained off the release build so HIL runs against an image that actually published,
+  # not merely one that compiled. `completed` + the success check below covers both.
+  workflow_run:
+    workflows: ["Release STM32 firmware"]
+    types: [completed]
+  # Manual escape hatch: prove the bench against whatever is currently flashed.
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    # Never chase a failed or cancelled release with a hardware run.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask embeddedci-server to run the HIL suites
+        env:
+          GH_TOKEN: ${{ secrets.HIL_DISPATCH_TOKEN }}
+          # What triggered this, so the HIL run is traceable back to a firmware commit.
+          REF: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::HIL_DISPATCH_TOKEN is not set — cannot dispatch into embeddedci-server"
+            exit 1
+          fi
+          gh api repos/embeddedci-com/embeddedci-server/dispatches \
+            -f event_type=firmware-released \
+            -F "client_payload[firmware_ref]=$REF" \
+            -F "client_payload[firmware_sha]=$SHA"
+          echo "dispatched firmware-released for $REF ($SHA)"
