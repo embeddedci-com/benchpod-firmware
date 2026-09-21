@@ -15,6 +15,15 @@ cd slave
 cp /board/sdkconfig.defaults.board .
 export SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c3;sdkconfig.defaults.board"
 
+# Pin transitive component versions (mqtt/iperf/ping-cmd/wifi-cmd/... pulled in by
+# the upstream example) to the committed lock, instead of re-resolving from the
+# component registry on every build. Without this, CONFIG_APP_REPRODUCIBLE_BUILD
+# alone isn't enough for a byte-identical rebuild: it only removes build-instruction
+# nondeterminism (timestamps, paths), not "the registry served a newer patch
+# version this time". The component manager honors an existing lock that matches
+# the current manifests instead of re-reconciling.
+cp /board/dependencies.lock .
+
 echo "=== set-target esp32c3 ==="
 idf.py set-target esp32c3
 
