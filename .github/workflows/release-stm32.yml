@@ -1,18 +1,14 @@
-# Build the STM32H563 bench-pod firmware and publish the binary to the PUBLIC
-# embeddedci-com/benchpod-firmware repo's releases, so `benchpod flash-self` can
-# fetch a prebuilt image without anyone needing a toolchain or access to this
-# (private) source repo.
+# Build the STM32H563 bench-pod firmware and publish the binary as a GitHub
+# release on this repo, so `benchpod flash-self` can fetch a prebuilt image
+# without anyone needing a toolchain.
 #
 # Trigger: push a tag like `stm32-v0.0.6` (the `stm32-` prefix is stripped for
-# the public release tag, e.g. → `v0.0.6`), or run it manually with an explicit
-# tag. The build embeds the real v2 iCE40 bitstream (built here), so the
-# published firmware can also self-reflash the FPGA.
+# the release tag, e.g. → `v0.0.6`), or run it manually with an explicit tag
+# via workflow_dispatch. The build embeds the real v2 iCE40 bitstream (built
+# here), so the published firmware can also self-reflash the FPGA.
 #
-# Prerequisites (one-time, outside this file):
-#   • the public repo `embeddedci-com/benchpod-firmware` must exist, and
-#   • a secret `FIRMWARE_RELEASE_TOKEN` — a (fine-grained) PAT with
-#     `contents: write` on benchpod-firmware — must be set on this repo/org.
-#     The default GITHUB_TOKEN can't write to a different repo.
+# Publishes using the default GITHUB_TOKEN (contents: write below) — no
+# separate PAT needed since source and release target are the same repo.
 name: Release STM32 firmware
 
 on:
@@ -31,12 +27,12 @@ env:
   TARGET_REPO: embeddedci-com/benchpod-firmware
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-and-release:
-    # Don't run on forks — the release token only belongs to the canonical repo.
-    if: github.repository == 'embeddedci-com/bench-pod-firmware'
+    # Don't run on forks — releases only belong to the canonical repo.
+    if: github.repository == 'embeddedci-com/benchpod-firmware'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (with submodules)
@@ -109,9 +105,9 @@ jobs:
         working-directory: stm32h563/build
         run: sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
 
-      - name: Publish to public firmware repo
+      - name: Publish release
         env:
-          GH_TOKEN: ${{ secrets.FIRMWARE_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
