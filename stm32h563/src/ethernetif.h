@@ -31,4 +31,8 @@ void ethernet_link_check_state(struct netif *netif);
    (they touch HAL_ETH + lwIP netif state). */
 void ethernetif_stop(struct netif *netif);
 void ethernetif_phy_restart(struct netif *netif);
+
+#include "eth_diag.h"
+/* Wired-link diagnostics (net task only). */
+void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d);
 #endif

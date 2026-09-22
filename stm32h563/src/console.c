@@ -148,6 +148,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
         "  wifi-clear           erase stored Wi-Fi credentials\r\n"
         "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
+        "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
         "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
         "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
         "  reboot               system reset\r\n");
@@ -814,7 +815,16 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if      (argc >= 2 && !strcmp(argv[1], "stop"))    { net_eth_stop();    op(out, ctx, "  eth: stop requested\r\n"); }
         else if (argc >= 2 && !strcmp(argv[1], "start"))   { net_eth_start();   op(out, ctx, "  eth: start requested (PHY reset + DHCP)\r\n"); }
         else if (argc >= 2 && !strcmp(argv[1], "restart")) { net_eth_restart(); op(out, ctx, "  eth: restart requested (PHY reset + DHCP)\r\n"); }
-        else op(out, ctx, "  usage: eth <stop|start|restart>\r\n");
+        else if (argc >= 2 && !strcmp(argv[1], "stats")) {
+            static eth_diag_t d;      /* static: the console stack has ~1.3 KB of headroom */
+            static char line[384];
+            net_eth_diag(&d);
+            eth_diag_format(&d, line, sizeof(line));
+            op(out, ctx, "  eth: ");
+            out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
+            op(out, ctx, "\r\n");
+        }
+        else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
     } else if (!strcmp(argv[0], "wifi-clear")) {
         config_clear();
         esp_wifi_ctrl_reload();     /* drop Wi-Fi; ESP32 returns to reset */

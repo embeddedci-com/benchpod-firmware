@@ -26,6 +26,8 @@
 #include "board_uid.h"
 #include "lan8742.h"
 #include "board_pins.h"
+#include "eth_diag.h"
+#include <stdio.h>
 #include <string.h>
 
 /* Private typedef -----------------------------------------------------------*/
@@ -88,6 +90,12 @@ LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX
 
 /* Variable Definitions */
 static uint8_t RxAllocStatus;
+static volatile uint32_t s_rx_alloc_fail;   /* RX pool empty events (eth_diag) */
+static uint32_t s_rx_missed, s_rx_missed_ovf;  /* accumulated: DMACMFCR clears on read */
+static volatile uint32_t s_rx_frames, s_rx_bcast;  /* every received frame (the MMC counts unicast only) */
+
+_Static_assert(ETH_DIAG_MACCR_DM == ETH_MACCR_DM && ETH_DIAG_MACCR_FES == ETH_MACCR_FES,
+               "eth_diag MACCR bits must match the CMSIS definitions");
 
 /* Global Ethernet handle*/
 ETH_HandleTypeDef EthHandle;
@@ -306,6 +314,12 @@ static struct pbuf * low_level_input(struct netif *netif)
   if(RxAllocStatus == RX_ALLOC_OK)
   {
     HAL_ETH_ReadData(&EthHandle, (void **)&p);
+  }
+  if (p != NULL)
+  {
+    const uint8_t *dst = (const uint8_t *)p->payload;
+    s_rx_frames++;
+    if (p->len >= 6 && (dst[0] & dst[1] & dst[2] & dst[3] & dst[4] & dst[5]) == 0xFF) s_rx_bcast++;
   }
   return p;
 
@@ -620,6 +634,13 @@ void ethernet_link_check_state(struct netif *netif)
       HAL_ETH_Start(&EthHandle);
       netif_set_up(netif);
       netif_set_link_up(netif);
+      uint32_t anlpar = 0;
+      (void)HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_ANLPAR, &anlpar);
+      printf("[net] eth link up: %s%s%s, partner 0x%04lx\r\n",
+             speed == ETH_SPEED_100M ? "100M" : "10M",
+             duplex == ETH_FULLDUPLEX_MODE ? " full" : " HALF",
+             duplex == ETH_FULLDUPLEX_MODE ? "" : " duplex (a full-duplex switch port would mean a mismatch)",
+             (unsigned long)anlpar);
     }
   }
 
@@ -672,6 +693,7 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
   }
   else
   {
+    if (RxAllocStatus != RX_ALLOC_ERROR) s_rx_alloc_fail++;
     RxAllocStatus = RX_ALLOC_ERROR;
     *buff = NULL;
   }
@@ -722,3 +744,39 @@ void ETH_IRQHandler(void)
 }
 
 
+
+/* Fill `d` from the PHY (MDIO), the MAC and its MMC counters. Net task only: MDIO is not locked. */
+void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d)
+{
+  uint32_t v = 0;
+  memset(d, 0, sizeof(*d));
+  d->phy_ok = true;
+  /* BSR's link bit latches low: the first read reports a drop since the last read, the second now. */
+  if (HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BSR, &v) != HAL_OK ||
+      HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BSR, &v) != HAL_OK) d->phy_ok = false;
+  d->bsr = (uint16_t)v;
+  if (HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_PHYSCSR, &v) != HAL_OK) d->phy_ok = false;
+  d->physcsr = (uint16_t)v;
+  if (HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_ANLPAR, &v) != HAL_OK) d->phy_ok = false;
+  d->anlpar = (uint16_t)v;
+  if (HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_SECR, &v) != HAL_OK) d->phy_ok = false;
+  d->symbol_errors = (uint16_t)v;
+
+  d->maccr = ETH->MACCR;
+  d->netif_link = netif_is_link_up(netif);
+  d->rx_frames = s_rx_frames;
+  d->rx_bcast = s_rx_bcast;
+  d->rx_good = ETH->MMCRUPGR;
+  d->rx_crc = ETH->MMCRCRCEPR;
+  d->rx_align = ETH->MMCRAEPR;
+  d->tx_good = ETH->MMCTPCGR;
+  d->tx_col_single = ETH->MMCTSCGPR;
+  d->tx_col_multi = ETH->MMCTMCGPR;
+  uint32_t mfc = ETH->DMACMFCR;   /* clears on read */
+  s_rx_missed += mfc & ETH_DMACMFCR_MFC;
+  if (mfc & ETH_DMACMFCR_MFCO) s_rx_missed_ovf++;
+  d->rx_missed = s_rx_missed;
+  d->rx_missed_ovf = s_rx_missed_ovf;
+  d->rx_alloc_fail = s_rx_alloc_fail;
+  d->rx_alloc_stuck = (RxAllocStatus == RX_ALLOC_ERROR);
+}

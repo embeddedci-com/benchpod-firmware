@@ -102,6 +102,51 @@ static uint32_t link_timer;
    only latch a request here; net_poll() applies it. */
 typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART } eth_req_t;
 static volatile eth_req_t s_eth_req;
+
+/* Wired-link diagnostics (eth_diag.h): refreshed every 2 s on this task, logged when an error
+   counter moves, printed with every "no lease" line, and read by `eth stats`. */
+#define ETH_DIAG_PERIOD_MS    2000u
+#define ETH_DIAG_LOG_GAP_MS  10000u
+static eth_diag_t s_eth_diag, s_eth_diag_logged;
+static uint32_t   s_eth_diag_timer, s_eth_err_log_ms;
+static bool       s_eth_diag_primed, s_eth_pool_stall_logged;
+
+static void eth_diag_print(void)
+{
+    char line[384];
+    eth_diag_format(&s_eth_diag, line, sizeof(line));
+    printf("[net] eth diag: %s\r\n", line);
+}
+
+static void eth_diag_poll(struct netif *netif, uint32_t now)
+{
+    if (now - s_eth_diag_timer < ETH_DIAG_PERIOD_MS) return;
+    s_eth_diag_timer = now;
+    bool was_stuck = s_eth_diag.rx_alloc_stuck;
+    ethernetif_diag_refresh(netif, &s_eth_diag);
+    if (!s_eth_diag_primed) {
+        s_eth_diag_logged = s_eth_diag;
+        s_eth_diag_primed = true;
+        return;
+    }
+    char delta[160];
+    if (eth_diag_error_delta(&s_eth_diag_logged, &s_eth_diag, delta, sizeof(delta)) > 0 &&
+        now - s_eth_err_log_ms >= ETH_DIAG_LOG_GAP_MS) {
+        s_eth_err_log_ms = now;
+        s_eth_diag_logged = s_eth_diag;
+        printf("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
+               eth_diag_phy_mode(s_eth_diag.physcsr), eth_diag_mac_mode(s_eth_diag.maccr));
+    }
+    if (was_stuck && s_eth_diag.rx_alloc_stuck && !s_eth_pool_stall_logged) {
+        s_eth_pool_stall_logged = true;
+        printf("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
+               (unsigned)ETH_DIAG_PERIOD_MS);
+    } else if (!s_eth_diag.rx_alloc_stuck) {
+        s_eth_pool_stall_logged = false;
+    }
+}
+
+void net_eth_diag(eth_diag_t *out) { *out = s_eth_diag; }
 static bool               s_eth_admin_down;  /* held down by an explicit `eth stop` */
 
 static bool iface_addressed(const net_if_t *i) {
@@ -404,10 +449,12 @@ static void dhcp_process(net_if_t *i)
             ethernetif_phy_restart(netif);
             printf("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
                    tag, DHCP_ESCALATE_REKICKS);
+            eth_diag_print();   /* the state that led to the reset */
             break;
         }
         dhcp_start(netif);
         printf("[net] %s DHCP: still no lease, re-probing...\r\n", tag);
+        if (i->is_eth) eth_diag_print();
         break;
     case NET_DHCP_DO_BOUND:
         i->dhcp_fails = 0;
@@ -608,6 +655,7 @@ void net_poll(void)
         if (!s_eth_admin_down) ethernet_link_check_state(&s_eth.netif);
         update_default_route();
     }
+    if (!s_eth_admin_down) eth_diag_poll(&s_eth.netif, now);
     if (!s_eth_admin_down && now - s_eth.dhcp_timer >= 500) { s_eth.dhcp_timer  = now; dhcp_process(&s_eth);  }
     if (!s_wifi_static && now - s_wifi.dhcp_timer >= 500) { s_wifi.dhcp_timer = now; dhcp_process(&s_wifi); }
 }

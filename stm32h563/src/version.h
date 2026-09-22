@@ -5,6 +5,6 @@
    console/JSON `status`, the boot banner, and the cloud `capabilities` frame (so
    the server can record which build a device is running and decide whether to
    push an OTA update). */
-#define FIRMWARE_VERSION "3.1.0"
+#define FIRMWARE_VERSION "3.1.1-dev"
 
 #endif /* VERSION_H */

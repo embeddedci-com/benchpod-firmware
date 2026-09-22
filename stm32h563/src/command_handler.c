@@ -2256,14 +2256,29 @@ static void handle_wifi_clear(int conn_id) {
 
 /* {"cmd":"eth","action":"stop"|"start"|"restart"} — manually control the wired
    interface (down/up, PHY reset + DHCP re-acquire) without a power cycle. The
-   action is latched and applied on the net task; the reply just confirms intent. */
+   action is latched and applied on the net task; the reply just confirms intent.
+   {"cmd":"eth","action":"stats"} returns the wired-link diagnostics (eth_diag.h). */
 static void handle_eth(int conn_id, const char *buf) {
     char action[16] = {0};
     json_get_value(buf, "action", action, sizeof(action));
+    if (strcmp(action, "stats") == 0) {
+        eth_diag_t d;
+        char data[512], resp[560];
+        net_eth_diag(&d);
+        eth_diag_json(&d, data, sizeof(data));
+        bp_emit_t e;
+        bp_emit_init(&e, resp, sizeof(resp));
+        bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":");
+        bp_emit_raw(&e, data);
+        bp_emit_raw(&e, "}\n");
+        if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
+        if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+        return;
+    }
     if      (strcmp(action, "stop")    == 0) { net_eth_stop();    }
     else if (strcmp(action, "start")   == 0) { net_eth_start();   }
     else if (strcmp(action, "restart") == 0 || action[0] == '\0') { net_eth_restart(); strcpy(action, "restart"); }
-    else { send_error(conn_id, "eth action must be stop|start|restart"); return; }
+    else { send_error(conn_id, "eth action must be stop|start|restart|stats"); return; }
     char resp[48];
     snprintf(resp, sizeof(resp), "\"%s\"", action);
     send_ok_str(conn_id, resp);

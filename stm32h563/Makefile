@@ -88,6 +88,7 @@ C_SOURCES := \
   src/ethernetif.c \
   src/net_server.c \
   src/net_dhcp.c \
+  src/eth_diag.c \
   src/esp_hosted_frame.c \
   src/esp_hosted_spi.c \
   src/esp_hosted_pump.c \

@@ -29,5 +29,8 @@ void net_wifi_static(const char *ip, const char *mask, const char *gw);
 void net_eth_stop(void);
 void net_eth_start(void);
 void net_eth_restart(void);
+/* The latest wired-link diagnostics snapshot (refreshed every 2 s on the net task). */
+#include "eth_diag.h"
+void net_eth_diag(eth_diag_t *out);
 
 #endif /* NET_SERVER_H */

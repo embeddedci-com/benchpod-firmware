@@ -26,6 +26,7 @@ DACLOOP_SRCS  := test_dac_loop_params.c ../src/dac_loop_params.c
 ADCSCALE_SRCS := test_adc_scale.c ../src/adc_scale.c
 ESPPUMP_SRCS  := test_esp_pump.c ../src/esp_hosted_pump.c
 LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
+ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 
@@ -106,7 +107,10 @@ build/test_esp_pump: $(ESPPUMP_SRCS)
 
 build/test_la_pins: $(LAPINS_SRCS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(LAPINS_SRCS) -lm -o $@
+
+build/test_eth_diag: $(ETHDIAG_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(ETHDIAG_SRCS) -lm -o $@
 
 build/test_power_profile: $(PWRPROF_SRCS)
 	@mkdir -p build
@@ -120,7 +124,7 @@ build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_power_profile build/test_boot_policy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -142,6 +146,7 @@ run: $(TESTS)
 	@./build/test_adc_scale
 	@./build/test_esp_pump
 	@./build/test_la_pins
+	@./build/test_eth_diag
 	@./build/test_power_profile
 	@./build/test_boot_policy
 ifneq ($(HAVE_MBEDTLS),)
