@@ -31,6 +31,9 @@ void ethernet_link_check_state(struct netif *netif);
    (they touch HAL_ETH + lwIP netif state). */
 void ethernetif_stop(struct netif *netif);
 void ethernetif_phy_restart(struct netif *netif);
+/* Force 10/100 Mbit (mbit = 10 or 100, full = duplex) or restore autoneg (mbit = 0).
+   A debug aid for a suspect wired link: see the comment in ethernetif.c. */
+int  ethernetif_force_speed(struct netif *netif, int mbit, int full);
 
 #include "eth_diag.h"
 /* Wired-link diagnostics (net task only). */

@@ -151,6 +151,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  wifi-clear           erase stored Wi-Fi credentials\r\n"
         "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
         "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
+        "  eth speed <auto|10|100> [full]  force the link mode (debug: 10M survives a bad\r\n"
+        "                       analog path that 100M does not); half unless `full` is given\r\n"
         "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
         "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
         "  reboot               system reset\r\n");
@@ -829,7 +831,24 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
             op(out, ctx, "\r\n");
         }
-        else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
+        else if (argc >= 3 && !strcmp(argv[1], "speed")) {
+            int full = (argc >= 4 && !strcmp(argv[3], "full"));
+            if (!strcmp(argv[2], "auto")) {
+                net_eth_force_speed(0, 0);
+                op(out, ctx, "  eth: autonegotiation restored (re-acquiring link + DHCP)\r\n");
+            } else if (!strcmp(argv[2], "10") || !strcmp(argv[2], "100")) {
+                int mbit = atoi(argv[2]);
+                net_eth_force_speed(mbit, full);
+                op(out, ctx, "  eth: forcing %d M %s (re-acquiring link + DHCP)\r\n",
+                   mbit, full ? "full" : "half");
+                if (full)
+                    op(out, ctx, "  note: a switch port that autonegotiates parallel-detects HALF,"
+                                 " so forced full is a duplex mismatch\r\n");
+            } else {
+                op(out, ctx, "  usage: eth speed <auto|10|100> [full]\r\n");
+            }
+        }
+        else op(out, ctx, "  usage: eth <stop|start|restart|stats|speed>\r\n");
     } else if (!strcmp(argv[0], "wifi-clear")) {
         config_clear();
         esp_wifi_ctrl_reload();     /* drop Wi-Fi; ESP32 returns to reset */

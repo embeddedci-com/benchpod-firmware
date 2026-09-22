@@ -101,7 +101,7 @@ static uint32_t link_timer;
 /* Ethernet admin control (from the `eth` console/JSON command or the DHCP
    self-heal). Touching HAL_ETH + lwIP must happen on the net task, so other tasks
    only latch a request here; net_poll() applies it. */
-typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART } eth_req_t;
+typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART, ETH_REQ_SPEED } eth_req_t;
 static volatile eth_req_t s_eth_req;
 
 /* Wired-link diagnostics (eth_diag.h): refreshed every 2 s on this task, logged when an error
@@ -149,6 +149,8 @@ static void eth_diag_poll(struct netif *netif, uint32_t now)
 
 void net_eth_diag(eth_diag_t *out) { *out = s_eth_diag; }
 static bool               s_eth_admin_down;  /* held down by an explicit `eth stop` */
+static int                s_eth_force_mbit;  /* `eth speed`: 0 = autoneg, else 10 or 100 */
+static int                s_eth_force_full;  /* `eth speed`: duplex when forced */
 
 static bool iface_addressed(const net_if_t *i) {
     return i->dhcp.state == NET_DHCP_DONE;
@@ -545,6 +547,22 @@ static void net_eth_apply_request(void)
         update_default_route();          /* fail over to Wi-Fi if it's up */
         printf("[net] eth: stopped (admin down)\r\n");
         break;
+    case ETH_REQ_SPEED:
+        s_eth_admin_down = false;
+        eth_reset_addr_state();
+        if (ethernetif_force_speed(&s_eth.netif, s_eth_force_mbit, s_eth_force_full) != 0) {
+            printf("[net] eth: forcing the link mode failed (MDIO write)\r\n");
+            break;
+        }
+        if (s_eth_force_mbit == 0) {
+            printf("[net] eth: autonegotiation restored, re-acquiring link + DHCP\r\n");
+        } else {
+            printf("[net] eth: link forced to %d M %s, re-acquiring link + DHCP%s\r\n",
+                   s_eth_force_mbit, s_eth_force_full ? "full" : "half",
+                   s_eth_force_full ? " (a switch port that autonegotiates falls back to HALF:"
+                                      " expect a duplex mismatch)" : "");
+        }
+        break;
     case ETH_REQ_UP:
     case ETH_REQ_RESTART:
         s_eth_admin_down = false;
@@ -563,6 +581,12 @@ static void net_eth_apply_request(void)
 void net_eth_stop(void)    { s_eth_req = ETH_REQ_DOWN; }
 void net_eth_start(void)   { s_eth_req = ETH_REQ_UP; }
 void net_eth_restart(void) { s_eth_req = ETH_REQ_RESTART; }
+void net_eth_force_speed(int mbit, int full)
+{
+    s_eth_force_mbit = mbit;
+    s_eth_force_full = full;
+    s_eth_req = ETH_REQ_SPEED;
+}
 
 /* ---- mDNS / DNS-SD responder ------------------------------------------------
    Advertises the pod as "_benchpod._tcp" so a client can browse the LAN and

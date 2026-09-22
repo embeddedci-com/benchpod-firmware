@@ -2263,7 +2263,9 @@ static void handle_wifi_clear(int conn_id) {
 /* {"cmd":"eth","action":"stop"|"start"|"restart"} — manually control the wired
    interface (down/up, PHY reset + DHCP re-acquire) without a power cycle. The
    action is latched and applied on the net task; the reply just confirms intent.
-   {"cmd":"eth","action":"stats"} returns the wired-link diagnostics (eth_diag.h). */
+   {"cmd":"eth","action":"stats"} returns the wired-link diagnostics (eth_diag.h).
+   {"cmd":"eth","action":"speed","mbit":0|10|100[,"duplex":"half"|"full"]} forces the link
+   mode (0 = back to autonegotiation) — a debug aid for a link that errors at 100M. */
 static void handle_eth(int conn_id, const char *buf) {
     char action[16] = {0};
     json_get_value(buf, "action", action, sizeof(action));
@@ -2281,10 +2283,28 @@ static void handle_eth(int conn_id, const char *buf) {
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
         return;
     }
+    if (strcmp(action, "speed") == 0) {
+        char nbuf[8] = {0}, dbuf[8] = {0};
+        if (!json_get_value(buf, "mbit", nbuf, sizeof(nbuf)) || !nbuf[0]) {
+            send_error(conn_id, "eth speed needs mbit (0 = autoneg, 10 or 100)"); return;
+        }
+        int mbit = atoi(nbuf);
+        if (mbit != 0 && mbit != 10 && mbit != 100) {
+            send_error(conn_id, "eth speed mbit must be 0 (autoneg), 10 or 100"); return;
+        }
+        json_get_value(buf, "duplex", dbuf, sizeof(dbuf));
+        int full = (strcmp(dbuf, "full") == 0);
+        net_eth_force_speed(mbit, full);
+        char resp[64];
+        snprintf(resp, sizeof(resp), "{\"speed\":%d,\"duplex\":\"%s\"}",
+                 mbit, mbit == 0 ? "auto" : (full ? "full" : "half"));
+        send_ok_str(conn_id, resp);
+        return;
+    }
     if      (strcmp(action, "stop")    == 0) { net_eth_stop();    }
     else if (strcmp(action, "start")   == 0) { net_eth_start();   }
     else if (strcmp(action, "restart") == 0 || action[0] == '\0') { net_eth_restart(); strcpy(action, "restart"); }
-    else { send_error(conn_id, "eth action must be stop|start|restart|stats"); return; }
+    else { send_error(conn_id, "eth action must be stop|start|restart|stats|speed"); return; }
     char resp[48];
     snprintf(resp, sizeof(resp), "\"%s\"", action);
     send_ok_str(conn_id, resp);

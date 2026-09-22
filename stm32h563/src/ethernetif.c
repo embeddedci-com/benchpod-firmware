@@ -678,6 +678,37 @@ void ethernetif_phy_restart(struct netif *netif)
   netif_set_link_down(netif);
 }
 
+/* Force the PHY's link mode instead of letting it autonegotiate, or put it back on
+   autoneg (mbit = 0).  A DEBUG AID: 10BASE-T swings ~5x the voltage of 100BASE-TX,
+   runs at a quarter of the symbol rate and tolerates a far looser reference clock, so
+   a link that is lossy at 100M and clean at 10M points at the analog path (magnetics,
+   RJ45, the PHY's 25 MHz reference) rather than the MAC, the driver or the network.
+
+   A forced link does NOT autonegotiate, so a switch port that does will fall back to
+   parallel detection and pick HALF duplex — which is why half is the sane default here.
+   Forcing full against such a port is a duplex mismatch and produces late collisions
+   and its own losses, so it stays opt-in.
+
+   Returns 0 on success, -1 if the MDIO write failed. Net task only. */
+int ethernetif_force_speed(struct netif *netif, int mbit, int full)
+{
+  uint32_t bcr = (mbit == 0) ? (LAN8742_BCR_AUTONEGO_EN | LAN8742_BCR_RESTART_AUTONEGO)
+                             : ((mbit == 100 ? LAN8742_BCR_SPEED_SELECT : 0u) |
+                                (full        ? LAN8742_BCR_DUPLEX_MODE  : 0u));
+  HAL_ETH_Stop(&EthHandle);
+  if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BCR, bcr) != HAL_OK) {
+    netif_set_down(netif);
+    netif_set_link_down(netif);
+    return -1;
+  }
+  /* Mark the link down so the next ethernet_link_check_state() re-reads the PHY and
+     reconfigures the MAC for whatever it now reports (the LAN8742 driver derives the
+     mode from BCR when autoneg is off, so a forced link comes back up by itself). */
+  netif_set_down(netif);
+  netif_set_link_down(netif);
+  return 0;
+}
+
 void HAL_ETH_RxAllocateCallback(uint8_t **buff)
 {
   struct pbuf_custom *p = LWIP_MEMPOOL_ALLOC(RX_POOL);

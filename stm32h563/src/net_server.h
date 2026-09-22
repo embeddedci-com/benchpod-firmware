@@ -29,6 +29,10 @@ void net_wifi_static(const char *ip, const char *mask, const char *gw);
 void net_eth_stop(void);
 void net_eth_start(void);
 void net_eth_restart(void);
+/* Force the wired link to 10 or 100 Mbit (mbit), or back to autonegotiation (mbit = 0).
+   A debug aid for a suspect link: 10BASE-T is far more tolerant of a degraded analog
+   path, so clean at 10M and lossy at 100M accuses the magnetics/RJ45/PHY clock. */
+void net_eth_force_speed(int mbit, int full);
 /* The latest wired-link diagnostics snapshot (refreshed every 2 s on the net task). */
 #include "eth_diag.h"
 void net_eth_diag(eth_diag_t *out);
