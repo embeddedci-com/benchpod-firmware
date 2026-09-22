@@ -309,11 +309,15 @@ SEED_LOOP_FALLBACK ?= 1 6 5 8 9 10 16 12 7 2 15 14 11 3 4
 # NB an earlier v35 draft also kept an LA PRE-TRIGGER window in the SPRAM ring (4280 LC): at that
 # fill only 7/16 seeds closed and the BEST was 49.75 MHz, under MIN_CLK48_MHZ.  That is why the
 # pre-trigger was dropped rather than shipped (see the v35 note in src/top_v2.v).
-SEED_DEEP ?= 13
-# Ordered by the v35 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
+# v36 LA13/LA14 READBACK (src/top_v2.v): widening la_sample/la_levels + la_psram_capture's N
+# 12->14 re-rolled placement and seed 13 now MISSES 48 MHz (47.48).  Swept 1..16: only 9/16 close
+# (v35: 13/16); 14 is best at clk48 51.13 MHz (clk 34.05), then 5 (49.36) and 8 (49.35).
+# Re-pinned SEED_DEEP 13 -> 14 — RE-VERIFY deep replay on hardware (TestHW_V2_DeepReplay).
+SEED_DEEP ?= 14
+# Ordered by the v36 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 2 7 14 1 3 4 16 10 9 15 5 11 8 6 12
+SEED_DEEP_FALLBACK ?= 5 8 2 3 7 12 4 15 10 13 11 1 9 16 6
 MULTI = $(OUT)_multi.bin
 
 $(OUT)_loop.json: $(SRC)

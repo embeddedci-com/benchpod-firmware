@@ -282,7 +282,7 @@ int  adc_capture_psram(uint16_t *out16, size_t samples, float sample_rate_hz);
 /* v2 unified capture: arm the ADC and raw 12-ch LA producers TOGETHER (one
    trigger, shared t0) and read both PSRAM regions back.  adc_count==0 => ADC not
    captured; la_count==0 => LA not captured.  out_adc receives adc_count 16-bit ADC
-   samples; out_la receives la_count 16-bit LA words (low 12 bits = LA1..LA12);
+   samples; out_la receives la_count 16-bit LA words (low 14 bits = LA1..LA14);
    either out may be NULL if its count is 0.  Dividers are in 24 MHz clk ticks.
    Blocking; returns 0 on success, -1 on error/timeout/overflow. */
 int  fpga_dual_capture(uint16_t *out_adc, uint16_t adc_count, uint16_t adc_div,
@@ -421,12 +421,12 @@ int adc_probe_one(uint8_t *out_value);
  * RP2350's PIO driving RP-native GPIOs.  They now run inside the FPGA gateware
  * (stepper_engine.v / swd_engine.v) driving the FPGA's LA bank, and the RP just
  * issues high-level commands over SPI.  The host addresses pins by 1-based LA
- * channel index (LA1..LA12); the firmware maps LA<n> → FPGA la[n-1].  See
+ * channel index (LA1..LA14); the firmware maps LA<n> → FPGA la[n-1].  See
  * docs/API.md and ice40/README.md for the channel→pin table.
  * ========================================================================== */
 
 #define LA_CHANNEL_MIN       1u
-#define LA_CHANNEL_MAX       12u
+#define LA_CHANNEL_MAX       14u
 
 /* Stepper bounds.  steps + delay_us are 16-bit fields in the gateware
  * (cmd_dispatch GPIO_STEP: [channel][steps(2)][delay_us(2)]), so both cap at
@@ -436,7 +436,7 @@ int adc_probe_one(uint8_t *out_value);
 #define LA_STEP_MAX_STEPS    65535u
 
 /* Drive an LA channel: mode 0 = low, 1 = high, 2 = high-Z.
-   Returns 0 on success, -1 if channel is outside LA1..LA12. */
+   Returns 0 on success, -1 if channel is outside LA1..LA14. */
 int fpga_la_set(unsigned channel, int mode);
 
 /* Drive the iCE40 onboard status LEDs: bit0 = green, bit1 = yellow,
@@ -455,7 +455,7 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us);
 bool fpga_la_step_busy(void);
 
 /* ---- LA I/O-bank voltage (TPS2116 mux) -----------------------------------
-   The LA bank VCCIO (iCE40 bank 0 — supplies ALL of LA1..LA12) is switched
+   The LA bank VCCIO (iCE40 bank 0 — supplies ALL of LA1..LA14) is switched
    between 3.3 V and 1.8 V by a TPS2116 power-mux (U8): PG3 (LA_VCCIO_SWITCH)
    drives PR1 (the select), PG4 (LA_VCCIO_ST) reads the open-drain ST output.
    PR1 and ST each have a 100 k pull-up to +3V3 (R151/R152).
@@ -533,7 +533,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
  * this firmware) as an I2C slave on two LA channels, captures DUT writes, and
  * runs a configurable conversion/busy-bit handshake.  Sensor-specific models
  * (sensor_bmp280.c, …) build the register image and pick the handshake config.
- * SDA/SCL are 1-based LA channel indices (LA1..LA12).
+ * SDA/SCL are 1-based LA channel indices (LA1..LA14).
  * ========================================================================== */
 
 typedef struct {
@@ -571,8 +571,8 @@ int fpga_i2c_sensor_status(i2c_sensor_status_t *out);
 int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
 
 /* ---- deep multi-channel LA capture into PSRAM ----------------------------
-   The iCE40 streams `samples` 12-channel LA samples (2 little-endian bytes each:
-   byte 2k = LA1..LA8, byte 2k+1 = {0000,LA9..LA12}) straight into the shared PSRAM, so the depth
+   The iCE40 streams `samples` 14-channel LA samples (2 little-endian bytes each:
+   byte 2k = LA1..LA8, byte 2k+1 = {00,LA9..LA14}) straight into the shared PSRAM, so the depth
    is bounded by PSRAM (up to LA_PSRAM_MAX_SAMPLES) rather than the 4 KB trace
    buffer.  The MCU reads the region back over its own XSPI in chunks.  Mirrors
    the async ADC PSRAM capture: arm with _start(), poll _wait() (it grabs the
@@ -606,7 +606,7 @@ void fpga_la_psram_release(void);
  * The FPGA serialises/deserialises frames on the chosen LA channels; this
  * firmware pushes TX bytes and drains RX bytes over SPI and bridges them to the
  * console (`uart-proxy`) or a TCP client (`uart_proxy_start`).  RX/TX are
- * 1-based LA channel indices (LA1..LA12).
+ * 1-based LA channel indices (LA1..LA14).
  * ========================================================================== */
 
 /* Soft-UART RX FIFO depth (uart_engine.v). rx_avail is a 9-bit count in [0, 256];

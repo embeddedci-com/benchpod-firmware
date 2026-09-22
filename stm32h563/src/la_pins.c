@@ -14,7 +14,7 @@ typedef struct {
     uint8_t level;   /* commanded level for gpio output / open_drain */
 } la_pin_t;
 
-static la_pin_t s_pin[LA_PINS_COUNT + 1];   /* index 1..12 */
+static la_pin_t s_pin[LA_PINS_COUNT + 1];   /* index 1..14 */
 
 static bool la_ok(unsigned la) { return la >= 1u && la <= LA_PINS_COUNT; }
 
@@ -71,7 +71,7 @@ uint16_t la_pins_mask_fn(la_fn_t fn) {
 }
 
 uint16_t la_pins_owned_mask(void) {
-    return (uint16_t)(~la_pins_mask_fn(LA_FN_NONE) & 0x0FFFu);
+    return (uint16_t)(~la_pins_mask_fn(LA_FN_NONE) & 0x3FFFu);
 }
 
 la_pull_dir_t la_pull_dir(unsigned la) {
@@ -139,7 +139,7 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
                          uint16_t free_fns, uint16_t pull_mask, char *err, size_t cap) {
     for (size_t i = 0; i < n; i++) {
         unsigned la = las[i];
-        if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..12)", la); return false; }
+        if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..14)", la); return false; }
         la_fn_t owner = (la_fn_t)s_pin[la].fn;
         if (owner != LA_FN_NONE && owner != fn && !(free_fns & LA_FN_BIT(owner))) {
             conflict_msg(la, err, cap);
@@ -182,7 +182,7 @@ bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap) {
 bool la_pins_check_level(const uint8_t *las, size_t n, char *err, size_t cap) {
     for (size_t i = 0; i < n; i++) {
         unsigned la = las[i];
-        if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..12)", la); return false; }
+        if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..14)", la); return false; }
         la_gpio_mode_t m = la_pins_gpio(la);
         if (m == LA_GPIO_OUTPUT || m == LA_GPIO_OPEN_DRAIN) continue;
         la_fn_t fn = (la_fn_t)s_pin[la].fn;
@@ -267,7 +267,7 @@ static const char *find_value(const char *json, const char *key) {
 
 static bool add_pin(la_gpio_req_t *req, long v, char *err, size_t cap) {
     if (v < 1 || v > (long)LA_PINS_COUNT) {
-        snprintf(err, cap, "la must be 1..12 (or \"all\" with \"mode\":\"off\")");
+        snprintf(err, cap, "la must be 1..14 (or \"all\" with \"mode\":\"off\")");
         return false;
     }
     for (size_t i = 0; i < req->n; i++) if (req->las[i] == (uint8_t)v) return true;   /* dedupe */
@@ -459,7 +459,7 @@ bool la_trigger_parse(const char *json, la_trigger_t *out, char *err, size_t cap
     char *end = NULL;
     long la = bp_json_get(obj, "la", s, sizeof(s)) ? strtol(s, &end, 10) : 0;
     if (!end || end == s || *end != '\0' || la < 1 || la > (long)LA_PINS_COUNT) {
-        snprintf(err, cap, "trigger la must be 1..12");
+        snprintf(err, cap, "trigger la must be 1..14");
         return false;
     }
     la_edge_t edge = LA_EDGE_RISING;   /* default when "edge" is omitted */

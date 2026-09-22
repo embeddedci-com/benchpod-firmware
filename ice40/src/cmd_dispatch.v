@@ -28,7 +28,7 @@
 //   -- logic-analyzer GPIO bank (stepper + static, see la_bank/stepper_engine) --
 //   0x40 GPIO_SET        [channel][mode]            (mode 0=low,1=high,2=high-Z)
 //   0x41 GPIO_STEP       [channel][steps(2)][delay_us(2)]   (16-bit each, LE)
-//   0x43 GPIO_GET        → 2 bytes LE: synchronised LA1..LA12 levels (v35)
+//   0x43 GPIO_GET        → 2 bytes LE: synchronised LA1..LA14 levels (v35)
 //   -- SWD bit-bang (see swd_engine) --
 //   0x50 SWD_ARM         [swclk_ch][swdio_ch][nreset_ch]   (nreset 0xFF = none)
 //   0x51 SWD_FEED        [len_lo][len_hi][N remote_bitbang bytes]
@@ -176,7 +176,7 @@ module cmd_dispatch #(
     input  wire [15:0]       adc_dbg_sample,
     input  wire [15:0]       dac_loop_v_dbg,   // DAC_PROBE (0x16): live loop output
     input  wire [15:0]       dac_loop_in_dbg,  // DAC_LOOP_IN_PROBE (0x1B): live loop INPUT
-    input  wire [11:0]       la_levels,        // GPIO_GET (0x43, v35): 2-flop-synced LA1..LA12
+    input  wire [13:0]       la_levels,        // GPIO_GET (0x43, v35): 2-flop-synced LA1..LA14
 
     // ---- LA static GPIO control (GPIO_SET) ----
     output reg               gpio_set_stb,
@@ -595,10 +595,10 @@ module cmd_dispatch #(
                                 tx_byte       <= dac_loop_in_dbg[7:0];
                                 state         <= S_ADC_PROBE_HI;
                             end
-                            // GPIO_GET (v35): the live LA1..LA12 levels through the 2-flop
+                            // GPIO_GET (v35): the live LA1..LA14 levels through the 2-flop
                             // synchroniser, LE, latched here so both bytes are one snapshot.
                             OP_GPIO_GET: begin
-                                adc_dbg_latch <= {4'b0000, la_levels};
+                                adc_dbg_latch <= {2'b00, la_levels};
                                 tx_byte       <= la_levels[7:0];
                                 state         <= S_ADC_PROBE_HI;
                             end

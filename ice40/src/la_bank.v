@@ -1,7 +1,8 @@
 // ============================================================================
 // la_bank.v — Logic-Analyzer GPIO bank for the bench-pod iCE40 gateware.
 //
-// Owns the 12 bidirectional LA channels (LA1..LA12, wired in *.pcf) and muxes
+// Owns the N bidirectional LA channels (LA1..LAN, wired in *.pcf; N=12 on v1,
+// N=14 on v2) and muxes
 // five drivers onto them with fixed priority  swd > stepper > i2c > uart > static :
 //
 //   static   per-channel {out,oe} latches set by the GPIO_SET command
@@ -25,8 +26,8 @@
 // tristate output (OUTPUT_ENABLE) + simple input (D_IN_0), so every channel
 // can be driven, released to high-Z, or read back (needed for SWDIO sampling).
 //
-// Channels here are 0-based (0..11).  The firmware exposes them to the host as
-// 1-based LA channel indices (LA1..LA12) and maps 1→0 on the wire.
+// Channels here are 0-based (0..N-1).  The firmware exposes them to the host as
+// 1-based LA channel indices (LA1..LAN) and maps 1→0 on the wire.
 // ============================================================================
 
 module la_bank #(

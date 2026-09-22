@@ -2,7 +2,7 @@
 #define LA_PINS_H
 
 /*
- * la_pins — who owns each of the 12 logic-analyzer pins (LA1..LA12 on the iCE40).
+ * la_pins — who owns each of the 14 logic-analyzer pins (LA1..LA14 on the iCE40).
  *
  * The gateware's la_bank.v resolves overlapping drivers silently, by priority
  * (swd > stepper > i2c > uart > static GPIO_SET).  Nothing used to stop a UART proxy and an
@@ -21,7 +21,7 @@
 
 #include "bp_json.h"
 
-#define LA_PINS_COUNT 12u
+#define LA_PINS_COUNT 14u
 
 typedef enum {
     LA_FN_NONE = 0,   /* LA mode: high-Z, observed by captures */
@@ -48,8 +48,9 @@ typedef enum {
 
 typedef enum { LA_PULL_NONE = 0, LA_PULL_UP, LA_PULL_DOWN } la_pull_dir_t;
 
-/* Every message this module builds fits in this many bytes (NUL included). */
-#define LA_PINS_ERR_MAX 256u
+/* Every message this module builds fits in this many bytes (NUL included).  320, not 256: the
+   voltage-change refusal listing all 14 pins by function name reaches 286 B (test_la_pins.c). */
+#define LA_PINS_ERR_MAX 320u
 
 /* Pod reboot state: every pin back to none. */
 void la_pins_reset(void);
@@ -66,7 +67,7 @@ uint16_t       la_pins_mask_fn(la_fn_t fn);    /* pins that currently have this 
 uint16_t       la_pins_owned_mask(void);       /* pins whose function is not none */
 
 /* Fixed board resistors: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, LA7/LA8 10k down,
-   LA9..LA12 none (ohms NULL). */
+   LA9..LA14 none (ohms NULL). */
 la_pull_dir_t la_pull_dir(unsigned la);
 const char   *la_pull_ohms(unsigned la);
 
@@ -122,7 +123,7 @@ typedef struct {
     bool claim_step;   /* step pin was none: claim `step` for the train */
     bool claim_dir;    /* dir pin was none: claim `step_dir`, drive it, release after */
 } la_step_plan_t;
-/* la 1..12; dir_la 0 = no direction pin.  A gpio output pin is used without changing its
+/* la 1..14; dir_la 0 = no direction pin.  A gpio output pin is used without changing its
    ownership (the train pulses it / the direction sets its level); none is claimed; anything
    else is a conflict. */
 bool la_pins_plan_step(unsigned la, unsigned dir_la, la_step_plan_t *plan, char *err, size_t cap);
@@ -146,7 +147,7 @@ typedef enum {
 
 typedef struct {
     bool      present;
-    uint8_t   la;           /* 1..12 */
+    uint8_t   la;           /* 1..14 */
     la_edge_t edge;
     uint32_t  timeout_ms;
 } la_trigger_t;

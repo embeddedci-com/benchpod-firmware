@@ -514,7 +514,7 @@ Accepted by `capture`, `capture_dual` and `la_capture`:
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `trigger.la` | integer | yes | — | LA channel 1..12 to watch. **Any** pin, whatever its function — triggers observe, they do not claim. |
+| `trigger.la` | integer | yes | — | LA channel 1..14 to watch. **Any** pin, whatever its function — triggers observe, they do not claim. |
 | `trigger.edge` | string | no | `"rising"` | `rising`, `falling`, `high` or `low`. |
 | `trigger_timeout_ms` | integer | no | `10000` | 1..600000. How long to wait before giving up. |
 
@@ -549,7 +549,7 @@ untriggered t0 and would otherwise fire the waveform.
 |---|---|
 | the running gateware is older than v35 | `"capture triggers need gateware v35 or newer (this pod runs vNN)"` |
 | `trigger` is not an object | `"trigger must be an object like {\"la\":1,\"edge\":\"rising\"}"` |
-| `trigger.la` outside 1..12 | `"trigger la must be 1..12"` |
+| `trigger.la` outside 1..14 | `"trigger la must be 1..14"` |
 | `trigger.edge` not recognised | `"trigger edge must be rising, falling, high or low"` |
 | `trigger_timeout_ms` outside 1..600000 | `"trigger_timeout_ms must be 1..600000"` |
 | the condition never arrived | `"trigger timeout: no <edge> edge on LA<n> within <N> ms"` |
@@ -905,8 +905,8 @@ Everything the pod exposes to the device under test lands on the 2×11 header
 | Pin | Signal | Pin | Signal |
 |---|---|---|---|
 | 1 | `LA1` | 12 | `LA12` |
-| 2 | `LA2` | 13 | `LA13` *(not exposed as an API channel)* |
-| 3 | `LA3` | 14 | `LA14` *(not exposed as an API channel)* |
+| 2 | `LA2` | 13 | `LA13` |
+| 3 | `LA3` | 14 | `LA14` |
 | 4 | `LA4` | 15 | `GND` |
 | 5 | `LA5` | 16 | `GND` |
 | 6 | `LA6` | 17 | `+3V3` |
@@ -948,7 +948,7 @@ Starts a **non-blocking** train of `steps` pulses on an LA channel: each pulse i
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `la` | integer | yes | — | LA channel to pulse (1..12). |
+| `la` | integer | yes | — | LA channel to pulse (1..14). |
 | `steps` | integer | yes | — | Number of pulses. Range 1..65535. **Its presence selects the step action.** |
 | `delay_us` | integer | yes | — | Microseconds per half-phase. Range 4..65535. |
 | `dir_la` | integer | no | — | Optional direction channel driven (high/low) **before** stepping. |
@@ -978,7 +978,7 @@ direction are fixed per pin:
 **LA7 and LA8 pull DOWN, not up.** They are driven by the same `pullup` field and the
 same analog switch as LA1-LA6 — only the resistor's other end differs — so a client
 that assumes every biased channel pulls up will drive an open-drain bus the wrong way.
-The `pull` field in the response says which way each one goes. LA9-LA12 have no
+The `pull` field in the response says which way each one goes. LA9-LA14 have no
 network at all.
 
 All of them default to **off (high-Z)** at boot.
@@ -1051,7 +1051,7 @@ without changing its ownership, and its commanded level returns afterwards.
 <a id="la-pin-ownership"></a>
 ### LA pin ownership: functions and conflicts
 
-Every one of LA1..LA12 has exactly **one function** at a time. Before this existed the
+Every one of LA1..LA14 has exactly **one function** at a time. Before this existed the
 gateware's pin bank resolved overlaps *silently* by priority (SWD > stepper > I2C > UART >
 static level), so a UART proxy and an emulated I2C sensor could be told to share a channel
 and the loser simply did not work. The firmware now keeps a table and refuses the collision.
@@ -1177,7 +1177,7 @@ pin back to `none`).
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `la` | integer, array of integers, or `"all"` | yes | — | Channel(s) 1..12. `"all"` is allowed **only** with `"mode":"off"`. |
+| `la` | integer, array of integers, or `"all"` | yes | — | Channel(s) 1..14. `"all"` is allowed **only** with `"mode":"off"`. |
 | `mode` | string | yes (here) | — | `input`, `output`, `open_drain` or `off`. |
 | `level` | `0` or `1` | no | `0` for `output`, `1` (released) for `open_drain` | Not accepted with `input`. |
 
@@ -1225,7 +1225,7 @@ The affected pins, in the same entry shape `la_pins` uses:
 | `mode` not recognised | `"mode must be input, output, open_drain or off"` |
 | `level` not 0/1 | `"level must be 0 or 1"` |
 | `la` not a number, list or `"all"` | `"la must be a pin number, a list of pin numbers, or \"all\""` |
-| `la` out of range | `"la must be 1..12 (or \"all\" with \"mode\":\"off\")"` |
+| `la` out of range | `"la must be 1..14 (or \"all\" with \"mode\":\"off\")"` |
 | `"la":"all"` with anything but `"mode":"off"` | `"\"la\":\"all\" is only allowed with \"mode\":\"off\""` |
 | `level` with `"mode":"input"` | `"level applies to output and open_drain pins, not input"` |
 | the pin belongs to another function | `"pin conflict: …"` (see [above](#la-pin-ownership)) |
@@ -1244,7 +1244,7 @@ pin. `DIGital:STEP` follows the step-train rules above.
 
 ### `la_voltage` — select the LA I/O-bank voltage
 
-The LA bank I/O voltage (iCE40 `VCCIO_0` — the supply for **all** of LA1..LA12) is
+The LA bank I/O voltage (iCE40 `VCCIO_0` — the supply for **all** of LA1..LA14) is
 switched between **3.3 V** and **1.8 V** by an on-board TPS2116 power-mux (U8),
 driven by `PG3` (select) with status on `PG4`. At boot the selection is **unset**
 and the firmware **refuses every LA-bank operation** (`la`, `la_capture`,
@@ -1710,7 +1710,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | Condition | `message` |
 |---|---|
 | `rx`/`tx` field missing | `"missing rx"` / `"missing tx"` |
-| an LA channel is outside 1..12 or the two are equal | `"invalid uart args"` |
+| an LA channel is outside 1..14 or the two are equal | `"invalid uart args"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
 | `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
@@ -1761,8 +1761,8 @@ console.
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `type` | string | yes | — | Sensor model. Currently only `"bmp280"`. |
-| `sda` | integer | yes | — | LA channel (1..12) for the I2C **SDA** line. |
-| `scl` | integer | yes | — | LA channel (1..12) for the I2C **SCL** line. |
+| `sda` | integer | yes | — | LA channel (1..14) for the I2C **SDA** line. |
+| `scl` | integer | yes | — | LA channel (1..14) for the I2C **SCL** line. |
 | `addr` | string | no | model default (`0x76`) | 7-bit I2C address as a hex/decimal string (e.g. `"0x77"`). |
 
 #### Response
@@ -2131,9 +2131,9 @@ All errors follow the format:
 | `"missing state"` | `target_power` request without `state` field |
 | `"missing efuse"` | `target_power` request without `efuse` field |
 | `"invalid efuse"` | `target_power` `efuse` is not 1 or 2 |
-| `"invalid swd la channel"` | `dap_start` channel outside 1..12 or both channels equal |
+| `"invalid swd la channel"` | `dap_start` channel outside 1..14 or both channels equal |
 | `"missing rx"` / `"missing tx"` | `uart_proxy_start` request without `rx`/`tx` field |
-| `"invalid uart args"` | `uart_proxy_start` channel outside 1..12 or `rx`==`tx` |
+| `"invalid uart args"` | `uart_proxy_start` channel outside 1..14 or `rx`==`tx` |
 | `"uart busy"` | a UART proxy is already active (console or another connection) |
 | `"missing type"` | `sensor_start` request without `type` field |
 | `"missing sda/scl"` | `sensor_start` request without `sda`/`scl` field |

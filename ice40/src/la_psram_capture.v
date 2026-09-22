@@ -1,7 +1,7 @@
 // ============================================================================
 // la_psram_capture.v — deep multi-channel logic-analyzer sampler → PSRAM (v2).
 //
-// Companion to la_capture.v.  la_capture.v packs the same 12-channel LA word into
+// Companion to the retired la_capture.v, which packed the same LA word into
 // the small on-FPGA la_capture_buf SPRAM (≤4096 bytes ⇒ ≤2048 samples, read back
 // over SPI with LA_READ).  THIS module instead streams the samples straight into
 // the APS6404L PSRAM via psram_writer — reusing the v2 ADC→PSRAM datapath — so the
@@ -9,10 +9,9 @@
 // region back over its own XSPI (psram_read), exactly as it does for an ADC PSRAM
 // capture.  Driven by the LA_CAPTURE (0x69) opcode.
 //
-// Each sample is recorded as TWO little-endian bytes (identical layout to
-// la_capture.v, so the host/server decoder is shared):
+// Each sample is recorded as TWO little-endian bytes (N=14 on v2):
 //   byte 2k    = la_in[7:0]          (LA1..LA8)
-//   byte 2k+1  = {4'b0, la_in[11:8]} (LA9..LA12 in the low nibble)
+//   byte 2k+1  = {2'b0, la_in[13:8]} (LA9..LA14 in the low 6 bits)
 //
 // `sample_count` is the number of SAMPLES (2 bytes each); its width is the CNT_W
 // parameter (top_v2 uses 24-bit, so a single capture can span the full 8 MB PSRAM =

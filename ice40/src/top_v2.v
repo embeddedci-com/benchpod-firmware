@@ -314,8 +314,8 @@ module top (
     wire [23:0] adc_cap_base;     // runtime ADC region base (SET_CAPTURE_BASES 0x32; default 4 MB). LA base is const 0.
     wire [23:0] la_cap_count;     // LA sample count  (24-bit: deep LA up to full 8 MB; 0 => LA not in this capture)
     wire [15:0] la_cap_divider;   // LA sample period in clk cycles
-    wire [11:0] la_sample;        // live 12-channel LA readback
-    wire [11:0] la_levels;        // la_sample through a 2-flop synchroniser (GPIO_GET + trigger)
+    wire [13:0] la_sample;        // live 14-channel LA readback
+    wire [13:0] la_levels;        // la_sample through a 2-flop synchroniser (GPIO_GET + trigger)
     wire [3:0]  trig_ch;          // capture trigger config (OP_SET_TRIGGER 0x33, v35) — see below
     wire        trig_en, trig_edge, trig_pol;
 
@@ -350,7 +350,7 @@ module top (
     reg         trig_wait = 1'b0;             // armed, condition not seen yet (holds the producers)
     reg         trig_fired = 1'b0;            // a triggered capture fired since the last arm
     reg         trig_prev = 1'b0;             // the selected level one clk ago (edge modes)
-    wire [15:0] trig_lv16 = {4'b0000, la_levels};   // channels 12..15 read as 0
+    wire [15:0] trig_lv16 = {2'b00, la_levels};     // channels 14..15 read as 0
     wire        trig_lvl  = trig_lv16[trig_ch];
     always @(posedge clk) trig_prev <= trig_lvl;
     wire        trig_fire = trig_wait & (trig_lvl == trig_pol) & (~trig_edge | (trig_prev != trig_pol));
@@ -450,14 +450,14 @@ module top (
         end
     end
 
-    // ---- LA producer: la_psram_capture samples the 12-ch LA word into 2 bytes/
+    // ---- LA producer: la_psram_capture samples the 14-ch LA word into 2 bytes/
     //      sample -> LA ring.  Armed by la_cap_start.  (Its own ps_start/ps_stop
     //      writer-control outputs are unused — the writer is driven by the unified
     //      trigger + drain controller below.) ----
     wire       la_wr_stb, la_busy, la_done, la_overflow;
     wire [7:0] la_wr_data;
     wire       la_ring_in_full;
-    la_psram_capture #(.N(12), .CNT_W(24)) la_ps_i (
+    la_psram_capture #(.N(14), .CNT_W(24)) la_ps_i (
         .clk(clk), .rst(rst), .la_in(la_sample),
         .start(la_cap_start), .sample_count(la_cap_count), .divider(la_cap_divider),
         .hold(trig_wait),
@@ -715,7 +715,22 @@ module top (
     SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
         .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 35) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 36) ----
+    // GATEWARE_VERSION 36 = v35 + LA13/LA14 READBACK: J1 pins 13/14 (LA_OUT13/14, la[12]/la[13] in
+    // the .pcf) were already wired to la_bank (engine_block's la port is N=14 wide, N=14 was already
+    // the v2 default) and drivable via GPIO_SET/the stepper/SWD/I2C/UART engines — only the
+    // READBACK path (la_sample/la_levels in engine_block, and la_psram_capture's sampled word) was
+    // hardcoded to the low 12 bits.  Both now carry all 14: OP_GPIO_GET's reply keeps its existing
+    // 2-byte LE format (bits 15:14 stay 0, same as bits 15:12 were before) and LA_CAPTURE's
+    // 2-bytes/sample PSRAM packing keeps byte 2k = LA1..8, only byte 2k+1's occupied nibble grows
+    // from 4 bits (LA9..12) to 6 bits (LA9..14) — no format/width change on the wire, so v35
+    // firmware reading a v36 gateware still works (LA13/14 come back as the two bits it already
+    // treated as always-zero).  Constants-only change in engine_block/cmd_dispatch/top_v2 (2 extra
+    // synchroniser flops + a wider zero-extend in la_psram_capture); la_bank's own arbitration mux
+    // was already N=14, so no new mux/priority logic.  Deep image seed re-swept 1..16 after this
+    // change (the tightest clk48 domain in the design): only 9/16 close, best is seed 14 at
+    // clk48 51.13 MHz (clk 34.05) — re-pinned SEED_DEEP 13 -> 14 in the Makefile; RE-VERIFY deep
+    // replay on hardware (TestHW_V2_DeepReplay).
     // GATEWARE_VERSION 35 = v34 + PIN READ-BACK + CAPTURE TRIGGER (both images):
     //   * OP_GPIO_GET (0x43): the 12 LA levels through a 2-flop synchroniser (engine_block), 2 bytes
     //     LE — firmware reads a gpio input pin's level without arming a capture.
@@ -958,7 +973,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd35), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd36), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

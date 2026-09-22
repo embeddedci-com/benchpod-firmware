@@ -494,9 +494,9 @@ static scpi_result_t scpi_diag_patternQ(scpi_t *ctx) {
 }
 
 /* ---- DIAGnostic:CAPture? [<adc_n>][,<la_n>] ----
-   v2: simultaneously capture adc_n ADC + la_n raw 12-ch LA samples off ONE trigger
+   v2: simultaneously capture adc_n ADC + la_n raw 14-ch LA samples off ONE trigger
    and return them as CSV: the adc_n ADC samples first, then the la_n LA words (low
-   12 bits = LA1..LA12).  Protocol decode is done off-device.  Defaults 16 + 16. */
+   14 bits = LA1..LA14).  Protocol decode is done off-device.  Defaults 16 + 16. */
 #define SCPI_CAP_MAX 128u
 static uint32_t scpi_cap[SCPI_CAP_MAX * 2];
 static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {

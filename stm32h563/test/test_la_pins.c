@@ -38,7 +38,7 @@ static bool gpio_json(const char *json, uint16_t pulls, uint16_t *changed, uint1
 
 static void test_defaults_and_names(void) {
     la_pins_reset();
-    for (unsigned la = 1; la <= 12; la++) {
+    for (unsigned la = 1; la <= 14; la++) {
         CHECK(la_pins_fn(la) == LA_FN_NONE);
         CHECK(la_pins_gpio(la) == LA_GPIO_NONE);
         CHECK(la_pins_level(la) == -1);
@@ -204,8 +204,8 @@ static void test_gpio_modes_and_levels(void) {
 
     /* parse errors */
     la_gpio_req_t req;
-    CHECK(!la_gpio_req_parse("{\"cmd\":\"gpio\",\"la\":13,\"mode\":\"input\"}", &req, err, sizeof(err)));
-    CHECK_STR(err, "la must be 1..12 (or \"all\" with \"mode\":\"off\")");
+    CHECK(!la_gpio_req_parse("{\"cmd\":\"gpio\",\"la\":15,\"mode\":\"input\"}", &req, err, sizeof(err)));
+    CHECK_STR(err, "la must be 1..14 (or \"all\" with \"mode\":\"off\")");
     CHECK(!la_gpio_req_parse("{\"cmd\":\"gpio\",\"la\":1,\"mode\":\"push\"}", &req, err, sizeof(err)));
     CHECK_STR(err, "mode must be input, output, open_drain or off");
     CHECK(!la_gpio_req_parse("{\"cmd\":\"gpio\",\"la\":1,\"level\":2}", &req, err, sizeof(err)));
@@ -253,7 +253,7 @@ static void test_step_plans(void) {
 
     CHECK(!la_pins_plan_step(0, 0, &plan, err, sizeof(err)));
     CHECK_STR(err, "invalid args");
-    CHECK(!la_pins_plan_step(1, 13, &plan, err, sizeof(err)));
+    CHECK(!la_pins_plan_step(1, 15, &plan, err, sizeof(err)));
     CHECK_STR(err, "invalid dir_la");
     CHECK(!la_pins_plan_step(1, 1, &plan, err, sizeof(err)));
 }
@@ -268,11 +268,12 @@ static void test_voltage_refusal(void) {
     CHECK(la_pins_check_voltage_change(3300, 3300, err, sizeof(err)));   /* re-set is allowed */
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* invalid: caller's error */
 
-    /* all 12 owned: the message still fits the module's buffer */
-    const la_fn_t fns[12] = { LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_I2C_SDA, LA_FN_I2C_SCL,
+    /* all 14 owned: the message still fits the module's buffer */
+    const la_fn_t fns[14] = { LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_I2C_SDA, LA_FN_I2C_SCL,
                               LA_FN_SWD_CLK, LA_FN_SWD_DIO, LA_FN_UART_RX, LA_FN_UART_TX,
-                              LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_STEP_DIR };
-    for (unsigned la = 1; la <= 12; la++) la_pins_claim(fns[la - 1], LA_GPIO_NONE, 0, (uint8_t[]){ (uint8_t)la }, 1);
+                              LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_STEP_DIR,
+                              LA_FN_STEP_DIR, LA_FN_STEP_DIR };
+    for (unsigned la = 1; la <= 14; la++) la_pins_claim(fns[la - 1], LA_GPIO_NONE, 0, (uint8_t[]){ (uint8_t)la }, 1);
     CHECK(!la_pins_check_voltage_change(1800, 3300, err, sizeof(err)));
     size_t len = strlen(err);
     CHECK(len < sizeof(err) - 1);
@@ -302,11 +303,11 @@ static void test_json_entries(void) {
     /* Worst case the la_pins / gpio read reply can reach: every pin a gpio open_drain with its
        pull on (the longest entry), plus the envelope.  It must fit the cloud reply capture. */
     la_pins_reset();
-    for (unsigned la = 1; la <= 12; la++) la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ (uint8_t)la }, 1);
+    for (unsigned la = 1; la <= 14; la++) la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ (uint8_t)la }, 1);
     bp_emit_init(&e, buf, sizeof(buf));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x0FFF, 0x00FF);
-    bp_emit_raw(&e, ",\"levels\":4095}}\n");
+    la_pins_emit_list(&e, 0x3FFF, 0x00FF);
+    bp_emit_raw(&e, ",\"levels\":16383}}\n");
     CHECK(bp_emit_ok(&e));
     printf("  la_pins worst-case reply: %u bytes (cloud reply cap %u)\n",
            (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
@@ -328,10 +329,10 @@ static void test_trigger_parse(void) {
     CHECK(la_trigger_parse("{\"trigger\":{\"edge\":\"low\",\"la\":12}}", &t, err, sizeof(err)));
     CHECK(t.la == 12 && t.edge == LA_EDGE_LOW);
 
-    CHECK(!la_trigger_parse("{\"trigger\":{\"la\":13,\"edge\":\"rising\"}}", &t, err, sizeof(err)));
-    CHECK_STR(err, "trigger la must be 1..12");
+    CHECK(!la_trigger_parse("{\"trigger\":{\"la\":15,\"edge\":\"rising\"}}", &t, err, sizeof(err)));
+    CHECK_STR(err, "trigger la must be 1..14");
     CHECK(!la_trigger_parse("{\"trigger\":{\"edge\":\"rising\"}}", &t, err, sizeof(err)));
-    CHECK_STR(err, "trigger la must be 1..12");
+    CHECK_STR(err, "trigger la must be 1..14");
     CHECK(!la_trigger_parse("{\"trigger\":{\"la\":2,\"edge\":\"up\"}}", &t, err, sizeof(err)));
     CHECK_STR(err, "trigger edge must be rising, falling, high or low");
     CHECK(!la_trigger_parse("{\"trigger\":5}", &t, err, sizeof(err)));

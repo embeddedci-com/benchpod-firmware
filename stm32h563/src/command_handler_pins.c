@@ -198,7 +198,7 @@ void handle_la_pins(int conn_id) {
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x0FFFu, pulls);
+    la_pins_emit_list(&e, 0x3FFFu, pulls);
     if (have) bp_emit(&e, ",\"levels\":%u}}\n", (unsigned)levels);
     else      bp_emit_raw(&e, ",\"levels\":null}}\n");
     send_emitted(conn_id, &e);
@@ -228,7 +228,7 @@ void handle_gpio(int conn_id, const char *json) {
         uint16_t levels = 0;
         if (fpga_gpio_get(&levels) != 0) { send_error(conn_id, "pin level read failed (SPI)"); return; }
         bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"levels\":%u,\"pins\":", (unsigned)levels);
-        la_pins_emit_list(&e, 0x0FFFu, la_pull_mask_now());
+        la_pins_emit_list(&e, 0x3FFFu, la_pull_mask_now());
         bp_emit_raw(&e, "}}\n");
         send_emitted(conn_id, &e);
         return;

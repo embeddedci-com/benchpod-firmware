@@ -1967,7 +1967,7 @@ void fpga_capture_psram_release(void) {
  * adc_count==0 => ADC not captured; la_count==0 => LA not captured (so this one
  * call serves ADC-only, LA-only, and simultaneous).  out_adc receives adc_count
  * 16-bit ADC samples; out_la receives la_count 16-bit LA words (low 12 bits =
- * LA1..LA12).  Either out pointer may be NULL if its count is 0.  Both dividers are
+ * LA1..LA14).  Either out pointer may be NULL if its count is 0.  Both dividers are
  * sample PERIODS in 24 MHz clk ticks (encoded for the gateware here, see
  * cap_divider_wire).  Returns 0 on success, -1 on error/timeout/overflow. */
 /* Async arm: send CMD_CAPTURE (0x31) and return immediately; poll with
@@ -2074,7 +2074,7 @@ int measure_psram(uint16_t *out16, const char *waveform, float freq,
 /* ===========================================================================
  * Logic-Analyzer GPIO bank + SWD — FPGA-backed (replaces the RP2350 PIO)
  *
- * Host-facing LA channels are 1-based (LA1..LA12); the gateware indexes its
+ * Host-facing LA channels are 1-based (LA1..LA14); the gateware indexes its
  * la[] bus 0-based, so we send (channel - 1) on the wire.
  * ========================================================================== */
 
@@ -2087,7 +2087,7 @@ int measure_psram(uint16_t *out16, const char *waveform, float freq,
 static bool            swd_armed_local = false;
 static absolute_time_t swd_deadline;   /* refreshed on each arm/feed */
 
-/* Validate a host LA channel (1..12) and return its 0-based wire index, or -1. */
+/* Validate a host LA channel (1..14) and return its 0-based wire index, or -1. */
 static int la_wire_index(unsigned channel) {
     if (channel < LA_CHANNEL_MIN || channel > LA_CHANNEL_MAX) return -1;
     return (int)(channel - 1u);
@@ -2118,7 +2118,7 @@ int fpga_gpio_get(uint16_t *levels) {
     if (s_fpga_version < GPIO_GET_MIN_GW) return -2;
     uint8_t b[2] = {0};
     if (spi_cmd_read(CMD_GPIO_GET, NULL, 0, b, sizeof(b)) != 0) return -1;
-    if (levels) *levels = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x0FFFu);
+    if (levels) *levels = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x3FFFu);
     return 0;
 }
 
@@ -2287,7 +2287,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
  * configures the bus.  All sensor-specific knowledge (register maps, IDs,
  * calibration math) lives in sensor_*.c — these are just thin SPI wrappers.
  *
- * Host LA channels are 1-based (LA1..LA12); the gateware indexes la[] 0-based,
+ * Host LA channels are 1-based (LA1..LA14); the gateware indexes la[] 0-based,
  * so SDA/SCL channels are sent as (channel - 1) like the SWD/GPIO commands.
  * ========================================================================== */
 
@@ -2365,7 +2365,7 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
     unsigned sda_ch = sensor_sim_sda();     /* 1-based LA channels; 0 = no sensor armed */
     unsigned scl_ch = sensor_sim_scl();
     if (sda_ch == 0 || scl_ch == 0) return -1;
-    uint8_t sda_bit = (uint8_t)(sda_ch - 1u);   /* deep-LA word bit index (LA1..12 -> 0..11) */
+    uint8_t sda_bit = (uint8_t)(sda_ch - 1u);   /* deep-LA word bit index (LA1..14 -> 0..13) */
     uint8_t scl_bit = (uint8_t)(scl_ch - 1u);
 
     size_t samples = bytes * 4u;            /* 4 packed {SCL,SDA} samples per output byte */
@@ -2377,7 +2377,7 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
     do { sleep_ms(1); r = fpga_la_capture_psram_wait(); } while (r == 0);  /* 1=done(bus held), -1=timeout */
     if (r < 0) return -1;
 
-    /* Read the LA region back in chunks (2 bytes/sample, LE: byte0=LA1..8, byte1={0,LA9..12})
+    /* Read the LA region back in chunks (2 bytes/sample, LE: byte0=LA1..8, byte1={00,LA9..14})
        and re-pack 4 samples per output byte. */
     uint8_t  chunk[256];                    /* 128 samples/chunk; no large new buffer (RAM is tight) */
     size_t   out = 0;

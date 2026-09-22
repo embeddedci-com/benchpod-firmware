@@ -129,8 +129,8 @@ module engine_block #(
     output wire         la_cap_start,
     output wire [23:0]  la_cap_count,     // 24-bit: deep LA up to the full 8 MB PSRAM
     output wire [15:0]  la_cap_divider,
-    output wire [11:0]  la_sample,
-    output wire [11:0]  la_levels         // la_sample through a 2-flop synchroniser (GPIO_GET + trigger)
+    output wire [13:0]  la_sample,
+    output wire [13:0]  la_levels         // la_sample through a 2-flop synchroniser (GPIO_GET + trigger)
 );
 
     // ---- SPI slave ----
@@ -322,17 +322,17 @@ module engine_block #(
         .la(la), .la_in(la_in)
     );
 
-    // Live 12-channel LA readback for the v2 deep-PSRAM sampler (la_psram_capture
-    // in top_v2 re-synchronizes it into the 48 MHz domain).  Same low-12 readback
+    // Live 14-channel LA readback for the v2 deep-PSRAM sampler (la_psram_capture
+    // in top_v2 re-synchronizes it into the 48 MHz domain).  Same low-14 readback
     // the on-FPGA la_capture samples; unused on v1.
-    assign la_sample = la_in[11:0];
+    assign la_sample = la_in[13:0];
 
-    // The same 12 levels through a 2-flop synchroniser (v35): GPIO_GET reads them and the capture
+    // The same 14 levels through a 2-flop synchroniser (v35): GPIO_GET reads them and the capture
     // trigger in top_v2 tests them.  Deliberately no power-up init, so these flops are identical to
     // la_psram_capture's own q1/q2 and synthesis can merge the two chains.
-    reg [11:0] la_s1, la_s2;
+    reg [13:0] la_s1, la_s2;
     always @(posedge clk) begin
-        la_s1 <= la_in[11:0];
+        la_s1 <= la_in[13:0];
         la_s2 <= la_s1;
     end
     assign la_levels = la_s2;

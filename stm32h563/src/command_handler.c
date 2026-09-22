@@ -1851,7 +1851,7 @@ static void handle_dac_set(int conn_id, const char *json) {
 /* Unified logic-analyzer-pin command. The action is inferred from the fields:
  *
  *   {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
- *        → run a step pulse train on LA N (1..12); the FPGA runs it autonomously.
+ *        → run a step pulse train on LA N (1..14); the FPGA runs it autonomously.
  *   {"cmd":"la","la":N,"pullup":"on"|"off"}  → switch LA N's pull-up (LA1..8).
  *   {"cmd":"la","la":N}                       → report LA N's pull-up state.
  *   {"cmd":"la"}                              → bitmask of enabled LA pull-ups.
@@ -1927,7 +1927,7 @@ static void handle_la(int conn_id, const char *json) {
     /* --- pull-up set ("pullup":"on|off") or query for one pin (LA1..8) --- */
     unsigned la = (unsigned)atoi(la_s);
     if (la < 1 || la > 8) {
-        send_error(conn_id, "no pull-up on this la");   /* LA9-12 / out of range */
+        send_error(conn_id, "no pull-up on this la");   /* LA9-14 / out of range */
         return;
     }
 
@@ -2584,10 +2584,10 @@ static void handle_sensor_la(int conn_id, const char *json) {
     bulk_begin(conn_id, bytes, false);   /* paced send; frees the gate when done */
 }
 
-/* la_capture: general multi-channel logic-analyzer snapshot of ALL 12 LA
+/* la_capture: general multi-channel logic-analyzer snapshot of ALL 14 LA
  * channels.  Unlike sensor_la (the 2 emulated-I2C pins packed 4 samples/byte),
  * this records every LA channel as TWO little-endian bytes per sample
- * (byte 2k = LA1..LA8, byte 2k+1 = {0000, LA9..LA12}).  The cloud server renders
+ * (byte 2k = LA1..LA8, byte 2k+1 = {00, LA9..LA14}).  The cloud server renders
  * the raw logic traces — the retired agent only ever decoded I2C; this is the
  * new general view.
  *   {"cmd":"la_capture","samples":1024,"sample_rate_mhz":2.0}
@@ -2683,7 +2683,7 @@ static void handle_uart_proxy_start(int conn_id, const char *json) {
        flood of 0x00 during boot. Restored in uart_proxy_end.
        LA1-LA6 only: LA7/LA8's resistor pulls DOWN, so engaging "the pull" there held RX at
        the opposite of the idle level and guaranteed the 0x00 flood it was meant to prevent.
-       LA9-LA12 have no resistor at all, and at a 1.8 V bank the 3V3-referenced ones are
+       LA9-LA14 have no resistor at all, and at a 1.8 V bank the 3V3-referenced ones are
        off-limits — the proxy still runs, it just cannot hold RX high. */
     uart_rx_pu_ch = -1;
     if (la_pull_dir(rx) == LA_PULL_UP && la_pullups_available()) {
