@@ -2,18 +2,18 @@
 //
 // Drives a known LA word, arms a short capture, and checks the byte stream the
 // module presents to psram_writer: 2 little-endian bytes per sample
-// (byte0 = la[7:0], byte1 = {4'b0, la[11:8]}), exactly sample_count samples, with
+// (byte0 = la[7:0], byte1 = {2'b0, la[13:8]}), exactly sample_count samples, with
 // ps_start at arm and ps_stop coincident with the final byte, and consecutive
 // samples exactly `divider` clocks apart.  A second pass checks the `overflow`
 // diagnostic latches when `full` is held.
 `timescale 1ns/1ps
 module tb_la_psram_capture;
-    localparam N     = 12;
+    localparam N     = 14;
     localparam CNT_W = 16;
 
     reg              clk = 1'b0;
     reg              rst = 1'b1;
-    reg  [N-1:0]     la_in = 12'h000;
+    reg  [N-1:0]     la_in = {N{1'b0}};
     reg              start = 1'b0;
     reg  [CNT_W-1:0] sample_count = 0;
     reg  [15:0]      divider = 16'd4;
@@ -110,9 +110,9 @@ module tb_la_psram_capture;
                          ps_stop_at_byte, cnt*2);
                 errors = errors + 1;
             end
-            // byte packing: every sample = {word[7:0], {4'b0,word[11:8]}}
+            // byte packing: every sample = {word[7:0], {2'b0,word[13:8]}}
             exp_lo = word[7:0];
-            exp_hi = {4'b0, word[11:8]};
+            exp_hi = {{(16-N){1'b0}}, word[N-1:8]};
             for (k = 0; k < cnt && k*2+1 < 256; k = k + 1) begin
                 if (cap[k*2] !== exp_lo) begin
                     $display("FAIL: sample %0d lo byte %02x, expected %02x", k, cap[k*2], exp_lo);
@@ -144,18 +144,18 @@ module tb_la_psram_capture;
         @(posedge clk);
 
         // Pass 1: 4 samples of 0xABC at divider 4.
-        run_capture(16'd4, 12'hABC, 16'd4);
+        run_capture(16'd4, 14'h2ABC, 16'd4);
         // Pass 2: different word + count + divider to be sure nothing is hardcoded.
-        run_capture(16'd8, 12'h135, 16'd2);
+        run_capture(16'd8, 14'h1135, 16'd2);
         // Pass 3: single sample (terminal-on-first-sample edge case).
-        run_capture(16'd1, 12'h0FF, 16'd6);
+        run_capture(16'd1, 14'h30FF, 16'd6);
         // Pass 3b: a large divider (24 = 1 MS/s), where the period is what matters.
-        run_capture(16'd5, 12'h3C3, 16'd24);
+        run_capture(16'd5, 14'h13C3, 16'd24);
 
         // Pass 4: overflow diagnostic — hold `full`, expect overflow to latch but
         // the capture to still complete (writer would drop, module flags it).
         full = 1'b1;
-        run_capture(16'd3, 12'h2A5, 16'd3);
+        run_capture(16'd3, 14'h22A5, 16'd3);
         if (!overflow) begin
             $display("FAIL: overflow did not latch while full was held");
             errors = errors + 1;
@@ -163,7 +163,7 @@ module tb_la_psram_capture;
         full = 1'b0;
 
         // Pass 5: after a clean run, overflow must be clear again (cleared at start).
-        run_capture(16'd2, 12'h111, 16'd4);
+        run_capture(16'd2, 14'h3111, 16'd4);
         if (overflow) begin
             $display("FAIL: overflow still set after a no-full capture");
             errors = errors + 1;
@@ -172,11 +172,11 @@ module tb_la_psram_capture;
         // Pass 6 (v35 trigger hold): a run started under `hold` writes nothing until hold drops,
         // then its first sample comes as many clocks after the release as an unheld run's comes
         // after the clock following its start — and the rest of the run is unchanged.
-        run_capture(16'd6, 12'h5A5, 16'd5);
+        run_capture(16'd6, 14'h15A5, 16'd5);
         hold_ref = lo_at[0] - start_cyc - 1;
         hold = 1'b1;
         reset_capture;
-        la_in = 12'h69C; sample_count = 16'd6; divider = 16'd5;
+        la_in = 14'h269C; sample_count = 16'd6; divider = 16'd5;
         @(posedge clk); #1 start = 1'b1;
         @(posedge clk); #1 start = 1'b0;
         repeat (40) @(posedge clk);
@@ -198,8 +198,8 @@ module tb_la_psram_capture;
                 $display("FAIL: held run sample %0d came %0d clocks after the last (want 5)", k6, lo_at[k6] - lo_at[k6-1]);
                 errors = errors + 1;
             end
-        if (cap[0] !== 8'h9C || cap[1] !== 8'h06) begin
-            $display("FAIL: held run sample 0 = %02x %02x (want 9c 06)", cap[0], cap[1]); errors = errors + 1;
+        if (cap[0] !== 8'h9C || cap[1] !== 8'h26) begin
+            $display("FAIL: held run sample 0 = %02x %02x (want 9c 26)", cap[0], cap[1]); errors = errors + 1;
         end
 
         if (errors == 0) $display("PASS tb_la_psram_capture: byte stream/framing/overflow OK");

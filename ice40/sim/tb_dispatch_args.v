@@ -84,7 +84,7 @@ module tb_dispatch_args;
     wire [3:0]  trig_ch;
     wire        trig_en, trig_edge, trig_pol;
     reg         trig_wait = 0, trig_fired = 0;
-    reg  [11:0] la_levels = 12'h000;
+    reg  [13:0] la_levels = 14'h0000;
 
     cmd_dispatch #(.GATEWARE_VERSION(8'd6), .ADDR_W(ADDR_W)) dut (
         .clk(clk), .rst(rst),
@@ -421,16 +421,16 @@ module tb_dispatch_args;
     endtask
 
     // GPIO_GET (0x43): 2-byte LE reply of la_levels, both bytes from ONE snapshot taken at the opcode.
-    task test_gpio_get(input [11:0] lv);
+    task test_gpio_get(input [13:0] lv);
         begin
             la_levels = lv;
             cs_hi; feed(8'h43);
             @(negedge clk);
-            if (tx_byte !== lv[7:0]) begin $display("FAIL gpio_get %03h: lo=%02h", lv, tx_byte); errors=errors+1; end
+            if (tx_byte !== lv[7:0]) begin $display("FAIL gpio_get %04h: lo=%02h", lv, tx_byte); errors=errors+1; end
             la_levels = ~lv;                          // pins move between the two reply bytes
             feed(8'h00);
             @(negedge clk);
-            if (tx_byte !== {4'h0, lv[11:8]}) begin $display("FAIL gpio_get %03h: hi=%02h (torn or not zero-extended)", lv, tx_byte); errors=errors+1; end
+            if (tx_byte !== {2'b00, lv[13:8]}) begin $display("FAIL gpio_get %04h: hi=%02h (torn or not zero-extended)", lv, tx_byte); errors=errors+1; end
             feed(8'h00);
             cs_lo;
         end
@@ -480,8 +480,9 @@ module tb_dispatch_args;
         trig_wait=1; trig_fired=0; expect_resp(8'h34, 8'h01, "trig_status wait");
         trig_wait=0; trig_fired=1; expect_resp(8'h34, 8'h02, "trig_status fired");
         trig_wait=0; trig_fired=0;
-        test_gpio_get(12'hA5C);
-        test_gpio_get(12'h3C3);
+        test_gpio_get(14'h2A5C);
+        test_gpio_get(14'h13C3);
+        test_gpio_get(14'h3000);
 
         if (errors == 0)
             $display("PASS tb_dispatch_args: arg_rem terminal counting matches across all paths");

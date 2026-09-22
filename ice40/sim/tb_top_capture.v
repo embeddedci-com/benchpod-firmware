@@ -31,12 +31,12 @@ module tb_top_capture;
     wire led_g, led_b, led_r;
     wire psram_sclk, psram_cs, psram_io0, psram_io1, psram_io2, psram_io3;
 
-    // Drive the LA bank to a known 12-bit word (LA1..LA12 = 0xA5A).  A reg so the v35 trigger
+    // Drive the LA bank to a known 14-bit word (LA1..LA14 = 0x2A5A).  A reg so the v35 trigger
     // passes can move pins; la_bank never drives in this bench.
-    localparam [11:0] LA_WORD = 12'hA5A;
-    reg  [11:0] la_drv = LA_WORD;
+    localparam [13:0] LA_WORD = 14'h2A5A;
+    reg  [13:0] la_drv = LA_WORD;
     wire [13:0] la;
-    assign la = {2'b00, la_drv};
+    assign la = la_drv;
 
     top dut (
         .clk48(clk48),
@@ -382,14 +382,14 @@ module tb_top_capture;
         end
     endtask
     // v35: the first n LA samples in the LA region are all `word`.
-    task check_la_word(input [8*24-1:0] what, input integer n, input [11:0] word);
+    task check_la_word(input [8*24-1:0] what, input integer n, input [13:0] word);
         integer k, bad; reg [15:0] g; begin
             bad = 0;
             if (la_n < n*2) begin $display("FAIL trig %0s: LA region got %0d bytes, want >= %0d", what, la_n, n*2); errors=errors+1; end
             else for (k = 0; k < n; k = k + 1) begin
                 g = {la_mem[k*2+1], la_mem[k*2]};
-                if ((g & 16'h0FFF) !== {4'b0, word}) begin
-                    if (bad < 3) $display("FAIL trig %0s: LA[%0d]=%03h want %03h", what, k, g & 16'h0FFF, word);
+                if (g !== {2'b0, word}) begin
+                    if (bad < 3) $display("FAIL trig %0s: LA[%0d]=%04h want %04h", what, k, g, word);
                     bad = bad + 1; errors = errors + 1;
                 end
             end
@@ -424,13 +424,13 @@ module tb_top_capture;
             end
         end
 
-        // ---- LA region: every sample = LA_WORD (0x0A5A, low 12 bits) ----
+        // ---- LA region: every sample = LA_WORD (0x2A5A, 14 bits, bits 15:14 zero) ----
         if (la_n < NL*2) begin $display("FAIL: LA region got %0d bytes, want >= %0d", la_n, NL*2); errors=errors+1; end
         else begin
             for (i = 0; i < NL; i = i + 1) begin
                 got = {la_mem[i*2+1], la_mem[i*2+0]};
-                if ((got & 16'h0FFF) !== {4'b0, LA_WORD}) begin
-                    $display("FAIL: LA[%0d]=%04h want %03h", i, got, LA_WORD); errors=errors+1; end
+                if (got !== {2'b0, LA_WORD}) begin
+                    $display("FAIL: LA[%0d]=%04h want %04h", i, got, LA_WORD); errors=errors+1; end
             end
         end
 
@@ -474,8 +474,8 @@ module tb_top_capture;
         else begin
             for (i = 0; i < NP; i = i + 1) begin
                 got = {la_mem[i*2+1], la_mem[i*2+0]};
-                if ((got & 16'h0FFF) !== {4'b0, LA_WORD}) begin
-                    $display("FAIL: period pass LA[%0d]=%04h want %03h", i, got, LA_WORD); errors=errors+1; end
+                if (got !== {2'b0, LA_WORD}) begin
+                    $display("FAIL: period pass LA[%0d]=%04h want %04h", i, got, LA_WORD); errors=errors+1; end
             end
         end
         $display("  [period] LA %0d samples @div2 (%0d off-period), ADC %0d intervals @div100 (%0d off)",
@@ -631,7 +631,7 @@ module tb_top_capture;
         // edges later: two synchroniser flops, then the cycle the condition is tested.
 
         // -- untriggered baseline: LA-only @div6 (trigger off since reset) --
-        la_drv = 12'h000;
+        la_drv = 14'h0000;
         adc_n = 0; la_n = 0; wait_seen = 0; t0_n = 0;
         bus_own = 1'b0; #1000;
         cmd_la_capture(24'd16, 16'd6);
@@ -640,26 +640,26 @@ module tb_top_capture;
         if (wait_seen)             begin $display("FAIL trig: an untriggered capture waited"); errors=errors+1; end
         if (t0_n != 1 || t0_cyc != arm_cyc) begin $display("FAIL trig: untriggered t0 (%0d x, cycle %0d) is not the arm (%0d)", t0_n, t0_cyc, arm_cyc); errors=errors+1; end
         cmd1(8'h34, r); if (r !== 8'h00) begin $display("FAIL trig: TRIGGER_STATUS=%02h after an untriggered capture", r); errors=errors+1; end
-        check_la_word("untriggered", 16, 12'h000);
+        check_la_word("untriggered", 16, 14'h0000);
 
         // -- RISING on LA4 (ch 3).  The pin is already HIGH at the arm, and other pins move while it
         //    is low: neither may fire.  Count 16 @div6, and STATUS/TRIGGER_STATUS polls in between
         //    (they overwrite the dispatcher's payload, which the held producers must not need). --
-        la_drv = 12'h008;
+        la_drv = 14'h0008;
         cmd_set_trigger(8'd3, 8'd1);
         adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0; la_bad = 0; la_want = 6; adc_armed = 0; per_on = 1;
         bus_own = 1'b0; #1000;
         cmd_la_capture(24'd16, 16'd6);
         #20000;  check_waiting("rising, pin high at arm");
-        la_drv = 12'h000; #20000; la_drv = 12'hFF7; #20000;
+        la_drv = 14'h0000; #20000; la_drv = 14'h0FF7; #20000;
         check_waiting("rising, other pins");
-        chg_cyc = cyc; la_drv = 12'hA5A;               // LA4 rises
+        chg_cyc = cyc; la_drv = 14'h0A5A;               // LA4 rises
         wait_done(4000); #4000; bus_own = 1'b1; per_on = 0;
         check_fired("rising");
         if (t0_cyc - chg_cyc != 3)       begin $display("FAIL trig rising: t0 %0d clk after the pin (want 3)", t0_cyc - chg_cyc); errors=errors+1; end
         if (la0_cyc - t0_cyc != base_la6) begin $display("FAIL trig rising: first LA byte %0d clk after t0 (untriggered: %0d after the arm)", la0_cyc - t0_cyc, base_la6); errors=errors+1; end
         if (la_lo != 16 || la_bad != 0)  begin $display("FAIL trig rising: %0d LA samples, %0d off the divider-6 period", la_lo, la_bad); errors=errors+1; end
-        check_la_word("rising", 16, 12'hA5A);
+        check_la_word("rising", 16, 14'h0A5A);
         $display("  [trig]   rising LA4: waited through a high pin + other edges; t0 = pin+3, first LA byte t0+%0d (arm+%0d untriggered)",
                  la0_cyc - t0_cyc, base_la6);
 
@@ -678,7 +678,7 @@ module tb_top_capture;
 
         // -- FALLING on LA8 (ch 7), unified CAPTURE (ADC ramp + LA) with the DAC co-trigger and
         //    SET_DAC_STOP_AFTER: the DAC must not start, and the stop-after must not count, until t0. --
-        la_drv = 12'hFFF;
+        la_drv = 14'h0FFF;
         cmd_set_trigger(8'd7, 8'd2);
         cmd_op0(8'h19); cmd_start_dac(16'd8, 16'd4); cmd_stop_after(STOP_N);
         dacst_cyc = -1; auto_cyc = -1; adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0;
@@ -689,7 +689,7 @@ module tb_top_capture;
             $display("FAIL trig falling: the co-triggered DAC started before the trigger"); errors=errors+1; end
         if (auto_cyc >= 0 || dut.cap_stop_cnt != STOP_N) begin
             $display("FAIL trig falling: stop-after counted while waiting (count %0d)", dut.cap_stop_cnt); errors=errors+1; end
-        chg_cyc = cyc; la_drv = 12'h000;               // LA8 falls
+        chg_cyc = cyc; la_drv = 14'h0000;               // LA8 falls
         wait_done(4000); #4000; bus_own = 1'b1;
         cmd_op0(8'h12); cmd_stop_after(32'd0); #1000;
         check_fired("falling");
@@ -706,12 +706,12 @@ module tb_top_capture;
                 want = want + 16'h0101;
             end
         end
-        check_la_word("falling", 32, 12'h000);
+        check_la_word("falling", 32, 14'h0000);
         $display("  [trig]   falling LA8 + co-trigger: DAC start t0+%0d, stop-after t0+%0d, first ADC byte t0+%0d",
                  dacst_cyc - t0_cyc, auto_cyc - t0_cyc, adc0_cyc - t0_cyc);
 
         // -- HIGH on LA1 (ch 0), already high at the arm: fires on the first waiting cycle --
-        la_drv = 12'h001;
+        la_drv = 14'h0001;
         cmd_set_trigger(8'd0, 8'd3);
         adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0;
         bus_own = 1'b0; #1000;
@@ -720,26 +720,40 @@ module tb_top_capture;
         check_fired("high");
         if (t0_cyc != arm_cyc + 1) begin $display("FAIL trig high: t0 at arm+%0d (want arm+1 for a pin already high)", t0_cyc - arm_cyc); errors=errors+1; end
         if (la0_cyc - t0_cyc != base_la6) begin $display("FAIL trig high: first LA byte t0+%0d (want %0d)", la0_cyc - t0_cyc, base_la6); errors=errors+1; end
-        check_la_word("high", 8, 12'h001);
+        check_la_word("high", 8, 14'h0001);
 
         // -- LOW on LA12 (ch 11): waits while high, fires when it drops --
-        la_drv = 12'hFFF;
+        la_drv = 14'h0FFF;
         cmd_set_trigger(8'd11, 8'd4);
         adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0;
         bus_own = 1'b0; #1000;
         cmd_la_capture(24'd8, 16'd6);
         #20000;  check_waiting("low");
-        chg_cyc = cyc; la_drv = 12'h7FF;
+        chg_cyc = cyc; la_drv = 14'h07FF;
         wait_done(4000); #4000; bus_own = 1'b1;
         check_fired("low");
         if (t0_cyc - chg_cyc != 3) begin $display("FAIL trig low: t0 %0d clk after the pin (want 3)", t0_cyc - chg_cyc); errors=errors+1; end
-        check_la_word("low", 8, 12'h7FF);
+        check_la_word("low", 8, 14'h07FF);
         $display("  [trig]   high LA1 (already high): t0 = arm+%0d; low LA12 fired", t0_cyc - arm_cyc);
+
+        // -- RISING on LA14 (ch 13), the top channel: the trigger's level vector must carry LA13/LA14 --
+        la_drv = 14'h1FFF;                             // every pin high but LA14 (LA13 high too)
+        cmd_set_trigger(8'd13, 8'd1);
+        adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0;
+        bus_own = 1'b0; #1000;
+        cmd_la_capture(24'd8, 16'd6);
+        #20000;  check_waiting("LA14");
+        chg_cyc = cyc; la_drv = 14'h3FFF;              // LA14 rises
+        wait_done(4000); #4000; bus_own = 1'b1;
+        check_fired("LA14");
+        if (t0_cyc - chg_cyc != 3) begin $display("FAIL trig LA14: t0 %0d clk after the pin (want 3)", t0_cyc - chg_cyc); errors=errors+1; end
+        check_la_word("LA14", 8, 14'h3FFF);
+        $display("  [trig]   rising LA14 (ch 13) fired; LA13/LA14 in the captured words");
 
         // -- ABORT while waiting: a unified CAPTURE re-armed with both counts 0 ends it, the old
         //    trigger condition afterwards starts nothing, and a staged co-trigger is NOT fired by
         //    the abort (t0 is only ever the trigger cycle while a trigger is set) --
-        la_drv = 12'h000;
+        la_drv = 14'h0000;
         cmd_set_trigger(8'd5, 8'd1);
         cmd_op0(8'h19); cmd_start_dac(16'd8, 16'd4);   // stage a co-triggered DAC start
         adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0; dacst_cyc = -1;
@@ -753,18 +767,18 @@ module tb_top_capture;
             $display("FAIL trig abort: the abort fired the staged co-trigger (dac_running=%b dac_pend=%b)", dut.dac_running, dut.dac_pend); errors=errors+1; end
         cmd_op0(8'h12); #1000;                          // STOP_DAC cancels the staged start
         if (dut.dac_pend !== 1'b0) begin $display("FAIL trig abort: STOP_DAC did not cancel the staged co-trigger"); errors=errors+1; end
-        la_drv = 12'h020; #20000;                        // the aborted run's rising edge on LA6
+        la_drv = 14'h0020; #20000;                        // the aborted run's rising edge on LA6
         if (la_n != 0 || adc_n != 0 || la0_cyc >= 0 || adc0_cyc >= 0) begin
             $display("FAIL trig abort: the aborted capture produced data (LA %0d / ADC %0d bytes)", la_n, adc_n); errors=errors+1; end
         bus_own = 1'b1;
         // ... and an LA-only capture aborted with LA_CAPTURE count 0
-        la_drv = 12'h000; t0_n = 0;
+        la_drv = 14'h0000; t0_n = 0;
         bus_own = 1'b0; #1000;
         cmd_la_capture(24'd16, 16'd6);
         #20000;  check_waiting("abort (la_capture)");
         cmd_la_capture(24'd0, 16'd6);
         wait_done(4000); #4000;
-        la_drv = 12'h020; #20000;
+        la_drv = 14'h0020; #20000;
         cmd1(8'h34, r);
         if (r !== 8'h00 || la_n != 0 || la0_cyc >= 0) begin
             $display("FAIL trig abort: LA-only abort left TRIGGER_STATUS=%02h, %0d LA bytes", r, la_n); errors=errors+1; end
@@ -772,22 +786,22 @@ module tb_top_capture;
         $display("  [trig]   abort while waiting (CAPTURE 0/0 and LA_CAPTURE 0): done, nothing produced");
 
         // -- RE-ARM with different parameters: FALLING on LA10 (ch 9), 24 samples @div2 --
-        la_drv = 12'hFFF;
+        la_drv = 14'h0FFF;
         cmd_set_trigger(8'd9, 8'd2);
         adc_n = 0; la_n = 0; t0_n = 0; wait_wr = 0; la_bad = 0; la_want = 2; adc_armed = 0; per_on = 1;
         bus_own = 1'b0; #1000;
         cmd_la_capture(24'd24, 16'd2);
         #20000;  check_waiting("re-arm");
-        chg_cyc = cyc; la_drv = 12'h1FF;               // LA10 falls
+        chg_cyc = cyc; la_drv = 14'h01FF;               // LA10 falls
         wait_done(4000); #4000; bus_own = 1'b1; per_on = 0;
         check_fired("re-arm");
         base_la2 = la0_cyc - t0_cyc;
         if (t0_cyc - chg_cyc != 3)      begin $display("FAIL trig re-arm: t0 %0d clk after the pin (want 3)", t0_cyc - chg_cyc); errors=errors+1; end
         if (la_lo != 24 || la_bad != 0) begin $display("FAIL trig re-arm: %0d LA samples (want 24), %0d off the divider-2 period", la_lo, la_bad); errors=errors+1; end
-        check_la_word("re-arm", 24, 12'h1FF);
+        check_la_word("re-arm", 24, 14'h01FF);
 
         // -- trigger OFF again: an untriggered capture after triggered ones is the v34 capture --
-        la_drv = 12'hA5A;
+        la_drv = 14'h0A5A;
         cmd_set_trigger(8'd9, 8'd0);
         adc_n = 0; la_n = 0; t0_n = 0; wait_seen = 0; la_bad = 0; la_want = 2; adc_armed = 0; per_on = 1;
         bus_own = 1'b0; #1000;
@@ -798,7 +812,7 @@ module tb_top_capture;
             $display("FAIL trig off: TRIGGER_STATUS=%02h waited=%0d t0 %0d x at arm+%0d", r, wait_seen, t0_n, t0_cyc - arm_cyc); errors=errors+1; end
         if (la0_cyc - arm_cyc != base_la2) begin $display("FAIL trig off: first LA byte arm+%0d (triggered div2 run: t0+%0d)", la0_cyc - arm_cyc, base_la2); errors=errors+1; end
         if (la_lo != 24 || la_bad != 0)   begin $display("FAIL trig off: %0d LA samples, %0d off the divider-2 period", la_lo, la_bad); errors=errors+1; end
-        check_la_word("off", 24, 12'hA5A);
+        check_la_word("off", 24, 14'h0A5A);
         $display("  [trig]   re-arm falling LA10 @div2 then trigger off: first LA byte t0+%0d == arm+%0d; sim time %0t",
                  base_la2, la0_cyc - arm_cyc, $time);
 

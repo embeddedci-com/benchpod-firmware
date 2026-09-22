@@ -7,7 +7,7 @@
 // derivation and power-on reset.  That top-level seam is exactly where the last
 // two field bugs lived (the 0x5555 mis-latch and the config-pin tristate), so this
 // drives a behavioural SPI master (mode 0) and checks the instant-response
-// commands: PING -> 0xA5, VERSION -> 35, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
+// commands: PING -> 0xA5, VERSION -> 36, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
 // GPIO_GET (v35) returning a pattern driven onto the LA pads.
 //
 // It needs the iCE40 primitive sim models (yosys' cells_sim.v), passed on the
@@ -39,8 +39,8 @@ module tb_top_v2;
             pulldown (la[gi]);
         end
     endgenerate
-    reg [11:0] la_pat = 12'h000;          // LA1..LA12 driven for GPIO_GET (la_bank never drives here)
-    assign la[11:0] = la_pat;
+    reg [13:0] la_pat = 14'h0000;         // LA1..LA14 driven for GPIO_GET (la_bank never drives here)
+    assign la = la_pat;
 
     top dut (
         .clk48(clk48),
@@ -118,15 +118,18 @@ module tb_top_v2;
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd35, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd36, "VERSION");
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");
         cmd1(8'h34, r); check(r, 8'h00, "TRIGGER_STATUS");
         // GPIO_GET: pad levels through SB_IO -> la_bank -> the 2-flop synchroniser -> MISO.
-        la_pat = 12'hA5C; #2000;
-        cmd2(8'h43, v); check(v[7:0], 8'h5C, "GPIO_GET lo A5C"); check(v[15:8], 8'h0A, "GPIO_GET hi A5C");
-        la_pat = 12'h3C3; #2000;
-        cmd2(8'h43, v); check(v[7:0], 8'hC3, "GPIO_GET lo 3C3"); check(v[15:8], 8'h03, "GPIO_GET hi 3C3");
+        // Bits 12/13 are LA13/LA14; bits 15:14 of the reply must stay 0.
+        la_pat = 14'h2A5C; #2000;
+        cmd2(8'h43, v); check(v[7:0], 8'h5C, "GPIO_GET lo 2A5C"); check(v[15:8], 8'h2A, "GPIO_GET hi 2A5C");
+        la_pat = 14'h13C3; #2000;
+        cmd2(8'h43, v); check(v[7:0], 8'hC3, "GPIO_GET lo 13C3"); check(v[15:8], 8'h13, "GPIO_GET hi 13C3");
+        la_pat = 14'h3FFF; #2000;
+        cmd2(8'h43, v); check(v[7:0], 8'hFF, "GPIO_GET lo 3FFF"); check(v[15:8], 8'h3F, "GPIO_GET hi 3FFF");
 
         if (errors == 0)
             $display("PASS tb_top_v2: PING/VERSION/STATUS/TRIGGER_STATUS/GPIO_GET answer correctly through the SPI+pad top");
