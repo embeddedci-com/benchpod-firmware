@@ -34,6 +34,9 @@ void ethernetif_phy_restart(struct netif *netif);
 /* Force 10/100 Mbit (mbit = 10 or 100, full = duplex) or restore autoneg (mbit = 0).
    A debug aid for a suspect wired link: see the comment in ethernetif.c. */
 int  ethernetif_force_speed(struct netif *netif, int mbit, int full);
+/* Measure the PHY's RMII reference clock on PA1 (nominally 50 MHz) against the MCU crystal.
+   0 = ok and *hz_out is set, -1 = no edges / failed. Drops the link for ~200 ms. */
+int  ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out);
 
 #include "eth_diag.h"
 /* Wired-link diagnostics (net task only). */

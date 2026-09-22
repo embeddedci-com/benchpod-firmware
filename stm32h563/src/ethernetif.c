@@ -678,6 +678,75 @@ void ethernetif_phy_restart(struct netif *netif)
   netif_set_link_down(netif);
 }
 
+/* Measure the RMII reference clock the PHY drives into PA1 (nominally 50 MHz) against the
+   MCU's own 25 MHz crystal, and report it in Hz.
+
+   Why this is worth a command: 100BASE-TX needs the transmit reference within +/-50 ppm,
+   while 10BASE-T tolerates +/-100 ppm and in practice much more. A PHY whose reference is
+   off therefore fails at 100M and works at 10M, and it fails on TRANSMIT only, because the
+   receive path recovers its clock from the wire. That is indistinguishable from damaged
+   magnetics by looking at the MAC's counters, but it is obvious here.
+
+   Method: PA1 is temporarily re-muxed from ETH_REF_CLK to TIM2_CH2, TIM2 counts its edges
+   for a gate timed by the DWT cycle counter (the CPU clock, so the MCU crystal), and the
+   pins and the link are put back. The link drops for the ~200 ms this takes.
+
+   It measures the two oscillators AGAINST EACH OTHER, so compare a suspect pod with a
+   known-good one rather than reading one number in isolation. If the MCU fell back to the
+   internal HSI (no crystal) the reference is worthless: the caller reports that. */
+int ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out)
+{
+  if (!hz_out) return -1;
+  *hz_out = 0;
+
+  HAL_ETH_Stop(&EthHandle);
+  netif_set_down(netif);
+  netif_set_link_down(netif);
+
+  /* PA1: ETH_REF_CLK (AF11) -> TIM2_CH2 (AF1). The PHY keeps driving it either way. */
+  GPIO_InitTypeDef g = {0};
+  g.Pin       = GPIO_PIN_1;
+  g.Mode      = GPIO_MODE_AF_PP;
+  g.Pull      = GPIO_NOPULL;
+  g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+  g.Alternate = GPIO_AF1_TIM2;
+  HAL_GPIO_Init(GPIOA, &g);
+
+  __HAL_RCC_TIM2_CLK_ENABLE();
+  TIM2->CR1   = 0;
+  TIM2->PSC   = 0;
+  TIM2->ARR   = 0xFFFFFFFFu;
+  TIM2->CCMR1 = (1u << 8);                    /* CC2S = 01: IC2 on TI2 (PA1), no filter */
+  TIM2->CCER  = 0;                            /* TI2 rising edge */
+  TIM2->SMCR  = (6u << TIM_SMCR_TS_Pos) |     /* TS = 110: trigger = TI2FP2 */
+                (7u << TIM_SMCR_SMS_Pos);     /* SMS = 111: external clock mode 1 */
+  TIM2->EGR   = TIM_EGR_UG;
+  TIM2->CNT   = 0;
+  TIM2->CR1   = TIM_CR1_CEN;
+
+  /* ~200 ms gate: 10 M edges at 50 MHz, so one count of quantisation is 0.1 ppm. */
+  const uint32_t gate_cycles = SystemCoreClock / 5u;
+  uint32_t t0 = DWT->CYCCNT;
+  uint32_t c0 = TIM2->CNT;
+  while ((DWT->CYCCNT - t0) < gate_cycles) { /* busy-wait: the gate must not be preempted */ }
+  uint32_t c1      = TIM2->CNT;
+  uint32_t elapsed = DWT->CYCCNT - t0;
+
+  TIM2->CR1  = 0;
+  TIM2->SMCR = 0;
+  __HAL_RCC_TIM2_CLK_DISABLE();
+
+  g.Alternate = GPIO_AF11_ETH;
+  HAL_GPIO_Init(GPIOA, &g);
+
+  uint32_t edges = c1 - c0;
+  if (elapsed == 0) { ethernetif_phy_restart(netif); return -1; }
+  *hz_out = (uint32_t)(((uint64_t)edges * (uint64_t)SystemCoreClock) / (uint64_t)elapsed);
+
+  ethernetif_phy_restart(netif);              /* re-negotiate, DHCP re-acquires */
+  return (edges == 0) ? -1 : 0;               /* no edges = the PHY is not clocking PA1 */
+}
+
 /* Force the PHY's link mode instead of letting it autonegotiate, or put it back on
    autoneg (mbit = 0).  A DEBUG AID: 10BASE-T swings ~5x the voltage of 100BASE-TX,
    runs at a quarter of the symbol rate and tolerates a far looser reference clock, so

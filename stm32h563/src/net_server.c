@@ -101,7 +101,8 @@ static uint32_t link_timer;
 /* Ethernet admin control (from the `eth` console/JSON command or the DHCP
    self-heal). Touching HAL_ETH + lwIP must happen on the net task, so other tasks
    only latch a request here; net_poll() applies it. */
-typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART, ETH_REQ_SPEED } eth_req_t;
+typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART, ETH_REQ_SPEED,
+               ETH_REQ_REFCLK } eth_req_t;
 static volatile eth_req_t s_eth_req;
 
 /* Wired-link diagnostics (eth_diag.h): refreshed every 2 s on this task, logged when an error
@@ -151,6 +152,11 @@ void net_eth_diag(eth_diag_t *out) { *out = s_eth_diag; }
 static bool               s_eth_admin_down;  /* held down by an explicit `eth stop` */
 static int                s_eth_force_mbit;  /* `eth speed`: 0 = autoneg, else 10 or 100 */
 static int                s_eth_force_full;  /* `eth speed`: duplex when forced */
+/* `eth refclk` result: the net task measures, the caller polls net_eth_refclk_result().
+   seq increments on every completed measurement so a caller can tell a fresh one from
+   the previous answer. */
+static volatile uint32_t  s_eth_refclk_seq;
+static volatile uint32_t  s_eth_refclk_hz;
 
 static bool iface_addressed(const net_if_t *i) {
     return i->dhcp.state == NET_DHCP_DONE;
@@ -563,6 +569,22 @@ static void net_eth_apply_request(void)
                                       " expect a duplex mismatch)" : "");
         }
         break;
+    case ETH_REQ_REFCLK: {
+        uint32_t hz = 0;
+        s_eth_admin_down = false;
+        eth_reset_addr_state();
+        (void)ethernetif_measure_refclk(&s_eth.netif, &hz);
+        s_eth_refclk_hz = hz;
+        s_eth_refclk_seq++;
+        if (hz == 0) {
+            printf("[net] eth refclk: no edges on PA1 — the PHY is not driving the RMII clock\r\n");
+        } else {
+            long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
+            printf("[net] eth refclk: %lu Hz (%+ld ppm vs 50 MHz, measured against the MCU crystal)\r\n",
+                   (unsigned long)hz, ppm);
+        }
+        break;
+    }
     case ETH_REQ_UP:
     case ETH_REQ_RESTART:
         s_eth_admin_down = false;
@@ -581,6 +603,17 @@ static void net_eth_apply_request(void)
 void net_eth_stop(void)    { s_eth_req = ETH_REQ_DOWN; }
 void net_eth_start(void)   { s_eth_req = ETH_REQ_UP; }
 void net_eth_restart(void) { s_eth_req = ETH_REQ_RESTART; }
+/* Ask for a reference-clock measurement, then poll net_eth_refclk_result(): it returns
+   true once seq has moved past the value captured before the request. */
+void net_eth_refclk_measure(void) { s_eth_req = ETH_REQ_REFCLK; }
+uint32_t net_eth_refclk_seq(void) { return s_eth_refclk_seq; }
+bool net_eth_refclk_result(uint32_t since_seq, uint32_t *hz_out)
+{
+    if (s_eth_refclk_seq == since_seq) return false;
+    if (hz_out) *hz_out = s_eth_refclk_hz;
+    return true;
+}
+
 void net_eth_force_speed(int mbit, int full)
 {
     s_eth_force_mbit = mbit;

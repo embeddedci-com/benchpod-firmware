@@ -1,6 +1,9 @@
 #ifndef NET_SERVER_H
 #define NET_SERVER_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* Ethernet + LwIP (NO_SYS=1) TCP command server.
  *   net_init()  — lwIP init, add the RMII netif (DHCP), start the server.
  *   net_poll()  — drive the stack: drain RX, run timeouts, link + DHCP checks.
@@ -33,6 +36,12 @@ void net_eth_restart(void);
    A debug aid for a suspect link: 10BASE-T is far more tolerant of a degraded analog
    path, so clean at 10M and lossy at 100M accuses the magnetics/RJ45/PHY clock. */
 void net_eth_force_speed(int mbit, int full);
+/* Measure the PHY's RMII reference clock (see ethernetif.c). Latches a request the net task
+   runs; capture net_eth_refclk_seq() first, then poll net_eth_refclk_result(seq, &hz) until
+   it returns true. hz = 0 means the PHY drove no clock at all. Costs the link ~200 ms. */
+void     net_eth_refclk_measure(void);
+uint32_t net_eth_refclk_seq(void);
+bool     net_eth_refclk_result(uint32_t since_seq, uint32_t *hz_out);
 /* The latest wired-link diagnostics snapshot (refreshed every 2 s on the net task). */
 #include "eth_diag.h"
 void net_eth_diag(eth_diag_t *out);

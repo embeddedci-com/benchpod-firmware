@@ -2265,7 +2265,11 @@ static void handle_wifi_clear(int conn_id) {
    action is latched and applied on the net task; the reply just confirms intent.
    {"cmd":"eth","action":"stats"} returns the wired-link diagnostics (eth_diag.h).
    {"cmd":"eth","action":"speed","mbit":0|10|100[,"duplex":"half"|"full"]} forces the link
-   mode (0 = back to autonegotiation) — a debug aid for a link that errors at 100M. */
+   mode (0 = back to autonegotiation) — a debug aid for a link that errors at 100M.
+   {"cmd":"eth","action":"refclk"} measures the PHY's RMII reference clock (nominally
+   50 MHz) against the MCU crystal and returns {hz, ppm, on_hsi}. */
+bool clock_on_hsi(void);   /* main.c: true when the MCU crystal did not start */
+
 static void handle_eth(int conn_id, const char *buf) {
     char action[16] = {0};
     json_get_value(buf, "action", action, sizeof(action));
@@ -2281,6 +2285,18 @@ static void handle_eth(int conn_id, const char *buf) {
         bp_emit_raw(&e, "}\n");
         if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+        return;
+    }
+    if (strcmp(action, "refclk") == 0) {
+        uint32_t seq = net_eth_refclk_seq(), hz = 0;
+        net_eth_refclk_measure();
+        for (int i = 0; i < 40 && !net_eth_refclk_result(seq, &hz); i++)
+            sleep_ms(100);   /* the net task runs the ~200 ms gate, then restarts the PHY */
+        long ppm = hz ? (((long long)hz - 50000000LL) * 1000000LL / 50000000LL) : 0;
+        char resp[96];
+        snprintf(resp, sizeof(resp), "{\"hz\":%lu,\"ppm\":%ld,\"on_hsi\":%s}",
+                 (unsigned long)hz, ppm, clock_on_hsi() ? "true" : "false");
+        send_ok_str(conn_id, resp);
         return;
     }
     if (strcmp(action, "speed") == 0) {
@@ -2304,7 +2320,7 @@ static void handle_eth(int conn_id, const char *buf) {
     if      (strcmp(action, "stop")    == 0) { net_eth_stop();    }
     else if (strcmp(action, "start")   == 0) { net_eth_start();   }
     else if (strcmp(action, "restart") == 0 || action[0] == '\0') { net_eth_restart(); strcpy(action, "restart"); }
-    else { send_error(conn_id, "eth action must be stop|start|restart|stats|speed"); return; }
+    else { send_error(conn_id, "eth action must be stop|start|restart|stats|speed|refclk"); return; }
     char resp[48];
     snprintf(resp, sizeof(resp), "\"%s\"", action);
     send_ok_str(conn_id, resp);

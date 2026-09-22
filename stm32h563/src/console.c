@@ -153,6 +153,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
         "  eth speed <auto|10|100> [full]  force the link mode (debug: 10M survives a bad\r\n"
         "                       analog path that 100M does not); half unless `full` is given\r\n"
+        "  eth refclk           measure the PHY's 50 MHz RMII clock (100BASE-TX needs it\r\n"
+        "                       within 50 ppm; drops the link for ~200 ms)\r\n"
         "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
         "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
         "  reboot               system reset\r\n");
@@ -830,6 +832,25 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  eth: ");
             out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
             op(out, ctx, "\r\n");
+        }
+        else if (argc >= 2 && !strcmp(argv[1], "refclk")) {
+            uint32_t seq = net_eth_refclk_seq(), hz = 0;
+            net_eth_refclk_measure();
+            /* The net task runs it (~200 ms of gate plus a PHY restart); wait, don't guess. */
+            for (int i = 0; i < 40 && !net_eth_refclk_result(seq, &hz); i++)
+                vTaskDelay(pdMS_TO_TICKS(100));
+            if (hz == 0) {
+                op(out, ctx, "  eth refclk: no clock on PA1 — the PHY is not driving RMII\r\n");
+            } else {
+                long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
+                op(out, ctx, "  eth refclk: %lu Hz, %+ld ppm vs 50 MHz%s\r\n",
+                   (unsigned long)hz, ppm,
+                   clock_on_hsi() ? " (UNRELIABLE: the MCU crystal did not start, so the"
+                                    " reference this is measured against is the internal HSI)" : "");
+                op(out, ctx, "  (100BASE-TX needs +/-50 ppm, 10BASE-T tolerates far more."
+                             " This compares the PHY clock with the MCU crystal, so read it"
+                             " next to a known-good pod.)\r\n");
+            }
         }
         else if (argc >= 3 && !strcmp(argv[1], "speed")) {
             int full = (argc >= 4 && !strcmp(argv[3], "full"));
