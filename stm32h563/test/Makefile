@@ -107,6 +107,7 @@ build/test_esp_pump: $(ESPPUMP_SRCS)
 
 build/test_la_pins: $(LAPINS_SRCS)
 	@mkdir -p build
+	$(CC) $(CFLAGS) $(LAPINS_SRCS) -lm -o $@
 
 build/test_eth_diag: $(ETHDIAG_SRCS)
 	@mkdir -p build
