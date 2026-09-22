@@ -125,4 +125,14 @@
 #define LWIP_NETCONN            0
 #define LWIP_SOCKET             0
 
+/* ---------- Routing ---------- */
+/* Source-based route choice (net_server.c, logic in net_route.c): a reply leaves
+   the interface that owns its source address, and same-subnet traffic with no
+   bound source prefers eth. Without it lwIP picks the first netif on the subnet,
+   which is Wi-Fi (netif_add prepends), so eth-arrived TCP replied over Wi-Fi. */
+struct netif;
+struct ip4_addr;
+struct netif *net_route_src_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
+#define LWIP_HOOK_IP4_ROUTE_SRC(src, dest) net_route_src_hook((src), (dest))
+
 #endif /* __LWIPOPTS_H__ */

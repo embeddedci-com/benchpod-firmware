@@ -14,6 +14,7 @@ PORTABLE_SRCS := test_portable.c ../src/b64url.c ../src/sensor_bmp280.c ../src/e
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
 SWDLL_SRCS    := test_swd_ll.c ../src/swd_ll.c
 NET_DHCP_SRCS := test_net_dhcp.c ../src/net_dhcp.c
+NET_ROUTE_SRCS := test_net_route.c ../src/net_route.c
 XFER_SRCS     := test_xfer.c ../src/xfer.c
 TGTPWR_SRCS   := test_target_power.c ../src/target_power.c ../src/tca9554.c
 LARATE_SRCS   := test_la_rate.c ../src/la_rate.c
@@ -60,6 +61,10 @@ build/test_swd_ll: $(SWDLL_SRCS)
 build/test_net_dhcp: $(NET_DHCP_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(NET_DHCP_SRCS) -lm -o $@
+
+build/test_net_route: $(NET_ROUTE_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(NET_ROUTE_SRCS) -lm -o $@
 
 build/test_xfer: $(XFER_SRCS)
 	@mkdir -p build
@@ -125,7 +130,7 @@ build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -135,6 +140,7 @@ run: $(TESTS)
 	@./build/test_dap
 	@./build/test_swd_ll
 	@./build/test_net_dhcp
+	@./build/test_net_route
 	@./build/test_xfer
 	@./build/test_target_power
 	@./build/test_la_rate

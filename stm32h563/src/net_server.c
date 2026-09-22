@@ -21,6 +21,7 @@
 #include "mbedtls_port.h"
 #include "esp_hosted_spi.h"
 #include "net_dhcp.h"
+#include "net_route.h"
 #include "esp_netif.h"
 #include "esp_wifi_ctrl.h"
 #include "conn_tx.h"
@@ -494,6 +495,27 @@ static void update_default_route(void)
     }
 }
 
+/* LWIP_HOOK_IP4_ROUTE_SRC (config/lwipopts.h): pick the outbound netif by source
+   address, then eth-first on a shared subnet. Mirrors update_default_route()'s
+   priority; returning NULL lets lwIP fall back to its subnet scan + default route.
+   src is NULL when lwIP calls this after that scan found nothing. */
+static void route_if_fill(net_route_if_t *r, const struct netif *n)
+{
+    r->ip     = ip4_addr_get_u32(netif_ip4_addr(n));
+    r->mask   = ip4_addr_get_u32(netif_ip4_netmask(n));
+    r->usable = netif_is_up(n) && netif_is_link_up(n) && r->ip != 0;
+}
+
+struct netif *net_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
+{
+    struct netif *order[2] = { &s_eth.netif, &s_wifi.netif };   /* priority */
+    net_route_if_t ifs[2];
+    route_if_fill(&ifs[0], order[0]);
+    route_if_fill(&ifs[1], order[1]);
+    int i = net_route_pick(ifs, 2, src ? ip4_addr_get_u32(src) : 0, ip4_addr_get_u32(dest));
+    return (i < 0) ? NULL : order[i];
+}
+
 /* Clear the wired netif's address + DHCP state so acquisition restarts clean. */
 static void eth_reset_addr_state(void)
 {
@@ -622,6 +644,14 @@ void net_init(void)
     esp_hosted_spi_init();
     netif_add(&s_wifi.netif, &zero, &zero, &zero, NULL, &esp_netif_init, &ethernet_input);
     mdns_register(&s_wifi.netif);
+    /* netif_add() prepends, leaving Wi-Fi first in netif_list. Put eth back in
+       front so lwIP's own subnet scan (ICMP errors, anything that bypasses the
+       route hook) also prefers the wire. */
+    if (netif_list == &s_wifi.netif && s_wifi.netif.next == &s_eth.netif) {
+        s_wifi.netif.next = s_eth.netif.next;
+        s_eth.netif.next  = &s_wifi.netif;
+        netif_list        = &s_eth.netif;
+    }
     esp_wifi_ctrl_init();
 
     server_start();
