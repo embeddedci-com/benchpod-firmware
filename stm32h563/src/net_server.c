@@ -102,7 +102,7 @@ static uint32_t link_timer;
    self-heal). Touching HAL_ETH + lwIP must happen on the net task, so other tasks
    only latch a request here; net_poll() applies it. */
 typedef enum { ETH_REQ_NONE = 0, ETH_REQ_DOWN, ETH_REQ_UP, ETH_REQ_RESTART, ETH_REQ_SPEED,
-               ETH_REQ_REFCLK } eth_req_t;
+               ETH_REQ_REFCLK, ETH_REQ_LOOPBACK } eth_req_t;
 static volatile eth_req_t s_eth_req;
 
 /* Wired-link diagnostics (eth_diag.h): refreshed every 2 s on this task, logged when an error
@@ -157,6 +157,11 @@ static int                s_eth_force_full;  /* `eth speed`: duplex when forced 
    the previous answer. */
 static volatile uint32_t  s_eth_refclk_seq;
 static volatile uint32_t  s_eth_refclk_hz;
+/* `eth loopback`: same request/seq pattern as refclk. */
+static int                   s_eth_lb_mbit;
+static uint32_t              s_eth_lb_n;
+static volatile uint32_t     s_eth_lb_seq;
+static eth_loopback_result_t s_eth_lb_result;
 
 static bool iface_addressed(const net_if_t *i) {
     return i->dhcp.state == NET_DHCP_DONE;
@@ -585,6 +590,22 @@ static void net_eth_apply_request(void)
         }
         break;
     }
+    case ETH_REQ_LOOPBACK: {
+        eth_loopback_result_t r;
+        s_eth_admin_down = false;
+        eth_reset_addr_state();
+        if (ethernetif_loopback_test(&s_eth.netif, s_eth_lb_mbit, s_eth_lb_n, &r) != 0)
+            printf("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
+        else
+            printf("[net] eth loopback %dM: sent %lu, back %lu, intact %lu, corrupt %lu, "
+                   "crc %lu, align %lu, tx fail %lu\r\n",
+                   r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
+                   (unsigned long)r.intact, (unsigned long)r.corrupt,
+                   (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
+        s_eth_lb_result = r;
+        s_eth_lb_seq++;
+        break;
+    }
     case ETH_REQ_UP:
     case ETH_REQ_RESTART:
         s_eth_admin_down = false;
@@ -611,6 +632,20 @@ bool net_eth_refclk_result(uint32_t since_seq, uint32_t *hz_out)
 {
     if (s_eth_refclk_seq == since_seq) return false;
     if (hz_out) *hz_out = s_eth_refclk_hz;
+    return true;
+}
+
+void net_eth_loopback(int mbit, uint32_t n)
+{
+    s_eth_lb_mbit = mbit;
+    s_eth_lb_n    = n;
+    s_eth_req     = ETH_REQ_LOOPBACK;
+}
+uint32_t net_eth_loopback_seq(void) { return s_eth_lb_seq; }
+bool net_eth_loopback_result(uint32_t since_seq, eth_loopback_result_t *out)
+{
+    if (s_eth_lb_seq == since_seq) return false;
+    if (out) *out = s_eth_lb_result;
     return true;
 }
 

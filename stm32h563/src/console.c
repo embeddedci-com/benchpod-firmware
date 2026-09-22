@@ -155,6 +155,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "                       analog path that 100M does not); half unless `full` is given\r\n"
         "  eth refclk           measure the PHY's 50 MHz RMII clock (100BASE-TX needs it\r\n"
         "                       within 50 ppm; drops the link for ~200 ms)\r\n"
+        "  eth loopback <10|100> [n]  PHY loopback, n frames (def 200): fails = RMII/digital\r\n"
+        "                       side, clean = the fault is analog (magnetics, jack, RBIAS)\r\n"
         "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
         "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
         "  reboot               system reset\r\n");
@@ -850,6 +852,36 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  (100BASE-TX needs +/-50 ppm, 10BASE-T tolerates far more."
                              " This compares the PHY clock with the MCU crystal, so read it"
                              " next to a known-good pod.)\r\n");
+            }
+        }
+        else if (argc >= 3 && !strcmp(argv[1], "loopback")) {
+            int mbit = atoi(argv[2]);
+            uint32_t n = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 200u;
+            if (mbit != 10 && mbit != 100) {
+                op(out, ctx, "  usage: eth loopback <10|100> [n]\r\n");
+            } else {
+                if (n == 0) n = 1;
+                if (n > 1000) n = 1000;
+                uint32_t seq = net_eth_loopback_seq();
+                static eth_loopback_result_t r;   /* static: console stack headroom */
+                net_eth_loopback(mbit, n);
+                bool done = false;
+                for (int i = 0; i < 150 && !(done = net_eth_loopback_result(seq, &r)); i++)
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                if (!done) {
+                    op(out, ctx, "  eth loopback: no result (timed out)\r\n");
+                } else {
+                    op(out, ctx, "  eth loopback %dM: sent %lu, came back %lu, intact %lu, corrupt %lu,"
+                                 " crc %lu, align %lu, tx fail %lu\r\n",
+                       r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
+                       (unsigned long)r.intact, (unsigned long)r.corrupt,
+                       (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
+                    op(out, ctx, "  %s\r\n",
+                       r.intact == r.sent
+                         ? "all frames intact: the RMII lines and the PHY's digital side are fine at this speed"
+                         : "frames lost or damaged without ever reaching the jack: suspect the RMII lines"
+                           " (TXD0/TXD1/TX_EN, RXD, CRS_DV) or the PHY's digital side");
+                }
             }
         }
         else if (argc >= 3 && !strcmp(argv[1], "speed")) {

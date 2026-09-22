@@ -38,6 +38,19 @@ int  ethernetif_force_speed(struct netif *netif, int mbit, int full);
    0 = ok and *hz_out is set, -1 = no edges / failed. Drops the link for ~200 ms. */
 int  ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out);
 
+/* PHY near-end loopback test (see ethernetif.c). */
+typedef struct {
+  int      mbit;       /* 10 or 100 */
+  uint32_t sent;       /* frames handed to the MAC */
+  uint32_t tx_fail;    /* frames the MAC refused / timed out */
+  uint32_t received;   /* frames that came back */
+  uint32_t intact;     /* ... with the payload byte-for-byte as sent */
+  uint32_t corrupt;    /* ... that came back but differ */
+  uint32_t crc;        /* MAC CRC errors during the test (MMC delta) */
+  uint32_t align;      /* MAC alignment errors during the test (MMC delta) */
+} eth_loopback_result_t;
+int  ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loopback_result_t *r);
+
 #include "eth_diag.h"
 /* Wired-link diagnostics (net task only). */
 void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d);

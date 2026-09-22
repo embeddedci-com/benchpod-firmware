@@ -2267,7 +2267,9 @@ static void handle_wifi_clear(int conn_id) {
    {"cmd":"eth","action":"speed","mbit":0|10|100[,"duplex":"half"|"full"]} forces the link
    mode (0 = back to autonegotiation) — a debug aid for a link that errors at 100M.
    {"cmd":"eth","action":"refclk"} measures the PHY's RMII reference clock (nominally
-   50 MHz) against the MCU crystal and returns {hz, ppm, on_hsi}. */
+   50 MHz) against the MCU crystal and returns {hz, ppm, on_hsi}.
+   {"cmd":"eth","action":"loopback","mbit":10|100[,"n":N]} runs a PHY near-end loopback
+   test and returns {mbit, sent, received, intact, corrupt, crc, align, tx_fail}. */
 bool clock_on_hsi(void);   /* main.c: true when the MCU crystal did not start */
 
 static void handle_eth(int conn_id, const char *buf) {
@@ -2285,6 +2287,30 @@ static void handle_eth(int conn_id, const char *buf) {
         bp_emit_raw(&e, "}\n");
         if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+        return;
+    }
+    if (strcmp(action, "loopback") == 0) {
+        char mbuf[8] = {0}, nbuf[8] = {0};
+        json_get_value(buf, "mbit", mbuf, sizeof(mbuf));
+        int mbit = atoi(mbuf);
+        if (mbit != 10 && mbit != 100) { send_error(conn_id, "eth loopback mbit must be 10 or 100"); return; }
+        uint32_t n = json_get_value(buf, "n", nbuf, sizeof(nbuf)) && nbuf[0] ? (uint32_t)atoi(nbuf) : 200u;
+        if (n == 0) n = 1;
+        if (n > 1000) n = 1000;
+        uint32_t seq = net_eth_loopback_seq();
+        eth_loopback_result_t r;
+        net_eth_loopback(mbit, n);
+        bool done = false;
+        for (int i = 0; i < 150 && !(done = net_eth_loopback_result(seq, &r)); i++) sleep_ms(100);
+        if (!done) { send_error(conn_id, "eth loopback: timed out"); return; }
+        char resp[192];
+        snprintf(resp, sizeof(resp),
+                 "{\"mbit\":%d,\"sent\":%lu,\"received\":%lu,\"intact\":%lu,\"corrupt\":%lu,"
+                 "\"crc\":%lu,\"align\":%lu,\"tx_fail\":%lu}",
+                 r.mbit, (unsigned long)r.sent, (unsigned long)r.received, (unsigned long)r.intact,
+                 (unsigned long)r.corrupt, (unsigned long)r.crc, (unsigned long)r.align,
+                 (unsigned long)r.tx_fail);
+        send_ok_str(conn_id, resp);
         return;
     }
     if (strcmp(action, "refclk") == 0) {
@@ -2320,7 +2346,7 @@ static void handle_eth(int conn_id, const char *buf) {
     if      (strcmp(action, "stop")    == 0) { net_eth_stop();    }
     else if (strcmp(action, "start")   == 0) { net_eth_start();   }
     else if (strcmp(action, "restart") == 0 || action[0] == '\0') { net_eth_restart(); strcpy(action, "restart"); }
-    else { send_error(conn_id, "eth action must be stop|start|restart|stats|speed|refclk"); return; }
+    else { send_error(conn_id, "eth action must be stop|start|restart|stats|speed|refclk|loopback"); return; }
     char resp[48];
     snprintf(resp, sizeof(resp), "\"%s\"", action);
     send_ok_str(conn_id, resp);

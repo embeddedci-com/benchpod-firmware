@@ -678,6 +678,105 @@ void ethernetif_phy_restart(struct netif *netif)
   netif_set_link_down(netif);
 }
 
+/* PHY near-end loopback: the LAN8742 returns every frame the MAC transmits straight back
+   to the MAC from its DIGITAL side, so the frame crosses the RMII transmit lines (TXD0,
+   TXD1, TX_EN), the PHY's digital logic and the RMII receive lines, and never reaches the
+   PHY's analog front end, the magnetics, the RJ45 or the cable.
+
+   That splits a link that fails at 100M and works at 10M in two:
+     - loopback also fails at 100M  -> RMII lines or the PHY's digital side. At 100M every
+       50 MHz clock carries new data; at 10M each dibit is held for 10 clocks, so a marginal
+       TXD/TX_EN joint or timing is fatal at 100M and invisible at 10M.
+     - loopback is clean at 100M    -> the digital path is fine; the fault is analog
+       (RBIAS, analog supply decoupling, magnetics, jack).
+
+   Each frame is addressed to our own MAC with a local-experimental ethertype, carries its
+   sequence number and a bit-toggling pattern, and is compared byte for byte on return.
+   The link is down for the duration; the PHY is soft-reset (autoneg) afterwards. */
+#define ETH_LB_ETHERTYPE  0x88B5u
+#define ETH_LB_PAYLOAD    1000u
+#define ETH_LB_FRAME      (14u + ETH_LB_PAYLOAD)
+
+static uint8_t eth_lb_byte(uint32_t seq, uint32_t i)
+{
+  return (uint8_t)((i * 7u + seq) ^ ((i & 1u) ? 0xAAu : 0x55u));
+}
+
+int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loopback_result_t *r)
+{
+  if (!r) return -1;
+  memset(r, 0, sizeof(*r));
+  r->mbit = mbit;
+
+  HAL_ETH_Stop(&EthHandle);
+  netif_set_down(netif);
+  netif_set_link_down(netif);
+
+  uint32_t bcr = LAN8742_BCR_LOOPBACK | LAN8742_BCR_DUPLEX_MODE |
+                 (mbit == 100 ? LAN8742_BCR_SPEED_SELECT : 0u);
+  if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BCR, bcr) != HAL_OK) {
+    ethernetif_phy_restart(netif);
+    return -1;
+  }
+  HAL_Delay(20);
+
+  ETH_MACConfigTypeDef mac = {0};
+  HAL_ETH_GetMACConfig(&EthHandle, &mac);
+  mac.DuplexMode = ETH_FULLDUPLEX_MODE;
+  mac.Speed      = (mbit == 100) ? ETH_SPEED_100M : ETH_SPEED_10M;
+  HAL_ETH_SetMACConfig(&EthHandle, &mac);
+  HAL_ETH_Start(&EthHandle);
+
+  /* Drain anything already queued so it is not counted as a loopback frame. */
+  for (struct pbuf *q; (q = low_level_input(netif)) != NULL; ) pbuf_free(q);
+
+  uint32_t crc0 = ETH->MMCRCRCEPR, align0 = ETH->MMCRAEPR;
+
+  for (uint32_t seq = 0; seq < n; seq++) {
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, ETH_LB_FRAME, PBUF_RAM);
+    if (!p) { r->tx_fail++; continue; }
+    uint8_t *f = (uint8_t *)p->payload;
+    memcpy(f, netif->hwaddr, 6);
+    memcpy(f + 6, netif->hwaddr, 6);
+    f[12] = (uint8_t)(ETH_LB_ETHERTYPE >> 8);
+    f[13] = (uint8_t)(ETH_LB_ETHERTYPE & 0xFFu);
+    for (uint32_t i = 0; i < ETH_LB_PAYLOAD; i++) f[14 + i] = eth_lb_byte(seq, i);
+    f[14] = (uint8_t)(seq >> 8);
+    f[15] = (uint8_t)(seq & 0xFFu);
+
+    r->sent++;
+    if (low_level_output(netif, p) != ERR_OK) r->tx_fail++;
+    pbuf_free(p);
+
+    /* A 1 KB frame takes ~0.8 ms at 10M; give it 5 ms to come back. */
+    uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < 5u) {
+      struct pbuf *q = low_level_input(netif);
+      if (!q) continue;
+      const uint8_t *g = (const uint8_t *)q->payload;
+      if (q->len >= 14u && g[12] == (uint8_t)(ETH_LB_ETHERTYPE >> 8) &&
+          g[13] == (uint8_t)(ETH_LB_ETHERTYPE & 0xFFu)) {
+        r->received++;
+        bool ok = (q->tot_len >= ETH_LB_FRAME) && (q->len >= ETH_LB_FRAME) &&
+                  g[14] == (uint8_t)(seq >> 8) && g[15] == (uint8_t)(seq & 0xFFu);
+        for (uint32_t i = 2; ok && i < ETH_LB_PAYLOAD; i++)
+          if (g[14 + i] != eth_lb_byte(seq, i)) ok = false;
+        if (ok) r->intact++; else r->corrupt++;
+        pbuf_free(q);
+        break;
+      }
+      pbuf_free(q);
+    }
+  }
+
+  r->crc   = ETH->MMCRCRCEPR - crc0;
+  r->align = ETH->MMCRAEPR   - align0;
+
+  HAL_ETH_Stop(&EthHandle);
+  ethernetif_phy_restart(netif);     /* soft reset: loopback off, autoneg back on */
+  return 0;
+}
+
 /* Measure the RMII reference clock the PHY drives into PA1 (nominally 50 MHz) against the
    MCU's own 25 MHz crystal, and report it in Hz.
 

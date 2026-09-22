@@ -42,6 +42,13 @@ void net_eth_force_speed(int mbit, int full);
 void     net_eth_refclk_measure(void);
 uint32_t net_eth_refclk_seq(void);
 bool     net_eth_refclk_result(uint32_t since_seq, uint32_t *hz_out);
+/* PHY near-end loopback test at 10 or 100 Mbit with n frames (see ethernetif.c): tells a
+   fault on the RMII/digital side from one in the analog front end. Same request/poll
+   pattern as refclk. Takes the link down for up to ~n x 5 ms plus a PHY restart. */
+#include "ethernetif.h"
+void     net_eth_loopback(int mbit, uint32_t n);
+uint32_t net_eth_loopback_seq(void);
+bool     net_eth_loopback_result(uint32_t since_seq, eth_loopback_result_t *out);
 /* The latest wired-link diagnostics snapshot (refreshed every 2 s on the net task). */
 #include "eth_diag.h"
 void net_eth_diag(eth_diag_t *out);
