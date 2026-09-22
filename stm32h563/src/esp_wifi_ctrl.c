@@ -17,6 +17,8 @@
 #include "esp_hosted_frame.h"
 #include "esp_netif.h"
 #include "config_store.h"
+#include "esp_rom_flash.h"
+#include "hw_worker.h"
 
 #include "pico/time.h"
 #include <string.h>
@@ -41,6 +43,10 @@ enum {
 
 #define STEP_TIMEOUT_MS  4000
 #define RETRY_BACKOFF_MS 5000
+/* The esp-hosted slave sends its boot event ~1-2 s after reset.  No event this long after
+   release means the C3 is blank or runs something else (a new pod ships with it empty), so
+   Wi-Fi flashes the embedded image once and tries again. */
+#define SLAVE_BOOT_TIMEOUT_MS 20000
 
 /* ---- tiny protobuf writer ------------------------------------------------- */
 typedef struct { uint8_t *buf; size_t cap, len; bool err; } pb_w;
@@ -155,6 +161,7 @@ static size_t build_set_config(uint8_t *out, size_t cap,
 typedef enum {
     WC_DOWN = 0,   /* unconfigured / ESP held in reset */
     WC_WAIT_READY, /* started, awaiting slave boot event */
+    WC_FLASHING,   /* no boot event: the worker is writing the embedded image to the C3 */
     WC_INIT, WC_SETMODE, WC_SETCFG, WC_START, WC_CONNECT, WC_GETMAC,
     WC_WAIT_ASSOC, /* connect issued, awaiting sta-connected event */
     WC_UP,
@@ -177,17 +184,29 @@ static absolute_time_t s_deadline;
 static volatile int32_t s_rssi;        /* last STA RSSI in dBm (valid iff s_have_rssi) */
 static volatile bool  s_have_rssi;
 static absolute_time_t s_rssi_deadline; /* when to issue the next GetRssi while WC_UP */
+static absolute_time_t s_boot_deadline; /* WC_WAIT_READY gives up on the boot event here */
+static bool           s_flash_tried;    /* one automatic C3 flash per configuration */
+static volatile bool  s_flash_done, s_flash_ok;   /* set by the worker when it finishes */
+static volatile bool  s_paused;         /* a console command owns the C3 straps */
 
 const char *esp_wifi_ctrl_state_str(void) {
     switch (s_state) {
         case WC_DOWN:        return s_configured ? "starting" : "disabled";
         case WC_WAIT_READY:  return "waiting-slave";
+        case WC_FLASHING:    return "flashing-c3";
         case WC_INIT: case WC_SETMODE: case WC_SETCFG: case WC_START:
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: return "connecting";
         case WC_UP: case WC_UP_RSSI: return "connected";
         case WC_BACKOFF:     return "backoff";
         default:             return "unknown";
     }
+}
+
+void esp_wifi_ctrl_pause(bool paused) { s_paused = paused; }
+
+void esp_wifi_ctrl_flash_done(bool ok) {
+    s_flash_ok   = ok;
+    s_flash_done = true;
 }
 
 bool esp_wifi_ctrl_configured(void) { return s_configured; }
@@ -355,25 +374,67 @@ void esp_wifi_ctrl_init(void) {
 
 void esp_wifi_ctrl_reload(void) {
     if (s_started) { esp_hosted_spi_stop(); s_started = false; }
+    s_flash_tried = false;   /* new credentials (or a manual flash) earn another automatic try */
     esp_netif_set_link_up(false);
     s_state = WC_DOWN;
     esp_wifi_ctrl_init();
 }
 
 void esp_wifi_ctrl_poll(void) {
+    /* A backoff that expires mid-flash would release the C3's reset and knock it out of its
+       ROM loader, so leave the straps alone while a console command holds them. */
+    if (s_paused) return;
     /* Gate the whole co-processor on configuration. */
     if (!s_configured) {
         if (s_started) { esp_hosted_spi_stop(); s_started = false; s_state = WC_DOWN; }
         return;
     }
-    if (!s_started) { esp_hosted_spi_start(); s_started = true; s_state = WC_WAIT_READY; }
+    if (s_state == WC_FLASHING) {           /* the C3 is the worker's until it reports back */
+        if (!s_flash_done) return;
+        s_flash_done = false;
+        if (s_flash_ok) {
+            printf("[wifi] ESP32-C3 flashed — starting it\n");
+            s_state = WC_DOWN;              /* s_started is false: the next poll releases reset */
+        } else {
+            to_backoff("ESP32-C3 flash failed");
+        }
+        return;
+    }
+    if (!s_started) {
+        esp_hosted_spi_start(); s_started = true; s_state = WC_WAIT_READY;
+        s_boot_deadline = make_timeout_time_ms(SLAVE_BOOT_TIMEOUT_MS);
+    }
 
     switch (s_state) {
     case WC_DOWN:
         s_state = WC_WAIT_READY;
+        s_boot_deadline = make_timeout_time_ms(SLAVE_BOOT_TIMEOUT_MS);
+        return;
+
+    case WC_FLASHING:                       /* handled above */
         return;
 
     case WC_WAIT_READY:
+        if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline)) {
+            if (!s_flash_tried && esp_slave_fw_len > 0) {
+                /* Hold the C3 in reset and hand it to the worker: the ROM-loader flash
+                   blocks for ~140 s, which the net task (lwIP, cloud) cannot afford. */
+                esp_hosted_spi_stop(); s_started = false;
+                s_flash_tried = true;
+                s_flash_done  = false;
+                if (hw_worker_submit_esp_flash()) {
+                    printf("[wifi] no boot event from the ESP32-C3 in %u s — flashing its "
+                           "esp-hosted image (~2-3 min)\n", SLAVE_BOOT_TIMEOUT_MS / 1000u);
+                    s_state = WC_FLASHING;
+                } else {
+                    to_backoff("could not queue the ESP32-C3 flash");
+                }
+            } else {
+                to_backoff("no boot event from the ESP32-C3 (already flashed once; "
+                           "run flash-esp32 or check the board)");
+            }
+            return;
+        }
         if (esp_hosted_spi_ready()) {
             s_evt_connected = s_evt_disconnected = false;
             uint8_t p[128]; size_t n = build_init_cfg(p, sizeof(p));

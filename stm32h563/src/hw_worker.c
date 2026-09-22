@@ -8,6 +8,8 @@
 #include "sys_health.h"
 #include "bp_limits.h"
 #include "ota.h"
+#include "esp_rom_flash.h"
+#include "esp_wifi_ctrl.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
 
 #include "FreeRTOS.h"
@@ -21,7 +23,7 @@
    static_assert the "a full TCP window fits the queue" invariant against TCP_WND. */
 
 enum { WK_BYTES = 0, WK_CONSOLE, WK_CLOUD, WK_CLOSED, WK_TUNNEL_RESET,
-       WK_OTA_BEGIN, WK_OTA_DATA, WK_OTA_END, WK_OTA_ABORT, WK_OTA_COMMIT };
+       WK_OTA_BEGIN, WK_OTA_DATA, WK_OTA_END, WK_OTA_ABORT, WK_OTA_COMMIT, WK_ESP_FLASH };
 
 typedef struct {
     uint8_t  kind;
@@ -115,6 +117,7 @@ bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len) 
 void hw_worker_submit_ota_end(void)    { submit(WK_OTA_END, -1, NULL, 0, NULL, 0); }
 void hw_worker_submit_ota_abort(void)  { submit(WK_OTA_ABORT, -1, NULL, 0, NULL, 0); }
 void hw_worker_submit_ota_commit(void) { submit(WK_OTA_COMMIT, -1, NULL, 0, NULL, 0); }
+bool hw_worker_submit_esp_flash(void)  { return submit(WK_ESP_FLASH, -1, NULL, 0, NULL, 0); }
 
 bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
                                 char *reply, size_t reply_cap, size_t *reply_len) {
@@ -171,6 +174,10 @@ static void handle_work(cmd_work_t *w) {
         break;
     case WK_OTA_COMMIT:
         ota_commit();                     /* does not return on success */
+        break;
+    case WK_ESP_FLASH:                    /* Wi-Fi found no esp-hosted image on the C3 */
+        esp_wifi_ctrl_flash_done(esp_slave_fw_len > 0 &&
+                                 esp_rom_flash_program(esp_slave_fw, esp_slave_fw_len, 0) == 0);
         break;
     default:
         break;

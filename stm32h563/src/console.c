@@ -775,13 +775,17 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             }
         }
     } else if (!strcmp(argv[0], "flash-esp32-sync")) {
-        esp_hosted_spi_stop();          /* ensure the Wi-Fi transport isn't driving EN/BOOT */
+        esp_wifi_ctrl_pause(true);      /* Wi-Fi control must not drive EN/BOOT meanwhile */
+        esp_hosted_spi_stop();
         uint32_t magic = 0;
         if (esp_rom_flash_sync(&magic) == 0)
             op(out, ctx, "  C3 ROM synced (chip magic 0x%08lx)\r\n", (unsigned long)magic);
         else
             op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
+        esp_wifi_ctrl_pause(false);
+        esp_wifi_ctrl_reload();         /* the C3 was left in its ROM loader: restart Wi-Fi */
     } else if (!strcmp(argv[0], "flash-esp32")) {
+        esp_wifi_ctrl_pause(true);      /* Wi-Fi control must not drive EN/BOOT meanwhile */
         esp_hosted_spi_stop();
         if (esp_slave_fw_len == 0) {
             op(out, ctx, "  no embedded C3 image (build esp32-hosted-slave first)\r\n");
@@ -791,6 +795,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         } else {
             op(out, ctx, "  flash-esp32 failed (C3 left in reset; see log)\r\n");
         }
+        esp_wifi_ctrl_pause(false);
+        esp_wifi_ctrl_reload();         /* restart the Wi-Fi join (fresh image, or retry) */
     } else if (!strcmp(argv[0], "wifi-set")) {
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
     } else if (!strcmp(argv[0], "esp-mon")) {

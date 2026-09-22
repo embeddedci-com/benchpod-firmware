@@ -18,6 +18,7 @@
  */
 #include "esp_rom_flash.h"
 #include "board_pins.h"
+#include "watchdog.h"
 
 #include "stm32h5xx_hal.h"
 #include "mbedtls/md5.h"
@@ -37,6 +38,7 @@
 #define ESP_CHECKSUM_MAGIC  0xEF
 #define FLASH_WRITE_SIZE    0x400u          /* ROM-loader FLASH_DATA block size  */
 #define ROM_STATUS_BYTES    2               /* ROM (no stub) trailing status len */
+#define FLASH_DATA_ATTEMPTS 3               /* esptool's WRITE_BLOCK_ATTEMPTS        */
 
 /* SLIP framing bytes. */
 #define SLIP_END            0xC0
@@ -353,16 +355,24 @@ int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset)
         for (uint32_t i = 0; i < FLASH_WRITE_SIZE; i++) checksum ^= pk[16 + i];
 
         /* FLASH_DATA payload = 16-byte sub-header + padded block; the command
-           checksum covers only the block bytes (esptool convention). */
-        if (esp_command(ESP_FLASH_DATA, pk, (uint16_t)(16 + FLASH_WRITE_SIZE),
-                        checksum, NULL, NULL, NULL, 3000) != 0) {
-            printf("[espflash] FLASH_DATA failed at block %lu/%lu\n",
-                   (unsigned long)seq, (unsigned long)num_blocks);
-            goto fail;
+           checksum covers only the block bytes (esptool convention).  Like esptool, resend a
+           block whose reply was lost (the ROM accepts the same seq again) before giving up
+           on a two-minute flash. */
+        int rc = -1;
+        for (int attempt = 1; attempt <= FLASH_DATA_ATTEMPTS && rc != 0; attempt++) {
+            rc = esp_command(ESP_FLASH_DATA, pk, (uint16_t)(16 + FLASH_WRITE_SIZE),
+                             checksum, NULL, NULL, NULL, 3000);
+            if (rc != 0)
+                printf("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
+                       (unsigned long)(seq + 1), (unsigned long)num_blocks, attempt, rc);
         }
+        if (rc != 0) goto fail;
         if ((seq & 0x3F) == 0 || seq == num_blocks - 1)
             printf("[espflash]  block %lu/%lu\n", (unsigned long)(seq + 1),
                    (unsigned long)num_blocks);
+        /* The whole image takes ~140 s at 115200 baud, far past the worker's 60 s watchdog
+           grace, so prove liveness per block.  Only the hw worker ever runs this. */
+        watchdog_heartbeat(WD_TASK_WORKER, "worker");
     }
 
     /* Verify with on-chip MD5 over the written region [offset, offset+len). */

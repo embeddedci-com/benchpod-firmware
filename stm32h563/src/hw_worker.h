@@ -79,4 +79,8 @@ void hw_worker_submit_ota_end(void);
 void hw_worker_submit_ota_abort(void);
 void hw_worker_submit_ota_commit(void);
 
+/* Net task (Wi-Fi control): flash the embedded esp-hosted image onto the ESP32-C3 (~140 s),
+   then report through esp_wifi_ctrl_flash_done().  False if it could not be queued. */
+bool hw_worker_submit_esp_flash(void);
+
 #endif /* HW_WORKER_H */

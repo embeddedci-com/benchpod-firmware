@@ -31,6 +31,14 @@ bool esp_wifi_ctrl_connected(void);
 /* Re-read credentials and restart the sequence (after a wifi-set). */
 void esp_wifi_ctrl_reload(void);
 
+/* Console C3 commands (flash-esp32, flash-esp32-sync) own the C3's EN/BOOT straps while they
+   run: pause(true) stops the state machine touching them, pause(false) releases it. */
+void esp_wifi_ctrl_pause(bool paused);
+
+/* Worker task: the C3 flash that Wi-Fi control asked for has finished (ok = flashed and
+   verified).  Safe to call from any task. */
+void esp_wifi_ctrl_flash_done(bool ok);
+
 /* Human-readable state for the `status` command. */
 const char *esp_wifi_ctrl_state_str(void);
 
