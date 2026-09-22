@@ -11,6 +11,7 @@ cmake_install.cmake
 # Compiled outputs (if produced outside build/)
 *.elf
 *.bin
+*.bin.gwversion
 *.uf2
 *.hex
 *.dis

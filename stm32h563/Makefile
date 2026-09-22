@@ -267,7 +267,7 @@ FPGA_BLOB_ATTR := __attribute__((section(".blob_fpga"),used))
 # Prefer the two-image embed (loop + deep) when both single images exist; otherwise
 # fall back to a single ../ice40/bench_pod_fpga_vbench_pod.bin if present. The single
 # fallback is intentionally NOT a hard prerequisite (it may not exist in a two-image build).
-$(GEN_BITSTREAM): $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard ../ice40/bench_pod_fpga_vbench_pod.bin) | $(BUILD_DIR)
+$(GEN_BITSTREAM): $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard ../ice40/bench_pod_fpga_vbench_pod.bin) $(wildcard $(ICE40_LOOP_BIN).gwversion) | $(BUILD_DIR)
 	@if [ -f $(ICE40_LOOP_BIN) ] && [ -f $(ICE40_DEEP_BIN) ]; then \
 	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_image0[] = {\n' > $@; \
 	   xxd -i < $(ICE40_LOOP_BIN) >> $@; \
@@ -283,6 +283,11 @@ $(GEN_BITSTREAM): $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(
 	 else \
 	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_bitstream[1]={0};\nstatic const unsigned int fpga_bitstream_len=0;\n' > $@; \
 	 fi
+	@# The GATEWARE_VERSION the gateware build recorded next to the image (0 = unknown, which
+	@# turns the boot-time gateware update off).
+	@v=$$(cat $(ICE40_LOOP_BIN).gwversion 2>/dev/null); \
+	 if [ -f $(ICE40_LOOP_BIN) ] && [ -n "$$v" ]; then printf '#define FPGA_EMBEDDED_GW_VERSION %s\n' "$$v" >> $@; \
+	 else printf '#define FPGA_EMBEDDED_GW_VERSION 0\n' >> $@; fi
 $(BUILD_DIR)/console.o: $(GEN_BITSTREAM)
 
 # Re-assemble the embedded C3 image whenever the blob changes. The .incbin path

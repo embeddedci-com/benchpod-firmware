@@ -21,3 +21,9 @@ const char *boot_policy_off_str(uint32_t off) {
         default:           return "network and iCE40/PSRAM";
     }
 }
+
+int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep)
+{
+    if (running == 0 || embedded == 0 || running == embedded) return -1;
+    return running_is_deep ? 1 : 0;
+}

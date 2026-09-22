@@ -319,6 +319,10 @@ SEED_DEEP ?= 14
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
 SEED_DEEP_FALLBACK ?= 5 8 2 3 7 12 4 15 10 13 11 1 9 16 6
 MULTI = $(OUT)_multi.bin
+# The GATEWARE_VERSION the images are built with, read from the source they are built from and
+# written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
+# that the gateware in its iCE40 config flash is not the one its firmware shipped with.
+GW_VERSION := $(shell sed -n "s/.*GATEWARE_VERSION(8'd\([0-9]*\)).*/\1/p" src/top_v2.v | head -1)
 
 $(OUT)_loop.json: $(SRC)
 	yosys -p "read_verilog -Isrc $(DEFINES) $(SRC); synth_ice40 -abc9 -dsp -spram -top top -json $@"
@@ -327,9 +331,11 @@ $(OUT)_deep.json: $(SRC)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
+	echo $(GW_VERSION) > $@.gwversion
 $(OUT)_deep.bin: $(OUT)_deep.json $(PCF)
 	$(call pnr,$<,$(OUT)_deep.asc,$(SEED_DEEP),$(SEED_DEEP_FALLBACK))
 	icepack $(OUT)_deep.asc $@
+	echo $(GW_VERSION) > $@.gwversion
 # -p0: power-on image = slot 0 (loop).  -a16: align images at 64 KB (SB_WARMBOOT jumps here).
 multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 	icemulti -p0 -a16 -o $(MULTI) $(OUT)_loop.bin $(OUT)_deep.bin

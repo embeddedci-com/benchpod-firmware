@@ -34,6 +34,14 @@ int main(void) {
     CHECK(strcmp(boot_policy_off_str(H), "iCE40/PSRAM") == 0, "str hw");
     CHECK(strcmp(boot_policy_off_str(A), "network and iCE40/PSRAM") == 0, "str both");
 
+    /* Boot-time gateware update: only when both versions are known and differ. */
+    CHECK(boot_policy_gateware_image(36, 36, 0) == -1, "gw: same version, no update");
+    CHECK(boot_policy_gateware_image(35, 36, 0) == 0, "gw: older loop image -> reload image 0");
+    CHECK(boot_policy_gateware_image(35, 36, 1) == 1, "gw: older deep image -> reload image 1");
+    CHECK(boot_policy_gateware_image(37, 36, 0) == 0, "gw: newer gateware than the firmware -> match the firmware");
+    CHECK(boot_policy_gateware_image(0, 36, 0) == -1, "gw: iCE40 not answering -> leave it to the blank-board path");
+    CHECK(boot_policy_gateware_image(35, 0, 0) == -1, "gw: embedded version unknown -> never touch it");
+
     if (fails) { printf("test_boot_policy: %d FAILED\n", fails); return 1; }
     printf("test_boot_policy: all passed\n");
     return 0;

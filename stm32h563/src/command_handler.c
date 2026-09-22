@@ -38,6 +38,7 @@
 #include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
+#include "ice40_flash.h"
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
@@ -2087,7 +2088,8 @@ static void handle_status(int conn_id) {
        last_crash is free-form, so keep real headroom rather than sizing to today's payload. */
     /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[].
        1344: safe_mode + safe_reason (up to ~130 B). */
-    char resp[1344];
+    /* 1408: gateware + gateware_embedded. */
+    char resp[1408];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
@@ -2104,6 +2106,10 @@ static void handle_status(int conn_id) {
     bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",
             board_rev_str(), board_rev_strap_mv(),
             nrst_ctrl_supported() ? "true" : "false");
+    /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
+       differ after a firmware update until the boot-time gateware update has run. */
+    bp_emit(&e, "\"gateware\":%u,\"gateware_embedded\":%u,",
+            (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version());
     bp_emit(&e, "\"psram\":\"%s\",\"psram_ok\":%s,\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,"
                 "\"reset\":\"%s\",\"last_crash\":",
             psram_selftest_str(), signal_engine_psram_operable() ? "true" : "false",

@@ -58,6 +58,8 @@ bool clock_on_hsi(void);   /* main.c */
  * pins are the shared PSRAM bus), so switching reprograms the selected single image via the
  * proven ice40_flash_program + CRESET-reconfig path (~2 s).  n: 0=closed-loop,
  * 1=deep-DAC-replay.  Returns 0 ok, -1 fail. */
+uint8_t ice40_embedded_gw_version(void) { return (uint8_t)FPGA_EMBEDDED_GW_VERSION; }
+
 int ice40_reflash_image(int n)
 {
 #ifdef FPGA_HAVE_IMAGES
@@ -375,7 +377,10 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=read-failed\r\n",
                gw, fpga_ok ? "reachable" : "UNREACHABLE");
-        /* Separate keys ("hint", "safe", "clock"), so a host parsing "fpga : gateware vN"
+        if (ice40_embedded_gw_version() != 0 && gw != ice40_embedded_gw_version())
+            op(out, ctx, "  gw     : firmware embeds v%u, running v%u (updated at the next boot, or run flash-ice40)\r\n",
+               ice40_embedded_gw_version(), gw);
+        /* Separate keys ("hint", "safe", "clock", "gw"), so a host parsing "fpga : gateware vN"
            keeps working. */
         if (!fpga_ok && boot_hw_ready() && !ice40_is_configured())
             op(out, ctx, "  hint   : the iCE40 never configured (blank config flash?): run flash-ice40\r\n");
