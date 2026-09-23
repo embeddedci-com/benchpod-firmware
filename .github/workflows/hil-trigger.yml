@@ -10,9 +10,22 @@
 #
 # Flow:  push tag stm32-v* -> release-stm32.yml builds + publishes -> this dispatches HIL.
 #
-# Prerequisite (one-time): a secret `HIL_DISPATCH_TOKEN` — a fine-grained PAT with
-# `contents: write` on embeddedci-com/embeddedci-server (repository_dispatch is gated on the
-# contents scope). The default GITHUB_TOKEN cannot dispatch into another repository.
+# OFF BY DEFAULT. There is not always a pod on the bench, and a release must not go red
+# because nothing was listening. Turn it on only while a bench is up:
+#
+#   var    HIL_DISPATCH        — "true" enables the automatic dispatch after a release.
+#                                Anything else (unset included) skips this job, which is a
+#                                clean skip on the release, not a failure. A manual run
+#                                ignores the flag: asking for it by hand IS the opt-in.
+#   secret HIL_DISPATCH_TOKEN  — a fine-grained PAT with `contents: write` on
+#                                embeddedci-com/embeddedci-server (repository_dispatch is
+#                                gated on the contents scope). The default GITHUB_TOKEN
+#                                cannot dispatch into another repository. Missing while the
+#                                job runs is a FAILURE: the flag says a bench is expected,
+#                                so silence would be a hardware run nobody notices is gone.
+#
+# The far side is already safe on its own: hil.yml skips (not fails) when the bench is not
+# connected, so a dispatch that arrives with the pod unplugged costs nothing.
 name: Trigger HIL
 
 on:
@@ -29,8 +42,11 @@ permissions:
 
 jobs:
   dispatch:
-    # Never chase a failed or cancelled release with a hardware run.
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Manual runs always go. Automatic ones need the flag AND a release that succeeded:
+    # never chase a failed or cancelled release with a hardware run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.HIL_DISPATCH == 'true' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     steps:
       - name: Ask embeddedci-server to run the HIL suites
@@ -41,7 +57,8 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::HIL_DISPATCH_TOKEN is not set — cannot dispatch into embeddedci-server"
+            echo "::error::HIL_DISPATCH_TOKEN is not set — cannot dispatch into embeddedci-server."
+            echo "::error::Add the secret, or unset the HIL_DISPATCH variable to turn this job off."
             exit 1
           fi
           gh api repos/embeddedci-com/embeddedci-server/dispatches \
