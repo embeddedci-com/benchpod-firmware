@@ -98,33 +98,35 @@ module cmd_dispatch #(
     output reg  [31:0]       dac_stop_after,
 
     // In-fabric DAC control loop (OP_START_DAC_LOOP 0x15, v2 >= v23).  dac_loop_mode is a
-    // LEVEL (1 while the loop runs); cleared by STOP_DAC or any normal DAC start.  The
-    // params are latched at arm.  The curve is the LOAD_WAVE BRAM, indexed by the loop input.
+    // LEVEL (1 while the loop runs); cleared by STOP_DAC or any normal DAC start.  The curve is
+    // the LOAD_WAVE BRAM, indexed by the loop input.
+    //
+    // The loop PARAMETERS are not held here (v38).  The loop runs on clk48, and a clk register
+    // read straight from clk48 logic is an untimed crossing that a live write can tear.  Each
+    // loop opcode instead pulses a strobe with its payload as WIRES off arg_buf (the same
+    // strobe-qualified pattern as the I2C/UART config below), and top_v2 carries both through a
+    // cdc_pulse_payload whose clk48 registers ARE the parameters.  The payload stays valid long
+    // enough: arg_buf only changes in S_COLLECT, and rx_byte holds until the next SPI byte
+    // (>= 16 clk), while the crossing latches it within 2 clk.
     output reg               dac_loop_mode,
-    output reg  [15:0]       dac_loop_k,      // damping coefficient, Q15
-    output reg  [15:0]       dac_loop_vmin,   // output clamp low
-    output reg  [15:0]       dac_loop_vmax,   // output clamp high
-    output reg  [15:0]       dac_loop_tick,   // control period in clk48 cycles
+    output reg               loop_arm_stb,    // OP_START_DAC_LOOP payload valid
+    output wire [63:0]       loop_arm_cfg,    // {tick_div, vmax, vmin, k_q15}
 
     // Loop INPUT SOURCE (OP_DAC_LOOP_SRC 0x1A, v2 >= v29).  Separate from the arm opcode so
     // the host can step the input of a RUNNING loop (the open-loop bring-up test: hold a
     // point, meter the DAC, move on) without re-arming or re-uploading the curve.  Persistent
     // across arms; 0 = live ADC (closed loop) is the power-on default, so a client that never
     // sends this behaves exactly as it did before v29.
-    output reg  [1:0]        dac_loop_src,    // 0 = ADC, 1 = fixed, 2 = time sweep
-    output reg  [15:0]       dac_loop_in,     // fixed input value / sweep start
-    output reg  [15:0]       dac_loop_step,   // sweep increment per tick
+    output reg               loop_src_stb,
+    output wire [33:0]       loop_src_cfg,    // {step, fixed, src}: src 0 = ADC, 1 = fixed, 2 = sweep
 
     // Loop INPUT MAP + safety bounds (OP_DAC_LOOP_INMAP 0x1C, v2 >= v30).  Also persistent
     // across arms and separate from the arm opcode, for the same reason: the map describes
     // the BENCH (what the ADC is wired to), which does not change when a curve does.  All
     // zero = the v29 behaviour (legacy `in >> SHIFT` index, no trip, no slew bound), so a
     // client that never sends this is bit-for-bit unchanged.
-    output reg  [15:0]       dac_loop_in_zero,
-    output reg  [15:0]       dac_loop_in_gain,   // signed Q15
-    output reg  [10:0]       dac_loop_in_trip,   // trip threshold as a curve index
-    output reg               dac_loop_map_en,
-    output reg               dac_loop_trip_en,
+    output reg               loop_inmap_stb,
+    output wire [44:0]       loop_inmap_cfg,  // {trip_en, map_en, in_trip(11), in_gain (signed Q15), in_zero}
 
     // ADC engine control
     output reg               cap_start,
@@ -369,6 +371,13 @@ module cmd_dispatch #(
     assign uart_cfg_tx_ch    = arg_buf[1][3:0];
     assign uart_cfg_div      = {arg_buf[4], arg_buf[3], arg_buf[2]};
     assign uart_cfg_enable   = rx_byte[0];
+    // Control-loop payloads (v38), in wire order [k(2)][vmin(2)][vmax(2)][tick(2)] /
+    // [src][fixed(2)][step(2)] / [in_zero(2)][in_gain(2)][in_trip(2)][flags]; see the port list.
+    assign loop_arm_cfg      = {rx_byte, arg_buf[6], arg_buf[5], arg_buf[4],
+                                arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0]};
+    assign loop_src_cfg      = {rx_byte, arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0][1:0]};
+    assign loop_inmap_cfg    = {rx_byte[1:0], arg_buf[5][2:0], arg_buf[4],
+                                arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0]};
     reg [7:0]  reg_base;    // I2C_LOAD_REGS/READ_REGS start address
     reg [15:0] adc_dbg_latch;  // ADC_PROBE: sample latched at opcode so both bytes
                                // come from ONE conversion (engine free-runs)
@@ -439,13 +448,7 @@ module cmd_dispatch #(
             dac_psram_len  <= 24'd0;
             dac_stop_after <= 32'd0;
             dac_loop_mode <= 1'b0;
-            dac_loop_k    <= 16'd0;     dac_loop_vmin <= 16'd0;
-            dac_loop_vmax <= 16'hFFFF;  dac_loop_tick <= 16'd64;
-            dac_loop_src  <= 2'd0;      /* live ADC: the pre-v29 behaviour */
-            dac_loop_in   <= 16'd0;     dac_loop_step <= 16'd0;
-            dac_loop_in_zero   <= 16'd0; dac_loop_in_gain   <= 16'd0;
-            dac_loop_in_trip   <= 11'd0;
-            dac_loop_map_en    <= 1'b0;  dac_loop_trip_en   <= 1'b0;
+            loop_arm_stb  <= 1'b0;  loop_src_stb <= 1'b0;  loop_inmap_stb <= 1'b0;
             cap_start     <= 1'b0;
             cap_divider   <= 16'd2;
             adc_cap_base  <= 24'h400000;   /* legacy fixed map until SET_CAPTURE_BASES */
@@ -503,6 +506,9 @@ module cmd_dispatch #(
             uart_tx_we       <= 1'b0;
             uart_rx_re       <= 1'b0;
             uart_rx_ovf_clr  <= 1'b0;
+            loop_arm_stb     <= 1'b0;
+            loop_src_stb     <= 1'b0;
+            loop_inmap_stb   <= 1'b0;
 
             cs_active_d <= cs_active;
 
@@ -765,27 +771,18 @@ module cmd_dispatch #(
                                 // Loop input source (v29): [src][fixed(2)][step(2)].  Sets the
                                 // registers only — arming and stopping stay with 0x15/0x12.
                                 OP_DAC_LOOP_SRC: begin
-                                    dac_loop_src  <= arg_buf[0][1:0];
-                                    dac_loop_in   <= {arg_buf[2], arg_buf[1]};
-                                    dac_loop_step <= {rx_byte,    arg_buf[3]};
+                                    loop_src_stb  <= 1'b1;
                                 end
 `ifndef USE_DEEP_REPLAY
                                 // Loop input map (v30): [in_zero(2)][in_gain(2)][in_trip(2)]
                                 // [flags(1)], flags bit0=map_en, bit1=trip_en.
                                 OP_DAC_LOOP_INMAP: begin
-                                    dac_loop_in_zero   <= {arg_buf[1], arg_buf[0]};
-                                    dac_loop_in_gain   <= {arg_buf[3], arg_buf[2]};
-                                    dac_loop_in_trip   <= {arg_buf[5][2:0], arg_buf[4]};
-                                    dac_loop_map_en    <= rx_byte[0];
-                                    dac_loop_trip_en   <= rx_byte[1];
+                                    loop_inmap_stb     <= 1'b1;
                                 end
 `endif
                                 // Control loop arm: [k(2)][vmin(2)][vmax(2)][tick_div(2)].
                                 OP_START_DAC_LOOP: begin
-                                    dac_loop_k    <= {arg_buf[1], arg_buf[0]};
-                                    dac_loop_vmin <= {arg_buf[3], arg_buf[2]};
-                                    dac_loop_vmax <= {arg_buf[5], arg_buf[4]};
-                                    dac_loop_tick <= {rx_byte,    arg_buf[6]};
+                                    loop_arm_stb  <= 1'b1;
                                     dac_loop_mode <= 1'b1;
                                     dac_start     <= 1'b1;   // kick the DAC8551 into streaming
                                 end

@@ -80,19 +80,14 @@ module engine_block #(
     output wire [31:0]  dac_stop_after,
     // closed-loop DAC control (OP_START_DAC_LOOP 0x15, >=v23)
     output wire         dac_loop_mode,
-    output wire [15:0]  dac_loop_k,
-    output wire [15:0]  dac_loop_vmin,
-    output wire [15:0]  dac_loop_vmax,
-    output wire [15:0]  dac_loop_tick,
-    output wire [1:0]   dac_loop_src,     // loop input source (v29): 0=ADC, 1=fixed, 2=sweep
-    output wire [15:0]  dac_loop_in,      // fixed input value / sweep start
-    output wire [15:0]  dac_loop_step,    // sweep increment per tick
-    // Input conditioner + safety bounds (v30).  See dac_loop.v's header.
-    output wire [15:0]  dac_loop_in_zero,
-    output wire [15:0]  dac_loop_in_gain,
-    output wire [10:0]  dac_loop_in_trip,
-    output wire         dac_loop_map_en,
-    output wire         dac_loop_trip_en,
+    // Loop parameters as strobe + payload (v38): top_v2 crosses each into clk48 registers.
+    // See cmd_dispatch's port list for the field layouts.
+    output wire         loop_arm_stb,     // OP_START_DAC_LOOP: {tick_div, vmax, vmin, k_q15}
+    output wire [63:0]  loop_arm_cfg,
+    output wire         loop_src_stb,     // OP_DAC_LOOP_SRC (v29): {step, fixed, src}
+    output wire [33:0]  loop_src_cfg,
+    output wire         loop_inmap_stb,   // OP_DAC_LOOP_INMAP (v30): {trip_en, map_en, trip, gain, zero}
+    output wire [44:0]  loop_inmap_cfg,
     input  wire         loop_tripped,     // latched over-range trip -> STATUS bit 6
 
     // ---- capture control -> the version-specific ADC/capture datapath ----
@@ -195,14 +190,11 @@ module engine_block #(
         .dac_period(dac_period), .dac_divider(dac_divider),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .dac_stop_after(dac_stop_after),
-        .dac_loop_mode(dac_loop_mode), .dac_loop_k(dac_loop_k),
-        .dac_loop_vmin(dac_loop_vmin), .dac_loop_vmax(dac_loop_vmax),
-        .dac_loop_tick(dac_loop_tick),
-        .dac_loop_src(dac_loop_src), .dac_loop_in(dac_loop_in), .dac_loop_step(dac_loop_step),
-        .dac_loop_in_zero(dac_loop_in_zero), .dac_loop_in_gain(dac_loop_in_gain),
-        .dac_loop_in_trip(dac_loop_in_trip),
-        .dac_loop_map_en(dac_loop_map_en),
-        .dac_loop_trip_en(dac_loop_trip_en), .loop_tripped(loop_tripped),
+        .dac_loop_mode(dac_loop_mode),
+        .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
+        .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
+        .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg),
+        .loop_tripped(loop_tripped),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp),

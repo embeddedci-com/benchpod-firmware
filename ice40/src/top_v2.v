@@ -167,8 +167,8 @@ module top (
     wire        psram_run_48 = psram_run_s[1];       // engine psram_mode (clk48)
 
     // ---- closed-loop DAC control engine (OP_START_DAC_LOOP 0x15, >=v23) ----
-    // Params come from engine_block (clk domain); the loop runs on clk48 (DAC + BRAM-read
-    // domain).  It reuses the LOAD_WAVE BRAM as a curve LUT (read via wave_raddr, muxed at
+    // The loop runs on clk48 (DAC + BRAM-read domain); its params are clk48 registers written
+    // through cdc_pulse_payload from engine_block's strobes (v38, below).  It reuses the LOAD_WAVE BRAM as a curve LUT (read via wave_raddr, muxed at
     // dac_i) and feeds the computed `v` to the DAC through the strm port.  No PSRAM — so an
     // LA capture runs alongside it untouched.  Inert (mux hands the DAC back) when arm=0.
     // Closed-loop and deep-DAC-PSRAM-replay are MUTUALLY-EXCLUSIVE DAC advanced modes of
@@ -185,14 +185,11 @@ module top (
     wire        adc_sample_stb;
     wire        dac_strm_pop;                // dac8551's strm pop, routed to loop or reader
     wire        dac_loop_mode;
-    wire [15:0] dac_loop_k, dac_loop_vmin, dac_loop_vmax, dac_loop_tick;
-    wire [1:0]  dac_loop_src;                             // 0 = ADC, 1 = fixed, 2 = sweep (v29)
-    wire [15:0] dac_loop_in, dac_loop_step;
-    // Input conditioner + safety bounds (v30): affine map onto the curve index, over-range
-    // trip, per-tick slew bound.  All zero => the v29 behaviour.
-    wire [15:0] dac_loop_in_zero, dac_loop_in_gain;
-    wire [10:0] dac_loop_in_trip;
-    wire        dac_loop_map_en, dac_loop_trip_en;
+    // Loop parameter strobes + payloads from cmd_dispatch (clk domain; see its port list).
+    wire        loop_arm_stb, loop_src_stb, loop_inmap_stb;
+    wire [63:0] loop_arm_cfg;
+    wire [33:0] loop_src_cfg;
+    wire [44:0] loop_inmap_cfg;
     wire        dac_loop_mode48;
     wire [11:0] loop_raddr;
     wire [7:0]  loop_strm_data;
@@ -206,9 +203,42 @@ module top (
     always @(posedge clk) loop_v_clk  <= loop_v;
     always @(posedge clk) loop_in_clk <= loop_in;
 `ifndef USE_DEEP_REPLAY
+    // ---- loop parameters: clk -> clk48 through cdc_pulse_payload (v38) ----
+    // Until v37 the loop read k/vmin/vmax/tick/src/fixed/step/in_* as clk registers straight
+    // from clk48 logic.  clocks.py declares clk and clk48 unrelated, so those paths were never
+    // timed (vmax -> the S_CLAMP cone measured 20.9 ns against a 20.8 ns clk48 period), and a
+    // write while armed (DAC_LOOP_SRC stepping a running loop, INMAP, a repeated START_DAC_LOOP)
+    // could be sampled half-updated.  Now each opcode's payload is latched into these clk48
+    // registers on one clk48 edge, as a whole, and every read in dac_loop is in-domain.
+    // INIT = the power-on values cmd_dispatch used to reset them to.
+    wire [63:0] arm48;    // {tick_div, vmax, vmin, k_q15}
+    wire [33:0] src48;    // {step, fixed, src}
+    wire [44:0] inmap48;  // {trip_en, map_en, in_trip, in_gain, in_zero}
+    wire        loop_arm_p48;
+    cdc_pulse_payload #(.W(64), .INIT({16'd64, 16'hFFFF, 16'd0, 16'd0})) loop_arm_cdc (
+        .src_clk(clk), .src_pulse(loop_arm_stb), .src_data(loop_arm_cfg),
+        .dst_clk(clk48), .dst_pulse(loop_arm_p48), .dst_data(arm48));
+    cdc_pulse_payload #(.W(34)) loop_src_cdc (
+        .src_clk(clk), .src_pulse(loop_src_stb), .src_data(loop_src_cfg),
+        .dst_clk(clk48), .dst_pulse(), .dst_data(src48));
+    cdc_pulse_payload #(.W(45)) loop_inmap_cdc (
+        .src_clk(clk), .src_pulse(loop_inmap_stb), .src_data(loop_inmap_cfg),
+        .dst_clk(clk48), .dst_pulse(), .dst_data(inmap48));
+    // The loop's ARM is raised by the arm opcode's crossed pulse, which cdc_pulse_payload
+    // issues one clk48 AFTER it writes arm48 (the pulse that latches a value is never the one
+    // that consumes it).  So the loop's disarmed state (v <= vmin, tick_cnt <= tick_div) is
+    // loaded from THIS arm's params on its last cycle.  The mode LEVEL (2-FF synced) only
+    // clears it: STOP_DAC or any other DAC start drops the loop.  Everything that follows the
+    // loop's mode (the DAC's strm source, the curve BRAM address, the engine's stream mode)
+    // switches on this one flop.
     reg  [1:0]  loop_mode_s = 2'b0;
     always @(posedge clk48) loop_mode_s <= {loop_mode_s[0], dac_loop_mode};
-    assign      dac_loop_mode48 = loop_mode_s[1];
+    reg         loop_armed48 = 1'b0;
+    always @(posedge clk48) begin
+        if (rst48 || !loop_mode_s[1]) loop_armed48 <= 1'b0;
+        else if (loop_arm_p48)        loop_armed48 <= 1'b1;
+    end
+    assign      dac_loop_mode48 = loop_armed48;
     // live ADC sample synced into clk48 with its strobe (never a torn 16-bit read).  The loop
     // reads adc48 on its own tick, so the crossed pulse itself is unused (and pruned).
     wire [15:0] adc48;
@@ -218,15 +248,11 @@ module top (
     dac_loop #(.ADDR_W(12), .SHIFT(5)) loop_i (
         .clk48(clk48), .rst48(rst48), .arm(dac_loop_mode48),
         .adc_sample(adc48),
-        .k_q15(dac_loop_k), .vmin(dac_loop_vmin), .vmax(dac_loop_vmax), .tick_div(dac_loop_tick),
-        // Loop input source (v29).  src/fixed/step are plain held registers written from the
-        // clk domain and only SAMPLED here on a tick, exactly like k/vmin/vmax/tick_div — no
-        // CDC beyond that is warranted (a torn value would have to be written mid-tick and
-        // would be corrected on the next one, and the host never writes while metering).
-        .src_sel(dac_loop_src), .in_fixed(dac_loop_in), .sweep_step(dac_loop_step),
-        .in_zero(dac_loop_in_zero), .in_gain(dac_loop_in_gain),
-        .in_trip(dac_loop_in_trip),
-        .map_en(dac_loop_map_en), .trip_en(dac_loop_trip_en),
+        .k_q15(arm48[15:0]), .vmin(arm48[31:16]), .vmax(arm48[47:32]), .tick_div(arm48[63:48]),
+        .src_sel(src48[1:0]), .in_fixed(src48[17:2]), .sweep_step(src48[33:18]),
+        .in_zero(inmap48[15:0]), .in_gain(inmap48[31:16]),
+        .in_trip(inmap48[42:32]),
+        .map_en(inmap48[43]), .trip_en(inmap48[44]),
         .lut_raddr(loop_raddr), .lut_rdata(wave_rdata),
         .strm_data(loop_strm_data), .strm_valid(loop_strm_valid),
         .strm_pop(dac_loop_mode48 & dac_strm_pop),
@@ -715,7 +741,27 @@ module top (
     SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
         .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 37) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 38) ----
+    // GATEWARE_VERSION 38 = v37 + CLOSED-LOOP CROSSING + TORN-FRAME FIX (loop image; the deep
+    // image only moves because cmd_dispatch lost the loop registers):
+    //   * The loop's parameters are clk48 registers written through three cdc_pulse_payload
+    //     instances (START_DAC_LOOP / DAC_LOOP_SRC / DAC_LOOP_INMAP), not clk registers read
+    //     from clk48 logic.  clocks.py declares clk and clk48 unrelated, so those reads were
+    //     never timed, and a write while armed could be sampled half-updated.  The loop's arm is
+    //     raised by the arm opcode's crossed pulse, one clk48 after its parameters land, so a
+    //     fresh arm starts from this arm's vmin (tb_top_capture "loop arm"/"loop rearm" fail if
+    //     it arms on the mode sync instead; "live rearm"/"live src" cover writes while armed).
+    //   * dac_loop serves each DAC frame from `vf`, a copy of v taken when the high byte pops:
+    //     a tick between the low and high pops used to send {new high, old low}
+    //     (tb_dac_loop_frames: 176 of 1111 frames torn before, none after).
+    //   * dac_loop's clamp compare is its own state (S_CMP), one more clk48 per tick.
+    // Loop 4351 -> 4379 LC (82%), deep 4088 -> 4087 (77%).  Both images now place far more
+    // robustly (loop 23/24 seeds reach 50 MHz clk48, deep 13/40 vs 1/40 at v37): SEED_LOOP 5
+    // (56.69 MHz), SEED_DEEP 3 (51.13 MHz).  The worst clk -> clk48 path in the loop image fell
+    // from 20.92 ns (vmax -> clamp) to 10.93 ns.
+    // Moving to 24 MHz (the other option) was rejected: the curve BRAM's read port is clk48,
+    // so it would have recreated the clk-address / clk48-data shape behind the v28 deep-replay
+    // failures.
     // GATEWARE_VERSION 37 = v36 + LC PASS (tier 1 of the 2026-09 LC review; clk-domain only, no
     // clk48 logic and no clock-domain crossing touched):
     //   * SWD nRESET on an LA channel removed (swd_engine + its la_bank driver column).  nRESET is
@@ -986,7 +1032,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd37), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd38), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -998,14 +1044,11 @@ module top (
         .dac_period(dac_period), .dac_divider(dac_divider), .dac_running(dac_running),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .dac_stop_after(dac_stop_after),
-        .dac_loop_mode(dac_loop_mode), .dac_loop_k(dac_loop_k),
-        .dac_loop_vmin(dac_loop_vmin), .dac_loop_vmax(dac_loop_vmax),
-        .dac_loop_tick(dac_loop_tick),
-        .dac_loop_src(dac_loop_src), .dac_loop_in(dac_loop_in), .dac_loop_step(dac_loop_step),
-        .dac_loop_in_zero(dac_loop_in_zero), .dac_loop_in_gain(dac_loop_in_gain),
-        .dac_loop_in_trip(dac_loop_in_trip),
-        .dac_loop_map_en(dac_loop_map_en),
-        .dac_loop_trip_en(dac_loop_trip_en), .loop_tripped(loop_tripped),
+        .dac_loop_mode(dac_loop_mode),
+        .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
+        .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
+        .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg),
+        .loop_tripped(loop_tripped),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp), .psram_cs_force(psram_cs_force),

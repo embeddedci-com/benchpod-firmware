@@ -80,9 +80,16 @@
 //   target = curve[in >> SHIFT]                         (2 BRAM reads: lo, hi)
 //   delta  = clamp16(target - v)                        (slew-bounded error)
 //   v     += (k * delta) >>> 15                         (Q15 damping, ONE DSP mult)
-//   v      = clamp(v, vmin, vmax)                        (output window)
-// The DAC8551 continuously streams the current `v` (this engine is a 2-byte strm
-// producer, LE, byte-aligned from arm — same contract as dac_psram_reader).
+//   v      = clamp(v, vmin, vmax)                        (output window; the compare
+//                                                          and the select are two states, v38)
+// The DAC8551 continuously streams `v` (this engine is a 2-byte strm producer, LE,
+// byte-aligned from arm — same contract as dac_psram_reader), one WHOLE value per frame:
+// see `vf` below.
+//
+// ---- Parameters are clk48 registers (v38) ----
+// Every parameter input is a clk48 register written through cdc_pulse_payload (top_v2), never
+// a clk-domain register read across the domain boundary: a write while armed lands on one
+// clk48 edge, whole, so no state here can sample a half-updated value.
 //
 // Inert when not armed (arm=0): the FSM idles, strm_valid=0, lut_raddr=0 — so the
 // top-level muxes hand the DAC/BRAM back to the normal replay paths untouched.
@@ -98,7 +105,7 @@ module dac_loop #(
     // live ADC reading, already synchronised into clk48 (see top_v2)
     input  wire [15:0] adc_sample,
 
-    // control parameters (clk48; held stable while armed)
+    // control parameters (clk48 registers; a live update lands whole on one clk48 edge)
     input  wire [15:0] k_q15,            // damping coefficient, Q15 (32768 = 1.0)
     input  wire [15:0] vmin,             // output clamp low
     input  wire [15:0] vmax,             // output clamp high
@@ -134,13 +141,26 @@ module dac_loop #(
     // ---- output register + 2-byte strm producer -------------------------------
     reg  [15:0] v;
     reg         byte_sel;                // 0 => low byte next, 1 => high byte
-    assign strm_data  = byte_sel ? v[15:8] : v[7:0];
-    assign strm_valid = arm;             // always ready while armed (DAC holds `v`)
+    // `vf` = the value the DAC is sending, one WHOLE value per frame (v38).  dac8551_engine
+    // takes a sample as two pops, low byte then high byte, and it latches each byte one cycle
+    // BEFORE its pop reaches here.  Served straight from `v`, a tick landing between the two
+    // pops sent {new high, old low} — 0x00FF -> 0x0100 went out as 0x01FF (tb_dac_loop_frames:
+    // 176 of 1111 frames torn).  So `vf` only takes `v` on the edge that sees the HIGH-byte pop:
+    // by then that frame has latched both bytes, and the next frame's low byte is at least one
+    // DAC divider away.  Cost: a new `v` reaches the DAC up to one sample period later.
+    reg  [15:0] vf;
+    assign strm_data  = byte_sel ? vf[15:8] : vf[7:0];
+    assign strm_valid = arm;             // always ready while armed (DAC holds `vf`)
     assign v_out      = v;
 
     always @(posedge clk48) begin
-        if (rst48 || !arm) byte_sel <= 1'b0;         // arm => aligned, low byte first
-        else if (strm_pop) byte_sel <= ~byte_sel;
+        if (rst48 || !arm) begin
+            byte_sel <= 1'b0;                        // arm => aligned, low byte first
+            vf       <= vmin;                        // the value v starts from, below
+        end else if (strm_pop) begin
+            byte_sel <= ~byte_sel;
+            if (byte_sel) vf <= v;                   // high byte popped: frame done
+        end
     end
 
     // ---- damping multiply (inferred SB_MAC16 DSP: k_q15 * delta, both signed) ---
@@ -158,7 +178,12 @@ module dac_loop #(
     // is simply not selected — so one tick is one constant number of cycles either way
     // and the host's sweep arithmetic has nothing to branch on.
     localparam S_IDLE=4'd0, S_IMUL=4'd1, S_IDX=4'd2, S_RDLO=4'd3, S_RDHI=4'd4,
-               S_ASM=4'd5, S_MUL=4'd6, S_MAC=4'd7, S_UPD=4'd8, S_CLAMP=4'd9;
+               S_ASM=4'd5, S_MUL=4'd6, S_MAC=4'd7, S_UPD=4'd8, S_CMP=4'd10, S_CLAMP=4'd9;
+    // S_CMP (v38) registers the clamp compares, so S_CLAMP is only a select.  In one state the
+    // 18-bit compares' carry chains fed v's mux directly: the loop image's clk48 critical path
+    // at v36 (vsum -> compare -> v), and once vmin/vmax became clk48 registers (v38) their path
+    // into that cone became a timed one too.  One more clk48 cycle per tick.
+    reg        lt_min, gt_max;
     reg [3:0]  st;
     // Tick timer: a registered DOWN-counter (reload = tick_div, fire at 0) with a
     // registered `tick_z` flag, so the S_IDLE fire test reads ONE bit instead of a
@@ -218,6 +243,7 @@ module dac_loop #(
             lut_raddr <= {ADDR_W{1'b0}}; lo <= 8'd0; target <= 16'd0;
             delta_q <= 16'sd0; k_s <= 16'sd0; delta17 <= 17'sd0;
             prod_r <= 32'sd0; vsum <= 18'sd0;
+            lt_min <= 1'b0; gt_max <= 1'b0;
             sweep_acc <= in_fixed;        // a sweep starts from the host-set point
             in_lat    <= 16'd0;
             d_r <= 16'sd0; prod_i <= 17'sd0;
@@ -288,16 +314,23 @@ module dac_loop #(
             S_UPD: begin
                 // v + (k*delta)>>>15 (round-to-nearest) — one registered add
                 vsum <= $signed({2'b0, v}) + $signed(prod_r[30:15] + prod_r[14]);
+                st <= S_CMP;
+            end
+            S_CMP: begin
+                lt_min <= (vsum < $signed({2'b0, vmin}));
+                gt_max <= (vsum > $signed({2'b0, vmax}));
                 st <= S_CLAMP;
             end
             S_CLAMP: begin
                 // A latched trip outranks the curve: the loop keeps running (so the host
                 // can see the input that tripped it) but the output is parked at vmin
-                // until the loop is disarmed.
-                if (trip_l)                            v <= vmin;
-                else if (vsum < $signed({2'b0, vmin})) v <= vmin;
-                else if (vsum > $signed({2'b0, vmax})) v <= vmax;
-                else                                   v <= vsum[15:0];
+                // until the loop is disarmed.  If a live START_DAC_LOOP rewrote vmin/vmax
+                // between S_CMP and here, v is still either vsum inside the OLD window or one
+                // of the NEW bounds, i.e. what the tick would give one edge either side of it.
+                if (trip_l)      v <= vmin;
+                else if (lt_min) v <= vmin;
+                else if (gt_max) v <= vmax;
+                else             v <= vsum[15:0];
                 st <= S_IDLE;
             end
             default: st <= S_IDLE;

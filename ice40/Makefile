@@ -223,7 +223,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -278,9 +278,13 @@ $(OUT).bin: $(OUT).asc
 # the final v37 netlist: all place, 14/16 close @48 (16 and 5 miss).  Best is 14 at clk48
 # 57.05 MHz (clk 30.64), then 9 (53.68) and 1 (53.53).  Re-pinned SEED_LOOP 13 -> 14.  The loop's
 # binding clk48 path is still dac_loop's clamp, which this pass left alone.
-SEED_LOOP ?= 14
-# Ordered by the v37 sweep's clk48 margin (every seed places; the tail misses 48 MHz).
-SEED_LOOP_FALLBACK ?= 9 1 7 11 8 10 3 13 6 2 4 12 15 16 5
+# v38 CLOSED-LOOP CROSSING (4351 -> 4379 LC, 82%): the loop params became clk48 registers and
+# the clamp compare got its own state.  Swept 1..24: all place, 23/24 close AND reach
+# MIN_CLK48_MHZ (v37: 14/16 closed @48); seed 14 fell to 52.82, best is 5 at clk48 56.69 MHz
+# (clk 31.07), then 23 and 21 (55.04).  Re-pinned SEED_LOOP 14 -> 5.
+SEED_LOOP ?= 5
+# Ordered by the v38 sweep's clk48 margin (every seed places; only the last misses 50 MHz).
+SEED_LOOP_FALLBACK ?= 23 21 12 2 17 20 13 24 10 16 14 7 1 8 9 22 11 4 19 3 6 15
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -323,11 +327,15 @@ SEED_LOOP_FALLBACK ?= 9 1 7 11 8 10 3 13 6 2 4 12 15 16 5
 # v36 was 9/16 closing, best 51.13.  Re-pinned SEED_DEEP 14 -> 12 — RE-VERIFY deep replay on
 # hardware.  The deep image's binding clk48 path is dac_psram_reader's FIFO read pointer; that,
 # not more seeds, is the next thing to fix here.
-SEED_DEEP ?= 12
+# v38 (cmd_dispatch lost the loop registers; no deep logic changed) re-rolled it again, the
+# other way: swept 1..40, all place, 32/40 close @48 and 13 reach MIN_CLK48_MHZ (v37: 1/40).
+# Seed 12 fell to 48.77; twelve seeds tie at clk48 51.13 MHz, and 3 has the best clk (32.69).
+# Re-pinned SEED_DEEP 12 -> 3 — RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 3
 # Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 18 11 4 38 14 3 19 23 28 34 6
+SEED_DEEP_FALLBACK ?= 38 1 14 9 29 16 35 18 10 20 32 39 24 34 28
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -495,6 +503,14 @@ looptest:
 	$(VVP) /tmp/$(PROJECT)_loop.vvp
 	@rm -f /tmp/$(PROJECT)_loop.vvp
 
+# The real dac_loop + dac8551_engine: every DAC frame is a whole value of the loop's `v`,
+# never {new high byte, old low byte} (v38; 176 of 1111 frames were torn before).
+loopframetest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_loopframe.vvp \
+	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v
+	$(VVP) /tmp/$(PROJECT)_loopframe.vvp
+	@rm -f /tmp/$(PROJECT)_loopframe.vvp
+
 # Subset (DAC-disabled) + region-backstop coverage for the tri-master.
 trimodetest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_trimode.vvp \
@@ -559,7 +575,7 @@ topcapturetest:
 	@rm -f /tmp/$(PROJECT)_topcap.vvp
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

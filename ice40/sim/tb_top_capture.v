@@ -209,6 +209,36 @@ module tb_top_capture;
             dac_rec = 0;
         end
     endtask
+    // LIVE update while the loop runs (v38): record frames, send the command mid-stream, keep
+    // recording.  Every frame must be the old or the new value (none torn, none from a half-
+    // crossed parameter), the stream must start old and end new, and switch exactly once.
+    task check_live(input [8*10-1:0] what, input [15:0] vold, input [15:0] vnew, input integer op,
+                    input [15:0] a0, input [15:0] a1);
+        integer k, t, sw, bad, n; begin
+            dac_nfr = 0; dac_rec = 1; t = 0;
+            while (dac_nfr < 4 && t < 4000) begin #100; t = t + 1; end
+            if (op == 0) cmd_start_loop(16'h7FFF, a0, a1, 16'd16);   // re-arm while armed
+            else         cmd_loop_src(8'd1, a0, 16'd0);              // step the fixed input
+            t = 0;
+            while (dac_nfr < 64 && t < 8000) begin #100; t = t + 1; end
+            dac_rec = 0;
+            n = (dac_nfr < 64) ? dac_nfr : 64;
+            sw = 0; bad = 0;
+            for (k = 0; k < n; k = k + 1) begin
+                if (dac_fr[k] !== vold && dac_fr[k] !== vnew) begin
+                    if (bad < 4) $display("FAIL %0s: DAC frame %0d = %04h, neither %04h nor %04h", what, k, dac_fr[k], vold, vnew);
+                    bad = bad + 1; errors = errors + 1;
+                end
+                if (k > 0 && dac_fr[k] !== dac_fr[k-1]) sw = sw + 1;
+            end
+            if (n < 16 || dac_fr[0] !== vold || dac_fr[n-1] !== vnew || sw != 1) begin
+                $display("FAIL %0s: %0d frames, first %04h last %04h, %0d switches (want %04h -> %04h once)",
+                         what, n, dac_fr[0], dac_fr[n-1], sw, vold, vnew);
+                errors = errors + 1;
+            end
+            $display("  [loop]   %0s: %0d frames, %04h -> %04h, switched once", what, n, vold, vnew);
+        end
+    endtask
     // The first DAC_NF recorded frames must be base + (k % per), or all `base` when per == 0.
     task check_dac_frames(input [8*10-1:0] what, input integer per, input [15:0] base);
         integer k, bad; reg [15:0] w; begin
@@ -624,6 +654,16 @@ module tb_top_capture;
         check_dac_frames("loop rearm", 0, 16'h5678);
         $display("  [loop]   arm -> %04h, re-arm -> first frames %04h %04h %04h",
                  16'h1234, dac_fr[0], dac_fr[1], dac_fr[2]);
+
+        // ---- CONTROL LOOP updated WHILE ARMED (v38): the params are clk48 registers written
+        //      through cdc_pulse_payload, so a live write lands whole on one clk48 edge. ----
+        cmd_start_loop(16'h7FFF, 16'h1111, 16'h1111, 16'd16);
+        #20000;
+        check_live("live rearm", 16'h1111, 16'h2222, 0, 16'h2222, 16'h2222);
+        cmd_start_loop(16'h7FFF, 16'h0000, 16'hFFFF, 16'd16);   // open window: v -> curve[0]
+        #20000;
+        check_live("live src", 16'h4000, 16'h4003, 1, 16'd3 << 5, 16'd0);   // -> curve[3]
+        cmd_op0(8'h12); #1000;
 
         // ==== CAPTURE TRIGGER (v35, OP_SET_TRIGGER 0x33 / OP_TRIGGER_STATUS 0x34) ====
         // Every relationship is measured on an UNTRIGGERED run first (from the arm) and must hold
