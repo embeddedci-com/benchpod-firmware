@@ -775,10 +775,16 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                live DAC replay/reader mid-burst would wedge the PSRAM the same way the runtime
                image swap does. */
             signal_engine_quiesce_psram_masters();
-            if (ice40_flash_program(fpga_bitstream, fpga_bitstream_len) == 0) {
+            /* Through ice40_reflash_image like every other reconfig: it puts the PSRAM in SPI
+               for the config read, re-inits and hands the bus back, and re-syncs the firmware's
+               mirrors of the fabric's registers.  Calling ice40_flash_program directly skipped
+               all of that (stale capture bases = the "sentinel survived" false wedge).
+               fpga_bitstream is image 0. */
+            if (ice40_reflash_image(0) == 0) {
                 /* Re-read the gateware version so status/capabilities reflect the just-
                    flashed bitstream instead of the boot-time value. */
                 bool ok = signal_engine_refresh_version();
+                cloud_client_request_caps_resend();   /* the running image may have changed */
                 op(out, ctx, "  iCE40 reflashed + reconfigured (%u bytes), gateware v%u%s\r\n",
                    (unsigned)fpga_bitstream_len, signal_engine_fpga_version(),
                    ok ? "" : " (FPGA unreachable — check gateware)");

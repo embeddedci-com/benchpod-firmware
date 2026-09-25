@@ -320,8 +320,12 @@ static bool heavy_begin(int conn_id) {
 }
 
 /* Exposed to the SCPI handler so its blocking captures share the same single-
-   ADC mutual exclusion as the JSON capture/stream/measure/test commands. */
-bool command_handler_acquire_adc(int conn_id) { return heavy_try_claim(conn_id); }
+   ADC mutual exclusion as the JSON capture/stream/measure/test commands.  Same test as
+   heavy_begin: OTA staging never claims heavy_owner, so the claim alone let a SCPI capture
+   write PSRAM 0 (the LA region, where OTA stages its image) mid-OTA. */
+bool command_handler_acquire_adc(int conn_id) {
+    return !heavy_in_flight() && heavy_try_claim(conn_id);
+}
 void command_handler_release_adc(int conn_id) { heavy_release(conn_id); }
 
 /* Clear all PROTO_LOAD raw-upload bookkeeping (does not touch the heavy gate or
@@ -999,6 +1003,7 @@ void command_handler_poll(void) {
                 bulk_begin(cid, nsamp, true);  /* paced send; frees the gate when done */
                 bulk.b64 = v2cap.b64;
             } else {
+                fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
                 send_error(cid, "capture failed");
                 heavy_release(cid);
@@ -1033,6 +1038,7 @@ void command_handler_poll(void) {
                        (unsigned)samples);
                 bulk_begin_capture16(cid, 0, samples);
             } else {
+                fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
                 send_error(cid, "la capture failed");
                 heavy_release(cid);
@@ -1092,6 +1098,7 @@ void command_handler_poll(void) {
                 bulk.adc_rate_hz = adc_n ? adc_hz : 0;
                 bulk.la_rate_hz  = la_n  ? la_hz  : 0;
             } else {
+                fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
                 send_error(cid, "capture failed");
                 heavy_release(cid);
@@ -3729,18 +3736,26 @@ void command_handler_conn_closed(int conn_id) {
        claimed until the trailing async DMA reports back (command_handler_poll
        releases it once stream_active is observed false), so a freshly-claimed
        capture can't race the dying stream's DMA over adc_cmd_buf. */
-    /* Abort an in-flight v2 PSRAM capture/measure owned by this conn.  The
-       iCE40 finishes into PSRAM on its own; we just stop tracking it and free
-       the gate (the next capture overwrites PSRAM from offset 0). */
+    /* Abort an in-flight PSRAM capture/measure owned by this conn, in the fabric too.  Only
+       forgetting it (as before) freed the gate while the iCE40 kept writing PSRAM, so the next
+       capture or upload took the bus mid-burst; and a forgotten capture_dual streamed its result
+       to the dead conn when it finished, holding the bus and the gate until the slot was reused.
+       A measure or a stop-after capture also leaves the DAC running: stop it. */
+    bool cap_owned = false, cap_stopdac = false;
     if (v2cap.active && v2cap.conn_id == conn_id) {
-        v2cap.active = false;
-        printf("[cmd] v2 capture aborted — conn %d closed\n", conn_id);
+        cap_owned = true; cap_stopdac |= v2cap.stop_dac; v2cap.active = false;
     }
-    /* Abort an in-flight deep LA→PSRAM capture owned by this conn (same deal: the
-       iCE40 finishes into PSRAM on its own; stop tracking it and free the gate). */
     if (lacap.active && lacap.conn_id == conn_id) {
-        lacap.active = false;
-        printf("[cmd] LA PSRAM capture aborted — conn %d closed\n", conn_id);
+        cap_owned = true; cap_stopdac |= lacap.stop_dac; lacap.active = false;
+    }
+    if (dualcap.active && dualcap.conn_id == conn_id) {
+        cap_owned = true; cap_stopdac |= dualcap.stop_dac; dualcap.active = false;
+    }
+    if (cap_owned) {
+        fpga_capture_abort();              /* also turns SET_TRIGGER off */
+        if (trigwait.active && trigwait.conn_id == conn_id) trigwait.active = false;
+        if (cap_stopdac) dac_stop();
+        printf("[cmd] PSRAM capture aborted: conn %d closed\n", conn_id);
     }
     /* Abort an in-flight paced bulk send owned by this conn.  If it was reading
        back from PSRAM, hand the shared bus back to the iCE40 or it stays stuck

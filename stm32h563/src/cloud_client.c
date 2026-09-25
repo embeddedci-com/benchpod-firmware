@@ -624,13 +624,10 @@ static bool cl_send_capabilities(void) {
        device supports so the server can offer full-length recording replay and clamp
        requests: FPGA_DAC_REPLAY_MAX_SAMPLES (8 MB region) when deep, else the shallow
        BRAM depth (SIGNAL_MAX_SAMPLES). */
-    /* Live-read the gateware version first: the boot-time ping (signal_engine_init) can
-       race the iCE40 configuring from flash and cache v0, which would wrongly advertise
-       deep=false and make the server fall back to shallow replay (load_bin "total out of
-       range").  By connect time the FPGA is up, so refresh from it (hw_lock-guarded). */
-    /* Only once the hw worker has brought the iCE40 up: before that SPI1 is not initialised
-       (and the worker may be using it).  It re-announces when it is done. */
-    if (boot_hw_ready()) signal_engine_refresh_version();
+    /* The cached gateware version is current: the hw worker re-reads it after boot bring-up,
+       the boot gateware update and every image swap, and re-announces when it is done.  This ran
+       on the net task and used to re-read it over SPI1, which the worker drives WITHOUT hw_lock,
+       so a (re)connect could cut a worker transaction mid-command. */
     /* Feature flags come from signal_engine_caps() — the SAME call the `status` reply uses, so
        a cloud client and a direct LAN/serial client cannot disagree about what this pod can do.
        (They used to: status carried a hardcoded caps[] literal that named none of these.) */

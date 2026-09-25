@@ -1652,6 +1652,13 @@ bool fpga_dac_arm_on_capture(void) {
 
 /* Deadline for the in-flight PSRAM capture, armed by *_start(). */
 static absolute_time_t psram_cap_deadline;
+/* CAP_DONE deadline for a capture of `samples` at `divider` capture clocks each: its window plus
+   3 s.  A fixed 5 s cut every capture longer than that short (32768 samples at 1 kS/s is ~33 s)
+   and reported it failed while the fabric kept writing into PSRAM. */
+static void cap_deadline_for(size_t samples, uint32_t divider) {
+    uint64_t window_ms = ((uint64_t)samples * divider) / (adc_capture_hz() / 1000u);
+    psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
+}
 
 /* Fill sample_buf16[0..n-1] with one period of `waveform`, 16-bit: the 8-bit
    shape goes into the high byte for the DAC8551.  Returns 0, or -1 on an
@@ -1697,7 +1704,7 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     else
         spi_cmd_write(CMD_START_CAPTURE, args, sizeof(args));
     cotrig_consume();
-    psram_cap_deadline = make_timeout_time_ms(5000);
+    cap_deadline_for(samples, divider);
     float actual = (float)adc_capture_hz() / (float)divider;
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     printf("[sig] PSRAM capture armed (%u samples, divider=%lu, %lu S/s)\n",
@@ -1753,7 +1760,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
         psram_bus_acquire();
         return -1;
     }
-    psram_cap_deadline = make_timeout_time_ms(5000);
+    cap_deadline_for(samples, cap_div);
     /* Both step at the ADC rate now (dac_div = 2*cap_div - K matches the DAC's real
        48 MHz rate to the ADC's 24 MHz rate), so report that one rate + the played
        frequency. */
@@ -2193,11 +2200,24 @@ void fpga_capture_extend_deadline_ms(uint32_t ms) {
 
 void fpga_capture_abort(void) {
     if (s_cotrig_in_capture) dac_stop();
-    uint8_t args[10] = {0};   /* CAPTURE with both counts 0: no producer, never waits */
+    uint8_t args[10] = {0};   /* CAPTURE with both counts 0: stops a running producer, never waits */
     spi_cmd_write(CMD_CAPTURE, args, sizeof(args));
     s_cotrig_in_capture = false;
     (void)fpga_set_trigger(0u, 0u);
-    printf("[sig] capture aborted while waiting for its trigger\n");
+    /* The writer still drains what the producers had queued.  Wait for it (CAP_BUSY clear, BUSY
+       high) so the next psram_bus_acquire() cannot take the bus mid-burst: the writer does not
+       watch bus_own, and a burst cut there leaves the PSRAM mid-command.  Bounded: the rings drain
+       in well under a millisecond. */
+    uint32_t t0 = HAL_GetTick();
+    uint8_t st = 0;
+    while (!((fpga_status_read(&st) == 0) && !(st & STATUS_CAP_BUSY) && busy_read())) {
+        if (HAL_GetTick() - t0 > 25u) {
+            printf("[sig] capture abort: writer not idle after 25 ms (st=0x%02x)\n", st);
+            break;
+        }
+        sleep_ms(1);
+    }
+    printf("[sig] capture aborted\n");
 }
 
 bool fpga_la_step_busy(void) {
