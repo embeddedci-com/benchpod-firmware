@@ -38,6 +38,12 @@ jobs:
         env:
           ICE40_PNR_STRICT: ${{ vars.ICE40_PNR_STRICT || '0' }}
         run: make -C ice40 test PNR_STRICT="$ICE40_PNR_STRICT"
+      # Releases embed ice40/release/ (hardware-verified), not the images built above.  Every
+      # gateware change is unpromoted until it has been tested on a bench, so this only warns;
+      # the release job fails on it.
+      - name: Hardware-verified release images match the sources
+        run: |
+          make -C ice40 check-release || echo "::warning title=ice40 release images stale::ice40/release/ does not match the gateware sources. Test this gateware on hardware, then run make -C ice40 promote and commit ice40/release/ before tagging a firmware release."
 
   stm32-host:
     runs-on: ubuntu-latest

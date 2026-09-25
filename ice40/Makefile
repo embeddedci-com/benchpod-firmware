@@ -223,7 +223,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -374,6 +374,21 @@ multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 # The two runtime images the firmware embeds (stm32h563/Makefile: image 0 = loop, 1 = deep) —
 # what pods actually run and what a release must build.  `make` (all) builds only one image.
 images: $(OUT)_loop.bin $(OUT)_deep.bin
+
+# ---- hardware-verified images for firmware releases (tools/ice40_release.py) ----
+# The release job embeds ice40/release/, NOT a fresh CI build: CI's toolchain places the same
+# sources differently (v40: loop clk48 56.95 MHz locally, 48.84 MHz in CI).  After an `images`
+# build has passed on hardware:  make promote HW_VERIFIED="e2e 132 passed on benchpod-baea06"
+# and commit ice40/release/ with the sources.  check-release fails once the sources move on.
+RELEASE_TOOL = python3 ../tools/ice40_release.py
+promote:
+	@test -n "$(HW_VERIFIED)" || { echo 'usage: make promote HW_VERIFIED="<which hardware test this build passed>"'; exit 2; }
+	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP)
+check-release:
+	$(RELEASE_TOOL) check
+# Put the promoted images where stm32h563/Makefile embeds them (what the release job runs).
+release-images:
+	$(RELEASE_TOOL) install
 
 # Persistent flash: writes bitstream to the board's SPI flash chip via iceprog.
 # The FPGA reloads from this flash on every power-up.
@@ -586,6 +601,9 @@ help:
 	@echo "  all          Build bitstream for BOARD (default; one image, the loop netlist)"
 	@echo "  images       Build the loop + deep images the firmware embeds (what pods run)"
 	@echo "               PNR_STRICT=1 fails on a fallback seed or clk48 < MIN_CLK48_MHZ (50)"
+	@echo "  promote      Copy a HARDWARE-TESTED images build to release/ (HW_VERIFIED=\"...\")"
+	@echo "  check-release  Fail unless release/ still matches the gateware sources"
+	@echo "  release-images Install release/ for the firmware build (the release job)"
 	@echo "  flash        Build + program SPI flash via iceprog (persistent)"
 	@echo "  flash-ram    Build + load to FPGA SRAM only (volatile, faster)"
 	@echo "  prog         Alias for 'flash'"

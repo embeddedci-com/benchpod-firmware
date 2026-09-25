@@ -70,6 +70,21 @@ Gates, so you don't have to read PnR logs to notice:
 - Pods run the two images from `make images`, which the release builds. `make`
   alone builds one image, and it now shares the loop seed.
 
+## Releases embed hardware-tested gateware, not a CI build
+
+The CI toolchain places the design differently from a local build, so the same sources give
+a different bitstream with different clk48 margin (v40: loop 56.95 MHz locally, 48.84 MHz in
+CI). The firmware release job therefore never builds gateware: it embeds the images committed
+in `ice40/release/` (`make -C ice40 release-images`), and fails if they no longer match the
+gateware sources. After a gateware change:
+
+1. `make -C ice40 images`, build the firmware, flash it, run the hardware suite on it.
+2. `make -C ice40 promote HW_VERIFIED="<which test passed, on which pod>"`: copies that exact
+   build to `ice40/release/` and writes the MANIFEST (source hash, sha256s, seeds, clk48,
+   toolchain, the hardware record).
+3. Commit `ice40/release/` with the sources. `make -C ice40 check-release` (a CI warning until
+   then) passes again.
+
 ## Test the second run, not just the first
 
 Both v32's divider off-by-one and v33's DAC restart bug passed benches that start once from

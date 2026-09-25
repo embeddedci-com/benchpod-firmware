@@ -12,6 +12,8 @@ cmake_install.cmake
 *.elf
 *.bin
 *.bin.gwversion
+# ...except the hardware-verified gateware images firmware releases embed (ice40/release/).
+!ice40/release/*.bin
 *.uf2
 *.hex
 *.dis

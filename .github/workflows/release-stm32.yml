@@ -4,8 +4,10 @@
 #
 # Trigger: push a tag like `stm32-v0.0.6` (the `stm32-` prefix is stripped for
 # the release tag, e.g. → `v0.0.6`), or run it manually with an explicit tag
-# via workflow_dispatch. The build embeds the real v2 iCE40 bitstream (built
-# here), so the published firmware can also self-reflash the FPGA.
+# via workflow_dispatch. The build embeds the HARDWARE-VERIFIED iCE40 images committed in
+# ice40/release/ (not a build from this job: CI's toolchain places the same sources
+# differently, v40 loop clk48 56.95 MHz locally vs 48.84 MHz here), so the published firmware
+# can self-reflash the FPGA with exactly the gateware that passed on a bench.
 #
 # Publishes using the default GITHUB_TOKEN (contents: write below) — no
 # separate PAT needed since source and release target are the same repo.
@@ -71,12 +73,6 @@ jobs:
         with:
           release: "13.3.Rel1"
 
-      - name: Set up OSS CAD Suite (yosys / nextpnr-ice40 / icestorm)
-        uses: YosysHQ/setup-oss-cad-suite@v4
-        with:
-          # Pin to the yosys 0.65 toolchain the gateware timing is validated on (see test.yml).
-          version: '2026-05-13'
-
       - name: Cache STM32CubeH5 SDK
         id: cube-cache
         uses: actions/cache@v6
@@ -108,16 +104,12 @@ jobs:
         if: steps.esp-slave-cache.outputs.cache-hit != 'true'
         run: make -C stm32h563 fetch
 
-      # BOTH runtime images (image 0 = closed-loop, image 1 = deep DAC replay) on their
-      # pinned seeds — what pods run and what hardware verification covers.  The default `make`
-      # target builds a single image, and the firmware then embeds only that one, so
-      # fpga_image switching would not work on a released pod.
-      - name: Build v2 iCE40 gateware images (embedded by the firmware)
-        env:
-          # Repository variable; unset/0 = a fallback seed or a clk48 below MIN_CLK48_MHZ warns
-          # and the build continues, 1 = it fails the release (ice40/Makefile, PNR_STRICT).
-          ICE40_PNR_STRICT: ${{ vars.ICE40_PNR_STRICT || '0' }}
-        run: make -C ice40 images BOARD=vbench_pod PNR_STRICT="$ICE40_PNR_STRICT"
+      # BOTH runtime images (image 0 = closed-loop, image 1 = deep DAC replay), exactly as they
+      # passed on hardware (ice40/release/MANIFEST says how).  Fails the release if the gateware
+      # sources changed since they were promoted: build, test on hardware, then
+      # `make -C ice40 promote HW_VERIFIED="..."` and commit ice40/release/.
+      - name: Install the hardware-verified iCE40 images (embedded by the firmware)
+        run: make -C ice40 release-images
 
       - name: Build STM32 firmware
         run: make -C stm32h563 CUBE="${{ runner.temp }}/STM32CubeH5"
@@ -131,7 +123,10 @@ jobs:
 
       - name: Checksum
         working-directory: stm32h563/build
-        run: sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
+        run: |
+          sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
+          # which gateware this firmware embeds, and what hardware test it passed
+          cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
       - name: Publish release
         env:
@@ -139,7 +134,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else
