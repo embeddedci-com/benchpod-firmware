@@ -38,7 +38,12 @@
 module dac_psram_reader #(
     parameter [8:0] CHUNK_BYTES = 9'd16,   // bytes per CS-low burst (tCEM budget)
     parameter [3:0] WAIT_CYCLES = 4'd6,    // 0xEB dummy cycles (APS6404L default; matches fw QREAD_DUMMY)
-    parameter       FIFO_AW     = 8        // 2^FIFO_AW-byte prefetch FIFO
+    parameter       FIFO_AW     = 8,       // 2^FIFO_AW-byte prefetch FIFO
+    // v41: clk48 cycles between these outputs and the pins (psram_pads retimes every PSRAM
+    // output by one), so the returning nibbles are sampled that much later: 0 = sample at ph3 and
+    // ph7 (the pre-v41 pads), 1 = at ph4 and the edge after ph7.  Same 2-clk48-after-SCLK-rise
+    // margin either way.
+    parameter       PAD_PIPE    = 0
 )(
     input  wire        clk,                // 24 MHz — cell-producer FSM + arithmetic
     input  wire        rst,                // reset in the clk domain
@@ -209,32 +214,52 @@ module dac_psram_reader #(
     // the last byte's low nibble is sampled.  Driven cmd/addr nibbles still get 1 clk48 of
     // SCLK-low setup before the rising.
     reg  [3:0]  cap_hi;                                 // captured high nibble (nib0)
+    reg         cap_pend = 1'b0;                        // PAD_PIPE=1: low nibble due next edge
 
     // ---- single-clock (clk48) prefetch FIFO ----
     localparam AW = FIFO_AW;
     reg  [7:0]  fmem [0:(1<<AW)-1];
     reg  [AW:0] wptr = 0, rptr = 0;
     wire [AW:0] occ   = wptr - rptr;
-    wire        f_full = occ[AW];
-    wire [AW:0] room  = (1 << AW) - occ;
+    // Full = the pointers differ only in their wrap bit: an equality compare, not the top bit of
+    // the wptr - rptr carry chain (which sat on the push/ne_r cone; v41).  Same value: occ <= 2^AW.
+    wire        f_full = ((wptr ^ rptr) == {1'b1, {AW{1'b0}}});
     reg  [7:0]  push_byte;
     reg         push;
 
     reg  [7:0]  dout = 0;
     reg         dout_vld = 0;
     // FWFT: refill the head only when it is empty (a 1-clk48 bubble per pop; still >=3 MB/s vs the
-    // DAC's <=1.8 MB/s drain).  Empty = the DIRECT compare of the two binary pointers: for a
-    // SINGLE-clock FIFO that is the shortest path (a registered "next-cycle empty" pipeline HURT
-    // timing here — it added the next-pointer mux — the opposite of the dual-clock FIFO it once
-    // helped).  The FIFO read side is not the clk48 critical path binding the deep image anyway.
-    wire        fifo_empty = (wptr == rptr);
-    wire        fetch = !dout_vld && !fifo_empty;
+    // DAC's <=1.8 MB/s drain).
+    // v41: `empty` is a REGISTERED flag, ne_r == (wptr != rptr) on every cycle, instead of the
+    // live pointer compare, which fed the BRAM read enable and the rptr increment in the same
+    // clk48 cycle (20.9 ns, mostly routing to the BRAM column: a deep-image clk48 bottleneck once
+    // the room test was fixed).  It is maintained incrementally, with no next-pointer mux (the
+    // "registered next-cycle empty" tried earlier added one and hurt): a push sets it; fetching
+    // the last byte (occ == 1, off the wptr - rptr carry chain the room test already builds; an
+    // explicit wptr == rptr + 1 synthesised as an 8-deep LUT ripple instead) clears it.
+    //   push:               occ - fetch + 1 >= 1        -> 1  (a push into a FULL FIFO is
+    //                                                          dropped, but it is non-empty
+    //                                                          anyway, so the raw push sets it and
+    //                                                          the full test stays off this cone)
+    //   fetch of the last:  occ == 1, no push           -> 0
+    //   otherwise:          occ unchanged or still >= 1 -> hold
+    reg         ne_r = 1'b0;                            // FIFO not empty
+    wire        push_ok = push && !f_full;
+    wire        fetch = !dout_vld && ne_r;
+    wire        occ_one = (occ == {{AW{1'b0}}, 1'b1});
     assign      data       = dout;
     assign      data_valid = dout_vld;
 
     // room_ok (clk48) -> clk, 2FF level
     reg         roomok48 = 0;
-    always @(posedge clk48) roomok48 <= (room > {1'b0, CHUNK_BYTES});
+    // room > CHUNK_BYTES, written as occ < 2^AW - CHUNK_BYTES (v41): the same test against a
+    // constant, one subtract instead of two.  wptr - rptr -> (2^AW - occ) -> (> CHUNK) was three
+    // chained carry chains in one clk48 cycle, the deep image's clk48 critical path (20.2 ns).
+    // Deliberately NOT pipelined further: room_ok gates the next burst, and the time from a
+    // burst's last push to room_ok (this flop + the 2-FF sync) is already ~ one S_CSH cell.
+    localparam integer ROOM_LIM = (1 << AW) - CHUNK_BYTES;
+    always @(posedge clk48) roomok48 <= (ROOM_LIM > 0) && (occ < ROOM_LIM);
     always @(posedge clk) roomok_s <= {roomok_s[0], roomok48};
 
     // run 2FF into clk48 (FIFO reset uses it so each arm starts clean/aligned)
@@ -249,13 +274,21 @@ module dac_psram_reader #(
         if (rst48 || !run48) begin
             ph<=0; busy48<=0; io_o<=4'h0; io_oe<=1'b0; cs<=1'b1; sclk<=1'b0;
             cap_hi<=0;
-            wptr<=0; rptr<=0; dout<=8'd0; dout_vld<=1'b0;
-            n0_l<=0; n1_l<=0; drv_l<=0; cs_l<=1'b1; clk_l<=0; cap_l<=0;
+            wptr<=0; rptr<=0; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
+            n0_l<=0; n1_l<=0; drv_l<=0; cs_l<=1'b1; clk_l<=0; cap_l<=0; cap_pend<=1'b0;
         end else begin
+            // PAD_PIPE=1: the low nibble of a data cell is sampled on the edge AFTER ph7, which
+            // belongs to the next cell (or idle), so it is a flag of its own.  The retimed CS is
+            // still low on that edge (it too leaves one clk48 late).
+            if (PAD_PIPE != 0 && cap_pend) begin
+                push_byte <= {cap_hi, io_i}; push <= 1'b1; cap_pend <= 1'b0;
+            end
             // ---- FIFO write (capture) + FWFT read side ----
-            if (push && !f_full) begin fmem[wptr[AW-1:0]] <= push_byte; wptr <= wptr + 1'b1; end
+            if (push_ok) begin fmem[wptr[AW-1:0]] <= push_byte; wptr <= wptr + 1'b1; end
             if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr + 1'b1; dout_vld <= 1'b1; end
             else if (data_pop) dout_vld <= 1'b0;
+            if (push)                             ne_r <= 1'b1;
+            else if (fetch && occ_one)            ne_r <= 1'b0;
 
             // ---- cell serializer (8 clk48 per cell) ----
             if (cell_tgl != tgl_m) begin
@@ -271,10 +304,12 @@ module dac_psram_reader #(
                 cs    <= cs_l;
                 sclk  <= clk_l & (ph[0] | ph[1]); // low only on ph0/ph4 -> rises early (ph0->1, ph4->5)
                 case (ph)
-                    3'd3: if (cap_l) cap_hi <= io_i;                 // sample nib0 (high nibble)
-                    3'd7: begin                                     // sample nib1 (low nibble) + emit byte
-                        if (cap_l) begin push_byte <= {cap_hi, io_i}; push <= 1'b1; end
-                        busy48 <= 1'b0;                             // cell done; await next toggle
+                    3'd3: if (PAD_PIPE == 0 && cap_l) cap_hi <= io_i;   // sample nib0 (high nibble)
+                    3'd4: if (PAD_PIPE != 0 && cap_l) cap_hi <= io_i;   // ... one clk48 later
+                    3'd7: begin                                        // sample nib1 (low nibble) + emit byte
+                        if (PAD_PIPE == 0 && cap_l) begin push_byte <= {cap_hi, io_i}; push <= 1'b1; end
+                        if (PAD_PIPE != 0) cap_pend <= cap_l;          // ... on the next edge
+                        busy48 <= 1'b0;                                // cell done; await next toggle
                     end
                     default: ;
                 endcase

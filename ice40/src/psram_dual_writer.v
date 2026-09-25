@@ -104,7 +104,7 @@ module psram_dual_writer #(
     // ---- cell-producer FSM state ----
     localparam S_IDLE=0, S_CMD=1, S_ADDR=2, S_DATA=3, S_CSH=4;
     reg  [2:0]  st;
-    reg  [23:0] addr_adc, addr_la;        // running byte address per region
+    wire [23:0] addr_adc, addr_la;        // running byte address per region (DSP counters, below)
     reg         active;
     reg         sel;                      // 0 = ADC region, 1 = LA region (latched per burst)
     reg  [8:0]  chunk_left;
@@ -142,6 +142,22 @@ module psram_dual_writer #(
     wire        a_pop      = pop_this && !sel;
     wire        l_pop      = pop_this &&  sel;
 
+    // Running region addresses: SB_MAC16 up-counters since v41 (dsp_counter), not 2 x 24 fabric
+    // LCs.  Same behaviour as the old always-block: reset and `start` load the base, a pop steps
+    // the selected region, and a pop on the same edge as `start` wins (the old code's later
+    // assignment did).
+    wire [31:0] addr_adc_q, addr_la_q;
+    assign addr_adc = addr_adc_q[23:0];
+    assign addr_la  = addr_la_q[23:0];
+    wire        adc_step = ~rst & a_pop;
+    wire        la_step  = ~rst & l_pop;
+    dsp_counter #(.UP(1)) addr_adc_i (
+        .clk(clk), .load(rst | (start & ~adc_step)), .load_val({8'd0, adc_base}),
+        .en(adc_step), .q(addr_adc_q), .flag());
+    dsp_counter #(.UP(1)) addr_la_i (
+        .clk(clk), .load(rst | (start & ~la_step)), .load_val({8'd0, la_base}),
+        .en(la_step), .q(addr_la_q), .flag());
+
     always @(posedge clk) begin
         // ---- FIFO writes + occupancy (both FIFOs; +1 on accepted write, -1 on pop) ----
         if (rst) begin
@@ -164,11 +180,11 @@ module psram_dual_writer #(
         cell_drv <= 1'b0; cell_clk <= 1'b0; cell_cs <= 1'b1;
 
         if (rst) begin
-            st <= S_IDLE; addr_adc <= adc_base; addr_la <= la_base; active <= 1'b0;
+            st <= S_IDLE; active <= 1'b0;   // (addr_adc/addr_la load in their dsp_counters)
             idle <= 1'b1; sel <= 1'b0; chunk_left <= 9'd0; addr_idx <= 2'd0;
             cell_tgl <= 1'b0;   // defined start so ~cell_tgl toggles (never stays X)
         end else begin
-            if (start) begin active <= 1'b1; addr_adc <= adc_base; addr_la <= la_base; end
+            if (start) active <= 1'b1;     // (addr_adc/addr_la load in their dsp_counters)
             if (stop)  active <= 1'b0;
 
             case (st)
@@ -210,8 +226,7 @@ module psram_dual_writer #(
                 if (pop_this) begin
                     cell_n0 <= sel_head[7:4]; cell_n1 <= sel_head[3:0];
                     cell_drv <= 1'b1; cell_clk <= 1'b1; cell_cs <= 1'b0;
-                    if (sel) addr_la  <= addr_la  + 24'd1;
-                    else     addr_adc <= addr_adc + 24'd1;
+                    // (addr_la / addr_adc step in their dsp_counters on this edge)
                     chunk_left <= chunk_left - 9'd1;
                     // last byte of the chunk -> close the burst next cell
                     if (chunk_left == 9'd1) begin cell_cs <= 1'b0; st <= S_CSH; end

@@ -25,6 +25,10 @@
 // the PSRAM in the clk domain (the pre-v28 structure, or any future regression to it)
 // FAILS here at the larger skews — exactly the bug, now caught in `make test`.
 //
+// v41: the reader runs as shipped, PAD_PIPE=1 behind the real psram_pads (the one-clk48 output
+// retime, SB_IO DDR SCLK and registered CS/data models), so the model sees the actual pin
+// waveforms and the sweep covers the retimed read path.
+//
 // Run:  make dacpsramskewtest
 // ============================================================================
 `timescale 1ns/1ps
@@ -45,20 +49,27 @@ module tb_dac_psram_skew;
 
     reg  rst = 1, rst48 = 1, run = 0;
 
-    // reader <-> modelled PSRAM bus
-    wire [3:0] rd_io_o;  wire rd_io_oe;  wire ps_cs, ps_sclk;
+    // reader -> psram_pads (retimed pins) <-> modelled PSRAM bus
+    wire [3:0] rd_io_o, rd_io_i;  wire rd_io_oe, rd_cs, rd_sclk, rd_active;
+    tri        psram_sclk, psram_cs;
     tri  [3:0] psram_io;
+    wire       ps_cs = psram_cs, ps_sclk = psram_sclk;  // the model watches the PINS
     wire [7:0] rd_data;  wire rd_valid;  reg rd_pop = 0;
 
-    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5)) dut (
+    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5), .PAD_PIPE(1)) dut (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(run),
         .base_addr(BASE), .len_bytes(LEN),
         .bus_gnt(1'b1), .bus_req(), .bus_busy(),
         .data(rd_data), .data_valid(rd_valid), .data_pop(rd_pop),
-        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(psram_io),
-        .cs(ps_cs), .sclk(ps_sclk), .active()
+        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
+        .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)
     );
-    assign psram_io = rd_io_oe ? rd_io_o : 4'bzzzz;     // reader drives cmd/addr
+    psram_pads pads (
+        .clk48(clk48), .bus_own(1'b0), .selftest(1'b0), .replay(rd_active),
+        .rd_io_o(rd_io_o), .rd_io_oe(rd_io_oe), .rd_cs(rd_cs), .rd_sclk(rd_sclk), .rd_io_i(rd_io_i),
+        .ps_io_o(4'h0), .ps_io_oe(1'b0), .ps_cs(1'b1), .ps_sclk_d1(1'b0),   // writer idle
+        .psram_sclk(psram_sclk), .psram_cs(psram_cs),
+        .psram_io0(psram_io[0]), .psram_io1(psram_io[1]), .psram_io2(psram_io[2]), .psram_io3(psram_io[3]));
 
     // ---- APS6404L read model with a REALISTIC round-trip TACC ----
     reg  [7:0] mem [0:1023];

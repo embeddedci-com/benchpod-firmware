@@ -23,20 +23,28 @@ module tb_dac_psram_replay;
     reg [23:0] base = BASE, len = LEN;      // runtime region: re-armed onto a different one below
 
     // reader <-> tri bus
-    wire [3:0] rd_io_o; wire rd_io_oe; wire ps_cs, ps_sclk;
+    // v41: the reader runs as shipped, PAD_PIPE=1 behind the real psram_pads; the model watches the pins
+    wire [3:0] rd_io_o, rd_io_i; wire rd_io_oe, rd_cs, rd_sclk, rd_active;
+    tri        psram_sclk, psram_cs;
     tri  [3:0] psram_io;
+    wire       ps_cs = psram_cs, ps_sclk = psram_sclk;
     wire [7:0] strm_data; wire strm_valid, strm_pop;
 
     // reader FSM on clk (24 MHz), FIFO read on clk48 (the DAC engine's domain).
-    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5)) rd (
+    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5), .PAD_PIPE(1)) rd (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(run),
         .base_addr(base), .len_bytes(len),
         .bus_gnt(1'b1), .bus_req(), .bus_busy(),   // standalone: reader always holds the bus
         .data(strm_data), .data_valid(strm_valid), .data_pop(strm_pop),
-        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(psram_io),
-        .cs(ps_cs), .sclk(ps_sclk), .active()
+        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
+        .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)
     );
-    assign psram_io = rd_io_oe ? rd_io_o : 4'bzzzz;
+    psram_pads pads (
+        .clk48(clk48), .bus_own(1'b0), .selftest(1'b0), .replay(rd_active),
+        .rd_io_o(rd_io_o), .rd_io_oe(rd_io_oe), .rd_cs(rd_cs), .rd_sclk(rd_sclk), .rd_io_i(rd_io_i),
+        .ps_io_o(4'h0), .ps_io_oe(1'b0), .ps_cs(1'b1), .ps_sclk_d1(1'b0),   // writer idle
+        .psram_sclk(psram_sclk), .psram_cs(psram_cs),
+        .psram_io0(psram_io[0]), .psram_io1(psram_io[1]), .psram_io2(psram_io[2]), .psram_io3(psram_io[3]));
 
     // streaming DAC engine (psram_mode=1) on clk48; BRAM port unused.
     wire sync, dsclk, din, running;

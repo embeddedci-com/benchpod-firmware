@@ -312,7 +312,7 @@ module top (
     // path (rgray -> strm_valid -> DAC strm_pop), and 32 B still dwarfs any reader gap
     // vs the DAC's <=1.81 MB/s drain (recordings replay at <=0.4 MS/s in practice).
 `ifdef USE_DEEP_REPLAY
-    dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5)) rdr_i (
+    dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5), .PAD_PIPE(1)) rdr_i (
         .clk(clk), .rst(deep_rst), .clk48(clk48), .rst48(deep_rst48),
         .run(dac_psram_run), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
         .data(rd_strm_data), .data_valid(rd_strm_valid), .data_pop(rd_strm_pop),
@@ -454,19 +454,27 @@ module top (
     // pushes into the ADC SPRAM ring (not straight to the writer), so the writer's
     // per-region arbitration drains it independently of the LA stream.
     reg        adc_run, adc_done_r, adc_ovf_r;
-    reg [23:0] adc_left;          // 24-bit countdown: deep ADC capture up to 2,097,152 samples
+    // 24-bit countdown (deep ADC capture up to 2,097,152 samples) in a DSP block since v41: a
+    // dsp_counter loaded at the arm and stepped on each sample's second byte, exactly where the
+    // fabric counter was; the done test still reads it at 1.
+    wire [31:0] adc_left_q;
+    wire [23:0] adc_left = adc_left_q[23:0];
     reg [15:0] adc_hold;
     reg [1:0]  adc_pst;
     reg        adc_wr_stb;
     reg  [7:0] adc_wr_data;
     wire       adc_ring_in_full;
+    dsp_counter #(.UP(0)) adc_left_i (
+        .clk(clk), .load(~rst & cap_start), .load_val({8'd0, cap_count}),
+        .en(~rst & ~cap_start & adc_run & (adc_pst == 2'd2)),
+        .q(adc_left_q), .flag());
     always @(posedge clk) begin
         adc_wr_stb <= 1'b0;
         if (rst) begin
-            adc_run<=1'b0; adc_done_r<=1'b0; adc_ovf_r<=1'b0; adc_left<=24'd0; adc_pst<=2'd0;
+            adc_run<=1'b0; adc_done_r<=1'b0; adc_ovf_r<=1'b0; adc_pst<=2'd0;
         end else if (cap_start) begin
             adc_run<=(cap_count!=24'd0); adc_done_r<=(cap_count==24'd0); adc_ovf_r<=1'b0;
-            adc_left<=cap_count; adc_pst<=2'd0;
+            adc_pst<=2'd0;                     // (adc_left loads in its dsp_counter)
         end else if (adc_run) begin
             if (adc_sample_stb && adc_pst==2'd0 && !trig_wait) begin adc_hold<=adc_sample_sel; adc_pst<=2'd1; end
             else if (adc_pst==2'd1) begin
@@ -475,7 +483,7 @@ module top (
             end else if (adc_pst==2'd2) begin
                 adc_wr_data<=adc_hold[15:8]; adc_wr_stb<=1'b1; adc_pst<=2'd0;
                 if (adc_ring_in_full) adc_ovf_r<=1'b1;
-                adc_left<=adc_left-24'd1;
+                // (adc_left steps down in its dsp_counter on this same edge)
                 if (adc_left==24'd1) begin adc_run<=1'b0; adc_done_r<=1'b1; end
             end
         end
@@ -621,21 +629,25 @@ module top (
     // trips; `cap_active` gates it, so a capture that ends before the count expires never trips
     // — the cut is bounded to the capture window.  (v35) While a triggered capture waits, the
     // counter holds, so it counts from the trigger cycle instead of the arm.
-    reg  [31:0] cap_stop_cnt = 32'd0;
+    // v41: the counter is an SB_MAC16 (dsp_counter) instead of 32 fabric LCs, and its borrow-out
+    // is the free `!= 0` test.  The one-shot clear is a 1-bit `armed` flag (a DSP register has no
+    // cheap synchronous clear): the capture's end disarms it, and a disarmed residue neither
+    // counts nor trips.  Cycle-identical to the v40 fabric counter.
+    wire [31:0] cap_stop_cnt;
+    wire        stop_nz;                                        // cap_stop_cnt != 0
+    reg         stop_armed = 1'b0;
     wire        cap_counting = cap_active & ~trig_wait;
     always @(posedge clk) begin
-        if (rst) begin
-            cap_stop_cnt <= 32'd0;
-        end else if (stop_after_stb) begin
-            cap_stop_cnt <= stop_after_cfg;                     // 0 => disarmed
-        end else if (dual_stop) begin
-            cap_stop_cnt <= 32'd0;                              // capture over: one-shot
-        end else if (cap_counting && cap_stop_cnt != 32'd0) begin
-            cap_stop_cnt <= cap_stop_cnt - 32'd1;               // reaches 1 -> trip below -> 0
-        end
+        if (rst)                 stop_armed <= 1'b0;
+        else if (stop_after_stb) stop_armed <= 1'b1;            // a 0 threshold = never trips
+        else if (dual_stop)      stop_armed <= 1'b0;            // capture over: one-shot
     end
+    dsp_counter #(.UP(0)) stop_cnt_i (
+        .clk(clk), .load(stop_after_stb), .load_val(stop_after_cfg),
+        .en(~rst & ~stop_after_stb & stop_armed & ~dual_stop & cap_counting & stop_nz),
+        .q(cap_stop_cnt), .flag(stop_nz));
     // 1-cycle trip the single cycle the active capture's counter is at 1 (then it decs to 0).
-    assign dac_autostop = cap_counting & (cap_stop_cnt == 32'd1);
+    assign dac_autostop = cap_counting & stop_armed & (cap_stop_cnt == 32'd1);
 
     // Latch that holds the deep-replay reader gated off from the trip until the next DAC arm.
     // NB: cleared by the RAW dac_start (not dac_start_eff) on purpose — under a co-trigger the
@@ -671,51 +683,33 @@ module top (
     // reflash/power-cycle.  0x17 stays RESERVED in the opcode table (firmware never sends it —
     // fpga_warmboot() reflashes) so a future board with an off-bus config flash can reuse it.
 
-    // Shared quad bus: tristate on RAW bus_own (fail-safe-to-release).  Explicit SB_IO with
-    // OUTPUT_ENABLE (the inferred `?:1'bz` did NOT release the SPI_SO config pin — see the
-    // psram_io0 note).  psram_cs_force statically drives a known pattern for the boot /CE-net
-    // self-test.
-    wire        drive  = ~bus_own;
-    // SHARED-BUS pad mux: route the PSRAM pins to the reader whenever it is mid-burst,
-    // else to the capture writer (also the safe default between bursts: the writer sits
-    // in S_IDLE with CS high / OE low).  Select on `rd_active` = the reader's clk48 CS-low
-    // flop (~cs): it tracks the ACTUAL pad activity in the clk48 domain the pads live in, so
-    // the mux and the reader's clk48 pad registers switch together.  (`rd_busy` is the
-    // clk-domain arbiter-facing flop (st != S_IDLE) — the arbiter runs on clk and reads it
-    // directly; the reader FSM is on clk, so no CDC.)  `drive` still gates both on bus_own;
-    // each data SB_IO wires D_IN_0 back to rd_io_i.
-    wire        replay = rd_active; // 1 = READER driving the bus (clk48 CS-low)
-    wire        io_oe  = drive & (replay ? rd_io_oe : ps_io_oe);
-    wire [3:0]  io_dat = replay ? rd_io_o : ps_io_o;
-    wire        cs_lvl = replay ? rd_cs   : ps_cs;
-    wire        ps_cs_out   = psram_cs_force ? 1'b0    : cs_lvl;
-    wire        ps_io_oe_f  = psram_cs_force ? 1'b1    : io_oe;
-    wire [3:0]  ps_io_f     = psram_cs_force ? 4'b0011 : io_dat;
-    // DDR SCLK pad (PIN_TYPE[3:2]=00): for CAPTURE writes the pad shows D_OUT_0 during
-    // the clk48-high half and D_OUT_1 during the low half, so with D_OUT_0=0/D_OUT_1=
-    // gate the SCLK RISES at the clk48 negedge = dead-centre of each data nibble's eye
-    // (robust mode-0 setup, independent of the SB_GB skew).  For deep-replay READS the
-    // reader supplies a plain clk48-domain SCLK level (rd_sclk); driving BOTH DDR halves
-    // with it just re-registers it on clk48 into a clean ~24 MHz read clock.
-    // psram_cs_force -> static high for the boot /CE-net self-test.
-    wire        ps_sclk_d0   = psram_cs_force ? 1'b1 : (replay ? rd_sclk : 1'b0);
-    wire        ps_sclk_d1_f = psram_cs_force ? 1'b1 : (replay ? rd_sclk : ps_sclk_d1);
+    // Shared quad bus: the master mux + pads live in psram_pads (v41), which also retimes every
+    // PSRAM output by one clk48 cycle so the SCLK pad's falling-edge DDR input no longer has a
+    // half-cycle path through the mux (the deep image's clk48 cap; see psram_pads.v).  The
+    // reader samples one clk48 later to match (PAD_PIPE=1 above).  `replay` = rd_active, the
+    // reader's clk48 CS-low flop: it tracks the actual pad activity in the pads' own domain.
+    // tristate on RAW bus_own (fail-safe-to-release); psram_cs_force = the boot /CE-net self-test.
+    psram_pads pads_i (
+        .clk48(clk48), .bus_own(bus_own), .selftest(psram_cs_force), .replay(rd_active),
+        .rd_io_o(rd_io_o), .rd_io_oe(rd_io_oe), .rd_cs(rd_cs), .rd_sclk(rd_sclk), .rd_io_i(rd_io_i),
+        .ps_io_o(ps_io_o), .ps_io_oe(ps_io_oe), .ps_cs(ps_cs), .ps_sclk_d1(ps_sclk_d1),
+        .psram_sclk(psram_sclk), .psram_cs(psram_cs),
+        .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    SB_IO #(.PIN_TYPE(6'b100000), .PULLUP(1'b0)) io_sclk_i (
-        .PACKAGE_PIN(psram_sclk), .OUTPUT_ENABLE(drive), .OUTPUT_CLK(clk48),
-        .D_OUT_0(ps_sclk_d0), .D_OUT_1(ps_sclk_d1_f));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_cs_i (
-        .PACKAGE_PIN(psram_cs),   .OUTPUT_ENABLE(drive),      .D_OUT_0(ps_cs_out));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d0_i (
-        .PACKAGE_PIN(psram_io0),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[0]), .D_IN_0(rd_io_i[0]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d1_i (
-        .PACKAGE_PIN(psram_io1),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[1]), .D_IN_0(rd_io_i[1]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d2_i (
-        .PACKAGE_PIN(psram_io2),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[2]), .D_IN_0(rd_io_i[2]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
-        .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
-
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 40) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 41) ----
+    // GATEWARE_VERSION 41 = v40 + LC PASS TIER 3 + the deep image's clk48 bottlenecks fixed:
+    //   * dsp_counter: the stop-after countdown, the ADC and LA sample countdowns and the PSRAM
+    //     writer's two address counters are SB_MAC16 accumulators (the carry-out is their free
+    //     != 0 / all-ones test).  Cycle-identical (tb_dsp_counter).  yosys 0.65's ice40_dsp
+    //     rewrites explicit SB_MAC16 cells, so the Makefile hides them from it and
+    //     synth/check_dsp.py checks the netlist (RTL benches cannot see that failure).
+    //   * psram_pads: every PSRAM output leaves one clk48 later (CS/data in the pads' own
+    //     registers, SCLK's DDR halves from two flops), so no fabric path into the SCLK pad's
+    //     falling-edge input has only half a period; the reader samples one clk48 later
+    //     (PAD_PIPE=1).  Same waveforms, same read margin (tb_dac_psram_skew, now through the pads).
+    //   * dac_psram_reader: registered FIFO not-empty flag and a one-subtract room test.
+    // Loop 4197 -> 3909 LC (79% -> 74%), deep 3872 -> 3615 (73% -> 68%).  Deep clk48: all 24 swept
+    // seeds close, 22 reach MIN_CLK48_MHZ (v40: 5/32), best 55.35 MHz.  SEED_LOOP 23, SEED_DEEP 14.
     // GATEWARE_VERSION 40 = v39 + LC PASS, TIER 2 (protocol changes, firmware >= this commit):
     //   * START_CAPTURE 0x20, START_MEASURE 0x30 and LA_CAPTURE 0x69 retired (ignored).  Every
     //     capture is OP_CAPTURE; `measure` = DAC_ARM_ON_CAPTURE + START_DAC + OP_CAPTURE.  A
@@ -1029,7 +1023,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd40), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd41), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

@@ -73,9 +73,16 @@ module la_psram_capture #(
     end
 
     reg [15:0]      divcnt;        // sample-period DOWN-counter (ticks at 0)
-    reg [CNT_W-1:0] samps_left;    // samples still to record
+    // samples still to record: an SB_MAC16 down-counter since v41 (dsp_counter), loaded at start
+    // and stepped with each sample's high byte, exactly where the fabric counter was.
+    wire [31:0]      samps_q;
+    wire [CNT_W-1:0] samps_left = samps_q[CNT_W-1:0];
     reg             writing_hi;    // 0 = write low byte on tick; 1 = write high byte
     reg [N-1:0]     latched;       // sample held across the 2-byte write
+    dsp_counter #(.UP(0)) samps_i (
+        .clk(clk), .load(~rst & start), .load_val({{(32-CNT_W){1'b0}}, sample_count}),
+        .en(~rst & ~start & busy & ~hold & writing_hi),
+        .q(samps_q), .flag());
 
     // Sample period = EXACTLY `divider` clocks (floor 2).  One period is: the tick cycle
     // (low byte), the hi-byte cycle — which does NOT decrement divcnt — then div_reload
@@ -96,14 +103,12 @@ module la_psram_capture #(
         wr_stb   <= 1'b0;
         if (rst) begin
             divcnt     <= 16'd0;
-            samps_left <= {CNT_W{1'b0}};
             writing_hi <= 1'b0;
             busy       <= 1'b0;
             done       <= 1'b0;
             overflow   <= 1'b0;
         end else if (start) begin
             divcnt     <= div_reload;
-            samps_left <= sample_count;
             writing_hi <= 1'b0;
             busy       <= (sample_count != {CNT_W{1'b0}});
             done       <= 1'b0;
@@ -121,7 +126,6 @@ module la_psram_capture #(
                     done    <= 1'b1;
                     ps_stop <= 1'b1;   // last byte + flush in the same cycle (as ADC)
                 end
-                samps_left <= samps_left - 1'b1;
             end else if (divcnt == 16'd0) begin
                 // sample tick: latch the word and write the low byte.
                 divcnt     <= div_reload;

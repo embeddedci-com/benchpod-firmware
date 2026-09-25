@@ -54,7 +54,7 @@ module tb_psram_arbiter;
     wire [7:0]  rd_data; wire rd_valid; reg rd_pop = 0;
     wire        rd_req, rd_busy, rd_gnt;
 
-    dac_psram_reader #(.CHUNK_BYTES(RD_CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(RD_FIFO_AW)) rdr (
+    dac_psram_reader #(.CHUNK_BYTES(RD_CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(RD_FIFO_AW), .PAD_PIPE(1)) rdr (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(rd_run),
         .base_addr(DAC_BASE), .len_bytes(DAC_LEN),
         .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
@@ -93,31 +93,16 @@ module tb_psram_arbiter;
     );
     wire rd_own = (owner == 2'd1);
 
-    // ---- top_v2-faithful shared pad mux (replay = reader is mid-burst == owns bus) ----
-    wire        replay  = rd_busy;
-    wire        m_io_oe = replay ? rd_io_oe : w_io_oe;   // owner==NONE -> writer(idle oe=0)
-    wire [3:0]  m_io_o  = replay ? rd_io_o  : w_io_o;
-    wire        m_cs    = replay ? rd_cs    : w_cs;
-    wire        m_sclk0 = replay ? rd_sclk  : 1'b0;
-    wire        m_sclk1 = replay ? rd_sclk  : w_sclk_d1;
-
+    // ---- the real shared pads (v41: mux + one-clk48 output retime, SB_IO models) ----
     tri  psram_sclk, psram_cs; tri [3:0] psram_io;
     pulldown (psram_sclk); pulldown (psram_cs);
     pullup   (psram_io[0]); pullup (psram_io[1]); pullup (psram_io[2]); pullup (psram_io[3]);
-
-    SB_IO #(.PIN_TYPE(6'b100000), .PULLUP(1'b0)) io_sclk_i (
-        .PACKAGE_PIN(psram_sclk), .OUTPUT_ENABLE(1'b1), .OUTPUT_CLK(clk48),
-        .D_OUT_0(m_sclk0), .D_OUT_1(m_sclk1));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_cs_i (
-        .PACKAGE_PIN(psram_cs), .OUTPUT_ENABLE(1'b1), .D_OUT_0(m_cs));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d0 (
-        .PACKAGE_PIN(psram_io[0]), .OUTPUT_ENABLE(m_io_oe), .D_OUT_0(m_io_o[0]), .D_IN_0(rd_io_i[0]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d1 (
-        .PACKAGE_PIN(psram_io[1]), .OUTPUT_ENABLE(m_io_oe), .D_OUT_0(m_io_o[1]), .D_IN_0(rd_io_i[1]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d2 (
-        .PACKAGE_PIN(psram_io[2]), .OUTPUT_ENABLE(m_io_oe), .D_OUT_0(m_io_o[2]), .D_IN_0(rd_io_i[2]));
-    SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3 (
-        .PACKAGE_PIN(psram_io[3]), .OUTPUT_ENABLE(m_io_oe), .D_OUT_0(m_io_o[3]), .D_IN_0(rd_io_i[3]));
+    psram_pads pads (
+        .clk48(clk48), .bus_own(1'b0), .selftest(1'b0), .replay(rd_active),
+        .rd_io_o(rd_io_o), .rd_io_oe(rd_io_oe), .rd_cs(rd_cs), .rd_sclk(rd_sclk), .rd_io_i(rd_io_i),
+        .ps_io_o(w_io_o), .ps_io_oe(w_io_oe), .ps_cs(w_cs), .ps_sclk_d1(w_sclk_d1),
+        .psram_sclk(psram_sclk), .psram_cs(psram_cs),
+        .psram_io0(psram_io[0]), .psram_io1(psram_io[1]), .psram_io2(psram_io[2]), .psram_io3(psram_io[3]));
 
     wire       ps_cs   = psram_cs;
     wire       ps_sclk = psram_sclk;
@@ -180,7 +165,7 @@ module tb_psram_arbiter;
     always @(posedge clk) begin
         if (rd_busy && wr_busy) both_busy_err = both_busy_err + 1;
         // a master driving the bus AND the model driving = collision
-        if (m_io_oe && mdriving) collide_err = collide_err + 1;
+        if (pads.io_oe && mdriving) collide_err = collide_err + 1;   // the real pad OE (v41)
         // watermarks (hierarchical peeks)
         if (rd_run && rdr.occ < rd_min_occ) rd_min_occ = rdr.occ;
         if (wrt.a_cnt > wr_max_occ) wr_max_occ = wrt.a_cnt;

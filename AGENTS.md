@@ -34,13 +34,27 @@ gateware change:
   against its datasheet timing table, and assert it on the pins in sim like
   `tb_dac8551` does (t5–t9).
 
+Two more that RTL simulation cannot catch:
+
+- **Explicit DSP primitives.** yosys 0.65's `ice40_dsp` pass (run by `synth_ice40 -dsp`)
+  treats every `SB_MAC16` as a multiplier and rewrote the `dsp_counter` cells (clock tied to
+  0, load inputs zeroed) while every bench passed. The Makefile hides explicit `SB_MAC16`
+  cells from that step (`synth/sb_mac16_keep.v`) and `synth/check_dsp.py` checks the netlist.
+  Instantiate new DSP cells through `dsp_counter`, or extend that check.
+- **Half-cycle pad paths.** The SCLK pad is DDR: it captures `D_OUT_1` on the clk48 falling
+  edge, so logic in front of it has half a period. That capped the deep image near 51 MHz
+  until v41 (`src/psram_pads.v` retimes every PSRAM output by one clk48 and feeds the pad
+  from flops; the reader samples one clk48 later, `PAD_PIPE=1`). Keep logic out of any
+  `D_OUT_1` path, and run reader changes through `tb_dac_psram_skew`, which now drives the
+  real pads.
+
 Note the PnR seed in `ice40/Makefile` is a *placement* pin, not a timing crutch.
 The capture datapath's single 24 MHz `clk` closes with wide margin (~33-35 MHz vs a
 24 MHz target), so **a `clk` timing failure is a real bug, not a reason to try another
 seed**. Two things are genuinely seed-sensitive and are handled by the Makefile, not
 by you re-rolling seeds by hand:
 
-- **Placement.** The loop image runs at ~79% LC (4197 at v40; 4405 at v39; 4351 at v37; 4442 at
+- **Placement.** The loop image runs at ~74% LC (3909 at v41; 4197 at v40; 4405 at v39; 4442 at
   v35/v36). At the previous ~87%, roughly half of all seeds failed to place
   at all, and it will get there again if features are added without reclaiming LC.
   Each PnR therefore tries the pinned seed first and falls back down

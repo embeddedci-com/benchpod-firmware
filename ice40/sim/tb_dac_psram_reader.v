@@ -24,19 +24,27 @@ module tb_dac_psram_reader;
     reg rst = 1, rst48 = 1, run = 0;
 
     // reader <-> tri bus
-    wire [3:0] rd_io_o; wire rd_io_oe; wire ps_cs, ps_sclk;
+    // v41: the reader runs as shipped, PAD_PIPE=1 behind the real psram_pads; the model watches the pins
+    wire [3:0] rd_io_o, rd_io_i; wire rd_io_oe, rd_cs, rd_sclk, rd_active;
+    tri        psram_sclk, psram_cs;
     tri  [3:0] psram_io;
+    wire       ps_cs = psram_cs, ps_sclk = psram_sclk;
     wire [7:0] rd_data; wire rd_valid; reg rd_pop = 0;
 
-    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5)) dut (
+    dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5), .PAD_PIPE(1)) dut (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(run),
         .base_addr(BASE), .len_bytes(LEN),
         .bus_gnt(1'b1), .bus_req(), .bus_busy(),
         .data(rd_data), .data_valid(rd_valid), .data_pop(rd_pop),
-        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(psram_io),
-        .cs(ps_cs), .sclk(ps_sclk), .active()
+        .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
+        .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)
     );
-    assign psram_io = rd_io_oe ? rd_io_o : 4'bzzzz;   // reader drives cmd/addr
+    psram_pads pads (
+        .clk48(clk48), .bus_own(1'b0), .selftest(1'b0), .replay(rd_active),
+        .rd_io_o(rd_io_o), .rd_io_oe(rd_io_oe), .rd_cs(rd_cs), .rd_sclk(rd_sclk), .rd_io_i(rd_io_i),
+        .ps_io_o(4'h0), .ps_io_oe(1'b0), .ps_cs(1'b1), .ps_sclk_d1(1'b0),   // writer idle
+        .psram_sclk(psram_sclk), .psram_cs(psram_cs),
+        .psram_io0(psram_io[0]), .psram_io1(psram_io[1]), .psram_io2(psram_io[2]), .psram_io3(psram_io[3]));
 
     // ---- APS6404L read model ----
     reg  [7:0] mem [0:1023];
@@ -76,6 +84,16 @@ module tb_dac_psram_reader;
 
     // ---- pop bytes on the clk48 read port at a DAC-like slow rate ----
     integer i, errors;
+    // v41: the FIFO's registered not-empty flag must equal the pointer compare on EVERY clk48
+    // cycle (the fetch/BRAM-enable path reads the flag instead of the compare).
+    integer ne_bad = 0, ne_checks = 0;
+    always @(posedge clk48) begin
+        ne_checks = ne_checks + 1;
+        if (dut.ne_r !== (dut.wptr != dut.rptr)) begin
+            if (ne_bad < 3) $display("FAIL: FIFO ne_r=%b but wptr=%0d rptr=%0d", dut.ne_r, dut.wptr, dut.rptr);
+            ne_bad = ne_bad + 1;
+        end
+    end
     reg [7:0] got;
     task pop_one(output [7:0] b); begin
         @(posedge clk48); while (!rd_valid) @(posedge clk48);
@@ -96,8 +114,9 @@ module tb_dac_psram_reader;
                 errors = errors + 1;
             end
         end
+        errors = errors + ne_bad;
         if (errors == 0)
-            $display("PASS tb_dac_psram_reader: %0d bytes streamed in order across the loop wrap (len=%0d)", NPOP, LEN);
+            $display("PASS tb_dac_psram_reader: %0d bytes streamed in order across the loop wrap (len=%0d); FIFO flag == pointer compare on %0d cycles", NPOP, LEN, ne_checks);
         else
             $display("FAIL tb_dac_psram_reader: %0d error(s)", errors);
         $finish;

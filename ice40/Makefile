@@ -46,7 +46,9 @@ SRC = src/top_v2.v            \
       src/i2c_regfile.v       \
       src/i2c_target.v        \
       src/la_psram_capture.v  \
-      src/uart_engine.v
+      src/uart_engine.v       \
+      src/dsp_counter.v       \
+      src/psram_pads.v
 DEFINES = -DVERSION_V2
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
@@ -223,7 +225,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -239,8 +241,24 @@ all: $(OUT).bin
 #   -noabc9).  Toolchain is pinned to 0.65 for this reason.
 # -spram: infer SB_SPRAM256KA for the 256Kbit correlated-capture ring (small
 #         RAMs still go to BRAM — SPRAM is only cheaper for the big one).
-$(OUT).json: $(SRC)
-	yosys -p "read_verilog -Isrc $(DEFINES) $(SRC); synth_ice40 -abc9 -dsp -spram -top top -json $@"
+#
+# $(call synth,<extra -D flags>,<out.json>): synth_ice40 in three segments so the explicit SB_MAC16
+# cells (dsp_counter, v41) sit out the `coarse` step as SB_MAC16_KEEP: yosys 0.65's ice40_dsp
+# (run there by -dsp) rewrites any SB_MAC16 as a multiplier, which killed the counters in the
+# netlist while every RTL bench passed (synth/sb_mac16_keep.v).  The control loop's multipliers
+# are still $mul in that step, so -dsp infers them exactly as before.  synth/check_dsp.py then
+# fails the build (and removes the netlist) unless every dsp_counter cell came through intact.
+SYNTH_FLAGS = -abc9 -dsp -spram -top top
+SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
+define synth
+	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(SRC); \
+	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
+	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
+	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
+	python3 synth/check_dsp.py $(2) src || { rm -f $(2); exit 1; }
+endef
+$(OUT).json: $(SRC) $(SYNTH_AUX)
+	$(call synth,,$@)
 
 # --pcf-allow-unconstrained: a board .pcf may intentionally leave some ports
 # (e.g. DAC/ADC on a board whose analog wiring isn't pinned down yet)
@@ -287,9 +305,13 @@ $(OUT).bin: $(OUT).asc
 # (57.74) and 20 (57.03).  Re-pinned SEED_LOOP 5 -> 8.
 # v40 LC PASS TIER 2 (4405 -> 4197 LC, 83% -> 79%): swept 1..24, all place and close, 23/24 reach
 # MIN_CLK48_MHZ.  Seed 8 stays: it ties the best (56.95 MHz, clk 33.53).
-SEED_LOOP ?= 8
-# Ordered by the v40 sweep's clk48 margin (every seed places and closes).
-SEED_LOOP_FALLBACK ?= 6 12 1 19 2 16 10 21 20 13 18 3 17 7 14 11 23 15 5 4 9 22 24
+# v41 LC PASS TIER 3 (4197 -> 3909 LC, 79% -> 74%; five counters in SB_MAC16 DSPs) + the
+# psram_pads retime.  Swept 1..24 on the final netlist: all place, 21/24 close @48, 12 reach
+# MIN_CLK48_MHZ; seed 8 no longer closes.  Best is 23 at clk48 55.69 MHz (clk 32.76).
+# Re-pinned SEED_LOOP 8 -> 23.
+SEED_LOOP ?= 23
+# Ordered by the v41 sweep's clk48 margin.
+SEED_LOOP_FALLBACK ?= 3 1 10 5 18 14 21 20 17 7 11 6 16 22 2 4 9 8 12 24
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -343,21 +365,26 @@ SEED_LOOP_FALLBACK ?= 6 12 1 19 2 16 10 21 20 13 18 3 17 7 14 11 23 15 5 4 9 22 
 # 1..32: all place, 26/32 close @48 (v39: 11/24), 5 reach MIN_CLK48_MHZ, all at exactly
 # 51.13 MHz (a fixed path caps the deep image there); 23 has the best clk (32.23).
 # Re-pinned SEED_DEEP 3 -> 23 — RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 23
+# v41: the deep image's two clk48 bottlenecks are FIXED rather than placed around: the reader
+# FIFO's `empty` is a registered flag (off the BRAM read-enable path) and psram_pads retimes the
+# PSRAM outputs so the SCLK DDR pad has no half-cycle path through the mux.  Swept 1..24 on the
+# final netlist (3615 LC, 68%): ALL 24 close @48 and 22/24 reach MIN_CLK48_MHZ (v40: 5/32), best
+# 14 at 55.35 MHz (clk 35.42).  Re-pinned SEED_DEEP 23 -> 14 — RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 14
 # Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 18 13 31 15 14 6 21 25 12 4 8 22 20 28 32 17 10
+SEED_DEEP_FALLBACK ?= 24 18 6 23 11 21 12 5 20 22 15 1 17 2 7 19 4 10 3 13 8 9 16
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
 # that the gateware in its iCE40 config flash is not the one its firmware shipped with.
 GW_VERSION := $(shell sed -n "s/.*GATEWARE_VERSION(8'd\([0-9]*\)).*/\1/p" src/top_v2.v | head -1)
 
-$(OUT)_loop.json: $(SRC)
-	yosys -p "read_verilog -Isrc $(DEFINES) $(SRC); synth_ice40 -abc9 -dsp -spram -top top -json $@"
-$(OUT)_deep.json: $(SRC)
-	yosys -p "read_verilog -Isrc $(DEFINES) -DUSE_DEEP_REPLAY $(SRC); synth_ice40 -abc9 -dsp -spram -top top -json $@"
+$(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
+	$(call synth,,$@)
+$(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
+	$(call synth,-DUSE_DEEP_REPLAY,$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -450,7 +477,7 @@ daclooptest:
 # matches PSRAM contents in order, across the loop wrap.
 dacpsramrdtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrd.vvp \
-	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v
+	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrd.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrd.vvp
 
@@ -460,7 +487,7 @@ dacpsramrdtest:
 # sampler (the pre-v28 bug, or any regression to it) fails at the larger skews.
 dacpsramskewtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacskew.vvp \
-	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v
+	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacskew.vvp
 	@rm -f /tmp/$(PROJECT)_dacskew.vvp
 
@@ -468,7 +495,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/dac8551_engine.v
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -498,7 +525,7 @@ adctimingtest:
 # FSM — hence it needs yosys' cells_sim.v.
 dualwrtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dualwr.vvp \
-	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v $(CELLS_SIM)
+	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v src/dsp_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dualwr.vvp
 	@rm -f /tmp/$(PROJECT)_dualwr.vvp
 
@@ -509,10 +536,17 @@ dualwrtest:
 # APS6404L model; checks no bus collision, no DAC underrun, correct data both ways.
 arbtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_arb.vvp \
-	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v \
+	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v src/dsp_counter.v src/psram_pads.v \
 	         src/psram_bus_arbiter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_arb.vvp
 	@rm -f /tmp/$(PROJECT)_arb.vvp
+
+# dsp_counter (an SB_MAC16 accumulator) == the fabric counter it replaces, cycle for cycle (v41).
+dsptest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dsp.vvp \
+	         sim/tb_dsp_counter.v src/dsp_counter.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dsp.vvp
+	@rm -f /tmp/$(PROJECT)_dsp.vvp
 
 # Closed-loop DAC control engine: convergence + clamp + strm + determinism.
 looptest:
@@ -532,7 +566,7 @@ loopframetest:
 # Self-checking simulation of the deep LA→PSRAM sampler (byte packing + framing).
 lapsramtest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_lapsram.vvp \
-	         sim/tb_la_psram_capture.v src/la_psram_capture.v
+	         sim/tb_la_psram_capture.v src/la_psram_capture.v src/dsp_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_lapsram.vvp
 	@rm -f /tmp/$(PROJECT)_lapsram.vvp
 
@@ -586,7 +620,7 @@ topcapturetest:
 	@rm -f /tmp/$(PROJECT)_topcap.vvp
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:
