@@ -198,10 +198,13 @@ module top (
     wire [15:0] loop_in;                                 // input the last tick used (v29)
     wire [15:0] loop_idx;                                // curve index it resolved to (v30)
     wire        loop_tripped;                            // latched over-range trip (v30)
-    reg  [15:0] loop_v_clk = 16'd0;                       // clk-domain snapshot for DAC_PROBE telemetry
-    reg  [15:0] loop_in_clk = 16'd0;                      // ditto for DAC_LOOP_IN_PROBE
-    always @(posedge clk) loop_v_clk  <= loop_v;
-    always @(posedge clk) loop_in_clk <= loop_in;
+    wire        loop_tlm_stb;                            // clk48: loop_v/in/tripped just changed
+    // Loop telemetry in the clk domain (v39): DAC_PROBE, DAC_LOOP_IN_PROBE and STATUS bit 6.
+    // Until v38 loop_v/loop_in were copied by a plain clk flop off clk48 registers every cycle
+    // and loop_tripped went straight into the STATUS reply: untimed crossings that could read a
+    // value mid-change.  dac_loop now publishes one coherent snapshot and holds it >= 12 clk48,
+    // so cdc_pulse_payload carries it across whole (same rule as every other crossing).
+    wire [32:0] loop_tlm_clk;                            // {tripped, in, v}
 `ifndef USE_DEEP_REPLAY
     // ---- loop parameters: clk -> clk48 through cdc_pulse_payload (v38) ----
     // Until v37 the loop read k/vmin/vmax/tick/src/fixed/step/in_* as clk registers straight
@@ -257,11 +260,15 @@ module top (
         .strm_data(loop_strm_data), .strm_valid(loop_strm_valid),
         .strm_pop(dac_loop_mode48 & dac_strm_pop),
         .v_out(loop_v), .in_used(loop_in),
-        .idx_used(loop_idx), .tripped(loop_tripped)
+        .idx_used(loop_idx), .tripped(loop_tripped), .tlm_stb(loop_tlm_stb)
     );
+    cdc_pulse_payload #(.W(33)) loop_tlm_cdc (
+        .src_clk(clk48), .src_pulse(loop_tlm_stb), .src_data({loop_tripped, loop_in, loop_v}),
+        .dst_clk(clk), .dst_pulse(), .dst_data(loop_tlm_clk));
 `else
     assign dac_loop_mode48 = 1'b0;      // deep-replay build: no control loop
     assign loop_idx = 16'd0; assign loop_tripped = 1'b0;
+    assign loop_tlm_stb = 1'b0; assign loop_tlm_clk = 33'd0;
     assign loop_raddr = 12'd0; assign loop_strm_data = 8'd0;
     assign loop_strm_valid = 1'b0; assign loop_v = 16'd0; assign loop_in = 16'd0;
 `endif
@@ -741,7 +748,17 @@ module top (
     SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
         .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 38) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 39) ----
+    // GATEWARE_VERSION 39 = v38 + LOOP TELEMETRY CROSSING (loop image): DAC_PROBE, the input probe
+    // and STATUS bit 6 (tripped) read the clk48 loop through cdc_pulse_payload.  Until v38
+    // loop_v/loop_in were copied by plain clk flops off clk48 registers and `tripped` went
+    // straight into the STATUS reply, so a read could catch a value mid-change.  dac_loop now
+    // publishes {v, in, tripped} as one snapshot on its tick commit (or arm/disarm) and holds it
+    // >= 12 clk48 (tb_dac_loop_frames asserts the contract; tb_top_capture reads all three over
+    // SPI, including a real over-range trip and its clear on disarm).  `in_used` is now the
+    // input of the last COMMITTED tick, published together with that tick's v.
+    // Loop 4379 -> 4405 LC (83%), deep 4092 (77%).  SEED_LOOP 5 -> 8 (clk48 57.87 MHz; all 24 swept
+    // seeds reach 50), SEED_DEEP stays 3 (51.13 MHz, the only one of 1..24 that reaches 50).
     // GATEWARE_VERSION 38 = v37 + CLOSED-LOOP CROSSING + TORN-FRAME FIX (loop image; the deep
     // image only moves because cmd_dispatch lost the loop registers):
     //   * The loop's parameters are clk48 registers written through three cdc_pulse_payload
@@ -1032,7 +1049,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd38), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd39), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1048,7 +1065,7 @@ module top (
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
         .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg),
-        .loop_tripped(loop_tripped),
+        .loop_tripped(loop_tlm_clk[32]),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp), .psram_cs_force(psram_cs_force),
@@ -1058,8 +1075,8 @@ module top (
         .cap_done(cap_done_r),
         .cap_overflow(cap_overflow_r),
         .adc_dbg_sample(adc_sample),   // live 24 MHz ADC sample -> ADC_PROBE direct read
-        .dac_loop_v_dbg(loop_v_clk),   // clk snapshot of the loop's DAC output -> DAC_PROBE
-        .dac_loop_in_dbg(loop_in_clk), // clk snapshot of the loop's INPUT -> DAC_LOOP_IN_PROBE
+        .dac_loop_v_dbg(loop_tlm_clk[15:0]),   // the loop's DAC output -> DAC_PROBE
+        .dac_loop_in_dbg(loop_tlm_clk[31:16]), // the loop's INPUT -> DAC_LOOP_IN_PROBE
         .la_cap_start(la_cap_start), .la_cap_count(la_cap_count),
         .la_cap_divider(la_cap_divider), .la_sample(la_sample), .la_levels(la_levels)
     );

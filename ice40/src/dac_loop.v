@@ -132,10 +132,16 @@ module dac_loop #(
     output wire        strm_valid,
     input  wire        strm_pop,
 
-    output wire [15:0] v_out,            // current output, for telemetry read-back
-    output wire [15:0] in_used,          // input the last tick indexed with (telemetry)
-    output wire [15:0] idx_used,         // curve index that input resolved to (telemetry)
-    output wire        tripped           // latched: the trip fired, output forced to vmin
+    // ---- telemetry (v39): one coherent snapshot, published for a clk-domain reader ----
+    // v_out/in_used/tripped change together, only on the edge that raises tlm_stb (the tick's
+    // commit, or an arm/disarm), and then hold until the next such edge: >= 12 clk48 later even
+    // at tick_div 0.  That is the source contract cdc_pulse_payload needs to carry them into
+    // clk (top_v2) without a torn or metastable read.
+    output wire [15:0] v_out,            // current output
+    output wire [15:0] in_used,          // input the committed tick indexed with
+    output wire [15:0] idx_used,         // curve index the last tick resolved to (live, clk48 only)
+    output wire        tripped,          // latched: the trip fired, output forced to vmin
+    output reg         tlm_stb           // 1 clk48: v_out/in_used/tripped just changed
 );
     localparam [1:0] SRC_ADC = 2'd0, SRC_FIXED = 2'd1;
     // ---- output register + 2-byte strm producer -------------------------------
@@ -205,8 +211,9 @@ module dac_loop #(
     reg  [15:0] sweep_acc;
     wire [15:0] in_now = (src_sel == SRC_ADC)   ? adc_sample :
                          (src_sel == SRC_FIXED) ? in_fixed   : sweep_acc;
-    reg  [15:0] in_lat;                   // the input the last tick actually used
-    assign in_used = in_lat;
+    reg  [15:0] in_lat;                   // the input this tick uses (set at its start)
+    reg  [15:0] in_pub;                   // ...published with the tick's v at S_CLAMP
+    assign in_used = in_pub;
 
     // ---- input conditioner datapath (v30) --------------------------------------
     // The legacy index, kept as its own wire so map_en=0 is provably unchanged.
@@ -234,7 +241,8 @@ module dac_loop #(
     wire [ADDR_W-2:0]  idx_next = map_en ? idx_sat : idx_leg;
 
     reg trip_l;                              // latched until disarm
-    assign tripped  = trip_l;
+    reg trip_pub;                            // ...published with the tick's v at S_CLAMP
+    assign tripped  = trip_pub;
     assign idx_used = {{(17-ADDR_W){1'b0}}, lut_raddr[ADDR_W-1:1]};
 
     always @(posedge clk48) begin
@@ -246,6 +254,7 @@ module dac_loop #(
             lt_min <= 1'b0; gt_max <= 1'b0;
             sweep_acc <= in_fixed;        // a sweep starts from the host-set point
             in_lat    <= 16'd0;
+            in_pub    <= 16'd0;  trip_pub <= 1'b0;
             d_r <= 16'sd0; prod_i <= 17'sd0;
             trip_l <= 1'b0;               // the trip clears only on disarm/reset
         end else begin
@@ -331,10 +340,20 @@ module dac_loop #(
                 else if (lt_min) v <= vmin;
                 else if (gt_max) v <= vmax;
                 else             v <= vsum[15:0];
+                in_pub   <= in_lat;              // publish this tick's input and trip with v
+                trip_pub <= trip_l;
                 st <= S_IDLE;
             end
             default: st <= S_IDLE;
             endcase
         end
+    end
+
+    // tlm_stb: the edge after a commit (S_CLAMP) or an arm/disarm, i.e. after the published
+    // values last changed.  While disarmed they are constants (v = vmin, 0, 0).
+    reg arm_d;
+    always @(posedge clk48) begin
+        arm_d   <= arm & ~rst48;
+        tlm_stb <= ~rst48 & ((arm & (st == S_CLAMP)) | (arm != arm_d));
     end
 endmodule

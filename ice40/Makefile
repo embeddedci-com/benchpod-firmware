@@ -282,9 +282,12 @@ $(OUT).bin: $(OUT).asc
 # the clamp compare got its own state.  Swept 1..24: all place, 23/24 close AND reach
 # MIN_CLK48_MHZ (v37: 14/16 closed @48); seed 14 fell to 52.82, best is 5 at clk48 56.69 MHz
 # (clk 31.07), then 23 and 21 (55.04).  Re-pinned SEED_LOOP 14 -> 5.
-SEED_LOOP ?= 5
-# Ordered by the v38 sweep's clk48 margin (every seed places; only the last misses 50 MHz).
-SEED_LOOP_FALLBACK ?= 23 21 12 2 17 20 13 24 10 16 14 7 1 8 9 22 11 4 19 3 6 15
+# v39 LOOP TELEMETRY CROSSING (4379 -> 4405 LC, 83%): seed 5 fell to clk48 50.93 MHz.  Swept
+# 1..24: all place and all reach MIN_CLK48_MHZ; best is 8 at 57.87 MHz (clk 30.03), then 24
+# (57.74) and 20 (57.03).  Re-pinned SEED_LOOP 5 -> 8.
+SEED_LOOP ?= 8
+# Ordered by the v39 sweep's clk48 margin (every seed places and reaches 50 MHz).
+SEED_LOOP_FALLBACK ?= 24 20 2 19 9 15 13 16 11 14 7 10 6 23 18 12 21 22 1 17 3 5 4
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -331,11 +334,14 @@ SEED_LOOP_FALLBACK ?= 23 21 12 2 17 20 13 24 10 16 14 7 1 8 9 22 11 4 19 3 6 15
 # other way: swept 1..40, all place, 32/40 close @48 and 13 reach MIN_CLK48_MHZ (v37: 1/40).
 # Seed 12 fell to 48.77; twelve seeds tie at clk48 51.13 MHz, and 3 has the best clk (32.69).
 # Re-pinned SEED_DEEP 12 -> 3 — RE-VERIFY deep replay on hardware.
+# v39 (only the version constant changed in the deep netlist): swept 1..24, 11/24 close @48 and
+# ONLY seed 3 reaches MIN_CLK48_MHZ (51.13 MHz, clk 32.96).  Kept.  The deep image's clk48 margin
+# is at the mercy of placement; its binding path (dac_psram_reader) is the next thing to fix.
 SEED_DEEP ?= 3
 # Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 38 1 14 9 29 16 35 18 10 20 32 39 24 34 28
+SEED_DEEP_FALLBACK ?= 15 18 19 22 7 1 16 11 4 24
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell

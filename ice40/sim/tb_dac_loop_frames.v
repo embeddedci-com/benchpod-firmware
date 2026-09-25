@@ -14,6 +14,10 @@
 // divider), so ticks land on every phase of the frame.  Every decoded frame must be a value
 // `v` held at some point; the run must also produce many frames and many distinct values,
 // so a stuck loop cannot pass.
+//
+// Also the telemetry contract (v39) top_v2's cdc_pulse_payload relies on: v_out/in_used/tripped
+// change ONLY on the edge that raises tlm_stb, and then hold >= TLM_HOLD clk48 (the clk-side
+// latch lands within 3 clk = 6 clk48).  This bench runs the shortest tick, the worst case.
 // Run: make loopframetest
 // ============================================================================
 `timescale 1ns/1ps
@@ -27,7 +31,7 @@ module tb_dac_loop_frames;
     reg  [7:0]  lut_rdata;
     wire [7:0]  strm_data; wire strm_valid, strm_pop;
     wire [15:0] v_out, in_used, idx_used;
-    wire        tripped;
+    wire        tripped, tlm_stb;
     wire [11:0] wave_addr;
     wire        sync, sclk, din, running;
 
@@ -40,7 +44,8 @@ module tb_dac_loop_frames;
         .map_en(1'b0), .trip_en(1'b0),
         .lut_raddr(lut_raddr), .lut_rdata(lut_rdata),
         .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
-        .v_out(v_out), .in_used(in_used), .idx_used(idx_used), .tripped(tripped)
+        .v_out(v_out), .in_used(in_used), .idx_used(idx_used), .tripped(tripped),
+        .tlm_stb(tlm_stb)
     );
     dac8551_engine #(.ADDR_W(12)) dac (
         .clk(clk48), .rst(rst48), .start(start), .stop(1'b0),
@@ -66,6 +71,25 @@ module tb_dac_loop_frames;
     integer nvals = 0;
     initial for (i = 0; i < 65536; i = i + 1) seen[i] = 1'b0;
     always @(posedge clk48) if (!seen[v_out]) begin seen[v_out] = 1'b1; nvals = nvals + 1; end
+
+    // ---- telemetry contract: change only with tlm_stb, then hold >= TLM_HOLD clk48 ----
+    localparam TLM_HOLD = 8;
+    reg  [32:0] tlm_prev = 33'd0;
+    integer     since_stb = 1000, tlm_bad = 0, nstb = 0;
+    always @(posedge clk48) if (!rst48) begin
+        if ({tripped, in_used, v_out} !== tlm_prev) begin
+            if (!tlm_stb) begin                              // stb is registered with the change
+                tlm_bad = tlm_bad + 1;
+                if (tlm_bad <= 3) $display("FAIL telemetry changed without tlm_stb (%09h -> %09h)",
+                                           tlm_prev, {tripped, in_used, v_out});
+            end else if (since_stb < TLM_HOLD) begin
+                tlm_bad = tlm_bad + 1;
+                if (tlm_bad <= 3) $display("FAIL telemetry held only %0d clk48 (want >= %0d)", since_stb, TLM_HOLD);
+            end
+        end
+        if (tlm_stb) begin since_stb = 1; nstb = nstb + 1; end else since_stb = since_stb + 1;
+        tlm_prev = {tripped, in_used, v_out};
+    end
 
     // ---- frame decoder (as tb_dac8551): DIN taken on SCLK falling with SYNC low ----
     integer errors = 0, bits = 0, nfr = 0, torn = 0;
@@ -96,12 +120,19 @@ module tb_dac_loop_frames;
         if (torn != 0) begin
             $display("FAIL: %0d of %0d DAC frames were torn", torn, nfr); errors = errors + 1;
         end
+        if (tlm_bad != 0) begin
+            $display("FAIL: %0d telemetry contract violations", tlm_bad); errors = errors + 1;
+        end
+        if (nstb < 1000) begin
+            $display("FAIL: only %0d telemetry strobes", nstb); errors = errors + 1;
+        end
         if (nfr < 500 || nvals < 1000) begin
             $display("FAIL: only %0d frames / %0d distinct v values: the loop did not exercise the DAC", nfr, nvals);
             errors = errors + 1;
         end
         if (errors == 0)
-            $display("PASS tb_dac_loop_frames: %0d DAC frames over %0d distinct v values, none torn", nfr, nvals);
+            $display("PASS tb_dac_loop_frames: %0d DAC frames over %0d distinct v values, none torn; %0d telemetry snapshots, each held >= %0d clk48",
+                     nfr, nvals, nstb, TLM_HOLD);
         $finish;
     end
 endmodule

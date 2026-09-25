@@ -76,6 +76,43 @@ module tb_top_capture;
         end
     endtask
 
+    // opcode + a 2-byte LE reply (DAC_PROBE 0x16 / DAC_LOOP_IN_PROBE 0x1B)
+    task cmd2(input [7:0] op, output [15:0] reply);
+        reg [7:0] junk, lo, hi;
+        begin
+            csn = 1'b0; #(SPI_HALF);
+            spi_byte(op, junk);
+            spi_byte(8'h00, lo);
+            spi_byte(8'h00, hi);
+            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            reply = {hi, lo};
+        end
+    endtask
+    // OP_DAC_LOOP_INMAP (0x1C): in_zero(2) + in_gain(2) + in_trip(2) + flags (bit0 map, bit1 trip).
+    task cmd_loop_inmap(input [15:0] zero, input [15:0] gain, input [15:0] trip, input [7:0] flags);
+        reg [7:0] junk; begin
+            csn = 1'b0; #(SPI_HALF);
+            spi_byte(8'h1C, junk);
+            spi_byte(zero[7:0], junk); spi_byte(zero[15:8], junk);
+            spi_byte(gain[7:0], junk); spi_byte(gain[15:8], junk);
+            spi_byte(trip[7:0], junk); spi_byte(trip[15:8], junk);
+            spi_byte(flags, junk);
+            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+        end
+    endtask
+    // Loop telemetry through SPI (v39: crossed by cdc_pulse_payload): DAC_PROBE, the input probe,
+    // and STATUS bit 6 (tripped) must all read `want_*`.
+    task check_tlm(input [8*12-1:0] what, input [15:0] want_v, input [15:0] want_in, input want_trip);
+        reg [15:0] pv, pin; reg [7:0] st; begin
+            cmd2(8'h16, pv); cmd2(8'h1B, pin); cmd1(8'h03, st);
+            if (pv !== want_v || pin !== want_in || st[6] !== want_trip) begin
+                $display("FAIL %0s telemetry: DAC_PROBE %04h (want %04h) IN_PROBE %04h (want %04h) STATUS.trip %b (want %b)",
+                         what, pv, want_v, pin, want_in, st[6], want_trip);
+                errors = errors + 1;
+            end else $display("  [loop]   %0s telemetry: v %04h, in %04h, tripped %b", what, pv, pin, st[6]);
+        end
+    endtask
+
     // opcode + N argument bytes, no reply
     task cmd_args1(input [7:0] op, input [7:0] a0);
         reg [7:0] junk; begin
@@ -646,6 +683,7 @@ module tb_top_capture;
         cmd_loop_src(8'd1, 16'd0, 16'd0);             // fixed input 0, no sweep
         cmd_start_loop(16'h7FFF, 16'h1234, 16'h1234, 16'd16);
         record_dac_frames;
+        check_tlm("armed", 16'h1234, 16'h0000, 1'b0);
         cmd_op0(8'h12); #1000;
         check_dac_frames("loop arm", 0, 16'h1234);
         cmd_start_loop(16'h7FFF, 16'h5678, 16'h5678, 16'd16);
@@ -663,7 +701,15 @@ module tb_top_capture;
         cmd_start_loop(16'h7FFF, 16'h0000, 16'hFFFF, 16'd16);   // open window: v -> curve[0]
         #20000;
         check_live("live src", 16'h4000, 16'h4003, 1, 16'd3 << 5, 16'd0);   // -> curve[3]
+        check_tlm("live src", 16'h4003, 16'd3 << 5, 1'b0);
+        // Over-range TRIP through the input map: gain ~1.0 puts input 96 at index 95, past a trip
+        // at index 2, so the loop latches tripped and parks v at vmin (0).  Disarm must clear it.
+        cmd_loop_inmap(16'd0, 16'h7FFF, 16'd2, 8'h03);
+        #20000;
+        check_tlm("tripped", 16'h0000, 16'd3 << 5, 1'b1);
         cmd_op0(8'h12); #1000;
+        check_tlm("disarmed", 16'h0000, 16'h0000, 1'b0);
+        cmd_loop_inmap(16'd0, 16'd0, 16'd0, 8'h00);   // back to the power-on map
 
         // ==== CAPTURE TRIGGER (v35, OP_SET_TRIGGER 0x33 / OP_TRIGGER_STATUS 0x34) ====
         // Every relationship is measured on an UNTRIGGERED run first (from the arm) and must hold

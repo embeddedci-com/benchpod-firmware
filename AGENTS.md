@@ -40,7 +40,7 @@ The capture datapath's single 24 MHz `clk` closes with wide margin (~33-35 MHz v
 seed**. Two things are genuinely seed-sensitive and are handled by the Makefile, not
 by you re-rolling seeds by hand:
 
-- **Placement.** The loop image runs at ~82% LC (4379 at v38; 4351 at v37; 4442 at
+- **Placement.** The loop image runs at ~83% LC (4405 at v39; 4379 at v38; 4351 at v37; 4442 at
   v35/v36). At the previous ~87%, roughly half of all seeds failed to place
   at all, and it will get there again if features are added without reclaiming LC.
   Each PnR therefore tries the pinned seed first and falls back down
