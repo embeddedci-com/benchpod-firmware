@@ -1,0 +1,46 @@
+# Sweep iCE40 PnR seeds in CI's toolchain (OSS CAD Suite Linux, the same pin as test.yml).
+# CI synthesizes and places differently from a local Homebrew build, so a seed pinned from a local
+# sweep can fail CI's strict PnR gate (ICE40_PNR_STRICT).  After a gateware change, run this on the
+# branch and pin seeds that are good in both toolchains (ice40/Makefile, SEED_LOOP / SEED_DEEP):
+#
+#   gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=32
+name: iCE40 seed sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      first:
+        description: First seed
+        default: '1'
+      last:
+        description: Last seed
+        default: '32'
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [loop, deep]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: '2026-05-13'   # keep in step with test.yml
+      - name: Synthesize
+        run: make -C ice40 bench_pod_fpga_vbench_pod_${{ matrix.image }}.json
+      - name: Sweep
+        run: |
+          sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
+            "${{ inputs.first }}" "${{ inputs.last }}" | tee sweep.txt
+          { echo '### ${{ matrix.image }}'; echo '```'; cat sweep.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sweep-${{ matrix.image }}
+          path: |
+            sweep.txt
+            ice40/bench_pod_fpga_vbench_pod_${{ matrix.image }}.json

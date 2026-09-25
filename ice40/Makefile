@@ -225,7 +225,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -401,6 +401,14 @@ multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 # The two runtime images the firmware embeds (stm32h563/Makefile: image 0 = loop, 1 = deep) —
 # what pods actually run and what a release must build.  `make` (all) builds only one image.
 images: $(OUT)_loop.bin $(OUT)_deep.bin
+
+# Sweep PnR seeds for one image on its current netlist: make seed-sweep IMAGE=deep [SWEEP="1 32"].
+# Pin the seed with the best clk48 margin that is also good in CI's toolchain (the
+# ice40-seed-sweep workflow runs this same script there).
+IMAGE ?= loop
+SWEEP ?= 1 24
+seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
+	sh synth/seed_sweep.sh $(OUT)_$(IMAGE).json $(SWEEP)
 
 # ---- hardware-verified images for firmware releases (tools/ice40_release.py) ----
 # The release job embeds ice40/release/, NOT a fresh CI build: CI's toolchain places the same
