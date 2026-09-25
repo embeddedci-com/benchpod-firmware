@@ -156,12 +156,12 @@ module engine_block #(
     wire [15:0] step_steps, step_delay;   // step_busy is an output port
     wire [3:0]  step_la_ch;    wire step_la_val;
     wire        swd_arm_stb, swd_disarm_stb;
-    wire [3:0]  swd_clk_ch_arg, swd_dio_ch_arg, swd_nrst_ch_arg;
-    wire        swd_nrst_present_arg, swd_feed_begin, swd_feed_stb;
+    wire [3:0]  swd_clk_ch_arg, swd_dio_ch_arg;
+    wire        swd_feed_begin, swd_feed_stb;
     wire [7:0]  swd_feed_byte;  wire [8:0] swd_rd_addr;  wire [7:0] swd_rd_data;
     wire [15:0] swd_reply_count;          // swd_armed is an output port
-    wire [3:0]  swd_clk_ch, swd_dio_ch, swd_nrst_ch;
-    wire        swd_clk_val, swd_dio_val, swd_dio_oe, swd_nrst_val, swd_nrst_oe, swd_nrst_present;
+    wire [3:0]  swd_clk_ch, swd_dio_ch;
+    wire        swd_clk_val, swd_dio_val, swd_dio_oe;
     wire [N-1:0] la_in;
     wire        i2c_cfg_stb, i2c_cfg_enable, i2c_disable_stb;
     wire [6:0]  i2c_cfg_addr7;  wire [3:0] i2c_cfg_sda_ch, i2c_cfg_scl_ch;
@@ -218,8 +218,7 @@ module engine_block #(
         .step_start(step_start), .step_channel(step_channel),
         .step_steps(step_steps), .step_delay(step_delay), .step_busy(step_busy),
         .swd_arm_stb(swd_arm_stb), .swd_clk_ch(swd_clk_ch_arg),
-        .swd_dio_ch(swd_dio_ch_arg), .swd_nrst_ch(swd_nrst_ch_arg),
-        .swd_nrst_present(swd_nrst_present_arg), .swd_disarm_stb(swd_disarm_stb),
+        .swd_dio_ch(swd_dio_ch_arg), .swd_disarm_stb(swd_disarm_stb),
         .swd_feed_begin(swd_feed_begin), .swd_feed_stb(swd_feed_stb), .swd_feed_byte(swd_feed_byte),
         .swd_rd_addr(swd_rd_addr), .swd_rd_data(swd_rd_data),
         .swd_armed(swd_armed), .swd_reply_count(swd_reply_count),
@@ -297,13 +296,12 @@ module engine_block #(
     swd_engine #(.REPLY_AW(9)) swd_i (
         .clk(clk), .rst(rst),
         .arm_stb(swd_arm_stb), .arm_clk_ch(swd_clk_ch_arg), .arm_dio_ch(swd_dio_ch_arg),
-        .arm_nrst_ch(swd_nrst_ch_arg), .arm_nrst_present(swd_nrst_present_arg), .disarm_stb(swd_disarm_stb),
+        .disarm_stb(swd_disarm_stb),
         .feed_begin(swd_feed_begin), .feed_stb(swd_feed_stb), .feed_byte(swd_feed_byte),
         .dio_in(la_in[swd_dio_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
         .reply_count(swd_reply_count), .armed(swd_armed),
         .clk_ch(swd_clk_ch), .clk_val(swd_clk_val),
-        .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
-        .nrst_present(swd_nrst_present), .nrst_ch(swd_nrst_ch), .nrst_val(swd_nrst_val), .nrst_oe(swd_nrst_oe)
+        .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe)
     );
 
     // ---- LA GPIO bank: arbitration of all the engine drivers onto the pads,
@@ -317,8 +315,6 @@ module engine_block #(
         .swd_active(swd_armed),
         .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val),
         .swd_dio_ch(swd_dio_ch), .swd_dio_val(swd_dio_val), .swd_dio_oe(swd_dio_oe),
-        .swd_nrst_present(swd_nrst_present), .swd_nrst_ch(swd_nrst_ch),
-        .swd_nrst_val(swd_nrst_val), .swd_nrst_oe(swd_nrst_oe),
         .la(la), .la_in(la_in)
     );
 

@@ -274,9 +274,13 @@ $(OUT).bin: $(OUT).asc
 # placement.  Swept 1..16: ALL 16 still place and close; seed 9 drops to clk48 52.73 MHz and the
 # best is 13 at 56.44 MHz (clk 32.86), then 1 (55.94) and 6 (55.04).  Re-pinned SEED_LOOP 9 -> 13.
 # RE-VERIFY deep DAC replay + a capture on HW after this seed change (see AGENTS.md).
-SEED_LOOP ?= 13
-# Ordered by the v35 sweep's clk48 margin (every seed places; the tail is below MIN_CLK48_MHZ).
-SEED_LOOP_FALLBACK ?= 1 6 5 8 9 10 16 12 7 2 15 14 11 3 4
+# v37 LC PASS (4442 -> 4351 LC, 84% -> 82%; clk-domain only, see src/top_v2.v).  Swept 1..16 on
+# the final v37 netlist: all place, 14/16 close @48 (16 and 5 miss).  Best is 14 at clk48
+# 57.05 MHz (clk 30.64), then 9 (53.68) and 1 (53.53).  Re-pinned SEED_LOOP 13 -> 14.  The loop's
+# binding clk48 path is still dac_loop's clamp, which this pass left alone.
+SEED_LOOP ?= 14
+# Ordered by the v37 sweep's clk48 margin (every seed places; the tail misses 48 MHz).
+SEED_LOOP_FALLBACK ?= 9 1 7 11 8 10 3 13 6 2 4 12 15 16 5
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -313,11 +317,17 @@ SEED_LOOP_FALLBACK ?= 1 6 5 8 9 10 16 12 7 2 15 14 11 3 4
 # 12->14 re-rolled placement and seed 13 now MISSES 48 MHz (47.48).  Swept 1..16: only 9/16 close
 # (v35: 13/16); 14 is best at clk48 51.13 MHz (clk 34.05), then 5 (49.36) and 8 (49.35).
 # Re-pinned SEED_DEEP 13 -> 14 — RE-VERIFY deep replay on hardware (TestHW_V2_DeepReplay).
-SEED_DEEP ?= 14
-# Ordered by the v36 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
+# v37 LC PASS (4187 -> 4088 LC, 79% -> 77%; no clk48 logic changed): the re-rolled placement
+# is WORSE for clk48 here.  Swept 1..40 on the final v37 netlist: all place, only 18/40 close @48
+# and only seed 12 reaches MIN_CLK48_MHZ (50.07 MHz, clk 33.65), then 18 (49.80) and 11 (49.49).
+# v36 was 9/16 closing, best 51.13.  Re-pinned SEED_DEEP 14 -> 12 — RE-VERIFY deep replay on
+# hardware.  The deep image's binding clk48 path is dac_psram_reader's FIFO read pointer; that,
+# not more seeds, is the next thing to fix here.
+SEED_DEEP ?= 12
+# Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 5 8 2 3 7 12 4 15 10 13 11 1 9 16 6
+SEED_DEEP_FALLBACK ?= 18 11 4 38 14 3 19 23 28 34 6
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell

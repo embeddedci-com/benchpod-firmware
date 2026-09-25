@@ -4,7 +4,9 @@
 // Ties tx_out → rx_in (external loopback), pushes bytes into the TX FIFO,
 // lets the engine serialise + deserialise them, then pops the RX FIFO and
 // checks the bytes round-trip.  Also checks rx_avail tracking and the
-// overflow flag.
+// overflow flag, and the EXACT bit period on the wire (a 0x55 frame toggles every bit,
+// so each of its 9 in-frame edges must be exactly div clocks apart), re-armed with an
+// odd divider to cover the half-bit RX start wait.
 //
 // Run:  make -C ice40 uarttest      (needs iverilog/vvp)
 // ============================================================================
@@ -51,6 +53,26 @@ module tb_uart_engine;
     );
 
     integer errors = 0;
+
+    // ---- bit-period monitor: armed per 0x55 frame by the test (chk_div = expected clks) ----
+    integer cyc = 0, last_edge = 0, nb = 0, chk_div = 0, edges_ok = 0;
+    reg     tx_prev = 1'b1;
+    always @(posedge clk) begin
+        cyc <= cyc + 1;
+        tx_prev <= tx_out;
+        if (chk_div != 0 && tx_out !== tx_prev) begin
+            if (nb == 0) begin
+                if (tx_prev && !tx_out) begin nb <= 1; last_edge <= cyc; end   // start-bit fall
+            end else begin
+                if (cyc - last_edge != chk_div) begin
+                    $display("FAIL: bit %0d lasted %0d clks, want %0d", nb - 1, cyc - last_edge, chk_div);
+                    errors = errors + 1;
+                end else edges_ok <= edges_ok + 1;
+                last_edge <= cyc;
+                nb <= (nb == 9) ? 0 : nb + 1;                                  // 9th edge = stop rise
+            end
+        end
+    end
 
     task tick(input integer n); begin repeat (n) @(posedge clk); end endtask
 
@@ -106,6 +128,24 @@ module tb_uart_engine;
         pop(b1); check_eq(b1, 8'hA3, "rx[1]");
         pop(b2); check_eq(b2, 8'h00, "rx[2]");
         check_eq(rx_avail[7:0], 8'd0, "rx_avail drained");
+
+        // ---- Test 1b: exact bit period, then re-arm with an ODD divider ----
+        chk_div = 16; edges_ok = 0; push(8'h55); tick(FRAME_CLKS + 100); chk_div = 0;
+        if (edges_ok != 9) begin $display("FAIL: div 16: %0d/9 exact bit edges", edges_ok); errors = errors + 1; end
+        else $display("ok:   div 16: 9/9 bit edges exactly 16 clks");
+        pop(b0); check_eq(b0, 8'h55, "rx @div16");
+        @(posedge clk); cfg_div = 24'd13; cfg_stb = 1'b1;
+        @(posedge clk); cfg_stb = 1'b0;
+        tick(4);
+        chk_div = 13; edges_ok = 0; push(8'h55); tick(FRAME_CLKS + 100); chk_div = 0;
+        if (edges_ok != 9) begin $display("FAIL: div 13: %0d/9 exact bit edges", edges_ok); errors = errors + 1; end
+        else $display("ok:   div 13: 9/9 bit edges exactly 13 clks");
+        push(8'hC6); tick(FRAME_CLKS + 100);
+        pop(b0); check_eq(b0, 8'h55, "rx @div13");
+        pop(b1); check_eq(b1, 8'hC6, "rx @div13 (2nd)");
+        @(posedge clk); cfg_div = 24'd16; cfg_stb = 1'b1;
+        @(posedge clk); cfg_stb = 1'b0;
+        tick(4);
 
         // ---- Test 2: overflow flag when RX FIFO fills (257 bytes) ----
         // push 257 bytes through; FIFO depth is 256, so at least one is dropped.

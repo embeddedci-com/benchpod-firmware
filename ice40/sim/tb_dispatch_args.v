@@ -73,8 +73,8 @@ module tb_dispatch_args;
     wire            gpio_set_stb;                  // GPIO_SET
     wire [3:0]      gpio_set_ch;
     wire [1:0]      gpio_set_mode;
-    wire            swd_arm_stb, swd_nrst_present;  // SWD_ARM
-    wire [3:0]      swd_clk_ch, swd_dio_ch, swd_nrst_ch;
+    wire            swd_arm_stb;                   // SWD_ARM
+    wire [3:0]      swd_clk_ch, swd_dio_ch;
     // STATUS flag inputs (driven to a known pattern to check the response byte)
     reg dac_running = 0, cap_busy = 0, cap_done = 0, step_busy = 0, swd_armed = 0;
     reg cap_overflow = 0;   // STATUS bit5
@@ -108,7 +108,6 @@ module tb_dispatch_args;
         .cap_start(cap_start),
         .gpio_set_stb(gpio_set_stb), .gpio_set_ch(gpio_set_ch), .gpio_set_mode(gpio_set_mode),
         .swd_arm_stb(swd_arm_stb), .swd_clk_ch(swd_clk_ch), .swd_dio_ch(swd_dio_ch),
-        .swd_nrst_ch(swd_nrst_ch), .swd_nrst_present(swd_nrst_present),
         .dac_running(dac_running), .cap_busy(cap_busy), .cap_done(cap_done),
         .cap_overflow(cap_overflow), .loop_tripped(loop_tripped),
         .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol),
@@ -304,13 +303,11 @@ module tb_dispatch_args;
     task test_swd_arm;
         begin
             sarm_n = 0; cs_hi;
-            feed(8'h50); feed(8'h03); feed(8'h04); feed(8'h05);   // clk=3, dio=4, nrst=5
+            feed(8'h50); feed(8'h03); feed(8'h04); feed(8'h05);   // clk=3, dio=4, nreset byte (ignored since v37)
             cs_lo;
             if (sarm_n !== 1)               begin $display("FAIL swd_arm: stb %0d (want 1)", sarm_n); errors=errors+1; end
             if (swd_clk_ch !== 4'h3)        begin $display("FAIL swd_arm: clk=%0d", swd_clk_ch); errors=errors+1; end
             if (swd_dio_ch !== 4'h4)        begin $display("FAIL swd_arm: dio=%0d", swd_dio_ch); errors=errors+1; end
-            if (swd_nrst_ch !== 4'h5)       begin $display("FAIL swd_arm: nrst=%0d", swd_nrst_ch); errors=errors+1; end
-            if (swd_nrst_present !== 1'b1)  begin $display("FAIL swd_arm: nrst_present=%b (want 1, nrst!=0xFF)", swd_nrst_present); errors=errors+1; end
         end
     endtask
 

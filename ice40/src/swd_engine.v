@@ -10,8 +10,9 @@
 //   'd'/'e'/'f'/'g' : swd_write(swclk, swdio) = (0,0)(0,1)(1,0)(1,1)
 //   'O' / 'o'       : SWDIO drive (output) / release (input, turnaround)
 //   'c'             : sample SWDIO → push one ASCII '0'/'1' into the reply buf
-//   's'/'u'         : assert  nRESET (drive low — SRST is active-low)
-//   'r'/'t'         : deassert nRESET (release high-Z, target pulls up)
+//   's'/'u'/'r'/'t' : nRESET — ignored since v37.  nRESET is the pod's own /NRST_CONTROL
+//                     pin on v3 (stm32h563 nrst_ctrl.c), never an LA channel; the firmware
+//                     has always sent SWD_ARM's nreset_ch as 0xFF, so this driver was dead.
 //   'B'/'b'         : blink LED — ignored
 // 'Q' (quit) and '{' (exit-to-JSON) are transport control: the RP handles
 // those and never forwards them here.
@@ -32,8 +33,6 @@ module swd_engine #(
     input  wire        arm_stb,           // 1-cycle
     input  wire [3:0]  arm_clk_ch,
     input  wire [3:0]  arm_dio_ch,
-    input  wire [3:0]  arm_nrst_ch,
-    input  wire        arm_nrst_present,
     input  wire        disarm_stb,        // 1-cycle
 
     // ---- feed (SWD_FEED) ----
@@ -53,22 +52,16 @@ module swd_engine #(
     output wire        clk_val,
     output wire [3:0]  dio_ch,
     output wire        dio_val,
-    output wire        dio_oe,
-    output wire        nrst_present,
-    output wire [3:0]  nrst_ch,
-    output wire        nrst_val,
-    output wire        nrst_oe
+    output wire        dio_oe
 );
 
     // ---- session state ----
     reg        armed_r;
-    reg [3:0]  clk_ch_r, dio_ch_r, nrst_ch_r;
-    reg        nrst_present_r;
+    reg [3:0]  clk_ch_r, dio_ch_r;
 
     reg        swclk_lvl;
     reg        swdio_out;
     reg        swdio_oe;
-    reg        nreset_oe;     // 1 = driving low (asserted), 0 = released (high-Z)
 
     // ---- reply buffer (inferred BRAM) ----
     reg [7:0]  rmem [0:(1<<REPLY_AW)-1];
@@ -91,28 +84,22 @@ module swd_engine #(
             armed_r        <= 1'b0;
             clk_ch_r       <= 4'd0;
             dio_ch_r       <= 4'd1;
-            nrst_ch_r      <= 4'd0;
-            nrst_present_r <= 1'b0;
             swclk_lvl      <= 1'b0;
             swdio_out      <= 1'b0;
             swdio_oe       <= 1'b1;
-            nreset_oe      <= 1'b0;
             wptr           <= {REPLY_AW{1'b0}};
         end else begin
             if (disarm_stb) begin
                 armed_r <= 1'b0;
             end else if (arm_stb) begin
-                // Initial line state: SWCLK low, SWDIO driven low, nRESET
-                // released (deasserted).  Matches the old swd_probe_arm().
+                // Initial line state: SWCLK low, SWDIO driven low.  Matches the
+                // old swd_probe_arm().
                 armed_r        <= 1'b1;
                 clk_ch_r       <= arm_clk_ch;
                 dio_ch_r       <= arm_dio_ch;
-                nrst_ch_r      <= arm_nrst_ch;
-                nrst_present_r <= arm_nrst_present;
                 swclk_lvl      <= 1'b0;
                 swdio_out      <= 1'b0;
                 swdio_oe       <= 1'b1;
-                nreset_oe      <= 1'b0;
                 wptr           <= {REPLY_AW{1'b0}};
             end
 
@@ -130,9 +117,7 @@ module swd_engine #(
                         rmem[wptr] <= dio_s1 ? "1" : "0";   // synchronised SWDIO
                         wptr       <= wptr + 1'b1;
                     end
-                    "s", "u": nreset_oe <= 1'b1;   // assert  (drive low)
-                    "r", "t": nreset_oe <= 1'b0;   // deassert (release)
-                    default: ;                      // 'B'/'b' and others: ignore
+                    default: ;   // 'B'/'b', nRESET 's'/'u'/'r'/'t' and others: ignore
                 endcase
             end
 
@@ -147,9 +132,5 @@ module swd_engine #(
     assign dio_ch       = dio_ch_r;
     assign dio_val      = swdio_out;
     assign dio_oe       = swdio_oe;
-    assign nrst_present = nrst_present_r;
-    assign nrst_ch      = nrst_ch_r;
-    assign nrst_val     = 1'b0;          // assertion is always drive-low
-    assign nrst_oe      = nreset_oe;
 
 endmodule

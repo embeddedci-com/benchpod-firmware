@@ -52,7 +52,7 @@ OPCODES = [
     ("GPIO_STEP",       0x41, "channel + steps(2) + delay_us(2)",               "—"),
     ("SET_LED",         0x42, "mask (bit0=green, bit1=yellow, bit2=red)",       "—"),
     ("GPIO_GET",        0x43, "—",                                              "levels(2) LE — live LA1..LA14 pin levels (bit n = LA n+1) through a 2-flop synchroniser, bits 15:14 = 0 (v2 >=v35)"),
-    ("SWD_ARM",         0x50, "swclk_ch + swdio_ch + nreset_ch(0xFF=none)",     "—"),
+    ("SWD_ARM",         0x50, "swclk_ch + swdio_ch + nreset_ch(ignored, send 0xFF)", "—"),
     ("SWD_FEED",        0x51, "len(2) + N remote_bitbang bytes",                "—"),
     ("SWD_READ",        0x52, "len(2)",                                         "N sample bytes"),
     ("SWD_DISARM",      0x53, "—",                                              "—"),

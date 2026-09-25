@@ -32,7 +32,7 @@
 | 0x41 | GPIO_STEP | channel + steps(2) + delay_us(2) | — |
 | 0x42 | SET_LED | mask (bit0=green, bit1=yellow, bit2=red) | — |
 | 0x43 | GPIO_GET | — | levels(2) LE — live LA1..LA14 pin levels (bit n = LA n+1) through a 2-flop synchroniser, bits 15:14 = 0 (v2 >=v35) |
-| 0x50 | SWD_ARM | swclk_ch + swdio_ch + nreset_ch(0xFF=none) | — |
+| 0x50 | SWD_ARM | swclk_ch + swdio_ch + nreset_ch(ignored, send 0xFF) | — |
 | 0x51 | SWD_FEED | len(2) + N remote_bitbang bytes | — |
 | 0x52 | SWD_READ | len(2) | N sample bytes |
 | 0x53 | SWD_DISARM | — | — |

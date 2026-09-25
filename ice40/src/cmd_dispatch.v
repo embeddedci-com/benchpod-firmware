@@ -30,7 +30,7 @@
 //   0x41 GPIO_STEP       [channel][steps(2)][delay_us(2)]   (16-bit each, LE)
 //   0x43 GPIO_GET        → 2 bytes LE: synchronised LA1..LA14 levels (v35)
 //   -- SWD bit-bang (see swd_engine) --
-//   0x50 SWD_ARM         [swclk_ch][swdio_ch][nreset_ch]   (nreset 0xFF = none)
+//   0x50 SWD_ARM         [swclk_ch][swdio_ch][nreset_ch]   (nreset_ch ignored since v37; send 0xFF)
 //   0x51 SWD_FEED        [len_lo][len_hi][N remote_bitbang bytes]
 //   0x52 SWD_READ        [len_lo][len_hi] → returns N sample bytes ('0'/'1')
 //   0x53 SWD_DISARM
@@ -198,8 +198,6 @@ module cmd_dispatch #(
     output reg               swd_arm_stb,
     output wire [3:0]        swd_clk_ch,
     output wire [3:0]        swd_dio_ch,
-    output wire [3:0]        swd_nrst_ch,
-    output wire              swd_nrst_present,
     output reg               swd_disarm_stb,
     output reg               swd_feed_begin,
     output reg               swd_feed_stb,
@@ -326,15 +324,16 @@ module cmd_dispatch #(
 
     reg [4:0]  state;
     reg [7:0]  current_cmd;
-    reg [15:0] arg_len;     // payload byte count or response byte count
     reg [11:0] arg_count;   // bytes consumed in current payload phase (addressing).
                             // 12-bit: the WIDEST address use is the 4 KB wave/LA buffers
                             // ([ADDR_W-1:0]=12); longer streams (UART up to 64 KB) advance
                             // it too but never read it as an address, and arg_rem (16-bit)
                             // is the sole terminal, so a 12-bit wrap is harmless.
-    reg [15:0] arg_rem;     // bytes still to process (= arg_len - arg_count).
-                            // Down-counter loaded with arg_len at each payload
-                            // entry and decremented in lockstep with arg_count;
+    reg [15:0] arg_rem;     // bytes still to process (= payload length - arg_count).
+                            // Down-counter loaded with the payload length at each
+                            // payload entry and decremented in lockstep with arg_count
+                            // (v37: it also stages the length's low byte in
+                            // S_READ_LEN0, replacing a separate arg_len register);
                             // replaces the per-state `arg_count + 1 >= arg_len`
                             // 16-bit add+magnitude-compare carry chain that used
                             // to cap fmax (see last_byte below).
@@ -358,8 +357,6 @@ module cmd_dispatch #(
     assign step_delay        = {rx_byte, arg_buf[3]};
     assign swd_clk_ch        = arg_buf[0][3:0];
     assign swd_dio_ch        = arg_buf[1][3:0];
-    assign swd_nrst_ch       = rx_byte[3:0];
-    assign swd_nrst_present  = (rx_byte != 8'hFF);
     assign i2c_cfg_addr7     = arg_buf[0][6:0];
     assign i2c_cfg_sda_ch    = arg_buf[1][3:0];
     assign i2c_cfg_scl_ch    = arg_buf[2][3:0];
@@ -423,7 +420,6 @@ module cmd_dispatch #(
         if (rst) begin
             state       <= S_IDLE;
             current_cmd <= 8'h00;
-            arg_len     <= 16'd0;
             arg_count   <= 16'd0;
             arg_rem     <= 16'd0;
             for (i = 0; i < 9; i = i + 1) arg_buf[i] <= 8'h00;
@@ -548,31 +544,31 @@ module cmd_dispatch #(
                             // 4-byte [count(2)][div(2)] payloads share the uniform
                             // S_COLLECT collector (was a dedicated S_ARG0..3 chain).
                             OP_START_DAC,
-                            OP_START_CAPTURE: begin arg_len <= 16'd4; arg_rem <= 16'd4; state <= S_COLLECT; end
+                            OP_START_CAPTURE: begin arg_rem <= 16'd4; state <= S_COLLECT; end
                             // MEASURE now carries SEPARATE dac + adc dividers (6-byte
                             // payload) so firmware can offset the DAC sequencer's per-
                             // sample overhead and run the DAC + ADC at the same real
                             // rate: [count(2)][dac_div(2)][cap_div(2)].
-                            OP_START_MEASURE: begin arg_len <= 16'd6; arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_START_MEASURE: begin arg_rem <= 16'd6; state <= S_COLLECT; end
                             // Control loop arm: 8-byte [k(2)][vmin(2)][vmax(2)][tick_div(2)].
-                            OP_START_DAC_LOOP: begin arg_len <= 16'd8; arg_rem <= 16'd8; state <= S_COLLECT; end
+                            OP_START_DAC_LOOP: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             // Loop INPUT SOURCE (v29): 5-byte [src][fixed(2)][step(2)].  Legal
                             // whether or not the loop is armed — a running loop picks the new
                             // source/value up on its next tick.
-                            OP_DAC_LOOP_SRC: begin arg_len <= 16'd5; arg_rem <= 16'd5; state <= S_COLLECT; end
+                            OP_DAC_LOOP_SRC: begin arg_rem <= 16'd5; state <= S_COLLECT; end
 `ifndef USE_DEEP_REPLAY
                             // Only the control-loop image has a loop to map an input for. The
                             // registers themselves already DCE away in the deep build, but the
                             // DECODE did not, and perturbing this netlist cost the deep image
                             // ~5 MHz of clk48 margin on its pinned seed. Gate it out.
-                            OP_DAC_LOOP_INMAP: begin arg_len <= 16'd7; arg_rem <= 16'd7; state <= S_COLLECT; end
+                            OP_DAC_LOOP_INMAP: begin arg_rem <= 16'd7; state <= S_COLLECT; end
 `endif
                             // DEEP DAC replay: 8-byte payload [base(3)][count(3)][div(2)];
                             // the waveform streams straight from PSRAM (up to 8 MB).
-                            OP_START_DAC_PSRAM: begin arg_len <= 16'd8; arg_rem <= 16'd8; state <= S_COLLECT; end
+                            OP_START_DAC_PSRAM: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             // Capture-tied DAC auto-stop threshold: 4-byte payload
                             // [cyc_lo][cyc_1][cyc_2][cyc_hi] (24 MHz clk cycles; 0 = disarm).
-                            OP_SET_DAC_STOP_AFTER: begin arg_len <= 16'd4; arg_rem <= 16'd4; state <= S_COLLECT; end
+                            OP_SET_DAC_STOP_AFTER: begin arg_rem <= 16'd4; state <= S_COLLECT; end
                             // ADC_PROBE: latch the live sample and shift out its 2
                             // bytes (LE) with NO PSRAM/CDC/orchestrator in the path.
                             OP_ADC_PROBE: begin
@@ -609,26 +605,26 @@ module cmd_dispatch #(
                                 state   <= S_DONE;
                             end
                             // Capture trigger (v35): [channel][mode][flags(reserved)].
-                            OP_SET_TRIGGER: begin arg_len <= 16'd3; arg_rem <= 16'd3; state <= S_COLLECT; end
+                            OP_SET_TRIGGER: begin arg_rem <= 16'd3; state <= S_COLLECT; end
                             // 10-byte payload: [adc_cnt(3)][adc_div(2)][la_cnt(3)][la_div(2)]
                             // — both counts 24-bit so a single unified capture can span
                             // the multi-MB ADC region AND the multi-MB LA region.
-                            OP_CAPTURE: begin arg_len <= 16'd10; arg_rem <= 16'd10; state <= S_COLLECT; end
+                            OP_CAPTURE: begin arg_rem <= 16'd10; state <= S_COLLECT; end
                             // Runtime PSRAM bases for tri-capture (0x32): 6-byte payload.
-                            OP_SET_CAPTURE_BASES: begin arg_len <= 16'd6; arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_SET_CAPTURE_BASES: begin arg_rem <= 16'd6; state <= S_COLLECT; end
 
                             // ---- LA GPIO bank ----
-                            OP_GPIO_SET:  begin arg_len <= 16'd2; arg_rem <= 16'd2; state <= S_COLLECT; end
-                            OP_SET_LED:   begin arg_len <= 16'd1; arg_rem <= 16'd1; state <= S_COLLECT; end
+                            OP_GPIO_SET:  begin arg_rem <= 16'd2; state <= S_COLLECT; end
+                            OP_SET_LED:   begin arg_rem <= 16'd1; state <= S_COLLECT; end
                             // OP_WARMBOOT (0x17) removed in v24 — SB_WARMBOOT is HW-dead on this
                             // board (config-SPI = shared PSRAM bus).  An incoming 0x17 now falls
                             // through to `default: state <= S_DONE` and is safely ignored.
-                            OP_CAPTURE_TEST: begin arg_len <= 16'd1; arg_rem <= 16'd1; state <= S_COLLECT; end
-                            OP_PSRAM_CS:     begin arg_len <= 16'd1; arg_rem <= 16'd1; state <= S_COLLECT; end
-                            OP_GPIO_STEP: begin arg_len <= 16'd5; arg_rem <= 16'd5; state <= S_COLLECT; end
+                            OP_CAPTURE_TEST: begin arg_rem <= 16'd1; state <= S_COLLECT; end
+                            OP_PSRAM_CS:     begin arg_rem <= 16'd1; state <= S_COLLECT; end
+                            OP_GPIO_STEP: begin arg_rem <= 16'd5; state <= S_COLLECT; end
 
                             // ---- SWD ----
-                            OP_SWD_ARM:    begin arg_len <= 16'd3; arg_rem <= 16'd3; state <= S_COLLECT; end
+                            OP_SWD_ARM:    begin arg_rem <= 16'd3; state <= S_COLLECT; end
                             OP_SWD_FEED:   begin swd_feed_begin <= 1'b1; state <= S_READ_LEN0; end
                             OP_SWD_READ:   begin
                                 // Preload reply BRAM addr 0 (same 1-cycle
@@ -639,12 +635,11 @@ module cmd_dispatch #(
                             OP_SWD_DISARM: begin swd_disarm_stb <= 1'b1; state <= S_DONE; end
 
                             // ---- emulated I2C sensor ----
-                            OP_I2C_CONFIG:  begin arg_len <= 16'd9; arg_rem <= 16'd9; state <= S_COLLECT; end
+                            OP_I2C_CONFIG:  begin arg_rem <= 16'd9; state <= S_COLLECT; end
                             OP_I2C_DISABLE: begin i2c_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_I2C_LOAD_REGS,
                             OP_I2C_READ_REGS: state <= S_REG_ADDR;
                             OP_I2C_STATUS: begin
-                                arg_len   <= I2C_STATUS_LEN;
                                 arg_rem   <= I2C_STATUS_LEN;
                                 tx_byte   <= i2c_status_byte(3'd0);
                                 state     <= S_I2C_STATUS;
@@ -657,15 +652,14 @@ module cmd_dispatch #(
                             // deep LA capture into PSRAM (v2): 5-byte payload
                             // [cnt_lo][cnt_mid][cnt_hi][div_lo][div_hi] — 24-bit sample
                             // count so a single capture can span the full 8 MB.
-                            OP_LA_CAPTURE: begin arg_len <= 16'd5; arg_rem <= 16'd5; state <= S_COLLECT; end
+                            OP_LA_CAPTURE: begin arg_rem <= 16'd5; state <= S_COLLECT; end
 
                             // ---- UART proxy ----
-                            OP_UART_CONFIG:  begin arg_len <= 16'd6; arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
                             OP_UART_DISABLE: begin uart_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_UART_WRITE,
                             OP_UART_READ:    state <= S_READ_LEN0;
                             OP_UART_STATUS: begin
-                                arg_len         <= UART_STATUS_LEN;
                                 arg_rem         <= UART_STATUS_LEN;
                                 tx_byte         <= uart_status_byte(2'd0);
                                 uart_rx_ovf_clr <= 1'b1;   // status read clears sticky overflow
@@ -677,17 +671,16 @@ module cmd_dispatch #(
                     end
 
                     S_READ_LEN0: begin
-                        arg_len[7:0] <= rx_byte;
+                        arg_rem[7:0] <= rx_byte;   // length low byte (arg_rem is reloaded whole in S_READ_LEN1)
                         state        <= S_READ_LEN1;
                     end
 
                     S_READ_LEN1: begin
-                        arg_len[15:8] <= rx_byte;
                         arg_count     <= 16'd0;
                         // Full 16-bit length is the byte just received (hi) with
                         // the low byte latched in S_READ_LEN0.  Loading arg_rem
                         // here covers every length-prefixed streaming state.
-                        arg_rem       <= {rx_byte, arg_len[7:0]};
+                        arg_rem       <= {rx_byte, arg_rem[7:0]};
                         // Dispatch on the latched command.  Empty-payload reads
                         // (len==0) skip straight to S_DONE.  The read paths preload
                         // their first BRAM/FIFO byte here to hide the 1-cycle read
@@ -698,10 +691,10 @@ module cmd_dispatch #(
                                 state      <= S_LOAD_DATA;
                             end
                             OP_SWD_FEED:
-                                state <= ({rx_byte, arg_len[7:0]} == 16'd0)
+                                state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_SWD_FEED;
                             OP_SWD_READ:
-                                if ({rx_byte, arg_len[7:0]} == 16'd0) state <= S_DONE;
+                                if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     swd_rd_addr <= {REPLY_AW{1'b0}};
                                     tx_byte     <= swd_rd_data;
@@ -710,19 +703,19 @@ module cmd_dispatch #(
                             // reg_base preset in S_REG_ADDR; write/read port addr is
                             // reg_base + arg_count in S_REG_LOAD/S_REG_READ.
                             OP_I2C_LOAD_REGS:
-                                state <= ({rx_byte, arg_len[7:0]} == 16'd0)
+                                state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_REG_LOAD;
                             OP_I2C_READ_REGS:
-                                if ({rx_byte, arg_len[7:0]} == 16'd0) state <= S_DONE;
+                                if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr preset
                                     state   <= S_REG_READ;
                                 end
                             OP_UART_WRITE:
-                                state <= ({rx_byte, arg_len[7:0]} == 16'd0)
+                                state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_UART_WRITE;
                             OP_UART_READ:
-                                if ({rx_byte, arg_len[7:0]} == 16'd0) state <= S_DONE;
+                                if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     // preload head byte + pop so the FIFO advances.
                                     tx_byte    <= uart_rx_rdata;

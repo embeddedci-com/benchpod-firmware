@@ -107,6 +107,9 @@ module uart_engine (
     localparam DIV_W = 18;
     reg [DIV_W-1:0] div;
     wire [DIV_W-1:0] half_div = {1'b0, div[DIV_W-1:1]};
+    // The bit counters reload with `div` (or half_div) and expire at 1, not reload `div - 1`
+    // and expire at 0: the same number of clocks per bit (div..1 == div-1..0), without the
+    // two 18-bit subtractors.  Safe because div >= 2 (clamped below), so half_div >= 1.
 
     // ---- RX 2-flop synchroniser ----
     reg rx_s0, rx_s1;
@@ -172,21 +175,21 @@ module uart_engine (
                 TX_LOAD: begin
                     tx_sr    <= tx_head;    // now-valid head
                     tx_pop   <= 1'b1;       // advance FIFO
-                    tx_cnt   <= div - 18'd1;
+                    tx_cnt   <= div;
                     tx_out   <= 1'b0;        // start bit
                     tx_state <= TX_START;
                 end
                 TX_START: begin
-                    if (tx_cnt == 18'd0) begin
-                        tx_cnt   <= div - 18'd1;
+                    if (tx_cnt == 18'd1) begin
+                        tx_cnt   <= div;
                         tx_out   <= tx_sr[0];   // LSB first
                         tx_bit   <= 3'd0;
                         tx_state <= TX_DATA;
                     end else tx_cnt <= tx_cnt - 18'd1;
                 end
                 TX_DATA: begin
-                    if (tx_cnt == 18'd0) begin
-                        tx_cnt <= div - 18'd1;
+                    if (tx_cnt == 18'd1) begin
+                        tx_cnt <= div;
                         if (tx_bit == 3'd7) begin
                             tx_out   <= 1'b1;   // stop bit
                             tx_state <= TX_STOP;
@@ -198,7 +201,7 @@ module uart_engine (
                     end else tx_cnt <= tx_cnt - 18'd1;
                 end
                 TX_STOP: begin
-                    if (tx_cnt == 18'd0) tx_state <= TX_IDLE;
+                    if (tx_cnt == 18'd1) tx_state <= TX_IDLE;
                     else                 tx_cnt   <= tx_cnt - 18'd1;
                 end
             endcase
@@ -237,29 +240,29 @@ module uart_engine (
             case (rx_state)
                 RX_IDLE: begin
                     if (rx_s1 == 1'b0) begin   // start edge (line went low)
-                        rx_cnt   <= half_div - 18'd1;  // → middle of start bit
+                        rx_cnt   <= half_div;  // → middle of start bit
                         rx_state <= RX_START;
                     end
                 end
                 RX_START: begin
-                    if (rx_cnt == 18'd0) begin
+                    if (rx_cnt == 18'd1) begin
                         if (rx_s1 == 1'b0) begin       // genuine start
-                            rx_cnt   <= div - 18'd1;   // → middle of bit0
+                            rx_cnt   <= div;   // → middle of bit0
                             rx_bit   <= 3'd0;
                             rx_state <= RX_DATA;
                         end else rx_state <= RX_IDLE;   // glitch
                     end else rx_cnt <= rx_cnt - 18'd1;
                 end
                 RX_DATA: begin
-                    if (rx_cnt == 18'd0) begin
+                    if (rx_cnt == 18'd1) begin
                         rx_sr  <= {rx_s1, rx_sr[7:1]};  // LSB first
-                        rx_cnt <= div - 18'd1;
+                        rx_cnt <= div;
                         if (rx_bit == 3'd7) rx_state <= RX_STOP;
                         else                rx_bit   <= rx_bit + 3'd1;
                     end else rx_cnt <= rx_cnt - 18'd1;
                 end
                 RX_STOP: begin
-                    if (rx_cnt == 18'd0) begin
+                    if (rx_cnt == 18'd1) begin
                         // sample point at middle of stop bit; push regardless of
                         // framing (best-effort), flag overflow if FIFO is full.
                         if (rx_fifo_full) rx_overflow <= 1'b1;

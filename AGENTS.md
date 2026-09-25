@@ -40,8 +40,8 @@ The capture datapath's single 24 MHz `clk` closes with wide margin (~33-35 MHz v
 seed**. Two things are genuinely seed-sensitive and are handled by the Makefile, not
 by you re-rolling seeds by hand:
 
-- **Placement.** The loop image runs at ~84% LC (4442 since the v35 capture trigger +
-  GPIO_GET; 4407 at v34). At the previous ~87%, roughly half of all seeds failed to place
+- **Placement.** The loop image runs at ~82% LC (4351 since the v37 LC pass; 4442 at
+  v35/v36). At the previous ~87%, roughly half of all seeds failed to place
   at all, and it will get there again if features are added without reclaiming LC.
   Each PnR therefore tries the pinned seed first and falls back down
   `SEED_FALLBACK` until one both places and closes timing, printing a loud warning

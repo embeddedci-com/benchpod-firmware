@@ -715,7 +715,20 @@ module top (
     SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
         .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 36) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 37) ----
+    // GATEWARE_VERSION 37 = v36 + LC PASS (tier 1 of the 2026-09 LC review; clk-domain only, no
+    // clk48 logic and no clock-domain crossing touched):
+    //   * SWD nRESET on an LA channel removed (swd_engine + its la_bank driver column).  nRESET is
+    //     the pod's own /NRST_CONTROL pin on v3 and the firmware has always sent SWD_ARM's third
+    //     byte as 0xFF; the byte is still accepted and now ignored, so the wire format is unchanged.
+    //   * uart_engine bit counters reload div (half_div) and expire at 1 instead of div-1 and 0:
+    //     the same clocks per bit, without two 18-bit subtractors (tb_uart_engine now checks the
+    //     exact bit period at div 16 and 13).
+    //   * cmd_dispatch: the length low byte is staged in arg_rem; the arg_len register is gone.
+    // Loop 4444 -> 4351 LC (84% -> 82%), deep 4187 -> 4088 (79% -> 77%).  Seeds re-swept on this
+    // netlist: SEED_LOOP 13 -> 14 (clk48 57.05 MHz), SEED_DEEP 14 -> 12 (clk48 50.07 MHz, the only
+    // deep seed of 1..40 at MIN_CLK48_MHZ; see the Makefile).  RE-VERIFY deep replay + a capture
+    // on hardware.
     // GATEWARE_VERSION 36 = v35 + LA13/LA14 READBACK: J1 pins 13/14 (LA_OUT13/14, la[12]/la[13] in
     // the .pcf) were already wired to la_bank (engine_block's la port is N=14 wide, N=14 was already
     // the v2 default) and drivable via GPIO_SET/the stepper/SWD/I2C/UART engines — only the
@@ -973,7 +986,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd36), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd37), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
