@@ -36,10 +36,29 @@ module stepper_engine #(
     localparam [4:0] PRESC_MAX = CLK_MHZ[4:0] - 5'd1;
 
     reg [4:0]  presc;
-    reg [15:0] us_left;
     reg [15:0] delay_lat;
-    reg [15:0] steps_left;
     reg        phase;        // 0 = HIGH half-phase, 1 = LOW half-phase
+
+    // v42: us_left (top, with the free != 0 flag) and steps_left (bottom) are the two halves of
+    // one SB_MAC16 (dsp_counter2) instead of 32 fabric LCs plus a 16-bit zero test and the reload
+    // muxes.  Same loads and steps, on the same edges, as the fabric counters they replace
+    // (tb_stepper checks this engine against the v41 one, sim/stepper_engine_ref.v).  The DSP has
+    // no reset; both counters are loaded when a train starts, before anything reads them.
+    wire [15:0] us_left, steps_left;
+    wire        us_nz;                                   // us_left != 0
+    wire        fresh     = start && !busy && steps != 16'd0;
+    wire        us_tick   = busy && presc == PRESC_MAX;  // one microsecond elapsed
+    wire        half_done = us_tick && !us_nz;           // a half-phase ends this edge
+    wire        last      = steps_left <= 16'd1;
+    dsp_counter2 #(.UP_T(0), .UP_B(0)) cnt_i (
+        .clk(clk),
+        // us_left: the new train's delay, or delay_lat for the next half-phase (not after the last)
+        .load_t(~rst & (fresh | (half_done & ~(phase & last)))),
+        .val_t(fresh ? delay_us : delay_lat),
+        .en_t(~rst & us_tick & us_nz), .qt(us_left), .flag(us_nz),
+        // steps_left: one step done at the end of each LOW half-phase but the last
+        .load_b(~rst & fresh), .val_b(steps),
+        .en_b(~rst & half_done & phase & ~last), .qb(steps_left));
 
     always @(posedge clk) begin
         if (rst) begin
@@ -47,42 +66,36 @@ module stepper_engine #(
             step_channel <= 4'd0;
             step_val     <= 1'b0;
             presc        <= 5'd0;
-            us_left      <= 16'd0;
             delay_lat    <= 16'd0;
-            steps_left   <= 16'd0;
             phase        <= 1'b0;
-        end else if (start && !busy && steps != 16'd0) begin
-            // Latch a fresh train.  delay_lat>=1 guaranteed by firmware clamp.
+        end else if (fresh) begin
+            // Latch a fresh train (us_left and steps_left load in cnt_i).  delay_lat>=1
+            // guaranteed by firmware clamp.
             busy         <= 1'b1;
             step_channel <= channel;
             step_val     <= 1'b1;             // first HIGH half-phase
             phase        <= 1'b0;
             delay_lat    <= delay_us;     // half-phase - 1 (v40 wire encoding)
-            us_left      <= delay_us;
-            steps_left   <= steps;
             presc        <= 5'd0;
         end else if (busy) begin
             // microsecond prescaler
-            if (presc == PRESC_MAX) begin
+            if (us_tick) begin
                 presc <= 5'd0;
-                // one microsecond elapsed
-                if (us_left != 16'd0) begin
-                    us_left <= us_left - 16'd1;
+                // one microsecond elapsed (us_left counts down in cnt_i while it is != 0)
+                if (!half_done) begin
                 end else if (phase == 1'b0) begin
-                    // HIGH half-phase done → go LOW
+                    // HIGH half-phase done → go LOW (us_left reloads delay_lat)
                     step_val <= 1'b0;
                     phase    <= 1'b1;
-                    us_left  <= delay_lat;
                 end else begin
                     // LOW half-phase done → one full step complete
-                    if (steps_left <= 16'd1) begin
+                    if (last) begin
                         busy     <= 1'b0;     // train finished
                         step_val <= 1'b0;
                     end else begin
-                        steps_left <= steps_left - 16'd1;
+                        // (steps_left steps down and us_left reloads in cnt_i)
                         step_val   <= 1'b1;   // next HIGH half-phase
                         phase      <= 1'b0;
-                        us_left    <= delay_lat;
                     end
                 end
             end else begin

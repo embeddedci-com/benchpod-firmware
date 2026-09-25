@@ -88,6 +88,12 @@ module dac8551_engine #(
     reg [ADDR_W:0]   sleft;       // samples left in this loop (= period_samples - sidx);
                                   // down-counter terminal, replaces the per-sample
                                   // `sidx + 1 >= period_samples` add+compare.
+    // `slast` = registered (sleft <= 1), recomputed every clk (v42).  sleft only changes at a
+    // start or a frame end, and the next frame end is >= 51 clk later, so the flag is always
+    // current when the frame end reads it.  Keeps the compare out of the sleft/sidx update cone,
+    // which bound the loop image's clk48 on several seeds.
+    reg              slast;
+    always @(posedge clk) slast <= (sleft <= {{ADDR_W{1'b0}}, 1'b1});
     reg [7:0]        lo;
     reg [23:0]       sh;
     reg [4:0]        bitc;
@@ -132,31 +138,27 @@ module dac8551_engine #(
             //      does — the DAC just holds SYNC high until the next byte arrives). ----
             S_PLO: begin
                 dac_sync<=1'b1; dac_sclk<=1'b0;
-                if (strm_valid) begin lo<=strm_data; strm_pop<=1'b1; st<=S_PLW; end
+                if (strm_valid) begin strm_pop<=1'b1; st<=S_PLW; end
             end
             S_PLW: st<=S_PHI;                      // pop effective; head advances to the high byte
             S_PHI: begin
                 if (strm_valid) begin
-                    sh <= {8'h00, strm_data, lo};  // {ctrl, high, low}
                     strm_pop<=1'b1;
-                    bitc<=5'd0; last<=1'b0; ph<=1'b0; dac_sync<=1'b0; st<=S_SHIFT;
+                    dac_sync<=1'b0; st<=S_SHIFT;
                 end
             end
             S_RDLO: begin                          // BRAM latency: addr now valid
                 wave_addr <= {sidx[ADDR_W-1:0], 1'b0} | {{(ADDR_W-1){1'b0}},1'b1}; // 2*sidx+1
                 st<=S_RDHI;
             end
-            S_RDHI: begin lo <= wave_data; st<=S_LAT; end   // capture low byte
+            S_RDHI: st<=S_LAT;                     // (lo captures the low byte)
             S_LAT: begin
-                sh <= {8'h00, wave_data, lo};      // {ctrl, high, low}
-                bitc<=5'd0; last<=1'b0; ph<=1'b0; dac_sync<=1'b0; st<=S_SHIFT;
+                dac_sync<=1'b0; st<=S_SHIFT;       // (sh loads {ctrl, high, low})
             end
             S_SHIFT: begin
-                ph<=~ph;
                 if (!ph) begin dac_din<=sh[23]; dac_sclk<=1'b1; end
                 else begin
-                    dac_sclk<=1'b0; sh<={sh[22:0],1'b0}; bitc<=bitc+5'd1;
-                    last<=(bitc==5'd22);                  // next bit is the 24th
+                    dac_sclk<=1'b0;                       // (sh/bitc/last step below)
                     if (last) begin                       // == (bitc == 23)
                         // SYNC is NOT raised here: this edge IS the 24th SCLK fall, which the
                         // DAC8551 must see with SYNC still low (t7 >= 0 ns).  Raising both on
@@ -169,7 +171,7 @@ module dac8551_engine #(
                         // sidx/sleft (the reader loops the stream) and every start
                         // reloads them, so gating on psram_mode only put that OR of
                         // two synced flops into this branch's clock-enable cone.
-                        if (sleft <= {{ADDR_W{1'b0}}, 1'b1}) begin
+                        if (slast) begin                     // == (sleft <= 1)
                             sidx  <= 0;
                             sleft <= period_samples;         // reload for the next loop
                         end else begin
@@ -183,5 +185,35 @@ module dac8551_engine #(
             default: st<=S_IDLE;
             endcase
         end
+    end
+
+    // Frame datapath (v42): lo, sh, bitc, last and ph are loaded at S_PLO/S_RDHI and S_PHI/S_LAT
+    // before every frame and only read in S_SHIFT, so they need no reset, stop or start term.  In
+    // the FSM above they sat behind its rst/stop/start/running priority chain, which put all of
+    // that into the clock enable of ~35 flops; the v42 loop image's clk48 then closed below
+    // 48 MHz on most seeds, bound by that fan-out (rst48 -> sh/bitc CEN).  Here each register's
+    // enable is its own state decode.  A stop or restart mid-frame still aborts it (the FSM
+    // leaves S_SHIFT and raises SYNC); whatever these hold then is reloaded before the next one.
+    always @(posedge clk) begin
+        case (st)
+        S_PLO:  if (strm_valid) lo <= strm_data;
+        S_RDHI: lo <= wave_data;                                   // capture low byte
+        S_PHI:  if (strm_valid) begin
+                    sh <= {8'h00, strm_data, lo};                  // {ctrl, high, low}
+                    bitc <= 5'd0; last <= 1'b0; ph <= 1'b0;
+                end
+        S_LAT:  begin
+                    sh <= {8'h00, wave_data, lo};                  // {ctrl, high, low}
+                    bitc <= 5'd0; last <= 1'b0; ph <= 1'b0;
+                end
+        S_SHIFT: begin
+                    ph <= ~ph;
+                    if (ph) begin
+                        sh <= {sh[22:0], 1'b0}; bitc <= bitc + 5'd1;
+                        last <= (bitc == 5'd22);                   // next bit is the 24th
+                    end
+                end
+        default: ;
+        endcase
     end
 endmodule

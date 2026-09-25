@@ -32,9 +32,9 @@ jobs:
         run: yosys --version && nextpnr-ice40 --version
       - name: Run gateware testbenches + protocol check
         # `test` also places both runtime images (multiboot).  ICE40_PNR_STRICT is a repository
-        # variable: unset/0 = a fallback seed or a thin clk48 only WARNS (this runner's toolchain
-        # can place differently from the local one the seeds are pinned on); set it to 1 to make
-        # either one fail the job (ice40/Makefile, PNR_STRICT).
+        # variable (1 since v42): a fallback seed, a thin clk48 or a slow clk -> clk48 path fails
+        # the job (ice40/Makefile, PNR_STRICT).  This runner's toolchain places differently from a
+        # local one, so seeds are pinned from sweeps in both (the ice40-seed-sweep workflow).
         env:
           ICE40_PNR_STRICT: ${{ vars.ICE40_PNR_STRICT || '0' }}
         run: make -C ice40 test PNR_STRICT="$ICE40_PNR_STRICT"

@@ -48,6 +48,7 @@ SRC = src/top_v2.v            \
       src/la_psram_capture.v  \
       src/uart_engine.v       \
       src/dsp_counter.v       \
+      src/dsp_counter2.v      \
       src/psram_pads.v
 DEFINES = -DVERSION_V2
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
@@ -164,8 +165,14 @@ NEXTPNR = nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) \
 # MIN_CLK48_MHZ: nextpnr only fails clk48 below 48.00 MHz, but placements closing at
 #   48.2-48.8 MHz have silently HW-regressed deep DAC replay (the v28/v31 notes), and seeds are
 #   pinned for >= 50.  Checked against the final post-route Fmax.
+# MAX_X48_NS: clocks.py declares clk and clk48 unrelated, so nextpnr does not time the clk -> clk48
+#   paths (the PSRAM writer's and reader's gearboxes into the clk48 serializers).  They must fit in
+#   one clk48 period (20.8 ns) minus how far clk lags clk48 through its divider flop and global
+#   buffer (a few ns).  nextpnr still reports their max delay; hardware-verified v41 placements sit
+#   at 12.1-14.5 ns.  Checked like MIN_CLK48_MHZ (warning; a failure with PNR_STRICT=1).
 PNR_STRICT    ?= 0
 MIN_CLK48_MHZ ?= 50
+MAX_X48_NS    ?= 15
 
 # $(call pnr,<in.json>,<out.asc>,<pinned seed>,<fallback seeds>)
 #
@@ -199,6 +206,13 @@ define pnr
 	      echo "***          Static timing passes, but margin this thin has HW-regressed deep"; \
 	      echo "***          DAC replay before — re-sweep and re-pin the seed."; \
 	      bad="$${bad:+$$bad, }clk48 $$f48 MHz"; \
+	    fi; \
+	    x48=$$(grep -E "Max delay posedge clk +-> posedge clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
+	    echo "nextpnr: $(2): clk -> clk48 (untimed) max delay $${x48:-?} ns (MAX_X48_NS=$(MAX_X48_NS))"; \
+	    if [ -n "$$x48" ] && awk -v x="$$x48" -v m="$(MAX_X48_NS)" 'BEGIN { exit !(x > m) }'; then \
+	      echo "*** WARNING: $(2): the untimed clk -> clk48 paths take $$x48 ns (MAX_X48_NS=$(MAX_X48_NS))."; \
+	      echo "***          They must fit in 20.8 ns minus clk's lag behind clk48; re-sweep the seed."; \
+	      bad="$${bad:+$$bad, }clk->clk48 $$x48 ns"; \
 	    fi; \
 	    if [ -n "$$bad" ] && [ "$(PNR_STRICT)" = "1" ]; then \
 	      rm -f $(2); \
@@ -309,9 +323,19 @@ $(OUT).bin: $(OUT).asc
 # psram_pads retime.  Swept 1..24 on the final netlist: all place, 21/24 close @48, 12 reach
 # MIN_CLK48_MHZ; seed 8 no longer closes.  Best is 23 at clk48 55.69 MHz (clk 32.76).
 # Re-pinned SEED_LOOP 8 -> 23.
-SEED_LOOP ?= 23
-# Ordered by the v41 sweep's clk48 margin.
-SEED_LOOP_FALLBACK ?= 3 1 10 5 18 14 21 20 17 7 11 6 16 22 2 4 9 8 12 24
+# v42 (2026-09-25) STEPPER COUNTERS IN THE LAST DSP + DAC ENGINE CE CONES (3909 -> 3846 LC, 72%).
+# Moving the stepper's counters into a DSP took the loop netlist from 12/24 seeds reaching
+# MIN_CLK48_MHZ to 2/48: the binding path was rst48 -> the clock enables of the DAC engine's shift
+# register, whose ~35 datapath flops sat behind the FSM's rst/stop/start/running priority chain.
+# That margin was fragile, not lost: the same netlist with only the version constant changed
+# reached 15/24.  Fixed in the RTL (dac8551_engine.v: the frame datapath in its own block, the
+# `sleft <= 1` compare registered).  Swept 1..64 in BOTH toolchains (synth/seed_sweep.sh locally,
+# the ice40-seed-sweep workflow for CI's OSS CAD Suite): 61/64 local and 62/64 CI reach
+# MIN_CLK48_MHZ.  Pinned SEED_LOOP 23 -> 52, the best seed in both (clk48 57.47 local / 58.31 CI,
+# clk 33.30, clk -> clk48 10.19 ns), so CI can run with PNR_STRICT=1.
+SEED_LOOP ?= 52
+# Good in both toolchains, ordered by the lower of the two clk48 results (v42 sweeps).
+SEED_LOOP_FALLBACK ?= 25 46 42 55 19 17 6 16 41 43 28 30 48 11 62 47 21 7 59 58
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -370,11 +394,14 @@ SEED_LOOP_FALLBACK ?= 3 1 10 5 18 14 21 20 17 7 11 6 16 22 2 4 9 8 12 24
 # PSRAM outputs so the SCLK DDR pad has no half-cycle path through the mux.  Swept 1..24 on the
 # final netlist (3615 LC, 68%): ALL 24 close @48 and 22/24 reach MIN_CLK48_MHZ (v40: 5/32), best
 # 14 at 55.35 MHz (clk 35.42).  Re-pinned SEED_DEEP 23 -> 14 — RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 14
-# Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
-# a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
-# list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 24 18 6 23 11 21 12 5 20 22 15 1 17 2 7 19 4 10 3 13 8 9 16
+# v42: swept 1..64 in both toolchains on the final netlist (3568 LC, 68%): 62/64 local and 62/64
+# CI reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 14 -> 34, the best seed in both (clk48 55.35 local /
+# 53.73 CI, clk -> clk48 12.76 ns).  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 34
+# Good in both toolchains, ordered by the lower of the two clk48 results (v42 sweeps).  A timing
+# miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
+# the same cross-toolchain reason as SEED_FALLBACK above.
+SEED_DEEP_FALLBACK ?= 33 55 47 39 37 23 64 63 62 60 59 53 51 48 45 43 42 38 36 35
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -552,7 +579,7 @@ arbtest:
 # dsp_counter (an SB_MAC16 accumulator) == the fabric counter it replaces, cycle for cycle (v41).
 dsptest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dsp.vvp \
-	         sim/tb_dsp_counter.v src/dsp_counter.v $(CELLS_SIM)
+	         sim/tb_dsp_counter.v src/dsp_counter.v src/dsp_counter2.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dsp.vvp
 	@rm -f /tmp/$(PROJECT)_dsp.vvp
 
@@ -596,7 +623,7 @@ argtest:
 # Self-checking simulation of the stepper engine pulse-train generator.
 steppertest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_step.vvp \
-	         sim/tb_stepper.v src/stepper_engine.v
+	         sim/tb_stepper.v src/stepper_engine.v sim/stepper_engine_ref.v src/dsp_counter2.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_step.vvp
 	@rm -f /tmp/$(PROJECT)_step.vvp
 

@@ -76,11 +76,21 @@ Gates, so you don't have to read PnR logs to notice:
 
 - `MIN_CLK48_MHZ` (default 50) warns when the routed clk48 Fmax is below it.
   nextpnr itself only fails below 48.00 MHz.
-- `PNR_STRICT=1` turns that warning and a fallback seed into build failures.
-  CI passes it from the `ICE40_PNR_STRICT` repo variable (off until CI's toolchain
-  places the pinned seeds).
-- After any gateware change, sweep seeds for both images (`_loop`, `_deep`) and
-  re-pin for the best clk48 margin.
+- `MAX_X48_NS` (default 15) warns when the clk -> clk48 paths take longer than that.
+  clocks.py declares the two clocks unrelated, so nextpnr does not time these paths (the PSRAM
+  writer's and reader's gearboxes into the clk48 serializers), yet `clk` is clk48 / 2 and they
+  must fit in one clk48 period minus clk's lag through its divider and global buffer. nextpnr
+  still reports their max delay; hardware-verified placements sit at 10-14.5 ns.
+- `PNR_STRICT=1` turns those warnings and a fallback seed into build failures.
+  CI passes it from the `ICE40_PNR_STRICT` repo variable (on since v42).
+- After any gateware change, sweep seeds for both images in BOTH toolchains and pin a seed good
+  in both: `make -C ice40 seed-sweep IMAGE=loop|deep SWEEP="1 64"` locally, and
+  `gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=64` for CI's OSS CAD
+  Suite (local nextpnr on CI's netlist does NOT reproduce CI's results; both tools differ).
+- A seed sweep that suddenly gets much worse after a small change is a structural warning, not
+  bad luck. Find the binding path (`Critical path report` in the nextpnr log) before re-pinning:
+  v42's loop image fell to 2/48 seeds because a reset sat in the clock-enable cone of ~35 DAC
+  datapath flops, and fixing that in the RTL took it to 61/64.
 - Pods run the two images from `make images`, which the release builds. `make`
   alone builds one image, and it now shares the loop seed.
 

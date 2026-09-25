@@ -68,10 +68,10 @@ module top (
     output wire        led_r    // pad 41 (red)
 );
     // ---- clocking (single 24 MHz logic domain) ------------------------------
-    // clk48 (the external oscillator, on the global clock pad) is the primary
-    // clock, but NO functional logic runs on it: it only derives `clk` (÷2) and
-    // clocks the power-on-reset counter.  The whole design runs on the derived
-    // 24 MHz `clk` (the single-clock collapse — docs/adc-capture-cdc-review.md).
+    // clk48 (the external oscillator, on the global clock pad) derives `clk` (÷2)
+    // and clocks the POR counter, the DAC engine, the loop and the PSRAM serializers.
+    // clk lags clk48 by clkdiv + the global buffer; clocks.py leaves the two unrelated,
+    // so no crossing is timed (MAX_X48_NS in the Makefile watches clk -> clk48).
     reg clkdiv = 1'b0;
     always @(posedge clk48) clkdiv <= ~clkdiv;
     wire clk;
@@ -696,7 +696,11 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 41) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 42) ----
+    // GATEWARE_VERSION 42 = v41 + the loop image's last DSP: stepper_engine's us_left/steps_left
+    //   are the two halves of one SB_MAC16 (dsp_counter2, two independent 16-bit counters) and
+    //   the half-phase zero test is its carry-out.  Cycle-identical to v41 (tb_stepper compares
+    //   the two engines).  Loop 3909 -> 3834 LC (8/8 DSPs).  No protocol change.
     // GATEWARE_VERSION 41 = v40 + LC PASS TIER 3 + the deep image's clk48 bottlenecks fixed:
     //   * dsp_counter: the stop-after countdown, the ADC and LA sample countdowns and the PSRAM
     //     writer's two address counters are SB_MAC16 accumulators (the carry-out is their free
@@ -1023,7 +1027,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd41), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd42), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
