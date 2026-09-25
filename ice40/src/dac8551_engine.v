@@ -42,7 +42,7 @@ module dac8551_engine #(
     input  wire              start,
     input  wire              stop,
     input  wire [ADDR_W:0]   period_samples,  // 16-bit samples before looping
-    input  wire [15:0]       divider,
+    input  wire [15:0]       divider,         // v40: the RELOAD, i.e. inter-sample clocks - 1
 
     // 8-bit waveform BRAM read port (shared sample_buf) — used when psram_mode=0
     output reg  [ADDR_W-1:0] wave_addr,
@@ -75,8 +75,14 @@ module dac8551_engine #(
     // fall lands >= DIV_MIN + 3 clk after the 24th SCLK fall.  DAC8551 t9 needs >= 100 ns;
     // divider 2 gave exactly 5 x 20.8 = 104 ns and 0/1 gave less.  DIV_MIN = 3 -> 125 ns.
     localparam [15:0] DIV_MIN        = 16'd3;
-    wire             div_small       = (divider < DIV_MIN);
-    wire [15:0]      div_reload      = div_small ? (DIV_MIN - 16'd1) : (divider - 16'd1);
+    // v40: the firmware sends divider - 1 (the reload), so the 16-bit compare and subtract that
+    // sat in this clk48 cone are gone.  The DIV_MIN floor stays in gateware because it is a
+    // DATASHEET timing guarantee (t9): a reload below DIV_MIN-1 = 2 is raised to 2 with a 14-bit
+    // OR instead of a magnitude compare.
+    wire             div_nz          = |divider[15:2];      // reload >= 4, or ...
+    wire [15:0]      div_reload      = {divider[15:2],
+                                        divider[1] | ~div_nz,                 // 0..3 -> 2 or 3
+                                        divider[0] & (div_nz | divider[1])};
     wire             div_reload_zero = 1'b0;                  // reload >= DIV_MIN-1 >= 2
     reg [ADDR_W:0]   sidx;        // 16-bit-sample index (also the BRAM address)
     reg [ADDR_W:0]   sleft;       // samples left in this loop (= period_samples - sidx);

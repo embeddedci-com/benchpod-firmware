@@ -50,7 +50,8 @@ module la_psram_capture #(
     // so the divider/period logic below is untouched.  Tie 0 for an untriggered producer.
     input  wire              hold,
     input  wire [CNT_W-1:0]  sample_count,   // number of samples (2 bytes each)
-    input  wire [15:0]       divider,        // sample period in clocks, exact (0..2 => 2)
+    input  wire [15:0]       divider,        // v40: sample period in clocks MINUS 2 (the reload;
+                                             // the firmware encodes it, 0 => the 2-clock floor)
 
     // psram_writer feed
     output reg               ps_start,       // 1-cycle: open a PSRAM write at addr 0
@@ -82,7 +83,9 @@ module la_psram_capture #(
     // divider - 1, so every sample took divider + 1 clocks and the real LA rate was
     // d/(d+1) of the 24 MHz / d the firmware reports: -8% at 2 MS/s.)  Same LC cost as
     // the old reload — only the constants changed.
-    wire [15:0] div_reload = (divider > 16'd2) ? (divider - 16'd2) : 16'd0;
+    // v40: the firmware sends the reload itself (period - 2, floored at 0), so no compare and
+    // subtract here.
+    wire [15:0] div_reload = divider;
 
     // high byte: LA channels above bit 7, zero-extended to a byte (9 <= N <= 16).
     wire [7:0] hi_byte = { {(16-N){1'b0}}, latched[N-1:8] };

@@ -30,7 +30,7 @@ module tb_dac_loop_frames;
     wire [ADDR_W-1:0] lut_raddr;
     reg  [7:0]  lut_rdata;
     wire [7:0]  strm_data; wire strm_valid, strm_pop;
-    wire [15:0] v_out, in_used, idx_used;
+    wire [15:0] v_out, in_used;
     wire        tripped, tlm_stb;
     wire [11:0] wave_addr;
     wire        sync, sclk, din, running;
@@ -44,7 +44,7 @@ module tb_dac_loop_frames;
         .map_en(1'b0), .trip_en(1'b0),
         .lut_raddr(lut_raddr), .lut_rdata(lut_rdata),
         .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
-        .v_out(v_out), .in_used(in_used), .idx_used(idx_used), .tripped(tripped),
+        .v_out(v_out), .in_used(in_used), .tripped(tripped),
         .tlm_stb(tlm_stb)
     );
     dac8551_engine #(.ADDR_W(12)) dac (

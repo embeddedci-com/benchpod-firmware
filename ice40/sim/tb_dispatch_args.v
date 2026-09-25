@@ -86,6 +86,12 @@ module tb_dispatch_args;
     reg         trig_wait = 0, trig_fired = 0;
     reg  [13:0] la_levels = 14'h0000;
 
+    wire [23:0] adc_cap_base, dac_psram_base, dac_psram_len;
+    wire        stop_after_stb, loop_arm_stb, loop_src_stb, loop_inmap_stb;
+    wire [31:0] stop_after_cfg;
+    wire [63:0] loop_arm_cfg;
+    wire [33:0] loop_src_cfg;
+    wire [44:0] loop_inmap_cfg;
     cmd_dispatch #(.GATEWARE_VERSION(8'd6), .ADDR_W(ADDR_W)) dut (
         .clk(clk), .rst(rst),
         .rx_byte(rx_byte), .rx_valid(rx_valid), .cs_active(cs_active), .tx_byte(tx_byte),
@@ -112,9 +118,26 @@ module tb_dispatch_args;
         .cap_overflow(cap_overflow), .loop_tripped(loop_tripped),
         .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol),
         .trig_wait(trig_wait), .trig_fired(trig_fired), .la_levels(la_levels),
-        .step_busy(step_busy), .swd_armed(swd_armed)
+        .step_busy(step_busy), .swd_armed(swd_armed),
+        .adc_cap_base(adc_cap_base),
+        .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
+        .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
+        .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
+        .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
+        .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg)
         // remaining engine ports intentionally unconnected (not exercised here)
     );
+    // v40: every multi-byte field sits at a payload-length-dependent slot of the shift-register
+    // collector, so each opcode's fields are checked with a DISTINCT value per byte.
+    // strobe-qualified payloads are only valid in the strobe cycle: capture them there
+    reg  [31:0] got_stop;  reg [63:0] got_arm;  reg [33:0] got_src;  reg [44:0] got_inmap;
+    integer     n_stop = 0, n_arm = 0, n_src = 0, n_inmap = 0;
+    always @(posedge clk) begin
+        if (stop_after_stb) begin got_stop  <= stop_after_cfg; n_stop  = n_stop  + 1; end
+        if (loop_arm_stb)   begin got_arm   <= loop_arm_cfg;   n_arm   = n_arm   + 1; end
+        if (loop_src_stb)   begin got_src   <= loop_src_cfg;   n_src   = n_src   + 1; end
+        if (loop_inmap_stb) begin got_inmap <= loop_inmap_cfg; n_inmap = n_inmap + 1; end
+    end
 
     integer errors = 0;
 
@@ -272,18 +295,62 @@ module tb_dispatch_args;
         end
     endtask
 
-    // collect: OP_LA_CAPTURE (0x69, 5 payload bytes) arms the deep-LA producer with a
-    // 24-bit sample count (so one capture can span the full 8 MB PSRAM).
+    // LA-only capture (v40): OP_CAPTURE with ADC count 0 (OP_LA_CAPTURE 0x69 was retired).  The
+    // 24-bit LA count spans the full 8 MB PSRAM; the ADC divider must NOT move (it paces the
+    // free-running ADC), and a retired 0x69 must be inert.
     task test_la_capture;
-        begin
+        reg [15:0] adc_div0; begin
+            adc_div0 = cap_divider;
             lacap_n = 0; cs_hi;
-            feed(8'h69);   // OP_LA_CAPTURE
-            feed(8'h00); feed(8'h80); feed(8'h3F);   // count = 0x3F8000 (4,161,536 = full LA region)
-            feed(8'h02); feed(8'h00);                // divider = 0x0002 (final byte = rx_byte)
+            feed(8'h69); feed(8'h00); feed(8'h80); feed(8'h3F); feed(8'h02); feed(8'h00);
+            cs_lo;
+            if (lacap_n !== 0) begin $display("FAIL la_capture: retired 0x69 fired the LA arm"); errors=errors+1; end
+            cs_hi;
+            feed(8'h31);                                              // OP_CAPTURE
+            feed(8'h00); feed(8'h00); feed(8'h00); feed(8'h77); feed(8'h00);   // ADC 0 (div ignored)
+            feed(8'h00); feed(8'h80); feed(8'h3F);   // LA count = 0x3F8000 (4,161,536 = full LA region)
+            feed(8'h02); feed(8'h00);                // LA divider = 0x0002 (final byte = rx_byte)
             cs_lo;
             if (lacap_n !== 1)                 begin $display("FAIL la_capture: la arm fired %0d (want 1)", lacap_n); errors=errors+1; end
             if (la_cap_count   !== 24'h3F8000) begin $display("FAIL la_capture: la_count=%h",  la_cap_count);   errors=errors+1; end
             if (la_cap_divider !== 16'h0002)  begin $display("FAIL la_capture: la_div=%h",     la_cap_divider); errors=errors+1; end
+            if (cap_divider !== adc_div0)     begin $display("FAIL la_capture: ADC divider moved %h -> %h", adc_div0, cap_divider); errors=errors+1; end
+            caps_n = 0;
+        end
+    endtask
+
+    // SET_CAPTURE_BASES (6 bytes [la_base(3)][adc_base(3)]) and START_DAC_PSRAM (8 bytes
+    // [base(3)][count(3)][div(2)]): registered decodes.
+    task test_bases_and_psram;
+        begin
+            cs_hi; feed(8'h32); feed(8'h11); feed(8'h12); feed(8'h13); feed(8'h14); feed(8'h15); feed(8'h16); cs_lo;
+            if (adc_cap_base !== 24'h161514) begin $display("FAIL capture_bases: adc_base=%h (want 161514)", adc_cap_base); errors=errors+1; end
+            dac_n = 0;
+            cs_hi; feed(8'h13); feed(8'h21); feed(8'h22); feed(8'h23); feed(8'h24); feed(8'h25); feed(8'h26);
+                   feed(8'h27); feed(8'h28); cs_lo;
+            if (dac_n !== 1)                   begin $display("FAIL dac_psram: start %0d (want 1)", dac_n); errors=errors+1; end
+            if (dac_psram_base !== 24'h232221) begin $display("FAIL dac_psram: base=%h (want 232221)", dac_psram_base); errors=errors+1; end
+            if (dac_psram_len  !== 24'h262524) begin $display("FAIL dac_psram: len=%h (want 262524)", dac_psram_len); errors=errors+1; end
+            if (dac_divider    !== 16'h2827)   begin $display("FAIL dac_psram: div=%h (want 2827)", dac_divider); errors=errors+1; end
+        end
+    endtask
+    // SET_DAC_STOP_AFTER (4) + the three control-loop opcodes (8 / 5 / 7): strobe + payload wires.
+    task test_strobed_payloads;
+        begin
+            cs_hi; feed(8'h14); feed(8'h31); feed(8'h32); feed(8'h33); feed(8'h34); cs_lo;
+            if (n_stop !== 1 || got_stop !== 32'h34333231) begin
+                $display("FAIL stop_after: %0d strobes, payload %h (want 1, 34333231)", n_stop, got_stop); errors=errors+1; end
+            cs_hi; feed(8'h15); feed(8'h41); feed(8'h42); feed(8'h43); feed(8'h44);
+                   feed(8'h45); feed(8'h46); feed(8'h47); feed(8'h48); cs_lo;
+            if (n_arm !== 1 || got_arm !== 64'h4847464544434241) begin
+                $display("FAIL loop_arm: %0d strobes, payload %h", n_arm, got_arm); errors=errors+1; end
+            cs_hi; feed(8'h1A); feed(8'h02); feed(8'h52); feed(8'h53); feed(8'h54); feed(8'h55); cs_lo;
+            if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
+                $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
+            cs_hi; feed(8'h1C); feed(8'h61); feed(8'h62); feed(8'h63); feed(8'h64); feed(8'h65); feed(8'h06);
+                   feed(8'h03); cs_lo;
+            if (n_inmap !== 1 || got_inmap !== {2'b11, 11'h665, 16'h6463, 16'h6261}) begin
+                $display("FAIL loop_inmap: %0d strobes, payload %h", n_inmap, got_inmap); errors=errors+1; end
         end
     endtask
 
@@ -322,10 +389,12 @@ module tb_dispatch_args;
             if (dac_divider !== 16'h0018) begin $display("FAIL start_dac: div=%h", dac_divider); errors=errors+1; end
         end
     endtask
+    // ADC-only capture (v40): OP_CAPTURE with LA count 0 (OP_START_CAPTURE 0x20 was retired).
     task test_start_capture;
         begin
             caps_n = 0; cs_hi;
-            feed(8'h20); feed(8'h00); feed(8'h01); feed(8'h28); feed(8'h00);  // count 0x0100, div 0x0028
+            feed(8'h31); feed(8'h00); feed(8'h01); feed(8'h00); feed(8'h28); feed(8'h00);  // ADC 0x0100 @ 0x0028
+            feed(8'h00); feed(8'h00); feed(8'h00); feed(8'h05); feed(8'h00);               // LA 0
             cs_lo;
             if (caps_n !== 1)              begin $display("FAIL start_cap: start %0d (want 1)", caps_n); errors=errors+1; end
             if (cap_count !== 24'h000100)  begin $display("FAIL start_cap: count=%h", cap_count); errors=errors+1; end
@@ -450,6 +519,8 @@ module tb_dispatch_args;
         test_start_capture;
         test_capture;
         test_la_capture;
+        test_bases_and_psram;
+        test_strobed_payloads;
         test_i2c_config;
         test_uart_config;
 

@@ -33,7 +33,7 @@
 // Read SCLK = clk48 / 4 = 12 MHz (8 clk48 per cell, 2 nibbles), matching the proven v26
 // read margin; the return data is sampled ~41.6 ns after each SCLK rising edge, inside the
 // cell.  Read bandwidth (>=3 MB/s) >> the DAC8551's <=1.8 MB/s drain, so the FIFO never
-// underruns (verified in tb_psram_arbiter / tb_psram_tri_master at representative rates).
+// underruns (verified in tb_psram_arbiter at representative rates).
 // ============================================================================
 module dac_psram_reader #(
     parameter [8:0] CHUNK_BYTES = 9'd16,   // bytes per CS-low burst (tCEM budget)

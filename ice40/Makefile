@@ -223,7 +223,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -285,9 +285,11 @@ $(OUT).bin: $(OUT).asc
 # v39 LOOP TELEMETRY CROSSING (4379 -> 4405 LC, 83%): seed 5 fell to clk48 50.93 MHz.  Swept
 # 1..24: all place and all reach MIN_CLK48_MHZ; best is 8 at 57.87 MHz (clk 30.03), then 24
 # (57.74) and 20 (57.03).  Re-pinned SEED_LOOP 5 -> 8.
+# v40 LC PASS TIER 2 (4405 -> 4197 LC, 83% -> 79%): swept 1..24, all place and close, 23/24 reach
+# MIN_CLK48_MHZ.  Seed 8 stays: it ties the best (56.95 MHz, clk 33.53).
 SEED_LOOP ?= 8
-# Ordered by the v39 sweep's clk48 margin (every seed places and reaches 50 MHz).
-SEED_LOOP_FALLBACK ?= 24 20 2 19 9 15 13 16 11 14 7 10 6 23 18 12 21 22 1 17 3 5 4
+# Ordered by the v40 sweep's clk48 margin (every seed places and closes).
+SEED_LOOP_FALLBACK ?= 6 12 1 19 2 16 10 21 20 13 18 3 17 7 14 11 23 15 5 4 9 22 24
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -337,11 +339,15 @@ SEED_LOOP_FALLBACK ?= 24 20 2 19 9 15 13 16 11 14 7 10 6 23 18 12 21 22 1 17 3 5
 # v39 (only the version constant changed in the deep netlist): swept 1..24, 11/24 close @48 and
 # ONLY seed 3 reaches MIN_CLK48_MHZ (51.13 MHz, clk 32.96).  Kept.  The deep image's clk48 margin
 # is at the mercy of placement; its binding path (dac_psram_reader) is the next thing to fix.
-SEED_DEEP ?= 3
+# v40 LC PASS TIER 2 (4092 -> 3872 LC, 77% -> 73%): seed 3 now MISSES 48 MHz (46.39).  Swept
+# 1..32: all place, 26/32 close @48 (v39: 11/24), 5 reach MIN_CLK48_MHZ, all at exactly
+# 51.13 MHz (a fixed path caps the deep image there); 23 has the best clk (32.23).
+# Re-pinned SEED_DEEP 3 -> 23 — RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 23
 # Ordered by the v37 sweep's clk48 margin.  The deep netlist no longer closes on every seed, but
 # a timing miss makes nextpnr error, so a failing seed in this list is only a wasted attempt; the
 # list exists for the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 15 18 19 22 7 1 16 11 4 24
+SEED_DEEP_FALLBACK ?= 18 13 31 15 14 6 21 25 12 4 8 22 20 28 32 17 10
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -493,15 +499,6 @@ arbtest:
 	$(VVP) /tmp/$(PROJECT)_arb.vvp
 	@rm -f /tmp/$(PROJECT)_arb.vvp
 
-# Self-checking test of the UNIFIED tri-capture master: DAC replay (read) + ADC + LA
-# (write) concurrently through ONE psram_tri_master + one shared pad set (reuses the
-# combined APS6404L model).  Needs cells_sim.v for the SB_IO pads.
-tritest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_tri.vvp \
-	         sim/tb_psram_tri_master.v src/psram_tri_master.v $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_tri.vvp
-	@rm -f /tmp/$(PROJECT)_tri.vvp
-
 # Closed-loop DAC control engine: convergence + clamp + strm + determinism.
 looptest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_loop.vvp \
@@ -516,13 +513,6 @@ loopframetest:
 	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v
 	$(VVP) /tmp/$(PROJECT)_loopframe.vvp
 	@rm -f /tmp/$(PROJECT)_loopframe.vvp
-
-# Subset (DAC-disabled) + region-backstop coverage for the tri-master.
-trimodetest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_trimode.vvp \
-	         sim/tb_psram_tri_modes.v src/psram_tri_master.v $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_trimode.vvp
-	@rm -f /tmp/$(PROJECT)_trimode.vvp
 
 # Self-checking simulation of the deep LA→PSRAM sampler (byte packing + framing).
 lapsramtest:
@@ -581,7 +571,7 @@ topcapturetest:
 	@rm -f /tmp/$(PROJECT)_topcap.vvp
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest tritest trimodetest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

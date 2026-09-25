@@ -7,7 +7,7 @@
 // derivation and power-on reset.  That top-level seam is exactly where the last
 // two field bugs lived (the 0x5555 mis-latch and the config-pin tristate), so this
 // drives a behavioural SPI master (mode 0) and checks the instant-response
-// commands: PING -> 0xA5, VERSION -> 39, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
+// commands: PING -> 0xA5, VERSION -> 40, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
 // GPIO_GET (v35) returning a pattern driven onto the LA pads.
 //
 // It needs the iCE40 primitive sim models (yosys' cells_sim.v), passed on the
@@ -118,7 +118,7 @@ module tb_top_v2;
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd39, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd40, "VERSION");
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");
         cmd1(8'h34, r); check(r, 8'h00, "TRIGGER_STATUS");

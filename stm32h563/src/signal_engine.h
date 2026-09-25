@@ -198,6 +198,12 @@ void fpga_set_dac_stop_after_us(uint32_t us);
    == capture t0, sample-exact and jitter-free. Older gateware ignores the opcode (firmware falls
    back to the old sequential start, which the DAC free-runs at an arbitrary phase). */
 #define DAC_COTRIG_MIN_GW  27u
+/* Gateware >= v40 arms EVERY capture with CMD_CAPTURE (0x31): START_CAPTURE (0x20), LA_CAPTURE
+   (0x69) and START_MEASURE (0x30) were retired from the iCE40 to free logic.  ADC-only and
+   LA-only are CMD_CAPTURE with the other count 0; measure is DAC_ARM_ON_CAPTURE + START_DAC +
+   CMD_CAPTURE (the co-trigger starts the DAC on the capture's t0, the same cycle MEASURE did).
+   Older gateware keeps getting the old opcodes. */
+#define CAPTURE_OPCODE_ONLY_MIN_GW  40u
 
 /* Stage a co-trigger for the NEXT DAC start: after this, the following START_DAC / START_DAC_PSRAM
    latches its params (and, deep, primes its reader FIFO) but HOLDS the engine start until the next

@@ -24,7 +24,8 @@ module stepper_engine #(
     input  wire        start,        // 1-cycle pulse
     input  wire [3:0]  channel,      // LA channel to pulse (0-based)
     input  wire [15:0] steps,        // number of pulses (1..65535)
-    input  wire [15:0] delay_us,     // microseconds per half-phase (1..65535)
+    input  wire [15:0] delay_us,     // v40: microseconds per half-phase MINUS ONE (0..65534);
+                                     // the firmware sends delay - 1, so no subtract here
 
     // outputs to la_bank
     output reg         busy,
@@ -56,8 +57,8 @@ module stepper_engine #(
             step_channel <= channel;
             step_val     <= 1'b1;             // first HIGH half-phase
             phase        <= 1'b0;
-            delay_lat    <= (delay_us == 16'd0) ? 16'd1 : delay_us;
-            us_left      <= ((delay_us == 16'd0) ? 16'd1 : delay_us) - 16'd1;
+            delay_lat    <= delay_us;     // half-phase - 1 (v40 wire encoding)
+            us_left      <= delay_us;
             steps_left   <= steps;
             presc        <= 5'd0;
         end else if (busy) begin
@@ -71,7 +72,7 @@ module stepper_engine #(
                     // HIGH half-phase done → go LOW
                     step_val <= 1'b0;
                     phase    <= 1'b1;
-                    us_left  <= delay_lat - 16'd1;
+                    us_left  <= delay_lat;
                 end else begin
                     // LOW half-phase done → one full step complete
                     if (steps_left <= 16'd1) begin
@@ -81,7 +82,7 @@ module stepper_engine #(
                         steps_left <= steps_left - 16'd1;
                         step_val   <= 1'b1;   // next HIGH half-phase
                         phase      <= 1'b0;
-                        us_left    <= delay_lat - 16'd1;
+                        us_left    <= delay_lat;
                     end
                 end
             end else begin

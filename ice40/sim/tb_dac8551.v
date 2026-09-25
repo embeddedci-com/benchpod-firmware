@@ -92,7 +92,9 @@ module tb_dac8551;
         integer k, want_gap;
         reg [23:0] want;
         begin
-            divider = div; psram_mode = psm; nfr = 0;
+            // v40 wire: the reload, div - 1 (div 0 sends 0).  Reloads 0 and 1 (div 0..2) exercise
+            // the gateware's own DIV_MIN floor, which must still give max(div,3).
+            divider = (div > 0) ? div - 16'd1 : 16'd0; psram_mode = psm; nfr = 0;
             @(negedge clk) start = 1; @(negedge clk) start = 0;
             wait (nfr >= 6);
             wait (dut.st == 3'd0);

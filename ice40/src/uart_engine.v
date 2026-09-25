@@ -126,11 +126,11 @@ module uart_engine (
             if (cfg_stb) begin
                 rx_ch <= cfg_rx_ch;
                 tx_ch <= cfg_tx_ch;
-                // Clamp cfg_div into DIV_W: floor at 2, saturate anything that overflows
-                // 18 bits (>=2^18) to the max period (slowest supported baud).
-                div   <= (cfg_div < 24'd2)      ? {{(DIV_W-2){1'b0}}, 2'd2} :
-                         (|cfg_div[23:DIV_W])   ? {DIV_W{1'b1}} :
-                                                  cfg_div[DIV_W-1:0];
+                // v40: the firmware sends cfg_div already in range (2 .. 2^18-1; it clamps in
+                // fpga_uart_config), so only the low DIV_W bits are kept.  Until v39 this clamped
+                // it here too.  Below 2 the bit timing would be wrong (the counters expire at 1),
+                // but nothing locks up.
+                div   <= cfg_div[DIV_W-1:0];
                 armed <= cfg_enable;
             end
             if (disable_stb) armed <= 1'b0;

@@ -1,8 +1,10 @@
 // tb_adc_mcp33131.v — self-checking testbench for adc_mcp33131.
 // Presents a known 16-bit word on SDO (MSB-first, shifted on the engine's SCLK
 // falling edge) and checks the captured `sample` matches after one conversion,
-// then checks the free-running sample period is EXACTLY `divider` clocks (floored
-// at 60) — the firmware reports the ADC rate as 24 MHz / divider.
+// then checks the free-running sample period is EXACTLY `divider` clocks — the firmware
+// reports the ADC rate as 24 MHz / divider.  v40: the 60-clock floor moved to the firmware
+// (adc_min_divider); below it the engine runs conversions back to back (58 clocks, ~414 kS/s,
+// inside the MCP33131-10's 1 MS/s), so a too-small divider is inexact but never unsafe.
 `timescale 1ns/1ps
 module tb_adc_mcp33131;
     reg clk = 0;
@@ -66,11 +68,11 @@ module tb_adc_mcp33131;
         check_period(16'd100, 100);
         check_period(16'd61,   61);
         check_period(16'd60,   60);   // the floor itself (~400 kS/s)
-        check_period(16'd2,    60);   // below the floor -> floored
+        check_period(16'd2,    58);   // below the firmware floor: back-to-back conversions
         check_period(16'd240, 240);   // 100 kS/s
 
         if (errors == 0)
-            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (floor 60)", PATTERN);
+            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (>= 60; back-to-back 58 below)", PATTERN);
         else
             $display("FAIL tb_adc_mcp33131: %0d error(s)", errors);
         $finish;

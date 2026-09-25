@@ -77,7 +77,8 @@ module engine_block #(
 
     // ---- capture-tied DAC auto-stop threshold (OP_SET_DAC_STOP_AFTER, v2 >= v21) -> top ----
     // 24 MHz clk cycles after a capture's t0 at which the top cuts a running DAC (0 = disarmed).
-    output wire [31:0]  dac_stop_after,
+    output wire         stop_after_stb,   // v40: loads the top's countdown (one-shot)
+    output wire [31:0]  stop_after_cfg,
     // closed-loop DAC control (OP_START_DAC_LOOP 0x15, >=v23)
     output wire         dac_loop_mode,
     // Loop parameters as strobe + payload (v38): top_v2 crosses each into clk48 registers.
@@ -189,7 +190,7 @@ module engine_block #(
         .dac_cotrig_stb(dac_cotrig),
         .dac_period(dac_period), .dac_divider(dac_divider),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
-        .dac_stop_after(dac_stop_after),
+        .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),

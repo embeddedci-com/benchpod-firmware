@@ -80,7 +80,7 @@ module tb_la_psram_capture;
             reset_capture;
             la_in        = word;
             sample_count = cnt;
-            divider      = div;
+            divider      = (div > 2) ? div - 16'd2 : 16'd0;   // v40 wire: period - 2 (the reload)
             // Drive `start` 1ns after the edge so the DUT samples it on exactly
             // one posedge (avoids the same-edge stimulus race that double-counts).
             @(posedge clk); #1 start = 1'b1;
@@ -176,7 +176,7 @@ module tb_la_psram_capture;
         hold_ref = lo_at[0] - start_cyc - 1;
         hold = 1'b1;
         reset_capture;
-        la_in = 14'h269C; sample_count = 16'd6; divider = 16'd5;
+        la_in = 14'h269C; sample_count = 16'd6; divider = 16'd3;   // period 5 (v40 wire: period - 2)
         @(posedge clk); #1 start = 1'b1;
         @(posedge clk); #1 start = 1'b0;
         repeat (40) @(posedge clk);

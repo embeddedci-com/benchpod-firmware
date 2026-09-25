@@ -115,8 +115,9 @@ module top (
     // the capture FSM (below) trips `dac_autostop` when it reaches the threshold, cutting a
     // concurrently-running DAC at a sample-precise point WITHIN the capture window.  The trip is
     // OR'd into the clk48 STOP (below) to mute the DAC8551, and latched to gate the deep-replay
-    // reader off (dac_psram_run) until the next DAC arm.  dac_stop_after==0 disarms.
-    wire [31:0] dac_stop_after;               // threshold in clk cycles (0 = disarmed)
+    // reader off (dac_psram_run) until the next DAC arm.  A threshold of 0 disarms.
+    wire        stop_after_stb;               // SET_DAC_STOP_AFTER: load the countdown
+    wire [31:0] stop_after_cfg;               // ...with this threshold (clk cycles)
     wire        dac_autostop;                 // 1-cycle trip pulse (driven in the capture FSM)
     reg         dac_autostop_lat = 1'b0;      // holds the reader gated off after a trip
 
@@ -196,7 +197,6 @@ module top (
     wire        loop_strm_valid;
     wire [15:0] loop_v;                                  // current DAC output, for telemetry
     wire [15:0] loop_in;                                 // input the last tick used (v29)
-    wire [15:0] loop_idx;                                // curve index it resolved to (v30)
     wire        loop_tripped;                            // latched over-range trip (v30)
     wire        loop_tlm_stb;                            // clk48: loop_v/in/tripped just changed
     // Loop telemetry in the clk domain (v39): DAC_PROBE, DAC_LOOP_IN_PROBE and STATUS bit 6.
@@ -260,14 +260,14 @@ module top (
         .strm_data(loop_strm_data), .strm_valid(loop_strm_valid),
         .strm_pop(dac_loop_mode48 & dac_strm_pop),
         .v_out(loop_v), .in_used(loop_in),
-        .idx_used(loop_idx), .tripped(loop_tripped), .tlm_stb(loop_tlm_stb)
+        .tripped(loop_tripped), .tlm_stb(loop_tlm_stb)
     );
     cdc_pulse_payload #(.W(33)) loop_tlm_cdc (
         .src_clk(clk48), .src_pulse(loop_tlm_stb), .src_data({loop_tripped, loop_in, loop_v}),
         .dst_clk(clk), .dst_pulse(), .dst_data(loop_tlm_clk));
 `else
     assign dac_loop_mode48 = 1'b0;      // deep-replay build: no control loop
-    assign loop_idx = 16'd0; assign loop_tripped = 1'b0;
+    assign loop_tripped = 1'b0;
     assign loop_tlm_stb = 1'b0; assign loop_tlm_clk = 33'd0;
     assign loop_raddr = 12'd0; assign loop_strm_data = 8'd0;
     assign loop_strm_valid = 1'b0; assign loop_v = 16'd0; assign loop_in = 16'd0;
@@ -311,9 +311,7 @@ module top (
     // FIFO kept small (32 B): the gray read-pointer's width sits on the clk48 critical
     // path (rgray -> strm_valid -> DAC strm_pop), and 32 B still dwarfs any reader gap
     // vs the DAC's <=1.81 MB/s drain (recordings replay at <=0.4 MS/s in practice).
-`ifdef USE_TRI_MASTER
-    // (the tri-master below provides the DAC read master)
-`elsif USE_DEEP_REPLAY
+`ifdef USE_DEEP_REPLAY
     dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5)) rdr_i (
         .clk(clk), .rst(deep_rst), .clk48(clk48), .rst48(deep_rst48),
         .run(dac_psram_run), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
@@ -536,10 +534,10 @@ module top (
     wire       ps_idle, ps_sclk_d1, ps_cs;
     wire [3:0] ps_io_o;
     wire       ps_io_oe;
-    wire       ps_sclk_d0_tri;         // tri-master's read-mode SCLK d0 (Path B only; 0 in Path A)
     reg        dual_stop;
-`ifndef USE_TRI_MASTER
-    // ===== Path A: two masters (DAC read + ADC/LA write) + burst arbiter =====
+    // Two PSRAM masters (DAC read + ADC/LA write) + a burst arbiter.  (A single unified
+    // "tri-master" was prototyped as USE_TRI_MASTER and shelved in v40: it came out 260-340
+    // LUTs BIGGER than this pair.  See docs/tri-capture-unified-psram.md for where to find it.)
     psram_dual_writer #(
         .CHUNK_BYTES(9'd16)            // 48 Mnib/s: (2+6+32) nib = 0.83 us CS-low < tCEM; fits the 32 B staging FIFO
     ) ps_i (
@@ -556,7 +554,6 @@ module top (
         .psram_io_o(ps_io_o), .psram_io_oe(ps_io_oe), .psram_cs(ps_cs),
         .psram_sclk_d1(ps_sclk_d1)
     );
-    assign ps_sclk_d0_tri = 1'b0;      // Path A drives read SCLK via rd_sclk (mux below)
 
     // ---- shared-bus arbiter (burst granularity) ----
     // Only needed when the deep-replay reader contends for the bus; in the DEFAULT (closed-
@@ -571,42 +568,6 @@ module top (
 `else
     assign wr_gnt = 1'b1;   // no reader to arbitrate against
     assign rd_gnt = 1'b0;
-`endif
-`else
-    // ===== Path B: ONE unified tri-master (LA+ADC write + DAC read) =====
-    // Drives the same ps_* pad wires the writer used; ties off the reader/arbiter nets
-    // so the existing pad mux (replay=rd_busy=0 -> picks ps_*) and drain controller
-    // (wr_req/wr_busy=0, ps_idle from the tri-master) work unchanged, except the read
-    // SCLK d0 which the tri-master supplies on ps_sclk_d0_tri (see the sclk mux below).
-`ifdef USE_DEEP_REPLAY
-    localparam TRI_HAS_READ = 1;   // deep image: DAC PSRAM read job present
-`else
-    localparam TRI_HAS_READ = 0;   // loop image: capture-only (no deep replay) — compile the read path out
-`endif
-    psram_tri_master #(.WCHUNK(9'd16), .RCHUNK(9'd8), .RWAIT(4'd6), .RD_FIFO_AW(5), .HAS_DAC_READ(TRI_HAS_READ)) tri_i (
-        .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48),
-        .start(arm),
-        .la_base(24'h000000),    .la_len({la_cap_count[22:0], 1'b0}),   // LA always at base 0
-        .adc_base(adc_cap_base), .adc_len({cap_count[22:0], 1'b0}),
-        // loop image: statically no DAC read job — tie dac_run 0 so the DAC region regs
-        // + priming prune (HAS_DAC_READ=0 already drops the FIFO/read FSM).
-        .dac_base(dac_psram_base), .dac_len(psram_len_bytes),
-        .dac_run(TRI_HAS_READ ? dac_psram_run : 1'b0),
-        .adc_data(adc_wr_data), .adc_stb(adc_wr_stb), .adc_full(adc_ring_in_full),
-        .la_data (la_ring_out),  .la_stb (la_ring_out_stb),  .la_full (la_wr_full),
-        .dac_data(rd_strm_data), .dac_valid(rd_strm_valid), .dac_pop(rd_strm_pop),
-        .idle(ps_idle),
-        .psram_io_o(ps_io_o), .psram_io_oe(ps_io_oe), .psram_io_i(rd_io_i),
-        .psram_cs(ps_cs), .psram_sclk_d0(ps_sclk_d0_tri), .psram_sclk_d1(ps_sclk_d1),
-        .active()
-    );
-    // Tie off the Path-A-only reader/arbiter nets so the shared mux/controller degrade
-    // cleanly: replay=rd_busy=0 selects ps_*, and wr_req/wr_busy=0 leaves pipe_active
-    // keyed on ~ps_idle (the tri-master's idle is a clean drained signal).
-    assign rd_busy = 1'b0; assign rd_active = 1'b0;
-    assign rd_io_o = 4'h0; assign rd_io_oe = 1'b0; assign rd_cs = 1'b1; assign rd_sclk = 1'b0;
-    assign rd_req = 1'b0;  assign wr_req = 1'b0;  assign wr_busy = 1'b0;
-    assign rd_gnt = 1'b0;  assign wr_gnt = 1'b0;
 `endif
 
     // ---- unified capture / drain controller ----
@@ -649,8 +610,12 @@ module top (
     end
 
     // ---- capture-tied DAC auto-stop DOWN-counter (24 MHz clk) ----
-    // Loaded at the capture t0 (arm) with the firmware-set threshold (clk cycles), counts DOWN
-    // while the capture is active and trips ONCE when it reaches 1.  A down-counter + compare-to
+    // v40: SET_DAC_STOP_AFTER loads it directly and the END of a capture clears it, so a threshold
+    // applies to the next capture only.  Until v39 cmd_dispatch kept a persistent 32-bit copy that
+    // this counter re-loaded at every arm, so a threshold set for one capture silently re-applied
+    // to every later capture that never asked for one (only two firmware paths set it).  The
+    // firmware sets it right before the arm, and nothing counts before the arm (cap_active = 0).
+    // Counts DOWN while the capture is active and trips ONCE when it reaches 1.  A down-counter + compare-to
     // -1 avoids a separate threshold register and a wide magnitude comparator (LC-lean — the
     // up5k is ~86% full).  cnt==0 means disarmed (firmware writes 0 to disarm), so it never
     // trips; `cap_active` gates it, so a capture that ends before the count expires never trips
@@ -661,8 +626,10 @@ module top (
     always @(posedge clk) begin
         if (rst) begin
             cap_stop_cnt <= 32'd0;
-        end else if (arm) begin
-            cap_stop_cnt <= dac_stop_after;                     // 0 => disarmed
+        end else if (stop_after_stb) begin
+            cap_stop_cnt <= stop_after_cfg;                     // 0 => disarmed
+        end else if (dual_stop) begin
+            cap_stop_cnt <= 32'd0;                              // capture over: one-shot
         end else if (cap_counting && cap_stop_cnt != 32'd0) begin
             cap_stop_cnt <= cap_stop_cnt - 32'd1;               // reaches 1 -> trip below -> 0
         end
@@ -731,7 +698,7 @@ module top (
     // reader supplies a plain clk48-domain SCLK level (rd_sclk); driving BOTH DDR halves
     // with it just re-registers it on clk48 into a clean ~24 MHz read clock.
     // psram_cs_force -> static high for the boot /CE-net self-test.
-    wire        ps_sclk_d0   = psram_cs_force ? 1'b1 : (replay ? rd_sclk : ps_sclk_d0_tri);
+    wire        ps_sclk_d0   = psram_cs_force ? 1'b1 : (replay ? rd_sclk : 1'b0);
     wire        ps_sclk_d1_f = psram_cs_force ? 1'b1 : (replay ? rd_sclk : ps_sclk_d1);
 
     SB_IO #(.PIN_TYPE(6'b100000), .PULLUP(1'b0)) io_sclk_i (
@@ -748,7 +715,20 @@ module top (
     SB_IO #(.PIN_TYPE(6'b101001), .PULLUP(1'b0)) io_d3_i (
         .PACKAGE_PIN(psram_io3),  .OUTPUT_ENABLE(ps_io_oe_f), .D_OUT_0(ps_io_f[3]), .D_IN_0(rd_io_i[3]));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 39) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 40) ----
+    // GATEWARE_VERSION 40 = v39 + LC PASS, TIER 2 (protocol changes, firmware >= this commit):
+    //   * START_CAPTURE 0x20, START_MEASURE 0x30 and LA_CAPTURE 0x69 retired (ignored).  Every
+    //     capture is OP_CAPTURE; `measure` = DAC_ARM_ON_CAPTURE + START_DAC + OP_CAPTURE.  A
+    //     producer with count 0 keeps its divider (the ADC's paces the free-running ADC).
+    //   * S_COLLECT is a shift register: trailing fields share slots, no per-slot write decode.
+    //   * SET_DAC_STOP_AFTER loads the countdown directly and a capture's end clears it (one-
+    //     shot; it used to re-apply a stale threshold to later captures).  -30 FF.
+    //   * Divider clamps and decrements moved to the firmware (la_rate.c, host-tested): LA
+    //     period - 2, DAC divider - 1 (gateware keeps a cheap t9 floor), GPIO_STEP delay - 1,
+    //     no ADC/UART clamps.  The firmware keeps the old encodings for gateware < 40.
+    //   * Cleanup: the shelved USE_TRI_MASTER path and dac_loop's unused idx_used removed.
+    // Loop 4405 -> 4197 LC (83% -> 79%), deep 4092 -> 3872 (77% -> 73%).  SEED_LOOP stays 8
+    // (56.95 MHz), SEED_DEEP 3 -> 23 (51.13 MHz; 26/32 deep seeds close, was 11/24).
     // GATEWARE_VERSION 39 = v38 + LOOP TELEMETRY CROSSING (loop image): DAC_PROBE, the input probe
     // and STATUS bit 6 (tripped) read the clk48 loop through cdc_pulse_payload.  Until v38
     // loop_v/loop_in were copied by plain clk flops off clk48 registers and `tripped` went
@@ -1049,7 +1029,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd39), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd40), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1060,7 +1040,7 @@ module top (
         .dac_cotrig(dac_cotrig),
         .dac_period(dac_period), .dac_divider(dac_divider), .dac_running(dac_running),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
-        .dac_stop_after(dac_stop_after),
+        .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),

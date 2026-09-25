@@ -116,6 +116,22 @@ int main(void) {
     /* every LA plan encodes to a divider the v32 gateware takes as-is */
     CHECK(cap_divider_wire(la_psram_plan(HFOSC, 4096, 2.0e6f).divider, 32) == 12, "2 MS/s -> wire 12 on v32");
 
+    /* ---- v40 reload encodings: the gateware no longer subtracts, so the firmware sends the
+     *      counter reload.  Older gateware still gets the period / divider / delay. ---- */
+    CHECK(la_divider_wire(6, 40) == 4,          "v40: LA period 6 -> wire 4 (period - 2)");
+    CHECK(la_divider_wire(2, 40) == 0,          "v40: LA peak period 2 -> wire 0");
+    CHECK(la_divider_wire(1, 40) == 0 && la_divider_wire(0, 40) == 0, "v40: LA period < 2 -> 0 (the floor)");
+    CHECK(la_divider_wire(70000u, 40) == 0xFFFFu, "v40: LA clamps to 16 bits");
+    CHECK(la_divider_wire(6, 39) == 6,          "v39: LA period 6 -> wire 6 (exact period)");
+    CHECK(la_divider_wire(6, 31) == 5,          "v31: LA period 6 -> wire 5 (old +1 engines)");
+    CHECK(dac_divider_wire(29, 40) == 28,       "v40: DAC divider 29 -> wire 28");
+    CHECK(dac_divider_wire(0, 40) == 0,         "v40: DAC divider 0 -> 0 (gateware floors it)");
+    CHECK(dac_divider_wire(29, 39) == 29,       "v39: DAC divider unchanged");
+    CHECK(dac_divider_wire(70000u, 39) == 0xFFFFu, "v39: DAC clamps to 16 bits");
+    CHECK(step_delay_wire(1, 40) == 0,          "v40: 1 us half-phase -> wire 0");
+    CHECK(step_delay_wire(250, 40) == 249,      "v40: 250 us -> wire 249");
+    CHECK(step_delay_wire(250, 39) == 250,      "v39: delay unchanged");
+
     if (fails == 0) printf("PASS — all la_rate tests\n");
     else            printf("FAIL — %d la_rate test(s)\n", fails);
     return fails ? 1 : 0;

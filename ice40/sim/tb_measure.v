@@ -1,18 +1,15 @@
-// tb_measure.v — self-checking testbench for the cmd_dispatch MEASURE decode.
-// Feeds a START_MEASURE (0x30) 6-byte command with count=0x140 and SEPARATE
-// dac_div=29 / cap_div=80, and checks the dispatcher co-asserts dac_start AND
-// cap_start in the same cycle (phase-locked DAC waveform + ADC->PSRAM capture)
-// with the matching period/count and the two independent dividers — the gateware
-// half of the v2 `measure` path (gateware >= 12).
+// tb_measure.v — self-checking testbench for the cmd_dispatch side of `measure`.
 //
-// Also (gateware >= 31) regression-locks DAC SOURCE SELECTION: dac_psram_mode and
-// dac_loop_mode are LEVEL registers, and until v31 only OP_STOP_DAC cleared them.
-// So OP_START_MEASURE (which cleared neither) and OP_START_DAC (which cleared only
-// dac_loop_mode) kicked the DAC engine with a PREVIOUS source still selected.  In
-// the deep image that leaves the dac_psram_reader requesting the shared quad bus
-// while measure's own capture writer needs it — silent capture corruption; in the
-// loop image the engine starves and the DAC holds a constant level.  A BRAM-
-// waveform start must select the BRAM waveform, so both opcodes must clear both.
+// v40 retired OP_START_MEASURE (0x30).  `measure` is now DAC_ARM_ON_CAPTURE (0x19) +
+// START_DAC (0x11) + OP_CAPTURE (0x31): the co-trigger holds the DAC start until the capture's
+// t0, so the DAC and the ADC still start on the same cycle (tb_top_capture checks that end to
+// end, frames and samples).  This bench checks the dispatcher half:
+//   * a stray 0x30 is inert: no DAC or capture start, no register change;
+//   * the replacement sequence decodes: the co-trigger strobe, START_DAC's period + divider,
+//     OP_CAPTURE's ADC count + divider, with the LA left out (count 0, its divider kept);
+//   * DAC SOURCE SELECTION (gateware >= 31): dac_psram_mode / dac_loop_mode are LEVEL
+//     registers, so a BRAM-waveform start (START_DAC) must clear both, or a `generate` after
+//     a deep `replay` keeps streaming from PSRAM (and contends with a capture for the bus).
 `timescale 1ns/1ps
 module tb_measure;
     reg clk = 0;
@@ -23,10 +20,10 @@ module tb_measure;
     reg        rx_valid = 0;
     reg        cs_active = 0;
 
-    wire        dac_start, dac_stop, cap_start;
+    wire        dac_start, dac_stop, cap_start, la_cap_start, dac_cotrig_stb;
     wire [12:0] dac_period;
-    wire [23:0] cap_count;   // 24-bit: matches cmd_dispatch's deep ADC capture count
-    wire [15:0] dac_divider, cap_divider;
+    wire [23:0] cap_count, la_cap_count;
+    wire [15:0] dac_divider, cap_divider, la_cap_divider;
     wire        dac_psram_mode, dac_loop_mode;
 
     cmd_dispatch #(.GATEWARE_VERSION(8'd6)) dut (
@@ -35,6 +32,8 @@ module tb_measure;
         .dac_start(dac_start), .dac_stop(dac_stop),
         .dac_period(dac_period), .dac_divider(dac_divider),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
+        .la_cap_start(la_cap_start), .la_cap_count(la_cap_count), .la_cap_divider(la_cap_divider),
+        .dac_cotrig_stb(dac_cotrig_stb),
         .dac_psram_mode(dac_psram_mode), .dac_loop_mode(dac_loop_mode)
         // remaining ports intentionally unconnected (not exercised here)
     );
@@ -52,24 +51,41 @@ module tb_measure;
     task cs_lo; begin @(negedge clk); cs_active = 0; @(negedge clk); @(negedge clk); end endtask
 
     integer errors = 0;
-    reg     saw_both = 0;
-    // dac_start & cap_start must be asserted together (same FPGA cycle).
-    always @(posedge clk) if (dac_start && cap_start) saw_both = 1;
+    // strobe counters (each opcode must fire exactly the strobes it owns)
+    integer n_dac = 0, n_cap = 0, n_la = 0, n_cot = 0;
+    always @(posedge clk) begin
+        if (dac_start)      n_dac = n_dac + 1;
+        if (cap_start)      n_cap = n_cap + 1;
+        if (la_cap_start)   n_la  = n_la  + 1;
+        if (dac_cotrig_stb) n_cot = n_cot + 1;
+    end
+    reg [15:0] cap_div0, la_div0;
 
     initial begin
         repeat (4) @(negedge clk); rst = 0;
-        cs_hi;
-        feed(8'h30);   // OP_START_MEASURE
-        feed(8'h40);   // count_lo
-        feed(8'h01);   // count_hi   -> count   = 0x0140 (320)
-        feed(8'h1D);   // dac_div_lo
-        feed(8'h00);   // dac_div_hi -> dac_div = 0x001D (29)
-        feed(8'h50);   // cap_div_lo
-        feed(8'h00);   // cap_div_hi -> cap_div = 0x0050 (80)
-        @(posedge clk); #1;
 
-        if (!saw_both) begin
-            $display("FAIL tb_measure: dac_start & cap_start not co-asserted"); errors = errors + 1; end
+        // ---- a retired OP_START_MEASURE (0x30) is inert ----
+        cap_div0 = cap_divider; la_div0 = la_cap_divider;
+        cs_hi;
+        feed(8'h30); feed(8'h40); feed(8'h01); feed(8'h1D); feed(8'h00); feed(8'h50); feed(8'h00);
+        @(posedge clk); #1;
+        cs_lo;
+        if (n_dac != 0 || n_cap != 0 || n_la != 0 || cap_divider !== cap_div0 || dac_divider !== 16'd2) begin
+            $display("FAIL tb_measure: retired 0x30 acted (dac %0d cap %0d la %0d starts, cap_div %0d, dac_div %0d)",
+                     n_dac, n_cap, n_la, cap_divider, dac_divider);
+            errors = errors + 1; end
+
+        // ---- the v40 `measure` sequence ----
+        cs_hi; feed(8'h19); @(posedge clk); #1; cs_lo;                        // DAC_ARM_ON_CAPTURE
+        cs_hi; feed(8'h11); feed(8'h40); feed(8'h01); feed(8'h1D); feed(8'h00); // START_DAC 320 / 29
+        @(posedge clk); #1; cs_lo;
+        cs_hi; feed(8'h31);                                                   // OP_CAPTURE
+        feed(8'h40); feed(8'h01); feed(8'h00); feed(8'h50); feed(8'h00);       // ADC 320 @ 80
+        feed(8'h00); feed(8'h00); feed(8'h00); feed(8'h09); feed(8'h00);       // LA 0 (div 9 ignored)
+        @(posedge clk); #1;
+        if (n_cot != 1 || n_dac != 1 || n_cap != 1) begin
+            $display("FAIL tb_measure: sequence fired cotrig %0d / dac %0d / cap %0d (want 1 each)", n_cot, n_dac, n_cap);
+            errors = errors + 1; end
         if (dac_period  !== 13'h140) begin
             $display("FAIL tb_measure: dac_period=%h want 140", dac_period);   errors = errors + 1; end
         if (cap_count   !== 24'h000140) begin
@@ -78,29 +94,19 @@ module tb_measure;
             $display("FAIL tb_measure: dac_divider=%0d want 29", dac_divider); errors = errors + 1; end
         if (cap_divider !== 16'd80)  begin
             $display("FAIL tb_measure: cap_divider=%0d want 80", cap_divider); errors = errors + 1; end
+        if (la_cap_count !== 24'd0 || la_cap_divider !== la_div0) begin
+            $display("FAIL tb_measure: LA count %0d / divider %0d (want 0 / unchanged %0d): an LA-less capture moved the LA divider",
+                     la_cap_count, la_cap_divider, la_div0); errors = errors + 1; end
         cs_lo;
 
-        // ---- source-select regression (v31) ----------------------------------
-        // Arm DEEP PSRAM replay (0x13, 8-byte payload) so dac_psram_mode is set,
-        // then MEASURE: the measure must take the DAC back to the BRAM waveform.
-        cs_hi;
-        feed(8'h13); feed(8'h00); feed(8'h00); feed(8'h40);   // base = 0x400000
-        feed(8'h00); feed(8'h10); feed(8'h00);                // len  = 0x001000 samples
-        feed(8'h04); feed(8'h00);                             // div  = 4
+        // ---- an LA-only capture keeps the ADC divider (it paces the free-running ADC) ----
+        cs_hi; feed(8'h31);
+        feed(8'h00); feed(8'h00); feed(8'h00); feed(8'h07); feed(8'h00);       // ADC 0 (div 7 ignored)
+        feed(8'h10); feed(8'h00); feed(8'h00); feed(8'h06); feed(8'h00);       // LA 16 @ 6
         @(posedge clk); #1;
-        if (dac_psram_mode !== 1'b1) begin
-            $display("FAIL tb_measure: START_DAC_PSRAM did not set dac_psram_mode"); errors = errors + 1; end
-        cs_lo;
-
-        cs_hi;
-        feed(8'h30); feed(8'h40); feed(8'h01);
-        feed(8'h1D); feed(8'h00); feed(8'h50); feed(8'h00);   // MEASURE again
-        @(posedge clk); #1;
-        if (dac_psram_mode !== 1'b0) begin
-            $display("FAIL tb_measure: MEASURE left dac_psram_mode SET — the deep reader stays the DAC source and contends with measure's own capture writer for the shared PSRAM bus");
-            errors = errors + 1; end
-        if (dac_loop_mode !== 1'b0) begin
-            $display("FAIL tb_measure: MEASURE left dac_loop_mode SET"); errors = errors + 1; end
+        if (cap_divider !== 16'd80 || la_cap_divider !== 16'd6) begin
+            $display("FAIL tb_measure: LA-only capture: cap_div %0d (want 80 kept), la_div %0d (want 6)",
+                     cap_divider, la_cap_divider); errors = errors + 1; end
         cs_lo;
 
         // Same for a plain BRAM-waveform start (0x11) after a deep replay: this is
@@ -122,8 +128,7 @@ module tb_measure;
         cs_lo;
 
         if (errors == 0)
-            $display("PASS tb_measure: MEASURE co-starts DAC+ADC (period=%0d count=%0d dac_div=%0d cap_div=%0d) and both DAC starts reselect the BRAM source",
-                     dac_period, cap_count, dac_divider, cap_divider);
+            $display("PASS tb_measure: retired 0x30 inert; the co-trigger measure sequence decodes; an absent producer keeps its divider; START_DAC reselects the BRAM source");
         $finish;
     end
 

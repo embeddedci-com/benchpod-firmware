@@ -1,6 +1,15 @@
 # Unified tri-capture: DAC + ADC + LA concurrent on one PSRAM master
 
-Status: **DESIGN** (2026-07-20). Supersedes the two-master + `psram_bus_arbiter`
+Status: **SHELVED** (2026-09-25, gateware v40). The prototype below
+(`ice40/src/psram_tri_master.v` + `sim/tb_psram_tri_master.v` / `tb_psram_tri_modes.v`,
+built with `-DUSE_TRI_MASTER`) was never the shipped path, and measured with yosys 0.65 it
+came out **bigger** than the two-master + `psram_bus_arbiter` pair it meant to replace:
++340 LUTs in the loop image, +260 in the deep image. It was removed from the tree to stop
+its two benches running in every `make test`; the last commit that has it is `a4026b7`
+(`git show a4026b7:ice40/src/psram_tri_master.v`). Reviving it would need a rescope that
+actually saves logic, not just the design below.
+
+Original status: DESIGN (2026-07-20). Supersedes the two-master + `psram_bus_arbiter`
 split (v18) for the concurrency path.
 
 ## Goal

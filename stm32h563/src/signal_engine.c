@@ -453,6 +453,7 @@ static int fpga_load_wave(const uint8_t *data, size_t len) {
 
 /* START_DAC: [CMD][period_lo][period_hi][div_lo][div_hi] */
 static int fpga_start_dac(uint32_t period, uint32_t divider) {
+    divider = dac_divider_wire(divider, s_fpga_version);   /* v40+: the reload, divider - 1 */
     uint8_t args[4] = {
         (uint8_t)(period  & 0xFF), (uint8_t)((period  >> 8) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
@@ -485,6 +486,7 @@ static int fpga_stop_dac(void) {
    waveform must already be staged in PSRAM at `base` and the STM32 must have
    released the shared bus (psram_bus_release) so the iCE40 can read it. */
 static int fpga_start_dac_psram(uint32_t base, uint32_t count, uint32_t divider) {
+    divider = dac_divider_wire(divider, s_fpga_version);   /* v40+: the reload, divider - 1 */
     uint8_t args[8] = {
         (uint8_t)(base    & 0xFF), (uint8_t)((base    >> 8) & 0xFF), (uint8_t)((base    >> 16) & 0xFF),
         (uint8_t)(count   & 0xFF), (uint8_t)((count   >> 8) & 0xFF), (uint8_t)((count   >> 16) & 0xFF),
@@ -520,6 +522,22 @@ static int fpga_start_measure(uint32_t samples, uint32_t dac_div, uint32_t cap_d
     };
     spi_cmd_write(CMD_START_MEASURE, args, sizeof(args));
     return 0;
+}
+
+/* CAPTURE (0x31): [adc_cnt(3)][adc_div(2)][la_cnt(3)][la_div(2)], counts and PERIODS in, the
+   wire encodings for the connected gateware out.  A producer with count 0 is not in the capture
+   (v40+ gateware then also keeps its divider: the ADC one paces the free-running ADC). */
+static void fpga_capture_cmd(uint32_t adc_count, uint32_t adc_period,
+                             uint32_t la_count, uint32_t la_period) {
+    uint16_t adc_wire = cap_divider_wire(adc_period, s_fpga_version);
+    uint16_t la_wire  = la_divider_wire(la_period,   s_fpga_version);
+    uint8_t args[10] = {
+        (uint8_t)adc_count, (uint8_t)(adc_count >> 8), (uint8_t)(adc_count >> 16),
+        (uint8_t)adc_wire,  (uint8_t)(adc_wire  >> 8),
+        (uint8_t)la_count,  (uint8_t)(la_count  >> 8), (uint8_t)(la_count  >> 16),
+        (uint8_t)la_wire,   (uint8_t)(la_wire   >> 8),
+    };
+    spi_cmd_write(CMD_CAPTURE, args, sizeof(args));
 }
 
 /* ---- Diagnostics --------------------------------------------------------- */
@@ -1674,7 +1692,10 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     psram_bus_acquire();
     psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
     psram_bus_release();   /* hand the shared bus to the iCE40 */
-    spi_cmd_write(CMD_START_CAPTURE, args, sizeof(args));
+    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
+        fpga_capture_cmd((uint32_t)samples, divider, 0u, 0u);   /* ADC only: LA count 0 */
+    else
+        spi_cmd_write(CMD_START_CAPTURE, args, sizeof(args));
     cotrig_consume();
     psram_cap_deadline = make_timeout_time_ms(5000);
     float actual = (float)adc_capture_hz() / (float)divider;
@@ -1721,7 +1742,14 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        it can stream the ADC samples into PSRAM. */
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
     psram_bus_release();
-    if (fpga_start_measure((uint32_t)samples, dac_div, cap_div) != 0) {
+    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
+        /* v40: START_MEASURE is gone.  Stage the DAC start on the co-trigger, then arm an
+           ADC-only capture: the DAC starts on the capture's t0, the cycle MEASURE used. */
+        (void)fpga_dac_arm_on_capture();
+        (void)fpga_start_dac(period, dac_div);
+        fpga_capture_cmd((uint32_t)samples, cap_div, 0u, 0u);
+        cotrig_consume();
+    } else if (fpga_start_measure((uint32_t)samples, dac_div, cap_div) != 0) {
         psram_bus_acquire();
         return -1;
     }
@@ -1874,7 +1902,10 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz) {
         (uint8_t)(wire & 0xFF),    (uint8_t)((wire >> 8) & 0xFF),
     };
     psram_bus_release();   /* hand the shared bus to the iCE40 */
-    spi_cmd_write(CMD_LA_CAPTURE, args, sizeof(args));
+    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
+        fpga_capture_cmd(0u, 0u, (uint32_t)samples, divider);   /* LA only: ADC count 0 */
+    else
+        spi_cmd_write(CMD_LA_CAPTURE, args, sizeof(args));
     cotrig_consume();
 
     /* Deadline scales with the capture window (samples * divider / capture clk) so
@@ -2001,18 +2032,10 @@ int fpga_dual_capture_start(uint32_t adc_count, uint16_t adc_div,
     if (adc_count > ADC_CAP_MAX_SAMPLES || la_count > LA_PSRAM_MAX_SAMPLES) return -1;
     /* v16 CMD_CAPTURE payload: adc_cnt(3) + adc_div(2) + la_cnt(3) + la_div(2) — both
        counts 24-bit so a single unified capture spans the multi-MB ADC AND LA regions. */
-    uint16_t adc_wire = cap_divider_wire(adc_div, s_fpga_version);
-    uint16_t la_wire  = cap_divider_wire(la_div,  s_fpga_version);
-    uint8_t args[10] = {
-        (uint8_t)adc_count, (uint8_t)(adc_count >> 8), (uint8_t)(adc_count >> 16),
-        (uint8_t)adc_wire,  (uint8_t)(adc_wire  >> 8),
-        (uint8_t)la_count,  (uint8_t)(la_count  >> 8), (uint8_t)(la_count  >> 16),
-        (uint8_t)la_wire,   (uint8_t)(la_wire   >> 8),
-    };
     psram_bus_acquire();
     if (adc_count) psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
     psram_bus_release();
-    spi_cmd_write(CMD_CAPTURE, args, sizeof(args));
+    fpga_capture_cmd(adc_count, adc_div, la_count, la_div);
     cotrig_consume();
     /* Deadline scales with the (deep) capture window so a multi-second capture is not
        cut short; ADC dominates (slower rate), so budget on max(adc,la) sample*divider. */
@@ -2191,11 +2214,13 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
         return -4;
     if (fpga_la_step_busy()) return -2;
 
-    /* [CMD][channel][steps(2, LE)][delay_us(2, LE)] — 16-bit gateware fields */
+    /* [CMD][channel][steps(2, LE)][delay(2, LE)] — 16-bit gateware fields; v40+ takes the
+       half-phase minus one (step_delay_wire). */
+    uint16_t dwire = step_delay_wire(delay_us, s_fpga_version);
     uint8_t args[5] = {
         (uint8_t)idx,
         (uint8_t)(steps    & 0xFF), (uint8_t)((steps    >> 8) & 0xFF),
-        (uint8_t)(delay_us & 0xFF), (uint8_t)((delay_us >> 8) & 0xFF),
+        (uint8_t)(dwire & 0xFF),    (uint8_t)((dwire >> 8) & 0xFF),
     };
     spi_cmd_write(CMD_GPIO_STEP, args, sizeof(args));
     printf("[la] LA%u step x%lu started (delay %luus)\n",
@@ -2453,10 +2478,11 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
     if (rx < 0 || tx < 0 || rx == tx) return -1;
     if (baud == 0) return -1;
 
-    /* divisor = round(HFOSC / baud), clamped to the 24-bit gateware field. */
+    /* divisor = round(HFOSC / baud), clamped to what the gateware's bit counter holds: 2 ..
+       2^18-1 (~92 baud).  Gateware <= v39 clamped it the same way itself; v40 takes it as sent. */
     uint32_t div = (uint32_t)(((uint64_t)FPGA_HFOSC_HZ + baud / 2) / baud);
-    if (div < 2)         div = 2;
-    if (div > 0xFFFFFFu) div = 0xFFFFFFu;
+    if (div < 2)        div = 2;
+    if (div > 0x3FFFFu) div = 0x3FFFFu;
 
     /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags] */
     uint8_t args[6] = {

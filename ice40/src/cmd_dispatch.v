@@ -91,11 +91,12 @@ module cmd_dispatch #(
     output reg  [23:0]       dac_psram_base,   // byte base in PSRAM
     output reg  [23:0]       dac_psram_len,    // waveform length in SAMPLES (top => *2 bytes)
 
-    // Capture-tied DAC auto-stop threshold (OP_SET_DAC_STOP_AFTER 0x14, v2 >= v21): the number
-    // of 24 MHz clk cycles after a capture's t0 at which the top cuts a concurrently-running
-    // DAC.  0 = disarmed.  Persistent (holds until the next SET) so the top can snapshot it at
-    // the capture arm.
-    output reg  [31:0]       dac_stop_after,
+    // Capture-tied DAC auto-stop (OP_SET_DAC_STOP_AFTER 0x14, v2 >= v21): the number of 24 MHz
+    // clk cycles after the NEXT capture's t0 at which the top cuts a concurrently-running DAC.
+    // 0 = disarmed.  v40: a strobe + payload wires that load the top's countdown directly (it
+    // was a persistent 32-bit copy the top re-loaded at every arm); see top_v2.
+    output reg               stop_after_stb,
+    output wire [31:0]       stop_after_cfg,
 
     // In-fabric DAC control loop (OP_START_DAC_LOOP 0x15, v2 >= v23).  dac_loop_mode is a
     // LEVEL (1 while the loop runs); cleared by STOP_DAC or any normal DAC start.  The curve is
@@ -344,40 +345,42 @@ module cmd_dispatch #(
     // Capture sample counts: top_v2 reads cap_count only with cap_start (producer load, run_adc)
     // and la_cap_count only with la_cap_start (la_psram_capture load, run_la), so they are also
     // decoded straight off the payload of the command that pulsed the strobe.
-    assign cap_count         = (current_cmd == OP_CAPTURE) ? {arg_buf[2], arg_buf[1], arg_buf[0]} : {8'h00, arg_buf[1], arg_buf[0]};
-    assign la_cap_count      = (current_cmd == OP_CAPTURE) ? {arg_buf[7], arg_buf[6], arg_buf[5]} : {arg_buf[2], arg_buf[1], arg_buf[0]};
+    // OP_CAPTURE (0x31) is the only capture arm since v40, so each count has one source.
+    assign cap_count         = {arg_buf[2], arg_buf[1], arg_buf[0]};
+    assign la_cap_count      = {arg_buf[7], arg_buf[6], arg_buf[5]};
     // Strobe-qualified config fields (GPIO_SET / GPIO_STEP / SWD_ARM / I2C_CONFIG / UART_CONFIG)
     // are WIRES straight off the collected payload, not registered copies.  Every consumer
     // (la_bank, stepper_engine, swd_engine, i2c_target, uart_engine) samples them ONLY in the
     // 1-cycle strobe after the last payload byte, when arg_buf[] and rx_byte (held by spi_slave
     // until the next byte completes, >= 16 clk later) still carry this command's bytes.  A
     // registered copy cost 1 LC per bit for ~145 bits.
-    assign gpio_set_ch       = arg_buf[0][3:0];
+    assign gpio_set_ch       = arg_buf[8][3:0];
     assign gpio_set_mode     = rx_byte[1:0];
-    assign step_channel      = arg_buf[0][3:0];
-    assign step_steps        = {arg_buf[2], arg_buf[1]};
-    assign step_delay        = {rx_byte, arg_buf[3]};
-    assign swd_clk_ch        = arg_buf[0][3:0];
-    assign swd_dio_ch        = arg_buf[1][3:0];
-    assign i2c_cfg_addr7     = arg_buf[0][6:0];
-    assign i2c_cfg_sda_ch    = arg_buf[1][3:0];
-    assign i2c_cfg_scl_ch    = arg_buf[2][3:0];
-    assign i2c_cfg_enable    = arg_buf[3][0];
-    assign i2c_cfg_trig_reg  = arg_buf[4];
-    assign i2c_cfg_busy_reg  = arg_buf[5];
-    assign i2c_cfg_busy_mask = arg_buf[6];
-    assign i2c_cfg_conv_us   = {rx_byte, arg_buf[7]};
-    assign uart_cfg_rx_ch    = arg_buf[0][3:0];
-    assign uart_cfg_tx_ch    = arg_buf[1][3:0];
-    assign uart_cfg_div      = {arg_buf[4], arg_buf[3], arg_buf[2]};
+    assign step_channel      = arg_buf[5][3:0];
+    assign step_steps        = {arg_buf[7], arg_buf[6]};
+    assign step_delay        = {rx_byte, arg_buf[8]};
+    assign swd_clk_ch        = arg_buf[7][3:0];
+    assign swd_dio_ch        = arg_buf[8][3:0];
+    assign i2c_cfg_addr7     = arg_buf[1][6:0];
+    assign i2c_cfg_sda_ch    = arg_buf[2][3:0];
+    assign i2c_cfg_scl_ch    = arg_buf[3][3:0];
+    assign i2c_cfg_enable    = arg_buf[4][0];
+    assign i2c_cfg_trig_reg  = arg_buf[5];
+    assign i2c_cfg_busy_reg  = arg_buf[6];
+    assign i2c_cfg_busy_mask = arg_buf[7];
+    assign i2c_cfg_conv_us   = {rx_byte, arg_buf[8]};
+    assign uart_cfg_rx_ch    = arg_buf[4][3:0];
+    assign uart_cfg_tx_ch    = arg_buf[5][3:0];
+    assign uart_cfg_div      = {arg_buf[8], arg_buf[7], arg_buf[6]};
     assign uart_cfg_enable   = rx_byte[0];
+    assign stop_after_cfg    = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6]};
     // Control-loop payloads (v38), in wire order [k(2)][vmin(2)][vmax(2)][tick(2)] /
     // [src][fixed(2)][step(2)] / [in_zero(2)][in_gain(2)][in_trip(2)][flags]; see the port list.
-    assign loop_arm_cfg      = {rx_byte, arg_buf[6], arg_buf[5], arg_buf[4],
-                                arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0]};
-    assign loop_src_cfg      = {rx_byte, arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0][1:0]};
-    assign loop_inmap_cfg    = {rx_byte[1:0], arg_buf[5][2:0], arg_buf[4],
-                                arg_buf[3], arg_buf[2], arg_buf[1], arg_buf[0]};
+    assign loop_arm_cfg      = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6],
+                                arg_buf[5], arg_buf[4], arg_buf[3], arg_buf[2]};
+    assign loop_src_cfg      = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6], arg_buf[5][1:0]};
+    assign loop_inmap_cfg    = {rx_byte[1:0], arg_buf[8][2:0], arg_buf[7],
+                                arg_buf[6], arg_buf[5], arg_buf[4], arg_buf[3]};
     reg [7:0]  reg_base;    // I2C_LOAD_REGS/READ_REGS start address
     reg [15:0] adc_dbg_latch;  // ADC_PROBE: sample latched at opcode so both bytes
                                // come from ONE conversion (engine free-runs)
@@ -446,11 +449,11 @@ module cmd_dispatch #(
             dac_psram_mode <= 1'b0;
             dac_psram_base <= 24'd0;
             dac_psram_len  <= 24'd0;
-            dac_stop_after <= 32'd0;
+            stop_after_stb <= 1'b0;
             dac_loop_mode <= 1'b0;
             loop_arm_stb  <= 1'b0;  loop_src_stb <= 1'b0;  loop_inmap_stb <= 1'b0;
             cap_start     <= 1'b0;
-            cap_divider   <= 16'd2;
+            cap_divider   <= 16'd60;   // the ADC's floor (v40: the engine no longer clamps)
             adc_cap_base  <= 24'h400000;   /* legacy fixed map until SET_CAPTURE_BASES */
             cap_test_ramp <= 1'b0;   /* persistent — reset only, not per-cycle */
             psram_cs_force <= 1'b0;
@@ -507,6 +510,7 @@ module cmd_dispatch #(
             uart_rx_re       <= 1'b0;
             uart_rx_ovf_clr  <= 1'b0;
             loop_arm_stb     <= 1'b0;
+            stop_after_stb   <= 1'b0;
             loop_src_stb     <= 1'b0;
             loop_inmap_stb   <= 1'b0;
 
@@ -549,13 +553,14 @@ module cmd_dispatch #(
                             OP_LOAD_WAVE:    state <= S_READ_LEN0;
                             // 4-byte [count(2)][div(2)] payloads share the uniform
                             // S_COLLECT collector (was a dedicated S_ARG0..3 chain).
-                            OP_START_DAC,
-                            OP_START_CAPTURE: begin arg_rem <= 16'd4; state <= S_COLLECT; end
-                            // MEASURE now carries SEPARATE dac + adc dividers (6-byte
-                            // payload) so firmware can offset the DAC sequencer's per-
-                            // sample overhead and run the DAC + ADC at the same real
-                            // rate: [count(2)][dac_div(2)][cap_div(2)].
-                            OP_START_MEASURE: begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            // (OP_START_CAPTURE 0x20, OP_START_MEASURE 0x30 and OP_LA_CAPTURE 0x69
+                            //  retired in v40: an ADC-only or LA-only capture is OP_CAPTURE with the
+                            //  other count 0, and MEASURE is DAC_ARM_ON_CAPTURE + START_DAC +
+                            //  OP_CAPTURE, whose co-trigger starts the DAC on the capture's t0.  An
+                            //  incoming 0x20/0x30/0x69 falls to `default` and is ignored.  Dropping
+                            //  them left every capture/DAC config field with one source, which
+                            //  removed their input muxes.)
+                            OP_START_DAC: begin arg_rem <= 16'd4; state <= S_COLLECT; end
                             // Control loop arm: 8-byte [k(2)][vmin(2)][vmax(2)][tick_div(2)].
                             OP_START_DAC_LOOP: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             // Loop INPUT SOURCE (v29): 5-byte [src][fixed(2)][step(2)].  Legal
@@ -655,10 +660,6 @@ module cmd_dispatch #(
                             //  LA_CAPTURE 0x69 path + a firmware re-pack.)
                             // (shallow BRAM LA_START 0x67 / LA_READ 0x68 removed in v17 —
                             //  v2 uses the deep LA_CAPTURE 0x69 below; HAS_WIDE_LA=0.)
-                            // deep LA capture into PSRAM (v2): 5-byte payload
-                            // [cnt_lo][cnt_mid][cnt_hi][div_lo][div_hi] — 24-bit sample
-                            // count so a single capture can span the full 8 MB.
-                            OP_LA_CAPTURE: begin arg_rem <= 16'd5; state <= S_COLLECT; end
 
                             // ---- UART proxy ----
                             OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
@@ -745,15 +746,26 @@ module cmd_dispatch #(
                     // Stores bytes into arg_buf; on the final byte it dispatches
                     // using rx_byte for the last slot (which isn't latched yet).
                     S_COLLECT: begin
-                        arg_buf[arg_count[3:0]] <= rx_byte;
+                        // v40: a SHIFT register, not an indexed write.  Each byte but the last
+                        // shifts in at arg_buf[8], so byte i of an n-byte payload sits at
+                        // arg_buf[10-n+i] and the last is rx_byte: a trailing field lands in
+                        // the same slot whatever the payload length (START_DAC and
+                        // START_DAC_PSRAM share one dac_divider source), and there is no
+                        // per-slot write decode.  The last byte does not shift, so registered
+                        // decodes (at this edge) and strobe-qualified wires (the next cycle)
+                        // see the same positions.
+                        if (!last_byte) begin
+                            for (i = 0; i < 8; i = i + 1) arg_buf[i] <= arg_buf[i+1];
+                            arg_buf[8] <= rx_byte;
+                        end
                         if (last_byte) begin
                             case (current_cmd)
                                 // 4-byte [count(2)][div(2)] arming opcodes: the
                                 // last byte (div_hi) is rx_byte, the rest are in
                                 // arg_buf[0..2].  (Was the dedicated S_ARG0..3 chain.)
                                 OP_START_DAC: begin
-                                    dac_period  <= {arg_buf[1][ADDR_W-8:0], arg_buf[0]};
-                                    dac_divider <= {rx_byte, arg_buf[2]};
+                                    dac_period  <= {arg_buf[7][ADDR_W-8:0], arg_buf[6]};
+                                    dac_divider <= {rx_byte, arg_buf[8]};
                                     dac_start   <= 1'b1;
                                     // A BRAM-waveform start must SELECT the BRAM waveform.  The
                                     // mode registers are LEVELS, so leaving either set here armed
@@ -786,10 +798,6 @@ module cmd_dispatch #(
                                     dac_loop_mode <= 1'b1;
                                     dac_start     <= 1'b1;   // kick the DAC8551 into streaming
                                 end
-                                OP_START_CAPTURE: begin
-                                    cap_divider <= {rx_byte, arg_buf[2]};
-                                    cap_start   <= 1'b1;
-                                end
                                 OP_GPIO_SET: begin
                                     gpio_set_stb  <= 1'b1;
                                 end
@@ -821,8 +829,12 @@ module cmd_dispatch #(
                                     // capture spans the multi-MB ADC region AND the multi-MB
                                     // LA region (each read back chunked from PSRAM — no longer
                                     // bounded by the old shared 32768-sample RAM buffer).
-                                    cap_divider    <= {arg_buf[4], arg_buf[3]};
-                                    la_cap_divider <= {rx_byte,    arg_buf[8]};
+                                    // A producer that is not in this capture (count 0) keeps its
+                                    // divider: cap_divider also paces the free-running ADC that
+                                    // ADC_PROBE and the control loop read, and an LA-only capture
+                                    // (the retired 0x69) never touched it.  Same for the LA.
+                                    if (cap_count    != 24'd0) cap_divider    <= {arg_buf[4], arg_buf[3]};
+                                    if (la_cap_count != 24'd0) la_cap_divider <= {rx_byte,    arg_buf[8]};
                                     cap_start      <= 1'b1;   // arm ADC producer
                                     la_cap_start   <= 1'b1;   // arm LA producer (same cycle)
                                 end
@@ -831,35 +843,7 @@ module cmd_dispatch #(
                                 OP_SET_CAPTURE_BASES: begin
                                     /* payload [la_base(3)][adc_base(3)]; LA base ignored
                                        (always 0), only the ADC base is programmable. */
-                                    adc_cap_base <= {rx_byte, arg_buf[4], arg_buf[3]};
-                                end
-                                // deep standalone LA capture (v2): 5-byte payload with a
-                                // 24-bit sample count -> a single capture can span 8 MB.
-                                OP_LA_CAPTURE: begin
-                                    // [cnt_lo][cnt_mid][cnt_hi][div_lo][div_hi(=rx_byte)]
-                                    la_cap_divider <= {rx_byte,    arg_buf[3]};
-                                    la_cap_start   <= 1'b1;
-                                end
-                                // MEASURE: start the DAC (from the loaded waveform) and
-                                // the ADC capture on the SAME cycle, but with SEPARATE
-                                // dividers.  The DAC sequencer costs extra clocks/sample
-                                // (BRAM reads + SPI shift), so firmware sends
-                                // dac_div = cap_div - overhead to make the DAC and ADC
-                                // step at the same real rate (aligned capture).
-                                //   [count_lo][count_hi][dac_div_lo][dac_div_hi]
-                                //   [cap_div_lo][cap_div_hi(=rx_byte)]
-                                OP_START_MEASURE: begin
-                                    dac_period  <= {arg_buf[1][ADDR_W-8:0], arg_buf[0]};   // 13-bit: DAC waveform BRAM bounded
-                                    dac_divider <= {arg_buf[3], arg_buf[2]};
-                                    cap_divider <= {rx_byte,    arg_buf[4]};
-                                    dac_start   <= 1'b1;
-                                    cap_start   <= 1'b1;
-                                    // Same source-selection rule as OP_START_DAC above, and it
-                                    // matters MORE here: measure arms a capture in the same cycle,
-                                    // so a stale dac_psram_mode points the deep reader at the PSRAM
-                                    // bus exactly while the capture writer needs it.  (v31)
-                                    dac_loop_mode  <= 1'b0;
-                                    dac_psram_mode <= 1'b0;
+                                    adc_cap_base <= {rx_byte, arg_buf[8], arg_buf[7]};
                                 end
                                 // DEEP DAC replay from PSRAM: [base_lo][base_mid][base_hi]
                                 // [cnt_lo][cnt_mid][cnt_hi][div_lo][div_hi(=rx_byte)].  Set
@@ -867,26 +851,26 @@ module cmd_dispatch #(
                                 // the top latches base/len into the DAC clock domain and
                                 // the reader streams the waveform out of PSRAM.
                                 OP_START_DAC_PSRAM: begin
-                                    dac_psram_base <= {arg_buf[2], arg_buf[1], arg_buf[0]};  // 24-bit byte base
-                                    dac_psram_len  <= {arg_buf[5], arg_buf[4], arg_buf[3]};  // 24-bit SAMPLE count
-                                    dac_divider    <= {rx_byte,    arg_buf[6]};
+                                    dac_psram_base <= {arg_buf[4], arg_buf[3], arg_buf[2]};  // 24-bit byte base
+                                    dac_psram_len  <= {arg_buf[7], arg_buf[6], arg_buf[5]};  // 24-bit SAMPLE count
+                                    dac_divider    <= {rx_byte,    arg_buf[8]};
                                     dac_psram_mode <= 1'b1;
                                     dac_start      <= 1'b1;
                                 end
-                                // Capture-tied DAC auto-stop threshold (persistent; the top
-                                // snapshots it at the next capture arm).  0 disarms.
+                                // Capture-tied DAC auto-stop for the NEXT capture (v40: one-shot,
+                                // loads the top's countdown).  0 disarms.
                                 //   [cyc_lo][cyc_1][cyc_2][cyc_hi(=rx_byte)]
                                 OP_SET_DAC_STOP_AFTER: begin
-                                    dac_stop_after <= {rx_byte, arg_buf[2], arg_buf[1], arg_buf[0]};
+                                    stop_after_stb <= 1'b1;
                                 end
                                 // Capture trigger (persistent; the top applies it at every later
                                 // arm): [channel][mode][flags(reserved, =rx_byte)].  The mode is
                                 // decoded here so the top's per-cycle test is a mux + two compares.
                                 OP_SET_TRIGGER: begin
-                                    trig_ch   <= arg_buf[0][3:0];
-                                    trig_en   <= (arg_buf[1] != 8'd0) && (arg_buf[1] <= 8'd4);
-                                    trig_edge <= (arg_buf[1] == 8'd1) || (arg_buf[1] == 8'd2);
-                                    trig_pol  <= (arg_buf[1] == 8'd1) || (arg_buf[1] == 8'd3);
+                                    trig_ch   <= arg_buf[7][3:0];
+                                    trig_en   <= (arg_buf[8] != 8'd0) && (arg_buf[8] <= 8'd4);
+                                    trig_edge <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd2);
+                                    trig_pol  <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd3);
                                 end
                                 OP_I2C_CONFIG: begin
                                     // [addr7][sda_ch][scl_ch][flags][trig_reg]

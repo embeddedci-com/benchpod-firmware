@@ -79,7 +79,10 @@ module adc_mcp33131 (
                     // Floor the sample period at the engine's own min duration
                     // (~59 clk: 1 idle + 24 conv + 32 read + transitions) so a small
                     // requested divider can't ask for a rate the FSM can't sustain.
-                    period_cnt  <= (divider > 16'd60) ? divider : 16'd60;
+                    // v40: no 60-clock floor here; the firmware floors the divider
+                    // (adc_min_divider).  A shorter period cannot break the engine: the next
+                    // conversion just starts as soon as this one has been read out.
+                    period_cnt  <= divider;
                     period_zero <= 1'b0;
                     st          <= S_CONV;
                 end

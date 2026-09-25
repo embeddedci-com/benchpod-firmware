@@ -41,7 +41,8 @@ module tb_dac_loop;
     wire [7:0]  strm_data; wire strm_valid; reg strm_pop = 0;
     wire [15:0] v_out;
     wire [15:0] in_used;
-    wire [15:0] idx_used;
+    // the curve index the last tick resolved to, read off the loop's registered LUT address
+    wire [15:0] idx_used = {{(17-ADDR_W){1'b0}}, dut.lut_raddr[ADDR_W-1:1]};
     wire        tripped;
 
     dac_loop #(.ADDR_W(ADDR_W), .SHIFT(SHIFT)) dut (
@@ -53,7 +54,7 @@ module tb_dac_loop;
         .map_en(map_en), .trip_en(trip_en),
         .lut_raddr(lut_raddr), .lut_rdata(lut_rdata),
         .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
-        .v_out(v_out), .in_used(in_used), .idx_used(idx_used), .tripped(tripped)
+        .v_out(v_out), .in_used(in_used), .tripped(tripped)
     );
 
     // ---- curve LUT model: 4 KB byte BRAM, registered read (matches sample_buf) ----

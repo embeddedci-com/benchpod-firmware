@@ -43,3 +43,28 @@ uint16_t cap_divider_wire(uint32_t period, uint8_t gw_version)
     if (gw_version >= EXACT_CAP_DIVIDER_MIN_GW) return (uint16_t)period;
     return (uint16_t)(period > 1u ? period - 1u : 0u);   /* old engines: divider + 1 clocks */
 }
+
+/* x - k, floored at 0 and clamped to 16 bits (the reload encodings below). */
+static uint16_t reload16(uint32_t x, uint32_t k)
+{
+    uint32_t r = (x > k) ? x - k : 0u;
+    return (uint16_t)(r > 0xFFFFu ? 0xFFFFu : r);
+}
+
+uint16_t la_divider_wire(uint32_t period, uint8_t gw_version)
+{
+    if (gw_version >= RELOAD_WIRE_MIN_GW) return reload16(period, 2u);
+    return cap_divider_wire(period, gw_version);
+}
+
+uint16_t dac_divider_wire(uint32_t divider, uint8_t gw_version)
+{
+    if (gw_version >= RELOAD_WIRE_MIN_GW) return reload16(divider, 1u);
+    return (uint16_t)(divider > 0xFFFFu ? 0xFFFFu : divider);
+}
+
+uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version)
+{
+    if (gw_version >= RELOAD_WIRE_MIN_GW) return reload16(delay_us, 1u);
+    return (uint16_t)(delay_us > 0xFFFFu ? 0xFFFFu : delay_us);
+}

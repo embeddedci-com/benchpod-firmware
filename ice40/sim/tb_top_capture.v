@@ -123,9 +123,12 @@ module tb_top_capture;
     endtask
     // v16: OP_CAPTURE is a 10-byte payload — adc_cnt(3) + adc_div(2) + la_cnt(3) +
     // la_div(2) — both counts full 24-bit for deep ADC + deep LA.
+    // Dividers are PERIODS here; the tasks send the v40 wire encodings the firmware sends
+    // (LA: period - 2, DAC: period - 1), so every timing expectation below stays a period.
     task cmd_capture(input [23:0] adc_cnt, input [15:0] adc_div,
-                     input [23:0] la_cnt,  input [15:0] la_div);
-        reg [7:0] junk; begin
+                     input [23:0] la_cnt,  input [15:0] la_div_period);
+        reg [7:0] junk; reg [15:0] la_div; begin
+            la_div = (la_div_period > 2) ? la_div_period - 16'd2 : 16'd0;
             csn = 1'b0; #(SPI_HALF);
             spi_byte(8'h31, junk);                 // OP_CAPTURE
             spi_byte(adc_cnt[7:0], junk); spi_byte(adc_cnt[15:8], junk); spi_byte(adc_cnt[23:16], junk);
@@ -137,8 +140,9 @@ module tb_top_capture;
     endtask
 
     // OP_START_DAC (0x11): period(2) + divider(2) — shallow BRAM replay arm.
-    task cmd_start_dac(input [15:0] period, input [15:0] divider);
-        reg [7:0] junk; begin
+    task cmd_start_dac(input [15:0] period, input [15:0] div_period);
+        reg [7:0] junk; reg [15:0] divider; begin
+            divider = (div_period > 0) ? div_period - 16'd1 : 16'd0;
             csn = 1'b0; #(SPI_HALF);
             spi_byte(8'h11, junk);
             spi_byte(period[7:0],  junk); spi_byte(period[15:8],  junk);
@@ -148,8 +152,9 @@ module tb_top_capture;
     endtask
 
     // OP_START_DAC_PSRAM (0x13): base(3) + count(3) + divider(2) — deep PSRAM replay arm.
-    task cmd_start_dac_psram(input [23:0] base, input [23:0] count, input [15:0] divider);
-        reg [7:0] junk; begin
+    task cmd_start_dac_psram(input [23:0] base, input [23:0] count, input [15:0] div_period);
+        reg [7:0] junk; reg [15:0] divider; begin
+            divider = (div_period > 0) ? div_period - 16'd1 : 16'd0;
             csn = 1'b0; #(SPI_HALF);
             spi_byte(8'h13, junk);
             spi_byte(base[7:0],   junk); spi_byte(base[15:8],  junk); spi_byte(base[23:16],  junk);
@@ -205,14 +210,14 @@ module tb_top_capture;
     end
 
     // OP_START_MEASURE (0x30): count(2) [= DAC period AND ADC count] + dac_div(2) + cap_div(2).
+    // MEASURE (DAC period == ADC count, DAC and ADC started on one cycle).  OP_START_MEASURE (0x30)
+    // was retired in v40; the firmware sends this sequence instead: arm the co-trigger, stage the
+    // DAC start, then the unified capture, whose t0 starts the DAC on the same cycle.
     task cmd_measure(input [15:0] count, input [15:0] dac_div, input [15:0] cap_div);
-        reg [7:0] junk; begin
-            csn = 1'b0; #(SPI_HALF);
-            spi_byte(8'h30, junk);
-            spi_byte(count[7:0],   junk); spi_byte(count[15:8],   junk);
-            spi_byte(dac_div[7:0], junk); spi_byte(dac_div[15:8], junk);
-            spi_byte(cap_div[7:0], junk); spi_byte(cap_div[15:8], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+        begin
+            cmd_op0(8'h19);                              // DAC_ARM_ON_CAPTURE
+            cmd_start_dac(count, dac_div);
+            cmd_capture({8'h00, count}, cap_div, 24'd0, 16'd0);
         end
     endtask
     // OP_DAC_LOOP_SRC (0x1A): src(1) + fixed(2) + step(2).
@@ -335,13 +340,10 @@ module tb_top_capture;
     end
 
     // OP_LA_CAPTURE (0x69): count(3) + divider(2).
+    // LA-only capture: OP_CAPTURE with ADC count 0 (OP_LA_CAPTURE 0x69 was retired in v40).
     task cmd_la_capture(input [23:0] cnt, input [15:0] div);
-        reg [7:0] junk; begin
-            csn = 1'b0; #(SPI_HALF);
-            spi_byte(8'h69, junk);
-            spi_byte(cnt[7:0], junk); spi_byte(cnt[15:8], junk); spi_byte(cnt[23:16], junk);
-            spi_byte(div[7:0], junk); spi_byte(div[15:8], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+        begin
+            cmd_capture(24'd0, 16'd0, cnt, div);
         end
     endtask
     // OP_SET_TRIGGER (0x33, v35): channel + mode + flags (0).
@@ -398,7 +400,9 @@ module tb_top_capture;
         if (dut.dac_start_eff) dacst_cyc = cyc;
         if (dut.dac_autostop)  auto_cyc  = cyc;
         if (dut.la_cap_start) begin la_lo = 0; la_hi = 0; end
-        if (dut.cap_start)    begin adc_seen = 0; adc_armed = 1; end
+        // arm_adc, not cap_start: an LA-only OP_CAPTURE (v40, ADC count 0) pulses cap_start too,
+        // but the ADC is not in that capture.
+        if (dut.arm_adc)      begin adc_seen = 0; adc_armed = 1; end
         if (per_on && dut.la_wr_stb) begin
             if (!la_hi) begin
                 if (la_lo > 0 && cyc - la_prev != la_want) begin

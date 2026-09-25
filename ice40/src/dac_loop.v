@@ -139,7 +139,6 @@ module dac_loop #(
     // clk (top_v2) without a torn or metastable read.
     output wire [15:0] v_out,            // current output
     output wire [15:0] in_used,          // input the committed tick indexed with
-    output wire [15:0] idx_used,         // curve index the last tick resolved to (live, clk48 only)
     output wire        tripped,          // latched: the trip fired, output forced to vmin
     output reg         tlm_stb           // 1 clk48: v_out/in_used/tripped just changed
 );
@@ -243,7 +242,9 @@ module dac_loop #(
     reg trip_l;                              // latched until disarm
     reg trip_pub;                            // ...published with the tick's v at S_CLAMP
     assign tripped  = trip_pub;
-    assign idx_used = {{(17-ADDR_W){1'b0}}, lut_raddr[ADDR_W-1:1]};
+    // (The curve index a tick resolved to is lut_raddr[ADDR_W-1:1]; the idx_used port that
+    //  exposed it had no reader in the design and was removed in v40 — tb_dac_loop reads it
+    //  hierarchically.)
 
     always @(posedge clk48) begin
         if (rst48 || !arm) begin

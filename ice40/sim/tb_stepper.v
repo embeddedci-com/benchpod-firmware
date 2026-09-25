@@ -29,7 +29,7 @@ module tb_stepper;
 
     stepper_engine #(.CLK_MHZ(CLK_MHZ)) dut (
         .clk(clk), .rst(rst), .start(start), .channel(channel),
-        .steps(steps), .delay_us(delay_us),
+        .steps(steps), .delay_us(delay_us - 16'd1),   // v40 wire: half-phase - 1
         .busy(busy), .step_channel(step_channel), .step_val(step_val)
     );
 

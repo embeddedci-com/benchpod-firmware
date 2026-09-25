@@ -64,4 +64,19 @@ la_plan_t la_psram_plan(uint32_t cap_hz, uint32_t samples, float req_rate_hz);
  * DAC divider, whose sequencer overhead firmware already models (DAC_SEQ_OVERHEAD_CLK). */
 uint16_t cap_divider_wire(uint32_t period, uint8_t gw_version);
 
+/* Gateware >= RELOAD_WIRE_MIN_GW takes the RELOAD value its counter needs instead of doing
+ * the compare + subtract itself (the v40 LC pass moved them into firmware): the LA divider is
+ * period - 2, the DAC divider is divider - 1, the GPIO_STEP delay is half-phase us - 1.  Older
+ * gateware takes the period / divider / delay as before.  All clamp to the 16-bit fields. */
+#define RELOAD_WIRE_MIN_GW  40u
+
+/* LA capture PERIOD (24 MHz clocks) -> wire divider.  v40+: period - 2, floored at 0 (the
+ * sampler's 2-clock minimum).  Older: cap_divider_wire(). */
+uint16_t la_divider_wire(uint32_t period, uint8_t gw_version);
+/* DAC inter-sample divider (the firmware's DAC_SEQ_OVERHEAD_CLK model) -> wire.  v40+:
+ * divider - 1 (0 stays 0; the gateware still floors the reload at 2, a DAC8551 t9 limit). */
+uint16_t dac_divider_wire(uint32_t divider, uint8_t gw_version);
+/* GPIO_STEP half-phase in us (>= 1) -> wire.  v40+: delay - 1. */
+uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
+
 #endif /* LA_RATE_H */
