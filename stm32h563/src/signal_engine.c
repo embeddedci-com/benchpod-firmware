@@ -176,7 +176,7 @@ static inline bool busy_read(void)
    ring overrun) or was armed over an in-flight capture" — the read-back region is
    truncated/corrupt.  Cleared by the next clean capture arm.  Older gateware
    always reports 0 here, so checking it is safe on any version. */
-#define STATUS_CAP_OVF     (1u << 5)
+#define STATUS_CAP_OVF     (1u << 5)   /* gw >= 43: also a writer burst cut by bus_own */
 /* v2 gateware >= 30: the control loop LATCHED its over-range trip — the input crossed
    in_trip, so the loop forced its output to vmin and holds it there until disarmed.  Older
    gateware reports 0, so reading it is safe on any version. */
@@ -439,8 +439,20 @@ static void log_dac_samples(uint32_t total) {
 /* ---- FPGA command wrappers ----------------------------------------------- */
 
 /* LOAD_WAVE:  [CMD][len_lo][len_hi][N data bytes] */
+static int fpga_stop_dac(void);
+static bool s_cotrig_pending;
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
+    /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
+       clk48 while this writes it on clk: a running DAC played a half-rewritten table at the old
+       period, with torn 16-bit samples (and a torn curve entry can step the loop output anywhere
+       between vmin and vmax).  Stop it first; every caller starts it again after the load. */
+    uint8_t st = 0;
+    if (fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN)) {
+        bool cotrig = s_cotrig_pending;       /* callers stage a co-trigger BEFORE the load */
+        fpga_stop_dac();                      /* (which cancels it) */
+        if (cotrig) (void)fpga_dac_arm_on_capture();
+    }
     uint8_t header[3] = { CMD_LOAD_WAVE,
                           (uint8_t)(len & 0xFF),
                           (uint8_t)((len >> 8) & 0xFF) };
@@ -463,8 +475,8 @@ static int fpga_start_dac(uint32_t period, uint32_t divider) {
 }
 
 /* A co-triggered DAC start (DAC_ARM_ON_CAPTURE) staged for the next capture arm, and whether the
-   capture in flight took it — so a trigger-timeout abort (an untriggered t0) can cancel it first. */
-static bool s_cotrig_pending;
+   capture in flight took it — so a trigger-timeout abort (an untriggered t0) can cancel it first.
+   (s_cotrig_pending is declared above fpga_load_wave.) */
 static bool s_cotrig_in_capture;
 
 static void cotrig_consume(void) {   /* at every capture arm */
@@ -570,11 +582,13 @@ int fpga_status_read(uint8_t *out_status) {
     uint8_t status = 0xFF;
     spi_cmd_read(CMD_STATUS, NULL, 0, &status, 1);
     if (out_status) *out_status = status;
-    /* STATUS uses the bottom 6 bits now (DAC_RUN, CAP_BUSY, CAP_DONE, STEP_BUSY,
-       SWD_ARMED, and CAP_OVF on gateware >= 9).  Only bits 6-7 are reserved, so a
-       stuck-high MISO is detected on those two.  (This mask was 0xE0 before v9,
-       which would have misread a legitimate CAP_OVF as a stuck bus.) */
-    return (status & 0xC0) ? -1 : 0;
+    /* STATUS uses the bottom 7 bits (DAC_RUN, CAP_BUSY, CAP_DONE, STEP_BUSY, SWD_ARMED,
+       CAP_OVF on gateware >= 9, LOOP_TRIPPED on >= 30).  Only bit 7 is reserved, so a
+       stuck-high MISO is detected on it.  (This mask was 0xC0 until firmware for gw v43: a
+       TRIPPED loop then failed every status read, so the trip could never be reported and
+       every capture failed as "iCE40 not responding".  Before v9 it was 0xE0 and misread a
+       legitimate CAP_OVF the same way.) */
+    return (status & 0x80) ? -1 : 0;
 }
 
 /* v9+ gateware sets STATUS_CAP_OVF when the just-completed PSRAM capture dropped
@@ -582,22 +596,22 @@ int fpga_status_read(uint8_t *out_status) {
    corrupt.  Log + return true so callers fail loudly instead of returning garbage.
    On < v9 gateware the bit is always 0, so this is a no-op there. */
 static bool cap_overflowed(uint8_t st, const char *what) {
-    /* A CONFIGURED iCE40 always drives STATUS bits 7:6 = 0 (cmd_dispatch hardwires
-       them to 2'b0).  If either is set the iCE40 isn't driving MISO at all — STATUS
+    /* A CONFIGURED iCE40 always drives STATUS bit 7 = 0 (cmd_dispatch hardwires it; bit 6 is
+       LOOP_TRIPPED since gw v30).  If it is set the iCE40 isn't driving MISO at all — STATUS
        floated to 0xFF via the pull-ups because the FPGA is UNCONFIGURED/wedged (it
        loses config on a power blip / the config-window race, and a plain reboot does
        NOT reload it).  bit5 (overflow) is then a false positive, so check this FIRST
        and tell the user the real fix — reconfigure — instead of "lower the rate". */
-    if ((st & 0xC0) != 0) {
+    if ((st & 0x80) != 0) {
         printf("[sig] ERROR: %s failed — iCE40 NOT RESPONDING (STATUS=0x%02x): the FPGA "
                "is unconfigured/wedged, not overflowing.  Reconfigure it (console "
                "`flash-ice40`); a plain reboot won't fix it.\n", what, st);
         return true;
     }
     if (st & STATUS_CAP_OVF) {
-        printf("[sig] ERROR: %s OVERFLOW (STATUS bit5) — PSRAM capture dropped "
-               "bytes / overlapping arm; region truncated/corrupt. Lower the rate.\n",
-               what);
+        printf("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
+               "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
+               "truncated/corrupt. Lower the rate.\n", what);
         return true;
     }
     return false;
@@ -1502,9 +1516,19 @@ int fpga_warmboot(uint8_t image) {
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();
     if (ice40_reflash_image((int)image) != 0) {
-        printf("[sig] image switch: reflash failed\n");
-        fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version);   /* refresh whatever is running */
-        return -3;
+        /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
+           flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
+        printf("[sig] image switch: reflash failed, retrying\n");
+        if (ice40_reflash_image((int)image) != 0) {
+            if (image != 0u) {
+                printf("[sig] image switch: retry failed, restoring image 0\n");
+                (void)ice40_reflash_image(0);
+            }
+            sleep_ms(5);
+            if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
+            s_fpga_features = signal_engine_fpga_features();
+            return -3;
+        }
     }
     sleep_ms(5);
     fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version);
@@ -2313,6 +2337,19 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 
     if (swd_armed_local) swd_deadline = make_timeout_time_ms(SWD_INACTIVITY_MS);
 
+    /* The engine must still be armed (STATUS bit 4).  After a reconfig or reset it is not, and
+       then a feed drives nothing while SWD_READ returns stale reply bits, which OpenOCD takes as
+       real ACKs and data.  End the session loudly instead (the client sees the disconnect). */
+    if (swd_armed_local) {
+        uint8_t st = 0;
+        if (fpga_status_read(&st) != 0 || !(st & STATUS_SWD_ARMED)) {
+            printf("[swd] the iCE40 SWD engine is not armed (status 0x%02x): ending the session\n", st);
+            swd_armed_local = false;
+            *quit = true;
+            return 0;
+        }
+    }
+
     while (i < len) {
         size_t wlen = 0;   /* wire-driving bytes in this chunk            */
         size_t cc   = 0;   /* 'c' (sample) bytes in this chunk            */
@@ -2490,8 +2527,12 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
 /* Single-owner guard: only one UART proxy (console OR one TCP conn) at a time. */
 static bool uart_armed_local = false;
 
+static void uart_tx_clear(void);
+static bool s_uart_rx_ovf;
 int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable) {
     if (enable && uart_armed_local) return -2;   /* already in use */
+    uart_tx_clear();                             /* a new session starts with nothing queued */
+    if (enable) s_uart_rx_ovf = false;
 
     int rx = la_wire_index(rx_ch);
     int tx = la_wire_index(tx_ch);
@@ -2521,16 +2562,33 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
     return 0;
 }
 
+/* TX staging ring (v43 firmware).  The gateware's TX FIFO holds 256 bytes and drops what is
+   written while it is full, and the proxy used to write whole TCP segments into it: a paste of
+   more than 256 bytes lost the rest silently.  The FIFO reports only full/empty, so bytes wait
+   here and go into it in bursts of up to its depth each time it reports empty (the shifter is
+   still sending its last byte then, so the line stays busy).  fpga_uart_tx_pump() runs from the
+   command poll. */
+#define UART_TX_RING      4096u
+#define UART_TX_FIFO      256u
+static uint8_t  s_utx[UART_TX_RING];
+static uint32_t s_utx_head, s_utx_count, s_utx_dropped;
+
+static void uart_tx_clear(void) {
+    if (s_utx_dropped) printf("[uart] %lu TX bytes dropped (client wrote faster than the baud rate)\n",
+                              (unsigned long)s_utx_dropped);
+    s_utx_head = s_utx_count = s_utx_dropped = 0;
+}
+
 void fpga_uart_disable(void) {
     spi_cmd_write(CMD_UART_DISABLE, NULL, 0);
     uart_armed_local = false;
+    uart_tx_clear();
     printf("[uart] disabled\n");
 }
 
 bool fpga_uart_active(void) { return uart_armed_local; }
 
-int fpga_uart_write(const uint8_t *data, size_t len) {
-    if (!data || len == 0) return -1;
+static void uart_fifo_write(const uint8_t *data, size_t len) {
     /* [CMD][len_lo][len_hi][N bytes] */
     uint8_t hdr[3] = { CMD_UART_WRITE,
                        (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
@@ -2538,6 +2596,32 @@ int fpga_uart_write(const uint8_t *data, size_t len) {
     spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
     spi_write_blocking(SPI_PORT, data, len);
     cs_deselect();
+}
+
+void fpga_uart_tx_pump(void) {
+    if (s_utx_count == 0) return;
+    uint8_t flags = 0;
+    if (fpga_uart_status(NULL, &flags) != 0 || !(flags & UART_STATUS_TX_EMPTY)) return;
+    uint32_t budget = UART_TX_FIFO;
+    while (budget && s_utx_count) {
+        uint32_t tail = (s_utx_head + UART_TX_RING - s_utx_count) % UART_TX_RING;
+        uint32_t n = UART_TX_RING - tail;               /* contiguous run */
+        if (n > s_utx_count) n = s_utx_count;
+        if (n > budget)      n = budget;
+        uart_fifo_write(&s_utx[tail], n);
+        s_utx_count -= n; budget -= n;
+    }
+}
+
+int fpga_uart_write(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return -1;
+    for (size_t i = 0; i < len; i++) {
+        if (s_utx_count == UART_TX_RING) { s_utx_dropped += (uint32_t)(len - i); break; }
+        s_utx[s_utx_head] = data[i];
+        s_utx_head = (s_utx_head + 1u) % UART_TX_RING;
+        s_utx_count++;
+    }
+    fpga_uart_tx_pump();
     return 0;
 }
 
@@ -2556,12 +2640,22 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
     return 0;
 }
 
+/* The DUT sent faster than the proxy drained the 256-byte RX FIFO during this session (the
+   gateware's sticky flag): latched here (s_uart_rx_ovf, declared above), logged once, and
+   reported in `status`. */
+bool fpga_uart_rx_overflowed(void) { return s_uart_rx_ovf; }
+
 size_t fpga_uart_read(uint8_t *buf, size_t len) {
     if (!buf || len == 0) return 0;
     /* Read only what's actually available so the FIFO never underflows. A bad status
        read (unresponsive FPGA) reports no data rather than flooding garbage. */
     uint16_t avail = 0;
-    if (fpga_uart_status(&avail, NULL) != 0) return 0;
+    uint8_t  flags = 0;
+    if (fpga_uart_status(&avail, &flags) != 0) return 0;
+    if ((flags & UART_STATUS_RX_OVERFLOW) && !s_uart_rx_ovf) {
+        s_uart_rx_ovf = true;
+        printf("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
+    }
     size_t n = (avail < len) ? avail : len;
     if (n == 0) return 0;
     uint8_t args[2] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };

@@ -53,6 +53,9 @@ int ota_end(void);
 /* Commit a VERIFIED image: erase + rewrite internal flash from PSRAM, then reset.
    Does NOT return on success.  Returns <0 if no verified image is staged. */
 int ota_commit(void);
+/* Re-hash the staged image with the PSRAM bus ALREADY held by the caller (ota_commit, right
+   before it goes RAM-resident): 0 = still the verified image, -1 = changed or unreadable. */
+int ota_reverify_held(void);
 
 /* Abandon a staging session that has received nothing for too long, so an interrupted push
    cannot pin the device in OTA_RECEIVING (holding the PSRAM claim and the cloud client's long

@@ -1113,6 +1113,7 @@ void command_handler_poll(void) {
     speedtest_pump();
 
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
+    fpga_uart_tx_pump();   /* queued proxy TX bytes -> the FPGA FIFO as it drains */
     if (uart_proxy_conn >= 0) {
         if (load_bin_conn >= 0) {
             /* A DAC-replay upload is streaming in — SUSPEND the proxy for its duration.  The pod's
@@ -2115,8 +2116,9 @@ static void handle_status(int conn_id) {
             nrst_ctrl_supported() ? "true" : "false");
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
-    bp_emit(&e, "\"gateware\":%u,\"gateware_embedded\":%u,",
-            (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version());
+    bp_emit(&e, "\"gateware\":%u,\"gateware_embedded\":%u,\"loop_tripped\":%s,\"uart_rx_overflow\":%s,",
+            (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version(),
+            fpga_dac_loop_tripped() ? "true" : "false", fpga_uart_rx_overflowed() ? "true" : "false");
     bp_emit(&e, "\"psram\":\"%s\",\"psram_ok\":%s,\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,"
                 "\"reset\":\"%s\",\"last_crash\":",
             psram_selftest_str(), signal_engine_psram_operable() ? "true" : "false",
@@ -3289,10 +3291,14 @@ static void handle_dac_loop_probe(int conn_id, const char *json) {
     signal_engine_adc_spi(&i_adc);
     bool     has_src = (signal_engine_fpga_version() >= DAC_LOOP_SOURCE_MIN_GW);
     uint16_t in      = has_src ? fpga_dac_loop_input() : i_adc;
+    /* The over-range trip is latched: the output sits at vmin until disarmed.  Without this a
+       tripped loop looks like one holding a rail for no reason. */
+    bool     tripped = fpga_dac_loop_tripped();
     heavy_release(conn_id);
-    char payload[96];
-    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"v\":%u}",
-             i_adc, in, dac_loop_src_str(has_src ? s_loop_src : (uint8_t)DAC_LOOP_SRC_ADC), v);
+    char payload[112];
+    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"v\":%u,\"tripped\":%s}",
+             i_adc, in, dac_loop_src_str(has_src ? s_loop_src : (uint8_t)DAC_LOOP_SRC_ADC), v,
+             tripped ? "true" : "false");
     send_ok_str(conn_id, payload);
 }
 

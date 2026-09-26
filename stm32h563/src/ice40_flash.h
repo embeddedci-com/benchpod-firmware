@@ -25,6 +25,10 @@ int  ice40_wait_cdone(uint32_t timeout_ms);
 /* CDONE right now: 1 = the iCE40 loaded a bitstream, 0 = it never configured (e.g. a new
    board whose config flash is blank).  Configures PF14 as an input first. */
 int  ice40_is_configured(void);
+/* Hold the iCE40 in reset (all its pins Hi-Z) with the config flash deselected: for an iCE40 that
+   did not configure, which otherwise keeps driving the shared bus hunting for a bitstream.  The
+   next ice40_flash_program releases it. */
+void ice40_hold_off_bus(void);
 
 /* Runtime gateware IMAGE SWITCH: reprogram the config flash with image n (0=closed-loop,
    1=deep-DAC-replay) and reconfigure.  Defined in console.c (holds the embedded

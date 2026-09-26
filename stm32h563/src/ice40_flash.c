@@ -8,6 +8,7 @@
  * and the W25Q64 command timings (erase/program WIP, tHP) need bench validation.
  */
 #include "ice40_flash.h"
+#include <stdbool.h>
 #include "psram.h"
 #include "board_pins.h"
 #include "pico_compat.h"
@@ -99,9 +100,27 @@ int ice40_flash_read_id(uint8_t id[3])
     return rc;
 }
 
+/* Configuration failed, or the config flash no longer holds a whole image: keep the iCE40 in
+   reset (every iCE40 pin Hi-Z) and deselect the flash.  Released from reset it keeps searching
+   the flash for a bitstream, driving SCLK and the flash /CS while the flash drives SO (= PSRAM
+   IO1), and the psram_init() that follows drives the same lines: two drivers.  The next reflash
+   (boot recovery, a retried swap, flash-ice40) releases it. */
+void ice40_hold_off_bus(void)
+{
+    GPIO_InitTypeDef g = {0};
+    g.Pull = GPIO_NOPULL; g.Speed = GPIO_SPEED_FREQ_LOW; g.Mode = GPIO_MODE_OUTPUT_PP;
+    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);
+    g.Pin = ICE_CRESET_PIN; HAL_GPIO_Init(ICE_CRESET_PORT, &g);
+    FCS_HIGH();
+    g.Pin = ICE_FLASH_CS_PIN; HAL_GPIO_Init(ICE_FLASH_CS_PORT, &g);
+    FCS_HIGH();
+    printf("[ice40] held in reset (off the shared bus) until the next reflash\n");
+}
+
 int ice40_flash_program(const uint8_t *data, size_t len)
 {
     if (!data || len == 0) return -1;
+    bool erased = false;   /* from the first erase on, the flash holds no whole image */
 
     psram_bus_acquire();
     flash_pins();
@@ -121,6 +140,7 @@ int ice40_flash_program(const uint8_t *data, size_t len)
     /* Erase enough 4 KB sectors to hold the bitstream. */
     for (uint32_t a = 0; a < len; a += FLASH_SECTOR) {
         if (fxfer(0x06, 0, 0, NULL, 0, 0) != 0) goto fail;        /* WREN */
+        erased = true;
         if (fxfer(0x20, 1, a, NULL, 0, 0) != 0) goto fail;        /* sector erase */
         if (flash_wait_wip() != 0) goto fail;
     }
@@ -172,6 +192,7 @@ int ice40_flash_program(const uint8_t *data, size_t len)
         while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {
             if (HAL_GetTick() - t0 > CDONE_TIMEOUT_MS) {
                 printf("[ice40] CDONE never went high — configuration failed\n");
+                ice40_hold_off_bus();
                 return -1;
             }
         }
@@ -180,7 +201,11 @@ int ice40_flash_program(const uint8_t *data, size_t len)
     return 0;
 
 fail:
-    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);
+    if (erased) {
+        ice40_hold_off_bus();   /* a partial image: never let it configure from that */
+    } else {
+        HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);   /* old image intact */
+    }
     psram_bus_release();
     return -1;
 }

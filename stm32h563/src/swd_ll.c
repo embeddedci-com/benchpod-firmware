@@ -72,7 +72,12 @@ static size_t swd_feed(const wire_t *w, char *samples, size_t cap) {
                                         &reply_len, &exit_json, &quit);
         off += consumed;
         got += reply_len;
-        if (consumed == 0) break;   /* defensive: avoid spin on a stuck feed */
+        if (consumed == 0 || quit) {   /* stuck feed, or the SWD engine is no longer armed */
+            /* Read the missing samples as line-high: an all-ones ACK is SWD's "no response", so
+               the DAP layer reports a failed transfer instead of parsing whatever was here. */
+            if (got < cap) memset(samples + got, '1', cap - got);
+            break;
+        }
     }
     return got;
 }

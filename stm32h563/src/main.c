@@ -37,6 +37,7 @@
 #include "cloud_client.h"
 #include "sys_health.h"
 #include "hw_worker.h"
+#include "ice40_flash.h"
 #include "version.h"
 
 #include <stdbool.h>
@@ -212,6 +213,10 @@ void boot_deferred_hw_init(void)
     boot_guard_sub_start(BOOT_SUB_HW);
     boot_guard_test_loop_point(BOOT_SUB_HW);   /* no-op unless `test-bootloop hw` armed it */
     signal_engine_init();   /* SPI1 to the iCE40 */
+    /* signal_engine_init pinged it for a while, so a valid bitstream has loaded by now.  An iCE40
+       that did not configure (blank or partial config flash) keeps hunting the flash, driving the
+       lines psram_init() is about to drive: hold it in reset; the recovery below reflashes it. */
+    if (!ice40_is_configured()) ice40_hold_off_bus();
     /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
        even when the FPGA is unconfigured. */

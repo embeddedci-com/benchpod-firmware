@@ -3,6 +3,7 @@
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
 
 #include "mbedtls/sha256.h"
+#include <stdbool.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -87,10 +88,9 @@ int ota_data(uint32_t offset, const uint8_t *buf, uint32_t len) {
     return 0;
 }
 
-int ota_end(void) {
-    if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
-    if (s_received < s_size) { set_err("incomplete image"); return -1; }
-
+/* SHA-256 of the staged image == the expected one?  0 = match, 1 = mismatch, -1 = read error.
+   held: the caller already owns the PSRAM bus (ota_commit); otherwise it is taken per chunk. */
+static int staged_hash_check(bool held) {
     mbedtls_sha256_context ctx;
     mbedtls_sha256_init(&ctx);
     mbedtls_sha256_starts(&ctx, 0);   /* 0 = SHA-256 (not 224) */
@@ -101,9 +101,9 @@ int ota_end(void) {
     while (off < s_size) {
         uint32_t n = s_size - off;
         if (n > OTA_CHUNK) n = OTA_CHUNK;
-        psram_bus_acquire();
+        if (!held) psram_bus_acquire();
         rc = psram_read(OTA_PSRAM_BASE + off, chunk, n);
-        psram_bus_release();
+        if (!held) psram_bus_release();
         if (rc != 0) { set_err("psram read failed"); mbedtls_sha256_free(&ctx); return -1; }
         mbedtls_sha256_update(&ctx, chunk, n);
         off += n;
@@ -111,11 +111,25 @@ int ota_end(void) {
     uint8_t got[32];
     mbedtls_sha256_finish(&ctx, got);
     mbedtls_sha256_free(&ctx);
+    return memcmp(got, s_expect, 32) != 0 ? 1 : 0;
+}
 
-    if (memcmp(got, s_expect, 32) != 0) { set_err("sha256 mismatch"); return -1; }
+int ota_end(void) {
+    if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
+    if (s_received < s_size) { set_err("incomplete image"); return -1; }
+    int rc = staged_hash_check(false);
+    if (rc < 0) return -1;
+    if (rc > 0) { set_err("sha256 mismatch"); return -1; }
     s_state = OTA_VERIFIED;
     printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;
+}
+
+int ota_reverify_held(void) {
+    if (s_state != OTA_VERIFIED) return -1;
+    int rc = staged_hash_check(true);
+    if (rc > 0) set_err("staged image changed after verify (sha256 mismatch)");
+    return rc == 0 ? 0 : -1;
 }
 
 void ota_abort(void) {

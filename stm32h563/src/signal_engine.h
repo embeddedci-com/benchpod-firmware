@@ -648,8 +648,11 @@ void fpga_uart_disable(void);
 /* True while a UART proxy owns the engine (console or a TCP client). */
 bool fpga_uart_active(void);
 
-/* Queue `len` bytes into the FPGA TX FIFO. Returns 0 on success. */
+/* Queue `len` bytes for the DUT: they wait in a 4 KB firmware ring and move into the FPGA's
+   256-byte TX FIFO whenever it is empty (fpga_uart_tx_pump).  Returns 0 on success. */
 int fpga_uart_write(const uint8_t *data, size_t len);
+/* Move queued TX bytes into the FPGA FIFO if it is empty.  Called from the command poll. */
+void fpga_uart_tx_pump(void);
 
 /* Read the UART status: RX bytes available + flag bits (see UART_STATUS_*). */
 int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
@@ -657,3 +660,5 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
 /* Drain up to `len` bytes from the FPGA RX FIFO into `buf`; returns the count
    actually read (0 if none available). */
 size_t fpga_uart_read(uint8_t *buf, size_t len);
+/* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
+bool fpga_uart_rx_overflowed(void);

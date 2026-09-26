@@ -95,6 +95,30 @@ static void test_stage_and_verify(void) {
 
 /* Chunks may arrive out of order or be re-sent; the high-water mark must not go backwards, and
    the staged image must still be exactly right. */
+/* ota_commit re-hashes the staged image with the bus held right before flashing it: PSRAM 0 is
+   also the LA capture region, so anything that wrote there after ota_end must be refused. */
+static void test_commit_reverifies_the_staged_image(void) {
+    enum { N = 3000 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 0xBEEF);
+    sha256_hex(img, N, hex);
+
+    mock_ota_psram_reset();
+    ota_abort();
+    CHECK(ota_begin(N, hex) == 0, "begin: %s", ota_error());
+    CHECK(ota_data(0, img, N) == 0, "data: %s", ota_error());
+    CHECK(ota_end() == 0, "verify: %s", ota_error());
+    mock_psram_acquired = 1;                      /* ota_commit holds the bus */
+    CHECK(ota_reverify_held() == 0, "an untouched staged image failed the re-verify: %s", ota_error());
+    CHECK(mock_psram_acquired == 1, "re-verify changed the held bus (depth=%d)", mock_psram_acquired);
+    mock_psram[1234] ^= 0x5A;                     /* a capture wrote into the staged image */
+    CHECK(ota_reverify_held() != 0, "a staged image changed after verify was accepted");
+    CHECK(strstr(ota_error(), "changed") != NULL, "error should say the image changed: %s", ota_error());
+    mock_psram_acquired = 0;
+    ota_abort();
+}
+
 static void test_out_of_order_and_resent_chunks(void) {
     enum { N = 3072 };
     static uint8_t img[N];
@@ -322,6 +346,7 @@ static void test_watchdog_abandons_stalled_staging(void) {
 int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
+    test_commit_reverifies_the_staged_image();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

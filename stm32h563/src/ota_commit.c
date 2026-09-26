@@ -198,6 +198,15 @@ int ota_commit(void) {
     signal_engine_quiesce_psram_masters();
     /* Grab the shared PSRAM bus (HAL GPIO) BEFORE going RAM-resident. */
     psram_bus_acquire();
+    /* ota_end hashed the image, but PSRAM 0 is also the LA capture region, and any master that
+       wrote there since (an orphaned capture, a capture that slipped past the gate) would be
+       flashed: a brick.  Hash it again now, with the bus held until the reset, so what is
+       flashed is exactly what was verified. */
+    if (ota_reverify_held() != 0) {
+        psram_bus_release();
+        printf("[ota] commit refused: %s\n", ota_error());
+        return -1;
+    }
     ram_commit_all(nsectors, total, s_sector);   /* does not return */
     return -1;                                    /* unreachable */
 }
