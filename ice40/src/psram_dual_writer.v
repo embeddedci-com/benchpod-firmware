@@ -45,7 +45,7 @@ module psram_dual_writer #(
     input  wire        clk,               // 24 MHz logic clock (FSM + FIFOs)
     input  wire        clk48,             // 48 MHz output clock (serializer + DDR SCLK)
     input  wire        rst,               // sync reset in the clk domain
-    input  wire        bus_own,           // 1 = STM32 owns the bus (top tristates pads)
+    input  wire        bus_own,           // 1 = STM32 owns the bus (top tristates pads; synced)
     // RUNTIME region bases (byte addr) — latched at `start` for dynamic tri-capture
     // zone allocation (was compile-time ADC_BASE/LA_BASE params).
     input  wire [23:0] adc_base,          // ADC region base
@@ -67,6 +67,7 @@ module psram_dual_writer #(
     output wire        la_full,           // LA staging-FIFO full (backpressure)
     // status (clk domain)
     output reg         idle,              // both FIFOs drained + not in a burst
+    output reg         bus_lost,          // 1 clk: a burst was cut short by bus_own (v43)
     // pad-facing outputs (clk48-timed — see header)
     output reg  [3:0]  psram_io_o,        // nibble on the bus this clk48 cycle
     output reg         psram_io_oe,       // 1 = drive io pads this clk48 cycle
@@ -138,7 +139,9 @@ module psram_dual_writer #(
     wire [23:0] cur_addr  = sel ? addr_la : addr_adc;
 
     // A data byte is popped this cycle iff we're in DATA with data left in the chunk.
-    wire        pop_this  = (st == S_DATA) && !sel_empty && (chunk_left != 9'd0);
+    // v43: nothing is popped while the STM32 owns the bus (the pads are tristated, so the byte
+    // would be lost silently).
+    wire        pop_this  = (st == S_DATA) && !bus_own && !sel_empty && (chunk_left != 9'd0);
     wire        a_pop      = pop_this && !sel;
     wire        l_pop      = pop_this &&  sel;
 
@@ -178,6 +181,11 @@ module psram_dual_writer #(
         cell_tgl <= ~cell_tgl;
         cell_n0  <= 4'h0; cell_n1 <= 4'h0;
         cell_drv <= 1'b0; cell_clk <= 1'b0; cell_cs <= 1'b1;
+        // v43: bus_own mid-burst.  The pads were already tristated (raw bus_own), so this burst's
+        // bytes never reached the PSRAM; close it (CS high) and report it, so the firmware fails
+        // the capture instead of reading back a hole.  Never cut here in normal use: the firmware
+        // only takes the bus while the writer is idle.
+        bus_lost <= ~rst & bus_own & (st == S_CMD || st == S_ADDR || st == S_DATA);
 
         if (rst) begin
             st <= S_IDLE; active <= 1'b0;   // (addr_adc/addr_la load in their dsp_counters)
@@ -194,7 +202,7 @@ module psram_dual_writer #(
                 idle <= 1'b1;
                 // Only commit to a burst when the arbiter has granted the bus.
                 // bus_gnt=1 (exclusive use) reduces this to the original `any_data`.
-                if (any_data && bus_gnt) begin
+                if (any_data && bus_gnt && !bus_own) begin   // v43: never while the STM32 owns it
                     idle <= 1'b0;
                     sel        <= pick_la;
                     chunk_left <= CHUNK_BYTES;
@@ -204,14 +212,14 @@ module psram_dual_writer #(
                 end
             end
             // 0x38 write command: nib0=0x3, nib1=0x8.
-            S_CMD: begin
+            S_CMD: if (bus_own) st <= S_CSH; else begin
                 cell_n0 <= 4'h3; cell_n1 <= 4'h8;
                 cell_drv <= 1'b1; cell_clk <= 1'b1; cell_cs <= 1'b0;
                 addr_idx <= 2'd0;
                 st <= S_ADDR;
             end
             // 24-bit address of the SELECTED region: three 8-bit cells, MSB first.
-            S_ADDR: begin
+            S_ADDR: if (bus_own) st <= S_CSH; else begin
                 cell_drv <= 1'b1; cell_clk <= 1'b1; cell_cs <= 1'b0;
                 case (addr_idx)
                     2'd0: begin cell_n0 <= cur_addr[23:20]; cell_n1 <= cur_addr[19:16]; end
@@ -231,8 +239,8 @@ module psram_dual_writer #(
                     // last byte of the chunk -> close the burst next cell
                     if (chunk_left == 9'd1) begin cell_cs <= 1'b0; st <= S_CSH; end
                 end else begin
-                    // selected stream drained mid-chunk -> close the burst
-                    cell_cs <= 1'b0; st <= S_CSH;
+                    // selected stream drained mid-chunk (or bus_own: nothing popped) -> close
+                    cell_cs <= bus_own; st <= S_CSH;
                 end
             end
             // Chip-select-high gap (lets the PSRAM refresh between bursts): one cell

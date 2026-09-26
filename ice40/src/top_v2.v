@@ -539,7 +539,7 @@ module top (
     // FSM/FIFOs on clk (24 MHz); output serialized on clk48 (one nibble per clk48
     // cycle).  psram_io_o/cs are clk48 regs (driven to COMB pads below); the SCLK pad
     // is a DDR SB_IO whose D_OUT_1 = ps_sclk_d1 (see the pad section).
-    wire       ps_idle, ps_sclk_d1, ps_cs;
+    wire       ps_idle, ps_bus_lost, ps_sclk_d1, ps_cs;
     wire [3:0] ps_io_o;
     wire       ps_io_oe;
     reg        dual_stop;
@@ -558,7 +558,7 @@ module top (
         .bus_gnt(wr_gnt), .bus_req(wr_req), .bus_busy(wr_busy),
         .adc_data(adc_wr_data), .adc_stb(adc_wr_stb), .adc_full(adc_ring_in_full),
         .la_data (la_ring_out),  .la_stb (la_ring_out_stb),  .la_full (la_wr_full),
-        .idle(ps_idle),
+        .idle(ps_idle), .bus_lost(ps_bus_lost),
         .psram_io_o(ps_io_o), .psram_io_oe(ps_io_oe), .psram_cs(ps_cs),
         .psram_sclk_d1(ps_sclk_d1)
     );
@@ -663,12 +663,13 @@ module top (
     wire cap_busy_w  = cap_active | ~ps_idle;
     // Sticky overflow: a clean arm clears it; any drop during a run sets it.  Sources:
     // adc_ovf_r (ADC staging-FIFO full at write), la_overflow (LA producer), la_ring_ovf
-    // (LA SPRAM ring).  The ADC no longer has its own ring, so adc_ring_ovf is gone.
+    // (LA SPRAM ring), and (v43) ps_bus_lost (a writer burst cut by bus_own, i.e. the STM32
+    // took the bus mid-capture).  The ADC no longer has its own ring, so adc_ring_ovf is gone.
     reg  cap_overflow_r;
     always @(posedge clk) begin
         if (rst)                                       cap_overflow_r <= 1'b0;
         else if (arm)                                  cap_overflow_r <= 1'b0;
-        else if (adc_ovf_r | la_overflow | la_ring_ovf) cap_overflow_r <= 1'b1;
+        else if (adc_ovf_r | la_overflow | la_ring_ovf | ps_bus_lost) cap_overflow_r <= 1'b1;
     end
 
     // ---- iCE40 multi-image swap (reflash-based; NO SB_WARMBOOT) ----
@@ -696,7 +697,15 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 42) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 43) ----
+    // GATEWARE_VERSION 43 = v42 + two stability fixes from the 2026-09 review:
+    //   * psram_dual_writer honours bus_own: no burst starts, and nothing is popped, while the
+    //     STM32 owns the bus; a burst it cuts is closed and raises the sticky capture-overflow
+    //     STATUS bit (ps_bus_lost), so the firmware fails that capture instead of reading back a
+    //     hole.  Before, the writer kept bursting into tristated pads and could come back mid-burst.
+    //   * dac_loop publishes telemetry as a snapshot with strobes >= 8 clk48 apart, so a STOP_DAC
+    //     one clk48 after a commit can no longer lose both updates in cdc_pulse_payload (a stale
+    //     DAC_PROBE / tripped bit until the next arm).
     // GATEWARE_VERSION 42 = v41 + the loop image's last DSP: stepper_engine's us_left/steps_left
     //   are the two halves of one SB_MAC16 (dsp_counter2, two independent 16-bit counters) and
     //   the half-phase zero test is its carry-out.  Cycle-identical to v41 (tb_stepper compares
@@ -1027,7 +1036,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd42), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd43), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

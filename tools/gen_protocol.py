@@ -23,7 +23,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OPCODES = [
     ("PING",            0x01, "—",                                              "0xA5"),
     ("VERSION",         0x02, "—",                                              "version byte"),
-    ("STATUS",          0x03, "—",                                              "flag byte"),
+    ("STATUS",          0x03, "—",                                              "flag byte: bit0 DAC running, bit1 capture busy, bit2 capture done, bit3 step train busy, bit4 SWD armed, bit5 sticky capture overflow (dropped bytes, an overlapping arm, or from v43 a writer burst cut because the STM32 took the bus; cleared by the next arm), bit6 control loop tripped (v30), bit7 always 0 (a 1 means the iCE40 is not driving MISO)"),
     ("LOAD_WAVE",       0x10, "len(2) + N data bytes",                          "—"),
     ("START_DAC",       0x11, "period(2) + divider(2)",                         "— (shallow: loops the 4 KB LOAD_WAVE BRAM, <=2048 samples. A DAC sample takes max(divider, 3) + 51 clk48: v2 >=v34 floors the divider at 3 for the DAC8551's frame-gap timing (t9), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 2)"),
     ("STOP_DAC",        0x12, "—",                                              "—"),

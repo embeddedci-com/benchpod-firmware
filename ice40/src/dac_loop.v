@@ -137,9 +137,9 @@ module dac_loop #(
     // commit, or an arm/disarm), and then hold until the next such edge: >= 12 clk48 later even
     // at tick_div 0.  That is the source contract cdc_pulse_payload needs to carry them into
     // clk (top_v2) without a torn or metastable read.
-    output wire [15:0] v_out,            // current output
-    output wire [15:0] in_used,          // input the committed tick indexed with
-    output wire        tripped,          // latched: the trip fired, output forced to vmin
+    output reg  [15:0] v_out,            // current output
+    output reg  [15:0] in_used,          // input the committed tick indexed with
+    output reg         tripped,          // latched: the trip fired, output forced to vmin
     output reg         tlm_stb           // 1 clk48: v_out/in_used/tripped just changed
 );
     localparam [1:0] SRC_ADC = 2'd0, SRC_FIXED = 2'd1;
@@ -156,7 +156,6 @@ module dac_loop #(
     reg  [15:0] vf;
     assign strm_data  = byte_sel ? vf[15:8] : vf[7:0];
     assign strm_valid = arm;             // always ready while armed (DAC holds `vf`)
-    assign v_out      = v;
 
     always @(posedge clk48) begin
         if (rst48 || !arm) begin
@@ -212,7 +211,6 @@ module dac_loop #(
                          (src_sel == SRC_FIXED) ? in_fixed   : sweep_acc;
     reg  [15:0] in_lat;                   // the input this tick uses (set at its start)
     reg  [15:0] in_pub;                   // ...published with the tick's v at S_CLAMP
-    assign in_used = in_pub;
 
     // ---- input conditioner datapath (v30) --------------------------------------
     // The legacy index, kept as its own wire so map_en=0 is provably unchanged.
@@ -241,7 +239,6 @@ module dac_loop #(
 
     reg trip_l;                              // latched until disarm
     reg trip_pub;                            // ...published with the tick's v at S_CLAMP
-    assign tripped  = trip_pub;
     // (The curve index a tick resolved to is lut_raddr[ADDR_W-1:1]; the idx_used port that
     //  exposed it had no reader in the design and was removed in v40 — tb_dac_loop reads it
     //  hierarchically.)
@@ -350,11 +347,42 @@ module dac_loop #(
         end
     end
 
-    // tlm_stb: the edge after a commit (S_CLAMP) or an arm/disarm, i.e. after the published
-    // values last changed.  While disarmed they are constants (v = vmin, 0, 0).
-    reg arm_d;
+    // Telemetry publisher (v43).  The loop's {v, in_pub, trip_pub} change at a commit (S_CLAMP)
+    // and again at an arm or disarm, and a STOP_DAC can land a clk48 after a commit: two updates
+    // one clk48 apart.  cdc_pulse_payload needs strobes >= 2 clk (4 clk48) apart and the value
+    // held 4 clk, so the clk side could keep the commit's snapshot until the next arm (a stale
+    // DAC_PROBE and a stale tripped bit).  So publish a SNAPSHOT: `upd` marks a change, and the
+    // snapshot is retaken (with its strobe) only when 8 clk48 have passed since the last
+    // one.  A change inside the gap is published at its end, so the last word is always the
+    // loop's current state.
+    // Snapshots are exactly 8 clk48 apart at most: a publish loads tlm_wait = 6, it counts down
+    // to 0 over the next 6 edges, the 7th sets `tlm_ok`, and the 8th may publish again.  tlm_ok
+    // is a flop, so the ~35 snapshot enables test one bit, not a compare (that compare bound the
+    // loop image's clk48 on a third of the seeds).
+    reg       arm_d, upd, upd_pend, tlm_ok;
+    reg [2:0] tlm_wait;
+    wire      tlm_go = (upd | upd_pend) & tlm_ok;
     always @(posedge clk48) begin
         arm_d   <= arm & ~rst48;
-        tlm_stb <= ~rst48 & ((arm & (st == S_CLAMP)) | (arm != arm_d));
+        upd     <= ~rst48 & ((arm & (st == S_CLAMP)) | (arm != arm_d));   // the edge AFTER a change
+        tlm_stb <= 1'b0;
+        if (rst48) begin
+            upd_pend <= 1'b0; tlm_ok <= 1'b1; tlm_wait <= 3'd0;
+            v_out <= 16'd0; in_used <= 16'd0; tripped <= 1'b0;
+        end else begin
+            if (tlm_go) begin
+                v_out <= v; in_used <= in_pub; tripped <= trip_pub;
+                tlm_stb  <= 1'b1;
+                upd_pend <= 1'b0;
+                tlm_ok   <= 1'b0;
+                tlm_wait <= 3'd6;
+            end else begin
+                if (upd) upd_pend <= 1'b1;
+                if (!tlm_ok) begin
+                    if (tlm_wait == 3'd0) tlm_ok <= 1'b1;
+                    else                  tlm_wait <= tlm_wait - 3'd1;
+                end
+            end
+        end
     end
 endmodule

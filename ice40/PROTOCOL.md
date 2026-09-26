@@ -5,7 +5,7 @@
 |---|---|---|---|
 | 0x01 | PING | — | 0xA5 |
 | 0x02 | VERSION | — | version byte |
-| 0x03 | STATUS | — | flag byte |
+| 0x03 | STATUS | — | flag byte: bit0 DAC running, bit1 capture busy, bit2 capture done, bit3 step train busy, bit4 SWD armed, bit5 sticky capture overflow (dropped bytes, an overlapping arm, or from v43 a writer burst cut because the STM32 took the bus; cleared by the next arm), bit6 control loop tripped (v30), bit7 always 0 (a 1 means the iCE40 is not driving MISO) |
 | 0x10 | LOAD_WAVE | len(2) + N data bytes | — |
 | 0x11 | START_DAC | period(2) + divider(2) | — (shallow: loops the 4 KB LOAD_WAVE BRAM, <=2048 samples. A DAC sample takes max(divider, 3) + 51 clk48: v2 >=v34 floors the divider at 3 for the DAC8551's frame-gap timing (t9), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 2) |
 | 0x12 | STOP_DAC | — | — |

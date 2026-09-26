@@ -33,7 +33,7 @@ module tb_psram_dual_writer;
     reg        start = 0, stop = 0, bus_own = 0;
     reg  [7:0] adc_data = 0, la_data = 0;
     reg        adc_stb = 0, la_stb = 0;
-    wire       adc_full, la_full, idle;
+    wire       adc_full, la_full, idle, bus_lost;
 
     // writer outputs (clk48-timed) -> real SB_IO pads
     wire [3:0] w_io_o;
@@ -46,7 +46,7 @@ module tb_psram_dual_writer;
         .bus_gnt(1'b1), .bus_req(), .bus_busy(),
         .adc_data(adc_data), .adc_stb(adc_stb), .adc_full(adc_full),
         .la_data(la_data),   .la_stb(la_stb),   .la_full(la_full),
-        .idle(idle),
+        .idle(idle), .bus_lost(bus_lost),
         .psram_io_o(w_io_o), .psram_io_oe(w_io_oe), .psram_cs(w_cs),
         .psram_sclk_d1(w_sclk_d1)
     );
@@ -145,6 +145,8 @@ module tb_psram_dual_writer;
         adc_data <= v; adc_stb <= 1'b1; @(posedge clk); adc_stb <= 1'b0;
     end endtask
 
+    integer lost_pulses; initial lost_pulses = 0;
+    always @(posedge clk) if (bus_lost) lost_pulses = lost_pulses + 1;
     integer oe_while_owned; reg checking_busown;
     initial begin oe_while_owned=0; checking_busown=0; end
     always @(posedge clk) if (checking_busown && bus_own && ps_oe) oe_while_owned = oe_while_owned + 1;
@@ -190,9 +192,51 @@ module tb_psram_dual_writer;
             $display("FAIL: writer drove io_oe for %0d cycles while bus_own=1", oe_while_owned); errors=errors+1; end
         else $display("  bus_own: writer kept io_oe low while owned though data was pending");
         bus_own <= 1'b0;
+        // (the writer reports idle while it waits for the bus, so wait for the drain burst itself)
+        wait (!idle); wait (idle); repeat (10) @(posedge clk);
+        checking_busown = 0;
+        if (lost_pulses !== 0) begin
+            $display("FAIL: bus_lost fired %0d times with no burst cut", lost_pulses); errors=errors+1; end
+
+        // ---- v43: bus_own arriving MID-burst ----
+        // The writer must stop popping, close the burst (CS high) within a couple of cells, report
+        // bus_lost once, never drive while owned, and resume at the right address on release.
+        decode_en = 1;
+        for (i=0;i<512;i=i+1) mem[i] = 8'hXX;
+        @(posedge clk); start <= 1'b1; @(posedge clk); start <= 1'b0;
+        fork
+            for (i = 0; i < 3*CHUNK; i = i+1) feed_la(8'h10 + i[7:0]);
+            begin
+                @(negedge w_cs); repeat (6) @(posedge clk);     // well inside the first burst
+                bus_own <= 1'b1; checking_busown = 1;
+                repeat (3) @(posedge clk);
+                if (w_cs !== 1'b1) begin
+                    $display("FAIL: writer CS still low 3 clk after bus_own"); errors=errors+1; end
+                repeat (30) @(posedge clk);
+                if (w_cs !== 1'b1) begin
+                    $display("FAIL: writer CS low at the bus release"); errors=errors+1; end
+                bus_own <= 1'b0;
+            end
+        join
+        wait (idle); repeat (10) @(posedge clk);
+        checking_busown = 0;
+        if (oe_while_owned !== 0) begin
+            $display("FAIL: writer drove io_oe for %0d cycles while bus_own=1 (mid-burst)", oe_while_owned); errors=errors+1; end
+        if (lost_pulses !== 1) begin
+            $display("FAIL: bus_lost fired %0d times for one cut burst (want 1)", lost_pulses); errors=errors+1; end
+        if (mem[(LA_BASE[8:0] + 3*CHUNK - 1) & 9'h1FF] !== (8'h10 + 3*CHUNK - 1)) begin
+            $display("FAIL: after the cut the stream did not resume at its address (last byte %02h)",
+                     mem[(LA_BASE[8:0] + 3*CHUNK - 1) & 9'h1FF]); errors=errors+1; end
+        else $display("  bus_own mid-burst: burst closed, bus_lost once, stream resumed at its address");
+        adc_i = 0;   // (reused) bytes that reached their address
+        for (i = 0; i < 3*CHUNK; i = i+1)
+            if (mem[(LA_BASE[8:0] + i) & 9'h1FF] === (8'h10 + i[7:0])) adc_i = adc_i + 1;
+        if (adc_i < 3*CHUNK - 2) begin   // only the cells in flight at the cut (2 here) may be lost
+            $display("FAIL: %0d of %0d bytes landed after a mid-burst bus_own (bytes popped while owned?)",
+                     adc_i, 3*CHUNK); errors=errors+1; end
 
         if (errors == 0)
-            $display("PASS tb_psram_dual_writer: two streams -> two regions, contiguous, in order; tCEM/setup/bus_own ok");
+            $display("PASS tb_psram_dual_writer: two streams -> two regions, contiguous, in order; tCEM/setup/bus_own (idle + mid-burst) ok");
         else
             $display("FAIL tb_psram_dual_writer: %0d error(s)", errors);
         $finish;
