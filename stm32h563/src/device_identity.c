@@ -1,4 +1,5 @@
 #include "device_identity.h"
+#include "flash_compat.h"
 #include "b64url.h"
 
 #include "rng.h"             /* rng_fill — TRNG with error reporting */
@@ -54,11 +55,7 @@ static identity_record_t s_ram_id;
 static const identity_record_t *flash_identity(void) {
     return &s_ram_id;
 }
-#else
-static const identity_record_t *flash_identity(void) {
-    return (const identity_record_t *)(XIP_BASE + IDENTITY_FLASH_OFFSET);
-}
-#endif
+#endif   /* (flash builds read the record through flash_read_checked) */
 
 /* Fill seed[32] from the STM32H5 TRNG (rng.c).  Returns 0, or -1 if the TRNG
    reported an error or produced an obviously dead value (every byte equal,
@@ -95,8 +92,9 @@ static int identity_persist(const identity_record_t *rec) {
     flash_range_program(IDENTITY_FLASH_OFFSET, page, FLASH_PAGE_SIZE);
     restore_interrupts(irqs);
 
-    const identity_record_t *p = flash_identity();
-    if (p->magic != IDENTITY_MAGIC || p->version != IDENTITY_VERSION) {
+    identity_record_t back;
+    if (flash_read_checked(IDENTITY_FLASH_OFFSET, &back, sizeof(back)) != 0 ||
+        memcmp(&back, rec, sizeof(back)) != 0) {
         printf("[id] ERROR: identity write verification failed\n");
         return -1;
     }
@@ -106,11 +104,25 @@ static int identity_persist(const identity_record_t *rec) {
 
 void device_identity_init(void) {
     identity_record_t rec;
-    const identity_record_t *p = flash_identity();
+#if PICO_NO_FLASH
+    memcpy(&rec, flash_identity(), sizeof(rec));
+#else
+    /* Through the ECC-checked read: a plain pointer read of a damaged quad-word (a power cut
+       during the one-time write) raises an NMI and resets the pod on every boot.  And an
+       unreadable sector must NOT be taken as "no key": generating a new one would overwrite
+       the key this pod is registered with.  Run without an identity instead (cloud auth and
+       proof-of-possession refuse) and say so. */
+    if (flash_read_checked(IDENTITY_FLASH_OFFSET, &rec, sizeof(rec)) != 0) {
+        printf("[id] ERROR: the identity sector is unreadable (flash ECC error); running "
+               "without an identity, NOT generating a new key over it\n");
+        memset(&rec, 0, sizeof(rec));
+        s_ready = false;
+        return;
+    }
+#endif
 
-    if (p->magic == IDENTITY_MAGIC && p->version == IDENTITY_VERSION) {
+    if (rec.magic == IDENTITY_MAGIC && rec.version == IDENTITY_VERSION) {
         /* Existing key — load it, never overwrite. */
-        memcpy(&rec, p, sizeof(rec));
         printf("[id] loaded device identity from flash\n");
     } else {
         /* First boot (or unknown schema): generate and persist a new key. */

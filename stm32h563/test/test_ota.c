@@ -119,6 +119,23 @@ static void test_commit_reverifies_the_staged_image(void) {
     ota_abort();
 }
 
+/* The image may fill flash up to 0x081F0000 and no further: above it are the config slots and
+   the device identity key, which ota_commit would erase. */
+static void test_size_limit_protects_the_high_sectors(void) {
+    char hex[65];
+    static uint8_t one[1] = {0};
+    sha256_hex(one, 1, hex);
+    mock_ota_psram_reset();
+    ota_abort();
+    CHECK(ota_begin(0x1F0000u, hex) == 0, "an image ending exactly at 0x081F0000 was refused: %s", ota_error());
+    ota_abort();
+    CHECK(ota_begin(0x1F0001u, hex) != 0, "an image one byte into the config/identity sectors was accepted");
+    CHECK(strstr(ota_error(), "size") != NULL, "error should name the size: %s", ota_error());
+    ota_abort();
+    CHECK(ota_begin(0x200000u, hex) != 0, "a full-flash image was accepted");
+    ota_abort();
+}
+
 static void test_out_of_order_and_resent_chunks(void) {
     enum { N = 3072 };
     static uint8_t img[N];
@@ -347,6 +364,7 @@ int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
     test_commit_reverifies_the_staged_image();
+    test_size_limit_protects_the_high_sectors();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

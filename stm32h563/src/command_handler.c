@@ -1565,6 +1565,11 @@ static void handle_measure(int conn_id, const char *json) {
         send_error(conn_id, "missing waveform");
         return;
     }
+    if (strcmp(waveform, "sine") != 0 && strcmp(waveform, "square") != 0 &&
+        strcmp(waveform, "sawtooth") != 0) {   /* was only "measure start failed" */
+        send_error(conn_id, "unknown waveform (use sine, square or sawtooth)");
+        return;
+    }
 
     float    freq      = freq_s[0]    ? (float)atof(freq_s)     : 1000.0f;
     uint8_t  amplitude = amp_s[0]     ? (uint8_t)atoi(amp_s)    : 127;
@@ -2252,18 +2257,22 @@ static void handle_cloud_status(int conn_id) {
     bool have = (cloud_config_load(&cfg) == 0);
     char last_error[80];
     cloud_client_last_error(last_error, sizeof(last_error));
-    char resp[384];
-    snprintf(resp, sizeof(resp),
-             "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"last_error\":\"%s\",\"configured\":%s,"
-             "\"host\":\"%s\",\"port\":%u,\"tls\":%s,\"verify\":%s,\"device_id\":\"%s\"}}\n",
-             cloud_client_state_str(), last_error,
-             have ? "true" : "false",
-             have ? cfg.host : "",
-             have ? cfg.port : 0,
-             (have && cfg.tls) ? "true" : "false",
-             (have && cfg.verify) ? "true" : "false",
-             have ? cfg.device_id : "");
-    if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
+    /* last_error, host and device_id are free text: escape them (a quote broke the reply). */
+    char resp[640];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"last_error\":",
+            cloud_client_state_str());
+    bp_emit_jstr(&e, last_error);
+    bp_emit(&e, ",\"configured\":%s,\"host\":", have ? "true" : "false");
+    bp_emit_jstr(&e, have ? cfg.host : "");
+    bp_emit(&e, ",\"port\":%u,\"tls\":%s,\"verify\":%s,\"device_id\":",
+            have ? cfg.port : 0, (have && cfg.tls) ? "true" : "false",
+            (have && cfg.verify) ? "true" : "false");
+    bp_emit_jstr(&e, have ? cfg.device_id : "");
+    bp_emit_raw(&e, "}}\n");
+    if (!bp_emit_ok(&e) ||
+        at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);
     }
 }
@@ -2442,17 +2451,22 @@ static void handle_wifi_status(int conn_id) {
 
     uint32_t c3_noresp = 0, c3_reboot = 0;   /* C3 restarts: no RSSI answers / booted while up */
     esp_wifi_ctrl_slave_lost_counts(&c3_noresp, &c3_reboot);
-    char resp[448];
+    /* The SSID is user data: escape it (a quote in it broke the whole reply). */
+    char ssid_j[2 * sizeof(cfg.ssid) + 8];
+    bp_emit_t ej;
+    bp_emit_init(&ej, ssid_j, sizeof(ssid_j));
+    bp_emit_jstr(&ej, have ? cfg.ssid : "");
+    char resp[512];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,"
-             "\"connected\":%s,\"ssid\":\"%s\","
+             "\"connected\":%s,\"ssid\":%s,"
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
              "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
              "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu}}\n",
              esp_wifi_ctrl_state_str(),
              have ? "true" : "false",
              esp_wifi_ctrl_connected() ? "true" : "false",
-             have ? cfg.ssid : "",
+             bp_emit_ok(&ej) ? ssid_j : "\"\"",
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
              (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot);

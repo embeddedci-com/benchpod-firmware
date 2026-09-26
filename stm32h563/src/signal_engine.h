@@ -359,7 +359,8 @@ int measure_psram(uint16_t *out16, const char *waveform, float freq,
 /* True once the SPI1 GPDMA channels inited OK (big transfers use DMA). */
 bool signal_engine_dma_active(void);
 
-/* SPI-clock diagnostics: set SCK live (div = 2,4,..256; returns SCK Hz or 0),
+/* SPI-clock diagnostics: set SCK live (div = 128 or 256; faster clocks exceed the gateware's
+   MOSI sampling and are refused; returns SCK Hz or 0),
    and loop-test read reliability at the current clock (prints CLEAN/CORRUPT). */
 uint32_t signal_engine_spi_set_prescaler(uint32_t div);
 void     signal_engine_spi_diag(int n);

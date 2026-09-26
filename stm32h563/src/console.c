@@ -44,6 +44,8 @@ bool clock_on_hsi(void);   /* main.c */
 #include "net_server.h"       /* net_ip_str() for `status` */
 #include "cloud_config.h"     /* provisioned cloud registration, for `status` */
 #include "cloud_client.h"     /* cloud_client_state_str() for `status` */
+#include "board_pins.h"      /* ESP_EN (esp-reset-pulse) */
+#include "pico/time.h"
 #include "pico/rand.h"        /* get_rand_32 — hardware RNG liveness check */
 
 #include <stdio.h>
@@ -147,6 +149,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
         "  flash-esp32          C3: flash the embedded esp-hosted slave image\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
+        "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
         "  wifi-clear           erase stored Wi-Fi credentials\r\n"
         "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
@@ -444,7 +447,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         uint32_t div = (uint32_t)atoi(argv[1]);
         uint32_t hz = signal_engine_spi_set_prescaler(div);
         if (hz) op(out, ctx, "  SPI1 SCK = %lu Hz (/%lu)\r\n", (unsigned long)hz, (unsigned long)div);
-        else    op(out, ctx, "  bad divisor (use 2,4,8,16,32,64,128,256)\r\n");
+        else    op(out, ctx, "  bad divisor (use 128 or 256; faster than /128 exceeds the iCE40's MOSI sampling)\r\n");
     } else if (!strcmp(argv[0], "spi-diag")) {
         int n = (argc >= 2) ? atoi(argv[1]) : 50;
         signal_engine_spi_diag(n);
@@ -825,6 +828,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
     } else if (!strcmp(argv[0], "wifi-set")) {
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
+    } else if (!strcmp(argv[0], "esp-reset-pulse")) {
+        /* Diagnostic: reset the ESP32-C3 behind the Wi-Fi control's back (EN low 50 ms), which
+           is what a C3 crash or brown-out looks like from here.  The control must notice (the
+           C3's new boot event, or its RSSI answers stopping), drop the link and rejoin; see
+           wifi_status c3_lost_reboot / c3_lost_noresp. */
+        HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
+        sleep_ms(50);
+        HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_SET);
+        op(out, ctx, "  C3 reset pulsed (50 ms); watch wifi-show\r\n");
     } else if (!strcmp(argv[0], "esp-mon")) {
         uint32_t ms = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 5000;
         if (ms > 20000) ms = 20000;

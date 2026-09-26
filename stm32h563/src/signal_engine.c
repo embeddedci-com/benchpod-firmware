@@ -621,14 +621,13 @@ static bool cap_overflowed(uint8_t st, const char *what) {
    Change the SPI1 SCK live, and loop-test read reliability at that clock, so the
    real usable SPI frequency can be swept from one flash without reflashing. */
 uint32_t signal_engine_spi_set_prescaler(uint32_t div) {
+    /* Floor /128 (1.95 MHz, the boot setting).  The gateware samples MOSI once, 2-3 clk (24 MHz)
+       after it sees SCK rise through its synchronizer, and updates MISO 3-4 clk after SCK falls,
+       so an SCK half period under ~150 ns (above ~3.3 MHz, i.e. /64 and faster) corrupts
+       commands by design, not because of the board.  Refuse those rather than leave the link
+       in a state that silently mangles every command. */
     uint32_t presc;
     switch (div) {
-    case 2:   presc = SPI_BAUDRATEPRESCALER_2;   break;
-    case 4:   presc = SPI_BAUDRATEPRESCALER_4;   break;
-    case 8:   presc = SPI_BAUDRATEPRESCALER_8;   break;
-    case 16:  presc = SPI_BAUDRATEPRESCALER_16;  break;
-    case 32:  presc = SPI_BAUDRATEPRESCALER_32;  break;
-    case 64:  presc = SPI_BAUDRATEPRESCALER_64;  break;
     case 128: presc = SPI_BAUDRATEPRESCALER_128; break;
     case 256: presc = SPI_BAUDRATEPRESCALER_256; break;
     default:  return 0;
