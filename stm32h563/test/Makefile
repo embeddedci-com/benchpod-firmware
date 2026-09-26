@@ -158,7 +158,7 @@ build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
