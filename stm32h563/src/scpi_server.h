@@ -8,7 +8,10 @@
    target_power, wifi_manager). */
 
 /* Dispatch one complete, NUL-terminated SCPI command line (no trailing CR/LF)
-   received on conn_id.  Sends any response via at_send_data(conn_id, ...). */
+   received on conn_id.  Sends any response via at_send_data(conn_id, ...), paced
+   against at_send_avail(): a large reply blocks the caller (the hw worker task)
+   until the connection's TX ring drains, and is abandoned with a log line and a
+   close if the ring makes no progress for SCPI_SEND_STALL_MS. */
 void scpi_dispatch_line(int conn_id, const char *line);
 
 /* Notify the SCPI layer that a TCP connection has closed.  SCPI state is

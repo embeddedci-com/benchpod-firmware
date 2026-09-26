@@ -46,4 +46,10 @@ const char *esp_wifi_ctrl_state_str(void);
    disconnect). Returns true and fills *dbm iff a reading is available. */
 bool esp_wifi_ctrl_rssi(int *dbm);
 
+/* How many times the link was torn down and the C3 restarted because the C3 itself
+   went away while connected or connecting: `no_response` = RSSI_MAX_MISSES GetRssi
+   requests in a row went unanswered (crashed/hung C3, stuck HANDSHAKE); `rebooted` =
+   the C3 announced a new boot mid-session.  Since power-on.  Either pointer may be NULL. */
+void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted);
+
 #endif /* ESP_WIFI_CTRL_H */

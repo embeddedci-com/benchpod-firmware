@@ -8,7 +8,8 @@ CFLAGS  := -std=gnu11 -Wall -Wextra -O1 -I../src -I../port -I. -I../lib/esp_host
 # `make test` reported a PASS for code that was no longer being compiled — or a FAIL for a fix
 # that was.  These suites link in seconds, so depending on all headers is cheaper than being
 # wrong; it is also why there is no -MMD dependency machinery to get subtly incomplete.
-HEADERS := $(wildcard ../src/*.h) $(wildcard ../port/*.h) $(wildcard *.h) $(wildcard mocks/*.h)
+HEADERS := $(wildcard ../src/*.h) $(wildcard ../port/*.h) $(wildcard *.h) $(wildcard mocks/*.h) \
+           $(wildcard shim/lwip/*.h)
 
 PORTABLE_SRCS := test_portable.c ../src/b64url.c ../src/sensor_bmp280.c ../src/esp_hosted_frame.c
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
@@ -30,6 +31,16 @@ LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
+BUSREC_SRCS   := test_bus_recovery.c
+CFGSTORE_SRCS := test_config_store.c ../src/config_store.c ../src/cloud_config.c mocks/mock_flash.c
+# Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
+# for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
+WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c
+# SCPI reply pacing: scpi_server.c on the real libscpi, instrument + conn ring faked.
+SCPI_LIB      := ../lib/scpi-parser/libscpi
+SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
+                 $(addprefix $(SCPI_LIB)/src/,error.c expression.c fifo.c ieee488.c \
+                   lexer.c minimal.c parser.c units.c utils.c)
 
 # OTA staging/verify (src/ota.c). It hashes with mbedTLS, which lives in the STM32Cube tree the
 # firmware build already needs, so this one suite is conditional: without Cube the rest of the
@@ -126,11 +137,28 @@ build/test_boot_policy: $(BOOTPOL_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BOOTPOL_SRCS) -lm -o $@
 
+build/test_esp_wifi_ctrl: $(WIFICTRL_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim $(WIFICTRL_SRCS) -lm -o $@
+
+# -Wno-missing-field-initializers: scpi_server.c's command table omits libscpi's `tag` field.
+build/test_scpi_paced: $(SCPI_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Wno-missing-field-initializers -I$(SCPI_LIB)/inc $(SCPI_SRCS) -lm -o $@
+
+build/test_config_store: $(CFGSTORE_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CFGSTORE_SRCS) -lm -o $@
+
+build/test_bus_recovery: $(BUSREC_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(BUSREC_SRCS) -lm -o $@
+
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -156,6 +184,11 @@ run: $(TESTS)
 	@./build/test_eth_diag
 	@./build/test_power_profile
 	@./build/test_boot_policy
+	@./build/test_bus_recovery
+	@./build/test_config_store > build/test_config_store.log || { cat build/test_config_store.log; exit 1; }
+	@tail -n 1 build/test_config_store.log
+	@./build/test_esp_wifi_ctrl
+	@./build/test_scpi_paced
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
 else

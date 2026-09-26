@@ -7,6 +7,8 @@
 #include "wifi_manager.h"
 #include "device_identity.h"
 #include "b64url.h"
+#include "watchdog.h"
+#include "pico/time.h"   /* make_timeout_time_ms / time_reached / sleep_ms */
 
 #include "scpi/scpi.h"
 
@@ -80,26 +82,77 @@ static scpi_t       scpi_ctx;
 static char         scpi_input_buf[SCPI_INPUT_BUFFER_LENGTH];
 static scpi_error_t scpi_err_queue[SCPI_ERROR_QUEUE_SIZE];
 
-/* Single-threaded main loop + device-wide state → one shared response buffer.
+/* Only the hw worker task runs SCPI + device-wide state → one shared response buffer.
    conn_id for the in-flight line is carried in scpi_ctx.user_context. */
 static char   resp_buf[RESP_BUF_SIZE];
 static size_t resp_len;
 
 static int cur_conn(scpi_t *ctx) { return (int)(intptr_t)ctx->user_context; }
 
+/* Paced send.  A reply is queued into the connection's TX ring (conn_tx, 2 KB),
+   which the net task drains into lwIP.  READ?/MEASure? can return 4096 values
+   (~24 KB of CSV), so a reply must wait for ring room instead of writing into a
+   full ring: at_send_data() refuses a write the ring cannot take whole, which
+   used to close the connection after the first ~2 KB.  We send only what fits,
+   sleep 1 ms while the ring is full, and give up if it makes no progress for
+   SCPI_SEND_STALL_MS (peer not reading, or the connection is gone).
+
+   Runs on the hw worker task (scpi_dispatch_line <- command_handler_process <-
+   hw_worker), which blocks here, so the wait feeds the worker's watchdog
+   heartbeat: a long reply at a slow drain rate is progress, not a hang. */
+#ifndef SCPI_SEND_STALL_MS
+#define SCPI_SEND_STALL_MS   5000u
+#endif
+#define SCPI_SEND_MIN_CHUNK  256u   /* don't dribble: wait for this much room (or the rest) */
+
+static bool resp_aborted;   /* this line's reply was abandoned; drop the rest of it */
+
+static void resp_abort(int conn, const char *why, size_t sent, size_t len) {
+    printf("[scpi] conn %d: reply aborted (%s) after %u of %u bytes of this chunk; closing\n",
+           conn, why, (unsigned)sent, (unsigned)len);
+    at_close_connection(conn);
+    resp_aborted = true;
+}
+
+static int send_paced(int conn, const char *buf, size_t len) {
+    if (resp_aborted) return -1;
+    absolute_time_t stall_deadline = make_timeout_time_ms(SCPI_SEND_STALL_MS);
+    size_t off = 0;
+    while (off < len) {
+        size_t want  = len - off;
+        size_t avail = at_send_avail(conn);
+        size_t need  = want < SCPI_SEND_MIN_CHUNK ? want : SCPI_SEND_MIN_CHUNK;
+        if (avail < need) {
+            if (time_reached(stall_deadline)) {
+                resp_abort(conn, "send buffer stalled", off, len);
+                return -1;
+            }
+            watchdog_heartbeat(WD_TASK_WORKER, "worker");
+            sleep_ms(1);
+            continue;
+        }
+        size_t n = want < avail ? want : avail;
+        if (at_send_data(conn, (const uint8_t *)buf + off, n) != 0) {
+            resp_abort(conn, "send failed", off, len);
+            return -1;
+        }
+        off += n;
+        stall_deadline = make_timeout_time_ms(SCPI_SEND_STALL_MS);   /* progress */
+    }
+    return 0;
+}
+
 /* libscpi calls write in fragments; batch into resp_buf and emit on flush (or
-   when full) so a query is one AT+CIPSEND instead of many. */
+   when full) so a short query is one send instead of many. */
 static size_t cb_write(scpi_t *ctx, const char *data, size_t len) {
     int conn = cur_conn(ctx);
+    if (resp_aborted) return len;   /* already logged + closing: discard the rest */
     size_t off = 0;
     while (off < len) {
         if (resp_len == RESP_BUF_SIZE) {
-            if (at_send_data(conn, (const uint8_t *)resp_buf, resp_len) != 0) {
-                at_close_connection(conn);
-                resp_len = 0;
-                return off;   /* connection died — drop the remainder */
-            }
+            int rc = send_paced(conn, resp_buf, resp_len);
             resp_len = 0;
+            if (rc != 0) return len;   /* aborted: drop the remainder */
         }
         size_t space = RESP_BUF_SIZE - resp_len;
         size_t n = (len - off) < space ? (len - off) : space;
@@ -113,8 +166,7 @@ static size_t cb_write(scpi_t *ctx, const char *data, size_t len) {
 static scpi_result_t cb_flush(scpi_t *ctx) {
     int conn = cur_conn(ctx);
     if (resp_len > 0) {
-        if (at_send_data(conn, (const uint8_t *)resp_buf, resp_len) != 0)
-            at_close_connection(conn);
+        (void)send_paced(conn, resp_buf, resp_len);
         resp_len = 0;
     }
     return SCPI_RES_OK;
@@ -778,6 +830,7 @@ void scpi_dispatch_line(int conn_id, const char *line) {
     /* Route this line's response to the right TCP connection. */
     scpi_ctx.user_context = (void *)(intptr_t)conn_id;
     resp_len = 0;
+    resp_aborted = false;
 
     /* command_handler already assembled one complete line (no terminator);
        feed it plus a terminator so libscpi parses and dispatches it now. */

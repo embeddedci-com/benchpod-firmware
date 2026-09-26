@@ -374,7 +374,13 @@ static struct {
     bool     trig_fired;
     bool     b64;         /* dense 16-bit chunks carry "b64":"<base64url of little-endian
                              uint16>" instead of "data":[decimal,...] (see wants_b64) */
+    uint32_t progress_ms; /* HAL_GetTick() of the last chunk the connection took */
 } bulk;
+
+/* A client that stays connected but stops reading held the PSRAM bus and the busy gate for as
+   long as it stayed connected (a dead tunnel's ring never drains either).  No progress for this
+   long ends the send. */
+#define BULK_STALL_MS 30000u
 
 /* ---- compact dense read-back ("enc":"b64", advertised as caps[] "capture_b64") ----
    Decimal JSON costs up to 6 B per 16-bit sample ("65535,") plus a snprintf per sample, and
@@ -503,6 +509,7 @@ static uint16_t psram_chunk16[CHUNK_SAMPLES];
 
 static void bulk_begin(int conn_id, size_t total, bool is16) {
     bulk.active      = true;
+    bulk.progress_ms = HAL_GetTick();
     bulk.conn_id     = conn_id;
     bulk.total       = total;
     bulk.sent        = 0;
@@ -523,6 +530,7 @@ static void bulk_begin(int conn_id, size_t total, bool is16) {
    unchanged — only the source (chunked PSRAM vs one big SRAM read) differs. */
 static void bulk_begin_capture16(int conn_id, size_t adc_samples, size_t la_samples) {
     bulk.active      = true;
+    bulk.progress_ms = HAL_GetTick();
     bulk.conn_id     = conn_id;
     bulk.total       = adc_samples + la_samples;
     bulk.sent        = 0;
@@ -542,6 +550,7 @@ static void bulk_begin_capture16(int conn_id, size_t adc_samples, size_t la_samp
    rates/geometry from the first attempt and just appends this tail. */
 static void bulk_begin_capture16_resume(int conn_id, size_t offset) {
     bulk.active      = true;
+    bulk.progress_ms = HAL_GetTick();
     bulk.conn_id     = conn_id;
     bulk.total       = last_cap.adc_samples + last_cap.la_samples;
     bulk.sent        = offset;
@@ -565,7 +574,19 @@ static void bulk_pump(void) {
            framing and budget up to 7 bytes per sample ("65535,").  If it is
            nearly full, stop and resume next poll once lwIP has drained acks. */
         size_t avail = at_send_avail(conn);
-        if (avail < 96) return;
+        if (avail < 96) {
+            if (HAL_GetTick() - bulk.progress_ms > BULK_STALL_MS) {
+                printf("[cmd] bulk send stalled %lu ms on conn %d at %lu/%lu: ending it\n",
+                       (unsigned long)BULK_STALL_MS, conn,
+                       (unsigned long)bulk.sent, (unsigned long)bulk.total);
+                bulk.active = false;
+                if (bulk.from_psram) fpga_capture_psram_release();
+                heavy_release(conn);
+                at_close_connection(conn);   /* the reply is incomplete: drop the connection */
+            }
+            return;
+        }
+        bulk.progress_ms = HAL_GetTick();
 
         /* ---- LA region of a deep unified capture: stream TRANSITIONS (run-length) ----
            Digital lanes are mostly static, so sending one (index,word) pair per CHANGE
@@ -2116,6 +2137,10 @@ static void handle_status(int conn_id) {
             nrst_ctrl_supported() ? "true" : "false");
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
+    {
+        extern volatile uint32_t g_malloc_failures;   /* main.c: allocations that failed after boot */
+        bp_emit(&e, "\"malloc_failures\":%lu,", (unsigned long)g_malloc_failures);
+    }
     bp_emit(&e, "\"gateware\":%u,\"gateware_embedded\":%u,\"loop_tripped\":%s,\"uart_rx_overflow\":%s,",
             (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version(),
             fpga_dac_loop_tripped() ? "true" : "false", fpga_uart_rx_overflowed() ? "true" : "false");
@@ -2177,8 +2202,13 @@ static void handle_cloud_set(int conn_id, const char *json) {
     char did[CLOUD_DEVICE_ID_MAX]  = {0};
     char port_s[8] = {0}, tls_s[8] = {0}, en_s[8] = {0};
 
-    if (!json_get_value(json, "host", host, sizeof(host)))           { send_error(conn_id, "missing host");      return; }
-    if (!json_get_value(json, "device_id", did, sizeof(did)))        { send_error(conn_id, "missing device_id"); return; }
+    /* Refuse over-long values instead of saving them cut short (a truncated host never connects). */
+    int hr = bp_json_get_fit(json, "host", host, sizeof(host));
+    if (hr == 0)  { send_error(conn_id, "missing host");  return; }
+    if (hr < 0)   { send_error(conn_id, "host too long"); return; }
+    int dr = bp_json_get_fit(json, "device_id", did, sizeof(did));
+    if (dr == 0)  { send_error(conn_id, "missing device_id");  return; }
+    if (dr < 0)   { send_error(conn_id, "device_id too long"); return; }
     json_get_value(json, "port", port_s, sizeof(port_s));
     json_get_value(json, "tls", tls_s, sizeof(tls_s));
     bool have_en  = json_get_value(json, "enabled", en_s, sizeof(en_s)) != 0;
@@ -2204,7 +2234,7 @@ static void handle_cloud_set(int conn_id, const char *json) {
     cfg.verify  = tls ? 1 : 0;
 
     if (cloud_config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
-    cloud_client_reload();   /* pick up the new config and (re)connect */
+    net_cloud_reload();   /* pick up the new config and (re)connect */
 
     char resp[256];
     snprintf(resp, sizeof(resp),
@@ -2240,7 +2270,7 @@ static void handle_cloud_status(int conn_id) {
 
 static void handle_cloud_clear(int conn_id) {
     cloud_config_clear();
-    cloud_client_reload();   /* drops to DISABLED now that there's no config */
+    net_cloud_reload();   /* drops to DISABLED now that there's no config */
     send_ok_str(conn_id, "\"cleared\"");
 }
 
@@ -2251,21 +2281,27 @@ static void handle_wifi_set(int conn_id, const char *json) {
     config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.magic = CONFIG_MAGIC; cfg.version = CONFIG_VERSION;
-    if (!json_get_value(json, "ssid", cfg.ssid, sizeof(cfg.ssid))) {
-        send_error(conn_id, "missing ssid"); return;
+    int sr = bp_json_get_fit(json, "ssid", cfg.ssid, sizeof(cfg.ssid));
+    if (sr == 0) { send_error(conn_id, "missing ssid"); return; }
+    if (sr < 0)  { send_error(conn_id, "ssid too long"); return; }   /* never save it cut short */
+    if (bp_json_get_fit(json, "password", cfg.password, sizeof(cfg.password)) < 0) {   /* open AP: empty */
+        send_error(conn_id, "password too long"); return;
     }
-    json_get_value(json, "password", cfg.password, sizeof(cfg.password));   /* open AP: empty */
     if (config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
-    esp_wifi_ctrl_reload();   /* bring the ESP32 up + (re)connect with the new creds */
+    net_wifi_reload();   /* bring the ESP32 up + (re)connect with the new creds */
 
-    char resp[128];
-    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"data\":{\"ssid\":\"%s\"}}\n", cfg.ssid);
-    if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
+    char resp[160];
+    bp_emit_t e;                          /* the SSID is escaped: it may hold a quote */
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"ssid\":");
+    bp_emit_jstr(&e, cfg.ssid);
+    bp_emit_raw(&e, "}}\n");
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
 static void handle_wifi_clear(int conn_id) {
     config_clear();
-    esp_wifi_ctrl_reload();   /* drops Wi-Fi; ESP32 returns to reset */
+    net_wifi_reload();   /* drops Wi-Fi; ESP32 returns to reset */
     send_ok_str(conn_id, "\"cleared\"");
 }
 
@@ -2404,19 +2440,22 @@ static void handle_wifi_status(int conn_id) {
     }
     batch[n] = '\0';
 
-    char resp[384];
+    uint32_t c3_noresp = 0, c3_reboot = 0;   /* C3 restarts: no RSSI answers / booted while up */
+    esp_wifi_ctrl_slave_lost_counts(&c3_noresp, &c3_reboot);
+    char resp[448];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,"
              "\"connected\":%s,\"ssid\":\"%s\","
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
-             "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu}}\n",
+             "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
+             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu}}\n",
              esp_wifi_ctrl_state_str(),
              have ? "true" : "false",
              esp_wifi_ctrl_connected() ? "true" : "false",
              have ? cfg.ssid : "",
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
-             (unsigned long)ps->xact_err);
+             (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot);
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
 }
 

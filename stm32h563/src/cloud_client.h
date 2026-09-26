@@ -44,7 +44,9 @@ void cloud_client_last_error(char *out, size_t n);
    the tunnel pseudo-conn (CH_CLOUD_TUNNEL_CONN + slot); the slot's tunnel id is stamped on each frame
    so the server routes it to the right client. Called by at_send_data() when the command handler
    writes to a tunnel conn. No-op when that slot has no open tunnel. */
-void cloud_client_tunnel_out(int conn_id, const uint8_t *buf, size_t len);
+/* Frame raw tunnel bytes onto the WS link.  Returns how many of them were taken (the caller
+   keeps the rest for the next poll); a closed tunnel takes (discards) them all. */
+size_t cloud_client_tunnel_out(int conn_id, const uint8_t *buf, size_t len);
 
 /* Raw bytes that may be written to this tunnel pseudo-conn right now without overrunning the TLS/WS
    send buffer (accounts for the base64 + envelope + WS-frame expansion in cloud_client_tunnel_out).

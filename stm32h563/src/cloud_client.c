@@ -156,6 +156,10 @@ static int cl_tunnel_slot_by_id(const char *id) {
 }
 
 static int cl_tunnel_free_slot(void) {
+    /* Prefer a slot whose previous session's reset the worker has already handled (its late
+       replies are gone); fall back to any free one. */
+    for (int i = 0; i < CH_CLOUD_TUNNEL_CONN_COUNT; i++)
+        if (!s_tunnels[i][0] && !hw_worker_conn_busy(CH_CLOUD_TUNNEL_CONN + i)) return i;
     for (int i = 0; i < CH_CLOUD_TUNNEL_CONN_COUNT; i++)
         if (!s_tunnels[i][0]) return i;
     return -1;
@@ -476,7 +480,9 @@ static bool cl_tcp_established(void) {
 static int cl_tcp_send(const uint8_t *buf, size_t len) {
     if (!s_pcb) return -1;
     if (altcp_write(s_pcb, buf, (u16_t)len, TCP_WRITE_FLAG_COPY) != ERR_OK) return -1;
-    if (altcp_output(s_pcb) != ERR_OK) return -1;
+    /* The frame is queued once altcp_write succeeds; an altcp_output error only delays it (the
+       TCP timer sends it).  Reporting that as a failure made callers resend a queued frame. */
+    (void)altcp_output(s_pcb);
     return 0;
 }
 
@@ -780,6 +786,14 @@ void cloud_client_send_command_response(const char *request_id,
                                         const char *reply, size_t reply_len) {
     (void)reply_len;
     static char frame[BP_CLOUD_CMD_FRAME_MAX];
+    /* The worker can finish a command after the link dropped.  A reply sent while a reconnect
+       is mid-handshake landed in the HTTP upgrade exchange (or tripped a backoff); the server
+       re-issues the command after reconnecting anyway, so drop it. */
+    if (s_state != CL_CONNECTED) {
+        printf("[cloud] dropping the reply to %s: link not connected (%s)\n",
+               request_id, cloud_client_state_str());
+        return;
+    }
     if (strstr(reply, "\"status\":\"error\"")) {
         char msg[320] = {0};   /* pin-conflict / la_voltage refusals run to ~250 characters */
         cl_json_str(reply, "message", msg, sizeof(msg));
@@ -856,10 +870,10 @@ static void cl_handle_tunnel_close(const char *json) {
     hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);
 }
 
-void cloud_client_tunnel_out(int conn_id, const uint8_t *buf, size_t len) {
+size_t cloud_client_tunnel_out(int conn_id, const uint8_t *buf, size_t len) {
     int slot = conn_id - CH_CLOUD_TUNNEL_CONN;
-    if (slot < 0 || slot >= CH_CLOUD_TUNNEL_CONN_COUNT) return;
-    if (!s_tunnels[slot][0] || len == 0) return;
+    if (slot < 0 || slot >= CH_CLOUD_TUNNEL_CONN_COUNT) return len;   /* nowhere to go: discard */
+    if (!s_tunnels[slot][0] || len == 0) return len;
     /* Chunk so each tunnel.data frame fits cl_ws_send's frame budget after base64 + envelope. */
     char b64[B64URL_ENCODED_LEN(BP_TUNNEL_CHUNK) + 1];
     char frame[BP_TUNNEL_OUT_FRAME_MAX];
@@ -867,14 +881,18 @@ void cloud_client_tunnel_out(int conn_id, const uint8_t *buf, size_t len) {
     while (off < len) {
         size_t n = len - off;
         if (n > BP_TUNNEL_CHUNK) n = BP_TUNNEL_CHUNK;
-        if (b64url_encode(buf + off, n, b64, sizeof(b64)) == 0) return;
+        if (b64url_encode(buf + off, n, b64, sizeof(b64)) == 0) return len;   /* cannot happen */
         int fn = snprintf(frame, sizeof(frame),
             "{\"type\":\"tunnel.data\",\"tunnel_id\":\"%s\",\"data_b64\":\"%s\"}",
             s_tunnels[slot], b64);
-        if (fn <= 0 || (size_t)fn >= sizeof(frame)) return;
-        if (!cl_ws_send(WS_OP_TEXT, frame, (size_t)fn)) return;
+        if (fn <= 0 || (size_t)fn >= sizeof(frame)) return len;               /* cannot happen */
+        /* A full send queue (ERR_MEM) is not a loss: report what went out and the caller keeps
+           the rest in its ring for the next poll.  It used to return here while the caller
+           advanced past everything, dropping bytes from the middle of a capture stream. */
+        if (!cl_ws_send(WS_OP_TEXT, frame, (size_t)fn)) return off;
         off += n;
     }
+    return len;
 }
 
 size_t cloud_client_tunnel_avail(int conn_id) {
@@ -966,11 +984,11 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
     } else if (strcmp(type, "ota.data") == 0) {
         return cl_handle_ota_data(msg);   /* false => worker busy, retry this frame next poll */
     } else if (strcmp(type, "ota.end") == 0) {
-        hw_worker_submit_ota_end();
+        return hw_worker_submit_ota_end();     /* false => worker busy, retry this frame next poll */
     } else if (strcmp(type, "ota.abort") == 0) {
-        hw_worker_submit_ota_abort();
+        return hw_worker_submit_ota_abort();   /* (these were dropped on a full queue) */
     } else if (strcmp(type, "ota.commit") == 0) {
-        hw_worker_submit_ota_commit();
+        return hw_worker_submit_ota_commit();
     } else if (strcmp(type, "ping") == 0) {
         cl_ws_send(WS_OP_TEXT, "{\"type\":\"pong\"}", 15);
     }

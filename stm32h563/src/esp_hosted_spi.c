@@ -72,6 +72,11 @@ static esp_hosted_frame_cb_t s_serial_cb;   /* ESP_SERIAL_IF */
 
 static bool     s_running = false;          /* reset released */
 static bool     s_ready   = false;          /* boot event seen */
+/* A boot event after the first one since start() means the C3 reset itself (crash,
+   brown-out, its own watchdog) while we were talking to it.  Latched here, taken by
+   esp_wifi_ctrl on the same (net) task, which restarts the link. */
+static bool     s_slave_reset;
+static uint32_t s_boot_events;              /* boot events since start() */
 static uint16_t s_seq;
 
 /* TX ring of pre-framed packets (header already prepended). */
@@ -183,6 +188,7 @@ void esp_hosted_spi_start(void) {
     sleep_ms(10);
     HAL_GPIO_WritePin(ESP_EN_PORT,   ESP_EN_PIN,   GPIO_PIN_SET);   /* release reset */
     s_running = true; s_ready = false;
+    s_slave_reset = false; s_boot_events = 0;
     s_tx_head = s_tx_tail = 0;
     memset(&s_pump_stats, 0, sizeof(s_pump_stats));
     printf("[esp] ESP32-C3 reset released — awaiting boot event\n");
@@ -191,10 +197,17 @@ void esp_hosted_spi_start(void) {
 void esp_hosted_spi_stop(void) {
     HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);     /* hold reset */
     s_running = false; s_ready = false;
+    s_slave_reset = false;
     s_tx_head = s_tx_tail = 0;
 }
 
 bool esp_hosted_spi_ready(void) { return s_ready; }
+
+bool esp_hosted_spi_take_slave_reset(void) {
+    bool r = s_slave_reset;
+    s_slave_reset = false;
+    return r;
+}
 
 /* True once the SPI4 GPDMA channels inited OK (Wi-Fi transactions use DMA). */
 bool esp_hosted_spi_dma_active(void) { return s_esp_dma_ok; }
@@ -233,7 +246,16 @@ static void handle_rx_frame(const esp_hosted_rx_t *rx) {
            (Capabilities/config TLVs in the payload are parsed later — TODO.) */
         if (rx->priv_pkt_type == ESP_HOSTED_PKT_TYPE_EVENT &&
             rx->payload_len >= 1 && rx->payload[0] == ESP_HOSTED_EVENT_INIT) {
-            if (!s_ready) printf("[esp] slave boot event — link up\n");
+            s_boot_events++;
+            if (!s_ready) {
+                printf("[esp] slave boot event — link up\n");
+            } else {
+                /* Already up: the slave rebooted underneath us.  Its Wi-Fi state is gone,
+                   so everything we think we know about the association is stale. */
+                printf("[esp] slave boot event while up (#%lu since start) — slave reset\n",
+                       (unsigned long)s_boot_events);
+                s_slave_reset = true;
+            }
             s_ready = true;
         }
         break;

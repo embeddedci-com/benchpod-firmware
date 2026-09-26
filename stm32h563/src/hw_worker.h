@@ -53,6 +53,9 @@ void hw_worker_submit_closed(int conn_id);
 /* A cloud tunnel opened/closed (net task): the worker runs
    command_handler_tunnel_reset for that tunnel pseudo-conn. */
 void hw_worker_submit_tunnel_reset(int conn_id);
+/* A close/reset for this id is still on its way to the worker (queued or parked because the
+   queue was full).  The net task must not reuse the slot, and drops its leftover output. */
+bool hw_worker_conn_busy(int conn_id);
 
 /* A cloud command.request (net task).  The reply is delivered back via
    hw_worker_take_cloud_reply().  Returns false if a cloud command is already in
@@ -75,9 +78,9 @@ bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
    task (WS) or console; non-blocking submits. */
 bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex);
 bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len);
-void hw_worker_submit_ota_end(void);
-void hw_worker_submit_ota_abort(void);
-void hw_worker_submit_ota_commit(void);
+bool hw_worker_submit_ota_end(void);
+bool hw_worker_submit_ota_abort(void);
+bool hw_worker_submit_ota_commit(void);
 
 /* Net task (Wi-Fi control): flash the embedded esp-hosted image onto the ESP32-C3 (~140 s),
    then report through esp_wifi_ctrl_flash_done().  False if it could not be queued. */

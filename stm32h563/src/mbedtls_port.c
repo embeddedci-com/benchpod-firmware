@@ -12,7 +12,8 @@
 #include "mbedtls/platform_time.h"
 
 #include "FreeRTOS.h"
-#include "pico/rand.h"      /* get_rand_32 — STM32H5 TRNG (rng.c) */
+#include "mbedtls/entropy.h" /* MBEDTLS_ERR_ENTROPY_SOURCE_FAILED */
+#include "rng.h"            /* rng_fill — STM32H5 TRNG with error reporting */
 #include "pico/time.h"      /* time_us_64 — monotonic uptime for bench_mbedtls_time */
 
 #include <string.h>
@@ -60,17 +61,15 @@ mbedtls_ms_time_t mbedtls_ms_time(void)
 }
 
 /* Hardware entropy source registered by mbedtls_entropy_init() because the
-   config defines MBEDTLS_ENTROPY_HARDWARE_ALT.  Fill `output` from the TRNG. */
+   config defines MBEDTLS_ENTROPY_HARDWARE_ALT.  Fill `output` from the TRNG.
+   On a TRNG failure (seed/clock error that survives rng.c's retries) report
+   MBEDTLS_ERR_ENTROPY_SOURCE_FAILED with *olen = 0, so the DRBG seed and the
+   TLS handshake fail instead of running on zeros. */
 int mbedtls_hardware_poll(void *data, unsigned char *output, size_t len, size_t *olen)
 {
     (void)data;
-    size_t i = 0;
-    while (i < len) {
-        uint32_t r = get_rand_32();
-        size_t n = (len - i < sizeof(r)) ? (len - i) : sizeof(r);
-        memcpy(output + i, &r, n);
-        i += n;
-    }
+    if (olen) *olen = 0;
+    if (rng_fill(output, len) != 0) return MBEDTLS_ERR_ENTROPY_SOURCE_FAILED;
     if (olen) *olen = len;
     return 0;
 }

@@ -125,13 +125,14 @@ void handle_can_status(int conn_id) {
              "\"enabled\":%s,\"mode\":\"%s\",\"bitrate\":%lu,\"term\":%s,"
              "\"tec\":%u,\"rec\":%u,\"bus_off\":%s,\"error_passive\":%s,"
              "\"rx_pending\":%lu,\"rx_overflow\":%lu,"
-             "\"responder_rules\":%lu,\"responder_hits\":%lu}}\n",
+             "\"responder_rules\":%lu,\"responder_hits\":%lu,\"bus_off_recoveries\":%lu}}\n",
              s.enabled ? "true" : "false", can_mode_name(s.mode),
              (unsigned long)s.bitrate, s.term ? "true" : "false",
              s.tec, s.rec, s.bus_off ? "true" : "false",
              s.error_passive ? "true" : "false",
              (unsigned long)s.rx_pending, (unsigned long)s.rx_overflow,
-             (unsigned long)s.responder_rules, (unsigned long)s.responder_hits);
+             (unsigned long)s.responder_rules, (unsigned long)s.responder_hits,
+             (unsigned long)s.bus_off_recoveries);
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
     }

@@ -791,7 +791,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
    receive path recovers its clock from the wire. That is indistinguishable from damaged
    magnetics by looking at the MAC's counters, but it is obvious here.
 
-   Method: PA1 is temporarily re-muxed from ETH_REF_CLK to TIM2_CH2, TIM2 counts its edges
+   Method: PA1 is temporarily re-muxed from ETH_REF_CLK to TIM5_CH2, TIM5 counts its edges
    for a gate timed by the DWT cycle counter (the CPU clock, so the MCU crystal), and the
    pins and the link are put back. The link drops for the ~200 ms this takes.
 
@@ -807,38 +807,40 @@ int ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out)
   netif_set_down(netif);
   netif_set_link_down(netif);
 
-  /* PA1: ETH_REF_CLK (AF11) -> TIM2_CH2 (AF1). The PHY keeps driving it either way. */
+  /* PA1: ETH_REF_CLK (AF11) -> TIM5_CH2 (AF2). The PHY keeps driving it either way.
+     NOT TIM2 (AF1): TIM2 is the firmware's free-running microsecond clock (port/pico_compat.c),
+     and reprogramming it here stopped every deadline, ping and timeout until reboot. */
   GPIO_InitTypeDef g = {0};
   g.Pin       = GPIO_PIN_1;
   g.Mode      = GPIO_MODE_AF_PP;
   g.Pull      = GPIO_NOPULL;
   g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
-  g.Alternate = GPIO_AF1_TIM2;
+  g.Alternate = GPIO_AF2_TIM5;
   HAL_GPIO_Init(GPIOA, &g);
 
-  __HAL_RCC_TIM2_CLK_ENABLE();
-  TIM2->CR1   = 0;
-  TIM2->PSC   = 0;
-  TIM2->ARR   = 0xFFFFFFFFu;
-  TIM2->CCMR1 = (1u << 8);                    /* CC2S = 01: IC2 on TI2 (PA1), no filter */
-  TIM2->CCER  = 0;                            /* TI2 rising edge */
-  TIM2->SMCR  = (6u << TIM_SMCR_TS_Pos) |     /* TS = 110: trigger = TI2FP2 */
+  __HAL_RCC_TIM5_CLK_ENABLE();
+  TIM5->CR1   = 0;
+  TIM5->PSC   = 0;
+  TIM5->ARR   = 0xFFFFFFFFu;
+  TIM5->CCMR1 = (1u << 8);                    /* CC2S = 01: IC2 on TI2 (PA1), no filter */
+  TIM5->CCER  = 0;                            /* TI2 rising edge */
+  TIM5->SMCR  = (6u << TIM_SMCR_TS_Pos) |     /* TS = 110: trigger = TI2FP2 */
                 (7u << TIM_SMCR_SMS_Pos);     /* SMS = 111: external clock mode 1 */
-  TIM2->EGR   = TIM_EGR_UG;
-  TIM2->CNT   = 0;
-  TIM2->CR1   = TIM_CR1_CEN;
+  TIM5->EGR   = TIM_EGR_UG;
+  TIM5->CNT   = 0;
+  TIM5->CR1   = TIM_CR1_CEN;
 
   /* ~200 ms gate: 10 M edges at 50 MHz, so one count of quantisation is 0.1 ppm. */
   const uint32_t gate_cycles = SystemCoreClock / 5u;
   uint32_t t0 = DWT->CYCCNT;
-  uint32_t c0 = TIM2->CNT;
+  uint32_t c0 = TIM5->CNT;
   while ((DWT->CYCCNT - t0) < gate_cycles) { /* busy-wait: the gate must not be preempted */ }
-  uint32_t c1      = TIM2->CNT;
+  uint32_t c1      = TIM5->CNT;
   uint32_t elapsed = DWT->CYCCNT - t0;
 
-  TIM2->CR1  = 0;
-  TIM2->SMCR = 0;
-  __HAL_RCC_TIM2_CLK_DISABLE();
+  TIM5->CR1  = 0;
+  TIM5->SMCR = 0;
+  __HAL_RCC_TIM5_CLK_DISABLE();
 
   g.Alternate = GPIO_AF11_ETH;
   HAL_GPIO_Init(GPIOA, &g);

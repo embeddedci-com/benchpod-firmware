@@ -1144,7 +1144,31 @@ void signal_engine_init(void) {
         s_fpga_features = signal_engine_fpga_features();   /* which warmboot image booted */
         printf("[sig] FPGA gateware v%u (v2/PSRAM capture path), features 0x%02x\n",
                s_fpga_version, s_fpga_features);
+        signal_engine_fabric_to_idle();
     }
+}
+
+/* An MCU reset (crash, watchdog, OTA, flash-self, `reboot`) does not reset the iCE40: it keeps
+   whatever the previous session left running (a DAC waveform or the control loop, an armed
+   UART/SWD/I2C engine, LA pins driven high or low), while this fresh firmware's state (pin
+   table, engine flags, heavy gate) says everything is idle.  Put the fabric in that state.
+   Each is an idempotent opcode; nothing here touches PSRAM. */
+void signal_engine_fabric_to_idle(void) {
+    spi_cmd_write(CMD_STOP_DAC, NULL, 0);          /* also leaves loop + PSRAM-replay mode */
+    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
+        uint8_t zero[10] = {0};                    /* CAPTURE with both counts 0 = abort */
+        spi_cmd_write(CMD_CAPTURE, zero, sizeof(zero));
+    }
+    (void)fpga_set_trigger(0u, 0u);
+    spi_cmd_write(CMD_UART_DISABLE, NULL, 0);
+    spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
+    spi_cmd_write(CMD_I2C_DISABLE, NULL, 0);
+    for (uint8_t idx = 0; idx < 14u; idx++) {      /* every LA channel back to high-Z */
+        uint8_t args[2] = { idx, 2u };
+        spi_cmd_write(CMD_GPIO_SET, args, sizeof(args));
+    }
+    s_cotrig_pending = s_cotrig_in_capture = false;
+    printf("[sig] fabric set idle (DAC, capture, engines, LA pins)\n");
 }
 
 /* ---- Poll (main loop) ---------------------------------------------------- */

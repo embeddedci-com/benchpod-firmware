@@ -99,7 +99,24 @@ FAULT_TRAMPOLINE(MemManage_Handler,   FAULT_MEMMANAGE)
 FAULT_TRAMPOLINE(BusFault_Handler,    FAULT_BUSFAULT)
 FAULT_TRAMPOLINE(UsageFault_Handler,  FAULT_USAGEFAULT)
 FAULT_TRAMPOLINE(SecureFault_Handler, FAULT_SECUREFAULT)
-FAULT_TRAMPOLINE(NMI_Handler,         FAULT_NMI)
+FAULT_TRAMPOLINE(NMI_Fault,           FAULT_NMI)
+
+/* An NMI is also how the H5 reports a flash ECC double error.  The persistence stores read
+   through flash_read_checked(), which marks the read as a probe: then the NMI is that probe's
+   torn record (a power cut mid-save), which the store rejects, not a fault.  Anything else goes
+   to the normal fault path with its exception frame untouched (push/pop restore SP and LR, and
+   pop keeps the flags from cmp). */
+__attribute__((naked)) void NMI_Handler(void)
+{
+    __asm volatile(
+        "push {r0, lr}              \n"
+        "bl   flash_ecc_nmi_absorb  \n"
+        "cmp  r0, #0                \n"
+        "pop  {r0, lr}              \n"
+        "it   ne                    \n"
+        "bxne lr                    \n"
+        "b    NMI_Fault             \n");
+}
 
 void fault_sw_panic(uint32_t reason, const char *name) {
     if (name) fault_set_task_hint(name);

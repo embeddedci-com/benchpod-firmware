@@ -41,19 +41,128 @@ static inline void i2c_leave(void) {
     if (xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED) xTaskResumeAll();
 }
 
-/* Clear a wedged peripheral (stuck BUSY / half-finished transfer) with a PE
-   disable→enable toggle — keeps the pin/timing config, resets the state machine.
-   Belt-and-suspenders: with i2c_enter() preventing mid-transfer preemption a wedge
-   should no longer form, but this self-heals any that slips through. */
-static void i2c_recover(void) {
-    __HAL_I2C_DISABLE(&hi2c);
-    for (volatile int i = 0; i < 1000; i++) { __NOP(); }
-    __HAL_I2C_ENABLE(&hi2c);
+/* ---- bus clear (see i2c_bus.h) -------------------------------------------- */
+
+static void bc_set_scl(void *ctx, bool high)
+{
+    (void)ctx;
+    PWR_I2C_SCL_PORT->BSRR = high ? (uint32_t)PWR_I2C_SCL_PIN : ((uint32_t)PWR_I2C_SCL_PIN << 16);
+}
+static void bc_set_sda(void *ctx, bool high)
+{
+    (void)ctx;
+    PWR_I2C_SDA_PORT->BSRR = high ? (uint32_t)PWR_I2C_SDA_PIN : ((uint32_t)PWR_I2C_SDA_PIN << 16);
+}
+static bool bc_get_scl(void *ctx) { (void)ctx; return (PWR_I2C_SCL_PORT->IDR & PWR_I2C_SCL_PIN) != 0u; }
+static bool bc_get_sda(void *ctx) { (void)ctx; return (PWR_I2C_SDA_PORT->IDR & PWR_I2C_SDA_PIN) != 0u; }
+static void bc_delay(void *ctx)   { (void)ctx; busy_wait_us(5); }   /* ~100 kHz */
+
+static const i2c_busclear_io_t s_bc_io = {
+    bc_set_scl, bc_set_sda, bc_get_scl, bc_get_sda, bc_delay, NULL,
+};
+
+static void i2c_pins_mode(uint32_t mode)
+{
+    GPIO_InitTypeDef gp = {0};
+    gp.Mode = mode;
+    gp.Pull = GPIO_NOPULL;                 /* the board has external pull-ups */
+    gp.Speed = GPIO_SPEED_FREQ_LOW;
+    gp.Alternate = PWR_I2C_AF;
+    gp.Pin = PWR_I2C_SCL_PIN;
+    HAL_GPIO_Init(PWR_I2C_SCL_PORT, &gp);
+    gp.Pin = PWR_I2C_SDA_PIN;
+    HAL_GPIO_Init(PWR_I2C_SDA_PORT, &gp);
+}
+
+static volatile uint32_t s_clear_count;
+static int  s_clear_last_rc;
+static bool s_clear_log_pending;
+
+/* Take the pins from the peripheral, run the bus clear on them as open-drain
+   GPIO, hand them back as I2C1 AF4.  The caller re-inits the peripheral.
+   Pins are released (ODR high) BEFORE the mode switch so there is no glitch. */
+static int i2c_bus_clear_pins(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    if (__HAL_RCC_I2C1_IS_CLK_ENABLED()) PWR_I2C->CR1 &= ~I2C_CR1_PE;
+    bc_set_scl(NULL, true);
+    bc_set_sda(NULL, true);
+    i2c_pins_mode(GPIO_MODE_OUTPUT_OD);
+    int rc = i2c_busclear_run(&s_bc_io);
+    i2c_pins_mode(GPIO_MODE_AF_OD);
+    s_clear_count++;
+    s_clear_last_rc = rc;
+    s_clear_log_pending = true;
+    return rc;
+}
+
+/* No printf here: it runs with the scheduler suspended (i2c_enter). */
+static int i2c_hw_init(void)
+{
+    hi2c.Instance = PWR_I2C;
+    hi2c.Init.Timing = I2C_TIMING_100K;
+    hi2c.Init.OwnAddress1 = 0;
+    hi2c.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c.Init.OwnAddress2 = 0;
+    hi2c.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c) != HAL_OK) return -1;
+    HAL_I2CEx_ConfigAnalogFilter(&hi2c, I2C_ANALOGFILTER_ENABLE);
+    return 0;
+}
+
+/* Print the result of the last bus clear, once, from task context. */
+static void i2c_clear_log(void)
+{
+    if (!s_clear_log_pending) return;
+    s_clear_log_pending = false;
+    int rc = s_clear_last_rc;
+    if (rc >= 0) {
+        printf("[i2c] bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
+               (unsigned long)s_clear_count, rc);
+    } else {
+        printf("[i2c] bus clear #%lu FAILED: %s still held low\n",
+               (unsigned long)s_clear_count,
+               rc == I2C_BUSCLEAR_SCL_STUCK ? "SCL" : "SDA");
+    }
+}
+
+/* Only a stuck bus needs the full clear.  A plain NACK (probe of an empty
+   address, HAL_ERROR + AF) is normal and only gets the PE toggle.
+   HAL_I2C_IsDeviceReady reports "nobody answered" as HAL_ERROR + the TIMEOUT
+   error bit, so a probe must not count that bit (`timeout_bit_counts`),
+   or every scan of an empty address would clear the bus. */
+static bool i2c_needs_bus_clear(HAL_StatusTypeDef st, bool timeout_bit_counts)
+{
+    if (st == HAL_BUSY || st == HAL_TIMEOUT) return true;
+    uint32_t mask = HAL_I2C_ERROR_BERR | HAL_I2C_ERROR_ARLO;
+    if (timeout_bit_counts) mask |= HAL_I2C_ERROR_TIMEOUT;
+    if (HAL_I2C_GetError(&hi2c) & mask) return true;
+    /* Between transfers both lines must be high.  SDA low = a slave stuck
+       mid-byte. */
+    return !bc_get_sda(NULL) || !bc_get_scl(NULL);
+}
+
+/* After a failed transaction (inside i2c_enter/i2c_leave).
+   NACK: PE disable→enable toggle, keeps pin/timing config and resets the state
+   machine.  Stuck bus: full bus clear + HAL re-init. */
+static void i2c_recover(HAL_StatusTypeDef st, bool timeout_bit_counts)
+{
+    if (!i2c_needs_bus_clear(st, timeout_bit_counts)) {
+        __HAL_I2C_DISABLE(&hi2c);
+        for (volatile int i = 0; i < 1000; i++) { __NOP(); }
+        __HAL_I2C_ENABLE(&hi2c);
+        return;
+    }
+    (void)HAL_I2C_DeInit(&hi2c);          /* PE off, State = RESET */
+    (void)i2c_bus_clear_pins();
+    s_ready = (i2c_hw_init() == 0);
 }
 
 int i2c_bus_init(void)
 {
-    GPIO_InitTypeDef gp = {0};
     RCC_PeriphCLKInitTypeDef pclk = {0};
 
     s_ready = false;
@@ -69,28 +178,16 @@ int i2c_bus_init(void)
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_I2C1_CLK_ENABLE();
 
-    /* PB8/PB9 = I2C1 SCL/SDA, AF4, open-drain (board has external pull-ups). */
-    gp.Pin = PWR_I2C_SCL_PIN | PWR_I2C_SDA_PIN;
-    gp.Mode = GPIO_MODE_AF_OD;
-    gp.Pull = GPIO_NOPULL;
-    gp.Speed = GPIO_SPEED_FREQ_LOW;
-    gp.Alternate = PWR_I2C_AF;
-    HAL_GPIO_Init(GPIOB, &gp);
+    /* A reset mid-read can leave a slave holding SDA low (see i2c_bus.h).
+       Clear the bus first; this also leaves PB8/PB9 as AF4 open drain. */
+    if (hi2c.Instance != NULL) (void)HAL_I2C_DeInit(&hi2c);
+    (void)i2c_bus_clear_pins();
+    i2c_clear_log();
 
-    hi2c.Instance = PWR_I2C;
-    hi2c.Init.Timing = I2C_TIMING_100K;
-    hi2c.Init.OwnAddress1 = 0;
-    hi2c.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-    hi2c.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-    hi2c.Init.OwnAddress2 = 0;
-    hi2c.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-    hi2c.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-    hi2c.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-    if (HAL_I2C_Init(&hi2c) != HAL_OK) {
+    if (i2c_hw_init() != 0) {
         printf("[i2c] ERROR: I2C1 init failed\n");
         return -1;
     }
-    HAL_I2CEx_ConfigAnalogFilter(&hi2c, I2C_ANALOGFILTER_ENABLE);
 
     s_ready = true;
     printf("[i2c] I2C1 ~100 kHz  SCL=PB8 SDA=PB9\n");
@@ -99,15 +196,39 @@ int i2c_bus_init(void)
 
 bool i2c_bus_ready(void) { return s_ready; }
 
+uint32_t i2c_bus_clear_count(void) { return s_clear_count; }
+
+int i2c_bus_clear_and_reinit(void)
+{
+    i2c_enter();
+    (void)HAL_I2C_DeInit(&hi2c);
+    int rc = i2c_bus_clear_pins();
+    s_ready = (i2c_hw_init() == 0);
+    i2c_leave();
+    i2c_clear_log();
+    if (!s_ready) printf("[i2c] ERROR: I2C1 re-init failed\n");
+    return rc;
+}
+
+/* Close a transaction: recover on failure, leave the atomic section, then log
+   (never printf with the scheduler suspended). */
+static int i2c_finish_ex(HAL_StatusTypeDef st, bool timeout_bit_counts)
+{
+    if (st != HAL_OK) i2c_recover(st, timeout_bit_counts);
+    i2c_leave();
+    i2c_clear_log();
+    return (st == HAL_OK) ? 0 : -1;
+}
+
+static int i2c_finish(HAL_StatusTypeDef st) { return i2c_finish_ex(st, true); }
+
 int i2c_bus_write(uint8_t addr, const uint8_t *buf, size_t len)
 {
     i2c_enter();
     HAL_StatusTypeDef st = HAL_I2C_Master_Transmit(&hi2c, (uint16_t)(addr << 1),
                                                    (uint8_t *)buf, (uint16_t)len,
                                                    I2C_TIMEOUT_MS);
-    if (st != HAL_OK) i2c_recover();
-    i2c_leave();
-    return (st == HAL_OK) ? 0 : -1;
+    return i2c_finish(st);
 }
 
 int i2c_bus_read(uint8_t addr, uint8_t *buf, size_t len)
@@ -115,9 +236,7 @@ int i2c_bus_read(uint8_t addr, uint8_t *buf, size_t len)
     i2c_enter();
     HAL_StatusTypeDef st = HAL_I2C_Master_Receive(&hi2c, (uint16_t)(addr << 1),
                                                   buf, (uint16_t)len, I2C_TIMEOUT_MS);
-    if (st != HAL_OK) i2c_recover();
-    i2c_leave();
-    return (st == HAL_OK) ? 0 : -1;
+    return i2c_finish(st);
 }
 
 int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
@@ -130,9 +249,7 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
         HAL_StatusTypeDef st = HAL_I2C_Mem_Read(&hi2c, (uint16_t)(addr << 1),
                                                 wbuf[0], I2C_MEMADD_SIZE_8BIT,
                                                 rbuf, (uint16_t)rlen, I2C_TIMEOUT_MS);
-        if (st != HAL_OK) i2c_recover();
-        i2c_leave();
-        return (st == HAL_OK) ? 0 : -1;
+        return i2c_finish(st);
     }
     if (i2c_bus_write(addr, wbuf, wlen) != 0) return -1;
     return i2c_bus_read(addr, rbuf, rlen);
@@ -142,9 +259,7 @@ bool i2c_bus_probe(uint8_t addr)
 {
     i2c_enter();
     HAL_StatusTypeDef st = HAL_I2C_IsDeviceReady(&hi2c, (uint16_t)(addr << 1), 2, I2C_TIMEOUT_MS);
-    if (st != HAL_OK) i2c_recover();
-    i2c_leave();
-    return st == HAL_OK;
+    return i2c_finish_ex(st, false) == 0;
 }
 
 /* ---- LA pull-up control via TCA9554 @ 0x20 ----------------------------
@@ -378,6 +493,7 @@ int analog_path_from_name(const char *name, analog_path_t *out)
 void i2c_bus_status(void)
 {
     if (!s_ready) { printf("[i2c] bus not initialised\n"); return; }
+    printf("[i2c] bus clears since boot: %lu\n", (unsigned long)s_clear_count);
     printf("[i2c] scan:");
     for (uint8_t a = 0x08; a <= 0x77; a++) {
         if (i2c_bus_probe(a)) {

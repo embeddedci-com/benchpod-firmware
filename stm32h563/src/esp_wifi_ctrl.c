@@ -47,6 +47,11 @@ enum {
    release means the C3 is blank or runs something else (a new pod ships with it empty), so
    Wi-Fi flashes the embedded image once and tries again. */
 #define SLAVE_BOOT_TIMEOUT_MS 20000
+/* While connected, GetRssi doubles as a liveness probe of the C3: this many requests in a
+   row without a response (timed out, or not even queued because the TX ring never drains,
+   which is what a stuck HANDSHAKE looks like) means the C3 is gone, and the link restarts. */
+#define RSSI_MAX_MISSES       3
+#define RSSI_PERIOD_MS        5000
 
 /* ---- tiny protobuf writer ------------------------------------------------- */
 typedef struct { uint8_t *buf; size_t cap, len; bool err; } pb_w;
@@ -188,6 +193,9 @@ static absolute_time_t s_boot_deadline; /* WC_WAIT_READY gives up on the boot ev
 static bool           s_flash_tried;    /* one automatic C3 flash per configuration */
 static volatile bool  s_flash_done, s_flash_ok;   /* set by the worker when it finishes */
 static volatile bool  s_paused;         /* a console command owns the C3 straps */
+static uint8_t        s_rssi_misses;    /* consecutive unanswered GetRssi while up */
+static volatile uint32_t s_lost_rssi;   /* link restarts: C3 stopped answering */
+static volatile uint32_t s_lost_reboot; /* link restarts: C3 announced a new boot */
 
 const char *esp_wifi_ctrl_state_str(void) {
     switch (s_state) {
@@ -207,6 +215,11 @@ void esp_wifi_ctrl_pause(bool paused) { s_paused = paused; }
 void esp_wifi_ctrl_flash_done(bool ok) {
     s_flash_ok   = ok;
     s_flash_done = true;
+}
+
+void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted) {
+    if (no_response) *no_response = s_lost_rssi;
+    if (rebooted)    *rebooted    = s_lost_reboot;
 }
 
 bool esp_wifi_ctrl_configured(void) { return s_configured; }
@@ -347,6 +360,36 @@ static void to_backoff(const char *why) {
     s_deadline = make_timeout_time_ms(RETRY_BACKOFF_MS);
 }
 
+/* The C3 is dead or has rebooted under us: its association is gone, so drop the Wi-Fi
+   link now (not after the backoff, or the netif keeps routing into a dead slave for
+   another RETRY_BACKOFF_MS), hold the C3 in reset, and let the normal backoff restart
+   it from reset.  s_started stays true so the poll does not skip the backoff; the
+   WC_BACKOFF expiry clears it.  Runs on the net task, the only task that touches lwIP. */
+static void slave_lost(const char *why) {
+    esp_netif_set_link_up(false);
+    esp_hosted_spi_stop();
+    s_rssi_misses = 0;
+    s_evt_connected = s_evt_disconnected = false;
+    printf("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
+           why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
+    to_backoff("ESP32-C3 restart");
+}
+
+/* One GetRssi went unanswered.  Returns true if that was the last straw (the link was
+   restarted; caller returns). */
+static bool rssi_missed(const char *what) {
+    s_await_resp = 0;
+    s_rssi_deadline = make_timeout_time_ms(RSSI_PERIOD_MS);
+    s_state = WC_UP;
+    if (++s_rssi_misses < RSSI_MAX_MISSES) {
+        printf("[wifi] RSSI %s (%u/%u)\n", what, (unsigned)s_rssi_misses, (unsigned)RSSI_MAX_MISSES);
+        return false;
+    }
+    s_lost_rssi++;
+    slave_lost("no response to RSSI requests");
+    return true;
+}
+
 /* Shared by WC_UP / WC_UP_RSSI: if the slave reported a disconnect, drop the
    Wi-Fi link and re-issue connect (the slave stays inited). Returns true if a
    drop was handled (caller should return immediately). */
@@ -403,6 +446,20 @@ void esp_wifi_ctrl_poll(void) {
     if (!s_started) {
         esp_hosted_spi_start(); s_started = true; s_state = WC_WAIT_READY;
         s_boot_deadline = make_timeout_time_ms(SLAVE_BOOT_TIMEOUT_MS);
+    }
+
+    /* A boot announce is only expected while waiting for one.  Anywhere later in the
+       sequence it means the C3 reset itself and lost everything we configured. */
+    if (esp_hosted_spi_take_slave_reset()) {
+        switch (s_state) {
+        case WC_INIT: case WC_SETMODE: case WC_SETCFG: case WC_START: case WC_CONNECT:
+        case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
+            s_lost_reboot++;
+            slave_lost("it announced a new boot");
+            return;
+        default:                            /* waiting for it anyway, or restarting */
+            break;
+        }
     }
 
     switch (s_state) {
@@ -503,6 +560,7 @@ void esp_wifi_ctrl_poll(void) {
             esp_netif_set_link_up(true);     /* lwIP restarts DHCP on link-up */
             printf("[wifi] associated — link up\n");
             s_rssi_deadline = make_timeout_time_ms(1000);   /* first RSSI read soon */
+            s_rssi_misses = 0;
             s_state = WC_UP;
         } else if (s_evt_disconnected || time_reached(s_deadline)) {
             to_backoff("association failed");
@@ -515,16 +573,19 @@ void esp_wifi_ctrl_poll(void) {
            quality (useful when the AP is far and DHCP won't complete). */
         if (time_reached(s_rssi_deadline)) {
             if (send_req(ID_REQ_GET_RSSI, ID_RESP_GET_RSSI, NULL, 0)) s_state = WC_UP_RSSI;
-            else s_rssi_deadline = make_timeout_time_ms(5000);  /* TX busy — retry later */
+            else (void)rssi_missed("request not queued (TX full)");   /* retry later */
         }
         return;
 
     case WC_UP_RSSI:
         if (esp_wifi_ctrl_reconnect_if_dropped()) return;
-        if (s_resp_ready || time_reached(s_deadline)) {   /* got RSSI (or it timed out) */
+        if (s_resp_ready) {                               /* the C3 is alive */
             s_await_resp = 0;
-            s_rssi_deadline = make_timeout_time_ms(5000);
+            s_rssi_misses = 0;
+            s_rssi_deadline = make_timeout_time_ms(RSSI_PERIOD_MS);
             s_state = WC_UP;
+        } else if (time_reached(s_deadline)) {
+            (void)rssi_missed("request timed out");
         }
         return;
 

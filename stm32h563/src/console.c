@@ -273,18 +273,21 @@ static void cmd_selftest(console_out_t out, void *ctx)
 /* Extract one argument, honoring "double quotes" (so an SSID/password may
    contain spaces).  The benchpod-cli sends both args double-quoted. Returns the
    position just past the parsed argument. */
+static bool s_parse_truncated;   /* the last parse_quoted value did not fit */
+
 static const char *parse_quoted(const char *p, char *out, size_t n)
 {
     while (*p == ' ' || *p == '\t') p++;
-    size_t i = 0;
+    size_t i = 0, len = 0;
     if (*p == '"') {
         p++;
-        while (*p && *p != '"') { if (i < n - 1) out[i++] = *p; p++; }
+        while (*p && *p != '"') { if (i < n - 1) out[i++] = *p; p++; len++; }
         if (*p == '"') p++;
     } else {
-        while (*p && *p != ' ' && *p != '\t') { if (i < n - 1) out[i++] = *p; p++; }
+        while (*p && *p != ' ' && *p != '\t') { if (i < n - 1) out[i++] = *p; p++; len++; }
     }
     out[i] = '\0';
+    s_parse_truncated = (len > i);
     return p;
 }
 
@@ -299,7 +302,12 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
     memset(&cfg, 0, sizeof(cfg));
     cfg.magic = CONFIG_MAGIC; cfg.version = CONFIG_VERSION;
     const char *p = parse_quoted(args, cfg.ssid, sizeof(cfg.ssid));
+    bool too_long = s_parse_truncated;
     parse_quoted(p, cfg.password, sizeof(cfg.password));   /* open AP: empty */
+    if (too_long || s_parse_truncated) {                   /* never save credentials cut short */
+        op(out, ctx, "  wifi-set: %s too long\r\n", too_long ? "ssid" : "password");
+        return;
+    }
 
     if (cfg.ssid[0] == '\0') {
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
@@ -310,7 +318,7 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
         return;
     }
     op(out, ctx, "[cfg] credentials written to flash\r\n");
-    esp_wifi_ctrl_reload();     /* re-read creds, (re)start the ESP32 + connect */
+    net_wifi_reload();          /* re-read creds, (re)start the ESP32 + connect */
     op(out, ctx, "  saved SSID \"%s\" — connecting in the background; run wifi-show for status\r\n",
        cfg.ssid);
 }
@@ -325,6 +333,10 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
     int rssi;
     if (esp_wifi_ctrl_rssi(&rssi)) op(out, ctx, "  rssi: %d dBm\r\n", rssi);
     else                           op(out, ctx, "  rssi: \r\n");
+    uint32_t noresp = 0, reboot = 0;
+    esp_wifi_ctrl_slave_lost_counts(&noresp, &reboot);
+    op(out, ctx, "  c3 restarts: %lu no response, %lu rebooted while up\r\n",
+       (unsigned long)noresp, (unsigned long)reboot);
 }
 
 static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
@@ -793,18 +805,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             }
         }
     } else if (!strcmp(argv[0], "flash-esp32-sync")) {
-        esp_wifi_ctrl_pause(true);      /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        esp_hosted_spi_stop();
+        net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         uint32_t magic = 0;
         if (esp_rom_flash_sync(&magic) == 0)
             op(out, ctx, "  C3 ROM synced (chip magic 0x%08lx)\r\n", (unsigned long)magic);
         else
             op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
-        esp_wifi_ctrl_pause(false);
-        esp_wifi_ctrl_reload();         /* the C3 was left in its ROM loader: restart Wi-Fi */
+        net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
     } else if (!strcmp(argv[0], "flash-esp32")) {
-        esp_wifi_ctrl_pause(true);      /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        esp_hosted_spi_stop();
+        net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         if (esp_slave_fw_len == 0) {
             op(out, ctx, "  no embedded C3 image (build esp32-hosted-slave first)\r\n");
         } else if (esp_rom_flash_program(esp_slave_fw, esp_slave_fw_len, 0) == 0) {
@@ -813,8 +822,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         } else {
             op(out, ctx, "  flash-esp32 failed (C3 left in reset; see log)\r\n");
         }
-        esp_wifi_ctrl_pause(false);
-        esp_wifi_ctrl_reload();         /* restart the Wi-Fi join (fresh image, or retry) */
+        net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
     } else if (!strcmp(argv[0], "wifi-set")) {
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
     } else if (!strcmp(argv[0], "esp-mon")) {
@@ -910,7 +918,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else op(out, ctx, "  usage: eth <stop|start|restart|stats|speed>\r\n");
     } else if (!strcmp(argv[0], "wifi-clear")) {
         config_clear();
-        esp_wifi_ctrl_reload();     /* drop Wi-Fi; ESP32 returns to reset */
+        net_wifi_reload();          /* drop Wi-Fi; ESP32 returns to reset */
         op(out, ctx, "  Wi-Fi credentials cleared (reboot to fully apply)\r\n");
     } else if (!strcmp(argv[0], "can")) {
         /* can config <bitrate> <normal|internal|external|listen> [term] |

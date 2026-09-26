@@ -143,7 +143,20 @@ static void test_top_level_not_shadowed_by_payload(void) {
     CHECK(!strcmp(v, "command.request"));
 }
 
+/* bp_json_get_fit: provisioning values (SSID, password, cloud host) must never be stored cut short. */
+static void test_get_fit(void) {
+    char v[6];
+    CHECK(bp_json_get_fit("{\"ssid\":\"abcde\"}", "ssid", v, sizeof(v)) == 1 && !strcmp(v, "abcde"));
+    CHECK(bp_json_get_fit("{\"ssid\":\"abcdef\"}", "ssid", v, sizeof(v)) == -1);   /* one too long */
+    CHECK(bp_json_get_fit("{\"ssid\":\"\"}", "ssid", v, sizeof(v)) == 1 && v[0] == '\0');
+    CHECK(bp_json_get_fit("{\"x\":1}", "ssid", v, sizeof(v)) == 0);
+    CHECK(bp_json_get_fit("{\"ssid\":\"a\\\"b\"}", "ssid", v, sizeof(v)) == 1 && !strcmp(v, "a\"b"));
+    CHECK(bp_json_get_fit("{\"port\":12345}", "port", v, sizeof(v)) == 1 && !strcmp(v, "12345"));
+    CHECK(bp_json_get_fit("{\"port\":123456}", "port", v, sizeof(v)) == -1);
+}
+
 int main(void) {
+    test_get_fit();
     test_get_basic();
     test_top_level_not_shadowed_by_payload();
     test_key_vs_value();

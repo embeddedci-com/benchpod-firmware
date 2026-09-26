@@ -124,8 +124,17 @@ static char unescape(const char **pp) {
     return out;
 }
 
+static bool json_get_at2(const char *json, const char *key, char *out, size_t out_len,
+                        bool top_level, bool *truncated);
+
 static bool json_get_at(const char *json, const char *key, char *out, size_t out_len,
                        bool top_level) {
+    return json_get_at2(json, key, out, out_len, top_level, NULL);
+}
+
+static bool json_get_at2(const char *json, const char *key, char *out, size_t out_len,
+                        bool top_level, bool *truncated) {
+    if (truncated) *truncated = false;
     if (!out || out_len == 0) return false;
     out[0] = '\0';
     const char *p = top_level ? find_key_top(json, key) : find_key(json, key);
@@ -140,6 +149,7 @@ static bool json_get_at(const char *json, const char *key, char *out, size_t out
             out[i++] = c;
         }
         out[i] = '\0';
+        if (truncated) *truncated = (*p && *p != '"');   /* stopped short of the closing quote */
         return true;   /* a present (even empty) string counts as found */
     }
 
@@ -148,7 +158,15 @@ static bool json_get_at(const char *json, const char *key, char *out, size_t out
         out[i++] = *p++;
     }
     out[i] = '\0';
+    if (truncated) *truncated = (*p && *p != ',' && *p != '}' && *p != ' ' && *p != '\t' &&
+                                 *p != '\n' && *p != '\r');
     return i > 0;
+}
+
+int bp_json_get_fit(const char *json, const char *key, char *out, size_t out_len) {
+    bool trunc = false;
+    if (!json_get_at2(json, key, out, out_len, false, &trunc)) return 0;
+    return trunc ? -1 : 1;
 }
 
 bool bp_json_get(const char *json, const char *key, char *out, size_t out_len) {

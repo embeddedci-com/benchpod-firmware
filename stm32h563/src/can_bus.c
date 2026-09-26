@@ -42,6 +42,58 @@ typedef struct {
 static can_rule_t        s_rules[CAN_RESPONDER_MAX];
 static volatile uint32_t s_resp_hits;
 
+/* Bus-off recovery (see can_bus.h).  Counted from the ISR and the task paths;
+   logged from task context only. */
+static volatile uint32_t s_busoff_recoveries;
+static uint32_t          s_busoff_logged;
+
+_Static_assert(CAN_REG_PSR_BO == FDCAN_PSR_BO, "PSR.BO bit");
+_Static_assert(CAN_REG_CCCR_INIT == FDCAN_CCCR_INIT, "CCCR.INIT bit");
+
+/* Mask the FDCAN IT0 interrupt (RX + responder + bus-off) around task-side
+   work that touches the same state.  Returns whether it was enabled. */
+static bool can_irq_mask(void)
+{
+    bool was = NVIC_GetEnableIRQ(CAN_IRQn) != 0u;
+    HAL_NVIC_DisableIRQ(CAN_IRQn);
+    __DSB();
+    __ISB();
+    return was;
+}
+
+static void can_irq_restore(bool was)
+{
+    if (was) HAL_NVIC_EnableIRQ(CAN_IRQn);
+}
+
+/* Start a bus-off recovery if needed.  Caller has masked the IRQ or IS the
+   IRQ. */
+static bool can_busoff_recover_locked(void)
+{
+    if (!s_enabled) return false;
+    if (!can_busoff_recover_regs(&hfdcan.Instance->CCCR, hfdcan.Instance->PSR)) return false;
+    s_busoff_recoveries++;
+    return true;
+}
+
+/* Task-side check + log.  Returns true if the core is bus-off right now (a
+   recovery may have just been started, or be under way). */
+static bool can_busoff_poll(void)
+{
+    if (!s_enabled) return false;
+    bool was = can_irq_mask();
+    (void)can_busoff_recover_locked();
+    bool bo = (hfdcan.Instance->PSR & FDCAN_PSR_BO) != 0u;
+    can_irq_restore(was);
+    uint32_t n = s_busoff_recoveries;
+    if (n != s_busoff_logged) {
+        printf("[can] bus-off: recovery started (%lu since boot), rejoining after 129x11 recessive bits\n",
+               (unsigned long)n);
+        s_busoff_logged = n;
+    }
+    return bo;
+}
+
 /* ---- bit timing ---------------------------------------------------------- */
 
 /* Solve nominal bit timing for `bitrate` from a `fclk`-Hz kernel clock, aiming
@@ -223,9 +275,9 @@ int can_configure(uint32_t bitrate, can_mode_t mode, bool fd, bool term)
 
     if (HAL_FDCAN_Start(&hfdcan) != HAL_OK) return -2;
 
-    /* New-message-in-FIFO0 interrupt -> IT0 line. */
+    /* New-message-in-FIFO0 + bus-off interrupts -> IT0 line (ILS default). */
     if (HAL_FDCAN_ActivateNotification(&hfdcan,
-            FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0) != HAL_OK) {
+            FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_BUS_OFF, 0) != HAL_OK) {
         return -2;
     }
     HAL_NVIC_SetPriority(CAN_IRQn, 6, 0);
@@ -272,11 +324,17 @@ int can_tx(const can_frame_t *f)
     if (!s_enabled) return -1;
     if (!f || f->dlc > 8) return -3;
 
-    /* Refuse to queue if the core is bus-off (would never leave the FIFO). */
-    FDCAN_ProtocolStatusTypeDef ps;
-    if (HAL_FDCAN_GetProtocolStatus(&hfdcan, &ps) == HAL_OK && ps.BusOff) return -2;
+    /* Bus-off: start the recovery (if the ISR has not) and refuse this frame;
+       the core rejoins on its own and the next call goes through. */
+    if (can_busoff_poll()) return -2;
 
-    return (can_tx_raw(f) == 0) ? 0 : -3;
+    /* The RX ISR's responder also queues frames (can_tx_raw).  Two writers of
+       the TX FIFO put index must not interleave, so mask the ISR while the
+       task side checks the free level and adds its frame. */
+    bool was = can_irq_mask();
+    int rc = can_tx_raw(f);
+    can_irq_restore(was);
+    return (rc == 0) ? 0 : -3;
 }
 
 /* ---- receive (ISR producer / can_rx_pop consumer) ------------------------ */
@@ -293,6 +351,16 @@ static uint8_t dlc_to_bytes(uint32_t dlc)
 void FDCAN1_IT0_IRQHandler(void)
 {
     HAL_FDCAN_IRQHandler(&hfdcan);
+}
+
+/* PSR.BO changed (IR.BO).  Recover right away so the autonomous responder
+   keeps answering without waiting for a host poll.  No printf in an ISR: the
+   task paths log the counter. */
+void HAL_FDCAN_ErrorStatusCallback(FDCAN_HandleTypeDef *h, uint32_t its)
+{
+    if (h->Instance != CAN_FD) return;
+    if ((its & FDCAN_IR_BO) == 0u) return;
+    (void)can_busoff_recover_locked();
 }
 
 void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *h, uint32_t its)
@@ -336,6 +404,7 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *h, uint32_t its)
 int can_rx_pop(can_frame_t *out, int max)
 {
     if (!out || max <= 0) return 0;
+    (void)can_busoff_poll();   /* poll path: backstop for a missed bus-off IRQ */
     int n = 0;
     while (n < max && s_rx_tail != s_rx_head) {
         out[n++] = s_ring[s_rx_tail];
@@ -361,6 +430,7 @@ int can_get_status(can_status_t *out)
     out->responder_hits  = s_resp_hits;
 
     if (s_enabled) {
+        (void)can_busoff_poll();
         FDCAN_ErrorCountersTypeDef ec;
         FDCAN_ProtocolStatusTypeDef ps;
         if (HAL_FDCAN_GetErrorCounters(&hfdcan, &ec) == HAL_OK) {
@@ -372,6 +442,7 @@ int can_get_status(can_status_t *out)
             out->error_passive = ps.ErrorPassive ? true : false;
         }
     }
+    out->bus_off_recoveries = s_busoff_recoveries;
     return 0;
 }
 

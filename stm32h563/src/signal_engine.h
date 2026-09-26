@@ -210,6 +210,9 @@ void fpga_set_dac_stop_after_us(uint32_t us);
    capture arm.  Returns true if armed (gw >= v27), false if the gateware can't co-trigger (caller
    then uses the sequential start).  Cancelled by fpga_stop_dac / dac_stop. */
 bool fpga_dac_arm_on_capture(void);
+/* Stop every fabric engine and release the LA pins: the iCE40 survives an MCU reset, so at boot
+   it can still be running what the previous firmware session started. */
+void signal_engine_fabric_to_idle(void);
 
 /* Minimum gateware with GPIO_GET (0x43: the 12 live LA levels through a 2-flop synchroniser) and
    the CAPTURE TRIGGER (SET_TRIGGER 0x33 / TRIGGER_STATUS 0x34: an armed capture's producers wait

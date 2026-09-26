@@ -32,12 +32,17 @@
 #include "lwip/netif.h"
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
+
 #include "lwip/dhcp.h"
 #include "lwip/apps/mdns.h"
 #include "netif/ethernet.h"
 
 #include "FreeRTOS.h"
 #include "task.h"        /* vTaskDelay — rare backstop in srv_recv's bulk path */
+
+/* net_call_sync (defined further down, next to net_wifi_static) */
+static TaskHandle_t s_net_task;
+static void net_run_pending_call(void);
 
 /* srv_recv accepts each inbound pbuf all-or-nothing into the hw_worker queue, so
    the queue must be able to hold a full lwIP receive window once drained — else a
@@ -327,7 +332,11 @@ static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     if (err != ERR_OK || newpcb == NULL) return ERR_VAL;
 
     int id = -1;
-    for (int i = 0; i < NET_MAX_CONN; i++) { if (conn_pcb[i] == NULL) { id = i; break; } }
+    /* Not a slot whose previous connection's close the worker has not handled yet: its state
+       (upload mode, SWD session, busy gate) and late replies still belong to that client. */
+    for (int i = 0; i < NET_MAX_CONN; i++) {
+        if (conn_pcb[i] == NULL && !hw_worker_conn_busy(i)) { id = i; break; }
+    }
     if (id < 0) { tcp_abort(newpcb); return ERR_ABRT; }   /* too many clients */
 
     conn_tx_reset(id);           /* clear any stale bytes from a prior conn on this slot */
@@ -335,6 +344,7 @@ static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     s_nodelay_req[id] = -1;
     conn_pcb[id] = newpcb;
     tcp_setprio(newpcb, TCP_PRIO_MIN);
+    ip_set_option(newpcb, SOF_KEEPALIVE);   /* a dead idle client frees its slot (~50 s) */
     tcp_arg(newpcb, (void *)(intptr_t)(id + 1));
     tcp_recv(newpcb, srv_recv);
     tcp_err(newpcb, srv_err);
@@ -349,6 +359,7 @@ static void net_tx_drain(void)
     for (int id = 0; id < NET_MAX_CONN; id++) {
         struct tcp_pcb *pcb = conn_pcb[id];
         if (!pcb) continue;
+        if (hw_worker_conn_busy(id)) continue;   /* (cannot be: accept skips busy slots) */
         bool wrote = false;
         const uint8_t *chunk;
         size_t n;
@@ -366,13 +377,19 @@ static void net_tx_drain(void)
         int id = CH_CLOUD_TUNNEL_CONN + t;
         size_t used = conn_tx_used(id);
         if (!used) continue;
+        const uint8_t *chunk;
+        if (hw_worker_conn_busy(id)) {
+            /* The previous session's reset has not reached the worker yet: whatever is in the
+               ring is that session's late output, not for the tunnel now on this slot. */
+            size_t n = conn_tx_peek(id, &chunk);
+            conn_tx_advance(id, n);
+            continue;
+        }
         size_t avail = cloud_client_tunnel_avail(id);   /* raw bytes the WS buffer can take now */
         if (avail == 0) continue;
-        const uint8_t *chunk;
         size_t n = conn_tx_peek(id, &chunk);
         if (n > avail) n = avail;
-        cloud_client_tunnel_out(id, chunk, n);          /* frames + altcp on the net task */
-        conn_tx_advance(id, n);
+        conn_tx_advance(id, cloud_client_tunnel_out(id, chunk, n));   /* only what went out */
     }
 }
 
@@ -707,6 +724,7 @@ void net_init(void)
     ip_addr_t zero;
     ip_addr_set_zero_ip4(&zero);
 
+    s_net_task = xTaskGetCurrentTaskHandle();                         /* net_call_sync */
     for (int i = 0; i < NET_MAX_CONN; i++) s_nodelay_req[i] = -1;   /* -1 = no pending toggle */
 
     /* Route mbedTLS allocation to the FreeRTOS heap before any TLS work (the
@@ -767,6 +785,7 @@ void net_poll(void)
     net_apply_worker_requests();     /* worker-requested close / Nagle toggles  */
     net_frame_cloud_reply();         /* a finished cloud command -> response    */
     net_eth_apply_request();         /* apply a pending eth stop/start/restart  */
+    net_run_pending_call();          /* a worker call handed over by net_call_sync */
 
     uint32_t now = HAL_GetTick();
     if (now - link_timer >= 100) {
@@ -785,8 +804,75 @@ void net_poll(void)
 /* Bring-up diagnostic: pin a static IP on the Wi-Fi netif (disables DHCP on it)
    so a peer can ping the pod — a definitive test of whether the esp-hosted bridge
    delivers UNICAST-to-STA frames to this host. `mask`/`gw` dotted-quad. */
+/* ---- run a function on the net task --------------------------------------------------------
+   lwIP runs NO_SYS on this task only (SYS_LIGHTWEIGHT_PROT 0), and the Wi-Fi control and SPI
+   transport are driven from it too.  The worker used to call cloud_client_reload (altcp close,
+   TLS config free), esp_wifi_ctrl_reload / esp_hosted_spi_stop (netif link down, TX ring reset)
+   and the wifi-static netif calls directly, and the net task (higher priority, every tick) could
+   preempt it mid-update: lwIP list or heap corruption.  net_call_sync hands the call over and
+   waits for it.  Single caller at a time (the worker runs every command and console line). */
+static volatile net_call_fn_t    s_net_call;
+static void *volatile            s_net_call_arg;
+static volatile uint32_t         s_net_call_done;
+
+static void net_run_pending_call(void)
+{
+    net_call_fn_t fn = s_net_call;
+    if (!fn) return;
+    fn(s_net_call_arg);
+    s_net_call = NULL;
+    s_net_call_done++;
+}
+
+bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
+{
+    if (!s_net_task || xTaskGetCurrentTaskHandle() == s_net_task) {
+        fn(arg);                           /* already the net task (or before it runs) */
+        return true;
+    }
+    uint32_t seq = s_net_call_done;
+    s_net_call_arg = arg;
+    s_net_call     = fn;
+    uint32_t t0 = HAL_GetTick();
+    while (s_net_call_done == seq) {
+        if (HAL_GetTick() - t0 > timeout_ms) {
+            s_net_call = NULL;             /* withdraw it; the net task is not polling */
+            printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
+                   (unsigned long)timeout_ms);
+            return false;
+        }
+        vTaskDelay(1);
+    }
+    return true;
+}
+
+static void call_cloud_reload(void *a) { (void)a; cloud_client_reload(); }
+static void call_wifi_reload(void *a)  { (void)a; esp_wifi_ctrl_reload(); }
+static void call_wifi_hold(void *a) {
+    if (a) { esp_wifi_ctrl_pause(true); esp_hosted_spi_stop(); }   /* EN/BOOT + SPI are ours */
+    else   { esp_wifi_ctrl_pause(false); esp_wifi_ctrl_reload(); }
+}
+void net_cloud_reload(void)          { (void)net_call_sync(call_cloud_reload, NULL, 2000); }
+void net_wifi_reload(void)           { (void)net_call_sync(call_wifi_reload, NULL, 2000); }
+void net_wifi_hold_for_flash(bool h) { (void)net_call_sync(call_wifi_hold, h ? (void *)1 : NULL, 2000); }
+
+typedef struct { char ip[16], mask[16], gw[16]; } wifi_static_args_t;
+
+static void net_wifi_static_on_net(void *arg);
+
 void net_wifi_static(const char *ip_s, const char *mask_s, const char *gw_s)
 {
+    static wifi_static_args_t a;
+    strncpy(a.ip, ip_s, sizeof(a.ip) - 1);     a.ip[sizeof(a.ip) - 1] = '\0';
+    strncpy(a.mask, mask_s, sizeof(a.mask) - 1); a.mask[sizeof(a.mask) - 1] = '\0';
+    strncpy(a.gw, gw_s, sizeof(a.gw) - 1);     a.gw[sizeof(a.gw) - 1] = '\0';
+    (void)net_call_sync(net_wifi_static_on_net, &a, 2000);
+}
+
+static void net_wifi_static_on_net(void *arg)
+{
+    const wifi_static_args_t *a = (const wifi_static_args_t *)arg;
+    const char *ip_s = a->ip, *mask_s = a->mask, *gw_s = a->gw;
     ip4_addr_t ip, mask, gw;
     if (!ip4addr_aton(ip_s, &ip) || !ip4addr_aton(mask_s, &mask) || !ip4addr_aton(gw_s, &gw)) {
         printf("[net] wifi-static: bad address\r\n");

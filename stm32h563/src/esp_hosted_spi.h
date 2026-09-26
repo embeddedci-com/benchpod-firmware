@@ -55,6 +55,10 @@ void esp_hosted_spi_stop(void);
 /* True once the slave has announced itself (boot event seen). */
 bool esp_hosted_spi_ready(void);
 
+/* True (once) if the slave announced a boot AGAIN after it was already up, i.e. it
+   reset on its own.  Reading clears it; start()/stop() clear it too.  Net task only. */
+bool esp_hosted_spi_take_slave_reset(void);
+
 /* True once the SPI4 GPDMA channels inited OK (Wi-Fi transactions use DMA). */
 bool esp_hosted_spi_dma_active(void);
 

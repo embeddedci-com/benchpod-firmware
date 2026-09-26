@@ -1,7 +1,7 @@
 #include "device_identity.h"
 #include "b64url.h"
 
-#include "pico/rand.h"
+#include "rng.h"             /* rng_fill — TRNG with error reporting */
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/regs/addressmap.h"   /* XIP_BASE */
@@ -60,13 +60,15 @@ static const identity_record_t *flash_identity(void) {
 }
 #endif
 
-/* Fill seed[32] with hardware entropy.  On RP2350, get_rand_*() draws from the
-   hardware TRNG (see Pico SDK pico_rand). */
-static void fill_seed(uint8_t seed[32]) {
-    for (int i = 0; i < 32; i += 8) {
-        uint64_t r = get_rand_64();
-        memcpy(seed + i, &r, 8);
-    }
+/* Fill seed[32] from the STM32H5 TRNG (rng.c).  Returns 0, or -1 if the TRNG
+   reported an error or produced an obviously dead value (every byte equal,
+   e.g. all zeros).  This key is permanent, so never make one from bad entropy. */
+static int fill_seed(uint8_t seed[32]) {
+    if (rng_fill(seed, 32) != 0) return -1;
+    bool constant = true;
+    for (int i = 1; i < 32; i++) if (seed[i] != seed[0]) { constant = false; break; }
+    if (constant) { memset(seed, 0, 32); return -1; }
+    return 0;
 }
 
 /* Erase the identity sector and program a single page holding *rec.
@@ -116,7 +118,15 @@ void device_identity_init(void) {
         memset(&rec, 0, sizeof(rec));
         rec.magic   = IDENTITY_MAGIC;
         rec.version = IDENTITY_VERSION;
-        fill_seed(rec.seed);
+        if (fill_seed(rec.seed) != 0) {
+            /* No usable entropy: refuse rather than persist a guessable key.
+               The pod runs without an identity (cloud auth / pop refuse) and
+               tries again on the next boot. */
+            printf("[id] ERROR: hardware RNG failed; NOT generating a device key\n");
+            memset(&rec, 0, sizeof(rec));
+            s_ready = false;
+            return;
+        }
         if (identity_persist(&rec) != 0) {
             /* Persist failed: continue with the in-RAM key this boot so the
                device is still usable, but it won't survive a reboot. */

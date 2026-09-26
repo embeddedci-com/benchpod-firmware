@@ -49,9 +49,11 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
  *   FLASH_BLOBS — embedded .blobs region        (0x080A0000, 1344K)
  * The 0x080A0000 blob base is mirrored by DFU_BLOBS_ADDR in the Makefile — keep
  * the two in sync. FLASH_BLOBS deliberately stops at 0x081F0000, below the
- * high-flash persistence sectors touched at runtime (OTA self-test scratch
- * 0x081F0000 in ota_commit.c, config 0x081FE000 in config_store.h), so the link
- * fails if the blobs ever grow into them. Two regions also give a free guard:
+ * high-flash persistence sectors touched at runtime, so the link fails if the blobs
+ * ever grow into them: 0x081F0000 OTA self-test scratch (ota_commit.c); two-slot,
+ * power-loss-safe stores (config_store.h): cloud 0x081F2000/0x081F4000, Wi-Fi
+ * 0x081F6000/0x081F8000; legacy single-sector cloud 0x081FA000 and Wi-Fi 0x081FE000
+ * (read-only fallback, erased by a clear); device identity 0x081FC000. Two regions also give a free guard:
  * the link fails with "region FLASH overflowed" if the firmware exceeds 640K. */
 MEMORY
 {

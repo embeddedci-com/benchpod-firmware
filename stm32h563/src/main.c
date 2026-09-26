@@ -345,10 +345,20 @@ void Error_Handler(void)
 /* --- FreeRTOS hooks ------------------------------------------------------ */
 /* These used to end in Error_Handler()'s while(1); now they record the reason in
    the crash log and reset, so the pod recovers and the next boot reports why. */
+/* An allocation failed.  At boot that is fatal (the system cannot come up without it).  After
+   boot, every caller handles NULL (a TLS handshake fails and backs off, power_profile refuses
+   with "not enough memory"), so rebooting the pod for it turned a recoverable refusal into an
+   outage.  Count it instead: the worker logs new failures and `status` reports malloc_failures.
+   (This runs inside pvPortMalloc with the scheduler suspended: no printf here.) */
+volatile uint32_t g_malloc_failures;
+
 void vApplicationMallocFailedHook(void)
 {
-    printf("[fatal] malloc failed\r\n");
-    fault_sw_panic(FAULT_SW_MALLOC, "heap");
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+        printf("[fatal] malloc failed at boot\r\n");
+        fault_sw_panic(FAULT_SW_MALLOC, "heap");
+    }
+    g_malloc_failures++;
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *name)

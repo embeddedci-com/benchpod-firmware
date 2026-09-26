@@ -61,6 +61,21 @@
 #define TCP_SND_BUF             (8 * TCP_MSS)
 #define TCP_WND                 (8 * TCP_MSS)
 
+/* Keepalive (enabled per LAN connection in srv_accept): a client that sleeps, loses its cable or
+   crashes while idle held its slot forever, with any UART proxy or SWD session on it, and five
+   of those locked the LAN out until reboot.  30 s idle, then 4 probes 5 s apart: ~50 s. */
+#define LWIP_TCP_KEEPALIVE      1
+#define TCP_KEEPIDLE_DEFAULT    30000
+#define TCP_KEEPINTVL_DEFAULT   5000
+#define TCP_KEEPCNT_DEFAULT     4
+
+/* The Ethernet driver receives into a small zero-copy pool shared with TCP's out-of-order queue
+   and IP reassembly (lwIP defaults: unbounded / 10 pbufs for up to 15 s).  Junk fragments or a
+   lossy window could hold the pool and stall receive for seconds.  Cap both. */
+#define TCP_OOSEQ_MAX_PBUFS     4
+#define IP_REASS_MAX_PBUFS      4
+#define MEMP_NUM_REASSDATA      2   /* <= IP_REASS_MAX_PBUFS / 2 (lwIP init.c check) */
+
 /* ---------- ICMP / DHCP / UDP / DNS ---------- */
 #define LWIP_ICMP               1
 #define LWIP_DHCP               1

@@ -24,6 +24,18 @@ const char *wifi_sta_ip(void);
    netif and disable DHCP on it, so a peer can ping the pod to test unicast RX. */
 void net_wifi_static(const char *ip, const char *mask, const char *gw);
 
+/* Run fn(arg) on the net task (which owns lwIP, the cloud client and the Wi-Fi transport) and
+   wait up to timeout_ms for it; runs it directly when called on the net task.  false = the net
+   task did not run it in time (not polling: safe mode with networking off). */
+typedef void (*net_call_fn_t)(void *arg);
+bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms);
+/* The worker-side entry points that must run on the net task (via net_call_sync). */
+void net_cloud_reload(void);                 /* cloud_client_reload() */
+void net_wifi_reload(void);                  /* esp_wifi_ctrl_reload() */
+/* true: pause Wi-Fi control and stop the ESP SPI transport so the worker may drive the C3's
+   EN/BOOT and ROM loader; false: resume and restart the Wi-Fi join. */
+void net_wifi_hold_for_flash(bool hold);
+
 /* Manual wired-interface control (console `eth stop|start|restart` / JSON
    {"cmd":"eth",...}). Safe to call from any task — they only latch a request that
    net_poll() applies on the net task. `stop` halts the MAC and holds it down;

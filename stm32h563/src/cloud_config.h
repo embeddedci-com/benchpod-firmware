@@ -11,18 +11,19 @@
  * no host/CLI present at runtime. Provisioned once by `benchpod register`
  * (the `cloud_set` command).
  *
- * Stored in its OWN 8 KB sector at 0x1FA000 (bank2 sector 125) — the sector
- * just below the device-identity sector (0x1FC000) and the WiFi-config sector
- * (0x1FE000, the last sector).  Survives `make flash` for the same reason those
- * do: the firmware is ~120 KB (nowhere near the bank-2 tail), and OpenOCD only
- * programs loadable ELF segments, so this sector is never touched.  A WiFi
- * factory-reset (config_clear) does NOT erase it.
- *
- * Same magic/version + single-page write discipline as config_store.c; the
- * Pico-style flash API maps onto STM32H5 internal flash via flash_compat.c.
+ * Stored with the power-loss-safe A/B record store (config_store.h): two slots,
+ * bank2 sectors 122 (0x1F4000) and 121 (0x1F2000). The old single-sector layout
+ * at 0x1FA000 (sector 125) is read only when neither slot holds a record, so pods
+ * provisioned by older firmware keep their config; the next save migrates it.
+ * These sectors sit above the linker's FLASH_BLOBS end and the OTA scratch sector
+ * (0x1F0000), so neither `make flash` nor an OTA touches them. A Wi-Fi
+ * factory-reset (config_clear) does NOT clear this store.
  * ---------------------------------------------------------------------------*/
 
-#define CLOUD_CONFIG_FLASH_OFFSET 0x1FA000u    /* STM32H5: bank2 sector 125 (8 KB) */
+#define CLOUD_CONFIG_SLOT_A_OFFSET 0x1F4000u   /* bank2 sector 122 */
+#define CLOUD_CONFIG_SLOT_B_OFFSET 0x1F2000u   /* bank2 sector 121 */
+#define CLOUD_CONFIG_FLASH_OFFSET  0x1FA000u   /* legacy single-sector layout, bank2 s125 */
+#define CLOUD_CONFIG_RECORD_MAGIC  0xAB5C0F03u
 #define CLOUD_CONFIG_MAGIC        0xC0FFEE03u   /* distinct from config (..01) / identity (..02) */
 #define CLOUD_CONFIG_VERSION      1u
 
@@ -45,13 +46,14 @@ typedef struct {
     uint32_t reserved[4];                 /* headroom for future fields */
 } cloud_config_t;
 
-/* Returns 0 and fills *out if a valid config exists; -1 if blank/unknown schema. */
+/* Returns 0 and fills *out if a valid config exists; -1 if none/cleared/unknown schema. */
 int  cloud_config_load(cloud_config_t *out);
 
-/* Erase the sector and write *cfg. Atomic at the sector level. 0 on success. */
+/* Store *cfg (magic/version are filled in). Power-loss safe: after a power loss the
+   loader sees either the new config or the previous one. 0 on success. */
 int  cloud_config_save(const cloud_config_t *cfg);
 
-/* Erase the cloud-config sector (disables auto-connect). */
+/* Forget the cloud config (disables auto-connect). */
 void cloud_config_clear(void);
 
 #endif /* CLOUD_CONFIG_H */

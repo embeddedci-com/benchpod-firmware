@@ -56,6 +56,7 @@ typedef struct {
     uint32_t rx_overflow;   /* frames dropped because the ring was full        */
     uint32_t responder_rules;  /* active autonomous-responder rules            */
     uint32_t responder_hits;   /* auto-replies the firmware has sent           */
+    uint32_t bus_off_recoveries; /* bus-off recoveries started since boot      */
 } can_status_t;
 
 /* Set the termination GPIO to a safe default (off) and mark CAN down.  Called
@@ -72,7 +73,9 @@ void can_disable(void);
 
 /* Queue one classic frame for transmission (0..8 data bytes).
    Returns 0, -1 if CAN is not enabled, -2 if bus-off, -3 if the TX FIFO is full
-   or the frame is invalid. */
+   or the frame is invalid.  -2 is not sticky: the core is put back on the bus
+   automatically (see bus-off recovery below), so a later call succeeds once
+   the bus is healthy again. */
 int  can_tx(const can_frame_t *f);
 
 /* Pop up to `max` received frames into `out` (oldest first).  Non-blocking.
@@ -102,6 +105,30 @@ bool can_get_term(void);
 int  can_responder_add(uint32_t match_id, bool match_ext, const can_frame_t *reply);
 void can_responder_clear(void);       /* remove all rules */
 int  can_responder_count(void);       /* active rule count */
+
+/* ---- Bus-off recovery -----------------------------------------------------
+ * On bus-off (TEC > 255) the FDCAN core sets PSR.BO and CCCR.INIT and stops.
+ * It stays that way until software clears CCCR.INIT (RM0481 FDCAN "Bus-off
+ * recovery"); the core then waits for 129 x 11 recessive bits and rejoins the
+ * bus, which also clears PSR.BO.  The firmware does that from the bus-off
+ * interrupt, and again from the task-side paths (can_tx, can_rx_pop,
+ * can_get_status) in case the interrupt was missed.  Each start is counted
+ * (can_status_t.bus_off_recoveries).
+ *
+ * Pure register logic, host-tested: given CCCR (read-modify-written) and a
+ * PSR snapshot, start a recovery if the core is bus-off and still in INIT.
+ * Returns true when a recovery was started.  A core that already left INIT
+ * (recovery in progress) is left alone, so repeated calls count once. */
+#define CAN_REG_PSR_BO     (1u << 7)
+#define CAN_REG_CCCR_INIT  (1u << 0)
+
+static inline bool can_busoff_recover_regs(volatile uint32_t *cccr, uint32_t psr)
+{
+    if ((psr & CAN_REG_PSR_BO) == 0u) return false;
+    if ((*cccr & CAN_REG_CCCR_INIT) == 0u) return false;
+    *cccr &= ~CAN_REG_CCCR_INIT;
+    return true;
+}
 
 /* Parse a mode name ("normal"|"internal"|"external"|"listen") into can_mode_t.
    Returns 0, -1 if unknown. */

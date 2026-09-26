@@ -34,6 +34,10 @@
    false if the key is absent or (for a bare scalar) empty. out is always
    NUL-terminated. */
 bool bp_json_get(const char *json, const char *key, char *out, size_t out_len);
+/* Like bp_json_get, but reports a value that did not fit: 1 = found and whole, 0 = missing,
+   -1 = present but longer than out_len - 1 (out holds the truncated prefix).  For values that
+   must not be stored cut short (SSID, password, cloud host). */
+int  bp_json_get_fit(const char *json, const char *key, char *out, size_t out_len);
 
 /* Like bp_json_get, but matches ONLY a key of the OUTERMOST object, so a key
    nested inside a member cannot shadow it.  Use this for ENVELOPE fields of a

@@ -26,10 +26,101 @@
 #define I2C_ADDR_TCA9554_DACMUX   0x24u
 #define I2C_ADDR_TCA9554_ANASW    0x26u
 
-/* Initialise (or re-initialise) I2C1.  Safe to call repeatedly.
+/* Initialise (or re-initialise) I2C1.  Safe to call repeatedly.  Runs a bus
+   clear (see below) before the peripheral is set up.
    Returns 0 on success, <0 on HAL init failure. */
 int  i2c_bus_init(void);
 bool i2c_bus_ready(void);
+
+/* Bus clear + peripheral re-init, from the task that owns the bus (the hw
+   worker).  Bounded: well under 1 ms.  Returns the i2c_busclear_run() result
+   (>=0 = SCL pulses it took, <0 = the bus is still stuck).  Transactions call
+   this on their own after a BUSY/timeout/bus error or when SDA reads low. */
+int  i2c_bus_clear_and_reinit(void);
+/* Number of bus clears run since boot (the boot-time one included). */
+uint32_t i2c_bus_clear_count(void);
+
+/* ---- Bus clear (NXP UM10204 3.1.16) -------------------------------------
+ * An MCU reset in the middle of a read (IWDG, crash, DFU, OTA reboot) with the
+ * pod still powered can leave a slave half way through a byte, driving SDA low
+ * and waiting for clocks that never come.  The I2C peripheral cannot start a
+ * transfer on that bus, and the eFuse/power expander sits on it, so it stays
+ * dead until a power cycle.  The cure: drive SCL by hand until the slave lets
+ * go of SDA, then send a STOP.
+ *
+ * The sequence is pure logic over these pin callbacks so the host tests can run
+ * it against a simulated slave.  Both lines are open drain: "high" means
+ * release (the pull-up takes it high), "low" means drive low. */
+#define I2C_BUSCLEAR_MAX_PULSES  16   /* 9 is enough for one byte + ACK */
+#define I2C_BUSCLEAR_SCL_WAIT    20   /* half periods to wait for a stretched SCL */
+
+#define I2C_BUSCLEAR_SCL_STUCK  (-1)  /* something holds SCL low */
+#define I2C_BUSCLEAR_SDA_STUCK  (-2)  /* SDA still low after the pulse budget */
+
+typedef struct {
+    void (*set_scl)(void *ctx, bool high);
+    void (*set_sda)(void *ctx, bool high);
+    bool (*get_scl)(void *ctx);
+    bool (*get_sda)(void *ctx);
+    void (*delay)(void *ctx);        /* half an SCL period (~5 us = 100 kHz) */
+    void *ctx;
+} i2c_busclear_io_t;
+
+/* Release SCL and wait (bounded) for it to read high: a slave may stretch. */
+static inline bool i2c_busclear_scl_high(const i2c_busclear_io_t *io)
+{
+    io->set_scl(io->ctx, true);
+    for (int i = 0; i < I2C_BUSCLEAR_SCL_WAIT; i++) {
+        io->delay(io->ctx);
+        if (io->get_scl(io->ctx)) return true;
+    }
+    return false;
+}
+
+/* Run the bus clear.  SDA only ever changes while SCL is low, except for the
+   final STOP (SDA rising while SCL is high), so it never makes a START.
+   Always ends with a STOP, even on a bus that looked idle: a slave that was
+   mid-write holds SDA high but is still waiting for bits, and the STOP resets
+   it.  Returns the number of SCL pulses clocked (>=0), or
+   I2C_BUSCLEAR_SCL_STUCK / I2C_BUSCLEAR_SDA_STUCK.  Leaves both lines released. */
+static inline int i2c_busclear_run(const i2c_busclear_io_t *io)
+{
+    int pulses = 0;
+
+    io->set_sda(io->ctx, true);
+    if (!i2c_busclear_scl_high(io)) return I2C_BUSCLEAR_SCL_STUCK;
+
+    for (;;) {
+        /* Clock until the slave releases SDA (it reads SDA after SCL rises). */
+        while (!io->get_sda(io->ctx)) {
+            if (pulses >= I2C_BUSCLEAR_MAX_PULSES) return I2C_BUSCLEAR_SDA_STUCK;
+            io->set_scl(io->ctx, false);
+            io->delay(io->ctx);
+            if (!i2c_busclear_scl_high(io)) return I2C_BUSCLEAR_SCL_STUCK;
+            pulses++;
+        }
+
+        /* STOP: SCL low, SDA low, SCL high, then SDA high while SCL is high.
+           The SCL rise here is one more clock for the slave, so the total is
+           at most MAX_PULSES + 1; the check below keeps a flapping SDA from
+           looping forever. */
+        if (pulses > I2C_BUSCLEAR_MAX_PULSES) return I2C_BUSCLEAR_SDA_STUCK;
+        io->set_scl(io->ctx, false);
+        io->delay(io->ctx);
+        io->set_sda(io->ctx, false);
+        io->delay(io->ctx);
+        if (!i2c_busclear_scl_high(io)) {
+            io->set_sda(io->ctx, true);
+            return I2C_BUSCLEAR_SCL_STUCK;
+        }
+        pulses++;
+        io->set_sda(io->ctx, true);
+        io->delay(io->ctx);
+        if (io->get_sda(io->ctx)) return pulses;
+        /* A slave in a read drove its next data bit (a 0) on that falling
+           edge, so SDA did not rise and there was no STOP.  Keep clocking. */
+    }
+}
 
 /* Print bus state + a 0x08..0x77 scan, naming the known devices. */
 void i2c_bus_status(void);
