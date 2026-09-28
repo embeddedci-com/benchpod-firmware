@@ -144,7 +144,8 @@ Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `
 | `capture_dual` | Simultaneous ADC + raw LA capture off one trigger | array of uint16 | yes |
 | `load` | Upload a waveform for replay (chunked) | object | no |
 | `replay` | Play the recorded/uploaded trace out the DAC | object | no |
-| `dac_stop` | Stop any running DAC output | `null` | no |
+| `dac_stop` | Stop any running DAC output (parks it when DAC limits are set) | `null` or object | no |
+| `dac_limits` | Read, set or clear the DAC output limits for an external output stage | object | no |
 | `analog_path` | Apply a named analog path (flips mux + relays) | object | no |
 | `dac_out` | Route a DAC output path + set a calibrated voltage | object | no |
 | `adc_read` | Route an ADC source + return a calibrated reading (mV) | object | no |
@@ -675,6 +676,58 @@ Halt any running DAC output: a looped `replay`, a continuous `generate` (`durati
 ```json
 {"status":"ok","data":null}
 ```
+
+With DAC limits set (below), `dac_stop` also holds the DAC at the low-output end of the limits
+with the path routed, and replies `{"parked_mv":3600}`.
+
+---
+
+### `dac_limits` — DAC output limits for an external output stage
+
+For a bench with a power module between a DAC output and the DUT, such as a solar simulator.
+Some of those modules are **inverted**: 0 V on the DAC is their FULL output. The limits are
+stored in flash, survive reboots, and are checked on every command that can move the DAC,
+whichever way it arrives (LAN, cloud, USB console). The embeddedci.com server sets them from the
+device wiring (output stage) when the pod connects and when the wiring changes.
+
+#### Request
+
+```json
+{"cmd":"dac_limits"}
+{"cmd":"dac_limits","path":"5v","inverted":true,"min_mv":1850,"max_mv":3600}
+{"cmd":"dac_limits","enabled":false}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | string | DAC output the module is on: `3v3`, `5v` or `12v`. Without it the request only reads. |
+| `inverted` | bool | `true` = 0 V on the DAC is the module's full output. |
+| `min_mv`, `max_mv` | integer | The DAC voltages the module may be given, in mV. |
+| `enabled` | bool | `false` clears the limits. |
+
+Setting does not move the DAC; the next `dac_stop`, and every boot, parks it at the
+low-output end (`max_mv` when inverted, `min_mv` otherwise).
+
+#### Response
+
+```json
+{"status":"ok","data":{"enabled":true,"path":"5v","inverted":true,"min_mv":1850,"max_mv":3600,"park_mv":3600}}
+```
+
+#### What is refused while limits are set
+
+| Command | Refused when |
+|---|---|
+| `dac_out` | `volts` on the limited path is outside `min_mv`..`max_mv` |
+| `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
+| `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
+| `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
+
+The USB console applies the same rules to `dac`, `path`, `adc`, `dacraw`, `dacmux` and `calsw`;
+`dac-limits` shows them and `dac-limits clear` removes them.
+
+Between reset and the moment boot parks the DAC (after the iCE40 is up), the DAC reads 0 V.
+Hold the module off with its own enable pin for that window.
 
 ---
 

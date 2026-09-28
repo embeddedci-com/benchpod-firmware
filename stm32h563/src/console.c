@@ -51,6 +51,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include "dac_limits.h"
 #include <stdlib.h>
 
 #include "fpga_bitstream.h"   /* generated: fpga_image0/1[] + _len (or fpga_bitstream[]) */
@@ -560,6 +561,27 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  nRST %s\r\n",
                nrst_ctrl_is_asserted() ? "ASSERTED (low)" : "released (Hi-Z)");
         }
+    } else if ((!strcmp(argv[0], "dacraw") || !strcmp(argv[0], "dacmux") || !strcmp(argv[0], "calsw")) &&
+               dac_limits_check_raw(argv[0])) {
+        /* DAC output limits (dac_limits.h) refuse raw DAC/mux writes. */
+        op(out, ctx, "  %s\r\n", dac_limits_check_raw(argv[0]));
+    } else if (!strcmp(argv[0], "path") && argc >= 2 && dac_limits_check_route(argv[1])) {
+        op(out, ctx, "  %s\r\n", dac_limits_check_route(argv[1]));
+    } else if (!strcmp(argv[0], "dac") && argc >= 2 &&
+               (dac_limits_check_route(argv[1]) ||
+                (argc >= 3 && dac_limits_check_volts(argv[1], (float)atof(argv[2]))))) {
+        const char *why = dac_limits_check_route(argv[1]);
+        op(out, ctx, "  %s\r\n", why ? why : dac_limits_check_volts(argv[1], (float)atof(argv[2])));
+    } else if (!strcmp(argv[0], "adc") && dac_limits_check_route(argc >= 2 ? argv[1] : "ext")) {
+        op(out, ctx, "  %s\r\n", dac_limits_check_route(argc >= 2 ? argv[1] : "ext"));
+    } else if (!strcmp(argv[0], "dac-limits")) {
+        /* dac-limits — show the DAC output limits; `dac-limits clear` removes them. */
+        if (argc >= 2 && !strcmp(argv[1], "clear")) dac_limits_clear();
+        const dac_limits_t *l = dac_limits_get();
+        if (!l->enabled) op(out, ctx, "  dac limits: none\r\n");
+        else op(out, ctx, "  dac limits: %s %s %ld..%ld mV, park %ld mV\r\n", dac_limits_path_name(l->path),
+                l->inverted ? "inverted" : "normal", (long)l->min_mv, (long)l->max_mv,
+                (long)(l->inverted ? l->max_mv : l->min_mv));
     } else if (!strcmp(argv[0], "dacraw") && argc >= 2) {
         /* dacraw <code 0..255> [div] — raw DAC code, no routing/cal (debug). */
         uint8_t v = (uint8_t)atoi(argv[1]);

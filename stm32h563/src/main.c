@@ -39,6 +39,7 @@
 #include "hw_worker.h"
 #include "ice40_flash.h"
 #include "version.h"
+#include "dac_limits.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -163,6 +164,7 @@ int main(void)
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
     analog_switch_init();   /* U55 DAC mux + U58 cal switching, all off */
+    dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */
     can_bus_init();         /* FDCAN1 term GPIO safe (core stays down until can_config) */
     boot_guard_stage(BOOT_STAGE_IDENTITY);
     device_identity_init(); /* Ed25519 identity (internal flash + RNG) */
@@ -226,6 +228,9 @@ void boot_deferred_hw_init(void)
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();
     i2c_bus_status();       /* scan + name known devices */
+    /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
+       which is where reset left it: park it now that the iCE40 can drive the DAC. */
+    if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     boot_guard_sub_done(BOOT_SUB_HW);
     boot_guard_set_hw_ready();
     boot_guard_stage(BOOT_STAGE_RUNNING);

@@ -33,6 +33,7 @@ PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 BUSREC_SRCS   := test_bus_recovery.c
 CFGSTORE_SRCS := test_config_store.c ../src/config_store.c ../src/cloud_config.c mocks/mock_flash.c
+DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c
@@ -150,6 +151,10 @@ build/test_config_store: $(CFGSTORE_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CFGSTORE_SRCS) -lm -o $@
 
+build/test_dac_limits: $(DACLIM_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(DACLIM_SRCS) -lm -o $@
+
 build/test_bus_recovery: $(BUSREC_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BUSREC_SRCS) -lm -o $@
@@ -158,7 +163,7 @@ build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -187,6 +192,8 @@ run: $(TESTS)
 	@./build/test_bus_recovery
 	@./build/test_config_store > build/test_config_store.log || { cat build/test_config_store.log; exit 1; }
 	@tail -n 1 build/test_config_store.log
+	@./build/test_dac_limits > build/test_dac_limits.log || { cat build/test_dac_limits.log; exit 1; }
+	@tail -n 1 build/test_dac_limits.log
 	@./build/test_esp_wifi_ctrl
 	@./build/test_scpi_paced
 ifneq ($(HAVE_MBEDTLS),)

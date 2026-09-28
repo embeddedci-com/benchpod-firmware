@@ -47,6 +47,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include "dac_limits.h"
 #include <stdio.h>
 #include <math.h>
 
@@ -1857,7 +1858,63 @@ static void handle_replay(int conn_id, const char *json) {
    `generate`, or a held `dac_set_constant`). */
 static void handle_dac_stop(int conn_id) {
     dac_stop();
+    /* With DAC limits set (an external output stage), stopping must not leave the DAC wherever
+       it was: hold it at the low-output end instead (dac_limits.h). */
+    if (dac_limits_get()->enabled) {
+        if (dac_limits_park_now() != 0) { send_error(conn_id, "DAC stopped, but parking it at the limits failed"); return; }
+        char payload[48];
+        const dac_limits_t *l = dac_limits_get();
+        snprintf(payload, sizeof(payload), "{\"parked_mv\":%ld}", (long)(l->inverted ? l->max_mv : l->min_mv));
+        send_ok_str(conn_id, payload);
+        return;
+    }
     send_ok_str(conn_id, "null");
+}
+
+/* Reply body describing the active DAC limits. */
+static void dac_limits_reply(int conn_id) {
+    const dac_limits_t *l = dac_limits_get();
+    char payload[160];
+    if (!l->enabled) {
+        snprintf(payload, sizeof(payload), "{\"enabled\":false}");
+    } else {
+        snprintf(payload, sizeof(payload),
+                 "{\"enabled\":true,\"path\":\"%s\",\"inverted\":%s,\"min_mv\":%ld,\"max_mv\":%ld,\"park_mv\":%ld}",
+                 dac_limits_path_name(l->path), l->inverted ? "true" : "false",
+                 (long)l->min_mv, (long)l->max_mv, (long)(l->inverted ? l->max_mv : l->min_mv));
+    }
+    send_ok_str(conn_id, payload);
+}
+
+/* `dac_limits` — read, set or clear the DAC output limits for an external output stage
+   (dac_limits.h). Stored in flash and enforced on every DAC command until cleared.
+     {"cmd":"dac_limits"}                                         -> the active limits
+     {"cmd":"dac_limits","path":"5v","inverted":true,"min_mv":1850,"max_mv":3600}  -> set
+     {"cmd":"dac_limits","enabled":false}                         -> clear
+   Setting does not move the DAC; the next dac_stop (or boot) parks it. */
+static void handle_dac_limits(int conn_id, const char *json) {
+    char v[16] = {0};
+    if (json_get_value(json, "enabled", v, sizeof(v)) && strcmp(v, "false") == 0) {
+        if (dac_limits_clear() != 0) { send_error(conn_id, "could not clear the DAC limits"); return; }
+        dac_limits_reply(conn_id);
+        return;
+    }
+    char path[16] = {0}, inv[8] = {0}, lo[16] = {0}, hi[16] = {0};
+    bool has_path = json_get_value(json, "path", path, sizeof(path));
+    if (!has_path) { dac_limits_reply(conn_id); return; }
+    if (!json_get_value(json, "min_mv", lo, sizeof(lo)) || !json_get_value(json, "max_mv", hi, sizeof(hi))) {
+        send_error(conn_id, "dac_limits needs path, min_mv and max_mv (and inverted)"); return;
+    }
+    int idx = dac_limits_path_index(path);
+    if (idx < 0) { send_error(conn_id, "path must be 3v3, 5v or 12v"); return; }
+    json_get_value(json, "inverted", inv, sizeof(inv));
+    dac_limits_t l = {
+        .enabled = 1, .path = (uint8_t)idx, .inverted = (uint8_t)(strcmp(inv, "true") == 0),
+        .min_mv = (int32_t)atol(lo), .max_mv = (int32_t)atol(hi),
+    };
+    const char *why = dac_limits_set(&l);
+    if (why) { send_error(conn_id, why); return; }
+    dac_limits_reply(conn_id);
 }
 
 /* `dac_set` — hold the DAC at a fixed DC level (multimeter-probe / fault
@@ -2169,7 +2226,7 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\"");
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
@@ -3378,6 +3435,8 @@ static void handle_fpga_image(int conn_id, const char *json) {
     /* The live image (and thus dac_control_loop / dac_deep_replay / dac_replay_max_samples) just
        changed — re-announce so the cloud/webapp gate on the NEW image, not the connect-time one. */
     cloud_client_request_caps_resend();
+    /* A reconfigure can glitch the DAC's SPI lines: put an output stage back on its park level. */
+    if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     char payload[96];
     snprintf(payload, sizeof(payload), "{\"image\":%u,\"version\":%u,\"features\":%u}", img, ver, feats);
     send_ok_str(conn_id, payload);
@@ -3434,7 +3493,7 @@ static bool cmd_ok_without_hw(const char *cmd) {
         "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
         "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
         "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
-        "power_profile", "identity_public", "identity_pop",
+        "power_profile", "identity_public", "identity_pop", "dac_limits",
         "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
         "can_disable",
     };
@@ -3458,6 +3517,13 @@ static void dispatch_line(int conn_id, const char *buf) {
         return;
     }
 
+    /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud
+       tunnel, cloud command channel). No-op on a pod without limits. */
+    {
+        const char *why = dac_limits_check_command(cmd, buf);
+        if (why) { send_error(conn_id, why); return; }
+    }
+
     if      (strcmp(cmd, "ping")      == 0) handle_ping(conn_id);
     else if (strcmp(cmd, "generate")  == 0) handle_generate(conn_id, buf);
     else if (strcmp(cmd, "capture")   == 0) handle_capture(conn_id, buf);
@@ -3469,6 +3535,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "load_bin")  == 0) handle_load_bin(conn_id, buf);
     else if (strcmp(cmd, "replay")    == 0) handle_replay(conn_id, buf);
     else if (strcmp(cmd, "dac_stop")  == 0) handle_dac_stop(conn_id);
+    else if (strcmp(cmd, "dac_limits") == 0) handle_dac_limits(conn_id, buf);
     else if (strcmp(cmd, "dac_set")   == 0) handle_dac_set(conn_id, buf);
     else if (strcmp(cmd, "dac_mux")   == 0) handle_dac_mux(conn_id, buf);
     else if (strcmp(cmd, "cal_switch") == 0) handle_cal_switch(conn_id, buf);

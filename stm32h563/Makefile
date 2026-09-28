@@ -120,6 +120,8 @@ C_SOURCES := \
   src/sys_health.c \
   src/device_identity.c \
   src/config_store.c \
+  src/dac_limits.c \
+  src/dac_limits_hw.c \
   src/flash_compat.c \
   src/rng.c \
   src/hw_lock.c \

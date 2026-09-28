@@ -5,9 +5,9 @@
  *
  * STM32H5: 2 MB flash, 2 banks x 1 MB, 8 KB sectors (128/bank); programmed in
  * 16-byte quad-words.  `offset` is relative to FLASH_BASE (0x08000000).  The
- * persistence records live in bank-2 sectors 121..127 (0x081F2000..0x081FFFFF),
- * above the linker's FLASH_BLOBS end (0x081F0000) and the OTA self-test scratch
- * sector (0x081F0000), so erasing them never touches code.
+ * persistence records live in bank-2 sectors 118..127 (0x081EC000..0x081FFFFF,
+ * with the OTA self-test scratch at s120), at or above the linker's FLASH_BLOBS
+ * end (0x081EC000), so erasing them never touches code.
  */
 #include "hardware/flash.h"
 #include "hardware/sync.h"
