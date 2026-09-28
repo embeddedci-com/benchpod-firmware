@@ -108,6 +108,14 @@ static void op(console_out_t out, void *ctx, const char *fmt, ...)
     if (n > 0) out(ctx, buf);
 }
 
+/* A line longer than op()'s 160-byte buffer (the DAC limits refusals), written straight through. */
+static void op_line(console_out_t out, void *ctx, const char *msg)
+{
+    out(ctx, "  ");
+    out(ctx, msg);
+    out(ctx, "\r\n");
+}
+
 static void cmd_help(console_out_t out, void *ctx)
 {
     /* Emit straight through out() (not op()): the full list is ~830 bytes and
@@ -564,16 +572,16 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     } else if ((!strcmp(argv[0], "dacraw") || !strcmp(argv[0], "dacmux") || !strcmp(argv[0], "calsw")) &&
                dac_limits_check_raw(argv[0])) {
         /* DAC output limits (dac_limits.h) refuse raw DAC/mux writes. */
-        op(out, ctx, "  %s\r\n", dac_limits_check_raw(argv[0]));
+        op_line(out, ctx, dac_limits_check_raw(argv[0]));
     } else if (!strcmp(argv[0], "path") && argc >= 2 && dac_limits_check_route(argv[1])) {
-        op(out, ctx, "  %s\r\n", dac_limits_check_route(argv[1]));
+        op_line(out, ctx, dac_limits_check_route(argv[1]));
     } else if (!strcmp(argv[0], "dac") && argc >= 2 &&
                (dac_limits_check_route(argv[1]) ||
                 (argc >= 3 && dac_limits_check_volts(argv[1], (float)atof(argv[2]))))) {
         const char *why = dac_limits_check_route(argv[1]);
-        op(out, ctx, "  %s\r\n", why ? why : dac_limits_check_volts(argv[1], (float)atof(argv[2])));
+        op_line(out, ctx, why ? why : dac_limits_check_volts(argv[1], (float)atof(argv[2])));
     } else if (!strcmp(argv[0], "adc") && dac_limits_check_route(argc >= 2 ? argv[1] : "ext")) {
-        op(out, ctx, "  %s\r\n", dac_limits_check_route(argc >= 2 ? argv[1] : "ext"));
+        op_line(out, ctx, dac_limits_check_route(argc >= 2 ? argv[1] : "ext"));
     } else if (!strcmp(argv[0], "dac-limits")) {
         /* dac-limits — show the DAC output limits; `dac-limits clear` removes them. */
         if (argc >= 2 && !strcmp(argv[1], "clear")) dac_limits_clear();
