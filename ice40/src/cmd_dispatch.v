@@ -353,6 +353,90 @@ module cmd_dispatch #(
     localparam I2C_STATUS_LEN  = 16'd7;
     localparam UART_STATUS_LEN = 16'd3;
 
+    // ------------------------------------------------------------------------
+    // Masked opcode decode for S_COLLECT and S_READ_LEN1.
+    //
+    // current_cmd only changes in S_IDLE, so in S_COLLECT it is always one of the opcodes S_IDLE
+    // sends there, and in S_READ_LEN1 one of the length-prefixed stream opcodes.  Each case item
+    // below therefore only compares the bits that tell its opcode apart from the OTHER opcodes of
+    // the same set ('?' = not compared): 2-5 bits instead of 8 per strobe decode.  S_IDLE still
+    // compares all 8 bits, so an unknown opcode is still ignored.  (swd_feed_q likewise is just
+    // bit 3: swd_engine samples it only with swd_feed_begin, i.e. for SWD_FEED 0x51 / QFEED 0x58.)
+    //
+    // ADDING AN OPCODE THAT ENTERS S_COLLECT OR S_READ_LEN0: add it to the table and to the
+    // *_OPS/*_PATS lists below, and re-derive the patterns so every one of them still matches
+    // exactly one opcode of its set.  The sim-only checks below fail every bench otherwise.
+`define CD_START_DAC           8'b?00?_?00?    // 0x11
+`define CD_DAC_LOOP_SRC        8'b????_1?1?    // 0x1A
+`define CD_DAC_LOOP_INMAP      8'b????_11??    // 0x1C (loop image only)
+`define CD_START_DAC_LOOP      8'b?0?1_?1?1    // 0x15
+`define CD_GPIO_SET            8'b??00_??00    // 0x40
+`define CD_SET_LED             8'b???0_??10    // 0x42
+`define CD_CAPTURE_TEST        8'b???0_??11    // 0x23
+`define CD_PSRAM_CS            8'b???0_?1??    // 0x25
+`define CD_SWD_ARM             8'b??01_?000    // 0x50
+`define CD_SPI_ARM             8'b?1??_?1?1    // 0x55
+`define CD_SPI_CS              8'b????_?11?    // 0x56
+`define CD_SWD_QCONFIG         8'b????_1??1    // 0x59
+`define CD_GPIO_STEP           8'b??00_???1    // 0x41
+`define CD_CAPTURE             8'b??1?_?001    // 0x31
+`define CD_SET_CAPTURE_BASES   8'b??1?_??10    // 0x32
+`define CD_START_DAC_PSRAM     8'b??0?_??11    // 0x13
+`define CD_SET_DAC_STOP_AFTER  8'b????_0100    // 0x14
+`define CD_SET_TRIGGER         8'b??11_??11    // 0x33
+`define CD_I2C_CONFIG          8'b??10_???0    // 0x60
+`define CD_UART_CONFIG         8'b?111_????    // 0x70
+
+`define CD_LOAD_WAVE           8'b?0??_????    // 0x10
+`define CD_SWD_FEED            8'b????_??01    // 0x51
+`define CD_SWD_QFEED           8'b????_1???    // 0x58
+`define CD_SWD_READ            8'b??0?_??1?    // 0x52
+`define CD_I2C_LOAD_REGS       8'b???0_???0    // 0x62
+`define CD_I2C_READ_REGS       8'b???0_???1    // 0x63
+`define CD_UART_WRITE          8'b??11_???0    // 0x72
+`define CD_UART_READ           8'b???1_??11    // 0x73
+
+`ifndef SYNTHESIS
+    localparam N_COLLECT = 20, N_STREAM = 8;
+    localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
+        OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
+        OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
+        OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
+        OP_I2C_CONFIG, OP_UART_CONFIG };
+    localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
+        `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
+        `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
+        `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
+        `CD_I2C_CONFIG, `CD_UART_CONFIG };
+    localparam [N_STREAM*8-1:0] STREAM_OPS = {
+        OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
+        OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_UART_WRITE, OP_UART_READ };
+    localparam [N_STREAM*8-1:0] STREAM_PATS = {
+        `CD_LOAD_WAVE, `CD_SWD_FEED, `CD_SWD_QFEED, `CD_SWD_READ,
+        `CD_I2C_LOAD_REGS, `CD_I2C_READ_REGS, `CD_UART_WRITE, `CD_UART_READ };
+
+    function pat_hit(input [7:0] c, input [7:0] p);   // casez semantics: z bits don't care
+        integer b;
+        begin
+            pat_hit = 1'b1;
+            for (b = 0; b < 8; b = b + 1) if (p[b] !== 1'bz && p[b] !== c[b]) pat_hit = 1'b0;
+        end
+    endfunction
+
+    // Static: each pattern matches its own opcode and no other opcode of its set.
+    initial begin : masked_decode_static
+        integer a, b;
+        for (a = 0; a < N_COLLECT; a = a + 1) for (b = 0; b < N_COLLECT; b = b + 1)
+            if (pat_hit(COLLECT_OPS[a*8 +: 8], COLLECT_PATS[b*8 +: 8]) != (a == b))
+                $display("FAIL cmd_dispatch: S_COLLECT pattern of %02h vs opcode %02h", COLLECT_OPS[b*8 +: 8], COLLECT_OPS[a*8 +: 8]);
+        for (a = 0; a < N_STREAM; a = a + 1) for (b = 0; b < N_STREAM; b = b + 1)
+            if (pat_hit(STREAM_OPS[a*8 +: 8], STREAM_PATS[b*8 +: 8]) != (a == b))
+                $display("FAIL cmd_dispatch: S_READ_LEN1 pattern of %02h vs opcode %02h", STREAM_OPS[b*8 +: 8], STREAM_OPS[a*8 +: 8]);
+        if (OP_SWD_FEED[3] !== 1'b0 || OP_SWD_QFEED[3] !== 1'b1)
+            $display("FAIL cmd_dispatch: swd_feed_q = current_cmd[3] no longer separates SWD_FEED/QFEED");
+    end
+`endif
+
     reg [4:0]  state;
     reg [7:0]  current_cmd;
     reg [11:0] arg_count;   // the payload ADDRESS pointer, and itself the address outputs
@@ -401,7 +485,7 @@ module cmd_dispatch #(
     assign spi_half          = arg_buf[8][5:0];
     assign spi_cpol          = rx_byte[0];
     assign spi_cs_assert     = rx_byte[0];
-    assign swd_feed_q        = (current_cmd == OP_SWD_QFEED);
+    assign swd_feed_q        = current_cmd[3];
     assign q_cfg_half        = arg_buf[8][5:0];
     assign q_cfg_idle        = rx_byte[4:0];
     assign i2c_cfg_addr7     = arg_buf[1][6:0];
@@ -758,12 +842,12 @@ module cmd_dispatch #(
                         // (len==0) skip straight to S_DONE.  The read paths preload
                         // their first BRAM/FIFO byte here to hide the 1-cycle read
                         // latency before the streaming state shifts it out.
-                        case (current_cmd)
-                            OP_LOAD_WAVE: state <= S_LOAD_DATA;
-                            OP_SWD_FEED, OP_SWD_QFEED:
+                        (* parallel_case *) casez (current_cmd)
+                            `CD_LOAD_WAVE: state <= S_LOAD_DATA;
+                            `CD_SWD_FEED, `CD_SWD_QFEED:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_SWD_FEED;
-                            OP_SWD_READ:
+                            `CD_SWD_READ:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     tx_byte     <= swd_rd_data;
@@ -771,19 +855,19 @@ module cmd_dispatch #(
                                 end
                             // arg_count = start address (S_REG_ADDR) is the write/read
                             // port address in S_REG_LOAD/S_REG_READ.
-                            OP_I2C_LOAD_REGS:
+                            `CD_I2C_LOAD_REGS:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_REG_LOAD;
-                            OP_I2C_READ_REGS:
+                            `CD_I2C_READ_REGS:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr = start address
                                     state   <= S_REG_READ;
                                 end
-                            OP_UART_WRITE:
+                            `CD_UART_WRITE:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_UART_WRITE;
-                            OP_UART_READ:
+                            `CD_UART_READ:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
                                     // preload head byte + pop so the FIFO advances.
@@ -818,11 +902,11 @@ module cmd_dispatch #(
                             arg_buf[8] <= rx_byte;
                         end
                         if (last_byte) begin
-                            case (current_cmd)
+                            (* parallel_case *) casez (current_cmd)
                                 // 4-byte [count(2)][div(2)] arming opcodes: the
                                 // last byte (div_hi) is rx_byte, the rest are in
                                 // arg_buf[0..2].  (Was the dedicated S_ARG0..3 chain.)
-                                OP_START_DAC: begin
+                                `CD_START_DAC: begin
                                     dac_period  <= {arg_buf[7][ADDR_W-8:0], arg_buf[6]};
                                     dac_divider <= {rx_byte, arg_buf[8]};
                                     dac_start   <= 1'b1;
@@ -841,42 +925,42 @@ module cmd_dispatch #(
                                 end
                                 // Loop input source (v29): [src][fixed(2)][step(2)].  Sets the
                                 // registers only — arming and stopping stay with 0x15/0x12.
-                                OP_DAC_LOOP_SRC: begin
+                                `CD_DAC_LOOP_SRC: begin
                                     loop_src_stb  <= 1'b1;
                                 end
 `ifndef USE_DEEP_REPLAY
                                 // Loop input map (v30): [in_zero(2)][in_gain(2)][in_trip(2)]
                                 // [flags(1)], flags bit0=map_en, bit1=trip_en.
-                                OP_DAC_LOOP_INMAP: begin
+                                `CD_DAC_LOOP_INMAP: begin
                                     loop_inmap_stb     <= 1'b1;
                                 end
 `endif
                                 // Control loop arm: [k(2)][vmin(2)][vmax(2)][tick_div(2)].
-                                OP_START_DAC_LOOP: begin
+                                `CD_START_DAC_LOOP: begin
                                     loop_arm_stb  <= 1'b1;
                                     dac_loop_mode <= 1'b1;
                                     dac_start     <= 1'b1;   // kick the DAC8551 into streaming
                                 end
-                                OP_GPIO_SET: begin
+                                `CD_GPIO_SET: begin
                                     gpio_set_stb  <= 1'b1;
                                 end
-                                OP_SET_LED: begin
+                                `CD_SET_LED: begin
                                     led_ctrl <= rx_byte;   // 1 arg: the LED mask
                                 end
-                                OP_CAPTURE_TEST: begin
+                                `CD_CAPTURE_TEST: begin
                                     cap_test_ramp <= rx_byte[0];    // 0=real ADC, 1=ramp self-test
                                 end
-                                OP_PSRAM_CS: begin
+                                `CD_PSRAM_CS: begin
                                     psram_cs_force <= rx_byte[0];   // 1=force PSRAM /CS low
                                 end
-                                OP_SWD_ARM: begin
+                                `CD_SWD_ARM: begin
                                     swd_arm_stb      <= 1'b1;
                                 end
                                 // [sck][mosi][miso][cs][half][flags(=rx_byte)] / [level(=rx_byte)]
-                                OP_SPI_ARM: spi_arm_stb <= 1'b1;
-                                OP_SPI_CS:  spi_cs_stb  <= 1'b1;
-                                OP_SWD_QCONFIG: q_cfg_stb <= 1'b1;   // [half][idle(=rx_byte)]
-                                OP_GPIO_STEP: begin
+                                `CD_SPI_ARM: spi_arm_stb <= 1'b1;
+                                `CD_SPI_CS:  spi_cs_stb  <= 1'b1;
+                                `CD_SWD_QCONFIG: q_cfg_stb <= 1'b1;   // [half][idle(=rx_byte)]
+                                `CD_GPIO_STEP: begin
                                     // [channel][steps_lo][steps_hi][delay_lo][delay_hi(=rx_byte)]
                                     step_start   <= 1'b1;
                                 end
@@ -885,7 +969,7 @@ module cmd_dispatch #(
                                 // its own count+divider -> two independent PSRAM
                                 // regions.  adc_cnt=0 => ADC not captured; la_cnt=0 =>
                                 // LA not captured.  See top_v2.v / psram_dual_writer.
-                                OP_CAPTURE: begin
+                                `CD_CAPTURE: begin
                                     // [adc_cnt_lo][adc_cnt_mid][adc_cnt_hi][adc_div_lo][adc_div_hi]
                                     // [la_cnt_lo][la_cnt_mid][la_cnt_hi][la_div_lo][la_div_hi(=rx_byte)]
                                     // BOTH counts are now full 24-bit so a single unified
@@ -903,7 +987,7 @@ module cmd_dispatch #(
                                 end
                                 // Latch runtime PSRAM region bases (6-byte payload):
                                 // [la_base_lo,mid,hi][adc_base_lo,mid,hi(=rx_byte)].
-                                OP_SET_CAPTURE_BASES: begin
+                                `CD_SET_CAPTURE_BASES: begin
                                     /* payload [la_base(3)][adc_base(3)]; LA base ignored
                                        (always 0), only the ADC base is programmable. */
                                     adc_cap_base <= {rx_byte, arg_buf[8], arg_buf[7]};
@@ -913,7 +997,7 @@ module cmd_dispatch #(
                                 // the streaming mode LEVEL and pulse the DAC engine start;
                                 // the top latches base/len into the DAC clock domain and
                                 // the reader streams the waveform out of PSRAM.
-                                OP_START_DAC_PSRAM: begin
+                                `CD_START_DAC_PSRAM: begin
                                     dac_psram_base <= {arg_buf[4], arg_buf[3], arg_buf[2]};  // 24-bit byte base
                                     dac_psram_len  <= {arg_buf[7], arg_buf[6], arg_buf[5]};  // 24-bit SAMPLE count
                                     dac_divider    <= {rx_byte,    arg_buf[8]};
@@ -923,24 +1007,24 @@ module cmd_dispatch #(
                                 // Capture-tied DAC auto-stop for the NEXT capture (v40: one-shot,
                                 // loads the top's countdown).  0 disarms.
                                 //   [cyc_lo][cyc_1][cyc_2][cyc_hi(=rx_byte)]
-                                OP_SET_DAC_STOP_AFTER: begin
+                                `CD_SET_DAC_STOP_AFTER: begin
                                     stop_after_stb <= 1'b1;
                                 end
                                 // Capture trigger (persistent; the top applies it at every later
                                 // arm): [channel][mode][flags(reserved, =rx_byte)].  The mode is
                                 // decoded here so the top's per-cycle test is a mux + two compares.
-                                OP_SET_TRIGGER: begin
+                                `CD_SET_TRIGGER: begin
                                     trig_ch   <= arg_buf[7][3:0];
                                     trig_en   <= (arg_buf[8] != 8'd0) && (arg_buf[8] <= 8'd4);
                                     trig_edge <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd2);
                                     trig_pol  <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd3);
                                 end
-                                OP_I2C_CONFIG: begin
+                                `CD_I2C_CONFIG: begin
                                     // [addr7][sda_ch][scl_ch][flags][trig_reg]
                                     // [busy_reg][busy_mask][conv_lo][conv_hi(=rx_byte)]
                                     i2c_cfg_stb       <= 1'b1;
                                 end
-                                OP_UART_CONFIG: begin
+                                `CD_UART_CONFIG: begin
                                     // [rx_ch][tx_ch][div_lo][div_mid][div_hi(=rx_byte)][flags]
                                     // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
                                     uart_cfg_stb     <= 1'b1;
@@ -1054,4 +1138,53 @@ module cmd_dispatch #(
         end
     end
 
+`ifndef SYNTHESIS
+    // Dynamic half of the masked-decode check: whatever opcode a bench drives into S_COLLECT or
+    // S_READ_LEN1 must be in that state's table, or its patterns were never checked against it.
+    always @(posedge clk) begin : masked_decode_dynamic
+        integer a;  reg known;
+        if (!rst && rx_valid && !cs_release && (state == S_COLLECT || state == S_READ_LEN1)) begin
+            known = 1'b0;
+            if (state == S_COLLECT) begin
+                for (a = 0; a < N_COLLECT; a = a + 1) if (current_cmd == COLLECT_OPS[a*8 +: 8]) known = 1'b1;
+            end else begin
+                for (a = 0; a < N_STREAM; a = a + 1)  if (current_cmd == STREAM_OPS[a*8 +: 8])  known = 1'b1;
+            end
+            if (!known)
+                $display("FAIL cmd_dispatch: opcode %02h reached state %0d but is not in its masked-decode table",
+                         current_cmd, state);
+        end
+    end
+`endif
+
 endmodule
+
+// the masked-decode patterns are local to this file
+`undef CD_START_DAC
+`undef CD_DAC_LOOP_SRC
+`undef CD_DAC_LOOP_INMAP
+`undef CD_START_DAC_LOOP
+`undef CD_GPIO_SET
+`undef CD_SET_LED
+`undef CD_CAPTURE_TEST
+`undef CD_PSRAM_CS
+`undef CD_SWD_ARM
+`undef CD_SPI_ARM
+`undef CD_SPI_CS
+`undef CD_SWD_QCONFIG
+`undef CD_GPIO_STEP
+`undef CD_CAPTURE
+`undef CD_SET_CAPTURE_BASES
+`undef CD_START_DAC_PSRAM
+`undef CD_SET_DAC_STOP_AFTER
+`undef CD_SET_TRIGGER
+`undef CD_I2C_CONFIG
+`undef CD_UART_CONFIG
+`undef CD_LOAD_WAVE
+`undef CD_SWD_FEED
+`undef CD_SWD_QFEED
+`undef CD_SWD_READ
+`undef CD_I2C_LOAD_REGS
+`undef CD_I2C_READ_REGS
+`undef CD_UART_WRITE
+`undef CD_UART_READ
