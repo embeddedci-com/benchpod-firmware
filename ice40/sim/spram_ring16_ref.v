@@ -17,7 +17,7 @@
 // Depth = (1<<AW) words = 2*(1<<AW) bytes.  AW=15 -> 32K words -> 64 KB -> 32K
 // samples, 2 SB_SPRAM256KA blocks (the pod has 2 free after the correlated ring).
 // ============================================================================
-module spram_ring16 #(
+module spram_ring16_ref #(
     parameter AW = 15
 )(
     input  wire       clk,
@@ -45,12 +45,8 @@ module spram_ring16 #(
         else         sram_dout      <= sram[sram_addr];
     end
 
-    // Pointers carry one wrap bit above the address (v45): words resident = wr_ptr - rd_ptr,
-    // so the old separate up/down `count` register is gone; the two flags below are updated at
-    // the same two events from pointer compares instead.
-    reg [AW:0]   wr_ptr, rd_ptr;
-    wire [AW:0]  wr_ptr_inc = wr_ptr + 1'b1;
-    wire [AW:0]  rd_ptr_inc = rd_ptr + 1'b1;
+    reg [AW-1:0] wr_ptr, rd_ptr;
+    reg [AW:0]   count;                       // WORDS resident in SPRAM
 
     // input: pack low then high byte into one 16-bit word (word[7:0]=low), held in
     // the 1-deep in_p register until the port writes it.
@@ -101,7 +97,7 @@ module spram_ring16 #(
     always @(posedge clk) begin
         sram_we <= 1'b0;
         if (rst) begin
-            wr_ptr <= 0; rd_ptr <= 0;
+            wr_ptr <= 0; rd_ptr <= 0; count <= 0;
             cnt_nz <= 1'b0; cnt_nfull <= 1'b1;
             lo_v <= 1'b0; in_p_v <= 1'b0;
             out_word_v <= 1'b0; out_hi <= 1'b0;
@@ -129,13 +125,12 @@ module spram_ring16 #(
             case (st)
             S_IDLE: begin
                 if (do_write) begin
-                    sram_addr <= wr_ptr[AW-1:0]; sram_din <= in_p_d; sram_we <= 1'b1;
-                    wr_ptr <= wr_ptr_inc; in_p_v <= 1'b0;
+                    sram_addr <= wr_ptr; sram_din <= in_p_d; sram_we <= 1'b1;
+                    wr_ptr <= wr_ptr + 1'b1; count <= count + 1'b1; in_p_v <= 1'b0;
                     cnt_nz    <= 1'b1;
-                    // full after this write: DEPTH words resident = same address, other lap
-                    cnt_nfull <= (wr_ptr_inc != {~rd_ptr[AW], rd_ptr[AW-1:0]});
+                    cnt_nfull <= (count != (DEPTH[AW:0] - 1'b1));
                 end else if (do_read) begin
-                    sram_addr <= rd_ptr[AW-1:0];           // present read address
+                    sram_addr <= rd_ptr;                   // present read address
                     st <= S_RD1;
                 end
             end
@@ -144,9 +139,10 @@ module spram_ring16 #(
                 out_word   <= sram_dout;
                 out_word_v <= 1'b1;
                 out_hi     <= 1'b0;
-                rd_ptr     <= rd_ptr_inc;
+                rd_ptr     <= rd_ptr + 1'b1;
+                count      <= count - 1'b1;
                 cnt_nfull  <= 1'b1;
-                cnt_nz     <= (rd_ptr_inc != wr_ptr);             // words left after this read
+                cnt_nz     <= (count != {{AW{1'b0}}, 1'b1});
                 st         <= S_IDLE;
             end
             default: st <= S_IDLE;

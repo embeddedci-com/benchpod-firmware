@@ -239,7 +239,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest ringtest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -685,8 +685,15 @@ swdqtest:
 	$(VVP) /tmp/$(PROJECT)_swdq.vvp
 	@rm -f /tmp/$(PROJECT)_swdq.vvp
 
+# spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
+ringtest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_ring.vvp -s tb_spram_ring16 \
+	         sim/tb_spram_ring16.v src/spram_ring16.v sim/spram_ring16_ref.v
+	$(VVP) /tmp/$(PROJECT)_ring.vvp
+	@rm -f /tmp/$(PROJECT)_ring.vvp
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest ringtest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:
