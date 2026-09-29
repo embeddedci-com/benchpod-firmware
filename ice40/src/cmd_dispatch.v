@@ -79,7 +79,7 @@ module cmd_dispatch #(
     // Waveform BRAM write port (LOAD_WAVE drives this)
     output reg               wave_we,
     output reg  [ADDR_W-1:0] wave_waddr,
-    output reg  [7:0]        wave_wdata,
+    output wire [7:0]        wave_wdata,
 
     // DAC engine control
     output reg               dac_start,
@@ -211,7 +211,7 @@ module cmd_dispatch #(
     output reg               swd_disarm_stb,
     output reg               swd_feed_begin,
     output reg               swd_feed_stb,
-    output reg  [7:0]        swd_feed_byte,
+    output wire [7:0]        swd_feed_byte,
     output reg  [REPLY_AW-1:0] swd_rd_addr,
     input  wire [7:0]        swd_rd_data,
     input  wire              swd_armed,
@@ -253,7 +253,7 @@ module cmd_dispatch #(
     // ---- emulated I2C sensor: register file (SPI/load+readback port) ----
     output reg               i2c_reg_we,
     output reg  [7:0]        i2c_reg_waddr,
-    output reg  [7:0]        i2c_reg_wdata,
+    output wire [7:0]        i2c_reg_wdata,
     output reg  [7:0]        i2c_reg_raddr,
     input  wire [7:0]        i2c_reg_rdata,
 
@@ -288,7 +288,7 @@ module cmd_dispatch #(
 
     // ---- UART proxy: TX FIFO write / RX FIFO read ----
     output reg               uart_tx_we,
-    output reg  [7:0]        uart_tx_wdata,
+    output wire [7:0]        uart_tx_wdata,
     output reg               uart_rx_re,
     input  wire [7:0]        uart_rx_rdata,
     output reg               uart_rx_ovf_clr,
@@ -411,6 +411,14 @@ module cmd_dispatch #(
     assign uart_cfg_tx_ch    = arg_buf[5][3:0];
     assign uart_cfg_div      = {arg_buf[8], arg_buf[7], arg_buf[6]};
     assign uart_cfg_enable   = rx_byte[0];
+    // Streamed write data (LOAD_WAVE / SWD_FEED / I2C_LOAD_REGS / UART_WRITE) is rx_byte itself:
+    // each sink (sample_buf, swd_engine, i2c_regfile, uart FIFO) takes it only under its 1-cycle
+    // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
+    // A registered copy was 32 FF-only LCs.
+    assign wave_wdata        = rx_byte;
+    assign swd_feed_byte     = rx_byte;
+    assign i2c_reg_wdata     = rx_byte;
+    assign uart_tx_wdata     = rx_byte;
     assign stop_after_cfg    = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6]};
     // Control-loop payloads (v38), in wire order [k(2)][vmin(2)][vmax(2)][tick(2)] /
     // [src][fixed(2)][step(2)] / [in_zero(2)][in_gain(2)][in_trip(2)][flags]; see the port list.
@@ -477,7 +485,6 @@ module cmd_dispatch #(
             tx_byte     <= 8'h00;
             wave_we     <= 1'b0;
             wave_waddr  <= {ADDR_W{1'b0}};
-            wave_wdata  <= 8'h00;
 
             dac_start   <= 1'b0;
             dac_stop    <= 1'b0;
@@ -506,7 +513,6 @@ module cmd_dispatch #(
             swd_disarm_stb   <= 1'b0;
             swd_feed_begin   <= 1'b0;
             swd_feed_stb     <= 1'b0;
-            swd_feed_byte    <= 8'h00;
             swd_rd_addr      <= {REPLY_AW{1'b0}};
             spi_arm_stb      <= 1'b0;
             spi_cs_stb       <= 1'b0;
@@ -517,7 +523,6 @@ module cmd_dispatch #(
             i2c_disable_stb   <= 1'b0;
             i2c_reg_we        <= 1'b0;
             i2c_reg_waddr     <= 8'h00;
-            i2c_reg_wdata     <= 8'h00;
             i2c_reg_raddr     <= 8'h00;
             la_cap_start      <= 1'b0;
             la_cap_divider    <= 16'd2;
@@ -525,7 +530,6 @@ module cmd_dispatch #(
             uart_cfg_stb      <= 1'b0;
             uart_disable_stb  <= 1'b0;
             uart_tx_we        <= 1'b0;
-            uart_tx_wdata     <= 8'h00;
             uart_rx_re        <= 1'b0;
             uart_rx_ovf_clr   <= 1'b0;
         end else begin
@@ -798,7 +802,6 @@ module cmd_dispatch #(
                     S_LOAD_DATA: begin
                         wave_we    <= 1'b1;
                         wave_waddr <= arg_count[ADDR_W-1:0];
-                        wave_wdata <= rx_byte;
                         if (last_byte) state <= S_DONE;
                         arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
@@ -958,7 +961,6 @@ module cmd_dispatch #(
 
                     S_SWD_FEED: begin
                         swd_feed_stb  <= 1'b1;
-                        swd_feed_byte <= rx_byte;
                         if (last_byte) state <= S_DONE;
                         arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
@@ -986,7 +988,6 @@ module cmd_dispatch #(
                     S_REG_LOAD: begin
                         i2c_reg_we    <= 1'b1;
                         i2c_reg_waddr <= reg_base + arg_count[7:0];
-                        i2c_reg_wdata <= rx_byte;
                         if (last_byte) state <= S_DONE;
                         arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
@@ -1025,7 +1026,6 @@ module cmd_dispatch #(
                     // ---- UART proxy: stream bytes into the TX FIFO ----
                     S_UART_WRITE: begin
                         uart_tx_we    <= 1'b1;
-                        uart_tx_wdata <= rx_byte;
                         if (last_byte) state <= S_DONE;
                         arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
