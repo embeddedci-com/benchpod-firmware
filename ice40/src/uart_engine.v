@@ -49,11 +49,20 @@ module uart_fifo (
 
     assign rdata = rdata_r;
     assign count = cnt;
-    assign full  = (cnt == 9'd256);
+    // cnt never exceeds 256 (it only counts up while not full), so bit 8 alone is "full".
+    assign full  = cnt[8];
     assign empty = (cnt == 9'd0);
 
     wire we_e = we & ~full;
     wire re_e = re & ~empty;
+
+    // The next read pointer as one carry chain (rptr + re_e): it is both rptr's next value
+    // and the head's read address, so no separate increment and 8-bit mux.
+    wire [7:0] rptr_nx = rptr + {7'd0, re_e};
+    // cnt +1 / -1 / 0 as one add: -1 is + all-ones, +1 is the carry in.
+    wire       cnt_dn  = re_e & ~we_e;
+    wire       cnt_up  = we_e & ~re_e;
+    wire [8:0] cnt_nx  = cnt + {9{cnt_dn}} + {8'd0, cnt_up};
 
     always @(posedge clk) begin
         if (rst) begin
@@ -62,12 +71,12 @@ module uart_fifo (
             cnt  <= 9'd0;
         end else begin
             if (we_e) begin mem[wptr] <= wdata; wptr <= wptr + 8'd1; end
-            if (re_e) rptr <= rptr + 8'd1;
-            cnt <= cnt + (we_e ? 9'd1 : 9'd0) - (re_e ? 9'd1 : 9'd0);
+            rptr <= rptr_nx;
+            cnt  <= cnt_nx;
         end
         // Present the next head: after a pop, show mem[rptr+1] so the head is
         // ready by the next consumer access (SPI/baud are far slower).
-        rdata_r <= mem[re_e ? (rptr + 8'd1) : rptr];
+        rdata_r <= mem[rptr_nx];
     end
 endmodule
 
