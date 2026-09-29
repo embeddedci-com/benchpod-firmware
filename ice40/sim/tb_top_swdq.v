@@ -143,8 +143,9 @@ module tb_top_swdq;
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
-            for (b = 7; b >= 0; b = b - 1) begin
-                mosi = tx[b]; #(SPI_HALF); sck = 1'b1; rx[b] = miso; #(SPI_HALF); sck = 1'b0;
+            for (b = 7; b >= 0; b = b - 1) begin   // mode 1: launch on rise, sample on fall
+                sck = 1'b1; mosi = tx[b]; #(SPI_HALF);
+                sck = 1'b0; rx[b] = miso;  #(SPI_HALF);
             end
             #(SPI_GAP);
         end

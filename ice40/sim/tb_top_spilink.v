@@ -3,7 +3,7 @@
 //
 // spi_slave runs its shift logic on SCK (v46 prototype) and needs an idle gap between bytes
 // (STM32H5 MIDI) so cmd_dispatch can answer.  This drives the link like the H5 master does:
-// mode 0, frames of 8 SCK, rise-to-rise (1 + MIDI) * T between frames, CSn from a GPIO.
+// mode 1 (launch on rise, sample on fall), frames of 8 SCK, rise-to-rise (1 + MIDI) * T between frames, CSn from a GPIO.
 //
 // Per link setting (25 MHz / MIDI 6 and 15.625 MHz / MIDI 4, then 25 MHz again after the
 // slower run, i.e. re-armed with different parameters):
@@ -16,8 +16,8 @@
 //   * CSn abort mid-byte: an opcode cut after 3..7 bits must be dropped (the next command
 //     works), and a LOAD_REGS cut mid-data-byte must not write that byte,
 //   * CSn rising right after the last SCK edge must not lose the last byte (the CS_SYNC depth),
-//   * MISO must never change while SCK is high with CSn low (it moves on falling edges and in
-//     the inter-byte gap only).
+//   * MISO must never change while SCK is low with CSn low (the pad register launches it on
+//     rising edges only, so it is still during the sampling fall and the gap).
 // Then, as an expected failure (indented rows), MIDI 0 at 25 MHz: the reply's first bit is the
 // previous tx_byte's, which is why the firmware must program MIDI.
 //
@@ -59,11 +59,11 @@ module tb_top_spilink;
     integer errors = 0;
     integer quiet = 0;         // 1: expected-failure run, report indented and don't count
 
-    // MISO must not move while SCK is high inside a transfer.
+    // MISO must not move while SCK is low inside a transfer.
     always @(miso)
-        if (!csn && sck && $time > 0) begin
+        if (!csn && !sck && $time > 0) begin
             if (!quiet) begin
-                $display("FAIL tb_top_spilink: MISO changed while SCK high at %0t", $time);
+                $display("FAIL tb_top_spilink: MISO changed while SCK low at %0t", $time);
                 errors = errors + 1;
             end
         end
@@ -71,13 +71,9 @@ module tb_top_spilink;
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
-            for (b = 7; b >= 0; b = b - 1) begin
-                mosi = tx[b];
-                #(half);
-                sck = 1'b1;
-                rx[b] = miso;
-                #(half);
-                sck = 1'b0;
+            for (b = 7; b >= 0; b = b - 1) begin   // mode 1: launch on rise, sample on fall
+                sck = 1'b1; mosi = tx[b]; #(half);
+                sck = 1'b0; rx[b] = miso;  #(half);
             end
             #(2.0 * half * midi);            // MIDI: rise-to-rise = (1 + midi) * T
         end
@@ -88,7 +84,7 @@ module tb_top_spilink;
         integer b;
         begin
             for (b = 7; b > 7 - nbits; b = b - 1) begin
-                mosi = tx[b]; #(half); sck = 1'b1; #(half); sck = 1'b0;
+                sck = 1'b1; mosi = tx[b]; #(half); sck = 1'b0; #(half);
             end
         end
     endtask
@@ -192,9 +188,9 @@ module tb_top_spilink;
             cs_lo;
             spi_byte(8'h62, junk); spi_byte(8'h10, junk); spi_byte(8'd1, junk); spi_byte(8'd0, junk);
             for (k = 7; k >= 0; k = k - 1) begin
-                mosi = 8'h96 >> k; #(half); sck = 1'b1; #(half); sck = 1'b0;
+                sck = 1'b1; mosi = 8'h96 >> k; #(half); sck = 1'b0; #(half);
             end
-            #(half); csn = 1'b1; #(400);
+            csn = 1'b1; #(400);
             cs_lo;
             spi_byte(8'h63, junk); spi_byte(8'h10, junk); spi_byte(8'd2, junk); spi_byte(8'd0, junk);
             spi_byte(8'h00, r); check(r, 8'h96, "last byte with CSn right after it");
