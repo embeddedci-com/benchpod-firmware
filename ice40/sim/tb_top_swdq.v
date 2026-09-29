@@ -213,7 +213,7 @@ module tb_top_swdq;
         q_read(1'b1, 2'd1);
         xfer_idx = 0;
         run_queue(3);
-        check8(st_done, 8'd5, "done (mixed)"); check8(st_flags, 8'h04, "flags (mixed: ACK OK, idle)");
+        check8(st_done, 8'd13, "qptr (mixed: 3 reads + 2 writes)"); check8(st_flags, 8'h04, "flags (mixed: ACK OK, idle)");
         check32(word(0), 32'h2BA01477, "DPIDR");
         check32(word(1), 32'hDEADBEEF, "AP DRW");
         check32(word(2), 32'h20000000, "AP TAR");
@@ -224,39 +224,39 @@ module tb_top_swdq;
         for (i = 0; i < 100; i = i + 1) q_write(1'b1, 2'd3, 32'h1000 + i * 32'h01010101);
         t0 = $realtime;
         run_queue(0);
-        check8(st_done, 8'd100, "done (100 writes)"); check32(ap[3], 32'h1000 + 99 * 32'h01010101, "last write");
-        $display("  ok?: 100 writes done=%0d in %0t us", st_done, ($realtime - t0) / 1000);
+        check8(st_done, 8'd244, "qptr (100 writes = 500 bytes, low 8)"); check8(st_flags & 8'h40, 8'h40, "qptr bit 8"); check32(ap[3], 32'h1000 + 99 * 32'h01010101, "last write");
+        $display("  ok?: 100 writes in %0t us", ($realtime - t0) / 1000000);
 
         // ---- WAIT on the third transfer: stops with done = 2, ACK 010; the rest completes ----
         xfer_idx = 0; wait_on = 2;
         q_write(1'b1, 2'd1, 32'h11111111); q_write(1'b1, 2'd2, 32'h22222222);
         q_write(1'b1, 2'd3, 32'h33333333); q_read(1'b1, 2'd3);
         run_queue(0);
-        check8(st_done, 8'd2, "done (WAIT)"); check8(st_flags, 8'h0A, "flags (WAIT: stopped, ACK 010)");
+        check8(st_done, 8'd11, "qptr (WAIT: 2 writes + the WAITed request byte)"); check8(st_flags, 8'h0A, "flags (WAIT: stopped, ACK 010)");
         check32(ap[3], 32'h1000 + 99 * 32'h01010101, "the WAITed write did not land");
         wait_on = -1;
         q_write(1'b1, 2'd3, 32'h33333333); q_read(1'b1, 2'd3);
         run_queue(1);
-        check8(st_done, 8'd2, "done (re-queued)"); check32(word(0), 32'h33333333, "re-queued read");
+        check8(st_done, 8'd6, "qptr (re-queued)"); check32(word(0), 32'h33333333, "re-queued read");
         $display("  ok?: WAIT stop + re-queue");
 
         // ---- read parity error ----
         xfer_idx = 0; corrupt_on = 1;
         q_read(1'b0, 2'd0); q_read(1'b0, 2'd0); q_read(1'b0, 2'd0);
         run_queue(1);
-        check8(st_done, 8'd1, "done (parity)"); check8(st_flags, 8'h26, "flags (parity: perr, ACK OK, stopped)");
+        check8(st_done, 8'd2, "qptr (parity: read 1 + the failing read)"); check8(st_flags, 8'h26, "flags (parity: perr, ACK OK, stopped)");
         corrupt_on = -1;
 
         // ---- re-config: half 4, no idle cycles; then no target at all ----
         cs_lo; spi_byte(8'h59, junk); spi_byte(8'd4, junk); spi_byte(8'd0, junk); cs_hi;
         q_write(1'b0, 2'd2, 32'h000000F0); q_read(1'b0, 2'd2); q_read(1'b0, 2'd0);
         run_queue(2);
-        check8(st_done, 8'd3, "done (half 4)"); check32(word(0), 32'h000000F0, "DP SELECT read back");
+        check8(st_done, 8'd7, "qptr (half 4)"); check32(word(0), 32'h000000F0, "DP SELECT read back");
         check32(word(1), 32'h2BA01477, "DPIDR (half 4)");
         present = 1'b0;
         q_read(1'b0, 2'd0); q_read(1'b0, 2'd0);
         run_queue(0);
-        check8(st_done, 8'd0, "done (no target)"); check8(st_flags, 8'h1E, "flags (no target: ACK 111, stopped)");
+        check8(st_done, 8'd1, "qptr (no target: the request byte)"); check8(st_flags, 8'h1E, "flags (no target: ACK 111, stopped)");
         present = 1'b1;
 
         // ---- the bit-bang path still drives the pins ----

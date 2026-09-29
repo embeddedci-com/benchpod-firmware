@@ -54,7 +54,9 @@
 // high phase after the target's edge, so half = 2 (6 MHz) keeps full margin.  A read stores its
 // 4 data bytes (LE) in the reply buffer.  An ACK other than OK, or a read parity error, stops the
 // queue after a turnaround (+ idle); SWD_QSTATUS reports the transfers completed, the ACK and
-// the parity flag, and the firmware retries a WAIT by queueing the rest again.  When the next
+// the parity flag, and the firmware retries a WAIT by queueing the rest again.  SWD_QSTATUS
+// reports how far the queue got as the read pointer: a stopped transfer has consumed its request
+// byte only, so the firmware maps the pointer back to the op that stopped.  When the next
 // queued byte has not arrived yet (the link is slower than the wire), the engine holds SWCLK high
 // until it has: SWD lets the host stop the clock anywhere.  In queue mode SWDIO comes straight
 // from the sequencer state, which changes only on the falling edge.
@@ -102,8 +104,8 @@ module swd_engine #(
     output wire        armed,
     output wire        spi_mode,
     output wire        spi_busy,
-    output wire [7:0]  q_done,            // transfers completed since the feed began
-    output wire [7:0]  q_flags,           // {2'b0, perr, ack[2:0], stopped, busy}
+    output wire [7:0]  q_done,            // queue bytes consumed, low 8 bits (qptr)
+    output wire [7:0]  q_flags,           // {1'b0, qptr[8], perr, ack[2:0], stopped, busy}
 
     // ---- outputs to la_bank ----
     output wire [3:0]  clk_ch,
@@ -177,7 +179,6 @@ module swd_engine #(
     reg        ph;                        // 0 = low half, 1 = high half
     reg        isrd, par, fail, perr, qstop;
     reg [2:0]  ack;
-    reg [7:0]  done;
     wire       q_active = armed_r & ~spi_r & qmode;
     wire       ack_ok = (ack == 3'b001);
 
@@ -210,7 +211,6 @@ module swd_engine #(
             qmode          <= 1'b0;
             qready         <= 1'b0;
             qstop          <= 1'b0;
-            done           <= 8'd0;
             ack            <= 3'd0;
             perr           <= 1'b0;
         end else begin
@@ -265,7 +265,6 @@ module swd_engine #(
                 qmode <= feed_q;
                 qst   <= Q_IDLE;
                 qstop <= 1'b0;
-                done  <= 8'd0;
                 ack   <= 3'd0;
                 perr  <= 1'b0;
             end
@@ -384,7 +383,6 @@ module swd_engine #(
                         swclk_lvl <= 1'b1;                                  // SWCLK stays high
                         qst       <= Q_IDLE;
                         if (fail || (isrd && perr)) qstop <= 1'b1;
-                        else                         done  <= done + 8'd1;
                     end
                 end
             end
@@ -399,8 +397,8 @@ module swd_engine #(
     assign spi_mode     = armed_r & spi_r;
     assign spi_busy     = spi_mode & (spi_pending | (sst != SP_IDLE));
     wire   q_busy       = q_active & ~qstop & ((qptr != fptr) | (qst != Q_IDLE));
-    assign q_done       = done;
-    assign q_flags      = {2'b00, perr, ack, qstop, q_busy};
+    assign q_done       = qptr[7:0];
+    assign q_flags      = {1'b0, qptr[8], perr, ack, qstop, q_busy};
     assign clk_ch       = clk_ch_r;
     assign clk_val      = swclk_lvl;
     assign dio_ch       = dio_ch_r;

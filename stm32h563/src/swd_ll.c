@@ -164,9 +164,21 @@ size_t swd_ll_batch(const swd_op_t *ops, size_t n, uint32_t *rdata, uint8_t *ack
             }
             nops++;
         }
-        uint8_t done = 0, flags = 0;
-        if (fpga_swdq_run(q, qlen, &done, &flags) != 0) { *ack = SWD_ACK_NO_ACK; return i; }
-        if (done > nops) done = (uint8_t)nops;
+        uint16_t consumed = 0;
+        uint8_t  flags = 0;
+        if (fpga_swdq_run(q, qlen, &consumed, &flags) != 0) { *ack = SWD_ACK_NO_ACK; return i; }
+        /* ops done = whole ops inside the consumed bytes; when stopped, the op whose request
+           byte was the last one taken is the one that stopped */
+        size_t done = 0;
+        if (!(flags & SWDQ_FLAG_STOPPED)) done = nops;
+        else {
+            size_t off = 0;
+            while (done < nops) {
+                size_t sz = (ops[i + done].req & SWD_REQ_RnW) ? 1u : 5u;
+                if (off + 1u >= consumed) break;
+                off += sz; done++;
+            }
+        }
         size_t rdone = 0;
         for (size_t k = 0; k < done; k++) if (ops[i + k].req & SWD_REQ_RnW) rdone++;
         bool perr = (flags & SWDQ_FLAG_PERR) != 0 && done < nops;

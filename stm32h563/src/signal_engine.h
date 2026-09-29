@@ -553,9 +553,10 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 #define SWDQ_FLAG_STOPPED   0x02u
 #define SWDQ_FLAG_PERR      0x20u
 int fpga_swdq_config(unsigned half, unsigned idle_cycles);
-/* Queue q[0..len) and wait until the engine is idle.  0 ok (*done / *flags as SWD_QSTATUS
-   reports them); -1 not armed or bad args; -2 the engine never went idle. */
-int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags);
+/* Queue q[0..len) and wait until the engine is idle.  0 ok: *consumed = queue bytes the engine
+   took (a stopped transfer took its request byte only), *flags as SWD_QSTATUS reports them;
+   -1 not armed or bad args; -2 the engine never went idle. */
+int fpga_swdq_run(const uint8_t *q, size_t len, uint16_t *consumed, uint8_t *flags);
 /* The first n reply bytes of the last run (4 LE per read). */
 int fpga_swdq_read(uint8_t *buf, size_t n);
 #define SPI_XFER_MAX        512u    /* bytes per fpga_spi_xfer: the gateware queue */

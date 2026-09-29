@@ -79,12 +79,12 @@ static size_t   qbytes_n;
 static int      q_runs, q_cfgs;
 static int      q_wait_first;          /* answer WAIT at op 1 of the first run(s) */
 int fpga_swdq_config(unsigned half, unsigned idle) { (void)half; (void)idle; q_cfgs++; return 0; }
-int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags) {
+int fpga_swdq_run(const uint8_t *q, size_t len, uint16_t *consumed, uint8_t *flags) {
     memcpy(qbytes + qbytes_n, q, len); qbytes_n += len; q_runs++;
-    size_t ops = 0;
-    for (size_t i = 0; i < len; ops++) i += (q[i] & 0x04) ? 1 : 5;
-    if (q_wait_first > 0) { q_wait_first--; *done = 1; *flags = (uint8_t)(0x02 | (0x02 << 2)); return 0; }
-    *done = (uint8_t)ops; *flags = (uint8_t)(0x01 << 2);
+    if (q_wait_first > 0) {                 /* op 0 (a read) done, op 1's request byte taken */
+        q_wait_first--; *consumed = 2; *flags = (uint8_t)(0x02 | (0x02 << 2)); return 0;
+    }
+    *consumed = (uint16_t)len; *flags = (uint8_t)(0x01 << 2);
     return 0;
 }
 int fpga_swdq_read(uint8_t *buf, size_t n) {

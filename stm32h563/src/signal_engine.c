@@ -2431,7 +2431,7 @@ int fpga_swdq_config(unsigned half, unsigned idle_cycles) {
     return 0;
 }
 
-int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags) {
+int fpga_swdq_run(const uint8_t *q, size_t len, uint16_t *consumed, uint8_t *flags) {
     if (!swd_armed_local || !q || len == 0 || len > SWDQ_BYTES_MAX) return -1;
     swd_deadline = make_timeout_time_ms(SWD_INACTIVITY_MS);
     uint8_t hdr[3] = { CMD_SWD_QFEED, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
@@ -2445,12 +2445,12 @@ int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags) {
     for (;;) {
         st[0] = st[1] = 0xFF;
         spi_cmd_read(CMD_SWD_QSTATUS, NULL, 0, st, 2);
-        if (st[1] & 0xC0) return -2;             /* bits 7:6 are 0: MISO stuck high */
+        if (st[1] & 0x80) return -2;             /* bit 7 is always 0: MISO stuck high */
         if (!(st[1] & SWDQ_FLAG_BUSY)) break;
         if (time_reached(deadline)) return -2;
     }
-    *done  = st[0];
-    *flags = st[1];
+    *consumed = (uint16_t)(st[0] | ((st[1] & 0x40u) << 2));
+    *flags    = st[1];
     return 0;
 }
 

@@ -41,7 +41,7 @@
 //   -- SWD transfer queue (v45, see swd_engine) --
 //   0x58 SWD_QFEED       [len_lo][len_hi][transfers]   (the SWD_FEED path, into the queue)
 //   0x59 SWD_QCONFIG     [half][idle]
-//   0x5A SWD_QSTATUS     → [done][flags]
+//   0x5A SWD_QSTATUS     → [qptr_lo][flags]
 //   -- emulated I2C sensor (generic target + register file, see i2c_target) --
 //   0x60 I2C_SENSOR_CONFIG  [addr7][sda_ch][scl_ch][flags][trig_reg]
 //                           [busy_reg][busy_mask][conv_lo][conv_hi]
@@ -700,7 +700,7 @@ module cmd_dispatch #(
 
                             // ---- SWD transfer queue (v45) ----
                             OP_SWD_QCONFIG: begin arg_rem <= 16'd2; state <= S_COLLECT; end
-                            // [done][flags], one snapshot (the ADC_PROBE 2-byte path)
+                            // [qptr_lo][flags], one snapshot (the ADC_PROBE 2-byte path)
                             OP_SWD_QSTATUS: begin
                                 adc_dbg_latch <= {q_flags, q_done};
                                 tx_byte       <= q_done;
