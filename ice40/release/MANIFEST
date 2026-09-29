@@ -1,15 +1,15 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=43
-source_sha256=1ea6930175a8b9cb62d237ea579933bae3002b763cf36d2adb1e9a3caa348a6d
-built_from=a124f43
-promoted=2026-09-25
+gateware_version=45
+source_sha256=9b070581397187f47b4125c9e8f8746d471987ec160958d91d32a27e9ea1e49b
+built_from=064e27f
+promoted=2026-09-29
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
-hw_verified=e2e 131 passed 0 failed (NRESET, cloud, ext DAC->ADC loop) + MCP 9 + OpenHTF 2 on benchpod-baea06 rev3, fw 2026-09-25
-loop.sha256=a3f24f62f20785566d69b7d2661cf4cb826a92ae5b195fcebf5aa34b7b533c6b
-loop.seed=31
-loop.clk48_mhz=55.53
-deep.sha256=e9aee2f4869733c6434ac8092dbfec62c411ae78c6d724b5cf3bba89f3705c2d
-deep.seed=7
-deep.clk48_mhz=55.27
+hw_verified=e2e 129 passed 1 failed (usb_cc: cable) + SPI tier 6 + MCP 9 + OpenHTF 2 + cloud 6 + Go cloud 34 on benchpod-baea06 rev3, fw 3.3.0 2026-09-29
+loop.sha256=cd410deff3d6ce5d08d591daf70adbb46a0b3ae87e7e7f6ca2a545bb48e99192
+loop.seed=26
+loop.clk48_mhz=56.70
+deep.sha256=0898c1f0d3693d2c39f7d67497a152edb5d0c27b4e4cb15654964886a430b20f
+deep.seed=25
+deep.clk48_mhz=54.59
