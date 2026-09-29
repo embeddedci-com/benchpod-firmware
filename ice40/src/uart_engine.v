@@ -233,12 +233,12 @@ module uart_engine (
 
     // ============================ RX path ===================================
     reg        rx_push;
-    reg  [7:0] rx_pushdata;
+    reg  [7:0] rx_sr;   // the FIFO writes it directly: it does not change in the clock after RX_STOP pushes
     wire       rx_fifo_full;
 
     uart_fifo rx_fifo (
         .clk(clk), .rst(rst),
-        .we(rx_push), .wdata(rx_pushdata),
+        .we(rx_push), .wdata(rx_sr),
         .re(rx_re), .rdata(rx_rdata),
         .count(rx_avail), .full(rx_fifo_full), .empty(/*unused*/)
     );
@@ -247,7 +247,6 @@ module uart_engine (
     (* fsm_encoding = "none" *) reg [1:0]  rx_state;
     wire [DIV_W-1:0] rx_cnt;
     reg [2:0]  rx_bit;
-    reg [7:0]  rx_sr;
 
     // The bit timer in one logic cell per bit (lc_counter), always loaded with div.
     // The half bit to the middle of the start bit is div counted down in steps of 2
@@ -302,7 +301,7 @@ module uart_engine (
                         // sample point at middle of stop bit; push regardless of
                         // framing (best-effort), flag overflow if FIFO is full.
                         if (rx_fifo_full) rx_overflow <= 1'b1;
-                        else begin rx_push <= 1'b1; rx_pushdata <= rx_sr; end
+                        else rx_push <= 1'b1;
                         rx_state <= RX_IDLE;
                     end
                 end
