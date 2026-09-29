@@ -158,6 +158,11 @@ module engine_block #(
     wire [15:0] swd_reply_count;          // swd_armed is an output port
     wire [3:0]  swd_clk_ch, swd_dio_ch;
     wire        swd_clk_val, swd_dio_val, swd_dio_oe;
+    wire        spi_arm_stb, spi_cs_stb, spi_cs_assert, spi_cpol;
+    wire [3:0]  spi_sck_ch, spi_mosi_ch, spi_miso_ch, spi_cs_ch_arg;
+    wire [5:0]  spi_half;
+    wire        spi_mode, spi_busy, swd_cs_on, swd_cs_val;
+    wire [3:0]  swd_in_ch, swd_cs_ch;
     wire [N-1:0] la_in;
     wire        i2c_cfg_stb, i2c_cfg_enable, i2c_disable_stb;
     wire [6:0]  i2c_cfg_addr7;  wire [3:0] i2c_cfg_sda_ch, i2c_cfg_scl_ch;
@@ -215,6 +220,10 @@ module engine_block #(
         .swd_feed_begin(swd_feed_begin), .swd_feed_stb(swd_feed_stb), .swd_feed_byte(swd_feed_byte),
         .swd_rd_addr(swd_rd_addr), .swd_rd_data(swd_rd_data),
         .swd_armed(swd_armed), .swd_reply_count(swd_reply_count),
+        .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),
+        .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
+        .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
+        .spi_mode(spi_mode), .spi_busy(spi_busy),
         .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_addr7(i2c_cfg_addr7),
         .i2c_cfg_sda_ch(i2c_cfg_sda_ch), .i2c_cfg_scl_ch(i2c_cfg_scl_ch), .i2c_cfg_enable(i2c_cfg_enable),
         .i2c_cfg_trig_reg(i2c_cfg_trig_reg), .i2c_cfg_busy_reg(i2c_cfg_busy_reg),
@@ -285,16 +294,21 @@ module engine_block #(
         .busy(step_busy), .step_channel(step_la_ch), .step_val(step_la_val)
     );
 
-    // ---- SWD bit-bang engine (SWDIO sampled back via la_in[swd_dio_ch]) ----
+    // ---- SWD bit-bang engine + SPI master (SWDIO / MISO sampled back via la_in[swd_in_ch]) ----
     swd_engine #(.REPLY_AW(9)) swd_i (
         .clk(clk), .rst(rst),
         .arm_stb(swd_arm_stb), .arm_clk_ch(swd_clk_ch_arg), .arm_dio_ch(swd_dio_ch_arg),
+        .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),
+        .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
+        .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
         .disarm_stb(swd_disarm_stb),
         .feed_begin(swd_feed_begin), .feed_stb(swd_feed_stb), .feed_byte(swd_feed_byte),
-        .dio_in(la_in[swd_dio_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
+        .dio_in(la_in[swd_in_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
         .reply_count(swd_reply_count), .armed(swd_armed),
+        .spi_mode(spi_mode), .spi_busy(spi_busy),
         .clk_ch(swd_clk_ch), .clk_val(swd_clk_val),
-        .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe)
+        .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
+        .in_ch(swd_in_ch), .cs_ch(swd_cs_ch), .cs_val(swd_cs_val), .cs_on(swd_cs_on)
     );
 
     // ---- LA GPIO bank: arbitration of all the engine drivers onto the pads,
@@ -308,6 +322,7 @@ module engine_block #(
         .swd_active(swd_armed),
         .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val),
         .swd_dio_ch(swd_dio_ch), .swd_dio_val(swd_dio_val), .swd_dio_oe(swd_dio_oe),
+        .swd_cs_active(swd_cs_on), .swd_cs_ch(swd_cs_ch), .swd_cs_val(swd_cs_val),
         .la(la), .la_in(la_in)
     );
 

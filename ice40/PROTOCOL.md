@@ -36,6 +36,9 @@
 | 0x51 | SWD_FEED | len(2) + N remote_bitbang bytes | — |
 | 0x52 | SWD_READ | len(2) | N sample bytes |
 | 0x53 | SWD_DISARM | — | — |
+| 0x55 | SPI_ARM | sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3) | — (v2 >=v44; CS starts released, driven high) |
+| 0x56 | SPI_CS | level (1 = assert CS low, 0 = release high) | — (v2 >=v44; only change it while SPI_STATUS says idle) |
+| 0x57 | SPI_STATUS | — | status(1): bit0 = SPI mode armed, bit1 = busy (bytes queued or shifting) (v2 >=v44) |
 | 0x60 | I2C_CONFIG | addr7+sda_ch+scl_ch+flags+trig_reg+busy_reg+busy_mask+conv(2) | — |
 | 0x61 | I2C_DISABLE | — | — |
 | 0x62 | I2C_LOAD_REGS | start_addr + len(2) + N data bytes | — |

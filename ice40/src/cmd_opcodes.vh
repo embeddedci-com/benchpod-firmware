@@ -34,6 +34,9 @@
     localparam OP_SWD_FEED           = 8'h51;
     localparam OP_SWD_READ           = 8'h52;
     localparam OP_SWD_DISARM         = 8'h53;
+    localparam OP_SPI_ARM            = 8'h55;
+    localparam OP_SPI_CS             = 8'h56;
+    localparam OP_SPI_STATUS         = 8'h57;
     localparam OP_I2C_CONFIG         = 8'h60;
     localparam OP_I2C_DISABLE        = 8'h61;
     localparam OP_I2C_LOAD_REGS      = 8'h62;

@@ -697,7 +697,15 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 43) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 44) ----
+    // GATEWARE_VERSION 44 = v43 + an SPI MASTER as the SWD engine's second job (swd_engine.v):
+    //   * SPI_ARM 0x55 [sck][mosi][miso][cs][half][flags] takes the engine (SCK/MOSI on the SWD
+    //     clk/dio slots, a new CS column in la_bank, MISO read back through la_in); SPI_CS 0x56
+    //     drives CS; SPI_STATUS 0x57 = {busy, armed}.  SWD_FEED queues <= 512 bytes in a second
+    //     BRAM, shifted out MSB first at 24 MHz / (2 * half), half 2..63; SWD_READ returns the
+    //     bytes clocked in.  Modes 0 and 3.  SWD_DISARM ends either job.  tb_top_spi drives a
+    //     flash model through the whole top (ID, program, erase, read; both modes; re-arm; SWD).
+    // Loop 3914 -> 4108 LC (77%), deep 3568 -> 3787 (71%), +1 BRAM.  SEED_LOOP 51, SEED_DEEP 54.
     // GATEWARE_VERSION 43 = v42 + two stability fixes from the 2026-09 review:
     //   * psram_dual_writer honours bus_own: no burst starts, and nothing is popped, while the
     //     STM32 owns the bus; a burst it cuts is closed and raises the sticky capture-overflow
@@ -1036,7 +1044,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd43), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd44), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

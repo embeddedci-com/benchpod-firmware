@@ -36,6 +36,9 @@
 #define CMD_SWD_FEED           0x51u
 #define CMD_SWD_READ           0x52u
 #define CMD_SWD_DISARM         0x53u
+#define CMD_SPI_ARM            0x55u
+#define CMD_SPI_CS             0x56u
+#define CMD_SPI_STATUS         0x57u
 #define CMD_I2C_CONFIG         0x60u
 #define CMD_I2C_DISABLE        0x61u
 #define CMD_I2C_LOAD_REGS      0x62u

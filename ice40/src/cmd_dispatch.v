@@ -34,7 +34,10 @@
 //   0x51 SWD_FEED        [len_lo][len_hi][N remote_bitbang bytes]
 //   0x52 SWD_READ        [len_lo][len_hi] → returns N sample bytes ('0'/'1')
 //   0x53 SWD_DISARM
-//   0x54 SWD_STATUS      → returns reply byte count of the last feed (low 8 bits)
+//   -- SPI master (v44, the SWD engine's second job; SWD_FEED/SWD_READ move the data) --
+//   0x55 SPI_ARM         [sck_ch][mosi_ch][miso_ch][cs_ch][half][flags]  (flags bit0 = CPOL)
+//   0x56 SPI_CS          [level]   (1 = assert CS low, 0 = release high)
+//   0x57 SPI_STATUS      → [bit0 SPI armed, bit1 busy]
 //   -- emulated I2C sensor (generic target + register file, see i2c_target) --
 //   0x60 I2C_SENSOR_CONFIG  [addr7][sda_ch][scl_ch][flags][trig_reg]
 //                           [busy_reg][busy_mask][conv_lo][conv_hi]
@@ -210,6 +213,19 @@ module cmd_dispatch #(
     input  wire              swd_armed,
     input  wire [15:0]       swd_reply_count,
 
+    // ---- SPI master (v44): same engine; SWD_FEED / SWD_READ carry its data ----
+    output reg               spi_arm_stb,
+    output wire [3:0]        spi_sck_ch,
+    output wire [3:0]        spi_mosi_ch,
+    output wire [3:0]        spi_miso_ch,
+    output wire [3:0]        spi_cs_ch,
+    output wire [5:0]        spi_half,
+    output wire              spi_cpol,
+    output reg               spi_cs_stb,
+    output wire              spi_cs_assert,
+    input  wire              spi_mode,
+    input  wire              spi_busy,
+
     // ---- emulated I2C sensor: configuration ----
     output reg               i2c_cfg_stb,
     output wire [6:0]        i2c_cfg_addr7,
@@ -361,6 +377,13 @@ module cmd_dispatch #(
     assign step_delay        = {rx_byte, arg_buf[8]};
     assign swd_clk_ch        = arg_buf[7][3:0];
     assign swd_dio_ch        = arg_buf[8][3:0];
+    assign spi_sck_ch        = arg_buf[4][3:0];
+    assign spi_mosi_ch       = arg_buf[5][3:0];
+    assign spi_miso_ch       = arg_buf[6][3:0];
+    assign spi_cs_ch         = arg_buf[7][3:0];
+    assign spi_half          = arg_buf[8][5:0];
+    assign spi_cpol          = rx_byte[0];
+    assign spi_cs_assert     = rx_byte[0];
     assign i2c_cfg_addr7     = arg_buf[1][6:0];
     assign i2c_cfg_sda_ch    = arg_buf[2][3:0];
     assign i2c_cfg_scl_ch    = arg_buf[3][3:0];
@@ -470,6 +493,8 @@ module cmd_dispatch #(
             swd_feed_stb     <= 1'b0;
             swd_feed_byte    <= 8'h00;
             swd_rd_addr      <= {REPLY_AW{1'b0}};
+            spi_arm_stb      <= 1'b0;
+            spi_cs_stb       <= 1'b0;
 
             reg_base          <= 8'h00;
             i2c_cfg_stb       <= 1'b0;
@@ -500,6 +525,8 @@ module cmd_dispatch #(
             swd_disarm_stb <= 1'b0;
             swd_feed_begin <= 1'b0;
             swd_feed_stb   <= 1'b0;
+            spi_arm_stb    <= 1'b0;
+            spi_cs_stb     <= 1'b0;
             i2c_cfg_stb     <= 1'b0;
             i2c_disable_stb <= 1'b0;
             i2c_reg_we      <= 1'b0;
@@ -644,6 +671,14 @@ module cmd_dispatch #(
                                 state       <= S_READ_LEN0;
                             end
                             OP_SWD_DISARM: begin swd_disarm_stb <= 1'b1; state <= S_DONE; end
+
+                            // ---- SPI master (v44) ----
+                            OP_SPI_ARM:    begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_SPI_CS:     begin arg_rem <= 16'd1; state <= S_COLLECT; end
+                            OP_SPI_STATUS: begin
+                                tx_byte <= {6'b0, spi_busy, spi_mode};
+                                state   <= S_DONE;
+                            end
 
                             // ---- emulated I2C sensor ----
                             OP_I2C_CONFIG:  begin arg_rem <= 16'd9; state <= S_COLLECT; end
@@ -813,6 +848,9 @@ module cmd_dispatch #(
                                 OP_SWD_ARM: begin
                                     swd_arm_stb      <= 1'b1;
                                 end
+                                // [sck][mosi][miso][cs][half][flags(=rx_byte)] / [level(=rx_byte)]
+                                OP_SPI_ARM: spi_arm_stb <= 1'b1;
+                                OP_SPI_CS:  spi_cs_stb  <= 1'b1;
                                 OP_GPIO_STEP: begin
                                     // [channel][steps_lo][steps_hi][delay_lo][delay_hi(=rx_byte)]
                                     step_start   <= 1'b1;

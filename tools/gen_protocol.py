@@ -57,6 +57,12 @@ OPCODES = [
     ("SWD_READ",        0x52, "len(2)",                                         "N sample bytes"),
     ("SWD_DISARM",      0x53, "—",                                              "—"),
     # 0x54 SWD_STATUS removed (v17): never sent by v2 firmware (dead gateware decode).
+    # SPI master (v44): the SWD engine's second job.  SPI_ARM takes over the engine; SWD_FEED
+    # then queues data bytes (<= 512 per feed) that the engine shifts out MSB first, and
+    # SWD_READ returns the bytes it clocked in.  SWD_DISARM releases the pins.
+    ("SPI_ARM",         0x55, "sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3)", "— (v2 >=v44; CS starts released, driven high)"),
+    ("SPI_CS",          0x56, "level (1 = assert CS low, 0 = release high)",    "— (v2 >=v44; only change it while SPI_STATUS says idle)"),
+    ("SPI_STATUS",      0x57, "—",                                              "status(1): bit0 = SPI mode armed, bit1 = busy (bytes queued or shifting) (v2 >=v44)"),
     ("I2C_CONFIG",      0x60, "addr7+sda_ch+scl_ch+flags+trig_reg+busy_reg+busy_mask+conv(2)", "—"),
     ("I2C_DISABLE",     0x61, "—",                                              "—"),
     ("I2C_LOAD_REGS",   0x62, "start_addr + len(2) + N data bytes",             "—"),

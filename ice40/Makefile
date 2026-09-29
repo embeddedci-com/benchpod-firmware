@@ -239,7 +239,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -338,9 +338,14 @@ $(OUT).bin: $(OUT).asc
 # the loop's clk48 on a third of the seeds (45/64); a registered tlm_ok flag took it to 57/64
 # local, 51/64 CI.  Pinned SEED_LOOP 52 -> 31, good in both (clk48 55.53 local / 56.86 CI,
 # clk -> clk48 10.38 / 11.47 ns).
-SEED_LOOP ?= 31
-# Good in both toolchains, ordered by the lower of the two clk48 results (v43 sweeps).
-SEED_LOOP_FALLBACK ?= 36 17 6 55 27 49 8 13 5 53 34 51 20 29 57 9 12 22 19 60
+# v44 (2026-09-28) SPI MASTER in swd_engine (+~200 LC: 4108 LC, 78%).  Local sweep 1..64: 33/64
+# reach MIN_CLK48_MHZ (24 slow, 7 fail at 48 MHz).  The binding path on the failing seeds is the
+# untouched clk48 dac8551_engine div_cnt chain spread across the die, i.e. fill, not new logic.
+# Pinned SEED_LOOP 31 -> 51 (clk48 54.64, clk 32.42, clk -> clk48 11.86 ns).  NOT yet swept in
+# CI's toolchain (the ice40-seed-sweep workflow); do that before PNR_STRICT CI runs on v44.
+SEED_LOOP ?= 51
+# Ordered by local clk48 (v44 local sweep; the CI sweep will reorder them).
+SEED_LOOP_FALLBACK ?= 56 58 55 9 59 32 12 63 6 22 60 24 5 2 42 19 1 52 62 48
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -404,11 +409,14 @@ SEED_LOOP_FALLBACK ?= 36 17 6 55 27 49 8 13 5 53 34 51 20 29 57 9 12 22 19 60
 # 53.73 CI, clk -> clk48 12.76 ns).  RE-VERIFY deep replay on hardware.
 # v43: swept 1..64 in both toolchains: 60/64 local, 58/64 CI.  Pinned SEED_DEEP 34 -> 7 (clk48
 # 55.27 local / 54.04 CI, clk -> clk48 13.11 / 12.72 ns).  RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 7
-# Good in both toolchains, ordered by the lower of the two clk48 results (v43 sweeps).  A timing
+# v44 (SPI master, 3787 LC, 71%): local sweep 1..64: 60/64 reach MIN_CLK48_MHZ.  Pinned SEED_DEEP
+# 7 -> 54 (clk48 55.35, clk 35.99, clk -> clk48 12.72 ns).  CI sweep still to do; RE-VERIFY deep
+# replay on hardware.
+SEED_DEEP ?= 54
+# Ordered by local clk48 (v44 local sweep; the CI sweep will reorder them).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 29 64 11 8 22 20 17 16 12 37 48 41 63 60 53 51 50 47 46 39
+SEED_DEEP_FALLBACK ?= 8 55 53 46 31 29 28 9 64 60 6 40 36 25 24 58 51 35 11 1
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -661,8 +669,16 @@ topcapturetest:
 	$(VVP) /tmp/$(PROJECT)_topcap.vvp
 	@rm -f /tmp/$(PROJECT)_topcap.vvp
 
+# SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
+# behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
+spitest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_spi.vvp -s tb_top_spi \
+	         sim/tb_top_spi.v $(SRC) $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_spi.vvp
+	@rm -f /tmp/$(PROJECT)_spi.vvp
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

@@ -21,7 +21,9 @@
 //   swd      while a SWD session is armed, swd_engine owns two channels
 //            (SWCLK / SWDIO); SWDIO is bidirectional so its oe is driven by the
 //            engine (released during turnaround).  (nRESET is the pod's own pin on
-//            v3, not an LA channel; its LA driver was removed in v37.)
+//            v3, not an LA channel; its LA driver was removed in v37.)  In SPI mode
+//            (v44) the same two slots carry SCK and MOSI, and a third slot drives
+//            CS push-pull (swd_cs_*); MISO is read-only (sampled via la_in).
 //
 // Each channel is a single SB_IO in PIN_TYPE 6'b1010_01 = combinational
 // tristate output (OUTPUT_ENABLE) + simple input (D_IN_0), so every channel
@@ -64,6 +66,9 @@ module la_bank #(
     input  wire [3:0]        swd_dio_ch,
     input  wire              swd_dio_val,
     input  wire              swd_dio_oe,
+    input  wire              swd_cs_active,     // SPI mode armed
+    input  wire [3:0]        swd_cs_ch,
+    input  wire              swd_cs_val,
 
     // ---- physical pins + readback ----
     inout  wire [N-1:0]      la,
@@ -113,18 +118,21 @@ module la_bank #(
     wire [N-1:0] m_step = onehot(step_active, step_ch);
     wire [N-1:0] m_swdc = onehot(swd_active,  swd_clk_ch);
     wire [N-1:0] m_swdd = onehot(swd_active,  swd_dio_ch);
+    wire [N-1:0] m_swds = onehot(swd_cs_active, swd_cs_ch);
 
     wire [N-1:0] eff_out, eff_oe;
     genvar c;
     generate for (c = 0; c < N; c = c + 1) begin : g_mux
-        // priority (high→low): swd_dio > swd_clk > step > i2c > uart > static
+        // priority (high→low): swd_dio > swd_clk > spi cs > step > i2c > uart > static
         assign eff_out[c] = m_swdd[c] ? swd_dio_val  :
                             m_swdc[c] ? swd_clk_val  :
+                            m_swds[c] ? swd_cs_val   :
                             m_step[c] ? step_val     :
                             m_i2c [c] ? 1'b0         :
                             m_uart[c] ? uart_tx_val  : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
                             m_swdc[c] ? 1'b1         :
+                            m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
                             m_i2c [c] ? i2c_sda_drive_low :
                             m_uart[c] ? 1'b1         : s_oe[c];
