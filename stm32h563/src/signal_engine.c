@@ -76,6 +76,17 @@ static SPI_HandleTypeDef hspi_ice;
    48 MHz clk48 domain with proper CDC — not a firmware change.) */
 #define SPI_ICE_PRESCALER SPI_BAUDRATEPRESCALER_128
 #define SPI_CLOCK_HZ      1953125U      /* 250 MHz / 128 */
+
+/* DRAFT (not HW-tested): gateware with the SCK-clocked spi_slave (branch spi-sck-slave-mode1).
+   That slave runs SPI MODE 1 and needs an idle gap from a byte's 8th SCK fall to the next
+   byte's first rise of >= ~225 ns (5 iCE40 clk + the MISO pad register setup), which the H5
+   master inserts as MIDI.  Mode 1 at /128 with no MIDI (fall-to-rise 256 ns) talks to BOTH that
+   slave and the old clk-sampled one (sim: tb_top_spilink), so the link boots in mode 1 at /128,
+   reads VERSION, then raises the clock.  SPI_FAST_MIN_GW assumes the gateware VERSION is bumped
+   to 46 with the new slave (the prototype branch still answers 45). */
+#define SPI_FAST_MIN_GW   46u
+#define SPI_FAST_DIV      16u           /* 15.625 MHz; /8 = 31.25 MHz needs a HW margin sweep */
+#define SPI_GAP_NS        250u          /* >= 225 ns + margin */
 #include "fpga_config.h"               /* FPGA_HFOSC_HZ — single source: tools/gen_protocol.py */
 #include "la_rate.h"                    /* la_psram_plan — deep-LA rate/divider (host-tested) */
 
@@ -626,13 +637,24 @@ uint32_t signal_engine_spi_set_prescaler(uint32_t div) {
        so an SCK half period under ~150 ns (above ~3.3 MHz, i.e. /64 and faster) corrupts
        commands by design, not because of the board.  Refuse those rather than leave the link
        in a state that silently mangles every command. */
+    /* DRAFT: gateware >= SPI_FAST_MIN_GW (SCK-clocked slave) takes /8../64 too, each with the
+       MIDI that gives it the SPI_GAP_NS inter-byte gap. */
     uint32_t presc;
+    bool fast = s_fpga_version >= SPI_FAST_MIN_GW;
     switch (div) {
+    case 8:   if (!fast) return 0; presc = SPI_BAUDRATEPRESCALER_8;  break;
+    case 16:  if (!fast) return 0; presc = SPI_BAUDRATEPRESCALER_16; break;
+    case 32:  if (!fast) return 0; presc = SPI_BAUDRATEPRESCALER_32; break;
+    case 64:  if (!fast) return 0; presc = SPI_BAUDRATEPRESCALER_64; break;
     case 128: presc = SPI_BAUDRATEPRESCALER_128; break;
     case 256: presc = SPI_BAUDRATEPRESCALER_256; break;
     default:  return 0;
     }
+    /* Mode 1: gap from the 8th fall to the next rise = MIDI*T + T/2, T = div * 4 ns. */
+    uint32_t t_ns = div * 4u, midi = 0;
+    while (midi < 15u && midi * t_ns + t_ns / 2u < SPI_GAP_NS) midi++;
     hspi_ice.Init.BaudRatePrescaler = presc;
+    hspi_ice.Init.MasterInterDataIdleness = midi << SPI_CFG2_MIDI_Pos;
     if (HAL_SPI_Init(&hspi_ice) != HAL_OK) return 0;
     return 250000000u / div;   /* SPI1 kernel = PLL1Q = 250 MHz */
 }
@@ -1098,7 +1120,10 @@ void signal_engine_init(void) {
     hspi_ice.Init.Direction = SPI_DIRECTION_2LINES;
     hspi_ice.Init.DataSize = SPI_DATASIZE_8BIT;
     hspi_ice.Init.CLKPolarity = SPI_POLARITY_LOW;
-    hspi_ice.Init.CLKPhase = SPI_PHASE_1EDGE;
+    /* DRAFT: mode 1 (CPHA 2nd edge) for the SCK-clocked slave; at /128 the old slave works
+       in mode 1 too (tb_top_spilink run against it). */
+    hspi_ice.Init.CLKPhase = SPI_PHASE_2EDGE;
+    hspi_ice.Init.MasterInterDataIdleness = SPI_MASTER_INTERDATA_IDLENESS_00CYCLE;
     hspi_ice.Init.NSS = SPI_NSS_SOFT;
     hspi_ice.Init.BaudRatePrescaler = SPI_ICE_PRESCALER;
     hspi_ice.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -1143,6 +1168,9 @@ void signal_engine_init(void) {
         s_fpga_features = signal_engine_fpga_features();   /* which warmboot image booted */
         printf("[sig] FPGA gateware v%u (v2/PSRAM capture path), features 0x%02x\n",
                s_fpga_version, s_fpga_features);
+        if (s_fpga_version >= SPI_FAST_MIN_GW && signal_engine_spi_set_prescaler(SPI_FAST_DIV))
+            printf("[sig] SPI1 raised to %lu Hz (SCK-clocked slave)\n",
+                   (unsigned long)(250000000u / SPI_FAST_DIV));
         signal_engine_fabric_to_idle();
     }
 }
@@ -1647,6 +1675,9 @@ bool signal_engine_refresh_version(void) {
        net task), so the transaction must be serialised or it corrupts an in-flight
        transfer — same rule as signal_engine_poll(). */
     hw_lock();
+    /* DRAFT: the gateware may have just been reflashed to an older slave, so re-probe at the
+       boot setting (/128, works with both slaves) and raise the clock only if it is new. */
+    signal_engine_spi_set_prescaler(128);
     uint8_t ping = 0;
     spi_cmd_read(CMD_PING, NULL, 0, &ping, 1);
     bool ok = (ping == PING_REPLY_MAGIC);
@@ -1654,6 +1685,7 @@ bool signal_engine_refresh_version(void) {
         uint8_t v = 0;
         spi_cmd_read(CMD_VERSION, NULL, 0, &v, 1);
         s_fpga_version = v;
+        if (v >= SPI_FAST_MIN_GW) signal_engine_spi_set_prescaler(SPI_FAST_DIV);
     }
     hw_unlock();
     return ok;
