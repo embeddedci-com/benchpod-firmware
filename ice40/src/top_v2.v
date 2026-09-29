@@ -440,14 +440,13 @@ module top (
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
     );
     // Self-test ramp (+0x0101/sample) so the whole capture->writer->PSRAM->readback
-    // path is verifiable end-to-end (CAPTURE_TEST / cap-selftest).
-    reg  [15:0] adc_test_cnt;
-    always @(posedge clk) begin
-        if (rst)                     adc_test_cnt <= 16'd0;
-        else if (adc_sample_stb_raw) adc_test_cnt <= adc_test_cnt + 16'h0101;
-    end
+    // path is verifiable end-to-end (CAPTURE_TEST / cap-selftest).  Both bytes of a +0x0101
+    // ramp are always equal, so it is one 8-bit counter shown twice (v45).  It steps once per
+    // CAPTURED sample, on the sample's second byte write, so both byte writes see one value (the
+    // firmware checks the step between samples, not an absolute start).
+    reg  [7:0] adc_test_c;
     assign adc_sample_stb = adc_sample_stb_raw;
-    assign adc_sample_sel = cap_test_ramp ? adc_test_cnt : adc_sample;
+    assign adc_sample_sel = cap_test_ramp ? {adc_test_c, adc_test_c} : adc_sample;
 
     // ---- ADC producer: pack each ADC sample into 2 bytes (LE) -> ADC ring ----
     // Armed by cap_start; captures cap_count samples at the ADC engine's rate.  It
@@ -459,7 +458,6 @@ module top (
     // fabric counter was; the done test still reads it at 1.
     wire [31:0] adc_left_q;
     wire [23:0] adc_left = adc_left_q[23:0];
-    reg [15:0] adc_hold;
     reg [1:0]  adc_pst;
     reg        adc_wr_stb;
     reg  [7:0] adc_wr_data;
@@ -468,20 +466,25 @@ module top (
         .clk(clk), .load(~rst & cap_start), .load_val({8'd0, cap_count}),
         .en(~rst & ~cap_start & adc_run & (adc_pst == 2'd2)),
         .q(adc_left_q), .flag());
+    // v45: no 16-bit hold register.  The two byte writes read adc_sample_sel directly one and
+    // two clk after the sample strobe: the ADC engine holds `sample` until its next conversion
+    // (>= 58 clk at the minimum divider), and the test ramp only steps on the second write.
     always @(posedge clk) begin
         adc_wr_stb <= 1'b0;
+        if (rst) adc_test_c <= 8'd0;
+        else if (adc_run && adc_pst == 2'd2) adc_test_c <= adc_test_c + 8'd1;
         if (rst) begin
             adc_run<=1'b0; adc_done_r<=1'b0; adc_ovf_r<=1'b0; adc_pst<=2'd0;
         end else if (cap_start) begin
             adc_run<=(cap_count!=24'd0); adc_done_r<=(cap_count==24'd0); adc_ovf_r<=1'b0;
             adc_pst<=2'd0;                     // (adc_left loads in its dsp_counter)
         end else if (adc_run) begin
-            if (adc_sample_stb && adc_pst==2'd0 && !trig_wait) begin adc_hold<=adc_sample_sel; adc_pst<=2'd1; end
+            if (adc_sample_stb && adc_pst==2'd0 && !trig_wait) adc_pst<=2'd1;
             else if (adc_pst==2'd1) begin
-                adc_wr_data<=adc_hold[7:0];  adc_wr_stb<=1'b1; adc_pst<=2'd2;
+                adc_wr_data<=adc_sample_sel[7:0];  adc_wr_stb<=1'b1; adc_pst<=2'd2;
                 if (adc_ring_in_full) adc_ovf_r<=1'b1;
             end else if (adc_pst==2'd2) begin
-                adc_wr_data<=adc_hold[15:8]; adc_wr_stb<=1'b1; adc_pst<=2'd0;
+                adc_wr_data<=adc_sample_sel[15:8]; adc_wr_stb<=1'b1; adc_pst<=2'd0;
                 if (adc_ring_in_full) adc_ovf_r<=1'b1;
                 // (adc_left steps down in its dsp_counter on this same edge)
                 if (adc_left==24'd1) begin adc_run<=1'b0; adc_done_r<=1'b1; end
