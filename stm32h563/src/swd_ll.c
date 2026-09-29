@@ -142,15 +142,16 @@ uint8_t swd_ll_transfer(uint8_t request, uint32_t *data) {
     w_write_bit(&w, parity & 1);       /* parity */
     w_write_bit(&w, 0);                /* stop   */
     w_write_bit(&w, 1);                /* park   */
-    swd_feed(&w, NULL, 0);             /* FEED 1: clock the request out on its own.  The
-                                        * resulting processing/SPI gap before we sample the
-                                        * ACK lets a slow AP latch its read result first.
-                                        * Sampled back-to-back with the request, an AP read
-                                        * ACKs OK before its (posted) data is ready and the
-                                        * data phase comes back corrupt (parity error); DP
-                                        * reads answer instantly and don't need the gap.
-                                        * Mirrors DAP_SWD_Sequence: request out, then read. */
-    w.n = 0;
+    /* AP READS ONLY: clock the request out in a feed of its own.  The resulting processing/SPI
+     * gap before we sample the ACK lets a slow AP latch its read result first.  Sampled
+     * back-to-back with the request, an AP read ACKs OK before its (posted) data is ready and
+     * the data phase comes back corrupt (parity error).  DP reads answer instantly, and a write
+     * only needs its ACK, so those keep the request in the same feed as the ACK: one SPI feed
+     * transaction less per transfer. */
+    if ((request & SWD_REQ_APnDP) && (request & SWD_REQ_RnW)) {
+        swd_feed(&w, NULL, 0);
+        w.n = 0;
+    }
     w_release(&w);                     /* turnaround to input */
 
     if (request & SWD_REQ_RnW) {

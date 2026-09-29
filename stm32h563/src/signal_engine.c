@@ -2186,6 +2186,8 @@ int measure_psram(uint16_t *out16, const char *waveform, float freq,
 
 static bool            swd_armed_local = false;
 static absolute_time_t swd_deadline;   /* refreshed on each arm/feed */
+#define SWD_ARMED_CHECK_US  50000u
+static absolute_time_t swd_next_check;   /* next STATUS read that confirms the engine is armed */
 
 /* Validate a host LA channel (1..14) and return its 0-based wire index, or -1. */
 static int la_wire_index(unsigned channel) {
@@ -2311,6 +2313,7 @@ int fpga_swd_arm(unsigned swclk, unsigned swdio) {
     spi_cmd_write(CMD_SWD_ARM, args, sizeof(args));
     swd_armed_local = true;
     swd_deadline    = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    swd_next_check  = get_absolute_time();
     printf("[swd] armed  SWCLK=LA%u SWDIO=LA%u nRESET=%s\n",
            swclk, swdio, nrst_ctrl_supported() ? "PF4 (J1 pin 22)" : "unavailable");
     return 0;
@@ -2365,8 +2368,13 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 
     /* The engine must still be armed (STATUS bit 4).  After a reconfig or reset it is not, and
        then a feed drives nothing while SWD_READ returns stale reply bits, which OpenOCD takes as
-       real ACKs and data.  End the session loudly instead (the client sees the disconnect). */
-    if (swd_armed_local) {
+       real ACKs and data.  End the session loudly instead (the client sees the disconnect).
+       Checked at most every SWD_ARMED_CHECK_US, not on every feed: a transfer is 2-3 feeds and
+       the extra SPI transaction each was ~10% of the SWD time.  A reconfiguration through the
+       firmware already disarms the session (command_handler_on_gateware_reconfigured); this
+       only has to catch an iCE40 that reset on its own, within one check period. */
+    if (swd_armed_local && time_reached(swd_next_check)) {
+        swd_next_check = make_timeout_time_us(SWD_ARMED_CHECK_US);
         uint8_t st = 0;
         if (fpga_status_read(&st) != 0 || !(st & STATUS_SWD_ARMED)) {
             printf("[swd] the iCE40 SWD engine is not armed (status 0x%02x): ending the session\n", st);

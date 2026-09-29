@@ -46,12 +46,25 @@ static uint8_t  s_idle_cycles;
 static uint16_t s_wait_retry;
 static uint16_t s_match_retry;
 static uint32_t s_match_mask;
+static uint16_t s_packet_size  = DAP_PACKET_DEFAULT;
+static uint8_t  s_packet_count = 1;
+
+void dap_configure(unsigned packet_size, unsigned packet_count) {
+    if (packet_size < 64u) packet_size = 64u;
+    if (packet_size > DAP_PACKET_SIZE) packet_size = DAP_PACKET_SIZE;
+    if (packet_count < 1u) packet_count = 1u;
+    if (packet_count > DAP_PACKET_COUNT_MAX) packet_count = DAP_PACKET_COUNT_MAX;
+    s_packet_size  = (uint16_t)packet_size;
+    s_packet_count = (uint8_t)packet_count;
+}
 
 void dap_reset(void) {
     s_idle_cycles = 0;
     s_wait_retry  = 100;
     s_match_retry = 0;
     s_match_mask  = 0;
+    s_packet_size  = DAP_PACKET_DEFAULT;
+    s_packet_count = 1;
     swd_ll_reset();
     swd_ll_set_idle(0);
 }
@@ -90,6 +103,10 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
 
     for (; count > 0; count--) {
         if (p >= end) break;
+        /* Room for what this request can add (a finished posted read + a DP read) plus the
+           final posted-read flush after the loop.  A host that asks for more reads than the
+           advertised packet size holds gets a short count, not a buffer overrun. */
+        if (rp + 12 > resp + DAP_PACKET_SIZE) break;
         uint8_t request = *p++;
 
         if (request & SWD_REQ_RnW) {                 /* ---- read ---- */
@@ -177,6 +194,8 @@ static size_t do_transfer_block(const uint8_t *req, size_t req_len, uint8_t *res
     if (count == 0) { resp[1] = 0; resp[2] = 0; resp[3] = SWD_ACK_OK; return 4; }
 
     if (request & SWD_REQ_RnW) {                          /* block read */
+        /* Never more words than the response holds (the count is the host's). */
+        if (count > (DAP_PACKET_SIZE - 4u) / 4u) count = (DAP_PACKET_SIZE - 4u) / 4u;
         if (request & SWD_REQ_APnDP) {
             ack = xfer(request, NULL);                    /* prime posted read */
             if (ack != SWD_ACK_OK) goto done;
@@ -215,12 +234,12 @@ static size_t do_info(const uint8_t *req, size_t req_len, uint8_t *resp) {
             resp[1] = 1; resp[2] = 0x01;            /* bit0 = SWD */
             return 3;
         case INFO_PACKET_COUNT:
-            resp[1] = 1; resp[2] = 1;
+            resp[1] = 1; resp[2] = s_packet_count;
             return 3;
         case INFO_PACKET_SIZE:
             resp[1] = 2;
-            resp[2] = (uint8_t)(DAP_PACKET_SIZE & 0xFF);
-            resp[3] = (uint8_t)(DAP_PACKET_SIZE >> 8);
+            resp[2] = (uint8_t)(s_packet_size & 0xFF);
+            resp[3] = (uint8_t)(s_packet_size >> 8);
             return 4;
         case INFO_FW_VER: {
             static const char ver[] = "1.2.0";      /* CMSIS-DAP protocol version */

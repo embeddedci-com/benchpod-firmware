@@ -24,7 +24,8 @@ static size_t  rec_n;
 static int     samp_q[512];   /* programmed sample bits, consumed per 'c' */
 static int     samp_n, samp_idx;
 
-static void fake_reset(void) { rec_n = 0; samp_n = 0; samp_idx = 0; }
+static int     feeds;          /* fpga_swd_feed calls: each is SPI transactions on the pod */
+static void fake_reset(void) { rec_n = 0; samp_n = 0; samp_idx = 0; feeds = 0; }
 static void push_bit(int b)  { samp_q[samp_n++] = b & 1; }
 
 /* ACK lands s_turnaround samples into the read stream — the standard SWD
@@ -47,6 +48,7 @@ static void push_word(uint32_t v) {   /* 32 data bits LSB-first + even parity */
 size_t fpga_swd_feed(const uint8_t *in, size_t len, char *reply, size_t reply_cap,
                      size_t *reply_len, bool *exit_to_json, bool *quit) {
     *exit_to_json = false; *quit = false;
+    feeds++;
     size_t r = 0;
     for (size_t k = 0; k < len; k++) {
         uint8_t b = in[k];
@@ -156,6 +158,23 @@ static void test_nreset_uses_dedicated_pin(void) {
     CHECK(rec_n == 0);
 }
 
+/* Feeds per transfer: an AP read keeps its request in a feed of its own (the gap lets a slow AP
+ * latch the posted data before the ACK is sampled); a DP read is one feed; a write is the request
+ * with its ACK, then the data. */
+static void test_feeds_per_transfer(void) {
+    setup(); push_lead(); push_ack(SWD_ACK_OK); push_word(1);
+    uint32_t d = 0;
+    CHECK(swd_ll_transfer(SWD_REQ_APnDP | SWD_REQ_RnW, &d) == SWD_ACK_OK);
+    CHECK(feeds == 2);
+    setup(); push_lead(); push_ack(SWD_ACK_OK); push_word(2);
+    CHECK(swd_ll_transfer(SWD_REQ_RnW, &d) == SWD_ACK_OK && d == 2);
+    CHECK(feeds == 1);
+    setup(); push_lead(); push_ack(SWD_ACK_OK);
+    d = 3;
+    CHECK(swd_ll_transfer(SWD_REQ_APnDP, &d) == SWD_ACK_OK);
+    CHECK(feeds == 2);
+}
+
 int main(void) {
     test_nreset_uses_dedicated_pin();
     test_request_encoding();
@@ -163,6 +182,7 @@ int main(void) {
     test_read_parity_error();
     test_wait_ack();
     test_write_encodes_value();
+    test_feeds_per_transfer();
     if (failures == 0) { printf("PASS — all swd_ll tests\n"); return 0; }
     printf("FAILED — %d check(s)\n", failures);
     return 1;

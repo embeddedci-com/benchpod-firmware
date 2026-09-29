@@ -50,7 +50,19 @@ static void test_info_packet_size(void) {
     size_t n = run(req, sizeof(req));
     CHECK(n == 4);
     CHECK(resp[1] == 0x02);
-    CHECK((uint16_t)(resp[2] | (resp[3] << 8)) == 256);
+    CHECK((uint16_t)(resp[2] | (resp[3] << 8)) == DAP_PACKET_DEFAULT);   /* old clients */
+    dap_configure(1024, 4);
+    run(req, sizeof(req));
+    CHECK((uint16_t)(resp[2] | (resp[3] << 8)) == 1024);
+    uint8_t cnt[] = { 0x00, 0xFE };
+    run(cnt, sizeof(cnt));
+    CHECK(resp[1] == 1 && resp[2] == 4);
+    dap_configure(99999, 99);
+    run(req, sizeof(req));
+    CHECK((uint16_t)(resp[2] | (resp[3] << 8)) == DAP_PACKET_SIZE);
+    dap_reset();
+    run(cnt, sizeof(cnt));
+    CHECK(resp[2] == 1);
 }
 
 /* ---- connect / config --------------------------------------------------- */
@@ -195,9 +207,46 @@ static void test_unknown_command(void) {
     CHECK(resp[0] == 0xFF);   /* DAP_Invalid */
 }
 
+/* The read counts are the host's: a request for more words than the packet holds must return a
+ * short count, never write past the response buffer.  (Before the bounds, a 65535-word block read
+ * or a 255-read DAP_Transfer overran it; the LAN API is unauthenticated.) */
+static struct { uint8_t r[DAP_PACKET_SIZE]; uint8_t guard[64]; } g;
+
+static bool guard_intact(void) {
+    for (size_t i = 0; i < sizeof(g.guard); i++) if (g.guard[i] != 0x5A) return false;
+    return true;
+}
+
+static void test_reads_never_overrun_the_response(void) {
+    setup();
+    mock_swd_ll_dp_value = 0x12345678;
+    memset(g.guard, 0x5A, sizeof(g.guard));
+    uint8_t blk[] = { 0x06, 0x00, 0xFF, 0xFF, (uint8_t)SWD_REQ_RnW };   /* 65535 DP reads */
+    size_t n = dap_process(blk, sizeof(blk), g.r, DAP_PACKET_SIZE);
+    uint16_t done = (uint16_t)(g.r[1] | (g.r[2] << 8));
+    CHECK(n <= DAP_PACKET_SIZE);
+    CHECK(done == (DAP_PACKET_SIZE - 4) / 4);
+    CHECK(n == 4 + 4u * done);
+    CHECK(le32(&g.r[4]) == 0x12345678);
+    CHECK(guard_intact());
+
+    setup();
+    mock_swd_ll_dp_value = 0x0BADF00D;
+    memset(g.guard, 0x5A, sizeof(g.guard));
+    uint8_t xf[3 + 255];
+    xf[0] = 0x05; xf[1] = 0x00; xf[2] = 255;                           /* 255 DP reads */
+    memset(xf + 3, SWD_REQ_RnW, 255);
+    n = dap_process(xf, sizeof(xf), g.r, DAP_PACKET_SIZE);
+    CHECK(n <= DAP_PACKET_SIZE);
+    CHECK(n == 3 + 4u * g.r[1]);
+    CHECK(g.r[1] > 200);                                                 /* most of them still ran */
+    CHECK(guard_intact());
+}
+
 int main(void) {
     test_info_capabilities();
     test_info_packet_size();
+    test_reads_never_overrun_the_response();
     test_connect_swd();
     test_connect_jtag_rejected();
     test_transfer_configure();

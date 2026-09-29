@@ -44,7 +44,8 @@ firmware gains a CMSIS-DAP brain, and the host gains a thin pyOCD probe.
 
 A connection enters DAP mode exactly like SWD mode does today:
 
-1. Host sends JSON `{"cmd":"dap_start","swclk":<la>,"swdio":<la>}`.
+1. Host sends JSON `{"cmd":"dap_start","swclk":<la>,"swdio":<la>}`, optionally with
+   `"packet_size":1024,"packet_count":4` (see [Packet size](#packet-size)).
 
    > Since rev3 there is **no `nreset` field**. nRESET is the pod's own
    > `/NRST_CONTROL` pin (J1 pin 22 — see the [DUT header pinout](API.md#dut-header)),
@@ -64,7 +65,7 @@ A connection enters DAP mode exactly like SWD mode does today:
    response  (pod → host):  [len_lo][len_hi][ CMSIS-DAP response bytes (len) ]
    ```
 
-   `len` is little-endian u16, ≤ `DAP_PACKET_SIZE` (256). A **zero-length frame**
+   `len` is little-endian u16, ≤ the advertised packet size. A **zero-length frame**
    (`00 00`) leaves DAP mode and disarms — the connection returns to JSON.
 
 The frame length is the only thing we add on top of standard CMSIS-DAP; the
@@ -75,7 +76,7 @@ later be exposed to OpenOCD's `cmsis-dap` driver or probe-rs.
 
 | ID | Command | Notes |
 |----|---------|-------|
-| 0x00 | `DAP_Info` | caps=SWD, packet size 256, count 1, empty strings |
+| 0x00 | `DAP_Info` | caps=SWD, packet size 256 and count 1 unless `dap_start` asked for more, empty strings |
 | 0x01 | `DAP_HostStatus` | LED — acked, ignored |
 | 0x02 | `DAP_Connect` | SWD only (port 1); JTAG rejected |
 | 0x03 | `DAP_Disconnect` | |
@@ -138,11 +139,35 @@ The internet now sees **one round-trip per DAP command**, not per bit:
 - Writes have no return data, so the host can keep several block packets in
   flight (future: raise `packet_count`) to hide RTT almost entirely.
 
-The remaining floor is **local, on the pod**: the FPGA is a 1 MHz-SPI
-remote_bitbang decoder (~8 µs/byte, ~1.6 ms per 32-bit transfer for the two
-feed phases). That's unchanged by this work and is bench-local. To go faster you
-raise the RP↔FPGA SPI baud or add a "shift N bits" FPGA op — a separate,
-optional optimization that does **not** affect internet latency.
+### Packet size
+
+`dap_start` takes optional `packet_size` (64..1024) and `packet_count` (1..4); `DAP_Info`
+advertises them and OpenOCD follows.  The default stays 256 x 1 because the benchpod CLI's
+bridge (<= 0.1.5) breaks on larger packets; the Python SDK asks for 1024 x 4.
+
+### Where the time goes
+
+The pod logs one line per session on its console:
+
+```
+[dap] session: 401 packets, 62874 bytes, 9969 ms executing of 12883 ms (77%)
+```
+
+Measured on the LAN (rev3 pod, STM32F446 DUT, 40 KB program + verify with OpenOCD):
+
+| Firmware | Packets | Executing on the pod | Session |
+|---|---|---|---|
+| before (256 x 1, armed check per feed, request in its own feed) | ~600 | - | 16.2 s |
+| armed check every 50 ms, request merged with the ACK (not for AP reads) | 596 | 10.0 s | 15.1 s |
+| + 1024 x 4 packets (Python SDK) | 401 | 10.0 s | 13.2 s |
+
+Most packets are small (flash-algorithm status polls), so bigger packets help less than the
+payload math suggests on the LAN; over the cloud each saved packet is a full round trip.
+
+The floor is **local, on the pod**: remote_bitbang over the 1.95 MHz STM32 -> iCE40 link,
+about 0.65 ms per 32-bit transfer (~140 link bytes for a write).  Going faster means doing the
+SWD transfer in the gateware (request, ACK, data, parity from a queued word) or a faster
+STM32 -> iCE40 link; neither affects internet latency.
 
 ## What this is NOT
 

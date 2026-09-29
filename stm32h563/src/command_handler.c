@@ -939,7 +939,27 @@ static size_t  dap_rx_have;                 /* bytes accumulated incl. 2-byte he
 static uint8_t dap_resp[2 + DAP_PACKET_SIZE];
 
 /* Disarming hands SWCLK/SWDIO back to the LA bank, so the ownership table has to follow. */
+/* One line per DAP session on the console: how much of the session the pod spent executing
+   packets (SWD over the FPGA link) versus waiting for the next one (host + network). */
+static struct {
+    uint32_t packets;
+    uint32_t bytes;          /* request + response payload */
+    uint64_t busy_us;
+    absolute_time_t start;
+} s_dap_stats;
+
+static void dap_stats_report(void) {
+    if (s_dap_stats.packets == 0) return;
+    uint64_t total_us = (uint64_t)absolute_time_diff_us(s_dap_stats.start, get_absolute_time());
+    printf("[dap] session: %lu packets, %lu bytes, %lu ms executing of %lu ms (%lu%%)\n",
+           (unsigned long)s_dap_stats.packets, (unsigned long)s_dap_stats.bytes,
+           (unsigned long)(s_dap_stats.busy_us / 1000u), (unsigned long)(total_us / 1000u),
+           (unsigned long)(total_us ? s_dap_stats.busy_us * 100u / total_us : 0u));
+    s_dap_stats.packets = 0;
+}
+
 static void swd_disarm_and_release(void) {
+    dap_stats_report();
     fpga_swd_disarm();
     la_pins_release_fn(LA_FN_SWD_CLK);
     la_pins_release_fn(LA_FN_SWD_DIO);
@@ -2628,7 +2648,17 @@ static void handle_dap_start(int conn_id, const char *json) {
     la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, &dio_pin, 1);
 
     dap_reset();
+    /* Opt-in larger packets / several in flight (see dap.h: the old CLI bridge breaks on them). */
+    {
+        char v[12];
+        unsigned size = DAP_PACKET_DEFAULT, count = 1;
+        if (json_get_value(json, "packet_size", v, sizeof(v)))  size  = (unsigned)atoi(v);
+        if (json_get_value(json, "packet_count", v, sizeof(v))) count = (unsigned)atoi(v);
+        dap_configure(size, count);
+    }
     dap_rx_have = 0;
+    memset(&s_dap_stats, 0, sizeof(s_dap_stats));
+    s_dap_stats.start = get_absolute_time();
 
     send_ok_str(conn_id, "\"dap ready\"");
     proto[conn_id] = PROTO_DAP;   /* AFTER the ack: bytes are now framed packets */
@@ -3784,8 +3814,12 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 dap_rx_have = 0;
                 if (payload == 0) { leave = true; break; }   /* zero-length: leave */
 
+                absolute_time_t t0 = get_absolute_time();
                 size_t rlen = dap_process(dap_rx + 2, payload,
                                           dap_resp + 2, DAP_PACKET_SIZE);
+                s_dap_stats.busy_us += (uint64_t)absolute_time_diff_us(t0, get_absolute_time());
+                s_dap_stats.packets++;
+                s_dap_stats.bytes   += (uint32_t)(payload + rlen);
                 dap_resp[0] = (uint8_t)(rlen & 0xFF);
                 dap_resp[1] = (uint8_t)((rlen >> 8) & 0xFF);
                 at_send_data(conn_id, dap_resp, rlen + 2);
