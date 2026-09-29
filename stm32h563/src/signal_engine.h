@@ -543,6 +543,21 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
    The shifter clocks at 24 MHz / (2 * half): half 2..63 = 6 MHz .. 190 kHz.  CS starts
    released (driven high); fpga_spi_cs() asserts it around a transaction. */
 #define SPI_MASTER_MIN_GW   44u
+#define SWD_QUEUE_MIN_GW    45u
+
+/* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
+   See swd_ll_batch() for the layer on top. */
+#define SWDQ_BYTES_MAX      512u    /* queue bytes per run: 1 per read, 5 per write */
+#define SWDQ_READS_MAX      128u    /* reads per run: 4 reply bytes each */
+#define SWDQ_FLAG_BUSY      0x01u
+#define SWDQ_FLAG_STOPPED   0x02u
+#define SWDQ_FLAG_PERR      0x20u
+int fpga_swdq_config(unsigned half, unsigned idle_cycles);
+/* Queue q[0..len) and wait until the engine is idle.  0 ok (*done / *flags as SWD_QSTATUS
+   reports them); -1 not armed or bad args; -2 the engine never went idle. */
+int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags);
+/* The first n reply bytes of the last run (4 LE per read). */
+int fpga_swdq_read(uint8_t *buf, size_t n);
 #define SPI_XFER_MAX        512u    /* bytes per fpga_spi_xfer: the gateware queue */
 #define SPI_HALF_MIN        2u
 #define SPI_HALF_MAX        63u

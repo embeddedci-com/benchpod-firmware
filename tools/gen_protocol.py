@@ -62,6 +62,10 @@ OPCODES = [
     # SWD_READ returns the bytes it clocked in.  SWD_DISARM releases the pins.
     ("SPI_ARM",         0x55, "sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3)", "— (v2 >=v44; CS starts released, driven high)"),
     ("SPI_CS",          0x56, "level (1 = assert CS low, 0 = release high)",    "— (v2 >=v44; only change it while SPI_STATUS says idle)"),
+    # SWD transfer queue (v45): whole SWD transfers run by the fabric (see swd_engine.v).
+    ("SWD_QFEED",       0x58, "len(2) + transfers: request byte (the 8-bit SWD packet), + 4 data bytes LE for a write", "— (v2 >=v45; needs SWD_ARM; the reply buffer gets 4 bytes LE per read, read back with SWD_READ)"),
+    ("SWD_QCONFIG",     0x59, "half(clk per SWCLK half period, 2..63) + idle(cycles after each transfer, 0..31)", "— (v2 >=v45)"),
+    ("SWD_QSTATUS",     0x5A, "—",                                              "done(1) + flags(1): bit0 busy, bit1 stopped, bits4:2 the ACK of the last transfer, bit5 read parity error (v2 >=v45)"),
     ("SPI_STATUS",      0x57, "—",                                              "status(1): bit0 = SPI mode armed, bit1 = busy (bytes queued or shifting) (v2 >=v44)"),
     ("I2C_CONFIG",      0x60, "addr7+sda_ch+scl_ch+flags+trig_reg+busy_reg+busy_mask+conv(2)", "—"),
     ("I2C_DISABLE",     0x61, "—",                                              "—"),

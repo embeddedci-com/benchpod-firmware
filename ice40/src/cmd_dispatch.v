@@ -38,6 +38,10 @@
 //   0x55 SPI_ARM         [sck_ch][mosi_ch][miso_ch][cs_ch][half][flags]  (flags bit0 = CPOL)
 //   0x56 SPI_CS          [level]   (1 = assert CS low, 0 = release high)
 //   0x57 SPI_STATUS      → [bit0 SPI armed, bit1 busy]
+//   -- SWD transfer queue (v45, see swd_engine) --
+//   0x58 SWD_QFEED       [len_lo][len_hi][transfers]   (the SWD_FEED path, into the queue)
+//   0x59 SWD_QCONFIG     [half][idle]
+//   0x5A SWD_QSTATUS     → [done][flags]
 //   -- emulated I2C sensor (generic target + register file, see i2c_target) --
 //   0x60 I2C_SENSOR_CONFIG  [addr7][sda_ch][scl_ch][flags][trig_reg]
 //                           [busy_reg][busy_mask][conv_lo][conv_hi]
@@ -226,6 +230,14 @@ module cmd_dispatch #(
     input  wire              spi_mode,
     input  wire              spi_busy,
 
+    // ---- SWD transfer queue (v45) ----
+    output wire              swd_feed_q,      // the current feed is SWD_QFEED
+    output reg               q_cfg_stb,
+    output wire [5:0]        q_cfg_half,
+    output wire [4:0]        q_cfg_idle,
+    input  wire [7:0]        q_done,
+    input  wire [7:0]        q_flags,
+
     // ---- emulated I2C sensor: configuration ----
     output reg               i2c_cfg_stb,
     output wire [6:0]        i2c_cfg_addr7,
@@ -384,6 +396,9 @@ module cmd_dispatch #(
     assign spi_half          = arg_buf[8][5:0];
     assign spi_cpol          = rx_byte[0];
     assign spi_cs_assert     = rx_byte[0];
+    assign swd_feed_q        = (current_cmd == OP_SWD_QFEED);
+    assign q_cfg_half        = arg_buf[8][5:0];
+    assign q_cfg_idle        = rx_byte[4:0];
     assign i2c_cfg_addr7     = arg_buf[1][6:0];
     assign i2c_cfg_sda_ch    = arg_buf[2][3:0];
     assign i2c_cfg_scl_ch    = arg_buf[3][3:0];
@@ -495,6 +510,7 @@ module cmd_dispatch #(
             swd_rd_addr      <= {REPLY_AW{1'b0}};
             spi_arm_stb      <= 1'b0;
             spi_cs_stb       <= 1'b0;
+            q_cfg_stb        <= 1'b0;
 
             reg_base          <= 8'h00;
             i2c_cfg_stb       <= 1'b0;
@@ -527,6 +543,7 @@ module cmd_dispatch #(
             swd_feed_stb   <= 1'b0;
             spi_arm_stb    <= 1'b0;
             spi_cs_stb     <= 1'b0;
+            q_cfg_stb      <= 1'b0;
             i2c_cfg_stb     <= 1'b0;
             i2c_disable_stb <= 1'b0;
             i2c_reg_we      <= 1'b0;
@@ -663,7 +680,8 @@ module cmd_dispatch #(
 
                             // ---- SWD ----
                             OP_SWD_ARM:    begin arg_rem <= 16'd3; state <= S_COLLECT; end
-                            OP_SWD_FEED:   begin swd_feed_begin <= 1'b1; state <= S_READ_LEN0; end
+                            OP_SWD_FEED,
+                            OP_SWD_QFEED:  begin swd_feed_begin <= 1'b1; state <= S_READ_LEN0; end
                             OP_SWD_READ:   begin
                                 // Preload reply BRAM addr 0 (same 1-cycle
                                 // latency trick as READ_CAPTURE).
@@ -678,6 +696,15 @@ module cmd_dispatch #(
                             OP_SPI_STATUS: begin
                                 tx_byte <= {6'b0, spi_busy, spi_mode};
                                 state   <= S_DONE;
+                            end
+
+                            // ---- SWD transfer queue (v45) ----
+                            OP_SWD_QCONFIG: begin arg_rem <= 16'd2; state <= S_COLLECT; end
+                            // [done][flags], one snapshot (the ADC_PROBE 2-byte path)
+                            OP_SWD_QSTATUS: begin
+                                adc_dbg_latch <= {q_flags, q_done};
+                                tx_byte       <= q_done;
+                                state         <= S_ADC_PROBE_HI;
                             end
 
                             // ---- emulated I2C sensor ----
@@ -732,7 +759,7 @@ module cmd_dispatch #(
                                 wave_waddr <= {ADDR_W{1'b0}};
                                 state      <= S_LOAD_DATA;
                             end
-                            OP_SWD_FEED:
+                            OP_SWD_FEED, OP_SWD_QFEED:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_SWD_FEED;
                             OP_SWD_READ:
@@ -851,6 +878,7 @@ module cmd_dispatch #(
                                 // [sck][mosi][miso][cs][half][flags(=rx_byte)] / [level(=rx_byte)]
                                 OP_SPI_ARM: spi_arm_stb <= 1'b1;
                                 OP_SPI_CS:  spi_cs_stb  <= 1'b1;
+                                OP_SWD_QCONFIG: q_cfg_stb <= 1'b1;   // [half][idle(=rx_byte)]
                                 OP_GPIO_STEP: begin
                                     // [channel][steps_lo][steps_hi][delay_lo][delay_hi(=rx_byte)]
                                     step_start   <= 1'b1;

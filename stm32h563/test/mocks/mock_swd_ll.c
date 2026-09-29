@@ -7,6 +7,11 @@ uint32_t mock_swd_ll_dp_value;
 uint32_t mock_swd_ll_ap_seq[64];
 int      mock_swd_ll_ap_seq_len;
 int      mock_swd_ll_wait_before_ok;
+bool     mock_swd_ll_batch;
+int      mock_swd_ll_batch_calls;
+int      mock_swd_ll_fail_at;
+uint8_t  mock_swd_ll_fail_ack;
+static uint16_t s_mock_wait_retry = 100;
 uint32_t mock_swd_ll_writes[256];
 int      mock_swd_ll_writes_n;
 int      mock_swd_ll_xfer_calls;
@@ -29,6 +34,31 @@ void mock_swd_ll_reset(void) {
     mock_swd_ll_nreset_calls = 0;
     mock_swd_ll_last_nreset = false;
     s_posted = 0; s_have_posted = false; s_ap_idx = 0;
+    mock_swd_ll_batch = false;
+    mock_swd_ll_batch_calls = 0;
+    mock_swd_ll_fail_at = 0;
+    mock_swd_ll_fail_ack = SWD_ACK_FAULT;
+}
+
+void swd_ll_set_wait_retry(uint16_t retries) { s_mock_wait_retry = retries; }
+void swd_ll_set_clock(uint32_t hz) { (void)hz; }
+bool swd_ll_batch_supported(void) { return mock_swd_ll_batch; }
+
+/* The batch the gateware runs, modelled on the same target: in order, WAIT retried, stop at
+   the first other non-OK ACK. */
+size_t swd_ll_batch(const swd_op_t *ops, size_t n, uint32_t *rdata, uint8_t *ack) {
+    mock_swd_ll_batch_calls++;
+    size_t rd = 0;
+    *ack = SWD_ACK_OK;
+    for (size_t i = 0; i < n; i++) {
+        uint32_t d = ops[i].data;
+        uint16_t retry = s_mock_wait_retry;
+        uint8_t a;
+        do { a = swd_ll_transfer(ops[i].req, &d); } while (a == SWD_ACK_WAIT && retry--);
+        if (a != SWD_ACK_OK) { *ack = a; return i; }
+        if (ops[i].req & SWD_REQ_RnW) rdata[rd++] = d;
+    }
+    return n;
 }
 
 /* config / sequence calls are recorded only where a test needs them */
@@ -45,6 +75,7 @@ void swd_ll_nreset(bool asserted) {
 
 uint8_t swd_ll_transfer(uint8_t request, uint32_t *data) {
     mock_swd_ll_xfer_calls++;
+    if (mock_swd_ll_fail_at && mock_swd_ll_xfer_calls == mock_swd_ll_fail_at) return mock_swd_ll_fail_ack;
 
     if (mock_swd_ll_wait_before_ok > 0) {
         mock_swd_ll_wait_before_ok--;

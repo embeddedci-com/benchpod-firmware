@@ -313,7 +313,7 @@ module tb_top_spi;
 
     initial begin
         #5000;
-        cmd1(8'h02, r); check(r, 8'd44, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd45, "VERSION");
         cmd1(8'h57, r); check(r, 8'h00, "SPI_STATUS at boot");
         pin(la[5], 1'b0, "CS pad before arm (high-Z)");
 

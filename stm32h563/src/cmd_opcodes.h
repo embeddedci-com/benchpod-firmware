@@ -38,6 +38,9 @@
 #define CMD_SWD_DISARM         0x53u
 #define CMD_SPI_ARM            0x55u
 #define CMD_SPI_CS             0x56u
+#define CMD_SWD_QFEED          0x58u
+#define CMD_SWD_QCONFIG        0x59u
+#define CMD_SWD_QSTATUS        0x5Au
 #define CMD_SPI_STATUS         0x57u
 #define CMD_I2C_CONFIG         0x60u
 #define CMD_I2C_DISABLE        0x61u

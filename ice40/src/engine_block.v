@@ -163,6 +163,10 @@ module engine_block #(
     wire [5:0]  spi_half;
     wire        spi_mode, spi_busy, swd_cs_on, swd_cs_val;
     wire [3:0]  swd_in_ch, swd_cs_ch;
+    wire        swd_feed_q, q_cfg_stb;
+    wire [5:0]  q_cfg_half;
+    wire [4:0]  q_cfg_idle;
+    wire [7:0]  q_done, q_flags;
     wire [N-1:0] la_in;
     wire        i2c_cfg_stb, i2c_cfg_enable, i2c_disable_stb;
     wire [6:0]  i2c_cfg_addr7;  wire [3:0] i2c_cfg_sda_ch, i2c_cfg_scl_ch;
@@ -224,6 +228,8 @@ module engine_block #(
         .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
         .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
         .spi_mode(spi_mode), .spi_busy(spi_busy),
+        .swd_feed_q(swd_feed_q), .q_cfg_stb(q_cfg_stb), .q_cfg_half(q_cfg_half),
+        .q_cfg_idle(q_cfg_idle), .q_done(q_done), .q_flags(q_flags),
         .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_addr7(i2c_cfg_addr7),
         .i2c_cfg_sda_ch(i2c_cfg_sda_ch), .i2c_cfg_scl_ch(i2c_cfg_scl_ch), .i2c_cfg_enable(i2c_cfg_enable),
         .i2c_cfg_trig_reg(i2c_cfg_trig_reg), .i2c_cfg_busy_reg(i2c_cfg_busy_reg),
@@ -302,10 +308,11 @@ module engine_block #(
         .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
         .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
         .disarm_stb(swd_disarm_stb),
+        .q_cfg_stb(q_cfg_stb), .q_cfg_half(q_cfg_half), .q_cfg_idle(q_cfg_idle), .feed_q(swd_feed_q),
         .feed_begin(swd_feed_begin), .feed_stb(swd_feed_stb), .feed_byte(swd_feed_byte),
         .dio_in(la_in[swd_in_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
         .reply_count(swd_reply_count), .armed(swd_armed),
-        .spi_mode(spi_mode), .spi_busy(spi_busy),
+        .spi_mode(spi_mode), .spi_busy(spi_busy), .q_done(q_done), .q_flags(q_flags),
         .clk_ch(swd_clk_ch), .clk_val(swd_clk_val),
         .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
         .in_ch(swd_in_ch), .cs_ch(swd_cs_ch), .cs_val(swd_cs_val), .cs_on(swd_cs_on)

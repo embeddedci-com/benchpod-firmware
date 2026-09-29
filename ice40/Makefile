@@ -239,7 +239,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -677,8 +677,16 @@ spitest:
 	$(VVP) /tmp/$(PROJECT)_spi.vvp
 	@rm -f /tmp/$(PROJECT)_spi.vvp
 
+# SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
+# model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
+swdqtest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_swdq.vvp -s tb_top_swdq \
+	         sim/tb_top_swdq.v $(SRC) $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_swdq.vvp
+	@rm -f /tmp/$(PROJECT)_swdq.vvp
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

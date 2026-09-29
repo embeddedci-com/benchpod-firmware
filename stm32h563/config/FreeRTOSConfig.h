@@ -28,7 +28,9 @@
    mbedTLS heap (mbedtls_calloc -> pvPortMalloc, see mbedtls_port.c).  A TLS 1.2
    handshake peaks at tens of KB (record buffers + RSA/ECDHE working memory), so
    size generously — the STM32H563 has 640 KB SRAM. */
-#define configTOTAL_HEAP_SIZE                   (256U * 1024U) /* heap_4 bytes */
+/* 248 KB: 8 KB went to static buffers for the batched SWD path (dap.c / swd_ll.c).  The heap's
+   low-water mark on a busy pod is ~159 KB free of 256 KB (status heap_min). */
+#define configTOTAL_HEAP_SIZE                   (248U * 1024U) /* heap_4 bytes */
 #define configMAX_TASK_NAME_LEN                 (16)
 #define configUSE_16_BIT_TICKS                  0
 #define configIDLE_SHOULD_YIELD                 1

@@ -71,6 +71,27 @@ static int  nrst_calls;
 static bool nrst_state;
 void nrst_ctrl_assert(bool asserted) { nrst_calls++; nrst_state = asserted; }
 
+/* ---- fake SWD queue (swd_ll_batch) --------------------------------------- */
+static uint8_t  gw_version = 44;
+uint8_t signal_engine_fpga_version(void) { return gw_version; }
+static uint8_t  qbytes[4096];
+static size_t   qbytes_n;
+static int      q_runs, q_cfgs;
+static int      q_wait_first;          /* answer WAIT at op 1 of the first run(s) */
+int fpga_swdq_config(unsigned half, unsigned idle) { (void)half; (void)idle; q_cfgs++; return 0; }
+int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags) {
+    memcpy(qbytes + qbytes_n, q, len); qbytes_n += len; q_runs++;
+    size_t ops = 0;
+    for (size_t i = 0; i < len; ops++) i += (q[i] & 0x04) ? 1 : 5;
+    if (q_wait_first > 0) { q_wait_first--; *done = 1; *flags = (uint8_t)(0x02 | (0x02 << 2)); return 0; }
+    *done = (uint8_t)ops; *flags = (uint8_t)(0x01 << 2);
+    return 0;
+}
+int fpga_swdq_read(uint8_t *buf, size_t n) {
+    for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(0x10 + i);
+    return 0;
+}
+
 static void setup(void) { fake_reset(); nrst_calls = 0; nrst_state = false; swd_ll_reset(); }
 
 /* ---- tests -------------------------------------------------------------- */
@@ -175,6 +196,41 @@ static void test_feeds_per_transfer(void) {
     CHECK(feeds == 2);
 }
 
+/* Batches: the request packets the gateware gets, the 5-byte writes, and WAIT re-queues the
+ * rest (the op that WAITed first). */
+static void test_batch_bytes_and_wait(void) {
+    setup();
+    gw_version = 44;
+    CHECK(!swd_ll_batch_supported());
+    gw_version = 45;
+    CHECK(swd_ll_batch_supported());
+    swd_op_t ops[3] = {
+        { SWD_REQ_RnW, 0 },                                                   /* DP IDR read   */
+        { SWD_REQ_APnDP | SWD_REQ_A2 | SWD_REQ_A3, 0xDEADBEEF },              /* AP DRW write  */
+        { SWD_REQ_APnDP | SWD_REQ_RnW | SWD_REQ_A2 | SWD_REQ_A3, 0 },         /* AP DRW read   */
+    };
+    uint32_t rd[3] = { 0 };
+    uint8_t ack = 0;
+    qbytes_n = 0; q_runs = 0; q_cfgs = 0;
+    CHECK(swd_ll_batch(ops, 3, rd, &ack) == 3);
+    CHECK(ack == SWD_ACK_OK);
+    CHECK(q_cfgs == 1 && q_runs == 1);
+    CHECK(qbytes_n == 7);
+    CHECK(qbytes[0] == 0xA5);
+    CHECK(qbytes[1] == 0xBB && qbytes[2] == 0xEF && qbytes[3] == 0xBE && qbytes[4] == 0xAD && qbytes[5] == 0xDE);
+    CHECK(qbytes[6] == 0x9F);
+    CHECK(rd[0] == 0x13121110u && rd[1] == 0x17161514u);
+
+    /* WAIT on op 1 of the first run: op 0 is kept, ops 1.. are queued again */
+    qbytes_n = 0; q_runs = 0; q_wait_first = 1;
+    CHECK(swd_ll_batch(ops, 3, rd, &ack) == 3);
+    CHECK(ack == SWD_ACK_OK);
+    CHECK(q_runs == 2);
+    CHECK(qbytes_n == 7 + 6);           /* the rerun starts at the write */
+    CHECK(qbytes[7] == 0xBB);
+    gw_version = 44;
+}
+
 int main(void) {
     test_nreset_uses_dedicated_pin();
     test_request_encoding();
@@ -183,6 +239,7 @@ int main(void) {
     test_wait_ack();
     test_write_encodes_value();
     test_feeds_per_transfer();
+    test_batch_bytes_and_wait();
     if (failures == 0) { printf("PASS — all swd_ll tests\n"); return 0; }
     printf("FAILED — %d check(s)\n", failures);
     return 1;

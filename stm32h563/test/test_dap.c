@@ -20,7 +20,8 @@ static int failures;
 
 static uint8_t resp[DAP_PACKET_SIZE];
 
-static void setup(void) { mock_swd_ll_reset(); dap_reset(); }
+static bool g_batch;   /* run the suite one-by-one, then batched: the answers must not change */
+static void setup(void) { mock_swd_ll_reset(); dap_reset(); mock_swd_ll_batch = g_batch; }
 
 static size_t run(const uint8_t *req, size_t n) {
     memset(resp, 0xEE, sizeof(resp));
@@ -243,7 +244,31 @@ static void test_reads_never_overrun_the_response(void) {
     CHECK(guard_intact());
 }
 
-int main(void) {
+/* A FAULT in the middle of a batched DAP_Transfer must answer like the one-by-one loop breaking
+ * there: the count of transfers before it, FAULT, and only the data read before it. */
+static void test_fault_mid_transfer_same_answer(void) {
+    uint8_t want[DAP_PACKET_SIZE], got_n_one, got_n_batch;
+    size_t n1, n2;
+    /* DP read, DP write, DP read, DP read: the third bus op FAULTs */
+    uint8_t req[] = { 0x05, 0x00, 4, SWD_REQ_RnW, 0x08, 1, 2, 3, 4, SWD_REQ_RnW, SWD_REQ_RnW };
+    for (int b = 0; b < 2; b++) {
+        mock_swd_ll_reset(); dap_reset(); mock_swd_ll_batch = (b == 1);
+        mock_swd_ll_dp_value = 0x11223344;
+        mock_swd_ll_fail_at = 3; mock_swd_ll_fail_ack = SWD_ACK_FAULT;
+        size_t n = run(req, sizeof(req));
+        if (b == 0) { memcpy(want, resp, n); n1 = n; got_n_one = resp[1]; }
+        else {
+            n2 = n; got_n_batch = resp[1];
+            CHECK(n2 == n1);
+            CHECK(memcmp(want, resp, n) == 0);
+            CHECK(got_n_batch == got_n_one && got_n_batch == 2);
+            CHECK(resp[2] == SWD_ACK_FAULT);
+            CHECK(mock_swd_ll_batch_calls == 1);
+        }
+    }
+}
+
+static void run_suite(void) {
     test_info_capabilities();
     test_info_packet_size();
     test_reads_never_overrun_the_response();
@@ -259,6 +284,12 @@ int main(void) {
     test_block_write_ap();
     test_swj_pins_nreset();
     test_unknown_command();
+}
+
+int main(void) {
+    g_batch = false; run_suite();
+    g_batch = true;  run_suite();
+    test_fault_mid_transfer_same_answer();
     if (failures == 0) { printf("PASS — all dap tests\n"); return 0; }
     printf("FAILED — %d check(s)\n", failures);
     return 1;

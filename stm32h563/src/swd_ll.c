@@ -3,6 +3,7 @@
 #include "swd_ll.h"
 #include "signal_engine.h"   /* fpga_swd_feed() */
 #include "nrst_ctrl.h"       /* the dedicated /NRST_CONTROL pin (rev3+) */
+#include "fpga_config.h"     /* FPGA_HFOSC_HZ */
 
 #include <string.h>
 
@@ -18,7 +19,10 @@
  * turnaround, drive toggle and up to 255 idle clocks (idle*2). 768 covers it. */
 #define SWD_WIRE_MAX 768
 
-static uint8_t s_turnaround = 1;   /* 1..4 */
+static uint8_t  s_turnaround = 1;   /* 1..4 */
+static uint16_t s_wait_retry = 100;
+static unsigned s_half       = 6;   /* 2 MHz until DAP_SWJ_Clock says otherwise */
+static bool     s_qcfg_dirty = true;
 static bool    s_data_phase = false;
 static uint8_t s_idle       = 0;
 
@@ -93,6 +97,7 @@ static size_t swd_feed(const wire_t *w, char *samples, size_t cap) {
 #define SWD_MIN_IDLE 8u
 
 void swd_ll_reset(void) {
+    s_qcfg_dirty = true;
     s_turnaround = 1;
     s_data_phase = false;
     s_idle       = SWD_MIN_IDLE;
@@ -107,6 +112,82 @@ void swd_ll_configure(uint8_t turnaround, bool data_phase) {
 
 void swd_ll_set_idle(uint8_t idle_cycles) {
     s_idle = (idle_cycles < SWD_MIN_IDLE) ? SWD_MIN_IDLE : idle_cycles;
+    s_qcfg_dirty = true;
+}
+
+/* ---- batched transfers (the gateware's SWD queue) ------------------------ */
+
+void swd_ll_set_wait_retry(uint16_t retries) { s_wait_retry = retries; }
+
+void swd_ll_set_clock(uint32_t hz) {
+    const uint32_t clk = FPGA_HFOSC_HZ;          /* 24 MHz */
+    uint32_t half = hz ? (clk + 2u * hz - 1u) / (2u * hz) : 63u;
+    if (half < 2u) half = 2u;
+    if (half > 63u) half = 63u;
+    s_half = (unsigned)half;
+    s_qcfg_dirty = true;
+}
+
+bool swd_ll_batch_supported(void) {
+    return signal_engine_fpga_version() >= SWD_QUEUE_MIN_GW && s_turnaround == 1 && !s_data_phase;
+}
+
+/* The 8-bit SWD request packet: start, APnDP, RnW, A2, A3, parity, stop, park (LSB first). */
+static uint8_t swd_packet(uint8_t req) {
+    uint8_t r = req & 0x0Fu;
+    uint8_t par = (uint8_t)((r ^ (r >> 1) ^ (r >> 2) ^ (r >> 3)) & 1u);
+    return (uint8_t)(0x81u | (r << 1) | (par << 5));
+}
+
+size_t swd_ll_batch(const swd_op_t *ops, size_t n, uint32_t *rdata, uint8_t *ack) {
+    static uint8_t q[SWDQ_BYTES_MAX];
+    static uint8_t rb[4u * SWDQ_READS_MAX];
+    size_t   i = 0, rd = 0;
+    uint16_t waits = 0;
+    *ack = SWD_ACK_OK;
+
+    if (s_qcfg_dirty) {
+        if (fpga_swdq_config(s_half, s_idle) != 0) { *ack = SWD_ACK_NO_ACK; return 0; }
+        s_qcfg_dirty = false;
+    }
+    while (i < n) {
+        size_t qlen = 0, nops = 0, nrd = 0;
+        while (i + nops < n && nops < 255u) {
+            const swd_op_t *o = &ops[i + nops];
+            bool r = (o->req & SWD_REQ_RnW) != 0;
+            if (qlen + (r ? 1u : 5u) > sizeof(q) || (r && nrd >= SWDQ_READS_MAX)) break;
+            q[qlen++] = swd_packet(o->req);
+            if (r) nrd++;
+            else {
+                q[qlen++] = (uint8_t)o->data;         q[qlen++] = (uint8_t)(o->data >> 8);
+                q[qlen++] = (uint8_t)(o->data >> 16); q[qlen++] = (uint8_t)(o->data >> 24);
+            }
+            nops++;
+        }
+        uint8_t done = 0, flags = 0;
+        if (fpga_swdq_run(q, qlen, &done, &flags) != 0) { *ack = SWD_ACK_NO_ACK; return i; }
+        if (done > nops) done = (uint8_t)nops;
+        size_t rdone = 0;
+        for (size_t k = 0; k < done; k++) if (ops[i + k].req & SWD_REQ_RnW) rdone++;
+        bool perr = (flags & SWDQ_FLAG_PERR) != 0 && done < nops;
+        size_t rget = rdone + (perr ? 1u : 0u);    /* a parity-failed read still stored its word */
+        if (rget) {
+            if (fpga_swdq_read(rb, 4u * rget) != 0) { *ack = SWD_ACK_NO_ACK; return i; }
+            for (size_t k = 0; k < rget; k++)
+                rdata[rd + k] = (uint32_t)rb[4*k] | ((uint32_t)rb[4*k+1] << 8) |
+                                ((uint32_t)rb[4*k+2] << 16) | ((uint32_t)rb[4*k+3] << 24);
+        }
+        rd += rdone;
+        i  += done;
+        if (done) waits = 0;
+        if (done == nops) continue;
+        if (perr) { *ack = SWD_ACK_OK | SWD_ACK_PERR; return i; }
+        uint8_t a = (uint8_t)((flags >> 2) & 7u);
+        if (a == SWD_ACK_WAIT && waits++ < s_wait_retry) continue;   /* queue the rest again */
+        *ack = a;
+        return i;
+    }
+    return n;
 }
 
 /* nRESET is the pod's dedicated /NRST_CONTROL pin (PF4 -> 330 R -> J1 pin 22),

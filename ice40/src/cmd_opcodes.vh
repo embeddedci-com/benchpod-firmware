@@ -36,6 +36,9 @@
     localparam OP_SWD_DISARM         = 8'h53;
     localparam OP_SPI_ARM            = 8'h55;
     localparam OP_SPI_CS             = 8'h56;
+    localparam OP_SWD_QFEED          = 8'h58;
+    localparam OP_SWD_QCONFIG        = 8'h59;
+    localparam OP_SWD_QSTATUS        = 8'h5A;
     localparam OP_SPI_STATUS         = 8'h57;
     localparam OP_I2C_CONFIG         = 8'h60;
     localparam OP_I2C_DISABLE        = 8'h61;

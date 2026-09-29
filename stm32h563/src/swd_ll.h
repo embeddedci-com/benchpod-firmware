@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /* CMSIS-DAP transfer ACK codes, returned by swd_ll_transfer().  SWD_ACK_PERR is
  * OR-ed into an otherwise-OK ack when the read data parity check fails. */
@@ -60,3 +61,23 @@ void swd_ll_seq_out(const uint8_t *data, uint32_t nbits);
 /* Clock in `nbits`, SWDIO released, packing samples LSB-first into `data`
  * (ceil(nbits/8) bytes written).  nbits <= 256. */
 void swd_ll_seq_in(uint8_t *data, uint32_t nbits);
+
+/* ---- batched transfers in the gateware (v45+ SWD queue) ------------------------------------
+ * swd_ll_transfer() bit-bangs one transfer over the FPGA link: ~140 link bytes and ~0.65 ms per
+ * 32-bit write.  A batch queues whole transfers (1 byte per read, 5 per write) and the fabric
+ * runs them at SWCLK speed, stopping at the first ACK other than OK. */
+typedef struct {
+    uint8_t  req;     /* SWD_REQ_* bits */
+    uint32_t data;    /* the value, for a write */
+} swd_op_t;
+
+/* True when swd_ll_batch() can run: gateware with the queue, turnaround 1, no data phase. */
+bool   swd_ll_batch_supported(void);
+/* Run ops[0..n) in order; each read's value goes to rdata[] in order.  WAIT is retried (up to
+ * the wait-retry count per transfer, like swd_ll_transfer's callers do).  Returns the number of
+ * ops completed; *ack is SWD_ACK_OK when all were, else the stopping op's ACK
+ * (SWD_ACK_OK | SWD_ACK_PERR for a read parity error, whose value is then in rdata too). */
+size_t swd_ll_batch(const swd_op_t *ops, size_t n, uint32_t *rdata, uint8_t *ack);
+void   swd_ll_set_wait_retry(uint16_t retries);
+/* SWCLK for batches (DAP_SWJ_Clock): 24 MHz / (2 * half), half 2..63, never faster than hz. */
+void   swd_ll_set_clock(uint32_t hz);

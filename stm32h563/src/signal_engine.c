@@ -2417,6 +2417,54 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
     return i;
 }
 
+/* ---- SWD transfer queue (gateware >= v45) -------------------------------- */
+
+#define SWDQ_IDLE_TIMEOUT_US  250000u   /* 512 bytes of writes at the slowest SWCLK: ~30 ms */
+
+int fpga_swdq_config(unsigned half, unsigned idle_cycles) {
+    if (!swd_armed_local || s_fpga_version < SWD_QUEUE_MIN_GW) return -1;
+    if (half < 2u) half = 2u;
+    if (half > 63u) half = 63u;
+    if (idle_cycles > 31u) idle_cycles = 31u;
+    uint8_t args[2] = { (uint8_t)half, (uint8_t)idle_cycles };
+    spi_cmd_write(CMD_SWD_QCONFIG, args, sizeof(args));
+    return 0;
+}
+
+int fpga_swdq_run(const uint8_t *q, size_t len, uint8_t *done, uint8_t *flags) {
+    if (!swd_armed_local || !q || len == 0 || len > SWDQ_BYTES_MAX) return -1;
+    swd_deadline = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    uint8_t hdr[3] = { CMD_SWD_QFEED, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, q, len);
+    cs_deselect();
+
+    absolute_time_t deadline = make_timeout_time_us(SWDQ_IDLE_TIMEOUT_US);
+    uint8_t st[2];
+    for (;;) {
+        st[0] = st[1] = 0xFF;
+        spi_cmd_read(CMD_SWD_QSTATUS, NULL, 0, st, 2);
+        if (st[1] & 0xC0) return -2;             /* bits 7:6 are 0: MISO stuck high */
+        if (!(st[1] & SWDQ_FLAG_BUSY)) break;
+        if (time_reached(deadline)) return -2;
+    }
+    *done  = st[0];
+    *flags = st[1];
+    return 0;
+}
+
+int fpga_swdq_read(uint8_t *buf, size_t n) {
+    if (!buf || n == 0 || n > 4u * SWDQ_READS_MAX) return -1;
+    /* SWD_READ repeats reply byte 0: read one more and drop it (see fpga_spi_xfer). */
+    static uint8_t tmp[4u * SWDQ_READS_MAX + 1u];
+    size_t want = n + 1;
+    uint8_t args[2] = { (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    spi_cmd_read(CMD_SWD_READ, args, sizeof(args), tmp, want);
+    memcpy(buf, tmp + 1, n);
+    return 0;
+}
+
 /* ===========================================================================
  * SPI master — the SWD engine's second job (gateware >= v44).
  *

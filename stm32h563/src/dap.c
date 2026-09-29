@@ -49,6 +49,22 @@ static uint32_t s_match_mask;
 static uint16_t s_packet_size  = DAP_PACKET_DEFAULT;
 static uint8_t  s_packet_count = 1;
 
+/* batching state (see the batching section below) */
+#define REC_MAX 128u
+static swd_op_t  s_ops[REC_MAX];
+static uint8_t  *s_dst[REC_MAX];     /* where a read's value goes (NULL: discarded) */
+static uint16_t  s_cnt_at[REC_MAX];  /* the command's transfer count when the op was issued */
+static uint8_t  *s_rp_at[REC_MAX];   /* ... and its response write position */
+static uint32_t  s_rdata[REC_MAX];
+static size_t    s_rec_n;
+static bool      s_recording;
+static uint16_t  s_cur_cnt;          /* kept current by the transfer loops */
+static uint8_t  *s_cur_rp;
+static bool      s_failed;
+static uint16_t  s_fail_cnt;
+static uint8_t  *s_fail_rp;
+static uint8_t   s_fail_ack;
+
 void dap_configure(unsigned packet_size, unsigned packet_count) {
     if (packet_size < 64u) packet_size = 64u;
     if (packet_size > DAP_PACKET_SIZE) packet_size = DAP_PACKET_SIZE;
@@ -67,6 +83,10 @@ void dap_reset(void) {
     s_packet_count = 1;
     swd_ll_reset();
     swd_ll_set_idle(0);
+    swd_ll_set_wait_retry(100);
+    s_recording = false;
+    s_rec_n     = 0;
+    s_failed    = false;
 }
 
 /* ---- little-endian helpers ----------------------------------------------- */
@@ -74,18 +94,86 @@ static uint32_t get_le32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
-static void put_le32(uint8_t *p, uint32_t v) {
+static void put_le32_(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)(v); p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 
+/* ---- batching ----------------------------------------------------------------------------
+ * With the gateware's SWD queue (swd_ll_batch), DAP_Transfer and DAP_TransferBlock RECORD their
+ * transfers instead of running each one: xfer() appends an op and answers OK, store() notes
+ * where a read's value goes.  The ops run as one batch when the list fills and when the command
+ * ends, and the values are written into the response afterwards.  Each op also remembers the
+ * command's transfer count and response position when it was issued, so a batch that stops at
+ * op k (FAULT, WAIT retries used up, no ACK, parity) yields exactly the response the one-by-one
+ * loop gives when it breaks there.  A DAP_Transfer with a match-value read branches on read
+ * data, so it keeps the one-by-one path. */
+
+static uint8_t rec_flush(void) {
+    if (s_failed) return s_fail_ack;
+    if (s_rec_n == 0) return SWD_ACK_OK;
+    uint8_t ack = SWD_ACK_OK;
+    size_t done = swd_ll_batch(s_ops, s_rec_n, s_rdata, &ack);
+    size_t r = 0;
+    for (size_t i = 0; i < done; i++)
+        if (s_ops[i].req & SWD_REQ_RnW) { if (s_dst[i]) put_le32_(s_dst[i], s_rdata[r]); r++; }
+    if (done < s_rec_n) {
+        s_failed   = true;
+        s_fail_cnt = s_cnt_at[done];
+        s_fail_rp  = s_rp_at[done];
+        s_fail_ack = ack;
+    }
+    s_rec_n = 0;
+    return s_failed ? s_fail_ack : SWD_ACK_OK;
+}
+
+static void rec_begin(void) { s_recording = true; s_rec_n = 0; s_failed = false; }
+
+/* Run what is left; true when the batch stopped early (the caller then answers with
+   s_fail_cnt / s_fail_ack / s_fail_rp). */
+static bool rec_end(void) {
+    rec_flush();
+    s_recording = false;
+    return s_failed;
+}
+
+/* A read's value into the response (one-by-one), or a note of where it goes (recording). */
+static void store(uint8_t *rp, uint32_t v) {
+    if (s_recording) { if (s_rec_n) s_dst[s_rec_n - 1] = rp; s_cur_rp = rp + 4; }
+    else put_le32_(rp, v);
+}
+
 /* One transfer with WAIT-retry (DAP_TransferConfigure wait-retry count). */
 static uint8_t xfer(uint8_t request, uint32_t *data) {
+    if (s_recording) {
+        if (s_failed) return s_fail_ack;
+        if (s_rec_n == REC_MAX && rec_flush() != SWD_ACK_OK) return s_fail_ack;
+        s_ops[s_rec_n].req  = request & 0x0Fu;
+        s_ops[s_rec_n].data = (data && !(request & SWD_REQ_RnW)) ? *data : 0;
+        s_dst[s_rec_n]    = NULL;
+        s_cnt_at[s_rec_n] = s_cur_cnt;
+        s_rp_at[s_rec_n]  = s_cur_rp;
+        s_rec_n++;
+        if (data && (request & SWD_REQ_RnW)) *data = 0;   /* filled in after the batch */
+        return SWD_ACK_OK;
+    }
     uint16_t retry = s_wait_retry;
     uint8_t  ack;
     do { ack = swd_ll_transfer(request, data); }
     while (ack == SWD_ACK_WAIT && retry--);
     return ack;
+}
+
+/* Does this DAP_Transfer contain a match-value read?  (Its loop branches on read data.) */
+static bool has_match_read(const uint8_t *req, size_t req_len) {
+    const uint8_t *p = req + 2, *end = req + req_len;
+    uint8_t count = (p < end) ? *p++ : 0;
+    for (; count > 0 && p < end; count--) {
+        uint8_t r = *p++;
+        if ((r & SWD_REQ_RnW) && (r & XFER_MATCH_VALUE)) return true;
+        if (!(r & SWD_REQ_RnW) || (r & XFER_MATCH_VALUE)) p += 4;
+    }
+    return false;
 }
 
 /* ---- DAP_Transfer -------------------------------------------------------- */
@@ -107,6 +195,7 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
            final posted-read flush after the loop.  A host that asks for more reads than the
            advertised packet size holds gets a short count, not a buffer overrun. */
         if (rp + 12 > resp + DAP_PACKET_SIZE) break;
+        s_cur_cnt = xfer_count; s_cur_rp = rp;
         uint8_t request = *p++;
 
         if (request & SWD_REQ_RnW) {                 /* ---- read ---- */
@@ -120,7 +209,7 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
                     if (ack != SWD_ACK_OK) break;
                     post_read = false;
                 }
-                put_le32(rp, data); rp += 4;
+                store(rp, data); rp += 4;
             }
             if (request & XFER_MATCH_VALUE) {
                 if (p + 4 > end) break;
@@ -145,13 +234,13 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
             } else {
                 ack = xfer(request, &data);          /* DP read: immediate */
                 if (ack != SWD_ACK_OK) break;
-                put_le32(rp, data); rp += 4;
+                store(rp, data); rp += 4;
             }
         } else {                                     /* ---- write ---- */
             if (post_read) {
                 ack = xfer(DP_RDBUFF_READ, &data);
                 if (ack != SWD_ACK_OK) break;
-                put_le32(rp, data); rp += 4;
+                store(rp, data); rp += 4;
                 post_read = false;
             }
             if (p + 4 > end) break;
@@ -167,11 +256,13 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
     }
 
     /* flush a trailing posted read (data only — its transfer was already counted) */
+    s_cur_cnt = xfer_count; s_cur_rp = rp;
     if (post_read && ack == SWD_ACK_OK) {
         ack = xfer(DP_RDBUFF_READ, &data);
-        if (ack == SWD_ACK_OK) { put_le32(rp, data); rp += 4; }
+        if (ack == SWD_ACK_OK) { store(rp, data); rp += 4; }
     }
 
+    if (s_recording && rec_end()) { xfer_count = (uint8_t)s_fail_cnt; ack = s_fail_ack; rp = s_fail_rp; }
     resp[1] = xfer_count;
     resp[2] = ack;
     return (size_t)(rp - resp);
@@ -196,6 +287,7 @@ static size_t do_transfer_block(const uint8_t *req, size_t req_len, uint8_t *res
     if (request & SWD_REQ_RnW) {                          /* block read */
         /* Never more words than the response holds (the count is the host's). */
         if (count > (DAP_PACKET_SIZE - 4u) / 4u) count = (DAP_PACKET_SIZE - 4u) / 4u;
+        s_cur_cnt = 0; s_cur_rp = rp;
         if (request & SWD_REQ_APnDP) {
             ack = xfer(request, NULL);                    /* prime posted read */
             if (ack != SWD_ACK_OK) goto done;
@@ -204,15 +296,17 @@ static size_t do_transfer_block(const uint8_t *req, size_t req_len, uint8_t *res
             uint8_t rq = request;
             if ((request & SWD_REQ_APnDP) && count == 1)
                 rq = DP_RDBUFF_READ;                      /* last: flush via RDBUFF */
+            s_cur_cnt = done; s_cur_rp = rp;
             ack = xfer(rq, &data);
             if (ack != SWD_ACK_OK) goto done;
-            put_le32(rp, data); rp += 4; done++;
+            store(rp, data); rp += 4; done++;
             count--;
         }
     } else {                                              /* block write */
         while (count > 0) {
             if (p + 4 > end) break;
             uint32_t value = get_le32(p); p += 4;
+            s_cur_cnt = done; s_cur_rp = rp;
             ack = xfer(request, &value);
             if (ack != SWD_ACK_OK) goto done;
             done++;
@@ -220,6 +314,7 @@ static size_t do_transfer_block(const uint8_t *req, size_t req_len, uint8_t *res
         }
     }
 done:
+    if (s_recording && rec_end()) { done = s_fail_cnt; ack = s_fail_ack; rp = s_fail_rp; }
     resp[1] = (uint8_t)(done & 0xFF);
     resp[2] = (uint8_t)(done >> 8);
     resp[3] = ack;
@@ -309,6 +404,7 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             if (req_len >= 6) {
                 s_idle_cycles = req[1];
                 s_wait_retry  = (uint16_t)(req[2] | (req[3] << 8));
+                swd_ll_set_wait_retry(s_wait_retry);
                 s_match_retry = (uint16_t)(req[4] | (req[5] << 8));
                 swd_ll_set_idle(s_idle_cycles);
             }
@@ -316,9 +412,11 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             return 2;
 
         case ID_DAP_Transfer:
+            if (swd_ll_batch_supported() && !has_match_read(req, req_len)) rec_begin();
             return do_transfer(req, req_len, resp);
 
         case ID_DAP_TransferBlock:
+            if (swd_ll_batch_supported()) rec_begin();
             return do_transfer_block(req, req_len, resp);
 
         case ID_DAP_WriteABORT: {
@@ -349,7 +447,8 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             return 2;
         }
 
-        case ID_DAP_SWJ_Clock:                   /* rate is SPI-bound; accept */
+        case ID_DAP_SWJ_Clock:                   /* req[1..4] = Hz: the batch SWCLK */
+            if (req_len >= 5) swd_ll_set_clock(get_le32(req + 1));
             resp[1] = DAP_OK;
             return 2;
 

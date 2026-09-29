@@ -20,6 +20,10 @@ extern uint32_t mock_swd_ll_dp_value;       /* value for plain DP reads */
 extern uint32_t mock_swd_ll_ap_seq[64];     /* values an AP "produces" in order */
 extern int      mock_swd_ll_ap_seq_len;
 extern int      mock_swd_ll_wait_before_ok; /* WAIT this many times, then ack */
+extern bool     mock_swd_ll_batch;          /* swd_ll_batch_supported() answer */
+extern int      mock_swd_ll_batch_calls;
+extern int      mock_swd_ll_fail_at;        /* the xfer call (1-based) that answers mock_swd_ll_fail_ack; 0 = none */
+extern uint8_t  mock_swd_ll_fail_ack;
 
 /* Captured outputs */
 extern uint32_t mock_swd_ll_writes[256];
