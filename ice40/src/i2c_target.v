@@ -158,9 +158,8 @@ module i2c_target #(
     // ---- FSM ----
     localparam S_IDLE      = 3'd0;
     localparam S_ADDR      = 3'd1;
-    localparam S_ADDR_ACK  = 3'd2;  // slave drives ACK for matched address
+    localparam S_ACK       = 3'd2;  // slave drives ACK (matched address or received byte)
     localparam S_WRITE     = 3'd3;  // receive a data byte from the DUT
-    localparam S_WRITE_ACK = 3'd4;  // slave drives ACK for received byte
     localparam S_READ      = 3'd5;  // transmit a data byte to the DUT
     localparam S_READ_ACK  = 3'd6;  // sample master ACK/NACK after a sent byte
     localparam S_IGNORE    = 3'd7;  // not addressed / NACKed — wait for (re)START/STOP
@@ -246,8 +245,6 @@ module i2c_target #(
                 // (re)START — begin a new address phase, keep reg_ptr.
                 state         <= S_ADDR;
                 bit_cnt       <= 3'd0;
-                ack_step      <= 1'b0;
-                rd_first      <= 1'b0;
                 sda_drive_low <= 1'b0;
             end else if (stop_cond) begin
                 state         <= S_IDLE;
@@ -255,28 +252,29 @@ module i2c_target #(
                 sda_drive_low <= 1'b0;
                 xfer_count    <= xfer_count + 16'd1;
             end else begin
+                // bit_cnt counts every bit of a byte and wraps 7 -> 0 by itself, so
+                // it is 0 whenever an ACK phase or a new byte starts.
                 case (state)
                     // ---- address byte ----
                     S_ADDR: begin
                         if (scl_rise) begin
-                            sr <= addr_full;
+                            sr      <= addr_full;
+                            bit_cnt <= bit_cnt + 3'd1;
                             if (bit_cnt == 3'd7) begin
                                 if (sr[6:0] == addr7) begin
                                     rw       <= sda_now;   // bit0 = R/W
                                     ack_step <= 1'b0;
-                                    state    <= S_ADDR_ACK;
+                                    state    <= S_ACK;
                                 end else begin
                                     state <= S_IGNORE;     // not us
                                 end
-                                bit_cnt <= 3'd0;
-                            end else begin
-                                bit_cnt <= bit_cnt + 3'd1;
                             end
                         end
                     end
 
-                    // ---- ACK the matched address; then branch read/write ----
-                    S_ADDR_ACK: begin
+                    // ---- ACK the matched address or a written byte; then read or
+                    //      receive the next byte (rw is 0 in a write transfer) ----
+                    S_ACK: begin
                         if (scl_fall) begin
                             if (!ack_step) begin
                                 sda_drive_low <= 1'b1;     // assert ACK (low)
@@ -292,7 +290,6 @@ module i2c_target #(
                                     state         <= S_READ;
                                 end else begin
                                     sda_drive_low <= 1'b0; // release for RX
-                                    bit_cnt       <= 3'd0;
                                     state         <= S_WRITE;
                                 end
                             end
@@ -302,7 +299,8 @@ module i2c_target #(
                     // ---- receive a data byte (write transaction) ----
                     S_WRITE: begin
                         if (scl_rise) begin
-                            sr <= addr_full;
+                            sr      <= addr_full;
+                            bit_cnt <= bit_cnt + 3'd1;
                             if (bit_cnt == 3'd7) begin
                                 if (!ptr_loaded) begin
                                     reg_ptr    <= addr_full;
@@ -318,24 +316,7 @@ module i2c_target #(
                                     reg_ptr      <= reg_ptr + 8'd1;
                                 end
                                 ack_step <= 1'b0;
-                                state    <= S_WRITE_ACK;
-                                bit_cnt  <= 3'd0;
-                            end else begin
-                                bit_cnt <= bit_cnt + 3'd1;
-                            end
-                        end
-                    end
-
-                    S_WRITE_ACK: begin
-                        if (scl_fall) begin
-                            if (!ack_step) begin
-                                sda_drive_low <= 1'b1; // assert ACK
-                                ack_step      <= 1'b1;
-                            end else begin
-                                sda_drive_low <= 1'b0; // release
-                                ack_step      <= 1'b0;
-                                bit_cnt       <= 3'd0;
-                                state         <= S_WRITE;
+                                state    <= S_ACK;
                             end
                         end
                     end
@@ -343,10 +324,10 @@ module i2c_target #(
                     // ---- transmit a data byte (read transaction) ----
                     S_READ: begin
                         if (scl_fall) begin
+                            bit_cnt <= bit_cnt + 3'd1;
                             if (rd_first) begin
                                 sr            <= {rd_byte[6:0], 1'b0};
                                 sda_drive_low <= ~rd_byte[7];
-                                bit_cnt       <= 3'd1;
                                 rd_first      <= 1'b0;
                             end else begin
                                 sda_drive_low <= ~sr[7];
@@ -355,7 +336,6 @@ module i2c_target #(
                                     ack_step <= 1'b0;
                                     state    <= S_READ_ACK;
                                 end
-                                bit_cnt <= bit_cnt + 3'd1;
                             end
                         end
                     end
