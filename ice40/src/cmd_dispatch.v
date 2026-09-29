@@ -448,7 +448,7 @@ module cmd_dispatch #(
                             // registered BRAM/regfile read then presents the next byte);
                             // write streams advance it in their write-strobe cycle, so the
                             // strobe sees the address of the byte it writes.  Streams that
-                            // never address (COLLECT, SWD_FEED, UART) leave it alone.
+                            // never address (COLLECT, SWD_FEED, UART, status blocks) leave it alone.
     reg [15:0] arg_rem;     // bytes still to process (= payload length - arg_count).
                             // Down-counter loaded with the payload length at each
                             // payload entry and decremented in lockstep with arg_count
@@ -530,32 +530,33 @@ module cmd_dispatch #(
     //   arg_count + 1 <  arg_len   <=>   arg_rem >  1   (= !last_byte)
     wire last_byte = (arg_rem <= 16'd1);
 
-    // I2C status block: byte at a given index (combinational, no BRAM latency).
-    function [7:0] i2c_status_byte;
-        input [2:0] idx;
+    // Status blocks (combinational, no BRAM latency).  Byte 0 goes out from S_IDLE; each later
+    // beat presents the NEXT byte, picked by the down-counter (arg_rem = LEN - index of the byte
+    // being clocked, so the next index is LEN + 1 - arg_rem) instead of arg_count + 1.
+    // I2C (LEN 7): armed, xfer_lo, xfer_hi, wr_lo, wr_hi, last_wr_addr, last_wr_val.
+    function [7:0] i2c_status_next;
+        input [2:0] rem;
         begin
-            case (idx)
-                3'd0:    i2c_status_byte = {7'b0, i2c_armed};
-                3'd1:    i2c_status_byte = i2c_xfer_count[7:0];
-                3'd2:    i2c_status_byte = i2c_xfer_count[15:8];
-                3'd3:    i2c_status_byte = i2c_wr_count[7:0];
-                3'd4:    i2c_status_byte = i2c_wr_count[15:8];
-                3'd5:    i2c_status_byte = i2c_last_wr_addr;
-                default: i2c_status_byte = i2c_last_wr_val;
+            case (rem)
+                3'd7:    i2c_status_next = i2c_xfer_count[7:0];     // byte 1
+                3'd6:    i2c_status_next = i2c_xfer_count[15:8];    // byte 2
+                3'd5:    i2c_status_next = i2c_wr_count[7:0];       // byte 3
+                3'd4:    i2c_status_next = i2c_wr_count[15:8];      // byte 4
+                3'd3:    i2c_status_next = i2c_last_wr_addr;        // byte 5
+                default: i2c_status_next = i2c_last_wr_val;         // byte 6 (rem 2)
             endcase
         end
     endfunction
 
-    // UART status block: rx_avail(2) + flags.  flags bit0=tx_full, bit1=tx_empty,
-    // bit2=rx_overflow, bit3=armed.
-    function [7:0] uart_status_byte;
-        input [1:0] idx;
+    // UART (LEN 3): rx_avail(2) + flags.  flags bit0=tx_full, bit1=tx_empty, bit2=rx_overflow,
+    // bit3=armed.
+    function [7:0] uart_status_next;
+        input [1:0] rem;
         begin
-            case (idx)
-                2'd0:    uart_status_byte = uart_rx_avail[7:0];
-                2'd1:    uart_status_byte = {7'b0, uart_rx_avail[8]};
-                default: uart_status_byte = {4'b0, uart_armed, uart_rx_overflow,
-                                             uart_tx_empty, uart_tx_full};
+            case (rem)
+                2'd3:    uart_status_next = {7'b0, uart_rx_avail[8]};   // byte 1
+                default: uart_status_next = {4'b0, uart_armed, uart_rx_overflow,
+                                             uart_tx_empty, uart_tx_full};   // byte 2 (rem 2)
             endcase
         end
     endfunction
@@ -802,7 +803,7 @@ module cmd_dispatch #(
                             OP_I2C_READ_REGS: state <= S_REG_ADDR;
                             OP_I2C_STATUS: begin
                                 arg_rem   <= I2C_STATUS_LEN;
-                                tx_byte   <= i2c_status_byte(3'd0);
+                                tx_byte   <= {7'b0, i2c_armed};         // byte 0
                                 state     <= S_I2C_STATUS;
                             end
                             // (OP_I2C_LA_START 0x65 / OP_I2C_LA_READ 0x66 removed in v24 —
@@ -818,7 +819,7 @@ module cmd_dispatch #(
                             OP_UART_READ:    state <= S_READ_LEN0;
                             OP_UART_STATUS: begin
                                 arg_rem         <= UART_STATUS_LEN;
-                                tx_byte         <= uart_status_byte(2'd0);
+                                tx_byte         <= uart_rx_avail[7:0];   // byte 0
                                 uart_rx_ovf_clr <= 1'b1;   // status read clears sticky overflow
                                 state           <= S_UART_STATUS;
                             end
@@ -1077,8 +1078,7 @@ module cmd_dispatch #(
 
                     S_I2C_STATUS: begin
                         if (!last_byte) begin
-                            tx_byte   <= i2c_status_byte(arg_count[2:0] + 3'd1);
-                            arg_count <= arg_count + 12'd1;
+                            tx_byte   <= i2c_status_next(arg_rem[2:0]);
                             arg_rem   <= arg_rem   - 16'd1;
                         end else begin
                             state <= S_DONE;
@@ -1116,8 +1116,7 @@ module cmd_dispatch #(
 
                     S_UART_STATUS: begin
                         if (!last_byte) begin
-                            tx_byte   <= uart_status_byte(arg_count[1:0] + 2'd1);
-                            arg_count <= arg_count + 12'd1;
+                            tx_byte   <= uart_status_next(arg_rem[1:0]);
                             arg_rem   <= arg_rem   - 16'd1;
                         end else begin
                             state <= S_DONE;
