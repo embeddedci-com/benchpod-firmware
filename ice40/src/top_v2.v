@@ -705,7 +705,7 @@ module top (
     //     BRAM, shifted out MSB first at 24 MHz / (2 * half), half 2..63; SWD_READ returns the
     //     bytes clocked in.  Modes 0 and 3.  SWD_DISARM ends either job.  tb_top_spi drives a
     //     flash model through the whole top (ID, program, erase, read; both modes; re-arm; SWD).
-    // Loop 3914 -> 4108 LC (77%), deep 3568 -> 3787 (71%), +1 BRAM.  SEED_LOOP 51, SEED_DEEP 54.
+    // Loop 3914 -> 4108 LC (77%), deep 3568 -> 3787 (71%), +1 BRAM.  SEED_LOOP 58, SEED_DEEP 6.
     // GATEWARE_VERSION 43 = v42 + two stability fixes from the 2026-09 review:
     //   * psram_dual_writer honours bus_own: no burst starts, and nothing is popped, while the
     //     STM32 owns the bus; a burst it cuts is closed and raises the sticky capture-overflow

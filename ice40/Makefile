@@ -341,11 +341,12 @@ $(OUT).bin: $(OUT).asc
 # v44 (2026-09-28) SPI MASTER in swd_engine (+~200 LC: 4108 LC, 78%).  Local sweep 1..64: 33/64
 # reach MIN_CLK48_MHZ (24 slow, 7 fail at 48 MHz).  The binding path on the failing seeds is the
 # untouched clk48 dac8551_engine div_cnt chain spread across the die, i.e. fill, not new logic.
-# Pinned SEED_LOOP 31 -> 51 (clk48 54.64, clk 32.42, clk -> clk48 11.86 ns).  NOT yet swept in
-# CI's toolchain (the ice40-seed-sweep workflow); do that before PNR_STRICT CI runs on v44.
-SEED_LOOP ?= 51
-# Ordered by local clk48 (v44 local sweep; the CI sweep will reorder them).
-SEED_LOOP_FALLBACK ?= 56 58 55 9 59 32 12 63 6 22 60 24 5 2 42 19 1 52 62 48
+# CI sweep (OSS CAD Suite): 45/64.  51, the best local seed, misses 48 MHz in CI (47.50), so
+# pinned SEED_LOOP 31 -> 58, good in both (clk48 52.96 local / 52.59 CI, clk -> clk48 11.17 /
+# 11.86 ns).
+SEED_LOOP ?= 58
+# Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
+SEED_LOOP_FALLBACK ?= 12 32 5 62 10 56 19 50 9 48 38 36 1 63 61 6 4 33
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -409,14 +410,13 @@ SEED_LOOP_FALLBACK ?= 56 58 55 9 59 32 12 63 6 22 60 24 5 2 42 19 1 52 62 48
 # 53.73 CI, clk -> clk48 12.76 ns).  RE-VERIFY deep replay on hardware.
 # v43: swept 1..64 in both toolchains: 60/64 local, 58/64 CI.  Pinned SEED_DEEP 34 -> 7 (clk48
 # 55.27 local / 54.04 CI, clk -> clk48 13.11 / 12.72 ns).  RE-VERIFY deep replay on hardware.
-# v44 (SPI master, 3787 LC, 71%): local sweep 1..64: 60/64 reach MIN_CLK48_MHZ.  Pinned SEED_DEEP
-# 7 -> 54 (clk48 55.35, clk 35.99, clk -> clk48 12.72 ns).  CI sweep still to do; RE-VERIFY deep
-# replay on hardware.
-SEED_DEEP ?= 54
-# Ordered by local clk48 (v44 local sweep; the CI sweep will reorder them).  A timing
+# v44 (SPI master, 3787 LC, 71%): swept 1..64 in both toolchains: 60/64 local, 64/64 CI.  Pinned
+# SEED_DEEP 7 -> 6 (clk48 53.73 local / 51.93 CI, clk -> clk48 <= 12.72 ns in both).
+SEED_DEEP ?= 6
+# Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 8 55 53 46 31 29 28 9 64 60 6 40 36 25 24 58 51 35 11 1
+SEED_DEEP_FALLBACK ?= 49 20 31 52 28 9 53 29 25 8 60 55 46 40 35 1 2 48 56 43
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
