@@ -2618,6 +2618,10 @@ static void handle_dap_start(int conn_id, const char *json) {
     if (!la_claim_or_error(conn_id, LA_FN_SWD_DIO, &dio_pin, 1, 0)) return;
 
     int rc = fpga_swd_arm(swclk, swdio);
+    if (rc == -2 && fpga_spi_armed()) {
+        send_error(conn_id, "swd busy: an SPI session is using the engine ({\"cmd\":\"spi_stop\"})");
+        return;
+    }
     if (rc == -2) { send_error(conn_id, "swd busy"); return; }
     if (rc != 0)  { send_error(conn_id, "invalid swd la channel"); return; }
     la_pins_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, 0, &clk_pin, 1);

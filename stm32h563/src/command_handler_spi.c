@@ -181,8 +181,8 @@ void handle_spi_xfer(int conn_id, const char *json) {
         b64url_decode(b64, tx, sizeof(tx), &n) != 0 || n == 0 || n > SPI_XFER_CMD_MAX) {
         send_error(conn_id, "tx must be 1..768 bytes of base64url"); return;
     }
-    char csm[12] = "release";
-    bp_json_get(json, "cs", csm, sizeof(csm));
+    char csm[12];
+    if (!bp_json_get(json, "cs", csm, sizeof(csm))) strcpy(csm, "release");   /* it clears csm when absent */
     bool hold = strcmp(csm, "hold") == 0;
     if (!hold && strcmp(csm, "release") != 0) { send_error(conn_id, "cs must be release or hold"); return; }
 
