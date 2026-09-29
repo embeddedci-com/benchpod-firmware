@@ -33,7 +33,16 @@ module uart_fifo (
     output wire        full,
     output wire        empty
 );
-    reg [7:0] mem [0:255];
+    // no_rw_check: a read of the slot being written in the same cycle may return
+    // anything instead of the old byte.  Without it yosys emulates read-first with a
+    // delayed write and a bypass (~22 LUTs per FIFO).  Nobody consumes such a read:
+    // a collision needs rptr_next == wptr, i.e. the FIFO is empty (the head is not
+    // valid yet) or a pop hands over the slot being pushed; the head register is
+    // re-read every cycle, so the bad value lives one cycle.  TX loads the head only
+    // in TX_LOAD, one cycle after an IDLE cycle that saw !empty with no pop.  RX's
+    // reader (cmd_dispatch) samples once per SPI byte (>= 16 clks) and pops one
+    // cycle after sampling, so it never samples the cycle after its own pop.
+    (* no_rw_check *) reg [7:0] mem [0:255];
     reg [7:0] wptr, rptr;
     reg [8:0] cnt;
     reg [7:0] rdata_r;
