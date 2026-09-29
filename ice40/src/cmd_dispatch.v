@@ -78,7 +78,7 @@ module cmd_dispatch #(
 
     // Waveform BRAM write port (LOAD_WAVE drives this)
     output reg               wave_we,
-    output reg  [ADDR_W-1:0] wave_waddr,
+    output wire [ADDR_W-1:0] wave_waddr,
     output wire [7:0]        wave_wdata,
 
     // DAC engine control
@@ -212,7 +212,7 @@ module cmd_dispatch #(
     output reg               swd_feed_begin,
     output reg               swd_feed_stb,
     output wire [7:0]        swd_feed_byte,
-    output reg  [REPLY_AW-1:0] swd_rd_addr,
+    output wire [REPLY_AW-1:0] swd_rd_addr,
     input  wire [7:0]        swd_rd_data,
     input  wire              swd_armed,
     input  wire [15:0]       swd_reply_count,
@@ -252,9 +252,9 @@ module cmd_dispatch #(
 
     // ---- emulated I2C sensor: register file (SPI/load+readback port) ----
     output reg               i2c_reg_we,
-    output reg  [7:0]        i2c_reg_waddr,
+    output wire [7:0]        i2c_reg_waddr,
     output wire [7:0]        i2c_reg_wdata,
-    output reg  [7:0]        i2c_reg_raddr,
+    output wire [7:0]        i2c_reg_raddr,
     input  wire [7:0]        i2c_reg_rdata,
 
     // ---- emulated I2C sensor: status ----
@@ -355,11 +355,16 @@ module cmd_dispatch #(
 
     reg [4:0]  state;
     reg [7:0]  current_cmd;
-    reg [11:0] arg_count;   // bytes consumed in current payload phase (addressing).
-                            // 12-bit: the WIDEST address use is the 4 KB wave/LA buffers
-                            // ([ADDR_W-1:0]=12); longer streams (UART up to 64 KB) advance
-                            // it too but never read it as an address, and arg_rem (16-bit)
-                            // is the sole terminal, so a 12-bit wrap is harmless.
+    reg [11:0] arg_count;   // the payload ADDRESS pointer, and itself the address outputs
+                            // (wave_waddr, swd_rd_addr, i2c_reg_waddr/raddr are wires off it).
+                            // Cleared at the opcode; S_REG_ADDR loads it with the register
+                            // file start address.  12-bit: the widest address is the 4 KB
+                            // wave buffer; arg_rem (16-bit) is the sole terminal.
+                            // Read streams advance it on each rx_valid but the last (the
+                            // registered BRAM/regfile read then presents the next byte);
+                            // write streams advance it in their write-strobe cycle, so the
+                            // strobe sees the address of the byte it writes.  Streams that
+                            // never address (COLLECT, SWD_FEED, UART) leave it alone.
     reg [15:0] arg_rem;     // bytes still to process (= payload length - arg_count).
                             // Down-counter loaded with the payload length at each
                             // payload entry and decremented in lockstep with arg_count
@@ -416,6 +421,10 @@ module cmd_dispatch #(
     // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
     // A registered copy was 32 FF-only LCs.
     assign wave_wdata        = rx_byte;
+    assign wave_waddr        = arg_count[ADDR_W-1:0];
+    assign swd_rd_addr       = arg_count[REPLY_AW-1:0];
+    assign i2c_reg_waddr     = arg_count[7:0];
+    assign i2c_reg_raddr     = arg_count[7:0];
     assign swd_feed_byte     = rx_byte;
     assign i2c_reg_wdata     = rx_byte;
     assign uart_tx_wdata     = rx_byte;
@@ -427,7 +436,6 @@ module cmd_dispatch #(
     assign loop_src_cfg      = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6], arg_buf[5][1:0]};
     assign loop_inmap_cfg    = {rx_byte[1:0], arg_buf[8][2:0], arg_buf[7],
                                 arg_buf[6], arg_buf[5], arg_buf[4], arg_buf[3]};
-    reg [7:0]  reg_base;    // I2C_LOAD_REGS/READ_REGS start address
     reg [15:0] adc_dbg_latch;  // ADC_PROBE: sample latched at opcode so both bytes
                                // come from ONE conversion (engine free-runs)
 
@@ -484,7 +492,6 @@ module cmd_dispatch #(
 
             tx_byte     <= 8'h00;
             wave_we     <= 1'b0;
-            wave_waddr  <= {ADDR_W{1'b0}};
 
             dac_start   <= 1'b0;
             dac_stop    <= 1'b0;
@@ -513,17 +520,13 @@ module cmd_dispatch #(
             swd_disarm_stb   <= 1'b0;
             swd_feed_begin   <= 1'b0;
             swd_feed_stb     <= 1'b0;
-            swd_rd_addr      <= {REPLY_AW{1'b0}};
             spi_arm_stb      <= 1'b0;
             spi_cs_stb       <= 1'b0;
             q_cfg_stb        <= 1'b0;
 
-            reg_base          <= 8'h00;
             i2c_cfg_stb       <= 1'b0;
             i2c_disable_stb   <= 1'b0;
             i2c_reg_we        <= 1'b0;
-            i2c_reg_waddr     <= 8'h00;
-            i2c_reg_raddr     <= 8'h00;
             la_cap_start      <= 1'b0;
             la_cap_divider    <= 16'd2;
 
@@ -686,12 +689,9 @@ module cmd_dispatch #(
                             OP_SWD_ARM:    begin arg_rem <= 16'd3; state <= S_COLLECT; end
                             OP_SWD_FEED,
                             OP_SWD_QFEED:  begin swd_feed_begin <= 1'b1; state <= S_READ_LEN0; end
-                            OP_SWD_READ:   begin
-                                // Preload reply BRAM addr 0 (same 1-cycle
-                                // latency trick as READ_CAPTURE).
-                                swd_rd_addr <= {REPLY_AW{1'b0}};
-                                state       <= S_READ_LEN0;
-                            end
+                            // (reply BRAM addr 0 = arg_count, cleared above, is preloaded
+                            //  from here on: same 1-cycle latency trick as READ_CAPTURE)
+                            OP_SWD_READ:   state <= S_READ_LEN0;
                             OP_SWD_DISARM: begin swd_disarm_stb <= 1'b1; state <= S_DONE; end
 
                             // ---- SPI master (v44) ----
@@ -749,7 +749,7 @@ module cmd_dispatch #(
                     end
 
                     S_READ_LEN1: begin
-                        arg_count     <= 16'd0;
+                        // arg_count: still 0 from S_IDLE, or the I2C start address.
                         // Full 16-bit length is the byte just received (hi) with
                         // the low byte latched in S_READ_LEN0.  Loading arg_rem
                         // here covers every length-prefixed streaming state.
@@ -759,29 +759,25 @@ module cmd_dispatch #(
                         // their first BRAM/FIFO byte here to hide the 1-cycle read
                         // latency before the streaming state shifts it out.
                         case (current_cmd)
-                            OP_LOAD_WAVE: begin
-                                wave_waddr <= {ADDR_W{1'b0}};
-                                state      <= S_LOAD_DATA;
-                            end
+                            OP_LOAD_WAVE: state <= S_LOAD_DATA;
                             OP_SWD_FEED, OP_SWD_QFEED:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_SWD_FEED;
                             OP_SWD_READ:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
-                                    swd_rd_addr <= {REPLY_AW{1'b0}};
                                     tx_byte     <= swd_rd_data;
                                     state       <= S_SWD_READ;
                                 end
-                            // reg_base preset in S_REG_ADDR; write/read port addr is
-                            // reg_base + arg_count in S_REG_LOAD/S_REG_READ.
+                            // arg_count = start address (S_REG_ADDR) is the write/read
+                            // port address in S_REG_LOAD/S_REG_READ.
                             OP_I2C_LOAD_REGS:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_REG_LOAD;
                             OP_I2C_READ_REGS:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
-                                    tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr preset
+                                    tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr = start address
                                     state   <= S_REG_READ;
                                 end
                             OP_UART_WRITE:
@@ -800,10 +796,8 @@ module cmd_dispatch #(
                     end
 
                     S_LOAD_DATA: begin
-                        wave_we    <= 1'b1;
-                        wave_waddr <= arg_count[ADDR_W-1:0];
+                        wave_we    <= 1'b1;         // arg_count advances with it (below)
                         if (last_byte) state <= S_DONE;
-                        arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
 
@@ -955,22 +949,19 @@ module cmd_dispatch #(
                             endcase
                             state <= S_DONE;
                         end
-                        arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
 
                     S_SWD_FEED: begin
                         swd_feed_stb  <= 1'b1;
                         if (last_byte) state <= S_DONE;
-                        arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
 
                     S_SWD_READ: begin
                         // Mirror of the length-prefixed read-back loop for the SWD reply buffer.
                         if (!last_byte) begin
-                            swd_rd_addr <= arg_count[REPLY_AW-1:0] + 1'b1;
-                            tx_byte     <= swd_rd_data;
+                            tx_byte     <= swd_rd_data;   // swd_rd_addr = arg_count + 1 next
                             arg_count   <= arg_count + 12'd1;
                             arg_rem     <= arg_rem   - 16'd1;
                         end else begin
@@ -980,23 +971,19 @@ module cmd_dispatch #(
 
                     // ---- emulated I2C sensor: register file load / read ----
                     S_REG_ADDR: begin
-                        reg_base      <= rx_byte;
-                        i2c_reg_raddr <= rx_byte;   // preload for READ_REGS
+                        arg_count     <= {4'd0, rx_byte};   // start address (+ READ_REGS preload)
                         state         <= S_READ_LEN0;
                     end
 
                     S_REG_LOAD: begin
-                        i2c_reg_we    <= 1'b1;
-                        i2c_reg_waddr <= reg_base + arg_count[7:0];
+                        i2c_reg_we    <= 1'b1;      // arg_count advances with it (below)
                         if (last_byte) state <= S_DONE;
-                        arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
 
                     S_REG_READ: begin
                         if (!last_byte) begin
-                            i2c_reg_raddr <= reg_base + arg_count[7:0] + 8'd1;
-                            tx_byte       <= i2c_reg_rdata;
+                            tx_byte       <= i2c_reg_rdata;   // i2c_reg_raddr = arg_count + 1 next
                             arg_count     <= arg_count + 12'd1;
                             arg_rem       <= arg_rem   - 16'd1;
                         end else begin
@@ -1027,7 +1014,6 @@ module cmd_dispatch #(
                     S_UART_WRITE: begin
                         uart_tx_we    <= 1'b1;
                         if (last_byte) state <= S_DONE;
-                        arg_count <= arg_count + 12'd1;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
 
@@ -1038,7 +1024,6 @@ module cmd_dispatch #(
                         if (!last_byte) begin
                             tx_byte    <= uart_rx_rdata;
                             uart_rx_re <= 1'b1;
-                            arg_count  <= arg_count + 12'd1;
                             arg_rem    <= arg_rem   - 16'd1;
                         end else begin
                             state <= S_DONE;
@@ -1061,6 +1046,10 @@ module cmd_dispatch #(
 
                     default: state <= S_IDLE;
                 endcase
+            end else if (wave_we | i2c_reg_we) begin
+                // Write streams: the strobe cycle wrote the byte at arg_count; step to the
+                // next.  rx_valid is >= 16 clk apart, so this never meets a byte.
+                arg_count <= arg_count + 12'd1;
             end
         end
     end
