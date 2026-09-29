@@ -156,19 +156,18 @@ module tb_top_spi;
     // ------------------------------------------------------------------------
     // Host side: the STM32's link framing (signal_engine.c spi_cmd_write/read).
     // ------------------------------------------------------------------------
-    localparam SPI_HALF = 250;           // 2 MHz link, like the pod's 1.95 MHz
+    localparam SPI_HALF = 20;            // 25 MHz SCK (spi_slave runs on SCK)
+    localparam SPI_GAP  = 240;           // STM32H5 MIDI 6: idle between bytes, rise-to-rise 280 ns
+    localparam CS_IDLE  = 400;           // CSn high between commands
 
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
-            for (b = 7; b >= 0; b = b - 1) begin
-                mosi = tx[b];
-                #(SPI_HALF);
-                sck = 1'b1;
-                rx[b] = miso;
-                #(SPI_HALF);
-                sck = 1'b0;
+            for (b = 7; b >= 0; b = b - 1) begin   // mode 1: launch on rise, sample on fall
+                sck = 1'b1; mosi = tx[b]; #(SPI_HALF);
+                sck = 1'b0; rx[b] = miso;  #(SPI_HALF);
             end
+            #(SPI_GAP);
         end
     endtask
 
@@ -177,7 +176,7 @@ module tb_top_spi;
     reg [7:0] rxb [0:511];
 
     task cs_lo; begin csn = 1'b0; #(SPI_HALF); end endtask
-    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF); end endtask
+    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(CS_IDLE); end endtask
 
     task cmd0(input [7:0] op);
         begin cs_lo; spi_byte(op, junk); cs_hi; end
@@ -318,7 +317,7 @@ module tb_top_spi;
 
     initial begin
         #5000;
-        cmd1(8'h02, r); check(r, 8'd45, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd46, "VERSION");
         cmd1(8'h57, r); check(r, 8'h00, "SPI_STATUS at boot");
         pin(la[5], 1'b0, "CS pad before arm (high-Z)");
 

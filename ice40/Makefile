@@ -699,8 +699,16 @@ ringtest:
 	$(VVP) /tmp/$(PROJECT)_ring.vvp
 	@rm -f /tmp/$(PROJECT)_ring.vvp
 
+# STM32 <-> iCE40 link at full speed (v46 prototype): spi_slave on SCK, 25/15.6/31.25 MHz with
+# the MIDI inter-byte gap, long read-back streams, CSn aborts mid-byte; MIDI 0 as expected failure.
+spilinktest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_spilink.vvp -s tb_top_spilink \
+	         sim/tb_top_spilink.v $(SRC) $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_spilink.vvp
+	@rm -f /tmp/$(PROJECT)_spilink.vvp
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest ringtest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest spitest swdqtest ringtest spilinktest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

@@ -137,18 +137,22 @@ module tb_top_swdq;
     // ------------------------------------------------------------------------
     // Host side (the STM32's link framing)
     // ------------------------------------------------------------------------
-    localparam SPI_HALF = 250;
+    localparam SPI_HALF = 20;            // 25 MHz SCK (spi_slave runs on SCK)
+    localparam SPI_GAP  = 240;           // STM32H5 MIDI 6: idle between bytes, rise-to-rise 280 ns
+    localparam CS_IDLE  = 400;           // CSn high between commands
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
-            for (b = 7; b >= 0; b = b - 1) begin
-                mosi = tx[b]; #(SPI_HALF); sck = 1'b1; rx[b] = miso; #(SPI_HALF); sck = 1'b0;
+            for (b = 7; b >= 0; b = b - 1) begin   // mode 1: launch on rise, sample on fall
+                sck = 1'b1; mosi = tx[b]; #(SPI_HALF);
+                sck = 1'b0; rx[b] = miso;  #(SPI_HALF);
             end
+            #(SPI_GAP);
         end
     endtask
     reg [7:0] junk, r, st_done, st_flags;
     task cs_lo; begin csn = 1'b0; #(SPI_HALF); end endtask
-    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF); end endtask
+    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(CS_IDLE); end endtask
 
     reg [7:0] q [0:511];
     integer   qn;
@@ -200,7 +204,7 @@ module tb_top_swdq;
     initial begin
         qn = 0;
         #5000;
-        cs_lo; spi_byte(8'h02, junk); spi_byte(8'h00, r); cs_hi; check8(r, 8'd45, "VERSION");
+        cs_lo; spi_byte(8'h02, junk); spi_byte(8'h00, r); cs_hi; check8(r, 8'd46, "VERSION");
         // SWD_ARM SWCLK=LA11 SWDIO=LA12, then half 2 (6 MHz at the real clk), 2 idle cycles
         cs_lo; spi_byte(8'h50, junk); spi_byte(8'd10, junk); spi_byte(8'd11, junk); spi_byte(8'hFF, junk); cs_hi;
         cs_lo; spi_byte(8'h59, junk); spi_byte(8'd2, junk); spi_byte(8'd2, junk); cs_hi;

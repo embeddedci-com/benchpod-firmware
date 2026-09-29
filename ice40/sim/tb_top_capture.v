@@ -51,17 +51,19 @@ module tb_top_capture;
         .led_g(led_g), .led_b(led_b), .led_r(led_r)
     );
 
-    localparam SPI_HALF = 200;
+    localparam SPI_HALF = 20;            // 25 MHz SCK (spi_slave runs on SCK)
+    localparam SPI_GAP  = 240;           // STM32H5 MIDI 6: idle between bytes, rise-to-rise 280 ns
+    localparam CS_IDLE  = 400;           // CSn high between commands
     integer errors = 0;
 
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
-            for (b = 7; b >= 0; b = b - 1) begin
-                mosi = tx[b]; #(SPI_HALF);
-                sck = 1'b1; rx[b] = miso; #(SPI_HALF);
-                sck = 1'b0;
+            for (b = 7; b >= 0; b = b - 1) begin   // mode 1: launch on rise, sample on fall
+                sck = 1'b1; mosi = tx[b]; #(SPI_HALF);
+                sck = 1'b0; rx[b] = miso;  #(SPI_HALF);
             end
+            #(SPI_GAP);
         end
     endtask
 
@@ -72,7 +74,7 @@ module tb_top_capture;
             csn = 1'b0; #(SPI_HALF);
             spi_byte(op, junk);
             spi_byte(8'h00, reply);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -84,7 +86,7 @@ module tb_top_capture;
             spi_byte(op, junk);
             spi_byte(8'h00, lo);
             spi_byte(8'h00, hi);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
             reply = {hi, lo};
         end
     endtask
@@ -97,7 +99,7 @@ module tb_top_capture;
             spi_byte(gain[7:0], junk); spi_byte(gain[15:8], junk);
             spi_byte(trip[7:0], junk); spi_byte(trip[15:8], junk);
             spi_byte(flags, junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
     // Loop telemetry through SPI (v39: crossed by cdc_pulse_payload): DAC_PROBE, the input probe,
@@ -118,7 +120,7 @@ module tb_top_capture;
         reg [7:0] junk; begin
             csn = 1'b0; #(SPI_HALF);
             spi_byte(op, junk); spi_byte(a0, junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
     // v16: OP_CAPTURE is a 10-byte payload — adc_cnt(3) + adc_div(2) + la_cnt(3) +
@@ -135,7 +137,7 @@ module tb_top_capture;
             spi_byte(adc_div[7:0], junk); spi_byte(adc_div[15:8], junk);
             spi_byte(la_cnt[7:0],  junk); spi_byte(la_cnt[15:8],  junk); spi_byte(la_cnt[23:16], junk);
             spi_byte(la_div[7:0],  junk); spi_byte(la_div[15:8],  junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -147,7 +149,7 @@ module tb_top_capture;
             spi_byte(8'h11, junk);
             spi_byte(period[7:0],  junk); spi_byte(period[15:8],  junk);
             spi_byte(divider[7:0], junk); spi_byte(divider[15:8], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -160,7 +162,7 @@ module tb_top_capture;
             spi_byte(base[7:0],   junk); spi_byte(base[15:8],  junk); spi_byte(base[23:16],  junk);
             spi_byte(count[7:0],  junk); spi_byte(count[15:8], junk); spi_byte(count[23:16], junk);
             spi_byte(divider[7:0],junk); spi_byte(divider[15:8], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -169,7 +171,7 @@ module tb_top_capture;
         reg [7:0] junk; begin
             csn = 1'b0; #(SPI_HALF);
             spi_byte(op, junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -186,7 +188,7 @@ module tb_top_capture;
                 v = base + k;
                 spi_byte(v[7:0], junk); spi_byte(v[15:8], junk);
             end
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -227,7 +229,7 @@ module tb_top_capture;
             spi_byte(8'h1A, junk); spi_byte(src, junk);
             spi_byte(fixed[7:0], junk); spi_byte(fixed[15:8], junk);
             spi_byte(step[7:0],  junk); spi_byte(step[15:8],  junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
     // OP_START_DAC_LOOP (0x15): k(2) + vmin(2) + vmax(2) + tick_div(2).
@@ -239,7 +241,7 @@ module tb_top_capture;
             spi_byte(vmin[7:0], junk); spi_byte(vmin[15:8], junk);
             spi_byte(vmax[7:0], junk); spi_byte(vmax[15:8], junk);
             spi_byte(tick[7:0], junk); spi_byte(tick[15:8], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
@@ -351,7 +353,7 @@ module tb_top_capture;
         reg [7:0] junk; begin
             csn = 1'b0; #(SPI_HALF);
             spi_byte(8'h33, junk); spi_byte(ch, junk); spi_byte(mode, junk); spi_byte(8'h00, junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
     // OP_SET_DAC_STOP_AFTER (0x14): cycles(4).
@@ -361,7 +363,7 @@ module tb_top_capture;
             spi_byte(8'h14, junk);
             spi_byte(cycles[7:0], junk);   spi_byte(cycles[15:8], junk);
             spi_byte(cycles[23:16], junk); spi_byte(cycles[31:24], junk);
-            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+            #(SPI_HALF); csn = 1'b1; #(CS_IDLE);
         end
     endtask
 
