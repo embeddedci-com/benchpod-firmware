@@ -124,10 +124,9 @@ module uart_engine (
     // SPI/protocol cfg_div field stays 24-bit (firmware unchanged).
     localparam DIV_W = 18;
     reg [DIV_W-1:0] div;
-    wire [DIV_W-1:0] half_div = {1'b0, div[DIV_W-1:1]};
-    // The bit counters reload with `div` (or half_div) and expire at 1, not reload `div - 1`
-    // and expire at 0: the same number of clocks per bit (div..1 == div-1..0), without the
-    // two 18-bit subtractors.  Safe because div >= 2 (clamped below), so half_div >= 1.
+    // The bit counters reload with `div` and expire at 1, not reload `div - 1` and expire
+    // at 0: the same number of clocks per bit (div..1 == div-1..0), without the two 18-bit
+    // subtractors.  Safe because div >= 2 (the firmware's range, see below).
 
     // ---- RX 2-flop synchroniser ----
     reg rx_s0, rx_s1;
@@ -170,16 +169,26 @@ module uart_engine (
 
     localparam TX_IDLE = 3'd0, TX_LOAD = 3'd1, TX_START = 3'd2, TX_DATA = 3'd3, TX_STOP = 3'd4;
     (* fsm_encoding = "none" *) reg [2:0]  tx_state;
-    reg [DIV_W-1:0] tx_cnt;
+    wire [DIV_W-1:0] tx_cnt;
     reg [2:0]  tx_bit;
     reg [7:0]  tx_sr;
+
+    // The bit timer in one logic cell per bit (lc_counter): it loads div on TX_LOAD
+    // and at the end of the start and each data bit, and counts down otherwise.
+    wire tx_exp  = (tx_cnt == 18'd1);
+    wire tx_bits = (tx_state == TX_START) || (tx_state == TX_DATA);
+    lc_counter #(.W(DIV_W), .UP(0)) tx_timer (
+        .clk(clk), .rst(rst || !armed),
+        .load((tx_state == TX_LOAD) || (tx_bits && tx_exp)), .val(div),
+        .en(tx_bits || tx_state == TX_STOP), .hold0(1'b0),
+        .q(tx_cnt), .co()
+    );
 
     always @(posedge clk) begin
         tx_pop <= 1'b0;
         if (rst || !armed) begin
             tx_state <= TX_IDLE;
             tx_out   <= 1'b1;       // idle high
-            tx_cnt   <= 18'd0;
             tx_bit   <= 3'd0;
             tx_sr    <= 8'h00;
         end else begin
@@ -193,21 +202,18 @@ module uart_engine (
                 TX_LOAD: begin
                     tx_sr    <= tx_head;    // now-valid head
                     tx_pop   <= 1'b1;       // advance FIFO
-                    tx_cnt   <= div;
                     tx_out   <= 1'b0;        // start bit
                     tx_state <= TX_START;
                 end
                 TX_START: begin
-                    if (tx_cnt == 18'd1) begin
-                        tx_cnt   <= div;
+                    if (tx_exp) begin
                         tx_out   <= tx_sr[0];   // LSB first
                         tx_bit   <= 3'd0;
                         tx_state <= TX_DATA;
-                    end else tx_cnt <= tx_cnt - 18'd1;
+                    end
                 end
                 TX_DATA: begin
-                    if (tx_cnt == 18'd1) begin
-                        tx_cnt <= div;
+                    if (tx_exp) begin
                         if (tx_bit == 3'd7) begin
                             tx_out   <= 1'b1;   // stop bit
                             tx_state <= TX_STOP;
@@ -216,11 +222,10 @@ module uart_engine (
                             tx_out <= tx_sr[1];
                             tx_bit <= tx_bit + 3'd1;
                         end
-                    end else tx_cnt <= tx_cnt - 18'd1;
+                    end
                 end
                 TX_STOP: begin
-                    if (tx_cnt == 18'd1) tx_state <= TX_IDLE;
-                    else                 tx_cnt   <= tx_cnt - 18'd1;
+                    if (tx_exp) tx_state <= TX_IDLE;
                 end
             endcase
         end
@@ -240,9 +245,26 @@ module uart_engine (
 
     localparam RX_IDLE = 2'd0, RX_START = 2'd1, RX_DATA = 2'd2, RX_STOP = 2'd3;
     (* fsm_encoding = "none" *) reg [1:0]  rx_state;
-    reg [DIV_W-1:0] rx_cnt;
+    wire [DIV_W-1:0] rx_cnt;
     reg [2:0]  rx_bit;
     reg [7:0]  rx_sr;
+
+    // The bit timer in one logic cell per bit (lc_counter), always loaded with div.
+    // The half bit to the middle of the start bit is div counted down in steps of 2
+    // (hold0): after k clocks it holds div - 2(k-1), which first reaches 2 or 3 at
+    // k = floor(div/2) = half_div, the clock the old half_div count reached 1.  So the
+    // start bit ends on cnt[17:1] == 1, the others on cnt == 1 as before.  (div >= 2.)
+    wire rx_hi0   = (rx_cnt[DIV_W-1:2] == 0);
+    wire rx_exp   = rx_hi0 & ~rx_cnt[1] & rx_cnt[0];   // cnt == 1
+    wire rx_exp_h = rx_hi0 &  rx_cnt[1];                // cnt == 2 or 3 (half bit)
+    wire rx_in_start = (rx_state == RX_START);
+    lc_counter #(.W(DIV_W), .UP(0)) rx_timer (
+        .clk(clk), .rst(rst || !armed),
+        .load(((rx_state == RX_IDLE) && !rx_s1) || (rx_in_start && rx_exp_h && !rx_s1) ||
+              (rx_state == RX_DATA && rx_exp)),
+        .val(div), .en(rx_state != RX_IDLE), .hold0(rx_in_start),
+        .q(rx_cnt), .co()
+    );
 
     always @(posedge clk) begin
         rx_push <= 1'b0;
@@ -250,7 +272,6 @@ module uart_engine (
 
         if (rst || !armed) begin
             rx_state    <= RX_IDLE;
-            rx_cnt      <= 18'd0;
             rx_bit      <= 3'd0;
             rx_sr       <= 8'h00;
             if (rst) rx_overflow <= 1'b0;
@@ -258,35 +279,32 @@ module uart_engine (
             case (rx_state)
                 RX_IDLE: begin
                     if (rx_s1 == 1'b0) begin   // start edge (line went low)
-                        rx_cnt   <= half_div;  // → middle of start bit
-                        rx_state <= RX_START;
+                        rx_state <= RX_START;  // timer loads div (→ middle of start bit)
                     end
                 end
                 RX_START: begin
-                    if (rx_cnt == 18'd1) begin
+                    if (rx_exp_h) begin
                         if (rx_s1 == 1'b0) begin       // genuine start
-                            rx_cnt   <= div;   // → middle of bit0
-                            rx_bit   <= 3'd0;
+                            rx_bit   <= 3'd0;          // timer reloads div (→ bit0)
                             rx_state <= RX_DATA;
                         end else rx_state <= RX_IDLE;   // glitch
-                    end else rx_cnt <= rx_cnt - 18'd1;
+                    end
                 end
                 RX_DATA: begin
-                    if (rx_cnt == 18'd1) begin
+                    if (rx_exp) begin
                         rx_sr  <= {rx_s1, rx_sr[7:1]};  // LSB first
-                        rx_cnt <= div;
                         if (rx_bit == 3'd7) rx_state <= RX_STOP;
                         else                rx_bit   <= rx_bit + 3'd1;
-                    end else rx_cnt <= rx_cnt - 18'd1;
+                    end
                 end
                 RX_STOP: begin
-                    if (rx_cnt == 18'd1) begin
+                    if (rx_exp) begin
                         // sample point at middle of stop bit; push regardless of
                         // framing (best-effort), flag overflow if FIFO is full.
                         if (rx_fifo_full) rx_overflow <= 1'b1;
                         else begin rx_push <= 1'b1; rx_pushdata <= rx_sr; end
                         rx_state <= RX_IDLE;
-                    end else rx_cnt <= rx_cnt - 18'd1;
+                    end
                 end
             endcase
         end
