@@ -45,7 +45,12 @@ firmware gains a CMSIS-DAP brain, and the host gains a thin pyOCD probe.
 A connection enters DAP mode exactly like SWD mode does today:
 
 1. Host sends JSON `{"cmd":"dap_start","swclk":<la>,"swdio":<la>}`, optionally with
-   `"packet_size":1024,"packet_count":4` (see [Packet size](#packet-size)).
+   `"packet_size":1024,"packet_count":4` (see [Packet size](#packet-size)) and `"wait_ms":N`
+   (up to 10000): before acking, the pod repeats a line reset + DP IDR read until the target
+   answers or N ms pass, and logs `[dap] target answered after <ms> ms`.  Send it right after
+   switching the target's rail on: an STM32 NUCLEO answers ~2.1 s after power-on (its on-board
+   ST-LINK boots first), which no fixed settle delay covers for every board.  The benchpod CLI
+   and the Python SDK send 5000 when they powered the target.
 
    > Since rev3 there is **no `nreset` field**. nRESET is the pod's own
    > `/NRST_CONTROL` pin (J1 pin 22 — see the [DUT header pinout](API.md#dut-header)),
