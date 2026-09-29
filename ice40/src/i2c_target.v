@@ -102,10 +102,20 @@ module i2c_target #(
 
     // ---- conversion / busy timer (generic, config-driven) ----
     reg        conv_trig;          // 1-cycle pulse from FSM on trig_reg write
-    reg [15:0] conv_left;          // microseconds remaining
+    wire [15:0] conv_left;         // microseconds remaining
     reg [4:0]  conv_presc;         // ÷CLK_MHZ → 1 µs ticks
-    wire       conv_busy = (conv_left != 16'd0);
+    wire       conv_busy;          // conv_left != 0 (not valid in the conv_trig cycle)
     localparam [4:0] PRESC_MAX = CLK_MHZ[4:0] - 5'd1;
+
+    // conv_left in one logic cell per bit (lc_counter); its carry out is the != 0 test.
+    // That carry reads 0 in the cycle conv_trig loads the counter.  Nothing looks then:
+    // conv_trig follows the byte's 8th SCL rise by one clock, when the FSM is in S_ACK
+    // before its ACK, and rd_byte is only sampled on a later SCL fall.
+    lc_counter #(.W(16), .UP(0)) conv_cnt (
+        .clk(clk), .rst(rst), .load(conv_trig), .val(conv_us),
+        .en(conv_busy && conv_presc == PRESC_MAX), .hold0(1'b0),
+        .q(conv_left), .co(conv_busy)
+    );
 
     // ---- bus-recovery watchdog ----
     // If the DUT master dies mid-transaction while we are holding SDA low (an ACK
@@ -129,16 +139,11 @@ module i2c_target #(
     wire                 wdog_fire = scl_wdog[WDOG_BITS-1];
 
     always @(posedge clk) begin
-        if (rst) begin
-            conv_left  <= 16'd0;
+        if (rst || conv_trig) begin
             conv_presc <= 5'd0;
-        end else if (conv_trig) begin
-            conv_left  <= conv_us;
-            conv_presc <= 5'd0;
-        end else if (conv_left != 16'd0) begin
+        end else if (conv_busy) begin
             if (conv_presc == PRESC_MAX) begin
                 conv_presc <= 5'd0;
-                conv_left  <= conv_left - 16'd1;
             end else begin
                 conv_presc <= conv_presc + 5'd1;
             end

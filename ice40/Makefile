@@ -49,6 +49,7 @@ SRC = src/top_v2.v            \
       src/uart_engine.v       \
       src/dsp_counter.v       \
       src/dsp_counter2.v      \
+      src/lc_counter.v        \
       src/psram_pads.v
 DEFINES = -DVERSION_V2
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
@@ -488,14 +489,14 @@ sim:
 # Self-checking simulation of the generic I2C target (needs iverilog/vvp).
 simtest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_i2c.vvp \
-	         sim/tb_i2c_target.v src/i2c_target.v src/i2c_regfile.v
+	         sim/tb_i2c_target.v src/i2c_target.v src/i2c_regfile.v src/lc_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_i2c.vvp
 	@rm -f /tmp/$(PROJECT)_i2c.vvp
 
 # Self-checking loopback simulation of the soft UART (needs iverilog/vvp).
 uarttest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_uart.vvp \
-	         sim/tb_uart_engine.v src/uart_engine.v
+	         sim/tb_uart_engine.v src/uart_engine.v src/lc_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_uart.vvp
 	@rm -f /tmp/$(PROJECT)_uart.vvp
 
