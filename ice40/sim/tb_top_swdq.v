@@ -137,18 +137,21 @@ module tb_top_swdq;
     // ------------------------------------------------------------------------
     // Host side (the STM32's link framing)
     // ------------------------------------------------------------------------
-    localparam SPI_HALF = 250;
+    localparam SPI_HALF = 20;            // 25 MHz SCK (spi_slave runs on SCK)
+    localparam SPI_GAP  = 240;           // STM32H5 MIDI 6: idle between bytes, rise-to-rise 280 ns
+    localparam CS_IDLE  = 400;           // CSn high between commands
     task spi_byte(input [7:0] tx, output [7:0] rx);
         integer b;
         begin
             for (b = 7; b >= 0; b = b - 1) begin
                 mosi = tx[b]; #(SPI_HALF); sck = 1'b1; rx[b] = miso; #(SPI_HALF); sck = 1'b0;
             end
+            #(SPI_GAP);
         end
     endtask
     reg [7:0] junk, r, st_done, st_flags;
     task cs_lo; begin csn = 1'b0; #(SPI_HALF); end endtask
-    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF); end endtask
+    task cs_hi; begin #(SPI_HALF); csn = 1'b1; #(CS_IDLE); end endtask
 
     reg [7:0] q [0:511];
     integer   qn;

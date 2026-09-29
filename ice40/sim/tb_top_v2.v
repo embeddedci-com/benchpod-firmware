@@ -55,7 +55,9 @@ module tb_top_v2;
         .led_g(led_g), .led_b(led_b), .led_r(led_r)
     );
 
-    localparam SPI_HALF = 500;           // 1 us bit period (1 MHz) — far below clk/4
+    localparam SPI_HALF = 20;            // 25 MHz SCK (spi_slave runs on SCK)
+    localparam SPI_GAP  = 240;           // STM32H5 MIDI 6: idle between bytes, rise-to-rise 280 ns
+    localparam CS_IDLE  = 400;           // CSn high between commands
     integer errors = 0;
 
     // One SPI byte, mode 0: master drives MOSI while SCK low, slave samples on the
@@ -72,6 +74,7 @@ module tb_top_v2;
                 #(SPI_HALF);
                 sck = 1'b0;
             end
+            #(SPI_GAP);
         end
     endtask
 
@@ -84,7 +87,7 @@ module tb_top_v2;
             spi_byte(op,     junk);
             spi_byte(8'h00,  reply);
             #(SPI_HALF);   csn = 1'b1;
-            #(4*SPI_HALF);            // idle gap (FSM returns to IDLE on CSn high)
+            #(CS_IDLE);            // idle gap (FSM returns to IDLE on CSn high)
         end
     endtask
 
@@ -107,7 +110,7 @@ module tb_top_v2;
             spi_byte(8'h00, lo);
             spi_byte(8'h00, hi);
             #(SPI_HALF);   csn = 1'b1;
-            #(4*SPI_HALF);
+            #(CS_IDLE);
             reply = {hi, lo};
         end
     endtask
