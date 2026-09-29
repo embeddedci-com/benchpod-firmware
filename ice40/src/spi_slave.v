@@ -12,14 +12,15 @@
 //   posedge sck : rx_sr <= {rx_sr, mosi}; nbit <= nbit + 1       (CSn high: nbit = 0, async)
 //                 8th rise: the byte is complete in rx_sr and toggles a cdc_pulse_payload,
 //                 which copies rx_sr into rx_byte (clk) and then raises rx_valid.
-//   negedge sck : pos <= nbit (CSn high: pos = 0, async).  MISO = tx_byte[7 - pos], so it
-//                 changes on falling edges, half a period ahead of the master's rising-edge
-//                 sample; after the 8th fall pos = 0 and MISO shows the next byte's MSB.
+//   negedge sck : fall k of a byte (k = 1..7) loads sh <= tx_byte[7 - k]; fall 8 sets `first`.
+//                 MISO = first ? tx_byte[7] : sh, so bits 6..0 change on falling edges, half a
+//                 period ahead of the master's rising-edge sample, launched from a flop.
 //
 // There is no tx shift register: tx_byte (a cmd_dispatch register in clk) is only written on
-// rx_valid, so it is stable while a byte shifts out, and MISO muxes it directly.  The bit the
-// master samples at the first rising edge of a byte is therefore tx_byte[7] as cmd_dispatch
-// leaves it after that byte's predecessor, which it writes a few clk after the 8th rise.
+// rx_valid, so it is stable while a byte shifts out and `sh` samples it directly.  Bit 7 has no
+// SCK edge to launch it (the SCK idles low between bytes), so MISO shows tx_byte[7] through
+// the `first` mux: the master samples it at the byte's first rise, and cmd_dispatch writes
+// tx_byte a few clk after the previous byte's 8th rise.
 //
 // INTER-BYTE GAP (the host's contract).  From the 8th SCK rise of byte N to the first SCK rise
 // of byte N+1 the master must wait at least
@@ -37,9 +38,8 @@
 // transfer ahead of the FSM reset however soon after the last SCK edge CSn rises (its first
 // catching edge can be one earlier than the toggle's when the toggle goes metastable).
 //
-// SCK is a clock net now.  nextpnr promotes it to a global buffer (clock nets outrank the
-// reset/enable nets it otherwise promotes into the 8 SB_GBs).  The MISO output is combinational
-// (the first bit of a byte has no SCK edge to launch it), so it cannot use an SB_IO register.
+// SCK is a clock net now (posedge and negedge flops).  The MISO pad is fed by one LUT (the
+// `first` mux), not an SB_IO output register, because bit 7 has no launching edge.
 // ============================================================================
 
 module spi_slave #(
@@ -63,8 +63,9 @@ module spi_slave #(
 
     // ---- SCK domain ----
     reg [2:0] nbit = 3'd0;         // bits received in this byte (posedge)
-    reg [2:0] pos = 3'd0;          // MISO bit position (negedge copy of bit)
     reg [7:0] rx_sr = 8'h00;
+    reg       first = 1'b1;        // negedge: MISO shows tx_byte[7] (no SCK edge launches it)
+    reg       sh = 1'b0;           // negedge: MISO bits 6..0, straight off a flop
 
     always @(posedge sck or posedge csn)
         if (csn) nbit <= 3'd0;
@@ -72,11 +73,15 @@ module spi_slave #(
 
     always @(posedge sck) rx_sr <= {rx_sr[6:0], mosi};
 
+    // Fall k of a byte (nbit = k, k = 1..7) launches bit 7-k; fall 8 (nbit = 0) hands MISO
+    // back to tx_byte[7] for the next byte.
     always @(negedge sck or posedge csn)
-        if (csn) pos <= 3'd0;
-        else     pos <= nbit;
+        if (csn) first <= 1'b1;
+        else     first <= (nbit == 3'd0);
 
-    assign miso = tx_byte[~pos];
+    always @(negedge sck) sh <= tx_byte[~nbit];
+
+    assign miso = first ? tx_byte[7] : sh;
 
     // ---- byte handoff into clk: toggle + 3-flop sync, rx_sr copied, then the pulse ----
     cdc_pulse_payload #(.W(8)) rx_cdc (
