@@ -207,6 +207,10 @@ module tb_top_spilink;
         // 31.25 MHz (/8) with MIDI 8: the logic is fine at any rate; the pad timing is what
         // limits it (see the nextpnr sck reports), which sim can't see.
         run(16.0, 8, 4, "31.25 MHz");
+        // The firmware's boot setting (/128, no MIDI): its half period alone covers the gap, so
+        // the firmware can talk to this gateware and to the old clk-sampled slave (which also
+        // works in mode 1 at /128) before it reads VERSION and raises the clock.
+        run(256.0, 0, 5, "1.95 MHz boot setting");
 
         // Expected failure: no inter-byte gap at 25 MHz.
         quiet = 1;
@@ -220,7 +224,7 @@ module tb_top_spilink;
         cmd1(8'h01, r); check(r, 8'hA5, "PING after the MIDI-0 run");
 
         if (errors == 0)
-            $display("PASS tb_top_spilink: PING/VERSION/STATUS, 256-byte load + read-back streams and CSn aborts at 25/15.6/25/31.25 MHz with MIDI; MIDI 0 fails as expected");
+            $display("PASS tb_top_spilink: PING/VERSION/STATUS, 256-byte load + read-back streams and CSn aborts at 25/15.6/25/31.25 MHz with MIDI and 1.95 MHz without; MIDI 0 at 25 MHz fails as expected");
         else
             $display("FAIL tb_top_spilink: %0d error(s)", errors);
         $finish;
