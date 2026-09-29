@@ -167,14 +167,17 @@ module i2c_target #(
 
     (* fsm_encoding = "none" *) reg [2:0] state;
     reg [2:0] bit_cnt;
-    reg [7:0] shift_in;
-    reg [7:0] tx_shift;
+    // One shift register serves both directions: bits shift in on SCL rises
+    // (address / write bytes) and out of bit 7 on SCL falls (read bytes); a
+    // transaction is only ever doing one of the two.  The byte in is only looked
+    // at after 8 shifts, so it is never cleared.
+    reg [7:0] sr;
     reg       rw;            // 1 = master reads from us
     reg       ptr_loaded;    // reg_ptr has been set this transaction
     reg       ack_step;      // sub-phase within an ACK (assert → release/sample)
     reg       rd_first;      // next read fall must load+drive the MSB
 
-    wire [7:0] addr_full = {shift_in[6:0], sda_now};  // full byte at 8th rise
+    wire [7:0] addr_full = {sr[6:0], sda_now};  // full byte at 8th rise
 
     always @(posedge clk) begin
         // 1-cycle defaults
@@ -184,8 +187,7 @@ module i2c_target #(
         if (rst) begin
             state         <= S_IDLE;
             bit_cnt       <= 3'd0;
-            shift_in      <= 8'h00;
-            tx_shift      <= 8'h00;
+            sr            <= 8'h00;
             rw            <= 1'b0;
             ptr_loaded    <= 1'b0;
             ack_step      <= 1'b0;
@@ -244,7 +246,6 @@ module i2c_target #(
                 // (re)START — begin a new address phase, keep reg_ptr.
                 state         <= S_ADDR;
                 bit_cnt       <= 3'd0;
-                shift_in      <= 8'h00;
                 ack_step      <= 1'b0;
                 rd_first      <= 1'b0;
                 sda_drive_low <= 1'b0;
@@ -258,9 +259,9 @@ module i2c_target #(
                     // ---- address byte ----
                     S_ADDR: begin
                         if (scl_rise) begin
-                            shift_in <= {shift_in[6:0], sda_now};
+                            sr <= addr_full;
                             if (bit_cnt == 3'd7) begin
-                                if (shift_in[6:0] == addr7) begin
+                                if (sr[6:0] == addr7) begin
                                     rw       <= sda_now;   // bit0 = R/W
                                     ack_step <= 1'b0;
                                     state    <= S_ADDR_ACK;
@@ -284,7 +285,7 @@ module i2c_target #(
                                 ack_step <= 1'b0;
                                 if (rw) begin
                                     // this fall sets up data bit7 (MSB)
-                                    tx_shift      <= {rd_byte[6:0], 1'b0};
+                                    sr            <= {rd_byte[6:0], 1'b0};
                                     sda_drive_low <= ~rd_byte[7];
                                     bit_cnt       <= 3'd1; // MSB driven
                                     rd_first      <= 1'b0;
@@ -292,7 +293,6 @@ module i2c_target #(
                                 end else begin
                                     sda_drive_low <= 1'b0; // release for RX
                                     bit_cnt       <= 3'd0;
-                                    shift_in      <= 8'h00;
                                     state         <= S_WRITE;
                                 end
                             end
@@ -302,7 +302,7 @@ module i2c_target #(
                     // ---- receive a data byte (write transaction) ----
                     S_WRITE: begin
                         if (scl_rise) begin
-                            shift_in <= {shift_in[6:0], sda_now};
+                            sr <= addr_full;
                             if (bit_cnt == 3'd7) begin
                                 if (!ptr_loaded) begin
                                     reg_ptr    <= addr_full;
@@ -335,7 +335,6 @@ module i2c_target #(
                                 sda_drive_low <= 1'b0; // release
                                 ack_step      <= 1'b0;
                                 bit_cnt       <= 3'd0;
-                                shift_in      <= 8'h00;
                                 state         <= S_WRITE;
                             end
                         end
@@ -345,13 +344,13 @@ module i2c_target #(
                     S_READ: begin
                         if (scl_fall) begin
                             if (rd_first) begin
-                                tx_shift      <= {rd_byte[6:0], 1'b0};
+                                sr            <= {rd_byte[6:0], 1'b0};
                                 sda_drive_low <= ~rd_byte[7];
                                 bit_cnt       <= 3'd1;
                                 rd_first      <= 1'b0;
                             end else begin
-                                sda_drive_low <= ~tx_shift[7];
-                                tx_shift      <= {tx_shift[6:0], 1'b0};
+                                sda_drive_low <= ~sr[7];
+                                sr            <= addr_full;   // shift; the fill bit is unused
                                 if (bit_cnt == 3'd7) begin
                                     ack_step <= 1'b0;
                                     state    <= S_READ_ACK;
