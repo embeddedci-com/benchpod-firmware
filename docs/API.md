@@ -1785,7 +1785,7 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 ## SPI master (flash an SPI device)
 
-Gateware v44+ (`status` caps `spi_master`).  The iCE40 engine that runs SWD has a second job:
+Gateware v45+ (`status` caps `spi_master`).  The iCE40 engine that runs SWD has a second job:
 an SPI master on any four LA pins, used to read and program SPI NOR flash (W25Q, MX25, GD25,
 IS25 and other 25-series parts) or to talk to any other SPI device.  One engine, so an SPI
 session and an SWD session (`dap_start`) exclude each other.
@@ -1811,7 +1811,7 @@ command channel.
 Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
-Errors: `SPI master needs gateware v44+`, `spi busy: send spi_stop first`,
+Errors: `SPI master needs gateware v45+`, `spi busy: send spi_stop first`,
 `swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
 
 ### `spi_stop` / `spi_status`
