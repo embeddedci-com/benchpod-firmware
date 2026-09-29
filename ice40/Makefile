@@ -345,9 +345,13 @@ $(OUT).bin: $(OUT).asc
 # CI sweep (OSS CAD Suite): 45/64.  51, the best local seed, misses 48 MHz in CI (47.50), so
 # pinned SEED_LOOP 31 -> 58, good in both (clk48 52.96 local / 52.59 CI, clk -> clk48 11.17 /
 # 11.86 ns).
-SEED_LOOP ?= 58
+# v45 (SWD transfer queue + LC pass: SPI on the SWD sequencer, cmd_dispatch, i2c_target,
+# uart_engine/fifo, LA ring, ADC; 3864 LC, 73%, below v43's 3914).  Swept 1..64 in both
+# toolchains: 61/64 local, 46/64 CI (v45 before the LC pass: 22/64 local).  Pinned SEED_LOOP
+# 58 -> 26 (clk48 56.70 local / 55.48 CI, clk -> clk48 <= 11.38 ns).
+SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
-SEED_LOOP_FALLBACK ?= 12 32 5 62 10 56 19 50 9 48 38 36 1 63 61 6 4 33
+SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -413,11 +417,13 @@ SEED_LOOP_FALLBACK ?= 12 32 5 62 10 56 19 50 9 48 38 36 1 63 61 6 4 33
 # 55.27 local / 54.04 CI, clk -> clk48 13.11 / 12.72 ns).  RE-VERIFY deep replay on hardware.
 # v44 (SPI master, 3787 LC, 71%): swept 1..64 in both toolchains: 60/64 local, 64/64 CI.  Pinned
 # SEED_DEEP 7 -> 6 (clk48 53.73 local / 51.93 CI, clk -> clk48 <= 12.72 ns in both).
-SEED_DEEP ?= 6
+# v45 after the LC pass (3549 LC, 67%): 63/64 local, 57/64 CI.  Pinned SEED_DEEP 6 -> 25 (clk48
+# 54.59 local / 55.27 CI, clk -> clk48 <= 13.29 ns).
+SEED_DEEP ?= 25
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 49 20 31 52 28 9 53 29 25 8 60 55 46 40 35 1 2 48 56 43
+SEED_DEEP_FALLBACK ?= 55 61 7 62 6 50 16 48 46 45 26 5 64 57 56 32 27 21 14 13
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
