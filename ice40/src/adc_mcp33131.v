@@ -47,10 +47,11 @@ module adc_mcp33131 (
     reg [15:0] period_cnt;
     reg        period_zero;       // registered "period expired": keeps the 16-bit
                                   // compare off the conversion-start transition path
-    reg [7:0]  conv_cnt;
-    reg        conv_done;         // registered (conv_cnt == CONV_CYCLES)
-    reg [4:0]  bit_cnt;
-    reg        bits_done;         // registered (bit_cnt == 16)
+    // One 5-bit counter serves the conversion wait (S_CONV, to CONV_CYCLES) and the bit count
+    // (S_READ, to 16): the two states never overlap (v45; was an 8-bit and a 5-bit counter).
+    reg [4:0]  cnt;
+    reg        conv_done;         // registered (cnt == CONV_CYCLES)
+    reg        bits_done;         // registered (cnt == 16 in S_READ)
     reg [15:0] shreg;
     reg        sclk_ph;
 
@@ -58,7 +59,7 @@ module adc_mcp33131 (
         sample_stb <= 1'b0;
         if (rst) begin
             st <= S_IDLE; adc_cnvst <= 1'b0; adc_sclk <= 1'b0;
-            period_cnt <= 16'd0; period_zero <= 1'b1; bit_cnt <= 5'd0; sclk_ph <= 1'b0;
+            period_cnt <= 16'd0; period_zero <= 1'b1; cnt <= 5'd0; sclk_ph <= 1'b0;
         end else begin
             // Sample period = EXACTLY max(divider, 60) clocks.  period_cnt loads the
             // period at a conversion start and counts down; the registered flag is set
@@ -74,7 +75,7 @@ module adc_mcp33131 (
                 adc_sclk <= 1'b0;
                 if (en && period_zero) begin
                     adc_cnvst   <= 1'b1;              // start conversion
-                    conv_cnt    <= 8'd0;
+                    cnt         <= 5'd0;
                     conv_done   <= 1'b0;
                     // Floor the sample period at the engine's own min duration
                     // (~59 clk: 1 idle + 24 conv + 32 read + transitions) so a small
@@ -92,13 +93,13 @@ module adc_mcp33131 (
             S_CONV: begin
                 if (conv_done) begin
                     adc_cnvst <= 1'b0;              // end convert, begin read
-                    bit_cnt   <= 5'd0;
+                    cnt       <= 5'd0;
                     bits_done <= 1'b0;
                     sclk_ph   <= 1'b0;
                     st        <= S_READ;
                 end else begin
-                    conv_cnt  <= conv_cnt + 8'd1;
-                    conv_done <= (conv_cnt == CONV_CYCLES - 8'd1);
+                    cnt       <= cnt + 5'd1;
+                    conv_done <= (cnt == CONV_CYCLES[4:0] - 5'd1);
                 end
             end
             // Read 16 bits, MSB first. SDO changes on the SCLK falling edge; we
@@ -109,8 +110,8 @@ module adc_mcp33131 (
                 if (!sclk_ph) begin
                     adc_sclk  <= 1'b1;               // SCLK high next cycle
                     shreg     <= {shreg[14:0], adc_sdo};
-                    bit_cnt   <= bit_cnt + 5'd1;
-                    bits_done <= (bit_cnt == 5'd15);
+                    cnt       <= cnt + 5'd1;
+                    bits_done <= (cnt == 5'd15);
                 end else begin
                     adc_sclk <= 1'b0;               // falling edge
                     if (bits_done) begin
