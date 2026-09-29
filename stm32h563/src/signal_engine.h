@@ -260,6 +260,7 @@ typedef struct {
     bool loop_input_map;  /* affine input conditioner in front of the loop curve */
     bool gpio_read;       /* GPIO_GET: live LA pin levels (gpio read, la_pins levels) */
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
+    bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
 } signal_engine_caps_t;
 
 /* Fill *out with the running image's feature flags. Safe to call from any task. */
@@ -535,6 +536,33 @@ void fpga_swd_poll(void);
 size_t fpga_swd_feed(const uint8_t *in, size_t len,
                      char *reply, size_t reply_cap, size_t *reply_len,
                      bool *exit_to_json, bool *quit);
+
+/* ---- SPI master over the FPGA (gateware >= SPI_MASTER_MIN_GW) ---------------
+   The SWD engine's second job: SCK/MOSI/MISO/CS on four LA channels (1..14), so an SWD
+   session and an SPI session exclude each other (both return -2 while the other is armed).
+   The shifter clocks at 24 MHz / (2 * half): half 2..63 = 6 MHz .. 190 kHz.  CS starts
+   released (driven high); fpga_spi_cs() asserts it around a transaction. */
+#define SPI_MASTER_MIN_GW   44u
+#define SPI_XFER_MAX        512u    /* bytes per fpga_spi_xfer: the gateware queue */
+#define SPI_HALF_MIN        2u
+#define SPI_HALF_MAX        63u
+
+/* Half-period (in 24 MHz clk) for a requested SCK rate, rounded to the next slower rate
+   and clamped to SPI_HALF_MIN..MAX; and the rate a half gives. */
+unsigned fpga_spi_half_for_hz(uint32_t hz);
+uint32_t fpga_spi_hz_for_half(unsigned half);
+
+/* 0 ok; -1 bad channel (out of range or two roles on one pin); -2 SWD or SPI already armed;
+   -3 gateware too old.  mode is 0 or 3. */
+int  fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
+                  unsigned half, unsigned mode);
+void fpga_spi_disarm(void);
+bool fpga_spi_armed(void);
+void fpga_spi_cs(bool asserted);
+/* Shift tx[0..n) out and store what came back in rx (may be NULL); n <= SPI_XFER_MAX.  CS is
+   not touched.  0 ok; -1 bad args / not armed; -2 the engine never went idle; -3 the engine
+   is no longer armed (the gateware was reconfigured). */
+int  fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n);
 
 /* ===========================================================================
  * Emulated I2C sensor — generic FPGA-backed I2C target driven over SPI.

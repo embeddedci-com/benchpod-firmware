@@ -1487,6 +1487,7 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->loop_input_map = ver >= DAC_LOOP_INMAP_MIN_GW;
     out->gpio_read       = ver >= GPIO_GET_MIN_GW;
     out->capture_trigger = ver >= CAPTURE_TRIGGER_MIN_GW;
+    out->spi_master      = ver >= SPI_MASTER_MIN_GW;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
@@ -2295,8 +2296,10 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
     return 0;
 }
 
+static bool spi_armed_local = false;   /* the same engine in SPI mode (below) */
+
 int fpga_swd_arm(unsigned swclk, unsigned swdio) {
-    if (swd_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local) return -2;
     int clk_idx = la_wire_index(swclk);
     int dio_idx = la_wire_index(swdio);
     if (clk_idx < 0 || dio_idx < 0 || clk_idx == dio_idx) return -1;
@@ -2404,6 +2407,101 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
     }
 
     return i;
+}
+
+/* ===========================================================================
+ * SPI master — the SWD engine's second job (gateware >= v44).
+ *
+ * SPI_ARM puts the engine in SPI mode on four LA channels.  SWD_FEED then queues data bytes
+ * (<= 512) that the gateware shifts out MSB first at its own SCK rate, storing each byte it
+ * clocks in; SPI_STATUS bit1 says when the queue has drained, and SWD_READ returns the bytes.
+ * SWD_DISARM releases the pins, as for SWD.
+ * ========================================================================== */
+
+#define SPI_STATUS_ARMED  0x01u
+#define SPI_STATUS_BUSY   0x02u
+/* A 512-byte queue at the slowest rate (half 63, ~190 kHz) drains in ~22 ms. */
+#define SPI_IDLE_TIMEOUT_US  100000u
+
+unsigned fpga_spi_half_for_hz(uint32_t hz) {
+    const uint32_t clk = FPGA_HFOSC_HZ;
+    if (hz == 0) return SPI_HALF_MAX;
+    uint32_t half = (clk + 2u * hz - 1u) / (2u * hz);   /* round up: never faster than asked */
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    return (unsigned)half;
+}
+
+uint32_t fpga_spi_hz_for_half(unsigned half) {
+    return half ? FPGA_HFOSC_HZ / (2u * half) : 0u;
+}
+
+int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
+                 unsigned half, unsigned mode) {
+    if (s_fpga_version < SPI_MASTER_MIN_GW) return -3;
+    if (swd_armed_local || spi_armed_local) return -2;
+    int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
+    for (int i = 0; i < 4; i++) {
+        if (w[i] < 0) return -1;
+        for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
+    }
+    if (mode != 0 && mode != 3) return -1;
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    /* [sck][mosi][miso][cs][half][flags: bit0 CPOL] */
+    uint8_t args[6] = { (uint8_t)w[0], (uint8_t)w[1], (uint8_t)w[2], (uint8_t)w[3],
+                        (uint8_t)half, (uint8_t)(mode == 3 ? 1u : 0u) };
+    spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
+    spi_armed_local = true;
+    printf("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",
+           sck, mosi, miso, cs, (unsigned long)fpga_spi_hz_for_half(half), mode);
+    return 0;
+}
+
+void fpga_spi_disarm(void) {
+    if (!spi_armed_local) return;
+    spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
+    spi_armed_local = false;
+    printf("[spi] disarmed\n");
+}
+
+bool fpga_spi_armed(void) { return spi_armed_local; }
+
+void fpga_spi_cs(bool asserted) {
+    if (!spi_armed_local) return;
+    uint8_t level = asserted ? 1u : 0u;
+    spi_cmd_write(CMD_SPI_CS, &level, 1);
+}
+
+int fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n) {
+    if (!spi_armed_local || !tx || n == 0 || n > SPI_XFER_MAX) return -1;
+
+    uint8_t hdr[3] = { CMD_SWD_FEED, (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, tx, n);
+    cs_deselect();
+
+    absolute_time_t deadline = make_timeout_time_us(SPI_IDLE_TIMEOUT_US);
+    uint8_t st = SPI_STATUS_BUSY;
+    for (;;) {
+        st = 0xFF;
+        spi_cmd_read(CMD_SPI_STATUS, NULL, 0, &st, 1);
+        if (st & 0xFC) return -2;                 /* MISO stuck high: the iCE40 is not answering */
+        if (!(st & SPI_STATUS_ARMED)) { spi_armed_local = false; return -3; }
+        if (!(st & SPI_STATUS_BUSY)) break;
+        if (time_reached(deadline)) return -2;
+    }
+    if (!rx) return 0;
+
+    /* SWD_READ sends reply byte 0 twice (it always has; swd_ll's ack_lead absorbs it for SWD),
+       so read one byte more and drop the first. */
+    static uint8_t buf[SPI_XFER_MAX + 1];
+    size_t want = n + 1;
+    uint8_t args[2] = { (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    spi_cmd_read(CMD_SWD_READ, args, sizeof(args), buf, want);
+    memcpy(rx, buf + 1, n);
+    return 0;
 }
 
 /* ===========================================================================

@@ -46,6 +46,15 @@ void     la_pins_on_gateware_reconfigured(void);
 void     handle_la_pins(int conn_id);
 void     handle_gpio(int conn_id, const char *json);
 
+/* SPI master on the LA pins (command_handler_spi.c). */
+void handle_spi_start(int conn_id, const char *json);
+void handle_spi_stop(int conn_id);
+void handle_spi_xfer(int conn_id, const char *json);
+void handle_spi_flash(int conn_id, const char *json);
+void handle_spi_status(int conn_id);
+void spi_session_end(void);
+void spi_on_gateware_reconfigured(void);
+
 /* power_profile (command_handler_power.c). */
 void handle_power_profile(int conn_id, const char *json);
 void power_profile_service(void);            /* one-shot completion + paced result frames */

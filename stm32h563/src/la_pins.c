@@ -26,6 +26,7 @@ const char *la_fn_name(la_fn_t fn) {
     static const char *const names[LA_FN__COUNT] = {
         "none", "gpio", "uart_rx", "uart_tx", "swd_clk", "swd_dio",
         "i2c_sda", "i2c_scl", "step", "step_dir",
+        "spi_sck", "spi_mosi", "spi_miso", "spi_cs",
     };
     return ((unsigned)fn < (unsigned)LA_FN__COUNT) ? names[fn] : "none";
 }
@@ -104,6 +105,8 @@ static const char *release_hint(la_fn_t fn, unsigned la, char *buf, size_t cap) 
     case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: return "end the SWD session first";
     case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: return "stop the sensor emulation first ({\"cmd\":\"sensor_stop\"})";
     case LA_FN_STEP:    case LA_FN_STEP_DIR: return "wait for the step train to finish";
+    case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_MISO: case LA_FN_SPI_CS:
+        return "stop the SPI session first ({\"cmd\":\"spi_stop\"})";
     default: return "";
     }
 }
@@ -124,7 +127,7 @@ static const char *pull_down_reason(la_fn_t fn, la_gpio_mode_t mode) {
     case LA_FN_UART_RX: case LA_FN_UART_TX: return "the line idles high";
     case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: return "an open-drain bus needs pull-ups";
     case LA_FN_SWD_DIO: return "SWDIO is pulled up when released";
-    default: return NULL;   /* none, gpio input/output, swd_clk, step, step_dir */
+    default: return NULL;   /* none, gpio input/output, swd_clk, step, step_dir, spi_* (driven) */
     }
 }
 

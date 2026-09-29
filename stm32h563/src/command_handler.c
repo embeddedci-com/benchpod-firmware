@@ -2241,6 +2241,7 @@ static void handle_status(int conn_id) {
     if (fcaps.loop_input_map) bp_emit_raw(&e, ",\"dac_loop_input_map\"");
     if (fcaps.gpio_read)      bp_emit_raw(&e, ",\"gpio_read\"");
     if (fcaps.capture_trigger) bp_emit_raw(&e, ",\"capture_trigger\"");
+    if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_master\"");
     /* rev3 hardware features (what the BOARD has, decided by board_rev). */
     if (nrst_ctrl_supported()) bp_emit_raw(&e, ",\"nrst_pin\"");
     if (usb_cc_supported())    bp_emit_raw(&e, ",\"usb_cc\"");
@@ -3175,6 +3176,7 @@ void command_handler_on_gateware_reconfigured(void) {
        re-apply the gpio pins' GPIO_SET latches, which the fabric also lost. */
     if (uart_proxy_conn >= 0) uart_proxy_end(uart_proxy_conn, true);
     swd_disarm_and_release();
+    spi_on_gateware_reconfigured();
     if (sensor_sim_active()) sensor_sim_stop();
     la_pins_release_fn(LA_FN_I2C_SDA);
     la_pins_release_fn(LA_FN_I2C_SCL);
@@ -3569,6 +3571,11 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "power_status")  == 0) handle_power_status(conn_id);
     else if (strcmp(cmd, "power_profile") == 0) handle_power_profile(conn_id, buf);
     else if (strcmp(cmd, "dap_start")     == 0) handle_dap_start(conn_id, buf);
+    else if (strcmp(cmd, "spi_start")     == 0) handle_spi_start(conn_id, buf);
+    else if (strcmp(cmd, "spi_stop")      == 0) handle_spi_stop(conn_id);
+    else if (strcmp(cmd, "spi_xfer")      == 0) handle_spi_xfer(conn_id, buf);
+    else if (strcmp(cmd, "spi_flash")     == 0) handle_spi_flash(conn_id, buf);
+    else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id);
     else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id);
     else if (strcmp(cmd, "identity_pop")    == 0) handle_identity_pop(conn_id, buf);
     else if (strcmp(cmd, "sensor_start")  == 0) handle_sensor_start(conn_id, buf);

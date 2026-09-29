@@ -46,6 +46,8 @@ static void test_defaults_and_names(void) {
     }
     CHECK(la_pins_owned_mask() == 0);
     CHECK_STR(la_fn_name(LA_FN_STEP_DIR), "step_dir");
+    CHECK_STR(la_fn_name(LA_FN_SPI_SCK), "spi_sck");
+    CHECK_STR(la_fn_name(LA_FN_SPI_CS), "spi_cs");
     CHECK_STR(la_fn_name(LA_FN_SWD_DIO), "swd_dio");
     CHECK(la_pull_dir(1) == LA_PULL_UP && la_pull_dir(6) == LA_PULL_UP);
     CHECK(la_pull_dir(7) == LA_PULL_DOWN && la_pull_dir(8) == LA_PULL_DOWN);
@@ -88,6 +90,9 @@ static void test_claims_and_conflicts(void) {
     CHECK_STR(err, "pin conflict: LA2 is in use by i2c_scl; stop the sensor emulation first ({\"cmd\":\"sensor_stop\"})");
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 6 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
     CHECK_STR(err, "pin conflict: LA6 is in use by step; wait for the step train to finish");
+    la_pins_claim(LA_FN_SPI_CS, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
+    CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
+    CHECK_STR(err, "pin conflict: LA9 is in use by spi_cs; stop the SPI session first ({\"cmd\":\"spi_stop\"})");
 
     /* a replacing sensor_start treats the old sensor's pins as free */
     la_pins_reset();

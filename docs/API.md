@@ -1117,6 +1117,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--arm-an-emulated-sensor) | `sensor_stop`, or a replacing `sensor_start` |
 | `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
+| `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
 
 **Captures never own pins.** `la_capture`, `capture_dual`, `sensor_la` and capture triggers
 observe all 12 channels whatever their function.
@@ -1142,6 +1143,7 @@ pin conflict: LA<n> is in use by <function>; <how to release>
 | `swd_clk` / `swd_dio` | `end the SWD session first` |
 | `i2c_sda` / `i2c_scl` | `stop the sensor emulation first ({"cmd":"sensor_stop"})` |
 | `step` / `step_dir` | `wait for the step train to finish` |
+| `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
@@ -1159,7 +1161,7 @@ whose pull is engaged, and when engaging a pull on a pin that already has a func
 
 | Function | Pull-up engaged | Pull-down engaged (LA7/LA8) |
 |---|---|---|
-| `none`, gpio `input`, gpio `output`, `swd_clk`, `step`, `step_dir` | ok | ok |
+| `none`, gpio `input`, gpio `output`, `swd_clk`, `step`, `step_dir`, `spi_*` | ok | ok |
 | gpio `open_drain` | ok | **conflict** — a released line would read low |
 | `uart_rx`, `uart_tx` | ok | **conflict** — the line idles high |
 | `i2c_sda`, `i2c_scl` | ok | **conflict** — an open-drain bus needs pull-ups |
@@ -1780,6 +1782,81 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
+
+## SPI master (flash an SPI device)
+
+Gateware v44+ (`status` caps `spi_master`).  The iCE40 engine that runs SWD has a second job:
+an SPI master on any four LA pins, used to read and program SPI NOR flash (W25Q, MX25, GD25,
+IS25 and other 25-series parts) or to talk to any other SPI device.  One engine, so an SPI
+session and an SWD session (`dap_start`) exclude each other.
+
+Hold the DUT in reset while you flash its SPI flash (`{"cmd":"nrst","assert":true}`) so its own
+controller does not drive the same wires, and release it afterwards.
+
+Every command and reply fits one cloud frame, so all of this also works over the cloud
+command channel.
+
+### `spi_start` — claim four pins for SPI
+
+```json
+{"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}
+```
+
+| Field | Meaning |
+|---|---|
+| `sck`, `mosi`, `miso`, `cs` | LA pins 1..14, all different |
+| `hz` | SCK rate, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
+| `mode` | 0 (default) or 3 |
+
+Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
+CS is driven high (released) until a transfer.  Needs the LA voltage set first.
+
+Errors: `SPI master needs gateware v44+`, `spi busy: send spi_stop first`,
+`swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
+
+### `spi_stop` / `spi_status`
+
+`{"cmd":"spi_stop"}` releases the four pins (they go back to high-Z).
+`{"cmd":"spi_status"}` returns `{"active":false}` or the session's pins, rate, mode and whether
+CS is held.
+
+### `spi_xfer` — raw full-duplex transfer
+
+```json
+{"cmd":"spi_xfer","tx":"nwAAAA","cs":"release"}
+```
+
+`tx` is 1..768 bytes, base64url.  The reply carries the bytes clocked in at the same positions:
+`{"rx":"_-9AFw","cs":"released"}`.  CS is asserted before the first byte; `"cs":"hold"` keeps
+it asserted for the next `spi_xfer`, so one transaction can span several commands.
+
+### `spi_flash` — SPI NOR flash operations
+
+Standard 25-series commands with 3-byte addresses (the first 16 MB).
+
+| Request | Reply |
+|---|---|
+| `{"cmd":"spi_flash","op":"id"}` | `{"id":"ef4017","present":true,"size":8388608,"status":0}` |
+| `{"cmd":"spi_flash","op":"read","addr":0,"len":1024}` | `{"addr":0,"len":1024,"data":"<b64url>"}` (len 1..1024) |
+| `{"cmd":"spi_flash","op":"erase","addr":0,"len":65536}` | `{"addr":0,"len":65536,"ms":152}` |
+| `{"cmd":"spi_flash","op":"write","addr":0,"data":"<b64url>"}` | `{"addr":0,"len":768,"verified":true,"ms":9}` |
+| `{"cmd":"spi_flash","op":"chip_erase"}` | `{"ms":21500}` |
+
+- `present` is false when the ID reads all 00 or all FF: nothing is answering on those pins.
+- `erase` erases every 4 KB sector the range touches (64 KB block erases where a whole block
+  is covered), up to 1 MB per command.  The reply gives the range actually erased.
+- `write` programs 1..768 bytes on an already-erased range and reads them back
+  (`"verify":false` skips the read-back).  Page boundaries are handled.
+- `chip_erase` can take minutes on a large part and can outlast the cloud reply timeout; over
+  the cloud prefer `erase` in 1 MB steps.
+
+Errors: `write enable did not stick: no flash answering, or it is write-protected`,
+`flash stayed busy (WIP never cleared)`, `verify failed at 0x...: not erased, write-protected,
+or a bad wire`, `no SPI session: send spi_start first`.  The pod does not clear block-protect
+bits; a part that ships protected needs its status register written with `spi_xfer`.
+
+A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
+`write` it in 768-byte chunks, `nrst` release, `spi_stop`.
 
 ## Emulated I2C sensor
 

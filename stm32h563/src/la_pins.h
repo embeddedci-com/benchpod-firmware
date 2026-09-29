@@ -5,7 +5,7 @@
  * la_pins — who owns each of the 14 logic-analyzer pins (LA1..LA14 on the iCE40).
  *
  * The gateware's la_bank.v resolves overlapping drivers silently, by priority
- * (swd > stepper > i2c > uart > static GPIO_SET).  Nothing used to stop a UART proxy and an
+ * (swd/spi > stepper > i2c > uart > static GPIO_SET).  Nothing used to stop a UART proxy and an
  * emulated I2C sensor from sharing a channel; the loser simply did not work.  This table
  * gives every pin exactly ONE function, refuses a claim that would collide, and owns the
  * pull-resistor compatibility rules and the exact error strings (clients parse the
@@ -34,6 +34,10 @@ typedef enum {
     LA_FN_I2C_SCL,
     LA_FN_STEP,       /* `la` step train */
     LA_FN_STEP_DIR,
+    LA_FN_SPI_SCK,    /* spi_start (the SWD engine in SPI mode) */
+    LA_FN_SPI_MOSI,
+    LA_FN_SPI_MISO,
+    LA_FN_SPI_CS,
     LA_FN__COUNT
 } la_fn_t;
 
