@@ -38,6 +38,7 @@ module tb_uart_engine;
 
     // loopback
     wire       tx_out;
+    reg        glitch = 1'b0;      // 1 pulls the RX line low (start-bit / glitch tests)
     wire       uart_armed;
 
     uart_engine dut (
@@ -48,7 +49,7 @@ module tb_uart_engine;
         .tx_we(tx_we), .tx_wdata(tx_wdata), .tx_full(tx_full), .tx_empty(tx_empty),
         .rx_re(rx_re), .rx_rdata(rx_rdata), .rx_avail(rx_avail),
         .rx_overflow(rx_overflow), .rx_ovf_clr(rx_ovf_clr),
-        .rx_in(tx_out),            // <-- loopback
+        .rx_in(tx_out & ~glitch),  // <-- loopback (+ injected low pulses)
         .tx_out(tx_out)
     );
 
@@ -101,6 +102,28 @@ module tb_uart_engine;
         end
     endtask
 
+    // RX start-bit check: the line is re-sampled floor(div/2) clocks after the start edge,
+    // so a low pulse of floor(div/2) clocks is a glitch and one clock more is a start bit
+    // (whose data bits then read all ones: 0xFF).  Checks the exact boundary.
+    task start_boundary(input integer div);
+        reg [8:0] av0;
+        begin
+            av0 = rx_avail;
+            @(posedge clk); glitch = 1'b1; tick(div / 2); glitch = 1'b0;
+            tick(12 * div);
+            if (rx_avail !== av0) begin
+                $display("FAIL: div %0d: a %0d-clk low pulse was taken as a start bit", div, div / 2);
+                errors = errors + 1;
+            end else $display("ok:   div %0d: %0d-clk low pulse rejected", div, div / 2);
+            @(posedge clk); glitch = 1'b1; tick(div / 2 + 1); glitch = 1'b0;
+            tick(12 * div);
+            if (rx_avail !== av0 + 9'd1) begin
+                $display("FAIL: div %0d: a %0d-clk low pulse was not a start bit", div, div / 2 + 1);
+                errors = errors + 1;
+            end else $display("ok:   div %0d: %0d-clk low pulse starts a frame", div, div / 2 + 1);
+        end
+    endtask
+
     // One UART frame = 10 bit times; div clks per bit → ~10*div clks + sync.
     localparam integer FRAME_CLKS = 10 * 16 + 40;
 
@@ -143,9 +166,13 @@ module tb_uart_engine;
         push(8'hC6); tick(FRAME_CLKS + 100);
         pop(b0); check_eq(b0, 8'h55, "rx @div13");
         pop(b1); check_eq(b1, 8'hC6, "rx @div13 (2nd)");
+        start_boundary(13);
+        pop(b0); check_eq(b0, 8'hFF, "rx @div13 (bare start bit)");
         @(posedge clk); cfg_div = 24'd16; cfg_stb = 1'b1;
         @(posedge clk); cfg_stb = 1'b0;
         tick(4);
+        start_boundary(16);
+        pop(b0); check_eq(b0, 8'hFF, "rx @div16 (bare start bit)");
 
         // ---- Test 2: overflow flag when RX FIFO fills (257 bytes) ----
         // push 257 bytes through; FIFO depth is 256, so at least one is dropped.
