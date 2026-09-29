@@ -43,6 +43,11 @@ module tb_dispatch_args;
     // I2C register-file write port (I2C_LOAD_REGS)
     wire        i2c_reg_we;
     wire [7:0]  i2c_reg_waddr, i2c_reg_wdata;
+    // I2C register-file read port (I2C_READ_REGS): registered, like i2c_regfile.v.
+    // Cell a holds a ^ 8'h5A so every address reads back a distinct value.
+    wire [7:0]  i2c_reg_raddr;
+    reg  [7:0]  i2c_reg_rdata = 8'h00;
+    always @(posedge clk) i2c_reg_rdata <= i2c_reg_raddr ^ 8'h5A;
 
     // UART TX FIFO write port (UART_WRITE)
     wire        uart_tx_we;
@@ -102,6 +107,7 @@ module tb_dispatch_args;
         .i2c_cfg_busy_reg(i2c_cfg_busy_reg), .i2c_cfg_busy_mask(i2c_cfg_busy_mask),
         .i2c_cfg_conv_us(i2c_cfg_conv_us),
         .i2c_reg_we(i2c_reg_we), .i2c_reg_waddr(i2c_reg_waddr), .i2c_reg_wdata(i2c_reg_wdata),
+        .i2c_reg_raddr(i2c_reg_raddr), .i2c_reg_rdata(i2c_reg_rdata),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch),
         .uart_cfg_tx_ch(uart_cfg_tx_ch), .uart_cfg_div(uart_cfg_div),
         .uart_cfg_enable(uart_cfg_enable),
@@ -214,6 +220,29 @@ module tb_dispatch_args;
                     $display("FAIL load_regs idx %0d: addr=%02h data=%02h",
                              k, rg_a[k], rg_d[k]); errors = errors + 1;
                 end
+        end
+    endtask
+
+    // group B: I2C_READ_REGS [start][len] streams the register file back.  Like SWD_READ, the
+    // first step reloads tx_byte from the registered read port before the incremented address
+    // reaches it, so the stream is r[start], r[start], r[start+1], ...  The firmware
+    // (fpga_i2c_read_regs) asks for len+1 bytes and drops the first; this pins that contract.
+    // The reply to padding byte k is the tx_byte left by the byte before it (spi_slave preloads
+    // tx_sr between bytes).
+    task test_read_regs(input [7:0] start, input integer n);
+        integer k; reg [7:0] got, want; begin
+            cs_hi;
+            feed(8'h63); feed(start); feed(n[7:0]); feed(n[15:8]);
+            for (k = 0; k < n; k = k + 1) begin
+                got  = tx_byte;                                   // shifted out during pad k
+                want = (k == 0 ? start : start + k[7:0] - 8'd1) ^ 8'h5A;
+                if (got !== want) begin
+                    $display("FAIL read_regs start=%02h n=%0d byte %0d: %02h want %02h",
+                             start, n, k, got, want); errors = errors + 1;
+                end
+                feed(8'h00);
+            end
+            cs_lo;
         end
     endtask
 
@@ -510,6 +539,9 @@ module tb_dispatch_args;
         test_load_wave(3);
         test_load_wave(8);
         test_load_regs(8'h10, 3);
+        test_read_regs(8'hD0, 5);   // BMP280 chip-id window + the duplicated lead byte
+        test_read_regs(8'hFC, 5);   // firmware's len+1 read of the last 4 cells (never reads 0x00)
+        test_read_regs(8'h20, 1);   // single byte: r[start]
         test_uart_write(5);    // length-prefixed inbound stream
         test_uart_write_zero;  // zero-length -> straight to DONE
         test_gpio_step;

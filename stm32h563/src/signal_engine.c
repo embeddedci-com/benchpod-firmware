@@ -2624,10 +2624,19 @@ int fpga_i2c_load_regs(uint8_t start_addr, const uint8_t *data, size_t len) {
 
 int fpga_i2c_read_regs(uint8_t start_addr, uint8_t *buf, size_t len) {
     if (!buf || len == 0 || (size_t)start_addr + len > 256) return -1;
-    uint8_t args[3] = { start_addr,
-                        (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
-    spi_cmd_read(CMD_I2C_READ_REGS, args, sizeof(args), buf, len);
-    return 0;
+    /* I2C_READ_REGS sends r[start] twice, like SWD_READ (see fpga_spi_xfer): ask for one byte
+       more and clock the first into a scratch byte. The extra byte never reads past
+       r[start + len - 1], so the bound above still holds; len + 1 fits the 16-bit length. */
+    size_t want = len + 1;
+    uint8_t hdr[4] = { CMD_I2C_READ_REGS, start_addr,
+                       (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    uint8_t lead;
+    cs_select();
+    int rc = spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, &lead, 1);
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, buf, len);
+    cs_deselect();
+    return rc == 0 ? 0 : -1;
 }
 
 int fpga_i2c_sensor_status(i2c_sensor_status_t *out) {
