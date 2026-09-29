@@ -1,4 +1,5 @@
 #include "cloud_client.h"
+#include "nrst_ctrl.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
 #include "device_identity.h"
@@ -661,6 +662,7 @@ static bool cl_send_capabilities(void) {
         "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
         "\"dac_cotrig\":%s,"
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,"
+        "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
         "\"capture_b64\":true,\"dac_limits\":true,"
         "\"board\":\"%s\",",
@@ -673,6 +675,7 @@ static bool cl_send_capabilities(void) {
         loop_map ? "true" : "false", cotrig ? "true" : "false",
         caps.gpio_read ? "true" : "false", caps.capture_trigger ? "true" : "false",
         caps.spi_master ? "true" : "false",
+        nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
         BOARD_NAME);
     if (n <= 0 || (size_t)n >= sizeof(f)) return false;
     /* Boot health, sent on every connect so the server always holds the current boot's
