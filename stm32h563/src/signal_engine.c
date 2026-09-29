@@ -2529,13 +2529,23 @@ void fpga_spi_cs(bool asserted) {
     spi_cmd_write(CMD_SPI_CS, &level, 1);
 }
 
+/* The gateware (v45) shifts each byte out bit 0 first, sharing the SWD transfer sequencer; an
+   SPI device wants MSB first, so bytes are bit-reversed on the way in and out. */
+static uint8_t rev8(uint8_t b) {
+    b = (uint8_t)((b & 0xF0u) >> 4 | (b & 0x0Fu) << 4);
+    b = (uint8_t)((b & 0xCCu) >> 2 | (b & 0x33u) << 2);
+    return (uint8_t)((b & 0xAAu) >> 1 | (b & 0x55u) << 1);
+}
+
 int fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n) {
     if (!spi_armed_local || !tx || n == 0 || n > SPI_XFER_MAX) return -1;
 
+    static uint8_t txr[SPI_XFER_MAX];
+    for (size_t i = 0; i < n; i++) txr[i] = rev8(tx[i]);
     uint8_t hdr[3] = { CMD_SWD_FEED, (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
     cs_select();
     spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
-    spi_write_blocking(SPI_PORT, tx, n);
+    spi_write_blocking(SPI_PORT, txr, n);
     cs_deselect();
 
     absolute_time_t deadline = make_timeout_time_us(SPI_IDLE_TIMEOUT_US);
@@ -2556,7 +2566,7 @@ int fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n) {
     size_t want = n + 1;
     uint8_t args[2] = { (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), buf, want);
-    memcpy(rx, buf + 1, n);
+    for (size_t i = 0; i < n; i++) rx[i] = rev8(buf[1 + i]);
     return 0;
 }
 

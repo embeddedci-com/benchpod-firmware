@@ -211,7 +211,8 @@ module tb_top_spi;
             n1 = n + 1;
             cs_lo;
             spi_byte(8'h51, junk); spi_byte(n[7:0], junk); spi_byte(n[15:8], junk);
-            for (j = 0; j < n; j = j + 1) spi_byte(txb[j], junk);
+            // v45: the engine shifts bit 0 first; an MSB-first device gets bit-reversed bytes
+            for (j = 0; j < n; j = j + 1) spi_byte(rev8(txb[j]), junk);
             cs_hi;
             polls = 0;
             r = 8'h02;
@@ -225,10 +226,14 @@ module tb_top_spi;
             cs_lo;
             spi_byte(8'h52, junk); spi_byte(n1[7:0], junk); spi_byte(n1[15:8], junk);
             spi_byte(8'h00, junk);
-            for (j = 0; j < n; j = j + 1) spi_byte(8'h00, rxb[j]);
+            for (j = 0; j < n; j = j + 1) begin spi_byte(8'h00, rxb[j]); rxb[j] = rev8(rxb[j]); end
             cs_hi;
         end
     endtask
+
+    function [7:0] rev8(input [7:0] b);
+        integer q; begin for (q = 0; q < 8; q = q + 1) rev8[q] = b[7 - q]; end
+    endfunction
 
     task check(input [7:0] got, input [7:0] want, input [255:0] name);
         begin

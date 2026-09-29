@@ -58,8 +58,10 @@ OPCODES = [
     ("SWD_DISARM",      0x53, "—",                                              "—"),
     # 0x54 SWD_STATUS removed (v17): never sent by v2 firmware (dead gateware decode).
     # SPI master (v44): the SWD engine's second job.  SPI_ARM takes over the engine; SWD_FEED
-    # then queues data bytes (<= 512 per feed) that the engine shifts out MSB first, and
-    # SWD_READ returns the bytes it clocked in.  SWD_DISARM releases the pins.
+    # then queues data bytes (<= 512 per feed) that the engine shifts out, and SWD_READ returns
+    # the bytes it clocked in.  SWD_DISARM releases the pins.  v45: bit 0 goes out first and the
+    # first bit clocked in lands in bit 0 (the SWD sequencer's order): send bytes bit-reversed
+    # for an MSB-first device and reverse the reply.
     ("SPI_ARM",         0x55, "sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3)", "— (v2 >=v44; CS starts released, driven high)"),
     ("SPI_CS",          0x56, "level (1 = assert CS low, 0 = release high)",    "— (v2 >=v44; only change it while SPI_STATUS says idle)"),
     # SWD transfer queue (v45): whole SWD transfers run by the fabric (see swd_engine.v).

@@ -27,8 +27,10 @@
 // SPI mode (v44, SPI_ARM).  The same two slots carry SCK (clk slot) and MOSI (dio slot,
 // always driven), plus a CS output (driven high = released until SPI_CS asserts it) and
 // a MISO input channel.  Each SWD_FEED byte is queued in a second BRAM (tmem) and shifted
-// out MSB first; the byte clocked in lands in the reply buffer at the same index, so
-// SWD_READ returns the response of the same feed.  The shifter runs on its own clock
+// out BIT 0 FIRST (v45: the SPI byte runs on the SWD transfer sequencer, which shifts right;
+// the firmware bit-reverses bytes for an MSB-first device, both ways); the byte clocked in
+// lands in the reply buffer at the same index, so SWD_READ returns the response of the
+// same feed.  The shifter runs on its own clock
 // (`half` clk per SCK half period), so the link rate and the SPI rate are independent:
 // the host queues up to 512 bytes and polls `spi_busy` (SPI_STATUS).
 //
@@ -152,41 +154,35 @@ module swd_engine #(
         else     begin dio_s0 <= dio_in; dio_s1 <= dio_s0; end
     end
 
-    // ---- shared shifter state (SPI byte / SWD transfer; one job at a time) ----
+    // ---- the sequencer: SPI bytes or SWD transfers from the queue (one job at a time) ----
+    // One cycle = `half` clk low then `half` clk high.  Its index `idx` (and SWDIO) moves on at
+    // the end of the high half, i.e. on the falling edge.
+    //   SPI:  a unit is one byte, idx 0..7; MOSI = sh[0]; MISO is taken at the END of the high
+    //         half (the device changed it on the falling edge; the 2-flop synchroniser then sees
+    //         the pin at the rising edge) and shifted in at the top as the byte shifts out.
+    //   SWD:  a unit is one transfer (see the header), idx 0..end_idx; the target's bit is taken
+    //         at the end of the LOW half.
     reg [5:0]  hcnt;                      // clk left in this half period
-    reg [2:0]  bcnt;                      // bit within the byte
     reg [7:0]  sh;
-    reg        qready;                    // qptr != fptr, one edge late (t_rd is valid with it)
-
-    // SPI
-    localparam SP_IDLE = 2'd0, SP_LOAD = 2'd1, SP_LOW = 2'd2, SP_HIGH = 2'd3;
-    reg [1:0]  sst;
-    wire       spi_pending = (fptr != qptr);
-    wire [7:0] sh_in = {sh[6:0], dio_s1};
-
-    // SWD queue
-    reg        qmode;                     // the current feed queues transfers
+    reg        qmode;                     // the current feed queues SWD transfers
     localparam Q_IDLE = 1'b0, Q_RUN = 1'b1;
     reg        qst;
-    // One index per SWCLK cycle of a transfer; every segment is a range of it:
-    //   0..7 request (driven) | 8 turnaround | 9..11 ACK (sampled) |
-    //   read:  12..43 data + 44 parity (sampled), 45 turnaround
-    //   write: 12 turnaround, 13..44 data + 45 parity (driven)
-    //   46..end_idx idle (driven 0)
-    // A non-OK ACK jumps to 45 as a read would (a released turnaround), then idles.
     reg [6:0]  idx;
-    reg [6:0]  end_idx;                   // 45 + idle cycles (SWD_QCONFIG)
+    reg [6:0]  end_idx;                   // SPI 7; SWD 45 + idle cycles (SWD_QCONFIG)
     reg        ph;                        // 0 = low half, 1 = high half
+    reg        qready;                    // qptr != fptr, one edge late (t_rd is valid with it)
     reg        isrd, par, fail, perr, qstop;
     reg [2:0]  ack;
+    wire       run    = armed_r & (spi_r | qmode);
     wire       q_active = armed_r & ~spi_r & qmode;
     wire       ack_ok = (ack == 3'b001);
+    wire       spi_pending = (fptr != qptr);
 
     // SWDIO in queue mode: a function of the sequencer state (updated on the falling edge)
     wire       q_idle_cyc = (idx >= 7'd46) | (qst == Q_IDLE);
     wire       q_oe  = (idx < 7'd8) | q_idle_cyc | (~isrd & (idx >= 7'd13));
     wire       q_out = ~q_idle_cyc & ((idx == 7'd45) ? par : sh[0]);
-    wire       q_byte_in = ~isrd & ((idx == 7'd12) | (idx == 7'd20) | (idx == 7'd28) | (idx == 7'd36));
+    wire       q_byte_in = ~spi_r & ~isrd & ((idx == 7'd12) | (idx == 7'd20) | (idx == 7'd28) | (idx == 7'd36));
 
     always @(posedge clk) begin
         if (rst) begin
@@ -201,12 +197,11 @@ module swd_engine #(
             swdio_oe       <= 1'b1;
             cs_n           <= 1'b1;
             half_r         <= 6'd4;
-            cpol_r         <= 1'b0;
+            cpol_r         <= 1'b1;
             end_idx        <= 7'd53;
             wptr           <= {REPLY_AW{1'b0}};
             fptr           <= {REPLY_AW{1'b0}};
             qptr           <= {REPLY_AW{1'b0}};
-            sst            <= SP_IDLE;
             qst            <= Q_IDLE;
             qmode          <= 1'b0;
             qready         <= 1'b0;
@@ -217,11 +212,10 @@ module swd_engine #(
             if (disarm_stb) begin
                 armed_r <= 1'b0;
                 spi_r   <= 1'b0;
-                sst     <= SP_IDLE;
                 qst     <= Q_IDLE;
             end else if (arm_stb) begin
                 // Initial line state: SWCLK low, SWDIO driven low.  Matches the
-                // old swd_probe_arm().
+                // old swd_probe_arm().  Between queued transfers SWCLK rests high.
                 armed_r        <= 1'b1;
                 spi_r          <= 1'b0;
                 clk_ch_r       <= arm_clk_ch;
@@ -230,8 +224,9 @@ module swd_engine #(
                 swclk_lvl      <= 1'b0;
                 swdio_out      <= 1'b0;
                 swdio_oe       <= 1'b1;
+                cpol_r         <= 1'b1;
+                end_idx        <= 7'd53;               // 8 idle cycles until SWD_QCONFIG
                 wptr           <= {REPLY_AW{1'b0}};
-                sst            <= SP_IDLE;
                 qst            <= Q_IDLE;
                 qmode          <= 1'b0;
             end else if (spi_arm_stb) begin
@@ -244,6 +239,7 @@ module swd_engine #(
                 cs_ch_r        <= spi_cs_ch;
                 half_r         <= spi_half;
                 cpol_r         <= spi_cpol;
+                end_idx        <= 7'd7;                // a unit is one byte
                 swclk_lvl      <= spi_cpol;
                 swdio_out      <= 1'b0;
                 swdio_oe       <= 1'b1;
@@ -251,8 +247,9 @@ module swd_engine #(
                 wptr           <= {REPLY_AW{1'b0}};
                 fptr           <= {REPLY_AW{1'b0}};
                 qptr           <= {REPLY_AW{1'b0}};
-                sst            <= SP_IDLE;
                 qst            <= Q_IDLE;
+                qmode          <= 1'b0;
+                qstop          <= 1'b0;
             end
 
             if (spi_cs_stb) cs_n <= ~spi_cs_assert;
@@ -287,58 +284,18 @@ module swd_engine #(
             end
 
             // ---- SPI data bytes / SWD transfers: into the queue ----
-            if (feed_stb && armed_r && (spi_r || qmode)) begin
+            if (feed_stb && run) begin
                 tmem[fptr] <= feed_byte;
                 fptr       <= fptr + 1'b1;
             end
 
-            // ---- SPI: shift the queue out, one byte at a time ----
-            // t_rd is tmem[qptr] read one edge earlier: SP_LOAD waits that edge out.
-            if (armed_r && spi_r) begin
-                case (sst)
-                    SP_IDLE: if (spi_pending) sst <= SP_LOAD;
-                    SP_LOAD: begin
-                        sh        <= t_rd;
-                        swdio_out <= t_rd[7];
-                        swclk_lvl <= 1'b0;
-                        bcnt      <= 3'd7;
-                        hcnt      <= half_r - 6'd1;
-                        qptr      <= qptr + 1'b1;
-                        sst       <= SP_LOW;
-                    end
-                    SP_LOW:
-                        if (hcnt == 6'd0) begin
-                            swclk_lvl <= 1'b1;            // rising edge: target samples MOSI
-                            hcnt      <= half_r - 6'd1;
-                            sst       <= SP_HIGH;
-                        end else hcnt <= hcnt - 6'd1;
-                    SP_HIGH:
-                        if (hcnt != 6'd0) hcnt <= hcnt - 6'd1;
-                        else if (bcnt == 3'd0) begin     // last bit: store the byte
-                            rmem[wptr] <= sh_in;
-                            wptr       <= wptr + 1'b1;
-                            swclk_lvl  <= cpol_r;         // back to idle
-                            sst        <= SP_IDLE;
-                        end else begin                    // falling edge + next MOSI bit
-                            sh        <= sh_in;
-                            swdio_out <= sh[6];
-                            swclk_lvl <= 1'b0;
-                            bcnt      <= bcnt - 3'd1;
-                            hcnt      <= half_r - 6'd1;
-                            sst       <= SP_LOW;
-                        end
-                endcase
-            end
-
-            // ---- SWD transfer queue ----
-            // A cycle is `half` clk low then `half` clk high.  The target's bit is taken at the end
-            // of the low half; idx (and with it SWDIO) moves on at the end of the high half, i.e.
-            // on the falling edge.  A step that takes a queued data byte (q_byte_in) waits, SWCLK
-            // high, until qready says it has arrived.
+            // ---- the sequencer ----
+            // A step that takes a queued data byte (q_byte_in) waits, SWCLK high, until qready
+            // says it has arrived.
             qready <= (qptr != fptr) & ~feed_begin;   // a new feed resets the pointers this edge
-            if (q_active) begin
+            if (run) begin
                 if (qst == Q_IDLE) begin
-                    if (!qstop && qready) begin             // t_rd = the request byte
+                    if (!qstop && qready) begin             // t_rd = the SPI byte / request byte
                         sh        <= t_rd;
                         isrd      <= t_rd[2];
                         qptr      <= qptr + 1'b1;
@@ -352,9 +309,9 @@ module swd_engine #(
                     end
                 end else if (hcnt != 6'd0) hcnt <= hcnt - 6'd1;
                 else if (!ph) begin
-                    // end of the low half: the bit the target drove on the last rising edge
-                    if (idx >= 7'd9 && idx <= 7'd11) ack <= {dio_s1, ack[2:1]};
-                    if (isrd && idx >= 7'd12 && idx <= 7'd43) begin
+                    // end of the low half: SWD takes the bit the target drove on the last rise
+                    if (!spi_r && idx >= 7'd9 && idx <= 7'd11) ack <= {dio_s1, ack[2:1]};
+                    if (!spi_r && isrd && idx >= 7'd12 && idx <= 7'd43) begin
                         par <= par ^ dio_s1;
                         sh  <= {dio_s1, sh[7:1]};
                         if (idx[2:0] == 3'd3) begin          // 19, 27, 35, 43: a byte is in
@@ -362,7 +319,7 @@ module swd_engine #(
                             wptr       <= wptr + 1'b1;
                         end
                     end
-                    if (isrd && idx == 7'd44) perr <= par ^ dio_s1;
+                    if (!spi_r && isrd && idx == 7'd44) perr <= par ^ dio_s1;
                     swclk_lvl <= 1'b1;
                     ph        <= 1'b1;
                     hcnt      <= half_r - 6'd1;
@@ -372,17 +329,25 @@ module swd_engine #(
                     hcnt      <= half_r - 6'd1;
                     swclk_lvl <= 1'b0;
                     idx       <= idx + 7'd1;
-                    if (idx < 7'd8) sh <= {1'b0, sh[7:1]};                 // next request bit
-                    if (idx == 7'd11 && !ack_ok) begin                      // turnaround, then idle
-                        fail <= 1'b1; isrd <= 1'b1; idx <= 7'd45;
+                    if (spi_r) begin
+                        sh <= {dio_s1, sh[7:1]};                            // MISO in, next MOSI bit out
+                        if (idx == 7'd7) begin
+                            rmem[wptr] <= {dio_s1, sh[7:1]};
+                            wptr       <= wptr + 1'b1;
+                        end
+                    end else begin
+                        if (idx < 7'd8) sh <= {1'b0, sh[7:1]};             // next request bit
+                        if (idx == 7'd11 && !ack_ok) begin                  // turnaround, then idle
+                            fail <= 1'b1; isrd <= 1'b1; idx <= 7'd45;
+                        end
+                        if (!isrd && idx >= 7'd13 && idx <= 7'd44) par <= par ^ sh[0];
+                        if (q_byte_in) begin sh <= t_rd; qptr <= qptr + 1'b1; end
+                        else if (!isrd && idx >= 7'd13) sh <= {1'b0, sh[7:1]};
                     end
-                    if (!isrd && idx >= 7'd13 && idx <= 7'd44) par <= par ^ sh[0];
-                    if (q_byte_in) begin sh <= t_rd; qptr <= qptr + 1'b1; end
-                    else if (!isrd && idx >= 7'd13) sh <= {1'b0, sh[7:1]};
-                    if (idx == end_idx) begin                               // the transfer is over
-                        swclk_lvl <= 1'b1;                                  // SWCLK stays high
+                    if (idx == end_idx) begin                               // the unit is over
+                        swclk_lvl <= cpol_r;                                // SPI idle level / SWD high
                         qst       <= Q_IDLE;
-                        if (fail || (isrd && perr)) qstop <= 1'b1;
+                        if (!spi_r && (fail || (isrd && perr))) qstop <= 1'b1;
                     end
                 end
             end
@@ -395,15 +360,15 @@ module swd_engine #(
 
     assign armed        = armed_r;
     assign spi_mode     = armed_r & spi_r;
-    assign spi_busy     = spi_mode & (spi_pending | (sst != SP_IDLE));
+    assign spi_busy     = spi_mode & (spi_pending | (qst != Q_IDLE));
     wire   q_busy       = q_active & ~qstop & ((qptr != fptr) | (qst != Q_IDLE));
     assign q_done       = qptr[7:0];
     assign q_flags      = {1'b0, qptr[8], perr, ack, qstop, q_busy};
     assign clk_ch       = clk_ch_r;
     assign clk_val      = swclk_lvl;
     assign dio_ch       = dio_ch_r;
-    assign dio_val      = q_active ? q_out : swdio_out;
-    assign dio_oe       = q_active ? q_oe  : swdio_oe;
+    assign dio_val      = q_active ? q_out : (spi_r ? sh[0] : swdio_out);
+    assign dio_oe       = q_active ? q_oe  : (spi_r | swdio_oe);
     assign in_ch        = in_ch_r;
     assign cs_ch        = cs_ch_r;
     assign cs_val       = cs_n;

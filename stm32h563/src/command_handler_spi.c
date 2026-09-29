@@ -108,7 +108,7 @@ static bool session_or_error(int conn_id) {
 void handle_spi_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     if (signal_engine_fpga_version() < SPI_MASTER_MIN_GW) {
-        send_error(conn_id, "SPI master needs gateware v44+"); return;
+        send_error(conn_id, "SPI master needs gateware v45+"); return;
     }
     static const char *const keys[4] = { "sck", "mosi", "miso", "cs" };
     uint32_t v[4];

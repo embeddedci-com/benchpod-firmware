@@ -542,7 +542,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
    session and an SPI session exclude each other (both return -2 while the other is armed).
    The shifter clocks at 24 MHz / (2 * half): half 2..63 = 6 MHz .. 190 kHz.  CS starts
    released (driven high); fpga_spi_cs() asserts it around a transaction. */
-#define SPI_MASTER_MIN_GW   44u
+#define SPI_MASTER_MIN_GW   45u   /* v45: bytes go out bit 0 first (fpga_spi_xfer reverses) */
 #define SWD_QUEUE_MIN_GW    45u
 
 /* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
