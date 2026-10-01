@@ -123,6 +123,7 @@ C_SOURCES := \
   src/dac_limits.c \
   src/dac_limits_hw.c \
   src/adc_zero.c \
+  src/adc_zero_hw.c \
   src/flash_compat.c \
   src/rng.c \
   src/hw_lock.c \

@@ -17,6 +17,7 @@
 #include "can_bus.h"
 #include "cal_data.h"
 #include "adc_scale.h"     /* circular-mean + unwrap for adc_read's sample burst */
+#include "adc_zero.h"      /* per-pod zero for the amp source */
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
 #include "ina238.h"
 #include "b64url.h"
@@ -2287,7 +2288,7 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"adc_zero\"");
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
@@ -3183,7 +3184,9 @@ static void handle_dac_out(int conn_id, const char *json) {
 }
 
 /* adc_read — route an ADC source AND return a CALIBRATED reading in mV.
-   {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  A short
+   {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  `amp` also
+   returns "zero_mv", the stored zero that was subtracted from `mv` (adc_zero.h; 0 when
+   none is set).  `count` stays raw.  A short
    16-sample burst, averaged ON THE 16-BIT CIRCLE and then unwrapped — see
    adc_scale.h.  Averaging the RAW counts first (what this did until 2026-07-29)
    returns a plausible-looking number that is wrong by tens of volts whenever the
@@ -3225,12 +3228,58 @@ static void handle_adc_read(int conn_id, const char *json) {
         send_error(conn_id, msg);
         return;
     }
-    char payload[96];
-    snprintf(payload, sizeof(payload),
-             "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
-             analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
-             (int)lroundf(rd.count), (unsigned)rd.span);
+    char payload[112];
+    if (p == ANALOG_PATH_AMP) {
+        /* The per-pod zero (adc_zero.h). Only `amp`: the other sources are untouched. */
+        snprintf(payload, sizeof(payload),
+                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"zero_mv\":%ld}",
+                 analog_path_name(p), (int)lroundf(adc_zero_amp_apply(rd.volts) * 1000.0f),
+                 (int)lroundf(rd.count), (unsigned)rd.span, (long)adc_zero_amp_mv());
+    } else {
+        snprintf(payload, sizeof(payload),
+                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
+                 analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
+                 (int)lroundf(rd.count), (unsigned)rd.span);
+    }
     send_ok_str(conn_id, payload);
+}
+
+static void adc_zero_reply(int conn_id, const adc_reading_t *rd) {
+    char payload[160];
+    int n = snprintf(payload, sizeof(payload), "{\"source\":\"amp\",\"set\":%s,\"zero_mv\":%ld,\"zero_uv\":%ld",
+                     adc_zero_amp_is_set() ? "true" : "false",
+                     (long)adc_zero_amp_mv(), (long)adc_zero_amp_uv());
+    if (rd)
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
+                      (int)lroundf(rd->count), (unsigned)rd->span, (unsigned)ADC_ZERO_SAMPLES);
+    snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
+    send_ok_str(conn_id, payload);
+}
+
+/* `adc_zero` — measure, read or clear the per-pod zero of the `amp` source (adc_zero.h).
+   Stored in flash and subtracted from every `adc_read` on `amp` until cleared.
+     {"cmd":"adc_zero"}                  -> the stored zero
+     {"cmd":"adc_zero","source":"amp"}   -> measure with J8 DISCONNECTED, store, return it
+     {"cmd":"adc_zero","clear":true}     -> remove it
+   The measurement is a 1024-sample average over 100 ms. A reading outside +/-50 mV means
+   something is driving J8: it is refused and the old zero stays. */
+static void handle_adc_zero(int conn_id, const char *json) {
+    char v[16] = {0};
+    if (json_get_value(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
+        if (adc_zero_clear() != 0) { send_error(conn_id, "could not clear the zero"); return; }
+        adc_zero_reply(conn_id, NULL);
+        return;
+    }
+    if (!json_get_value(json, "source", v, sizeof(v))) { adc_zero_reply(conn_id, NULL); return; }
+    if (strcmp(v, "amp") != 0) { send_error(conn_id, "source must be amp"); return; }
+    if (!heavy_begin(conn_id)) return;
+    adc_reading_t rd;
+    int rc = adc_zero_measure_amp(&rd);
+    heavy_release(conn_id);
+    if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
+    const char *why = adc_zero_amp_store(&rd);
+    if (why) { send_error(conn_id, why); return; }
+    adc_zero_reply(conn_id, &rd);
 }
 
 /* Last loop input source pushed to the gateware.  The fabric registers are write-only, so
@@ -3626,6 +3675,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "psram_ping") == 0) handle_psram_ping(conn_id, buf);
     else if (strcmp(cmd, "dac_out")   == 0) handle_dac_out(conn_id, buf);
     else if (strcmp(cmd, "adc_read")  == 0) handle_adc_read(conn_id, buf);
+    else if (strcmp(cmd, "adc_zero")  == 0) handle_adc_zero(conn_id, buf);
     else if (strcmp(cmd, "dac_control_loop") == 0) handle_dac_control_loop(conn_id, buf);
     else if (strcmp(cmd, "dac_loop_probe")   == 0) handle_dac_loop_probe(conn_id, buf);
     else if (strcmp(cmd, "dac_loop_input")   == 0) handle_dac_loop_input(conn_id, buf);
