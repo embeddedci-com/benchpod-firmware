@@ -140,7 +140,8 @@ module motor_model (
     wire [15:0] s_sum = s_base + s_off;
 
     // ---------------------------------------------------------------- pipeline registers
-    reg  [31:0] ir_x, ir_y;
+    reg  [31:0] ir_x;
+    reg         y_busy;                                 // an instruction in Y (for busy)
     reg  signed [15:0] a_y, b_y;
     reg  signed [31:0] p_y;
     // 34 bits: the largest value is a sum of three 16 x 16 products (< 2^32), so nothing overflows
@@ -249,7 +250,17 @@ module motor_model (
     wire signed [AW-1:0] p_ext = {{(AW-32){p_y[31]}}, p_y};
     wire signed [AW-1:0] na_ext = {{(AW-17){na_y[16]}}, na_y};
 
-    wire signed [AW-1:0] acc_sh = acc_c >>> shamt;         // only feeds sh_q (registered)
+    // W32ADD / THADV: acc >>> shamt (acc fits 32 bits there) on two DSPs instead of a barrel
+    // shifter: y = acc, or acc >>> 16 when shamt >= 16, then y >>> s = (y x 2^(15 - s)) >> 15 for
+    // s = shamt mod 16, as (hi16 x P) << 1 + (lo16 x P) >> 15. Pipelined: sh_q 3 clk after Y.
+    // Both products unsigned (16 x 16 fits a DSP); a negative hi16 is corrected afterwards by
+    // subtracting P << 17 (mod 2^32).
+    reg  [31:0]        acc_dl;              // acc a clk later: the shifter's input stays away from the adder
+    reg  [4:0]         shamt_d;
+    reg  [31:0]        sh_y;
+    reg  [15:0]        sh_p, sh_p2;
+    reg  [31:0]        sh_ph, sh_pl;
+    reg                sh_v0, sh_v1, sh_v2, sh_th, sh_neg;
 
     // STO / SHR: a fixed six-way shift, saturation flags straight from acc (no compare chains)
     reg  signed [AW-1:0] acc_s;
@@ -287,6 +298,7 @@ module motor_model (
     wire signed [32:0] cm_sum = $signed({cm_int[31], cm_int}) + $signed({acc_c[31], acc_c[31:0]});
     reg  signed [32:0] cm_raw;
     reg  [31:0]        sh_q;                           // shifted acc for W32ADD / THADV, added next clk
+    wire signed [19:0] adv_p = $signed(sh_q[31:16]) * $signed({1'b0, adv});   // a DSP: step x ADV
     reg                w_fix, th_fix, w_hi, th_hi;
     reg                f_c;                            // carry between the halves (W32ADD, THADV never overlap)
     reg                cm_fix;                         // clamp cm_raw into cm_int on the next clk
@@ -313,7 +325,7 @@ module motor_model (
     integer j;
 
 
-    assign busy = running | r_valid | w_fix | th_fix | w_hi | th_hi | adv_fix | cm_fix | (sstep != 4'd0) | (ir_x != 32'd0) | (ir_y != 32'd0) | (hold != 6'd0) |
+    assign busy = running | r_valid | sh_v0 | sh_v1 | sh_v2 | w_fix | th_fix | w_hi | th_hi | adv_fix | cm_fix | (sstep != 4'd0) | (ir_x != 32'd0) | y_busy | (hold != 6'd0) |
                   (|rstep) | m_go | p_go;
 
     // fetch address: mirrors the fetch decisions in the main block
@@ -329,13 +341,13 @@ module motor_model (
     always @(posedge clk) begin
         if (rst) begin
             pc <= 8'd0; running <= 1'b0; r_valid <= 1'b0; hold <= 6'd0;
-            ir_x <= 32'd0; ir_y <= 32'd0; acc <= {AW{1'b0}}; acc_c <= {AW{1'b0}};
+            ir_x <= 32'd0; y_busy <= 1'b0; acc <= {AW{1'b0}}; acc_c <= {AW{1'b0}};
             theta <= 32'd0; w32 <= 32'sd0; cm_int <= 32'sd0; count <= 16'd0;
             duty_a <= 16'h8000; duty_b <= 16'h8000; duty_c <= 16'h8000;
             e_amp <= 16'sd0; i0 <= 16'sd0; v_cm <= 16'sd0; iq <= 16'sd0; hall <= 3'b000;
             w_set <= 16'sd0; wshift <= 5'd12; jshift <= 5'd10; dt_idb <= 16'd200; hall_ofs <= 16'd0;
             adv <= 3'd3; th_look <= 16'd0; adv_fix <= 1'b0; sstep <= 4'd0;
-            pend <= 1'b0; cm_fix <= 1'b0; w_fix <= 1'b0; th_fix <= 1'b0; w_hi <= 1'b0; th_hi <= 1'b0;
+            pend <= 1'b0; cm_fix <= 1'b0; w_fix <= 1'b0; th_fix <= 1'b0; sh_v0 <= 1'b0; sh_v1 <= 1'b0; sh_v2 <= 1'b0; w_hi <= 1'b0; th_hi <= 1'b0;
             rstep <= 31'd0; m_go <= 1'b0; p_go <= 1'b0; rpark <= 1'b1; recip <= 21'd0;
         end else begin
             // ---- parameter writes (fabric copies now, data RAM when the engine is not storing)
@@ -410,7 +422,7 @@ module motor_model (
 
             // ---- R -> X -> Y
             ir_x <= (r_op == OP_WAIT || r_op == OP_END) ? 32'd0 : ir_r;
-            ir_y <= ir_x;                               // (kept for busy)
+            y_busy <= (ir_x != 32'd0);
             nidb <= -$signed({1'b0, dt_idb[14:0]});
             // DTC's current operand is always in the data RAM: compare the RAM output directly
             if (x_op == OP_DTS) begin                   // the current is a data-RAM operand: compare qa
@@ -438,24 +450,37 @@ module motor_model (
                     endcase
                 end
                 OP_W32LD: w32 <= {a_y, 16'h0000};
-                OP_W32ADD: begin sh_q <= acc_sh[31:0]; w_fix <= 1'b1; end   // acc = the 32-bit product
+                OP_W32ADD: begin sh_v0 <= 1'b1; sh_th <= 1'b0; end         // acc = the 32-bit product
                 OP_CMADD: begin cm_raw <= cm_sum; cm_fix <= 1'b1; end
                 OP_CMZ:   cm_int <= 32'sd0;
                 OP_THADV: begin                                   // acc = w32 (ACCW)
-                    sh_q  <= acc_sh[31:0]; th_fix <= 1'b1;
+                    sh_v0 <= 1'b1; sh_th <= 1'b1;
                     count <= count + 16'd1;
                 end
                 default: ;
             endcase
             // the 32-bit adds go in two 16-bit halves (low half and carry, then high half): a 32-bit
             // carry chain placed across the die missed timing
+            // the shift pipeline (sh_v1 is set by the Y stage above for W32ADD / THADV)
+            acc_dl <= acc_c[31:0]; shamt_d <= shamt;
+            sh_y  <= shamt_d[4] ? {{16{acc_dl[31]}}, acc_dl[31:16]} : acc_dl;
+            sh_p  <= 16'd1 << (4'd15 - shamt_d[3:0]);
+            sh_v1 <= sh_v0;
+            sh_v2 <= sh_v1;
+            if (sh_v0 && !(y_go && (y_op == OP_W32ADD || y_op == OP_THADV))) sh_v0 <= 1'b0;
+            sh_ph <= sh_y[31:16] * sh_p;
+            sh_pl <= sh_y[15:0] * sh_p;
+            sh_neg <= sh_y[31]; sh_p2 <= sh_p;
+            if (sh_v2) begin
+                sh_q <= {sh_ph[30:0], 1'b0} + {15'd0, sh_pl[31:15]} - (sh_neg ? {sh_p2[14:0], 17'd0} : 32'd0);
+                if (sh_th) th_fix <= 1'b1; else w_fix <= 1'b1;
+            end
             if (w_fix)  begin w_fix <= 1'b0; w_hi <= 1'b1; {f_c, w32[15:0]} <= {1'b0, w32[15:0]} + {1'b0, sh_q[15:0]}; end
             if (w_hi)   begin w_hi <= 1'b0; w32[31:16] <= w32[31:16] + sh_q[31:16] + {15'd0, f_c}; end
             if (th_fix) begin
                 th_fix  <= 1'b0; th_hi <= 1'b1;
                 {f_c, theta[15:0]} <= {1'b0, theta[15:0]} + {1'b0, sh_q[15:0]};
-                adv_q   <= (adv[2] ? {sh_q[30:16], 1'b0} : 16'd0) + (adv[1] ? sh_q[31:16] : 16'd0) +
-                           (adv[0] ? {sh_q[31], sh_q[31:17]} : 16'd0);
+                adv_q   <= adv_p[16:1];                     // ADV half ticks: (step x ADV) >>> 1
             end
             if (th_hi)  begin th_hi <= 1'b0; adv_fix <= 1'b1; theta[31:16] <= theta[31:16] + sh_q[31:16] + {15'd0, f_c}; end
             if (adv_fix) begin adv_fix <= 1'b0; th_look <= theta[31:16] + adv_q; end

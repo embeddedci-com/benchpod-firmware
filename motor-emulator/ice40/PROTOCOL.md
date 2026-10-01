@@ -36,11 +36,11 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | Addr | Name | Access | Description |
 | --- | --- | --- | --- |
 | 0x00 | ID | R | 0x4D45 ("ME") |
-| 0x01 | VERSION | R | gateware version (0x0004: model with common-mode shaping, angle advance, resistance subtraction) |
+| 0x01 | VERSION | R | gateware version (0x0005: encoder registers, every written register reads back) |
 | 0x02 | BOARD | R/W | [1:0] board id, [8] probe done, [9] probe ok (EEPROM answered). Write bit 15 = probe again |
 | 0x03 | STATUS | R | see below |
 | 0x04 | CONTROL | R/W | see below; FAULT or a watchdog trip clears PWM_EN |
-| 0x05 | ARM | W | any value: one 100 µs pulse on ARM_REQ_N (sets the board fault latch) |
+| 0x05 | ARM | W | any value: one 100-101 µs pulse on ARM_REQ_N (sets the board fault latch) |
 | 0x06 | WD_CLEAR | W | any value: clear the SYNC watchdog trip |
 | 0x07 | SCRATCH | R/W | free, for link tests |
 | 0x08 | PWM_PERIOD | R/W | clocks per bridge PWM period at 36 MHz (default 180 = 200 kHz, minimum 32) |
@@ -52,7 +52,7 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | 0x18 | BRAKE_DUTY | R/W | [7:0] brake PWM duty /256 at about 20 kHz (needs CONTROL.BRAKE_EN; board 0 only) |
 | 0x1C | HALL | R/W | [2:0] hall levels the DUT sees (C, B, A); default 111 (used unless MODE[4]) |
 | 0x20 | MODE | R/W | [1:0] 0 = direct duties (DUTY_A-C), 1 = model at fixed speed, 2 = model with mechanics; [2] common-mode loop; [3] dead-time compensation; [4] halls from the model's angle |
-| 0x21-0x2E | model parameters | W | see Motor model below (write-only: they live in the model's data memory) |
+| 0x21-0x2E | model parameters | R/W | see Motor model below |
 | 0x2F | MODEL_RESET | W | any value: angle 0, speed = W_SET, common-mode integrator 0 |
 | 0x30 | THETA | R | electrical angle, top 16 bits (65536 = one revolution) |
 | 0x31 | SPEED | R | w16 (speed, see below) |
@@ -62,9 +62,15 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | 0x35 | IQ | R | current in phase with the back-EMF |
 | 0x36-0x38 | MDUTY_A-C | R | the model's duties |
 | 0x39 | MODEL_COUNT | R | model ticks (one per PWM period) |
-| 0x3A-0x3D | I_OFS_A-C, VBUS_OFS | W | sinc offsets subtracted before the model (calibration) |
-| 0x3E | ADV | W | back-EMF angle advance in half PWM periods, 0-7 (default 3 = 1.5 periods) |
-| 0x3F | R_SUB | W | resistance subtracted from the emulated phase: u_x += R_SUB x i_x >>> 15 (see Motor model) |
+| 0x3A-0x3D | I_OFS_A-C, VBUS_OFS | R/W | sinc offsets subtracted before the model (calibration) |
+| 0x3E | ADV | R/W | back-EMF angle advance in half PWM periods, 0-7 (default 3 = 1.5 periods) |
+| 0x3F | R_SUB | R/W | resistance subtracted from the emulated phase: u_x += R_SUB x i_x >>> 15 (see Motor model) |
+| 0x40-0x48 | encoder | | see Encoder below (gateware built with ENC=1; otherwise they read 0 / as written) |
+
+Reads: the live registers (0x00-0x04, 0x10-0x15, 0x30-0x39, 0x45-0x48) return the current value;
+every other register returns the value last written to it, as written (a block-RAM mirror of the
+link writes, so the gateware's own clamping and masking, e.g. PWM_PERIOD[9:0], is not shown).
+Action registers (ARM, WD_CLEAR, MODEL_RESET) read back what was written.
 
 Changes to period, dead time, duties and min-on take effect at the start of the next PWM period.
 In model modes the period is at least 180 clk (200 kHz): the model runs once per period, takes
@@ -135,6 +141,42 @@ simulation (design doc, studies.py rsub) cut the error against a 30 mOhm motor b
 at 0x8000. Design-doc gains in these units: CM_KP about 7815, CM_KI about 5000 (Kp 160 V/A,
 Ki 80k V/(A s) at 200 kHz with 2048 codes/A and 391 codes/V). The exact fixed-point spec is in the
 header of `src/motor_model.v`; `sim/tb_motor_model.v` checks the gateware against it bit for bit.
+
+## Encoder (ENC=1 builds)
+
+The rotor position as an encoder, from the model's angle (`src/encoder.v`; `sim/tb_encoder.v`
+checks it). Not in the default image yet: with it the UP5K is over 100 % (see README, Next).
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x40 | ENC_CTRL | R/W | [0] ABZ outputs on, [1] SPI on, [3:2] SPI profile: 0 AS5047P, 1 AS5048A, 2 MA730; [4] DIR (mechanical direction) |
+| 0x41 | ENC_CPR | R/W | ABZ counts (quadrature states) per mechanical revolution, multiple of 4, 4-32764 (AS5047P default 4000, MA730 4096). A write restarts the counter at 0 |
+| 0x42 | ENC_POLES | R/W | motor pole pairs, 1-63 |
+| 0x43 | ENC_OFS | R/W | mechanical offset added to the angle (65536 = one revolution): where the magnet sits |
+| 0x44 | ENC_RF_ADDR | R/W | register-file index 0-63 |
+| 0x45 | ENC_RF_DATA | R/W | register file [ENC_RF_ADDR] |
+| 0x46 | ENC_ANGLE | R | the mechanical angle the DUT sees (16 bits per revolution) |
+| 0x47 | ENC_COUNT | R | the ABZ count, 0 .. CPR-1 |
+| 0x48 | ENC_STATUS | R | [15:8] SPI frames received, [2:0] AS504x error flags (parity, invalid command, framing) |
+
+- Angle: mech = floor((electrical revolutions mod POLES x 65536 + THETA) / POLES), exact (no
+  drift); angle = (DIR ? -mech : mech) + ENC_OFS. Updated once per PWM period. The model must not
+  move more than 1/4 electrical revolution per period.
+- ABZ: follows the angle with one PWM period of lag, edges evenly spread over the period (jitter
+  up to one generator step, about 2 clk). Up to 72M angle LSB/s (66k RPM mechanical); faster, it
+  falls behind and catches up. Z is high for the quadrature state at count 0 (A = B = 0). After
+  MODEL_RESET or an ENC_CPR write it walks to the angle at full rate (up to half a revolution).
+- SPI: SCK up to 8 MHz, CS low at least 150 ns before the first SCK edge. AS5047P / AS5048A: mode
+  1, 16-bit frames with even parity, the answer in the next frame, ERRFL / error register at
+  0x0001 (read to clear), EF sticky until then; writes (command frame, data frame) are stored.
+  MA730: mode 0 or 3, the angle in every frame (14 bits, [1:0] = 0; partial reads fine),
+  register read 010aaaaa_xxxxxxxx and write 100aaaaa_vvvvvvvv answered in the next frame.
+- Register file: 0x00-0x1F the MA730's registers (factory values at power-up), 0x20 + a the
+  AS504x registers 0x0000-0x001F (AS5047P SETTINGS1 = 0x0001), 0x3C-0x3F the AS504x registers
+  0x3FFC-0x3FFF (0x3C = AS5047P DIAAGC 0x0180, 0x3D MAG / AS5048A diagnostics, 0x3E AS5048A
+  magnitude; the angle registers are live). BenchPod loads the values for the chosen chip, and can
+  set magnet faults there. The DUT's writes are stored and read back but change nothing: zero
+  position, direction and resolution come from ENC_OFS, DIR and ENC_CPR.
 
 ## Bring-up sequence
 

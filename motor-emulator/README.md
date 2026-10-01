@@ -38,7 +38,11 @@ FPV pass (30 Sep 2026):
 | Sensing | `sinc5.v` | 5 × sinc3 OSR 64 (phases, DUT battery, bus), one shared comb pipeline with its state in block RAM |
 | Motor model | `motor_model.v`, `model.masm` | microcoded engine: 4-stage pipeline, one multiplier, 34-bit accumulator, program and data in block RAM; per PWM period (166 instructions): back-EMF at the advanced angle, R_SUB, torque, mechanics, i0 PI, dead-time compensation, min-max injection and CM shaping, duties by reciprocal, halls |
 | Board id | `i2c_probe.v` | probes the EEPROM at 0x50-0x53 at start-up: stack position |
-| Stack | `sync_wd.v` | board 0 sends SYNC (1 µs every 1 ms); watchdog on SYNC held low |
+| Stack | `sync_wd.v` | board 0 sends SYNC (1 µs every 1 ms); watchdog on SYNC held low; the µs / ms time base |
+| Encoder (ENC=1) | `encoder.v` | the rotor angle as ABZ and as an AS5047P / AS5048A / MA730 SPI slave; see below |
+
+Register reads: live values come through fabric muxes, everything BenchPod writes reads back from
+a block-RAM mirror of the link writes (so the model parameters are readable too).
 
 `tools/masm.py` assembles `src/model.masm` (the Makefile runs it). The engine has no interlocks:
 the assembler spaces dependent instructions and pads with NOPs, and expands compares (MAX, MIN,
@@ -57,16 +61,37 @@ Safety, in the gateware (the board's pull-downs cover a blank FPGA):
 - ARM is one pulse per register write (the latch input is AC-coupled); every pad output comes
   straight from a flop (a decoded output glitched in the gate-level run).
 
-Verification (`make test`, about 3 minutes): unit benches for each block, a bit-exact bench of the
+Verification (`make test`, about 4 minutes): unit benches for each block (the encoder against
+exact references for the angle, ABZ and the three SPI profiles at 8 MHz), a bit-exact bench of the
 model against an independent reference of its fixed-point spec (1275 ticks, five runs including a
 re-arm and the shaping properties: legs inside the margin, line voltages kept), the whole chip over the real SPI link (both pinouts), and the same model and chip benches
 on the yosys gate-level netlist. The build fails if yosys reports a signal driven from two always
 blocks (that once simulated fine and synthesised to a constant).
 
-Resources and timing (yosys 0.65, nextpnr-ice40 0.10): 4,631 of 5,280 LCs (87 %), 10 of 30 block
-RAMs, 4 of 8 DSPs. Timing closes at 37.1-41.1 MHz against the 36 MHz target on every seed from 1
-to 8, for both pinouts. The margin is thin: new features need an area and timing pass, and the
-UP5K has about 600 LCs left.
+Resources and timing (yosys 0.65, nextpnr-ice40 0.10), default image: 4,475 of 5,280 LCs (85 %),
+11 of 30 block RAMs, 7 of 8 DSPs. Timing closes at 36.0-40.3 MHz against the 36 MHz target on every
+seed from 1 to 8, for both pinouts. An area pass (30 Sep 2026) took 160 LCs out: the register
+read-back mirror, the comb stages of the sinc filters sharing one register, the model's runtime
+shifter and angle advance on DSPs, the dither state written in place, one µs / ms time base.
+
+## Encoder emulation (built with `make ENC=1`, does not fit yet)
+
+`src/encoder.v` is written and verified in simulation (`tb_encoder`), registers in
+[PROTOCOL.md](ice40/PROTOCOL.md#encoder-enc1-builds):
+
+- Mechanical angle from the model's electrical angle, exact over any run: electrical revolutions
+  counted modulo the pole pairs, one 22-step division per PWM period; then BenchPod's DIR and
+  offset.
+- ABZ: an edge generator chases the angle in 2-LSB steps spread evenly over each PWM period (one
+  period of lag, up to 66k RPM mechanical); counts by an exact carry accumulator, any CPR that is a
+  multiple of 4; Z at count 0 with A = B = 0, as the AS5047P and MA730.
+- SPI slave, single clock (oversampled, SCK up to 8 MHz): AS5047P and AS5048A (mode 1, parity,
+  answers in the next frame, error flags, writes) and MA730 (mode 0 / 3, angle every frame,
+  register read / write), with a 64-entry register file BenchPod can load (DIAAGC, magnitude,
+  magnet faults).
+
+It costs about 830 LCs (590 LUTs, 400 flip-flops) and the image comes to 5,302 of 5,280 LCs: it
+does not place. See Next for the ways to make room.
 
 ## Pinout: rev 0.4 pin swap
 
@@ -87,6 +112,7 @@ cd ice40
 make test            # every bench must print PASS (sim/run_vvp.sh enforces it)
 make                 # build/motor_emulator.bin (rev 0.4 pinout)
 make REV03=1         # build/motor_emulator_rev03.bin (schematic rev 0.3 pins)
+make ENC=1           # with the encoder emulation (does not place yet)
 ```
 
 Needs yosys, nextpnr-ice40, icestorm and iverilog (`brew install yosys nextpnr-ice40 icestorm
@@ -96,12 +122,15 @@ icarus-verilog`).
 
 In rough order:
 
-1. Encoder emulation from the model's angle: ABZ (edge generator between ticks) and the SPI-slave
-   profiles (AS5047P, AS5048A, MA730). This needs LCs: the sinc5 integrators and the PWM prep are
-   the next candidates for sharing.
+1. Make room for the encoder (about 830 LCs over today's image; the UP5K has 805 left, and
+   placement needs ~10 % free). Options: separate ABZ and SPI images (a DUT uses one; about 450
+   LCs each, BenchPod loads the image per DUT anyway), and/or move more of the model's fabric
+   helpers (duty conversion, saturations, angle sequencer) into microcode, which needs a longer
+   model period than 180 clk; or a larger FPGA on a later board revision.
 2. Trip recorder read (PCAL6408A), OSR-256 logging stream, brake energy budget, PV setpoint
    sigma-delta (DNP path), stack SYNC as the model's time base.
 3. Bench calibration: current and bus offsets and gains, the effective dead time, the choke's
    leakage inductance.
 4. BenchPod side: slave-SPI configuration loader (PSRAM-streamed) and a host driver for the
-   register protocol, including the physical-unit conversion of the model parameters.
+   register protocol, including the physical-unit conversion of the model parameters and the
+   encoder register-file tables per chip.

@@ -44,7 +44,7 @@ module pwm3 (
     // per-leg high interval for the running period, the next period's, and the dither accumulators
     reg [9:0]  st_a, en_a, st_b, en_b, st_c, en_c;
     reg [9:0]  nst_a, nen_a, nst_b, nen_b, nst_c, nen_c;
-    reg [15:0] acc_a, acc_b, acc_c, nacc_a, nacc_b, nacc_c;
+    reg [15:0] acc_a, acc_b, acc_c;     // dither state: only the prep reads it, so it updates there
 
     // Next period's intervals are prepared by one datapath, leg by leg (7 clk per leg), starting 24
     // clk before the wrap (the period is at least 32 clk). Compare values are registered once per
@@ -73,7 +73,7 @@ module pwm3 (
         if (rst) begin
             stp <= 3'd7; leg <= 2'd0;
             nst_a <= 10'd0; nen_a <= 10'd0; nst_b <= 10'd0; nen_b <= 10'd0; nst_c <= 10'd0; nen_c <= 10'd0;
-            nacc_a <= 16'd0; nacc_b <= 16'd0; nacc_c <= 16'd0;
+            acc_a <= 16'd0; acc_b <= 16'd0; acc_c <= 16'd0;
         end else begin
             if (prep) begin
                 p_n   <= period_c;
@@ -102,9 +102,9 @@ module pwm3 (
                     end
                     default: begin                       // 6: start and end, store for the leg
                         case (leg)
-                            2'd0: begin nst_a <= (p_n - d) >> 1; nen_a <= ((p_n - d) >> 1) + d; nacc_a <= sum[15:0]; end
-                            2'd1: begin nst_b <= (p_n - d) >> 1; nen_b <= ((p_n - d) >> 1) + d; nacc_b <= sum[15:0]; end
-                            default: begin nst_c <= (p_n - d) >> 1; nen_c <= ((p_n - d) >> 1) + d; nacc_c <= sum[15:0]; end
+                            2'd0: begin nst_a <= (p_n - d) >> 1; nen_a <= ((p_n - d) >> 1) + d; acc_a <= sum[15:0]; end
+                            2'd1: begin nst_b <= (p_n - d) >> 1; nen_b <= ((p_n - d) >> 1) + d; acc_b <= sum[15:0]; end
+                            default: begin nst_c <= (p_n - d) >> 1; nen_c <= ((p_n - d) >> 1) + d; acc_c <= sum[15:0]; end
                         endcase
                         if (leg == 2'd2) stp <= 3'd7;
                         else begin leg <= leg + 2'd1; stp <= 3'd0; end
@@ -119,14 +119,12 @@ module pwm3 (
         period_mid   <= 1'b0;
         if (rst) begin
             cnt <= 10'd0; per <= 10'd180; dt <= 6'd0;
-            acc_a <= 16'd0; acc_b <= 16'd0; acc_c <= 16'd0;
             st_a <= 10'd0; en_a <= 10'd0; st_b <= 10'd0; en_b <= 10'd0; st_c <= 10'd0; en_c <= 10'd0;
         end else if (wrap || cnt >= per) begin
             cnt <= 10'd0;
             period_start <= 1'b1;
             if (wrap) begin                          // the prep ran for this wrap
                 per <= p_n; dt <= dt_n;
-                acc_a <= nacc_a; acc_b <= nacc_b; acc_c <= nacc_c;
                 st_a <= nst_a; en_a <= nen_a; st_b <= nst_b; en_b <= nen_b; st_c <= nst_c; en_c <= nen_c;
             end
         end else begin

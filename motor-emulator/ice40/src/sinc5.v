@@ -47,27 +47,29 @@ module sinc5 (
     end
 
     // ---------------------------------------------------------------- comb state RAM
-    reg  [7:0]  raddr, waddr;
-    reg  [31:0] wdata;
-    reg         we;
+    // One running value v walks the three comb stages: at stage k v -= delay_k, and the old v is
+    // the new delay_k, written on the same edge (the write port takes v straight from its flop).
+    reg  [7:0]  raddr;
     reg  [31:0] rdata;
     reg  [31:0] mem [0:255];
+    reg  [2:0]  ch;
+    reg  [W-1:0] v;
+    reg  [4:0]  cs;                                  // stage strobes
+    wire        we    = cs[1] | cs[2] | cs[3];
+    wire [7:0]  waddr = {2'b00, ch, 1'b0, cs[3], cs[2]};   // delay 0, 1, 2 at stage strobes 1, 2, 3
     integer m;
     initial for (m = 0; m < 256; m = m + 1) mem[m] = 32'd0;
     always @(posedge clk) begin
-        if (we) mem[waddr] <= wdata;
+        if (we) mem[waddr] <= {13'd0, v};
         rdata <= mem[raddr];
     end
 
     // ---------------------------------------------------------------- shared comb pipeline
-    reg [2:0]   ch;
-    reg [W-1:0] x, c1, c2, c3;
-    reg [4:0]   cs;                                  // stage strobes
     wire        start = bit_en && (dec[2:0] == 3'd0) && (dec[5:3] < 3'd5);
-    wire signed [W:0] s = $signed({1'b0, c3}) - $signed(20'd131072);
+    wire signed [W:0] s = $signed({1'b0, v}) - $signed(20'd131072);
 
     always @(posedge clk) begin
-        valid <= 1'b0; set_done <= 1'b0; we <= 1'b0;
+        valid <= 1'b0; set_done <= 1'b0;
         if (rst) begin
             cs <= 5'd0; ch <= 3'd0;
             d0 <= 0; d1 <= 0; d2 <= 0; d3 <= 0; d4 <= 0;
@@ -76,26 +78,16 @@ module sinc5 (
             if (start) begin
                 ch <= dec[5:3];
                 case (dec[5:3])
-                    3'd0: x <= i3[0]; 3'd1: x <= i3[1]; 3'd2: x <= i3[2]; 3'd3: x <= i3[3];
-                    default: x <= i3[4];
+                    3'd0: v <= i3[0]; 3'd1: v <= i3[1]; 3'd2: v <= i3[2]; 3'd3: v <= i3[3];
+                    default: v <= i3[4];
                 endcase
-                raddr <= {2'b00, dec[5:3], 3'd0};         // c1_d of this channel
+                raddr <= {2'b00, dec[5:3], 3'd0};         // delay 0 of this channel
                 cs[0] <= 1'b1;
             end
-            if (cs[0]) raddr <= {2'b00, ch, 3'd1};        // c2_d next
-            if (cs[1]) begin                             // rdata = c1_d
-                c1 <= x - rdata[W-1:0];
-                we <= 1'b1; waddr <= {2'b00, ch, 3'd0}; wdata <= {13'd0, x};
-                raddr <= {2'b00, ch, 3'd2};
-            end
-            if (cs[2]) begin                             // rdata = c2_d
-                c2 <= c1 - rdata[W-1:0];
-                we <= 1'b1; waddr <= {2'b00, ch, 3'd1}; wdata <= {13'd0, c1};
-            end
-            if (cs[3]) begin                             // rdata = c3_d
-                c3 <= c2 - rdata[W-1:0];
-                we <= 1'b1; waddr <= {2'b00, ch, 3'd2}; wdata <= {13'd0, c2};
-            end
+            if (cs[0]) raddr <= {2'b00, ch, 3'd1};        // delay 1 next
+            if (cs[1]) begin v <= v - rdata[W-1:0]; raddr <= {2'b00, ch, 3'd2}; end   // rdata = delay 0
+            if (cs[2]) v <= v - rdata[W-1:0];                                         // delay 1
+            if (cs[3]) v <= v - rdata[W-1:0];                                         // delay 2
             if (cs[4]) begin
                 case (ch)
                     3'd0: d0 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];

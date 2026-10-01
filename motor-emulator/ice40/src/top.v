@@ -179,7 +179,7 @@ module top (
     reg [15:0] duty_a, duty_b, duty_c;
     reg [7:0]  brake_duty;
     reg [2:0]  hall;
-    reg [11:0] arm_cnt;
+    reg [6:0]  arm_cnt;                  // us
     reg        wd_clear;
     // motor model: MODE here, parameters (0x21-0x3D) go into the model's data memory
     reg [4:0]  m_mode;
@@ -194,7 +194,17 @@ module top (
         m_pw_data <= r_wdata;
     end
 
-    wire wd_trip, sync_seen, sync_tick;
+    // encoder writes (0x40-0x45), registered the same way
+    reg        e_pw;
+    reg  [2:0] e_pw_addr;
+    reg [15:0] e_pw_data;
+    always @(posedge clk) begin
+        e_pw      <= r_wr && (r_addr[7:3] == 5'b01000) && (r_addr[2:0] <= 3'd5);
+        e_pw_addr <= r_addr[2:0];
+        e_pw_data <= r_wdata;
+    end
+
+    wire wd_trip, sync_seen, sync_tick, us_tick, ms_tick;
     wire pwm_run = ctrl[`C_PWM_EN] & latched & fault_ok & ~wd_trip & ~rst;
 
     always @(posedge clk) begin
@@ -205,14 +215,14 @@ module top (
             ctrl <= 16'h0000; scratch <= 16'h0000;
             period <= 10'd180; deadtime <= 6'd0; min_on <= 6'd2;
             duty_a <= 16'h8000; duty_b <= 16'h8000; duty_c <= 16'h8000;
-            brake_duty <= 8'd0; hall <= 3'b111; arm_cnt <= 12'd0;
+            brake_duty <= 8'd0; hall <= 3'b111; arm_cnt <= 7'd0;
             m_mode <= 5'd0;
         end else begin
-            if (arm_cnt != 12'd0) arm_cnt <= arm_cnt - 12'd1;
+            if (us_tick && arm_cnt != 7'd0) arm_cnt <= arm_cnt - 7'd1;
             if (r_wr) case (r_addr)
                 `R_BOARD:      if (r_wdata[15]) probe_start <= 1'b1;
                 `R_CONTROL:    ctrl <= r_wdata;
-                `R_ARM:        arm_cnt <= 12'd3600;             // 100 us low
+                `R_ARM:        arm_cnt <= 7'd101;               // 100-101 us low (us ticks)
                 `R_WD_CLEAR:   wd_clear <= 1'b1;
                 `R_SCRATCH:    scratch <= r_wdata;
                 `R_PWM_PERIOD: period <= r_wdata[9:0];
@@ -297,13 +307,13 @@ module top (
 `else
         .required(1'b0),                      // no SYNC readback on rev 0.3
 `endif .clear(wd_clear), .sync_in(sync_in),
-        .sync_oe(sync_oe), .tick(sync_tick), .seen(sync_seen), .trip(wd_trip));
+        .sync_oe(sync_oe), .tick(sync_tick), .seen(sync_seen), .trip(wd_trip), .us(us_tick), .ms(ms_tick));
 
     // ------------------------------------------------------------------ ARM, brake, hot-swap
     // pad outputs come straight from flops: a decoded counter can glitch, and ARM_REQ_N feeds an
     // AC-coupled latch input where a glitch is an edge (the gate-level bench caught it)
     reg arm_oe_q, hswap_q, led_q;
-    always @(posedge clk) arm_oe_q <= (arm_cnt != 12'd0) & ~rst;
+    always @(posedge clk) arm_oe_q <= (arm_cnt != 7'd0) & ~rst;
     assign arm_oe = arm_oe_q;
 
     // brake PWM about 20 kHz (36 MHz / 7 / 256); board 0 only
@@ -327,58 +337,80 @@ module top (
     reg [2:0] hall_pin;
     always @(posedge clk) hall_pin <= ~((m_mode[4] && model_on) ? m_hall : hall);
     assign {hall_c, hall_b, hall_a} = hall_pin;
+
+    // ------------------------------------------------------------------ encoder
+    // Built with ENC (make ENC=1): it does not fit beside the model yet (see README, Next).
+    wire [15:0] e_rf_q, e_angle, e_count, e_status;
+`ifdef ENC
+    encoder enc (
+        .clk(clk), .rst(rst), .tick(period_start), .reset_state(m_reset), .theta(m_theta), .period(period_eff),
+        .pw_en(e_pw), .pw_addr(e_pw_addr), .pw_data(e_pw_data),
+        .cs_in(enc_cs_i), .sck_in(enc_sck_i), .mosi_in(enc_mosi_i),
+        .enc_a(enc_a), .enc_b(enc_b), .enc_z(enc_z), .enc_miso(enc_miso),
+        .ctrl(), .cpr(), .poles(), .ofs(), .rf_addr(), .rf_link_q(e_rf_q),
+        .angle(e_angle), .count(e_count), .status(e_status));
+`else
     assign enc_a = 1'b0; assign enc_b = 1'b0; assign enc_z = 1'b0; assign enc_miso = 1'b0;
+    assign e_rf_q = 16'h0000; assign e_angle = 16'h0000; assign e_count = 16'h0000; assign e_status = 16'h0000;
+`endif
     assign pv_set  = 1'b1;                     // buffer off: the divider holds the park level
 
-    reg [24:0] blink;
-    always @(posedge clk) blink <= blink + 25'd1;
-    always @(posedge clk) led_q <= wd_trip ? blink[21] : (pwm_run ? 1'b1 : blink[24]);
+    reg [8:0] blink;                          // ms
+    always @(posedge clk) if (ms_tick) blink <= blink + 9'd1;
+    always @(posedge clk) led_q <= wd_trip ? blink[5] : (pwm_run ? 1'b1 : blink[8]);
     assign led_on = led_q;
 
     // ------------------------------------------------------------------ read mux
-    // Two registered stages (groups of 8 by address[2:0], then the group by address[5:3]). The
-    // link sets each read address at least one byte time before it loads the data, so the extra
-    // clk costs nothing; it keeps the ~40-way mux out of a single 36 MHz clk.
+    // Registers BenchPod only writes read back from a block-RAM mirror of every link write (the
+    // value as written); only live values go through fabric muxes. Two registered stages (the
+    // link sets each read address at least one byte time before it loads the data).
+    reg [15:0] mirror [0:255];
+    integer mi;
+    initial begin                                           // the power-up defaults
+        for (mi = 0; mi < 256; mi = mi + 1) mirror[mi] = 16'h0000;
+        mirror[`R_PWM_PERIOD] = 16'd180; mirror[`R_MIN_ON] = 16'd2; mirror[`R_HALL] = 16'h0007;
+        mirror[`R_DUTY_A] = 16'h8000; mirror[`R_DUTY_B] = 16'h8000; mirror[`R_DUTY_C] = 16'h8000;
+        mirror[`R_WSHIFT] = 16'd12; mirror[`R_JSHIFT] = 16'd10; mirror[`R_DT_IDB] = 16'd200;
+        mirror[`R_ADV] = 16'd3; mirror[`R_ENC_CPR] = 16'd4000; mirror[`R_ENC_POLES] = 16'd1;
+    end
+    reg [15:0] mq;
+    always @(posedge clk) begin
+        if (r_wr) mirror[r_addr] <= r_wdata;
+        mq <= mirror[r_addr];
+    end
     wire [15:0] status = {8'd0,
         pll_lock, sync_seen, pwm_run, wd_trip, sync_in, back_s[1], latched, fault_ok};
-    reg  [15:0] rg [0:7];
-    reg  [2:0]  rgrp;
+    // live: 0x00-0x04, 0x10-0x15, 0x30-0x39, 0x45-0x48
+    reg  [15:0] lv0, lv2, lv6, lv8;
+    reg  [1:0]  lsel;
+    reg         live;
     always @(posedge clk) begin
-        rgrp <= r_addr[5:3];
-        case (r_addr[2:0])                                  // 0x00-0x07
-            3'd0: rg[0] <= `EMU_ID;              3'd1: rg[0] <= `EMU_VERSION;
-            3'd2: rg[0] <= {6'd0, probe_ok, probe_done, 6'd0, board_id};
-            3'd3: rg[0] <= status;               3'd4: rg[0] <= ctrl;
-            3'd7: rg[0] <= scratch;              default: rg[0] <= 16'h0000;
+        case (r_addr[2:0])                                  // 0x00-0x04
+            3'd0: lv0 <= `EMU_ID;                3'd1: lv0 <= `EMU_VERSION;
+            3'd2: lv0 <= {6'd0, probe_ok, probe_done, 6'd0, board_id};
+            3'd3: lv0 <= status;                 default: lv0 <= ctrl;
         endcase
-        case (r_addr[2:0])                                  // 0x08-0x0F
-            3'd0: rg[1] <= {6'd0, period};       3'd1: rg[1] <= {10'd0, deadtime};
-            3'd2: rg[1] <= duty_a;               3'd3: rg[1] <= duty_b;
-            3'd4: rg[1] <= duty_c;               3'd5: rg[1] <= {10'd0, min_on};
-            default: rg[1] <= 16'h0000;
+        case (r_addr[2:0])                                  // 0x10-0x15
+            3'd0: lv2 <= s_a;   3'd1: lv2 <= s_b;   3'd2: lv2 <= s_c;
+            3'd3: lv2 <= s_d;   3'd4: lv2 <= s_e;   default: lv2 <= sinc_count;
         endcase
-        case (r_addr[2:0])                                  // 0x10-0x17
-            3'd0: rg[2] <= s_a;   3'd1: rg[2] <= s_b;   3'd2: rg[2] <= s_c;
-            3'd3: rg[2] <= s_d;   3'd4: rg[2] <= s_e;   3'd5: rg[2] <= sinc_count;
-            default: rg[2] <= 16'h0000;
+        case (r_addr[3:0])                                  // 0x30-0x39
+            4'h0: lv6 <= m_theta[31:16];   4'h1: lv6 <= m_w32[31:16];
+            4'h2: lv6 <= m_e;              4'h3: lv6 <= m_i0;
+            4'h4: lv6 <= m_vcm;            4'h5: lv6 <= m_iq;
+            4'h6: lv6 <= md_a;             4'h7: lv6 <= md_b;
+            4'h8: lv6 <= md_c;             default: lv6 <= m_count;
         endcase
-        case (r_addr[2:0])                                  // 0x18-0x1F
-            3'd0: rg[3] <= {8'd0, brake_duty};   3'd4: rg[3] <= {13'd0, hall};
-            default: rg[3] <= 16'h0000;
+        case (r_addr[3:0])                                  // 0x45-0x48
+            4'h5: lv8 <= e_rf_q;           4'h6: lv8 <= e_angle;
+            4'h7: lv8 <= e_count;          default: lv8 <= e_status;
         endcase
-        rg[4] <= (r_addr[2:0] == 3'd0) ? {11'd0, m_mode} : 16'h0000;   // 0x20; 0x21-0x2F write-only
-        rg[5] <= 16'h0000;
-        case (r_addr[2:0])                                  // 0x30-0x37
-            3'd0: rg[6] <= m_theta[31:16];   3'd1: rg[6] <= m_w32[31:16];
-            3'd2: rg[6] <= m_e;              3'd3: rg[6] <= m_i0;
-            3'd4: rg[6] <= m_vcm;            3'd5: rg[6] <= m_iq;
-            3'd6: rg[6] <= md_a;             default: rg[6] <= md_b;
-        endcase
-        case (r_addr[2:0])                                  // 0x38-0x3F
-            3'd0: rg[7] <= md_c;             3'd1: rg[7] <= m_count;
-            default: rg[7] <= 16'h0000;
-        endcase
-        r_rdata_q <= (r_addr[7:6] != 2'b00) ? 16'h0000 : rg[rgrp];
+        lsel <= r_addr[6] ? 2'd3 : r_addr[5] ? 2'd2 : r_addr[4] ? 2'd1 : 2'd0;
+        live <= (r_addr[7:3] == 5'b00000 && r_addr[2:0] <= 3'd4) ||
+                (r_addr[7:3] == 5'b00010 && r_addr[2:0] <= 3'd5) ||
+                (r_addr[7:4] == 4'h3 && r_addr[3:0] <= 4'h9) ||
+                (r_addr[7:4] == 4'h4 && r_addr[3:0] >= 4'h5 && r_addr[3:0] <= 4'h8);
+        r_rdata_q <= !live ? mq : (lsel == 2'd0) ? lv0 : (lsel == 2'd1) ? lv2 : (lsel == 2'd2) ? lv6 : lv8;
     end
 endmodule
 `default_nettype wire

@@ -10,7 +10,7 @@
 
 PROJECT ?= motor_emulator
 BUILD    = build
-SRC      = src/top.v src/spi_link.v src/pwm3.v src/sinc5.v src/i2c_probe.v src/sync_wd.v src/motor_model.v
+SRC      = src/top.v src/spi_link.v src/pwm3.v src/sinc5.v src/i2c_probe.v src/sync_wd.v src/motor_model.v src/encoder.v
 INC      = src/emu_defs.vh src/sine1024.hex src/model_prog.hex src/model_data.hex
 # Default: schematic rev 0.4 pinout (SYNC on pin 48 with readback, EE_WC_N on RGB1).
 # REV03=1: the rev 0.3 pins (SYNC on RGB1, write-only: no stack watchdog input).
@@ -21,6 +21,11 @@ PROJECT  = motor_emulator_rev03
 else
 PCF      = emu.pcf
 YDEFS    =
+endif
+# ENC=1: with the encoder emulation (src/encoder.v; does not fit beside the model yet)
+ifeq ($(ENC),1)
+YDEFS   += -DENC
+PROJECT := $(PROJECT)_enc
 endif
 SEED    ?= 1
 CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
@@ -57,7 +62,7 @@ $(BUILD)/$(PROJECT).bin: $(BUILD)/$(PROJECT).asc
 	icepack $< $@
 
 # ---- benches
-BENCHES = tb_pwm3 tb_sinc5 tb_i2c_probe tb_sync_wd tb_motor_model tb_top tb_top_rev03 tb_motor_model_gl tb_top_gl
+BENCHES = tb_pwm3 tb_sinc5 tb_i2c_probe tb_sync_wd tb_motor_model tb_encoder tb_top tb_top_rev03 tb_motor_model_gl tb_top_gl
 
 tb_pwm3: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/pwm3.v
@@ -73,6 +78,10 @@ tb_i2c_probe: | $(BUILD)
 
 tb_motor_model: src/model_prog.hex src/sine1024.hex | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/motor_model.v
+	$(VVP) $(BUILD)/$@.vvp
+
+tb_encoder: | $(BUILD)
+	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/encoder.v
 	$(VVP) $(BUILD)/$@.vvp
 
 tb_sync_wd: | $(BUILD)

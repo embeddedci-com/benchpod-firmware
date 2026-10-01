@@ -14,13 +14,16 @@ module tb_sync_wd;
     wire oe0, oe1, tick0, tick1, seen0, seen1, trip0, trip1;
     assign sync_line = (oe0 | oe1) ? 1'b0 : 1'bz;
 
-    localparam P = 400, PW = 4, LT = 40, MS = 1200;
-    sync_wd #(.PERIOD(P), .PULSE(PW), .LOW_TRIP(LT), .MISSING(MS)) b0 (
+    // UNIT 4 clk: period 100 units = 400 clk, pulse one unit, trips at 10 and 300 units
+    localparam U = 4, PU = 100, LTU = 10, MSU = 300;
+    localparam P = PU * U, PW = U, LT = LTU * U, MS = MSU * U;
+    wire us0, ms0, us1, ms1;
+    sync_wd #(.UNIT(U), .PERIOD(PU), .LOW_TRIP(LTU), .MISSING(MSU)) b0 (
         .clk(clk), .rst(rst), .master(master0), .hold_low(1'b0), .required(required), .clear(clear),
-        .sync_in(sync_line), .sync_oe(oe0), .tick(tick0), .seen(seen0), .trip(trip0));
-    sync_wd #(.PERIOD(P), .PULSE(PW), .LOW_TRIP(LT), .MISSING(MS)) b1 (
+        .sync_in(sync_line), .sync_oe(oe0), .tick(tick0), .seen(seen0), .trip(trip0), .us(us0), .ms(ms0));
+    sync_wd #(.UNIT(U), .PERIOD(PU), .LOW_TRIP(LTU), .MISSING(MSU)) b1 (
         .clk(clk), .rst(rst), .master(1'b0), .hold_low(hold1), .required(required), .clear(clear),
-        .sync_in(sync_line), .sync_oe(oe1), .tick(tick1), .seen(seen1), .trip(trip1));
+        .sync_in(sync_line), .sync_oe(oe1), .tick(tick1), .seen(seen1), .trip(trip1), .us(us1), .ms(ms1));
 
     integer errors = 0, n, low, t0, t1;
     initial begin
@@ -40,7 +43,9 @@ module tb_sync_wd;
         if (!seen0 || !seen1 || trip0 || trip1) begin errors = errors + 1; $display("FAIL: normal running seen %b%b trip %b%b", seen0, seen1, trip0, trip1); end
 
         // board 1's gateware faults: holds SYNC low -> both trip after LOW_TRIP
-        hold1 = 1; repeat (LT + 10) @(posedge clk);
+        hold1 = 1; repeat (LT - 2 * U) @(posedge clk);
+        if (trip0 || trip1) begin errors = errors + 1; $display("FAIL: tripped before LOW_TRIP"); end
+        repeat (3 * U + 10) @(posedge clk);
         if (!trip0 || !trip1) begin errors = errors + 1; $display("FAIL: SYNC held low did not trip both (%b%b)", trip0, trip1); end
         hold1 = 0; repeat (5) @(posedge clk);
         @(negedge clk) clear = 1; @(negedge clk) clear = 0; repeat (2 * P) @(posedge clk);

@@ -163,7 +163,9 @@ module tb_motor_model;
         begin
             @(negedge clk) tick = 1; @(negedge clk) tick = 0;
             ref_tick;
-            wait (busy === 1'b0);
+            // busy sampled after clock edges (a level wait can catch a zero-width delta glitch
+            // between two flops changing on the same edge)
+            do begin @(posedge clk); #1; end while (busy !== 1'b0);
             repeat (2) @(posedge clk); #1;
             ticks = ticks + 1;
             if (duty_a !== r_da || duty_b !== r_db || duty_c !== r_dc || theta !== r_theta || w32 !== r_w32 ||

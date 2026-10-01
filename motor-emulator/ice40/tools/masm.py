@@ -6,7 +6,7 @@
 Instruction word: [31:27] op  [26:24] cond  [23:16] a  [15:8] b  [7:0] d
 Operands are data-RAM names (see DATA below) or ports (A operand only). The pipeline has no
 interlocks: a value stored (STO) or a port updated by instruction i can be read by instruction
-i + 3 or later. The assembler inserts NOPs where the program is tighter than that and reports
+i + 3 or later (W32ADD's w32: i + 6). The assembler inserts NOPs where the program is tighter than that and reports
 them, so the program text can stay in logical order.
 """
 import sys, re
@@ -38,6 +38,8 @@ READS_A = {'LD', 'LDN', 'ADDA', 'SUBA', 'MUL', 'MAC', 'CMPS', 'CMPN', 'SELA', 'S
            'W32LD', 'DIV', 'RCP'}
 READS_B = {'MUL', 'MAC', 'DTC', 'DIV'}
 GAP = 3
+# results that land later than GAP: W32ADD's shift takes three more clk (DSPs) before w32 changes
+LATENCY = {'W32ADD': 6}
 # STO / SHR shift amounts the engine supports (a fixed select, not a barrel shifter): value -> code
 SHIFTS = {0: 0, 1: 1, 2: 2, 8: 3, 14: 4, 15: 5}
 
@@ -72,14 +74,14 @@ def assemble(src):
             for sub in MACROS[op]:
                 a_, ra = operand(args[0])
                 word = (OPS[sub] << 27) | (CONDS[cond] << 24) | (a_ << 16)
-                prog.append((word, f'{sub} {args[0]}  ({op})' + (f' [{cond}]' if cond else ''), {ra}, set()))
+                prog.append((word, f'{sub} {args[0]}  ({op})' + (f' [{cond}]' if cond else ''), {ra}, set(), GAP))
             continue
         if op == 'DTC':
             # DTC i, v: DTS latches the sign of i (against the band) a clk ahead, so the adder's
             # operand can be inverted before the Y stage
             a_, ra = operand(args[0])
             prog.append(((OPS['DTS'] << 27) | (CONDS[cond] << 24) | (a_ << 16),
-                         f'DTS {args[0]}  (DTC)' + (f' [{cond}]' if cond else ''), {ra}, set()))
+                         f'DTS {args[0]}  (DTC)' + (f' [{cond}]' if cond else ''), {ra}, set(), GAP))
         if op not in OPS or cond not in CONDS:
             raise SystemExit(f'{src}:{ln}: bad instruction {line!r} [{cond}]')
         a = b = d = 0
@@ -87,7 +89,7 @@ def assemble(src):
         if op == 'STO' and int(args[1]) not in (0, 15):
             # the engine's STO shifts by 0 or 15: other amounts go through SHR first (same result)
             prog.append(((OPS['SHR'] << 27) | (CONDS[cond] << 24) | (shcode(args[1]) << 16),
-                         f'SHR {args[1]}  (STO {args[0]}, {args[1]})', set(), set()))
+                         f'SHR {args[1]}  (STO {args[0]}, {args[1]})', set(), set(), GAP))
             args = [args[0], '0']
         if op == 'STO':
             d, _ = operand(args[0]); a = 1 if int(args[1]) == 15 else 0; writes.add('D:' + args[0])
@@ -108,15 +110,15 @@ def assemble(src):
         if op in ('CMADD', 'CMZ'):
             writes.add('P:CM_HI')
         word = (OPS[op] << 27) | (CONDS[cond] << 24) | (a << 16) | (b << 8) | d
-        prog.append((word, f'{line} [{cond}]' if cond else line, reads, writes))
+        prog.append((word, f'{line} [{cond}]' if cond else line, reads, writes, LATENCY.get(op, GAP)))
     # insert NOPs so every read is >= GAP instructions after the write it depends on
     out, last_write, nops = [], {}, 0
-    for word, text, reads, writes in prog:
-        need = max([last_write[r] + GAP - len(out) for r in reads if r in last_write] + [0])
+    for word, text, reads, writes, lat in prog:
+        need = max([last_write[r] - len(out) for r in reads if r in last_write] + [0])
         for _ in range(need):
             out.append((0, 'NOP (inserted)')); nops += 1
         for w in writes:
-            last_write[w] = len(out)
+            last_write[w] = len(out) + lat
         out.append((word, text))
     if len(out) > 256:
         raise SystemExit('program too long')

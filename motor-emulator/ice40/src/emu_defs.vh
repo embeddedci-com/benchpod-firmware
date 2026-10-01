@@ -9,7 +9,7 @@
 
 `define EMU_CLK_HZ        36000000
 `define EMU_ID            16'h4D45      // "ME": read back at register 0x00
-`define EMU_VERSION       16'h0004      // gateware version, register 0x01
+`define EMU_VERSION       16'h0005      // gateware version, register 0x01
 
 // Register map (16-bit registers, see PROTOCOL.md)
 `define R_ID              8'h00
@@ -68,6 +68,17 @@
 `define R_VBUS_OFS        8'h3D
 `define R_ADV             8'h3E         // back-EMF angle advance in half PWM periods (0-7, default 3)
 `define R_RSUB            8'h3F         // resistance subtracted from the emulated phase: u += R_SUB x i >>> 15
+
+// encoder emulation (src/encoder.v)
+`define R_ENC_CTRL        8'h40         // [0] ABZ on, [1] SPI on, [3:2] profile (0 AS5047P, 1 AS5048A, 2 MA730), [4] DIR
+`define R_ENC_CPR         8'h41         // ABZ counts (quadrature states) per mechanical revolution, multiple of 4
+`define R_ENC_POLES       8'h42         // pole pairs (1-63)
+`define R_ENC_OFS         8'h43         // mechanical angle offset (65536 = one revolution)
+`define R_ENC_RF_ADDR     8'h44         // register-file index (0-63)
+`define R_ENC_RF_DATA     8'h45         // register file [R_ENC_RF_ADDR], read and write
+`define R_ENC_ANGLE       8'h46         // R: the angle the DUT sees
+`define R_ENC_COUNT       8'h47         // R: ABZ count
+`define R_ENC_STATUS      8'h48         // R: [15:8] SPI frames seen, [2:0] AS504x error flags
 
 // R_CONTROL bits
 `define C_PWM_EN          0

@@ -216,7 +216,8 @@ module tb_top;
             reg_write(1'b0, 2'd0, `R_ARM, 16'h0001);
             begin @(negedge arm_req_n); t_arm0 = $time; @(posedge arm_req_n); t_arm1 = $time; end
         join
-        if (t_arm1 - t_arm0 < 99900 || t_arm1 - t_arm0 > 100100) begin errors = errors + 1; $display("FAIL: ARM pulse %0d ns", t_arm1 - t_arm0); end
+        // 100-101 us: the gateware counts it in us ticks
+        if (t_arm1 - t_arm0 < 99900 || t_arm1 - t_arm0 > 101100) begin errors = errors + 1; $display("FAIL: ARM pulse %0d ns", t_arm1 - t_arm0); end
         else $display("  ok ARM pulse %0d ns", t_arm1 - t_arm0);
 `ifndef REV03
         reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0001);
