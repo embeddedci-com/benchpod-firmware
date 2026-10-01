@@ -779,7 +779,7 @@ the code used (`code` is `-1` when only routing).
 
 #### `current_out` — hold a current on the 4-20 mA output (J9)
 
-J9 is an XTR116 two-wire transmitter. It is **loop powered**: an external supply drives the
+J9 is an XTR116 two-wire transmitter. It is **loop powered**: an external floating supply drives the
 loop and the pod only sets how much current flows. The request and the reply are in microamps.
 
 ```json

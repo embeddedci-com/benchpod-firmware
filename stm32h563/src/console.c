@@ -625,7 +625,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         if (why) op_line(out, ctx, why);
         else if (argc >= 2) op(out, ctx, "  current-out = %ld uA (code=%u)\r\n", current_out_ua(code), (unsigned)code);
-        else op(out, ctx, "  current-out range: %ld to %ld uA (needs an external loop supply on J9)\r\n",
+        else op(out, ctx, "  current-out range: %ld to %ld uA (needs an external floating loop supply on J9)\r\n",
                 current_out_min_ua(), current_out_max_ua());
     } else if (!strcmp(argv[0], "dacraw") && argc >= 2) {
         /* dacraw <code 0..255> [div] — raw DAC code, no routing/cal (debug). */

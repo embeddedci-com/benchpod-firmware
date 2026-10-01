@@ -3190,7 +3190,7 @@ static void handle_dac_out(int conn_id, const char *json) {
    `ua` in the reply is the current the nearest 16-bit DAC code gives. A request from 4000 uA up
    to min_ua gives min_ua; anything else outside min_ua..max_ua is refused, there is no clamp.
    Setting a current switches the DAC voltage outputs off first (analog path current_out): they
-   share the DAC and would follow it. The loop needs an external supply; the pod cannot see
+   share the DAC and would follow it. The loop needs an external floating supply; the pod cannot see
    whether current flows. dac_stop does not return the loop to 4 mA: send 4000 uA for that. */
 static void handle_current_out(int conn_id, const char *json) {
     char ua_s[24] = {0}, payload[112];
