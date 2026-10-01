@@ -167,6 +167,15 @@ const char *dac_limits_check_volts(const char *path, float volts) {
     return NULL;
 }
 
+const char *dac_limits_check_current_out(void) {
+    if (!s_active.enabled) return NULL;
+    snprintf(s_msg, sizeof(s_msg),
+             "refused: %s, and the 4-20 mA output shares that DAC: setting a current moves it. "
+             "Clear them with dac_limits enabled:false",
+             describe());
+    return s_msg;
+}
+
 /* A number field; false when absent or not a number. */
 static bool num(const char *json, const char *key, double *out) {
     char buf[24];
@@ -227,6 +236,10 @@ const char *dac_limits_check_command(const char *cmd, const char *json) {
         double v;
         if (!why && num(json, "volts", &v)) why = dac_limits_check_volts(path, (float)v);
         return why;
+    }
+    if (!strcmp(cmd, "current_out")) {
+        double ua;
+        return num(json, "ua", &ua) ? dac_limits_check_current_out() : NULL;   /* bare = read the range */
     }
     if (!strcmp(cmd, "dac_control_loop")) return check_loop(json);
     return NULL;

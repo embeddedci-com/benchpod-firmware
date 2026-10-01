@@ -454,6 +454,13 @@ int analog_path_set(analog_path_t path)
     case ANALOG_PATH_CURRENT_IN:                                    /* ADC <- amps terminal */
         r |= calsw_set(false, false, true, false);           /* leave DAC mux as-is */
         break;
+    case ANALOG_PATH_CURRENT_OUT:                            /* DAC -> 4-20 mA output (J9) only */
+        /* The XTR116 follows the DAC buffer whatever the mux does, so there is nothing to
+           switch ON. This switches the voltage outputs OFF, so they do not follow the current.
+           The relays are left as-is: the ADC source (e.g. current_in) stays routed. */
+        r |= dacmux_set_ctrl1(false, 0);
+        r |= dacmux_set_ctrl2(false, 0);
+        break;
     default:
         return -1;
     }
@@ -470,6 +477,7 @@ static const struct { const char *name; analog_path_t path; } s_path_tbl[] = {
     { "cal1",    ANALOG_PATH_CAL1    },
     { "cal2",    ANALOG_PATH_CAL2    },
     { "current_in",     ANALOG_PATH_CURRENT_IN     },
+    { "current_out",    ANALOG_PATH_CURRENT_OUT    },
 };
 
 const char *analog_path_name(analog_path_t path)
@@ -477,6 +485,7 @@ const char *analog_path_name(analog_path_t path)
     /* canonical names only (first hit per enum in the table) */
     static const char *canon[ANALOG_PATH__COUNT] = {
         "off", "dac_3v3", "dac_5v", "dac_12v", "adc_ext", "cal1", "cal2", "current_in",
+        "current_out",
     };
     return (path < ANALOG_PATH__COUNT) ? canon[path] : "";
 }

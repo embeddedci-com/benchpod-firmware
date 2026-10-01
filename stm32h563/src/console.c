@@ -54,6 +54,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <string.h>
 #include "dac_limits.h"
 #include "adc_cal.h"
+#include "current_out.h"
 #include <stdlib.h>
 
 #include "fpga_bitstream.h"   /* generated: fpga_image0/1[] + _len (or fpga_bitstream[]) */
@@ -141,6 +142,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|current_in]  route ADC source + read calibrated mV (def ext)\r\n"
         "  calibrate [current_in|clear]  this pod's ADC calibration: show, calibrate (J8 open), remove\r\n"
+        "  current-out [mA]    4-20 mA output (J9): hold a current; no value shows the range\r\n"
         "  measure              read the ADC input SMA in volts (= adc ext, ÷12)\r\n"
         "  path <name>          apply a named analog path (routing only)\r\n");
     out(ctx,
@@ -610,6 +612,21 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (!adc_cal_current_in_is_set()) op(out, ctx, "  current_in: not calibrated\r\n");
         else op(out, ctx, "  current_in: calibrated, offset %ld mV (%ld uV)\r\n",
                 (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv());
+    } else if (!strcmp(argv[0], "current-out")) {
+        /* current-out [mA] — hold a current on the 4-20 mA output (J9); bare shows the range
+           (current_out.h). mA here because a person types it; the JSON command takes uA. */
+        uint16_t code = 0;
+        const char *why = NULL;
+        if (argc >= 2) {
+            why = dac_limits_check_current_out();
+            if (!why) why = current_out_code(lround(atof(argv[1]) * 1000.0), &code);
+            if (!why && (analog_path_set(ANALOG_PATH_CURRENT_OUT) != 0 || dac_set_constant16(code, 240) != 0))
+                why = "current-out: could not set the DAC";
+        }
+        if (why) op_line(out, ctx, why);
+        else if (argc >= 2) op(out, ctx, "  current-out = %ld uA (code=%u)\r\n", current_out_ua(code), (unsigned)code);
+        else op(out, ctx, "  current-out range: %ld to %ld uA (needs an external loop supply on J9)\r\n",
+                current_out_min_ua(), current_out_max_ua());
     } else if (!strcmp(argv[0], "dacraw") && argc >= 2) {
         /* dacraw <code 0..255> [div] — raw DAC code, no routing/cal (debug). */
         uint8_t v = (uint8_t)atoi(argv[1]);

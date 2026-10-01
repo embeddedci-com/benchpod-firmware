@@ -418,6 +418,10 @@ int fpga_status_read(uint8_t *out_status);
    dac_stop() halts it. */
 int dac_set_constant(uint8_t value, uint32_t divider);
 
+/* The same hold with the full 16-bit DAC8551 code (dac_set_constant puts its byte in the high
+   half). Used by the 4-20 mA output, where an 8-bit step is 63 uA. */
+int dac_set_constant16(uint16_t code, uint32_t divider);
+
 /* Single-sample ADC capture.  Returns the byte the ADC pins are showing
    after one capture cycle (subject to ADC chip pipeline delay).  Useful
    paired with dac_set_constant() to verify the analog DAC→ADC path with

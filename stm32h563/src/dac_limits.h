@@ -22,6 +22,9 @@
  *     DAC path, cal2, cal1 unless the path is 5v): a disconnected input sits near 0 V.
  *   - Commands that write raw DAC codes or flip the mux by hand are refused: generate, dac_set,
  *     load, load_bin, replay, measure, dac_mux, cal_switch (and the console's dacraw/dacmux).
+ *   - current_out with a current is refused: the 4-20 mA output has no DAC of its own, so setting
+ *     a current moves the limited path. Reading its range (no `ua`) is allowed. The route
+ *     current_out switches the DAC outputs off, so it follows the rule for `off` above.
  *   - dac_stop parks the DAC at the low-output end (max_mv when inverted, min_mv otherwise) with
  *     the path routed, and so does boot, as soon as the analog front end and iCE40 are up.
  *
@@ -80,6 +83,10 @@ const char *dac_limits_check_command(const char *cmd, const char *json);
 const char *dac_limits_check_raw(const char *what);
 const char *dac_limits_check_route(const char *path);
 const char *dac_limits_check_volts(const char *path, float volts);
+
+/* Setting a current on the 4-20 mA output (current_out.h). It shares the DAC with the limited
+   path, so it is refused while limits are set. NULL = allowed. */
+const char *dac_limits_check_current_out(void);
 
 /* Hardware (dac_limits_hw.c, not in the host tests): hold the DAC at the park level and route the
    limited path. 0 = parked, 1 = no limits set, -1 = failed. Needs the iCE40 up. */

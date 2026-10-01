@@ -13,6 +13,7 @@
 #include "fault.h"        /* reset cause + last crash, announced with the capabilities */
 #include "fpga_config.h"     /* FPGA_DAC_REPLAY_MAX_SAMPLES */
 #include "cal_data.h"        /* ADC_CAL_EXT — front-SMA cal shipped in capabilities */
+#include "current_out.h"     /* the 4-20 mA output's range, shipped in capabilities */
 #include "target_power.h"
 #include "bp_json.h"
 #include "bp_limits.h"
@@ -665,6 +666,7 @@ static bool cl_send_capabilities(void) {
         "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
         "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,"
+        "\"current_out\":true,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
@@ -677,6 +679,9 @@ static bool cl_send_capabilities(void) {
         caps.spi_master ? "true" : "false",
         caps.spi_master ? "true" : "false",        /* spi_stream: firmware, on the SPI master */
         nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
+        /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes
+           with the pod's own numbers (current_out.h). */
+        current_out_min_ua(), current_out_max_ua(),
         BOARD_NAME);
     if (n <= 0 || (size_t)n >= sizeof(f)) return false;
     /* Boot health, sent on every connect so the server always holds the current boot's

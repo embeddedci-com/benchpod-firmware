@@ -125,6 +125,7 @@ C_SOURCES := \
   src/cal_data.c \
   src/adc_cal.c \
   src/adc_cal_hw.c \
+  src/current_out.c \
   src/flash_compat.c \
   src/rng.c \
   src/hw_lock.c \

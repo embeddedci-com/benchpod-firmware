@@ -16,6 +16,7 @@
 #include "i2c_bus.h"
 #include "can_bus.h"
 #include "cal_data.h"
+#include "current_out.h"   /* 4-20 mA output (J9): uA <-> DAC code */
 #include "adc_scale.h"     /* circular-mean + unwrap for adc_read's sample burst */
 #include "adc_cal.h"       /* per-pod ADC calibration on top of cal_data.h */
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
@@ -2288,7 +2289,7 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\",\"current_out\"");
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
@@ -3140,7 +3141,7 @@ static void handle_cal_switch(int conn_id, const char *json) {
 /* analog_path — apply a named analog path (the SINGLE SOURCE OF TRUTH lives in
    i2c_bus.c::analog_path_set).  {"cmd":"analog_path","path":"cal1"} flips every
    switch the path needs and returns the resulting mux/relay registers.
-   Names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v adc_ext|ext|sma cal1 cal2 current_in. */
+   Names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v adc_ext|ext|sma cal1 cal2 current_in current_out. */
 static void handle_analog_path(int conn_id, const char *json) {
     char name[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
@@ -3180,6 +3181,36 @@ static void handle_dac_out(int conn_id, const char *json) {
     char payload[80];
     snprintf(payload, sizeof(payload), "{\"path\":\"%s\",\"mv\":%d,\"code\":%ld}",
              analog_path_name(p), got_mv, code);
+    send_ok_str(conn_id, payload);
+}
+
+/* current_out — hold a current on the 4-20 mA output (J9), in microamps (current_out.h).
+     {"cmd":"current_out","ua":12000} -> {"ua":12000,"code":32576,"min_ua":4016,"max_ua":20078}
+     {"cmd":"current_out"}            -> {"min_ua":4016,"max_ua":20078}   (the range; nothing moves)
+   `ua` in the reply is the current the nearest 16-bit DAC code gives. A request from 4000 uA up
+   to min_ua gives min_ua; anything else outside min_ua..max_ua is refused, there is no clamp.
+   Setting a current switches the DAC voltage outputs off first (analog path current_out): they
+   share the DAC and would follow it. The loop needs an external supply; the pod cannot see
+   whether current flows. dac_stop does not return the loop to 4 mA: send 4000 uA for that. */
+static void handle_current_out(int conn_id, const char *json) {
+    char ua_s[24] = {0}, payload[112];
+    if (!json_get_value(json, "ua", ua_s, sizeof(ua_s))) {
+        snprintf(payload, sizeof(payload), "{\"min_ua\":%ld,\"max_ua\":%ld}",
+                 current_out_min_ua(), current_out_max_ua());
+        send_ok_str(conn_id, payload);
+        return;
+    }
+    char *end = NULL;
+    double req = strtod(ua_s, &end);
+    if (end == ua_s || *end != '\0') { send_error(conn_id, "current_out: ua must be a number of microamps"); return; }
+    uint16_t code = 0;
+    const char *why = current_out_code(lround(req), &code);
+    if (why) { send_error(conn_id, why); return; }
+    /* Outputs off first, then the level: the voltage outputs never see the new code. */
+    if (analog_path_set(ANALOG_PATH_CURRENT_OUT) != 0) { send_error(conn_id, "route failed"); return; }
+    if (dac_set_constant16(code, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
+    snprintf(payload, sizeof(payload), "{\"ua\":%ld,\"code\":%u,\"min_ua\":%ld,\"max_ua\":%ld}",
+             current_out_ua(code), (unsigned)code, current_out_min_ua(), current_out_max_ua());
     send_ok_str(conn_id, payload);
 }
 
@@ -3686,6 +3717,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "analog_path") == 0) handle_analog_path(conn_id, buf);
     else if (strcmp(cmd, "psram_ping") == 0) handle_psram_ping(conn_id, buf);
     else if (strcmp(cmd, "dac_out")   == 0) handle_dac_out(conn_id, buf);
+    else if (strcmp(cmd, "current_out") == 0) handle_current_out(conn_id, buf);
     else if (strcmp(cmd, "adc_read")  == 0) handle_adc_read(conn_id, buf);
     else if (strcmp(cmd, "calibrate") == 0) handle_calibrate(conn_id, buf);
     else if (strcmp(cmd, "dac_control_loop") == 0) handle_dac_control_loop(conn_id, buf);

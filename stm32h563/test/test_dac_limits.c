@@ -38,6 +38,8 @@ static void test_no_limits_changes_nothing(void) {
     CHECK(allowed("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":0}"), "dac_out 0 refused without limits");
     CHECK(allowed("dac_control_loop", "{\"cmd\":\"dac_control_loop\",\"vmin\":0,\"vmax\":65535,\"in_trip\":5}"),
           "loop refused without limits");
+    CHECK(allowed("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}"), "current_out refused without limits");
+    CHECK(dac_limits_check_current_out() == NULL, "console current-out refused without limits");
 }
 
 static void test_inverted_solar(void) {
@@ -68,6 +70,12 @@ static void test_inverted_solar(void) {
     CHECK(refused("dac_out", "{\"path\":\"5v\",\"volts\":3.9}", "outside"), "3.9 V allowed");
     CHECK(refused("dac_out", "{\"path\":\"off\"}", "near 0 V"), "dac_out off allowed");
 
+    /* the 4-20 mA output shares the DAC: a current is refused, reading its range is not */
+    CHECK(refused("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}", "shares that DAC"), "current_out allowed");
+    CHECK(allowed("current_out", "{\"cmd\":\"current_out\"}"), "current_out range read refused");
+    CHECK(refused("analog_path", "{\"path\":\"current_out\"}", "near 0 V"), "current_out route allowed on an inverted stage");
+    CHECK(dac_limits_check_current_out() != NULL, "console current-out allowed");
+
     /* the loop, with the clamp the page sends (nominal codes) */
     char j[160];
     snprintf(j, sizeof(j), "{\"vmin\":%ld,\"vmax\":%ld}", page_code(1.847), page_code(3.6));
@@ -93,6 +101,8 @@ static void test_normal_stage(void) {
     CHECK(allowed("analog_path", "{\"path\":\"off\"}"), "path off refused on a normal stage");
     CHECK(refused("dac_out", "{\"path\":\"5v\",\"volts\":4.5}", "outside"), "over-limit allowed");
     CHECK(refused("generate", "{}", "raw"), "generate allowed");
+    CHECK(refused("current_out", "{\"ua\":4000}", "shares that DAC"), "current_out allowed on a normal stage");
+    CHECK(allowed("analog_path", "{\"path\":\"current_out\"}"), "current_out route refused on a normal stage");
     char j[96];
     snprintf(j, sizeof(j), "{\"vmin\":%ld,\"vmax\":%ld,\"in_trip\":900}", page_code(0.3), page_code(3.9));
     CHECK(allowed("dac_control_loop", j), "trip refused on a normal stage");

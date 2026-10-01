@@ -922,6 +922,18 @@ int dac_set_constant(uint8_t value, uint32_t divider) {
     return 0;
 }
 
+int dac_set_constant16(uint16_t code, uint32_t divider) {
+    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
+    if (divider > 65535) divider = 65535;
+    /* One 16-bit sample, little-endian byte pair, the layout load/replay use. */
+    uint8_t one16[2] = { (uint8_t)(code & 0xFFu), (uint8_t)(code >> 8) };
+    if (fpga_load_wave(one16, 2) != 0) return -1;
+    if (fpga_start_dac(1, divider) != 0) return -1;
+    dac_timed = false;
+    printf("[sig] DAC held at 0x%04x (%u), divider=%lu\n", code, code, (unsigned long)divider);
+    return 0;
+}
+
 int adc_probe_one(uint8_t *out_value) {
     if (!out_value) return -1;
 
