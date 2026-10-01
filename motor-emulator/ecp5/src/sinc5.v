@@ -5,7 +5,7 @@
 // Hogenauer CIC, modular arithmetic, never reset-sensitive. The comb stages run once per 64 bits, so
 // one comb unit serves all five channels: channel k decimates when the shared bit counter reaches
 // 8k (the five sampling instants are 8 bits = 444 ns apart), and its comb delay elements live in a
-// block RAM (2 x SB_RAM40_4K as 32-bit words, address {k, stage}).
+// block RAM (32-bit words, address {k, stage}).
 //
 // Output per channel: signed 16-bit, 0 = 50 % ones density, +32767 = all ones (saturated), as in
 // the single-channel version. 281.25 kSPS per channel at 18 MHz; `valid` strobes for each channel

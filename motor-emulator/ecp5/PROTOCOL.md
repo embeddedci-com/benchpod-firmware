@@ -1,7 +1,7 @@
-# Motor emulator link protocol (BenchPod ↔ emulator iCE40)
+# Motor emulator link protocol (BenchPod ↔ emulator ECP5)
 
 BenchPod talks to the emulator boards over the stack link on header pins 1-11: SCK, MOSI, MISO, SS,
-plus CRESET_B/CDONE for configuration, SYNC and FAULT. After configuration the same SPI pins carry
+plus PROGRAMN/DONE for configuration, SYNC and FAULT. After configuration the same SPI pins carry
 this register protocol. All boards in a stack share SCK, MOSI, MISO and SS, so every transaction
 names its board.
 
@@ -65,7 +65,7 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | 0x3A-0x3D | I_OFS_A-C, VBUS_OFS | R/W | sinc offsets subtracted before the model (calibration) |
 | 0x3E | ADV | R/W | back-EMF angle advance in half PWM periods, 0-7 (default 3 = 1.5 periods) |
 | 0x3F | R_SUB | R/W | resistance subtracted from the emulated phase: u_x += R_SUB x i_x >>> 15 (see Motor model) |
-| 0x40-0x48 | encoder | | see Encoder below (gateware built with ENC=1; otherwise they read 0 / as written) |
+| 0x40-0x48 | encoder | | see Encoder below |
 
 Reads: the live registers (0x00-0x04, 0x10-0x15, 0x30-0x39, 0x45-0x48) return the current value;
 every other register returns the value last written to it, as written (a block-RAM mirror of the
@@ -84,7 +84,7 @@ about 160 clk, and the PWM reads its duties from 24 clk before the period ends.
 | 1 | HSWAP_EN | enable the LT4363 hot-swap (board 0 only) |
 | 2 | BRAKE_EN | brake chopper (board 0 only) |
 | 3 | SYNC_MASTER | send the 1 µs / 1 ms SYNC pulse (board 0 only) |
-| 4 | SYNC_REQUIRED | stack mode: trip if SYNC pulses stop for 3 ms (rev 0.4 pinout; ignored with REV03) |
+| 4 | SYNC_REQUIRED | stack mode: trip if SYNC pulses stop for 3 ms |
 
 ### STATUS (0x03)
 
@@ -142,10 +142,10 @@ at 0x8000. Design-doc gains in these units: CM_KP about 7815, CM_KI about 5000 (
 Ki 80k V/(A s) at 200 kHz with 2048 codes/A and 391 codes/V). The exact fixed-point spec is in the
 header of `src/motor_model.v`; `sim/tb_motor_model.v` checks the gateware against it bit for bit.
 
-## Encoder (ENC=1 builds)
+## Encoder
 
 The rotor position as an encoder, from the model's angle (`src/encoder.v`; `sim/tb_encoder.v`
-checks it). Not in the default image yet: with it the UP5K is over 100 % (see README, Next).
+checks it).
 
 | Addr | Name | Access | Description |
 | --- | --- | --- | --- |
@@ -180,8 +180,11 @@ checks it). Not in the default image yet: with it the UP5K is over 100 % (see RE
 
 ## Bring-up sequence
 
-1. Configure: CRESET_B low with SS low, release, wait ≥ 1200 µs, send the bitstream, ≥ 49 extra
-   clocks (see the design doc). Check CDONE.
+1. Configure (slave SPI, every board at once; see the design doc's rev 0.5 section): pulse
+   PROGRAMN low (at least 110 ns), wait 50 ms, then three SS-low frames: ISC_ENABLE (0xC6 + 3
+   zero bytes); LSC_BITSTREAM_BURST (0x7A + 3 zero bytes) followed in the same frame by the whole
+   .bit file; ISC_DISABLE (0x26 + 3 zero bytes). Nothing is read back, so every board in the stack
+   loads at once. SCK up to 60 MHz for this. Then check each board's DONE.
 2. Read ID (0x4D45) and BOARD from each board id you expect; BOARD bit 8 says the probe finished.
 3. Set PWM_PERIOD, DEADTIME, duties (0x8000 = all legs at half the bus: no phase voltage).
 4. Write ARM, check STATUS.LATCH_Q, then set CONTROL.PWM_EN. Arm before the DUT starts switching:

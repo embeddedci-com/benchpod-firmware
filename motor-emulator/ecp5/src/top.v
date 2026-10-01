@@ -1,16 +1,14 @@
 // ============================================================================
-// top.v — BenchPod motor & battery emulator, iCE40UP5K-SG48I (schematic rev 0.4 pinout; REV03 for 0.3).
-//
-// Milestone 1: platform and safety layer. BenchPod drives the bridge duties directly over the
-// link (open-loop test mode); the motor model, common-mode loop and dead-time compensation build
-// on these blocks later.
+// top.v — BenchPod motor & battery emulator, LFE5U-25F-6BG256C (ECP5, schematic rev 0.5).
 //
 //   PLL 12 -> 36 MHz `clk` (the only clock) -- MCLK 18 MHz to the five CA-IS1305 modulators
 //   spi_link  BenchPod link / stack bus, 16-bit registers, board-addressed
 //   pwm3      3 legs, HS/LS per leg, on-delay dead time, centred pulses, dithered duty
 //   sinc5     5 x sinc3 OSR 64 (phase A/B/C, DUT battery, bus voltage), one shared comb
+//   motor_model  the PMSM model (microcoded engine, model.masm)
+//   encoder   the rotor angle as ABZ and as an AS5047P / AS5048A / MA730 SPI slave
 //   i2c_probe board id from the EEPROM strap address (0x50-0x53)
-//   sync_wd   1 ms SYNC from board 0, stack watchdog
+//   sync_wd   1 ms SYNC from board 0, stack watchdog, the us / ms time base
 //
 // Safety (the gateware side; the board's pull-downs cover a blank FPGA):
 //   - bridge gates are low unless PWM_EN, the board fault latch is armed (LATCH_Q), FAULT is
@@ -18,45 +16,49 @@
 //     PWM_EN, so the bridge never restarts on its own;
 //   - hot-swap enable, brake and the SYNC pulse are refused on any board but board 0 (the one
 //     with the PV source and the DUT battery), and before the board id is known;
-//   - ARM is a single 100 us current-sink pulse per register write (the latch input is AC-coupled).
+//   - ARM is a single 100 us pulse per register write (the latch input is AC-coupled; the pin
+//     drives the gate of the N-FET that pulls ARM_REQ_N low).
+// Pads are plain Verilog (yosys maps them to the ECP5 I/O cells); pull-ups and drive strengths
+// are in emu.lpf. Every pad output comes straight from a flop.
 // ============================================================================
 `default_nettype none
 `include "emu_defs.vh"
 
 module top (
-    input  wire clk12,          // 35  12 MHz oscillator (PLL pad)
-    // BenchPod link / stack
-    input  wire spi_sck,        // 15
-    input  wire spi_ss,         // 16
-    input  wire spi_mosi,       // 17
-    inout  wire spi_miso,       // 14  driven only while this board answers a read
-    inout  wire sync_n,         // 48  open drain, read back (40 = RGB1 on rev 0.3)
-    input  wire fault_n,        // 46  shared FAULT line, 1 = no fault
+    input  wire clk12,          // 12 MHz oscillator (PLL input ball)
+    // BenchPod link / stack (the slave-SPI configuration pins, user I/O after configuration;
+    // SCK also reaches a user ball, since CCLK is a dedicated configuration pin)
+    input  wire spi_sck,
+    input  wire spi_ss,
+    input  wire spi_mosi,
+    inout  wire spi_miso,       // driven only while this board answers a read
+    inout  wire sync_n,         // open drain, read back
+    input  wire fault_n,        // shared FAULT line, 1 = no fault
     // bridge
-    output wire pwm_ha, output wire pwm_la,   // 23, 25
-    output wire pwm_hb, output wire pwm_lb,   // 26, 27
-    output wire pwm_hc, output wire pwm_lc,   // 28, 31
-    inout  wire arm_req_n,      // 39  RGB0, open drain, AC-coupled into the latch
-    input  wire latch_q,        // 47  fault latch state
+    output wire pwm_ha, output wire pwm_la,
+    output wire pwm_hb, output wire pwm_lb,
+    output wire pwm_hc, output wire pwm_lc,
+    output wire arm,            // 1 = the N-FET pulls ARM_REQ_N low (AC-coupled into the latch)
+    input  wire latch_q,        // fault latch state
     // power path
-    output wire brake,          // 32
-    output wire hswap_en,       // 44
-    input  wire backstop,       // 45
-    output wire pv_set,         // 19  PV setpoint sigma-delta (DNP path); 1 = released = park
+    output wire brake,
+    output wire hswap_en,
+    input  wire backstop,
+    output wire pv_set,         // PV setpoint sigma-delta (DNP path); 1 = released = park
     // sensing
-    output wire mclk,           // 34
-    input  wire dout_a, input wire dout_b, input wire dout_c,   // 36, 37, 38
-    input  wire dout_d, input wire dout_e,                      // 42, 43
+    output wire mclk,
+    input  wire dout_a, input wire dout_b, input wire dout_c,
+    input  wire dout_d, input wire dout_e,
     // board id EEPROM + trip recorder
-    inout  wire i2c_sda,        // 20
-    inout  wire i2c_scl,        // 21
-    inout  wire ee_wc_n,        // 40  RGB1 current sink (48 on rev 0.3)
+    inout  wire i2c_sda,
+    inout  wire i2c_scl,
+    inout  wire ee_wc_n,        // open drain: low = EEPROM writable (10 k pull-up keeps it protected)
     // DUT signals
-    output wire hall_a, output wire hall_b, output wire hall_c, // 2, 3, 4 (to 2N7002K gates)
-    output wire enc_a, output wire enc_b, output wire enc_z,    // 6, 9, 10
-    input  wire enc_cs, input wire enc_sck, input wire enc_mosi,// 11, 12, 13
-    output wire enc_miso,       // 18
-    inout  wire led_n           // 41  RGB2, open drain
+    output wire hall_a, output wire hall_b, output wire hall_c, // to 2N7002K gates
+    output wire enc_a, output wire enc_b, output wire enc_z,
+    input  wire enc_cs, input wire enc_sck, input wire enc_mosi,  // pull-ups in emu.lpf
+    output wire enc_miso,
+    inout  wire led_n           // open drain, sinks the LED
 );
     // ------------------------------------------------------------------ clock and reset
     wire clk, pll_lock;
@@ -64,17 +66,23 @@ module top (
     assign clk = clk12;         // benches drive clk12 at 36 MHz
     assign pll_lock = 1'b1;
 `else
-    // 12 MHz x 48 / 16 = 36 MHz exactly (icepll -i 12 -o 36)
-    SB_PLL40_PAD #(
-        .FEEDBACK_PATH("SIMPLE"), .DIVR(4'b0000), .DIVF(7'b0101111), .DIVQ(3'b100),
-        .FILTER_RANGE(3'b001)
+    // 12 MHz / 1 x 3 = 36 MHz exactly, VCO 612 MHz (ecppll -i 12 -o 36)
+    (* FREQUENCY_PIN_CLKI="12" *) (* FREQUENCY_PIN_CLKOP="36" *)
+    (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
+    EHXPLLL #(
+        .PLLRST_ENA("DISABLED"), .INTFB_WAKE("DISABLED"), .STDBY_ENABLE("DISABLED"),
+        .DPHASE_SOURCE("DISABLED"), .OUTDIVIDER_MUXA("DIVA"), .OUTDIVIDER_MUXB("DIVB"),
+        .OUTDIVIDER_MUXC("DIVC"), .OUTDIVIDER_MUXD("DIVD"),
+        .CLKI_DIV(1), .CLKOP_ENABLE("ENABLED"), .CLKOP_DIV(17), .CLKOP_CPHASE(8), .CLKOP_FPHASE(0),
+        .FEEDBK_PATH("CLKOP"), .CLKFB_DIV(3)
     ) pll (
-        .PACKAGEPIN(clk12), .PLLOUTGLOBAL(clk), .LOCK(pll_lock),
-        .RESETB(1'b1), .BYPASS(1'b0)
+        .RST(1'b0), .STDBY(1'b0), .CLKI(clk12), .CLKOP(clk), .CLKFB(clk), .CLKINTFB(),
+        .PHASESEL0(1'b0), .PHASESEL1(1'b0), .PHASEDIR(1'b1), .PHASESTEP(1'b1), .PHASELOADREG(1'b1),
+        .PLLWAKESYNC(1'b0), .ENCLKOP(1'b0), .LOCK(pll_lock)
     );
 `endif
 
-    // iCE40 flops configure to 0, so reset is built from a 0-initialised `ready`
+    // flops start at 0 after configuration, so reset is built from a 0-initialised `ready`
     reg [1:0]  lock_s = 2'b00;
     reg [10:0] por = 11'd0;
     reg        ready = 1'b0;
@@ -88,60 +96,22 @@ module top (
 
     // ------------------------------------------------------------------ pads
     wire miso_d, miso_oe;
-    SB_IO #(.PIN_TYPE(6'b101001)) io_miso (
-        .PACKAGE_PIN(spi_miso), .OUTPUT_ENABLE(miso_oe), .D_OUT_0(miso_d));
+    assign spi_miso = miso_oe ? miso_d : 1'bz;
 
-    wire sda_oe, scl_oe, sda_in, scl_in;
-    SB_IO #(.PIN_TYPE(6'b101001)) io_sda (
-        .PACKAGE_PIN(i2c_sda), .OUTPUT_ENABLE(sda_oe), .D_OUT_0(1'b0), .D_IN_0(sda_in));
-    SB_IO #(.PIN_TYPE(6'b101001)) io_scl (
-        .PACKAGE_PIN(i2c_scl), .OUTPUT_ENABLE(scl_oe), .D_OUT_0(1'b0), .D_IN_0(scl_in));
+    wire sda_oe, scl_oe;
+    assign i2c_sda = sda_oe ? 1'b0 : 1'bz;
+    assign i2c_scl = scl_oe ? 1'b0 : 1'bz;
+    wire sda_in = i2c_sda;
 
-    // RGB pins (39-41). With the open-source flow the only primitive nextpnr accepts on them is
-    // SB_RGBA_DRV: an output-only constant-current sink (the pad cannot be read). So:
-    //   ARM_REQ_N (RGB0) 24 mA: the latch input is AC-coupled through 100 nF, 24 mA pulls it down
-    //                    in about 14 us, hence the 100 us ARM pulse
-    //   LED_N     (RGB2)  4 mA
-    //   EE_WC_N   (RGB1)  4 mA (it only ever pulls low against 10 k)
-    //   SYNC is on pin 48, a normal I/O, open drain with readback (rev 0.4 pin swap). REV03 builds
-    //   for the rev 0.3 pins, where SYNC sat on RGB1 and could not be read (no stack watchdog).
-    wire arm_oe, sync_oe, led_on, sync_in;
+    wire arm_oe, sync_oe, led_on;
     wire ee_we = 1'b0;                          // EEPROM stays write-protected for now
-`ifdef SIM
-    assign arm_req_n = arm_oe ? 1'b0 : 1'bz;
-    assign led_n     = led_on ? 1'b0 : 1'bz;
-`ifndef REV03
-    assign sync_n    = sync_oe ? 1'b0 : 1'bz;
-    assign sync_in   = sync_n;
-    assign ee_wc_n   = ee_we ? 1'b0 : 1'bz;
-`else
-    assign sync_n    = sync_oe ? 1'b0 : 1'bz;
-    assign sync_in   = 1'b1;                    // write-only on rev 0.3
-    assign ee_wc_n   = ~ee_we;
-`endif
-`else
-`ifndef REV03
-    SB_RGBA_DRV #(.CURRENT_MODE("0b0"), .RGB0_CURRENT("0b111111"), .RGB1_CURRENT("0b000001"),
-                  .RGB2_CURRENT("0b000001")) rgb (
-        .CURREN(1'b1), .RGBLEDEN(1'b1), .RGB0PWM(arm_oe), .RGB1PWM(ee_we), .RGB2PWM(led_on),
-        .RGB0(arm_req_n), .RGB1(ee_wc_n), .RGB2(led_n));
-    SB_IO #(.PIN_TYPE(6'b101001)) io_sync (
-        .PACKAGE_PIN(sync_n), .OUTPUT_ENABLE(sync_oe), .D_OUT_0(1'b0), .D_IN_0(sync_in));
-`else
-    SB_RGBA_DRV #(.CURRENT_MODE("0b0"), .RGB0_CURRENT("0b111111"), .RGB1_CURRENT("0b000011"),
-                  .RGB2_CURRENT("0b000001")) rgb (
-        .CURREN(1'b1), .RGBLEDEN(1'b1), .RGB0PWM(arm_oe), .RGB1PWM(sync_oe), .RGB2PWM(led_on),
-        .RGB0(arm_req_n), .RGB1(sync_n), .RGB2(led_n));
-    assign sync_in = 1'b1;
-    assign ee_wc_n = ~ee_we;
-`endif
-`endif
+    wire sync_in = sync_n;
+    assign sync_n  = sync_oe ? 1'b0 : 1'bz;
+    assign ee_wc_n = ee_we   ? 1'b0 : 1'bz;
+    assign led_n   = led_on  ? 1'b0 : 1'bz;
+    assign arm     = arm_oe;
 
-    // encoder inputs float when the DUT supplies no VIO (translators disabled): pull them up
-    wire enc_cs_i, enc_sck_i, enc_mosi_i;
-    SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_ecs  (.PACKAGE_PIN(enc_cs),   .D_IN_0(enc_cs_i));
-    SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_esck (.PACKAGE_PIN(enc_sck),  .D_IN_0(enc_sck_i));
-    SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_emo  (.PACKAGE_PIN(enc_mosi), .D_IN_0(enc_mosi_i));
+    wire enc_cs_i = enc_cs, enc_sck_i = enc_sck, enc_mosi_i = enc_mosi;
 
     // slow status inputs, synchronised
     reg [1:0] fault_s, latch_s, back_s;
@@ -302,11 +272,7 @@ module top (
     // ------------------------------------------------------------------ SYNC / stack watchdog
     sync_wd wd (
         .clk(clk), .rst(rst), .master(ctrl[`C_SYNC_MASTER] & is_board0), .hold_low(1'b0),
-`ifndef REV03
-        .required(ctrl[`C_SYNC_REQUIRED]),
-`else
-        .required(1'b0),                      // no SYNC readback on rev 0.3
-`endif .clear(wd_clear), .sync_in(sync_in),
+        .required(ctrl[`C_SYNC_REQUIRED]), .clear(wd_clear), .sync_in(sync_in),
         .sync_oe(sync_oe), .tick(sync_tick), .seen(sync_seen), .trip(wd_trip), .us(us_tick), .ms(ms_tick));
 
     // ------------------------------------------------------------------ ARM, brake, hot-swap
@@ -339,9 +305,7 @@ module top (
     assign {hall_c, hall_b, hall_a} = hall_pin;
 
     // ------------------------------------------------------------------ encoder
-    // Built with ENC (make ENC=1): it does not fit beside the model yet (see README, Next).
     wire [15:0] e_rf_q, e_angle, e_count, e_status;
-`ifdef ENC
     encoder enc (
         .clk(clk), .rst(rst), .tick(period_start), .reset_state(m_reset), .theta(m_theta), .period(period_eff),
         .pw_en(e_pw), .pw_addr(e_pw_addr), .pw_data(e_pw_data),
@@ -349,10 +313,6 @@ module top (
         .enc_a(enc_a), .enc_b(enc_b), .enc_z(enc_z), .enc_miso(enc_miso),
         .ctrl(), .cpr(), .poles(), .ofs(), .rf_addr(), .rf_link_q(e_rf_q),
         .angle(e_angle), .count(e_count), .status(e_status));
-`else
-    assign enc_a = 1'b0; assign enc_b = 1'b0; assign enc_z = 1'b0; assign enc_miso = 1'b0;
-    assign e_rf_q = 16'h0000; assign e_angle = 16'h0000; assign e_count = 16'h0000; assign e_status = 16'h0000;
-`endif
     assign pv_set  = 1'b1;                     // buffer off: the divider holds the park level
 
     reg [8:0] blink;                          // ms

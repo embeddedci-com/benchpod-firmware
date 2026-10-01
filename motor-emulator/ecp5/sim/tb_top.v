@@ -10,8 +10,9 @@
 //  6  board 1 cannot enable hot-swap, brake or SYNC master
 //  7  re-probe with the EEPROM at 0x50: board 0 now may (hot-swap, brake PWM, 1 ms SYNC)
 //  8  ARM pulse 100 us; SYNC held low by another board trips the watchdog and WD_CLEAR clears it
-//     (not with REV03: rev 0.3 cannot read SYNC)
 //  9  motor model at fixed speed over the link: ticks, back-EMF amplitude, halls from the model
+// 10  encoder over the link: ABZ moves with the model, and an AS5047P read on the encoder pins
+//     returns ENC_ANGLE
 `timescale 1ns/1ps
 `default_nettype none
 `include "emu_defs.vh"
@@ -22,6 +23,9 @@ module tb_top;
     reg sck = 0, ss = 1, mosi = 0;
     tri miso;
     tri1 sync_n, arm_req_n, led_n, sda, scl;
+    wire arm;
+    assign arm_req_n = arm ? 1'b0 : 1'bz;          // the board's N-FET
+    reg  ecs = 1, esck = 0, emosi = 0;
     reg fault_n = 1, latch_q = 0, backstop = 0;
     reg ext_sync_low = 0;
     assign sync_n = ext_sync_low ? 1'b0 : 1'bz;
@@ -34,12 +38,12 @@ module tb_top;
         .clk12(clk), .spi_sck(sck), .spi_ss(ss), .spi_mosi(mosi), .spi_miso(miso),
         .sync_n(sync_n), .fault_n(fault_n),
         .pwm_ha(ha), .pwm_la(la), .pwm_hb(hb), .pwm_lb(lb), .pwm_hc(hc), .pwm_lc(lc),
-        .arm_req_n(arm_req_n), .latch_q(latch_q),
+        .arm(arm), .latch_q(latch_q),
         .brake(brake), .hswap_en(hswap_en), .backstop(backstop), .pv_set(pv_set),
         .mclk(mclk), .dout_a(dout[0]), .dout_b(dout[1]), .dout_c(dout[2]), .dout_d(dout[3]), .dout_e(dout[4]),
         .i2c_sda(sda), .i2c_scl(scl), .ee_wc_n(ee_wc_n_pu),
         .hall_a(hall_a), .hall_b(hall_b), .hall_c(hall_c), .enc_a(enc_a), .enc_b(enc_b), .enc_z(enc_z),
-        .enc_cs(1'bz), .enc_sck(1'bz), .enc_mosi(1'bz), .enc_miso(enc_miso), .led_n(led_n));
+        .enc_cs(ecs), .enc_sck(esck), .enc_mosi(emosi), .enc_miso(enc_miso), .led_n(led_n));
 
     reg [6:0] ee_addr = 7'h51;
     i2c_ack_model ee (.sda(sda), .scl(scl), .addr7(ee_addr), .present(1'b1));
@@ -73,6 +77,17 @@ module tb_top;
                 if (miso === 1'bz) miso_z_bits = miso_z_bits + 1;
                 rx[b] = miso; #HALF; sck = 0;
             end
+        end
+    endtask
+    // DUT-side SPI master on the encoder pins: mode 1, 4 MHz
+    task enc_frame(input [15:0] tx, output [15:0] r);
+        integer b;
+        begin
+            r = 0; #300; ecs = 0; #400;
+            for (b = 15; b >= 0; b = b - 1) begin
+                esck = 1; emosi = tx[b]; #115; r = {r[14:0], enc_miso}; #10; esck = 0; #125;
+            end
+            #100; ecs = 1; #500;
         end
     endtask
     task reg_write(input bcast, input [1:0] id, input [7:0] addr, input [15:0] data);
@@ -219,7 +234,6 @@ module tb_top;
         // 100-101 us: the gateware counts it in us ticks
         if (t_arm1 - t_arm0 < 99900 || t_arm1 - t_arm0 > 101100) begin errors = errors + 1; $display("FAIL: ARM pulse %0d ns", t_arm1 - t_arm0); end
         else $display("  ok ARM pulse %0d ns", t_arm1 - t_arm0);
-`ifndef REV03
         reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0001);
         repeat (200) @(posedge clk);
         ext_sync_low = 1; #150_000; ext_sync_low = 0;
@@ -228,10 +242,6 @@ module tb_top;
         reg_write(1'b0, 2'd0, `R_WD_CLEAR, 16'h0001);
         reg_read(2'd0, `R_STATUS, v); expect1("STATUS.wd_trip after clear", v[`S_WD_TRIP], 1'b0);
         reg_read(2'd0, `R_CONTROL, v); expect1("PWM_EN cleared by the trip", v[`C_PWM_EN], 1'b0);
-
-`else
-        $display("  (rev 0.3 pinout: SYNC is write-only, watchdog readback not tested)");
-`endif
 
         // ---------------- 9: motor model over the link (fixed speed, halls from the model)
         reg_write(1'b0, 2'd0, `R_KE, 16'd10468);
@@ -253,6 +263,31 @@ module tb_top;
         reg_read(2'd0, `R_EMF, v); expect16("model E", v, 16'd5862);
         reg_read(2'd0, `R_MDUTY_A, v);
         if (v == 16'h8000) begin errors = errors + 1; $display("FAIL: model duty stuck at 0x8000"); end
+
+        // ---------------- 10: encoder over the link (the model still turning)
+        reg_write(1'b0, 2'd0, `R_ENC_POLES, 16'd7);
+        reg_write(1'b0, 2'd0, `R_ENC_CPR, 16'd4000);
+        reg_write(1'b0, 2'd0, `R_ENC_CTRL, 16'h0003);            // ABZ and SPI, AS5047P
+        repeat (180 * 10) @(posedge clk);
+        reg_read(2'd0, `R_ENC_ANGLE, v2);
+        n = 0;
+        for (i = 0; i < 180 * 20; i = i + 1) begin
+            @(posedge clk);
+            if (i > 0 && enc_a != cnt_h) n = n + 1;
+            cnt_h = enc_a;
+        end
+        reg_read(2'd0, `R_ENC_ANGLE, v3);
+        if (n < 20 || v3 == v2) begin errors = errors + 1; $display("FAIL: encoder: %0d A edges, angle %h -> %h", n, v2, v3); end
+        else $display("  ok encoder: %0d A edges in 20 periods, angle %h -> %h", n, v2, v3);
+        reg_write(1'b0, 2'd0, `R_W_SET, 16'd0);                 // stop: the angle holds
+        repeat (180 * 4) @(posedge clk);
+        reg_read(2'd0, `R_ENC_ANGLE, v2);
+        enc_frame(16'hFFFF, v); enc_frame(16'hC000, v);       // read ANGLECOM, then NOP
+        if (v[13:0] !== v2[15:2] || v[14] !== 1'b0) begin errors = errors + 1; $display("FAIL: AS5047P read %h, ENC_ANGLE %h", v, v2); end
+        else $display("  ok AS5047P frame on the encoder pins: %h (ENC_ANGLE %h)", v, v2);
+        reg_read(2'd0, `R_ENC_STATUS, v);
+        if (v[15:8] != 8'd2 || v[2:0] != 3'd0) begin errors = errors + 1; $display("FAIL: ENC_STATUS %h", v); end
+
         reg_write(1'b0, 2'd0, `R_MODE, 16'h0000);
         if (errors == 0) $display("PASS tb_top"); else $display("FAIL tb_top: %0d errors", errors);
         $finish;

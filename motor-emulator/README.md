@@ -2,12 +2,13 @@
 
 Firmware for the BenchPod motor & battery emulator board: an ESC or other BLDC/PMSM drive runs
 against an emulated motor and battery in CI. Hardware and design:
-`benchpod-private/pcb/motor-emulator` (`design.md`, schematic rev 0.3; the gateware targets the
-rev 0.4 pin swap below).
+`benchpod-private/pcb/motor-emulator` (`design.md`; the gateware targets schematic rev 0.5, see
+"FPGA: ECP5 LFE5U-25F, rev 0.5" there).
 
-- `ice40/`: gateware for the board's iCE40UP5K-SG48I. BenchPod loads it over slave SPI (the
+- `ecp5/`: gateware for the board's ECP5 LFE5U-25F-6BG256C. BenchPod loads it over slave SPI (the
   board has no configuration flash) and then drives it over the same pins
-  ([PROTOCOL.md](ice40/PROTOCOL.md)).
+  ([PROTOCOL.md](ecp5/PROTOCOL.md)). Until 30 Sep 2026 the board had an iCE40UP5K, which ran out
+  of logic with the encoder; iCE40 support is gone (git history has it).
 
 ## Gateware status
 
@@ -39,7 +40,7 @@ FPV pass (30 Sep 2026):
 | Motor model | `motor_model.v`, `model.masm` | microcoded engine: 4-stage pipeline, one multiplier, 34-bit accumulator, program and data in block RAM; per PWM period (166 instructions): back-EMF at the advanced angle, R_SUB, torque, mechanics, i0 PI, dead-time compensation, min-max injection and CM shaping, duties by reciprocal, halls |
 | Board id | `i2c_probe.v` | probes the EEPROM at 0x50-0x53 at start-up: stack position |
 | Stack | `sync_wd.v` | board 0 sends SYNC (1 µs every 1 ms); watchdog on SYNC held low; the µs / ms time base |
-| Encoder (ENC=1) | `encoder.v` | the rotor angle as ABZ and as an AS5047P / AS5048A / MA730 SPI slave; see below |
+| Encoder | `encoder.v` | the rotor angle as ABZ and as an AS5047P / AS5048A / MA730 SPI slave; see below |
 
 Register reads: live values come through fabric muxes, everything BenchPod writes reads back from
 a block-RAM mirror of the link writes (so the model parameters are readable too).
@@ -64,20 +65,23 @@ Safety, in the gateware (the board's pull-downs cover a blank FPGA):
 Verification (`make test`, about 4 minutes): unit benches for each block (the encoder against
 exact references for the angle, ABZ and the three SPI profiles at 8 MHz), a bit-exact bench of the
 model against an independent reference of its fixed-point spec (1275 ticks, five runs including a
-re-arm and the shaping properties: legs inside the margin, line voltages kept), the whole chip over the real SPI link (both pinouts), and the same model and chip benches
-on the yosys gate-level netlist. The build fails if yosys reports a signal driven from two always
+re-arm and the shaping properties: legs inside the margin, line voltages kept), the whole chip over
+the real SPI link (including the encoder pins), and the same model and chip benches on the yosys
+gate-level ECP5 netlist (`sim/mult18x18d_sim.v` models the hard multiplier, which yosys's library
+has only as a black box; memories go to LUT RAM there, since the library's block-RAM cell has no
+behaviour). The build fails if yosys reports a signal driven from two always
 blocks (that once simulated fine and synthesised to a constant).
 
-Resources and timing (yosys 0.65, nextpnr-ice40 0.10), default image: 4,475 of 5,280 LCs (85 %),
-11 of 30 block RAMs, 7 of 8 DSPs. Timing closes at 36.0-40.3 MHz against the 36 MHz target on every
-seed from 1 to 8, for both pinouts. An area pass (30 Sep 2026) took 160 LCs out: the register
-read-back mirror, the comb stages of the sinc filters sharing one register, the model's runtime
-shifter and angle advance on DSPs, the dither state written in place, one µs / ms time base.
+Resources and timing (yosys 0.65, nextpnr-ecp5 0.10, OSS CAD Suite): 18 % of the 24,288 LUTs,
+11 % of the flip-flops, 7 of 28 multipliers, 6 of 56 block RAMs; timing closes at about 65 MHz
+against the 36 MHz clock. The bitstream is 183 KB (compressed). The iCE40-era area pass (register
+read-back mirror, shared sinc comb register, the model's shifter and angle advance on multipliers,
+one µs / ms time base) is kept; it costs nothing here.
 
-## Encoder emulation (built with `make ENC=1`, does not fit yet)
+## Encoder emulation
 
-`src/encoder.v` is written and verified in simulation (`tb_encoder`), registers in
-[PROTOCOL.md](ice40/PROTOCOL.md#encoder-enc1-builds):
+`src/encoder.v`, verified in simulation (`tb_encoder`, and through the link in `tb_top`),
+registers in [PROTOCOL.md](ecp5/PROTOCOL.md#encoder):
 
 - Mechanical angle from the model's electrical angle, exact over any run: electrical revolutions
   counted modulo the pole pairs, one 22-step division per PWM period; then BenchPod's DIR and
@@ -90,43 +94,35 @@ shifter and angle advance on DSPs, the dither state written in place, one µs / 
   register read / write), with a 64-entry register file BenchPod can load (DIAAGC, magnitude,
   magnet faults).
 
-It costs about 830 LCs (590 LUTs, 400 flip-flops) and the image comes to 5,302 of 5,280 LCs: it
-does not place. See Next for the ways to make room.
+## Pinout
 
-## Pinout: rev 0.4 pin swap
-
-The UP5K's RGB pins (39, 40, 41) are output-only in the open-source flow: nextpnr accepts only
-`SB_RGBA_DRV` (a constant-current sink) on them, and the pad cannot be read. On schematic rev 0.3
-SYNC sat on RGB1, so a board could send SYNC but never see another board hold it low. The design
-doc (Gateware bring-up findings, 30 Sep 2026) swaps SYNC to pin 48 (normal I/O, open drain with
-readback) and EE_WC_N to pin 40 (write-only, a current sink suits it). The gateware targets that
-pinout (`emu.pcf`); `make REV03=1` builds for the rev 0.3 pins (`emu_rev03.pcf`, no SYNC readback).
-
-ARM_REQ_N is a 24 mA current sink into an AC-coupled latch input (100 nF), about 14 us to pull it
-down, so the ARM pulse is 100 us.
+`ecp5/emu.lpf` is the ball map, the same table as the design doc's rev 0.5 section. The
+power-stage outputs (PWM, brake, hot-swap, ARM, PV setpoint) sit on the top banks: the ECP5's
+left and right banks have no hot-socket protection. Pads are plain Verilog in `top.v` (yosys maps
+them to the ECP5 I/O cells); pulls, drive and slew are in the LPF. ARM drives the gate of the
+N-FET that pulls ARM_REQ_N (the iCE40's 24 mA current sink is gone); LED, EE_WC_N and SYNC are
+open drain. The link clock comes in on a user ball (T6) as well as CCLK, which is a dedicated
+configuration pin.
 
 ## Building
 
 ```sh
-cd ice40
+cd ecp5
 make test            # every bench must print PASS (sim/run_vvp.sh enforces it)
-make                 # build/motor_emulator.bin (rev 0.4 pinout)
-make REV03=1         # build/motor_emulator_rev03.bin (schematic rev 0.3 pins)
-make ENC=1           # with the encoder emulation (does not place yet)
+make                 # build/motor_emulator.bit
+make SEED=n          # another placement seed
 ```
 
-Needs yosys, nextpnr-ice40, icestorm and iverilog (`brew install yosys nextpnr-ice40 icestorm
-icarus-verilog`).
+Needs the OSS CAD Suite (yosys, nextpnr-ecp5, prjtrellis' ecppack; `TOOLS=` points at its `bin`,
+default `/opt/oss-cad-suite/bin`) and iverilog.
 
 ## Next
 
 In rough order:
 
-1. Make room for the encoder (about 830 LCs over today's image; the UP5K has 805 left, and
-   placement needs ~10 % free). Options: separate ABZ and SPI images (a DUT uses one; about 450
-   LCs each, BenchPod loads the image per DUT anyway), and/or move more of the model's fabric
-   helpers (duty conversion, saturations, angle sequencer) into microcode, which needs a longer
-   model period than 180 clk; or a larger FPGA on a later board revision.
+1. Bring-up on the rev 0.5 board: BenchPod's slave-SPI loader for the ECP5 (write-only:
+   PROGRAMN, 50 ms, ISC_ENABLE, LSC_BITSTREAM_BURST + bitstream, ISC_DISABLE, then DONE), then
+   the hardware checks in the design doc (DONE gating of BRAKE / SHDN at power-up).
 2. Trip recorder read (PCAL6408A), OSR-256 logging stream, brake energy budget, PV setpoint
    sigma-delta (DNP path), stack SYNC as the model's time base.
 3. Bench calibration: current and bus offsets and gains, the effective dead time, the choke's

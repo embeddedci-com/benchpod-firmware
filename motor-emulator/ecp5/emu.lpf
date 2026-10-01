@@ -1,0 +1,102 @@
+# LFE5U-25F-6BG256C (caBGA-256) ball map, motor emulator schematic rev 0.5 (U701).
+# Source of truth: benchpod-private/pcb/motor-emulator (design.md, "FPGA: ECP5, rev 0.5").
+# Every bank at VCCIO 3.3 V. Signals sit on the outer two ball rings where possible (escape on
+# four layers); any user ball in the same bank works electrically, so pins may be swapped in
+# KiCad as long as this file follows. Dedicated configuration balls (CCLK, PROGRAMN, INITN, DONE,
+# CFG_0-2, JTAG) are not listed here.
+
+FREQUENCY PORT "clk12" 12 MHz;
+
+# 12 MHz oscillator -> PLL (bank 6, the left-bottom PLL's dedicated input)
+LOCATE COMP "clk12"     SITE "P6";
+IOBUF  PORT "clk12"     IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# BenchPod link / stack bus (bank 8): the slave-SPI configuration pins, user I/O after
+# configuration. SCK reaches CCLK (dedicated) for configuration and T6 for the link.
+LOCATE COMP "spi_mosi"  SITE "T8";      # D0/MOSI (slave SPI SI)
+LOCATE COMP "spi_miso"  SITE "T7";      # D1/MISO (slave SPI SO), via 470R
+LOCATE COMP "spi_ss"    SITE "R8";      # SN (slave SPI chip select)
+LOCATE COMP "spi_sck"   SITE "T6";      # D7, user copy of SCK
+IOBUF  PORT "spi_mosi"  IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "spi_miso"  IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
+IOBUF  PORT "spi_ss"    IO_TYPE=LVCMOS33 PULLMODE=UP;
+IOBUF  PORT "spi_sck"   IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# bridge and power path (bank 1, top edge): MP6539 HS/LS inputs with 4.7k pull-downs.
+# Power-stage outputs stay on the top/bottom banks (0, 1): the left/right banks (2, 3, 6, 7) have
+# no hot-socket protection and can leak up to 33 mA while VCC ramps (DS Table 3.5). BRAKE,
+# HSWAP_EN and ARM are also ANDed with DONE on the board.
+LOCATE COMP "pwm_ha"    SITE "A10";
+LOCATE COMP "pwm_la"    SITE "A11";
+LOCATE COMP "pwm_hb"    SITE "A12";
+LOCATE COMP "pwm_lb"    SITE "A13";
+LOCATE COMP "pwm_hc"    SITE "A14";
+LOCATE COMP "pwm_lc"    SITE "A15";
+LOCATE COMP "arm"       SITE "B12";     # gate of the N-FET that pulls ARM_REQ_N low
+LOCATE COMP "latch_q"   SITE "B14";
+LOCATE COMP "fault_n"   SITE "A9";
+LOCATE COMP "brake"     SITE "B10";
+LOCATE COMP "hswap_en"  SITE "B11";
+LOCATE COMP "backstop"  SITE "B9";
+LOCATE COMP "pv_set"    SITE "B13";     # sigma-delta PV setpoint (DNP buffer)
+IOBUF  PORT "pwm_ha"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pwm_la"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pwm_hb"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pwm_lb"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pwm_hc"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pwm_lc"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "arm"       IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "latch_q"   IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "fault_n"   IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "brake"     IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "hswap_en"  IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "backstop"  IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# delta-sigma modulators (bank 2)
+LOCATE COMP "mclk"      SITE "J16";
+LOCATE COMP "dout_a"    SITE "G16";
+LOCATE COMP "dout_b"    SITE "F16";
+LOCATE COMP "dout_c"    SITE "E16";
+LOCATE COMP "dout_d"    SITE "D16";     # DUT battery current
+LOCATE COMP "dout_e"    SITE "C16";     # bus voltage
+IOBUF  PORT "mclk"      IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
+IOBUF  PORT "dout_a"    IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "dout_b"    IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "dout_c"    IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "dout_d"    IO_TYPE=LVCMOS33 PULLMODE=NONE;
+IOBUF  PORT "dout_e"    IO_TYPE=LVCMOS33 PULLMODE=NONE;
+
+# EEPROM / trip recorder I2C, LED, stack SYNC (bank 7)
+LOCATE COMP "i2c_sda"   SITE "B1";
+LOCATE COMP "i2c_scl"   SITE "C1";
+LOCATE COMP "ee_wc_n"   SITE "D1";      # open drain, 2.2k pull-up keeps the EEPROM protected
+LOCATE COMP "led_n"     SITE "E1";      # open drain, sinks the LED
+LOCATE COMP "sync_n"    SITE "F1";      # open drain with readback, 4.7k pull-up per board
+IOBUF  PORT "i2c_sda"   IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "i2c_scl"   IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "ee_wc_n"   IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "led_n"     IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "sync_n"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=SLOW;
+IOBUF  PORT "pv_set"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+
+# DUT side (bank 0): hall FET gates, encoder translators (inputs float without DUT VIO: pull up)
+LOCATE COMP "hall_a"    SITE "A2";
+LOCATE COMP "hall_b"    SITE "A3";
+LOCATE COMP "hall_c"    SITE "A4";
+LOCATE COMP "enc_a"     SITE "A5";
+LOCATE COMP "enc_b"     SITE "A6";
+LOCATE COMP "enc_z"     SITE "B3";
+LOCATE COMP "enc_cs"    SITE "B4";
+LOCATE COMP "enc_sck"   SITE "B5";
+LOCATE COMP "enc_mosi"  SITE "B6";
+LOCATE COMP "enc_miso"  SITE "A7";
+IOBUF  PORT "hall_a"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "hall_b"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "hall_c"    IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=4 SLEWRATE=SLOW;
+IOBUF  PORT "enc_a"     IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
+IOBUF  PORT "enc_b"     IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
+IOBUF  PORT "enc_z"     IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
+IOBUF  PORT "enc_cs"    IO_TYPE=LVCMOS33 PULLMODE=UP;
+IOBUF  PORT "enc_sck"   IO_TYPE=LVCMOS33 PULLMODE=UP;
+IOBUF  PORT "enc_mosi"  IO_TYPE=LVCMOS33 PULLMODE=UP;
+IOBUF  PORT "enc_miso"  IO_TYPE=LVCMOS33 PULLMODE=NONE DRIVE=8 SLEWRATE=FAST;
