@@ -3464,9 +3464,14 @@ static void handle_dac_control_loop(int conn_id, const char *json) {
     if (signal_engine_fpga_version() >= DAC_LOOP_SOURCE_MIN_GW)
         rc = dac_loop_set_source(p.src, p.in_fixed, p.sweep_step);
     /* Program the map before arming too: the first tick must already index through it, or
-       the loop opens by driving whatever the raw count happened to point at. */
-    if (rc == 0 && have_map)
-        rc = dac_loop_set_inmap(map.in_zero, map.in_gain, map.in_trip, true, map.trip_en);
+       the loop opens by driving whatever the raw count happened to point at.
+       An arm WITHOUT a map has to switch the map (and its trip) OFF: the fabric keeps the
+       registers of the previous arm until a reconfiguration, so until 3.4.0 an unmapped arm
+       after a mapped one silently indexed the curve through the old map (measured: fixed
+       input 0 landed on curve entry 62 instead of 0). */
+    if (rc == 0 && signal_engine_fpga_version() >= DAC_LOOP_INMAP_MIN_GW)
+        rc = have_map ? dac_loop_set_inmap(map.in_zero, map.in_gain, map.in_trip, true, map.trip_en)
+                      : dac_loop_set_inmap(0, 0, 0, false, false);
     if (rc == 0) rc = dac_control_loop_start(lut, lut_len, p.k_q15, p.vmin, p.vmax, p.tick_div);
     heavy_release(conn_id);
     if (rc == -2) { send_error(conn_id, "control loop needs gateware v23+"); return; }
