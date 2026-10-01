@@ -25,7 +25,8 @@ module tb_i2c_ctl;
     reg [7:0] pins = 8'h7F;
     i2c_dev_model #(.KIND(0), .WRITE_NS(3_000_000)) ee (.sda(sda), .scl(scl), .addr7(ee_a7), .present(ee_present), .wc_n(~wc_low), .pins(8'h00));
     i2c_dev_model #(.KIND(1)) pc (.sda(sda), .scl(scl), .addr7(7'h20), .present(pc_present), .wc_n(1'b1), .pins(pins));
-    i2c_ctl #(.QUARTER(90)) dut (.clk(clk), .rst(rst), .sda_in(sda), .scl_oe(scl_oe), .sda_oe(sda_oe), .wc_low(wc_low),
+    // QUARTER 90 (the default): 100 kHz; no parameter override, so the gate-level netlist fits too
+    i2c_ctl dut (.clk(clk), .rst(rst), .sda_in(sda), .scl_oe(scl_oe), .sda_oe(sda_oe), .wc_low(wc_low),
         .probe_start(probe_start), .board_id(board_id), .done(done), .ok(ok),
         .trip_req(trip_req), .trip_src(trip_src), .trip_valid(trip_valid), .pcal_ok(pcal_ok),
         .ee_wr(ee_wr), .ee_rd(ee_rd), .ee_addr(ee_addr), .ee_wdata(ee_wdata), .ee_rdata(ee_rdata), .busy(busy), .err(err));

@@ -359,6 +359,9 @@ module tb_top;
         reg_write(1'b0, 2'd0, `R_TRIPS, 16'h000F);
         $display("  ok protection: overcurrent trip, OV brake, hot-swap interlock");
 
+`ifndef GL
+        // steps 12-16 wait milliseconds of simulated time each: RTL only (the gate-level run of
+        // these blocks is in their own benches, tb_*_gl)
         // ---------------- 12: trip recorder
         @(negedge clk) oc_trip_n = 0; fault_n = 0;
         #20_000; @(negedge clk) oc_trip_n = 1; fault_n = 1;
@@ -460,6 +463,7 @@ module tb_top;
         reg_write(1'b0, 2'd0, `R_SYNC_CTRL, 16'h0000);
         reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0000);
 
+`endif
         // ---------------- 17: fault injection: hall A stuck high, then all inverted
         reg_write(1'b0, 2'd0, `R_HALL, 16'h0000);
         reg_write(1'b0, 2'd0, `R_MODE, 16'h0001);                 // halls from the HALL register

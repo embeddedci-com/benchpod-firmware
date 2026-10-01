@@ -56,7 +56,7 @@ $(BUILD)/$(PROJECT).bit: $(BUILD)/$(PROJECT).config
 	$(ECPPACK) --compress --input $< --bit $@
 
 # ---- benches
-BENCHES = tb_pwm3 tb_sinc5 tb_sinc5_256 tb_i2c_ctl tb_sync_wd tb_motor_model tb_encoder tb_protect tb_battery tb_top tb_motor_model_gl tb_top_gl
+BENCHES = tb_pwm3 tb_sinc5 tb_sinc5_256 tb_i2c_ctl tb_sync_wd tb_motor_model tb_encoder tb_protect tb_battery tb_top tb_motor_model_gl tb_protect_gl tb_battery_gl tb_i2c_ctl_gl tb_encoder_gl tb_top_gl
 
 tb_pwm3: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/pwm3.v
@@ -110,13 +110,29 @@ $(BUILD)/gl_model.v: src/motor_model.v $(INC) | $(BUILD)
 	$(YOSYS) -q -l $(BUILD)/gl_model.log -p "read_verilog -I src src/motor_model.v; synth_ecp5 -nobram -top motor_model; write_verilog -noattr $@"
 
 tb_top_gl: $(BUILD)/gl_top.v
-	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -DSIM -o $(BUILD)/$@.vvp \
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -DSIM -DGL -o $(BUILD)/$@.vvp \
 		sim/tb_top.v sim/i2c_dev_model.v sim/mult18x18d_sim.v sim/tbuf_cell.v $(BUILD)/gl_top.v $(CELLS_SIM)
 	$(VVP) $(BUILD)/$@.vvp
 
 tb_motor_model_gl: $(BUILD)/gl_model.v
 	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp \
 		sim/tb_motor_model.v sim/mult18x18d_sim.v $(BUILD)/gl_model.v $(CELLS_SIM)
+	$(VVP) $(BUILD)/$@.vvp
+
+# gate-level unit benches for the newer blocks (tb_top_gl skips their long steps)
+$(BUILD)/gl_%.v: src/%.v | $(BUILD)
+	$(YOSYS) -q -l $(BUILD)/gl_$*.log -p "read_verilog -I src src/$*.v; synth_ecp5 -nobram -top $*; write_verilog -noattr $@"
+tb_protect_gl: $(BUILD)/gl_protect.v
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_protect.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
+	$(VVP) $(BUILD)/$@.vvp
+tb_battery_gl: $(BUILD)/gl_battery.v
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_battery.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
+	$(VVP) $(BUILD)/$@.vvp
+tb_i2c_ctl_gl: $(BUILD)/gl_i2c_ctl.v
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_i2c_ctl.v sim/i2c_dev_model.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
+	$(VVP) $(BUILD)/$@.vvp
+tb_encoder_gl: $(BUILD)/gl_encoder.v
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_encoder.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
 	$(VVP) $(BUILD)/$@.vvp
 
 test: $(BENCHES)
