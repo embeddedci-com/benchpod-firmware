@@ -113,7 +113,7 @@ module tb_top;
         end
     endtask
     // burst read of n words from addr (auto-increment), into burst[]
-    reg [15:0] burst [0:63];
+    reg [15:0] burst [0:127];
     // half = 1: one more byte (the MSB of word n), then the transaction ends mid-word
     task reg_burst(input [1:0] id, input [7:0] addr, input integer n, input half);
         integer w;
@@ -124,6 +124,16 @@ module tb_top;
                 spi_byte(8'h00); burst[w][15:8] = rx; spi_byte(8'h00); burst[w][7:0] = rx;
             end
             if (half) spi_byte(8'h00);
+            #200; ss = 1; #400;
+        end
+    endtask
+    // burst write of n words (w0, w0 + 1, ...) from addr
+    task reg_wburst(input [1:0] id, input [7:0] addr, input integer n, input [15:0] w0);
+        integer w;
+        begin
+            ss = 0; #200;
+            spi_byte({1'b0, 1'b0, id, 4'h0}); spi_byte(addr);
+            for (w = 0; w < n; w = w + 1) begin spi_byte(w0[15:8] + 8'd0); spi_byte(w0[7:0] + w); end
             #200; ss = 1; #400;
         end
     endtask
@@ -413,6 +423,13 @@ module tb_top;
         repeat (10) @(posedge clk);
         expect1("PV_SET parked when off", pv_set, 1'b1);
         $display("  ok battery: OCV 24000, BAT_SET %0d, PV_SET high %0d / 20000", v, n);
+        // a port register takes a whole burst: the words after BAT_TBL_DATA stay off PV_OFS / PV_GAIN
+        reg_write(1'b0, 2'd0, `R_PV_OFS, 16'h1234);
+        reg_write(1'b0, 2'd0, `R_BAT_TBL_ADDR, 16'd60);
+        reg_wburst(2'd0, `R_BAT_TBL_DATA, 3, 16'd100);
+        reg_read(2'd0, `R_PV_OFS, v); expect16("PV_OFS after a table burst", v, 16'h1234);
+        reg_read(2'd0, `R_PV_GAIN, v); expect16("PV_GAIN after a table burst", v, 16'd32767);
+        reg_read(2'd0, `R_BAT_TBL_ADDR, v); expect16("BAT_TBL_ADDR mirror", v, 16'd60);
 
         // ---------------- 15: logging stream
         reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h8000);              // clear
@@ -440,8 +457,17 @@ module tb_top;
                     seq_prev = burst[0];
                 end
             end
+            // one burst longer than the 0xC0-0xFF window: the FIFO address holds
+            #200_000;
+            reg_burst(2'd0, `R_LOG_FIFO, 96, 1'b0);
+            for (w = 0; w < 96; w = w + 3) begin
+                if (burst[w] != seq_prev + 1) bad = bad + 1;
+                seq_prev = burst[w];
+                if (burst[w + 1] < 8000 || burst[w + 1] > 8400) bad = bad + 1;
+                words = words + 3;
+            end
             if (bad) begin errors = errors + 1; $display("FAIL: log stream: %0d bad words", bad); end
-            else $display("  ok log stream: %0d words in order, a cut burst lost nothing", words);
+            else $display("  ok log stream: %0d words in order, a cut burst lost nothing, a 96-word burst", words);
         end
         reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h8000);
         reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h0061);              // on, OSR 256, phase A

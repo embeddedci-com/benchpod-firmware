@@ -19,11 +19,14 @@ byte 0   command   [7] 1 = read, 0 = write
                    [6] broadcast (writes only: every board applies it)
                    [5:4] board id (0-3, from the EEPROM strap address 0x50-0x53)
                    [3:0] 0
-byte 1   register address (auto-increments after each 16-bit word)
+byte 1   register address (auto-increments after each 16-bit word, except on a port register)
 
 write:   MSB, LSB [, MSB, LSB ...]          one register write per LSB
 read:    one turnaround byte (MISO 0x00), then MSB, LSB [, MSB, LSB ...]
 ```
+
+Port registers keep the address for the whole burst, so one transaction loads a table or drains
+the log: BAT_TBL_DATA (0x69), SHAPE_DATA (0x78) and the LOG_FIFO window (0xC0-0xFF).
 
 A read captures the whole 16-bit register when its MSB goes out, so a live value (a sinc sample)
 cannot tear between its two bytes. Broadcast reads are ignored (four boards would drive MISO).
@@ -36,7 +39,7 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | Addr | Name | Access | Description |
 | --- | --- | --- | --- |
 | 0x00 | ID | R | 0x4D45 ("ME") |
-| 0x01 | VERSION | R | gateware version (0x0006: protection, trip recorder, battery model, logging, stack time base, EEPROM, fault injection, back-EMF shape) |
+| 0x01 | VERSION | R | gateware version (0x0006: protection, trip recorder, battery model, logging, stack time base, EEPROM, fault injection, back-EMF shape; 0x0007: port registers take a whole burst) |
 | 0x02 | BOARD | R/W | [1:0] board id, [8] probe done, [9] probe ok (EEPROM answered). Write bit 15 = probe again |
 | 0x03 | STATUS | R | see below |
 | 0x04 | CONTROL | R/W | see below; FAULT, a watchdog trip or an overcurrent trip clears PWM_EN; an overcurrent or hot-swap trip clears HSWAP_EN |
@@ -237,7 +240,7 @@ flips it), voltages in bus codes.
 | 0x64 | BAT_ALPHA | R/W | 1 ms / τ x 2^20 (τ from 16 ms to about 10 min) |
 | 0x65 / 0x66 | BAT_VMIN / BAT_VMAX | R/W | setpoint clamp, bus codes |
 | 0x67 | BAT_POS | R / W | position in the table, 1/256 entries (0 = full); a write sets the charge (state of charge) |
-| 0x68 / 0x69 | BAT_TBL_ADDR / BAT_TBL_DATA | R/W, W | OCV table, 64 entries in bus codes for the whole pack, entry 0 full; each data write moves the address on |
+| 0x68 / 0x69 | BAT_TBL_ADDR / BAT_TBL_DATA | R/W, W | OCV table, 64 entries in bus codes for the whole pack, entry 0 full; each data write moves the address on (a port register: the whole table in one burst) |
 | 0x6A / 0x6B | PV_OFS / PV_GAIN | R/W | PV_SET duty = clamp(PV_OFS + (setpoint x PV_GAIN >>> 15), 0, 65535): BenchPod's calibration of the PV board's (inverted) setpoint input |
 | 0x6C | BAT_SET | R | the setpoint, bus codes: BenchPod's DAC path reads this (default) |
 | 0x6D | BAT_I | R | mean current over the last ms |
@@ -262,7 +265,7 @@ open-drain buffer and RC filter; high is released (the divider's park level).
 | 0x74 | HALL_FAULT | R/W | [2:0] hold these hall lines (C, B, A) at [5:3]; [8:6] invert these lines |
 | 0x75 | ENC_FAULT | R/W | [0] angle frozen (SPI and ABZ hold: a stuck sensor), [1] ABZ outputs dead (low), [2] MISO stuck low |
 | 0x76 | NOISE_AMP | R/W | uniform noise of ± NOISE_AMP (Q16 of the full duty, i.e. of the bus) on each model duty, new every clk; 0 = off |
-| 0x77 / 0x78 | SHAPE_ADDR / SHAPE_DATA | R/W, W | back-EMF shape, 1024 Q15 entries per electrical revolution (a sine at power-up); each data write moves the address on. The model uses it for the back-EMF and the torque alike, so any shape (trapezoidal, harmonics) keeps the power balance |
+| 0x77 / 0x78 | SHAPE_ADDR / SHAPE_DATA | R/W, W | back-EMF shape, 1024 Q15 entries per electrical revolution (a sine at power-up); each data write moves the address on (a port register: the whole table in one burst). The model uses it for the back-EMF and the torque alike, so any shape (trapezoidal, harmonics) keeps the power balance |
 
 ## Logging stream
 
@@ -271,9 +274,9 @@ open-drain buffer and RC filter; high is released (the divider's park level).
 | 0x79 | LOG_CTRL | R/W | [4:0] channels (phase A, B, C, DUT battery, bus), [5] OSR 256 (sinc3, 70 kSPS per channel, 14.3 ENOB) instead of OSR 64 (281 kSPS), [6] on, [7] a sequence word before each set, [15] clear (write-only action) |
 | 0x7A | LOG_LEVEL | R | words waiting (FIFO of 2048) |
 | 0x7B | LOG_DROPS | R | sets dropped because the FIFO was full (a whole set at a time: the stream stays aligned) |
-| 0xC0-0xFF | LOG_FIFO | R | each word read pops the FIFO: read a burst from 0xC0 (up to 64 words). A word counts as read only when its last bit is out, so a burst may end anywhere |
+| 0xC0-0xFF | LOG_FIFO | R | each word read pops the FIFO: read a burst from 0xC0, of any length (a port register). A word counts as read only when its last bit is out, so a burst may end anywhere. Read no more than LOG_LEVEL: an empty FIFO reads 0x0000 |
 
-The link carries about 360 k words per second at 6 MHz in bursts of 64: all five channels at
+The link carries about 370 k words per second at 6 MHz in long bursts: all five channels at
 OSR 256 (350 k words/s) only just fit; pick the channels.
 
 ## Board EEPROM

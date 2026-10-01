@@ -5,7 +5,9 @@
 // command byte that names the board:
 //
 //   byte 0  command   [7] 1 = read, 0 = write   [6] broadcast (writes only)   [5:4] board id
-//   byte 1  address   first register; it auto-increments after each 16-bit word
+//   byte 1  address   first register; it auto-increments after each 16-bit word, except on a
+//                     port register (`addr_hold`: a table data register or the log FIFO), which
+//                     takes a whole burst
 //   write:  data MSB, data LSB, data MSB, data LSB, ...   (one register write per LSB)
 //   read:   one turnaround byte (MISO 0x00), then MSB, LSB of each register
 //
@@ -37,6 +39,7 @@ module spi_link (
     // register bus
     output reg  [7:0]  addr,        // current register (read address; write address with wr_en)
     input  wire [15:0] rd_data,     // read of `addr`, pipelined in the regfile (settled within a byte)
+    input  wire        addr_hold,   // `addr` is a port register: the address does not advance
     output reg         wr_en,       // one-clk write strobe
     output reg  [15:0] wr_data,
     // read progress (for registers that act on reads, e.g. the log FIFO): `rd_take` when a word is
@@ -103,7 +106,7 @@ module spi_link (
                 case (phase)
                     // capture the whole word, then move on: the next word's address is then
                     // set a whole byte before its data is needed (the regfile read is pipelined)
-                    PH_RHI: begin tx_sr <= rd_data[15:8]; rd_latch <= rd_data; addr <= addr + 8'd1; rd_take <= 1'b1; rd_addr <= addr; end
+                    PH_RHI: begin tx_sr <= rd_data[15:8]; rd_latch <= rd_data; if (!addr_hold) addr <= addr + 8'd1; rd_take <= 1'b1; rd_addr <= addr; end
                     PH_RLO:       tx_sr <= rd_latch[7:0];
                     default:      tx_sr <= 8'h00;
                 endcase
@@ -148,7 +151,7 @@ module spi_link (
             end
             // the write address advances on the clk after the strobe, so the regfile sees the
             // strobe with the address it was written for
-            if (wr_en) addr <= addr + 8'd1;
+            if (wr_en && !addr_hold) addr <= addr + 8'd1;
         end
     end
 endmodule

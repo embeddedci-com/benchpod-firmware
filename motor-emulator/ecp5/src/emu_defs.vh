@@ -9,7 +9,7 @@
 
 `define EMU_CLK_HZ        36000000
 `define EMU_ID            16'h4D45      // "ME": read back at register 0x00
-`define EMU_VERSION       16'h0006      // gateware version, register 0x01
+`define EMU_VERSION       16'h0007      // gateware version, register 0x01
 
 // Register map (16-bit registers, see PROTOCOL.md)
 `define R_ID              8'h00

@@ -153,10 +153,12 @@ module top (
     wire        rd_take, rd_done, cs_end;
     wire [7:0]  rd_addr;
 
+    // port registers take a whole burst at one address: the table data registers and the log FIFO
+    wire link_hold = (r_addr == `R_BAT_TBL_DATA) || (r_addr == `R_SHAPE_DATA) || (r_addr[7:6] == 2'b11);
     spi_link link (
         .clk(clk), .rst(rst), .board_id(board_id),
         .sck(spi_sck), .mosi(spi_mosi), .csn(spi_ss), .miso(miso_d), .miso_oe(miso_oe),
-        .addr(r_addr), .rd_data(r_rdata_q), .wr_en(r_wr), .wr_data(r_wdata),
+        .addr(r_addr), .rd_data(r_rdata_q), .addr_hold(link_hold), .wr_en(r_wr), .wr_data(r_wdata),
         .rd_take(rd_take), .rd_addr(rd_addr), .rd_done(rd_done), .cs_end(cs_end));
 
     reg [15:0] ctrl, scratch;
