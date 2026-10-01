@@ -699,11 +699,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                        argv[0], analog_path_name(p), (unsigned)rd.span);
                 } else if (p == ANALOG_PATH_AMP) {
                     op(out, ctx, "  %s %s: count=%d -> %d mV (zero %ld mV)\r\n",
-                       argv[0], analog_path_name(p), (int)lroundf(rd.count),
+                       argv[0], analog_path_name(p), adc_count_u16(rd.count),
                        (int)lroundf(adc_zero_amp_apply(rd.volts) * 1000.0f), (long)adc_zero_amp_mv());
                 } else {
                     op(out, ctx, "  %s %s: count=%d -> %d mV\r\n",
-                       argv[0], analog_path_name(p), (int)lroundf(rd.count), (int)lroundf(rd.volts * 1000.0f));
+                       argv[0], analog_path_name(p), adc_count_u16(rd.count), (int)lroundf(rd.volts * 1000.0f));
                 }
             } else {
                 op(out, ctx, "  adc read failed\r\n");

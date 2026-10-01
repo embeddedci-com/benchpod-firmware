@@ -34,6 +34,7 @@
 #ifndef ADC_SCALE_H
 #define ADC_SCALE_H
 
+#include <math.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -57,5 +58,9 @@ typedef struct {
 /* Average `n` raw counts on the 16-bit circle, unwrap, and apply volts = a + b*c.
  * `n` must be >= 1; raw must be non-NULL.  A degenerate call returns valid=0. */
 adc_reading_t adc_scale_burst(const uint16_t *raw, size_t n, float a, float b);
+
+/* The mean count as the 16-bit integer a reply reports.  A mean of 65535.6 rounds to
+ * 65536, which is count 0 on the circle (seen on pod .220, whose `amp` zero sits there). */
+static inline int adc_count_u16(float count) { return (int)(lroundf(count) & 0xFFFF); }
 
 #endif /* ADC_SCALE_H */

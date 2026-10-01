@@ -40,7 +40,15 @@ static void fill(uint16_t *dst, size_t n, uint16_t v) {
     for (size_t i = 0; i < n; i++) dst[i] = v;
 }
 
+/* A mean just under the wrap rounds up to 65536: the reply must say 0, not 65536. */
+static void test_count_reported_as_16_bit(void) {
+    CHECK(adc_count_u16(65535.6f) == 0, "65535.6 reported as %d", adc_count_u16(65535.6f));
+    CHECK(adc_count_u16(65535.4f) == 65535, "65535.4 reported as %d", adc_count_u16(65535.4f));
+    CHECK(adc_count_u16(0.4f) == 0 && adc_count_u16(61562.0f) == 61562, "plain counts changed");
+}
+
 int main(void) {
+    test_count_reported_as_16_bit();
     uint16_t s[16];
 
     /* ---- 1. the ordinary case still works: `ext` at a quiet input ----------

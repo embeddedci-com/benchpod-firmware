@@ -3234,12 +3234,12 @@ static void handle_adc_read(int conn_id, const char *json) {
         snprintf(payload, sizeof(payload),
                  "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"zero_mv\":%ld}",
                  analog_path_name(p), (int)lroundf(adc_zero_amp_apply(rd.volts) * 1000.0f),
-                 (int)lroundf(rd.count), (unsigned)rd.span, (long)adc_zero_amp_mv());
+                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_zero_amp_mv());
     } else {
         snprintf(payload, sizeof(payload),
                  "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
                  analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
-                 (int)lroundf(rd.count), (unsigned)rd.span);
+                 adc_count_u16(rd.count), (unsigned)rd.span);
     }
     send_ok_str(conn_id, payload);
 }
@@ -3251,7 +3251,7 @@ static void adc_zero_reply(int conn_id, const adc_reading_t *rd) {
                      (long)adc_zero_amp_mv(), (long)adc_zero_amp_uv());
     if (rd)
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
-                      (int)lroundf(rd->count), (unsigned)rd->span, (unsigned)ADC_ZERO_SAMPLES);
+                      adc_count_u16(rd->count), (unsigned)rd->span, (unsigned)ADC_ZERO_SAMPLES);
     snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
     send_ok_str(conn_id, payload);
 }
