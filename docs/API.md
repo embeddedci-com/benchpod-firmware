@@ -796,8 +796,7 @@ loop and the pod only sets how much current flows. The request and the reply are
 | `code` | The 16-bit DAC code now held (0.245 µA per code) |
 | `min_ua`, `max_ua` | What the output can do: the current at code 0 and at code 65535 |
 
-The output has a fixed 4 mA live zero, so it cannot go below `min_ua` (4016 µA) or above
-`max_ua` (20078 µA). There is no 0 mA and no 21 mA level. A request from 4000 µA up to `min_ua`
+The output has a fixed 4 mA live zero, so it cannot go below `min_ua` or above `max_ua`. There is no 0 mA and no 21 mA level. A request from 4000 µA up to `min_ua`
 gives `min_ua`, so "4 mA" works. Anything else outside the range is refused, not clamped:
 
 ```json
@@ -806,10 +805,18 @@ gives `min_ua`, so "4 mA" works. Anything else outside the range is refused, not
    20078 uA: it cannot go below the 4 mA live zero or above the top of the DAC"}
 ```
 
-The current is `100 × (4.096 V / 102 kΩ + Vdac / 25.5 kΩ)` with `Vdac = code / 65536 × 4.096 V`.
-These are the board's nominal values, the same on every pod. The output has no per-pod
-calibration: one rev3 pod measured 4.056 mA at the bottom and 20.032 mA near the top, where the
-nominal values are 4.016 and 20.016 mA.
+Nominally the current is `100 × (4.096 V / 102 kΩ + Vdac / 25.5 kΩ)` with
+`Vdac = code / 65536 × 4.096 V`: 4016 to 20078 µA, the numbers in the examples here. A real
+board is off by tens of µA, so the pod converts with a fit for its board revision, like the DAC
+and ADC fits:
+
+| Revision | `min_ua` | `max_ua` | From |
+|---|---|---|---|
+| v2 | 4016 | 20078 | the nominal values (not measured) |
+| rev3 | 4056 | 20094 | one rev3 pod: 4.056 mA at 8-bit code 0, 20.032 mA at 8-bit code 255 |
+
+Always take the range from the reply (or the capabilities frame), never from this table. The
+fit is per revision, not per pod: the output has no per-pod calibration.
 
 **The DAC is shared.** The transmitter follows the DAC on every analog path, and the 3.3 V, 5 V
 and ±12 V outputs use the same DAC:

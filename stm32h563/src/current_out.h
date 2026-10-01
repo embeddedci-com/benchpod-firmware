@@ -12,15 +12,19 @@
  *
  *     I = 100 * (AREF / R162 + Vbuf / R82),   Vbuf = code / 65536 * AREF
  *
- * About 4.016 mA at code 0 and 20.078 mA at code 65535, 0.245 uA per code. The output cannot go
- * below the live zero or above the top code: there is no 0 mA and no 21 mA.
+ * Nominally 4.016 mA at code 0 and 20.078 mA at code 65535, 0.245 uA per code. A board differs
+ * from that by tens of uA (the DAC buffer does not reach 0 V, and the reference and the
+ * XTR116 gain have their own error), so the conversion uses a fit per board revision from
+ * cal_data.h, like the DAC and ADC fits: measured on one board of the revision where there is a
+ * measurement, the nominal values otherwise. The output cannot go below the live zero or above
+ * the top code: there is no 0 mA and no 21 mA.
  *
  * The transmitter follows the DAC buffer on EVERY analog path. The DAC is shared with the
  * 3.3 V / 5 V / +-12 V outputs, so a voltage output also moves the loop current. `current_out`
  * switches those outputs off (analog path current_out) before it sets the DAC.
  *
- * These are the board's nominal values, the same on every pod: there is no per-pod calibration
- * of the output (it needs a reference meter in the loop).
+ * The fit is the same on every pod of a revision: there is no per-pod calibration of the output
+ * (it needs a reference meter in the loop).
  *
  * Pure: no HAL, integers in and out (newlib-nano's printf has no %f). Routing and the DAC write
  * are the caller's job (command_handler.c, console.c).
@@ -31,8 +35,14 @@
 #define CURRENT_OUT_SPAN_OHMS  25500     /* R82, DAC buffer -> IIN: the 16 mA span */
 #define CURRENT_OUT_GAIN       100       /* XTR116: loop current = 100 * input current */
 
-/* The lowest request that is accepted. The live zero sits a little above 4 mA (4016 uA), so a
-   request from here up to current_out_min_ua() gives code 0: "4 mA" has to work. */
+/* The nominal transfer function from the part values above: uA at code 0 and uA per 16-bit
+   code. The fit of a revision that was not measured (cal_data.c), and a sanity bound for one
+   that was. */
+double current_out_nominal_zero_ua(void);
+double current_out_nominal_ua_per_code(void);
+
+/* The lowest request that is accepted. The live zero sits a little above 4 mA (4016 uA
+   nominal), so a request from here up to current_out_min_ua() gives code 0: "4 mA" has to work. */
 #define CURRENT_OUT_REQUEST_MIN_UA  4000
 
 /* Loop current in microamps for a 16-bit DAC code. */

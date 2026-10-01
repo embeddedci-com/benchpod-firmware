@@ -4,6 +4,7 @@
  * Pure: no HAL, so the whole file runs in the host tests.
  */
 #include "current_out.h"
+#include "cal_data.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -12,11 +13,15 @@
    reply straight away, so one buffer is enough. */
 static char s_msg[160];
 
-/* uA at code 0, and uA per code. Double: the step is 0.245 uA, a float loses it at the top. */
-static double zero_ua(void) {
+/* uA at code 0, and uA per code, for this board revision (cal_data.h). Summed in double: the
+   step is 0.245 uA and a float sum loses it near the top of the range. */
+static double zero_ua(void)     { return (double)CURRENT_OUT_CAL.a; }
+static double ua_per_code(void) { return (double)CURRENT_OUT_CAL.b; }
+
+double current_out_nominal_zero_ua(void) {
     return (double)CURRENT_OUT_GAIN * (double)CURRENT_OUT_AREF_UV / (double)CURRENT_OUT_ZERO_OHMS;
 }
-static double ua_per_code(void) {
+double current_out_nominal_ua_per_code(void) {
     return (double)CURRENT_OUT_GAIN * (double)CURRENT_OUT_AREF_UV / (double)CURRENT_OUT_SPAN_OHMS / 65536.0;
 }
 

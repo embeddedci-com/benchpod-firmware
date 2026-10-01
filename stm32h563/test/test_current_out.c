@@ -1,10 +1,12 @@
 /* Host unit test for current_out.c — the 4-20 mA output's transfer function (J9, XTR116).
  *
- * I = 100 * (AREF/102k + Vbuf/25.5k), Vbuf = code/65536 * AREF. The same constants are in
- * embeddedci-server/hwe2e/benchpod_current_loop_hw_test.go, which checked them on a pod against
- * a resistor in the loop (4.02 mA at 8-bit code 0, 20.02 mA at 8-bit code 255).
+ * Nominal: I = 100 * (AREF/102k + Vbuf/25.5k), Vbuf = code/65536 * AREF. The conversion uses a
+ * fit per board revision (cal_data.c): the nominal values on v2, a measured line on rev3. The
+ * cases below run on the v2 set unless they say otherwise.
  */
 #include "current_out.h"
+#include "board_rev.h"
+#include "cal_data.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -77,7 +79,41 @@ static void test_refusals(void) {
     CHECK(current_out_code(21000, &code) != NULL, "21 mA allowed");
 }
 
+/* The v2 fit is the nominal transfer function: nobody measured a v2 board. */
+static void test_v2_fit_is_nominal(void) {
+    cal_data_select(BOARD_REV_V2);
+    CHECK(fabs((double)CURRENT_OUT_CAL.a - current_out_nominal_zero_ua()) < 0.001, "v2 zero %f", (double)CURRENT_OUT_CAL.a);
+    CHECK(fabs((double)CURRENT_OUT_CAL.b - current_out_nominal_ua_per_code()) < 1e-7, "v2 step %f", (double)CURRENT_OUT_CAL.b);
+}
+
+/* A rev3 pod uses its own fit: the measured 4.056 mA at 8-bit code 0 and 20.032 mA at 8-bit
+   code 255. The range the pod reports, and the code for a current, move with it. */
+static void test_rev3_fit(void) {
+    cal_data_select(BOARD_REV_V3);
+    CHECK(current_out_min_ua() == 4056, "rev3 min %ld uA", current_out_min_ua());
+    CHECK(current_out_ua(255u << 8) == 20032, "rev3 8-bit code 255: %ld uA", current_out_ua(255u << 8));
+    CHECK(current_out_max_ua() == 20094, "rev3 max %ld uA", current_out_max_ua());
+
+    uint16_t code = 0xFFFF, nominal = 0;
+    CHECK(current_out_code(4000, &code) == NULL && code == 0, "rev3 4000 uA -> code %u", code);
+    CHECK(current_out_code(12000, &code) == NULL && labs(current_out_ua(code) - 12000) <= 1, "rev3 12 mA -> code %u", code);
+    cal_data_select(BOARD_REV_V2);
+    current_out_code(12000, &nominal);
+    cal_data_select(BOARD_REV_V3);
+    CHECK(code < nominal, "rev3 12 mA code %u is not below the nominal %u (its zero is 40 uA higher)", code, nominal);
+
+    const char *why = current_out_code(20095, &code);
+    CHECK(why && strstr(why, "4056 to 20094 uA"), "rev3 refusal: %s", why ? why : "(allowed)");
+
+    /* A measured fit stays close to the nominal one: a table typo must not pass. */
+    CHECK(fabs((double)CURRENT_OUT_CAL.a - current_out_nominal_zero_ua()) < 100.0, "rev3 zero is far from nominal");
+    CHECK(fabs((double)CURRENT_OUT_CAL.b / current_out_nominal_ua_per_code() - 1.0) < 0.01, "rev3 step is far from nominal");
+    cal_data_select(BOARD_REV_V2);
+}
+
 int main(void) {
+    test_v2_fit_is_nominal();
+    test_rev3_fit();
     test_range();
     test_matches_the_hardware_test();
     test_code_for_current();

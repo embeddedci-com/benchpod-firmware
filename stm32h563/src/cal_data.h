@@ -33,6 +33,10 @@ typedef struct {
     cal_lin_t adc_cal1;   /* 5V loop; no wrap over 0..5V */
     cal_lin_t adc_cal2;   /* ±12V diff loop; wraps */
     cal_lin_t adc_ext;    /* front SMA; wraps (ref: DAC 12V) */
+
+    /* 4-20 mA output (J9, current_out.h): microamps = a + b*code for the 16-bit DAC code.
+     * `a` is the live zero (the current at code 0). */
+    cal_lin_t current_out;
 } cal_set_t;
 
 /* Pick the set for a board revision (BOARD_REV_V3 -> rev3, anything else -> v2).  Call once
@@ -47,5 +51,6 @@ const cal_set_t *cal_data(void);
 #define ADC_CAL_CAL1  (cal_data()->adc_cal1)
 #define ADC_CAL_CAL2  (cal_data()->adc_cal2)
 #define ADC_CAL_EXT   (cal_data()->adc_ext)
+#define CURRENT_OUT_CAL (cal_data()->current_out)
 
 #endif /* CAL_DATA_H */
