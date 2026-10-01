@@ -29,21 +29,21 @@ static char s_msg[160];
 
 static bool in_range(int32_t uv) { return uv >= -ADC_CAL_MAX_OFFSET_UV && uv <= ADC_CAL_MAX_OFFSET_UV; }
 
-bool    adc_cal_amp_is_set(void)    { return s_active.amp_set != 0; }
-int32_t adc_cal_amp_offset_uv(void) { return s_active.amp_set ? s_active.amp_offset_uv : 0; }
-int32_t adc_cal_amp_offset_mv(void) { return (int32_t)lroundf((float)adc_cal_amp_offset_uv() / 1000.0f); }
+bool    adc_cal_current_in_is_set(void)    { return s_active.current_in_set != 0; }
+int32_t adc_cal_current_in_offset_uv(void) { return s_active.current_in_set ? s_active.current_in_offset_uv : 0; }
+int32_t adc_cal_current_in_offset_mv(void) { return (int32_t)lroundf((float)adc_cal_current_in_offset_uv() / 1000.0f); }
 
-cal_lin_t adc_cal_amp_fit(void) {
+cal_lin_t adc_cal_current_in_fit(void) {
     cal_lin_t c = ADC_CAL_CAL1;
-    c.a -= (float)adc_cal_amp_offset_uv() / 1000000.0f;
+    c.a -= (float)adc_cal_current_in_offset_uv() / 1000000.0f;
     return c;
 }
 
-const char *adc_cal_amp_store(const adc_reading_t *rd) {
+const char *adc_cal_current_in_store(const adc_reading_t *rd) {
     if (!rd) return "calibrate: no reading";
     if (!rd->valid) {
         snprintf(s_msg, sizeof(s_msg),
-                 "calibrate: input not settled on amp (%u counts pk-pk, limit %u). "
+                 "calibrate: input not settled on current_in (%u counts pk-pk, limit %u). "
                  "Disconnect J8 and try again",
                  (unsigned)rd->span, (unsigned)ADC_BURST_MAX_SPAN);
         return s_msg;
@@ -51,14 +51,14 @@ const char *adc_cal_amp_store(const adc_reading_t *rd) {
     long uv = lroundf(rd->volts * 1000000.0f);
     if (!in_range((int32_t)uv)) {
         snprintf(s_msg, sizeof(s_msg),
-                 "calibrate: amp reads %ld mV, it must be within +/-%d mV of zero. "
+                 "calibrate: current_in reads %ld mV, it must be within +/-%d mV of zero. "
                  "Something is driving J8. Disconnect it and try again",
                  lroundf(rd->volts * 1000.0f), ADC_CAL_MAX_OFFSET_UV / 1000);
         return s_msg;
     }
     adc_cal_t rec = s_active;   /* keep whatever else the record holds */
-    rec.amp_set = 1;
-    rec.amp_offset_uv = (int32_t)uv;
+    rec.current_in_set = 1;
+    rec.current_in_offset_uv = (int32_t)uv;
     if (ab_store_save(&s_store, &rec, sizeof(rec)) != 0) return "calibrate: could not save to flash";
     s_active = rec;
     return NULL;
@@ -71,7 +71,7 @@ int adc_cal_clear(void) {
 
 int adc_cal_load(void) {
     adc_cal_t rec;
-    if (ab_store_load(&s_store, &rec, sizeof(rec)) != 0 || !rec.amp_set || !in_range(rec.amp_offset_uv)) {
+    if (ab_store_load(&s_store, &rec, sizeof(rec)) != 0 || !rec.current_in_set || !in_range(rec.current_in_offset_uv)) {
         memset(&s_active, 0, sizeof(s_active));
         return -1;
     }

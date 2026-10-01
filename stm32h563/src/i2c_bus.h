@@ -212,11 +212,11 @@ void analog_switch_dump(void);                /* diagnostic: dump U55/U58 regist
  *   adc_ext    (unchanged)    (unchanged)     0,0,0,0                          RF4 SMA (÷12, ~1MΩ)
  *   cal1       en,5V          off             1,0,0,1                          5V DAC via K1
  *   cal2       en,12V_ADC     en,ADC_VMID     0,1,0,1                          ±12V diff via K2/U51
- *   amp        (unchanged)    (unchanged)     0,0,1,0                          J8 screw terminal
+ *   current_in (unchanged)    (unchanged)     0,0,1,0                          J8 screw terminal
  *
  * The DAC output paths also open all ADC relays (ADC returns to the external
  * SMA), so `dac_12v` + read ADC is a self-contained loopback of the front end.
- * adc_ext / amp only move relays, leaving any DAC output running. */
+ * adc_ext / current_in only move relays, leaving any DAC output running. */
 typedef enum {
     ANALOG_PATH_OFF = 0,
     ANALOG_PATH_DAC_3V3,
@@ -225,7 +225,7 @@ typedef enum {
     ANALOG_PATH_ADC_EXT,
     ANALOG_PATH_CAL1,
     ANALOG_PATH_CAL2,
-    ANALOG_PATH_AMP,
+    ANALOG_PATH_CURRENT_IN,
     ANALOG_PATH__COUNT
 } analog_path_t;
 

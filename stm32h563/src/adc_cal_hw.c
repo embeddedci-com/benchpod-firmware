@@ -1,5 +1,5 @@
 /*
- * adc_cal_hw.c — the hardware half of adc_cal.h: the `amp` offset measurement.
+ * adc_cal_hw.c — the hardware half of adc_cal.h: the `current_in` offset measurement.
  * Kept out of adc_cal.c so the checks and the store stay host-testable.
  */
 #include "adc_cal.h"
@@ -10,9 +10,9 @@
 
 static uint16_t s_buf[ADC_CAL_SAMPLES];
 
-int adc_cal_measure_amp(adc_reading_t *out) {
+int adc_cal_measure_current_in(adc_reading_t *out) {
     if (!out) return -1;
-    if (analog_path_set(ANALOG_PATH_AMP) != 0) return -1;
+    if (analog_path_set(ANALOG_PATH_CURRENT_IN) != 0) return -1;
     sleep_ms(20);    /* let the G6K relays (~4ms) + front-end RC settle */
     /* The same burst as adc_read (16 samples at the maximum rate), many times over: see
        adc_cal.h for why one long slow capture reads differently. */

@@ -451,7 +451,7 @@ int analog_path_set(analog_path_t path)
         r |= dacmux_set_ctrl2(true, DACMUX_CTRL2_ADC_VMID);
         r |= calsw_set(false, true, false, true);
         break;
-    case ANALOG_PATH_AMP:                                    /* ADC <- amps terminal */
+    case ANALOG_PATH_CURRENT_IN:                                    /* ADC <- amps terminal */
         r |= calsw_set(false, false, true, false);           /* leave DAC mux as-is */
         break;
     default:
@@ -469,14 +469,14 @@ static const struct { const char *name; analog_path_t path; } s_path_tbl[] = {
                                         { "sma", ANALOG_PATH_ADC_EXT },
     { "cal1",    ANALOG_PATH_CAL1    },
     { "cal2",    ANALOG_PATH_CAL2    },
-    { "amp",     ANALOG_PATH_AMP     },
+    { "current_in",     ANALOG_PATH_CURRENT_IN     },
 };
 
 const char *analog_path_name(analog_path_t path)
 {
     /* canonical names only (first hit per enum in the table) */
     static const char *canon[ANALOG_PATH__COUNT] = {
-        "off", "dac_3v3", "dac_5v", "dac_12v", "adc_ext", "cal1", "cal2", "amp",
+        "off", "dac_3v3", "dac_5v", "dac_12v", "adc_ext", "cal1", "cal2", "current_in",
     };
     return (path < ANALOG_PATH__COUNT) ? canon[path] : "";
 }

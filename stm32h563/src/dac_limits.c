@@ -148,7 +148,7 @@ const char *dac_limits_check_route(const char *path) {
     if (!s_active.enabled || !s_active.inverted) return NULL;   /* a normal stage's 0 V is its low end */
     const char *p = canon(path);
     const char *own = s_path_names[s_active.path];
-    if (!strcmp(p, own) || !strcmp(p, "ext") || !strcmp(p, "amp")) return NULL;
+    if (!strcmp(p, own) || !strcmp(p, "ext") || !strcmp(p, "current_in")) return NULL;
     if (!strcmp(p, "cal1") && s_active.path == 1) return NULL;      /* cal1 keeps the 5V mux */
     snprintf(s_msg, sizeof(s_msg),
              "refused: %s. Routing to %s disconnects it and leaves the module input near 0 V, "

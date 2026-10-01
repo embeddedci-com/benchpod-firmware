@@ -3140,7 +3140,7 @@ static void handle_cal_switch(int conn_id, const char *json) {
 /* analog_path — apply a named analog path (the SINGLE SOURCE OF TRUTH lives in
    i2c_bus.c::analog_path_set).  {"cmd":"analog_path","path":"cal1"} flips every
    switch the path needs and returns the resulting mux/relay registers.
-   Names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v adc_ext|ext|sma cal1 cal2 amp. */
+   Names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v adc_ext|ext|sma cal1 cal2 current_in. */
 static void handle_analog_path(int conn_id, const char *json) {
     char name[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
@@ -3184,9 +3184,10 @@ static void handle_dac_out(int conn_id, const char *json) {
 }
 
 /* adc_read — route an ADC source AND return a CALIBRATED reading in mV.
-   {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  `amp` also
+   {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  `current_in` also
    returns "offset_mv", this pod's calibration offset that was taken out of `mv`
-   (adc_cal.h; 0 when the pod was never calibrated).  `count` stays raw.  A short
+   (adc_cal.h; 0 when the pod was never calibrated), and "ua", the loop current in
+   microamps (mv across the 249 ohm sense resistor).  `count` stays raw.  A short
    16-sample burst, averaged ON THE 16-BIT CIRCLE and then unwrapped — see
    adc_scale.h.  Averaging the RAW counts first (what this did until 2026-07-29)
    returns a plausible-looking number that is wrong by tens of volts whenever the
@@ -3201,8 +3202,8 @@ static void handle_adc_read(int conn_id, const char *json) {
     if (json_get_value(json, "source", name, sizeof(name))) {
         if (analog_path_from_name(name, &p) != 0 ||
             (p != ANALOG_PATH_ADC_EXT && p != ANALOG_PATH_CAL1 &&
-             p != ANALOG_PATH_CAL2 && p != ANALOG_PATH_AMP)) {
-            send_error(conn_id, "source must be ext|cal1|cal2|amp"); return;
+             p != ANALOG_PATH_CAL2 && p != ANALOG_PATH_CURRENT_IN)) {
+            send_error(conn_id, "source must be ext|cal1|cal2|current_in"); return;
         }
     }
     if (!heavy_begin(conn_id)) return;
@@ -3217,7 +3218,7 @@ static void handle_adc_read(int conn_id, const char *json) {
     cal_lin_t c = ADC_CAL_CAL1;
     if      (p == ANALOG_PATH_CAL2)    c = ADC_CAL_CAL2;
     else if (p == ANALOG_PATH_ADC_EXT) c = ADC_CAL_EXT;
-    else if (p == ANALOG_PATH_AMP)     c = adc_cal_amp_fit();   /* cal1 fit + this pod's offset (adc_cal.h) */
+    else if (p == ANALOG_PATH_CURRENT_IN)     c = adc_cal_current_in_fit();   /* cal1 fit + this pod's offset (adc_cal.h) */
     adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
     if (!rd.valid) {
         /* Plausible-looking garbage is worse than an error: a sweep would record it. */
@@ -3230,12 +3231,14 @@ static void handle_adc_read(int conn_id, const char *json) {
         return;
     }
     char payload[112];
-    if (p == ANALOG_PATH_AMP) {
-        /* Say which per-pod offset is in `mv`. Only `amp` has one. */
+    if (p == ANALOG_PATH_CURRENT_IN) {
+        /* Say which per-pod offset is in `mv` (only `current_in` has one), and give the loop
+           current the voltage stands for, so no client needs to know the sense resistor. */
         snprintf(payload, sizeof(payload),
-                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"offset_mv\":%ld}",
+                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"offset_mv\":%ld,\"ua\":%ld}",
                  analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
-                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_cal_amp_offset_mv());
+                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_cal_current_in_offset_mv(),
+                 current_in_ua(rd.volts));
     } else {
         snprintf(payload, sizeof(payload),
                  "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
@@ -3245,17 +3248,17 @@ static void handle_adc_read(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-/* The per-pod calibration of `amp` as a reply. a_uv / b_nv are the fit this pod scales `amp`
+/* The per-pod calibration of `current_in` as a reply. a_uv / b_nv are the fit this pod scales `current_in`
    with (volts = a + b*count), in the units of the capabilities frame's adc_cal_a_uv /
-   adc_cal_b_nv, so a client can scale raw `amp` counts the way adc_read does. */
+   adc_cal_b_nv, so a client can scale raw `current_in` counts the way adc_read does. */
 static void calibrate_reply(int conn_id, const adc_reading_t *rd) {
-    cal_lin_t fit = adc_cal_amp_fit();
+    cal_lin_t fit = adc_cal_current_in_fit();
     char payload[224];
     int n = snprintf(payload, sizeof(payload),
-                     "{\"source\":\"amp\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
+                     "{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
                      "\"a_uv\":%ld,\"b_nv\":%ld",
-                     adc_cal_amp_is_set() ? "true" : "false",
-                     (long)adc_cal_amp_offset_mv(), (long)adc_cal_amp_offset_uv(),
+                     adc_cal_current_in_is_set() ? "true" : "false",
+                     (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv(),
                      lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0));
     if (rd)
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
@@ -3267,9 +3270,9 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd) {
 /* `calibrate` — run, read or clear this pod's own ADC calibration (adc_cal.h). It sits on top
    of the compiled-in fits (cal_data.h) and is kept in flash.
      {"cmd":"calibrate"}                  -> the stored calibration
-     {"cmd":"calibrate","source":"amp"}   -> calibrate `amp`: J8 must be DISCONNECTED
+     {"cmd":"calibrate","source":"current_in"}   -> calibrate `current_in`: J8 must be DISCONNECTED
      {"cmd":"calibrate","clear":true}     -> back to the compiled-in fit
-   `amp` is the only source a pod can calibrate on its own: with J8 open the terminal is 0 V,
+   `current_in` is the only source a pod can calibrate on its own: with J8 open the terminal is 0 V,
    so what it reads is its offset. A reading outside +/-50 mV means something is driving J8:
    it is refused and the old calibration stays. */
 static void handle_calibrate(int conn_id, const char *json) {
@@ -3280,13 +3283,13 @@ static void handle_calibrate(int conn_id, const char *json) {
         return;
     }
     if (!json_get_value(json, "source", v, sizeof(v))) { calibrate_reply(conn_id, NULL); return; }
-    if (strcmp(v, "amp") != 0) { send_error(conn_id, "only amp can be calibrated on the pod: source must be amp"); return; }
+    if (strcmp(v, "current_in") != 0) { send_error(conn_id, "only current_in can be calibrated on the pod: source must be current_in"); return; }
     if (!heavy_begin(conn_id)) return;
     adc_reading_t rd;
-    int rc = adc_cal_measure_amp(&rd);
+    int rc = adc_cal_measure_current_in(&rd);
     heavy_release(conn_id);
     if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
-    const char *why = adc_cal_amp_store(&rd);
+    const char *why = adc_cal_current_in_store(&rd);
     if (why) { send_error(conn_id, why); return; }
     calibrate_reply(conn_id, &rd);
 }

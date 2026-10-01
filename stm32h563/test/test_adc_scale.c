@@ -3,7 +3,7 @@
  * Regression-locks the 2026-07-29 silent-corruption bug: handle_adc_read averaged
  * the 16 RAW counts and unwrapped only the AVERAGE.  Every analog source's 0 V
  * point sits within a few counts of the 65535->0 wrap (MEASURED on pod
- * 192.168.1.215: ext 24..38, cal1@dac0 65524..65530, amp 0..9), so one sample
+ * 192.168.1.215: ext 24..38, cal1@dac0 65524..65530, current_in 0..9), so one sample
  * landing on the far side of the cut moved the raw mean to mid-scale, which then
  * got unwrapped as a single huge negative reading.  adc_read returned a
  * PLAUSIBLE number wrong by tens of volts, quantised in 65536/16 = 4096-count
@@ -97,8 +97,8 @@ int main(void) {
               k, r.volts * 1000.0f, legacy_volts(s, 16, EXT_A, EXT_B) * 1000.0f);
     }
 
-    /* ---- 4. unwrap is unconditional: `amp`/`cal1` at 0 V ------------------
-       MEASURED on HW: the amp path reads counts 0..9 at a ~0 V input and the old
+    /* ---- 4. unwrap is unconditional: `current_in`/`cal1` at 0 V ------------------
+       MEASURED on HW: the current_in path reads counts 0..9 at a ~0 V input and the old
        code, which disabled the unwrap for anything but cal2/ext, reported
        +65828 mV (65.8 V!) for it. */
     {
@@ -106,7 +106,7 @@ int main(void) {
         memcpy(s, a, sizeof(a));
         adc_reading_t r = adc_scale_burst(s, 16, CAL1_A, CAL1_B);
         CHECK(fabsf(r.volts * 1000.0f) < 40.0f,
-              "amp/cal1 at 0 V: %.1f mV, want ~0 (unwrapped); legacy reported ~+65828 mV",
+              "current_in/cal1 at 0 V: %.1f mV, want ~0 (unwrapped); legacy reported ~+65828 mV",
               r.volts * 1000.0f);
     }
 

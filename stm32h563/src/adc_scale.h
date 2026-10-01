@@ -12,7 +12,7 @@
  * The bug this module exists to prevent (2026-07-29): handle_adc_read averaged
  * the 16 RAW counts and unwrapped only the AVERAGE.  Every analog source's quiet
  * operating point sits WITHIN A FEW COUNTS OF THAT WRAP (measured on pod
- * 192.168.1.215: ext 24..38, cal1@dac0 65524..65530, amp 0..9 — the wrap
+ * 192.168.1.215: ext 24..38, cal1@dac0 65524..65530, current_in 0..9 — the wrap
  * boundary IS the 0 V point), so as soon as one sample in a burst lands on the
  * other side of the cut, the raw mean lands mid-scale, gets unwrapped as if it
  * were a single huge negative reading, and adc_read returns a PLAUSIBLE number
@@ -27,7 +27,7 @@
  * The unwrap is unconditional, i.e. a property of the shared front end rather
  * than of the selected source.  It cannot misfire: with b < 0 a count below
  * half-scale that is NOT wrapped would decode to > +32 V, which no path on this
- * board can present.  Doing it for every source also fixes `amp` and `cal1`,
+ * board can present.  Doing it for every source also fixes `current_in` and `cal1`,
  * which were scaled with the unwrap DISABLED and so reported ~65.8 V (!) for a
  * 0 V input.
  */
@@ -60,7 +60,7 @@ typedef struct {
 adc_reading_t adc_scale_burst(const uint16_t *raw, size_t n, float a, float b);
 
 /* The mean count as the 16-bit integer a reply reports.  A mean of 65535.6 rounds to
- * 65536, which is count 0 on the circle (seen on pod .220, whose `amp` zero sits there). */
+ * 65536, which is count 0 on the circle (seen on pod .220, whose `current_in` zero sits there). */
 static inline int adc_count_u16(float count) { return (int)(lroundf(count) & 0xFFFF); }
 
 #endif /* ADC_SCALE_H */

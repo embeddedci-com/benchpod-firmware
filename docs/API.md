@@ -149,7 +149,7 @@ Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `
 | `analog_path` | Apply a named analog path (flips mux + relays) | object | no |
 | `dac_out` | Route a DAC output path + set a calibrated voltage | object | no |
 | `adc_read` | Route an ADC source + return a calibrated reading (mV) | object | no |
-| `calibrate` | Run, read or clear this pod's own ADC calibration (the `amp` input, J8) | object | no |
+| `calibrate` | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
 | `dac_mux` | Low-level DAC output mux (U55) — prefer `dac_out` | object | no |
 | `cal_switch` | Low-level calibration relays (U58) — prefer `analog_path` | object | no |
 | `test` | Pico-side pattern (no FPGA) | array of uint8 | yes |
@@ -750,7 +750,7 @@ encoding and can't wire a path two different ways.
 | `adc_ext` (`ext`, `sma`) | ADC ← front-panel input SMA | ~1 MΩ high-Z, ÷12 |
 | `cal1` | Internal 5 V DAC → ADC loopback | 5 V path |
 | `cal2` | Internal ±12 V differential DAC → ADC loopback | ±12 V path |
-| `amp` | ADC ← amps screw terminal | J8 |
+| `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground) | J8 |
 
 The DAC output paths also open all ADC relays (the ADC returns to the external
 SMA), so driving `dac_12v` and reading the ADC is a self-contained loopback of
@@ -776,7 +776,7 @@ the code used (`code` is `-1` when only routing).
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
-`source` is `ext` (default) / `cal1` / `cal2` / `amp`. The firmware routes the
+`source` is `ext` (default) / `cal1` / `cal2` / `current_in`. The firmware routes the
 source, waits ~20 ms for the relays to settle, averages a short 16-sample burst,
 applies that source's ADC calibration, and returns millivolts plus the raw 16-bit
 count and the burst's peak-to-peak spread in counts (`span`). The front-SMA input
@@ -806,46 +806,55 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
    over the 16-sample burst, limit 1024) — stop the DAC (dac_stop) or let the node settle"}
 ```
 
-On `amp` the reply also has `offset_mv`: this pod's calibration offset, which is already
-taken out of `mv` (see [`calibrate`](#calibrate--calibrate-the-amp-input-j8)). It is 0 on
-a pod that was never calibrated. `count` is always raw.
+`current_in` is the 4-20 mA measurement terminal (J8). Its reply has two more fields:
+
+- `ua`: the loop current in µA. The pod reads the voltage across a 249 Ω resistor, so
+  `ua = mv × 1000 / 249`. 4 mA is 996 mV and 20 mA is 4980 mV.
+- `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
+  (see [`calibrate`](#calibrate--calibrate-the-current_in-input-j8)). It is 0 on a pod that was
+  never calibrated.
+
+`count` is always raw.
 
 ```json
-{"cmd":"adc_read","source":"amp"}
-→ {"status":"ok","data":{"source":"amp","mv":3985,"count":61562,"span":6,"offset_mv":10}}
+{"cmd":"adc_read","source":"current_in"}
+→ {"status":"ok","data":{"source":"current_in","mv":3985,"count":61562,"span":6,"offset_mv":10,"ua":16004}}
 ```
 
-#### `calibrate` — calibrate the `amp` input (J8)
+Firmware up to 3.3.0 called this source `amp`. The name changed because it read as
+"amplifier"; `amp` is no longer accepted.
 
-`amp` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
+#### `calibrate` — calibrate the `current_in` input (J8)
+
+`current_in` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
 pin 2 is ground. The pod reads the voltage across that resistor, so 4 mA is 996 mV and
 20 mA is 4980 mV.
 
 Every ADC source is scaled with a fit, `volts = a + b × count`. The fits are built into
 the firmware and are the same on every pod. Each pod still has its own offset of a few mV
-on `amp`. `calibrate` measures that offset and stores it on the pod. From then on the pod
-uses its own fit for `amp`: the built-in one with the offset taken out of `a`.
+on `current_in`. `calibrate` measures that offset and stores it on the pod. From then on the pod
+uses its own fit for `current_in`: the built-in one with the offset taken out of `a`.
 
 Disconnect J8 first. With nothing connected the terminal is at 0 V, so the pod needs no
 reference.
 
 | Request | What it does |
 |---|---|
-| `{"cmd":"calibrate","source":"amp"}` | Calibrate `amp` with J8 disconnected, store the result, return it |
+| `{"cmd":"calibrate","source":"current_in"}` | Calibrate `current_in` with J8 disconnected, store the result, return it |
 | `{"cmd":"calibrate"}` | Return the stored calibration |
 | `{"cmd":"calibrate","clear":true}` | Remove it and go back to the built-in fit |
 
 ```json
-{"cmd":"calibrate","source":"amp"}
-→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4356,
+{"cmd":"calibrate","source":"current_in"}
+→ {"status":"ok","data":{"source":"current_in","calibrated":true,"offset_mv":4,"offset_uv":4356,
    "a_uv":65828041,"b_nv":-1004471,"count":65535,"span":6,"samples":512}}
 
 {"cmd":"calibrate"}
-→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4356,
+→ {"status":"ok","data":{"source":"current_in","calibrated":true,"offset_mv":4,"offset_uv":4356,
    "a_uv":65828041,"b_nv":-1004471}}
 
 {"cmd":"calibrate","clear":true}
-→ {"status":"ok","data":{"source":"amp","calibrated":false,"offset_mv":0,"offset_uv":0,
+→ {"status":"ok","data":{"source":"current_in","calibrated":false,"offset_mv":0,"offset_uv":0,
    "a_uv":65832397,"b_nv":-1004471}}
 ```
 
@@ -854,29 +863,29 @@ reference.
 | `calibrated` | `true` when this pod has its own calibration stored |
 | `offset_mv` | The offset in mV, rounded. `adc_read` reports the same value |
 | `offset_uv` | The offset in µV, as stored |
-| `a_uv`, `b_nv` | The fit the pod now uses for `amp`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
+| `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 
 The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
-takes about 0.3 s and leaves the `amp` path routed.
+takes about 0.3 s and leaves the `current_in` path routed.
 
 A reading outside ±50 mV is refused, because it means something is driving J8. The old
 calibration stays in place.
 
 ```json
-{"cmd":"calibrate","source":"amp"}   // a 4 mA loop is still connected
-→ {"status":"error","message":"calibrate: amp reads 996 mV, it must be within +/-50 mV of zero.
+{"cmd":"calibrate","source":"current_in"}   // a 4 mA loop is still connected
+→ {"status":"error","message":"calibrate: current_in reads 996 mV, it must be within +/-50 mV of zero.
    Something is driving J8. Disconnect it and try again"}
 ```
 
 The calibration is stored in flash. It survives a reboot and a firmware update. Only the
-offset of `amp` is calibrated. The gain, and `ext`, `cal1` and `cal2`, use the built-in
+offset of `current_in` is calibrated. The gain, and `ext`, `cal1` and `cal2`, use the built-in
 fits: calibrating those needs a reference voltage. `status.caps` contains `"calibrate"`
 when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
-On the USB console, `calibrate` shows the calibration, `calibrate amp` runs it, and
-`calibrate clear` removes it. `adc amp` uses it.
+On the USB console, `calibrate` shows the calibration, `calibrate current_in` runs it, and
+`calibrate clear` removes it. `adc current_in` uses it.
 
 #### Loopback / self-cal examples
 
@@ -978,7 +987,7 @@ Returns current firmware version, WiFi connection state, and IP address. No para
 | `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the three features that differ between the two boards — the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if the strap was not measured — e.g. a v2 pod, where the pad is not connected). Diagnostic only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
-| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64); `"calibrate"` = [`calibrate`](#calibrate--calibrate-the-amp-input-j8). `"gpio_read"` and `"capture_trigger"` depend on the **running** gateware image, so they can appear and disappear across an image swap. |
+| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64); `"calibrate"` = [`calibrate`](#calibrate--calibrate-the-current_in-input-j8). `"gpio_read"` and `"capture_trigger"` depend on the **running** gateware image, so they can appear and disappear across an image swap. |
 
 #### `wifi` state values
 
@@ -1690,7 +1699,7 @@ inrush at power-on, sleep-current floors, the energy of one duty cycle.
 
 The eFuses auto-retry after ~110 ms and blank faults for ~2.8 ms, so **a fast trip (< 1 ms)
 will not appear in a ~1 kHz profile** — `stats.fault` is the reliable indicator that one
-happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `amp` input is a
+happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current_in` input is a
 249 Ω 4–20 mA terminal, *not* the DUT supply — do not use it for this.)
 
 #### Start
