@@ -115,6 +115,7 @@ The 16-bit **DAC8551** analog DAC is not an I²C part — it is clocked by the i
 |---|---|
 | `dac <off\|3v3\|5v\|12v> [volts]` | Route the DAC8551 output path (mux via TCA9554) and hold a calibrated DC voltage. |
 | `dacraw <0-255> [divider]` | Raw DAC8551 code, no routing/calibration; `divider` sets the FPGA DAC engine rate (48 MHz / divider). Debug. |
+| `current-out [mA]` | Hold a current on the 4-20 mA output (J9, needs an external loop supply) and switch the DAC voltage outputs off. No value shows the range. |
 | `adc [ext\|cal1\|cal2\|current_in]` | Route an MCP33131 ADC source and return a calibrated reading in mV (default `ext`). |
 | `adcraw` | Single raw MCP33131 sample byte. Debug. |
 | `measure` | Read the ADC input SMA in volts (= `adc ext`, ÷12 front-end). |

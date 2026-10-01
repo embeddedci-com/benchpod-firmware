@@ -148,6 +148,7 @@ Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `
 | `dac_limits` | Read, set or clear the DAC output limits for an external output stage | object | no |
 | `analog_path` | Apply a named analog path (flips mux + relays) | object | no |
 | `dac_out` | Route a DAC output path + set a calibrated voltage | object | no |
+| `current_out` | Hold a current on the 4-20 mA output (J9), in µA | object | no |
 | `adc_read` | Route an ADC source + return a calibrated reading (mV) | object | no |
 | `calibrate` | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
 | `dac_mux` | Low-level DAC output mux (U55) — prefer `dac_out` | object | no |
@@ -723,8 +724,9 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 | `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
 | `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
+| `current_out` | always, when it has `ua`: the 4-20 mA output shares the DAC, so setting a current moves the limited path. Without `ua` it only reads the range and is allowed |
 
-The USB console applies the same rules to `dac`, `path`, `adc`, `dacraw`, `dacmux` and `calsw`;
+The USB console applies the same rules to `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and `calsw`;
 `dac-limits` shows them and `dac-limits clear` removes them.
 
 Between reset and the moment boot parks the DAC (after the iCE40 is up), the DAC reads 0 V.
@@ -751,6 +753,7 @@ encoding and can't wire a path two different ways.
 | `cal1` | Internal 5 V DAC → ADC loopback | 5 V path |
 | `cal2` | Internal ±12 V differential DAC → ADC loopback | ±12 V path |
 | `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground) | J8 |
+| `current_out` | DAC → 4-20 mA output terminal (J9) only: the DAC voltage outputs are switched off, the ADC relays stay as they are | unchanged |
 
 The DAC output paths also open all ADC relays (the ADC returns to the external
 SMA), so driving `dac_12v` and reading the ADC is a self-contained loopback of
@@ -774,14 +777,59 @@ the code used (`code` is `-1` when only routing).
 → {"status":"ok","data":{"path":"dac_5v","mv":2502,"code":128}}
 ```
 
-#### The 4-20 mA output (J9)
+#### `current_out` — hold a current on the 4-20 mA output (J9)
 
-J9 is a two-wire transmitter (XTR116). It has no command of its own: it follows the DAC on
-every path, also with the path `off`. The loop current is about `4.02 mA + 0.0627 mA × code`
-for the 8-bit `code` that `dac_out` returns, so 4.02 mA at code 0 and 20.02 mA at code 255.
-Measured on a rev3 pod: 4.056 mA and 20.032 mA.
+J9 is an XTR116 two-wire transmitter. It is **loop powered**: an external supply drives the
+loop and the pod only sets how much current flows. The request and the reply are in microamps.
 
-The transmitter does not source current. An external supply powers the loop:
+```json
+{"cmd":"current_out","ua":12000}
+→ {"status":"ok","data":{"ua":12000,"code":32576,"min_ua":4016,"max_ua":20078}}
+
+{"cmd":"current_out"}                 // the range only, nothing moves
+→ {"status":"ok","data":{"min_ua":4016,"max_ua":20078}}
+```
+
+| Field | Meaning |
+|---|---|
+| `ua` | Request: the current to hold. Reply: the current the nearest DAC code gives |
+| `code` | The 16-bit DAC code now held (0.245 µA per code) |
+| `min_ua`, `max_ua` | What the output can do: the current at code 0 and at code 65535 |
+
+The output has a fixed 4 mA live zero, so it cannot go below `min_ua` (4016 µA) or above
+`max_ua` (20078 µA). There is no 0 mA and no 21 mA level. A request from 4000 µA up to `min_ua`
+gives `min_ua`, so "4 mA" works. Anything else outside the range is refused, not clamped:
+
+```json
+{"cmd":"current_out","ua":2000}
+→ {"status":"error","message":"current_out: 2000 uA is out of range. The output can do 4016 to
+   20078 uA: it cannot go below the 4 mA live zero or above the top of the DAC"}
+```
+
+The current is `100 × (4.096 V / 102 kΩ + Vdac / 25.5 kΩ)` with `Vdac = code / 65536 × 4.096 V`.
+These are the board's nominal values, the same on every pod. The output has no per-pod
+calibration: one rev3 pod measured 4.056 mA at the bottom and 20.032 mA near the top, where the
+nominal values are 4.016 and 20.016 mA.
+
+**The DAC is shared.** The transmitter follows the DAC on every analog path, and the 3.3 V, 5 V
+and ±12 V outputs use the same DAC:
+
+- `current_out` with `ua` switches the DAC voltage outputs off first (path `current_out`), so
+  they do not follow the current. The ADC relays are not touched: a `current_in` or `ext`
+  reading keeps working.
+- A voltage output (`dac_out`, `generate`, `replay`, the control loop) also moves the loop
+  current: about `4.02 mA + 0.0627 mA × code` for the 8-bit `code` that `dac_out` returns.
+  Path `off` does not park the loop: DAC code 0 is `min_ua`.
+- `dac_stop` stops a waveform but leaves the DAC where it was. Send `{"cmd":"current_out","ua":4000}`
+  to go back to 4 mA.
+- To play a waveform as a current, set a current first (that switches the voltage outputs off),
+  then use `generate` or `load_bin` + `replay` with codes computed from `min_ua` / `max_ua`:
+  `ua = min_ua + code16 × (max_ua − min_ua) / 65535`. `generate` takes 8-bit levels; a level is
+  the high byte of the 16-bit code.
+- While [DAC limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set,
+  `current_out` with `ua` is refused.
+
+**Wiring.** The transmitter does not source current. An external supply powers the loop:
 
 ```
 supply +  →  J9 pin 1 (plus)
@@ -808,6 +856,13 @@ To measure the loop current with the pod, put a resistor between J9 pin 2 and su
 connect the ADC input SMA center to supply minus, with the SMA shell left open. `adc_read ext`
 then reads a negative voltage, `-(R + 25 Ω) × I`. `hwe2e/benchpod_current_loop_hw_test.go` in
 embeddedci-server does this.
+
+The pod cannot see the loop: with no supply or an open loop, `current_out` still replies ok.
+
+`status.caps` contains `"current_out"` when the firmware supports it. The cloud capabilities
+frame has `"current_out":true` and the range as `current_out_min_ua` / `current_out_max_ua`.
+On the USB console, `current-out 12` holds 12 mA (the console takes mA) and `current-out`
+shows the range.
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
