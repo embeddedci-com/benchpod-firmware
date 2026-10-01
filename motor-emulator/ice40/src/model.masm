@@ -1,0 +1,155 @@
+; model.masm — motor-model program, run once per PWM period (spec in motor_model.v's header).
+; Assemble: python3 tools/masm.py src/model.masm src/model_prog.hex src/model_data.hex
+; STO x, n stores sat16(acc >>> n); SHR n: acc >>>= n. (No NEG: use LDN / SUBA.) MAXN x: acc = max(acc, -x).
+; [cond] executes only in that mode: mode1, mode2, cm, nocm, dt.
+; Order: everything this tick's duties need first (the dividers then run while the mechanics and
+; the angle advance for the next tick are computed).
+
+; ---- measurements, offset-corrected
+        LD      SINC_A
+        SUBA    OFS_A
+        STO     IA, 0
+        LD      SINC_B
+        SUBA    OFS_B
+        STO     IB, 0
+        LD      SINC_C
+        SUBA    OFS_C
+        STO     IC, 0
+        LD      SINC_BUS
+        SUBA    OFS_BUS
+        STO     VB, 0
+        W32LD   W_SET                   [mode1]
+        RCP     VB                      ; 2^30 / vbus in the background (31 clk), for the duties
+
+; ---- half bus, zero sequence, motor currents (-i)
+        LD      VB
+        MAX0
+        STO     HVB, 1
+        LD      IA
+        ADDA    IB
+        ADDA    IC
+        STO     T0, 2                   ; (ia + ib + ic) / 4
+        LDN     IA
+        STO     NA, 0
+        LDN     IB
+        STO     NB, 0
+        LDN     IC
+        STO     NC, 0
+
+; ---- back-EMF amplitude, i0, dead-time volts, shaping limit
+        MUL     W16, KE
+        STO     E, 15
+        MUL     T0, K21845
+        STO     I0, 14                  ; x 4/3 -> (ia + ib + ic) / 3
+        MUL     VB, DTF2
+        STO     DTV, 15
+        MUL     VB, MARG2
+        STO     MG, 15                  ; margin volts = vbus x CM_MARGIN
+        LD      HVB
+        SUBA    MG
+        STO     LIM, 0                  ; legs stay within +-(vbus / 2 - margin)
+
+; ---- phase back-EMFs, at the advanced angle
+        MUL     S_A, E
+        STO     EA, 15
+        MUL     S_B, E
+        STO     EB, 15
+        MUL     S_C, E
+        STO     EC, 15
+
+; ---- common-mode PI (output clipped to the whole bus)
+        MUL     CM_KP, I0
+        STO     CMP, 8
+        MUL     CM_KI, I0
+        CMADD                           [cm]
+        CMZ                             [nocm]
+        LDN     CMP                     [cm]
+        SUBA    CM_HI                   [cm]   ; -(P + I)
+        MIN     HVB                     [cm]
+        MAXN    HVB                     [cm]
+        LD      ZERO                    [nocm]
+        STO     VCM, 0
+
+; ---- leg voltages: back-EMF + resistance subtraction + dead-time comp
+        MUL     IA, RSUB               ; + R_SUB x i: less phase resistance than the emulator's path
+        SHR     15
+        ADDA    EA
+        DTC     IA, DTV                 [dt]
+        STO     UA, 0
+        MUL     IB, RSUB               ; + R_SUB x i: less phase resistance than the emulator's path
+        SHR     15
+        ADDA    EB
+        DTC     IB, DTV                 [dt]
+        STO     UB, 0
+        MUL     IC, RSUB               ; + R_SUB x i: less phase resistance than the emulator's path
+        SHR     15
+        ADDA    EC
+        DTC     IC, DTV                 [dt]
+        STO     UC, 0
+
+; ---- min-max injection + v_cm, then common-mode shaping: shift all legs together so the lowest
+; ---- and highest stay within +-LIM (line voltages kept); legs still beyond it clip at +-vbus/2
+        LD      UA
+        MAX     UB
+        MAX     UC
+        STO     MX, 0
+        LD      UA
+        MIN     UB
+        MIN     UC
+        ADDA    MX
+        STO     OFF, 1                  ; (max + min) / 2
+        LD      MX
+        SUBA    OFF
+        STO     SPR, 0                  ; half the spread
+        LD      VCM
+        ADDA    SPR
+        SUBA    LIM
+        MAX0
+        STO     SH2, 0                  ; highest leg above +LIM by this much
+        LD      SPR
+        SUBA    VCM
+        SUBA    LIM
+        MAX0
+        STO     SH1, 0                  ; lowest leg below -LIM by this much
+        LD      VCM
+        ADDA    SH1
+        SUBA    SH2
+        SUBA    OFF
+        STO     TOFF, 0                 ; common offset for all three legs
+        LD      UA
+        ADDA    TOFF
+        MIN     HVB
+        MAXN    HVB
+        STO     VA, 0
+        LD      UB
+        ADDA    TOFF
+        MIN     HVB
+        MAXN    HVB
+        STO     VBB, 0
+        DIV     VA, 0                   ; duty = 0x8000 + v x (2^30 / vbus) >> 14
+        LD      UC
+        ADDA    TOFF
+        MIN     HVB
+        MAXN    HVB
+        STO     VCC, 0
+        DIV     VBB, 1
+        MUL     R_A, NA                 ; (torque, starts while the last store settles)
+        MAC     R_B, NB
+        DIV     VCC, 2
+
+; ---- torque (sines at the angle itself), mechanics, angle advance (all for the next tick)
+        MAC     R_C, NC
+        STO     IQ, 15
+        MUL     KT, IQ
+        STO     TQ, 15
+        MUL     W16, DAMP
+        STO     DMP, 15                 ; (fits: DAMP <= 0x7FFF)
+        LD      TQ
+        SUBA    DMP
+        SUBA    LOAD
+        STO     NET, 0
+        MUL     NET, INVJ
+        W32ADD                          [mode2]
+        ACCW                            ; acc = w32, THADV adds acc >>> (16 - WSHIFT)
+        THADV
+        END

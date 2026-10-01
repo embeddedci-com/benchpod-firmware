@@ -1,0 +1,49 @@
+# iCE40UP5K-SG48I pin map for schematic rev 0.3 (SYNC on RGB1, write-only). Build with make REV03=1.
+# Source of truth: benchpod-private/pcb/motor-emulator (netlist U701 pins).
+# CDONE (7) and CRESET_B (8) are dedicated configuration pins, not user I/O.
+
+set_io clk12      35   # IOT_46b_G0, 12 MHz oscillator -> PLL
+# BenchPod link / stack bus (the slave-SPI configuration pins, user I/O after configuration)
+set_io spi_miso   14   # IOB_32a_SPI_SO, via 470R
+set_io spi_sck    15   # IOB_34a_SPI_SCK
+set_io spi_ss     16   # IOB_35b_SPI_SS
+set_io spi_mosi   17   # IOB_33b_SPI_SI
+set_io sync_n     40   # RGB1, open drain
+set_io fault_n    46
+# bridge (MP6539 HS/LS inputs, 4.7k pull-downs)
+set_io pwm_ha     23
+set_io pwm_la     25
+set_io pwm_hb     26
+set_io pwm_lb     27
+set_io pwm_hc     28
+set_io pwm_lc     31
+set_io arm_req_n  39   # RGB0, open drain, AC-coupled into the fault latch
+set_io latch_q    47
+# power path
+set_io brake      32
+set_io hswap_en   44
+set_io backstop   45
+set_io pv_set     19   # sigma-delta PV setpoint (DNP buffer)
+# delta-sigma modulators
+set_io mclk       34
+set_io dout_a     36
+set_io dout_b     37
+set_io dout_c     38
+set_io dout_d     42   # DUT battery current
+set_io dout_e     43   # bus voltage
+# board id EEPROM, trip recorder
+set_io i2c_sda    20
+set_io i2c_scl    21
+set_io ee_wc_n    48
+# DUT signals
+set_io hall_a     2
+set_io hall_b     3
+set_io hall_c     4
+set_io enc_a      6
+set_io enc_b      9
+set_io enc_z      10
+set_io enc_cs     11
+set_io enc_sck    12
+set_io enc_mosi   13
+set_io enc_miso   18
+set_io led_n      41   # RGB2, open drain
