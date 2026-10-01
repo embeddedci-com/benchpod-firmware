@@ -821,8 +821,7 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 → {"status":"ok","data":{"source":"current_in","mv":3985,"count":61562,"span":6,"offset_mv":10,"ua":16004}}
 ```
 
-Firmware up to 3.3.0 called this source `amp`. The name changed because it read as
-"amplifier"; `amp` is no longer accepted.
+Firmware up to 3.3.0 used a different name for this source. That name is no longer accepted.
 
 #### `calibrate` — calibrate the `current_in` input (J8)
 
@@ -900,7 +899,7 @@ On the USB console, `calibrate` shows the calibration, `calibrate current_in` ru
 
 The low-level `dac_mux` (U55 mux: `ctrl1_sel` 0=3V3/1=5V/2=12V/3=12V_ADC,
 `ctrl2_sel` 0=12V_VMID/1=ADC_VMID/2=GND) and `cal_switch` (U58 relays: `cal1`,
-`cal2`, `amp_measure`, `cal_path`; `cal1`+`cal2` are mutually exclusive) commands
+`cal2`, `current_in`, `cal_path`; `cal1`+`cal2` are mutually exclusive) commands
 remain available for diagnostics, but prefer the named paths above.
 
 ---

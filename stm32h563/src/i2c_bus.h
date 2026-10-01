@@ -173,7 +173,7 @@ void la_pullups_all_off(void);
  *   U58 @ 0x26 (ANASW): drives 4 relays via a TPL7407 low-side driver
  *     (bit high = relay energised):
  *     P0 CAL1 (5V DAC path -> ADC), P1 CAL2 (12V DAC path -> ADC),
- *     P2 AMP_MEASURE (ADC <- amps screw terminal), P3 CAL_PATH (ADC <- cal path).
+ *     P2 current_in (ADC <- 4-20 mA terminal J8; net AMP_MEASURE in the schematic), P3 CAL_PATH (ADC <- cal path).
  *     CAL1 and CAL2 must never be enabled together.
  *
  * Sel encodings (match the TMUX1104 A1:A0 truth table). */
@@ -195,7 +195,7 @@ int  dacmux_set_ctrl2(bool en, uint8_t sel);
 int  dacmux_read(uint8_t *out_reg);           /* current U55 output register */
 
 /* Calibration switching (U58). Rejects cal1 && cal2 (returns -2). */
-int  calsw_set(bool cal1, bool cal2, bool amp_measure, bool cal_path);
+int  calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path);
 int  calsw_read(uint8_t *out_reg);            /* current U58 output register */
 void analog_switch_dump(void);                /* diagnostic: dump U55/U58 registers */
 
@@ -204,7 +204,7 @@ void analog_switch_dump(void);                /* diagnostic: dump U55/U58 regist
  * so the console, JSON API, and SDK never hand-flip switches or drift apart.
  * Routing is verified against the vbench-pod netlist + bench measurements:
  *
- *   path       U55 ctrl1      U55 ctrl2       U58 relays (cal1,cal2,amp,path)  ADC sees
+ *   path       U55 ctrl1      U55 ctrl2       U58 relays (cal1,cal2,cur,path)  ADC sees
  *   off        off            off             0,0,0,0                          -
  *   dac_3v3    en,3V3         off             0,0,0,0                          -
  *   dac_5v     en,5V          off             0,0,0,0                          -

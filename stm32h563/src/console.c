@@ -625,7 +625,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     } else if (!strcmp(argv[0], "expdump")) {
         analog_switch_dump();
     } else if (!strcmp(argv[0], "calsw") && argc >= 5) {
-        /* calsw <cal1> <cal2> <amp_measure> <cal_path> — LOW-LEVEL U58 relays
+        /* calsw <cal1> <cal2> <current_in> <cal_path> — LOW-LEVEL U58 relays
            (prefer `path`/`adc`).  CAL1=5V->ADC, CAL2=diff->ADC, CAL_PATH=ADC<-cal node */
         int r = calsw_set((bool)atoi(argv[1]), (bool)atoi(argv[2]),
                           (bool)atoi(argv[3]), (bool)atoi(argv[4]));

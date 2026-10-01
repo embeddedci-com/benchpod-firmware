@@ -373,12 +373,12 @@ int dacmux_read(uint8_t *out_reg)
     return tca9554_read_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, out_reg);
 }
 
-int calsw_set(bool cal1, bool cal2, bool amp_measure, bool cal_path)
+int calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path)
 {
     if (cal1 && cal2) return -2;   /* mutually exclusive: never both DAC rails */
     s_u58_out = (uint8_t)((cal1 ? 0x01u : 0u)
                 | (cal2 ? 0x02u : 0u)
-                | (amp_measure ? 0x04u : 0u)
+                | (current_in ? 0x04u : 0u)
                 | (cal_path ? 0x08u : 0u));
     /* Re-assert the direction (P0..P3 = outputs) in case the power-on config
        write didn't take — otherwise the output write drives nothing and the

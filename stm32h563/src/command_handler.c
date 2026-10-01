@@ -3112,18 +3112,18 @@ static void handle_dac_mux(int conn_id, const char *json) {
 }
 
 /* Calibration relay switching via U58 (relays energised by a bit high): cal1
-   (5V DAC->ADC), cal2 (12V DAC->ADC, exclusive with cal1), amp_measure
+   (5V DAC->ADC), cal2 (12V DAC->ADC, exclusive with cal1), current_in
    (ADC<-amps terminal), cal_path (ADC<-cal path). Any field present sets the
    whole state (absent = off); a bare command just reports state. */
 static void handle_cal_switch(int conn_id, const char *json) {
     char s[8] = {0};
     bool any = json_get_value(json, "cal1", s, sizeof(s))
              | json_get_value(json, "cal2", s, sizeof(s))
-             | json_get_value(json, "amp_measure", s, sizeof(s))
+             | json_get_value(json, "current_in", s, sizeof(s))
              | json_get_value(json, "cal_path", s, sizeof(s));
     if (any) {
         int rc = calsw_set(json_flag(json, "cal1"), json_flag(json, "cal2"),
-                           json_flag(json, "amp_measure"), json_flag(json, "cal_path"));
+                           json_flag(json, "current_in"), json_flag(json, "cal_path"));
         if (rc == -2) { send_error(conn_id, "cal1 and cal2 are mutually exclusive"); return; }
         if (rc != 0)  { send_error(conn_id, "cal_switch failed"); return; }
     }
@@ -3131,7 +3131,7 @@ static void handle_cal_switch(int conn_id, const char *json) {
     if (calsw_read(&reg) != 0) { send_error(conn_id, "cal_switch read failed"); return; }
     char payload[112];
     snprintf(payload, sizeof(payload),
-        "{\"reg\":%u,\"cal1\":%u,\"cal2\":%u,\"amp_measure\":%u,\"cal_path\":%u}",
+        "{\"reg\":%u,\"cal1\":%u,\"cal2\":%u,\"current_in\":%u,\"cal_path\":%u}",
         reg, (reg & 0x01u) ? 1u : 0u, (reg & 0x02u) ? 1u : 0u,
         (reg & 0x04u) ? 1u : 0u, (reg & 0x08u) ? 1u : 0u);
     send_ok_str(conn_id, payload);
