@@ -873,7 +873,7 @@ calibration stays in place.
 The calibration is stored in flash. It survives a reboot and a firmware update. Only the
 offset of `amp` is calibrated. The gain, and `ext`, `cal1` and `cal2`, use the built-in
 fits: calibrating those needs a reference voltage. `status.caps` contains `"calibrate"`
-when the firmware supports it.
+when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
 On the USB console, `calibrate` shows the calibration, `calibrate amp` runs it, and
 `calibrate clear` removes it. `adc amp` uses it.
