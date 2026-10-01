@@ -3,6 +3,9 @@
  * HP 34401A DMM through the internal cal path).  Linear: value = a + b*x.
  * Source of truth / re-runnable: bench-pod-firmware/calibration/{dac_cal,adc_cal}.json
  * (regenerate with calibration/scripts/dac_cal_direct.py and update these consts).
+ *
+ * These are the same on every pod. What a pod measures on itself with the `calibrate`
+ * command is layered on top in adc_cal.h.
  */
 #ifndef CAL_DATA_H
 #define CAL_DATA_H

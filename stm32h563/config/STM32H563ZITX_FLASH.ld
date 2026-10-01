@@ -50,7 +50,7 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
  * The 0x080A0000 blob base is mirrored by DFU_BLOBS_ADDR in the Makefile — keep
  * the two in sync. FLASH_BLOBS deliberately stops at 0x081E8000, below the
  * high-flash persistence sectors touched at runtime, so the link fails if the blobs
- * ever grow into them: ADC amp zero 0x081E8000/0x081EA000 (adc_zero.h);
+ * ever grow into them: per-pod ADC calibration 0x081E8000/0x081EA000 (adc_cal.h);
  * DAC output limits 0x081EC000/0x081EE000 (dac_limits.h);
  * 0x081F0000 OTA self-test scratch (ota_commit.c); two-slot,
  * power-loss-safe stores (config_store.h): cloud 0x081F2000/0x081F4000, Wi-Fi

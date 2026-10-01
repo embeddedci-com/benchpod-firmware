@@ -27,7 +27,7 @@
 
 /* Max image we will accept: everything below 0x081E8000, where the linker's FLASH_BLOBS region
    ends (config/STM32H563ZITX_FLASH.ld), so a firmware image can never be larger.  Above it sit
-   the ADC amp zero (adc_zero.h), the DAC output limits (dac_limits.h), the OTA self-test scratch sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY
+   the per-pod ADC calibration (adc_cal.h), the DAC output limits (dac_limits.h), the OTA self-test scratch sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY
    KEY; ota_commit erases and rewrites up to the image size, so the old limit (all 2 MB) let an
    oversized image wipe them, and a pod without its key cannot authenticate to the cloud again. */
 #define OTA_MAX_SIZE   0x1E8000u   /* 1952 KB */

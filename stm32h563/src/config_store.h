@@ -7,7 +7,7 @@
 /* ---- Power-loss-safe record store (A/B slots) --------------------------------
  *
  * Used for the Wi-Fi config (below), the cloud config (cloud_config.h), the DAC output
- * limits (dac_limits.h) and the ADC amp zero (adc_zero.h).
+ * limits (dac_limits.h) and the per-pod ADC calibration (adc_cal.h).
  *
  * The old layout erased ONE sector and programmed it. A power loss in that window
  * lost the config, and on the H5 a torn quad-word program leaves an ECC double
@@ -41,8 +41,8 @@
  * left alone until a clear, so it stays a fallback until then.
  *
  * Flash map (bank 2, 8 KB sectors, offsets from 0x08000000):
- *   0x1E8000  s116  ADC amp zero slot B (adc_zero.h); FLASH_BLOBS ends here
- *   0x1EA000  s117  ADC amp zero slot A
+ *   0x1E8000  s116  per-pod ADC calibration slot B (adc_cal.h); FLASH_BLOBS ends here
+ *   0x1EA000  s117  per-pod ADC calibration slot A
  *   0x1EC000  s118  DAC output limits slot B (dac_limits.h)
  *   0x1EE000  s119  DAC output limits slot A
  *   0x1F0000  s120  OTA self-test scratch (ota_commit.c)

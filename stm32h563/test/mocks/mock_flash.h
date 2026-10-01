@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <setjmp.h>
 
-#define MOCK_FLASH_BASE_OFF  0x1E8000u     /* s116: the ADC amp zero store (adc_zero.h) */
+#define MOCK_FLASH_BASE_OFF  0x1E8000u     /* s116: the per-pod ADC calibration store (adc_cal.h) */
 #define MOCK_FLASH_BYTES     0x18000u      /* 0x1E8000..0x1FFFFF */
 #define MOCK_QW              16u
 

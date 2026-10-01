@@ -17,7 +17,7 @@
 #include "can_bus.h"
 #include "cal_data.h"
 #include "adc_scale.h"     /* circular-mean + unwrap for adc_read's sample burst */
-#include "adc_zero.h"      /* per-pod zero for the amp source */
+#include "adc_cal.h"       /* per-pod ADC calibration on top of cal_data.h */
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
 #include "ina238.h"
 #include "b64url.h"
@@ -2288,7 +2288,7 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"adc_zero\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\"");
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
@@ -3185,8 +3185,8 @@ static void handle_dac_out(int conn_id, const char *json) {
 
 /* adc_read — route an ADC source AND return a CALIBRATED reading in mV.
    {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  `amp` also
-   returns "zero_mv", the stored zero that was subtracted from `mv` (adc_zero.h; 0 when
-   none is set).  `count` stays raw.  A short
+   returns "offset_mv", this pod's calibration offset that was taken out of `mv`
+   (adc_cal.h; 0 when the pod was never calibrated).  `count` stays raw.  A short
    16-sample burst, averaged ON THE 16-BIT CIRCLE and then unwrapped — see
    adc_scale.h.  Averaging the RAW counts first (what this did until 2026-07-29)
    returns a plausible-looking number that is wrong by tens of volts whenever the
@@ -3217,6 +3217,7 @@ static void handle_adc_read(int conn_id, const char *json) {
     cal_lin_t c = ADC_CAL_CAL1;
     if      (p == ANALOG_PATH_CAL2)    c = ADC_CAL_CAL2;
     else if (p == ANALOG_PATH_ADC_EXT) c = ADC_CAL_EXT;
+    else if (p == ANALOG_PATH_AMP)     c = adc_cal_amp_fit();   /* cal1 fit + this pod's offset (adc_cal.h) */
     adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
     if (!rd.valid) {
         /* Plausible-looking garbage is worse than an error: a sweep would record it. */
@@ -3230,11 +3231,11 @@ static void handle_adc_read(int conn_id, const char *json) {
     }
     char payload[112];
     if (p == ANALOG_PATH_AMP) {
-        /* The per-pod zero (adc_zero.h). Only `amp`: the other sources are untouched. */
+        /* Say which per-pod offset is in `mv`. Only `amp` has one. */
         snprintf(payload, sizeof(payload),
-                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"zero_mv\":%ld}",
-                 analog_path_name(p), (int)lroundf(adc_zero_amp_apply(rd.volts) * 1000.0f),
-                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_zero_amp_mv());
+                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"offset_mv\":%ld}",
+                 analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
+                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_cal_amp_offset_mv());
     } else {
         snprintf(payload, sizeof(payload),
                  "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
@@ -3244,42 +3245,50 @@ static void handle_adc_read(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-static void adc_zero_reply(int conn_id, const adc_reading_t *rd) {
-    char payload[160];
-    int n = snprintf(payload, sizeof(payload), "{\"source\":\"amp\",\"set\":%s,\"zero_mv\":%ld,\"zero_uv\":%ld",
-                     adc_zero_amp_is_set() ? "true" : "false",
-                     (long)adc_zero_amp_mv(), (long)adc_zero_amp_uv());
+/* The per-pod calibration of `amp` as a reply. a_uv / b_nv are the fit this pod scales `amp`
+   with (volts = a + b*count), in the units of the capabilities frame's adc_cal_a_uv /
+   adc_cal_b_nv, so a client can scale raw `amp` counts the way adc_read does. */
+static void calibrate_reply(int conn_id, const adc_reading_t *rd) {
+    cal_lin_t fit = adc_cal_amp_fit();
+    char payload[224];
+    int n = snprintf(payload, sizeof(payload),
+                     "{\"source\":\"amp\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
+                     "\"a_uv\":%ld,\"b_nv\":%ld",
+                     adc_cal_amp_is_set() ? "true" : "false",
+                     (long)adc_cal_amp_offset_mv(), (long)adc_cal_amp_offset_uv(),
+                     lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0));
     if (rd)
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
-                      adc_count_u16(rd->count), (unsigned)rd->span, (unsigned)ADC_ZERO_SAMPLES);
+                      adc_count_u16(rd->count), (unsigned)rd->span, (unsigned)ADC_CAL_SAMPLES);
     snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
     send_ok_str(conn_id, payload);
 }
 
-/* `adc_zero` — measure, read or clear the per-pod zero of the `amp` source (adc_zero.h).
-   Stored in flash and subtracted from every `adc_read` on `amp` until cleared.
-     {"cmd":"adc_zero"}                  -> the stored zero
-     {"cmd":"adc_zero","source":"amp"}   -> measure with J8 DISCONNECTED, store, return it
-     {"cmd":"adc_zero","clear":true}     -> remove it
-   The measurement averages 32 adc_read bursts (512 samples). A reading outside +/-50 mV means
-   something is driving J8: it is refused and the old zero stays. */
-static void handle_adc_zero(int conn_id, const char *json) {
+/* `calibrate` — run, read or clear this pod's own ADC calibration (adc_cal.h). It sits on top
+   of the compiled-in fits (cal_data.h) and is kept in flash.
+     {"cmd":"calibrate"}                  -> the stored calibration
+     {"cmd":"calibrate","source":"amp"}   -> calibrate `amp`: J8 must be DISCONNECTED
+     {"cmd":"calibrate","clear":true}     -> back to the compiled-in fit
+   `amp` is the only source a pod can calibrate on its own: with J8 open the terminal is 0 V,
+   so what it reads is its offset. A reading outside +/-50 mV means something is driving J8:
+   it is refused and the old calibration stays. */
+static void handle_calibrate(int conn_id, const char *json) {
     char v[16] = {0};
     if (json_get_value(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        if (adc_zero_clear() != 0) { send_error(conn_id, "could not clear the zero"); return; }
-        adc_zero_reply(conn_id, NULL);
+        if (adc_cal_clear() != 0) { send_error(conn_id, "could not clear the calibration"); return; }
+        calibrate_reply(conn_id, NULL);
         return;
     }
-    if (!json_get_value(json, "source", v, sizeof(v))) { adc_zero_reply(conn_id, NULL); return; }
-    if (strcmp(v, "amp") != 0) { send_error(conn_id, "source must be amp"); return; }
+    if (!json_get_value(json, "source", v, sizeof(v))) { calibrate_reply(conn_id, NULL); return; }
+    if (strcmp(v, "amp") != 0) { send_error(conn_id, "only amp can be calibrated on the pod: source must be amp"); return; }
     if (!heavy_begin(conn_id)) return;
     adc_reading_t rd;
-    int rc = adc_zero_measure_amp(&rd);
+    int rc = adc_cal_measure_amp(&rd);
     heavy_release(conn_id);
     if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
-    const char *why = adc_zero_amp_store(&rd);
+    const char *why = adc_cal_amp_store(&rd);
     if (why) { send_error(conn_id, why); return; }
-    adc_zero_reply(conn_id, &rd);
+    calibrate_reply(conn_id, &rd);
 }
 
 /* Last loop input source pushed to the gateware.  The fabric registers are write-only, so
@@ -3675,7 +3684,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "psram_ping") == 0) handle_psram_ping(conn_id, buf);
     else if (strcmp(cmd, "dac_out")   == 0) handle_dac_out(conn_id, buf);
     else if (strcmp(cmd, "adc_read")  == 0) handle_adc_read(conn_id, buf);
-    else if (strcmp(cmd, "adc_zero")  == 0) handle_adc_zero(conn_id, buf);
+    else if (strcmp(cmd, "calibrate") == 0) handle_calibrate(conn_id, buf);
     else if (strcmp(cmd, "dac_control_loop") == 0) handle_dac_control_loop(conn_id, buf);
     else if (strcmp(cmd, "dac_loop_probe")   == 0) handle_dac_loop_probe(conn_id, buf);
     else if (strcmp(cmd, "dac_loop_input")   == 0) handle_dac_loop_input(conn_id, buf);

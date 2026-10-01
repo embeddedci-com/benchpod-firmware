@@ -27,7 +27,7 @@
 
 bool clock_on_hsi(void);   /* main.c */
 #include "command_handler.h"   /* mirror re-sync after a reconfiguration */
-#include "command_handler_internal.h"   /* heavy_in_flight: adc-zero must not cut a capture */
+#include "command_handler_internal.h"   /* heavy_in_flight: calibrate must not cut a capture */
 #include "esp_rom_flash.h"
 #include "esp_hosted_spi.h"   /* stop the Wi-Fi transport before flashing the C3 */
 #include "esp_wifi_ctrl.h"    /* wifi-set / wifi-show provisioning */
@@ -53,7 +53,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdarg.h>
 #include <string.h>
 #include "dac_limits.h"
-#include "adc_zero.h"
+#include "adc_cal.h"
 #include <stdlib.h>
 
 #include "fpga_bitstream.h"   /* generated: fpga_image0/1[] + _len (or fpga_bitstream[]) */
@@ -140,7 +140,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  test-bootloop [net|hw] yes  crash 2 boots on purpose to prove safe mode\r\n"
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|amp]       route ADC source + read calibrated mV (def ext)\r\n"
-        "  adc-zero [run|clear]          amp (J8) zero: show, measure with J8 open, remove\r\n"
+        "  calibrate [amp|clear]         this pod's ADC calibration: show, calibrate amp (J8 open), remove\r\n"
         "  measure              read the ADC input SMA in volts (= adc ext, ÷12)\r\n"
         "  path <name>          apply a named analog path (routing only)\r\n");
     out(ctx,
@@ -593,22 +593,23 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else op(out, ctx, "  dac limits: %s %s %ld..%ld mV, park %ld mV\r\n", dac_limits_path_name(l->path),
                 l->inverted ? "inverted" : "normal", (long)l->min_mv, (long)l->max_mv,
                 (long)(l->inverted ? l->max_mv : l->min_mv));
-    } else if (!strcmp(argv[0], "adc-zero")) {
-        /* adc-zero — show the amp zero; `adc-zero run` measures it (J8 disconnected) and
-           stores it; `adc-zero clear` removes it (adc_zero.h). */
+    } else if (!strcmp(argv[0], "calibrate")) {
+        /* calibrate — show this pod's ADC calibration; `calibrate amp` measures the amp
+           offset (J8 disconnected) and stores it; `calibrate clear` removes it (adc_cal.h). */
         if (argc >= 2 && !strcmp(argv[1], "clear")) {
-            adc_zero_clear();
-        } else if (argc >= 2 && !strcmp(argv[1], "run")) {
+            adc_cal_clear();
+        } else if (argc >= 2 && !strcmp(argv[1], "amp")) {
             adc_reading_t rd;
             const char *why = heavy_in_flight() ? "busy: a capture is running" : NULL;
-            if (!why && adc_zero_measure_amp(&rd) != 0) why = "adc read failed";
-            if (!why) why = adc_zero_amp_store(&rd);
+            if (!why && adc_cal_measure_amp(&rd) != 0) why = "adc read failed";
+            if (!why) why = adc_cal_amp_store(&rd);
             if (why) op_line(out, ctx, why);
         } else if (argc >= 2) {
-            op(out, ctx, "  usage: adc-zero [run|clear]\r\n");
+            op(out, ctx, "  usage: calibrate [amp|clear]\r\n");
         }
-        if (!adc_zero_amp_is_set()) op(out, ctx, "  amp zero: none\r\n");
-        else op(out, ctx, "  amp zero: %ld mV (%ld uV)\r\n", (long)adc_zero_amp_mv(), (long)adc_zero_amp_uv());
+        if (!adc_cal_amp_is_set()) op(out, ctx, "  amp: not calibrated\r\n");
+        else op(out, ctx, "  amp: calibrated, offset %ld mV (%ld uV)\r\n",
+                (long)adc_cal_amp_offset_mv(), (long)adc_cal_amp_offset_uv());
     } else if (!strcmp(argv[0], "dacraw") && argc >= 2) {
         /* dacraw <code 0..255> [div] — raw DAC code, no routing/cal (debug). */
         uint8_t v = (uint8_t)atoi(argv[1]);
@@ -689,18 +690,19 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             uint16_t s16[16] = {0};
             if (adc_capture_psram(s16, 16, 0.0f) == 0) {
                 /* Same reduction as the JSON adc_read: circular mean, then unwrap
-                   (adc_scale.h), and the per-pod zero on `amp` (adc_zero.h). */
+                   (adc_scale.h), and this pod's calibration on `amp` (adc_cal.h). */
                 cal_lin_t c = ADC_CAL_CAL1;
                 if      (p == ANALOG_PATH_CAL2)    c = ADC_CAL_CAL2;
                 else if (p == ANALOG_PATH_ADC_EXT) c = ADC_CAL_EXT;
+                else if (p == ANALOG_PATH_AMP)     c = adc_cal_amp_fit();
                 adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
                 if (!rd.valid) {
                     op(out, ctx, "  %s %s: input not settled (%u counts pk-pk)\r\n",
                        argv[0], analog_path_name(p), (unsigned)rd.span);
                 } else if (p == ANALOG_PATH_AMP) {
-                    op(out, ctx, "  %s %s: count=%d -> %d mV (zero %ld mV)\r\n",
+                    op(out, ctx, "  %s %s: count=%d -> %d mV (offset %ld mV)\r\n",
                        argv[0], analog_path_name(p), adc_count_u16(rd.count),
-                       (int)lroundf(adc_zero_amp_apply(rd.volts) * 1000.0f), (long)adc_zero_amp_mv());
+                       (int)lroundf(rd.volts * 1000.0f), (long)adc_cal_amp_offset_mv());
                 } else {
                     op(out, ctx, "  %s %s: count=%d -> %d mV\r\n",
                        argv[0], analog_path_name(p), adc_count_u16(rd.count), (int)lroundf(rd.volts * 1000.0f));
