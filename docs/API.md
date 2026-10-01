@@ -774,6 +774,41 @@ the code used (`code` is `-1` when only routing).
 → {"status":"ok","data":{"path":"dac_5v","mv":2502,"code":128}}
 ```
 
+#### The 4-20 mA output (J9)
+
+J9 is a two-wire transmitter (XTR116). It has no command of its own: it follows the DAC on
+every path, also with the path `off`. The loop current is about `4.02 mA + 0.0627 mA × code`
+for the 8-bit `code` that `dac_out` returns, so 4.02 mA at code 0 and 20.02 mA at code 255.
+Measured on a rev3 pod: 4.056 mA and 20.032 mA.
+
+The transmitter does not source current. An external supply powers the loop:
+
+```
+supply +  →  J9 pin 1 (plus)
+J9 pin 2 (minus)  →  receiver  →  supply −
+```
+
+The supply needs at least 8 V plus 20 mA times the receiver resistance (13 V for 249 Ω), and
+at most 30 V. Pin 1 has a series diode, so a reversed supply gives no current and no damage.
+
+**The loop supply must float.** J9 pin 2 is not ground: it sits up to 0.5 V below pod ground,
+across the transmitter's internal sense resistor. That resistor is how the current is
+regulated, so nothing else in the loop may connect to pod ground.
+
+- Use a supply whose output is isolated from pod ground and from earth. The pod's own 5 V and
+  0-20 V outputs cannot power the loop.
+- Do not connect supply minus, or the low side of the receiver, to pod ground.
+- J9 cannot be wired to the pod's own measurement terminal J8, because J8 is 249 Ω to pod ground.
+- A target whose loop input is referenced to a ground it shares with the pod (through SWD or
+  UART wiring) cannot be driven either. Use an isolated loop input on the target.
+- If the loop does touch pod ground, the current bypasses the sense resistor, is no longer
+  regulated, and sits near the transmitter's 32 mA limit regardless of the DAC.
+
+To measure the loop current with the pod, put a resistor between J9 pin 2 and supply minus and
+connect the ADC input SMA center to supply minus, with the SMA shell left open. `adc_read ext`
+then reads a negative voltage, `-(R + 25 Ω) × I`. `hwe2e/benchpod_current_loop_hw_test.go` in
+embeddedci-server does this.
+
 #### `adc_read` — route a source **and** return a calibrated reading
 
 `source` is `ext` (default) / `cal1` / `cal2` / `current_in`. The firmware routes the
