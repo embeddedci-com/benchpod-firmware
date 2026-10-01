@@ -837,16 +837,16 @@ reference.
 
 ```json
 {"cmd":"calibrate","source":"amp"}
-→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4181,
-   "a_uv":65828217,"b_nv":-1004471,"count":65535,"span":6,"samples":512}}
+→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4356,
+   "a_uv":65828041,"b_nv":-1004471,"count":65535,"span":6,"samples":512}}
 
 {"cmd":"calibrate"}
-→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4181,
-   "a_uv":65828217,"b_nv":-1004471}}
+→ {"status":"ok","data":{"source":"amp","calibrated":true,"offset_mv":4,"offset_uv":4356,
+   "a_uv":65828041,"b_nv":-1004471}}
 
 {"cmd":"calibrate","clear":true}
 → {"status":"ok","data":{"source":"amp","calibrated":false,"offset_mv":0,"offset_uv":0,
-   "a_uv":65832398,"b_nv":-1004471}}
+   "a_uv":65832397,"b_nv":-1004471}}
 ```
 
 | Field | Meaning |
