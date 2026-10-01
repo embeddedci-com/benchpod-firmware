@@ -8,7 +8,15 @@
  *   {"cmd":"spi_flash","op":"erase","addr":N,"len":N}          -> {"addr":..,"len":..}
  *   {"cmd":"spi_flash","op":"write","addr":N,"data":"<b64url>","verify":true}
  *   {"cmd":"spi_flash","op":"chip_erase"}
+ *   {"cmd":"spi_stream","len":N,"head":"<b64url>","cs":"release"|"hold"}  -> {"sent":N,"ms":T}
  *   {"cmd":"spi_stop"}
+ *
+ * spi_stream sends, in one chip-select frame, an optional short header (<= 64 bytes) and then the
+ * first `len` bytes a `load_bin` with "psram" staged — for loads too big for spi_xfer, e.g. an
+ * FPGA bitstream into its slave-SPI configuration port (SCK pauses between 512-byte chunks with CS
+ * held, which such ports take; about 1.5 s for 256 KB at 6 MHz).  It holds the PSRAM bus and the
+ * heavy-operation gate while it runs (so send it on the upload's connection, or after that
+ * connection closed).
  *
  * spi_start claims the four pins (la_pins: spi_sck / spi_mosi / spi_miso / spi_cs) and arms
  * the SWD engine in SPI mode, so an SWD session and an SPI session exclude each other.  The
@@ -23,6 +31,8 @@
 #include "command_handler_internal.h"
 #include "signal_engine.h"
 #include "spi_flash.h"
+#include "spi_stream.h"
+#include "psram.h"
 #include "la_pins.h"
 #include "b64url.h"
 #include "bp_json.h"
@@ -316,5 +326,65 @@ void handle_spi_status(int conn_id) {
              "\"hz\":%lu,\"mode\":%u,\"cs_held\":%s}",
              s_pins[0], s_pins[1], s_pins[2], s_pins[3], (unsigned long)s_hz, s_mode,
              s_cs_held ? "true" : "false");
+    send_ok_str(conn_id, p);
+}
+
+/* ---- spi_stream ---- */
+
+typedef struct { uint32_t base; } stream_ctx_t;
+static int st_xfer(void *ctx, const uint8_t *tx, size_t n) { (void)ctx; return fpga_spi_xfer(tx, NULL, n); }
+static int st_read(void *ctx, uint32_t off, uint8_t *buf, size_t n) {
+    return psram_read(((stream_ctx_t *)ctx)->base + off, buf, (uint32_t)n) < 0 ? -1 : 0;
+}
+static void st_progress(void *ctx, uint32_t done) {
+    (void)ctx;
+    if ((done & 0x3FFFu) < SPI_XFER_MAX) watchdog_heartbeat(WD_TASK_WORKER, "spi_stream");
+}
+
+void handle_spi_stream(int conn_id, const char *json) {
+    if (!session_or_error(conn_id)) return;
+    uint32_t len = 0;
+    if (!get_u32(json, "len", &len)) { send_error(conn_id, "missing or invalid len"); return; }
+    uint8_t head[SPI_STREAM_HEAD_MAX];
+    size_t head_len = 0;
+    if (has_key(json, "head")) {
+        char b64[B64URL_ENCODED_LEN(SPI_STREAM_HEAD_MAX) + 8];
+        if (bp_json_get_fit(json, "head", b64, sizeof(b64)) != 1 ||
+            b64url_decode(b64, head, sizeof(head), &head_len) != 0) {
+            send_error(conn_id, "head must be up to 64 bytes of base64url"); return;
+        }
+    }
+    char csm[12];
+    if (!bp_json_get(json, "cs", csm, sizeof(csm))) strcpy(csm, "release");
+    bool hold = strcmp(csm, "hold") == 0;
+    if (!hold && strcmp(csm, "release") != 0) { send_error(conn_id, "cs must be release or hold"); return; }
+    uint32_t base = 0, staged = 0;
+    if (len > 0 && !command_handler_psram_stage(&base, &staged)) {
+        send_error(conn_id, "nothing staged: load_bin with \"psram\":true first"); return;
+    }
+    if (len > staged) { send_error(conn_id, "len is more than the staged upload"); return; }
+    if (len == 0 && head_len == 0) { send_error(conn_id, "nothing to send"); return; }
+    if (!command_handler_acquire_adc(conn_id)) { send_error(conn_id, "busy"); return; }
+
+    stream_ctx_t ctx = { base };
+    spi_stream_io_t io = { &ctx, io_cs, st_xfer, st_read, st_progress, SPI_XFER_MAX };
+    if (s_cs_held) { fpga_spi_cs(false); s_cs_held = false; }   /* a frame of its own */
+    uint64_t t0 = time_us_64();
+    psram_bus_acquire();
+    uint32_t sent = 0;
+    int rc = spi_stream_run(&io, head, head_len, len, hold, &sent);
+    psram_bus_release();
+    command_handler_release_adc(conn_id);
+    s_cs_held = (rc == SPI_STREAM_OK) && hold;
+    if (!fpga_spi_armed()) { spi_session_end(); send_error(conn_id, "the SPI engine was reset: spi_start again"); return; }
+    if (rc != SPI_STREAM_OK) {
+        char m[96];
+        snprintf(m, sizeof(m), "spi_stream: %s after %lu bytes", spi_stream_strerror(rc), (unsigned long)sent);
+        send_error(conn_id, m);
+        return;
+    }
+    char p[96];
+    snprintf(p, sizeof(p), "{\"sent\":%lu,\"ms\":%lu,\"cs\":\"%s\"}", (unsigned long)sent,
+             (unsigned long)((time_us_64() - t0) / 1000u), s_cs_held ? "held" : "released");
     send_ok_str(conn_id, p);
 }

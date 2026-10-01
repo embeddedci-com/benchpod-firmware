@@ -182,6 +182,9 @@ static size_t replay_len = 0;
    bytes expected, bytes received, and the arming conn (only its raw bytes count). */
 static uint8_t *load_bin_dst   = NULL;
 static size_t   load_bin_total = 0;
+/* Bytes of the last completed PSRAM `load_bin` (at signal_engine_dac_psram_base()), for spi_stream;
+   0 = nothing staged (cleared when a new upload starts). */
+static uint32_t psram_stage_len = 0;
 static size_t   load_bin_have  = 0;
 static int      load_bin_conn  = -1;
 
@@ -330,6 +333,14 @@ bool command_handler_acquire_adc(int conn_id) {
     return !heavy_in_flight() && heavy_try_claim(conn_id);
 }
 void command_handler_release_adc(int conn_id) { heavy_release(conn_id); }
+
+/* The PSRAM region the last `load_bin` with "psram" staged (spi_stream sends it).  False when none. */
+bool command_handler_psram_stage(uint32_t *base, uint32_t *len) {
+    if (psram_stage_len == 0) return false;
+    *base = signal_engine_dac_psram_base();
+    *len  = psram_stage_len;
+    return true;
+}
 
 /* Clear all PROTO_LOAD raw-upload bookkeeping (does not touch the heavy gate or
    proto[]).  Used on completion, on the owning conn closing, and on timeout. */
@@ -1791,6 +1802,7 @@ static void handle_load_bin(int conn_id, const char *json) {
     }
     if (!heavy_begin(conn_id)) return;
 
+    psram_stage_len = 0;
     if (to_psram) {
         /* Take the shared quad bus so the STM32 can write PSRAM directly over XSPI;
            released at completion (load_bin_clear) so the iCE40 can read it back for
@@ -2291,6 +2303,7 @@ static void handle_status(int conn_id) {
     if (fcaps.gpio_read)      bp_emit_raw(&e, ",\"gpio_read\"");
     if (fcaps.capture_trigger) bp_emit_raw(&e, ",\"capture_trigger\"");
     if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_master\"");
+    if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_stream\"");   /* firmware: PSRAM upload -> one CS frame */
     /* rev3 hardware features (what the BOARD has, decided by board_rev). */
     if (nrst_ctrl_supported()) bp_emit_raw(&e, ",\"nrst_pin\"");
     if (usb_cc_supported())    bp_emit_raw(&e, ",\"usb_cc\"");
@@ -3643,6 +3656,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "spi_stop")      == 0) handle_spi_stop(conn_id);
     else if (strcmp(cmd, "spi_xfer")      == 0) handle_spi_xfer(conn_id, buf);
     else if (strcmp(cmd, "spi_flash")     == 0) handle_spi_flash(conn_id, buf);
+    else if (strcmp(cmd, "spi_stream")    == 0) handle_spi_stream(conn_id, buf);
     else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id);
     else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id);
     else if (strcmp(cmd, "identity_pop")    == 0) handle_identity_pop(conn_id, buf);
@@ -3804,6 +3818,7 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
             if (load_bin_have >= load_bin_total) {
                 replay_len      = load_bin_total / 2u;   /* 16-bit samples */
                 replay_in_psram = load_bin_psram;        /* trace lives in PSRAM => deep replay */
+                if (load_bin_psram) psram_stage_len = (uint32_t)load_bin_total;
                 proto[conn_id]  = PROTO_JSON;   /* heavy stays claimed for `replay` */
                 char payload[32];
                 snprintf(payload, sizeof(payload), "{\"total\":%u}",

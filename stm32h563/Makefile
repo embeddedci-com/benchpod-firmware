@@ -128,6 +128,7 @@ C_SOURCES := \
   src/psram.c \
   src/ice40_flash.c \
   src/spi_flash.c \
+  src/spi_stream.c \
   src/command_handler_spi.c \
   src/esp_rom_flash.c \
   src/dfu_boot.c \

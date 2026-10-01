@@ -1785,7 +1785,7 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 ## SPI master (flash an SPI device)
 
-Gateware v45+ (`status` caps `spi_master`).  The iCE40 engine that runs SWD has a second job:
+Gateware v45+ (`status` caps `spi_master`; `spi_stream` with it on firmware that has the command).  The iCE40 engine that runs SWD has a second job:
 an SPI master on any four LA pins, used to read and program SPI NOR flash (W25Q, MX25, GD25,
 IS25 and other 25-series parts) or to talk to any other SPI device.  One engine, so an SPI
 session and an SWD session (`dap_start`) exclude each other.
@@ -1829,6 +1829,36 @@ CS is held.
 `tx` is 1..768 bytes, base64url.  The reply carries the bytes clocked in at the same positions:
 `{"rx":"_-9AFw","cs":"released"}`.  CS is asserted before the first byte; `"cs":"hold"` keeps
 it asserted for the next `spi_xfer`, so one transaction can span several commands.
+
+### `spi_stream` — send a staged upload in one CS frame
+
+For data too big for `spi_xfer`, such as an FPGA bitstream into its slave-SPI configuration port.
+Stage the bytes in PSRAM first with `load_bin` and `"psram":true` (a stream connection), then:
+
+```json
+{"cmd":"spi_stream","len":262144,"head":"egAAAA","cs":"release"}
+```
+
+| Field | Meaning |
+|---|---|
+| `len` | bytes of the staged upload to send (0 .. its size; 0 sends only `head`) |
+| `head` | optional, up to 64 bytes (base64url) sent first in the same frame, e.g. a command opcode |
+| `cs` | `release` (default) or `hold` after the last byte |
+
+CS is asserted once and stays asserted for the whole stream; between 512-byte chunks SCK pauses
+(about 3 ms per chunk, so about 1.5 s for 256 KB at 6 MHz).  A held CS from an earlier
+`spi_xfer` is released first, so the stream is a frame of its own.  The pod holds the PSRAM bus
+and the heavy-operation gate while it runs: send it on the connection that did the upload, or
+after that connection closed.  Reply: `{"sent":262144,"ms":1450,"cs":"released"}`.
+
+Errors: `nothing staged: load_bin with "psram":true first`, `len is more than the staged upload`,
+`busy` (a capture or another connection owns the gate), `spi_stream: SPI transfer failed after N
+bytes`.
+
+Example, an ECP5 (Lattice sysCONFIG slave SPI, write-only), with PROGRAMN and DONE on two more
+LA pins as `gpio`: pulse PROGRAMN low, wait 50 ms, `spi_xfer` `xgAAAA` (ISC_ENABLE 0xC6 + 3 zero
+bytes), `spi_stream` with `head` `egAAAA` (LSC_BITSTREAM_BURST 0x7A + 3 zero bytes) and `len` the
+bitstream size, `spi_xfer` `JgAAAA` (ISC_DISABLE 0x26), then read DONE.
 
 ### `spi_flash` — SPI NOR flash operations
 

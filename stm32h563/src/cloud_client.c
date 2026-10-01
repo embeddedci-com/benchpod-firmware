@@ -661,7 +661,7 @@ static bool cl_send_capabilities(void) {
         "\"dac_deep_replay\":%s,\"dac_replay_max_samples\":%lu,"
         "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
         "\"dac_cotrig\":%s,"
-        "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,"
+        "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
         "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
         "\"capture_b64\":true,\"dac_limits\":true,"
@@ -675,6 +675,7 @@ static bool cl_send_capabilities(void) {
         loop_map ? "true" : "false", cotrig ? "true" : "false",
         caps.gpio_read ? "true" : "false", caps.capture_trigger ? "true" : "false",
         caps.spi_master ? "true" : "false",
+        caps.spi_master ? "true" : "false",        /* spi_stream: firmware, on the SPI master */
         nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
         BOARD_NAME);
     if (n <= 0 || (size_t)n >= sizeof(f)) return false;
