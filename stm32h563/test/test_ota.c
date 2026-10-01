@@ -119,7 +119,7 @@ static void test_commit_reverifies_the_staged_image(void) {
     ota_abort();
 }
 
-/* The image may fill flash up to 0x081EC000 and no further: above it are the DAC limits, the
+/* The image may fill flash up to 0x081E8000 and no further: above it are the ADC amp zero, the DAC limits, the
    config slots and the device identity key, which ota_commit would erase. */
 static void test_size_limit_protects_the_high_sectors(void) {
     char hex[65];
@@ -127,9 +127,9 @@ static void test_size_limit_protects_the_high_sectors(void) {
     sha256_hex(one, 1, hex);
     mock_ota_psram_reset();
     ota_abort();
-    CHECK(ota_begin(0x1EC000u, hex) == 0, "an image ending exactly at 0x081EC000 was refused: %s", ota_error());
+    CHECK(ota_begin(0x1E8000u, hex) == 0, "an image ending exactly at 0x081E8000 was refused: %s", ota_error());
     ota_abort();
-    CHECK(ota_begin(0x1EC001u, hex) != 0, "an image one byte into the DAC limits sectors was accepted");
+    CHECK(ota_begin(0x1E8001u, hex) != 0, "an image one byte into the ADC amp zero sectors was accepted");
     CHECK(strstr(ota_error(), "size") != NULL, "error should name the size: %s", ota_error());
     ota_abort();
     CHECK(ota_begin(0x200000u, hex) != 0, "a full-flash image was accepted");

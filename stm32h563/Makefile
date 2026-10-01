@@ -122,6 +122,7 @@ C_SOURCES := \
   src/config_store.c \
   src/dac_limits.c \
   src/dac_limits_hw.c \
+  src/adc_zero.c \
   src/flash_compat.c \
   src/rng.c \
   src/hw_lock.c \
