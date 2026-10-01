@@ -149,6 +149,7 @@ Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `
 | `analog_path` | Apply a named analog path (flips mux + relays) | object | no |
 | `dac_out` | Route a DAC output path + set a calibrated voltage | object | no |
 | `adc_read` | Route an ADC source + return a calibrated reading (mV) | object | no |
+| `adc_zero` | Measure, read or clear the per-pod zero of the `amp` input (J8) | object | no |
 | `dac_mux` | Low-level DAC output mux (U55) — prefer `dac_out` | object | no |
 | `cal_switch` | Low-level calibration relays (U58) — prefer `analog_path` | object | no |
 | `test` | Pico-side pattern (no FPGA) | array of uint8 | yes |
@@ -805,6 +806,73 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
    over the 16-sample burst, limit 1024) — stop the DAC (dac_stop) or let the node settle"}
 ```
 
+On `amp` the reply also has `zero_mv`: the stored zero that was subtracted from `mv`
+(see [`adc_zero`](#adc_zero--zero-the-amp-input-j8)). It is 0 when no zero is set. `count`
+is always raw.
+
+```json
+{"cmd":"adc_read","source":"amp"}
+→ {"status":"ok","data":{"source":"amp","mv":3985,"count":61562,"span":6,"zero_mv":10}}
+```
+
+#### `adc_zero` — zero the `amp` input (J8)
+
+`amp` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
+pin 2 is ground. The pod reads the voltage across that resistor, so 4 mA is 996 mV and
+20 mA is 4980 mV.
+
+`amp` uses a calibration that is the same on every pod, and each pod has its own offset
+of a few mV. `adc_zero` measures that offset and stores it on the pod. Every later
+`adc_read` on `amp` subtracts it. `ext`, `cal1` and `cal2` are not changed.
+
+Disconnect J8 first. With nothing connected the terminal is at 0 V, so the pod needs no
+reference.
+
+| Request | What it does |
+|---|---|
+| `{"cmd":"adc_zero","source":"amp"}` | Measure with J8 disconnected, store the zero, return it |
+| `{"cmd":"adc_zero"}` | Return the stored zero |
+| `{"cmd":"adc_zero","clear":true}` | Remove the stored zero |
+
+```json
+{"cmd":"adc_zero","source":"amp"}
+→ {"status":"ok","data":{"source":"amp","set":true,"zero_mv":10,"zero_uv":10418,
+   "count":65529,"span":9,"samples":1024}}
+
+{"cmd":"adc_zero"}
+→ {"status":"ok","data":{"source":"amp","set":true,"zero_mv":10,"zero_uv":10418}}
+
+{"cmd":"adc_zero","clear":true}
+→ {"status":"ok","data":{"source":"amp","set":false,"zero_mv":0,"zero_uv":0}}
+```
+
+| Field | Meaning |
+|---|---|
+| `set` | `true` when a zero is stored |
+| `zero_mv` | The zero in mV, rounded. This is what `adc_read` reports |
+| `zero_uv` | The zero in µV, as stored |
+| `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (measure only) |
+| `samples` | Samples averaged (measure only) |
+
+The measurement averages 1024 samples over 100 ms, a whole number of 50 Hz and 60 Hz
+cycles. It takes about 150 ms and leaves the `amp` path routed.
+
+A zero outside ±50 mV is refused, because it means something is driving J8. The old zero
+stays in place.
+
+```json
+{"cmd":"adc_zero","source":"amp"}   // a 4 mA loop is still connected
+→ {"status":"error","message":"adc_zero: amp reads 996 mV, a zero must be within +/-50 mV.
+   Something is driving J8. Disconnect it and try again"}
+```
+
+The zero is stored in flash. It survives a reboot and a firmware update. Only the offset
+is corrected, the gain is not. `status.caps` contains `"adc_zero"` when the firmware
+supports it.
+
+On the USB console, `adc-zero` shows the zero, `adc-zero run` measures and stores it, and
+`adc-zero clear` removes it. `adc amp` applies it.
+
 #### Loopback / self-cal examples
 
 ```json
@@ -905,7 +973,7 @@ Returns current firmware version, WiFi connection state, and IP address. No para
 | `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the three features that differ between the two boards — the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if the strap was not measured — e.g. a v2 pod, where the pad is not connected). Diagnostic only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
-| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64). The last two depend on the **running** gateware image, so they can appear and disappear across an image swap. |
+| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64); `"adc_zero"` = [`adc_zero`](#adc_zero--zero-the-amp-input-j8). `"gpio_read"` and `"capture_trigger"` depend on the **running** gateware image, so they can appear and disappear across an image swap. |
 
 #### `wifi` state values
 
