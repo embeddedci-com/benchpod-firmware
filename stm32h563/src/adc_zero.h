@@ -15,7 +15,7 @@
  *
  * J8 pin 1 goes through R81 (249 ohm) to pod GND, so with nothing connected the terminal is
  * exactly 0 V and the pod can measure its own zero with no reference. `adc_zero` does that:
- * a long average with J8 open, stored here, subtracted from every later `amp` reading.
+ * an average of many adc_read bursts with J8 open, stored here, subtracted from every later `amp` reading.
  *
  * Only the offset. Gain stays the shared fit. ext, cal1 and cal2 are not touched.
  *
@@ -32,10 +32,15 @@
 /* A real zero is a few mV. More than this means something is driving the terminal. */
 #define ADC_ZERO_MAX_UV   50000
 
-/* The zero measurement: 1024 samples over 100 ms, which is a whole number of 50 Hz and 60 Hz
-   cycles, so mains pickup averages out. adc_read's 16-sample burst spans 40 us. */
-#define ADC_ZERO_SAMPLES  1024u
-#define ADC_ZERO_RATE_HZ  10240.0f
+/* The zero measurement: 32 of the 16-sample bursts adc_read takes, spread over about 100 ms.
+   It has to be the SAME burst, not one long slow capture: the front end reads lower at lower
+   sample rates (measured on pod .220, J8 open: count 65535.4 at 400 kS/s, 65531.6 at
+   100 kS/s, 65530.6 at 10 kS/s, about 5 mV apart), and the first samples of a burst sit
+   about 1 count under the rest. A zero taken any other way is off by that much. */
+#define ADC_ZERO_BURST    16u
+#define ADC_ZERO_BURSTS   32u
+#define ADC_ZERO_SAMPLES  (ADC_ZERO_BURST * ADC_ZERO_BURSTS)
+#define ADC_ZERO_GAP_MS   3u
 
 typedef struct {
     uint8_t  amp_set;       /* 1 = amp_uv holds a measured zero */
@@ -63,7 +68,7 @@ int adc_zero_clear(void);
 float adc_zero_amp_apply(float volts);
 
 /* Hardware (adc_zero_hw.c, not in the host tests): route `amp`, let it settle and take the
-   long average, UNCORRECTED. 0 = *out filled (check out->valid), -1 = route failed,
+   bursts, UNCORRECTED. 0 = *out filled (check out->valid), -1 = route failed,
    -2 = capture failed. Needs the iCE40 up; the caller owns the ADC. */
 int adc_zero_measure_amp(adc_reading_t *out);
 

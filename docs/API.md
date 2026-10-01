@@ -837,7 +837,7 @@ reference.
 ```json
 {"cmd":"adc_zero","source":"amp"}
 → {"status":"ok","data":{"source":"amp","set":true,"zero_mv":10,"zero_uv":10418,
-   "count":65529,"span":9,"samples":1024}}
+   "count":65529,"span":9,"samples":512}}
 
 {"cmd":"adc_zero"}
 → {"status":"ok","data":{"source":"amp","set":true,"zero_mv":10,"zero_uv":10418}}
@@ -854,8 +854,8 @@ reference.
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (measure only) |
 | `samples` | Samples averaged (measure only) |
 
-The measurement averages 1024 samples over 100 ms, a whole number of 50 Hz and 60 Hz
-cycles. It takes about 150 ms and leaves the `amp` path routed.
+The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
+takes about 0.3 s and leaves the `amp` path routed.
 
 A zero outside ±50 mV is refused, because it means something is driving J8. The old zero
 stays in place.

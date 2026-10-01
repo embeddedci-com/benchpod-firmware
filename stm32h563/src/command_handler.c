@@ -3261,7 +3261,7 @@ static void adc_zero_reply(int conn_id, const adc_reading_t *rd) {
      {"cmd":"adc_zero"}                  -> the stored zero
      {"cmd":"adc_zero","source":"amp"}   -> measure with J8 DISCONNECTED, store, return it
      {"cmd":"adc_zero","clear":true}     -> remove it
-   The measurement is a 1024-sample average over 100 ms. A reading outside +/-50 mV means
+   The measurement averages 32 adc_read bursts (512 samples). A reading outside +/-50 mV means
    something is driving J8: it is refused and the old zero stays. */
 static void handle_adc_zero(int conn_id, const char *json) {
     char v[16] = {0};
