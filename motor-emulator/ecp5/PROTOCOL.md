@@ -36,10 +36,10 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | Addr | Name | Access | Description |
 | --- | --- | --- | --- |
 | 0x00 | ID | R | 0x4D45 ("ME") |
-| 0x01 | VERSION | R | gateware version (0x0005: encoder registers, every written register reads back) |
+| 0x01 | VERSION | R | gateware version (0x0006: protection, trip recorder, battery model, logging, stack time base, EEPROM, fault injection, back-EMF shape) |
 | 0x02 | BOARD | R/W | [1:0] board id, [8] probe done, [9] probe ok (EEPROM answered). Write bit 15 = probe again |
 | 0x03 | STATUS | R | see below |
-| 0x04 | CONTROL | R/W | see below; FAULT or a watchdog trip clears PWM_EN |
+| 0x04 | CONTROL | R/W | see below; FAULT, a watchdog trip or an overcurrent trip clears PWM_EN; an overcurrent or hot-swap trip clears HSWAP_EN |
 | 0x05 | ARM | W | any value: one 100-101 µs pulse on ARM_REQ_N (sets the board fault latch) |
 | 0x06 | WD_CLEAR | W | any value: clear the SYNC watchdog trip |
 | 0x07 | SCRATCH | R/W | free, for link tests |
@@ -49,7 +49,7 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | 0x0D | MIN_ON | R/W | shortest gate pulse in clocks (default 2); shorter pulses snap to 0 or 100 % |
 | 0x10-0x14 | SINC_A..E | R | signed, sinc3 OSR 64 at 18 MHz (281.25 kSPS): phase A, B, C current, DUT battery current, bus voltage. 0 = 0 V at the modulator, ±32767 = full scale (±320 mV) |
 | 0x15 | SINC_COUNT | R | increments with every new sample set |
-| 0x18 | BRAKE_DUTY | R/W | [7:0] brake PWM duty /256 at about 20 kHz (needs CONTROL.BRAKE_EN; board 0 only) |
+| 0x18 | BRAKE_DUTY | R/W | [7:0] manual brake PWM duty /256 at about 20 kHz (needs CONTROL.BRAKE_EN; board 0 only; the energy budget applies) |
 | 0x1C | HALL | R/W | [2:0] hall levels the DUT sees (C, B, A); default 111 (used unless MODE[4]) |
 | 0x20 | MODE | R/W | [1:0] 0 = direct duties (DUTY_A-C), 1 = model at fixed speed, 2 = model with mechanics; [2] common-mode loop; [3] dead-time compensation; [4] halls from the model's angle |
 | 0x21-0x2E | model parameters | R/W | see Motor model below |
@@ -66,11 +66,19 @@ Example: write 0x4000 to DUTY_A on board 2: `20 0A 40 00`. Read STATUS from boar
 | 0x3E | ADV | R/W | back-EMF angle advance in half PWM periods, 0-7 (default 3 = 1.5 periods) |
 | 0x3F | R_SUB | R/W | resistance subtracted from the emulated phase: u_x += R_SUB x i_x >>> 15 (see Motor model) |
 | 0x40-0x48 | encoder | | see Encoder below |
+| 0x50-0x5E | protection, trip recorder | | see Protection below |
+| 0x60-0x6E | battery model | | see Battery model below |
+| 0x70-0x73 | stack time base | | see Stack time base below |
+| 0x74-0x78 | fault injection, back-EMF shape | | see Fault injection and back-EMF shape below |
+| 0x79-0x7B, 0xC0-0xFF | logging stream | | see Logging stream below |
+| 0x7C-0x7E | board EEPROM | | see Board EEPROM below |
 
-Reads: the live registers (0x00-0x04, 0x10-0x15, 0x30-0x39, 0x45-0x48) return the current value;
+Reads: the live registers (0x00-0x04, 0x10-0x15, 0x30-0x39, 0x45-0x48, 0x50, 0x59-0x5B, 0x5D,
+0x67, 0x6C-0x6E, 0x71-0x73, 0x7A, 0x7B, 0x7D, 0x7E, 0xC0-0xFF) return the current value;
 every other register returns the value last written to it, as written (a block-RAM mirror of the
 link writes, so the gateware's own clamping and masking, e.g. PWM_PERIOD[9:0], is not shown).
-Action registers (ARM, WD_CLEAR, MODEL_RESET) read back what was written.
+Action registers (ARM, WD_CLEAR, MODEL_RESET, BRK_TEST, BAT_TBL_DATA, SHAPE_DATA) read back what
+was written.
 
 Changes to period, dead time, duties and min-on take effect at the start of the next PWM period.
 In model modes the period is at least 180 clk (200 kHz): the model runs once per period, takes
@@ -178,6 +186,104 @@ checks it).
   set magnet faults there. The DUT's writes are stored and read back but change nothing: zero
   position, direction and resolution come from ENC_OFS, DIR and ENC_CPR.
 
+## Protection
+
+The gateware layer of the board's protection (`src/protect.v`), on top of the hardware latch and
+the 57 V backstop. Values are offset-corrected sinc codes: currents about 2048 / A (I_OFS_A-C),
+bus about 391 / V (VBUS_OFS).
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x50 | TRIPS | R / W | R: [2:0] overcurrent on phase A, B, C, [3] hot-swap bus limit (sticky), [4] brake inhibited by the energy budget, [5] overvoltage brake on (live). W: 1s clear bits [3:0] |
+| 0x51 | OC_LIM | R/W | phase current limit, codes; 0 = off |
+| 0x52 | OC_COUNT | R/W | samples in a row over the limit before the trip, 1-15 (281 kSPS per phase: 1 trips within about 8 µs) |
+| 0x53 | OV_ON | R/W | bus codes: the brake turns fully on above this (board 0); 0 = off |
+| 0x54 | OV_OFF | R/W | bus codes: and off again below this |
+| 0x55 | BRK_G | R/W | brake conductance for the budget: P [W] = bus^2 x BRK_G >> 24, so BRK_G = 2^24 / (391^2 x R): 11 for 10 Ω, 33 for 10 Ω ‖ 5 Ω |
+| 0x56 | BRK_PAVG | R/W | W the resistor may take on average (the bucket drains this much per µs) |
+| 0x57 | BRK_CAP | R/W | energy budget in 4096 µJ units; above it every brake (manual, overvoltage, test) is inhibited until the bucket is below half; 0 = no budget |
+| 0x58 | BRK_TEST | W | brake test pulse of this many µs (board 0) |
+| 0x59 / 0x5A | BRK_V0 / BRK_V1 | R | bus codes at the start and the end of the test pulse: R = Δt / (C x ln(V0 / V1)) with the bus capacitance known (hot-swap off) |
+| 0x5B | BRK_ENERGY | R | the budget bucket, 4096 µJ units |
+| 0x5C | HS_LIMIT | R/W | bus codes the hot-swap may run up to; 0 = the hot-swap is refused. Four bus samples in a row above it while it is on: TRIPS[3], hot-swap off |
+| 0x5D | TRIP_SRC | R / W | R: [7:0] the trip expander's inputs at the last read (P0 OC_TRIP_N, P1 DRV_NFAULT, P2 NTC_TRIP_N, P3 HS_FLT_N, P4 FAULT, P5 LATCH_Q, P6 BACKSTOP; active low except P5, P6), [8] valid, [9] expander answered at start-up, [10] I²C error. W: read the expander now |
+| 0x5E | BAT_I_OFS | R/W | DUT battery current offset (battery model) |
+
+- An overcurrent trip drops every gate at once, clears PWM_EN and HSWAP_EN, and holds SYNC low,
+  so every board in the stack trips its watchdog (100 µs). To recover: TRIPS clear, WD_CLEAR,
+  re-arm, re-enable.
+- The expander's inputs latch (PCAL6408A input latch): FAULT going low makes the gateware read
+  it, so TRIP_SRC shows the source that fired even if it has recovered. Reading clears the latch.
+- The hot-swap needs board 0, HSWAP_EN, HS_LIMIT set, no trip and no watchdog trip.
+- PV_SET (battery model) parks on any trip, a watchdog trip or FAULT.
+
+## Battery model
+
+The bus voltage a pack would show, from the measured DUT battery current (`src/battery.v`). In
+codes: current from the DUT battery channel minus BAT_I_OFS (positive = discharge; BAT_CTRL[1]
+flips it), voltages in bus codes.
+
+    every sample set (281 kSPS):  setpoint = clamp(OCV - (i x R0 >>> 15) - v_rc, VMIN, VMAX)
+    every ms:                     charge += the ms's current sum; i_ms = sum x 233 >>> 16 (mean)
+                                  v_rc += ((i_ms x R1 >>> 15) - v_rc) x ALPHA >>> 20
+                                  OCV = table at p = charge >>> (QSHIFT - 8), interpolated
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x60 | BAT_CTRL | R/W | [0] run, [1] invert the current, [2] drive PV_SET (board 0) |
+| 0x61 | BAT_QSHIFT | R/W | charge per table entry is 2^QSHIFT code-samples (1 A for 1 h = 2048 x 281250 x 3600 = 2.07e12): pick it so 64 entries cover the pack (8-47) |
+| 0x62 | BAT_R0 | R/W | series resistance: R [Ω] x 391 / 2048 x 32768 (20 mΩ = 125) |
+| 0x63 | BAT_R1 | R/W | RC-branch resistance, same units |
+| 0x64 | BAT_ALPHA | R/W | 1 ms / τ x 2^20 (τ from 16 ms to about 10 min) |
+| 0x65 / 0x66 | BAT_VMIN / BAT_VMAX | R/W | setpoint clamp, bus codes |
+| 0x67 | BAT_POS | R / W | position in the table, 1/256 entries (0 = full); a write sets the charge (state of charge) |
+| 0x68 / 0x69 | BAT_TBL_ADDR / BAT_TBL_DATA | R/W, W | OCV table, 64 entries in bus codes for the whole pack, entry 0 full; each data write moves the address on |
+| 0x6A / 0x6B | PV_OFS / PV_GAIN | R/W | PV_SET duty = clamp(PV_OFS + (setpoint x PV_GAIN >>> 15), 0, 65535): BenchPod's calibration of the PV board's (inverted) setpoint input |
+| 0x6C | BAT_SET | R | the setpoint, bus codes: BenchPod's DAC path reads this (default) |
+| 0x6D | BAT_I | R | mean current over the last ms |
+| 0x6E | BAT_OCV | R | open-circuit voltage at the position |
+
+PV_SET is a first-order sigma-delta (fraction of time high = duty / 65536) into the board's DNP
+open-drain buffer and RC filter; high is released (the divider's park level).
+
+## Stack time base
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x70 | SYNC_CTRL | R/W | [0] lock the PWM period (the model's tick) to SYNC: each SYNC pulse measures the PWM phase and the next periods are stretched or shrunk by one clk until it is 0. Only with a period that divides 36000 clk (1 ms), e.g. 180 |
+| 0x71 | TIME_MS | R | ms: SYNC pulses while SYNC is seen, the local ms otherwise. A read latches TIME_SUB, so read both in one burst |
+| 0x72 | TIME_SUB | R | clk since that ms began (0-35999) |
+| 0x73 | SYNC_ERR | R | PWM phase at the last SYNC pulse, clk (signed; 0 when locked) |
+
+## Fault injection and back-EMF shape
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x74 | HALL_FAULT | R/W | [2:0] hold these hall lines (C, B, A) at [5:3]; [8:6] invert these lines |
+| 0x75 | ENC_FAULT | R/W | [0] angle frozen (SPI and ABZ hold: a stuck sensor), [1] ABZ outputs dead (low), [2] MISO stuck low |
+| 0x76 | NOISE_AMP | R/W | uniform noise of ± NOISE_AMP (Q16 of the full duty, i.e. of the bus) on each model duty, new every clk; 0 = off |
+| 0x77 / 0x78 | SHAPE_ADDR / SHAPE_DATA | R/W, W | back-EMF shape, 1024 Q15 entries per electrical revolution (a sine at power-up); each data write moves the address on. The model uses it for the back-EMF and the torque alike, so any shape (trapezoidal, harmonics) keeps the power balance |
+
+## Logging stream
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x79 | LOG_CTRL | R/W | [4:0] channels (phase A, B, C, DUT battery, bus), [5] OSR 256 (sinc3, 70 kSPS per channel, 14.3 ENOB) instead of OSR 64 (281 kSPS), [6] on, [7] a sequence word before each set, [15] clear (write-only action) |
+| 0x7A | LOG_LEVEL | R | words waiting (FIFO of 2048) |
+| 0x7B | LOG_DROPS | R | sets dropped because the FIFO was full (a whole set at a time: the stream stays aligned) |
+| 0xC0-0xFF | LOG_FIFO | R | each word read pops the FIFO: read a burst from 0xC0 (up to 64 words). A word counts as read only when its last bit is out, so a burst may end anywhere |
+
+The link carries about 360 k words per second at 6 MHz in bursts of 64: all five channels at
+OSR 256 (350 k words/s) only just fit; pick the channels.
+
+## Board EEPROM
+
+| Addr | Name | Access | Description |
+| --- | --- | --- | --- |
+| 0x7C | EE_ADDR | R/W | byte address in the board's M24C02 (256 bytes) |
+| 0x7D | EE_DATA | R / W | W: write this byte at EE_ADDR (WC low only during the write; the gateware polls the 5 ms write cycle). R: the byte the last read returned |
+| 0x7E | EE_CMD | R / W | W: [0] read EE_ADDR into EE_DATA. R: [0] busy, [1] error (no ACK) |
+
 ## Bring-up sequence
 
 1. Configure (slave SPI, every board at once; see the design doc's rev 0.5 section): pulse
@@ -189,4 +295,6 @@ checks it).
 3. Set PWM_PERIOD, DEADTIME, duties (0x8000 = all legs at half the bus: no phase voltage).
 4. Write ARM, check STATUS.LATCH_Q, then set CONTROL.PWM_EN. Arm before the DUT starts switching:
    waking the MP6539 charges its bootstraps with brief low-side pulses.
-5. After any trip (FAULT, watchdog), PWM_EN is clear: re-arm and re-enable explicitly.
+5. Board 0: set OC_LIM, OV_ON / OV_OFF, the brake budget and HS_LIMIT for the DUT before HSWAP_EN.
+6. After any trip (FAULT, watchdog, overcurrent), PWM_EN is clear: read TRIPS and TRIP_SRC, clear
+   TRIPS and the watchdog, re-arm and re-enable explicitly.

@@ -50,6 +50,9 @@ module encoder (
     input  wire [15:0] pw_data,
     // DUT side (synchronised here)
     input  wire        cs_in, sck_in, mosi_in,
+    // fault injection: [0] angle frozen (a stuck sensor: SPI and ABZ hold), [1] ABZ outputs dead
+    // (low), [2] MISO stuck low
+    input  wire [2:0]  fault,
     output reg         enc_a, enc_b, enc_z,
     output wire        enc_miso,        // straight from the shift register's flop
     // readback
@@ -131,7 +134,7 @@ module encoder (
                 dcnt <= dcnt - 5'd1;
                 if (dcnt == 5'd0) es <= 4'd2;
             end
-            4'd2: begin angle <= (ctrl[4] ? ~dnum[15:0] : dnum[15:0]) + ofs + {15'd0, ctrl[4]}; es <= 4'd3; end
+            4'd2: begin if (!fault[0]) angle <= (ctrl[4] ? ~dnum[15:0] : dnum[15:0]) + ofs + {15'd0, ctrl[4]}; es <= 4'd3; end
             4'd3: begin gap <= angle - g; es <= 4'd5; end
             4'd5: begin up <= ~gap[15]; dd <= (steps > {5'd0, period}) ? period : steps[9:0]; es <= 4'd6; end
             default: begin dmt <= $signed({1'b0, dd}) - $signed({1'b0, period}); ld <= 1'b1; es <= 4'd0; end
@@ -164,9 +167,9 @@ module encoder (
             else if (r_next[16] == up_r) count <= count + (up_r ? 16'd1 : 16'hFFFF);
         end else
             e <= e + $signed({1'b0, dd_r});
-        enc_a <= ctrl[0] & (count[1] ^ count[0]);
-        enc_b <= ctrl[0] & count[1];
-        enc_z <= ctrl[0] & (count == 16'd0);
+        enc_a <= ctrl[0] & ~fault[1] & (count[1] ^ count[0]);
+        enc_b <= ctrl[0] & ~fault[1] & count[1];
+        enc_z <= ctrl[0] & ~fault[1] & (count == 16'd0);
     end
 
     // ------------------------------------------------------------------ SPI slave
@@ -264,7 +267,7 @@ module encoder (
             endcase
         end
     end
-    assign enc_miso = osr[15];
+    assign enc_miso = osr[15] & ~fault[2];
     assign status = {frames, 5'd0, err};
 
     // ------------------------------------------------------------------ BenchPod side

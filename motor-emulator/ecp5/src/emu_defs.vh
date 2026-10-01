@@ -9,7 +9,7 @@
 
 `define EMU_CLK_HZ        36000000
 `define EMU_ID            16'h4D45      // "ME": read back at register 0x00
-`define EMU_VERSION       16'h0005      // gateware version, register 0x01
+`define EMU_VERSION       16'h0006      // gateware version, register 0x01
 
 // Register map (16-bit registers, see PROTOCOL.md)
 `define R_ID              8'h00
@@ -79,6 +79,58 @@
 `define R_ENC_ANGLE       8'h46         // R: the angle the DUT sees
 `define R_ENC_COUNT       8'h47         // R: ABZ count
 `define R_ENC_STATUS      8'h48         // R: [15:8] SPI frames seen, [2:0] AS504x error flags
+
+// protection (protect.v), trip recorder (i2c_ctl.v)
+`define R_TRIPS           8'h50         // R: [2:0] overcurrent A/B/C, [3] hot-swap bus limit, [4] brake inhibited, [5] OV brake on; W: 1s clear [3:0]
+`define R_OC_LIM          8'h51         // phase current limit, codes (0 = off)
+`define R_OC_COUNT        8'h52         // samples in a row over the limit before the trip (1-15)
+`define R_OV_ON           8'h53         // bus codes: brake on above (0 = off)
+`define R_OV_OFF          8'h54         // bus codes: brake off below
+`define R_BRK_G           8'h55         // brake conductance: W = bus^2 x BRK_G >> 24
+`define R_BRK_PAVG        8'h56         // W the resistor may take on average
+`define R_BRK_CAP         8'h57         // energy budget, 4096 uJ units (0 = no budget)
+`define R_BRK_TEST        8'h58         // W: brake test pulse, us
+`define R_BRK_V0          8'h59         // R: bus at the test start
+`define R_BRK_V1          8'h5A         // R: bus at the test end
+`define R_BRK_ENERGY      8'h5B         // R: budget bucket, 4096 uJ units
+`define R_HS_LIMIT        8'h5C         // bus codes the hot-swap may run up to (0 = hot-swap refused)
+`define R_TRIP_SRC        8'h5D         // R: [7:0] expander inputs at the last read, [8] valid, [9] expander ok, [10] I2C error; W: read now
+`define R_BAT_I_OFS       8'h5E         // DUT battery current offset, codes
+
+// battery model (battery.v)
+`define R_BAT_CTRL        8'h60         // [0] run, [1] invert the current, [2] drive PV_SET
+`define R_BAT_QSHIFT      8'h61
+`define R_BAT_R0          8'h62
+`define R_BAT_R1          8'h63
+`define R_BAT_ALPHA       8'h64
+`define R_BAT_VMIN        8'h65
+`define R_BAT_VMAX        8'h66
+`define R_BAT_POS         8'h67         // R: position in the OCV table (1/256 entries); W: set it
+`define R_BAT_TBL_ADDR    8'h68
+`define R_BAT_TBL_DATA    8'h69         // W: table[BAT_TBL_ADDR], then the address increments
+`define R_PV_OFS          8'h6A
+`define R_PV_GAIN         8'h6B
+`define R_BAT_SET         8'h6C         // R: the setpoint, bus codes
+`define R_BAT_I           8'h6D         // R: mean current over the last ms
+`define R_BAT_OCV         8'h6E         // R: open-circuit voltage at the position
+
+// stack time base, fault injection, back-EMF shape, logging, EEPROM
+`define R_SYNC_CTRL       8'h70         // [0] lock the PWM period to SYNC
+`define R_TIME_MS         8'h71         // R: ms (SYNC pulses when SYNC is seen); a read latches TIME_SUB
+`define R_TIME_SUB        8'h72         // R: clk since that ms began
+`define R_SYNC_ERR        8'h73         // R: PWM phase at the last SYNC pulse, clk (signed)
+`define R_HALL_FAULT      8'h74         // [2:0] stuck mask (C,B,A), [5:3] stuck levels, [8:6] invert
+`define R_ENC_FAULT       8'h75         // [0] angle frozen, [1] ABZ dead, [2] MISO stuck low
+`define R_NOISE_AMP       8'h76         // model duty noise, Q16 of the full duty (0 = off)
+`define R_SHAPE_ADDR      8'h77
+`define R_SHAPE_DATA      8'h78         // W: shape[SHAPE_ADDR], then the address increments
+`define R_LOG_CTRL        8'h79         // [4:0] channels, [5] OSR 256, [6] on, [7] sequence word, [15] clear
+`define R_LOG_LEVEL       8'h7A         // R: words waiting
+`define R_LOG_DROPS       8'h7B         // R: sets dropped (FIFO full)
+`define R_EE_ADDR         8'h7C
+`define R_EE_DATA         8'h7D         // W: write the byte at EE_ADDR; R: the last byte read
+`define R_EE_CMD          8'h7E         // W: [0] read EE_ADDR into EE_DATA; R: [0] busy, [1] error
+`define R_LOG_FIFO        8'hC0         // 0xC0-0xFF: each word read pops the log FIFO
 
 // R_CONTROL bits
 `define C_PWM_EN          0

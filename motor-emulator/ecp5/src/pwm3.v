@@ -33,7 +33,12 @@ module pwm3 (
     output reg  [2:0]  hs,           // {C, B, A}
     output reg  [2:0]  ls,
     output reg         period_start, // strobe on the first clk of each period
-    output reg         period_mid    // strobe at the centre of each period (sampling point)
+    output reg         period_mid,   // strobe at the centre of each period (sampling point)
+    // phase lock (stack SYNC): one-clk requests, each moves the period phase by one clk once:
+    // stretch holds the last count one more clk, shrink skips count 1 of the next period
+    input  wire        stretch,
+    input  wire        shrink,
+    output wire [9:0]  phase         // the period counter
 );
     reg [9:0] per;          // period in use
     reg [5:0] dt;
@@ -114,13 +119,21 @@ module pwm3 (
         end
     end
 
+    assign phase = cnt;
+    reg pend_st, pend_sh, held;
     always @(posedge clk) begin
         period_start <= 1'b0;
         period_mid   <= 1'b0;
+        if (stretch) pend_st <= 1'b1;
+        if (shrink)  pend_sh <= 1'b1;
         if (rst) begin
+            pend_st <= 1'b0; pend_sh <= 1'b0; held <= 1'b0;
             cnt <= 10'd0; per <= 10'd180; dt <= 6'd0;
             st_a <= 10'd0; en_a <= 10'd0; st_b <= 10'd0; en_b <= 10'd0; st_c <= 10'd0; en_c <= 10'd0;
+        end else if (wrap && pend_st && !held) begin
+            held <= 1'b1; pend_st <= 1'b0;           // one more clk at the end of this period
         end else if (wrap || cnt >= per) begin
+            held <= 1'b0;
             cnt <= 10'd0;
             period_start <= 1'b1;
             if (wrap) begin                          // the prep ran for this wrap
@@ -128,7 +141,8 @@ module pwm3 (
                 st_a <= nst_a; en_a <= nen_a; st_b <= nst_b; en_b <= nen_b; st_c <= nst_c; en_c <= nen_c;
             end
         end else begin
-            cnt <= cnt + 10'd1;
+            if (cnt == 10'd1 && pend_sh) begin cnt <= 10'd3; pend_sh <= 1'b0; end
+            else cnt <= cnt + 10'd1;
             if (cnt == half_m1) period_mid <= 1'b1;
         end
     end

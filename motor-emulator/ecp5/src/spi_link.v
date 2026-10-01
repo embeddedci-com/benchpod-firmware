@@ -38,7 +38,14 @@ module spi_link (
     output reg  [7:0]  addr,        // current register (read address; write address with wr_en)
     input  wire [15:0] rd_data,     // read of `addr`, pipelined in the regfile (settled within a byte)
     output reg         wr_en,       // one-clk write strobe
-    output reg  [15:0] wr_data
+    output reg  [15:0] wr_data,
+    // read progress (for registers that act on reads, e.g. the log FIFO): `rd_take` when a word is
+    // captured (`rd_addr` is that word's address), `rd_done` when its last bit is out, `cs_end`
+    // when the transaction ends
+    output reg         rd_take,
+    output reg  [7:0]  rd_addr,
+    output reg         rd_done,
+    output reg         cs_end
 );
 
     // ---- synchronisers: sck and mosi go through the same depth so they stay aligned ----
@@ -73,8 +80,16 @@ module spi_link (
     wire [7:0] rx_byte = {rx_sr, mosi_s[1]};
     assign miso = tx_sr[7];
 
+    reg cs_was;
+    always @(posedge clk) begin
+        cs_was <= cs_active & ~rst;
+        cs_end <= cs_was & ~cs_active;
+    end
+
     always @(posedge clk) begin
         wr_en <= 1'b0;
+        rd_take <= 1'b0;
+        rd_done <= 1'b0;
         if (rst || !cs_active) begin
             phase     <= PH_CMD;
             bit_cnt   <= 3'd0;
@@ -88,7 +103,7 @@ module spi_link (
                 case (phase)
                     // capture the whole word, then move on: the next word's address is then
                     // set a whole byte before its data is needed (the regfile read is pipelined)
-                    PH_RHI: begin tx_sr <= rd_data[15:8]; rd_latch <= rd_data; addr <= addr + 8'd1; end
+                    PH_RHI: begin tx_sr <= rd_data[15:8]; rd_latch <= rd_data; addr <= addr + 8'd1; rd_take <= 1'b1; rd_addr <= addr; end
                     PH_RLO:       tx_sr <= rd_latch[7:0];
                     default:      tx_sr <= 8'h00;
                 endcase
@@ -126,7 +141,7 @@ module spi_link (
                         end
                         PH_RDUMMY: phase <= PH_RHI;
                         PH_RHI:    phase <= PH_RLO;
-                        PH_RLO:    phase <= PH_RHI;
+                        PH_RLO:    begin phase <= PH_RHI; rd_done <= 1'b1; end
                         default:   phase <= PH_IGNORE;
                     endcase
                 end

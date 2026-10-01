@@ -13,6 +13,15 @@
 //  9  motor model at fixed speed over the link: ticks, back-EMF amplitude, halls from the model
 // 10  encoder over the link: ABZ moves with the model, and an AS5047P read on the encoder pins
 //     returns ENC_ANGLE
+// 11  protection: overcurrent trip on phase A (stops the bridge, holds SYNC low for the stack),
+//     the bus overvoltage brake, the hot-swap interlock (refused without a limit, trips over it)
+// 12  trip recorder: OC_TRIP_N pulses with FAULT; the expander is read on FAULT and keeps the pulse
+// 13  EEPROM byte write (WC low only during it) and read back over the link
+// 14  battery model: OCV table and parameters over the link, BAT_SET follows, PV_SET switches
+// 15  logging stream: phase A + bus at OSR 64 with sequence words, burst reads from 0xC0 (one cut
+//     short): no word lost or repeated; then OSR 256
+// 16  SYNC lock: the PWM phase pulls in to the SYNC pulse
+// 17  fault injection: a hall line stuck, then inverted
 `timescale 1ns/1ps
 `default_nettype none
 `include "emu_defs.vh"
@@ -46,7 +55,13 @@ module tb_top;
         .enc_cs(ecs), .enc_sck(esck), .enc_mosi(emosi), .enc_miso(enc_miso), .led_n(led_n));
 
     reg [6:0] ee_addr = 7'h51;
-    i2c_ack_model ee (.sda(sda), .scl(scl), .addr7(ee_addr), .present(1'b1));
+    i2c_dev_model #(.KIND(0), .WRITE_NS(3_000_000)) ee (.sda(sda), .scl(scl), .addr7(ee_addr), .present(1'b1),
+        .wc_n(ee_wc_n_pu), .pins(8'h00));
+    // trip-recorder expander: P0 OC_TRIP_N, P1 DRV_NFAULT, P2 NTC_TRIP_N, P3 HS_FLT_N, P4 FAULT,
+    // P5 LATCH_Q, P6 BACKSTOP, P7 GND
+    reg oc_trip_n = 1;
+    wire [7:0] pc_pins = {1'b0, backstop, latch_q, fault_n, 1'b1, 1'b1, 1'b1, oc_trip_n};
+    i2c_dev_model #(.KIND(1)) pc (.sda(sda), .scl(scl), .addr7(7'h20), .present(1'b1), .wc_n(1'b1), .pins(pc_pins));
 
     // ---- five second-order delta-sigma modulators on MCLK (DOUT changes 8 ns after the rise)
     real mx [0:4];
@@ -94,6 +109,21 @@ module tb_top;
         begin
             ss = 0; #200;
             spi_byte({1'b0, bcast, id, 4'h0}); spi_byte(addr); spi_byte(data[15:8]); spi_byte(data[7:0]);
+            #200; ss = 1; #400;
+        end
+    endtask
+    // burst read of n words from addr (auto-increment), into burst[]
+    reg [15:0] burst [0:63];
+    // half = 1: one more byte (the MSB of word n), then the transaction ends mid-word
+    task reg_burst(input [1:0] id, input [7:0] addr, input integer n, input half);
+        integer w;
+        begin
+            ss = 0; #200;
+            spi_byte({1'b1, 1'b0, id, 4'h0}); spi_byte(addr); spi_byte(8'h00);
+            for (w = 0; w < n; w = w + 1) begin
+                spi_byte(8'h00); burst[w][15:8] = rx; spi_byte(8'h00); burst[w][7:0] = rx;
+            end
+            if (half) spi_byte(8'h00);
             #200; ss = 1; #400;
         end
     endtask
@@ -199,6 +229,7 @@ module tb_top;
 
         // ---------------- 6: board 1 may not drive the power path or SYNC
         reg_write(1'b0, 2'd1, `R_BRAKE_DUTY, 16'd128);
+        reg_write(1'b0, 2'd1, `R_HS_LIMIT, 16'd30000);       // a hot-swap bus limit: only the board id refuses
         reg_write(1'b0, 2'd1, `R_CONTROL, 16'h000F);         // PWM, HSWAP, BRAKE, SYNC_MASTER
         sync_pulses = 0;
         for (i = 0; i < 40000; i = i + 1) begin
@@ -287,6 +318,177 @@ module tb_top;
         else $display("  ok AS5047P frame on the encoder pins: %h (ENC_ANGLE %h)", v, v2);
         reg_read(2'd0, `R_ENC_STATUS, v);
         if (v[15:8] != 8'd2 || v[2:0] != 3'd0) begin errors = errors + 1; $display("FAIL: ENC_STATUS %h", v); end
+
+
+        // ---------------- 11: protection (board 0; phase A reads about 8192 codes, the bus 19660)
+        reg_write(1'b0, 2'd0, `R_HS_LIMIT, 16'd0);
+        reg_write(1'b0, 2'd0, `R_OC_LIM, 16'd6000);
+        reg_write(1'b0, 2'd0, `R_OC_COUNT, 16'd2);
+        repeat (2000) @(posedge clk);
+        reg_read(2'd0, `R_TRIPS, v); expect16("TRIPS: A and B (-16384) over the limit", v & 16'h000F, 16'h0003);
+        reg_read(2'd0, `R_CONTROL, v); expect1("PWM_EN cleared by the overcurrent trip", v[`C_PWM_EN], 1'b0);
+        expect1("SYNC held low (stack stop)", sync_n, 1'b0);
+        reg_write(1'b0, 2'd0, `R_OC_LIM, 16'd0);
+        reg_write(1'b0, 2'd0, `R_TRIPS, 16'h000F);
+        reg_write(1'b0, 2'd0, `R_WD_CLEAR, 16'd1);
+        reg_read(2'd0, `R_TRIPS, v); expect16("TRIPS cleared", v & 16'h000F, 16'h0000);
+        // overvoltage brake: on above 19000 codes (the bus reads 19660)
+        reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0000);
+        reg_write(1'b0, 2'd0, `R_OV_OFF, 16'd18000);
+        reg_write(1'b0, 2'd0, `R_OV_ON, 16'd19000);
+        repeat (2000) @(posedge clk);
+        expect1("overvoltage brake on", brake, 1'b1);
+        reg_read(2'd0, `R_TRIPS, v); expect1("TRIPS[5] OV brake", v[5], 1'b1);
+        reg_write(1'b0, 2'd0, `R_OV_ON, 16'd0);
+        repeat (100) @(posedge clk);
+        expect1("overvoltage brake off", brake, 1'b0);
+        // hot-swap interlock
+        reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0002);
+        repeat (20) @(posedge clk);
+        expect1("hot-swap refused without HS_LIMIT", hswap_en, 1'b0);
+        reg_write(1'b0, 2'd0, `R_HS_LIMIT, 16'd25000);
+        reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0002);
+        repeat (20) @(posedge clk);
+        expect1("hot-swap on with a limit above the bus", hswap_en, 1'b1);
+        reg_write(1'b0, 2'd0, `R_HS_LIMIT, 16'd19000);
+        repeat (3000) @(posedge clk);
+        expect1("hot-swap dropped over the limit", hswap_en, 1'b0);
+        reg_read(2'd0, `R_TRIPS, v); expect1("TRIPS[3] hot-swap", v[3], 1'b1);
+        reg_read(2'd0, `R_CONTROL, v); expect1("HSWAP_EN cleared", v[`C_HSWAP_EN], 1'b0);
+        reg_write(1'b0, 2'd0, `R_HS_LIMIT, 16'd0);
+        reg_write(1'b0, 2'd0, `R_TRIPS, 16'h000F);
+        $display("  ok protection: overcurrent trip, OV brake, hot-swap interlock");
+
+        // ---------------- 12: trip recorder
+        @(negedge clk) oc_trip_n = 0; fault_n = 0;
+        #20_000; @(negedge clk) oc_trip_n = 1; fault_n = 1;
+        #2_000_000;                                       // the expander read (about 0.7 ms)
+        reg_read(2'd0, `R_TRIP_SRC, v);
+        expect1("TRIP_SRC valid", v[8], 1'b1);
+        expect1("TRIP_SRC: OC_TRIP_N latched low", v[0], 1'b0);
+        expect1("TRIP_SRC: FAULT latched low", v[4], 1'b0);
+        expect1("expander set up", v[9], 1'b1);
+        reg_write(1'b0, 2'd0, `R_TRIP_SRC, 16'd1);         // read again: live now
+        #2_000_000;
+        reg_read(2'd0, `R_TRIP_SRC, v);
+        expect1("TRIP_SRC re-read: OC_TRIP_N high", v[0], 1'b1);
+        reg_write(1'b0, 2'd0, `R_WD_CLEAR, 16'd1);
+        $display("  ok trip recorder: %h", v);
+
+        // ---------------- 13: EEPROM
+        reg_write(1'b0, 2'd0, `R_EE_ADDR, 16'h0020);
+        reg_write(1'b0, 2'd0, `R_EE_DATA, 16'h00B7);
+        expect1("EEPROM WC low during the write", ee_wc_n_pu, 1'b0);
+        v = 16'h0001; n = 0;
+        while (v[0]) begin #200_000; reg_read(2'd0, `R_EE_CMD, v); n = n + 1; end
+        expect1("EEPROM write: no error", v[1], 1'b0);
+        expect1("EEPROM WC high after the write", ee_wc_n_pu, 1'b1);
+        reg_write(1'b0, 2'd0, `R_EE_CMD, 16'h0001);
+        v = 16'h0001;
+        while (v[0]) begin #100_000; reg_read(2'd0, `R_EE_CMD, v); end
+        reg_read(2'd0, `R_EE_DATA, v); expect16("EEPROM read back", v, 16'h00B7);
+
+        // ---------------- 14: battery model (rest current: the DUT battery channel reads 3277 codes)
+        reg_write(1'b0, 2'd0, `R_BAT_TBL_ADDR, 16'd0);
+        for (i = 0; i < 64; i = i + 1) reg_write(1'b0, 2'd0, `R_BAT_TBL_DATA, 16'd25000 - 16'd100 * i);
+        reg_write(1'b0, 2'd0, `R_BAT_I_OFS, 16'd3277);    // the channel's own reading counts as zero
+        reg_write(1'b0, 2'd0, `R_BAT_QSHIFT, 16'd30);
+        reg_write(1'b0, 2'd0, `R_BAT_R0, 16'd600);
+        reg_write(1'b0, 2'd0, `R_BAT_VMIN, 16'd10000);
+        reg_write(1'b0, 2'd0, `R_BAT_VMAX, 16'd30000);
+        reg_write(1'b0, 2'd0, `R_BAT_POS, 16'd2560);      // entry 10: 24000
+        reg_write(1'b0, 2'd0, `R_PV_GAIN, 16'd32767);
+        reg_write(1'b0, 2'd0, `R_BAT_CTRL, 16'h0005);     // run, drive PV_SET
+        #2_500_000;
+        reg_read(2'd0, `R_BAT_OCV, v); expect16("BAT_OCV at entry 10", v, 16'd24000);
+        reg_read(2'd0, `R_BAT_SET, v);
+        if (v < 23990 || v > 24010) begin errors = errors + 1; $display("FAIL: BAT_SET %0d", v); end
+        n = 0;
+        for (i = 0; i < 20000; i = i + 1) begin @(posedge clk); n = n + pv_set; end
+        if (n < 7000 || n > 7600) begin errors = errors + 1; $display("FAIL: PV_SET high %0d of 20000 clk", n); end
+        reg_write(1'b0, 2'd0, `R_BAT_CTRL, 16'h0000);
+        repeat (10) @(posedge clk);
+        expect1("PV_SET parked when off", pv_set, 1'b1);
+        $display("  ok battery: OCV 24000, BAT_SET %0d, PV_SET high %0d / 20000", v, n);
+
+        // ---------------- 15: logging stream
+        reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h8000);              // clear
+        reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h00D1);              // on, sequence, phase A + bus
+        #300_000;
+        reg_read(2'd0, `R_LOG_LEVEL, v);
+        if (v < 30) begin errors = errors + 1; $display("FAIL: LOG_LEVEL %0d", v); end
+        begin : logread
+            integer w, seq_prev, bad, words;
+            seq_prev = -1; bad = 0; words = 0;
+            // bursts of 9 words (3 sets); one ends half-way through its 4th word, which must come
+            // again in the next burst
+            for (i = 0; i < 6; i = i + 1) begin
+                reg_burst(2'd0, `R_LOG_FIFO, (i == 2) ? 3 : 9, i == 2);
+                for (w = 0; w < ((i == 2) ? 3 : 9); w = w + 3) begin
+                    if (seq_prev >= 0 && burst[w] != seq_prev + 1) bad = bad + 1;
+                    seq_prev = burst[w];
+                    if (burst[w + 1] < 8000 || burst[w + 1] > 8400) bad = bad + 1;
+                    if (burst[w + 2] < 19400 || burst[w + 2] > 19900) bad = bad + 1;
+                    words = words + 3;
+                end
+                if (i == 2) begin                        // the cut word was not lost
+                    reg_burst(2'd0, `R_LOG_FIFO, 3, 1'b0);
+                    if (burst[0] != seq_prev + 1) bad = bad + 1;
+                    seq_prev = burst[0];
+                end
+            end
+            if (bad) begin errors = errors + 1; $display("FAIL: log stream: %0d bad words", bad); end
+            else $display("  ok log stream: %0d words in order, a cut burst lost nothing", words);
+        end
+        reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h8000);
+        reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h0061);              // on, OSR 256, phase A
+        #200_000;
+        reg_burst(2'd0, `R_LOG_FIFO, 4, 1'b0);
+        if (burst[2] < 8100 || burst[2] > 8300) begin errors = errors + 1; $display("FAIL: OSR-256 log %0d", burst[2]); end
+        reg_read(2'd0, `R_LOG_DROPS, v); expect16("no drops", v, 16'd0);
+        reg_write(1'b0, 2'd0, `R_LOG_CTRL, 16'h8000);
+
+        // ---------------- 16: SYNC lock (board 0 is the SYNC master; period 180 divides 36000)
+        reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0008);
+        reg_write(1'b0, 2'd0, `R_SYNC_CTRL, 16'h0001);
+        #4_000_000;
+        reg_read(2'd0, `R_SYNC_ERR, v);
+        if ($signed(v) > 1 || $signed(v) < -1) begin errors = errors + 1; $display("FAIL: SYNC_ERR %0d after lock", $signed(v)); end
+        reg_read(2'd0, `R_TIME_MS, v2); reg_read(2'd0, `R_TIME_SUB, v3);
+        if (v2 < 3 || v3 > 36000) begin errors = errors + 1; $display("FAIL: TIME %0d ms + %0d clk", v2, v3); end
+        $display("  ok SYNC lock: phase error %0d clk, time %0d ms + %0d clk", $signed(v), v2, v3);
+        reg_write(1'b0, 2'd0, `R_SYNC_CTRL, 16'h0000);
+        reg_write(1'b0, 2'd0, `R_CONTROL, 16'h0000);
+
+        // ---------------- 17: fault injection: hall A stuck high, then all inverted
+        reg_write(1'b0, 2'd0, `R_HALL, 16'h0000);
+        reg_write(1'b0, 2'd0, `R_MODE, 16'h0001);                 // halls from the HALL register
+        reg_write(1'b0, 2'd0, `R_HALL_FAULT, 16'h0009);           // A stuck at 1
+        repeat (10) @(posedge clk);
+        expect1("hall A stuck (FET off = line high)", hall_a, 1'b0);
+        expect1("hall B normal", hall_b, 1'b1);
+        reg_write(1'b0, 2'd0, `R_HALL_FAULT, 16'h01C0);           // all inverted
+        repeat (10) @(posedge clk);
+        expect1("halls inverted", hall_a | hall_b | hall_c, 1'b0);
+        reg_write(1'b0, 2'd0, `R_HALL_FAULT, 16'h0000);
+        // back-EMF noise: +-5 % on the model duties, none when off
+        reg_write(1'b0, 2'd0, `R_NOISE_AMP, 16'd3277);
+        begin : noise
+            integer d, dmax, ndiff;
+            dmax = 0; ndiff = 0;
+            for (i = 0; i < 3000; i = i + 1) begin
+                @(posedge clk); #1;
+                d = $signed({1'b0, dut.mdn_b}) - $signed({1'b0, dut.md_b});
+                if (d < 0) d = -d;
+                if (d > dmax) dmax = d;
+                if (d != 0) ndiff = ndiff + 1;
+            end
+            if (dmax > 3278 || ndiff < 1000) begin errors = errors + 1; $display("FAIL: noise max %0d, %0d of 3000 differ", dmax, ndiff); end
+            reg_write(1'b0, 2'd0, `R_NOISE_AMP, 16'd0);
+            repeat (10) @(posedge clk); #1;
+            if (dut.mdn_b !== dut.md_b) begin errors = errors + 1; $display("FAIL: noise still on"); end
+            $display("  ok fault injection: hall stuck and inverted; duty noise up to %0d / 3277", dmax);
+        end
 
         reg_write(1'b0, 2'd0, `R_MODE, 16'h0000);
         if (errors == 0) $display("PASS tb_top"); else $display("FAIL tb_top: %0d errors", errors);

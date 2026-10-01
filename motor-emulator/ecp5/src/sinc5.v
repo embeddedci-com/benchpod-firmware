@@ -14,7 +14,9 @@
 // ============================================================================
 `default_nettype none
 
-module sinc5 (
+module sinc5 #(
+    parameter L = 6                       // log2 OSR: 6 = OSR 64 (control), 8 = OSR 256 (logging)
+) (
     input  wire        clk,
     input  wire        rst,
     input  wire        bit_en,
@@ -24,20 +26,20 @@ module sinc5 (
     output reg  [2:0]  valid_ch,
     output reg         set_done
 );
-    localparam W = 19;
+    localparam W = 3 * L + 1;            // Hogenauer width: 19 bits at OSR 64, 25 at OSR 256
 
     // ---------------------------------------------------------------- integrators
     reg [W-1:0] i1 [0:4];
     reg [W-1:0] i2 [0:4];
     reg [W-1:0] i3 [0:4];
-    reg [5:0]   dec;
+    reg [L-1:0] dec;
     integer k;
     always @(posedge clk) begin
         if (rst) begin
-            dec <= 6'd0;
+            dec <= {L{1'b0}};
             for (k = 0; k < 5; k = k + 1) begin i1[k] <= 0; i2[k] <= 0; i3[k] <= 0; end
         end else if (bit_en) begin
-            dec <= dec + 6'd1;
+            dec <= dec + 1'b1;
             for (k = 0; k < 5; k = k + 1) begin
                 i1[k] <= i1[k] + {{(W-1){1'b0}}, din[k]};
                 i2[k] <= i2[k] + i1[k];
@@ -65,8 +67,11 @@ module sinc5 (
     end
 
     // ---------------------------------------------------------------- shared comb pipeline
-    wire        start = bit_en && (dec[2:0] == 3'd0) && (dec[5:3] < 3'd5);
-    wire signed [W:0] s = $signed({1'b0, v}) - $signed(20'd131072);
+    wire        start = bit_en && (dec[2:0] == 3'd0) && (dec[L-1:3] < 5);
+    // centre (half of OSR^3) removed; 16 bits out from the top; all ones saturates at +32767
+    wire signed [W:0] s = $signed({1'b0, v}) - $signed({2'b01, {(W-1){1'b0}}} >> 1);
+    wire        sat = (s >= $signed({2'b00, {(W-2){1'b1}}}) - $signed((1 << (W-17)) - 1));
+    wire [15:0] s16 = sat ? 16'h7FFF : s[W-2:W-17];
 
     always @(posedge clk) begin
         valid <= 1'b0; set_done <= 1'b0;
@@ -76,8 +81,8 @@ module sinc5 (
         end else begin
             cs <= {cs[3:0], 1'b0};
             if (start) begin
-                ch <= dec[5:3];
-                case (dec[5:3])
+                ch <= dec[L-1:3];
+                case (dec[L-1:3])
                     3'd0: v <= i3[0]; 3'd1: v <= i3[1]; 3'd2: v <= i3[2]; 3'd3: v <= i3[3];
                     default: v <= i3[4];
                 endcase
@@ -90,11 +95,11 @@ module sinc5 (
             if (cs[3]) v <= v - rdata[W-1:0];                                         // delay 2
             if (cs[4]) begin
                 case (ch)
-                    3'd0: d0 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];
-                    3'd1: d1 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];
-                    3'd2: d2 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];
-                    3'd3: d3 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];
-                    default: d4 <= (s >= 20'sd131068) ? 16'sd32767 : s[17:2];
+                    3'd0: d0 <= s16;
+                    3'd1: d1 <= s16;
+                    3'd2: d2 <= s16;
+                    3'd3: d3 <= s16;
+                    default: d4 <= s16;
                 endcase
                 valid <= 1'b1; valid_ch <= ch;
                 if (ch == 3'd4) set_done <= 1'b1;

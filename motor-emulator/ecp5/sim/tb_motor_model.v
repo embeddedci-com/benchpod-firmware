@@ -13,6 +13,7 @@ module tb_motor_model;
     always #13.889 clk = ~clk;
     reg rst = 1, tick = 0, reset_state = 0;
     reg [1:0] mode = 0;
+    reg shape_we = 0; reg [9:0] shape_addr = 0; reg [15:0] shape_data = 0;
     reg cm_en = 0, dt_en = 0;
     reg signed [15:0] sa = 0, sb = 0, sc = 0, sbus = 18760;
     reg signed [15:0] oa = 0, ob = 0, oc = 0, obus = 0;
@@ -48,6 +49,7 @@ module tb_motor_model;
         .clk(clk), .rst(rst), .tick(tick), .mode(mode), .cm_en(cm_en), .dt_en(dt_en), .reset_state(reset_state),
         .sinc_a(sa), .sinc_b(sb), .sinc_c(sc), .sinc_bus(sbus),
         .pw_en(pw_en), .pw_addr(pw_addr), .pw_data(pw_data),
+        .shape_we(shape_we), .shape_addr(shape_addr), .shape_data(shape_data),
         .duty_a(duty_a), .duty_b(duty_b), .duty_c(duty_c), .theta(theta), .w32(w32), .e_amp(e_amp),
         .i0(i0), .v_cm(v_cm), .iq(iq), .hall(hall), .count(count), .busy(busy));
 
@@ -252,6 +254,29 @@ module tb_motor_model;
             end
         end
         $display("  ok shaping: legs inside the 2 %% margin, line-line kept (v_cm %0d)", v_cm);
+
+        // ---- run 6: a trapezoidal back-EMF shape loaded through the shape port (and into the
+        // reference): 120-degree flat tops, linear 60-degree ramps; bit-exact as before
+        for (k = 0; k < 1024; k = k + 1) begin : trap
+            integer v;
+            v = (k < 85) ? (k * 30000) / 85 : (k < 427) ? 30000 : (k < 597) ? 30000 - ((k - 427) * 60000) / 170 :
+                (k < 939) ? -30000 : -30000 + ((k - 939) * 30000) / 85;
+            @(negedge clk) begin shape_we = 1; shape_addr = k; shape_data = v; end
+            sine[k] = v;
+        end
+        @(negedge clk) shape_we = 0;
+        mode = 2; cm_en = 1; dt_en = 1; sa = 1200; sb = -500; sc = -700; obus = 0; set_params;
+        for (k = 0; k < 150; k = k + 1) do_tick;
+        $display("  ok trapezoidal shape: %0d ticks bit-exact so far", ticks);
+        for (k = 0; k < 1024; k = k + 1) begin : back
+            @(negedge clk) begin shape_we = 1; shape_addr = k; shape_data = 0; end
+        end
+        @(negedge clk) shape_we = 0;
+        $readmemh("src/sine1024.hex", sine);
+        for (k = 0; k < 1024; k = k + 1) begin
+            @(negedge clk) begin shape_we = 1; shape_addr = k; shape_data = sine[k]; end
+        end
+        @(negedge clk) shape_we = 0;
 
         // ---- run 4: bus collapsed
         sbus = 400; obus = 0; set_params;

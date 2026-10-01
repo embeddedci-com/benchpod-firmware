@@ -1,10 +1,14 @@
 // tb_sinc5 — five sinc3 channels with a shared comb, against five second-order delta-sigma models.
 // Run 1 and run 2 (new values on every channel, no reset) check each channel's mean, so a comb
 // state mixed up between channels, or a stale RAM word, shows. Also checks the per-channel rate
-// (one output per 64 modulator bits = 128 clk) and the channel order.
+// (one output per OSR modulator bits) and the channel order. SINC_L picks the OSR (6: 64, 8: 256).
 `timescale 1ns/1ps
 `default_nettype none
+`ifndef SINC_L
+`define SINC_L 6
+`endif
 module tb_sinc5;
+    localparam L = `SINC_L, PER = 2 << L;    // clk per output and channel (2 clk per modulator bit)
     reg clk = 0;
     always #13.889 clk = ~clk;
     reg rst = 1, bit_en = 0;
@@ -12,7 +16,7 @@ module tb_sinc5;
     wire signed [15:0] d0, d1, d2, d3, d4;
     wire valid, set_done;
     wire [2:0] valid_ch;
-    sinc5 dut (.clk(clk), .rst(rst), .bit_en(bit_en), .din(din), .d0(d0), .d1(d1), .d2(d2), .d3(d3), .d4(d4),
+    sinc5 #(.L(L)) dut (.clk(clk), .rst(rst), .bit_en(bit_en), .din(din), .d0(d0), .d1(d1), .d2(d2), .d3(d3), .d4(d4),
                .valid(valid), .valid_ch(valid_ch), .set_done(set_done));
 
     real x [0:4];
@@ -65,14 +69,14 @@ module tb_sinc5;
     always @(posedge clk) begin
         clkn = clkn + 1;
         if (valid) begin
-            if (last_t[valid_ch] >= 0 && clkn - last_t[valid_ch] != 128) bad_rate = bad_rate + 1;
+            if (last_t[valid_ch] >= 0 && clkn - last_t[valid_ch] != PER) bad_rate = bad_rate + 1;
             if (last_ch >= 0 && valid_ch != (last_ch + 1) % 5) bad_order = bad_order + 1;
             last_t[valid_ch] = clkn; last_ch = valid_ch;
         end
     end
 
     initial begin
-        #10_000_000 $display("FAIL tb_sinc5: timeout"); $finish;
+        #40_000_000 $display("FAIL tb_sinc5: timeout"); $finish;
     end
     initial begin
         last_ch = -1;
@@ -80,9 +84,9 @@ module tb_sinc5;
         repeat (4) @(posedge clk); rst = 0;
         run_and_check(0.25, -0.5, 0.0, 0.1, 0.6);
         run_and_check(-0.7, 0.3, 0.95, -0.05, 0.2);      // second run, every channel changed
-        if (bad_rate) begin errors = errors + 1; $display("FAIL: %0d outputs off the 128-clk rate", bad_rate); end
+        if (bad_rate) begin errors = errors + 1; $display("FAIL: %0d outputs off the %0d-clk rate", bad_rate, PER); end
         if (bad_order) begin errors = errors + 1; $display("FAIL: %0d outputs out of channel order", bad_order); end
-        if (errors == 0) $display("PASS tb_sinc5"); else $display("FAIL tb_sinc5: %0d errors", errors);
+        if (errors == 0) $display("PASS tb_sinc5 (OSR %0d)", 1 << L); else $display("FAIL tb_sinc5: %0d errors", errors);
         $finish;
     end
 endmodule

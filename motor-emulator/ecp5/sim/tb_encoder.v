@@ -19,10 +19,11 @@ module tb_encoder;
     reg [31:0] theta = 0;
     reg pw_en = 0; reg [2:0] pw_addr = 0; reg [15:0] pw_data = 0;
     reg cs = 1, sck = 0, mosi = 0;
+    reg [2:0] fault = 0;
     wire a, b, z, miso;
     wire [15:0] rf_q, angle, count, status;
     encoder dut (.clk(clk), .rst(rst), .tick(tick), .reset_state(reset_state), .theta(theta), .period(10'd180),
-        .pw_en(pw_en), .pw_addr(pw_addr), .pw_data(pw_data), .cs_in(cs), .sck_in(sck), .mosi_in(mosi),
+        .pw_en(pw_en), .pw_addr(pw_addr), .pw_data(pw_data), .cs_in(cs), .sck_in(sck), .mosi_in(mosi), .fault(fault),
         .enc_a(a), .enc_b(b), .enc_z(z), .enc_miso(miso),
         .ctrl(), .cpr(), .poles(), .ofs(), .rf_addr(), .rf_link_q(rf_q),
         .angle(angle), .count(count), .status(status));
@@ -55,10 +56,12 @@ module tb_encoder;
     always @(posedge clk) begin count_d1 <= count; count_d2 <= count_d1; end
     reg [1:0] ab_q = 2'b00;
     integer last_step = -1, min_iv = 1 << 30, max_iv = 0, steps_tick = 0, track_iv = 0;
-    reg [3:0] cw = 0;                     // a CPR write restarts the count (a jump): follow silently
+    reg [3:0] cw = 0;
+    reg quiet = 0;                        // fault tests: outputs forced, the decoder just follows                     // a CPR write restarts the count (a jump): follow silently
     always @(posedge clk) cw <= {cw[2:0], pw_en && pw_addr == 3'd1};
     always @(posedge clk) if (!rst) begin
-        if (|cw) begin ab_q = {a, b}; qpos = 0; end
+        if (quiet) ab_q = {a, b};
+        else if (|cw) begin ab_q = {a, b}; qpos = 0; end
         else if ({a, b} != ab_q) begin
             // states 0-3: AB 00, 10, 11, 01
             case ({ab_q, a, b})
@@ -268,6 +271,27 @@ module tb_encoder;
         run_ticks(20, 0);
         $display("  ok second run (POLES 11, CPR 1024, OFS, DIR) and MODEL_RESET: %0d angle checks, %0d ABZ checks", angle_checks, abz_checks);
 
+        // ---- 5: fault injection
+        begin : faults
+            reg [15:0] a0;
+            integer edges, t;
+            a0 = angle; fault = 3'b001; quiet = 1;
+            for (t = 0; t < 10; t = t + 1) begin
+                @(negedge clk) tick = 1; @(negedge clk) tick = 0; repeat (178) @(negedge clk);
+                theta = theta + 32'sd150_000_000;
+            end
+            if (angle !== a0) begin errors = errors + 1; $display("FAIL: frozen angle moved"); end
+            fault = 3'b010; edges = 0;
+            for (t = 0; t < 2000; t = t + 1) begin @(negedge clk); if (a || b || z) edges = edges + 1; end
+            if (edges != 0) begin errors = errors + 1; $display("FAIL: ABZ not dead"); end
+            fault = 3'b100;
+            xfer(0, 16, 16'h0000, r);
+            if (r !== 16'h0000) begin errors = errors + 1; $display("FAIL: MISO not stuck low (%h)", r); end
+            fault = 3'b000;
+            xfer(0, 16, 16'h0000, r);
+            if (r === 16'h0000 && angle != 0) begin errors = errors + 1; $display("FAIL: MISO did not recover"); end
+            $display("  ok fault injection: frozen angle, dead ABZ, stuck MISO");
+        end
         if (errors == 0) $display("PASS tb_encoder"); else $display("FAIL tb_encoder: %0d errors", errors);
         $finish;
     end

@@ -15,12 +15,15 @@ module tb_pwm3;
     reg [15:0] duty_a = 16'h8000, duty_b = 16'h8000, duty_c = 16'h8000;
     wire [2:0] hs, ls;
     wire period_start, period_mid;
+    reg stretch = 0, shrink = 0;
 
     pwm3 dut (.clk(clk), .rst(rst), .enable(enable), .period(period), .deadtime(deadtime),
               .min_on(min_on), .duty_a(duty_a), .duty_b(duty_b), .duty_c(duty_c),
-              .hs(hs), .ls(ls), .period_start(period_start), .period_mid(period_mid));
+              .hs(hs), .ls(ls), .period_start(period_start), .period_mid(period_mid),
+              .stretch(stretch), .shrink(shrink), .phase());
 
     integer errors = 0;
+    realtime t_p0, t_p1;
     integer k, j;
     // per-leg time (in clk) since each gate last turned off
     integer since_hs_off [0:2];
@@ -114,6 +117,26 @@ module tb_pwm3;
         measure(16);
         if (on_a != 0) begin errors = errors + 1; $display("FAIL: 0 %% duty still switches HS (%0d clk)", on_a); end
         if (on_b != clocks) begin errors = errors + 1; $display("FAIL: 100 %% duty HS on %0d of %0d clk", on_b, clocks); end
+
+        // ---- phase lock: stretch makes one period 1 clk longer, shrink one 1 clk shorter (period
+        //      240); the overlap / dead-time monitor keeps running through both
+        duty_a = 16'h5000; duty_b = 16'hA000; duty_c = 16'h8000;
+        repeat (3) @(posedge period_start);
+        t_p0 = $time;                               // a period starts; request inside it
+        repeat (50) @(negedge clk);
+        @(negedge clk) stretch = 1; @(negedge clk) stretch = 0;
+        @(posedge period_start); t_p1 = $time;      // that period ends one clk late
+        if ((t_p1 - t_p0) / 27.778 < 240.5 || (t_p1 - t_p0) / 27.778 > 241.5) begin
+            errors = errors + 1; $display("FAIL: stretched period %0.1f clk", (t_p1 - t_p0) / 27.778); end
+        @(posedge period_start); t_p0 = $time;
+        if ((t_p0 - t_p1) / 27.778 < 239.5 || (t_p0 - t_p1) / 27.778 > 240.5) begin
+            errors = errors + 1; $display("FAIL: period after the stretch %0.1f clk", (t_p0 - t_p1) / 27.778); end
+        repeat (50) @(negedge clk);
+        @(negedge clk) shrink = 1; @(negedge clk) shrink = 0;   // applies to the next period
+        @(posedge period_start); t_p0 = $time; @(posedge period_start); t_p1 = $time;
+        if ((t_p1 - t_p0) / 27.778 < 238.5 || (t_p1 - t_p0) / 27.778 > 239.5) begin
+            errors = errors + 1; $display("FAIL: shrunk period %0.1f clk", (t_p1 - t_p0) / 27.778); end
+        else $display("  ok stretch / shrink: periods of 241 and 239 clk");
 
         // ---- disable in mid-period: every gate off on the next clk
         repeat (57) @(posedge clk);

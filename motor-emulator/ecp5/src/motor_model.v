@@ -50,6 +50,11 @@ module motor_model (
     input  wire               pw_en,
     input  wire [4:0]         pw_addr,
     input  wire [15:0]        pw_data,
+    // back-EMF shape table (1024 x Q15 per electrical revolution, a sine at power-up): the link
+    // can load any shape; it serves the back-EMF and the torque products alike
+    input  wire               shape_we,
+    input  wire [9:0]         shape_addr,
+    input  wire [15:0]        shape_data,
     // results
     output reg  [15:0]        duty_a, duty_b, duty_c,
     output reg  [31:0]        theta,
@@ -123,12 +128,15 @@ module motor_model (
         qb <= dmb[ir_r[15:8]];
     end
 
-    // ---------------------------------------------------------------- sine ROM (per tick: 3 reads)
+    // ---------------------------------------------------------------- shape table (per tick: 6 reads)
     reg  [15:0] sine [0:1023];
     initial $readmemh("src/sine1024.hex", sine);
     reg  [9:0]  saddr;
     reg  signed [15:0] sq, s_a, s_b, s_c, r_a, r_b, r_c;
-    always @(posedge clk) sq <= sine[saddr];
+    always @(posedge clk) begin
+        if (shape_we) sine[shape_addr] <= shape_data;
+        sq <= sine[saddr];
+    end
     // back-EMF angle (16 bits): advanced by ADV half ticks to cover the hold of the output for one
     // PWM period (the voltage computed at a tick is applied during the next period)
     reg  [15:0] th_look, adv_q;

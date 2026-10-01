@@ -3,7 +3,7 @@
 #
 #   make            synthesise, place and route, pack: build/motor_emulator.bit
 #   make test       run every bench (each must print PASS; sim/run_vvp.sh enforces it)
-#   make tb_<name>  run one bench (tb_pwm3, tb_sinc5, tb_i2c_probe, tb_sync_wd, tb_motor_model,
+#   make tb_<name>  run one bench (tb_pwm3, tb_sinc5, tb_i2c_ctl, tb_sync_wd, tb_motor_model,
 #                   tb_encoder, tb_top, and the gate-level tb_motor_model_gl, tb_top_gl)
 #   make SEED=n     another placement seed
 #   make clean
@@ -17,7 +17,7 @@ NEXTPNR ?= $(TOOLS)/nextpnr-ecp5
 ECPPACK ?= $(TOOLS)/ecppack
 PROJECT  = motor_emulator
 BUILD    = build
-SRC      = src/top.v src/spi_link.v src/pwm3.v src/sinc5.v src/i2c_probe.v src/sync_wd.v src/motor_model.v src/encoder.v
+SRC      = src/top.v src/spi_link.v src/pwm3.v src/sinc5.v src/i2c_ctl.v src/protect.v src/battery.v src/logbuf.v src/sync_wd.v src/motor_model.v src/encoder.v
 INC      = src/emu_defs.vh src/sine1024.hex src/model_prog.hex src/model_data.hex
 LPF      = emu.lpf
 SEED    ?= 1
@@ -56,7 +56,7 @@ $(BUILD)/$(PROJECT).bit: $(BUILD)/$(PROJECT).config
 	$(ECPPACK) --compress --input $< --bit $@
 
 # ---- benches
-BENCHES = tb_pwm3 tb_sinc5 tb_i2c_probe tb_sync_wd tb_motor_model tb_encoder tb_top tb_motor_model_gl tb_top_gl
+BENCHES = tb_pwm3 tb_sinc5 tb_sinc5_256 tb_i2c_ctl tb_sync_wd tb_motor_model tb_encoder tb_protect tb_battery tb_top tb_motor_model_gl tb_top_gl
 
 tb_pwm3: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/pwm3.v
@@ -66,8 +66,12 @@ tb_sinc5: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/sinc5.v
 	$(VVP) $(BUILD)/$@.vvp
 
-tb_i2c_probe: | $(BUILD)
-	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v sim/i2c_ack_model.v src/i2c_probe.v
+tb_sinc5_256: | $(BUILD)
+	$(IVERILOG) -DSINC_L=8 -o $(BUILD)/$@.vvp sim/tb_sinc5.v src/sinc5.v
+	$(VVP) $(BUILD)/$@.vvp
+
+tb_i2c_ctl: | $(BUILD)
+	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v sim/i2c_dev_model.v src/i2c_ctl.v
 	$(VVP) $(BUILD)/$@.vvp
 
 tb_motor_model: src/model_prog.hex src/sine1024.hex | $(BUILD)
@@ -78,13 +82,21 @@ tb_encoder: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/encoder.v
 	$(VVP) $(BUILD)/$@.vvp
 
+tb_battery: | $(BUILD)
+	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/battery.v
+	$(VVP) $(BUILD)/$@.vvp
+
+tb_protect: | $(BUILD)
+	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/protect.v
+	$(VVP) $(BUILD)/$@.vvp
+
 tb_sync_wd: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/sync_wd.v
 	$(VVP) $(BUILD)/$@.vvp
 
 # whole chip: -DSIM bypasses the PLL (the bench drives 36 MHz on clk12)
 tb_top: src/model_prog.hex src/sine1024.hex | $(BUILD)
-	$(IVERILOG) -DSIM -o $(BUILD)/$@.vvp sim/$@.v sim/i2c_ack_model.v $(SRC)
+	$(IVERILOG) -DSIM -o $(BUILD)/$@.vvp sim/$@.v sim/i2c_dev_model.v $(SRC)
 	$(VVP) $(BUILD)/$@.vvp
 
 # gate level: the same benches on the yosys netlist (catches what RTL simulation hides: signals
@@ -99,7 +111,7 @@ $(BUILD)/gl_model.v: src/motor_model.v $(INC) | $(BUILD)
 
 tb_top_gl: $(BUILD)/gl_top.v
 	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -DSIM -o $(BUILD)/$@.vvp \
-		sim/tb_top.v sim/i2c_ack_model.v sim/mult18x18d_sim.v sim/tbuf_cell.v $(BUILD)/gl_top.v $(CELLS_SIM)
+		sim/tb_top.v sim/i2c_dev_model.v sim/mult18x18d_sim.v sim/tbuf_cell.v $(BUILD)/gl_top.v $(CELLS_SIM)
 	$(VVP) $(BUILD)/$@.vvp
 
 tb_motor_model_gl: $(BUILD)/gl_model.v
