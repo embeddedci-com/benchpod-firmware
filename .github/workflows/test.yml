@@ -5,6 +5,9 @@
 #   • ice40 gateware sims  — `make -C ice40 test` (iverilog/vvp/yosys) + the
 #     tools/gen_protocol.py --check the target already runs.
 #   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
+#   • motor-emulator gateware (ECP5) — `make -C motor-emulator/ecp5 test-rtl all` (every RTL
+#     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
+#     yosys gate-level netlist, in a job of its own: it takes several times longer).
 name: Tests
 
 on:
@@ -54,3 +57,40 @@ jobs:
           submodules: recursive
       - name: Run STM32H563 host unit tests
         run: make -C stm32h563/test
+
+  motor-emulator-sim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up OSS CAD Suite (yosys / nextpnr-ecp5 / prjtrellis / iverilog)
+        uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: '2026-05-13'
+      - name: RTL benches
+        run: make -C motor-emulator/ecp5 test-rtl YOSYS=yosys
+      # nextpnr fails the step when the 36 MHz clock constraint is not met
+      - name: Synthesis, place and route, bitstream
+        run: make -C motor-emulator/ecp5 all YOSYS=yosys NEXTPNR=nextpnr-ecp5 ECPPACK=ecppack
+      - name: Keep the bitstream
+        uses: actions/upload-artifact@v7
+        with:
+          name: motor-emulator-bitstream
+          path: |
+            motor-emulator/ecp5/build/motor_emulator.bit
+            motor-emulator/ecp5/build/nextpnr.log
+          if-no-files-found: error
+
+  motor-emulator-gl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up OSS CAD Suite (yosys / iverilog)
+        uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          version: '2026-05-13'
+      - name: Gate-level benches (one per core; make keeps each bench's output together)
+        run: make -C motor-emulator/ecp5 -j"$(nproc)" --output-sync=target test-gl YOSYS=yosys

@@ -71,7 +71,8 @@ Safety, in the gateware (the board's pull-downs cover a blank FPGA):
 Verification (`make test`, about 10 minutes): unit benches for each block against independent
 references (the encoder: angle, ABZ, three SPI profiles at 8 MHz; the battery model bit-exact over
 24k sample sets; the I²C controller against M24C02 and PCAL6408A models; protection timing against
-the arithmetic; the sinc filters at OSR 64 and 256), a bit-exact bench of the model against an
+the arithmetic; the sinc filters at OSR 64 and 256; the link with the log FIFO behind it: two
+boards on one bus, bursts, broadcast, the port registers, a cut burst, a full FIFO), a bit-exact bench of the model against an
 independent reference of its fixed-point spec (1425 ticks, six runs including a re-arm, the
 shaping properties and a trapezoidal back-EMF), the whole chip over the real SPI link (17 steps,
 every feature through its registers), and the same model and chip benches on the yosys gate-level
@@ -117,6 +118,7 @@ configuration pin.
 ```sh
 cd ecp5
 make test            # every bench must print PASS (sim/run_vvp.sh enforces it)
+make test-rtl        # only the RTL benches (about 2 minutes); test-gl: the gate-level ones
 make                 # build/motor_emulator.bit
 make SEED=n          # another placement seed
 ```

@@ -2,9 +2,10 @@
 # yosys, nextpnr-ecp5, prjtrellis (ecppack). The tools come from the OSS CAD Suite.
 #
 #   make            synthesise, place and route, pack: build/motor_emulator.bit
-#   make test       run every bench (each must print PASS; sim/run_vvp.sh enforces it)
-#   make tb_<name>  run one bench (tb_pwm3, tb_sinc5, tb_i2c_ctl, tb_sync_wd, tb_motor_model,
-#                   tb_encoder, tb_top, and the gate-level tb_motor_model_gl, tb_top_gl)
+#   make test       run every bench (each must print PASS; sim/run_vvp.sh enforces it);
+#                   test-rtl / test-gl run the RTL or the gate-level half
+#   make tb_<name>  run one bench (tb_pwm3, tb_sinc5, tb_i2c_ctl, tb_sync_wd, tb_link,
+#                   tb_motor_model, tb_encoder, tb_top, and the gate-level tb_<name>_gl)
 #   make SEED=n     another placement seed
 #   make clean
 #
@@ -56,7 +57,10 @@ $(BUILD)/$(PROJECT).bit: $(BUILD)/$(PROJECT).config
 	$(ECPPACK) --compress --input $< --bit $@
 
 # ---- benches
-BENCHES = tb_pwm3 tb_sinc5 tb_sinc5_256 tb_i2c_ctl tb_sync_wd tb_motor_model tb_encoder tb_protect tb_battery tb_top tb_motor_model_gl tb_protect_gl tb_battery_gl tb_i2c_ctl_gl tb_encoder_gl tb_top_gl
+# RTL benches (seconds each, tb_top about a minute) and gate-level ones (minutes each)
+BENCHES_RTL = tb_pwm3 tb_sinc5 tb_sinc5_256 tb_i2c_ctl tb_sync_wd tb_link tb_motor_model tb_encoder tb_protect tb_battery tb_top
+BENCHES_GL  = tb_link_gl tb_motor_model_gl tb_protect_gl tb_battery_gl tb_i2c_ctl_gl tb_encoder_gl tb_top_gl
+BENCHES = $(BENCHES_RTL) $(BENCHES_GL)
 
 tb_pwm3: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/pwm3.v
@@ -72,6 +76,10 @@ tb_sinc5_256: | $(BUILD)
 
 tb_i2c_ctl: | $(BUILD)
 	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v sim/i2c_dev_model.v src/i2c_ctl.v
+	$(VVP) $(BUILD)/$@.vvp
+
+tb_link: | $(BUILD)
+	$(IVERILOG) -o $(BUILD)/$@.vvp sim/$@.v src/spi_link.v src/logbuf.v
 	$(VVP) $(BUILD)/$@.vvp
 
 tb_motor_model: src/model_prog.hex src/sine1024.hex | $(BUILD)
@@ -131,13 +139,18 @@ tb_battery_gl: $(BUILD)/gl_battery.v
 tb_i2c_ctl_gl: $(BUILD)/gl_i2c_ctl.v
 	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_i2c_ctl.v sim/i2c_dev_model.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
 	$(VVP) $(BUILD)/$@.vvp
+tb_link_gl: $(BUILD)/gl_spi_link.v $(BUILD)/gl_logbuf.v
+	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_link.v $^ $(CELLS_SIM)
+	$(VVP) $(BUILD)/$@.vvp
 tb_encoder_gl: $(BUILD)/gl_encoder.v
 	iverilog -g2012 -I src -I $(CELLS_DIR) -DNO_INCLUDES -o $(BUILD)/$@.vvp sim/tb_encoder.v sim/mult18x18d_sim.v $< $(CELLS_SIM)
 	$(VVP) $(BUILD)/$@.vvp
 
 test: $(BENCHES)
+test-rtl: $(BENCHES_RTL)
+test-gl: $(BENCHES_GL)
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test clean $(BENCHES)
+.PHONY: all test test-rtl test-gl clean $(BENCHES)
