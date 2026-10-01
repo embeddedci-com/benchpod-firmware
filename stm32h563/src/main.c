@@ -20,6 +20,7 @@
 #include "target_power.h"
 #include "mcu_adc.h"
 #include "board_rev.h"
+#include "cal_data.h"
 #include "usb_cc.h"
 #include "nrst_ctrl.h"
 #include "can_bus.h"
@@ -152,6 +153,7 @@ int main(void)
        few ADC conversions on the MCU's own ADC1. */
     (void)mcu_adc_init();   /* MCU ADC1: revision strap + USB-C CC sense */
     board_rev_init();       /* latches v2/v3 from the PA3 strap             */
+    cal_data_select(board_rev_get());   /* DAC/ADC fits for this revision (cal_data.h) */
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */
     /* Bring the I2C bus + expander outputs up FIRST, before the slower SPI/XSPI

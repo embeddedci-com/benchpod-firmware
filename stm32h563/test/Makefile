@@ -35,8 +35,8 @@ PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 BUSREC_SRCS   := test_bus_recovery.c
 CFGSTORE_SRCS := test_config_store.c ../src/config_store.c ../src/cloud_config.c mocks/mock_flash.c
-DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
+DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c

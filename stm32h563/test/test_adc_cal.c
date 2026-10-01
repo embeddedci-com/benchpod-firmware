@@ -159,6 +159,28 @@ static void test_stays_in_its_sectors(void) {
         if (*mock_flash_ptr(off) != 0xFF) { CHECK(0, "wrote outside its sectors at 0x%lx", (unsigned long)off); break; }
 }
 
+/* The compiled-in fits are per board revision (cal_data.c). rev3 has its own, anything else
+   gets v2, and `current_in` follows whichever set is selected. Readings from pod .220 (rev3):
+   the 5 V output at code 251 measured 4906.6 mV on the DMM and count 60642 through cal1. */
+static void test_revision_selects_the_fits(void) {
+    mock_flash_reset();
+    adc_cal_load();
+    cal_lin_t v2_cal1 = ADC_CAL_CAL1, v2_dac5 = DAC_CAL[1];
+
+    cal_data_select(3);
+    CHECK(ADC_CAL_CAL1.a != v2_cal1.a && DAC_CAL[1].b != v2_dac5.b, "rev3 selected the v2 fits");
+    CHECK(labs(mv(DAC_CAL[1].a + DAC_CAL[1].b * 251.0f) - 4907) <= 1, "rev3 5 V DAC at code 251: %ld mV, DMM read 4907", mv(DAC_CAL[1].a + DAC_CAL[1].b * 251.0f));
+    CHECK(labs(mv(DAC_CAL[2].a + DAC_CAL[2].b * 6.0f) + 11520) <= 2, "rev3 12 V DAC at code 6: %ld mV, DMM read -11520", mv(DAC_CAL[2].a + DAC_CAL[2].b * 6.0f));
+    CHECK(labs(current_in_mv(60642) - 4907) <= 2, "rev3 current_in at count 60642: %ld mV, want 4907", current_in_mv(60642));
+    cal_lin_t fit = adc_cal_current_in_fit();
+    CHECK(fit.a == ADC_CAL_CAL1.a && fit.b == ADC_CAL_CAL1.b, "current_in must follow the selected cal1 fit");
+
+    cal_data_select(2);
+    CHECK(ADC_CAL_CAL1.a == v2_cal1.a && DAC_CAL[1].b == v2_dac5.b, "v2 did not get its fits back");
+    cal_data_select(0);
+    CHECK(ADC_CAL_CAL1.a == v2_cal1.a, "an unknown revision must fall back to v2");
+}
+
 int main(void) {
     test_uncalibrated_changes_nothing();
     test_store_apply_persist();
@@ -167,6 +189,7 @@ int main(void) {
     test_refusals_keep_the_old_calibration();
     test_load_rejects_out_of_range();
     test_stays_in_its_sectors();
+    test_revision_selects_the_fits();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }
     printf("test_adc_cal: all passed\n");
     return 0;
