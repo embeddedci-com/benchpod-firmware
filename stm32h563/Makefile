@@ -405,6 +405,7 @@ endef
 # The firmware image (~0.5 MB). The gateware and ESP32-C3 images are not in it: they live in
 # the W25Q blob slots and go in with `benchpod flash-self` (or any OTA) after this write.
 flash-dfu: all
+	@python3 tools/dfu_fit_check.py $(BUILD_DIR)/$(TARGET).bin $(DFU_UTIL)
 	$(call dfu_write,$(BUILD_DIR)/$(TARGET).bin,$(DFU_FLASH_ADDR))
 
 # Same image; kept for the old split-image habit.
