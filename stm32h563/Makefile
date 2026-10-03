@@ -267,45 +267,10 @@ $(BUILD_DIR)/mbedtls/%.o: $(MBEDTLS)/library/%.c | $(BUILD_DIR)/mbedtls
 
 .DEFAULT_GOAL := all
 
-# Embed the iCE40 bitstream(s) so the STM32 can (re)flash them (flash-ice40) and switch
-# between gateware images at runtime.  SB_WARMBOOT can't reconfigure at runtime on this
-# board (config-SPI pins are shared with the PSRAM bus), so image switching reprograms the
-# config flash with the selected SINGLE image via the proven ice40_flash_program +
-# CRESET-reconfig path.  Embed BOTH singles when the gateware `make multiboot` built them
-# (slot0=closed-loop image, slot1=deep-DAC-replay); `fpga_bitstream` aliases image 0 so the
-# existing flash-ice40 default is unchanged.  Fall back to the single default bitstream.
+# The iCE40 gateware images are not embedded: the pod keeps them in W25Q blob slots
+# (src/blob_store.h), and an installer sends them from build/blobs/ (below).
 ICE40_LOOP_BIN := ../ice40/bench_pod_fpga_vbench_pod_loop.bin
 ICE40_DEEP_BIN := ../ice40/bench_pod_fpga_vbench_pod_deep.bin
-GEN_BITSTREAM := $(BUILD_DIR)/fpga_bitstream.h
-# Place the (large, rarely-changing) bitstream arrays in their own section so the
-# linker collects them into the FLASH_BLOBS region (.blobs) instead of .rodata —
-# this is what lets `flash-dfu-code` skip them. `used` pins them past --gc-sections.
-FPGA_BLOB_ATTR := __attribute__((section(".blob_fpga"),used))
-# Prefer the two-image embed (loop + deep) when both single images exist; otherwise
-# fall back to a single ../ice40/bench_pod_fpga_vbench_pod.bin if present. The single
-# fallback is intentionally NOT a hard prerequisite (it may not exist in a two-image build).
-$(GEN_BITSTREAM): $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard ../ice40/bench_pod_fpga_vbench_pod.bin) $(wildcard $(ICE40_LOOP_BIN).gwversion) | $(BUILD_DIR)
-	@if [ -f $(ICE40_LOOP_BIN) ] && [ -f $(ICE40_DEEP_BIN) ]; then \
-	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_image0[] = {\n' > $@; \
-	   xxd -i < $(ICE40_LOOP_BIN) >> $@; \
-	   printf '};\nstatic const unsigned int fpga_image0_len = sizeof(fpga_image0);\n' >> $@; \
-	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_image1[] = {\n' >> $@; \
-	   xxd -i < $(ICE40_DEEP_BIN) >> $@; \
-	   printf '};\nstatic const unsigned int fpga_image1_len = sizeof(fpga_image1);\n' >> $@; \
-	   printf '#define FPGA_HAVE_IMAGES 1\n#define fpga_bitstream fpga_image0\n#define fpga_bitstream_len fpga_image0_len\n' >> $@; \
-	 elif [ -f ../ice40/bench_pod_fpga_vbench_pod.bin ]; then \
-	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_bitstream[] = {\n' > $@; \
-	   xxd -i < ../ice40/bench_pod_fpga_vbench_pod.bin >> $@; \
-	   printf '};\nstatic const unsigned int fpga_bitstream_len = sizeof(fpga_bitstream);\n' >> $@; \
-	 else \
-	   printf '$(FPGA_BLOB_ATTR) static const unsigned char fpga_bitstream[1]={0};\nstatic const unsigned int fpga_bitstream_len=0;\n' > $@; \
-	 fi
-	@# The GATEWARE_VERSION the gateware build recorded next to the image (0 = unknown, which
-	@# turns the boot-time gateware update off).
-	@v=$$(cat $(ICE40_LOOP_BIN).gwversion 2>/dev/null); \
-	 if [ -f $(ICE40_LOOP_BIN) ] && [ -n "$$v" ]; then printf '#define FPGA_EMBEDDED_GW_VERSION %s\n' "$$v" >> $@; \
-	 else printf '#define FPGA_EMBEDDED_GW_VERSION 0\n' >> $@; fi
-$(BUILD_DIR)/console.o: $(GEN_BITSTREAM)
 
 # The blobs that go with this firmware, as the pod's W25Q slots hold them (src/blob_store.h):
 # build/blobs/{gw0,gw1,esp}.bin + manifest.json for installers, and blob_manifest_gen.h so the
@@ -371,7 +336,7 @@ fetch:
 	@echo "==> OK: $(ESP_SLAVE_BIN)"
 
 .PHONY: all flash flash-dfu flash-dfu-code flash-dfu-blobs clean help test fetch
-all: check-uid $(GEN_BITSTREAM) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
+all: check-uid $(GEN_BLOB_MANIFEST) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
      $(BUILD_DIR)/$(TARGET).bin $(CODE_BIN) $(BLOBS_BIN)
 
 # The unique-ID area must be read as whole words (a byte read is a bus fault on the H5 and

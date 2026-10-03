@@ -714,3 +714,6 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
 size_t fpga_uart_read(uint8_t *buf, size_t len);
 /* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
 bool fpga_uart_rx_overflowed(void);
+/* Reprogram the iCE40 when its gateware is not the version this firmware was built with, from
+   the matching W25Q slot; no-op otherwise. Runs at boot and after a gateware blob install. */
+void signal_engine_gateware_update(void);
