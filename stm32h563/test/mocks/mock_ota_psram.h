@@ -12,6 +12,7 @@ extern int mock_psram_acquire_count;    /* total acquires, for "the bus was used
 extern int mock_psram_fail_write_at;    /* make the write covering this offset fail (-1 = never) */
 extern int mock_psram_fail_read_at;     /* make the read covering this offset fail (-1 = never) */
 extern int mock_quiesce_calls;
+extern uint32_t mock_flash_size;      /* what flash_layout_size() reports (default 2 MB) */
 
 void mock_ota_psram_reset(void);
 

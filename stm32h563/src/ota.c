@@ -1,6 +1,8 @@
 #include "ota.h"
 #include "psram.h"
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
+#include "flash_layout.h"
+#include "fw_info.h"
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -46,6 +48,10 @@ static int parse_sha256_hex(const char *hex, uint8_t out[32]) {
     return hex[64] == '\0' ? 0 : -1;   /* exactly 64 hex chars */
 }
 
+uint32_t ota_max_size(void) {
+    return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
+}
+
 static void set_err(const char *e) {
     strncpy(s_err, e ? e : "", sizeof(s_err) - 1);
     s_err[sizeof(s_err) - 1] = '\0';
@@ -54,7 +60,7 @@ static void set_err(const char *e) {
 }
 
 int ota_begin(uint32_t size, const char *sha256_hex) {
-    if (size == 0 || size > OTA_MAX_SIZE) { set_err("bad size"); return -1; }
+    if (size == 0 || size > ota_max_size()) { set_err("bad size"); return -1; }
     uint8_t expect[32];
     if (parse_sha256_hex(sha256_hex, expect) != 0) { set_err("bad sha256"); return -1; }
     memcpy(s_expect, expect, 32);
@@ -114,12 +120,38 @@ static int staged_hash_check(bool held) {
     return memcmp(got, s_expect, 32) != 0 ? 1 : 0;
 }
 
+/* Does the staged image fit this pod's flash?  Its fw_info block (fw_info.h) says the smallest
+   flash it was built for; an image without one is from before the 1 MB part and needs 2 MB.
+   0 = fits, -1 = refused (error set). */
+static int staged_fits_this_flash(void) {
+    uint8_t info[sizeof(fw_info_t)];
+    size_t n = 0;
+    if (s_size >= FW_INFO_OFFSET + sizeof(info)) {
+        psram_bus_acquire();
+        int rc = psram_read(OTA_PSRAM_BASE + FW_INFO_OFFSET, info, sizeof(info));
+        psram_bus_release();
+        if (rc != 0) { set_err("psram read failed"); return -1; }
+        n = sizeof(info);
+    }
+    uint32_t need_kb = fw_info_required_kb(n ? info : NULL, n);
+    uint32_t have_kb = flash_layout_size() / 1024u;
+    if (need_kb > have_kb) {
+        char e[64];
+        snprintf(e, sizeof(e), "image needs %lu KB flash, this pod has %lu KB",
+                 (unsigned long)need_kb, (unsigned long)have_kb);
+        set_err(e);
+        return -1;
+    }
+    return 0;
+}
+
 int ota_end(void) {
     if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
     if (s_received < s_size) { set_err("incomplete image"); return -1; }
     int rc = staged_hash_check(false);
     if (rc < 0) return -1;
     if (rc > 0) { set_err("sha256 mismatch"); return -1; }
+    if (staged_fits_this_flash() != 0) return -1;
     s_state = OTA_VERIFIED;
     printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;

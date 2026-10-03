@@ -54,7 +54,7 @@ SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
 CUBE     ?= /opt/STM32CubeH5
 MBEDTLS  := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
-OTA_SRCS := test_ota.c ../src/ota.c mocks/mock_ota_psram.c $(MBEDTLS_SHA256)
+OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c mocks/mock_ota_psram.c $(MBEDTLS_SHA256)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 ifneq ($(HAVE_MBEDTLS),)
 OTA_TARGET := build/test_ota
@@ -217,6 +217,7 @@ run: $(TESTS)
 	@./build/test_power_profile
 	@./build/test_boot_policy
 	@./build/test_bus_recovery
+	@./build/test_flash_layout
 	@./build/test_config_store > build/test_config_store.log || { cat build/test_config_store.log; exit 1; }
 	@tail -n 1 build/test_config_store.log
 	@./build/test_dac_limits > build/test_dac_limits.log || { cat build/test_dac_limits.log; exit 1; }

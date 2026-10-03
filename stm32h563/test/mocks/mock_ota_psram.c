@@ -18,6 +18,7 @@ int mock_psram_acquire_count;
 int mock_psram_fail_write_at = -1;  /* offset whose write fails, or -1 */
 int mock_psram_fail_read_at  = -1;  /* offset whose read fails, or -1 */
 int mock_quiesce_calls;
+uint32_t mock_flash_size = 0x200000u;
 
 void mock_ota_psram_reset(void) {
     memset(mock_psram, 0, sizeof(mock_psram));
@@ -26,7 +27,10 @@ void mock_ota_psram_reset(void) {
     mock_psram_fail_write_at = -1;
     mock_psram_fail_read_at = -1;
     mock_quiesce_calls = 0;
+    mock_flash_size = 0x200000u;
 }
+
+uint32_t flash_layout_size(void) { return mock_flash_size; }
 
 void psram_bus_acquire(void) { mock_psram_acquired++; mock_psram_acquire_count++; }
 void psram_bus_release(void) { mock_psram_acquired--; }

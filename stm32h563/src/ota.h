@@ -25,12 +25,14 @@
  * the write leaves the device needing a USB-DFU reflash — it is NOT power-atomic.
  */
 
-/* Max image we will accept: everything below 0x081E8000, where the linker's FLASH_BLOBS region
-   ends (config/STM32H563ZITX_FLASH.ld), so a firmware image can never be larger.  Above it sit
-   the per-pod ADC calibration (adc_cal.h), the DAC output limits (dac_limits.h), the OTA self-test scratch sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY
-   KEY; ota_commit erases and rewrites up to the image size, so the old limit (all 2 MB) let an
-   oversized image wipe them, and a pod without its key cannot authenticate to the cloud again. */
+/* Max image we will accept: everything below the persistence sectors at the top of flash
+   (flash_layout.h): 0x1E8000 on a 2 MB part, 0x0E8000 on a 1 MB part.  There sit the per-pod
+   ADC calibration (adc_cal.h), the DAC output limits (dac_limits.h), the OTA self-test scratch
+   sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY KEY; ota_commit erases and
+   rewrites up to the image size, so a larger image would wipe them, and a pod without its key
+   cannot authenticate to the cloud again.  OTA_MAX_SIZE is the 2 MB part's limit. */
 #define OTA_MAX_SIZE   0x1E8000u   /* 1952 KB */
+uint32_t ota_max_size(void);
 
 typedef enum {
     OTA_IDLE = 0,
