@@ -15,11 +15,11 @@
 
 #define FW_INFO_OFFSET   0x400u
 #define FW_INFO_MAGIC    0x57465042u   /* "BPFW" little-endian */
-#define FW_INFO_LAYOUT   1u            /* bumped when the flash layout changes */
+#define FW_INFO_LAYOUT   2u            /* bumped when the flash layout changes (2: blobs in the W25Q) */
 
-/* The smallest flash this build fits. The embedded ESP32-C3 and iCE40 blobs still fill the
-   2 MB part's FLASH_BLOBS region; once they move to the W25Q the image fits a 1 MB part. */
-#define FW_INFO_MIN_FLASH_KB  2048u
+/* The smallest flash this build fits: the linker keeps the code below the 1 MB part's
+   persistence sectors (config/STM32H563ZITX_FLASH.ld). */
+#define FW_INFO_MIN_FLASH_KB  1024u
 
 typedef struct {
     uint32_t magic;          /* FW_INFO_MAGIC */

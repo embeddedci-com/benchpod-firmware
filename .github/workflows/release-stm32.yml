@@ -65,8 +65,6 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Publishing firmware as ${TARGET_REPO}@${TAG}"
 
-      - name: Install host tools (xxd for the bitstream embed)
-        run: sudo apt-get update && sudo apt-get install -y xxd
 
       - name: Set up ARM GCC toolchain
         uses: carlosperate/arm-none-eabi-gcc-action@v1
@@ -114,18 +112,24 @@ jobs:
       - name: Build STM32 firmware
         run: make -C stm32h563 CUBE="${{ runner.temp }}/STM32CubeH5"
 
-      - name: Check both gateware images are embedded
+      - name: Check the blobs that go with this firmware are all there
         run: |
-          grep -q '#define FPGA_HAVE_IMAGES 1' stm32h563/build/fpga_bitstream.h || {
-            echo "firmware embeds a single iCE40 image — expected loop + deep (make -C ice40 images)"
-            exit 1
-          }
+          python3 - <<'PY'
+          import json, sys
+          m = json.load(open("stm32h563/build/blobs/blobs-manifest.json"))
+          missing = [b["name"] for b in m["blobs"] if not b["size"]]
+          if missing:
+              sys.exit("no blob built for: " + ", ".join(missing) + " (make -C ice40 images, make fetch)")
+          print("blobs:", ", ".join("%s %d B" % (b["name"], b["size"]) for b in m["blobs"]))
+          PY
 
       - name: Checksum
         working-directory: stm32h563/build
         run: |
           sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
-          # which gateware this firmware embeds, and what hardware test it passed
+          # the blobs installers put in the pod's W25Q slots, under their release asset names
+          cp blobs/blob-gw0.bin blobs/blob-gw1.bin blobs/blob-esp.bin blobs/blobs-manifest.json .
+          # which gateware goes with this firmware, and what hardware test it passed
           cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
       - name: Publish release
@@ -134,7 +138,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else

@@ -8,10 +8,10 @@
 /*
  * ota — hostless firmware update, staged in external PSRAM.
  *
- * The full firmware image (~1.6 MB — the STM32 app plus the embedded ESP + FPGA
- * blobs) is too big for a dual-bank A/B swap (it exceeds one 1 MB bank), so OTA
- * streams the whole image into the 8 MB PSRAM, verifies its SHA-256, then a
- * RAM-resident routine erases + rewrites the internal flash from PSRAM and resets.
+ * The firmware image (~0.5 MB; it must fit the 1 MB H563's 928 KB code area) is
+ * streamed into the 8 MB PSRAM, its SHA-256 verified, then a RAM-resident routine
+ * erases + rewrites the internal flash from PSRAM and resets.  The same staging
+ * carries the blobs (ESP32-C3 image, iCE40 gateware) to their W25Q slots.
  *
  * Transport-agnostic: the same calls are driven by the cloud WebSocket ota.*
  * frames AND by the LAN ota_* JSON commands (so OTA is testable without the

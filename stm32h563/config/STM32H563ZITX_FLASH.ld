@@ -42,26 +42,17 @@ _Min_Heap_Size = 0x200; /* required amount of heap */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Memories definition */
-/* The 2 MB main flash is split into two regions so `make flash-dfu-code` can
- * rewrite just the firmware without re-sending the ~1.3 MB of embedded blobs
- * (ESP32-C3 slave image + iCE40 bitstreams) over slow USB-FS DFU each edit:
- *   FLASH       — code, rodata, data-init      (0x08000000, 640K)
- *   FLASH_BLOBS — embedded .blobs region        (0x080A0000, 1312K)
- * The 0x080A0000 blob base is mirrored by DFU_BLOBS_ADDR in the Makefile — keep
- * the two in sync. FLASH_BLOBS deliberately stops at 0x081E8000, below the
- * high-flash persistence sectors touched at runtime, so the link fails if the blobs
- * ever grow into them: per-pod ADC calibration 0x081E8000/0x081EA000 (adc_cal.h);
- * DAC output limits 0x081EC000/0x081EE000 (dac_limits.h);
- * 0x081F0000 OTA self-test scratch (ota_commit.c); two-slot,
- * power-loss-safe stores (config_store.h): cloud 0x081F2000/0x081F4000, Wi-Fi
- * 0x081F6000/0x081F8000; legacy single-sector cloud 0x081FA000 and Wi-Fi 0x081FE000
- * (read-only fallback, erased by a clear); device identity 0x081FC000. Two regions also give a free guard:
- * the link fails with "region FLASH overflowed" if the firmware exceeds 640K. */
+/* One image for the 2 MB H563 (ZIT6) and the 1 MB one (ZGT6): the code may use the 1 MB part's
+ * flash up to its persistence sectors, 0x080E8000, so the same binary fits both and the link
+ * fails with "region FLASH overflowed" before it could grow into them.  The persistence records
+ * (ADC calibration, DAC limits, OTA self-test scratch, cloud and Wi-Fi config, device identity)
+ * sit in the top 96 KB of whichever flash the chip has (src/flash_layout.h); on a 2 MB part the
+ * flash between 0x080E8000 and those records is unused.  The ESP32-C3 image and the iCE40
+ * gateware live in the W25Q (src/blob_store.h), not here. */
 MEMORY
 {
   RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K
-  FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 640K
-  FLASH_BLOBS (r)     : ORIGIN = 0x080A0000,   LENGTH = 1312K
+  FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 928K
 }
 
 /* Sections */
@@ -109,25 +100,6 @@ SECTIONS
     *(.rodata*)        /* .rodata* sections (constants, strings, etc.) */
     . = ALIGN(4);
   } >FLASH
-
-  /* Large embedded binary blobs — the ESP32-C3 esp-hosted slave image
-   * (src/esp_slave_fw.s → .blob_esp_slave_fw) and the iCE40 bitstream(s)
-   * (build/fpga_bitstream.h arrays → .blob_fpga) — kept out of .rodata and
-   * collected here into the dedicated FLASH_BLOBS region. They rarely change,
-   * so `make flash-dfu-code` can re-flash the firmware without them, while
-   * `make flash-dfu-blobs` writes just this region after a gateware rebuild.
-   * KEEP guards against --gc-sections dropping an unreferenced image. */
-  .blobs :
-  {
-    . = ALIGN(4);
-    _blobs_start = .;
-    KEEP(*(.blob_esp_slave_fw))
-    KEEP(*(.blob_esp_slave_fw*))
-    KEEP(*(.blob_fpga))
-    KEEP(*(.blob_fpga*))
-    . = ALIGN(4);
-    _blobs_end = .;
-  } >FLASH_BLOBS
 
   .ARM.extab (READONLY) : /* The READONLY keyword is only supported in GCC11 and later, remove it if using GCC10 or earlier. */
   {

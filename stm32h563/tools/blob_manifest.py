@@ -4,10 +4,11 @@ ESP32-C3 esp-hosted image, which the pod keeps in W25Q slots (src/blob_store.h) 
 its internal flash.
 
 Writes, for the firmware and for whoever installs it (release CI, benchpod CLI, server):
-  <out-dir>/gw0.bin, gw1.bin, esp.bin   the blobs, under their slot names
-  <out-dir>/manifest.json               size, SHA-256 and gateware version of each
+  <out-dir>/blob-gw0.bin, blob-gw1.bin, blob-esp.bin   the blobs, named after their slots
+  <out-dir>/blobs-manifest.json         size, SHA-256 and gateware version of each
   <header>                              the same as C, compiled into the firmware so the pod
                                         knows which blobs it was built and tested with
+The file names are also the release asset names, so the manifest's "file" fields work for both.
 
 A missing input (a build without gateware) is written as size 0: the firmware then reports
 that slot's expected blob as unknown instead of failing the build.
@@ -25,7 +26,7 @@ def describe(name, path, version):
     data = open(path, "rb").read()
     return {
         "name": name,
-        "file": name + ".bin",
+        "file": "blob-" + name + ".bin",
         "size": len(data),
         "sha256": hashlib.sha256(data).hexdigest(),
         "version": version,
@@ -59,7 +60,7 @@ def main():
         if e["file"]:
             shutil.copyfile(src, os.path.join(a.out_dir, e["file"]))
     manifest = {"format": 1, "gateware_version": a.gw_version, "blobs": [e for e, _ in entries]}
-    with open(os.path.join(a.out_dir, "manifest.json"), "w") as f:
+    with open(os.path.join(a.out_dir, "blobs-manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
         f.write("\n")
 
