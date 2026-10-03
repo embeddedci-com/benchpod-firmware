@@ -17,6 +17,11 @@ int ice40_flash_read_id(uint8_t id[3]);
    and wait for CDONE.  Returns 0 on success, <0 on error. */
 int ice40_flash_program(const uint8_t *data, size_t len);
 
+/* The same, reading the bitstream through `rd` (n <= 256 bytes at offset `off`), so the source
+   can be a blob slot in this same flash: it is read page by page with the bus already held. */
+typedef int (*ice40_src_read_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
+int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len);
+
 /* iCE40 self-reconfiguration (SB_WARMBOOT) support: hand it the config-flash bus, then
    wait for CDONE after it reboots into the selected image. */
 void ice40_prepare_reconfig(void);
