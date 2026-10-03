@@ -10,75 +10,29 @@
 #include "ice40_flash.h"
 #include <stdbool.h>
 #include "psram.h"
+#include "w25q.h"
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "stm32h5xx_hal.h"
 #include <stdio.h>
 #include <string.h>
 
-#define FLASH_SECTOR  4096u
-#define FLASH_PAGE    256u
-#define WIP_TIMEOUT_MS    2000u
 #define CDONE_TIMEOUT_MS  500u
 
-#define FCS_LOW()   HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_RESET)
 #define FCS_HIGH()  HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_SET)
-
-/* Single-SPI command on the flash, framed by PE3.  Reuses the OCTOSPI handle
-   psram_init() set up. */
-static int fxfer(uint8_t instr, int has_addr, uint32_t addr,
-                 uint8_t *buf, uint32_t len, int is_read)
-{
-    XSPI_HandleTypeDef *h = (XSPI_HandleTypeDef *)psram_xspi();
-    XSPI_RegularCmdTypeDef c = {0};
-    c.OperationType = HAL_XSPI_OPTYPE_COMMON_CFG;
-    c.Instruction = instr;
-    c.InstructionMode = HAL_XSPI_INSTRUCTION_1_LINE;
-    c.InstructionWidth = HAL_XSPI_INSTRUCTION_8_BITS;
-    c.AddressMode = has_addr ? HAL_XSPI_ADDRESS_1_LINE : HAL_XSPI_ADDRESS_NONE;
-    c.Address = addr;
-    c.AddressWidth = HAL_XSPI_ADDRESS_24_BITS;
-    c.DataMode = len ? HAL_XSPI_DATA_1_LINE : HAL_XSPI_DATA_NONE;
-    c.DataLength = len;
-    c.DummyCycles = 0;
-
-    FCS_LOW();
-    HAL_StatusTypeDef s = HAL_XSPI_Command(h, &c, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
-    if (s == HAL_OK && len) {
-        s = is_read ? HAL_XSPI_Receive(h, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE)
-                    : HAL_XSPI_Transmit(h, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
-    }
-    FCS_HIGH();
-    return (s == HAL_OK) ? 0 : -1;
-}
-
-static int flash_wait_wip(void)
-{
-    uint32_t t0 = HAL_GetTick();
-    for (;;) {
-        uint8_t sr = 0xFF;
-        if (fxfer(0x05, 0, 0, &sr, 1, 1) != 0) return -1;   /* RDSR */
-        if ((sr & 0x01u) == 0) return 0;                    /* WIP clear */
-        if (HAL_GetTick() - t0 > WIP_TIMEOUT_MS) return -1;
-    }
-}
 
 /* PE3 (flash CS) + CRESET (PF13, drive low to hold iCE40 in reset) + CDONE
    (PF14, input).  PG0/PSRAM-CS/OCTOSPI pins are handled by psram_bus_acquire. */
 static void flash_pins(void)
 {
     GPIO_InitTypeDef g = {0};
-    __HAL_RCC_GPIOE_CLK_ENABLE();
     __HAL_RCC_GPIOF_CLK_ENABLE();
     g.Pull = GPIO_NOPULL; g.Speed = GPIO_SPEED_FREQ_LOW;
 
-    FCS_HIGH();
-    g.Mode = GPIO_MODE_OUTPUT_PP; g.Pin = ICE_FLASH_CS_PIN;
-    HAL_GPIO_Init(ICE_FLASH_CS_PORT, &g);
-    FCS_HIGH();
+    w25q_cs_output();
 
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);  /* hold reset */
-    g.Pin = ICE_CRESET_PIN; HAL_GPIO_Init(ICE_CRESET_PORT, &g);
+    g.Mode = GPIO_MODE_OUTPUT_PP; g.Pin = ICE_CRESET_PIN; HAL_GPIO_Init(ICE_CRESET_PORT, &g);
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);
 
     g.Mode = GPIO_MODE_INPUT; g.Pin = ICE_CDONE_PIN;
@@ -91,9 +45,8 @@ int ice40_flash_read_id(uint8_t id[3])
     flash_pins();
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);
     sleep_ms(1);
-    fxfer(0xAB, 0, 0, NULL, 0, 0);   /* release deep power-down */
-    sleep_ms(1);
-    int rc = fxfer(0x9F, 0, 0, id, 3, 1);
+    w25q_wake();
+    int rc = w25q_read_id(id);
     /* leave the iCE40 in reset is bad — release it so it reconfigures */
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);
     psram_bus_release();
@@ -117,20 +70,34 @@ void ice40_hold_off_bus(void)
     printf("[ice40] held in reset (off the shared bus) until the next reflash\n");
 }
 
+static int mem_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
+{
+    memcpy(buf, (const uint8_t *)ctx + off, n);
+    return 0;
+}
+
 int ice40_flash_program(const uint8_t *data, size_t len)
 {
-    if (!data || len == 0) return -1;
+    if (!data) return -1;
+    return ice40_flash_program_src(mem_read, (void *)data, len);
+}
+
+int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
+{
+    if (!rd || len == 0) return -1;
     bool erased = false;   /* from the first erase on, the flash holds no whole image */
+    static uint8_t pg[W25Q_PAGE];   /* source page */
+    static uint8_t rb[W25Q_PAGE];   /* read-back page */
 
     psram_bus_acquire();
     flash_pins();
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);  /* iCE40 in reset */
     sleep_ms(2);
-    fxfer(0xAB, 0, 0, NULL, 0, 0);   /* wake flash */
+    w25q_wake();
     sleep_ms(1);
 
     uint8_t id[3] = {0};
-    if (fxfer(0x9F, 0, 0, id, 3, 1) != 0 || id[0] == 0x00 || id[0] == 0xFF) {
+    if (w25q_read_id(id) != 0 || id[0] == 0x00 || id[0] == 0xFF) {
         printf("[ice40] flash not responding (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
         goto fail;
     }
@@ -138,37 +105,32 @@ int ice40_flash_program(const uint8_t *data, size_t len)
            id[0], id[1], id[2], (unsigned)len);
 
     /* Erase enough 4 KB sectors to hold the bitstream. */
-    for (uint32_t a = 0; a < len; a += FLASH_SECTOR) {
-        if (fxfer(0x06, 0, 0, NULL, 0, 0) != 0) goto fail;        /* WREN */
+    for (uint32_t a = 0; a < len; a += W25Q_SECTOR) {
         erased = true;
-        if (fxfer(0x20, 1, a, NULL, 0, 0) != 0) goto fail;        /* sector erase */
-        if (flash_wait_wip() != 0) goto fail;
+        if (w25q_erase_sector(a) != 0) goto fail;
     }
     /* Program in 256-byte pages. */
-    for (uint32_t a = 0; a < len; a += FLASH_PAGE) {
-        uint32_t n = (len - a < FLASH_PAGE) ? (uint32_t)(len - a) : FLASH_PAGE;
-        if (fxfer(0x06, 0, 0, NULL, 0, 0) != 0) goto fail;        /* WREN */
-        if (fxfer(0x02, 1, a, (uint8_t *)(data + a), n, 0) != 0) goto fail; /* page program */
-        if (flash_wait_wip() != 0) goto fail;
+    for (uint32_t a = 0; a < len; a += W25Q_PAGE) {
+        uint32_t n = (len - a < W25Q_PAGE) ? (uint32_t)(len - a) : W25Q_PAGE;
+        if (rd(ctx, a, pg, n) != 0) goto fail;
+        if (w25q_program(a, pg, n) != 0) goto fail;
     }
 
     /* Read-back verify: prove the flash content matches the bitstream, so a
        CDONE failure can be pinned on the config/handoff path rather than a bad
        write.  Still on the STM32-owned bus here (normal read, 0x03, no dummy). */
-    {
-        static uint8_t rb[FLASH_PAGE];
-        for (uint32_t a = 0; a < len; a += FLASH_PAGE) {
-            uint32_t n = (len - a < FLASH_PAGE) ? (uint32_t)(len - a) : FLASH_PAGE;
-            if (fxfer(0x03, 1, a, rb, n, 1) != 0) goto fail;
-            if (memcmp(rb, data + a, n) != 0) {
-                uint32_t k = 0; while (k < n && rb[k] == data[a + k]) k++;
-                printf("[ice40] verify FAILED @0x%06lx: wrote %02x read %02x\n",
-                       (unsigned long)(a + k), data[a + k], rb[k]);
-                goto fail;
-            }
+    for (uint32_t a = 0; a < len; a += W25Q_PAGE) {
+        uint32_t n = (len - a < W25Q_PAGE) ? (uint32_t)(len - a) : W25Q_PAGE;
+        if (rd(ctx, a, pg, n) != 0) goto fail;
+        if (w25q_read(a, rb, n) != 0) goto fail;
+        if (memcmp(rb, pg, n) != 0) {
+            uint32_t k = 0; while (k < n && rb[k] == pg[k]) k++;
+            printf("[ice40] verify FAILED @0x%06lx: wrote %02x read %02x\n",
+                   (unsigned long)(a + k), pg[k], rb[k]);
+            goto fail;
         }
-        printf("[ice40] verify OK (%u bytes)\n", (unsigned)len);
     }
+    printf("[ice40] verify OK (%u bytes)\n", (unsigned)len);
 
     /* Hand the config-flash bus FULLY to the iCE40 before releasing it from reset (previously
        CRESET was released while the STM32 still owned the bus, so the iCE40 came out of reset
