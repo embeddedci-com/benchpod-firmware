@@ -9,8 +9,6 @@ BUILD_DIR         := build
 
 # Split DFU images (built by `all`; recipes further below). Defined up here so the
 # `all:` prerequisite list — read before those recipes — sees them.
-CODE_BIN          := $(BUILD_DIR)/$(TARGET)-code.bin
-BLOBS_BIN         := $(BUILD_DIR)/$(TARGET)-blobs.bin
 
 # STM32CubeH5 SDK location (override on the command line if installed elsewhere).
 CUBE              ?= /opt/STM32CubeH5
@@ -23,9 +21,6 @@ OPENOCD_INTERFACE ?= stlink
 # is in the ROM bootloader (BOOT0 high at reset, or `benchpod dfu` on a running pod).
 DFU_UTIL          ?= dfu-util
 DFU_FLASH_ADDR    ?= 0x08000000
-# Base of the FLASH_BLOBS region (embedded ESP-C3 + iCE40 blobs). MUST match the
-# FLASH_BLOBS origin in config/STM32H563ZITX_FLASH.ld. Used by `flash-dfu-blobs`.
-DFU_BLOBS_ADDR    ?= 0x080A0000
 
 #######################################
 # Toolchain
@@ -273,7 +268,7 @@ ICE40_LOOP_BIN := ../ice40/bench_pod_fpga_vbench_pod_loop.bin
 ICE40_DEEP_BIN := ../ice40/bench_pod_fpga_vbench_pod_deep.bin
 
 # The blobs that go with this firmware, as the pod's W25Q slots hold them (src/blob_store.h):
-# build/blobs/{gw0,gw1,esp}.bin + manifest.json for installers, and blob_manifest_gen.h so the
+# build/blobs/blob-{gw0,gw1,esp}.bin + blobs-manifest.json for installers, and blob_manifest_gen.h so the
 # firmware knows which blobs it was built with.
 BLOB_DIR      := $(BUILD_DIR)/blobs
 GEN_BLOB_MANIFEST := $(BUILD_DIR)/blob_manifest_gen.h
@@ -332,9 +327,9 @@ fetch:
 	 fi
 	@echo "==> OK: $(ESP_SLAVE_BIN)"
 
-.PHONY: all flash flash-dfu flash-dfu-code flash-dfu-blobs clean help test fetch
+.PHONY: all flash flash-dfu flash-dfu-code clean help test fetch
 all: check-uid $(GEN_BLOB_MANIFEST) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
-     $(BUILD_DIR)/$(TARGET).bin $(CODE_BIN) $(BLOBS_BIN)
+     $(BUILD_DIR)/$(TARGET).bin
 
 # The unique-ID area must be read as whole words (a byte read is a bus fault on the H5 and
 # once left a pod crashing before USB came up).  Only board_uid.h may touch UID_BASE.
@@ -375,23 +370,6 @@ $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
 	$(BIN) $< $@
 
-# Split images for fast DFU. The big embedded blobs (ESP-C3 slave image + iCE40
-# bitstreams) live in the dedicated high-flash .blobs region and rarely change,
-# so a routine firmware edit only needs the ~0.4 MB code image re-flashed instead
-# of the full ~1.7 MB image (~4x faster over USB-FS DFU).
-#   code.bin  — everything EXCEPT .blobs → compact image based at $(DFU_FLASH_ADDR)
-#   blobs.bin — ONLY .blobs             → image based at $(DFU_BLOBS_ADDR)
-# --remove-section drops .blobs so the highest remaining section (code/rodata) sets
-# the image length; --only-section keeps just .blobs so the image starts at its base.
-# (CODE_BIN / BLOBS_BIN are defined near the top so `all` can list them as prereqs.)
-$(CODE_BIN): $(BUILD_DIR)/$(TARGET).elf
-	$(CP) -O binary -S --remove-section=.blobs $< $@
-	@echo "code image:  $$(wc -c < $@) bytes  -> $(DFU_FLASH_ADDR)"
-
-$(BLOBS_BIN): $(BUILD_DIR)/$(TARGET).elf
-	$(CP) -O binary -S --only-section=.blobs $< $@
-	@echo "blobs image: $$(wc -c < $@) bytes  -> $(DFU_BLOBS_ADDR)"
-
 $(BUILD_DIR):
 	mkdir -p $@
 
@@ -423,22 +401,13 @@ define dfu_write
 	fi
 endef
 
-# Full image (code + blobs) — first flash of a board, or when both changed. The
-# blob region sits above the code region with a gap that objcopy zero-fills, so
-# this one write primes everything (required before the first flash-dfu-code).
+# The firmware image (~0.5 MB). The gateware and ESP32-C3 images are not in it: they live in
+# the W25Q blob slots and go in with `benchpod flash-self` (or any OTA) after this write.
 flash-dfu: all
 	$(call dfu_write,$(BUILD_DIR)/$(TARGET).bin,$(DFU_FLASH_ADDR))
 
-# Firmware only (~0.4 MB, ~4x faster) — the routine dev-loop write. Leaves the
-# blob region untouched, so the blobs must already be in flash (run `flash-dfu`
-# once on a fresh board first).
-flash-dfu-code: $(CODE_BIN)
-	$(call dfu_write,$(CODE_BIN),$(DFU_FLASH_ADDR))
-
-# Blobs only (~1.3 MB) — after a gateware rebuild (new iCE40 bitstreams) or to
-# refresh the embedded ESP-C3 image, without rewriting the firmware.
-flash-dfu-blobs: $(BLOBS_BIN)
-	$(call dfu_write,$(BLOBS_BIN),$(DFU_BLOBS_ADDR))
+# Same image; kept for the old split-image habit.
+flash-dfu-code: flash-dfu
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -446,10 +415,8 @@ clean:
 help:
 	@echo "Targets: all (default), flash, clean, fetch"
 	@echo "  flash          : SWD flash via OpenOCD (needs a probe; verifies)"
-	@echo "  flash-dfu      : full USB-DFU write (code + blobs) — first flash / clean image"
-	@echo "  flash-dfu-code : DFU-write firmware only (~0.4 MB, ~4x faster) — routine dev loop"
-	@echo "                   (blobs must already be flashed; run flash-dfu once on a fresh board)"
-	@echo "  flash-dfu-blobs: DFU-write blobs only (~1.3 MB) — after a gateware/ESP-C3 rebuild"
-	@echo "  fetch          : build/download the embedded ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
+	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
+	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
+	@echo "  build/blobs/   : blob-{gw0,gw1,esp}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "Vars:    CUBE=$(CUBE)  OPENOCD_INTERFACE=$(OPENOCD_INTERFACE)"
-	@echo "         DFU_UTIL=$(DFU_UTIL)  DFU_FLASH_ADDR=$(DFU_FLASH_ADDR)  DFU_BLOBS_ADDR=$(DFU_BLOBS_ADDR)"
+	@echo "         DFU_UTIL=$(DFU_UTIL)  DFU_FLASH_ADDR=$(DFU_FLASH_ADDR)"
