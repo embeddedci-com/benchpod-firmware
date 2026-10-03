@@ -58,6 +58,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdlib.h>
 
 #include "fpga_bitstream.h"   /* generated: fpga_image0/1[] + _len (or fpga_bitstream[]) */
+#include "flash_layout.h"
 
 /* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
  * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
@@ -455,6 +456,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         for (int i = 0; i < sys_health_task_count(); i++)
             op(out, ctx, "  stack  : %-7s %u B free (min)\r\n",
                sys_health_task_name(i), sys_health_task_stack_free(i));
+        op(out, ctx, "  flash  : %lu KB\r\n", (unsigned long)(flash_layout_size() / 1024u));
         op(out, ctx, "  heap   : %u B free, %u B min\r\n",
            sys_health_heap_free(), sys_health_heap_min_free());
     } else if (!strcmp(argv[0], "spi-clk") && argc >= 2) {
