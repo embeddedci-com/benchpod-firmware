@@ -9,6 +9,7 @@
  * error paths are exercised without real hardware faults.
  */
 #include "mock_ota_psram.h"
+#include "blob_store.h"
 
 #include <string.h>
 
@@ -19,6 +20,7 @@ int mock_psram_fail_write_at = -1;  /* offset whose write fails, or -1 */
 int mock_psram_fail_read_at  = -1;  /* offset whose read fails, or -1 */
 int mock_quiesce_calls;
 uint32_t mock_flash_size = 0x200000u;
+int mock_installed[4];
 
 void mock_ota_psram_reset(void) {
     memset(mock_psram, 0, sizeof(mock_psram));
@@ -28,7 +30,10 @@ void mock_ota_psram_reset(void) {
     mock_psram_fail_read_at = -1;
     mock_quiesce_calls = 0;
     mock_flash_size = 0x200000u;
+    memset(mock_installed, 0, sizeof(mock_installed));
 }
+
+void blob_store_on_installed(blob_id_t id) { if ((int)id >= 0 && id < 4) mock_installed[id]++; }
 
 uint32_t flash_layout_size(void) { return mock_flash_size; }
 

@@ -3785,6 +3785,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "ota_abort")    == 0) handle_ota_abort(conn_id);
     else if (strcmp(cmd, "ota_selftest") == 0) handle_ota_selftest(conn_id);
     else if (strcmp(cmd, "ota_commit")   == 0) handle_ota_commit(conn_id);
+    else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id);
     else send_error(conn_id, "unknown cmd");
 }
 

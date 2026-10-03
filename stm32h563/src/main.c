@@ -42,6 +42,7 @@
 #include "version.h"
 #include "dac_limits.h"
 #include "adc_cal.h"
+#include "blob_store.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -228,6 +229,8 @@ void boot_deferred_hw_init(void)
        even when the FPGA is unconfigured. */
     (void)psram_init();
     psram_bus_release();
+    /* What the W25Q blob slots hold (blob_store.h): read once, while nothing else uses the bus. */
+    (void)blob_store_init();
     /* Layered PSRAM datapath self-test; loads the embedded gateware when the iCE40 never
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();

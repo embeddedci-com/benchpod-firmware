@@ -89,4 +89,9 @@ int  blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 /* Hash a present slot's data against its header. Bus held. 0 = intact. */
 int  blob_store_verify(blob_id_t id);
 
+/* A blob was just installed into its slot (OTA): put it to use. Defined by the firmware
+   (blob_hooks.c): a gateware slot may update the running gateware, an ESP slot lets Wi-Fi retry
+   flashing a blank C3. */
+void blob_store_on_installed(blob_id_t id);
+
 #endif /* BLOB_STORE_H */
