@@ -3,19 +3,19 @@
  * flash_range_erase / flash_range_program API used by config_store.c and
  * device_identity.c.
  *
- * STM32H5: 2 MB flash, 2 banks x 1 MB, 8 KB sectors (128/bank); programmed in
- * 16-byte quad-words.  `offset` is relative to FLASH_BASE (0x08000000).  The
- * persistence records live in bank-2 sectors 116..127 (0x081E8000..0x081FFFFF,
- * with the OTA self-test scratch at s120), at or above the linker's FLASH_BLOBS
- * end (0x081E8000), so erasing them never touches code.
+ * STM32H5: 1 MB or 2 MB flash in 2 equal banks, 8 KB sectors; programmed in
+ * 16-byte quad-words.  `offset` is relative to FLASH_BASE (0x08000000) and is a
+ * 2 MB-reference offset: the persistence records (0x1E8000..0x1FFFFF on a 2 MB
+ * part, with the OTA self-test scratch at 0x1F0000) are mapped to the top 96 KB
+ * of the flash this chip has (flash_layout.h), so erasing them never touches code.
  */
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "flash_compat.h"
+#include "flash_layout.h"
 #include "stm32h5xx_hal.h"
 #include <string.h>
 
-#define FLASH_BANK_SIZE   0x00100000u   /* 1 MB per bank */
 #define H5_SECTOR_SIZE    0x2000u        /* 8 KB */
 
 uint32_t save_and_disable_interrupts(void)
@@ -28,18 +28,19 @@ void restore_interrupts(uint32_t status) { __set_PRIMASK(status); }
 
 static void addr_to_bank_sector(uint32_t abs, uint32_t *bank, uint32_t *sector)
 {
-    if (abs < (FLASH_BASE + FLASH_BANK_SIZE)) {
+    uint32_t bank_size = flash_layout_bank_size();
+    if (abs < (FLASH_BASE + bank_size)) {
         *bank = FLASH_BANK_1;
         *sector = (abs - FLASH_BASE) / H5_SECTOR_SIZE;
     } else {
         *bank = FLASH_BANK_2;
-        *sector = (abs - (FLASH_BASE + FLASH_BANK_SIZE)) / H5_SECTOR_SIZE;
+        *sector = (abs - (FLASH_BASE + bank_size)) / H5_SECTOR_SIZE;
     }
 }
 
 void flash_range_erase(uint32_t offset, size_t count)
 {
-    uint32_t abs = FLASH_BASE + offset;
+    uint32_t abs = FLASH_BASE + flash_layout_store_off(offset);
     uint32_t nsectors = (uint32_t)((count + H5_SECTOR_SIZE - 1) / H5_SECTOR_SIZE);
     uint32_t bank, sector, err = 0;
     addr_to_bank_sector(abs, &bank, &sector);
@@ -57,7 +58,7 @@ void flash_range_erase(uint32_t offset, size_t count)
 
 void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
 {
-    uint32_t abs = FLASH_BASE + offset;
+    uint32_t abs = FLASH_BASE + flash_layout_store_off(offset);
     HAL_FLASH_Unlock();
     for (size_t i = 0; i < count; i += 16) {
         /* Quad-word program reads 16 bytes from a word-aligned source. */
@@ -94,7 +95,7 @@ int flash_ecc_nmi_absorb(void)
 
 int flash_read_checked(uint32_t offset, void *dst, size_t n)
 {
-    const volatile uint8_t *src = (const volatile uint8_t *)(FLASH_BASE + offset);
+    const volatile uint8_t *src = (const volatile uint8_t *)(FLASH_BASE + flash_layout_store_off(offset));
     uint8_t *d = (uint8_t *)dst;
     const uint32_t bus_err = SCB_CFSR_PRECISERR_Msk | SCB_CFSR_BFARVALID_Msk;
 

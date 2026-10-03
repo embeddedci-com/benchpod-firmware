@@ -19,6 +19,7 @@
 #include "psram.h"
 #include "signal_engine.h"   /* signal_engine_quiesce_psram_masters() before the bus grab */
 #include "board_pins.h"
+#include "flash_layout.h"
 #include "stm32h5xx_hal.h"
 
 #include <stdio.h>
@@ -29,13 +30,16 @@
 #define OTA_FLASH_KEY2 0xCDEF89ABu
 
 #define FLASH_BASE_ADDR   0x08000000u
-#define FLASH_BANK_BYTES  0x00100000u   /* 1 MB per bank */
 #define FLASH_SECTOR_BYTES 0x2000u      /* 8 KB sectors  */
 #define FLASH_SECTOR_SHIFT 13u          /* 1<<13 = 8 KB (shift instead of divide) */
 
-/* Scratch sector for the self-test: in the free flash between the image tail
-   (~0x08189b28) and the persistence sectors (config 0x081FA000). Bank 2. */
-#define OTA_SCRATCH_ADDR  0x081F0000u
+/* Scratch sector for the self-test: a sector of the persistence area kept free for
+   it (config_store.h), as a 2 MB-reference offset mapped onto this chip. */
+#define OTA_SCRATCH_REF_OFF  0x1F0000u
+
+/* Bank size of this chip, set before any RAM-resident code runs (that code cannot
+   call into flash while flash is being erased). */
+static uint32_t s_bank_bytes;
 
 /* OTA image staging base in PSRAM (must match ota.c's OTA_PSRAM_BASE). */
 #define OTA_PSRAM_BASE    0u
@@ -99,11 +103,11 @@ RAMFUNC static void ram_flash_wait(void) {
 RAMFUNC static void ram_flash_erase(uint32_t abs) {
     uint32_t off = abs - FLASH_BASE_ADDR;
     uint32_t sector, bksel;
-    if (off < FLASH_BANK_BYTES) {
+    if (off < s_bank_bytes) {
         sector = off >> FLASH_SECTOR_SHIFT;
         bksel  = 0;
     } else {
-        sector = (off - FLASH_BANK_BYTES) >> FLASH_SECTOR_SHIFT;
+        sector = (off - s_bank_bytes) >> FLASH_SECTOR_SHIFT;
         bksel  = FLASH_CR_BKSEL;
     }
     ram_flash_wait();
@@ -207,6 +211,7 @@ int ota_commit(void) {
         printf("[ota] commit refused: %s\n", ota_error());
         return -1;
     }
+    s_bank_bytes = flash_layout_bank_size();
     ram_commit_all(nsectors, total, s_sector);   /* does not return */
     return -1;                                    /* unreachable */
 }
@@ -219,6 +224,8 @@ int ota_commit_selftest(void) {
         pat[i] = (uint8_t)((i * 197u + 31u) & 0xFFu);
 
     const uint32_t scratch_psram = OTA_PSRAM_BASE;   /* reuse offset 0 (OTA idle) */
+    const uint32_t scratch_addr  = FLASH_BASE_ADDR + flash_layout_store_off(OTA_SCRATCH_REF_OFF);
+    s_bank_bytes = flash_layout_bank_size();
     psram_bus_acquire();
     if (psram_write(scratch_psram, pat, FLASH_SECTOR_BYTES) != 0) {
         psram_bus_release();
@@ -230,11 +237,11 @@ int ota_commit_selftest(void) {
        IRQs off only during the flash program quad-words (inside ram_flash_program);
        the app code stays intact, so we don't disable IRQs for the whole thing. */
     ram_flash_unlock();
-    ram_write_one_sector(OTA_SCRATCH_ADDR, scratch_psram, s_sector, FLASH_SECTOR_BYTES);
+    ram_write_one_sector(scratch_addr, scratch_psram, s_sector, FLASH_SECTOR_BYTES);
     psram_bus_release();
 
     /* Verify via a direct memory-mapped flash read. */
-    const uint8_t *flash = (const uint8_t *)OTA_SCRATCH_ADDR;
+    const uint8_t *flash = (const uint8_t *)scratch_addr;
     int bad = -1;
     for (uint32_t i = 0; i < FLASH_SECTOR_BYTES; i++) {
         if (flash[i] != pat[i]) { bad = (int)i; break; }
@@ -246,6 +253,6 @@ int ota_commit_selftest(void) {
     }
     printf("[ota-selftest] PASS: RAM-resident PSRAM-read + flash erase/program verified "
            "on scratch sector 0x%08lx (%u B)\n",
-           (unsigned long)OTA_SCRATCH_ADDR, (unsigned)FLASH_SECTOR_BYTES);
+           (unsigned long)scratch_addr, (unsigned)FLASH_SECTOR_BYTES);
     return 0;
 }

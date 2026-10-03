@@ -127,6 +127,7 @@ C_SOURCES := \
   src/adc_cal_hw.c \
   src/current_out.c \
   src/flash_compat.c \
+  src/flash_layout.c \
   src/rng.c \
   src/hw_lock.c \
   src/psram.c \
