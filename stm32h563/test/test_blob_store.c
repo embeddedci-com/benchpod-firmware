@@ -173,7 +173,30 @@ static void test_no_flash(void) {
     CHECK(blob_store_load() == 0, "a W25Q128 was refused");
 }
 
+/* blob_state_of: what an installer is told about each slot. */
+static void test_state(void) {
+    blob_info_t have = {0};
+    blob_manifest_t want = { .len = 100, .version = 46 };
+    memset(want.sha256, 0xAB, 32);
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_MISSING, "empty slot not missing");
+    have.present = true; have.len = 100; memset(have.sha256, 0xAB, 32);
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_OK, "matching slot not ok");
+    have.sha256[31] ^= 1;
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_OUTDATED, "different blob not outdated");
+    have.sha256[31] ^= 1; have.len = 99;
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_OUTDATED, "different length not outdated");
+    want.len = 0;
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_UNKNOWN, "no expectation not unknown");
+    have.present = false;
+    CHECK(blob_state_of(&have, &want) == BLOB_STATE_UNKNOWN, "empty + no expectation not unknown");
+    CHECK(strcmp(blob_state_str(BLOB_STATE_OUTDATED), "outdated") == 0, "state names");
+}
+
+/* The firmware's generated manifest is not linked into the host test. */
+const blob_manifest_t *blob_manifest(blob_id_t id) { (void)id; return NULL; }
+
 int main(void) {
+    test_state();
     test_empty_flash();
     test_write_read_verify();
     test_bad_hash_leaves_slot_empty();

@@ -64,3 +64,6 @@ int psram_read(uint32_t addr, uint8_t *buf, uint32_t len) {
 
 /* ota.c stops the gateware's PSRAM masters for the duration of the session. */
 void signal_engine_quiesce_psram_masters(void) { mock_quiesce_calls++; }
+
+/* The firmware's generated blob manifest is not linked into the host tests. */
+const blob_manifest_t *blob_manifest(blob_id_t id) { (void)id; return NULL; }
