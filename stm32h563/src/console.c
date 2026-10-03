@@ -59,6 +59,8 @@ bool clock_on_hsi(void);   /* main.c */
 
 #include "blob_store.h"
 #include "w25q.h"
+#include "ota.h"
+#include "upload_rx.h"
 #include "flash_layout.h"
 
 /* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
@@ -104,7 +106,7 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
-#define LINE_MAX 96
+#define LINE_MAX 128   /* fits upload-begin <target> <size> <64-hex sha256> <version> */
 
 /* Formatted output to a sink. */
 static void op(console_out_t out, void *ctx, const char *fmt, ...)
@@ -165,9 +167,11 @@ static void cmd_help(console_out_t out, void *ctx)
         "  dualcap [an] [ln]    v2: simultaneous an ADC + ln raw-LA samples (one trigger)\r\n"
         "  lastress [n]         v2: deep LA capture (n<=65535) @12 MS/s — DDR-drain stress test\r\n"
         "  flash-id             read the iCE40 config-flash JEDEC ID\r\n"
-        "  flash-ice40          reflash the iCE40 from the embedded v2 bitstream\r\n"
+        "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
         "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
-        "  flash-esp32          C3: flash the embedded esp-hosted slave image\r\n"
+        "  flash-esp32          C3: flash the esp-hosted image from the W25Q\r\n"
+        "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
+        "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -887,6 +891,55 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  flash-ice40 failed (see device log)\r\n");
             }
         }
+    } else if (!strcmp(argv[0], "upload-begin")) {
+        /* Uploads over this console (upload_rx.h): the same staging + SHA-256 check as an OTA,
+           to the firmware or a W25Q blob slot. Replies start with the command name. */
+        int t = argc >= 4 ? ota_target_from_name(argv[1]) : -1;
+        if (argc < 4)
+            op(out, ctx, "upload-begin error usage: upload-begin <firmware|gw0|gw1|esp> <size> <sha256> [version]\r\n");
+        else if (t < 0)
+            op(out, ctx, "upload-begin error unknown target\r\n");
+        else if (heavy_in_flight())
+            op(out, ctx, "upload-begin error busy\r\n");
+        else if (ota_begin_target((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
+                                  argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u) == 0)
+            op(out, ctx, "upload-begin ok\r\n");
+        else
+            op(out, ctx, "upload-begin error %s\r\n", ota_error());
+    } else if (!strcmp(argv[0], "upload-end")) {
+        if (ota_end() == 0) op(out, ctx, "upload-end ok\r\n");
+        else                op(out, ctx, "upload-end error %s\r\n", ota_error());
+    } else if (!strcmp(argv[0], "upload-commit")) {
+        if (ota_get_state() != OTA_VERIFIED) {
+            op(out, ctx, "upload-commit error no verified image staged\r\n");
+        } else if (ota_target() == OTA_TARGET_FIRMWARE) {
+            op(out, ctx, "upload-commit resetting\r\n");
+            sleep_ms(50);              /* let the reply leave before the flash writer takes over */
+            ota_commit();              /* does not return on success */
+            op(out, ctx, "upload-commit error %s\r\n", ota_error());
+        } else if (ota_commit() == 0) {
+            op(out, ctx, "upload-commit ok\r\n");
+        } else {
+            op(out, ctx, "upload-commit error %s\r\n", ota_error());
+        }
+    } else if (!strcmp(argv[0], "upload-status")) {
+        op(out, ctx, "upload-status %s %s %lu/%lu %s\r\n", ota_state_str(),
+           ota_target_name(ota_target()), (unsigned long)ota_received(),
+           (unsigned long)ota_size(), ota_error()[0] ? ota_error() : "-");
+    } else if (!strcmp(argv[0], "upload-abort")) {
+        ota_abort();
+        op(out, ctx, "upload-abort ok\r\n");
+    } else if (!strcmp(argv[0], "blobs")) {
+        /* One line per W25Q slot: name, state against this firmware, what it holds. */
+        for (int i = 0; i < BLOB_COUNT; i++) {
+            const blob_info_t *in = blob_store_info((blob_id_t)i);
+            char hex[65] = "-";
+            if (in->present)
+                for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
+            op(out, ctx, "blob %s %s %lu %lu %s\r\n", blob_name((blob_id_t)i),
+               blob_state_str(blob_state((blob_id_t)i)), (unsigned long)in->len,
+               (unsigned long)in->version, hex);
+        }
     } else if (!strcmp(argv[0], "flash-esp32-sync")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         uint32_t magic = 0;
@@ -1134,6 +1187,20 @@ void console_init(void)
     printf("\r\nconsole ready — type 'help'\r\n> ");
 }
 
+/* upload-data: the console task itself takes the raw chunk off the wire (it never reaches the
+   line editor or the worker as text), checks its CRC and queues it to the worker as OTA data. */
+static upload_rx_t s_upload;
+
+static void upload_chunk_done(void)
+{
+    if (!upload_rx_crc_ok(&s_upload))
+        printf("upload-data retry crc\r\n> ");
+    else if (!hw_worker_submit_ota_data(s_upload.offset, s_upload.buf, s_upload.len))
+        printf("upload-data busy\r\n> ");
+    else
+        printf("upload-data ok %lu\r\n> ", (unsigned long)s_upload.offset);
+}
+
 void console_poll(void)
 {
     /* Persists across polls: a CR and its trailing LF can arrive in separate
@@ -1142,12 +1209,22 @@ void console_poll(void)
     static int last_was_cr = 0;
     int c;
     while ((c = console_io_getc()) >= 0) {
+        if (s_upload.active) {                      /* raw chunk bytes: no echo, no editing */
+            if (upload_rx_byte(&s_upload, (uint8_t)c, HAL_GetTick())) upload_chunk_done();
+            continue;
+        }
         if (c == '\n' && last_was_cr) { last_was_cr = 0; continue; }  /* LF of a CR-LF */
         if (c == '\r' || c == '\n') {
             last_was_cr = (c == '\r');
             printf("\r\n");
             line[line_len] = '\0';
-            if (line_len > 0) {
+            if (line_len > 12 && !strncmp(line, "upload-data ", 12)) {
+                if (upload_rx_start(&s_upload, line + 12, HAL_GetTick()) == 0)
+                    last_was_cr = 0;                /* the next byte is data, even a LF */
+                else
+                    printf("upload-data error usage: upload-data <offset> <len<=%u> <crc32 hex>\r\n> ",
+                           (unsigned)UPLOAD_CHUNK_MAX);
+            } else if (line_len > 0) {
                 /* Execute on the hw worker (it owns the instrument hardware); the
                    worker reprints the prompt after the command output. */
                 if (!hw_worker_submit_console(line)) {
@@ -1167,4 +1244,6 @@ void console_poll(void)
             console_io_write(&ch, 1);
         }
     }
+    if (upload_rx_timed_out(&s_upload, HAL_GetTick()))
+        printf("upload-data retry timeout\r\n> ");
 }
