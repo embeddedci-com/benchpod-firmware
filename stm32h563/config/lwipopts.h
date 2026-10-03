@@ -114,7 +114,21 @@
 #define LWIP_ALTCP_TLS          1
 #define LWIP_ALTCP_TLS_MBEDTLS  1
 
-#define LWIP_STATS              0
+/* Only the memory statistics: high-water marks of the lwIP heap (MEM_SIZE) and the pbuf pool,
+   shown by `status` (lwip_mem_max / pbuf_pool_max), to size them from measurements. */
+#define LWIP_STATS              1
+#define LWIP_STATS_DISPLAY      0
+#define MEM_STATS               1
+#define MEMP_STATS              1
+#define LINK_STATS              0
+#define ETHARP_STATS            0
+#define IP_STATS                0
+#define IPFRAG_STATS            0
+#define ICMP_STATS              0
+#define IGMP_STATS              0
+#define UDP_STATS               0
+#define TCP_STATS               0
+#define SYS_STATS               0
 
 /* Checksums are selected PER-NETIF (LWIP_CHECKSUM_CTRL_PER_NETIF): the STM32H5
    ETH MAC inserts IP/UDP/TCP checksums in hardware (ethernetif.c TxConfig), but
