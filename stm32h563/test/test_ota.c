@@ -15,6 +15,7 @@
  * identical primitives against a scratch flash sector.
  */
 #include "ota.h"
+#include "fw_info.h"
 #include "mocks/mock_ota_psram.h"
 #include "mbedtls/sha256.h"
 
@@ -360,11 +361,71 @@ static void test_watchdog_abandons_stalled_staging(void) {
           ota_state_str());
 }
 
+/* On a 1 MB part the persistence sectors start at 0x0E8000, so that is the largest image. */
+static void test_size_limit_on_a_1mb_part(void) {
+    char hex[65];
+    static uint8_t one[1] = {0};
+    sha256_hex(one, 1, hex);
+    mock_ota_psram_reset();
+    mock_flash_size = 0x100000u;
+    ota_abort();
+    CHECK(ota_max_size() == 0x0E8000u, "1 MB limit is 0x%x", (unsigned)ota_max_size());
+    CHECK(ota_begin(0x0E8000u, hex) == 0, "an image ending at the 1 MB store was refused: %s", ota_error());
+    ota_abort();
+    CHECK(ota_begin(0x0E8001u, hex) != 0, "an image into the 1 MB part's calibration sector was accepted");
+    ota_abort();
+    mock_flash_size = 0x200000u;
+    CHECK(ota_max_size() == OTA_MAX_SIZE, "2 MB limit moved: 0x%x", (unsigned)ota_max_size());
+}
+
+/* Stage `img` and run the verify; returns ota_end()'s result. */
+static int stage_and_end(const uint8_t *img, uint32_t n) {
+    char hex[65];
+    sha256_hex(img, n, hex);
+    ota_abort();
+    if (ota_begin(n, hex) != 0) return -2;
+    for (uint32_t off = 0; off < n; off += 1024) {
+        uint32_t c = (n - off) < 1024 ? (n - off) : 1024;
+        if (ota_data(off, img + off, c) != 0) return -3;
+    }
+    return ota_end();
+}
+
+/* A 1 MB pod takes only images whose fw_info block says they fit 1 MB. Images without the block
+   are from before the 1 MB part: fine on a 2 MB pod, refused on a 1 MB pod. */
+static void test_image_must_fit_this_flash(void) {
+    enum { N = 4096 };
+    static uint8_t img[N];
+    fw_info_t info = { .magic = FW_INFO_MAGIC, .layout = FW_INFO_LAYOUT, .min_flash_kb = 1024 };
+
+    mock_ota_psram_reset();
+    fill_image(img, N, 99);                       /* no block */
+    CHECK(stage_and_end(img, N) == 0, "a legacy image was refused on a 2 MB pod: %s", ota_error());
+    mock_flash_size = 0x100000u;
+    CHECK(stage_and_end(img, N) != 0, "a legacy image was accepted on a 1 MB pod");
+    CHECK(strstr(ota_error(), "2048 KB") != NULL, "error should name the size needed: %s", ota_error());
+
+    memcpy(img + FW_INFO_OFFSET, &info, sizeof(info));   /* fits 1 MB */
+    CHECK(stage_and_end(img, N) == 0, "a 1 MB image was refused on a 1 MB pod: %s", ota_error());
+    mock_flash_size = 0x200000u;
+    CHECK(stage_and_end(img, N) == 0, "a 1 MB image was refused on a 2 MB pod: %s", ota_error());
+
+    info.min_flash_kb = 2048;                      /* built for 2 MB only */
+    memcpy(img + FW_INFO_OFFSET, &info, sizeof(info));
+    mock_flash_size = 0x100000u;
+    CHECK(stage_and_end(img, N) != 0, "a 2 MB image was accepted on a 1 MB pod");
+    CHECK(mock_psram_acquired == 0, "PSRAM bus left held (depth=%d)", mock_psram_acquired);
+    mock_flash_size = 0x200000u;
+    ota_abort();
+}
+
 int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
     test_commit_reverifies_the_staged_image();
     test_size_limit_protects_the_high_sectors();
+    test_size_limit_on_a_1mb_part();
+    test_image_must_fit_this_flash();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

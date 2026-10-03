@@ -128,6 +128,8 @@ C_SOURCES := \
   src/current_out.c \
   src/flash_compat.c \
   src/flash_layout.c \
+  src/fw_info.c \
+  src/fw_info_block.c \
   src/rng.c \
   src/hw_lock.c \
   src/psram.c \

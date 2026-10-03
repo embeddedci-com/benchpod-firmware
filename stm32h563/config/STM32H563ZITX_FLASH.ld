@@ -75,6 +75,15 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
+  /* The image's fw_info block (src/fw_info.h) at a fixed offset right after the vector table,
+     where installers look for it. Must match FW_INFO_OFFSET. */
+  .fw_info (ORIGIN(FLASH) + 0x400) :
+  {
+    KEEP(*(.fw_info))
+  } >FLASH
+  ASSERT(SIZEOF(.isr_vector) <= 0x400, "vector table grew into the fw_info block")
+  ASSERT(SIZEOF(.fw_info) == 16, "fw_info block missing or resized")
+
   /* The program code and other data into "FLASH" Rom type memory */
   .text :
   {
