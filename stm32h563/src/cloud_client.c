@@ -37,6 +37,7 @@
 #include "lwip/tcp.h"        /* TCP_WRITE_FLAG_COPY */
 
 #include "mbedtls/ssl.h"     /* mbedtls_ssl_set_hostname (SNI) */
+#include "flash_layout.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -653,7 +654,7 @@ static bool cl_send_capabilities(void) {
     static char f[1280];
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
-        "\"firmware_version\":\"%s\",\"ota\":true,"
+        "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
         "\"serial\":false,\"scope\":true,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
         "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
@@ -668,7 +669,7 @@ static bool cl_send_capabilities(void) {
         "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,"
         "\"current_out\":true,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
-        s_cfg.device_id, FIRMWARE_VERSION, ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
+        s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u), ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
         DAC_AC ? "true" : "false", DAC_REPLAY ? "true" : "false", DAC_DC ? "true" : "false",
         DAC_BITS, DAC_REPLAY_BITS, DAC_FULLSCALE_MV, DAC_CHANNELS,
