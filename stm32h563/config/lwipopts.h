@@ -15,12 +15,10 @@
 
 /* ---------- Memory ---------- */
 #define MEM_ALIGNMENT           4
-/* The lwIP `mem` heap ALSO backs mbedTLS (altcp_tls with ALTCP_MBEDTLS_PLATFORM_ALLOC=1
-   routes every mbedTLS calloc through mem_malloc, and rejects any single alloc
-   > MEM_SIZE).  A TLS session needs the 16 KB SSL IN buffer + 4 KB OUT buffer +
-   context + handshake temporaries (cert chain, bignums) concurrently, so 16 KB
-   is far too small — altcp_tls_new() failed with "out of mem".  64 KB holds a
-   session with headroom for in-flight pbufs. */
+/* The lwIP `mem` heap backs PBUF_RAM pbufs (tcp_write copies, ethernetif TX) and the TCP send
+   queues. It no longer backs mbedTLS: mbedtls_bench_config.h routes mbedTLS to the FreeRTOS
+   heap (ALTCP_MBEDTLS_PLATFORM_ALLOC=0), so the old reason for 64 KB (a whole TLS session had to
+   fit here) is gone. Not reduced yet: there are no lwIP memory statistics to size it from. */
 #define MEM_SIZE                (64 * 1024)
 
 #define MEMP_NUM_TCP_PCB        10
