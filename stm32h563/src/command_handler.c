@@ -56,6 +56,7 @@
 #include <math.h>
 
 #include "pico/time.h"   /* absolute_time_t, get_absolute_time, *_diff_us (UART escape guard timing) */
+#include "flash_layout.h"
 
 #define CHUNK_SAMPLES    256
 
@@ -2260,6 +2261,9 @@ static void handle_status(int conn_id) {
     bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",
             board_rev_str(), board_rev_strap_mv(),
             nrst_ctrl_supported() ? "true" : "false");
+    /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
+       an image (flash_layout.h). */
+    bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
     {
