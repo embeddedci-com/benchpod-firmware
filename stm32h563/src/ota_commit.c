@@ -220,15 +220,17 @@ int ota_commit(void) {
 int ota_commit_selftest(void) {
     /* Build a known 8 KB pattern and stage it in PSRAM at a scratch offset via the
        normal HAL path (safe, flash-resident). */
-    static uint8_t pat[FLASH_SECTOR_BYTES];
+    /* The pattern is a formula, so it is built in the commit's sector buffer and recomputed for
+       the verify instead of being kept in a second 8 KB buffer. */
+#define SELFTEST_PAT(i) ((uint8_t)(((i) * 197u + 31u) & 0xFFu))
     for (uint32_t i = 0; i < FLASH_SECTOR_BYTES; i++)
-        pat[i] = (uint8_t)((i * 197u + 31u) & 0xFFu);
+        s_sector[i] = SELFTEST_PAT(i);
 
     const uint32_t scratch_psram = OTA_PSRAM_BASE;   /* reuse offset 0 (OTA idle) */
     const uint32_t scratch_addr  = FLASH_BASE_ADDR + flash_layout_store_off(OTA_SCRATCH_REF_OFF);
     s_bank_bytes = flash_layout_bank_size();
     psram_bus_acquire();
-    if (psram_write(scratch_psram, pat, FLASH_SECTOR_BYTES) != 0) {
+    if (psram_write(scratch_psram, s_sector, FLASH_SECTOR_BYTES) != 0) {
         psram_bus_release();
         printf("[ota-selftest] PSRAM stage write failed\n");
         return -1;
@@ -245,11 +247,11 @@ int ota_commit_selftest(void) {
     const uint8_t *flash = (const uint8_t *)scratch_addr;
     int bad = -1;
     for (uint32_t i = 0; i < FLASH_SECTOR_BYTES; i++) {
-        if (flash[i] != pat[i]) { bad = (int)i; break; }
+        if (flash[i] != SELFTEST_PAT(i)) { bad = (int)i; break; }
     }
     if (bad >= 0) {
         printf("[ota-selftest] FAIL: scratch mismatch at byte %d (flash=0x%02x want=0x%02x)\n",
-               bad, flash[bad], pat[bad]);
+               bad, flash[bad], SELFTEST_PAT((uint32_t)bad));
         return -1;
     }
     printf("[ota-selftest] PASS: RAM-resident PSRAM-read + flash erase/program verified "

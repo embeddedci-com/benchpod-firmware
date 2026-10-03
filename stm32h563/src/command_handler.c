@@ -57,6 +57,7 @@
 
 #include "pico/time.h"   /* absolute_time_t, get_absolute_time, *_diff_us (UART escape guard timing) */
 #include "flash_layout.h"
+#include "FreeRTOS.h"   /* pvPortMalloc: per-call curve buffers */
 
 #define CHUNK_SAMPLES    256
 
@@ -3381,7 +3382,24 @@ void command_handler_on_gateware_reconfigured(void) {
 
      {"cmd":"dac_control_loop","k":Q15,"vmin":N,"vmax":N,"tick_div":N,"curve":"<b64url>",
       "source":"adc"|"fixed"|"sweep","input":N,"step":N} */
+/* The curve upload buffers (16 KB): only needed while one control_loop command runs, so they
+   come from the heap for that call instead of sitting in .bss. */
+typedef struct {
+    char    b64[SIGNAL_BUF_SIZE * 2];   /* base64url of the uploaded curve bytes */
+    uint8_t curve[SIGNAL_BUF_SIZE];
+    uint8_t full[SIGNAL_BUF_SIZE];      /* the full 2048-point gateware LUT       */
+} loop_curve_bufs_t;
+
+static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb);
+
 static void handle_dac_control_loop(int conn_id, const char *json) {
+    loop_curve_bufs_t *cb = pvPortMalloc(sizeof(*cb));
+    if (!cb) { send_error(conn_id, "out of memory for the curve"); return; }
+    handle_dac_control_loop_with(conn_id, json, cb);
+    vPortFree(cb);
+}
+
+static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb) {
     if (signal_engine_fpga_version() < DAC_CONTROL_LOOP_MIN_GW) {
         send_error(conn_id, "control loop needs gateware v23+"); return;
     }
@@ -3412,12 +3430,12 @@ static void handle_dac_control_loop(int conn_id, const char *json) {
     dac_loop_params_err_t perr = dac_loop_params_validate(&p);
     if (perr != DAC_LOOP_PARAMS_OK) { send_error(conn_id, dac_loop_params_err_str(perr)); return; }
 
-    static char    curve_b64[SIGNAL_BUF_SIZE * 2];   /* base64url of the uploaded curve bytes */
-    static uint8_t curve[SIGNAL_BUF_SIZE];
-    static uint8_t curve_full[SIGNAL_BUF_SIZE];       /* the full 2048-point gateware LUT       */
+    char    *curve_b64  = cb->b64;
+    uint8_t *curve      = cb->curve;
+    uint8_t *curve_full = cb->full;
     size_t curve_len = 0;
-    if (json_get_value(json, "curve", curve_b64, sizeof(curve_b64)) && curve_b64[0]) {
-        if (b64url_decode(curve_b64, curve, sizeof(curve), &curve_len) != 0) {
+    if (json_get_value(json, "curve", curve_b64, sizeof(cb->b64)) && curve_b64[0]) {
+        if (b64url_decode(curve_b64, curve, sizeof(cb->curve), &curve_len) != 0) {
             send_error(conn_id, "curve base64 decode failed"); return;
         }
         if (curve_len < 2) { send_error(conn_id, "curve needs at least one 16-bit point"); return; }
@@ -3455,8 +3473,8 @@ static void handle_dac_control_loop(int conn_id, const char *json) {
     if (curve_len >= 2) {
         lut_len = have_map
             ? dac_loop_upsample_curve_mapped(curve, curve_len, map.idx_max,
-                                             curve_full, sizeof(curve_full))
-            : dac_loop_upsample_curve(curve, curve_len, curve_full, sizeof(curve_full));
+                                             curve_full, sizeof(cb->full))
+            : dac_loop_upsample_curve(curve, curve_len, curve_full, sizeof(cb->full));
         if (lut_len == 0) { send_error(conn_id, "curve upsample failed"); return; }
         lut = curve_full;
     }
