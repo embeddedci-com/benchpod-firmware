@@ -1,5 +1,7 @@
 /* Pico SDK <hardware/flash.h> shim -> STM32H5 internal-flash backend
-   (see src/flash_compat.c).  offset is relative to XIP_BASE (= FLASH_BASE).
+   (see src/flash_compat.c).  offset is relative to XIP_BASE (= FLASH_BASE) and
+   written for the 2 MB part: persistence offsets are mapped to the top of the
+   actual flash (src/flash_layout.h).
    STM32H5 erases in 8 KB sectors; programs in 16-byte quad-words (handled
    internally — callers may still pass 256-byte pages). */
 #ifndef HW_FLASH_SHIM_H
