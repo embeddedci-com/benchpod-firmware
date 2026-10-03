@@ -237,8 +237,7 @@ static void handle_work(cmd_work_t *w) {
         ota_commit();                     /* does not return on success */
         break;
     case WK_ESP_FLASH:                    /* Wi-Fi found no esp-hosted image on the C3 */
-        esp_wifi_ctrl_flash_done(esp_slave_fw_len > 0 &&
-                                 esp_rom_flash_program(esp_slave_fw, esp_slave_fw_len, 0) == 0);
+        esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
         break;
     default:
         break;

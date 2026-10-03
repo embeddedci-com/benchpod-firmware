@@ -195,9 +195,9 @@ C_SOURCES += \
   $(FREERTOS)/portable/MemMang/heap_4.c
 
 ASM_SOURCES := config/startup_stm32h563zitx.s
-# Embedded ESP32-C3 esp-hosted slave image (.incbin blob for flash-esp32).
+# The ESP32-C3 esp-hosted slave image is not embedded: the pod keeps it in a W25Q blob slot
+# (src/blob_store.h) and flashes the C3 from there; an installer sends it from build/blobs/.
 ESP_SLAVE_BIN := ../esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin
-ASM_SOURCES += src/esp_slave_fw.s
 
 #######################################
 # Flags
@@ -284,9 +284,6 @@ $(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wil
 	@echo "blobs: $$(ls $(BLOB_DIR) | tr '\n' ' ')"
 $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 
-# Re-assemble the embedded C3 image whenever the blob changes. The .incbin path
-# in src/esp_slave_fw.s is relative to this Makefile's directory.
-$(BUILD_DIR)/esp_slave_fw.o: $(ESP_SLAVE_BIN)
 
 # The embedded C3 slave image is a ~1.07 MB vendored binary, intentionally NOT in
 # git (caught by *.bin). If it's absent, fail the build loudly with the command to

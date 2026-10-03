@@ -52,4 +52,8 @@ bool esp_wifi_ctrl_rssi(int *dbm);
    the C3 announced a new boot mid-session.  Since power-on.  Either pointer may be NULL. */
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted);
 
+/* A new ESP32-C3 image was installed into its W25Q slot: a C3 that never booted gets another
+   automatic flash attempt. */
+void esp_wifi_ctrl_image_installed(void);
+
 #endif /* ESP_WIFI_CTRL_H */
