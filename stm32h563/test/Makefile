@@ -54,7 +54,7 @@ SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
 CUBE     ?= /opt/STM32CubeH5
 MBEDTLS  := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
-OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c mocks/mock_ota_psram.c $(MBEDTLS_SHA256)
+OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/blob_store.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 ifneq ($(HAVE_MBEDTLS),)
@@ -189,7 +189,7 @@ build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
 
-build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
+build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 

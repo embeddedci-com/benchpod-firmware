@@ -80,5 +80,6 @@ void handle_ota_status(int conn_id);
 void handle_ota_abort(int conn_id);
 void handle_ota_selftest(int conn_id);
 void handle_ota_commit(int conn_id);
+void handle_blob_status(int conn_id);
 
 #endif /* COMMAND_HANDLER_INTERNAL_H */

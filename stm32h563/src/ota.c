@@ -3,6 +3,8 @@
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
 #include "flash_layout.h"
 #include "fw_info.h"
+#include "blob_store.h"
+#include "w25q.h"
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -21,6 +23,8 @@ static ota_state_t s_state = OTA_IDLE;
 static uint32_t    s_size;                 /* expected image size          */
 static uint32_t    s_received;             /* high-water extent staged     */
 static uint8_t     s_expect[32];           /* expected SHA-256             */
+static ota_target_t s_target = OTA_TARGET_FIRMWARE;
+static uint32_t    s_version;              /* gateware version of a blob   */
 static char        s_err[64];
 static uint32_t    s_wd_seen;              /* s_received at the last watchdog mark */
 static uint32_t    s_wd_mark_ms;           /* caller clock at that mark            */
@@ -52,6 +56,28 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp" };
+
+int ota_target_from_name(const char *name) {
+    if (!name || !name[0]) return OTA_TARGET_FIRMWARE;
+    for (int i = 0; i < (int)(sizeof(k_target_names) / sizeof(k_target_names[0])); i++)
+        if (strcmp(name, k_target_names[i]) == 0) return i;
+    return -1;
+}
+
+const char *ota_target_name(ota_target_t t) {
+    return (unsigned)t < sizeof(k_target_names) / sizeof(k_target_names[0]) ? k_target_names[t] : "?";
+}
+
+ota_target_t ota_target(void) { return s_target; }
+
+/* The blob slot a target writes (only for a blob target). */
+static blob_id_t target_blob(ota_target_t t) { return (blob_id_t)(t - OTA_TARGET_GW0); }
+
+static uint32_t target_max_size(ota_target_t t) {
+    return t == OTA_TARGET_FIRMWARE ? ota_max_size() : blob_slot_capacity(target_blob(t));
+}
+
 static void set_err(const char *e) {
     strncpy(s_err, e ? e : "", sizeof(s_err) - 1);
     s_err[sizeof(s_err) - 1] = '\0';
@@ -60,7 +86,14 @@ static void set_err(const char *e) {
 }
 
 int ota_begin(uint32_t size, const char *sha256_hex) {
-    if (size == 0 || size > ota_max_size()) { set_err("bad size"); return -1; }
+    return ota_begin_target(size, sha256_hex, OTA_TARGET_FIRMWARE, 0);
+}
+
+int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version) {
+    if ((unsigned)target > OTA_TARGET_ESP) { set_err("bad target"); return -1; }
+    s_target  = target;
+    s_version = version;
+    if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
     uint8_t expect[32];
     if (parse_sha256_hex(sha256_hex, expect) != 0) { set_err("bad sha256"); return -1; }
     memcpy(s_expect, expect, 32);
@@ -75,7 +108,7 @@ int ota_begin(uint32_t size, const char *sha256_hex) {
        and wedge the PSRAM.  Firmware OTA reboots the device anyway, so stopping a running DAC
        here is the correct behaviour.  ota_commit() re-quiesces as a brick-critical backstop. */
     signal_engine_quiesce_psram_masters();
-    printf("[ota] begin: %lu bytes\n", (unsigned long)size);
+    printf("[ota] begin: %s, %lu bytes\n", ota_target_name(target), (unsigned long)size);
     return 0;
 }
 
@@ -151,7 +184,7 @@ int ota_end(void) {
     int rc = staged_hash_check(false);
     if (rc < 0) return -1;
     if (rc > 0) { set_err("sha256 mismatch"); return -1; }
-    if (staged_fits_this_flash() != 0) return -1;
+    if (s_target == OTA_TARGET_FIRMWARE && staged_fits_this_flash() != 0) return -1;
     s_state = OTA_VERIFIED;
     printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;
@@ -166,6 +199,7 @@ int ota_reverify_held(void) {
 
 void ota_abort(void) {
     s_state    = OTA_IDLE;
+    s_target   = OTA_TARGET_FIRMWARE;
     s_size     = 0;
     s_received = 0;
     s_err[0]   = '\0';
@@ -216,8 +250,33 @@ const char *ota_state_str(void) {
         case OTA_RECEIVING: return "receiving";
         case OTA_VERIFIED:  return "verified";
         case OTA_ERROR:     return "error";
+        case OTA_INSTALLED: return "installed";
         default:            return "unknown";
     }
+}
+
+/* Blob data straight from the staging area; the bus is already held (w25q_open). */
+static int staged_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
+    (void)ctx;
+    return psram_read(OTA_PSRAM_BASE + off, buf, n);
+}
+
+int ota_install_blob(void) {
+    if (s_state != OTA_VERIFIED) { set_err("no verified image staged"); return -1; }
+    if (s_target == OTA_TARGET_FIRMWARE) { set_err("not a blob"); return -1; }
+    blob_id_t id = target_blob(s_target);
+    /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: the same
+       quiesce every bus grab needs. blob_store_write hashes what it wrote back against the
+       verified digest, so anything that wrote into the staging area since ota_end is caught. */
+    signal_engine_quiesce_psram_masters();
+    w25q_open();
+    int rc = blob_store_write(id, s_size, s_version, s_expect, staged_src, NULL);
+    w25q_close();
+    if (rc != 0) { set_err("blob write failed"); return -1; }
+    s_state = OTA_INSTALLED;
+    printf("[ota] installed %s (%lu bytes)\n", blob_name(id), (unsigned long)s_size);
+    blob_store_on_installed(id);
+    return 0;
 }
 
 /* ota_commit() is defined in ota_commit.c (RAM-resident flash writer). */

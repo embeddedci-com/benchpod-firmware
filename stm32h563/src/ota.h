@@ -39,12 +39,29 @@ typedef enum {
     OTA_RECEIVING,
     OTA_VERIFIED,     /* staged image hash matched; ready to commit */
     OTA_ERROR,
+    OTA_INSTALLED,    /* a blob was written to its W25Q slot (firmware never gets here: it resets) */
 } ota_state_t;
+
+/* What an update writes. The firmware goes to internal flash and resets; a blob goes to its
+   W25Q slot (blob_store.h) and the pod carries on. */
+typedef enum {
+    OTA_TARGET_FIRMWARE = 0,
+    OTA_TARGET_GW0,
+    OTA_TARGET_GW1,
+    OTA_TARGET_ESP,
+} ota_target_t;
+
+/* "firmware", "gw0", "gw1", "esp" (NULL or "" = firmware). -1 if unknown. */
+int         ota_target_from_name(const char *name);
+const char *ota_target_name(ota_target_t t);
+ota_target_t ota_target(void);
 
 /* Begin an update: `size` bytes total, `sha256_hex` the expected 64-char hex
    digest of the whole image.  Prepares PSRAM staging.  Returns 0, or <0 on bad
    params / busy (a heavy capture in flight). */
 int ota_begin(uint32_t size, const char *sha256_hex);
+/* The same for any target. `version` is stored with a gateware blob (0 = not known). */
+int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version);
 
 /* Stage `len` bytes at image `offset` into PSRAM.  Offsets may arrive in order or
    with gaps re-sent; the received-byte high-water is tracked.  Returns 0, <0 on
@@ -56,9 +73,13 @@ int ota_data(uint32_t offset, const uint8_t *buf, uint32_t len);
    becomes OTA_VERIFIED and returns 0; on mismatch -> OTA_ERROR, returns <0. */
 int ota_end(void);
 
-/* Commit a VERIFIED image: erase + rewrite internal flash from PSRAM, then reset.
-   Does NOT return on success.  Returns <0 if no verified image is staged. */
+/* Commit a VERIFIED image.  Firmware: erase + rewrite internal flash from PSRAM, then reset;
+   does NOT return on success.  A blob: write it to its W25Q slot (ota_install_blob), return 0.
+   Returns <0 if no verified image is staged or the write failed. */
 int ota_commit(void);
+/* The blob half of ota_commit: copy the verified staged blob into its slot, state -> installed.
+   Calls blob_store_on_installed() so the pod can put the new blob to use. */
+int ota_install_blob(void);
 /* Re-hash the staged image with the PSRAM bus ALREADY held by the caller (ota_commit, right
    before it goes RAM-resident): 0 = still the verified image, -1 = changed or unreadable. */
 int ota_reverify_held(void);

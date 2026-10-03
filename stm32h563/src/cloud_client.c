@@ -927,15 +927,19 @@ size_t cloud_client_tunnel_avail(int conn_id) {
 
 /* ---- OTA over the WebSocket (server -> device ota.* frames) ---------------- */
 
-/* ota.begin: {"size":N,"sha256":"<hex>"} -> stage in PSRAM (on the worker). */
+/* ota.begin: {"size":N,"sha256":"<hex>"[,"target":"gw0|gw1|esp","version":V]} -> stage in
+   PSRAM (on the worker). No target = the firmware. */
 static bool cl_handle_ota_begin(const char *json) {
-    char size_s[16] = {0}, sha[80] = {0};
+    char size_s[16] = {0}, sha[80] = {0}, target[16] = {0}, ver_s[16] = {0};
     if (!cl_json_str(json, "size", size_s, sizeof(size_s)) ||
         !cl_json_str(json, "sha256", sha, sizeof(sha)))
         return true;   /* malformed: consumed, not replayed */
+    cl_json_str(json, "target", target, sizeof(target));
+    cl_json_str(json, "version", ver_s, sizeof(ver_s));
     /* Also returns false on a full queue; losing the BEGIN loses the whole update, so it
        gets the same replay treatment as the data frames. */
-    return hw_worker_submit_ota_begin((uint32_t)strtoul(size_s, NULL, 0), sha);
+    return hw_worker_submit_ota_begin((uint32_t)strtoul(size_s, NULL, 0), sha, target,
+                                      (uint32_t)strtoul(ver_s, NULL, 0));
 }
 
 /* ota.data: {"offset":O,"data_b64":"..."} -> decode + stage.

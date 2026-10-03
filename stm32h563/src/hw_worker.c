@@ -154,9 +154,14 @@ bool hw_worker_submit_console(const char *line) {
                   pdMS_TO_TICKS(100));
 }
 
-bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex) {
-    return submit_u(WK_OTA_BEGIN, -1, (const uint8_t *)sha256_hex,
-                    strlen(sha256_hex), NULL, size, 0);
+/* The item carries "<sha256 hex> <target> <version>" in its data. */
+bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex, const char *target,
+                                uint32_t version) {
+    char arg[128];
+    int n = snprintf(arg, sizeof(arg), "%s %s %lu", sha256_hex,
+                     (target && target[0]) ? target : "firmware", (unsigned long)version);
+    if (n < 0 || n >= (int)sizeof(arg)) return true;   /* malformed: consumed, not replayed */
+    return submit_u(WK_OTA_BEGIN, -1, (const uint8_t *)arg, (size_t)n, NULL, size, 0);
 }
 bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len) {
     return submit_u(WK_OTA_DATA, -1, buf, len, NULL, offset, 0);
@@ -209,10 +214,16 @@ static void handle_work(cmd_work_t *w) {
         command_handler_tunnel_reset(w->conn_id);
         teardown_done(w->conn_id, PEND_RESET);
         break;
-    case WK_OTA_BEGIN:
-        w->data[w->len] = '\0';           /* sha256 hex string */
-        ota_begin(w->u32, (const char *)w->data);
+    case WK_OTA_BEGIN: {
+        w->data[w->len] = '\0';           /* "<sha256 hex> <target> <version>" */
+        char sha[80] = {0}, target[16] = {0};
+        unsigned long version = 0;
+        if (sscanf((const char *)w->data, "%79s %15s %lu", sha, target, &version) < 1) break;
+        int t = ota_target_from_name(target);
+        if (t < 0) { ota_begin_target(0, sha, (ota_target_t)99, 0); break; }   /* reports "bad target" */
+        ota_begin_target(w->u32, sha, (ota_target_t)t, (uint32_t)version);
         break;
+    }
     case WK_OTA_DATA:
         ota_data(w->u32, w->data, w->len);
         break;

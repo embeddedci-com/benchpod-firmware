@@ -16,6 +16,8 @@
  */
 #include "ota.h"
 #include "fw_info.h"
+#include "blob_store.h"
+#include "mocks/mock_w25q.h"
 #include "mocks/mock_ota_psram.h"
 #include "mbedtls/sha256.h"
 
@@ -24,6 +26,9 @@
 #include <string.h>
 
 static int failures;
+
+/* ota_commit lives in ota_commit.c (register-level, not linked here); its blob half is this. */
+#define ota_commit_blob_for_test ota_install_blob
 
 #define CHECK(cond, ...)                                        \
     do {                                                        \
@@ -419,6 +424,65 @@ static void test_image_must_fit_this_flash(void) {
     ota_abort();
 }
 
+/* Blob targets: the limit is the slot, there is no fw_info check, and commit writes the slot and
+   leaves the pod running (state "installed") instead of resetting. */
+static void test_blob_targets(void) {
+    enum { N = 6000 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 5);
+    sha256_hex(img, N, hex);
+
+    CHECK(ota_target_from_name("gw1") == OTA_TARGET_GW1 && ota_target_from_name("esp") == OTA_TARGET_ESP &&
+          ota_target_from_name(NULL) == OTA_TARGET_FIRMWARE && ota_target_from_name("") == OTA_TARGET_FIRMWARE &&
+          ota_target_from_name("bogus") == -1, "target names");
+
+    mock_ota_psram_reset();
+    mock_w25q_reset();
+    ota_abort();
+    CHECK(ota_begin_target(blob_slot_capacity(BLOB_GW0) + 1, hex, OTA_TARGET_GW0, 46) != 0,
+          "a gateware larger than its slot was accepted");
+    ota_abort();
+    CHECK(ota_begin_target(0x300000u, hex, OTA_TARGET_ESP, 0) == 0,
+          "a 3 MB ESP image was refused: %s", ota_error());
+    ota_abort();
+
+    /* A blob on a 1 MB pod: no fw_info block needed. */
+    mock_flash_size = 0x100000u;
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_GW1, 46) == 0, "begin: %s", ota_error());
+    CHECK(ota_target() == OTA_TARGET_GW1, "target not kept");
+    for (uint32_t off = 0; off < N; off += 1024) {
+        uint32_t c = (N - off) < 1024 ? (N - off) : 1024;
+        CHECK(ota_data(off, img + off, c) == 0, "data: %s", ota_error());
+    }
+    CHECK(ota_end() == 0, "a blob without fw_info was refused: %s", ota_error());
+    CHECK(ota_commit_blob_for_test() == 0, "install failed: %s", ota_error());
+    CHECK(ota_get_state() == OTA_INSTALLED, "state after install = %s", ota_state_str());
+    CHECK(mock_installed[BLOB_GW1] == 1, "the installed hook did not run");
+    CHECK(blob_store_present(BLOB_GW1) && blob_store_info(BLOB_GW1)->version == 46 &&
+          blob_store_info(BLOB_GW1)->len == N, "slot not written");
+    CHECK(blob_store_verify(BLOB_GW1) == 0, "slot data does not hash");
+    CHECK(mock_psram_acquired == 0 && mock_w25q_open_depth == 0, "bus left held");
+    mock_flash_size = 0x200000u;
+    ota_abort();
+    CHECK(ota_target() == OTA_TARGET_FIRMWARE, "abort did not reset the target");
+
+    /* The staging area changed after verify (a capture wrote into it): the slot stays empty. */
+    mock_w25q_reset();
+    blob_store_load();
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_ESP, 0) == 0, "begin");
+    for (uint32_t off = 0; off < N; off += 1024) {
+        uint32_t c = (N - off) < 1024 ? (N - off) : 1024;
+        ota_data(off, img + off, c);
+    }
+    CHECK(ota_end() == 0, "end");
+    mock_psram[100] ^= 0x01;
+    CHECK(ota_commit_blob_for_test() != 0, "a changed staging area was installed");
+    CHECK(!blob_store_present(BLOB_ESP), "the slot is present after a failed install");
+    CHECK(mock_installed[BLOB_ESP] == 0, "the installed hook ran after a failure");
+    ota_abort();
+}
+
 int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
@@ -426,6 +490,7 @@ int main(void) {
     test_size_limit_protects_the_high_sectors();
     test_size_limit_on_a_1mb_part();
     test_image_must_fit_this_flash();
+    test_blob_targets();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

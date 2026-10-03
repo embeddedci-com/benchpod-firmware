@@ -11,6 +11,7 @@
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "ota.h"
+#include "blob_store.h"
 #include "cloud_client.h"   /* frames_seen: wire-level vs staged, for stall triage */
 #include "b64url.h"
 #include "bp_json.h"
@@ -35,9 +36,10 @@ static void ota_reply(int conn_id) {
     char resp[192];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"received\":%lu,\"size\":%lu,"
-                "\"frames_seen\":%lu,\"error\":",
-            ota_state_str(), (unsigned long)ota_received(), (unsigned long)ota_size(),
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"target\":\"%s\",\"received\":%lu,"
+                "\"size\":%lu,\"frames_seen\":%lu,\"error\":",
+            ota_state_str(), ota_target_name(ota_target()),
+            (unsigned long)ota_received(), (unsigned long)ota_size(),
             (unsigned long)cloud_client_ota_frames_seen());
     bp_emit_jstr(&e, ota_error());
     bp_emit_raw(&e, "}}\n");
@@ -46,18 +48,26 @@ static void ota_reply(int conn_id) {
         at_close_connection(conn_id);
 }
 
-/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"} */
+/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"[,"target":"gw0|gw1|esp","version":V]}
+   No target = the firmware. */
 void handle_ota_begin(int conn_id, const char *json) {
-    char size_s[16] = {0}, sha_s[80] = {0};
+    char size_s[16] = {0}, sha_s[80] = {0}, target_s[16] = {0}, ver_s[16] = {0};
     if (!json_get_value(json, "size", size_s, sizeof(size_s)) ||
         !json_get_value(json, "sha256", sha_s, sizeof(sha_s))) {
         send_error(conn_id, "missing size/sha256");
         return;
     }
+    json_get_value(json, "target", target_s, sizeof(target_s));
+    json_get_value(json, "version", ver_s, sizeof(ver_s));
+    int target = ota_target_from_name(target_s);
+    if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* Refuse if a capture/measure/LA is in flight (shares the PSRAM bus). */
     if (heavy_in_flight()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin(size, sha_s) != 0) { send_error(conn_id, ota_error()); return; }
+    if (ota_begin_target(size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0)) != 0) {
+        send_error(conn_id, ota_error());
+        return;
+    }
     ota_reply(conn_id);
 }
 
@@ -102,15 +112,41 @@ void handle_ota_selftest(int conn_id) {
     else         send_error(conn_id, "ota selftest failed (see console log)");
 }
 
-/* {"cmd":"ota_commit"} — write the VERIFIED image to flash and reset (no return
-   on success).  Reply is only reached on failure. */
+/* {"cmd":"ota_commit"} — firmware: write the VERIFIED image to flash and reset (no return on
+   success, so the ack goes first).  A blob: write it to its W25Q slot and reply with the state. */
 void handle_ota_commit(int conn_id) {
     if (ota_get_state() != OTA_VERIFIED) {
         send_error(conn_id, "no verified image staged");
+        return;
+    }
+    if (ota_target() != OTA_TARGET_FIRMWARE) {
+        if (ota_commit() != 0) { send_error(conn_id, ota_error()); return; }
+        ota_reply(conn_id);
         return;
     }
     /* Best-effort ack before we disappear into the flash writer + reset. */
     send_ok_str(conn_id, "{\"committing\":true}");
     ota_commit();       /* does not return on success */
     send_error(conn_id, ota_error());   /* only reached if commit refused */
+}
+
+/* {"cmd":"blob_status"} — what each W25Q slot holds (cached headers, no bus access). */
+void handle_blob_status(int conn_id) {
+    char resp[512];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"blobs\":[");
+    for (int i = 0; i < BLOB_COUNT; i++) {
+        const blob_info_t *in = blob_store_info((blob_id_t)i);
+        char hex[65] = "";
+        if (in->present)
+            for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
+        bp_emit(&e, "%s{\"name\":\"%s\",\"present\":%s,\"size\":%lu,\"version\":%lu,\"sha256\":\"%s\"}",
+                i ? "," : "", blob_name((blob_id_t)i), in->present ? "true" : "false",
+                (unsigned long)in->len, (unsigned long)in->version, hex);
+    }
+    bp_emit_raw(&e, "]}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0)
+        at_close_connection(conn_id);
 }

@@ -190,6 +190,7 @@ static uint8_t s_sector[FLASH_SECTOR_BYTES] __attribute__((aligned(4)));
 
 int ota_commit(void) {
     if (ota_get_state() != OTA_VERIFIED) return -1;
+    if (ota_target() != OTA_TARGET_FIRMWARE) return ota_install_blob();
     uint32_t total    = ota_size();
     uint32_t nsectors = (total + (FLASH_SECTOR_BYTES - 1u)) / FLASH_SECTOR_BYTES;
 
