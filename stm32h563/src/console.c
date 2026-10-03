@@ -57,27 +57,32 @@ bool clock_on_hsi(void);   /* main.c */
 #include "current_out.h"
 #include <stdlib.h>
 
-#include "fpga_bitstream.h"   /* generated: fpga_image0/1[] + _len (or fpga_bitstream[]) */
+#include "blob_store.h"
+#include "w25q.h"
 #include "flash_layout.h"
 
 /* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
  * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
- * pins are the shared PSRAM bus), so switching reprograms the selected single image via the
- * proven ice40_flash_program + CRESET-reconfig path (~2 s).  n: 0=closed-loop,
- * 1=deep-DAC-replay.  Returns 0 ok, -1 fail. */
-uint8_t ice40_embedded_gw_version(void) { return (uint8_t)FPGA_EMBEDDED_GW_VERSION; }
+ * pins are the shared PSRAM bus), so switching copies the selected image from its W25Q blob
+ * slot (blob_store.h) to offset 0 of the same flash via the proven ice40_flash_program +
+ * CRESET-reconfig path (~2 s).  n: 0=closed-loop, 1=deep-DAC-replay.  Returns 0 ok, -1 fail. */
+uint8_t ice40_embedded_gw_version(void) { return (uint8_t)blob_manifest_gw_version(); }
 
 int ice40_reflash_image(int n)
 {
-#ifdef FPGA_HAVE_IMAGES
-    const unsigned char *img = (n == 1) ? fpga_image1     : fpga_image0;
-    unsigned int         len = (n == 1) ? fpga_image1_len : fpga_image0_len;
-#else
-    const unsigned char *img = fpga_bitstream;
-    unsigned int         len = fpga_bitstream_len;
-    (void)n;
-    if (len == 0) return -1;
-#endif
+    blob_id_t id = (n == 1) ? BLOB_GW1 : BLOB_GW0;
+    if (!blob_store_present(id)) {
+        printf("[ice40] no gateware image %d in the W25Q (slot %s is empty)\n", n, blob_name(id));
+        return -1;
+    }
+    /* Never copy a damaged slot over the image the iCE40 boots from. */
+    w25q_open();
+    int intact = blob_store_verify(id) == 0;
+    w25q_close();
+    if (!intact) {
+        printf("[ice40] gateware slot %s does not match its checksum: not flashed\n", blob_name(id));
+        return -1;
+    }
     /* Runtime image-swap sequence.  The DEEP image's PSRAM-write wedge is fixed IN THE GATEWARE
        (gw v26: the deep reader/arbiter are held in reset while the STM32 owns the bus, so the
        psram_init() bus-yank below can no longer desync them).  So keep the firmware ordering that
@@ -87,7 +92,7 @@ int ice40_reflash_image(int n)
        NB: an earlier attempt to run psram_init() BEFORE the boot (so the config read saw a QPI
        PSRAM) intermittently CORRUPTED the deep bitstream — reverted. */
     psram_reset_to_spi();
-    int rc = ice40_flash_program(img, (size_t)len);
+    int rc = ice40_flash_program_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
     psram_init();                       /* re-enter QPI for the new gateware (bus-yank now safe: gw v26) */
     psram_bus_release();                /* hand the shared bus back to the iCE40 */
     /* The fabric just reset every register it owns; the firmware's MIRRORS of those registers did
@@ -414,7 +419,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=read-failed\r\n",
                gw, fpga_ok ? "reachable" : "UNREACHABLE");
         if (ice40_embedded_gw_version() != 0 && gw != ice40_embedded_gw_version())
-            op(out, ctx, "  gw     : firmware embeds v%u, running v%u (updated at the next boot, or run flash-ice40)\r\n",
+            op(out, ctx, "  gw     : firmware built for v%u, running v%u (updated at the next boot, or run flash-ice40)\r\n",
                ice40_embedded_gw_version(), gw);
         /* Separate keys ("hint", "safe", "clock", "gw"), so a host parsing "fpga : gateware vN"
            keeps working. */
@@ -859,8 +864,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  flash-id failed (see device log)\r\n");
     } else if (!strcmp(argv[0], "flash-ice40")) {
-        if (fpga_bitstream_len == 0) {
-            op(out, ctx, "  no embedded bitstream (build the v2 iCE40 .bin first)\r\n");
+        if (!blob_store_present(BLOB_GW0)) {
+            op(out, ctx, "  no gateware image 0 in the W25Q (install blob gw0 first)\r\n");
         } else {
             /* Quiesce first: ice40_flash_program grabs the shared bus (psram_bus_acquire); a
                live DAC replay/reader mid-burst would wedge the PSRAM the same way the runtime
@@ -869,15 +874,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             /* Through ice40_reflash_image like every other reconfig: it puts the PSRAM in SPI
                for the config read, re-inits and hands the bus back, and re-syncs the firmware's
                mirrors of the fabric's registers.  Calling ice40_flash_program directly skipped
-               all of that (stale capture bases = the "sentinel survived" false wedge).
-               fpga_bitstream is image 0. */
+               all of that (stale capture bases = the "sentinel survived" false wedge). */
             if (ice40_reflash_image(0) == 0) {
                 /* Re-read the gateware version so status/capabilities reflect the just-
                    flashed bitstream instead of the boot-time value. */
                 bool ok = signal_engine_refresh_version();
                 cloud_client_request_caps_resend();   /* the running image may have changed */
                 op(out, ctx, "  iCE40 reflashed + reconfigured (%u bytes), gateware v%u%s\r\n",
-                   (unsigned)fpga_bitstream_len, signal_engine_fpga_version(),
+                   (unsigned)blob_store_info(BLOB_GW0)->len, signal_engine_fpga_version(),
                    ok ? "" : " (FPGA unreachable — check gateware)");
             } else {
                 op(out, ctx, "  flash-ice40 failed (see device log)\r\n");

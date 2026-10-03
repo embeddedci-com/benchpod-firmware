@@ -163,6 +163,7 @@ static inline bool busy_read(void)
 
 /* ---- SPI command opcodes (single source: tools/gen_protocol.py) ---- */
 #include "cmd_opcodes.h"
+#include "blob_store.h"
 
 #define PING_REPLY_MAGIC   0xA5
 
@@ -822,7 +823,7 @@ void psram_boot_selftest_with_recovery(void) {
     const bool configured = ice40_is_configured() != 0;
     psram_boot_selftest();
     if (!configured || psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        printf("[psram-selftest] %s: loading the embedded gateware (image 0)...\n",
+        printf("[psram-selftest] %s: loading gateware image 0 from the W25Q...\n",
                configured ? "iCE40->PSRAM inoperable" : "iCE40 not configured (blank config flash?)");
         if (ice40_reflash_image(0) == 0) {
             sleep_ms(5);
@@ -833,25 +834,36 @@ void psram_boot_selftest_with_recovery(void) {
         }
     }
 
-    /* A firmware update (flash-self, DFU) leaves the iCE40's config flash alone, so the pod
-       keeps its old gateware and new gateware features stay missing until something reprograms
-       it. Bring it in line with the images this firmware embeds, keeping the image kind that is
-       running. The config flash is written only when the versions differ, so once per update. */
+    signal_engine_gateware_update();
+}
+
+/* A firmware update (flash-self, DFU, OTA) leaves the gateware the iCE40 boots from alone, so the
+   pod keeps its old gateware and new gateware features stay missing until something reprograms
+   it. Bring it in line with the gateware this firmware was built with, keeping the image kind
+   that is running. Only from a slot holding exactly that gateware (blob_store.h), and only when
+   the versions differ, so once per update. Runs at boot and after a gateware blob is installed. */
+void signal_engine_gateware_update(void) {
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();
     int deep = (running != 0) && (signal_engine_fpga_features() & FPGA_FEATURE_DEEP_REPLAY);
     int img = boot_policy_gateware_image(running, embedded, deep);
-    if (img >= 0) {
-        printf("[fpga] gateware v%u, this firmware embeds v%u: reprogramming image %d...\n",
-               (unsigned)running, (unsigned)embedded, img);
-        if (ice40_reflash_image(img) == 0) {
-            sleep_ms(5);
-            signal_engine_refresh_version();
-            psram_boot_selftest();
-            printf("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
-        } else {
-            printf("[fpga] gateware update failed, run flash-ice40 on the console\n");
-        }
+    if (img < 0) return;
+    blob_id_t slot = img == 1 ? BLOB_GW1 : BLOB_GW0;
+    if (blob_state(slot) != BLOB_STATE_OK) {
+        printf("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
+               "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
+               blob_name(slot), blob_state_str(blob_state(slot)));
+        return;
+    }
+    printf("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
+           (unsigned)running, (unsigned)embedded, img);
+    if (ice40_reflash_image(img) == 0) {
+        sleep_ms(5);
+        signal_engine_refresh_version();
+        psram_boot_selftest();
+        printf("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
+    } else {
+        printf("[fpga] gateware update failed, run flash-ice40 on the console\n");
     }
 }
 
