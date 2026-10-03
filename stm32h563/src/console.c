@@ -62,6 +62,8 @@ bool clock_on_hsi(void);   /* main.c */
 #include "ota.h"
 #include "upload_rx.h"
 #include "flash_layout.h"
+#include "lwip/stats.h"    /* lwIP memory high-water marks in status */
+#include "lwip/memp.h"
 
 /* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
  * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
@@ -466,6 +468,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  stack  : %-7s %u B free (min)\r\n",
                sys_health_task_name(i), sys_health_task_stack_free(i));
         op(out, ctx, "  flash  : %lu KB\r\n", (unsigned long)(flash_layout_size() / 1024u));
+        op(out, ctx, "  lwip   : mem max %lu of %lu B, pbuf pool max %u of %u\r\n",
+           (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
+           (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
         op(out, ctx, "  heap   : %u B free, %u B min\r\n",
            sys_health_heap_free(), sys_health_heap_min_free());
     } else if (!strcmp(argv[0], "spi-clk") && argc >= 2) {

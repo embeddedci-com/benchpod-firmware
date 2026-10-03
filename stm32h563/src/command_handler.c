@@ -58,6 +58,8 @@
 #include "pico/time.h"   /* absolute_time_t, get_absolute_time, *_diff_us (UART escape guard timing) */
 #include "flash_layout.h"
 #include "FreeRTOS.h"   /* pvPortMalloc: per-call curve buffers */
+#include "lwip/stats.h"    /* lwIP memory high-water marks in status */
+#include "lwip/memp.h"
 
 #define CHUNK_SAMPLES    256
 
@@ -2265,6 +2267,10 @@ static void handle_status(int conn_id) {
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
     bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
+    /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data. */
+    bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
+            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
+            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
     {
