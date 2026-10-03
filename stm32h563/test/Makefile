@@ -56,8 +56,9 @@ MBEDTLS  := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c mocks/mock_ota_psram.c $(MBEDTLS_SHA256)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
+BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 ifneq ($(HAVE_MBEDTLS),)
-OTA_TARGET := build/test_ota
+OTA_TARGET := build/test_ota build/test_blob_store
 endif
 
 .PHONY: all clean run
@@ -184,6 +185,10 @@ build/test_bus_recovery: $(BUSREC_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BUSREC_SRCS) -lm -o $@
 
+build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
+
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
@@ -230,8 +235,9 @@ run: $(TESTS)
 	@./build/test_scpi_paced
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
+	@./build/test_blob_store
 else
-	@echo "SKIP test_ota (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
+	@echo "SKIP test_ota and test_blob_store (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
 endif
 
 clean:

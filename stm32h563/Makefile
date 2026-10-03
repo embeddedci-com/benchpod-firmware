@@ -135,6 +135,7 @@ C_SOURCES := \
   src/psram.c \
   src/ice40_flash.c \
   src/w25q.c \
+  src/blob_store.c \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
