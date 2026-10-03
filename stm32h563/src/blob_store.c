@@ -182,3 +182,27 @@ int blob_store_verify(blob_id_t id)
     if (hash_flash(k_slots[id].base + BLOB_HDR_SIZE, s_info[id].len, got) != 0) return -1;
     return memcmp(got, s_info[id].sha256, 32) == 0 ? 0 : -1;
 }
+
+blob_state_t blob_state_of(const blob_info_t *have, const blob_manifest_t *want)
+{
+    if (!have || !have->present) return (want && want->len) ? BLOB_STATE_MISSING : BLOB_STATE_UNKNOWN;
+    if (!want || want->len == 0) return BLOB_STATE_UNKNOWN;
+    if (have->len == want->len && memcmp(have->sha256, want->sha256, 32) == 0) return BLOB_STATE_OK;
+    return BLOB_STATE_OUTDATED;
+}
+
+blob_state_t blob_state(blob_id_t id)
+{
+    if (id >= BLOB_COUNT) return BLOB_STATE_UNKNOWN;
+    return blob_state_of(&s_info[id], blob_manifest(id));
+}
+
+const char *blob_state_str(blob_state_t s)
+{
+    switch (s) {
+        case BLOB_STATE_OK:       return "ok";
+        case BLOB_STATE_OUTDATED: return "outdated";
+        case BLOB_STATE_MISSING:  return "missing";
+        default:                  return "unknown";
+    }
+}

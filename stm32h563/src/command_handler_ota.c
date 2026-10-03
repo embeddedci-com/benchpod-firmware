@@ -132,7 +132,7 @@ void handle_ota_commit(int conn_id) {
 
 /* {"cmd":"blob_status"} — what each W25Q slot holds (cached headers, no bus access). */
 void handle_blob_status(int conn_id) {
-    char resp[512];
+    static char resp[768];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"blobs\":[");
@@ -141,9 +141,13 @@ void handle_blob_status(int conn_id) {
         char hex[65] = "";
         if (in->present)
             for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
-        bp_emit(&e, "%s{\"name\":\"%s\",\"present\":%s,\"size\":%lu,\"version\":%lu,\"sha256\":\"%s\"}",
-                i ? "," : "", blob_name((blob_id_t)i), in->present ? "true" : "false",
-                (unsigned long)in->len, (unsigned long)in->version, hex);
+        /* state: ok = exactly the blob this firmware was built with; outdated / missing = an
+           installer should send it; unknown = this build expects nothing in particular. */
+        bp_emit(&e, "%s{\"name\":\"%s\",\"state\":\"%s\",\"present\":%s,\"size\":%lu,"
+                    "\"version\":%lu,\"sha256\":\"%s\"}",
+                i ? "," : "", blob_name((blob_id_t)i), blob_state_str(blob_state((blob_id_t)i)),
+                in->present ? "true" : "false", (unsigned long)in->len,
+                (unsigned long)in->version, hex);
     }
     bp_emit_raw(&e, "]}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }

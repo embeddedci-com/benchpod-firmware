@@ -89,6 +89,29 @@ int  blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 /* Hash a present slot's data against its header. Bus held. 0 = intact. */
 int  blob_store_verify(blob_id_t id);
 
+/* The blob a firmware build goes with (tools/blob_manifest.py -> blob_manifest.c). len 0 = the
+   build had no such blob, so nothing is expected. */
+typedef struct {
+    uint32_t len;
+    uint32_t version;
+    uint8_t  sha256[32];
+} blob_manifest_t;
+
+const blob_manifest_t *blob_manifest(blob_id_t id);
+/* GATEWARE_VERSION of the gateware this firmware was built with, 0 = unknown. */
+uint32_t blob_manifest_gw_version(void);
+
+typedef enum {
+    BLOB_STATE_OK,         /* the slot holds exactly the blob this firmware expects */
+    BLOB_STATE_OUTDATED,   /* the slot holds a different blob */
+    BLOB_STATE_MISSING,    /* the slot is empty */
+    BLOB_STATE_UNKNOWN,    /* this firmware expects nothing in particular (built without it) */
+} blob_state_t;
+
+blob_state_t blob_state_of(const blob_info_t *have, const blob_manifest_t *want);
+blob_state_t blob_state(blob_id_t id);
+const char  *blob_state_str(blob_state_t s);
+
 /* A blob was just installed into its slot (OTA): put it to use. Defined by the firmware
    (blob_hooks.c): a gateware slot may update the running gateware, an ESP slot lets Wi-Fi retry
    flashing a blank C3. */

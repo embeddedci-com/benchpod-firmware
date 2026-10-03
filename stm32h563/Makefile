@@ -137,6 +137,7 @@ C_SOURCES := \
   src/w25q.c \
   src/blob_store.c \
   src/blob_hooks.c \
+  src/blob_manifest.c \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
@@ -305,6 +306,18 @@ $(GEN_BITSTREAM): $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(
 	 if [ -f $(ICE40_LOOP_BIN) ] && [ -n "$$v" ]; then printf '#define FPGA_EMBEDDED_GW_VERSION %s\n' "$$v" >> $@; \
 	 else printf '#define FPGA_EMBEDDED_GW_VERSION 0\n' >> $@; fi
 $(BUILD_DIR)/console.o: $(GEN_BITSTREAM)
+
+# The blobs that go with this firmware, as the pod's W25Q slots hold them (src/blob_store.h):
+# build/blobs/{gw0,gw1,esp}.bin + manifest.json for installers, and blob_manifest_gen.h so the
+# firmware knows which blobs it was built with.
+BLOB_DIR      := $(BUILD_DIR)/blobs
+GEN_BLOB_MANIFEST := $(BUILD_DIR)/blob_manifest_gen.h
+$(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard $(ICE40_LOOP_BIN).gwversion) $(wildcard $(ESP_SLAVE_BIN)) | $(BUILD_DIR)
+	@v=$$(cat $(ICE40_LOOP_BIN).gwversion 2>/dev/null); \
+	 python3 tools/blob_manifest.py --gw0 $(ICE40_LOOP_BIN) --gw1 $(ICE40_DEEP_BIN) --esp $(ESP_SLAVE_BIN) \
+	   --gw-version $${v:-0} --out-dir $(BLOB_DIR) --header $@
+	@echo "blobs: $$(ls $(BLOB_DIR) | tr '\n' ' ')"
+$(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 
 # Re-assemble the embedded C3 image whenever the blob changes. The .incbin path
 # in src/esp_slave_fw.s is relative to this Makefile's directory.
