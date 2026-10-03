@@ -19,6 +19,9 @@
 #include "esp_rom_flash.h"
 #include "board_pins.h"
 #include "watchdog.h"
+#include "blob_store.h"
+#include "w25q.h"
+#include "signal_engine.h"
 
 #include "stm32h5xx_hal.h"
 #include "mbedtls/md5.h"
@@ -297,9 +300,12 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
 
 /* ---- public: full program ------------------------------------------------- */
 
-int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset)
+int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
 {
-    if (!data || len == 0) return -1;
+    if (!rd || len == 0) return -1;
+    mbedtls_md5_context md5;
+    mbedtls_md5_init(&md5);
+    mbedtls_md5_starts(&md5);
 
     printf("[espflash] programming %u bytes at 0x%06lx\n", (unsigned)len, (unsigned long)offset);
     strap_gpio_init();
@@ -348,7 +354,11 @@ int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset)
         put_le32(pk + 4, seq);
         put_le32(pk + 8, 0);
         put_le32(pk + 12, 0);
-        memcpy(pk + 16, data + off, n);
+        if (rd(ctx, off, pk + 16, n) != 0) {
+            printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
+            goto fail;
+        }
+        mbedtls_md5_update(&md5, pk + 16, n);   /* each block is read once, so hashed once */
         if (n < FLASH_WRITE_SIZE) memset(pk + 16 + n, 0xFF, FLASH_WRITE_SIZE - n);
 
         uint32_t checksum = ESP_CHECKSUM_MAGIC;
@@ -378,7 +388,7 @@ int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset)
     /* Verify with on-chip MD5 over the written region [offset, offset+len). */
     {
         uint8_t want[16], want_hex[33];
-        mbedtls_md5(data, len, want);
+        mbedtls_md5_finish(&md5, want);
         for (int i = 0; i < 16; i++)
             snprintf((char *)want_hex + i * 2, 3, "%02x", want[i]);
 
@@ -409,12 +419,45 @@ int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset)
     printf("[espflash] done — resetting C3 into application\n");
     strap_boot_app();
     uart_deinit();
+    mbedtls_md5_free(&md5);
     return 0;
 
 fail:
     HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);   /* leave off */
     uart_deinit();
+    mbedtls_md5_free(&md5);
     return -1;
+}
+
+/* ---- public: program from the W25Q slot ----------------------------------- */
+
+/* One block of the image straight from its slot. The bus is taken per block rather than for the
+   whole ~2 minutes, so the gateware is not locked out; nothing new can start meanwhile because
+   the hw worker that runs this is busy. */
+static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
+{
+    w25q_open();
+    int rc = blob_store_read(ctx, off, buf, n);
+    w25q_close();
+    return rc;
+}
+
+int esp_rom_flash_from_slot(void)
+{
+    if (!blob_store_present(BLOB_ESP)) {
+        printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
+        return -1;
+    }
+    signal_engine_quiesce_psram_masters();   /* every bus grab below shares the PSRAM bus */
+    w25q_open();
+    int intact = blob_store_verify(BLOB_ESP) == 0;
+    w25q_close();
+    if (!intact) {
+        printf("[espflash] slot esp does not match its checksum: not flashed\n");
+        return -1;
+    }
+    return esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
+                                     blob_store_info(BLOB_ESP)->len, 0);
 }
 
 void esp_rom_flash_power_off(void)

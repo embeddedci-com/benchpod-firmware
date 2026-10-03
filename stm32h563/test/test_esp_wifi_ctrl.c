@@ -23,6 +23,7 @@
 #include "esp_rom_flash.h"
 #include "hw_worker.h"
 #include "pico/time.h"
+#include "blob_store.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -156,7 +157,7 @@ int config_load(config_t *out) {
 }
 static int s_flash_submits;
 bool hw_worker_submit_esp_flash(void) { s_flash_submits++; return true; }
-const uint32_t esp_slave_fw_len = 0;   /* no embedded image: never auto-flash here */
+bool blob_store_present(blob_id_t id) { (void)id; return false; }   /* no image: never auto-flash here */
 
 /* ---- scenarios -------------------------------------------------------------- */
 

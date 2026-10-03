@@ -18,6 +18,7 @@
 #include "esp_netif.h"
 #include "config_store.h"
 #include "esp_rom_flash.h"
+#include "blob_store.h"
 #include "hw_worker.h"
 
 #include "pico/time.h"
@@ -415,6 +416,10 @@ void esp_wifi_ctrl_init(void) {
     else              printf("[wifi] no SSID configured — Wi-Fi disabled\n");
 }
 
+void esp_wifi_ctrl_image_installed(void) {
+    s_flash_tried = false;   /* a new image in the W25Q earns another automatic try */
+}
+
 void esp_wifi_ctrl_reload(void) {
     if (s_started) { esp_hosted_spi_stop(); s_started = false; }
     s_flash_tried = false;   /* new credentials (or a manual flash) earn another automatic try */
@@ -473,7 +478,7 @@ void esp_wifi_ctrl_poll(void) {
 
     case WC_WAIT_READY:
         if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline)) {
-            if (!s_flash_tried && esp_slave_fw_len > 0) {
+            if (!s_flash_tried && blob_store_present(BLOB_ESP)) {
                 /* Hold the C3 in reset and hand it to the worker: the ROM-loader flash
                    blocks for ~140 s, which the net task (lwIP, cloud) cannot afford. */
                 esp_hosted_spi_stop(); s_started = false;

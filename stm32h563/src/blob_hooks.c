@@ -3,6 +3,7 @@
  */
 #include "blob_store.h"
 #include "signal_engine.h"
+#include "esp_wifi_ctrl.h"
 #include <stdio.h>
 
 void blob_store_on_installed(blob_id_t id)
@@ -14,6 +15,9 @@ void blob_store_on_installed(blob_id_t id)
         /* The running gateware may now be updatable to the version this firmware expects
            (the firmware was installed before its gateware). */
         signal_engine_gateware_update();
+        break;
+    case BLOB_ESP:
+        esp_wifi_ctrl_image_installed();
         break;
     default:
         break;

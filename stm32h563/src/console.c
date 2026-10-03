@@ -897,11 +897,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
     } else if (!strcmp(argv[0], "flash-esp32")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        if (esp_slave_fw_len == 0) {
-            op(out, ctx, "  no embedded C3 image (build esp32-hosted-slave first)\r\n");
-        } else if (esp_rom_flash_program(esp_slave_fw, esp_slave_fw_len, 0) == 0) {
+        if (!blob_store_present(BLOB_ESP)) {
+            op(out, ctx, "  no ESP32-C3 image in the W25Q (install blob esp first)\r\n");
+        } else if (esp_rom_flash_from_slot() == 0) {
             op(out, ctx, "  ESP32-C3 flashed + booted (%u bytes)\r\n",
-               (unsigned)esp_slave_fw_len);
+               (unsigned)blob_store_info(BLOB_ESP)->len);
         } else {
             op(out, ctx, "  flash-esp32 failed (C3 left in reset; see log)\r\n");
         }

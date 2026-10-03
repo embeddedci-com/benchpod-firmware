@@ -33,11 +33,17 @@
  * Proves EN/BOOT/UART wiring without touching flash.  Returns 0 on success. */
 int esp_rom_flash_sync(uint32_t *chip_magic_out);
 
-/* Full program: enter download mode, SYNC, erase+write `len` bytes of `data` at
- * `offset` (use 0 for a merge_bin image), verify by on-chip MD5, then reset the
- * C3 into the newly-flashed application.  Returns 0 on success, <0 on error
- * (C3 left in reset on error).  Takes ~2 min for a ~1 MB image at 115200 baud. */
-int esp_rom_flash_program(const uint8_t *data, size_t len, uint32_t offset);
+/* Full program: enter download mode, SYNC, erase+write `len` bytes read through `rd`
+ * (1 KB blocks, each read once) at `offset` (use 0 for a merge_bin image), verify by
+ * on-chip MD5, then reset the C3 into the newly-flashed application.  Returns 0 on
+ * success, <0 on error (C3 left in reset on error).  Takes ~2 min for a ~1 MB image at
+ * 115200 baud. */
+typedef int (*esp_src_read_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
+int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset);
+
+/* Program the C3 with the esp-hosted image in its W25Q slot (blob_store.h), after checking
+ * the slot against its SHA-256.  Runs on the hw worker.  0 = flashed and booted. */
+int esp_rom_flash_from_slot(void);
 
 /* Hold the C3 in reset / powered down (EN low). */
 void esp_rom_flash_power_off(void);
@@ -47,9 +53,5 @@ void esp_rom_flash_power_off(void);
  * Does NOT touch EN/BOOT — the C3 keeps running the app. USART1 only. */
 void esp_uart_monitor(uint32_t ms);
 
-/* The embedded esp-hosted slave image (esp_slave_fw.s / built by
- * esp32-hosted-slave/build.sh).  Flash at offset 0. */
-extern const uint8_t  esp_slave_fw[];
-extern const uint32_t esp_slave_fw_len;
 
 #endif /* ESP_ROM_FLASH_H */
