@@ -242,6 +242,11 @@ int can_configure(uint32_t bitrate, can_mode_t mode, bool fd, bool term)
     pclk.FdcanClockSelection  = RCC_FDCANCLKSOURCE_HSE;
     if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) return -2;
     __HAL_RCC_FDCAN_CLK_ENABLE();
+    /* DeInit/Init leaves TEC/REC alone (only a peripheral reset or bus-off
+       recovery clears them), so one session that ended error passive made the
+       next start error passive too. Each configure starts from a clean core. */
+    __HAL_RCC_FDCAN_FORCE_RESET();
+    __HAL_RCC_FDCAN_RELEASE_RESET();
 
     can_gpio_init();
 
