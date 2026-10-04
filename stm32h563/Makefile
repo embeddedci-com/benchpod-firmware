@@ -234,9 +234,11 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
+# --no-warn-rwx-segments: .data is RWX on purpose. It carries .RamFunc (ota_commit.c's
+# RAM-resident flash copy code), so the RAM LOAD segment must be executable.
 LDFLAGS := $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \
            -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref \
-           -Wl,--gc-sections -Wl,--print-memory-usage -lc -lm
+           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments -lc -lm
 
 #######################################
 # Build rules

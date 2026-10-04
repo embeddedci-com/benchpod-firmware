@@ -2165,15 +2165,17 @@ int fpga_dual_capture(uint16_t *out_adc, uint16_t adc_count, uint16_t adc_div,
 /* Rate-based async arm for the dual capture (server /capture path): converts the
    requested Hz to gateware dividers — ADC against the ADC capture clock, raw-LA
    against the 24 MHz control clock — and returns the ACHIEVED rates via
-   *adc_rate_hz/*la_rate_hz so the timebase is exact.  Poll with
+   *adc_rate_hz and *la_rate_hz so the timebase is exact.  Poll with
    fpga_dual_capture_poll(). */
 int fpga_dual_capture_start_hz(uint32_t adc_samples, float adc_req_hz,
                                uint32_t la_samples, float la_req_hz,
                                float *adc_rate_hz, float *la_rate_hz) {
     uint32_t ad = adc_samples ? adc_divider_from_rate_hz(adc_req_hz) : 2u;
     uint32_t ld = la_samples  ? divider_from_rate_hz(la_req_hz)      : 2u;
-    if (ad < 2u) ad = 2u; if (ad > 65535u) ad = 65535u;
-    if (ld < 2u) ld = 2u; if (ld > 65535u) ld = 65535u;
+    if (ad < 2u) ad = 2u;
+    if (ad > 65535u) ad = 65535u;
+    if (ld < 2u) ld = 2u;
+    if (ld > 65535u) ld = 65535u;
     if (adc_rate_hz) *adc_rate_hz = (float)adc_capture_hz() / (float)ad;
     if (la_rate_hz)  *la_rate_hz  = (float)FPGA_HFOSC_HZ     / (float)ld;
     return fpga_dual_capture_start(adc_samples, (uint16_t)ad, la_samples, (uint16_t)ld);

@@ -10,7 +10,7 @@
 #include <stddef.h>
 
 #define FLASH_PAGE_SIZE     256u
-#define FLASH_SECTOR_SIZE   8192u   /* STM32H5 sector size */
+#define FLASH_SHIM_SECTOR_SIZE 8192u   /* STM32H5 sector size (not FLASH_SECTOR_SIZE: CMSIS defines that) */
 
 void flash_range_erase(uint32_t offset, size_t count);
 void flash_range_program(uint32_t offset, const uint8_t *data, size_t count);

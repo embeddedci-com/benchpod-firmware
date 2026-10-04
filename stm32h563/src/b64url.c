@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-static const char ENC[64] =
+static const char ENC[65] =   /* 64 symbols + the string literal's NUL */
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /* Reverse lookup: maps an ASCII byte to its 6-bit value, or 0xFF if not part
