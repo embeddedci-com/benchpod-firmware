@@ -363,6 +363,9 @@ static size_t do_swd_sequence(const uint8_t *req, size_t req_len, uint8_t *resp)
         if (nbits == 0) nbits = 64;
         uint32_t nbytes = (nbits + 7) / 8;
         if (info & 0x80u) {                  /* input */
+            /* Each input sequence costs one request byte but returns up to 8: 255 of them
+               would write ~2 KB into a DAP_PACKET_SIZE response. Refuse the rest. */
+            if ((size_t)(rp - resp) + nbytes > DAP_PACKET_SIZE) { resp[1] = DAP_ERROR; break; }
             uint8_t tmp[8] = {0};
             swd_ll_seq_in(tmp, nbits);
             memcpy(rp, tmp, nbytes); rp += nbytes;

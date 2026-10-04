@@ -242,6 +242,17 @@ static void test_reads_never_overrun_the_response(void) {
     CHECK(n == 3 + 4u * g.r[1]);
     CHECK(g.r[1] > 200);                                                 /* most of them still ran */
     CHECK(guard_intact());
+
+    /* DAP_SWD_Sequence: 255 input sequences of 64 bits would return 2040 bytes. */
+    setup();
+    memset(g.guard, 0x5A, sizeof(g.guard));
+    uint8_t sq[2 + 255];
+    sq[0] = 0x1D; sq[1] = 255;
+    memset(sq + 2, 0x80, 255);                                           /* input, 0 = 64 bits */
+    n = dap_process(sq, sizeof(sq), g.r, DAP_PACKET_SIZE);
+    CHECK(n <= DAP_PACKET_SIZE);
+    CHECK(g.r[1] == 0xFF);                                               /* DAP_ERROR: refused the rest */
+    CHECK(guard_intact());
 }
 
 /* A FAULT in the middle of a batched DAP_Transfer must answer like the one-by-one loop breaking
