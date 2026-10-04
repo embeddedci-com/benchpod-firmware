@@ -1,8 +1,9 @@
 /*
  * ota_commit.c — RAM-resident PSRAM -> internal-flash writer for hostless OTA.
  *
- * The full image (~1.6 MB, app + embedded ESP/FPGA blobs) is larger than one
- * 1 MB flash bank, so the running firmware must be erased and rewritten IN PLACE.
+ * There is no second bank to install into (the 928 KB image area does not fit one bank of
+ * the 1 MB part, and there is no bootloader), so the running firmware is erased and
+ * rewritten IN PLACE. See docs/design/ota-fallback.md for the options to add a fallback.
  * Code that erases the flash it runs from must execute from SRAM, and so must the
  * routine that reads the source image back from PSRAM (psram_read() goes through
  * the OCTOSPI HAL, which lives in the flash being erased).  So the erase/read/

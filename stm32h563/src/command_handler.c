@@ -9,7 +9,6 @@
 #include "fpga_config.h"    /* FPGA_PSRAM_* region map, FPGA_DAC_BASE_FOR, caps */
 #include "sensor_sim.h"
 #include "wifi_manager.h"
-#include "gpio_control.h"
 #include "target_power.h"
 #include "scpi_server.h"
 #include "device_identity.h"
@@ -184,7 +183,7 @@ static uint16_t adc_buf16[ADC_MONO_BUF_SAMPLES];
 static size_t replay_len = 0;
 
 /* Binary-upload (`load_bin`) state while a connection is in PROTO_LOAD raw mode:
-   destination buffer + capacity (adc_buf16 on v2, adc_cmd_buf otherwise), total
+   destination buffer + capacity (adc_buf16, or PSRAM for a deep upload), total
    bytes expected, bytes received, and the arming conn (only its raw bytes count). */
 static uint8_t *load_bin_dst   = NULL;
 static size_t   load_bin_total = 0;
@@ -1807,7 +1806,7 @@ static void dac_psram_verify_log(uint32_t base, uint32_t total_bytes) {
    base64 `load`, this switches the connection into PROTO_LOAD raw mode and the
    host streams exactly `total` raw bytes (no per-chunk JSON/base64, so not bounded
    by the 256-byte command line).  v2 waveforms are 16-bit, so the bytes land in
-   adc_buf16 and replay_len is total/2 samples; v1-mode uses adc_cmd_buf 1:1.
+   adc_buf16 (or PSRAM for a deep upload) and replay_len is total/2 samples.
    Refused over the single-reply cloud command channel (needs a stream conn).
      {"cmd":"load_bin","total":N}
    Reply (immediate): {"status":"ok","data":{"ready":N}}  -> stream N bytes next.
