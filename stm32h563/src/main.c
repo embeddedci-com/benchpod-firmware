@@ -177,8 +177,10 @@ int main(void)
 
     /* The net task runs the lwIP poll loop AND the mbedTLS handshake for the
        outbound WSS cloud client; TLS (ASN.1/bignum) is stack-heavy, so give it
-       a generous 16 KB stack. */
-    if (xTaskCreate(console_task, "console", 768, NULL,
+       a generous 16 KB stack.  The console task gets 4 KB: every USB-console command puts a
+       1.6 KB cmd_work_t on its stack (hw_worker.c submit_u), and with 3 KB it was measured down
+       to 1296 B free (status "stacks", 2026-10-04). */
+    if (xTaskCreate(console_task, "console", 1024, NULL,
                     tskIDLE_PRIORITY + 1, NULL) != pdPASS ||
         xTaskCreate(net_task, "net", 4096, NULL,
                     tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
