@@ -1008,6 +1008,19 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
 
     char type[32] = {0};
     cl_json_str(msg, "type", type, sizeof(type));
+    if (len >= sizeof(msg)) {
+        /* Never act on a cut-off frame: the flat JSON helpers would still find their keys and a
+           shortened base64 field decodes fine, silently losing upload or OTA bytes. type and
+           request_id come first, so a command can still be answered. */
+        printf("[cloud] dropping a %u-byte %s frame (limit %u)\n", (unsigned)len,
+               type[0] ? type : "untyped", (unsigned)(sizeof(msg) - 1));
+        if (strcmp(type, "command.request") == 0) {
+            char rid[64] = {0};
+            cl_json_str(msg, "request_id", rid, sizeof(rid));
+            if (rid[0]) cl_send_command_error(rid, "command too large");
+        }
+        return true;
+    }
     if (strcmp(type, "command.request") == 0) {
         cl_handle_command_request(msg);
     } else if (strcmp(type, "tunnel.data") == 0) {
