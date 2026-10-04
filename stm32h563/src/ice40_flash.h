@@ -22,11 +22,6 @@ int ice40_flash_program(const uint8_t *data, size_t len);
 typedef int (*ice40_src_read_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len);
 
-/* iCE40 self-reconfiguration (SB_WARMBOOT) support: hand it the config-flash bus, then
-   wait for CDONE after it reboots into the selected image. */
-void ice40_prepare_reconfig(void);
-int  ice40_wait_cdone(uint32_t timeout_ms);
-
 /* CDONE right now: 1 = the iCE40 loaded a bitstream, 0 = it never configured (e.g. a new
    board whose config flash is blank).  Configures PF14 as an input first. */
 int  ice40_is_configured(void);

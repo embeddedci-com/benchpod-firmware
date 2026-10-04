@@ -2,7 +2,6 @@
 #include "command_handler.h"
 #include "at_driver.h"
 #include "signal_engine.h"
-#include "gpio_control.h"
 #include "target_power.h"
 #include "wifi_manager.h"
 #include "device_identity.h"

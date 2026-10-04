@@ -779,7 +779,6 @@ int psram_selftest_result(void) { return s_psram_selftest_rc; }
 const char *psram_selftest_str(void) {
     switch (s_psram_selftest_rc) {
     case PSRAM_ST_OK:              return "ok";
-    case PSRAM_ST_SKIP:            return "n/a (v1)";
     case PSRAM_ST_STM32_FAIL:      return "inoperable (STM32<->PSRAM)";
     case PSRAM_ST_ICE40_WRITE_FAIL:return "inoperable (iCE40 write)";
     case PSRAM_ST_ICE40_REACH_FAIL:return "inoperable (iCE40 pad open)";

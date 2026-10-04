@@ -392,7 +392,6 @@ void     psram_boot_selftest(void);
 #define PSRAM_ST_STM32_FAIL        1
 #define PSRAM_ST_ICE40_WRITE_FAIL  2
 #define PSRAM_ST_ICE40_REACH_FAIL  3
-#define PSRAM_ST_SKIP              4
 int          psram_selftest_result(void);   /* one of PSRAM_ST_* */
 const char  *psram_selftest_str(void);       /* human-readable for 'status' */
 bool         signal_engine_psram_operable(void);        /* status.psram_ok — true iff last selftest passed */
