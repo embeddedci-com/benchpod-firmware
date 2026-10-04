@@ -297,10 +297,26 @@ static void run_suite(void) {
     test_unknown_command();
 }
 
+/* A target that answers WAIT forever, with the host's retry count at its maximum: one packet must
+   come back after a bounded number of tries (with WAIT), not hold the pod for minutes. */
+static void test_endless_wait_is_bounded(void) {
+    setup();
+    uint8_t cfg[] = { 0x04, 0x00, 0xFF, 0xFF, 0xFF, 0xFF };   /* wait retry 65535, match 65535 */
+    run(cfg, sizeof(cfg));
+    mock_swd_ll_wait_before_ok = 1 << 30;
+    uint8_t xf[3 + 255];
+    xf[0] = 0x05; xf[1] = 0x00; xf[2] = 255;
+    memset(xf + 3, SWD_REQ_RnW, 255);                      /* 255 DP reads */
+    run(xf, sizeof(xf));
+    CHECK(resp[2] == SWD_ACK_WAIT);
+    CHECK(mock_swd_ll_xfer_calls <= 2048 + 255);
+}
+
 int main(void) {
     g_batch = false; run_suite();
     g_batch = true;  run_suite();
     test_fault_mid_transfer_same_answer();
+    g_batch = false; test_endless_wait_is_bounded();
     if (failures == 0) { printf("PASS — all dap tests\n"); return 0; }
     printf("FAILED — %d check(s)\n", failures);
     return 1;

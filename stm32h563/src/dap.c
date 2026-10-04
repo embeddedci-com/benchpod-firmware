@@ -45,6 +45,15 @@
 static uint8_t  s_idle_cycles;
 static uint16_t s_wait_retry;
 static uint16_t s_match_retry;
+/* WAIT and match-value retries one packet may spend in total. The host sets the per-transfer
+   counts (up to 65535 each, x up to 255 transfers per packet), and a target that answers WAIT
+   forever then held the hw task for minutes: no other session ran and the watchdog reset the
+   pod. ~0.65 ms per queued transfer keeps a packet near 1-2 s; the host (OpenOCD) retries a
+   WAIT answer itself, so ending early only hands the decision back to it. */
+#define DAP_RETRY_BUDGET     2048u
+/* Cap on the batched engine's per-transfer WAIT retries (swd_ll), for the same reason. */
+#define DAP_BATCH_WAIT_MAX   64u
+static uint32_t s_budget;
 static uint32_t s_match_mask;
 static uint16_t s_packet_size  = DAP_PACKET_DEFAULT;
 static uint8_t  s_packet_count = 1;
@@ -159,8 +168,12 @@ static uint8_t xfer(uint8_t request, uint32_t *data) {
     }
     uint16_t retry = s_wait_retry;
     uint8_t  ack;
-    do { ack = swd_ll_transfer(request, data); }
-    while (ack == SWD_ACK_WAIT && retry--);
+    for (;;) {
+        ack = swd_ll_transfer(request, data);
+        if (ack != SWD_ACK_WAIT || retry == 0 || s_budget == 0) break;
+        retry--;
+        s_budget--;
+    }
     return ack;
 }
 
@@ -219,10 +232,13 @@ static size_t do_transfer(const uint8_t *req, size_t req_len, uint8_t *resp) {
                     if (ack != SWD_ACK_OK) break;
                 }
                 uint16_t retry = s_match_retry;
-                do {
+                for (;;) {
                     ack = xfer((request & SWD_REQ_APnDP) ? DP_RDBUFF_READ : request, &data);
                     if (ack != SWD_ACK_OK) break;
-                } while ((data & s_match_mask) != match_value && retry--);
+                    if ((data & s_match_mask) == match_value || retry == 0 || s_budget == 0) break;
+                    retry--;
+                    s_budget--;
+                }
                 if (ack != SWD_ACK_OK) break;
                 if ((data & s_match_mask) != match_value) ack |= XFER_MATCH_VALUE;
             } else if (request & SWD_REQ_APnDP) {
@@ -385,6 +401,7 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
     }
     uint8_t cmd = req[0];
     resp[0] = cmd;
+    s_budget = DAP_RETRY_BUDGET;
 
     switch (cmd) {
         case ID_DAP_Info:
@@ -407,7 +424,8 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             if (req_len >= 6) {
                 s_idle_cycles = req[1];
                 s_wait_retry  = (uint16_t)(req[2] | (req[3] << 8));
-                swd_ll_set_wait_retry(s_wait_retry);
+                swd_ll_set_wait_retry(s_wait_retry < DAP_BATCH_WAIT_MAX ? s_wait_retry
+                                                                        : (uint16_t)DAP_BATCH_WAIT_MAX);
                 s_match_retry = (uint16_t)(req[4] | (req[5] << 8));
                 swd_ll_set_idle(s_idle_cycles);
             }
