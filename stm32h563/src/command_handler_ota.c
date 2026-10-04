@@ -62,7 +62,7 @@ void handle_ota_begin(int conn_id, const char *json) {
     int target = ota_target_from_name(target_s);
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* Refuse if a capture/measure/LA is in flight (shares the PSRAM bus). */
-    if (heavy_in_flight()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
+    if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
     if (ota_begin_target(size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0)) != 0) {
         send_error(conn_id, ota_error());
@@ -106,7 +106,7 @@ void handle_ota_abort(int conn_id) { ota_abort(); ota_reply(conn_id); }
 /* {"cmd":"ota_selftest"} — SAFE validation of the RAM-resident flash writer
    against a scratch sector (never the app).  Run + confirm PASS before ota_commit. */
 void handle_ota_selftest(int conn_id) {
-    if (heavy_in_flight()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
+    if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     int rc = ota_commit_selftest();
     if (rc == 0) send_ok_str(conn_id, "{\"selftest\":\"pass\"}");
     else         send_error(conn_id, "ota selftest failed (see console log)");

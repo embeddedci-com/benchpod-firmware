@@ -93,6 +93,8 @@ int ota_begin(uint32_t size, const char *sha256_hex) {
     return ota_begin_target(size, sha256_hex, OTA_TARGET_FIRMWARE, 0);
 }
 
+void ota_refuse(const char *why) { set_err(why); }
+
 int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version) {
     if ((unsigned)target > OTA_TARGET_ESP) { set_err("bad target"); return -1; }
     s_target  = target;

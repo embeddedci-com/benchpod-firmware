@@ -518,6 +518,10 @@ bool heavy_in_flight(void) {
            o == OTA_RECEIVING || o == OTA_VERIFIED;
 }
 
+bool heavy_or_claimed(void) {
+    return heavy_in_flight() || heavy_owner != -1 || load_bin_conn >= 0;
+}
+
 /* Scratch for one PSRAM-sourced chunk (deep LA capture read-back).  Sized to one
    bulk chunk so the readback streams straight from PSRAM without a giant RAM
    buffer; the PSRAM bus is held for the whole send (released on completion). */

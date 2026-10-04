@@ -7,6 +7,7 @@
 #include "watchdog.h"
 #include "bp_limits.h"
 #include "ota.h"
+#include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
 #include "esp_wifi_ctrl.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
@@ -220,6 +221,9 @@ static void handle_work(cmd_work_t *w) {
         if (sscanf((const char *)w->data, "%79s %15s %lu", sha, target, &version) < 1) break;
         int t = ota_target_from_name(target);
         if (t < 0) { ota_begin_target(0, sha, (ota_target_t)99, 0); break; }   /* reports "bad target" */
+        /* Same gate as the LAN and console paths: staging takes the PSRAM bus, which a running
+           capture or waveform upload owns. "busy" is not a permanent error: the server retries. */
+        if (heavy_or_claimed()) { ota_refuse("busy: a capture or upload is running"); break; }
         ota_begin_target(w->u32, sha, (ota_target_t)t, (uint32_t)version);
         break;
     }

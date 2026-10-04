@@ -908,7 +908,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "upload-begin error usage: upload-begin <firmware|gw0|gw1|esp> <size> <sha256> [version]\r\n");
         else if (t < 0)
             op(out, ctx, "upload-begin error unknown target\r\n");
-        else if (heavy_in_flight())
+        else if (heavy_or_claimed())
             op(out, ctx, "upload-begin error busy\r\n");
         else if (ota_begin_target((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
                                   argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u) == 0)

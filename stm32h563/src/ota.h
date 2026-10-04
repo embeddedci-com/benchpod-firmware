@@ -62,6 +62,9 @@ ota_target_t ota_target(void);
 int ota_begin(uint32_t size, const char *sha256_hex);
 /* The same for any target. `version` is stored with a gateware blob (0 = not known). */
 int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version);
+/* Refuse an OTA without starting it (e.g. the PSRAM bus is busy): state ERROR with `why`, which
+   the cloud reports in ota.status like any other begin failure. */
+void ota_refuse(const char *why);
 
 /* Stage `len` bytes at image `offset` into PSRAM.  Offsets may arrive in order or
    with gaps re-sent; the received-byte high-water is tracked.  Returns 0, <0 on

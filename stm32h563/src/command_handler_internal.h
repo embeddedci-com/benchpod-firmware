@@ -27,6 +27,9 @@ void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok",
 /* True while a capture/measure/LA/DAC op owns the shared PSRAM bus — an OTA (which
    also stages into PSRAM) must refuse while it is set. Defined in command_handler.c. */
 bool heavy_in_flight(void);
+/* heavy_in_flight(), or a connection holding the gate (an upload waiting for its replay) or a
+   PSRAM waveform upload in progress: the test for starting an OTA, which takes the PSRAM bus. */
+bool heavy_or_claimed(void);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
