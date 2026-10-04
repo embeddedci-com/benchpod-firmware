@@ -666,7 +666,7 @@ static bool cl_send_capabilities(void) {
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
         "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
-        "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,"
+        "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,\"can\":true,"
         "\"current_out\":true,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u), ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,

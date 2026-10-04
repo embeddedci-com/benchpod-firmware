@@ -2300,7 +2300,8 @@ static void handle_status(int conn_id) {
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                     ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\",\"current_out\"");
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\",\"current_out\""
+                    ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
