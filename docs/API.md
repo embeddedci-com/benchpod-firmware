@@ -900,7 +900,7 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 
 {"cmd":"adc_read","source":"cal1"}   // DAC still playing a waveform into the loopback
 → {"status":"error","message":"adc_read: input not settled on cal1 (51811 counts pk-pk
-   over the 16-sample burst, limit 1024) — stop the DAC (dac_stop) or let the node settle"}
+   over the 16-sample burst, limit 1024). Stop the DAC (dac_stop) or let the node settle"}
 ```
 
 `current_in` is the 4-20 mA measurement terminal (J8). Its reply has two more fields:

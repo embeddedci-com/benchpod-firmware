@@ -3290,10 +3290,10 @@ static void handle_adc_read(int conn_id, const char *json) {
     adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
     if (!rd.valid) {
         /* Plausible-looking garbage is worse than an error: a sweep would record it. */
-        char msg[112];
+        char msg[176];   /* 112 cut the advice off the end */
         snprintf(msg, sizeof(msg),
                  "adc_read: input not settled on %s (%u counts pk-pk over the 16-sample "
-                 "burst, limit %u) — stop the DAC (dac_stop) or let the node settle",
+                 "burst, limit %u). Stop the DAC (dac_stop) or let the node settle",
                  analog_path_name(p), (unsigned)rd.span, (unsigned)ADC_BURST_MAX_SPAN);
         send_error(conn_id, msg);
         return;
