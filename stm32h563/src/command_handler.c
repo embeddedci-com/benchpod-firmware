@@ -207,6 +207,13 @@ static bool     load_bin_psram = false;
 /* Set at load completion: the staged trace lives in PSRAM (replay must use the
    deep CMD_START_DAC_PSRAM path, not the BRAM LOAD_WAVE). */
 static bool     replay_in_psram = false;
+/* A finished upload keeps the heavy gate for its `replay` (adc_buf16 must not be overwritten
+   by a capture first). A client that never replays used to hold it forever: everyone else got
+   "busy". After LOADED_HOLD_MS the gate is released; a RAM upload is dropped with it (a capture
+   may now reuse adc_buf16), a PSRAM upload keeps its reserved region and stays replayable. */
+#define LOADED_HOLD_MS 120000u
+static int             loaded_hold_conn = -1;
+static absolute_time_t loaded_hold_until;
 /* IDLE deadline: PROTO_LOAD holds the heavy gate while waiting for `total` raw bytes.
    A host that arms load_bin then stalls (or vanishes without a clean socket close)
    would pin the gate forever, so command_handler_poll() aborts the upload if no new
@@ -1033,6 +1040,19 @@ void command_handler_poll(void) {
         NVIC_SystemReset();   /* does not return */
     }
 
+    /* ---- a finished upload that was never replayed gives the gate back (LOADED_HOLD_MS) ---- */
+    if (loaded_hold_conn >= 0 && time_reached(loaded_hold_until)) {
+        int conn = loaded_hold_conn;
+        loaded_hold_conn = -1;
+        if (heavy_owner == conn && !heavy_in_flight()) {
+            heavy_release(conn);
+            if (!replay_in_psram) replay_len = 0;    /* adc_buf16 is free for captures again */
+            printf("[cmd] conn %d uploaded a waveform but did not replay it within %u s: gate released%s\n",
+                   conn, (unsigned)(LOADED_HOLD_MS / 1000u),
+                   replay_in_psram ? " (the PSRAM upload stays replayable)" : ", upload dropped");
+        }
+    }
+
     /* ---- load_bin stall guard: abort an upload that stopped feeding bytes ----
        PROTO_LOAD holds the heavy gate while awaiting `total` raw bytes; a host that
        arms it then stalls would pin the gate forever.  The deadline is re-armed on
@@ -1752,6 +1772,8 @@ static void handle_load(int conn_id, const char *json) {
              "{\"offset\":%u,\"len\":%u,\"total\":%u}",
              (unsigned)offset, (unsigned)dec_len, (unsigned)replay_len);
     send_ok_str(conn_id, payload);
+    loaded_hold_conn  = conn_id;      /* the gate waits for `replay`, re-armed per chunk */
+    loaded_hold_until = make_timeout_time_ms(LOADED_HOLD_MS);
 }
 
 /* Read a spread of DAC samples back out of PSRAM and print a one-line summary, so it's easy to
@@ -1894,6 +1916,7 @@ static void handle_replay(int conn_id, const char *json) {
        preceding `load`).  Released as soon as the waveform is armed — the DAC then
        runs off the FPGA (BRAM or PSRAM), not adc_cmd_buf. */
     if (!heavy_begin(conn_id)) return;
+    if (loaded_hold_conn == conn_id) loaded_hold_conn = -1;
     int rc;
     if (replay_in_psram) {
         /* Deep replay: the trace is already staged in PSRAM and the bus is released
@@ -3979,6 +4002,8 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 replay_in_psram = load_bin_psram;        /* trace lives in PSRAM => deep replay */
                 if (load_bin_psram) psram_stage_len = (uint32_t)load_bin_total;
                 proto[conn_id]  = PROTO_JSON;   /* heavy stays claimed for `replay` */
+                loaded_hold_conn  = conn_id;      /* ...for LOADED_HOLD_MS at most */
+                loaded_hold_until = make_timeout_time_ms(LOADED_HOLD_MS);
                 char payload[32];
                 snprintf(payload, sizeof(payload), "{\"total\":%u}",
                          (unsigned)replay_len);
