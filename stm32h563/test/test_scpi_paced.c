@@ -88,8 +88,11 @@ int  command_handler_dig_step(unsigned la, uint32_t s, uint32_t d, unsigned dl, 
     (void)la; (void)s; (void)d; (void)dl; (void)dir; return 0;
 }
 bool command_handler_step_busy(void) { return false; }
-int  dac_generate_arbitrary_rate(const uint8_t *d, size_t n, bool loop, float r) { (void)d; (void)n; (void)loop; (void)r; return 0; }
-int  dac_generate_sine(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
+static int g_generates;      /* DAC waveform starts, to prove a refused OUTPut never reached it */
+static bool g_limits_on;     /* dac_limits enabled? */
+const char *dac_limits_check_raw(const char *what) { (void)what; return g_limits_on ? "refused: limits" : NULL; }
+int  dac_generate_arbitrary_rate(const uint8_t *d, size_t n, bool loop, float r) { (void)d; (void)n; (void)loop; (void)r; g_generates++; return 0; }
+int  dac_generate_sine(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; g_generates++; return 0; }
 int  dac_generate_square(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
 int  dac_generate_sawtooth(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
 void dac_stop(void) {}
@@ -188,8 +191,30 @@ static void test_short_reply_unchanged(void) {
     CHECK(K.closes == 0);
 }
 
+/* dac_limits must hold on SCPI too: with limits set, OUTPut ON and MEASure? (both play a raw
+   waveform) are refused with -221 and never reach the DAC; without limits OUTPut ON still works. */
+static void test_dac_limits_refuse_raw_output(void) {
+    g_limits_on = true;
+    g_generates = 0;
+    reset_conn(4096);
+    scpi_dispatch_line(0, "OUTP ON");
+    scpi_dispatch_line(0, "MEAS?");
+    CHECK(g_generates == 0);
+    reset_conn(4096);
+    scpi_dispatch_line(0, "SYST:ERR?");
+    K.out[K.out_len] = '\0';
+    CHECK(strstr(K.out, "-221") != NULL);
+
+    g_limits_on = false;
+    scpi_dispatch_line(0, "*CLS");
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_generates == 1);
+    scpi_dispatch_line(0, "OUTP OFF");
+}
+
 int main(void) {
     test_short_reply_unchanged();
+    test_dac_limits_refuse_raw_output();
     test_big_read_arrives_whole();
     test_slow_peer_feeds_watchdog();
     test_stalled_peer_aborts_once();

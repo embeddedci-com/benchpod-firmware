@@ -8,6 +8,7 @@
 #include "device_identity.h"
 #include "b64url.h"
 #include "watchdog.h"
+#include "dac_limits.h"
 #include "pico/time.h"   /* make_timeout_time_ms / time_reached / sleep_ms */
 
 #include "scpi/scpi.h"
@@ -368,6 +369,16 @@ static scpi_result_t scpi_src_durationQ(scpi_t *ctx) {
 
 /* ---- OUTPut[:STATe] — DAC waveform enable ---- */
 
+/* The DAC output limits (dac_limits) apply here exactly as on the JSON API: with limits set,
+   raw waveforms are refused there (generate/replay/measure), so SCPI must refuse them too or it
+   is a way around them. Pushes -221 "Settings conflict" with the same reason text. */
+static bool scpi_refused_by_limits(scpi_t *ctx, const char *what) {
+    const char *why = dac_limits_check_raw(what);
+    if (!why) return false;
+    SCPI_ErrorPushEx(ctx, SCPI_ERROR_SETTINGS_CONFLICT, (char *)why, strlen(why));
+    return true;
+}
+
 static int output_start(void) {
     int rc;
     switch (src.shape) {
@@ -390,6 +401,7 @@ static scpi_result_t scpi_output(scpi_t *ctx) {
     scpi_bool_t on;
     if (!SCPI_ParamBool(ctx, &on, TRUE)) return SCPI_RES_ERR;
     if (on) {
+        if (scpi_refused_by_limits(ctx, "OUTPut")) return SCPI_RES_ERR;
         if (output_start() != 0) {
             SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
             return SCPI_RES_ERR;
@@ -470,6 +482,7 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
 static scpi_result_t scpi_measureQ(scpi_t *ctx) {
     int conn = cur_conn(ctx);
     size_t n = sense_points;
+    if (scpi_refused_by_limits(ctx, "MEASure?")) return SCPI_RES_ERR;   /* it plays a waveform */
     if (!command_handler_acquire_adc(conn)) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
         return SCPI_RES_ERR;
