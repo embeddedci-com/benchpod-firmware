@@ -925,6 +925,10 @@ static bool            uart_plus_pending = false;/* saw "+++", awaiting the trai
 static absolute_time_t uart_last_rx_at;          /* last byte received from the client */
 static absolute_time_t uart_last_plus_at;        /* time of the most recent '+' */
 static uint8_t         uart_rx_buf[256];         /* DUT→client drain buffer */
+static uint8_t         uart_proxy_rx, uart_proxy_tx;   /* the session's pins and baud, kept so a */
+static uint32_t        uart_proxy_baud;                /* gateware reconfig can re-apply them    */
+static int             uart_rearm_conn = -1;           /* session to re-arm on the next poll     */
+static void uart_rearm_poll(void);
 /* True while the proxy is SUSPENDED for the duration of a load_bin upload: we stop touching the
    iCE40 for UART entirely (no per-poll SPI drain) so nothing competes with the upload's PSRAM
    writes on the worker task; on resume we flush the FIFO once so stale bytes aren't forwarded. */
@@ -1033,6 +1037,7 @@ static void swd_disarm_and_release(void) {
 }
 
 void command_handler_poll(void) {
+    uart_rearm_poll();   /* before the UART drain below touches the new fabric */
     /* ---- deferred reboot for `psram_recover`: fire once the ack has had time to flush ---- */
     if (s_recover_pending && time_reached(s_recover_at)) {
         printf("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
@@ -3047,6 +3052,9 @@ static void handle_uart_proxy_start(int conn_id, const char *json) {
     send_ok_str(conn_id, "\"uart ready\"");   /* ack while still in JSON mode */
     proto[conn_id]    = PROTO_UART;            /* AFTER the ack: bytes are now raw UART */
     uart_proxy_conn   = conn_id;
+    uart_proxy_rx     = (uint8_t)rx;
+    uart_proxy_tx     = (uint8_t)tx;
+    uart_proxy_baud   = baud;
     uart_plus_count   = 0;
     uart_plus_pending = false;
     uart_last_rx_at   = get_absolute_time();
@@ -3410,7 +3418,10 @@ void command_handler_on_gateware_reconfigured(void) {
        pin they owned is back to plain LA mode.  Tear the sessions down here (the table must
        not claim a function nothing is driving) and let la_pins_on_gateware_reconfigured()
        re-apply the gpio pins' GPIO_SET latches, which the fabric also lost. */
-    if (uart_proxy_conn >= 0) uart_proxy_end(uart_proxy_conn, true);
+    /* An open UART session is KEPT: its soft UART is re-armed on the new fabric below. Ending
+       it here (as before) put the connection back in JSON mode without telling the client, whose
+       terminal then went silent for good after any image swap. */
+    int uart_conn = uart_proxy_conn;
     swd_disarm_and_release();
     spi_on_gateware_reconfigured();
     if (sensor_sim_active()) sensor_sim_stop();
@@ -3419,6 +3430,30 @@ void command_handler_on_gateware_reconfigured(void) {
     trigwait.active    = false;   /* an armed capture died with the fabric */
     trig_reply.present = false;
     la_pins_on_gateware_reconfigured();
+    /* Re-armed on the next command_handler_poll pass, not here: this hook runs right after
+       CDONE, before the caller has pinged the new fabric, and it does not answer SPI yet. */
+    uart_rearm_conn = uart_conn;
+}
+
+/* The deferred half of the hook above: re-arm the soft UART of a session that was open across a
+   gateware reconfiguration. On failure end it and drop the connection, so the client sees the
+   session close instead of a terminal that never answers again. */
+static void uart_rearm_poll(void) {
+    int conn = uart_rearm_conn;
+    if (conn < 0) return;
+    uart_rearm_conn = -1;
+    if (uart_proxy_conn != conn) return;              /* the session ended meanwhile */
+    uint16_t rx_avail = 0;
+    fpga_uart_disable();   /* the firmware still marks the old (gone) session armed: -2 otherwise */
+    if (fpga_uart_config(uart_proxy_rx, uart_proxy_tx, uart_proxy_baud, true) == 0 &&
+        fpga_uart_status(&rx_avail, NULL) == 0) {
+        printf("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
+               uart_proxy_rx, uart_proxy_tx);
+        return;
+    }
+    printf("[uart] gateware reconfigured: could not re-arm the UART session, closing it\n");
+    uart_proxy_end(conn, false);
+    at_close_connection(conn);
 }
 
 /* In-fabric DAC CONTROL LOOP (gateware >= v23): a DETERMINISTIC loop where the DAC output is
