@@ -150,3 +150,12 @@ or C3 rebuild, `benchpod install-blobs --dir stm32h563/build/blobs` sends the ch
 ones (a gateware blob that matches the firmware updates the running iCE40 at once).
 `flash-ice40` reprograms the iCE40 config flash from slot gw0. A DFU reflash does NOT reconfigure the iCE40; if a bad firmware
 left it unconfigured, run `flash-ice40` or power-cycle.
+
+## Release builds use -Og -g3 on purpose
+
+`stm32h563/Makefile` builds with `OPT := -Og -g3`, releases included. Don't switch to -O2
+casually: `ota_commit.c` copies the new image from SRAM-resident code (.RamFunc) while
+main flash is being erased, so that code must never call into flash. At -O2 GCC can turn
+its fill loop into a call to the flash-resident `memset`. Switching needs either
+`__attribute__((optimize("no-tree-loop-distribute-patterns")))` on that code or a CI check
+that the RAM functions reference no flash symbols.
