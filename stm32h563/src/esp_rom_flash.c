@@ -431,15 +431,10 @@ fail:
 
 /* ---- public: program from the W25Q slot ----------------------------------- */
 
-/* One block of the image straight from its slot. The bus is taken per block rather than for the
-   whole ~2 minutes, so the gateware is not locked out; nothing new can start meanwhile because
-   the hw worker that runs this is busy. */
+/* One block of the image straight from its slot; the bus is held for the whole flash (below). */
 static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
-    w25q_open();
-    int rc = blob_store_read(ctx, off, buf, n);
-    w25q_close();
-    return rc;
+    return blob_store_read(ctx, off, buf, n);
 }
 
 int esp_rom_flash_from_slot(void)
@@ -456,8 +451,15 @@ int esp_rom_flash_from_slot(void)
         printf("[espflash] slot esp does not match its checksum: not flashed\n");
         return -1;
     }
-    return esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
-                                     blob_store_info(BLOB_ESP)->len, 0);
+    /* Hold the bus for the whole ~2 minutes. Taking it per block cost a lost C3 reply every
+       ~37 blocks (29 resends per flash, measured), against ~1 per flash with the image in
+       internal flash. The gateware's PSRAM masters are quiesced and the hw worker running this
+       is busy, so nothing else wants the bus meanwhile. */
+    w25q_open();
+    int rc = esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
+                                       blob_store_info(BLOB_ESP)->len, 0);
+    w25q_close();
+    return rc;
 }
 
 void esp_rom_flash_power_off(void)
