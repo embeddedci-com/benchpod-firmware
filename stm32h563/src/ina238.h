@@ -7,8 +7,9 @@
    shunt resistors (internal 50 mΩ @ 0x40, external 30 mΩ @ 0x44) and better ADC
    resolution.  Boards fitted with the pin-compatible INA226 instead (the INA238 went out of
    stock) run the same driver: the chip is detected per address on first use (ina238_chip) and
-   every reading comes out in the same units.  The INA226 has half the shunt range (±81.92 mV:
-   1.64 A on the 50 mΩ shunt, 2.73 A on 30 mΩ) and a finer step (2.5 µV, 1.25 mV bus).  Current is derived from the measured shunt voltage and the known
+   every reading comes out in the same units.  The INA226 has half the shunt range (±81.92 mV)
+   and a finer step (2.5 µV, 1.25 mV bus); its boards fit smaller shunts (internal 30 mΩ,
+   external 20 mΩ: 2.73 A and 4.10 A full scale) and the driver picks them from the chip.  Current is derived from the measured shunt voltage and the known
    shunt value (no SHUNT_CAL dependency), so a sensor that powers up late still
    reads correctly.  ADCRANGE is forced to 0 (±163.84 mV, 5 µV/LSB).
 

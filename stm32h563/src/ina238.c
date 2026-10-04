@@ -41,10 +41,15 @@
 #define INA226_VSHUNT_LSB_NV  2500    /* 2.5 µV */
 #define INA226_VBUS_LSB_UV    1250    /* 1.25 mV */
 
-/* Shunt resistance per connector (milliohms) — unchanged from the INA219 board. */
+/* Shunt resistance per connector (milliohms). INA238 boards keep the INA219 board's shunts
+   (internal 50, external 30). INA226 boards have smaller ones (internal 30, external 20) so the
+   INA226's ±81.92 mV range still covers the eFuse limits: 2.73 A over the 2.03 A internal
+   limit, 4.10 A over the 3.03 A external limit. */
 static int shunt_mohm_for(uint8_t addr)
 {
-    return (addr == I2C_ADDR_INA238_EXTERNAL) ? 30 : 50;
+    int ext = (addr == I2C_ADDR_INA238_EXTERNAL);
+    if (ina238_chip(addr) == INA_CHIP_INA226) return ext ? 20 : 30;
+    return ext ? 30 : 50;
 }
 
 static int read_reg16(uint8_t addr, uint8_t reg, uint16_t *out)

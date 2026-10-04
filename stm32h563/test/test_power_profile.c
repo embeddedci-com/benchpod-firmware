@@ -462,14 +462,17 @@ static void test_ina226_detect_and_scale(void) {
 
     mock_as_ina226();
     CHECK(ina238_chip(I2C_ADDR_INA238_INTERNAL) == INA_CHIP_INA226);
-    ina.reg[REG226_VSHUNT] = 2000;            /* 2000 x 2.5 uV = 5 mV over 50 mOhm = 100 mA */
+    /* INA226 boards have the smaller shunts: internal 30 mOhm, external 20 mOhm. */
+    ina.reg[REG226_VSHUNT] = 1200;            /* 1200 x 2.5 uV = 3 mV over 30 mOhm = 100 mA */
     ina.reg[REG226_VBUS]   = 4000;            /* 4000 x 1.25 mV = 5000 mV */
     CHECK(ina238_read(I2C_ADDR_INA238_INTERNAL, &bus, &sh, &ua) == 0);
-    CHECK(bus == 5000 && sh == 5000 && ua == 100000);
+    CHECK(bus == 5000 && sh == 3000 && ua == 100000);
     CHECK(ina.writes == 0);                   /* no ADCRANGE write: the INA226 has one range */
-    ina.reg[REG226_VSHUNT] = (uint16_t)-400;  /* -1 mV over 30 mOhm = -33.333 mA */
+    ina.reg[REG226_VSHUNT] = (uint16_t)-400;  /* -1 mV over 20 mOhm = -50 mA */
     CHECK(ina238_read(I2C_ADDR_INA238_EXTERNAL, NULL, &sh, &ua) == 0);
-    CHECK(sh == -1000 && ua == -33333);
+    CHECK(sh == -1000 && ua == -50000);
+    int32_t ua32 = 0;
+    CHECK(ina238_read_shunt_ua(I2C_ADDR_INA238_EXTERNAL, &ua32) == 0 && ua32 == -50000);
     CHECK(ina238_read_id(I2C_ADDR_INA238_INTERNAL, &id) == 0 && id == 0x2260u);
 
     /* An absent sensor (the external rail without supply) is not cached as anything. */
@@ -507,7 +510,7 @@ static void test_ina226_sampler(void) {
     power_profile_discard();
     g_fault = false;
     g_now_us = 5000000;
-    ina.reg[REG226_VSHUNT] = 2000;            /* 100 mA */
+    ina.reg[REG226_VSHUNT] = 1200;            /* 3 mV over 30 mOhm = 100 mA */
     ina.reg[REG226_VBUS]   = 4000;            /* 5000 mV */
 
     CHECK(power_profile_start(1, PP_RATE_MAX_HZ, 60000, 64, err, sizeof(err)) == 0);
@@ -524,6 +527,7 @@ static void test_ina226_sampler(void) {
     bp_emit_init(&e, buf, sizeof(buf));
     power_profile_emit_stats(&e);
     CHECK(strstr(buf, "\"adc_rate_hz\":530") != NULL);
+    CHECK(strstr(buf, "\"avg_ua\":100000") != NULL);
     power_profile_discard();
 }
 

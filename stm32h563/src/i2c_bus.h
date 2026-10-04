@@ -9,8 +9,8 @@
  * I2C0 power/IO bus — STM32 I2C1 on PB8 (SCL) / PB9 (SDA), 100 kHz.
  *
  * Devices (7-bit addresses decoded from the netlist):
- *   0x40  INA238  — INTERNAL power-connector current (50 mΩ shunt)   [U29]
- *   0x44  INA238  — EXTERNAL power-connector current (30 mΩ shunt)   [U33]
+ *   0x40  INA238  — INTERNAL power-connector current (50 mΩ shunt, 30 mΩ on INA226 boards) [U29]
+ *   0x44  INA238  — EXTERNAL power-connector current (30 mΩ shunt, 20 mΩ on INA226 boards) [U33]
  *   0x20  TCA9554 — logic-analyzer pull-up control (CTRL1..8)        [U54]
  *   0x22  TCA9554 — eFuse control + INA ALERT (EN/V/FLT)            [U56]
  *   0x24  TCA9554 — DAC v2 analog mux                                [U55]
