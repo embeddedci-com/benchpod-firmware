@@ -19,10 +19,17 @@ void  vPortFree(void *p);
 
 /* ---- rate selection ---- */
 
-static const uint16_t k_ct_us[8] = { 50, 84, 150, 280, 540, 1052, 2074, 4120 };
+/* Conversion times per CT code: the INA238's, and the INA226's (slower, same AVG table). */
+static const uint16_t k_ct_us_238[8] = { 50, 84, 150, 280, 540, 1052, 2074, 4120 };
+static const uint16_t k_ct_us_226[8] = { 140, 204, 332, 588, 1100, 2116, 4156, 8244 };
 static const uint16_t k_avg[8]   = { 1, 4, 16, 64, 128, 256, 512, 1024 };
 
 void pp_rate_select(uint32_t rate_hz, pp_adc_cfg_t *out) {
+    pp_rate_select_chip(rate_hz, INA_CHIP_INA238, out);
+}
+
+void pp_rate_select_chip(uint32_t rate_hz, ina_chip_t chip, pp_adc_cfg_t *out) {
+    const uint16_t *k_ct_us = (chip == INA_CHIP_INA226) ? k_ct_us_226 : k_ct_us_238;
     if (rate_hz < PP_RATE_MIN_HZ) rate_hz = PP_RATE_MIN_HZ;
     if (rate_hz > PP_RATE_MAX_HZ) rate_hz = PP_RATE_MAX_HZ;
     uint32_t target = 1000000u / rate_hz;
@@ -32,7 +39,7 @@ void pp_rate_select(uint32_t rate_hz, pp_adc_cfg_t *out) {
     uint32_t best_period = 0;
     for (unsigned ct = 0; ct < 8u; ct++) {
         for (unsigned a = 0; a < 8u; a++) {
-            /* VBUSCT is pinned to the shortest conversion (50 us): the bus only needs a reading
+            /* VBUSCT is pinned to the shortest conversion (50 us / 140 us): the bus only needs a reading
                every ~10 ms, so every other microsecond of the period goes to the shunt. */
             uint32_t period = ((uint32_t)k_ct_us[0] + k_ct_us[ct]) * k_avg[a];
             if (period < PP_MIN_PERIOD_US) continue;
@@ -46,7 +53,10 @@ void pp_rate_select(uint32_t rate_hz, pp_adc_cfg_t *out) {
             }
         }
     }
-    out->adc_config = (uint16_t)((0xBu << 12) | (0u << 9) | (best_ct << 6) | (0u << 3) | best_avg);
+    if (chip == INA_CHIP_INA226)   /* CONFIG: AVG[11:9] VBUSCT[8:6]=0 VSHCT[5:3] MODE 7 (cont. shunt+bus) */
+        out->adc_config = (uint16_t)((best_avg << 9) | (0u << 6) | (best_ct << 3) | 0x7u);
+    else                           /* ADC_CONFIG: MODE 0xB VBUSCT 0 VSHCT VTCT 0 AVG */
+        out->adc_config = (uint16_t)((0xBu << 12) | (0u << 9) | (best_ct << 6) | (0u << 3) | best_avg);
     out->period_us  = best_period;
     out->rate_hz    = (1000000u + best_period / 2u) / best_period;
 }
@@ -206,10 +216,13 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
 
     uint8_t addr = (efuse == 2) ? I2C_ADDR_INA238_EXTERNAL : I2C_ADDR_INA238_INTERNAL;
     pp_adc_cfg_t cfg;
-    pp_rate_select(rate_hz, &cfg);
+    hw_lock();
+    ina_chip_t chip = ina238_chip(addr);
+    hw_unlock();
+    pp_rate_select_chip(rate_hz, chip, &cfg);
     uint16_t mv = 0;
     hw_lock();
-    int rc = ina238_set_adcrange_fine(addr);
+    int rc = (chip == INA_CHIP_NONE) ? -1 : ina238_set_adcrange_fine(addr);
     if (rc == 0) rc = ina238_write_adc_config(addr, cfg.adc_config);
     hw_unlock();
     hw_lock();
@@ -217,7 +230,7 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     hw_unlock();
     if (rc != 0) {
         free_store();
-        snprintf(err, cap, "power profile: the INA238 for efuse %d (I2C 0x%02X) is not responding", efuse, addr);
+        snprintf(err, cap, "power profile: the current monitor for efuse %d (I2C 0x%02X) is not responding", efuse, addr);
         return -1;
     }
 
@@ -237,8 +250,8 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     s.last_mv    = mv;
     s.i2c_errors = 0;
     pp_stats_init(&s.st);
-    printf("[power] profile started: efuse %d, %u Hz (ADC_CONFIG 0x%04X, %u us), max %u ms, keep %u\n",
-           efuse, (unsigned)cfg.rate_hz, cfg.adc_config, (unsigned)cfg.period_us,
+    printf("[power] profile started: efuse %d, %s, %u Hz (ADC config 0x%04X, %u us), max %u ms, keep %u\n",
+           efuse, ina_chip_name(chip), (unsigned)cfg.rate_hz, cfg.adc_config, (unsigned)cfg.period_us,
            (unsigned)max_duration_ms, (unsigned)keep_samples);
     return 0;
 }
@@ -248,8 +261,8 @@ static void finish(bool truncated) {
     s.truncated = truncated;
     s.t_stop    = time_us_64();
     hw_lock();
-    if (ina238_write_adc_config(s.addr, INA238_ADC_CONFIG_RESET) != 0)
-        printf("[power] WARNING: could not restore ADC_CONFIG on 0x%02X\n", s.addr);
+    if (ina238_restore_adc_config(s.addr) != 0)
+        printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
     hw_unlock();
     pp_decim_finish(&s.dec);
     printf("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
@@ -291,7 +304,7 @@ void power_profile_poll(void) {
         if (s.next_shunt <= now) s.next_shunt = now + s.cfg.period_us;
         if (rc != 0) {
             if (++s.i2c_errors >= PP_MAX_I2C_ERRORS) {
-                printf("[power] %u consecutive INA238 read failures on 0x%02X; stopping the profile\n",
+                printf("[power] %u consecutive current-monitor read failures on 0x%02X; stopping the profile\n",
                        (unsigned)s.i2c_errors, s.addr);
                 finish(false);
             }

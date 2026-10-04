@@ -197,12 +197,13 @@ static void cmd_ina(console_out_t out, void *ctx)
     uint16_t id;
     if (ina238_read_id(I2C_ADDR_INA238_INTERNAL, &id) == 0 &&
         ina238_read(I2C_ADDR_INA238_INTERNAL, &bus_mv, &sh_uv, &cur_ua) == 0)
-        op(out, ctx, "  int(0x40) id=0x%04x  bus=%d mV  shunt=%d uV  I=%d uA\r\n",
-           id, bus_mv, sh_uv, cur_ua);
+        op(out, ctx, "  int(0x40) %s id=0x%04x  bus=%d mV  shunt=%d uV  I=%d uA\r\n",
+           ina_chip_name(ina238_chip(I2C_ADDR_INA238_INTERNAL)), id, bus_mv, sh_uv, cur_ua);
     else
         op(out, ctx, "  int(0x40) no response\r\n");
     if (ina238_read(I2C_ADDR_INA238_EXTERNAL, &bus_mv, &sh_uv, &cur_ua) == 0)
-        op(out, ctx, "  ext(0x44) bus=%d mV  shunt=%d uV  I=%d uA\r\n", bus_mv, sh_uv, cur_ua);
+        op(out, ctx, "  ext(0x44) %s bus=%d mV  shunt=%d uV  I=%d uA\r\n",
+           ina_chip_name(ina238_chip(I2C_ADDR_INA238_EXTERNAL)), bus_mv, sh_uv, cur_ua);
     else
         op(out, ctx, "  ext(0x44) no response (needs external supply)\r\n");
 }

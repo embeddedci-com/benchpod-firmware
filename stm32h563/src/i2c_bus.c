@@ -508,8 +508,8 @@ void i2c_bus_status(void)
         if (i2c_bus_probe(a)) {
             const char *name = "";
             switch (a) {
-            case I2C_ADDR_INA238_INTERNAL: name = "INA238(int)"; break;
-            case I2C_ADDR_INA238_EXTERNAL: name = "INA238(ext)"; break;
+            case I2C_ADDR_INA238_INTERNAL: name = "INA238/226(int)"; break;
+            case I2C_ADDR_INA238_EXTERNAL: name = "INA238/226(ext)"; break;
             case I2C_ADDR_TCA9554_LA:      name = "TCA9554(LA)"; break;
             case I2C_ADDR_TCA9554_PWR:     name = "TCA9554(pwr)"; break;
             case I2C_ADDR_TCA9554_DACMUX:  name = "TCA9554(dacmux)"; break;
