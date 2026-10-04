@@ -14,6 +14,7 @@
 #include "power_profile.h"
 #include "at_driver.h"
 #include "bp_json.h"
+#include "pico/time.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +31,12 @@ static struct {
     int      conn_id;
     uint32_t next;     /* next kept sample to send */
     bool     first;
+    absolute_time_t stall_deadline;   /* no room to send since: give up (like bulk's BULK_STALL_MS) */
 } s_reply;
+
+/* A client that stops reading the reply (but keeps the connection) used to keep it "being sent"
+   forever, so every later power_profile was refused. Same rule as the capture bulk send. */
+#define PP_REPLY_STALL_MS 30000u
 
 static struct {
     bool pending;      /* one-shot: reply to conn_id when the sampler stops by itself */
@@ -60,6 +66,7 @@ static void reply_begin(int conn_id) {
     s_reply.conn_id = conn_id;
     s_reply.next    = 0;
     s_reply.first   = true;
+    s_reply.stall_deadline = make_timeout_time_ms(PP_REPLY_STALL_MS);
     power_profile_service();   /* the console / cloud capture take it all at once */
 }
 
@@ -69,7 +76,17 @@ static void reply_pump(void) {
     uint32_t total = power_profile_kept();
     for (;;) {
         size_t avail = at_send_avail(conn);
-        if (avail < PP_FRAME_OVERHEAD + PP_SAMPLE_BYTES) return;
+        if (avail < PP_FRAME_OVERHEAD + PP_SAMPLE_BYTES) {
+            if (time_reached(s_reply.stall_deadline)) {
+                printf("[power] reply stalled %u ms on conn %d at %lu/%lu: ending it (result kept)\n",
+                       (unsigned)PP_REPLY_STALL_MS, conn, (unsigned long)s_reply.next,
+                       (unsigned long)total);
+                s_reply.active = false;     /* the result stays: a new stop can still read it */
+                at_close_connection(conn);  /* the reply is incomplete: drop the connection */
+            }
+            return;
+        }
+        s_reply.stall_deadline = make_timeout_time_ms(PP_REPLY_STALL_MS);
         uint32_t k = total - s_reply.next;
         if (k > PP_FRAME_SAMPLES) k = PP_FRAME_SAMPLES;
         uint32_t room = (uint32_t)((avail - PP_FRAME_OVERHEAD) / PP_SAMPLE_BYTES);
