@@ -366,6 +366,35 @@ static void test_watchdog_abandons_stalled_staging(void) {
           ota_state_str());
 }
 
+/* A verified image that is never committed (a dry run, a lost ota.commit) must not keep the pod
+   busy forever: VERIFIED counts as busy, so captures refused until a reboot (seen on HW
+   2026-10-04 after a cloud dry run). It is dropped after 10 min; a commit before that is fine. */
+static void test_watchdog_drops_uncommitted_verified_image(void) {
+    uint8_t buf[64];
+    memset(buf, 0x5A, sizeof(buf));
+    char hex[65];
+    sha256_hex(buf, sizeof(buf), hex);
+    CHECK(ota_begin(sizeof(buf), hex) == 0, "begin: %s", ota_error());
+    CHECK(ota_data(0, buf, sizeof(buf)) == 0, "data: %s", ota_error());
+    CHECK(ota_end() == 0, "end: %s", ota_error());
+    CHECK(ota_get_state() == OTA_VERIFIED, "state after end = %s", ota_state_str());
+
+    uint32_t t = 5000;
+    ota_watchdog(t);                      /* first sight of VERIFIED starts the clock */
+    ota_watchdog(t + 599000);
+    CHECK(ota_get_state() == OTA_VERIFIED, "verified image dropped early (state=%s)", ota_state_str());
+    ota_watchdog(t + 601000);
+    CHECK(ota_get_state() == OTA_IDLE, "verified image kept past the hold (state=%s)", ota_state_str());
+
+    /* A second verified image gets its own full hold, not the leftover of the first. */
+    CHECK(ota_begin(sizeof(buf), hex) == 0, "begin 2: %s", ota_error());
+    CHECK(ota_data(0, buf, sizeof(buf)) == 0 && ota_end() == 0, "stage 2: %s", ota_error());
+    ota_watchdog(t + 700000);
+    ota_watchdog(t + 1200000);
+    CHECK(ota_get_state() == OTA_VERIFIED, "second image dropped early (state=%s)", ota_state_str());
+    ota_abort();
+}
+
 /* On a 1 MB part the persistence sectors start at 0x0E8000, so that is the largest image. */
 static void test_size_limit_on_a_1mb_part(void) {
     char hex[65];
@@ -499,6 +528,7 @@ int main(void) {
     test_psram_failures_surface();
     test_abort_resets_state();
     test_watchdog_abandons_stalled_staging();
+    test_watchdog_drops_uncommitted_verified_image();
 
     if (failures) {
         printf("test_ota: %d FAILURE(S)\n", failures);

@@ -33,6 +33,10 @@ static uint32_t    s_wd_mark_ms;           /* caller clock at that mark         
    Longer than the server's own 60 s stall timeout, so the server reports the failure first and
    this is purely the device cleaning up after it. */
 #define OTA_STAGE_IDLE_MS  120000u
+/* A verified image waits this long for its commit. The pod counts as busy meanwhile (captures
+   refuse), so a dry run or a lost ota.commit used to keep it busy until a reboot. */
+#define OTA_VERIFIED_HOLD_MS  600000u
+static uint32_t    s_verified_mark_ms;     /* caller clock when VERIFIED was first seen, 0 = not */
 
 static int hex_nibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -103,6 +107,7 @@ int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target,
     s_state    = OTA_RECEIVING;
     s_wd_seen = 0;
     s_wd_mark_ms = 0;
+    s_verified_mark_ms = 0;   /* each staged image gets its own commit window */
     /* Stop the gateware PSRAM masters for the whole OTA session: every stage/verify chunk grabs
        the shared bus (psram_bus_acquire), and a live DAC replay/reader mid-burst would contend
        and wedge the PSRAM.  Firmware OTA reboots the device anyway, so stopping a running DAC
@@ -225,6 +230,15 @@ ota_state_t ota_get_state(void) { return s_state; }
  * Call it from the task that owns OTA + PSRAM, on every pass, so it runs whatever the cloud link
  * is doing — including while it is down, which is exactly when it is needed. */
 void ota_watchdog(uint32_t now_ms) {
+    if (s_state == OTA_VERIFIED) {
+        if (s_verified_mark_ms == 0) { s_verified_mark_ms = now_ms ? now_ms : 1; return; }
+        if ((uint32_t)(now_ms - s_verified_mark_ms) < OTA_VERIFIED_HOLD_MS) return;
+        printf("[ota] dropping a verified image never committed after %u ms\n",
+               (unsigned)OTA_VERIFIED_HOLD_MS);
+        ota_abort();
+        return;
+    }
+    s_verified_mark_ms = 0;
     if (s_state != OTA_RECEIVING) {
         s_wd_mark_ms = now_ms;
         return;
