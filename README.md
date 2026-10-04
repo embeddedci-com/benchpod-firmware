@@ -61,14 +61,19 @@ Build + flash (needs `arm-none-eabi-gcc`, `dfu-util`):
 
 ```
 cd stm32h563
-make all                       # build .elf/.hex/.bin (embeds the iCE40 v2 bitstream)
+make all                       # build .elf/.hex/.bin (~0.5 MB) + build/blobs/
 make fetch                     # one-time: fetch the ESP32-C3 esp-hosted slave blob
 printf 'dfu\r\n' > <usb-cdc>   # console cmd → ROM DFU  (or hold BOOT0 on a blank board)
 make flash-dfu                 # dfu-util writes flash and reboots into the app
+benchpod install-blobs --dir build/blobs   # gateware + ESP32-C3 images into the W25Q
 ```
 
-The STM32 can also reprogram the iCE40's config flash from its embedded copy of
-the bitstream (`flash-ice40` console command).
+One image fits both the 2 MB STM32H563ZIT6 and the 1 MB ZGT6 (928 KB code area; the
+persistence records sit in the top 96 KB of whichever flash the chip has). The iCE40
+gateware images and the ESP32-C3 image are not in the firmware: they live in slots of the
+W25Q config flash (`src/blob_store.h`), go in with `benchpod install-blobs` / `benchpod
+flash-self` over USB or with any OTA, and the STM32 reprograms the iCE40 (`flash-ice40`,
+image swap) and the C3 (`flash-esp32`) from there. `blobs` on the console lists the slots.
 
 ## Gateware — `ice40/`
 

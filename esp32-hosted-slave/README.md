@@ -78,14 +78,15 @@ CLK=6, CS=10. Verify after `set-target` with
 
 ## On-device flash (how the C3 actually gets programmed)
 
-The merged image is embedded in the STM32 firmware as a `.incbin` blob
-(`../stm32h563/src/esp_slave_fw.s`, ~1.07 MB) and flashed by the STM32 driving
-the C3's ROM serial bootloader — mirroring `flash-ice40`. No host esptool, no
+The merged image (~1.07 MB) is kept in the pod's W25Q flash, slot `esp`
+(`../stm32h563/src/blob_store.h`; `benchpod install-blobs` puts it there, the
+firmware build leaves it in `stm32h563/build/blobs/blob-esp.bin`), and flashed by
+the STM32 driving the C3's ROM serial bootloader — mirroring `flash-ice40`. No host esptool, no
 programming header. From the pod's USB-CDC console:
 
 ```
 flash-esp32-sync    # strap BOOT=0 + EN pulse, SYNC — proves EN/BOOT/UART wiring
-flash-esp32         # erase + write the embedded image at 0x0, on-chip MD5 verify,
+flash-esp32         # erase + write the slot's image at 0x0, on-chip MD5 verify,
                     # then reset the C3 into the new app (~2 min at 115200 baud)
 ```
 
