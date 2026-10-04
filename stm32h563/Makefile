@@ -1,8 +1,10 @@
 # bench-pod STM32H563ZIT6 firmware — Makefile
 #
-# Mirrors the RP2350 build ergonomics: `make`, `make flash`, `make clean`.
-# Uses the STM32CubeH5 HAL referenced in place from $(CUBE) (like the RP2350
-# build referenced /opt/pico-sdk), plus FreeRTOS vendored under lib/.
+# `make` builds, `make test` runs the host tests, `make flash-dfu` / `make flash`
+# program a pod, `make clean`, `make help`.
+# Uses the STM32CubeH5 HAL (and its mbed-crypto) referenced in place from $(CUBE),
+# plus FreeRTOS, LwIP, the ST USB device stack, scpi-parser and Monocypher
+# as submodules under lib/.
 
 TARGET            := bench_pod_stm32
 BUILD_DIR         := build
@@ -234,9 +236,11 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
+# --no-warn-rwx-segments: .data is RWX on purpose. It carries .RamFunc (ota_commit.c's
+# RAM-resident flash copy code), so the RAM LOAD segment must be executable.
 LDFLAGS := $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \
            -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref \
-           -Wl,--gc-sections -Wl,--print-memory-usage -lc -lm
+           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments -lc -lm
 
 #######################################
 # Build rules

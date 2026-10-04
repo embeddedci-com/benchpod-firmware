@@ -12,7 +12,7 @@
  *     sites (the unused server path) pass 5 args; adapt them to the 7-arg form.
  *
  * config/ is searched before the real mbedTLS include dir, so this satisfies
- * altcp's one #include without shadowing any other mbedtls/*.h header.
+ * altcp's one #include without shadowing any other mbedtls header.
  */
 #ifndef MBEDTLS_SSL_INTERNAL_H_SHIM
 #define MBEDTLS_SSL_INTERNAL_H_SHIM

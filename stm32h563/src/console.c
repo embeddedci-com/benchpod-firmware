@@ -108,7 +108,7 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
-#define LINE_MAX 128   /* fits upload-begin <target> <size> <64-hex sha256> <version> */
+#define CONSOLE_LINE_MAX 128   /* fits upload-begin <target> <size> <64-hex sha256> <version> */
 
 /* Formatted output to a sink. */
 static void op(console_out_t out, void *ctx, const char *fmt, ...)
@@ -1169,7 +1169,7 @@ void console_exec(char *cmd, console_out_t out, void *ctx)
 
 /* ---- local interactive console ----------------------------------------- */
 
-static char line[LINE_MAX];
+static char line[CONSOLE_LINE_MAX];
 static size_t line_len;
 
 static void local_out(void *ctx, const char *s)
@@ -1183,7 +1183,7 @@ static void local_out(void *ctx, const char *s)
    AFTER the output so the "> " lands below the result rather than before it. */
 void console_run_line(const char *line_in)
 {
-    char buf[LINE_MAX];
+    char buf[CONSOLE_LINE_MAX];
     strncpy(buf, line_in, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     console_exec(buf, local_out, NULL);
@@ -1246,7 +1246,7 @@ void console_poll(void)
         } else if (c == 0x08 || c == 0x7F) {
             last_was_cr = 0;
             if (line_len > 0) { line_len--; printf("\b \b"); }
-        } else if (c >= 0x20 && c < 0x7F && line_len < LINE_MAX - 1) {
+        } else if (c >= 0x20 && c < 0x7F && line_len < CONSOLE_LINE_MAX - 1) {
             last_was_cr = 0;
             uint8_t ch = (uint8_t)c;
             line[line_len++] = (char)ch;

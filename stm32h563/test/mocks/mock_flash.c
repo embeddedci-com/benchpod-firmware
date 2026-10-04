@@ -64,7 +64,7 @@ static void power_lost(void)
 void flash_range_erase(uint32_t offset, size_t count)
 {
     uint32_t i = idx(offset, count);
-    if (i % FLASH_SECTOR_SIZE || count % FLASH_SECTOR_SIZE) { fprintf(stderr, "mock_flash: unaligned erase\n"); abort(); }
+    if (i % FLASH_SHIM_SECTOR_SIZE || count % FLASH_SHIM_SECTOR_SIZE) { fprintf(stderr, "mock_flash: unaligned erase\n"); abort(); }
     if (step()) {
         /* Interrupted erase: every cell anywhere between old and erased; many
            quad-words fail ECC, some read back as old data, some as erased. */

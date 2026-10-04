@@ -159,9 +159,12 @@ uint8_t  signal_engine_fpga_features(void);
    Reads FPGA_FEATURES live over SPI, so call it from the hw worker (heavy gate held). */
 bool     signal_engine_has_control_loop(void);
 
-/* iCE40 multi-image warmboot: reconfigure the FPGA to another image in the config flash
-   (0=closed-loop, 1=deep-DAC-replay) with NO reflash.  Blocks until CDONE + re-reads
-   version/features.  Returns 0 ok, -1 bad image, -2 gw too old, -3 CDONE timeout. */
+/* iCE40 image switch (0=closed-loop, 1=deep-DAC-replay).  Despite the name this is not an
+   SB_WARMBOOT: it quiesces the PSRAM masters, then REFLASHES the iCE40 config flash from W25Q
+   slot gw0/gw1 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads version/features
+   and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
+   -3 reflash failed twice (falls back to image 0), -5 the PSRAM-write selftest failed on the
+   new image (falls back to image 0). */
 int      fpga_warmboot(uint8_t image);
 
 /* Bring every gateware PSRAM master (deep-replay reader / closed loop / capture writer) to a
@@ -389,7 +392,6 @@ void     psram_boot_selftest(void);
 #define PSRAM_ST_STM32_FAIL        1
 #define PSRAM_ST_ICE40_WRITE_FAIL  2
 #define PSRAM_ST_ICE40_REACH_FAIL  3
-#define PSRAM_ST_SKIP              4
 int          psram_selftest_result(void);   /* one of PSRAM_ST_* */
 const char  *psram_selftest_str(void);       /* human-readable for 'status' */
 bool         signal_engine_psram_operable(void);        /* status.psram_ok — true iff last selftest passed */

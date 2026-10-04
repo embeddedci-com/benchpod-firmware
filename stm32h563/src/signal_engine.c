@@ -1,25 +1,16 @@
 /* ============================================================================
- * signal_engine.c — SPI client for the iCE40 (UPduino) signal-engine FPGA.
+ * signal_engine.c — SPI client for the iCE40 signal-engine FPGA.
  *
- * The RP2350 used to drive an 8-bit parallel DAC and ADC directly through
- * PIO + DMA on 18 GPIOs.  That responsibility now belongs to the iCE40 FPGA.
- * This file keeps the public signal_engine.h API identical so command_handler
- * and main don't need to change — every call here turns into one or more SPI
- * transactions to the FPGA.
+ * The iCE40 owns the DAC, the ADC capture, the logic analyzer and their PSRAM
+ * datapaths.  Every call here turns into one or more SPI transactions to it.
  *
- * Wiring (RP2350 GPIO → FPGA):
- *                       RP2350A   RP2350B
- *   SCK                 GPIO 18   GPIO 38
- *   MOSI  (RP → FPGA)   GPIO 19   GPIO 39
- *   MISO  (FPGA → RP)   GPIO 16   GPIO 36
- *   CSn   (active low)  GPIO 17   GPIO 37
- *   BUSY  (FPGA → RP)   GPIO 22   GPIO 42
- *   FPGA pulls BUSY LOW while LOAD_WAVE / capture is in progress; the rising
- *   edge signals async completion.  Both variants land on spi0 — the SPI
- *   function of a pin is fixed by GPIO%4 (0=RX,1=CSn,2=SCK,3=TX) and the
- *   instance by GPIO/8 (even=spi0), so 16-19 and 36-39 are both spi0 groups.
+ * Link (STM32H563 SPI1 -> iCE40; see bsp/board_pins.h):
+ *   SCK=PA5  MISO=PA6  MOSI=PB5 (AF5)  CS=PB10 (GPIO, active low)
+ *   BUSY=PG1 (input + EXTI1).  The FPGA pulls BUSY LOW while LOAD_WAVE /
+ *   capture is in progress; the rising edge signals async completion.
  *
- * SPI command set: see docs/API.md and the plan file.
+ * SPI command set: docs/API.md; opcodes are generated from tools/gen_protocol.py
+ * into cmd_opcodes.h.
  * ========================================================================== */
 
 #include "signal_engine.h"
@@ -788,7 +779,6 @@ int psram_selftest_result(void) { return s_psram_selftest_rc; }
 const char *psram_selftest_str(void) {
     switch (s_psram_selftest_rc) {
     case PSRAM_ST_OK:              return "ok";
-    case PSRAM_ST_SKIP:            return "n/a (v1)";
     case PSRAM_ST_STM32_FAIL:      return "inoperable (STM32<->PSRAM)";
     case PSRAM_ST_ICE40_WRITE_FAIL:return "inoperable (iCE40 write)";
     case PSRAM_ST_ICE40_REACH_FAIL:return "inoperable (iCE40 pad open)";
@@ -2165,15 +2155,17 @@ int fpga_dual_capture(uint16_t *out_adc, uint16_t adc_count, uint16_t adc_div,
 /* Rate-based async arm for the dual capture (server /capture path): converts the
    requested Hz to gateware dividers — ADC against the ADC capture clock, raw-LA
    against the 24 MHz control clock — and returns the ACHIEVED rates via
-   *adc_rate_hz/*la_rate_hz so the timebase is exact.  Poll with
+   *adc_rate_hz and *la_rate_hz so the timebase is exact.  Poll with
    fpga_dual_capture_poll(). */
 int fpga_dual_capture_start_hz(uint32_t adc_samples, float adc_req_hz,
                                uint32_t la_samples, float la_req_hz,
                                float *adc_rate_hz, float *la_rate_hz) {
     uint32_t ad = adc_samples ? adc_divider_from_rate_hz(adc_req_hz) : 2u;
     uint32_t ld = la_samples  ? divider_from_rate_hz(la_req_hz)      : 2u;
-    if (ad < 2u) ad = 2u; if (ad > 65535u) ad = 65535u;
-    if (ld < 2u) ld = 2u; if (ld > 65535u) ld = 65535u;
+    if (ad < 2u) ad = 2u;
+    if (ad > 65535u) ad = 65535u;
+    if (ld < 2u) ld = 2u;
+    if (ld > 65535u) ld = 65535u;
     if (adc_rate_hz) *adc_rate_hz = (float)adc_capture_hz() / (float)ad;
     if (la_rate_hz)  *la_rate_hz  = (float)FPGA_HFOSC_HZ     / (float)ld;
     return fpga_dual_capture_start(adc_samples, (uint16_t)ad, la_samples, (uint16_t)ld);

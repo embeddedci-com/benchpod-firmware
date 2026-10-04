@@ -4,8 +4,8 @@
    JSON protocol.  command_handler routes a connection here when its first
    non-whitespace byte is not '{'.  Lines are newline-terminated; responses are
    newline-terminated, with bulk sample data returned as ASCII CSV.  Maps onto
-   the same underlying actions as the JSON commands (signal_engine, gpio_control,
-   target_power, wifi_manager). */
+   the same underlying actions as the JSON commands (signal_engine, target_power,
+   wifi_manager). */
 
 /* Dispatch one complete, NUL-terminated SCPI command line (no trailing CR/LF)
    received on conn_id.  Sends any response via at_send_data(conn_id, ...), paced

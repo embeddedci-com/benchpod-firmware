@@ -29,9 +29,10 @@ uint32_t boot_policy_off(uint32_t prev_off, uint32_t culprit);
 const char *boot_policy_off_str(uint32_t off);
 
 /* A firmware update does not touch the iCE40's own config flash, so a pod keeps its old
-   gateware until something reprograms it. Which embedded image to load so the gateware
-   matches this firmware, or -1 to leave it: the running version (`running`, 0 = the iCE40
-   did not answer) differs from the embedded one (`embedded`, 0 = unknown at build time).
+   gateware until something reprograms it. Which image (W25Q slot gw0/gw1) to load so the
+   gateware matches this firmware, or -1 to leave it: the running version (`running`, 0 = the
+   iCE40 did not answer) differs from the one this firmware was built for (`embedded`,
+   0 = unknown at build time).
    Keeps the kind of image that is running: 1 when it is the deep-replay image, else 0. */
 int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep);
 

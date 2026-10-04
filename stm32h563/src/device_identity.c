@@ -88,7 +88,7 @@ static int identity_persist(const identity_record_t *rec) {
     /* Same single-core, IRQs-off discipline as config_store.c: XIP code cannot
        execute while flash is being erased/programmed. */
     uint32_t irqs = save_and_disable_interrupts();
-    flash_range_erase(IDENTITY_FLASH_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_erase(IDENTITY_FLASH_OFFSET, FLASH_SHIM_SECTOR_SIZE);
     flash_range_program(IDENTITY_FLASH_OFFSET, page, FLASH_PAGE_SIZE);
     restore_interrupts(irqs);
 

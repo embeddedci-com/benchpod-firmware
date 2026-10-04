@@ -172,21 +172,6 @@ fail:
     return -1;
 }
 
-/* Prepare for an iCE40 SELF-reconfiguration (SB_WARMBOOT / OP_WARMBOOT): hand the config-
-   flash bus to the iCE40 so it can re-read the selected image (same handoff as the
-   flash-done path, but WITHOUT touching CRESET — SB_WARMBOOT reboots the fabric itself). */
-void ice40_prepare_reconfig(void) {
-    psram_bus_release();                 /* SCLK/IO -> Hi-Z (iCE40 drives them for the read) */
-    psram_cs_park_high();                /* but HOLD PSRAM /CS high so the PSRAM stays
-                                            deselected and doesn't answer the config-flash
-                                            0x03 read on the SHARED SCK/SO/SI pins */
-    GPIO_InitTypeDef gz = {0};
-    gz.Mode = GPIO_MODE_ANALOG;          /* PE3 (flash /CS) -> Hi-Z so the iCE40 drives it */
-    gz.Pin  = ICE_FLASH_CS_PIN;
-    HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
-}
-
-/* Wait for CDONE to (re)assert after a warmboot.  0 = configured, -1 = timeout. */
 int ice40_is_configured(void) {
     GPIO_InitTypeDef g = {0};
     __HAL_RCC_GPIOF_CLK_ENABLE();
@@ -195,10 +180,3 @@ int ice40_is_configured(void) {
     return HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_SET;
 }
 
-int ice40_wait_cdone(uint32_t timeout_ms) {
-    uint32_t t0 = HAL_GetTick();
-    while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {
-        if (HAL_GetTick() - t0 > timeout_ms) return -1;
-    }
-    return 0;
-}

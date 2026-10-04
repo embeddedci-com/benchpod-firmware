@@ -1,0 +1,75 @@
+# Build the STM32H563 firmware and run its host tests on every PR and push to main, so a
+# compiler warning, a build break or a skipped test is caught before a release tag is cut.
+#
+#   • Firmware build with the same ARM GCC and STM32CubeH5 as release-stm32.yml. The job fails
+#     on any compiler or linker warning except newlib's nosys stub notices
+#     ("_read is not implemented and will always fail" etc.), which are expected.
+#   • Host tests WITH Cube, so test_ota and test_blob_store (which need Cube's mbed-crypto)
+#     run instead of being skipped. The job fails if they are skipped.
+#
+# The build does not embed gateware or ESP32-C3 blobs (their manifest entries stay empty);
+# the release workflow adds those. test.yml still runs the plain host tests without Cube.
+name: STM32 firmware build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CUBE_VERSION: v1.6.0
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up ARM GCC toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: "13.3.Rel1"
+
+      - name: Cache STM32CubeH5 SDK
+        id: cube-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/STM32CubeH5
+          key: stm32cubeh5-${{ env.CUBE_VERSION }}
+
+      - name: Fetch STM32CubeH5 SDK
+        if: steps.cube-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${CUBE_VERSION}" \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/STMicroelectronics/STM32CubeH5.git \
+            "${{ runner.temp }}/STM32CubeH5"
+
+      - name: Build STM32 firmware
+        run: |
+          set -o pipefail
+          make -C stm32h563 -j"$(nproc)" CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee build.log
+
+      - name: No compiler warnings
+        run: |
+          if grep 'warning:' build.log | grep -v 'is not implemented and will always fail' > warnings.txt; then
+            echo "::error title=Compiler warnings::$(wc -l < warnings.txt) warning(s) in the firmware build"
+            cat warnings.txt
+            exit 1
+          fi
+          echo "No compiler warnings."
+
+      - name: Host tests (with Cube, so the OTA and blob store suites run)
+        run: |
+          set -o pipefail
+          make -C stm32h563 test CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee test.log
+          if grep -q '^SKIP' test.log; then
+            echo "::error title=Host tests skipped::$(grep '^SKIP' test.log)"
+            exit 1
+          fi

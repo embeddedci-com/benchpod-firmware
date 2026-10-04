@@ -2,7 +2,6 @@
 #include "command_handler.h"
 #include "at_driver.h"
 #include "signal_engine.h"
-#include "gpio_control.h"
 #include "target_power.h"
 #include "wifi_manager.h"
 #include "device_identity.h"
@@ -741,79 +740,79 @@ static scpi_result_t scpi_pow_validQ(scpi_t *ctx) {
 
 static const scpi_command_t scpi_commands[] = {
     /* IEEE 488.2 mandated (handled by libscpi core) */
-    {"*CLS",  SCPI_CoreCls},
-    {"*ESE",  SCPI_CoreEse},
-    {"*ESE?", SCPI_CoreEseQ},
-    {"*ESR?", SCPI_CoreEsrQ},
-    {"*IDN?", SCPI_CoreIdnQ},
-    {"*OPC",  SCPI_CoreOpc},
-    {"*OPC?", SCPI_CoreOpcQ},
-    {"*RST",  SCPI_CoreRst},
-    {"*SRE",  SCPI_CoreSre},
-    {"*SRE?", SCPI_CoreSreQ},
-    {"*STB?", SCPI_CoreStbQ},
-    {"*TST?", SCPI_CoreTstQ},
-    {"*WAI",  SCPI_CoreWai},
+    {.pattern = "*CLS",  .callback = SCPI_CoreCls},
+    {.pattern = "*ESE",  .callback = SCPI_CoreEse},
+    {.pattern = "*ESE?", .callback = SCPI_CoreEseQ},
+    {.pattern = "*ESR?", .callback = SCPI_CoreEsrQ},
+    {.pattern = "*IDN?", .callback = SCPI_CoreIdnQ},
+    {.pattern = "*OPC",  .callback = SCPI_CoreOpc},
+    {.pattern = "*OPC?", .callback = SCPI_CoreOpcQ},
+    {.pattern = "*RST",  .callback = SCPI_CoreRst},
+    {.pattern = "*SRE",  .callback = SCPI_CoreSre},
+    {.pattern = "*SRE?", .callback = SCPI_CoreSreQ},
+    {.pattern = "*STB?", .callback = SCPI_CoreStbQ},
+    {.pattern = "*TST?", .callback = SCPI_CoreTstQ},
+    {.pattern = "*WAI",  .callback = SCPI_CoreWai},
 
     /* Required SCPI system nodes (libscpi core) */
-    {"SYSTem:ERRor[:NEXT]?", SCPI_SystemErrorNextQ},
-    {"SYSTem:ERRor:COUNt?",  SCPI_SystemErrorCountQ},
-    {"SYSTem:VERSion?",      SCPI_SystemVersionQ},
+    {.pattern = "SYSTem:ERRor[:NEXT]?", .callback = SCPI_SystemErrorNextQ},
+    {.pattern = "SYSTem:ERRor:COUNt?",  .callback = SCPI_SystemErrorCountQ},
+    {.pattern = "SYSTem:VERSion?",      .callback = SCPI_SystemVersionQ},
 
     /* Custom system queries */
-    {"SYSTem:PING?",                     scpi_system_pingQ},
-    {"SYSTem:WIFI:STATe?",               scpi_wifi_stateQ},
-    {"SYSTem:WIFI:RSSI?",                scpi_wifi_rssiQ},
-    {"SYSTem:COMMunicate:LAN:IPADdress?", scpi_lan_ipQ},
+    {.pattern = "SYSTem:PING?",                     .callback = scpi_system_pingQ},
+    {.pattern = "SYSTem:WIFI:STATe?",               .callback = scpi_wifi_stateQ},
+    {.pattern = "SYSTem:WIFI:RSSI?",                .callback = scpi_wifi_rssiQ},
+    {.pattern = "SYSTem:COMMunicate:LAN:IPADdress?", .callback = scpi_lan_ipQ},
 
     /* Device identity (Ed25519) */
-    {"SYSTem:IDENtity:PUBlic?", scpi_identity_publicQ},
-    {"SYSTem:IDENtity:POP?",    scpi_identity_popQ},
+    {.pattern = "SYSTem:IDENtity:PUBlic?", .callback = scpi_identity_publicQ},
+    {.pattern = "SYSTem:IDENtity:POP?",    .callback = scpi_identity_popQ},
 
     /* Source (waveform generation config) */
-    {"[SOURce]:FUNCtion[:SHAPe]",   scpi_src_function},
-    {"[SOURce]:FUNCtion[:SHAPe]?",  scpi_src_functionQ},
-    {"[SOURce]:FREQuency",          scpi_src_freq},
-    {"[SOURce]:FREQuency?",         scpi_src_freqQ},
-    {"[SOURce]:VOLTage[:AMPLitude]",  scpi_src_ampl},
-    {"[SOURce]:VOLTage[:AMPLitude]?", scpi_src_amplQ},
-    {"[SOURce]:VOLTage:OFFSet",     scpi_src_offset},
-    {"[SOURce]:VOLTage:OFFSet?",    scpi_src_offsetQ},
-    {"[SOURce]:SRATe",              scpi_src_srate},
-    {"[SOURce]:SRATe?",             scpi_src_srateQ},
-    {"[SOURce]:DURation",           scpi_src_duration},
-    {"[SOURce]:DURation?",          scpi_src_durationQ},
+    {.pattern = "[SOURce]:FUNCtion[:SHAPe]",   .callback = scpi_src_function},
+    {.pattern = "[SOURce]:FUNCtion[:SHAPe]?",  .callback = scpi_src_functionQ},
+    {.pattern = "[SOURce]:FREQuency",          .callback = scpi_src_freq},
+    {.pattern = "[SOURce]:FREQuency?",         .callback = scpi_src_freqQ},
+    {.pattern = "[SOURce]:VOLTage[:AMPLitude]",  .callback = scpi_src_ampl},
+    {.pattern = "[SOURce]:VOLTage[:AMPLitude]?", .callback = scpi_src_amplQ},
+    {.pattern = "[SOURce]:VOLTage:OFFSet",     .callback = scpi_src_offset},
+    {.pattern = "[SOURce]:VOLTage:OFFSet?",    .callback = scpi_src_offsetQ},
+    {.pattern = "[SOURce]:SRATe",              .callback = scpi_src_srate},
+    {.pattern = "[SOURce]:SRATe?",             .callback = scpi_src_srateQ},
+    {.pattern = "[SOURce]:DURation",           .callback = scpi_src_duration},
+    {.pattern = "[SOURce]:DURation?",          .callback = scpi_src_durationQ},
 
     /* Output enable (waveform) */
-    {"OUTPut[:STATe]",  scpi_output},
-    {"OUTPut[:STATe]?", scpi_outputQ},
+    {.pattern = "OUTPut[:STATe]",  .callback = scpi_output},
+    {.pattern = "OUTPut[:STATe]?", .callback = scpi_outputQ},
 
     /* Sense (acquisition length + capture rate) */
-    {"SENSe:SWEep:POINts",  scpi_points},
-    {"SENSe:SWEep:POINts?", scpi_pointsQ},
-    {"SENSe:SRATe",         scpi_sense_srate},
-    {"SENSe:SRATe?",        scpi_sense_srateQ},
+    {.pattern = "SENSe:SWEep:POINts",  .callback = scpi_points},
+    {.pattern = "SENSe:SWEep:POINts?", .callback = scpi_pointsQ},
+    {.pattern = "SENSe:SRATe",         .callback = scpi_sense_srate},
+    {.pattern = "SENSe:SRATe?",        .callback = scpi_sense_srateQ},
 
     /* Acquisition */
-    {"READ?",                scpi_readQ},
-    {"MEASure?",             scpi_measureQ},
-    {"DIAGnostic:PATTern?",  scpi_diag_patternQ},
-    {"DIAGnostic:CAPture?", scpi_diag_captureQ},
+    {.pattern = "READ?",                .callback = scpi_readQ},
+    {.pattern = "MEASure?",             .callback = scpi_measureQ},
+    {.pattern = "DIAGnostic:PATTern?",  .callback = scpi_diag_patternQ},
+    {.pattern = "DIAGnostic:CAPture?", .callback = scpi_diag_captureQ},
 
     /* Trace upload for replay (play back via SOURce:FUNCtion USER; OUTPut ON) */
-    {"TRACe[:DATA]",   scpi_trace_data},
-    {"TRACe:POINts?",  scpi_trace_pointsQ},
+    {.pattern = "TRACe[:DATA]",   .callback = scpi_trace_data},
+    {.pattern = "TRACe:POINts?",  .callback = scpi_trace_pointsQ},
 
     /* Digital GPIO */
-    {"DIGital:OUTPut", scpi_dig_output},
-    {"DIGital:STEP",   scpi_dig_step},
-    {"DIGital:STEP:BUSY?", scpi_dig_step_busyQ},
+    {.pattern = "DIGital:OUTPut", .callback = scpi_dig_output},
+    {.pattern = "DIGital:STEP",   .callback = scpi_dig_step},
+    {.pattern = "DIGital:STEP:BUSY?", .callback = scpi_dig_step_busyQ},
 
     /* Target eFuse power */
-    {"OUTPut:POWer#[:STATe]",  scpi_pow_state},
-    {"OUTPut:POWer#[:STATe]?", scpi_pow_stateQ},
-    {"OUTPut:POWer#:FAULt?",   scpi_pow_faultQ},
-    {"OUTPut:POWer#:VALid?",   scpi_pow_validQ},
+    {.pattern = "OUTPut:POWer#[:STATe]",  .callback = scpi_pow_state},
+    {.pattern = "OUTPut:POWer#[:STATe]?", .callback = scpi_pow_stateQ},
+    {.pattern = "OUTPut:POWer#:FAULt?",   .callback = scpi_pow_faultQ},
+    {.pattern = "OUTPut:POWer#:VALid?",   .callback = scpi_pow_validQ},
 
     SCPI_CMD_LIST_END,
 };

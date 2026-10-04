@@ -130,7 +130,7 @@ static int write_record(const ab_store_t *s, int target, uint32_t seq, const voi
 
     /* Interrupts off, as before: bank-2 erase/program while bank 1 keeps running. */
     uint32_t irqs = save_and_disable_interrupts();
-    flash_range_erase(off, FLASH_SECTOR_SIZE);
+    flash_range_erase(off, FLASH_SHIM_SECTOR_SIZE);
     if (body) flash_range_program(off + AB_HDR_SIZE, rec + AB_HDR_SIZE, body);
     flash_range_program(off, rec, AB_HDR_SIZE);         /* the commit point */
     restore_interrupts(irqs);
@@ -206,9 +206,9 @@ int ab_store_clear(const ab_store_t *s)
     /* The tombstone now outranks everything; wipe the rest so the old secrets are
        gone. If the tombstone failed, erasing everything is the fallback clear. */
     uint32_t irqs = save_and_disable_interrupts();
-    if (rc != 0) flash_range_erase(s->slot_off[target], FLASH_SECTOR_SIZE);
-    flash_range_erase(s->slot_off[1 - target], FLASH_SECTOR_SIZE);
-    if (s->legacy_off) flash_range_erase(s->legacy_off, FLASH_SECTOR_SIZE);
+    if (rc != 0) flash_range_erase(s->slot_off[target], FLASH_SHIM_SECTOR_SIZE);
+    flash_range_erase(s->slot_off[1 - target], FLASH_SHIM_SECTOR_SIZE);
+    if (s->legacy_off) flash_range_erase(s->legacy_off, FLASH_SHIM_SECTOR_SIZE);
     restore_interrupts(irqs);
     printf("[%s] cleared\n", s->tag);
     return rc;
