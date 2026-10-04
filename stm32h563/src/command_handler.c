@@ -3666,9 +3666,10 @@ static void handle_fpga_image(int conn_id, const char *json) {
 }
 
 /* {"cmd":"psram_recover"} — one-click remote recovery for an inoperable PSRAM datapath: ack,
-   then reboot.  The reboot clears the STM32-OCTOSPI side (the only thing that does), and the
-   boot self-test auto-reflashes the iCE40 side (psram_boot_selftest_with_recovery), so the
-   pod returns healthy WITHOUT a physical power-cycle.  The client will not receive a
+   then reboot.  The reboot resets every firmware-side mirror and peripheral, and the boot
+   self-test auto-reflashes the iCE40 side (psram_boot_selftest_with_recovery), so the pod
+   returns healthy WITHOUT a physical power-cycle.  (The July "only a reboot clears it" case was
+   a stale firmware mirror of the capture base, since fixed: see fpga_warmboot.)  The client will not receive a
    command.response (the pod reboots first) — treat "no reply, device reconnects" as success
    and re-poll status.psram_ok. */
 static void handle_psram_recover(int conn_id) {

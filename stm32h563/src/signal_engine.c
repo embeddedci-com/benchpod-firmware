@@ -1584,11 +1584,14 @@ int fpga_warmboot(uint8_t image) {
 
     /* ★ fix 3: VERIFY the iCE40->PSRAM write path actually came up on the swapped-to image (a
        16-sample capture selftest: the STM32 pre-writes a sentinel, the iCE40 must overwrite it).
-       With the gw v26 deep-master reset-gating this should always pass.  If it ever wedges, do
-       NOT re-reflash the same image — re-running the swap re-triggers the race and COMPOUNDS the
-       wedge into a persistent, power-cycle-only state.  Instead recover the bench to the immune
-       LOOP image (a single, race-free reconfig) and report the failure, so the pod is left
-       usable rather than dead. */
+       With the gw v26 deep-master reset-gating this should always pass.  If it fails, recover
+       the bench to the LOOP image and report it, so the pod is left usable.
+       History: the "wedge that compounds across swaps until a power cycle" seen in July was NOT
+       a hardware latch. A CRESET resets the fabric's ADC capture base while the firmware's
+       mirror of it kept the packed base from capture_dual, so this selftest checked the wrong
+       PSRAM address and its sentinel "survived". Fixed by the mirror re-sync in
+       ice40_reflash_image (signal_engine/command_handler_on_gateware_reconfigured); a
+       sentinel-survives failure is a stale-mirror bug first, silicon last. */
     int bad = -1;
     if (signal_engine_capture_selftest(16, &bad) == 0) {
         printf("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
