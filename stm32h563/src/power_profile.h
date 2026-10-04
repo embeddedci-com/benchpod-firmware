@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "ina238.h"
 
 #include "bp_json.h"
 
@@ -52,6 +53,9 @@ typedef struct {
    (by ratio) to 1/rate and not shorter than PP_MIN_PERIOD_US is chosen; ties prefer the longer
    shunt conversion (less of each period spent on the bus channel). */
 void pp_rate_select(uint32_t rate_hz, pp_adc_cfg_t *out);
+/* The same for the monitor actually fitted: the INA226 has slower conversions and its timing
+   lives in CONFIG (AVG[11:9] VBUSCT[8:6] VSHCT[5:3] MODE[2:0]) instead of ADC_CONFIG. */
+void pp_rate_select_chip(uint32_t rate_hz, ina_chip_t chip, pp_adc_cfg_t *out);
 
 /* ---- statistics over every raw sample ---- */
 typedef struct {

@@ -42,7 +42,9 @@ int target_power_get_cached(int efuse, bool *enabled, bool *fault) {
     return 0;
 }
 
-/* ---- INA238 register mock (only 0x40 / 0x44 exist) ----------------------- */
+/* ---- current-monitor register mock (only 0x40 / 0x44 exist) -------------
+   An INA238 by default; mock_as_ina226() makes it the pin-compatible INA226 (registers at
+   other addresses, DIE_ID at 0xFF). */
 
 #define REG_CONFIG      0x00u
 #define REG_ADC_CONFIG  0x01u
@@ -51,7 +53,7 @@ int target_power_get_cached(int efuse, bool *enabled, bool *fault) {
 
 static struct {
     uint8_t  addr;                 /* last address talked to */
-    uint16_t reg[0x40];
+    uint16_t reg[0x100];
     int      writes;               /* register writes since the last mock_reset */
     int      shunt_reads, bus_reads;
     bool     dead;                 /* every transaction fails (an absent sensor) */
@@ -60,13 +62,25 @@ static struct {
 static void mock_reset(void) {
     memset(&ina, 0, sizeof(ina));
     ina.reg[REG_ADC_CONFIG] = INA238_ADC_CONFIG_RESET;
+    ina.reg[0x3F] = 0x2381u;               /* INA238 DEVICE_ID */
+    ina238_forget_chips();
+}
+
+#define REG226_CONFIG 0x00u
+#define REG226_VSHUNT 0x01u
+#define REG226_VBUS   0x02u
+static void mock_as_ina226(void) {
+    memset(ina.reg, 0, sizeof(ina.reg));
+    ina.reg[REG226_CONFIG] = INA226_CONFIG_RESET;
+    ina.reg[0xFF] = 0x2260u;               /* INA226 DIE_ID; 0x3F reads 0 */
+    ina238_forget_chips();
 }
 
 int i2c_bus_write(uint8_t addr, const uint8_t *buf, size_t len) {
     if (ina.dead) return -1;
     ina.addr = addr;
     if (len == 3) {
-        ina.reg[buf[0] & 0x3Fu] = (uint16_t)((buf[1] << 8) | buf[2]);
+        ina.reg[buf[0]] = (uint16_t)((buf[1] << 8) | buf[2]);
         ina.writes++;
     }
     return 0;
@@ -77,9 +91,10 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
     if (ina.dead) return -1;
     ina.addr = addr;
     if (wlen == 1 && rlen == 2) {
-        uint8_t r = wbuf[0] & 0x3Fu;
-        if (r == REG_VSHUNT) ina.shunt_reads++;
-        if (r == REG_VBUS)   ina.bus_reads++;
+        uint8_t r = wbuf[0];
+        bool is226 = ina.reg[0xFF] == 0x2260u;
+        if (r == (is226 ? REG226_VSHUNT : REG_VSHUNT)) ina.shunt_reads++;
+        if (r == (is226 ? REG226_VBUS : REG_VBUS))     ina.bus_reads++;
         rbuf[0] = (uint8_t)(ina.reg[r] >> 8);
         rbuf[1] = (uint8_t)(ina.reg[r] & 0xFF);
     }
@@ -437,6 +452,81 @@ static void test_sampler_survives_i2c_errors(void) {
     power_profile_discard();
 }
 
+/* ---- INA226 instead of INA238 ------------------------------------------------ */
+
+static void test_ina226_detect_and_scale(void) {
+    int bus = 0, sh = 0, ua = 0;
+    uint16_t id = 0;
+    mock_reset();
+    CHECK(ina238_chip(I2C_ADDR_INA238_INTERNAL) == INA_CHIP_INA238);
+
+    mock_as_ina226();
+    CHECK(ina238_chip(I2C_ADDR_INA238_INTERNAL) == INA_CHIP_INA226);
+    ina.reg[REG226_VSHUNT] = 2000;            /* 2000 x 2.5 uV = 5 mV over 50 mOhm = 100 mA */
+    ina.reg[REG226_VBUS]   = 4000;            /* 4000 x 1.25 mV = 5000 mV */
+    CHECK(ina238_read(I2C_ADDR_INA238_INTERNAL, &bus, &sh, &ua) == 0);
+    CHECK(bus == 5000 && sh == 5000 && ua == 100000);
+    CHECK(ina.writes == 0);                   /* no ADCRANGE write: the INA226 has one range */
+    ina.reg[REG226_VSHUNT] = (uint16_t)-400;  /* -1 mV over 30 mOhm = -33.333 mA */
+    CHECK(ina238_read(I2C_ADDR_INA238_EXTERNAL, NULL, &sh, &ua) == 0);
+    CHECK(sh == -1000 && ua == -33333);
+    CHECK(ina238_read_id(I2C_ADDR_INA238_INTERNAL, &id) == 0 && id == 0x2260u);
+
+    /* An absent sensor (the external rail without supply) is not cached as anything. */
+    mock_reset();
+    ina.dead = true;
+    CHECK(ina238_chip(I2C_ADDR_INA238_EXTERNAL) == INA_CHIP_NONE);
+    CHECK(ina238_read(I2C_ADDR_INA238_EXTERNAL, &bus, &sh, &ua) != 0);
+    ina.dead = false;
+    mock_as_ina226();
+    CHECK(ina238_chip(I2C_ADDR_INA238_EXTERNAL) == INA_CHIP_INA226);
+}
+
+static void test_ina226_rate_select(void) {
+    pp_adc_cfg_t c;
+    for (uint32_t hz = PP_RATE_MIN_HZ; hz <= PP_RATE_MAX_HZ; hz += 50) {
+        pp_rate_select_chip(hz, INA_CHIP_INA226, &c);
+        CHECK((c.adc_config & 7u) == 7u);               /* MODE: continuous shunt + bus */
+        CHECK(((c.adc_config >> 6) & 7u) == 0u);        /* VBUSCT = 140 us */
+        CHECK((c.adc_config & 0xF000u) == 0u);          /* no RST, reserved bits clear */
+        CHECK(c.period_us >= PP_MIN_PERIOD_US);
+    }
+    /* A 500 Hz request (2000 us): (140 us bus + 332 us shunt) x 4 averages = 1888 us, 530 Hz,
+       the closest the INA226's conversion times get. CONFIG = AVG 1 | VBUSCT 0 | VSHCT 2 | MODE 7. */
+    pp_rate_select_chip(PP_RATE_MAX_HZ, INA_CHIP_INA226, &c);
+    CHECK(c.period_us == 1888u && c.rate_hz == 530u && c.adc_config == 0x0217u);
+    /* The INA238 selection is unchanged. */
+    pp_rate_select_chip(PP_RATE_MAX_HZ, INA_CHIP_INA238, &c);
+    CHECK(c.adc_config == 0xB180u && c.period_us == 2124u);
+}
+
+static void test_ina226_sampler(void) {
+    char err[160];
+    mock_reset();
+    mock_as_ina226();
+    power_profile_discard();
+    g_fault = false;
+    g_now_us = 5000000;
+    ina.reg[REG226_VSHUNT] = 2000;            /* 100 mA */
+    ina.reg[REG226_VBUS]   = 4000;            /* 5000 mV */
+
+    CHECK(power_profile_start(1, PP_RATE_MAX_HZ, 60000, 64, err, sizeof(err)) == 0);
+    CHECK(ina.reg[REG226_CONFIG] == 0x0217u);  /* the INA226 timing went to CONFIG */
+    advance(100000);
+    pp_status_t st;
+    power_profile_status(&st);
+    CHECK(st.n >= 50 && st.n <= 55);           /* ~53 shunt reads at 1888 us */
+    power_profile_stop();
+    CHECK(ina.reg[REG226_CONFIG] == INA226_CONFIG_RESET);
+
+    char buf[512];
+    bp_emit_t e;
+    bp_emit_init(&e, buf, sizeof(buf));
+    power_profile_emit_stats(&e);
+    CHECK(strstr(buf, "\"adc_rate_hz\":530") != NULL);
+    power_profile_discard();
+}
+
 int main(void) {
     test_rate_select();
     test_stats();
@@ -446,6 +536,9 @@ int main(void) {
     test_sampler_tracks_bus_at_worker_cadence();
     test_sampler_busy_truncate_and_fault();
     test_sampler_survives_i2c_errors();
+    test_ina226_detect_and_scale();
+    test_ina226_rate_select();
+    test_ina226_sampler();
     if (failures) { printf("test_power_profile: %d FAILURE(S)\n", failures); return 1; }
     printf("test_power_profile: all passed\n");
     return 0;
