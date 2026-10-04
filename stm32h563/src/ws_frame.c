@@ -1,6 +1,6 @@
 #include "ws_frame.h"
 
-#include "pico/rand.h"   /* get_rand_64 — RP2350 hardware TRNG */
+#include "pico/rand.h"   /* get_rand_64: STM32 hardware RNG (src/rng.c) */
 
 #include <string.h>
 

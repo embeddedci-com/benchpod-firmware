@@ -11,17 +11,16 @@
  * over USART1 (PA9/PA10) while strapping BOOT (IO9/PF12) low and pulsing EN
  * (PF11).  There is NO programming header on the vbench-pod board — the C3's
  * UART and straps reach only the STM32 — so this is the sole non-soldering way
- * to flash it.  Mirrors flash-ice40: the image is an embedded blob and the pod
- * flashes it itself (no host esptool needed).
+ * to flash it.  Mirrors flash-ice40: the image lives in a W25Q blob slot and
+ * the pod flashes it itself (no host esptool needed).
  *
  * The protocol is a from-scratch implementation of the esptool SLIP command set
  * (SYNC / SPI_ATTACH / FLASH_BEGIN / FLASH_DATA / FLASH_END / SPI_FLASH_MD5),
  * ROM loader variant (no stub upload).  All progress is logged via printf to the
  * console.
  *
- * ⚠ NOT hardware-verified: strap/reset timing, USART1 kernel clock, and the
- *   ROM command framing are bench bring-up items.  Use esp_rom_flash_sync()
- *   first to prove the wiring before attempting a full program.
+ * Hardware-verified (C3 auto-flash, 2026-09-21).  esp_rom_flash_sync() proves
+ * the EN/BOOT/UART wiring without touching flash.
  *
  * These take over EN/BOOT/USART1; call only when the SPI Wi-Fi transport is
  * stopped (esp_hosted_spi_stop()).  On success the C3 is left running the new

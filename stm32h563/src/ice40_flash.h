@@ -36,8 +36,8 @@ int  ice40_is_configured(void);
 void ice40_hold_off_bus(void);
 
 /* Runtime gateware IMAGE SWITCH: reprogram the config flash with image n (0=closed-loop,
-   1=deep-DAC-replay) and reconfigure.  Defined in console.c (holds the embedded
-   images).  ~2 s.  Returns 0 ok, -1 fail. */
+   1=deep-DAC-replay) and reconfigure, from W25Q blob slot gw0/gw1.  Defined in console.c.
+   ~2 s.  Returns 0 ok, -1 fail. */
 int  ice40_reflash_image(int n);
 /* The GATEWARE_VERSION of the images this firmware embeds (0 = unknown at build time). */
 uint8_t ice40_embedded_gw_version(void);

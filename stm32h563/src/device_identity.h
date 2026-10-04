@@ -7,7 +7,7 @@
 /* ---- Device identity: a persistent Ed25519 keypair ------------------------
  *
  * At boot the device ensures it owns a stable Ed25519 private key, generating
- * one (from the RP2350 hardware TRNG) only if flash has none, and NEVER
+ * one (from the STM32 hardware RNG, src/rng.c) only if flash has none, and NEVER
  * overwriting an existing key.  The public key is the device's identifier; a
  * signature over a server-supplied nonce is its proof of possession.
  *
