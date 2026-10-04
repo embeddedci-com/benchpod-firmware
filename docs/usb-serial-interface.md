@@ -97,7 +97,9 @@ The `<la>` argument is a **Logic-Analyzer channel index (1..12)** driven by the 
 |---|---|
 | `spi-ping` | Re-PING the iCE40 FPGA (3 attempts); prints gateware version on success. |
 | `spi-status` | Read the FPGA `STATUS` byte (`DAC_RUN`/`CAP_BUSY`/`CAP_DONE`). |
-| `flash-ice40 [verify\|diag]` | Program the config flash from the embedded bitstream. `verify` reads back + compares; `diag` probes the JEDEC ID. |
+| `flash-ice40 [verify\|diag]` | Program the config flash with gateware image 0 from its W25Q blob slot. `verify` reads back + compares; `diag` probes the JEDEC ID. |
+| `blobs` | One line per W25Q blob slot (gw0, gw1, esp): state against this firmware, size, version, SHA-256. |
+| `upload-begin <firmware\|gw0\|gw1\|esp> <size> <sha256> [version]` | Start an upload over this console (then `upload-data <off> <len<=512> <crc32>` + raw bytes, `upload-end`, `upload-commit`, `upload-status`, `upload-abort`; see `src/upload_rx.h`). `benchpod install-blobs` drives it. |
 
 #### I²C peripherals (v2: INA238 ×2 / TCA9554 ×4; analog DAC = DAC8551)
 

@@ -144,7 +144,9 @@ Report expected-failure rows indented, as `tb_adc_timing` does.
 
 ## Flashing
 
-Software DFU: `dfu` console cmd → `make flash-dfu` (run in background, ~90 s). A
-gateware change also needs the console `flash-ice40` to reprogram the iCE40 config
-flash + reconfigure. A DFU reflash does NOT reconfigure the iCE40; if a bad firmware
+Software DFU: `dfu` console cmd → `make flash-dfu` (~20 s, a ~0.5 MB image). The
+gateware and ESP32-C3 images live in W25Q blob slots, not in the image: after a gateware
+or C3 rebuild, `benchpod install-blobs --dir stm32h563/build/blobs` sends the changed
+ones (a gateware blob that matches the firmware updates the running iCE40 at once).
+`flash-ice40` reprograms the iCE40 config flash from slot gw0. A DFU reflash does NOT reconfigure the iCE40; if a bad firmware
 left it unconfigured, run `flash-ice40` or power-cycle.
