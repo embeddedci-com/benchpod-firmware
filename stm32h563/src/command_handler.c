@@ -981,8 +981,14 @@ static void dap_stats_report(void) {
    host that has just switched the target's rail on does not start OpenOCD against a board that
    is still booting (an STM32 NUCLEO answers ~2.1 s after power-on: its on-board ST-LINK comes up
    first).  The IDR is readable with the target held in reset, so this works under
-   connect-under-reset too.  Returns ms until the first OK ACK, or -1 on timeout. */
+   connect-under-reset too.  It waits for a STABLE answer (DAP_WAIT_STABLE_OK reads in a row,
+   DAP_WAIT_STABLE_MS apart): the first OK came ~100 ms before the NUCLEO's ST-LINK let go of
+   the target (its F446 runs ~2.2 s after power-on), and the first flash after a pod boot then
+   failed with "cannot read IDR" while the retry passed.  Returns ms until the answer was
+   stable, or -1 on timeout. */
 #define DAP_WAIT_MAX_MS 10000u
+#define DAP_WAIT_STABLE_OK 5
+#define DAP_WAIT_STABLE_MS 50
 static int dap_wait_for_target(uint32_t wait_ms) {
     static const uint8_t line_reset[7] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };  /* 56 ones */
     static const uint8_t jtag_to_swd[2] = { 0x9E, 0xE7 };
@@ -990,17 +996,22 @@ static int dap_wait_for_target(uint32_t wait_ms) {
     if (wait_ms > DAP_WAIT_MAX_MS) wait_ms = DAP_WAIT_MAX_MS;
     absolute_time_t t0 = get_absolute_time();
     absolute_time_t deadline = make_timeout_time_ms(wait_ms);
+    int ok = 0;
     for (;;) {
         swd_ll_seq_out(line_reset, 56);
         swd_ll_seq_out(jtag_to_swd, 16);
         swd_ll_seq_out(line_reset, 56);
         swd_ll_seq_out(idle, 8);
         uint32_t idr = 0;
-        if (swd_ll_transfer(SWD_REQ_RnW, &idr) == SWD_ACK_OK)   /* DP read, A[3:2]=0: DPIDR */
-            return (int)(absolute_time_diff_us(t0, get_absolute_time()) / 1000);
+        if (swd_ll_transfer(SWD_REQ_RnW, &idr) == SWD_ACK_OK) {  /* DP read, A[3:2]=0: DPIDR */
+            if (++ok >= DAP_WAIT_STABLE_OK)
+                return (int)(absolute_time_diff_us(t0, get_absolute_time()) / 1000);
+        } else {
+            ok = 0;
+        }
         if (time_reached(deadline)) return -1;
         watchdog_heartbeat(WD_TASK_WORKER, "dap-wait");
-        sleep_ms(20);
+        sleep_ms(ok ? DAP_WAIT_STABLE_MS : 20);
     }
 }
 
