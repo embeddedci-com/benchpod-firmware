@@ -322,8 +322,13 @@ static void cl_drop_link(void) {
     cl_rx_reset();
 }
 
+static bool        s_send_full;    /* the last cl_tcp_send failed only because the buffer was full */
+static const char *s_pend_buf;     /* a command.response that met a full buffer, resent from the poll */
+static size_t      s_pend_len;
+
 static void cl_backoff(const char *reason) {
     printf("[cloud] backoff: %s\n", reason);
+    s_pend_len = 0;                 /* the server times the request out and retries it */
     cl_drop_link();
     cl_set_state(CL_BACKOFF);
     s_deadline = make_timeout_time_ms(s_backoff_ms);
@@ -482,7 +487,11 @@ static bool cl_tcp_established(void) {
 
 static int cl_tcp_send(const uint8_t *buf, size_t len) {
     if (!s_pcb) return -1;
-    if (altcp_write(s_pcb, buf, (u16_t)len, TCP_WRITE_FLAG_COPY) != ERR_OK) return -1;
+    err_t err = altcp_write(s_pcb, buf, (u16_t)len, TCP_WRITE_FLAG_COPY);
+    /* ERR_MEM = the send buffer is full for now (a tunnel read-back is filling it), not a
+       broken link: callers that can wait check s_send_full and retry instead of reconnecting. */
+    s_send_full = (err == ERR_MEM);
+    if (err != ERR_OK) return -1;
     /* The frame is queued once altcp_write succeeds; an altcp_output error only delays it (the
        TCP timer sends it).  Reporting that as a failure made callers resend a queued frame. */
     (void)altcp_output(s_pcb);
@@ -747,6 +756,16 @@ static void cl_send_efuse_snapshot(void) {
 }
 
 /* Send an error command.response immediately (net task). */
+/* Send a command.response frame. A full send buffer keeps it (in the caller's static frame,
+   which nothing rewrites until the next response) for the poll loop to resend; any other
+   failure is a broken link. A newer response replaces one still waiting: the server has
+   timed that request out by then. */
+static void cl_send_reply_frame(const char *buf, size_t len) {
+    if (cl_ws_send(WS_OP_TEXT, buf, len)) { s_pend_len = 0; return; }
+    if (s_send_full) { s_pend_buf = buf; s_pend_len = len; return; }
+    cl_backoff("command.response send failed");
+}
+
 static void cl_send_command_error(const char *request_id, const char *error) {
     static char frame[BP_CLOUD_CMD_FRAME_MAX];
     bp_emit_t e;
@@ -756,7 +775,7 @@ static void cl_send_command_error(const char *request_id, const char *error) {
     bp_emit(&e, ",\"device_id\":\"%s\",\"status\":\"error\",\"error\":", s_cfg.device_id);
     bp_emit_jstr(&e, error);
     bp_emit_raw(&e, "}");
-    if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, frame, bp_emit_len(&e));
+    if (bp_emit_ok(&e)) cl_send_reply_frame(frame, bp_emit_len(&e));
 }
 
 /* A command.request arrived: hand the command object to the hw worker for
@@ -821,9 +840,11 @@ void cloud_client_send_command_response(const char *request_id,
     bp_emit(&e, "{\"type\":\"command.response\",\"request_id\":");
     bp_emit_jstr(&e, request_id);
     bp_emit(&e, ",\"device_id\":\"%s\",%s", s_cfg.device_id, tail);
-    if (!bp_emit_ok(&e) || !cl_ws_send(WS_OP_TEXT, frame, bp_emit_len(&e))) {
-        cl_backoff("command.response send failed");
+    if (!bp_emit_ok(&e)) {
+        cl_backoff("command.response too large");
+        return;
     }
+    cl_send_reply_frame(frame, bp_emit_len(&e));
 }
 
 /* ---- Cloud byte-tunnel (flash/capture bridge) ----------------------------- */
@@ -1336,6 +1357,10 @@ void cloud_client_poll(void) {
             cl_backoff("idle timeout (no pong)");
             return;
         }
+        if (s_pend_len) {                          /* a reply that met a full buffer */
+            if (cl_ws_send(WS_OP_TEXT, s_pend_buf, s_pend_len)) s_pend_len = 0;
+            else if (!s_send_full) { cl_backoff("command.response send failed"); return; }
+        }
         if (time_reached(s_next_ping)) {
             s_next_ping = make_timeout_time_ms(PING_INTERVAL_MS);
             /* RFC 6455 PING (not the app-level JSON {"type":"ping"}): the server's
@@ -1343,8 +1368,14 @@ void cloud_client_poll(void) {
                (cl_recv_cb), so this keeps the idle-timeout from tripping even when
                there's no application traffic. */
             if (!cl_ws_send(WS_OP_PING, NULL, 0)) {
-                cl_backoff("ping send failed");
-                return;
+                if (s_send_full) {
+                    /* Busy, not broken: try again shortly. A dead link still trips the idle
+                       timeout above, so this cannot hide one. */
+                    s_next_ping = make_timeout_time_ms(250);
+                } else {
+                    cl_backoff("ping send failed");
+                    return;
+                }
             }
         }
         /* Spontaneous push: drain any queued eFuse EN/FLT change events. */
