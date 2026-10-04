@@ -5,7 +5,6 @@
 #include "target_power.h"
 #include "console.h"
 #include "watchdog.h"
-#include "sys_health.h"
 #include "bp_limits.h"
 #include "ota.h"
 #include "esp_rom_flash.h"
@@ -281,11 +280,9 @@ static void worker_task(void *arg) {
 void hw_worker_init(void) {
     s_q = xQueueCreate(HW_WORK_QUEUE_DEPTH, sizeof(cmd_work_t));
     if (!s_q) { printf("[hw] worker queue alloc failed\n"); return; }
-    TaskHandle_t h = NULL;
     if (xTaskCreate(worker_task, "hw", 3072, NULL,
-                    tskIDLE_PRIORITY + 1, &h) != pdPASS) {
+                    tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
         printf("[hw] worker task create failed\n");
         return;
     }
-    sys_health_register("hw", h);   /* stack headroom telemetry */
 }

@@ -465,9 +465,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         op(out, ctx, "  reset  : %s\r\n", fault_last_reset_str());
         op(out, ctx, "  crash  : %s\r\n", fault_last_crash_str());
-        for (int i = 0; i < sys_health_task_count(); i++)
-            op(out, ctx, "  stack  : %-7s %u B free (min)\r\n",
-               sys_health_task_name(i), sys_health_task_stack_free(i));
+        {
+            sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
+            int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
+            for (int i = 0; i < n; i++)
+                op(out, ctx, "  stack  : %-7s %u B free (min)\r\n", t[i].name, t[i].stack_free);
+        }
         op(out, ctx, "  flash  : %lu KB\r\n", (unsigned long)(flash_layout_size() / 1024u));
         op(out, ctx, "  lwip   : mem max %lu of %lu B, pbuf pool max %u of %u\r\n",
            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,

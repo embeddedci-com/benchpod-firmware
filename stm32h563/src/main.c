@@ -36,7 +36,6 @@
 #include "watchdog.h"
 #include "boot_guard.h"
 #include "cloud_client.h"
-#include "sys_health.h"
 #include "hw_worker.h"
 #include "ice40_flash.h"
 #include "version.h"
@@ -179,17 +178,13 @@ int main(void)
     /* The net task runs the lwIP poll loop AND the mbedTLS handshake for the
        outbound WSS cloud client; TLS (ASN.1/bignum) is stack-heavy, so give it
        a generous 16 KB stack. */
-    TaskHandle_t console_h = NULL, net_h = NULL;
     if (xTaskCreate(console_task, "console", 768, NULL,
-                    tskIDLE_PRIORITY + 1, &console_h) != pdPASS ||
+                    tskIDLE_PRIORITY + 1, NULL) != pdPASS ||
         xTaskCreate(net_task, "net", 4096, NULL,
-                    tskIDLE_PRIORITY + 2, &net_h) != pdPASS) {
+                    tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
         printf("[fatal] task create failed\r\n");
         fault_sw_panic(FAULT_SW_TASKCREATE, "main");
     }
-    /* Register handles for stack/heap headroom telemetry (status/selftest). */
-    sys_health_register("console", console_h);
-    sys_health_register("net", net_h);
 
     /* The hw worker owns all instrument hardware + command execution; the console
        and net tasks feed it work and drain its replies.  Create it after the

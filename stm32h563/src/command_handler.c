@@ -2246,8 +2246,9 @@ static void handle_status(int conn_id) {
        last_crash is free-form, so keep real headroom rather than sizing to today's payload. */
     /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[].
        1344: safe_mode + safe_reason (up to ~130 B). */
-    /* 1408: gateware + gateware_embedded. */
-    char resp[1408];
+    /* 1408: gateware + gateware_embedded.
+       1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since. */
+    char resp[1536];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
@@ -2286,6 +2287,19 @@ static void handle_status(int conn_id) {
             sys_health_heap_free(), sys_health_heap_min_free(),
             sys_health_stack_min_free(), fault_last_reset_str());
     bp_emit_jstr(&e, fault_last_crash_str());
+    /* Per-task stack headroom (minimum-ever free bytes), every task incl. IDLE and the timer
+       task, so stack_min says which task it is. */
+    {
+        sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
+        int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
+        bp_emit_raw(&e, ",\"stacks\":{");
+        for (int i = 0; i < n; i++) {
+            if (i) bp_emit_raw(&e, ",");
+            bp_emit_jstr(&e, t[i].name);
+            bp_emit(&e, ":%u", t[i].stack_free);
+        }
+        bp_emit_raw(&e, "}");
+    }
     /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
     bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":",
             boot_guard_safe_mode() ? "true" : "false");
