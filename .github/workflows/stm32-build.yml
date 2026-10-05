@@ -65,6 +65,9 @@ jobs:
           fi
           echo "No compiler warnings."
 
+      - name: OTA commit code stays in RAM
+        run: stm32h563/tools/check_ramfunc_calls.sh stm32h563/build/bench_pod_stm32.elf
+
       - name: Host tests (with Cube, so the OTA and blob store suites run)
         run: |
           set -o pipefail

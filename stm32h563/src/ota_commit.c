@@ -57,7 +57,25 @@ static uint32_t s_bank_bytes;
                       | XSPI_CCR_DMODE_0  | XSPI_CCR_DMODE_1 )
 #define OTA_QREAD_DUMMY   6u
 
-#define RAMFUNC __attribute__((section(".RamFunc"), noinline, used))
+/* no-tree-loop-distribute-patterns: GCC must not turn a fill/compare loop here into a memset or
+   memcmp call, which lives in the flash being erased (fine at -Og today, a brick at -O2). */
+#define RAMFUNC __attribute__((section(".RamFunc"), noinline, used, \
+                               optimize("no-tree-loop-distribute-patterns")))
+
+/* Hardening of the in-place commit (see docs/design/ota-fallback.md, option 1):
+   - every sector of the image gets a CRC32, computed by the CRC unit over bytes read through the
+     HAL PSRAM path right after the SHA-256 reverify (so the table describes the hashed image);
+   - before anything is erased, every sector is read again through the raw register path the
+     commit uses and checked against its CRC: a mismatch refuses the commit with flash untouched;
+   - each sector is erased, programmed, checked for flash error flags and read back, and retried
+     up to OTA_SECTOR_TRIES times. */
+#define OTA_MAX_SECTORS   128u           /* 1 MB / 8 KB: covers the 928 KB image area */
+#define OTA_READ_TRIES    3u
+#define OTA_SECTOR_TRIES  3u
+#define OTA_FLASH_ERRS    (FLASH_SR_WRPERR | FLASH_SR_PGSERR | FLASH_SR_STRBERR | FLASH_SR_INCERR)
+#define OTA_FLASH_CLR     (FLASH_CCR_CLR_WRPERR | FLASH_CCR_CLR_PGSERR | FLASH_CCR_CLR_STRBERR | \
+                           FLASH_CCR_CLR_INCERR | FLASH_CCR_CLR_EOP)
+static uint32_t s_sector_crc[OTA_MAX_SECTORS];
 
 /* ---- RAM-resident primitives (no flash access, no libcalls) --------------- */
 
@@ -148,35 +166,83 @@ RAMFUNC static void ram_iwdg_kick(void) {
     IWDG->KR = 0x0000AAAAu;
 }
 
-/* One sector: read from PSRAM into `buf` (in OTA_RD_BURST windows), erase the
-   flash sector, program it.  `len` <= FLASH_SECTOR_BYTES.  Source buffer bytes
-   beyond `len` are left as-is (the caller pre-fills the tail with 0xFF). */
-RAMFUNC static void ram_write_one_sector(uint32_t flash_abs, uint32_t psram_addr,
-                                         uint8_t *buf, uint32_t len) {
-    for (uint32_t off = 0; off < len; off += OTA_RD_BURST) {
-        uint32_t n = len - off;
-        if (n > OTA_RD_BURST) n = OTA_RD_BURST;
-        ram_psram_read_burst(psram_addr + off, buf + off, n);
-    }
-    ram_flash_erase(flash_abs);
-    ram_flash_program(flash_abs, buf, len);
-    ram_iwdg_kick();
+/* CRC32 (CRC unit defaults: poly 0x04C11DB7, init 0xFFFFFFFF) of `len` bytes, len a multiple
+   of 4. Register-only, so it runs while flash is erased. */
+RAMFUNC static uint32_t ram_crc32(const uint8_t *buf, uint32_t len) {
+    CRC->CR = CRC_CR_RESET;
+    const uint32_t *w = (const uint32_t *)buf;
+    for (uint32_t i = 0; i < (len >> 2); i++) CRC->DR = w[i];
+    return CRC->DR;
 }
 
-/* The real in-place commit: erase + rewrite every sector of the image from PSRAM,
-   with IRQs off (the ISR vectors/code are being erased), then reset.  Never
-   returns.  `nsectors` is precomputed by the caller (no division here). */
-RAMFUNC static void ram_commit_all(uint32_t nsectors, uint32_t total, uint8_t *buf) {
+/* Error flags of the last flash operation, cleared. 0 = it went through. */
+RAMFUNC static uint32_t ram_flash_take_errors(void) {
+    uint32_t e = FLASH->NSSR & OTA_FLASH_ERRS;
+    FLASH->NSCCR = OTA_FLASH_CLR;
+    return e;
+}
+
+/* Read one sector of the staged image through the raw register path into `buf` (tail past
+   `len` filled with 0xFF) and check it against its CRC, retrying the read. 0 = matches. */
+RAMFUNC static int ram_read_checked(uint32_t psram_addr, uint8_t *buf, uint32_t len,
+                                    uint32_t crc) {
+    for (uint32_t t = 0; t < OTA_READ_TRIES; t++) {
+        for (uint32_t i = len; i < FLASH_SECTOR_BYTES; i++) buf[i] = 0xFF;
+        for (uint32_t off = 0; off < len; off += OTA_RD_BURST) {
+            uint32_t n = len - off;
+            if (n > OTA_RD_BURST) n = OTA_RD_BURST;
+            ram_psram_read_burst(psram_addr + off, buf + off, n);
+        }
+        if (ram_crc32(buf, FLASH_SECTOR_BYTES) == crc) return 0;
+    }
+    return -1;
+}
+
+/* Erase + program one sector from `buf`, then check the error flags and read it back;
+   retried. 0 = the sector now holds exactly `buf`. */
+RAMFUNC static int ram_flash_sector(uint32_t flash_abs, const uint8_t *buf) {
+    for (uint32_t t = 0; t < OTA_SECTOR_TRIES; t++) {
+        (void)ram_flash_take_errors();
+        ram_flash_erase(flash_abs);
+        uint32_t err = ram_flash_take_errors();
+        ram_flash_program(flash_abs, buf, FLASH_SECTOR_BYTES);
+        err |= ram_flash_take_errors();
+        ram_iwdg_kick();
+        if (err) continue;
+        const volatile uint32_t *f = (const volatile uint32_t *)flash_abs;
+        const uint32_t *b = (const uint32_t *)buf;
+        uint32_t i = 0;
+        while (i < (FLASH_SECTOR_BYTES >> 2) && f[i] == b[i]) i++;
+        if (i == (FLASH_SECTOR_BYTES >> 2)) return 0;
+    }
+    return -1;
+}
+
+/* The real in-place commit, from RAM with IRQs off (the vectors and code are being rewritten).
+   A pre-pass reads every sector through the raw path and checks it against its CRC BEFORE the
+   first erase: a mismatch returns -1 with flash untouched (the caller re-enables IRQs and
+   refuses). Then every sector is read (checked again), erased, programmed, checked and read
+   back, and the chip resets. A sector that still fails after its retries is left as it is: the
+   pod needs USB DFU then, exactly as after a power cut (no bootloader yet). */
+RAMFUNC static int ram_commit_all(uint32_t nsectors, uint32_t total, uint8_t *buf) {
     __disable_irq();
+    for (uint32_t s = 0; s < nsectors; s++) {
+        uint32_t base = s << FLASH_SECTOR_SHIFT;
+        uint32_t len  = total - base;
+        if (len > FLASH_SECTOR_BYTES) len = FLASH_SECTOR_BYTES;
+        if (ram_read_checked(OTA_PSRAM_BASE + base, buf, len, s_sector_crc[s]) != 0) {
+            __enable_irq();
+            return -1;
+        }
+        ram_iwdg_kick();
+    }
     ram_flash_unlock();
     for (uint32_t s = 0; s < nsectors; s++) {
         uint32_t base = s << FLASH_SECTOR_SHIFT;
         uint32_t len  = total - base;
         if (len > FLASH_SECTOR_BYTES) len = FLASH_SECTOR_BYTES;
-        /* Pre-fill the sector buffer with 0xFF so a short final sector programs
-           erased bytes in its tail quad-word. */
-        for (uint32_t i = len; i < FLASH_SECTOR_BYTES; i++) buf[i] = 0xFF;
-        ram_write_one_sector(FLASH_BASE_ADDR + base, OTA_PSRAM_BASE + base, buf, len);
+        (void)ram_read_checked(OTA_PSRAM_BASE + base, buf, len, s_sector_crc[s]);   /* passed above */
+        (void)ram_flash_sector(FLASH_BASE_ADDR + base, buf);
     }
     /* SYSRESETREQ. */
     __DSB();
@@ -213,8 +279,33 @@ int ota_commit(void) {
         printf("[ota] commit refused: %s\n", ota_error());
         return -1;
     }
+    if (nsectors > OTA_MAX_SECTORS) {
+        psram_bus_release();
+        printf("[ota] commit refused: %lu sectors, more than %u\n",
+               (unsigned long)nsectors, (unsigned)OTA_MAX_SECTORS);
+        return -1;
+    }
+    /* Per-sector CRCs of the hashed image, read through the HAL path (bus still held). */
+    __HAL_RCC_CRC_CLK_ENABLE();
+    for (uint32_t sct = 0; sct < nsectors; sct++) {
+        uint32_t base = sct * FLASH_SECTOR_BYTES;
+        uint32_t len  = total - base;
+        if (len > FLASH_SECTOR_BYTES) len = FLASH_SECTOR_BYTES;
+        memset(s_sector, 0xFF, sizeof(s_sector));
+        if (psram_read(OTA_PSRAM_BASE + base, s_sector, len) != 0) {
+            psram_bus_release();
+            printf("[ota] commit refused: PSRAM read failed at sector %lu\n", (unsigned long)sct);
+            return -1;
+        }
+        s_sector_crc[sct] = ram_crc32(s_sector, FLASH_SECTOR_BYTES);
+    }
     s_bank_bytes = flash_layout_bank_size();
-    ram_commit_all(nsectors, total, s_sector);   /* does not return */
+    if (ram_commit_all(nsectors, total, s_sector) != 0) {   /* returns only if refused */
+        psram_bus_release();
+        printf("[ota] commit refused: the raw PSRAM read does not match the verified image; "
+               "nothing was erased\n");
+        return -1;
+    }
     return -1;                                    /* unreachable */
 }
 
@@ -240,9 +331,17 @@ int ota_commit_selftest(void) {
     /* Run the RAM-resident primitives against the SCRATCH sector (not the app).
        IRQs off only during the flash program quad-words (inside ram_flash_program);
        the app code stays intact, so we don't disable IRQs for the whole thing. */
+    __HAL_RCC_CRC_CLK_ENABLE();
+    uint32_t crc = ram_crc32(s_sector, FLASH_SECTOR_BYTES);
     ram_flash_unlock();
-    ram_write_one_sector(scratch_addr, scratch_psram, s_sector, FLASH_SECTOR_BYTES);
+    /* The same checked read + checked sector write the commit uses. */
+    int rc = ram_read_checked(scratch_psram, s_sector, FLASH_SECTOR_BYTES, crc);
+    if (rc == 0) rc = ram_flash_sector(scratch_addr, s_sector);
     psram_bus_release();
+    if (rc != 0) {
+        printf("[ota-selftest] FAIL: %s\n", "checked PSRAM read or checked sector write");
+        return -1;
+    }
 
     /* Verify via a direct memory-mapped flash read. */
     const uint8_t *flash = (const uint8_t *)scratch_addr;
