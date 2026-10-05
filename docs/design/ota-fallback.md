@@ -16,6 +16,12 @@ first update into 3.5.1 has the old risk; every update made from 3.5.1 on has th
 a copy. A power cut during the rewrite still needs USB DFU until the bootloader (next release)
 uses the copy.
 
+Seen on the bench: the copy is "the firmware of the last install made by 3.5.1+", not
+necessarily the running one. After 3.5.1 installs 3.5.0 (copy = 3.5.0) and 3.5.0 installs 3.5.1
+again (old install code, no copy), the slot holds 3.5.0 under a running 3.5.1. The bootloader must
+treat the copy as a recovery source only (restore it when the app is invalid, never because it
+differs), and could record the running image's SHA-256 at first healthy boot to tell them apart.
+
 
 Today a firmware OTA rewrites internal flash in place from PSRAM, starting at sector 0. A power
 cut during that window leaves no runnable app, and the only way back is BOOT0 + USB DFU
