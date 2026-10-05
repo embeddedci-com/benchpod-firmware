@@ -173,6 +173,34 @@ static void test_no_flash(void) {
     CHECK(blob_store_load() == 0, "a W25Q128 was refused");
 }
 
+/* The FW slot (firmware copy written at OTA commit): stores and verifies like the others, lies
+   above the release slots, touches nothing below it, and stays out of what installers see. */
+static void test_fw_slot(void) {
+    const uint32_t n = 526216;   /* a 3.5.x firmware image */
+    uint8_t d[32], back[64];
+    mock_w25q_reset();
+    blob_store_load();
+    fill(img, n, 41); sha(img, n, d);
+    CHECK(blob_slot_base(BLOB_FW) >= blob_slot_base(BLOB_ESP) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_ESP),
+          "fw slot overlaps esp");
+    CHECK(blob_slot_base(BLOB_FW) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_FW) <= MOCK_W25Q_BYTES,
+          "fw slot past 8 MB");
+    CHECK(blob_slot_capacity(BLOB_FW) >= 928u * 1024u, "fw slot smaller than the 928 KB image area");
+    CHECK(blob_store_write(BLOB_FW, n, 0, d, mem_src, img) == 0, "fw write failed");
+    CHECK(mock_w25q_bad_programs == 0, "programmed over unerased bits");
+    blob_store_load();
+    CHECK(blob_store_present(BLOB_FW) && blob_store_verify(BLOB_FW) == 0, "fw slot not intact");
+    CHECK(blob_store_read((void *)(uintptr_t)BLOB_FW, n - 64, back, 64) == 0 &&
+          memcmp(back, img + n - 64, 64) == 0, "fw read-back differs");
+    for (uint32_t a = 0; a < blob_slot_base(BLOB_FW); a++)
+        if (mock_w25q[a] != 0xFF) { CHECK(0, "fw write touched 0x%06x below its slot", a); break; }
+    /* Not a release blob: not addressable by name (OTA targets, installers), no manifest state. */
+    CHECK(blob_from_name("fw") == -1, "fw is addressable as a blob name");
+    CHECK(blob_state(BLOB_FW) == BLOB_STATE_UNKNOWN, "fw has a manifest state");
+    for (int i = 0; i < BLOB_COUNT; i++)
+        CHECK(!blob_store_present((blob_id_t)i), "release slot %s present after a fw write", blob_name((blob_id_t)i));
+}
+
 /* blob_state_of: what an installer is told about each slot. */
 static void test_state(void) {
     blob_info_t have = {0};
@@ -205,6 +233,7 @@ int main(void) {
     test_corruption_detected();
     test_power_cut_anywhere();
     test_no_flash();
+    test_fw_slot();
     if (fails) { printf("test_blob_store: %d FAILED\n", fails); return 1; }
     printf("test_blob_store: all passed\n");
     return 0;

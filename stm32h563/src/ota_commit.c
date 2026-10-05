@@ -263,6 +263,9 @@ int ota_commit(void) {
 
     printf("[ota] committing %lu bytes (%lu sectors) — do NOT power off\n",
            (unsigned long)total, (unsigned long)nsectors);
+    /* A copy that survives a power cut, for the bootloader planned next. Before the bus grab
+       below: it takes the bus itself (w25q_open). Never blocks the install. */
+    (void)ota_store_fw_copy();
     /* Stop every gateware PSRAM master and drain to idle BEFORE grabbing the bus: the commit
        READS the staged image from PSRAM to write it into internal flash, so a live iCE40
        reader mid-burst contending on the shared bus could corrupt those reads and flash a bad

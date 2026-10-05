@@ -949,6 +949,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                blob_state_str(blob_state((blob_id_t)i)), (unsigned long)in->len,
                (unsigned long)in->version, hex);
         }
+        /* The firmware copy the last install left in the W25Q (for the bootloader planned next).
+           Not a "blob" line: installers parse those and must not see an internal slot. */
+        const blob_info_t *fw = blob_store_info(BLOB_FW);
+        if (fw && fw->present)
+            op(out, ctx, "fw-copy %lu bytes, sha256 %02x%02x%02x%02x...\r\n", (unsigned long)fw->len,
+               fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
+        else
+            op(out, ctx, "fw-copy none\r\n");
     } else if (!strcmp(argv[0], "flash-esp32-sync")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         uint32_t magic = 0;

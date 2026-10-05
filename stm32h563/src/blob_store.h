@@ -9,7 +9,11 @@
  *   0x140000  slot GW1: gateware image 1 (deep replay)     256 KB
  *   0x180000  free for two more gateware slots
  *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
- *   0x600000  free
+ *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
+ *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
+ *             listings (blob_status, the console, the manifest) stop at BLOB_COUNT. Only on a
+ *             W25Q of at least 7 MB.
+ *   0x700000  free
  *
  * A slot is a 4 KB header sector followed by the data. A write erases the slot (header first,
  * so it reads as empty from that moment), programs and read-back-hashes the data, then programs
@@ -31,7 +35,9 @@ typedef enum {
     BLOB_GW0 = 0,     /* gateware image 0: closed loop */
     BLOB_GW1 = 1,     /* gateware image 1: deep replay */
     BLOB_ESP = 2,     /* ESP32-C3 esp-hosted slave image */
-    BLOB_COUNT
+    BLOB_COUNT,       /* the release blobs above; listings and the manifest stop here */
+    BLOB_FW = BLOB_COUNT,   /* internal: STM32 firmware copy written at OTA commit */
+    BLOB_SLOT_COUNT
 } blob_id_t;
 
 #define BLOB_HDR_SIZE      0x1000u

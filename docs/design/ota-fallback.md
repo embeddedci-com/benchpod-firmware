@@ -5,6 +5,18 @@ current `build/bench_pod_stm32.bin` (523,984 bytes).
 
 ## Summary
 
+**Status (3.5.1):** the first step is in. The in-place install checks every sector (option 1:
+per-sector CRC of the hashed image, a pre-pass over the raw read path before the first erase,
+flash error flags, read-back, retries, and a CI check that the RAM code never calls into flash),
+and every install writes the verified image into the W25Q `fw` slot at 0x600000 first (option 4,
+first half; written only when an update is actually installed, never by a dry run). The slot is
+internal: `blob_status` and installers do not list it; the console `blobs` command prints a
+`fw-copy` line. A pod coming from older firmware runs that firmware's install code once, so its
+first update into 3.5.1 has the old risk; every update made from 3.5.1 on has the checks and leaves
+a copy. A power cut during the rewrite still needs USB DFU until the bootloader (next release)
+uses the copy.
+
+
 Today a firmware OTA rewrites internal flash in place from PSRAM, starting at sector 0. A power
 cut during that window leaves no runnable app, and the only way back is BOOT0 + USB DFU
 (`benchpod flash-self`). The fix that works on both the 2 MB (ZIT6) and the 1 MB (ZGT6) part is

@@ -14,17 +14,25 @@ static const struct {
     const char *name;
     uint32_t    base;
     uint32_t    size;         /* header + data */
-} k_slots[BLOB_COUNT] = {
+} k_slots[BLOB_SLOT_COUNT] = {
     [BLOB_GW0] = { "gw0", 0x100000u, 0x040000u },
     [BLOB_GW1] = { "gw1", 0x140000u, 0x040000u },
     [BLOB_ESP] = { "esp", 0x200000u, 0x400000u },
+    [BLOB_FW]  = { "fw",  0x600000u, 0x100000u },
 };
 
-static blob_info_t s_info[BLOB_COUNT];
+static blob_info_t s_info[BLOB_SLOT_COUNT];
+static uint32_t    s_capacity;        /* W25Q bytes, from the last blob_store_load */
 
-uint32_t blob_slot_base(blob_id_t id)     { return id < BLOB_COUNT ? k_slots[id].base : 0u; }
-uint32_t blob_slot_capacity(blob_id_t id) { return id < BLOB_COUNT ? k_slots[id].size - BLOB_HDR_SIZE : 0u; }
-const char *blob_name(blob_id_t id)       { return id < BLOB_COUNT ? k_slots[id].name : "?"; }
+/* A slot exists when its id is known and it fits the chip (the FW slot needs >= 7 MB). */
+static bool slot_ok(blob_id_t id)
+{
+    return id < BLOB_SLOT_COUNT && (id < BLOB_COUNT || k_slots[id].base + k_slots[id].size <= s_capacity);
+}
+
+uint32_t blob_slot_base(blob_id_t id)     { return id < BLOB_SLOT_COUNT ? k_slots[id].base : 0u; }
+uint32_t blob_slot_capacity(blob_id_t id) { return id < BLOB_SLOT_COUNT ? k_slots[id].size - BLOB_HDR_SIZE : 0u; }
+const char *blob_name(blob_id_t id)       { return id < BLOB_SLOT_COUNT ? k_slots[id].name : "?"; }
 
 int blob_from_name(const char *name)
 {
@@ -34,8 +42,8 @@ int blob_from_name(const char *name)
     return -1;
 }
 
-const blob_info_t *blob_store_info(blob_id_t id) { return id < BLOB_COUNT ? &s_info[id] : NULL; }
-bool blob_store_present(blob_id_t id)            { return id < BLOB_COUNT && s_info[id].present; }
+const blob_info_t *blob_store_info(blob_id_t id) { return id < BLOB_SLOT_COUNT ? &s_info[id] : NULL; }
+bool blob_store_present(blob_id_t id)            { return id < BLOB_SLOT_COUNT && s_info[id].present; }
 
 /* Parse one slot's header sector start into s_info[id]. */
 static void load_slot(blob_id_t id)
@@ -58,12 +66,15 @@ int blob_store_load(void)
 {
     uint8_t id[3] = {0};
     memset(s_info, 0, sizeof(s_info));
+    s_capacity = 0;
     if (w25q_read_id(id) != 0 || w25q_capacity(id) < 0x600000u) {
         printf("[blob] no usable W25Q (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
         return -1;
     }
+    s_capacity = w25q_capacity(id);
     int n = 0;
-    for (int i = 0; i < BLOB_COUNT; i++) {
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+        if (!slot_ok((blob_id_t)i)) continue;
         load_slot((blob_id_t)i);
         if (s_info[i].present) n++;
     }
@@ -75,7 +86,8 @@ int blob_store_init(void)
     w25q_open();
     int n = blob_store_load();
     w25q_close();
-    for (int i = 0; i < BLOB_COUNT; i++) {
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+        if (!slot_ok((blob_id_t)i)) continue;
         if (s_info[i].present)
             printf("[blob] %s: %lu bytes, version %lu\n", k_slots[i].name,
                    (unsigned long)s_info[i].len, (unsigned long)s_info[i].version);
@@ -123,7 +135,7 @@ static int hash_flash(uint32_t addr, uint32_t len, uint8_t out[32])
 int blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
                      blob_src_fn src, void *ctx)
 {
-    if (id >= BLOB_COUNT || !src || !sha256 || len == 0 || len > blob_slot_capacity(id)) return -1;
+    if (!slot_ok(id) || !src || !sha256 || len == 0 || len > blob_slot_capacity(id)) return -1;
     const uint32_t base = k_slots[id].base;
     const uint32_t data = base + BLOB_HDR_SIZE;
     static uint8_t page[W25Q_PAGE];
@@ -170,7 +182,7 @@ int blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t
 int blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
     blob_id_t id = (blob_id_t)(uintptr_t)ctx;
-    if (id >= BLOB_COUNT || !s_info[id].present || off > s_info[id].len || n > s_info[id].len - off)
+    if (id >= BLOB_SLOT_COUNT || !s_info[id].present || off > s_info[id].len || n > s_info[id].len - off)
         return -1;
     return w25q_read(k_slots[id].base + BLOB_HDR_SIZE + off, buf, n);
 }

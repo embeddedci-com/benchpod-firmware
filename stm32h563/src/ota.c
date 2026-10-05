@@ -295,4 +295,20 @@ int ota_install_blob(void) {
     return 0;
 }
 
+/* Copy a verified firmware image into the W25Q FW slot, at install time only (a dry run never
+   writes it). The slot survives a power cut, unlike the PSRAM staging, so the bootloader planned
+   next can restore the app from it (docs/design/ota-fallback.md). blob_store_write erases the
+   header first and commits last, so a cut leaves an empty slot, never a valid-looking partial
+   one, and it hashes what it wrote back against the verified digest. Best effort: a failure is
+   logged and the install goes on, since the copy is only groundwork today. */
+int ota_store_fw_copy(void) {
+    if (s_state != OTA_VERIFIED || s_target != OTA_TARGET_FIRMWARE) return -1;
+    signal_engine_quiesce_psram_masters();
+    w25q_open();
+    int rc = blob_store_write(BLOB_FW, s_size, 0u, s_expect, staged_src, NULL);
+    w25q_close();
+    printf("[ota] firmware copy in the W25Q fw slot: %s\n", rc == 0 ? "stored" : "FAILED (install continues)");
+    return rc;
+}
+
 /* ota_commit() is defined in ota_commit.c (RAM-resident flash writer). */

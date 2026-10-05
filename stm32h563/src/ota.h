@@ -65,6 +65,8 @@ int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target,
 /* Refuse an OTA without starting it (e.g. the PSRAM bus is busy): state ERROR with `why`, which
    the cloud reports in ota.status like any other begin failure. */
 void ota_refuse(const char *why);
+/* Store the verified firmware image in the W25Q FW slot (install time; best effort). */
+int ota_store_fw_copy(void);
 
 /* Stage `len` bytes at image `offset` into PSRAM.  Offsets may arrive in order or
    with gaps re-sent; the received-byte high-water is tracked.  Returns 0, <0 on
