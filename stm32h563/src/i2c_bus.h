@@ -11,6 +11,8 @@
  * Devices (7-bit addresses decoded from the netlist):
  *   0x40  INA238  — INTERNAL power-connector current (50 mΩ shunt, 30 mΩ on INA226 boards) [U29]
  *   0x44  INA238  — EXTERNAL power-connector current (30 mΩ shunt, 20 mΩ on INA226 boards) [U33]
+ *   0x41  INA226  — the pod's own 5 V current (30 mΩ shunt after the input eFuse, the DUT's
+ *                   internal rail bypasses it); only on boards that have it          [U35]
  *   0x20  TCA9554 — logic-analyzer pull-up control (CTRL1..8)        [U54]
  *   0x22  TCA9554 — eFuse control + INA ALERT (EN/V/FLT)            [U56]
  *   0x24  TCA9554 — DAC v2 analog mux                                [U55]
@@ -21,6 +23,7 @@
 
 #define I2C_ADDR_INA238_INTERNAL  0x40u
 #define I2C_ADDR_INA238_EXTERNAL  0x44u
+#define I2C_ADDR_INA_POD          0x41u   /* pod's own current, not on every board */
 #define I2C_ADDR_TCA9554_LA       0x20u   /* LA pull-up control      */
 #define I2C_ADDR_TCA9554_PWR      0x22u   /* eFuse enable/status     */
 #define I2C_ADDR_TCA9554_DACMUX   0x24u

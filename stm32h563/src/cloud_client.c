@@ -1,4 +1,5 @@
 #include "cloud_client.h"
+#include "ina238.h"
 #include "nrst_ctrl.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
@@ -675,7 +676,7 @@ static bool cl_send_capabilities(void) {
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
         "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
-        "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,\"can\":true,"
+        "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,\"can\":true,\"pod_current\":%s,"
         "\"current_out\":true,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u), ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
@@ -689,6 +690,7 @@ static bool cl_send_capabilities(void) {
         caps.spi_master ? "true" : "false",
         caps.spi_master ? "true" : "false",        /* spi_stream: firmware, on the SPI master */
         nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
+        ina_pod_present() ? "true" : "false",       /* the pod's own current monitor (0x41) */
         /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes
            with the pod's own numbers (current_out.h). */
         current_out_min_ua(), current_out_max_ua(),

@@ -206,6 +206,13 @@ static void cmd_ina(console_out_t out, void *ctx)
            ina_chip_name(ina238_chip(I2C_ADDR_INA238_EXTERNAL)), bus_mv, sh_uv, cur_ua);
     else
         op(out, ctx, "  ext(0x44) no response (needs external supply)\r\n");
+    if (ina_pod_present()) {
+        if (ina238_read(I2C_ADDR_INA_POD, &bus_mv, &sh_uv, &cur_ua) == 0)
+            op(out, ctx, "  pod(0x41) %s bus=%d mV  shunt=%d uV  I=%d uA\r\n",
+               ina_chip_name(ina238_chip(I2C_ADDR_INA_POD)), bus_mv, sh_uv, cur_ua);
+        else
+            op(out, ctx, "  pod(0x41) no response\r\n");
+    }
 }
 
 static void cmd_pstat(console_out_t out, void *ctx)

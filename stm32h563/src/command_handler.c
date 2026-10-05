@@ -2231,10 +2231,14 @@ static void handle_target_status(int conn_id) {
 
 /* `power_status` — read the on-board INA238 current monitors (0x40 = internal,
    0x44 = external supply). Reports bus voltage (mV) + current (µA) per rail;
-   `ok:false` when a rail can't be read. Single-reply (cloud command channel). */
+   `ok:false` when a rail can't be read. Single-reply (cloud command channel).
+   Boards with the pod's own monitor (0x41) add "pod": the pod's 5 V current (the DUT's
+   internal rail bypasses that shunt) and total_ua, pod + internal rail = what the USB input
+   delivers. Older boards leave "pod" out. */
 static void handle_power_status(int conn_id) {
     int ibus = 0, ish = 0, icur = 0;
     int ebus = 0, esh = 0, ecur = 0;
+    int pbus = 0, psh = 0, pcur = 0;
     /* I2C1 is shared with the console `ina` command, the TCA9554 expanders and the
        power_profile sampler, all of which take hw_lock — this one read did not, so a
        concurrent transaction could interleave and return a torn register. */
@@ -2244,14 +2248,28 @@ static void handle_power_status(int conn_id) {
     hw_lock();
     bool ext_ok = (ina238_read(I2C_ADDR_INA238_EXTERNAL, &ebus, &esh, &ecur) == 0);
     hw_unlock();
+    bool pod = ina_pod_present(), pod_ok = false;
+    if (pod) {
+        hw_lock();
+        pod_ok = (ina238_read(I2C_ADDR_INA_POD, &pbus, &psh, &pcur) == 0);
+        hw_unlock();
+    }
 
-    char resp[224];
-    snprintf(resp, sizeof(resp),
-             "{\"status\":\"ok\",\"data\":{"
-             "\"internal\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d},"
-             "\"external\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d}}}\n",
-             int_ok ? "true" : "false", ibus, icur,
-             ext_ok ? "true" : "false", ebus, ecur);
+    char resp[352];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
+                "\"internal\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d},"
+                "\"external\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d}",
+            int_ok ? "true" : "false", ibus, icur,
+            ext_ok ? "true" : "false", ebus, ecur);
+    if (pod) {
+        bp_emit(&e, ",\"pod\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d",
+                pod_ok ? "true" : "false", pbus, pcur);
+        if (pod_ok && int_ok) bp_emit(&e, ",\"total_ua\":%ld", (long)pcur + (long)icur);
+        bp_emit_raw(&e, "}");
+    }
+    bp_emit_raw(&e, "}}\n");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
     }
@@ -2358,6 +2376,7 @@ static void handle_status(int conn_id) {
     /* Firmware-side features that do not depend on the gateware image. */
                     ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\",\"current_out\""
                     ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
+    if (ina_pod_present()) bp_emit_raw(&e, ",\"pod_current\"");   /* 0x41 pod monitor fitted */
     /* Build-time analog features (what the BOARD has). */
     if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
     if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");

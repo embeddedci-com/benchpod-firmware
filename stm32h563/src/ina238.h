@@ -1,6 +1,7 @@
 #ifndef INA238_H
 #define INA238_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* INA238 current/power monitor.  Replaces the RP2350B's INA219 with the same
@@ -28,6 +29,8 @@ ina_chip_t  ina238_chip(uint8_t addr);
 const char *ina_chip_name(ina_chip_t c);
 /* Drop the cache (host tests). */
 void        ina238_forget_chips(void);
+/* The board has the pod's own current monitor (I2C_ADDR_INA_POD). Probed once, then cached. */
+bool        ina_pod_present(void);
 
 /* Read the chip's ID register: INA238 DEVICE_ID (0x3F) = 0x2381, INA226 DIE_ID (0xFF) =
    0x2260.  Returns 0 on success. */

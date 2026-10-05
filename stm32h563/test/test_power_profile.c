@@ -57,6 +57,7 @@ static struct {
     int      writes;               /* register writes since the last mock_reset */
     int      shunt_reads, bus_reads;
     bool     dead;                 /* every transaction fails (an absent sensor) */
+    bool     no_pod;               /* 0x41 does not answer (a board without the pod monitor) */
 } ina;
 
 static void mock_reset(void) {
@@ -77,7 +78,7 @@ static void mock_as_ina226(void) {
 }
 
 int i2c_bus_write(uint8_t addr, const uint8_t *buf, size_t len) {
-    if (ina.dead) return -1;
+    if (ina.dead || (ina.no_pod && addr == I2C_ADDR_INA_POD)) return -1;
     ina.addr = addr;
     if (len == 3) {
         ina.reg[buf[0]] = (uint16_t)((buf[1] << 8) | buf[2]);
@@ -88,7 +89,7 @@ int i2c_bus_write(uint8_t addr, const uint8_t *buf, size_t len) {
 
 int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
                        uint8_t *rbuf, size_t rlen) {
-    if (ina.dead) return -1;
+    if (ina.dead || (ina.no_pod && addr == I2C_ADDR_INA_POD)) return -1;
     ina.addr = addr;
     if (wlen == 1 && rlen == 2) {
         uint8_t r = wbuf[0];
@@ -485,6 +486,29 @@ static void test_ina226_detect_and_scale(void) {
     CHECK(ina238_chip(I2C_ADDR_INA238_EXTERNAL) == INA_CHIP_INA226);
 }
 
+/* The pod's own monitor (0x41): 30 mOhm on either chip, probed once and cached. */
+static void test_pod_monitor(void) {
+    int bus = 0, sh = 0, ua = 0;
+    mock_reset();
+    mock_as_ina226();
+    ina.reg[REG226_VSHUNT] = 1200;            /* 3 mV over 30 mOhm = 100 mA */
+    ina.reg[REG226_VBUS]   = 3960;            /* 4950 mV, after the shunt */
+    CHECK(ina_pod_present());
+    CHECK(ina238_read(I2C_ADDR_INA_POD, &bus, &sh, &ua) == 0);
+    CHECK(bus == 4950 && sh == 3000 && ua == 100000);
+    mock_reset();                             /* an INA238 there reads through the same shunt */
+    ina.reg[REG_VSHUNT] = 600;                /* 600 x 5 uV = 3 mV -> 100 mA */
+    CHECK(ina238_read(I2C_ADDR_INA_POD, NULL, NULL, &ua) == 0 && ua == 100000);
+
+    /* A board without it: absent, and the answer is kept (no bus traffic per status). */
+    mock_reset();
+    ina.no_pod = true;
+    CHECK(!ina_pod_present());
+    ina.no_pod = false;
+    CHECK(!ina_pod_present());
+    CHECK(ina238_read(I2C_ADDR_INA238_INTERNAL, NULL, NULL, &ua) == 0);   /* others unaffected */
+}
+
 static void test_ina226_rate_select(void) {
     pp_adc_cfg_t c;
     for (uint32_t hz = PP_RATE_MIN_HZ; hz <= PP_RATE_MAX_HZ; hz += 50) {
@@ -541,6 +565,7 @@ int main(void) {
     test_sampler_busy_truncate_and_fault();
     test_sampler_survives_i2c_errors();
     test_ina226_detect_and_scale();
+    test_pod_monitor();
     test_ina226_rate_select();
     test_ina226_sampler();
     if (failures) { printf("test_power_profile: %d FAILURE(S)\n", failures); return 1; }

@@ -166,6 +166,7 @@ int main(void)
        each EN / U53 IN net.) */
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
+    (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
     analog_switch_init();   /* U55 DAC mux + U58 cal switching, all off */
     dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */
     adc_cal_load();         /* per-pod ADC calibration, on top of cal_data.h (adc_cal.h) */

@@ -47,6 +47,7 @@
    limit, 4.10 A over the 3.03 A external limit. */
 static int shunt_mohm_for(uint8_t addr)
 {
+    if (addr == I2C_ADDR_INA_POD) return 30;   /* R138, whichever chip is fitted */
     int ext = (addr == I2C_ADDR_INA238_EXTERNAL);
     if (ina238_chip(addr) == INA_CHIP_INA226) return ext ? 20 : 30;
     return ext ? 30 : 50;
@@ -68,7 +69,9 @@ static int write_reg16(uint8_t addr, uint8_t reg, uint16_t val)
 
 /* ---- chip detection ---- */
 
-static struct { uint8_t addr; ina_chip_t chip; } s_chip[2];
+#define INA_CHIP_SLOTS 3u   /* internal, external, pod */
+static struct { uint8_t addr; ina_chip_t chip; } s_chip[INA_CHIP_SLOTS];
+static int8_t s_pod_present = -1;   /* -1 = not probed yet */
 
 static ina_chip_t detect(uint8_t addr)
 {
@@ -82,11 +85,11 @@ static ina_chip_t detect(uint8_t addr)
 
 ina_chip_t ina238_chip(uint8_t addr)
 {
-    for (unsigned i = 0; i < 2; i++)
+    for (unsigned i = 0; i < INA_CHIP_SLOTS; i++)
         if (s_chip[i].addr == addr && s_chip[i].chip != INA_CHIP_NONE) return s_chip[i].chip;
     ina_chip_t c = detect(addr);
     if (c == INA_CHIP_NONE) return c;
-    for (unsigned i = 0; i < 2; i++)
+    for (unsigned i = 0; i < INA_CHIP_SLOTS; i++)
         if (s_chip[i].addr == addr || s_chip[i].chip == INA_CHIP_NONE) {
             s_chip[i].addr = addr;
             s_chip[i].chip = c;
@@ -97,7 +100,16 @@ ina_chip_t ina238_chip(uint8_t addr)
 
 void ina238_forget_chips(void)
 {
-    for (unsigned i = 0; i < 2; i++) { s_chip[i].addr = 0; s_chip[i].chip = INA_CHIP_NONE; }
+    for (unsigned i = 0; i < INA_CHIP_SLOTS; i++) { s_chip[i].addr = 0; s_chip[i].chip = INA_CHIP_NONE; }
+    s_pod_present = -1;
+}
+
+bool ina_pod_present(void)
+{
+    /* The chip is soldered on or not: probe once (at boot, before the tasks run) and keep the
+       answer, so status and the cloud announce never touch the bus for it. */
+    if (s_pod_present < 0) s_pod_present = (ina238_chip(I2C_ADDR_INA_POD) != INA_CHIP_NONE);
+    return s_pod_present > 0;
 }
 
 const char *ina_chip_name(ina_chip_t c)
