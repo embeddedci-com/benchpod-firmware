@@ -64,6 +64,7 @@ C_SOURCES := \
   src/adc_scale.c \
   src/mcu_adc.c \
   src/board_rev.c \
+  src/board_variant.c \
   src/usb_cc.c \
   src/nrst_ctrl.c \
   src/psram_alloc.c \

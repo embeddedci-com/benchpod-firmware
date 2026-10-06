@@ -20,6 +20,7 @@
 #include "adc_cal.h"       /* per-pod ADC calibration on top of cal_data.h */
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
 #include "ina238.h"
+#include "board_variant.h"
 #include "b64url.h"
 #include "cloud_config.h"
 #include "cloud_client.h"
@@ -2360,6 +2361,8 @@ static void handle_status(int conn_id) {
         }
         bp_emit_raw(&e, "}");
     }
+    /* Analog front end (board_variant.h): false on the digital-only board. */
+    bp_emit(&e, ",\"analog\":%s", board_has_analog() ? "true" : "false");
     /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
     bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":",
             boot_guard_safe_mode() ? "true" : "false");
@@ -2372,23 +2375,27 @@ static void handle_status(int conn_id) {
        The dynamic half now comes from signal_engine_caps(), the same call the cloud announce
        makes, so the two can no longer drift. */
     bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
-                    ",\"scope\",\"analyzer\",\"command\",\"tunnel\",\"ota\""
+                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
     /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\",\"dac_limits\",\"calibrate\",\"current_out\""
+                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
                     ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
     if (ina_pod_present()) bp_emit_raw(&e, ",\"pod_current\"");   /* 0x41 pod monitor fitted */
+    /* Analog features: only on a board with the analog front end (board_variant.h). The
+       digital-only board has the gateware engines but no ADC or DAC behind them. */
+    const bool analog = board_has_analog();
+    if (analog) bp_emit_raw(&e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
     /* Build-time analog features (what the BOARD has). */
-    if (DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
-    if (DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
-    if (DAC_REPLAY) bp_emit_raw(&e, ",\"dac_replay\"");
+    if (analog && DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
+    if (analog && DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
+    if (analog && DAC_REPLAY) bp_emit_raw(&e, ",\"dac_replay\"");
     /* Run-time gateware features (what the RUNNING iCE40 image has). */
     signal_engine_caps_t fcaps;
     signal_engine_caps(&fcaps);
-    if (fcaps.deep_replay)    bp_emit_raw(&e, ",\"dac_deep_replay\"");
-    if (fcaps.control_loop)   bp_emit_raw(&e, ",\"dac_control_loop\"");
-    if (fcaps.cotrig)         bp_emit_raw(&e, ",\"dac_cotrig\"");
-    if (fcaps.loop_sources)   bp_emit_raw(&e, ",\"dac_loop_sources\"");
-    if (fcaps.loop_input_map) bp_emit_raw(&e, ",\"dac_loop_input_map\"");
+    if (analog && fcaps.deep_replay)    bp_emit_raw(&e, ",\"dac_deep_replay\"");
+    if (analog && fcaps.control_loop)   bp_emit_raw(&e, ",\"dac_control_loop\"");
+    if (analog && fcaps.cotrig)         bp_emit_raw(&e, ",\"dac_cotrig\"");
+    if (analog && fcaps.loop_sources)   bp_emit_raw(&e, ",\"dac_loop_sources\"");
+    if (analog && fcaps.loop_input_map) bp_emit_raw(&e, ",\"dac_loop_input_map\"");
     if (fcaps.gpio_read)      bp_emit_raw(&e, ",\"gpio_read\"");
     if (fcaps.capture_trigger) bp_emit_raw(&e, ",\"capture_trigger\"");
     if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_master\"");
@@ -3817,6 +3824,22 @@ static bool cmd_ok_without_hw(const char *cmd) {
     return false;
 }
 
+/* Commands that need the analog front end (DAC, ADC, relays, the 4-20 mA terminals). Refused on
+   the digital-only board (board_variant.h) with a clear reason, instead of "succeeding" against
+   an ADC that is not there. dac_stop stays allowed: stopping nothing is harmless, and callers
+   send it to clean up. capture_dual is handled separately: an LA-only capture is fine. */
+static bool cmd_needs_analog(const char *cmd) {
+    static const char *const analog[] = {
+        "generate", "capture", "stream", "measure", "load", "load_bin", "replay",
+        "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
+        "current_out", "adc_read", "calibrate", "dac_control_loop", "dac_loop_probe",
+        "dac_loop_input",
+    };
+    for (size_t i = 0; i < sizeof(analog) / sizeof(analog[0]); i++)
+        if (strcmp(cmd, analog[i]) == 0) return true;
+    return false;
+}
+
 static void dispatch_line(int conn_id, const char *buf) {
     char cmd[32] = {0};
     if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
@@ -3830,6 +3853,19 @@ static void dispatch_line(int conn_id, const char *buf) {
     if (boot_guard_skip_hw() && !cmd_ok_without_hw(cmd)) {
         send_error(conn_id, "safe mode: iCE40/PSRAM are off. Unplug and replug the pod");
         return;
+    }
+
+    if (!board_has_analog()) {
+        bool adc_capture = false;
+        if (strcmp(cmd, "capture_dual") == 0) {
+            char n[16] = {0};
+            adc_capture = json_get_value(buf, "adc_samples", n, sizeof(n)) && atoi(n) > 0;
+        }
+        if (adc_capture || cmd_needs_analog(cmd)) {
+            send_error(conn_id, "this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. "
+                                "Restart the pod after fitting an analog add-on");
+            return;
+        }
     }
 
     /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud

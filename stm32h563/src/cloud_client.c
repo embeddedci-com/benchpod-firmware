@@ -1,5 +1,6 @@
 #include "cloud_client.h"
 #include "ina238.h"
+#include "board_variant.h"
 #include "nrst_ctrl.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
@@ -652,11 +653,14 @@ static bool cl_send_capabilities(void) {
        (They used to: status carried a hardcoded caps[] literal that named none of these.) */
     signal_engine_caps_t caps;
     signal_engine_caps(&caps);
-    bool deep      = caps.deep_replay;
-    bool ctrl_loop = caps.control_loop;
-    bool cotrig    = caps.cotrig;
-    bool loop_src  = caps.loop_sources;
-    bool loop_map  = caps.loop_input_map;
+    /* A digital-only board has the gateware's DAC/ADC engines but no DAC or ADC behind them
+       (board_variant.h): announce none of the analog features there. */
+    bool analog    = board_has_analog();
+    bool deep      = analog && caps.deep_replay;
+    bool ctrl_loop = analog && caps.control_loop;
+    bool cotrig    = analog && caps.cotrig;
+    bool loop_src  = analog && caps.loop_sources;
+    bool loop_map  = analog && caps.loop_input_map;
     unsigned long replay_max = deep ? (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES
                                     : (unsigned long)SIGNAL_MAX_SAMPLES;
     /* 1024 held the ~700 B of feature flags; the boot health below adds up to ~330 B (a
@@ -665,7 +669,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"serial\":false,\"scope\":true,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
+        "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
         "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
         "\"dac\":%s,\"dac_replay\":%s,\"dac_dc\":%s,\"dac_bits\":%d,\"dac_replay_bits\":%d,"
@@ -676,12 +680,14 @@ static bool cl_send_capabilities(void) {
         "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
         "\"nrst_pin\":%s,"
         "\"power_profile\":true,"
-        "\"capture_b64\":true,\"dac_limits\":true,\"calibrate\":true,\"can\":true,\"pod_current\":%s,"
-        "\"current_out\":true,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
+        "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"can\":true,\"pod_current\":%s,"
+        "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
-        s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u), ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
+        s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u),
+        analog ? "true" : "false", analog ? "true" : "false", ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
-        DAC_AC ? "true" : "false", DAC_REPLAY ? "true" : "false", DAC_DC ? "true" : "false",
+        (analog && DAC_AC) ? "true" : "false", (analog && DAC_REPLAY) ? "true" : "false",
+        (analog && DAC_DC) ? "true" : "false",
         DAC_BITS, DAC_REPLAY_BITS, DAC_FULLSCALE_MV, DAC_CHANNELS,
         deep ? "true" : "false", replay_max,
         ctrl_loop ? "true" : "false", loop_src ? "true" : "false",
@@ -690,7 +696,9 @@ static bool cl_send_capabilities(void) {
         caps.spi_master ? "true" : "false",
         caps.spi_master ? "true" : "false",        /* spi_stream: firmware, on the SPI master */
         nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
+        analog ? "true" : "false", analog ? "true" : "false",   /* dac_limits, calibrate */
         ina_pod_present() ? "true" : "false",       /* the pod's own current monitor (0x41) */
+        analog ? "true" : "false",                  /* current_out: the 4-20 mA output */
         /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes
            with the pod's own numbers (current_out.h). */
         current_out_min_ua(), current_out_max_ua(),
