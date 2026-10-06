@@ -11,10 +11,10 @@
  * the client announces, before anything is staged; the existing SHA-256 check at ota_end then
  * ties the received bytes to the signed hash.
  *
- * Policy. This release only REPORTS: FW_SIG_POLICY_AUDIT accepts every image and records the
- * result (ota status, ota.status, upload-status). PERMISSIVE (refuse a bad signature) and
- * REQUIRED (refuse anything not signed) exist and are host-tested, but no command selects them
- * yet: a later release adds one (cloud and USB may tighten, only USB may relax) and persists it.
+ * Policy: FW_SIG_POLICY_AUDIT (the default) accepts every image and records the result (ota
+ * status, ota.status, upload-status); PERMISSIVE refuses a bad signature; REQUIRED refuses
+ * anything not signed. pod_policy.h persists it and decides who may change it (the cloud may
+ * only tighten it, the USB console anything).
  */
 
 #include <stdbool.h>
@@ -71,7 +71,7 @@ bool fw_sign_accept(fw_sig_result_t r, fw_sig_policy_t policy);
 const char *fw_sign_result_name(fw_sig_result_t r);
 
 fw_sig_policy_t fw_sign_policy(void);
-/* Not reachable from any command in this release: only the host tests call it. */
+/* Set by pod_policy (boot and the sig_policy command); nothing else should call it. */
 void fw_sign_set_policy(fw_sig_policy_t p);
 const char *fw_sign_policy_name(fw_sig_policy_t p);
 

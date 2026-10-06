@@ -130,6 +130,7 @@ C_SOURCES := \
   src/fw_info_block.c \
   src/fw_sign.c \
   src/cmd_tier.c \
+  src/pod_policy.c \
   src/rng.c \
   src/hw_lock.c \
   src/psram.c \

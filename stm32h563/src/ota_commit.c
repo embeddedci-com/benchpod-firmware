@@ -69,7 +69,7 @@ static uint32_t s_bank_bytes;
      commit uses and checked against its CRC: a mismatch refuses the commit with flash untouched;
    - each sector is erased, programmed, checked for flash error flags and read back, and retried
      up to OTA_SECTOR_TRIES times. */
-#define OTA_MAX_SECTORS   128u           /* 1 MB / 8 KB: covers the 928 KB image area */
+#define OTA_MAX_SECTORS   128u           /* 1 MB / 8 KB: covers the 912 KB image area */
 #define OTA_READ_TRIES    3u
 #define OTA_SECTOR_TRIES  3u
 #define OTA_FLASH_ERRS    (FLASH_SR_WRPERR | FLASH_SR_PGSERR | FLASH_SR_STRBERR | FLASH_SR_INCERR)

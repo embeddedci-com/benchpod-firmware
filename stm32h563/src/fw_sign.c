@@ -89,7 +89,7 @@ const char *fw_sign_result_name(fw_sig_result_t r) {
     return "?";
 }
 
-/* Audit in this release (see fw_sign.h); not persisted yet. */
+/* Held here for the OTA check; pod_policy.c loads and persists it. */
 static fw_sig_policy_t s_policy = FW_SIG_POLICY_AUDIT;
 fw_sig_policy_t fw_sign_policy(void) { return s_policy; }
 void fw_sign_set_policy(fw_sig_policy_t p) { s_policy = p; }
