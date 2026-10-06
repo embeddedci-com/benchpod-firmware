@@ -1,6 +1,7 @@
 # Signed firmware and blobs
 
-Status: plan, 2026-10-06. Nothing implemented. Expands option D of
+Status: 2026-10-06, the preparation (report only) is built: see "Built so far" at the end.
+Enforcement is not. Expands option D of
 [access-control.md](access-control.md) and adds the rollout order within the access-control work.
 Written against firmware 3.5.1 (`bcad10d`).
 
@@ -38,10 +39,10 @@ Published as `<asset>.sig` next to `bench_pod_stm32.bin`, `blob-gw0.bin`, `blob-
 | 8 | 4 | image size in bytes |
 | 12 | 32 | SHA-256 of the image |
 | 44 | 4 | version, packed `major<<16 \| minor<<8 \| patch` (gateware: its version) |
-| 48 | 4 | build number, monotonic across releases |
+| 48 | 4 | release: packed firmware version of the release the asset belongs to (the rollback floor will use it) |
 | 52 | 2 | fw_info layout (firmware only, else 0) |
 | 54 | 2 | fw_info min_flash_kb (firmware only, else 0) |
-| 56 | 8 | key_id: first 8 bytes of SHA-256(public key) |
+| 56 | 8 | key_id: first 8 bytes of SHA-512(public key) (Monocypher already has SHA-512) |
 | 64 | 64 | Ed25519 signature over `"benchpod-fw-sign:v1" \|\| 0x00 \|\| bytes 0..63` |
 
 The context string follows the `DEVICE_ID_CTX_*` convention in `device_identity.h`. Binding the
@@ -69,6 +70,8 @@ together on any breaking change.
   Builds without `RELEASE=1` also trust a developer key from `make dev-key`
   (`~/.config/benchpod/`), and `make` signs its own output. Release firmware never trusts it.
 - Policy, persisted in the config sector:
+  - `audit` (the default of the preparation release, not persisted): every image is accepted
+    and the result is only reported.
   - `permissive`: unsigned accepted (reported `sig:"none"`), a bad signature always refused.
   - `required`: unsigned refused.
   - **Ratchet:** the cloud and the USB console may set `required`; only the USB console may go
@@ -109,7 +112,7 @@ signature check. That is unavoidable and happens once per pod.
   the server already lives in that cloud.
 - `release-stm32.yml` signs all four assets after the "Checksum" step and uploads `*.sig`.
 - Add `.sig` files to the 3.5.0 and 3.5.1 releases afterwards with `gh release upload`. Their
-  build numbers are assigned in the order of the releases.
+  `release` field is their own version (`tools/sign_published_release.sh`).
 - Rotation: a release adds the next key and can drop a revoked one; the pod persists a minimum
   key generation once it boots a release that raises it.
 
@@ -140,7 +143,7 @@ because they cost no firmware release.
 | 4 | **Firmware release N**, commits in this order: (a) command tier table, (b) signature check + policy + ratchet + downgrade bit + `upload-sig`, (c) release builds refuse `cloud_set tls=false` (F2 quick fix), (d) `lan_policy open\|locked\|off`, default `open` | one firmware release | step 3 deployed **before** the tag |
 | 5 | Server turns it on: pushes `sig_policy required` to pods after their first verified install, pushes the org's `lan_policy` default, UI toggles | server deploy | step 4 |
 | 6 | Bootloader (ota-fallback.md): installed as a signed combined image, then verifies the W25Q `fw` slot manifest at boot | next firmware release | step 4 |
-| 7 | WS-auth v2 (`host \|\| nonce`, F2), LAN credential (option B), lease mirroring (F3), rollback floor on the build number | next release(s) | steps 4, 5 |
+| 7 | WS-auth v2 (`host \|\| nonce`, F2), LAN credential (option B), lease mirroring (F3), rollback floor on the release field | next release(s) | steps 4, 5 |
 | 8 | H5 secure boot / RDP for physical attackers; customer-owned signing keys if asked | later | step 6 |
 
 Notes on the order:
@@ -175,3 +178,26 @@ Notes on the order:
 3. Self-built firmware over the network: is "set `permissive` over USB once" enough, or should
    users be able to enroll their own public key (over USB only)?
 4. Add `.sig` files only to 3.5.0 and 3.5.1 (blobs in the W25Q), or to every 3.x release?
+
+## Built so far (preparation, report only)
+
+Branch `fw-signing` in benchpod-firmware, embeddedci-server and benchpod-cli; hwe2e on
+`fw-signing-hwe2e` in embeddedci-server. Nothing refuses anything because of a signature.
+
+| Step | What | Where |
+|---|---|---|
+| 1 | Format, `tools/fwsign.py` (keygen, sign, sign-blobs, verify, keys-header, vectors), vectors in `stm32h563/test/vectors/` | firmware |
+| 2 | Go verify packages tested against the same vectors | server `internal/fwsign`, CLI `internal/fwsign` |
+| 3 | Release key `keys/release-1.pub`, offline spare `keys/release-2.pub`; private seeds in `~/.config/benchpod/release-signing/` on the machine that made them | firmware |
+| 4 | `make dev-key`; dev builds trust it and sign `build/*.sig`; `RELEASE=1` builds trust only the release keys | firmware Makefile |
+| 5 | Release CI signs when the `release` environment has `FW_SIGNING_KEY`, else publishes unsigned; `tools/sign_published_release.sh <tag> <key> [--upload]` for old releases | firmware CI |
+| 6 | Server lists, checks and forwards signatures (only to pods with `ota_sig`), records the pod's result | server |
+| 7 | CLI checks `flash-self` and blob signatures and sends `upload-sig` to pods that take it | CLI |
+| 8 | Server audit log with a "would deny" flag, nothing enforced | server |
+| 9 | `cmd_tier.c`: every JSON verb has a tier, logged with each command | firmware |
+| 10 | `fw_sign.c` + OTA: `sig` on `ota_begin`/`ota.begin`, `upload-sig` on USB, results in the status replies, `ota_sig`/`sig_policy` capabilities, fw_info `FW_INFO_FLAG_ENFORCES_SIG` (no image sets it yet) | firmware |
+| 11 | `hwe2e/benchpod_ota_sig_hw_test.go` | server hwe2e |
+
+To turn enforcement on later: add a policy command (cloud and USB may tighten, only USB may
+relax), persist it, set `FW_INFO_FLAG_ENFORCES_SIG` in that release's fw_info, and have the
+server push `required` after a pod's first `sig: ok` install.
