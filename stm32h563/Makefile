@@ -128,6 +128,7 @@ C_SOURCES := \
   src/flash_layout.c \
   src/fw_info.c \
   src/fw_info_block.c \
+  src/fw_sign.c \
   src/rng.c \
   src/hw_lock.c \
   src/psram.c \
@@ -286,6 +287,41 @@ $(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wil
 $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 
 
+# Firmware signing (docs/design/firmware-signing.md). The build trusts the release keys in
+# keys/release-N.pub and, unless RELEASE=1, the developer key from `make dev-key` too. A dev build
+# signs its own image and blobs with that key (build/*.sig), so OTA, install-blobs and hwe2e can
+# send a signed update to a pod running a dev build. CI signs releases itself (release-stm32.yml).
+RELEASE       ?= 0
+DEV_SIGN_KEY  ?= $(HOME)/.config/benchpod/fw-signing-dev.key
+FWSIGN        := python3 ../tools/fwsign.py
+FW_VERSION    := $(shell sed -n 's/^\#define FIRMWARE_VERSION "\(.*\)"/\1/p' src/version.h)
+SIGN_PUBS     := $(sort $(wildcard keys/release-*.pub))
+ifneq ($(RELEASE),1)
+DEV_SIGN_PUB  := $(if $(wildcard $(DEV_SIGN_KEY)),$(BUILD_DIR)/dev-signing.pub)
+endif
+GEN_SIGN_KEYS := $(BUILD_DIR)/fw_sign_keys_gen.h
+# Rewritten only when its content changes (keys-header compares), so the FORCE does not rebuild
+# anything unless RELEASE or the dev key changed.
+$(GEN_SIGN_KEYS): FORCE $(SIGN_PUBS) $(DEV_SIGN_PUB) | $(BUILD_DIR)
+	@$(FWSIGN) keys-header $(foreach k,$(SIGN_PUBS) $(DEV_SIGN_PUB),--pub $(k)) -o $@
+$(BUILD_DIR)/dev-signing.pub: $(DEV_SIGN_KEY) | $(BUILD_DIR)
+	@$(FWSIGN) pubkey $< | cut -d' ' -f1 > $@
+$(BUILD_DIR)/fw_sign.o: $(GEN_SIGN_KEYS)
+.PHONY: FORCE
+FORCE:
+
+# A dev build signs what it built: the image and the three blobs, as `<file>.sig`.
+SIGNED_OUT := $(if $(DEV_SIGN_PUB),$(BUILD_DIR)/$(TARGET).bin.sig)
+$(BUILD_DIR)/$(TARGET).bin.sig: $(BUILD_DIR)/$(TARGET).bin $(GEN_BLOB_MANIFEST) $(DEV_SIGN_KEY)
+	@$(FWSIGN) sign --key $(DEV_SIGN_KEY) --target firmware --release $(FW_VERSION) $<
+	@$(FWSIGN) sign-blobs --key $(DEV_SIGN_KEY) --release $(FW_VERSION) $(BLOB_DIR)/blobs-manifest.json
+
+# One developer signing key per machine (the private seed never leaves ~/.config/benchpod/).
+.PHONY: dev-key
+dev-key:
+	@if [ -f $(DEV_SIGN_KEY) ]; then $(FWSIGN) pubkey $(DEV_SIGN_KEY); \
+	 else $(FWSIGN) keygen $(DEV_SIGN_KEY); fi
+
 # The embedded C3 slave image is a ~1.07 MB vendored binary, intentionally NOT in
 # git (caught by *.bin). If it's absent, fail the build loudly with the command to
 # produce it — rather than silently shipping a pod that can't flash the C3.
@@ -335,7 +371,7 @@ fetch:
 
 .PHONY: all flash flash-dfu flash-dfu-code clean help test fetch
 all: check-uid $(GEN_BLOB_MANIFEST) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
-     $(BUILD_DIR)/$(TARGET).bin
+     $(BUILD_DIR)/$(TARGET).bin $(SIGNED_OUT)
 
 # The unique-ID area must be read as whole words (a byte read is a bus fault on the H5 and
 # once left a pod crashing before USB came up).  Only board_uid.h may touch UID_BASE.
@@ -425,5 +461,7 @@ help:
 	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
 	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
 	@echo "  build/blobs/   : blob-{gw0,gw1,esp}.bin + blobs-manifest.json for the W25Q blob slots"
+	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
+	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "Vars:    CUBE=$(CUBE)  OPENOCD_INTERFACE=$(OPENOCD_INTERFACE)"
 	@echo "         DFU_UTIL=$(DFU_UTIL)  DFU_FLASH_ADDR=$(DFU_FLASH_ADDR)"

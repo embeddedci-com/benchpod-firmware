@@ -56,7 +56,12 @@ SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
 CUBE     ?= /opt/STM32CubeH5
 MBEDTLS  := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
-OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/blob_store.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
+# Signed-manifest check (src/fw_sign.c) on the real Monocypher; fw_sign_keys_gen.h here holds the
+# test vectors' key (vectors/, made by tools/fwsign.py vectors).
+MONOCYPHER := ../lib/monocypher/src/monocypher.c ../lib/monocypher/src/optional/monocypher-ed25519.c
+MONO_INC   := -I../lib/monocypher/src -I../lib/monocypher/src/optional
+FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
+OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 ifneq ($(HAVE_MBEDTLS),)
@@ -201,9 +206,13 @@ build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
 
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h mocks/mock_w25q.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
+	$(CC) $(CFLAGS) $(MONO_INC) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx $(OTA_TARGET)
+build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
+
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)

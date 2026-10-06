@@ -5,6 +5,8 @@
 #include "fw_info.h"
 #include "blob_store.h"
 #include "w25q.h"
+#include "fw_sign.h"
+#include "b64url.h"
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -26,6 +28,8 @@ static uint8_t     s_expect[32];           /* expected SHA-256             */
 static ota_target_t s_target = OTA_TARGET_FIRMWARE;
 static uint32_t    s_version;              /* gateware version of a blob   */
 static char        s_err[64];
+static fw_sig_result_t s_sig = FW_SIG_NONE;  /* last begin's signature check */
+static char        s_sig_key[2 * FW_SIGN_KEY_ID_LEN + 1];
 static uint32_t    s_wd_seen;              /* s_received at the last watchdog mark */
 static uint32_t    s_wd_mark_ms;           /* caller clock at that mark            */
 
@@ -96,12 +100,54 @@ int ota_begin(uint32_t size, const char *sha256_hex) {
 void ota_refuse(const char *why) { set_err(why); }
 
 int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version) {
+    return ota_begin_signed(size, sha256_hex, target, version, NULL, 0);
+}
+
+const char *ota_sig_result(void) { return fw_sign_result_name(s_sig); }
+const char *ota_sig_key_id(void) { return s_sig_key; }
+
+int ota_sig_decode(const char *b64, uint8_t out[FW_SIGN_MANIFEST_LEN]) {
+    if (!b64 || !b64[0]) return 0;
+    size_t n = strlen(b64);
+    /* 128 bytes are 171 base64url characters without padding (172 with one '='). */
+    if (n > 172) return -1;
+    uint8_t buf[132];
+    size_t got = 0;
+    if (b64url_decode(b64, buf, sizeof(buf), &got) != 0 || got != FW_SIGN_MANIFEST_LEN) return -1;
+    memcpy(out, buf, FW_SIGN_MANIFEST_LEN);
+    return (int)got;
+}
+
+/* Check the manifest that came with the image and keep the result for the status replies.
+   0 = the policy lets it in, -1 = refused (error set). */
+static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t expect[32]) {
+    fw_sig_manifest_t m;
+    s_sig = fw_sign_check(sig, sig_len, (uint8_t)s_target, s_size, expect, &m);
+    s_sig_key[0] = '\0';
+    if (s_sig != FW_SIG_NONE && s_sig != FW_SIG_FORMAT)
+        for (unsigned i = 0; i < FW_SIGN_KEY_ID_LEN; i++)
+            snprintf(s_sig_key + 2 * i, 3, "%02x", m.key_id[i]);
+    printf("[ota] signature: %s%s%s (policy %s)\n", fw_sign_result_name(s_sig),
+           s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()));
+    if (fw_sign_accept(s_sig, fw_sign_policy())) return 0;
+    char e[64];
+    snprintf(e, sizeof(e), "signature: %s", fw_sign_result_name(s_sig));
+    set_err(e);
+    return -1;
+}
+
+int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
+                     const uint8_t *sig, size_t sig_len) {
+    s_sig = FW_SIG_NONE;
+    s_sig_key[0] = '\0';
     if ((unsigned)target > OTA_TARGET_ESP) { set_err("bad target"); return -1; }
     s_target  = target;
     s_version = version;
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
     uint8_t expect[32];
     if (parse_sha256_hex(sha256_hex, expect) != 0) { set_err("bad sha256"); return -1; }
+    s_size = size;
+    if (check_signature(sig, sig_len, expect) != 0) return -1;
     memcpy(s_expect, expect, 32);
     s_size     = size;
     s_received = 0;
@@ -185,6 +231,24 @@ static int staged_fits_this_flash(void) {
     return 0;
 }
 
+/* A "required" pod must not install firmware that cannot refuse unsigned updates (fw_info.h
+   FW_INFO_FLAG_ENFORCES_SIG), or one update would turn the check off. 0 = fine, -1 = refused. */
+static int staged_keeps_enforcement(void) {
+    if (fw_sign_policy() != FW_SIG_POLICY_REQUIRED) return 0;
+    uint8_t info[sizeof(fw_info_t)];
+    size_t n = 0;
+    if (s_size >= FW_INFO_OFFSET + sizeof(info)) {
+        psram_bus_acquire();
+        int rc = psram_read(OTA_PSRAM_BASE + FW_INFO_OFFSET, info, sizeof(info));
+        psram_bus_release();
+        if (rc != 0) { set_err("psram read failed"); return -1; }
+        n = sizeof(info);
+    }
+    if (fw_info_flags(n ? info : NULL, n) & FW_INFO_FLAG_ENFORCES_SIG) return 0;
+    set_err("image cannot enforce signatures (policy required)");
+    return -1;
+}
+
 int ota_end(void) {
     if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
     if (s_received < s_size) { set_err("incomplete image"); return -1; }
@@ -192,6 +256,7 @@ int ota_end(void) {
     if (rc < 0) return -1;
     if (rc > 0) { set_err("sha256 mismatch"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE && staged_fits_this_flash() != 0) return -1;
+    if (s_target == OTA_TARGET_FIRMWARE && staged_keeps_enforcement() != 0) return -1;
     s_state = OTA_VERIFIED;
     printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;

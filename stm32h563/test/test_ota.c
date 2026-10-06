@@ -20,6 +20,10 @@
 #include "mocks/mock_w25q.h"
 #include "mocks/mock_ota_psram.h"
 #include "mbedtls/sha256.h"
+#include "fw_sign.h"
+#include "b64url.h"
+
+#include "vectors/fwsign_vectors.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -512,6 +516,83 @@ static void test_blob_targets(void) {
     ota_abort();
 }
 
+/* Stage a vector image with its manifest and run it through end. 0 = verified. */
+static int signed_stage(int image, const uint8_t *sig, size_t sig_len, ota_target_t target) {
+    const uint8_t *img = vec_images[image].data;
+    uint32_t n = (uint32_t)vec_images[image].len;
+    char hex[65];
+    sha256_hex(img, n, hex);
+    ota_abort();
+    if (ota_begin_signed(n, hex, target, 0, sig, sig_len) != 0) return -1;
+    if (ota_data(0, img, n) != 0) return -1;
+    return ota_end();
+}
+
+/* The signed manifest (fw_sign.h): this release reports the check and refuses nothing; the
+   stricter policies exist for a later release and are exercised here by setting them directly. */
+static void test_signed_begin(void) {
+    enum { FW = 0, BLOB = 1, FW_ENF = 4 };   /* vec_images order, see tools/fwsign.py vectors */
+    const uint8_t *good = vec_cases[0].sig, *flipped = vec_cases[5].sig, *enf = vec_cases[10].sig;
+    mock_ota_psram_reset();
+    CHECK(strcmp(vec_cases[5].want, "signature") == 0 && strcmp(vec_cases[10].want, "ok") == 0,
+          "vector order changed: update this test");
+
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "the default policy must be audit");
+    CHECK(signed_stage(FW, good, 128, OTA_TARGET_FIRMWARE) == 0, "good: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "ok") == 0, "good: sig %s", ota_sig_result());
+    CHECK(strlen(ota_sig_key_id()) == 16, "key id '%s'", ota_sig_key_id());
+
+    CHECK(signed_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE) == 0, "unsigned: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "none") == 0 && ota_sig_key_id()[0] == '\0', "unsigned: %s",
+          ota_sig_result());
+
+    /* audit: a bad signature or a wrong target is reported, the update still goes through */
+    CHECK(signed_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE) == 0, "audit refused: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "signature") == 0, "flipped: %s", ota_sig_result());
+    CHECK(signed_stage(FW, good, 128, OTA_TARGET_GW1) == 0, "audit refused a blob: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "target") == 0, "wrong target: %s", ota_sig_result());
+    CHECK(signed_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1) == 0, "blob: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "ok") == 0, "blob: %s", ota_sig_result());
+
+    /* plain ota_begin_target is the unsigned path */
+    ota_abort();
+    char hex[65];
+    sha256_hex(vec_images[FW].data, (uint32_t)vec_images[FW].len, hex);
+    CHECK(ota_begin_target((uint32_t)vec_images[FW].len, hex, OTA_TARGET_FIRMWARE, 0) == 0, "begin");
+    CHECK(strcmp(ota_sig_result(), "none") == 0, "begin_target: %s", ota_sig_result());
+
+    fw_sign_set_policy(FW_SIG_POLICY_PERMISSIVE);
+    CHECK(signed_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE) != 0, "permissive took a bad signature");
+    CHECK(strcmp(ota_error(), "signature: signature") == 0, "error '%s'", ota_error());
+    CHECK(mock_psram_acquire_count == 0 || mock_psram_acquired == 0, "bus held");
+    CHECK(signed_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE) == 0, "permissive refused unsigned: %s", ota_error());
+
+    fw_sign_set_policy(FW_SIG_POLICY_REQUIRED);
+    CHECK(signed_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE) != 0, "required took an unsigned image");
+    CHECK(strcmp(ota_error(), "signature: none") == 0, "error '%s'", ota_error());
+    /* signed, but the image could not refuse unsigned updates itself: downgrade guard */
+    CHECK(signed_stage(FW, good, 128, OTA_TARGET_FIRMWARE) != 0, "required installed a non-enforcing image");
+    CHECK(strstr(ota_error(), "cannot enforce") != NULL, "error '%s'", ota_error());
+    CHECK(signed_stage(FW_ENF, enf, 128, OTA_TARGET_FIRMWARE) == 0, "enforcing image: %s", ota_error());
+    /* blobs have no fw_info: only the signature counts */
+    CHECK(signed_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1) == 0, "required blob: %s", ota_error());
+    fw_sign_set_policy(FW_SIG_POLICY_AUDIT);
+    CHECK(mock_psram_acquired == 0, "PSRAM bus left held (depth=%d)", mock_psram_acquired);
+    ota_abort();
+}
+
+/* The transports carry the manifest as base64url. */
+static void test_sig_decode(void) {
+    char b64[200];
+    uint8_t out[128];
+    CHECK(b64url_encode(vec_cases[0].sig, 128, b64, sizeof(b64)) == 171, "encode length");
+    CHECK(ota_sig_decode(b64, out) == 128 && memcmp(out, vec_cases[0].sig, 128) == 0, "round trip");
+    CHECK(ota_sig_decode("", out) == 0 && ota_sig_decode(NULL, out) == 0, "empty = none");
+    CHECK(ota_sig_decode("not*base64", out) < 0, "garbage accepted");
+    b64[100] = '\0';
+    CHECK(ota_sig_decode(b64, out) < 0, "a short manifest decoded");
+}
+
 int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
@@ -529,6 +610,8 @@ int main(void) {
     test_abort_resets_state();
     test_watchdog_abandons_stalled_staging();
     test_watchdog_drops_uncommitted_verified_image();
+    test_signed_begin();
+    test_sig_decode();
 
     if (failures) {
         printf("test_ota: %d FAILURE(S)\n", failures);
