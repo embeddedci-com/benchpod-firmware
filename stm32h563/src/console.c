@@ -108,6 +108,8 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
+/* upload-sig halves collected for the next upload-begin (base64url of a 128-byte manifest). */
+static char s_sig_b64[176];
 #define CONSOLE_LINE_MAX 128   /* fits upload-begin <target> <size> <64-hex sha256> <version> */
 
 /* Formatted output to a sink. */
@@ -174,6 +176,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  flash-esp32          C3: flash the esp-hosted image from the W25Q\r\n"
         "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
         "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
+        "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -907,6 +910,29 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  flash-ice40 failed (see device log)\r\n");
             }
         }
+    } else if (!strcmp(argv[0], "upload-sig")) {
+        /* The image's signed manifest (fw_sign.h), 171 base64url characters, does not fit one
+           console line next to upload-begin: it comes first, in two halves (part 0 then 1),
+           and the next upload-begin uses it. No argument: the last begin's check result. */
+        if (argc < 2) {
+            op(out, ctx, "upload-sig result %s %s\r\n", ota_sig_result(),
+               ota_sig_key_id()[0] ? ota_sig_key_id() : "-");
+        } else if (!strcmp(argv[1], "clear")) {
+            s_sig_b64[0] = '\0';
+            op(out, ctx, "upload-sig ok\r\n");
+        } else if (argc < 3 || (strcmp(argv[1], "0") && strcmp(argv[1], "1"))) {
+            op(out, ctx, "upload-sig error usage: upload-sig <0|1> <base64url> | clear\r\n");
+        } else {
+            size_t have = argv[1][0] == '0' ? 0 : strlen(s_sig_b64);
+            size_t add = strlen(argv[2]);
+            if (have + add >= sizeof(s_sig_b64)) {
+                s_sig_b64[0] = '\0';
+                op(out, ctx, "upload-sig error too long\r\n");
+            } else {
+                memcpy(s_sig_b64 + have, argv[2], add + 1);
+                op(out, ctx, "upload-sig ok\r\n");
+            }
+        }
     } else if (!strcmp(argv[0], "upload-begin")) {
         /* Uploads over this console (upload_rx.h): the same staging + SHA-256 check as an OTA,
            to the firmware or a W25Q blob slot. Replies start with the command name. */
@@ -917,11 +943,17 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "upload-begin error unknown target\r\n");
         else if (heavy_or_claimed())
             op(out, ctx, "upload-begin error busy\r\n");
-        else if (ota_begin_target((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
-                                  argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u) == 0)
-            op(out, ctx, "upload-begin ok\r\n");
-        else
-            op(out, ctx, "upload-begin error %s\r\n", ota_error());
+        else {
+            uint8_t sig[128];
+            int sig_len = ota_sig_decode(s_sig_b64, sig);   /* < 0: undecodable = malformed */
+            s_sig_b64[0] = '\0';                             /* one manifest per begin */
+            if (ota_begin_signed((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
+                                 argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
+                                 sig_len < 0 ? 1u : (size_t)sig_len) == 0)
+                op(out, ctx, "upload-begin ok\r\n");
+            else
+                op(out, ctx, "upload-begin error %s\r\n", ota_error());
+        }
     } else if (!strcmp(argv[0], "upload-end")) {
         if (ota_end() == 0) op(out, ctx, "upload-end ok\r\n");
         else                op(out, ctx, "upload-end error %s\r\n", ota_error());

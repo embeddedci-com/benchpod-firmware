@@ -76,8 +76,9 @@ bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
    The bytes are staged into PSRAM + verified on the worker (it owns the PSRAM
    bus).  begin/data/end/abort/commit map to ota.c.  All are called from the net
    task (WS) or console; non-blocking submits. */
+/* sig_b64: the image's signed manifest as base64url (fw_sign.h), NULL or "" = none came. */
 bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex, const char *target,
-                                uint32_t version);
+                                uint32_t version, const char *sig_b64);
 bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len);
 bool hw_worker_submit_ota_end(void);
 bool hw_worker_submit_ota_abort(void);

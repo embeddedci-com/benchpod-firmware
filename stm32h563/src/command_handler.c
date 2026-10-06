@@ -45,6 +45,7 @@
 #include "ice40_flash.h"
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
+#include "fw_sign.h"
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
 #include "la_pins.h"     /* LA pin ownership table + capture-trigger parsing/messages */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
@@ -2329,6 +2330,9 @@ static void handle_status(int conn_id) {
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
     bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
+    /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
+    bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,",
+            fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count());
     /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data. */
     bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
             (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,

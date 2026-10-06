@@ -33,14 +33,14 @@
 
 /* Build+send an ota status reply: {state,received,size,error}. */
 static void ota_reply(int conn_id) {
-    char resp[192];
+    char resp[256];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"target\":\"%s\",\"received\":%lu,"
-                "\"size\":%lu,\"frames_seen\":%lu,\"error\":",
+                "\"size\":%lu,\"frames_seen\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"error\":",
             ota_state_str(), ota_target_name(ota_target()),
             (unsigned long)ota_received(), (unsigned long)ota_size(),
-            (unsigned long)cloud_client_ota_frames_seen());
+            (unsigned long)cloud_client_ota_frames_seen(), ota_sig_result(), ota_sig_key_id());
     bp_emit_jstr(&e, ota_error());
     bp_emit_raw(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
@@ -48,10 +48,10 @@ static void ota_reply(int conn_id) {
         at_close_connection(conn_id);
 }
 
-/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"[,"target":"gw0|gw1|esp","version":V]}
-   No target = the firmware. */
+/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"[,"target":"gw0|gw1|esp","version":V,
+    "sig":"<base64url manifest>"]}  No target = the firmware; sig: see fw_sign.h. */
 void handle_ota_begin(int conn_id, const char *json) {
-    char size_s[16] = {0}, sha_s[80] = {0}, target_s[16] = {0}, ver_s[16] = {0};
+    char size_s[16] = {0}, sha_s[80] = {0}, target_s[16] = {0}, ver_s[16] = {0}, sig_s[200] = {0};
     if (!json_get_value(json, "size", size_s, sizeof(size_s)) ||
         !json_get_value(json, "sha256", sha_s, sizeof(sha_s))) {
         send_error(conn_id, "missing size/sha256");
@@ -59,12 +59,16 @@ void handle_ota_begin(int conn_id, const char *json) {
     }
     json_get_value(json, "target", target_s, sizeof(target_s));
     json_get_value(json, "version", ver_s, sizeof(ver_s));
+    json_get_value(json, "sig", sig_s, sizeof(sig_s));
+    uint8_t sig[128];
+    int sig_len = ota_sig_decode(sig_s, sig);   /* < 0: undecodable, checked as malformed */
     int target = ota_target_from_name(target_s);
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* Refuse if a capture/measure/LA is in flight (shares the PSRAM bus). */
     if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin_target(size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0)) != 0) {
+    if (ota_begin_signed(size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0), sig,
+                         sig_len < 0 ? 1u : (size_t)sig_len) != 0) {
         send_error(conn_id, ota_error());
         return;
     }
