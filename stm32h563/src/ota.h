@@ -17,9 +17,10 @@
  * frames AND by the LAN ota_* JSON commands (so OTA is testable without the
  * cloud).  All calls run on the hw worker task, which owns the PSRAM bus.
  *
- * Trust model (per design decision): authenticity comes from the
- * device-authenticated, TLS-encrypted server link; OTA verifies only the SHA-256
- * for integrity before committing.
+ * Trust model: authenticity comes from the device-authenticated, TLS-encrypted
+ * server link and the SHA-256. An image may also come with a signed manifest
+ * (fw_sign.h), checked at begin; in this release that result is only reported
+ * (policy "audit"), nothing is refused because of it.
  *
  * ⚠ ota_commit() overwrites the running firmware in place.  A power loss during
  * the write leaves the device needing a USB-DFU reflash — it is NOT power-atomic.
@@ -62,6 +63,18 @@ ota_target_t ota_target(void);
 int ota_begin(uint32_t size, const char *sha256_hex);
 /* The same for any target. `version` is stored with a gateware blob (0 = not known). */
 int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version);
+/* The same with the signed manifest that came with the image (`sig` NULL or `sig_len` 0 = none).
+   It is checked before staging; the policy (fw_sign_policy) decides whether a failed check
+   refuses the update. The result is kept for ota_sig_result until the next begin. */
+int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
+                     const uint8_t *sig, size_t sig_len);
+/* The last begin's signature check: fw_sign_result_name() words ("none", "ok", ...). */
+const char *ota_sig_result(void);
+/* key_id (16 hex) of the last begin's manifest, "" when it had none or an unreadable one. */
+const char *ota_sig_key_id(void);
+/* Decode a base64url manifest as the transports carry it. Returns its length (128 when valid
+   base64url of the right size), 0 for an empty string, -1 when it cannot be decoded. */
+int ota_sig_decode(const char *b64, uint8_t out[128]);
 /* Refuse an OTA without starting it (e.g. the PSRAM bus is busy): state ERROR with `why`, which
    the cloud reports in ota.status like any other begin failure. */
 void ota_refuse(const char *why);

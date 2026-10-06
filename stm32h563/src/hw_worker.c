@@ -154,12 +154,13 @@ bool hw_worker_submit_console(const char *line) {
                   pdMS_TO_TICKS(100));
 }
 
-/* The item carries "<sha256 hex> <target> <version>" in its data. */
+/* The item carries "<sha256 hex> <target> <version> [<manifest base64url>]" in its data. */
 bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex, const char *target,
-                                uint32_t version) {
-    char arg[128];
-    int n = snprintf(arg, sizeof(arg), "%s %s %lu", sha256_hex,
-                     (target && target[0]) ? target : "firmware", (unsigned long)version);
+                                uint32_t version, const char *sig_b64) {
+    char arg[320];
+    int n = snprintf(arg, sizeof(arg), "%s %s %lu %s", sha256_hex,
+                     (target && target[0]) ? target : "firmware", (unsigned long)version,
+                     sig_b64 ? sig_b64 : "");
     if (n < 0 || n >= (int)sizeof(arg)) return true;   /* malformed: consumed, not replayed */
     return submit_u(WK_OTA_BEGIN, -1, (const uint8_t *)arg, (size_t)n, NULL, size, 0);
 }
@@ -215,16 +216,20 @@ static void handle_work(cmd_work_t *w) {
         teardown_done(w->conn_id, PEND_RESET);
         break;
     case WK_OTA_BEGIN: {
-        w->data[w->len] = '\0';           /* "<sha256 hex> <target> <version>" */
-        char sha[80] = {0}, target[16] = {0};
+        w->data[w->len] = '\0';           /* "<sha256 hex> <target> <version> [<manifest>]" */
+        char sha[80] = {0}, target[16] = {0}, sig_b64[200] = {0};
         unsigned long version = 0;
-        if (sscanf((const char *)w->data, "%79s %15s %lu", sha, target, &version) < 1) break;
+        if (sscanf((const char *)w->data, "%79s %15s %lu %199s", sha, target, &version, sig_b64) < 1) break;
         int t = ota_target_from_name(target);
         if (t < 0) { ota_begin_target(0, sha, (ota_target_t)99, 0); break; }   /* reports "bad target" */
         /* Same gate as the LAN and console paths: staging takes the PSRAM bus, which a running
            capture or waveform upload owns. "busy" is not a permanent error: the server retries. */
         if (heavy_or_claimed()) { ota_refuse("busy: a capture or upload is running"); break; }
-        ota_begin_target(w->u32, sha, (ota_target_t)t, (uint32_t)version);
+        uint8_t sig[128];
+        int sig_len = ota_sig_decode(sig_b64, sig);
+        /* an undecodable manifest counts as a malformed one (fw_sign: "format"), not as none */
+        ota_begin_signed(w->u32, sha, (ota_target_t)t, (uint32_t)version, sig,
+                         sig_len < 0 ? 1u : (size_t)sig_len);
         break;
     }
     case WK_OTA_DATA:

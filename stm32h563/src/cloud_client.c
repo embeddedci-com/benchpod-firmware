@@ -23,6 +23,7 @@
 #include "conn_tx.h"
 #include "version.h"
 #include "ota.h"
+#include "fw_sign.h"
 
 #include "FreeRTOS.h"
 #include "task.h"            /* taskENTER_CRITICAL — guard the cross-task event slot */
@@ -669,6 +670,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
+        "\"ota_sig\":true,\"sig_policy\":\"%s\","
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
         "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
@@ -684,6 +686,7 @@ static bool cl_send_capabilities(void) {
         "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u),
+        fw_sign_policy_name(fw_sign_policy()),
         analog ? "true" : "false", analog ? "true" : "false", ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
         (analog && DAC_AC) ? "true" : "false", (analog && DAC_REPLAY) ? "true" : "false",
@@ -959,19 +962,20 @@ size_t cloud_client_tunnel_avail(int conn_id) {
 
 /* ---- OTA over the WebSocket (server -> device ota.* frames) ---------------- */
 
-/* ota.begin: {"size":N,"sha256":"<hex>"[,"target":"gw0|gw1|esp","version":V]} -> stage in
-   PSRAM (on the worker). No target = the firmware. */
+/* ota.begin: {"size":N,"sha256":"<hex>"[,"target":"gw0|gw1|esp","version":V,"sig":"<b64url>"]}
+   -> stage in PSRAM (on the worker). No target = the firmware; sig = the signed manifest. */
 static bool cl_handle_ota_begin(const char *json) {
-    char size_s[16] = {0}, sha[80] = {0}, target[16] = {0}, ver_s[16] = {0};
+    char size_s[16] = {0}, sha[80] = {0}, target[16] = {0}, ver_s[16] = {0}, sig[200] = {0};
     if (!cl_json_str(json, "size", size_s, sizeof(size_s)) ||
         !cl_json_str(json, "sha256", sha, sizeof(sha)))
         return true;   /* malformed: consumed, not replayed */
     cl_json_str(json, "target", target, sizeof(target));
     cl_json_str(json, "version", ver_s, sizeof(ver_s));
+    cl_json_str(json, "sig", sig, sizeof(sig));
     /* Also returns false on a full queue; losing the BEGIN loses the whole update, so it
        gets the same replay treatment as the data frames. */
     return hw_worker_submit_ota_begin((uint32_t)strtoul(size_s, NULL, 0), sha, target,
-                                      (uint32_t)strtoul(ver_s, NULL, 0));
+                                      (uint32_t)strtoul(ver_s, NULL, 0), sig);
 }
 
 /* ota.data: {"offset":O,"data_b64":"..."} -> decode + stage.
@@ -1091,13 +1095,13 @@ static void cl_ota_status_poll(void) {
     last_state = st;
     last_reported = rcv;
 
-    char f[256];
+    char f[320];
     bp_emit_t e;
     bp_emit_init(&e, f, sizeof(f));
     bp_emit(&e, "{\"type\":\"ota.status\",\"device_id\":\"%s\",\"state\":\"%s\","
-                "\"received\":%lu,\"size\":%lu,\"error\":",
+                "\"received\":%lu,\"size\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"error\":",
             s_cfg.device_id, ota_state_str(),
-            (unsigned long)rcv, (unsigned long)ota_size());
+            (unsigned long)rcv, (unsigned long)ota_size(), ota_sig_result(), ota_sig_key_id());
     bp_emit_jstr(&e, ota_error());
     bp_emit_raw(&e, "}");
     if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e));
