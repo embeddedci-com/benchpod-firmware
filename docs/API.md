@@ -47,6 +47,13 @@ There is no login, no API key, and no allow-list. "Single client at a time" is a
 dispatcher limitation, not a security control — it does not stop an attacker, it only
 means they queue. The USB-CDC console is equivalent and assumes physical access.
 
+**The LAN policy limits this.** `lan_policy` (below) is `open` by default, which is everything
+above. `locked` keeps the LAN to reads and instrument control (tiers T0 and T1 of
+`src/cmd_tier.c`): persisted settings (Wi-Fi, cloud, DAC limits, calibration, the policies) and
+firmware updates then need the cloud or the USB console. `off` stops the TCP listener and the
+mDNS advertisement. Only the cloud and the USB console can change it, from the web app's device
+settings or `benchpod lan-policy set`.
+
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
 VLAN or behind a firewall rule that admits only the hosts that need it. This is the
 same posture as most bench instruments (a SCPI-over-LAN scope or DMM is also
@@ -2546,10 +2553,48 @@ $ nc 192.168.1.213 8080
 
 ---
 
+## Pod policies
+
+See `docs/design/policy-commands.md` for the full rules.
+
+### `sig_policy` — which firmware and blob updates the pod accepts
+
+```json
+{"cmd":"sig_policy"}
+{"cmd":"sig_policy","set":"required"}
+```
+
+```json
+{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3}}
+```
+
+`audit` (default) accepts every update and reports its signature check; `permissive` refuses a
+bad signature; `required` refuses anything not signed by a key the firmware trusts. Over the
+cloud the policy can only get stricter (`sig_policy: only the USB console can loosen the policy
+(now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
+value.
+
+### `lan_policy` — what the LAN API may do
+
+```json
+{"cmd":"lan_policy"}
+{"cmd":"lan_policy","set":"locked"}
+```
+
+```json
+{"status":"ok","data":{"policy":"locked"}}
+```
+
+`open` (default), `locked` (a T2/T3 command on the LAN gets `locked: <verb> needs the cloud or
+the USB console`) or `off` (no TCP listener on 8080, no mDNS). Set from the cloud or the USB
+console (`lan-policy <value>`), never from the LAN.
+
+---
+
 ## Implementation Notes
 
 - **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects and arrays in requests are not supported. All command fields must be at the top level of the JSON object.
-- **No authentication:** Any TCP client that can reach port 8080 has the full command set — including target power, SWD access to an attached target, and pod OTA. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
+- **No authentication:** Any TCP client that can reach port 8080 has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
 - **Concurrent commands:** A second TCP connection while one is active is handled by the ESP32 AT layer but not by the firmware dispatcher — only connection ID 0 is dispatched. Do not send a new command while a `capture` or `stream` response is in progress.
 - **DAC runs until stopped:** A `generate` command with `duration_ms=0` runs the DAC indefinitely. Issuing another `generate` command replaces the running waveform immediately. There is currently no explicit `stop` command — send `generate` with `amplitude=0` workaround is not valid (returns error); instead send a new `generate` with a different `duration_ms` value, or rely on the previous `duration_ms` expiry.
 - **Separate DAC and ADC sample-clock domains (v2):** the DAC8551 engine runs on the 48 MHz `clk48` domain (up to ~24 MSPS, SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.
