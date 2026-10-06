@@ -36,9 +36,16 @@ import os
 import struct
 import sys
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.exceptions import InvalidSignature
+# `cryptography` is imported only by the commands that sign or verify, so the firmware build
+# (keys-header) runs on a machine without it.
+def _ed25519():
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        sys.exit("fwsign.py: this command needs the Python package `cryptography` (pip install cryptography)")
+    return serialization, ed25519, InvalidSignature
 
 MAGIC = b"BPSG"
 FORMAT = 1
@@ -66,6 +73,7 @@ def unpack_version(v):
 
 
 def raw_public(priv):
+    serialization, _, _ = _ed25519()
     return priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
@@ -84,7 +92,7 @@ def load_seed(spec):
     seed = bytes.fromhex(text.strip())
     if len(seed) != 32:
         sys.exit("a key is a 32-byte seed in hex")
-    return Ed25519PrivateKey.from_private_bytes(seed)
+    return _ed25519()[1].Ed25519PrivateKey.from_private_bytes(seed)
 
 
 def load_pub(spec):
@@ -149,8 +157,9 @@ def verify(sig, image, pubs, target=None):
     pub = next((p for p in pubs if key_id(p).hex() == m["key_id"]), None)
     if pub is None:
         return "unknown-key"
+    _, ed25519, InvalidSignature = _ed25519()
     try:
-        Ed25519PublicKey.from_public_bytes(pub).verify(sig[64:], CONTEXT + sig[:64])
+        ed25519.Ed25519PublicKey.from_public_bytes(pub).verify(sig[64:], CONTEXT + sig[:64])
     except InvalidSignature:
         return "signature"
     if target is not None and m["target"] != target:
@@ -163,7 +172,8 @@ def verify(sig, image, pubs, target=None):
 def cmd_keygen(a):
     if os.path.exists(a.out):
         sys.exit("%s exists; not overwriting a key" % a.out)
-    priv = Ed25519PrivateKey.generate()
+    serialization, ed25519, _ = _ed25519()
+    priv = ed25519.Ed25519PrivateKey.generate()
     seed = priv.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
                               serialization.NoEncryption())
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
@@ -235,8 +245,9 @@ def cmd_keys_header(a):
 
 def cmd_vectors(a):
     """Fixed test key and images, so every implementation checks the same bytes."""
-    priv = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
-    other = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+    ed = _ed25519()[1].Ed25519PrivateKey
+    priv = ed.from_private_bytes(bytes(range(32)))
+    other = ed.from_private_bytes(bytes(range(32, 64)))
     pub = raw_public(priv)
     fw = bytearray(b"\x5a" * 0x420)
     struct.pack_into("<IHH", fw, FW_INFO_OFFSET, FW_INFO_MAGIC, 2, 1024)

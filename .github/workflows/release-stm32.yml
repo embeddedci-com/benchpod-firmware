@@ -36,6 +36,9 @@ jobs:
     # Don't run on forks — releases only belong to the canonical repo.
     if: github.repository == 'embeddedci-com/benchpod-firmware'
     runs-on: ubuntu-latest
+    # The signing key (secret FW_SIGNING_KEY) lives in this environment; give it required
+    # reviewers so a release is only signed after a person approves the run.
+    environment: release
     steps:
       # ubuntu-latest ships ~30GB of preinstalled Android/.NET/Haskell/etc that this
       # build never touches, leaving too little free space for the ESP-IDF Docker
@@ -110,7 +113,8 @@ jobs:
         run: make -C ice40 release-images
 
       - name: Build STM32 firmware
-        run: make -C stm32h563 CUBE="${{ runner.temp }}/STM32CubeH5"
+        # RELEASE=1: trust only keys/release-N.pub, never a developer key (fw_sign.h).
+        run: make -C stm32h563 RELEASE=1 CUBE="${{ runner.temp }}/STM32CubeH5"
 
       - name: Check the blobs that go with this firmware are all there
         run: |
@@ -132,13 +136,39 @@ jobs:
           # which gateware goes with this firmware, and what hardware test it passed
           cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
+      # Detached signed manifests next to each asset (docs/design/firmware-signing.md). Report
+      # only for now: pods, the server and the CLI check them and refuse nothing. Without the
+      # secret the release is published unsigned, exactly as before.
+      - name: Sign
+        id: sign
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+          TAG: ${{ steps.rel.outputs.tag }}
+        working-directory: stm32h563/build
+        run: |
+          if [ -z "$FW_SIGNING_KEY" ]; then
+            echo "::warning::FW_SIGNING_KEY is not set: publishing without signatures"
+            echo "assets=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography
+          FWSIGN="python3 ../../tools/fwsign.py"
+          $FWSIGN sign --key env:FW_SIGNING_KEY --target firmware --release "${TAG#v}" bench_pod_stm32.bin
+          $FWSIGN sign-blobs --key env:FW_SIGNING_KEY --release "${TAG#v}" blobs-manifest.json
+          # the key must be one the firmware trusts
+          $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target firmware bench_pod_stm32.bin
+          for b in gw0 gw1 esp; do
+            $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target $b blob-$b.bin
+          done
+          echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-esp.bin.sig" >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json ${{ steps.sign.outputs.assets }}"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else
