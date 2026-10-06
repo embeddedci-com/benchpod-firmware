@@ -24,6 +24,7 @@
 #include "version.h"
 #include "ota.h"
 #include "fw_sign.h"
+#include "pod_policy.h"
 
 #include "FreeRTOS.h"
 #include "task.h"            /* taskENTER_CRITICAL — guard the cross-task event slot */
@@ -665,12 +666,14 @@ static bool cl_send_capabilities(void) {
     unsigned long replay_max = deep ? (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES
                                     : (unsigned long)SIGNAL_MAX_SAMPLES;
     /* 1024 held the ~700 B of feature flags; the boot health below adds up to ~330 B (a
-       free-form crash line and safe-mode reason).  Static: net-task only. */
-    static char f[1280];
+       free-form crash line and safe-mode reason), the signing and policy flags ~130 B more.
+       A frame that does not fit is not sent at all, so keep headroom.  Static: net-task only. */
+    static char f[1536];
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\","
+        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,"
+        "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
         "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
@@ -686,7 +689,7 @@ static bool cl_send_capabilities(void) {
         "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
         "\"board\":\"%s\",",
         s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u),
-        fw_sign_policy_name(fw_sign_policy()),
+        fw_sign_policy_name(fw_sign_policy()), pod_policy_lan_name(pod_policy_lan()),
         analog ? "true" : "false", analog ? "true" : "false", ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
         lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
         (analog && DAC_AC) ? "true" : "false", (analog && DAC_REPLAY) ? "true" : "false",
@@ -873,6 +876,11 @@ static void cl_handle_tunnel_open(const char *json) {
     if (slot < 0) return;                      /* all tunnels in use (the server caps this) */
     strncpy(s_tunnels[slot], id, sizeof(s_tunnels[slot]) - 1);
     s_tunnels[slot][sizeof(s_tunnels[slot]) - 1] = '\0';
+    /* The highest command tier the server allows this tunnel's user (policy-commands.md section
+       3); an older server sends none, which means everything, as before. */
+    char tier_s[8] = {0};
+    int max_tier = cl_json_str(json, "max_tier", tier_s, sizeof(tier_s)) && tier_s[0] ? atoi(tier_s) : 3;
+    command_handler_set_tunnel_max_tier(CH_CLOUD_TUNNEL_CONN + slot, max_tier);
     conn_tx_reset(CH_CLOUD_TUNNEL_CONN + slot);                  /* drop stale ring bytes */
     hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);  /* start the virtual conn fresh */
 }

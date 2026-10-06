@@ -37,6 +37,11 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len);
 #define CH_CLOUD_TUNNEL_CONN_COUNT 3
 #define CH_CLOUD_TUNNEL_CONN_LAST  (CH_CLOUD_TUNNEL_CONN + CH_CLOUD_TUNNEL_CONN_COUNT - 1)
 
+/* The highest command tier (cmd_tier.h) the user behind a cloud tunnel may use, from the
+   server's tunnel.open "max_tier" (docs/design/policy-commands.md section 3); 3 when the server
+   did not say (older servers). Set by the net task before the tunnel's reset is queued. */
+void command_handler_set_tunnel_max_tier(int conn_id, int max_tier);
+
 /* Reset one cloud-tunnel pseudo-connection's protocol state (disarm any in-flight SWD/UART, clear the
    line buffer). Called by the cloud client on tunnel.open / tunnel.close. conn_id must be in
    CH_CLOUD_TUNNEL_CONN .. CH_CLOUD_TUNNEL_CONN_LAST. */

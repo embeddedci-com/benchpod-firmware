@@ -10,12 +10,12 @@
  *   T2  persisted config, network identity, safety limits, calibration
  *   T3  firmware and gateware (OTA)
  *
- * Data only in this release: dispatch_line logs the tier with each command and nothing is
- * refused because of it. A later release gates T2/T3 on the LAN with it.
+ * dispatch_line logs the tier with each command and gates on it: a "locked" LAN policy refuses
+ * T2/T3 on LAN connections, and a cloud tunnel refuses anything above its max_tier.
  *
- * The tier depends on the arguments for three verbs that read and write: `dac_limits` (a write
- * has "path" or "enabled":false), `calibrate` ("source" or "clear":true) and `eth` (only
- * "stats" and "refclk" are reads). An unknown verb counts as T3, so a new command is never
+ * The tier depends on the arguments for the verbs that read and write: `dac_limits` (a write
+ * has "path" or "enabled":false), `calibrate` ("source" or "clear":true), `eth` (only
+ * "stats" and "refclk" are reads), `sig_policy` and `lan_policy` (a write has "set"). An unknown verb counts as T3, so a new command is never
  * under-classified; test_cmd_tier fails when dispatch_line gains a verb this table lacks.
  */
 

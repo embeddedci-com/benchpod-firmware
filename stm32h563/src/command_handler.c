@@ -46,7 +46,8 @@
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "fw_sign.h"
-#include "cmd_tier.h"      /* command tiers (logged only) */
+#include "cmd_tier.h"      /* command tiers: logged, and gated (LAN policy, tunnel max_tier) */
+#include "pod_policy.h"
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
 #include "la_pins.h"     /* LA pin ownership table + capture-trigger parsing/messages */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
@@ -2332,8 +2333,10 @@ static void handle_status(int conn_id) {
        an image (flash_layout.h). */
     bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
-    bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,",
-            fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count());
+    bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
+                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,",
+            fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count(),
+            pod_policy_lan_name(pod_policy_lan()));
     /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data. */
     bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
             (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
@@ -3845,6 +3848,16 @@ static bool cmd_needs_analog(const char *cmd) {
     return false;
 }
 
+/* Per cloud tunnel: the highest tier its user may use (command_handler.h). Written by the net
+   task at tunnel.open, read by the worker. */
+static volatile uint8_t s_tunnel_max_tier[CH_CLOUD_TUNNEL_CONN_COUNT] = { 3, 3, 3 };
+
+void command_handler_set_tunnel_max_tier(int conn_id, int max_tier) {
+    if (conn_id < CH_CLOUD_TUNNEL_CONN || conn_id > CH_CLOUD_TUNNEL_CONN_LAST) return;
+    if (max_tier < 0 || max_tier > 3) max_tier = 3;
+    s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN] = (uint8_t)max_tier;
+}
+
 static void dispatch_line(int conn_id, const char *buf) {
     char cmd[32] = {0};
     if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
@@ -3852,9 +3865,26 @@ static void dispatch_line(int conn_id, const char *buf) {
         return;
     }
 
-    /* The tier (cmd_tier.h) is logged only: nothing is gated on it in this release. */
+    const cmd_tier_t tier = cmd_tier(cmd, buf);
     if (!cmd_is_noisy_poll(cmd))
-        printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(cmd_tier(cmd, buf)));
+        printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
+
+    /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and
+       USB, and a cloud tunnel never goes above what the server allowed its user. */
+    if (tier >= CMD_TIER_T2 && command_handler_policy_src(conn_id) == POLICY_SRC_LAN &&
+        pod_policy_lan() != POD_LAN_OPEN) {
+        char why[80];
+        snprintf(why, sizeof(why), "locked: %s needs the cloud or the USB console", cmd);
+        send_error(conn_id, why);
+        return;
+    }
+    if (conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST &&
+        (int)tier > s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN]) {
+        char why[80];
+        snprintf(why, sizeof(why), "forbidden: %s needs an organization owner or admin", cmd);
+        send_error(conn_id, why);
+        return;
+    }
 
     if (boot_guard_skip_hw() && !cmd_ok_without_hw(cmd)) {
         send_error(conn_id, "safe mode: iCE40/PSRAM are off. Unplug and replug the pod");
@@ -3959,6 +3989,8 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "ota_selftest") == 0) handle_ota_selftest(conn_id);
     else if (strcmp(cmd, "ota_commit")   == 0) handle_ota_commit(conn_id);
     else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id);
+    else if (strcmp(cmd, "sig_policy")   == 0) handle_sig_policy(conn_id, buf);
+    else if (strcmp(cmd, "lan_policy")   == 0) handle_lan_policy(conn_id, buf);
     else send_error(conn_id, "unknown cmd");
 }
 

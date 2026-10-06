@@ -12,6 +12,7 @@
  * than touching lwIP directly.
  */
 #include "net_server.h"
+#include "pod_policy.h"
 #include "ethernetif.h"
 #include "command_handler.h"
 #include "at_driver.h"
@@ -429,13 +430,26 @@ static void net_frame_cloud_reply(void)
         cloud_client_send_command_response(req_id, reply, rl);
 }
 
+static struct tcp_pcb *s_listen;   /* the :8080 listener; NULL while the LAN policy is "off" */
+
 static void server_start(void)
 {
+    if (s_listen) return;
     struct tcp_pcb *pcb = tcp_new();
     if (pcb == NULL) return;
     if (tcp_bind(pcb, IP_ADDR_ANY, TCP_SERVER_PORT) != ERR_OK) { memp_free(MEMP_TCP_PCB, pcb); return; }
     pcb = tcp_listen(pcb);
     tcp_accept(pcb, srv_accept);
+    s_listen = pcb;
+}
+
+static void server_stop(void)
+{
+    if (!s_listen) return;
+    tcp_close(s_listen);
+    s_listen = NULL;
+    for (int id = 0; id < NET_MAX_CONN; id++)
+        if (conn_pcb[id]) s_close_req[id] = 1;   /* closed by net_apply_worker_requests */
 }
 
 /* ---- DHCP management (per interface) ----------------------------------- */
@@ -718,6 +732,32 @@ static void mdns_register(struct netif *netif)
                           TCP_SERVER_PORT, mdns_txt, NULL);
 }
 
+/* LAN policy "off" (pod_policy.h): no :8080 listener and no mDNS advertisement; the cloud link
+   and USB are untouched. The worker asks (pod_policy_on_lan_change); the net task applies it,
+   since it owns lwIP. */
+static volatile int8_t s_lan_req = -1;   /* -1 none, 0 = stop LAN access, 1 = start it */
+static bool            s_lan_up;
+
+static void lan_access(bool up)
+{
+    if (up == s_lan_up) return;
+    s_lan_up = up;
+    if (up) {
+        server_start();
+        mdns_register(&s_eth.netif);
+        mdns_register(&s_wifi.netif);
+        if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
+        if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
+    } else {
+        server_stop();
+        mdns_resp_remove_netif(&s_eth.netif);
+        mdns_resp_remove_netif(&s_wifi.netif);
+    }
+    printf("[net] LAN access %s\r\n", up ? "on" : "off (policy)");
+}
+
+void pod_policy_on_lan_change(pod_lan_policy_t now) { s_lan_req = (now == POD_LAN_OFF) ? 0 : 1; }
+
 /* ---- public API -------------------------------------------------------- */
 void net_init(void)
 {
@@ -746,14 +786,12 @@ void net_init(void)
                                       NETIF_CHECKSUM_GEN_UDP |
                                       NETIF_CHECKSUM_GEN_TCP));
     netif_set_default(&s_eth.netif);
-    mdns_register(&s_eth.netif);
 
     /* Wi-Fi netif over the ESP32-C3. The netif is registered (inert until the
        link comes up); the co-processor itself stays in reset until Wi-Fi is
        provisioned, gated inside esp_wifi_ctrl. */
     esp_hosted_spi_init();
     netif_add(&s_wifi.netif, &zero, &zero, &zero, NULL, &esp_netif_init, &ethernet_input);
-    mdns_register(&s_wifi.netif);
     /* netif_add() prepends, leaving Wi-Fi first in netif_list. Put eth back in
        front so lwIP's own subnet scan (ICMP errors, anything that bypasses the
        route hook) also prefers the wire. */
@@ -764,7 +802,8 @@ void net_init(void)
     }
     esp_wifi_ctrl_init();
 
-    server_start();
+    /* The :8080 listener and mDNS, unless the LAN policy is "off" (pod_policy.h). */
+    lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
     printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d\r\n",
            TCP_SERVER_PORT);
@@ -782,6 +821,7 @@ void net_poll(void)
     cloud_client_poll();             /* drive the outbound WSS control channel */
     esp_wifi_ctrl_poll();            /* drive Wi-Fi association (if configured) */
     net_tx_drain();                  /* worker reply rings -> lwIP              */
+    if (s_lan_req >= 0) { int8_t r = s_lan_req; s_lan_req = -1; lan_access(r == 1); }
     net_apply_worker_requests();     /* worker-requested close / Nagle toggles  */
     net_frame_cloud_reply();         /* a finished cloud command -> response    */
     net_eth_apply_request();         /* apply a pending eth stop/start/restart  */

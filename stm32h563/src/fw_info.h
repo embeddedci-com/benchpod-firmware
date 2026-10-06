@@ -23,8 +23,7 @@
 
 /* reserved[0] bits. FW_INFO_FLAG_ENFORCES_SIG: this image can refuse unsigned updates
    (fw_sign.h). A pod whose policy is "required" refuses firmware without it, so an update can
-   never quietly turn the check off. No image sets it yet: the release that adds a policy
-   command will. */
+   never quietly turn the check off. Set by every image that has the sig_policy command. */
 #define FW_INFO_FLAG_ENFORCES_SIG  0x1u
 
 typedef struct {
