@@ -82,7 +82,9 @@ Gates, so you don't have to read PnR logs to notice:
   must fit in one clk48 period minus clk's lag through its divider and global buffer. nextpnr
   still reports their max delay; hardware-verified placements sit at 10-14.5 ns.
 - `PNR_STRICT=1` turns those warnings and a fallback seed into build failures.
-  CI passes it from the `ICE40_PNR_STRICT` repo variable (on since v42).
+  CI always runs with it (test.yml, since v47; before that the `ICE40_PNR_STRICT` repo variable).
+  A nextpnr log without the clk48 Fmax or the clk -> clk48 max-delay line fails the build in
+  either mode.
 - After any gateware change, sweep seeds for both images in BOTH toolchains and pin a seed good
   in both: `make -C ice40 seed-sweep IMAGE=loop|deep SWEEP="1 64"` locally, and
   `gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=64` for CI's OSS CAD
