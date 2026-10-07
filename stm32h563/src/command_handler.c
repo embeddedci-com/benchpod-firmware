@@ -531,6 +531,11 @@ bool heavy_in_flight(void) {
            o == OTA_RECEIVING || o == OTA_VERIFIED;
 }
 
+bool capture_or_upload_busy(void) {
+    return v2cap.active || lacap.active || dualcap.active || bulk.active ||
+           heavy_owner != -1 || load_bin_conn >= 0;
+}
+
 bool heavy_or_claimed(void) {
     return heavy_in_flight() || heavy_owner != -1 || load_bin_conn >= 0;
 }
@@ -4373,6 +4378,8 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
 }
 
 void command_handler_conn_closed(int conn_id) {
+    /* A LAN client's OTA session outlives its socket only as an abandoned one (ota.h). */
+    if (command_handler_policy_src(conn_id) == POLICY_SRC_LAN) ota_owner_gone(OTA_OWNER_LAN(conn_id));
     /* Abort an in-flight stream owned by this connection.  Keep the gate
        claimed until the trailing async DMA reports back (command_handler_poll
        releases it once stream_active is observed false), so a freshly-claimed

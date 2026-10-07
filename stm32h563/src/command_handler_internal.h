@@ -33,6 +33,8 @@ bool heavy_or_claimed(void);
 /* NULL when the shared PSRAM/W25Q bus is free for a runtime W25Q write (company CA, proxy) or a
    console diagnostic, else the "busy: ..." refusal to send. Same test as heavy_or_claimed. */
 const char *bus_busy_reason(void);
+/* heavy_or_claimed() without the OTA session itself: a capture, bulk send, upload or a held gate. */
+bool capture_or_upload_busy(void);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
@@ -87,6 +89,13 @@ policy_src_t command_handler_policy_src(int conn_id);
 void handle_lan_policy(int conn_id, const char *json);
 void handle_cloud_ca(int conn_id, const char *json);
 void handle_cloud_proxy(int conn_id, const char *json);
+
+/* The OTA session owner for a connection (ota.h): the cloud, the USB console or one LAN conn. */
+#include "ota.h"
+ota_owner_t ota_owner_for_conn(int conn_id);
+/* The one test every transport runs before an OTA begin: NULL = go ahead, else the refusal
+   (another transport's session, or a capture/upload on the PSRAM bus). */
+const char *ota_begin_gate(ota_owner_t who);
 
 void handle_ota_begin(int conn_id, const char *json);
 void handle_ota_data(int conn_id, const char *json);

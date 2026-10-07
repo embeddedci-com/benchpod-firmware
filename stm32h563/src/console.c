@@ -1011,24 +1011,28 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "upload-begin error usage: upload-begin <firmware|gw0|gw1|esp> <size> <sha256> [version]\r\n");
         else if (t < 0)
             op(out, ctx, "upload-begin error unknown target\r\n");
-        else if (heavy_or_claimed())
-            op(out, ctx, "upload-begin error busy\r\n");
+        else if (ota_begin_gate(OTA_OWNER_USB))   /* another transport's update, or a capture */
+            op(out, ctx, "upload-begin error %s\r\n", ota_begin_gate(OTA_OWNER_USB));
         else {
             uint8_t sig[128];
             int sig_len = ota_sig_decode(s_sig_b64, sig);   /* < 0: undecodable = malformed */
             s_sig_b64[0] = '\0';                             /* one manifest per begin */
-            if (ota_begin_signed((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
-                                 argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
-                                 sig_len < 0 ? 1u : (size_t)sig_len) == 0)
+            if (ota_begin_owned(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
+                                argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
+                                sig_len < 0 ? 1u : (size_t)sig_len) == 0)
                 op(out, ctx, "upload-begin ok\r\n");
             else
                 op(out, ctx, "upload-begin error %s\r\n", ota_error());
         }
     } else if (!strcmp(argv[0], "upload-end")) {
-        if (ota_end() == 0) op(out, ctx, "upload-end ok\r\n");
-        else                op(out, ctx, "upload-end error %s\r\n", ota_error());
+        if (ota_busy_for(OTA_OWNER_USB))
+            op(out, ctx, "upload-end error %s\r\n", ota_busy_for(OTA_OWNER_USB));
+        else if (ota_end_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-end ok\r\n");
+        else                                      op(out, ctx, "upload-end error %s\r\n", ota_error());
     } else if (!strcmp(argv[0], "upload-commit")) {
-        if (ota_get_state() != OTA_VERIFIED) {
+        if (ota_busy_for(OTA_OWNER_USB)) {
+            op(out, ctx, "upload-commit error %s\r\n", ota_busy_for(OTA_OWNER_USB));
+        } else if (ota_get_state() != OTA_VERIFIED) {
             op(out, ctx, "upload-commit error no verified image staged\r\n");
         } else if (ota_target() == OTA_TARGET_FIRMWARE) {
             op(out, ctx, "upload-commit resetting\r\n");
@@ -1045,8 +1049,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
            ota_target_name(ota_target()), (unsigned long)ota_received(),
            (unsigned long)ota_size(), ota_error()[0] ? ota_error() : "-");
     } else if (!strcmp(argv[0], "upload-abort")) {
-        ota_abort();
-        op(out, ctx, "upload-abort ok\r\n");
+        if (ota_abort_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-abort ok\r\n");
+        else op(out, ctx, "upload-abort error %s\r\n", ota_busy_replace_for(OTA_OWNER_USB));
     } else if (!strcmp(argv[0], "blobs")) {
         /* One line per W25Q slot: name, state against this firmware, what it holds. */
         for (int i = 0; i < BLOB_COUNT; i++) {
@@ -1324,7 +1328,7 @@ static void upload_chunk_done(void)
 {
     if (!upload_rx_crc_ok(&s_upload))
         printf("upload-data retry crc\r\n> ");
-    else if (!hw_worker_submit_ota_data(s_upload.offset, s_upload.buf, s_upload.len))
+    else if (!hw_worker_submit_ota_data_from(OTA_OWNER_USB, s_upload.offset, s_upload.buf, s_upload.len))
         printf("upload-data busy\r\n> ");
     else
         printf("upload-data ok %lu\r\n> ", (unsigned long)s_upload.offset);

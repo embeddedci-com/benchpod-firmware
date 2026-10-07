@@ -1143,8 +1143,12 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
 static void cl_ota_status_poll(void) {
     static ota_state_t last_state = OTA_IDLE;
     static uint32_t    last_reported;
-    ota_state_t st  = ota_get_state();
-    uint32_t    rcv = ota_received();
+    /* The cloud's view: the session, or the refusal its last ota.* frame got because another
+       transport (LAN, USB) holds the session (ota.h). */
+    ota_view_t  v;
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    ota_state_t st  = v.state;
+    uint32_t    rcv = v.received;
     /* 8 KB, not 64 KB: this frame is not just a progress bar, it is the ACK the server
        paces its push against (see otaWindow in the server's benchpod_ota.go). At a 64 KB
        reporting interval the server had no usable catch-up signal inside a sane window, so
@@ -1171,9 +1175,9 @@ static void cl_ota_status_poll(void) {
     bp_emit_init(&e, f, sizeof(f));
     bp_emit(&e, "{\"type\":\"ota.status\",\"device_id\":\"%s\",\"state\":\"%s\","
                 "\"received\":%lu,\"size\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"error\":",
-            s_cfg.device_id, ota_state_str(),
-            (unsigned long)rcv, (unsigned long)ota_size(), ota_sig_result(), ota_sig_key_id());
-    bp_emit_jstr(&e, ota_error());
+            s_cfg.device_id, ota_state_name(st),
+            (unsigned long)rcv, (unsigned long)v.size, ota_sig_result(), ota_sig_key_id());
+    bp_emit_jstr(&e, v.error);
     bp_emit_raw(&e, "}");
     if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e));
 }

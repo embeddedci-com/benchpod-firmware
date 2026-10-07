@@ -460,6 +460,87 @@ static void test_image_must_fit_this_flash(void) {
 
 /* Blob targets: the limit is the slot, there is no fw_info check, and commit writes the slot and
    leaves the pod running (state "installed") instead of resetting. */
+/* One staging area, three transports (FW-5): the session belongs to whoever began it. */
+static void test_session_owner(void) {
+    enum { N = 4096 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 11);
+    sha256_hex(img, N, hex);
+    const ota_owner_t lan = OTA_OWNER_LAN(1);
+    ota_view_t v;
+
+    mock_ota_psram_reset();
+    ota_abort();
+    ota_watchdog(1000);
+    CHECK(ota_begin_owned(lan, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "lan begin: %s", ota_error());
+    CHECK(ota_owner() == lan, "owner not recorded");
+    CHECK(ota_data_by(lan, 0, img, 1024) == 0, "lan data: %s", ota_error());
+
+    /* The cloud's begin is refused with the holder named; the LAN session is untouched. */
+    CHECK(ota_begin_owned(OTA_OWNER_CLOUD, N, hex, OTA_TARGET_GW0, 50, NULL, 0) != 0,
+          "a second transport's begin was accepted");
+    CHECK(ota_get_state() == OTA_RECEIVING && ota_received() == 1024 && ota_target() == OTA_TARGET_FIRMWARE,
+          "the refused begin disturbed the LAN session (state %s, %lu bytes)", ota_state_str(),
+          (unsigned long)ota_received());
+    CHECK(ota_error()[0] == '\0', "the refusal landed on the LAN session: %s", ota_error());
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_ERROR && strstr(v.error, "LAN connection 1") && strstr(v.error, "busy"),
+          "the cloud does not see why it was refused: %s %s", ota_state_name(v.state), v.error);
+    ota_view_for(lan, &v);
+    CHECK(v.state == OTA_RECEIVING && v.received == 1024, "the LAN view changed");
+
+    /* The cloud's data, end, abort and a refusal cannot touch the LAN session either. */
+    uint8_t junk[64];
+    memset(junk, 0xEE, sizeof(junk));
+    CHECK(ota_data_by(OTA_OWNER_CLOUD, 0, junk, sizeof(junk)) != 0, "foreign data accepted");
+    CHECK(mock_psram[0] == img[0], "foreign data was staged");
+    CHECK(ota_end_by(OTA_OWNER_USB) != 0, "foreign end accepted");
+    CHECK(ota_abort_by(OTA_OWNER_CLOUD) != 0, "a live session was aborted by another transport");
+    ota_refuse_for(OTA_OWNER_CLOUD, "busy: a capture or upload is running");
+    CHECK(ota_get_state() == OTA_RECEIVING, "ota_refuse_for killed another transport's session");
+
+    for (uint32_t off = 1024; off < N; off += 1024)
+        CHECK(ota_data_by(lan, off, img + off, 1024) == 0, "lan data: %s", ota_error());
+    CHECK(ota_end_by(lan) == 0, "lan end: %s", ota_error());
+    CHECK(ota_get_state() == OTA_VERIFIED, "state %s", ota_state_str());
+    CHECK(ota_busy_for(OTA_OWNER_USB) != NULL, "USB may commit the LAN's image");
+    CHECK(ota_busy_for(lan) == NULL, "the owner may not commit its own image");
+
+    /* The owner may start over (a retry). */
+    CHECK(ota_begin_owned(lan, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "lan restart: %s", ota_error());
+    CHECK(ota_received() == 0 && ota_get_state() == OTA_RECEIVING, "restart did not reset the session");
+
+    /* No progress for OTA_TAKEOVER_IDLE_MS: abandoned, another transport may begin over it. */
+    ota_watchdog(1000 + OTA_TAKEOVER_IDLE_MS - 1);
+    CHECK(ota_busy_replace_for(OTA_OWNER_CLOUD) != NULL, "taken over before the idle limit");
+    ota_watchdog(1000 + OTA_TAKEOVER_IDLE_MS);
+    CHECK(ota_get_state() == OTA_RECEIVING, "the staging watchdog fired too early");
+    CHECK(ota_begin_owned(OTA_OWNER_CLOUD, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0,
+          "an abandoned session blocked the cloud: %s", ota_error());
+    CHECK(ota_owner() == OTA_OWNER_CLOUD, "owner after takeover");
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_RECEIVING, "the old refusal still shows to the cloud");
+    CHECK(ota_data_by(lan, 0, img, 1024) != 0, "the old owner still writes into the new session");
+
+    /* The owner's connection closed: the session is abandoned at once, its owner id refused. */
+    ota_abort();
+    CHECK(ota_begin_owned(lan, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "lan begin");
+    ota_owner_gone(lan);
+    CHECK(ota_data_by(lan, 0, img, 1024) != 0, "data on an orphaned session (a reused connection id)");
+    CHECK(ota_abort_by(OTA_OWNER_CLOUD) == 0, "the server's abort cannot clear an orphaned LAN session");
+    CHECK(ota_get_state() == OTA_IDLE && ota_owner() == OTA_OWNER_NONE, "abort did not clear");
+
+    /* A transport's own refusal still lands in the global state (single-transport behavior). */
+    ota_refuse_for(OTA_OWNER_CLOUD, "busy: a capture or upload is running");
+    CHECK(ota_get_state() == OTA_ERROR && strstr(ota_error(), "capture"), "own refusal not reported");
+    char tag[16];
+    CHECK(strcmp(ota_owner_tag(OTA_OWNER_LAN(3), tag, sizeof(tag)), "lan:3") == 0 &&
+          strcmp(ota_owner_tag(OTA_OWNER_CLOUD, tag, sizeof(tag)), "cloud") == 0, "owner tags");
+    ota_abort();
+    ota_watchdog(0);
+}
+
 /* Staging writes PSRAM 0, the LA capture region: a capture kept for capture_read must go stale. */
 static void test_staging_makes_a_kept_capture_stale(void) {
     enum { N = 2048 };
@@ -624,6 +705,7 @@ int main(void) {
     test_image_must_fit_this_flash();
     test_blob_targets();
     test_staging_makes_a_kept_capture_stale();
+    test_session_owner();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();
