@@ -3,6 +3,7 @@
  */
 #include "pod_policy.h"
 #include "config_store.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -38,7 +39,7 @@ void pod_policy_load(void) {
         s_rec = r;
     }
     fw_sign_set_policy((fw_sig_policy_t)s_rec.sig);
-    printf("[policy] signatures %s, LAN %s\n", fw_sign_policy_name((fw_sig_policy_t)s_rec.sig),
+    log_printf("[policy] signatures %s, LAN %s\n", fw_sign_policy_name((fw_sig_policy_t)s_rec.sig),
            pod_policy_lan_name((pod_lan_policy_t)s_rec.lan));
 }
 
@@ -66,7 +67,7 @@ const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
     const char *why = save(&r);
     if (why) return why;
     fw_sign_set_policy(p);
-    printf("[policy] signatures now %s (from %s)\n", fw_sign_policy_name(p),
+    log_printf("[policy] signatures now %s (from %s)\n", fw_sign_policy_name(p),
            src == POLICY_SRC_USB ? "USB" : "cloud");
     return NULL;
 }
@@ -79,7 +80,7 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
     r.lan = (uint8_t)p;
     const char *why = save(&r);
     if (why) return why;
-    printf("[policy] LAN now %s (from %s)\n", pod_policy_lan_name(p),
+    log_printf("[policy] LAN now %s (from %s)\n", pod_policy_lan_name(p),
            src == POLICY_SRC_USB ? "USB" : "cloud");
     pod_policy_on_lan_change(p);
     return NULL;

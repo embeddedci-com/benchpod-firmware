@@ -15,6 +15,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -120,10 +121,10 @@ static void i2c_clear_log(void)
     s_clear_log_pending = false;
     int rc = s_clear_last_rc;
     if (rc >= 0) {
-        printf("[i2c] bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
+        log_printf("[i2c] bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
                (unsigned long)s_clear_count, rc);
     } else {
-        printf("[i2c] bus clear #%lu FAILED: %s still held low\n",
+        log_printf("[i2c] bus clear #%lu FAILED: %s still held low\n",
                (unsigned long)s_clear_count,
                rc == I2C_BUSCLEAR_SCL_STUCK ? "SCL" : "SDA");
     }
@@ -171,7 +172,7 @@ int i2c_bus_init(void)
     pclk.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
     pclk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
     if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
-        printf("[i2c] ERROR: kernel clock config failed\n");
+        log_printf("[i2c] ERROR: kernel clock config failed\n");
         return -1;
     }
 
@@ -185,12 +186,12 @@ int i2c_bus_init(void)
     i2c_clear_log();
 
     if (i2c_hw_init() != 0) {
-        printf("[i2c] ERROR: I2C1 init failed\n");
+        log_printf("[i2c] ERROR: I2C1 init failed\n");
         return -1;
     }
 
     s_ready = true;
-    printf("[i2c] I2C1 ~100 kHz  SCL=PB8 SDA=PB9\n");
+    log_printf("[i2c] I2C1 ~100 kHz  SCL=PB8 SDA=PB9\n");
     return 0;
 }
 
@@ -206,7 +207,7 @@ int i2c_bus_clear_and_reinit(void)
     s_ready = (i2c_hw_init() == 0);
     i2c_leave();
     i2c_clear_log();
-    if (!s_ready) printf("[i2c] ERROR: I2C1 re-init failed\n");
+    if (!s_ready) log_printf("[i2c] ERROR: I2C1 re-init failed\n");
     return rc;
 }
 
@@ -404,7 +405,7 @@ void analog_switch_dump(void)
         int err = tca9554_read_reg(chips[i].a, 0x00u, &in)
                 | tca9554_read_reg(chips[i].a, TCA_REG_OUTPUT, &out)
                 | tca9554_read_reg(chips[i].a, TCA_REG_CONFIG, &cfg);
-        printf("[exp] %s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
+        log_printf("[exp] %s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
                chips[i].n, in, out, cfg,
                err ? "(I2C ERR)"
                    : (cfg == (uint8_t)~chips[i].mask ? "dir OK" : "*** dir WRONG ***"));
@@ -501,9 +502,9 @@ int analog_path_from_name(const char *name, analog_path_t *out)
 
 void i2c_bus_status(void)
 {
-    if (!s_ready) { printf("[i2c] bus not initialised\n"); return; }
-    printf("[i2c] bus clears since boot: %lu\n", (unsigned long)s_clear_count);
-    printf("[i2c] scan:");
+    if (!s_ready) { log_printf("[i2c] bus not initialised\n"); return; }
+    log_printf("[i2c] bus clears since boot: %lu\n", (unsigned long)s_clear_count);
+    log_printf("[i2c] scan:");
     for (uint8_t a = 0x08; a <= 0x77; a++) {
         if (i2c_bus_probe(a)) {
             const char *name = "";
@@ -517,8 +518,8 @@ void i2c_bus_status(void)
             case I2C_ADDR_TCA9554_ANASW:   name = "TCA9554(anasw)"; break;
             default: break;
             }
-            printf(" 0x%02x%s%s", a, name[0] ? "=" : "", name);
+            log_printf(" 0x%02x%s%s", a, name[0] ? "=" : "", name);
         }
     }
-    printf("\n");
+    log_printf("\n");
 }

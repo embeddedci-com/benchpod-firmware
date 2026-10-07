@@ -11,6 +11,7 @@
 #include "can_bus.h"
 #include "board_pins.h"
 #include "stm32h5xx_hal.h"
+#include "bp_log.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -87,7 +88,7 @@ static bool can_busoff_poll(void)
     can_irq_restore(was);
     uint32_t n = s_busoff_recoveries;
     if (n != s_busoff_logged) {
-        printf("[can] bus-off: recovery started (%lu since boot), rejoining after 129x11 recessive bits\n",
+        log_printf("[can] bus-off: recovery started (%lu since boot), rejoining after 129x11 recessive bits\n",
                (unsigned long)n);
         s_busoff_logged = n;
     }
@@ -192,7 +193,7 @@ void can_bus_init(void)
     s_enabled = false;
     s_rx_head = s_rx_tail = s_rx_overflow = 0;
     can_responder_clear();
-    printf("[can] init: FDCAN1 PD1/PD0, term=PA4 (off), core idle\n");
+    log_printf("[can] init: FDCAN1 PD1/PD0, term=PA4 (off), core idle\n");
 }
 
 /* ---- bring-up / teardown ------------------------------------------------- */
@@ -219,7 +220,7 @@ void can_disable(void)
         s_enabled = false;
     }
     s_rx_head = s_rx_tail = 0;
-    printf("[can] disabled\n");
+    log_printf("[can] disabled\n");
 }
 
 int can_configure(uint32_t bitrate, can_mode_t mode, bool fd, bool term)
@@ -228,7 +229,7 @@ int can_configure(uint32_t bitrate, can_mode_t mode, bool fd, bool term)
     (void)fd;   /* classic CAN only for now — FD reserved */
 
     if (can_solve_timing(CAN_KERNEL_CLK_HZ, bitrate, &presc, &seg1, &seg2, &sjw) != 0) {
-        printf("[can] no bit timing for %lu bit/s @ %lu Hz kernel\n",
+        log_printf("[can] no bit timing for %lu bit/s @ %lu Hz kernel\n",
                (unsigned long)bitrate, (unsigned long)CAN_KERNEL_CLK_HZ);
         return -1;
     }
@@ -294,7 +295,7 @@ int can_configure(uint32_t bitrate, can_mode_t mode, bool fd, bool term)
     s_rx_head = s_rx_tail = s_rx_overflow = 0;
     can_set_term(term);
 
-    printf("[can] up: %lu bit/s mode=%s presc=%lu seg1=%lu seg2=%lu sjw=%lu term=%d\n",
+    log_printf("[can] up: %lu bit/s mode=%s presc=%lu seg1=%lu seg2=%lu sjw=%lu term=%d\n",
            (unsigned long)bitrate, can_mode_name(mode),
            (unsigned long)presc, (unsigned long)seg1, (unsigned long)seg2,
            (unsigned long)sjw, term ? 1 : 0);

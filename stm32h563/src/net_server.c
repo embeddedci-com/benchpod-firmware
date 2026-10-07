@@ -55,6 +55,7 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 #include "b64url.h"
 
 #include "stm32h5xx_hal.h"
+#include "bp_log.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -123,7 +124,7 @@ static void eth_diag_print(void)
 {
     char line[384];
     eth_diag_format(&s_eth_diag, line, sizeof(line));
-    printf("[net] eth diag: %s\r\n", line);
+    log_printf("[net] eth diag: %s\r\n", line);
 }
 
 static void eth_diag_poll(struct netif *netif, uint32_t now)
@@ -142,12 +143,12 @@ static void eth_diag_poll(struct netif *netif, uint32_t now)
         now - s_eth_err_log_ms >= ETH_DIAG_LOG_GAP_MS) {
         s_eth_err_log_ms = now;
         s_eth_diag_logged = s_eth_diag;
-        printf("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
+        log_printf("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
                eth_diag_phy_mode(s_eth_diag.physcsr), eth_diag_mac_mode(s_eth_diag.maccr));
     }
     if (was_stuck && s_eth_diag.rx_alloc_stuck && !s_eth_pool_stall_logged) {
         s_eth_pool_stall_logged = true;
-        printf("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
+        log_printf("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
                (unsigned)ETH_DIAG_PERIOD_MS);
     } else if (!s_eth_diag.rx_alloc_stuck) {
         s_eth_pool_stall_logged = false;
@@ -300,7 +301,7 @@ static err_t srv_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                        upload exactly like the pre-all-or-nothing bug. Abort the
                        connection instead: the client sees a reset and can retry
                        cleanly rather than receiving a corrupt trace. */
-                    printf("[net] conn %d: worker wedged mid-pbuf after %u/%u bytes — "
+                    log_printf("[net] conn %d: worker wedged mid-pbuf after %u/%u bytes — "
                            "aborting to avoid silent truncation\n",
                            id, (unsigned)off, (unsigned)p->tot_len);
                     hw_worker_submit_closed(id);
@@ -476,7 +477,7 @@ static void dhcp_process(net_if_t *i)
         ip_addr_set_zero_ip4(&netif->netmask);
         ip_addr_set_zero_ip4(&netif->gw);
         dhcp_start(netif);
-        printf("[net] %s DHCP: requesting address...\r\n", tag);
+        log_printf("[net] %s DHCP: requesting address...\r\n", tag);
         break;
     case NET_DHCP_DO_REKICK:
         /* No static fallback: keep retrying forever so a slow/awkward home router
@@ -494,30 +495,30 @@ static void dhcp_process(net_if_t *i)
             i->dhcp.state = NET_DHCP_OFF;   /* re-DISCOVER once the link is back up */
             i->dhcp.wait_ticks = 0;
             ethernetif_phy_restart(netif);
-            printf("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
+            log_printf("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
                    tag, DHCP_ESCALATE_REKICKS);
             eth_diag_print();   /* the state that led to the reset */
             break;
         }
         dhcp_start(netif);
-        printf("[net] %s DHCP: still no lease, re-probing...\r\n", tag);
+        log_printf("[net] %s DHCP: still no lease, re-probing...\r\n", tag);
         if (i->is_eth) eth_diag_print();
         break;
     case NET_DHCP_DO_BOUND:
         i->dhcp_fails = 0;
         strncpy(i->ip, ip4addr_ntoa(netif_ip4_addr(netif)), sizeof(i->ip) - 1);
         mdns_resp_announce(netif);   /* broadcast the now-valid A record */
-        printf("[net] %s DHCP: ip=%s\r\n", tag, i->ip);
+        log_printf("[net] %s DHCP: ip=%s\r\n", tag, i->ip);
         break;
     case NET_DHCP_DO_IPCHANGE:
         /* Bound but the router handed out a different address on renew/rebind. */
         strncpy(i->ip, ip4addr_ntoa(netif_ip4_addr(netif)), sizeof(i->ip) - 1);
         mdns_resp_announce(netif);   /* re-broadcast the new A record */
-        printf("[net] %s DHCP: address changed -> %s\r\n", tag, i->ip);
+        log_printf("[net] %s DHCP: address changed -> %s\r\n", tag, i->ip);
         break;
     case NET_DHCP_DO_LINKDOWN:
         strcpy(i->ip, "0.0.0.0");
-        printf("[net] %s link down\r\n", tag);
+        log_printf("[net] %s link down\r\n", tag);
         break;
     case NET_DHCP_DO_NOTHING:
     default:
@@ -537,7 +538,7 @@ static void update_default_route(void)
     }
     if (netif_default != want) {
         netif_set_default(want);
-        printf("[net] default route -> %s\r\n", (want == &s_eth.netif) ? "eth" : "wifi");
+        log_printf("[net] default route -> %s\r\n", (want == &s_eth.netif) ? "eth" : "wifi");
     }
 }
 
@@ -589,19 +590,19 @@ static void net_eth_apply_request(void)
         ethernetif_stop(&s_eth.netif);
         eth_reset_addr_state();
         update_default_route();          /* fail over to Wi-Fi if it's up */
-        printf("[net] eth: stopped (admin down)\r\n");
+        log_printf("[net] eth: stopped (admin down)\r\n");
         break;
     case ETH_REQ_SPEED:
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_force_speed(&s_eth.netif, s_eth_force_mbit, s_eth_force_full) != 0) {
-            printf("[net] eth: forcing the link mode failed (MDIO write)\r\n");
+            log_printf("[net] eth: forcing the link mode failed (MDIO write)\r\n");
             break;
         }
         if (s_eth_force_mbit == 0) {
-            printf("[net] eth: autonegotiation restored, re-acquiring link + DHCP\r\n");
+            log_printf("[net] eth: autonegotiation restored, re-acquiring link + DHCP\r\n");
         } else {
-            printf("[net] eth: link forced to %d M %s, re-acquiring link + DHCP%s\r\n",
+            log_printf("[net] eth: link forced to %d M %s, re-acquiring link + DHCP%s\r\n",
                    s_eth_force_mbit, s_eth_force_full ? "full" : "half",
                    s_eth_force_full ? " (a switch port that autonegotiates falls back to HALF:"
                                       " expect a duplex mismatch)" : "");
@@ -615,10 +616,10 @@ static void net_eth_apply_request(void)
         s_eth_refclk_hz = hz;
         s_eth_refclk_seq++;
         if (hz == 0) {
-            printf("[net] eth refclk: no edges on PA1 — the PHY is not driving the RMII clock\r\n");
+            log_printf("[net] eth refclk: no edges on PA1 — the PHY is not driving the RMII clock\r\n");
         } else {
             long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
-            printf("[net] eth refclk: %lu Hz (%+ld ppm vs 50 MHz, measured against the MCU crystal)\r\n",
+            log_printf("[net] eth refclk: %lu Hz (%+ld ppm vs 50 MHz, measured against the MCU crystal)\r\n",
                    (unsigned long)hz, ppm);
         }
         break;
@@ -628,9 +629,9 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_loopback_test(&s_eth.netif, s_eth_lb_mbit, s_eth_lb_n, &r) != 0)
-            printf("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
+            log_printf("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
         else
-            printf("[net] eth loopback %dM: sent %lu, back %lu, intact %lu, corrupt %lu, "
+            log_printf("[net] eth loopback %dM: sent %lu, back %lu, intact %lu, corrupt %lu, "
                    "crc %lu, align %lu, tx fail %lu\r\n",
                    r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
                    (unsigned long)r.intact, (unsigned long)r.corrupt,
@@ -644,7 +645,7 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         ethernetif_phy_restart(&s_eth.netif);   /* link re-negotiates; check_state re-ups */
-        printf("[net] eth: %s — PHY reset, re-acquiring link + DHCP\r\n",
+        log_printf("[net] eth: %s — PHY reset, re-acquiring link + DHCP\r\n",
                req == ETH_REQ_UP ? "started" : "restarted");
         break;
     default:
@@ -755,7 +756,7 @@ static void lan_access(bool up)
         mdns_resp_remove_netif(&s_eth.netif);
         mdns_resp_remove_netif(&s_wifi.netif);
     }
-    printf("[net] LAN access %s\r\n", up ? "on" : "off (policy)");
+    log_printf("[net] LAN access %s\r\n", up ? "on" : "off (policy)");
 }
 
 void pod_policy_on_lan_change(pod_lan_policy_t now) { s_lan_req = (now == POD_LAN_OFF) ? 0 : 1; }
@@ -807,7 +808,7 @@ void net_init(void)
     /* The :8080 listener and mDNS, unless the LAN policy is "off" (pod_policy.h). */
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
-    printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d\r\n",
+    log_printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d\r\n",
            TCP_SERVER_PORT);
 }
 
@@ -879,7 +880,7 @@ bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
     while (s_net_call_done == seq) {
         if (HAL_GetTick() - t0 > timeout_ms) {
             s_net_call = NULL;             /* withdraw it; the net task is not polling */
-            printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
+            log_printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
                    (unsigned long)timeout_ms);
             return false;
         }
@@ -917,7 +918,7 @@ static void net_wifi_static_on_net(void *arg)
     const char *ip_s = a->ip, *mask_s = a->mask, *gw_s = a->gw;
     ip4_addr_t ip, mask, gw;
     if (!ip4addr_aton(ip_s, &ip) || !ip4addr_aton(mask_s, &mask) || !ip4addr_aton(gw_s, &gw)) {
-        printf("[net] wifi-static: bad address\r\n");
+        log_printf("[net] wifi-static: bad address\r\n");
         return;
     }
     dhcp_stop(&s_wifi.netif);
@@ -927,7 +928,7 @@ static void net_wifi_static_on_net(void *arg)
     strncpy(s_wifi.ip, ip4addr_ntoa(&ip), sizeof(s_wifi.ip) - 1);
     s_wifi.dhcp.state = NET_DHCP_DONE;
     s_wifi_static = true;
-    printf("[net] wifi static ip=%s gw=%s (DHCP off on wifi — ping to test unicast RX)\r\n",
+    log_printf("[net] wifi static ip=%s gw=%s (DHCP off on wifi — ping to test unicast RX)\r\n",
            s_wifi.ip, gw_s);
 }
 

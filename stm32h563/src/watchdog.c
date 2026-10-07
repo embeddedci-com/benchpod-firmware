@@ -1,6 +1,7 @@
 #include "watchdog.h"
 #include "fault.h"
 #include "stm32h5xx_hal.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 
@@ -40,11 +41,11 @@ void watchdog_init(void) {
         s_last_change_ms[t] = now;
     }
     if (HAL_IWDG_Init(&s_iwdg) != HAL_OK) {
-        printf("[wdg] IWDG init failed — running WITHOUT a watchdog\n");
+        log_printf("[wdg] IWDG init failed — running WITHOUT a watchdog\n");
         return;
     }
     s_started = 1;
-    printf("[wdg] IWDG armed (~%lu ms)\n",
+    log_printf("[wdg] IWDG armed (~%lu ms)\n",
            (unsigned long)((IWDG_RELOAD_VAL + 1) * 256u * 1000u / 32000u));
 }
 
@@ -54,7 +55,7 @@ void watchdog_arm_early(void) {
     s_iwdg.Init.Reload    = IWDG_RELOAD_VAL;
     s_iwdg.Init.Window    = IWDG_WINDOW_DISABLE;
     if (HAL_IWDG_Init(&s_iwdg) != HAL_OK)
-        printf("[wdg] early IWDG arm failed\n");
+        log_printf("[wdg] early IWDG arm failed\n");
 }
 
 void watchdog_early_refresh(void) {

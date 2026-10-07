@@ -10,6 +10,7 @@
 #include "signal_engine.h"
 #include "pico_compat.h"
 #include "hw_lock.h"   /* serialize I2C access vs the net task */
+#include "bp_log.h"
 #include <stdio.h>
 
 #define PWR_ADDR  I2C_ADDR_TCA9554_PWR
@@ -89,15 +90,15 @@ void target_power_init(void)
        NOTE: the pre-firmware POR window still needs a hardware pulldown on each
        EN net for full elimination — same as the U53 relay note in i2c_bus.c. */
     if (tca9554_write_reg(PWR_ADDR, TCA_REG_OUTPUT, 0x00) != 0) {
-        printf("[pwr] WARN: TCA9554@0x%02x output preset failed — leaving EN pins "
+        log_printf("[pwr] WARN: TCA9554@0x%02x output preset failed — leaving EN pins "
                "as inputs (both eFuses stay OFF)\n", PWR_ADDR);
         return;   /* do not enable outputs off a possibly-0xFF latch */
     }
     if (tca9554_write_reg(PWR_ADDR, TCA_REG_CONFIG, PWR_CONFIG) != 0) {
-        printf("[pwr] WARN: TCA9554@0x%02x config write failed\n", PWR_ADDR);
+        log_printf("[pwr] WARN: TCA9554@0x%02x config write failed\n", PWR_ADDR);
         return;
     }
-    printf("[pwr] eFuse control via TCA9554@0x%02x (eF1 EN=P7, eF2 EN=P0), both OFF\n",
+    log_printf("[pwr] eFuse control via TCA9554@0x%02x (eF1 EN=P7, eF2 EN=P0), both OFF\n",
            PWR_ADDR);
 }
 

@@ -11,6 +11,7 @@
 #include "pico/time.h"   /* make_timeout_time_ms / time_reached / sleep_ms */
 
 #include "scpi/scpi.h"
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -120,7 +121,7 @@ static int cur_conn(scpi_t *ctx) { return (int)(intptr_t)ctx->user_context; }
 static bool resp_aborted;   /* this line's reply was abandoned; drop the rest of it */
 
 static void resp_abort(int conn, const char *why, size_t sent, size_t len) {
-    printf("[scpi] conn %d: reply aborted (%s) after %u of %u bytes of this chunk; closing\n",
+    log_printf("[scpi] conn %d: reply aborted (%s) after %u of %u bytes of this chunk; closing\n",
            conn, why, (unsigned)sent, (unsigned)len);
     at_close_connection(conn);
     resp_aborted = true;
@@ -186,7 +187,7 @@ static scpi_result_t cb_flush(scpi_t *ctx) {
 
 static int cb_error(scpi_t *ctx, int_fast16_t err) {
     (void)ctx;
-    printf("[scpi] error %d: %s\n", (int)err, SCPI_ErrorTranslate((int16_t)err));
+    log_printf("[scpi] error %d: %s\n", (int)err, SCPI_ErrorTranslate((int16_t)err));
     return 0;
 }
 
