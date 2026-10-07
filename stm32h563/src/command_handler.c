@@ -534,6 +534,12 @@ bool heavy_or_claimed(void) {
     return heavy_in_flight() || heavy_owner != -1 || load_bin_conn >= 0;
 }
 
+const char *bus_busy_reason(void) {
+    return heavy_or_claimed() ? "busy: a capture, upload or update is using the PSRAM bus; "
+                                "try again when it ends"
+                              : NULL;
+}
+
 /* Scratch for one PSRAM-sourced chunk (deep LA capture read-back).  Sized to one
    bulk chunk so the readback streams straight from PSRAM without a giant RAM
    buffer; the PSRAM bus is held for the whole send (released on completion). */

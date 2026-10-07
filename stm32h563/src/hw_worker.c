@@ -36,6 +36,10 @@ typedef struct {
 
 static QueueHandle_t s_q;
 
+/* The Wi-Fi control asked for the ESP32-C3 reflash while a capture, upload or update owned the
+   shared bus: it holds the W25Q for ~140 s, so it waits for the bus instead of cutting in. */
+static bool s_esp_flash_deferred;
+
 /* Scratch work item for producers (each producer runs on its own task; the queue
    copies by value, but the staging buffer must not be shared — use a local). */
 
@@ -245,6 +249,12 @@ static void handle_work(cmd_work_t *w) {
         ota_commit();                     /* does not return on success */
         break;
     case WK_ESP_FLASH:                    /* Wi-Fi found no esp-hosted image on the C3 */
+        if (heavy_or_claimed()) {
+            if (!s_esp_flash_deferred)
+                printf("[hw] ESP32-C3 flash deferred: a capture, upload or update owns the PSRAM bus\n");
+            s_esp_flash_deferred = true;
+            break;
+        }
         esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
         break;
     default:
@@ -267,6 +277,11 @@ static void worker_task(void *arg) {
             handle_work(&w);
         }
         apply_parked_teardowns(); /* closes/resets that did not fit in the queue */
+        if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */
+            s_esp_flash_deferred = false;
+            printf("[hw] running the deferred ESP32-C3 flash\n");
+            esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
+        }
         {
             extern volatile uint32_t g_malloc_failures;   /* main.c */
             static uint32_t seen;

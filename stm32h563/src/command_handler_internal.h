@@ -30,6 +30,9 @@ bool heavy_in_flight(void);
 /* heavy_in_flight(), or a connection holding the gate (an upload waiting for its replay) or a
    PSRAM waveform upload in progress: the test for starting an OTA, which takes the PSRAM bus. */
 bool heavy_or_claimed(void);
+/* NULL when the shared PSRAM/W25Q bus is free for a runtime W25Q write (company CA, proxy) or a
+   console diagnostic, else the "busy: ..." refusal to send. Same test as heavy_or_claimed. */
+const char *bus_busy_reason(void);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);

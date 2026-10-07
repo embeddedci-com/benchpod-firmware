@@ -932,7 +932,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                     (unsigned)fw_sign_key_count());
     } else if (!strcmp(argv[0], "ca") || !strcmp(argv[0], "ca-clear")) {
         if (!strcmp(argv[0], "ca-clear")) {
-            const char *why = cloud_extras_ca_clear();
+            const char *why = bus_busy_reason();   /* the W25Q write takes the shared bus */
+            if (!why) why = cloud_extras_ca_clear();
             if (why) op(out, ctx, "ca-clear error %s\r\n", why);
             else     op(out, ctx, "ca-clear ok\r\n");
         } else {
@@ -953,7 +954,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
     } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
         const char *why = NULL;
-        if (!strcmp(argv[0], "proxy-set"))
+        /* proxy-set/-clear write the W25Q, which takes the shared bus; plain `proxy` only reads */
+        const char *busy = strcmp(argv[0], "proxy") ? bus_busy_reason() : NULL;
+        if (busy)
+            why = busy;
+        else if (!strcmp(argv[0], "proxy-set"))
             why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
                            : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
         else if (!strcmp(argv[0], "proxy-clear"))
@@ -1069,6 +1074,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
         net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
+    } else if (!strcmp(argv[0], "flash-esp32") && bus_busy_reason()) {
+        /* ~140 s on the shared bus: not under a capture, upload or update */
+        op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
     } else if (!strcmp(argv[0], "flash-esp32")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         if (!blob_store_present(BLOB_ESP)) {

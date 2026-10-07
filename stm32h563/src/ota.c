@@ -368,13 +368,12 @@ int ota_install_blob(void) {
     if (s_state != OTA_VERIFIED) { set_err("no verified image staged"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE) { set_err("not a blob"); return -1; }
     blob_id_t id = target_blob(s_target);
-    /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: the same
-       quiesce every bus grab needs. blob_store_write hashes what it wrote back against the
+    /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: a W25Q session
+       quiesces them like every runtime bus grab. blob_store_write hashes what it wrote back against the
        verified digest, so anything that wrote into the staging area since ota_end is caught. */
-    signal_engine_quiesce_psram_masters();
-    w25q_open();
+    w25q_session_open();
     int rc = blob_store_write(id, s_size, s_version, s_expect, staged_src, NULL);
-    w25q_close();
+    w25q_session_close();
     if (rc != 0) { set_err("blob write failed"); return -1; }
     s_state = OTA_INSTALLED;
     printf("[ota] installed %s (%lu bytes)\n", blob_name(id), (unsigned long)s_size);
@@ -390,10 +389,9 @@ int ota_install_blob(void) {
    logged and the install goes on, since the copy is only groundwork today. */
 int ota_store_fw_copy(void) {
     if (s_state != OTA_VERIFIED || s_target != OTA_TARGET_FIRMWARE) return -1;
-    signal_engine_quiesce_psram_masters();
-    w25q_open();
+    w25q_session_open();
     int rc = blob_store_write(BLOB_FW, s_size, 0u, s_expect, staged_src, NULL);
-    w25q_close();
+    w25q_session_close();
     printf("[ota] firmware copy in the W25Q fw slot: %s\n", rc == 0 ? "stored" : "FAILED (install continues)");
     return rc;
 }

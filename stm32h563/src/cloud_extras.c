@@ -128,9 +128,9 @@ int ota_validate_staged(ota_target_t t, uint32_t size, char *why, size_t cap) {
 }
 
 void cloud_extras_ca_changed(void) {
-    if (w25q_open() == 0) {
+    if (w25q_session_open() == 0) {
         load_ca_locked();
-        w25q_close();
+        w25q_session_close();
     }
     printf("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : "removed");
     net_cloud_reload();
@@ -147,9 +147,9 @@ const char *cloud_extras_ca_clear(void) {
     static const uint8_t zero = 0;
     uint8_t sha[32];
     mbedtls_sha256(&zero, 1, sha, 0);
-    if (w25q_open() != 0) return "the W25Q flash does not answer";
+    if (w25q_session_open() != 0) return "the W25Q flash does not answer";
     int rc = blob_store_write(BLOB_CA, 1, 0, sha, marker_src, NULL);
-    w25q_close();
+    w25q_session_close();
     if (rc != 0) return "could not clear the company CA";
     cloud_extras_ca_changed();
     return NULL;
@@ -234,9 +234,9 @@ const char *cloud_extras_proxy_set(const char *spec, const char *user, const cha
     }
     uint8_t sha[32];
     mbedtls_sha256((const unsigned char *)&p, sizeof(p), sha, 0);
-    if (w25q_open() != 0) return "the W25Q flash does not answer";
+    if (w25q_session_open() != 0) return "the W25Q flash does not answer";
     int rc = blob_store_write(BLOB_PROXY, sizeof(p), 0, sha, proxy_src, &p);
-    w25q_close();
+    w25q_session_close();
     if (rc != 0) return "could not save the proxy";
     taskENTER_CRITICAL();
     s_proxy = p;

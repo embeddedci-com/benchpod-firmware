@@ -489,7 +489,9 @@ static void test_blob_targets(void) {
         CHECK(ota_data(off, img + off, c) == 0, "data: %s", ota_error());
     }
     CHECK(ota_end() == 0, "a blob without fw_info was refused: %s", ota_error());
+    int sessions = mock_w25q_sessions;
     CHECK(ota_commit_blob_for_test() == 0, "install failed: %s", ota_error());
+    CHECK(mock_w25q_sessions == sessions + 1, "the install did not use a quiescing W25Q session");
     CHECK(ota_get_state() == OTA_INSTALLED, "state after install = %s", ota_state_str());
     CHECK(mock_installed[BLOB_GW1] == 1, "the installed hook did not run");
     CHECK(blob_store_present(BLOB_GW1) && blob_store_info(BLOB_GW1)->version == 46 &&
