@@ -63,16 +63,23 @@
    kind, including the pong, refreshes s_last_rx. */
 #define PING_INTERVAL_MS      6000
 #define IDLE_TIMEOUT_MS      20000   /* no inbound (not even a pong) while connected -> reconnect */
-/* Idle budget while an OTA is staging. Longer than the normal budget because a paced push may
-   legitimately go quiet between acknowledgements — but NOT much longer, because this is also how
-   long we take to notice a genuinely dead downlink.
+/* Idle budget while an OTA is staging: SHORTER than the normal budget, not longer.
  *
- * Was 90 s, chosen when the server could pause indefinitely waiting on a byte threshold. The
- * server now rate-caps the push (a frame every ~16 ms at the default) and never goes quiet for
- * more than about a second, so 90 s bought nothing and cost a lot: every wedge left the pod
- * unreachable for a minute and a half before it even tried to reconnect, which is most of why an
- * interrupted transfer left the pod looking broken long afterwards. */
-#define OTA_IDLE_TIMEOUT_MS  30000
+ * While an image is staging the server pushes a frame every ~16 ms and waits on our 500 ms
+ * acknowledgements, and our pings get a pong every PING_INTERVAL_MS on top: a healthy link is
+ * never silent for more than a second or so. Silence during a transfer therefore means the
+ * server->pod direction has died, and the sooner we reconnect the sooner the server resumes the
+ * push from our acknowledged mark (the staged image survives a reconnect, see OTA_STAGE_IDLE_MS).
+ *
+ * Measured 2026-10-07 on a v3 pod over Cloudflare: mid-transfer the downlink went silent while
+ * the uplink stayed healthy ([cloud/diag] ms_since_rx=30000 rx_acc=0 sndbuf=11659, every frame
+ * received already staged). At 30 s each such wedge cost the update half a minute before the pod
+ * even tried to reconnect. Two ping intervals is the shortest budget that a pong arriving late
+ * cannot trip.
+ *
+ * History: 90 s when the server could pause indefinitely on a byte threshold, then 30 s once
+ * the server was rate-capped. */
+#define OTA_IDLE_TIMEOUT_MS  (2 * PING_INTERVAL_MS)
 #define HTTP_TIMEOUT_MS       8000   /* await an HTTP/handshake response */
 #define CONNECT_TIMEOUT_MS   12000   /* TCP connect + TLS handshake budget */
 #define DNS_TIMEOUT_MS        8000
