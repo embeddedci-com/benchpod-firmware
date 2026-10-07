@@ -230,9 +230,22 @@ altcp_bp_proxy_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *
         /* "HTTP/1.0 200" or "HTTP/1.1 200": anything else (407 auth, 403, 502) fails. */
         if (strncmp(state->reply, "HTTP/1.", 7) != 0 || strncmp(state->reply + 8, " 200", 4) != 0) {
           state->conf->last_status = (u16_t)atoi(state->reply + 9);
-          /* Aborting reports ERR_ABRT up the chain (TLS, then the application's err callback),
-             which reads last_status for the reason. */
-          altcp_abort(conn);
+          /* Tear down the way an error from below does (altcp_bp_proxy_lower_err): drop and abort
+             the TCP pcb with our callbacks removed, tell the layer above (TLS, which frees
+             itself and calls the application's err callback, where last_status gives the
+             reason), then free this layer. Aborting only ourselves would leave TLS pointing at
+             freed memory: seen as a HardFault in altcp_mbedtls_lower_recv on the bench. */
+          altcp_arg(inner_conn, NULL);
+          altcp_recv(inner_conn, NULL);
+          altcp_sent(inner_conn, NULL);
+          altcp_err(inner_conn, NULL);
+          altcp_poll(inner_conn, NULL, 0);
+          altcp_abort(inner_conn);
+          conn->inner_conn = NULL;
+          if (conn->err) {
+            conn->err(conn->arg, ERR_ABRT);
+          }
+          altcp_free(conn);
           return ERR_ABRT;
         }
         state->conf->last_status = 200;
