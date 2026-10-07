@@ -936,6 +936,34 @@ static void cl_handle_lease_state(const char *json) {
     printf("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
 }
 
+/* End a tunnel because its byte stream can no longer be trusted (a frame was lost or garbled):
+   tell the client why on the stream itself, close it towards the server with the reason, and
+   reset the virtual connection so a half-done raw transfer (load_bin, spi_stream) ends at once
+   instead of waiting out its idle timeout with a gap in the data. Net task. */
+static void cl_tunnel_fail(int slot, const char *reason) {
+    char id[BP_TUNNEL_ID_MAX];
+    memcpy(id, s_tunnels[slot], sizeof(id));
+    printf("[cloud] tunnel %s reset: %s\n", id, reason);
+    char line[192];
+    bp_emit_t e;
+    bp_emit_init(&e, line, sizeof(line));
+    bp_emit_raw(&e, "{\"status\":\"error\",\"message\":");
+    bp_emit_jstr(&e, reason);
+    bp_emit_raw(&e, "}\n");
+    if (bp_emit_ok(&e)) cloud_client_tunnel_out(CH_CLOUD_TUNNEL_CONN + slot, (const uint8_t *)line, bp_emit_len(&e));
+    char f[BP_TUNNEL_ID_MAX + 256];
+    bp_emit_init(&e, f, sizeof(f));
+    bp_emit_raw(&e, "{\"type\":\"tunnel.close\",\"tunnel_id\":");
+    bp_emit_jstr(&e, id);
+    bp_emit_raw(&e, ",\"reason\":");
+    bp_emit_jstr(&e, reason);
+    bp_emit_raw(&e, "}");
+    if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e));
+    s_tunnels[slot][0] = '\0';
+    conn_tx_reset(CH_CLOUD_TUNNEL_CONN + slot);
+    hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);
+}
+
 /* tunnel.open: bind a fresh virtual connection to this tunnel id. */
 static void cl_handle_tunnel_open(const char *json) {
     char id[BP_TUNNEL_ID_MAX];
@@ -972,9 +1000,16 @@ static bool cl_handle_tunnel_data(const char *json) {
     if (slot < 0) return true;                  /* unknown/closed tunnel — drop, don't retry */
     static char    b64[BP_CLOUD_RX_MAX];
     static uint8_t raw[B64URL_DECODED_MAX(sizeof(b64))];
-    if (!cl_json_str(json, "data_b64", b64, sizeof(b64))) return true;
+    if (!cl_json_str(json, "data_b64", b64, sizeof(b64))) {
+        cl_tunnel_fail(slot, "tunnel.data without data_b64");
+        return true;
+    }
     size_t rawlen = 0;
-    if (b64url_decode(b64, raw, sizeof(raw), &rawlen) != 0 || rawlen == 0) return true;
+    if (b64url_decode(b64, raw, sizeof(raw), &rawlen) != 0) {
+        cl_tunnel_fail(slot, "tunnel.data with bad base64");
+        return true;
+    }
+    if (rawlen == 0) return true;
     /* Feed the bytes to the worker (it owns command_handler); FIFO-ordered behind this
        tunnel's open. Do NOT drop on a full queue: for a raw PROTO_LOAD stream (a deep DAC
        replay upload) a lost chunk corrupts the trace. Signal "retry" so the frame stays in
@@ -1100,20 +1135,34 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
     msg[n] = '\0';
 
     char type[32] = {0};
-    cl_json_str(msg, "type", type, sizeof(type));
     if (len >= sizeof(msg)) {
         /* Never act on a cut-off frame: the flat JSON helpers would still find their keys and a
-           shortened base64 field decodes fine, silently losing upload or OTA bytes. type and
-           request_id come first, so a command can still be answered. */
+           shortened base64 field decodes fine, silently losing upload or OTA bytes. The ids are
+           read from the whole frame: Go marshals keys in sorted order, so in a tunnel.data frame
+           "tunnel_id" and "type" come AFTER the base64 data. */
+        bp_json_scan_str((const char *)payload, len, "type", type, sizeof(type));
         printf("[cloud] dropping a %u-byte %s frame (limit %u)\n", (unsigned)len,
                type[0] ? type : "untyped", (unsigned)(sizeof(msg) - 1));
         if (strcmp(type, "command.request") == 0) {
             char rid[64] = {0};
-            cl_json_str(msg, "request_id", rid, sizeof(rid));
+            bp_json_scan_str((const char *)payload, len, "request_id", rid, sizeof(rid));
             if (rid[0]) cl_send_command_error(rid, "command too large");
+        } else if (strcmp(type, "tunnel.data") == 0) {
+            /* A raw stream (load_bin, spi_stream) cannot skip a frame: the bytes after it would
+               land at the wrong offset. End the tunnel with the reason instead. */
+            char id[BP_TUNNEL_ID_MAX] = {0};
+            bp_json_scan_str((const char *)payload, len, "tunnel_id", id, sizeof(id));
+            int slot = id[0] ? cl_tunnel_slot_by_id(id) : -1;
+            if (slot >= 0) {
+                char why[96];
+                snprintf(why, sizeof(why), "tunnel.data frame too large (%u bytes, limit %u)",
+                         (unsigned)len, (unsigned)(sizeof(msg) - 1));
+                cl_tunnel_fail(slot, why);
+            }
         }
         return true;
     }
+    cl_json_str(msg, "type", type, sizeof(type));
     if (strcmp(type, "command.request") == 0) {
         cl_handle_command_request(msg);
     } else if (strcmp(type, "tunnel.data") == 0) {
@@ -1194,7 +1243,12 @@ static void cl_process_ws_frames(void) {
         ws_frame_t fr;
         int consumed = ws_parse_frame(s_rx, s_rx_len, &fr);
         if (consumed == 0) break;            /* need more bytes */
-        if (consumed < 0) { cl_backoff("bad ws frame"); return; }
+        if (consumed == WS_PARSE_FRAGMENTED) {
+            cl_set_error("fragmented websocket message (not supported)");
+            cl_backoff("fragmented ws frame");
+            return;
+        }
+        if (consumed < 0) { cl_set_error("bad websocket frame"); cl_backoff("bad ws frame"); return; }
 
         switch (fr.opcode) {
             case WS_OP_TEXT:
