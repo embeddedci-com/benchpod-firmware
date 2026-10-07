@@ -32,6 +32,7 @@ CC      := $(PREFIX)gcc
 AS      := $(PREFIX)gcc -x assembler-with-cpp
 CP      := $(PREFIX)objcopy
 SZ      := $(PREFIX)size
+NM      := $(PREFIX)nm
 HEX     := $(CP) -O ihex
 BIN     := $(CP) -O binary -S
 
@@ -385,7 +386,7 @@ fetch:
 
 .PHONY: all flash flash-dfu flash-dfu-code clean help test fetch
 all: check-uid $(GEN_BLOB_MANIFEST) $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
-     $(BUILD_DIR)/$(TARGET).bin $(SIGNED_OUT)
+     $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).syms $(SIGNED_OUT)
 
 # The unique-ID area must be read as whole words (a byte read is a bus fault on the H5 and
 # once left a pod crashing before USB came up).  Only board_uid.h may touch UID_BASE.
@@ -425,6 +426,11 @@ $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 
 $(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
 	$(BIN) $< $@
+
+# Function symbol map ("address size type name", sorted), published with each release so the
+# server can name the function a crash report's pc and lr point into.
+$(BUILD_DIR)/%.syms: $(BUILD_DIR)/%.elf
+	$(NM) -n -S --defined-only $< | awk '$$3 ~ /^[tTwW]$$/' > $@
 
 $(BUILD_DIR):
 	mkdir -p $@

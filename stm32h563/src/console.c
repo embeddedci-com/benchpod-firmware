@@ -158,6 +158,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  uid                  the chip's unique ID\r\n"
         "  test-bootloop [net|hw] yes  crash 2 boots on purpose to prove safe mode\r\n"
         "  test-hang net|hw yes        hang a task on purpose to prove the watchdog report\r\n"
+        "  test-crash yes              fault on purpose to prove the crash report\r\n"
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|current_in]  route ADC source + read calibrated mV (def ext)\r\n"
         "  calibrate [current_in|clear]  this pod's ADC calibration: show, calibrate (J8 open), remove\r\n"
@@ -487,6 +488,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         op(out, ctx, "  reset  : %s\r\n", fault_last_reset_str());
         op(out, ctx, "  crash  : %s\r\n", fault_last_crash_str());
+        op(out, ctx, "  boot   : id %08lx  unclean resets not yet reported %lu\r\n",
+           (unsigned long)fault_boot_id(), (unsigned long)fault_unclean_resets());
         {
             sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
             int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
@@ -602,6 +605,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
             vTaskDelay(pdMS_TO_TICKS(200));
             NVIC_SystemReset();
+        }
+    } else if (!strcmp(argv[0], "test-crash")) {
+        /* Prove the crash report: a real fault (UsageFault/HardFault) in the console task. */
+        if (argc < 2 || strcmp(argv[1], "yes")) {
+            op(out, ctx, "  test-crash yes : fault on purpose; the next boot reports it as the last crash\r\n");
+        } else {
+            op(out, ctx, "  crashing now\r\n");
+            vTaskDelay(pdMS_TO_TICKS(100));
+            __builtin_trap();
         }
     } else if (!strcmp(argv[0], "test-hang")) {
         /* Prove the watchdog report: the named task spins, the IWDG early warning records it

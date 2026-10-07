@@ -167,7 +167,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json ${{ steps.sign.outputs.assets }}"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json ${{ steps.sign.outputs.assets }}"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else

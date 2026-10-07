@@ -30,9 +30,14 @@ static volatile uint32_t  s_hb[WD_TASK_COUNT];   /* bumped by heartbeat        *
 static uint32_t           s_last_hb[WD_TASK_COUNT];
 static uint32_t           s_last_change_ms[WD_TASK_COUNT];
 static int                s_started;
-/* HAL_GetTick() of each task's last heartbeat, read by the early-warning interrupt to name the
-   task that stalled (the net task that services the IWDG may be the one that hung). */
+/* HAL_GetTick() of each task's last heartbeat and of the last IWDG refresh, read by the
+   early-warning interrupt to name the task that stalled (the net task that services the IWDG
+   may be the one that hung).  The interrupt does not read the clock itself: HAL_GetTick counts
+   CPU cycles and loses ~17 s when nothing calls it for that long, which is exactly what a hung
+   net task causes.  The early warning fires a fixed time after the last refresh instead. */
 static volatile uint32_t  s_hb_ms[WD_TASK_COUNT];
+static volatile uint32_t  s_refresh_ms;
+#define IWDG_EWI_AFTER_MS   ((IWDG_RELOAD_VAL - IWDG_EWI_VAL) * 1000u / 125u)
 static const char *const  s_names[WD_TASK_COUNT] = {
     [WD_TASK_NET]     = "net",
     [WD_TASK_CONSOLE] = "console",
@@ -60,6 +65,7 @@ void watchdog_init(void) {
         s_last_change_ms[t] = now;
         s_hb_ms[t] = now;
     }
+    s_refresh_ms = now;
     iwdg_ewi_enable();
     if (HAL_IWDG_Init(&s_iwdg) != HAL_OK) {
         log_printf("[wdg] IWDG init failed — running WITHOUT a watchdog\n");
@@ -105,7 +111,10 @@ void watchdog_service(void) {
             healthy = 0;                    /* stalled past its grace window  */
         }
     }
-    if (healthy) HAL_IWDG_Refresh(&s_iwdg);
+    if (healthy) {
+        HAL_IWDG_Refresh(&s_iwdg);
+        s_refresh_ms = now;
+    }
     /* else: stop refreshing — the IWDG expires and resets the pod. fault.c will
        report "iwdg" as the reset cause on the next boot. */
 }
@@ -116,7 +125,7 @@ void iwdg_ewi_capture(uint32_t *frame);
 void iwdg_ewi_capture(uint32_t *frame) {
     uint32_t stall[WD_TASK_COUNT] = {0};
     if (s_started) {
-        uint32_t now = HAL_GetTick();
+        uint32_t now = s_refresh_ms + IWDG_EWI_AFTER_MS;
         for (int t = 0; t < WD_TASK_COUNT; t++) {
             uint32_t since = now - s_hb_ms[t];
             if (since > s_grace_ms[t]) stall[t] = since;
