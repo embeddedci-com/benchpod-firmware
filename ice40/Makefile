@@ -349,6 +349,9 @@ $(OUT).bin: $(OUT).asc
 # uart_engine/fifo, LA ring, ADC; 3864 LC, 73%, below v43's 3914).  Swept 1..64 in both
 # toolchains: 61/64 local, 46/64 CI (v45 before the LC pass: 22/64 local).  Pinned SEED_LOOP
 # 58 -> 26 (clk48 56.70 local / 55.48 CI, clk -> clk48 <= 11.38 ns).
+# v46 (CORR-2 ring overflow clear + version; 3895 LC, 74%): swept 1..64 locally: 57/64 reach
+# MIN_CLK48_MHZ (2 miss 48 MHz).  Seed 26 still closes (clk48 54.69, clk 32.69, clk -> clk48
+# 10.19 ns) and stays pinned.  CI sweep not run yet.
 SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
 SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
@@ -419,7 +422,11 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # SEED_DEEP 7 -> 6 (clk48 53.73 local / 51.93 CI, clk -> clk48 <= 12.72 ns in both).
 # v45 after the LC pass (3549 LC, 67%): 63/64 local, 57/64 CI.  Pinned SEED_DEEP 6 -> 25 (clk48
 # 54.59 local / 55.27 CI, clk -> clk48 <= 13.29 ns).
-SEED_DEEP ?= 25
+# v46 (CORR-1: reader honours bus_own with burst commit/abort, ne_r clear off the subtract;
+# 3579 LC, 68%): swept 1..64 locally: ALL 64 reach MIN_CLK48_MHZ (v45: 63/64), eight tie at
+# 59.26 MHz.  Pinned SEED_DEEP 25 -> 50 (clk48 59.26, clk 32.34, clk -> clk48 12.72 ns; 25 ties
+# on clk48 but its clk is 27.94).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 50
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.

@@ -701,7 +701,27 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 44) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 46) ----
+    // GATEWARE_VERSION 46 = v45 + two P0 correctness fixes (no protocol change):
+    //   * CORR-1 (deep image): the replay reader honours bus_own instead of being reset by it.
+    //     v26..v45 held it in reset while the STM32 owned the bus, so a capture read-back during
+    //     a replay flushed the prefetch FIFO and restarted the stream at its base while the DAC
+    //     engine kept running; a flush between the engine's low- and high-byte pops byte-swapped
+    //     every later sample until the next arm.  Now no burst starts while bus_own, a burst it
+    //     touches is cut at the next cell and its bytes are discarded (they only become visible to
+    //     the DAC on the burst's commit cell, S_CMT, one cell after S_CSH), and the address only
+    //     advances on a commit, so the stream resumes exactly where it stopped.  The DAC waits
+    //     (SYNC high) while the FIFO is empty; it never sees a swapped, repeated or skipped byte.
+    //     The arbiter is still reset by bus_own (the v26 image-swap fix).  The FIFO push lost its
+    //     full test (the room check already rules a full push out; the benches assert it), and
+    //     the not-empty clear compares rptr + 1 (a register) with wptr instead of a subtract.
+    //     Loop 3864 -> 3895 LC, deep 3549 -> 3579.  Local sweeps 1..64: loop 57/64, deep 64/64
+    //     reach MIN_CLK48_MHZ.  SEED_LOOP 26, SEED_DEEP 50.
+    //   * CORR-2 (both images): the LA SPRAM ring's overflow flag is cleared by every capture arm.
+    //     It was sticky until the FPGA reset, so after one overflow every capture reported CAP_OVF.
+    //   tb_top_deep is the first whole-top bench of the deep image (-DUSE_DEEP_REPLAY): bus_own
+    //   swept over a reader burst and the engine's byte pops with STM32 reads in between, a
+    //   capture alongside the replay read back mid-replay, and an overflowed then a clean capture.
     // GATEWARE_VERSION 44 = v43 + an SPI MASTER as the SWD engine's second job (swd_engine.v):
     //   * SPI_ARM 0x55 [sck][mosi][miso][cs][half][flags] takes the engine (SCK/MOSI on the SWD
     //     clk/dio slots, a new CS column in la_bank, MISO read back through la_in); SPI_CS 0x56
@@ -1048,7 +1068,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd45), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd46), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
