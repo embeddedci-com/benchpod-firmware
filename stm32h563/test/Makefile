@@ -274,6 +274,11 @@ run: $(TESTS)
 	@./build/test_flash_layout
 	@./build/test_board_variant
 	@./build/test_upload_rx
+	@./build/test_fw_sign
+	@./build/test_cmd_tier
+	@./build/test_pod_policy > build/test_pod_policy.log || { cat build/test_pod_policy.log; exit 1; }
+	@tail -n 1 build/test_pod_policy.log
+	@./build/test_lease_gate
 	@./build/test_config_store > build/test_config_store.log || { cat build/test_config_store.log; exit 1; }
 	@tail -n 1 build/test_config_store.log
 	@./build/test_dac_limits > build/test_dac_limits.log || { cat build/test_dac_limits.log; exit 1; }
