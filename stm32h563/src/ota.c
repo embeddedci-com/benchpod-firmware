@@ -50,6 +50,7 @@ static uint32_t    s_clock_ms;             /* last ota_watchdog clock           
 static uint32_t    s_activity_ms;          /* s_clock_ms at the session's last begin/data/end  */
 static ota_owner_t s_ref_owner = OTA_OWNER_NONE;   /* last refusal shown only to this owner   */
 static char        s_ref_err[96];
+static uint32_t    s_ref_seq;              /* bumped per explicit refusal (ota_view_t.refusals) */
 
 static int hex_nibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -454,21 +455,29 @@ static void clear_refusal(ota_owner_t who) {
     if (s_ref_owner == who) { s_ref_owner = OTA_OWNER_NONE; s_ref_err[0] = '\0'; }
 }
 
-void ota_refuse_for(ota_owner_t who, const char *why) {
+/* fresh: an explicit refusal (a begin, abort or commit) that the owner must hear about even when
+   it repeats the last one word for word; data/end refusals of the same session are deduplicated,
+   or a refused upload would answer every frame. */
+static void refuse(ota_owner_t who, const char *why, bool fresh) {
     if (may_replace(who)) {
         clear_refusal(who);
+        if (fresh) s_ref_seq++;   /* the same error twice must still be reported twice */
         set_err(why);
         s_owner  = who;
         s_orphan = false;
         return;
     }
     why = why ? why : "";
-    if (s_ref_owner == who && strncmp(s_ref_err, why, sizeof(s_ref_err) - 1) == 0) return;   /* once per frame burst */
+    bool same = s_ref_owner == who && strncmp(s_ref_err, why, sizeof(s_ref_err) - 1) == 0;
+    if (same && !fresh) return;   /* once per frame burst */
     s_ref_owner = who;
     strncpy(s_ref_err, why, sizeof(s_ref_err) - 1);
     s_ref_err[sizeof(s_ref_err) - 1] = '\0';
+    s_ref_seq++;
     printf("[ota] refused: %s\n", s_ref_err);
 }
+
+void ota_refuse_for(ota_owner_t who, const char *why) { refuse(who, why, true); }
 
 int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                     uint32_t version, const uint8_t *sig, size_t sig_len) {
@@ -486,13 +495,13 @@ int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_
 
 int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len) {
     const char *busy = ota_busy_for(who);
-    if (busy) { ota_refuse_for(who, busy); return -1; }
+    if (busy) { refuse(who, busy, false); return -1; }
     return ota_data(offset, buf, len);
 }
 
 int ota_end_by(ota_owner_t who) {
     const char *busy = ota_busy_for(who);
-    if (busy) { ota_refuse_for(who, busy); return -1; }
+    if (busy) { refuse(who, busy, false); return -1; }
     int rc = ota_end();
     s_activity_ms = s_clock_ms;
     return rc;
@@ -519,8 +528,10 @@ void ota_view_for(ota_owner_t who, ota_view_t *out) {
         out->received = 0;
         out->size = 0;
         out->error = s_ref_err;
+        out->refusals = s_ref_seq;
         return;
     }
+    out->refusals = s_ref_seq;
     out->state = s_state;
     out->received = s_received;
     out->size = s_size;

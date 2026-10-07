@@ -573,6 +573,58 @@ static void test_lan_connection_per_command(void) {
     ota_watchdog(0);
 }
 
+/* The cloud hears every refusal of its begin, even one that reads like the last (the cloud view
+   stays "error" between jobs; cl_ota_status_poll reports when `refusals` changes). Repro from the
+   pod: a per-command LAN upload running, a cloud job started twice. */
+static void test_cloud_hears_each_refusal(void) {
+    enum { N = 4096 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 13);
+    sha256_hex(img, N, hex);
+    ota_view_t v;
+    mock_ota_psram_reset();
+    ota_abort();
+    ota_watchdog(7000);
+    CHECK(ota_begin_owned(OTA_OWNER_LAN(0), N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "lan begin");
+    ota_owner_gone(OTA_OWNER_LAN(0));
+
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    uint32_t before = v.refusals;
+    /* hw_worker's path for a cloud ota.begin: the gate refuses, ota_refuse_for reports it. */
+    ota_refuse_for(OTA_OWNER_CLOUD, ota_busy_replace_for(OTA_OWNER_CLOUD));
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_ERROR && strstr(v.error, "LAN connection 0") && v.refusals != before,
+          "first refusal not visible to the cloud: %s %s", ota_state_name(v.state), v.error);
+    uint32_t first = v.refusals;
+
+    /* The job's data frames: refused, but not one report per frame. */
+    CHECK(ota_data_by(OTA_OWNER_CLOUD, 0, img, 1024) != 0, "cloud data accepted");
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.refusals == first, "every refused data frame would trigger a status report");
+
+    /* LAN keeps going on a new connection. */
+    CHECK(ota_data_by(OTA_OWNER_LAN(1), 0, img, 1024) == 0, "lan data on a new connection");
+
+    /* The second cloud job: same refusal text, the view already "error". It must still count. */
+    ota_refuse_for(OTA_OWNER_CLOUD, ota_busy_replace_for(OTA_OWNER_CLOUD));
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_ERROR && v.refusals != first,
+          "a repeated refusal is invisible to the cloud (the job would wait for acks forever)");
+    CHECK(ota_get_state() == OTA_RECEIVING && ota_received() == 1024, "the LAN upload was disturbed");
+
+    /* The same holds for a refusal in the cloud's own state (a capture on the bus, twice). */
+    ota_abort();
+    ota_refuse_for(OTA_OWNER_CLOUD, "busy: a capture or upload is running");
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    uint32_t own = v.refusals;
+    ota_refuse_for(OTA_OWNER_CLOUD, "busy: a capture or upload is running");
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_ERROR && v.refusals != own, "a repeated own refusal is invisible");
+    ota_abort();
+    ota_watchdog(0);
+}
+
 /* Tail of test_session_owner: a transport's own refusal and the owner tags. */
 static void test_session_owner_tail(void) {
     /* A transport's own refusal still lands in the global state (single-transport behavior). */
@@ -752,6 +804,7 @@ int main(void) {
     test_session_owner();
     test_lan_connection_per_command();
     test_session_owner_tail();
+    test_cloud_hears_each_refusal();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

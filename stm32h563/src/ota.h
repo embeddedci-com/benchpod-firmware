@@ -121,6 +121,8 @@ typedef struct {
     ota_state_t state;
     uint32_t    received, size;
     const char *error;
+    uint32_t    refusals;   /* changes with every explicit refusal (a begin, abort or commit): a
+                               status report is due even when state and error read as before */
 } ota_view_t;
 void ota_view_for(ota_owner_t who, ota_view_t *out);
 const char *ota_state_name(ota_state_t st);
