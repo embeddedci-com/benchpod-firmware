@@ -523,14 +523,58 @@ static void test_session_owner(void) {
     CHECK(v.state == OTA_RECEIVING, "the old refusal still shows to the cloud");
     CHECK(ota_data_by(lan, 0, img, 1024) != 0, "the old owner still writes into the new session");
 
-    /* The owner's connection closed: the session is abandoned at once, its owner id refused. */
+    /* A second LAN connection is refused while the owner's is open. */
     ota_abort();
     CHECK(ota_begin_owned(lan, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "lan begin");
-    ota_owner_gone(lan);
-    CHECK(ota_data_by(lan, 0, img, 1024) != 0, "data on an orphaned session (a reused connection id)");
-    CHECK(ota_abort_by(OTA_OWNER_CLOUD) == 0, "the server's abort cannot clear an orphaned LAN session");
-    CHECK(ota_get_state() == OTA_IDLE && ota_owner() == OTA_OWNER_NONE, "abort did not clear");
+    CHECK(ota_data_by(OTA_OWNER_LAN(2), 0, img, 1024) != 0, "a second LAN connection wrote while the owner's is open");
+    CHECK(ota_abort_by(OTA_OWNER_LAN(2)) != 0, "a second LAN connection aborted while the owner's is open");
+    CHECK(ota_get_state() == OTA_RECEIVING && ota_owner() == lan, "the second connection disturbed the session");
+    ota_abort();
+}
 
+/* One LAN connection per command (the hwe2e suite, older clients): begin on one connection, each
+   chunk on a new one, end and commit-check on the last; each closes before the next opens. */
+static void test_lan_connection_per_command(void) {
+    enum { N = 4096 };
+    static uint8_t img[N];
+    char hex[65], tag[16], want[16];
+    fill_image(img, N, 12);
+    sha256_hex(img, N, hex);
+    mock_ota_psram_reset();
+    ota_abort();
+    ota_watchdog(5000);
+
+    int conn = 1;
+    CHECK(ota_begin_owned(OTA_OWNER_LAN(conn), N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) == 0, "begin: %s", ota_error());
+    ota_owner_gone(OTA_OWNER_LAN(conn));
+    /* Between two connections the cloud cannot steal it: a closed connection is not abandoned. */
+    CHECK(ota_begin_owned(OTA_OWNER_CLOUD, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) != 0,
+          "the cloud took a per-command LAN upload between connections");
+    CHECK(ota_abort_by(OTA_OWNER_CLOUD) != 0, "the cloud aborted a per-command LAN upload");
+    CHECK(ota_get_state() == OTA_RECEIVING, "the cloud disturbed the LAN upload");
+    for (uint32_t off = 0; off < N; off += 1024) {
+        conn++;                                                /* a new connection per chunk */
+        CHECK(ota_data_by(OTA_OWNER_LAN(conn), off, img + off, 1024) == 0,
+              "data at %lu on connection %d: %s", (unsigned long)off, conn, ota_busy_for(OTA_OWNER_LAN(conn)));
+        CHECK(ota_owner() == OTA_OWNER_LAN(conn), "connection %d did not adopt the session", conn);
+        snprintf(want, sizeof(want), "lan:%d", conn);
+        CHECK(strcmp(ota_owner_tag(ota_owner(), tag, sizeof(tag)), want) == 0, "owner tag %s", tag);
+        ota_owner_gone(OTA_OWNER_LAN(conn));
+    }
+    conn++;
+    CHECK(ota_end_by(OTA_OWNER_LAN(conn)) == 0 && ota_get_state() == OTA_VERIFIED, "end: %s", ota_error());
+    ota_owner_gone(OTA_OWNER_LAN(conn));
+    conn++;
+    CHECK(ota_busy_for(OTA_OWNER_LAN(conn)) == NULL, "the commit connection was refused");
+    CHECK(ota_owner() == OTA_OWNER_LAN(conn), "the commit connection did not adopt");
+    ota_owner_gone(OTA_OWNER_LAN(conn));
+    CHECK(ota_abort_by(OTA_OWNER_LAN(conn + 1)) == 0 && ota_get_state() == OTA_IDLE,
+          "abort on a fresh LAN connection did not clear the session");
+    ota_watchdog(0);
+}
+
+/* Tail of test_session_owner: a transport's own refusal and the owner tags. */
+static void test_session_owner_tail(void) {
     /* A transport's own refusal still lands in the global state (single-transport behavior). */
     ota_refuse_for(OTA_OWNER_CLOUD, "busy: a capture or upload is running");
     CHECK(ota_get_state() == OTA_ERROR && strstr(ota_error(), "capture"), "own refusal not reported");
@@ -706,6 +750,8 @@ int main(void) {
     test_blob_targets();
     test_staging_makes_a_kept_capture_stale();
     test_session_owner();
+    test_lan_connection_per_command();
+    test_session_owner_tail();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

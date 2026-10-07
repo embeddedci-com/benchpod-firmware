@@ -45,7 +45,7 @@ static uint32_t    s_verified_mark_ms;     /* caller clock when VERIFIED was fir
 
 /* Session owner (ota.h). The clock is the one ota_watchdog is fed, so this file stays HAL-free. */
 static ota_owner_t s_owner = OTA_OWNER_NONE;
-static bool        s_orphan;               /* the owner went away: anyone may begin over it   */
+static bool        s_orphan;               /* the owning LAN connection closed: the next one adopts */
 static uint32_t    s_clock_ms;             /* last ota_watchdog clock                          */
 static uint32_t    s_activity_ms;          /* s_clock_ms at the session's last begin/data/end  */
 static ota_owner_t s_ref_owner = OTA_OWNER_NONE;   /* last refusal shown only to this owner   */
@@ -382,12 +382,33 @@ const char *ota_state_name(ota_state_t st) {
 
 static bool session_active(void) { return s_state == OTA_RECEIVING || s_state == OTA_VERIFIED; }
 
-static bool may_act(ota_owner_t who) {
-    return !session_active() || s_owner == OTA_OWNER_NONE || (s_owner == who && !s_orphan);
+static bool is_lan(ota_owner_t who) { return who >= OTA_OWNER_LAN(0); }
+
+/* The LAN owner's connection closed and `who` is another LAN connection: it carries on with the
+   session (clients that open one connection per command, like the hwe2e suite, do exactly this). */
+static bool may_adopt(ota_owner_t who) {
+    return s_orphan && is_lan(who) && is_lan(s_owner);
 }
 
+static bool may_act(ota_owner_t who) {
+    return !session_active() || s_owner == OTA_OWNER_NONE || s_owner == who || may_adopt(who);
+}
+
+/* No progress for OTA_TAKEOVER_IDLE_MS. A closed LAN connection alone does not count: a cloud
+   begin must not steal a LAN upload between two per-command connections. */
 static bool abandoned(void) {
-    return s_orphan || (uint32_t)(s_clock_ms - s_activity_ms) >= OTA_TAKEOVER_IDLE_MS;
+    return (uint32_t)(s_clock_ms - s_activity_ms) >= OTA_TAKEOVER_IDLE_MS;
+}
+
+/* `who` is allowed to act: a LAN connection adopting its transport's orphaned session becomes
+   the owner, so the owner field and later checks name it. */
+static void adopt(ota_owner_t who) {
+    if (session_active() && s_owner != who && may_adopt(who)) {
+        printf("[ota] LAN connection %d takes over the update from closed connection %d\n",
+               who - OTA_OWNER_LAN(0), s_owner - OTA_OWNER_LAN(0));
+        s_owner = who;
+    }
+    if (s_owner == who) s_orphan = false;
 }
 
 static bool may_replace(ota_owner_t who) {
@@ -420,9 +441,9 @@ static const char *busy_msg(void) {
 }
 
 const char *ota_busy_for(ota_owner_t who) {
-    if (may_act(who)) return NULL;
-    if (s_orphan) return "the update's connection closed; begin it again";
-    return busy_msg();
+    if (!may_act(who)) return busy_msg();
+    adopt(who);
+    return NULL;
 }
 
 const char *ota_busy_replace_for(ota_owner_t who) {
@@ -478,16 +499,17 @@ int ota_end_by(ota_owner_t who) {
 }
 
 int ota_abort_by(ota_owner_t who) {
-    if (!may_replace(who)) return -1;
+    if (!may_replace(who)) return -1;   /* includes a LAN connection adopting an orphaned session */
     clear_refusal(who);
     ota_abort();
     return 0;
 }
 
 void ota_owner_gone(ota_owner_t who) {
-    if (session_active() && s_owner == who && who != OTA_OWNER_NONE) {
+    if (session_active() && s_owner == who && is_lan(who)) {
         s_orphan = true;
-        printf("[ota] the owner of the %s update went away; it may be replaced\n", ota_state_str());
+        printf("[ota] the LAN connection of the %s update closed; the next LAN connection may continue it\n",
+               ota_state_str());
     }
 }
 

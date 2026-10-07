@@ -81,9 +81,11 @@ int ota_sig_decode(const char *b64, uint8_t out[128]);
    console (upload-*) and the LAN (ota_* JSON). The session belongs to the transport that began
    it. Another owner's begin is refused with the holder in the message, its data/end/commit are
    refused without touching the session, and only its own refusals put the session in ERROR.
-   A session whose LAN connection closed, or that made no progress for OTA_TAKEOVER_IDLE_MS,
-   counts as abandoned: any owner may begin over it or abort it (the server's "abort" button
-   clears a LAN-staged image that way). The calls without an owner (ota_begin_signed, ota_data,
+   Within the LAN the session belongs to one connection while it is open; once it closes, the
+   next LAN connection adopts the session and carries on (clients that open a connection per
+   command). A session that made no progress for OTA_TAKEOVER_IDLE_MS counts as abandoned: any
+   transport may begin over it or abort it (the server's "abort" button clears a forgotten
+   LAN-staged image that way). A closed LAN connection alone does not let another transport in. The calls without an owner (ota_begin_signed, ota_data,
    ...) skip these checks; the transports use the owned ones. */
 typedef int ota_owner_t;
 #define OTA_OWNER_NONE        0
@@ -95,8 +97,9 @@ typedef int ota_owner_t;
 ota_owner_t ota_owner(void);
 /* "cloud", "usb", "lan:<conn>" ("" when none), for the JSON replies. */
 const char *ota_owner_tag(ota_owner_t who, char *buf, size_t cap);
-/* NULL if `who` may send data/end/commit for the session (none active, or its own), else a
-   refusal naming the holder ("busy: an update from LAN connection 2 is in progress"). */
+/* NULL if `who` may send data/end/commit for the session (none active, its own, or a LAN
+   connection adopting the session of a closed one, which then becomes the owner), else a
+   refusal naming the holder ("busy: firmware update from LAN connection 2 is in progress"). */
 const char *ota_busy_for(ota_owner_t who);
 /* The same for begin and abort, which may also replace an abandoned session. */
 const char *ota_busy_replace_for(ota_owner_t who);
@@ -110,7 +113,7 @@ int ota_abort_by(ota_owner_t who);
    is `who`'s own (or none/abandoned) it goes to ERROR with `why` as before; otherwise the refusal
    is only shown to `who` (ota_view_for), which is how the cloud learns a begin was refused. */
 void ota_refuse_for(ota_owner_t who, const char *why);
-/* `who` went away (a LAN connection closed): its session becomes abandoned. */
+/* `who` went away (a LAN connection closed): the next LAN connection may adopt its session. */
 void ota_owner_gone(ota_owner_t who);
 
 /* What `who` should see in a status report: the session, or the refusal it was last given. */
