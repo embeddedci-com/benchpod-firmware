@@ -85,6 +85,13 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
     return NULL;
 }
 
+const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src) {
+    if (src != POLICY_SRC_LAN) return NULL;
+    static char why[80];
+    snprintf(why, sizeof(why), "%s: change it from the cloud or the USB console", verb);
+    return why;
+}
+
 int pod_policy_sig_from_name(const char *name) {
     if (!name) return -1;
     if (!strcmp(name, "audit")) return FW_SIG_POLICY_AUDIT;

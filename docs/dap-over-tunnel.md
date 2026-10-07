@@ -73,6 +73,11 @@ A connection enters DAP mode exactly like SWD mode does today:
    `len` is little-endian u16, ≤ the advertised packet size. A **zero-length frame**
    (`00 00`) leaves DAP mode and disarms — the connection returns to JSON.
 
+   Every response goes out whole. Before running a packet the pod waits for room for the
+   largest response in the connection's send ring; if the host stops reading for 5 s, the pod
+   does not run the packet: it closes the LAN connection (a cloud tunnel is reset), which
+   disarms SWD.
+
 The frame length is the only thing we add on top of standard CMSIS-DAP; the
 payload is a verbatim CMSIS-DAP v1 command/response. So the same firmware could
 later be exposed to OpenOCD's `cmsis-dap` driver or probe-rs.

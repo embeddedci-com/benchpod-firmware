@@ -9,7 +9,7 @@ CFLAGS  := -std=gnu11 -Wall -Wextra -O1 -I../src -I../port -I. -I../lib/esp_host
 # that was.  These suites link in seconds, so depending on all headers is cheaper than being
 # wrong; it is also why there is no -MMD dependency machinery to get subtly incomplete.
 HEADERS := $(wildcard ../src/*.h) $(wildcard ../port/*.h) $(wildcard *.h) $(wildcard mocks/*.h) \
-           $(wildcard shim/lwip/*.h)
+           $(wildcard shim/lwip/*.h) $(wildcard shim_altcp/*.h) $(wildcard shim_altcp/arch/*.h)
 
 PORTABLE_SRCS := test_portable.c ../src/b64url.c ../src/sensor_bmp280.c ../src/esp_hosted_frame.c
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
@@ -113,6 +113,14 @@ build/test_psram_alloc: $(PSRAMALLOC_SRCS)
 build/test_json: $(JSON_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(JSON_SRCS) -lm -o $@
+
+# The proxy layer compiles against lwIP's real altcp headers; the altcp core and the layers
+# around it are fakes in the test (shim_altcp holds the host lwipopts.h and arch/cc.h).
+PROXY_SRCS := test_altcp_bp_proxy.c ../src/altcp_bp_proxy.c
+PROXY_INC  := -Ishim_altcp -I../lib/stm32_mw_lwip/src/include
+build/test_altcp_bp_proxy: $(PROXY_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(PROXY_INC) $(PROXY_SRCS) -lm -o $@
 
 build/test_conn_tx: $(CONNTX_SRCS)
 	@mkdir -p build
@@ -227,7 +235,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -244,6 +252,7 @@ run: $(TESTS)
 	@./build/test_psram_alloc
 	@./build/test_json
 	@./build/test_conn_tx
+	@./build/test_altcp_bp_proxy
 	@./build/test_cloud_rx
 	@./build/test_uart_status
 	@./build/test_dac_loop_params
