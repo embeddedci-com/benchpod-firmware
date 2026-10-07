@@ -31,6 +31,7 @@
 #include "dap.h"
 #include "swd_ll.h"
 #include "watchdog.h"
+#include "hw_worker.h"   /* hw_worker_submit_tunnel_reset (DAP send stall) */
 #include "board_info.h"
 #include "board_rev.h"
 #include "usb_cc.h"
@@ -975,6 +976,29 @@ static void uart_proxy_end(int conn_id, bool restore_json) {
 static uint8_t dap_rx[2 + DAP_PACKET_SIZE];
 static size_t  dap_rx_have;                 /* bytes accumulated incl. 2-byte header */
 static uint8_t dap_resp[2 + DAP_PACKET_SIZE];
+
+/* A DAP response must go out whole (the host reads [len][packet] frames; a lost or torn one
+   desyncs the session for good), and the request must not run unless its response can: a
+   DAP_Transfer write that ran but whose answer was dropped leaves the host retrying a write the
+   target already took.  So before running a packet, wait for room for the largest response,
+   like send_paced in scpi_server.c: 1 ms sleeps with the worker's watchdog heartbeat (a slow
+   cloud tunnel draining is progress, not a hang), bounded by DAP_SEND_STALL_MS. */
+#ifndef DAP_SEND_STALL_MS
+#define DAP_SEND_STALL_MS 5000u
+#endif
+static int dap_dead_conn = -1;   /* timed out waiting: drop its bytes until it is torn down */
+
+static bool dap_wait_send_room(int conn_id) {
+    const size_t need = 2u + DAP_PACKET_SIZE;
+    if (at_send_avail(conn_id) >= need) return true;
+    absolute_time_t deadline = make_timeout_time_ms(DAP_SEND_STALL_MS);
+    while (at_send_avail(conn_id) < need) {
+        if (time_reached(deadline)) return false;
+        watchdog_heartbeat(WD_TASK_WORKER, "dap-send");
+        sleep_ms(1);
+    }
+    return true;
+}
 
 /* Disarming hands SWCLK/SWDIO back to the LA bank, so the ownership table has to follow. */
 /* One line per DAP session on the console: how much of the session the pod spent executing
@@ -4190,6 +4214,7 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
            through dap_process() on-pod, and write the framed response back.  A
            zero-length frame (or an over-long declared length) leaves DAP mode. */
         if (proto[conn_id] == PROTO_DAP) {
+            if (dap_dead_conn == conn_id) break;   /* being torn down: drop the rest */
             bool leave = false;
             for (;;) {
                 /* fill the 2-byte length header */
@@ -4215,6 +4240,18 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 dap_rx_have = 0;
                 if (payload == 0) { leave = true; break; }   /* zero-length: leave */
 
+                if (!dap_wait_send_room(conn_id)) {
+                    /* The peer stopped reading. Do not run the packet; tear the link down
+                       (command_handler_conn_closed disarms SWD) and drop its bytes until then. */
+                    printf("[dap] conn %d: no room for a response in %u ms; %s\n", conn_id,
+                           (unsigned)DAP_SEND_STALL_MS, is_tunnel_conn(conn_id) ? "resetting the tunnel"
+                                                                                : "closing");
+                    dap_dead_conn = conn_id;
+                    if (is_tunnel_conn(conn_id)) hw_worker_submit_tunnel_reset(conn_id);
+                    else                         at_close_connection(conn_id);
+                    i = len;
+                    break;
+                }
                 absolute_time_t t0 = get_absolute_time();
                 size_t rlen = dap_process(dap_rx + 2, payload,
                                           dap_resp + 2, DAP_PACKET_SIZE);
@@ -4223,6 +4260,7 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 s_dap_stats.bytes   += (uint32_t)(payload + rlen);
                 dap_resp[0] = (uint8_t)(rlen & 0xFF);
                 dap_resp[1] = (uint8_t)((rlen >> 8) & 0xFF);
+                /* Room was checked above and only this task fills the ring, so this is whole. */
                 at_send_data(conn_id, dap_resp, rlen + 2);
             }
             if (leave) {
@@ -4372,6 +4410,7 @@ void command_handler_conn_closed(int conn_id) {
             swd_disarm_and_release();
             dap_rx_have = 0;
         }
+        if (dap_dead_conn == conn_id) dap_dead_conn = -1;
         /* A raw load_bin upload owned by this conn is abandoned — clear its state
            so a stale total/have/dst can't corrupt the next upload (the heavy gate
            is freed by the heavy_release above). */
