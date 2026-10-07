@@ -109,7 +109,9 @@ console command.
 
 `sim/` holds self-checking iverilog testbenches for the individual cores
 (`make dactest adctest psramwrtest dualwrtest lapsramtest measuretest argtest
-steppertest ilatest …`) and two whole-top smoke tests that drive real SPI
-transactions through the SB_IO pads (`make topsmoketest topcapturetest`).
+steppertest …`) and whole-top benches that drive real SPI transactions through
+the SB_IO pads (`make topsmoketest topcapturetest spitest swdqtest` on the loop
+image, `make topdeeptest` on the deep image: replay across bus_own, a capture
+read back mid-replay, overflow cleared by the next arm).
 `make check-protocol` verifies the opcode table is in sync with
 `tools/gen_protocol.py`.
