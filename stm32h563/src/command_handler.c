@@ -863,6 +863,7 @@ static void speedtest_pump(void) {
         if (at_send_data(conn, chunk, room) != 0) { sptx.active = false; return; }
         sptx.sent += room;
     }
+    if (at_send_avail(conn) < 72) return;       /* the done line goes out whole: next poll */
     sptx.active = false;
     speedtest_ack_done(conn, sptx.sent);        /* ordered after the payload in the ring */
 }
@@ -1291,7 +1292,11 @@ void command_handler_poll(void) {
                 uart_upload_suspended = false;
                 (void)fpga_uart_read(uart_rx_buf, sizeof(uart_rx_buf));
             }
-            size_t n = fpga_uart_read(uart_rx_buf, sizeof(uart_rx_buf));
+            /* Read no more than the ring takes whole (at_send_data is all or nothing): what we
+               cannot send yet stays in the FIFO for the next pass instead of being lost. */
+            size_t room = at_send_avail(uart_proxy_conn);
+            if (room > sizeof(uart_rx_buf)) room = sizeof(uart_rx_buf);
+            size_t n = room ? fpga_uart_read(uart_rx_buf, room) : 0;
             if (n > 0) {
                 if (at_send_data(uart_proxy_conn, uart_rx_buf, n) != 0) {
                     /* client gone — auto-stop and reclaim the slot */
