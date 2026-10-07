@@ -360,6 +360,8 @@ $(OUT).bin: $(OUT).asc
 # v46 (CORR-2 ring overflow clear + version; 3895 LC, 74%): swept 1..64 locally: 57/64 reach
 # MIN_CLK48_MHZ (2 miss 48 MHz).  Seed 26 still closes (clk48 54.69, clk 32.69, clk -> clk48
 # 10.19 ns) and stays pinned.  CI sweep not run yet.
+# v47 (GW-1, 3886 LC, 74%): seed 26 still closes (clk48 56.32, clk 31.22, clk -> clk48 11.05 ns);
+# kept, no sweep.
 SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
 SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
@@ -434,7 +436,11 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # 3579 LC, 68%): swept 1..64 locally: ALL 64 reach MIN_CLK48_MHZ (v45: 63/64), eight tie at
 # 59.26 MHz.  Pinned SEED_DEEP 25 -> 50 (clk48 59.26, clk 32.34, clk -> clk48 12.72 ns; 25 ties
 # on clk48 but its clk is 27.94).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 50
+# v47 (GW-1: every arm flushes the writer's staging FIFOs and the LA ring; 3590 LC, 68%): seed 50
+# fell to clk48 49.61 MHz.  Swept 1..64 locally: 60/64 reach MIN_CLK48_MHZ, fourteen tie at
+# 56.95 MHz.  Pinned SEED_DEEP 50 -> 57 (clk48 56.95, clk 34.51, clk -> clk48 12.82 ns; it is in
+# the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 57
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.

@@ -704,7 +704,15 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 46) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 47) ----
+    // GATEWARE_VERSION 47 = v46 + GW-1 (both images, no protocol change): every capture arm,
+    //   including the zero-count abort, empties psram_dual_writer's two staging FIFOs and the LA
+    //   SPRAM ring, and the arm wins over a pop on the same edge in the writer's region-address
+    //   counters.  An aborted capture (the STM32 held the bus, so nothing drained) used to leave
+    //   bytes there that the next capture wrote at the start of its own regions, so every sample
+    //   landed late (or byte-swapped).  tb_psram_dual_writer and tb_top_capture cover it (both
+    //   fail on v46).  Loop 3895 -> 3886 LC, deep 3579 -> 3590.  SEED_LOOP 26 kept (clk48 56.32);
+    //   SEED_DEEP 50 -> 57 (50 fell to 49.61; local sweep 60/64, 57 at 56.95).
     // GATEWARE_VERSION 46 = v45 + two P0 correctness fixes (no protocol change):
     //   * CORR-1 (deep image): the replay reader honours bus_own instead of being reset by it.
     //     v26..v45 held it in reset while the STM32 owned the bus, so a capture read-back during
@@ -1071,7 +1079,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd46), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd47), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
