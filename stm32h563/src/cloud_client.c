@@ -914,7 +914,9 @@ void cloud_client_send_command_response(const char *request_id,
     bp_emit_jstr(&e, request_id);
     bp_emit(&e, ",\"device_id\":\"%s\",%s", s_cfg.device_id, tail);
     if (!bp_emit_ok(&e)) {
-        cl_backoff("command.response too large");
+        /* An error the caller can read, not a reconnect (bp_limits.h sizes the frame for the
+           largest captured reply, so this needs an unusually long request id). */
+        cl_send_command_error(request_id, "reply too large for the cloud channel");
         return;
     }
     cl_send_reply_frame(frame, bp_emit_len(&e));

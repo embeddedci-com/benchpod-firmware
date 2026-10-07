@@ -38,6 +38,7 @@
 #include "nrst_ctrl.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
 #include "bp_limits.h"   /* coupled cloud/command buffer sizes */
+#include "cloud_reply_cap.h"   /* the captured reply of a cloud command.request */
 #include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
 #include "fault.h"       /* reset cause + last-crash summary for status */
 #include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
@@ -151,20 +152,10 @@ bool require_la_voltage(int conn_id) {
 /* ---- Cloud command capture (CH_CLOUD_CONN) ----
    A command.request arriving over the cloud WebSocket is dispatched through the
    normal handlers with conn_id = CH_CLOUD_CONN; at_send_data() routes the reply
-   into this buffer instead of the TCP server so the cloud client can wrap it in
-   a command.response frame. Single-threaded net loop -> one capture at a time.
-   Sized to match the cloud client's reply[] (BP_CLOUD_REPLY_MAX). */
-static char   cloud_cap_buf[BP_CLOUD_REPLY_MAX];
-static size_t cloud_cap_len = 0;
-static bool   cloud_cap_active = false;
-
+   into cloud_reply_cap instead of the TCP server so the cloud client can wrap it in
+   a command.response frame (a reply that does not fit becomes a "too large" error). */
 void command_handler_cloud_capture_append(const uint8_t *buf, size_t len) {
-    if (!cloud_cap_active) return;
-    size_t space = sizeof(cloud_cap_buf) - 1 - cloud_cap_len;
-    if (len > space) len = space;
-    memcpy(cloud_cap_buf + cloud_cap_len, buf, len);
-    cloud_cap_len += len;
-    cloud_cap_buf[cloud_cap_len] = '\0';
+    cloud_reply_cap_append(buf, len);
 }
 
 /* ---- ADC buffer and chunk sender ---- */
@@ -4098,24 +4089,9 @@ size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_
 
     /* Dispatch through the normal handlers; the reply is captured (see
        command_handler_cloud_capture_append) rather than sent to the TCP server. */
-    cloud_cap_active = true;
-    cloud_cap_len    = 0;
-    cloud_cap_buf[0] = '\0';
+    cloud_reply_cap_begin();
     dispatch_line(CH_CLOUD_CONN, command_json);
-    cloud_cap_active = false;
-
-    while (cloud_cap_len > 0 &&
-           (cloud_cap_buf[cloud_cap_len - 1] == '\n' ||
-            cloud_cap_buf[cloud_cap_len - 1] == '\r')) {
-        cloud_cap_buf[--cloud_cap_len] = '\0';
-    }
-    if (cloud_cap_len == 0 || cloud_cap_len >= out_cap) {
-        int n = snprintf(out, out_cap, "{\"status\":\"error\",\"message\":\"no reply\"}");
-        return (n > 0 && (size_t)n < out_cap) ? (size_t)n : 0;
-    }
-    memcpy(out, cloud_cap_buf, cloud_cap_len);
-    out[cloud_cap_len] = '\0';
-    return cloud_cap_len;
+    return cloud_reply_cap_end(out, out_cap);
 }
 
 void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {

@@ -97,6 +97,7 @@ C_SOURCES := \
   src/cloud_config.c \
   src/cloud_client.c \
   src/cloud_caps.c \
+  src/cloud_reply_cap.c \
   src/ws_frame.c \
   src/mbedtls_port.c \
   src/command_handler.c \
