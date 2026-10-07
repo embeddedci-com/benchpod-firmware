@@ -386,6 +386,22 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
        (unsigned long)noresp, (unsigned long)reboot);
 }
 
+/* Console commands that capture into the PSRAM or drive the shared bus.  They go through the
+   same heavy gate as the JSON and SCPI captures: run on the worker between two polls of a LAN
+   capture_dual, a console `adc` used to overwrite the capture the iCE40 was still writing (or a
+   staged OTA image) and read back garbage itself. */
+static bool console_needs_heavy_gate(const char *verb)
+{
+    static const char *const gated[] = {
+        "adc", "measure", "capture-psram", "psram-test", "dualcap", "lastress", "psram",
+        "psram-addrtest", "psram-bench", "psram-clk", "psram-selftest", "cap-selftest",
+        "flash-ice40",
+    };
+    for (size_t i = 0; i < sizeof(gated) / sizeof(gated[0]); i++)
+        if (!strcmp(verb, gated[i])) return true;
+    return false;
+}
+
 static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
 {
     /* wifi-set needs quote-aware parsing (SSID/password may contain spaces), so
@@ -402,6 +418,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     char *tok = strtok(cmd, " \t");
     while (tok && argc < 11) { argv[argc++] = tok; tok = strtok(NULL, " \t"); }
     if (argc == 0) return;
+
+    const bool gated = console_needs_heavy_gate(argv[0]);
+    if (gated && !command_handler_acquire_adc(CH_CONSOLE_TEXT_OWNER)) {
+        op(out, ctx, "  %s refused: busy: a capture, upload or update is using the PSRAM bus; "
+                     "try again when it ends\r\n", argv[0]);
+        return;
+    }
 
     if (!strcmp(argv[0], "help")) {
         cmd_help(out, ctx);
@@ -1282,6 +1305,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     } else {
         op(out, ctx, "  unknown command '%s' (try 'help')\r\n", argv[0]);
     }
+    if (gated) command_handler_release_adc(CH_CONSOLE_TEXT_OWNER);
 }
 
 void console_exec(char *cmd, console_out_t out, void *ctx)

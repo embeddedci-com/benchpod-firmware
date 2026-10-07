@@ -17,6 +17,7 @@
 #include "bp_json.h"
 #include "bp_err.h"
 #include "bp_limits.h"
+#include "boot_guard.h"     /* safe mode: no PSRAM to stage into */
 
 #include <string.h>
 #include <stdlib.h>
@@ -40,6 +41,12 @@ ota_owner_t ota_owner_for_conn(int conn_id) {
 }
 
 const char *ota_begin_gate(ota_owner_t who) {
+    /* Safe mode turned the iCE40/PSRAM bring-up off: the OCTOSPI was never initialised, so there
+       is nowhere to stage. The JSON path already refuses every ota_* command there; the cloud's
+       ota.* frames and the console's upload-begin did not, and staged into an uninitialised bus. */
+    if (boot_guard_skip_hw())
+        return "safe mode: the PSRAM is off this boot, so an update cannot be staged; unplug and "
+               "replug the pod, or flash it over USB DFU";
     const char *why = ota_busy_replace_for(who);   /* another transport's live session */
     if (why) return why;
     /* Staging takes the PSRAM bus, which a running capture or waveform upload owns. "busy" is not
