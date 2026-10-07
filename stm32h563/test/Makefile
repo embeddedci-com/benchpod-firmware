@@ -21,6 +21,7 @@ TGTPWR_SRCS   := test_target_power.c ../src/target_power.c ../src/tca9554.c
 LARATE_SRCS   := test_la_rate.c ../src/la_rate.c
 PSRAMALLOC_SRCS := test_psram_alloc.c ../src/psram_alloc.c
 BUSOWNER_SRCS := test_bus_owner.c ../src/bus_owner.c
+PSRAMREG_SRCS := test_psram_regions.c ../src/psram_regions.c
 JSON_SRCS     := test_json.c ../src/bp_json.c
 CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
 CLOUDRX_SRCS  := test_cloud_rx.c
@@ -66,7 +67,7 @@ PODPOL_SRCS := test_pod_policy.c ../src/pod_policy.c ../src/fw_sign.c ../src/con
 LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_json.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
-OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
+OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 ifneq ($(HAVE_MBEDTLS),)
@@ -115,6 +116,10 @@ build/test_psram_alloc: $(PSRAMALLOC_SRCS)
 build/test_bus_owner: $(BUSOWNER_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BUSOWNER_SRCS) -lm -o $@
+
+build/test_psram_regions: $(PSRAMREG_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(PSRAMREG_SRCS) -lm -o $@
 
 build/test_json: $(JSON_SRCS)
 	@mkdir -p build
@@ -245,7 +250,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -261,6 +266,7 @@ run: $(TESTS)
 	@./build/test_la_rate
 	@./build/test_psram_alloc
 	@./build/test_bus_owner
+	@./build/test_psram_regions
 	@./build/test_json
 	@./build/test_conn_tx
 	@./build/test_altcp_bp_proxy

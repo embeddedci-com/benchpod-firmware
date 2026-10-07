@@ -7,6 +7,7 @@
 #include "w25q.h"
 #include "fw_sign.h"
 #include "b64url.h"
+#include "psram_regions.h"   /* staging lands on the LA capture region */
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -181,6 +182,7 @@ int ota_data(uint32_t offset, const uint8_t *buf, uint32_t len) {
     if (len == 0) return 0;
     if (offset > s_size || len > s_size - offset) { set_err("chunk out of range"); return -1; }
 
+    psram_regions_dirty(OTA_PSRAM_BASE + offset, len, "a firmware update staged into PSRAM");
     psram_bus_acquire();
     int rc = psram_write(OTA_PSRAM_BASE + offset, buf, len);
     psram_bus_release();

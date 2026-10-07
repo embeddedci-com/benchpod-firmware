@@ -40,6 +40,7 @@
 #include "bp_limits.h"   /* coupled cloud/command buffer sizes */
 #include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
 #include "fault.h"       /* reset cause + last-crash summary for status */
+#include "psram_regions.h"  /* capture_read: is the capture still in PSRAM */
 #include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
@@ -1197,6 +1198,7 @@ void command_handler_poll(void) {
                 last_cap.la_samples  = samples;
                 last_cap.adc_rate_hz = 0;
                 last_cap.la_rate_hz  = 0;
+                psram_regions_track(signal_engine_la_cap_base(), (uint32_t)(samples * 2u), 0, 0);
                 printf("[cmd] la_capture: PSRAM data ready (%u samples), streaming back over websocket...\n",
                        (unsigned)samples);
                 bulk_begin_capture16(cid, 0, samples);
@@ -1254,6 +1256,9 @@ void command_handler_poll(void) {
                 last_cap.la_samples  = la_n;
                 last_cap.adc_rate_hz = adc_n ? adc_hz : 0;
                 last_cap.la_rate_hz  = la_n  ? la_hz  : 0;
+                /* capture_read refuses once anything writes over these (psram_regions.h). */
+                psram_regions_track(signal_engine_adc_cap_base(), (uint32_t)(adc_n * 2u),
+                                    signal_engine_la_cap_base(),  (uint32_t)(la_n  * 2u));
                 bulk_begin_capture16(cid, adc_n, la_n);   /* paced send; frees bus+gate when done */
                 bulk.b64 = dualcap.b64;
                 /* report the ACHIEVED rates (0 for a stream with 0 samples) so the
@@ -1565,6 +1570,15 @@ static void handle_capture_dual(int conn_id, const char *json) {
 static void handle_capture_read(int conn_id, const char *json) {
     if (!last_cap.valid) {
         send_error(conn_id, "no capture to resume (run capture_dual first)");
+        return;
+    }
+    /* The samples must still be the capture's: an OTA staging, a load_bin psram, a gateware
+       reload or a SCPI/console capture since then wrote over them. */
+    const char *stale = psram_regions_stale();
+    if (stale) {
+        char why[128];
+        snprintf(why, sizeof(why), "capture data was overwritten by %s; run the capture again", stale);
+        send_error(conn_id, why);
         return;
     }
     char s[16] = {0};
@@ -1899,6 +1913,7 @@ static void handle_load_bin(int conn_id, const char *json) {
         /* Fix the top-anchored DAC base now that we know the total length, so the
            staging writes and the later CMD_START_DAC_PSRAM agree on the base. */
         signal_engine_dac_psram_stage((uint32_t)total);
+        psram_regions_dirty(signal_engine_dac_psram_base(), (uint32_t)total, "a load_bin psram upload");
         load_bin_psram = true;
         load_bin_dst   = NULL;                 /* bytes go to PSRAM, not a RAM buffer */
     } else {
@@ -3491,6 +3506,8 @@ static uint16_t s_loop_step = 0;
    Same defect class as the capture-base desync (see signal_engine_on_gateware_reconfigured);
    called from the same place, ice40_reflash_image(). */
 void command_handler_on_gateware_reconfigured(void) {
+    /* The fabric's capture bases reset and the PSRAM was reset for the config read. */
+    psram_regions_dirty_all("a gateware reload");
     s_loop_src  = DAC_LOOP_SRC_ADC;
     s_loop_in   = 0;
     s_loop_step = 0;

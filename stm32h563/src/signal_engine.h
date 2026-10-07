@@ -184,6 +184,7 @@ void     signal_engine_quiesce_psram_masters(void);
    legacy fixed map on gateware < CAPTURE_BASES_MIN_GW.  LA is normally 0. */
 int      fpga_set_capture_bases(uint32_t la_base, uint32_t adc_base);
 uint32_t signal_engine_adc_cap_base(void);
+uint32_t signal_engine_la_cap_base(void);   /* byte base of the LA capture region */
 
 /* Re-sync the firmware's mirrors of gateware registers after a RECONFIGURATION (the fabric
  * resets them; the mirrors do not).  Called by ice40_reflash_image() — the single point every

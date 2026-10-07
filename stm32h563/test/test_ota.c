@@ -22,6 +22,7 @@
 #include "mbedtls/sha256.h"
 #include "fw_sign.h"
 #include "b64url.h"
+#include "psram_regions.h"
 
 #include "vectors/fwsign_vectors.h"
 
@@ -459,6 +460,25 @@ static void test_image_must_fit_this_flash(void) {
 
 /* Blob targets: the limit is the slot, there is no fw_info check, and commit writes the slot and
    leaves the pod running (state "installed") instead of resetting. */
+/* Staging writes PSRAM 0, the LA capture region: a capture kept for capture_read must go stale. */
+static void test_staging_makes_a_kept_capture_stale(void) {
+    enum { N = 2048 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 9);
+    sha256_hex(img, N, hex);
+    mock_ota_psram_reset();
+    ota_abort();
+    psram_regions_track(0x400000u, 4096u, 0x000000u, 8192u);   /* ADC + LA of a capture_dual */
+    CHECK(ota_begin(N, hex) == 0, "begin: %s", ota_error());
+    CHECK(psram_regions_stale() == NULL, "begin alone made the capture stale");
+    CHECK(ota_data(0, img, 512) == 0, "data: %s", ota_error());
+    CHECK(psram_regions_stale() && strstr(psram_regions_stale(), "firmware update"),
+          "staging over the LA region did not make the capture stale");
+    psram_regions_forget();
+    ota_abort();
+}
+
 static void test_blob_targets(void) {
     enum { N = 6000 };
     static uint8_t img[N];
@@ -603,6 +623,7 @@ int main(void) {
     test_size_limit_on_a_1mb_part();
     test_image_must_fit_this_flash();
     test_blob_targets();
+    test_staging_makes_a_kept_capture_stale();
     test_out_of_order_and_resent_chunks();
     test_corrupted_image_is_rejected();
     test_incomplete_image_is_rejected();

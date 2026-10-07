@@ -29,6 +29,7 @@
 #include "xfer.h"        /* XFER_OK */
 #include "dma_wait.h"    /* GPDMA completion for the read data phase */
 #include "bus_owner.h"   /* owner token + depth for the shared bus */
+#include "psram_regions.h"   /* an STM32 write may land on the last capture */
 #include "FreeRTOS.h"
 #include "task.h"
 #include <string.h>
@@ -324,6 +325,7 @@ int psram_read(uint32_t addr, uint8_t *buf, uint32_t len)   /* QPI 0xEB, chunked
 
 int psram_write(uint32_t addr, const uint8_t *buf, uint32_t len)  /* QPI 0x38; bus must be acquired */
 {
+    psram_regions_dirty(addr, len, "a PSRAM write by the firmware");   /* callers may name it first */
     for (uint32_t off = 0; off < len; off += TCEM_CHUNK_WRITE) {
         uint32_t n = (len - off < TCEM_CHUNK_WRITE) ? (len - off) : TCEM_CHUNK_WRITE;
         if (xspi_xfer(0x38, HAL_XSPI_INSTRUCTION_4_LINES, HAL_XSPI_ADDRESS_4_LINES,
