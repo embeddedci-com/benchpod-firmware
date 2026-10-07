@@ -4,6 +4,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "at_driver.h"
 #include "pod_policy.h"
 #include "fw_sign.h"
 #include "bp_json.h"
@@ -67,11 +68,18 @@ void handle_cloud_ca(int conn_id, const char *json) {
         if (!why) why = cloud_extras_ca_clear();
         if (why) { send_error(conn_id, why); return; }
     }
+    /* Built here, not with send_ok_str: its 256-byte frame cannot hold a certificate list (a
+       long subject, or a chain of several, is several hundred bytes). Worker task only. */
     static char certs[640];
     int n = cloud_extras_ca_describe(certs, sizeof(certs));
-    static char data[700];
-    snprintf(data, sizeof(data), "{\"present\":%s,\"certs\":[%s]}", n > 0 ? "true" : "false", certs);
-    send_ok_str(conn_id, data);
+    static char resp[720];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"present\":%s,\"certs\":[", n > 0 ? "true" : "false");
+    bp_emit_raw(&e, certs);
+    bp_emit_raw(&e, "]}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "cloud_ca: reply too large"); return; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
 /* {"cmd":"cloud_proxy"[,"set":"host:port","user":..,"password":..|"clear":true]}
