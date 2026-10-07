@@ -142,6 +142,17 @@ static void test_cleared_marker_is_none(void) {
     CHECK(cloud_extras_ca_pem(&pem, &len) == 0 && pem == NULL);
 }
 
+static void test_dev_damage_command(void) {
+    install_and_load(test_ca, strlen(test_ca));
+    int before = reloads;
+    CHECK(cloud_extras_ca_damage() == NULL);
+    CHECK(reloads == before + 1);
+    CHECK(cloud_extras_ca_error() && strcmp(cloud_extras_ca_error(), CLOUD_CA_ERR_HASH) == 0);
+    mock_w25q_reset();
+    CHECK(blob_store_init() >= 0);
+    CHECK(cloud_extras_ca_damage() != NULL);   /* nothing installed */
+}
+
 static void test_no_w25q_no_error(void) {
     mock_w25q_reset();
     CHECK(blob_store_init() >= 0);
@@ -156,6 +167,7 @@ int main(void) {
     test_unparsable_ca_falls_back();
     test_out_of_memory_is_not_roots_only();
     test_cleared_marker_is_none();
+    test_dev_damage_command();
     test_no_w25q_no_error();
     CHECK(mock_w25q_open_depth == 0);
     if (failures) { printf("test_cloud_extras: %d FAILED\n", failures); return 1; }

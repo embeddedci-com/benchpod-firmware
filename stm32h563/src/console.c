@@ -927,6 +927,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (why) op(out, ctx, "sig-policy error %s\r\n", why);
         else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
                     (unsigned)fw_sign_key_count());
+#if !defined(BENCHPOD_RELEASE)
+    } else if (!strcmp(argv[0], "ca-damage")) {
+        /* Development builds: damage the company CA slot to try the built-in-roots fallback. */
+        const char *why = cloud_extras_ca_damage();
+        if (why) op(out, ctx, "ca-damage error %s\r\n", why);
+        else     op(out, ctx, "ca-damage ok (ca error %s)\r\n",
+                    cloud_extras_ca_error() ? cloud_extras_ca_error() : "none");
+#endif
     } else if (!strcmp(argv[0], "ca") || !strcmp(argv[0], "ca-clear")) {
         if (!strcmp(argv[0], "ca-clear")) {
             const char *why = cloud_extras_ca_clear();

@@ -202,6 +202,23 @@ const char *cloud_extras_ca_clear(void) {
     return NULL;
 }
 
+#if !defined(BENCHPOD_RELEASE)
+const char *cloud_extras_ca_damage(void) {
+    const blob_info_t *in = blob_store_info(BLOB_CA);
+    if (!in || !in->present || in->len < CA_MIN_BYTES) return "no company CA installed";
+    if (w25q_open() != 0) return "the W25Q flash does not answer";
+    /* NOR can only clear bits: clear the lowest set bit of a byte in the middle of the PEM. */
+    uint32_t addr = blob_slot_base(BLOB_CA) + BLOB_HDR_SIZE + in->len / 2u;
+    uint8_t b = 0;
+    int rc = w25q_read(addr, &b, 1);
+    if (rc == 0 && b) { b &= (uint8_t)(b - 1u); rc = w25q_program(addr, &b, 1); }
+    w25q_close();
+    if (rc != 0 || !b) return "could not change the slot";
+    cloud_extras_ca_changed();
+    return NULL;
+}
+#endif
+
 int cloud_extras_ca_pem(char **out, size_t *len_with_nul) {
     *out = NULL;
     *len_with_nul = 0;

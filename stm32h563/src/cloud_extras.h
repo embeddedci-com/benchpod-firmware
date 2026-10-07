@@ -56,6 +56,11 @@ bool  cloud_extras_ca_tls_refused(void);
 #define CLOUD_CA_ERR_HASH   "corrupt (slot hash mismatch)"
 #define CLOUD_CA_ERR_PARSE  "unparsable (not a valid PEM X.509 certificate)"
 const char *cloud_extras_ca_error(void);
+#if !defined(BENCHPOD_RELEASE)
+/* Development builds: clear one bit in the installed company CA's slot data (the slot hash then
+   fails) and reload, to try the fallback on hardware (console "ca-damage"). NULL = done. */
+const char *cloud_extras_ca_damage(void);
+#endif
 void  cloud_extras_free(void *p);
 /* Describe the installed company CA as JSON array items {"subject":..,"sha256":..} into out;
    returns the number of certificates (0 = none). Worker. */
