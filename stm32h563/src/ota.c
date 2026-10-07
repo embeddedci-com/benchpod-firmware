@@ -306,9 +306,9 @@ ota_state_t ota_get_state(void) { return s_state; }
  * Without this the pod sits in OTA_RECEIVING FOREVER after an interrupted push — measured: an
  * ota_begin with no data left it "receiving" indefinitely, and only an explicit ota_abort ever
  * cleared it. That is what made a wedged transfer leave the pod DEGRADED rather than merely
- * failing one job: while an OTA is nominally in flight the cloud client uses its longer
- * OTA_IDLE_TIMEOUT_MS budget, so it is slower to notice a dead downlink and reconnect, and the
- * staging claim keeps the PSRAM path occupied. The next command or update then fails against a
+ * failing one job: while an OTA is nominally in flight the cloud client uses its own
+ * OTA_IDLE_TIMEOUT_MS budget (once longer than the normal one), and the staging claim keeps the
+ * PSRAM path occupied. The next command or update then fails against a
  * device that is still "offline", which reads as the pod being broken long after the transfer
  * that broke it.
  *
