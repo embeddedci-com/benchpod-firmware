@@ -500,3 +500,31 @@ void la_trigger_emit(bp_emit_t *e, const la_trigger_t *t, bool fired) {
     bp_emit(e, "\"trigger\":{\"la\":%u,\"edge\":\"%s\",\"fired\":%s}",
             (unsigned)t->la, la_edge_name(t->edge), fired ? "true" : "false");
 }
+
+/* ---- step train arguments ---- */
+
+bool la_step_parse_u32(const char *s, uint32_t *out) {
+    if (!s || !*s) return false;
+    uint64_t v = 0;
+    for (; *s; s++) {
+        if (*s < '0' || *s > '9') return false;
+        v = v * 10u + (uint64_t)(*s - '0');
+        if (v > 0xFFFFFFFFull) return false;
+    }
+    *out = (uint32_t)v;
+    return true;
+}
+
+bool la_step_args_ok(uint32_t steps, uint32_t delay_us, char *err, size_t cap) {
+    if (steps == 0 || steps > LA_STEP_MAX_STEPS) {
+        snprintf(err, cap, "steps must be 1..%u (the step counter is 16-bit): split a longer move "
+                 "into several trains", (unsigned)LA_STEP_MAX_STEPS);
+        return false;
+    }
+    if (delay_us < LA_STEP_MIN_DELAY_US || delay_us > LA_STEP_MAX_DELAY_US) {
+        snprintf(err, cap, "delay_us must be %u..%u (microseconds per half-phase: a step takes "
+                 "2 x delay_us)", (unsigned)LA_STEP_MIN_DELAY_US, (unsigned)LA_STEP_MAX_DELAY_US);
+        return false;
+    }
+    return true;
+}

@@ -445,12 +445,8 @@ int adc_probe_one(uint8_t *out_value);
 #define LA_CHANNEL_MIN       1u
 #define LA_CHANNEL_MAX       14u
 
-/* Stepper bounds.  steps + delay_us are 16-bit fields in the gateware
- * (cmd_dispatch GPIO_STEP: [channel][steps(2)][delay_us(2)]), so both cap at
- * 0xFFFF.  delay_us is microseconds per half-phase. */
-#define LA_STEP_MIN_DELAY_US 4u
-#define LA_STEP_MAX_DELAY_US 65535u
-#define LA_STEP_MAX_STEPS    65535u
+/* Stepper bounds (LA_STEP_*): la_pins.h. */
+#include "la_pins.h"
 
 /* Drive an LA channel: mode 0 = low, 1 = high, 2 = high-Z.
    Returns 0 on success, -1 if channel is outside LA1..LA14. */

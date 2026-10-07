@@ -132,6 +132,18 @@ typedef struct {
    else is a conflict. */
 bool la_pins_plan_step(unsigned la, unsigned dir_la, la_step_plan_t *plan, char *err, size_t cap);
 
+/* Step train bounds.  steps and delay_us are 16-bit fields in the gateware (cmd_dispatch
+   GPIO_STEP: [channel][steps(2)][delay_us(2)], stepper_engine.v), so both cap at 0xFFFF.
+   delay_us is microseconds per HALF-phase: a full step period is 2 * delay_us. */
+#define LA_STEP_MIN_DELAY_US 4u
+#define LA_STEP_MAX_DELAY_US 65535u
+#define LA_STEP_MAX_STEPS    65535u
+/* A plain decimal string ("70000", not "7e4", "-1" or "12x") into *out; false if it is not one
+   or does not fit 32 bits.  atoi() read "1e5" as 1 step. */
+bool la_step_parse_u32(const char *s, uint32_t *out);
+/* steps and delay_us inside the bounds above; else false with a message that names the range. */
+bool la_step_args_ok(uint32_t steps, uint32_t delay_us, char *err, size_t cap);
+
 /* ---- JSON ---- */
 /* {"la":1,"function":"none","gpio":null,"level":null,"pull":{"dir":"up","ohms":"4.7k","on":false}} */
 void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask);

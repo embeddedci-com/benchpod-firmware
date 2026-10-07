@@ -91,11 +91,7 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
     la_step_plan_t plan;
     if (!la_pins_plan_step(la, dir_la, &plan, err, cap))
         return strncmp(err, "pin conflict:", 13) == 0 ? -3 : -1;
-    if (steps == 0 || steps > LA_STEP_MAX_STEPS ||
-        delay_us < LA_STEP_MIN_DELAY_US || delay_us > LA_STEP_MAX_DELAY_US) {
-        snprintf(err, cap, "invalid args");
-        return -1;
-    }
+    if (!la_step_args_ok(steps, delay_us, err, cap)) return -1;
     if (s_step.active || fpga_la_step_busy()) { snprintf(err, cap, "busy"); return -2; }
 
     /* Direction first, so the first pulse already sees it. */

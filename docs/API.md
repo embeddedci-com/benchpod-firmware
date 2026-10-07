@@ -1269,7 +1269,9 @@ the current bank voltage (`1` = bank at 3.3 V).
 | Condition | Message |
 |---|---|
 | step request without `la` / `delay_us` | `"missing la"` / `"missing delay_us"` |
-| `steps` ≤ 0 / `delay_us` ≤ 0 | `"invalid steps"` / `"invalid delay_us"` |
+| `steps` / `delay_us` not a plain non-negative integer | `"invalid steps"` / `"invalid delay_us"` |
+| `steps` outside 1..65535 (the gateware step counter is 16-bit) | `"steps must be 1..65535 (the step counter is 16-bit): split a longer move into several trains"` |
+| `delay_us` outside 4..65535 | `"delay_us must be 4..65535 (microseconds per half-phase: a step takes 2 x delay_us)"` |
 | a step train is already running | `"busy"` |
 | step `la` invalid or out of range | `"invalid args"` |
 | `dir_la` invalid, or equal to `la` | `"invalid dir_la"` / `"dir_la must be a different pin than la"` |
