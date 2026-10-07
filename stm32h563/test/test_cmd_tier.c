@@ -58,6 +58,9 @@ static void test_mixed_verbs(void) {
     expect("sig_policy", "{\"cmd\":\"sig_policy\",\"set\":\"required\"}", CMD_TIER_T2);
     expect("lan_policy", "{\"cmd\":\"lan_policy\"}", CMD_TIER_T0);
     expect("lan_policy", "{\"cmd\":\"lan_policy\",\"set\":\"off\"}", CMD_TIER_T2);
+    expect("cloud_ca", "{\"cmd\":\"cloud_ca\"}", CMD_TIER_T0);
+    expect("cloud_ca", "{\"cmd\":\"cloud_ca\",\"clear\":true}", CMD_TIER_T2);
+    expect("cloud_proxy", "{\"cmd\":\"cloud_proxy\",\"set\":\"p:3128\"}", CMD_TIER_T2);
 }
 
 /* Every `strcmp(cmd, "<verb>")` inside dispatch_line() must be in the table. */

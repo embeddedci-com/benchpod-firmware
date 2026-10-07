@@ -4,6 +4,7 @@
 #include "blob_store.h"
 #include "signal_engine.h"
 #include "esp_wifi_ctrl.h"
+#include "cloud_extras.h"
 #include <stdio.h>
 
 void blob_store_on_installed(blob_id_t id)
@@ -18,6 +19,9 @@ void blob_store_on_installed(blob_id_t id)
         break;
     case BLOB_ESP:
         esp_wifi_ctrl_image_installed();
+        break;
+    case BLOB_CA:
+        cloud_extras_ca_changed();   /* reload it and reconnect the cloud with it */
         break;
     default:
         break;

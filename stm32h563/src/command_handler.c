@@ -2335,7 +2335,7 @@ static void handle_status(int conn_id) {
     bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
-                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,",
+                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",
             fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count(),
             pod_policy_lan_name(pod_policy_lan()));
     {
@@ -4030,6 +4030,8 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id);
     else if (strcmp(cmd, "sig_policy")   == 0) handle_sig_policy(conn_id, buf);
     else if (strcmp(cmd, "lan_policy")   == 0) handle_lan_policy(conn_id, buf);
+    else if (strcmp(cmd, "cloud_ca")     == 0) handle_cloud_ca(conn_id, buf);
+    else if (strcmp(cmd, "cloud_proxy")  == 0) handle_cloud_proxy(conn_id, buf);
     else send_error(conn_id, "unknown cmd");
 }
 

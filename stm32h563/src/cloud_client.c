@@ -26,6 +26,9 @@
 #include "fw_sign.h"
 #include "pod_policy.h"
 #include "lease_gate.h"
+#include "cloud_extras.h"
+#include "altcp_bp_proxy.h"
+#include "mbedtls/base64.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
 
 #include "FreeRTOS.h"
@@ -120,6 +123,13 @@ static char             s_sig[B64URL_ENCODED_LEN(DEVICE_ID_SIG_LEN) + 1];
 /* ---- LwIP transport ---- */
 static struct altcp_pcb        *s_pcb = NULL;        /* the link we currently own, or NULL */
 static struct altcp_tls_config *s_tls_conf = NULL;   /* created once, reused */
+/* The proxy settings of the current connect attempt (cloud_extras.h) and the CONNECT layer's
+   config, which must outlive the pcb. */
+static cloud_proxy_t                 s_proxy;
+static struct altcp_bp_proxy_config  s_proxy_conf;
+static char                          s_proxy_auth[160];
+/* How long after boot the first connect waits for the W25Q settings. */
+#define CL_EXTRAS_WAIT_MS 20000u
 /* Sign the login with v1 instead of v2: set after a 401 to a v2 login (an older server). */
 static bool s_auth_v1;
 static ip_addr_t                s_ip;                /* resolved server address */
@@ -442,23 +452,49 @@ static void cl_err_cb(void *arg, err_t err) {
    (with SNI) vs plain altcp. Returns false on immediate failure. */
 static bool cl_open(bool tls, uint16_t port) {
     struct altcp_pcb *pcb;
+    /* The bottom of the stack: plain TCP, or the HTTP CONNECT layer when a proxy is set
+       (cloud_extras.h); TLS goes on top of either, so it starts only once the tunnel is up. */
+    struct altcp_pcb *base;
+    if (s_proxy.host[0]) {
+        ip_addr_copy(s_proxy_conf.proxy_addr, s_ip);
+        s_proxy_conf.proxy_port  = s_proxy.port;
+        s_proxy_conf.target_host = s_cfg.host;
+        s_proxy_conf.auth_b64    = NULL;
+        s_proxy_conf.last_status = 0;
+        if (s_proxy.user[0]) {
+            char up[CLOUD_PROXY_USER_MAX + CLOUD_PROXY_PASS_MAX + 2];
+            int n = snprintf(up, sizeof(up), "%s:%s", s_proxy.user, s_proxy.pass);
+            size_t olen = 0;
+            if (n > 0 && mbedtls_base64_encode((unsigned char *)s_proxy_auth, sizeof(s_proxy_auth), &olen,
+                                               (const unsigned char *)up, (size_t)n) == 0)
+                s_proxy_conf.auth_b64 = s_proxy_auth;
+            memset(up, 0, sizeof(up));
+        }
+        base = altcp_bp_proxy_new_tcp(&s_proxy_conf, IPADDR_TYPE_V4);
+    } else {
+        base = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
+    }
+    if (!base) return false;
     if (tls) {
         if (!s_tls_conf) {
-            /* TLS always anchors trust on the embedded ISRG roots (Let's Encrypt) so
-               the server cert chain + hostname are validated in cl_tls_verified() after
-               the handshake. authmode is VERIFY_OPTIONAL (the handshake completes; we
-               check the result ourselves and drop the link on a verify failure). The
-               old no-CA/unauthenticated bring-up path has been removed. */
-            s_tls_conf = altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
-            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); return false; }
+            /* TLS always anchors trust on the embedded ISRG roots (Let's Encrypt), plus the
+               company CA when one is installed (cloud_extras.h), so the server cert chain +
+               hostname are validated in cl_tls_verified() after the handshake. authmode is
+               VERIFY_OPTIONAL (the handshake completes; we check the result ourselves and
+               drop the link on a verify failure). */
+            size_t ca_len = 0;
+            char *ca = cloud_extras_ca_pem(&ca_len);
+            s_tls_conf = ca ? altcp_tls_create_config_client((const u8_t *)ca, ca_len)
+                            : altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
+            if (ca) cloud_extras_free(ca);
+            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); altcp_abort(base); return false; }
         }
-        pcb = altcp_tls_new(s_tls_conf, IPADDR_TYPE_V4);
-        if (!pcb) { printf("[cloud] altcp_tls_new failed (out of mem?)\n"); return false; }
+        pcb = altcp_tls_wrap(s_tls_conf, base);
+        if (!pcb) { printf("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }
         mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)altcp_tls_context(pcb);
         if (ssl) mbedtls_ssl_set_hostname(ssl, s_cfg.host);   /* SNI + CN/SAN check host */
     } else {
-        pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
-        if (!pcb) return false;
+        pcb = base;
     }
 
     altcp_arg(pcb, NULL);
@@ -677,7 +713,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,\"lease_state\":true,"
+        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
         "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
@@ -1288,12 +1324,19 @@ void cloud_client_poll(void) {
         return;
 
     case CL_WAIT_WIFI:
-        if (wifi_get_state() == WIFI_READY) cl_set_state(CL_RESOLVE);
+        /* Also wait (up to CL_EXTRAS_WAIT_MS after boot) for the company CA and proxy settings,
+           which the hw worker reads from the W25Q at boot (cloud_extras.h). */
+        if (wifi_get_state() == WIFI_READY &&
+            (cloud_extras_ready() || to_ms_since_boot(get_absolute_time()) > CL_EXTRAS_WAIT_MS))
+            cl_set_state(CL_RESOLVE);
         return;
 
     case CL_RESOLVE: {
         s_dns = DNS_PENDING;
-        err_t e = dns_gethostbyname(s_cfg.host, &s_ip, cl_dns_cb, NULL);
+        /* Through a proxy only the proxy needs resolving: the CONNECT line names the server and
+           the proxy resolves it (corporate networks often cannot resolve outside names). */
+        cloud_extras_proxy_get(&s_proxy);
+        err_t e = dns_gethostbyname(s_proxy.host[0] ? s_proxy.host : s_cfg.host, &s_ip, cl_dns_cb, NULL);
         if (e == ERR_OK)             s_dns = DNS_OK;        /* cached */
         else if (e == ERR_INPROGRESS) s_dns = DNS_PENDING;
         else { cl_set_error("dns lookup failed"); cl_dns_backoff("dns request failed"); return; }
@@ -1328,7 +1371,13 @@ void cloud_client_poll(void) {
             cl_set_state(CL_CHAL_WAIT);
             return;
         }
-        if (s_link == LINK_FAILED) { cl_backoff("challenge connect failed"); return; }
+        if (s_link == LINK_FAILED || s_dropped) {
+            if (s_proxy.host[0] && s_proxy_conf.last_status && s_proxy_conf.last_status != 200)
+                cl_set_error("the proxy refused the connection (HTTP %u%s)", (unsigned)s_proxy_conf.last_status,
+                             s_proxy_conf.last_status == 407 ? ": proxy user or password" : "");
+            cl_backoff("challenge connect failed");
+            return;
+        }
         if (time_reached(s_deadline)) {
             cl_set_error(s_tcp_up ? "tls handshake timed out" : "tcp connect timed out");
             cl_backoff("challenge connect timeout");

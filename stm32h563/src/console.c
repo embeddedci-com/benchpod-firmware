@@ -63,6 +63,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "upload_rx.h"
 #include "flash_layout.h"
 #include "pod_policy.h"
+#include "cloud_extras.h"
 #include "fw_sign.h"
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
@@ -181,6 +182,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
+        "  ca | ca-clear                              company CA for the cloud link (upload-begin ca ...)\r\n"
+        "  proxy | proxy-set <host:port> [user pass] | proxy-clear   HTTP proxy for the cloud link\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -924,6 +927,43 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (why) op(out, ctx, "sig-policy error %s\r\n", why);
         else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
                     (unsigned)fw_sign_key_count());
+    } else if (!strcmp(argv[0], "ca") || !strcmp(argv[0], "ca-clear")) {
+        if (!strcmp(argv[0], "ca-clear")) {
+            const char *why = cloud_extras_ca_clear();
+            if (why) op(out, ctx, "ca-clear error %s\r\n", why);
+            else     op(out, ctx, "ca-clear ok\r\n");
+        } else {
+            /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
+            static char certs[640];
+            int n = cloud_extras_ca_describe(certs, sizeof(certs));
+            if (n == 0) op(out, ctx, "ca none\r\n");
+            for (char *p = certs; n > 0 && (p = strstr(p, "{\"subject\":\"")) != NULL; ) {
+                p += 12;
+                char *se = strchr(p, '"');
+                char *h = se ? strstr(se, "\"sha256\":\"") : NULL;
+                if (!se || !h) break;
+                *se = '\0';
+                h += 10;
+                op(out, ctx, "ca %s %.64s\r\n", p, h);
+                p = h + 64;
+            }
+        }
+    } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
+        const char *why = NULL;
+        if (!strcmp(argv[0], "proxy-set"))
+            why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
+                           : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
+        else if (!strcmp(argv[0], "proxy-clear"))
+            why = cloud_extras_proxy_set(NULL, NULL, NULL);
+        if (why) {
+            op(out, ctx, "proxy error %s\r\n", why);
+        } else {
+            cloud_proxy_t p;
+            cloud_extras_proxy_get(&p);
+            if (p.host[0]) op(out, ctx, "proxy %s:%u %s\r\n", p.host, (unsigned)p.port, p.user[0] ? "auth" : "noauth");
+            else           op(out, ctx, "proxy none\r\n");
+            memset(&p, 0, sizeof(p));
+        }
     } else if (!strcmp(argv[0], "lan-policy")) {
         const char *why = NULL;
         if (argc >= 2) {

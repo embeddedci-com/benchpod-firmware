@@ -7,6 +7,9 @@
 #include "pod_policy.h"
 #include "fw_sign.h"
 #include "bp_json.h"
+#include "cloud_extras.h"
+
+#include <string.h>
 
 #include <stdio.h>
 
@@ -49,5 +52,48 @@ void handle_lan_policy(int conn_id, const char *json) {
     }
     char data[48];
     snprintf(data, sizeof(data), "{\"policy\":\"%s\"}", pod_policy_lan_name(pod_policy_lan()));
+    send_ok_str(conn_id, data);
+}
+
+/* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */
+
+/* {"cmd":"cloud_ca"[,"clear":true]} -> {"present":bool,"certs":[{"subject":..,"sha256":..}]}
+   Installing one goes through the upload path (OTA target "ca"). */
+void handle_cloud_ca(int conn_id, const char *json) {
+    char v[8] = {0};
+    if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
+        const char *why = cloud_extras_ca_clear();
+        if (why) { send_error(conn_id, why); return; }
+    }
+    static char certs[640];
+    int n = cloud_extras_ca_describe(certs, sizeof(certs));
+    static char data[700];
+    snprintf(data, sizeof(data), "{\"present\":%s,\"certs\":[%s]}", n > 0 ? "true" : "false", certs);
+    send_ok_str(conn_id, data);
+}
+
+/* {"cmd":"cloud_proxy"[,"set":"host:port","user":..,"password":..|"clear":true]}
+   -> {"host":..,"port":N,"auth":bool}, or {} when none (never the password). */
+void handle_cloud_proxy(int conn_id, const char *json) {
+    char spec[80] = {0}, user[CLOUD_PROXY_USER_MAX] = {0}, pass[CLOUD_PROXY_PASS_MAX] = {0}, v[8] = {0};
+    const char *why = NULL;
+    if (bp_json_get(json, "set", spec, sizeof(spec))) {
+        bp_json_get(json, "user", user, sizeof(user));
+        bp_json_get(json, "password", pass, sizeof(pass));
+        why = cloud_extras_proxy_set(spec, user, pass);
+        memset(pass, 0, sizeof(pass));
+    } else if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
+        why = cloud_extras_proxy_set(NULL, NULL, NULL);
+    }
+    if (why) { send_error(conn_id, why); return; }
+    cloud_proxy_t p;
+    cloud_extras_proxy_get(&p);
+    char data[160];
+    if (p.host[0])
+        snprintf(data, sizeof(data), "{\"host\":\"%s\",\"port\":%u,\"auth\":%s}", p.host,
+                 (unsigned)p.port, p.user[0] ? "true" : "false");
+    else
+        snprintf(data, sizeof(data), "{}");
+    memset(&p, 0, sizeof(p));
     send_ok_str(conn_id, data);
 }

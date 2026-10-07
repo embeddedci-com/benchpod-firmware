@@ -64,7 +64,7 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
-static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp" };
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca" };
 
 int ota_target_from_name(const char *name) {
     if (!name || !name[0]) return OTA_TARGET_FIRMWARE;
@@ -80,7 +80,16 @@ const char *ota_target_name(ota_target_t t) {
 ota_target_t ota_target(void) { return s_target; }
 
 /* The blob slot a target writes (only for a blob target). */
-static blob_id_t target_blob(ota_target_t t) { return (blob_id_t)(t - OTA_TARGET_GW0); }
+static blob_id_t target_blob(ota_target_t t) {
+    return t == OTA_TARGET_CA ? BLOB_CA : (blob_id_t)(t - OTA_TARGET_GW0);
+}
+
+/* A configuration blob must make sense before it is installed (the company CA must parse);
+   cloud_extras.c provides the check on the pod, the host tests take this default. 0 = fine. */
+__attribute__((weak)) int ota_validate_staged(ota_target_t t, uint32_t size, char *why, size_t cap) {
+    (void)t; (void)size; (void)why; (void)cap;
+    return 0;
+}
 
 static uint32_t target_max_size(ota_target_t t) {
     return t == OTA_TARGET_FIRMWARE ? ota_max_size() : blob_slot_capacity(target_blob(t));
@@ -140,14 +149,16 @@ int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target,
                      const uint8_t *sig, size_t sig_len) {
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
-    if ((unsigned)target > OTA_TARGET_ESP) { set_err("bad target"); return -1; }
+    if ((unsigned)target > OTA_TARGET_CA) { set_err("bad target"); return -1; }
     s_target  = target;
     s_version = version;
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
     uint8_t expect[32];
     if (parse_sha256_hex(sha256_hex, expect) != 0) { set_err("bad sha256"); return -1; }
     s_size = size;
-    if (check_signature(sig, sig_len, expect) != 0) return -1;
+    /* Signatures cover code (firmware, gateware, the C3 image); the company CA is configuration
+       an admin installs, so it is neither checked nor refused by the signature policy. */
+    if (target != OTA_TARGET_CA && check_signature(sig, sig_len, expect) != 0) return -1;
     memcpy(s_expect, expect, 32);
     s_size     = size;
     s_received = 0;
@@ -249,6 +260,13 @@ static int staged_keeps_enforcement(void) {
     return -1;
 }
 
+int ota_read_staged(uint32_t off, uint8_t *buf, uint32_t n) {
+    psram_bus_acquire();
+    int rc = psram_read(OTA_PSRAM_BASE + off, buf, n);
+    psram_bus_release();
+    return rc;
+}
+
 int ota_end(void) {
     if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
     if (s_received < s_size) { set_err("incomplete image"); return -1; }
@@ -257,6 +275,10 @@ int ota_end(void) {
     if (rc > 0) { set_err("sha256 mismatch"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE && staged_fits_this_flash() != 0) return -1;
     if (s_target == OTA_TARGET_FIRMWARE && staged_keeps_enforcement() != 0) return -1;
+    if (s_target == OTA_TARGET_CA) {
+        char why[64] = "";
+        if (ota_validate_staged(s_target, s_size, why, sizeof(why)) != 0) { set_err(why[0] ? why : "invalid"); return -1; }
+    }
     s_state = OTA_VERIFIED;
     printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;
