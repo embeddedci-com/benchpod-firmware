@@ -1435,13 +1435,15 @@ void cloud_client_poll(void) {
                 if (!cl_status_is_101(s_rx, i)) {
                     int code = cl_http_status(s_rx, i);
                     cl_set_error("websocket upgrade failed (HTTP %d)", code);
-                    /* A server from before the host-bound login rejects the v2 signature: try v1
-                       next time. Safe, because a server that knows v2 refuses v1 from any pod
-                       that has logged in with v2 once (cloud-hardening.md section 1). */
-                    if (code == 401 && !s_auth_v1) {
+                    /* A server from before the host-bound login rejects the v2 signature (HTTP
+                       403 "signature mismatch" on those servers, 401 on newer ones): try v1 next
+                       time. Safe, because a server that knows v2 refuses v1 from any pod that has
+                       logged in with v2 once (cloud-hardening.md section 1). */
+                    bool auth_refused = (code == 401 || code == 403);
+                    if (auth_refused && !s_auth_v1) {
                         s_auth_v1 = true;
-                        printf("[cloud] login v2 refused (HTTP 401): next attempt signs v1\n");
-                    } else if (code == 401) {
+                        printf("[cloud] login v2 refused (HTTP %d): next attempt signs v1\n", code);
+                    } else if (auth_refused) {
                         s_auth_v1 = false;   /* v1 refused too: back to v2 */
                     }
                     cl_backoff("ws handshake rejected");
