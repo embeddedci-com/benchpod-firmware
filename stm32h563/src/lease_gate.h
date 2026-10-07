@@ -24,7 +24,12 @@ void lease_gate_update(bool held, const char *holder, uint32_t expires_in_s, uin
 /* The cloud link dropped: whatever the server said no longer holds. */
 void lease_gate_clear(void);
 
-/* Is a lease in force at now_ms? *left_s (may be NULL) gets the seconds left, rounded up. */
+/* Net task (the writer), every poll: forget a lease past its deadline, so a stale deadline
+   cannot read as live again once the millisecond clock has moved on by 2^31 ms. */
+void lease_gate_expire(uint32_t now_ms);
+
+/* Is a lease in force at now_ms? *left_s (may be NULL) gets the seconds left, rounded up.
+   Read-only: safe from any task. */
 bool lease_gate_active(uint32_t now_ms, uint32_t *left_s);
 /* The holder label of the current lease ("" when none). */
 const char *lease_gate_holder(void);

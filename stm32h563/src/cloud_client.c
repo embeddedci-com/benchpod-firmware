@@ -1337,6 +1337,7 @@ void cloud_client_poll(void) {
         s_diag_req = false;
         cloud_client_log_link_state(s_diag_tag ? s_diag_tag : "req");
     }
+    lease_gate_expire(HAL_GetTick());   /* the lease's writer is this task: it ends it too */
     switch (s_state) {
     case CL_DISABLED:
         return;
