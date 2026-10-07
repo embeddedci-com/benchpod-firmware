@@ -16,7 +16,9 @@ struct altcp_bp_proxy_config {
   u16_t       proxy_port;
   const char *target_host;   /* the server's host name for the CONNECT line */
   const char *auth_b64;      /* base64("user:password") or NULL */
-  u16_t       last_status;   /* the proxy's reply code of the last attempt (200 = tunnel up) */
+  u16_t       last_status;   /* the proxy's reply code of the last attempt (200 = tunnel up,
+                                0 = no reply) */
+  u8_t        closed_early;  /* 1: the proxy closed the connection before it replied */
 };
 
 /* A proxy layer over a new TCP pcb. Connect it (or a TLS pcb wrapped around it) to the target

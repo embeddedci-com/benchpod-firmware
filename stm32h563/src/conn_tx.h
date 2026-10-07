@@ -27,8 +27,9 @@
    command / out of range). */
 int conn_tx_slot(int conn_id);
 
-/* Producer (worker): append up to len bytes; returns the number actually queued
-   (< len if the ring filled).  Returns 0 for a conn with no ring. */
+/* Producer (worker): append all len bytes, or none: returns len, or 0 when the ring does not
+   have room for all of them (nothing is queued then) or the conn has no ring.  A sender that
+   needs to stream more than fits checks conn_tx_free() first and writes at most that. */
 size_t conn_tx_write(int conn_id, const uint8_t *buf, size_t len);
 
 /* Producer/consumer: free space / queued bytes for this conn's ring. */

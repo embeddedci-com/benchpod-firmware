@@ -46,6 +46,12 @@ pod_lan_policy_t pod_policy_lan(void);
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src);
 const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src);
 
+/* The cloud link's trust settings (company CA install or clear, HTTP proxy set or clear):
+   NULL = this source may change them, else the refusal for `verb`. The LAN never may, whatever
+   the LAN policy: a LAN attacker who installs their own CA and points the pod at their proxy
+   could otherwise terminate its TLS and relay the host-bound login (cloud-hardening.md). */
+const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src);
+
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);
 /* "open"/"locked"/"off" -> value, -1 if unknown. */

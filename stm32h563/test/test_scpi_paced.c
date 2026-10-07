@@ -6,8 +6,8 @@
  * drains into lwIP.  at_send_data() refuses a write the ring cannot take whole,
  * so before pacing a READ? of 4096 points (~24 KB of CSV) was cut off after the
  * first ~2 KB and the connection closed.  The fake connection here behaves like
- * conn_tx: a 2 KB ring, a short write fails, and sleep_ms() is where the "net
- * task" drains it.  Checks:
+ * conn_tx: a 2 KB ring, a write that does not fit fails and queues nothing
+ * (all or nothing), and sleep_ms() is where the "net task" drains it.  Checks:
  *   - a 4096-point READ? arrives whole and in order, with no overrun and no close;
  *   - the same at a slow drain rate, feeding the worker watchdog meanwhile;
  *   - a peer that stops reading gets its reply aborted once (log + close) after

@@ -92,10 +92,12 @@ static int cur_conn(scpi_t *ctx) { return (int)(intptr_t)ctx->user_context; }
 /* Paced send.  A reply is queued into the connection's TX ring (conn_tx, 2 KB),
    which the net task drains into lwIP.  READ?/MEASure? can return 4096 values
    (~24 KB of CSV), so a reply must wait for ring room instead of writing into a
-   full ring: at_send_data() refuses a write the ring cannot take whole, which
-   used to close the connection after the first ~2 KB.  We send only what fits,
-   sleep 1 ms while the ring is full, and give up if it makes no progress for
-   SCPI_SEND_STALL_MS (peer not reading, or the connection is gone).
+   full ring: at_send_data() is all or nothing (it queues none of a write the ring
+   cannot take whole, and fails), and writing the whole reply at once used to close
+   the connection after the first ~2 KB.  We send only what fits (at most
+   at_send_avail() bytes, so each write is taken whole), sleep 1 ms while the ring
+   is full, and give up if it makes no progress for SCPI_SEND_STALL_MS (peer not
+   reading, or the connection is gone).
 
    Runs on the hw worker task (scpi_dispatch_line <- command_handler_process <-
    hw_worker), which blocks here, so the wait feeds the worker's watchdog

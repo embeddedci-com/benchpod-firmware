@@ -2602,11 +2602,20 @@ See `docs/design/cloud-hardening.md` section 3.
 ```
 
 `cloud_ca` replies `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`. A company CA is
-installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"`, or `benchpod cloud
-ca set corp.pem`); it must parse as X.509 and is trusted in addition to the built-in roots.
+installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"` from the cloud, WS
+`ota.begin`, the USB console `upload-begin ca`, or `benchpod cloud ca set corp.pem` over USB); it
+must parse as X.509 and is trusted in addition to the built-in roots.
 `cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
-Setting or clearing either reconnects the cloud. Both are T2 (a locked LAN refuses them).
+Setting or clearing either reconnects the cloud. Both are T2.
+
+**Never from the LAN.** Installing or clearing the CA and setting or clearing the proxy are refused
+on a LAN TCP connection whatever the LAN policy (even `open`), with
+`cloud_ca: change it from the cloud or the USB console` or
+`cloud_proxy: change it from the cloud or the USB console`. Reading both (`{"cmd":"cloud_ca"}`,
+`{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
+own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
+real server name and relay the host-bound (v2) login, which defeats it.
 
 ### While a cloud job holds the pod
 

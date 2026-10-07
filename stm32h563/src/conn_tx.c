@@ -56,7 +56,9 @@ size_t conn_tx_write(int conn_id, const uint8_t *buf, size_t len) {
     if (!r) return 0;
     uint16_t head = r->head;
     size_t free = CONN_TX_MASK - (uint16_t)(head - r->tail);
-    if (len > free) len = free;
+    /* All or nothing: a reply line, a DAP response or a tunnel frame cut short is worse than
+       one not sent, because the peer cannot resynchronize on the rest of it. */
+    if (len > free) return 0;
     for (size_t i = 0; i < len; i++)
         r->buf[(head + i) & CONN_TX_MASK] = buf[i];
     r->head = (uint16_t)(head + len);

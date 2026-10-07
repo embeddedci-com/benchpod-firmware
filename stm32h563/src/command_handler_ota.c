@@ -48,7 +48,7 @@ static void ota_reply(int conn_id) {
         at_close_connection(conn_id);
 }
 
-/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"[,"target":"gw0|gw1|esp","version":V,
+/* {"cmd":"ota_begin","size":N,"sha256":"<64 hex>"[,"target":"gw0|gw1|esp|ca","version":V,
     "sig":"<base64url manifest>"]}  No target = the firmware; sig: see fw_sign.h. */
 void handle_ota_begin(int conn_id, const char *json) {
     char size_s[16] = {0}, sha_s[80] = {0}, target_s[16] = {0}, ver_s[16] = {0}, sig_s[200] = {0};
@@ -64,6 +64,11 @@ void handle_ota_begin(int conn_id, const char *json) {
     int sig_len = ota_sig_decode(sig_s, sig);   /* < 0: undecodable, checked as malformed */
     int target = ota_target_from_name(target_s);
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
+    /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
+    if (target == OTA_TARGET_CA) {
+        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
+        if (why) { send_error(conn_id, why); return; }
+    }
     /* Refuse if a capture/measure/LA is in flight (shares the PSRAM bus). */
     if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);

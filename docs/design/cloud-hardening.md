@@ -69,7 +69,8 @@ embedded ISRG roots, so the cloud link fails there.
 - Stored in a new W25Q slot `ca` at 0x180000 (64 KB slot, PEM up to 16 KB), outside the release
   blob list (like the `fw` copy slot). Written with the existing upload path: OTA target `ca`
   (`ota_begin` `"target":"ca"`, console `upload-begin ca <size> <sha256>`, WS `ota.begin`). No
-  signature needed (it is configuration, not code); T2.
+  signature needed (it is configuration, not code); T2. Never from the LAN (see "Who may change
+  the CA and proxy" below).
 - Accepted only if it parses as one or more X.509 CA certificates; refused otherwise.
 - Used in addition to the ISRG roots (hostname and chain checks stay on).
 - JSON `{"cmd":"cloud_ca"}` -> `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`;
@@ -89,8 +90,22 @@ embedded ISRG roots, so the cloud link fails there.
   request and the WS go through it.
 - Capabilities and status: `"cloud_ca":true`, `"cloud_proxy":true`.
 
+### Who may change the CA and proxy
+
+Like `sig_policy`, only the USB console and the cloud (WS `ota.begin` target `ca`, the cloud
+command channel and cloud tunnels) may install or clear the CA or set or clear the proxy. A LAN TCP
+connection is refused whatever the LAN policy (`open` included), before anything changes:
+`cloud_ca: change it from the cloud or the USB console` (for `ota_begin` target `ca` and
+`cloud_ca` `clear`) and `cloud_proxy: change it from the cloud or the USB console` (`set`,
+`clear`). Reads (`cloud_ca`, `cloud_proxy` without `set`/`clear`) stay allowed on the LAN.
+
+Why: with both, a LAN attacker can point the pod at their own proxy and present a certificate for
+the real server name signed by their own CA. The pod then does a v2 login over the attacker's TLS,
+and the attacker relays the challenge and signature to the real server: the host binding of
+section 1 no longer helps, even with signatures `required`.
+
 ### CLI
 
 `benchpod cloud ca show|set <file.pem>|clear` and `benchpod cloud proxy show|set <host:port>
-[--user U --password P]|clear`, over USB (console commands above) or the LAN (JSON). Over the
-cloud only `show` makes sense before the link works; allow set/clear over the cloud too.
+[--user U --password P]|clear`, over USB (console commands above) or the cloud. Over the LAN (JSON)
+only `show` works; the pod refuses `set` and `clear` there.
