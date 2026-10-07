@@ -79,6 +79,7 @@ C_SOURCES := \
   src/target_power.c \
   src/can_bus.c \
   src/console_io.c \
+  src/bp_log.c \
   src/console.c \
   src/usbd_conf.c \
   src/usbd_desc.c \
