@@ -101,7 +101,7 @@ int ice40_reflash_image(int n)
     psram_reset_to_spi();
     int rc = ice40_flash_program_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
     psram_init();                       /* re-enter QPI for the new gateware (bus-yank now safe: gw v26) */
-    psram_bus_release();                /* hand the shared bus back to the iCE40 */
+    psram_bus_handover();               /* hand the shared bus back to the iCE40 */
     /* The fabric just reset every register it owns; the firmware's MIRRORS of those registers did
        not.  Re-sync them here — this is the one point every reconfiguration passes through (image
        swap, this console command, the boot/OTA reflash).  Unconditional: even a FAILED program
@@ -421,6 +421,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
            iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
         op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+        /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
+        op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
+           (unsigned long)psram_bus_violations());
         /* Capabilities — the full set advertised to the cloud (cl_send_capabilities),
            surfaced here so they're visible from the serial console without decoding the
            cloud handshake. The gateware version is LIVE-read (not the boot snapshot) so a

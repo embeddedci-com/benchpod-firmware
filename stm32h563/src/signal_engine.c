@@ -1659,6 +1659,7 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
        address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
        co-trigger, whose reader is already streaming.  A staged co-trigger is staged again. */
     if (dac_quiesce(true) != 0) return -1;
+    psram_bus_handover();   /* the reader needs the bus; no STM32 hold may be left open */
     if (fpga_start_dac_psram(signal_engine_dac_psram_base(), count, divider) != 0) return -1;
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
@@ -1780,7 +1781,8 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
        writer streams it to the ADC region (FPGA_PSRAM_ADC_BASE). */
     psram_bus_acquire();
     psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
-    psram_bus_release();   /* hand the shared bus to the iCE40 */
+    psram_bus_release();
+    psram_bus_handover();  /* hand the shared bus to the iCE40 (no hold may survive this) */
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
         fpga_capture_cmd((uint32_t)samples, divider, 0u, 0u);   /* ADC only: LA count 0 */
     else
@@ -1830,7 +1832,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        the same FPGA cycle (START_MEASURE).  Hand the bus to the iCE40 first so
        it can stream the ADC samples into PSRAM. */
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
-    psram_bus_release();
+    psram_bus_handover();
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
         /* v40: START_MEASURE is gone.  Stage the DAC start on the co-trigger, then arm an
            ADC-only capture: the DAC starts on the capture's t0, the cycle MEASURE used. */
@@ -1839,7 +1841,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
         fpga_capture_cmd((uint32_t)samples, cap_div, 0u, 0u);
         cotrig_consume();
     } else if (fpga_start_measure((uint32_t)samples, dac_div, cap_div) != 0) {
-        psram_bus_acquire();
+        psram_bus_park();   /* take the bus back without leaving a hold open */
         return -1;
     }
     cap_deadline_for(samples, cap_div);
@@ -1990,7 +1992,7 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz) {
         (uint8_t)(samples & 0xFF), (uint8_t)((samples >> 8) & 0xFF), (uint8_t)((samples >> 16) & 0xFF),
         (uint8_t)(wire & 0xFF),    (uint8_t)((wire >> 8) & 0xFF),
     };
-    psram_bus_release();   /* hand the shared bus to the iCE40 */
+    psram_bus_handover();  /* hand the shared bus to the iCE40 */
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
         fpga_capture_cmd(0u, 0u, (uint32_t)samples, divider);   /* LA only: ADC count 0 */
     else
@@ -2124,6 +2126,7 @@ int fpga_dual_capture_start(uint32_t adc_count, uint16_t adc_div,
     psram_bus_acquire();
     if (adc_count) psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
     psram_bus_release();
+    psram_bus_handover();
     fpga_capture_cmd(adc_count, adc_div, la_count, la_div);
     cotrig_consume();
     /* Deadline scales with the (deep) capture window so a multi-second capture is not

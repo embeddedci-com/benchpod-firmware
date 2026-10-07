@@ -69,6 +69,7 @@ C_SOURCES := \
   src/usb_cc.c \
   src/nrst_ctrl.c \
   src/psram_alloc.c \
+  src/bus_owner.c \
   src/xfer.c \
   src/dma_wait.c \
   src/dap.c \

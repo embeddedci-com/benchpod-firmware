@@ -63,6 +63,7 @@ int dma_wait_block(dma_waiter_t *w, uint32_t timeout_ms)
 static void dma_wait_signal(dma_waiter_t *w, int result)
 {
     if (!w) return;
+    if (w->on_done) w->on_done();
     w->result = result;
     w->done   = true;
     if (w->sem && xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED) {

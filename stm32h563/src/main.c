@@ -233,7 +233,7 @@ void boot_deferred_hw_init(void)
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
        even when the FPGA is unconfigured. */
     (void)psram_init();
-    psram_bus_release();
+    psram_bus_handover();
     /* What the W25Q blob slots hold (blob_store.h): read once, while nothing else uses the bus. */
     (void)blob_store_init();
     cloud_extras_load();    /* company CA + proxy for the cloud link (cloud_extras.h) */
