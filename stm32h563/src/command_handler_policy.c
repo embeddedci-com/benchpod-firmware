@@ -58,11 +58,13 @@ void handle_lan_policy(int conn_id, const char *json) {
 /* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */
 
 /* {"cmd":"cloud_ca"[,"clear":true]} -> {"present":bool,"certs":[{"subject":..,"sha256":..}]}
-   Installing one goes through the upload path (OTA target "ca"). */
+   Installing one goes through the upload path (OTA target "ca"). Reading works from anywhere;
+   clearing (like installing and the proxy) only from the cloud or USB (pod_policy_cloud_link_gate). */
 void handle_cloud_ca(int conn_id, const char *json) {
     char v[8] = {0};
     if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        const char *why = cloud_extras_ca_clear();
+        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
+        if (!why) why = cloud_extras_ca_clear();
         if (why) { send_error(conn_id, why); return; }
     }
     static char certs[640];
@@ -73,17 +75,21 @@ void handle_cloud_ca(int conn_id, const char *json) {
 }
 
 /* {"cmd":"cloud_proxy"[,"set":"host:port","user":..,"password":..|"clear":true]}
-   -> {"host":..,"port":N,"auth":bool}, or {} when none (never the password). */
+   -> {"host":..,"port":N,"auth":bool}, or {} when none (never the password).
+   Reading works from anywhere; set and clear only from the cloud or USB (pod_policy_cloud_link_gate). */
 void handle_cloud_proxy(int conn_id, const char *json) {
     char spec[80] = {0}, user[CLOUD_PROXY_USER_MAX] = {0}, pass[CLOUD_PROXY_PASS_MAX] = {0}, v[8] = {0};
     const char *why = NULL;
+    const policy_src_t src = command_handler_policy_src(conn_id);
     if (bp_json_get(json, "set", spec, sizeof(spec))) {
         bp_json_get(json, "user", user, sizeof(user));
         bp_json_get(json, "password", pass, sizeof(pass));
-        why = cloud_extras_proxy_set(spec, user, pass);
+        why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        if (!why) why = cloud_extras_proxy_set(spec, user, pass);
         memset(pass, 0, sizeof(pass));
     } else if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        why = cloud_extras_proxy_set(NULL, NULL, NULL);
+        why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        if (!why) why = cloud_extras_proxy_set(NULL, NULL, NULL);
     }
     if (why) { send_error(conn_id, why); return; }
     cloud_proxy_t p;

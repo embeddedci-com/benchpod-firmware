@@ -105,6 +105,21 @@ static void test_power_cut(void) {
     }
 }
 
+/* SEC-3: the CA and proxy are cloud-link trust settings; the LAN may never change them, whatever
+   the LAN policy (open included). */
+static void test_cloud_link_gate(void) {
+    boot_blank();
+    CHECK(pod_policy_lan() == POD_LAN_OPEN, "precondition: LAN open");
+    const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN);
+    CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or the USB console"),
+          "LAN gate: %s", why ? why : "(null)");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB) == NULL, "USB refused");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD) == NULL, "cloud refused");
+    pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB);
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_LAN) != NULL, "locked LAN allowed");
+    pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
+}
+
 static void test_names(void) {
     CHECK(pod_policy_sig_from_name("required") == FW_SIG_POLICY_REQUIRED, "required");
     CHECK(pod_policy_sig_from_name("bogus") == -1 && pod_policy_sig_from_name(NULL) == -1, "bogus sig");
@@ -118,6 +133,7 @@ int main(void) {
     test_lan();
     test_persists();
     test_power_cut();
+    test_cloud_link_gate();
     test_names();
     if (failures) { printf("test_pod_policy: %d FAILED\n", failures); return 1; }
     printf("test_pod_policy: all passed\n");
