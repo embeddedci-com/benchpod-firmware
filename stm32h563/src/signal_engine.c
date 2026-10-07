@@ -69,6 +69,7 @@ static SPI_HandleTypeDef hspi_ice;
 #define SPI_CLOCK_HZ      1953125U      /* 250 MHz / 128 */
 #include "fpga_config.h"               /* FPGA_HFOSC_HZ — single source: tools/gen_protocol.py */
 #include "la_rate.h"                    /* la_psram_plan — deep-LA rate/divider (host-tested) */
+#include "dac_rearm.h"                  /* stop-before-rearm sequencing (host-tested) */
 
 /* ---- SPI1 DMA transfer backend ------------------------------------------
    Big capture read-backs (fpga_read_capture, up to SIGNAL_BUF_SIZE) and waveform
@@ -431,20 +432,16 @@ static void log_dac_samples(uint32_t total) {
 /* ---- FPGA command wrappers ----------------------------------------------- */
 
 /* LOAD_WAVE:  [CMD][len_lo][len_hi][N data bytes] */
-static int fpga_stop_dac(void);
 static bool s_cotrig_pending;
+static int dac_quiesce(bool force);
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
     /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
        clk48 while this writes it on clk: a running DAC played a half-rewritten table at the old
        period, with torn 16-bit samples (and a torn curve entry can step the loop output anywhere
-       between vmin and vmax).  Stop it first; every caller starts it again after the load. */
-    uint8_t st = 0;
-    if (fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN)) {
-        bool cotrig = s_cotrig_pending;       /* callers stage a co-trigger BEFORE the load */
-        fpga_stop_dac();                      /* (which cancels it) */
-        if (cotrig) (void)fpga_dac_arm_on_capture();
-    }
+       between vmin and vmax).  Stop it first; every caller starts it again after the load.
+       Callers stage a co-trigger BEFORE the load, so dac_quiesce stages it again after the stop. */
+    (void)dac_quiesce(false);
     uint8_t header[3] = { CMD_LOAD_WAVE,
                           (uint8_t)(len & 0xFF),
                           (uint8_t)((len >> 8) & 0xFF) };
@@ -481,6 +478,19 @@ static int fpga_stop_dac(void) {
     s_cotrig_pending    = false;   /* STOP_DAC cancels a staged-but-uncaptured start */
     s_cotrig_in_capture = false;
     return 0;
+}
+
+/* Stop the DAC and wait for STATUS to report it idle before a new start (dac_rearm.h has why a
+   start on top of a running deep replay or loop misplaces the stream).  force = stop even if
+   STATUS reads idle.  Costs one STATUS read when idle, STOP_DAC + about one STATUS read when not. */
+static void rearm_stop(void) { (void)fpga_stop_dac(); }
+static const dac_rearm_ops_t s_rearm_ops = {
+    .status_read = fpga_status_read, .stop = rearm_stop, .arm_cotrig = fpga_dac_arm_on_capture,
+};
+static int dac_quiesce(bool force) {
+    int rc = dac_rearm_quiesce(&s_rearm_ops, force, s_cotrig_pending);
+    if (rc != 0) printf("[sig] ERROR: DAC still running after STOP_DAC (STATUS DAC_RUN stuck)\n");
+    return rc;
 }
 
 /* START_DAC_PSRAM (deep replay, gateware >= v17):
@@ -1385,6 +1395,9 @@ int dac_control_loop_start(const uint8_t *curve, size_t curve_len,
        drive nothing.  Gated here (not just in the command handler) so every caller — cloud
        command, console, SDK — gets the same refusal. */
     if (!signal_engine_has_control_loop()) return -3;
+    /* Re-arming a running loop must disarm it first: dac_loop realigns its byte pops only on
+       disarm, and a re-arm without a new curve skips fpga_load_wave's stop. */
+    if (dac_quiesce(false) != 0) return -1;
     if (curve && curve_len) { if (fpga_load_wave(curve, curve_len) != 0) return -1; }
     uint8_t args[8] = {
         (uint8_t)k_q15,    (uint8_t)(k_q15    >> 8),
@@ -1642,6 +1655,10 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     printf("[sig] DAC psram replay  count=%lu  %lu S/s (divider=%lu)\n",
            (unsigned long)count, (unsigned long)lroundf(actual), (unsigned long)divider);
+    /* START_DAC_PSRAM on top of a running (or co-trigger staged) replay keeps the reader's
+       address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
+       co-trigger, whose reader is already streaming.  A staged co-trigger is staged again. */
+    if (dac_quiesce(true) != 0) return -1;
     if (fpga_start_dac_psram(signal_engine_dac_psram_base(), count, divider) != 0) return -1;
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
