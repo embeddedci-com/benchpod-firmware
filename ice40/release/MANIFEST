@@ -1,15 +1,15 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=45
-source_sha256=9b070581397187f47b4125c9e8f8746d471987ec160958d91d32a27e9ea1e49b
-built_from=064e27f
-promoted=2026-09-29
+gateware_version=46
+source_sha256=9f084eae1bcbe15695e9576c33e95fa75334dc54d03e5108434678d7ea362b06
+built_from=4bdf5c1
+promoted=2026-10-06
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
-hw_verified=e2e 129 passed 1 failed (usb_cc: cable) + SPI tier 6 + MCP 9 + OpenHTF 2 + cloud 6 + Go cloud 34 on benchpod-baea06 rev3, fw 3.3.0 2026-09-29
-loop.sha256=cd410deff3d6ce5d08d591daf70adbb46a0b3ae87e7e7f6ca2a545bb48e99192
+hw_verified=benchpod-baea06 2026-10-06: boot auto-update to 46, LAN TestHW 58/0/4, cloud TestCloud 43/0/6, CORR-1 deep replay byte-swap check across 10 concurrent LA captures
+loop.sha256=858283f220ac1936fe216eeca343a58e898c89f408894712cf5c43477c011e6a
 loop.seed=26
-loop.clk48_mhz=56.70
-deep.sha256=0898c1f0d3693d2c39f7d67497a152edb5d0c27b4e4cb15654964886a430b20f
-deep.seed=25
-deep.clk48_mhz=54.59
+loop.clk48_mhz=54.69
+deep.sha256=83848c052a8ac8e861d7f4048d1a5ed0c85f6d00009c48435b816e9d8ad5817e
+deep.seed=50
+deep.clk48_mhz=59.26

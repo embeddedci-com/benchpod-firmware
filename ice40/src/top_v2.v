@@ -273,6 +273,12 @@ module top (
     assign loop_strm_valid = 1'b0; assign loop_v = 16'd0; assign loop_in = 16'd0;
 `endif
 
+    // 2-FF sync of the STM32's bus_own (the only true async input): the writer, the deep-replay
+    // reader and the deep image's arbiter all act on this copy; the pads tristate on the raw pin.
+    reg  [1:0]  bus_own_sync = 2'b00;
+    always @(posedge clk) bus_own_sync <= {bus_own_sync[0], bus_own};
+    wire        bus_own_synced = bus_own_sync[1];
+
     // reader (FSM @clk, FIFO read @clk48) <-> DAC engine + PSRAM pads (muxed below).
     wire [3:0]  rd_io_o, rd_io_i;
     wire        rd_io_oe, rd_cs, rd_sclk, rd_active;
@@ -313,8 +319,9 @@ module top (
     // vs the DAC's <=1.81 MB/s drain (recordings replay at <=0.4 MS/s in practice).
 `ifdef USE_DEEP_REPLAY
     dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5), .PAD_PIPE(1)) rdr_i (
-        .clk(clk), .rst(deep_rst), .clk48(clk48), .rst48(deep_rst48),
+        .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48),   // v46: NOT reset by bus_own
         .run(dac_psram_run), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
+        .bus_own(bus_own_synced),
         .data(rd_strm_data), .data_valid(rd_strm_valid), .data_pop(rd_strm_pop),
         .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
         .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
@@ -404,26 +411,20 @@ module top (
         else if (t0)             dac_pend <= 1'b0;   // consumed by this capture's t0
     end
 
-    // 2-FF sync of the STM32's bus_own (the only true async input).
-    reg  [1:0]  bus_own_sync = 2'b00;
-    always @(posedge clk) bus_own_sync <= {bus_own_sync[0], bus_own};
-    wire        bus_own_synced = bus_own_sync[1];
-    // ---- deep-image PSRAM-master reset gating (runtime image-swap fix) ----
-    // The deep-replay reader + burst arbiter (present only in USE_DEEP_REPLAY) keep their FSMs
-    // RUNNING whenever the STM32 owns the bus (bus_own) — the top only tristates their PADS, not
-    // their state.  During a RUNTIME image swap the STM's post-reconfig psram_init YANKS the bus
-    // and RESETS the PSRAM (0x66/0x99->QPI) while these just-booted masters are live; that
-    // desyncs the arbiter (it stops granting the writer -> captures write nothing: "sentinel
-    // survived") and the wedge only clears on a fresh reconfig/power-cycle.  Holding the deep
-    // masters in reset for as long as the STM owns the bus keeps them quiescent across the yank,
-    // so they come up clean once bus_own drops.  The STM only takes the bus while these masters
-    // are idle (waveform staging / capture read-back happen between jobs, never mid-burst), so
-    // this reset is always at a safe boundary.  Guarded so the LOOP netlist is byte-unchanged.
+    // ---- deep-image arbiter reset gating (runtime image-swap fix, v26) ----
+    // During a RUNTIME image swap the STM's post-reconfig psram_init YANKS the bus and RESETS the
+    // PSRAM (0x66/0x99->QPI) while the just-booted masters are live; a live arbiter could desync
+    // (it stopped granting the writer -> captures wrote nothing: "sentinel survived").  The
+    // arbiter is held in reset while the STM owns the bus.  That is safe mid-replay: both masters
+    // honour bus_own themselves (no new burst; a cut burst closes at the next cell), and a grant
+    // is masked by the other master's busy, so a fresh arbiter can never overlap two bursts.
+    // v26..v45 also held the replay READER in reset here.  That was wrong whenever the STM32 took
+    // the bus DURING a replay (a capture read-back): the reader flushed its FIFO and restarted at
+    // the waveform's base while the DAC engine kept running, and a flush between the engine's two
+    // byte pops byte-swapped every later sample until the next arm (CORR-1).  The reader now
+    // pauses and resumes on bus_own instead (dac_psram_reader.v, "BUS_OWN"; tb_top_deep).
 `ifdef USE_DEEP_REPLAY
-    reg  [1:0]  bus_own_sync48 = 2'b00;      // clk48 copy of bus_own for the reader's rst48
-    always @(posedge clk48) bus_own_sync48 <= {bus_own_sync48[0], bus_own};
     wire        deep_rst   = rst   | bus_own_synced;
-    wire        deep_rst48 = rst48 | bus_own_sync48[1];
 `endif
 
     // ---- ADC engine (serial MCP33131, 24 MHz clk, free-running) ----
@@ -532,7 +533,7 @@ module top (
     // psram_dual_writer.adc_full — the ADC producer's backpressure/overflow input.
 
     spram_ring16 #(.AW(15)) la_ring_i (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .clr_ovf(arm),     // v46: per-capture overflow, like the other sources
         .in_data(la_wr_data), .in_stb(la_wr_stb), .in_full(la_ring_in_full),
         .out_data(la_ring_out), .out_stb(la_ring_out_stb), .out_full(la_wr_full),
         .empty(la_ring_empty), .overflow(la_ring_ovf)
@@ -700,7 +701,27 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 44) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 46) ----
+    // GATEWARE_VERSION 46 = v45 + two P0 correctness fixes (no protocol change):
+    //   * CORR-1 (deep image): the replay reader honours bus_own instead of being reset by it.
+    //     v26..v45 held it in reset while the STM32 owned the bus, so a capture read-back during
+    //     a replay flushed the prefetch FIFO and restarted the stream at its base while the DAC
+    //     engine kept running; a flush between the engine's low- and high-byte pops byte-swapped
+    //     every later sample until the next arm.  Now no burst starts while bus_own, a burst it
+    //     touches is cut at the next cell and its bytes are discarded (they only become visible to
+    //     the DAC on the burst's commit cell, S_CMT, one cell after S_CSH), and the address only
+    //     advances on a commit, so the stream resumes exactly where it stopped.  The DAC waits
+    //     (SYNC high) while the FIFO is empty; it never sees a swapped, repeated or skipped byte.
+    //     The arbiter is still reset by bus_own (the v26 image-swap fix).  The FIFO push lost its
+    //     full test (the room check already rules a full push out; the benches assert it), and
+    //     the not-empty clear compares rptr + 1 (a register) with wptr instead of a subtract.
+    //     Loop 3864 -> 3895 LC, deep 3549 -> 3579.  Local sweeps 1..64: loop 57/64, deep 64/64
+    //     reach MIN_CLK48_MHZ.  SEED_LOOP 26, SEED_DEEP 50.
+    //   * CORR-2 (both images): the LA SPRAM ring's overflow flag is cleared by every capture arm.
+    //     It was sticky until the FPGA reset, so after one overflow every capture reported CAP_OVF.
+    //   tb_top_deep is the first whole-top bench of the deep image (-DUSE_DEEP_REPLAY): bus_own
+    //   swept over a reader burst and the engine's byte pops with STM32 reads in between, a
+    //   capture alongside the replay read back mid-replay, and an overflowed then a clean capture.
     // GATEWARE_VERSION 44 = v43 + an SPI MASTER as the SWD engine's second job (swd_engine.v):
     //   * SPI_ARM 0x55 [sck][mosi][miso][cs][half][flags] takes the engine (SCK/MOSI on the SWD
     //     clk/dio slots, a new CS column in la_bank, MISO read back through la_in); SPI_CS 0x56
@@ -1047,7 +1068,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd45), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd46), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

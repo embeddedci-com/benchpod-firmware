@@ -22,6 +22,7 @@ module spram_ring16 #(
 )(
     input  wire       clk,
     input  wire       rst,
+    input  wire       clr_ovf,              // clears `overflow` (top: every capture arm, v46)
     input  wire [7:0] in_data,
     input  wire       in_stb,
     output wire       in_full,
@@ -29,7 +30,7 @@ module spram_ring16 #(
     output wire       out_stb,
     input  wire       out_full,
     output wire       empty,
-    output reg        overflow
+    output reg        overflow              // sticky: a sample was dropped since rst / clr_ovf
 );
     localparam DEPTH = (1 << AW);
 
@@ -107,6 +108,10 @@ module spram_ring16 #(
             out_word_v <= 1'b0; out_hi <= 1'b0;
             st <= S_IDLE; overflow <= 1'b0;
         end else begin
+            // v46: the arm clears the flag.  Until v45 only rst did, so after one LA ring overflow
+            // every later capture reported CAP_OVF until the FPGA was reconfigured.  A drop on the
+            // clear cycle itself still sets it (the assignment below wins).
+            if (clr_ovf) overflow <= 1'b0;
             // ---- input: byte -> 16-bit word (low byte first) ----
             if (in_stb) begin
                 if (!lo_v) begin lo <= in_data; lo_v <= 1'b1; end       // low byte: always OK

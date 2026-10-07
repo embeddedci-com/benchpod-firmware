@@ -54,6 +54,8 @@ module dac_psram_reader #(
     input  wire [23:0] base_addr,
     input  wire [23:0] len_bytes,
     // ---- bus arbitration handshake (clk domain; tie bus_gnt=1 for exclusive use) ----
+    // bus_own (v46): the STM32 owns the bus (2-FF synced into clk).  See "BUS_OWN" below.
+    input  wire        bus_own,
     input  wire        bus_gnt,
     output wire        bus_req,
     output wire        bus_busy,
@@ -85,7 +87,7 @@ module dac_psram_reader #(
     reg  [2:0]  cell_ph = 0;                             // 0..CELL_CLK-1
     wire        cell_go = (cell_ph == (CELL_CLK-1));     // last clk of the cell period
 
-    localparam S_IDLE=3'd0, S_CMD=3'd1, S_ADDR=3'd2, S_DUMMY=3'd3, S_DATA=3'd4, S_CSH=3'd5;
+    localparam S_IDLE=3'd0, S_CMD=3'd1, S_ADDR=3'd2, S_DUMMY=3'd3, S_DATA=3'd4, S_CSH=3'd5, S_CMT=3'd6;
     reg  [2:0]  st = S_IDLE;
     reg  [23:0] rd_addr;
     reg  [23:0] remaining;
@@ -98,7 +100,28 @@ module dac_psram_reader #(
     reg         cell_tgl = 0;
     reg  [3:0]  cell_n0, cell_n1;
     reg         cell_drv, cell_cs, cell_clk, cell_cap;
+    reg         cell_cmt, cell_abt;                      // v46: commit / discard the last burst
 
+    // ---- BUS_OWN (v46) ----
+    // Until v45 the top held this reader in reset while the STM32 owned the bus, so a capture
+    // read-back during a replay flushed the prefetch FIFO and restarted the stream at base_addr,
+    // while the DAC engine kept running: a flush between its low- and high-byte pops left every
+    // later sample byte-swapped until the next arm.  Now the reader honours bus_own the way
+    // psram_dual_writer does (v43) and the top no longer resets it:
+    //   * no burst starts while bus_own;
+    //   * a burst bus_own touches (`lost`, from its lead cell until its commit cell) is cut at the
+    //     next cell (CS high) and its bytes are DISCARDED: they sit in the FIFO past the committed
+    //     write pointer until the commit cell, so the DAC never sees them, and the abort rewinds
+    //     the speculative pointer.  rd_addr only advances on a commit, so the next burst re-reads
+    //     the same bytes: the stream resumes exactly where it stopped, no FIFO flush, no byte lost
+    //     or repeated, and the engine's lo/hi pairing never moves.
+    //   * the commit decision is taken one whole cell after S_CSH, i.e. > 2 clk after the burst's
+    //     last nibble is sampled (PAD_PIPE=1: one edge after ph7 of the last data cell), so a
+    //     bus_own that rose before that sample has passed the 2-FF sync by then.
+    // While the STM32 holds the bus the DAC drains the FIFO and then waits (SYNC high) for the
+    // next committed byte, as on any underrun; the order of the samples is unaffected.
+    reg         lost = 1'b0;
+    wire        lost_now = lost | bus_own;
     // room backpressure: `room_ok` (a stored waveform can fill CHUNK) comes from clk48.
     reg  [1:0]  roomok_s = 0;
     wire        room_ok = roomok_s[1];
@@ -113,10 +136,11 @@ module dac_psram_reader #(
     wire        run_i = run & run_d;
 
     wire [8:0]  next_burst = (remaining >= {15'd0, CHUNK_BYTES}) ? CHUNK_BYTES : remaining[8:0];
-    wire        want_burst = run_i && (remaining != 24'd0) && room_ok;
+    wire        want_burst = run_i && (remaining != 24'd0) && room_ok && !bus_own;
 
     assign bus_req  = want_burst;      // clk-domain -> arbiter directly (no CDC; FSM is on clk)
-    assign bus_busy = (st != S_IDLE);
+    // S_CMT is a CS-high bookkeeping cell, so the arbiter may hand the bus over during it.
+    assign bus_busy = (st != S_IDLE) && (st != S_CMT);
 
     localparam integer DUM_CELLS = (WAIT_CYCLES + 1) / 2;   // dummy NIBBLES -> cells (2 nib/cell)
 
@@ -125,17 +149,24 @@ module dac_psram_reader #(
             st<=S_IDLE; rd_addr<=base_addr; remaining<=len_bytes; burst_bytes<=0;
             data_left<=0; addr_idx<=0; dum_idx<=0; cell_ph<=0; cell_tgl<=1'b0;
             cell_n0<=0; cell_n1<=0; cell_drv<=0; cell_cs<=1'b1; cell_clk<=0; cell_cap<=0;
+            cell_cmt<=0; cell_abt<=0; lost<=1'b0;
         end else if (!run_i) begin
             st<=S_IDLE; rd_addr<=base_addr; remaining<=len_bytes;
             cell_cs<=1'b1; cell_drv<=0; cell_clk<=0; cell_cap<=0;
+            cell_cmt<=0; cell_abt<=0; lost<=1'b0;
         end else begin
             cell_ph <= cell_go ? 3'd0 : (cell_ph + 3'd1);
+            if (bus_own && st != S_IDLE) lost <= 1'b1;   // (cleared by the commit cell below)
             if (cell_go) begin
                 // advance one CELL: flip the toggle + default the cell to idle, then
                 // each state overrides.
                 cell_tgl <= ~cell_tgl;
                 cell_n0<=4'h0; cell_n1<=4'h0; cell_drv<=1'b0; cell_cs<=1'b1; cell_clk<=1'b0; cell_cap<=1'b0;
-                case (st)
+                cell_cmt<=1'b0; cell_abt<=1'b0;
+                // bus_own touched this burst: cut it here (this cell is the idle default, CS high)
+                if (lost_now && (st == S_CMD || st == S_ADDR || st == S_DUMMY || st == S_DATA))
+                    st <= S_CSH;
+                else case (st)
                 S_IDLE: begin
                     if (want_burst && bus_gnt) begin
                         burst_bytes <= next_burst;
@@ -169,18 +200,26 @@ module dac_psram_reader #(
                 S_DATA: begin                           // capture one byte (2 nibbles) per cell
                     cell_drv<=1'b0; cell_clk<=1'b1; cell_cs<=1'b0; cell_cap<=1'b1;
                     data_left<=data_left-9'd1;
-                    if (data_left==9'd1) begin          // last byte: advance / wrap next cell
+                    if (data_left==9'd1) begin          // last byte (the address steps at S_CMT)
+                        cell_cs<=1'b0; st<=S_CSH;
+                    end
+                end
+                S_CSH: begin                            // CS-high refresh gap
+                    cell_cs<=1'b1; cell_drv<=1'b0; cell_clk<=1'b0; cell_cap<=1'b0;
+                    st<=S_CMT;
+                end
+                S_CMT: begin                            // v46: keep or drop the burst's bytes
+                    lost <= 1'b0;
+                    if (lost_now) cell_abt <= 1'b1;     // re-read the same bytes next burst
+                    else begin
+                        cell_cmt <= 1'b1;               // advance / wrap
                         if (remaining == {15'd0, burst_bytes}) begin
                             rd_addr<=base_addr; remaining<=len_bytes;
                         end else begin
                             rd_addr<=rd_addr+{15'd0, burst_bytes};
                             remaining<=remaining-{15'd0, burst_bytes};
                         end
-                        cell_cs<=1'b0; st<=S_CSH;
                     end
-                end
-                S_CSH: begin                            // CS-high refresh gap
-                    cell_cs<=1'b1; cell_drv<=1'b0; cell_clk<=1'b0; cell_cap<=1'b0;
                     st<=S_IDLE;
                 end
                 default: st<=S_IDLE;
@@ -219,11 +258,18 @@ module dac_psram_reader #(
     // ---- single-clock (clk48) prefetch FIFO ----
     localparam AW = FIFO_AW;
     reg  [7:0]  fmem [0:(1<<AW)-1];
-    reg  [AW:0] wptr = 0, rptr = 0;
-    wire [AW:0] occ   = wptr - rptr;
-    // Full = the pointers differ only in their wrap bit: an equality compare, not the top bit of
-    // the wptr - rptr carry chain (which sat on the push/ne_r cone; v41).  Same value: occ <= 2^AW.
-    wire        f_full = ((wptr ^ rptr) == {1'b1, {AW{1'b0}}});
+    // v46: wsp is the write pointer of the burst in flight; wptr only catches up with it on the
+    // burst's commit cell (an aborted burst rewinds wsp instead).  The DAC side only ever sees
+    // [rptr, wptr); the room test counts the speculative bytes too.
+    reg  [AW:0] wptr = 0, wsp = 0, rptr = 0;
+    reg  [AW:0] rptr1 = 1;                               // v46: always rptr + 1 (see occ_one)
+    wire [AW:0] occ   = wptr - rptr;                     // committed bytes (what the DAC can pop)
+    wire [AW:0] occ_s = wsp  - rptr;                     // + the burst in flight
+    // No full test on the push (v46).  A burst only starts with room > CHUNK_BYTES (room_ok
+    // below, counting the burst in flight), and room_ok has caught up with the previous burst's
+    // last push long before the next burst's S_IDLE decision (S_CSH + S_CMT lie between), so a
+    // push never meets a full FIFO.  The full compare was on the deep image's clk48 critical
+    // path (rptr -> full -> WCLKE/wsp enable); the benches check the invariant instead.
     reg  [7:0]  push_byte;
     reg         push;
 
@@ -235,19 +281,20 @@ module dac_psram_reader #(
     // live pointer compare, which fed the BRAM read enable and the rptr increment in the same
     // clk48 cycle (20.9 ns, mostly routing to the BRAM column: a deep-image clk48 bottleneck once
     // the room test was fixed).  It is maintained incrementally, with no next-pointer mux (the
-    // "registered next-cycle empty" tried earlier added one and hurt): a push sets it; fetching
-    // the last byte (occ == 1, off the wptr - rptr carry chain the room test already builds; an
-    // explicit wptr == rptr + 1 synthesised as an 8-deep LUT ripple instead) clears it.
-    //   push:               occ - fetch + 1 >= 1        -> 1  (a push into a FULL FIFO is
-    //                                                          dropped, but it is non-empty
-    //                                                          anyway, so the raw push sets it and
-    //                                                          the full test stays off this cone)
-    //   fetch of the last:  occ == 1, no push           -> 0
+    // "registered next-cycle empty" tried earlier added one and hurt): a commit sets it; fetching
+    // the last byte (occ == 1) clears it.  v46: occ == 1 is rptr1 == wptr, an equality of two
+    // registers; the room test no longer shares the wptr - rptr carry chain (it counts wsp), and
+    // that chain into ne_r's enable bound the deep image's clk48 on most seeds.
+    //   commit (v46):       a burst's bytes are published -> 1 (when it pushed any)
+    //   fetch of the last:  occ == 1, no commit         -> 0
     //   otherwise:          occ unchanged or still >= 1 -> hold
     reg         ne_r = 1'b0;                            // FIFO not empty
-    wire        push_ok = push && !f_full;
+    // v46: the commit/abort cell's action is a registered pulse one clk48 after the cell is
+    // latched (the toggle compare stays out of the pointer/ne_r cones), and `spec_nz` (the burst
+    // in flight pushed a byte) replaces a wsp != wptr compare in the ne_r cone.
+    reg         cmt_p = 1'b0, abt_p = 1'b0, spec_nz = 1'b0;
     wire        fetch = !dout_vld && ne_r;
-    wire        occ_one = (occ == {{AW{1'b0}}, 1'b1});
+    wire        occ_one = (rptr1 == wptr);
     assign      data       = dout;
     assign      data_valid = dout_vld;
 
@@ -259,12 +306,17 @@ module dac_psram_reader #(
     // Deliberately NOT pipelined further: room_ok gates the next burst, and the time from a
     // burst's last push to room_ok (this flop + the 2-FF sync) is already ~ one S_CSH cell.
     localparam integer ROOM_LIM = (1 << AW) - CHUNK_BYTES;
-    always @(posedge clk48) roomok48 <= (ROOM_LIM > 0) && (occ < ROOM_LIM);
+    always @(posedge clk48) roomok48 <= (ROOM_LIM > 0) && (occ_s < ROOM_LIM);
     always @(posedge clk) roomok_s <= {roomok_s[0], roomok48};
 
     // run 2FF into clk48 (FIFO reset uses it so each arm starts clean/aligned)
     reg  [1:0]  run48_s = 0;
     wire        run48 = run48_s[1];
+    // the room invariant (no full test in the RTL, see the FIFO declaration)
+`ifndef SYNTHESIS
+    always @(posedge clk48) if (push && !rst48 && run48 && (wsp ^ rptr) == {1'b1, {AW{1'b0}}})
+        $display("FAIL dac_psram_reader: push into a full prefetch FIFO at %0t", $time);
+`endif
     always @(posedge clk48) run48_s <= {run48_s[0], run_i};
 
     always @(posedge clk48) begin
@@ -274,7 +326,8 @@ module dac_psram_reader #(
         if (rst48 || !run48) begin
             ph<=0; busy48<=0; io_o<=4'h0; io_oe<=1'b0; cs<=1'b1; sclk<=1'b0;
             cap_hi<=0;
-            wptr<=0; rptr<=0; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
+            wptr<=0; wsp<=0; rptr<=0; rptr1<=1; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
+            cmt_p<=1'b0; abt_p<=1'b0; spec_nz<=1'b0;
             n0_l<=0; n1_l<=0; drv_l<=0; cs_l<=1'b1; clk_l<=0; cap_l<=0; cap_pend<=1'b0;
         end else begin
             // PAD_PIPE=1: the low nibble of a data cell is sampled on the edge AFTER ph7, which
@@ -284,10 +337,18 @@ module dac_psram_reader #(
                 push_byte <= {cap_hi, io_i}; push <= 1'b1; cap_pend <= 1'b0;
             end
             // ---- FIFO write (capture) + FWFT read side ----
-            if (push_ok) begin fmem[wptr[AW-1:0]] <= push_byte; wptr <= wptr + 1'b1; end
-            if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr + 1'b1; dout_vld <= 1'b1; end
+            // (a commit/abort cell never coincides with a push: S_CSH lies between the last data
+            // cell's capture and the S_CMT cell.)
+            if (push) begin fmem[wsp[AW-1:0]] <= push_byte; wsp <= wsp + 1'b1; end
+            if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr1; rptr1 <= rptr1 + 1'b1; dout_vld <= 1'b1; end
             else if (data_pop) dout_vld <= 1'b0;
-            if (push)                             ne_r <= 1'b1;
+            cmt_p <= (cell_tgl != tgl_m) && cell_cmt;
+            abt_p <= (cell_tgl != tgl_m) && cell_abt;
+            if (push)                             spec_nz <= 1'b1;
+            else if (cmt_p || abt_p)              spec_nz <= 1'b0;
+            if (cmt_p)                            wptr <= wsp;   // publish the burst's bytes
+            if (abt_p)                            wsp  <= wptr;  // drop them
+            if (cmt_p && spec_nz)                 ne_r <= 1'b1;
             else if (fetch && occ_one)            ne_r <= 1'b0;
 
             // ---- cell serializer (8 clk48 per cell) ----
