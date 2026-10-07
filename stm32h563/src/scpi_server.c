@@ -51,10 +51,11 @@ static float     sense_srate_hz;   /* ADC capture clock for READ? (0 = max) */
    (16-bit little-endian samples, as the JSON `load`); the USER source shape replays it out
    the DAC as byte pairs, exactly like the JSON `replay`.  The DAC BRAM holds
    SIGNAL_MAX_SAMPLES, so a longer capture replays its first SIGNAL_MAX_SAMPLES samples.
-   scpi_adc_buf is only DIAGnostic:PATTern?'s 8-bit scratch: USER used to replay it (stale
-   pattern or upload bytes) instead of the capture that READ? had just announced. */
-static uint8_t  scpi_adc_buf[SIGNAL_BUF_SIZE];
+   USER used to replay a separate 8-bit buffer (stale DIAGnostic:PATTern? or upload bytes)
+   instead of the capture that READ? had just announced.  PATTern? now builds its bytes in
+   the upper half of scpi_adc16, which replay never reads (it stops at SIGNAL_BUF_SIZE bytes). */
 static uint16_t scpi_adc16[SIGNAL_BUF_SIZE];   /* v2 16-bit capture + replay buffer */
+#define scpi_adc_buf ((uint8_t *)scpi_adc16 + SIGNAL_BUF_SIZE)   /* PATTern? scratch, 4 KB */
 static size_t  scpi_replay_bytes;  /* valid bytes of scpi_adc16 for replay (<= SIGNAL_BUF_SIZE) */
 
 static void scpi_replay_set_samples(size_t n) {
