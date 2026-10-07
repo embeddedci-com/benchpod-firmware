@@ -191,8 +191,10 @@ int at_send_data(int conn_id, const uint8_t *buf, size_t len)
         return 0;
     }
     /* Real TCP conns and cloud tunnels: enqueue into the conn's TX ring; the net
-       task moves it into lwIP.  A short write (ring full) is reported as failure so
-       the caller closes the (evidently stuck) connection. */
+       task moves it into lwIP.  All or nothing (conn_tx_write): when the ring cannot
+       take the whole buffer nothing is queued and this fails, so the peer never sees a
+       torn line or frame.  Callers that may meet a full ring check at_send_avail()
+       first (bulk senders, DAP, UART proxy); the others close the stuck connection. */
     if (conn_tx_slot(conn_id) >= 0)
         return (conn_tx_write(conn_id, buf, len) == len) ? 0 : -1;
     return -1;

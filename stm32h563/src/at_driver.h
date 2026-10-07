@@ -8,7 +8,8 @@
 /* TCP transmit seam used by command_handler.c / scpi_server.c.  On the RP2350
    these went to the ESP32 AT modem; here they map onto the LwIP TCP command
    server (see net_server.c) by connection id.  Return 0 on success, <0 on
-   error (which makes the caller close the connection). */
+   error (which makes the caller close the connection).  All or nothing: on
+   failure none of buf was queued (check at_send_avail() to send in pieces). */
 int at_send_data(int conn_id, const uint8_t *buf, size_t len);
 int at_close_connection(int conn_id);
 int at_set_tcp_nodelay(int conn_id, bool enable);

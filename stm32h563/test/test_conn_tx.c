@@ -43,19 +43,39 @@ static void test_basic(void) {
     CHECK(conn_tx_used(CONN) == 0);
 }
 
-static void test_fill_and_short_write(void) {
+/* All or nothing (CORR-3): a write the ring cannot take whole queues NOTHING, so a reader never
+   sees half a JSON line or half a DAP response; a write that fits exactly is taken whole. */
+static void test_all_or_nothing(void) {
     conn_tx_reset(CONN);
     size_t cap = conn_tx_free(CONN);
     static uint8_t big[4096];
     memset(big, 0xAB, sizeof(big));
-    /* Writing more than capacity queues exactly `cap` bytes (short write). */
-    size_t w = conn_tx_write(CONN, big, sizeof(big));
-    CHECK(w == cap);
+    /* More than capacity: nothing queued, the ring untouched. */
+    CHECK(conn_tx_write(CONN, big, sizeof(big)) == 0);
+    CHECK(conn_tx_used(CONN) == 0 && conn_tx_free(CONN) == cap);
+    CHECK(conn_tx_write(CONN, big, cap + 1) == 0);
+    CHECK(conn_tx_used(CONN) == 0);
+
+    /* Part-full ring: a write one byte too big is refused whole; the queued bytes are intact. */
+    uint8_t mark[300];
+    for (size_t i = 0; i < sizeof(mark); i++) mark[i] = (uint8_t)(i * 7u + 3u);
+    CHECK(conn_tx_write(CONN, mark, sizeof(mark)) == sizeof(mark));
+    size_t room = conn_tx_free(CONN);
+    CHECK(room == cap - sizeof(mark));
+    CHECK(conn_tx_write(CONN, big, room + 1) == 0);
+    CHECK(conn_tx_used(CONN) == sizeof(mark) && conn_tx_free(CONN) == room);
+    /* Exactly the free space: taken whole, the ring is then full. */
+    CHECK(conn_tx_write(CONN, big, room) == room);
     CHECK(conn_tx_free(CONN) == 0);
-    /* Another write queues nothing. */
-    CHECK(conn_tx_write(CONN, big, 10) == 0);
+    CHECK(conn_tx_write(CONN, big, 1) == 0);
+    /* The first bytes out are still the marker, then the filler: no torn or mixed write. */
+    const uint8_t *p;
+    size_t n = conn_tx_peek(CONN, &p);
+    CHECK(n >= sizeof(mark) && memcmp(p, mark, sizeof(mark)) == 0);
     drain_all(CONN);
     CHECK(conn_tx_used(CONN) == 0);
+    /* An empty write always succeeds and queues nothing. */
+    CHECK(conn_tx_write(CONN, big, 0) == 0 && conn_tx_used(CONN) == 0);
 }
 
 /* Reconstruct a written buffer through the peek/advance API (which returns at most
@@ -105,7 +125,7 @@ static void test_no_ring(void) {
 
 int main(void) {
     test_basic();
-    test_fill_and_short_write();
+    test_all_or_nothing();
     test_wrap();
     test_no_ring();
     if (failures) { printf("FAILED — %d conn_tx checks\n", failures); return 1; }
