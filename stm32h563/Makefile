@@ -188,8 +188,9 @@ LWIP_V4   := ip4 ip4_addr ip4_frag etharp icmp dhcp acd igmp
 C_SOURCES += $(addprefix $(LWIP)/src/core/,$(addsuffix .c,$(LWIP_CORE)))
 C_SOURCES += $(addprefix $(LWIP)/src/core/ipv4/,$(addsuffix .c,$(LWIP_V4)))
 C_SOURCES += $(LWIP)/src/netif/ethernet.c
-C_SOURCES += $(LWIP)/src/apps/altcp_tls/altcp_tls_mbedtls.c \
-             $(LWIP)/src/apps/altcp_tls/altcp_tls_mbedtls_mem.c
+# altcp_tls_mbedtls: our patched copy (src/altcp_tls_bp/, see the top of altcp_tls_mbedtls_bp.c).
+C_SOURCES += src/altcp_tls_bp/altcp_tls_mbedtls_bp.c \
+             src/altcp_tls_bp/altcp_tls_mbedtls_mem.c
 C_SOURCES += $(LWIP)/src/apps/mdns/mdns.c \
              $(LWIP)/src/apps/mdns/mdns_out.c \
              $(LWIP)/src/apps/mdns/mdns_domain.c
@@ -396,11 +397,11 @@ check-uid:
 test:
 	$(MAKE) -C test
 
-# The vendored LwIP altcp_tls_mbedtls.c is mbedTLS 2.x-era: it reads the now-private
+# The LwIP altcp_tls_mbedtls.c (our copy, src/altcp_tls_bp/altcp_tls_mbedtls_bp.c) is mbedTLS 2.x-era: it reads the now-private
 # ssl_context.out_left (needs MBEDTLS_ALLOW_PRIVATE_ACCESS) and the renamed-away
 # MBEDTLS_SSL_MAX_CONTENT_LEN (now split into IN/OUT) — alias it back for this file only.
-$(BUILD_DIR)/altcp_tls_mbedtls.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
-                                            -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
+$(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
+                                               -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
