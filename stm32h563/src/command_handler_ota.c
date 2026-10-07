@@ -17,6 +17,7 @@
 #include "bp_json.h"
 #include "bp_err.h"
 #include "bp_limits.h"
+#include "boot_guard.h"     /* safe mode: no PSRAM to stage into */
 
 #include <string.h>
 #include <stdlib.h>
@@ -31,16 +32,41 @@
  * frames (or, for LAN testing, base64 ota_data commands).  See ota.c.
  * ========================================================================== */
 
-/* Build+send an ota status reply: {state,received,size,error}. */
+ota_owner_t ota_owner_for_conn(int conn_id) {
+    switch (command_handler_policy_src(conn_id)) {
+    case POLICY_SRC_USB:   return OTA_OWNER_USB;
+    case POLICY_SRC_CLOUD: return OTA_OWNER_CLOUD;
+    default:               return OTA_OWNER_LAN(conn_id);
+    }
+}
+
+const char *ota_begin_gate(ota_owner_t who) {
+    /* Safe mode turned the iCE40/PSRAM bring-up off: the OCTOSPI was never initialised, so there
+       is nowhere to stage. The JSON path already refuses every ota_* command there; the cloud's
+       ota.* frames and the console's upload-begin did not, and staged into an uninitialised bus. */
+    if (boot_guard_skip_hw())
+        return "safe mode: the PSRAM is off this boot, so an update cannot be staged; unplug and "
+               "replug the pod, or flash it over USB DFU";
+    const char *why = ota_busy_replace_for(who);   /* another transport's live session */
+    if (why) return why;
+    /* Staging takes the PSRAM bus, which a running capture or waveform upload owns. "busy" is not
+       a permanent error: the server retries. */
+    if (capture_or_upload_busy()) return "busy: a capture or upload is running";
+    return NULL;
+}
+
+/* Build+send an ota status reply: {state,received,size,owner,error}. */
 static void ota_reply(int conn_id) {
-    char resp[256];
+    char resp[288];
+    char owner[16];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"target\":\"%s\",\"received\":%lu,"
-                "\"size\":%lu,\"frames_seen\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"error\":",
+                "\"size\":%lu,\"frames_seen\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"owner\":\"%s\",\"error\":",
             ota_state_str(), ota_target_name(ota_target()),
             (unsigned long)ota_received(), (unsigned long)ota_size(),
-            (unsigned long)cloud_client_ota_frames_seen(), ota_sig_result(), ota_sig_key_id());
+            (unsigned long)cloud_client_ota_frames_seen(), ota_sig_result(), ota_sig_key_id(),
+            ota_owner_tag(ota_owner(), owner, sizeof(owner)));
     bp_emit_jstr(&e, ota_error());
     bp_emit_raw(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
@@ -69,11 +95,13 @@ void handle_ota_begin(int conn_id, const char *json) {
         const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
-    /* Refuse if a capture/measure/LA is in flight (shares the PSRAM bus). */
-    if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
+    /* Refuse if another transport's update or a capture/measure/LA is in flight. */
+    const ota_owner_t who = ota_owner_for_conn(conn_id);
+    const char *busy = ota_begin_gate(who);
+    if (busy) { send_error(conn_id, busy); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin_signed(size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0), sig,
-                         sig_len < 0 ? 1u : (size_t)sig_len) != 0) {
+    if (ota_begin_owned(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0), sig,
+                        sig_len < 0 ? 1u : (size_t)sig_len) != 0) {
         send_error(conn_id, ota_error());
         return;
     }
@@ -96,13 +124,19 @@ void handle_ota_data(int conn_id, const char *json) {
         send_error(conn_id, "invalid data");
         return;
     }
-    if (ota_data(offset, raw, (uint32_t)rawlen) != 0) { send_error(conn_id, ota_error()); return; }
+    const ota_owner_t who = ota_owner_for_conn(conn_id);
+    const char *busy = ota_busy_for(who);
+    if (busy) { send_error(conn_id, busy); return; }
+    if (ota_data_by(who, offset, raw, (uint32_t)rawlen) != 0) { send_error(conn_id, ota_error()); return; }
     ota_reply(conn_id);
 }
 
 /* {"cmd":"ota_end"} — verify the staged image's SHA-256. */
 void handle_ota_end(int conn_id) {
-    ota_end();          /* sets state to verified or error */
+    const ota_owner_t who = ota_owner_for_conn(conn_id);
+    const char *busy = ota_busy_for(who);
+    if (busy) { send_error(conn_id, busy); return; }
+    ota_end_by(who);    /* sets state to verified or error */
     ota_reply(conn_id);
 }
 
@@ -110,7 +144,12 @@ void handle_ota_end(int conn_id) {
 void handle_ota_status(int conn_id) { ota_reply(conn_id); }
 
 /* {"cmd":"ota_abort"} */
-void handle_ota_abort(int conn_id) { ota_abort(); ota_reply(conn_id); }
+/* Another transport's live session is refused (ota.h); an abandoned one may be cleared. */
+void handle_ota_abort(int conn_id) {
+    const ota_owner_t who = ota_owner_for_conn(conn_id);
+    if (ota_abort_by(who) != 0) { send_error(conn_id, ota_busy_replace_for(who)); return; }
+    ota_reply(conn_id);
+}
 
 /* {"cmd":"ota_selftest"} — SAFE validation of the RAM-resident flash writer
    against a scratch sector (never the app).  Run + confirm PASS before ota_commit. */
@@ -124,6 +163,8 @@ void handle_ota_selftest(int conn_id) {
 /* {"cmd":"ota_commit"} — firmware: write the VERIFIED image to flash and reset (no return on
    success, so the ack goes first).  A blob: write it to its W25Q slot and reply with the state. */
 void handle_ota_commit(int conn_id) {
+    const char *busy = ota_busy_for(ota_owner_for_conn(conn_id));
+    if (busy) { send_error(conn_id, busy); return; }
     if (ota_get_state() != OTA_VERIFIED) {
         send_error(conn_id, "no verified image staged");
         return;

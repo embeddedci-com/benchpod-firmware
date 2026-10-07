@@ -6,6 +6,7 @@
  */
 #include "w25q.h"
 #include "psram.h"
+#include "signal_engine.h"   /* quiesce the gateware PSRAM masters for a session */
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "stm32h5xx_hal.h"
@@ -86,6 +87,17 @@ void w25q_close(void)
     gz.Pin  = ICE_FLASH_CS_PIN;
     HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
     psram_bus_release();
+}
+
+int w25q_session_open(void)
+{
+    signal_engine_quiesce_psram_masters();
+    return w25q_open();
+}
+
+void w25q_session_close(void)
+{
+    w25q_close();
 }
 
 int w25q_read_id(uint8_t id[3])

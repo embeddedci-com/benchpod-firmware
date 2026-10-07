@@ -104,7 +104,7 @@ int ice40_reflash_image(int n)
     psram_reset_to_spi();
     int rc = ice40_flash_program_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
     psram_init();                       /* re-enter QPI for the new gateware (bus-yank now safe: gw v26) */
-    psram_bus_release();                /* hand the shared bus back to the iCE40 */
+    psram_bus_handover();               /* hand the shared bus back to the iCE40 */
     /* The fabric just reset every register it owns; the firmware's MIRRORS of those registers did
        not.  Re-sync them here — this is the one point every reconfiguration passes through (image
        swap, this console command, the boot/OTA reflash).  Unconditional: even a FAILED program
@@ -392,6 +392,22 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
        (unsigned long)noresp, (unsigned long)reboot);
 }
 
+/* Console commands that capture into the PSRAM or drive the shared bus.  They go through the
+   same heavy gate as the JSON and SCPI captures: run on the worker between two polls of a LAN
+   capture_dual, a console `adc` used to overwrite the capture the iCE40 was still writing (or a
+   staged OTA image) and read back garbage itself. */
+static bool console_needs_heavy_gate(const char *verb)
+{
+    static const char *const gated[] = {
+        "adc", "measure", "capture-psram", "psram-test", "dualcap", "lastress", "psram",
+        "psram-addrtest", "psram-bench", "psram-clk", "psram-selftest", "cap-selftest",
+        "flash-ice40",
+    };
+    for (size_t i = 0; i < sizeof(gated) / sizeof(gated[0]); i++)
+        if (!strcmp(verb, gated[i])) return true;
+    return false;
+}
+
 static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
 {
     /* wifi-set needs quote-aware parsing (SSID/password may contain spaces), so
@@ -408,6 +424,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     char *tok = strtok(cmd, " \t");
     while (tok && argc < 11) { argv[argc++] = tok; tok = strtok(NULL, " \t"); }
     if (argc == 0) return;
+
+    const bool gated = console_needs_heavy_gate(argv[0]);
+    if (gated && !command_handler_acquire_adc(CH_CONSOLE_TEXT_OWNER)) {
+        op(out, ctx, "  %s refused: busy: a capture, upload or update is using the PSRAM bus; "
+                     "try again when it ends\r\n", argv[0]);
+        return;
+    }
 
     if (!strcmp(argv[0], "help")) {
         cmd_help(out, ctx);
@@ -427,6 +450,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
            iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
         op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+        /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
+        op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
+           (unsigned long)psram_bus_violations());
         /* Capabilities — the full set advertised to the cloud (cl_send_capabilities),
            surfaced here so they're visible from the serial console without decoding the
            cloud handshake. The gateware version is LIVE-read (not the boot snapshot) so a
@@ -966,7 +992,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
 #endif
     } else if (!strcmp(argv[0], "ca") || !strcmp(argv[0], "ca-clear")) {
         if (!strcmp(argv[0], "ca-clear")) {
-            const char *why = cloud_extras_ca_clear();
+            const char *why = bus_busy_reason();   /* the W25Q write takes the shared bus */
+            if (!why) why = cloud_extras_ca_clear();
             if (why) op(out, ctx, "ca-clear error %s\r\n", why);
             else     op(out, ctx, "ca-clear ok\r\n");
         } else {
@@ -988,7 +1015,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
     } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
         const char *why = NULL;
-        if (!strcmp(argv[0], "proxy-set"))
+        /* proxy-set/-clear write the W25Q, which takes the shared bus; plain `proxy` only reads */
+        const char *busy = strcmp(argv[0], "proxy") ? bus_busy_reason() : NULL;
+        if (busy)
+            why = busy;
+        else if (!strcmp(argv[0], "proxy-set"))
             why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
                            : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
         else if (!strcmp(argv[0], "proxy-clear"))
@@ -1041,24 +1072,28 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "upload-begin error usage: upload-begin <firmware|gw0|gw1|esp> <size> <sha256> [version]\r\n");
         else if (t < 0)
             op(out, ctx, "upload-begin error unknown target\r\n");
-        else if (heavy_or_claimed())
-            op(out, ctx, "upload-begin error busy\r\n");
+        else if (ota_begin_gate(OTA_OWNER_USB))   /* another transport's update, or a capture */
+            op(out, ctx, "upload-begin error %s\r\n", ota_begin_gate(OTA_OWNER_USB));
         else {
             uint8_t sig[128];
             int sig_len = ota_sig_decode(s_sig_b64, sig);   /* < 0: undecodable = malformed */
             s_sig_b64[0] = '\0';                             /* one manifest per begin */
-            if (ota_begin_signed((uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
-                                 argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
-                                 sig_len < 0 ? 1u : (size_t)sig_len) == 0)
+            if (ota_begin_owned(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
+                                argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
+                                sig_len < 0 ? 1u : (size_t)sig_len) == 0)
                 op(out, ctx, "upload-begin ok\r\n");
             else
                 op(out, ctx, "upload-begin error %s\r\n", ota_error());
         }
     } else if (!strcmp(argv[0], "upload-end")) {
-        if (ota_end() == 0) op(out, ctx, "upload-end ok\r\n");
-        else                op(out, ctx, "upload-end error %s\r\n", ota_error());
+        if (ota_busy_for(OTA_OWNER_USB))
+            op(out, ctx, "upload-end error %s\r\n", ota_busy_for(OTA_OWNER_USB));
+        else if (ota_end_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-end ok\r\n");
+        else                                      op(out, ctx, "upload-end error %s\r\n", ota_error());
     } else if (!strcmp(argv[0], "upload-commit")) {
-        if (ota_get_state() != OTA_VERIFIED) {
+        if (ota_busy_for(OTA_OWNER_USB)) {
+            op(out, ctx, "upload-commit error %s\r\n", ota_busy_for(OTA_OWNER_USB));
+        } else if (ota_get_state() != OTA_VERIFIED) {
             op(out, ctx, "upload-commit error no verified image staged\r\n");
         } else if (ota_target() == OTA_TARGET_FIRMWARE) {
             op(out, ctx, "upload-commit resetting\r\n");
@@ -1075,8 +1110,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
            ota_target_name(ota_target()), (unsigned long)ota_received(),
            (unsigned long)ota_size(), ota_error()[0] ? ota_error() : "-");
     } else if (!strcmp(argv[0], "upload-abort")) {
-        ota_abort();
-        op(out, ctx, "upload-abort ok\r\n");
+        if (ota_abort_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-abort ok\r\n");
+        else op(out, ctx, "upload-abort error %s\r\n", ota_busy_replace_for(OTA_OWNER_USB));
     } else if (!strcmp(argv[0], "blobs")) {
         /* One line per W25Q slot: name, state against this firmware, what it holds. */
         for (int i = 0; i < BLOB_COUNT; i++) {
@@ -1104,6 +1139,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
         net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
+    } else if (!strcmp(argv[0], "flash-esp32") && bus_busy_reason()) {
+        /* ~140 s on the shared bus: not under a capture, upload or update */
+        op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
     } else if (!strcmp(argv[0], "flash-esp32")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         if (!blob_store_present(BLOB_ESP)) {
@@ -1330,6 +1368,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     } else {
         op(out, ctx, "  unknown command '%s' (try 'help')\r\n", argv[0]);
     }
+    if (gated) command_handler_release_adc(CH_CONSOLE_TEXT_OWNER);
 }
 
 void console_exec(char *cmd, console_out_t out, void *ctx)
@@ -1376,7 +1415,7 @@ static void upload_chunk_done(void)
 {
     if (!upload_rx_crc_ok(&s_upload))
         printf("upload-data retry crc\r\n> ");
-    else if (!hw_worker_submit_ota_data(s_upload.offset, s_upload.buf, s_upload.len))
+    else if (!hw_worker_submit_ota_data_from(OTA_OWNER_USB, s_upload.offset, s_upload.buf, s_upload.len))
         printf("upload-data busy\r\n> ");
     else
         printf("upload-data ok %lu\r\n> ", (unsigned long)s_upload.offset);

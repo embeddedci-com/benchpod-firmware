@@ -444,10 +444,9 @@ int esp_rom_flash_from_slot(void)
         log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
         return -1;
     }
-    signal_engine_quiesce_psram_masters();   /* every bus grab below shares the PSRAM bus */
-    w25q_open();
+    w25q_session_open();   /* every bus grab below shares the PSRAM bus: quiesce first */
     int intact = blob_store_verify(BLOB_ESP) == 0;
-    w25q_close();
+    w25q_session_close();
     if (!intact) {
         log_printf("[espflash] slot esp does not match its checksum: not flashed\n");
         return -1;
@@ -456,10 +455,10 @@ int esp_rom_flash_from_slot(void)
        ~37 blocks (29 resends per flash, measured), against ~1 per flash with the image in
        internal flash. The gateware's PSRAM masters are quiesced and the hw worker running this
        is busy, so nothing else wants the bus meanwhile. */
-    w25q_open();
+    w25q_session_open();
     int rc = esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
                                        blob_store_info(BLOB_ESP)->len, 0);
-    w25q_close();
+    w25q_session_close();
     return rc;
 }
 

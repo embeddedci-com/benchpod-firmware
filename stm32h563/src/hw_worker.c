@@ -36,6 +36,10 @@ typedef struct {
 
 static QueueHandle_t s_q;
 
+/* The Wi-Fi control asked for the ESP32-C3 reflash while a capture, upload or update owned the
+   shared bus: it holds the W25Q for ~140 s, so it waits for the bus instead of cutting in. */
+static bool s_esp_flash_deferred;
+
 /* Scratch work item for producers (each producer runs on its own task; the queue
    copies by value, but the staging buffer must not be shared — use a local). */
 
@@ -162,15 +166,19 @@ bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex, const cha
                      (target && target[0]) ? target : "firmware", (unsigned long)version,
                      sig_b64 ? sig_b64 : "");
     if (n < 0 || n >= (int)sizeof(arg)) return true;   /* malformed: consumed, not replayed */
-    return submit_u(WK_OTA_BEGIN, -1, (const uint8_t *)arg, (size_t)n, NULL, size, 0);
+    return submit_u(WK_OTA_BEGIN, OTA_OWNER_CLOUD, (const uint8_t *)arg, (size_t)n, NULL, size, 0);
 }
+/* OTA items carry their session owner (ota.h) in conn_id: the cloud unless said otherwise. */
 bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len) {
-    return submit_u(WK_OTA_DATA, -1, buf, len, NULL, offset, 0);
+    return hw_worker_submit_ota_data_from(OTA_OWNER_CLOUD, offset, buf, len);
+}
+bool hw_worker_submit_ota_data_from(int owner, uint32_t offset, const uint8_t *buf, size_t len) {
+    return submit_u(WK_OTA_DATA, owner, buf, len, NULL, offset, 0);
 }
 /* false = the queue is full: the caller keeps the frame and retries (these were dropped). */
-bool hw_worker_submit_ota_end(void)    { return submit(WK_OTA_END, -1, NULL, 0, NULL, 0); }
-bool hw_worker_submit_ota_abort(void)  { return submit(WK_OTA_ABORT, -1, NULL, 0, NULL, 0); }
-bool hw_worker_submit_ota_commit(void) { return submit(WK_OTA_COMMIT, -1, NULL, 0, NULL, 0); }
+bool hw_worker_submit_ota_end(void)    { return submit(WK_OTA_END, OTA_OWNER_CLOUD, NULL, 0, NULL, 0); }
+bool hw_worker_submit_ota_abort(void)  { return submit(WK_OTA_ABORT, OTA_OWNER_CLOUD, NULL, 0, NULL, 0); }
+bool hw_worker_submit_ota_commit(void) { return submit(WK_OTA_COMMIT, OTA_OWNER_CLOUD, NULL, 0, NULL, 0); }
 bool hw_worker_submit_esp_flash(void)  { return submit(WK_ESP_FLASH, -1, NULL, 0, NULL, 0); }
 
 bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
@@ -220,31 +228,44 @@ static void handle_work(cmd_work_t *w) {
         char sha[80] = {0}, target[16] = {0}, sig_b64[200] = {0};
         unsigned long version = 0;
         if (sscanf((const char *)w->data, "%79s %15s %lu %199s", sha, target, &version, sig_b64) < 1) break;
+        const ota_owner_t who = w->conn_id;
         int t = ota_target_from_name(target);
-        if (t < 0) { ota_begin_target(0, sha, (ota_target_t)99, 0); break; }   /* reports "bad target" */
-        /* Same gate as the LAN and console paths: staging takes the PSRAM bus, which a running
-           capture or waveform upload owns. "busy" is not a permanent error: the server retries. */
-        if (heavy_or_claimed()) { ota_refuse("busy: a capture or upload is running"); break; }
+        if (t < 0) { ota_refuse_for(who, "bad target"); break; }
+        /* Same gate as the LAN and console paths: another transport's update, or a capture or
+           waveform upload on the PSRAM bus. A refusal of someone else's session reaches the cloud
+           through its own ota.status view (ota_view_for) and leaves that session alone. */
+        const char *busy = ota_begin_gate(who);
+        if (busy) { ota_refuse_for(who, busy); break; }
         uint8_t sig[128];
         int sig_len = ota_sig_decode(sig_b64, sig);
         /* an undecodable manifest counts as a malformed one (fw_sign: "format"), not as none */
-        ota_begin_signed(w->u32, sha, (ota_target_t)t, (uint32_t)version, sig,
-                         sig_len < 0 ? 1u : (size_t)sig_len);
+        ota_begin_owned(who, w->u32, sha, (ota_target_t)t, (uint32_t)version, sig,
+                        sig_len < 0 ? 1u : (size_t)sig_len);
         break;
     }
     case WK_OTA_DATA:
-        ota_data(w->u32, w->data, w->len);
+        ota_data_by(w->conn_id, w->u32, w->data, w->len);
         break;
     case WK_OTA_END:
-        ota_end();
+        ota_end_by(w->conn_id);
         break;
     case WK_OTA_ABORT:
-        ota_abort();
+        if (ota_abort_by(w->conn_id) != 0)   /* another transport's live session */
+            ota_refuse_for(w->conn_id, ota_busy_replace_for(w->conn_id));
         break;
-    case WK_OTA_COMMIT:
+    case WK_OTA_COMMIT: {
+        const char *busy = ota_busy_for(w->conn_id);
+        if (busy) { ota_refuse_for(w->conn_id, busy); break; }
         ota_commit();                     /* does not return on success */
         break;
+    }
     case WK_ESP_FLASH:                    /* Wi-Fi found no esp-hosted image on the C3 */
+        if (heavy_or_claimed()) {
+            if (!s_esp_flash_deferred)
+                printf("[hw] ESP32-C3 flash deferred: a capture, upload or update owns the PSRAM bus\n");
+            s_esp_flash_deferred = true;
+            break;
+        }
         esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
         break;
     default:
@@ -268,6 +289,11 @@ static void worker_task(void *arg) {
             handle_work(&w);
         }
         apply_parked_teardowns(); /* closes/resets that did not fit in the queue */
+        if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */
+            s_esp_flash_deferred = false;
+            printf("[hw] running the deferred ESP32-C3 flash\n");
+            esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
+        }
         {
             extern volatile uint32_t g_malloc_failures;   /* main.c */
             static uint32_t seen;

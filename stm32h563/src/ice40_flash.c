@@ -134,8 +134,10 @@ int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
 
     /* Hand the config-flash bus FULLY to the iCE40 before releasing it from reset (previously
        CRESET was released while the STM32 still owned the bus, so the iCE40 came out of reset
-       into a flash it couldn't reach and CDONE never asserted). */
+       into a flash it couldn't reach and CDONE never asserted).  Handover, not a plain release:
+       an outer hold left open here would keep PG0 high through the config read. */
     psram_bus_release();
+    psram_bus_handover();
     /* ...BUT hold the PSRAM /CS DRIVEN HIGH (not the Hi-Z psram_bus_release leaves) for the whole
        config read: the shared SCLK/SO/SI edges the iCE40 clocks out can capacitively drag a Hi-Z
        (pulled-up) /CS low, glitch-selecting the PSRAM so it drives IO0(=SO) and corrupts the

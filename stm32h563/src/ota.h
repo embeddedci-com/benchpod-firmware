@@ -76,9 +76,56 @@ const char *ota_sig_key_id(void);
 /* Decode a base64url manifest as the transports carry it. Returns its length (128 when valid
    base64url of the right size), 0 for an empty string, -1 when it cannot be decoded. */
 int ota_sig_decode(const char *b64, uint8_t out[128]);
-/* Refuse an OTA without starting it (e.g. the PSRAM bus is busy): state ERROR with `why`, which
-   the cloud reports in ota.status like any other begin failure. */
-void ota_refuse(const char *why);
+/* ---- session owner ----------------------------------------------------------------------
+   One staging area, three transports: the cloud (ota.* frames and cloud JSON commands), the USB
+   console (upload-*) and the LAN (ota_* JSON). The session belongs to the transport that began
+   it. Another owner's begin is refused with the holder in the message, its data/end/commit are
+   refused without touching the session, and only its own refusals put the session in ERROR.
+   Within the LAN the session belongs to one connection while it is open; once it closes, the
+   next LAN connection adopts the session and carries on (clients that open a connection per
+   command). A session that made no progress for OTA_TAKEOVER_IDLE_MS counts as abandoned: any
+   transport may begin over it or abort it (the server's "abort" button clears a forgotten
+   LAN-staged image that way). A closed LAN connection alone does not let another transport in. The calls without an owner (ota_begin_signed, ota_data,
+   ...) skip these checks; the transports use the owned ones. */
+typedef int ota_owner_t;
+#define OTA_OWNER_NONE        0
+#define OTA_OWNER_CLOUD       1
+#define OTA_OWNER_USB         2
+#define OTA_OWNER_LAN(conn)   (16 + (conn))
+#define OTA_TAKEOVER_IDLE_MS  30000u
+
+ota_owner_t ota_owner(void);
+/* "cloud", "usb", "lan:<conn>" ("" when none), for the JSON replies. */
+const char *ota_owner_tag(ota_owner_t who, char *buf, size_t cap);
+/* NULL if `who` may send data/end/commit for the session (none active, its own, or a LAN
+   connection adopting the session of a closed one, which then becomes the owner), else a
+   refusal naming the holder ("busy: firmware update from LAN connection 2 is in progress"). */
+const char *ota_busy_for(ota_owner_t who);
+/* The same for begin and abort, which may also replace an abandoned session. */
+const char *ota_busy_replace_for(ota_owner_t who);
+int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
+                    uint32_t version, const uint8_t *sig, size_t sig_len);
+int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len);
+int ota_end_by(ota_owner_t who);
+/* 0 = aborted; -1 = refused (another owner's live session; ota_busy_replace_for says why). */
+int ota_abort_by(ota_owner_t who);
+/* Refuse something `who` asked for without disturbing another owner's session: when the session
+   is `who`'s own (or none/abandoned) it goes to ERROR with `why` as before; otherwise the refusal
+   is only shown to `who` (ota_view_for), which is how the cloud learns a begin was refused. */
+void ota_refuse_for(ota_owner_t who, const char *why);
+/* `who` went away (a LAN connection closed): the next LAN connection may adopt its session. */
+void ota_owner_gone(ota_owner_t who);
+
+/* What `who` should see in a status report: the session, or the refusal it was last given. */
+typedef struct {
+    ota_state_t state;
+    uint32_t    received, size;
+    const char *error;
+    uint32_t    refusals;   /* changes with every explicit refusal (a begin, abort or commit): a
+                               status report is due even when state and error read as before */
+} ota_view_t;
+void ota_view_for(ota_owner_t who, ota_view_t *out);
+const char *ota_state_name(ota_state_t st);
 /* Store the verified firmware image in the W25Q FW slot (install time; best effort). */
 int ota_store_fw_copy(void);
 

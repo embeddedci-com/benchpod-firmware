@@ -1240,8 +1240,13 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
 static void cl_ota_status_poll(void) {
     static ota_state_t last_state = OTA_IDLE;
     static uint32_t    last_reported;
-    ota_state_t st  = ota_get_state();
-    uint32_t    rcv = ota_received();
+    static uint32_t    last_refusals;
+    /* The cloud's view: the session, or the refusal its last ota.* frame got because another
+       transport (LAN, USB) holds the session (ota.h). */
+    ota_view_t  v;
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    ota_state_t st  = v.state;
+    uint32_t    rcv = v.received;
     /* 8 KB, not 64 KB: this frame is not just a progress bar, it is the ACK the server
        paces its push against (see otaWindow in the server's benchpod_ota.go). At a 64 KB
        reporting interval the server had no usable catch-up signal inside a sane window, so
@@ -1255,24 +1260,30 @@ static void cl_ota_status_poll(void) {
        one window verified fine. Adding the tick took the frames the device saw from 7 to 327. */
     static absolute_time_t next_tick;
     bool tick = (st == OTA_RECEIVING) && time_reached(next_tick);
-    bool changed = (st != last_state) ||
+    /* A refusal (another transport holds the session) is reported every time, even when it reads
+       like the last one: the cloud view stays "error" between jobs, so a state-change test alone
+       left a later job's refused begin unanswered and the server waited for acks that never came. */
+    bool changed = (st != last_state) || (v.refusals != last_refusals) ||
                    (st == OTA_RECEIVING && rcv - last_reported >= OTA_STATUS_EVERY) ||
                    tick;
     if (!changed) return;
-    next_tick = make_timeout_time_ms(OTA_STATUS_TICK_MS);
-    last_state = st;
-    last_reported = rcv;
 
     char f[320];
     bp_emit_t e;
     bp_emit_init(&e, f, sizeof(f));
     bp_emit(&e, "{\"type\":\"ota.status\",\"device_id\":\"%s\",\"state\":\"%s\","
                 "\"received\":%lu,\"size\":%lu,\"sig\":\"%s\",\"sig_key\":\"%s\",\"error\":",
-            s_cfg.device_id, ota_state_str(),
-            (unsigned long)rcv, (unsigned long)ota_size(), ota_sig_result(), ota_sig_key_id());
-    bp_emit_jstr(&e, ota_error());
+            s_cfg.device_id, ota_state_name(st),
+            (unsigned long)rcv, (unsigned long)v.size, ota_sig_result(), ota_sig_key_id());
+    bp_emit_jstr(&e, v.error);
     bp_emit_raw(&e, "}");
-    if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e));
+    /* Only a frame that went out counts as reported: a full send buffer used to lose a state
+       change (an error included) for good. Retried on the next poll. */
+    if (!bp_emit_ok(&e) || !cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e))) return;
+    next_tick = make_timeout_time_ms(OTA_STATUS_TICK_MS);
+    last_state = st;
+    last_reported = rcv;
+    last_refusals = v.refusals;
 }
 
 /* Parse and act on any complete WS frames buffered in s_rx. */

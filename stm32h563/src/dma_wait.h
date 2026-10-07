@@ -32,6 +32,8 @@ typedef struct dma_waiter {
     SemaphoreHandle_t sem;       /* binary; given from the completion ISR    */
     volatile int      result;    /* XFER_OK / XFER_ERR, set by the ISR       */
     volatile bool     done;      /* set by the ISR (poll-fallback reads it)  */
+    void            (*on_done)(void);  /* optional, run in the completion ISR before the
+                                          waiter wakes (psram.c raises its GPIO CS here) */
 } dma_waiter_t;
 
 /* Create the waiter's semaphore and register it so the shared HAL SPI/XSPI

@@ -2493,6 +2493,10 @@ All errors follow the format:
 | `"missing nonce"` | `identity_pop` request without `nonce` field |
 | `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
 | `"identity not available"` | Device identity not initialised (should not occur after boot) |
+| `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
+| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
+| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, console `upload-begin`) in a safe mode that turned the iCE40/PSRAM off |
+| `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `ca-clear`, `proxy-set`, `proxy-clear`, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
 
 Three families carry a **machine-parseable prefix** — clients (the Python SDK among them) match
 on the prefix and show the rest to the user:
