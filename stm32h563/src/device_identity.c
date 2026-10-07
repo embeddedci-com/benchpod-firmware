@@ -24,16 +24,10 @@
  * ---------------------------------------------------------------------------*/
 
 #define IDENTITY_FLASH_OFFSET 0x1FC000u   /* STM32H5: bank2 sector 126 (8 KB) */
-#define IDENTITY_MAGIC        0xC0FFEE02u   /* distinct from CONFIG_MAGIC */
-#define IDENTITY_VERSION      1u
+#define IDENTITY_MAGIC        DEVICE_ID_REC_MAGIC
+#define IDENTITY_VERSION      DEVICE_ID_REC_VERSION
 
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    uint8_t  seed[32];      /* Ed25519 private seed (RFC 8032 private key) */
-    uint32_t reserved[4];
-} identity_record_t;
-/* sizeof = 4 + 4 + 32 + 16 = 56 B  (fits one 256 B program page) */
+typedef device_identity_rec_t identity_record_t;   /* layout: device_identity.h */
 
 _Static_assert(sizeof(identity_record_t) <= FLASH_PAGE_SIZE,
                "identity_record_t must fit in a single 256 B flash page");
@@ -43,6 +37,7 @@ _Static_assert(sizeof(identity_record_t) <= FLASH_PAGE_SIZE,
 static uint8_t s_secret_key[64];               /* Ed25519 expanded secret key */
 static uint8_t s_public_key[DEVICE_ID_PUBLIC_LEN];
 static bool    s_ready = false;
+static char    s_problem[96];                  /* device_identity_problem(); "" = none */
 
 #if PICO_NO_FLASH
 /* RAM-only (no_flash) build: no flash to read/persist (e.g. an unusable flash
@@ -115,17 +110,38 @@ void device_identity_init(void) {
     if (flash_read_checked(IDENTITY_FLASH_OFFSET, &rec, sizeof(rec)) != 0) {
         printf("[id] ERROR: the identity sector is unreadable (flash ECC error); running "
                "without an identity, NOT generating a new key over it\n");
+        snprintf(s_problem, sizeof(s_problem), "identity sector unreadable (flash ECC error)");
         memset(&rec, 0, sizeof(rec));
         s_ready = false;
         return;
     }
 #endif
 
-    if (rec.magic == IDENTITY_MAGIC && rec.version == IDENTITY_VERSION) {
+#if PICO_NO_FLASH
+    /* The RAM shadow starts zeroed: that is this build's blank sector. */
+    static const identity_record_t zero;
+    if (memcmp(&rec, &zero, sizeof(rec)) == 0) memset(&rec, 0xFF, sizeof(rec));
+#endif
+    device_id_rec_state_t st = device_identity_rec_state(&rec);
+    if (st == DEVICE_ID_REC_FOREIGN) {
+        /* Not ours, and not blank: an older or newer record layout, or damage. It may well hold
+           the key this pod is registered with, so it is left alone. Run without an identity
+           (cloud login and proof-of-possession refuse) and say why. */
+        printf("[id] ERROR: the identity sector holds an unknown record (magic 0x%08lx, version "
+               "%lu); NOT generating a new key over it\n",
+               (unsigned long)rec.magic, (unsigned long)rec.version);
+        snprintf(s_problem, sizeof(s_problem),
+                 "unknown identity record (magic 0x%08lx v%lu), not replaced",
+                 (unsigned long)rec.magic, (unsigned long)rec.version);
+        memset(&rec, 0, sizeof(rec));
+        s_ready = false;
+        return;
+    }
+    if (st == DEVICE_ID_REC_VALID) {
         /* Existing key — load it, never overwrite. */
         printf("[id] loaded device identity from flash\n");
     } else {
-        /* First boot (or unknown schema): generate and persist a new key. */
+        /* First boot (the sector is blank): generate and persist a new key. */
         printf("[id] no identity in flash — generating new Ed25519 key\n");
         memset(&rec, 0, sizeof(rec));
         rec.magic   = IDENTITY_MAGIC;
@@ -135,6 +151,7 @@ void device_identity_init(void) {
                The pod runs without an identity (cloud auth / pop refuse) and
                tries again on the next boot. */
             printf("[id] ERROR: hardware RNG failed; NOT generating a device key\n");
+            snprintf(s_problem, sizeof(s_problem), "hardware RNG failed: no device key yet");
             memset(&rec, 0, sizeof(rec));
             s_ready = false;
             return;
@@ -156,6 +173,10 @@ void device_identity_init(void) {
     char pub_b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
     b64url_encode(s_public_key, sizeof(s_public_key), pub_b64, sizeof(pub_b64));
     printf("[id] device public key (ed25519): %s\n", pub_b64);
+}
+
+const char *device_identity_problem(void) {
+    return s_ready ? "" : (s_problem[0] ? s_problem : "identity not initialized");
 }
 
 int device_identity_get_public(uint8_t pub[DEVICE_ID_PUBLIC_LEN]) {

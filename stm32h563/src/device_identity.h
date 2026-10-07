@@ -43,6 +43,36 @@
    payload is a host name (< 64 B) + NUL + a server nonce (<= 128 B). */
 #define DEVICE_ID_SIGN_MSG_MAX 256
 
+/* ---- The persistent record (its own flash sector) ------------------------- */
+#define DEVICE_ID_REC_MAGIC    0xC0FFEE02u   /* distinct from CONFIG_MAGIC */
+#define DEVICE_ID_REC_VERSION  1u
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint8_t  seed[32];      /* Ed25519 private seed (RFC 8032 private key) */
+    uint32_t reserved[4];
+} device_identity_rec_t;
+/* sizeof = 4 + 4 + 32 + 16 = 56 B  (fits one 256 B program page) */
+
+typedef enum {
+    DEVICE_ID_REC_VALID,     /* our magic and version: load it */
+    DEVICE_ID_REC_BLANK,     /* erased (every byte 0xFF): the one case where a key is generated */
+    DEVICE_ID_REC_FOREIGN,   /* anything else: another schema, or damage. Never written over */
+} device_id_rec_state_t;
+
+/* What the identity sector holds. A record this firmware does not know may still be the key
+   the pod is registered with (an older or newer layout): generating over it would orphan the
+   pod's cloud registration for good, so only a blank sector gets a new key. */
+static inline device_id_rec_state_t device_identity_rec_state(const device_identity_rec_t *r) {
+    if (r->magic == DEVICE_ID_REC_MAGIC && r->version == DEVICE_ID_REC_VERSION)
+        return DEVICE_ID_REC_VALID;
+    const uint8_t *b = (const uint8_t *)r;
+    for (size_t i = 0; i < sizeof(*r); i++)
+        if (b[i] != 0xFFu) return DEVICE_ID_REC_FOREIGN;
+    return DEVICE_ID_REC_BLANK;
+}
+
 /* Load the key from flash, or generate-and-persist one on first boot.
    Derives the in-RAM keypair and logs the base64url public key.  Call once,
    early in boot (after stdio, before networking). */
@@ -51,6 +81,10 @@ void device_identity_init(void);
 /* Copy the 32-byte public key into pub.
    Returns 0 on success, -1 if identity is not initialized. */
 int device_identity_get_public(uint8_t pub[DEVICE_ID_PUBLIC_LEN]);
+
+/* Why there is no identity ("" when there is one): e.g. an unknown record in the identity
+   sector, an unreadable sector or a failed RNG. For error replies and the cloud status. */
+const char *device_identity_problem(void);
 
 /* Sign  context || 0x00 || msg  (len bytes of msg) into sig with the device
    private key.  `context` is one of the DEVICE_ID_CTX_* domain tags.  Returns 0

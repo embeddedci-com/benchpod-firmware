@@ -1440,7 +1440,12 @@ void cloud_client_poll(void) {
         /* Discard the whole challenge response so the WS 101 parser starts clean.
            Keep the link open. */
         cl_rx_consume(total);
-        if (!cl_sign_nonce()) { cl_backoff("sign failed"); return; }
+        if (!cl_sign_nonce()) {
+            if (device_identity_problem()[0])
+                cl_set_error("device identity: %s", device_identity_problem());
+            cl_backoff("sign failed");
+            return;
+        }
         if (!cl_send_ws_upgrade()) { cl_backoff("ws upgrade send failed"); return; }
         s_deadline = make_timeout_time_ms(HTTP_TIMEOUT_MS);
         cl_set_state(CL_WS_WAIT);

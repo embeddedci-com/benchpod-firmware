@@ -2736,7 +2736,9 @@ static void handle_wifi_status(int conn_id) {
 static void handle_identity_public(int conn_id) {
     uint8_t pub[DEVICE_ID_PUBLIC_LEN];
     if (device_identity_get_public(pub) != 0) {
-        send_error(conn_id, "identity not available");
+        char msg[128];
+        snprintf(msg, sizeof(msg), "identity not available: %s", device_identity_problem());
+        send_error(conn_id, msg);
         return;
     }
     char b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
