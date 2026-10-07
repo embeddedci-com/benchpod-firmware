@@ -207,9 +207,10 @@ def cmd_sign_blobs(a):
     priv = load_seed(a.key)
     release = pack_version(a.release)
     for b in m["blobs"]:
-        path = os.path.join(base, b["file"])
-        if not b.get("size") or not os.path.exists(path):
-            print("%s: not built, not signed" % b["file"])
+        # A blob that was not built has "file": null in a dev tree (the release job refuses that).
+        path = os.path.join(base, b["file"]) if b.get("file") else None
+        if not path or not b.get("size") or not os.path.exists(path):
+            print("%s: not built, not signed" % (b.get("file") or b["name"]))
             continue
         image = open(path, "rb").read()
         with open(path + ".sig", "wb") as f:
