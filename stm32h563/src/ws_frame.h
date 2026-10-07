@@ -9,7 +9,8 @@
  *
  * Just enough for the bench pod's cloud client: encode masked client->server
  * text/control frames, and parse (unmasked) server->client frames. Fragmentation
- * and 64-bit huge payloads are not needed — our frames are small JSON.
+ * and 64-bit huge payloads are not needed (our frames are small JSON), and a
+ * fragmented message is refused explicitly (WS_PARSE_FRAGMENTED).
  * ---------------------------------------------------------------------------*/
 
 #define WS_OP_CONT  0x0
@@ -34,8 +35,11 @@ size_t ws_build_frame(uint8_t opcode, const uint8_t *payload, size_t len,
 
 /* Parse one frame from buf[0..len). On a complete frame, fills *out (payload
    points into buf) and returns the number of bytes consumed (header + payload).
-   Returns 0 if the buffer does not yet hold a full frame, or -1 on a frame we
-   refuse (a masked server frame, or a payload larger than 65535 B). */
+   Returns 0 if the buffer does not yet hold a full frame, -1 on a frame we
+   refuse (a masked server frame, reserved bits set, or a payload larger than
+   65535 B), or WS_PARSE_FRAGMENTED on part of a fragmented message (FIN clear,
+   or a continuation frame), which is not supported. */
+#define WS_PARSE_FRAGMENTED (-2)
 int ws_parse_frame(const uint8_t *buf, size_t len, ws_frame_t *out);
 
 /* Generate a Sec-WebSocket-Key header value: 16 random bytes, standard base64

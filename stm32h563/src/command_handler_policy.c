@@ -58,7 +58,7 @@ void handle_lan_policy(int conn_id, const char *json) {
 
 /* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */
 
-/* {"cmd":"cloud_ca"[,"clear":true]} -> {"present":bool,"certs":[{"subject":..,"sha256":..}]}
+/* {"cmd":"cloud_ca"[,"clear":true]} -> {"present":bool,"certs":[{"subject":..,"sha256":..}][,"error":..]}
    Installing one goes through the upload path (OTA target "ca"). Reading works from anywhere;
    clearing (like installing and the proxy) only from the cloud or USB (pod_policy_cloud_link_gate). */
 void handle_cloud_ca(int conn_id, const char *json) {
@@ -77,7 +77,11 @@ void handle_cloud_ca(int conn_id, const char *json) {
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"present\":%s,\"certs\":[", n > 0 ? "true" : "false");
     bp_emit_raw(&e, certs);
-    bp_emit_raw(&e, "]}}\n");
+    bp_emit_raw(&e, "]");
+    /* An installed CA that is corrupt or does not parse is not used (built-in roots only). */
+    const char *err = cloud_extras_ca_error();
+    if (err) { bp_emit_raw(&e, ",\"error\":"); bp_emit_jstr(&e, err); }
+    bp_emit_raw(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, "cloud_ca: reply too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }

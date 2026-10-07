@@ -195,6 +195,13 @@ int ab_store_save(const ab_store_t *s, const void *data, size_t len)
     return 0;
 }
 
+static void erase_sector(uint32_t off)
+{
+    uint32_t irqs = save_and_disable_interrupts();
+    flash_range_erase(off, FLASH_SHIM_SECTOR_SIZE);
+    restore_interrupts(irqs);
+}
+
 int ab_store_clear(const ab_store_t *s)
 {
     bool v[2]; ab_hdr_t h[2];
@@ -204,12 +211,11 @@ int ab_store_clear(const ab_store_t *s)
     int rc = write_record(s, target, seq, "", 0);
 
     /* The tombstone now outranks everything; wipe the rest so the old secrets are
-       gone. If the tombstone failed, erasing everything is the fallback clear. */
-    uint32_t irqs = save_and_disable_interrupts();
-    if (rc != 0) flash_range_erase(s->slot_off[target], FLASH_SHIM_SECTOR_SIZE);
-    flash_range_erase(s->slot_off[1 - target], FLASH_SHIM_SECTOR_SIZE);
-    if (s->legacy_off) flash_range_erase(s->legacy_off, FLASH_SHIM_SECTOR_SIZE);
-    restore_interrupts(irqs);
+       gone. If the tombstone failed, erasing everything is the fallback clear. One sector per
+       interrupts-off window: three erases in one window kept interrupts off for tens of ms. */
+    if (rc != 0) erase_sector(s->slot_off[target]);
+    erase_sector(s->slot_off[1 - target]);
+    if (s->legacy_off) erase_sector(s->legacy_off);
     printf("[%s] cleared\n", s->tag);
     return rc;
 }

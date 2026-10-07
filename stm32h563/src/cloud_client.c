@@ -27,6 +27,7 @@
 #include "pod_policy.h"
 #include "lease_gate.h"
 #include "cloud_extras.h"
+#include "cloud_caps.h"
 #include "altcp_bp_proxy.h"
 #include "mbedtls/base64.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
@@ -522,12 +523,32 @@ static bool cl_open(bool tls, uint16_t port) {
                hostname are validated in cl_tls_verified() after the handshake. authmode is
                VERIFY_OPTIONAL (the handshake completes; we check the result ourselves and
                drop the link on a verify failure). */
+            /* Only a config built from what was asked for is cached: out of memory fails this
+               attempt (the backoff retries), it never quietly caches a roots-only config that a
+               TLS-inspecting network would refuse until the next reboot. A company CA that does
+               not parse is dropped by cloud_extras (with a log line and cloud_ca's "error"), and
+               the next attempt uses the built-in roots. */
             size_t ca_len = 0;
-            char *ca = cloud_extras_ca_pem(&ca_len);
+            char *ca = NULL;
+            if (cloud_extras_ca_pem(&ca, &ca_len) != 0) {
+                printf("[cloud] out of memory for the company CA: retrying later\n");
+                cl_set_error("out of memory for the company CA");
+                altcp_abort(base);
+                return false;
+            }
             s_tls_conf = ca ? altcp_tls_create_config_client((const u8_t *)ca, ca_len)
                             : altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
             if (ca) cloud_extras_free(ca);
-            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); altcp_abort(base); return false; }
+            if (!s_tls_conf) {
+                if (ca && cloud_extras_ca_tls_refused())
+                    cl_set_error("company CA unusable: using the built-in roots");
+                else {
+                    printf("[cloud] altcp_tls config create failed (out of memory?)\n");
+                    cl_set_error("tls config create failed (out of memory?)");
+                }
+                altcp_abort(base);
+                return false;
+            }
         }
         pcb = altcp_tls_wrap(s_tls_conf, base);
         if (!pcb) { printf("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }
@@ -746,63 +767,50 @@ static bool cl_send_capabilities(void) {
     bool loop_map  = analog && caps.loop_input_map;
     unsigned long replay_max = deep ? (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES
                                     : (unsigned long)SIGNAL_MAX_SAMPLES;
-    /* 1024 held the ~700 B of feature flags; the boot health below adds up to ~330 B (a
-       free-form crash line and safe-mode reason), the signing and policy flags ~130 B more.
-       A frame that does not fit is not sent at all, so keep headroom.  Static: net-task only. */
-    static char f[1536];
-    int n = snprintf(f, sizeof(f),
-        "{\"type\":\"capabilities\",\"device_id\":\"%s\","
-        "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
-        "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
-        "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
-        "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
-        "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
-        "\"dac\":%s,\"dac_replay\":%s,\"dac_dc\":%s,\"dac_bits\":%d,\"dac_replay_bits\":%d,"
-        "\"dac_fullscale_mv\":%d,\"dac_channels\":%d,"
-        "\"dac_deep_replay\":%s,\"dac_replay_max_samples\":%lu,"
-        "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
-        "\"dac_cotrig\":%s,"
-        "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
-        "\"nrst_pin\":%s,"
-        "\"power_profile\":true,"
-        "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"can\":true,\"pod_current\":%s,"
-        "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
-        "\"board\":\"%s\",",
-        s_cfg.device_id, FIRMWARE_VERSION, (unsigned long)(flash_layout_size() / 1024u),
-        fw_sign_policy_name(fw_sign_policy()), pod_policy_lan_name(pod_policy_lan()),
-        analog ? "true" : "false", analog ? "true" : "false", ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS,
-        lround((double)ADC_CAL_EXT.a * 1000000.0), lround((double)ADC_CAL_EXT.b * 1000000000.0),
-        (analog && DAC_AC) ? "true" : "false", (analog && DAC_REPLAY) ? "true" : "false",
-        (analog && DAC_DC) ? "true" : "false",
-        DAC_BITS, DAC_REPLAY_BITS, DAC_FULLSCALE_MV, DAC_CHANNELS,
-        deep ? "true" : "false", replay_max,
-        ctrl_loop ? "true" : "false", loop_src ? "true" : "false",
-        loop_map ? "true" : "false", cotrig ? "true" : "false",
-        caps.gpio_read ? "true" : "false", caps.capture_trigger ? "true" : "false",
-        caps.spi_master ? "true" : "false",
-        caps.spi_master ? "true" : "false",        /* spi_stream: firmware, on the SPI master */
-        nrst_ctrl_supported() ? "true" : "false",   /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
-        analog ? "true" : "false", analog ? "true" : "false",   /* dac_limits, calibrate */
-        ina_pod_present() ? "true" : "false",       /* the pod's own current monitor (0x41) */
-        analog ? "true" : "false",                  /* current_out: the 4-20 mA output */
+    cloud_caps_t c = {
+        .device_id = s_cfg.device_id,
+        .firmware_version = FIRMWARE_VERSION,
+        .flash_kb = (unsigned long)(flash_layout_size() / 1024u),
+        .sig_policy = fw_sign_policy_name(fw_sign_policy()),
+        .lan_policy = pod_policy_lan_name(pod_policy_lan()),
+        .analog = analog,
+        .adc_bits = ADC_BITS, .adc_fullscale_mv = ADC_FULLSCALE_MV, .adc_channels = ADC_CHANNELS,
+        .adc_cal_a_uv = lround((double)ADC_CAL_EXT.a * 1000000.0),
+        .adc_cal_b_nv = lround((double)ADC_CAL_EXT.b * 1000000000.0),
+        .dac_ac = analog && DAC_AC, .dac_replay = analog && DAC_REPLAY, .dac_dc = analog && DAC_DC,
+        .dac_bits = DAC_BITS, .dac_replay_bits = DAC_REPLAY_BITS,
+        .dac_fullscale_mv = DAC_FULLSCALE_MV, .dac_channels = DAC_CHANNELS,
+        .deep_replay = deep, .replay_max_samples = replay_max,
+        .control_loop = ctrl_loop, .loop_sources = loop_src, .loop_input_map = loop_map,
+        .cotrig = cotrig,
+        .gpio_read = caps.gpio_read, .capture_trigger = caps.capture_trigger,
+        .spi_master = caps.spi_master,
+        .nrst_pin = nrst_ctrl_supported(),     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
+        .pod_current = ina_pod_present(),      /* the pod's own current monitor (0x41) */
         /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes
            with the pod's own numbers (current_out.h). */
-        current_out_min_ua(), current_out_max_ua(),
-        BOARD_NAME);
-    if (n <= 0 || (size_t)n >= sizeof(f)) return false;
-    /* Boot health, sent on every connect so the server always holds the current boot's
-       values: last_crash is "none" and safe_reason "" after a clean start, which clears an
-       old warning. */
-    bp_emit_t e;
-    bp_emit_init(&e, f + n, sizeof(f) - (size_t)n);
-    bp_emit(&e, "\"safe_mode\":%s,\"safe_reason\":", boot_guard_safe_mode() ? "true" : "false");
-    bp_emit_jstr(&e, boot_guard_reason());
-    bp_emit(&e, ",\"reset_cause\":\"%s\",\"last_crash\":", fault_last_reset_str());
-    bp_emit_jstr(&e, fault_last_crash_str());
-    bp_emit_raw(&e, "}");
-    if (!bp_emit_ok(&e)) return false;
-    return cl_ws_send(WS_OP_TEXT, f, (size_t)n + bp_emit_len(&e));
+        .current_out_min_ua = current_out_min_ua(), .current_out_max_ua = current_out_max_ua(),
+        .board = BOARD_NAME,
+        /* Boot health, sent on every connect so the server always holds the current boot's
+           values: last_crash is "none" and safe_reason "" after a clean start, which clears an
+           old warning. */
+        .safe_mode = boot_guard_safe_mode(),
+        .safe_reason = boot_guard_reason(),
+        .reset_cause = fault_last_reset_str(),
+        .last_crash = fault_last_crash_str(),
+    };
+    /* cloud_caps_build keeps the frame inside one WS frame (it shortens the free-form boot
+       health when it has to), so a long crash line can no longer make the connect fail and
+       loop. Static: net-task only. */
+    static char f[CLOUD_CAPS_MAX + 1];
+    size_t n = cloud_caps_build(&c, f, sizeof(f));
+    if (n == 0) {
+        /* Cannot happen (test_cloud_caps.c builds the worst case); keep the link rather than
+           reconnect over it. */
+        printf("[cloud] capabilities frame does not fit %u bytes: not sent\n", (unsigned)CLOUD_CAPS_MAX);
+        return true;
+    }
+    return cl_ws_send(WS_OP_TEXT, f, n);
 }
 
 /* Build + push one efuse.event WS frame (efuse is 1 or 2).  Net-task only. */
@@ -938,7 +946,9 @@ void cloud_client_send_command_response(const char *request_id,
     bp_emit_jstr(&e, request_id);
     bp_emit(&e, ",\"device_id\":\"%s\",%s", s_cfg.device_id, tail);
     if (!bp_emit_ok(&e)) {
-        cl_backoff("command.response too large");
+        /* An error the caller can read, not a reconnect (bp_limits.h sizes the frame for the
+           largest captured reply, so this needs an unusually long request id). */
+        cl_send_command_error(request_id, "reply too large for the cloud channel");
         return;
     }
     cl_send_reply_frame(frame, bp_emit_len(&e));
@@ -956,6 +966,34 @@ static void cl_handle_lease_state(const char *json) {
     bool on = strcmp(held, "true") == 0;
     lease_gate_update(on, holder, (uint32_t)strtoul(exp, NULL, 10), HAL_GetTick());
     printf("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
+}
+
+/* End a tunnel because its byte stream can no longer be trusted (a frame was lost or garbled):
+   tell the client why on the stream itself, close it towards the server with the reason, and
+   reset the virtual connection so a half-done raw transfer (load_bin, spi_stream) ends at once
+   instead of waiting out its idle timeout with a gap in the data. Net task. */
+static void cl_tunnel_fail(int slot, const char *reason) {
+    char id[BP_TUNNEL_ID_MAX];
+    memcpy(id, s_tunnels[slot], sizeof(id));
+    printf("[cloud] tunnel %s reset: %s\n", id, reason);
+    char line[192];
+    bp_emit_t e;
+    bp_emit_init(&e, line, sizeof(line));
+    bp_emit_raw(&e, "{\"status\":\"error\",\"message\":");
+    bp_emit_jstr(&e, reason);
+    bp_emit_raw(&e, "}\n");
+    if (bp_emit_ok(&e)) cloud_client_tunnel_out(CH_CLOUD_TUNNEL_CONN + slot, (const uint8_t *)line, bp_emit_len(&e));
+    char f[BP_TUNNEL_ID_MAX + 256];
+    bp_emit_init(&e, f, sizeof(f));
+    bp_emit_raw(&e, "{\"type\":\"tunnel.close\",\"tunnel_id\":");
+    bp_emit_jstr(&e, id);
+    bp_emit_raw(&e, ",\"reason\":");
+    bp_emit_jstr(&e, reason);
+    bp_emit_raw(&e, "}");
+    if (bp_emit_ok(&e)) cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e));
+    s_tunnels[slot][0] = '\0';
+    conn_tx_reset(CH_CLOUD_TUNNEL_CONN + slot);
+    hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);
 }
 
 /* tunnel.open: bind a fresh virtual connection to this tunnel id. */
@@ -994,9 +1032,16 @@ static bool cl_handle_tunnel_data(const char *json) {
     if (slot < 0) return true;                  /* unknown/closed tunnel — drop, don't retry */
     static char    b64[BP_CLOUD_RX_MAX];
     static uint8_t raw[B64URL_DECODED_MAX(sizeof(b64))];
-    if (!cl_json_str(json, "data_b64", b64, sizeof(b64))) return true;
+    if (!cl_json_str(json, "data_b64", b64, sizeof(b64))) {
+        cl_tunnel_fail(slot, "tunnel.data without data_b64");
+        return true;
+    }
     size_t rawlen = 0;
-    if (b64url_decode(b64, raw, sizeof(raw), &rawlen) != 0 || rawlen == 0) return true;
+    if (b64url_decode(b64, raw, sizeof(raw), &rawlen) != 0) {
+        cl_tunnel_fail(slot, "tunnel.data with bad base64");
+        return true;
+    }
+    if (rawlen == 0) return true;
     /* Feed the bytes to the worker (it owns command_handler); FIFO-ordered behind this
        tunnel's open. Do NOT drop on a full queue: for a raw PROTO_LOAD stream (a deep DAC
        replay upload) a lost chunk corrupts the trace. Signal "retry" so the frame stays in
@@ -1122,20 +1167,34 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
     msg[n] = '\0';
 
     char type[32] = {0};
-    cl_json_str(msg, "type", type, sizeof(type));
     if (len >= sizeof(msg)) {
         /* Never act on a cut-off frame: the flat JSON helpers would still find their keys and a
-           shortened base64 field decodes fine, silently losing upload or OTA bytes. type and
-           request_id come first, so a command can still be answered. */
+           shortened base64 field decodes fine, silently losing upload or OTA bytes. The ids are
+           read from the whole frame: Go marshals keys in sorted order, so in a tunnel.data frame
+           "tunnel_id" and "type" come AFTER the base64 data. */
+        bp_json_scan_str((const char *)payload, len, "type", type, sizeof(type));
         printf("[cloud] dropping a %u-byte %s frame (limit %u)\n", (unsigned)len,
                type[0] ? type : "untyped", (unsigned)(sizeof(msg) - 1));
         if (strcmp(type, "command.request") == 0) {
             char rid[64] = {0};
-            cl_json_str(msg, "request_id", rid, sizeof(rid));
+            bp_json_scan_str((const char *)payload, len, "request_id", rid, sizeof(rid));
             if (rid[0]) cl_send_command_error(rid, "command too large");
+        } else if (strcmp(type, "tunnel.data") == 0) {
+            /* A raw stream (load_bin, spi_stream) cannot skip a frame: the bytes after it would
+               land at the wrong offset. End the tunnel with the reason instead. */
+            char id[BP_TUNNEL_ID_MAX] = {0};
+            bp_json_scan_str((const char *)payload, len, "tunnel_id", id, sizeof(id));
+            int slot = id[0] ? cl_tunnel_slot_by_id(id) : -1;
+            if (slot >= 0) {
+                char why[96];
+                snprintf(why, sizeof(why), "tunnel.data frame too large (%u bytes, limit %u)",
+                         (unsigned)len, (unsigned)(sizeof(msg) - 1));
+                cl_tunnel_fail(slot, why);
+            }
         }
         return true;
     }
+    cl_json_str(msg, "type", type, sizeof(type));
     if (strcmp(type, "command.request") == 0) {
         cl_handle_command_request(msg);
     } else if (strcmp(type, "tunnel.data") == 0) {
@@ -1216,7 +1275,12 @@ static void cl_process_ws_frames(void) {
         ws_frame_t fr;
         int consumed = ws_parse_frame(s_rx, s_rx_len, &fr);
         if (consumed == 0) break;            /* need more bytes */
-        if (consumed < 0) { cl_backoff("bad ws frame"); return; }
+        if (consumed == WS_PARSE_FRAGMENTED) {
+            cl_set_error("fragmented websocket message (not supported)");
+            cl_backoff("fragmented ws frame");
+            return;
+        }
+        if (consumed < 0) { cl_set_error("bad websocket frame"); cl_backoff("bad ws frame"); return; }
 
         switch (fr.opcode) {
             case WS_OP_TEXT:
@@ -1359,6 +1423,7 @@ void cloud_client_poll(void) {
         s_diag_req = false;
         cloud_client_log_link_state(s_diag_tag ? s_diag_tag : "req");
     }
+    lease_gate_expire(HAL_GetTick());   /* the lease's writer is this task: it ends it too */
     switch (s_state) {
     case CL_DISABLED:
         return;
@@ -1462,7 +1527,12 @@ void cloud_client_poll(void) {
         /* Discard the whole challenge response so the WS 101 parser starts clean.
            Keep the link open. */
         cl_rx_consume(total);
-        if (!cl_sign_nonce()) { cl_backoff("sign failed"); return; }
+        if (!cl_sign_nonce()) {
+            if (device_identity_problem()[0])
+                cl_set_error("device identity: %s", device_identity_problem());
+            cl_backoff("sign failed");
+            return;
+        }
         if (!cl_send_ws_upgrade()) { cl_backoff("ws upgrade send failed"); return; }
         s_deadline = make_timeout_time_ms(HTTP_TIMEOUT_MS);
         cl_set_state(CL_WS_WAIT);

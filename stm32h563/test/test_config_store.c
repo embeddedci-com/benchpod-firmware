@@ -225,8 +225,11 @@ static void test_clear(void)
     mock_flash_poke(CONFIG_FLASH_OFFSET, &old, sizeof(old));
     config_save(&a);
     config_save(&b);
+    mock_flash_max_erases_irq_off = 0;
     config_clear();
     CHECK(config_load(NULL) == -1, "cleared");
+    CHECK(mock_flash_max_erases_irq_off == 1, "clear erased %d sectors with interrupts off",
+          mock_flash_max_erases_irq_off);
     CHECK(*mock_flash_ptr(CONFIG_FLASH_OFFSET) == 0xFF, "clear erases the legacy sector");
     int wiped = 1;
     for (uint32_t i = 16; i < 16 + sizeof(config_t); i++) {

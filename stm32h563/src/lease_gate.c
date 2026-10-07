@@ -26,10 +26,16 @@ void lease_gate_clear(void) {
     s_holder[0] = '\0';
 }
 
+void lease_gate_expire(uint32_t now_ms) {
+    if (s_held && (int32_t)(s_deadline_ms - now_ms) <= 0) lease_gate_clear();
+}
+
+/* Read-only: it runs on the hw worker while the net task writes (update, clear, expire). It used
+   to clear an expired lease itself, from the wrong task, racing a renew that had just arrived. */
 bool lease_gate_active(uint32_t now_ms, uint32_t *left_s) {
     if (!s_held) { if (left_s) *left_s = 0; return false; }
     int32_t left = (int32_t)(s_deadline_ms - now_ms);   /* wrap-safe */
-    if (left <= 0) { lease_gate_clear(); if (left_s) *left_s = 0; return false; }
+    if (left <= 0) { if (left_s) *left_s = 0; return false; }
     if (left_s) *left_s = ((uint32_t)left + 999u) / 1000u;
     return true;
 }

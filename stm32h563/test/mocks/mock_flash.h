@@ -25,6 +25,8 @@ extern int     mock_flash_double_programs; /* program of a non-erased quad-word 
 extern int     mock_flash_ecc_reads;       /* reads that hit an ECC double error: each one is
                                               an NMI on hardware, a reset without the hook */
 extern int     mock_flash_irq_depth;       /* save/restore_interrupts balance */
+extern int     mock_flash_max_erases_irq_off; /* most sector erases in one interrupts-off window:
+                                                 each erase stalls the CPU for milliseconds */
 
 /* Power cut: after this many more steps (0 = off). The step that hits zero is torn. */
 extern int     mock_flash_cut_after;

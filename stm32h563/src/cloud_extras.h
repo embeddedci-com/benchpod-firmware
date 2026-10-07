@@ -43,9 +43,24 @@ const char *cloud_extras_ca_check(const uint8_t *pem, size_t len);
 void cloud_extras_ca_changed(void);
 /* Remove the company CA. Worker. NULL = done, else why not. */
 const char *cloud_extras_ca_clear(void);
-/* Net task: the combined PEM for TLS (the embedded roots + the company CA, NUL-terminated),
-   freshly allocated; the caller frees it with cloud_extras_free(). NULL = out of memory. */
-char *cloud_extras_ca_pem(size_t *len_with_nul);
+/* Net task: the PEM for TLS when a company CA is in use: the embedded roots + the company CA,
+   NUL-terminated, freshly allocated into *out; the caller frees it with cloud_extras_free().
+   0 with *out NULL = no company CA (use cloud_ca_pem as it is); -1 = out of memory (retry later,
+   and never fall back to the roots alone for it: that would lock out a TLS-inspecting network). */
+int   cloud_extras_ca_pem(char **out, size_t *len_with_nul);
+/* Net task: TLS refused the combined PEM. Parse the company CA again: when it is corrupt it is
+   dropped (cloud_extras_ca_error says why) and true is returned, so the next connect uses the
+   built-in roots; false = it parses (or memory is short), so the refusal was out of memory. */
+bool  cloud_extras_ca_tls_refused(void);
+/* Why an installed company CA is not in use, NULL when none is installed or it is in use. */
+#define CLOUD_CA_ERR_HASH   "corrupt (slot hash mismatch)"
+#define CLOUD_CA_ERR_PARSE  "unparsable (not a valid PEM X.509 certificate)"
+const char *cloud_extras_ca_error(void);
+#if !defined(BENCHPOD_RELEASE)
+/* Development builds: clear one bit in the installed company CA's slot data (the slot hash then
+   fails) and reload, to try the fallback on hardware (console "ca-damage"). NULL = done. */
+const char *cloud_extras_ca_damage(void);
+#endif
 void  cloud_extras_free(void *p);
 /* Describe the installed company CA as JSON array items {"subject":..,"sha256":..} into out;
    returns the number of certificates (0 = none). Worker. */

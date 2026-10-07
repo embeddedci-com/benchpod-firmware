@@ -17,6 +17,7 @@ static const tier_entry_t k_tiers[] = {
     { "wifi_status", CMD_TIER_T0 }, { "la_pins", CMD_TIER_T0 }, { "usb_cc", CMD_TIER_T0 },
     { "target_status", CMD_TIER_T0 }, { "power_status", CMD_TIER_T0 },
     { "identity_public", CMD_TIER_T0 }, { "identity_pop", CMD_TIER_T0 },
+    { "identity_wipe", CMD_TIER_T0 },   /* always refused off the USB console: it changes nothing */
     { "spi_status", CMD_TIER_T0 }, { "sensor_status", CMD_TIER_T0 }, { "can_status", CMD_TIER_T0 },
     { "ota_status", CMD_TIER_T0 }, { "blob_status", CMD_TIER_T0 }, { "dac_loop_probe", CMD_TIER_T0 },
     /* T0, observational: they read the DUT */
