@@ -43,4 +43,10 @@ void watchdog_heartbeat(int task, const char *task_name);
    proven liveness within its grace window; otherwise it lets the IWDG expire. */
 void watchdog_service(void);
 
+/* Deliberate hang test (console: test-hang).  watchdog_test_hang() arms it for one task;
+   that task spins forever at its next watchdog_test_hang_point(), with interrupts on, so the
+   early warning records it and the IWDG resets the pod. */
+void watchdog_test_hang(int task);
+void watchdog_test_hang_point(int task);
+
 #endif /* WATCHDOG_H */

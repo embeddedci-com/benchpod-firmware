@@ -36,6 +36,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "hw_lock.h"
 #include "dfu_boot.h"
 #include "fault.h"
+#include "watchdog.h"
 #include "sys_health.h"
 #include "board_rev.h"
 #include "usb_cc.h"
@@ -156,6 +157,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  nrst [assert|release|<ms>]  drive the target reset pin, J1 pin 22 (v3)\r\n"
         "  uid                  the chip's unique ID\r\n"
         "  test-bootloop [net|hw] yes  crash 2 boots on purpose to prove safe mode\r\n"
+        "  test-hang net|hw yes        hang a task on purpose to prove the watchdog report\r\n"
         "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
         "  adc [ext|cal1|cal2|current_in]  route ADC source + read calibrated mV (def ext)\r\n"
         "  calibrate [current_in|clear]  this pod's ADC calibration: show, calibrate (J8 open), remove\r\n"
@@ -600,6 +602,18 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
             vTaskDelay(pdMS_TO_TICKS(200));
             NVIC_SystemReset();
+        }
+    } else if (!strcmp(argv[0], "test-hang")) {
+        /* Prove the watchdog report: the named task spins, the IWDG early warning records it
+           (~30 s), the pod resets, and the next boot reports the stall as its last crash. */
+        int task = argc >= 2 && !strcmp(argv[1], "net") ? WD_TASK_NET
+                 : argc >= 2 && !strcmp(argv[1], "hw")  ? WD_TASK_WORKER : -1;
+        if (task < 0 || argc < 3 || strcmp(argv[2], "yes")) {
+            op(out, ctx, "  test-hang net yes : hang the net task; the watchdog resets the pod in ~30 s\r\n");
+            op(out, ctx, "  test-hang hw yes  : hang the hw worker; the watchdog resets the pod in ~90 s\r\n");
+        } else {
+            watchdog_test_hang(task);
+            op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
         }
     } else if (!strcmp(argv[0], "nrst")) {
         /* Drive /NRST_CONTROL (J1 pin 22): nrst [assert|release|<pulse ms>]. */

@@ -798,6 +798,8 @@ static bool cl_send_capabilities(void) {
         .safe_reason = boot_guard_reason(),
         .reset_cause = fault_last_reset_str(),
         .last_crash = fault_last_crash_str(),
+        .boot_id = fault_boot_id(),
+        .unclean_resets = fault_unclean_resets(),
     };
     /* cloud_caps_build keeps the frame inside one WS frame (it shortens the free-form boot
        health when it has to), so a long crash line can no longer make the connect fail and
@@ -810,7 +812,11 @@ static bool cl_send_capabilities(void) {
         printf("[cloud] capabilities frame does not fit %u bytes: not sent\n", (unsigned)CLOUD_CAPS_MAX);
         return true;
     }
-    return cl_ws_send(WS_OP_TEXT, f, n);
+    if (!cl_ws_send(WS_OP_TEXT, f, n)) return false;
+    /* The server has the count now (it keys the crash on boot_id, so a reconnect that sends the
+       same boot again does not count twice). */
+    fault_unclean_resets_ack();
+    return true;
 }
 
 /* Build + push one efuse.event WS frame (efuse is 1 or 2).  Net-task only. */
