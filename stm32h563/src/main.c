@@ -229,6 +229,10 @@ void boot_deferred_hw_init(void)
        that did not configure (blank or partial config flash) keeps hunting the flash, driving the
        lines psram_init() is about to drive: hold it in reset; the recovery below reflashes it. */
     if (!ice40_is_configured()) ice40_hold_off_bus();
+    /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
+       which is where reset left it.  Park it as soon as the iCE40 can drive the DAC (SPI1 only,
+       no PSRAM), not after the PSRAM self-test, which takes seconds. */
+    else if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
        even when the FPGA is unconfigured. */
@@ -241,8 +245,8 @@ void boot_deferred_hw_init(void)
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();
     i2c_bus_status();       /* scan + name known devices */
-    /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
-       which is where reset left it: park it now that the iCE40 can drive the DAC. */
+    /* Park again: the self-test recovery or the gateware update may have reconfigured the
+       iCE40 (or it was not configured above), which resets the DAC to 0 V. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     boot_guard_sub_done(BOOT_SUB_HW);
     boot_guard_set_hw_ready();
