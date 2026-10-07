@@ -34,7 +34,7 @@ module tb_dac_psram_replay;
     dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5), .PAD_PIPE(1)) rd (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(run),
         .base_addr(base), .len_bytes(len),
-        .bus_gnt(1'b1), .bus_req(), .bus_busy(),   // standalone: reader always holds the bus
+        .bus_own(1'b0), .bus_gnt(1'b1), .bus_req(), .bus_busy(),   // standalone: reader always holds the bus
         .data(strm_data), .data_valid(strm_valid), .data_pop(strm_pop),
         .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
         .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)

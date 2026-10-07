@@ -57,7 +57,7 @@ module tb_psram_arbiter;
     dac_psram_reader #(.CHUNK_BYTES(RD_CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(RD_FIFO_AW), .PAD_PIPE(1)) rdr (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(rd_run),
         .base_addr(DAC_BASE), .len_bytes(DAC_LEN),
-        .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
+        .bus_own(1'b0), .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
         .data(rd_data), .data_valid(rd_valid), .data_pop(rd_pop),
         .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
         .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)

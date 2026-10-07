@@ -34,7 +34,7 @@ module tb_dac_psram_reader;
     dac_psram_reader #(.CHUNK_BYTES(CHUNK), .WAIT_CYCLES(WAIT), .FIFO_AW(5), .PAD_PIPE(1)) dut (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48), .run(run),
         .base_addr(BASE), .len_bytes(LEN),
-        .bus_gnt(1'b1), .bus_req(), .bus_busy(),
+        .bus_own(1'b0), .bus_gnt(1'b1), .bus_req(), .bus_busy(),
         .data(rd_data), .data_valid(rd_valid), .data_pop(rd_pop),
         .io_o(rd_io_o), .io_oe(rd_io_oe), .io_i(rd_io_i),
         .cs(rd_cs), .sclk(rd_sclk), .active(rd_active)
