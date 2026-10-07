@@ -48,6 +48,7 @@
 #include "fw_sign.h"
 #include "cmd_tier.h"      /* command tiers: logged, and gated (LAN policy, tunnel max_tier) */
 #include "pod_policy.h"
+#include "lease_gate.h"
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
 #include "la_pins.h"     /* LA pin ownership table + capture-trigger parsing/messages */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
@@ -2334,9 +2335,15 @@ static void handle_status(int conn_id) {
     bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
-                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,",
+                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,",
             fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count(),
             pod_policy_lan_name(pod_policy_lan()));
+    {
+        uint32_t left = 0;
+        bool held = lease_gate_active(HAL_GetTick(), &left);
+        bp_emit(&e, "\"lease\":{\"held\":%s,\"holder\":\"%s\",\"left_s\":%lu},",
+                held ? "true" : "false", held ? lease_gate_holder() : "", (unsigned long)left);
+    }
     /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data. */
     bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
             (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
@@ -3863,6 +3870,23 @@ void command_handler_set_tunnel_max_tier(int conn_id, int max_tier) {
     s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN] = (uint8_t)max_tier;
 }
 
+/* A LAN SCPI line with any non-query part, while a cloud job holds the pod (lease_gate.h). */
+static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
+    if (command_handler_policy_src(conn_id) != POLICY_SRC_LAN || !lease_gate_active(HAL_GetTick(), NULL))
+        return false;
+    const char *p = line;
+    for (;;) {                                   /* every ';'-separated part must be a query */
+        const char *end = strchr(p, ';');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (!memchr(p, '?', n)) {
+            printf("[cmd] SCPI \"%s\" refused: a cloud job holds the pod\n", line);
+            return true;
+        }
+        if (!end) return false;
+        p = end + 1;
+    }
+}
+
 static void dispatch_line(int conn_id, const char *buf) {
     char cmd[32] = {0};
     if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
@@ -3880,6 +3904,16 @@ static void dispatch_line(int conn_id, const char *buf) {
         pod_policy_lan() != POD_LAN_OPEN) {
         char why[80];
         snprintf(why, sizeof(why), "locked: %s needs the cloud or the USB console", cmd);
+        send_error(conn_id, why);
+        return;
+    }
+    /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
+    uint32_t lease_left = 0;
+    if (command_handler_policy_src(conn_id) == POLICY_SRC_LAN &&
+        lease_gate_active(HAL_GetTick(), &lease_left) && !cmd_tier_light(cmd, buf)) {
+        char why[112];
+        snprintf(why, sizeof(why), "busy: a cloud job holds this pod (%s, %lu s left)",
+                 lease_gate_holder()[0] ? lease_gate_holder() : "cloud", (unsigned long)lease_left);
         send_error(conn_id, why);
         return;
     }
@@ -4241,7 +4275,10 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 la->len = 0;
             } else if (la->len > 0) {
                 la->buf[la->len] = '\0';
-                if (proto[conn_id] == PROTO_SCPI) scpi_dispatch_line(conn_id, la->buf);
+                if (proto[conn_id] == PROTO_SCPI && scpi_line_blocked_by_lease(conn_id, la->buf)) {
+                    /* SCPI setters wait while a cloud job holds the pod; queries still answer. */
+                    scpi_push_execution_error();
+                } else if (proto[conn_id] == PROTO_SCPI) scpi_dispatch_line(conn_id, la->buf);
                 else                              dispatch_line(conn_id, la->buf);
                 la->len = 0;
             }

@@ -25,6 +25,8 @@
 #include "ota.h"
 #include "fw_sign.h"
 #include "pod_policy.h"
+#include "lease_gate.h"
+#include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
 
 #include "FreeRTOS.h"
 #include "task.h"            /* taskENTER_CRITICAL — guard the cross-task event slot */
@@ -306,6 +308,7 @@ static void cl_rx_append(const uint8_t *data, size_t len) {
 /* Close (or abort) the link we own and tear down any in-flight tunnel. Safe to
    call when s_pcb is already NULL (e.g. after the err callback freed it). */
 static void cl_drop_link(void) {
+    lease_gate_clear();   /* without the link, the server's lease says nothing any more */
     if (s_pcb) {
         altcp_arg(s_pcb, NULL);
         altcp_recv(s_pcb, NULL);
@@ -674,7 +677,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
+        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,\"lease_state\":true,"
         "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
@@ -867,6 +870,18 @@ void cloud_client_send_command_response(const char *request_id,
 
 /* ---- Cloud byte-tunnel (flash/capture bridge) ----------------------------- */
 
+/* lease.state: a cloud consumer took, renewed or released the pod's lease. While it holds it,
+   LAN clients get light reads only (lease_gate.h, cloud-hardening.md section 2). */
+static void cl_handle_lease_state(const char *json) {
+    char held[8] = {0}, holder[LEASE_GATE_HOLDER_MAX] = {0}, exp[12] = {0};
+    cl_json_str(json, "held", held, sizeof(held));
+    cl_json_str(json, "holder", holder, sizeof(holder));
+    cl_json_str(json, "expires_in_s", exp, sizeof(exp));
+    bool on = strcmp(held, "true") == 0;
+    lease_gate_update(on, holder, (uint32_t)strtoul(exp, NULL, 10), HAL_GetTick());
+    printf("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
+}
+
 /* tunnel.open: bind a fresh virtual connection to this tunnel id. */
 static void cl_handle_tunnel_open(const char *json) {
     char id[BP_TUNNEL_ID_MAX];
@@ -1049,6 +1064,8 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
         cl_handle_command_request(msg);
     } else if (strcmp(type, "tunnel.data") == 0) {
         return cl_handle_tunnel_data(msg);   /* false => worker busy, retry this frame next poll */
+    } else if (strcmp(type, "lease.state") == 0) {
+        cl_handle_lease_state(msg);
     } else if (strcmp(type, "tunnel.open") == 0) {
         cl_handle_tunnel_open(msg);
     } else if (strcmp(type, "tunnel.close") == 0) {

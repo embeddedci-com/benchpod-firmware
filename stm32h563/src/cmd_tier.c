@@ -84,6 +84,20 @@ cmd_tier_t cmd_tier(const char *cmd, const char *json) {
 
 int cmd_tier_known(const char *cmd) { return find(cmd) != NULL; }
 
+/* The T0 reads that take the capture hardware (PSRAM, the LA, the ADC, the sensor bus): not
+   light, so a LAN client cannot run them while a cloud job holds the pod. */
+static const char *const k_heavy_reads[] = {
+    "capture", "capture_dual", "capture_read", "stream", "la_capture", "sensor_regs",
+    "sensor_la", "can_read", "psram_ping", "test",
+};
+
+int cmd_tier_light(const char *cmd, const char *json) {
+    if (!find(cmd) || cmd_tier(cmd, json) != CMD_TIER_T0) return 0;
+    for (size_t i = 0; i < sizeof(k_heavy_reads) / sizeof(k_heavy_reads[0]); i++)
+        if (strcmp(cmd, k_heavy_reads[i]) == 0) return 0;
+    return 1;
+}
+
 const char *cmd_tier_name(cmd_tier_t t) {
     static const char *const names[] = { "T0", "T1", "T2", "T3" };
     return (unsigned)t < 4u ? names[t] : "T?";
