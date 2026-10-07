@@ -2589,6 +2589,33 @@ value.
 the USB console`) or `off` (no TCP listener on 8080, no mDNS). Set from the cloud or the USB
 console (`lan-policy <value>`), never from the LAN.
 
+### `cloud_ca` / `cloud_proxy`: company CA and HTTP proxy for the cloud link
+
+See `docs/design/cloud-hardening.md` section 3.
+
+```json
+{"cmd":"cloud_ca"}
+{"cmd":"cloud_ca","clear":true}
+{"cmd":"cloud_proxy"}
+{"cmd":"cloud_proxy","set":"proxy.corp:3128","user":"u","password":"p"}
+{"cmd":"cloud_proxy","clear":true}
+```
+
+`cloud_ca` replies `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`. A company CA is
+installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"`, or `benchpod cloud
+ca set corp.pem`); it must parse as X.509 and is trusted in addition to the built-in roots.
+`cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
+The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
+Setting or clearing either reconnects the cloud. Both are T2 (a locked LAN refuses them).
+
+### While a cloud job holds the pod
+
+When a cloud consumer (a CI run, the web app, the SDK) holds the pod's lease, LAN connections get
+only light reads (`status`, `ping`, the `*_status` reads, policy reads); everything else gets
+`busy: a cloud job holds this pod (<holder>, <N> s left)`, and SCPI setters get -200. The pod ends
+the lease itself at the announced expiry or when the cloud link drops. `status` shows
+`"lease":{"held":...,"holder":"...","left_s":...}`.
+
 ---
 
 ## Implementation Notes

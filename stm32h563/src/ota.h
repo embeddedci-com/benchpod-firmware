@@ -50,9 +50,10 @@ typedef enum {
     OTA_TARGET_GW0,
     OTA_TARGET_GW1,
     OTA_TARGET_ESP,
+    OTA_TARGET_CA,      /* the company CA for the cloud link: configuration, not code (no signature) */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp" (NULL or "" = firmware). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca" (NULL or "" = firmware). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);
@@ -115,6 +116,12 @@ void ota_watchdog(uint32_t now_ms);
    read.  Returns 0 on pass, <0 on failure (with a reason logged).  RUN THIS AND
    CONFIRM IT PASSES before ever calling ota_commit() on real hardware. */
 int ota_commit_selftest(void);
+
+/* Read staged bytes (takes the PSRAM bus). 0 = ok. For checks of a configuration blob. */
+int ota_read_staged(uint32_t off, uint8_t *buf, uint32_t n);
+/* Check a staged configuration blob before it is accepted (weak default: fine). 0 = fine, else
+   `why` says what is wrong. */
+int ota_validate_staged(ota_target_t t, uint32_t size, char *why, size_t cap);
 
 /* Abort and free the staging state. */
 void ota_abort(void);

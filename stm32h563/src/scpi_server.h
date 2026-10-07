@@ -13,6 +13,8 @@
    until the connection's TX ring drains, and is abandoned with a log line and a
    close if the ring makes no progress for SCPI_SEND_STALL_MS. */
 void scpi_dispatch_line(int conn_id, const char *line);
+/* Queue -200 "Execution error" (a setter refused while a cloud job holds the pod). */
+void scpi_push_execution_error(void);
 
 /* Notify the SCPI layer that a TCP connection has closed.  SCPI state is
    device-wide (one instrument) and captures are synchronous, so there is no

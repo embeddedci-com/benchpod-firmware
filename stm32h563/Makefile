@@ -131,6 +131,9 @@ C_SOURCES := \
   src/fw_sign.c \
   src/cmd_tier.c \
   src/pod_policy.c \
+  src/lease_gate.c \
+  src/cloud_extras.c \
+  src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/rng.c \
   src/hw_lock.c \
@@ -301,6 +304,9 @@ FW_VERSION    := $(shell sed -n 's/^\#define FIRMWARE_VERSION "\(.*\)"/\1/p' src
 SIGN_PUBS     := $(sort $(wildcard keys/release-*.pub))
 ifneq ($(RELEASE),1)
 DEV_SIGN_PUB  := $(if $(wildcard $(DEV_SIGN_KEY)),$(BUILD_DIR)/dev-signing.pub)
+else
+# Release builds also refuse a plain (non-TLS) cloud connection (cloud-hardening.md section 1).
+DEFS += -DBENCHPOD_RELEASE=1
 endif
 GEN_SIGN_KEYS := $(BUILD_DIR)/fw_sign_keys_gen.h
 # Rewritten only when its content changes (keys-header compares), so the FORCE does not rebuild

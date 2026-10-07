@@ -25,6 +25,11 @@
 #include "ota.h"
 #include "fw_sign.h"
 #include "pod_policy.h"
+#include "lease_gate.h"
+#include "cloud_extras.h"
+#include "altcp_bp_proxy.h"
+#include "mbedtls/base64.h"
+#include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
 
 #include "FreeRTOS.h"
 #include "task.h"            /* taskENTER_CRITICAL — guard the cross-task event slot */
@@ -118,6 +123,15 @@ static char             s_sig[B64URL_ENCODED_LEN(DEVICE_ID_SIG_LEN) + 1];
 /* ---- LwIP transport ---- */
 static struct altcp_pcb        *s_pcb = NULL;        /* the link we currently own, or NULL */
 static struct altcp_tls_config *s_tls_conf = NULL;   /* created once, reused */
+/* The proxy settings of the current connect attempt (cloud_extras.h) and the CONNECT layer's
+   config, which must outlive the pcb. */
+static cloud_proxy_t                 s_proxy;
+static struct altcp_bp_proxy_config  s_proxy_conf;
+static char                          s_proxy_auth[160];
+/* How long after boot the first connect waits for the W25Q settings. */
+#define CL_EXTRAS_WAIT_MS 20000u
+/* Sign the login with v1 instead of v2: set after a 401 to a v2 login (an older server). */
+static bool s_auth_v1;
 static ip_addr_t                s_ip;                /* resolved server address */
 static volatile link_ev_t       s_link = LINK_IDLE;  /* connect/handshake event */
 static volatile bool            s_dropped = false;   /* peer closed / link error */
@@ -304,6 +318,7 @@ static void cl_rx_append(const uint8_t *data, size_t len) {
 /* Close (or abort) the link we own and tear down any in-flight tunnel. Safe to
    call when s_pcb is already NULL (e.g. after the err callback freed it). */
 static void cl_drop_link(void) {
+    lease_gate_clear();   /* without the link, the server's lease says nothing any more */
     if (s_pcb) {
         altcp_arg(s_pcb, NULL);
         altcp_recv(s_pcb, NULL);
@@ -437,23 +452,49 @@ static void cl_err_cb(void *arg, err_t err) {
    (with SNI) vs plain altcp. Returns false on immediate failure. */
 static bool cl_open(bool tls, uint16_t port) {
     struct altcp_pcb *pcb;
+    /* The bottom of the stack: plain TCP, or the HTTP CONNECT layer when a proxy is set
+       (cloud_extras.h); TLS goes on top of either, so it starts only once the tunnel is up. */
+    struct altcp_pcb *base;
+    if (s_proxy.host[0]) {
+        ip_addr_copy(s_proxy_conf.proxy_addr, s_ip);
+        s_proxy_conf.proxy_port  = s_proxy.port;
+        s_proxy_conf.target_host = s_cfg.host;
+        s_proxy_conf.auth_b64    = NULL;
+        s_proxy_conf.last_status = 0;
+        if (s_proxy.user[0]) {
+            char up[CLOUD_PROXY_USER_MAX + CLOUD_PROXY_PASS_MAX + 2];
+            int n = snprintf(up, sizeof(up), "%s:%s", s_proxy.user, s_proxy.pass);
+            size_t olen = 0;
+            if (n > 0 && mbedtls_base64_encode((unsigned char *)s_proxy_auth, sizeof(s_proxy_auth), &olen,
+                                               (const unsigned char *)up, (size_t)n) == 0)
+                s_proxy_conf.auth_b64 = s_proxy_auth;
+            memset(up, 0, sizeof(up));
+        }
+        base = altcp_bp_proxy_new_tcp(&s_proxy_conf, IPADDR_TYPE_V4);
+    } else {
+        base = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
+    }
+    if (!base) return false;
     if (tls) {
         if (!s_tls_conf) {
-            /* TLS always anchors trust on the embedded ISRG roots (Let's Encrypt) so
-               the server cert chain + hostname are validated in cl_tls_verified() after
-               the handshake. authmode is VERIFY_OPTIONAL (the handshake completes; we
-               check the result ourselves and drop the link on a verify failure). The
-               old no-CA/unauthenticated bring-up path has been removed. */
-            s_tls_conf = altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
-            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); return false; }
+            /* TLS always anchors trust on the embedded ISRG roots (Let's Encrypt), plus the
+               company CA when one is installed (cloud_extras.h), so the server cert chain +
+               hostname are validated in cl_tls_verified() after the handshake. authmode is
+               VERIFY_OPTIONAL (the handshake completes; we check the result ourselves and
+               drop the link on a verify failure). */
+            size_t ca_len = 0;
+            char *ca = cloud_extras_ca_pem(&ca_len);
+            s_tls_conf = ca ? altcp_tls_create_config_client((const u8_t *)ca, ca_len)
+                            : altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
+            if (ca) cloud_extras_free(ca);
+            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); altcp_abort(base); return false; }
         }
-        pcb = altcp_tls_new(s_tls_conf, IPADDR_TYPE_V4);
-        if (!pcb) { printf("[cloud] altcp_tls_new failed (out of mem?)\n"); return false; }
+        pcb = altcp_tls_wrap(s_tls_conf, base);
+        if (!pcb) { printf("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }
         mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)altcp_tls_context(pcb);
         if (ssl) mbedtls_ssl_set_hostname(ssl, s_cfg.host);   /* SNI + CN/SAN check host */
     } else {
-        pcb = altcp_tcp_new_ip_type(IPADDR_TYPE_V4);
-        if (!pcb) return false;
+        pcb = base;
     }
 
     altcp_arg(pcb, NULL);
@@ -672,7 +713,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,"
+        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
         "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
@@ -865,6 +906,18 @@ void cloud_client_send_command_response(const char *request_id,
 
 /* ---- Cloud byte-tunnel (flash/capture bridge) ----------------------------- */
 
+/* lease.state: a cloud consumer took, renewed or released the pod's lease. While it holds it,
+   LAN clients get light reads only (lease_gate.h, cloud-hardening.md section 2). */
+static void cl_handle_lease_state(const char *json) {
+    char held[8] = {0}, holder[LEASE_GATE_HOLDER_MAX] = {0}, exp[12] = {0};
+    cl_json_str(json, "held", held, sizeof(held));
+    cl_json_str(json, "holder", holder, sizeof(holder));
+    cl_json_str(json, "expires_in_s", exp, sizeof(exp));
+    bool on = strcmp(held, "true") == 0;
+    lease_gate_update(on, holder, (uint32_t)strtoul(exp, NULL, 10), HAL_GetTick());
+    printf("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
+}
+
 /* tunnel.open: bind a fresh virtual connection to this tunnel id. */
 static void cl_handle_tunnel_open(const char *json) {
     char id[BP_TUNNEL_ID_MAX];
@@ -1047,6 +1100,8 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
         cl_handle_command_request(msg);
     } else if (strcmp(type, "tunnel.data") == 0) {
         return cl_handle_tunnel_data(msg);   /* false => worker busy, retry this frame next poll */
+    } else if (strcmp(type, "lease.state") == 0) {
+        cl_handle_lease_state(msg);
     } else if (strcmp(type, "tunnel.open") == 0) {
         cl_handle_tunnel_open(msg);
     } else if (strcmp(type, "tunnel.close") == 0) {
@@ -1164,27 +1219,42 @@ static bool cl_send_ws_upgrade(void) {
     ws_make_sec_key(key);
     char req[512];
     int n = snprintf(req, sizeof(req),
-        "GET /api/benchpod/ws?device_id=%s&nonce=%s&signature=%s HTTP/1.1\r\n"
+        "GET /api/benchpod/ws?device_id=%s&nonce=%s&signature=%s&auth=%s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\n"
         "Sec-WebSocket-Version: 13\r\n\r\n",
-        s_cfg.device_id, s_nonce, s_sig, s_cfg.host, key);
+        s_cfg.device_id, s_nonce, s_sig, s_auth_v1 ? "v1" : "v2", s_cfg.host, key);
     if (n <= 0 || (size_t)n >= sizeof(req)) return false;
     return cl_tcp_send((const uint8_t *)req, (size_t)n) == 0;
 }
 
-/* Decode the base64url nonce, sign it under the WS-auth domain context, and
-   base64url-encode the signature.  The server verifies over the SAME
-   DEVICE_ID_CTX_WS_AUTH-prefixed message (see benchpod_ws.go). */
+/* Decode the base64url nonce, sign  host || 0x00 || nonce  under the v2 WS-auth context, and
+   base64url-encode the signature.  The host is the one this connection went to and whose
+   certificate was checked, so a challenge relayed through another server cannot be signed for
+   the real one (DEVICE_ID_CTX_WS_AUTH_V2; the server verifies with its own names, benchpod_ws.go). */
 static bool cl_sign_nonce(void) {
     uint8_t nonce[128];
     size_t  nlen = 0;
     if (b64url_decode(s_nonce, nonce, sizeof(nonce), &nlen) != 0) return false;
+    if (s_auth_v1) {   /* fallback for a server without v2 (see CL_WS_WAIT) */
+        uint8_t sig1[DEVICE_ID_SIG_LEN];
+        if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH, nonce, nlen, sig1) != 0) return false;
+        b64url_encode(sig1, sizeof(sig1), s_sig, sizeof(s_sig));
+        return true;
+    }
+    uint8_t payload[CLOUD_HOST_MAX + 1 + sizeof(nonce)];
+    size_t hlen = strnlen(s_cfg.host, CLOUD_HOST_MAX - 1);
+    for (size_t i = 0; i < hlen; i++) {   /* host names compare case-insensitively: sign lowercase */
+        char c = s_cfg.host[i];
+        payload[i] = (uint8_t)((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    }
+    payload[hlen] = 0x00;
+    memcpy(payload + hlen + 1, nonce, nlen);
     uint8_t sig[DEVICE_ID_SIG_LEN];
     absolute_time_t t0 = get_absolute_time();
-    if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH, nonce, nlen, sig) != 0) return false;
+    if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH_V2, payload, hlen + 1 + nlen, sig) != 0) return false;
     printf("[cloud] nonce sign (ed25519) took %lu ms\n",
            (unsigned long)(absolute_time_diff_us(t0, get_absolute_time()) / 1000));
     b64url_encode(sig, sizeof(sig), s_sig, sizeof(s_sig));
@@ -1205,7 +1275,17 @@ void cloud_client_init(void) {
     /* Route async eFuse EN/FLT changes to our WS push queue (idempotent). */
     target_power_set_event_cb(cl_efuse_event_cb);
 
-    if (cloud_config_load(&s_cfg) == 0 && s_cfg.enabled && s_cfg.host[0] && s_cfg.device_id[0]) {
+    bool loaded = cloud_config_load(&s_cfg) == 0;
+#if defined(BENCHPOD_RELEASE)
+    /* A plain config stored by older or dev firmware is not used by a release build (see
+       handle_cloud_set): connecting without TLS would let anyone on the path stand in. */
+    if (loaded && !s_cfg.tls && s_cfg.enabled) {
+        printf("[cloud] stored config is plain ws: release firmware connects over TLS only\n");
+        cl_set_error("plain (non-TLS) cloud config refused by release firmware; run cloud_set with tls");
+        loaded = false;
+    }
+#endif
+    if (loaded && s_cfg.enabled && s_cfg.host[0] && s_cfg.device_id[0]) {
         s_have_cfg = true;
         cl_set_state(CL_WAIT_WIFI);
         printf("[cloud] configured: %s:%u tls=%d device=%s\n",
@@ -1244,12 +1324,19 @@ void cloud_client_poll(void) {
         return;
 
     case CL_WAIT_WIFI:
-        if (wifi_get_state() == WIFI_READY) cl_set_state(CL_RESOLVE);
+        /* Also wait (up to CL_EXTRAS_WAIT_MS after boot) for the company CA and proxy settings,
+           which the hw worker reads from the W25Q at boot (cloud_extras.h). */
+        if (wifi_get_state() == WIFI_READY &&
+            (cloud_extras_ready() || to_ms_since_boot(get_absolute_time()) > CL_EXTRAS_WAIT_MS))
+            cl_set_state(CL_RESOLVE);
         return;
 
     case CL_RESOLVE: {
         s_dns = DNS_PENDING;
-        err_t e = dns_gethostbyname(s_cfg.host, &s_ip, cl_dns_cb, NULL);
+        /* Through a proxy only the proxy needs resolving: the CONNECT line names the server and
+           the proxy resolves it (corporate networks often cannot resolve outside names). */
+        cloud_extras_proxy_get(&s_proxy);
+        err_t e = dns_gethostbyname(s_proxy.host[0] ? s_proxy.host : s_cfg.host, &s_ip, cl_dns_cb, NULL);
         if (e == ERR_OK)             s_dns = DNS_OK;        /* cached */
         else if (e == ERR_INPROGRESS) s_dns = DNS_PENDING;
         else { cl_set_error("dns lookup failed"); cl_dns_backoff("dns request failed"); return; }
@@ -1284,7 +1371,13 @@ void cloud_client_poll(void) {
             cl_set_state(CL_CHAL_WAIT);
             return;
         }
-        if (s_link == LINK_FAILED) { cl_backoff("challenge connect failed"); return; }
+        if (s_link == LINK_FAILED || s_dropped) {
+            if (s_proxy.host[0] && s_proxy_conf.last_status && s_proxy_conf.last_status != 200)
+                cl_set_error("the proxy refused the connection (HTTP %u%s)", (unsigned)s_proxy_conf.last_status,
+                             s_proxy_conf.last_status == 407 ? ": proxy user or password" : "");
+            cl_backoff("challenge connect failed");
+            return;
+        }
         if (time_reached(s_deadline)) {
             cl_set_error(s_tcp_up ? "tls handshake timed out" : "tcp connect timed out");
             cl_backoff("challenge connect timeout");
@@ -1340,7 +1433,19 @@ void cloud_client_poll(void) {
             if (s_rx[i] == '\r' && s_rx[i + 1] == '\n' &&
                 s_rx[i + 2] == '\r' && s_rx[i + 3] == '\n') {
                 if (!cl_status_is_101(s_rx, i)) {
-                    cl_set_error("websocket upgrade failed (HTTP %d)", cl_http_status(s_rx, i));
+                    int code = cl_http_status(s_rx, i);
+                    cl_set_error("websocket upgrade failed (HTTP %d)", code);
+                    /* A server from before the host-bound login rejects the v2 signature (HTTP
+                       403 "signature mismatch" on those servers, 401 on newer ones): try v1 next
+                       time. Safe, because a server that knows v2 refuses v1 from any pod that has
+                       logged in with v2 once (cloud-hardening.md section 1). */
+                    bool auth_refused = (code == 401 || code == 403);
+                    if (auth_refused && !s_auth_v1) {
+                        s_auth_v1 = true;
+                        printf("[cloud] login v2 refused (HTTP %d): next attempt signs v1\n", code);
+                    } else if (auth_refused) {
+                        s_auth_v1 = false;   /* v1 refused too: back to v2 */
+                    }
                     cl_backoff("ws handshake rejected");
                     return;
                 }

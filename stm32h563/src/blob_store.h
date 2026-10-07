@@ -7,7 +7,9 @@
  *   0x000000  the gateware the iCE40 boots from (ice40_flash.c rewrites it)
  *   0x100000  slot GW0: gateware image 0 (closed loop)     256 KB
  *   0x140000  slot GW1: gateware image 1 (deep replay)     256 KB
- *   0x180000  free for two more gateware slots
+ *   0x180000  slot CA: the company CA for the cloud link (PEM, cloud_extras.h)      64 KB
+ *   0x190000  slot PROXY: the HTTP proxy for the cloud link (cloud_extras.h)        8 KB
+ *   0x192000  free
  *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
@@ -37,6 +39,8 @@ typedef enum {
     BLOB_ESP = 2,     /* ESP32-C3 esp-hosted slave image */
     BLOB_COUNT,       /* the release blobs above; listings and the manifest stop here */
     BLOB_FW = BLOB_COUNT,   /* internal: STM32 firmware copy written at OTA commit */
+    BLOB_CA,                /* internal: the company CA for the cloud link (cloud_extras.h) */
+    BLOB_PROXY,             /* internal: the HTTP proxy for the cloud link (cloud_extras.h) */
     BLOB_SLOT_COUNT
 } blob_id_t;
 

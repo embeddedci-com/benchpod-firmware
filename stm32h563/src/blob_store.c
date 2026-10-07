@@ -19,6 +19,8 @@ static const struct {
     [BLOB_GW1] = { "gw1", 0x140000u, 0x040000u },
     [BLOB_ESP] = { "esp", 0x200000u, 0x400000u },
     [BLOB_FW]  = { "fw",  0x600000u, 0x100000u },
+    [BLOB_CA]  = { "ca",  0x180000u, 0x010000u },
+    [BLOB_PROXY] = { "proxy", 0x190000u, 0x002000u },
 };
 
 static blob_info_t s_info[BLOB_SLOT_COUNT];

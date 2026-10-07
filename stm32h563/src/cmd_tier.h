@@ -30,6 +30,9 @@ typedef enum {
 cmd_tier_t cmd_tier(const char *cmd, const char *json);
 /* Is `cmd` in the table at all? */
 int cmd_tier_known(const char *cmd);
+/* A light read: T0 and not one of the reads that take the capture hardware. The only thing a LAN
+   client may run while a cloud job holds the pod (lease_gate.h). */
+int cmd_tier_light(const char *cmd, const char *json);
 const char *cmd_tier_name(cmd_tier_t t);   /* "T0".."T3" */
 
 #endif /* CMD_TIER_H */

@@ -829,6 +829,10 @@ static scpi_interface_t scpi_if = {
 
 static bool inited = false;
 
+void scpi_push_execution_error(void) {
+    if (inited) SCPI_ErrorPush(&scpi_ctx, SCPI_ERROR_EXECUTION_ERROR);
+}
+
 void scpi_dispatch_line(int conn_id, const char *line) {
     if (!inited) {
         scpi_reset_state();

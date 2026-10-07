@@ -82,6 +82,8 @@ void handle_sig_policy(int conn_id, const char *json);
 #include "pod_policy.h"
 policy_src_t command_handler_policy_src(int conn_id);
 void handle_lan_policy(int conn_id, const char *json);
+void handle_cloud_ca(int conn_id, const char *json);
+void handle_cloud_proxy(int conn_id, const char *json);
 
 void handle_ota_begin(int conn_id, const char *json);
 void handle_ota_data(int conn_id, const char *json);
