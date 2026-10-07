@@ -532,7 +532,7 @@ module top (
     // psram_dual_writer.adc_full — the ADC producer's backpressure/overflow input.
 
     spram_ring16 #(.AW(15)) la_ring_i (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .clr_ovf(arm),     // v46: per-capture overflow, like the other sources
         .in_data(la_wr_data), .in_stb(la_wr_stb), .in_full(la_ring_in_full),
         .out_data(la_ring_out), .out_stb(la_ring_out_stb), .out_full(la_wr_full),
         .empty(la_ring_empty), .overflow(la_ring_ovf)
