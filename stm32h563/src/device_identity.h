@@ -82,6 +82,32 @@ void device_identity_init(void);
    Returns 0 on success, -1 if identity is not initialized. */
 int device_identity_get_public(uint8_t pub[DEVICE_ID_PUBLIC_LEN]);
 
+/* ---- Wipe (USB console only: physical presence) ----------------------------
+ *
+ * The way back for a pod whose identity sector holds a record this firmware will not replace
+ * (DEVICE_ID_REC_FOREIGN), or whose key must be retired: erase the sector and generate a fresh
+ * key. The pod is then a NEW pod to the server (it knows pods by their public key), so it has to
+ * be registered again. Only the USB console runs it ("identity-wipe <confirm>"); the LAN and cloud
+ * JSON verb identity_wipe always refuses.
+ *
+ * The confirmation token must name what is being wiped: the current short id (the six hex digits
+ * of "benchpod-a1b2c3", the first three bytes of the public key), or "unknown" when the pod has
+ * no identity. A stray or replayed command for another pod, or one typed before checking, fails.
+ */
+#define DEVICE_ID_SHORT_LEN 6   /* hex digits, without "benchpod-" */
+
+/* The current short id into out (DEVICE_ID_SHORT_LEN + 1 bytes); "" when there is no identity. */
+void device_identity_short_id(char out[DEVICE_ID_SHORT_LEN + 1]);
+
+/* Does `confirm` authorize wiping an identity whose short id is `short_id` ("" = none)? NULL = yes,
+   else why not (with the token to use). Pure: host-tested. */
+const char *device_identity_wipe_check(const char *confirm, const char *short_id);
+
+/* Erase the identity sector, generate and persist a new key, and switch to it. NULL = done (the new
+   short id is then device_identity_short_id), else why not; nothing is erased when the
+   confirmation fails or the RNG does. Logs the old and new ids. */
+const char *device_identity_wipe(const char *confirm);
+
 /* Why there is no identity ("" when there is one): e.g. an unknown record in the identity
    sector, an unreadable sector or a failed RNG. For error replies and the cloud status. */
 const char *device_identity_problem(void);

@@ -58,6 +58,8 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdlib.h>
 
 #include "blob_store.h"
+#include "device_identity.h"   /* identity / identity-wipe */
+#include "b64url.h"
 #include "w25q.h"
 #include "ota.h"
 #include "upload_rx.h"
@@ -183,6 +185,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
         "  ca | ca-clear                              company CA for the cloud link (upload-begin ca ...)\r\n"
+        "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  proxy | proxy-set <host:port> [user pass] | proxy-clear   HTTP proxy for the cloud link\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
@@ -1188,6 +1191,31 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             }
         }
         else op(out, ctx, "  usage: eth <stop|start|restart|stats|speed>\r\n");
+    } else if (!strcmp(argv[0], "identity")) {
+        /* "identity <short id> <public key>", or "identity unknown <why>" (device_identity.h). */
+        char id[DEVICE_ID_SHORT_LEN + 1];
+        device_identity_short_id(id);
+        uint8_t pub[DEVICE_ID_PUBLIC_LEN];
+        if (id[0] && device_identity_get_public(pub) == 0) {
+            char b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
+            b64url_encode(pub, sizeof(pub), b64, sizeof(b64));
+            op(out, ctx, "identity %s %s\r\n", id, b64);
+        } else {
+            op(out, ctx, "identity unknown %s\r\n", device_identity_problem());
+        }
+    } else if (!strcmp(argv[0], "identity-wipe")) {
+        /* The way back for a pod whose identity record the firmware will not replace: erase it and
+           make a new key. USB console only (this console is physical presence); the token must be
+           the current short id, or "unknown" when there is none. */
+        const char *why = device_identity_wipe(argc >= 2 ? argv[1] : NULL);
+        if (why) {
+            op(out, ctx, "identity-wipe error %s\r\n", why);
+        } else {
+            char id[DEVICE_ID_SHORT_LEN + 1];
+            device_identity_short_id(id);
+            op(out, ctx, "identity-wipe ok %s\r\n", id);
+            net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
+        }
     } else if (!strcmp(argv[0], "wifi-clear")) {
         config_clear();
         net_wifi_reload();          /* drop Wi-Fi; ESP32 returns to reset */

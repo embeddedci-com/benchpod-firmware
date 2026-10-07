@@ -175,6 +175,62 @@ void device_identity_init(void) {
     printf("[id] device public key (ed25519): %s\n", pub_b64);
 }
 
+void device_identity_short_id(char out[DEVICE_ID_SHORT_LEN + 1]) {
+    out[0] = '\0';
+    if (!s_ready) return;
+    snprintf(out, DEVICE_ID_SHORT_LEN + 1, "%02x%02x%02x",
+             s_public_key[0], s_public_key[1], s_public_key[2]);
+}
+
+const char *device_identity_wipe_check(const char *confirm, const char *short_id) {
+    static char why[96];
+    const char *want = (short_id && short_id[0]) ? short_id : "unknown";
+    if (confirm && strcmp(confirm, want) == 0) return NULL;
+    snprintf(why, sizeof(why), "confirm with the current id: identity-wipe %s", want);
+    return why;
+}
+
+const char *device_identity_wipe(const char *confirm) {
+    char old_id[DEVICE_ID_SHORT_LEN + 1];
+    device_identity_short_id(old_id);
+    const char *why = device_identity_wipe_check(confirm, old_id);
+    if (why) return why;
+    char old_problem[sizeof(s_problem)];
+    memcpy(old_problem, device_identity_problem(), sizeof(old_problem) - 1);
+    old_problem[sizeof(old_problem) - 1] = '\0';
+
+    /* The new seed first: with no usable entropy, refuse before erasing anything. */
+    identity_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+    rec.magic   = IDENTITY_MAGIC;
+    rec.version = IDENTITY_VERSION;
+    if (fill_seed(rec.seed) != 0) return "hardware RNG failed; nothing was erased";
+
+    /* Stop signing with the old key while the record and the keys change. */
+    s_ready = false;
+    int persisted = identity_persist(&rec);
+    uint8_t seed_copy[32];
+    memcpy(seed_copy, rec.seed, sizeof(seed_copy));
+    crypto_ed25519_key_pair(s_secret_key, s_public_key, seed_copy);
+    memset(&rec, 0, sizeof(rec));
+    s_problem[0] = '\0';
+    s_ready = true;
+
+    char new_id[DEVICE_ID_SHORT_LEN + 1];
+    device_identity_short_id(new_id);
+    char pub_b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
+    b64url_encode(s_public_key, sizeof(s_public_key), pub_b64, sizeof(pub_b64));
+    printf("[id] identity WIPED on the USB console: old %s%s%s%s, new benchpod-%s (%s)\n",
+           old_id[0] ? "benchpod-" : "unknown", old_id,
+           old_id[0] ? "" : " - ", old_id[0] ? "" : old_problem, new_id, pub_b64);
+    if (persisted != 0) {
+        snprintf(s_problem, sizeof(s_problem), "new key not persisted (flash write failed)");
+        printf("[id] WARNING: the new identity was not persisted; it is lost at the next reboot\n");
+        return "the new key could not be written to flash (it works until the next reboot)";
+    }
+    return NULL;
+}
+
 const char *device_identity_problem(void) {
     return s_ready ? "" : (s_problem[0] ? s_problem : "identity not initialized");
 }

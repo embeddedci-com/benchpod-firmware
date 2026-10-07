@@ -3857,7 +3857,7 @@ static bool cmd_ok_without_hw(const char *cmd) {
         "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
         "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
         "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
-        "power_profile", "identity_public", "identity_pop", "dac_limits",
+        "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
         "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
         "can_disable",
     };
@@ -4027,6 +4027,9 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id);
     else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id);
     else if (strcmp(cmd, "identity_pop")    == 0) handle_identity_pop(conn_id, buf);
+    else if (strcmp(cmd, "identity_wipe")   == 0)
+        send_error(conn_id, "identity_wipe: only on the pod's USB console (physical presence): "
+                            "benchpod identity wipe --connection usb");
     else if (strcmp(cmd, "sensor_start")  == 0) handle_sensor_start(conn_id, buf);
     else if (strcmp(cmd, "sensor_set")    == 0) handle_sensor_set(conn_id, buf);
     else if (strcmp(cmd, "sensor_stop")   == 0) handle_sensor_stop(conn_id);

@@ -25,7 +25,7 @@ CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
 CLOUDRX_SRCS  := test_cloud_rx.c
 CLOUDCAPS_SRCS := test_cloud_caps.c ../src/cloud_caps.c ../src/bp_json.c
 CLOUDREPLY_SRCS := test_cloud_reply_cap.c ../src/cloud_reply_cap.c
-DEVID_SRCS    := test_device_identity.c
+DEVID_SRCS     = test_device_identity.c ../src/device_identity.c ../src/b64url.c mocks/mock_flash.c $(MONOCYPHER)
 WSFRAME_SRCS  := test_ws_frame.c ../src/ws_frame.c ../src/bp_json.c
 UARTSTAT_SRCS := test_uart_status.c
 DACLOOP_SRCS  := test_dac_loop_params.c ../src/dac_loop_params.c
@@ -149,7 +149,7 @@ build/test_cloud_reply_cap: $(CLOUDREPLY_SRCS)
 
 build/test_device_identity: $(DEVID_SRCS)
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(DEVID_SRCS) -lm -o $@
+	$(CC) $(CFLAGS) -Imocks $(MONO_INC) $(DEVID_SRCS) -lm -o $@
 
 build/test_ws_frame: $(WSFRAME_SRCS)
 	@mkdir -p build
@@ -295,7 +295,8 @@ run: $(TESTS)
 	@./build/test_cloud_caps
 	@./build/test_cloud_reply_cap > build/test_cloud_reply_cap.log || { cat build/test_cloud_reply_cap.log; exit 1; }
 	@tail -n 1 build/test_cloud_reply_cap.log
-	@./build/test_device_identity
+	@./build/test_device_identity > build/test_device_identity.log || { cat build/test_device_identity.log; exit 1; }
+	@tail -n 1 build/test_device_identity.log
 	@./build/test_ws_frame
 	@./build/test_uart_status
 	@./build/test_dac_loop_params
