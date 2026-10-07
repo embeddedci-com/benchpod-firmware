@@ -200,7 +200,7 @@ module tb_top_swdq;
     initial begin
         qn = 0;
         #5000;
-        cs_lo; spi_byte(8'h02, junk); spi_byte(8'h00, r); cs_hi; check8(r, 8'd46, "VERSION");
+        cs_lo; spi_byte(8'h02, junk); spi_byte(8'h00, r); cs_hi; check8(r, 8'd47, "VERSION");
         // SWD_ARM SWCLK=LA11 SWDIO=LA12, then half 2 (6 MHz at the real clk), 2 idle cycles
         cs_lo; spi_byte(8'h50, junk); spi_byte(8'd10, junk); spi_byte(8'd11, junk); spi_byte(8'hFF, junk); cs_hi;
         cs_lo; spi_byte(8'h59, junk); spi_byte(8'd2, junk); spi_byte(8'd2, junk); cs_hi;

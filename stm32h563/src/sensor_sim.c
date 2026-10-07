@@ -4,6 +4,7 @@
 
 #include "sensor_sim.h"
 #include "sensor_bmp280.h"
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -55,7 +56,7 @@ int sensor_sim_start(const char *type, uint8_t addr7,
         return -2;
     }
 
-    printf("[i2c-sim] started \"%s\" addr=0x%02x SDA=LA%u SCL=LA%u\n",
+    log_printf("[i2c-sim] started \"%s\" addr=0x%02x SDA=LA%u SCL=LA%u\n",
            m->name, active_addr7, active_sda, active_scl);
     return 0;
 }
@@ -68,7 +69,7 @@ int sensor_sim_set(const char *key, float value) {
     /* Integer int.frac split — newlib-nano printf has no %f (the old %.3f printed
        nothing). Scale to milli-units and print the whole/fraction parts as %ld. */
     long milli = lroundf(value * 1000.0f);
-    printf("[i2c-sim] set %s=%ld.%03ld -> image reloaded\n",
+    log_printf("[i2c-sim] set %s=%ld.%03ld -> image reloaded\n",
            key, milli / 1000, (milli < 0 ? -milli : milli) % 1000);
     return 0;
 }
@@ -76,7 +77,7 @@ int sensor_sim_set(const char *key, float value) {
 void sensor_sim_stop(void) {
     if (!active) return;
     fpga_i2c_sensor_disable();
-    printf("[i2c-sim] stopped \"%s\"\n", active->name);
+    log_printf("[i2c-sim] stopped \"%s\"\n", active->name);
     active = NULL;
 }
 

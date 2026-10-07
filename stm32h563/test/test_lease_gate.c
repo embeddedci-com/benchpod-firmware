@@ -25,7 +25,15 @@ static void test_lifecycle(void) {
     CHECK(lease_gate_active(200000, &left) && left == 20, "after renew %u", left);
     /* the pod's own deadline ends it without a release */
     CHECK(!lease_gate_active(100000 + 120000, &left), "expired lease still held");
+    /* the check itself writes nothing (it runs on another task than the writer)... */
+    CHECK(lease_gate_holder()[0] != '\0', "the read-only check cleared the holder");
+    /* ...the writer's expire does, and it stays free even 2^31 ms on */
+    lease_gate_expire(100000 + 120000);
     CHECK(lease_gate_holder()[0] == '\0', "holder kept after expiry");
+    CHECK(!lease_gate_active(100000 + 120000 + 0x80000000u, &left), "stale deadline came back");
+    lease_gate_update(true, "CI", 10, 0);
+    lease_gate_expire(5000);
+    CHECK(lease_gate_active(5000, &left) && left == 5, "expire ended a live lease");
     /* release and link drop */
     lease_gate_update(true, "web", 60, 0);
     lease_gate_update(false, NULL, 0, 10);

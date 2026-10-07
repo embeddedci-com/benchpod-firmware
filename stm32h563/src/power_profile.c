@@ -7,6 +7,7 @@
 #include "hw_lock.h"
 #include "target_power.h"
 #include "pico/time.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -250,7 +251,7 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     s.last_mv    = mv;
     s.i2c_errors = 0;
     pp_stats_init(&s.st);
-    printf("[power] profile started: efuse %d, %s, %u Hz (ADC config 0x%04X, %u us), max %u ms, keep %u\n",
+    log_printf("[power] profile started: efuse %d, %s, %u Hz (ADC config 0x%04X, %u us), max %u ms, keep %u\n",
            efuse, ina_chip_name(chip), (unsigned)cfg.rate_hz, cfg.adc_config, (unsigned)cfg.period_us,
            (unsigned)max_duration_ms, (unsigned)keep_samples);
     return 0;
@@ -262,10 +263,10 @@ static void finish(bool truncated) {
     s.t_stop    = time_us_64();
     hw_lock();
     if (ina238_restore_adc_config(s.addr) != 0)
-        printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
+        log_printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
     hw_unlock();
     pp_decim_finish(&s.dec);
-    printf("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
+    log_printf("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
            (unsigned)s.st.n, (unsigned)((s.t_stop - s.t_start) / 1000u));
 }
 
@@ -304,7 +305,7 @@ void power_profile_poll(void) {
         if (s.next_shunt <= now) s.next_shunt = now + s.cfg.period_us;
         if (rc != 0) {
             if (++s.i2c_errors >= PP_MAX_I2C_ERRORS) {
-                printf("[power] %u consecutive current-monitor read failures on 0x%02X; stopping the profile\n",
+                log_printf("[power] %u consecutive current-monitor read failures on 0x%02X; stopping the profile\n",
                        (unsigned)s.i2c_errors, s.addr);
                 finish(false);
             }

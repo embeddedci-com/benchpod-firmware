@@ -22,6 +22,7 @@
 #include "hw_worker.h"
 
 #include "pico/time.h"
+#include "bp_log.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -307,9 +308,9 @@ static void on_serial_frame(const esp_hosted_rx_t *rx) {
             }
             if (have_drssi) {
                 s_rssi = drssi; s_have_rssi = true;   /* freshest signal reading */
-                printf("[wifi] disconnected (reason %d, rssi %d dBm)\n", reason, drssi);
+                log_printf("[wifi] disconnected (reason %d, rssi %d dBm)\n", reason, drssi);
             } else {
-                printf("[wifi] disconnected (reason %d)\n", reason);
+                log_printf("[wifi] disconnected (reason %d)\n", reason);
             }
         }
         return;
@@ -355,7 +356,7 @@ static bool send_req(uint32_t req_id, uint32_t resp_id,
 }
 
 static void to_backoff(const char *why) {
-    printf("[wifi] %s — backoff\n", why);
+    log_printf("[wifi] %s — backoff\n", why);
     s_await_resp = 0;
     s_state = WC_BACKOFF;
     s_deadline = make_timeout_time_ms(RETRY_BACKOFF_MS);
@@ -371,7 +372,7 @@ static void slave_lost(const char *why) {
     esp_hosted_spi_stop();
     s_rssi_misses = 0;
     s_evt_connected = s_evt_disconnected = false;
-    printf("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
+    log_printf("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
            why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
     to_backoff("ESP32-C3 restart");
 }
@@ -383,7 +384,7 @@ static bool rssi_missed(const char *what) {
     s_rssi_deadline = make_timeout_time_ms(RSSI_PERIOD_MS);
     s_state = WC_UP;
     if (++s_rssi_misses < RSSI_MAX_MISSES) {
-        printf("[wifi] RSSI %s (%u/%u)\n", what, (unsigned)s_rssi_misses, (unsigned)RSSI_MAX_MISSES);
+        log_printf("[wifi] RSSI %s (%u/%u)\n", what, (unsigned)s_rssi_misses, (unsigned)RSSI_MAX_MISSES);
         return false;
     }
     s_lost_rssi++;
@@ -398,7 +399,7 @@ static bool esp_wifi_ctrl_reconnect_if_dropped(void) {
     if (!s_evt_disconnected) return false;
     s_evt_disconnected = false;
     esp_netif_set_link_up(false);
-    printf("[wifi] disconnected — reconnecting\n");
+    log_printf("[wifi] disconnected — reconnecting\n");
     if (send_req(ID_REQ_WIFI_CONNECT, ID_RESP_WIFI_CONNECT, NULL, 0)) {
         s_deadline = make_timeout_time_ms(15000);
         s_state = WC_WAIT_ASSOC;
@@ -412,8 +413,8 @@ void esp_wifi_ctrl_init(void) {
     s_configured = (config_load(&s_cfg) == 0 && s_cfg.ssid[0] != '\0');
     esp_hosted_spi_set_serial_cb(on_serial_frame);
     s_state = WC_DOWN;
-    if (s_configured) printf("[wifi] configured for SSID \"%s\"\n", s_cfg.ssid);
-    else              printf("[wifi] no SSID configured — Wi-Fi disabled\n");
+    if (s_configured) log_printf("[wifi] configured for SSID \"%s\"\n", s_cfg.ssid);
+    else              log_printf("[wifi] no SSID configured — Wi-Fi disabled\n");
 }
 
 void esp_wifi_ctrl_image_installed(void) {
@@ -441,7 +442,7 @@ void esp_wifi_ctrl_poll(void) {
         if (!s_flash_done) return;
         s_flash_done = false;
         if (s_flash_ok) {
-            printf("[wifi] ESP32-C3 flashed — starting it\n");
+            log_printf("[wifi] ESP32-C3 flashed — starting it\n");
             s_state = WC_DOWN;              /* s_started is false: the next poll releases reset */
         } else {
             to_backoff("ESP32-C3 flash failed");
@@ -485,7 +486,7 @@ void esp_wifi_ctrl_poll(void) {
                 s_flash_tried = true;
                 s_flash_done  = false;
                 if (hw_worker_submit_esp_flash()) {
-                    printf("[wifi] no boot event from the ESP32-C3 in %u s — flashing its "
+                    log_printf("[wifi] no boot event from the ESP32-C3 in %u s — flashing its "
                            "esp-hosted image (~2-3 min)\n", SLAVE_BOOT_TIMEOUT_MS / 1000u);
                     s_state = WC_FLASHING;
                 } else {
@@ -548,10 +549,10 @@ void esp_wifi_ctrl_poll(void) {
         if (s_resp_ready) {
             if (s_have_mac) {
                 esp_netif_set_hwaddr(s_mac);
-                printf("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                log_printf("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
                        s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
             } else {
-                printf("[wifi] GetMac: no MAC in resp — netif keeps provisional MAC (DHCP will fail)\n");
+                log_printf("[wifi] GetMac: no MAC in resp — netif keeps provisional MAC (DHCP will fail)\n");
             }
             s_await_resp = 0;
             s_deadline = make_timeout_time_ms(15000);   /* assoc can take a few s */
@@ -563,7 +564,7 @@ void esp_wifi_ctrl_poll(void) {
         if (s_evt_connected) {
             s_evt_connected = false;
             esp_netif_set_link_up(true);     /* lwIP restarts DHCP on link-up */
-            printf("[wifi] associated — link up\n");
+            log_printf("[wifi] associated — link up\n");
             s_rssi_deadline = make_timeout_time_ms(1000);   /* first RSSI read soon */
             s_rssi_misses = 0;
             s_state = WC_UP;

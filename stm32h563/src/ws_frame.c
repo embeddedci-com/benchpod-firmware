@@ -35,6 +35,11 @@ int ws_parse_frame(const uint8_t *buf, size_t len, ws_frame_t *out) {
     uint8_t b1 = buf[1];
     bool    masked = (b1 & 0x80) != 0;
     if (masked) return -1;          /* server frames must be unmasked */
+    if (b0 & 0x70) return -1;       /* RSV1-3: no extension (compression) was negotiated */
+    /* A message split over several frames (FIN clear, or a continuation frame) is refused, not
+       taken piecewise: the first part used to be acted on as a whole message and the rest
+       dropped. Our server never fragments, so this is a protocol error, said as such. */
+    if (!(b0 & 0x80) || (b0 & 0x0F) == WS_OP_CONT) return WS_PARSE_FRAGMENTED;
 
     size_t   offset = 2;
     uint64_t payload_len = (uint8_t)(b1 & 0x7F);

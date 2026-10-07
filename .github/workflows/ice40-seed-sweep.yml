@@ -1,6 +1,6 @@
 # Sweep iCE40 PnR seeds in CI's toolchain (OSS CAD Suite Linux, the same pin as test.yml).
 # CI synthesizes and places differently from a local Homebrew build, so a seed pinned from a local
-# sweep can fail CI's strict PnR gate (ICE40_PNR_STRICT).  After a gateware change, run this on the
+# sweep can fail CI's strict PnR gate (PNR_STRICT=1 in test.yml).  After a gateware change, run this on the
 # branch and pin seeds that are good in both toolchains (ice40/Makefile, SEED_LOOP / SEED_DEEP):
 #
 #   gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=32

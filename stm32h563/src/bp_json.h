@@ -66,6 +66,11 @@ bool bp_json_object_top(const char *json, const char *key, char *out, size_t cap
 int bp_json_byte_array(const char *json, const char *key,
                        uint8_t *out, int cap, int *len);
 
+/* A "key":"value" string anywhere in buf[0..n) (not NUL-terminated, any size), for a frame too
+   large to copy for the helpers above. No unescaping and no nesting awareness: for plain ids and
+   type names next to base64 data. Returns false (out = "") when absent or cut short. */
+bool bp_json_scan_str(const char *buf, size_t n, const char *key, char *out, size_t cap);
+
 /* ---- emitter -------------------------------------------------------------- */
 
 /* Bounds-tracked builder.  Never overruns buf; sets ok=false the first time an

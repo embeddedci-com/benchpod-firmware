@@ -45,6 +45,7 @@
 #include "cloud_extras.h"
 #include "adc_cal.h"
 #include "blob_store.h"
+#include "bp_log.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -81,7 +82,7 @@ static void net_task(void *arg)
     (void)arg;
     const bool skip = boot_guard_skip_net();
     if (skip) {
-        printf("[boot] safe mode: networking off\r\n");
+        log_printf("[boot] safe mode: networking off\r\n");
     } else {
         /* Stage first: anything below that crashes or hangs counts as the network's. */
         boot_guard_stage(BOOT_STAGE_NET_INIT);
@@ -121,18 +122,18 @@ int main(void)
     pico_compat_init();
     console_io_init();
 
-    printf("\r\n\r\n");
-    printf("========================================\r\n");
-    printf(" bench-pod-firmware v%s\r\n", FIRMWARE_VERSION);
-    printf(" STM32H563ZIT6  |  console: USB-CDC + USART2 PD5/PD6 @ %lu\r\n",
+    log_printf("\r\n\r\n");
+    log_printf("========================================\r\n");
+    log_printf(" bench-pod-firmware v%s\r\n", FIRMWARE_VERSION);
+    log_printf(" STM32H563ZIT6  |  console: USB-CDC + USART2 PD5/PD6 @ %lu\r\n",
            (unsigned long)CONSOLE_UART_BAUD);
-    printf(" sysclk=%lu Hz  FreeRTOS=%s\r\n",
+    log_printf(" sysclk=%lu Hz  FreeRTOS=%s\r\n",
            (unsigned long)HAL_RCC_GetSysClockFreq(), tskKERNEL_VERSION_NUMBER);
-    printf(" reset: %s   last crash: %s\r\n",
+    log_printf(" reset: %s   last crash: %s\r\n",
            fault_last_reset_str(), fault_last_crash_str());
-    printf("========================================\r\n");
+    log_printf("========================================\r\n");
     if (s_clock_on_hsi)
-        printf("[boot] WARNING: the 25 MHz crystal did not start; running from the internal HSI\r\n");
+        log_printf("[boot] WARNING: the 25 MHz crystal did not start; running from the internal HSI\r\n");
 
     /* Count this boot (safe mode after repeated failures) and arm the watchdog: from here a
        hang resets the chip instead of leaving it dark.  A power-on or the reset button starts
@@ -191,7 +192,7 @@ int main(void)
                     tskIDLE_PRIORITY + 1, NULL) != pdPASS ||
         xTaskCreate(net_task, "net", 4096, NULL,
                     tskIDLE_PRIORITY + 2, NULL) != pdPASS) {
-        printf("[fatal] task create failed\r\n");
+        log_printf("[fatal] task create failed\r\n");
         fault_sw_panic(FAULT_SW_TASKCREATE, "main");
     }
 
@@ -217,7 +218,7 @@ int main(void)
 void boot_deferred_hw_init(void)
 {
     if (boot_guard_skip_hw()) {
-        printf("[boot] safe mode: iCE40/PSRAM bring-up skipped\r\n");
+        log_printf("[boot] safe mode: iCE40/PSRAM bring-up skipped\r\n");
         cloud_extras_mark_ready();   /* no W25Q this boot: connect without a company CA or proxy */
         return;
     }
@@ -229,6 +230,10 @@ void boot_deferred_hw_init(void)
        that did not configure (blank or partial config flash) keeps hunting the flash, driving the
        lines psram_init() is about to drive: hold it in reset; the recovery below reflashes it. */
     if (!ice40_is_configured()) ice40_hold_off_bus();
+    /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
+       which is where reset left it.  Park it as soon as the iCE40 can drive the DAC (SPI1 only,
+       no PSRAM), not after the PSRAM self-test, which takes seconds. */
+    else if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
        even when the FPGA is unconfigured. */
@@ -241,8 +246,8 @@ void boot_deferred_hw_init(void)
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();
     i2c_bus_status();       /* scan + name known devices */
-    /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
-       which is where reset left it: park it now that the iCE40 can drive the DAC. */
+    /* Park again: the self-test recovery or the gateware update may have reconfigured the
+       iCE40 (or it was not configured above), which resets the DAC to 0 V. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     boot_guard_sub_done(BOOT_SUB_HW);
     boot_guard_set_hw_ready();

@@ -35,6 +35,7 @@ void mock_flash_reset(void)
     memset(mock_flash_ecc_bad, 0, sizeof(mock_flash_ecc_bad));
     memset(mock_flash_programmed, 0, sizeof(mock_flash_programmed));
     mock_flash_erases = mock_flash_programs = mock_flash_double_programs = 0;
+    mock_flash_max_erases_irq_off = 0;
     mock_flash_ecc_reads = mock_flash_irq_depth = 0;
     mock_flash_cut_after = 0;
 }
@@ -61,6 +62,9 @@ static void power_lost(void)
     longjmp(mock_flash_power_jmp, 1);
 }
 
+static int s_window_erases;   /* sector erases in the current interrupts-off window */
+int mock_flash_max_erases_irq_off;
+
 void flash_range_erase(uint32_t offset, size_t count)
 {
     uint32_t i = idx(offset, count);
@@ -80,6 +84,8 @@ void flash_range_erase(uint32_t offset, size_t count)
     memset(mock_flash_ecc_bad + i / MOCK_QW, 0, count / MOCK_QW);
     memset(mock_flash_programmed + i / MOCK_QW, 0, count / MOCK_QW);
     mock_flash_erases++;
+    if (mock_flash_irq_depth > 0 && ++s_window_erases > mock_flash_max_erases_irq_off)
+        mock_flash_max_erases_irq_off = s_window_erases;
 }
 
 void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
@@ -106,7 +112,10 @@ void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
     }
 }
 
-uint32_t save_and_disable_interrupts(void) { return (uint32_t)mock_flash_irq_depth++; }
+uint32_t save_and_disable_interrupts(void) {
+    if (mock_flash_irq_depth == 0) s_window_erases = 0;
+    return (uint32_t)mock_flash_irq_depth++;
+}
 void restore_interrupts(uint32_t status) { mock_flash_irq_depth = (int)status; }
 
 int flash_read_checked(uint32_t offset, void *dst, size_t n)

@@ -39,7 +39,8 @@ enum {
 const char *spi_stream_strerror(int rc);
 
 /* Assert CS, send head[0..head_len) and source[0..len), then release CS unless hold_cs.  On any
-   error CS is released.  *sent (may be NULL) = source bytes the transport accepted. */
+   error CS is released.  *sent (may be NULL) = source bytes the transport accepted.  Not
+   reentrant (one static 4 KB chunk buffer): call it from the hw worker only. */
 int spi_stream_run(const spi_stream_io_t *io, const uint8_t *head, size_t head_len,
                    uint32_t len, bool hold_cs, uint32_t *sent);
 

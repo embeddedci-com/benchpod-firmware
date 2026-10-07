@@ -15,6 +15,10 @@ void console_io_init(void);
 /* Write to both sinks (USART2 blocking, USB-CDC best-effort/ring-buffered). */
 void console_io_write(const uint8_t *buf, size_t len);
 
+/* Write log text to both sinks with a CR before every bare LF, all under the console lock (no
+   other task's output lands inside it).  printf's _write and log_printf (bp_log.h) use it. */
+void console_io_write_text(const char *ptr, size_t len);
+
 /* Push one received byte into the RX ring (called from ISR / CDC callback). */
 void console_io_rx_push(uint8_t byte);
 

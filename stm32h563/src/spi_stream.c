@@ -23,7 +23,9 @@ int spi_stream_run(const spi_stream_io_t *io, const uint8_t *head, size_t head_l
         head_len > SPI_STREAM_HEAD_MAX || (head_len && !head) || (head_len == 0 && len == 0))
         return SPI_STREAM_E_ARGS;
 
-    uint8_t buf[4096];
+    /* static, not a 4 KB local: the only caller runs on the 12 KB hw worker stack, and
+       the worker is the only task that streams, so this is never entered twice at once. */
+    static uint8_t buf[4096];
     uint32_t done = 0;
     int rc = SPI_STREAM_OK;
     io->cs(io->ctx, true);

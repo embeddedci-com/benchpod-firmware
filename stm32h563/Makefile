@@ -81,6 +81,7 @@ C_SOURCES := \
   src/target_power.c \
   src/can_bus.c \
   src/console_io.c \
+  src/bp_log.c \
   src/console.c \
   src/usbd_conf.c \
   src/usbd_desc.c \
@@ -98,6 +99,8 @@ C_SOURCES := \
   src/esp_wifi_ctrl.c \
   src/cloud_config.c \
   src/cloud_client.c \
+  src/cloud_caps.c \
+  src/cloud_reply_cap.c \
   src/ws_frame.c \
   src/mbedtls_port.c \
   src/command_handler.c \

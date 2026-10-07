@@ -297,3 +297,25 @@ void bp_emit_jstr(bp_emit_t *e, const char *s) {
     }
     emit_bytes(e, "\"", 1);
 }
+
+bool bp_json_scan_str(const char *buf, size_t n, const char *key, char *out, size_t cap) {
+    if (!out || cap == 0) return false;
+    out[0] = '\0';
+    size_t kl = strlen(key);
+    for (size_t i = 0; i + kl + 3 < n; i++) {
+        if (buf[i] != '"' || memcmp(buf + i + 1, key, kl) != 0 || buf[i + 1 + kl] != '"') continue;
+        size_t j = i + kl + 2;
+        while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+        if (j >= n || buf[j] != ':') continue;
+        j++;
+        while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+        if (j >= n || buf[j] != '"') continue;
+        j++;
+        size_t o = 0;
+        while (j < n && buf[j] != '"' && o + 1 < cap) out[o++] = buf[j++];
+        if (j >= n || buf[j] != '"') { out[0] = '\0'; continue; }   /* cut short or too long */
+        out[o] = '\0';
+        return true;
+    }
+    return false;
+}

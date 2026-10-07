@@ -22,6 +22,7 @@
 #include "stm32h5xx_hal.h"
 #include "FreeRTOSConfig.h"
 #include "pico/time.h"        /* sleep_ms / get_absolute_time for reset timing */
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -153,7 +154,7 @@ int esp_hosted_spi_init(void) {
     hspi_esp.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
     hspi_esp.Init.NSSPMode          = SPI_NSS_PULSE_DISABLE;
     if (HAL_SPI_Init(&hspi_esp) != HAL_OK) {
-        printf("[esp] SPI4 init failed\n");
+        log_printf("[esp] SPI4 init failed\n");
         return -1;
     }
 
@@ -168,15 +169,15 @@ int esp_hosted_spi_init(void) {
         HAL_NVIC_SetPriority(SPI4_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
         HAL_NVIC_EnableIRQ(SPI4_IRQn);
         s_esp_dma_ok = true;
-        printf("[esp] SPI4 DMA enabled (GPDMA1 ch2=rx ch3=tx)\n");
+        log_printf("[esp] SPI4 DMA enabled (GPDMA1 ch2=rx ch3=tx)\n");
     } else {
-        printf("[esp] SPI4 DMA init failed — using blocking transfers\n");
+        log_printf("[esp] SPI4 DMA init failed — using blocking transfers\n");
     }
 #endif
 
     s_running = false; s_ready = false;
     s_tx_head = s_tx_tail = 0;
-    printf("[esp] SPI4 transport configured (ESP32-C3 held in reset)\n");
+    log_printf("[esp] SPI4 transport configured (ESP32-C3 held in reset)\n");
     return 0;
 }
 
@@ -191,7 +192,7 @@ void esp_hosted_spi_start(void) {
     s_slave_reset = false; s_boot_events = 0;
     s_tx_head = s_tx_tail = 0;
     memset(&s_pump_stats, 0, sizeof(s_pump_stats));
-    printf("[esp] ESP32-C3 reset released — awaiting boot event\n");
+    log_printf("[esp] ESP32-C3 reset released — awaiting boot event\n");
 }
 
 void esp_hosted_spi_stop(void) {
@@ -248,11 +249,11 @@ static void handle_rx_frame(const esp_hosted_rx_t *rx) {
             rx->payload_len >= 1 && rx->payload[0] == ESP_HOSTED_EVENT_INIT) {
             s_boot_events++;
             if (!s_ready) {
-                printf("[esp] slave boot event — link up\n");
+                log_printf("[esp] slave boot event — link up\n");
             } else {
                 /* Already up: the slave rebooted underneath us.  Its Wi-Fi state is gone,
                    so everything we think we know about the association is stale. */
-                printf("[esp] slave boot event while up (#%lu since start) — slave reset\n",
+                log_printf("[esp] slave boot event while up (#%lu since start) — slave reset\n",
                        (unsigned long)s_boot_events);
                 s_slave_reset = true;
             }
@@ -306,7 +307,7 @@ static int esp_do_xact(void *ctx) {
     int st = xfer_txrx(&s_esp_xfer, s_xfer_tx, s_xfer_rx, ESP_HOSTED_SPI_BUF_SIZE);
     HAL_GPIO_WritePin(ESP_CS_PORT, ESP_CS_PIN, GPIO_PIN_SET);
     if (st != XFER_OK) {
-        printf("[esp] SPI xfer error %d\n", st);
+        log_printf("[esp] SPI xfer error %d\n", st);
         return -1;   /* leave the TX frame queued for retry */
     }
 

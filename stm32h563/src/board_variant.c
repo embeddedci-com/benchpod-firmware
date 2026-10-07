@@ -3,6 +3,7 @@
  */
 #include "board_variant.h"
 #include "i2c_bus.h"
+#include "bp_log.h"
 #include <stdio.h>
 
 static bool s_has_analog = true;
@@ -24,15 +25,15 @@ void board_variant_init(void)
     bool u55 = false, u58 = false;
     s_has_analog = board_variant_detect(i2c_bus_probe, &u55, &u58);
     if (!s_has_analog) {
-        printf("[board] digital-only BenchPod (no analog expanders at 0x%02x/0x%02x): "
+        log_printf("[board] digital-only BenchPod (no analog expanders at 0x%02x/0x%02x): "
                "DAC, ADC and the analog outputs are off (restart after fitting an analog add-on)\r\n",
                I2C_ADDR_TCA9554_DACMUX, I2C_ADDR_TCA9554_ANASW);
     } else if (!(u55 && u58)) {
-        printf("[board] WARNING: analog board, but only the %s expander answers (0x%02x); "
+        log_printf("[board] WARNING: analog board, but only the %s expander answers (0x%02x); "
                "check U55/U58\r\n", u55 ? "DAC mux" : "analog switching",
                u55 ? I2C_ADDR_TCA9554_ANASW : I2C_ADDR_TCA9554_DACMUX);
     } else {
-        printf("[board] analog front end present\r\n");
+        log_printf("[board] analog front end present\r\n");
     }
 }
 

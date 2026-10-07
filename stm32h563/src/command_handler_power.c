@@ -15,6 +15,7 @@
 #include "at_driver.h"
 #include "bp_json.h"
 #include "pico/time.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,7 +79,7 @@ static void reply_pump(void) {
         size_t avail = at_send_avail(conn);
         if (avail < PP_FRAME_OVERHEAD + PP_SAMPLE_BYTES) {
             if (time_reached(s_reply.stall_deadline)) {
-                printf("[power] reply stalled %u ms on conn %d at %lu/%lu: ending it (result kept)\n",
+                log_printf("[power] reply stalled %u ms on conn %d at %lu/%lu: ending it (result kept)\n",
                        (unsigned)PP_REPLY_STALL_MS, conn, (unsigned long)s_reply.next,
                        (unsigned long)total);
                 s_reply.active = false;     /* the result stays: a new stop can still read it */

@@ -263,6 +263,30 @@ static void test_step_plans(void) {
     CHECK(!la_pins_plan_step(1, 1, &plan, err, sizeof(err)));
 }
 
+/* Step counts above the 16-bit gateware counter are refused with a message naming the range
+   (they used to come back as "invalid args"); JSON numbers parse strictly. */
+static void test_step_args(void) {
+    CHECK(la_step_args_ok(1, 4, err, sizeof(err)));
+    CHECK(la_step_args_ok(65535, 65535, err, sizeof(err)));
+    CHECK(!la_step_args_ok(65536, 1000, err, sizeof(err)));
+    CHECK(strstr(err, "steps must be 1..65535") == err);
+    CHECK(!la_step_args_ok(0, 1000, err, sizeof(err)));
+    CHECK(strstr(err, "steps must be 1..65535") == err);
+    CHECK(!la_step_args_ok(10, 3, err, sizeof(err)));
+    CHECK(strstr(err, "delay_us must be 4..65535 (microseconds per half-phase") == err);
+    CHECK(!la_step_args_ok(10, 65536, err, sizeof(err)));
+    CHECK(strstr(err, "delay_us must be 4..65535") == err);
+
+    uint32_t v = 0;
+    CHECK(la_step_parse_u32("70000", &v) && v == 70000);
+    CHECK(la_step_parse_u32("4294967295", &v) && v == 4294967295u);
+    CHECK(!la_step_parse_u32("4294967296", &v));
+    CHECK(!la_step_parse_u32("1e5", &v));
+    CHECK(!la_step_parse_u32("-1", &v));
+    CHECK(!la_step_parse_u32("12x", &v));
+    CHECK(!la_step_parse_u32("", &v));
+}
+
 static void test_voltage_refusal(void) {
     la_pins_reset();
     CHECK(la_pins_check_voltage_change(3300, 1800, err, sizeof(err)));   /* nothing owned */
@@ -363,6 +387,7 @@ int main(void) {
     test_pull_rules();
     test_gpio_modes_and_levels();
     test_step_plans();
+    test_step_args();
     test_voltage_refusal();
     test_json_entries();
     test_trigger_parse();

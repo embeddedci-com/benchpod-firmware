@@ -2,6 +2,8 @@
 # Run with:  make            (builds + runs)
 CC      ?= cc
 CFLAGS  := -std=gnu11 -Wall -Wextra -O1 -I../src -I../port -I. -I../lib/esp_hosted/common
+# Code under test logs through plain printf (bp_log.h); test_bp_log tests log_printf itself.
+CFLAGS  += -DLOG_PRINTF_IS_PRINTF
 
 # Every test binary depends on every header (see the $(TESTS) rule near the bottom).  The rules
 # below list only .c prerequisites, so before this a header edit left stale binaries behind and
@@ -25,6 +27,10 @@ PSRAMREG_SRCS := test_psram_regions.c ../src/psram_regions.c
 JSON_SRCS     := test_json.c ../src/bp_json.c
 CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
 CLOUDRX_SRCS  := test_cloud_rx.c
+CLOUDCAPS_SRCS := test_cloud_caps.c ../src/cloud_caps.c ../src/bp_json.c
+CLOUDREPLY_SRCS := test_cloud_reply_cap.c ../src/cloud_reply_cap.c
+DEVID_SRCS     = test_device_identity.c ../src/device_identity.c ../src/b64url.c mocks/mock_flash.c $(MONOCYPHER)
+WSFRAME_SRCS  := test_ws_frame.c ../src/ws_frame.c ../src/bp_json.c
 UARTSTAT_SRCS := test_uart_status.c
 DACLOOP_SRCS  := test_dac_loop_params.c ../src/dac_loop_params.c
 DACREARM_SRCS := test_dac_rearm.c ../src/dac_rearm.c
@@ -70,8 +76,12 @@ FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
+# The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
+# (default config), built once into an archive.
+CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/blob_store.c mocks/mock_w25q.c
+MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 ifneq ($(HAVE_MBEDTLS),)
-OTA_TARGET := build/test_ota build/test_blob_store
+OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras
 endif
 
 .PHONY: all clean run
@@ -141,6 +151,22 @@ build/test_cloud_rx: $(CLOUDRX_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CLOUDRX_SRCS) -lm -o $@
 
+build/test_cloud_caps: $(CLOUDCAPS_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CLOUDCAPS_SRCS) -lm -o $@
+
+build/test_cloud_reply_cap: $(CLOUDREPLY_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CLOUDREPLY_SRCS) -lm -o $@
+
+build/test_device_identity: $(DEVID_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Imocks $(MONO_INC) $(DEVID_SRCS) -lm -o $@
+
+build/test_ws_frame: $(WSFRAME_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(WSFRAME_SRCS) -lm -o $@
+
 build/test_uart_status: $(UARTSTAT_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(UARTSTAT_SRCS) -lm -o $@
@@ -168,6 +194,10 @@ build/test_spi_flash: $(SPIFLASH_SRCS)
 build/test_spi_stream: $(SPISTREAM_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SPISTREAM_SRCS) -lm -o $@
+
+build/test_bp_log: test_bp_log.c ../src/bp_log.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -ULOG_PRINTF_IS_PRINTF test_bp_log.c ../src/bp_log.c -o $@
 
 build/test_la_pins: $(LAPINS_SRCS)
 	@mkdir -p build
@@ -230,6 +260,15 @@ build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
 
+build/mbedtls/libmbedtls_host.a: $(MBEDTLS_ALL)
+	@mkdir -p build/mbedtls
+	cd build/mbedtls && $(CC) -O1 -w -c -I$(MBEDTLS)/include -I$(MBEDTLS)/library $(MBEDTLS_ALL)
+	ar rcs $@ build/mbedtls/*.o
+
+build/test_cloud_extras: $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a mocks/mock_w25q.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim_rtos -Imocks -I$(MBEDTLS)/include $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a -lm -o $@
+
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
@@ -250,7 +289,9 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+
+TESTS += build/test_bp_log
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -271,6 +312,12 @@ run: $(TESTS)
 	@./build/test_conn_tx
 	@./build/test_altcp_bp_proxy
 	@./build/test_cloud_rx
+	@./build/test_cloud_caps
+	@./build/test_cloud_reply_cap > build/test_cloud_reply_cap.log || { cat build/test_cloud_reply_cap.log; exit 1; }
+	@tail -n 1 build/test_cloud_reply_cap.log
+	@./build/test_device_identity > build/test_device_identity.log || { cat build/test_device_identity.log; exit 1; }
+	@tail -n 1 build/test_device_identity.log
+	@./build/test_ws_frame
 	@./build/test_uart_status
 	@./build/test_dac_loop_params
 	@./build/test_dac_rearm
@@ -279,6 +326,7 @@ run: $(TESTS)
 	@./build/test_la_pins
 	@./build/test_spi_flash
 	@./build/test_spi_stream
+	@./build/test_bp_log
 	@./build/test_eth_diag
 	@./build/test_power_profile
 	@./build/test_boot_policy
@@ -304,8 +352,10 @@ run: $(TESTS)
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
 	@./build/test_blob_store
+	@./build/test_cloud_extras > build/test_cloud_extras.log || { cat build/test_cloud_extras.log; exit 1; }
+	@tail -n 1 build/test_cloud_extras.log
 else
-	@echo "SKIP test_ota and test_blob_store (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
+	@echo "SKIP test_ota, test_blob_store and test_cloud_extras (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
 endif
 
 clean:

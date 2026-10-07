@@ -83,9 +83,8 @@ static void uart_tx_enqueue(const uint8_t *buf, size_t len)
 
 uint32_t console_tx_dropped(void) { return tx_drops; }
 
-void console_io_write(const uint8_t *buf, size_t len)
+static void console_io_write_unlocked(const uint8_t *buf, size_t len)
 {
-    io_lock();
     if (huart2.Instance != NULL) {
         if (s_tx_irq_ready) {
             uart_tx_enqueue(buf, len);   /* non-blocking; ISR drains to TDR */
@@ -96,6 +95,35 @@ void console_io_write(const uint8_t *buf, size_t len)
         }
     }
     cdc_if_write(buf, (uint16_t)len);
+}
+
+void console_io_write(const uint8_t *buf, size_t len)
+{
+    io_lock();
+    console_io_write_unlocked(buf, len);
+    io_unlock();
+}
+
+/* ONLCR: emit a CR before any bare LF, so device-log lines that end in "\n" (not "\r\n") don't
+   stair-step across the terminal (each line starting at the column where the previous one
+   ended).  Runs of non-LF bytes go out in one write; a lone "\n" becomes "\r\n"; an existing
+   "\r\n" is untouched.  The whole message is written under one lock, so another task's output
+   can't land inside it, and `last` (the previous byte, across calls) is only touched under it. */
+void console_io_write_text(const char *ptr, size_t len)
+{
+    static uint8_t last = 0;
+    static const uint8_t crlf[2] = { '\r', '\n' };
+    io_lock();
+    size_t start = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (ptr[i] == '\n' && last != '\r') {
+            if (i > start) console_io_write_unlocked((const uint8_t *)(ptr + start), i - start);
+            console_io_write_unlocked(crlf, 2);
+            start = i + 1;
+        }
+        last = (uint8_t)ptr[i];
+    }
+    if (len > start) console_io_write_unlocked((const uint8_t *)(ptr + start), len - start);
     io_unlock();
 }
 
@@ -119,28 +147,13 @@ int console_io_getc(void)
 
 bool console_io_rx_available(void) { return rx_head != rx_tail; }
 
-/* printf / stdout / stderr -> both console sinks. */
+/* printf / stdout / stderr -> both console sinks.  Only printf() goes through here (log_printf
+   calls console_io_write_text directly); console command output and char echo call
+   console_io_write() and already use "\r\n". */
 int _write(int file, char *ptr, int len)
 {
     (void)file;
-    /* ONLCR: emit a CR before any bare LF, so device-log printf()s that end in
-       "\n" (not "\r\n") don't stair-step across the terminal (each line starting
-       at the column where the previous one ended).  Runs of non-LF bytes go out
-       in one write; a lone "\n" becomes "\r\n"; an existing "\r\n" is untouched.
-       Only printf() goes through here — console command output and char echo call
-       console_io_write() directly and already use "\r\n". */
-    static uint8_t last = 0;
-    static const uint8_t crlf[2] = { '\r', '\n' };
-    int start = 0;
-    for (int i = 0; i < len; i++) {
-        if (ptr[i] == '\n' && last != '\r') {
-            if (i > start) console_io_write((const uint8_t *)(ptr + start), (size_t)(i - start));
-            console_io_write(crlf, 2);
-            start = i + 1;
-        }
-        last = (uint8_t)ptr[i];
-    }
-    if (len > start) console_io_write((const uint8_t *)(ptr + start), (size_t)(len - start));
+    if (len > 0) console_io_write_text(ptr, (size_t)len);
     return len;
 }
 
