@@ -24,6 +24,7 @@
 #include "device_identity.h"
 #include "watchdog.h"
 #include "pico/time.h"
+#include "b64url.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -91,7 +92,15 @@ bool command_handler_step_busy(void) { return false; }
 static int g_generates;      /* DAC waveform starts, to prove a refused OUTPut never reached it */
 static bool g_limits_on;     /* dac_limits enabled? */
 const char *dac_limits_check_raw(const char *what) { (void)what; return g_limits_on ? "refused: limits" : NULL; }
-int  dac_generate_arbitrary_rate(const uint8_t *d, size_t n, bool loop, float r) { (void)d; (void)n; (void)loop; (void)r; g_generates++; return 0; }
+static uint8_t g_replay[8192];  /* what the last USER replay handed the DAC */
+static size_t  g_replay_len;
+int  dac_generate_arbitrary_rate(const uint8_t *d, size_t n, bool loop, float r) {
+    (void)loop; (void)r;
+    g_replay_len = n;
+    memcpy(g_replay, d, n < sizeof(g_replay) ? n : sizeof(g_replay));
+    g_generates++;
+    return 0;
+}
 int  dac_generate_sine(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; g_generates++; return 0; }
 int  dac_generate_square(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
 int  dac_generate_sawtooth(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
@@ -212,8 +221,56 @@ static void test_dac_limits_refuse_raw_output(void) {
     scpi_dispatch_line(0, "OUTP OFF");
 }
 
+/* SOURce:FUNCtion USER replays what READ? captured (16-bit samples as LE byte pairs, like the
+   JSON replay), capped at the DAC BRAM; TRACe:DATA uploads replace it; DIAGnostic:PATTern? does
+   not touch it.  USER used to replay the 8-bit pattern/upload buffer instead of the capture. */
+static void test_user_replays_the_capture(void) {
+    reset_conn(4096);
+    scpi_dispatch_line(0, "READ? 16");
+    reset_conn(4096);
+    scpi_dispatch_line(0, "DIAG:PATT? CONS,7,64");
+    scpi_dispatch_line(0, "FUNC USER");
+    g_replay_len = 0;
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_replay_len == 32);
+    bool same = true;
+    for (size_t i = 0; i < 16; i++) {
+        uint16_t v = (uint16_t)(g_replay[2 * i] | (g_replay[2 * i + 1] << 8));
+        if (v != sample(i)) same = false;
+    }
+    CHECK(same);
+    scpi_dispatch_line(0, "OUTP OFF");
+
+    /* a capture longer than the BRAM replays its first SIGNAL_MAX_SAMPLES samples */
+    reset_conn(1024);
+    scpi_dispatch_line(0, "READ? 4096");
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_replay_len == SIGNAL_MAX_SAMPLES * 2u);
+    scpi_dispatch_line(0, "OUTP OFF");
+    reset_conn(4096);
+    scpi_dispatch_line(0, "TRAC:POIN?");
+    K.out[K.out_len] = '\0';
+    CHECK(atoi(K.out) == (int)SIGNAL_MAX_SAMPLES);
+
+    /* an upload replaces it: 3 samples, reported in samples */
+    const uint8_t up[6] = { 0x34, 0x12, 0x78, 0x56, 0xBC, 0x9A };
+    char b64[16], line[64];
+    b64url_encode(up, sizeof(up), b64, sizeof(b64));
+    snprintf(line, sizeof(line), "TRAC:DATA 0,\"%s\"", b64);
+    scpi_dispatch_line(0, line);
+    reset_conn(4096);
+    scpi_dispatch_line(0, "TRAC:POIN?");
+    K.out[K.out_len] = '\0';
+    CHECK(atoi(K.out) == 3);
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_replay_len == 6 && memcmp(g_replay, up, 6) == 0);
+    scpi_dispatch_line(0, "OUTP OFF");
+    scpi_dispatch_line(0, "FUNC SIN");
+}
+
 int main(void) {
     test_short_reply_unchanged();
+    test_user_replays_the_capture();
     test_dac_limits_refuse_raw_output();
     test_big_read_arrives_whole();
     test_slow_peer_feeds_watchdog();

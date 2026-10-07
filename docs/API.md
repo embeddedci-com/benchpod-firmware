@@ -2393,9 +2393,9 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 |---|---|---|
 | `SENSe:SRATe <MHz>` / `?` | `capture` `sample_rate_mhz` | ADC capture clock; `0` = max ~400 kSPS (24 MHz ÷ divider, divider ≥ 60). Lower stretches the window (e.g. `0.08` → 80 kS/s → 32768 samples ≈ 410 ms). |
 | `SENSe:SWEep:POINts <n>` / `?` | `capture` `samples` | Default acquisition length for `READ?`. |
-| `READ? [<n>]` | `capture` | Capture `n` (or the `POINts` default) samples at `SENSe:SRATe` and return CSV. Also loads the replay buffer. |
-| `TRACe[:DATA] <offset>,"<base64url>"` | `load` | Upload one chunk of a replay waveform. Send `offset` 0 first, then successive offsets (≤150 bytes/chunk to fit the 256-byte line). |
-| `TRACe:POINts?` | — | Number of samples currently loaded for replay. |
+| `READ? [<n>]` | `capture` | Capture `n` (or the `POINts` default) samples at `SENSe:SRATe` and return CSV. Also loads the replay buffer (its first 2048 samples, the DAC BRAM size). |
+| `TRACe[:DATA] <offset>,"<base64url>"` | `load` | Upload one chunk of a replay waveform: 16-bit little-endian samples (2 bytes each, as the JSON `load`), at most 4096 bytes. `offset` is in bytes. Send `offset` 0 first, then successive offsets (≤150 bytes/chunk to fit the 256-byte line). |
+| `TRACe:POINts?` | — | Number of 16-bit samples currently loaded for replay. |
 | `SOURce:FUNCtion USER` + `OUTPut ON` | `replay` | Play the captured/uploaded buffer out the DAC (loops). Playback rate = `SOURce:SRATe`. |
 | `OUTPut OFF` | `dac_stop` | Stop the DAC (a looped replay or any waveform). |
 
@@ -2414,7 +2414,7 @@ OUTPut OFF                  # stop
 # Replay a previously saved trace (upload first, in base64url chunks)
 TRACe:DATA 0,"<base64url chunk 0>"
 TRACe:DATA 150,"<base64url chunk 1>"
-TRACe:POINts?               → 300
+TRACe:POINts?               → 150      (300 bytes = 150 samples)
 SOURce:FUNCtion USER
 OUTPut ON
 ```

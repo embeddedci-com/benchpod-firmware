@@ -47,11 +47,20 @@ static float     sense_srate_hz;   /* ADC capture clock for READ? (0 = max) */
 
 /* SCPI's own capture/replay buffer.  Shares the heavy-op gate with the JSON
    handler (the single ADC) but keeps a separate buffer so the two never alias.
-   READ? fills it; TRACe:DATA can overwrite it with a host-uploaded trace; the
-   USER source shape replays it out the DAC. */
+   READ?/MEASure? fill scpi_adc16; TRACe:DATA can overwrite it with a host-uploaded trace
+   (16-bit little-endian samples, as the JSON `load`); the USER source shape replays it out
+   the DAC as byte pairs, exactly like the JSON `replay`.  The DAC BRAM holds
+   SIGNAL_MAX_SAMPLES, so a longer capture replays its first SIGNAL_MAX_SAMPLES samples.
+   scpi_adc_buf is only DIAGnostic:PATTern?'s 8-bit scratch: USER used to replay it (stale
+   pattern or upload bytes) instead of the capture that READ? had just announced. */
 static uint8_t  scpi_adc_buf[SIGNAL_BUF_SIZE];
-static uint16_t scpi_adc16[SIGNAL_BUF_SIZE];   /* v2 16-bit capture buffer */
-static size_t  scpi_replay_len;    /* valid samples in scpi_adc_buf for replay */
+static uint16_t scpi_adc16[SIGNAL_BUF_SIZE];   /* v2 16-bit capture + replay buffer */
+static size_t  scpi_replay_bytes;  /* valid bytes of scpi_adc16 for replay (<= SIGNAL_BUF_SIZE) */
+
+static void scpi_replay_set_samples(size_t n) {
+    if (n > SIGNAL_MAX_SAMPLES) n = SIGNAL_MAX_SAMPLES;
+    scpi_replay_bytes = n * 2u;
+}
 
 static void scpi_reset_state(void) {
     src.shape       = 's';
@@ -63,7 +72,7 @@ static void scpi_reset_state(void) {
     output_on       = false;
     sense_points    = 256;
     sense_srate_hz  = 0.0f;
-    scpi_replay_len = 0;
+    scpi_replay_bytes = 0;
 }
 
 /* 'u' (USER) replays the captured/uploaded buffer; it has no parametric
@@ -388,8 +397,9 @@ static int output_start(void) {
         case 'r': rc = dac_generate_sawtooth(src.freq, src.amplitude, src.offset,
                                              src.duration_ms, src.srate_hz); break;
         case 'u': /* USER: replay the captured/uploaded buffer at SOURce:SRATe */
-                  if (scpi_replay_len == 0) return -1;
-                  rc = dac_generate_arbitrary_rate(scpi_adc_buf, scpi_replay_len,
+                  if (scpi_replay_bytes < 2u) return -1;
+                  rc = dac_generate_arbitrary_rate((const uint8_t *)scpi_adc16,
+                                                   scpi_replay_bytes & ~(size_t)1u,
                                                    true, src.srate_hz); break;
         default:  rc = dac_generate_sine(src.freq, src.amplitude, src.offset,
                                          src.duration_ms, src.srate_hz); break;
@@ -475,7 +485,7 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
     command_handler_release_adc(conn);
     /* Leave the capture in the buffer so SOURce:FUNCtion USER + OUTPut ON can
        replay this exact trace out the DAC. */
-    scpi_replay_len = n;
+    scpi_replay_set_samples(n);
     SCPI_ResultArrayUInt16(ctx, scpi_adc16, n, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
 }
@@ -499,7 +509,7 @@ static scpi_result_t scpi_measureQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* measure failed */
         return SCPI_RES_ERR;
     }
-    scpi_replay_len = n;
+    scpi_replay_set_samples(n);
     SCPI_ResultArrayUInt16(ctx, scpi_adc16, n, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
 }
@@ -594,11 +604,11 @@ static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
 }
 
 /* ---- TRACe — upload a waveform for replay ----
-   TRACe:DATA <offset>,"<base64url>" uploads one chunk of raw sample bytes into
-   the replay buffer.  A full trace won't fit one 256-byte line, so the host
+   TRACe:DATA <offset>,"<base64url>" uploads one chunk of raw sample bytes (16-bit
+   little-endian samples, at most SIGNAL_BUF_SIZE bytes) into the replay buffer.  A full trace won't fit one 256-byte line, so the host
    sends offset 0 first then successive offsets (≤150 bytes/chunk).  Replay the
    result with SOURce:FUNCtion USER; OUTPut ON.  TRACe:POINts? reports the
-   loaded length. */
+   loaded length in samples. */
 static scpi_result_t scpi_trace_data(scpi_t *ctx) {
     uint32_t offset;
     if (!SCPI_ParamUInt32(ctx, &offset, TRUE)) return SCPI_RES_ERR;
@@ -607,25 +617,26 @@ static scpi_result_t scpi_trace_data(scpi_t *ctx) {
         return SCPI_RES_ERR;
     }
 
-    char   data_b64[B64URL_ENCODED_LEN(SIGNAL_BUF_SIZE) + 4];
+    /* A parameter can't be longer than the line it rode in on (SCPI_INPUT_BUFFER_LENGTH);
+       sizing this for a whole 4 KB trace put 5.5 KB on the 12 KB worker stack. */
+    char   data_b64[SCPI_INPUT_BUFFER_LENGTH];
     size_t b64_len = 0;
     if (!SCPI_ParamCopyText(ctx, data_b64, sizeof(data_b64), &b64_len, TRUE)) {
         return SCPI_RES_ERR;   /* libscpi already queued the parameter error */
     }
 
     size_t dec_len = 0;
-    if (b64url_decode(data_b64, scpi_adc_buf + offset,
+    if (b64url_decode(data_b64, (uint8_t *)scpi_adc16 + offset,
                       SIGNAL_BUF_SIZE - offset, &dec_len) != 0) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_ILLEGAL_PARAMETER_VALUE);
         return SCPI_RES_ERR;
     }
-    if (offset == 0) scpi_replay_len = dec_len;
-    else             scpi_replay_len = offset + dec_len;
+    scpi_replay_bytes = offset + dec_len;
     return SCPI_RES_OK;
 }
 
 static scpi_result_t scpi_trace_pointsQ(scpi_t *ctx) {
-    SCPI_ResultUInt32(ctx, (uint32_t)scpi_replay_len);
+    SCPI_ResultUInt32(ctx, (uint32_t)(scpi_replay_bytes / 2u));   /* 16-bit samples */
     return SCPI_RES_OK;
 }
 
