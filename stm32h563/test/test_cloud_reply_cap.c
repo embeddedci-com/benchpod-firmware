@@ -1,5 +1,5 @@
 /*
- * test_cloud_reply_cap.c — the captured reply of a cloud command (src/cloud_reply_cap.c, FW-10).
+ * test_cloud_reply_cap.c: the captured reply of a cloud command (src/cloud_reply_cap.c, FW-10).
  *
  * A reply longer than the capture was cut and sent on as if whole: JSON with no end. It must
  * become a clear "too large" error instead; a reply that fits (also exactly) passes unchanged.

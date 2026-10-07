@@ -2,7 +2,7 @@
 #define CLOUD_REPLY_CAP_H
 
 /*
- * cloud_reply_cap — captures the reply of a command that arrived as a cloud command.request
+ * cloud_reply_cap: captures the reply of a command that arrived as a cloud command.request
  * (command_handler_dispatch_cloud): the handlers write it with at_send_data as for any client,
  * and net_server routes CH_CLOUD_CONN's bytes here instead of to a socket.
  *

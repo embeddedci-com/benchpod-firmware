@@ -1,5 +1,5 @@
 /*
- * test_device_identity.c — which identity-sector contents get a new device key (FW-10).
+ * test_device_identity.c: which identity-sector contents get a new device key (FW-10).
  *
  * A record with another magic or version used to be taken as "no identity" and a new key was
  * generated over it, silently orphaning the pod's cloud registration. Only an erased sector may

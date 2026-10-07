@@ -1,5 +1,5 @@
 /*
- * test_ws_frame.c — server->pod WebSocket framing (src/ws_frame.c) and the id scan used on a
+ * test_ws_frame.c: server->pod WebSocket framing (src/ws_frame.c) and the id scan used on a
  * frame too large to copy (bp_json_scan_str), FW-12.
  *
  * A fragmented message used to be taken piecewise: its first frame acted on as a whole message,

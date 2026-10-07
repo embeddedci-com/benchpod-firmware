@@ -1,5 +1,5 @@
 /*
- * test_cloud_extras.c — the company CA as cloud_extras.c loads it from its W25Q slot (FW-1).
+ * test_cloud_extras.c: the company CA as cloud_extras.c loads it from its W25Q slot (FW-1).
  *
  * A damaged slot (hash mismatch) or a CA that does not parse must not take the cloud link down:
  * it is dropped with a reason and the link trusts the built-in roots. Out of memory while

@@ -1,5 +1,5 @@
 /*
- * cloud_caps.c — the capabilities frame (see cloud_caps.h).
+ * cloud_caps.c: the capabilities frame (see cloud_caps.h).
  */
 #include "cloud_caps.h"
 #include "bp_json.h"

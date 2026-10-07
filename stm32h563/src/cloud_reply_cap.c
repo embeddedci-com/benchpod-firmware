@@ -1,5 +1,5 @@
 /*
- * cloud_reply_cap.c — see cloud_reply_cap.h. Hw worker task only (one cloud command at a time).
+ * cloud_reply_cap.c: see cloud_reply_cap.h. Hw worker task only (one cloud command at a time).
  */
 #include "cloud_reply_cap.h"
 

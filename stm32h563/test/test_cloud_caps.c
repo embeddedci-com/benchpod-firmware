@@ -1,5 +1,5 @@
 /*
- * test_cloud_caps.c — the capabilities frame (src/cloud_caps.c, FW-6).
+ * test_cloud_caps.c: the capabilities frame (src/cloud_caps.c, FW-6).
  *
  * A capabilities frame that did not fit one WS frame was not sent, and a failed capabilities
  * send made the pod reconnect, over and over. The worst case here (every feature on, the longest

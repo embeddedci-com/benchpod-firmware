@@ -2,7 +2,7 @@
 #define CLOUD_CAPS_H
 
 /*
- * cloud_caps — the one place that builds the `capabilities` frame the pod sends the server on
+ * cloud_caps: the one place that builds the `capabilities` frame the pod sends the server on
  * every connect (and after a gateware swap). cloud_client.c gathers the values; this file only
  * formats them, so a host test can build the worst case (test_cloud_caps.c).
  *
