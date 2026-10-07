@@ -262,6 +262,7 @@ module dac_psram_reader #(
     // burst's commit cell (an aborted burst rewinds wsp instead).  The DAC side only ever sees
     // [rptr, wptr); the room test counts the speculative bytes too.
     reg  [AW:0] wptr = 0, wsp = 0, rptr = 0;
+    reg  [AW:0] rptr1 = 1;                               // v46: always rptr + 1 (see occ_one)
     wire [AW:0] occ   = wptr - rptr;                     // committed bytes (what the DAC can pop)
     wire [AW:0] occ_s = wsp  - rptr;                     // + the burst in flight
     // No full test on the push (v46).  A burst only starts with room > CHUNK_BYTES (room_ok
@@ -281,8 +282,9 @@ module dac_psram_reader #(
     // clk48 cycle (20.9 ns, mostly routing to the BRAM column: a deep-image clk48 bottleneck once
     // the room test was fixed).  It is maintained incrementally, with no next-pointer mux (the
     // "registered next-cycle empty" tried earlier added one and hurt): a commit sets it; fetching
-    // the last byte (occ == 1, off the wptr - rptr carry chain the room test already builds; an
-    // explicit wptr == rptr + 1 synthesised as an 8-deep LUT ripple instead) clears it.
+    // the last byte (occ == 1) clears it.  v46: occ == 1 is rptr1 == wptr, an equality of two
+    // registers; the room test no longer shares the wptr - rptr carry chain (it counts wsp), and
+    // that chain into ne_r's enable bound the deep image's clk48 on most seeds.
     //   commit (v46):       a burst's bytes are published -> 1 (when it pushed any)
     //   fetch of the last:  occ == 1, no commit         -> 0
     //   otherwise:          occ unchanged or still >= 1 -> hold
@@ -292,7 +294,7 @@ module dac_psram_reader #(
     // in flight pushed a byte) replaces a wsp != wptr compare in the ne_r cone.
     reg         cmt_p = 1'b0, abt_p = 1'b0, spec_nz = 1'b0;
     wire        fetch = !dout_vld && ne_r;
-    wire        occ_one = (occ == {{AW{1'b0}}, 1'b1});
+    wire        occ_one = (rptr1 == wptr);
     assign      data       = dout;
     assign      data_valid = dout_vld;
 
@@ -324,7 +326,7 @@ module dac_psram_reader #(
         if (rst48 || !run48) begin
             ph<=0; busy48<=0; io_o<=4'h0; io_oe<=1'b0; cs<=1'b1; sclk<=1'b0;
             cap_hi<=0;
-            wptr<=0; wsp<=0; rptr<=0; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
+            wptr<=0; wsp<=0; rptr<=0; rptr1<=1; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
             cmt_p<=1'b0; abt_p<=1'b0; spec_nz<=1'b0;
             n0_l<=0; n1_l<=0; drv_l<=0; cs_l<=1'b1; clk_l<=0; cap_l<=0; cap_pend<=1'b0;
         end else begin
@@ -338,7 +340,7 @@ module dac_psram_reader #(
             // (a commit/abort cell never coincides with a push: S_CSH lies between the last data
             // cell's capture and the S_CMT cell.)
             if (push) begin fmem[wsp[AW-1:0]] <= push_byte; wsp <= wsp + 1'b1; end
-            if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr + 1'b1; dout_vld <= 1'b1; end
+            if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr1; rptr1 <= rptr1 + 1'b1; dout_vld <= 1'b1; end
             else if (data_pop) dout_vld <= 1'b0;
             cmt_p <= (cell_tgl != tgl_m) && cell_cmt;
             abt_p <= (cell_tgl != tgl_m) && cell_abt;
