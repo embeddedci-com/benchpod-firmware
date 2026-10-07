@@ -11,6 +11,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "mbedtls/x509_crt.h"
+#include "mbedtls/pem.h"        /* MBEDTLS_ERR_PEM_ALLOC_FAILED */
 #include "mbedtls/sha256.h"
 
 #include <stdio.h>
@@ -27,6 +28,8 @@ static char             *s_ca;
 static size_t            s_ca_len;
 static cloud_proxy_t     s_proxy;
 static volatile bool     s_ready;
+/* Why an installed company CA is not in use (CLOUD_CA_ERR_*), NULL = none or in use. */
+static const char * volatile s_ca_error;
 
 bool cloud_extras_ready(void) { return s_ready; }
 void cloud_extras_mark_ready(void) { s_ready = true; }
@@ -52,16 +55,60 @@ static char *read_slot(blob_id_t id, size_t max, size_t *len) {
     return buf;
 }
 
+/* Does a company CA parse? 0 = yes, 1 = no (corrupt or not X.509), -1 = out of memory (unknown).
+   The chain lives on the heap: this also runs on the net task, whose stack is tight. */
+static int ca_parse_state(const char *pem, size_t len) {
+    mbedtls_x509_crt *chain = pvPortMalloc(sizeof(*chain));
+    if (!chain) return -1;
+    mbedtls_x509_crt_init(chain);
+    int rc = mbedtls_x509_crt_parse(chain, (const unsigned char *)pem, len + 1);   /* + its NUL */
+    int certs = 0;
+    for (const mbedtls_x509_crt *c = chain; c && c->raw.len; c = c->next) certs++;
+    mbedtls_x509_crt_free(chain);
+    vPortFree(chain);
+    if (rc == MBEDTLS_ERR_X509_ALLOC_FAILED || rc == MBEDTLS_ERR_PEM_ALLOC_FAILED) return -1;
+    return (rc != 0 || certs == 0) ? 1 : 0;
+}
+
+/* Drop the company CA from RAM and remember why: the link then trusts the built-in roots only. */
+static void ca_reject(const char *why) {
+    taskENTER_CRITICAL();
+    char *old = s_ca;
+    s_ca = NULL;
+    s_ca_len = 0;
+    s_ca_error = why;
+    taskEXIT_CRITICAL();
+    if (old) vPortFree(old);
+    printf("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
+}
+
 static void load_ca_locked(void) {
     size_t len = 0;
     char *ca = read_slot(BLOB_CA, CLOUD_CA_MAX_BYTES, &len);
     if (ca && len < CA_MIN_BYTES) { vPortFree(ca); ca = NULL; }   /* the "cleared" marker */
+    const char *why = NULL;
+    if (ca) {
+        /* The slot header carries the hash of what was written: a mismatch is a damaged slot. */
+        const blob_info_t *in = blob_store_info(BLOB_CA);
+        uint8_t sha[32];
+        mbedtls_sha256((const unsigned char *)ca, len, sha, 0);
+        if (!in || memcmp(sha, in->sha256, sizeof(sha)) != 0)
+            why = CLOUD_CA_ERR_HASH;
+        else if (ca_parse_state(ca, len) > 0)
+            why = CLOUD_CA_ERR_PARSE;
+        /* Out of memory while parsing: keep it; the net task checks again if TLS refuses it. */
+    }
     taskENTER_CRITICAL();
     char *old = s_ca;
-    s_ca = ca;
-    s_ca_len = ca ? len : 0;
+    s_ca = why ? NULL : ca;
+    s_ca_len = s_ca ? len : 0;
+    s_ca_error = why;
     taskEXIT_CRITICAL();
     if (old) vPortFree(old);
+    if (why) {
+        vPortFree(ca);
+        printf("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
+    }
 }
 
 void cloud_extras_load(void) {
@@ -83,7 +130,7 @@ void cloud_extras_load(void) {
         w25q_close();
     }
     if (s_ca || s_proxy.host[0])
-        printf("[cloud] company CA %s, proxy %s\n", s_ca ? "installed" : "none",
+        printf("[cloud] company CA %s, proxy %s\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "none"),
                s_proxy.host[0] ? s_proxy.host : "none");
     s_ready = true;
 }
@@ -132,7 +179,7 @@ void cloud_extras_ca_changed(void) {
         load_ca_locked();
         w25q_close();
     }
-    printf("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : "removed");
+    printf("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "removed"));
     net_cloud_reload();
 }
 
@@ -155,27 +202,55 @@ const char *cloud_extras_ca_clear(void) {
     return NULL;
 }
 
-char *cloud_extras_ca_pem(size_t *len_with_nul) {
+int cloud_extras_ca_pem(char **out, size_t *len_with_nul) {
+    *out = NULL;
+    *len_with_nul = 0;
     /* cloud_ca_pem_len counts its NUL; the company CA follows after a newline. */
     taskENTER_CRITICAL();
     size_t extra = s_ca ? s_ca_len : 0;
     taskEXIT_CRITICAL();
+    if (!extra) return 0;   /* no company CA: the caller uses the built-in roots as they are */
     size_t base = cloud_ca_pem_len ? cloud_ca_pem_len - 1 : 0;
-    char *out = pvPortMalloc(base + 1 + extra + 1);
-    if (!out) return NULL;
-    memcpy(out, cloud_ca_pem, base);
+    char *buf = pvPortMalloc(base + 1 + extra + 1);
+    if (!buf) return -1;
+    memcpy(buf, cloud_ca_pem, base);
     size_t n = base;
+    bool same = false;
     taskENTER_CRITICAL();
     if (s_ca && s_ca_len == extra) {
-        out[n++] = '\n';
-        memcpy(out + n, s_ca, extra);
+        buf[n++] = '\n';
+        memcpy(buf + n, s_ca, extra);
         n += extra;
+        same = true;
     }
     taskEXIT_CRITICAL();
-    out[n++] = '\0';
+    if (!same) { vPortFree(buf); return 0; }   /* removed meanwhile: built-in roots */
+    buf[n++] = '\0';
+    *out = buf;
     *len_with_nul = n;
-    return out;
+    return 0;
 }
+
+bool cloud_extras_ca_tls_refused(void) {
+    /* Copy it out first: parsing under a critical section would stall the scheduler. */
+    taskENTER_CRITICAL();
+    size_t len = s_ca ? s_ca_len : 0;
+    taskEXIT_CRITICAL();
+    if (!len) return false;
+    char *copy = pvPortMalloc(len + 1);
+    if (!copy) return false;
+    bool same = false;
+    taskENTER_CRITICAL();
+    if (s_ca && s_ca_len == len) { memcpy(copy, s_ca, len + 1); same = true; }
+    taskEXIT_CRITICAL();
+    int st = same ? ca_parse_state(copy, len) : -1;
+    vPortFree(copy);
+    if (st <= 0) return false;
+    ca_reject(CLOUD_CA_ERR_PARSE);
+    return true;
+}
+
+const char *cloud_extras_ca_error(void) { return s_ca_error; }
 
 int cloud_extras_ca_describe(char *out, size_t cap) {
     out[0] = '\0';

@@ -490,12 +490,32 @@ static bool cl_open(bool tls, uint16_t port) {
                hostname are validated in cl_tls_verified() after the handshake. authmode is
                VERIFY_OPTIONAL (the handshake completes; we check the result ourselves and
                drop the link on a verify failure). */
+            /* Only a config built from what was asked for is cached: out of memory fails this
+               attempt (the backoff retries), it never quietly caches a roots-only config that a
+               TLS-inspecting network would refuse until the next reboot. A company CA that does
+               not parse is dropped by cloud_extras (with a log line and cloud_ca's "error"), and
+               the next attempt uses the built-in roots. */
             size_t ca_len = 0;
-            char *ca = cloud_extras_ca_pem(&ca_len);
+            char *ca = NULL;
+            if (cloud_extras_ca_pem(&ca, &ca_len) != 0) {
+                printf("[cloud] out of memory for the company CA: retrying later\n");
+                cl_set_error("out of memory for the company CA");
+                altcp_abort(base);
+                return false;
+            }
             s_tls_conf = ca ? altcp_tls_create_config_client((const u8_t *)ca, ca_len)
                             : altcp_tls_create_config_client(cloud_ca_pem, cloud_ca_pem_len);
             if (ca) cloud_extras_free(ca);
-            if (!s_tls_conf) { printf("[cloud] altcp_tls config create failed\n"); altcp_abort(base); return false; }
+            if (!s_tls_conf) {
+                if (ca && cloud_extras_ca_tls_refused())
+                    cl_set_error("company CA unusable: using the built-in roots");
+                else {
+                    printf("[cloud] altcp_tls config create failed (out of memory?)\n");
+                    cl_set_error("tls config create failed (out of memory?)");
+                }
+                altcp_abort(base);
+                return false;
+            }
         }
         pcb = altcp_tls_wrap(s_tls_conf, base);
         if (!pcb) { printf("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }

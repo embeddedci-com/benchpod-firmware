@@ -937,6 +937,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             static char certs[640];
             int n = cloud_extras_ca_describe(certs, sizeof(certs));
             if (n == 0) op(out, ctx, "ca none\r\n");
+            if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
             for (char *p = certs; n > 0 && (p = strstr(p, "{\"subject\":\"")) != NULL; ) {
                 p += 12;
                 char *se = strchr(p, '"');

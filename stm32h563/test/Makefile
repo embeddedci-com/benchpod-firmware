@@ -68,8 +68,12 @@ FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
+# The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
+# (default config), built once into an archive.
+CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/blob_store.c mocks/mock_w25q.c
+MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 ifneq ($(HAVE_MBEDTLS),)
-OTA_TARGET := build/test_ota build/test_blob_store
+OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras
 endif
 
 .PHONY: all clean run
@@ -220,6 +224,15 @@ build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
 
+build/mbedtls/libmbedtls_host.a: $(MBEDTLS_ALL)
+	@mkdir -p build/mbedtls
+	cd build/mbedtls && $(CC) -O1 -w -c -I$(MBEDTLS)/include -I$(MBEDTLS)/library $(MBEDTLS_ALL)
+	ar rcs $@ build/mbedtls/*.o
+
+build/test_cloud_extras: $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a mocks/mock_w25q.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim_rtos -Imocks -I$(MBEDTLS)/include $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a -lm -o $@
+
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
@@ -292,8 +305,10 @@ run: $(TESTS)
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
 	@./build/test_blob_store
+	@./build/test_cloud_extras > build/test_cloud_extras.log || { cat build/test_cloud_extras.log; exit 1; }
+	@tail -n 1 build/test_cloud_extras.log
 else
-	@echo "SKIP test_ota and test_blob_store (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
+	@echo "SKIP test_ota, test_blob_store and test_cloud_extras (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
 endif
 
 clean:
