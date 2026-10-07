@@ -42,6 +42,10 @@
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
 #include "lwip/altcp_tls.h"
+#include "lwip/tcp.h"
+#include "lwip/priv/tcp_priv.h"
+#include "altcp_tls_bp/altcp_tls_mbedtls_structs.h"
+#include "altcp_tls_bp/altcp_tls_bp.h"
 #include "lwip/dns.h"
 #include "lwip/ip_addr.h"
 #include "lwip/tcp.h"        /* TCP_WRITE_FLAG_COPY */
@@ -383,6 +387,23 @@ static uint32_t s_ota_frames_requeued;
 
 uint32_t cloud_client_ota_frames_seen(void) { return s_ota_frames_seen; }
 
+/* Wedge diag: the TLS layer's window bookkeeping and the TCP receive window, next to
+   cloud_client_log_link_state's snapshot. rcv_wnd=0 with bio_read>0 and nothing queued is the
+   record-larger-than-window deadlock altcp_tls_mbedtls_bp.c fixes. */
+static void cl_log_tls_window(const char *when) {
+    if (!s_pcb || !s_cfg.tls || s_proxy.host[0]) return;
+    altcp_mbedtls_state_t *st = (altcp_mbedtls_state_t *)s_pcb->state;
+    struct altcp_pcb *inner = s_pcb->inner_conn;
+    struct tcp_pcb *tp = inner ? (struct tcp_pcb *)inner->state : NULL;
+    unsigned rx = (st && st->rx) ? st->rx->tot_len : 0, rxapp = (st && st->rx_app) ? st->rx_app->tot_len : 0;
+    printf("[cloud/tls] %s: rcv_wnd=%u rcv_ann_wnd=%u refused=%u unrecved=%d bio_read=%d bio_appl=%d loaned=%d debt=%d rx=%u rx_app=%u ssl_avail=%u\n",
+           when, tp ? (unsigned)tp->rcv_wnd : 0, tp ? (unsigned)tp->rcv_ann_wnd : 0,
+           (tp && tp->refused_data) ? (unsigned)tp->refused_data->tot_len : 0,
+           st ? st->rx_passed_unrecved : -1, st ? st->bio_bytes_read : -1, st ? st->bio_bytes_appl : -1,
+           st ? st->bp_loaned : -1, st ? st->bp_debt : -1,
+           rx, rxapp, st ? (unsigned)mbedtls_ssl_get_bytes_avail(&st->ssl_context) : 0);
+}
+
 void cloud_client_log_link_state(const char *when) {
     long ms_since_rx = (long)(absolute_time_diff_us(s_last_rx, get_absolute_time()) / 1000);
     unsigned sndbuf = (s_pcb && s_state == CL_CONNECTED) ? (unsigned)altcp_sndbuf(s_pcb) : 0;
@@ -428,11 +449,22 @@ static err_t cl_connected_cb(void *arg, struct altcp_pcb *conn, err_t err) {
     return ERR_OK;
 }
 
+/* Set when cl_recv_cb refused data for lack of room in s_rx: the net task hands it back
+   (altcp_tls_bp_kick) once it has drained s_rx. */
+static bool s_rx_refused;
+
 static err_t cl_recv_cb(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t err) {
     (void)arg;
     if (p == NULL) { s_dropped = true; return ERR_OK; }   /* peer sent FIN */
     if (err != ERR_OK) { pbuf_free(p); return err; }
     s_last_rx = get_absolute_time();
+    /* No room: refuse it. The TLS layer keeps it (and the TCP window stays shut for it) until we
+       ask again, which is the backpressure that keeps a fast server from overflowing s_rx. Only
+       an empty buffer that still cannot hold it counts as an overflow. */
+    if (p->tot_len > sizeof(s_rx) - s_rx_len && s_rx_len > 0) {
+        s_rx_refused = true;
+        return ERR_MEM;
+    }
     for (struct pbuf *q = p; q != NULL; q = q->next)
         cl_rx_append((const uint8_t *)q->payload, q->len);
     altcp_recved(conn, p->tot_len);
@@ -1558,6 +1590,11 @@ void cloud_client_poll(void) {
         if (s_rx_overflow) { cl_set_error("connection lost (rx overflow)"); cl_backoff("rx overflow"); return; }
         if (s_rx_len > 0) cl_process_ws_frames();
         if (s_state != CL_CONNECTED) return;
+        /* Room again for what we refused: take it now rather than at the next segment. */
+        if (s_rx_refused && s_pcb && s_rx_len < sizeof(s_rx) / 2) {
+            s_rx_refused = false;
+            if (s_cfg.tls) altcp_tls_bp_kick(s_pcb);
+        }
         /* The link stayed up long enough to trust it — reset the backoff so the NEXT
            genuine drop reconnects promptly (a flapping link never reaches here). */
         if (s_backoff_reset_pending && time_reached(s_stable_at)) {
@@ -1574,6 +1611,7 @@ void cloud_client_poll(void) {
                                       ? OTA_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS;
         if (absolute_time_diff_us(s_last_rx, get_absolute_time()) > (int64_t)idle_budget_ms * 1000) {
             cloud_client_log_link_state("idle-timeout");   /* wedge diag: which direction died */
+            cl_log_tls_window("idle-timeout");
             cl_set_error("connection lost (no reply from server)");
             cl_backoff("idle timeout (no pong)");
             return;
