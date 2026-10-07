@@ -1,15 +1,15 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=46
-source_sha256=9f084eae1bcbe15695e9576c33e95fa75334dc54d03e5108434678d7ea362b06
-built_from=4bdf5c1
-promoted=2026-10-06
+gateware_version=47
+source_sha256=0f959d76e67dcc22adfa57bced3823aae27818455a7813fd1309650132866fbd
+built_from=0a44fa0
+promoted=2026-10-07
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
-hw_verified=benchpod-baea06 2026-10-06: boot auto-update to 46, LAN TestHW 58/0/4, cloud TestCloud 43/0/6, CORR-1 deep replay byte-swap check across 10 concurrent LA captures
-loop.sha256=858283f220ac1936fe216eeca343a58e898c89f408894712cf5c43477c011e6a
+hw_verified=benchpod-baea06 2026-10-07: boot auto-update to 47, LAN TestHW 58/0/4, cloud TestCloud 43/0/6, P1 targeted checks (capture flush, stale capture_read, bus-busy refusals); CI seeds loop 26 52.55 MHz, deep 57 55.35 MHz
+loop.sha256=2a9d58557bd995b690a7d1562600bc3776642a51a29ac433eabc6fd107ae6ada
 loop.seed=26
 loop.clk48_mhz=54.69
-deep.sha256=83848c052a8ac8e861d7f4048d1a5ed0c85f6d00009c48435b816e9d8ad5817e
-deep.seed=50
+deep.sha256=2164c362cfdedc82be9bd6faac6ee362aeebb110ac65fc6e60cec884da0e78d4
+deep.seed=57
 deep.clk48_mhz=59.26
