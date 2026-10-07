@@ -569,6 +569,36 @@ module tb_top_capture;
         $display("  [re-arm] LA %0d samples @div6 (%0d off), ADC %0d bytes @div72 (%0d intervals, %0d off)",
                  la_lo, la_bad, adc_wr, adc_ok, adc_bad);
 
+        // ---- ABORTED CAPTURE, THEN A NEW ONE (v47): an LA capture runs while the STM32 holds the
+        //      bus, so its bytes pile up in the LA SPRAM ring and the writer's staging FIFO; the
+        //      firmware aborts it (OP_CAPTURE with both counts 0) and arms a new capture with the
+        //      pins at another word.  Every arm now empties the ring and the FIFOs; until v46 the
+        //      old capture's bytes were written at the start of the new capture's LA region. ----
+        adc_n = 0; la_n = 0;
+        for (i = 0; i < 256; i = i + 1) la_mem[i] = 8'hxx;
+        // 2000 LA samples = 4000 B, far more than the 32 B FIFO: the rest waits in the ring, and
+        // draining it takes longer than the SPI arm that follows the bus release.
+        cmd_capture(24'd0, 16'd40, 24'd2000, 16'd2);
+        #200000;                                     // produced, stuck: bus_own = 1
+        cmd_capture(24'd0, 16'd40, 24'd0, 16'd6);    // abort
+        la_drv = 14'h1C3C;
+        #1000; bus_own = 1'b0;
+        cmd_capture(24'd0, 16'd40, 24'd8, 16'd6);
+        wait_done(4000); #4000; bus_own = 1'b1;
+        la_drv = LA_WORD;
+        begin : stale_chk
+            integer bad; bad = 0;
+            for (i = 0; i < 8; i = i + 1) begin
+                got = {la_mem[i*2+1], la_mem[i*2+0]};
+                if (got !== 16'h1C3C) begin
+                    if (bad < 3) $display("FAIL abort: LA[%0d]=%04h want 1c3c (the aborted capture's bytes?)", i, got);
+                    bad = bad + 1; errors = errors + 1;
+                end
+            end
+            $display("  [abort]  new capture after an aborted one: LA region %0d bytes, first %04h, %0d stale",
+                     la_n, {la_mem[1], la_mem[0]}, bad);
+        end
+
         // ---- CO-TRIGGER (v27, OP_DAC_ARM_ON_CAPTURE 0x19): the DAC start is DEFERRED to the
         //      capture arm, so the engine must NOT run after START_DAC and must start exactly when
         //      OP_CAPTURE fires (DAC sample 0 == capture t0). ----
