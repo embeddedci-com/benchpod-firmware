@@ -32,11 +32,16 @@
  * The server MUST prepend the SAME context bytes + NUL before ed25519.Verify.
  * Bump the :vN suffix on any breaking change so both ends move together. */
 #define DEVICE_ID_CTX_WS_AUTH  "benchpod-ws-auth:v1"
+/* v2 binds the login to the server name: the payload is  host || 0x00 || nonce, where host is the
+   cloud host the pod connected to (and checked the certificate of). A signature for a challenge
+   relayed through another host then does not verify at the real server (access-control.md F2,
+   docs/design/cloud-hardening.md). */
+#define DEVICE_ID_CTX_WS_AUTH_V2 "benchpod-ws-auth:v2"
 #define DEVICE_ID_CTX_POP      "benchpod-pop:v1"
 
-/* Largest payload device_identity_sign_ctx will sign (a server nonce is <=128 B;
-   the context tag + separator is short). */
-#define DEVICE_ID_SIGN_MSG_MAX 192
+/* Largest message device_identity_sign_ctx will sign (context + NUL + payload): the v2 login
+   payload is a host name (< 64 B) + NUL + a server nonce (<= 128 B). */
+#define DEVICE_ID_SIGN_MSG_MAX 256
 
 /* Load the key from flash, or generate-and-persist one on first boot.
    Derives the in-RAM keypair and logs the base64url public key.  Call once,

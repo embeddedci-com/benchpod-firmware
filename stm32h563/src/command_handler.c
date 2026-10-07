@@ -2443,6 +2443,11 @@ static void handle_cloud_set(int conn_id, const char *json) {
     bool have_en  = json_get_value(json, "enabled", en_s, sizeof(en_s)) != 0;
 
     bool tls = cloud_truthy(tls_s);
+#if defined(BENCHPOD_RELEASE)
+    /* A plain ws:// link has no certificate to check, so anyone on the path could stand in for
+       the server. Release firmware only talks TLS; dev builds keep plain for local servers. */
+    if (!tls) { send_error(conn_id, "cloud_set: release firmware needs \"tls\":true (plain ws is for development builds)"); return; }
+#endif
     int  port = atoi(port_s);
     if (port <= 0 || port > 65535) port = tls ? 443 : 80;
 

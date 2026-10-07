@@ -118,6 +118,8 @@ static char             s_sig[B64URL_ENCODED_LEN(DEVICE_ID_SIG_LEN) + 1];
 /* ---- LwIP transport ---- */
 static struct altcp_pcb        *s_pcb = NULL;        /* the link we currently own, or NULL */
 static struct altcp_tls_config *s_tls_conf = NULL;   /* created once, reused */
+/* Sign the login with v1 instead of v2: set after a 401 to a v2 login (an older server). */
+static bool s_auth_v1;
 static ip_addr_t                s_ip;                /* resolved server address */
 static volatile link_ev_t       s_link = LINK_IDLE;  /* connect/handshake event */
 static volatile bool            s_dropped = false;   /* peer closed / link error */
@@ -672,7 +674,7 @@ static bool cl_send_capabilities(void) {
     int n = snprintf(f, sizeof(f),
         "{\"type\":\"capabilities\",\"device_id\":\"%s\","
         "\"firmware_version\":\"%s\",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
-        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,"
+        "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
         "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,"
         "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
         "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
@@ -1164,27 +1166,42 @@ static bool cl_send_ws_upgrade(void) {
     ws_make_sec_key(key);
     char req[512];
     int n = snprintf(req, sizeof(req),
-        "GET /api/benchpod/ws?device_id=%s&nonce=%s&signature=%s HTTP/1.1\r\n"
+        "GET /api/benchpod/ws?device_id=%s&nonce=%s&signature=%s&auth=%s HTTP/1.1\r\n"
         "Host: %s\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\n"
         "Sec-WebSocket-Version: 13\r\n\r\n",
-        s_cfg.device_id, s_nonce, s_sig, s_cfg.host, key);
+        s_cfg.device_id, s_nonce, s_sig, s_auth_v1 ? "v1" : "v2", s_cfg.host, key);
     if (n <= 0 || (size_t)n >= sizeof(req)) return false;
     return cl_tcp_send((const uint8_t *)req, (size_t)n) == 0;
 }
 
-/* Decode the base64url nonce, sign it under the WS-auth domain context, and
-   base64url-encode the signature.  The server verifies over the SAME
-   DEVICE_ID_CTX_WS_AUTH-prefixed message (see benchpod_ws.go). */
+/* Decode the base64url nonce, sign  host || 0x00 || nonce  under the v2 WS-auth context, and
+   base64url-encode the signature.  The host is the one this connection went to and whose
+   certificate was checked, so a challenge relayed through another server cannot be signed for
+   the real one (DEVICE_ID_CTX_WS_AUTH_V2; the server verifies with its own names, benchpod_ws.go). */
 static bool cl_sign_nonce(void) {
     uint8_t nonce[128];
     size_t  nlen = 0;
     if (b64url_decode(s_nonce, nonce, sizeof(nonce), &nlen) != 0) return false;
+    if (s_auth_v1) {   /* fallback for a server without v2 (see CL_WS_WAIT) */
+        uint8_t sig1[DEVICE_ID_SIG_LEN];
+        if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH, nonce, nlen, sig1) != 0) return false;
+        b64url_encode(sig1, sizeof(sig1), s_sig, sizeof(s_sig));
+        return true;
+    }
+    uint8_t payload[CLOUD_HOST_MAX + 1 + sizeof(nonce)];
+    size_t hlen = strnlen(s_cfg.host, CLOUD_HOST_MAX - 1);
+    for (size_t i = 0; i < hlen; i++) {   /* host names compare case-insensitively: sign lowercase */
+        char c = s_cfg.host[i];
+        payload[i] = (uint8_t)((c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c);
+    }
+    payload[hlen] = 0x00;
+    memcpy(payload + hlen + 1, nonce, nlen);
     uint8_t sig[DEVICE_ID_SIG_LEN];
     absolute_time_t t0 = get_absolute_time();
-    if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH, nonce, nlen, sig) != 0) return false;
+    if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH_V2, payload, hlen + 1 + nlen, sig) != 0) return false;
     printf("[cloud] nonce sign (ed25519) took %lu ms\n",
            (unsigned long)(absolute_time_diff_us(t0, get_absolute_time()) / 1000));
     b64url_encode(sig, sizeof(sig), s_sig, sizeof(s_sig));
@@ -1205,7 +1222,17 @@ void cloud_client_init(void) {
     /* Route async eFuse EN/FLT changes to our WS push queue (idempotent). */
     target_power_set_event_cb(cl_efuse_event_cb);
 
-    if (cloud_config_load(&s_cfg) == 0 && s_cfg.enabled && s_cfg.host[0] && s_cfg.device_id[0]) {
+    bool loaded = cloud_config_load(&s_cfg) == 0;
+#if defined(BENCHPOD_RELEASE)
+    /* A plain config stored by older or dev firmware is not used by a release build (see
+       handle_cloud_set): connecting without TLS would let anyone on the path stand in. */
+    if (loaded && !s_cfg.tls && s_cfg.enabled) {
+        printf("[cloud] stored config is plain ws: release firmware connects over TLS only\n");
+        cl_set_error("plain (non-TLS) cloud config refused by release firmware; run cloud_set with tls");
+        loaded = false;
+    }
+#endif
+    if (loaded && s_cfg.enabled && s_cfg.host[0] && s_cfg.device_id[0]) {
         s_have_cfg = true;
         cl_set_state(CL_WAIT_WIFI);
         printf("[cloud] configured: %s:%u tls=%d device=%s\n",
@@ -1340,7 +1367,17 @@ void cloud_client_poll(void) {
             if (s_rx[i] == '\r' && s_rx[i + 1] == '\n' &&
                 s_rx[i + 2] == '\r' && s_rx[i + 3] == '\n') {
                 if (!cl_status_is_101(s_rx, i)) {
-                    cl_set_error("websocket upgrade failed (HTTP %d)", cl_http_status(s_rx, i));
+                    int code = cl_http_status(s_rx, i);
+                    cl_set_error("websocket upgrade failed (HTTP %d)", code);
+                    /* A server from before the host-bound login rejects the v2 signature: try v1
+                       next time. Safe, because a server that knows v2 refuses v1 from any pod
+                       that has logged in with v2 once (cloud-hardening.md section 1). */
+                    if (code == 401 && !s_auth_v1) {
+                        s_auth_v1 = true;
+                        printf("[cloud] login v2 refused (HTTP 401): next attempt signs v1\n");
+                    } else if (code == 401) {
+                        s_auth_v1 = false;   /* v1 refused too: back to v2 */
+                    }
                     cl_backoff("ws handshake rejected");
                     return;
                 }
