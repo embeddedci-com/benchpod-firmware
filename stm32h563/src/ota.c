@@ -7,6 +7,7 @@
 #include "w25q.h"
 #include "fw_sign.h"
 #include "b64url.h"
+#include "psram_regions.h"   /* staging lands on the LA capture region */
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -41,6 +42,15 @@ static uint32_t    s_wd_mark_ms;           /* caller clock at that mark         
    refuse), so a dry run or a lost ota.commit used to keep it busy until a reboot. */
 #define OTA_VERIFIED_HOLD_MS  600000u
 static uint32_t    s_verified_mark_ms;     /* caller clock when VERIFIED was first seen, 0 = not */
+
+/* Session owner (ota.h). The clock is the one ota_watchdog is fed, so this file stays HAL-free. */
+static ota_owner_t s_owner = OTA_OWNER_NONE;
+static bool        s_orphan;               /* the owning LAN connection closed: the next one adopts */
+static uint32_t    s_clock_ms;             /* last ota_watchdog clock                          */
+static uint32_t    s_activity_ms;          /* s_clock_ms at the session's last begin/data/end  */
+static ota_owner_t s_ref_owner = OTA_OWNER_NONE;   /* last refusal shown only to this owner   */
+static char        s_ref_err[96];
+static uint32_t    s_ref_seq;              /* bumped per explicit refusal (ota_view_t.refusals) */
 
 static int hex_nibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -106,10 +116,14 @@ int ota_begin(uint32_t size, const char *sha256_hex) {
     return ota_begin_target(size, sha256_hex, OTA_TARGET_FIRMWARE, 0);
 }
 
-void ota_refuse(const char *why) { set_err(why); }
 
 int ota_begin_target(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version) {
     return ota_begin_signed(size, sha256_hex, target, version, NULL, 0);
+}
+
+int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
+                     const uint8_t *sig, size_t sig_len) {
+    return ota_begin_owned(OTA_OWNER_NONE, size, sha256_hex, target, version, sig, sig_len);
 }
 
 const char *ota_sig_result(void) { return fw_sign_result_name(s_sig); }
@@ -145,8 +159,8 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
     return -1;
 }
 
-int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
-                     const uint8_t *sig, size_t sig_len) {
+static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
+                        const uint8_t *sig, size_t sig_len) {
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
     if ((unsigned)target > OTA_TARGET_CA) { set_err("bad target"); return -1; }
@@ -178,9 +192,11 @@ int ota_begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target,
 
 int ota_data(uint32_t offset, const uint8_t *buf, uint32_t len) {
     if (s_state != OTA_RECEIVING) { set_err("not receiving"); return -1; }
+    s_activity_ms = s_clock_ms;
     if (len == 0) return 0;
     if (offset > s_size || len > s_size - offset) { set_err("chunk out of range"); return -1; }
 
+    psram_regions_dirty(OTA_PSRAM_BASE + offset, len, "a firmware update staged into PSRAM");
     psram_bus_acquire();
     int rc = psram_write(OTA_PSRAM_BASE + offset, buf, len);
     psram_bus_release();
@@ -292,6 +308,8 @@ int ota_reverify_held(void) {
 }
 
 void ota_abort(void) {
+    s_owner    = OTA_OWNER_NONE;
+    s_orphan   = false;
     s_state    = OTA_IDLE;
     s_target   = OTA_TARGET_FIRMWARE;
     s_size     = 0;
@@ -319,6 +337,7 @@ ota_state_t ota_get_state(void) { return s_state; }
  * Call it from the task that owns OTA + PSRAM, on every pass, so it runs whatever the cloud link
  * is doing — including while it is down, which is exactly when it is needed. */
 void ota_watchdog(uint32_t now_ms) {
+    s_clock_ms = now_ms;
     if (s_state == OTA_VERIFIED) {
         if (s_verified_mark_ms == 0) { s_verified_mark_ms = now_ms ? now_ms : 1; return; }
         if ((uint32_t)(now_ms - s_verified_mark_ms) < OTA_VERIFIED_HOLD_MS) return;
@@ -347,8 +366,10 @@ uint32_t    ota_received(void)  { return s_received; }
 uint32_t    ota_size(void)      { return s_size; }
 const char *ota_error(void)     { return s_err; }
 
-const char *ota_state_str(void) {
-    switch (s_state) {
+const char *ota_state_str(void) { return ota_state_name(s_state); }
+
+const char *ota_state_name(ota_state_t st) {
+    switch (st) {
         case OTA_IDLE:      return "idle";
         case OTA_RECEIVING: return "receiving";
         case OTA_VERIFIED:  return "verified";
@@ -356,6 +377,165 @@ const char *ota_state_str(void) {
         case OTA_INSTALLED: return "installed";
         default:            return "unknown";
     }
+}
+
+/* ---- session owner (ota.h) ---------------------------------------------------------------- */
+
+static bool session_active(void) { return s_state == OTA_RECEIVING || s_state == OTA_VERIFIED; }
+
+static bool is_lan(ota_owner_t who) { return who >= OTA_OWNER_LAN(0); }
+
+/* The LAN owner's connection closed and `who` is another LAN connection: it carries on with the
+   session (clients that open one connection per command, like the hwe2e suite, do exactly this). */
+static bool may_adopt(ota_owner_t who) {
+    return s_orphan && is_lan(who) && is_lan(s_owner);
+}
+
+static bool may_act(ota_owner_t who) {
+    return !session_active() || s_owner == OTA_OWNER_NONE || s_owner == who || may_adopt(who);
+}
+
+/* No progress for OTA_TAKEOVER_IDLE_MS. A closed LAN connection alone does not count: a cloud
+   begin must not steal a LAN upload between two per-command connections. */
+static bool abandoned(void) {
+    return (uint32_t)(s_clock_ms - s_activity_ms) >= OTA_TAKEOVER_IDLE_MS;
+}
+
+/* `who` is allowed to act: a LAN connection adopting its transport's orphaned session becomes
+   the owner, so the owner field and later checks name it. */
+static void adopt(ota_owner_t who) {
+    if (session_active() && s_owner != who && may_adopt(who)) {
+        printf("[ota] LAN connection %d takes over the update from closed connection %d\n",
+               who - OTA_OWNER_LAN(0), s_owner - OTA_OWNER_LAN(0));
+        s_owner = who;
+    }
+    if (s_owner == who) s_orphan = false;
+}
+
+static bool may_replace(ota_owner_t who) {
+    return may_act(who) || s_owner == who || abandoned();
+}
+
+ota_owner_t ota_owner(void) { return session_active() ? s_owner : OTA_OWNER_NONE; }
+
+const char *ota_owner_tag(ota_owner_t who, char *buf, size_t cap) {
+    if (who == OTA_OWNER_CLOUD)    snprintf(buf, cap, "cloud");
+    else if (who == OTA_OWNER_USB) snprintf(buf, cap, "usb");
+    else if (who >= OTA_OWNER_LAN(0)) snprintf(buf, cap, "lan:%d", who - OTA_OWNER_LAN(0));
+    else if (cap) buf[0] = '\0';
+    return buf;
+}
+
+static const char *holder_name(char *buf, size_t cap) {
+    if (s_owner == OTA_OWNER_CLOUD)    snprintf(buf, cap, "the cloud");
+    else if (s_owner == OTA_OWNER_USB) snprintf(buf, cap, "the USB console");
+    else                               snprintf(buf, cap, "LAN connection %d", s_owner - OTA_OWNER_LAN(0));
+    return buf;
+}
+
+static const char *busy_msg(void) {
+    static char msg[96];
+    char who[24];
+    snprintf(msg, sizeof(msg), "busy: %s update from %s is in progress",
+             ota_target_name(s_target), holder_name(who, sizeof(who)));
+    return msg;
+}
+
+const char *ota_busy_for(ota_owner_t who) {
+    if (!may_act(who)) return busy_msg();
+    adopt(who);
+    return NULL;
+}
+
+const char *ota_busy_replace_for(ota_owner_t who) {
+    return may_replace(who) ? NULL : busy_msg();
+}
+
+static void clear_refusal(ota_owner_t who) {
+    if (s_ref_owner == who) { s_ref_owner = OTA_OWNER_NONE; s_ref_err[0] = '\0'; }
+}
+
+/* fresh: an explicit refusal (a begin, abort or commit) that the owner must hear about even when
+   it repeats the last one word for word; data/end refusals of the same session are deduplicated,
+   or a refused upload would answer every frame. */
+static void refuse(ota_owner_t who, const char *why, bool fresh) {
+    if (may_replace(who)) {
+        clear_refusal(who);
+        if (fresh) s_ref_seq++;   /* the same error twice must still be reported twice */
+        set_err(why);
+        s_owner  = who;
+        s_orphan = false;
+        return;
+    }
+    why = why ? why : "";
+    bool same = s_ref_owner == who && strncmp(s_ref_err, why, sizeof(s_ref_err) - 1) == 0;
+    if (same && !fresh) return;   /* once per frame burst */
+    s_ref_owner = who;
+    strncpy(s_ref_err, why, sizeof(s_ref_err) - 1);
+    s_ref_err[sizeof(s_ref_err) - 1] = '\0';
+    s_ref_seq++;
+    printf("[ota] refused: %s\n", s_ref_err);
+}
+
+void ota_refuse_for(ota_owner_t who, const char *why) { refuse(who, why, true); }
+
+int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
+                    uint32_t version, const uint8_t *sig, size_t sig_len) {
+    const char *busy = ota_busy_replace_for(who);
+    if (busy) { ota_refuse_for(who, busy); return -1; }
+    if (session_active() && s_owner != who && s_owner != OTA_OWNER_NONE)
+        printf("[ota] replacing an abandoned session\n");
+    clear_refusal(who);
+    s_owner  = who;          /* a refused begin below reports its error to this owner */
+    s_orphan = false;
+    int rc = begin_signed(size, sha256_hex, target, version, sig, sig_len);
+    s_activity_ms = s_clock_ms;
+    return rc;
+}
+
+int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len) {
+    const char *busy = ota_busy_for(who);
+    if (busy) { refuse(who, busy, false); return -1; }
+    return ota_data(offset, buf, len);
+}
+
+int ota_end_by(ota_owner_t who) {
+    const char *busy = ota_busy_for(who);
+    if (busy) { refuse(who, busy, false); return -1; }
+    int rc = ota_end();
+    s_activity_ms = s_clock_ms;
+    return rc;
+}
+
+int ota_abort_by(ota_owner_t who) {
+    if (!may_replace(who)) return -1;   /* includes a LAN connection adopting an orphaned session */
+    clear_refusal(who);
+    ota_abort();
+    return 0;
+}
+
+void ota_owner_gone(ota_owner_t who) {
+    if (session_active() && s_owner == who && is_lan(who)) {
+        s_orphan = true;
+        printf("[ota] the LAN connection of the %s update closed; the next LAN connection may continue it\n",
+               ota_state_str());
+    }
+}
+
+void ota_view_for(ota_owner_t who, ota_view_t *out) {
+    if (who != OTA_OWNER_NONE && s_ref_owner == who) {
+        out->state = OTA_ERROR;
+        out->received = 0;
+        out->size = 0;
+        out->error = s_ref_err;
+        out->refusals = s_ref_seq;
+        return;
+    }
+    out->refusals = s_ref_seq;
+    out->state = s_state;
+    out->received = s_received;
+    out->size = s_size;
+    out->error = s_err;
 }
 
 /* Blob data straight from the staging area; the bus is already held (w25q_open). */
@@ -368,13 +548,12 @@ int ota_install_blob(void) {
     if (s_state != OTA_VERIFIED) { set_err("no verified image staged"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE) { set_err("not a blob"); return -1; }
     blob_id_t id = target_blob(s_target);
-    /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: the same
-       quiesce every bus grab needs. blob_store_write hashes what it wrote back against the
+    /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: a W25Q session
+       quiesces them like every runtime bus grab. blob_store_write hashes what it wrote back against the
        verified digest, so anything that wrote into the staging area since ota_end is caught. */
-    signal_engine_quiesce_psram_masters();
-    w25q_open();
+    w25q_session_open();
     int rc = blob_store_write(id, s_size, s_version, s_expect, staged_src, NULL);
-    w25q_close();
+    w25q_session_close();
     if (rc != 0) { set_err("blob write failed"); return -1; }
     s_state = OTA_INSTALLED;
     printf("[ota] installed %s (%lu bytes)\n", blob_name(id), (unsigned long)s_size);
@@ -390,10 +569,9 @@ int ota_install_blob(void) {
    logged and the install goes on, since the copy is only groundwork today. */
 int ota_store_fw_copy(void) {
     if (s_state != OTA_VERIFIED || s_target != OTA_TARGET_FIRMWARE) return -1;
-    signal_engine_quiesce_psram_masters();
-    w25q_open();
+    w25q_session_open();
     int rc = blob_store_write(BLOB_FW, s_size, 0u, s_expect, staged_src, NULL);
-    w25q_close();
+    w25q_session_close();
     printf("[ota] firmware copy in the W25Q fw slot: %s\n", rc == 0 ? "stored" : "FAILED (install continues)");
     return rc;
 }

@@ -80,6 +80,9 @@ bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
 bool hw_worker_submit_ota_begin(uint32_t size, const char *sha256_hex, const char *target,
                                 uint32_t version, const char *sig_b64);
 bool hw_worker_submit_ota_data(uint32_t offset, const uint8_t *buf, size_t len);
+/* The same for another session owner (ota.h OTA_OWNER_*): the USB console's upload-data. The
+   plain hw_worker_submit_ota_* calls are the cloud's. */
+bool hw_worker_submit_ota_data_from(int owner, uint32_t offset, const uint8_t *buf, size_t len);
 bool hw_worker_submit_ota_end(void);
 bool hw_worker_submit_ota_abort(void);
 bool hw_worker_submit_ota_commit(void);

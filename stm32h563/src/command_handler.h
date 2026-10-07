@@ -88,6 +88,9 @@ void command_handler_on_gateware_reconfigured(void);
    currently owns it. */
 bool command_handler_acquire_adc(int conn_id);
 void command_handler_release_adc(int conn_id);
+/* The gate holder id for the text console's capture/PSRAM diagnostics (not a connection, so it
+   never collides with the USB JSON console's CH_CONSOLE_CONN hold). */
+#define CH_CONSOLE_TEXT_OWNER (-2)
 
 /* SCPI DIGital:* entry points, under the same LA pin-ownership rules as the JSON `gpio` / `la`
    commands (the refusal reason is logged on the console).

@@ -22,6 +22,7 @@
 #include "pico_compat.h"
 #include "FreeRTOSConfig.h"
 #include "psram.h"
+#include "psram_regions.h"   /* capture arms make a resumable capture stale */
 #include "ice40_flash.h"
 #include "xfer.h"
 #include "dma_wait.h"
@@ -527,7 +528,12 @@ static int fpga_set_dac_stop_after(uint32_t cycles) {
    with its OWN divider — [count(2)][dac_div(2)][cap_div(2)].  Separate dividers let
    firmware offset the DAC sequencer's per-sample overhead so the DAC and ADC step
    at the same real rate (the ADC then captures exactly one played period, aligned). */
+/* The iCE40 is about to write `adc_n` / `la_n` samples into its capture regions: a capture that
+   capture_read could still resume from there is no longer there (psram_regions.h). */
+static void capture_regions_dirty(uint32_t adc_n, uint32_t la_n);
+
 static int fpga_start_measure(uint32_t samples, uint32_t dac_div, uint32_t cap_div) {
+    capture_regions_dirty(samples, 0u);
     cap_div = cap_divider_wire(cap_div, s_fpga_version);   /* period -> wire divider */
     uint8_t args[6] = {
         (uint8_t)(samples & 0xFF),  (uint8_t)((samples  >> 8) & 0xFF),
@@ -543,6 +549,7 @@ static int fpga_start_measure(uint32_t samples, uint32_t dac_div, uint32_t cap_d
    (v40+ gateware then also keeps its divider: the ADC one paces the free-running ADC). */
 static void fpga_capture_cmd(uint32_t adc_count, uint32_t adc_period,
                              uint32_t la_count, uint32_t la_period) {
+    capture_regions_dirty(adc_count, la_count);
     uint16_t adc_wire = cap_divider_wire(adc_period, s_fpga_version);
     uint16_t la_wire  = la_divider_wire(la_period,   s_fpga_version);
     uint8_t args[10] = {
@@ -1351,6 +1358,12 @@ int fpga_set_capture_bases(uint32_t la_base, uint32_t adc_base) {
     return 0;
 }
 uint32_t signal_engine_adc_cap_base(void) { return s_adc_cap_base; }
+uint32_t signal_engine_la_cap_base(void)  { return s_la_cap_base; }
+
+static void capture_regions_dirty(uint32_t adc_n, uint32_t la_n) {
+    psram_regions_dirty(s_adc_cap_base, adc_n * 2u, "another capture");
+    psram_regions_dirty(s_la_cap_base,  la_n  * 2u, "another capture");
+}
 
 /* Re-sync every FIRMWARE MIRROR of a gateware register to the values the fabric actually holds
  * after a RECONFIGURATION (image swap, console flash-ice40, boot/OTA reflash).  Call it from the
@@ -1659,6 +1672,7 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
        address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
        co-trigger, whose reader is already streaming.  A staged co-trigger is staged again. */
     if (dac_quiesce(true) != 0) return -1;
+    psram_bus_handover();   /* the reader needs the bus; no STM32 hold may be left open */
     if (fpga_start_dac_psram(signal_engine_dac_psram_base(), count, divider) != 0) return -1;
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
@@ -1778,13 +1792,17 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     /* Stamp the no-write sentinel at the ADC region base (bus owned), then hand the
        bus over.  START_CAPTURE arms only the ADC producer (LA off) — the v2 dual
        writer streams it to the ADC region (FPGA_PSRAM_ADC_BASE). */
+    capture_regions_dirty((uint32_t)samples, 0u);   /* named before the sentinel write lands */
     psram_bus_acquire();
     psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
-    psram_bus_release();   /* hand the shared bus to the iCE40 */
+    psram_bus_release();
+    psram_bus_handover();  /* hand the shared bus to the iCE40 (no hold may survive this) */
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
         fpga_capture_cmd((uint32_t)samples, divider, 0u, 0u);   /* ADC only: LA count 0 */
-    else
+    else {
+        capture_regions_dirty((uint32_t)samples, 0u);
         spi_cmd_write(CMD_START_CAPTURE, args, sizeof(args));
+    }
     cotrig_consume();
     cap_deadline_for(samples, divider);
     float actual = (float)adc_capture_hz() / (float)divider;
@@ -1830,7 +1848,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        the same FPGA cycle (START_MEASURE).  Hand the bus to the iCE40 first so
        it can stream the ADC samples into PSRAM. */
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
-    psram_bus_release();
+    psram_bus_handover();
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
         /* v40: START_MEASURE is gone.  Stage the DAC start on the co-trigger, then arm an
            ADC-only capture: the DAC starts on the capture's t0, the cycle MEASURE used. */
@@ -1839,7 +1857,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
         fpga_capture_cmd((uint32_t)samples, cap_div, 0u, 0u);
         cotrig_consume();
     } else if (fpga_start_measure((uint32_t)samples, dac_div, cap_div) != 0) {
-        psram_bus_acquire();
+        psram_bus_park();   /* take the bus back without leaving a hold open */
         return -1;
     }
     cap_deadline_for(samples, cap_div);
@@ -1990,11 +2008,13 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz) {
         (uint8_t)(samples & 0xFF), (uint8_t)((samples >> 8) & 0xFF), (uint8_t)((samples >> 16) & 0xFF),
         (uint8_t)(wire & 0xFF),    (uint8_t)((wire >> 8) & 0xFF),
     };
-    psram_bus_release();   /* hand the shared bus to the iCE40 */
+    psram_bus_handover();  /* hand the shared bus to the iCE40 */
     if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
         fpga_capture_cmd(0u, 0u, (uint32_t)samples, divider);   /* LA only: ADC count 0 */
-    else
+    else {
+        capture_regions_dirty(0u, (uint32_t)samples);
         spi_cmd_write(CMD_LA_CAPTURE, args, sizeof(args));
+    }
     cotrig_consume();
 
     /* Deadline scales with the capture window (samples * divider / capture clk) so
@@ -2121,9 +2141,11 @@ int fpga_dual_capture_start(uint32_t adc_count, uint16_t adc_div,
     if (adc_count > ADC_CAP_MAX_SAMPLES || la_count > LA_PSRAM_MAX_SAMPLES) return -1;
     /* v16 CMD_CAPTURE payload: adc_cnt(3) + adc_div(2) + la_cnt(3) + la_div(2) — both
        counts 24-bit so a single unified capture spans the multi-MB ADC AND LA regions. */
+    capture_regions_dirty(adc_count, la_count);   /* named before the sentinel write lands */
     psram_bus_acquire();
     if (adc_count) psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
     psram_bus_release();
+    psram_bus_handover();
     fpga_capture_cmd(adc_count, adc_div, la_count, la_div);
     cotrig_consume();
     /* Deadline scales with the (deep) capture window so a multi-second capture is not

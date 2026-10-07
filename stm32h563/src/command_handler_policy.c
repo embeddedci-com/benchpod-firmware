@@ -65,6 +65,7 @@ void handle_cloud_ca(int conn_id, const char *json) {
     char v[8] = {0};
     if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
         const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
+        if (!why) why = bus_busy_reason();   /* the W25Q write takes the shared bus */
         if (!why) why = cloud_extras_ca_clear();
         if (why) { send_error(conn_id, why); return; }
     }
@@ -97,10 +98,12 @@ void handle_cloud_proxy(int conn_id, const char *json) {
         bp_json_get(json, "user", user, sizeof(user));
         bp_json_get(json, "password", pass, sizeof(pass));
         why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        if (!why) why = bus_busy_reason();   /* the W25Q write takes the shared bus */
         if (!why) why = cloud_extras_proxy_set(spec, user, pass);
         memset(pass, 0, sizeof(pass));
     } else if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
         why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        if (!why) why = bus_busy_reason();
         if (!why) why = cloud_extras_proxy_set(NULL, NULL, NULL);
     }
     if (why) { send_error(conn_id, why); return; }
