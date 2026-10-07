@@ -146,24 +146,27 @@ module psram_dual_writer #(
     wire        l_pop      = pop_this &&  sel;
 
     // Running region addresses: SB_MAC16 up-counters since v41 (dsp_counter), not 2 x 24 fabric
-    // LCs.  Same behaviour as the old always-block: reset and `start` load the base, a pop steps
-    // the selected region, and a pop on the same edge as `start` wins (the old code's later
-    // assignment did).
+    // LCs.  Reset and `start` load the base, a pop steps the selected region.  v47: `start` wins
+    // over a pop on the same edge (load wins over en in dsp_counter).  Until v46 the pop won, so a
+    // `start` that landed mid-burst (an arm while an aborted capture was still draining) left the
+    // address where the old capture was and the new capture was written there, not at its base.
     wire [31:0] addr_adc_q, addr_la_q;
     assign addr_adc = addr_adc_q[23:0];
     assign addr_la  = addr_la_q[23:0];
-    wire        adc_step = ~rst & a_pop;
-    wire        la_step  = ~rst & l_pop;
     dsp_counter #(.UP(1)) addr_adc_i (
-        .clk(clk), .load(rst | (start & ~adc_step)), .load_val({8'd0, adc_base}),
-        .en(adc_step), .q(addr_adc_q), .flag());
+        .clk(clk), .load(rst | start), .load_val({8'd0, adc_base}),
+        .en(a_pop), .q(addr_adc_q), .flag());
     dsp_counter #(.UP(1)) addr_la_i (
-        .clk(clk), .load(rst | (start & ~la_step)), .load_val({8'd0, la_base}),
-        .en(la_step), .q(addr_la_q), .flag());
+        .clk(clk), .load(rst | start), .load_val({8'd0, la_base}),
+        .en(l_pop), .q(addr_la_q), .flag());
 
     always @(posedge clk) begin
         // ---- FIFO writes + occupancy (both FIFOs; +1 on accepted write, -1 on pop) ----
-        if (rst) begin
+        // v47: `start` (every capture arm, including the zero-count abort) empties both FIFOs.
+        // Bytes an aborted capture left behind (the STM32 held bus_own, so nothing was popped)
+        // used to be written at the START of the next capture's regions, shifting every sample.
+        // A byte offered on the `start` edge itself is the old capture's and is dropped too.
+        if (rst || start) begin
             a_wr <= 0; a_rd <= 0; a_cnt <= 0;
             l_wr <= 0; l_rd <= 0; l_cnt <= 0;
         end else begin
@@ -202,7 +205,8 @@ module psram_dual_writer #(
                 idle <= 1'b1;
                 // Only commit to a burst when the arbiter has granted the bus.
                 // bus_gnt=1 (exclusive use) reduces this to the original `any_data`.
-                if (any_data && bus_gnt && !bus_own) begin   // v43: never while the STM32 owns it
+                // v43: never while the STM32 owns it.  v47: nor on `start`, which empties the FIFOs.
+                if (any_data && bus_gnt && !bus_own && !start) begin
                     idle <= 1'b0;
                     sel        <= pick_la;
                     chunk_left <= CHUNK_BYTES;

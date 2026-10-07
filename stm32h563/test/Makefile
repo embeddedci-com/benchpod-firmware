@@ -2,6 +2,8 @@
 # Run with:  make            (builds + runs)
 CC      ?= cc
 CFLAGS  := -std=gnu11 -Wall -Wextra -O1 -I../src -I../port -I. -I../lib/esp_hosted/common
+# Code under test logs through plain printf (bp_log.h); test_bp_log tests log_printf itself.
+CFLAGS  += -DLOG_PRINTF_IS_PRINTF
 
 # Every test binary depends on every header (see the $(TESTS) rule near the bottom).  The rules
 # below list only .c prerequisites, so before this a header edit left stale binaries behind and
@@ -183,6 +185,10 @@ build/test_spi_stream: $(SPISTREAM_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SPISTREAM_SRCS) -lm -o $@
 
+build/test_bp_log: test_bp_log.c ../src/bp_log.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) -ULOG_PRINTF_IS_PRINTF test_bp_log.c ../src/bp_log.c -o $@
+
 build/test_la_pins: $(LAPINS_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(LAPINS_SRCS) -lm -o $@
@@ -275,6 +281,8 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 
 TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
 
+TESTS += build/test_bp_log
+
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
 
@@ -306,6 +314,7 @@ run: $(TESTS)
 	@./build/test_la_pins
 	@./build/test_spi_flash
 	@./build/test_spi_stream
+	@./build/test_bp_log
 	@./build/test_eth_diag
 	@./build/test_power_profile
 	@./build/test_boot_policy

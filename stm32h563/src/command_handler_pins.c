@@ -15,6 +15,7 @@
 #include "bp_json.h"
 #include "bp_limits.h"
 #include "pico/time.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -91,11 +92,7 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
     la_step_plan_t plan;
     if (!la_pins_plan_step(la, dir_la, &plan, err, cap))
         return strncmp(err, "pin conflict:", 13) == 0 ? -3 : -1;
-    if (steps == 0 || steps > LA_STEP_MAX_STEPS ||
-        delay_us < LA_STEP_MIN_DELAY_US || delay_us > LA_STEP_MAX_DELAY_US) {
-        snprintf(err, cap, "invalid args");
-        return -1;
-    }
+    if (!la_step_args_ok(steps, delay_us, err, cap)) return -1;
     if (s_step.active || fpga_la_step_busy()) { snprintf(err, cap, "busy"); return -2; }
 
     /* Direction first, so the first pulse already sees it. */
@@ -149,7 +146,7 @@ void la_pins_on_gateware_reconfigured(void) {
 
 int command_handler_dig_output(unsigned la, int level) {
     if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
-        printf("[scpi] DIG:OUTP refused: la voltage not set (la_voltage first)\n");
+        log_printf("[scpi] DIG:OUTP refused: la voltage not set (la_voltage first)\n");
         return -2;
     }
     if (la < 1u || la > LA_PINS_COUNT) return -1;
@@ -158,7 +155,7 @@ int command_handler_dig_output(unsigned la, int level) {
     /* none or gpio (any mode) -> gpio output with that level; any other owner -> conflict. */
     if (!la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, &p, 1, LA_FN_BIT(LA_FN_GPIO),
                              la_pull_mask_now(), err, sizeof(err))) {
-        printf("[scpi] DIG:OUTP refused: %s\n", err);
+        log_printf("[scpi] DIG:OUTP refused: %s\n", err);
         return -2;
     }
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, level ? 1u : 0u, &p, 1);
@@ -169,13 +166,13 @@ int command_handler_dig_output(unsigned la, int level) {
 int command_handler_dig_step(unsigned la, uint32_t steps, uint32_t delay_us,
                              unsigned dir_la, int dir) {
     if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
-        printf("[scpi] DIG:STEP refused: la voltage not set (la_voltage first)\n");
+        log_printf("[scpi] DIG:STEP refused: la voltage not set (la_voltage first)\n");
         return -2;
     }
     char err[LA_PINS_ERR_MAX];
     int rc = la_step_begin(la, steps, delay_us, dir_la, dir, err, sizeof(err));
     if (rc == 0) return 0;
-    printf("[scpi] DIG:STEP refused: %s\n", err);
+    log_printf("[scpi] DIG:STEP refused: %s\n", err);
     if (rc == -3) return -2;   /* conflict */
     if (rc == -2) return -3;   /* busy */
     return -1;

@@ -2100,11 +2100,10 @@ static void handle_la(int conn_id, const char *json) {
             send_error(conn_id, "missing delay_us");
             return;
         }
-        unsigned la       = (unsigned)atoi(la_s);
-        int      steps    = atoi(steps_s);
-        int      delay_us = atoi(delay_s);
-        if (steps <= 0)    { send_error(conn_id, "invalid steps");    return; }
-        if (delay_us <= 0) { send_error(conn_id, "invalid delay_us"); return; }
+        unsigned la = (unsigned)atoi(la_s);
+        uint32_t steps = 0, delay_us = 0;
+        if (!la_step_parse_u32(steps_s, &steps))    { send_error(conn_id, "invalid steps");    return; }
+        if (!la_step_parse_u32(delay_s, &delay_us)) { send_error(conn_id, "invalid delay_us"); return; }
 
         /* Optional direction channel — driven before stepping (stepper dir). */
         unsigned dir_la = 0;
@@ -2120,16 +2119,15 @@ static void handle_la(int conn_id, const char *json) {
            pulsed in place; anything else is a `pin conflict:`.  la_step_begin drives the
            direction pin and starts the train. */
         char err[LA_PINS_ERR_MAX];
-        int rc = la_step_begin(la, (uint32_t)steps, (uint32_t)delay_us, dir_la, dir,
-                               err, sizeof(err));
+        int rc = la_step_begin(la, steps, delay_us, dir_la, dir, err, sizeof(err));
         if (rc != 0) { send_error(conn_id, err); return; }
 
         /* Non-blocking: the FPGA runs the train autonomously, so we report that
            it has started rather than waiting for completion. */
         char payload[80];
         snprintf(payload, sizeof(payload),
-                 "{\"la\":%u,\"steps\":%d,\"delay_us\":%d,\"status\":\"started\"}",
-                 la, steps, delay_us);
+                 "{\"la\":%u,\"steps\":%lu,\"delay_us\":%lu,\"status\":\"started\"}",
+                 la, (unsigned long)steps, (unsigned long)delay_us);
         send_ok_str(conn_id, payload);
         return;
     }

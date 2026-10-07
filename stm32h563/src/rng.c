@@ -11,6 +11,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 
@@ -88,7 +89,7 @@ static void rng_log_errors(void)
 {
     uint32_t e = s_errors;
     if (e != s_logged_errors) {
-        printf("[rng] %lu read error(s) since boot (last HAL error 0x%lx)\n",
+        log_printf("[rng] %lu read error(s) since boot (last HAL error 0x%lx)\n",
                (unsigned long)e, (unsigned long)hrng.ErrorCode);
         s_logged_errors = e;
     }
@@ -99,7 +100,7 @@ int rng_fill(void *buf, size_t len)
     int rc = rng_fill_policy(buf, len, rng_word, rng_reset, NULL,
                              RNG_WORD_ATTEMPTS, &s_errors);
     rng_log_errors();
-    if (rc != 0) printf("[rng] ERROR: TRNG failed %u times in a row, no entropy\n",
+    if (rc != 0) log_printf("[rng] ERROR: TRNG failed %u times in a row, no entropy\n",
                         (unsigned)RNG_WORD_ATTEMPTS);
     return rc;
 }

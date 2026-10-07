@@ -34,13 +34,13 @@ jobs:
       - name: Toolchain versions (confirm the 0.65 pin)
         run: yosys --version && nextpnr-ice40 --version
       - name: Run gateware testbenches + protocol check
-        # `test` also places both runtime images (multiboot).  ICE40_PNR_STRICT is a repository
-        # variable (1 since v42): a fallback seed, a thin clk48 or a slow clk -> clk48 path fails
-        # the job (ice40/Makefile, PNR_STRICT).  This runner's toolchain places differently from a
-        # local one, so seeds are pinned from sweeps in both (the ice40-seed-sweep workflow).
-        env:
-          ICE40_PNR_STRICT: ${{ vars.ICE40_PNR_STRICT || '0' }}
-        run: make -C ice40 test PNR_STRICT="$ICE40_PNR_STRICT"
+        # `test` also places both runtime images (multiboot), always with PNR_STRICT=1: a fallback
+        # seed, a thin clk48, a slow clk -> clk48 path or a log without those lines fails the job
+        # (ice40/Makefile).  It used to come from the ICE40_PNR_STRICT repository variable with a
+        # default of 0, so a missing variable (a fork, a renamed variable) turned the gate off.
+        # This runner's toolchain places differently from a local one, so seeds are pinned from
+        # sweeps in both (the ice40-seed-sweep workflow).
+        run: make -C ice40 test PNR_STRICT=1
       # Releases embed ice40/release/ (hardware-verified), not the images built above.  Every
       # gateware change is unpromoted until it has been tested on a bench, so this only warns;
       # the release job fails on it.

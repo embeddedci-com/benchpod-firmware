@@ -25,6 +25,7 @@
 
 #include "stm32h5xx_hal.h"
 #include "mbedtls/md5.h"
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -277,20 +278,20 @@ static int esp_read_reg(uint32_t addr, uint32_t *val)
 
 int esp_rom_flash_sync(uint32_t *chip_magic_out)
 {
-    printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
+    log_printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
     strap_gpio_init();
     uart_init(ESP_UART_FLASH_BAUD);
     strap_enter_download();
 
     if (esp_sync() != 0) {
-        printf("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
+        log_printf("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
         HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
         uart_deinit();
         return -1;
     }
     uint32_t magic = 0;
     (void)esp_read_reg(CHIP_DETECT_MAGIC_REG, &magic);
-    printf("[espflash] SYNC ok — C3 ROM responding (chip magic 0x%08lx)\n", (unsigned long)magic);
+    log_printf("[espflash] SYNC ok — C3 ROM responding (chip magic 0x%08lx)\n", (unsigned long)magic);
     if (chip_magic_out) *chip_magic_out = magic;
 
     /* leave in download mode, powered — caller decides next step */
@@ -307,25 +308,25 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
     mbedtls_md5_init(&md5);
     mbedtls_md5_starts(&md5);
 
-    printf("[espflash] programming %u bytes at 0x%06lx\n", (unsigned)len, (unsigned long)offset);
+    log_printf("[espflash] programming %u bytes at 0x%06lx\n", (unsigned)len, (unsigned long)offset);
     strap_gpio_init();
     uart_init(ESP_UART_FLASH_BAUD);
     strap_enter_download();
 
     if (esp_sync() != 0) {
-        printf("[espflash] SYNC failed\n");
+        log_printf("[espflash] SYNC failed\n");
         goto fail;
     }
     uint32_t magic = 0;
     (void)esp_read_reg(CHIP_DETECT_MAGIC_REG, &magic);
-    printf("[espflash] C3 ROM synced (magic 0x%08lx)\n", (unsigned long)magic);
+    log_printf("[espflash] C3 ROM synced (magic 0x%08lx)\n", (unsigned long)magic);
 
     /* SPI_ATTACH(0): default flash pins. Non-fatal — C3 flash is usually already
        attached; FLASH_BEGIN/DATA + MD5 are the real correctness gates. */
     {
         uint8_t a[8] = {0};
         if (esp_command(ESP_SPI_ATTACH, a, sizeof(a), 0, NULL, NULL, NULL, 1000) != 0)
-            printf("[espflash] SPI_ATTACH warning (continuing)\n");
+            log_printf("[espflash] SPI_ATTACH warning (continuing)\n");
     }
 
     uint32_t num_blocks = (uint32_t)((len + FLASH_WRITE_SIZE - 1) / FLASH_WRITE_SIZE);
@@ -338,10 +339,10 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         put_le32(b + 8, FLASH_WRITE_SIZE);      /* packet size         */
         put_le32(b + 12, offset);               /* flash offset        */
         put_le32(b + 16, 0);                    /* not encrypted       */
-        printf("[espflash] FLASH_BEGIN (%lu blocks, erasing)...\n", (unsigned long)num_blocks);
+        log_printf("[espflash] FLASH_BEGIN (%lu blocks, erasing)...\n", (unsigned long)num_blocks);
         /* ROM may erase the whole region up front (esptool budgets ~30 s/MB). */
         if (esp_command(ESP_FLASH_BEGIN, b, sizeof(b), 0, NULL, NULL, NULL, 40000) != 0) {
-            printf("[espflash] FLASH_BEGIN failed\n");
+            log_printf("[espflash] FLASH_BEGIN failed\n");
             goto fail;
         }
     }
@@ -355,7 +356,7 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         put_le32(pk + 8, 0);
         put_le32(pk + 12, 0);
         if (rd(ctx, off, pk + 16, n) != 0) {
-            printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
+            log_printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
             goto fail;
         }
         mbedtls_md5_update(&md5, pk + 16, n);   /* each block is read once, so hashed once */
@@ -373,12 +374,12 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
             rc = esp_command(ESP_FLASH_DATA, pk, (uint16_t)(16 + FLASH_WRITE_SIZE),
                              checksum, NULL, NULL, NULL, 3000);
             if (rc != 0)
-                printf("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
+                log_printf("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
                        (unsigned long)(seq + 1), (unsigned long)num_blocks, attempt, rc);
         }
         if (rc != 0) goto fail;
         if ((seq & 0x3F) == 0 || seq == num_blocks - 1)
-            printf("[espflash]  block %lu/%lu\n", (unsigned long)(seq + 1),
+            log_printf("[espflash]  block %lu/%lu\n", (unsigned long)(seq + 1),
                    (unsigned long)num_blocks);
         /* The whole image takes ~140 s at 115200 baud, far past the worker's 60 s watchdog
            grace, so prove liveness per block.  Only the hw worker ever runs this. */
@@ -398,16 +399,16 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         const uint8_t *got = NULL; int glen = 0;
         if (esp_command(ESP_SPI_FLASH_MD5, m, sizeof(m), 0, NULL, &got, &glen, 10000) != 0
             || glen < 32) {
-            printf("[espflash] MD5 read failed\n");
+            log_printf("[espflash] MD5 read failed\n");
             goto fail;
         }
         if (memcmp(got, want_hex, 32) != 0) {
-            printf("[espflash] MD5 MISMATCH — flash corrupt\n");
-            printf("[espflash]   want %.32s\n", (const char *)want_hex);
-            printf("[espflash]   got  %.32s\n", (const char *)got);
+            log_printf("[espflash] MD5 MISMATCH — flash corrupt\n");
+            log_printf("[espflash]   want %.32s\n", (const char *)want_hex);
+            log_printf("[espflash]   got  %.32s\n", (const char *)got);
             goto fail;
         }
-        printf("[espflash] MD5 verified (%.32s)\n", (const char *)want_hex);
+        log_printf("[espflash] MD5 verified (%.32s)\n", (const char *)want_hex);
     }
 
     /* FLASH_END: stay in loader (param 1) — we do our own clean strap reset. */
@@ -416,7 +417,7 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         (void)esp_command(ESP_FLASH_END, e, sizeof(e), 0, NULL, NULL, NULL, 1000);
     }
 
-    printf("[espflash] done — resetting C3 into application\n");
+    log_printf("[espflash] done — resetting C3 into application\n");
     strap_boot_app();
     uart_deinit();
     mbedtls_md5_free(&md5);
@@ -440,7 +441,7 @@ static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 int esp_rom_flash_from_slot(void)
 {
     if (!blob_store_present(BLOB_ESP)) {
-        printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
+        log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
         return -1;
     }
     signal_engine_quiesce_psram_masters();   /* every bus grab below shares the PSRAM bus */
@@ -448,7 +449,7 @@ int esp_rom_flash_from_slot(void)
     int intact = blob_store_verify(BLOB_ESP) == 0;
     w25q_close();
     if (!intact) {
-        printf("[espflash] slot esp does not match its checksum: not flashed\n");
+        log_printf("[espflash] slot esp does not match its checksum: not flashed\n");
         return -1;
     }
     /* Hold the bus for the whole ~2 minutes. Taking it per block cost a lost C3 reply every
@@ -471,7 +472,7 @@ void esp_rom_flash_power_off(void)
 void esp_uart_monitor(uint32_t ms)
 {
     uart_init(ESP_UART_FLASH_BAUD);     /* USART1 only — does not touch EN/BOOT */
-    printf("[esp-mon] C3 UART0 for %lu ms:\n", (unsigned long)ms);
+    log_printf("[esp-mon] C3 UART0 for %lu ms:\n", (unsigned long)ms);
     uint32_t end = HAL_GetTick() + ms;
     char line[160]; int li = 0;
     while ((int32_t)(HAL_GetTick() - end) < 0) {
@@ -479,13 +480,13 @@ void esp_uart_monitor(uint32_t ms)
         if (c < 0) continue;
         if (c == '\n' || li >= (int)sizeof(line) - 1) {
             line[li] = '\0';
-            if (li) printf("[c3] %s\n", line);
+            if (li) log_printf("[c3] %s\n", line);
             li = 0;
         } else if (c != '\r') {
             line[li++] = (c >= 32 && c < 127) ? (char)c : '.';
         }
     }
-    if (li) { line[li] = '\0'; printf("[c3] %s\n", line); }
-    printf("[esp-mon] done\n");
+    if (li) { line[li] = '\0'; log_printf("[c3] %s\n", line); }
+    log_printf("[esp-mon] done\n");
     uart_deinit();
 }

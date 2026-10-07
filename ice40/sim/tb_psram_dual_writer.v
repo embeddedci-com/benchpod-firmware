@@ -235,8 +235,58 @@ module tb_psram_dual_writer;
             $display("FAIL: %0d of %0d bytes landed after a mid-burst bus_own (bytes popped while owned?)",
                      adc_i, 3*CHUNK); errors=errors+1; end
 
+        // ---- v47: an arm flushes what an aborted capture left behind ----
+        // (a) The STM32 held the bus, so the old capture's bytes are still in the staging FIFOs
+        //     when the next arm comes.  Until v46 they were written at the START of the new
+        //     capture's regions and every new sample landed that many bytes late.
+        decode_en = 1;
+        for (i=0;i<512;i=i+1) mem[i] = 8'hXX;
+        @(posedge clk); bus_own <= 1'b1;
+        @(posedge clk); start <= 1'b1; @(posedge clk); start <= 1'b0;
+        for (i = 0; i < 5; i = i+1) feed_la(8'hF0 + i[7:0]);
+        for (i = 0; i < 3; i = i+1) feed_adc(8'hF8 + i[7:0]);
+        repeat (4) @(posedge clk);                         // aborted: the bytes are stuck
+        @(posedge clk); start <= 1'b1; @(posedge clk); start <= 1'b0;   // the next arm
+        bus_own <= 1'b0;
+        for (i = 0; i < 12; i = i+1) begin
+            feed_la(8'hC0 + i[7:0]);
+            if (i < 6) feed_adc(8'hD0 + i[7:0]);
+        end
+        repeat (10) @(posedge clk);
+        wait (idle && dut.a_cnt == 0 && dut.l_cnt == 0); repeat (10) @(posedge clk);
+        adc_i = 0;
+        for (i = 0; i < 12; i = i+1)
+            if (mem[(LA_BASE[8:0] + i) & 9'h1FF] !== (8'hC0 + i[7:0])) adc_i = adc_i + 1;
+        for (i = 0; i < 6; i = i+1)
+            if (mem[(ADC_BASE[8:0] + i) & 9'h1FF] !== (8'hD0 + i[7:0])) adc_i = adc_i + 1;
+        if (adc_i !== 0) begin
+            $display("FAIL: stale bytes of an aborted capture landed in the next one (%0d wrong; LA[0]=%02h ADC[0]=%02h)",
+                     adc_i, mem[LA_BASE[8:0]], mem[ADC_BASE[8:0]]); errors=errors+1; end
+        else $display("  arm after an aborted capture: stale FIFO bytes dropped, new capture at its bases");
+
+        // (b) The arm lands MID-burst while an aborted capture is still draining.  Until v46 a pop
+        //     on the arm edge kept the region address from reloading and the FIFO kept the rest of
+        //     the old bytes, so the new capture was written after them instead of at its base.
+        for (i=0;i<512;i=i+1) mem[i] = 8'hXX;
+        @(posedge clk); bus_own <= 1'b1;
+        @(posedge clk); start <= 1'b1; @(posedge clk); start <= 1'b0;
+        for (i = 0; i < 20; i = i+1) feed_la(8'h80 + i[7:0]);
+        @(posedge clk); bus_own <= 1'b0;
+        @(negedge w_cs); repeat (6) @(posedge clk);         // inside the first drain burst
+        start <= 1'b1; @(posedge clk); start <= 1'b0;
+        for (i = 0; i < 10; i = i+1) feed_la(8'h70 + i[7:0]);
+        repeat (10) @(posedge clk);
+        wait (idle && dut.a_cnt == 0 && dut.l_cnt == 0); repeat (10) @(posedge clk);
+        adc_i = 0;
+        for (i = 0; i < 10; i = i+1)
+            if (mem[(LA_BASE[8:0] + i) & 9'h1FF] !== (8'h70 + i[7:0])) adc_i = adc_i + 1;
+        if (adc_i !== 0) begin
+            $display("FAIL: an arm mid-burst did not restart the region at its base (%0d of 10 wrong; LA[0]=%02h)",
+                     adc_i, mem[LA_BASE[8:0]]); errors=errors+1; end
+        else $display("  arm mid-burst: burst closed, region restarted at its base, old bytes dropped");
+
         if (errors == 0)
-            $display("PASS tb_psram_dual_writer: two streams -> two regions, contiguous, in order; tCEM/setup/bus_own (idle + mid-burst) ok");
+            $display("PASS tb_psram_dual_writer: two streams -> two regions, contiguous, in order; tCEM/setup/bus_own (idle + mid-burst)/arm flush ok");
         else
             $display("FAIL tb_psram_dual_writer: %0d error(s)", errors);
         $finish;

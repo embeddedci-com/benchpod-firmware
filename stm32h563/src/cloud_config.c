@@ -4,6 +4,7 @@
  */
 #include "cloud_config.h"
 #include "config_store.h"   /* ab_store_* */
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -25,7 +26,7 @@ int cloud_config_load(cloud_config_t *out) {
     if (ab_store_load(&s_cloud_store, &tmp, sizeof(tmp)) != 0) return -1;
     if (tmp.magic != CLOUD_CONFIG_MAGIC) return -1;
     if (tmp.version != CLOUD_CONFIG_VERSION) {
-        printf("[cloud-cfg] schema mismatch (version=%lu, expected %lu), ignoring\n",
+        log_printf("[cloud-cfg] schema mismatch (version=%lu, expected %lu), ignoring\n",
                (unsigned long)tmp.version, (unsigned long)CLOUD_CONFIG_VERSION);
         return -1;
     }

@@ -4,6 +4,7 @@
 #include "fault.h"
 #include "watchdog.h"
 #include "stm32h5xx_hal.h"
+#include "bp_log.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -61,7 +62,7 @@ void boot_guard_begin(bool fresh_start) {
         snprintf(s_report, sizeof(s_report),
                  SAFE_PREFIX "%lu failed boots in a row, the last in \"%s\"; %s off",
                  (unsigned long)failed, where, boot_policy_off_str(s_off));
-        printf("[boot] SAFE MODE: %s\r\n", s_report + sizeof(SAFE_PREFIX) - 1);
+        log_printf("[boot] SAFE MODE: %s\r\n", s_report + sizeof(SAFE_PREFIX) - 1);
         boot_test_loop_end();   /* a test loop has done its job */
     }
 
@@ -142,6 +143,6 @@ void boot_guard_test_loop_point(uint32_t sub) {
     }
     s_test_left--;
     __DSB();
-    printf("[boot] test-bootloop: crashing on purpose (%lu more)\r\n", (unsigned long)s_test_left);
+    log_printf("[boot] test-bootloop: crashing on purpose (%lu more)\r\n", (unsigned long)s_test_left);
     __builtin_trap();   /* a real fault, recorded like any other */
 }

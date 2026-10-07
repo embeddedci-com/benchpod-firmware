@@ -160,9 +160,10 @@ NEXTPNR = nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) \
 #   MIN_CLK48_MHZ, prints a loud WARNING and the bitstream is kept, so a toolchain build that
 #   maps the design differently (CI vs local — see SEED_FALLBACK) still completes.
 # PNR_STRICT=1 makes either one FAIL the build (the .asc is removed so a re-run can't pick it
-#   up) and tries no fallback seed.  Use it for anything that ships.  CI passes it through from
-#   the ICE40_PNR_STRICT repository variable (.github/workflows) — off until CI's toolchain is
-#   confirmed to place the pinned seeds.
+#   up) and tries no fallback seed.  Use it for anything that ships.  CI always runs with it
+#   (.github/workflows/test.yml).
+# Either way, a nextpnr log without the clk48 Fmax or the clk -> clk48 max-delay line FAILS the
+#   build (v47): the gates below read those lines, and a missing one used to pass silently.
 # MIN_CLK48_MHZ: nextpnr only fails clk48 below 48.00 MHz, but placements closing at
 #   48.2-48.8 MHz have silently HW-regressed deep DAC replay (the v28/v31 notes), and seeds are
 #   pinned for >= 50.  Checked against the final post-route Fmax.
@@ -202,15 +203,22 @@ define pnr
 	      bad="fallback seed $$s"; \
 	    fi; \
 	    f48=$$(grep "Max frequency for clock 'clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/'); \
-	    if [ -n "$$f48" ] && awk -v f="$$f48" -v m="$(MIN_CLK48_MHZ)" 'BEGIN { exit !(f < m) }'; then \
+	    x48=$$(grep -E "Max delay posedge clk +-> posedge clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
+	    if [ -z "$$f48" ] || [ -z "$$x48" ]; then \
+	      rm -f $(2); \
+	      echo "ERROR: $(2): the nextpnr log ($$log) has no $${f48:+clk -> clk48 max delay}$${f48:-clk48 Max frequency} line,"; \
+	      echo "       so the clk48 gates cannot run.  A renamed clock or a changed nextpnr report format"; \
+	      echo "       used to pass here silently."; \
+	      exit 1; \
+	    fi; \
+	    if awk -v f="$$f48" -v m="$(MIN_CLK48_MHZ)" 'BEGIN { exit !(f < m) }'; then \
 	      echo "*** WARNING: $(2): clk48 closes at only $$f48 MHz (MIN_CLK48_MHZ=$(MIN_CLK48_MHZ))."; \
 	      echo "***          Static timing passes, but margin this thin has HW-regressed deep"; \
 	      echo "***          DAC replay before — re-sweep and re-pin the seed."; \
 	      bad="$${bad:+$$bad, }clk48 $$f48 MHz"; \
 	    fi; \
-	    x48=$$(grep -E "Max delay posedge clk +-> posedge clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
-	    echo "nextpnr: $(2): clk -> clk48 (untimed) max delay $${x48:-?} ns (MAX_X48_NS=$(MAX_X48_NS))"; \
-	    if [ -n "$$x48" ] && awk -v x="$$x48" -v m="$(MAX_X48_NS)" 'BEGIN { exit !(x > m) }'; then \
+	    echo "nextpnr: $(2): clk -> clk48 (untimed) max delay $$x48 ns (MAX_X48_NS=$(MAX_X48_NS))"; \
+	    if awk -v x="$$x48" -v m="$(MAX_X48_NS)" 'BEGIN { exit !(x > m) }'; then \
 	      echo "*** WARNING: $(2): the untimed clk -> clk48 paths take $$x48 ns (MAX_X48_NS=$(MAX_X48_NS))."; \
 	      echo "***          They must fit in 20.8 ns minus clk's lag behind clk48; re-sweep the seed."; \
 	      bad="$${bad:+$$bad, }clk->clk48 $$x48 ns"; \
@@ -352,6 +360,8 @@ $(OUT).bin: $(OUT).asc
 # v46 (CORR-2 ring overflow clear + version; 3895 LC, 74%): swept 1..64 locally: 57/64 reach
 # MIN_CLK48_MHZ (2 miss 48 MHz).  Seed 26 still closes (clk48 54.69, clk 32.69, clk -> clk48
 # 10.19 ns) and stays pinned.  CI sweep not run yet.
+# v47 (GW-1, 3886 LC, 74%): seed 26 still closes (clk48 56.32, clk 31.22, clk -> clk48 11.05 ns);
+# kept, no sweep.
 SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
 SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
@@ -426,7 +436,11 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # 3579 LC, 68%): swept 1..64 locally: ALL 64 reach MIN_CLK48_MHZ (v45: 63/64), eight tie at
 # 59.26 MHz.  Pinned SEED_DEEP 25 -> 50 (clk48 59.26, clk 32.34, clk -> clk48 12.72 ns; 25 ties
 # on clk48 but its clk is 27.94).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 50
+# v47 (GW-1: every arm flushes the writer's staging FIFOs and the LA ring; 3590 LC, 68%): seed 50
+# fell to clk48 49.61 MHz.  Swept 1..64 locally: 60/64 reach MIN_CLK48_MHZ, fourteen tie at
+# 56.95 MHz.  Pinned SEED_DEEP 50 -> 57 (clk48 56.95, clk 34.51, clk -> clk48 12.82 ns; it is in
+# the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 57
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.

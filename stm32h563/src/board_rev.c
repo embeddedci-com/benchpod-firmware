@@ -3,6 +3,7 @@
 #include "mcu_adc.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 
@@ -42,7 +43,7 @@ void board_rev_init(void)
 
     if (lvl == STRAP_NC_LEVEL_IS_LOW) {
         s_rev = BOARD_REV_V2;
-        printf("[board] revision v2 (PA3 strap not fitted)\r\n");
+        log_printf("[board] revision v2 (PA3 strap not fitted)\r\n");
         return;
     }
 
@@ -53,21 +54,21 @@ void board_rev_init(void)
         if (mv >= BOARD_REV_V3_NOMINAL_MV - STRAP_V3_TOLERANCE_MV &&
             mv <= BOARD_REV_V3_NOMINAL_MV + STRAP_V3_TOLERANCE_MV) {
             s_rev = BOARD_REV_V3;
-            printf("[board] revision v3 (strap %d mV, VREF+ %d mV)\r\n",
+            log_printf("[board] revision v3 (strap %d mV, VREF+ %d mV)\r\n",
                    mv, mcu_adc_vref_mv());
             return;
         }
         /* Driven, but not a ratio we know.  It is certainly not a v2 board, so
            run as the newest revision we understand and make the reading loud. */
         s_rev = BOARD_REV_V3;
-        printf("[board] WARNING: unrecognised revision strap %d mV "
+        log_printf("[board] WARNING: unrecognised revision strap %d mV "
                "(expected ~%d mV for v3); running as v3\r\n",
                mv, BOARD_REV_V3_NOMINAL_MV);
         return;
     }
 
     s_rev = BOARD_REV_V3;
-    printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\r\n");
+    log_printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\r\n");
 }
 
 int  board_rev_get(void)      { return s_rev; }

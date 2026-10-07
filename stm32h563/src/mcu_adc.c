@@ -10,6 +10,7 @@
 #include "mcu_adc.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 
@@ -97,7 +98,7 @@ int mcu_adc_init(void)
     if (convert_raw(ADC_CHANNEL_VREFINT, &raw) == 0 && raw != 0) {
         s_vref_mv = (int)__LL_ADC_CALC_VREFANALOG_VOLTAGE(raw, LL_ADC_RESOLUTION_12B);
     } else {
-        printf("[adc] VREFINT read failed; assuming VREF+ = %d mV\r\n",
+        log_printf("[adc] VREFINT read failed; assuming VREF+ = %d mV\r\n",
                MCU_ADC_VREF_NOMINAL_MV);
     }
     return 0;
