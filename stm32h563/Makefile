@@ -61,6 +61,7 @@ C_SOURCES := \
   src/la_pins.c \
   src/power_profile.c \
   src/dac_loop_params.c \
+  src/dac_rearm.c \
   src/adc_scale.c \
   src/mcu_adc.c \
   src/board_rev.c \

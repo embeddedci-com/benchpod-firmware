@@ -25,6 +25,7 @@ CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
 CLOUDRX_SRCS  := test_cloud_rx.c
 UARTSTAT_SRCS := test_uart_status.c
 DACLOOP_SRCS  := test_dac_loop_params.c ../src/dac_loop_params.c
+DACREARM_SRCS := test_dac_rearm.c ../src/dac_rearm.c
 ADCSCALE_SRCS := test_adc_scale.c ../src/adc_scale.c
 ESPPUMP_SRCS  := test_esp_pump.c ../src/esp_hosted_pump.c
 SPIFLASH_SRCS := test_spi_flash.c ../src/spi_flash.c
@@ -138,6 +139,10 @@ build/test_dac_loop_params: $(DACLOOP_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(DACLOOP_SRCS) -lm -o $@
 
+build/test_dac_rearm: $(DACREARM_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(DACREARM_SRCS) -lm -o $@
+
 build/test_adc_scale: $(ADCSCALE_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(ADCSCALE_SRCS) -lm -o $@
@@ -235,7 +240,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_json build/test_conn_tx build/test_cloud_rx build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
 
 # Header edits must rebuild every suite (see HEADERS above).
 $(TESTS): $(HEADERS)
@@ -256,6 +261,7 @@ run: $(TESTS)
 	@./build/test_cloud_rx
 	@./build/test_uart_status
 	@./build/test_dac_loop_params
+	@./build/test_dac_rearm
 	@./build/test_adc_scale
 	@./build/test_esp_pump
 	@./build/test_la_pins
