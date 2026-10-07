@@ -461,6 +461,7 @@ static bool cl_open(bool tls, uint16_t port) {
         s_proxy_conf.target_host = s_cfg.host;
         s_proxy_conf.auth_b64    = NULL;
         s_proxy_conf.last_status = 0;
+        s_proxy_conf.closed_early = 0;
         if (s_proxy.user[0]) {
             char up[CLOUD_PROXY_USER_MAX + CLOUD_PROXY_PASS_MAX + 2];
             int n = snprintf(up, sizeof(up), "%s:%s", s_proxy.user, s_proxy.pass);
@@ -1375,6 +1376,8 @@ void cloud_client_poll(void) {
             if (s_proxy.host[0] && s_proxy_conf.last_status && s_proxy_conf.last_status != 200)
                 cl_set_error("the proxy refused the connection (HTTP %u%s)", (unsigned)s_proxy_conf.last_status,
                              s_proxy_conf.last_status == 407 ? ": proxy user or password" : "");
+            else if (s_proxy.host[0] && s_proxy_conf.closed_early)
+                cl_set_error("the proxy closed the connection before it replied");
             cl_backoff("challenge connect failed");
             return;
         }

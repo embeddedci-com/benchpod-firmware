@@ -134,6 +134,46 @@ altcp_bp_proxy_send_request(struct altcp_pcb *conn)
   return err;
 }
 
+/* Fail the connection during setup (the proxy refused, or closed before its reply). Called
+ * from our lower_recv, i.e. from inside tcp_input via altcp_tcp_recv; returns ERR_ABRT, which
+ * altcp_tcp_recv hands back to tcp_input ("pcb aborted, do not touch it").
+ *
+ * The stack is app -> tls (T) -> this layer (conn) -> altcp_tcp (inner_conn) -> tcp_pcb, and
+ * every layer must be freed exactly once, with nobody left pointing at a freed one:
+ *
+ *  1. Remove our callbacks from inner_conn, then abort it. tcp_abort() calls altcp_tcp_err,
+ *     which frees inner_conn (its err callback is now NULL, so it does not call us back), and
+ *     tcp_abandon frees the tcp_pcb (tcp_input knows from ERR_ABRT not to touch it).
+ *  2. Clear conn->inner_conn: from here on nothing may reach the freed TCP layer through us.
+ *  3. Tell the layer above the way an error from below does (altcp_bp_proxy_lower_err).
+ *     conn->err is altcp_mbedtls_lower_err: it sets T->inner_conn = NULL (so T never touches us
+ *     again), calls the application's err callback (cl_err_cb: drops its pcb pointer and marks
+ *     the link failed, where last_status / closed_early give the reason), and frees T.
+ *  4. Free this layer (altcp_bp_proxy_dealloc frees our state). Nobody points at it now.
+ *
+ * Forwarding the FIN up instead (conn->recv(arg, conn, NULL)) would also work in principle:
+ * altcp_mbedtls_lower_recv, before its handshake is done, calls err(ERR_ABRT) and then
+ * altcp_close(T), which closes us and tcp_close()s the pcb from inside its own recv callback.
+ * But that calls the application's err callback and then still uses T, and a failing tcp_close
+ * (ERR_MEM) leaves the pcbs half-closed with the application already told they are gone. The
+ * abort path is one sequence for every setup failure, and it is the one bench-tested on 407. */
+static err_t
+altcp_bp_proxy_fail_setup(struct altcp_pcb *conn, struct altcp_pcb *inner_conn)
+{
+  altcp_arg(inner_conn, NULL);
+  altcp_recv(inner_conn, NULL);
+  altcp_sent(inner_conn, NULL);
+  altcp_err(inner_conn, NULL);
+  altcp_poll(inner_conn, NULL, 0);
+  altcp_abort(inner_conn);
+  conn->inner_conn = NULL;
+  if (conn->err) {
+    conn->err(conn->arg, ERR_ABRT);
+  }
+  altcp_free(conn);
+  return ERR_ABRT;
+}
+
 /* callback functions from inner/lower connection: */
 
 /** Connected callback from lower connection (i.e. TCP).
@@ -203,11 +243,13 @@ altcp_bp_proxy_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *
     /* setup phase */
     /* handle NULL pbuf (inner connection closed) */
     if (p == NULL) {
-      if (altcp_close(conn) != ERR_OK) {
-        altcp_abort(conn);
-        return ERR_ABRT;
-      }
-      return ERR_OK;
+      /* The proxy closed before its reply (FIN in the setup phase). Closing only ourselves here
+         (what lwIP's altcp_proxyconnect does) frees this layer while TLS above still has it as
+         its inner_conn: the application's later altcp_close/abort of the TLS pcb then runs
+         altcp_mbedtls_close on freed memory. Fail the whole stack instead (fail_setup). */
+      state->conf->last_status = 0;
+      state->conf->closed_early = 1;
+      return altcp_bp_proxy_fail_setup(conn, inner_conn);
     } else {
       /* Collect the status line and wait for the end of the reply headers. The proxy sends
          nothing after them until TLS speaks (the client talks first), so no data is lost. */
@@ -230,23 +272,9 @@ altcp_bp_proxy_lower_recv(void *arg, struct altcp_pcb *inner_conn, struct pbuf *
         /* "HTTP/1.0 200" or "HTTP/1.1 200": anything else (407 auth, 403, 502) fails. */
         if (strncmp(state->reply, "HTTP/1.", 7) != 0 || strncmp(state->reply + 8, " 200", 4) != 0) {
           state->conf->last_status = (u16_t)atoi(state->reply + 9);
-          /* Tear down the way an error from below does (altcp_bp_proxy_lower_err): drop and abort
-             the TCP pcb with our callbacks removed, tell the layer above (TLS, which frees
-             itself and calls the application's err callback, where last_status gives the
-             reason), then free this layer. Aborting only ourselves would leave TLS pointing at
-             freed memory: seen as a HardFault in altcp_mbedtls_lower_recv on the bench. */
-          altcp_arg(inner_conn, NULL);
-          altcp_recv(inner_conn, NULL);
-          altcp_sent(inner_conn, NULL);
-          altcp_err(inner_conn, NULL);
-          altcp_poll(inner_conn, NULL, 0);
-          altcp_abort(inner_conn);
-          conn->inner_conn = NULL;
-          if (conn->err) {
-            conn->err(conn->arg, ERR_ABRT);
-          }
-          altcp_free(conn);
-          return ERR_ABRT;
+          /* Aborting only ourselves would leave TLS pointing at freed memory: seen as a
+             HardFault in altcp_mbedtls_lower_recv on the bench. */
+          return altcp_bp_proxy_fail_setup(conn, inner_conn);
         }
         state->conf->last_status = 200;
         state->flags |= ALTCP_BP_PROXY_FLAGS_HANDSHAKE_DONE;
