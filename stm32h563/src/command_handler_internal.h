@@ -76,6 +76,13 @@ void handle_can_term(int conn_id, const char *json);
 void handle_can_disable(int conn_id);
 
 /* OTA subsystem handlers (command_handler_ota.c). */
+/* Policy commands (command_handler_policy.c). */
+void handle_sig_policy(int conn_id, const char *json);
+/* POLICY_SRC_USB / _CLOUD / _LAN for a connection id (pod_policy.h). */
+#include "pod_policy.h"
+policy_src_t command_handler_policy_src(int conn_id);
+void handle_lan_policy(int conn_id, const char *json);
+
 void handle_ota_begin(int conn_id, const char *json);
 void handle_ota_data(int conn_id, const char *json);
 void handle_ota_end(int conn_id);

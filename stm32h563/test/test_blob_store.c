@@ -185,7 +185,7 @@ static void test_fw_slot(void) {
           "fw slot overlaps esp");
     CHECK(blob_slot_base(BLOB_FW) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_FW) <= MOCK_W25Q_BYTES,
           "fw slot past 8 MB");
-    CHECK(blob_slot_capacity(BLOB_FW) >= 928u * 1024u, "fw slot smaller than the 928 KB image area");
+    CHECK(blob_slot_capacity(BLOB_FW) >= 912u * 1024u, "fw slot smaller than the 912 KB image area");
     CHECK(blob_store_write(BLOB_FW, n, 0, d, mem_src, img) == 0, "fw write failed");
     CHECK(mock_w25q_bad_programs == 0, "programmed over unerased bits");
     blob_store_load();

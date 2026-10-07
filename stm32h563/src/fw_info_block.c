@@ -8,5 +8,6 @@ const fw_info_t g_fw_info = {
     .magic        = FW_INFO_MAGIC,
     .layout       = FW_INFO_LAYOUT,
     .min_flash_kb = FW_INFO_MIN_FLASH_KB,
-    .reserved     = { 0u, 0u },
+    /* This firmware can refuse unsigned updates (sig_policy, pod_policy.h). */
+    .reserved     = { FW_INFO_FLAG_ENFORCES_SIG, 0u },
 };

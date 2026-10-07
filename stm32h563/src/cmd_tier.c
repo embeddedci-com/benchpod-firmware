@@ -26,6 +26,7 @@ static const tier_entry_t k_tiers[] = {
     { "test", CMD_TIER_T0 },
     /* mixed: read form T0, write form T2 (see mixed_write) */
     { "dac_limits", CMD_TIER_T0 }, { "calibrate", CMD_TIER_T0 }, { "eth", CMD_TIER_T0 },
+    { "sig_policy", CMD_TIER_T0 }, { "lan_policy", CMD_TIER_T0 },
     /* T1: instrument control */
     { "generate", CMD_TIER_T1 }, { "measure", CMD_TIER_T1 }, { "load", CMD_TIER_T1 },
     { "load_bin", CMD_TIER_T1 }, { "replay", CMD_TIER_T1 }, { "dac_stop", CMD_TIER_T1 },
@@ -66,6 +67,8 @@ static int mixed_write(const char *cmd, const char *json) {
     if (strcmp(cmd, "calibrate") == 0)
         return bp_json_get(json, "source", v, sizeof(v)) ||
                (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0);
+    if (strcmp(cmd, "sig_policy") == 0 || strcmp(cmd, "lan_policy") == 0)
+        return bp_json_get(json, "set", v, sizeof(v));
     if (strcmp(cmd, "eth") == 0) {
         bp_json_get(json, "action", v, sizeof(v));
         return strcmp(v, "stats") != 0 && strcmp(v, "refclk") != 0;

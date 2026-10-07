@@ -129,7 +129,7 @@ static void test_commit_reverifies_the_staged_image(void) {
     ota_abort();
 }
 
-/* The image may fill flash up to 0x081E8000 and no further: above it are the per-pod ADC calibration, the DAC limits, the
+/* The image may fill flash up to 0x081E4000 and no further: above it are the per-pod ADC calibration, the DAC limits, the
    config slots and the device identity key, which ota_commit would erase. */
 static void test_size_limit_protects_the_high_sectors(void) {
     char hex[65];
@@ -137,7 +137,7 @@ static void test_size_limit_protects_the_high_sectors(void) {
     sha256_hex(one, 1, hex);
     mock_ota_psram_reset();
     ota_abort();
-    CHECK(ota_begin(0x1E8000u, hex) == 0, "an image ending exactly at 0x081E8000 was refused: %s", ota_error());
+    CHECK(ota_begin(0x1E4000u, hex) == 0, "an image ending exactly at 0x081E4000 was refused: %s", ota_error());
     ota_abort();
     CHECK(ota_begin(0x1E8001u, hex) != 0, "an image one byte into the per-pod ADC calibration sectors was accepted");
     CHECK(strstr(ota_error(), "size") != NULL, "error should name the size: %s", ota_error());
@@ -399,7 +399,7 @@ static void test_watchdog_drops_uncommitted_verified_image(void) {
     ota_abort();
 }
 
-/* On a 1 MB part the persistence sectors start at 0x0E8000, so that is the largest image. */
+/* On a 1 MB part the persistence sectors start at 0x0E4000, so that is the largest image. */
 static void test_size_limit_on_a_1mb_part(void) {
     char hex[65];
     static uint8_t one[1] = {0};
@@ -407,8 +407,8 @@ static void test_size_limit_on_a_1mb_part(void) {
     mock_ota_psram_reset();
     mock_flash_size = 0x100000u;
     ota_abort();
-    CHECK(ota_max_size() == 0x0E8000u, "1 MB limit is 0x%x", (unsigned)ota_max_size());
-    CHECK(ota_begin(0x0E8000u, hex) == 0, "an image ending at the 1 MB store was refused: %s", ota_error());
+    CHECK(ota_max_size() == 0x0E4000u, "1 MB limit is 0x%x", (unsigned)ota_max_size());
+    CHECK(ota_begin(0x0E4000u, hex) == 0, "an image ending at the 1 MB store was refused: %s", ota_error());
     ota_abort();
     CHECK(ota_begin(0x0E8001u, hex) != 0, "an image into the 1 MB part's calibration sector was accepted");
     ota_abort();

@@ -136,9 +136,9 @@ jobs:
           # which gateware goes with this firmware, and what hardware test it passed
           cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
-      # Detached signed manifests next to each asset (docs/design/firmware-signing.md). Report
-      # only for now: pods, the server and the CLI check them and refuse nothing. Without the
-      # secret the release is published unsigned, exactly as before.
+      # Detached signed manifests next to each asset (docs/design/firmware-signing.md). Pods set
+      # to "required" refuse unsigned updates, so a release without signatures is a failed
+      # release: the job stops here when the secret is missing.
       - name: Sign
         id: sign
         env:
@@ -147,9 +147,8 @@ jobs:
         working-directory: stm32h563/build
         run: |
           if [ -z "$FW_SIGNING_KEY" ]; then
-            echo "::warning::FW_SIGNING_KEY is not set: publishing without signatures"
-            echo "assets=" >> "$GITHUB_OUTPUT"
-            exit 0
+            echo "::error::FW_SIGNING_KEY is not set in the release environment: refusing to publish an unsigned release"
+            exit 1
           fi
           python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography
           FWSIGN="python3 ../../tools/fwsign.py"

@@ -62,6 +62,8 @@ bool clock_on_hsi(void);   /* main.c */
 #include "ota.h"
 #include "upload_rx.h"
 #include "flash_layout.h"
+#include "pod_policy.h"
+#include "fw_sign.h"
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 
@@ -177,6 +179,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
         "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
         "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
+        "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
+        "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -910,6 +914,24 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  flash-ice40 failed (see device log)\r\n");
             }
         }
+    } else if (!strcmp(argv[0], "sig-policy")) {
+        /* The USB console may set any value: it is the way back from "required" (pod_policy.h). */
+        const char *why = NULL;
+        if (argc >= 2) {
+            int p = pod_policy_sig_from_name(argv[1]);
+            why = p < 0 ? "use audit, permissive or required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
+        }
+        if (why) op(out, ctx, "sig-policy error %s\r\n", why);
+        else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
+                    (unsigned)fw_sign_key_count());
+    } else if (!strcmp(argv[0], "lan-policy")) {
+        const char *why = NULL;
+        if (argc >= 2) {
+            int p = pod_policy_lan_from_name(argv[1]);
+            why = p < 0 ? "use open, locked or off" : pod_policy_set_lan((pod_lan_policy_t)p, POLICY_SRC_USB);
+        }
+        if (why) op(out, ctx, "lan-policy error %s\r\n", why);
+        else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
     } else if (!strcmp(argv[0], "upload-sig")) {
         /* The image's signed manifest (fw_sign.h), 171 base64url characters, does not fit one
            console line next to upload-begin: it comes first, in two halves (part 0 then 1),

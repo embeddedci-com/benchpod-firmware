@@ -41,6 +41,7 @@
 #include "ice40_flash.h"
 #include "version.h"
 #include "dac_limits.h"
+#include "pod_policy.h"
 #include "adc_cal.h"
 #include "blob_store.h"
 
@@ -173,6 +174,7 @@ int main(void)
         analog_switch_init(); /* U55 DAC mux + U58 cal switching, all off */
     dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */
     adc_cal_load();         /* per-pod ADC calibration, on top of cal_data.h (adc_cal.h) */
+    pod_policy_load();      /* signature + LAN policy, before OTA or the LAN listener (pod_policy.h) */
     can_bus_init();         /* FDCAN1 term GPIO safe (core stays down until can_config) */
     boot_guard_stage(BOOT_STAGE_IDENTITY);
     device_identity_init(); /* Ed25519 identity (internal flash + RNG) */

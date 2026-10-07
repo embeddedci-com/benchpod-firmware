@@ -101,6 +101,8 @@ The `<la>` argument is a **Logic-Analyzer channel index (1..12)** driven by the 
 | `blobs` | One `blob` line per W25Q blob slot (gw0, gw1, esp): state against this firmware, size, version, SHA-256. Then a `fw-copy` line: the firmware image the last OTA install stored in the W25Q (size and SHA-256 prefix), or `fw-copy none`. |
 | `upload-begin <firmware\|gw0\|gw1\|esp> <size> <sha256> [version]` | Start an upload over this console (then `upload-data <off> <len<=512> <crc32>` + raw bytes, `upload-end`, `upload-commit`, `upload-status`, `upload-abort`; see `src/upload_rx.h`). `benchpod install-blobs` drives it. |
 | `upload-sig <0\|1> <base64url>`, `upload-sig`, `upload-sig clear` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Report only in this firmware: nothing is refused because of it. Older firmware answers "unknown command", which is how installers tell. |
+| `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts (`docs/API.md`, Pod policies). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
+| `lan-policy [open\|locked\|off]` | Show or set what the LAN API may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` stops the TCP listener and mDNS until set back. |
 
 #### I²C peripherals (v2: INA238 ×2 / TCA9554 ×4; analog DAC = DAC8551)
 

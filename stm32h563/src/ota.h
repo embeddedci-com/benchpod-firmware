@@ -8,7 +8,7 @@
 /*
  * ota — hostless firmware update, staged in external PSRAM.
  *
- * The firmware image (~0.5 MB; it must fit the 1 MB H563's 928 KB code area) is
+ * The firmware image (~0.5 MB; it must fit the 1 MB H563's 912 KB code area) is
  * streamed into the 8 MB PSRAM, its SHA-256 verified, then a RAM-resident routine
  * erases + rewrites the internal flash from PSRAM and resets.  The same staging
  * carries the blobs (ESP32-C3 image, iCE40 gateware) to their W25Q slots.
@@ -27,12 +27,12 @@
  */
 
 /* Max image we will accept: everything below the persistence sectors at the top of flash
-   (flash_layout.h): 0x1E8000 on a 2 MB part, 0x0E8000 on a 1 MB part.  There sit the per-pod
+   (flash_layout.h): 0x1E4000 on a 2 MB part, 0x0E4000 on a 1 MB part.  There sit the pod policy, the per-pod
    ADC calibration (adc_cal.h), the DAC output limits (dac_limits.h), the OTA self-test scratch
    sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY KEY; ota_commit erases and
    rewrites up to the image size, so a larger image would wipe them, and a pod without its key
    cannot authenticate to the cloud again.  OTA_MAX_SIZE is the 2 MB part's limit. */
-#define OTA_MAX_SIZE   0x1E8000u   /* 1952 KB */
+#define OTA_MAX_SIZE   0x1E4000u   /* 1936 KB */
 uint32_t ota_max_size(void);
 
 typedef enum {

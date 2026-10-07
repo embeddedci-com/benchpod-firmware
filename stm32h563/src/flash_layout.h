@@ -1,11 +1,12 @@
 /*
  * flash_layout.h — one firmware for the STM32H563 with 2 MB (ZIT6) or 1 MB (ZGT6) of flash.
  *
- * The persistence offsets (adc_cal.h, dac_limits.h, cloud_config.h, config_store.h,
+ * The persistence offsets (pod_policy.h, adc_cal.h, dac_limits.h, cloud_config.h, config_store.h,
  * device_identity.c, the OTA self-test scratch) are written for the 2 MB part: they sit in
- * its top 96 KB, 0x1E8000..0x1FFFFF. flash_compat maps every such offset to the same distance
+ * its top 112 KB, 0x1E4000..0x1FFFFF (the pod policy took 0x1E4000..0x1E7FFF, below the
+ * older records, which did not move). flash_compat maps every such offset to the same distance
  * from the END of the flash this chip actually has. On a 2 MB pod the mapping is the identity,
- * so no record moves; on a 1 MB pod the same records live in 0x0E8000..0x0FFFFF.
+ * so no record moves; on a 1 MB pod the same records live in 0x0E4000..0x0FFFFF.
  *
  * The size comes from the chip's flash-size register, read as a 32-bit word: a narrower read
  * of this OTP area is a precise bus fault on the H5.
@@ -16,7 +17,7 @@
 #include <stdint.h>
 
 #define FLASH_LAYOUT_REF_SIZE    0x200000u   /* the 2 MB part the offsets are written for */
-#define FLASH_LAYOUT_STORE_BASE  0x1E8000u   /* lowest persistence offset (ADC cal slot B) */
+#define FLASH_LAYOUT_STORE_BASE  0x1E4000u   /* lowest persistence offset (pod policy slot B) */
 #define FLASH_LAYOUT_SIZE_1MB    0x100000u
 #define FLASH_LAYOUT_SIZE_2MB    0x200000u
 

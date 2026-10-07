@@ -43,16 +43,17 @@ _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Memories definition */
 /* One image for the 2 MB H563 (ZIT6) and the 1 MB one (ZGT6): the code may use the 1 MB part's
- * flash up to its persistence sectors, 0x080E8000, so the same binary fits both and the link
+ * flash up to its persistence sectors, 0x080E4000 (912 KB; 928 KB before the pod policy record
+ * took two sectors below the others), so the same binary fits both and the link
  * fails with "region FLASH overflowed" before it could grow into them.  The persistence records
- * (ADC calibration, DAC limits, OTA self-test scratch, cloud and Wi-Fi config, device identity)
+ * (pod policy, ADC calibration, DAC limits, OTA self-test scratch, cloud and Wi-Fi config, device identity)
  * sit in the top 96 KB of whichever flash the chip has (src/flash_layout.h); on a 2 MB part the
- * flash between 0x080E8000 and those records is unused.  The ESP32-C3 image and the iCE40
+ * flash between 0x080E4000 and those records is unused.  The ESP32-C3 image and the iCE40
  * gateware live in the W25Q (src/blob_store.h), not here. */
 MEMORY
 {
   RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K
-  FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 928K
+  FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 912K
 }
 
 /* Sections */

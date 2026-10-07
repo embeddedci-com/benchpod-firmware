@@ -5,6 +5,7 @@
 #include "dac_limits.h"
 #include "cloud_config.h"
 #include "config_store.h"
+#include "pod_policy.h"
 #include <stdio.h>
 
 static int fails = 0;
@@ -14,6 +15,8 @@ static int fails = 0;
 /* Every persistence offset, as written for the 2 MB part. The identity record and the OTA
    self-test scratch are private to their .c files; their values are repeated here. */
 static const struct { const char *name; uint32_t off; } k_stores[] = {
+    { "pod-policy B",   POD_POLICY_SLOT_B_OFFSET },
+    { "pod-policy A",   POD_POLICY_SLOT_A_OFFSET },
     { "adc-cal B",      ADC_CAL_SLOT_B_OFFSET },
     { "adc-cal A",      ADC_CAL_SLOT_A_OFFSET },
     { "dac-limits B",   DAC_LIMITS_SLOT_B_OFFSET },
@@ -41,8 +44,8 @@ int main(void) {
               k_stores[i].name, (unsigned)off, (unsigned)two);
         CHECK(one == off - 0x100000u, "%s on a 1 MB part is 0x%06x, want 0x%06x",
               k_stores[i].name, (unsigned)one, (unsigned)(off - 0x100000u));
-        CHECK(one >= 0x0E8000u && one < FLASH_LAYOUT_SIZE_1MB && (one % 0x2000u) == 0u,
-              "%s on a 1 MB part is not a sector in its top 96 KB: 0x%06x",
+        CHECK(one >= 0x0E4000u && one < FLASH_LAYOUT_SIZE_1MB && (one % 0x2000u) == 0u,
+              "%s on a 1 MB part is not a sector in its top 112 KB: 0x%06x",
               k_stores[i].name, (unsigned)one);
         for (unsigned j = 0; j < i; j++)
             CHECK(k_stores[j].off != off, "%s and %s share a sector", k_stores[i].name, k_stores[j].name);
@@ -50,9 +53,12 @@ int main(void) {
 
     /* Offsets below the persistence area are not remapped. */
     CHECK(flash_layout_map(0x000000u, FLASH_LAYOUT_SIZE_1MB) == 0x000000u, "offset 0 remapped");
-    CHECK(flash_layout_map(0x1E7FF0u, FLASH_LAYOUT_SIZE_1MB) == 0x1E7FF0u, "offset below the store remapped");
-    /* The lowest store sits on the 2 MB part's FLASH_BLOBS end and on the 1 MB part's 928 KB code end. */
-    CHECK(flash_layout_map(FLASH_LAYOUT_STORE_BASE, FLASH_LAYOUT_SIZE_1MB) == 0x0E8000u, "1 MB store base");
+    CHECK(flash_layout_map(0x1E3FF0u, FLASH_LAYOUT_SIZE_1MB) == 0x1E3FF0u, "offset below the store remapped");
+    /* The older records did not move: ADC cal B is still where pods have it. */
+    CHECK(flash_layout_map(ADC_CAL_SLOT_B_OFFSET, FLASH_LAYOUT_SIZE_2MB) == 0x1E8000u &&
+          flash_layout_map(ADC_CAL_SLOT_B_OFFSET, FLASH_LAYOUT_SIZE_1MB) == 0x0E8000u, "ADC cal moved");
+    /* The lowest store sits right above the 1 MB part's 912 KB code end. */
+    CHECK(flash_layout_map(FLASH_LAYOUT_STORE_BASE, FLASH_LAYOUT_SIZE_1MB) == 0x0E4000u, "1 MB store base");
 
     if (fails) { printf("test_flash_layout: %d FAILED\n", fails); return 1; }
     printf("test_flash_layout: all passed\n");

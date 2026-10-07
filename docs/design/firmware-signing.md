@@ -198,6 +198,8 @@ Branch `fw-signing` in benchpod-firmware, embeddedci-server and benchpod-cli; hw
 | 10 | `fw_sign.c` + OTA: `sig` on `ota_begin`/`ota.begin`, `upload-sig` on USB, results in the status replies, `ota_sig`/`sig_policy` capabilities, fw_info `FW_INFO_FLAG_ENFORCES_SIG` (no image sets it yet) | firmware |
 | 11 | `hwe2e/benchpod_ota_sig_hw_test.go` | server hwe2e |
 
-To turn enforcement on later: add a policy command (cloud and USB may tighten, only USB may
-relax), persist it, set `FW_INFO_FLAG_ENFORCES_SIG` in that release's fw_info, and have the
-server push `required` after a pod's first `sig: ok` install.
+Enforcement (branch `policy-enforce`, docs/design/policy-commands.md): the persisted
+`sig_policy` command (cloud may tighten, USB may set anything, LAN nothing), the fw_info
+`FW_INFO_FLAG_ENFORCES_SIG` flag, release CI refusing to publish unsigned, and the server's
+"Require signed firmware" org setting that pushes `required` after a pod's first `sig: ok`
+install.

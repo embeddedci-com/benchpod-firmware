@@ -154,9 +154,11 @@ static void test_stays_in_its_sectors(void) {
     adc_cal_load();
     adc_reading_t open = burst(65529, 65529);
     CHECK(adc_cal_current_in_store(&open) == NULL && adc_cal_clear() == 0 && adc_cal_current_in_store(&open) == NULL, "setup");
-    CHECK(ADC_CAL_SLOT_B_OFFSET == MOCK_FLASH_BASE_OFF && ADC_CAL_SLOT_A_OFFSET == 0x1EA000u, "slot offsets moved");
-    for (uint32_t off = 0x1EC000u; off < MOCK_FLASH_BASE_OFF + MOCK_FLASH_BYTES; off++)
+    CHECK(ADC_CAL_SLOT_B_OFFSET == 0x1E8000u && ADC_CAL_SLOT_A_OFFSET == 0x1EA000u, "slot offsets moved");
+    for (uint32_t off = MOCK_FLASH_BASE_OFF; off < MOCK_FLASH_BASE_OFF + MOCK_FLASH_BYTES; off++) {
+        if (off == ADC_CAL_SLOT_B_OFFSET) { off = 0x1EC000u - 1u; continue; }   /* its two sectors */
         if (*mock_flash_ptr(off) != 0xFF) { CHECK(0, "wrote outside its sectors at 0x%lx", (unsigned long)off); break; }
+    }
 }
 
 /* The compiled-in fits are per board revision (cal_data.c). rev3 has its own, anything else
