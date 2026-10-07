@@ -12,6 +12,9 @@
  * Shared-bus arbitration with the iCE40 (which writes captures into the PSRAM):
  * psram_bus_acquire() drives PG0 high + restores the OCTOSPI/CS pins;
  * psram_bus_release() tristates them + drops PG0 so the iCE40 can drive.
+ * The STM32 side has an owner token and a depth (bus_owner.h): nested acquires by the holder
+ * only count, so an inner w25q_open/close no longer hands the bus away under an outer holder,
+ * and a take by another task is counted and logged (psram_bus_violations).
  *
  * Command set: reset 0x66/0x99, read-ID 0x9F (single SPI); QPI enable 0x35;
  * then quad read 0xEB (6 dummy) / quad write 0x38 (QPI).  ⚠ The exact dummy
@@ -25,6 +28,10 @@
 #include "stm32h5xx_hal.h"
 #include "xfer.h"        /* XFER_OK */
 #include "dma_wait.h"    /* GPDMA completion for the read data phase */
+#include "bus_owner.h"   /* owner token + depth for the shared bus */
+#include "psram_regions.h"   /* an STM32 write may land on the last capture */
+#include "FreeRTOS.h"
+#include "task.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -62,6 +69,10 @@ static bool              s_psram_dma_ok;
 
 void *psram_xspi(void) { return &hxspi; }
 
+/* From the OCTOSPI1 completion ISR (dma_wait.h on_done): the read is complete, end the CS-low
+   window now instead of when the waiting task next gets the CPU. */
+static void psram_dma_done(void) { HAL_GPIO_WritePin(PSRAM_CS_PORT, PSRAM_CS_PIN, GPIO_PIN_SET); }
+
 #define CS_LOW()   HAL_GPIO_WritePin(PSRAM_CS_PORT, PSRAM_CS_PIN, GPIO_PIN_RESET)
 #define CS_HIGH()  HAL_GPIO_WritePin(PSRAM_CS_PORT, PSRAM_CS_PIN, GPIO_PIN_SET)
 
@@ -81,7 +92,8 @@ static void octospi_pins(int af)   /* SCLK + IO0..3 as AF (drive) or analog (Hi-
     g.Pin = XSPI_IO3_PIN; HAL_GPIO_Init(XSPI_IO3_PORT, &g);
 }
 
-void psram_bus_acquire(void)
+/* The pins alone: the STM32 drives the bus (PG0 high, OCTOSPI AF, PSRAM CS driven high). */
+static void pins_to_stm32(void)
 {
     GPIO_InitTypeDef g = {0};
     HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_SET);  /* PG0=1 */
@@ -93,7 +105,8 @@ void psram_bus_acquire(void)
     CS_HIGH();
 }
 
-void psram_bus_release(void)
+/* The pins alone: tristate the STM32 side and drop PG0 so the iCE40 drives. */
+static void pins_to_ice40(void)
 {
     GPIO_InitTypeDef g = {0};
     octospi_pins(0);                                   /* SCLK/IO -> Hi-Z */
@@ -101,6 +114,55 @@ void psram_bus_release(void)
     g.Pin = PSRAM_CS_PIN; HAL_GPIO_Init(PSRAM_CS_PORT, &g);  /* PSRAM CS -> Hi-Z */
     HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_RESET); /* PG0=0 */
 }
+
+/* ---- owner token + depth (bus_owner.h) ----------------------------------
+   Every STM32 user is on the hw worker task, so a take from another task is a bug, not a race
+   to arbitrate: it is counted and logged (with the caller's address) rather than asserted, since
+   resetting the pod mid-capture would be worse than the transfer it might corrupt. */
+static bus_owner_t s_bus;
+#define BUS_LOG_MAX 8u          /* log the first few violations, then only count them */
+
+static const void *bus_token(void)
+{
+    return xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED ? NULL
+                                                                  : (const void *)xTaskGetCurrentTaskHandle();
+}
+
+static void bus_note(uint32_t before, const char *what, void *caller)
+{
+    if (s_bus.violations == before || s_bus.violations > BUS_LOG_MAX) return;
+    printf("[psram] bus %s broke the ownership rules (depth %u, caller %p, %lu so far)\n",
+           what, (unsigned)s_bus.depth, caller, (unsigned long)s_bus.violations);
+}
+
+void psram_bus_acquire(void)
+{
+    uint32_t v = s_bus.violations;
+    if (bus_owner_take(&s_bus, bus_token())) pins_to_stm32();
+    bus_note(v, "acquire", __builtin_return_address(0));
+}
+
+void psram_bus_release(void)
+{
+    uint32_t v = s_bus.violations;
+    if (bus_owner_give(&s_bus, bus_token())) pins_to_ice40();
+    bus_note(v, "release", __builtin_return_address(0));
+}
+
+void psram_bus_handover(void)
+{
+    uint32_t v = s_bus.violations;
+    int dropped = bus_owner_handover(&s_bus);
+    pins_to_ice40();
+    if (dropped && s_bus.violations != v && s_bus.violations <= BUS_LOG_MAX)
+        printf("[psram] bus handed to the iCE40 with %d hold(s) still open (caller %p)\n",
+               dropped, __builtin_return_address(0));
+}
+
+void psram_bus_park(void) { pins_to_stm32(); }
+
+uint32_t psram_bus_violations(void) { return s_bus.violations; }
+unsigned psram_bus_depth(void)      { return s_bus.depth; }
 
 /* Park the PSRAM chip-select DRIVEN HIGH (deselected) with SCLK/IO left tristated.  Used
  * during an iCE40 WARMBOOT: the config flash and PSRAM share SCLK/SO/SI (see the .pcf),
@@ -158,7 +220,7 @@ uint8_t psram_bus_read_lines(void)
 
 void psram_ce_probe_end(void)
 {
-    psram_bus_acquire();   /* restore: PG0=1, OCTOSPI AF, PE4 driven high */
+    pins_to_stm32();       /* restore: PG0=1, OCTOSPI AF, PE4 driven high */
 }
 
 /* ---- low-level OCTOSPI indirect transfer (GPIO-CS framed) -------------
@@ -190,25 +252,35 @@ static int xspi_xfer(uint8_t instr, uint32_t inst_mode, uint32_t addr_mode,
     c.DataLength = len;
     c.DummyCycles = dummy;
 
+    /* tCEM: the APS6404L must see CS high within ~8 us. A task switch while CS is low (the
+       worker is a low-priority task) used to stretch that to a whole time slice or more, so the
+       scheduler is held off from CS-low until the data phase is either done (blocking) or
+       running on DMA, whose completion ISR raises CS itself (psram_dma_done). Interrupts still
+       run; they are microseconds. */
+    const bool sched = dma_sched_ready();
+    const bool use_dma = is_read && s_psram_dma_ok && len >= PSRAM_DMA_MIN && sched;
+    if (use_dma) dma_wait_arm(&s_psram_waiter);
+    if (sched) vTaskSuspendAll();
     CS_LOW();
     HAL_StatusTypeDef s = HAL_XSPI_Command(&hxspi, &c, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
+    bool dma_started = false;
     if (s == HAL_OK && len) {
-        if (is_read && s_psram_dma_ok && len >= PSRAM_DMA_MIN && dma_sched_ready()) {
-            dma_wait_arm(&s_psram_waiter);
-            if (HAL_XSPI_Receive_DMA(&hxspi, buf) == HAL_OK) {
-                if (dma_wait_block(&s_psram_waiter, 100) != XFER_OK) {
-                    HAL_XSPI_Abort(&hxspi);
-                    s = HAL_ERROR;
-                }
-            } else {   /* couldn't start DMA — fall back to blocking */
+        if (use_dma) {
+            dma_started = HAL_XSPI_Receive_DMA(&hxspi, buf) == HAL_OK;
+            if (!dma_started)   /* couldn't start DMA — fall back to blocking */
                 s = HAL_XSPI_Receive(&hxspi, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
-            }
         } else {
             s = is_read ? HAL_XSPI_Receive(&hxspi, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE)
                         : HAL_XSPI_Transmit(&hxspi, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
         }
     }
-    CS_HIGH();
+    if (!dma_started) CS_HIGH();
+    if (sched) (void)xTaskResumeAll();
+    if (dma_started && dma_wait_block(&s_psram_waiter, 100) != XFER_OK) {
+        HAL_XSPI_Abort(&hxspi);
+        s = HAL_ERROR;
+    }
+    CS_HIGH();   /* already high after DMA (the ISR raised it); covers the abort path */
     return (s == HAL_OK) ? 0 : -1;
 }
 
@@ -227,7 +299,7 @@ static int cmd_simple(uint8_t instr)   /* single-line, instruction only */
  * psram_init() after the warmboot to put it back in QPI for the gateware. */
 void psram_reset_to_spi(void)
 {
-    psram_bus_acquire();                            /* STM32 owns the bus; OCTOSPI AF; /CS driven */
+    pins_to_stm32();                                /* STM32 owns the bus; OCTOSPI AF; /CS driven */
     xspi_xfer(0x66, HAL_XSPI_INSTRUCTION_4_LINES, HAL_XSPI_ADDRESS_NONE, 0,
               HAL_XSPI_DATA_NONE, 0, NULL, 0, 0);   /* QPI RSTEN (recovers a QPI-stuck part) */
     xspi_xfer(0x99, HAL_XSPI_INSTRUCTION_4_LINES, HAL_XSPI_ADDRESS_NONE, 0,
@@ -253,6 +325,7 @@ int psram_read(uint32_t addr, uint8_t *buf, uint32_t len)   /* QPI 0xEB, chunked
 
 int psram_write(uint32_t addr, const uint8_t *buf, uint32_t len)  /* QPI 0x38; bus must be acquired */
 {
+    psram_regions_dirty(addr, len, "a PSRAM write by the firmware");   /* callers may name it first */
     for (uint32_t off = 0; off < len; off += TCEM_CHUNK_WRITE) {
         uint32_t n = (len - off < TCEM_CHUNK_WRITE) ? (len - off) : TCEM_CHUNK_WRITE;
         if (xspi_xfer(0x38, HAL_XSPI_INSTRUCTION_4_LINES, HAL_XSPI_ADDRESS_4_LINES,
@@ -280,7 +353,7 @@ int psram_init(void)
     g.Pin = ICE_FLASH_CS_PIN; HAL_GPIO_Init(ICE_FLASH_CS_PORT, &g);
     HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_SET);
 
-    psram_bus_acquire();   /* OCTOSPI pins -> AF, PSRAM CS -> driven high */
+    pins_to_stm32();       /* OCTOSPI pins -> AF, PSRAM CS -> driven high */
 
     /* OCTOSPI1 kernel clock = HCLK (250 MHz). */
     pclk.PeriphClockSelection = RCC_PERIPHCLK_OSPI;
@@ -362,6 +435,7 @@ int psram_init(void)
                                   DMA_PERIPH_TO_MEMORY, GPDMA1_Channel4_IRQn) == 0) {
             __HAL_LINKDMA(&hxspi, hdmarx, hdma_psram);
             dma_wait_setup(&s_psram_waiter, OCTOSPI1);
+            s_psram_waiter.on_done = psram_dma_done;   /* CS high the moment the data is in */
             HAL_NVIC_SetPriority(OCTOSPI1_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
             HAL_NVIC_EnableIRQ(OCTOSPI1_IRQn);
             s_psram_dma_ok = true;
@@ -502,7 +576,7 @@ int psram_diag(void)
 
     /* Hand the bus back and release the iCE40 (PG0 low BEFORE CRESET high, else
        the iCE40 wakes into a bus it can't read its own config flash on). */
-    psram_bus_release();
+    psram_bus_handover();
     HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);
     printf("[psram-diag] iCE40 released (reconfigures from flash)\n");
     return rc;

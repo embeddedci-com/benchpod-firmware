@@ -54,6 +54,18 @@ void *psram_xspi(void);
    OCTOSPI pins and drops PG0 so the iCE40 can drive the bus during a capture. */
 void psram_bus_acquire(void);
 void psram_bus_release(void);
+/* acquire/release carry an owner token (the calling task) and a depth: a nested acquire by the
+   holder only counts, and only the outermost release hands the bus to the iCE40. A release with
+   nothing held still hands it over (older "give the bus to the iCE40" call sites). */
+/* The iCE40 must own the bus now (a capture or replay is about to start, or it must read its
+   config): drop every hold and release the pins. A hold still open here is logged and counted. */
+void psram_bus_handover(void);
+/* Drive the bus from the STM32 without recording a hold: the init/reset paths that leave the
+   bus with the STM32 until the next handover (psram_init does this internally). */
+void psram_bus_park(void);
+/* Ownership rule breaks so far (a take or give by another task, a hold dropped by a handover). */
+uint32_t psram_bus_violations(void);
+unsigned psram_bus_depth(void);
 /* Hold the PSRAM /CS driven high (deselected) with SCLK/IO tristated — for an iCE40
    warmboot so the PSRAM doesn't corrupt the shared-bus config-flash read. */
 void psram_cs_park_high(void);

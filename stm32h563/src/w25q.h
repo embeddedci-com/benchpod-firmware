@@ -27,6 +27,14 @@ int  w25q_open(void);
 /* Deselect the flash, put its chip-select back to Hi-Z and release the bus. */
 void w25q_close(void);
 
+/* A W25Q session for code that runs while the gateware may be live (OTA blob installs, the
+   company CA and proxy, the ESP32-C3 reflash): quiesce the gateware's PSRAM masters, then
+   w25q_open. Every runtime W25Q writer goes through this pair, so none can grab the bus in the
+   middle of a DAC replay burst. The caller must also make sure no capture or upload owns the bus
+   (heavy_or_claimed): quiescing stops a DAC, it does not wait for a capture to be read back. */
+int  w25q_session_open(void);
+void w25q_session_close(void);
+
 /* Chip-select pin as a driven output, high (deselected). Used by w25q_open and ice40_flash. */
 void w25q_cs_output(void);
 /* Release deep power-down (0xAB). */

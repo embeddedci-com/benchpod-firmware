@@ -10,6 +10,7 @@ int     mock_w25q_bad_programs;
 int     mock_w25q_cut_after;
 int     mock_w25q_fail_read;
 int     mock_w25q_open_depth;
+int     mock_w25q_sessions;
 jmp_buf mock_w25q_power_jmp;
 
 void mock_w25q_reset(void)
@@ -21,6 +22,7 @@ void mock_w25q_reset(void)
     mock_w25q_cut_after = 0;
     mock_w25q_fail_read = 0;
     mock_w25q_open_depth = 0;
+    mock_w25q_sessions = 0;
 }
 
 /* One flash operation: may be the one the power cut lands on. */
@@ -32,6 +34,8 @@ static void step(void)
 
 int  w25q_open(void)  { mock_w25q_open_depth++; return 0; }
 void w25q_close(void) { mock_w25q_open_depth--; }
+int  w25q_session_open(void)  { mock_w25q_sessions++; return w25q_open(); }
+void w25q_session_close(void) { w25q_close(); }
 void w25q_cs_output(void) {}
 void w25q_wake(void) {}
 

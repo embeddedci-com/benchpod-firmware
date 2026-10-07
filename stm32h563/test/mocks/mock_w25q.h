@@ -17,6 +17,7 @@ extern int     mock_w25q_bad_programs;     /* programs that tried to set a 0 bit
 extern int     mock_w25q_cut_after;        /* power cut after this many more ops (0 = off) */
 extern int     mock_w25q_fail_read;        /* make every read fail */
 extern int     mock_w25q_open_depth;
+extern int     mock_w25q_sessions;        /* w25q_session_open calls (quiesce + open) */
 extern jmp_buf mock_w25q_power_jmp;
 
 void mock_w25q_reset(void);               /* erased, W25Q64 ID, counters cleared */
