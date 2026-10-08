@@ -27,8 +27,8 @@ jobs:
       matrix:
         image: [loop, deep]
     steps:
-      - uses: actions/checkout@v7
-      - uses: YosysHQ/setup-oss-cad-suite@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
           version: '2026-05-13'   # keep in step with test.yml
       - name: Synthesize
@@ -38,7 +38,7 @@ jobs:
           sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
             "${{ inputs.first }}" "${{ inputs.last }}" | tee sweep.txt
           { echo '### ${{ matrix.image }}'; echo '```'; cat sweep.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sweep-${{ matrix.image }}
           path: |

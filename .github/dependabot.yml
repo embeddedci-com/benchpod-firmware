@@ -1,0 +1,15 @@
+# Version updates for the workflow actions (weekly) and the vendored git submodules (monthly; each
+# bump needs a build and a bench run before it merges). Security updates arrive on their own.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: monthly
