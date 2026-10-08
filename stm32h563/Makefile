@@ -141,6 +141,7 @@ C_SOURCES := \
   src/cmd_gate.c \
   src/pod_policy.c \
   src/lease_gate.c \
+  src/net_reload.c \
   src/cloud_extras.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
