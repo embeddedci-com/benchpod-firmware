@@ -91,6 +91,7 @@ void handle_test(int conn_id, const char *json);
 void handle_measure(int conn_id, const char *json);
 void handle_load(int conn_id, const char *json);
 void handle_load_bin(int conn_id, const char *json);
+int  load_bin_owner(void);                    /* the conn streaming a load_bin upload, or -1 */
 void handle_replay(int conn_id, const char *json);
 void handle_dac_stop(int conn_id, const char *json);
 void handle_dac_limits(int conn_id, const char *json);
@@ -110,7 +111,6 @@ void handle_sensor_status(int conn_id, const char *json);
 void handle_sensor_regs(int conn_id, const char *json);
 void handle_sensor_la(int conn_id, const char *json);
 void handle_la_capture(int conn_id, const char *json);
-void handle_uart_proxy_start(int conn_id, const char *json);
 void handle_la_voltage(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 void handle_nrst(int conn_id, const char *json);
@@ -143,6 +143,15 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* UART transparent proxy (command_handler_uart.c). */
+void   handle_uart_proxy_start(int conn_id, const char *json);
+/* The PROTO_UART receive path: forwards buf to the DUT and watches for the +++ escape. */
+size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
+void   uart_proxy_poll(void);                 /* DUT -> client drain and the escape's guard */
+void   uart_rearm_poll(void);                 /* re-arm a session kept across a reconfiguration */
+void   uart_proxy_on_gateware_reconfigured(void);
+void   uart_proxy_conn_closed(int conn_id);
 
 /* LA pin ownership glue + handlers (command_handler_pins.c). */
 uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
