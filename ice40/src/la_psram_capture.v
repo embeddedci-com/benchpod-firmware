@@ -1,13 +1,11 @@
 // ============================================================================
 // la_psram_capture.v — deep multi-channel logic-analyzer sampler → PSRAM (v2).
 //
-// Companion to the retired la_capture.v, which packed the same LA word into
-// the small on-FPGA la_capture_buf SPRAM (≤4096 bytes ⇒ ≤2048 samples, read back
-// over SPI with LA_READ).  THIS module instead streams the samples straight into
-// the APS6404L PSRAM via psram_writer — reusing the v2 ADC→PSRAM datapath — so the
-// capture depth is bounded by PSRAM, not by a 4 KB BRAM.  The STM32 reads the
-// region back over its own XSPI (psram_read), exactly as it does for an ADC PSRAM
-// capture.  Driven by the LA_CAPTURE (0x69) opcode.
+// The LA producer of the unified capture: armed from OP_CAPTURE's la_cnt/la_div (the
+// standalone LA_CAPTURE 0x69 arm is retired since v40), it samples the LA word every
+// `divider` clocks and emits two bytes per sample on wr_data/wr_stb.  top_v2 feeds them
+// into the LA spram_ring16, which psram_dual_writer drains into the LA PSRAM region; the
+// STM32 reads the region back over its own XSPI.  Depth is bounded by PSRAM, not BRAM.
 //
 // Each sample is recorded as TWO little-endian bytes (N=14 on v2):
 //   byte 2k    = la_in[7:0]          (LA1..LA8)
@@ -15,22 +13,16 @@
 //
 // `sample_count` is the number of SAMPLES (2 bytes each); its width is the CNT_W
 // parameter (top_v2 uses 24-bit, so a single capture can span the full 8 MB PSRAM =
-// up to ~4.16M samples).  Sample period = `divider` clocks; the
-// divider / 2-byte-write cadence mirrors la_capture.v byte-for-byte so the two LA
-// paths produce identically-timed traces.
+// up to ~4.16M samples).  Sample period = `divider` clocks (24 MHz clk in top_v2, so
+// the floor of 2 is 12 MS/s).  `hold` (the v35 trigger) delays the run without
+// changing its timing.
 //
-// Runs on the 48 MHz capture clock (clk48) alongside the ADC-only orchestrator in
-// top_v2; its writer feed (ps_start/ps_stop/wr_data/wr_stb) is muxed into the same
-// psram_writer, and the three capture modes (ADC-only / correlated / LA) are
-// mutually exclusive (the firmware never arms one while another runs).
-//
-// THROUGHPUT CAVEAT: psram_writer DROPS bytes when its 64-byte FIFO is full
-// (wr_en = wr_stb && !full), and unlike the correlated path there is no spram_ring
-// in front of it here.  So the sustained sample rate must stay within the writer's
-// drain rate (~12 MB/s ⇒ a few MS/s at 2 B/sample); the firmware clamps the
-// divider accordingly.  `overflow` latches if a byte was ever pushed while full —
-// a diagnostic that the requested rate exceeded the writer.  NEEDS HARDWARE
-// VALIDATION before relying on long/fast captures (see psram_writer.v's note).
+// THROUGHPUT: `full` is the ring's input-full flag.  At 12 MS/s the producer outruns
+// the PSRAM drain, so a capture longer than the ring can buffer needs a slower rate;
+// the firmware picks it (stm32h563/src/la_rate.h).  `overflow` latches if a byte was
+// ever pushed while full, and top_v2 ORs it into STATUS bit 5 (cleared by the next arm).
+// The ps_start/ps_stop outputs are left unconnected in top_v2 (the unified trigger and
+// the drain controller drive the writer).
 // ============================================================================
 
 module la_psram_capture #(

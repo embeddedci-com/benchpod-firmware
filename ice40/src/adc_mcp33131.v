@@ -15,7 +15,7 @@
 // also needs the iCE40 internal pull-up enabled at the top level (defines the
 // idle level so a real driven-low read isn't masked).  `sample`/`sample_stb` stay
 // in this single 24 MHz domain — the capture datapath runs on the same clk, so
-// there is no crossing (post single-clock collapse; see docs/adc-capture-cdc-review.md).
+// there is no crossing (post single-clock collapse).
 // Verified: a DAC swept into the ADC input tracks linearly with ~2 LSB noise.
 // ============================================================================
 module adc_mcp33131 (

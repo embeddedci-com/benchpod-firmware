@@ -1,7 +1,7 @@
 // ============================================================================
 // spi_slave.v — SPI slave (mode 0) for the iCE40 signal-engine FPGA.
 //
-// Receives bytes from the RP2350 on MOSI, presents them as rx_byte + rx_valid
+// Receives bytes from the STM32H563 on MOSI, presents them as rx_byte + rx_valid
 // strobe to the cmd_dispatch FSM.  Shifts tx_byte out on MISO during the
 // 8 SCK cycles after each received byte.  CSn high resets the bit counter
 // and forces MISO high-Z (handled at top level).

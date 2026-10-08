@@ -3,12 +3,12 @@
 //
 // The bench pod can mock/bridge a DUT UART through two LA channels: this engine
 // serialises TX bytes onto `tx_out` (idle high, push-pull via la_bank) and
-// deserialises `rx_in` into bytes.  The RP2350 (SPI orchestrator) pushes TX
+// deserialises `rx_in` into bytes.  The STM32 (SPI orchestrator) pushes TX
 // bytes and drains RX bytes over SPI (cmd_dispatch opcodes 0x70-0x74) and
 // bridges them to the console / a TCP client.
 //
 // Frame: 8 data bits, no parity, 1 stop bit (8N1).  The bit period in system
-// clocks is supplied as `cfg_div` (the RP computes round(24 MHz / baud) so the
+// clocks is supplied as `cfg_div` (the STM32 computes round(24 MHz / baud) so the
 // FPGA needs no divider).  RX uses mid-bit sampling: on the start edge it waits
 // half a bit to the middle of the start bit (re-checking it is still low to
 // reject glitches), then one full bit period to the middle of each data bit.

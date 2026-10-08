@@ -8,56 +8,13 @@
 //   spi_slave shifts them out on MISO during the next read cycles.
 //   CSn↑ resets back to IDLE.
 //
-// Commands (must match rp2350 signal_engine.c):
-//   -- signal engine (DAC/ADC) --
-//   0x01 PING            → returns 0xA5
-//   0x02 VERSION         → returns 1 byte version
-//   0x03 STATUS          → returns 1 byte flags
-//   0x10 LOAD_WAVE       [len_lo][len_hi][N data bytes]
-//   0x11 START_DAC       [period_lo][period_hi][div_lo][div_hi]
-//   0x12 STOP_DAC
-//   0x20 START_CAPTURE   [count_lo][count_hi][div_lo][div_hi]
-//   0x22 READ_CAPTURE    [len_lo][len_hi] → returns N bytes
-//   0x30 START_MEASURE   [count_lo][count_hi][div_lo][div_hi]
-//   0x31 START_CORRELATED [adc_cnt(2)][adc_div(2)][la_cnt(2)][la_div(2)]
-//                         ADC + I2C-LA merged into one tagged/timestamped PSRAM
-//                         stream (capture_merge -> spram_ring -> psram_writer;
-//                         record format in sim/capture_format.h)
-//   0x33 SET_TRIGGER     [channel][mode][flags]   (v35 capture trigger, see top_v2.v)
-//   0x34 TRIGGER_STATUS  → [status: bit0 waiting, bit1 fired since the arm]
-//   -- logic-analyzer GPIO bank (stepper + static, see la_bank/stepper_engine) --
-//   0x40 GPIO_SET        [channel][mode]            (mode 0=low,1=high,2=high-Z)
-//   0x41 GPIO_STEP       [channel][steps(2)][delay_us(2)]   (16-bit each, LE)
-//   0x43 GPIO_GET        → 2 bytes LE: synchronised LA1..LA14 levels (v35)
-//   -- SWD bit-bang (see swd_engine) --
-//   0x50 SWD_ARM         [swclk_ch][swdio_ch][nreset_ch]   (nreset_ch ignored since v37; send 0xFF)
-//   0x51 SWD_FEED        [len_lo][len_hi][N remote_bitbang bytes]
-//   0x52 SWD_READ        [len_lo][len_hi] → returns N sample bytes ('0'/'1')
-//   0x53 SWD_DISARM
-//   -- SPI master (v44, the SWD engine's second job; SWD_FEED/SWD_READ move the data) --
-//   0x55 SPI_ARM         [sck_ch][mosi_ch][miso_ch][cs_ch][half][flags]  (flags bit0 = CPOL)
-//   0x56 SPI_CS          [level]   (1 = assert CS low, 0 = release high)
-//   0x57 SPI_STATUS      → [bit0 SPI armed, bit1 busy]
-//   -- SWD transfer queue (v45, see swd_engine) --
-//   0x58 SWD_QFEED       [len_lo][len_hi][transfers]   (the SWD_FEED path, into the queue)
-//   0x59 SWD_QCONFIG     [half][idle]
-//   0x5A SWD_QSTATUS     → [qptr_lo][flags]
-//   -- emulated I2C sensor (generic target + register file, see i2c_target) --
-//   0x60 I2C_SENSOR_CONFIG  [addr7][sda_ch][scl_ch][flags][trig_reg]
-//                           [busy_reg][busy_mask][conv_lo][conv_hi]
-//   0x61 I2C_SENSOR_DISABLE
-//   0x62 I2C_LOAD_REGS      [start_addr][len_lo][len_hi][N data bytes]
-//   0x63 I2C_READ_REGS      [start_addr][len_lo][len_hi] → returns N bytes
-//   0x64 I2C_SENSOR_STATUS  → 7 bytes: armed, xfer_lo, xfer_hi, wr_lo, wr_hi,
-//                              last_wr_addr, last_wr_val
-//   (0x65 I2C_LA_START / 0x66 I2C_LA_READ removed v24 — on-FPGA I2C-LA retired; sensor_la
-//    now uses the deep LA_CAPTURE 0x69 path + a firmware re-pack)
-//   -- UART proxy (soft UART on two LA channels, see uart_engine) --
-//   0x70 UART_CONFIG        [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]
-//   0x71 UART_DISABLE
-//   0x72 UART_WRITE         [len_lo][len_hi][N data bytes]   → TX FIFO
-//   0x73 UART_READ          [len_lo][len_hi] → returns N bytes from RX FIFO
-//   0x74 UART_STATUS        → 3 bytes: rx_avail_lo, rx_avail_hi, flags
+// Commands: the opcode values come from cmd_opcodes.vh and the payload/reply of each
+// one is documented in ice40/PROTOCOL.md, both generated from the single table in
+// tools/gen_protocol.py (the firmware's cmd_opcodes.h comes from the same table).  This
+// header used to repeat that list and drifted from it; the case items below carry the
+// per-command notes.  Since v40 CAPTURE (0x31) is the only capture arm: START_CAPTURE
+// 0x20, START_MEASURE 0x30 and LA_CAPTURE 0x69 fall to `default` and are ignored, as
+// are the retired opcodes listed at the end of PROTOCOL.md.
 // ============================================================================
 
 module cmd_dispatch #(
@@ -168,9 +125,9 @@ module cmd_dispatch #(
     input  wire              dac_running,
     input  wire              cap_busy,
     input  wire              cap_done,
-    // Sticky "a PSRAM-path capture lost bytes" flag (v2: OR of the ADC/correlated/
-    // deep-LA writer + ring overflow diagnostics; cleared when the next capture is
-    // armed).  v1 ties this 0.  Surfaced as STATUS bit 5 so firmware can tell a
+    // Sticky "a PSRAM-path capture lost bytes" flag (OR of the ADC/LA writer and ring
+    // overflow diagnostics; cleared when the next capture is armed).  Surfaced as
+    // STATUS bit 5 so firmware can tell a
     // truncated/corrupt capture from a clean one.
     input  wire              cap_overflow,
     // Latched control-loop over-range trip (v30).  Surfaced as STATUS bit 6 rather than a
@@ -267,13 +224,12 @@ module cmd_dispatch #(
     // (The on-FPGA I2C-bus logic-analyzer capture — OP_I2C_LA_START 0x65 / OP_I2C_LA_READ
     //  0x66 → i2c_la_capture + la_capture_buf — was removed in v24 to reclaim ~150 LC + an
     //  SPRAM block.  The `sensor_la` feature now samples the two I2C pins via the general
-    //  deep-LA path (OP_LA_CAPTURE 0x69) and the firmware re-packs them into the same
+    //  LA capture path (OP_CAPTURE 0x31) and the firmware re-packs them into the same
     //  4-samples/byte layout, so the server/python decoder is unchanged.)
 
-    // ---- deep multi-channel LA capture into PSRAM (LA_CAPTURE, v2 only).  Its
-    //      own 16-bit sample count (depth bounded by PSRAM, not the 4 KB trace
-    //      buffer) + divider; top_v2 streams it through psram_writer.  v1 leaves
-    //      these outputs unconnected. ----
+    // ---- LA producer arm, from OP_CAPTURE's la_cnt/la_div: its own 24-bit sample
+    //      count (depth bounded by PSRAM) + divider; top_v2 streams it through the
+    //      LA ring into psram_dual_writer. ----
     output reg               la_cap_start,
     output wire [23:0]       la_cap_count,     // 24-bit: deep LA up to the full 8 MB PSRAM
     output reg  [15:0]       la_cap_divider,
@@ -310,9 +266,9 @@ module cmd_dispatch #(
     //   S_IDLE ── opcode byte ──┬─ instant (PING/VERSION/STATUS/STOP_DAC/
     //                           │   *_DISABLE/SWD_DISARM) ─► S_DONE
     //                           │
-    //                           ├─ fixed-len collect (START_DAC/CAPTURE/MEASURE,
-    //                           │   I2C_LA_START, GPIO_SET/STEP, SWD_ARM,
-    //                           │   I2C_CONFIG, UART_CONFIG, CAPTURE)
+    //                           ├─ fixed-len collect (START_DAC/START_DAC_PSRAM/
+    //                           │   START_DAC_LOOP, CAPTURE, SET_TRIGGER, GPIO_SET/STEP,
+    //                           │   SWD_ARM, SPI_ARM, I2C_CONFIG, UART_CONFIG, ...)
     //                           │   ─► S_COLLECT (decode on last byte) ─► S_DONE
     //                           │
     //                           ├─ length-prefixed stream ─► S_READ_LEN0→1, then
@@ -965,7 +921,7 @@ module cmd_dispatch #(
                                     // [channel][steps_lo][steps_hi][delay_lo][delay_hi(=rx_byte)]
                                     step_start   <= 1'b1;
                                 end
-                                // Unified capture: arm the ADC and the raw 12-ch LA
+                                // Unified capture: arm the ADC and the raw 14-ch LA
                                 // producers on the SAME cycle (shared t0), each with
                                 // its own count+divider -> two independent PSRAM
                                 // regions.  adc_cnt=0 => ADC not captured; la_cnt=0 =>
