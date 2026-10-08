@@ -187,9 +187,10 @@ static void cmd_help(console_out_t out, void *ctx)
         "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
-        "  ca | ca-clear                              company CA for the cloud link (upload-begin ca ...)\r\n"
+        "  cloud-ca | cloud-ca-clear                  company CA for the cloud link (upload-begin ca ...)\r\n"
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
-        "  proxy | proxy-set <host:port> [user pass] | proxy-clear   HTTP proxy for the cloud link\r\n"
+        "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
+        "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -433,6 +434,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     char *tok = strtok(cmd, " \t");
     while (tok && argc < 11) { argv[argc++] = tok; tok = strtok(NULL, " \t"); }
     if (argc == 0) return;
+    /* The cloud-link settings carry the JSON verbs' names (cloud_ca, cloud_proxy) on the console
+       too; the short names they started with keep working, and replies keep the short form. */
+    static const char *const aliases[][2] = {
+        { "cloud-ca", "ca" }, { "cloud-ca-clear", "ca-clear" }, { "cloud-proxy", "proxy" },
+        { "cloud-proxy-set", "proxy-set" }, { "cloud-proxy-clear", "proxy-clear" },
+    };
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
+        if (!strcmp(argv[0], aliases[i][0])) { argv[0] = (char *)aliases[i][1]; break; }
 
     const bool gated = console_needs_heavy_gate(argv[0]);
     if (gated && !command_handler_acquire_adc(CH_CONSOLE_TEXT_OWNER)) {
