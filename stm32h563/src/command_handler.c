@@ -3924,13 +3924,6 @@ static void dispatch_line(int conn_id, const char *buf) {
     else send_error(conn_id, "unknown cmd");
 }
 
-void command_handler_dispatch_console(const char *json_line) {
-    /* The console "json" mode already hands us one complete, NUL-terminated JSON
-       object, so dispatch it directly (no per-connection byte reassembly).
-       Replies route to stdout via at_send_data(CH_CONSOLE_CONN, ...). */
-    dispatch_line(CH_CONSOLE_CONN, json_line);
-}
-
 size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_t out_cap) {
     char cmd[32] = {0};
     if (!json_get_value(command_json, "cmd", cmd, sizeof(cmd))) {

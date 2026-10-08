@@ -47,12 +47,6 @@ void command_handler_set_tunnel_max_tier(int conn_id, int max_tier);
    CH_CLOUD_TUNNEL_CONN .. CH_CLOUD_TUNNEL_CONN_LAST. */
 void command_handler_tunnel_reset(int conn_id);
 
-/* Dispatch one complete JSON command line that arrived on the serial console's
-   "json" mode, through the same handlers as the TCP path.  Replies go to stdout
-   via at_send_data(CH_CONSOLE_CONN, ...).  `json_line` is a NUL-terminated JSON
-   object (no trailing newline required). */
-void command_handler_dispatch_console(const char *json_line);
-
 /* Run a single command (the `command` object from a cloud command.request) and
    capture its full reply line ({"status":"ok","data":...} or
    {"status":"error","message":...}) into out.  command_json is a NUL-terminated

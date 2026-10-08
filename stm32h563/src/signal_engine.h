@@ -50,15 +50,9 @@ int dac_generate_square(float freq, uint8_t amplitude, uint8_t offset,
 int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
                           uint32_t duration_ms, float sample_rate_hz);
 
-/* Play an arbitrary user-supplied waveform.
-   loop=true: restart DMA from beginning each time (runs until dac_stop()).
-   loop=false: play once. */
-int dac_generate_arbitrary(const uint8_t *data, size_t len, bool loop);
-
-/* As dac_generate_arbitrary(), but selects the DAC sample clock from a target
-   rate in Hz.  Pass 0 to use the max rate (12 MSPS).  Use this to replay a
-   captured trace at the same sample rate it was captured at, so the playback
-   time-base matches the recording. */
+/* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
+   DAC sample clock from a target rate in Hz (0 = the max rate, 12 MSPS). Replay a captured trace
+   at the rate it was captured at, so the playback time base matches the recording. */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
                                 float sample_rate_hz);
 
@@ -695,9 +689,6 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
 
 /* Disarm the UART and release the TX channel to high-Z. */
 void fpga_uart_disable(void);
-
-/* True while a UART proxy owns the engine (console or a TCP client). */
-bool fpga_uart_active(void);
 
 /* Queue `len` bytes for the DUT: they wait in a 4 KB firmware ring and move into the FPGA's
    256-byte TX FIFO whenever it is empty (fpga_uart_tx_pump).  Returns 0 on success. */
