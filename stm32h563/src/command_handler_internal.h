@@ -103,7 +103,6 @@ void handle_power_status(int conn_id, const char *json);
 void handle_status(int conn_id, const char *json);
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
-void handle_dap_start(int conn_id, const char *json);
 void handle_sensor_start(int conn_id, const char *json);
 void handle_sensor_set(int conn_id, const char *json);
 void handle_sensor_stop(int conn_id, const char *json);
@@ -143,6 +142,14 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* On-pod CMSIS-DAP probe (command_handler_dap.c). */
+void   handle_dap_start(int conn_id, const char *json);
+/* The PROTO_DAP receive path: runs each whole frame, returns the bytes taken from buf. */
+size_t dap_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
+void   dap_poll(void);                        /* frees the pins of an SWD session that timed out */
+void   swd_disarm_and_release(void);          /* disarm SWD and give SWCLK/SWDIO back */
+void   dap_conn_closed(int conn_id);
 
 /* UART transparent proxy (command_handler_uart.c). */
 void   handle_uart_proxy_start(int conn_id, const char *json);
