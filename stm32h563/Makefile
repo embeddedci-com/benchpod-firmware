@@ -100,6 +100,7 @@ C_SOURCES := \
   src/esp_wifi_ctrl.c \
   src/cloud_config.c \
   src/cloud_client.c \
+  src/cloud_rx.c \
   src/cloud_caps.c \
   src/cloud_reply_cap.c \
   src/ws_frame.c \

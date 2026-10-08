@@ -19,6 +19,7 @@
 #include "target_power.h"
 #include "bp_json.h"
 #include "bp_limits.h"
+#include "cloud_rx.h"     /* the s_rx accumulator operations (host-tested) */
 #include "hw_worker.h"
 #include "conn_tx.h"
 #include "version.h"
@@ -306,11 +307,7 @@ static void cl_set_state(cl_state_t st) {
 
 static void cl_rx_reset(void) { s_rx_len = 0; }
 
-static void cl_rx_consume(size_t n) {
-    if (n >= s_rx_len) { s_rx_len = 0; return; }
-    memmove(s_rx, s_rx + n, s_rx_len - n);
-    s_rx_len -= n;
-}
+static void cl_rx_consume(size_t n) { cloud_rx_consume(s_rx, &s_rx_len, n); }
 
 /* Append inbound (decrypted) bytes.  Runs in lwIP recv-callback context (the
    callbacks only set flags; poll() acts on them), so on overflow we don't tear the
@@ -318,12 +315,10 @@ static void cl_rx_consume(size_t n) {
    and desync ws_parse_frame for the rest of the link, so flag an overflow and let
    poll() drop the whole buffer and reconnect (the server resends after reopen). */
 static void cl_rx_append(const uint8_t *data, size_t len) {
-    if (len > sizeof(s_rx) - s_rx_len) {
+    if (!cloud_rx_append(s_rx, sizeof(s_rx), &s_rx_len, data, len)) {
         s_rx_overflow = true;
         return;
     }
-    memcpy(s_rx + s_rx_len, data, len);
-    s_rx_len += len;
     if (s_rx_len > s_rx_len_peak) s_rx_len_peak = s_rx_len;
 }
 
@@ -461,7 +456,7 @@ static err_t cl_recv_cb(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t
     /* No room: refuse it. The TLS layer keeps it (and the TCP window stays shut for it) until we
        ask again, which is the backpressure that keeps a fast server from overflowing s_rx. Only
        an empty buffer that still cannot hold it counts as an overflow. */
-    if (p->tot_len > sizeof(s_rx) - s_rx_len && s_rx_len > 0) {
+    if (cloud_rx_refuse(sizeof(s_rx), s_rx_len, p->tot_len)) {
         s_rx_refused = true;
         return ERR_MEM;
     }
