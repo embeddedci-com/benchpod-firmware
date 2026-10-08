@@ -93,17 +93,23 @@ jobs:
       # vendored binary and intentionally not committed (gitignored *.bin), so a
       # fresh checkout must produce it first (stm32h563/Makefile, `fetch` target)
       # or the STM32 build fails loudly asking for exactly this. Cache it keyed on
-      # the build recipe so only a recipe change re-runs the ESP-IDF Docker build.
+      # everything that goes into it (recipe, component lock, pinned ESP-IDF image)
+      # and the expected hash, so only a change there re-runs the ESP-IDF Docker build.
       - name: Cache ESP32-C3 esp-hosted slave image
         id: esp-slave-cache
         uses: actions/cache@v6
         with:
           path: esp32-hosted-slave/prebuilt
-          key: esp32c3-hosted-slave-${{ hashFiles('esp32-hosted-slave/build.sh', 'esp32-hosted-slave/sdkconfig.defaults*') }}
+          key: esp32c3-hosted-slave-${{ hashFiles('esp32-hosted-slave/build.sh', 'esp32-hosted-slave/sdkconfig.defaults*', 'esp32-hosted-slave/dependencies.lock', 'esp32-hosted-slave/idf-image', 'esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin.sha256') }}
 
+      # Builds in the digest-pinned image and fails unless the result matches the committed hash.
       - name: Build ESP32-C3 esp-hosted slave image
         if: steps.esp-slave-cache.outputs.cache-hit != 'true'
         run: make -C stm32h563 fetch
+
+      - name: ESP32-C3 slave image matches the committed hash
+        working-directory: esp32-hosted-slave/prebuilt
+        run: sha256sum -c esp32c3-hosted-slave-merged.bin.sha256
 
       # BOTH runtime images (image 0 = closed-loop, image 1 = deep DAC replay), exactly as they
       # passed on hardware (ice40/release/MANIFEST says how).  Fails the release if the gateware

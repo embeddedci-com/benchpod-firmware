@@ -3,12 +3,12 @@ set -euo pipefail
 echo "=== IDF version ==="; idf.py --version || true
 cd /work
 
-# Materialize the slave example, pinning esp_hosted to the version at commit 8f0770d.
+# Materialize the slave example, pinning esp_hosted to the version at commit 8f0770d. Exactly
+# this version or fail: a looser fallback would build a different image (and the host headers in
+# ../stm32h563/lib/esp_hosted are vendored from this one).
 if [ ! -d slave ]; then
   echo "=== create-project-from-example (pinned esp_hosted==2.12.9) ==="
-  idf.py create-project-from-example "espressif/esp_hosted==2.12.9:slave" \
-    || idf.py create-project-from-example "espressif/esp_hosted^2.12.9:slave" \
-    || idf.py create-project-from-example "espressif/esp_hosted:slave"
+  idf.py create-project-from-example "espressif/esp_hosted==2.12.9:slave"
 fi
 
 cd slave

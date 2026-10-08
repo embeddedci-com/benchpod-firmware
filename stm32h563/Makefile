@@ -353,38 +353,39 @@ $(ESP_SLAVE_BIN):
 	@exit 1
 
 # Fetch/produce the out-of-tree binary build dependencies (currently just the
-# ESP32-C3 esp-hosted slave image). Default: ESP-IDF Docker build, pinned by
-# esp32-hosted-slave/dependencies.lock and CONFIG_APP_REPRODUCIBLE_BUILD to be
-# byte-for-byte reproducible for the actual firmware content. Override with
-# ESP_SLAVE_URL to download a prebuilt asset (e.g. in CI) instead of running
-# Docker.
+# ESP32-C3 esp-hosted slave image). Default: ESP-IDF Docker build, reproducible
+# byte for byte: the image is pinned by digest (esp32-hosted-slave/idf-image),
+# the component versions by esp32-hosted-slave/dependencies.lock, and the build
+# uses CONFIG_APP_REPRODUCIBLE_BUILD. Override with ESP_SLAVE_URL to download a
+# prebuilt asset instead of running Docker.
 #
-# The committed sha256 is hard-enforced on a DOWNLOAD (ESP_SLAVE_URL) — that's
-# a real transfer-integrity check. It's advisory-only on a fresh Docker build:
-# ESP-IDF embeds a self-referential app_elf_sha256 field (esp_app_desc_t) whose
-# computation isn't fully covered by CONFIG_APP_REPRODUCIBLE_BUILD, so a build
-# can differ from the committed hash by exactly that field (plus the knock-on
-# whole-image trailer checksum) even when the actual compiled firmware is
-# byte-identical (verified: only those two 32-byte fields differed between a
-# local and a CI build of the same source/lock). Failing the build over that
-# would block every release for a difference with no functional effect.
+# Either way the result must match the committed
+# esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin.sha256, or this
+# fails. (It used to be advisory on a Docker build: with the floating
+# espressif/idf:release-v5.5 tag a rebuild could differ in the self-referential
+# app_elf_sha256 field and the image trailer. With the digest pinned, a rebuild
+# reproduces the committed hash.) Changing the recipe, the lock or the image
+# means committing the new hash: make fetch prints it on a mismatch.
 ESP_SLAVE_DIR := ../esp32-hosted-slave
 ESP_SLAVE_URL ?=
+ESP_IDF_IMAGE := $(shell cat $(ESP_SLAVE_DIR)/idf-image)
 fetch:
 	@if [ -n "$(ESP_SLAVE_URL)" ]; then \
 	   echo "==> Downloading esp-hosted slave image: $(ESP_SLAVE_URL)"; \
 	   mkdir -p $(ESP_SLAVE_DIR)/prebuilt; \
 	   curl -fL "$(ESP_SLAVE_URL)" -o $(ESP_SLAVE_BIN); \
-	   echo "==> Verifying sha256 (download integrity)..."; \
-	   ( cd $(ESP_SLAVE_DIR)/prebuilt && shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256 ); \
 	 else \
-	   echo "==> Building ESP32-C3 esp-hosted slave image (ESP-IDF Docker; needs Docker)..."; \
+	   echo "==> Building ESP32-C3 esp-hosted slave image (ESP-IDF Docker $(ESP_IDF_IMAGE))..."; \
 	   ( cd $(ESP_SLAVE_DIR) && docker run --rm \
 	       -v "$$PWD:/board" -v "$$PWD/work:/work" -v "$$PWD/prebuilt:/out" \
-	       espressif/idf:release-v5.5 bash /board/build.sh ); \
-	   echo "==> Checking sha256 (advisory — see comment above `fetch`)..."; \
-	   ( cd $(ESP_SLAVE_DIR)/prebuilt && shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256 ) \
-	     || echo "==> sha256 mismatch on a fresh build — expected (see comment above), continuing"; \
+	       "$(ESP_IDF_IMAGE)" bash /board/build.sh ) || exit 1; \
+	 fi
+	@echo "==> Verifying sha256 against the committed hash..."
+	@cd $(ESP_SLAVE_DIR)/prebuilt && if ! shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256; then \
+	   echo "fetch: the ESP32-C3 slave image does not match esp32c3-hosted-slave-merged.bin.sha256." >&2; \
+	   echo "       Got: $$(shasum -a 256 esp32c3-hosted-slave-merged.bin)" >&2; \
+	   echo "       If the recipe, the lock or idf-image changed on purpose, commit the new hash." >&2; \
+	   exit 1; \
 	 fi
 	@echo "==> OK: $(ESP_SLAVE_BIN)"
 
