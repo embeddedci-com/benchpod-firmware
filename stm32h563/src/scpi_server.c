@@ -466,7 +466,8 @@ static scpi_result_t scpi_pointsQ(scpi_t *ctx) {
     return SCPI_RES_OK;
 }
 
-/* SENSe:SRATe — ADC capture sample clock in MHz (0 = max 12 MSPS).  A lower
+/* SENSe:SRATe — ADC capture sample clock in MHz (0 = the maximum, about 0.4 MHz: the ADC
+   engine's divider floor of 60 at 24 MHz, see adc_min_divider in signal_engine.c).  A lower
    rate stretches the READ? capture window so a slow waveform fits the buffer
    (e.g. 0.08 → 80 kS/s → 4096 samples ≈ 51 ms). */
 static scpi_result_t scpi_sense_srate(scpi_t *ctx) {

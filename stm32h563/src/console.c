@@ -148,7 +148,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "commands:\r\n"
         "  help                 this list\r\n"
         "  ping                 SPI ping the iCE40 (expect 0xA5 + version)\r\n"
-        "  status               read the iCE40 STATUS byte\r\n"
+        "  status               pod report: network, PSRAM, gateware, safe mode, health\r\n"
         "  i2c-scan             scan the I2C0 power/IO bus\r\n"
         "  ina                  read both INA238 monitors\r\n"
         "  power <1|2> <on|off> enable/disable an eFuse\r\n"
