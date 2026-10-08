@@ -94,14 +94,24 @@ module tb_dac_psram_replay;
     localparam ST_SHIFT = 3'd4;
     integer fidx = 0, errors = 0, k;
     reg [15:0] frames [0:63];
+    integer    fclk [0:63];      // clk48 cycle of each frame's entry into the shift state
+    integer    cyc = 0;
     reg [2:0]  st_d = 3'd0;
     always @(posedge clk48) begin        // DAC engine runs on clk48
+        cyc = cyc + 1;
         st_d <= dac.st;
         if (dac.st == ST_SHIFT && st_d != ST_SHIFT) begin
             frames[fidx] = dac.sh[15:0];
+            fclk[fidx] = cyc;
             fidx = fidx + 1;
         end
     end
+
+    // Sample period in psram_mode with the real reader: max(divider, 3) + 52 clk48, one more than
+    // the BRAM path's + 51 (tb_dac8551), because the reader's FWFT head refills one clk48 after
+    // each pop, so S_PHI waits a cycle for the high byte.  The wire divider here is the v40
+    // reload 8, i.e. divider 9.  Firmware's deep-replay divider math depends on this.
+    localparam integer DEEP_SAMPLE_CLK = 9 + 52;
 
     localparam NFRAMES = 11;   // > 2 loops of 4 samples -> exercises the wrap
     function [15:0] want_sample(input integer i);
@@ -118,6 +128,12 @@ module tb_dac_psram_replay;
             for (k = 0; k < NFRAMES; k = k + 1)
                 if (frames[k] !== want_sample(k)) begin
                     $display("FAIL %0s: frame[%0d]=%04h want %04h", what, k, frames[k], want_sample(k));
+                    errors = errors + 1;
+                end
+            for (k = 1; k < NFRAMES; k = k + 1)
+                if (fclk[k] - fclk[k-1] != DEEP_SAMPLE_CLK) begin
+                    $display("FAIL %0s: frame[%0d] came %0d clk48 after the previous one, want %0d (divider 9 + 52)",
+                             what, k, fclk[k] - fclk[k-1], DEEP_SAMPLE_CLK);
                     errors = errors + 1;
                 end
         end
@@ -149,7 +165,7 @@ module tb_dac_psram_replay;
         wait (fidx >= NFRAMES);
         check_frames("re-arm");
         if (errors == 0)
-            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B), and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
+            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B) at divider + 52 clk48 per sample, and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
         else
             $display("FAIL tb_dac_psram_replay: %0d error(s)", errors);
         $finish;
