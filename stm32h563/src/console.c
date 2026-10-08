@@ -7,6 +7,7 @@
  * surface lands in later phases.
  */
 #include "console.h"
+#include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
 #include "console_io.h"
 #include "signal_engine.h"
 #include "board_info.h"       /* board caps (ADC/DAC bits, channels) for `status` */
@@ -875,7 +876,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             0x300000u, 0x400000u, 0x600000u, 0x7FFF00u
         };
         const int NADDR = (int)(sizeof(A) / sizeof(A[0]));
-        static uint8_t b[256];
+        uint8_t *b = adc_pool_scratch();   /* 256 B; gated, so the pool is ours */
         int errs = 0;
         psram_bus_acquire();
         for (int a = 0; a < NADDR; a++) {                 /* phase 1: write tagged blocks */
@@ -914,7 +915,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         unsigned ln = (argc >= 3) ? (unsigned)strtoul(argv[2], NULL, 0) : 64u;
         if (an > 256) an = 256;
         if (ln > 256) ln = 256;
-        static uint16_t adcb[256], lab[256];
+        uint16_t *adcb = (uint16_t *)adc_pool_scratch();   /* gated: the pool's scratch, 256 each */
+        uint16_t *lab  = adcb + 256;
         int rc = fpga_dual_capture(an ? adcb : NULL, (uint16_t)an, 240,
                                    ln ? lab : NULL, (uint16_t)ln, 24);
         if (rc != 0) {
