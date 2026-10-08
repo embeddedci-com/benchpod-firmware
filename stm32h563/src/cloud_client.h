@@ -33,6 +33,12 @@ void cloud_client_poll(void);
    cloud_clear so a new endpoint takes effect (or the client drops to disabled). */
 void cloud_client_reload(void);
 
+/* Net task: the cloud link still has output to send for what the pod was asked: a command in
+   flight or its command.response not yet acknowledged by the server's TCP, tunnel output, or an
+   OTA state change not yet reported. False when the link is not connected (nothing to protect).
+   net_reload waits for this before it reloads the link after a settings change. */
+bool cloud_client_tx_busy(void);
+
 /* Human-readable current state (for the cloud_status command). */
 const char *cloud_client_state_str(void);
 

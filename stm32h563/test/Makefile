@@ -43,7 +43,7 @@ ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 # hw_worker.c is #included by its test; shim_worker has the FreeRTOS + HAL headers it needs.
-HWWORKER_SRCS := test_hw_worker.c ../src/hw_worker.c
+HWWORKER_SRCS := test_hw_worker.c ../src/hw_worker.c ../src/net_reload.c
 # boot_guard.c is #included by its test (shim_hal stands in for the HAL header).
 BOOTGUARD_SRCS := test_boot_guard.c ../src/boot_guard.c ../src/boot_policy.c
 FLASHLAYOUT_SRCS := test_flash_layout.c
@@ -74,6 +74,7 @@ MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
 MONOCYPHER := ../lib/monocypher/src/monocypher.c ../lib/monocypher/src/optional/monocypher-ed25519.c
 MONO_INC   := -I../lib/monocypher/src -I../lib/monocypher/src/optional
 PODPOL_SRCS := test_pod_policy.c ../src/pod_policy.c ../src/fw_sign.c ../src/config_store.c mocks/mock_flash.c $(MONOCYPHER)
+NETRELOAD_SRCS := test_net_reload.c ../src/net_reload.c
 LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_json.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
 CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c
@@ -234,7 +235,7 @@ build/test_boot_policy: $(BOOTPOL_SRCS)
 
 build/test_hw_worker: $(HWWORKER_SRCS) $(wildcard shim_worker/*.h)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Ishim_worker test_hw_worker.c -lm -o $@
+	$(CC) $(CFLAGS) -Ishim_worker test_hw_worker.c ../src/net_reload.c -lm -o $@
 
 build/test_boot_guard: $(BOOTGUARD_SRCS) shim_hal/stm32h5xx_hal.h
 	@mkdir -p build
@@ -294,6 +295,10 @@ build/test_lease_gate: $(LEASE_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(LEASE_SRCS) -lm -o $@
 
+build/test_net_reload: $(NETRELOAD_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(NETRELOAD_SRCS) -lm -o $@
+
 build/test_cmd_tier: $(CMDTIER_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CMDTIER_SRCS) -lm -o $@
@@ -306,7 +311,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy $(OTA_TARGET)
 
 TESTS += build/test_bp_log
 
@@ -360,6 +365,7 @@ run: $(TESTS)
 	@./build/test_pod_policy > build/test_pod_policy.log || { cat build/test_pod_policy.log; exit 1; }
 	@tail -n 1 build/test_pod_policy.log
 	@./build/test_lease_gate
+	@./build/test_net_reload
 	@./build/test_config_store > build/test_config_store.log || { cat build/test_config_store.log; exit 1; }
 	@tail -n 1 build/test_config_store.log
 	@./build/test_dac_limits > build/test_dac_limits.log || { cat build/test_dac_limits.log; exit 1; }

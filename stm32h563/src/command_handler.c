@@ -2520,7 +2520,7 @@ static void handle_cloud_set(int conn_id, const char *json) {
     cfg.verify  = tls ? 1 : 0;
 
     if (cloud_config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
-    net_cloud_reload();   /* pick up the new config and (re)connect */
+    net_cloud_reload_after_reply();   /* pick up the new config and (re)connect, once this reply is out */
 
     char resp[256];
     snprintf(resp, sizeof(resp),
@@ -2560,7 +2560,7 @@ static void handle_cloud_status(int conn_id) {
 
 static void handle_cloud_clear(int conn_id) {
     cloud_config_clear();
-    net_cloud_reload();   /* drops to DISABLED now that there's no config */
+    net_cloud_reload_after_reply();   /* drops to DISABLED once this reply is out */
     send_ok_str(conn_id, "\"cleared\"");
 }
 
@@ -2578,7 +2578,7 @@ static void handle_wifi_set(int conn_id, const char *json) {
         send_error(conn_id, "password too long"); return;
     }
     if (config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
-    net_wifi_reload();   /* bring the ESP32 up + (re)connect with the new creds */
+    net_wifi_reload_after_reply();   /* (re)connect with the new creds, once this reply is out */
 
     char resp[160];
     bp_emit_t e;                          /* the SSID is escaped: it may hold a quote */
@@ -2591,7 +2591,7 @@ static void handle_wifi_set(int conn_id, const char *json) {
 
 static void handle_wifi_clear(int conn_id) {
     config_clear();
-    net_wifi_reload();   /* drops Wi-Fi; ESP32 returns to reset */
+    net_wifi_reload_after_reply();   /* drops Wi-Fi once this reply is out (the cloud may ride it) */
     send_ok_str(conn_id, "\"cleared\"");
 }
 

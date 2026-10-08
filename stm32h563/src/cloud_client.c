@@ -1232,10 +1232,12 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
    byte threshold we have not reached. Must stay well under the server's stall timeout. */
 #define OTA_STATUS_TICK_MS  500u
 
+/* What the last ota.status frame reported (cloud_client_tx_busy reads these too). */
+static ota_state_t s_ota_last_state = OTA_IDLE;
+static uint32_t    s_ota_last_refusals;
+
 static void cl_ota_status_poll(void) {
-    static ota_state_t last_state = OTA_IDLE;
     static uint32_t    last_reported;
-    static uint32_t    last_refusals;
     /* The cloud's view: the session, or the refusal its last ota.* frame got because another
        transport (LAN, USB) holds the session (ota.h). */
     ota_view_t  v;
@@ -1258,7 +1260,7 @@ static void cl_ota_status_poll(void) {
     /* A refusal (another transport holds the session) is reported every time, even when it reads
        like the last one: the cloud view stays "error" between jobs, so a state-change test alone
        left a later job's refused begin unanswered and the server waited for acks that never came. */
-    bool changed = (st != last_state) || (v.refusals != last_refusals) ||
+    bool changed = (st != s_ota_last_state) || (v.refusals != s_ota_last_refusals) ||
                    (st == OTA_RECEIVING && rcv - last_reported >= OTA_STATUS_EVERY) ||
                    tick;
     if (!changed) return;
@@ -1276,9 +1278,9 @@ static void cl_ota_status_poll(void) {
        change (an error included) for good. Retried on the next poll. */
     if (!bp_emit_ok(&e) || !cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e))) return;
     next_tick = make_timeout_time_ms(OTA_STATUS_TICK_MS);
-    last_state = st;
+    s_ota_last_state = st;
     last_reported = rcv;
-    last_refusals = v.refusals;
+    s_ota_last_refusals = v.refusals;
 }
 
 /* Parse and act on any complete WS frames buffered in s_rx. */
@@ -1424,6 +1426,21 @@ void cloud_client_reload(void) {
     s_dns = DNS_NONE;
     cl_set_error("%s", "");          /* a new config starts with a clean slate */
     cloud_client_init();
+}
+
+bool cloud_client_tx_busy(void) {
+    if (s_state != CL_CONNECTED || !s_pcb) return false;
+    if (hw_worker_cloud_pending() || s_pend_len) return true;
+    for (int i = 0; i < CH_CLOUD_TUNNEL_CONN_COUNT; i++)
+        if (s_tunnels[i][0] && conn_tx_used(CH_CLOUD_TUNNEL_CONN + i)) return true;
+    ota_view_t v;
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    if (v.state != s_ota_last_state || v.refusals != s_ota_last_refusals) return true;
+    /* Queued in TCP but not yet acknowledged: closing now could still lose it. */
+    struct altcp_pcb *c = s_pcb;
+    while (c->inner_conn) c = c->inner_conn;
+    const struct tcp_pcb *t = (const struct tcp_pcb *)c->state;
+    return t && (t->unsent || t->unacked);
 }
 
 /* ---- net-loop driver ------------------------------------------------------ */
