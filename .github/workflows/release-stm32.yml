@@ -11,6 +11,18 @@
 #
 # Publishes using the default GITHUB_TOKEN (contents: write below) — no
 # separate PAT needed since source and release target are the same repo.
+#
+# Nothing is published until these pass (needs: below):
+#   • preflight: the tag equals FIRMWARE_VERSION in stm32h563/src/version.h, and ice40/release/
+#     still matches the gateware sources (make -C ice40 check-release), both fatal;
+#   • tests: test.yml (gateware sims, host tests) with release: true;
+#   • firmware-build: stm32-build.yml (warning-free build, host tests with Cube, RELEASE=1 build).
+#
+# Option, not switched on: publish with `gh release create --prerelease` and promote it
+# (`gh release edit <tag> --prerelease=false`) once the hardware-in-the-loop run passed on the
+# published assets. The server's firmware release list skips drafts and prereleases
+# (embeddedci-server api/benchpod_firmware_release.go), so pods would not be offered it before
+# the promotion; check what `benchpod flash-self` picks before relying on that for the CLI too.
 name: Release STM32 firmware
 
 on:
@@ -29,13 +41,48 @@ env:
   TARGET_REPO: embeddedci-com/benchpod-firmware
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  preflight:
+    if: github.repository == 'embeddedci-com/benchpod-firmware'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag matches FIRMWARE_VERSION
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then TAG="$INPUT_TAG"; else TAG="${GITHUB_REF_NAME#stm32-}"; fi
+          SRC="$(sed -n 's/^#define FIRMWARE_VERSION "\(.*\)"/\1/p' stm32h563/src/version.h)"
+          if [ -z "$SRC" ]; then echo "::error::no FIRMWARE_VERSION in stm32h563/src/version.h"; exit 1; fi
+          if [ "${TAG#v}" != "$SRC" ]; then
+            echo "::error title=Version mismatch::release tag $TAG but stm32h563/src/version.h says $SRC: bump FIRMWARE_VERSION (or fix the tag)"
+            exit 1
+          fi
+          echo "release $TAG = FIRMWARE_VERSION $SRC"
+
+      - name: Hardware-verified iCE40 images match the gateware sources
+        run: make -C ice40 check-release
+
+  tests:
+    uses: ./.github/workflows/test.yml
+    with:
+      release: true
+
+  firmware-build:
+    uses: ./.github/workflows/stm32-build.yml
+
   build-and-release:
+    needs: [preflight, tests, firmware-build]
     # Don't run on forks — releases only belong to the canonical repo.
     if: github.repository == 'embeddedci-com/benchpod-firmware'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     # The signing key (secret FW_SIGNING_KEY) lives in this environment; give it required
     # reviewers so a release is only signed after a person approves the run.
     environment: release
@@ -53,7 +100,7 @@ jobs:
           df -h /
 
       - name: Checkout (with submodules)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -70,13 +117,13 @@ jobs:
 
 
       - name: Set up ARM GCC toolchain
-        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
         with:
           release: "13.3.Rel1"
 
       - name: Cache STM32CubeH5 SDK
         id: cube-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/STM32CubeH5
           key: stm32cubeh5-${{ env.CUBE_VERSION }}
@@ -97,7 +144,7 @@ jobs:
       # and the expected hash, so only a change there re-runs the ESP-IDF Docker build.
       - name: Cache ESP32-C3 esp-hosted slave image
         id: esp-slave-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: esp32-hosted-slave/prebuilt
           key: esp32c3-hosted-slave-${{ hashFiles('esp32-hosted-slave/build.sh', 'esp32-hosted-slave/sdkconfig.defaults*', 'esp32-hosted-slave/dependencies.lock', 'esp32-hosted-slave/idf-image', 'esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin.sha256') }}
