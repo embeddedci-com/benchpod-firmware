@@ -307,6 +307,16 @@ module tb_top_capture;
     reg [7:0]  d_cmd, d_byte;
     reg [23:0] d_addr, wr_ptr;
     initial begin nib_i=0; adc_n=0; la_n=0; in_la=0; end
+    // Every byte written while log_on (abort / re-arm mid-capture): region, offset in it, value,
+    // time. Wider than the 256-byte region arrays, which alias a high offset onto a low one.
+    localparam LOG_MAX = 16384;
+    integer    log_on = 0, log_n = 0;
+    reg        log_la  [0:LOG_MAX-1];
+    reg [23:0] log_off [0:LOG_MAX-1];
+    reg [7:0]  log_val [0:LOG_MAX-1];
+    realtime   log_t   [0:LOG_MAX-1];
+    realtime   arm_t = 0;                 // the last capture arm (dut.arm)
+    always @(posedge dut.clk) if (dut.arm) arm_t = $realtime;
 
     always @(negedge psram_cs) nib_i = 0;
     always @(posedge psram_sclk) begin
@@ -331,6 +341,10 @@ module tb_top_capture;
                         d_byte[3:0] = ps_io;
                         if (in_la) begin if (wr_ptr[7:0] < 256) la_mem[wr_ptr[7:0]]  = d_byte; la_n=la_n+1; end
                         else       begin if (wr_ptr[7:0] < 256) adc_mem[wr_ptr[7:0]] = d_byte; adc_n=adc_n+1; end
+                        if (log_on && log_n < LOG_MAX) begin
+                            log_la[log_n] = in_la; log_off[log_n] = wr_ptr; log_val[log_n] = d_byte;
+                            log_t[log_n] = $realtime; log_n = log_n + 1;
+                        end
                         wr_ptr = wr_ptr + 24'd1;
                     end
                 end
@@ -464,6 +478,106 @@ module tb_top_capture;
                     bad = bad + 1; errors = errors + 1;
                 end
             end
+        end
+    endtask
+
+    // ---- mid-capture re-arm / abort (P2 T-2) ----
+    localparam MIDRUN_GRACE = 5000;      // ns for a QPI burst already on the bus to finish
+
+    // Start a long dual capture with the bus released and wait until both regions are being
+    // written; log every byte from then on.
+    task midrun_start(input [13:0] word);
+        begin
+            la_drv = word; adc_n = 0; la_n = 0; per_on = 0;
+            bus_own = 1'b0; #1000;
+            // LA at divider 6, not 2: at 2 the ring has no idle cycle to read in and holds the whole
+            // burst until it ends (by design), so nothing would be on the bus to interrupt.
+            cmd_capture(24'd2000, 16'd40, 24'd2000, 16'd6);
+            #40000;
+            if (la_n < 64 || adc_n < 4) begin
+                $display("FAIL midrun: the long capture is not writing yet (LA %0d / ADC %0d bytes)", la_n, adc_n); errors=errors+1; end
+            log_n = 0; log_on = 1;
+        end
+    endtask
+
+    // Bytes written after arm_t + grace: those outside [0, la_len) of the LA region or
+    // [0, adc_len) of the ADC region, and LA bytes that are not `word`.
+    integer mr_stray, mr_badla, mr_late;
+    task midrun_scan(input integer la_len, input integer adc_len, input [13:0] word);
+        integer k; begin
+            mr_stray = 0; mr_badla = 0; mr_late = 0;
+            for (k = 0; k < log_n; k = k + 1) if (log_t[k] > arm_t + MIDRUN_GRACE) begin
+                mr_late = mr_late + 1;
+                if (log_la[k] ? (log_off[k] >= la_len) : (log_off[k] >= adc_len)) begin
+                    if (mr_stray < 3) $display("FAIL midrun: %0s byte at +%0d written %0.1f us after the arm",
+                                               log_la[k] ? "LA" : "ADC", log_off[k], (log_t[k] - arm_t) / 1000.0);
+                    mr_stray = mr_stray + 1;
+                end else if (log_la[k] && log_val[k] !== (log_off[k][0] ? {2'b00, word[13:8]} : word[7:0])) begin
+                    if (mr_badla < 3) $display("FAIL midrun: LA byte +%0d = %02h (the old capture's?)", log_off[k], log_val[k]);
+                    mr_badla = mr_badla + 1;
+                end
+            end
+            errors = errors + mr_stray + mr_badla;
+        end
+    endtask
+
+    // The new capture's regions: na ADC samples continuing the ramp, nl LA samples = word.
+    task midrun_check_regions(input [8*8-1:0] what, input integer na, input integer nl, input [13:0] word);
+        integer k, bad; reg [15:0] g, w; begin
+            bad = 0;
+            w = {adc_mem[1], adc_mem[0]};
+            for (k = 0; k < na; k = k + 1) begin
+                g = {adc_mem[k*2+1], adc_mem[k*2]};
+                if (g !== w) begin if (bad < 3) $display("FAIL %0s: ADC[%0d]=%04h want %04h", what, k, g, w); bad = bad + 1; end
+                w = w + 16'h0101;
+            end
+            for (k = 0; k < nl; k = k + 1) begin
+                g = {la_mem[k*2+1], la_mem[k*2]};
+                if (g !== {2'b00, word}) begin if (bad < 6) $display("FAIL %0s: LA[%0d]=%04h want %04h", what, k, g, word); bad = bad + 1; end
+            end
+            errors = errors + bad;
+        end
+    endtask
+
+    task midrun_rearm;
+        integer k; begin
+            midrun_start(14'h0F0F);
+            for (k = 0; k < 256; k = k + 1) begin la_mem[k] = 8'hxx; adc_mem[k] = 8'hxx; end
+            la_drv = 14'h1234;
+            // re-arm: shorter, other dividers and pins; slow, so most of it lands after the grace
+            cmd_capture(24'd8, 16'd400, 24'd16, 16'd200);
+            wait_done(4000); #4000;
+            log_on = 0; bus_own = 1'b1;
+            midrun_scan(32, 16, 14'h1234);
+            midrun_check_regions("rearm", 8, 16, 14'h1234);
+            if (psram_cs !== 1'b1) begin $display("FAIL midrun rearm: PSRAM CS left low"); errors=errors+1; end
+            $display("  [midrun] re-arm while writing: %0d bytes after the arm, %0d stray, %0d stale LA; new capture whole",
+                     mr_late, mr_stray, mr_badla);
+        end
+    endtask
+
+    task midrun_abort;
+        integer k; reg [7:0] st; begin
+            midrun_start(14'h0F0F);
+            cmd_capture(24'd0, 16'd40, 24'd0, 16'd6);    // abort while writing
+            #100000;                                     // the long capture had ~3 ms to go
+            log_on = 0;
+            midrun_scan(0, 0, 14'h0000);                 // nothing may be written after the abort
+            cmd1(8'h03, st);
+            if (st[1]) begin $display("FAIL midrun abort: STATUS=%02h still busy", st); errors=errors+1; end
+            if (psram_cs !== 1'b1) begin $display("FAIL midrun abort: PSRAM CS left low"); errors=errors+1; end
+            $display("  [midrun] abort while writing: %0d bytes after the abort + grace, STATUS %02h", mr_late, st);
+            // and a capture armed right after it, the bus still with the iCE40
+            for (k = 0; k < 256; k = k + 1) begin la_mem[k] = 8'hxx; adc_mem[k] = 8'hxx; end
+            log_n = 0; log_on = 1;
+            la_drv = 14'h2C3D;
+            cmd_capture(24'd6, 16'd500, 24'd12, 16'd250);
+            wait_done(4000); #4000;
+            log_on = 0; bus_own = 1'b1;
+            midrun_scan(24, 12, 14'h2C3D);
+            midrun_check_regions("abort", 6, 12, 14'h2C3D);
+            la_drv = LA_WORD;
+            $display("  [midrun] capture after the abort: %0d bytes, %0d stray, %0d stale LA", mr_late, mr_stray, mr_badla);
         end
     endtask
 
@@ -935,6 +1049,16 @@ module tb_top_capture;
         check_la_word("off", 24, 14'h0A5A);
         $display("  [trig]   re-arm falling LA10 @div2 then trigger off: first LA byte t0+%0d == arm+%0d; sim time %0t",
                  base_la2, la0_cyc - arm_cyc, $time);
+
+        // ==== RE-ARM AND ABORT MID-CAPTURE with the bus released (P2 T-2) ====
+        // A long ADC + LA capture is writing PSRAM; the firmware arms a new, short one (other
+        // counts, dividers and pins) or aborts it (both counts 0). After the arm, once the burst
+        // in flight has had MIDRUN_GRACE to finish, every byte written must belong to the new
+        // capture, at its offsets and with its values; an abort must stop the writes; and a capture
+        // armed after the abort must come out whole. The v47 abort above runs with the STM32
+        // holding the bus (bytes stuck in the ring); these run with the iCE40 writing.
+        midrun_rearm();
+        midrun_abort();
 
         if (errors == 0)
             $display("PASS tb_top_capture: OP_CAPTURE both/ADC-only/LA-only all write the right region(s)");
