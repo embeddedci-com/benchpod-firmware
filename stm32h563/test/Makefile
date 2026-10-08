@@ -13,7 +13,8 @@ CFLAGS  += -DCMD_TABLE_NO_HANDLERS
 # that was.  These suites link in seconds, so depending on all headers is cheaper than being
 # wrong; it is also why there is no -MMD dependency machinery to get subtly incomplete.
 HEADERS := $(wildcard ../src/*.h) $(wildcard ../port/*.h) $(wildcard *.h) $(wildcard mocks/*.h) \
-           $(wildcard shim/lwip/*.h) $(wildcard shim_altcp/*.h) $(wildcard shim_altcp/arch/*.h)
+           $(wildcard shim/lwip/*.h) $(wildcard shim_altcp/*.h) $(wildcard shim_altcp/arch/*.h) \
+           $(wildcard shim_ch/*.h)
 
 PORTABLE_SRCS := test_portable.c ../src/b64url.c ../src/sensor_bmp280.c ../src/esp_hosted_frame.c
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
@@ -82,6 +83,16 @@ LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_
 ADCPOOL_SRCS := test_adc_pool.c ../src/adc_pool.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
 CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c
+# The command_handler modules, each on its own with the modules around it faked in the test
+# (shim_ch: the HAL tick/reset they call).
+CH_INC := -Ishim_ch
+CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c
+CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
+CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c
+CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
+              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c
+CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/bp_json.c ../src/config_store.c \
+              ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
@@ -315,11 +326,32 @@ build/test_cmd_gate: $(CMDGATE_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CMDGATE_SRCS) -lm -o $@
 
+build/test_ch_transport: $(CHTRANSPORT_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CH_INC) $(CHTRANSPORT_SRCS) -lm -o $@
+
+build/test_ch_dap: $(CHDAP_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CH_INC) $(CHDAP_SRCS) -lm -o $@
+
+build/test_ch_uart: $(CHUART_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CH_INC) $(CHUART_SRCS) -lm -o $@
+
+build/test_ch_dac: $(CHDAC_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CH_INC) -Ishim_rtos $(CHDAC_SRCS) -lm -o $@
+
+# command_handler_net.c reaches lwIP's types through net_server.h (as test_altcp_bp_proxy does).
+build/test_ch_net: $(CHNET_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CH_INC) $(PROXY_INC) $(CHNET_SRCS) -lm -o $@
+
 build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_net $(OTA_TARGET)
 
 TESTS += build/test_bp_log
 
@@ -384,6 +416,16 @@ run: $(TESTS)
 	@./build/test_current_out > build/test_current_out.log || { cat build/test_current_out.log; exit 1; }
 	@tail -n 1 build/test_current_out.log
 	@./build/test_esp_wifi_ctrl
+	@./build/test_ch_transport > build/test_ch_transport.log || { cat build/test_ch_transport.log; exit 1; }
+	@tail -n 1 build/test_ch_transport.log
+	@./build/test_ch_dap > build/test_ch_dap.log || { cat build/test_ch_dap.log; exit 1; }
+	@tail -n 1 build/test_ch_dap.log
+	@./build/test_ch_uart > build/test_ch_uart.log || { cat build/test_ch_uart.log; exit 1; }
+	@tail -n 1 build/test_ch_uart.log
+	@./build/test_ch_dac > build/test_ch_dac.log || { cat build/test_ch_dac.log; exit 1; }
+	@tail -n 1 build/test_ch_dac.log
+	@./build/test_ch_net > build/test_ch_net.log || { cat build/test_ch_net.log; exit 1; }
+	@tail -n 1 build/test_ch_net.log
 	@./build/test_scpi_paced
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
