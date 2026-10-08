@@ -17,7 +17,6 @@
 #include "command_handler.h"
 #include "at_driver.h"
 #include "wifi_manager.h"
-#include "console_io.h"
 #include "cloud_client.h"
 #include "mbedtls_port.h"
 #include "esp_hosted_spi.h"
@@ -62,7 +61,7 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 #include <stdint.h>
 
 #define TCP_SERVER_PORT   8080
-#define NET_MAX_CONN      5            /* TCP conn ids 0..4 (CH_CONSOLE_CONN = 5) */
+#define NET_MAX_CONN      5            /* TCP conn ids 0..4 (= CH_MAX_CONN) */
 
 static struct tcp_pcb *conn_pcb[NET_MAX_CONN];
 
@@ -178,14 +177,10 @@ static bool iface_addressed(const net_if_t *i) {
 /* ---- at_driver transmit seam ---------------------------------------------
    Called by command_handler / scpi_server ON THE WORKER TASK.  Because lwIP is
    single-threaded on the net task, replies are NOT written to lwIP here — they go
-   into the per-connection conn_tx rings (or the console/cloud sinks) and the net
+   into the per-connection conn_tx rings (or the cloud reply capture) and the net
    task drains them (net_tx_drain). */
 int at_send_data(int conn_id, const uint8_t *buf, size_t len)
 {
-    if (conn_id == CH_CONSOLE_CONN) {        /* console replies -> local console (thread-safe) */
-        console_io_write(buf, len);
-        return 0;
-    }
     /* Cloud command channel: capture the reply (worker-local buffer) so it can be
        framed as a command.response once the worker finishes the command. */
     if (conn_id == CH_CLOUD_CONN) {
@@ -204,7 +199,6 @@ int at_send_data(int conn_id, const uint8_t *buf, size_t len)
 
 size_t at_send_avail(int conn_id)
 {
-    if (conn_id == CH_CONSOLE_CONN) return 0xFFFFu;   /* local console: blocking sink */
     if (conn_id == CH_CLOUD_CONN)   return 0xFFFFu;   /* captured to RAM, framed once */
     /* Real TCP conns and cloud tunnels: pace against the ring free space (the net
        task, in turn, only drains a tunnel ring as fast as the TLS/WS send buffer

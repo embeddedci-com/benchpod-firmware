@@ -9,9 +9,9 @@
    back via at_send_data(conn_id, ...). */
 void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len);
 
-/* Reserved pseudo-connection id for console-originated JSON commands (the serial
-   console "json" mode).  Its responses are routed to stdout by at_send_data()
-   instead of the TCP server, so the same JSON handlers serve a serial client. */
+/* Reserved, unused pseudo-connection id. It was the serial console's JSON mode, which is gone:
+   the USB console runs its own text commands and never reaches the JSON handlers, so nothing
+   routes replies for it any more. Kept so the ids after it stay where they are. */
 #define CH_CONSOLE_CONN 5
 
 /* Reserved pseudo-connection id for cloud-originated JSON commands (a server
@@ -88,7 +88,7 @@ const char *command_handler_device_gate(const char *verb, const char *json);
 bool command_handler_acquire_adc(int conn_id);
 void command_handler_release_adc(int conn_id);
 /* The gate holder id for the text console's capture/PSRAM diagnostics (not a connection, so it
-   never collides with the USB JSON console's CH_CONSOLE_CONN hold). */
+   never collides with a connection's hold). */
 #define CH_CONSOLE_TEXT_OWNER (-2)
 
 /* SCPI DIGital:* entry points, under the same LA pin-ownership rules as the JSON `gpio` / `la`
