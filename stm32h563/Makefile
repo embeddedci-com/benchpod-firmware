@@ -381,7 +381,7 @@ fetch:
 	   curl -fL "$(ESP_SLAVE_URL)" -o $(ESP_SLAVE_BIN); \
 	 else \
 	   echo "==> Building ESP32-C3 esp-hosted slave image (ESP-IDF Docker $(ESP_IDF_IMAGE))..."; \
-	   ( cd $(ESP_SLAVE_DIR) && docker run --rm \
+	   ( cd $(ESP_SLAVE_DIR) && docker run --rm --platform linux/amd64 \
 	       -v "$$PWD:/board" -v "$$PWD/work:/work" -v "$$PWD/prebuilt:/out" \
 	       "$(ESP_IDF_IMAGE)" bash /board/build.sh ) || exit 1; \
 	 fi
