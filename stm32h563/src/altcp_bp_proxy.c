@@ -490,12 +490,18 @@ altcp_bp_proxy_listen(struct altcp_pcb *conn, u8_t backlog, err_t *err)
   return NULL;
 }
 
+/* Aborting the TCP pcb below calls its err callback, which is altcp_bp_proxy_lower_err: that
+   frees this layer. Freeing it again afterwards (what lwIP's altcp_proxyconnect_abort does) is a
+   double free, reached from cloud_client's altcp_abort of the proxy pcb when the TLS config
+   cannot be built, and from an abort of the TLS pcb above. Take the setup-failure path instead:
+   detach, abort the TCP pcb, tell the layer above (TLS frees itself there), free this layer once. */
 static void
 altcp_bp_proxy_abort(struct altcp_pcb *conn)
 {
   if (conn != NULL) {
     if (conn->inner_conn != NULL) {
-      altcp_abort(conn->inner_conn);
+      (void)altcp_bp_proxy_fail_setup(conn, conn->inner_conn);
+      return;
     }
     altcp_free(conn);
   }
