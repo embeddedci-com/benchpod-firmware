@@ -50,6 +50,7 @@
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "fw_sign.h"
+#include "adc_pool.h"      /* the RAM sample buffer, shared with SCPI and the console */
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
@@ -163,24 +164,25 @@ void command_handler_cloud_capture_append(const uint8_t *buf, size_t len) {
 
 /* ---- ADC buffer and chunk sender ---- */
 
-static uint8_t adc_cmd_buf[SIGNAL_BUF_SIZE];
-
-/* v2 captures are 16-bit (MCP33131); samples are read back from the PSRAM into
-   this buffer and streamed as 16-bit JSON values. */
-/* Small MONOLITHIC ADC read-back buffer, and the staging buffer for `load`/`replay`.
-   DECOUPLED from ADC_CAP_MAX_SAMPLES (which is now the multi-MB PSRAM region size):
-   the shallow `capture`/`stream`/`test` verbs and capture->replay use this fixed 64 KB
-   buffer, while DEEP captures (`capture_dual`) stream CHUNKED straight out of PSRAM via
-   the bulk sender and never touch it.  Sizing this to ADC_CAP_MAX_SAMPLES would ask for
-   several MB of SRAM the STM32H563 does not have. */
-#define ADC_MONO_BUF_SAMPLES 32768u
-static uint16_t adc_buf16[ADC_MONO_BUF_SAMPLES];
+/* The RAM sample buffer is the shared pool (adc_pool.h): the shallow `capture`/`stream`/`test`
+   read-back (v2 captures are 16-bit, MCP33131) and the `load`/`load_bin` staging for `replay` use
+   all of it, and the sensor/I2C-LA byte reads (adc_cmd_buf) its scratch region. DEEP captures
+   (`capture_dual`) stream CHUNKED straight out of PSRAM via the bulk sender and never touch it.
+   Sizing it to ADC_CAP_MAX_SAMPLES (the multi-MB PSRAM region) would ask for several MB of SRAM
+   the STM32H563 does not have. SCPI and the console share the pool under the same heavy gate. */
+#define ADC_MONO_BUF_SAMPLES ADC_POOL_SAMPLES
+#define adc_buf16            adc_pool
+#define adc_cmd_buf          adc_pool_scratch()
+_Static_assert(ADC_POOL_SCRATCH_BYTES >= SIGNAL_BUF_SIZE, "adc_cmd_buf needs SIGNAL_BUF_SIZE bytes");
 
 /* Number of valid samples currently held in adc_cmd_buf for `replay` to play
    out the DAC.  Set by a successful `capture`/`stream` (the just-recorded
    trace) or by a `load` upload (a host-supplied trace).  0 = nothing to
    replay yet. */
 static size_t replay_len = 0;
+/* The pool generation (adc_pool.h) the RAM trace above was written under: once SCPI (or anyone)
+   fills the pool's trace region, it is not ours to replay any more. */
+static uint32_t json_trace_gen;
 
 /* Binary-upload (`load_bin`) state while a connection is in PROTO_LOAD raw mode:
    destination buffer + capacity (adc_buf16, or PSRAM for a deep upload), total
@@ -1462,6 +1464,7 @@ void handle_capture(int conn_id, const char *json) {
     v2cap.stop_dac = false;
     v2cap.b64      = wants_b64(json);
     replay_len     = samples;
+    json_trace_gen = adc_pool_take();   /* the read-back lands in the pool */
     return;            /* gate stays claimed until poll completes it */
 }
 
@@ -1628,6 +1631,7 @@ void handle_stream(int conn_id, const char *json) {
     v2cap.stop_dac = false;
     v2cap.b64      = wants_b64(json);
     replay_len     = samples;
+    json_trace_gen = adc_pool_take();   /* the read-back lands in the pool */
 }
 
 void handle_ping(int conn_id, const char *json) {
@@ -1765,6 +1769,7 @@ void handle_measure(int conn_id, const char *json) {
     v2cap.stop_dac = true;
     v2cap.b64      = wants_b64(json);
     replay_len     = samples;
+    json_trace_gen = adc_pool_take();   /* the read-back lands in the pool */
 }
 
 /* `load` — upload a host-supplied waveform into adc_cmd_buf, one base64url
@@ -1823,6 +1828,7 @@ void handle_load(int conn_id, const char *json) {
 
     size_t total_bytes = offset + dec_len;
     replay_len = total_bytes / 2u;               /* 16-bit samples */
+    json_trace_gen = adc_pool_take();            /* the upload is the pool's trace now */
 
     char payload[64];
     snprintf(payload, sizeof(payload),
@@ -1918,6 +1924,7 @@ void handle_load_bin(int conn_id, const char *json) {
     } else {
         load_bin_psram = false;
         load_bin_dst   = (uint8_t *)adc_buf16;
+        json_trace_gen = adc_pool_take();      /* the upload is the pool's trace now */
     }
     load_bin_total    = total;
     load_bin_have     = 0;
@@ -1954,6 +1961,8 @@ void handle_replay(int conn_id, const char *json) {
     float  sr_hz   = parse_sample_rate_hz(json);   /* 0 = max rate */
     size_t samples = samples_s[0] ? (size_t)strtoul(samples_s, NULL, 10) : replay_len;
 
+    /* A RAM trace the pool has since given to someone else (a SCPI READ? or TRACe:DATA) is gone. */
+    if (!replay_in_psram && !adc_pool_holds(json_trace_gen)) replay_len = 0;
     if (replay_len == 0) {
         send_error(conn_id, "nothing to replay");
         return;

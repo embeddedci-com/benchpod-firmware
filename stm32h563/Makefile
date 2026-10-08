@@ -138,6 +138,7 @@ C_SOURCES := \
   src/fw_info.c \
   src/fw_info_block.c \
   src/fw_sign.c \
+  src/adc_pool.c \
   src/cmd_tier.c \
   src/cmd_gate.c \
   src/pod_policy.c \
