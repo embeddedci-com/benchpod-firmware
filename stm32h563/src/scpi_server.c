@@ -9,6 +9,7 @@
 #include "watchdog.h"
 #include "dac_limits.h"
 #include "adc_pool.h"
+#include "version.h"      /* FIRMWARE_VERSION: the *IDN? firmware field */
 #include "pico/time.h"   /* make_timeout_time_ms / time_reached / sleep_ms */
 
 #include "scpi/scpi.h"
@@ -25,7 +26,6 @@
    not '{'.  All actions reuse the same engine APIs as the JSON handler, and
    bulk sample data is returned as ASCII CSV. */
 
-#define SCPI_FW_VERSION "0.2.0"   /* keep in sync with command_handler FIRMWARE_VERSION */
 
 #define SCPI_INPUT_BUFFER_LENGTH 256
 #define SCPI_ERROR_QUEUE_SIZE    16
@@ -895,7 +895,7 @@ void scpi_dispatch_line(int conn_id, const char *line) {
     if (!inited) {
         scpi_reset_state();
         SCPI_Init(&scpi_ctx, scpi_commands, &scpi_if, scpi_units_def,
-                  "EmbeddedCI", "BenchPod", "0", SCPI_FW_VERSION,
+                  "EmbeddedCI", "BenchPod", "0", FIRMWARE_VERSION,
                   scpi_input_buf, SCPI_INPUT_BUFFER_LENGTH,
                   scpi_err_queue, SCPI_ERROR_QUEUE_SIZE);
         inited = true;

@@ -2992,7 +2992,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 
 | Command | Description |
 |---|---|
-| `*IDN?` | `EmbeddedCI,BenchPod,0,0.2.0` (the last field is the SCPI layer's version, not the firmware's; read that with JSON `status`) |
+| `*IDN?` | `EmbeddedCI,BenchPod,0,<firmware version>`, for example `EmbeddedCI,BenchPod,0,3.7.0` (the same version as JSON `status`) |
 | `*RST` | Stop the DAC and restore the `SOURce`/`SENSe` defaults (sine, 1 kHz, amplitude 127, offset 128, 256 points, maximum rates) and empty the trace |
 | `*CLS`, `*ESE`, `*ESE?`, `*ESR?`, `*OPC`, `*OPC?`, `*SRE`, `*SRE?`, `*STB?`, `*TST?`, `*WAI` | Standard status and synchronization commands (libscpi core) |
 

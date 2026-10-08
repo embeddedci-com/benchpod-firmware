@@ -34,6 +34,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "version.h"
+
 static int failures;
 #define CHECK(cond) do { \
     if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } \
@@ -212,7 +214,7 @@ static void test_short_reply_unchanged(void) {
     reset_conn(1024);
     scpi_dispatch_line(0, "*IDN?");
     K.out[K.out_len] = '\0';
-    CHECK(strstr(K.out, "EmbeddedCI,BenchPod") == K.out);
+    CHECK(strcmp(K.out, "EmbeddedCI,BenchPod,0," FIRMWARE_VERSION "\r\n") == 0);   /* the firmware's version */
     CHECK(K.sleeps == 0);                      /* room available: no waiting at all */
     CHECK(K.closes == 0);
 }
