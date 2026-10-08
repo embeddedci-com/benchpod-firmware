@@ -1,7 +1,11 @@
 # OTA fallback for the STM32H563 BenchPod
 
-Status: design note, 2026-10-04. No code changed. Covers the firmware in `stm32h563/` as of the
-current `build/bench_pod_stm32.bin` (523,984 bytes).
+Status (firmware 3.7.0): step 1 of the recommended path is built (released in 3.5.1, see the
+summary). Step 2, the bootloader with the W25Q copy (options 2 + 4) and pending/confirm/rollback
+(option 5), is not built: a power cut during an install still needs USB DFU. 3.7.0 added one
+owner per update (a second transport cannot restart or abort a running install). The design
+note itself is from 2026-10-04 and covers the firmware in `stm32h563/` as of the then
+`build/bench_pod_stm32.bin` (523,984 bytes).
 
 ## Summary
 

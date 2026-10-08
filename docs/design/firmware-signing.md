@@ -1,7 +1,8 @@
 # Signed firmware and blobs
 
-Status: 2026-10-06, the preparation (report only) is built: see "Built so far" at the end.
-Enforcement is not. Expands option D of
+Status (firmware 3.7.0): built and released. Firmware 3.6.0 is the first signed release and
+ships the enforcement too (`sig_policy`, default `audit`, so nothing is refused until a pod is
+moved to `permissive` or `required`); 3.7.0 is signed the same way. See "Built" at the end. Expands option D of
 [access-control.md](access-control.md) and adds the rollout order within the access-control work.
 Written against firmware 3.5.1 (`bcad10d`).
 
@@ -179,10 +180,11 @@ Notes on the order:
    users be able to enroll their own public key (over USB only)?
 4. Add `.sig` files only to 3.5.0 and 3.5.1 (blobs in the W25Q), or to every 3.x release?
 
-## Built so far (preparation, report only)
+## Built
 
-Branch `fw-signing` in benchpod-firmware, embeddedci-server and benchpod-cli; hwe2e on
-`fw-signing-hwe2e` in embeddedci-server. Nothing refuses anything because of a signature.
+The preparation (report only) came from branch `fw-signing` in benchpod-firmware,
+embeddedci-server and benchpod-cli (hwe2e on `fw-signing-hwe2e` in embeddedci-server); the
+enforcement below it from `policy-enforce`. Both are in firmware 3.6.0 and later.
 
 | Step | What | Where |
 |---|---|---|
@@ -195,10 +197,10 @@ Branch `fw-signing` in benchpod-firmware, embeddedci-server and benchpod-cli; hw
 | 7 | CLI checks `flash-self` and blob signatures and sends `upload-sig` to pods that take it | CLI |
 | 8 | Server audit log with a "would deny" flag, nothing enforced | server |
 | 9 | `cmd_tier.c`: every JSON verb has a tier, logged with each command | firmware |
-| 10 | `fw_sign.c` + OTA: `sig` on `ota_begin`/`ota.begin`, `upload-sig` on USB, results in the status replies, `ota_sig`/`sig_policy` capabilities, fw_info `FW_INFO_FLAG_ENFORCES_SIG` (no image sets it yet) | firmware |
+| 10 | `fw_sign.c` + OTA: `sig` on `ota_begin`/`ota.begin`, `upload-sig` on USB, results in the status replies, `ota_sig`/`sig_policy` capabilities, fw_info `FW_INFO_FLAG_ENFORCES_SIG` (set from 3.6.0) | firmware |
 | 11 | `hwe2e/benchpod_ota_sig_hw_test.go` | server hwe2e |
 
-Enforcement (branch `policy-enforce`, docs/design/policy-commands.md): the persisted
+Enforcement (branch `policy-enforce`, docs/design/policy-commands.md, released in 3.6.0): the persisted
 `sig_policy` command (cloud may tighten, USB may set anything, LAN nothing), the fw_info
 `FW_INFO_FLAG_ENFORCES_SIG` flag, release CI refusing to publish unsigned, and the server's
 "Require signed firmware" org setting that pushes `required` after a pod's first `sig: ok`
