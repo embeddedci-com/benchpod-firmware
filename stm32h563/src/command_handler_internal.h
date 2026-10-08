@@ -112,13 +112,6 @@ void handle_sensor_status(int conn_id, const char *json);
 void handle_la_voltage(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 void handle_nrst(int conn_id, const char *json);
-void handle_dac_mux(int conn_id, const char *json);
-void handle_cal_switch(int conn_id, const char *json);
-void handle_analog_path(int conn_id, const char *json);
-void handle_dac_out(int conn_id, const char *json);
-void handle_current_out(int conn_id, const char *json);
-void handle_adc_read(int conn_id, const char *json);
-void handle_calibrate(int conn_id, const char *json);
 void handle_fpga_image(int conn_id, const char *json);
 void handle_psram_recover(int conn_id, const char *json);
 void handle_psram_ping(int conn_id, const char *json);
@@ -138,6 +131,15 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* Analog front end (command_handler_analog.c). */
+void handle_dac_mux(int conn_id, const char *json);
+void handle_cal_switch(int conn_id, const char *json);
+void handle_analog_path(int conn_id, const char *json);
+void handle_dac_out(int conn_id, const char *json);
+void handle_current_out(int conn_id, const char *json);
+void handle_adc_read(int conn_id, const char *json);
+void handle_calibrate(int conn_id, const char *json);
 
 /* Captures and the paced bulk read-back (command_handler_capture.c). */
 void handle_capture(int conn_id, const char *json);

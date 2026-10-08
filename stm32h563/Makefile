@@ -107,6 +107,7 @@ C_SOURCES := \
   src/ws_frame.c \
   src/mbedtls_port.c \
   src/command_handler.c \
+  src/command_handler_analog.c \
   src/command_handler_can.c \
   src/command_handler_capture.c \
   src/command_handler_dac.c \
