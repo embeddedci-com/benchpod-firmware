@@ -186,7 +186,8 @@ bool command_handler_step_busy(void) {
 /* ---- JSON commands ---------------------------------------------------------- */
 
 /* {"cmd":"la_pins"} -> {"pins":[12 entries],"levels":M|null} */
-void handle_la_pins(int conn_id) {
+void handle_la_pins(int conn_id, const char *json) {
+    (void)json;
     uint16_t pulls  = la_pull_mask_now();
     uint16_t levels = 0;
     bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;

@@ -1388,7 +1388,7 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     return true;
 }
 
-static void handle_generate(int conn_id, const char *json) {
+void handle_generate(int conn_id, const char *json) {
     char waveform[16] = {0};
     char freq_s[16]   = {0};
     char amp_s[8]     = {0};
@@ -1428,7 +1428,7 @@ static void handle_generate(int conn_id, const char *json) {
     }
 }
 
-static void handle_capture(int conn_id, const char *json) {
+void handle_capture(int conn_id, const char *json) {
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     size_t samples = samples_s[0] ? (size_t)atoi(samples_s) : 256;
@@ -1478,7 +1478,7 @@ static float parse_named_rate_hz(const char *json, const char *key) {
      {"cmd":"capture_dual","adc_samples":N,"adc_rate_mhz":R,
                            "la_samples":M,"la_rate_mhz":S}
    command_handler_poll() reads back + replies, so the net task keeps running. */
-static void handle_capture_dual(int conn_id, const char *json) {
+void handle_capture_dual(int conn_id, const char *json) {
     char s[16] = {0};
     size_t adc_n = 0, la_n = 0;
     if (json_get_value(json, "adc_samples", s, sizeof(s)) && s[0]) adc_n = (size_t)atoi(s);
@@ -1564,7 +1564,7 @@ static void handle_capture_dual(int conn_id, const char *json) {
    RESUME streaming the last capture_dual's PSRAM data from global sample index N — the
    samples are still in PSRAM, so a stalled read-back resumes here instead of re-capturing.
    Reuses the same bulk read-back path; command_handler_poll() streams + frees the bus. */
-static void handle_capture_read(int conn_id, const char *json) {
+void handle_capture_read(int conn_id, const char *json) {
     if (!last_cap.valid) {
         send_error(conn_id, "no capture to resume (run capture_dual first)");
         return;
@@ -1601,7 +1601,7 @@ static void handle_capture_read(int conn_id, const char *json) {
            (unsigned)offset, (unsigned)total);
 }
 
-static void handle_stream(int conn_id, const char *json) {
+void handle_stream(int conn_id, const char *json) {
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     size_t samples = samples_s[0] ? (size_t)atoi(samples_s) : 256;
@@ -1629,7 +1629,8 @@ static void handle_stream(int conn_id, const char *json) {
     replay_len     = samples;
 }
 
-static void handle_ping(int conn_id) {
+void handle_ping(int conn_id, const char *json) {
+    (void)json;
     send_ok_str(conn_id, "\"pong\"");
 }
 
@@ -1651,7 +1652,7 @@ static void handle_ping(int conn_id) {
      {"cmd":"test","pattern":"counter","samples":512}
      {"cmd":"test","pattern":"const","value":42,"samples":128}
 */
-static void handle_test(int conn_id, const char *json) {
+void handle_test(int conn_id, const char *json) {
     char pattern[16]   = {0};
     char value_s[8]    = {0};
     char samples_s[16] = {0};
@@ -1705,7 +1706,7 @@ static void handle_test(int conn_id, const char *json) {
     bulk.b64 = wants_b64(json);
 }
 
-static void handle_measure(int conn_id, const char *json) {
+void handle_measure(int conn_id, const char *json) {
     char waveform[16] = {0};
     char freq_s[16]   = {0};
     char amp_s[8]     = {0};
@@ -1777,7 +1778,7 @@ static void handle_measure(int conn_id, const char *json) {
      {"cmd":"load","offset":0,"data":"<base64url>"}
      {"cmd":"load","offset":180,"data":"<base64url>"}  ... etc
    Reply: {"status":"ok","data":{"offset":O,"len":L,"total":T}} */
-static void handle_load(int conn_id, const char *json) {
+void handle_load(int conn_id, const char *json) {
     char offset_s[12] = {0};
     char data_b64[240] = {0};
 
@@ -1867,7 +1868,7 @@ static void dac_psram_verify_log(uint32_t base, uint32_t total_bytes) {
      {"cmd":"load_bin","total":N}
    Reply (immediate): {"status":"ok","data":{"ready":N}}  -> stream N bytes next.
    Reply (after N bytes): {"status":"ok","data":{"total":S}}  (S = samples). */
-static void handle_load_bin(int conn_id, const char *json) {
+void handle_load_bin(int conn_id, const char *json) {
     if (!conn_runs_state_machine(conn_id)) {
         send_error(conn_id, "load_bin needs a stream connection");
         return;
@@ -1946,7 +1947,7 @@ static void handle_load_bin(int conn_id, const char *json) {
    `sample_rate_mhz` should match the rate the trace was captured at so the
    playback time-base matches; omit for the max 12 MSPS rate.  `samples`
    defaults to the full recorded length. */
-static void handle_replay(int conn_id, const char *json) {
+void handle_replay(int conn_id, const char *json) {
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     float  sr_hz   = parse_sample_rate_hz(json);   /* 0 = max rate */
@@ -2017,7 +2018,8 @@ static void handle_replay(int conn_id, const char *json) {
 
 /* `dac_stop` — halt any running DAC output (a looped `replay`, a continuous
    `generate`, or a held `dac_set_constant`). */
-static void handle_dac_stop(int conn_id) {
+void handle_dac_stop(int conn_id, const char *json) {
+    (void)json;
     dac_stop();
     /* With DAC limits set (an external output stage), stopping must not leave the DAC wherever
        it was: hold it at the low-output end instead (dac_limits.h). */
@@ -2053,7 +2055,7 @@ static void dac_limits_reply(int conn_id) {
      {"cmd":"dac_limits","path":"5v","inverted":true,"min_mv":1850,"max_mv":3600}  -> set
      {"cmd":"dac_limits","enabled":false}                         -> clear
    Setting does not move the DAC; the next dac_stop (or boot) parks it. */
-static void handle_dac_limits(int conn_id, const char *json) {
+void handle_dac_limits(int conn_id, const char *json) {
     char v[16] = {0};
     if (json_get_value(json, "enabled", v, sizeof(v)) && strcmp(v, "false") == 0) {
         if (dac_limits_clear() != 0) { send_error(conn_id, "could not clear the DAC limits"); return; }
@@ -2083,7 +2085,7 @@ static void handle_dac_limits(int conn_id, const char *json) {
    FPGA DAC sequencer clocks a single byte continuously; `value` is the 0..255
    level and `divider` (optional) sets DAC_CLK = HFOSC / divider.
      {"cmd":"dac_set","value":0..255,"divider":N} */
-static void handle_dac_set(int conn_id, const char *json) {
+void handle_dac_set(int conn_id, const char *json) {
     char val_s[8]  = {0};
     char div_s[12] = {0};
     if (!json_get_value(json, "value", val_s, sizeof(val_s))) {
@@ -2112,7 +2114,7 @@ static void handle_dac_set(int conn_id, const char *json) {
  * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
  * drive (the former gpio_set) is gone: a pull-up — or its absence, which leaves
  * the board's pull-down — sets a line's idle level instead. */
-static void handle_la(int conn_id, const char *json) {
+void handle_la(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char steps_s[12] = {0};
 
@@ -2222,7 +2224,7 @@ static void handle_la(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-static void handle_target_power(int conn_id, const char *json) {
+void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
     char state_s[8]  = {0};
     char delay_s[12] = {0};
@@ -2258,7 +2260,8 @@ static void handle_target_power(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-static void handle_target_status(int conn_id) {
+void handle_target_status(int conn_id, const char *json) {
+    (void)json;
     target_power_status_t e1, e2;
     target_power_get_status(1, &e1);
     target_power_get_status(2, &e2);
@@ -2285,7 +2288,8 @@ static void handle_target_status(int conn_id) {
    Boards with the pod's own monitor (0x41) add "pod": the pod's 5 V current (the DUT's
    internal rail bypasses that shunt) and total_ua, pod + internal rail = what the USB input
    delivers. Older boards leave "pod" out. */
-static void handle_power_status(int conn_id) {
+void handle_power_status(int conn_id, const char *json) {
+    (void)json;
     int ibus = 0, ish = 0, icur = 0;
     int ebus = 0, esh = 0, ecur = 0;
     int pbus = 0, psh = 0, pcur = 0;
@@ -2325,7 +2329,8 @@ static void handle_power_status(int conn_id) {
     }
 }
 
-static void handle_status(int conn_id) {
+void handle_status(int conn_id, const char *json) {
+    (void)json;
     const char *ip = wifi_get_ip();
     const char *wstate;
     wifi_state_t st = wifi_get_state();
@@ -2478,7 +2483,7 @@ static bool cloud_truthy(const char *s) {
     return s[0] == 't' || s[0] == 'T' || s[0] == '1';
 }
 
-static void handle_cloud_set(int conn_id, const char *json) {
+void handle_cloud_set(int conn_id, const char *json) {
     char host[CLOUD_HOST_MAX]      = {0};
     char did[CLOUD_DEVICE_ID_MAX]  = {0};
     char port_s[8] = {0}, tls_s[8] = {0}, en_s[8] = {0};
@@ -2533,7 +2538,8 @@ static void handle_cloud_set(int conn_id, const char *json) {
     }
 }
 
-static void handle_cloud_status(int conn_id) {
+void handle_cloud_status(int conn_id, const char *json) {
+    (void)json;
     cloud_config_t cfg;
     bool have = (cloud_config_load(&cfg) == 0);
     char last_error[80];
@@ -2558,7 +2564,8 @@ static void handle_cloud_status(int conn_id) {
     }
 }
 
-static void handle_cloud_clear(int conn_id) {
+void handle_cloud_clear(int conn_id, const char *json) {
+    (void)json;
     cloud_config_clear();
     net_cloud_reload_after_reply();   /* drops to DISABLED once this reply is out */
     send_ok_str(conn_id, "\"cleared\"");
@@ -2567,7 +2574,7 @@ static void handle_cloud_clear(int conn_id) {
 /* ---- Wi-Fi provisioning (ESP32-C3 via esp-hosted) ----
    Stores the SSID/passphrase that esp_wifi_ctrl associates with; the wired
    Ethernet stays primary, Wi-Fi is the fallback (see net_server multihoming). */
-static void handle_wifi_set(int conn_id, const char *json) {
+void handle_wifi_set(int conn_id, const char *json) {
     config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.magic = CONFIG_MAGIC; cfg.version = CONFIG_VERSION;
@@ -2589,7 +2596,8 @@ static void handle_wifi_set(int conn_id, const char *json) {
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
-static void handle_wifi_clear(int conn_id) {
+void handle_wifi_clear(int conn_id, const char *json) {
+    (void)json;
     config_clear();
     net_wifi_reload_after_reply();   /* drops Wi-Fi once this reply is out (the cloud may ride it) */
     send_ok_str(conn_id, "\"cleared\"");
@@ -2607,7 +2615,7 @@ static void handle_wifi_clear(int conn_id) {
    test and returns {mbit, sent, received, intact, corrupt, crc, align, tx_fail}. */
 bool clock_on_hsi(void);   /* main.c: true when the MCU crystal did not start */
 
-static void handle_eth(int conn_id, const char *buf) {
+void handle_eth(int conn_id, const char *buf) {
     char action[16] = {0};
     json_get_value(buf, "action", action, sizeof(action));
     if (strcmp(action, "stats") == 0) {
@@ -2689,7 +2697,7 @@ static void handle_eth(int conn_id, const char *buf) {
 
 /* {"cmd":"speedtest","dir":"up"|"down","bytes":N}  — cloud throughput probe over
    a tunnel conn. See the speedtest state block / speedtest_pump above. */
-static void handle_speedtest(int conn_id, const char *buf) {
+void handle_speedtest(int conn_id, const char *buf) {
     char dir[8] = {0};
     json_get_value(buf, "dir", dir, sizeof(dir));
     char nbuf[16] = {0};
@@ -2713,7 +2721,8 @@ static void handle_speedtest(int conn_id, const char *buf) {
     sptx.sent   = 0;
 }
 
-static void handle_wifi_status(int conn_id) {
+void handle_wifi_status(int conn_id, const char *json) {
+    (void)json;
     config_t cfg;
     bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
     /* esp-hosted transport counters since the link came up.  `batch` is the
@@ -2758,7 +2767,8 @@ static void handle_wifi_status(int conn_id) {
 
 #define IDENT_NONCE_MAX 128   /* max nonce we will sign, in bytes */
 
-static void handle_identity_public(int conn_id) {
+void handle_identity_public(int conn_id, const char *json) {
+    (void)json;
     uint8_t pub[DEVICE_ID_PUBLIC_LEN];
     if (device_identity_get_public(pub) != 0) {
         char msg[128];
@@ -2774,7 +2784,7 @@ static void handle_identity_public(int conn_id) {
     send_ok_str(conn_id, payload);
 }
 
-static void handle_identity_pop(int conn_id, const char *json) {
+void handle_identity_pop(int conn_id, const char *json) {
     char nonce_b64[B64URL_ENCODED_LEN(IDENT_NONCE_MAX) + 4];
     if (!json_get_value(json, "nonce", nonce_b64, sizeof(nonce_b64))) {
         send_error(conn_id, "missing nonce");
@@ -2810,6 +2820,14 @@ static void handle_identity_pop(int conn_id, const char *json) {
     }
 }
 
+/* identity_wipe only runs on the pod's USB console (console.c, physical presence); every JSON
+   transport gets this refusal. */
+void handle_identity_wipe(int conn_id, const char *json) {
+    (void)json;
+    send_error(conn_id, "identity_wipe: only on the pod's USB console (physical presence): "
+                        "benchpod identity wipe --connection usb");
+}
+
 /* ---- SWD probe ---- */
 
 /* Arm the SWD engine and flip this connection to PROTO_DAP, where its byte
@@ -2818,7 +2836,7 @@ static void handle_identity_pop(int conn_id, const char *json) {
    replaced by batched DAP transfers, the path that makes flashing fast over the
    internet.  The "ok" response is sent FIRST, while the connection is still
    JSON, so the client sees the ack before the byte stream switches meaning. */
-static void handle_dap_start(int conn_id, const char *json) {
+void handle_dap_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char s[8] = {0};
     if (!json_get_value(json, "swclk", s, sizeof(s))) {
@@ -2892,7 +2910,7 @@ static void handle_dap_start(int conn_id, const char *json) {
  *   {"cmd":"sensor_regs","start":"0xF7","len":6}     → register bytes
  *   {"cmd":"sensor_la","samples":1024,"sample_rate_mhz":2.0} → raw bus capture
  */
-static void handle_sensor_start(int conn_id, const char *json) {
+void handle_sensor_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char type[16] = {0}, addr_s[8] = {0}, sda_s[8] = {0}, scl_s[8] = {0};
 
@@ -2934,7 +2952,7 @@ static void handle_sensor_start(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-static void handle_sensor_set(int conn_id, const char *json) {
+void handle_sensor_set(int conn_id, const char *json) {
     char t_s[16] = {0}, p_s[16] = {0};
     bool any = false;
 
@@ -2961,14 +2979,16 @@ static void handle_sensor_set(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-static void handle_sensor_stop(int conn_id) {
+void handle_sensor_stop(int conn_id, const char *json) {
+    (void)json;
     sensor_sim_stop();
     la_pins_release_fn(LA_FN_I2C_SDA);
     la_pins_release_fn(LA_FN_I2C_SCL);
     send_ok_str(conn_id, "null");
 }
 
-static void handle_sensor_status(int conn_id) {
+void handle_sensor_status(int conn_id, const char *json) {
+    (void)json;
     char resp[256];
     if (!sensor_sim_active()) {
         snprintf(resp, sizeof(resp),
@@ -2989,7 +3009,7 @@ static void handle_sensor_status(int conn_id) {
     }
 }
 
-static void handle_sensor_regs(int conn_id, const char *json) {
+void handle_sensor_regs(int conn_id, const char *json) {
     char start_s[8] = {0}, len_s[8] = {0};
     json_get_value(json, "start", start_s, sizeof(start_s));
     json_get_value(json, "len",   len_s,   sizeof(len_s));
@@ -3011,7 +3031,7 @@ static void handle_sensor_regs(int conn_id, const char *json) {
     bulk_begin(conn_id, len, false);   /* paced send; frees the gate when done */
 }
 
-static void handle_sensor_la(int conn_id, const char *json) {
+void handle_sensor_la(int conn_id, const char *json) {
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     /* "samples" here = packed capture bytes (4 raw {SCL,SDA} samples per byte) */
@@ -3039,7 +3059,7 @@ static void handle_sensor_la(int conn_id, const char *json) {
  * new general view.
  *   {"cmd":"la_capture","samples":1024,"sample_rate_mhz":2.0}
  * "samples" is the LA sample count (2 bytes each); 2*samples must fit the buffer. */
-static void handle_la_capture(int conn_id, const char *json) {
+void handle_la_capture(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
@@ -3089,7 +3109,7 @@ static void handle_la_capture(int conn_id, const char *json) {
  *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200}
  * Exit: close the socket (primary), or send  <≥1s idle> +++ <≥1s idle>  to
  * return to JSON on the same connection. */
-static void handle_uart_proxy_start(int conn_id, const char *json) {
+void handle_uart_proxy_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char s[12] = {0};
     if (!json_get_value(json, "rx", s, sizeof(s))) { send_error(conn_id, "missing rx"); return; }
@@ -3163,7 +3183,7 @@ static void handle_uart_proxy_start(int conn_id, const char *json) {
      {"cmd":"la_voltage","mv":1800|3300}  -> switch the bank (required before any
                                              LA op) and report the new state.
      {"cmd":"la_voltage"}                 -> report the current mv + status pin. */
-static void handle_la_voltage(int conn_id, const char *json) {
+void handle_la_voltage(int conn_id, const char *json) {
     char mv_s[8] = {0};
     if (json_get_value(json, "mv", mv_s, sizeof(mv_s))) {
         /* Switching the bank under a running UART proxy / SWD session / sensor emulation
@@ -3199,7 +3219,8 @@ static void handle_la_voltage(int conn_id, const char *json) {
                            "advertised":"none"|"default"|"1.5A"|"3.0A",
                            "advertised_ma":0|500|1500|3000}
    Report-only: nothing in the firmware gates on it. */
-static void handle_usb_cc(int conn_id) {
+void handle_usb_cc(int conn_id, const char *json) {
+    (void)json;
     usb_cc_t cc;
     if (usb_cc_read(&cc) != 0) {
         /* Distinguish "this board has no CC taps" from "the conversion failed",
@@ -3227,7 +3248,7 @@ static void handle_usb_cc(int conn_id) {
    Flashing does NOT need this: dap_start's CMSIS-DAP SWJ_PINS already drives the
    same pin, so an OpenOCD/pyOCD connect-under-reset works with no extra call.
    This is for power-on-reset style test steps that are not flashing. */
-static void handle_nrst(int conn_id, const char *json) {
+void handle_nrst(int conn_id, const char *json) {
     if (!nrst_ctrl_supported()) {
         send_error(conn_id, "nrst pin needs a v3 pod");
         return;
@@ -3250,7 +3271,7 @@ static void handle_nrst(int conn_id, const char *json) {
    including its ``ctrlN_en``; ``ctrlN_sel`` picks the path (ctrl1: 0=3V3,1=5V,
    2=12V,3=12V_ADC; ctrl2: 0=12V_VMID,1=ADC_VMID,2=GND). Omitted CTRLn is left
    as-is; a bare command just reports state. */
-static void handle_dac_mux(int conn_id, const char *json) {
+void handle_dac_mux(int conn_id, const char *json) {
     char s[8] = {0};
     if (json_get_value(json, "ctrl1_en", s, sizeof(s))) {
         int sel = json_get_value(json, "ctrl1_sel", s, sizeof(s)) ? atoi(s) : 0;
@@ -3280,7 +3301,7 @@ static void handle_dac_mux(int conn_id, const char *json) {
    (5V DAC->ADC), cal2 (12V DAC->ADC, exclusive with cal1), current_in
    (ADC<-amps terminal), cal_path (ADC<-cal path). Any field present sets the
    whole state (absent = off); a bare command just reports state. */
-static void handle_cal_switch(int conn_id, const char *json) {
+void handle_cal_switch(int conn_id, const char *json) {
     char s[8] = {0};
     bool any = json_get_value(json, "cal1", s, sizeof(s))
              | json_get_value(json, "cal2", s, sizeof(s))
@@ -3306,7 +3327,7 @@ static void handle_cal_switch(int conn_id, const char *json) {
    i2c_bus.c::analog_path_set).  {"cmd":"analog_path","path":"cal1"} flips every
    switch the path needs and returns the resulting mux/relay registers.
    Names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v adc_ext|ext|sma cal1 cal2 current_in current_out. */
-static void handle_analog_path(int conn_id, const char *json) {
+void handle_analog_path(int conn_id, const char *json) {
     char name[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
     analog_path_t p;
@@ -3322,7 +3343,7 @@ static void handle_analog_path(int conn_id, const char *json) {
 /* dac_out — route a DAC output path AND set a CALIBRATED voltage (one step, no
    manual mux flipping).  {"cmd":"dac_out","path":"5v","volts":2.5} → achieved
    mv + code.  path off just parks the output; omit volts to only route. */
-static void handle_dac_out(int conn_id, const char *json) {
+void handle_dac_out(int conn_id, const char *json) {
     char name[16] = {0}, volts_s[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
     analog_path_t p; int idx = -1;
@@ -3356,7 +3377,7 @@ static void handle_dac_out(int conn_id, const char *json) {
    Setting a current switches the DAC voltage outputs off first (analog path current_out): they
    share the DAC and would follow it. The loop needs an external floating supply; the pod cannot see
    whether current flows. dac_stop does not return the loop to 4 mA: send 4000 uA for that. */
-static void handle_current_out(int conn_id, const char *json) {
+void handle_current_out(int conn_id, const char *json) {
     char ua_s[24] = {0}, payload[112];
     if (!json_get_value(json, "ua", ua_s, sizeof(ua_s))) {
         snprintf(payload, sizeof(payload), "{\"min_ua\":%ld,\"max_ua\":%ld}",
@@ -3391,7 +3412,7 @@ static void handle_current_out(int conn_id, const char *json) {
    no single voltage (the input is still moving — e.g. a DAC left driving by a
    preceding `measure`/`generate`) and is REFUSED rather than averaged.  Quick, so
    it blocks briefly. */
-static void handle_adc_read(int conn_id, const char *json) {
+void handle_adc_read(int conn_id, const char *json) {
     char name[16] = {0};
     analog_path_t p = ANALOG_PATH_ADC_EXT;
     if (json_get_value(json, "source", name, sizeof(name))) {
@@ -3470,7 +3491,7 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd) {
    `current_in` is the only source a pod can calibrate on its own: with J8 open the terminal is 0 V,
    so what it reads is its offset. A reading outside +/-50 mV means something is driving J8:
    it is refused and the old calibration stays. */
-static void handle_calibrate(int conn_id, const char *json) {
+void handle_calibrate(int conn_id, const char *json) {
     char v[16] = {0};
     if (json_get_value(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
         if (adc_cal_clear() != 0) { send_error(conn_id, "could not clear the calibration"); return; }
@@ -3580,7 +3601,7 @@ typedef struct {
 
 static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb);
 
-static void handle_dac_control_loop(int conn_id, const char *json) {
+void handle_dac_control_loop(int conn_id, const char *json) {
     loop_curve_bufs_t *cb = pvPortMalloc(sizeof(*cb));
     if (!cb) { send_error(conn_id, "out of memory for the curve"); return; }
     handle_dac_control_loop_with(conn_id, json, cb);
@@ -3718,7 +3739,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
    This is the open-loop bring-up flow: hold curve point A, meter the output, move to B, meter
    again — each step is one small command, and the curve stays exactly as it was so the two
    readings are comparable.  Omitted fields keep their current value.  Gateware >= v29. */
-static void handle_dac_loop_input(int conn_id, const char *json) {
+void handle_dac_loop_input(int conn_id, const char *json) {
     if (signal_engine_fpga_version() < DAC_LOOP_SOURCE_MIN_GW) {
         /* Cheap pre-check on the cached version; the authoritative image gate lives in
            dac_loop_set_source (a live SPI read, so it runs under the heavy lock). */
@@ -3775,7 +3796,7 @@ static void handle_dac_loop_input(int conn_id, const char *json) {
    source; in a fixed/sweep run the ADC is not in the path at all and `i` is just a reading of
    an input nothing is using — plot against `in`, not `i`.  On pre-v29 gateware `in` is the ADC
    value, which is what the loop used there by construction. */
-static void handle_dac_loop_probe(int conn_id, const char *json) {
+void handle_dac_loop_probe(int conn_id, const char *json) {
     (void)json;
     if (!heavy_begin(conn_id)) return;
     /* Same image gate as arming: on the deep-replay image DAC_PROBE reads a tied-off 0, which
@@ -3807,7 +3828,7 @@ static void handle_dac_loop_probe(int conn_id, const char *json) {
    config-SPI pins ARE the shared PSRAM bus), so fpga_warmboot() actually REFLASHES the selected
    image and does a CRESET cold-reconfig (~2-3 s). Returns the new image's {version, features};
    also asks the net task to re-announce capabilities so the server's cached caps track the swap. */
-static void handle_fpga_image(int conn_id, const char *json) {
+void handle_fpga_image(int conn_id, const char *json) {
     char s[8] = {0};
     if (!json_get_value(json, "image", s, sizeof(s)) || !s[0]) {
         send_error(conn_id, "image required (0=loop, 1=deep-replay)"); return;
@@ -3839,7 +3860,8 @@ static void handle_fpga_image(int conn_id, const char *json) {
    a stale firmware mirror of the capture base, since fixed: see fpga_warmboot.)  The client will not receive a
    command.response (the pod reboots first) — treat "no reply, device reconnects" as success
    and re-poll status.psram_ok. */
-static void handle_psram_recover(int conn_id) {
+void handle_psram_recover(int conn_id, const char *json) {
+    (void)json;
     send_ok_str(conn_id, "{\"recover\":\"rebooting\"}");
     s_recover_at = make_timeout_time_ms(400);   /* let the ack flush, then reset in the poll loop */
     s_recover_pending = true;
@@ -3851,7 +3873,7 @@ static void handle_psram_recover(int conn_id) {
    reads it back.  PASS => the iCE40 writes PSRAM and the STM32 sees it identically;
    FAIL => the iCE40->PSRAM write path is broken (NOT the analog ADC).  Cheap,
    deterministic, self-contained — used by hwe2e TestHW_V2_PsramPing. */
-static void handle_psram_ping(int conn_id, const char *json) {
+void handle_psram_ping(int conn_id, const char *json) {
     char v[12] = {0};
     int n = 16;
     if (json_get_value(json, "count", v, sizeof(v))) n = atoi(v);
@@ -3933,7 +3955,7 @@ static void dispatch_line(int conn_id, const char *buf) {
         if (why) { send_error(conn_id, why); return; }
     }
 
-    if      (strcmp(cmd, "ping")      == 0) handle_ping(conn_id);
+    if      (strcmp(cmd, "ping")      == 0) handle_ping(conn_id, buf);
     else if (strcmp(cmd, "generate")  == 0) handle_generate(conn_id, buf);
     else if (strcmp(cmd, "capture")   == 0) handle_capture(conn_id, buf);
     else if (strcmp(cmd, "capture_dual") == 0) handle_capture_dual(conn_id, buf);
@@ -3943,7 +3965,7 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "load")      == 0) handle_load(conn_id, buf);
     else if (strcmp(cmd, "load_bin")  == 0) handle_load_bin(conn_id, buf);
     else if (strcmp(cmd, "replay")    == 0) handle_replay(conn_id, buf);
-    else if (strcmp(cmd, "dac_stop")  == 0) handle_dac_stop(conn_id);
+    else if (strcmp(cmd, "dac_stop")  == 0) handle_dac_stop(conn_id, buf);
     else if (strcmp(cmd, "dac_limits") == 0) handle_dac_limits(conn_id, buf);
     else if (strcmp(cmd, "dac_set")   == 0) handle_dac_set(conn_id, buf);
     else if (strcmp(cmd, "dac_mux")   == 0) handle_dac_mux(conn_id, buf);
@@ -3958,43 +3980,41 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "dac_loop_probe")   == 0) handle_dac_loop_probe(conn_id, buf);
     else if (strcmp(cmd, "dac_loop_input")   == 0) handle_dac_loop_input(conn_id, buf);
     else if (strcmp(cmd, "fpga_image")       == 0) handle_fpga_image(conn_id, buf);
-    else if (strcmp(cmd, "psram_recover")    == 0) handle_psram_recover(conn_id);
+    else if (strcmp(cmd, "psram_recover")    == 0) handle_psram_recover(conn_id, buf);
     else if (strcmp(cmd, "test")      == 0) handle_test(conn_id, buf);
-    else if (strcmp(cmd, "status")    == 0) handle_status(conn_id);
+    else if (strcmp(cmd, "status")    == 0) handle_status(conn_id, buf);
     else if (strcmp(cmd, "cloud_set")     == 0) handle_cloud_set(conn_id, buf);
-    else if (strcmp(cmd, "cloud_status")  == 0) handle_cloud_status(conn_id);
-    else if (strcmp(cmd, "cloud_clear")   == 0) handle_cloud_clear(conn_id);
+    else if (strcmp(cmd, "cloud_status")  == 0) handle_cloud_status(conn_id, buf);
+    else if (strcmp(cmd, "cloud_clear")   == 0) handle_cloud_clear(conn_id, buf);
     else if (strcmp(cmd, "wifi_set")      == 0) handle_wifi_set(conn_id, buf);
-    else if (strcmp(cmd, "wifi_status")   == 0) handle_wifi_status(conn_id);
-    else if (strcmp(cmd, "wifi_clear")    == 0) handle_wifi_clear(conn_id);
+    else if (strcmp(cmd, "wifi_status")   == 0) handle_wifi_status(conn_id, buf);
+    else if (strcmp(cmd, "wifi_clear")    == 0) handle_wifi_clear(conn_id, buf);
     else if (strcmp(cmd, "eth")           == 0) handle_eth(conn_id, buf);
     else if (strcmp(cmd, "speedtest")     == 0) handle_speedtest(conn_id, buf);
     else if (strcmp(cmd, "la")        == 0) handle_la(conn_id, buf);
-    else if (strcmp(cmd, "la_pins")       == 0) handle_la_pins(conn_id);
+    else if (strcmp(cmd, "la_pins")       == 0) handle_la_pins(conn_id, buf);
     else if (strcmp(cmd, "gpio")          == 0) handle_gpio(conn_id, buf);
     else if (strcmp(cmd, "la_voltage")    == 0) handle_la_voltage(conn_id, buf);
-    else if (strcmp(cmd, "usb_cc")        == 0) handle_usb_cc(conn_id);
+    else if (strcmp(cmd, "usb_cc")        == 0) handle_usb_cc(conn_id, buf);
     else if (strcmp(cmd, "nrst")          == 0) handle_nrst(conn_id, buf);
     else if (strcmp(cmd, "target_power")  == 0) handle_target_power(conn_id, buf);
-    else if (strcmp(cmd, "target_status") == 0) handle_target_status(conn_id);
-    else if (strcmp(cmd, "power_status")  == 0) handle_power_status(conn_id);
+    else if (strcmp(cmd, "target_status") == 0) handle_target_status(conn_id, buf);
+    else if (strcmp(cmd, "power_status")  == 0) handle_power_status(conn_id, buf);
     else if (strcmp(cmd, "power_profile") == 0) handle_power_profile(conn_id, buf);
     else if (strcmp(cmd, "dap_start")     == 0) handle_dap_start(conn_id, buf);
     else if (strcmp(cmd, "spi_start")     == 0) handle_spi_start(conn_id, buf);
-    else if (strcmp(cmd, "spi_stop")      == 0) handle_spi_stop(conn_id);
+    else if (strcmp(cmd, "spi_stop")      == 0) handle_spi_stop(conn_id, buf);
     else if (strcmp(cmd, "spi_xfer")      == 0) handle_spi_xfer(conn_id, buf);
     else if (strcmp(cmd, "spi_flash")     == 0) handle_spi_flash(conn_id, buf);
     else if (strcmp(cmd, "spi_stream")    == 0) handle_spi_stream(conn_id, buf);
-    else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id);
-    else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id);
+    else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id, buf);
+    else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id, buf);
     else if (strcmp(cmd, "identity_pop")    == 0) handle_identity_pop(conn_id, buf);
-    else if (strcmp(cmd, "identity_wipe")   == 0)
-        send_error(conn_id, "identity_wipe: only on the pod's USB console (physical presence): "
-                            "benchpod identity wipe --connection usb");
+    else if (strcmp(cmd, "identity_wipe")   == 0) handle_identity_wipe(conn_id, buf);
     else if (strcmp(cmd, "sensor_start")  == 0) handle_sensor_start(conn_id, buf);
     else if (strcmp(cmd, "sensor_set")    == 0) handle_sensor_set(conn_id, buf);
-    else if (strcmp(cmd, "sensor_stop")   == 0) handle_sensor_stop(conn_id);
-    else if (strcmp(cmd, "sensor_status") == 0) handle_sensor_status(conn_id);
+    else if (strcmp(cmd, "sensor_stop")   == 0) handle_sensor_stop(conn_id, buf);
+    else if (strcmp(cmd, "sensor_status") == 0) handle_sensor_status(conn_id, buf);
     else if (strcmp(cmd, "sensor_regs")   == 0) handle_sensor_regs(conn_id, buf);
     else if (strcmp(cmd, "sensor_la")     == 0) handle_sensor_la(conn_id, buf);
     else if (strcmp(cmd, "la_capture")    == 0) handle_la_capture(conn_id, buf);
@@ -4002,18 +4022,18 @@ static void dispatch_line(int conn_id, const char *buf) {
     else if (strcmp(cmd, "can_config")   == 0) handle_can_config(conn_id, buf);
     else if (strcmp(cmd, "can_write")    == 0) handle_can_write(conn_id, buf);
     else if (strcmp(cmd, "can_read")     == 0) handle_can_read(conn_id, buf);
-    else if (strcmp(cmd, "can_status")   == 0) handle_can_status(conn_id);
+    else if (strcmp(cmd, "can_status")   == 0) handle_can_status(conn_id, buf);
     else if (strcmp(cmd, "can_term")     == 0) handle_can_term(conn_id, buf);
     else if (strcmp(cmd, "can_respond")  == 0) handle_can_respond(conn_id, buf);
-    else if (strcmp(cmd, "can_disable")  == 0) handle_can_disable(conn_id);
+    else if (strcmp(cmd, "can_disable")  == 0) handle_can_disable(conn_id, buf);
     else if (strcmp(cmd, "ota_begin")    == 0) handle_ota_begin(conn_id, buf);
     else if (strcmp(cmd, "ota_data")     == 0) handle_ota_data(conn_id, buf);
-    else if (strcmp(cmd, "ota_end")      == 0) handle_ota_end(conn_id);
-    else if (strcmp(cmd, "ota_status")   == 0) handle_ota_status(conn_id);
-    else if (strcmp(cmd, "ota_abort")    == 0) handle_ota_abort(conn_id);
-    else if (strcmp(cmd, "ota_selftest") == 0) handle_ota_selftest(conn_id);
-    else if (strcmp(cmd, "ota_commit")   == 0) handle_ota_commit(conn_id);
-    else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id);
+    else if (strcmp(cmd, "ota_end")      == 0) handle_ota_end(conn_id, buf);
+    else if (strcmp(cmd, "ota_status")   == 0) handle_ota_status(conn_id, buf);
+    else if (strcmp(cmd, "ota_abort")    == 0) handle_ota_abort(conn_id, buf);
+    else if (strcmp(cmd, "ota_selftest") == 0) handle_ota_selftest(conn_id, buf);
+    else if (strcmp(cmd, "ota_commit")   == 0) handle_ota_commit(conn_id, buf);
+    else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id, buf);
     else if (strcmp(cmd, "sig_policy")   == 0) handle_sig_policy(conn_id, buf);
     else if (strcmp(cmd, "lan_policy")   == 0) handle_lan_policy(conn_id, buf);
     else if (strcmp(cmd, "cloud_ca")     == 0) handle_cloud_ca(conn_id, buf);
