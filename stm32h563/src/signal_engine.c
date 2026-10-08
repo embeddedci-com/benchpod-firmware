@@ -1325,10 +1325,6 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
     return 0;
 }
 
-int dac_generate_arbitrary(const uint8_t *data, size_t len, bool loop) {
-    return dac_generate_arbitrary_rate(data, len, loop, 0.0f);
-}
-
 /* ---- deep-DAC PSRAM region bookkeeping (top-anchored, >=v18) ----------------
  * s_dac_ps_base is the byte base of the staged waveform (TOP - total_bytes on v18,
  * or 0 = legacy overlay on older gateware).  s_dac_ps_active marks the region as
@@ -2839,8 +2835,6 @@ void fpga_uart_disable(void) {
     uart_tx_clear();
     printf("[uart] disabled\n");
 }
-
-bool fpga_uart_active(void) { return uart_armed_local; }
 
 static void uart_fifo_write(const uint8_t *data, size_t len) {
     /* [CMD][len_lo][len_hi][N bytes] */

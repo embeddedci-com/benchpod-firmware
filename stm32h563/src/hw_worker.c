@@ -239,11 +239,7 @@ static void handle_work(cmd_work_t *w) {
            through its own ota.status view (ota_view_for) and leaves that session alone. */
         const char *busy = ota_begin_gate(who);
         if (busy) { ota_refuse_for(who, busy); break; }
-        uint8_t sig[128];
-        int sig_len = ota_sig_decode(sig_b64, sig);
-        /* an undecodable manifest counts as a malformed one (fw_sign: "format"), not as none */
-        ota_begin_owned(who, w->u32, sha, (ota_target_t)t, (uint32_t)version, sig,
-                        sig_len < 0 ? 1u : (size_t)sig_len);
+        ota_begin_owned_b64(who, w->u32, sha, (ota_target_t)t, (uint32_t)version, sig_b64);
         break;
     }
     case WK_OTA_DATA:

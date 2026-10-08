@@ -105,6 +105,28 @@ static void test_other_slots_untouched(void) {
     CHECK(mock_w25q_bad_programs == 0, "programmed over unerased bits");
 }
 
+/* blob_store_clear empties one slot (now and after a reboot) and leaves the others alone. */
+static void test_clear(void) {
+    const uint32_t n = 3000;
+    uint8_t d[32];
+    mock_w25q_reset();
+    fill(img, n, 21); sha(img, n, d);
+    CHECK(blob_store_write(BLOB_CA, n, 0, d, mem_src, img) == 0, "ca write");
+    CHECK(blob_store_write(BLOB_PROXY, n, 0, d, mem_src, img) == 0, "proxy write");
+    CHECK(blob_store_clear(BLOB_CA) == 0, "clear failed");
+    CHECK(!blob_store_present(BLOB_CA), "present after clear");
+    CHECK(blob_store_present(BLOB_PROXY) && blob_store_verify(BLOB_PROXY) == 0, "neighbour damaged");
+    blob_store_load();
+    CHECK(!blob_store_present(BLOB_CA) && blob_store_present(BLOB_PROXY), "reload after clear");
+    CHECK(blob_store_clear(BLOB_CA) == 0, "clearing an empty slot");
+    CHECK(blob_store_clear((blob_id_t)BLOB_SLOT_COUNT) != 0, "cleared a slot that does not exist");
+    /* A new write into a cleared slot works (the rest of the old data is erased by the write). */
+    fill(img, n, 22); sha(img, n, d);
+    CHECK(blob_store_write(BLOB_CA, n, 0, d, mem_src, img) == 0 && blob_store_verify(BLOB_CA) == 0,
+          "write after clear");
+    CHECK(mock_w25q_bad_programs == 0, "programmed over unerased bits");
+}
+
 static void test_corruption_detected(void) {
     const uint32_t n = 20000;
     uint8_t d[32];
@@ -230,6 +252,7 @@ int main(void) {
     test_bad_hash_leaves_slot_empty();
     test_limits();
     test_other_slots_untouched();
+    test_clear();
     test_corruption_detected();
     test_power_cut_anywhere();
     test_no_flash();

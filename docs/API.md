@@ -2637,6 +2637,10 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 `SOURce:FUNCtion` now accepts `USER` alongside `SINusoid`/`SQUare`/`RAMP`. `OUTPut ON` with `USER` selected and an empty buffer pushes `-200 "Execution error"`.
 
+The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `stream`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
+
+SCPI gets the same safe-mode and digital-board refusals as the JSON commands. In safe mode (the iCE40/PSRAM are off) `OUTPut`, `READ?`, `MEASure?`, `DIAGnostic:CAPture?`, `TRACe:DATA` and `DIGital:*` push `-240 "Hardware error"`; on the digital-only board `OUTPut ON`, `READ?`, `MEASure?`, `TRACe:DATA` and a `DIAGnostic:CAPture?` with ADC samples push `-241 "Hardware missing"`. `SYSTem:ERRor?` carries the same text as the JSON refusal. The `SOURce`/`SENSe` settings, `DIAGnostic:PATTern?`, identity, network and target power keep working. `OUTPut OFF` is refused in safe mode too (it maps to `dac_stop`), but works on the digital-only board.
+
 ```
 # Record a slow trace, then replay it straight back out the DAC
 SENSe:SRATe 0.08
@@ -3053,6 +3057,8 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 | `-221 Settings conflict` | DAC limits are set (`OUTPut ON`, `MEASure?`), or an LA pin belongs to another function (`DIGital:*`) |
 | `-222 Data out of range` | A parameter outside the ranges above, or an eFuse other than 1 or 2 |
 | `-224 Illegal parameter value` | Bad base64url (`TRACe:DATA`, `SYSTem:IDENtity:POP?`) or a bad `FREQuency` keyword |
+| `-240 Hardware error` | Safe mode: the iCE40/PSRAM are off this boot, so `OUTPut`, `READ?`, `MEASure?`, `DIAG:CAP?`, `TRACe:DATA` and `DIGital:*` are refused (the error text is the JSON refusal) |
+| `-241 Hardware missing` | The digital-only board has no analog front end: the analog commands are refused (`DIAG:CAP?` for the LA alone still works) |
 | `-300 Device specific error` | `DIGital:STEP` while a step train is running |
 | `-310 System error` | The device identity is not available |
 | Other libscpi codes | Malformed input, for example `-113 Undefined header` |
@@ -3143,9 +3149,11 @@ All errors follow the format:
 | `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
 | `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
 | `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, console `upload-begin`) in a safe mode that turned the iCE40/PSRAM off |
-| `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `ca-clear`, `proxy-set`, `proxy-clear`, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
+| `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
 | `"cloud_ca: change it from the cloud or the USB console"`, `"cloud_proxy: ..."`, `"sig_policy: ..."`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
 | `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
+
+Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
 
 Three families carry a **machine-parseable prefix** — clients (the Python SDK among them) match
 on the prefix and show the rest to the user:

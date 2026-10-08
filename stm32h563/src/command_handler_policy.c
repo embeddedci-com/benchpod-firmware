@@ -58,6 +58,25 @@ void handle_lan_policy(int conn_id, const char *json) {
 
 /* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */
 
+/* One certificate of the cloud_ca reply. The list is capped at CA_CERTS_MAX bytes (the reply's
+   one buffer has to hold the rest too); the walk stops at the first one that does not fit. */
+#define CA_CERTS_MAX 640u
+typedef struct {
+    bp_emit_t e;
+    size_t    used;   /* bytes of certificate items so far */
+} ca_json_t;
+
+static bool ca_json_cert(void *ctx, const char *subject, const char *sha256_hex) {
+    ca_json_t *cj = ctx;
+    char item[200];
+    int w = snprintf(item, sizeof(item), "%s{\"subject\":\"%s\",\"sha256\":\"%s\"}",
+                     cj->used ? "," : "", subject, sha256_hex);
+    if (w < 0 || (size_t)w >= sizeof(item) || cj->used + (size_t)w >= CA_CERTS_MAX) return false;
+    bp_emit_raw(&cj->e, item);
+    cj->used += (size_t)w;
+    return true;
+}
+
 /* {"cmd":"cloud_ca"[,"clear":true]} -> {"present":bool,"certs":[{"subject":..,"sha256":..}][,"error":..]}
    Installing one goes through the upload path (OTA target "ca"). Reading works from anywhere;
    clearing (like installing and the proxy) only from the cloud or USB (pod_policy_cloud_link_gate). */
@@ -70,14 +89,21 @@ void handle_cloud_ca(int conn_id, const char *json) {
         if (why) { send_error(conn_id, why); return; }
     }
     /* Built here, not with send_ok_str: its 256-byte frame cannot hold a certificate list (a
-       long subject, or a chain of several, is several hundred bytes). Worker task only. */
-    static char certs[640];
-    int n = cloud_extras_ca_describe(certs, sizeof(certs));
+       long subject, or a chain of several, is several hundred bytes). Worker task only. The
+       certificates go in behind the "false" header, which becomes "true" once there is one. */
+    static const char hdr_false[] = "{\"status\":\"ok\",\"data\":{\"present\":false,\"certs\":[";
+    static const char hdr_true[]  = "{\"status\":\"ok\",\"data\":{\"present\":true,\"certs\":[";
     static char resp[720];
-    bp_emit_t e;
-    bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"present\":%s,\"certs\":[", n > 0 ? "true" : "false");
-    bp_emit_raw(&e, certs);
+    ca_json_t cj = { .used = 0 };
+    bp_emit_init(&cj.e, resp, sizeof(resp));
+    bp_emit_raw(&cj.e, hdr_false);
+    int n = cloud_extras_ca_each(ca_json_cert, &cj);
+    bp_emit_t e = cj.e;
+    if (n > 0 && bp_emit_ok(&e)) {
+        memmove(resp + sizeof(hdr_true) - 1, resp + sizeof(hdr_false) - 1, e.len - (sizeof(hdr_false) - 1) + 1);
+        memcpy(resp, hdr_true, sizeof(hdr_true) - 1);
+        e.len -= 1;
+    }
     bp_emit_raw(&e, "]");
     /* An installed CA that is corrupt or does not parse is not used (built-in roots only). */
     const char *err = cloud_extras_ca_error();

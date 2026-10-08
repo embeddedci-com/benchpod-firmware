@@ -108,11 +108,6 @@ bool mcu_adc_ready(void) { return s_ready; }
 
 int mcu_adc_vref_mv(void) { return s_vref_mv; }
 
-int mcu_adc_read_mv(uint32_t channel, int *out_mv)
-{
-    return mcu_adc_read_mv_avg(channel, 1, out_mv);
-}
-
 int mcu_adc_read_mv_avg(uint32_t channel, unsigned n, int *out_mv)
 {
     if (!s_ready || out_mv == NULL) return -1;

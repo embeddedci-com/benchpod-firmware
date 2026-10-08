@@ -198,6 +198,27 @@ static void test_lists_name_real_verbs(void) {
     CHECK(!cmd_gate_ok_without_hw("ota_begin") && !cmd_gate_needs_analog("la_capture"), "spot");
 }
 
+/* cmd_gate_device: the safe-mode and digital-board checks alone, as SCPI asks them with the JSON
+   verb its command stands for. Same refusal texts as through cmd_gate_check, no tier or lease. */
+static void test_device_gate(void) {
+    CHECK(cmd_gate_device("capture", NULL, false, true) == NULL, "full board, no safe mode");
+    const char *r = cmd_gate_device("capture", NULL, true, true);
+    CHECK(r && strcmp(r, "safe mode: iCE40/PSRAM are off. Unplug and replug the pod") == 0, "safe: %s", r);
+    CHECK(cmd_gate_device("target_power", NULL, true, true) == NULL, "power in safe mode");
+    CHECK(starts(cmd_gate_device("measure", NULL, false, false), "this BenchPod has no analog front end"),
+          "digital measure");
+    CHECK(cmd_gate_device("la", NULL, false, false) == NULL, "digital la");
+    CHECK(cmd_gate_device("capture_dual", "{\"adc_samples\":0}", false, false) == NULL, "LA-only dual");
+    CHECK(cmd_gate_device("capture_dual", "{\"adc_samples\":16}", false, false) != NULL, "ADC dual");
+    CHECK(cmd_gate_device("capture_dual", NULL, false, false) == NULL, "dual without json");
+    CHECK(starts(cmd_gate_device("generate", NULL, true, false), "safe mode:"), "order");
+    /* the same answer cmd_gate_check gives once the policy gates pass */
+    cmd_gate_ctx_t c = open_ctx(POLICY_SRC_LAN);
+    c.skip_hw = true;
+    CHECK(gate("{\"cmd\":\"capture\"}", &c) == cmd_gate_device("capture", "{\"cmd\":\"capture\"}", true, true),
+          "check vs device");
+}
+
 static void test_scpi_line_writes(void) {
     CHECK(!cmd_gate_scpi_line_writes("*IDN?"), "query");
     CHECK(!cmd_gate_scpi_line_writes("MEAS:VOLT?;:SYST:ERR?"), "two queries");
@@ -213,6 +234,7 @@ int main(void) {
     test_locked_lan();
     test_lease();
     test_tunnel_max_tier();
+    test_device_gate();
     test_safe_mode();
     test_digital_board();
     test_lists_name_real_verbs();

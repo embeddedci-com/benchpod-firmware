@@ -46,6 +46,31 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit_raw(e, ",");
 }
 
+void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
+    /* Firmware features every pod has, then the ones that depend on the board, the analog front
+       end and the running gateware image. */
+    bp_emit_raw(e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
+                   ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
+                   ",\"la_pins\",\"power_profile\",\"capture_b64\""
+                   ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
+    if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
+    if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
+    if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");
+    if (c->dac_dc)          bp_emit_raw(e, ",\"dac_dc\"");
+    if (c->dac_replay)      bp_emit_raw(e, ",\"dac_replay\"");
+    if (c->deep_replay)     bp_emit_raw(e, ",\"dac_deep_replay\"");
+    if (c->control_loop)    bp_emit_raw(e, ",\"dac_control_loop\"");
+    if (c->cotrig)          bp_emit_raw(e, ",\"dac_cotrig\"");
+    if (c->loop_sources)    bp_emit_raw(e, ",\"dac_loop_sources\"");
+    if (c->loop_input_map)  bp_emit_raw(e, ",\"dac_loop_input_map\"");
+    if (c->gpio_read)       bp_emit_raw(e, ",\"gpio_read\"");
+    if (c->capture_trigger) bp_emit_raw(e, ",\"capture_trigger\"");
+    if (c->spi_master)      bp_emit_raw(e, ",\"spi_master\",\"spi_stream\"");   /* spi_stream: firmware */
+    if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
+    if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
+    bp_emit_raw(e, "]");
+}
+
 /* s cut to `max` characters, control characters (each up to six escaped bytes) as '?'. */
 static void short_text(char *out, size_t cap, const char *s, size_t max) {
     size_t n = 0;

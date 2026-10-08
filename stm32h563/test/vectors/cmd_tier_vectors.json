@@ -1,0 +1,511 @@
+{
+  "_comment": "Shared command tier vectors. table: every verb of the firmware's dispatch table (stm32h563/src/cmd_tier.c k_tiers) with its table tier, the tier of the read form for a mixed verb. cases: one raw JSON command line as the pod receives it and the tier the role gate applies to it (cmd_tier() in the firmware, benchpodGateTier in the server): T0 read, T1 instrument control, T2 persisted config, T3 firmware; an unknown verb is T3. Source of truth: embeddedci-server testdata/shared/cmd_tier_vectors.json, checked by api/shared_vectors_test.go against the server table and the firmware's cmd_tier.c. Copies elsewhere (firmware host tests) must stay byte-identical. Add a verb to table and cases when the firmware gains one.",
+  "version": 1,
+  "table": {
+    "ping": "T0",
+    "status": "T0",
+    "cloud_status": "T0",
+    "wifi_status": "T0",
+    "la_pins": "T0",
+    "usb_cc": "T0",
+    "target_status": "T0",
+    "power_status": "T0",
+    "identity_public": "T0",
+    "identity_pop": "T0",
+    "identity_wipe": "T0",
+    "spi_status": "T0",
+    "sensor_status": "T0",
+    "can_status": "T0",
+    "ota_status": "T0",
+    "blob_status": "T0",
+    "dac_loop_probe": "T0",
+    "capture": "T0",
+    "capture_dual": "T0",
+    "capture_read": "T0",
+    "stream": "T0",
+    "la_capture": "T0",
+    "sensor_regs": "T0",
+    "sensor_la": "T0",
+    "can_read": "T0",
+    "psram_ping": "T0",
+    "test": "T0",
+    "dac_limits": "T0",
+    "calibrate": "T0",
+    "eth": "T0",
+    "sig_policy": "T0",
+    "lan_policy": "T0",
+    "cloud_ca": "T0",
+    "cloud_proxy": "T0",
+    "generate": "T1",
+    "measure": "T1",
+    "load": "T1",
+    "load_bin": "T1",
+    "replay": "T1",
+    "dac_stop": "T1",
+    "dac_set": "T1",
+    "dac_mux": "T1",
+    "cal_switch": "T1",
+    "analog_path": "T1",
+    "dac_out": "T1",
+    "current_out": "T1",
+    "adc_read": "T1",
+    "dac_control_loop": "T1",
+    "dac_loop_input": "T1",
+    "la": "T1",
+    "gpio": "T1",
+    "la_voltage": "T1",
+    "nrst": "T1",
+    "target_power": "T1",
+    "power_profile": "T1",
+    "dap_start": "T1",
+    "uart_proxy_start": "T1",
+    "spi_start": "T1",
+    "spi_stop": "T1",
+    "spi_xfer": "T1",
+    "spi_stream": "T1",
+    "spi_flash": "T1",
+    "sensor_start": "T1",
+    "sensor_set": "T1",
+    "sensor_stop": "T1",
+    "can_config": "T1",
+    "can_write": "T1",
+    "can_term": "T1",
+    "can_respond": "T1",
+    "can_disable": "T1",
+    "speedtest": "T1",
+    "fpga_image": "T1",
+    "psram_recover": "T1",
+    "cloud_set": "T2",
+    "cloud_clear": "T2",
+    "wifi_set": "T2",
+    "wifi_clear": "T2",
+    "ota_begin": "T3",
+    "ota_data": "T3",
+    "ota_end": "T3",
+    "ota_commit": "T3",
+    "ota_abort": "T3",
+    "ota_selftest": "T3"
+  },
+  "cases": [
+    {
+      "line": "{\"cmd\":\"ping\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"wifi_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"la_pins\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"usb_cc\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"target_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"power_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"identity_public\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"identity_pop\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"identity_wipe\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"spi_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"can_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"ota_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"blob_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"dac_loop_probe\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"capture\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"capture_dual\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"capture_read\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"stream\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"la_capture\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_regs\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_la\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"can_read\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"psram_ping\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"test\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"dac_limits\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"calibrate\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"eth\"}",
+      "tier": "T2",
+      "note": "eth without an action is not a read (only stats and refclk are)"
+    },
+    {
+      "line": "{\"cmd\":\"sig_policy\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_policy\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_ca\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_proxy\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"generate\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"measure\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"load\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"load_bin\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"replay\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_stop\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_set\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_mux\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"cal_switch\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"analog_path\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_out\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"current_out\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"adc_read\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_control_loop\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dac_loop_input\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"la\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"gpio\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"la_voltage\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"nrst\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"target_power\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"power_profile\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"dap_start\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"uart_proxy_start\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"spi_start\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"spi_stop\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"spi_xfer\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"spi_stream\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"spi_flash\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_start\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_set\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_stop\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"can_config\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"can_write\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"can_term\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"can_respond\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"can_disable\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"speedtest\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"fpga_image\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"psram_recover\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_set\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_clear\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"wifi_set\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"wifi_clear\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"ota_begin\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"ota_data\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"ota_end\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"ota_commit\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"ota_abort\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"ota_selftest\"}",
+      "tier": "T3"
+    },
+    {
+      "line": "{\"cmd\":\"dac_limits\",\"path\":\"5v\",\"min_mv\":1850}",
+      "tier": "T2",
+      "note": "sets a limit"
+    },
+    {
+      "line": "{\"cmd\":\"dac_limits\",\"enabled\":false}",
+      "tier": "T2",
+      "note": "clears the limits"
+    },
+    {
+      "line": "{\"cmd\":\"dac_limits\",\"enabled\":true}",
+      "tier": "T0",
+      "note": "enabled:true changes nothing"
+    },
+    {
+      "line": "{\"cmd\":\"calibrate\",\"source\":\"current_in\"}",
+      "tier": "T2",
+      "note": "runs a calibration"
+    },
+    {
+      "line": "{\"cmd\":\"calibrate\",\"clear\":true}",
+      "tier": "T2",
+      "note": "drops the calibration"
+    },
+    {
+      "line": "{\"cmd\":\"calibrate\",\"clear\":false}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"eth\",\"action\":\"stats\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"eth\",\"action\":\"refclk\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"eth\",\"action\":\"restart\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"eth\",\"action\":\"speed\",\"mbit\":10}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"eth\",\"action\":\"loopback\",\"mbit\":100}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"sig_policy\",\"set\":\"required\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_policy\",\"set\":\"off\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_ca\",\"set\":\"-----BEGIN CERTIFICATE-----\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_ca\",\"clear\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_proxy\",\"set\":\"proxy.example:3128\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_proxy\",\"clear\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"cloud_proxy\",\"clear\":false}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"no_such_verb\"}",
+      "tier": "T3",
+      "note": "a verb the table does not know needs an owner or admin"
+    },
+    {
+      "line": "{\"cmd\":\"generate\",\"shape\":\"sine\",\"freq_hz\":1000}",
+      "tier": "T1",
+      "note": "extra fields do not change a plain verb's tier"
+    }
+  ]
+}

@@ -92,6 +92,10 @@ typedef int (*blob_src_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 int  blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
                       blob_src_fn src, void *ctx);
 
+/* Empty a slot: erase its header sector, so it reads as absent from now on (and after a reboot).
+   Bus held by the caller. 0 = ok. Updates the cache. */
+int  blob_store_clear(blob_id_t id);
+
 /* Read slot data. Bus held by the caller. Same shape as blob_src_fn and ice40_src_read_fn, with
    ctx = (void *)(uintptr_t)id, so a slot can feed ice40_flash_program_src directly. */
 int  blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);

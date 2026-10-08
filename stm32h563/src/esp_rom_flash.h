@@ -44,9 +44,6 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
  * the slot against its SHA-256.  Runs on the hw worker.  0 = flashed and booted. */
 int esp_rom_flash_from_slot(void);
 
-/* Hold the C3 in reset / powered down (EN low). */
-void esp_rom_flash_power_off(void);
-
 /* Bring-up diagnostic: passively monitor the C3's UART0 log (its console output
  * on U0TXD -> PA10) for `ms` milliseconds, printing each line to our console.
  * Does NOT touch EN/BOOT — the C3 keeps running the app. USART1 only. */

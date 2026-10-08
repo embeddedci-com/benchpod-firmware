@@ -86,8 +86,6 @@ void handle_ota_begin(int conn_id, const char *json) {
     json_get_value(json, "target", target_s, sizeof(target_s));
     json_get_value(json, "version", ver_s, sizeof(ver_s));
     json_get_value(json, "sig", sig_s, sizeof(sig_s));
-    uint8_t sig[128];
-    int sig_len = ota_sig_decode(sig_s, sig);   /* < 0: undecodable, checked as malformed */
     int target = ota_target_from_name(target_s);
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
@@ -100,8 +98,8 @@ void handle_ota_begin(int conn_id, const char *json) {
     const char *busy = ota_begin_gate(who);
     if (busy) { send_error(conn_id, busy); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin_owned(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0), sig,
-                        sig_len < 0 ? 1u : (size_t)sig_len) != 0) {
+    if (ota_begin_owned_b64(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0),
+                            sig_s) != 0) {
         send_error(conn_id, ota_error());
         return;
     }
@@ -132,7 +130,8 @@ void handle_ota_data(int conn_id, const char *json) {
 }
 
 /* {"cmd":"ota_end"} — verify the staged image's SHA-256. */
-void handle_ota_end(int conn_id) {
+void handle_ota_end(int conn_id, const char *json) {
+    (void)json;
     const ota_owner_t who = ota_owner_for_conn(conn_id);
     const char *busy = ota_busy_for(who);
     if (busy) { send_error(conn_id, busy); return; }
@@ -141,11 +140,12 @@ void handle_ota_end(int conn_id) {
 }
 
 /* {"cmd":"ota_status"} */
-void handle_ota_status(int conn_id) { ota_reply(conn_id); }
+void handle_ota_status(int conn_id, const char *json) { (void)json; ota_reply(conn_id); }
 
 /* {"cmd":"ota_abort"} */
 /* Another transport's live session is refused (ota.h); an abandoned one may be cleared. */
-void handle_ota_abort(int conn_id) {
+void handle_ota_abort(int conn_id, const char *json) {
+    (void)json;
     const ota_owner_t who = ota_owner_for_conn(conn_id);
     if (ota_abort_by(who) != 0) { send_error(conn_id, ota_busy_replace_for(who)); return; }
     ota_reply(conn_id);
@@ -153,7 +153,8 @@ void handle_ota_abort(int conn_id) {
 
 /* {"cmd":"ota_selftest"} — SAFE validation of the RAM-resident flash writer
    against a scratch sector (never the app).  Run + confirm PASS before ota_commit. */
-void handle_ota_selftest(int conn_id) {
+void handle_ota_selftest(int conn_id, const char *json) {
+    (void)json;
     if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
     int rc = ota_commit_selftest();
     if (rc == 0) send_ok_str(conn_id, "{\"selftest\":\"pass\"}");
@@ -162,7 +163,8 @@ void handle_ota_selftest(int conn_id) {
 
 /* {"cmd":"ota_commit"} — firmware: write the VERIFIED image to flash and reset (no return on
    success, so the ack goes first).  A blob: write it to its W25Q slot and reply with the state. */
-void handle_ota_commit(int conn_id) {
+void handle_ota_commit(int conn_id, const char *json) {
+    (void)json;
     const char *busy = ota_busy_for(ota_owner_for_conn(conn_id));
     if (busy) { send_error(conn_id, busy); return; }
     if (ota_get_state() != OTA_VERIFIED) {
@@ -181,7 +183,8 @@ void handle_ota_commit(int conn_id) {
 }
 
 /* {"cmd":"blob_status"} — what each W25Q slot holds (cached headers, no bus access). */
-void handle_blob_status(int conn_id) {
+void handle_blob_status(int conn_id, const char *json) {
+    (void)json;
     static char resp[768];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));

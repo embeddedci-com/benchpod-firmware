@@ -7,6 +7,7 @@
  * surface lands in later phases.
  */
 #include "console.h"
+#include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
 #include "console_io.h"
 #include "signal_engine.h"
 #include "board_info.h"       /* board caps (ADC/DAC bits, channels) for `status` */
@@ -187,9 +188,10 @@ static void cmd_help(console_out_t out, void *ctx)
         "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
-        "  ca | ca-clear                              company CA for the cloud link (upload-begin ca ...)\r\n"
+        "  cloud-ca | cloud-ca-clear                  company CA for the cloud link (upload-begin ca ...)\r\n"
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
-        "  proxy | proxy-set <host:port> [user pass] | proxy-clear   HTTP proxy for the cloud link\r\n"
+        "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
+        "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
@@ -392,6 +394,15 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
        (unsigned long)noresp, (unsigned long)reboot);
 }
 
+/* `ca`: one line per company CA certificate (cloud_extras_ca_each). */
+typedef struct { console_out_t out; void *ctx; } console_line_t;
+static bool console_ca_cert(void *c, const char *subject, const char *sha256_hex)
+{
+    console_line_t *cl = c;
+    op(cl->out, cl->ctx, "ca %s %.64s\r\n", subject, sha256_hex);
+    return true;
+}
+
 /* Console commands that capture into the PSRAM or drive the shared bus.  They go through the
    same heavy gate as the JSON and SCPI captures: run on the worker between two polls of a LAN
    capture_dual, a console `adc` used to overwrite the capture the iCE40 was still writing (or a
@@ -424,6 +435,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     char *tok = strtok(cmd, " \t");
     while (tok && argc < 11) { argv[argc++] = tok; tok = strtok(NULL, " \t"); }
     if (argc == 0) return;
+    /* The cloud-link settings carry the JSON verbs' names (cloud_ca, cloud_proxy) on the console
+       too; the short names they started with keep working, and replies keep the short form. */
+    static const char *const aliases[][2] = {
+        { "cloud-ca", "ca" }, { "cloud-ca-clear", "ca-clear" }, { "cloud-proxy", "proxy" },
+        { "cloud-proxy-set", "proxy-set" }, { "cloud-proxy-clear", "proxy-clear" },
+    };
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
+        if (!strcmp(argv[0], aliases[i][0])) { argv[0] = (char *)aliases[i][1]; break; }
 
     const bool gated = console_needs_heavy_gate(argv[0]);
     if (gated && !command_handler_acquire_adc(CH_CONSOLE_TEXT_OWNER)) {
@@ -857,7 +876,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             0x300000u, 0x400000u, 0x600000u, 0x7FFF00u
         };
         const int NADDR = (int)(sizeof(A) / sizeof(A[0]));
-        static uint8_t b[256];
+        uint8_t *b = adc_pool_scratch();   /* 256 B; gated, so the pool is ours */
         int errs = 0;
         psram_bus_acquire();
         for (int a = 0; a < NADDR; a++) {                 /* phase 1: write tagged blocks */
@@ -896,7 +915,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         unsigned ln = (argc >= 3) ? (unsigned)strtoul(argv[2], NULL, 0) : 64u;
         if (an > 256) an = 256;
         if (ln > 256) ln = 256;
-        static uint16_t adcb[256], lab[256];
+        uint16_t *adcb = (uint16_t *)adc_pool_scratch();   /* gated: the pool's scratch, 256 each */
+        uint16_t *lab  = adcb + 256;
         int rc = fpga_dual_capture(an ? adcb : NULL, (uint16_t)an, 240,
                                    ln ? lab : NULL, (uint16_t)ln, 24);
         if (rc != 0) {
@@ -998,20 +1018,10 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             else     op(out, ctx, "ca-clear ok\r\n");
         } else {
             /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
-            static char certs[640];
-            int n = cloud_extras_ca_describe(certs, sizeof(certs));
+            console_line_t cl = { out, ctx };
+            int n = cloud_extras_ca_each(console_ca_cert, &cl);
             if (n == 0) op(out, ctx, "ca none\r\n");
             if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
-            for (char *p = certs; n > 0 && (p = strstr(p, "{\"subject\":\"")) != NULL; ) {
-                p += 12;
-                char *se = strchr(p, '"');
-                char *h = se ? strstr(se, "\"sha256\":\"") : NULL;
-                if (!se || !h) break;
-                *se = '\0';
-                h += 10;
-                op(out, ctx, "ca %s %.64s\r\n", p, h);
-                p = h + 64;
-            }
         }
     } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
         const char *why = NULL;
@@ -1075,12 +1085,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else if (ota_begin_gate(OTA_OWNER_USB))   /* another transport's update, or a capture */
             op(out, ctx, "upload-begin error %s\r\n", ota_begin_gate(OTA_OWNER_USB));
         else {
-            uint8_t sig[128];
-            int sig_len = ota_sig_decode(s_sig_b64, sig);   /* < 0: undecodable = malformed */
+            int rc = ota_begin_owned_b64(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3],
+                                         (ota_target_t)t,
+                                         argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, s_sig_b64);
             s_sig_b64[0] = '\0';                             /* one manifest per begin */
-            if (ota_begin_owned(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
-                                argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
-                                sig_len < 0 ? 1u : (size_t)sig_len) == 0)
+            if (rc == 0)
                 op(out, ctx, "upload-begin ok\r\n");
             else
                 op(out, ctx, "upload-begin error %s\r\n", ota_error());

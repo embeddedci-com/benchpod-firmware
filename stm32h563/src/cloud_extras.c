@@ -20,8 +20,9 @@
 
 /* The company CA as installed (PEM, NUL-terminated), heap; NULL = none. Written by the worker,
    read by the net task inside cloud_extras_ca_pem() under a critical section. */
-/* blob_store has no erase: clearing writes a 1-byte marker, and anything shorter than a PEM
-   certificate could ever be (64 bytes) reads as "no company CA". */
+/* Clearing empties the slot (blob_store_clear). Firmware before that wrote a 1-byte marker
+   instead, so anything shorter than a PEM certificate could ever be (64 bytes) still reads as
+   "no company CA". */
 #define CA_MIN_BYTES 64u
 
 static char             *s_ca;
@@ -85,7 +86,7 @@ static void ca_reject(const char *why) {
 static void load_ca_locked(void) {
     size_t len = 0;
     char *ca = read_slot(BLOB_CA, CLOUD_CA_MAX_BYTES, &len);
-    if (ca && len < CA_MIN_BYTES) { vPortFree(ca); ca = NULL; }   /* the "cleared" marker */
+    if (ca && len < CA_MIN_BYTES) { vPortFree(ca); ca = NULL; }   /* an old "cleared" marker */
     const char *why = NULL;
     if (ca) {
         /* The slot header carries the hash of what was written: a mismatch is a damaged slot. */
@@ -185,18 +186,9 @@ void cloud_extras_ca_changed(void) {
 }
 
 
-static int marker_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
-    (void)ctx; (void)off;
-    memset(buf, 0, n);
-    return 0;
-}
-
 const char *cloud_extras_ca_clear(void) {
-    static const uint8_t zero = 0;
-    uint8_t sha[32];
-    mbedtls_sha256(&zero, 1, sha, 0);
     if (w25q_session_open() != 0) return "the W25Q flash does not answer";
-    int rc = blob_store_write(BLOB_CA, 1, 0, sha, marker_src, NULL);
+    int rc = blob_store_clear(BLOB_CA);
     w25q_session_close();
     if (rc != 0) return "could not clear the company CA";
     cloud_extras_ca_changed();
@@ -270,8 +262,7 @@ bool cloud_extras_ca_tls_refused(void) {
 
 const char *cloud_extras_ca_error(void) { return s_ca_error; }
 
-int cloud_extras_ca_describe(char *out, size_t cap) {
-    out[0] = '\0';
+int cloud_extras_ca_each(cloud_ca_cert_fn fn, void *ctx) {
     if (!s_ca) return 0;
     mbedtls_x509_crt chain;
     mbedtls_x509_crt_init(&chain);
@@ -280,7 +271,6 @@ int cloud_extras_ca_describe(char *out, size_t cap) {
         return 0;
     }
     int certs = 0;
-    size_t used = 0;
     for (const mbedtls_x509_crt *c = &chain; c && c->raw.len; c = c->next) {
         char subject[96] = "";
         mbedtls_x509_dn_gets(subject, sizeof(subject), &c->subject);
@@ -289,10 +279,7 @@ int cloud_extras_ca_describe(char *out, size_t cap) {
         mbedtls_sha256(c->raw.p, c->raw.len, d, 0);
         char hex[65];
         for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", d[i]);
-        int w = snprintf(out + used, cap - used, "%s{\"subject\":\"%s\",\"sha256\":\"%s\"}",
-                         certs ? "," : "", subject, hex);
-        if (w < 0 || (size_t)w >= cap - used) break;
-        used += (size_t)w;
+        if (!fn(ctx, subject, hex)) break;
         certs++;
     }
     mbedtls_x509_crt_free(&chain);
@@ -328,7 +315,9 @@ const char *cloud_extras_proxy_set(const char *spec, const char *user, const cha
     uint8_t sha[32];
     mbedtls_sha256((const unsigned char *)&p, sizeof(p), sha, 0);
     if (w25q_session_open() != 0) return "the W25Q flash does not answer";
-    int rc = blob_store_write(BLOB_PROXY, sizeof(p), 0, sha, proxy_src, &p);
+    /* Clearing empties the slot; a zeroed proxy written by older firmware reads as none too. */
+    int rc = p.host[0] ? blob_store_write(BLOB_PROXY, sizeof(p), 0, sha, proxy_src, &p)
+                       : blob_store_clear(BLOB_PROXY);
     w25q_session_close();
     if (rc != 0) return "could not save the proxy";
     taskENTER_CRITICAL();
