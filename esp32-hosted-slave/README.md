@@ -31,7 +31,7 @@ the STM32 embeds and flashes itself (see "On-device flash" below).
 There is **no programming header** — the C3's UART and straps reach only the
 STM32, so the pod flashes the C3 itself over its ROM bootloader.
 
-## Build (ESP-IDF v5.3+; we build with the v5.5 Docker image)
+## Build (ESP-IDF v5.3+; we build with the v5.5 Docker image, pinned by digest in `idf-image`)
 
 The merged image is a ~1.07 MB vendored binary and is **not committed** (git
 ignores `*.bin`). The STM32 build `.incbin`s it, so a fresh checkout must produce
@@ -44,7 +44,11 @@ cd ../stm32h563 && make fetch          # reproducible ESP-IDF Docker build
 cd ../stm32h563 && make fetch ESP_SLAVE_URL=https://…/esp32c3-hosted-slave-merged.bin
 ```
 
-`make fetch` verifies the result against `prebuilt/esp32c3-hosted-slave-merged.bin.sha256`.
+`make fetch` verifies the result against `prebuilt/esp32c3-hosted-slave-merged.bin.sha256`
+and fails on a mismatch, for a download and a Docker build alike. The Docker image is pinned by
+digest in `idf-image`, the component versions by `dependencies.lock`, so a rebuild reproduces the
+committed hash byte for byte. Changing any of them (or `build.sh`, `sdkconfig.defaults*`) means
+committing the new hash, which `make fetch` prints.
 
 The slave GPIO map is baked at compile time, so a generic prebuilt won't match —
 it's built against `sdkconfig.defaults.board`. `make fetch` wraps this container
@@ -52,7 +56,7 @@ build (equivalent to running it by hand):
 
 ```sh
 docker run --rm -v "$PWD:/board" -v "$PWD/work:/work" -v "$PWD/prebuilt:/out" \
-  espressif/idf:release-v5.5 bash /board/build.sh
+  "$(cat idf-image)" bash /board/build.sh
 ```
 
 `build.sh` runs `idf.py create-project-from-example "espressif/esp_hosted==2.12.9:slave"`

@@ -100,6 +100,7 @@ C_SOURCES := \
   src/esp_wifi_ctrl.c \
   src/cloud_config.c \
   src/cloud_client.c \
+  src/cloud_rx.c \
   src/cloud_caps.c \
   src/cloud_reply_cap.c \
   src/ws_frame.c \
@@ -137,6 +138,7 @@ C_SOURCES := \
   src/fw_info_block.c \
   src/fw_sign.c \
   src/cmd_tier.c \
+  src/cmd_gate.c \
   src/pod_policy.c \
   src/lease_gate.c \
   src/cloud_extras.c \
@@ -222,6 +224,14 @@ DEFS := -DUSE_HAL_DRIVER -DSTM32H563xx -DHSE_VALUE=25000000 \
         -DUSE_FULL_ERROR_LIST=1 -DBLAKE2_NO_UNROLLING=1 \
         -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"'
 
+# RELEASE=1: trust only keys/release-N.pub (see "Firmware signing" below) and refuse a plain
+# (non-TLS) cloud connection (cloud-hardening.md section 1). This must come before CFLAGS below
+# (`:=` expands DEFS there): appended further down, -DBENCHPOD_RELEASE=1 never reached the compiler.
+RELEASE ?= 0
+ifeq ($(RELEASE),1)
+DEFS += -DBENCHPOD_RELEASE=1
+endif
+
 INCLUDES := \
   -Iconfig -Ibsp -Isrc -Iport -I$(BUILD_DIR) \
   -Ilib/scpi-parser/libscpi/inc \
@@ -305,16 +315,12 @@ $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 # keys/release-N.pub and, unless RELEASE=1, the developer key from `make dev-key` too. A dev build
 # signs its own image and blobs with that key (build/*.sig), so OTA, install-blobs and hwe2e can
 # send a signed update to a pod running a dev build. CI signs releases itself (release-stm32.yml).
-RELEASE       ?= 0
 DEV_SIGN_KEY  ?= $(HOME)/.config/benchpod/fw-signing-dev.key
 FWSIGN        := python3 ../tools/fwsign.py
 FW_VERSION    := $(shell sed -n 's/^\#define FIRMWARE_VERSION "\(.*\)"/\1/p' src/version.h)
 SIGN_PUBS     := $(sort $(wildcard keys/release-*.pub))
 ifneq ($(RELEASE),1)
 DEV_SIGN_PUB  := $(if $(wildcard $(DEV_SIGN_KEY)),$(BUILD_DIR)/dev-signing.pub)
-else
-# Release builds also refuse a plain (non-TLS) cloud connection (cloud-hardening.md section 1).
-DEFS += -DBENCHPOD_RELEASE=1
 endif
 GEN_SIGN_KEYS := $(BUILD_DIR)/fw_sign_keys_gen.h
 # Rewritten only when its content changes (keys-header compares), so the FORCE does not rebuild
@@ -351,38 +357,39 @@ $(ESP_SLAVE_BIN):
 	@exit 1
 
 # Fetch/produce the out-of-tree binary build dependencies (currently just the
-# ESP32-C3 esp-hosted slave image). Default: ESP-IDF Docker build, pinned by
-# esp32-hosted-slave/dependencies.lock and CONFIG_APP_REPRODUCIBLE_BUILD to be
-# byte-for-byte reproducible for the actual firmware content. Override with
-# ESP_SLAVE_URL to download a prebuilt asset (e.g. in CI) instead of running
-# Docker.
+# ESP32-C3 esp-hosted slave image). Default: ESP-IDF Docker build, reproducible
+# byte for byte: the image is pinned by digest (esp32-hosted-slave/idf-image),
+# the component versions by esp32-hosted-slave/dependencies.lock, and the build
+# uses CONFIG_APP_REPRODUCIBLE_BUILD. Override with ESP_SLAVE_URL to download a
+# prebuilt asset instead of running Docker.
 #
-# The committed sha256 is hard-enforced on a DOWNLOAD (ESP_SLAVE_URL) — that's
-# a real transfer-integrity check. It's advisory-only on a fresh Docker build:
-# ESP-IDF embeds a self-referential app_elf_sha256 field (esp_app_desc_t) whose
-# computation isn't fully covered by CONFIG_APP_REPRODUCIBLE_BUILD, so a build
-# can differ from the committed hash by exactly that field (plus the knock-on
-# whole-image trailer checksum) even when the actual compiled firmware is
-# byte-identical (verified: only those two 32-byte fields differed between a
-# local and a CI build of the same source/lock). Failing the build over that
-# would block every release for a difference with no functional effect.
+# Either way the result must match the committed
+# esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin.sha256, or this
+# fails. (It used to be advisory on a Docker build: with the floating
+# espressif/idf:release-v5.5 tag a rebuild could differ in the self-referential
+# app_elf_sha256 field and the image trailer. With the digest pinned, a rebuild
+# reproduces the committed hash.) Changing the recipe, the lock or the image
+# means committing the new hash: make fetch prints it on a mismatch.
 ESP_SLAVE_DIR := ../esp32-hosted-slave
 ESP_SLAVE_URL ?=
+ESP_IDF_IMAGE := $(shell cat $(ESP_SLAVE_DIR)/idf-image)
 fetch:
 	@if [ -n "$(ESP_SLAVE_URL)" ]; then \
 	   echo "==> Downloading esp-hosted slave image: $(ESP_SLAVE_URL)"; \
 	   mkdir -p $(ESP_SLAVE_DIR)/prebuilt; \
 	   curl -fL "$(ESP_SLAVE_URL)" -o $(ESP_SLAVE_BIN); \
-	   echo "==> Verifying sha256 (download integrity)..."; \
-	   ( cd $(ESP_SLAVE_DIR)/prebuilt && shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256 ); \
 	 else \
-	   echo "==> Building ESP32-C3 esp-hosted slave image (ESP-IDF Docker; needs Docker)..."; \
+	   echo "==> Building ESP32-C3 esp-hosted slave image (ESP-IDF Docker $(ESP_IDF_IMAGE))..."; \
 	   ( cd $(ESP_SLAVE_DIR) && docker run --rm \
 	       -v "$$PWD:/board" -v "$$PWD/work:/work" -v "$$PWD/prebuilt:/out" \
-	       espressif/idf:release-v5.5 bash /board/build.sh ); \
-	   echo "==> Checking sha256 (advisory — see comment above `fetch`)..."; \
-	   ( cd $(ESP_SLAVE_DIR)/prebuilt && shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256 ) \
-	     || echo "==> sha256 mismatch on a fresh build — expected (see comment above), continuing"; \
+	       "$(ESP_IDF_IMAGE)" bash /board/build.sh ) || exit 1; \
+	 fi
+	@echo "==> Verifying sha256 against the committed hash..."
+	@cd $(ESP_SLAVE_DIR)/prebuilt && if ! shasum -a 256 -c esp32c3-hosted-slave-merged.bin.sha256; then \
+	   echo "fetch: the ESP32-C3 slave image does not match esp32c3-hosted-slave-merged.bin.sha256." >&2; \
+	   echo "       Got: $$(shasum -a 256 esp32c3-hosted-slave-merged.bin)" >&2; \
+	   echo "       If the recipe, the lock or idf-image changed on purpose, commit the new hash." >&2; \
+	   exit 1; \
 	 fi
 	@echo "==> OK: $(ESP_SLAVE_BIN)"
 
@@ -414,6 +421,18 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@
+
+# The compile flags and defines are part of every object: RELEASE=1 adds -DBENCHPOD_RELEASE=1, a
+# different CUBE moves the include paths. make only compares file times, so without this a
+# `make RELEASE=1` after a dev build relinked the dev objects into a "release" image. The stamp is
+# rewritten only when its content changes, so an unchanged build rebuilds nothing.
+DEFS_STAMP := $(BUILD_DIR)/flags.stamp
+DEFS_STAMP_TEXT := $(CC) $(CFLAGS) | $(AS) $(ASFLAGS) | $(LDFLAGS)
+$(DEFS_STAMP): FORCE | $(BUILD_DIR)
+	@printf '%s\n' '$(subst ','\'',$(DEFS_STAMP_TEXT))' > $@.tmp; \
+	 if cmp -s $@.tmp $@; then rm -f $@.tmp; \
+	 else if [ -f $@ ]; then echo "compile flags changed: rebuilding every object"; fi; mv $@.tmp $@; fi
+$(OBJECTS): $(DEFS_STAMP)
 
 # Header-dependency files emitted by -MMD (one .d per .o); the leading '-' ignores
 # them on a first/clean build when they don't exist yet.

@@ -336,11 +336,92 @@ static void test_closed_early(void) {
     check_torn_down("FIN mid-reply");
 }
 
+/* The reply in a pbuf chain (one segment split over pbufs), and a stray CR before the end. */
+static void test_reply_shapes(void) {
+    setup(NULL);
+    struct pbuf *p = mk_pbuf("HTTP/1.1 200 OK\r\n");
+    p->next = mk_pbuf("\r\n");
+    p->tot_len = (u16_t)(p->len + p->next->len);
+    CHECK(s_tcp->recv(s_tcp->arg, s_tcp, p, ERR_OK) == ERR_OK, "chain");
+    CHECK(s_app_connected == 1 && s_conf.last_status == 200, "chained reply not seen");
+    CHECK(s_tcp_recved == 19, "acknowledged %d of 19", s_tcp_recved);
+    altcp_close(s_tls);
+    CHECK(s_pcb_frees == 3 && s_pbuf_live == 0 && s_bad_free == 0, "chain: close leaked");
+
+    setup(NULL);
+    CHECK(deliver("HTTP/1.1 200 OK\r\r\n\r\n") == ERR_OK, "CR CR LF");
+    CHECK(s_app_connected == 1, "a doubled CR hid the end of the headers");
+    altcp_close(s_tls);
+
+    /* a blank line inside the status line is not the end: \r\n then text then \r\n\r\n */
+    setup(NULL);
+    CHECK(deliver("HTTP/1.1 200 OK\r\nX: \r\n") == ERR_OK && s_app_connected == 0, "early end");
+    CHECK(deliver("\r\n") == ERR_OK && s_app_connected == 1, "end not seen");
+    altcp_close(s_tls);
+}
+
+/* Something that is not an HTTP proxy answers (or a 200 from HTTP/2 or a lookalike). */
+static void test_not_http(void) {
+    static const char *const replies[] = {
+        "SSH-2.0-OpenSSH_9.6\r\n\r\n",
+        "HTTP/2 200\r\n\r\n",
+        "HTTP/1.1 201 Created\r\n\r\n",
+    };
+    for (size_t i = 0; i < sizeof(replies) / sizeof(replies[0]); i++) {
+        setup(NULL);
+        CHECK(deliver(replies[i]) == ERR_ABRT, "%zu: accepted", i);
+        CHECK(s_conf.last_status != 200 && !s_conf.closed_early, "%zu: status %u", i, s_conf.last_status);
+        check_torn_down("not http");
+    }
+}
+
+/* The application gives up mid-handshake (its connect timeout): aborting the TLS pcb runs the
+   abort down the chain, and every layer is freed once. Before the fix the proxy layer was freed
+   twice: once by its lower_err (the TCP abort's err callback) and again by its own abort. */
+static void test_app_abort_during_setup(void) {
+    setup("dTpw");
+    CHECK(deliver("HTTP/1.1 200 Conn") == ERR_OK, "partial reply");
+    altcp_abort(s_tls);
+    CHECK(s_bad_free == 0, "abort: %d bad frees", s_bad_free);
+    CHECK(s_pcb_frees == s_pcb_allocs && s_pcb_allocs == 3, "abort: %d of %d pcbs freed",
+          s_pcb_frees, s_pcb_allocs);
+    CHECK(s_mem_live == 0 && s_pbuf_live == 0, "abort: leaked mem %d pbuf %d", s_mem_live, s_pbuf_live);
+    CHECK(s_tcp_aborts == 1 && s_app_connected == 0, "abort: tcp aborts %d", s_tcp_aborts);
+    CHECK(s_app_err_calls == 1 && s_app_err == ERR_ABRT, "abort: app err %d calls", s_app_err_calls);
+
+    /* after the 200, in the application phase */
+    setup(NULL);
+    CHECK(deliver("HTTP/1.1 200 OK\r\n\r\n") == ERR_OK && s_app_connected == 1, "200");
+    altcp_abort(s_tls);
+    CHECK(s_bad_free == 0 && s_pcb_frees == 3 && s_mem_live == 0, "abort after 200: bad %d freed %d",
+          s_bad_free, s_pcb_frees);
+}
+
+/* cloud_client aborts the bare proxy pcb (nothing above it yet) when it cannot build the TLS
+   config: the CA does not parse, or out of memory. */
+static void test_abort_bare_proxy(void) {
+    s_pcb_allocs = s_pcb_frees = s_mem_live = s_bad_free = s_tcp_aborts = 0;
+    memset(s_live, 0, sizeof(s_live));
+    memset(&s_conf, 0, sizeof(s_conf));
+    s_conf.proxy_port = 3128;
+    s_conf.target_host = "embeddedci.com";
+    struct altcp_pcb *p = altcp_bp_proxy_new_tcp(&s_conf, IPADDR_TYPE_V4);
+    CHECK(p != NULL, "stack not built");
+    altcp_abort(p);
+    CHECK(s_bad_free == 0, "bare abort: %d bad frees", s_bad_free);
+    CHECK(s_pcb_frees == 2 && s_pcb_allocs == 2, "bare abort: %d of %d freed", s_pcb_frees, s_pcb_allocs);
+    CHECK(s_mem_live == 0 && s_tcp_aborts == 1, "bare abort: mem %d aborts %d", s_mem_live, s_tcp_aborts);
+}
+
 int main(void) {
     test_request();
     test_ok_split();
     test_refused();
     test_closed_early();
+    test_reply_shapes();
+    test_not_http();
+    test_app_abort_during_setup();
+    test_abort_bare_proxy();
     if (failures) { printf("test_altcp_bp_proxy: %d FAILED\n", failures); return 1; }
     printf("test_altcp_bp_proxy: all passed\n");
     return 0;

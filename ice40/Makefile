@@ -248,7 +248,7 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest spitest swdqtest ringtest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol test clean help
 
 all: $(OUT).bin
 
@@ -706,6 +706,15 @@ topdeeptest:
 	$(VVP) /tmp/$(PROJECT)_topdeep.vvp
 	@rm -f /tmp/$(PROJECT)_topdeep.vvp
 
+# la_bank's driver priority through the whole top (P2 T-2): static, UART, I2C, stepper and the
+# SPI engine armed over the SPI link onto one pad, each taking it over and handing it back, plus
+# the channel >= N guard.
+topmuxtest:
+	iverilog -g2012 -I src -o /tmp/$(PROJECT)_topmux.vvp -s tb_top_la_mux \
+	         sim/tb_top_la_mux.v $(SRC) $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_topmux.vvp
+	@rm -f /tmp/$(PROJECT)_topmux.vvp
+
 # SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
 # behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
 spitest:
@@ -730,7 +739,7 @@ ringtest:
 	@rm -f /tmp/$(PROJECT)_ring.vvp
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest spitest swdqtest ringtest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol
 	@echo "All gateware testbenches passed."
 
 clean:

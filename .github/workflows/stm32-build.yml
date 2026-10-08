@@ -7,14 +7,20 @@
 #   • Host tests WITH Cube, so test_ota and test_blob_store (which need Cube's mbed-crypto)
 #     run instead of being skipped. The job fails if they are skipped.
 #
+#   • A RELEASE=1 build (release-build), so the release configuration is compiled on every PR
+#     and not first on the tag: it checks BENCHPOD_RELEASE reached the compiler and runs the
+#     release job's signing commands with a throwaway key made in the job (never the real one).
+#
 # The build does not embed gateware or ESP32-C3 blobs (their manifest entries stay empty);
 # the release workflow adds those. test.yml still runs the plain host tests without Cube.
+# The release workflow calls this one (workflow_call) and waits for it.
 name: STM32 firmware build
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 env:
   CUBE_VERSION: v1.6.0
@@ -76,3 +82,88 @@ jobs:
             echo "::error title=Host tests skipped::$(grep '^SKIP' test.log)"
             exit 1
           fi
+
+  release-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Set up ARM GCC toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@98c40e51546516419841748d3210c290df0d2c6c # v1.13.0
+        with:
+          release: "13.3.Rel1"
+
+      - name: Cache STM32CubeH5 SDK
+        id: cube-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/STM32CubeH5
+          key: stm32cubeh5-${{ env.CUBE_VERSION }}
+
+      - name: Fetch STM32CubeH5 SDK
+        if: steps.cube-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${CUBE_VERSION}" \
+            --recurse-submodules --shallow-submodules \
+            https://github.com/STMicroelectronics/STM32CubeH5.git \
+            "${{ runner.temp }}/STM32CubeH5"
+
+      # The gateware blobs as the release embeds them (copies of ice40/release/, no toolchain).
+      # Not fatal here: a PR may carry unpromoted gateware; the release workflow fails on it.
+      - name: Install the hardware-verified iCE40 images
+        run: make -C ice40 release-images || echo "::warning::ice40/release/ is stale; release build without gateware blobs"
+
+      - name: Build STM32 firmware (RELEASE=1)
+        run: |
+          set -o pipefail
+          make -C stm32h563 -j"$(nproc)" RELEASE=1 CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee build.log
+
+      - name: No compiler warnings
+        run: |
+          if grep 'warning:' build.log | grep -v 'is not implemented and will always fail' > warnings.txt; then
+            echo "::error title=Compiler warnings::$(wc -l < warnings.txt) warning(s) in the RELEASE=1 build"
+            cat warnings.txt
+            exit 1
+          fi
+
+      # BENCHPOD_RELEASE once stopped reaching the compiler (it was appended to DEFS after CFLAGS
+      # expanded it) and release images quietly accepted a plain ws:// cloud config.
+      - name: Release configuration reached the compiler
+        run: |
+          grep -q -- '-DBENCHPOD_RELEASE=1' stm32h563/build/flags.stamp
+          strings stm32h563/build/bench_pod_stm32.elf | grep -q 'release firmware needs' \
+            || { echo "::error::the RELEASE=1 image lacks the TLS-only cloud_set check"; exit 1; }
+          if strings stm32h563/build/bench_pod_stm32.elf | grep -q 'ca-damage ok'; then
+            echo "::error::the RELEASE=1 image still has the development ca-damage command"; exit 1
+          fi
+
+      - name: OTA commit code stays in RAM
+        run: stm32h563/tools/check_ramfunc_calls.sh stm32h563/build/bench_pod_stm32.elf
+
+      # The release job's signing commands (release-stm32.yml), with a key made here and thrown
+      # away: the real FW_SIGNING_KEY is only in the release environment.
+      - name: Sign with a throwaway key and verify
+        working-directory: stm32h563/build
+        run: |
+          python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography
+          FWSIGN="python3 ../../tools/fwsign.py"
+          KEY="$RUNNER_TEMP/throwaway-signing.key"
+          $FWSIGN keygen "$KEY"
+          $FWSIGN pubkey "$KEY" | cut -d' ' -f1 > "$RUNNER_TEMP/throwaway-signing.pub"
+          export FW_SIGNING_KEY="$(cat "$KEY")"
+          REL="$(sed -n 's/^#define FIRMWARE_VERSION "\(.*\)"/\1/p' ../src/version.h)"
+          cp blobs/blob-*.bin blobs/blobs-manifest.json . 2>/dev/null || true
+          $FWSIGN sign --key env:FW_SIGNING_KEY --target firmware --release "$REL" bench_pod_stm32.bin
+          $FWSIGN sign-blobs --key env:FW_SIGNING_KEY --release "$REL" blobs-manifest.json
+          $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target firmware bench_pod_stm32.bin
+          for b in gw0 gw1; do
+            if [ -f blob-$b.bin ]; then $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target $b blob-$b.bin; fi
+          done
+          # a release-trusted key must not accept it
+          if $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target firmware bench_pod_stm32.bin; then
+            echo "::error::a throwaway signature verified against the release keys"; exit 1
+          fi
+          rm -f "$KEY"

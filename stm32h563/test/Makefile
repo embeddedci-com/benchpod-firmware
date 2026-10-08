@@ -26,7 +26,7 @@ BUSOWNER_SRCS := test_bus_owner.c ../src/bus_owner.c
 PSRAMREG_SRCS := test_psram_regions.c ../src/psram_regions.c
 JSON_SRCS     := test_json.c ../src/bp_json.c
 CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
-CLOUDRX_SRCS  := test_cloud_rx.c
+CLOUDRX_SRCS  := test_cloud_rx.c ../src/cloud_rx.c
 CLOUDCAPS_SRCS := test_cloud_caps.c ../src/cloud_caps.c ../src/bp_json.c
 CLOUDREPLY_SRCS := test_cloud_reply_cap.c ../src/cloud_reply_cap.c
 DEVID_SRCS     = test_device_identity.c ../src/device_identity.c ../src/b64url.c mocks/mock_flash.c $(MONOCYPHER)
@@ -42,6 +42,10 @@ LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
+# hw_worker.c is #included by its test; shim_worker has the FreeRTOS + HAL headers it needs.
+HWWORKER_SRCS := test_hw_worker.c ../src/hw_worker.c
+# boot_guard.c is #included by its test (shim_hal stands in for the HAL header).
+BOOTGUARD_SRCS := test_boot_guard.c ../src/boot_guard.c ../src/boot_policy.c
 FLASHLAYOUT_SRCS := test_flash_layout.c
 BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c
 UPLOADRX_SRCS := test_upload_rx.c ../src/upload_rx.c
@@ -72,6 +76,7 @@ MONO_INC   := -I../lib/monocypher/src -I../lib/monocypher/src/optional
 PODPOL_SRCS := test_pod_policy.c ../src/pod_policy.c ../src/fw_sign.c ../src/config_store.c mocks/mock_flash.c $(MONOCYPHER)
 LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_json.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
+CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
@@ -227,6 +232,14 @@ build/test_boot_policy: $(BOOTPOL_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BOOTPOL_SRCS) -lm -o $@
 
+build/test_hw_worker: $(HWWORKER_SRCS) $(wildcard shim_worker/*.h)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim_worker test_hw_worker.c -lm -o $@
+
+build/test_boot_guard: $(BOOTGUARD_SRCS) shim_hal/stm32h5xx_hal.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim_hal test_boot_guard.c ../src/boot_policy.c -lm -o $@
+
 build/test_esp_wifi_ctrl: $(WIFICTRL_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Ishim $(WIFICTRL_SRCS) -lm -o $@
@@ -285,11 +298,15 @@ build/test_cmd_tier: $(CMDTIER_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CMDTIER_SRCS) -lm -o $@
 
+build/test_cmd_gate: $(CMDGATE_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(CMDGATE_SRCS) -lm -o $@
+
 build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
+TESTS := build/test_portable build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_flash_layout build/test_board_variant build/test_upload_rx build/test_fw_sign build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_altcp_bp_proxy $(OTA_TARGET)
 
 TESTS += build/test_bp_log
 
@@ -330,12 +347,16 @@ run: $(TESTS)
 	@./build/test_eth_diag
 	@./build/test_power_profile
 	@./build/test_boot_policy
+	@./build/test_boot_guard > build/test_boot_guard.log || { cat build/test_boot_guard.log; exit 1; }
+	@tail -n 1 build/test_boot_guard.log
+	@./build/test_hw_worker
 	@./build/test_bus_recovery
 	@./build/test_flash_layout
 	@./build/test_board_variant
 	@./build/test_upload_rx
 	@./build/test_fw_sign
 	@./build/test_cmd_tier
+	@./build/test_cmd_gate
 	@./build/test_pod_policy > build/test_pod_policy.log || { cat build/test_pod_policy.log; exit 1; }
 	@tail -n 1 build/test_pod_policy.log
 	@./build/test_lease_gate

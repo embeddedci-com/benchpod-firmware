@@ -43,6 +43,7 @@
 #include "fault.h"       /* reset cause + last-crash summary for status */
 #include "psram_regions.h"  /* capture_read: is the capture still in PSRAM */
 #include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
+#include "cmd_gate.h"    /* the checks before a command reaches its handler (host-tested) */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
 #include "ice40_flash.h"
@@ -3875,39 +3876,6 @@ static bool cmd_is_noisy_poll(const char *cmd) {
            strcmp(cmd, "target_status") == 0;
 }
 
-/* Commands that need neither the iCE40 nor the PSRAM, so they still run in a safe mode that
-   turned those off (boot_guard.h).  Everything else is refused with a clear reason instead of
-   driving an uninitialised SPI1/XSPI. */
-static bool cmd_ok_without_hw(const char *cmd) {
-    static const char *const ok[] = {
-        "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
-        "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
-        "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
-        "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
-        "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-        "can_disable",
-    };
-    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
-        if (strcmp(cmd, ok[i]) == 0) return true;
-    return false;
-}
-
-/* Commands that need the analog front end (DAC, ADC, relays, the 4-20 mA terminals). Refused on
-   the digital-only board (board_variant.h) with a clear reason, instead of "succeeding" against
-   an ADC that is not there. dac_stop stays allowed: stopping nothing is harmless, and callers
-   send it to clean up. capture_dual is handled separately: an LA-only capture is fine. */
-static bool cmd_needs_analog(const char *cmd) {
-    static const char *const analog[] = {
-        "generate", "capture", "stream", "measure", "load", "load_bin", "replay",
-        "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
-        "current_out", "adc_read", "calibrate", "dac_control_loop", "dac_loop_probe",
-        "dac_loop_input",
-    };
-    for (size_t i = 0; i < sizeof(analog) / sizeof(analog[0]); i++)
-        if (strcmp(cmd, analog[i]) == 0) return true;
-    return false;
-}
-
 /* Per cloud tunnel: the highest tier its user may use (command_handler.h). Written by the net
    task at tunnel.open, read by the worker. */
 static volatile uint8_t s_tunnel_max_tier[CH_CLOUD_TUNNEL_CONN_COUNT] = { 3, 3, 3 };
@@ -3922,17 +3890,9 @@ void command_handler_set_tunnel_max_tier(int conn_id, int max_tier) {
 static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
     if (command_handler_policy_src(conn_id) != POLICY_SRC_LAN || !lease_gate_active(HAL_GetTick(), NULL))
         return false;
-    const char *p = line;
-    for (;;) {                                   /* every ';'-separated part must be a query */
-        const char *end = strchr(p, ';');
-        size_t n = end ? (size_t)(end - p) : strlen(p);
-        if (!memchr(p, '?', n)) {
-            printf("[cmd] SCPI \"%s\" refused: a cloud job holds the pod\n", line);
-            return true;
-        }
-        if (!end) return false;
-        p = end + 1;
-    }
+    if (!cmd_gate_scpi_line_writes(line)) return false;
+    printf("[cmd] SCPI \"%s\" refused: a cloud job holds the pod\n", line);
+    return true;
 }
 
 static void dispatch_line(int conn_id, const char *buf) {
@@ -3946,49 +3906,24 @@ static void dispatch_line(int conn_id, const char *buf) {
     if (!cmd_is_noisy_poll(cmd))
         printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
 
-    /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and
-       USB, and a cloud tunnel never goes above what the server allowed its user. */
-    if (tier >= CMD_TIER_T2 && command_handler_policy_src(conn_id) == POLICY_SRC_LAN &&
-        pod_policy_lan() != POD_LAN_OPEN) {
-        char why[80];
-        snprintf(why, sizeof(why), "locked: %s needs the cloud or the USB console", cmd);
-        send_error(conn_id, why);
-        return;
-    }
-    /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
-    uint32_t lease_left = 0;
-    if (command_handler_policy_src(conn_id) == POLICY_SRC_LAN &&
-        lease_gate_active(HAL_GetTick(), &lease_left) && !cmd_tier_light(cmd, buf)) {
+    /* Tier, lease, tunnel, safe-mode and board gates (cmd_gate.h, host-tested). */
+    {
+        cmd_gate_ctx_t g = {
+            .src = command_handler_policy_src(conn_id),
+            .lan_policy = pod_policy_lan(),
+            .tunnel_max_tier = -1,
+            .skip_hw = boot_guard_skip_hw(),
+            .has_analog = board_has_analog(),
+        };
+        if (g.src == POLICY_SRC_LAN) {
+            g.lease_active = lease_gate_active(HAL_GetTick(), &g.lease_left_s);
+            g.lease_holder = lease_gate_holder();
+        }
+        if (conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST)
+            g.tunnel_max_tier = s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN];
         char why[112];
-        snprintf(why, sizeof(why), "busy: a cloud job holds this pod (%s, %lu s left)",
-                 lease_gate_holder()[0] ? lease_gate_holder() : "cloud", (unsigned long)lease_left);
-        send_error(conn_id, why);
-        return;
-    }
-    if (conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST &&
-        (int)tier > s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN]) {
-        char why[80];
-        snprintf(why, sizeof(why), "forbidden: %s needs an organization owner or admin", cmd);
-        send_error(conn_id, why);
-        return;
-    }
-
-    if (boot_guard_skip_hw() && !cmd_ok_without_hw(cmd)) {
-        send_error(conn_id, "safe mode: iCE40/PSRAM are off. Unplug and replug the pod");
-        return;
-    }
-
-    if (!board_has_analog()) {
-        bool adc_capture = false;
-        if (strcmp(cmd, "capture_dual") == 0) {
-            char n[16] = {0};
-            adc_capture = json_get_value(buf, "adc_samples", n, sizeof(n)) && atoi(n) > 0;
-        }
-        if (adc_capture || cmd_needs_analog(cmd)) {
-            send_error(conn_id, "this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. "
-                                "Restart the pod after fitting an analog add-on");
-            return;
-        }
+        const char *refused = cmd_gate_check(cmd, buf, tier, &g, why, sizeof(why));
+        if (refused) { send_error(conn_id, refused); return; }
     }
 
     /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud
