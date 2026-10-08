@@ -12,7 +12,8 @@
 // LA stream in the LA region.  This is the exact scenario `cap-selftest` runs on
 // the bench.
 //
-// Run:  make topcapturetest
+// Run:  make topcapturetest   (builds and runs it for both images, loop and deep; the control
+//                             loop checks are loop-image only)
 // ============================================================================
 `timescale 1ns/1ps
 module tb_top_capture;
@@ -824,6 +825,7 @@ module tb_top_capture;
         $display("  [measure] after a %0d-sample DAC: frames %04h %04h %04h %04h %04h ..., ADC %0d bytes",
                  DAC_PA, dac_fr[0], dac_fr[1], dac_fr[2], dac_fr[3], dac_fr[4], adc_n);
 
+`ifndef USE_DEEP_REPLAY
         // ---- CONTROL LOOP re-armed with a different window (v34, loop image): the loop holds v at
         //      vmin while disarmed, so an arm with vmin = vmax = V must drive exactly V from its
         //      first frame — and a re-arm with a new V must never show the previous one. ----
@@ -858,6 +860,9 @@ module tb_top_capture;
         cmd_op0(8'h12); #1000;
         check_tlm("disarmed", 16'h0000, 16'h0000, 1'b0);
         cmd_loop_inmap(16'd0, 16'd0, 16'd0, 8'h00);   // back to the power-on map
+`else
+        $display("  [loop]   skipped: the deep image (-DUSE_DEEP_REPLAY) has no control loop");
+`endif
 
         // ==== CAPTURE TRIGGER (v35, OP_SET_TRIGGER 0x33 / OP_TRIGGER_STATUS 0x34) ====
         // Every relationship is measured on an UNTRIGGERED run first (from the arm) and must hold

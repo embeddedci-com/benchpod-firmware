@@ -248,6 +248,21 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
+# $(call topbench,<bench module>,<images>): compile and run a whole-top bench (sim/<module>.v + $(SRC))
+# once per image, `loop` (the default DEFINES) and/or `deep` (-DUSE_DEEP_REPLAY).  The two images
+# are different netlists of the same top, so a top-level bench runs on both unless it tests a
+# block only one image carries: a change that only one image's build exercised used to break the
+# other one silently.
+define topbench
+	@set -e; for img in $(2); do \
+	  if [ "$$img" = deep ]; then defs=-DUSE_DEEP_REPLAY; else defs=; fi; \
+	  echo "== $(1): $$img image"; \
+	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
+	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
+	  rm -f /tmp/$(PROJECT)_$(1)_$$img.vvp; \
+	done
+endef
+
 .PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol test clean help
 
 all: $(OUT).bin
@@ -680,56 +695,39 @@ check-protocol:
 # instant-response commands (PING/VERSION/STATUS).  This is the only bench that
 # exercises the top_v2 wiring seam — spi_slave -> cmd_dispatch -> MISO through the
 # pads + clk48÷2 + power-on reset — where the last two field bugs actually lived.
-# Uses $(SRC) (the v2 build set by default) so it tracks the shipping top.
+# Uses $(SRC) so it tracks the shipping top; like every whole-top bench below, it runs on both
+# images (topbench).
 topsmoketest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_top.vvp -s tb_top_v2 \
-	         sim/tb_top_v2.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_top.vvp
-	@rm -f /tmp/$(PROJECT)_top.vvp
+	$(call topbench,tb_top_v2,loop deep)
 
 # Top-level end-to-end capture: SPI OP_CAPTURE -> producers -> rings -> dual writer
 # -> the two PSRAM regions, with the tb acting as the PSRAM write-slave.  Catches
 # datapath/arbiter/region-select bugs the isolated dualwrtest can't.  Also decodes the
 # DAC8551 pins across a restart onto a shorter waveform (the v33 clk48 control-CDC fix).
 topcapturetest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_topcap.vvp -s tb_top_capture \
-	         sim/tb_top_capture.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topcap.vvp
-	@rm -f /tmp/$(PROJECT)_topcap.vvp
+	$(call topbench,tb_top_capture,loop deep)
 
 # The DEEP image's whole top (-DUSE_DEEP_REPLAY, v46): a deep replay keeps its sample order while
 # the STM32 takes the bus (bus_own swept over a reader burst and the DAC engine's byte pops), a
 # capture alongside the replay read back mid-replay, and an overflowed capture then a clean one.
 topdeeptest:
-	iverilog -g2012 -I src -DUSE_DEEP_REPLAY -o /tmp/$(PROJECT)_topdeep.vvp -s tb_top_deep \
-	         sim/tb_top_deep.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topdeep.vvp
-	@rm -f /tmp/$(PROJECT)_topdeep.vvp
+	$(call topbench,tb_top_deep,deep)
 
 # la_bank's driver priority through the whole top (P2 T-2): static, UART, I2C, stepper and the
 # SPI engine armed over the SPI link onto one pad, each taking it over and handing it back, plus
 # the channel >= N guard.
 topmuxtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_topmux.vvp -s tb_top_la_mux \
-	         sim/tb_top_la_mux.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topmux.vvp
-	@rm -f /tmp/$(PROJECT)_topmux.vvp
+	$(call topbench,tb_top_la_mux,loop deep)
 
 # SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
 # behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
 spitest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_spi.vvp -s tb_top_spi \
-	         sim/tb_top_spi.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_spi.vvp
-	@rm -f /tmp/$(PROJECT)_spi.vvp
+	$(call topbench,tb_top_spi,loop deep)
 
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
 swdqtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_swdq.vvp -s tb_top_swdq \
-	         sim/tb_top_swdq.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_swdq.vvp
-	@rm -f /tmp/$(PROJECT)_swdq.vvp
+	$(call topbench,tb_top_swdq,loop deep)
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
