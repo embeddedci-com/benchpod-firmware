@@ -40,6 +40,11 @@ typedef struct {
 const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap);
 
+/* Checks 4 and 5 alone (safe mode, the digital-only board), for the transports that have no
+   tier, lease or tunnel of their own: SCPI asks with the JSON verb its command stands for
+   (command_handler_device_gate). NULL = may run, else the refusal (a constant). */
+const char *cmd_gate_device(const char *cmd, const char *json, bool skip_hw, bool has_analog);
+
 /* Commands that run with the iCE40/PSRAM off (safe mode). */
 bool cmd_gate_ok_without_hw(const char *cmd);
 /* Commands that need the analog front end. */

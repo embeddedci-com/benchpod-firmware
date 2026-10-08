@@ -76,6 +76,11 @@ void command_handler_conn_closed(int conn_id);
  * flash-ice40, boot/OTA reflash).  Called by ice40_reflash_image(). */
 void command_handler_on_gateware_reconfigured(void);
 
+/* The safe-mode and digital-board checks JSON commands get (cmd_gate_device), for another
+   transport's command that does what JSON verb `verb` (with its JSON line `json`, may be NULL)
+   does. NULL = may run, else the refusal. SCPI runs every hardware command through this. */
+const char *command_handler_device_gate(const char *verb, const char *json);
+
 /* Claim / release the single shared ADC (and its capture path) so the SCPI
    handler's blocking captures cannot collide with an in-flight JSON
    capture/stream/measure/test.  acquire returns false if another connection

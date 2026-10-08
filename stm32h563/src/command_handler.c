@@ -3877,6 +3877,10 @@ static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
     return true;
 }
 
+const char *command_handler_device_gate(const char *verb, const char *json) {
+    return cmd_gate_device(verb, json, boot_guard_skip_hw(), board_has_analog());
+}
+
 static void dispatch_line(int conn_id, const char *buf) {
     char cmd[32] = {0};
     if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {

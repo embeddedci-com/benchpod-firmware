@@ -45,10 +45,14 @@ const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
         return why;
     }
 
-    if (ctx->skip_hw && !cmd_gate_ok_without_hw(cmd))
+    return cmd_gate_device(cmd, json, ctx->skip_hw, ctx->has_analog);
+}
+
+const char *cmd_gate_device(const char *cmd, const char *json, bool skip_hw, bool has_analog) {
+    if (skip_hw && !cmd_gate_ok_without_hw(cmd))
         return "safe mode: iCE40/PSRAM are off. Unplug and replug the pod";
 
-    if (!ctx->has_analog) {
+    if (!has_analog) {
         bool adc_capture = false;
         if (strcmp(cmd, "capture_dual") == 0) {
             char n[16] = {0};
