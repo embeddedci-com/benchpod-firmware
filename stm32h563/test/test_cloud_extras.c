@@ -8,9 +8,9 @@
  * cloud_extras.c is compiled into this file (net_server.h is stubbed out) on the real blob store
  * over the W25Q model, the real mbedTLS X.509 parser and a malloc-backed FreeRTOS heap shim.
  */
-#define NET_SERVER_H   /* keep lwIP out: cloud_extras.c only needs net_cloud_reload */
+#define NET_SERVER_H   /* keep lwIP out: cloud_extras.c only needs net_cloud_reload_after_reply */
 static int reloads;
-static void net_cloud_reload(void) { reloads++; }
+static void net_cloud_reload_after_reply(void) { reloads++; }
 
 #include "../src/cloud_extras.c"
 

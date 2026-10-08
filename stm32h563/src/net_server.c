@@ -28,6 +28,7 @@
 #include "conn_tx.h"
 #include "hw_worker.h"
 #include "bp_limits.h"
+#include "net_reload.h"
 
 #include "lwip/init.h"
 #include "lwip/netif.h"
@@ -812,6 +813,16 @@ void net_init(void)
            TCP_SERVER_PORT);
 }
 
+/* Carry out a reload a settings command requested (net_reload.h): after its reply has left the
+   cloud link, or NET_RELOAD_MAX_WAIT_MS after the request if the link never drains. */
+static void net_apply_reload(void)
+{
+    if (!net_reload_pending()) return;
+    uint32_t what = net_reload_take(HAL_GetTick(), cloud_client_tx_busy());
+    if (what & NET_RELOAD_CLOUD) cloud_client_reload();
+    if (what & NET_RELOAD_WIFI)  esp_wifi_ctrl_reload();
+}
+
 void net_poll(void)
 {
     ethernetif_input(&s_eth.netif);
@@ -829,6 +840,7 @@ void net_poll(void)
     net_frame_cloud_reply();         /* a finished cloud command -> response    */
     net_eth_apply_request();         /* apply a pending eth stop/start/restart  */
     net_run_pending_call();          /* a worker call handed over by net_call_sync */
+    net_apply_reload();              /* a settings change's reload, once its reply has left */
 
     uint32_t now = HAL_GetTick();
     if (now - link_timer >= 100) {
@@ -896,6 +908,8 @@ static void call_wifi_hold(void *a) {
     else   { esp_wifi_ctrl_pause(false); esp_wifi_ctrl_reload(); }
 }
 void net_cloud_reload(void)          { (void)net_call_sync(call_cloud_reload, NULL, 2000); }
+void net_cloud_reload_after_reply(void) { net_reload_request(NET_RELOAD_CLOUD, HAL_GetTick()); }
+void net_wifi_reload_after_reply(void)  { net_reload_request(NET_RELOAD_WIFI, HAL_GetTick()); }
 void net_wifi_reload(void)           { (void)net_call_sync(call_wifi_reload, NULL, 2000); }
 void net_wifi_hold_for_flash(bool h) { (void)net_call_sync(call_wifi_hold, h ? (void *)1 : NULL, 2000); }
 

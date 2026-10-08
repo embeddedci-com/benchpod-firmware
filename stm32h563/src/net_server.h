@@ -31,6 +31,10 @@ typedef void (*net_call_fn_t)(void *arg);
 bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms);
 /* The worker-side entry points that must run on the net task (via net_call_sync). */
 void net_cloud_reload(void);                 /* cloud_client_reload() */
+/* Settings commands: reload the cloud link / restart Wi-Fi after the reply to the command that
+   asked has left (net_reload.h), so a command that came in over that link gets its answer. */
+void net_cloud_reload_after_reply(void);
+void net_wifi_reload_after_reply(void);
 void net_wifi_reload(void);                  /* esp_wifi_ctrl_reload() */
 /* true: pause Wi-Fi control and stop the ESP SPI transport so the worker may drive the C3's
    EN/BOOT and ROM loader; false: resume and restart the Wi-Fi join. */

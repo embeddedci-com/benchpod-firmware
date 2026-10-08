@@ -5,7 +5,7 @@
 #include "blob_store.h"
 #include "w25q.h"
 #include "cloud_ca.h"
-#include "net_server.h"     /* net_cloud_reload: reconnect with the new settings */
+#include "net_server.h"     /* net_cloud_reload_after_reply: reconnect with the new settings */
 #include "ota.h"            /* ota_validate_staged: the CA upload is checked before it is accepted */
 
 #include "FreeRTOS.h"
@@ -180,7 +180,8 @@ void cloud_extras_ca_changed(void) {
         w25q_session_close();
     }
     printf("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "removed"));
-    net_cloud_reload();
+    /* After the reply: this command may have come in over the link being reloaded. */
+    net_cloud_reload_after_reply();
 }
 
 
@@ -334,7 +335,8 @@ const char *cloud_extras_proxy_set(const char *spec, const char *user, const cha
     s_proxy = p;
     taskEXIT_CRITICAL();
     printf("[cloud] proxy %s%s: reconnecting\n", p.host[0] ? "set to " : "cleared", p.host);
-    net_cloud_reload();
+    /* After the reply: this command may have come in over the link being reloaded. */
+    net_cloud_reload_after_reply();
     return NULL;
 }
 

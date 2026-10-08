@@ -10,6 +10,7 @@
 #include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
 #include "esp_wifi_ctrl.h"
+#include "net_reload.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
 
 #include "FreeRTOS.h"
@@ -195,6 +196,8 @@ bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
     return true;
 }
 
+bool hw_worker_cloud_pending(void) { return s_cloud_pending; }
+
 /* ---- worker task ---------------------------------------------------------- */
 
 static void handle_work(cmd_work_t *w) {
@@ -287,6 +290,8 @@ static void worker_task(void *arg) {
         for (int i = 0; i < HW_WORK_QUEUE_DEPTH; i++) {
             if (xQueueReceive(s_q, &w, 0) != pdTRUE) break;
             handle_work(&w);
+            /* A link reload this item asked for may go once its reply is queued (net_reload.h). */
+            net_reload_commit(HAL_GetTick());
         }
         apply_parked_teardowns(); /* closes/resets that did not fit in the queue */
         if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */

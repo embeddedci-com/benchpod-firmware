@@ -72,6 +72,9 @@ bool hw_worker_submit_console(const char *line);
 bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
                                 char *reply, size_t reply_cap, size_t *reply_len);
 
+/* A cloud command is in flight: submitted and its reply not yet taken by the net task. */
+bool hw_worker_cloud_pending(void);
+
 /* ---- OTA (firmware update) — driven from the WS ota.* frames (or LAN) -------
    The bytes are staged into PSRAM + verified on the worker (it owns the PSRAM
    bus).  begin/data/end/abort/commit map to ota.c.  All are called from the net
