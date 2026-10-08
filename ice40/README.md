@@ -78,7 +78,9 @@ STM32 ─ SPI ─► cmd_dispatch ─ engine_block ─┤ ADC producer ───
   / CAP_OVF (bit 5) and the control-loop trip (bit 6); bit 7 is hardwired 0 so firmware
   can tell an unconfigured FPGA (floated `0xFF`) from a real status byte.
 
-See [`../docs/tri-capture-unified-psram.md`](../docs/tri-capture-unified-psram.md).
+[`../docs/tri-capture-unified-psram.md`](../docs/tri-capture-unified-psram.md) describes a
+single-master alternative to the writer + reader + arbiter split; it was shelved in v40 because
+it came out bigger.
 
 ## DAC
 
