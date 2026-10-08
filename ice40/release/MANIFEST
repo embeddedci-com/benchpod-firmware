@@ -1,15 +1,20 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=47
-source_sha256=0f959d76e67dcc22adfa57bced3823aae27818455a7813fd1309650132866fbd
-built_from=0a44fa0
-promoted=2026-10-07
+source_sha256=c1ffe1b01ff0b9ed3fd2a5583d654483cba5cff1f4d950b6b077e215a72019bd
+built_from=975a4b5
+promoted=2026-10-08
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
-hw_verified=benchpod-baea06 2026-10-07: boot auto-update to 47, LAN TestHW 58/0/4, cloud TestCloud 43/0/6, P1 targeted checks (capture flush, stale capture_read, bus-busy refusals); CI seeds loop 26 52.55 MHz, deep 57 55.35 MHz
-loop.sha256=2a9d58557bd995b690a7d1562600bc3776642a51a29ac433eabc6fd107ae6ada
+nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
+synth_flags=-abc9 -dsp -spram -top top
+pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
+hw_verified=benchpod-baea06 2026-10-08: P3 trial (fw#27 + gw#26 gearbox refactor), LAN TestHW 65/0/4, cloud TestCloud 57/0 (one transient 502 passed on rerun), status caps identical; CI seeds loop 26, deep 57 ok
+loop.sha256=413097763d590c238d5e19b0f3f03a3b2d6e1c0e5b7d7eb0a5965a518def9063
 loop.seed=26
-loop.clk48_mhz=54.69
-deep.sha256=2164c362cfdedc82be9bd6faac6ee362aeebb110ac65fc6e60cec884da0e78d4
+loop.defines=-DVERSION_V2
+loop.clk48_mhz=55.05
+deep.sha256=fbcbef57cefa522d0df0e0be61c545b4354005e8fb18026ef2cb65345fc2704a
 deep.seed=57
-deep.clk48_mhz=59.26
+deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
+deep.clk48_mhz=57.67
