@@ -310,7 +310,6 @@ static struct {
    claim-the-gate).  This replaced the duplicated
    `if (v2cap.active || bulk.active) busy; if (!heavy_try_claim) busy;` pair that
    used to sit — subtly inconsistently — at the top of ~10 handlers. */
-#define CH_MAX_CONN   5
 static int heavy_owner = -1;   /* conn_id holding adc_cmd_buf, or -1 */
 
 static bool heavy_try_claim(int conn_id) {
@@ -898,32 +897,14 @@ _Static_assert(CH_CLOUD_TUNNEL_CONN > CH_CLOUD_CONN, "tunnel conn id must sit ab
 _Static_assert(CH_CLOUD_TUNNEL_CONN_COUNT >= 1, "need at least one tunnel conn");
 static line_asm_t line_asm[CH_CLOUD_TUNNEL_CONN_LAST + 1];
 
-/* Per-connection protocol, decided from the first non-whitespace byte:
-   '{' -> JSON, anything else -> SCPI.  Lets a VISA/SCPI client and a JSON
-   client share the single ESP-AT TCP server.  PROTO_DAP is entered only by an
-   explicit JSON "dap_start" command and routes the connection's raw bytes to
-   the on-pod CMSIS-DAP processor as length-framed packets until a zero-length
-   frame leaves DAP mode. */
-typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST } proto_t;
 static proto_t proto[CH_CLOUD_TUNNEL_CONN_LAST + 1];
 
-/* is_tunnel_conn: true for any of the N cloud byte-tunnel pseudo-connections. */
-static inline bool is_tunnel_conn(int conn_id) {
-    return conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST;
+proto_t conn_proto(int conn_id) {
+    return (conn_id >= 0 && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST) ? proto[conn_id] : PROTO_UNKNOWN;
 }
 
-/* conn_runs_state_machine: true for the TCP conns and the cloud tunnels — the connections whose raw
-   bytes flow through command_handler_process()'s proto state machine (JSON line assembly plus the
-   DAP/UART raw modes). The console/cloud-command pseudo-conns dispatch single lines instead. */
-static inline bool conn_runs_state_machine(int conn_id) {
-    return (conn_id >= 0 && conn_id < CH_MAX_CONN) || is_tunnel_conn(conn_id);
-}
-
-/* conn_has_socket: true only for real LwIP TCP conns — the ones with a pcb backing tcp_nodelay.
-   The tunnel reuses the state machine but has no socket, so socket-only calls (at_set_tcp_nodelay)
-   must be skipped for it. */
-static inline bool conn_has_socket(int conn_id) {
-    return conn_id >= 0 && conn_id < CH_MAX_CONN;
+void conn_proto_set(int conn_id, proto_t p) {
+    if (conn_id >= 0 && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST) proto[conn_id] = p;
 }
 
 /* ---- UART transparent proxy state (one active connection at a time) -------

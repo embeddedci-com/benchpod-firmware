@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "command_handler.h"   /* the pseudo-connection ids */
 #include "la_pins.h"
 
 /*
@@ -19,6 +20,42 @@
  * their prototypes so dispatch_line() can reach them. Not part of the public
  * command_handler.h API.
  */
+
+/* ---- Connections and their protocol ----
+   The TCP conns are 0..CH_MAX_CONN-1 (net_server.c); the pseudo-connections are in
+   command_handler.h. */
+#define CH_MAX_CONN   5
+
+/* Per-connection protocol, decided from the first non-whitespace byte:
+   '{' -> JSON, anything else -> SCPI.  Lets a VISA/SCPI client and a JSON
+   client share the single ESP-AT TCP server.  PROTO_DAP is entered only by an
+   explicit JSON "dap_start" command and routes the connection's raw bytes to
+   the on-pod CMSIS-DAP processor as length-framed packets until a zero-length
+   frame leaves DAP mode. */
+typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST } proto_t;
+
+/* A connection's protocol (PROTO_UNKNOWN for an id outside the table) and setting it. */
+proto_t conn_proto(int conn_id);
+void    conn_proto_set(int conn_id, proto_t p);
+
+/* is_tunnel_conn: true for any of the N cloud byte-tunnel pseudo-connections. */
+static inline bool is_tunnel_conn(int conn_id) {
+    return conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST;
+}
+
+/* conn_runs_state_machine: true for the TCP conns and the cloud tunnels — the connections whose raw
+   bytes flow through command_handler_process()'s proto state machine (JSON line assembly plus the
+   DAP/UART raw modes). The console/cloud-command pseudo-conns dispatch single lines instead. */
+static inline bool conn_runs_state_machine(int conn_id) {
+    return (conn_id >= 0 && conn_id < CH_MAX_CONN) || is_tunnel_conn(conn_id);
+}
+
+/* conn_has_socket: true only for real LwIP TCP conns — the ones with a pcb backing tcp_nodelay.
+   The tunnel reuses the state machine but has no socket, so socket-only calls (at_set_tcp_nodelay)
+   must be skipped for it. */
+static inline bool conn_has_socket(int conn_id) {
+    return conn_id >= 0 && conn_id < CH_MAX_CONN;
+}
 
 /* Reply helpers (defined in command_handler.c). */
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
