@@ -1,15 +1,15 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=47
-source_sha256=c1ffe1b01ff0b9ed3fd2a5583d654483cba5cff1f4d950b6b077e215a72019bd
-built_from=975a4b5
+source_sha256=71aaf4939efa29e8a701b1edd44cdc768e1c5d4260d05f745788e8c6a6140b61
+built_from=e4f5d6f
 promoted=2026-10-08
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=benchpod-baea06 2026-10-08: P3 trial (fw#27 + gw#26 gearbox refactor), LAN TestHW 65/0/4, cloud TestCloud 57/0 (one transient 502 passed on rerun), status caps identical; CI seeds loop 26, deep 57 ok
+hw_verified=bit-identical to the v47 images HW-verified on benchpod-baea06 2026-10-08 (P3 trial: LAN 65/0/4, cloud 57/0); comment-only source changes
 loop.sha256=413097763d590c238d5e19b0f3f03a3b2d6e1c0e5b7d7eb0a5965a518def9063
 loop.seed=26
 loop.defines=-DVERSION_V2
