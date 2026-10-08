@@ -55,6 +55,9 @@ def console_verbs():
     src = read(SRC, "console.c")
     verbs = set(re.findall(r'strcmp\(argv\[0\],\s*"([a-z0-9-]+)"\)', src))
     verbs |= set(re.findall(r'strncmp\((?:cmd|line),\s*"([a-z0-9-]+) ?"', src))
+    # Alias tables ({ "new-name", "old-name" }) dispatch through argv[0] rewriting.
+    for block in re.findall(r'aliases\[\]\[2\]\s*=\s*\{(.*?)\};', src, re.S):
+        verbs |= set(re.findall(r'\{\s*"([a-z0-9-]+)"\s*,\s*"[a-z0-9-]+"\s*\}', block))
     return sorted(verbs)
 
 
