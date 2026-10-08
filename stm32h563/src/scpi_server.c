@@ -8,6 +8,7 @@
 #include "b64url.h"
 #include "watchdog.h"
 #include "dac_limits.h"
+#include "adc_pool.h"
 #include "pico/time.h"   /* make_timeout_time_ms / time_reached / sleep_ms */
 
 #include "scpi/scpi.h"
@@ -46,18 +47,19 @@ static bool      output_on;
 static size_t    sense_points;
 static float     sense_srate_hz;   /* ADC capture clock for READ? (0 = max) */
 
-/* SCPI's own capture/replay buffer.  Shares the heavy-op gate with the JSON
-   handler (the single ADC) but keeps a separate buffer so the two never alias.
-   READ?/MEASure? fill scpi_adc16; TRACe:DATA can overwrite it with a host-uploaded trace
-   (16-bit little-endian samples, as the JSON `load`); the USER source shape replays it out
-   the DAC as byte pairs, exactly like the JSON `replay`.  The DAC BRAM holds
-   SIGNAL_MAX_SAMPLES, so a longer capture replays its first SIGNAL_MAX_SAMPLES samples.
-   USER used to replay a separate 8-bit buffer (stale DIAGnostic:PATTern? or upload bytes)
-   instead of the capture that READ? had just announced.  PATTern? now builds its bytes in
-   the upper half of scpi_adc16, which replay never reads (it stops at SIGNAL_BUF_SIZE bytes). */
-static uint16_t scpi_adc16[SIGNAL_BUF_SIZE];   /* v2 16-bit capture + replay buffer */
-#define scpi_adc_buf ((uint8_t *)scpi_adc16 + SIGNAL_BUF_SIZE)   /* PATTern? scratch, 4 KB */
-static size_t  scpi_replay_bytes;  /* valid bytes of scpi_adc16 for replay (<= SIGNAL_BUF_SIZE) */
+/* SCPI's capture/replay trace lives in the shared sample pool (adc_pool.h), filled under the
+   heavy gate it shares with JSON and the console. READ?/MEASure? capture into the pool's trace
+   region; TRACe:DATA can overwrite it with a host-uploaded trace (16-bit little-endian samples,
+   as the JSON `load`); the USER source shape replays it out the DAC as byte pairs, exactly like
+   the JSON `replay`. The DAC BRAM holds SIGNAL_MAX_SAMPLES, so a longer capture replays its first
+   SIGNAL_MAX_SAMPLES samples. Each fill takes a pool generation: once a JSON capture or upload
+   has filled the pool since, the trace is gone (USER refuses, TRACe:POINts? says 0) instead of
+   replaying the other client's data. DIAGnostic:PATTern? and :CAPture? use the pool's scratch
+   region, so they never touch the trace. */
+static uint32_t scpi_trace_gen;     /* the pool generation of the trace, 0 = none */
+static size_t   scpi_replay_bytes;  /* valid bytes of the trace for replay (<= SIGNAL_BUF_SIZE) */
+
+static bool scpi_trace_held(void) { return scpi_replay_bytes && adc_pool_holds(scpi_trace_gen); }
 
 static void scpi_replay_set_samples(size_t n) {
     if (n > SIGNAL_MAX_SAMPLES) n = SIGNAL_MAX_SAMPLES;
@@ -75,6 +77,7 @@ static void scpi_reset_state(void) {
     sense_points    = 256;
     sense_srate_hz  = 0.0f;
     scpi_replay_bytes = 0;
+    scpi_trace_gen    = 0;
 }
 
 /* 'u' (USER) replays the captured/uploaded buffer; it has no parametric
@@ -414,8 +417,8 @@ static int output_start(void) {
         case 'r': rc = dac_generate_sawtooth(src.freq, src.amplitude, src.offset,
                                              src.duration_ms, src.srate_hz); break;
         case 'u': /* USER: replay the captured/uploaded buffer at SOURce:SRATe */
-                  if (scpi_replay_bytes < 2u) return -1;
-                  rc = dac_generate_arbitrary_rate((const uint8_t *)scpi_adc16,
+                  if (scpi_replay_bytes < 2u || !scpi_trace_held()) return -1;
+                  rc = dac_generate_arbitrary_rate((const uint8_t *)adc_pool,
                                                    scpi_replay_bytes & ~(size_t)1u,
                                                    true, src.srate_hz); break;
         default:  rc = dac_generate_sine(src.freq, src.amplitude, src.offset,
@@ -496,7 +499,8 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* ADC busy */
         return SCPI_RES_ERR;
     }
-    if (adc_capture_psram(scpi_adc16, n, sense_srate_hz) != 0) {
+    scpi_trace_gen = adc_pool_take();
+    if (adc_capture_psram(adc_pool, n, sense_srate_hz) != 0) {
         command_handler_release_adc(conn);
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
         return SCPI_RES_ERR;
@@ -505,7 +509,8 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
     /* Leave the capture in the buffer so SOURce:FUNCtion USER + OUTPut ON can
        replay this exact trace out the DAC. */
     scpi_replay_set_samples(n);
-    SCPI_ResultArrayUInt16(ctx, scpi_adc16, n, SCPI_FORMAT_ASCII);
+    /* Sent after the release: every pool user runs on the hw worker, which is busy here. */
+    SCPI_ResultArrayUInt16(ctx, adc_pool, n, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
 }
 
@@ -521,7 +526,8 @@ static scpi_result_t scpi_measureQ(scpi_t *ctx) {
     /* Phase-locked DAC waveform + 16-bit ADC->PSRAM (measure_psram stops the DAC
        itself).  Blocking is fine here — SCPI is synchronous — and bounded by the
        real capture time. */
-    int rc = measure_psram(scpi_adc16, shape_engine_name(src.shape), src.freq,
+    scpi_trace_gen = adc_pool_take();
+    int rc = measure_psram(adc_pool, shape_engine_name(src.shape), src.freq,
                            src.amplitude, src.offset, n, src.srate_hz);
     output_on = false;
     command_handler_release_adc(conn);
@@ -530,7 +536,7 @@ static scpi_result_t scpi_measureQ(scpi_t *ctx) {
         return SCPI_RES_ERR;
     }
     scpi_replay_set_samples(n);
-    SCPI_ResultArrayUInt16(ctx, scpi_adc16, n, SCPI_FORMAT_ASCII);
+    SCPI_ResultArrayUInt16(ctx, adc_pool, n, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
 }
 
@@ -563,6 +569,7 @@ static scpi_result_t scpi_diag_patternQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
         return SCPI_RES_ERR;
     }
+    uint8_t *scpi_adc_buf = adc_pool_scratch();   /* n <= SIGNAL_BUF_SIZE */
     switch (pat) {
         case 3: /* CONStant */
             memset(scpi_adc_buf, (uint8_t)value, n);
@@ -594,7 +601,6 @@ static scpi_result_t scpi_diag_patternQ(scpi_t *ctx) {
    and return them as CSV: the adc_n ADC samples first, then the la_n LA words (low
    14 bits = LA1..LA14).  Protocol decode is done off-device.  Defaults 16 + 16. */
 #define SCPI_CAP_MAX 128u
-static uint32_t scpi_cap[SCPI_CAP_MAX * 2];
 static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
     int conn = cur_conn(ctx);
     uint32_t an = 16, ln = 16, v;
@@ -611,7 +617,8 @@ static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* ADC busy */
         return SCPI_RES_ERR;
     }
-    static uint16_t adcb[SCPI_CAP_MAX], lab[SCPI_CAP_MAX];
+    uint16_t *adcb = (uint16_t *)adc_pool_scratch();   /* pool scratch: SCPI_CAP_MAX each */
+    uint16_t *lab  = adcb + SCPI_CAP_MAX;
     int rc = fpga_dual_capture(an ? adcb : NULL, (uint16_t)an, 240,
                                ln ? lab : NULL, (uint16_t)ln, 24);
     command_handler_release_adc(conn);
@@ -619,10 +626,10 @@ static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
         return SCPI_RES_ERR;
     }
-    size_t n = 0;
-    for (uint32_t i = 0; i < an; i++) scpi_cap[n++] = adcb[i];
-    for (uint32_t i = 0; i < ln; i++) scpi_cap[n++] = lab[i] & 0xFFFu;
-    SCPI_ResultArrayUInt32(ctx, scpi_cap, n, SCPI_FORMAT_ASCII);
+    /* One CSV list: libscpi puts the separator between results, so two arrays read as one. */
+    for (uint32_t i = 0; i < ln; i++) lab[i] &= 0xFFFu;
+    SCPI_ResultArrayUInt16(ctx, adcb, an, SCPI_FORMAT_ASCII);
+    SCPI_ResultArrayUInt16(ctx, lab, ln, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
 }
 
@@ -649,9 +656,18 @@ static scpi_result_t scpi_trace_data(scpi_t *ctx) {
         return SCPI_RES_ERR;   /* libscpi already queued the parameter error */
     }
 
+    /* The pool is shared: write it under the heavy gate, and take it over (a new trace) when a
+       JSON capture or upload has filled it since this trace was ours. */
+    int conn = cur_conn(ctx);
+    if (!command_handler_acquire_adc(conn)) {
+        SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* a capture or upload is running */
+        return SCPI_RES_ERR;
+    }
+    if (!adc_pool_holds(scpi_trace_gen)) scpi_trace_gen = adc_pool_take();
     size_t dec_len = 0;
-    if (b64url_decode(data_b64, (uint8_t *)scpi_adc16 + offset,
-                      SIGNAL_BUF_SIZE - offset, &dec_len) != 0) {
+    int rc = b64url_decode(data_b64, (uint8_t *)adc_pool + offset, SIGNAL_BUF_SIZE - offset, &dec_len);
+    command_handler_release_adc(conn);
+    if (rc != 0) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_ILLEGAL_PARAMETER_VALUE);
         return SCPI_RES_ERR;
     }
@@ -660,7 +676,7 @@ static scpi_result_t scpi_trace_data(scpi_t *ctx) {
 }
 
 static scpi_result_t scpi_trace_pointsQ(scpi_t *ctx) {
-    SCPI_ResultUInt32(ctx, (uint32_t)(scpi_replay_bytes / 2u));   /* 16-bit samples */
+    SCPI_ResultUInt32(ctx, scpi_trace_held() ? (uint32_t)(scpi_replay_bytes / 2u) : 0u);   /* 16-bit samples */
     return SCPI_RES_OK;
 }
 

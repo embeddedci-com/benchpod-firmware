@@ -26,6 +26,7 @@
 #include "pico/time.h"
 #include "b64url.h"
 #include "cmd_gate.h"
+#include "adc_pool.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -85,7 +86,9 @@ const char *command_handler_device_gate(const char *verb, const char *json) {
     return cmd_gate_device(verb, json, g_skip_hw, !g_digital);
 }
 static int g_captures, g_dual_calls, g_dig_calls;
-bool command_handler_acquire_adc(int conn_id) { (void)conn_id; return true; }
+static bool g_dual_ok;
+static bool g_gate_busy;     /* another client holds the heavy gate */
+bool command_handler_acquire_adc(int conn_id) { (void)conn_id; return !g_gate_busy; }
 void command_handler_release_adc(int conn_id) { (void)conn_id; }
 int  adc_capture_psram(uint16_t *out16, size_t samples, float rate) {
     (void)rate;
@@ -115,7 +118,12 @@ int  dac_generate_square(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (
 int  dac_generate_sawtooth(float f, uint8_t a, uint8_t o, uint32_t d, float r) { (void)f; (void)a; (void)o; (void)d; (void)r; return 0; }
 void dac_stop(void) {}
 int  fpga_dual_capture(uint16_t *a, uint16_t ac, uint16_t ad, uint16_t *l, uint16_t lc, uint16_t ld) {
-    (void)a; (void)ac; (void)ad; (void)l; (void)lc; (void)ld; g_dual_calls++; return -1;
+    (void)ad; (void)ld;
+    g_dual_calls++;
+    if (!g_dual_ok) return -1;
+    for (uint16_t i = 0; i < ac; i++) a[i] = (uint16_t)(1000u + i);
+    for (uint16_t i = 0; i < lc; i++) l[i] = (uint16_t)(0xF000u | i);   /* bits above the 12 LA bits */
+    return 0;
 }
 int  measure_psram(uint16_t *o, const char *w, float f, uint8_t a, uint8_t off, size_t n, float r) {
     (void)o; (void)w; (void)f; (void)a; (void)off; (void)n; (void)r; return -1;
@@ -339,11 +347,81 @@ static void test_safe_mode_and_digital_board(void) {
     g_digital = false;
 }
 
+/* The trace lives in the shared pool: once a JSON capture or upload fills the pool (it takes a
+   generation), USER replay refuses and TRACe:POINts? says 0 instead of playing the other client's
+   data. TRACe:DATA takes the heavy gate, and takes the pool back for a new trace. */
+static void test_trace_in_the_shared_pool(void) {
+    scpi_dispatch_line(0, "*CLS");
+    reset_conn(4096);
+    scpi_dispatch_line(0, "READ? 16");
+    scpi_dispatch_line(0, "FUNC USER");
+    g_generates = 0;
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_generates == 1);
+    scpi_dispatch_line(0, "OUTP OFF");
+
+    (void)adc_pool_take();                     /* a JSON capture fills the pool */
+    g_generates = 0;
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_generates == 0);
+    CHECK(next_error(NULL, 0) == -200);
+    reset_conn(4096);
+    scpi_dispatch_line(0, "TRAC:POIN?");
+    K.out[K.out_len] = '\0';
+    CHECK(atoi(K.out) == 0);
+
+    /* TRACe:DATA while another client holds the gate: refused, nothing written */
+    const uint8_t up[4] = { 0x11, 0x22, 0x33, 0x44 };
+    char b64[16], line[64];
+    b64url_encode(up, sizeof(up), b64, sizeof(b64));
+    snprintf(line, sizeof(line), "TRAC:DATA 0,\"%s\"", b64);
+    g_gate_busy = true;
+    scpi_dispatch_line(0, line);
+    g_gate_busy = false;
+    CHECK(next_error(NULL, 0) == -200);
+    reset_conn(4096);
+    scpi_dispatch_line(0, "TRAC:POIN?");
+    K.out[K.out_len] = '\0';
+    CHECK(atoi(K.out) == 0);
+    /* free gate: the upload takes the pool back and replays */
+    scpi_dispatch_line(0, line);
+    CHECK(next_error(NULL, 0) == 0);
+    g_replay_len = 0;
+    scpi_dispatch_line(0, "OUTP ON");
+    CHECK(g_replay_len == 4 && memcmp(g_replay, up, 4) == 0);
+    scpi_dispatch_line(0, "OUTP OFF");
+    scpi_dispatch_line(0, "FUNC SIN");
+}
+
+/* DIAGnostic:CAPture? in the pool's scratch: the ADC samples, then the LA words cut to 12 bits, as
+   one CSV list; it does not disturb the trace. */
+static void test_dual_capture_csv(void) {
+    reset_conn(4096);
+    scpi_dispatch_line(0, "READ? 4");
+    g_dual_ok = true;
+    reset_conn(4096);
+    scpi_dispatch_line(0, "DIAG:CAP? 3,2");
+    K.out[K.out_len] = '\0';
+    CHECK(strcmp(K.out, "1000,1001,1002,0,1\r\n") == 0);
+    if (strcmp(K.out, "1000,1001,1002,0,1\r\n") != 0) printf("  got \"%s\"\n", K.out);
+    reset_conn(4096);
+    scpi_dispatch_line(0, "DIAG:CAP? 0,2");
+    K.out[K.out_len] = '\0';
+    CHECK(strcmp(K.out, "0,1\r\n") == 0);
+    g_dual_ok = false;
+    reset_conn(4096);
+    scpi_dispatch_line(0, "TRAC:POIN?");
+    K.out[K.out_len] = '\0';
+    CHECK(atoi(K.out) == 4);
+}
+
 int main(void) {
     test_short_reply_unchanged();
     test_user_replays_the_capture();
     test_dac_limits_refuse_raw_output();
     test_safe_mode_and_digital_board();
+    test_trace_in_the_shared_pool();
+    test_dual_capture_csv();
     test_big_read_arrives_whole();
     test_slow_peer_feeds_watchdog();
     test_stalled_peer_aborts_once();
