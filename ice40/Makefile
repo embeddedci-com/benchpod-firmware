@@ -53,6 +53,8 @@ SRC = src/top_v2.v            \
       src/psram_pads.v        \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
+# The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
+DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
 # Pinned PnR seed.  TIMING is not the constraint: after the single-clock collapse
@@ -153,8 +155,8 @@ DEVICE  = up5k
 PACKAGE = sg48
 
 # Common nextpnr-ice40 invocation.  --threads 1 keeps PnR reproducible.
-NEXTPNR = nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) \
-                        --pcf $(PCF) --pcf-allow-unconstrained $(PREPACK) --threads 1
+NEXTPNR_FLAGS = --$(DEVICE) --package $(PACKAGE) --pcf $(PCF) --pcf-allow-unconstrained $(PREPACK) --threads 1
+NEXTPNR = nextpnr-ice40 $(NEXTPNR_FLAGS)
 
 # ---- PnR policy: placement/margin gates ----
 # PNR_STRICT=0 (default) keeps the historical behaviour: a fallback seed, or a clk48 Fmax below
@@ -256,7 +258,7 @@ VVP = sh sim/run_vvp.sh
 # other one silently.
 define topbench
 	@set -e; for img in $(2); do \
-	  if [ "$$img" = deep ]; then defs=-DUSE_DEEP_REPLAY; else defs=; fi; \
+	  if [ "$$img" = deep ]; then defs="$(DEEP_DEFINES)"; else defs=; fi; \
 	  echo "== $(1): $$img image"; \
 	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
@@ -264,7 +266,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -475,7 +477,7 @@ GW_VERSION := $(shell sed -n "s/.*GATEWARE_VERSION(8'd\([0-9]*\)).*/\1/p" src/to
 $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
-	$(call synth,-DUSE_DEEP_REPLAY,$@)
+	$(call synth,$(DEEP_DEFINES),$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -506,15 +508,20 @@ seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
 # sources differently (v40: loop clk48 56.95 MHz locally, 48.84 MHz in CI).  After an `images`
 # build has passed on hardware:  make promote HW_VERIFIED="e2e 132 passed on benchpod-baea06"
 # and commit ice40/release/ with the sources.  check-release fails once the sources move on.
-RELEASE_TOOL = python3 ../tools/ice40_release.py
+# promote refuses an image older than any gateware source, and records the toolchain (yosys, the
+# nextpnr revision) and the flags below in the MANIFEST; check-release notes when they have moved.
+RELEASE_TOOL  = python3 ../tools/ice40_release.py
+# (--opt=value: the values start with a dash, which argparse would take for an option)
+RELEASE_FLAGS = --synth-flags="$(SYNTH_FLAGS)" --pnr-flags="$(NEXTPNR_FLAGS)" \
+                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)"
 promote:
 	@test -n "$(HW_VERIFIED)" || { echo 'usage: make promote HW_VERIFIED="<which hardware test this build passed>"'; exit 2; }
-	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP)
+	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) $(RELEASE_FLAGS)
 check-release:
-	$(RELEASE_TOOL) check
+	$(RELEASE_TOOL) check $(RELEASE_FLAGS)
 # Put the promoted images where stm32h563/Makefile embeds them (what the release job runs).
 release-images:
-	$(RELEASE_TOOL) install
+	$(RELEASE_TOOL) install $(RELEASE_FLAGS)
 
 # Persistent flash: writes bitstream to the board's SPI flash chip via iceprog.
 # The FPGA reloads from this flash on every power-up.
@@ -742,8 +749,12 @@ ringtest:
 	$(VVP) /tmp/$(PROJECT)_ring.vvp
 	@rm -f /tmp/$(PROJECT)_ring.vvp
 
+# Unit tests of tools/ice40_release.py (promote's stale-image refusal, the MANIFEST fields).
+releasetooltest:
+	python3 ../tools/test_ice40_release.py
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
@@ -759,6 +770,7 @@ help:
 	@echo "  images       Build the loop + deep images the firmware embeds (what pods run)"
 	@echo "               PNR_STRICT=1 fails on a fallback seed or clk48 < MIN_CLK48_MHZ (50)"
 	@echo "  promote      Copy a HARDWARE-TESTED images build to release/ (HW_VERIFIED=\"...\")"
+	@echo "               (refuses images older than the sources; records toolchain + flags)"
 	@echo "  check-release  Fail unless release/ still matches the gateware sources"
 	@echo "  release-images Install release/ for the firmware build (the release job)"
 	@echo "  flash        Build + program SPI flash via iceprog (persistent)"

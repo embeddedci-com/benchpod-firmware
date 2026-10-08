@@ -9,6 +9,9 @@ MANIFEST, and the release job embeds those.
 
   promote  copy the current ice40 build (make -C ice40 images) into ice40/release/ and write the
            MANIFEST.  Run it AFTER that exact build passed on hardware; --hw-verified says how.
+           Refuses an image older than any gateware source (a build from before the last edit).
+           The MANIFEST records the toolchain (yosys, the nextpnr revision) and the synthesis and
+           place-and-route flags the Makefile passes in, so a promoted image can be rebuilt.
   check    fail unless ice40/release/ is complete, untampered (sha256) and still matches the
            gateware sources (a source hash + GATEWARE_VERSION).  A gateware change without a
            new promote fails here: build, test on hardware, promote.
@@ -17,11 +20,13 @@ MANIFEST, and the release job embeds those.
 
 The source hash covers what determines the bitstream's logic: ice40/src/*.v and *.vh, the pin
 constraints and clocks.py.  It does not cover the Makefile (seeds, synthesis flags): a seed
-change alone does not invalidate a promoted image, which stays the tested one.
+change alone does not invalidate a promoted image, which stays the tested one.  `check` only
+notes when the Makefile's flags no longer match the ones the promoted images were built with.
 """
 import argparse
 import datetime
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -35,8 +40,8 @@ MANIFEST = REL / "MANIFEST"
 IMAGES = ("loop", "deep")
 
 
-def image_path(kind, base=ICE40):
-    return base / f"bench_pod_fpga_vbench_pod_{kind}.bin"
+def image_path(kind, base=None):
+    return (base or ICE40) / f"bench_pod_fpga_vbench_pod_{kind}.bin"
 
 
 def sha256(path):
@@ -47,6 +52,18 @@ def source_files():
     files = sorted((ICE40 / "src").glob("*.v")) + sorted((ICE40 / "src").glob("*.vh"))
     files += [ICE40 / "vbench_pod.pcf", ICE40 / "clocks.py"]
     return files
+
+
+def build_inputs():
+    """Everything an image's .bin is built from: the hashed sources plus the synthesis helpers."""
+    return source_files() + sorted((ICE40 / "synth").glob("*.v")) + [ICE40 / "synth" / "check_dsp.py"]
+
+
+def stale_against_sources(img):
+    """The newest build input that is newer than img, or None when img is newer than all of them."""
+    built = img.stat().st_mtime
+    newer = [f for f in build_inputs() if f.exists() and f.stat().st_mtime > built]
+    return max(newer, key=lambda f: f.stat().st_mtime) if newer else None
 
 
 def source_hash():
@@ -83,6 +100,32 @@ def tool_version(cmd):
         return "unknown"
 
 
+def nextpnr_revision(exe="nextpnr-ice40"):
+    """The nextpnr revision: the version its --version prints, or, for a build that prints an
+    empty one (Homebrew's prints "(Version )"), the package version from the install path.  The
+    binary's sha256 is appended so two builds that report the same version stay distinguishable."""
+    path = shutil.which(exe)
+    if not path:
+        return "unknown"
+    rev = ""
+    m = re.search(r"\(Version ([^)]*)\)", tool_version([path, "--version"]))
+    if m:
+        rev = m.group(1).strip()
+    if not rev:
+        real = pathlib.Path(os.path.realpath(path))
+        parts = real.parts
+        if "Cellar" in parts and parts.index("Cellar") + 2 < len(parts):
+            i = parts.index("Cellar")
+            rev = f"homebrew {parts[i + 1]} {parts[i + 2]}"
+        else:
+            rev = "unknown"
+    try:
+        rev += f" (sha256 {sha256(pathlib.Path(os.path.realpath(path)))[:16]})"
+    except OSError:
+        pass
+    return rev
+
+
 def clk48_fmax(kind):
     log = ICE40 / f"bench_pod_fpga_vbench_pod_{kind}.asc.pnr.log"
     if not log.exists():
@@ -115,6 +158,11 @@ def cmd_promote(args):
         if tag.exists() and tag.read_text().strip() != gw:
             sys.exit(f"ice40_release promote: {img.name} was built as gateware v{tag.read_text().strip()}, "
                      f"but the sources say v{gw}; rebuild with `make -C ice40 images`")
+        newer = stale_against_sources(img)
+        if newer is not None:
+            sys.exit(f"ice40_release promote: {img.relative_to(ROOT)} is older than {newer.relative_to(ROOT)}, "
+                     f"so it was not built from the current sources; rebuild with `make -C ice40 images`, "
+                     f"test that build on hardware, then promote")
     REL.mkdir(exist_ok=True)
     lines = [
         "# Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).",
@@ -125,13 +173,18 @@ def cmd_promote(args):
         f"promoted={datetime.date.today().isoformat()}",
         f"yosys={tool_version(['yosys', '-V'])}",
         f"nextpnr={tool_version(['nextpnr-ice40', '--version'])}",
+        f"nextpnr_revision={nextpnr_revision()}",
+        f"synth_flags={args.synth_flags.strip() or 'unknown'}",
+        f"pnr_flags={args.pnr_flags.strip() or 'unknown'}",
         f"hw_verified={args.hw_verified.strip()}",
     ]
     for kind in IMAGES:
         dst = image_path(kind, REL)
         shutil.copyfile(image_path(kind), dst)
         seed = args.seed_loop if kind == "loop" else args.seed_deep
+        defines = args.defines_loop if kind == "loop" else args.defines_deep
         lines += [f"{kind}.sha256={sha256(dst)}", f"{kind}.seed={seed}",
+                  f"{kind}.defines={defines.strip() or 'unknown'}",
                   f"{kind}.clk48_mhz={clk48_fmax(kind)}"]
     MANIFEST.write_text("\n".join(lines) + "\n")
     print(f"promoted gateware v{gw} to {REL.relative_to(ROOT)}/ (commit it with the sources)")
@@ -170,6 +223,26 @@ def cmd_check(args):
     m = read_manifest()
     print(f"ice40_release: gateware v{m['gateware_version']} images match the sources "
           f"(hardware: {m['hw_verified']})")
+    for note in flag_notes(m, args):
+        print(f"ice40_release: note: {note}")
+
+
+def flag_notes(m, args):
+    """Where the Makefile's current flags differ from the ones the promoted images were built
+    with.  Informational only: the promoted images stay the hardware-tested ones (see above)."""
+    current = {"synth_flags": getattr(args, "synth_flags", ""), "pnr_flags": getattr(args, "pnr_flags", ""),
+               "loop.defines": getattr(args, "defines_loop", ""),
+               "deep.defines": getattr(args, "defines_deep", "")}
+    notes = []
+    for key, now in current.items():
+        now = (now or "").strip()
+        if not now:
+            continue
+        if key not in m:
+            notes.append(f"the MANIFEST predates recording {key}")
+        elif m[key] != now:
+            notes.append(f"{key} is now '{now}', the promoted images were built with '{m[key]}'")
+    return notes
 
 
 def cmd_install(args):
@@ -189,9 +262,16 @@ def main():
     p.add_argument("--hw-verified", required=True)
     p.add_argument("--seed-loop", default="unknown")
     p.add_argument("--seed-deep", default="unknown")
+    c = sub.add_parser("check")
+    i = sub.add_parser("install")
+    for q in (p, c, i):
+        q.add_argument("--synth-flags", default="", help="yosys synth_ice40 flags (the Makefile's SYNTH_FLAGS)")
+        q.add_argument("--pnr-flags", default="", help="nextpnr-ice40 flags without the seed")
+        q.add_argument("--defines-loop", default="", help="Verilog defines of the loop image")
+        q.add_argument("--defines-deep", default="", help="Verilog defines of the deep image")
     p.set_defaults(fn=cmd_promote)
-    sub.add_parser("check").set_defaults(fn=cmd_check)
-    sub.add_parser("install").set_defaults(fn=cmd_install)
+    c.set_defaults(fn=cmd_check)
+    i.set_defaults(fn=cmd_install)
     args = ap.parse_args()
     args.fn(args)
 
