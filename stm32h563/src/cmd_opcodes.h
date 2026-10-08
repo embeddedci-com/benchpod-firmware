@@ -16,7 +16,6 @@
 #define CMD_DAC_LOOP_SRC       0x1Au
 #define CMD_DAC_LOOP_IN_PROBE  0x1Bu
 #define CMD_FPGA_FEATURES      0x18u
-#define CMD_WARMBOOT           0x17u
 #define CMD_DAC_LOOP_INMAP     0x1Cu
 #define CMD_START_DAC_LOOP     0x15u
 #define CMD_START_CAPTURE      0x20u

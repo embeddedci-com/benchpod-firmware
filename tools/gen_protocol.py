@@ -3,13 +3,15 @@
 
 OPCODES below is the ONE authoritative table.  This script generates:
   - ice40/src/cmd_opcodes.vh        Verilog  `localparam OP_<NAME> = 8'h..;`
-  - rp2350/src/cmd_opcodes.h        C  `#define CMD_<NAME> 0x..`
-  - stm32h563/src/cmd_opcodes.h     (same C header)
+  - stm32h563/src/cmd_opcodes.h     C  `#define CMD_<NAME> 0x..`
+  - ice40/src/sys_config.vh         the logic clock and PSRAM regions (gateware side)
+  - stm32h563/src/fpga_config.h     the same constants (firmware side)
   - ice40/PROTOCOL.md               human-readable command table
 
 Edit OPCODES, then run `python3 tools/gen_protocol.py` (or `make check-protocol`
 in ice40/, which fails if the committed outputs are stale).  Never hand-edit the
-generated files — the banner says so.
+generated files: the banner says so.  Opcodes the gateware no longer decodes stay out of
+OPCODES and are listed as comments below and in RETIRED, so their values are not reused.
 
 The gateware uses the OP_ prefix and the firmware the CMD_ prefix, but the bare
 NAME and the value are shared, so the two can never disagree again.
@@ -19,74 +21,78 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# (NAME, value, payload, reply)  — payload/reply are doc-only.
+# (NAME, value, payload, reply): payload/reply are doc-only.  Multi-byte fields are little-endian.
+# "vNN" is the GATEWARE_VERSION (VERSION reply) a command or behavior first appeared in; the
+# firmware gates every newer command on the version it reads at boot (signal_engine.h *_MIN_GW).
 OPCODES = [
-    ("PING",            0x01, "—",                                              "0xA5"),
-    ("VERSION",         0x02, "—",                                              "version byte"),
-    ("STATUS",          0x03, "—",                                              "flag byte: bit0 DAC running, bit1 capture busy, bit2 capture done, bit3 step train busy, bit4 SWD armed, bit5 sticky capture overflow (dropped bytes, an overlapping arm, or from v43 a writer burst cut because the STM32 took the bus; cleared by the next arm), bit6 control loop tripped (v30), bit7 always 0 (a 1 means the iCE40 is not driving MISO)"),
-    ("LOAD_WAVE",       0x10, "len(2) + N data bytes",                          "—"),
-    ("START_DAC",       0x11, "period(2) + divider(2)",                         "— (shallow: loops the 4 KB LOAD_WAVE BRAM, <=2048 samples. A DAC sample takes max(divider, 3) + 51 clk48: v2 >=v34 floors the divider at 3 for the DAC8551's frame-gap timing (t9), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 2)"),
-    ("STOP_DAC",        0x12, "—",                                              "—"),
-    ("START_DAC_PSRAM", 0x13, "base(3) + count(3) + divider(2)",                "— (v2 >=v17; DEEP replay: iCE40 streams the waveform straight out of PSRAM, up to the full 8 MB / 4,194,304 16-bit samples; MCU stages it into PSRAM over XSPI first; divider as START_DAC)"),
-    ("SET_DAC_STOP_AFTER", 0x14, "cycles(4)",                                    "— (v2 >=v21; arms the iCE40 to cut a concurrently-running DAC `cycles` of the 24 MHz clk after the NEXT capture's t0, so the captured window shows the DAC switch off; cycles=0 disarms; send BEFORE the capture-start command. v40+: one-shot, the capture's end clears it; until v39 it re-applied to every later capture)"),
-    ("DAC_ARM_ON_CAPTURE", 0x19, "—",                                            "— (v2 >=v27; CO-TRIGGER: defer the NEXT DAC start (START_DAC / START_DAC_PSRAM) so it fires on the SAME hardware cycle as the next capture's t0 instead of immediately — DAC sample 0 == capture t0, sample-exact and jitter-free. The deep reader still prefills its FIFO at the (suppressed) start, so the first PSRAM sample pops at t0 with zero latency. Consumed by that one arm; STOP_DAC cancels a staged-but-uncaptured start. Sequence: [stage waveform] → DAC_ARM_ON_CAPTURE → START_DAC(_PSRAM) → SET_DAC_STOP_AFTER → CAPTURE/LA_CAPTURE.)"),
-    ("DAC_PROBE",       0x16, "—",                                              "v(2) LE — the control loop's current DAC output (telemetry; pair with DAC_LOOP_IN_PROBE for the input it came from). ONLY meaningful on the loop image: the deep-replay image has no loop engine and returns a tied-off 0, indistinguishable from 'the loop is holding 0 V' — check FPGA_FEATURES bit0 first (the firmware refuses the probe otherwise)."),
-    ("DAC_LOOP_SRC",    0x1A, "src(1: 0=ADC, 1=fixed, 2=sweep) + fixed(2) + step(2)", "— (v2 >=v29; selects WHERE THE CONTROL LOOP'S INPUT COMES FROM. 0 = the live ADC (closed loop, the pre-v29 behaviour and the power-on default). 1 = the `fixed` register (OPEN loop: the host holds one point of the curve so the DAC output can be metered against curve[fixed] with the ADC and analog front end out of the picture — the first bring-up test of a curve or output path). 2 = an internal accumulator that adds `step` to the input every control tick, mod 65536 (OPEN loop function of TIME: walks the whole curve at a deterministic rate, again with no ADC). `fixed` is also the sweep's START value. Legal whether or not the loop is armed — a RUNNING loop picks the new source/value up on its next tick, so the host can step through curve points without re-arming or re-uploading the curve. Registers persist across arms.)"),
-    ("DAC_LOOP_IN_PROBE", 0x1B, "—",                                            "in(2) LE — the input value the control loop's LAST TICK actually indexed the curve with, whatever the source. In a fixed/sweep run there is no ADC in the path at all, so this — not ADC_PROBE — is the loop's input. (v2 >=v29; same image gate as DAC_PROBE.)"),
-    ("FPGA_FEATURES",   0x18, "—",                                              "features(1) — which optional blocks THIS flash image carries: bit0=closed-loop DAC, bit1=deep-DAC-PSRAM-replay (mutually exclusive across warmboot images). Lets firmware advertise capabilities per running image instead of by version."),
-    ("WARMBOOT",        0x17, "image(1: 0..3)",                                 "— (v2 >=v23; iCE40 SB_WARMBOOT: reconfigure to another gateware image stored in the config flash — e.g. slot0=closed-loop, slot1=deep-DAC-replay — WITHOUT a reflash. The FPGA reboots into `image` immediately; no SPI reply. Firmware waits for CDONE + re-reads the version. Every image carries this so you can switch back.)"),
-    ("DAC_LOOP_INMAP",  0x1C, "in_zero(2) + in_gain(2, signed Q15) + in_trip(2) + flags(1: b0=map_en, b1=trip_en)", "— (v2 >=v30; AFFINE MAP FROM THE RAW INPUT COUNT ONTO THE CURVE INDEX, plus an over-range trip. The loop indexes the curve with the raw input value, which on an inverting/offset/wrapping analog front end means a real measurement window lands backwards inside a few percent of the curve. This makes the index idx = sat_0_2047(((in - in_zero) * in_gain) >> 15), where the subtract is 16-bit MODULAR — for a window under 32768 counts that is exactly the unwrapped distance, so an ADC that wraps mid-range costs nothing — and in_gain is SIGNED so an inverting front end is just a negative gain. Saturation is the physical clamp: below the window = index 0 (source unloaded), above = 2047 (past short-circuit). |in_gain| <= 1.0 (32767) is all that is useful: one curve entry per input count is the hardware limit. flags b0=0 restores the legacy idx = in>>5 exactly. b1 arms the trip: at an index >= in_trip the loop LATCHES tripped, forces the output to vmin until disarmed, and raises STATUS bit 6 — the guard for a loop driving a real pass device into a shorted DUT. Registers persist across arms; the map describes the BENCH, not the curve. Loop image only.)"),
-    ("START_DAC_LOOP",  0x15, "k(2) + vmin(2) + vmax(2) + tick_div(2)",          "— (v2 >=v23; IN-FABRIC CONTROL LOOP: each tick it takes an INPUT (the live ADC by default; see DAC_LOOP_SRC 0x1A for the fixed/sweep open-loop sources, v29), indexes the LOAD_WAVE curve as a LUT (target=curve[in>>5]), damps v+=k*(target-v) [k Q15], clamps [vmin,vmax] and drives the DAC — a deterministic transfer function with no host in the control path (a solar-panel/MPPT emulator is one curve you can load). Load the curve with LOAD_WAVE first; STOP with STOP_DAC. Uses NO PSRAM so an LA capture can run alongside. PRESENT ONLY IN THE LOOP IMAGE (FPGA_FEATURES bit0): the deep-replay image ties the engine off and both images report the SAME version, so gate on FPGA_FEATURES, never on the version — arming on the wrong image otherwise looks like it worked and drives nothing. vmin must be <= vmax: the clamp tests vmin first, so an inverted window pins the output at vmin. k is used as k[14:0] (>32767 wraps to a small gain); tick_div < 8 outruns the pipelined tick.)"),
-    ("START_CAPTURE",   0x20, "count(2) + divider(2)",                          "— RETIRED in v40 (ignored): send CAPTURE 0x31 with la_cnt=0. (16-bit shallow ADC. CAPTURE DIVIDERS (here, START_MEASURE cap_div, CAPTURE adc_div/la_div, LA_CAPTURE) are the sample PERIOD in 24 MHz clk: rate = 24 MHz / divider EXACTLY on >=v32; ADC floors it at 60, LA at 2. Gateware <=v31 sampled every divider+1 clk — firmware sends divider-1 there. v40+: the LA divider is period - 2 on the wire, and the ADC one is not floored in gateware — firmware floors it at 60.)"),
-    ("ADC_PROBE",       0x21, "—",                                              "sample(2) LE — live ADC, no PSRAM/CDC"),
-    # 0x22 READ_CAPTURE removed (v17): v2 reads captures back from PSRAM over XSPI,
-    # never via a BRAM read-back opcode — the gateware S_READ_CAP/cap_raddr path was dead.
-    ("CAPTURE_TEST",    0x23, "mode(1: 1=ramp self-test, 0=real ADC)",          "— (ramp self-test then CAPTURE/XSPI read-back)"),
-    ("PSRAM_CS",        0x25, "drive(1: 1=force PSRAM /CS low, 0=release)",      "— (boot self-test: iCE40 reaches the /CE net?)"),
-    ("START_MEASURE",   0x30, "count(2) + dac_div(2) + cap_div(2)",             "— RETIRED in v40 (ignored): DAC_ARM_ON_CAPTURE + START_DAC + CAPTURE (ADC only). (DAC preloaded; 16-bit count; cap_div is a capture divider — see START_CAPTURE; dac_div is not: a DAC sample takes max(dac_div, 3) + 51 clk48, see START_DAC)"),
-    ("CAPTURE",         0x31, "adc_cnt(3)+adc_div(2)+la_cnt(3)+la_div(2)",      "— (v2; unified ADC+LA, one trigger, two PSRAM regions; both 24-bit deep; divider = sample period, see START_CAPTURE. v40+: the only capture arm; a producer with count 0 keeps its divider)"),
-    ("SET_CAPTURE_BASES", 0x32, "la_base(3) + adc_base(3)",                     "— (v2 >=v22; latch the RUNTIME PSRAM byte-bases for the next CAPTURE — dynamic tri-capture zone allocation, firmware packs LA/ADC/DAC to fit; send BEFORE CAPTURE)"),
-    ("SET_TRIGGER",     0x33, "channel(1: LA 0..11) + mode(1: 0=off, 1=rising, 2=falling, 3=high, 4=low) + flags(1: reserved, send 0)", "— (v2 >=v35; CAPTURE TRIGGER, gated start.  Persistent until changed; applies to every later capture arm (CAPTURE 0x31, LA_CAPTURE 0x69, START_CAPTURE 0x20).  With a mode set, the arm loads the producers but they start sampling only on the first clk cycle the condition holds on the synchronised LA levels; that cycle is t0, and the DAC co-trigger (DAC_ARM_ON_CAPTURE) fires and SET_DAC_STOP_AFTER counts from it.  Re-arming with count 0 aborts a waiting capture.  Mode 0 (and 5..7) = untriggered, identical to <=v34.  Firmware should send mode 0 after each triggered capture.  There is NO pre-trigger: a triggered capture's window is entirely POST-trigger, so the first sample is at t0.)"),
-    ("TRIGGER_STATUS",  0x34, "—",                                              "status(1): bit0 = waiting for the trigger (armed, condition not seen yet), bit1 = a triggered capture fired since the last arm (v2 >=v35)"),
-    ("GPIO_SET",        0x40, "channel + mode(0=low,1=high,2=hi-Z)",            "—"),
-    ("GPIO_STEP",       0x41, "channel + steps(2) + delay_us(2)",               "— (v40+: the wire carries the half-phase in us minus 1)"),
-    ("SET_LED",         0x42, "mask (bit0=green, bit1=yellow, bit2=red)",       "—"),
-    ("GPIO_GET",        0x43, "—",                                              "levels(2) LE — live LA1..LA14 pin levels (bit n = LA n+1) through a 2-flop synchroniser, bits 15:14 = 0 (v2 >=v35)"),
-    ("SWD_ARM",         0x50, "swclk_ch + swdio_ch + nreset_ch(ignored, send 0xFF)", "—"),
-    ("SWD_FEED",        0x51, "len(2) + N remote_bitbang bytes",                "—"),
-    ("SWD_READ",        0x52, "len(2)",                                         "N sample bytes"),
-    ("SWD_DISARM",      0x53, "—",                                              "—"),
-    # 0x54 SWD_STATUS removed (v17): never sent by v2 firmware (dead gateware decode).
+    ("PING",            0x01, "none",                                           "0xA5"),
+    ("VERSION",         0x02, "none",                                           "version byte (GATEWARE_VERSION in top_v2.v)"),
+    ("STATUS",          0x03, "none",                                           "flag byte: bit0 DAC running, bit1 capture busy, bit2 capture done, bit3 step train busy, bit4 SWD armed, bit5 sticky capture overflow (dropped bytes, an overlapping arm, or from v43 a writer burst cut because the STM32 took the bus; cleared by the next arm), bit6 control loop tripped (v30), bit7 always 0 (a 1 means the iCE40 is not driving MISO)"),
+    ("LOAD_WAVE",       0x10, "len(2) + N data bytes",                          "none (fills the 4 KB waveform BRAM: up to 2048 16-bit samples for START_DAC, or the control loop's curve)"),
+    ("START_DAC",       0x11, "period(2) + divider(2)",                         "none (shallow: loops the LOAD_WAVE BRAM, period in samples, <= 2048. A DAC sample takes max(divider, 3) + 51 clk48: v34+ floors the divider at 3 for the DAC8551's frame-gap timing (t9), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 2)"),
+    ("STOP_DAC",        0x12, "none",                                           "none (also leaves deep replay and the control loop, and cancels a start staged by DAC_ARM_ON_CAPTURE)"),
+    ("START_DAC_PSRAM", 0x13, "base(3) + count(3) + divider(2)",                "none (v17+; DEEP replay: the iCE40 streams the waveform straight out of PSRAM, up to the full 8 MB / 4,194,304 16-bit samples; the MCU stages it into PSRAM over XSPI first; divider as START_DAC. Deep image only (FPGA_FEATURES bit1))"),
+    ("SET_DAC_STOP_AFTER", 0x14, "cycles(4)",                                    "none (v21+; arms the iCE40 to cut a concurrently running DAC `cycles` of the 24 MHz clk after the NEXT capture's t0, so the captured window shows the DAC switch off; cycles=0 disarms; send BEFORE the capture arm. v40+: one-shot, the capture's end clears it; until v39 it re-applied to every later capture)"),
+    ("DAC_ARM_ON_CAPTURE", 0x19, "none",                                         "none (v27+; CO-TRIGGER: defer the NEXT DAC start (START_DAC / START_DAC_PSRAM) so it fires on the SAME hardware cycle as the next capture's t0 instead of immediately: DAC sample 0 == capture t0, sample-exact and jitter-free. The deep reader still prefills its FIFO at the (suppressed) start, so the first PSRAM sample pops at t0 with zero latency. Consumed by that one arm; STOP_DAC cancels a staged but uncaptured start. Sequence: [stage waveform], DAC_ARM_ON_CAPTURE, START_DAC(_PSRAM), SET_DAC_STOP_AFTER, CAPTURE)"),
+    ("DAC_PROBE",       0x16, "none",                                           "v(2): the control loop's current DAC output (telemetry; pair with DAC_LOOP_IN_PROBE for the input it came from). Only meaningful on the loop image: the deep image has no loop engine and returns a tied-off 0, indistinguishable from 'the loop is holding 0 V'. Check FPGA_FEATURES bit0 first (the firmware refuses dac_loop_probe otherwise)"),
+    ("DAC_LOOP_SRC",    0x1A, "src(1: 0=ADC, 1=fixed, 2=sweep) + fixed(2) + step(2)", "none (v29+; selects WHERE THE CONTROL LOOP'S INPUT COMES FROM. 0 = the live ADC (closed loop, the pre-v29 behavior and the power-on default). 1 = the `fixed` register (OPEN loop: the host holds one point of the curve so the DAC output can be metered against curve[fixed] with the ADC and analog front end out of the picture; the first bring-up test of a curve or output path). 2 = an internal accumulator that adds `step` to the input every control tick, mod 65536 (OPEN loop function of TIME: walks the whole curve at a deterministic rate, again with no ADC). `fixed` is also the sweep's START value. Legal whether or not the loop is armed: a RUNNING loop picks the new source/value up on its next tick, so the host can step through curve points without re-arming or re-uploading the curve. Registers persist across arms)"),
+    ("DAC_LOOP_IN_PROBE", 0x1B, "none",                                         "in(2): the input value the control loop's LAST TICK actually indexed the curve with, whatever the source. In a fixed/sweep run there is no ADC in the path at all, so this (not ADC_PROBE) is the loop's input. (v29+; same image gate as DAC_PROBE)"),
+    ("FPGA_FEATURES",   0x18, "none",                                           "features(1): which optional blocks THIS image carries: bit0 = closed-loop DAC (loop image), bit1 = deep DAC PSRAM replay (deep image). The two images report the same VERSION, so gate on this, never on the version. The firmware swaps images by rewriting the iCE40 config flash and reconfiguring (JSON `fpga_image`), not with SB_WARMBOOT"),
+    ("DAC_LOOP_INMAP",  0x1C, "in_zero(2) + in_gain(2, signed Q15) + in_trip(2) + flags(1: b0=map_en, b1=trip_en)", "none (v30+; AFFINE MAP FROM THE RAW INPUT COUNT ONTO THE CURVE INDEX, plus an over-range trip. The loop indexes the curve with the raw input value, which on an inverting/offset/wrapping analog front end means a real measurement window lands backwards inside a few percent of the curve. This makes the index idx = sat_0_2047(((in - in_zero) * in_gain) >> 15), where the subtract is 16-bit MODULAR (for a window under 32768 counts that is exactly the unwrapped distance, so an ADC that wraps mid-range costs nothing) and in_gain is SIGNED so an inverting front end is just a negative gain. Saturation is the physical clamp: below the window = index 0 (source unloaded), above = 2047 (past short-circuit). abs(in_gain) <= 1.0 (32767) is all that is useful: one curve entry per input count is the hardware limit. flags b0=0 restores the legacy idx = in>>5 exactly. b1 arms the trip: at an index >= in_trip the loop LATCHES tripped, forces the output to vmin until disarmed, and raises STATUS bit 6, the guard for a loop driving a real pass device into a shorted DUT. Registers persist across arms; the map describes the BENCH, not the curve. Loop image only: the deep image does not decode it)"),
+    ("START_DAC_LOOP",  0x15, "k(2) + vmin(2) + vmax(2) + tick_div(2)",          "none (v23+; IN-FABRIC CONTROL LOOP: each tick it takes an INPUT (the live ADC by default; see DAC_LOOP_SRC 0x1A for the fixed/sweep open-loop sources, v29), indexes the LOAD_WAVE curve as a LUT (target = curve[index], index from DAC_LOOP_INMAP, in>>5 without a map), damps v += k*(target-v) [k Q15], clamps [vmin,vmax] and drives the DAC: a deterministic transfer function with no host in the control path (a solar-panel/MPPT emulator is one curve you can load). Load the curve with LOAD_WAVE first; stop with STOP_DAC. Uses NO PSRAM so an LA capture can run alongside. PRESENT ONLY IN THE LOOP IMAGE (FPGA_FEATURES bit0): the deep image ties the engine off and both images report the SAME version, so gate on FPGA_FEATURES, never on the version; arming on the wrong image otherwise looks like it worked and drives nothing. vmin must be <= vmax: the clamp tests vmin first, so an inverted window pins the output at vmin. k is used as k[14:0] (>32767 wraps to a small gain); tick_div < 8 outruns the pipelined tick)"),
+    ("START_CAPTURE",   0x20, "count(2) + divider(2)",                          "none. RETIRED in v40 (ignored): send CAPTURE 0x31 with la_cnt=0; the firmware sends 0x20 only to gateware <= v39. (16-bit shallow ADC. CAPTURE DIVIDERS (here, START_MEASURE cap_div, CAPTURE adc_div/la_div, LA_CAPTURE) are the sample PERIOD in 24 MHz clk: rate = 24 MHz / divider EXACTLY on v32+; ADC floors it at 60, LA at 2. Gateware <= v31 sampled every divider+1 clk, so the firmware sends divider-1 there. v40+: the LA divider is period - 2 on the wire, and the ADC one is not floored in gateware: the firmware floors it at 60)"),
+    ("ADC_PROBE",       0x21, "none",                                           "sample(2): live ADC, no PSRAM/CDC"),
+    ("CAPTURE_TEST",    0x23, "mode(1: 1=ramp self-test, 0=real ADC)",          "none (persistent: while 1, every capture records a known ramp (+0x0101 per sample) instead of the ADC, which tests capture, writer, PSRAM and XSPI read-back without the analog path)"),
+    ("PSRAM_CS",        0x25, "drive(1: 1=force PSRAM /CS low, 0=release)",      "none (boot self-test: does the iCE40 reach the /CE net?)"),
+    ("START_MEASURE",   0x30, "count(2) + dac_div(2) + cap_div(2)",             "none. RETIRED in v40 (ignored): DAC_ARM_ON_CAPTURE + START_DAC + CAPTURE (ADC only); the firmware sends 0x30 only to gateware <= v39. (DAC preloaded; 16-bit count; cap_div is a capture divider, see START_CAPTURE; dac_div is not: a DAC sample takes max(dac_div, 3) + 51 clk48, see START_DAC)"),
+    ("CAPTURE",         0x31, "adc_cnt(3) + adc_div(2) + la_cnt(3) + la_div(2)", "none (unified ADC+LA arm: one t0 for both producers, two PSRAM regions; both counts 24-bit; divider = sample period, see START_CAPTURE. v40+: the only capture arm; a count of 0 leaves that producer off and keeps its divider)"),
+    ("SET_CAPTURE_BASES", 0x32, "la_base(3) + adc_base(3)",                     "none (v22+; latches the PSRAM byte base of the ADC region for the next CAPTURE, so the firmware can place it below a resident deep-replay waveform; send BEFORE CAPTURE. la_base is ignored: the LA region always starts at 0)"),
+    ("SET_TRIGGER",     0x33, "channel(1: LA wire index 0..13 = LA1..LA14) + mode(1: 0=off, 1=rising, 2=falling, 3=high, 4=low) + flags(1: reserved, send 0)", "none (v35+; CAPTURE TRIGGER, gated start. Persistent until changed; applies to every later CAPTURE arm. With a mode set, the arm loads the producers but they start sampling only on the first clk cycle the condition holds on the synchronized LA levels; that cycle is t0, and the DAC co-trigger (DAC_ARM_ON_CAPTURE) fires and SET_DAC_STOP_AFTER counts from it. Re-arming with count 0 aborts a waiting capture. Mode 0 (and 5..7) = untriggered, identical to <= v34. Channels 14 and 15 read as 0. The firmware sends mode 0 after each triggered capture. There is NO pre-trigger: a triggered capture's window is entirely POST-trigger, so the first sample is at t0)"),
+    ("TRIGGER_STATUS",  0x34, "none",                                           "status(1): bit0 = waiting for the trigger (armed, condition not seen yet), bit1 = a triggered capture fired since the last arm (v35+)"),
+    ("GPIO_SET",        0x40, "channel(0..13) + mode(0=low, 1=high, 2=hi-Z)",   "none"),
+    ("GPIO_STEP",       0x41, "channel + steps(2) + delay_us(2)",               "none (v40+: the wire carries the half-phase in us minus 1)"),
+    ("SET_LED",         0x42, "mask (bit0=green, bit1=yellow, bit2=red)",       "none"),
+    ("GPIO_GET",        0x43, "none",                                           "levels(2): live LA1..LA14 pin levels (bit n = LA n+1) through a 2-flop synchronizer, bits 15:14 = 0 (v35+)"),
+    ("SWD_ARM",         0x50, "swclk_ch + swdio_ch + nreset_ch(ignored since v37, send 0xFF)", "none (nRESET is the pod's own pin, not an LA channel)"),
+    ("SWD_FEED",        0x51, "len(2) + N remote_bitbang bytes",                "none (in SPI mode: data bytes to shift out, <= 512 per feed)"),
+    ("SWD_READ",        0x52, "len(2)",                                         "N sample bytes (SWD), or the bytes clocked in (SPI mode), or 4 bytes per queued read (SWD_QFEED)"),
+    ("SWD_DISARM",      0x53, "none",                                           "none (releases the pins, SWD and SPI mode)"),
     # SPI master (v44): the SWD engine's second job.  SPI_ARM takes over the engine; SWD_FEED
     # then queues data bytes (<= 512 per feed) that the engine shifts out, and SWD_READ returns
     # the bytes it clocked in.  SWD_DISARM releases the pins.  v45: bit 0 goes out first and the
     # first bit clocked in lands in bit 0 (the SWD sequencer's order): send bytes bit-reversed
     # for an MSB-first device and reverse the reply.
-    ("SPI_ARM",         0x55, "sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3)", "— (v2 >=v44; CS starts released, driven high)"),
-    ("SPI_CS",          0x56, "level (1 = assert CS low, 0 = release high)",    "— (v2 >=v44; only change it while SPI_STATUS says idle)"),
+    ("SPI_ARM",         0x55, "sck_ch + mosi_ch + miso_ch + cs_ch + half(24 MHz clk per SCK half period, 2..63; bits 7:6 ignored) + flags(bit0 = CPOL, mode 3)", "none (v44+; CS starts released, driven high. v45+: bit 0 first on the wire, see the comment above)"),
+    ("SPI_CS",          0x56, "level (1 = assert CS low, 0 = release high)",    "none (v44+; only change it while SPI_STATUS says idle)"),
     # SWD transfer queue (v45): whole SWD transfers run by the fabric (see swd_engine.v).
-    ("SWD_QFEED",       0x58, "len(2) + transfers: request byte (the 8-bit SWD packet), + 4 data bytes LE for a write", "— (v2 >=v45; needs SWD_ARM; the reply buffer gets 4 bytes LE per read, read back with SWD_READ)"),
-    ("SWD_QCONFIG",     0x59, "half(clk per SWCLK half period, 2..63) + idle(cycles after each transfer, 0..31)", "— (v2 >=v45)"),
-    ("SWD_QSTATUS",     0x5A, "—",                                              "qptr_lo(1) + flags(1): bit0 busy, bit1 stopped, bits4:2 the ACK of the last transfer, bit5 read parity error, bit6 qptr bit 8 (queue bytes consumed; a stopped transfer consumed its request byte only) (v2 >=v45)"),
-    ("SPI_STATUS",      0x57, "—",                                              "status(1): bit0 = SPI mode armed, bit1 = busy (bytes queued or shifting) (v2 >=v44)"),
-    ("I2C_CONFIG",      0x60, "addr7+sda_ch+scl_ch+flags+trig_reg+busy_reg+busy_mask+conv(2)", "—"),
-    ("I2C_DISABLE",     0x61, "—",                                              "—"),
-    ("I2C_LOAD_REGS",   0x62, "start_addr + len(2) + N data bytes",             "—"),
+    ("SWD_QFEED",       0x58, "len(2) + transfers: request byte (the 8-bit SWD packet), + 4 data bytes for a write", "none (v45+; needs SWD_ARM; the reply buffer gets 4 bytes per read, read back with SWD_READ)"),
+    ("SWD_QCONFIG",     0x59, "half(clk per SWCLK half period, 2..63) + idle(cycles after each transfer, 0..31)", "none (v45+)"),
+    ("SWD_QSTATUS",     0x5A, "none",                                           "qptr_lo(1) + flags(1): bit0 busy, bit1 stopped, bits4:2 the ACK of the last transfer, bit5 read parity error, bit6 qptr bit 8 (queue bytes consumed; a stopped transfer consumed its request byte only) (v45+)"),
+    ("SPI_STATUS",      0x57, "none",                                           "status(1): bit0 = SPI mode armed, bit1 = busy (bytes queued or shifting) (v44+)"),
+    ("I2C_CONFIG",      0x60, "addr7 + sda_ch + scl_ch + flags + trig_reg + busy_reg + busy_mask + conv(2)", "none"),
+    ("I2C_DISABLE",     0x61, "none",                                           "none"),
+    ("I2C_LOAD_REGS",   0x62, "start_addr + len(2) + N data bytes",             "none"),
     ("I2C_READ_REGS",   0x63, "start_addr + len(2)",                            "N bytes"),
-    ("I2C_STATUS",      0x64, "—",                                              "7 status bytes"),
-    # 0x65 I2C_LA_START / 0x66 I2C_LA_READ removed (v24): the on-FPGA I2C-bus LA sampler
-    # (i2c_la_capture + la_capture_buf SPRAM) was retired to reclaim ~150 LC + an SPRAM
-    # block.  The `sensor_la` feature now captures the two I2C pins via the general deep-LA
-    # path (0x69) and the FIRMWARE re-packs them into the same 4-samples/byte layout, so the
-    # server/python I2C decoder is byte-for-byte unchanged.  0x65/0x66 stay reserved.
-    # 0x67 LA_START / 0x68 LA_READ removed (v17): the shallow-BRAM LA sampler is not
-    # built in v2 (engine_block HAS_WIDE_LA=0); v2 uses the deep LA_CAPTURE 0x69 instead.
-    ("LA_CAPTURE",      0x69, "count(3) + divider(2)  (24-bit samples; 2 B/sample)", "— RETIRED in v40 (ignored): send CAPTURE 0x31 with adc_cnt=0. (v2; deep PSRAM stream up to 8 MB, MCU reads back over XSPI; divider = sample period, see START_CAPTURE)"),
-    ("UART_CONFIG",     0x70, "rx_ch+tx_ch+div(3)+flags",                       "— (div = 24 MHz clk per bit, 2 .. 2^18-1; v40+ takes it as sent, the firmware clamps)"),
-    ("UART_DISABLE",    0x71, "—",                                              "—"),
-    ("UART_WRITE",      0x72, "len(2) + N data bytes",                          "— (TX FIFO)"),
+    ("I2C_STATUS",      0x64, "none",                                           "7 bytes: armed, xfer count(2), write count(2), last written register, last written value"),
+    ("LA_CAPTURE",      0x69, "count(3) + divider(2)  (24-bit samples; 2 B/sample)", "none. RETIRED in v40 (ignored): send CAPTURE 0x31 with adc_cnt=0; the firmware sends 0x69 only to gateware <= v39. (Deep PSRAM stream up to 8 MB, the MCU reads it back over XSPI; divider = sample period, see START_CAPTURE)"),
+    ("UART_CONFIG",     0x70, "rx_ch + tx_ch + div(3) + flags",                 "none (div = 24 MHz clk per bit, 2 .. 2^18-1; v40+ takes it as sent, the firmware clamps)"),
+    ("UART_DISABLE",    0x71, "none",                                           "none"),
+    ("UART_WRITE",      0x72, "len(2) + N data bytes",                          "none (TX FIFO)"),
     ("UART_READ",       0x73, "len(2)",                                         "N bytes (RX FIFO)"),
-    ("UART_STATUS",     0x74, "—",                                              "3 status bytes"),
+    ("UART_STATUS",     0x74, "none",                                           "3 bytes: rx_avail(2), flags (reading it clears the sticky RX overflow)"),
+]
+
+# Opcodes the gateware no longer decodes (an incoming one is ignored until CSn rises).  They are
+# not emitted into the headers; the table keeps their values from being reused.
+# (value, name, removed in, why)
+RETIRED = [
+    (0x17, "WARMBOOT",     "v24", "SB_WARMBOOT cannot work on this board: the iCE40 config flash shares the PSRAM bus. The loop and deep images are swapped by rewriting the config flash (JSON `fpga_image`)."),
+    (0x22, "READ_CAPTURE", "v17", "captures are read back from PSRAM over XSPI, never through a BRAM read-back opcode."),
+    (0x54, "SWD_STATUS",   "v17", "never sent by the STM32 firmware."),
+    (0x65, "I2C_LA_START", "v24", "the on-FPGA I2C-bus sampler was removed; `sensor_la` captures the two I2C pins through CAPTURE and the firmware repacks them."),
+    (0x66, "I2C_LA_READ",  "v24", "as I2C_LA_START."),
+    (0x67, "LA_START",     "v17", "the shallow BRAM LA sampler is not built; deep LA captures go to PSRAM."),
+    (0x68, "LA_READ",      "v17", "as LA_START."),
 ]
 
 # System logic-clock frequency — the SINGLE source for both the gateware
@@ -159,13 +165,35 @@ def gen_h():
     lines.append("\n#endif /* CMD_OPCODES_H */\n")
     return "".join(lines)
 
+MD_INTRO = """\
+The STM32H563 is the SPI master and the iCE40 the slave (`spi_slave.v`, decoded by
+`cmd_dispatch.v`). One transaction is one command: CSn falls, the first byte is the opcode,
+the payload follows, and reply bytes shift out on MISO while the master clocks dummy bytes.
+CSn rising ends the command; an unknown opcode is ignored until then. Multi-byte fields are
+little-endian. Bulk data does not go over this link: captures and deep-replay waveforms move
+through the shared PSRAM, which the STM32 reads and writes over its own XSPI port.
+
+"vNN" is the gateware version (the VERSION reply) a command or behavior first appeared in.
+The firmware reads it at boot and gates newer commands on it (`*_MIN_GW` in
+`stm32h563/src/signal_engine.h`). The loop and deep images report the same version, so
+image-specific commands are gated on FPGA_FEATURES instead.
+
+"""
+
 def gen_md():
-    lines = ["<!-- GENERATED by tools/gen_protocol.py — DO NOT EDIT. -->\n",
+    lines = ["<!-- GENERATED by tools/gen_protocol.py. DO NOT EDIT: edit the tables there. -->\n",
              "# Bench-pod SPI command protocol\n\n",
-             "| Opcode | Command | Payload (master→FPGA) | Reply (MISO) |\n",
+             MD_INTRO,
+             "| Opcode | Command | Payload (master to FPGA) | Reply (MISO) |\n",
              "|---|---|---|---|\n"]
     for name, val, payload, reply in OPCODES:
         lines.append(f"| 0x{val:02X} | {name} | {payload} | {reply} |\n")
+    lines += ["\n## Retired opcodes\n\n",
+              "The gateware ignores these. Their values stay reserved.\n\n",
+              "| Opcode | Command | Removed in | Why |\n",
+              "|---|---|---|---|\n"]
+    for val, name, gone, why in RETIRED:
+        lines.append(f"| 0x{val:02X} | {name} | {gone} | {why} |\n")
     return "".join(lines)
 
 def gen_sys_vh():
@@ -227,6 +255,11 @@ TARGETS = {
 }
 
 def main():
+    live = [v for _, v, *_ in OPCODES]
+    reused = sorted(set(live) & {v for v, *_ in RETIRED})
+    if len(set(live)) != len(live) or reused:
+        sys.stderr.write(f"gen_protocol: duplicate or retired opcode values in OPCODES: {reused}\n")
+        return 1
     check = "--check" in sys.argv
     stale = []
     for rel, fn in TARGETS.items():
