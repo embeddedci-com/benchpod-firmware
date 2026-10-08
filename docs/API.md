@@ -3254,7 +3254,7 @@ installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"` 
 must parse as X.509 and is trusted in addition to the built-in roots.
 `cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
-Setting or clearing either reconnects the cloud. Both are T2.
+Setting or clearing either reconnects the cloud. Reading is T0; setting and clearing are T2.
 
 **Never from the LAN.** Installing or clearing the CA and setting or clearing the proxy are refused
 on a LAN TCP connection whatever the LAN policy (even `open`), with
