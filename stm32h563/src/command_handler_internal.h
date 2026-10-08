@@ -98,18 +98,12 @@ bool require_la_voltage(int conn_id);
 /* The command handlers in command_handler.c. Every handler has this one signature so the command
    table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
 void handle_ping(int conn_id, const char *json);
-void handle_la(int conn_id, const char *json);
 void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
 void handle_power_status(int conn_id, const char *json);
 void handle_status(int conn_id, const char *json);
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
-void handle_sensor_start(int conn_id, const char *json);
-void handle_sensor_set(int conn_id, const char *json);
-void handle_sensor_stop(int conn_id, const char *json);
-void handle_sensor_status(int conn_id, const char *json);
-void handle_la_voltage(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 void handle_nrst(int conn_id, const char *json);
 void handle_fpga_image(int conn_id, const char *json);
@@ -193,7 +187,7 @@ void   uart_rearm_poll(void);                 /* re-arm a session kept across a 
 void   uart_proxy_on_gateware_reconfigured(void);
 void   uart_proxy_conn_closed(int conn_id);
 
-/* LA pin ownership glue + handlers (command_handler_pins.c). */
+/* LA pin ownership glue + the LA pin and I2C-sensor handlers (command_handler_pins.c). */
 uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
 void     la_pins_drive_mask(uint16_t mask);   /* GPIO_SET each pin in mask to its table state */
 /* May `fn` claim las[0..n)?  Pins owned by a function in free_fns count as free.  false = the
@@ -207,6 +201,12 @@ void     la_step_poll(void);                  /* releases the train's pins once 
 void     la_pins_on_gateware_reconfigured(void);
 void     handle_la_pins(int conn_id, const char *json);
 void     handle_gpio(int conn_id, const char *json);
+void     handle_la(int conn_id, const char *json);
+void     handle_la_voltage(int conn_id, const char *json);
+void     handle_sensor_start(int conn_id, const char *json);
+void     handle_sensor_set(int conn_id, const char *json);
+void     handle_sensor_stop(int conn_id, const char *json);
+void     handle_sensor_status(int conn_id, const char *json);
 
 /* SPI master on the LA pins (command_handler_spi.c). */
 void handle_spi_start(int conn_id, const char *json);
