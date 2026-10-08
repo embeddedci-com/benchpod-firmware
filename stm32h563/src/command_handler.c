@@ -50,6 +50,7 @@
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "fw_sign.h"
+#include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
 #include "lease_gate.h"
@@ -2364,6 +2365,8 @@ void handle_status(int conn_id, const char *json) {
     /* 1408: gateware + gateware_embedded.
        1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since. */
     char resp[1536];
+    cloud_caps_t caps;
+    cloud_caps_collect(&caps);
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
@@ -2379,15 +2382,14 @@ void handle_status(int conn_id, const char *json) {
        so clients read it once here rather than probing each command. */
     bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",
             board_rev_str(), board_rev_strap_mv(),
-            nrst_ctrl_supported() ? "true" : "false");
+            caps.nrst_pin ? "true" : "false");
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
-    bp_emit(&e, "\"flash_kb\":%lu,", (unsigned long)(flash_layout_size() / 1024u));
+    bp_emit(&e, "\"flash_kb\":%lu,", caps.flash_kb);
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
                 "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",
-            fw_sign_policy_name(fw_sign_policy()), (unsigned)fw_sign_key_count(),
-            pod_policy_lan_name(pod_policy_lan()));
+            caps.sig_policy, (unsigned)fw_sign_key_count(), caps.lan_policy);
     {
         uint32_t left = 0;
         bool held = lease_gate_active(HAL_GetTick(), &left);
@@ -2427,48 +2429,15 @@ void handle_status(int conn_id, const char *json) {
         bp_emit_raw(&e, "}");
     }
     /* Analog front end (board_variant.h): false on the digital-only board. */
-    bp_emit(&e, ",\"analog\":%s", board_has_analog() ? "true" : "false");
+    bp_emit(&e, ",\"analog\":%s", caps.analog ? "true" : "false");
     /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
-    bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":",
-            boot_guard_safe_mode() ? "true" : "false");
-    bp_emit_jstr(&e, boot_guard_reason());
-    /* caps[]: the pod's ADVERTISED feature set, and the ONLY capability source a client on a
-       direct LAN/serial connection ever sees (the richer `capabilities` frame goes to the cloud
-       server alone).  It used to be a hardcoded 7-name literal that named no DAC feature at all,
-       so a direct client could not tell that deep replay / the control loop / the co-trigger
-       exist — the SDK skipped hardware tests for features this very pod passes over the cloud.
-       The dynamic half now comes from signal_engine_caps(), the same call the cloud announce
-       makes, so the two can no longer drift. */
-    bp_emit_raw(&e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
-                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
-    /* Firmware-side features that do not depend on the gateware image. */
-                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
-                    ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
-    if (ina_pod_present()) bp_emit_raw(&e, ",\"pod_current\"");   /* 0x41 pod monitor fitted */
-    /* Analog features: only on a board with the analog front end (board_variant.h). The
-       digital-only board has the gateware engines but no ADC or DAC behind them. */
-    const bool analog = board_has_analog();
-    if (analog) bp_emit_raw(&e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
-    /* Build-time analog features (what the BOARD has). */
-    if (analog && DAC_AC)     bp_emit_raw(&e, ",\"dac\"");
-    if (analog && DAC_DC)     bp_emit_raw(&e, ",\"dac_dc\"");
-    if (analog && DAC_REPLAY) bp_emit_raw(&e, ",\"dac_replay\"");
-    /* Run-time gateware features (what the RUNNING iCE40 image has). */
-    signal_engine_caps_t fcaps;
-    signal_engine_caps(&fcaps);
-    if (analog && fcaps.deep_replay)    bp_emit_raw(&e, ",\"dac_deep_replay\"");
-    if (analog && fcaps.control_loop)   bp_emit_raw(&e, ",\"dac_control_loop\"");
-    if (analog && fcaps.cotrig)         bp_emit_raw(&e, ",\"dac_cotrig\"");
-    if (analog && fcaps.loop_sources)   bp_emit_raw(&e, ",\"dac_loop_sources\"");
-    if (analog && fcaps.loop_input_map) bp_emit_raw(&e, ",\"dac_loop_input_map\"");
-    if (fcaps.gpio_read)      bp_emit_raw(&e, ",\"gpio_read\"");
-    if (fcaps.capture_trigger) bp_emit_raw(&e, ",\"capture_trigger\"");
-    if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_master\"");
-    if (fcaps.spi_master)     bp_emit_raw(&e, ",\"spi_stream\"");   /* firmware: PSRAM upload -> one CS frame */
-    /* rev3 hardware features (what the BOARD has, decided by board_rev). */
-    if (nrst_ctrl_supported()) bp_emit_raw(&e, ",\"nrst_pin\"");
-    if (usb_cc_supported())    bp_emit_raw(&e, ",\"usb_cc\"");
-    bp_emit_raw(&e, "]}}\n");
+    bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":", caps.safe_mode ? "true" : "false");
+    bp_emit_jstr(&e, caps.safe_reason);
+    /* caps[]: the pod's advertised feature set, and the only capability source a client on a
+       direct LAN/serial connection ever sees. The same values as the cloud `capabilities` frame
+       (cloud_caps.h), so the two cannot drift. */
+    cloud_caps_emit_list(&e, &caps);
+    bp_emit_raw(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, "status too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);

@@ -148,8 +148,44 @@ static void test_too_small_buffer(void) {
     CHECK(cloud_caps_build(&c, f, sizeof(f)) == 0);
 }
 
+/* The status reply's caps[] from the same values, in the order status always listed them. */
+static void test_status_list(void) {
+    char buf[1024];
+    bp_emit_t e;
+    cloud_caps_t c = typical();
+    c.usb_cc = true;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_list(&e, &c);
+    CHECK(bp_emit_ok(&e));
+    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
+                      "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
+                      "\"capture_b64\",\"can\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
+                      "\"dac_control_loop\",\"dac_cotrig\",\"dac_loop_sources\",\"dac_loop_input_map\","
+                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
+                      "\"usb_cc\"]") == 0);
+
+    /* The digital board: cloud_caps_collect clears every analog feature, so the list names none. */
+    cloud_caps_t d = typical();
+    d.analog = d.dac_ac = d.dac_dc = d.dac_replay = d.deep_replay = false;
+    d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = false;
+    d.pod_current = d.nrst_pin = d.usb_cc = false;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_list(&e, &d);
+    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
+                      "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
+                      "\"capture_b64\",\"can\",\"gpio_read\",\"capture_trigger\",\"spi_master\","
+                      "\"spi_stream\"]") == 0);
+    if (strstr(buf, "analog")) printf("  %s\n", buf);
+
+    /* The frame does not carry usb_cc (the server never read it): adding the field changed nothing. */
+    static char f[CLOUD_CAPS_MAX + 1];
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0 && strstr(f, "usb_cc") == NULL);
+}
+
 int main(void) {
     test_typical_frame();
+    test_status_list();
     test_worst_case_fits();
     test_too_small_buffer();
     if (failures) { printf("test_cloud_caps: %d FAILED\n", failures); return 1; }

@@ -102,6 +102,7 @@ C_SOURCES := \
   src/cloud_client.c \
   src/cloud_rx.c \
   src/cloud_caps.c \
+  src/cloud_caps_hw.c \
   src/cloud_reply_cap.c \
   src/ws_frame.c \
   src/mbedtls_port.c \

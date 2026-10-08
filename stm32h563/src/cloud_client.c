@@ -1,7 +1,4 @@
 #include "cloud_client.h"
-#include "ina238.h"
-#include "board_variant.h"
-#include "nrst_ctrl.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
 #include "device_identity.h"
@@ -10,12 +7,7 @@
 #include "ws_frame.h"
 #include "cloud_ca.h"
 #include "board_info.h"
-#include "signal_engine.h"
-#include "boot_guard.h"   /* signal_engine_fpga_version / DAC_DEEP_REPLAY_MIN_GW / SIGNAL_MAX_SAMPLES */
-#include "fault.h"        /* reset cause + last crash, announced with the capabilities */
-#include "fpga_config.h"     /* FPGA_DAC_REPLAY_MAX_SAMPLES */
-#include "cal_data.h"        /* ADC_CAL_EXT — front-SMA cal shipped in capabilities */
-#include "current_out.h"     /* the 4-20 mA output's range, shipped in capabilities */
+#include "fault.h"        /* fault_unclean_resets_ack once the capabilities went out */
 #include "target_power.h"
 #include "bp_json.h"
 #include "bp_limits.h"
@@ -24,7 +16,6 @@
 #include "conn_tx.h"
 #include "version.h"
 #include "ota.h"
-#include "fw_sign.h"
 #include "pod_policy.h"
 #include "lease_gate.h"
 #include "cloud_extras.h"
@@ -52,13 +43,11 @@
 #include "lwip/tcp.h"        /* TCP_WRITE_FLAG_COPY */
 
 #include "mbedtls/ssl.h"     /* mbedtls_ssl_set_hostname (SNI) */
-#include "flash_layout.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <math.h>          /* lround — integer-scale the cal (nano printf has no %f) */
 
 /* Ping often and time out fast so a WEDGED server->pod direction self-heals quickly.  The failure
    mode (a single Cloudflare-proxied WS shared by a bulk DAC upload + a UART flood) stalls
@@ -717,85 +706,11 @@ static bool cl_ws_send(uint8_t opcode, const char *payload, size_t len) {
 }
 
 static bool cl_send_capabilities(void) {
-    /* scope/analyzer are now driven server-side over the byte-tunnel (the server
-       runs the `capture` / `sensor_la` JSON commands and decodes the raw bytes),
-       so the pod advertises both as available along with its ADC metadata.
-
-       adc_cal_a_uv/adc_cal_b_nv/adc_cal_unwrap ship the affine front-end fit so
-       the server scales raw capture counts to the true probe voltage instead of
-       the naive count/full-scale (which reports the ADC-pin voltage — the
-       inverting ×gain+offset front end makes a 1.3 V input read ~4 V under that
-       model). We send ADC_CAL_EXT (the front-SMA path the scope capture uses); it
-       is exactly what handle_adc_read applies, so a `capture` and an `adc_read`
-       now agree. unwrap=true: ext is bipolar, so its 16-bit count wraps for
-       near-0/negative inputs and must be unwrapped (count += 65536 when
-       count < 32768).
-
-       The coefficients are shipped as INTEGERS (a in microvolts, b in nanovolts
-       per count) — NOT floats: newlib-nano's printf has no %f/%g (see the note in
-       signal_engine.c), so a %g here emitted a MALFORMED frame that failed to
-       parse server-side (→ "no tunnel"). Same integer-scaling trick
-       handle_adc_read uses. The server divides back: a[V]=a_uv/1e6,
-       b[V/count]=b_nv/1e9. lround() keeps full precision (double math, no float
-       printf). */
-    /* Deep DAC replay (stream a waveform straight out of PSRAM, past the 4 KB DAC
-       BRAM cap) needs gateware >= v17.  Advertise it + the actual replay depth the
-       device supports so the server can offer full-length recording replay and clamp
-       requests: FPGA_DAC_REPLAY_MAX_SAMPLES (8 MB region) when deep, else the shallow
-       BRAM depth (SIGNAL_MAX_SAMPLES). */
-    /* The cached gateware version is current: the hw worker re-reads it after boot bring-up,
-       the boot gateware update and every image swap, and re-announces when it is done.  This ran
-       on the net task and used to re-read it over SPI1, which the worker drives WITHOUT hw_lock,
-       so a (re)connect could cut a worker transaction mid-command. */
-    /* Feature flags come from signal_engine_caps() — the SAME call the `status` reply uses, so
-       a cloud client and a direct LAN/serial client cannot disagree about what this pod can do.
-       (They used to: status carried a hardcoded caps[] literal that named none of these.) */
-    signal_engine_caps_t caps;
-    signal_engine_caps(&caps);
-    /* A digital-only board has the gateware's DAC/ADC engines but no DAC or ADC behind them
-       (board_variant.h): announce none of the analog features there. */
-    bool analog    = board_has_analog();
-    bool deep      = analog && caps.deep_replay;
-    bool ctrl_loop = analog && caps.control_loop;
-    bool cotrig    = analog && caps.cotrig;
-    bool loop_src  = analog && caps.loop_sources;
-    bool loop_map  = analog && caps.loop_input_map;
-    unsigned long replay_max = deep ? (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES
-                                    : (unsigned long)SIGNAL_MAX_SAMPLES;
-    cloud_caps_t c = {
-        .device_id = s_cfg.device_id,
-        .firmware_version = FIRMWARE_VERSION,
-        .flash_kb = (unsigned long)(flash_layout_size() / 1024u),
-        .sig_policy = fw_sign_policy_name(fw_sign_policy()),
-        .lan_policy = pod_policy_lan_name(pod_policy_lan()),
-        .analog = analog,
-        .adc_bits = ADC_BITS, .adc_fullscale_mv = ADC_FULLSCALE_MV, .adc_channels = ADC_CHANNELS,
-        .adc_cal_a_uv = lround((double)ADC_CAL_EXT.a * 1000000.0),
-        .adc_cal_b_nv = lround((double)ADC_CAL_EXT.b * 1000000000.0),
-        .dac_ac = analog && DAC_AC, .dac_replay = analog && DAC_REPLAY, .dac_dc = analog && DAC_DC,
-        .dac_bits = DAC_BITS, .dac_replay_bits = DAC_REPLAY_BITS,
-        .dac_fullscale_mv = DAC_FULLSCALE_MV, .dac_channels = DAC_CHANNELS,
-        .deep_replay = deep, .replay_max_samples = replay_max,
-        .control_loop = ctrl_loop, .loop_sources = loop_src, .loop_input_map = loop_map,
-        .cotrig = cotrig,
-        .gpio_read = caps.gpio_read, .capture_trigger = caps.capture_trigger,
-        .spi_master = caps.spi_master,
-        .nrst_pin = nrst_ctrl_supported(),     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
-        .pod_current = ina_pod_present(),      /* the pod's own current monitor (0x41) */
-        /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes
-           with the pod's own numbers (current_out.h). */
-        .current_out_min_ua = current_out_min_ua(), .current_out_max_ua = current_out_max_ua(),
-        .board = BOARD_NAME,
-        /* Boot health, sent on every connect so the server always holds the current boot's
-           values: last_crash is "none" and safe_reason "" after a clean start, which clears an
-           old warning. */
-        .safe_mode = boot_guard_safe_mode(),
-        .safe_reason = boot_guard_reason(),
-        .reset_cause = fault_last_reset_str(),
-        .last_crash = fault_last_crash_str(),
-        .boot_id = fault_boot_id(),
-        .unclean_resets = fault_unclean_resets(),
-    };
+    /* The same values the `status` reply's caps[] lists (cloud_caps_collect), so a cloud client
+       and a direct LAN/serial client cannot disagree about what this pod can do. */
+    cloud_caps_t c;
+    cloud_caps_collect(&c);
+    c.device_id = s_cfg.device_id;
     /* cloud_caps_build keeps the frame inside one WS frame (it shortens the free-form boot
        health when it has to), so a long crash line can no longer make the connect fail and
        loop. Static: net-task only. */
