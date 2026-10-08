@@ -73,6 +73,9 @@ const char *bus_busy_reason(void);
 /* heavy_or_claimed() without the OTA session itself: a capture, bulk send, upload or a held gate. */
 bool capture_or_upload_busy(void);
 
+/* One raw newline-delimited JSON line on a (tunnel) conn: load_bin acks and speed-test marks. */
+void cloud_send_json_line(int conn_id, const char *json);
+
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
 
@@ -97,14 +100,6 @@ void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
 void handle_power_status(int conn_id, const char *json);
 void handle_status(int conn_id, const char *json);
-void handle_cloud_set(int conn_id, const char *json);
-void handle_cloud_status(int conn_id, const char *json);
-void handle_cloud_clear(int conn_id, const char *json);
-void handle_wifi_set(int conn_id, const char *json);
-void handle_wifi_clear(int conn_id, const char *json);
-void handle_eth(int conn_id, const char *json);
-void handle_speedtest(int conn_id, const char *json);
-void handle_wifi_status(int conn_id, const char *json);
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
 void handle_dap_start(int conn_id, const char *json);
@@ -133,6 +128,21 @@ void handle_fpga_image(int conn_id, const char *json);
 void handle_psram_recover(int conn_id, const char *json);
 void handle_psram_ping(int conn_id, const char *json);
 void handle_identity_wipe(int conn_id, const char *json);
+
+/* Network provisioning and the cloud speed test (command_handler_net.c). */
+void   handle_cloud_set(int conn_id, const char *json);
+void   handle_cloud_status(int conn_id, const char *json);
+void   handle_cloud_clear(int conn_id, const char *json);
+void   handle_wifi_set(int conn_id, const char *json);
+void   handle_wifi_clear(int conn_id, const char *json);
+void   handle_wifi_status(int conn_id, const char *json);
+void   handle_eth(int conn_id, const char *json);
+void   handle_speedtest(int conn_id, const char *json);
+void   speedtest_pump(void);                  /* the "up" direction's paced byte source */
+/* The PROTO_SPEEDTEST receive path: counts and drops the "down" bytes, acks, returns to JSON when
+   all arrived. Returns the bytes taken from buf. */
+size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
+void   speedtest_conn_closed(int conn_id);
 
 /* LA pin ownership glue + handlers (command_handler_pins.c). */
 uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */

@@ -109,6 +109,7 @@ C_SOURCES := \
   src/command_handler.c \
   src/command_handler_can.c \
   src/command_handler_ota.c \
+  src/command_handler_net.c \
   src/command_handler_pins.c \
   src/command_handler_power.c \
   src/scpi_server.c \
