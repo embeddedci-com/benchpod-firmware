@@ -3029,7 +3029,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 | `SENSe:SRATe <MHz>` / `?` | ≥ 0; `0` = maximum (about 0.4) | ADC sample clock for `READ?` |
 | `READ? [<n>]` | 1..4096 | Capture `n` ADC samples and return them as CSV; also fills the trace (first 2048 samples) |
 | `MEASure?` | | Play one period of the `SOURce` waveform across a `POINts`-long capture (as `measure`) and return the ADC samples; also fills the trace |
-| `DIAGnostic:CAPture? [<adc_n>][,<la_n>]` | each 0..128, not both 0; default 16,16 | One-trigger ADC + LA capture (ADC 100 kS/s, LA 1 MS/s): `adc_n` ADC counts, then `la_n` LA words, as CSV. The LA words are masked to 12 bits (LA1..LA12). |
+| `DIAGnostic:CAPture? [<adc_n>][,<la_n>]` | each 0..128, not both 0; default 16,16 | One-trigger ADC + LA capture (ADC 100 kS/s, LA 1 MS/s): `adc_n` ADC counts, then `la_n` LA words, as CSV. Each LA word holds LA1..LA14 in its low 14 bits (bit 0 = LA1). |
 | `DIAGnostic:PATTern? <pattern>[,<value>[,<n>]]` | `SINusoid`, `COUNter`, `RAMP` or `CONStant`; value 0..255 (for `CONStant`, default 255); n 1..4096 (default 256) | An 8-bit synthetic pattern as CSV (no hardware) |
 | `TRACe[:DATA] <offset>,"<base64url>"` | byte offset 0..4096 | Upload one chunk of a replay trace (16-bit little-endian samples, at most 4096 bytes in total) |
 | `TRACe:POINts?` | | Samples in the trace (bytes ÷ 2) |

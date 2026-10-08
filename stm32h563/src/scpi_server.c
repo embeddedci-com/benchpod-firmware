@@ -629,7 +629,7 @@ static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
         return SCPI_RES_ERR;
     }
     /* One CSV list: libscpi puts the separator between results, so two arrays read as one. */
-    for (uint32_t i = 0; i < ln; i++) lab[i] &= 0xFFFu;
+    for (uint32_t i = 0; i < ln; i++) lab[i] &= 0x3FFFu;   /* LA1..LA14 */
     SCPI_ResultArrayUInt16(ctx, adcb, an, SCPI_FORMAT_ASCII);
     SCPI_ResultArrayUInt16(ctx, lab, ln, SCPI_FORMAT_ASCII);
     return SCPI_RES_OK;
