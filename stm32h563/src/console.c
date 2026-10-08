@@ -392,6 +392,15 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
        (unsigned long)noresp, (unsigned long)reboot);
 }
 
+/* `ca`: one line per company CA certificate (cloud_extras_ca_each). */
+typedef struct { console_out_t out; void *ctx; } console_line_t;
+static bool console_ca_cert(void *c, const char *subject, const char *sha256_hex)
+{
+    console_line_t *cl = c;
+    op(cl->out, cl->ctx, "ca %s %.64s\r\n", subject, sha256_hex);
+    return true;
+}
+
 /* Console commands that capture into the PSRAM or drive the shared bus.  They go through the
    same heavy gate as the JSON and SCPI captures: run on the worker between two polls of a LAN
    capture_dual, a console `adc` used to overwrite the capture the iCE40 was still writing (or a
@@ -998,20 +1007,10 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             else     op(out, ctx, "ca-clear ok\r\n");
         } else {
             /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
-            static char certs[640];
-            int n = cloud_extras_ca_describe(certs, sizeof(certs));
+            console_line_t cl = { out, ctx };
+            int n = cloud_extras_ca_each(console_ca_cert, &cl);
             if (n == 0) op(out, ctx, "ca none\r\n");
             if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
-            for (char *p = certs; n > 0 && (p = strstr(p, "{\"subject\":\"")) != NULL; ) {
-                p += 12;
-                char *se = strchr(p, '"');
-                char *h = se ? strstr(se, "\"sha256\":\"") : NULL;
-                if (!se || !h) break;
-                *se = '\0';
-                h += 10;
-                op(out, ctx, "ca %s %.64s\r\n", p, h);
-                p = h + 64;
-            }
         }
     } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
         const char *why = NULL;

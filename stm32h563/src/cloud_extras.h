@@ -62,9 +62,11 @@ const char *cloud_extras_ca_error(void);
 const char *cloud_extras_ca_damage(void);
 #endif
 void  cloud_extras_free(void *p);
-/* Describe the installed company CA as JSON array items {"subject":..,"sha256":..} into out;
-   returns the number of certificates (0 = none). Worker. */
-int cloud_extras_ca_describe(char *out, size_t cap);
+/* The one walk over the installed company CA's certificates, for the JSON cloud_ca reply and the
+   console `ca`: fn gets each one's subject (quotes and backslashes turned into ') and the hex
+   SHA-256 of its DER, and returns false to stop. Returns the number fn took (0 = none). Worker. */
+typedef bool (*cloud_ca_cert_fn)(void *ctx, const char *subject, const char *sha256_hex);
+int cloud_extras_ca_each(cloud_ca_cert_fn fn, void *ctx);
 
 /* ---- proxy --------------------------------------------------------------- */
 /* Set ("host:port", user/pass may be NULL or "") or clear (spec NULL). Worker. NULL = done. */
