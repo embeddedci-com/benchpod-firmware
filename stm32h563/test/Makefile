@@ -4,6 +4,8 @@ CC      ?= cc
 CFLAGS  := -std=gnu11 -Wall -Wextra -O1 -I../src -I../port -I. -I../lib/esp_hosted/common
 # Code under test logs through plain printf (bp_log.h); test_bp_log tests log_printf itself.
 CFLAGS  += -DLOG_PRINTF_IS_PRINTF
+# The command table (cmd_tier.c) without its handlers, so it links without command_handler.c.
+CFLAGS  += -DCMD_TABLE_NO_HANDLERS
 
 # Every test binary depends on every header (see the $(TESTS) rule near the bottom).  The rules
 # below list only .c prerequisites, so before this a header edit left stale binaries behind and
@@ -299,7 +301,7 @@ build/test_net_reload: $(NETRELOAD_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(NETRELOAD_SRCS) -lm -o $@
 
-build/test_cmd_tier: $(CMDTIER_SRCS)
+build/test_cmd_tier: $(CMDTIER_SRCS) vectors/cmd_tier_vectors.json
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CMDTIER_SRCS) -lm -o $@
 

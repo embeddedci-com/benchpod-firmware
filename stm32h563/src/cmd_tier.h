@@ -16,7 +16,8 @@
  * The tier depends on the arguments for the verbs that read and write: `dac_limits` (a write
  * has "path" or "enabled":false), `calibrate` ("source" or "clear":true), `eth` (only
  * "stats" and "refclk" are reads), `sig_policy` and `lan_policy` (a write has "set"). An unknown verb counts as T3, so a new command is never
- * under-classified; test_cmd_tier fails when dispatch_line gains a verb this table lacks.
+ * under-classified. The tiers live in the command table (cmd_table.h); test_cmd_tier runs every
+ * line of embeddedci-server's shared vectors (test/vectors/cmd_tier_vectors.json) through it.
  */
 
 typedef enum {

@@ -50,7 +50,7 @@
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "fw_sign.h"
-#include "cmd_tier.h"      /* command tiers: logged, and gated (LAN policy, tunnel max_tier) */
+#include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
 #include "lease_gate.h"
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
@@ -3889,15 +3889,6 @@ void handle_psram_ping(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-/* High-frequency polled reads (the web UI refreshes these on a timer) would flood
-   the serial console with identical lines, so they're not traced.  Every other
-   command still logs, so a real interaction is still visible. */
-static bool cmd_is_noisy_poll(const char *cmd) {
-    return strcmp(cmd, "ping")          == 0 ||
-           strcmp(cmd, "power_status")  == 0 ||
-           strcmp(cmd, "target_status") == 0;
-}
-
 /* Per cloud tunnel: the highest tier its user may use (command_handler.h). Written by the net
    task at tunnel.open, read by the worker. */
 static volatile uint8_t s_tunnel_max_tier[CH_CLOUD_TUNNEL_CONN_COUNT] = { 3, 3, 3 };
@@ -3924,8 +3915,13 @@ static void dispatch_line(int conn_id, const char *buf) {
         return;
     }
 
-    const cmd_tier_t tier = cmd_tier(cmd, buf);
-    if (!cmd_is_noisy_poll(cmd))
+    /* The command table (cmd_table.h): tier, gate flags and handler. NULL = unknown verb, which
+       still goes through the gates (as T3) before it is refused. */
+    const cmd_desc_t *d = cmd_find(cmd);
+    const cmd_tier_t tier = cmd_tier_of(d, buf);
+    /* High-frequency polled reads (the web UI refreshes them on a timer) would flood the serial
+       console with identical lines, so they are not traced. */
+    if (!cmd_has(d, CMD_F_NOISY))
         printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
 
     /* Tier, lease, tunnel, safe-mode and board gates (cmd_gate.h, host-tested). */
@@ -3955,89 +3951,7 @@ static void dispatch_line(int conn_id, const char *buf) {
         if (why) { send_error(conn_id, why); return; }
     }
 
-    if      (strcmp(cmd, "ping")      == 0) handle_ping(conn_id, buf);
-    else if (strcmp(cmd, "generate")  == 0) handle_generate(conn_id, buf);
-    else if (strcmp(cmd, "capture")   == 0) handle_capture(conn_id, buf);
-    else if (strcmp(cmd, "capture_dual") == 0) handle_capture_dual(conn_id, buf);
-    else if (strcmp(cmd, "capture_read") == 0) handle_capture_read(conn_id, buf);
-    else if (strcmp(cmd, "stream")    == 0) handle_stream(conn_id, buf);
-    else if (strcmp(cmd, "measure")   == 0) handle_measure(conn_id, buf);
-    else if (strcmp(cmd, "load")      == 0) handle_load(conn_id, buf);
-    else if (strcmp(cmd, "load_bin")  == 0) handle_load_bin(conn_id, buf);
-    else if (strcmp(cmd, "replay")    == 0) handle_replay(conn_id, buf);
-    else if (strcmp(cmd, "dac_stop")  == 0) handle_dac_stop(conn_id, buf);
-    else if (strcmp(cmd, "dac_limits") == 0) handle_dac_limits(conn_id, buf);
-    else if (strcmp(cmd, "dac_set")   == 0) handle_dac_set(conn_id, buf);
-    else if (strcmp(cmd, "dac_mux")   == 0) handle_dac_mux(conn_id, buf);
-    else if (strcmp(cmd, "cal_switch") == 0) handle_cal_switch(conn_id, buf);
-    else if (strcmp(cmd, "analog_path") == 0) handle_analog_path(conn_id, buf);
-    else if (strcmp(cmd, "psram_ping") == 0) handle_psram_ping(conn_id, buf);
-    else if (strcmp(cmd, "dac_out")   == 0) handle_dac_out(conn_id, buf);
-    else if (strcmp(cmd, "current_out") == 0) handle_current_out(conn_id, buf);
-    else if (strcmp(cmd, "adc_read")  == 0) handle_adc_read(conn_id, buf);
-    else if (strcmp(cmd, "calibrate") == 0) handle_calibrate(conn_id, buf);
-    else if (strcmp(cmd, "dac_control_loop") == 0) handle_dac_control_loop(conn_id, buf);
-    else if (strcmp(cmd, "dac_loop_probe")   == 0) handle_dac_loop_probe(conn_id, buf);
-    else if (strcmp(cmd, "dac_loop_input")   == 0) handle_dac_loop_input(conn_id, buf);
-    else if (strcmp(cmd, "fpga_image")       == 0) handle_fpga_image(conn_id, buf);
-    else if (strcmp(cmd, "psram_recover")    == 0) handle_psram_recover(conn_id, buf);
-    else if (strcmp(cmd, "test")      == 0) handle_test(conn_id, buf);
-    else if (strcmp(cmd, "status")    == 0) handle_status(conn_id, buf);
-    else if (strcmp(cmd, "cloud_set")     == 0) handle_cloud_set(conn_id, buf);
-    else if (strcmp(cmd, "cloud_status")  == 0) handle_cloud_status(conn_id, buf);
-    else if (strcmp(cmd, "cloud_clear")   == 0) handle_cloud_clear(conn_id, buf);
-    else if (strcmp(cmd, "wifi_set")      == 0) handle_wifi_set(conn_id, buf);
-    else if (strcmp(cmd, "wifi_status")   == 0) handle_wifi_status(conn_id, buf);
-    else if (strcmp(cmd, "wifi_clear")    == 0) handle_wifi_clear(conn_id, buf);
-    else if (strcmp(cmd, "eth")           == 0) handle_eth(conn_id, buf);
-    else if (strcmp(cmd, "speedtest")     == 0) handle_speedtest(conn_id, buf);
-    else if (strcmp(cmd, "la")        == 0) handle_la(conn_id, buf);
-    else if (strcmp(cmd, "la_pins")       == 0) handle_la_pins(conn_id, buf);
-    else if (strcmp(cmd, "gpio")          == 0) handle_gpio(conn_id, buf);
-    else if (strcmp(cmd, "la_voltage")    == 0) handle_la_voltage(conn_id, buf);
-    else if (strcmp(cmd, "usb_cc")        == 0) handle_usb_cc(conn_id, buf);
-    else if (strcmp(cmd, "nrst")          == 0) handle_nrst(conn_id, buf);
-    else if (strcmp(cmd, "target_power")  == 0) handle_target_power(conn_id, buf);
-    else if (strcmp(cmd, "target_status") == 0) handle_target_status(conn_id, buf);
-    else if (strcmp(cmd, "power_status")  == 0) handle_power_status(conn_id, buf);
-    else if (strcmp(cmd, "power_profile") == 0) handle_power_profile(conn_id, buf);
-    else if (strcmp(cmd, "dap_start")     == 0) handle_dap_start(conn_id, buf);
-    else if (strcmp(cmd, "spi_start")     == 0) handle_spi_start(conn_id, buf);
-    else if (strcmp(cmd, "spi_stop")      == 0) handle_spi_stop(conn_id, buf);
-    else if (strcmp(cmd, "spi_xfer")      == 0) handle_spi_xfer(conn_id, buf);
-    else if (strcmp(cmd, "spi_flash")     == 0) handle_spi_flash(conn_id, buf);
-    else if (strcmp(cmd, "spi_stream")    == 0) handle_spi_stream(conn_id, buf);
-    else if (strcmp(cmd, "spi_status")    == 0) handle_spi_status(conn_id, buf);
-    else if (strcmp(cmd, "identity_public") == 0) handle_identity_public(conn_id, buf);
-    else if (strcmp(cmd, "identity_pop")    == 0) handle_identity_pop(conn_id, buf);
-    else if (strcmp(cmd, "identity_wipe")   == 0) handle_identity_wipe(conn_id, buf);
-    else if (strcmp(cmd, "sensor_start")  == 0) handle_sensor_start(conn_id, buf);
-    else if (strcmp(cmd, "sensor_set")    == 0) handle_sensor_set(conn_id, buf);
-    else if (strcmp(cmd, "sensor_stop")   == 0) handle_sensor_stop(conn_id, buf);
-    else if (strcmp(cmd, "sensor_status") == 0) handle_sensor_status(conn_id, buf);
-    else if (strcmp(cmd, "sensor_regs")   == 0) handle_sensor_regs(conn_id, buf);
-    else if (strcmp(cmd, "sensor_la")     == 0) handle_sensor_la(conn_id, buf);
-    else if (strcmp(cmd, "la_capture")    == 0) handle_la_capture(conn_id, buf);
-    else if (strcmp(cmd, "uart_proxy_start") == 0) handle_uart_proxy_start(conn_id, buf);
-    else if (strcmp(cmd, "can_config")   == 0) handle_can_config(conn_id, buf);
-    else if (strcmp(cmd, "can_write")    == 0) handle_can_write(conn_id, buf);
-    else if (strcmp(cmd, "can_read")     == 0) handle_can_read(conn_id, buf);
-    else if (strcmp(cmd, "can_status")   == 0) handle_can_status(conn_id, buf);
-    else if (strcmp(cmd, "can_term")     == 0) handle_can_term(conn_id, buf);
-    else if (strcmp(cmd, "can_respond")  == 0) handle_can_respond(conn_id, buf);
-    else if (strcmp(cmd, "can_disable")  == 0) handle_can_disable(conn_id, buf);
-    else if (strcmp(cmd, "ota_begin")    == 0) handle_ota_begin(conn_id, buf);
-    else if (strcmp(cmd, "ota_data")     == 0) handle_ota_data(conn_id, buf);
-    else if (strcmp(cmd, "ota_end")      == 0) handle_ota_end(conn_id, buf);
-    else if (strcmp(cmd, "ota_status")   == 0) handle_ota_status(conn_id, buf);
-    else if (strcmp(cmd, "ota_abort")    == 0) handle_ota_abort(conn_id, buf);
-    else if (strcmp(cmd, "ota_selftest") == 0) handle_ota_selftest(conn_id, buf);
-    else if (strcmp(cmd, "ota_commit")   == 0) handle_ota_commit(conn_id, buf);
-    else if (strcmp(cmd, "blob_status")  == 0) handle_blob_status(conn_id, buf);
-    else if (strcmp(cmd, "sig_policy")   == 0) handle_sig_policy(conn_id, buf);
-    else if (strcmp(cmd, "lan_policy")   == 0) handle_lan_policy(conn_id, buf);
-    else if (strcmp(cmd, "cloud_ca")     == 0) handle_cloud_ca(conn_id, buf);
-    else if (strcmp(cmd, "cloud_proxy")  == 0) handle_cloud_proxy(conn_id, buf);
+    if (d && d->fn) d->fn(conn_id, buf);
     else send_error(conn_id, "unknown cmd");
 }
 
@@ -4048,26 +3962,15 @@ void command_handler_dispatch_console(const char *json_line) {
     dispatch_line(CH_CONSOLE_CONN, json_line);
 }
 
-/* Commands that stream chunks or switch the connection into a raw protocol
-   (SWD/UART) cannot be carried over the single-reply cloud channel. */
-static bool cloud_cmd_is_streaming(const char *cmd) {
-    return strcmp(cmd, "capture")  == 0 || strcmp(cmd, "stream") == 0 ||
-           strcmp(cmd, "capture_dual") == 0 || strcmp(cmd, "capture_read") == 0 ||
-           strcmp(cmd, "measure")  == 0 || strcmp(cmd, "test")   == 0 ||
-           strcmp(cmd, "load")     == 0 || strcmp(cmd, "replay") == 0 ||
-           strcmp(cmd, "load_bin") == 0 ||
-           strcmp(cmd, "sensor_regs") == 0 || strcmp(cmd, "sensor_la") == 0 ||
-           strcmp(cmd, "dap_start") == 0 || strcmp(cmd, "uart_proxy_start") == 0 ||
-           strcmp(cmd, "la_capture") == 0 || strcmp(cmd, "speedtest") == 0;
-}
-
 size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_t out_cap) {
     char cmd[32] = {0};
     if (!json_get_value(command_json, "cmd", cmd, sizeof(cmd))) {
         int n = snprintf(out, out_cap, "{\"status\":\"error\",\"message\":\"missing cmd\"}");
         return (n > 0 && (size_t)n < out_cap) ? (size_t)n : 0;
     }
-    if (cloud_cmd_is_streaming(cmd)) {
+    /* Commands that stream chunks or switch the connection into a raw protocol (SWD/UART)
+       cannot be carried over the single-reply cloud channel. */
+    if (cmd_has(cmd_find(cmd), CMD_F_STREAM)) {
         int n = snprintf(out, out_cap,
                          "{\"status\":\"error\",\"message\":\"command not supported over cloud channel\"}");
         return (n > 0 && (size_t)n < out_cap) ? (size_t)n : 0;
