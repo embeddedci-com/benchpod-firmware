@@ -391,6 +391,21 @@ static bool scpi_refused_by_limits(scpi_t *ctx, const char *what) {
     return true;
 }
 
+/* The safe-mode and digital-board refusals a JSON command gets (cmd_gate.h), asked with the JSON
+   verb this SCPI command stands for: OUTPut = generate (OFF = dac_stop), READ? = capture,
+   MEASure? = measure, DIAGnostic:CAPture? = capture_dual, TRACe:DATA = load, DIGital = la.
+   Commands that touch no hardware (the SOURce/SENSe settings, PATTern?) or only what runs in
+   safe mode (target power, identity, network) are not asked. True = refused, error queued:
+   -240 in safe mode, -241 on the digital-only board. */
+static bool scpi_refused_by_gate(scpi_t *ctx, const char *verb, const char *json) {
+    const char *why = command_handler_device_gate(verb, json);
+    if (!why) return false;
+    SCPI_ErrorPushEx(ctx, strncmp(why, "safe mode", 9) == 0 ? SCPI_ERROR_HARDWARE_ERROR
+                                                          : SCPI_ERROR_HARDWARE_MISSING,
+                     (char *)why, strlen(why));
+    return true;
+}
+
 static int output_start(void) {
     int rc;
     switch (src.shape) {
@@ -413,6 +428,7 @@ static int output_start(void) {
 static scpi_result_t scpi_output(scpi_t *ctx) {
     scpi_bool_t on;
     if (!SCPI_ParamBool(ctx, &on, TRUE)) return SCPI_RES_ERR;
+    if (scpi_refused_by_gate(ctx, on ? "generate" : "dac_stop", NULL)) return SCPI_RES_ERR;
     if (on) {
         if (scpi_refused_by_limits(ctx, "OUTPut")) return SCPI_RES_ERR;
         if (output_start() != 0) {
@@ -475,6 +491,7 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
         }
         n = (size_t)v;
     }
+    if (scpi_refused_by_gate(ctx, "capture", NULL)) return SCPI_RES_ERR;
     if (!command_handler_acquire_adc(conn)) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* ADC busy */
         return SCPI_RES_ERR;
@@ -495,6 +512,7 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
 static scpi_result_t scpi_measureQ(scpi_t *ctx) {
     int conn = cur_conn(ctx);
     size_t n = sense_points;
+    if (scpi_refused_by_gate(ctx, "measure", NULL)) return SCPI_RES_ERR;
     if (scpi_refused_by_limits(ctx, "MEASure?")) return SCPI_RES_ERR;   /* it plays a waveform */
     if (!command_handler_acquire_adc(conn)) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
@@ -586,6 +604,9 @@ static scpi_result_t scpi_diag_captureQ(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_DATA_OUT_OF_RANGE);
         return SCPI_RES_ERR;
     }
+    char gate_json[40];   /* an LA-only capture is fine on the digital board */
+    snprintf(gate_json, sizeof(gate_json), "{\"adc_samples\":%lu}", (unsigned long)an);
+    if (scpi_refused_by_gate(ctx, "capture_dual", gate_json)) return SCPI_RES_ERR;
     if (!command_handler_acquire_adc(conn)) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* ADC busy */
         return SCPI_RES_ERR;
@@ -618,6 +639,7 @@ static scpi_result_t scpi_trace_data(scpi_t *ctx) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_DATA_OUT_OF_RANGE);
         return SCPI_RES_ERR;
     }
+    if (scpi_refused_by_gate(ctx, "load", NULL)) return SCPI_RES_ERR;
 
     /* A parameter can't be longer than the line it rode in on (SCPI_INPUT_BUFFER_LENGTH);
        sizing this for a whole 4 KB trace put 5.5 KB on the 12 KB worker stack. */
@@ -648,6 +670,7 @@ static scpi_result_t scpi_dig_output(scpi_t *ctx) {
     uint32_t la, state;
     if (!SCPI_ParamUInt32(ctx, &la, TRUE))    return SCPI_RES_ERR;
     if (!SCPI_ParamUInt32(ctx, &state, TRUE)) return SCPI_RES_ERR;
+    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
     /* The pin becomes a gpio output (JSON `gpio`), so it shows up in la_pins, is released with
        gpio mode off, and is refused while another function owns it. */
     int rc = command_handler_dig_output((unsigned)la, state != 0 ? 1 : 0);
@@ -680,6 +703,7 @@ static scpi_result_t scpi_dig_step(scpi_t *ctx) {
             return SCPI_RES_ERR;
         }
     }
+    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
     /* Same ownership rules as the JSON `la` step: free pins are claimed for the train. */
     int rc = command_handler_dig_step((unsigned)la, steps, delay_us, (unsigned)dir_la, dir != 0);
     if (rc == -2) {
@@ -701,6 +725,7 @@ static scpi_result_t scpi_dig_step(scpi_t *ctx) {
 
 /* DIGital:STEP:BUSY? — 1 while a step train is running, 0 once it completes. */
 static scpi_result_t scpi_dig_step_busyQ(scpi_t *ctx) {
+    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
     SCPI_ResultBool(ctx, command_handler_step_busy());
     return SCPI_RES_OK;
 }

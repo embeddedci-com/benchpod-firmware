@@ -62,6 +62,7 @@ WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c
 # SCPI reply pacing: scpi_server.c on the real libscpi, instrument + conn ring faked.
 SCPI_LIB      := ../lib/scpi-parser/libscpi
 SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
+                 ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c \
                  $(addprefix $(SCPI_LIB)/src/,error.c expression.c fifo.c ieee488.c \
                    lexer.c minimal.c parser.c units.c utils.c)
 
