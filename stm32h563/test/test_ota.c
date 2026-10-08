@@ -792,6 +792,31 @@ static void test_sig_decode(void) {
     CHECK(ota_sig_decode(b64, out) < 0, "a short manifest decoded");
 }
 
+/* ota_begin_owned_b64: the one begin every transport uses. A good manifest checks "ok", none is
+   "none", and an undecodable one is malformed ("format"), never "none". */
+static void test_begin_owned_b64(void) {
+    const uint8_t *img = vec_images[0].data;
+    uint32_t n = (uint32_t)vec_images[0].len;
+    char hex[65], b64[200];
+    sha256_hex(img, n, hex);
+    CHECK(b64url_encode(vec_cases[0].sig, 128, b64, sizeof(b64)) == 171, "encode length");
+    mock_ota_psram_reset();
+    ota_abort();
+    CHECK(ota_begin_owned_b64(OTA_OWNER_USB, n, hex, OTA_TARGET_FIRMWARE, 0, b64) == 0, "good: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "ok") == 0, "good: %s", ota_sig_result());
+    CHECK(ota_owner() == OTA_OWNER_USB, "owner %d", ota_owner());
+    ota_abort();
+    CHECK(ota_begin_owned_b64(OTA_OWNER_USB, n, hex, OTA_TARGET_FIRMWARE, 0, "") == 0, "none: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "none") == 0, "none: %s", ota_sig_result());
+    ota_abort();
+    CHECK(ota_begin_owned_b64(OTA_OWNER_USB, n, hex, OTA_TARGET_FIRMWARE, 0, NULL) == 0, "NULL: %s", ota_error());
+    CHECK(strcmp(ota_sig_result(), "none") == 0, "NULL: %s", ota_sig_result());
+    ota_abort();
+    ota_begin_owned_b64(OTA_OWNER_USB, n, hex, OTA_TARGET_FIRMWARE, 0, "not*base64");
+    CHECK(strcmp(ota_sig_result(), "format") == 0, "garbage: %s", ota_sig_result());
+    ota_abort();
+}
+
 int main(void) {
     test_sha256_known_answer();
     test_stage_and_verify();
@@ -816,6 +841,7 @@ int main(void) {
     test_watchdog_drops_uncommitted_verified_image();
     test_signed_begin();
     test_sig_decode();
+    test_begin_owned_b64();
 
     if (failures) {
         printf("test_ota: %d FAILURE(S)\n", failures);

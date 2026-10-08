@@ -86,8 +86,6 @@ void handle_ota_begin(int conn_id, const char *json) {
     json_get_value(json, "target", target_s, sizeof(target_s));
     json_get_value(json, "version", ver_s, sizeof(ver_s));
     json_get_value(json, "sig", sig_s, sizeof(sig_s));
-    uint8_t sig[128];
-    int sig_len = ota_sig_decode(sig_s, sig);   /* < 0: undecodable, checked as malformed */
     int target = ota_target_from_name(target_s);
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
@@ -100,8 +98,8 @@ void handle_ota_begin(int conn_id, const char *json) {
     const char *busy = ota_begin_gate(who);
     if (busy) { send_error(conn_id, busy); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin_owned(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0), sig,
-                        sig_len < 0 ? 1u : (size_t)sig_len) != 0) {
+    if (ota_begin_owned_b64(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0),
+                            sig_s) != 0) {
         send_error(conn_id, ota_error());
         return;
     }

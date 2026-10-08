@@ -81,10 +81,9 @@ void esp_wifi_ctrl_flash_done(bool ok) { (void)ok; }
 int  ota_target_from_name(const char *n) { (void)n; return 0; }
 void ota_refuse_for(ota_owner_t who, const char *why) { (void)who; (void)why; }
 const char *ota_begin_gate(ota_owner_t who) { (void)who; return NULL; }
-int  ota_sig_decode(const char *b64, uint8_t out[128]) { (void)b64; (void)out; return 0; }
-int  ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha, ota_target_t t, uint32_t v,
-                     const uint8_t *sig, size_t sig_len) {
-    (void)who; (void)size; (void)sha; (void)t; (void)v; (void)sig; (void)sig_len; return 0;
+int  ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha, ota_target_t t, uint32_t v,
+                         const char *sig_b64) {
+    (void)who; (void)size; (void)sha; (void)t; (void)v; (void)sig_b64; return 0;
 }
 int  ota_data_by(ota_owner_t who, uint32_t off, const uint8_t *b, uint32_t len) { (void)who; (void)off; (void)b; (void)len; return 0; }
 int  ota_end_by(ota_owner_t who) { (void)who; return 0; }

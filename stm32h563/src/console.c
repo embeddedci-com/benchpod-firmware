@@ -1075,12 +1075,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else if (ota_begin_gate(OTA_OWNER_USB))   /* another transport's update, or a capture */
             op(out, ctx, "upload-begin error %s\r\n", ota_begin_gate(OTA_OWNER_USB));
         else {
-            uint8_t sig[128];
-            int sig_len = ota_sig_decode(s_sig_b64, sig);   /* < 0: undecodable = malformed */
+            int rc = ota_begin_owned_b64(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3],
+                                         (ota_target_t)t,
+                                         argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, s_sig_b64);
             s_sig_b64[0] = '\0';                             /* one manifest per begin */
-            if (ota_begin_owned(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3], (ota_target_t)t,
-                                argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, sig,
-                                sig_len < 0 ? 1u : (size_t)sig_len) == 0)
+            if (rc == 0)
                 op(out, ctx, "upload-begin ok\r\n");
             else
                 op(out, ctx, "upload-begin error %s\r\n", ota_error());

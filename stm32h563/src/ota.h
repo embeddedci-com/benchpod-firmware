@@ -105,6 +105,12 @@ const char *ota_busy_for(ota_owner_t who);
 const char *ota_busy_replace_for(ota_owner_t who);
 int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                     uint32_t version, const uint8_t *sig, size_t sig_len);
+/* ota_begin_owned with the manifest as the transports carry it: base64url, NULL or "" = none. An
+   undecodable manifest counts as a malformed one (fw_sign: "format"), not as none. Every
+   transport's begin (LAN ota_begin, the cloud ota.begin frame, the console upload-begin) goes
+   through here. */
+int ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
+                        uint32_t version, const char *sig_b64);
 int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len);
 int ota_end_by(ota_owner_t who);
 /* 0 = aborted; -1 = refused (another owner's live session; ota_busy_replace_for says why). */
