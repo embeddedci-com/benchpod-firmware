@@ -16,9 +16,14 @@
 #include "bp_limits.h"
 #include "pico/time.h"
 #include "bp_log.h"
+#include "sensor_sim.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
+#define json_get_value      bp_json_get
 
 /* ---- glue ---------------------------------------------------------------- */
 
@@ -243,4 +248,269 @@ void handle_gpio(int conn_id, const char *json) {
     la_pins_emit_list(&e, affected, pulls);
     bp_emit_raw(&e, "}}\n");
     send_emitted(conn_id, &e);
+}
+
+/* ---- `la`, `la_voltage` and the emulated I2C sensor ---------------------- */
+
+/* Unified logic-analyzer-pin command. The action is inferred from the fields:
+ *
+ *   {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
+ *        → run a step pulse train on LA N (1..14); the FPGA runs it autonomously.
+ *   {"cmd":"la","la":N,"pullup":"on"|"off"}  → switch LA N's pull-up (LA1..8).
+ *   {"cmd":"la","la":N}                       → report LA N's pull-up state.
+ *   {"cmd":"la"}                              → bitmask of enabled LA pull-ups.
+ *
+ * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
+ * drive (the former gpio_set) is gone: a pull-up — or its absence, which leaves
+ * the board's pull-down — sets a line's idle level instead. */
+void handle_la(int conn_id, const char *json) {
+    if (!require_la_voltage(conn_id)) return;
+    char steps_s[12] = {0};
+
+    /* --- step pulse train: distinguished by the "steps" field --- */
+    if (json_get_value(json, "steps", steps_s, sizeof(steps_s))) {
+        char la_s[8] = {0}, delay_s[12] = {0}, dir_la_s[8] = {0}, dir_s[8] = {0};
+        if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
+            send_error(conn_id, "missing la");
+            return;
+        }
+        if (!json_get_value(json, "delay_us", delay_s, sizeof(delay_s))) {
+            send_error(conn_id, "missing delay_us");
+            return;
+        }
+        unsigned la = (unsigned)atoi(la_s);
+        uint32_t steps = 0, delay_us = 0;
+        if (!la_step_parse_u32(steps_s, &steps))    { send_error(conn_id, "invalid steps");    return; }
+        if (!la_step_parse_u32(delay_s, &delay_us)) { send_error(conn_id, "invalid delay_us"); return; }
+
+        /* Optional direction channel — driven before stepping (stepper dir). */
+        unsigned dir_la = 0;
+        bool     dir    = false;
+        if (json_get_value(json, "dir_la", dir_la_s, sizeof(dir_la_s))) {
+            dir_la = (unsigned)atoi(dir_la_s);
+            if (json_get_value(json, "direction", dir_s, sizeof(dir_s)))
+                dir = (atoi(dir_s) != 0);
+        }
+
+        /* Ownership: a free step/dir pin is CLAIMED for the train (and released when the
+           fabric reports STEP_BUSY low again, from command_handler_poll); a gpio output is
+           pulsed in place; anything else is a `pin conflict:`.  la_step_begin drives the
+           direction pin and starts the train. */
+        char err[LA_PINS_ERR_MAX];
+        int rc = la_step_begin(la, steps, delay_us, dir_la, dir, err, sizeof(err));
+        if (rc != 0) { send_error(conn_id, err); return; }
+
+        /* Non-blocking: the FPGA runs the train autonomously, so we report that
+           it has started rather than waiting for completion. */
+        char payload[80];
+        snprintf(payload, sizeof(payload),
+                 "{\"la\":%u,\"steps\":%lu,\"delay_us\":%lu,\"status\":\"started\"}",
+                 la, (unsigned long)steps, (unsigned long)delay_us);
+        send_ok_str(conn_id, payload);
+        return;
+    }
+
+    /* --- no "la" field: report the pull-up bitmask, bit (la-1)=LA<la> --- */
+    char la_s[8] = {0};
+    if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
+        unsigned mask = 0;
+        for (unsigned la = 1; la <= 8; la++) {
+            if (pca9555_la_pullup_enabled((uint8_t)la)) mask |= (1u << (la - 1));
+        }
+        /* pullups_available says whether a pull-up CAN be engaged right now (bank at
+           3.3 V); the mask is always the truth about what is engaged. */
+        char payload[64];
+        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
+                 mask, la_pullups_available() ? 1 : 0);
+        send_ok_str(conn_id, payload);
+        return;
+    }
+
+    /* --- pull-up set ("pullup":"on|off") or query for one pin (LA1..8) --- */
+    unsigned la = (unsigned)atoi(la_s);
+    if (la < 1 || la > 8) {
+        send_error(conn_id, "no pull-up on this la");   /* LA9-14 / out of range */
+        return;
+    }
+
+    char state_s[8] = {0};
+    if (json_get_value(json, "pullup", state_s, sizeof(state_s))) {
+        char c = state_s[0];
+        bool on = (c == 'o' || c == 'O') ? (state_s[1] == 'n' || state_s[1] == 'N')
+                                         : (atoi(state_s) != 0);
+        /* The other direction of the pull-compatibility rule: LA7/LA8's resistor pulls DOWN,
+           which an open-drain bus / an idle-high UART / SWDIO cannot live with.  Refuse before
+           touching the expander so the wire never briefly contradicts the function on it. */
+        char pull_err[LA_PINS_ERR_MAX];
+        if (on && !la_pins_check_pull_enable(la, pull_err, sizeof(pull_err))) {
+            send_error(conn_id, pull_err);
+            return;
+        }
+        int rc = pca9555_set_la_pullup((uint8_t)la, on);
+        if (rc == LA_PULLUP_ERR_VOLTAGE) {
+            /* Not a failure to talk to the expander: the resistors are 3V3-referenced
+               and the bank is at 1.8 V, so engaging one would drive the DUT above its
+               own rail. Say which, so the host can switch the bank instead of retrying. */
+            send_error(conn_id, "pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V");
+            return;
+        }
+        if (rc != 0) {
+            send_error(conn_id, "pca9555 write failed");
+            return;
+        }
+    }
+
+    /* "pull" says which way the channel's fixed resistor goes: LA1-LA6 up,
+       LA7/LA8 down. Without it "ohms" is ambiguous, and a client that assumed
+       every biased channel pulls up would drive an open-drain bus the wrong way. */
+    char payload[128];
+    snprintf(payload, sizeof(payload),
+             "{\"la\":%u,\"pullup\":%d,\"ohms\":\"%s\",\"pull\":\"%s\",\"pullups_available\":%d}",
+             la, pca9555_la_pullup_enabled((uint8_t)la) ? 1 : 0,
+             pca9555_la_pullup_ohms((uint8_t)la),
+             pca9555_la_pull_is_down((uint8_t)la) ? "down" : "up",
+             la_pullups_available() ? 1 : 0);
+    send_ok_str(conn_id, payload);
+}
+
+/* Set (or query) the LA I/O-bank voltage via the TPS2116 mux.
+     {"cmd":"la_voltage","mv":1800|3300}  -> switch the bank (required before any
+                                             LA op) and report the new state.
+     {"cmd":"la_voltage"}                 -> report the current mv + status pin. */
+void handle_la_voltage(int conn_id, const char *json) {
+    char mv_s[8] = {0};
+    if (json_get_value(json, "mv", mv_s, sizeof(mv_s))) {
+        /* Switching the bank under a running UART proxy / SWD session / sensor emulation
+           glitches every LA line and strands the 3V3-referenced pulls; refuse and name the
+           pins instead.  Re-setting the CURRENT voltage stays a no-op and is allowed. */
+        char why[LA_PINS_ERR_MAX];
+        if (!la_pins_check_voltage_change(la_vccio_get_mv(), atoi(mv_s), why, sizeof(why))) {
+            send_error(conn_id, why);
+            return;
+        }
+        int rc = la_vccio_set_mv(atoi(mv_s));
+        if (rc == -2) {
+            send_error(conn_id, "1.8 V needs a v3 pod; this board is v2 "
+                                "(its TPS2116 has no 1.8 V setting)");
+            return;
+        }
+        if (rc != 0) {
+            send_error(conn_id, "la voltage must be 1800 or 3300 (mv)");
+            return;
+        }
+    }
+    char payload[80];
+    snprintf(payload, sizeof(payload),
+             "{\"mv\":%d,\"st\":%d,\"readback_mv\":%d}",
+             la_vccio_get_mv(), la_vccio_status_pin(), la_vccio_readback_mv());
+    send_ok_str(conn_id, payload);
+}
+
+/* ---- Emulated I2C sensor ----
+ * Mock an I2C sensor on two LA channels, driven by the FPGA's generic target.
+ *
+ *   {"cmd":"sensor_start","type":"bmp280","addr":"0x76","sda":1,"scl":2}
+ *   {"cmd":"sensor_set","temperature_c":25.0,"pressure_pa":101325}
+ *   {"cmd":"sensor_stop"}
+ *   {"cmd":"sensor_status"}
+ *   {"cmd":"sensor_regs","start":"0xF7","len":6}     → register bytes
+ *   {"cmd":"sensor_la","samples":1024,"sample_rate_mhz":2.0} → raw bus capture
+ */
+void handle_sensor_start(int conn_id, const char *json) {
+    if (!require_la_voltage(conn_id)) return;
+    char type[16] = {0}, addr_s[8] = {0}, sda_s[8] = {0}, scl_s[8] = {0};
+
+    if (!json_get_value(json, "type", type, sizeof(type))) {
+        send_error(conn_id, "missing type");
+        return;
+    }
+    if (!json_get_value(json, "sda", sda_s, sizeof(sda_s)) ||
+        !json_get_value(json, "scl", scl_s, sizeof(scl_s))) {
+        send_error(conn_id, "missing sda/scl");
+        return;
+    }
+    json_get_value(json, "addr", addr_s, sizeof(addr_s));   /* optional */
+
+    uint8_t  addr7 = addr_s[0] ? (uint8_t)strtol(addr_s, NULL, 0) : 0;
+    unsigned sda   = (unsigned)atoi(sda_s);
+    unsigned scl   = (unsigned)atoi(scl_s);
+
+    /* A replacing sensor_start may take over the running sensor's own pins, so its two
+       functions count as free here — but any OTHER owner is a conflict, checked before
+       sensor_sim_start touches the FPGA so a refused start leaves the old sensor running. */
+    uint16_t i2c_fns = LA_FN_BIT(LA_FN_I2C_SDA) | LA_FN_BIT(LA_FN_I2C_SCL);
+    uint8_t  sda_pin = (uint8_t)sda, scl_pin = (uint8_t)scl;
+    if (!la_claim_or_error(conn_id, LA_FN_I2C_SDA, &sda_pin, 1, i2c_fns)) return;
+    if (!la_claim_or_error(conn_id, LA_FN_I2C_SCL, &scl_pin, 1, i2c_fns)) return;
+
+    int rc = sensor_sim_start(type, addr7, sda, scl);
+    if (rc == -1) { send_error(conn_id, "unknown sensor type"); return; }
+    if (rc != 0)  { send_error(conn_id, "sensor start failed (bad channel?)"); return; }
+    la_pins_release_fn(LA_FN_I2C_SDA);   /* the replaced sensor's pins, if any */
+    la_pins_release_fn(LA_FN_I2C_SCL);
+    la_pins_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, 0, &sda_pin, 1);
+    la_pins_claim(LA_FN_I2C_SCL, LA_GPIO_NONE, 0, &scl_pin, 1);
+
+    char payload[80];
+    snprintf(payload, sizeof(payload),
+             "{\"type\":\"%s\",\"addr\":%u,\"sda\":%u,\"scl\":%u}",
+             sensor_sim_type(), sensor_sim_addr7(), sda, scl);
+    send_ok_str(conn_id, payload);
+}
+
+void handle_sensor_set(int conn_id, const char *json) {
+    char t_s[16] = {0}, p_s[16] = {0};
+    bool any = false;
+
+    if (!sensor_sim_active()) { send_error(conn_id, "no sensor active"); return; }
+
+    if (json_get_value(json, "temperature_c", t_s, sizeof(t_s))) {
+        if (sensor_sim_set("temperature_c", (float)atof(t_s)) != 0) {
+            send_error(conn_id, "temperature_c rejected");
+            return;
+        }
+        any = true;
+    }
+    if (json_get_value(json, "pressure_pa", p_s, sizeof(p_s))) {
+        if (sensor_sim_set("pressure_pa", (float)atof(p_s)) != 0) {
+            send_error(conn_id, "pressure_pa rejected");
+            return;
+        }
+        any = true;
+    }
+    if (!any) { send_error(conn_id, "no recognised parameters"); return; }
+
+    char payload[64];
+    snprintf(payload, sizeof(payload), "{\"type\":\"%s\"}", sensor_sim_type());
+    send_ok_str(conn_id, payload);
+}
+
+void handle_sensor_stop(int conn_id, const char *json) {
+    (void)json;
+    sensor_sim_stop();
+    la_pins_release_fn(LA_FN_I2C_SDA);
+    la_pins_release_fn(LA_FN_I2C_SCL);
+    send_ok_str(conn_id, "null");
+}
+
+void handle_sensor_status(int conn_id, const char *json) {
+    (void)json;
+    char resp[256];
+    if (!sensor_sim_active()) {
+        snprintf(resp, sizeof(resp),
+                 "{\"status\":\"ok\",\"data\":{\"active\":false}}\n");
+    } else {
+        i2c_sensor_status_t st = {0};
+        sensor_sim_get_status(&st);
+        snprintf(resp, sizeof(resp),
+                 "{\"status\":\"ok\",\"data\":{"
+                 "\"active\":true,\"type\":\"%s\",\"addr\":%u,"
+                 "\"transactions\":%u,\"writes\":%u,"
+                 "\"last_reg\":%u,\"last_val\":%u}}\n",
+                 sensor_sim_type(), sensor_sim_addr7(),
+                 st.xfer_count, st.wr_count, st.last_wr_addr, st.last_wr_val);
+    }
+    if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
+        at_close_connection(conn_id);
+    }
 }

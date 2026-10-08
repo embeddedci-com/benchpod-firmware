@@ -34,6 +34,8 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "version.h"
+
 static int failures;
 #define CHECK(cond) do { \
     if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } \
@@ -122,7 +124,7 @@ int  fpga_dual_capture(uint16_t *a, uint16_t ac, uint16_t ad, uint16_t *l, uint1
     g_dual_calls++;
     if (!g_dual_ok) return -1;
     for (uint16_t i = 0; i < ac; i++) a[i] = (uint16_t)(1000u + i);
-    for (uint16_t i = 0; i < lc; i++) l[i] = (uint16_t)(0xF000u | i);   /* bits above the 12 LA bits */
+    for (uint16_t i = 0; i < lc; i++) l[i] = (uint16_t)(0xF000u | i);   /* LA13/LA14 high + 2 bits above them */
     return 0;
 }
 int  measure_psram(uint16_t *o, const char *w, float f, uint8_t a, uint8_t off, size_t n, float r) {
@@ -212,7 +214,7 @@ static void test_short_reply_unchanged(void) {
     reset_conn(1024);
     scpi_dispatch_line(0, "*IDN?");
     K.out[K.out_len] = '\0';
-    CHECK(strstr(K.out, "EmbeddedCI,BenchPod") == K.out);
+    CHECK(strcmp(K.out, "EmbeddedCI,BenchPod,0," FIRMWARE_VERSION "\r\n") == 0);   /* the firmware's version */
     CHECK(K.sleeps == 0);                      /* room available: no waiting at all */
     CHECK(K.closes == 0);
 }
@@ -393,7 +395,7 @@ static void test_trace_in_the_shared_pool(void) {
     scpi_dispatch_line(0, "FUNC SIN");
 }
 
-/* DIAGnostic:CAPture? in the pool's scratch: the ADC samples, then the LA words cut to 12 bits, as
+/* DIAGnostic:CAPture? in the pool's scratch: the ADC samples, then the LA words cut to 14 bits, as
    one CSV list; it does not disturb the trace. */
 static void test_dual_capture_csv(void) {
     reset_conn(4096);
@@ -402,12 +404,12 @@ static void test_dual_capture_csv(void) {
     reset_conn(4096);
     scpi_dispatch_line(0, "DIAG:CAP? 3,2");
     K.out[K.out_len] = '\0';
-    CHECK(strcmp(K.out, "1000,1001,1002,0,1\r\n") == 0);
-    if (strcmp(K.out, "1000,1001,1002,0,1\r\n") != 0) printf("  got \"%s\"\n", K.out);
+    CHECK(strcmp(K.out, "1000,1001,1002,12288,12289\r\n") == 0);   /* 0x3000 | i: LA13 and LA14 kept */
+    if (strcmp(K.out, "1000,1001,1002,12288,12289\r\n") != 0) printf("  got \"%s\"\n", K.out);
     reset_conn(4096);
     scpi_dispatch_line(0, "DIAG:CAP? 0,2");
     K.out[K.out_len] = '\0';
-    CHECK(strcmp(K.out, "0,1\r\n") == 0);
+    CHECK(strcmp(K.out, "12288,12289\r\n") == 0);
     g_dual_ok = false;
     reset_conn(4096);
     scpi_dispatch_line(0, "TRAC:POIN?");

@@ -107,8 +107,15 @@ C_SOURCES := \
   src/ws_frame.c \
   src/mbedtls_port.c \
   src/command_handler.c \
+  src/command_handler_analog.c \
   src/command_handler_can.c \
+  src/command_handler_capture.c \
+  src/command_handler_dac.c \
+  src/command_handler_dap.c \
+  src/command_handler_device.c \
   src/command_handler_ota.c \
+  src/command_handler_net.c \
+  src/command_handler_uart.c \
   src/command_handler_pins.c \
   src/command_handler_power.c \
   src/scpi_server.c \
@@ -159,6 +166,7 @@ C_SOURCES := \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
+  src/command_handler_transport.c \
   src/esp_rom_flash.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \

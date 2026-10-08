@@ -769,8 +769,9 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 | `data` field missing | `"missing data"` |
 | Chunk at `offset > 0` sent without a preceding `offset:0` on this connection | `"load not started"` |
 | Another connection holds the buffer | `"busy"` |
-| `offset` past the 8192-byte staging buffer | `"offset out of range"` |
-| Malformed base64url, or chunk overflows the buffer | `"invalid data"` |
+| `offset` past 4096 bytes | `"offset out of range"` |
+| The chunk would take the trace past 4096 bytes (2048 samples, what a RAM `replay` plays) | `"load: the trace would be longer than 4096 bytes (2048 samples, the DAC's RAM replay limit); use load_bin with \"psram\":true for longer traces"` |
+| Malformed base64url | `"invalid data"` |
 
 ---
 
@@ -2991,7 +2992,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 
 | Command | Description |
 |---|---|
-| `*IDN?` | `EmbeddedCI,BenchPod,0,0.2.0` (the last field is the SCPI layer's version, not the firmware's; read that with JSON `status`) |
+| `*IDN?` | `EmbeddedCI,BenchPod,0,<firmware version>`, for example `EmbeddedCI,BenchPod,0,3.7.0` (the same version as JSON `status`) |
 | `*RST` | Stop the DAC and restore the `SOURce`/`SENSe` defaults (sine, 1 kHz, amplitude 127, offset 128, 256 points, maximum rates) and empty the trace |
 | `*CLS`, `*ESE`, `*ESE?`, `*ESR?`, `*OPC`, `*OPC?`, `*SRE`, `*SRE?`, `*STB?`, `*TST?`, `*WAI` | Standard status and synchronization commands (libscpi core) |
 
@@ -3028,7 +3029,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 | `SENSe:SRATe <MHz>` / `?` | ≥ 0; `0` = maximum (about 0.4) | ADC sample clock for `READ?` |
 | `READ? [<n>]` | 1..4096 | Capture `n` ADC samples and return them as CSV; also fills the trace (first 2048 samples) |
 | `MEASure?` | | Play one period of the `SOURce` waveform across a `POINts`-long capture (as `measure`) and return the ADC samples; also fills the trace |
-| `DIAGnostic:CAPture? [<adc_n>][,<la_n>]` | each 0..128, not both 0; default 16,16 | One-trigger ADC + LA capture (ADC 100 kS/s, LA 1 MS/s): `adc_n` ADC counts, then `la_n` LA words, as CSV. The LA words are masked to 12 bits (LA1..LA12). |
+| `DIAGnostic:CAPture? [<adc_n>][,<la_n>]` | each 0..128, not both 0; default 16,16 | One-trigger ADC + LA capture (ADC 100 kS/s, LA 1 MS/s): `adc_n` ADC counts, then `la_n` LA words, as CSV. Each LA word holds LA1..LA14 in its low 14 bits (bit 0 = LA1). |
 | `DIAGnostic:PATTern? <pattern>[,<value>[,<n>]]` | `SINusoid`, `COUNter`, `RAMP` or `CONStant`; value 0..255 (for `CONStant`, default 255); n 1..4096 (default 256) | An 8-bit synthetic pattern as CSV (no hardware) |
 | `TRACe[:DATA] <offset>,"<base64url>"` | byte offset 0..4096 | Upload one chunk of a replay trace (16-bit little-endian samples, at most 4096 bytes in total) |
 | `TRACe:POINts?` | | Samples in the trace (bytes ÷ 2) |

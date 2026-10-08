@@ -16,7 +16,6 @@
 
 /* Where a command came from, for who-may-change-what (pod_policy.h). */
 policy_src_t command_handler_policy_src(int conn_id) {
-    if (conn_id == CH_CONSOLE_CONN) return POLICY_SRC_USB;
     if (conn_id == CH_CLOUD_CONN ||
         (conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST))
         return POLICY_SRC_CLOUD;
