@@ -108,6 +108,7 @@ C_SOURCES := \
   src/mbedtls_port.c \
   src/command_handler.c \
   src/command_handler_can.c \
+  src/command_handler_dac.c \
   src/command_handler_dap.c \
   src/command_handler_ota.c \
   src/command_handler_net.c \

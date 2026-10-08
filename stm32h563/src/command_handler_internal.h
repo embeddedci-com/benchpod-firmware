@@ -76,12 +76,21 @@ bool capture_or_upload_busy(void);
 /* One raw newline-delimited JSON line on a (tunnel) conn: load_bin acks and speed-test marks. */
 void cloud_send_json_line(int conn_id, const char *json);
 
+/* The heavy gate (command_handler.c): one owner of the RAM sample pool and the capture path.
+   heavy_begin refuses with "busy" (sent) when a heavy op runs or another conn holds it. */
+bool heavy_try_claim(int conn_id);
+void heavy_release(int conn_id);
+bool heavy_begin(int conn_id);
+int  heavy_owner_conn(void);                  /* the conn holding the gate, or -1 */
+
+/* An optional "sample_rate_mhz" field in Hz; 0.0f (= auto) when absent or not positive. */
+float parse_sample_rate_hz(const char *json);
+
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
 
 /* The command handlers in command_handler.c. Every handler has this one signature so the command
    table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
-void handle_generate(int conn_id, const char *json);
 void handle_capture(int conn_id, const char *json);
 void handle_capture_dual(int conn_id, const char *json);
 void handle_capture_read(int conn_id, const char *json);
@@ -89,13 +98,6 @@ void handle_stream(int conn_id, const char *json);
 void handle_ping(int conn_id, const char *json);
 void handle_test(int conn_id, const char *json);
 void handle_measure(int conn_id, const char *json);
-void handle_load(int conn_id, const char *json);
-void handle_load_bin(int conn_id, const char *json);
-int  load_bin_owner(void);                    /* the conn streaming a load_bin upload, or -1 */
-void handle_replay(int conn_id, const char *json);
-void handle_dac_stop(int conn_id, const char *json);
-void handle_dac_limits(int conn_id, const char *json);
-void handle_dac_set(int conn_id, const char *json);
 void handle_la(int conn_id, const char *json);
 void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
@@ -120,9 +122,6 @@ void handle_dac_out(int conn_id, const char *json);
 void handle_current_out(int conn_id, const char *json);
 void handle_adc_read(int conn_id, const char *json);
 void handle_calibrate(int conn_id, const char *json);
-void handle_dac_control_loop(int conn_id, const char *json);
-void handle_dac_loop_input(int conn_id, const char *json);
-void handle_dac_loop_probe(int conn_id, const char *json);
 void handle_fpga_image(int conn_id, const char *json);
 void handle_psram_recover(int conn_id, const char *json);
 void handle_psram_ping(int conn_id, const char *json);
@@ -142,6 +141,26 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* DAC output, uploads, replay and the control loop (command_handler_dac.c). */
+void   handle_generate(int conn_id, const char *json);
+void   handle_load(int conn_id, const char *json);
+void   handle_load_bin(int conn_id, const char *json);
+void   handle_replay(int conn_id, const char *json);
+void   handle_dac_stop(int conn_id, const char *json);
+void   handle_dac_limits(int conn_id, const char *json);
+void   handle_dac_set(int conn_id, const char *json);
+void   handle_dac_control_loop(int conn_id, const char *json);
+void   handle_dac_loop_input(int conn_id, const char *json);
+void   handle_dac_loop_probe(int conn_id, const char *json);
+/* The PROTO_LOAD receive path: stores the upload, replies and returns to JSON once all of it
+   arrived. Returns the bytes taken from buf. */
+size_t load_bin_receive(int conn_id, const uint8_t *buf, size_t len);
+int    load_bin_owner(void);                  /* the conn streaming a load_bin upload, or -1 */
+void   dac_trace_note_capture(size_t samples);/* a RAM capture is now the trace to replay */
+void   dac_poll(void);                        /* upload gate hold + load_bin stall guard */
+void   dac_on_gateware_reconfigured(void);    /* the loop's input mirrors */
+void   dac_conn_closed(int conn_id);
 
 /* On-pod CMSIS-DAP probe (command_handler_dap.c). */
 void   handle_dap_start(int conn_id, const char *json);
