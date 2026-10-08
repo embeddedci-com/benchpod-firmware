@@ -98,18 +98,6 @@ bool require_la_voltage(int conn_id);
 /* The command handlers in command_handler.c. Every handler has this one signature so the command
    table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
 void handle_ping(int conn_id, const char *json);
-void handle_target_power(int conn_id, const char *json);
-void handle_target_status(int conn_id, const char *json);
-void handle_power_status(int conn_id, const char *json);
-void handle_status(int conn_id, const char *json);
-void handle_identity_public(int conn_id, const char *json);
-void handle_identity_pop(int conn_id, const char *json);
-void handle_usb_cc(int conn_id, const char *json);
-void handle_nrst(int conn_id, const char *json);
-void handle_fpga_image(int conn_id, const char *json);
-void handle_psram_recover(int conn_id, const char *json);
-void handle_psram_ping(int conn_id, const char *json);
-void handle_identity_wipe(int conn_id, const char *json);
 
 /* Network provisioning and the cloud speed test (command_handler_net.c). */
 void   handle_cloud_set(int conn_id, const char *json);
@@ -125,6 +113,21 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* The pod itself: status, power, identity, the iCE40 (command_handler_device.c). */
+void handle_target_power(int conn_id, const char *json);
+void handle_target_status(int conn_id, const char *json);
+void handle_power_status(int conn_id, const char *json);
+void handle_status(int conn_id, const char *json);
+void handle_identity_public(int conn_id, const char *json);
+void handle_identity_pop(int conn_id, const char *json);
+void handle_identity_wipe(int conn_id, const char *json);
+void handle_usb_cc(int conn_id, const char *json);
+void handle_nrst(int conn_id, const char *json);
+void handle_fpga_image(int conn_id, const char *json);
+void handle_psram_recover(int conn_id, const char *json);
+void handle_psram_ping(int conn_id, const char *json);
+void device_poll(void);                       /* the deferred psram_recover reboot */
 
 /* Analog front end (command_handler_analog.c). */
 void handle_dac_mux(int conn_id, const char *json);

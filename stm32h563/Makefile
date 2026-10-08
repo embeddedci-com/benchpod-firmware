@@ -112,6 +112,7 @@ C_SOURCES := \
   src/command_handler_capture.c \
   src/command_handler_dac.c \
   src/command_handler_dap.c \
+  src/command_handler_device.c \
   src/command_handler_ota.c \
   src/command_handler_net.c \
   src/command_handler_uart.c \
