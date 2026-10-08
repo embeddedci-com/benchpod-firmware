@@ -101,22 +101,22 @@ RETIRED = [
 # them in one place stops the gateware and firmware clocks from drifting apart.
 SYS_CLK_MHZ = 24
 
-# Dedicated ADC capture-domain clock (P7).  In the v2 (>=v7) gateware the capture
-# datapath (ADC + PSRAM streaming) runs on its own 48 MHz clock; the firmware must
-# turn requested ADC sample rates into dividers against THIS clock, not the 24 MHz
-# control clock.  Single-sourced here so firmware and gateware can't drift.
+# clk48, the external 48 MHz clock that feeds the PSRAM serializers and the DAC engine.
+# No divider is computed against it: the ADC engine and the whole capture datapath run on
+# the 24 MHz SYS_CLK (clk = clk48 / 2) since the single-clock collapse, so ADC and LA
+# dividers use FPGA_HFOSC_HZ (signal_engine.c adc_capture_hz).  Kept for reference only.
 CAPTURE_CLK_MHZ = 48
 
 # DAC8551 waveform-sequencer clock.  In the v2 gateware (>= v13) the DAC engine runs
 # on clk48 (48 MHz) for a ~2x update rate; the STM32 firmware turns requested DAC
-# rates into dividers against THIS clock (see docs/ice40-48mhz-migration.md).  The
-# v1/RP2350 gateware keeps its DAC on the 24 MHz HFOSC, so that header omits it.
+# rates into dividers against THIS clock.  (The retired v1/RP2350 gateware kept its DAC
+# on the 24 MHz HFOSC; gen_sys_h(dac48=False) is that variant.)
 DAC_CLK_MHZ = 48
 
 # PSRAM regions (v2 gateware).  The 8 MB APS6404L is shared by three streams that
 # now TIME-MULTIPLEX the one quad bus via psram_bus_arbiter (>=v18), so a deep DAC
 # replay can run at the same time as an ADC/LA capture as long as their regions do
-# not overlap.  Layout (docs/psram-concurrent-arbiter):
+# not overlap.  Layout:
 #
 #     0x000000  +-----------------+  LA_BASE   — LA capture grows UP from the front
 #               |  LA capture     |
@@ -212,7 +212,7 @@ def gen_sys_h(dac48=False):
         "/* DAC8551 waveform-sequencer clock.  Gateware >= 13 runs the DAC engine on clk48\n"
         "   (48 MHz) for a ~2x update rate (smoother output), so the DAC divider maths use\n"
         "   this, NOT FPGA_HFOSC_HZ.  Older gateware ran the DAC at FPGA_HFOSC_HZ (24 MHz).\n"
-        "   (See docs/ice40-48mhz-migration.md.) */\n"
+        "   One sample takes divider + 51 clocks (signal_engine.c DAC_SEQ_OVERHEAD_CLK). */\n"
         f"#define DAC_CLK_HZ {DAC_CLK_MHZ}000000u\n\n"
     ) if dac48 else ""
     return (BANNER_C + "#ifndef FPGA_CONFIG_H\n#define FPGA_CONFIG_H\n\n"
@@ -220,9 +220,8 @@ def gen_sys_h(dac48=False):
             f"   (see top*.v).  {hfosc_uses} dividers are computed against this. */\n"
             f"#define FPGA_HFOSC_HZ {SYS_CLK_MHZ}000000u\n\n"
             + dac_block +
-            "/* Dedicated ADC capture-domain clock (>=v7 gateware, P7).  ADC sample\n"
-            "   dividers are computed against this when the connected gateware reports\n"
-            "   version >= 7; older gateware captures at FPGA_HFOSC_HZ. */\n"
+            "/* clk48, the PSRAM serializer and DAC clock.  Not used for ADC or LA dividers:\n"
+            "   the capture datapath runs on FPGA_HFOSC_HZ (signal_engine.c adc_capture_hz). */\n"
             f"#define FPGA_CAPTURE_HZ {CAPTURE_CLK_MHZ}000000u\n\n"
             "/* PSRAM regions (>=v18: LA at the FRONT, ADC fixed at 4 MB, DAC replay\n"
             "   floating down from the TOP).  psram_bus_arbiter time-multiplexes the one\n"
