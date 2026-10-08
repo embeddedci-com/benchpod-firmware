@@ -20,9 +20,13 @@
 #   secret HIL_DISPATCH_TOKEN  — a fine-grained PAT with `contents: write` on
 #                                embeddedci-com/embeddedci-server (repository_dispatch is
 #                                gated on the contents scope). The default GITHUB_TOKEN
-#                                cannot dispatch into another repository. Missing while the
-#                                job runs is a FAILURE: the flag says a bench is expected,
-#                                so silence would be a hardware run nobody notices is gone.
+#                                cannot dispatch into another repository. While it is not
+#                                set the job ends with a notice instead of failing, so a
+#                                release never goes red over a bench that is not wired up
+#                                yet (embeddedci-server docs/hil-runner.md has the steps).
+#
+# The dispatch asks for the RELEASED Python SDK (client_payload.sdk = "released"): a release
+# is checked against what users install from PyPI, not against the SDK's unreleased HEAD.
 #
 # The far side is already safe on its own: hil.yml skips (not fails) when the bench is not
 # connected, so a dispatch that arrives with the pod unplugged costs nothing.
@@ -57,12 +61,13 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::HIL_DISPATCH_TOKEN is not set — cannot dispatch into embeddedci-server."
-            echo "::error::Add the secret, or unset the HIL_DISPATCH variable to turn this job off."
-            exit 1
+            echo "::notice::HIL_DISPATCH_TOKEN is not set, so no HIL run was requested for $REF. Add the secret to turn the dispatch on (embeddedci-server docs/hil-runner.md)."
+            echo "### HIL not requested: HIL_DISPATCH_TOKEN is not set" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
           gh api repos/embeddedci-com/embeddedci-server/dispatches \
             -f event_type=firmware-released \
             -F "client_payload[firmware_ref]=$REF" \
-            -F "client_payload[firmware_sha]=$SHA"
-          echo "dispatched firmware-released for $REF ($SHA)"
+            -F "client_payload[firmware_sha]=$SHA" \
+            -F "client_payload[sdk]=released"
+          echo "dispatched firmware-released for $REF ($SHA), released SDK"
