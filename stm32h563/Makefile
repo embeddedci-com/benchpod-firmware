@@ -224,6 +224,14 @@ DEFS := -DUSE_HAL_DRIVER -DSTM32H563xx -DHSE_VALUE=25000000 \
         -DUSE_FULL_ERROR_LIST=1 -DBLAKE2_NO_UNROLLING=1 \
         -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"'
 
+# RELEASE=1: trust only keys/release-N.pub (see "Firmware signing" below) and refuse a plain
+# (non-TLS) cloud connection (cloud-hardening.md section 1). This must come before CFLAGS below
+# (`:=` expands DEFS there): appended further down, -DBENCHPOD_RELEASE=1 never reached the compiler.
+RELEASE ?= 0
+ifeq ($(RELEASE),1)
+DEFS += -DBENCHPOD_RELEASE=1
+endif
+
 INCLUDES := \
   -Iconfig -Ibsp -Isrc -Iport -I$(BUILD_DIR) \
   -Ilib/scpi-parser/libscpi/inc \
@@ -307,16 +315,12 @@ $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 # keys/release-N.pub and, unless RELEASE=1, the developer key from `make dev-key` too. A dev build
 # signs its own image and blobs with that key (build/*.sig), so OTA, install-blobs and hwe2e can
 # send a signed update to a pod running a dev build. CI signs releases itself (release-stm32.yml).
-RELEASE       ?= 0
 DEV_SIGN_KEY  ?= $(HOME)/.config/benchpod/fw-signing-dev.key
 FWSIGN        := python3 ../tools/fwsign.py
 FW_VERSION    := $(shell sed -n 's/^\#define FIRMWARE_VERSION "\(.*\)"/\1/p' src/version.h)
 SIGN_PUBS     := $(sort $(wildcard keys/release-*.pub))
 ifneq ($(RELEASE),1)
 DEV_SIGN_PUB  := $(if $(wildcard $(DEV_SIGN_KEY)),$(BUILD_DIR)/dev-signing.pub)
-else
-# Release builds also refuse a plain (non-TLS) cloud connection (cloud-hardening.md section 1).
-DEFS += -DBENCHPOD_RELEASE=1
 endif
 GEN_SIGN_KEYS := $(BUILD_DIR)/fw_sign_keys_gen.h
 # Rewritten only when its content changes (keys-header compares), so the FORCE does not rebuild
@@ -417,6 +421,18 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@
+
+# The compile flags and defines are part of every object: RELEASE=1 adds -DBENCHPOD_RELEASE=1, a
+# different CUBE moves the include paths. make only compares file times, so without this a
+# `make RELEASE=1` after a dev build relinked the dev objects into a "release" image. The stamp is
+# rewritten only when its content changes, so an unchanged build rebuilds nothing.
+DEFS_STAMP := $(BUILD_DIR)/flags.stamp
+DEFS_STAMP_TEXT := $(CC) $(CFLAGS) | $(AS) $(ASFLAGS) | $(LDFLAGS)
+$(DEFS_STAMP): FORCE | $(BUILD_DIR)
+	@printf '%s\n' '$(subst ','\'',$(DEFS_STAMP_TEXT))' > $@.tmp; \
+	 if cmp -s $@.tmp $@; then rm -f $@.tmp; \
+	 else if [ -f $@ ]; then echo "compile flags changed: rebuilding every object"; fi; mv $@.tmp $@; fi
+$(OBJECTS): $(DEFS_STAMP)
 
 # Header-dependency files emitted by -MMD (one .d per .o); the leading '-' ignores
 # them on a first/clean build when they don't exist yet.
