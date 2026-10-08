@@ -90,7 +90,7 @@ ifneq ($(HAVE_MBEDTLS),)
 OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras
 endif
 
-.PHONY: all clean run
+.PHONY: all clean run docs-check
 all: run
 
 build/test_portable: $(PORTABLE_SRCS)
@@ -384,6 +384,12 @@ ifneq ($(HAVE_MBEDTLS),)
 else
 	@echo "SKIP test_ota, test_blob_store and test_cloud_extras (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
 endif
+	@$(MAKE) --no-print-directory docs-check
+
+# Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py).
+PYTHON ?= python3
+docs-check:
+	@$(PYTHON) check_docs_coverage.py
 
 clean:
 	rm -rf build
