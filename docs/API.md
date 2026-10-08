@@ -2403,6 +2403,10 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 `SOURce:FUNCtion` now accepts `USER` alongside `SINusoid`/`SQUare`/`RAMP`. `OUTPut ON` with `USER` selected and an empty buffer pushes `-200 "Execution error"`.
 
+The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `stream`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
+
+SCPI gets the same safe-mode and digital-board refusals as the JSON commands. In safe mode (the iCE40/PSRAM are off) `OUTPut`, `READ?`, `MEASure?`, `DIAGnostic:CAPture?`, `TRACe:DATA` and `DIGital:*` push `-240 "Hardware error"`; on the digital-only board `OUTPut ON`, `READ?`, `MEASure?`, `TRACe:DATA` and a `DIAGnostic:CAPture?` with ADC samples push `-241 "Hardware missing"`. `SYSTem:ERRor?` carries the same text as the JSON refusal. The `SOURce`/`SENSe` settings, `DIAGnostic:PATTern?`, identity, network and target power keep working.
+
 ```
 # Record a slow trace, then replay it straight back out the DAC
 SENSe:SRATe 0.08
