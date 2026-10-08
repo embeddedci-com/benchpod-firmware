@@ -281,6 +281,7 @@ static void worker_task(void *arg) {
     boot_deferred_hw_init();
     for (;;) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
+        watchdog_test_hang_point(WD_TASK_WORKER);   /* no-op unless `test-hang hw` armed it */
         /* Drain a bounded batch so the periodic polls still run promptly even
            under a burst of inbound commands. */
         for (int i = 0; i < HW_WORK_QUEUE_DEPTH; i++) {

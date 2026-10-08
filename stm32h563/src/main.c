@@ -94,6 +94,7 @@ static void net_task(void *arg)
     bool healthy = false;
     for (;;) {
         watchdog_heartbeat(WD_TASK_NET, "net");
+        watchdog_test_hang_point(WD_TASK_NET);   /* no-op unless `test-hang net` armed it */
         if (!skip) net_poll();
         watchdog_service();   /* refresh IWDG only if ALL tasks are alive */
         /* Fifteen seconds up with every task cycling: this boot is good, so a later reset does

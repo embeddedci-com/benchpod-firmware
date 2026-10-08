@@ -64,6 +64,8 @@ static void emit_health(bp_emit_t *e, const cloud_caps_t *c, bool cut) {
         reason = r;
         crash = k;
     }
+    bp_emit(e, "\"boot_id\":\"%08lx\",\"unclean_resets\":%lu,",
+            (unsigned long)c->boot_id, (unsigned long)c->unclean_resets);
     bp_emit(e, "\"safe_mode\":%s,\"safe_reason\":", tf(c->safe_mode));
     bp_emit_jstr(e, reason);
     bp_emit_raw(e, ",\"reset_cause\":");

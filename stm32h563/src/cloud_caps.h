@@ -21,7 +21,7 @@
 /* The largest capabilities payload: cl_ws_send's scratch minus the WS header. */
 #define CLOUD_CAPS_MAX        (BP_WS_FRAME_MAX - BP_WS_HEADER_MAX)
 /* Free-form boot-health text is cut to this many characters when the frame runs long. */
-#define CLOUD_CAPS_TEXT_SHORT 96u
+#define CLOUD_CAPS_TEXT_SHORT 80u
 
 typedef struct {
     const char   *device_id;
@@ -47,6 +47,8 @@ typedef struct {
     const char   *safe_reason;    /* "" when not in safe mode */
     const char   *reset_cause;
     const char   *last_crash;     /* "none" after a clean start */
+    uint32_t      boot_id;        /* random per boot: the server's key for one boot's crash */
+    uint32_t      unclean_resets; /* crashes + watchdog resets since the last frame went out */
 } cloud_caps_t;
 
 /* Build the frame into out (cap >= CLOUD_CAPS_MAX + 1 recommended). Returns its length, or 0

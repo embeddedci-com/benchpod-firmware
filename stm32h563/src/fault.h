@@ -32,7 +32,11 @@ enum {
     FAULT_SW_ASSERT     = 0x22,
     FAULT_SW_TASKCREATE = 0x23,
     FAULT_SW_ERRHANDLER = 0x24,   /* HAL/clock Error_Handler reached (early or runtime) */
+    FAULT_WATCHDOG      = 0x25,   /* IWDG early warning: the reset that follows is a hang */
 };
+
+/* Watchdog-task slots in the crash record (one per WD_TASK_*, see watchdog.h). */
+#define FAULT_WDG_TASKS 4
 
 /* Read the RCC reset-cause flags and any surviving crash record, cache their
    human-readable forms, then clear the RCC flags.  Call once, very early in boot
@@ -57,6 +61,26 @@ int fault_was_watchdog(void);
    optional task/context name, then reset.  Does not return.  Used by the FreeRTOS
    hooks and vAssertCalled. */
 void fault_sw_panic(uint32_t reason, const char *name) __attribute__((noreturn));
+
+/* Called from the IWDG early-warning interrupt, about a second before the watchdog resets
+   the chip: records the interrupted context (frame: r0,r1,r2,r3,r12,lr,pc,psr), the running
+   task and how long each watchdog task had gone without a heartbeat (stall_ms[i] = 0: not
+   stalled; names[i] its name).  Returns: the IWDG reset still happens, so the next boot reports
+   reset cause "iwdg" with this record as the last crash. */
+void fault_note_watchdog(const uint32_t *frame, const uint32_t *stall_ms,
+                         const char *const *names, int n);
+
+/* A random id for this boot, the same for every cloud connect until the next reset, so the
+   server can tell a new crash from the same boot reconnecting.  Generated on first use. */
+uint32_t fault_boot_id(void);
+
+/* Unclean resets (crashes and watchdog resets) since the count was last acknowledged, kept
+   across resets but not across a power cut.  A crash loop the pod went through while offline
+   shows up as a count > 1. */
+uint32_t fault_unclean_resets(void);
+
+/* The server has the count (the capabilities frame went out): start it over. */
+void fault_unclean_resets_ack(void);
 
 /* Set by each task's watchdog heartbeat so a fault can be attributed to the task
    that was running.  Kept tiny and lock-free (a single pointer store). */

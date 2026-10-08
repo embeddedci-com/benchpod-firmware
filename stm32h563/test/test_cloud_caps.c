@@ -38,6 +38,7 @@ static cloud_caps_t typical(void) {
         .current_out_min_ua = 0, .current_out_max_ua = 24000,
         .board = "stm32h563",
         .safe_mode = false, .safe_reason = "", .reset_cause = "power-on", .last_crash = "none",
+        .boot_id = 0x2a, .unclean_resets = 0,
     };
     return c;
 }
@@ -51,6 +52,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
+        "boot_id", "unclean_resets",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -71,6 +73,7 @@ static void test_typical_frame(void) {
     CHECK(strstr(f, "\"device_id\":\"0b7d2c1e-5a4f-4c3b-9e8d-7f6a5b4c3d2e\"") != NULL);
     CHECK(strstr(f, "\"adc_cal_a_uv\":-1234567") != NULL);
     CHECK(strstr(f, "\"last_crash\":\"none\"}") != NULL);
+    CHECK(strstr(f, "\"boot_id\":\"0000002a\",\"unclean_resets\":0,") != NULL);
     CHECK(strstr(f, "boot_health_cut") == NULL);
     check_features(f);
     printf("typical capabilities frame: %u bytes (limit %u)\n", (unsigned)n, (unsigned)CLOUD_CAPS_MAX);
@@ -94,9 +97,11 @@ static void test_worst_case_fits(void) {
     c.board = "stm32h563-digital-v3r2";
     c.safe_mode = true;
     c.reset_cause = "independent-watchdog";
-    /* boot_guard's report is 127 characters, fault's crash line 143; a control character
+    c.boot_id = 0xFFFFFFFFu;
+    c.unclean_resets = 0xFFFFFFFFu;
+    /* boot_guard's report is 127 characters, fault's crash line 159; a control character
        escapes to six bytes (\u00XX). */
-    char reason[128], crash[144];
+    char reason[128], crash[160];
     memset(reason, 0x01, sizeof(reason) - 1);
     reason[sizeof(reason) - 1] = '\0';
     memset(crash, 0x02, sizeof(crash) - 1);
@@ -125,7 +130,7 @@ static void test_worst_case_fits(void) {
     CHECK(bp_emit_len(&e) > 1536u);
 
     /* Printable text that only needs cutting (no escapes) is kept up to the short length. */
-    char longtxt[144];
+    char longtxt[160];
     memset(longtxt, 'x', sizeof(longtxt) - 1);
     longtxt[sizeof(longtxt) - 1] = '\0';
     char lr[128];
