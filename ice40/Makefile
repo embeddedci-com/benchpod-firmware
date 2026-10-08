@@ -50,7 +50,8 @@ SRC = src/top_v2.v            \
       src/dsp_counter.v       \
       src/dsp_counter2.v      \
       src/lc_counter.v        \
-      src/psram_pads.v
+      src/psram_pads.v        \
+      src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
@@ -377,6 +378,9 @@ $(OUT).bin: $(OUT).asc
 # 10.19 ns) and stays pinned.  CI sweep not run yet.
 # v47 (GW-1, 3886 LC, 74%): seed 26 still closes (clk48 56.32, clk 31.22, clk -> clk48 11.05 ns);
 # kept, no sweep.
+# v47 + cell_gearbox48 (ARCH-GW-1: the writer's and reader's clk -> clk48 cell latch as one module;
+# yosys equiv proves both modules unchanged, same flip-flops, but abc9 maps the netlist slightly
+# differently: 3893 LC): seed 26 still closes (clk48 55.05, clk 29.73, clk -> clk48 10.38 ns).
 SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
 SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
@@ -455,6 +459,8 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # fell to clk48 49.61 MHz.  Swept 1..64 locally: 60/64 reach MIN_CLK48_MHZ, fourteen tie at
 # 56.95 MHz.  Pinned SEED_DEEP 50 -> 57 (clk48 56.95, clk 34.51, clk -> clk48 12.82 ns; it is in
 # the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+# v47 + cell_gearbox48 (ARCH-GW-1, no logic change, see SEED_LOOP; 3610 LC): seed 57 still closes
+# (clk48 57.67, clk 32.55, clk -> clk48 14.41 ns).  A new bitstream: RE-VERIFY on hardware.
 SEED_DEEP ?= 57
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
@@ -570,7 +576,7 @@ daclooptest:
 # matches PSRAM contents in order, across the loop wrap.
 dacpsramrdtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrd.vvp \
-	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v src/cell_gearbox48.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrd.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrd.vvp
 
@@ -580,7 +586,7 @@ dacpsramrdtest:
 # sampler (the pre-v28 bug, or any regression to it) fails at the larger skews.
 dacpsramskewtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacskew.vvp \
-	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v src/cell_gearbox48.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacskew.vvp
 	@rm -f /tmp/$(PROJECT)_dacskew.vvp
 
@@ -588,7 +594,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -618,7 +624,7 @@ adctimingtest:
 # FSM — hence it needs yosys' cells_sim.v.
 dualwrtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dualwr.vvp \
-	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v src/dsp_counter.v $(CELLS_SIM)
+	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v src/cell_gearbox48.v src/dsp_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dualwr.vvp
 	@rm -f /tmp/$(PROJECT)_dualwr.vvp
 
@@ -629,7 +635,7 @@ dualwrtest:
 # APS6404L model; checks no bus collision, no DAC underrun, correct data both ways.
 arbtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_arb.vvp \
-	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v src/dsp_counter.v src/psram_pads.v \
+	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v src/cell_gearbox48.v src/dsp_counter.v src/psram_pads.v \
 	         src/psram_bus_arbiter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_arb.vvp
 	@rm -f /tmp/$(PROJECT)_arb.vvp

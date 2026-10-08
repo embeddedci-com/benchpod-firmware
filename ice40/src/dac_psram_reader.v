@@ -239,9 +239,11 @@ module dac_psram_reader #(
     // nibble.  Driven nibbles are registered a half-nibble early (setup before SCLK
     // rises).  Data nibbles are sampled at SAMPLE_PH (late) for round-trip margin.
     // ================================================================
-    reg         tgl_m = 0;
-    reg  [3:0]  n0_l, n1_l;
-    reg         drv_l, cs_l, clk_l, cap_l;
+    // The toggle detect + cell latch is the shared cell_gearbox48 (the capture writer uses the
+    // same one); it clears the latched cell while the reader is in reset or not running.
+    wire        new_cell;
+    wire [3:0]  n0_l, n1_l;
+    wire        drv_l, cs_l, clk_l, cap_l;
     reg  [2:0]  ph = 0;                                  // clk48 phase within the 8-clk48 cell
     reg         busy48 = 0;                              // 1 while walking a cell
 
@@ -319,16 +321,21 @@ module dac_psram_reader #(
 `endif
     always @(posedge clk48) run48_s <= {run48_s[0], run_i};
 
+    cell_gearbox48 #(.W(12), .CLR_VAL({4'h0, 4'h0, 1'b0, 1'b1, 1'b0, 1'b0})) gb_i (
+        .clk48(clk48), .tgl(cell_tgl),
+        .cell_in({cell_n0, cell_n1, cell_drv, cell_cs, cell_clk, cell_cap}),
+        .clr(rst48 || !run48), .en(1'b1),
+        .new_cell(new_cell), .cell_l({n0_l, n1_l, drv_l, cs_l, clk_l, cap_l}));
+
     always @(posedge clk48) begin
         push   <= 1'b0;
-        tgl_m  <= cell_tgl;
 
         if (rst48 || !run48) begin
             ph<=0; busy48<=0; io_o<=4'h0; io_oe<=1'b0; cs<=1'b1; sclk<=1'b0;
             cap_hi<=0;
             wptr<=0; wsp<=0; rptr<=0; rptr1<=1; dout<=8'd0; dout_vld<=1'b0; ne_r<=1'b0;
             cmt_p<=1'b0; abt_p<=1'b0; spec_nz<=1'b0;
-            n0_l<=0; n1_l<=0; drv_l<=0; cs_l<=1'b1; clk_l<=0; cap_l<=0; cap_pend<=1'b0;
+            cap_pend<=1'b0;
         end else begin
             // PAD_PIPE=1: the low nibble of a data cell is sampled on the edge AFTER ph7, which
             // belongs to the next cell (or idle), so it is a flag of its own.  The retimed CS is
@@ -342,8 +349,8 @@ module dac_psram_reader #(
             if (push) begin fmem[wsp[AW-1:0]] <= push_byte; wsp <= wsp + 1'b1; end
             if (fetch) begin dout <= fmem[rptr[AW-1:0]]; rptr <= rptr1; rptr1 <= rptr1 + 1'b1; dout_vld <= 1'b1; end
             else if (data_pop) dout_vld <= 1'b0;
-            cmt_p <= (cell_tgl != tgl_m) && cell_cmt;
-            abt_p <= (cell_tgl != tgl_m) && cell_abt;
+            cmt_p <= new_cell && cell_cmt;
+            abt_p <= new_cell && cell_abt;
             if (push)                             spec_nz <= 1'b1;
             else if (cmt_p || abt_p)              spec_nz <= 1'b0;
             if (cmt_p)                            wptr <= wsp;   // publish the burst's bytes
@@ -352,9 +359,8 @@ module dac_psram_reader #(
             else if (fetch && occ_one)            ne_r <= 1'b0;
 
             // ---- cell serializer (8 clk48 per cell) ----
-            if (cell_tgl != tgl_m) begin
-                // new cell -> latch it, drive nib0 (ph0, SCLK low), walk ph 1..7
-                n0_l<=cell_n0; n1_l<=cell_n1; drv_l<=cell_drv; cs_l<=cell_cs; clk_l<=cell_clk; cap_l<=cell_cap;
+            if (new_cell) begin
+                // new cell (gb_i latches it) -> drive nib0 (ph0, SCLK low), walk ph 1..7
                 io_o  <= cell_n0; io_oe <= cell_drv; cs <= cell_cs; sclk <= 1'b0;
                 ph<=3'd1; busy48<=1'b1;
             end else if (busy48) begin

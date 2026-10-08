@@ -265,22 +265,26 @@ module psram_dual_writer #(
     // LATCH both nibbles + controls (cell is stable for the whole clk period, so this
     // capture has ~one clk48 of setup) and emit nib0; the following cycle emit the
     // latched nib1.  All clk-domain reads happen only on the detection cycle, so the
-    // nib1 emission never races the next clk edge.
-    reg        tgl_m;                     // last-cycle capture of cell_tgl
+    // nib1 emission never races the next clk edge.  The toggle detect + latch is the
+    // shared cell_gearbox48 (the deep-replay reader uses the same one).
     reg        sub;                       // 0 = waiting for a new cell, 1 = emit nib1 next
-    reg [3:0]  n1_l;                      // latched second nibble
-    reg        drv_l, cs_l, clk_l;        // latched controls
+    wire       new_cell;
+    wire [3:0] n1_l;                      // latched second nibble
+    wire       drv_l, cs_l, clk_l;        // latched controls
     reg        rst48_q, rst48;            // reset synced into clk48 (release only)
+
+    cell_gearbox48 #(.W(7)) gb_i (
+        .clk48(clk48), .tgl(cell_tgl), .cell_in({cell_n1, cell_drv, cell_cs, cell_clk}),
+        .clr(1'b0), .en(!rst48),
+        .new_cell(new_cell), .cell_l({n1_l, drv_l, cs_l, clk_l}));
 
     always @(posedge clk48) begin
         rst48_q <= rst; rst48 <= rst48_q; // 2-FF: rst is a clk-domain level
-        tgl_m   <= cell_tgl;
         if (rst48) begin
             sub <= 1'b0;
             psram_io_o <= 4'h0; psram_io_oe <= 1'b0; psram_cs <= 1'b1; psram_sclk_d1 <= 1'b0;
-        end else if (cell_tgl != tgl_m) begin
-            // new cell this clk48 cycle -> latch it and emit nibble 0
-            n1_l  <= cell_n1; drv_l <= cell_drv; cs_l <= cell_cs; clk_l <= cell_clk;
+        end else if (new_cell) begin
+            // new cell this clk48 cycle -> emit nibble 0 (gb_i latches the rest)
             psram_io_o    <= cell_n0;
             psram_io_oe   <= cell_drv;
             psram_cs      <= cell_cs;
