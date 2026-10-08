@@ -502,6 +502,7 @@ static scpi_result_t scpi_readQ(scpi_t *ctx) {
     scpi_trace_gen = adc_pool_take();
     if (adc_capture_psram(adc_pool, n, sense_srate_hz) != 0) {
         command_handler_release_adc(conn);
+        scpi_replay_bytes = 0;   /* the pool holds part of a capture now, not the old trace */
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);
         return SCPI_RES_ERR;
     }
@@ -532,6 +533,7 @@ static scpi_result_t scpi_measureQ(scpi_t *ctx) {
     output_on = false;
     command_handler_release_adc(conn);
     if (rc != 0) {
+        scpi_replay_bytes = 0;   /* the pool holds part of a capture now, not the old trace */
         SCPI_ErrorPush(ctx, SCPI_ERROR_EXECUTION_ERROR);   /* measure failed */
         return SCPI_RES_ERR;
     }
