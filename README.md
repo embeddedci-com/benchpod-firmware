@@ -101,6 +101,8 @@ proof obtained over the LAN cannot be replayed as a cloud login.
 Full detail — including the certificate-expiry caveat — is in
 [`docs/API.md` § Security model](docs/API.md#security-model).
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
 ## Docs
 
 - [`docs/API.md`](docs/API.md) — the JSON/SCPI command protocol.
