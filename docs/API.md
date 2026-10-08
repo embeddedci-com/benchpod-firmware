@@ -1,6 +1,6 @@
 # bench-pod-firmware TCP/JSON API
 
-The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent as single-line JSON objects and responses are returned as one or more single-line JSON objects.
+The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent as single-line JSON objects and responses are returned as one or more single-line JSON objects. The same commands run over the embeddedci.com cloud link (the command channel and the byte tunnels, see [While a cloud job holds the pod](#while-a-cloud-job-holds-the-pod)), and the same socket also speaks [SCPI](#scpi-reference). The USB console has its own text commands: see [usb-serial-interface.md](usb-serial-interface.md).
 
 ---
 
@@ -12,7 +12,7 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 | Default port | `8080` |
 | Framing | Newline-delimited (`\n`) — one JSON object per line |
 | Encoding | UTF-8 |
-| Concurrency | Single client at a time |
+| Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `"busy"`) |
 
 Connect with any TCP client:
 
@@ -20,9 +20,11 @@ Connect with any TCP client:
 nc <device-ip> 8080
 ```
 
-The IP address is printed on the UART1 debug console at boot and is also returned by the `status` command.
+The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS unless the [LAN policy](#lan_policy--what-the-lan-api-may-do) is `off`.
 
-**Latency.** The pod disables Nagle's algorithm (`TCP_NODELAY`) on every accepted connection, so small replies — a JSON ack, an SWD `c` sample byte — are sent immediately rather than batched. The RP2350↔ESP32 backhaul UART also auto-negotiates from 115200 up to 921600 baud at boot, so the per-command handshake cost is low. Both are transport-internal; no client action is required.
+**Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
+
+**Line length.** A JSON command line is at most 1279 bytes; a longer one gets `"command too long"` and is dropped. (A SCPI line is at most 255 bytes.) Bulk data goes through the commands that switch a connection to raw bytes (`load_bin`, `dap_start`, `uart_proxy_start`) or through base64url chunks (`load`, `ota_data`).
 
 ---
 
@@ -43,9 +45,8 @@ connection to the pod has the full command set, which includes:
 - driving the SWD probe — i.e. halting, reading, and reflashing an attached target,
 - uploading firmware to the pod itself over OTA.
 
-There is no login, no API key, and no allow-list. "Single client at a time" is a
-dispatcher limitation, not a security control — it does not stop an attacker, it only
-means they queue. The USB-CDC console is equivalent and assumes physical access.
+There is no login, no API key, and no allow-list. The USB-CDC console is equivalent and
+assumes physical access.
 
 **The LAN policy limits this.** `lan_policy` (below) is `open` by default, which is everything
 above. `locked` keeps the LAN to reads and instrument control (tiers T0 and T1 of
@@ -117,15 +118,15 @@ The `cmd` field is required. All other fields are command-specific and documente
 
 ### Chunked data (multi-packet responses)
 
-Commands that return large arrays (`capture`, `stream`) send the data in multiple packets of up to 256 samples each. The first packet uses `"status":"ok"` and subsequent packets use `"status":"chunk"`. Every packet includes a `"more"` boolean that indicates whether additional packets follow.
+Commands that return sample arrays (`capture`, `stream`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_regs`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
-{"status":"ok",    "data":[142,139,141,...], "more":true}\n
-{"status":"chunk", "data":[144,140,138,...], "more":true}\n
-{"status":"chunk", "data":[135,137,140,...], "more":false}\n
+{"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
+{"status":"chunk", "data":[33501,33790,34012,...], "more":true}\n
+{"status":"chunk", "data":[34190,34322,34410,...], "more":false}\n
 ```
 
-A client must read until it receives a packet with `"more":false` to know the transfer is complete.
+ADC samples are 16-bit counts (`"bits":16`); see [ADC sample values](#adc-sample-values). A client must read until it receives a packet with `"more":false` to know the transfer is complete. If the client stops reading for a few seconds the pod ends the transfer and closes the connection.
 
 #### Base64 samples (`"enc":"b64"`)
 
@@ -140,46 +141,126 @@ Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `
 
 ## Commands
 
-| `cmd` | Purpose | `data` returned | Multi-packet |
-|---|---|---|---|
-| `ping` | Connectivity check | `"pong"` (string) | no |
-| `status` | Firmware / WiFi info | object | no |
-| `generate` | Start DAC waveform | `null` | no |
-| `capture` | Blocking ADC snapshot | array of uint8 | yes |
-| `stream` | Async ADC capture | array of uint8 | yes |
-| `measure` | DAC + ADC loopback | array of uint8 | yes |
-| `capture_dual` | Simultaneous ADC + raw LA capture off one trigger | array of uint16 | yes |
-| `load` | Upload a waveform for replay (chunked) | object | no |
-| `replay` | Play the recorded/uploaded trace out the DAC | object | no |
-| `dac_stop` | Stop any running DAC output (parks it when DAC limits are set) | `null` or object | no |
-| `dac_limits` | Read, set or clear the DAC output limits for an external output stage | object | no |
-| `analog_path` | Apply a named analog path (flips mux + relays) | object | no |
-| `dac_out` | Route a DAC output path + set a calibrated voltage | object | no |
-| `current_out` | Hold a current on the 4-20 mA output (J9), in µA | object | no |
-| `adc_read` | Route an ADC source + return a calibrated reading (mV) | object | no |
-| `calibrate` | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
-| `dac_mux` | Low-level DAC output mux (U55) — prefer `dac_out` | object | no |
-| `cal_switch` | Low-level calibration relays (U58) — prefer `analog_path` | object | no |
-| `test` | Pico-side pattern (no FPGA) | array of uint8 | yes |
-| `la` | Logic-analyzer pin control: step pulses + pull-ups (LA1–8) | object | no |
-| `la_pins` | Report all 12 LA pins: function, gpio mode/level, pull, live levels | object | no |
-| `gpio` | Configure / release / drive / read LA pins as GPIO | object | no |
-| `la_voltage` | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
-| `nrst` | Drive the dedicated target-reset line (v3 pods) | object | no |
-| `usb_cc` | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
-| `target_power` | Enable/disable a target-power eFuse | object | no |
-| `target_status` | Read target-power eFuse state (enabled/fault/valid) | object | no |
-| `power_status` | One-shot INA238 reading of both supply rails | object | no |
-| `power_profile` | Record a current/voltage profile of one eFuse rail | object | on `stop` |
-| `uart_proxy_start` | Enter transparent UART bridge mode | `"uart ready"` (string) | no |
-| `sensor_start` | Arm an emulated I2C sensor (BMP280) | object | no |
-| `sensor_set` | Set the emulated sensor's readings | object | no |
-| `sensor_stop` | Disarm the emulated sensor | `null` | no |
-| `sensor_status` | Sensor + I2C-bus activity counters | object | no |
-| `sensor_regs` | Read the emulated register image | array of uint8 | yes |
-| `sensor_la` | Raw I2C-bus logic capture | array of uint8 | yes |
-| `identity_public` | Get the device Ed25519 public key | object | no |
-| `identity_pop` | Sign a nonce (proof of possession) | object | no |
+Every command the firmware accepts is in this table. **Tier** decides who may run it (see
+`src/cmd_tier.c` and `docs/design/policy-commands.md`): T0 reads, T1 instrument control, T2
+persisted settings, T3 firmware. A locked LAN keeps T2 and T3 for the cloud and the USB console,
+and a cloud tunnel never goes above the tier the server allowed its user (T2 and T3 need an
+organization owner or admin). "T0/T2" commands read at T0 and change a setting at T2.
+Commands that send several packets or switch the connection to raw bytes need a stream connection
+(a LAN socket or a cloud byte tunnel). The single-reply cloud command channel refuses `capture`,
+`stream`, `capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
+`sensor_regs`, `sensor_la`, `la_capture`, `dap_start`, `uart_proxy_start` and `speedtest` with
+`command not supported over cloud channel`. The USB console does not run JSON commands at all.
+
+| `cmd` | Tier | Purpose | `data` returned | Multi-packet |
+|---|---|---|---|---|
+| `ping` | T0 | Connectivity check | `"pong"` (string) | no |
+| `status` | T0 | Firmware, network, board and capability info | object | no |
+| `generate` | T1 | Start a DAC waveform | `null` or object | no |
+| `capture` | T0 | ADC snapshot, up to 32768 samples | array of uint16 | yes |
+| `stream` | T0 | Same as `capture`, without a trigger | array of uint16 | yes |
+| `measure` | T1 | DAC waveform + ADC capture in one command | array of uint16 | yes |
+| `capture_dual` | T0 | Deep ADC + LA capture off one trigger | array of uint16, LA as edges | yes |
+| `capture_read` | T0 | Resume the read-back of the last `capture_dual` | array of uint16 | yes |
+| `la_capture` | T0 | Deep raw capture of all 14 LA channels | LA words as edges | yes |
+| `test` | T0 | Synthetic sample pattern (no FPGA) | array of uint16 | yes |
+| `load` | T1 | Upload a waveform for replay (base64url chunks) | object | no |
+| `load_bin` | T1 | Upload a waveform as raw bytes (RAM or PSRAM) | object | no |
+| `replay` | T1 | Play the recorded or uploaded trace out the DAC | object | no |
+| `dac_stop` | T1 | Stop any running DAC output (parks it when DAC limits are set) | `null` or object | no |
+| `dac_set` | T1 | Hold the DAC at a raw 8-bit level | `null` | no |
+| `dac_limits` | T0/T2 | Read, set or clear the DAC output limits for an external output stage | object | no |
+| `analog_path` | T1 | Apply a named analog path (flips mux + relays) | object | no |
+| `dac_out` | T1 | Route a DAC output path + set a calibrated voltage | object | no |
+| `current_out` | T1 | Hold a current on the 4-20 mA output (J9), in µA | object | no |
+| `adc_read` | T1 | Route an ADC source + return a calibrated reading (mV) | object | no |
+| `calibrate` | T0/T2 | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
+| `dac_mux` | T1 | Low-level DAC output mux (U55); prefer `dac_out` | object | no |
+| `cal_switch` | T1 | Low-level calibration relays (U58); prefer `analog_path` | object | no |
+| `dac_control_loop` | T1 | Arm (or disarm) the in-fabric closed-loop DAC | object | no |
+| `dac_loop_input` | T1 | Retarget a running control loop's input | object | no |
+| `dac_loop_probe` | T0 | One live operating point of the control loop | object | no |
+| `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay) | object | no |
+| `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
+| `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
+| `la` | T1 | LA pin control: step pulse trains + pull-ups (LA1-8) | object | no |
+| `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
+| `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
+| `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
+| `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
+| `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
+| `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
+| `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
+| `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
+| `power_profile` | T1 | Record a current/voltage profile of one eFuse rail | object | on `stop` |
+| `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe | `"dap ready"` (string) | no |
+| `uart_proxy_start` | T1 | Enter transparent UART bridge mode | `"uart ready"` (string) | no |
+| `spi_start` | T1 | Claim four LA pins as an SPI master | object | no |
+| `spi_stop` | T1 | End the SPI session | `"spi stopped"` | no |
+| `spi_status` | T0 | The SPI session's pins, rate and mode | object | no |
+| `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
+| `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
+| `spi_flash` | T1 | SPI NOR flash operations (id, read, erase, program) | object | no |
+| `sensor_start` | T1 | Arm an emulated I2C sensor (BMP280) | object | no |
+| `sensor_set` | T1 | Set the emulated sensor's readings | object | no |
+| `sensor_stop` | T1 | Disarm the emulated sensor | `null` | no |
+| `sensor_status` | T0 | Sensor + I2C-bus activity counters | object | no |
+| `sensor_regs` | T0 | Read the emulated register image | array of uint8 | yes |
+| `sensor_la` | T0 | Raw I2C-bus logic capture | array of uint8 | yes |
+| `can_config` | T1 | Bring up classic CAN (FDCAN1 / TCAN1044) | object | no |
+| `can_write` | T1 | Send one CAN frame | object | no |
+| `can_read` | T0 | Drain up to 8 received CAN frames | object | no |
+| `can_status` | T0 | CAN state and error counters | object | no |
+| `can_term` | T1 | Switch the 120 Ω CAN termination | object | no |
+| `can_respond` | T1 | Add or clear an automatic CAN reply rule | object | no |
+| `can_disable` | T1 | Turn CAN off | object | no |
+| `identity_public` | T0 | Get the device Ed25519 public key | object | no |
+| `identity_pop` | T0 | Sign a nonce (proof of possession) | object | no |
+| `identity_wipe` | T0 | Always refused here: only on the USB console | error | no |
+| `cloud_status` | T0 | The cloud link's state and stored settings | object | no |
+| `cloud_set` | T2 | Store the cloud server and device id, then connect | object | no |
+| `cloud_clear` | T2 | Forget the cloud settings and disconnect | `"cleared"` | no |
+| `cloud_ca` | T0/T2 | Read or clear the company CA for the cloud link | object | no |
+| `cloud_proxy` | T0/T2 | Read, set or clear the HTTP proxy for the cloud link | object | no |
+| `wifi_status` | T0 | Wi-Fi state and transport counters | object | no |
+| `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
+| `wifi_clear` | T2 | Forget the Wi-Fi credentials | `"cleared"` | no |
+| `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
+| `speedtest` | T1 | Cloud throughput probe over a tunnel | none (raw bytes) | no |
+| `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
+| `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
+| `ota_begin` | T3 | Start a firmware or blob update | object | no |
+| `ota_data` | T3 | Send one base64url chunk of the image | object | no |
+| `ota_end` | T3 | Verify the staged image's SHA-256 (and signature) | object | no |
+| `ota_status` | T0 | The update session's state | object | no |
+| `ota_abort` | T3 | Drop the staged image | object | no |
+| `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
+| `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
+| `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+
+Commands not in this table answer `"unknown cmd"`.
+
+<a id="gates-that-apply-to-every-command"></a>
+### Gates that apply to every command
+
+Before a command runs, the firmware checks these, in this order (`src/cmd_gate.c`). The first one
+that applies answers with its message and the command does not run.
+
+| Gate | Applies to | Message |
+|---|---|---|
+| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or the USB console` |
+| A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
+| Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
+| Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
+| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
+| DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
+
+Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
+`capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`,
+`can_read`, `psram_ping` and `test`. Commands that use the capture hardware (PSRAM, ADC, LA) also
+take turns with each other: a second one gets `"busy"` until the first is done.
+
+---
 
 ### `ping` — connectivity check
 
@@ -203,7 +284,7 @@ Use this as a lightweight keepalive or to confirm the firmware is reachable befo
 
 ### `generate` — DAC waveform output
 
-Start continuous waveform generation on the DAC output (SMA connector).
+Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the iCE40). The waveform is built from 8-bit levels and scaled to the 16-bit DAC.
 
 #### Request
 
@@ -218,11 +299,12 @@ Start continuous waveform generation on the DAC output (SMA connector).
 | `amplitude` | integer 0–127 | no | `127` | Half-scale amplitude. Peak-to-peak swing = `2 × amplitude` counts out of 255 |
 | `offset` | integer 0–255 | no | `128` | DC offset (vertical centre). `128` = mid-scale |
 | `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run indefinitely until the next command |
-| `sample_rate_mhz` | number (MHz) | no | auto | FPGA DAC sample-clock rate. Omit to auto-pick the highest rate that fits the waveform in the 4096-sample buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. Range ≈ `0.001`–`12` MHz (FPGA HFOSC is 24 MHz, divider 2–65535). The firmware snaps to the nearest achievable divider and logs the actual rate. |
+| `sample_rate_mhz` | number (MHz) | no | auto | FPGA DAC sample-clock rate. Omit to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. The DAC engine runs at 48 MHz ÷ divider (divider ≥ 2); the firmware snaps to the nearest achievable divider and logs the actual rate. |
+| `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
 
 **Amplitude and offset arithmetic**
 
-The 8-bit DAC output value at each sample point is clamped to `[0, 255]`:
+The 8-bit level at each sample point is clamped to `[0, 255]` and then scaled to the 16-bit DAC:
 
 ```
 sine:     value = offset + amplitude × sin(2π × t/T)
@@ -234,7 +316,7 @@ With `amplitude=100, offset=128` the output swings between 28 and 228 (out of 25
 
 **Frequency resolution**
 
-The firmware precomputes one full period in a sample buffer and loops it via DMA. Period length in samples is:
+The firmware precomputes one full period in a sample buffer and the iCE40 loops it. Period length in samples is:
 
 ```
 period_samples = floor(sample_rate / freq)
@@ -242,13 +324,15 @@ period_samples = floor(sample_rate / freq)
 
 where `sample_rate = 48 MHz / divider` — on gateware ≥ 13 the DAC8551 engine runs on the 48 MHz `clk48` domain (divider ≥ 2, so up to ~24 MSPS; the DAC8551 SPI caps the achievable rate below that).
 
-The maximum buffer size is 4096 samples, which at the ~24 MSPS ceiling limits the minimum frequency to approximately **5.9 kHz**. Below that the period is clamped to 4096 samples and the actual frequency will be higher than requested.
+The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_mhz` out and the firmware picks one that fits the period.
 
 #### Response
 
 ```json
 {"status":"ok","data":null}
 ```
+
+With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
 
 #### Examples
 
@@ -270,20 +354,21 @@ The maximum buffer size is 4096 samples, which at the ~24 MSPS ceiling limits th
 ```json
 {"cmd":"generate","waveform":"sine","freq":100000,"sample_rate_mhz":1}
 ```
-→ 100 kHz sine clocked at 1 MHz (10 samples/period) instead of the default 12 MHz. Coarser waveform but ~12× lower clock feedthrough — useful for a cleaner scope trace on breadboard wiring.
+→ 100 kHz sine clocked at 1 MHz (10 samples/period). Coarser waveform but much lower clock feedthrough, useful for a cleaner scope trace on breadboard wiring.
 
 #### Error cases
 
 | Condition | Message |
 |---|---|
-| Unknown `waveform` value | `"unknown waveform"` |
+| Unknown or missing `waveform` | `"unknown waveform"` |
 | `freq` ≤ 0 or `amplitude` = 0 | `"generate failed"` |
+| DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 ---
 
-### `capture` — blocking ADC snapshot
+### `capture` — ADC snapshot
 
-Capture a fixed number of ADC samples and return them. The command blocks the TCP connection until all samples are collected and sent.
+Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into PSRAM) and return them. The reply arrives once the capture is done; meanwhile other connections keep working, but a second capture waits its turn (`"busy"`). A capture also fills the RAM replay buffer, so `replay` can play it straight back.
 
 #### Request
 
@@ -295,25 +380,23 @@ Capture a fixed number of ADC samples and return them. The command blocks the TC
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | `32768` |
 | `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
+| `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
+| `enc` | string | no | decimal | `"b64"`, see [Base64 samples](#base64-samples-encb64) |
+
+For more than 32768 samples use `capture_dual` with `la_samples` 0 (millions of samples, read back from PSRAM).
 
 `sample_rate_mhz` sets the ADC sample clock. Omit it for the maximum ~400 kSPS rate; a **lower** rate stretches the capture window so a slow waveform fits in the 32768-sample buffer. For example, 32768 samples at ~400 kSPS spans ~82 ms, and `0.08` (80 kS/s) spans ~410 ms — enough to see a motor current waveform or other low-frequency signal. The v2 MCP33131 ADC runs in the 24 MHz domain and its divider is floored at 60, so the maximum rate is 24 MHz ÷ 60 ≈ 400 kSPS; the firmware snaps to the nearest achievable divider and logs the actual rate.
 
 #### Response
 
-Chunked JSON array, 256 samples per packet:
+Chunked JSON array (see [Chunked data](#chunked-data-multi-packet-responses)):
 
 ```json
-{"status":"ok",    "data":[142,139,141,144,139,...], "more":true}\n
-{"status":"chunk", "data":[138,140,143,141,142,...], "more":false}\n
+{"status":"ok",    "bits":16, "data":[32768,33012,...], "more":true}\n
+{"status":"chunk", "data":[33270,33501,...], "more":false}\n
 ```
 
-Each sample is an unsigned 8-bit integer (0–255) representing the raw ADC output.
-
-If `samples` ≤ 256 the entire result fits in a single packet:
-
-```json
-{"status":"ok","data":[142,139,141,...],"more":false}\n
-```
+Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample-values)).
 
 #### Examples
 
@@ -330,15 +413,17 @@ If `samples` ≤ 256 the entire result fits in a single packet:
 
 | Condition | Message |
 |---|---|
-| `samples` = 0 or > 32768 | `"samples out of range"` |
-| DMA error | `"capture failed"` |
+| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
+| Another capture or upload is running | `"busy"` |
+| The capture did not arm | `"capture failed"` |
+| The PSRAM read-back failed | `"capture read-back failed"` |
 
 #### Loopback test
 
 To verify the signal path, start a waveform then capture:
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":1000000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
 {"cmd":"capture","samples":4096}
 ```
 
@@ -346,11 +431,9 @@ The captured array should show a sinusoidal pattern at the expected period.
 
 ---
 
-### `stream` — async ADC capture with immediate delivery
+### `stream` — ADC capture (alias of `capture`)
 
-Like `capture`, but ADC data is delivered in 256-sample chunks as each DMA transfer completes rather than buffering the full capture first. Useful for larger captures where you want to start processing data before all samples arrive.
-
-The firmware starts the first DMA transfer immediately and sends each chunk as soon as it is ready. The next DMA transfer is queued while the previous chunk is being sent over TCP.
+On this firmware `stream` is the same one-shot PSRAM capture as `capture`, without the trigger option: the capture runs in the gateware and the samples are read back once it is done. It is kept for older clients.
 
 #### Request
 
@@ -362,17 +445,17 @@ The firmware starts the first DMA transfer immediately and sends each chunk as s
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | `32768` |
 | `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
+| `enc` | string | no | decimal | `"b64"` |
 
-`sample_rate_mhz` has the same meaning as in `capture` and applies to every chunk of the stream.
+`sample_rate_mhz` has the same meaning as in `capture`.
 
 #### Response
 
 Same chunked format as `capture`:
 
 ```json
-{"status":"ok",    "data":[...256 samples...], "more":true}\n
-{"status":"chunk", "data":[...256 samples...], "more":true}\n
-{"status":"chunk", "data":[...256 samples...], "more":false}\n
+{"status":"ok",    "bits":16, "data":[...], "more":true}\n
+{"status":"chunk", "data":[...], "more":false}\n
 ```
 
 #### Example
@@ -385,24 +468,17 @@ Same chunked format as `capture`:
 
 | Condition | Message |
 |---|---|
-| `samples` = 0 or > 32768 | `"samples out of range"` |
-
-#### `capture` vs `stream`
-
-| | `capture` | `stream` |
-|---|---|---|
-| Execution | Blocks until done | Returns chunks as they arrive |
-| Latency to first byte | After all samples collected | After first 256 samples |
-| Max samples | 32768 | 32768 |
-| Use case | Snapshot, loopback test | Larger captures, real-time inspection |
+| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
+| Another capture or upload is running | `"busy"` |
+| The capture did not arm | `"capture failed"` |
 
 ---
 
 ### `measure` — simultaneous DAC generate + ADC capture (loopback)
 
-Generates a waveform on the DAC and simultaneously captures ADC samples in a single command. Both DMA channels start in the same `dma_start_channel_mask` call, so capture begins as the waveform is being emitted. Designed for loopback / round-trip measurements where the DAC output is wired (directly or through a DUT) to the ADC input.
+Generates a waveform on the DAC and captures ADC samples in one command. The iCE40 starts both together and plays exactly one waveform period across the capture window (the period is `samples` long), so the capture is phase-locked to the stimulus. Designed for loopback / round-trip measurements where the DAC output is wired (directly or through a DUT) to the ADC input.
 
-After the ADC DMA finishes, the firmware automatically stops the DAC loop before returning the captured data.
+When the capture finishes the firmware stops the DAC before it returns the data.
 
 #### Request
 
@@ -416,16 +492,17 @@ After the ADC DMA finishes, the firmware automatically stops the DAC loop before
 | `freq` | number (Hz) | no | `1000` | DAC output frequency |
 | `amplitude` | integer 0–127 | no | `127` | DAC half-scale amplitude |
 | `offset` | integer 0–255 | no | `128` | DAC DC offset |
-| `samples` | integer | no | `256` | Number of ADC samples to capture (max `32768`) |
-| `sample_rate_mhz` | number (MHz) | no | auto | Sample-clock rate for **both** the DAC and ADC. Omit to auto-pick. Same semantics and range as `generate`'s `sample_rate_mhz`. |
+| `samples` | integer | no | `256` | Number of ADC samples to capture, and the waveform period (max `2048`) |
+| `sample_rate_mhz` | number (MHz) | no | auto | Sample-clock rate. Omit it and the rate is `freq × samples`, so one period spans the capture. |
+| `enc` | string | no | decimal | `"b64"` |
 
 #### Response
 
 Same chunked format as `capture`. The first packet uses `"status":"ok"` and any subsequent packets use `"status":"chunk"`; the last packet has `"more":false`.
 
 ```json
-{"status":"ok",    "data":[129,148,167,184,...], "more":true}\n
-{"status":"chunk", "data":[197,205,209,209,...], "more":false}\n
+{"status":"ok",    "bits":16, "data":[33012,37950,42800,...], "more":true}\n
+{"status":"chunk", "data":[50511,52633,53518,...], "more":false}\n
 ```
 
 #### Examples
@@ -450,9 +527,12 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 | Condition | Message |
 |---|---|
 | `waveform` field missing | `"missing waveform"` |
-| `samples` = 0 or > 32768 | `"samples out of range"` |
-| Unknown waveform / invalid params | `"measure start failed"` |
-| ADC capture did not complete within 5 s | `"measure timeout"` |
+| Unknown waveform | `"unknown waveform (use sine, square or sawtooth)"` |
+| `samples` = 0 or > 2048 | `"samples out of range"` |
+| Invalid params (for example `freq` ≤ 0) | `"measure start failed"` |
+| Another capture or upload is running | `"busy"` |
+| The capture did not complete | `"capture failed"` |
+| DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 #### `measure` vs `generate` + `capture`
 
@@ -460,7 +540,7 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 |---|---|---|
 | DAC start time | First | Synchronised with ADC |
 | ADC start time | Second (after `generate` response round-trip) | Synchronised with DAC |
-| Skew between DAC and ADC start | Tens of ms (TCP round-trip) | A few PIO cycles |
+| Skew between DAC and ADC start | Tens of ms (TCP round-trip), or none with `generate` `on_capture` | None (one gateware command) |
 | DAC keeps running after | Yes (until next `generate` or duration expires) | No (stopped automatically after capture) |
 | Use case | Independent generation and capture, long-running signals | Loopback / round-trip measurements, paired waveform/capture |
 
@@ -468,7 +548,9 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 
 ### `capture_dual` — simultaneous ADC + LA capture (one trigger)
 
-Arm the ADC and the raw 12-channel logic analyzer off a **single** trigger and stream both regions back as one array. The ADC samples come first, then the LA words; the server splits the array at `adc_samples`. Either count may be `0` to capture just the other (so this one verb also serves ADC-only or LA-only). This is the unified capture (gateware opcode `OP_CAPTURE` = `0x31`); the standalone `OP_START_CAPTURE` (`0x20`, ADC-only) and `OP_LA_CAPTURE` (`0x69`, 24-bit deep LA) still exist.
+Arm the ADC and the raw 14-channel logic analyzer off a **single** trigger and stream both regions back. The ADC samples come first, then the LA region. Either count may be `0` to capture just the other, so this one verb also serves deep ADC-only and LA-only captures. Both regions live in the 8 MB PSRAM and are read back in chunks, so each is bounded by the PSRAM, not by a RAM buffer. This is the unified capture (gateware opcode `OP_CAPTURE` = `0x31`).
+
+The capture stays in PSRAM after the reply: if the read-back stalls, resume it with [`capture_read`](#capture_read--resume-a-capture-read-back) instead of capturing again.
 
 #### Request
 
@@ -478,20 +560,34 @@ Arm the ADC and the raw 12-channel logic analyzer off a **single** trigger and s
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `adc_samples` | integer | no | `0` | ADC 16-bit samples. `adc_samples + la_samples` must fit the read-back buffer (≤ `32768`). |
+| `adc_samples` | integer | no | `0` | ADC 16-bit samples. |
 | `adc_rate_mhz` | number (MHz) | no | max | ADC sample clock (24 MHz domain, divider ≥ 60 → max ~0.4 MHz). |
-| `la_samples` | integer | no | `0` | Raw 12-channel LA words (≤ `4161536`, the full 8 MB LA region). |
+| `la_samples` | integer | no | `0` | Raw LA words, 2 bytes each (bit `n-1` = LA`n`). |
 | `la_rate_mhz` | number (MHz) | no | max | LA sample clock. |
+| `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0, so the window shows it switch off. `0` leaves it running. |
+| `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
+| `enc` | string | no | decimal | `"b64"` for the ADC region |
 
-`adc_samples` and `la_samples` must not both be `0`.
+`adc_samples` and `la_samples` must not both be `0`. On gateware v22 and newer the firmware packs
+the LA region, the ADC region and any resident deep-replay waveform into the 8 MB and refuses up
+front when they do not fit or when the combined sample rate would overrun the PSRAM bus (see
+[tri-capture-unified-psram.md](tri-capture-unified-psram.md)).
 
 #### Response
 
-Chunked array of unsigned 16-bit counts (ADC counts, then LA words). The **first** packet also carries the **achieved** rates so the server can build an aligned time-base — the gateware floors the ADC to a divider ≥ 60, so the actual rate can differ from the request:
+Chunked reply: the ADC region as unsigned 16-bit counts in `data`, then the LA region as **edges**. The **first** packet also carries the **achieved** rates so the client can build an aligned time-base (the gateware floors the ADC to a divider ≥ 60, so the actual rate can differ from the request):
 
 ```json
-{"status":"ok","adc_rate_hz":399361,"la_rate_hz":6000000,"data":[...],"more":true}
+{"status":"ok","bits":16,"adc_rate_hz":399361,"la_rate_hz":6000000,"data":[...],"more":true}
+{"status":"chunk","data":[...],"more":true}
+{"status":"chunk","la":true,"la_edges":[[0,5],[812,7],[1630,5]],"la_upto":2048,"more":true}
+{"status":"chunk","la":true,"la_edges":[[4100,1]],"la_upto":4096,"more":false}
 ```
+
+Digital lines are mostly static, so the LA region is sent run-length coded: each `[index, word]`
+pair in `la_edges` is an LA sample index and the 16-bit word that starts there, and the word holds
+until the next pair. `la_upto` is the LA index the packets so far cover. An LA-only capture's first
+packet carries `"la":true,"la_edges"` directly.
 
 | Field | Meaning |
 |---|---|
@@ -503,8 +599,40 @@ Chunked array of unsigned 16-bit counts (ADC counts, then LA words). The **first
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
-| `adc_samples + la_samples` exceeds the read-back buffer | `"samples out of range (adc+la must fit the read-back buffer)"` |
+| LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
+| The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
+| A count exceeds its fixed region (gateware before v22) | `"samples out of range (per-stream PSRAM region limit)"` |
+| Another capture or upload is running | `"busy"` |
+| ADC samples on the digital-only board | the [digital-board refusal](#gates-that-apply-to-every-command) |
 | Capture did not arm | `"capture failed"` |
+
+---
+
+<a id="capture_read--resume-a-capture-read-back"></a>
+### `capture_read` — resume a capture read-back
+
+The samples of the last `capture_dual` (or `la_capture`) stay in PSRAM after the reply. If the
+read-back stalls (a slow cloud link), `capture_read` streams the rest from a sample index instead
+of capturing again. The reply has the same chunked format as `capture_dual`, starting at `offset`
+(ADC indices first, then LA indices continuing after them).
+
+```json
+{"cmd":"capture_read","offset":131072}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `offset` | integer | no | `0` | Global sample index to resume from (`0` .. `adc_samples + la_samples`). |
+| `enc` | string | no | decimal | `"b64"` |
+
+An `offset` equal to the total sends one empty final packet (`{"status":"ok","data":[],"more":false}`).
+
+| Condition | Message |
+|---|---|
+| No `capture_dual` / `la_capture` since boot, or a newer capture started | `"no capture to resume (run capture_dual first)"` |
+| Something wrote over the capture's PSRAM regions since (an OTA staging, a `load_bin` with `"psram"`, a gateware reload, a SCPI or console capture) | `"capture data was overwritten by <what>; run the capture again"` |
+| `offset` past the end | `"offset out of range"` |
+| Another capture or upload is running | `"busy"` |
 
 ---
 
@@ -581,13 +709,39 @@ When the pod connects to the cloud it advertises a `capabilities` frame. Alongsi
 
 ---
 
+### `la_capture` — deep raw logic-analyzer capture
+
+Capture all 14 LA channels into PSRAM and stream them back. The reply uses the LA edge format of
+[`capture_dual`](#capture_dual--simultaneous-adc--la-capture-one-trigger) (`"la":true`,
+`la_edges`, `la_upto`); each word holds LA1 in bit 0 up to LA14 in bit 13. Needs `la_voltage`.
+
+```json
+{"cmd":"la_capture","samples":65536,"sample_rate_mhz":2}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `samples` | integer | no | `256` | LA samples. The limit is the PSRAM left above a resident deep-replay waveform (up to the whole 8 MB, 2 bytes per sample). |
+| `sample_rate_mhz` | number (MHz) | no | max | LA sample clock. |
+| `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0. |
+| `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
+
+| Condition | Message |
+|---|---|
+| LA voltage not set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
+| `samples` = 0 or too deep | `"samples out of range"` |
+| Another capture or upload is running | `"busy"` |
+| The capture did not arm | `"la capture failed"` |
+
+---
+
 ### `load` — upload a waveform for replay
 
 Upload a host-supplied sample buffer into the device's shared waveform buffer so it can later be played out the DAC with `replay`. This is how you replay a **previously saved** trace: capture a run, save the returned array on the host, and when you want to play it back, upload it with `load` then `replay`.
 
-A full 4096-sample trace does not fit in a single command line (the device caps a JSON command at 256 bytes), so the trace is uploaded in chunks. Each chunk's `data` is the raw sample bytes encoded as **base64url** (RFC 4648 §5, no padding). Send the first chunk with `offset:0` — this claims the shared buffer — then successive chunks at increasing byte offsets. Keep each chunk to **≤150 sample bytes** (~200 base64url chars) so the whole command line stays under the 256-byte limit.
+Samples are 16-bit little-endian (2 bytes each). A RAM trace plays at most 2048 samples (4096 bytes, the DAC's BRAM); for longer traces use [`load_bin`](#load_bin--raw-binary-waveform-upload) with `"psram":true`. The trace is uploaded in chunks: each chunk's `data` is the raw sample bytes encoded as **base64url** (RFC 4648 §5, no padding), at most 239 characters (about 179 bytes) per chunk. Send the first chunk with `offset:0` (this claims the shared buffer), then successive chunks at increasing byte offsets; 150 bytes per chunk is a safe size.
 
-The buffer is held (gated, like `capture`) from the first `offset:0` chunk until a `replay` ships it to the FPGA or the connection closes.
+The buffer is held (gated, like `capture`) from the first `offset:0` chunk until a `replay` ships it to the FPGA, the connection closes, or two minutes pass without a chunk or `replay`.
 
 #### Request
 
@@ -606,7 +760,7 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 {"status":"ok","data":{"offset":0,"len":150,"total":150}}
 ```
 
-`len` is the number of bytes decoded from this chunk; `total` is the running highest filled length (the value to pass as `replay`'s `samples`, or just omit it to replay everything).
+`len` is the number of bytes decoded from this chunk; `total` is the trace length so far in 16-bit samples (the value to pass as `replay`'s `samples`, or just omit it to replay everything).
 
 #### Error cases
 
@@ -615,14 +769,43 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 | `data` field missing | `"missing data"` |
 | Chunk at `offset > 0` sent without a preceding `offset:0` on this connection | `"load not started"` |
 | Another connection holds the buffer | `"busy"` |
-| `offset` past the 4096-byte buffer | `"offset out of range"` |
+| `offset` past the 8192-byte staging buffer | `"offset out of range"` |
 | Malformed base64url, or chunk overflows the buffer | `"invalid data"` |
+
+---
+
+<a id="load_bin--raw-binary-waveform-upload"></a>
+### `load_bin` — raw binary waveform upload
+
+Arms a raw upload: after the reply the connection's next `total` bytes are the waveform (16-bit
+little-endian samples), with no JSON or base64 around them. Then the connection returns to JSON and
+`replay` plays the upload. Needs a stream connection (LAN socket or cloud byte tunnel).
+
+```json
+{"cmd":"load_bin","total":8192}
+{"cmd":"load_bin","total":4000000,"psram":true}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `total` | integer | yes | — | Bytes that follow. RAM: at most 4096 (2048 samples). PSRAM: at most 8 MB. |
+| `psram` | boolean | no | `false` | Stage into PSRAM for a deep replay (needs the deep-replay gateware image, `status.caps` `"dac_deep_replay"`). |
+
+Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok","data":{"total":4096}}`
+(in samples) once the bytes are in. An upload that gets no bytes for 30 s is dropped.
+
+| Condition | Message |
+|---|---|
+| Sent on the cloud command channel | `"load_bin needs a stream connection"` |
+| `total` missing | `"missing total"` |
+| `total` 0 or too large | `"total out of range"` |
+| Another capture or upload is running | `"busy"` |
 
 ---
 
 ### `replay` — play a recorded trace out the DAC
 
-Play the sample buffer back out the DAC. The buffer holds whichever trace was most recently put there — either the last `capture`/`stream` (so you can capture a signal and immediately play it back), or a host-uploaded trace from `load` (so you can replay a previously saved run). The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
+Play the trace back out the DAC. The trace is whichever was most recently put there: the last `capture`, `stream` or `measure` (so you can capture a signal and immediately play it back), a host-uploaded trace from `load` or `load_bin` (so you can replay a previously saved run), or a deep PSRAM upload from `load_bin` with `"psram":true`. The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
 
 #### Request
 
@@ -633,13 +816,16 @@ Play the sample buffer back out the DAC. The buffer holds whichever trace was mo
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | full recorded length | Number of samples to play, ≤ the recorded length. |
-| `sample_rate_mhz` | number (MHz) | no | `12` (max) | DAC sample clock. Set this to the **same** rate the trace was captured at so the playback time-base matches the recording. |
+| `sample_rate_mhz` | number (MHz) | no | max | DAC sample clock. Set this to the **same** rate the trace was captured at so the playback time-base matches the recording. |
+| `on_capture` | boolean | no | `false` | Gateware v27+: start at the next capture's t0 (the DAC co-trigger). |
 
 #### Response
 
 ```json
-{"status":"ok","data":{"samples":4096}}
+{"status":"ok","data":{"samples":2048,"cotrig":false}}
 ```
+
+`cotrig` is `true` when the start waits for the next capture.
 
 #### Error cases
 
@@ -648,7 +834,8 @@ Play the sample buffer back out the DAC. The buffer holds whichever trace was mo
 | Nothing has been captured or uploaded yet | `"nothing to replay"` |
 | `samples` = 0 or greater than the recorded length | `"samples out of range"` |
 | Another connection holds the buffer | `"busy"` |
-| FPGA load/start error | `"replay failed"` |
+| FPGA load/start error, or a RAM trace longer than 2048 samples | `"replay failed"` |
+| DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 #### Record → save → replay workflow
 
@@ -688,6 +875,25 @@ Halt any running DAC output: a looped `replay`, a continuous `generate` (`durati
 
 With DAC limits set (below), `dac_stop` also holds the DAC at the low-output end of the limits
 with the path routed, and replies `{"parked_mv":3600}`.
+
+---
+
+### `dac_set` — hold a raw DAC level
+
+Holds the DAC at a fixed 8-bit level (scaled to the 16-bit DAC), with no routing and no
+calibration. For a calibrated voltage use [`dac_out`](#analog-paths--analog_path--dac_out--adc_read).
+
+```json
+{"cmd":"dac_set","value":128,"divider":240}
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `value` | integer 0..255 | yes | — | The level. |
+| `divider` | integer | no | `2` | DAC engine clock = 48 MHz ÷ divider. |
+
+Reply `null`. Errors: `"missing value"`, `"value out of range"`, `"dac set failed"`, and the
+`dac_limits` refusal when limits are set.
 
 ---
 
@@ -1008,34 +1214,35 @@ remain available for diagnostics, but prefer the named paths above.
 
 ---
 
-### `test` — pure-Pico diagnostic with a known data pattern
+### `test` — synthetic diagnostic pattern
 
-Generates a known sample pattern entirely on the RP2350 (no FPGA involved) and returns it in the same chunked array format as `capture` / `measure`. Useful for verifying TCP / JSON / chunking independent of the FPGA, ADC, and analog frontend.
+Builds a known 16-bit pattern in the STM32 (the FPGA, ADC and analog front end are not touched) and returns it in the same chunked format as `capture`. Useful for verifying TCP, JSON, chunking and base64 decoding on their own.
 
 #### Request
 
 ```json
-{"cmd":"test","pattern":"<sine|counter|ramp|const>","value":<0-255>,"samples":<count>}
+{"cmd":"test","pattern":"<sine|counter|ramp|const>","value":<0-65535>,"samples":<count>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `pattern` | string | no | `sine` (or `const` if `value` is given) | `"sine"`, `"counter"`, `"ramp"`, or `"const"` |
-| `value` | integer 0-255 | no | `255` (used only for `const`) | Constant byte value |
+| `value` | integer 0-65535 | no | `65535` (used only for `const`) | Constant sample value |
 | `samples` | integer | no | `256` | 1 to `4096` |
+| `enc` | string | no | decimal | `"b64"` |
 
 #### Patterns
 
 | `pattern` | Output | Visual character |
 |---|---|---|
-| `sine` | One full sine period across `samples`, centred at 128, amplitude 100 | Smooth curve, easy to spot in a plot |
-| `counter` | `0,1,2,…,255,0,1,…` (wraps every 256) | Each sample is unique within a 256-window — easy to spot dropped/reordered bytes |
-| `ramp` | Linear `0 → 255` across all samples | Monotonic linear ramp |
-| `const` | Every byte = `value` | Constant — verifies chunking and value flow |
+| `sine` | One full sine period across `samples`, centred at 32768, amplitude 25000 | Smooth curve, easy to spot in a plot |
+| `counter` | `0,1,2,…` (the sample index) | Each sample is unique, so dropped or reordered samples are easy to spot |
+| `ramp` | Linear `0 → 65535` across all samples | Monotonic linear ramp |
+| `const` | Every sample = `value` | Constant: verifies chunking and value flow |
 
 #### Response
 
-Same chunked format as `capture` / `measure`: 256 samples per chunk; first chunk uses `"status":"ok"`, subsequent ones use `"status":"chunk"`, last has `"more":false`.
+Same chunked format as `capture`: the first packet uses `"status":"ok"` (with `"bits":16`), the ones after it `"status":"chunk"`, and the last has `"more":false`.
 
 #### Examples
 
@@ -1047,12 +1254,12 @@ Same chunked format as `capture` / `measure`: 256 samples per chunk; first chunk
 ```json
 {"cmd":"test","pattern":"counter","samples":1024}
 ```
-→ 1024 samples `0,1,2,…`, wrapping at 256.
+→ 1024 samples `0,1,2,…,1023`.
 
 ```json
-{"cmd":"test","value":255}
+{"cmd":"test","value":65535}
 ```
-→ 256 bytes of `255`. Old "all 1's" smoke test.
+→ 256 samples of `65535`.
 
 #### Error cases
 
@@ -1060,12 +1267,14 @@ Same chunked format as `capture` / `measure`: 256 samples per chunk; first chunk
 |---|---|
 | `samples` = 0 or > 4096 | `"samples out of range"` |
 | Unknown `pattern` | `"unknown pattern (use sine\|counter\|ramp\|const)"` |
+| Another capture or upload is running | `"busy"` |
 
 ---
 
 ### `status` — firmware and connection info
 
-Returns current firmware version, WiFi connection state, and IP address. No parameters.
+Returns the firmware version, network and cloud state, board and gateware details, health
+counters and the capability list. No parameters.
 
 #### Request
 
@@ -1073,63 +1282,87 @@ Returns current firmware version, WiFi connection state, and IP address. No para
 {"cmd":"status"}
 ```
 
-#### Response
+#### Response (abridged)
 
 ```json
-{"status":"ok","data":{"version":"0.2.0","wifi":"ready","ip":"192.168.1.213","rssi_dbm":-57,"caps":["signal","gpio","power","swd","i2c_sensor","uart"]}}\n
+{"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
+ "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
+ "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
+ "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
+ "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
+ "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
+ "psram":"ok","psram_ok":true,"reset":"power-on","last_crash":"","analog":true,
+ "safe_mode":false,"safe_reason":"","caps":["signal","gpio","power","swd","..."]}}
 ```
 
 #### Response fields
 
 | Field | Type | Description |
 |---|---|---|
-| `version` | string | Firmware version string |
-| `wifi` | string | WiFi/TCP state (see below) |
-| `ip` | string | Station IP address, or `""` if not connected |
-| `rssi_dbm` | integer or `null` | Received signal strength from the AP in dBm (e.g. `-57`). `null` when not associated. Higher (closer to 0) is stronger: roughly `≥ -50` excellent, `-60..-50` very good, `-70..-60` good, `-80..-70` fair, `< -80` weak. Querying this costs an AT round-trip (~30 ms) so it adds a small latency to each `status` call. |
-| `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the three features that differ between the two boards — the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
-| `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if the strap was not measured — e.g. a v2 pod, where the pad is not connected). Diagnostic only. |
+| `device` | string | Always `"benchpod"`. |
+| `version` | string | Firmware version. |
+| `board` | string | Board name this firmware was built for. |
+| `net` | string | `"ready"` when the Ethernet or Wi-Fi interface has an address, else `"disconnected"`. |
+| `ip` | string | The pod's IP (Ethernet preferred over Wi-Fi), or `"0.0.0.0"`. |
+| `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
+| `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
+| `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
+| `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
+| `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
+| `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
+| `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
+| `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). Diagnostic only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
-| `caps` | array of string | Capabilities this firmware exposes. `"swd"` = SWD debug-probe / flash mode via the pod's CMSIS-DAP probe (`dap_start`); `"i2c_sensor"` = emulated I2C sensors (`sensor_start`); `"uart"` = transparent UART bridge (`uart_proxy_start`); `"nrst_pin"` = dedicated target-reset pin (v3); `"usb_cc"` = USB-C CC monitoring (v3); `"la_pins"` = per-pin functions + the `gpio` command ([pin ownership](#la-pin-ownership)); `"power_profile"` = [`power_profile`](#power-profile); `"gpio_read"` = the gateware can read live pin levels back (v35+); `"capture_trigger"` = [triggered captures](#capture-triggers) (v35+); `"capture_b64"` = [base64 samples](#base64-samples-encb64); `"calibrate"` = [`calibrate`](#calibrate--calibrate-the-current_in-input-j8). `"gpio_read"` and `"capture_trigger"` depend on the **running** gateware image, so they can appear and disappear across an image swap. |
+| `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
+| `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. |
+| `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
+| `lan_policy` | string | The [LAN policy](#lan_policy--what-the-lan-api-may-do). |
+| `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. |
+| `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures` | integer | Network-stack and heap health counters. |
+| `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. |
+| `loop_tripped` | boolean | The control loop's over-range trip is latched. |
+| `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
+| `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
+| `heap_free`, `heap_min`, `stack_min`, `stacks` | integer, object | Heap and per-task stack headroom in bytes. |
+| `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). |
+| `analog` | boolean | `false` on the digital-only board (no DAC or ADC). |
+| `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). |
+| `caps` | array of string | The capability list, below. |
 
-#### `wifi` state values
+#### `caps` values
 
 | Value | Meaning |
 |---|---|
-| `"disconnected"` | Not associated with an access point |
-| `"connecting"` | Association in progress |
-| `"connected"` | Associated with AP, no TCP server yet |
-| `"ready"` | TCP server is up and accepting connections |
+| `signal`, `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can` | Always present on this firmware: signal generation, GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64) and CAN. |
+| `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
+| `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
+| `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |
+| `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
+| `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
+| `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
+| `nrst_pin`, `usb_cc` | v3 board features. |
 
-#### Example
-
-```json
-{"cmd":"status"}
-```
-```json
-{"status":"ok","data":{"version":"0.2.0","wifi":"ready","ip":"192.168.1.213","rssi_dbm":-57,"caps":["signal","gpio","power","swd","i2c_sensor","uart"]}}
-```
+The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
 
 ---
 
 ### Logic Analyzer (LA) GPIO channels
 
-The digital-IO command — `la` — and the SWD probe (`dap_start`) operate on the FPGA's **Logic Analyzer GPIO bank**, addressed by a **1-based LA channel index** (`LA1`..`LA12`).
+Every LA command (`la`, `gpio`, `la_capture`, `dap_start`, `uart_proxy_start`, `sensor_start`, `spi_start`, capture triggers) addresses the FPGA's **Logic Analyzer bank** by a **1-based LA channel index** (`LA1`..`LA14`). LA channel `N` is J1 pin `N` (see below).
 
-These pins physically live on the **iCE40 FPGA**, not on the RP2350. The stepper pulse generator and the SWD bit-banger run inside the FPGA gateware; the RP2350 only forwards high-level commands over SPI. **The host must supply LA channel numbers (1..12), not RP2350 GPIO numbers.**
+These pins live on the **iCE40 FPGA**. The stepper pulse generator, the SWD engine, the UART, the I2C target and the SPI master run inside the gateware; the STM32 only sends high-level commands over SPI.
 
 | LA channel | iCE40 SG48 pin | | LA channel | iCE40 SG48 pin |
 |---|---|---|---|---|
-| `1` | 19 | | `7`  | 27 |
-| `2` | 20 | | `8`  | 28 |
-| `3` | 21 | | `9`  | 31 |
-| `4` | 23 | | `10` | 32 |
-| `5` | 25 | | `11` | 35 |
-| `6` | 26 | | `12` | 34 |
+| `1` | 42 | | `8`  | 32 |
+| `2` | 43 | | `9`  | 31 |
+| `3` | 37 | | `10` | 28 |
+| `4` | 38 | | `11` | 26 |
+| `5` | 36 | | `12` | 27 |
+| `6` | 35 | | `13` | 25 |
+| `7` | 34 | | `14` | 23 |
 
-(Pin mapping for the `vbench_pod_b` / RP2350B board — see `ice40/vbench_pod_b.pcf`. The channel→pin map is fixed per gateware build.)
-
-> **Field name:** the channel field is `la` — a 1-based LA channel index (`1`..`12`), not an RP2350 GPIO number.
+(See `ice40/vbench_pod.pcf`. The channel→pin map is fixed per gateware build.)
 
 ---
 
@@ -1181,7 +1414,7 @@ idle level instead.
 Starts a **non-blocking** train of `steps` pulses on an LA channel: each pulse is high for `delay_us` microseconds then low for `delay_us` (one full step period is `2 × delay_us`). The FPGA runs the train autonomously; the command returns immediately. Poll completion via SCPI `DIGital:STEP:BUSY?`.
 
 ```json
-{"cmd":"la","la":<1-12>,"steps":<n>,"delay_us":<us>,"dir_la":<1-12>,"direction":<0|1>}
+{"cmd":"la","la":<1-14>,"steps":<n>,"delay_us":<us>,"dir_la":<1-14>,"direction":<0|1>}
 ```
 
 | Field | Type | Required | Default | Description |
@@ -1307,7 +1540,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
 
 **Captures never own pins.** `la_capture`, `capture_dual`, `sensor_la` and capture triggers
-observe all 12 channels whatever their function.
+observe all 14 channels whatever their function.
 
 Claims **persist across client disconnects** for `gpio` and the emulated sensor — they are pod
 state, like the LA voltage — and are cleared by a pod reboot. A gateware reconfiguration (an
@@ -1343,7 +1576,7 @@ LA<n> is not a gpio output (function <function>[, gpio <mode>]); configure it wi
 #### Pull compatibility
 
 The fixed bias resistors (LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, **LA7/LA8 10k
-down**, LA9–LA12 none) are checked in **both** directions — when claiming a function on a pin
+down**, LA9–LA14 none) are checked in **both** directions — when claiming a function on a pin
 whose pull is engaged, and when engaging a pull on a pin that already has a function.
 
 | Function | Pull-up engaged | Pull-down engaged (LA7/LA8) |
@@ -1366,7 +1599,7 @@ the second from `{"cmd":"la","la":7,"pullup":"on"}` on a pin that is already in 
 
 ### `la_pins` — report every LA pin
 
-Reports the function, gpio mode/level and pull state of all 12 channels, plus the live pin
+Reports the function, gpio mode/level and pull state of all 14 channels, plus the live pin
 levels when the gateware can read them back.
 
 ```json
@@ -1385,13 +1618,13 @@ Response:
 
 | Field | Meaning |
 |---|---|
-| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir` |
+| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` |
 | `gpio` | `null`, or the gpio mode (`input` / `output` / `open_drain`) |
 | `level` | the **commanded** level of a gpio `output` / `open_drain` pin, else `null` |
-| `pull` | `null` on LA9–LA12; otherwise the fixed resistor and whether it is engaged |
+| `pull` | `null` on LA9–LA14; otherwise the fixed resistor and whether it is engaged |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
 
-The reply always lists all 12 entries and is ~1.1 kB — it fits the cloud command channel, but
+The reply always lists all 14 entries and is about 1.3 kB. It fits the cloud command channel, but
 it is the largest single-reply command the pod has.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
@@ -1704,16 +1937,15 @@ State is **not** persisted: after a reset both eFuses return to off.
 | `state` field missing | `"missing state"` |
 | `efuse` not 1 or 2 | `"invalid efuse"` |
 
-> **Scheduled power-on + UART capture.** Because the firmware dispatches one
-> connection at a time and `uart_proxy_start` turns the connection into a raw
-> byte stream, you cannot send a power-on *while* capturing. Instead schedule it:
+> **Scheduled power-on + UART capture.** `uart_proxy_start` turns the connection
+> into a raw byte stream, so that connection cannot send a power-on *while*
+> capturing. Schedule it instead (or send it from a second connection):
 > `target_power` with `delay_ms` → `uart_proxy_start` → the eFuse switches mid-
 > capture and you catch the boot banner.
 
-> The serial console exposes the same operation as
-> `target-power <1|2> <on|off> [delay_ms]` — see
-> [usb-serial-interface.md](usb-serial-interface.md). On RP2350B boards the
-> eFuses also report fault/valid status; read it with `target_status`.
+> The USB console has `power <1|2> <on|off>` (no delay) and `pstat`; see
+> [usb-serial-interface.md](usb-serial-interface.md). Read the eFuses'
+> fault/valid status with `target_status`.
 
 ---
 
@@ -1921,7 +2153,7 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 #### Request
 
 ```json
-{"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200}
+{"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200}
 ```
 
 | Field | Type | Required | Default | Description |
@@ -1964,7 +2196,7 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
 > pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
 > happens on **LA1–LA6**, whose resistors pull **up**: LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA12 have no resistor. It is also
+> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. It is also
 > skipped at a 1.8 V bank, where the 3V3-referenced pulls are unavailable. The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
@@ -2079,7 +2311,7 @@ A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range 
 
 The pod can **pretend to be an I2C sensor** on two LA channels: the iCE40 FPGA
 acts as an I2C **slave (target)** that the DUT's I2C **master** reads, while the
-RP2350 serves the register image. This lets a host-in-the-loop test present a
+STM32 serves the register image. This lets a host-in-the-loop test present a
 device (currently a **BMP280**) to a DUT and control what it reports — so the DUT
 can be tested both with the sensor "present" and "absent" without touching real
 hardware. The feature is advertised by the `"i2c_sensor"` capability in
@@ -2102,7 +2334,7 @@ console.
 #### Request
 
 ```json
-{"cmd":"sensor_start","type":"bmp280","addr":"0x76","sda":<1-12>,"scl":<1-12>}
+{"cmd":"sensor_start","type":"bmp280","addr":"0x76","sda":<1-14>,"scl":<1-14>}
 ```
 
 | Field | Type | Required | Default | Description |
@@ -2269,7 +2501,9 @@ idle bus reads `0xFF`. Chunked array, same framing as `capture`.
 
 ## Device Identity (Ed25519)
 
-Each unit owns a stable **Ed25519 keypair** that serves as its device identity. The private key is generated on the device the first time it boots (seeded from the RP2350 hardware TRNG), persisted to a dedicated flash sector, and **never overwritten** thereafter — it survives firmware updates (`make flash`) and a WiFi factory-reset (`wifi-clear`). The device only ever **signs**; the private key never leaves the unit.
+Each unit owns a stable **Ed25519 keypair** that serves as its device identity. The private key is generated on the device the first time it boots (seeded from the STM32 hardware TRNG) and persisted to a dedicated flash sector. It survives firmware updates and `wifi_clear`/`cloud_clear`. The device only ever **signs**; the private key never leaves the unit.
+
+The firmware never replaces the key on its own. The one way to erase it and make a new one is the USB console's `identity-wipe <short id>` (physical presence; `benchpod identity wipe --connection usb`), after which the pod must be registered again. Over the LAN and the cloud, `{"cmd":"identity_wipe"}` is always refused with `identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb`.
 
 Two operations are exposed: fetch the **public key** (the identifier), and produce a **proof of possession** — a signature over a caller-supplied nonce that proves the unit holds the private key matching that public key.
 
@@ -2427,6 +2661,410 @@ OUTPut ON
 
 ---
 
+## Closed-loop DAC, gateware images and PSRAM
+
+The closed-loop DAC is described in full in [dac-control-loop.md](dac-control-loop.md); the
+commands are summarized here. They need the analog front end and the loop gateware image
+(`status.caps` `"dac_control_loop"`).
+
+### `dac_control_loop` — arm the closed-loop DAC
+
+The iCE40 reads the ADC every tick, looks the reading up in a 2048-point curve and moves the DAC
+toward it. `dac_stop` disarms the loop.
+
+```json
+{"cmd":"dac_control_loop","k":32767,"vmin":0,"vmax":65535,"tick_div":64,"curve":"<b64url>","source":"adc"}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `curve` | string (base64url) | the curve already loaded | 16-bit little-endian points; the firmware stretches a short curve to the 2048-entry table |
+| `k` | integer | `8192` | Loop gain, Q15 (clamped to 32767) |
+| `vmin`, `vmax` | integer 0..65535 | `0`, `65535` | Output clamp in DAC codes; `vmin > vmax` is refused |
+| `tick_div` | integer | `64` | Loop tick divider (clamped to at least 8) |
+| `source` | string | `"adc"` | Gateware v29+: `"adc"` (closed loop), `"fixed"` (hold `input`) or `"sweep"` (add `step` every tick) |
+| `input`, `step` | integer | `0` | The fixed input and the sweep step for the open-loop sources |
+| `in_mv_per_unit`, `in_mv_at_zero`, `in_min`, `in_max`, `in_trip` | number | none | Gateware v30+ input map in engineering units; `in_trip` parks the output at `vmin` past that level |
+
+The reply echoes the effective values: `{"armed":true,"k":..,"vmin":..,"vmax":..,"tick_div":..,"curve_pts":..,"source":"adc","input":0,"step":0}`, plus `in_zero`, `in_gain`, `idx_max` and `trip_idx` when an input map is set.
+
+Errors: `"control loop needs gateware v23+"`, `"loop input sources need gateware v29+"`,
+`"loop input map needs gateware v30+"`, `"unknown loop input source (use adc, fixed or sweep)"`,
+`"curve base64 decode failed"`, `"curve needs at least one 16-bit point"`, the parameter checks
+(inverted window, zero-step sweep), `"sweep cannot be combined with an input map on this
+gateware: ..."`, `"control loop not in the running gateware image (switch with
+{"cmd":"fpga_image","image":0})"` and `"control loop arm failed"`.
+
+### `dac_loop_input` — retarget a running loop
+
+Changes the loop's input source or value without re-arming or re-uploading the curve (gateware v29+).
+Fields left out keep their value.
+
+```json
+{"cmd":"dac_loop_input","input":32768}
+{"cmd":"dac_loop_input","source":"sweep","step":16}
+```
+
+Reply: `{"source":"fixed","input":32768,"step":0,"v":<DAC code at the moment of the write>}`. Poll
+`dac_loop_probe` for the settled value. Errors: `"loop input sources need gateware v29+"`,
+`"unknown loop input source (use adc, fixed or sweep)"`, the parameter checks, the image refusal
+and `"loop input update failed"`.
+
+### `dac_loop_probe` — one live operating point
+
+```json
+{"cmd":"dac_loop_probe"}
+```
+
+Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","v":<DAC code>,"tripped":false}`.
+Plot against `in`, not `i`: in a fixed or sweep run the ADC is not in the path. `tripped` is the
+latched over-range trip (the output then sits at `vmin` until the loop is disarmed). On the
+deep-replay image it answers `"closed-loop DAC not in the running gateware image (switch with
+{"cmd":"fpga_image","image":0})"`.
+
+<a id="fpga_image--switch-the-running-gateware-image"></a>
+### `fpga_image` — switch the running gateware image
+
+The iCE40 has two images: `0` (the closed-loop DAC) and `1` (deep DAC replay from PSRAM). The
+switch reflashes the iCE40's configuration and reconfigures it, which takes 2 to 3 seconds. The pod
+then announces its new capabilities to the cloud, and puts an external output stage back on its
+park level when DAC limits are set.
+
+```json
+{"cmd":"fpga_image","image":1}
+```
+
+Reply: `{"image":1,"version":47,"features":<feature bits>}`. Errors: `"image required (0=loop,
+1=deep-replay)"`, `"image out of range (0=loop, 1=deep-replay)"`, `"image switch: reflash failed
+(CDONE never rose)"`, `"image switch: iCE40->PSRAM write inoperable after retries (run
+psram_recover to reboot+reflash)"`, `"image switch failed"` and `"busy"`.
+
+### `psram_ping` — check the iCE40 to PSRAM write path
+
+The iCE40 writes a known ramp through the real capture datapath into PSRAM and the STM32 reads it
+back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
+
+```json
+{"cmd":"psram_ping","count":16}
+```
+
+`count` is 4..256 (default 16). Reply: `{"pass":true,"count":16,"first_bad":-1}`.
+
+<a id="psram_recover--reboot-to-recover-the-psram"></a>
+### `psram_recover` — reboot to recover the PSRAM
+
+When `status.psram_ok` is `false`, this acks with `{"recover":"rebooting"}` and reboots the pod
+about 0.4 s later; the boot self-test reflashes the iCE40 and brings the datapath back without a
+power cycle. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
+reconnects" as success and check `status.psram_ok` again.
+
+---
+
+## CAN
+
+Classic CAN on FDCAN1 with the TCAN1044 transceiver, on J1 pins 19 (`CAN+`) and 20 (`CAN−`).
+Every CAN command is a single reply, so all of them work over the cloud command channel, and they
+keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
+
+### `can_config` — bring CAN up
+
+```json
+{"cmd":"can_config","bitrate":500000,"mode":"normal","term":true}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `bitrate` | integer | `500000` | Bit rate in bit/s; one that has no exact bit timing is refused |
+| `mode` | string | `"normal"` | `normal`, `listen` (receive only), `internal` (internal loopback) or `external` (loopback through the transceiver); the loopback modes let a single pod test itself |
+| `term` | boolean | `false` | Switch the 120 Ω termination on |
+
+Reply: `{"bitrate":500000,"mode":"normal","term":true}`. Errors: `"mode must be
+normal|internal|external|listen"`, `"unsupported bitrate (no exact bit timing)"`, `"can init failed"`.
+
+### `can_write` — send one frame
+
+```json
+{"cmd":"can_write","id":291,"ext":false,"rtr":false,"data":[1,2,3]}
+```
+
+`id` is required; `ext` selects a 29-bit ID, `rtr` a remote frame, and `data` holds up to 8 bytes.
+Reply: `{"id":291,"ext":false,"dlc":3}`. Errors: `"missing id"`, `"can not enabled"`, `"bus off"`,
+`"tx failed (fifo full?)"`.
+
+### `can_read` — drain received frames
+
+```json
+{"cmd":"can_read","max":8}
+```
+
+`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"dlc":3,"data":[1,2,3],"ts":12345}],"overflow":0}`.
+`overflow` counts frames dropped because the receive queue was full.
+
+### `can_status` — state and counters
+
+Reply: `{"enabled":true,"mode":"normal","bitrate":500000,"term":true,"tec":0,"rec":0,"bus_off":false,"error_passive":false,"rx_pending":0,"rx_overflow":0,"responder_rules":0,"responder_hits":0,"bus_off_recoveries":0}`.
+
+### `can_term` — termination
+
+`{"cmd":"can_term","on":true}` switches the 120 Ω termination, even while CAN is off. Reply
+`{"term":true}`. Error: `"missing on"`.
+
+### `can_respond` — automatic replies
+
+Adds a rule so the pod answers a matching frame on its own (an ECU simulation), or clears all rules.
+Up to 8 rules.
+
+```json
+{"cmd":"can_respond","match_id":2015,"ext":false,"reply_id":2024,"reply_ext":false,"reply_data":[2,80,3]}
+{"cmd":"can_respond","clear":true}
+```
+
+`reply_rtr` sends a remote frame. Reply: `{"rule":0,"rules":1}`, or `{"rules":0}` after a clear.
+Errors: `"missing match_id"`, `"missing reply_id"`, `"responder table full"`.
+
+### `can_disable` — turn CAN off
+
+Reply `{"enabled":false}`.
+
+---
+
+## Network and cloud
+
+The cloud and Wi-Fi settings are T2: on a locked LAN they need the cloud or the USB console. They
+work in safe mode, so a pod can always be put back on the network.
+
+### `cloud_status`
+
+Reply: `{"state":"connected","last_error":"","configured":true,"host":"www.embeddedci.com","port":443,"tls":true,"verify":true,"device_id":"<uuid>"}`.
+`state` is `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`.
+
+### `cloud_set` — store the cloud settings
+
+`benchpod register` sends this once; the pod then connects on its own at every boot.
+
+```json
+{"cmd":"cloud_set","host":"www.embeddedci.com","port":443,"tls":true,"device_id":"<uuid>","enabled":true}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `host` | string | required | Server host name |
+| `device_id` | string | required | The id embeddedci.com gave the pod |
+| `port` | integer | `443` with TLS, else `80` | |
+| `tls` | boolean | `false` | Release firmware refuses `false` |
+| `enabled` | boolean | `true` | |
+
+TLS always verifies the server certificate and host name; a `verify` field is ignored. The pod
+reconnects after the reply. Reply: the stored settings. Errors: `"missing host"`, `"host too long"`,
+`"missing device_id"`, `"device_id too long"`, `"cloud_set: release firmware needs "tls":true
+(plain ws is for development builds)"`, `"config save failed"`.
+
+### `cloud_clear`
+
+Forgets the cloud settings and disconnects. Reply `"cleared"`.
+
+### `wifi_status`
+
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0}`.
+`state` is the same as `status.wifi`; the other counters describe the link to the ESP32-C3 and how
+often it was lost.
+
+### `wifi_set` / `wifi_clear`
+
+```json
+{"cmd":"wifi_set","ssid":"lab","password":"secret"}
+{"cmd":"wifi_clear"}
+```
+
+Wired Ethernet stays the primary link; Wi-Fi is the fallback. An empty or missing `password` is an
+open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
+replies `"cleared"`. Errors: `"missing ssid"`, `"ssid too long"`, `"password too long"`, `"config
+save failed"`.
+
+### `eth` — wired link control and diagnostics
+
+| Request | Tier | Reply |
+|---|---|---|
+| `{"cmd":"eth","action":"stats"}` | T0 | `{"phy_ok":true,"link":true,"aneg_done":true,"phy_mode":"100FD","mac_mode":"100FD","rx_good":..,"rx_crc":..,"tx_good":..,...}` |
+| `{"cmd":"eth","action":"refclk"}` | T0 | `{"hz":50000012,"ppm":0,"on_hsi":false}`: the PHY's 50 MHz RMII clock against the MCU crystal; drops the link for about 200 ms |
+| `{"cmd":"eth","action":"stop"}`, `"start"`, `"restart"` (the default) | T2 | the action name; `start` and `restart` reset the PHY and get a new DHCP lease |
+| `{"cmd":"eth","action":"speed","mbit":100,"duplex":"full"}` | T2 | `{"speed":100,"duplex":"full"}`; `mbit` `0` returns to autonegotiation, `duplex` defaults to half |
+| `{"cmd":"eth","action":"loopback","mbit":100,"n":200}` | T2 | `{"mbit":100,"sent":200,"received":200,"intact":200,"corrupt":0,"crc":0,"align":0,"tx_fail":0}`: a PHY loopback test, `n` 1..1000 |
+
+Errors: `"eth action must be stop|start|restart|stats|speed|refclk|loopback"`, `"eth speed needs
+mbit (0 = autoneg, 10 or 100)"`, `"eth speed mbit must be 0 (autoneg), 10 or 100"`, `"eth loopback
+mbit must be 10 or 100"`, `"eth loopback: timed out"`.
+
+### `speedtest` — cloud throughput probe
+
+Used by the server's speed test over a byte tunnel (`POST /api/benchpod/devices/{id}/speedtest`).
+
+```json
+{"cmd":"speedtest","dir":"up","bytes":1048576}
+```
+
+`bytes` defaults to 1 MiB and is capped at 64 MiB. `up` (the default): the pod sends `bytes`
+synthetic bytes, then `{"speedtest":"done","bytes":N}`. `down`: the pod counts and discards the
+next `bytes` bytes, acking every 8 KB with `{"speedtest":"ack","bytes":N}` and finishing with
+`{"speedtest":"done","bytes":N}`.
+
+---
+
+## Firmware and blob updates (OTA)
+
+An update is staged in PSRAM, checked (SHA-256, signature, fit) and only then written. The
+firmware itself goes to the MCU flash; the blob targets go to slots in the W25Q flash: `gw0` and
+`gw1` (the two iCE40 images), `esp` (the ESP32-C3 Wi-Fi image) and `ca` (a company CA, see
+[`cloud_ca`](#cloud_ca--cloud_proxy-company-ca-and-http-proxy-for-the-cloud-link)). Over the
+cloud the server sends the image as WS `ota.*` frames; over the LAN the image goes in base64url
+`ota_data` chunks; the USB console has `upload-*` (see
+[usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
+or the web app instead of these commands.
+
+One transport holds an update session at a time. Every `ota_*` reply carries the session:
+
+```json
+{"status":"ok","data":{"state":"receiving","target":"firmware","received":65536,"size":563696,
+ "frames_seen":0,"sig":"ok","sig_key":"<key id>","owner":"lan:1","error":""}}
+```
+
+`state` is `idle`, `receiving`, `verified`, `error` or `installed`. `sig` is the signature check of
+the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or `image`. `owner` is
+`cloud`, `usb`, `lan:N` or `""`.
+
+| Command | Fields | What it does |
+|---|---|---|
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` target is not signed). |
+| `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
+| `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
+| `ota_status` | none | The session, from any transport (T0). |
+| `ota_abort` | none | Drops the staged image. |
+| `ota_selftest` | none | Tests the flash writer on a scratch sector (never the firmware); replies `{"selftest":"pass"}`. |
+| `ota_commit` | none | Firmware: replies `{"committing":true}`, writes the image and resets. A blob: writes the slot and replies with the session. |
+
+Refusals:
+
+| Condition | Message |
+|---|---|
+| `size` or `sha256` missing | `"missing size/sha256"` |
+| Unknown `target` | `"unknown target"` |
+| `ca` from the LAN | `"cloud_ca: change it from the cloud or the USB console"` |
+| Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
+| A capture or upload is running | `"busy: a capture or upload is running"` |
+| Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
+| Size, hash or chunk problems | `"bad size"`, `"bad sha256"`, `"chunk out of range"`, `"incomplete image"`, `"sha256 mismatch"`, `"invalid data"`, `"missing data"` |
+| The policy refuses the signature | `"signature: <result>"` |
+| The image could not enforce `required` | `"image cannot enforce signatures (policy required)"` |
+| `ota_commit` before a successful `ota_end` | `"no verified image staged"` |
+| `ota_selftest` while the hardware is busy | `"busy"`, or `"ota selftest failed (see console log)"` |
+
+### `blob_status` — what the W25Q slots hold
+
+Reads the cached slot headers (no bus access).
+
+```json
+{"status":"ok","data":{"blobs":[
+  {"name":"gw0","state":"ok","present":true,"size":135100,"version":47,"sha256":"<hex>"},
+  {"name":"gw1","state":"ok","present":true,"size":135100,"version":47,"sha256":"<hex>"},
+  {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
+```
+
+It lists the three release slots (`gw0`, `gw1`, `esp`); the company CA is read with `cloud_ca`.
+
+`state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
+`outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
+particular).
+
+---
+
+<a id="scpi-reference"></a>
+## SCPI reference
+
+Port `8080` also speaks SCPI (IEEE 488.2, on libscpi): a connection whose first byte is not `{`
+is a SCPI connection for its whole life. Lines end with `\n`, are at most 255 bytes, and several
+commands can share a line with `;`. Queries answer one line; bulk samples come as comma-separated
+ASCII. Errors go to the error queue (16 deep): read them with `SYSTem:ERRor?`. The instrument
+state (`SOURce`, `SENSe`, the trace) is shared by every SCPI connection. Upper-case letters are
+the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWer1`).
+
+### IEEE 488.2 common commands
+
+| Command | Description |
+|---|---|
+| `*IDN?` | `EmbeddedCI,BenchPod,0,0.2.0` (the last field is the SCPI layer's version, not the firmware's; read that with JSON `status`) |
+| `*RST` | Stop the DAC and restore the `SOURce`/`SENSe` defaults (sine, 1 kHz, amplitude 127, offset 128, 256 points, maximum rates) and empty the trace |
+| `*CLS`, `*ESE`, `*ESE?`, `*ESR?`, `*OPC`, `*OPC?`, `*SRE`, `*SRE?`, `*STB?`, `*TST?`, `*WAI` | Standard status and synchronization commands (libscpi core) |
+
+### System
+
+| Command | Description |
+|---|---|
+| `SYSTem:ERRor[:NEXT]?` | Next error: `<code>,"<text>"`, or `0,"No error"` |
+| `SYSTem:ERRor:COUNt?` | Errors in the queue |
+| `SYSTem:VERSion?` | SCPI version |
+| `SYSTem:PING?` | `PONG` |
+| `SYSTem:WIFI:STATe?` | `READY` when an interface has an address, else `DISCONNECTED` |
+| `SYSTem:WIFI:RSSI?` | Always pushes `-200` on this firmware (no RSSI) |
+| `SYSTem:COMMunicate:LAN:IPADdress?` | The pod's IP |
+| `SYSTem:IDENtity:PUBlic?`, `SYSTem:IDENtity:POP? "<nonce>"` | Device identity, see [SCPI equivalents](#scpi-equivalents) |
+
+### Signal generator (DAC)
+
+| Command | Parameter | Description |
+|---|---|---|
+| `[SOURce]:FUNCtion[:SHAPe] <shape>` / `?` | `SINusoid`, `SQUare`, `RAMP` or `USER` | Waveform; `USER` replays the trace |
+| `[SOURce]:FREQuency <Hz>` / `?` | > 0, unit suffixes allowed; `MIN` 1, `MAX` 1e6, `DEF` 1000 | Frequency |
+| `[SOURce]:VOLTage[:AMPLitude] <0-255>` / `?` | 8-bit half-scale amplitude | As `generate` `amplitude` |
+| `[SOURce]:VOLTage:OFFSet <0-255>` / `?` | 8-bit offset | As `generate` `offset` |
+| `[SOURce]:SRATe <MHz>` / `?` | ≥ 0; `0` = auto | DAC sample clock, also the `USER` replay rate |
+| `[SOURce]:DURation <ms>` / `?` | ≥ 0; `0` = until stopped | Output duration |
+| `OUTPut[:STATe] <ON\|OFF>` / `?` | | `ON` starts the selected waveform (as `generate`, or `replay` for `USER`); `OFF` stops the DAC |
+
+### Acquisition (ADC and LA)
+
+| Command | Parameter | Description |
+|---|---|---|
+| `SENSe:SWEep:POINts <n>` / `?` | 1..4096 | Default `READ?` and `MEASure?` length |
+| `SENSe:SRATe <MHz>` / `?` | ≥ 0; `0` = maximum (about 0.4) | ADC sample clock for `READ?` |
+| `READ? [<n>]` | 1..4096 | Capture `n` ADC samples and return them as CSV; also fills the trace (first 2048 samples) |
+| `MEASure?` | | Play one period of the `SOURce` waveform across a `POINts`-long capture (as `measure`) and return the ADC samples; also fills the trace |
+| `DIAGnostic:CAPture? [<adc_n>][,<la_n>]` | each 0..128, not both 0; default 16,16 | One-trigger ADC + LA capture (ADC 100 kS/s, LA 1 MS/s): `adc_n` ADC counts, then `la_n` LA words, as CSV. The LA words are masked to 12 bits (LA1..LA12). |
+| `DIAGnostic:PATTern? <pattern>[,<value>[,<n>]]` | `SINusoid`, `COUNter`, `RAMP` or `CONStant`; value 0..255 (for `CONStant`, default 255); n 1..4096 (default 256) | An 8-bit synthetic pattern as CSV (no hardware) |
+| `TRACe[:DATA] <offset>,"<base64url>"` | byte offset 0..4096 | Upload one chunk of a replay trace (16-bit little-endian samples, at most 4096 bytes in total) |
+| `TRACe:POINts?` | | Samples in the trace (bytes ÷ 2) |
+
+### Digital (LA pins)
+
+| Command | Parameter | Description |
+|---|---|---|
+| `DIGital:OUTPut <la>,<0\|1>` | LA 1..14 | Make the pin a gpio output at that level (the JSON `gpio` table applies) |
+| `DIGital:STEP <la>,<steps>,<delay_us>[,<dir_la>[,<dir>]]` | as the JSON [`la` step train](#step-a-pulse-train) | Start a step pulse train (non-blocking) |
+| `DIGital:STEP:BUSY?` | | `1` while a step train runs, else `0` |
+
+### Target power
+
+| Command | Description |
+|---|---|
+| `OUTPut:POWer<n>[:STATe] <ON\|OFF>` / `?` | eFuse `n` (1 = internal 5 V, 2 = external) on or off |
+| `OUTPut:POWer<n>:FAULt?` | `1` when the eFuse reports a fault |
+| `OUTPut:POWer<n>:VALid?` | `1` when the eFuse's input is valid |
+
+### SCPI errors
+
+| Code | When |
+|---|---|
+| `-200 Execution error` | The hardware is busy (a JSON capture or upload holds it), a capture or waveform failed, `OUTPut ON` with `USER` and an empty trace, `SYSTem:WIFI:RSSI?`, or a setter while a cloud job holds the pod (queries still answer) |
+| `-221 Settings conflict` | DAC limits are set (`OUTPut ON`, `MEASure?`), or an LA pin belongs to another function (`DIGital:*`) |
+| `-222 Data out of range` | A parameter outside the ranges above, or an eFuse other than 1 or 2 |
+| `-224 Illegal parameter value` | Bad base64url (`TRACe:DATA`, `SYSTem:IDENtity:POP?`) or a bad `FREQuency` keyword |
+| `-240 Hardware error` | Safe mode: the iCE40/PSRAM are off this boot, so `OUTPut`, `READ?`, `MEASure?`, `DIAG:CAP?`, `TRACe:DATA` and `DIGital:*` are refused (the error text is the JSON refusal) |
+| `-241 Hardware missing` | The digital-only board has no analog front end: the analog commands are refused (`DIAG:CAP?` for the LA alone still works) |
+| `-300 Device specific error` | `DIGital:STEP` while a step train is running |
+| `-310 System error` | The device identity is not available |
+| Other libscpi codes | Malformed input, for example `-113 Undefined header` |
+
+---
+
 ## Signal Parameters Reference
 
 ### Waveform types
@@ -2449,13 +3087,18 @@ OUTPut ON
 
 ### ADC sample values
 
-ADC samples are raw 8-bit values (0–255) from the AD9280. No calibration or scaling is applied. To convert to a physical voltage:
+ADC samples are raw 16-bit counts (0–65535) from the MCP33131 ADC, with no calibration or
+scaling applied. The front end in front of the ADC input SMA is bipolar and divides by about 12,
+so the count is not a simple fraction of a reference. To convert, use the affine fit the pod
+announces (`adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, see
+[Capabilities frame](#capabilities-frame--adc-calibration-fields)):
 
 ```
-V = sample / 255 × V_ref
+if adc_cal_unwrap and count < 32768: count += 65536
+V = (adc_cal_a_uv + adc_cal_b_nv / 1000 × count) / 1e6
 ```
 
-where `V_ref` is the AD9280 reference voltage (3.3 V on this board).
+For a single calibrated reading of any source, use [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading).
 
 ---
 
@@ -2471,13 +3114,19 @@ All errors follow the format:
 |---|---|
 | `"missing cmd"` | Request JSON has no `"cmd"` field |
 | `"unknown cmd"` | `cmd` value not recognised |
-| `"unknown waveform"` | `waveform` value not `sine`, `square`, or `sawtooth` |
+| `"command too long"` | A JSON line longer than 1279 bytes |
+| `"busy"` | A command that uses the capture hardware while another one runs |
+| `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
+| `"locked: <cmd> needs the cloud or the USB console"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
+| `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
+| `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
-| `"samples out of range"` | `samples` = 0 or > 32768 |
-| `"capture failed"` | DMA setup or hardware error |
+| `"samples out of range"` | `samples` outside the command's range (see each command) |
+| `"samples out of range (use capture_dual for deep captures)"` | `capture` / `stream` with more than 32768 samples |
+| `"capture failed"` | The capture did not arm or did not complete |
 | `"missing waveform"` | `measure` request without `waveform` field |
-| `"measure start failed"` | `measure` invoked with invalid params or unknown waveform |
-| `"measure timeout"` | `measure` ADC DMA did not complete within 5 s |
+| `"unknown waveform (use sine, square or sawtooth)"` | `measure` with another waveform |
+| `"measure start failed"` | `measure` invoked with invalid params |
 | `"missing la"` | `la` step request without `la` field |
 | `"missing state"` | `target_power` request without `state` field |
 | `"missing efuse"` | `target_power` request without `efuse` field |
@@ -2501,6 +3150,8 @@ All errors follow the format:
 | `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
 | `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, console `upload-begin`) in a safe mode that turned the iCE40/PSRAM off |
 | `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
+| `"cloud_ca: change it from the cloud or the USB console"`, `"cloud_proxy: ..."`, `"sig_policy: ..."`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
+| `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
 
 Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
 
@@ -2517,38 +3168,30 @@ on the prefix and show the rest to the user:
 
 ## Session Example
 
-A complete session demonstrating all commands:
-
 ```
-$ nc 192.168.1.213 8080
+$ nc 192.168.1.220 8080
 
 {"cmd":"ping"}
 {"status":"ok","data":"pong"}
 
-{"cmd":"status"}
-{"status":"ok","data":{"version":"0.2.0","wifi":"ready","ip":"192.168.1.213","rssi_dbm":-57}}
+{"cmd":"la_voltage","mv":3300}
+{"status":"ok","data":{"mv":3300,"st":1,"readback_mv":3297}}
 
-{"cmd":"generate","waveform":"sine","freq":250000,"amplitude":100,"offset":128,"duration_ms":500}
+{"cmd":"target_power","efuse":1,"state":1}
+{"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
+
+{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
 {"status":"ok","data":null}
 
 {"cmd":"capture","samples":512}
-{"status":"ok","data":[128,151,172,190,204,214,219,219,214,204,190,172,...],"more":true}
-{"status":"chunk","data":[148,127,106,86,68,53,42,35,32,33,38,47,59,...],"more":false}
+{"status":"ok","bits":16,"data":[32768,33170,33571,...],"more":true}
+{"status":"chunk","data":[...],"more":false}
 
-{"cmd":"generate","waveform":"square","freq":1000000,"amplitude":64,"offset":128}
+{"cmd":"dac_stop"}
 {"status":"ok","data":null}
 
-{"cmd":"stream","samples":1024}
-{"status":"ok","data":[192,192,192,191,193,192,64,63,64,65,63,64,...],"more":true}
-{"status":"chunk","data":[192,193,191,192,64,63,65,64,192,193,191,...],"more":true}
-{"status":"chunk","data":[192,192,192,64,64,63,64,192,192,192,64,63,...],"more":true}
-{"status":"chunk","data":[192,191,193,64,64,65,63,192,191,193,64,64,...],"more":false}
-
-{"cmd":"measure","waveform":"sine","freq":250000,"amplitude":100,"offset":128,"samples":256}
-{"status":"ok","data":[128,148,168,186,202,214,221,224,221,213,201,185,...],"more":false}
-
 {"cmd":"la","la":1,"pullup":"on"}
-{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k"}}
+{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k","pull":"up","pullups_available":1}}
 
 {"cmd":"la","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
@@ -2556,12 +3199,12 @@ $ nc 192.168.1.213 8080
 {"cmd":"identity_public"}
 {"status":"ok","data":{"public":"ue5UfSsOAhQYZ332ELokjOI8-uyjcbrd1ic3Nmypvzk"}}
 
-{"cmd":"identity_pop","nonce":"Q2hhbGxlbmdlMTIz"}
-{"status":"ok","data":{"signature":"hZ8…(86 chars)…Qq"}}
-
-{"cmd":"status"}
-{"status":"ok","data":{"version":"0.2.0","wifi":"ready","ip":"192.168.1.213","rssi_dbm":-57}}
+{"cmd":"cloud_set","host":"www.embeddedci.com","device_id":"<uuid>","tls":true}
+{"status":"error","message":"locked: cloud_set needs the cloud or the USB console"}
 ```
+
+The last reply is what a pod with the LAN policy `locked` answers; on an `open` LAN it stores the
+settings.
 
 ---
 
@@ -2619,7 +3262,7 @@ installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"` 
 must parse as X.509 and is trusted in addition to the built-in roots.
 `cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
-Setting or clearing either reconnects the cloud. Both are T2.
+Setting or clearing either reconnects the cloud. Reading is T0; setting and clearing are T2.
 
 **Never from the LAN.** Installing or clearing the CA and setting or clearing the proxy are refused
 on a LAN TCP connection whatever the LAN policy (even `open`), with
@@ -2641,8 +3284,8 @@ the lease itself at the announced expiry or when the cloud link drops. `status` 
 
 ## Implementation Notes
 
-- **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects and arrays in requests are not supported. All command fields must be at the top level of the JSON object.
+- **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects are not supported, except the `trigger` object of the captures; arrays only where a command documents one (`data` of `can_write`, `reply_data` of `can_respond`). Fields must be at the top level of the JSON object, and unknown fields are ignored.
 - **No authentication:** Any TCP client that can reach port 8080 has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
-- **Concurrent commands:** A second TCP connection while one is active is handled by the ESP32 AT layer but not by the firmware dispatcher — only connection ID 0 is dispatched. Do not send a new command while a `capture` or `stream` response is in progress.
-- **DAC runs until stopped:** A `generate` command with `duration_ms=0` runs the DAC indefinitely. Issuing another `generate` command replaces the running waveform immediately. There is currently no explicit `stop` command — send `generate` with `amplitude=0` workaround is not valid (returns error); instead send a new `generate` with a different `duration_ms` value, or rely on the previous `duration_ms` expiry.
-- **Separate DAC and ADC sample-clock domains (v2):** the DAC8551 engine runs on the 48 MHz `clk48` domain (up to ~24 MSPS, SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.
+- **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `"busy"` until the first one's reply is complete.
+- **DAC runs until stopped:** A `generate` with `duration_ms` 0 runs the DAC until `dac_stop`, the next `generate`, `measure` or `replay`, or `OUTPut OFF` over SCPI.
+- **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.

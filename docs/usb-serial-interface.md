@@ -1,12 +1,18 @@
 # bench-pod-firmware USB Serial Console
 
 The firmware exposes its interactive console over the STM32H563's **USB CDC-ACM**
-port (ST's stock CDC-ACM class device), in addition to the UART debug
-console. A host tool (e.g. a provisioning CLI) can open the resulting serial
-port and drive commands such as `wifi-set`, `wifi-show`, and `dfu`.
+port (ST's stock CDC-ACM class device), mirrored on the USART2 debug pins. A host
+tool (the `benchpod` CLI, a provisioning script) can open the serial port and
+drive text commands such as `status`, `wifi-set`, `la-voltage` and `dfu`.
 
-This document describes the contract for talking to that interface. It does not
-ship a CLI — it specifies what a CLI needs to know.
+This document is the contract for talking to that interface. The console is the
+pod's **physical-presence** channel: it can change any setting, including the ones
+the LAN and the cloud cannot (loosening the signature policy, wiping the device
+identity), and it is the recovery path when the pod is in safe mode.
+
+The console does **not** run the JSON commands of [API.md](API.md). It has its own
+text vocabulary, listed below; many commands are diagnostics with no JSON
+counterpart.
 
 ---
 
@@ -15,13 +21,14 @@ ship a CLI — it specifies what a CLI needs to know.
 | Property | Value |
 |---|---|
 | Class | USB CDC-ACM (virtual serial port) |
-| USB VID/PID | `0x0483:0x5740` (STMicroelectronics CDC — the host's stock CDC-ACM driver binds) |
+| USB VID/PID | `0x0483:0x5740` (STMicroelectronics CDC; the host's stock CDC-ACM driver binds) |
 | Line settings | `115200 8N1` |
-| Framing | Line-oriented; commands terminated with `\n` (or `\r`) |
-| Encoding | ASCII/UTF-8 |
+| Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
+| Line length | At most 255 characters |
+| Encoding | ASCII |
 
 Because it is a standard CDC-ACM device, the host OS class driver creates a
-serial port automatically — **no libusb, no custom driver, and no cgo** are
+serial port automatically: **no libusb, no custom driver, and no cgo** are
 needed. The serial port appears as:
 
 | OS | Device path |
@@ -33,116 +40,183 @@ needed. The serial port appears as:
 > CDC-ACM ignores the actual baud rate on the wire, but set `115200 8N1` anyway
 > for compatibility with terminal tools.
 
-The same console is **also** available on the UART debug pins; both run
+The same console is **also** available on the USART2 debug pins; both run
 simultaneously and mirror each other's output.
 
 ---
 
 ## Command protocol
 
-The USB channel is the existing text console. Send a command line terminated by
-`\n`; the device executes it and prints human-readable output, then redisplays
-the prompt `"> "`.
+Send a command line terminated by `\n`; the device executes it on its hardware
+worker task, prints the output, then prints the prompt `"> "`.
 
-### Behaviour a parser must account for
+### Behavior a parser must account for
 
 - **Character echo:** typed characters are echoed back as you send them.
 - **Prompt delimiter:** after each command the device prints `"> "`. Read until
   the next prompt to capture a command's full output.
-- **Interleaved logs:** boot messages and asynchronous AT-modem / WiFi events
-  (e.g. reconnect attempts) are printed on the same channel and may appear
-  between or during command output. Parse by scanning for the documented marker
-  lines below rather than assuming the response is contiguous.
-- **Quoting:** arguments with spaces must be double-quoted, e.g.
-  `wifi-set "My SSID" "my password"`.
-- **Password masking:** the WiFi password is never printed in clear text. It is
-  shown as `*` in `wifi-show` and masked in AT-command logs (a failed join logs
-  `AT+CWJAP="ssid","******"`).
+- **Interleaved logs:** boot messages and asynchronous events (`[wifi] ...`,
+  `[cloud] ...`, `[cmd] ...` traces of LAN and cloud commands) are printed on the
+  same channel and may appear between or during command output. Parse by
+  scanning for the documented reply lines rather than assuming the response is
+  contiguous.
+- **Busy worker:** if the worker's queue is full the console prints
+  `busy — try again` and drops the line.
+- **Quoting:** only `wifi-set` understands double quotes (an SSID or password
+  with spaces). Every other command splits on whitespace.
+- **Machine-readable replies:** the commands an installer drives
+  (`identity*`, `sig-policy`, `lan-policy`, `ca*`, `proxy*`, `upload-*`,
+  `blobs`) start their reply with the command name and then `ok`, `error <why>`
+  or the value, with no leading spaces. The other commands print indented,
+  human-readable lines.
+- **Shared hardware:** the commands that capture into the PSRAM or drive the
+  shared bus (`adc`, `measure`, `capture-psram`, `dualcap`, `lastress`,
+  `psram*`, `cap-selftest`, `flash-ice40`) take the same lock as the JSON
+  captures. While a capture, upload or update runs they print
+  `<cmd> refused: busy: a capture, upload or update is using the PSRAM bus; try again when it ends`.
 
 ### Command reference
 
-The console runs `help` to print this list live on the device. All argument
-tokens are whitespace-separated; quote any value containing spaces. On a usage
-or argument error a command prints `usage: ...` or `ERROR: ...` and makes no
-change.
+`help` prints a short version of this list on the device. On a usage error a
+command prints `usage: ...` and changes nothing.
 
-#### System / provisioning
+#### System
 
 | Command | Description |
 |---|---|
-| `help` | List all commands. |
-| `status` | Firmware version, WiFi state, IP, TCP port. |
-| `wifi-set <ssid> <password>` | Save credentials to flash and (re)join the AP. Use quotes for values with spaces. |
-| `wifi-show` | Show stored SSID (password masked), WiFi state, IP, RSSI. |
-| `wifi-clear` | Erase stored credentials (reboot to fully apply). |
-| `esp32-reconnect` | Retry ESP32 probe + WiFi join + TCP server bring-up. |
-| `esp32-monitor [secs]` | EN-reset the modem and dump raw UART RX (1–30 s, default 3 s) — shows the ESP32 boot log. |
-| `reboot` | Software reset via watchdog. |
-| `dfu` | Reboot into the STM32 ROM USB DFU bootloader to reflash firmware (host: `dfu-util` / `make flash-dfu`). |
+| `help` | List the commands. |
+| `status` | One `key : value` line each: `device : benchpod`, `mac`, `ip`, `dma`, `psram` (boot self-test), `psbus`, `board` (board, firmware version, revision, `nrst_pin`, `usb_cc`), `fpga` (gateware version, reachable or not), `gw` (when the running gateware differs from the embedded one), `hint`, `safe` (safe-mode report), `clock`, `adc`, `dac`, `replay`, `cloud` (`registered state=... device_id=...` or `not registered`), `reset`, `crash`, `boot`, one `stack` line per task, `flash`, `lwip`, `heap`. Tools grep for `benchpod` to recognize a pod. |
+| `ping` | SPI-ping the iCE40: `PING ok  version=0x..` or `PING failed`. |
+| `uid` | The MCU's 96-bit unique ID. |
+| `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
+| `reboot` | System reset. |
+| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). |
+| `test-bootloop [net\|hw] yes` | Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
+| `test-hang <net\|hw> yes` | Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
+| `test-crash yes` | Fault on purpose; the next boot reports it as the last crash. |
 
-#### Target power & GPIO
-
-| Command | Description |
-|---|---|
-| `target-power <1\|2> <on\|off> [delay_ms]` | Enable/disable a target eFuse (1 = internal 5 V, 2 = external). Optional `delay_ms` applies the change after a delay (fired from the poll loop); echoes `eFuse<N> ON/OFF` (or `eFuse<N> ON/OFF in <ms> ms`). |
-| `target-status [1\|2]` | Show eFuse `enabled`/`fault`/`valid` (both if omitted). |
-| `la-step <la 1..12> <steps> <delay_us> [dir_la] [dir]` | Emit `steps` pulses on an LA channel (non-blocking; optional direction channel). |
-| `pullup [<1-8\|all> <on\|off>]` | Switch (or, with no args, report) an LA pin pull-up. LA1–8 only; off leaves the line on the board's pull-down. |
-
-The `<la>` argument is a **Logic-Analyzer channel index (1..12)** driven by the iCE40 gateware — see the channel→pin table in [`docs/API.md`](API.md#logic-analyzer-la-gpio-channels). The stepper/SWD bit-banging now lives in the FPGA, not on RP2350 PIO. (The former `gpio-set` console command is gone — drive a line's idle level with `pullup` instead.)
-
-#### FPGA (iCE40 over SPI0)
+#### Device identity and policies
 
 | Command | Description |
 |---|---|
-| `spi-ping` | Re-PING the iCE40 FPGA (3 attempts); prints gateware version on success. |
-| `spi-status` | Read the FPGA `STATUS` byte (`DAC_RUN`/`CAP_BUSY`/`CAP_DONE`). |
-| `flash-ice40 [verify\|diag]` | Program the config flash with gateware image 0 from its W25Q blob slot. `verify` reads back + compares; `diag` probes the JEDEC ID. |
-| `blobs` | One `blob` line per W25Q blob slot (gw0, gw1, esp): state against this firmware, size, version, SHA-256. Then a `fw-copy` line: the firmware image the last OTA install stored in the W25Q (size and SHA-256 prefix), or `fw-copy none`. |
-| `upload-begin <firmware\|gw0\|gw1\|esp> <size> <sha256> [version]` | Start an upload over this console (then `upload-data <off> <len<=512> <crc32>` + raw bytes, `upload-end`, `upload-commit`, `upload-status`, `upload-abort`; see `src/upload_rx.h`). `benchpod install-blobs` drives it. |
-| `upload-sig <0\|1> <base64url>`, `upload-sig`, `upload-sig clear` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Report only in this firmware: nothing is refused because of it. Older firmware answers "unknown command", which is how installers tell. |
-| `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts (`docs/API.md`, Pod policies). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
+| `identity` | `identity <short id> <public key base64url>`, or `identity unknown <why>`. |
+| `identity-wipe <short id\|unknown>` | Erase the device key and make a new one, the way back for a pod whose identity record the firmware will not replace. The argument must be the current short id (6 hex digits), or `unknown` when there is none; anything else prints `identity-wipe error confirm with the current id: identity-wipe <id>`. Replies `identity-wipe ok <new short id>`, then the pod logs in to the cloud again (the server needs a new registration). Only here: the JSON `identity_wipe` is refused on the LAN and the cloud. `benchpod identity wipe --connection usb` drives it. |
+| `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
 | `lan-policy [open\|locked\|off]` | Show or set what the LAN API may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` stops the TCP listener and mDNS until set back. |
-| `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate or `ca none`. Install one with `upload-begin ca <size> <sha256>` (no signature). Clearing empties the slot. |
-| `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth` or `proxy none`; never shows the password. |
+| `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Install one with `upload-begin ca <size> <sha256>` (no signature). `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
+| `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
+| `ca-damage` | Development builds only: damage the CA slot to try the built-in-roots fallback. |
 
-#### I²C peripherals (v2: INA238 ×2 / TCA9554 ×4; analog DAC = DAC8551)
+`ca-clear`, `proxy-set` and `proxy-clear` write the W25Q, so they are refused with
+`busy: ...` while a capture, upload or update is using the shared bus.
 
-| Command | Description |
-|---|---|
-| `i2c-scan` | Scan the I2C0 power/IO bus. |
-| `ina` | Read both INA238 power monitors (int = 0x40 internal 5 V, ext = 0x44 external supply). |
-| `expdump` | Dump the four TCA9554 expanders (LA pull-ups @0x20, eFuse ctrl @0x22, DAC mux @0x24, analog switch @0x26). |
-
-The 16-bit **DAC8551** analog DAC is not an I²C part — it is clocked by the iCE40 over SPI and its output is routed by the TCA9554 mux (@0x24). See the analog commands below.
-
-#### Analog (v2: DAC8551 / MCP33131)
+#### Network
 
 | Command | Description |
 |---|---|
-| `dac <off\|3v3\|5v\|12v> [volts]` | Route the DAC8551 output path (mux via TCA9554) and hold a calibrated DC voltage. |
-| `dacraw <0-255> [divider]` | Raw DAC8551 code, no routing/calibration; `divider` sets the FPGA DAC engine rate (48 MHz / divider). Debug. |
-| `current-out [mA]` | Hold a current on the 4-20 mA output (J9, needs an external floating loop supply) and switch the DAC voltage outputs off. No value shows the range. |
-| `adc [ext\|cal1\|cal2\|current_in]` | Route an MCP33131 ADC source and return a calibrated reading in mV (default `ext`). |
-| `adcraw` | Single raw MCP33131 sample byte. Debug. |
-| `measure` | Read the ADC input SMA in volts (= `adc ext`, ÷12 front-end). |
+| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to flash and (re)connect the ESP32-C3 in the background. Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
+| `wifi-show` | `ssid`, `state` (as `status.wifi` in the JSON API), `ip`, `rssi` and the C3 restart counters. The password is never printed. |
+| `wifi-clear` | Erase the stored credentials and drop Wi-Fi. |
+| `wifi-static <ip> <netmask> <gateway>` | Give the Wi-Fi interface a static address (diagnostic; the pod uses DHCP by default). |
+| `eth <stop\|start\|restart>` | Bring the wired link down or up (PHY reset + DHCP). |
+| `eth stats` | Wired link: negotiated mode, MAC mode, error and drop counters. |
+| `eth speed <auto\|10\|100> [full]` | Force the link mode (half duplex unless `full`), or go back to autonegotiation. |
+| `eth refclk` | Measure the PHY's 50 MHz RMII clock against the MCU crystal (drops the link for about 200 ms). |
+| `eth loopback <10\|100> [n]` | PHY loopback test with `n` frames (default 200, at most 1000). |
+| `esp-reset-pulse` | Diagnostic: reset the C3 unannounced; Wi-Fi must recover on its own. |
+| `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
+| `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
+| `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). |
 
-> **v2 analog.** The 16-bit DAC8551 is clocked by the iCE40 DAC sequencer on the 48 MHz `clk48` domain, so the FPGA-sequenced TCP commands `generate`, `replay`, and `measure` **are** available (unlike the retired RP2350B carrier, whose DC-only MCP4728 could not be clocked at waveform rates). The ADC is the 16-bit MCP33131D-10 SAR, sampled through the iCE40 into PSRAM.
-
-#### Debug probe
+#### Firmware, gateware and blob uploads
 
 | Command | Description |
 |---|---|
-| `dap-start <swclk la> <swdio la>` | Turn the console into the pod's **CMSIS-DAP** probe on the given LA channels (1..12), so host-side OpenOCD (`cmsis-dap` backend) can flash/debug an SWD target through the pod. Replies `dap ready`, then the connection carries length-framed CMSIS-DAP packets. Target reset is the pod's own NRST pin (J1 pin 22) — there is no `nreset` channel argument since rev3. |
+| `blobs` | One `blob <name> <state> <size> <version> <sha256\|->` line per W25Q release slot (`gw0`, `gw1`, `esp`); `state` is `ok`, `outdated`, `missing` or `unknown` (see JSON `blob_status`). Then `fw-copy <size> bytes, sha256 <prefix>...` or `fw-copy none`: the firmware image the last install stored in the W25Q. |
+| `upload-begin <firmware\|gw0\|gw1\|esp\|ca> <size> <sha256> [version]` | Start an upload over this console: the same PSRAM staging, SHA-256 and signature checks as an OTA. Replies `upload-begin ok` or `upload-begin error <why>` (for example `busy: <target> update from <holder> is in progress`, `busy: a capture or upload is running`, `signature: <result>`, or the safe-mode refusal). |
+| `upload-data <offset> <len> <crc32 hex>` | Followed by exactly `len` raw bytes (at most 512, no echo). Replies `upload-data ok <offset>`, `upload-data retry crc`, `upload-data retry timeout`, `upload-data busy` or `upload-data error usage: ...`. |
+| `upload-end` | Verify the staged image: `upload-end ok` or `upload-end error <why>`. |
+| `upload-commit` | Firmware: `upload-commit resetting`, then the pod writes the image and resets. A blob: `upload-commit ok`. Errors: `upload-commit error no verified image staged` and the others. |
+| `upload-status` | `upload-status <state> <target> <received>/<size> <error\|->`. |
+| `upload-abort` | `upload-abort ok`, or `upload-abort error <why>` when another transport holds the session. |
+| `upload-sig <0\|1> <base64url>`, `upload-sig clear`, `upload-sig` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Whether a missing or bad signature is refused depends on `sig-policy`. Older firmware answers "unknown command", which is how installers tell. |
+| `flash-ice40` | Reflash the iCE40 configuration flash with gateware image 0 from the W25Q `gw0` slot and reconfigure. |
+| `flash-id` | Read the iCE40 configuration flash's JEDEC ID (W25Q64 = `ef 40 17`). |
 
-#### Serial bridge
+`benchpod install-blobs` and `benchpod firmware install --connection usb` drive the
+upload commands.
+
+#### LA bank, target power and reset
 
 | Command | Description |
 |---|---|
-| `uart-proxy <rx la> <tx la> <baud>` | Open a transparent UART terminal to a DUT on the given LA channels (1..12) at `baud` (8N1). Exit with **Ctrl-]**. See [UART proxy mode](#uart-proxy-mode-uart-proxy). |
+| `la-voltage [1800\|3300]` | Set or show the LA I/O-bank voltage (required before any LA operation over the LAN or cloud). Refused, naming the pins, while an LA pin has a function. 1.8 V needs a v3 pod. |
+| `power <1\|2> <on\|off>` | Switch a target eFuse (1 = internal 5 V, 2 = external): `eFuse<N> ON` / `OFF`, or `bad eFuse index`. |
+| `pstat` | Both eFuses: `eFuse<N>: en=.. valid=.. fault=..`. |
+| `nrst [assert\|release\|<ms>]` | Drive the target reset pin (J1 pin 22, v3), or pulse it for `ms` milliseconds; with no argument, show it. |
+| `usb-cc` | USB-C CC lines: voltages, orientation and the source's current advertisement (v3). |
 
-> `selftest` runs an STM32H563 silicon health check (HSE/PLL clocks, timer,
-> SRAM walking-bit/address pattern, RNG).
+#### Analog (DAC8551 / MCP33131)
+
+| Command | Description |
+|---|---|
+| `dac <off\|3v3\|5v\|12v> [volts]` | Route the DAC output path and, with `volts`, hold a calibrated DC voltage. |
+| `adc [ext\|cal1\|cal2\|current_in]` | Route an ADC source and print a calibrated reading in mV (default `ext`; `current_in` also in µA). |
+| `measure` | The ADC input SMA in mV (= `adc ext`). |
+| `path <name>` | Apply a named analog path (routing only): `off`, `3v3`, `5v`, `12v`, `ext`, `cal1`, `cal2`, `current_in`. |
+| `current-out [mA]` | Hold a current on the 4-20 mA output (J9, needs an external floating loop supply); with no value, show the range. |
+| `calibrate [current_in\|clear]` | Show this pod's ADC calibration, calibrate the `current_in` input (J8 disconnected), or remove it. |
+| `dac-limits [clear]` | Show the DAC output limits, or clear them. Setting them is JSON `dac_limits`. |
+| `dacraw <0-255> [divider]` | Raw DAC code, no routing or calibration (debug); `divider` sets the DAC engine rate (48 MHz / divider, default 240). |
+| `dacmux <en> <sel> [en2 sel2]` | Low-level U55 output mux (debug; prefer `dac`/`path`). |
+| `calsw <cal1> <cal2> <current_in> <cal_path>` | Low-level U58 calibration relays (debug; prefer `path`/`adc`). |
+| `adcraw` | One raw ADC probe byte (debug). |
+| `adc-spi [n]` | `n` live ADC reads directly over SPI, skipping the PSRAM (debug; prints on the device log). |
+
+With DAC limits set, `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and
+`calsw` are refused when they would break them, with the same text as the JSON API.
+
+#### I²C peripherals
+
+| Command | Description |
+|---|---|
+| `i2c-scan` | Scan the power/IO I²C bus (prints on the device log). |
+| `ina` | Read the INA238 power monitors: `int(0x40)` internal 5 V, `ext(0x44)` external supply, and `pod(0x41)` when the pod's own monitor is fitted. |
+| `expdump` | Dump the four TCA9554 expanders (LA pull-ups, eFuse control, DAC mux, analog switch). |
+
+#### CAN
+
+| Command | Description |
+|---|---|
+| `can config <bitrate> [normal\|internal\|external\|listen] [term]` | Bring CAN up (classic CAN on FDCAN1). `internal` and `external` are loopback modes for a single pod. |
+| `can write <id> [b0 .. b7]` | Send one standard frame. |
+| `can read` | Print up to 8 received frames. |
+| `can status` | State, error counters, queue and responder counters. |
+| `can respond <match_id> <reply_id> [bytes...]`, `can respond clear` | Add or clear an automatic reply rule. |
+| `can term <0\|1>` | Switch the 120 Ω termination. |
+| `can off` | Turn CAN off. |
+
+#### PSRAM, capture and iCE40 diagnostics
+
+| Command | Description |
+|---|---|
+| `psram-selftest` | The layered boot test (STM32 to PSRAM, iCE40 write, iCE40 /CE reach); prints on the device log. Part of the safe-mode recovery path. |
+| `cap-selftest [n]` | Ramp through the ADC to PSRAM path (default 64): PASS = the path is fine, FAIL = an iCE40 capture timing error. |
+| `psram` | Diagnose the PSRAM bus, CS and arbitration (an `0xFF` ID). |
+| `psram-test` | Bring up and pattern-test the PSRAM. |
+| `psram-addrtest` | Address-tagged write and read-back across the whole 8 MB from the STM32 alone. |
+| `psram-bench [kb]` | PSRAM throughput (default 256 KB). |
+| `psram-clk <prescaler>` | Set the OCTOSPI clock prescaler (debug). |
+| `psram-chunk <bytes>` | Set the PSRAM chip-select chunk size (debug). |
+| `capture-psram [n]` | Capture `n` ADC samples (at most 64) and print them. |
+| `dualcap [adc_n] [la_n]` | One-trigger ADC (100 kS/s) + LA (1 MS/s) capture, at most 256 each; prints the first samples. |
+| `lastress [n]` | Deep LA capture at the maximum rate as a drain stress test (default 65535). |
+| `spi-clk <128\|256>` | Set the STM32 to iCE40 SPI prescaler (debug). |
+| `spi-diag [n]` | SPI link diagnostic (prints on the device log). |
+
+The console does **not** get the safe-mode refusals of the JSON API: in safe mode
+it is how you test the iCE40 and PSRAM (`psram-selftest`, `psram-test`,
+`flash-ice40`) before you power-cycle.
 
 ### `wifi-set` result markers
 
@@ -151,16 +225,20 @@ After `wifi-set "<ssid>" "<password>"`, scan the output for:
 | Outcome | Marker line (substring) |
 |---|---|
 | Credentials persisted | `[cfg] credentials written to flash` |
-| Join succeeded | `[wifi] join OK  ip=<ip>` |
-| Join failed (creds still saved) | `[wifi] join failed` |
+| Join progress and result | the asynchronous `[wifi] ...` log lines; or poll `wifi-show` until `state: connected` |
 
-A typical success transcript:
+A typical transcript:
 
 ```
 > wifi-set "MyNet" "s3cr3t"
 [cfg] credentials written to flash
-[wifi] joining "MyNet"...
-[wifi] join OK  ip=192.168.1.42
+  saved SSID "MyNet" — connecting in the background; run wifi-show for status
+> wifi-show
+  ssid: MyNet
+  state: connected
+  ip: 192.168.1.42
+  rssi: -57 dBm
+  c3 restarts: 0 no response, 0 rebooted while up
 >
 ```
 
@@ -172,13 +250,14 @@ The credentials are stored in flash and survive reboots and firmware updates
 ## Firmware update via `dfu`
 
 Sending `dfu` reboots the device into the STM32H563's ROM USB **DFU** bootloader.
-Flash a new image from the host with `dfu-util` (e.g. `make flash-dfu`, which runs
-`dfu-util ... :leave` and auto-reboots into the app). The application does **not**
-flash itself — it only hands off to the built-in ROM bootloader.
+Flash a new image from the host with `dfu-util` (`benchpod flash-self`, or
+`make flash-dfu`, which runs `dfu-util ... :leave` and reboots into the app). The
+application does **not** flash itself here; it only hands off to the built-in ROM
+bootloader. For an update without DFU, use `upload-begin` (above).
 
 ```
 > dfu
-entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...
+  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...
 ```
 
 The CDC serial port disappears at this point and the STM32 ROM DFU device
@@ -186,67 +265,19 @@ The CDC serial port disappears at this point and the STM32 ROM DFU device
 
 ---
 
-## UART proxy mode (`uart-proxy`)
-
-`uart-proxy` turns the console into a **transparent UART terminal** to a DUT —
-the bench-pod equivalent of `screen /dev/ttyUSB0`. The wire toggling runs in the
-iCE40 gateware (a soft 8N1 UART on two LA channels); the firmware bridges your
-keystrokes to the DUT and prints what the DUT sends back. It is the serial
-equivalent of the TCP `uart_proxy_start` command.
-
-### Entering the mode
-
-```
-uart-proxy <rx la> <tx la> <baud>\n
-```
-
-- `rx`, `tx` — **LA channel indices (1..12)**: `rx` is the pin the FPGA samples
-  (wire the DUT's TX here), `tx` is the pin the FPGA drives (wire the DUT's RX
-  here). They must be distinct.
-- `baud` — any value; the firmware computes the FPGA bit-period divisor.
-  Frame format is fixed at **8N1**. ≤115200 is solid; higher is best-effort.
-
-| Outcome | Output | Meaning |
-|---|---|---|
-| Armed OK | `uart ready (press Ctrl-] to exit)` | **UART mode active** — see below |
-| Already in use | `ERROR: uart busy` | another client/console owns the UART |
-| Bad args | `ERROR: invalid uart args (...)` | back at `> ` prompt |
-| Missing args | `usage: uart-proxy <rx la> <tx la> <baud>` | back at `> ` prompt |
-
-A client should send `uart-proxy ...\n` and **read lines until it sees
-`uart ready`** (treat any `ERROR:`/`usage:` line as failure).
-
-### After `uart ready`: transparent stream
-
-The line editor steps aside: every byte you type is transmitted to the DUT, and
-every byte the DUT sends is printed. There is **no inactivity timeout** — a
-serial console may sit idle waiting for the operator.
-
-### Leaving the mode
-
-Press **Ctrl-]** (0x1D, the telnet escape). Only your keystrokes are scanned for
-it, so binary DUT output containing 0x1D is never mistaken for the exit. On exit
-the UART is disarmed (the TX channel returns to high-Z) and the `> ` prompt
-returns.
-
-> The TCP form (`uart_proxy_start`, see [API.md](API.md#uart_proxy_start)) uses a
-> different exit since a network client has no single "escape key": it ends on
-> socket close, or on a guard-timed `+++` (Hayes-style) to return to JSON.
-
----
-
 ## Talking to it from Go
 
-Any pure-Go serial library works since the device is a normal serial port — no
+Any pure-Go serial library works since the device is a normal serial port, with no
 libusb/cgo dependency. For example, with `go.bug.st/serial`:
 
 ```go
-port, err := serial.Open("/dev/tty.usbmodem1101", &serial.Mode{BaudRate: 115200})
-// write: port.Write([]byte("wifi-set \"MyNet\" \"s3cr3t\"\n"))
-// read lines until you see the "> " prompt, then scan for "[wifi] join OK"
-//   or "[wifi] join failed".
+port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
+// write: port.Write([]byte("status\n"))
+// read lines until the "> " prompt, then look for "device : benchpod".
 ```
 
-Discover the port by enumerating serial ports and matching USB VID `0x2E8A`
-(`enumerator.GetDetailedPortsList()` exposes the VID/PID), or by matching the
-platform path patterns in the table above.
+Discover the port by enumerating serial ports and matching USB VID `0x0483` and
+PID `0x5740` (`enumerator.GetDetailedPortsList()` exposes the VID/PID), or by
+matching the platform path patterns in the table above. The UART bridge and the
+CMSIS-DAP probe are not on the console; use the LAN or the cloud for those
+(`uart_proxy_start`, `dap_start` in [API.md](API.md)).
