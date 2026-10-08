@@ -12,13 +12,18 @@
  * command_handler_internal.h — package-private seam shared by the command-handler
  * translation units.
  *
- * command_handler.c owns the dispatch loop and the tightly-coupled instrument
- * machinery (capture/DAC/PSRAM/load/bulk/DAP), whose state is intentionally kept
- * file-local. The self-contained subsystem handlers that only talk to their own
- * driver module (CAN -> can_bus.c, OTA -> ota.c) live in their own files to keep
- * command_handler.c smaller; this header exposes the few helpers they need plus
- * their prototypes so dispatch_line() can reach them. Not part of the public
- * command_handler.h API.
+ * command_handler.c is the glue: replies, the heavy gate, dispatch_line and the
+ * poll / conn_closed / gateware hooks. Each command_handler_*.c module owns its
+ * state (file-local) and exposes only its handlers and hooks here:
+ *   _transport  line assembly, the per-connection protocol and its raw modes
+ *   _capture    captures and the paced bulk read-back
+ *   _dac        DAC output, uploads (load / load_bin), replay, the control loop
+ *   _uart       the UART proxy        _dap      the on-pod CMSIS-DAP probe
+ *   _net        network provisioning and the cloud speed test
+ *   _device     status, power, identity, the iCE40   _analog   the analog front end
+ *   _pins, _spi, _power, _can, _ota, _policy   LA pins, SPI, power profile, CAN, OTA, policy
+ * A module with per-connection state has a <module>_conn_closed(conn_id) hook.
+ * Not part of the public command_handler.h API.
  */
 
 /* ---- Connections and their protocol ----

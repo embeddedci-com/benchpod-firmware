@@ -667,10 +667,6 @@ void capture_poll(void) {
 }
 
 void capture_conn_closed(int conn_id) {
-    /* Abort an in-flight stream owned by this connection.  Keep the gate
-       claimed until the trailing async DMA reports back (command_handler_poll
-       releases it once stream_active is observed false), so a freshly-claimed
-       capture can't race the dying stream's DMA over adc_cmd_buf. */
     /* Abort an in-flight PSRAM capture/measure owned by this conn, in the fabric too.  Only
        forgetting it (as before) freed the gate while the iCE40 kept writing PSRAM, so the next
        capture or upload took the bus mid-burst; and a forgotten capture_dual streamed its result

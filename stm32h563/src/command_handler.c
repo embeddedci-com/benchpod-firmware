@@ -1,86 +1,48 @@
+/*
+ * command_handler.c — the JSON command glue: replies, the heavy gate, dispatch and the hooks.
+ *
+ * Bytes arrive through command_handler_transport.c, which hands complete JSON lines to
+ * dispatch_line here: the command table (cmd_tier.c) names the handler, cmd_gate decides whether
+ * it may run. The handlers live in the command_handler_*.c modules, each owning its state;
+ * command_handler_poll, command_handler_conn_closed and command_handler_on_gateware_reconfigured
+ * call every module's hook in a fixed order. command_handler_internal.h is the seam between them.
+ *
+ * Everything here runs on the hw worker task (hw_worker.c).
+ */
 #include "command_handler.h"
-#include "command_handler_internal.h"   /* reply helpers + gate query shared with the CAN/OTA subsystem files */
-#include "console.h"
+#include "command_handler_internal.h"
 #include "at_driver.h"
-#include "signal_engine.h"
-#include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command */
-#include "psram_alloc.h"
-#include "psram.h"          /* deep DAC replay: stage the waveform into PSRAM */
-#include "fpga_config.h"    /* FPGA_PSRAM_* region map, FPGA_DAC_BASE_FOR, caps */
+#include "signal_engine.h"   /* la_vccio_get_mv */
+#include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "sensor_sim.h"
-#include "wifi_manager.h"
-#include "target_power.h"
 #include "scpi_server.h"
-#include "device_identity.h"
-#include "i2c_bus.h"
-#include "can_bus.h"
-#include "cal_data.h"
-#include "current_out.h"   /* 4-20 mA output (J9): uA <-> DAC code */
-#include "adc_scale.h"     /* circular-mean + unwrap for adc_read's sample burst */
-#include "adc_cal.h"       /* per-pod ADC calibration on top of cal_data.h */
-#include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
-#include "ina238.h"
 #include "board_variant.h"
-#include "b64url.h"
-#include "cloud_config.h"
-#include "cloud_client.h"
-#include "net_server.h"   /* net_eth_stop/start/restart for the `eth` command */
-#include "config_store.h"
-#include "esp_wifi_ctrl.h"
-#include "esp_hosted_spi.h"
-#include "dap.h"
-#include "swd_ll.h"
-#include "watchdog.h"
-#include "hw_worker.h"   /* hw_worker_submit_tunnel_reset (DAP send stall) */
-#include "board_info.h"
-#include "board_rev.h"
-#include "usb_cc.h"
-#include "nrst_ctrl.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
-#include "bp_limits.h"   /* coupled cloud/command buffer sizes */
 #include "cloud_reply_cap.h"   /* the captured reply of a cloud command.request */
-#include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
-#include "fault.h"       /* reset cause + last-crash summary for status */
-#include "psram_regions.h"  /* capture_read: is the capture still in PSRAM */
-#include "boot_guard.h"  /* safe mode: status fields + the iCE40/PSRAM-off command gate */
+#include "psram_regions.h"
+#include "boot_guard.h"  /* safe mode: the iCE40/PSRAM-off command gate */
 #include "cmd_gate.h"    /* the checks before a command reaches its handler (host-tested) */
-#include "sys_health.h"  /* heap/stack headroom for status */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
-#include "ice40_flash.h"
-#include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
-#include "fw_sign.h"
-#include "adc_pool.h"      /* the RAM sample buffer, shared with SCPI and the console */
-#include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
 #include "lease_gate.h"
-#include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
-#include "la_pins.h"     /* LA pin ownership table + capture-trigger parsing/messages */
+#include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
-
-#include <string.h>
-#include <stdlib.h>
 #include "dac_limits.h"
-#include <stdio.h>
-#include <math.h>
 
-#include "pico/time.h"   /* absolute_time_t, get_absolute_time, *_diff_us (UART escape guard timing) */
-#include "flash_layout.h"
-#include "FreeRTOS.h"   /* pvPortMalloc: per-call curve buffers */
-#include "lwip/stats.h"    /* lwIP memory high-water marks in status */
-#include "lwip/memp.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* JSON parsing/emitting is shared (see bp_json.h).  These thin aliases keep the
    handler bodies below reading the way they did before the parser was unified. */
 #define json_get_value      bp_json_get
-#define json_flag           bp_json_flag
-#define json_get_byte_array bp_json_byte_array
 
 /* ---- Response helpers ---- */
 
-/* send_error / send_ok_str / heavy_in_flight have external linkage (declared in
-   command_handler_internal.h) so the extracted CAN/OTA subsystem files can use them. */
+/* send_error / send_ok_str have external linkage (command_handler_internal.h): every module
+   replies through them. */
 
 void send_ok_str(int conn_id, const char *payload_json) {
     /* 256, and it has now grown TWICE — 128 -> 192 when the control-loop arm reply started
@@ -262,7 +224,6 @@ void command_handler_poll(void) {
 
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
-
 }
 
 /* ---- Command handlers ---- */
@@ -400,8 +361,7 @@ void command_handler_conn_closed(int conn_id) {
     /* A power profile keeps running (pod state), but its reply stream belongs to this conn. */
     power_profile_conn_closed(conn_id);
 
-    /* Heavy ops complete within a single dispatch, so if this conn owns the gate,
-       just free it. */
+    /* If this conn still owns the heavy gate (a held upload, a finished capture), free it. */
     heavy_release(conn_id);
 
     /* The raw modes end with the connection (an SWD session releases the wire to a safe state),
