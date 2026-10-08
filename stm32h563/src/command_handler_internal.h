@@ -91,13 +91,7 @@ bool require_la_voltage(int conn_id);
 
 /* The command handlers in command_handler.c. Every handler has this one signature so the command
    table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
-void handle_capture(int conn_id, const char *json);
-void handle_capture_dual(int conn_id, const char *json);
-void handle_capture_read(int conn_id, const char *json);
-void handle_stream(int conn_id, const char *json);
 void handle_ping(int conn_id, const char *json);
-void handle_test(int conn_id, const char *json);
-void handle_measure(int conn_id, const char *json);
 void handle_la(int conn_id, const char *json);
 void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
@@ -109,9 +103,6 @@ void handle_sensor_start(int conn_id, const char *json);
 void handle_sensor_set(int conn_id, const char *json);
 void handle_sensor_stop(int conn_id, const char *json);
 void handle_sensor_status(int conn_id, const char *json);
-void handle_sensor_regs(int conn_id, const char *json);
-void handle_sensor_la(int conn_id, const char *json);
-void handle_la_capture(int conn_id, const char *json);
 void handle_la_voltage(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 void handle_nrst(int conn_id, const char *json);
@@ -141,6 +132,21 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
    all arrived. Returns the bytes taken from buf. */
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
+
+/* Captures and the paced bulk read-back (command_handler_capture.c). */
+void handle_capture(int conn_id, const char *json);
+void handle_capture_dual(int conn_id, const char *json);
+void handle_capture_read(int conn_id, const char *json);
+void handle_stream(int conn_id, const char *json);
+void handle_test(int conn_id, const char *json);
+void handle_measure(int conn_id, const char *json);
+void handle_la_capture(int conn_id, const char *json);
+void handle_sensor_regs(int conn_id, const char *json);
+void handle_sensor_la(int conn_id, const char *json);
+bool capture_busy(void);                      /* an async capture or a bulk send is running */
+void capture_poll(void);                      /* trigger timeouts, completions, bulk read-back */
+void capture_on_gateware_reconfigured(void);
+void capture_conn_closed(int conn_id);
 
 /* DAC output, uploads, replay and the control loop (command_handler_dac.c). */
 void   handle_generate(int conn_id, const char *json);
