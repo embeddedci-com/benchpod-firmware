@@ -462,12 +462,6 @@ int esp_rom_flash_from_slot(void)
     return rc;
 }
 
-void esp_rom_flash_power_off(void)
-{
-    strap_gpio_init();
-    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
-}
-
 void esp_uart_monitor(uint32_t ms)
 {
     uart_init(ESP_UART_FLASH_BAUD);     /* USART1 only — does not touch EN/BOOT */

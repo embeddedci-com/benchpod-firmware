@@ -1,42 +1,18 @@
 #include "cmd_gate.h"
+#include "cmd_table.h"
 #include "bp_json.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* Commands that still work with the iCE40/PSRAM off (boot_guard safe mode): network config,
-   status and target power, so the operator can see what happened and recover without
-   driving an uninitialised SPI1/XSPI. */
-bool cmd_gate_ok_without_hw(const char *cmd) {
-    static const char *const ok[] = {
-        "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
-        "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
-        "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
-        "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
-        "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-        "can_disable",
-    };
-    for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
-        if (strcmp(cmd, ok[i]) == 0) return true;
-    return false;
-}
+/* Safe mode and the digital-only board read the command table's flags (cmd_table.h). An
+   unknown verb needs the hardware and no analog front end. */
+bool cmd_gate_ok_without_hw(const char *cmd) { return cmd_has(cmd_find(cmd), CMD_F_NO_HW); }
 
-/* Commands that need the analog front end (DAC, ADC, relays, the 4-20 mA terminals). Refused on
-   the digital-only board (board_variant.h) with a clear reason, instead of "succeeding" against
-   an ADC that is not there. dac_stop stays allowed: stopping nothing is harmless, and callers
-   send it to clean up. capture_dual is handled separately: an LA-only capture is fine. */
-bool cmd_gate_needs_analog(const char *cmd) {
-    static const char *const analog[] = {
-        "generate", "capture", "stream", "measure", "load", "load_bin", "replay",
-        "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
-        "current_out", "adc_read", "calibrate", "dac_control_loop", "dac_loop_probe",
-        "dac_loop_input",
-    };
-    for (size_t i = 0; i < sizeof(analog) / sizeof(analog[0]); i++)
-        if (strcmp(cmd, analog[i]) == 0) return true;
-    return false;
-}
+/* dac_stop stays allowed on the digital board: stopping nothing is harmless, and callers send it
+   to clean up. */
+bool cmd_gate_needs_analog(const char *cmd) { return cmd_has(cmd_find(cmd), CMD_F_ANALOG); }
 
 bool cmd_gate_scpi_line_writes(const char *line) {
     const char *p = line;
@@ -69,10 +45,14 @@ const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
         return why;
     }
 
-    if (ctx->skip_hw && !cmd_gate_ok_without_hw(cmd))
+    return cmd_gate_device(cmd, json, ctx->skip_hw, ctx->has_analog);
+}
+
+const char *cmd_gate_device(const char *cmd, const char *json, bool skip_hw, bool has_analog) {
+    if (skip_hw && !cmd_gate_ok_without_hw(cmd))
         return "safe mode: iCE40/PSRAM are off. Unplug and replug the pod";
 
-    if (!ctx->has_analog) {
+    if (!has_analog) {
         bool adc_capture = false;
         if (strcmp(cmd, "capture_dual") == 0) {
             char n[16] = {0};

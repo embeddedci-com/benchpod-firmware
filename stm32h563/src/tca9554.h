@@ -19,6 +19,5 @@ int  tca9554_write_reg(uint8_t addr, uint8_t reg, uint8_t val);
 int  tca9554_set_dir(uint8_t addr, uint8_t pin, bool is_output);
 int  tca9554_write_pin(uint8_t addr, uint8_t pin, bool value);
 int  tca9554_read_pin(uint8_t addr, uint8_t pin, bool *value);
-int  tca9554_read_inputs(uint8_t addr, uint8_t *port);
 
 #endif /* TCA9554_H */

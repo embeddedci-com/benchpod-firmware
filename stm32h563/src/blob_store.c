@@ -181,6 +181,20 @@ int blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t
     return 0;
 }
 
+int blob_store_clear(blob_id_t id)
+{
+    if (!slot_ok(id)) return -1;
+    memset(&s_info[id], 0, sizeof(s_info[id]));
+    if (w25q_erase_sector(k_slots[id].base) != 0) {
+        printf("[blob] %s: erase failed\n", k_slots[id].name);
+        return -1;
+    }
+    load_slot(id);
+    if (s_info[id].present) return -1;
+    printf("[blob] %s: cleared\n", k_slots[id].name);
+    return 0;
+}
+
 int blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
     blob_id_t id = (blob_id_t)(uintptr_t)ctx;

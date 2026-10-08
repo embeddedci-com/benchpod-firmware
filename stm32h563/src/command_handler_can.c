@@ -117,7 +117,8 @@ void handle_can_read(int conn_id, const char *json) {
     }
 }
 
-void handle_can_status(int conn_id) {
+void handle_can_status(int conn_id, const char *json) {
+    (void)json;
     can_status_t s; can_get_status(&s);
     char resp[360];
     snprintf(resp, sizeof(resp),
@@ -183,7 +184,8 @@ void handle_can_term(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-void handle_can_disable(int conn_id) {
+void handle_can_disable(int conn_id, const char *json) {
+    (void)json;
     can_disable();
     send_ok_str(conn_id, "{\"enabled\":false}");
 }

@@ -36,12 +36,10 @@ bool mcu_adc_ready(void);
    nominal if init has not run or VREFINT could not be read. */
 int mcu_adc_vref_mv(void);
 
-/* Convert one channel (an ADC_CHANNEL_x from board_pins.h).  *out_mv is the
-   pin voltage in millivolts.  Returns 0, or -1 on a conversion error/timeout. */
-int mcu_adc_read_mv(uint32_t channel, int *out_mv);
-
-/* Average `n` conversions of one channel (n clamped to 1..64).  Used for the
-   CC lines, which sit behind a 10 k / 10 n filter and pick up switching noise. */
+/* Average `n` conversions of one channel (an ADC_CHANNEL_x from board_pins.h, n clamped to
+   1..64) into *out_mv, the pin voltage in millivolts. Returns 0, or -1 on a conversion error or
+   timeout. Used for the CC lines, which sit behind a 10 k / 10 n filter and pick up switching
+   noise. */
 int mcu_adc_read_mv_avg(uint32_t channel, unsigned n, int *out_mv);
 
 #endif /* MCU_ADC_H */

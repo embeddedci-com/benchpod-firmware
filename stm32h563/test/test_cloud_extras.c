@@ -64,6 +64,19 @@ static void install_and_load(const void *data, size_t len) {
     cloud_extras_load();
 }
 
+/* cloud_extras_ca_each into one string, the way the console lists them. */
+static char s_list[1024];
+static bool list_cert(void *ctx, const char *subject, const char *sha256_hex) {
+    (void)ctx;
+    size_t n = strlen(s_list);
+    snprintf(s_list + n, sizeof(s_list) - n, "%s %s;", subject, sha256_hex);
+    return true;
+}
+static int describe(void) {
+    s_list[0] = '\0';
+    return cloud_extras_ca_each(list_cert, NULL);
+}
+
 static void test_valid_ca_is_used(void) {
     install_and_load(test_ca, strlen(test_ca));
     CHECK(cloud_extras_ca_error() == NULL);
@@ -76,9 +89,9 @@ static void test_valid_ca_is_used(void) {
     CHECK(pem && strstr(pem, "MIIBujCCAWGgAwIBAgIUSZoHdGmO6nXX") != NULL);
     CHECK(pem && memcmp(pem, cloud_ca_pem, cloud_ca_pem_len - 1) == 0);
     cloud_extras_free(pem);
-    char certs[640];
-    CHECK(cloud_extras_ca_describe(certs, sizeof(certs)) == 1);
-    CHECK(strstr(certs, "BenchPod Test Company CA") != NULL);
+    CHECK(describe() == 1);
+    CHECK(strstr(s_list, "BenchPod Test Company CA") != NULL);
+    CHECK(strlen(s_list) > 66 && s_list[strlen(s_list) - 66] == ' ');   /* " <64 hex>;" */
     /* TLS refused it anyway (out of memory there): it still parses, so it is kept. */
     CHECK(!cloud_extras_ca_tls_refused());
     CHECK(cloud_extras_ca_error() == NULL);
@@ -96,8 +109,7 @@ static void test_corrupt_slot_falls_back(void) {
     size_t len = 1;
     CHECK(cloud_extras_ca_pem(&pem, &len) == 0);
     CHECK(pem == NULL && len == 0);   /* built-in roots, as they are */
-    char certs[64];
-    CHECK(cloud_extras_ca_describe(certs, sizeof(certs)) == 0);
+    CHECK(describe() == 0);
 }
 
 static void test_unparsable_ca_falls_back(void) {
@@ -133,13 +145,65 @@ static void test_out_of_memory_is_not_roots_only(void) {
     CHECK(cloud_extras_ca_error() == NULL);
 }
 
-static void test_cleared_marker_is_none(void) {
+/* Clearing empties the slot (blob_store_clear): no company CA now and after a reboot. */
+static void test_clear_empties_the_slot(void) {
     install_and_load(test_ca, strlen(test_ca));
+    int before = reloads;
     CHECK(cloud_extras_ca_clear() == NULL);
+    CHECK(reloads == before + 1);
+    CHECK(!blob_store_present(BLOB_CA));
     CHECK(cloud_extras_ca_error() == NULL);
     char *pem = (char *)1;
     size_t len = 1;
     CHECK(cloud_extras_ca_pem(&pem, &len) == 0 && pem == NULL);
+    CHECK(describe() == 0);
+    CHECK(blob_store_init() >= 0 && !blob_store_present(BLOB_CA));   /* reboot */
+    cloud_extras_load();
+    CHECK(cloud_extras_ca_pem(&pem, &len) == 0 && pem == NULL);
+}
+
+/* Older firmware cleared with a 1-byte marker: it still reads as no company CA, no error. */
+static void test_old_cleared_marker_is_none(void) {
+    static const uint8_t zero = 0;
+    install_and_load(&zero, 1);
+    CHECK(blob_store_present(BLOB_CA));
+    CHECK(cloud_extras_ca_error() == NULL);
+    char *pem = (char *)1;
+    size_t len = 1;
+    CHECK(cloud_extras_ca_pem(&pem, &len) == 0 && pem == NULL);
+    CHECK(describe() == 0);
+}
+
+/* The proxy: set writes the slot, clear empties it, and the zeroed proxy older firmware wrote
+   for "cleared" reads as none. */
+static void test_proxy_set_and_clear(void) {
+    mock_w25q_reset();
+    CHECK(blob_store_init() >= 0);
+    cloud_extras_load();
+    cloud_proxy_t p;
+    CHECK(cloud_extras_proxy_set("proxy.corp:3128", "u", "pw") == NULL);
+    CHECK(blob_store_present(BLOB_PROXY));
+    cloud_extras_proxy_get(&p);
+    CHECK(strcmp(p.host, "proxy.corp") == 0 && p.port == 3128 && strcmp(p.user, "u") == 0);
+    CHECK(blob_store_init() >= 0);
+    cloud_extras_load();
+    cloud_extras_proxy_get(&p);
+    CHECK(strcmp(p.host, "proxy.corp") == 0);
+    CHECK(cloud_extras_proxy_set(NULL, NULL, NULL) == NULL);
+    CHECK(!blob_store_present(BLOB_PROXY));
+    cloud_extras_proxy_get(&p);
+    CHECK(p.host[0] == '\0');
+    /* the old clear: a zeroed cloud_proxy_t in the slot */
+    cloud_proxy_t z;
+    memset(&z, 0, sizeof(z));
+    uint8_t sha[32];
+    mbedtls_sha256((const unsigned char *)&z, sizeof(z), sha, 0);
+    CHECK(w25q_open() == 0);
+    CHECK(blob_store_write(BLOB_PROXY, sizeof(z), 0, sha, mem_src, &z) == 0);
+    w25q_close();
+    cloud_extras_load();
+    cloud_extras_proxy_get(&p);
+    CHECK(p.host[0] == '\0');
 }
 
 static void test_dev_damage_command(void) {
@@ -166,7 +230,9 @@ int main(void) {
     test_corrupt_slot_falls_back();
     test_unparsable_ca_falls_back();
     test_out_of_memory_is_not_roots_only();
-    test_cleared_marker_is_none();
+    test_clear_empties_the_slot();
+    test_old_cleared_marker_is_none();
+    test_proxy_set_and_clear();
     test_dev_damage_command();
     test_no_w25q_no_error();
     CHECK(mock_w25q_open_depth == 0);

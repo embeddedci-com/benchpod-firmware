@@ -168,7 +168,8 @@ void spi_session_end(void) {
     spi_release_pins();
 }
 
-void handle_spi_stop(int conn_id) {
+void handle_spi_stop(int conn_id, const char *json) {
+    (void)json;
     spi_session_end();
     send_ok_str(conn_id, "\"spi stopped\"");
 }
@@ -319,7 +320,8 @@ void handle_spi_flash(int conn_id, const char *json) {
     send_error(conn_id, "op must be id, read, erase, chip_erase or write");
 }
 
-void handle_spi_status(int conn_id) {
+void handle_spi_status(int conn_id, const char *json) {
+    (void)json;
     char p[160];
     if (!fpga_spi_armed()) { send_ok_str(conn_id, "{\"active\":false}"); return; }
     snprintf(p, sizeof(p), "{\"active\":true,\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,"

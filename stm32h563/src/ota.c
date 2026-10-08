@@ -493,6 +493,15 @@ int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_
     return rc;
 }
 
+int ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
+                        uint32_t version, const char *sig_b64) {
+    uint8_t sig[FW_SIGN_MANIFEST_LEN];
+    int sig_len = ota_sig_decode(sig_b64, sig);
+    /* 1 byte of an undecodable manifest: fw_sign_check reports it as malformed */
+    return ota_begin_owned(who, size, sha256_hex, target, version, sig,
+                           sig_len < 0 ? 1u : (size_t)sig_len);
+}
+
 int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len) {
     const char *busy = ota_busy_for(who);
     if (busy) { refuse(who, busy, false); return -1; }

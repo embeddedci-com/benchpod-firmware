@@ -48,8 +48,3 @@ int tca9554_read_pin(uint8_t addr, uint8_t pin, bool *value)
     if (value) *value = (in >> pin) & 1u;
     return 0;
 }
-
-int tca9554_read_inputs(uint8_t addr, uint8_t *port)
-{
-    return tca9554_read_reg(addr, TCA_REG_INPUT, port);
-}

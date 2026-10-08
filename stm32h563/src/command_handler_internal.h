@@ -39,6 +39,64 @@ bool capture_or_upload_busy(void);
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
 
+/* The command handlers in command_handler.c. Every handler has this one signature so the command
+   table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
+void handle_generate(int conn_id, const char *json);
+void handle_capture(int conn_id, const char *json);
+void handle_capture_dual(int conn_id, const char *json);
+void handle_capture_read(int conn_id, const char *json);
+void handle_stream(int conn_id, const char *json);
+void handle_ping(int conn_id, const char *json);
+void handle_test(int conn_id, const char *json);
+void handle_measure(int conn_id, const char *json);
+void handle_load(int conn_id, const char *json);
+void handle_load_bin(int conn_id, const char *json);
+void handle_replay(int conn_id, const char *json);
+void handle_dac_stop(int conn_id, const char *json);
+void handle_dac_limits(int conn_id, const char *json);
+void handle_dac_set(int conn_id, const char *json);
+void handle_la(int conn_id, const char *json);
+void handle_target_power(int conn_id, const char *json);
+void handle_target_status(int conn_id, const char *json);
+void handle_power_status(int conn_id, const char *json);
+void handle_status(int conn_id, const char *json);
+void handle_cloud_set(int conn_id, const char *json);
+void handle_cloud_status(int conn_id, const char *json);
+void handle_cloud_clear(int conn_id, const char *json);
+void handle_wifi_set(int conn_id, const char *json);
+void handle_wifi_clear(int conn_id, const char *json);
+void handle_eth(int conn_id, const char *json);
+void handle_speedtest(int conn_id, const char *json);
+void handle_wifi_status(int conn_id, const char *json);
+void handle_identity_public(int conn_id, const char *json);
+void handle_identity_pop(int conn_id, const char *json);
+void handle_dap_start(int conn_id, const char *json);
+void handle_sensor_start(int conn_id, const char *json);
+void handle_sensor_set(int conn_id, const char *json);
+void handle_sensor_stop(int conn_id, const char *json);
+void handle_sensor_status(int conn_id, const char *json);
+void handle_sensor_regs(int conn_id, const char *json);
+void handle_sensor_la(int conn_id, const char *json);
+void handle_la_capture(int conn_id, const char *json);
+void handle_uart_proxy_start(int conn_id, const char *json);
+void handle_la_voltage(int conn_id, const char *json);
+void handle_usb_cc(int conn_id, const char *json);
+void handle_nrst(int conn_id, const char *json);
+void handle_dac_mux(int conn_id, const char *json);
+void handle_cal_switch(int conn_id, const char *json);
+void handle_analog_path(int conn_id, const char *json);
+void handle_dac_out(int conn_id, const char *json);
+void handle_current_out(int conn_id, const char *json);
+void handle_adc_read(int conn_id, const char *json);
+void handle_calibrate(int conn_id, const char *json);
+void handle_dac_control_loop(int conn_id, const char *json);
+void handle_dac_loop_input(int conn_id, const char *json);
+void handle_dac_loop_probe(int conn_id, const char *json);
+void handle_fpga_image(int conn_id, const char *json);
+void handle_psram_recover(int conn_id, const char *json);
+void handle_psram_ping(int conn_id, const char *json);
+void handle_identity_wipe(int conn_id, const char *json);
+
 /* LA pin ownership glue + handlers (command_handler_pins.c). */
 uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
 void     la_pins_drive_mask(uint16_t mask);   /* GPIO_SET each pin in mask to its table state */
@@ -51,18 +109,18 @@ int      la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned 
                        char *err, size_t cap);
 void     la_step_poll(void);                  /* releases the train's pins once STEP_BUSY drops */
 void     la_pins_on_gateware_reconfigured(void);
-void     handle_la_pins(int conn_id);
+void     handle_la_pins(int conn_id, const char *json);
 void     handle_gpio(int conn_id, const char *json);
 
 /* SPI master on the LA pins (command_handler_spi.c). */
 void handle_spi_start(int conn_id, const char *json);
-void handle_spi_stop(int conn_id);
+void handle_spi_stop(int conn_id, const char *json);
 void handle_spi_xfer(int conn_id, const char *json);
 void handle_spi_flash(int conn_id, const char *json);
 void handle_spi_stream(int conn_id, const char *json);
 /* The PSRAM bytes the last `load_bin` with "psram" staged: false when none. */
 bool command_handler_psram_stage(uint32_t *base, uint32_t *len);
-void handle_spi_status(int conn_id);
+void handle_spi_status(int conn_id, const char *json);
 void spi_session_end(void);
 void spi_on_gateware_reconfigured(void);
 
@@ -75,10 +133,10 @@ void power_profile_conn_closed(int conn_id);
 void handle_can_config(int conn_id, const char *json);
 void handle_can_write(int conn_id, const char *json);
 void handle_can_read(int conn_id, const char *json);
-void handle_can_status(int conn_id);
+void handle_can_status(int conn_id, const char *json);
 void handle_can_respond(int conn_id, const char *json);
 void handle_can_term(int conn_id, const char *json);
-void handle_can_disable(int conn_id);
+void handle_can_disable(int conn_id, const char *json);
 
 /* OTA subsystem handlers (command_handler_ota.c). */
 /* Policy commands (command_handler_policy.c). */
@@ -99,11 +157,11 @@ const char *ota_begin_gate(ota_owner_t who);
 
 void handle_ota_begin(int conn_id, const char *json);
 void handle_ota_data(int conn_id, const char *json);
-void handle_ota_end(int conn_id);
-void handle_ota_status(int conn_id);
-void handle_ota_abort(int conn_id);
-void handle_ota_selftest(int conn_id);
-void handle_ota_commit(int conn_id);
-void handle_blob_status(int conn_id);
+void handle_ota_end(int conn_id, const char *json);
+void handle_ota_status(int conn_id, const char *json);
+void handle_ota_abort(int conn_id, const char *json);
+void handle_ota_selftest(int conn_id, const char *json);
+void handle_ota_commit(int conn_id, const char *json);
+void handle_blob_status(int conn_id, const char *json);
 
 #endif /* COMMAND_HANDLER_INTERNAL_H */
