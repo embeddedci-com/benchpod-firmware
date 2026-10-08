@@ -164,6 +164,7 @@ C_SOURCES := \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
+  src/command_handler_transport.c \
   src/esp_rom_flash.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \

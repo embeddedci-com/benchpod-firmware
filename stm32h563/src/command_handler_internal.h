@@ -34,9 +34,15 @@
    frame leaves DAP mode. */
 typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST } proto_t;
 
-/* A connection's protocol (PROTO_UNKNOWN for an id outside the table) and setting it. */
+/* A connection's protocol (PROTO_UNKNOWN for an id outside the table) and setting it
+   (command_handler_transport.c). */
 proto_t conn_proto(int conn_id);
 void    conn_proto_set(int conn_id, proto_t p);
+void    transport_conn_closed(int conn_id);   /* drop the partial line, back to PROTO_UNKNOWN */
+
+/* Run one complete, NUL-terminated JSON command line through the gates and its handler
+   (command_handler.c). */
+void dispatch_line(int conn_id, const char *buf);
 
 /* is_tunnel_conn: true for any of the N cloud byte-tunnel pseudo-connections. */
 static inline bool is_tunnel_conn(int conn_id) {
