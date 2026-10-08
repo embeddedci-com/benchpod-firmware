@@ -50,8 +50,11 @@ SRC = src/top_v2.v            \
       src/dsp_counter.v       \
       src/dsp_counter2.v      \
       src/lc_counter.v        \
-      src/psram_pads.v
+      src/psram_pads.v        \
+      src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
+# The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
+DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
 # Pinned PnR seed.  TIMING is not the constraint: after the single-clock collapse
@@ -152,8 +155,8 @@ DEVICE  = up5k
 PACKAGE = sg48
 
 # Common nextpnr-ice40 invocation.  --threads 1 keeps PnR reproducible.
-NEXTPNR = nextpnr-ice40 --$(DEVICE) --package $(PACKAGE) \
-                        --pcf $(PCF) --pcf-allow-unconstrained $(PREPACK) --threads 1
+NEXTPNR_FLAGS = --$(DEVICE) --package $(PACKAGE) --pcf $(PCF) --pcf-allow-unconstrained $(PREPACK) --threads 1
+NEXTPNR = nextpnr-ice40 $(NEXTPNR_FLAGS)
 
 # ---- PnR policy: placement/margin gates ----
 # PNR_STRICT=0 (default) keeps the historical behaviour: a fallback seed, or a clk48 Fmax below
@@ -248,7 +251,22 @@ CELLS_SIM = $(shell yosys-config --datdir)/ice40/cells_sim.v
 # status: vvp exits 0 whatever a bench prints, so a FAILing bench used to pass `make test` and CI.
 VVP = sh sim/run_vvp.sh
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol test clean help
+# $(call topbench,<bench module>,<images>): compile and run a whole-top bench (sim/<module>.v + $(SRC))
+# once per image, `loop` (the default DEFINES) and/or `deep` (-DUSE_DEEP_REPLAY).  The two images
+# are different netlists of the same top, so a top-level bench runs on both unless it tests a
+# block only one image carries: a change that only one image's build exercised used to break the
+# other one silently.
+define topbench
+	@set -e; for img in $(2); do \
+	  if [ "$$img" = deep ]; then defs="$(DEEP_DEFINES)"; else defs=; fi; \
+	  echo "== $(1): $$img image"; \
+	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
+	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
+	  rm -f /tmp/$(PROJECT)_$(1)_$$img.vvp; \
+	done
+endef
+
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -362,6 +380,9 @@ $(OUT).bin: $(OUT).asc
 # 10.19 ns) and stays pinned.  CI sweep not run yet.
 # v47 (GW-1, 3886 LC, 74%): seed 26 still closes (clk48 56.32, clk 31.22, clk -> clk48 11.05 ns);
 # kept, no sweep.
+# v47 + cell_gearbox48 (ARCH-GW-1: the writer's and reader's clk -> clk48 cell latch as one module;
+# yosys equiv proves both modules unchanged, same flip-flops, but abc9 maps the netlist slightly
+# differently: 3893 LC): seed 26 still closes (clk48 55.05, clk 29.73, clk -> clk48 10.38 ns).
 SEED_LOOP ?= 26
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
 SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
@@ -440,6 +461,8 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # fell to clk48 49.61 MHz.  Swept 1..64 locally: 60/64 reach MIN_CLK48_MHZ, fourteen tie at
 # 56.95 MHz.  Pinned SEED_DEEP 50 -> 57 (clk48 56.95, clk 34.51, clk -> clk48 12.82 ns; it is in
 # the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+# v47 + cell_gearbox48 (ARCH-GW-1, no logic change, see SEED_LOOP; 3610 LC): seed 57 still closes
+# (clk48 57.67, clk 32.55, clk -> clk48 14.41 ns).  A new bitstream: RE-VERIFY on hardware.
 SEED_DEEP ?= 57
 # Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
@@ -454,7 +477,7 @@ GW_VERSION := $(shell sed -n "s/.*GATEWARE_VERSION(8'd\([0-9]*\)).*/\1/p" src/to
 $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
-	$(call synth,-DUSE_DEEP_REPLAY,$@)
+	$(call synth,$(DEEP_DEFINES),$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -485,15 +508,20 @@ seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
 # sources differently (v40: loop clk48 56.95 MHz locally, 48.84 MHz in CI).  After an `images`
 # build has passed on hardware:  make promote HW_VERIFIED="e2e 132 passed on benchpod-baea06"
 # and commit ice40/release/ with the sources.  check-release fails once the sources move on.
-RELEASE_TOOL = python3 ../tools/ice40_release.py
+# promote refuses an image older than any gateware source, and records the toolchain (yosys, the
+# nextpnr revision) and the flags below in the MANIFEST; check-release notes when they have moved.
+RELEASE_TOOL  = python3 ../tools/ice40_release.py
+# (--opt=value: the values start with a dash, which argparse would take for an option)
+RELEASE_FLAGS = --synth-flags="$(SYNTH_FLAGS)" --pnr-flags="$(NEXTPNR_FLAGS)" \
+                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)"
 promote:
 	@test -n "$(HW_VERIFIED)" || { echo 'usage: make promote HW_VERIFIED="<which hardware test this build passed>"'; exit 2; }
-	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP)
+	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) $(RELEASE_FLAGS)
 check-release:
-	$(RELEASE_TOOL) check
+	$(RELEASE_TOOL) check $(RELEASE_FLAGS)
 # Put the promoted images where stm32h563/Makefile embeds them (what the release job runs).
 release-images:
-	$(RELEASE_TOOL) install
+	$(RELEASE_TOOL) install $(RELEASE_FLAGS)
 
 # Persistent flash: writes bitstream to the board's SPI flash chip via iceprog.
 # The FPGA reloads from this flash on every power-up.
@@ -555,7 +583,7 @@ daclooptest:
 # matches PSRAM contents in order, across the loop wrap.
 dacpsramrdtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrd.vvp \
-	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_reader.v src/dac_psram_reader.v src/cell_gearbox48.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrd.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrd.vvp
 
@@ -565,7 +593,7 @@ dacpsramrdtest:
 # sampler (the pre-v28 bug, or any regression to it) fails at the larger skews.
 dacpsramskewtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacskew.vvp \
-	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_skew.v src/dac_psram_reader.v src/cell_gearbox48.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacskew.vvp
 	@rm -f /tmp/$(PROJECT)_dacskew.vvp
 
@@ -573,7 +601,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -603,7 +631,7 @@ adctimingtest:
 # FSM — hence it needs yosys' cells_sim.v.
 dualwrtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dualwr.vvp \
-	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v src/dsp_counter.v $(CELLS_SIM)
+	         sim/tb_psram_dual_writer.v src/psram_dual_writer.v src/cell_gearbox48.v src/dsp_counter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dualwr.vvp
 	@rm -f /tmp/$(PROJECT)_dualwr.vvp
 
@@ -614,7 +642,7 @@ dualwrtest:
 # APS6404L model; checks no bus collision, no DAC underrun, correct data both ways.
 arbtest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_arb.vvp \
-	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v src/dsp_counter.v src/psram_pads.v \
+	         sim/tb_psram_arbiter.v src/dac_psram_reader.v src/psram_dual_writer.v src/cell_gearbox48.v src/dsp_counter.v src/psram_pads.v \
 	         src/psram_bus_arbiter.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_arb.vvp
 	@rm -f /tmp/$(PROJECT)_arb.vvp
@@ -680,56 +708,39 @@ check-protocol:
 # instant-response commands (PING/VERSION/STATUS).  This is the only bench that
 # exercises the top_v2 wiring seam — spi_slave -> cmd_dispatch -> MISO through the
 # pads + clk48÷2 + power-on reset — where the last two field bugs actually lived.
-# Uses $(SRC) (the v2 build set by default) so it tracks the shipping top.
+# Uses $(SRC) so it tracks the shipping top; like every whole-top bench below, it runs on both
+# images (topbench).
 topsmoketest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_top.vvp -s tb_top_v2 \
-	         sim/tb_top_v2.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_top.vvp
-	@rm -f /tmp/$(PROJECT)_top.vvp
+	$(call topbench,tb_top_v2,loop deep)
 
 # Top-level end-to-end capture: SPI OP_CAPTURE -> producers -> rings -> dual writer
 # -> the two PSRAM regions, with the tb acting as the PSRAM write-slave.  Catches
 # datapath/arbiter/region-select bugs the isolated dualwrtest can't.  Also decodes the
 # DAC8551 pins across a restart onto a shorter waveform (the v33 clk48 control-CDC fix).
 topcapturetest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_topcap.vvp -s tb_top_capture \
-	         sim/tb_top_capture.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topcap.vvp
-	@rm -f /tmp/$(PROJECT)_topcap.vvp
+	$(call topbench,tb_top_capture,loop deep)
 
 # The DEEP image's whole top (-DUSE_DEEP_REPLAY, v46): a deep replay keeps its sample order while
 # the STM32 takes the bus (bus_own swept over a reader burst and the DAC engine's byte pops), a
 # capture alongside the replay read back mid-replay, and an overflowed capture then a clean one.
 topdeeptest:
-	iverilog -g2012 -I src -DUSE_DEEP_REPLAY -o /tmp/$(PROJECT)_topdeep.vvp -s tb_top_deep \
-	         sim/tb_top_deep.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topdeep.vvp
-	@rm -f /tmp/$(PROJECT)_topdeep.vvp
+	$(call topbench,tb_top_deep,deep)
 
 # la_bank's driver priority through the whole top (P2 T-2): static, UART, I2C, stepper and the
 # SPI engine armed over the SPI link onto one pad, each taking it over and handing it back, plus
 # the channel >= N guard.
 topmuxtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_topmux.vvp -s tb_top_la_mux \
-	         sim/tb_top_la_mux.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_topmux.vvp
-	@rm -f /tmp/$(PROJECT)_topmux.vvp
+	$(call topbench,tb_top_la_mux,loop deep)
 
 # SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
 # behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
 spitest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_spi.vvp -s tb_top_spi \
-	         sim/tb_top_spi.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_spi.vvp
-	@rm -f /tmp/$(PROJECT)_spi.vvp
+	$(call topbench,tb_top_spi,loop deep)
 
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
 swdqtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_swdq.vvp -s tb_top_swdq \
-	         sim/tb_top_swdq.v $(SRC) $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_swdq.vvp
-	@rm -f /tmp/$(PROJECT)_swdq.vvp
+	$(call topbench,tb_top_swdq,loop deep)
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
@@ -738,8 +749,12 @@ ringtest:
 	$(VVP) /tmp/$(PROJECT)_ring.vvp
 	@rm -f /tmp/$(PROJECT)_ring.vvp
 
+# Unit tests of tools/ice40_release.py (promote's stale-image refusal, the MANIFEST fields).
+releasetooltest:
+	python3 ../tools/test_ice40_release.py
+
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
@@ -755,6 +770,7 @@ help:
 	@echo "  images       Build the loop + deep images the firmware embeds (what pods run)"
 	@echo "               PNR_STRICT=1 fails on a fallback seed or clk48 < MIN_CLK48_MHZ (50)"
 	@echo "  promote      Copy a HARDWARE-TESTED images build to release/ (HW_VERIFIED=\"...\")"
+	@echo "               (refuses images older than the sources; records toolchain + flags)"
 	@echo "  check-release  Fail unless release/ still matches the gateware sources"
 	@echo "  release-images Install release/ for the firmware build (the release job)"
 	@echo "  flash        Build + program SPI flash via iceprog (persistent)"

@@ -81,6 +81,7 @@ selects SWCLK/SWDIO/nRESET as LA channel indices; `swd_engine.v` decodes OpenOCD
 | `src/la_psram_capture.v` | Packs the 12-ch LA word into the LA ring |
 | `src/spram_ring16.v` | 16-bit-packed single-port SPRAM burst ring (one per stream) |
 | `src/psram_dual_writer.v` | 48 MHz DDR QPI writer → two PSRAM regions |
+| `src/cell_gearbox48.v` | clk → clk48 cell gearbox (receive half) shared by the PSRAM writer and reader |
 | `src/sample_buf.v` | Dual-port BRAM (inferred → `SB_RAM40_4K`) for DAC waveforms |
 | `src/la_bank.v` | 12 bidirectional LA channels + driver priority mux |
 | `src/stepper_engine.v` | Microsecond-precise step-pulse generator |
