@@ -199,6 +199,32 @@ static void test_load(void) {
     CHECK(g_played_len == 8 && g_owner == -1, "load + replay: %s", g_reply);
 }
 
+/* `load` stops at what a RAM replay can play (4096 bytes, the DAC BRAM): a longer upload is
+   refused at the chunk that crosses it, not later at `replay`. */
+static void test_load_cap(void) {
+    char json[400];
+    char b64[240];
+    memset(b64, 'A', 200); b64[200] = '\0';           /* 200 chars = 150 bytes */
+    size_t off = 0;
+    for (; off + 150 <= 4096; off += 150) {
+        snprintf(json, sizeof(json), "{\"cmd\":\"load\",\"offset\":%zu,\"data\":\"%s\"}", off, b64);
+        handle_load(0, json);
+        CHECK(strncmp(g_reply, "ok:", 3) == 0, "chunk at %zu: %s", off, g_reply);
+    }
+    /* off = 4050: 46 bytes still fit, 150 do not */
+    snprintf(json, sizeof(json), "{\"cmd\":\"load\",\"offset\":%zu,\"data\":\"%s\"}", off, b64);
+    handle_load(0, json);
+    CHECK(strncmp(g_reply, "err:load: the trace would be longer than 4096 bytes", 51) == 0, "%s", g_reply);
+    b64[60] = '\0';                                    /* 60 chars = 45 bytes: fits */
+    snprintf(json, sizeof(json), "{\"cmd\":\"load\",\"offset\":%zu,\"data\":\"%s\"}", off, b64);
+    handle_load(0, json);
+    CHECK(strncmp(g_reply, "ok:{\"offset\":4050,\"len\":45,\"total\":2047}", 44) == 0, "%s", g_reply);
+    handle_load(0, "{\"cmd\":\"load\",\"offset\":4097,\"data\":\"AA\"}");
+    CHECK(strcmp(g_reply, "err:offset out of range") == 0, "%s", g_reply);
+    handle_replay(0, "{\"cmd\":\"replay\"}");
+    CHECK(g_played_len == 4094 && g_owner == -1, "the longest load did not replay: %s", g_reply);
+}
+
 static void test_teardown(void) {
     arm(CH_CLOUD_TUNNEL_CONN, "{\"cmd\":\"load_bin\",\"total\":100,\"psram\":true}");
     uint8_t d[10] = {0};
@@ -220,6 +246,7 @@ int main(void) {
     test_stall_guard();
     test_hold_release();
     test_load();
+    test_load_cap();
     test_teardown();
     if (fails) { printf("test_ch_dac: %d FAILED\n", fails); return 1; }
     printf("test_ch_dac: all passed\n");

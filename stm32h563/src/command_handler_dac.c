@@ -280,6 +280,8 @@ void handle_generate(int conn_id, const char *json) {
      {"cmd":"load","offset":0,"data":"<base64url>"}
      {"cmd":"load","offset":180,"data":"<base64url>"}  ... etc
    Reply: {"status":"ok","data":{"offset":O,"len":L,"total":T}} */
+_Static_assert(SIGNAL_MAX_SAMPLES * 2u == 4096u, "the load refusal text names 4096 bytes / 2048 samples");
+
 void handle_load(int conn_id, const char *json) {
     char offset_s[12] = {0};
     char data_b64[240] = {0};
@@ -306,13 +308,22 @@ void handle_load(int conn_id, const char *json) {
         return;
     }
 
-    /* v2 waveforms are 16-bit: upload the raw byte stream into adc_buf16 (a
-       2*SIGNAL_BUF_SIZE byte buffer); replay_len is then in 16-bit samples. */
-    size_t   bufcap = SIGNAL_BUF_SIZE * 2u;      /* 16-bit samples */
+    /* v2 waveforms are 16-bit: upload the raw byte stream into adc_buf16; replay_len is then in
+       16-bit samples. The cap is what `replay` can play out of RAM, the DAC BRAM (SIGNAL_MAX_SAMPLES
+       16-bit samples = SIGNAL_BUF_SIZE bytes), not the staging buffer (twice that): accepting the
+       larger size let a long upload succeed here only to fail at `replay`. load_bin has the same cap. */
+    size_t   bufcap = (size_t)SIGNAL_MAX_SAMPLES * 2u;
     uint8_t *dst    = (uint8_t *)adc_buf16;
 
     if (offset > bufcap) {
         send_error(conn_id, "offset out of range");
+        return;
+    }
+    size_t enc_len = strlen(data_b64);
+    while (enc_len > 0 && data_b64[enc_len - 1] == '=') enc_len--;
+    if (offset + B64URL_DECODED_MAX(enc_len) > bufcap) {
+        send_error(conn_id, "load: the trace would be longer than 4096 bytes (2048 samples, the DAC's "
+                            "RAM replay limit); use load_bin with \"psram\":true for longer traces");
         return;
     }
 

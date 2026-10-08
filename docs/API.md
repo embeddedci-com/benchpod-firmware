@@ -769,8 +769,9 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 | `data` field missing | `"missing data"` |
 | Chunk at `offset > 0` sent without a preceding `offset:0` on this connection | `"load not started"` |
 | Another connection holds the buffer | `"busy"` |
-| `offset` past the 8192-byte staging buffer | `"offset out of range"` |
-| Malformed base64url, or chunk overflows the buffer | `"invalid data"` |
+| `offset` past 4096 bytes | `"offset out of range"` |
+| The chunk would take the trace past 4096 bytes (2048 samples, what a RAM `replay` plays) | `"load: the trace would be longer than 4096 bytes (2048 samples, the DAC's RAM replay limit); use load_bin with \"psram\":true for longer traces"` |
+| Malformed base64url | `"invalid data"` |
 
 ---
 
