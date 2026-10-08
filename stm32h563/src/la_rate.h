@@ -1,5 +1,6 @@
 #ifndef LA_RATE_H
 #define LA_RATE_H
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Deep-LA (spram_ring16) burst-buffer rate planning — the pure, host-testable core
@@ -78,5 +79,42 @@ uint16_t la_divider_wire(uint32_t period, uint8_t gw_version);
 uint16_t dac_divider_wire(uint32_t divider, uint8_t gw_version);
 /* GPIO_STEP half-phase in us (>= 1) -> wire.  v40+: delay - 1. */
 uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
+
+/* ---- DAC sample period ------------------------------------------------------------------
+ * Extra clk48 the DAC8551 sequencer spends per sample BEYOND the inter-sample divider gap:
+ * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus a 24-bit SPI frame shifted at
+ * 2 clocks/bit (S_SHIFT) = 3 + 48 = 51.  See ice40/src/dac8551_engine.v and tb_dac8551.  So
+ * one sample takes max(divider, DAC_MIN_DIVIDER) + 51 clocks and the real update rate is
+ * DAC_CLK/(divider + 51), NOT DAC_CLK/divider.  Ignoring it made generate() play far below
+ * the requested frequency at small dividers, and made replay play slow (80 kS/s asked came
+ * out at 73.7 kS/s, 400 kS/s at 281 kS/s; measured on the pod). */
+#define DAC_SEQ_OVERHEAD_CLK 51u
+/* A deep (PSRAM) replay takes one more clk48 per sample: the dac_psram_reader FIFO is
+ * first-word-fall-through and refills its head one clk48 after each pop, so the engine's
+ * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 52);
+ * the pod measures the same (48 MHz / (3 + 52) = 872.7 kS/s at the top). */
+#define DAC_PSRAM_EXTRA_CLK  1u
+
+/* Smallest DAC divider firmware sends — and, from gateware v34, the smallest the engine honours
+ * (it floors lower ones to this).  The next DAC8551 frame's SYNC falls divider+3 clocks after the
+ * previous frame's 24th SCLK falling edge; the datasheet needs >= 100 ns there (t9), and divider
+ * 2 gave 5 x 20.8 = 104 ns.  3 gives 125 ns for ~2% of the peak update rate (48 MHz/54). */
+#define DAC_MIN_DIVIDER 3u
+#define DAC_MAX_DIVIDER 65535u   /* the 16-bit divider field */
+
+typedef struct {
+    uint32_t divider;   /* inter-sample divider, DAC_MIN_DIVIDER..DAC_MAX_DIVIDER; encode with dac_divider_wire() */
+    uint32_t rate_hz;   /* the rate that divider really plays at, rounded */
+    uint8_t  clamped;   /* 1 = request above the ceiling, played at the ceiling;
+                           2 = request below the slowest rate, played at that */
+} dac_rate_plan_t;
+
+/* Clocks one DAC sample takes at `divider`, from the BRAM (from_psram false) or PSRAM. */
+uint32_t dac_sample_clocks(uint32_t divider, bool from_psram);
+
+/* Divider for a replay at `req_rate_hz` (the real sample rate) on a `dac_clk_hz` engine clock:
+ * the nearest achievable one, accounting for the frame overhead.  req_rate_hz <= 0 asks for the
+ * maximum rate (DAC_MIN_DIVIDER).  Requests outside the range are clamped and flagged. */
+dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram);
 
 #endif /* LA_RATE_H */

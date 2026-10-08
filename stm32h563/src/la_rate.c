@@ -68,3 +68,34 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version)
     if (gw_version >= RELOAD_WIRE_MIN_GW) return reload16(delay_us, 1u);
     return (uint16_t)(delay_us > 0xFFFFu ? 0xFFFFu : delay_us);
 }
+
+uint32_t dac_sample_clocks(uint32_t divider, bool from_psram)
+{
+    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;   /* the gateware floors it too */
+    return divider + DAC_SEQ_OVERHEAD_CLK + (from_psram ? DAC_PSRAM_EXTRA_CLK : 0u);
+}
+
+dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram)
+{
+    dac_rate_plan_t p = {0};
+    uint32_t overhead = dac_sample_clocks(DAC_MIN_DIVIDER, from_psram) - DAC_MIN_DIVIDER;
+    uint32_t d = DAC_MIN_DIVIDER;
+    if (req_rate_hz > 0.0f) {
+        /* rate = clk / (divider + overhead)  =>  divider = clk / rate - overhead */
+        float df = (float)dac_clk_hz / req_rate_hz - (float)overhead;
+        if (df < (float)DAC_MIN_DIVIDER - 0.5f) {
+            p.clamped = 1;
+        } else if (df > (float)DAC_MAX_DIVIDER + 0.5f) {
+            d = DAC_MAX_DIVIDER;
+            p.clamped = 2;
+        } else {
+            d = (uint32_t)(df + 0.5f);
+            if (d < DAC_MIN_DIVIDER) d = DAC_MIN_DIVIDER;
+            if (d > DAC_MAX_DIVIDER) d = DAC_MAX_DIVIDER;
+        }
+    }
+    uint32_t clocks = d + overhead;
+    p.divider = d;
+    p.rate_hz = (dac_clk_hz + clocks / 2u) / clocks;
+    return p;
+}

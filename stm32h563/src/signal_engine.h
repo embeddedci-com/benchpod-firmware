@@ -51,8 +51,9 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
                           uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
-   DAC sample clock from a target rate in Hz (0 = the max rate, 12 MSPS). Replay a captured trace
-   at the rate it was captured at, so the playback time base matches the recording. */
+   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (3 + 51) ~= 889 kS/s;
+   faster requests are clamped to it). Replay a captured trace at the rate it was captured at,
+   so the playback time base matches the recording. */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
                                 float sample_rate_hz);
 
@@ -62,8 +63,12 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
    the whole 8 MB region (up to FPGA_DAC_REPLAY_MAX_SAMPLES) — enough to replay a
    full stored ADC recording.  The caller must have staged the bytes into PSRAM and
    released the shared bus (psram_bus_release) so the iCE40 can read.  Pass 0 rate
-   for the max clock. */
+   for the max clock (48 MHz / (3 + 52) ~= 873 kS/s from PSRAM; faster requests are clamped). */
 int dac_replay_psram(uint32_t count, float sample_rate_hz);
+
+/* The sample rate (S/s, rounded) the last dac_generate_arbitrary_rate / dac_replay_psram plays at:
+   the request snapped to the nearest achievable divider, or clamped to the DAC's range. */
+uint32_t signal_engine_dac_replay_rate_hz(void);
 
 /* Connected iCE40 gateware version (CMD_VERSION, read at init).  Deep DAC replay
    (dac_replay_psram / CMD_START_DAC_PSRAM) requires >= 17. */

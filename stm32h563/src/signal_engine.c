@@ -232,20 +232,8 @@ void SPI1_IRQHandler(void)            { HAL_SPI_IRQHandler(&hspi_ice); }
 
 /* ---- Sample-rate / divider arithmetic ------------------------------------ */
 
-/* Extra FPGA clocks the DAC8551 sequencer spends per sample BEYOND the inter-sample
-   divider gap: 3 BRAM read/latch cycles (S_RDLO + S_RDHI + S_LAT) plus a 24-bit SPI
-   frame shifted at 2 clocks/bit (S_SHIFT) = 3 + 48 = 51.  See ice40/src/dac8551_
-   engine.v.  So one sample actually takes (divider + DAC_SEQ_OVERHEAD_CLK) clocks and
-   the real update rate is HFOSC/(divider+K), NOT HFOSC/divider.  Ignoring K made
-   generate() play far below the requested frequency at small dividers (the output
-   frequency "saturated": e.g. 1 kHz asked at a nominal 1 MS/s came out ~310 Hz). */
-#define DAC_SEQ_OVERHEAD_CLK 51u
-
-/* Smallest DAC divider firmware sends — and, from gateware v34, the smallest the engine honours
-   (it floors lower ones to this).  The next DAC8551 frame's SYNC falls divider+3 clocks after the
-   previous frame's 24th SCLK falling edge; the datasheet needs >= 100 ns there (t9), and divider
-   2 gave 5 x 20.8 = 104 ns.  3 gives 125 ns for ~2% of the peak update rate (48 MHz/54). */
-#define DAC_MIN_DIVIDER 3u
+/* DAC_SEQ_OVERHEAD_CLK, DAC_PSRAM_EXTRA_CLK and DAC_MIN_DIVIDER (the DAC8551 sequencer's per-sample
+   cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan). */
 
 /* True DAC update rate (Hz) achieved by the sequencer for a given divider.  The
    DAC engine runs on DAC_CLK_HZ (48 MHz on gateware >= 13), not the 24 MHz HFOSC. */
@@ -323,14 +311,19 @@ static uint32_t divider_from_rate_hz(float sample_rate_hz) {
     return d;
 }
 
-/* Same, but against the DAC engine's clock (DAC_CLK_HZ = 48 MHz on gw >= 13) — for
-   the arbitrary/replay DAC playback rate.  Floored at DAC_MIN_DIVIDER, not 2. */
-static uint32_t dac_divider_from_rate_hz(float sample_rate_hz) {
-    if (sample_rate_hz <= 0.0f) return DAC_MIN_DIVIDER;
-    uint32_t d = (uint32_t)((float)DAC_CLK_HZ / sample_rate_hz + 0.5f);
-    if (d < DAC_MIN_DIVIDER) d = DAC_MIN_DIVIDER;
-    if (d > 65535) d = 65535;
-    return d;
+/* Replay rate -> DAC divider (dac_replay_plan, host-tested), logging a request outside the
+   achievable range.  The rate a replay really plays at, for the reply. */
+static uint32_t s_dac_replay_rate_hz = 0;
+uint32_t signal_engine_dac_replay_rate_hz(void) { return s_dac_replay_rate_hz; }
+
+static uint32_t dac_replay_divider(float sample_rate_hz, bool from_psram) {
+    dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram);
+    if (p.clamped)
+        printf("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
+               (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
+               p.clamped == 1 ? "maximum" : "minimum", (unsigned long)p.rate_hz);
+    s_dac_replay_rate_hz = p.rate_hz;
+    return p.divider;
 }
 
 /* ADC capture clock.  The serial-ADC engine (adc_mcp33131) runs on the 24 MHz
@@ -1309,12 +1302,11 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
        continuously and rely on duration / dac_stop. */
     (void)loop;
 
-    uint32_t divider = dac_divider_from_rate_hz(sample_rate_hz);
-    float    actual  = (float)DAC_CLK_HZ / (float)divider;
+    uint32_t divider = dac_replay_divider(sample_rate_hz, false);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     printf("[sig] DAC arbitrary  len=%u  loop=%s  %lu S/s (divider=%lu)\n",
            (unsigned)len, loop ? "yes" : "no",
-           (unsigned long)lroundf(actual), (unsigned long)divider);
+           (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
 
     if (fpga_load_wave(data, len)        != 0) return -1;
     /* DAC8551: `data` is 16-bit samples as byte pairs, so the sequencer period is
@@ -1659,11 +1651,10 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
                (unsigned long)count, (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES);
         return -1;
     }
-    uint32_t divider = dac_divider_from_rate_hz(sample_rate_hz);
-    float    actual  = (float)DAC_CLK_HZ / (float)divider;
+    uint32_t divider = dac_replay_divider(sample_rate_hz, true);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     printf("[sig] DAC psram replay  count=%lu  %lu S/s (divider=%lu)\n",
-           (unsigned long)count, (unsigned long)lroundf(actual), (unsigned long)divider);
+           (unsigned long)count, (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
     /* START_DAC_PSRAM on top of a running (or co-trigger staged) replay keeps the reader's
        address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
        co-trigger, whose reader is already streaming.  A staged co-trigger is staged again. */

@@ -460,8 +460,9 @@ void handle_load_bin(int conn_id, const char *json) {
 
      {"cmd":"replay","sample_rate_mhz":0.08,"samples":4096}
    `sample_rate_mhz` should match the rate the trace was captured at so the
-   playback time-base matches; omit for the max 12 MSPS rate.  `samples`
-   defaults to the full recorded length. */
+   playback time-base matches; omit for the max rate (~889 kS/s from RAM, ~873 kS/s
+   from PSRAM; faster requests are clamped to it).  `samples` defaults to the full
+   recorded length.  The reply's `sample_rate_hz` is the rate it really plays at. */
 void handle_replay(int conn_id, const char *json) {
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
@@ -509,9 +510,10 @@ void handle_replay(int conn_id, const char *json) {
        actually driving (and with real data).  For a shallow trace we can peek adc_buf16 directly;
        the deep PSRAM trace was already summarised at upload (dac_psram_verify_log). */
     const char *co = cotrig ? " [co-trigger: waiting for capture t0]" : "";
+    unsigned long rate = (unsigned long)signal_engine_dac_replay_rate_hz();
     if (replay_in_psram) {
-        printf("[dac] replay armed (deep/PSRAM): %u samples @ %ld Hz%s\n",
-               (unsigned)samples, (long)(sr_hz > 0.0f ? (long)sr_hz : 0), co);
+        printf("[dac] replay armed (deep/PSRAM): %u samples @ %lu S/s%s\n",
+               (unsigned)samples, rate, co);
     } else {
         uint16_t first = adc_buf16[0], smin = 0xFFFF, smax = 0;
         for (size_t i = 0; i < samples; i++) {
@@ -519,17 +521,17 @@ void handle_replay(int conn_id, const char *json) {
             if (v < smin) smin = v;
             if (v > smax) smax = v;
         }
-        printf("[dac] replay armed: %u samples @ %ld Hz  first=0x%04X min=0x%04X max=0x%04X  %s%s\n",
-               (unsigned)samples, (long)(sr_hz > 0.0f ? (long)sr_hz : 0), first, smin, smax,
+        printf("[dac] replay armed: %u samples @ %lu S/s  first=0x%04X min=0x%04X max=0x%04X  %s%s\n",
+               (unsigned)samples, rate, first, smin, smax,
                (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)", co);
     }
 
     /* "cotrig" lets the host know the DAC start was DEFERRED to the next capture (it is not driving
        yet) vs already looping — so the UI waits for the capture to fire it instead of expecting
        output now. */
-    char payload[64];
-    snprintf(payload, sizeof(payload), "{\"samples\":%u,\"cotrig\":%s}",
-             (unsigned)samples, cotrig ? "true" : "false");
+    char payload[96];
+    snprintf(payload, sizeof(payload), "{\"samples\":%u,\"cotrig\":%s,\"sample_rate_hz\":%lu}",
+             (unsigned)samples, cotrig ? "true" : "false", rate);
     send_ok_str(conn_id, payload);
 }
 
