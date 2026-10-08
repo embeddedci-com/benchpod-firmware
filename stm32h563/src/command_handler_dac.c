@@ -460,7 +460,8 @@ void handle_load_bin(int conn_id, const char *json) {
 
      {"cmd":"replay","sample_rate_mhz":0.08,"samples":4096}
    `sample_rate_mhz` should match the rate the trace was captured at so the
-   playback time-base matches; omit for the max 12 MSPS rate.  `samples`
+   playback time-base matches; omit for the fastest rate, ~889 kS/s (the DAC8551 sequencer
+   ceiling, DAC_MAX_RATE_HZ; see dac_generate_arbitrary_rate for the rate math).  `samples`
    defaults to the full recorded length. */
 void handle_replay(int conn_id, const char *json) {
     char samples_s[16] = {0};
