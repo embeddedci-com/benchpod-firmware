@@ -103,8 +103,8 @@ The `<la>` argument is a **Logic-Analyzer channel index (1..12)** driven by the 
 | `upload-sig <0\|1> <base64url>`, `upload-sig`, `upload-sig clear` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Report only in this firmware: nothing is refused because of it. Older firmware answers "unknown command", which is how installers tell. |
 | `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts (`docs/API.md`, Pod policies). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
 | `lan-policy [open\|locked\|off]` | Show or set what the LAN API may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` stops the TCP listener and mDNS until set back. |
-| `ca`, `ca-clear` | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate or `ca none`. Install one with `upload-begin ca <size> <sha256>` (no signature). |
-| `proxy`, `proxy-set <host:port> [user password]`, `proxy-clear` | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth` or `proxy none`; never shows the password. |
+| `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate or `ca none`. Install one with `upload-begin ca <size> <sha256>` (no signature). Clearing empties the slot. |
+| `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth` or `proxy none`; never shows the password. |
 
 #### I²C peripherals (v2: INA238 ×2 / TCA9554 ×4; analog DAC = DAC8551)
 
