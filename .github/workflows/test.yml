@@ -17,13 +17,15 @@
 # publishes anything. A push to a PR branch used to run everything twice (push + pull_request);
 # branches other than main now get the pull_request run only.
 #
-# Path gating: the `changes` job lists the files a PR (or a push to main) changes. ice40-sim
+# Path gating, pull requests only: the `changes` job lists the files a PR changes. ice40-sim
 # runs only when what `make -C ice40 test` reads changed: ice40/, tools/gen_protocol.py and the
 # stm32h563 headers it generates (the --check compares them), tools/ice40_release.py and its
-# test, or this workflow. The motor-emulator jobs run only when motor-emulator/ or this workflow
-# changed. The nightly and manual runs always run everything, and so does any other event, a
-# base commit that cannot be fetched or a failed `changes` job. A job skipped by its `if` reports
-# success, so a required check (ice40-sim) stays green.
+# test, or this workflow. stm32-host runs only when stm32h563/, esp32-hosted-slave/, .gitmodules
+# or this workflow changed. The motor-emulator jobs run only when motor-emulator/ or this
+# workflow changed. A push to main (a merge), the nightly and manual runs and the release always
+# run everything, and so does any other event, a base commit that cannot be fetched or a failed
+# `changes` job. A job skipped by its `if` reports success, so a required check (ice40-sim,
+# stm32-host) stays green.
 name: Tests
 
 on:
@@ -50,6 +52,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       ice40: ${{ steps.filter.outputs.ice40 }}
+      stm32: ${{ steps.filter.outputs.stm32 }}
       motor: ${{ steps.filter.outputs.motor }}
       gl_benches: ${{ steps.benches.outputs.gl_benches }}
     steps:
@@ -73,18 +76,17 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE: ${{ inputs.release && 'true' || 'false' }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           all() {
             echo "$1: run every suite"
             echo "ice40=true" >> "$GITHUB_OUTPUT"
+            echo "stm32=true" >> "$GITHUB_OUTPUT"
             echo "motor=true" >> "$GITHUB_OUTPUT"
             exit 0
           }
           if [ "$RELEASE" = true ]; then all "release"; fi
           case "$EVENT" in
             pull_request) base="$PR_BASE" ;;
-            push) base="$PUSH_BEFORE" ;;
             *) all "event $EVENT" ;;
           esac
           if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then all "no base commit"; fi
@@ -93,9 +95,11 @@ jobs:
           echo "changed files:"; sed 's/^/  /' <<< "$changed"
           match() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
           ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
+          stm32=$(match '^(stm32h563/|esp32-hosted-slave/|\.gitmodules$|\.github/workflows/test\.yml$)')
           motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
-          echo "ice40=$ice40 motor=$motor"
+          echo "ice40=$ice40 stm32=$stm32 motor=$motor"
           echo "ice40=$ice40" >> "$GITHUB_OUTPUT"
+          echo "stm32=$stm32" >> "$GITHUB_OUTPUT"
           echo "motor=$motor" >> "$GITHUB_OUTPUT"
 
   ice40-sim:
@@ -142,6 +146,9 @@ jobs:
           echo "::warning title=ice40 release images stale::ice40/release/ does not match the gateware sources. Test this gateware on hardware, then run make -C ice40 promote and commit ice40/release/ before tagging a firmware release."
 
   stm32-host:
+    # a required check: skipped by this `if` it reports success; runs when `changes` failed
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stm32 != 'false' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout (with submodules — host tests include esp_hosted headers)
