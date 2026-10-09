@@ -66,6 +66,7 @@ int dac_generate_arbitrary_rate(const uint8_t *d, size_t n, bool loop, float hz)
     g_played_len = n; return 0;
 }
 int dac_replay_psram(uint32_t count, float hz) { (void)hz; g_played_psram = count; return 0; }
+uint32_t signal_engine_dac_replay_rate_hz(void) { return 80000u; }
 int dac_generate_sine(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
 int dac_generate_square(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
 int dac_generate_sawtooth(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
@@ -124,7 +125,7 @@ static void test_load_bin_ram(void) {
     CHECK(g_owner == 0, "the gate was released before the replay");
     CHECK(g_lines[0] == '\0', "a LAN conn got acks");
     handle_replay(0, "{\"cmd\":\"replay\"}");
-    CHECK(strcmp(g_reply, "ok:{\"samples\":4,\"cotrig\":false}") == 0 && g_played_len == 8, "replay %s", g_reply);
+    CHECK(strcmp(g_reply, "ok:{\"samples\":4,\"cotrig\":false,\"sample_rate_hz\":80000}") == 0 && g_played_len == 8, "replay %s", g_reply);
     CHECK(g_owner == -1, "replay kept the gate");
 }
 
