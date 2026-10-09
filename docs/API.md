@@ -2900,7 +2900,8 @@ values. `wifi_clear` therefore wipes both copies:
 2. After the reply has gone out and Wi-Fi is down (the reply may ride the Wi-Fi link): the C3's
    NVS partition (16 KB at `0x9000`, read from the partition table of the C3 image in the W25Q) is
    erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
-   This takes about 3 seconds. The C3's application is untouched; it recreates an empty NVS on its
+   This takes about 3 seconds, and like `flash-esp32` it stops a running DAC waveform (the W25Q
+   shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
    next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
 
 `wifi_status` reports step 2 as `c3_nvs`: `pending`, then `erased`, or `failed` if the C3 did not
