@@ -1964,7 +1964,7 @@ int adc_capture_psram(uint16_t *out16, size_t samples, float sample_rate_hz) {
    "do NOT inherit the ADC's min-divider floor" rule that the shipped 0.3-MS/s bug
    violated.  Conservative drain estimate; HW-tuned on the bench. */
 
-int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz) {
+int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz) {
     /* Dynamic ceiling: LA can use everything from the front up to a resident deep-DAC
        waveform (or the whole chip if none).  LA-only here (adc_in_capture=false) — the
        unified ADC+LA path caps LA to the ADC region separately. */
@@ -1978,6 +1978,10 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz) {
 
     la_plan_t plan = la_psram_plan(adc_capture_hz(), (uint32_t)samples, sample_rate_hz);
     uint32_t divider = plan.divider;
+    /* The ACHIEVED rate: the divider is a whole number of 24 MHz clocks and a deep capture may
+       be burst-capped, so it can sit well below the request (2.304 MHz -> 2.18, 4 MHz for 300K
+       samples -> 3).  The caller reports it so the host labels the timebase correctly. */
+    if (actual_hz) *actual_hz = (float)adc_capture_hz() / (float)divider;
     if (plan.capped)
         printf("[la] PSRAM LA rate capped to %lu kS/s so %u samples fit the %u-byte "
                "burst buffer (no dropped samples)\n",
@@ -2717,7 +2721,7 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
 
     /* Arm the deep-LA capture (hands the shared PSRAM bus to the iCE40) and block until
        it completes — mirroring the old synchronous fill contract of this function. */
-    if (fpga_la_capture_psram_start(samples, sample_rate_hz) != 0) return -1;
+    if (fpga_la_capture_psram_start(samples, sample_rate_hz, NULL) != 0) return -1;
     int r;
     do { sleep_ms(1); r = fpga_la_capture_psram_wait(); } while (r == 0);  /* 1=done(bus held), -1=timeout */
     if (r < 0) return -1;

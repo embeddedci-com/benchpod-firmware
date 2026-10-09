@@ -78,7 +78,9 @@ void fpga_capture_psram_release(void) { g_bus = false; g_releases++; }
 void fpga_capture_abort(void) { g_aborts++; }
 bool fpga_capture_adc_sentinel_survived(void) { return false; }
 void fpga_capture_extend_deadline_ms(uint32_t ms) { (void)ms; }
-int fpga_la_capture_psram_start(size_t n, float hz) { (void)n; (void)hz; return 0; }
+/* the deep-LA engine rounds the request to a whole divider: 2.304 MHz -> 24 MHz / 11 */
+static float g_la_req_hz;
+int fpga_la_capture_psram_start(size_t n, float hz, float *act) { (void)n; g_la_req_hz = hz; if (act) *act = 24000000.0f / 11.0f; return 0; }
 int fpga_la_capture_psram_wait(void) { if (g_wait_rc > 0) g_bus = true; return g_wait_rc; }
 int fpga_la_psram_read(uint32_t off, uint8_t *b, uint32_t n) { (void)off; memset(b, 0, n); return 0; }
 void fpga_la_psram_release(void) { g_bus = false; }
@@ -222,6 +224,30 @@ static void test_capture_dual(void) {
     g_wait_rc = 0;
 }
 
+/* la_capture reports the rate it achieved, not the one asked for: a 2.304 MHz request runs at
+   24 MHz / 11 = 2181818 Hz, and a host that labels the trace 2.304 MHz decodes 115200 baud with
+   ~6% timing error (80% framing errors on the bench). The resume keeps the same rate. */
+static void test_la_capture_reports_achieved_rate(void) {
+    for (size_t i = 0; i < 2000; i++) g_la[i] = (uint16_t)((i / 100) & 1);
+    clear_tx();
+    g_wait_rc = 0;
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"sample_rate_mhz\":2.304}");
+    CHECK(capture_busy() && g_owner == 6, "la_capture did not arm: %s", g_err);
+    g_wait_rc = 1;
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(strstr(first, "\"la_rate_hz\":2181818,") != NULL, "first frame: %.90s", first);
+    CHECK(nl == 2000 && !more && l[100] == 1 && l[199] == 1 && l[200] == 0, "la %zu more %d", nl, more);
+    CHECK(!g_bus && g_owner == -1, "bus or gate held after the read-back");
+
+    /* a capture_read resume carries the same timebase as the first attempt */
+    clear_tx();
+    handle_capture_read(6, "{\"cmd\":\"capture_read\",\"offset\":0}");
+    pump_all();
+    CHECK(strstr(g_tx, "\"la_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
+    g_wait_rc = 0;
+}
+
 static void test_stall(void) {
     clear_tx();
     g_avail = 50;   /* below the pump's floor */
@@ -272,6 +298,7 @@ int main(void) {
     test_test_pattern_decimal_paced();
     test_test_pattern_b64();
     test_capture_dual();
+    test_la_capture_reports_achieved_rate();
     test_stall();
     test_trigger_timeout();
     test_conn_closed();

@@ -79,6 +79,7 @@ static struct {
     int    conn_id;
     size_t bytes;
     bool   stop_dac;   /* HW-cut a concurrently-running DAC during this capture; free it after */
+    uint32_t rate_hz;  /* ACHIEVED rate (whole divider, maybe burst-capped), reported as la_rate_hz */
 } lacap;
 
 /* ---- v2 async unified simultaneous capture (CMD_CAPTURE 0x31) ----
@@ -571,6 +572,7 @@ void capture_poll(void) {
             int    cid     = lacap.conn_id;
             size_t samples = lacap.bytes / 2u;
             bool   stopdac = lacap.stop_dac;
+            uint32_t la_hz = lacap.rate_hz;
             lacap.active = false;
             /* Firmware-side cleanup after the iCE40's mid-capture DAC cut (v21): free the deep-DAC
                PSRAM region + send the official stop so the depth budget + UI state stay in sync. */
@@ -585,11 +587,14 @@ void capture_poll(void) {
                 last_cap.adc_samples = 0;
                 last_cap.la_samples  = samples;
                 last_cap.adc_rate_hz = 0;
-                last_cap.la_rate_hz  = 0;
+                last_cap.la_rate_hz  = la_hz;
                 psram_regions_track(signal_engine_la_cap_base(), (uint32_t)(samples * 2u), 0, 0);
                 printf("[cmd] la_capture: PSRAM data ready (%u samples), streaming back over websocket...\n",
                        (unsigned)samples);
                 bulk_begin_capture16(cid, 0, samples);
+                /* the ACHIEVED rate, not the request: without it the host labelled the trace
+                   with the requested rate (2.304 MHz for a 2.18 MHz capture) */
+                bulk.la_rate_hz = la_hz;
             } else {
                 fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
@@ -1098,7 +1103,10 @@ void handle_sensor_la(int conn_id, const char *json) {
  * the raw logic traces — the retired agent only ever decoded I2C; this is the
  * new general view.
  *   {"cmd":"la_capture","samples":1024,"sample_rate_mhz":2.0}
- * "samples" is the LA sample count (2 bytes each); 2*samples must fit the buffer. */
+ * "samples" is the LA sample count (2 bytes each); 2*samples must fit the buffer.  The first
+ * reply frame carries "la_rate_hz", the ACHIEVED rate: 24 MHz over a whole divider, lowered
+ * further for a capture deeper than the burst ring (la_rate.c), so it can differ from the
+ * request. */
 void handle_la_capture(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char samples_s[16] = {0};
@@ -1128,7 +1136,8 @@ void handle_la_capture(int conn_id, const char *json) {
     if (!capture_trigger_begin(conn_id, json, &trig)) return;
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
-    if (fpga_la_capture_psram_start(samples, sr_hz) != 0) {
+    float la_actual = 0.0f;
+    if (fpga_la_capture_psram_start(samples, sr_hz, &la_actual) != 0) {
         heavy_release(conn_id);
         capture_trigger_cancel(&trig);
         send_error(conn_id, "la capture failed");
@@ -1140,4 +1149,5 @@ void handle_la_capture(int conn_id, const char *json) {
     lacap.conn_id  = conn_id;
     lacap.bytes    = samples * 2u;
     lacap.stop_dac = stop_dac_armed;
+    lacap.rate_hz  = (uint32_t)lroundf(la_actual);
 }

@@ -643,7 +643,7 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
 /* Arm a deep LA→PSRAM capture of `samples` samples at sample_rate_hz (0 = max).
    The sample rate is clamped so the writer keeps up (see the .c).  Hands the
    shared bus to the iCE40.  Returns 0, or -1 (no v2>=8 gateware / bad count). */
-int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz);
+int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz);
 
 /* Poll an armed capture.  Returns 1 = done (the shared bus has been ACQUIRED for
    the MCU; read it back then release), 0 = still capturing, -1 = timeout. */
