@@ -47,7 +47,7 @@ jobs:
   preflight:
     if: github.repository == 'embeddedci-com/benchpod-firmware'
     # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +81,7 @@ jobs:
     needs: [preflight, tests, firmware-build]
     # Don't run on forks — releases only belong to the canonical repo.
     if: github.repository == 'embeddedci-com/benchpod-firmware'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     # The signing key (secret FW_SIGNING_KEY) lives in this environment; give it required
