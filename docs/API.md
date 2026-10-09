@@ -224,7 +224,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `cloud_proxy` | T0/T2 | Read, set or clear the HTTP proxy for the cloud link | object | no |
 | `wifi_status` | T0 | Wi-Fi state and transport counters | object | no |
 | `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
-| `wifi_clear` | T2 | Forget the Wi-Fi credentials | `"cleared"` | no |
+| `wifi_clear` | T2 | Forget the Wi-Fi credentials (pod and ESP32-C3) | `"cleared"` | no |
 | `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
 | `speedtest` | T1 | Cloud throughput probe over a tunnel | none (raw bytes) | no |
 | `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
@@ -2866,9 +2866,10 @@ Forgets the cloud settings and disconnects. Reply `"cleared"`.
 
 ### `wifi_status`
 
-Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0}`.
-`state` is the same as `status.wifi`; the other counters describe the link to the ESP32-C3 and how
-often it was lost.
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_nvs":"none"}`.
+`state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
+often it was lost. `c3_nvs` is the outcome of the last `wifi_clear` since boot on the ESP32-C3's
+side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 
 ### `wifi_set` / `wifi_clear`
 
@@ -2879,8 +2880,40 @@ often it was lost.
 
 Wired Ethernet stays the primary link; Wi-Fi is the fallback. An empty or missing `password` is an
 open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
-replies `"cleared"`. Errors: `"missing ssid"`, `"ssid too long"`, `"password too long"`, `"config
-save failed"`.
+replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `"ssid too long"`,
+`"password too long"`, `"config save failed"`. The same operations are `wifi-set` / `wifi-clear` on
+the [USB console](usb-serial-interface.md).
+
+**Where the credentials are kept.** In one place: the STM32's config store (two flash sectors,
+A/B). The ESP32-C3 is put in RAM storage mode (`esp_wifi_set_storage(WIFI_STORAGE_RAM)`) before it
+is given the Wi-Fi mode or the credentials, and it is given them again on every bring-up, so it
+holds them only while it is powered and out of reset. If the C3 does not confirm RAM storage, the
+pod does not send it the credentials and retries.
+
+**What `wifi_clear` does.** Pod firmware up to 3.7.0 ran the C3 in the ESP-IDF default flash
+storage mode, which wrote the SSID and password to the C3's own NVS partition as well. NVS only
+marks a replaced or deleted entry as erased, so nothing short of erasing the sectors removes old
+values. `wifi_clear` therefore wipes both copies:
+
+1. At once, before the reply: the STM32's copy. A tombstone record is written, then the other slot
+   and the legacy sector are erased, so a power loss part-way cannot bring an old config back.
+2. After the reply has gone out and Wi-Fi is down (the reply may ride the Wi-Fi link): the C3's
+   NVS partition (16 KB at `0x9000`, read from the partition table of the C3 image in the W25Q) is
+   erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
+   This takes about 3 seconds, and like `flash-esp32` it stops a running DAC waveform (the W25Q
+   shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
+   next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
+
+`wifi_status` reports step 2 as `c3_nvs`: `pending`, then `erased`, or `failed` if the C3 did not
+answer its ROM loader, the erase did not verify, the W25Q holds no C3 image, the pod is in safe
+mode, or a capture, upload or update held the shared bus for a minute. After `failed`, send
+`wifi_clear` again or run `flash-esp32` on the USB console (it rewrites the C3's whole image, NVS
+region included). `wifi_clear` does not touch the device identity key, the cloud configuration
+(`cloud_clear`) or calibration data.
+
+> **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
+> stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
+> `flash-esp32`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
 
 ### `eth` — wired link control and diagnostics
 

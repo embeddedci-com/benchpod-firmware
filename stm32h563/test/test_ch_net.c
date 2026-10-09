@@ -2,7 +2,7 @@
  * test_ch_net.c — host tests for src/command_handler_net.c: the speed test (the PROTO_SPEEDTEST
  * download sink with its ack cadence and done mark, the paced upload source) and the
  * provisioning replies (cloud_set / wifi_set on the real config stores over the RAM flash model,
- * their refusals, and the eth argument checks).
+ * their refusals, and the eth argument checks), and wifi_clear's deferred ESP32-C3 NVS erase.
  */
 #include <stdio.h>
 #include <string.h>
@@ -51,6 +51,16 @@ void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_repl
 static int g_cloud_reloads, g_wifi_reloads, g_eth;
 void net_cloud_reload_after_reply(void) { g_cloud_reloads++; }
 void net_wifi_reload_after_reply(void) { g_wifi_reloads++; }
+/* wifi_clear's C3 erase: what has to happen first (the reply out, the bus free) is faked here. */
+static bool g_reload_pending, g_skip_hw, g_wipe_ok = true;
+static const char *g_busy;
+static int g_wipes;
+static uint64_t g_now_us;
+bool net_reload_pending(void) { return g_reload_pending; }
+bool boot_guard_skip_hw(void) { return g_skip_hw; }
+const char *bus_busy_reason(void) { return g_busy; }
+bool net_wifi_wipe_c3(void) { g_wipes++; return g_wipe_ok; }
+uint64_t time_us_64(void) { return g_now_us; }
 void net_eth_stop(void) { g_eth = 1; }
 void net_eth_start(void) { g_eth = 2; }
 void net_eth_restart(void) { g_eth = 3; }
@@ -146,6 +156,67 @@ static void test_wifi_set(void) {
     CHECK(config_load(&cfg) == 0 && strcmp(cfg.ssid, "lab \"5G\"") == 0, "ssid not saved unescaped");
     handle_wifi_clear(0, "{}");
     CHECK(strcmp(g_reply, "ok:\"cleared\"") == 0, "%s", g_reply);
+    wifi_clear_poll();          /* clears the scheduled C3 erase for the next test */
+}
+
+static const char *c3_nvs(void) {
+    clear_tx();
+    handle_wifi_status(0, "{}");
+    const char *p = strstr(g_tx, "\"c3_nvs\":\"");
+    static char v[16];
+    v[0] = '\0';
+    if (p) sscanf(p + 10, "%15[^\"]", v);
+    return v;
+}
+
+static void test_wifi_clear_c3(void) {
+    config_t cfg = {0};
+    snprintf(cfg.ssid, sizeof(cfg.ssid), "lab");
+    CHECK(config_save(&cfg) == 0, "save");
+    int wipes = g_wipes, reloads = g_wifi_reloads;
+
+    /* JSON: the pod's copy goes at once, the reply says so, and the C3 erase waits for it to go out */
+    g_reload_pending = true;
+    handle_wifi_clear(0, "{}");
+    CHECK(strcmp(g_reply, "ok:\"cleared\"") == 0, "%s", g_reply);
+    CHECK(config_load(&cfg) != 0 || cfg.ssid[0] == '\0', "config store not cleared");
+    CHECK(g_wifi_reloads == reloads + 1, "Wi-Fi not dropped after the reply");
+    CHECK(g_wipes == wipes && strcmp(c3_nvs(), "pending") == 0, "erased before the reply went out");
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes, "erased while the reply was still pending");
+    g_reload_pending = false;
+    g_busy = "busy: a capture";                  /* then it waits for the PSRAM bus */
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes && strcmp(c3_nvs(), "pending") == 0, "erased under a capture");
+    g_busy = NULL;
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes + 1 && strcmp(c3_nvs(), "erased") == 0, "c3_nvs %s", c3_nvs());
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes + 1, "erased twice");
+
+    /* a C3 that does not answer is reported, not hidden */
+    g_wipe_ok = false;
+    handle_wifi_clear(0, "{}");
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes + 2 && strcmp(c3_nvs(), "failed") == 0, "c3_nvs %s", c3_nvs());
+    g_wipe_ok = true;
+
+    /* a bus that never frees: it gives up after a minute and says so, without touching the C3 */
+    g_busy = "busy: a capture";
+    handle_wifi_clear(0, "{}");
+    g_now_us += 59ull * 1000000ull;
+    wifi_clear_poll();
+    CHECK(strcmp(c3_nvs(), "pending") == 0, "gave up early");
+    g_now_us += 2ull * 1000000ull;
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes + 2 && strcmp(c3_nvs(), "failed") == 0, "c3_nvs %s", c3_nvs());
+    g_busy = NULL;
+
+    /* safe mode: no W25Q, so no erase; the console form answers at once */
+    g_skip_hw = true;
+    CHECK(wifi_clear_c3_now() != NULL && g_wipes == wipes + 2, "erased in safe mode");
+    g_skip_hw = false;
+    CHECK(wifi_clear_c3_now() == NULL && g_wipes == wipes + 3, "console erase");
 }
 
 static void test_eth(void) {
@@ -169,6 +240,7 @@ int main(void) {
     test_speedtest_up();
     test_cloud_set();
     test_wifi_set();
+    test_wifi_clear_c3();
     test_eth();
     if (fails) { printf("test_ch_net: %d FAILED\n", fails); return 1; }
     printf("test_ch_net: all passed\n");

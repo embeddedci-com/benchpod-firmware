@@ -195,7 +195,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
-        "  wifi-clear           erase stored Wi-Fi credentials\r\n"
+        "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3)\r\n"
         "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
         "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
         "  eth speed <auto|10|100> [full]  force the link mode (debug: 10M survives a bad\r\n"
@@ -1290,9 +1290,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
         }
     } else if (!strcmp(argv[0], "wifi-clear")) {
+        /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
         config_clear();
-        net_wifi_reload();          /* drop Wi-Fi; ESP32 returns to reset */
-        op(out, ctx, "  Wi-Fi credentials cleared (reboot to fully apply)\r\n");
+        net_wifi_reload();          /* drop Wi-Fi now, whatever happens to the C3 */
+        const char *why = wifi_clear_c3_now();
+        if (!why)
+            op(out, ctx, "  Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)\r\n");
+        else
+            op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
+                         "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
     } else if (!strcmp(argv[0], "can")) {
         /* can config <bitrate> <normal|internal|external|listen> [term] |
            can write <id> [b0 b1 ...] | can read | can status |

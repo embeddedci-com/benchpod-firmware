@@ -97,6 +97,20 @@ flash-esp32         # erase + write the slot's image at 0x0, on-chip MD5 verify,
 `esp_rom_flash.c` implements the esptool SLIP command set (ROM-loader variant, no
 stub): SYNC / SPI_ATTACH / FLASH_BEGIN / FLASH_DATA / FLASH_END / SPI_FLASH_MD5.
 
+## Wi-Fi credentials and the C3's NVS
+
+The slave firmware never calls `esp_wifi_set_storage`, so on its own it runs in the
+ESP-IDF default, `WIFI_STORAGE_FLASH`, and `esp_wifi_set_config` writes the SSID and
+password to its NVS partition (`nvs`, 0x9000, 16 KB). The host therefore sends
+`Req_WifiSetStorage(WIFI_STORAGE_RAM)` right after `Req_WifiInit` and before the mode
+and the config (`esp_wifi_ctrl.c`), which keeps the STM32 config store the only place
+the credentials live.
+
+`wifi-clear` erases the NVS partition over the same ROM-loader path (FLASH_BEGIN over
+the region, 0xFF blocks, MD5 check), to remove what pod firmware up to 3.7.0 left
+there. The region comes from the partition table of the image in the W25Q `esp` slot
+(`esp_part_table.c`), so it follows `partitions.esp32c3.csv` if that ever changes.
+
 ## Must-match constants (host ↔ slave)
 - **SPI mode 3**, **1600-byte** transfer buffer — the host's values are in
   `../stm32h563/src/esp_hosted_spi.h` (`ESP_HOSTED_SPI_MODE`, `ESP_HOSTED_SPI_BUF_SIZE`).

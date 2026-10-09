@@ -24,6 +24,7 @@
 #include "net_route.h"
 #include "esp_netif.h"
 #include "esp_wifi_ctrl.h"
+#include "esp_rom_flash.h"
 #include "conn_tx.h"
 #include "hw_worker.h"
 #include "bp_limits.h"
@@ -906,6 +907,13 @@ void net_cloud_reload_after_reply(void) { net_reload_request(NET_RELOAD_CLOUD, H
 void net_wifi_reload_after_reply(void)  { net_reload_request(NET_RELOAD_WIFI, HAL_GetTick()); }
 void net_wifi_reload(void)           { (void)net_call_sync(call_wifi_reload, NULL, 2000); }
 void net_wifi_hold_for_flash(bool h) { (void)net_call_sync(call_wifi_hold, h ? (void *)1 : NULL, 2000); }
+
+bool net_wifi_wipe_c3(void) {
+    net_wifi_hold_for_flash(true);   /* link down, C3 in reset, EN/BOOT are the worker's */
+    bool wiped = (esp_rom_flash_erase_nvs() == 0);
+    net_wifi_hold_for_flash(false);  /* reload: with nothing configured the C3 stays in reset */
+    return wiped;
+}
 
 typedef struct { char ip[16], mask[16], gw[16]; } wifi_static_args_t;
 

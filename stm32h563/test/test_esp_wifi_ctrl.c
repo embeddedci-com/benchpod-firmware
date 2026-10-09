@@ -13,6 +13,10 @@
  *     reset: link down + restart, counted separately;
  *   - a boot event while waiting for the boot event is just the boot event.
  *
+ * And that the credentials never reach the C3's flash:
+ *   - SetStorage(RAM) is sent, and answered, before SetMode and SetConfig;
+ *   - a C3 that refuses it, or does not answer it, is never sent the credentials.
+ *
  * The module under test is compiled unmodified; everything it calls below it
  * (esp_hosted_spi_*, esp_netif_*, config_load, hw_worker, time) is faked here.
  */
@@ -49,6 +53,10 @@ static struct {
     uint32_t pending[16]; int npending;   /* request msg_ids awaiting an answer */
     uint32_t last_req;
     int  dropped;        /* requests the fake C3 ignored (answer == false) */
+    uint32_t log[64]; int nlog;           /* every request msg_id, in the order sent */
+    uint32_t storage;    /* Rpc_Req_WifiSetStorage.storage of the last SetStorage (313) */
+    uint32_t storage_resp;                /* resp code the fake C3 gives SetStorage */
+    bool mute_storage;   /* the fake C3 answers everything except SetStorage */
 } C;
 static esp_hosted_frame_cb_t s_serial_cb;
 
@@ -86,10 +94,27 @@ static uint32_t req_msg_id(const uint8_t *p, uint16_t len) {
     return 0;
 }
 
+/* Field 1 (varint) of the request's oneof payload (Rpc field msg_id); `none` if absent. */
+static uint32_t req_arg1(const uint8_t *p, uint16_t len, uint32_t msg_id, uint32_t none) {
+    size_t eplen = (size_t)p[1] | ((size_t)p[2] << 8);
+    const uint8_t *pb = p + 3 + eplen + 3, *end = p + len;
+    while (pb < end) {
+        uint64_t key = 0, v = 0; int s = 0;
+        do { key |= (uint64_t)(*pb & 0x7F) << s; s += 7; } while (*pb++ & 0x80);
+        s = 0; do { v |= (uint64_t)(*pb & 0x7F) << s; s += 7; } while (*pb++ & 0x80);
+        if ((key & 7) != 2) continue;                    /* a varint field: value consumed */
+        if ((uint32_t)(key >> 3) == msg_id && v >= 2 && pb[0] == 0x08) return pb[1];
+        pb += v;
+    }
+    return none;
+}
+
 int esp_hosted_spi_send(uint8_t if_type, uint8_t if_num, const uint8_t *payload, uint16_t len) {
     (void)if_num;
     if (!C.running || !C.tx_ok || if_type != ESP_SERIAL_IF) return -1;
     C.last_req = req_msg_id(payload, len);
+    if (C.nlog < 64) C.log[C.nlog++] = C.last_req;
+    if (C.last_req == 313) C.storage = req_arg1(payload, len, 313, 0xFF);
     if (C.npending < 16) C.pending[C.npending++] = C.last_req;
     return 0;
 }
@@ -124,6 +149,9 @@ static void answer(uint32_t req) {
     } else if (req == 341) {                        /* GetRssi */
         w_int(&in, 1, 0);
         w_int(&in, 2, (uint64_t)(int64_t)-52);
+    } else if (req == 313) {                        /* SetStorage */
+        if (C.mute_storage) return;
+        if (C.storage_resp) w_int(&in, 1, C.storage_resp);   /* proto3: a zero resp is omitted */
     } else {
         w_int(&in, 1, 0);
     }
@@ -312,6 +340,65 @@ static void test_boot_event_while_waiting_is_ignored(void) {
     CHECK(strcmp(esp_wifi_ctrl_state_str(), "connecting") == 0);
 }
 
+/* Position of the first request `id` in the log, or -1. */
+static int sent_at(uint32_t id) {
+    for (int i = 0; i < C.nlog; i++) if (C.log[i] == id) return i;
+    return -1;
+}
+
+static void test_ram_storage_precedes_credentials(void) {
+    fresh();
+    CHECK(bring_up());
+    int init = sent_at(278), storage = sent_at(313), mode = sent_at(260), cfg = sent_at(284);
+    CHECK(init >= 0 && storage >= 0 && mode >= 0 && cfg >= 0);
+    CHECK(init < storage);                   /* esp_wifi_set_storage needs an inited driver */
+    CHECK(storage < mode);                   /* the mode is persisted too in flash storage */
+    CHECK(storage < cfg);
+    CHECK(C.storage == 1);                   /* WIFI_STORAGE_RAM */
+}
+
+/* Run a bring-up against a C3 that does not confirm RAM storage; the credentials must not go. */
+static void no_credentials_without_ram_storage(void) {
+    C.tx_ok = true; C.answer = true;
+    run_ms(20);
+    C.ready = true;
+    for (int i = 0; i < 1000 && strcmp(esp_wifi_ctrl_state_str(), "backoff") != 0; i++) run_ms(10);
+    CHECK(strcmp(esp_wifi_ctrl_state_str(), "backoff") == 0);
+    CHECK(sent_at(313) >= 0);
+    CHECK(sent_at(260) < 0);                 /* no SetMode */
+    CHECK(sent_at(284) < 0);                 /* no SetConfig: SSID + password stayed here */
+    CHECK(!connected());
+    CHECK(!L.up);
+    /* ...and not on the retries either. */
+    run_ms(60000);
+    CHECK(sent_at(284) < 0);
+    CHECK(!connected());
+}
+
+static void test_storage_refused_sends_no_credentials(void) {
+    fresh();
+    C.storage_resp = 0x3001;                 /* ESP_ERR_WIFI_NOT_INIT, say */
+    no_credentials_without_ram_storage();
+}
+
+static void test_storage_unanswered_sends_no_credentials(void) {
+    fresh();
+    C.mute_storage = true;                   /* a slave image without the RPC */
+    no_credentials_without_ram_storage();
+}
+
+/* A refusal must not stick: the next request starts from a clean result code. */
+static void test_storage_refusal_does_not_stick(void) {
+    fresh();
+    C.storage_resp = 0x3001;
+    no_credentials_without_ram_storage();
+    C.storage_resp = 0;
+    C.nlog = 0;
+    for (int i = 0; i < 1000 && strcmp(esp_wifi_ctrl_state_str(), "waiting-slave") != 0; i++) run_ms(10);
+    CHECK(bring_up());
+    CHECK(sent_at(313) >= 0 && sent_at(313) < sent_at(284));
+}
+
 int main(void) {
     esp_wifi_ctrl_init();
     test_healthy_link_stays_up();
@@ -321,6 +408,10 @@ int main(void) {
     test_boot_event_while_up_restarts();
     test_boot_event_mid_connect_restarts();
     test_boot_event_while_waiting_is_ignored();
+    test_ram_storage_precedes_credentials();
+    test_storage_refused_sends_no_credentials();
+    test_storage_unanswered_sends_no_credentials();
+    test_storage_refusal_does_not_stick();
     CHECK(s_flash_submits == 0);
     if (failures) { printf("FAIL test_esp_wifi_ctrl: %d failure(s)\n", failures); return 1; }
     printf("PASS test_esp_wifi_ctrl\n");

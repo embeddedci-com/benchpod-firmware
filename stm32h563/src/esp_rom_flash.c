@@ -17,6 +17,7 @@
  *   are bench bring-up items.  Prove the wiring with esp_rom_flash_sync() first.
  */
 #include "esp_rom_flash.h"
+#include "esp_part_table.h"
 #include "board_pins.h"
 #include "watchdog.h"
 #include "blob_store.h"
@@ -299,16 +300,20 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
     return 0;
 }
 
-/* ---- public: full program ------------------------------------------------- */
+/* ---- erase + write + verify one region ------------------------------------ */
 
-int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
+/* Enter download mode, SYNC, erase [offset, offset+len), write what `rd` reads there (rd NULL:
+   leave it blank, written as 0xFF) and verify by on-chip MD5.  On success the C3 is still in
+   its ROM loader; on failure it is held in reset.  The UART is released either way. */
+static int rom_write(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
 {
-    if (!rd || len == 0) return -1;
+    if (len == 0) return -1;
     mbedtls_md5_context md5;
     mbedtls_md5_init(&md5);
     mbedtls_md5_starts(&md5);
 
-    log_printf("[espflash] programming %u bytes at 0x%06lx\n", (unsigned)len, (unsigned long)offset);
+    log_printf("[espflash] %s %u bytes at 0x%06lx\n", rd ? "programming" : "erasing",
+               (unsigned)len, (unsigned long)offset);
     strap_gpio_init();
     uart_init(ESP_UART_FLASH_BAUD);
     strap_enter_download();
@@ -355,7 +360,9 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         put_le32(pk + 4, seq);
         put_le32(pk + 8, 0);
         put_le32(pk + 12, 0);
-        if (rd(ctx, off, pk + 16, n) != 0) {
+        if (!rd) {
+            memset(pk + 16, 0xFF, n);
+        } else if (rd(ctx, off, pk + 16, n) != 0) {
             log_printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
             goto fail;
         }
@@ -417,8 +424,6 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
         (void)esp_command(ESP_FLASH_END, e, sizeof(e), 0, NULL, NULL, NULL, 1000);
     }
 
-    log_printf("[espflash] done — resetting C3 into application\n");
-    strap_boot_app();
     uart_deinit();
     mbedtls_md5_free(&md5);
     return 0;
@@ -428,6 +433,17 @@ fail:
     uart_deinit();
     mbedtls_md5_free(&md5);
     return -1;
+}
+
+/* ---- public: full program ------------------------------------------------- */
+
+int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
+{
+    if (!rd) return -1;
+    if (rom_write(rd, ctx, len, offset) != 0) return -1;
+    log_printf("[espflash] done — resetting C3 into application\n");
+    strap_boot_app();
+    return 0;
 }
 
 /* ---- public: program from the W25Q slot ----------------------------------- */
@@ -459,6 +475,36 @@ int esp_rom_flash_from_slot(void)
     int rc = esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
                                        blob_store_info(BLOB_ESP)->len, 0);
     w25q_session_close();
+    return rc;
+}
+
+/* ---- public: wipe the C3's NVS partition ----------------------------------- */
+
+int esp_rom_flash_erase_nvs(void)
+{
+    uint32_t off = 0, size = 0;
+    int rc = -1;
+    if (!blob_store_present(BLOB_ESP)) {
+        log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): "
+                   "cannot locate the C3's NVS partition\n");
+        goto out;
+    }
+    /* The slot is checked like a flash-esp32 would: a corrupt table must not choose what to
+       erase (esp_part_find_nvs refuses the bootloader and the table, not the application). */
+    w25q_session_open();
+    bool found = blob_store_verify(BLOB_ESP) == 0
+              && esp_part_find_nvs_rd(slot_read, (void *)(uintptr_t)BLOB_ESP, &off, &size);
+    w25q_session_close();
+    if (!found) {
+        log_printf("[espflash] no usable NVS partition in the W25Q C3 image's partition table\n");
+        goto out;
+    }
+    rc = rom_write(NULL, NULL, size, off);
+    if (rc == 0) log_printf("[espflash] C3 NVS erased and verified blank (0x%06lx, %lu bytes)\n",
+                            (unsigned long)off, (unsigned long)size);
+out:
+    strap_gpio_init();
+    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);   /* in reset either way */
     return rc;
 }
 
