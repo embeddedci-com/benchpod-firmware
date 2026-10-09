@@ -266,7 +266,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -737,6 +737,11 @@ topmuxtest:
 spitest:
 	$(call topbench,tb_top_spi,loop deep)
 
+# UART2 (v48): the TX-only second UART next to the proxy through the whole top: both decoded
+# on the pads with bit timing, re-armed on another pin and rate, then disarmed.
+uart2test:
+	$(call topbench,tb_top_uart2,loop deep)
+
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
 swdqtest:
@@ -754,7 +759,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest ringtest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

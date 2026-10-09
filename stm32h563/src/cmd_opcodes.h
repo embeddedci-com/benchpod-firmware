@@ -52,5 +52,7 @@
 #define CMD_UART_WRITE         0x72u
 #define CMD_UART_READ          0x73u
 #define CMD_UART_STATUS        0x74u
+#define CMD_UART2_CONFIG       0x75u
+#define CMD_UART2_WRITE        0x76u
 
 #endif /* CMD_OPCODES_H */

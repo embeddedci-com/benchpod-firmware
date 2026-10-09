@@ -53,6 +53,10 @@ module la_bank #(
     input  wire              uart_active,       // UART proxy armed
     input  wire [3:0]        uart_tx_ch,
     input  wire              uart_tx_val,       // TX line level (idle high)
+    // ---- uart2 override (v48, TX-only UART, push-pull; lowest priority) ----
+    input  wire              uart2_active,
+    input  wire [3:0]        uart2_tx_ch,
+    input  wire              uart2_tx_val,
 
     // ---- stepper override ----
     input  wire              step_active,
@@ -114,6 +118,7 @@ module la_bank #(
     endfunction
     // uart: push-pull TX (idle high).  i2c: open-drain SDA (never drives high).
     wire [N-1:0] m_uart = onehot(uart_active, uart_tx_ch);
+    wire [N-1:0] m_urt2 = onehot(uart2_active, uart2_tx_ch);
     wire [N-1:0] m_i2c  = onehot(i2c_active,  i2c_sda_ch);
     wire [N-1:0] m_step = onehot(step_active, step_ch);
     wire [N-1:0] m_swdc = onehot(swd_active,  swd_clk_ch);
@@ -129,13 +134,15 @@ module la_bank #(
                             m_swds[c] ? swd_cs_val   :
                             m_step[c] ? step_val     :
                             m_i2c [c] ? 1'b0         :
-                            m_uart[c] ? uart_tx_val  : s_out[c];
+                            m_uart[c] ? uart_tx_val  :
+                            m_urt2[c] ? uart2_tx_val : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
                             m_swdc[c] ? 1'b1         :
                             m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
                             m_i2c [c] ? i2c_sda_drive_low :
-                            m_uart[c] ? 1'b1         : s_oe[c];
+                            m_uart[c] ? 1'b1         :
+                            m_urt2[c] ? 1'b1         : s_oe[c];
     end endgenerate
 
     // ---- bidirectional IO buffers ----

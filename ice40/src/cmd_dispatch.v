@@ -254,7 +254,14 @@ module cmd_dispatch #(
     input  wire              uart_tx_full,
     input  wire              uart_tx_empty,
     input  wire              uart_rx_overflow,
-    input  wire              uart_armed
+    input  wire              uart_armed,
+
+    // ---- UART2: a second, TX-only UART (v48; config payload = UART_CONFIG's) ----
+    output reg               uart2_cfg_stb,
+    output reg               uart2_tx_we,
+    input  wire              uart2_tx_full,
+    input  wire              uart2_tx_empty,
+    input  wire              uart2_armed
 );
 
     // Opcodes — generated from tools/gen_protocol.py (single source of truth).
@@ -331,7 +338,7 @@ module cmd_dispatch #(
 `define CD_CAPTURE_TEST        8'b???0_??11    // 0x23
 `define CD_PSRAM_CS            8'b???0_?1??    // 0x25
 `define CD_SWD_ARM             8'b??01_?000    // 0x50
-`define CD_SPI_ARM             8'b?1??_?1?1    // 0x55
+`define CD_SPI_ARM             8'b?10?_?1?1    // 0x55
 `define CD_SPI_CS              8'b????_?11?    // 0x56
 `define CD_SWD_QCONFIG         8'b????_1??1    // 0x59
 `define CD_GPIO_STEP           8'b??00_???1    // 0x41
@@ -341,7 +348,8 @@ module cmd_dispatch #(
 `define CD_SET_DAC_STOP_AFTER  8'b????_0100    // 0x14
 `define CD_SET_TRIGGER         8'b??11_??11    // 0x33
 `define CD_I2C_CONFIG          8'b??10_???0    // 0x60
-`define CD_UART_CONFIG         8'b?111_????    // 0x70
+`define CD_UART_CONFIG         8'b?111_?0??
+`define CD_UART2_CONFIG        8'b?111_?1??    // 0x75    // 0x70
 
 `define CD_LOAD_WAVE           8'b?0??_????    // 0x10
 `define CD_SWD_FEED            8'b????_??01    // 0x51
@@ -349,27 +357,28 @@ module cmd_dispatch #(
 `define CD_SWD_READ            8'b??0?_??1?    // 0x52
 `define CD_I2C_LOAD_REGS       8'b???0_???0    // 0x62
 `define CD_I2C_READ_REGS       8'b???0_???1    // 0x63
-`define CD_UART_WRITE          8'b??11_???0    // 0x72
+`define CD_UART_WRITE          8'b??11_?0?0
+`define CD_UART2_WRITE         8'b????_?11?    // 0x76    // 0x72
 `define CD_UART_READ           8'b???1_??11    // 0x73
 
 `ifndef SYNTHESIS
-    localparam N_COLLECT = 20, N_STREAM = 8;
+    localparam N_COLLECT = 21, N_STREAM = 9;
     localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
         OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
         OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
         OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
-        OP_I2C_CONFIG, OP_UART_CONFIG };
+        OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG };
     localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
         `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
         `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
         `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
-        `CD_I2C_CONFIG, `CD_UART_CONFIG };
+        `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG };
     localparam [N_STREAM*8-1:0] STREAM_OPS = {
         OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
-        OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_UART_WRITE, OP_UART_READ };
+        OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_UART_WRITE, OP_UART_READ, OP_UART2_WRITE };
     localparam [N_STREAM*8-1:0] STREAM_PATS = {
         `CD_LOAD_WAVE, `CD_SWD_FEED, `CD_SWD_QFEED, `CD_SWD_READ,
-        `CD_I2C_LOAD_REGS, `CD_I2C_READ_REGS, `CD_UART_WRITE, `CD_UART_READ };
+        `CD_I2C_LOAD_REGS, `CD_I2C_READ_REGS, `CD_UART_WRITE, `CD_UART_READ, `CD_UART2_WRITE };
 
     function pat_hit(input [7:0] c, input [7:0] p);   // casez semantics: z bits don't care
         integer b;
@@ -505,13 +514,13 @@ module cmd_dispatch #(
     endfunction
 
     // UART (LEN 3): rx_avail(2) + flags.  flags bit0=tx_full, bit1=tx_empty, bit2=rx_overflow,
-    // bit3=armed.
+    // bit3=armed; v48: bit4-6 = UART2 tx_full, tx_empty, armed.
     function [7:0] uart_status_next;
         input [1:0] rem;
         begin
             case (rem)
                 2'd3:    uart_status_next = {7'b0, uart_rx_avail[8]};   // byte 1
-                default: uart_status_next = {4'b0, uart_armed, uart_rx_overflow,
+                default: uart_status_next = {1'b0, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
                                              uart_tx_empty, uart_tx_full};   // byte 2 (rem 2)
             endcase
         end
@@ -572,6 +581,8 @@ module cmd_dispatch #(
             la_cap_divider    <= 16'd2;
 
             uart_cfg_stb      <= 1'b0;
+            uart2_cfg_stb     <= 1'b0;
+            uart2_tx_we       <= 1'b0;
             uart_disable_stb  <= 1'b0;
             uart_tx_we        <= 1'b0;
             uart_rx_re        <= 1'b0;
@@ -597,6 +608,8 @@ module cmd_dispatch #(
             i2c_reg_we      <= 1'b0;
             la_cap_start    <= 1'b0;
             uart_cfg_stb     <= 1'b0;
+            uart2_cfg_stb    <= 1'b0;
+            uart2_tx_we      <= 1'b0;
             uart_disable_stb <= 1'b0;
             uart_tx_we       <= 1'b0;
             uart_rx_re       <= 1'b0;
@@ -770,6 +783,8 @@ module cmd_dispatch #(
 
                             // ---- UART proxy ----
                             OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_UART2_CONFIG: begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_UART2_WRITE:  state <= S_READ_LEN0;
                             OP_UART_DISABLE: begin uart_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_UART_WRITE,
                             OP_UART_READ:    state <= S_READ_LEN0;
@@ -821,7 +836,7 @@ module cmd_dispatch #(
                                     tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr = start address
                                     state   <= S_REG_READ;
                                 end
-                            `CD_UART_WRITE:
+                            `CD_UART_WRITE, `CD_UART2_WRITE:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_UART_WRITE;
                             `CD_UART_READ:
@@ -986,6 +1001,8 @@ module cmd_dispatch #(
                                     // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
                                     uart_cfg_stb     <= 1'b1;
                                 end
+                                // UART_CONFIG's payload; the uart wires above carry it (rx_ch unused).
+                                `CD_UART2_CONFIG: uart2_cfg_stb <= 1'b1;
                                 default: ;
                             endcase
                             state <= S_DONE;
@@ -1052,7 +1069,9 @@ module cmd_dispatch #(
 
                     // ---- UART proxy: stream bytes into the TX FIFO ----
                     S_UART_WRITE: begin
-                        uart_tx_we    <= 1'b1;
+                        // opcode bit2 picks the FIFO: 0x72 UART_WRITE, 0x76 UART2_WRITE.
+                        uart_tx_we    <= ~current_cmd[2];
+                        uart2_tx_we   <= current_cmd[2];
                         if (last_byte) state <= S_DONE;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
@@ -1135,6 +1154,8 @@ endmodule
 `undef CD_SET_TRIGGER
 `undef CD_I2C_CONFIG
 `undef CD_UART_CONFIG
+`undef CD_UART2_CONFIG
+`undef CD_UART2_WRITE
 `undef CD_LOAD_WAVE
 `undef CD_SWD_FEED
 `undef CD_SWD_QFEED

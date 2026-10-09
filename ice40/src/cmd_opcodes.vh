@@ -50,3 +50,5 @@
     localparam OP_UART_WRITE         = 8'h72;
     localparam OP_UART_READ          = 8'h73;
     localparam OP_UART_STATUS        = 8'h74;
+    localparam OP_UART2_CONFIG       = 8'h75;
+    localparam OP_UART2_WRITE        = 8'h76;
