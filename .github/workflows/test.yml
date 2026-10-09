@@ -108,6 +108,9 @@ jobs:
       - name: Set up OSS CAD Suite (yosys / nextpnr-ice40 / icestorm / iverilog)
         uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
+          # Authenticated release lookups: the anonymous API limit is shared per runner IP and the
+          # gate-level matrix runs this step once per bench.
+          github-token: ${{ github.token }}
           # PIN yosys/nextpnr to the 0.65 toolchain the design is validated on. yosys 0.66's
           # abc9 change places the up5k ~7 MHz worse (docs / ice40 LUT-optimization notes), which
           # dropped the razor-thin deep-DAC-replay image's clk48 below 48 MHz on the drifting
@@ -159,6 +162,9 @@ jobs:
       - name: Set up OSS CAD Suite (yosys / nextpnr-ecp5 / prjtrellis / iverilog)
         uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
+          # Authenticated release lookups: the anonymous API limit is shared per runner IP and the
+          # gate-level matrix runs this step once per bench.
+          github-token: ${{ github.token }}
           version: '2026-05-13'
       - name: RTL benches
         run: make -C motor-emulator/ecp5 test-rtl YOSYS=yosys
@@ -190,6 +196,9 @@ jobs:
       - name: Set up OSS CAD Suite (yosys / iverilog)
         uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
+          # Authenticated release lookups: the anonymous API limit is shared per runner IP and the
+          # gate-level matrix runs this step once per bench.
+          github-token: ${{ github.token }}
           version: '2026-05-13'
       - name: Gate-level bench ${{ matrix.bench }}
         env:
