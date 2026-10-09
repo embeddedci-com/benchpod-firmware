@@ -939,7 +939,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (n < 1u) n = 1u;
         if (n > LA_PSRAM_MAX_SAMPLES) n = LA_PSRAM_MAX_SAMPLES;
         static uint16_t lo[4], hi[4];
-        if (fpga_la_capture_psram_start((size_t)n, 0.0f /*max rate*/) != 0) {
+        if (fpga_la_capture_psram_start((size_t)n, 0.0f /*max rate*/, NULL) != 0) {
             op(out, ctx, "  lastress: arm failed (v2 gateware / LA voltage? see log)\r\n");
         } else {
             int r = 0; uint32_t spin = 0;

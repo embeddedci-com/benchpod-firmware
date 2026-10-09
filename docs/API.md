@@ -727,9 +727,27 @@ Capture all 14 LA channels into PSRAM and stream them back. The reply uses the L
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | LA samples. The limit is the PSRAM left above a resident deep-replay waveform (up to the whole 8 MB, 2 bytes per sample). |
-| `sample_rate_mhz` | number (MHz) | no | max | LA sample clock. |
+| `sample_rate_mhz` | number (MHz) | no | max | LA sample clock. The pod runs the closest rate at or below it that it can reach (see below). |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
+
+The first reply packet carries `la_rate_hz`, the **achieved** sample rate in Hz. Use it, not the
+requested rate, as the time base:
+
+```json
+{"status":"ok","bits":16,"la_rate_hz":2181818,"la":true,"la_edges":[[0,256],[11,0]],"la_upto":256,"more":true}
+```
+
+The achieved rate can be lower than the request for two reasons:
+
+- The sample period is a whole number of 24 MHz clocks, so the rate is 24 MHz ÷ *n* (*n* ≥ 2,
+  so at most 12 MS/s), rounded down from the request: 2.304 MHz runs at 24/11 = 2.18 MHz.
+  Request a rate of that form (12, 8, 6, 4.8, 4, 3, 2.4, 2, … MHz) to get it exactly.
+- A capture larger than the 64 KB burst buffer (32768 samples) is slowed until it fits, so no
+  sample is dropped: about 4 MS/s at 100 000 samples and 3 MS/s at 300 000 or more.
+
+Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
+requested rate.
 
 | Condition | Message |
 |---|---|
