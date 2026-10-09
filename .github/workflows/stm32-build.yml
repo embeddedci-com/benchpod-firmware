@@ -14,6 +14,11 @@
 # The build does not embed gateware or ESP32-C3 blobs (their manifest entries stay empty);
 # the release workflow adds those. test.yml still runs the plain host tests without Cube.
 # The release workflow calls this one (workflow_call) and waits for it.
+#
+# Path gating, pull requests only: both jobs run only when the PR changes what the build reads
+# (stm32h563/, esp32-hosted-slave/, tools/fwsign.py, .gitmodules or this workflow). A push to
+# main (a merge), the release and a failed `changes` job always run them. Skipped by its `if`,
+# build-and-test reports success, so the required check stays green.
 name: STM32 firmware build
 
 on:
@@ -29,7 +34,46 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      stm32: ${{ steps.filter.outputs.stm32 }}
+    steps:
+      - name: Checkout (tree only, for the diff)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          filter: blob:none
+          sparse-checkout: .github
+      - name: Does this change need the firmware build?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          all() {
+            echo "$1: run the build"
+            echo "stm32=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          [ "$EVENT" = pull_request ] || all "event $EVENT"
+          if [ -z "$PR_BASE" ]; then all "no base commit"; fi
+          if ! git fetch -q --depth=1 --filter=blob:none origin "$PR_BASE"; then all "base $PR_BASE not fetchable"; fi
+          changed=$(git diff --name-only --no-renames "$PR_BASE" HEAD)
+          echo "changed files:"; sed 's/^/  /' <<< "$changed"
+          if grep -Eq '^(stm32h563/|esp32-hosted-slave/|tools/fwsign\.py$|\.gitmodules$|\.github/workflows/stm32-build\.yml$)' <<< "$changed"; then
+            stm32=true
+          else
+            stm32=false
+          fi
+          echo "stm32=$stm32"
+          echo "stm32=$stm32" >> "$GITHUB_OUTPUT"
+
   build-and-test:
+    # a required check: skipped by this `if` it reports success; runs when `changes` failed
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stm32 != 'false' }}
     # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
     runs-on: ubuntu-24.04
     steps:
@@ -85,6 +129,8 @@ jobs:
           fi
 
   release-build:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.stm32 != 'false' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout (with submodules)
