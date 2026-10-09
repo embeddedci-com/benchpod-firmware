@@ -1,20 +1,20 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=47
-source_sha256=71aaf4939efa29e8a701b1edd44cdc768e1c5d4260d05f745788e8c6a6140b61
-built_from=e4f5d6f
+gateware_version=48
+source_sha256=7add44e97e67e6c1f0d12526e8a21415834fda628e5c4fb61a007fa01b0a08e7
+built_from=0ce4b21
 promoted=2026-10-08
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=bit-identical to the v47 images HW-verified on benchpod-baea06 2026-10-08 (P3 trial: LAN 65/0/4, cloud 57/0); comment-only source changes
-loop.sha256=413097763d590c238d5e19b0f3f03a3b2d6e1c0e5b7d7eb0a5965a518def9063
-loop.seed=26
+hw_verified=benchpod-baea06 2026-10-08: SDK e2e 117 passed 0 failed (incl. deep replay while capturing, image round trip), MCP 9, OpenHTF 2; process-node HIL 78 passed (incl. BME280/SHT4x/MPU-6050 over the DUT's I2C); GPS NMEA on UART2 decoded from LA captures at 9600/1 Hz and 115200/10 Hz
+loop.sha256=f74e46b1733cf1bdf7ebf630be41afa9446391138d5212ea9a69dfb856f5e969
+loop.seed=17
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=55.05
-deep.sha256=fbcbef57cefa522d0df0e0be61c545b4354005e8fb18026ef2cb65345fc2704a
-deep.seed=57
+loop.clk48_mhz=54.84
+deep.sha256=784aa2532070c9a6f994be7547bc17365bb3c876cba0593e5e901a53c9d9ff59
+deep.seed=13
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=57.67
+deep.clk48_mhz=59.54

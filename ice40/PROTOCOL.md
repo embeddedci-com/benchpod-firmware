@@ -63,7 +63,9 @@ image-specific commands are gated on FPGA_FEATURES instead.
 | 0x71 | UART_DISABLE | none | none |
 | 0x72 | UART_WRITE | len(2) + N data bytes | none (TX FIFO) |
 | 0x73 | UART_READ | len(2) | N bytes (RX FIFO) |
-| 0x74 | UART_STATUS | none | 3 bytes: rx_avail(2), flags (reading it clears the sticky RX overflow) |
+| 0x74 | UART_STATUS | none | 3 bytes: rx_avail(2), flags: bit0 tx_full, bit1 tx_empty, bit2 rx_overflow (sticky; reading the status clears it), bit3 armed; v48+: bit4 UART2 tx_full, bit5 UART2 tx_empty, bit6 UART2 armed |
+| 0x75 | UART2_CONFIG | rx_ch (ignored) + tx_ch + div(3) + flags | none (v48+; a second, TX-only UART on one LA channel, for streams the pod sends the DUT while the UART proxy keeps its console, e.g. NMEA sentences of an emulated GPS receiver. Payload laid out as UART_CONFIG; flags bit0 = enable, so a config with enable 0 disarms it and releases the channel) |
+| 0x76 | UART2_WRITE | len(2) + N data bytes | none (v48+; UART2's 256-byte TX FIFO. UART_STATUS bit4 reports it full) |
 
 ## Retired opcodes
 

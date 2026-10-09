@@ -264,6 +264,7 @@ typedef struct {
     bool gpio_read;       /* GPIO_GET: live LA pin levels (gpio read, la_pins levels) */
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
     bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
+    bool uart2;           /* UART2_CONFIG: the TX-only second UART (gps_start) */
 } signal_engine_caps_t;
 
 /* Fill *out with the running image's feature flags. Safe to call from any task. */
@@ -685,6 +686,9 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART_STATUS_TX_EMPTY    (1u << 1)
 #define UART_STATUS_RX_OVERFLOW (1u << 2)
 #define UART_STATUS_ARMED       (1u << 3)
+#define UART2_STATUS_TX_FULL    (1u << 4)   /* v48+: UART2, the TX-only second UART */
+#define UART2_STATUS_TX_EMPTY   (1u << 5)
+#define UART2_STATUS_ARMED      (1u << 6)
 
 /* Arm the soft UART on the given RX/TX LA channels at `baud` (the firmware
    computes the FPGA bit-period divisor).  enable=false configures without
@@ -707,6 +711,20 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
 /* Drain up to `len` bytes from the FPGA RX FIFO into `buf`; returns the count
    actually read (0 if none available). */
 size_t fpga_uart_read(uint8_t *buf, size_t len);
+
+/* ---- UART2: a second, TX-only soft UART (gateware >= UART2_MIN_GW) ----------
+ * Streams bytes to the DUT on one LA channel while the UART proxy keeps its own
+ * pair (an emulated GPS receiver's NMEA, gps_sim.c).  Its status bits ride in
+ * UART_STATUS (UART2_STATUS_*); fpga_uart_status() latches the proxy's sticky RX
+ * overflow on every read, so polling UART2 never loses it. */
+#define UART2_MIN_GW     48u
+#define FPGA_UART2_FIFO  256u   /* TX FIFO depth (uart_engine.v) */
+
+/* Arm (enable) or disarm UART2 on 1-based LA channel tx_ch at `baud`.
+   0 ok, -1 bad channel/baud, -3 gateware older than UART2_MIN_GW. */
+int fpga_uart2_config(unsigned tx_ch, uint32_t baud, bool enable);
+/* Queue up to FPGA_UART2_FIFO bytes into its TX FIFO (call when it reports empty). */
+void fpga_uart2_fifo_write(const uint8_t *data, size_t len);
 /* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
 bool fpga_uart_rx_overflowed(void);
 /* Reprogram the iCE40 when its gateware is not the version this firmware was built with, from

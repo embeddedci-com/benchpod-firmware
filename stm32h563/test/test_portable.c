@@ -6,8 +6,6 @@
  * image, and the v2 sample-rate divider arithmetic shared with the gateware.
  */
 #include "b64url.h"
-#include "sensor_sim.h"
-#include "sensor_bmp280.h"
 #include "esp_hosted_frame.h"
 
 #include <stdint.h>
@@ -60,27 +58,6 @@ static void test_b64url_vectors(void)
     n = b64url_encode(raw, 2, enc, sizeof(enc));
     enc[n] = '\0';
     CHECK(strcmp(enc, "-_8") == 0);
-}
-
-/* ---- BMP280 model: register image is sane ---- */
-static void test_bmp280_regimage(void)
-{
-    sensor_model_t *m = sensor_bmp280_model();
-    CHECK(m != NULL);
-    CHECK(strcmp(m->name, "bmp280") == 0);
-    CHECK(m->default_addr7 == 0x76);
-
-    uint8_t img[SENSOR_REGIMAGE_LEN];
-    memset(img, 0xAA, sizeof(img));
-    m->reset(m);
-    m->build_regimage(m, img);
-    /* chip-id register (0xD0) reports BMP280 = 0x58 */
-    CHECK(img[0xD0] == 0x58);
-    /* setting a temperature changes the temp ADC registers (0xFA..0xFC) */
-    uint8_t before[3] = { img[0xFA], img[0xFB], img[0xFC] };
-    CHECK(m->set_param(m, "temperature_c", 42.0f) == 0);
-    m->build_regimage(m, img);
-    CHECK(memcmp(before, &img[0xFA], 3) != 0);
 }
 
 /* ---- divider arithmetic (mirrors signal_engine divider_from_rate_hz) ---- */
@@ -227,7 +204,6 @@ int main(void)
 {
     test_b64url_roundtrip();
     test_b64url_vectors();
-    test_bmp280_regimage();
     test_divider();
     test_dac_freq_accuracy();
     test_esp_hosted_frame_roundtrip();

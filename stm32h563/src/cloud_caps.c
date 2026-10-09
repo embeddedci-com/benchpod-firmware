@@ -36,11 +36,12 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
                "\"nrst_pin\":%s,"
                "\"power_profile\":true,"
                "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"can\":true,\"pod_current\":%s,"
-               "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,",
+               "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
+               "\"sensor_types\":true,\"gps\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
             tf(c->spi_master),   /* spi_stream: firmware, on the SPI master */
             tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->pod_current),
-            tf(c->analog), c->current_out_min_ua, c->current_out_max_ua);
+            tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->gps));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
     bp_emit_raw(e, ",");
@@ -52,7 +53,8 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit_raw(e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
-                   ",\"can\"");   /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
+                   ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
+                   ",\"sensor_types\"");   /* sensor_types lists the emulated I2C sensors */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
     if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
     if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");
@@ -66,6 +68,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->gpio_read)       bp_emit_raw(e, ",\"gpio_read\"");
     if (c->capture_trigger) bp_emit_raw(e, ",\"capture_trigger\"");
     if (c->spi_master)      bp_emit_raw(e, ",\"spi_master\",\"spi_stream\"");   /* spi_stream: firmware */
+    if (c->gps)             bp_emit_raw(e, ",\"gps\"");   /* gps_start: UART2, gateware v48+ */
     if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
     if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
     bp_emit_raw(e, "]");

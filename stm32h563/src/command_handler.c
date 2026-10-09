@@ -15,6 +15,7 @@
 #include "signal_engine.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "sensor_sim.h"
+#include "gps_sim.h"
 #include "scpi_server.h"
 #include "board_variant.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
@@ -227,6 +228,12 @@ void command_handler_poll(void) {
 
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
+
+    /* ---- emulated I2C sensor: register-write watch, re-arm after a reconfiguration ---- */
+    sensor_poll();
+
+    /* ---- emulated GPS receiver: the next NMEA epoch out of UART2 ---- */
+    gps_poll();
 }
 
 /* ---- Command handlers ---- */
@@ -262,9 +269,10 @@ void command_handler_on_gateware_reconfigured(void) {
        re-apply the gpio pins' GPIO_SET latches, which the fabric also lost. */
     swd_disarm_and_release();
     spi_on_gateware_reconfigured();
-    if (sensor_sim_active()) sensor_sim_stop();
-    la_pins_release_fn(LA_FN_I2C_SDA);
-    la_pins_release_fn(LA_FN_I2C_SCL);
+    /* An emulated sensor keeps its pins and values: sensor_poll() re-arms it on the new
+       fabric (and releases the pins if that fails), as the UART proxy does below. */
+    sensor_sim_on_gateware_reconfigured();
+    gps_sim_on_gateware_reconfigured();
     capture_on_gateware_reconfigured();
     la_pins_on_gateware_reconfigured();
     uart_proxy_on_gateware_reconfigured();

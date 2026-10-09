@@ -179,6 +179,8 @@ module engine_block #(
     wire        uart_tx_full, uart_tx_empty, uart_rx_overflow, uart_armed;
     wire [3:0]  uart_rx_ch, uart_tx_ch;  wire uart_tx_out;
     wire        uart_rx_in = la_in[uart_rx_ch];
+    wire        uart2_cfg_stb, uart2_tx_we, uart2_tx_full, uart2_tx_empty, uart2_armed;
+    wire [3:0]  uart2_tx_ch;  wire uart2_tx_out;
 
     // ---- command dispatcher ----
     // cap_done is the already-combined STATUS done bit (v2 folds in corr_done before
@@ -238,10 +240,25 @@ module engine_block #(
         .uart_tx_we(uart_tx_we), .uart_tx_wdata(uart_tx_wdata),
         .uart_rx_re(uart_rx_re), .uart_rx_rdata(uart_rx_rdata), .uart_rx_ovf_clr(uart_rx_ovf_clr),
         .uart_rx_avail(uart_rx_avail), .uart_tx_full(uart_tx_full),
-        .uart_tx_empty(uart_tx_empty), .uart_rx_overflow(uart_rx_overflow), .uart_armed(uart_armed)
+        .uart_tx_empty(uart_tx_empty), .uart_rx_overflow(uart_rx_overflow), .uart_armed(uart_armed),
+        .uart2_cfg_stb(uart2_cfg_stb), .uart2_tx_we(uart2_tx_we), .uart2_tx_full(uart2_tx_full),
+        .uart2_tx_empty(uart2_tx_empty), .uart2_armed(uart2_armed)
     );
 
     // ---- UART proxy engine ----
+    // UART2 (v48): a second uart_engine used TX-only, for streams the pod sends the DUT
+    // (an emulated GPS receiver's NMEA) while the proxy keeps the console.  RX is tied idle
+    // and its FIFO is never read, so synthesis drops the RX half (+~150 LC, 1 BRAM).
+    uart_engine uart2_i (
+        .clk(clk), .rst(rst),
+        .cfg_stb(uart2_cfg_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(uart_cfg_tx_ch),
+        .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .disable_stb(1'b0),
+        .rx_ch(), .tx_ch(uart2_tx_ch), .armed(uart2_armed),
+        .tx_we(uart2_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart2_tx_full), .tx_empty(uart2_tx_empty),
+        .rx_re(1'b0), .rx_rdata(), .rx_avail(), .rx_overflow(), .rx_ovf_clr(1'b0),
+        .rx_in(1'b1), .tx_out(uart2_tx_out)
+    );
+
     uart_engine uart_i (
         .clk(clk), .rst(rst),
         .cfg_stb(uart_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
@@ -318,6 +335,7 @@ module engine_block #(
         .set_stb(gpio_set_stb), .set_ch(gpio_set_ch), .set_mode(gpio_set_mode),
         .i2c_active(i2c_armed), .i2c_sda_ch(i2c_sda_ch), .i2c_sda_drive_low(i2c_sda_drive_low),
         .uart_active(uart_armed), .uart_tx_ch(uart_tx_ch), .uart_tx_val(uart_tx_out),
+        .uart2_active(uart2_armed), .uart2_tx_ch(uart2_tx_ch), .uart2_tx_val(uart2_tx_out),
         .step_active(step_busy), .step_ch(step_la_ch), .step_val(step_la_val),
         .swd_active(swd_armed),
         .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val),

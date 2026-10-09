@@ -42,6 +42,7 @@ typedef struct {
     unsigned long replay_max_samples;
     bool          control_loop, loop_sources, loop_input_map, cotrig;
     bool          gpio_read, capture_trigger, spi_master;
+    bool          gps;            /* UART2 in the gateware (v48+): the emulated GPS receiver */
     bool          nrst_pin;
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;

@@ -33,6 +33,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe) },   /* always refused off the USB console: it changes nothing */
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status) },
     { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor_status) },
+    { { "sensor_types", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor_types) },
+    { { "gps_status", CMD_TIER_T0 }, 0, CMD_FN(handle_gps_status) },
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status) },
     { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status) },
     { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status) },
@@ -88,6 +90,9 @@ static const cmd_desc_t k_tiers[] = {
     { { "sensor_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor_start) },
     { { "sensor_set", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor_set) },
     { { "sensor_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor_stop) },
+    { { "gps_start", CMD_TIER_T1 }, 0, CMD_FN(handle_gps_start) },
+    { { "gps_set", CMD_TIER_T1 }, 0, CMD_FN(handle_gps_set) },
+    { { "gps_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_gps_stop) },
     { { "can_config", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_config) },
     { { "can_write", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_write) },
     { { "can_term", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_term) },
