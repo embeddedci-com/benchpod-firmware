@@ -9,16 +9,24 @@
 #     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
 #     yosys gate-level netlist, in a job of its own: it takes several times longer).
 #
-# Triggers: pull requests, pushes to main, and the release workflow (workflow_call with
-# release: true), which waits for these jobs before it publishes anything. A push to a PR branch
-# used to run everything twice (push + pull_request); branches other than main now get the
-# pull_request run only.
+# Triggers: pull requests, pushes to main, a nightly run, manual runs (workflow_dispatch) and the
+# release workflow (workflow_call with release: true), which waits for these jobs before it
+# publishes anything. A push to a PR branch used to run everything twice (push + pull_request);
+# branches other than main now get the pull_request run only.
+#
+# Path gating: the `changes` job lists the files a PR (or a push to main) changes. The
+# motor-emulator jobs run only when motor-emulator/ or this workflow changed; the nightly and
+# manual runs always run them. Any other event, or a base commit that cannot be fetched, runs
+# everything. A job skipped by its `if` reports success, so a required check stays green.
 name: Tests
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '41 4 * * *'   # nightly, after the 02:17 UTC HIL run (embeddedci-server hil.yml)
+  workflow_dispatch:
   workflow_call:
     inputs:
       release:
@@ -30,6 +38,45 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      motor: ${{ steps.filter.outputs.motor }}
+    steps:
+      - name: Checkout (tree only, for the diff)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          filter: blob:none
+          sparse-checkout: .github
+      - name: Which suites does this change need?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release && 'true' || 'false' }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          all() {
+            echo "$1: run every suite"
+            echo "motor=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [ "$RELEASE" = true ]; then all "release"; fi
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) all "event $EVENT" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then all "no base commit"; fi
+          if ! git fetch -q --depth=1 --filter=blob:none origin "$base"; then all "base $base not fetchable"; fi
+          changed=$(git diff --name-only --no-renames "$base" HEAD)
+          echo "changed files:"; sed 's/^/  /' <<< "$changed"
+          match() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
+          motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
+          echo "motor=$motor"
+          echo "motor=$motor" >> "$GITHUB_OUTPUT"
+
   ice40-sim:
     runs-on: ubuntu-latest
     steps:
@@ -78,8 +125,9 @@ jobs:
         run: make -C stm32h563/test
 
   motor-emulator-sim:
-    # not part of a firmware release
-    if: ${{ !inputs.release }}
+    # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)
+    needs: changes
+    if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -104,7 +152,8 @@ jobs:
           if-no-files-found: error
 
   motor-emulator-gl:
-    if: ${{ !inputs.release }}
+    needs: changes
+    if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
