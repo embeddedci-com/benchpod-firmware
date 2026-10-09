@@ -7,18 +7,32 @@
 #   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
 #   • motor-emulator gateware (ECP5) — `make -C motor-emulator/ecp5 test-rtl all` (every RTL
 #     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
-#     yosys gate-level netlist, in a job of its own: it takes several times longer).
+#     yosys gate-level netlist). The gate-level benches run as a matrix, one job per bench in
+#     BENCHES_GL (the `changes` job reads the list from motor-emulator/ecp5/Makefile), so the run
+#     takes as long as its slowest bench (tb_top_gl, most of the time) instead of the sum on
+#     four cores; the motor-emulator-gl job sums up the matrix.
 #
-# Triggers: pull requests, pushes to main, and the release workflow (workflow_call with
-# release: true), which waits for these jobs before it publishes anything. A push to a PR branch
-# used to run everything twice (push + pull_request); branches other than main now get the
-# pull_request run only.
+# Triggers: pull requests, pushes to main, a nightly run, manual runs (workflow_dispatch) and the
+# release workflow (workflow_call with release: true), which waits for these jobs before it
+# publishes anything. A push to a PR branch used to run everything twice (push + pull_request);
+# branches other than main now get the pull_request run only.
+#
+# Path gating: the `changes` job lists the files a PR (or a push to main) changes. ice40-sim
+# runs only when what `make -C ice40 test` reads changed: ice40/, tools/gen_protocol.py and the
+# stm32h563 headers it generates (the --check compares them), tools/ice40_release.py and its
+# test, or this workflow. The motor-emulator jobs run only when motor-emulator/ or this workflow
+# changed. The nightly and manual runs always run everything, and so does any other event, a
+# base commit that cannot be fetched or a failed `changes` job. A job skipped by its `if` reports
+# success, so a required check (ice40-sim) stays green.
 name: Tests
 
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '41 4 * * *'   # nightly, after the 02:17 UTC HIL run (embeddedci-server hil.yml)
+  workflow_dispatch:
   workflow_call:
     inputs:
       release:
@@ -30,7 +44,63 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      ice40: ${{ steps.filter.outputs.ice40 }}
+      motor: ${{ steps.filter.outputs.motor }}
+      gl_benches: ${{ steps.benches.outputs.gl_benches }}
+    steps:
+      - name: Checkout (tree only, for the diff)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            .github
+            motor-emulator/ecp5
+      - name: Gate-level bench list (BENCHES_GL in motor-emulator/ecp5/Makefile)
+        id: benches
+        run: |
+          benches=$(sed -n 's/^BENCHES_GL *= *//p' motor-emulator/ecp5/Makefile | jq -Rc 'split(" ") | map(select(length > 0))')
+          echo "gl_benches=$benches"
+          if [ "$benches" = "[]" ] || [ -z "$benches" ]; then echo "::error::no BENCHES_GL in motor-emulator/ecp5/Makefile"; exit 1; fi
+          echo "gl_benches=$benches" >> "$GITHUB_OUTPUT"
+      - name: Which suites does this change need?
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE: ${{ inputs.release && 'true' || 'false' }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          all() {
+            echo "$1: run every suite"
+            echo "ice40=true" >> "$GITHUB_OUTPUT"
+            echo "motor=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          if [ "$RELEASE" = true ]; then all "release"; fi
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) all "event $EVENT" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then all "no base commit"; fi
+          if ! git fetch -q --depth=1 --filter=blob:none origin "$base"; then all "base $base not fetchable"; fi
+          changed=$(git diff --name-only --no-renames "$base" HEAD)
+          echo "changed files:"; sed 's/^/  /' <<< "$changed"
+          match() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
+          ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
+          motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
+          echo "ice40=$ice40 motor=$motor"
+          echo "ice40=$ice40" >> "$GITHUB_OUTPUT"
+          echo "motor=$motor" >> "$GITHUB_OUTPUT"
+
   ice40-sim:
+    # a required check: skipped by this `if` it reports success; runs when `changes` failed
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ice40 != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -78,8 +148,9 @@ jobs:
         run: make -C stm32h563/test
 
   motor-emulator-sim:
-    # not part of a firmware release
-    if: ${{ !inputs.release }}
+    # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)
+    needs: changes
+    if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -103,10 +174,16 @@ jobs:
             motor-emulator/ecp5/build/nextpnr.log
           if-no-files-found: error
 
-  motor-emulator-gl:
-    if: ${{ !inputs.release }}
+  motor-emulator-gl-bench:
+    name: motor-emulator-gl (${{ matrix.bench }})
+    needs: changes
+    if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        bench: ${{ fromJSON(needs.changes.outputs.gl_benches) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,5 +191,21 @@ jobs:
         uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
           version: '2026-05-13'
-      - name: Gate-level benches (one per core; make keeps each bench's output together)
-        run: make -C motor-emulator/ecp5 -j"$(nproc)" --output-sync=target test-gl YOSYS=yosys
+      - name: Gate-level bench ${{ matrix.bench }}
+        env:
+          BENCH: ${{ matrix.bench }}
+        run: make -C motor-emulator/ecp5 -j"$(nproc)" "$BENCH" YOSYS=yosys
+
+  # one status for the whole matrix (skipped benches count as passed)
+  motor-emulator-gl:
+    needs: motor-emulator-gl-bench
+    if: ${{ !cancelled() && !inputs.release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every gate-level bench passed
+        env:
+          RESULT: ${{ needs.motor-emulator-gl-bench.result }}
+        run: |
+          echo "gate-level benches: $RESULT"
+          [ "$RESULT" = success ] || [ "$RESULT" = skipped ]
