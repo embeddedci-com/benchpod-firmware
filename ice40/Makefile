@@ -383,9 +383,12 @@ $(OUT).bin: $(OUT).asc
 # v47 + cell_gearbox48 (ARCH-GW-1: the writer's and reader's clk -> clk48 cell latch as one module;
 # yosys equiv proves both modules unchanged, same flip-flops, but abc9 maps the netlist slightly
 # differently: 3893 LC): seed 26 still closes (clk48 55.05, clk 29.73, clk -> clk48 10.38 ns).
-SEED_LOOP ?= 26
-# Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).
-SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
+# v48 (UART2, the TX-only second UART; 4066 LC, 77%): swept 1..64 in both toolchains: 48/64 local,
+# 55/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 26 -> 17, the best in both (clk48 54.84 local /
+# 55.98 CI, clk -> clk48 10.73 / 9.84 ns).
+SEED_LOOP ?= 17
+# Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).
+SEED_LOOP_FALLBACK ?= 40 26 25 15 37 34 7 58 60 6 2
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -463,11 +466,14 @@ SEED_LOOP_FALLBACK ?= 11 43 56 5 35 3 23 2 38 25 57 1 24 20 61 9 63 29 58 37
 # the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
 # v47 + cell_gearbox48 (ARCH-GW-1, no logic change, see SEED_LOOP; 3610 LC): seed 57 still closes
 # (clk48 57.67, clk 32.55, clk -> clk48 14.41 ns).  A new bitstream: RE-VERIFY on hardware.
-SEED_DEEP ?= 57
-# Good in both toolchains, ordered by the lower of the two clk48 results (v44 sweeps).  A timing
+# v48 (UART2; 3780 LC, 71%): seed 57 FAILED clk48 (45.50 MHz).  Swept 1..64 in both toolchains:
+# 60/64 local, 64/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 57 -> 13 (clk48 59.54 local /
+# 59.26 CI, clk -> clk48 12.79 / 13.91 ns).  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 13
+# Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 55 61 7 62 6 50 16 48 46 45 26 5 64 57 56 32 27 21 14 13
+SEED_DEEP_FALLBACK ?= 6 23 20 45 61 14 28 36 44 48 58 64
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
