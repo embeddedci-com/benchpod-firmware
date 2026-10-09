@@ -14,10 +14,13 @@
 # publishes anything. A push to a PR branch used to run everything twice (push + pull_request);
 # branches other than main now get the pull_request run only.
 #
-# Path gating: the `changes` job lists the files a PR (or a push to main) changes. The
-# motor-emulator jobs run only when motor-emulator/ or this workflow changed; the nightly and
-# manual runs always run them. Any other event, or a base commit that cannot be fetched, runs
-# everything. A job skipped by its `if` reports success, so a required check stays green.
+# Path gating: the `changes` job lists the files a PR (or a push to main) changes. ice40-sim
+# runs only when what `make -C ice40 test` reads changed: ice40/, tools/gen_protocol.py and the
+# stm32h563 headers it generates (the --check compares them), tools/ice40_release.py and its
+# test, or this workflow. The motor-emulator jobs run only when motor-emulator/ or this workflow
+# changed. The nightly and manual runs always run everything, and so does any other event, a
+# base commit that cannot be fetched or a failed `changes` job. A job skipped by its `if` reports
+# success, so a required check (ice40-sim) stays green.
 name: Tests
 
 on:
@@ -42,6 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      ice40: ${{ steps.filter.outputs.ice40 }}
       motor: ${{ steps.filter.outputs.motor }}
     steps:
       - name: Checkout (tree only, for the diff)
@@ -59,6 +63,7 @@ jobs:
         run: |
           all() {
             echo "$1: run every suite"
+            echo "ice40=true" >> "$GITHUB_OUTPUT"
             echo "motor=true" >> "$GITHUB_OUTPUT"
             exit 0
           }
@@ -73,11 +78,16 @@ jobs:
           changed=$(git diff --name-only --no-renames "$base" HEAD)
           echo "changed files:"; sed 's/^/  /' <<< "$changed"
           match() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
+          ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
           motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
-          echo "motor=$motor"
+          echo "ice40=$ice40 motor=$motor"
+          echo "ice40=$ice40" >> "$GITHUB_OUTPUT"
           echo "motor=$motor" >> "$GITHUB_OUTPUT"
 
   ice40-sim:
+    # a required check: skipped by this `if` it reports success; runs when `changes` failed
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ice40 != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
