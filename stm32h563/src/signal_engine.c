@@ -302,7 +302,7 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
 /* Convert a desired LA sample rate (Hz) into an FPGA clock divider (the only caller is the
    LA side of a capture).  sample_rate = FPGA_HFOSC_HZ / divider, so divider = HFOSC / rate.
    0 (or negative) → divider 2, the LA's max rate (12 MS/s).  Clamped to 2..65535.  The DAC
-   has its own conversion (dac_divider_from_rate_hz; it tops out near 889 kS/s). */
+   has its own conversion (dac_replay_plan in la_rate.c; it tops out near 889 kS/s from RAM, 873 kS/s from PSRAM). */
 static uint32_t divider_from_rate_hz(float sample_rate_hz) {
     if (sample_rate_hz <= 0.0f) return 2;
     uint32_t d = (uint32_t)((float)FPGA_HFOSC_HZ / sample_rate_hz + 0.5f);
