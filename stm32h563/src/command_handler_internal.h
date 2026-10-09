@@ -111,6 +111,11 @@ void   handle_cloud_clear(int conn_id, const char *json);
 void   handle_wifi_set(int conn_id, const char *json);
 void   handle_wifi_clear(int conn_id, const char *json);
 void   handle_wifi_status(int conn_id, const char *json);
+/* wifi_clear's second half, the ESP32-C3's NVS partition (esp_rom_flash_erase_nvs). Worker task.
+   wifi_clear_c3_now: erase it now; NULL = erased and verified blank, else why not.
+   wifi_clear_poll: run the erase a JSON wifi_clear scheduled, once its reply is out. */
+const char *wifi_clear_c3_now(void);
+void   wifi_clear_poll(void);
 void   handle_eth(int conn_id, const char *json);
 void   handle_speedtest(int conn_id, const char *json);
 void   speedtest_pump(void);                  /* the "up" direction's paced byte source */

@@ -20,7 +20,9 @@
 #include "config_store.h"
 #include "esp_wifi_ctrl.h"
 #include "esp_hosted_spi.h"
-#include "pico_compat.h"    /* sleep_ms (yields to FreeRTOS) */
+#include "pico_compat.h"    /* sleep_ms (yields to FreeRTOS), time_reached */
+#include "net_reload.h"     /* net_reload_pending: the wifi_clear reply is out */
+#include "boot_guard.h"     /* boot_guard_skip_hw: no W25Q in safe mode */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -239,10 +241,51 @@ void handle_wifi_set(int conn_id, const char *json) {
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
+/* ---- wifi_clear: the ESP32-C3's copy -------------------------------------------------------
+   Pod firmware up to 3.7.0 left the C3 on the IDF default WIFI_STORAGE_FLASH, so the C3 kept the
+   SSID and password in its own NVS partition too. wifi_clear erases that partition after the
+   config store. Over JSON it runs after the reply, like the Wi-Fi drop: the reply may ride the
+   Wi-Fi link, and the erase holds the C3 in its ROM loader for ~3 s. wifi_status reports the
+   outcome as c3_nvs. The console runs it at once (wifi_clear_c3_now). */
+typedef enum { C3_NVS_NONE = 0, C3_NVS_PENDING, C3_NVS_ERASED, C3_NVS_FAILED } c3_nvs_t;
+static c3_nvs_t        s_c3_nvs;          /* since boot: no wifi_clear yet */
+static absolute_time_t s_c3_giveup;       /* a pending erase stops waiting for the bus here */
+#define C3_WIPE_WAIT_MS 60000u            /* for the reply to go out and the PSRAM bus to free */
+
+static const char *c3_nvs_str(void) {
+    switch (s_c3_nvs) {
+    case C3_NVS_PENDING: return "pending";
+    case C3_NVS_ERASED:  return "erased";
+    case C3_NVS_FAILED:  return "failed";
+    default:             return "none";
+    }
+}
+
+const char *wifi_clear_c3_now(void) {
+    const char *why = NULL;
+    if (boot_guard_skip_hw())
+        why = "safe mode: the W25Q that holds the C3 image is off";
+    else if (!(why = bus_busy_reason()) && !net_wifi_wipe_c3())
+        why = "the C3 did not answer its ROM loader or the erase did not verify (see log)";
+    s_c3_nvs = why ? C3_NVS_FAILED : C3_NVS_ERASED;
+    if (why) printf("[wifi] ESP32-C3 NVS not erased: %s\n", why);
+    return why;
+}
+
+void wifi_clear_poll(void) {
+    if (s_c3_nvs != C3_NVS_PENDING) return;
+    bool late = time_reached(s_c3_giveup);
+    if (!late && net_reload_pending()) return;   /* the reply and the Wi-Fi drop go first */
+    if (!late && !boot_guard_skip_hw() && bus_busy_reason()) return;   /* a capture is running */
+    (void)wifi_clear_c3_now();
+}
+
 void handle_wifi_clear(int conn_id, const char *json) {
     (void)json;
     config_clear();
     net_wifi_reload_after_reply();   /* drops Wi-Fi once this reply is out (the cloud may ride it) */
+    s_c3_nvs    = C3_NVS_PENDING;    /* then wifi_clear_poll erases the C3's NVS */
+    s_c3_giveup = make_timeout_time_ms(C3_WIPE_WAIT_MS);
     send_ok_str(conn_id, "\"cleared\"");
 }
 
@@ -395,13 +438,14 @@ void handle_wifi_status(int conn_id, const char *json) {
              "\"connected\":%s,\"ssid\":%s,"
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
              "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
-             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu}}\n",
+             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_nvs\":\"%s\"}}\n",
              esp_wifi_ctrl_state_str(),
              have ? "true" : "false",
              esp_wifi_ctrl_connected() ? "true" : "false",
              bp_emit_ok(&ej) ? ssid_j : "\"\"",
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
-             (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot);
+             (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot,
+             c3_nvs_str());
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
 }

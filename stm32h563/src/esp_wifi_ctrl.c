@@ -2,9 +2,11 @@
  * esp_wifi_ctrl.c — Wi-Fi association over the esp-hosted RPC channel.
  *
  * Hand-rolled minimal protobuf (no protobuf-c dependency) driving the ESP32-C3
- * through the esp-hosted RPC envelope on ESP_SERIAL_IF: Init -> SetConfig(STA)
- * -> Start -> Connect -> GetMac, then waits for the sta-connected event and
- * brings the Wi-Fi netif link up. Credentials come from config_store.
+ * through the esp-hosted RPC envelope on ESP_SERIAL_IF: Init -> SetStorage(RAM)
+ * -> SetMode(STA) -> SetConfig(STA) -> Start -> Connect -> GetMac, then waits for
+ * the sta-connected event and brings the Wi-Fi netif link up. Credentials come
+ * from config_store, which is the only place they are stored: the C3 is told to
+ * keep its Wi-Fi configuration in RAM before it is given any (see WC_SETSTORAGE).
  *
  * ⚠ NOT hardware-verified. The RPC ids/field numbers are from esp-hosted-mcu's
  *   esp_hosted_rpc.proto (commit 8f0770d). The wifi_init_config defaults below
@@ -36,11 +38,13 @@ enum {
     ID_REQ_WIFI_START   = 280, ID_RESP_WIFI_START   = 536,
     ID_REQ_WIFI_CONNECT = 282, ID_RESP_WIFI_CONNECT = 538,
     ID_REQ_WIFI_SETCFG  = 284, ID_RESP_WIFI_SETCFG  = 540,
+    ID_REQ_WIFI_SETSTORAGE = 313, ID_RESP_WIFI_SETSTORAGE = 569,
     ID_EVENT_STA_CONNECTED    = 775,
     ID_EVENT_STA_DISCONNECTED = 776,
 };
 #define WIFI_IF_STA            0
 #define WIFI_MODE_STA          1     /* esp_wifi_types wifi_mode_t WIFI_MODE_STA */
+#define WIFI_STORAGE_RAM       1     /* wifi_storage_t; 0 = WIFI_STORAGE_FLASH, the IDF default */
 #define WIFI_INIT_CONFIG_MAGIC 0x1F2F3F4F   /* IDF v5.x — verify vs slave IDF */
 
 #define STEP_TIMEOUT_MS  4000
@@ -109,6 +113,16 @@ static size_t build_rpc(uint8_t *out, size_t cap, uint32_t msg_id, uint32_t uid,
     return w.err ? 0 : w.len;
 }
 
+/* Rpc_Req_WifiSetStorage { int32 storage = 1 }.  The slave never selects a storage itself, so
+   it runs with the IDF default, WIFI_STORAGE_FLASH: esp_wifi_set_mode/set_config would write
+   the mode and the SSID + password to the C3's own NVS partition, where wifi-clear (which
+   clears config_store) does not reach.  RAM storage keeps them out of the C3's flash. */
+static size_t build_set_storage(uint8_t *out, size_t cap, uint32_t storage) {
+    pb_w w = { out, cap, 0, false };
+    pb_int(&w, 1, storage);
+    return w.err ? 0 : w.len;
+}
+
 /* Rpc_Req_SetMode { int32 mode = 1 } — MUST precede SetConfig, else the slave
    stays WIFI_MODE_NULL, SetConfig(STA) is dropped, and Connect fails with
    ESP_ERR_WIFI_SSID (no association attempt, no event). */
@@ -169,7 +183,9 @@ typedef enum {
     WC_DOWN = 0,   /* unconfigured / ESP held in reset */
     WC_WAIT_READY, /* started, awaiting slave boot event */
     WC_FLASHING,   /* no boot event: the worker is writing the embedded image to the C3 */
-    WC_INIT, WC_SETMODE, WC_SETCFG, WC_START, WC_CONNECT, WC_GETMAC,
+    WC_INIT,
+    WC_SETSTORAGE, /* RAM storage requested; nothing persistent is sent until the C3 confirms */
+    WC_SETMODE, WC_SETCFG, WC_START, WC_CONNECT, WC_GETMAC,
     WC_WAIT_ASSOC, /* connect issued, awaiting sta-connected event */
     WC_UP,
     WC_UP_RSSI,    /* connected; a periodic GetRssi is outstanding */
@@ -204,7 +220,7 @@ const char *esp_wifi_ctrl_state_str(void) {
         case WC_DOWN:        return s_configured ? "starting" : "disabled";
         case WC_WAIT_READY:  return "waiting-slave";
         case WC_FLASHING:    return "flashing-c3";
-        case WC_INIT: case WC_SETMODE: case WC_SETCFG: case WC_START:
+        case WC_INIT: case WC_SETSTORAGE: case WC_SETMODE: case WC_SETCFG: case WC_START:
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: return "connecting";
         case WC_UP: case WC_UP_RSSI: return "connected";
         case WC_BACKOFF:     return "backoff";
@@ -350,6 +366,7 @@ static bool send_req(uint32_t req_id, uint32_t resp_id,
     size_t tn = tlv_wrap(tlv, sizeof(tlv), frame, n);   /* wrap for the pserial endpoint */
     if (tn == 0) return false;
     s_resp_ready = false;
+    s_resp_status = 0;      /* proto3 omits a zero resp code: a stale one must not survive */
     s_await_resp = resp_id;
     s_deadline   = make_timeout_time_ms(STEP_TIMEOUT_MS);
     return esp_hosted_spi_send(ESP_SERIAL_IF, 0, tlv, (uint16_t)tn) == 0;
@@ -458,8 +475,8 @@ void esp_wifi_ctrl_poll(void) {
        sequence it means the C3 reset itself and lost everything we configured. */
     if (esp_hosted_spi_take_slave_reset()) {
         switch (s_state) {
-        case WC_INIT: case WC_SETMODE: case WC_SETCFG: case WC_START: case WC_CONNECT:
-        case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
+        case WC_INIT: case WC_SETSTORAGE: case WC_SETMODE: case WC_SETCFG: case WC_START:
+        case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
             s_lost_reboot++;
             slave_lost("it announced a new boot");
             return;
@@ -509,10 +526,28 @@ void esp_wifi_ctrl_poll(void) {
     case WC_INIT:
         if (s_resp_ready) {
             uint8_t p[16];
+            size_t n = build_set_storage(p, sizeof(p), WIFI_STORAGE_RAM);
+            if (n && send_req(ID_REQ_WIFI_SETSTORAGE, ID_RESP_WIFI_SETSTORAGE, p, n))
+                s_state = WC_SETSTORAGE;
+            else to_backoff("setstorage build/send failed");
+        } else if (time_reached(s_deadline)) to_backoff("init timeout");
+        return;
+
+    case WC_SETSTORAGE:
+        /* The one step whose result code gates the next: without RAM storage confirmed, the
+           mode and the credentials would land in the C3's flash, so they are not sent. */
+        if (s_resp_ready) {
+            if (s_resp_status != 0) {
+                printf("[wifi] ESP32-C3 refused RAM storage (0x%lx): credentials not sent\n",
+                       (unsigned long)(uint32_t)s_resp_status);
+                to_backoff("setstorage failed");
+                return;
+            }
+            uint8_t p[16];
             size_t n = build_set_mode(p, sizeof(p), WIFI_MODE_STA);
             if (n && send_req(ID_REQ_SET_MODE, ID_RESP_SET_MODE, p, n)) s_state = WC_SETMODE;
             else to_backoff("setmode build/send failed");
-        } else if (time_reached(s_deadline)) to_backoff("init timeout");
+        } else if (time_reached(s_deadline)) to_backoff("setstorage timeout");
         return;
 
     case WC_SETMODE:

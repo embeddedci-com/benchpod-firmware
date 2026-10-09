@@ -39,6 +39,11 @@ void net_wifi_reload(void);                  /* esp_wifi_ctrl_reload() */
 /* true: pause Wi-Fi control and stop the ESP SPI transport so the worker may drive the C3's
    EN/BOOT and ROM loader; false: resume and restart the Wi-Fi join. */
 void net_wifi_hold_for_flash(bool hold);
+/* wifi-clear's C3 half (worker task): take the Wi-Fi link down, erase the ESP32-C3's NVS
+   partition (esp_rom_flash_erase_nvs), where esp-hosted firmware driven by pod firmware up to
+   3.7.0 kept its own copy of the credentials, then reload Wi-Fi. Clear config_store first, or
+   the reload joins again. true = erased and verified blank. Takes ~3 s. */
+bool net_wifi_wipe_c3(void);
 
 /* Manual wired-interface control (console `eth stop|start|restart` / JSON
    {"cmd":"eth",...}). Safe to call from any task — they only latch a request that

@@ -223,6 +223,9 @@ void command_handler_poll(void) {
     /* ---- cloud speed-test upload: paced synthetic byte source ---- */
     speedtest_pump();
 
+    /* ---- wifi_clear: erase the ESP32-C3's NVS once the reply is out ---- */
+    wifi_clear_poll();
+
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
 

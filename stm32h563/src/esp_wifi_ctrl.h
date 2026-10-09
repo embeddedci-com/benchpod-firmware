@@ -8,9 +8,10 @@
  *
  * Drives the ESP32-C3 through the esp-hosted protobuf RPC (on ESP_SERIAL_IF) to
  * associate with the configured AP, and reflects the link state into the Wi-Fi
- * netif (esp_netif). Hand-rolled minimal RPC (Init → SetConfig(STA) → Start →
- * Connect → GetMac) — see esp_wifi_ctrl.c. Credentials come from config_store
- * (ssid/password). Polled from the net task.
+ * netif (esp_netif). Hand-rolled minimal RPC (Init → SetStorage(RAM) → SetMode →
+ * SetConfig(STA) → Start → Connect → GetMac) — see esp_wifi_ctrl.c. Credentials
+ * come from config_store (ssid/password) and are re-sent on every bring-up; the
+ * C3 holds them in RAM only. Polled from the net task.
  *
  * If no SSID is configured, this stays idle and the ESP32 is never started, so
  * an un-provisioned unit runs Ethernet-only.
@@ -31,7 +32,7 @@ bool esp_wifi_ctrl_connected(void);
 /* Re-read credentials and restart the sequence (after a wifi-set). */
 void esp_wifi_ctrl_reload(void);
 
-/* Console C3 commands (flash-esp32, flash-esp32-sync) own the C3's EN/BOOT straps while they
+/* C3 commands that use the ROM loader (flash-esp32, flash-esp32-sync, wifi-clear) own the C3's EN/BOOT straps while they
    run: pause(true) stops the state machine touching them, pause(false) releases it. */
 void esp_wifi_ctrl_pause(bool paused);
 

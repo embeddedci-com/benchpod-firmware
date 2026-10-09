@@ -173,6 +173,7 @@ C_SOURCES := \
   src/command_handler_spi.c \
   src/command_handler_transport.c \
   src/esp_rom_flash.c \
+  src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \
   port/pico_compat.c
