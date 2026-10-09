@@ -26,10 +26,15 @@
  *     a current moves the limited path. Reading its range (no `ua`) is allowed. The route
  *     current_out switches the DAC outputs off, so it follows the rule for `off` above.
  *   - dac_stop parks the DAC at the low-output end (max_mv when inverted, min_mv otherwise) with
- *     the path routed, and so does boot, as soon as the analog front end and iCE40 are up.
+ *     the path routed (dac_limits_park_now). Boot parks it as soon as the iCE40 answers on SPI1,
+ *     before the PSRAM self-test (boot_deferred_hw_init), and again after the self-test, because
+ *     its recovery or the gateware update may have reconfigured the iCE40. An `fpga_image` swap
+ *     parks it again too. A pod whose iCE40 did not configure is parked only after the recovery
+ *     reflash, once the self-test is done.
  *
- * What firmware can't cover: the time from reset until boot parks the DAC, when the DAC reads
- * 0 V. Hold the module off with its own enable pin for that.
+ * What firmware can't cover: the time from reset until that first park (STM32 boot, then the
+ * iCE40 configuring), and the moments an iCE40 reconfiguration leaves the DAC at code 0 before
+ * the next park. Hold the module off with its own enable pin for those.
  *
  * Stored in its own power-loss-safe A/B store (config_store.h), sectors s118/s119
  * (0x1EC000 / 0x1EE000), carved from the top of FLASH_BLOBS.

@@ -1,27 +1,20 @@
 // ============================================================================
-// engine_block.v — the shared signal-engine control plane for both bench-pod
-// gateware tops (top.v / top_v2.v).
+// engine_block.v: the signal-engine control plane, instantiated by top_v2.v.
 //
-// Holds every engine that is identical between the v1 (parallel-ADC) and v2
-// (serial-ADC + PSRAM) boards: the SPI command path (spi_slave + cmd_dispatch),
-// the LA GPIO bank with its stepper/SWD/I2C/UART drivers, the emulated I2C
-// sensor (target + register file) and its raw-bus LA capture, and the shared
-// waveform BRAM — together with all the inter-engine wiring (la_bank
-// arbitration, the la_in readback taps that feed I2C/UART/SWD, and the
-// regfile<->target<->dispatch plumbing).
-//
-// Each top keeps only its version-specific *analog datapath* (the DAC/ADC front
-// end and, for v2, the PSRAM streaming pipeline) and wires it to this block via
-// the boundary ports below.  This is a PURE STRUCTURAL extraction: instantiating
-// engine_block from each top must yield a netlist byte-for-byte-equivalent to
-// the pre-refactor inline instantiations (verified by matching synth cell
-// counts — see the P4 refactor notes).
+// Holds the SPI command path (spi_slave + cmd_dispatch), the LA GPIO bank with its
+// stepper/SWD/SPI/I2C/UART drivers, the emulated I2C sensor (target + register file)
+// and the waveform BRAM, together with the inter-engine wiring (la_bank arbitration,
+// the la_in readback taps that feed I2C/UART/SWD, and the regfile<->target<->dispatch
+// plumbing).  The analog datapath (DAC/ADC engines, the control loop, the PSRAM
+// capture and replay pipeline) lives in top_v2 and connects through the boundary
+// ports below.  It was split out when there were two tops (the retired v1 parallel-ADC
+// board shared it); several port comments still say what v1 tied off.
 //
 // Parameters:
-//   N                — LA bank width (12 for v1, 14 for v2).
-//   GATEWARE_VERSION — VERSION-command reply byte, passed straight to
-//                      cmd_dispatch (v1 historically used cmd_dispatch's own
-//                      default of 5; v2 passes 6).  Each top sets it explicitly.
+//   N                : LA bank width (14 on the v2 board).
+//   GATEWARE_VERSION : VERSION-command reply byte, passed straight to cmd_dispatch;
+//                      top_v2 sets it (the release value).
+//   FEATURES         : FPGA_FEATURES reply byte (bit0 loop image, bit1 deep image).
 // ============================================================================
 `include "sys_config.vh"   // SYS_CLK_MHZ — single source (tools/gen_protocol.py)
 

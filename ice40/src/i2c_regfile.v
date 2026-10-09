@@ -1,10 +1,10 @@
 // ============================================================================
 // i2c_regfile.v — 256-byte register memory for the emulated I2C sensor.
 //
-// This is the "register image" the RP2350B fills and the DUT reads/writes over
+// This is the "register image" the STM32 fills and the DUT reads/writes over
 // the emulated I2C bus.  It is deliberately sensor-agnostic: it holds whatever
 // bytes the orchestrator loads (chip ID, calibration, measurement bytes, …).
-// All sensor-specific knowledge lives on the RP2350B.
+// All sensor-specific knowledge lives in the STM32 firmware.
 //
 // Two access sides share one inferred memory (1-write / 2-read):
 //   I2C side  (i2c_target)   — reads served to the DUT, writes captured from it
@@ -12,7 +12,7 @@
 //                              for debugging (I2C_READ_REGS)
 //
 // Write port is shared with I2C priority.  In practice the two masters never
-// write at the same instant: the DUT bus runs at ≤400 kHz and the RP only
+// write at the same instant: the DUT bus runs at ≤400 kHz and the STM32 only
 // loads/reads between transactions, so a single muxed write port is plenty and
 // keeps this to one small BRAM region.  yosys replicates the read port into a
 // second block — both are a fraction of an SB_RAM40_4K, well within budget.

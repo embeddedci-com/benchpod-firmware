@@ -1,11 +1,11 @@
 // ============================================================================
 // top_v2.v — top-level for the STM32 "vbench-pod" board (VERSION=v2).
 //
-// UNIFIED CAPTURE (ground-up redesign — see docs/unified-adc-la-capture-redesign.md):
-// the 16-bit serial ADC (MCP33131) and the raw 12-channel logic analyzer are
-// captured SIMULTANEOUSLY off one trigger, each into its OWN contiguous PSRAM
-// region, by two independent producers -> two SPRAM rings -> one
-// psram_dual_writer.  There are no tags and no per-sample timestamps: sample i of
+// UNIFIED CAPTURE: the 16-bit serial ADC (MCP33131) and the raw 14-channel logic
+// analyzer are captured SIMULTANEOUSLY off one trigger, each into its OWN contiguous
+// PSRAM region, by two independent producers -> one psram_dual_writer (the LA through
+// its spram_ring16, the ADC straight into the writer's staging FIFO; see the capture
+// burst buffering note below).  There are no tags and no per-sample timestamps: sample i of
 // each stream is at t0 + i*divider, and both counters start at the same arm cycle,
 // so the two captures are time-aligned by construction.  Protocol interpretation
 // (I2C/SPI/UART decode) is done OFF the FPGA (server / STM32) from the raw LA
@@ -18,14 +18,18 @@
 // SINGLE-CLOCK CAPTURE + 48 MHz DDR DRAIN.  The whole capture datapath — ADC/LA
 // producers, both rings, the writer FSM and FIFOs, and the control plane — runs on
 // one 24 MHz `clk` (clk48÷2), preserving the single-clock collapse that fixed the
-// "ADC reads 0x5555" mis-latch (docs/adc-capture-cdc-review.md).  ONLY the PSRAM
+// "ADC reads 0x5555" mis-latch.  ONLY the PSRAM
 // write OUTPUT is sped up: psram_dual_writer emits one "cell" (=1 byte) per clk
 // cycle and a thin clk48 serializer shifts it out at one nibble per clk48 cycle
 // (~24 MB/s), with SCLK driven by a DDR SB_IO on clk48 (rises mid-eye).  The
-// clk->clk48 hop is a synchronous 1:2 gearbox, NOT the async class that caused
-// 0x5555 (docs/task8-48mhz-ddr-drain.md).  The shared quad bus is tristated when
-// the STM32 owns it (bus_own / PG0).  v1's parallel-board gateware (top.v)
-// instantiates the same engine_block.
+// clk->clk48 hop is a synchronous 1:2 gearbox (cell_gearbox48), NOT the async class
+// that caused 0x5555.  The shared quad bus is tristated when the STM32 owns it
+// (bus_own / PG0).
+//
+// Two images come from this top: the loop image (dac_loop, the in-fabric control loop)
+// and the deep image (-DUSE_DEEP_REPLAY: dac_psram_reader + psram_bus_arbiter, deep DAC
+// replay from PSRAM).  Both report the same GATEWARE_VERSION; FPGA_FEATURES tells them
+// apart.  The SPI command set is in ice40/PROTOCOL.md.
 // ============================================================================
 `include "sys_config.vh"   // SYS_CLK_MHZ — single source (tools/gen_protocol.py)
 module top (
@@ -1069,10 +1073,8 @@ module top (
     wire [7:0] led_ctrl;
     wire       i2c_la_busy;
 
-    // (SB_WARMBOOT + the pad-tristate-before-fire logic are declared above, near the pad mux.)
-
-    // FPGA_FEATURES byte: which optional block THIS warmboot image carries (they are
-    // mutually exclusive across images).  The firmware reads it to advertise capabilities
+    // FPGA_FEATURES byte: which optional block THIS image carries (they are mutually
+    // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
     localparam [7:0] IMG_FEATURES = 8'h02;   // deep-DAC-PSRAM-replay

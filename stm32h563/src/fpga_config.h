@@ -9,12 +9,11 @@
 /* DAC8551 waveform-sequencer clock.  Gateware >= 13 runs the DAC engine on clk48
    (48 MHz) for a ~2x update rate (smoother output), so the DAC divider maths use
    this, NOT FPGA_HFOSC_HZ.  Older gateware ran the DAC at FPGA_HFOSC_HZ (24 MHz).
-   (See docs/ice40-48mhz-migration.md.) */
+   One sample takes divider + 51 clocks (signal_engine.c DAC_SEQ_OVERHEAD_CLK). */
 #define DAC_CLK_HZ 48000000u
 
-/* Dedicated ADC capture-domain clock (>=v7 gateware, P7).  ADC sample
-   dividers are computed against this when the connected gateware reports
-   version >= 7; older gateware captures at FPGA_HFOSC_HZ. */
+/* clk48, the PSRAM serializer and DAC clock.  Not used for ADC or LA dividers:
+   the capture datapath runs on FPGA_HFOSC_HZ (signal_engine.c adc_capture_hz). */
 #define FPGA_CAPTURE_HZ 48000000u
 
 /* PSRAM regions (>=v18: LA at the FRONT, ADC fixed at 4 MB, DAC replay

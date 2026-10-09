@@ -7,7 +7,7 @@ logic-analyzer capture can run alongside it.
 
 ```
    input ──► curve LUT ──► damp (Q15 k) ──► clamp [vmin,vmax] ──► DAC
-             2048 entries, indexed by input >> 5
+             2048 entries, indexed by input >> 5, or by the input map (v30+)
 ```
 
 > For a worked example with a real external analog stage — the current-sense bench, its measured
@@ -33,6 +33,22 @@ The open-loop sources exist because a closed loop is the wrong place to start de
 input held by the host, the DAC and the output stage are testable on their own: hold a point, read
 the SMA with a meter, compare against the curve. If that number is wrong, no amount of loop
 tuning was ever going to help — and if it is right, everything that remains is loop behaviour.
+
+## Input map and trip (gateware v30+)
+
+The raw input is a 16-bit ADC count, and on a real front end (inverting, offset, wrapping) the
+range a bench actually uses can land backwards inside a few percent of the curve. With the map
+the gateware indexes the curve with `sat(((in - in_zero) * in_gain) >> 15)`, a signed Q15 gain,
+so the curve spans the range the bench uses (`DAC_LOOP_INMAP`, 0x1C, loop image only). The
+optional trip latches when the index passes a threshold: the output is forced to `vmin` until
+the loop is disarmed, and `dac_loop_probe` reports `"tripped":true`.
+
+Clients describe the bench, not the map: `in_mv_at_zero`, `in_mv_per_unit`, `in_min`, `in_max`
+and optionally `in_trip` on `dac_control_loop`. The firmware turns them into `in_zero`/`in_gain`
+with this board's own ADC calibration (`dac_loop_params.c`, `ADC_CAL_EXT`) and echoes the result
+in the arm reply. Without `in_mv_per_unit` there is no map: the pre-v30 `input >> 5` index.
+With DAC limits set on an inverted output stage, arming `in_trip` is refused, because the trip
+forces `vmin`, the highest output there (`dac_limits.h`).
 
 ## Bring-up procedure (no ADC)
 
@@ -70,7 +86,7 @@ read back through the pod's own DAC→ADC loopback (`analog_path cal1`):
 {"cmd":"dac_loop_input","input":32768}      -> {"source":"fixed","input":32768,"step":0,"v":…}
 
 // telemetry
-{"cmd":"dac_loop_probe"}                    -> {"i":<ADC>,"in":<loop input>,"source":"fixed","v":<DAC>}
+{"cmd":"dac_loop_probe"}                    -> {"i":<ADC>,"in":<loop input>,"source":"fixed","v":<DAC>,"tripped":false}
 
 // stop
 {"cmd":"dac_stop"}
@@ -99,8 +115,8 @@ tick) are **clamped** instead, and the arm reply echoes the effective values.
 
 | Layer | Files |
 |---|---|
-| Gateware | `ice40/src/dac_loop.v`, `cmd_dispatch.v` (0x15/0x1A/0x16/0x1B), `top_v2.v`; sim `sim/tb_dac_loop.v` (`make looptest`) |
-| Firmware | `stm32h563/src/dac_loop_params.{c,h}` (pure, host-tested), `signal_engine.c`, `command_handler.c` |
+| Gateware | `ice40/src/dac_loop.v`, `cmd_dispatch.v` (0x15/0x1A/0x1C/0x16/0x1B), `top_v2.v`; sim `sim/tb_dac_loop.v` (`make looptest`), `sim/tb_dac_loop_frames.v` (`make loopframetest`) |
+| Firmware | `stm32h563/src/dac_loop_params.{c,h}` (pure, host-tested), `signal_engine.c`, `command_handler_dac.c` |
 | Server | passthrough command channel; `cap.dac_control_loop` + `cap.dac_loop_sources` in `api/benchpod_ws.go` |
 | Webapp | `src/controlLoopCurve.ts`, `src/pages/GeneratorTab.tsx` (Generator → Control loop), `src/components/TransferCurveCanvas.tsx` |
 | Python SDK | `embeddedci/benchpod/control_loop.py`, `client.control_loop/loop_input/loop_probe` |
