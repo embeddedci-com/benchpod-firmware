@@ -51,7 +51,8 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (vars.HIL_DISPATCH == 'true' && github.event.workflow_run.conclusion == 'success')
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
+    runs-on: ubuntu-24.04
     steps:
       - name: Ask embeddedci-server to run the HIL suites
         env:
