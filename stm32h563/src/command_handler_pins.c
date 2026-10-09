@@ -18,6 +18,7 @@
 #include "bp_log.h"
 #include "sensor_sim.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -410,7 +411,8 @@ void handle_la_voltage(int conn_id, const char *json) {
  * Mock an I2C sensor on two LA channels, driven by the FPGA's generic target.
  *
  *   {"cmd":"sensor_start","type":"bmp280","addr":"0x76","sda":1,"scl":2}
- *   {"cmd":"sensor_set","temperature_c":25.0,"pressure_pa":101325}
+ *   {"cmd":"sensor_set","temperature_c":25.0,"pressure_pa":101325}   (the model's keys)
+ *   {"cmd":"sensor_types"}                                       → models + their keys
  *   {"cmd":"sensor_stop"}
  *   {"cmd":"sensor_status"}
  *   {"cmd":"sensor_regs","start":"0xF7","len":6}     → register bytes
@@ -458,31 +460,102 @@ void handle_sensor_start(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
+/* A float as JSON with up to three decimals (newlib-nano printf has no %f). */
+static void emit_milli(bp_emit_t *e, float v) {
+    long m = lroundf(v * 1000.0f);
+    unsigned long a = (unsigned long)(m < 0 ? -m : m);
+    if (a % 1000u == 0) bp_emit(e, "%s%lu", m < 0 ? "-" : "", a / 1000u);
+    else {
+        char frac[4];
+        snprintf(frac, sizeof(frac), "%03lu", a % 1000u);
+        for (int i = 2; i > 0 && frac[i] == '0'; i--) frac[i] = '\0';
+        bp_emit(e, "%s%lu.%s", m < 0 ? "-" : "", a / 1000u, frac);
+    }
+}
+
+/* {"key":value,...} of the active model's parameters. */
+static void emit_sensor_values(bp_emit_t *e) {
+    const sensor_model_t *m = sensor_sim_model();
+    bp_emit_raw(e, "{");
+    for (unsigned i = 0; m && i < m->n_params; i++) {
+        bp_emit(e, "%s\"%s\":", i ? "," : "", m->params[i].key);
+        emit_milli(e, sensor_sim_value(i));
+    }
+    bp_emit_raw(e, "}");
+}
+
+/* {"cmd":"sensor_set","temperature_c":25.0,...}: any of the active model's parameter keys
+   (sensor_types lists them).  Every key is checked before anything is applied, so a rejected
+   value leaves the sensor as it was; the accepted ones reload the image once. */
 void handle_sensor_set(int conn_id, const char *json) {
-    char t_s[16] = {0}, p_s[16] = {0};
-    bool any = false;
+    const sensor_model_t *m = sensor_sim_model();
+    if (!m) { send_error(conn_id, "no sensor active"); return; }
 
-    if (!sensor_sim_active()) { send_error(conn_id, "no sensor active"); return; }
-
-    if (json_get_value(json, "temperature_c", t_s, sizeof(t_s))) {
-        if (sensor_sim_set("temperature_c", (float)atof(t_s)) != 0) {
-            send_error(conn_id, "temperature_c rejected");
+    float    v[SENSOR_MAX_PARAMS];
+    uint16_t have = 0;
+    char     err[96];
+    for (unsigned i = 0; i < m->n_params; i++) {
+        const sensor_param_t *p = &m->params[i];
+        char val[24] = {0};
+        if (!json_get_value(json, p->key, val, sizeof(val))) continue;
+        char *end = NULL;
+        v[i] = strtof(val, &end);
+        if (end == val || !isfinite(v[i]) || v[i] < p->min || v[i] > p->max) {
+            long lo = lroundf(p->min), hi = lroundf(p->max);
+            snprintf(err, sizeof(err), "%s must be a number from %ld to %ld (%s)", p->key, lo, hi, p->unit);
+            send_error(conn_id, err);
             return;
         }
-        any = true;
+        have |= (uint16_t)(1u << i);
     }
-    if (json_get_value(json, "pressure_pa", p_s, sizeof(p_s))) {
-        if (sensor_sim_set("pressure_pa", (float)atof(p_s)) != 0) {
-            send_error(conn_id, "pressure_pa rejected");
-            return;
-        }
-        any = true;
+    if (!have) {
+        snprintf(err, sizeof(err), "no %s parameter given (sensor_types lists them)", m->name);
+        send_error(conn_id, err);
+        return;
     }
-    if (!any) { send_error(conn_id, "no recognised parameters"); return; }
+    for (unsigned i = 0; i < m->n_params; i++)
+        if (have & (1u << i)) (void)sensor_sim_set_value(m->params[i].key, v[i]);
+    if (sensor_sim_apply() != 0) { send_error(conn_id, "sensor image reload failed"); return; }
 
-    char payload[64];
-    snprintf(payload, sizeof(payload), "{\"type\":\"%s\"}", sensor_sim_type());
-    send_ok_str(conn_id, payload);
+    char resp[384];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"type\":\"%s\",\"values\":", m->name);
+    emit_sensor_values(&e);
+    bp_emit_raw(&e, "}}\n");
+    send_emitted(conn_id, &e);
+}
+
+/* {"cmd":"sensor_types"}: the models this firmware emulates, with their addresses and the
+   parameters sensor_set takes (key, unit, range, the value at sensor_start). */
+void handle_sensor_types(int conn_id, const char *json) {
+    (void)json;
+    char resp[BP_CLOUD_REPLY_MAX];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    size_t n = 0;
+    const sensor_model_t *const *models = sensor_sim_models(&n);
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"types\":[");
+    for (size_t k = 0; k < n; k++) {
+        const sensor_model_t *m = models[k];
+        bp_emit(&e, "%s{\"type\":\"%s\",\"label\":", k ? "," : "", m->name);
+        bp_emit_jstr(&e, m->label);
+        bp_emit(&e, ",\"addr\":%u,\"alt_addr\":%u,\"params\":[",
+                (unsigned)m->default_addr7, (unsigned)m->alt_addr7);
+        for (unsigned i = 0; i < m->n_params; i++) {
+            const sensor_param_t *p = &m->params[i];
+            bp_emit(&e, "%s{\"key\":\"%s\",\"unit\":\"%s\",\"min\":", i ? "," : "", p->key, p->unit);
+            emit_milli(&e, p->min);
+            bp_emit_raw(&e, ",\"max\":");
+            emit_milli(&e, p->max);
+            bp_emit_raw(&e, ",\"default\":");
+            emit_milli(&e, p->def);
+            bp_emit_raw(&e, "}");
+        }
+        bp_emit_raw(&e, "]}");
+    }
+    bp_emit_raw(&e, "]}}\n");
+    send_emitted(conn_id, &e);
 }
 
 void handle_sensor_stop(int conn_id, const char *json) {
@@ -495,22 +568,31 @@ void handle_sensor_stop(int conn_id, const char *json) {
 
 void handle_sensor_status(int conn_id, const char *json) {
     (void)json;
-    char resp[256];
+    char resp[512];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
     if (!sensor_sim_active()) {
-        snprintf(resp, sizeof(resp),
-                 "{\"status\":\"ok\",\"data\":{\"active\":false}}\n");
+        bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"active\":false}}\n");
     } else {
         i2c_sensor_status_t st = {0};
         sensor_sim_get_status(&st);
-        snprintf(resp, sizeof(resp),
-                 "{\"status\":\"ok\",\"data\":{"
-                 "\"active\":true,\"type\":\"%s\",\"addr\":%u,"
-                 "\"transactions\":%u,\"writes\":%u,"
-                 "\"last_reg\":%u,\"last_val\":%u}}\n",
-                 sensor_sim_type(), sensor_sim_addr7(),
-                 st.xfer_count, st.wr_count, st.last_wr_addr, st.last_wr_val);
+        bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
+                    "\"active\":true,\"type\":\"%s\",\"addr\":%u,\"sda\":%u,\"scl\":%u,"
+                    "\"transactions\":%u,\"writes\":%u,"
+                    "\"last_reg\":%u,\"last_val\":%u,\"values\":",
+                sensor_sim_type(), sensor_sim_addr7(), sensor_sim_sda(), sensor_sim_scl(),
+                st.xfer_count, st.wr_count, st.last_wr_addr, st.last_wr_val);
+        emit_sensor_values(&e);
+        bp_emit_raw(&e, "}}\n");
     }
-    if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
-        at_close_connection(conn_id);
+    send_emitted(conn_id, &e);
+}
+
+/* command_handler_poll's sensor pass: watch a configurable model's register writes, re-arm a
+   sensor after a gateware reconfiguration (releasing its pins if that fails). */
+void sensor_poll(void) {
+    if (sensor_sim_poll() != 0) {
+        la_pins_release_fn(LA_FN_I2C_SDA);
+        la_pins_release_fn(LA_FN_I2C_SCL);
     }
 }

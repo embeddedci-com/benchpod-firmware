@@ -121,6 +121,11 @@ C_SOURCES := \
   src/scpi_server.c \
   src/sensor_sim.c \
   src/sensor_bmp280.c \
+  src/sensor_sht4x.c \
+  src/sensor_mpu6050.c \
+  src/gps_nmea.c \
+  src/gps_sim.c \
+  src/command_handler_gps.c \
   src/b64url.c \
   src/bp_json.c \
   src/conn_tx.c \

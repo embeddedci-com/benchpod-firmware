@@ -38,6 +38,7 @@ typedef enum {
     LA_FN_SPI_MOSI,
     LA_FN_SPI_MISO,
     LA_FN_SPI_CS,
+    LA_FN_GPS_TX,     /* gps_start (UART2, gateware v48+) */
     LA_FN__COUNT
 } la_fn_t;
 

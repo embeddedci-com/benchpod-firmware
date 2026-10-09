@@ -67,6 +67,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->gpio_read = caps.gpio_read;
     c->capture_trigger = caps.capture_trigger;
     c->spi_master = caps.spi_master;
+    c->gps = caps.uart2;
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
     c->usb_cc = usb_cc_supported();
     c->pod_current = ina_pod_present();      /* the pod's own current monitor (0x41) */

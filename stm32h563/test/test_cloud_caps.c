@@ -52,7 +52,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets",
+        "boot_id", "unclean_resets", "sensor_types", "gps",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -154,15 +154,16 @@ static void test_status_list(void) {
     bp_emit_t e;
     cloud_caps_t c = typical();
     c.usb_cc = true;
+    c.gps = true;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &c);
     CHECK(bp_emit_ok(&e));
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"dac_loop_sources\",\"dac_loop_input_map\","
-                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
+                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
     /* The digital board: cloud_caps_collect clears every analog feature, so the list names none. */
@@ -174,8 +175,8 @@ static void test_status_list(void) {
     cloud_caps_emit_list(&e, &d);
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"gpio_read\",\"capture_trigger\",\"spi_master\","
-                      "\"spi_stream\"]") == 0);
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"gpio_read\",\"capture_trigger\","
+                      "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog")) printf("  %s\n", buf);
 
     /* The frame does not carry usb_cc (the server never read it): adding the field changed nothing. */

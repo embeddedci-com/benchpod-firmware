@@ -215,6 +215,14 @@ void     handle_sensor_start(int conn_id, const char *json);
 void     handle_sensor_set(int conn_id, const char *json);
 void     handle_sensor_stop(int conn_id, const char *json);
 void     handle_sensor_status(int conn_id, const char *json);
+void     handle_sensor_types(int conn_id, const char *json);
+void     sensor_poll(void);                     /* register-write watch + re-arm after a reconfiguration */
+/* command_handler_gps.c */
+void     handle_gps_start(int conn_id, const char *json);
+void     handle_gps_set(int conn_id, const char *json);
+void     handle_gps_stop(int conn_id, const char *json);
+void     handle_gps_status(int conn_id, const char *json);
+void     gps_poll(void);                        /* next NMEA epoch + UART2 FIFO feed */
 
 /* SPI master on the LA pins (command_handler_spi.c). */
 void handle_spi_start(int conn_id, const char *json);

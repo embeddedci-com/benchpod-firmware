@@ -1184,6 +1184,10 @@ void signal_engine_fabric_to_idle(void) {
     }
     (void)fpga_set_trigger(0u, 0u);
     spi_cmd_write(CMD_UART_DISABLE, NULL, 0);
+    if (s_fpga_version >= UART2_MIN_GW) {          /* UART2_CONFIG with enable 0 */
+        uint8_t off[6] = { 0, 0, 2, 0, 0, 0 };
+        spi_cmd_write(CMD_UART2_CONFIG, off, sizeof(off));
+    }
     spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
     spi_cmd_write(CMD_I2C_DISABLE, NULL, 0);
     for (uint8_t idx = 0; idx < 14u; idx++) {      /* every LA channel back to high-Z */
@@ -1515,6 +1519,7 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->loop_input_map = ver >= DAC_LOOP_INMAP_MIN_GW;
     out->gpio_read       = ver >= GPIO_GET_MIN_GW;
     out->capture_trigger = ver >= CAPTURE_TRIGGER_MIN_GW;
+    out->uart2           = ver >= UART2_MIN_GW;
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
 }
 
@@ -2874,6 +2879,12 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
        down.  Report nothing on a bad read so the caller treats it as "no data / error". */
     uint16_t avail = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
     if (!fpga_uart_avail_ok(avail, &avail)) return -1;
+    /* The read cleared the gateware's sticky RX overflow: latch it here, whoever asked (the
+       TX pump and UART2's poll read this status too, and used to drop the flag). */
+    if ((b[2] & UART_STATUS_RX_OVERFLOW) && uart_armed_local && !s_uart_rx_ovf) {
+        s_uart_rx_ovf = true;
+        printf("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
+    }
     if (rx_avail) *rx_avail = avail;
     if (flags)    *flags    = b[2];
     return 0;
@@ -2884,6 +2895,36 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
    reported in `status`. */
 bool fpga_uart_rx_overflowed(void) { return s_uart_rx_ovf; }
 
+int fpga_uart2_config(unsigned tx_ch, uint32_t baud, bool enable) {
+    if (s_fpga_version < UART2_MIN_GW) return -3;
+    int tx = la_wire_index(tx_ch);
+    if (tx < 0 || baud == 0) return -1;
+    uint32_t div = (uint32_t)(((uint64_t)FPGA_HFOSC_HZ + baud / 2) / baud);   /* as the proxy */
+    if (div < 2)        div = 2;
+    if (div > 0x3FFFFu) div = 0x3FFFFu;
+    /* UART_CONFIG's payload: [rx_ch (unused)][tx_ch][div_lo][div_mid][div_hi][flags] */
+    uint8_t args[6] = {
+        0, (uint8_t)tx,
+        (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
+        (uint8_t)(enable ? 0x01 : 0x00),
+    };
+    spi_cmd_write(CMD_UART2_CONFIG, args, sizeof(args));
+    printf("[uart2] TX=LA%u baud=%lu (div=%lu) %s\n", tx_ch, (unsigned long)baud,
+           (unsigned long)div, enable ? "armed" : "disabled");
+    return 0;
+}
+
+void fpga_uart2_fifo_write(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return;
+    if (len > FPGA_UART2_FIFO) len = FPGA_UART2_FIFO;
+    /* [CMD][len_lo][len_hi][N bytes] */
+    uint8_t hdr[3] = { CMD_UART2_WRITE, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, data, len);
+    cs_deselect();
+}
+
 size_t fpga_uart_read(uint8_t *buf, size_t len) {
     if (!buf || len == 0) return 0;
     /* Read only what's actually available so the FIFO never underflows. A bad status
@@ -2891,10 +2932,6 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
     uint16_t avail = 0;
     uint8_t  flags = 0;
     if (fpga_uart_status(&avail, &flags) != 0) return 0;
-    if ((flags & UART_STATUS_RX_OVERFLOW) && !s_uart_rx_ovf) {
-        s_uart_rx_ovf = true;
-        printf("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
-    }
     size_t n = (avail < len) ? avail : len;
     if (n == 0) return 0;
     uint8_t args[2] = { (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
