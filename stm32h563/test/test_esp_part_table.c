@@ -137,7 +137,7 @@ static void test_refuses_bad_geometry(void) {
 static void test_prebuilt_image(void) {
     const char *path = "../../esp32-hosted-slave/prebuilt/esp32c3-hosted-slave-merged.bin";
     FILE *f = fopen(path, "rb");
-    if (!f) { printf("SKIP test_esp_part_table: prebuilt slave image not present\n"); return; }
+    if (!f) { printf("test_esp_part_table: no prebuilt slave image (make fetch), real-image case not run\n"); return; }
     static uint8_t real[0x10000];
     size_t n = fread(real, 1, sizeof(real), f);
     fclose(f);
