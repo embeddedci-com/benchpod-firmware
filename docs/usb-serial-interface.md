@@ -114,9 +114,9 @@ command prints `usage: ...` and changes nothing.
 
 | Command | Description |
 |---|---|
-| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to flash and (re)connect the ESP32-C3 in the background. Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
+| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to the pod's flash and (re)connect the ESP32-C3 in the background (the C3 is given them on each bring-up and keeps them in RAM only). Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
 | `wifi-show` | `ssid`, `state` (as `status.wifi` in the JSON API), `ip`, `rssi` and the C3 restart counters. The password is never printed. |
-| `wifi-clear` | Erase the stored credentials and drop Wi-Fi. |
+| `wifi-clear` | Erase the stored credentials and drop Wi-Fi, then erase the ESP32-C3's NVS partition, where firmware up to 3.7.0 left a second copy (about 3 s). See [`wifi-clear` result](#wifi-clear-result). |
 | `wifi-static <ip> <netmask> <gateway>` | Give the Wi-Fi interface a static address (diagnostic; the pod uses DHCP by default). |
 | `eth <stop\|start\|restart>` | Bring the wired link down or up (PHY reset + DHCP). |
 | `eth stats` | Wired link: negotiated mode, MAC mode, error and drop counters. |
@@ -217,6 +217,22 @@ With DAC limits set, `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and
 The console does **not** get the safe-mode refusals of the JSON API: in safe mode
 it is how you test the iCE40 and PSRAM (`psram-selftest`, `psram-test`,
 `flash-ice40`) before you power-cycle.
+
+### `wifi-clear` result
+
+`wifi-clear` wipes both places Wi-Fi credentials can be: the pod's own config store, and the
+ESP32-C3's NVS partition (erased through the C3's ROM loader and verified blank by MD5). What it
+guarantees is described under [`wifi_set` / `wifi_clear`](API.md#wifi_set--wifi_clear) in API.md.
+
+| Outcome | Output |
+|---|---|
+| Both wiped | `Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)` |
+| Pod wiped, C3 not | `Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not erased (<why>): an old copy may remain there; run wifi-clear again or flash-esp32` |
+
+`<why>` is `safe mode: ...`, `busy: ...` (a capture, upload or update holds the shared bus), or
+`the C3 did not answer its ROM loader or the erase did not verify (see log)`; the `[espflash]`
+log lines above the result say which step failed. `flash-esp32` rewrites the whole C3 image, NVS
+region included (about 2 to 3 minutes).
 
 ### `wifi-set` result markers
 

@@ -44,6 +44,17 @@ int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_
  * the slot against its SHA-256.  Runs on the hw worker.  0 = flashed and booted. */
 int esp_rom_flash_from_slot(void);
 
+/* Erase the C3's NVS partition (found through the partition table of the esp-hosted image in
+ * the W25Q slot) and verify by on-chip MD5 that it reads back blank.  That is where esp-hosted
+ * firmware left on the IDF default WIFI_STORAGE_FLASH (pod firmware up to 3.7.0) kept the SSID
+ * and password; NVS itself only marks an entry erased, so nothing short of erasing the sectors
+ * removes them.  The application, otadata and phy_init are untouched: the C3 recreates an
+ * empty NVS (and redoes its RF calibration) on its next boot.  Returns 0 on success, <0 on
+ * error (no image in the slot, no NVS partition in its table, no ROM answer, or no blank
+ * verify).  The C3 is left held in reset either way.  Takes ~3 s; hw worker only, with the
+ * PSRAM bus free (bus_busy_reason) and the hardware up (not in safe mode). */
+int esp_rom_flash_erase_nvs(void);
+
 /* Bring-up diagnostic: passively monitor the C3's UART0 log (its console output
  * on U0TXD -> PA10) for `ms` milliseconds, printing each line to our console.
  * Does NOT touch EN/BOOT — the C3 keeps running the app. USART1 only. */
