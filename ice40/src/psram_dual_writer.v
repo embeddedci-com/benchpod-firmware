@@ -2,13 +2,12 @@
 // psram_dual_writer.v — APS6404L QPI streaming-write master for TWO independent
 // streams into TWO contiguous PSRAM regions (VERSION=v2 unified capture).
 //
-// Drains two byte streams — the ADC capture and the raw 12-channel LA capture —
+// Drains two byte streams (the ADC capture and the raw 14-channel LA capture)
 // into two separate PSRAM regions (ADC_BASE / LA_BASE) off ONE shared trigger, so
 // the two captures are time-aligned by construction (sample i of each stream is at
-// t0 + i*divider, and both counters start at `start`).  See
-// docs/unified-adc-la-capture-redesign.md.
+// t0 + i*divider, and both counters start at `start`).
 //
-// ---- 48 MHz DDR drain (docs/task8-48mhz-ddr-drain.md) ----
+// ---- 48 MHz DDR drain ----
 // The control FSM, both staging FIFOs and the region arbitration all run on the
 // 24 MHz logic clock `clk` (single-clock capture datapath — the collapse that fixed
 // the 0x5555 mis-latch, docs/adc-capture-cdc-review.md).  Only the OUTPUT is sped

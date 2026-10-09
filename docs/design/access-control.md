@@ -1,7 +1,18 @@
 # BenchPod access control: proposal
 
-Status: proposal, nothing implemented. Written against firmware `main` at 054ca7c and
-embeddedci-server `main`. Line numbers are from those trees.
+Status (firmware 3.7.0, 2026-10-08): the first phase of section 7 is built and released.
+Firmware 3.6.0 shipped the command tiers (`cmd_tier.c`, server `api/benchpod_command_tier.go`),
+option A `lan_policy` (`open|locked|off`, so C's `off` too), the server role gate and audit log,
+option D signing ([firmware-signing.md](firmware-signing.md),
+[policy-commands.md](policy-commands.md)), the host-bound cloud login for F2
+(`benchpod-ws-auth:v2`) and the LAN yielding to cloud jobs for F3
+([cloud-hardening.md](cloud-hardening.md)). Firmware 3.7.0 added the F2 quick fix: release
+builds refuse `tls=false` in `cloud_set`. Not built: `lan_iface=eth`, option B and a `strict`
+policy, retiring the v1 login (the server still accepts it), the rollback floor, B2, E and
+secure boot.
+
+The rest is the original proposal, written against firmware `main` at 054ca7c and
+embeddedci-server `main` before any of this. Line numbers are from those trees.
 
 ## 1. Current state (verified in code)
 

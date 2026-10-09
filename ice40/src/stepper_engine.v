@@ -1,6 +1,6 @@
 // ============================================================================
-// stepper_engine.v — non-blocking step-pulse generator (FPGA replacement for
-// the RP2350's old stepper.pio).
+// stepper_engine.v — non-blocking step-pulse generator (it replaced the retired
+// RP2350's stepper.pio).
 //
 // On a `start` pulse it drives the assigned LA channel HIGH for `delay_us`
 // microseconds, then LOW for `delay_us` microseconds, repeated `steps` times,

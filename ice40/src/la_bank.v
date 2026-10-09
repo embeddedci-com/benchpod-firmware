@@ -1,8 +1,8 @@
 // ============================================================================
 // la_bank.v — Logic-Analyzer GPIO bank for the bench-pod iCE40 gateware.
 //
-// Owns the N bidirectional LA channels (LA1..LAN, wired in *.pcf; N=12 on v1,
-// N=14 on v2) and muxes
+// Owns the N bidirectional LA channels (LA1..LAN, wired in vbench_pod.pcf; N=14)
+// and muxes
 // five drivers onto them with fixed priority  swd > stepper > i2c > uart > static :
 //
 //   static   per-channel {out,oe} latches set by the GPIO_SET command

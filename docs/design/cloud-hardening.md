@@ -1,7 +1,10 @@
 # Cloud hardening: bound login, LAN yields to cloud jobs, company CA and proxy
 
-Status: spec for branch `cloud-hardening` in benchpod-firmware, embeddedci-server and
-benchpod-cli, 2026-10-06. Findings F2 and F3 are from [access-control.md](access-control.md).
+Status: built and released in firmware 3.6.0 (2026-10-07), with the server and CLI changes.
+Firmware 3.7.0 fixed a proxy double free on a failed TLS setup, falls back to the built-in roots
+when the stored company CA is damaged, and replies to cloud-made proxy and CA changes before it
+reconnects. This was the spec for branch `cloud-hardening` in benchpod-firmware,
+embeddedci-server and benchpod-cli, 2026-10-06. Findings F2 and F3 are from [access-control.md](access-control.md).
 
 Every part is backward compatible: a pod only gets a new frame when it advertises the matching
 capability, and a server that does not know a new field ignores it.

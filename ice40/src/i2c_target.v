@@ -4,16 +4,16 @@
 // Sensor-agnostic by design: it presents a configurable 7-bit address and
 // serves bytes from / captures bytes into an external 256-byte register file
 // (i2c_regfile.v).  All sensor-specific behaviour (chip IDs, calibration,
-// measurement math) lives on the RP2350B, which fills the register image over
-// SPI.  This mirrors the software reference in rp2350-hil-adapter
-// (bmp280_simulator.cpp::on_i2c_slave_event): register-pointer model with
-// auto-increment, first write byte = pointer, subsequent writes stored.
+// measurement math) lives in the STM32 firmware, which fills the register image over
+// SPI.  Register-pointer model with auto-increment: first write byte = pointer,
+// subsequent writes stored (the model of the original rp2350-hil-adapter BMP280
+// simulator).
 //
 // Lightweight "conversion handshake" (also generic, config-driven): when the
 // DUT writes the configured trigger register, a down-counter runs for the
 // configured time; while it runs, reads of the configured "busy" register
 // OR-in a configured mask so the DUT observes a realistic measuring/busy bit
-// (e.g. BMP280 forced-mode: trig 0xF4, busy reg 0xF3, mask 0x08).  The RP still
+// (e.g. BMP280 forced-mode: trig 0xF4, busy reg 0xF3, mask 0x08).  The STM32 still
 // owns the actual data bytes.
 //
 // I2C electricals (open-drain):

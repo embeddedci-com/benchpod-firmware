@@ -1,22 +1,17 @@
 // ============================================================================
-// sample_buf.v — dual-port BRAM wrapper for the waveform and capture buffers.
+// sample_buf.v — dual-port BRAM wrapper for the waveform buffer.
 //
-// Each buffer is 4096 x 8 bits.  Implementation uses inferred dual-port BRAM
-// (yosys + nextpnr-ice40 will map to SB_RAM40_4K primitives).
-//
-// Waveform buffer:
-//   - Write port (A): driven by cmd_dispatch on LOAD_WAVE
-//   - Read  port (B): driven by dac_engine
-//
-// Capture buffer:
-//   - Write port (A): driven by adc_engine
-//   - Read  port (B): driven by cmd_dispatch on READ_CAPTURE
+// 4096 x 8 bits, inferred dual-port BRAM (yosys + nextpnr-ice40 map it to
+// SB_RAM40_4K primitives).  One instance, in engine_block:
+//   - Write port (A): cmd_dispatch on LOAD_WAVE (a DAC waveform or the loop curve)
+//   - Read  port (B): dac8551_engine (START_DAC) or dac_loop (the curve LUT)
+// (The v1 capture buffer read back with READ_CAPTURE is gone: captures go to PSRAM.)
 // ============================================================================
 
 // The two ports have INDEPENDENT clocks (SB_RAM40_4K is a true dual-clock BRAM):
 // the write port on `clk`, the read port on `b_clk`.  For the v2 DAC waveform this
 // lets the DAC sequencer read on clk48 (48 MHz) while cmd_dispatch loads on clk
-// (24 MHz); pass `b_clk = clk` for a same-clock buffer (v1 capture buffer, etc.).
+// (24 MHz); pass `b_clk = clk` for a same-clock buffer.
 module sample_buf #(
     parameter ADDR_W = 12,        // 4096 entries
     parameter DATA_W = 8

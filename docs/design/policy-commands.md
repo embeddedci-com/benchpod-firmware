@@ -1,6 +1,7 @@
 # Pod policies: signature policy, LAN policy, tunnel tier limit
 
-Status: spec for the firmware, server and CLI work on branch `policy-enforce`, 2026-10-06.
+Status: built and released in firmware 3.6.0 (2026-10-07), with the server and CLI changes; all
+three parts below shipped. This was the spec for branch `policy-enforce`, 2026-10-06.
 Builds on [firmware-signing.md](firmware-signing.md) and [access-control.md](access-control.md).
 
 Backward compatibility rules, for all three parts:

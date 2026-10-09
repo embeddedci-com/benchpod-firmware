@@ -51,8 +51,12 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
                           uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
-   DAC sample clock from a target rate in Hz (0 = the max rate, 12 MSPS). Replay a captured trace
-   at the rate it was captured at, so the playback time base matches the recording. */
+   DAC sample clock from a target rate in Hz. Replay a captured trace at the rate it was captured
+   at, so the playback time base matches the recording. 0 = the fastest the DAC8551 sequencer
+   goes: divider DAC_MIN_DIVIDER (3), one sample per 3 + 51 clk48 = 48 MHz / 54, ~889 kS/s
+   (DAC_MAX_RATE_HZ). What the code enforces: divider = round(DAC_CLK_HZ / rate), clamped to
+   3..65535. That divider leaves out the 51-clock frame overhead (DAC_SEQ_OVERHEAD_CLK), so the
+   waveform plays at DAC_CLK_HZ / (divider + 51), slower than requested (dac_divider_from_rate_hz). */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
                                 float sample_rate_hz);
 
@@ -62,7 +66,8 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
    the whole 8 MB region (up to FPGA_DAC_REPLAY_MAX_SAMPLES) — enough to replay a
    full stored ADC recording.  The caller must have staged the bytes into PSRAM and
    released the shared bus (psram_bus_release) so the iCE40 can read.  Pass 0 rate
-   for the max clock. */
+   for the fastest clock (~889 kS/s); the rate math, and its missing frame overhead, is
+   the same as dac_generate_arbitrary_rate's. */
 int dac_replay_psram(uint32_t count, float sample_rate_hz);
 
 /* Connected iCE40 gateware version (CMD_VERSION, read at init).  Deep DAC replay

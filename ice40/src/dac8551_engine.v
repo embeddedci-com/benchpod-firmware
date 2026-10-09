@@ -11,8 +11,7 @@
 // `period_samples` is in 16-bit samples.  Clocked on `clk`: gateware >= 13 (top_v2)
 // runs it on clk48 (48 MHz) for a ~2x update rate (SCLK = clk/2 = 24 MHz, still under
 // the DAC8551's 30 MHz max); the control-plane inputs cross a CDC in top_v2 and the
-// waveform BRAM read port shares this clock.  (v1 top.v uses the separate dac_engine
-// on the 24 MHz clk.)
+// waveform BRAM read port shares this clock.
 //
 // SERIAL TIMING vs the DAC8551 datasheet (SLAS429E 6.6, the VDD 3.6-5.5 V column — the 24 MHz
 // SCLK already requires it: SCLK max is 20 MHz below 3.6 V), at clk = 48 MHz (20.8 ns):

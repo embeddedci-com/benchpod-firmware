@@ -3,9 +3,10 @@
 //                (v44) a byte-wide SPI master: the engine's second job, and
 //                (v45) a queue of whole SWD transfers run in the fabric.
 //
-// Replaces the RP2350's old swd.pio + swd_rbb.c.  The RP now just forwards the
-// raw remote_bitbang byte stream to the FPGA (SWD_FEED) and reads the sampled
-// bits back (SWD_READ); ALL wire driving happens here.
+// Replaced the RP2350's old swd.pio + swd_rbb.c.  The STM32 forwards the raw
+// remote_bitbang byte stream to the FPGA (SWD_FEED) and reads the sampled bits
+// back (SWD_READ); ALL wire driving happens here.  (The pod's CMSIS-DAP bridge
+// uses the transfer queue below.)
 //
 // Command bytes (mapping identical to the old swd_rbb.c so the same OpenOCD
 // remote_bitbang config keeps working):
