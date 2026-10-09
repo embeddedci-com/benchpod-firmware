@@ -45,7 +45,8 @@ permissions:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       ice40: ${{ steps.filter.outputs.ice40 }}
@@ -101,7 +102,7 @@ jobs:
     # a required check: skipped by this `if` it reports success; runs when `changes` failed
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.ice40 != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,7 +142,7 @@ jobs:
           echo "::warning title=ice40 release images stale::ice40/release/ does not match the gateware sources. Test this gateware on hardware, then run make -C ice40 promote and commit ice40/release/ before tagging a firmware release."
 
   stm32-host:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout (with submodules — host tests include esp_hosted headers)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,7 +155,7 @@ jobs:
     # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)
     needs: changes
     if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -184,7 +185,7 @@ jobs:
     name: motor-emulator-gl (${{ matrix.bench }})
     needs: changes
     if: ${{ !cancelled() && !inputs.release && needs.changes.outputs.motor != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -209,7 +210,7 @@ jobs:
   motor-emulator-gl:
     needs: motor-emulator-gl-bench
     if: ${{ !cancelled() && !inputs.release }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every gate-level bench passed
