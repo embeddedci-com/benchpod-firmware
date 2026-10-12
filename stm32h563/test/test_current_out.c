@@ -91,6 +91,7 @@ static void test_v2_fit_is_nominal(void) {
    on its floor (30 uA above the line).  The range the pod reports, and the code for a current,
    move with it. */
 static void test_rev3_fit(void) {
+    uint16_t code = 0xFFFF, nominal = 0;
     cal_data_select(BOARD_REV_V3);
     CHECK(current_out_min_ua() == 4055, "rev3 min %ld uA", current_out_min_ua());
     CHECK(current_out_ua(255u << 8) == 20031, "rev3 8-bit code 255: %ld uA", current_out_ua(255u << 8));
@@ -99,6 +100,8 @@ static void test_rev3_fit(void) {
     /* Below the floor every code gives the floor; above it the line takes over, upward only. */
     CHECK(current_out_ua(60) == 4055 && current_out_ua(120) == 4055, "rev3 codes under the floor: %ld, %ld uA",
           current_out_ua(60), current_out_ua(120));
+    CHECK(current_out_code(4055, &code) == NULL && code == 0, "rev3 4055 uA (the floor) -> code %u", code);
+    CHECK(current_out_code(4056, &code) == NULL && code > 120, "rev3 4056 uA -> code %u", code);
     CHECK(current_out_ua(1000) == 4271, "rev3 code 1000: %ld uA", current_out_ua(1000));
     long prev_ua = 0;
     for (long c = 0; c <= 0xFFFF; c += 7) {
@@ -107,7 +110,7 @@ static void test_rev3_fit(void) {
         prev_ua = ua;
     }
 
-    uint16_t code = 0xFFFF, nominal = 0;
+    code = 0xFFFF;
     CHECK(current_out_code(4000, &code) == NULL && code == 0, "rev3 4000 uA -> code %u", code);
     CHECK(current_out_code(12000, &code) == NULL && labs(current_out_ua(code) - 12000) <= 1, "rev3 12 mA -> code %u", code);
     cal_data_select(BOARD_REV_V2);

@@ -42,7 +42,10 @@ const char *current_out_code(long ua, uint16_t *code) {
                  ua, current_out_min_ua(), current_out_max_ua());
         return s_msg;
     }
-    long c = lround(((double)ua - zero_ua()) / ua_per_code());
+    /* At or below the floor: code 0.  The real curve rounds off into the floor, so a code from
+       the line just above it overshoots (rev3: code 121 gives 4060 uA, code 0 gives 4054). */
+    long c = (double)ua <= (double)CURRENT_OUT_CAL_FLOOR_UA ? 0
+           : lround(((double)ua - zero_ua()) / ua_per_code());
     if (c < 0) c = 0;
     if (c > 0xFFFF) c = 0xFFFF;
     if (code) *code = (uint16_t)c;
