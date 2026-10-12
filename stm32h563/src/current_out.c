@@ -25,7 +25,12 @@ double current_out_nominal_ua_per_code(void) {
     return (double)CURRENT_OUT_GAIN * (double)CURRENT_OUT_AREF_UV / (double)CURRENT_OUT_SPAN_OHMS / 65536.0;
 }
 
-long current_out_ua(uint16_t code) { return lround(zero_ua() + ua_per_code() * (double)code); }
+/* The line, or the floor where the line runs below it (cal_data.h). */
+long current_out_ua(uint16_t code) {
+    double ua = zero_ua() + ua_per_code() * (double)code;
+    double floor_ua = (double)CURRENT_OUT_CAL_FLOOR_UA;
+    return lround(ua > floor_ua ? ua : floor_ua);
+}
 long current_out_min_ua(void)      { return current_out_ua(0); }
 long current_out_max_ua(void)      { return current_out_ua(0xFFFF); }
 
@@ -37,7 +42,10 @@ const char *current_out_code(long ua, uint16_t *code) {
                  ua, current_out_min_ua(), current_out_max_ua());
         return s_msg;
     }
-    long c = lround(((double)ua - zero_ua()) / ua_per_code());
+    /* At or below the floor: code 0.  The real curve rounds off into the floor, so a code from
+       the line just above it overshoots (rev3: code 121 gives 4060 uA, code 0 gives 4054). */
+    long c = (double)ua <= (double)CURRENT_OUT_CAL_FLOOR_UA ? 0
+           : lround(((double)ua - zero_ua()) / ua_per_code());
     if (c < 0) c = 0;
     if (c > 0xFFFF) c = 0xFFFF;
     if (code) *code = (uint16_t)c;

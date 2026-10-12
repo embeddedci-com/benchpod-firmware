@@ -19,23 +19,27 @@ static const cal_set_t CAL_V2 = {
     .current_out = { 4015.686f, 0.24509804f },
 };
 
-/* rev3: measured 2026-10-01.  DAC: the DMM on each output SMA, unloaded, 4 to 6 codes per
- * path.  Code 0 is left out of the 3V3 and 5V fits: the output stage cannot reach 0 V (it
- * bottoms out near 8 mV and 12 mV), so that point is not on the line.  ADC: 13-point sweeps
- * of the DAC outputs fitted above, through the two internal loopbacks and through a cable
- * from the ±12 V SMA to the ADC SMA.  4-20 mA output: the loop current at the two ends of the
- * 8-bit DAC range, 4.056 mA at code 0 and 20.032 mA at code 255 (16-bit code 65280), with an
- * external loop supply.  Two points only: the line through them. */
+/* rev3: measured 2026-10-12 on pod .220 against an HP 34401A, in 16-bit DAC codes
+ * (benchpod-firmware/calibration/scripts/dac16_sweep.py and adc16_sweep.py).  DAC: the DMM on
+ * each output SMA, unloaded, 40 codes per path; codes below 1000 (the output floor, about 8 mV
+ * on 3V3 and 12 mV on 5V) are left out.  What remains is the DAC8551's own INL: +-0.2 mV on
+ * 3V3, +-0.3 mV on 5V, +-1.6 mV on 12V.  ADC: 25-point sweeps against the DMM reading of the
+ * same DAC code, through the two internal loopbacks and through a cable from the +-12 V SMA to
+ * the ADC SMA; within about one count.  4-20 mA output: 25 currents from 4.1 to 20 mA, the
+ * DMM in series with a floating 24 V supply and 324 ohm, within 1 uA; code 0 sits on the DAC
+ * floor at 4055 uA, 30 uA above the line, and is left out.  The rev3 set of 2026-10-01 (8-bit
+ * codes, 4 to 6 per path, and a 4-20 mA line through code 0) was up to 27 uA off at 4 mA. */
 static const cal_set_t CAL_V3 = {
     .dac = {
-        {  0.001514f,  0.012903f },   /* 3V3 */
-        {  0.002428f,  0.019539f },   /* 5V  */
-        { -12.087271f, 0.094405f },   /* 12V */
+        {  0.0016304f,  0.01290215f },   /* 3V3 */
+        {  0.0025176f,  0.01953943f },   /* 5V  */
+        { -12.087242f,  0.09440379f },   /* 12V */
     },
-    .adc_cal1 = { 65.720665f, -0.001002852f },
-    .adc_cal2 = { 65.824094f, -0.001004449f },
-    .adc_ext  = { 65.716013f, -0.001002767f },
-    .current_out = { 4056.0f, 0.24473039f },   /* (20032 - 4056) uA / 65280 codes */
+    .adc_cal1 = { 65.712125f, -0.0010027157f },
+    .adc_cal2 = { 65.812962f, -0.0010042767f },
+    .adc_ext  = { 65.708158f, -0.0010026443f },
+    .current_out = { 4025.338f, 0.24518720f },
+    .current_out_floor_ua = 4055.0f,
 };
 
 static const cal_set_t *s_active = &CAL_V2;

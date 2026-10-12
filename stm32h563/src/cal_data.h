@@ -37,8 +37,11 @@ typedef struct {
     cal_lin_t adc_ext;    /* front SMA; wraps (ref: DAC 12V) */
 
     /* 4-20 mA output (J9, current_out.h): microamps = a + b*code for the 16-bit DAC code.
-     * `a` is the live zero (the current at code 0). */
+     * The line holds above the output floor: the DAC buffer cannot go below a few mV, so the
+     * lowest codes all give current_out_floor_ua.  0 = no floor, the line holds down to code 0
+     * (then `a` is the live zero). */
     cal_lin_t current_out;
+    float     current_out_floor_ua;
 } cal_set_t;
 
 /* Pick the set for a board revision (BOARD_REV_V3 -> rev3, anything else -> v2).  Call once
@@ -54,6 +57,7 @@ const cal_set_t *cal_data(void);
 #define ADC_CAL_CAL2  (cal_data()->adc_cal2)
 #define ADC_CAL_EXT   (cal_data()->adc_ext)
 #define CURRENT_OUT_CAL (cal_data()->current_out)
+#define CURRENT_OUT_CAL_FLOOR_UA (cal_data()->current_out_floor_ua)
 
 /* The DAC output paths at the DAC8551's full 16 bits.  `dac[]` is fitted on 8-bit codes, which
    drive the DAC in its high byte, so a 16-bit code is code8 * 256 on the same line:

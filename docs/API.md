@@ -1059,7 +1059,7 @@ and ADC fits:
 | Revision | `min_ua` | `max_ua` | From |
 |---|---|---|---|
 | v2 | 4016 | 20078 | the nominal values (not measured) |
-| rev3 | 4056 | 20094 | one rev3 pod: 4.056 mA at 8-bit code 0, 20.032 mA at 8-bit code 255 |
+| rev3 | 4055 | 20094 | one rev3 pod against a 6½-digit DMM: a line through 25 currents from 4.1 to 20 mA (within 1 µA), and 4.055 mA at the bottom, where the DAC cannot go lower |
 
 Always take the range from the reply (or the capabilities frame), never from this table. The
 fit is per revision, not per pod: the output has no per-pod calibration.
