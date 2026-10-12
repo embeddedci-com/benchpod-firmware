@@ -19,6 +19,10 @@ const char *net_mac_str(void);
    Unlike wifi_get_ip() (Ethernet-preferred), this is the Wi-Fi interface only —
    used by the `wifi-show` console command. */
 const char *wifi_sta_ip(void);
+/* The interface that owns local IPv4 `local_ip` (lwIP byte order): "eth", "wifi", or "unknown".
+   Net task only. The cloud client passes its connection's local address, so the answer is the
+   interface the cloud link actually runs over, not just the current default route. */
+const char *net_uplink_name(uint32_t local_ip);
 
 /* Bring-up diagnostic (console `wifi-static`): pin a static IP on the Wi-Fi
    netif and disable DHCP on it, so a peer can ping the pod to test unicast RX. */

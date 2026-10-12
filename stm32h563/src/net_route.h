@@ -31,4 +31,10 @@ typedef struct {
 /* Returns the index into ifs[] (ordered by priority), or -1 for "no opinion". */
 int net_route_pick(const net_route_if_t *ifs, int n, uint32_t src, uint32_t dest);
 
+/* The interface that owns local address `local` (a connection's local IP), as an index into
+   ifs[], or -1 when none does (0, or an address no interface holds any more). Ignores `usable`:
+   a connection keeps the address it was opened from even while its link flaps. The cloud client
+   reports it as the "uplink" of its capabilities frame (eth or wifi). */
+int net_route_owner(const net_route_if_t *ifs, int n, uint32_t local);
+
 #endif /* NET_ROUTE_H */

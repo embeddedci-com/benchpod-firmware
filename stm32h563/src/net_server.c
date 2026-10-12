@@ -549,6 +549,18 @@ static void route_if_fill(net_route_if_t *r, const struct netif *n)
     r->usable = netif_is_up(n) && netif_is_link_up(n) && r->ip != 0;
 }
 
+const char *net_uplink_name(uint32_t local_ip)
+{
+    net_route_if_t ifs[2];
+    route_if_fill(&ifs[0], &s_eth.netif);
+    route_if_fill(&ifs[1], &s_wifi.netif);
+    switch (net_route_owner(ifs, 2, local_ip)) {
+    case 0:  return "eth";
+    case 1:  return "wifi";
+    default: return "unknown";
+    }
+}
+
 struct netif *net_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
 {
     struct netif *order[2] = { &s_eth.netif, &s_wifi.netif };   /* priority */

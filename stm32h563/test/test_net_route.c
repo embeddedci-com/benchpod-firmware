@@ -81,6 +81,22 @@ static void test_nothing_usable(void)
     CHECK(net_route_pick(ifs, 2, IP(192, 168, 1, 220), IP(192, 168, 1, 50)) == -1);
 }
 
+/* The cloud capabilities frame's "uplink": which interface holds the connection's local IP. */
+static void test_owner_names_the_uplink(void)
+{
+    CHECK(net_route_owner(both_up, 2, IP(192, 168, 1, 220)) == ETH);
+    CHECK(net_route_owner(both_up, 2, IP(192, 168, 1, 221)) == WIFI);
+    CHECK(net_route_owner(both_up, 2, 0) == -1);
+    CHECK(net_route_owner(both_up, 2, IP(10, 0, 0, 7)) == -1);
+    /* A link flap does not change which interface the connection was opened from. */
+    net_route_if_t ifs[2] = { both_up[0], both_up[1] };
+    ifs[1].usable = false;
+    CHECK(net_route_owner(ifs, 2, IP(192, 168, 1, 221)) == WIFI);
+    /* Unaddressed interfaces never claim a connection. */
+    ifs[0].ip = 0;
+    CHECK(net_route_owner(ifs, 2, 0) == -1);
+}
+
 int main(void)
 {
     test_reply_leaves_arrival_interface();
@@ -90,6 +106,7 @@ int main(void)
     test_unaddressed_interface_never_matches();
     test_different_subnets();
     test_nothing_usable();
+    test_owner_names_the_uplink();
     if (failures) { printf("test_net_route: %d FAILED\n", failures); return 1; }
     printf("test_net_route: all passed\n");
     return 0;
