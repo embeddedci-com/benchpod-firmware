@@ -44,7 +44,7 @@ CMSIS_DEV   := $(CUBE)/Drivers/CMSIS/Device/ST/STM32H5xx
 HAL         := $(CUBE)/Drivers/STM32H5xx_HAL_Driver
 FREERTOS    := lib/FreeRTOS-Kernel
 FREERTOS_PORT := $(FREERTOS)/portable/GCC/ARM_CM33_NTZ/non_secure
-USBD        := lib/stm32_mw_usb_device
+TUSB        := lib/tinyusb/src
 LWIP        := lib/stm32_mw_lwip
 LAN8742     := $(CUBE)/Drivers/BSP/Components/lan8742
 MBEDTLS     := $(CUBE)/Middlewares/Third_Party/mbed-crypto
@@ -84,9 +84,9 @@ C_SOURCES := \
   src/console_io.c \
   src/bp_log.c \
   src/console.c \
-  src/usbd_conf.c \
-  src/usbd_desc.c \
-  src/usbd_cdc_if.c \
+  src/usb_desc.c \
+  src/usb_netif.c \
+  src/usb_dhcpd.c \
   src/usb_device.c \
   src/ethernetif.c \
   src/net_server.c \
@@ -198,12 +198,15 @@ HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_rcc.c \
          stm32h5xx_hal_iwdg.c stm32h5xx_hal_adc.c stm32h5xx_hal_adc_ex.c
 C_SOURCES += $(addprefix $(HAL)/Src/,$(HAL_C))
 
-# ST USB Device middleware (Core + CDC class).
+# TinyUSB device stack: CDC-ACM (console) + CDC-NCM (USB network), stm32_fsdev port.
 C_SOURCES += \
-  $(USBD)/Core/Src/usbd_core.c \
-  $(USBD)/Core/Src/usbd_ctlreq.c \
-  $(USBD)/Core/Src/usbd_ioreq.c \
-  $(USBD)/Class/CDC/Src/usbd_cdc.c
+  $(TUSB)/tusb.c \
+  $(TUSB)/common/tusb_fifo.c \
+  $(TUSB)/device/usbd.c \
+  $(TUSB)/class/cdc/cdc_device.c \
+  $(TUSB)/class/net/ncm_device.c \
+  $(TUSB)/portable/st/stm32_fsdev/dcd_stm32_fsdev.c \
+  $(TUSB)/portable/st/stm32_fsdev/fsdev_common.c
 
 # LwIP (NO_SYS=1): core + IPv4 + ethernet netif + DNS + altcp(+TLS) + mDNS.
 # igmp is needed for the mDNS responder (joins the 224.0.0.251 multicast group).
@@ -259,8 +262,7 @@ INCLUDES := \
   -I$(HAL)/Inc/Legacy \
   -I$(FREERTOS)/include \
   -I$(FREERTOS_PORT) \
-  -I$(USBD)/Core/Inc \
-  -I$(USBD)/Class/CDC/Inc \
+  -I$(TUSB) \
   -I$(LWIP)/src/include \
   -I$(LWIP)/system \
   -I$(LAN8742) \

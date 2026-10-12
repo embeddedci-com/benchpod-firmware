@@ -13,3 +13,6 @@
 [submodule "stm32h563/lib/monocypher"]
 	path = stm32h563/lib/monocypher
 	url = https://github.com/LoupVaillant/Monocypher
+[submodule "stm32h563/lib/tinyusb"]
+	path = stm32h563/lib/tinyusb
+	url = https://github.com/hathach/tinyusb.git

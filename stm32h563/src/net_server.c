@@ -23,6 +23,7 @@
 #include "net_dhcp.h"
 #include "net_route.h"
 #include "esp_netif.h"
+#include "usb_netif.h"
 #include "esp_wifi_ctrl.h"
 #include "esp_rom_flash.h"
 #include "conn_tx.h"
@@ -96,6 +97,8 @@ typedef struct {
 
 static net_if_t s_eth  = { .ip = "0.0.0.0", .is_eth = true  };
 static net_if_t s_wifi = { .ip = "0.0.0.0", .is_eth = false };
+/* USB CDC-NCM link: fixed /30, no DHCP client (usb_netif.c). */
+static struct netif s_usb_netif;
 static bool     s_wifi_static;   /* wifi-static console test: skip DHCP on wifi */
 static uint32_t link_timer;
 
@@ -551,11 +554,10 @@ static void route_if_fill(net_route_if_t *r, const struct netif *n)
 
 struct netif *net_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
 {
-    struct netif *order[2] = { &s_eth.netif, &s_wifi.netif };   /* priority */
-    net_route_if_t ifs[2];
-    route_if_fill(&ifs[0], order[0]);
-    route_if_fill(&ifs[1], order[1]);
-    int i = net_route_pick(ifs, 2, src ? ip4_addr_get_u32(src) : 0, ip4_addr_get_u32(dest));
+    struct netif *order[3] = { &s_eth.netif, &s_wifi.netif, &s_usb_netif };   /* priority */
+    net_route_if_t ifs[3];
+    for (int k = 0; k < 3; k++) route_if_fill(&ifs[k], order[k]);
+    int i = net_route_pick(ifs, 3, src ? ip4_addr_get_u32(src) : 0, ip4_addr_get_u32(dest));
     return (i < 0) ? NULL : order[i];
 }
 
@@ -745,12 +747,15 @@ static void lan_access(bool up)
         server_start();
         mdns_register(&s_eth.netif);
         mdns_register(&s_wifi.netif);
+        mdns_register(&s_usb_netif);
         if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
         if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
+        if (netif_is_link_up(&s_usb_netif)) mdns_resp_announce(&s_usb_netif);
     } else {
         server_stop();
         mdns_resp_remove_netif(&s_eth.netif);
         mdns_resp_remove_netif(&s_wifi.netif);
+        mdns_resp_remove_netif(&s_usb_netif);
     }
     log_printf("[net] LAN access %s\r\n", up ? "on" : "off (policy)");
 }
@@ -801,6 +806,19 @@ void net_init(void)
     }
     esp_wifi_ctrl_init();
 
+    /* USB network adapter (CDC-NCM): its own /30, never the default route. Appended
+       after eth and Wi-Fi so lwIP's subnet scan keeps preferring those. */
+    netif_add(&s_usb_netif, &zero, &zero, &zero, NULL, &usb_netif_init, &ethernet_input);
+    if (netif_list == &s_usb_netif) {
+        struct netif *tail = s_usb_netif.next;
+        netif_list = tail;
+        while (tail->next) tail = tail->next;
+        tail->next = &s_usb_netif;
+        s_usb_netif.next = NULL;
+    }
+    netif_set_up(&s_usb_netif);
+    log_printf("[net] usb: pod %s, host %s\r\n", usb_netif_pod_ip(), usb_netif_host_ip());
+
     /* The :8080 listener and mDNS, unless the LAN policy is "off" (pod_policy.h). */
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
@@ -822,6 +840,14 @@ void net_poll(void)
 {
     ethernetif_input(&s_eth.netif);
     esp_hosted_spi_poll();           /* pump the Wi-Fi SPI transport (RX/TX)   */
+    {
+        bool was_up = netif_is_link_up(&s_usb_netif);
+        usb_netif_poll(&s_usb_netif);    /* USB CDC-NCM frames, link, DHCP server */
+        if (!was_up && netif_is_link_up(&s_usb_netif)) {
+            log_printf("[net] usb link up\r\n");
+            if (s_lan_up) mdns_resp_announce(&s_usb_netif);
+        }
+    }
     sys_check_timeouts();
 
     /* The net task owns lwIP; it no longer runs command_handler (that moved to
