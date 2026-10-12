@@ -47,3 +47,16 @@ void cal_data_select(int board_rev) {
 const cal_set_t *cal_data(void) {
     return s_active;
 }
+
+uint16_t dac_code16_for_volts(int path, float volts) {
+    const cal_lin_t c = DAC_CAL[path];
+    double code = ((double)volts - c.a) / c.b * 256.0;
+    if (!(code > 0.0)) return 0;              /* also catches NaN */
+    if (code >= 65535.0) return 65535;
+    return (uint16_t)(code + 0.5);
+}
+
+float dac_volts_for_code16(int path, uint16_t code) {
+    const cal_lin_t c = DAC_CAL[path];
+    return (float)(c.a + (double)c.b * code / 256.0);
+}
