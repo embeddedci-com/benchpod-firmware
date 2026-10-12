@@ -1005,14 +1005,23 @@ the front end.
 
 #### `dac_out` — route an output path **and** set a calibrated voltage
 
-`volts` is optional (omit to only route). The firmware converts volts→DAC code
-using the baked-in per-path calibration and returns the achieved millivolts and
-the code used (`code` is `-1` when only routing).
+`volts` is optional (omit to only route). The firmware converts volts to the DAC8551's full
+16-bit code using the baked-in per-path calibration, so one step is about 50 µV on `3v3`,
+76 µV on `5v` and 0.37 mV on `12v`.
 
 ```json
 {"cmd":"dac_out","path":"5v","volts":2.5}
-→ {"status":"ok","data":{"path":"dac_5v","mv":2502,"code":128}}
+→ {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code":128,"code16":32723}}
 ```
+
+| Field | Meaning |
+|---|---|
+| `mv`, `uv` | The voltage the chosen code gives, in millivolts and in microvolts |
+| `code16` | The 16-bit DAC code now held |
+| `code` | The nearest 8-bit code (`code16` / 256, rounded), what older firmware reported; `-1` when only routing |
+
+When only routing, the reply is `{"path":…,"mv":0,"code":-1}` with no `uv` or `code16`.
+Waveforms (`generate`, `load`, `replay`) still use 8-bit codes.
 
 #### `current_out` — hold a current on the 4-20 mA output (J9)
 

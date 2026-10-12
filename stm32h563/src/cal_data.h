@@ -12,6 +12,8 @@
 #ifndef CAL_DATA_H
 #define CAL_DATA_H
 
+#include <stdint.h>
+
 typedef struct { float a, b; } cal_lin_t;
 
 typedef struct {
@@ -52,5 +54,11 @@ const cal_set_t *cal_data(void);
 #define ADC_CAL_CAL2  (cal_data()->adc_cal2)
 #define ADC_CAL_EXT   (cal_data()->adc_ext)
 #define CURRENT_OUT_CAL (cal_data()->current_out)
+
+/* The DAC output paths at the DAC8551's full 16 bits.  `dac[]` is fitted on 8-bit codes, which
+   drive the DAC in its high byte, so a 16-bit code is code8 * 256 on the same line:
+   volts = a + b * code16 / 256.  `path` is the dac[] index (0 = 3v3, 1 = 5v, 2 = 12v). */
+uint16_t dac_code16_for_volts(int path, float volts);   /* nearest code, clamped to 0..65535 */
+float    dac_volts_for_code16(int path, uint16_t code);
 
 #endif /* CAL_DATA_H */

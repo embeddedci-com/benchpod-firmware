@@ -103,7 +103,7 @@ void handle_analog_path(int conn_id, const char *json) {
 
 /* dac_out — route a DAC output path AND set a CALIBRATED voltage (one step, no
    manual mux flipping).  {"cmd":"dac_out","path":"5v","volts":2.5} → achieved
-   mv + code.  path off just parks the output; omit volts to only route. */
+   mv and uv, the 16-bit code16 and its 8-bit equivalent code.  path off just parks the output; omit volts to only route. */
 void handle_dac_out(int conn_id, const char *json) {
     char name[16] = {0}, volts_s[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
@@ -114,19 +114,27 @@ void handle_dac_out(int conn_id, const char *json) {
     else if (p == ANALOG_PATH_DAC_12V) idx = 2;
     else if (p != ANALOG_PATH_OFF) { send_error(conn_id, "path must be 3v3|5v|12v|off"); return; }
     if (analog_path_set(p) != 0) { send_error(conn_id, "route failed"); return; }
-    long code = -1; int got_mv = 0;
+    long code = -1, code16 = -1; int got_mv = 0; long got_uv = 0;
     if (idx >= 0 && json_get_value(json, "volts", volts_s, sizeof(volts_s))) {
-        float v = (float)atof(volts_s);
-        float a = DAC_CAL[idx].a, b = DAC_CAL[idx].b;
-        code = lroundf((v - a) / b);
-        if (code < 0) code = 0;
+        /* The full 16 bits of the DAC8551: one step is 1/256 of the 8-bit one (about 76 uV on
+           the 5v path).  `code` stays the 8-bit equivalent for older clients. */
+        uint16_t c16 = dac_code16_for_volts(idx, (float)atof(volts_s));
+        if (dac_set_constant16(c16, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
+        float got = dac_volts_for_code16(idx, c16);
+        code16 = c16;
+        code = (c16 + 128) >> 8;
         if (code > 255) code = 255;
-        if (dac_set_constant((uint8_t)code, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
-        got_mv = (int)lroundf((a + b * (float)code) * 1000.0f);
+        got_mv = (int)lroundf(got * 1000.0f);
+        got_uv = lroundf(got * 1e6f);
     }
-    char payload[80];
-    snprintf(payload, sizeof(payload), "{\"path\":\"%s\",\"mv\":%d,\"code\":%ld}",
-             analog_path_name(p), got_mv, code);
+    char payload[112];
+    if (code16 >= 0)
+        snprintf(payload, sizeof(payload),
+                 "{\"path\":\"%s\",\"mv\":%d,\"uv\":%ld,\"code\":%ld,\"code16\":%ld}",
+                 analog_path_name(p), got_mv, got_uv, code, code16);
+    else
+        snprintf(payload, sizeof(payload), "{\"path\":\"%s\",\"mv\":%d,\"code\":%ld}",
+                 analog_path_name(p), got_mv, code);
     send_ok_str(conn_id, payload);
 }
 
