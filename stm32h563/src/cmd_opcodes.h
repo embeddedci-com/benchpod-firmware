@@ -20,6 +20,8 @@
 #define CMD_START_DAC_LOOP     0x15u
 #define CMD_START_CAPTURE      0x20u
 #define CMD_ADC_PROBE          0x21u
+#define CMD_ADC_RECAL          0x24u
+#define CMD_ADC_STATUS         0x26u
 #define CMD_CAPTURE_TEST       0x23u
 #define CMD_PSRAM_CS           0x25u
 #define CMD_START_MEASURE      0x30u

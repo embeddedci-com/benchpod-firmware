@@ -175,6 +175,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `current_out` | T1 | Hold a current on the 4-20 mA output (J9), in µA | object | no |
 | `adc_read` | T1 | Route an ADC source + return a calibrated reading (mV) | object | no |
 | `calibrate` | T0/T2 | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
+| `adc_recalibrate` | T1 | Rerun the ADC chip's own self-calibration (~0.5 s) | object | no |
 | `dac_mux` | T1 | Low-level DAC output mux (U55); prefer `dac_out` | object | no |
 | `cal_switch` | T1 | Low-level calibration relays (U58); prefer `analog_path` | object | no |
 | `dac_control_loop` | T1 | Arm (or disarm) the in-fabric closed-loop DAC | object | no |
@@ -257,7 +258,7 @@ that applies answers with its message and the command does not run.
 | A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
-| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
+| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `adc_recalibrate`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
@@ -1219,6 +1220,24 @@ when the firmware supports it, and the cloud capabilities frame has `"calibrate"
 
 On the USB console, `calibrate` shows the calibration, `calibrate current_in` runs it, and
 `calibrate clear` removes it. `adc current_in` uses it.
+
+#### `adc_recalibrate` — rerun the ADC's self-calibration
+
+The ADC chip (MCP33131D) calibrates its own offset, gain and linearity. It does that at power-up,
+possibly before its voltage reference has settled, so the pod asks it to do it again once at boot
+(gateware v49 and newer). Run it again after the pod has warmed up or the room temperature changed
+a lot. It is not the same as
+[`calibrate`](#calibrate--calibrate-the-current_in-input-j8), which measures this pod's offset on
+`current_in`: run `adc_recalibrate` first if you do both.
+
+```json
+{"cmd":"adc_recalibrate"}
+→ {"status":"ok","data":{"took_ms":505}}
+```
+
+It takes about 0.5 s (0.65 s at most). The ADC does not convert meanwhile, so the command is
+refused while a capture runs (`busy`). It needs gateware v49 or newer, and an error says so on
+older gateware. An error also comes back when the ADC does not start a calibration.
 
 #### Loopback / self-cal examples
 

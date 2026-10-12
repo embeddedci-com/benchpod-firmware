@@ -184,8 +184,8 @@ static void test_lists_name_real_verbs(void) {
         "identity_wipe", "dac_limits", "can_config", "can_write", "can_read", "can_status",
         "can_term", "can_respond", "can_disable", "generate", "capture", "stream", "measure", "load",
         "load_bin", "replay", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
-        "current_out", "adc_read", "calibrate", "dac_control_loop", "dac_loop_probe",
-        "dac_loop_input",
+        "current_out", "adc_read", "adc_recalibrate", "calibrate", "dac_control_loop",
+        "dac_loop_probe", "dac_loop_input",
     };
     int hw_ok = 0, analog = 0;
     for (size_t i = 0; i < sizeof(probe) / sizeof(probe[0]); i++) {
@@ -193,7 +193,7 @@ static void test_lists_name_real_verbs(void) {
         hw_ok += cmd_gate_ok_without_hw(probe[i]);
         analog += cmd_gate_needs_analog(probe[i]);
     }
-    CHECK(hw_ok == 28 && analog == 19, "list sizes changed: %d without hw, %d analog (update this test)",
+    CHECK(hw_ok == 28 && analog == 20, "list sizes changed: %d without hw, %d analog (update this test)",
           hw_ok, analog);
     CHECK(!cmd_gate_ok_without_hw("ota_begin") && !cmd_gate_needs_analog("la_capture"), "spot");
 }

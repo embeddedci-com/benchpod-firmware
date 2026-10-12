@@ -386,7 +386,10 @@ $(OUT).bin: $(OUT).asc
 # v48 (UART2, the TX-only second UART; 4066 LC, 77%): swept 1..64 in both toolchains: 48/64 local,
 # 55/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 26 -> 17, the best in both (clk48 54.84 local /
 # 55.98 CI, clk -> clk48 10.73 / 9.84 ns).
-SEED_LOOP ?= 17
+# v49 (ADC recalibrate; 4110 LC, 77%): seed 17 fell to clk48 48.22 MHz.  Swept 1..40 locally:
+# 32/40 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 17 -> 6 (clk48 55.16, clk 32.78, clk -> clk48
+# 11.82 ns; 6 was in the v48 cross-toolchain fallback list).  CI sweep not run yet.
+SEED_LOOP ?= 6
 # Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).
 SEED_LOOP_FALLBACK ?= 40 26 25 15 37 34 7 58 60 6 2
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
@@ -466,6 +469,8 @@ SEED_LOOP_FALLBACK ?= 40 26 25 15 37 34 7 58 60 6 2
 # the cross-toolchain fallback list).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
 # v47 + cell_gearbox48 (ARCH-GW-1, no logic change, see SEED_LOOP; 3610 LC): seed 57 still closes
 # (clk48 57.67, clk 32.55, clk -> clk48 14.41 ns).  A new bitstream: RE-VERIFY on hardware.
+# v49 (ADC recalibrate; 3772 LC, 71%): seed 13 still closes (clk48 54.27, clk 31.22, clk -> clk48
+# 13.34 ns); kept, no sweep.
 # v48 (UART2; 3780 LC, 71%): seed 57 FAILED clk48 (45.50 MHz).  Swept 1..64 in both toolchains:
 # 60/64 local, 64/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 57 -> 13 (clk48 59.54 local /
 # 59.26 CI, clk -> clk48 12.79 / 13.91 ns).  RE-VERIFY deep replay on hardware.

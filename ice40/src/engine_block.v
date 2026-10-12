@@ -83,6 +83,9 @@ module engine_block #(
     output wire         loop_inmap_stb,   // OP_DAC_LOOP_INMAP (v30): {trip_en, map_en, trip, gain, zero}
     output wire [44:0]  loop_inmap_cfg,
     input  wire         loop_tripped,     // latched over-range trip -> STATUS bit 6
+    // ADC recalibrate (OP_ADC_RECAL 0x24 / ADC_STATUS 0x26, v49) <-> adc_mcp33131
+    output wire         adc_recal,
+    input  wire         adc_calibrating,
 
     // ---- capture control -> the version-specific ADC/capture datapath ----
     output wire         cap_start,
@@ -200,6 +203,7 @@ module engine_block #(
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
         .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg),
         .loop_tripped(loop_tripped),
+        .adc_recal_stb(adc_recal), .adc_calibrating(adc_calibrating),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp),

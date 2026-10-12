@@ -247,6 +247,8 @@ void boot_deferred_hw_init(void)
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();
     i2c_bus_status();       /* scan + name known devices */
+    /* Recalibrate the ADC now that its ADR4540 reference has long settled (signal_engine.h). */
+    if (ice40_is_configured()) signal_engine_adc_recal_boot();
     /* Park again: the self-test recovery or the gateware update may have reconfigured the
        iCE40 (or it was not configured above), which resets the DAC to 0 V. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();

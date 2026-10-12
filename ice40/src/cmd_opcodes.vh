@@ -18,6 +18,8 @@
     localparam OP_START_DAC_LOOP     = 8'h15;
     localparam OP_START_CAPTURE      = 8'h20;
     localparam OP_ADC_PROBE          = 8'h21;
+    localparam OP_ADC_RECAL          = 8'h24;
+    localparam OP_ADC_STATUS         = 8'h26;
     localparam OP_CAPTURE_TEST       = 8'h23;
     localparam OP_PSRAM_CS           = 8'h25;
     localparam OP_START_MEASURE      = 8'h30;

@@ -8,7 +8,8 @@
 // two field bugs lived (the 0x5555 mis-latch and the config-pin tristate), so this
 // drives a behavioural SPI master (mode 0) and checks the instant-response
 // commands: PING -> 0xA5, VERSION -> 41, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
-// GPIO_GET (v35) returning a pattern driven onto the LA pads.
+// GPIO_GET (v35) returning a pattern driven onto the LA pads, and the v49 ADC recalibrate:
+// ADC_RECAL sends 1024 SCLK on the ADC pins and ADC_STATUS bit0 stays high while SDO is low.
 //
 // It needs the iCE40 primitive sim models (yosys' cells_sim.v), passed on the
 // iverilog command line by the `topsmoketest` Makefile target.
@@ -114,11 +115,15 @@ module tb_top_v2;
 
     reg [7:0] r;
     reg [15:0] v;
+    // SCLK rising edges since the last CNVST rise (the ADC_RECAL read must have 1024).
+    integer sclk_n = 0;
+    always @(posedge adc_cnvst) sclk_n = 0;
+    always @(posedge adc_sclk)  sclk_n = sclk_n + 1;
     initial begin
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd48, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd49, "VERSION");
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");
         cmd1(8'h34, r); check(r, 8'h00, "TRIGGER_STATUS");
@@ -131,12 +136,29 @@ module tb_top_v2;
         la_pat = 14'h3FFF; #2000;
         cmd2(8'h43, v); check(v[7:0], 8'hFF, "GPIO_GET lo 3FFF"); check(v[15:8], 8'h3F, "GPIO_GET hi 3FFF");
 
+        // ADC recalibrate (v49).  The ADC "calibrates" (SDO low) from just after the command
+        // until the bench releases it.
+        cmd1(8'h26, r); check(r, 8'h00, "ADC_STATUS idle");
+        cmd1(8'h24, r);
+        adc_sdo = 1'b0;
+        cmd1(8'h26, r); check(r, 8'h01, "ADC_STATUS after ADC_RECAL");
+        #150000;
+        if (sclk_n !== 1024) begin
+            $display("FAIL tb_top_v2: ADC_RECAL sent %0d SCLK pulses, want 1024", sclk_n);
+            errors = errors + 1;
+        end
+        cmd1(8'h26, r); check(r, 8'h01, "ADC_STATUS while SDO low");
+        adc_sdo = 1'b1;
+        #2000;
+        cmd1(8'h26, r); check(r, 8'h00, "ADC_STATUS after SDO released");
+        cmd1(8'h03, r); check(r, 8'h00, "STATUS bit7 still 0");
+
         if (errors == 0)
-            $display("PASS tb_top_v2: PING/VERSION/STATUS/TRIGGER_STATUS/GPIO_GET answer correctly through the SPI+pad top");
+            $display("PASS tb_top_v2: PING/VERSION/STATUS/TRIGGER_STATUS/GPIO_GET/ADC_RECAL answer correctly through the SPI+pad top");
         else
             $display("FAIL tb_top_v2: %0d error(s)", errors);
         $finish;
     end
 
-    initial begin #200000 $display("FAIL tb_top_v2: timeout"); $finish; end
+    initial begin #600000 $display("FAIL tb_top_v2: timeout"); $finish; end
 endmodule

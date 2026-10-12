@@ -30,6 +30,7 @@
 #include "i2c_bus.h"   /* la_pullups_all_off — 3V3-referenced pull-ups vs the 1V8 bank */
 #include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
+#include "board_variant.h"  /* board_has_analog: no ADC to recalibrate on the digital board */
 
 #include <string.h>
 #include <math.h>
@@ -862,6 +863,7 @@ void signal_engine_gateware_update(void) {
         signal_engine_refresh_version();
         psram_boot_selftest();
         printf("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
+        signal_engine_adc_recal_boot();
     } else {
         printf("[fpga] gateware update failed, run flash-ice40 on the console\n");
     }
@@ -2276,6 +2278,40 @@ int fpga_gpio_get(uint16_t *levels) {
     if (spi_cmd_read(CMD_GPIO_GET, NULL, 0, b, sizeof(b)) != 0) return -1;
     if (levels) *levels = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x3FFFu);
     return 0;
+}
+
+/* ---- MCP33131 recalibrate (gateware >= v49) -------------------------------- */
+
+int fpga_adc_recalibrate(uint32_t timeout_ms, uint32_t *took_ms) {
+    if (took_ms) *took_ms = 0;
+    if (s_fpga_version < ADC_RECAL_MIN_GW) return -2;
+    uint8_t st = 0;
+    if (fpga_status_read(&st) != 0) return -1;
+    /* The engine stops converting while the ADC calibrates: a capture would stall half a
+       second and miss its timing.  The JSON command also holds the heavy lock. */
+    if (st & STATUS_CAP_BUSY) return -4;
+    if (spi_cmd_write(CMD_ADC_RECAL, NULL, 0) != 0) return -1;
+    uint32_t t0 = HAL_GetTick();
+    for (;;) {
+        uint8_t a = 0xFF;
+        /* ADC_STATUS bits 7:1 are 0 on a configured iCE40: 0xFF is a floating MISO. */
+        if (spi_cmd_read(CMD_ADC_STATUS, NULL, 0, &a, 1) != 0 || (a & 0x80u)) return -1;
+        uint32_t dt = HAL_GetTick() - t0;
+        if (took_ms) *took_ms = dt;
+        if (!(a & 0x01u)) return 0;
+        if (dt > timeout_ms) return -3;
+        sleep_ms(5);
+    }
+}
+
+void signal_engine_adc_recal_boot(void) {
+    if (!board_has_analog() || s_fpga_version < ADC_RECAL_MIN_GW) return;
+    uint32_t ms = 0;
+    int rc = fpga_adc_recalibrate(ADC_RECAL_TIMEOUT_MS, &ms);
+    if (rc == 0 && ms >= ADC_RECAL_MIN_MS)
+        printf("[adc] recalibrated in %lu ms\n", (unsigned long)ms);
+    else
+        printf("[adc] WARNING: recalibrate rc %d after %lu ms\n", rc, (unsigned long)ms);
 }
 
 int fpga_set_trigger(unsigned la, uint8_t mode) {

@@ -225,6 +225,34 @@ void handle_adc_read(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
+/* adc_recalibrate — rerun the ADC's own self-calibration (MCP33131 recalibrate command,
+   signal_engine.h) and wait for it: {"cmd":"adc_recalibrate"} -> {"took_ms":N}.  The pod already
+   does this once at boot; run it again after the pod has warmed up or the room temperature has
+   changed a lot.  Takes ~0.5 s (max 0.65 s), during which the ADC does not convert, so it is
+   refused while a capture runs. */
+void handle_adc_recalibrate(int conn_id, const char *json) {
+    (void)json;
+    if (!heavy_begin(conn_id)) return;
+    uint32_t ms = 0;
+    int rc = fpga_adc_recalibrate(ADC_RECAL_TIMEOUT_MS, &ms);
+    heavy_release(conn_id);
+    switch (rc) {
+    case 0: break;
+    case -2: send_error(conn_id, "adc_recalibrate needs gateware v49 or newer"); return;
+    case -3: send_error(conn_id, "adc_recalibrate: the ADC was still calibrating after 1000 ms"); return;
+    case -4: send_error(conn_id, "busy: a capture is running"); return;
+    default: send_error(conn_id, "adc_recalibrate: iCE40 not responding"); return;
+    }
+    if (ms < ADC_RECAL_MIN_MS) {
+        /* The gateware ends the wait at once when SDO never goes low. */
+        send_error(conn_id, "adc_recalibrate: the ADC did not start a calibration (SDO never went low)");
+        return;
+    }
+    char payload[32];
+    snprintf(payload, sizeof(payload), "{\"took_ms\":%lu}", (unsigned long)ms);
+    send_ok_str(conn_id, payload);
+}
+
 /* The per-pod calibration of `current_in` as a reply. a_uv / b_nv are the fit this pod scales `current_in`
    with (volts = a + b*count), in the units of the capabilities frame's adc_cal_a_uv /
    adc_cal_b_nv, so a client can scale raw `current_in` counts the way adc_read does. */

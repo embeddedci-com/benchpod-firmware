@@ -712,6 +712,26 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
    actually read (0 if none available). */
 size_t fpga_uart_read(uint8_t *buf, size_t len);
 
+/* ---- MCP33131 recalibrate (gateware >= ADC_RECAL_MIN_GW) -------------------
+ * Sends the ADC's recalibrate command (datasheet DS20005947B section 7.1) and waits for the
+ * self-calibration to finish (tCAL ~500 ms, max 650 ms; no conversion runs meanwhile).  The
+ * power-up self-calibration starts when AVDD comes up, which can be before the ADR4540 reference
+ * has settled (the datasheet's first reason to recalibrate).  boot_deferred_hw_init runs one at
+ * boot, `adc_recalibrate` on demand.  It does not remove the missing codes just below code 0 on
+ * rev3 boards (HW, baea06, 2026-10-11). */
+#define ADC_RECAL_MIN_GW        49u
+#define ADC_RECAL_TIMEOUT_MS  1000u   /* tCAL max 650 ms */
+/* Below this the ADC never held SDO low: it did not take the command (the gateware gives up
+   ~43 us after the 1024th clock). */
+#define ADC_RECAL_MIN_MS        100u
+/* 0 done (*took_ms = how long), -1 SPI failure / iCE40 not responding, -2 gateware older than
+   ADC_RECAL_MIN_GW, -3 still calibrating after timeout_ms, -4 a capture is running. */
+int fpga_adc_recalibrate(uint32_t timeout_ms, uint32_t *took_ms);
+/* The boot-time recalibration, logged: on an analog board with gateware >= ADC_RECAL_MIN_GW.
+   Also run after signal_engine_gateware_update moves the iCE40 to newer gateware, since the
+   boot one was skipped on the old gateware (a firmware update installs the blobs after it). */
+void signal_engine_adc_recal_boot(void);
+
 /* ---- UART2: a second, TX-only soft UART (gateware >= UART2_MIN_GW) ----------
  * Streams bytes to the DUT on one LA channel while the UART proxy keeps its own
  * pair (an emulated GPS receiver's NMEA, gps_sim.c).  Its status bits ride in

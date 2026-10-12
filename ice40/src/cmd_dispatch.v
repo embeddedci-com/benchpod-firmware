@@ -111,6 +111,10 @@ module cmd_dispatch #(
     // STM32 can check (PE4 as input) whether the iCE40 actually reaches the shared
     // /CE net — pins the "iCE40 can't write PSRAM" fault on the pad45->/CE joint.
     output reg               psram_cs_force,
+    // ADC recalibrate (OP_ADC_RECAL 0x24, v49): 1-cycle strobe to adc_mcp33131; its
+    // `calibrating` comes back for ADC_STATUS (0x26) bit0.
+    output reg               adc_recal_stb,
+    input  wire              adc_calibrating,
     // Capture trigger (OP_SET_TRIGGER 0x33, v2 >= v35).  Persistent; the mode byte is decoded
     // here at SET time so the top's per-cycle test is one mux and two compares.  trig_en = 0 is
     // an untriggered capture (the <= v34 behaviour).  trig_pol = the level that fires (1 for
@@ -559,6 +563,7 @@ module cmd_dispatch #(
             adc_cap_base  <= 24'h400000;   /* legacy fixed map until SET_CAPTURE_BASES */
             cap_test_ramp <= 1'b0;   /* persistent — reset only, not per-cycle */
             psram_cs_force <= 1'b0;
+            adc_recal_stb  <= 1'b0;
             trig_ch   <= 4'd0;  trig_en  <= 1'b0;   /* untriggered until SET_TRIGGER */
             trig_edge <= 1'b0;  trig_pol <= 1'b0;
             cs_active_d <= 1'b0;
@@ -593,6 +598,7 @@ module cmd_dispatch #(
             dac_start      <= 1'b0;
             dac_stop       <= 1'b0;
             dac_cotrig_stb <= 1'b0;
+            adc_recal_stb  <= 1'b0;
             cap_start      <= 1'b0;
             gpio_set_stb   <= 1'b0;
             step_start     <= 1'b0;
@@ -716,6 +722,15 @@ module cmd_dispatch #(
                             end
                             // TRIGGER_STATUS (v35): bit0 waiting for the trigger, bit1 fired since
                             // the arm.  One reply byte, like STATUS.
+                            // ADC recalibrate (v49): instant, no args; ADC_STATUS polls it.
+                            OP_ADC_RECAL: begin
+                                adc_recal_stb <= 1'b1;
+                                state         <= S_DONE;
+                            end
+                            OP_ADC_STATUS: begin
+                                tx_byte <= {7'b0, adc_calibrating};
+                                state   <= S_DONE;
+                            end
                             OP_TRIGGER_STATUS: begin
                                 tx_byte <= {6'b0, trig_fired, trig_wait};
                                 state   <= S_DONE;

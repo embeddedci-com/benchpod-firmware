@@ -188,6 +188,8 @@ module top (
     // cannot bind a net used before its declaration, so declare them here.
     wire [15:0] adc_sample;
     wire        adc_sample_stb;
+    wire        adc_recal;            // OP_ADC_RECAL strobe (v49) from engine_block
+    wire        adc_calibrating;      // -> ADC_STATUS bit0
     wire        dac_strm_pop;                // dac8551's strm pop, routed to loop or reader
     wire        dac_loop_mode;
     // Loop parameter strobes + payloads from cmd_dispatch (clk domain; see its port list).
@@ -440,6 +442,7 @@ module top (
     wire adc_sample_stb_raw;
     adc_mcp33131 adc_i (
         .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider),
+        .recal(adc_recal), .calibrating(adc_calibrating),
         .adc_cnvst(adc_cnvst), .adc_sclk(adc_sclk),
         .adc_sdi(adc_sdi), .adc_sdo(adc_sdo_pu),
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
@@ -708,7 +711,14 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 47) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 49) ----
+    // GATEWARE_VERSION 49 = v48 + the MCP33131 RECALIBRATE command (both images): ADC_RECAL
+    //   (0x24) makes the ADC engine's next read clock 1024 SCLK (datasheet DS20005947B 7.1), then
+    //   wait with CNVST low until the ADC releases SDO (tCAL ~500 ms); ADC_STATUS (0x26) bit0 is
+    //   high meanwhile.  The datasheet asks for it when the reference was not settled at power-up;
+    //   the firmware now recalibrates once at boot.  (It does NOT remove the missing codes just
+    //   below code 0 seen on rev3 baea06: HW 2026-10-11, same histogram before and after a
+    //   490 ms recalibration.)  tb_adc_mcp33131 and tb_top_v2 cover it.
     // GATEWARE_VERSION 47 = v46 + GW-1 (both images, no protocol change): every capture arm,
     //   including the zero-count abort, empties psram_dual_writer's two staging FIFOs and the LA
     //   SPRAM ring, and the arm wins over a pop on the same edge in the writer's region-address
@@ -1081,7 +1091,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd48), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd49), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1098,6 +1108,7 @@ module top (
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
         .loop_inmap_stb(loop_inmap_stb), .loop_inmap_cfg(loop_inmap_cfg),
         .loop_tripped(loop_tlm_clk[32]),
+        .adc_recal(adc_recal), .adc_calibrating(adc_calibrating),
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp), .psram_cs_force(psram_cs_force),

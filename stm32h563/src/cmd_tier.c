@@ -72,6 +72,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "dac_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_out) },
     { { "current_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_current_out) },
     { { "adc_read", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_read) },
+    { { "adc_recalibrate", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_recalibrate) },
     { { "dac_control_loop", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_control_loop) },
     { { "dac_loop_input", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_input) },
     { { "la", CMD_TIER_T1 }, 0, CMD_FN(handle_la) },
