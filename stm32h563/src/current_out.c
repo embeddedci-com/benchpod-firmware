@@ -25,7 +25,12 @@ double current_out_nominal_ua_per_code(void) {
     return (double)CURRENT_OUT_GAIN * (double)CURRENT_OUT_AREF_UV / (double)CURRENT_OUT_SPAN_OHMS / 65536.0;
 }
 
-long current_out_ua(uint16_t code) { return lround(zero_ua() + ua_per_code() * (double)code); }
+/* The line, or the floor where the line runs below it (cal_data.h). */
+long current_out_ua(uint16_t code) {
+    double ua = zero_ua() + ua_per_code() * (double)code;
+    double floor_ua = (double)CURRENT_OUT_CAL_FLOOR_UA;
+    return lround(ua > floor_ua ? ua : floor_ua);
+}
 long current_out_min_ua(void)      { return current_out_ua(0); }
 long current_out_max_ua(void)      { return current_out_ua(0xFFFF); }
 

@@ -86,13 +86,26 @@ static void test_v2_fit_is_nominal(void) {
     CHECK(fabs((double)CURRENT_OUT_CAL.b - current_out_nominal_ua_per_code()) < 1e-7, "v2 step %f", (double)CURRENT_OUT_CAL.b);
 }
 
-/* A rev3 pod uses its own fit: the measured 4.056 mA at 8-bit code 0 and 20.032 mA at 8-bit
-   code 255. The range the pod reports, and the code for a current, move with it. */
+/* A rev3 pod uses its own fit, measured 2026-10-12 against a 34401A in series: 4.1 to 20 mA
+   within 1 uA, 20.031 mA at 8-bit code 255, and 4055 uA at code 0, where the DAC buffer sits
+   on its floor (30 uA above the line).  The range the pod reports, and the code for a current,
+   move with it. */
 static void test_rev3_fit(void) {
     cal_data_select(BOARD_REV_V3);
-    CHECK(current_out_min_ua() == 4056, "rev3 min %ld uA", current_out_min_ua());
-    CHECK(current_out_ua(255u << 8) == 20032, "rev3 8-bit code 255: %ld uA", current_out_ua(255u << 8));
+    CHECK(current_out_min_ua() == 4055, "rev3 min %ld uA", current_out_min_ua());
+    CHECK(current_out_ua(255u << 8) == 20031, "rev3 8-bit code 255: %ld uA", current_out_ua(255u << 8));
     CHECK(current_out_max_ua() == 20094, "rev3 max %ld uA", current_out_max_ua());
+
+    /* Below the floor every code gives the floor; above it the line takes over, upward only. */
+    CHECK(current_out_ua(60) == 4055 && current_out_ua(120) == 4055, "rev3 codes under the floor: %ld, %ld uA",
+          current_out_ua(60), current_out_ua(120));
+    CHECK(current_out_ua(1000) == 4271, "rev3 code 1000: %ld uA", current_out_ua(1000));
+    long prev_ua = 0;
+    for (long c = 0; c <= 0xFFFF; c += 7) {
+        long ua = current_out_ua((uint16_t)c);
+        if (ua < prev_ua) { CHECK(0, "rev3 current fell at code %ld", c); break; }
+        prev_ua = ua;
+    }
 
     uint16_t code = 0xFFFF, nominal = 0;
     CHECK(current_out_code(4000, &code) == NULL && code == 0, "rev3 4000 uA -> code %u", code);
@@ -100,10 +113,10 @@ static void test_rev3_fit(void) {
     cal_data_select(BOARD_REV_V2);
     current_out_code(12000, &nominal);
     cal_data_select(BOARD_REV_V3);
-    CHECK(code < nominal, "rev3 12 mA code %u is not below the nominal %u (its zero is 40 uA higher)", code, nominal);
+    CHECK(code < nominal, "rev3 12 mA code %u is not below the nominal %u (its zero is 10 uA higher)", code, nominal);
 
     const char *why = current_out_code(20095, &code);
-    CHECK(why && strstr(why, "4056 to 20094 uA"), "rev3 refusal: %s", why ? why : "(allowed)");
+    CHECK(why && strstr(why, "4055 to 20094 uA"), "rev3 refusal: %s", why ? why : "(allowed)");
 
     /* A measured fit stays close to the nominal one: a table typo must not pass. */
     CHECK(fabs((double)CURRENT_OUT_CAL.a - current_out_nominal_zero_ua()) < 100.0, "rev3 zero is far from nominal");
