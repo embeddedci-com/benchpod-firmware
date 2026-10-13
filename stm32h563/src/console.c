@@ -7,6 +7,7 @@
  * surface lands in later phases.
  */
 #include "console.h"
+#include "console_moved.h"
 #include "usb_device.h"
 #include "usb_netif.h"
 #include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
@@ -1121,6 +1122,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         op(out, ctx, "  rebooting...\r\n");
         HAL_Delay(50);
         NVIC_SystemReset();
+    } else if (console_moved_to(argv[0])) {
+        /* An older benchpod CLI / embeddedci SDK: say what to update, not "unknown command". */
+        static char moved[224];
+        console_moved_line(argv[0], moved, sizeof(moved));
+        out(ctx, moved);
+        out(ctx, "\r\n");
     } else {
         op(out, ctx, "  unknown command '%s' (try 'help')\r\n", argv[0]);
     }

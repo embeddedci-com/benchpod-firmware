@@ -232,8 +232,18 @@ it is how you test the iCE40 and PSRAM (`psram-selftest`, `psram-test`,
 ### Moved to the JSON API
 
 Firmware 3.9.0 removed these console commands; their JSON equivalents work over the
-USB network adapter, the LAN and the cloud (`benchpod`, the SDK and the MCP server use
-them over `--connection usb`).
+USB network adapter, the LAN and the cloud (`benchpod` 0.6.0+, the `embeddedci` SDK and
+MCP server 2.12.0+ use them over `--connection usb`). The console still answers a removed
+command, with one line instead of `unknown command`, so an older CLI or SDK tells its user
+what to update:
+
+```
+la-voltage: moved to the network API (JSON la_voltage) in firmware 3.9.0; update the benchpod CLI to 0.6.0 or later (or embeddedci to 2.12.0), which uses it over USB
+```
+
+The commands that stay keep their names and reply formats, so older CLIs and SDKs keep
+working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,
+`lan-policy`, the Wi-Fi, CA, proxy and upload commands.
 
 | Removed console command | JSON command |
 |---|---|
