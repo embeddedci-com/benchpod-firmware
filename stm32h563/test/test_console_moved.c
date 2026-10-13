@@ -13,9 +13,12 @@ int main(void)
     CHECK(console_moved_to("la-voltage") && !strcmp(console_moved_to("la-voltage"), "la_voltage"), "la-voltage");
     CHECK(!strcmp(console_moved_to("power"), "target_power"), "power");
     CHECK(!strcmp(console_moved_to("measure"), "adc_read"), "measure");
+    /* uploads go over the network now (USB network adapter); recovery is dfu */
+    CHECK(!strcmp(console_moved_to("upload-begin"), "ota_begin"), "upload-begin");
+    CHECK(!strcmp(console_moved_to("upload-data"), "ota_data"), "upload-data");
     /* the kept recovery commands are not moved: older CLIs keep using them */
     const char *kept[] = { "status", "dfu", "identity", "identity-wipe", "lan-policy", "sig-policy",
-                           "wifi-set", "wifi-clear", "blobs", "upload-begin", "help", "flash-ice40" };
+                           "wifi-set", "wifi-clear", "blobs", "help", "flash-ice40" };
     for (size_t i = 0; i < sizeof(kept) / sizeof(kept[0]); i++)
         CHECK(console_moved_to(kept[i]) == NULL, "%s must stay on the console", kept[i]);
     CHECK(console_moved_to(NULL) == NULL, "NULL");

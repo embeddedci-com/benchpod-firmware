@@ -168,7 +168,6 @@ C_SOURCES := \
   src/blob_store.c \
   src/blob_hooks.c \
   src/blob_manifest.c \
-  src/upload_rx.c \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \

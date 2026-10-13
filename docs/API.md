@@ -3179,8 +3179,8 @@ firmware itself goes to the MCU flash; the blob targets go to slots in the W25Q 
 `gw1` (the two iCE40 images), `esp` (the ESP32-C3 Wi-Fi image) and `ca` (a company CA, see
 [`cloud_ca`](#cloud_ca--cloud_proxy-company-ca-and-http-proxy-for-the-cloud-link)). Over the
 cloud the server sends the image as WS `ota.*` frames; over the LAN the image goes in base64url
-`ota_data` chunks; the USB console has `upload-*` (see
-[usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
+`ota_data` chunks, also over the USB network adapter (the USB console's `upload-*` commands are gone
+from firmware 3.9.0; see [usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
 or the web app instead of these commands.
 
 One transport holds an update session at a time. Every `ota_*` reply carries the session:
@@ -3422,8 +3422,8 @@ All errors follow the format:
 | `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
 | `"identity not available"` | Device identity not initialised (should not occur after boot) |
 | `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
-| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
-| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, console `upload-begin`) in a safe mode that turned the iCE40/PSRAM off |
+| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console of firmware before 3.9.0) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
+| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, LAN or USB network `ota_begin`) in a safe mode that turned the iCE40/PSRAM off |
 | `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
 | `"cloud_ca: change it from the cloud or the USB console"`, `"cloud_proxy: ..."`, `"sig_policy: ..."`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
 | `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
@@ -3539,7 +3539,8 @@ See `docs/design/cloud-hardening.md` section 3.
 
 `cloud_ca` replies `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`. A company CA is
 installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"` from the cloud, WS
-`ota.begin`, the USB console `upload-begin ca`, or `benchpod cloud ca set corp.pem` over USB); it
+`ota.begin`, `ota_begin` over the USB network adapter, or the USB console's `upload-begin ca` on
+firmware before 3.9.0; `benchpod cloud ca set corp.pem` picks the way); it
 must parse as X.509 and is trusted in addition to the built-in roots.
 `cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.

@@ -115,8 +115,7 @@ worker task, prints the output, then prints the prompt `"> "`.
 - **Quoting:** only `wifi-set` understands double quotes (an SSID or password
   with spaces). Every other command splits on whitespace.
 - **Machine-readable replies:** the commands an installer drives
-  (`identity*`, `sig-policy`, `lan-policy`, `ca*`, `proxy*`, `upload-*`,
-  `blobs`) start their reply with the command name and then `ok`, `error <why>`
+  (`identity*`, `sig-policy`, `lan-policy`, `ca*`, `proxy*`, `blobs`) start their reply with the command name and then `ok`, `error <why>`
   or the value, with no leading spaces. The other commands print indented,
   human-readable lines.
 - **Shared hardware:** the commands that capture into the PSRAM or drive the
@@ -131,8 +130,7 @@ These console replies are read by host tools (the `benchpod` CLI, the `embeddedc
 server, the web app's setup wizard over WebSerial), including older releases still in use, so
 their formats do not change: `status` (`device : benchpod`, the `ip`, `usb` and `board` lines),
 `ping` (`PING ok`), `identity`, `identity-wipe ok`, `sig-policy`, `lan-policy`, `ca`/`ca none`,
-`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, the `upload-*` acknowledgements,
-`usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
+`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, `usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
 existing one keeps its place. `stm32h563/test/check_console_contract.py` (run with the host tests)
 fails when one of these format strings changes.
 
@@ -165,7 +163,7 @@ command prints `usage: ...` and changes nothing.
 | `identity-wipe <short id\|unknown>` | Erase the device key and make a new one, the way back for a pod whose identity record the firmware will not replace. The argument must be the current short id (6 hex digits), or `unknown` when there is none; anything else prints `identity-wipe error confirm with the current id: identity-wipe <id>`. Replies `identity-wipe ok <new short id>`, then the pod logs in to the cloud again (the server needs a new registration). Only here: the JSON `identity_wipe` is refused on the LAN and the cloud. `benchpod identity wipe --connection usb` drives it. |
 | `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
-| `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Install one with `upload-begin ca <size> <sha256>` (no signature). `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
+| `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Installing one needs the network: JSON `ota_begin` with target `ca` over the USB network adapter, the cloud or (firmware before 3.9.0) the console's `upload-begin ca`; `benchpod cloud ca set` does it. `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
 | `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
 | `ca-damage` | Development builds only: damage the CA slot to try the built-in-roots fallback. |
 
@@ -190,23 +188,19 @@ command prints `usage: ...` and changes nothing.
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). |
 
-#### Firmware, gateware and blob uploads
+#### Firmware, gateware and blobs
 
 | Command | Description |
 |---|---|
 | `blobs` | One `blob <name> <state> <size> <version> <sha256\|->` line per W25Q release slot (`gw0`, `gw1`, `esp`); `state` is `ok`, `outdated`, `missing` or `unknown` (see JSON `blob_status`). Then `fw-copy <size> bytes, sha256 <prefix>...` or `fw-copy none`: the firmware image the last install stored in the W25Q. |
-| `upload-begin <firmware\|gw0\|gw1\|esp\|ca> <size> <sha256> [version]` | Start an upload over this console: the same PSRAM staging, SHA-256 and signature checks as an OTA. Replies `upload-begin ok` or `upload-begin error <why>` (for example `busy: <target> update from <holder> is in progress`, `busy: a capture or upload is running`, `signature: <result>`, or the safe-mode refusal). |
-| `upload-data <offset> <len> <crc32 hex>` | Followed by exactly `len` raw bytes (at most 512, no echo). Replies `upload-data ok <offset>`, `upload-data retry crc`, `upload-data retry timeout`, `upload-data busy` or `upload-data error usage: ...`. |
-| `upload-end` | Verify the staged image: `upload-end ok` or `upload-end error <why>`. |
-| `upload-commit` | Firmware: `upload-commit resetting`, then the pod writes the image and resets. A blob: `upload-commit ok`. Errors: `upload-commit error no verified image staged` and the others. |
-| `upload-status` | `upload-status <state> <target> <received>/<size> <error\|->`. |
-| `upload-abort` | `upload-abort ok`, or `upload-abort error <why>` when another transport holds the session. |
-| `upload-sig <0\|1> <base64url>`, `upload-sig clear`, `upload-sig` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Whether a missing or bad signature is refused depends on `sig-policy`. Older firmware answers "unknown command", which is how installers tell. |
 | `flash-ice40` | Reflash the iCE40 configuration flash with gateware image 0 from the W25Q `gw0` slot and reconfigure. |
 | `flash-id` | Development builds only. Read the iCE40 configuration flash's JEDEC ID (W25Q64 = `ef 40 17`). |
 
-`benchpod install-blobs` and `benchpod firmware install --connection usb` drive the
-upload commands.
+Firmware 3.9.0 removed the console uploads (`upload-begin`, `-data`, `-end`, `-commit`,
+`-status`, `-abort`, `upload-sig`): firmware, blob and CA uploads go over the JSON API (`ota_*`),
+which a computer on the USB cable reaches through the USB network adapter (`benchpod
+install-blobs`, `benchpod cloud ca set`, the web app). The way back without any network is
+`dfu` and `benchpod flash-self`.
 
 #### I²C peripherals (development builds only)
 
@@ -258,7 +252,7 @@ la-voltage: moved to the network API (JSON la_voltage) in firmware 3.9.0; update
 
 The commands that stay keep their names and reply formats, so older CLIs and SDKs keep
 working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,
-`lan-policy`, the Wi-Fi, CA, proxy and upload commands.
+`lan-policy`, the Wi-Fi, CA and proxy commands, `blobs`.
 
 | Removed console command | JSON command |
 |---|---|
@@ -272,6 +266,7 @@ working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,
 | `calibrate` | `calibrate` |
 | `dac-limits` | `dac_limits` |
 | `dacraw`, `dacmux`, `calsw` | `dac_set`, `dac_mux`, `cal_switch` |
+| `upload-begin`, `-data`, `-end`, `-commit`, `-status`, `-abort`, `upload-sig` | `ota_begin` (with `sig`), `ota_data`, `ota_end`, `ota_commit`, `ota_status`, `ota_abort` |
 | `can ...` | `can_config`, `can_write`, `can_read`, `can_status`, `can_respond`, `can_term`, `can_disable` |
 
 ### `wifi-clear` result
@@ -325,7 +320,8 @@ Sending `dfu` reboots the device into the STM32H563's ROM USB **DFU** bootloader
 Flash a new image from the host with `dfu-util` (`benchpod flash-self`, or
 `make flash-dfu`, which runs `dfu-util ... :leave` and reboots into the app). The
 application does **not** flash itself here; it only hands off to the built-in ROM
-bootloader. For an update without DFU, use `upload-begin` (above).
+bootloader. For an update without DFU, use the JSON `ota_*` commands over the USB network
+adapter (`benchpod flash-self` uses DFU; the web app's one-click install uses the cloud).
 
 ```
 > dfu

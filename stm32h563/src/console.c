@@ -67,7 +67,6 @@ bool clock_on_hsi(void);   /* main.c */
 #include "b64url.h"
 #include "w25q.h"
 #include "ota.h"
-#include "upload_rx.h"
 #include "flash_layout.h"
 #include "pod_policy.h"
 #include "cloud_extras.h"
@@ -118,9 +117,7 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
-/* upload-sig halves collected for the next upload-begin (base64url of a 128-byte manifest). */
-static char s_sig_b64[176];
-#define CONSOLE_LINE_MAX 128   /* fits upload-begin <target> <size> <64-hex sha256> <version> */
+#define CONSOLE_LINE_MAX 128
 
 /* Formatted output to a sink. */
 static void op(console_out_t out, void *ctx, const char *fmt, ...)
@@ -152,7 +149,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
-        "  cloud-ca | cloud-ca-clear                  company CA for the cloud link (upload-begin ca ...)\r\n"
+        "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
         "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
         "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n");
     out(ctx,
@@ -169,8 +166,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
         "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
         "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
-        "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
-        "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n");
+        "  (firmware and blob uploads: the JSON API, also over the USB network; recovery: dfu)\r\n");
 #if !defined(BENCHPOD_RELEASE)
     out(ctx,
         "development build only:\r\n"
@@ -862,76 +858,6 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         if (why) op(out, ctx, "lan-policy error %s\r\n", why);
         else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
-    } else if (!strcmp(argv[0], "upload-sig")) {
-        /* The image's signed manifest (fw_sign.h), 171 base64url characters, does not fit one
-           console line next to upload-begin: it comes first, in two halves (part 0 then 1),
-           and the next upload-begin uses it. No argument: the last begin's check result. */
-        if (argc < 2) {
-            op(out, ctx, "upload-sig result %s %s\r\n", ota_sig_result(),
-               ota_sig_key_id()[0] ? ota_sig_key_id() : "-");
-        } else if (!strcmp(argv[1], "clear")) {
-            s_sig_b64[0] = '\0';
-            op(out, ctx, "upload-sig ok\r\n");
-        } else if (argc < 3 || (strcmp(argv[1], "0") && strcmp(argv[1], "1"))) {
-            op(out, ctx, "upload-sig error usage: upload-sig <0|1> <base64url> | clear\r\n");
-        } else {
-            size_t have = argv[1][0] == '0' ? 0 : strlen(s_sig_b64);
-            size_t add = strlen(argv[2]);
-            if (have + add >= sizeof(s_sig_b64)) {
-                s_sig_b64[0] = '\0';
-                op(out, ctx, "upload-sig error too long\r\n");
-            } else {
-                memcpy(s_sig_b64 + have, argv[2], add + 1);
-                op(out, ctx, "upload-sig ok\r\n");
-            }
-        }
-    } else if (!strcmp(argv[0], "upload-begin")) {
-        /* Uploads over this console (upload_rx.h): the same staging + SHA-256 check as an OTA,
-           to the firmware or a W25Q blob slot. Replies start with the command name. */
-        int t = argc >= 4 ? ota_target_from_name(argv[1]) : -1;
-        if (argc < 4)
-            op(out, ctx, "upload-begin error usage: upload-begin <firmware|gw0|gw1|esp> <size> <sha256> [version]\r\n");
-        else if (t < 0)
-            op(out, ctx, "upload-begin error unknown target\r\n");
-        else if (ota_begin_gate(OTA_OWNER_USB))   /* another transport's update, or a capture */
-            op(out, ctx, "upload-begin error %s\r\n", ota_begin_gate(OTA_OWNER_USB));
-        else {
-            int rc = ota_begin_owned_b64(OTA_OWNER_USB, (uint32_t)strtoul(argv[2], NULL, 0), argv[3],
-                                         (ota_target_t)t,
-                                         argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0u, s_sig_b64);
-            s_sig_b64[0] = '\0';                             /* one manifest per begin */
-            if (rc == 0)
-                op(out, ctx, "upload-begin ok\r\n");
-            else
-                op(out, ctx, "upload-begin error %s\r\n", ota_error());
-        }
-    } else if (!strcmp(argv[0], "upload-end")) {
-        if (ota_busy_for(OTA_OWNER_USB))
-            op(out, ctx, "upload-end error %s\r\n", ota_busy_for(OTA_OWNER_USB));
-        else if (ota_end_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-end ok\r\n");
-        else                                      op(out, ctx, "upload-end error %s\r\n", ota_error());
-    } else if (!strcmp(argv[0], "upload-commit")) {
-        if (ota_busy_for(OTA_OWNER_USB)) {
-            op(out, ctx, "upload-commit error %s\r\n", ota_busy_for(OTA_OWNER_USB));
-        } else if (ota_get_state() != OTA_VERIFIED) {
-            op(out, ctx, "upload-commit error no verified image staged\r\n");
-        } else if (ota_target() == OTA_TARGET_FIRMWARE) {
-            op(out, ctx, "upload-commit resetting\r\n");
-            sleep_ms(50);              /* let the reply leave before the flash writer takes over */
-            ota_commit();              /* does not return on success */
-            op(out, ctx, "upload-commit error %s\r\n", ota_error());
-        } else if (ota_commit() == 0) {
-            op(out, ctx, "upload-commit ok\r\n");
-        } else {
-            op(out, ctx, "upload-commit error %s\r\n", ota_error());
-        }
-    } else if (!strcmp(argv[0], "upload-status")) {
-        op(out, ctx, "upload-status %s %s %lu/%lu %s\r\n", ota_state_str(),
-           ota_target_name(ota_target()), (unsigned long)ota_received(),
-           (unsigned long)ota_size(), ota_error()[0] ? ota_error() : "-");
-    } else if (!strcmp(argv[0], "upload-abort")) {
-        if (ota_abort_by(OTA_OWNER_USB) == 0) op(out, ctx, "upload-abort ok\r\n");
-        else op(out, ctx, "upload-abort error %s\r\n", ota_busy_replace_for(OTA_OWNER_USB));
     } else if (!strcmp(argv[0], "blobs")) {
         /* One line per W25Q slot: name, state against this firmware, what it holds. */
         for (int i = 0; i < BLOB_COUNT; i++) {
@@ -1170,20 +1096,6 @@ void console_init(void)
     printf("\r\nconsole ready — type 'help'\r\n> ");
 }
 
-/* upload-data: the console task itself takes the raw chunk off the wire (it never reaches the
-   line editor or the worker as text), checks its CRC and queues it to the worker as OTA data. */
-static upload_rx_t s_upload;
-
-static void upload_chunk_done(void)
-{
-    if (!upload_rx_crc_ok(&s_upload))
-        printf("upload-data retry crc\r\n> ");
-    else if (!hw_worker_submit_ota_data_from(OTA_OWNER_USB, s_upload.offset, s_upload.buf, s_upload.len))
-        printf("upload-data busy\r\n> ");
-    else
-        printf("upload-data ok %lu\r\n> ", (unsigned long)s_upload.offset);
-}
-
 void console_poll(void)
 {
     /* Persists across polls: a CR and its trailing LF can arrive in separate
@@ -1192,22 +1104,12 @@ void console_poll(void)
     static int last_was_cr = 0;
     int c;
     while ((c = console_io_getc()) >= 0) {
-        if (s_upload.active) {                      /* raw chunk bytes: no echo, no editing */
-            if (upload_rx_byte(&s_upload, (uint8_t)c, HAL_GetTick())) upload_chunk_done();
-            continue;
-        }
         if (c == '\n' && last_was_cr) { last_was_cr = 0; continue; }  /* LF of a CR-LF */
         if (c == '\r' || c == '\n') {
             last_was_cr = (c == '\r');
             printf("\r\n");
             line[line_len] = '\0';
-            if (line_len > 12 && !strncmp(line, "upload-data ", 12)) {
-                if (upload_rx_start(&s_upload, line + 12, HAL_GetTick()) == 0)
-                    last_was_cr = 0;                /* the next byte is data, even a LF */
-                else
-                    printf("upload-data error usage: upload-data <offset> <len<=%u> <crc32 hex>\r\n> ",
-                           (unsigned)UPLOAD_CHUNK_MAX);
-            } else if (line_len > 0) {
+            if (line_len > 0) {
                 /* Execute on the hw worker (it owns the instrument hardware); the
                    worker reprints the prompt after the command output. */
                 if (!hw_worker_submit_console(line)) {
@@ -1227,6 +1129,4 @@ void console_poll(void)
             console_io_write(&ch, 1);
         }
     }
-    if (upload_rx_timed_out(&s_upload, HAL_GetTick()))
-        printf("upload-data retry timeout\r\n> ");
 }

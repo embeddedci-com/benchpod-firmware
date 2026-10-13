@@ -25,7 +25,7 @@ SCPI_UNDOCUMENTED = set()
 CONSOLE_UNDOCUMENTED = set()
 
 # Sanity floors: if a regex stops matching after a refactor, fail instead of passing vacuously.
-MIN_JSON, MIN_SCPI, MIN_CONSOLE = 80, 40, 60
+MIN_JSON, MIN_SCPI, MIN_CONSOLE = 80, 40, 50
 
 
 def read(*parts):

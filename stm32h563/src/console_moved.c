@@ -24,6 +24,13 @@ static const struct { const char *verb, *json; } k_moved[] = {
     { "dacmux",      "dac_mux" },
     { "calsw",       "cal_switch" },
     { "can",         "can_*" },
+    { "upload-begin",  "ota_begin" },
+    { "upload-data",   "ota_data" },
+    { "upload-end",    "ota_end" },
+    { "upload-commit", "ota_commit" },
+    { "upload-status", "ota_status" },
+    { "upload-abort",  "ota_abort" },
+    { "upload-sig",    "ota_begin sig" },
 };
 
 const char *console_moved_to(const char *verb)

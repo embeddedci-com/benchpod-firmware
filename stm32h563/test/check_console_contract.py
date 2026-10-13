@@ -33,11 +33,6 @@ PINNED = [
     ("wifi-show state", r'"  state: %s\r\n"'),
     ("wifi-show ip", r'"  ip: %s\r\n"'),
     ("blobs (install-blobs on older CLIs)", r'"blob %s %s %lu %lu %s\r\n"'),
-    ("upload-begin", r'"upload-begin ok\r\n"'),
-    ("upload-data", r'"upload-data ok %lu\r\n> "'),
-    ("upload-end", r'"upload-end ok\r\n"'),
-    ("upload-commit firmware", r'"upload-commit resetting\r\n"'),
-    ("upload-commit blob", r'"upload-commit ok\r\n"'),
     ("usb-reattach", r'"usb-reattach ok\r\n"'),
     ("dfu", r'"  entering DFU (USB bootloader)'),
 ]
