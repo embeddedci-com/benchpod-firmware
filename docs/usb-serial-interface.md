@@ -75,28 +75,6 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | Turning it off | `usb-network off` on the console (or `benchpod usb-network off` over USB): the pod re-enumerates as its console only and the computer sees no network adapter. `usb-network on` on the console brings it back. Stored, separate from the LAN policy; Ethernet, Wi-Fi and the cloud may only read it ([`usb_network`](API.md#usb_network--the-usb-network-adapter-on-or-off)) |
 | Throughput | USB full speed (12 Mbit/s): about 0.9 MB/s from the pod (`speedtest`), against 1.3 MB/s on 100 Mbit Ethernet |
 
-### Windows with ST's VCP driver
-
-The pod keeps ST's stock USB ID `0483:5740`. On a Windows computer where ST's Virtual COM Port
-driver (`STMicroelectronics Virtual COM Port`, from ST's STSW-STM32102 package) was installed, that
-driver can claim the whole device: the pod then shows up as one COM port and the USB network
-adapter does not load (`benchpod status` over `usb` uses the console, the network commands say the
-USB network is not up). Windows 11 and 10 without that driver bind their in-box drivers: a "USB
-Serial Device (COMn)" and the "EmbeddedCI BenchPod network" adapter.
-
-To let Windows use its own drivers for the pod (this test has not been run on hardware yet):
-
-1. Plug in the pod and open Device Manager.
-2. Under **Ports (COM & LPT)**, right-click **STMicroelectronics Virtual COM Port (COMn)** and
-   choose **Uninstall device**.
-3. Tick **Attempt to remove the driver for this device** and click **Uninstall**.
-4. Unplug the pod and plug it in again. Windows now lists a "USB Serial Device (COMn)" and, under
-   **Network adapters**, "EmbeddedCI BenchPod network".
-
-Removing the driver also affects other ST boards that use it; Windows 10 and 11 drive those with
-their in-box serial driver too. Without the USB network, the pod still works over Ethernet, Wi-Fi
-or the cloud.
-
 The JSON `status` reports it as `usb` (`net`, `setting`, `off_reason`, `link`, `ip`, `host_ip`) and the
 console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP server
 connect to it with the connection `usb`.
