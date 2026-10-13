@@ -27,7 +27,7 @@ Development builds add bench diagnostics, marked below; release firmware leaves 
 | Property | Value |
 |---|---|
 | Class | USB CDC-ACM (virtual serial port), interfaces 0-1 of a composite device |
-| USB VID/PID | `0x1209:0xEC10` from firmware 3.9.0 (pid.codes; pre-release 3.9.0 builds used `0x1209:0x0001`, firmware before 3.9.0 `0x0483:0x5740`); the host's stock CDC-ACM driver binds |
+| USB VID/PID | `0x0483:0x5740` (ST's stock CDC ID), before and from firmware 3.9.0; 3.9.0 reports `bcdDevice` `0x0390`. Pre-release 3.9.0 builds used `0x1209:0x0001`. The host's stock CDC-ACM driver binds |
 | USB strings | manufacturer `EmbeddedCI`, product `BenchPod`, serial = 12 hex digits from the MCU's unique ID (unchanged from older firmware) |
 | Line settings | `115200 8N1` |
 | Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
@@ -74,6 +74,28 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | WSL2, Docker on Windows | Not tested. Windows routes the pod's `10.237.x.y` address itself, so a WSL2 distribution or a Docker container that uses the Windows host's network should reach it; mDNS from inside them may not |
 | Turning it off | `usb-network off` on the console (or `benchpod usb-network off` over USB): the pod re-enumerates as its console only and the computer sees no network adapter. `usb-network on` on the console brings it back. Stored, separate from the LAN policy; Ethernet, Wi-Fi and the cloud may only read it ([`usb_network`](API.md#usb_network--the-usb-network-adapter-on-or-off)) |
 | Throughput | USB full speed (12 Mbit/s): about 0.9 MB/s from the pod (`speedtest`), against 1.3 MB/s on 100 Mbit Ethernet |
+
+### Windows with ST's VCP driver
+
+The pod keeps ST's stock USB ID `0483:5740`. On a Windows computer where ST's Virtual COM Port
+driver (`STMicroelectronics Virtual COM Port`, from ST's STSW-STM32102 package) was installed, that
+driver can claim the whole device: the pod then shows up as one COM port and the USB network
+adapter does not load (`benchpod status` over `usb` uses the console, the network commands say the
+USB network is not up). Windows 11 and 10 without that driver bind their in-box drivers: a "USB
+Serial Device (COMn)" and the "EmbeddedCI BenchPod network" adapter.
+
+To let Windows use its own drivers for the pod (this test has not been run on hardware yet):
+
+1. Plug in the pod and open Device Manager.
+2. Under **Ports (COM & LPT)**, right-click **STMicroelectronics Virtual COM Port (COMn)** and
+   choose **Uninstall device**.
+3. Tick **Attempt to remove the driver for this device** and click **Uninstall**.
+4. Unplug the pod and plug it in again. Windows now lists a "USB Serial Device (COMn)" and, under
+   **Network adapters**, "EmbeddedCI BenchPod network".
+
+Removing the driver also affects other ST boards that use it; Windows 10 and 11 drive those with
+their in-box serial driver too. Without the USB network, the pod still works over Ethernet, Wi-Fi
+or the cloud.
 
 The JSON `status` reports it as `usb` (`net`, `setting`, `off_reason`, `link`, `ip`, `host_ip`) and the
 console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP server
@@ -352,9 +374,8 @@ port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
 // read lines until the "> " prompt, then look for "device : benchpod".
 ```
 
-Discover the port by enumerating serial ports and matching USB VID `0x1209` and
-PID `0xEC10` (firmware 3.9.0 and later; `0x0001` on pre-release builds) or VID `0x0483` and PID `0x5740` (older
-firmware); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
+Discover the port by enumerating serial ports and matching USB VID `0x0483` and
+PID `0x5740` (every STM32 firmware; pre-release 3.9.0 builds used `0x1209:0x0001`); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
 the platform path patterns in the table above. The UART bridge and the
 CMSIS-DAP probe are not on the console; use the USB network adapter, the LAN or the cloud for those
 (`uart_proxy_start`, `dap_start` in [API.md](API.md)).
