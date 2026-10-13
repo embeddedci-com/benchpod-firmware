@@ -5,7 +5,7 @@ port, mirrored on the USART2 debug pins. The same USB device is also a network
 adapter (CDC-NCM) that carries the [JSON API](API.md): see
 [USB network adapter](#usb-network-adapter). A host
 tool (the `benchpod` CLI, a provisioning script) can open the serial port and
-drive text commands such as `status`, `wifi-set`, `la-voltage` and `dfu`.
+drive text commands such as `status`, `wifi-set`, `identity` and `dfu`.
 
 This document is the contract for talking to that interface. The console is the
 pod's **physical-presence** channel: it can change any setting, including the ones
@@ -13,8 +13,12 @@ the LAN and the cloud cannot (loosening the signature policy, wiping the device
 identity), and it is the recovery path when the pod is in safe mode.
 
 The console does **not** run the JSON commands of [API.md](API.md). It has its own
-text vocabulary, listed below; many commands are diagnostics with no JSON
-counterpart.
+text vocabulary, listed below. From firmware 3.9.0 it keeps only what needs physical
+presence or has to work without the network: identity and policies, recovery, Wi-Fi
+and the wired link. Instrument control (DAC, ADC, target power, LA voltage, CAN)
+is the JSON API, which a computer on the USB cable reaches through the [USB network
+adapter](#usb-network-adapter); see [Moved to the JSON API](#moved-to-the-json-api).
+Development builds add bench diagnostics, marked below; release firmware leaves them out.
 
 ---
 
@@ -112,8 +116,8 @@ worker task, prints the output, then prints the prompt `"> "`.
   or the value, with no leading spaces. The other commands print indented,
   human-readable lines.
 - **Shared hardware:** the commands that capture into the PSRAM or drive the
-  shared bus (`adc`, `measure`, `capture-psram`, `dualcap`, `lastress`,
-  `psram*`, `cap-selftest`, `flash-ice40`) take the same lock as the JSON
+  shared bus (`psram-test`, `psram-selftest`, `flash-ice40`, and in development
+  builds `capture-psram`, `dualcap`, `lastress`, `psram*`, `cap-selftest`) take the same lock as the JSON
   captures. While a capture, upload or update runs they print
   `<cmd> refused: busy: a capture, upload or update is using the PSRAM bus; try again when it ends`.
 
@@ -134,9 +138,9 @@ command prints `usage: ...` and changes nothing.
 | `reboot` | System reset. |
 | `usb-reattach` | Replies `usb-reattach ok`, then drops off the USB bus for half a second and connects again, so the computer enumerates the console and the network adapter anew (the serial port closes). |
 | `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). |
-| `test-bootloop [net\|hw] yes` | Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
-| `test-hang <net\|hw> yes` | Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
-| `test-crash yes` | Fault on purpose; the next boot reports it as the last crash. |
+| `test-bootloop [net\|hw] yes` | Development builds only. Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
+| `test-hang <net\|hw> yes` | Development builds only. Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
+| `test-crash yes` | Development builds only. Fault on purpose; the next boot reports it as the last crash. |
 
 #### Device identity and policies
 
@@ -163,9 +167,9 @@ command prints `usage: ...` and changes nothing.
 | `wifi-static <ip> <netmask> <gateway>` | Give the Wi-Fi interface a static address (diagnostic; the pod uses DHCP by default). |
 | `eth <stop\|start\|restart>` | Bring the wired link down or up (PHY reset + DHCP). |
 | `eth stats` | Wired link: negotiated mode, MAC mode, error and drop counters. |
-| `eth speed <auto\|10\|100> [full]` | Force the link mode (half duplex unless `full`), or go back to autonegotiation. |
-| `eth refclk` | Measure the PHY's 50 MHz RMII clock against the MCU crystal (drops the link for about 200 ms). |
-| `eth loopback <10\|100> [n]` | PHY loopback test with `n` frames (default 200, at most 1000). |
+| `eth speed <auto\|10\|100> [full]` | Development builds only (JSON `eth` has it in every build). Force the link mode (half duplex unless `full`), or go back to autonegotiation. |
+| `eth refclk` | Development builds only (JSON `eth` has it in every build). Measure the PHY's 50 MHz RMII clock against the MCU crystal (drops the link for about 200 ms). |
+| `eth loopback <10\|100> [n]` | Development builds only (JSON `eth` has it in every build). PHY loopback test with `n` frames (default 200, at most 1000). |
 | `esp-reset-pulse` | Diagnostic: reset the C3 unannounced; Wi-Fi must recover on its own. |
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
@@ -184,42 +188,14 @@ command prints `usage: ...` and changes nothing.
 | `upload-abort` | `upload-abort ok`, or `upload-abort error <why>` when another transport holds the session. |
 | `upload-sig <0\|1> <base64url>`, `upload-sig clear`, `upload-sig` | The image's signed manifest (171 base64url characters, sent in two halves before `upload-begin`, which uses it once; see `docs/design/firmware-signing.md`). Without arguments: `upload-sig result <none\|ok\|format\|unknown-key\|signature\|target\|image> <key_id\|->` for the last begin. Whether a missing or bad signature is refused depends on `sig-policy`. Older firmware answers "unknown command", which is how installers tell. |
 | `flash-ice40` | Reflash the iCE40 configuration flash with gateware image 0 from the W25Q `gw0` slot and reconfigure. |
-| `flash-id` | Read the iCE40 configuration flash's JEDEC ID (W25Q64 = `ef 40 17`). |
+| `flash-id` | Development builds only. Read the iCE40 configuration flash's JEDEC ID (W25Q64 = `ef 40 17`). |
 
 `benchpod install-blobs` and `benchpod firmware install --connection usb` drive the
 upload commands.
 
-#### LA bank, target power and reset
+#### I²C peripherals (development builds only)
 
-| Command | Description |
-|---|---|
-| `la-voltage [1800\|3300]` | Set or show the LA I/O-bank voltage (required before any LA operation over the LAN or cloud). Refused, naming the pins, while an LA pin has a function. 1.8 V needs a v3 pod. |
-| `power <1\|2> <on\|off>` | Switch a target eFuse (1 = internal 5 V, 2 = external): `eFuse<N> ON` / `OFF`, or `bad eFuse index`. |
-| `pstat` | Both eFuses: `eFuse<N>: en=.. valid=.. fault=..`. |
-| `nrst [assert\|release\|<ms>]` | Drive the target reset pin (J1 pin 22, v3), or pulse it for `ms` milliseconds; with no argument, show it. |
-| `usb-cc` | USB-C CC lines: voltages, orientation and the source's current advertisement (v3). |
-
-#### Analog (DAC8551 / MCP33131)
-
-| Command | Description |
-|---|---|
-| `dac <off\|3v3\|5v\|12v> [volts]` | Route the DAC output path and, with `volts`, hold a calibrated DC voltage. |
-| `adc [ext\|cal1\|cal2\|current_in]` | Route an ADC source and print a calibrated reading in mV (default `ext`; `current_in` also in µA). |
-| `measure` | The ADC input SMA in mV (= `adc ext`). |
-| `path <name>` | Apply a named analog path (routing only): `off`, `3v3`, `5v`, `12v`, `ext`, `cal1`, `cal2`, `current_in`. |
-| `current-out [mA]` | Hold a current on the 4-20 mA output (J9, needs an external floating loop supply); with no value, show the range. |
-| `calibrate [current_in\|clear]` | Show this pod's ADC calibration, calibrate the `current_in` input (J8 disconnected), or remove it. |
-| `dac-limits [clear]` | Show the DAC output limits, or clear them. Setting them is JSON `dac_limits`. |
-| `dacraw <0-255> [divider]` | Raw DAC code, no routing or calibration (debug); `divider` sets the DAC engine rate (48 MHz / divider, default 240). |
-| `dacmux <en> <sel> [en2 sel2]` | Low-level U55 output mux (debug; prefer `dac`/`path`). |
-| `calsw <cal1> <cal2> <current_in> <cal_path>` | Low-level U58 calibration relays (debug; prefer `path`/`adc`). |
-| `adcraw` | One raw ADC probe byte (debug). |
-| `adc-spi [n]` | `n` live ADC reads directly over SPI, skipping the PSRAM (debug; prints on the device log). |
-
-With DAC limits set, `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and
-`calsw` are refused when they would break them, with the same text as the JSON API.
-
-#### I²C peripherals
+The pod's own current monitor (`pod(0x41)` in `ina`) is JSON `power_status` `pod` in every build.
 
 | Command | Description |
 |---|---|
@@ -227,19 +203,9 @@ With DAC limits set, `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and
 | `ina` | Read the INA238 power monitors: `int(0x40)` internal 5 V, `ext(0x44)` external supply, and `pod(0x41)` when the pod's own monitor is fitted. |
 | `expdump` | Dump the four TCA9554 expanders (LA pull-ups, eFuse control, DAC mux, analog switch). |
 
-#### CAN
-
-| Command | Description |
-|---|---|
-| `can config <bitrate> [normal\|internal\|external\|listen] [term]` | Bring CAN up (classic CAN on FDCAN1). `internal` and `external` are loopback modes for a single pod. |
-| `can write <id> [b0 .. b7]` | Send one standard frame. |
-| `can read` | Print up to 8 received frames. |
-| `can status` | State, error counters, queue and responder counters. |
-| `can respond <match_id> <reply_id> [bytes...]`, `can respond clear` | Add or clear an automatic reply rule. |
-| `can term <0\|1>` | Switch the 120 Ω termination. |
-| `can off` | Turn CAN off. |
-
 #### PSRAM, capture and iCE40 diagnostics
+
+`psram-selftest` and `psram-test` are in every build; the others are development builds only.
 
 | Command | Description |
 |---|---|
@@ -256,10 +222,32 @@ With DAC limits set, `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and
 | `lastress [n]` | Deep LA capture at the maximum rate as a drain stress test (default 65535). |
 | `spi-clk <128\|256>` | Set the STM32 to iCE40 SPI prescaler (debug). |
 | `spi-diag [n]` | SPI link diagnostic (prints on the device log). |
+| `adcraw` | One raw ADC probe byte. |
+| `adc-spi [n]` | `n` live ADC reads directly over SPI, skipping the PSRAM (prints on the device log). |
 
 The console does **not** get the safe-mode refusals of the JSON API: in safe mode
 it is how you test the iCE40 and PSRAM (`psram-selftest`, `psram-test`,
 `flash-ice40`) before you power-cycle.
+
+### Moved to the JSON API
+
+Firmware 3.9.0 removed these console commands; their JSON equivalents work over the
+USB network adapter, the LAN and the cloud (`benchpod`, the SDK and the MCP server use
+them over `--connection usb`).
+
+| Removed console command | JSON command |
+|---|---|
+| `la-voltage` | `la_voltage` |
+| `power`, `pstat` | `target_power`, `target_status` |
+| `nrst` | `nrst` |
+| `usb-cc` | `usb_cc` |
+| `dac`, `path` | `dac_out`, `analog_path` |
+| `adc`, `measure` | `adc_read` (`measure` was `adc_read` with source `ext`) |
+| `current-out` | `current_out` |
+| `calibrate` | `calibrate` |
+| `dac-limits` | `dac_limits` |
+| `dacraw`, `dacmux`, `calsw` | `dac_set`, `dac_mux`, `cal_switch` |
+| `can ...` | `can_config`, `can_write`, `can_read`, `can_status`, `can_respond`, `can_term`, `can_disable` |
 
 ### `wifi-clear` result
 

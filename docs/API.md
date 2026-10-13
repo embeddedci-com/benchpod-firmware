@@ -967,8 +967,8 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
 | `current_out` | always, when it has `ua`: the 4-20 mA output shares the DAC, so setting a current moves the limited path. Without `ua` it only reads the range and is allowed |
 
-The USB console applies the same rules to `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and `calsw`;
-`dac-limits` shows them and `dac-limits clear` removes them.
+Firmware before 3.9.0 applied the same rules to the USB console's analog commands and had
+`dac-limits` there; from 3.9.0 the console has no analog commands.
 
 Between reset and the moment boot parks the DAC (after the iCE40 is up), the DAC reads 0 V.
 Hold the module off with its own enable pin for that window.
@@ -1118,8 +1118,6 @@ The pod cannot see the loop: with no supply or an open loop, `current_out` still
 
 `status.caps` contains `"current_out"` when the firmware supports it. The cloud capabilities
 frame has `"current_out":true` and the range as `current_out_min_ua` / `current_out_max_ua`.
-On the USB console, `current-out 12` holds 12 mA (the console takes mA) and `current-out`
-shows the range.
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
@@ -1230,8 +1228,6 @@ offset of `current_in` is calibrated. The gain, and `ext`, `cal1` and `cal2`, us
 fits: calibrating those needs a reference voltage. `status.caps` contains `"calibrate"`
 when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
-On the USB console, `calibrate` shows the calibration, `calibrate current_in` runs it, and
-`calibrate clear` removes it. `adc current_in` uses it.
 
 #### Loopback / self-cal examples
 
@@ -1986,9 +1982,9 @@ State is **not** persisted: after a reset both eFuses return to off.
 > `target_power` with `delay_ms` → `uart_proxy_start` → the eFuse switches mid-
 > capture and you catch the boot banner.
 
-> The USB console has `power <1|2> <on|off>` (no delay) and `pstat`; see
-> [usb-serial-interface.md](usb-serial-interface.md). Read the eFuses'
-> fault/valid status with `target_status`.
+> Read the eFuses' fault/valid status with `target_status`. (Firmware before 3.9.0 also had
+> `power` and `pstat` on the USB console; a computer on the USB cable now uses these JSON
+> commands over the [USB network adapter](usb-serial-interface.md#usb-network-adapter).)
 
 ---
 
@@ -2055,7 +2051,7 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 | `<rail>.ok` | boolean | `false` when that INA238 did not answer (an unpopulated / unpowered rail). |
 | `<rail>.bus_mv` | integer | Bus (DUT-side) voltage in mV. |
 | `<rail>.current_ua` | integer | Current in µA, computed from the measured shunt voltage and the known shunt resistance — signed, so a back-feeding DUT reads negative. |
-| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's internal rail bypasses that shunt), and `total_ua` = pod + internal rail, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` shows the same reading. |
+| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's internal rail bypasses that shunt), and `total_ua` = pod + internal rail, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` (development builds) shows the same reading. |
 
 Both reads are taken under the hardware lock that serialises this I2C bus against the console
 `ina` command, the eFuse expander and the profile sampler.

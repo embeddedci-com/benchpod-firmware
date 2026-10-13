@@ -107,6 +107,12 @@ def main():
             continue
         if not re.search(r"`%s[` ]" % re.escape(v), usb):
             failures.append(f"console command `{v}` (console.c) is not in docs/usb-serial-interface.md")
+    # And the other way: every command the reference tables list must still exist (a row's first
+    # code span), so a command removed from the console cannot stay documented.
+    reference = section(usb, "### Command reference", "### Moved to the JSON API")
+    for row in re.findall(r"^\| `([a-z0-9-]+)", reference, re.M):
+        if row not in cverbs:
+            failures.append(f"docs/usb-serial-interface.md documents console command `{row}`, which console.c no longer has")
 
     if failures:
         print("docs coverage: FAIL")

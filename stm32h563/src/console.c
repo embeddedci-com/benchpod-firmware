@@ -132,86 +132,57 @@ static void op(console_out_t out, void *ctx, const char *fmt, ...)
     if (n > 0) out(ctx, buf);
 }
 
-/* A line longer than op()'s 160-byte buffer (the DAC limits refusals), written straight through. */
-static void op_line(console_out_t out, void *ctx, const char *msg)
-{
-    out(ctx, "  ");
-    out(ctx, msg);
-    out(ctx, "\r\n");
-}
-
 static void cmd_help(console_out_t out, void *ctx)
 {
-    /* Emit straight through out() (not op()): the full list is ~830 bytes and
-       would be truncated by op()'s 160-byte format buffer — that is what cut
-       `help` off mid-line.  Split into a couple of writes to stay well under the
-       USB-CDC TX ring. */
+    /* Emit straight through out() (not op()): the list is longer than op()'s 160-byte format
+       buffer. Split into a few writes to stay well under the USB-CDC TX ring.
+       The console keeps what needs physical presence or works without the network; everything
+       else is the JSON API (docs/API.md), on the USB network adapter too. */
     out(ctx,
-        "commands:\r\n"
+        "commands (the rest is the JSON API on :8080, also over the USB network):\r\n"
         "  help                 this list\r\n"
+        "  status               pod report: network, USB, PSRAM, gateware, safe mode, health\r\n"
         "  ping                 SPI ping the iCE40 (expect 0xA5 + version)\r\n"
-        "  status               pod report: network, PSRAM, gateware, safe mode, health\r\n"
-        "  i2c-scan             scan the I2C0 power/IO bus\r\n"
-        "  ina                  read both INA238 monitors\r\n"
-        "  power <1|2> <on|off> enable/disable an eFuse\r\n"
-        "  pstat                show eFuse status\r\n"
-        "  la-voltage [1800|3300] set/show the LA I/O-bank voltage (required for LA ops)\r\n"
-        "  usb-cc              USB-C CC lines: orientation + source current (v3)\r\n"
-        "  nrst [assert|release|<ms>]  drive the target reset pin, J1 pin 22 (v3)\r\n"
         "  uid                  the chip's unique ID\r\n"
-        "  test-bootloop [net|hw] yes  crash 2 boots on purpose to prove safe mode\r\n"
-        "  test-hang net|hw yes        hang a task on purpose to prove the watchdog report\r\n"
-        "  test-crash yes              fault on purpose to prove the crash report\r\n"
-        "  dac <off|3v3|5v|12v> [volts]  route DAC output + set a calibrated voltage\r\n"
-        "  adc [ext|cal1|cal2|current_in]  route ADC source + read calibrated mV (def ext)\r\n"
-        "  calibrate [current_in|clear]  this pod's ADC calibration: show, calibrate (J8 open), remove\r\n"
-        "  current-out [mA]    4-20 mA output (J9): hold a current; no value shows the range\r\n"
-        "  measure              read the ADC input SMA in volts (= adc ext, ÷12)\r\n"
-        "  path <name>          apply a named analog path (routing only)\r\n");
-    out(ctx,
-        "  dacraw <0-255> [div] raw DAC code, no routing/cal (debug)\r\n"
-        "  adcraw               single raw ADC sample byte (debug)\r\n"
-        "  adc-spi [n]          n live ADC reads DIRECT over SPI, no PSRAM (debug)\r\n"
-        "  cap-selftest [n]     ramp through ADC->PSRAM path: PASS=path OK, FAIL=iCE40 CDC\r\n"
-        "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
-        "  dacmux/calsw/expdump low-level mux/relay control + dump (debug)\r\n"
-        "  psram                diagnose PSRAM bus/CS/arbitration (0xFF ID)\r\n"
-        "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
-        "  psram-addrtest       STM32-standalone address-tagged R/W across the full 8 MB\r\n"
-        "  capture-psram [n]    v2: iCE40 captures n ADC samples to PSRAM, read back\r\n"
-        "  dualcap [an] [ln]    v2: simultaneous an ADC + ln raw-LA samples (one trigger)\r\n"
-        "  lastress [n]         v2: deep LA capture (n<=65535) @12 MS/s — DDR-drain stress test\r\n"
-        "  flash-id             read the iCE40 config-flash JEDEC ID\r\n"
-        "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
-        "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
-        "  flash-esp32          C3: flash the esp-hosted image from the W25Q\r\n"
-        "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
-        "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
-        "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
+        "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
+        "  reboot               system reset\r\n"
+        "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
+        "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
+        "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA for the cloud link (upload-begin ca ...)\r\n"
-        "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
-        "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n"
-        "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3\r\n"
-        "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
+        "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n");
+    out(ctx,
+        "  eth <stop|start|restart|stats>  the wired link: down/up (PHY reset + DHCP), counters\r\n"
+        "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3 (USB networking off)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
-        "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3)\r\n"
-        "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
-        "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
-        "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
-        "  eth speed <auto|10|100> [full]  force the link mode (debug: 10M survives a bad\r\n"
-        "                       analog path that 100M does not); half unless `full` is given\r\n"
-        "  eth refclk           measure the PHY's 50 MHz RMII clock (100BASE-TX needs it\r\n"
-        "                       within 50 ppm; drops the link for ~200 ms)\r\n"
-        "  eth loopback <10|100> [n]  PHY loopback, n frames (def 200): fails = RMII/digital\r\n"
-        "                       side, clean = the fault is analog (magnetics, jack, RBIAS)\r\n"
-        "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
-        "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
-        "  reboot               system reset\r\n");
+        "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3; USB networking on)\r\n"
+        "  wifi-static <ip> <mask> <gw>  static Wi-Fi address (diagnostic)\r\n"
+        "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
+        "  esp-mon [ms]         print the C3's UART output\r\n"
+        "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
+        "  flash-esp32          C3: flash the esp-hosted image from the W25Q\r\n"
+        "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
+        "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
+        "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
+        "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
+        "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
+        "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n");
+#if !defined(BENCHPOD_RELEASE)
+    out(ctx,
+        "development build only:\r\n"
+        "  test-bootloop [net|hw] yes | test-hang net|hw yes | test-crash yes   prove safe mode / crash reports\r\n"
+        "  i2c-scan | ina | expdump   I2C bus scan, INA monitors, expander dump\r\n"
+        "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
+        "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
+        "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
+        "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n");
+#endif
 }
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: `ina` */
 static void cmd_ina(console_out_t out, void *ctx)
 {
     int bus_mv, sh_uv, cur_ua;
@@ -235,14 +206,7 @@ static void cmd_ina(console_out_t out, void *ctx)
             op(out, ctx, "  pod(0x41) no response\r\n");
     }
 }
-
-static void cmd_pstat(console_out_t out, void *ctx)
-{
-    target_power_status_t s;
-    for (int e = 1; e <= 2; e++)
-        if (target_power_get_status(e, &s) == 0)
-            op(out, ctx, "  eFuse%d: en=%d valid=%d fault=%d\r\n", e, s.enabled, s.valid, s.fault);
-}
+#endif
 
 /* ---- silicon self-test --------------------------------------------------
  * 'selftest' — a quick health check of the STM32H563 silicon itself: the HSE
@@ -250,7 +214,7 @@ static void cmd_pstat(console_out_t out, void *ctx)
  * SRAM, and the hardware RNG.  Each line is PASS/FAIL with a measured value, and
  * a summary at the end reports overall health.  Intended for bringing up a
  * suspect board; it deliberately does NOT touch the FPGA/PSRAM/flash (use 'ping'
- * / 'psram' / 'flash-id' for those).  Mirrors the RP2350 console selftest.
+ * / 'psram-test' for those).  Mirrors the RP2350 console selftest.
  * --------------------------------------------------------------------------*/
 
 /* Walking-pattern test over a small static SRAM buffer: catches stuck/aliased
@@ -413,7 +377,7 @@ static bool console_ca_cert(void *c, const char *subject, const char *sha256_hex
 static bool console_needs_heavy_gate(const char *verb)
 {
     static const char *const gated[] = {
-        "adc", "measure", "capture-psram", "psram-test", "dualcap", "lastress", "psram",
+        "capture-psram", "psram-test", "dualcap", "lastress", "psram",
         "psram-addrtest", "psram-bench", "psram-clk", "psram-selftest", "cap-selftest",
         "flash-ice40",
     };
@@ -559,27 +523,34 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
         op(out, ctx, "  heap   : %u B free, %u B min\r\n",
            sys_health_heap_free(), sys_health_heap_min_free());
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "spi-clk") && argc >= 2) {
         uint32_t div = (uint32_t)atoi(argv[1]);
         uint32_t hz = signal_engine_spi_set_prescaler(div);
         if (hz) op(out, ctx, "  SPI1 SCK = %lu Hz (/%lu)\r\n", (unsigned long)hz, (unsigned long)div);
         else    op(out, ctx, "  bad divisor (use 128 or 256; faster than /128 exceeds the iCE40's MOSI sampling)\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "spi-diag")) {
         int n = (argc >= 2) ? atoi(argv[1]) : 50;
         signal_engine_spi_diag(n);
         op(out, ctx, "  (spi-diag printed on the device log)\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "adc-spi")) {
         /* Read the live ADC sample DIRECTLY over SPI (CMD_ADC_PROBE), skipping
            PSRAM + the 24->48 CDC — isolates 0x5555 to engine/silicon vs path. */
         int n = (argc >= 2) ? atoi(argv[1]) : 16;
         signal_engine_adc_spi_diag(n);
         op(out, ctx, "  (adc-spi printed on the device log)\r\n");
+#endif
     } else if (!strcmp(argv[0], "psram-selftest")) {
         /* Layered PSRAM datapath test: STM32<->PSRAM, iCE40->PSRAM write, and (if
            that fails) whether the iCE40 even reaches the /CE net.  Same test run
            once at boot. */
         psram_boot_selftest();
         op(out, ctx, "  (psram-selftest printed on the device log)\r\n");
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "cap-selftest")) {
         /* End-to-end ADC->PSRAM path test: iCE40 streams a known ramp through the
            real capture datapath (CDC+writer+PSRAM+readback).  PASS => the path is
@@ -589,61 +560,21 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         int rc = signal_engine_capture_selftest(n, &bad);
         op(out, ctx, "  cap-selftest: %s (see device log)\r\n",
            rc == 0 ? "PASS — ADC->PSRAM path OK" : "FAIL — iCE40 capture/CDC timing error");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "i2c-scan")) {
         i2c_bus_status();   /* prints to the local console log */
         op(out, ctx, "  (scan printed on the device log)\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "ina")) {
         cmd_ina(out, ctx);
-    } else if (!strcmp(argv[0], "power") && argc >= 3) {
-        int e = atoi(argv[1]);
-        bool on = !strcmp(argv[2], "on") || !strcmp(argv[2], "1");
-        if (target_power_enable(e, on) == 0) op(out, ctx, "  eFuse%d %s\r\n", e, on ? "ON" : "OFF");
-        else                                 op(out, ctx, "  bad eFuse index\r\n");
-    } else if (!strcmp(argv[0], "pstat")) {
-        cmd_pstat(out, ctx);
-    } else if (!strcmp(argv[0], "la-voltage")) {
-        /* Select the LA I/O-bank voltage (TPS2116 mux) — must be set before any
-           LA op (la / la_capture / dap_start / uart / i2c-sensor). */
-        if (argc >= 2) {
-            /* Same refusal as the JSON la_voltage: not while any LA pin has a function. */
-            char why[LA_PINS_ERR_MAX];
-            int rc = la_pins_check_voltage_change(la_vccio_get_mv(), atoi(argv[1]), why, sizeof(why))
-                         ? la_vccio_set_mv(atoi(argv[1])) : -3;
-            if (rc == -3) {
-                out(ctx, "  ");   /* straight through out(): op()'s 160-byte buffer would cut it */
-                out(ctx, why);
-                out(ctx, "\r\n");
-            } else if (rc == 0)
-                op(out, ctx, "  LA VCCIO = %d mV (st=%d)\r\n",
-                   la_vccio_get_mv(), la_vccio_status_pin());
-            else if (rc == -2)
-                op(out, ctx, "  1.8 V needs a v3 pod; this board is %s "
-                             "(its TPS2116 has no 1.8 V setting)\r\n",
-                   board_rev_str());
-            else
-                op(out, ctx, "  usage: la-voltage <1800|3300>\r\n");
-        } else {
-            int mv = la_vccio_get_mv();
-            op(out, ctx, "  LA VCCIO = %s (st=%d)\r\n",
-               mv ? (mv == LA_VCCIO_1V8 ? "1800 mV" : "3300 mV") : "UNSET",
-               la_vccio_status_pin());
-        }
+#endif
     } else if (!strcmp(argv[0], "usb-reattach")) {
         /* macOS ignores a new network interface while the screen is locked; this makes
            the host see the device again without unplugging it. */
         op(out, ctx, "usb-reattach ok\r\n");
         usb_reattach_request();
-    } else if (!strcmp(argv[0], "usb-cc")) {
-        /* USB-C CC lines: cable orientation + the source's current advertisement. */
-        usb_cc_t cc;
-        if (usb_cc_read(&cc) != 0) {
-            op(out, ctx, "  usb-cc: unavailable (board %s)\r\n", board_rev_str());
-        } else {
-            static const char *const orient[] = { "none", "CC1", "CC2" };
-            op(out, ctx, "  CC1=%d mV  CC2=%d mV  orientation=%s  source=%s (%d mA)\r\n",
-               cc.cc1_mv, cc.cc2_mv, orient[cc.orientation], cc.advertised,
-               cc.advertised_ma);
-        }
     } else if (!strcmp(argv[0], "uid")) {
         /* uid: the 96-bit unique ID.  Words only: a byte read of this area is a precise bus
            fault on the H5 (proven on the v3, bfar=0x08fff800; see board_uid.h). */
@@ -651,6 +582,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         board_uid_words(w);
         op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
            (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "test-bootloop")) {
         /* Prove the safe-mode safeguard: the next two boots crash in the net task (net) or the
            iCE40/PSRAM bring-up (hw), the third comes up in safe mode with only that part off.
@@ -668,6 +600,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             vTaskDelay(pdMS_TO_TICKS(200));
             NVIC_SystemReset();
         }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "test-crash")) {
         /* Prove the crash report: a real fault (UsageFault/HardFault) in the console task. */
         if (argc < 2 || strcmp(argv[1], "yes")) {
@@ -677,6 +611,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             vTaskDelay(pdMS_TO_TICKS(100));
             __builtin_trap();
         }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "test-hang")) {
         /* Prove the watchdog report: the named task spins, the IWDG early warning records it
            (~30 s), the pod resets, and the next boot reports the stall as its last crash. */
@@ -689,199 +625,47 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             watchdog_test_hang(task);
             op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
         }
-    } else if (!strcmp(argv[0], "nrst")) {
-        /* Drive /NRST_CONTROL (J1 pin 22): nrst [assert|release|<pulse ms>]. */
-        if (!nrst_ctrl_supported()) {
-            op(out, ctx, "  nrst: no reset pin on this board (%s)\r\n", board_rev_str());
-        } else {
-            if (argc >= 2) {
-                if      (!strcmp(argv[1], "assert"))  nrst_ctrl_assert(true);
-                else if (!strcmp(argv[1], "release")) nrst_ctrl_assert(false);
-                else                                  nrst_ctrl_pulse((uint32_t)atoi(argv[1]));
-            }
-            op(out, ctx, "  nRST %s\r\n",
-               nrst_ctrl_is_asserted() ? "ASSERTED (low)" : "released (Hi-Z)");
-        }
-    } else if ((!strcmp(argv[0], "dacraw") || !strcmp(argv[0], "dacmux") || !strcmp(argv[0], "calsw")) &&
-               dac_limits_check_raw(argv[0])) {
-        /* DAC output limits (dac_limits.h) refuse raw DAC/mux writes. */
-        op_line(out, ctx, dac_limits_check_raw(argv[0]));
-    } else if (!strcmp(argv[0], "path") && argc >= 2 && dac_limits_check_route(argv[1])) {
-        op_line(out, ctx, dac_limits_check_route(argv[1]));
-    } else if (!strcmp(argv[0], "dac") && argc >= 2 &&
-               (dac_limits_check_route(argv[1]) ||
-                (argc >= 3 && dac_limits_check_volts(argv[1], (float)atof(argv[2]))))) {
-        const char *why = dac_limits_check_route(argv[1]);
-        op_line(out, ctx, why ? why : dac_limits_check_volts(argv[1], (float)atof(argv[2])));
-    } else if (!strcmp(argv[0], "adc") && dac_limits_check_route(argc >= 2 ? argv[1] : "ext")) {
-        op_line(out, ctx, dac_limits_check_route(argc >= 2 ? argv[1] : "ext"));
-    } else if (!strcmp(argv[0], "dac-limits")) {
-        /* dac-limits — show the DAC output limits; `dac-limits clear` removes them. */
-        if (argc >= 2 && !strcmp(argv[1], "clear")) dac_limits_clear();
-        const dac_limits_t *l = dac_limits_get();
-        if (!l->enabled) op(out, ctx, "  dac limits: none\r\n");
-        else op(out, ctx, "  dac limits: %s %s %ld..%ld mV, park %ld mV\r\n", dac_limits_path_name(l->path),
-                l->inverted ? "inverted" : "normal", (long)l->min_mv, (long)l->max_mv,
-                (long)(l->inverted ? l->max_mv : l->min_mv));
-    } else if (!strcmp(argv[0], "calibrate")) {
-        /* calibrate — show this pod's ADC calibration; `calibrate current_in` measures the
-           offset (J8 disconnected) and stores it; `calibrate clear` removes it (adc_cal.h). */
-        if (argc >= 2 && !strcmp(argv[1], "clear")) {
-            adc_cal_clear();
-        } else if (argc >= 2 && !strcmp(argv[1], "current_in")) {
-            adc_reading_t rd;
-            const char *why = heavy_in_flight() ? "busy: a capture is running" : NULL;
-            if (!why && adc_cal_measure_current_in(&rd) != 0) why = "adc read failed";
-            if (!why) why = adc_cal_current_in_store(&rd);
-            if (why) op_line(out, ctx, why);
-        } else if (argc >= 2) {
-            op(out, ctx, "  usage: calibrate [current_in|clear]\r\n");
-        }
-        if (!adc_cal_current_in_is_set()) op(out, ctx, "  current_in: not calibrated\r\n");
-        else op(out, ctx, "  current_in: calibrated, offset %ld mV (%ld uV)\r\n",
-                (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv());
-    } else if (!strcmp(argv[0], "current-out")) {
-        /* current-out [mA] — hold a current on the 4-20 mA output (J9); bare shows the range
-           (current_out.h). mA here because a person types it; the JSON command takes uA. */
-        uint16_t code = 0;
-        const char *why = NULL;
-        if (argc >= 2) {
-            why = dac_limits_check_current_out();
-            if (!why) why = current_out_code(lround(atof(argv[1]) * 1000.0), &code);
-            if (!why && (analog_path_set(ANALOG_PATH_CURRENT_OUT) != 0 || dac_set_constant16(code, 240) != 0))
-                why = "current-out: could not set the DAC";
-        }
-        if (why) op_line(out, ctx, why);
-        else if (argc >= 2) op(out, ctx, "  current-out = %ld uA (code=%u)\r\n", current_out_ua(code), (unsigned)code);
-        else op(out, ctx, "  current-out range: %ld to %ld uA (needs an external floating loop supply on J9)\r\n",
-                current_out_min_ua(), current_out_max_ua());
-    } else if (!strcmp(argv[0], "dacraw") && argc >= 2) {
-        /* dacraw <code 0..255> [div] — raw DAC code, no routing/cal (debug). */
-        uint8_t v = (uint8_t)atoi(argv[1]);
-        uint32_t div = (argc >= 3) ? (uint32_t)strtoul(argv[2], NULL, 0) : 240u;
-        if (dac_set_constant(v, div) == 0) op(out, ctx, "  DAC=%u div=%lu\r\n", v, (unsigned long)div);
-        else                               op(out, ctx, "  dac-set failed\r\n");
-    } else if (!strcmp(argv[0], "dacmux") && argc >= 3) {
-        /* dacmux <en> <sel> [en2 sel2] — LOW-LEVEL U55 mux (prefer `dac`/`path`).
-           CTRL1(U47) sel: 0=3V3 1=5V 2=12V 3=12V_ADC; CTRL2(U48): 0=12V_VMID 1=ADC_VMID */
-        int r = dacmux_set_ctrl1((bool)atoi(argv[1]), (uint8_t)(atoi(argv[2]) & 3));
-        if (argc >= 5) r |= dacmux_set_ctrl2((bool)atoi(argv[3]), (uint8_t)(atoi(argv[4]) & 3));
-        op(out, ctx, r == 0 ? "  dacmux set\r\n" : "  dacmux failed\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "expdump")) {
         analog_switch_dump();
-    } else if (!strcmp(argv[0], "calsw") && argc >= 5) {
-        /* calsw <cal1> <cal2> <current_in> <cal_path> — LOW-LEVEL U58 relays
-           (prefer `path`/`adc`).  CAL1=5V->ADC, CAL2=diff->ADC, CAL_PATH=ADC<-cal node */
-        int r = calsw_set((bool)atoi(argv[1]), (bool)atoi(argv[2]),
-                          (bool)atoi(argv[3]), (bool)atoi(argv[4]));
-        op(out, ctx, r == 0 ? "  calsw set\r\n" : "  calsw failed (cal1&cal2 exclusive?)\r\n");
-    } else if (!strcmp(argv[0], "path") && argc >= 2) {
-        /* path <name> — apply a named analog path (routing only; switches flip
-           automatically). names: off dac_3v3|3v3 dac_5v|5v dac_12v|12v
-           adc_ext|ext|sma cal1 cal2 current_in */
-        analog_path_t p;
-        if (analog_path_from_name(argv[1], &p) != 0) {
-            op(out, ctx, "  unknown path (off|3v3|5v|12v|ext|cal1|cal2|current_in)\r\n");
-        } else {
-            int r = analog_path_set(p);
-            uint8_t u55 = 0, u58 = 0; dacmux_read(&u55); calsw_read(&u58);
-            op(out, ctx, "  path=%s%s  U55=0x%02x U58=0x%02x\r\n",
-               analog_path_name(p), r ? " (I2C ERR)" : "", u55, u58);
-        }
-    } else if (!strcmp(argv[0], "dac") && argc >= 2) {
-        /* dac <off|3v3|5v|12v> [volts] — route the DAC output path (switches flip
-           automatically) and, if volts given, set a CALIBRATED voltage. */
-        analog_path_t p;
-        int idx = -1;
-        if      (analog_path_from_name(argv[1], &p) != 0) p = ANALOG_PATH__COUNT;
-        if      (p == ANALOG_PATH_DAC_3V3) idx = 0;
-        else if (p == ANALOG_PATH_DAC_5V)  idx = 1;
-        else if (p == ANALOG_PATH_DAC_12V) idx = 2;
-        if (p != ANALOG_PATH_OFF && idx < 0) {
-            op(out, ctx, "  usage: dac <off|3v3|5v|12v> [volts]\r\n");
-        } else {
-            analog_path_set(p);
-            if (argc >= 3 && idx >= 0) {
-                float v = (float)atof(argv[2]);
-                float a = DAC_CAL[idx].a, b = DAC_CAL[idx].b;
-                long code = lroundf((v - a) / b);
-                if (code < 0) code = 0;
-                if (code > 255) code = 255;
-                dac_set_constant((uint8_t)code, 240);
-                int got_mv = (int)lroundf((a + b * (float)code) * 1000.0f);
-                op(out, ctx, "  dac %s = %d mV (code=%d)\r\n",
-                   analog_path_name(p), got_mv, (int)code);
-            } else {
-                op(out, ctx, "  dac routed %s\r\n", analog_path_name(p));
-            }
-        }
-    } else if (!strcmp(argv[0], "adc") || !strcmp(argv[0], "measure")) {
-        /* adc [ext|cal1|cal2|current_in] / measure — route the ADC source (switches flip
-           automatically), read, and print CALIBRATED millivolts.  'ext' (default,
-           and `measure`) applies the front-SMA ÷12 divider so the value is the
-           true voltage at the ADC input SMA.  CAL2 unwraps the 16-bit count. */
-        analog_path_t p = ANALOG_PATH_ADC_EXT;   /* default + `measure` */
-        bool ok = true;
-        if (!strcmp(argv[0], "adc") && argc >= 2) {
-            if (analog_path_from_name(argv[1], &p) != 0 ||
-                (p != ANALOG_PATH_ADC_EXT && p != ANALOG_PATH_CAL1 &&
-                 p != ANALOG_PATH_CAL2 && p != ANALOG_PATH_CURRENT_IN)) {
-                op(out, ctx, "  usage: adc [ext|cal1|cal2|current_in]\r\n"); ok = false;
-            }
-        }
-        if (ok) {
-            analog_path_set(p);
-            HAL_Delay(20);           /* let the G6K relays (~4ms) + front-end RC settle */
-            uint16_t s16[16] = {0};
-            if (adc_capture_psram(s16, 16, 0.0f) == 0) {
-                /* Same reduction as the JSON adc_read: circular mean, then unwrap
-                   (adc_scale.h), and this pod's calibration on `current_in` (adc_cal.h). */
-                cal_lin_t c = ADC_CAL_CAL1;
-                if      (p == ANALOG_PATH_CAL2)    c = ADC_CAL_CAL2;
-                else if (p == ANALOG_PATH_ADC_EXT) c = ADC_CAL_EXT;
-                else if (p == ANALOG_PATH_CURRENT_IN)     c = adc_cal_current_in_fit();
-                adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
-                if (!rd.valid) {
-                    op(out, ctx, "  %s %s: input not settled (%u counts pk-pk)\r\n",
-                       argv[0], analog_path_name(p), (unsigned)rd.span);
-                } else if (p == ANALOG_PATH_CURRENT_IN) {
-                    op(out, ctx, "  %s %s: count=%d -> %d mV = %ld uA (offset %ld mV)\r\n",
-                       argv[0], analog_path_name(p), adc_count_u16(rd.count),
-                       (int)lroundf(rd.volts * 1000.0f), current_in_ua(rd.volts),
-                       (long)adc_cal_current_in_offset_mv());
-                } else {
-                    op(out, ctx, "  %s %s: count=%d -> %d mV\r\n",
-                       argv[0], analog_path_name(p), adc_count_u16(rd.count), (int)lroundf(rd.volts * 1000.0f));
-                }
-            } else {
-                op(out, ctx, "  adc read failed\r\n");
-            }
-        }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "adcraw")) {
         /* adcraw — single raw ADC probe byte (debug). */
         uint8_t val = 0;
         if (adc_probe_one(&val) == 0) op(out, ctx, "  ADC=%u (0x%02x)\r\n", val, val);
         else                          op(out, ctx, "  adc-probe failed\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "psram")) {
         /* Diagnostic path: reports bus/CS/arbitration state and re-probes the ID
            with the iCE40 held off the shared bus (see psram_diag). */
         if (psram_diag() == 0) op(out, ctx, "  PSRAM ID ok with iCE40 in reset (arbitration is the issue)\r\n");
         else                   op(out, ctx, "  PSRAM ID failed even with iCE40 in reset (see device log)\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "psram-bench")) {
         uint32_t kb = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 256;
         psram_bench(kb);
         op(out, ctx, "  (psram-bench printed on the device log)\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "psram-clk") && argc >= 2) {
         uint32_t p = (uint32_t)atoi(argv[1]);
         uint32_t hz = psram_set_prescaler(p);
         if (hz) op(out, ctx, "  OCTOSPI SCLK = %lu Hz (presc %lu)\r\n", (unsigned long)hz, (unsigned long)p);
         else    op(out, ctx, "  psram-clk failed\r\n");
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "psram-chunk") && argc >= 2) {
         uint32_t n = psram_set_chunk((uint32_t)atoi(argv[1]));
         op(out, ctx, "  PSRAM tCEM chunk = %lu bytes\r\n", (unsigned long)n);
+#endif
     } else if (!strcmp(argv[0], "psram-test")) {
         if (psram_init() == 0 && psram_test() == 0) op(out, ctx, "  PSRAM ok\r\n");
         else                                        op(out, ctx, "  PSRAM failed (see device log)\r\n");
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "psram-addrtest")) {
         /* STM32-standalone full-8MB address integrity test: write an ADDRESS-TAGGED
            256-B block at points spanning the whole device, then read them ALL back and
@@ -912,6 +696,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         psram_bus_release();
         op(out, ctx, "  psram-addrtest: %s (%d error(s) across %d addrs to 8MB)\r\n",
            errs ? "FAIL" : "PASS", errs, NADDR);
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "capture-psram")) {
         unsigned n = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 16u;
         if (n > 64) n = 64;
@@ -923,6 +709,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         } else {
             op(out, ctx, "  capture-psram failed (v2 gateware? see log)\r\n");
         }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "dualcap")) {
         /* Unified simultaneous ADC + raw-LA capture (one trigger).  `dualcap [an]
            [ln]` captures `an` ADC + `ln` LA samples into their two PSRAM regions and
@@ -945,6 +733,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             if (ln) op(out, ctx, "    LA [0..3]: 0x%03x 0x%03x 0x%03x 0x%03x\r\n",
                        lab[0] & 0xFFFu, lab[1] & 0xFFFu, lab[2] & 0xFFFu, lab[3] & 0xFFFu);
         }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "lastress")) {
         /* Deep-LA capture + drain stress test.  Captures `n` LA samples (up to the
            full 8 MB PSRAM = LA_PSRAM_MAX_SAMPLES) at the MAX rate and checks: no ring
@@ -978,6 +768,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                              "(overflow/timeout; STATUS bit5 — see log)\r\n", n);
             }
         }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "flash-id")) {
         uint8_t id[3] = {0};
         if (ice40_flash_read_id(id) == 0)
@@ -985,6 +777,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                id[0], id[1], id[2]);
         else
             op(out, ctx, "  flash-id failed (see device log)\r\n");
+#endif
     } else if (!strcmp(argv[0], "flash-ice40")) {
         if (!blob_store_present(BLOB_GW0)) {
             op(out, ctx, "  no gateware image 0 in the W25Q (install blob gw0 first)\r\n");
@@ -1214,6 +1007,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
             op(out, ctx, "\r\n");
         }
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: wired-link diagnostics (JSON eth has them) */
         else if (argc >= 2 && !strcmp(argv[1], "refclk")) {
             uint32_t seq = net_eth_refclk_seq(), hz = 0;
             net_eth_refclk_measure();
@@ -1280,7 +1074,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  usage: eth speed <auto|10|100> [full]\r\n");
             }
         }
-        else op(out, ctx, "  usage: eth <stop|start|restart|stats|speed>\r\n");
+#endif
+        else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
     } else if (!strcmp(argv[0], "identity")) {
         /* "identity <short id> <public key>", or "identity unknown <why>" (device_identity.h). */
         char id[DEVICE_ID_SHORT_LEN + 1];
@@ -1316,77 +1111,6 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
                          "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
-    } else if (!strcmp(argv[0], "can")) {
-        /* can config <bitrate> <normal|internal|external|listen> [term] |
-           can write <id> [b0 b1 ...] | can read | can status |
-           can term <0|1> | can off — classic CAN over FDCAN1 (TCAN1044).
-           Use internal/external loopback to self-test on a single pod. */
-        if (argc >= 3 && !strcmp(argv[1], "config")) {
-            uint32_t br = (uint32_t)strtoul(argv[2], NULL, 0);
-            can_mode_t m = CAN_MODE_NORMAL;
-            if (argc >= 4 && can_mode_from_name(argv[3], &m) != 0) {
-                op(out, ctx, "  usage: can config <bitrate> <normal|internal|external|listen> [term]\r\n");
-            } else {
-                bool term = (argc >= 5) && (!strcmp(argv[4], "1") || !strcmp(argv[4], "term") || !strcmp(argv[4], "on"));
-                int rc = can_configure(br, m, false, term);
-                op(out, ctx, rc == 0 ? "  CAN up: %lu bit/s %s term=%d\r\n"
-                                     : "  CAN config failed (rc=%d)\r\n",
-                   rc == 0 ? (unsigned long)br : (unsigned long)rc,
-                   rc == 0 ? can_mode_name(m) : "", term);
-            }
-        } else if (argc >= 3 && !strcmp(argv[1], "write")) {
-            can_frame_t f = {0};
-            f.id = (uint32_t)strtoul(argv[2], NULL, 0);
-            int n = 0;
-            for (int i = 3; i < argc && n < 8; i++) f.data[n++] = (uint8_t)strtoul(argv[i], NULL, 0);
-            f.dlc = (uint8_t)n;
-            int rc = can_tx(&f);
-            op(out, ctx, rc == 0 ? "  TX id=0x%lx dlc=%d\r\n" : "  TX failed (rc=%d)\r\n",
-               rc == 0 ? (unsigned long)f.id : (unsigned long)rc, f.dlc);
-        } else if (argc >= 2 && !strcmp(argv[1], "read")) {
-            can_frame_t fr[8];
-            int n = can_rx_pop(fr, 8);
-            if (n == 0) op(out, ctx, "  (no frames)\r\n");
-            for (int i = 0; i < n; i++) {
-                op(out, ctx, "  RX id=0x%lx%s dlc=%d:", (unsigned long)fr[i].id,
-                   fr[i].ext ? "(ext)" : "", fr[i].dlc);
-                for (int b = 0; b < fr[i].dlc; b++) op(out, ctx, " %02x", fr[i].data[b]);
-                op(out, ctx, "\r\n");
-            }
-        } else if (argc >= 2 && !strcmp(argv[1], "status")) {
-            can_status_t s; can_get_status(&s);
-            op(out, ctx, "  enabled=%d mode=%s bitrate=%lu term=%d tec=%u rec=%u busoff=%d rx=%lu ovf=%lu resp=%lu hits=%lu\r\n",
-               s.enabled, can_mode_name(s.mode), (unsigned long)s.bitrate, s.term,
-               s.tec, s.rec, s.bus_off, (unsigned long)s.rx_pending, (unsigned long)s.rx_overflow,
-               (unsigned long)s.responder_rules, (unsigned long)s.responder_hits);
-        } else if (argc >= 3 && !strcmp(argv[1], "respond")) {
-            /* can respond <match_id> <reply_id> [bytes...] | can respond clear */
-            if (!strcmp(argv[2], "clear")) {
-                can_responder_clear();
-                op(out, ctx, "  responder rules cleared\r\n");
-            } else if (argc >= 4) {
-                can_frame_t reply = {0};
-                reply.id = (uint32_t)strtoul(argv[3], NULL, 0);
-                int n = 0;
-                for (int i = 4; i < argc && n < 8; i++) reply.data[n++] = (uint8_t)strtoul(argv[i], NULL, 0);
-                reply.dlc = (uint8_t)n;
-                int idx = can_responder_add((uint32_t)strtoul(argv[2], NULL, 0), false, &reply);
-                op(out, ctx, idx >= 0 ? "  rule %d: id 0x%lx -> reply 0x%lx dlc=%d\r\n"
-                                      : "  responder table full\r\n",
-                   idx, (unsigned long)strtoul(argv[2], NULL, 0), (unsigned long)reply.id, reply.dlc);
-            } else {
-                op(out, ctx, "  usage: can respond <match_id> <reply_id> [bytes...] | can respond clear\r\n");
-            }
-        } else if (argc >= 3 && !strcmp(argv[1], "term")) {
-            bool on = !strcmp(argv[2], "1") || !strcmp(argv[2], "on");
-            can_set_term(on);
-            op(out, ctx, "  CAN termination %s\r\n", on ? "ON" : "OFF");
-        } else if (argc >= 2 && !strcmp(argv[1], "off")) {
-            can_disable();
-            op(out, ctx, "  CAN disabled\r\n");
-        } else {
-            op(out, ctx, "  usage: can config <bitrate> <normal|internal|external|listen> [term] | write <id> [bytes] | read | status | respond <match_id> <reply_id> [bytes] | respond clear | term <0|1> | off\r\n");
-        }
     } else if (!strcmp(argv[0], "dfu")) {
         op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
         HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
