@@ -745,6 +745,10 @@ static void mdns_register(struct netif *netif)
     if (mdns_resp_add_netif(netif, s_mdns_host) != ERR_OK) return;
     mdns_resp_add_service(netif, s_mdns_inst, "_benchpod", DNSSD_PROTO_TCP,
                           TCP_SERVER_PORT, mdns_txt, NULL);
+    /* The same :8080 socket speaks SCPI: VISA / LXI discovery finds the pod as a raw socket
+       instrument (TCPIP::<host>::8080::SOCKET). */
+    mdns_resp_add_service(netif, s_mdns_inst, "_scpi-raw", DNSSD_PROTO_TCP,
+                          TCP_SERVER_PORT, NULL, NULL);
 }
 
 /* LAN policy "off" (pod_policy.h): the external LAN (Ethernet, Wi-Fi) gets no :8080 connections

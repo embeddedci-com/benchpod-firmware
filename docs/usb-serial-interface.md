@@ -67,8 +67,10 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | Pod address | `10.237.x.y`, the first host of a `/30` derived from the MCU's unique ID (stable per pod) |
 | Computer's address | The other host of that `/30`, handed out by the pod's DHCP server (lease 1 hour) |
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
-| mDNS | `_benchpod._tcp` is advertised on this link too (unless the LAN policy is `off`) |
+| mDNS | `_benchpod._tcp` and `_scpi-raw._tcp` are advertised on this link too (under every LAN policy) |
 | Security | LAN tier: what the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`, the company CA and proxy) is refused on it too. The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
+| SCPI and VISA | The same `:8080` socket: `TCPIP::10.237.x.y::8080::SOCKET` |
+| WSL2, Docker on Windows | Not tested. Windows routes the pod's `10.237.x.y` address itself, so a WSL2 distribution or a Docker container that uses the Windows host's network should reach it; mDNS from inside them may not |
 | Throughput | USB full speed (12 Mbit/s): about 0.9 MB/s from the pod (`speedtest`), against 1.3 MB/s on 100 Mbit Ethernet |
 
 The JSON `status` reports it as `usb` (`net`, `link`, `ip`, `host_ip`) and the
@@ -122,6 +124,17 @@ worker task, prints the output, then prints the prompt `"> "`.
   builds `capture-psram`, `dualcap`, `lastress`, `psram*`, `cap-selftest`) take the same lock as the JSON
   captures. While a capture, upload or update runs they print
   `<cmd> refused: busy: a capture, upload or update is using the PSRAM bus; try again when it ends`.
+
+### Stable replies
+
+These console replies are read by host tools (the `benchpod` CLI, the `embeddedci` SDK and MCP
+server, the web app's setup wizard over WebSerial), including older releases still in use, so
+their formats do not change: `status` (`device : benchpod`, the `ip`, `usb` and `board` lines),
+`ping` (`PING ok`), `identity`, `identity-wipe ok`, `sig-policy`, `lan-policy`, `ca`/`ca none`,
+`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, the `upload-*` acknowledgements,
+`usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
+existing one keeps its place. `stm32h563/test/check_console_contract.py` (run with the host tests)
+fails when one of these format strings changes.
 
 ### Command reference
 

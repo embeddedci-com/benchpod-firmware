@@ -483,10 +483,12 @@ else
 endif
 	@$(MAKE) --no-print-directory docs-check
 
-# Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py).
+# Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py), and
+# the console replies host tools parse must not change (check_console_contract.py).
 PYTHON ?= python3
 docs-check:
 	@$(PYTHON) check_docs_coverage.py
+	@$(PYTHON) check_console_contract.py
 
 clean:
 	rm -rf build
