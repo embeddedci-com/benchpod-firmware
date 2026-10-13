@@ -223,9 +223,13 @@ void handle_status(int conn_id, const char *json) {
     {
         usb_cc_t cc;
         bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
-        bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
-                usb_net_enabled() ? "on" : "off", usb_net_link_up() ? "true" : "false",
-                usb_netif_pod_ip(), usb_netif_host_ip());
+        /* setting: the stored USB network setting; off_reason when net is off. */
+        bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"setting\":\"%s\",",
+                usb_net_on() ? "on" : "off", usb_net_setting_on() ? "on" : "off");
+        if (!usb_net_on())
+            bp_emit(&e, "\"off_reason\":\"%s\",", usb_net_setting_on() ? "wifi" : "setting");
+        bp_emit(&e, "\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
+                usb_net_link_up() ? "true" : "false", usb_netif_pod_ip(), usb_netif_host_ip());
         if (have_cc) bp_emit(&e, "\"source\":\"%s\",\"source_ma\":%d},", cc.advertised, cc.advertised_ma);
         else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
     }

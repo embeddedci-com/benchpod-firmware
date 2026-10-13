@@ -12,7 +12,8 @@ typedef struct {
     uint32_t magic;       /* POD_POLICY_RECORD_MAGIC */
     uint8_t  sig;         /* fw_sig_policy_t */
     uint8_t  lan;         /* pod_lan_policy_t */
-    uint8_t  reserved[10];
+    uint8_t  usb_net_off; /* 1: the USB network adapter is off (0, older records: on) */
+    uint8_t  reserved[9];
 } pod_policy_rec_t;
 
 static const ab_store_t k_store = {
@@ -28,6 +29,7 @@ static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SI
                                   .lan = POD_LAN_OPEN };
 
 __attribute__((weak)) void pod_policy_on_lan_change(pod_lan_policy_t now) { (void)now; }
+__attribute__((weak)) void pod_policy_on_usb_net_change(bool on) { (void)on; }
 
 void pod_policy_load(void) {
     pod_policy_rec_t r;
@@ -36,11 +38,12 @@ void pod_policy_load(void) {
            rather than silently opening up. */
         if (r.sig > FW_SIG_POLICY_REQUIRED) r.sig = FW_SIG_POLICY_REQUIRED;
         if (r.lan > POD_LAN_OFF) r.lan = POD_LAN_LOCKED;
+        if (r.usb_net_off > 1) r.usb_net_off = 1;
         s_rec = r;
     }
     fw_sign_set_policy((fw_sig_policy_t)s_rec.sig);
-    log_printf("[policy] signatures %s, LAN %s\n", fw_sign_policy_name((fw_sig_policy_t)s_rec.sig),
-           pod_policy_lan_name((pod_lan_policy_t)s_rec.lan));
+    log_printf("[policy] signatures %s, LAN %s, USB network %s\n", fw_sign_policy_name((fw_sig_policy_t)s_rec.sig),
+           pod_policy_lan_name((pod_lan_policy_t)s_rec.lan), s_rec.usb_net_off ? "off" : "on");
 }
 
 fw_sig_policy_t  pod_policy_sig(void) { return (fw_sig_policy_t)s_rec.sig; }
@@ -83,6 +86,22 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
     log_printf("[policy] LAN now %s (from %s)\n", pod_policy_lan_name(p),
            src == POLICY_SRC_USB ? "USB" : "cloud");
     pod_policy_on_lan_change(p);
+    return NULL;
+}
+
+bool pod_policy_usb_net(void) { return s_rec.usb_net_off == 0; }
+
+const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link) {
+    if (src == POLICY_SRC_CLOUD || (src == POLICY_SRC_LAN && !usb_link))
+        return "usb_network: change it on the device (the USB console, or over the USB link)";
+    if (on == pod_policy_usb_net()) return NULL;
+    pod_policy_rec_t r = s_rec;
+    r.usb_net_off = on ? 0 : 1;
+    const char *why = save(&r);
+    if (why) return why;
+    log_printf("[policy] USB network now %s (from %s)\n", on ? "on" : "off",
+           src == POLICY_SRC_USB ? "the USB console" : "the USB link");
+    pod_policy_on_usb_net_change(on);
     return NULL;
 }
 

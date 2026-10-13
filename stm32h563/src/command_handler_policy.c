@@ -56,6 +56,24 @@ void handle_lan_policy(int conn_id, const char *json) {
     send_ok_str(conn_id, data);
 }
 
+/* {"cmd":"usb_network"[,"set":"on|off"]}: the USB network adapter setting (pod_policy.h). Only
+   the device may change it: over the USB link itself here (the console has usb-network). */
+void handle_usb_network(int conn_id, const char *json) {
+    char v[8] = {0};
+    if (bp_json_get(json, "set", v, sizeof(v))) {
+        if (strcmp(v, "on") != 0 && strcmp(v, "off") != 0) {
+            send_error(conn_id, "usb_network: set must be on or off");
+            return;
+        }
+        const char *why = pod_policy_set_usb_net(!strcmp(v, "on"), command_handler_policy_src(conn_id),
+                                                 net_conn_on_usb(conn_id));
+        if (why) { send_error(conn_id, why); return; }
+    }
+    char data[48];
+    snprintf(data, sizeof(data), "{\"setting\":\"%s\"}", pod_policy_usb_net() ? "on" : "off");
+    send_ok_str(conn_id, data);
+}
+
 /* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */
 
 /* One certificate of the cloud_ca reply. The list is capped at CA_CERTS_MAX bytes (the reply's

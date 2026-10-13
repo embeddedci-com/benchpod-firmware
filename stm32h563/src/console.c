@@ -431,7 +431,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             usb_net_stats_t us;
             usb_net_stats(&us);
             op(out, ctx, "  usb    : net %s pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
-               usb_net_enabled() ? "on" : "off (Wi-Fi configured)",
+               usb_net_on() ? "on" : !usb_net_setting_on() ? "off (setting)" : "off (Wi-Fi configured)",
                usb_netif_pod_ip(), usb_netif_host_ip(), usb_net_link_up() ? "up" : "down",
                (unsigned long)us.rx_frames, (unsigned long)us.rx_drops,
                (unsigned long)us.tx_frames, (unsigned long)us.tx_full);
@@ -850,6 +850,18 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             else           op(out, ctx, "proxy none\r\n");
             memset(&p, 0, sizeof(p));
         }
+    } else if (!strcmp(argv[0], "usb-network")) {
+        /* The USB network adapter on or off (pod_policy.h): off, the pod re-enumerates as its
+           console only. The console is the way back on. */
+        const char *why = NULL;
+        if (argc >= 2) {
+            if (!strcmp(argv[1], "on") || !strcmp(argv[1], "off"))
+                why = pod_policy_set_usb_net(!strcmp(argv[1], "on"), POLICY_SRC_USB, false);
+            else
+                why = "use on or off";
+        }
+        if (why) op(out, ctx, "usb-network error %s\r\n", why);
+        else     op(out, ctx, "usb-network %s\r\n", pod_policy_usb_net() ? "on" : "off");
     } else if (!strcmp(argv[0], "lan-policy")) {
         const char *why = NULL;
         if (argc >= 2) {

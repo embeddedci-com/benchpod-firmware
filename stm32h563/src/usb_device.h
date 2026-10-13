@@ -31,6 +31,11 @@ bool usb_net_link_up(void);
    frames; the console is unaffected. Any task. */
 void usb_net_set_enabled(bool on);
 bool usb_net_enabled(void);
+/* The stored USB network setting (pod_policy_usb_net); off, the device enumerates without the
+   NCM function. */
+bool usb_net_setting_on(void);
+/* The adapter is on: the setting is on and no Wi-Fi is configured. */
+bool usb_net_on(void);
 /* The oldest received frame, or false when none is waiting. Release it when done. */
 bool usb_net_rx_peek(const uint8_t **frame, uint16_t *len);
 void usb_net_rx_release(void);

@@ -238,6 +238,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `speedtest` | T1 | Cloud throughput probe over a tunnel | none (raw bytes) | no |
 | `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
+| `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
 | `ota_begin` | T3 | Start a firmware or blob update | object | no |
 | `ota_data` | T3 | Send one base64url chunk of the image | object | no |
 | `ota_end` | T3 | Verify the staged image's SHA-256 (and signature) | object | no |
@@ -1327,7 +1328,7 @@ counters and the capability list. No parameters.
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
- "usb":{"net":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
+ "usb":{"net":"on","setting":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
@@ -1348,7 +1349,7 @@ counters and the capability list. No parameters.
 | `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
-| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` while Wi-Fi credentials are stored; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
@@ -1376,6 +1377,7 @@ counters and the capability list. No parameters.
 | Value | Meaning |
 |---|---|
 | `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
+| `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
 | `signal`, `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: signal generation, GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
@@ -3524,6 +3526,27 @@ loosening `sig_policy`, changing `lan_policy`) stays off it too; the one excepti
 and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
 values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
 <value>`), never from the LAN or the USB network.
+
+### `usb_network` — the USB network adapter on or off
+
+```json
+{"cmd":"usb_network"}
+{"cmd":"usb_network","set":"off"}
+```
+
+```json
+{"status":"ok","data":{"setting":"off"}}
+```
+
+Whether the pod's USB port is also a [USB network
+adapter](usb-serial-interface.md#usb-network-adapter) (default `on`). With `off` the pod
+re-enumerates as its USB console only: the computer sees no network adapter at all. The setting is
+stored, separate from `lan_policy` (which covers Ethernet and Wi-Fi), and survives a reboot and a
+firmware update. Only the device changes it: the USB console (`usb-network on|off`, the way back
+on) or a connection over the USB link itself (which can turn it off). Ethernet, Wi-Fi and the cloud
+get `usb_network: change it on the device (the USB console, or over the USB link)`; reading works
+everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
+credentials also turn the adapter off (status `usb.off_reason`).
 
 ### `cloud_ca` / `cloud_proxy`: company CA and HTTP proxy for the cloud link
 

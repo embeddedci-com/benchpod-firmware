@@ -60,6 +60,8 @@ static void test_mixed_verbs(void) {
     expect("sig_policy", "{\"cmd\":\"sig_policy\",\"set\":\"required\"}", CMD_TIER_T2);
     expect("lan_policy", "{\"cmd\":\"lan_policy\"}", CMD_TIER_T0);
     expect("lan_policy", "{\"cmd\":\"lan_policy\",\"set\":\"off\"}", CMD_TIER_T2);
+    expect("usb_network", "{\"cmd\":\"usb_network\"}", CMD_TIER_T0);
+    expect("usb_network", "{\"cmd\":\"usb_network\",\"set\":\"off\"}", CMD_TIER_T2);
     expect("cloud_ca", "{\"cmd\":\"cloud_ca\"}", CMD_TIER_T0);
     expect("cloud_ca", "{\"cmd\":\"cloud_ca\",\"clear\":true}", CMD_TIER_T2);
     expect("cloud_proxy", "{\"cmd\":\"cloud_proxy\",\"set\":\"p:3128\"}", CMD_TIER_T2);
@@ -201,7 +203,7 @@ static void test_flags_match_the_old_lists(void) {
                "test", "load", "replay", "load_bin", "sensor_regs", "sensor_la", "dap_start",
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
-    EXPECT_SET(CMD_F_MIXED, "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy",
+    EXPECT_SET(CMD_F_MIXED, "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy", "usb_network",
                "cloud_ca", "cloud_proxy");
 }
 
