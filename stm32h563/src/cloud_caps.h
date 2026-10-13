@@ -48,6 +48,10 @@ typedef struct {
     bool          pod_current;
     long          current_out_min_ua, current_out_max_ua;
     const char   *board;
+    /* The interface the cloud link runs over: "eth", "wifi" or "unknown" (NULL = "unknown").
+       Only the cloud client knows it (cloud_caps_collect leaves it NULL); the status reply's
+       "net"/"wifi" fields describe the interfaces, not which one carries the cloud. */
+    const char   *uplink;
     /* Boot health. */
     bool          safe_mode;
     const char   *safe_reason;    /* "" when not in safe mode */

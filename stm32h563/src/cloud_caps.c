@@ -44,6 +44,9 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
             tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->gps));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
+    /* Which interface carries this connection, so the server can record eth vs Wi-Fi per connect. */
+    bp_emit_raw(e, ",\"uplink\":");
+    bp_emit_jstr(e, c->uplink ? c->uplink : "unknown");
     bp_emit_raw(e, ",");
 }
 
@@ -75,11 +78,14 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit_raw(e, "]");
 }
 
-/* s cut to `max` characters, control characters (each up to six escaped bytes) as '?'. */
+/* s cut to `max` characters, every character that JSON escapes (control characters up to six
+   bytes, '"' and '\\' two) as '?', so a cut text costs exactly one byte per character. */
 static void short_text(char *out, size_t cap, const char *s, size_t max) {
     size_t n = 0;
-    for (; s && *s && n < max && n + 1 < cap; s++)
-        out[n++] = ((unsigned char)*s < 0x20) ? '?' : *s;
+    for (; s && *s && n < max && n + 1 < cap; s++) {
+        unsigned char ch = (unsigned char)*s;
+        out[n++] = (ch < 0x20 || ch == '"' || ch == '\\') ? '?' : (char)ch;
+    }
     out[n] = '\0';
 }
 

@@ -16,3 +16,11 @@ int net_route_pick(const net_route_if_t *ifs, int n, uint32_t src, uint32_t dest
     }
     return -1;
 }
+
+int net_route_owner(const net_route_if_t *ifs, int n, uint32_t local)
+{
+    if (local == 0) return -1;
+    for (int i = 0; i < n; i++)
+        if (ifs[i].ip == local) return i;
+    return -1;
+}
