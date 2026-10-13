@@ -2029,7 +2029,8 @@ interval never misses a trip.
 ### `power_status` — one-shot rail measurement
 
 Reads both on-board INA238 current monitors (`0x40` = internal 5 V rail, `0x44` = external
-rail) and reports each rail's bus voltage and current. This is the cheap "what is the DUT
+rail) and reports each rail's bus voltage and current. Boards with the pod's own current monitor
+(`0x41`, capability `pod_current`) add `pod`: what the pod itself draws from its 5 V input. This is the cheap "what is the DUT
 drawing right now" call; for a waveform over time use
 [`power_profile`](#power_profile--record-a-rail-current-profile).
 
@@ -2045,7 +2046,8 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 
 ```json
 {"status":"ok","data":{"internal":{"ok":true,"bus_mv":5008,"current_ua":142300},
-                       "external":{"ok":false,"bus_mv":0,"current_ua":0}}}
+                       "external":{"ok":false,"bus_mv":0,"current_ua":0},
+                       "pod":{"ok":true,"bus_mv":5012,"current_ua":231000,"total_ua":373300}}}
 ```
 
 | Field | Type | Description |
@@ -2053,6 +2055,7 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 | `<rail>.ok` | boolean | `false` when that INA238 did not answer (an unpopulated / unpowered rail). |
 | `<rail>.bus_mv` | integer | Bus (DUT-side) voltage in mV. |
 | `<rail>.current_ua` | integer | Current in µA, computed from the measured shunt voltage and the known shunt resistance — signed, so a back-feeding DUT reads negative. |
+| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's internal rail bypasses that shunt), and `total_ua` = pod + internal rail, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` shows the same reading. |
 
 Both reads are taken under the hardware lock that serialises this I2C bus against the console
 `ina` command, the eFuse expander and the profile sampler.
