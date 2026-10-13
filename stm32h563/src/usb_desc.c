@@ -7,7 +7,13 @@
  * through a Microsoft OS 2.0 descriptor (compatible ID "WINNCM"), so the device
  * reports USB 2.1 and a BOS descriptor that points at that set.
  *
- * VID 0x1209 PID 0x0001: pid.codes test ID (TODO: the BenchPod's own VID/PID).
+ * VID 0x0483 PID 0x5740: ST's stock CDC ID, as firmware before 3.9.0 enumerated, so every host tool
+ * that knows the pod keeps finding it (pre-release 3.9.0 builds used the pid.codes test ID
+ * 1209:0001; the pod's own pid.codes ID 1209:EC10 is for a later release). bcdDevice 0x0390 differs
+ * from the console-only device of older firmware, so Windows reads the composite descriptors again
+ * instead of reusing what it cached for that ID. A host with ST's Virtual COM Port driver bound to
+ * 0483:5740 claims the whole device and the network adapter does not load: see
+ * docs/usb-serial-interface.md, "Windows with ST's VCP driver".
  */
 #include "tusb.h"
 #include "usb_device.h"
@@ -15,9 +21,9 @@
 
 #include <string.h>
 
-#define USB_VID   0x1209
-#define USB_PID   0x0001
-#define USB_BCD   0x0100
+#define USB_VID   0x0483
+#define USB_PID   0x5740
+#define USB_BCD   0x0390
 
 enum { ITF_CDC = 0, ITF_CDC_DATA, ITF_NCM, ITF_NCM_DATA, ITF_TOTAL };
 
