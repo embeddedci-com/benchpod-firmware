@@ -47,9 +47,19 @@ size_t console_moved_line(const char *verb, char *out, size_t cap)
     if (!out || cap == 0) return 0;
     out[0] = '\0';
     if (!json) return 0;
-    int n = snprintf(out, cap, "%s: moved to the network API (JSON %s) in firmware 3.9.0; update the "
+    /* The upload commands keep the reply shape CLIs before 0.6.0 wait for, so they print the
+     * line instead of timing out: "<cmd> error <why>" for upload-begin and the rest, and
+     * "unknown command" for upload-sig (they then upload unsigned and meet upload-begin's). */
+    const char *fmt = "%s: moved";
+    if (!strcmp(verb, "upload-sig"))
+        fmt = "unknown command '%s': moved";
+    else if (!strncmp(verb, "upload-", 7))
+        fmt = "%s error moved";
+    char head[48];
+    snprintf(head, sizeof(head), fmt, verb);
+    int n = snprintf(out, cap, "%s to the network API (JSON %s) in firmware 3.9.0; update the "
                      "benchpod CLI to 0.6.0 or later (or embeddedci to 2.12.0), which uses it over USB",
-                     verb, json);
+                     head, json);
     if (n < 0) { out[0] = '\0'; return 0; }
     return (size_t)n < cap ? (size_t)n : cap - 1;
 }

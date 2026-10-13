@@ -251,6 +251,11 @@ what to update:
 la-voltage: moved to the network API (JSON la_voltage) in firmware 3.9.0; update the benchpod CLI to 0.6.0 or later (or embeddedci to 2.12.0), which uses it over USB
 ```
 
+The upload commands keep the reply shape older CLIs wait for, so they print the line instead of
+timing out: `upload-begin error moved to the network API (JSON ota_begin) ...` (the same for
+`upload-data`, `-end`, `-commit`, `-status`, `-abort`), and `unknown command 'upload-sig': moved
+to the network API (JSON ota_begin sig) ...`.
+
 The commands that stay keep their names and reply formats, so older CLIs and SDKs keep
 working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,
 `lan-policy`, the Wi-Fi, CA and proxy commands, `blobs`.

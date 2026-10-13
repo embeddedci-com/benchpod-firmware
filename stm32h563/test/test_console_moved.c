@@ -30,6 +30,11 @@ int main(void)
     CHECK(strstr(line, "0.6.0") && strstr(line, "2.12.0"), "names the versions: %s", line);
     /* an old CLI treats "unknown command" as "this firmware is too old"; the line must not say it */
     CHECK(!strstr(line, "unknown command"), "no unknown command: %s", line);
+    /* upload commands keep the reply shape CLIs before 0.6.0 wait for */
+    console_moved_line("upload-begin", line, sizeof(line));
+    CHECK(!strncmp(line, "upload-begin error moved to the network API (JSON ota_begin)", 60), "upload-begin: %s", line);
+    console_moved_line("upload-sig", line, sizeof(line));
+    CHECK(!strncmp(line, "unknown command 'upload-sig': moved to the network API", 54), "upload-sig: %s", line);
     CHECK(console_moved_line("status", line, sizeof(line)) == 0 && line[0] == '\0', "not moved");
     CHECK(console_moved_line("power", line, 20) == 19 && strlen(line) == 19, "cut to fit: %s", line);
 
