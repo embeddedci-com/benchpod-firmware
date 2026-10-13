@@ -27,7 +27,7 @@ Development builds add bench diagnostics, marked below; release firmware leaves 
 | Property | Value |
 |---|---|
 | Class | USB CDC-ACM (virtual serial port), interfaces 0-1 of a composite device |
-| USB VID/PID | `0x1209:0x0001` from firmware 3.9.0 (`0x0483:0x5740` before); the host's stock CDC-ACM driver binds |
+| USB VID/PID | `0x1209:0xEC10` from firmware 3.9.0 (pid.codes; pre-release 3.9.0 builds used `0x1209:0x0001`, firmware before 3.9.0 `0x0483:0x5740`); the host's stock CDC-ACM driver binds |
 | USB strings | manufacturer `EmbeddedCI`, product `BenchPod`, serial = 12 hex digits from the MCU's unique ID (unchanged from older firmware) |
 | Line settings | `115200 8N1` |
 | Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
@@ -353,7 +353,7 @@ port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
 ```
 
 Discover the port by enumerating serial ports and matching USB VID `0x1209` and
-PID `0x0001` (firmware 3.9.0 and later) or VID `0x0483` and PID `0x5740` (older
+PID `0xEC10` (firmware 3.9.0 and later; `0x0001` on pre-release builds) or VID `0x0483` and PID `0x5740` (older
 firmware); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
 the platform path patterns in the table above. The UART bridge and the
 CMSIS-DAP probe are not on the console; use the USB network adapter, the LAN or the cloud for those

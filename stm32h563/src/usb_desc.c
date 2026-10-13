@@ -7,7 +7,7 @@
  * through a Microsoft OS 2.0 descriptor (compatible ID "WINNCM"), so the device
  * reports USB 2.1 and a BOS descriptor that points at that set.
  *
- * VID 0x1209 PID 0x0001: pid.codes test ID (TODO: the BenchPod's own VID/PID).
+ * VID 0x1209 PID 0xEC10: the BenchPod's pid.codes ID (builds before it used the test PID 0x0001).
  */
 #include "tusb.h"
 #include "usb_device.h"
@@ -16,7 +16,7 @@
 #include <string.h>
 
 #define USB_VID   0x1209
-#define USB_PID   0x0001
+#define USB_PID   0xEC10
 #define USB_BCD   0x0100
 
 enum { ITF_CDC = 0, ITF_CDC_DATA, ITF_NCM, ITF_NCM_DATA, ITF_TOTAL };
