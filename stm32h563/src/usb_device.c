@@ -165,11 +165,26 @@ static volatile uint8_t  s_rx_head, s_rx_tail;   /* usb task fills head, net tas
 static volatile uint8_t  s_tx_head, s_tx_tail;   /* net task fills head, usb task sends tail */
 static bool              s_rx_renew;             /* usb task: ask the driver for the next frame */
 static bool              s_rx_stalled;           /* usb task: a frame waits for a free slot */
+static volatile bool     s_net_enabled = true;   /* off while Wi-Fi is provisioned (usb_net_set_enabled) */
 static usb_net_stats_t   s_stats;
 
 #define NEXT(i, n) ((uint8_t)(((i) + 1) % (n)))
 
-bool usb_net_link_up(void) { return s_mounted && !tud_suspended(); }
+bool usb_net_link_up(void) { return s_net_enabled && s_mounted && !tud_suspended(); }
+
+bool usb_net_enabled(void) { return s_net_enabled; }
+
+/* The NCM function stays enumerated either way (the console shares the device); off
+   tells the host the cable is out, so it drops the address and its route. */
+void usb_net_set_enabled(bool on)
+{
+    if (s_net_enabled == on) return;
+    s_net_enabled = on;
+    tud_network_link_state(BOARD_TUD_RHPORT, on);   /* deferred onto the usb task */
+}
+
+/* The NCM driver's link state at (re)enumeration. */
+bool tud_network_default_link_state_cb(void) { return s_net_enabled; }
 
 bool usb_net_rx_peek(const uint8_t **frame, uint16_t *len)
 {
@@ -204,7 +219,7 @@ void usb_net_tx_commit(uint16_t len)
    driver until tud_network_recv_renew() is called again. */
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size)
 {
-    if (size == 0 || size > USB_NET_FRAME_MAX) {
+    if (size == 0 || size > USB_NET_FRAME_MAX || !s_net_enabled) {
         s_stats.rx_drops++;
         s_rx_renew = true;
         return true;   /* consumed (dropped) */
@@ -284,10 +299,30 @@ void usb_net_host_mac(uint8_t mac[6]) { uid_mac(0x06, mac); }
 void tud_mount_cb(void)   { s_mounted = true; }
 void tud_umount_cb(void)  { s_mounted = false; }
 
+static volatile bool s_reattach;
+
+void usb_reattach_request(void) { s_reattach = true; }
+
+/* Drop off the bus and come back: the host enumerates the device again, as after
+   unplugging the cable. */
+static void usb_reattach(void)
+{
+    s_reattach = false;
+    for (int i = 0; i < 20 && s_con_head != s_con_tail; i++) {   /* the reply first */
+        tud_task_ext(1, false);
+        console_tx_pump();
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(500));
+    tud_connect();
+}
+
 static void usb_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (s_reattach) usb_reattach();
         /* Waits up to 1 ms for a USB event, so the console ring and the transmit slots,
            which other tasks fill without waking us, are drained at least every tick. */
         tud_task_ext(1, false);

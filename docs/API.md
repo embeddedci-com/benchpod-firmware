@@ -20,6 +20,8 @@ Connect with any TCP client:
 nc <device-ip> 8080
 ```
 
+**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
+
 The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS unless the [LAN policy](#lan_policy--what-the-lan-api-may-do) is `off`.
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
@@ -45,8 +47,9 @@ connection to the pod has the full command set, which includes:
 - driving the SWD probe — i.e. halting, reading, and reflashing an attached target,
 - uploading firmware to the pod itself over OTA.
 
-There is no login, no API key, and no allow-list. The USB-CDC console is equivalent and
-assumes physical access.
+There is no login, no API key, and no allow-list. The USB network adapter (firmware 3.9.0+)
+is the same tier as the LAN: port `8080` on it is this API, under the same LAN policy. The
+USB-CDC console is a separate, higher channel and assumes physical access.
 
 **The LAN policy limits this.** `lan_policy` (below) is `open` by default, which is everything
 above. `locked` keeps the LAN to reads and instrument control (tiers T0 and T1 of
@@ -1320,6 +1323,7 @@ counters and the capability list. No parameters.
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
+ "usb":{"net":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86"},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
@@ -1340,6 +1344,7 @@ counters and the capability list. No parameters.
 | `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` while Wi-Fi credentials are stored; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
@@ -1366,6 +1371,7 @@ counters and the capability list. No parameters.
 
 | Value | Meaning |
 |---|---|
+| `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
 | `signal`, `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: signal generation, GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
@@ -3089,8 +3095,10 @@ side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 {"cmd":"wifi_clear"}
 ```
 
-Wired Ethernet stays the primary link; Wi-Fi is the fallback. An empty or missing `password` is an
-open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
+Wired Ethernet stays the primary link; Wi-Fi is the fallback. Wi-Fi and the [USB network
+adapter](usb-serial-interface.md#usb-network-adapter) are one or the other: `wifi_set` turns USB
+networking off (the reply may still go out over it), and `wifi_clear` turns it back on. An empty or
+missing `password` is an open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
 replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `"ssid too long"`,
 `"password too long"`, `"config save failed"`. The same operations are `wifi-set` / `wifi-clear` on
 the [USB console](usb-serial-interface.md).

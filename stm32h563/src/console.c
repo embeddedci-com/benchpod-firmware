@@ -198,6 +198,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
         "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3)\r\n"
+        "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
         "  eth <stop|start|restart>  bring the wired link down/up (PHY reset + DHCP re-acquire)\r\n"
         "  eth stats            wired link: negotiated mode, MAC mode, error + drop counters\r\n"
         "  eth speed <auto|10|100> [full]  force the link mode (debug: 10M survives a bad\r\n"
@@ -468,7 +469,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         {
             usb_net_stats_t us;
             usb_net_stats(&us);
-            op(out, ctx, "  usb    : pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
+            op(out, ctx, "  usb    : net %s pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
+               usb_net_enabled() ? "on" : "off (Wi-Fi configured)",
                usb_netif_pod_ip(), usb_netif_host_ip(), usb_net_link_up() ? "up" : "down",
                (unsigned long)us.rx_frames, (unsigned long)us.rx_drops,
                (unsigned long)us.tx_frames, (unsigned long)us.tx_full);
@@ -626,6 +628,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                mv ? (mv == LA_VCCIO_1V8 ? "1800 mV" : "3300 mV") : "UNSET",
                la_vccio_status_pin());
         }
+    } else if (!strcmp(argv[0], "usb-reattach")) {
+        /* macOS ignores a new network interface while the screen is locked; this makes
+           the host see the device again without unplugging it. */
+        op(out, ctx, "usb-reattach ok\r\n");
+        usb_reattach_request();
     } else if (!strcmp(argv[0], "usb-cc")) {
         /* USB-C CC lines: cable orientation + the source's current advertisement. */
         usb_cc_t cc;

@@ -11,6 +11,10 @@
 /* Clocks, pins and TinyUSB, then the usb task. Call before vTaskStartScheduler. */
 void MX_USB_DEVICE_Init(void);
 
+/* Disconnect from the bus for 0.5 s and reconnect, once the console has sent what it
+   holds: the host enumerates the device again (console and network adapter). Any task. */
+void usb_reattach_request(void);
+
 /* ---- console (CDC-ACM) ---- */
 /* True once the host has configured the device. */
 int  cdc_if_connected(void);
@@ -20,8 +24,13 @@ int  cdc_if_write(const uint8_t *buf, uint16_t len);
 /* ---- network (CDC-NCM), for the net task ---- */
 #define USB_NET_FRAME_MAX  1514
 
-/* The NCM data interface is up (host configured it and selected the data alt). */
+/* The NCM data interface is up (host configured it and selected the data alt) and USB
+   networking is on. */
 bool usb_net_link_up(void);
+/* USB networking on/off (on at boot). Off reports the link down to the host and drops
+   frames; the console is unaffected. Any task. */
+void usb_net_set_enabled(bool on);
+bool usb_net_enabled(void);
 /* The oldest received frame, or false when none is waiting. Release it when done. */
 bool usb_net_rx_peek(const uint8_t **frame, uint16_t *len);
 void usb_net_rx_release(void);

@@ -1,7 +1,9 @@
 # bench-pod-firmware USB Serial Console
 
 The firmware exposes its interactive console over the STM32H563's **USB CDC-ACM**
-port (ST's stock CDC-ACM class device), mirrored on the USART2 debug pins. A host
+port, mirrored on the USART2 debug pins. The same USB device is also a network
+adapter (CDC-NCM) that carries the [JSON API](API.md): see
+[USB network adapter](#usb-network-adapter). A host
 tool (the `benchpod` CLI, a provisioning script) can open the serial port and
 drive text commands such as `status`, `wifi-set`, `la-voltage` and `dfu`.
 
@@ -20,8 +22,9 @@ counterpart.
 
 | Property | Value |
 |---|---|
-| Class | USB CDC-ACM (virtual serial port) |
-| USB VID/PID | `0x0483:0x5740` (STMicroelectronics CDC; the host's stock CDC-ACM driver binds) |
+| Class | USB CDC-ACM (virtual serial port), interfaces 0-1 of a composite device |
+| USB VID/PID | `0x1209:0x0001` from firmware 3.9.0 (`0x0483:0x5740` before); the host's stock CDC-ACM driver binds |
+| USB strings | manufacturer `EmbeddedCI`, product `BenchPod`, serial = 12 hex digits from the MCU's unique ID (unchanged from older firmware) |
 | Line settings | `115200 8N1` |
 | Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
 | Line length | At most 255 characters |
@@ -42,6 +45,43 @@ needed. The serial port appears as:
 
 The same console is **also** available on the USART2 debug pins; both run
 simultaneously and mirror each other's output.
+
+---
+
+## USB network adapter
+
+From firmware 3.9.0 the pod's USB device also has a CDC-NCM network adapter
+(interfaces 2-3), so a computer on the USB cable reaches the full JSON API, SCPI
+and the byte tunnels on port `8080` with no Ethernet or Wi-Fi. macOS, Linux and
+Windows 11 bind it with their in-box drivers (Windows through a Microsoft OS 2.0
+descriptor, compatible ID `WINNCM`).
+
+| Property | Value |
+|---|---|
+| Pod address | `10.237.x.y`, the first host of a `/30` derived from the MCU's unique ID (stable per pod) |
+| Computer's address | The other host of that `/30`, handed out by the pod's DHCP server (lease 1 hour) |
+| Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
+| mDNS | `_benchpod._tcp` is advertised on this link too (unless the LAN policy is `off`) |
+| Security | The same tier as the LAN API, and the [LAN policy](API.md#lan_policy--what-the-lan-api-may-do) applies. What the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`) is refused on it too |
+| Throughput | USB full speed (12 Mbit/s): about 0.6 MB/s of capture read-back |
+
+The JSON `status` reports it as `usb` (`net`, `link`, `ip`, `host_ip`) and the
+console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP server
+connect to it with the connection `usb`.
+
+**USB networking or Wi-Fi.** The two are one or the other: while Wi-Fi credentials
+are stored (`wifi-set`, JSON `wifi_set`) USB networking is off, and the pod reports
+the adapter's link down to the computer; `wifi-clear` turns it back on. The
+console works in both cases. Ethernet is independent of both.
+
+**macOS and a locked screen.** macOS ignores a network interface that appears while
+the screen is locked. If the pod was plugged in or rebooted then, run
+`usb-reattach` on the console (or unplug and plug the cable) after unlocking.
+
+The cloud link does not ride this adapter on its own (the pod gets no router from
+the computer). `benchpod usb-bridge` runs an HTTP CONNECT proxy on the computer
+and sets it as the pod's cloud proxy, so the pod reaches embeddedci.com through
+the computer.
 
 ---
 
@@ -85,11 +125,12 @@ command prints `usage: ...` and changes nothing.
 | Command | Description |
 |---|---|
 | `help` | List the commands. |
-| `status` | One `key : value` line each: `device : benchpod`, `mac`, `ip`, `dma`, `psram` (boot self-test), `psbus`, `board` (board, firmware version, revision, `nrst_pin`, `usb_cc`), `fpga` (gateware version, reachable or not), `gw` (when the running gateware differs from the embedded one), `hint`, `safe` (safe-mode report), `clock`, `adc`, `dac`, `replay`, `cloud` (`registered state=... device_id=...` or `not registered`), `reset`, `crash`, `boot`, one `stack` line per task, `flash`, `lwip`, `heap`. Tools grep for `benchpod` to recognize a pod. |
+| `status` | One `key : value` line each: `device : benchpod`, `mac`, `ip`, `usb` (`net on` or `net off (Wi-Fi configured)`, the pod's and the computer's address, `link up\|down`, frame counters), `dma`, `psram` (boot self-test), `psbus`, `board` (board, firmware version, revision, `nrst_pin`, `usb_cc`), `fpga` (gateware version, reachable or not), `gw` (when the running gateware differs from the embedded one), `hint`, `safe` (safe-mode report), `clock`, `adc`, `dac`, `replay`, `cloud` (`registered state=... device_id=...` or `not registered`), `reset`, `crash`, `boot`, one `stack` line per task, `flash`, `lwip`, `heap`. Tools grep for `benchpod` to recognize a pod. |
 | `ping` | SPI-ping the iCE40: `PING ok  version=0x..` or `PING failed`. |
 | `uid` | The MCU's 96-bit unique ID. |
 | `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
 | `reboot` | System reset. |
+| `usb-reattach` | Replies `usb-reattach ok`, then drops off the USB bus for half a second and connects again, so the computer enumerates the console and the network adapter anew (the serial port closes). |
 | `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). |
 | `test-bootloop [net\|hw] yes` | Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
 | `test-hang <net\|hw> yes` | Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
@@ -114,9 +155,9 @@ command prints `usage: ...` and changes nothing.
 
 | Command | Description |
 |---|---|
-| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to the pod's flash and (re)connect the ESP32-C3 in the background (the C3 is given them on each bring-up and keeps them in RAM only). Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
+| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to the pod's flash and (re)connect the ESP32-C3 in the background (the C3 is given them on each bring-up and keeps them in RAM only). Turns [USB networking](#usb-network-adapter) off. Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
 | `wifi-show` | `ssid`, `state` (as `status.wifi` in the JSON API), `ip`, `rssi` and the C3 restart counters. The password is never printed. |
-| `wifi-clear` | Erase the stored credentials and drop Wi-Fi, then erase the ESP32-C3's NVS partition, where firmware up to 3.7.0 left a second copy (about 3 s). See [`wifi-clear` result](#wifi-clear-result). |
+| `wifi-clear` | Erase the stored credentials and drop Wi-Fi (USB networking comes back on), then erase the ESP32-C3's NVS partition, where firmware up to 3.7.0 left a second copy (about 3 s). See [`wifi-clear` result](#wifi-clear-result). |
 | `wifi-static <ip> <netmask> <gateway>` | Give the Wi-Fi interface a static address (diagnostic; the pod uses DHCP by default). |
 | `eth <stop\|start\|restart>` | Bring the wired link down or up (PHY reset + DHCP). |
 | `eth stats` | Wired link: negotiated mode, MAC mode, error and drop counters. |
@@ -292,8 +333,9 @@ port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
 // read lines until the "> " prompt, then look for "device : benchpod".
 ```
 
-Discover the port by enumerating serial ports and matching USB VID `0x0483` and
-PID `0x5740` (`enumerator.GetDetailedPortsList()` exposes the VID/PID), or by
-matching the platform path patterns in the table above. The UART bridge and the
-CMSIS-DAP probe are not on the console; use the LAN or the cloud for those
+Discover the port by enumerating serial ports and matching USB VID `0x1209` and
+PID `0x0001` (firmware 3.9.0 and later) or VID `0x0483` and PID `0x5740` (older
+firmware); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
+the platform path patterns in the table above. The UART bridge and the
+CMSIS-DAP probe are not on the console; use the USB network adapter, the LAN or the cloud for those
 (`uart_proxy_start`, `dap_start` in [API.md](API.md)).

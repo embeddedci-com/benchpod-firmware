@@ -7,7 +7,7 @@
  * through a Microsoft OS 2.0 descriptor (compatible ID "WINNCM"), so the device
  * reports USB 2.1 and a BOS descriptor that points at that set.
  *
- * SPIKE: VID 0x1209 PID 0x0001 is the pid.codes test ID. A product needs its own.
+ * VID 0x1209 PID 0x0001: pid.codes test ID (TODO: the BenchPod's own VID/PID).
  */
 #include "tusb.h"
 #include "usb_device.h"

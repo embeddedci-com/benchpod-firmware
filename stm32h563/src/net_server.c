@@ -24,6 +24,7 @@
 #include "net_route.h"
 #include "esp_netif.h"
 #include "usb_netif.h"
+#include "usb_device.h"
 #include "esp_wifi_ctrl.h"
 #include "esp_rom_flash.h"
 #include "conn_tx.h"
@@ -805,6 +806,7 @@ void net_init(void)
         netif_list        = &s_eth.netif;
     }
     esp_wifi_ctrl_init();
+    usb_net_set_enabled(!esp_wifi_ctrl_configured());   /* see net_poll */
 
     /* USB network adapter (CDC-NCM): its own /30, never the default route. Appended
        after eth and Wi-Fi so lwIP's subnet scan keeps preferring those. */
@@ -841,11 +843,19 @@ void net_poll(void)
     ethernetif_input(&s_eth.netif);
     esp_hosted_spi_poll();           /* pump the Wi-Fi SPI transport (RX/TX)   */
     {
+        /* USB networking and Wi-Fi are one or the other: stored Wi-Fi credentials
+           (wifi-set) turn USB networking off, wifi-clear turns it back on. */
+        bool usb_on = !esp_wifi_ctrl_configured();
+        if (usb_on != usb_net_enabled()) {
+            usb_net_set_enabled(usb_on);
+            log_printf("[net] usb networking %s\r\n", usb_on ? "on (no Wi-Fi configured)" : "off (Wi-Fi configured)");
+        }
         bool was_up = netif_is_link_up(&s_usb_netif);
         usb_netif_poll(&s_usb_netif);    /* USB CDC-NCM frames, link, DHCP server */
-        if (!was_up && netif_is_link_up(&s_usb_netif)) {
-            log_printf("[net] usb link up\r\n");
-            if (s_lan_up) mdns_resp_announce(&s_usb_netif);
+        bool is_up = netif_is_link_up(&s_usb_netif);
+        if (was_up != is_up) {
+            log_printf("[net] usb link %s\r\n", is_up ? "up" : "down");
+            if (is_up && s_lan_up) mdns_resp_announce(&s_usb_netif);
         }
     }
     sys_check_timeouts();
