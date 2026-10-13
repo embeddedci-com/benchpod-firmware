@@ -338,6 +338,7 @@ void tud_umount_cb(void)  { s_mounted = false; }
 
 static volatile bool     s_reattach;
 static volatile uint32_t s_reattach_at;   /* HAL tick when a delayed reattach is due, 0: none */
+static volatile bool     s_net_setting_next = true;   /* applied at that reattach */
 
 void usb_reattach_request(void) { s_reattach = true; }
 
@@ -346,7 +347,9 @@ void usb_reattach_request(void) { s_reattach = true; }
    itself) reaches the computer first. */
 void pod_policy_on_usb_net_change(bool on)
 {
-    s_net_setting = on;
+    /* The live setting changes at the reattach: until then the link stays up, so a reply
+       sent over it gets out. */
+    s_net_setting_next = on;
     uint32_t at = HAL_GetTick() + 400u;
     s_reattach_at = at ? at : 1u;
 }
@@ -372,6 +375,7 @@ static void usb_task(void *arg)
     for (;;) {
         if (s_reattach_at && (int32_t)(HAL_GetTick() - s_reattach_at) >= 0) {
             s_reattach_at = 0;
+            s_net_setting = s_net_setting_next;
             s_reattach = true;
         }
         if (s_reattach) usb_reattach();
@@ -386,7 +390,7 @@ static void usb_task(void *arg)
 void MX_USB_DEVICE_Init(void)
 {
     usb_hw_init();
-    s_net_setting = pod_policy_usb_net();   /* loaded before USB (main.c): off never shows NCM */
+    s_net_setting = s_net_setting_next = pod_policy_usb_net();   /* loaded before USB (main.c): off never shows NCM */
 
     tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
     if (!tusb_init(BOARD_TUD_RHPORT, &dev_init)) return;
