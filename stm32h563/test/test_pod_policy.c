@@ -111,7 +111,7 @@ static void test_cloud_link_gate(void) {
     boot_blank();
     CHECK(pod_policy_lan() == POD_LAN_OPEN, "precondition: LAN open");
     const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN, false);
-    CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or the USB console"),
+    CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or over USB"),
           "LAN gate: %s", why ? why : "(null)");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB, false) == NULL, "USB refused");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD, false) == NULL, "cloud refused");

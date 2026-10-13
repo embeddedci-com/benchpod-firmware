@@ -89,7 +89,7 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
 const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool usb_link) {
     if (src != POLICY_SRC_LAN || usb_link) return NULL;
     static char why[80];
-    snprintf(why, sizeof(why), "%s: change it from the cloud or the USB console", verb);
+    snprintf(why, sizeof(why), "%s: change it from the cloud or over USB", verb);
     return why;
 }
 

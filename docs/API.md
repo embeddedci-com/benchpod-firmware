@@ -3210,7 +3210,7 @@ Refusals:
 |---|---|
 | `size` or `sha256` missing | `"missing size/sha256"` |
 | Unknown `target` | `"unknown target"` |
-| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or the USB console"` |
+| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or over USB"` |
 | Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
 | A capture or upload is running | `"busy: a capture or upload is running"` |
 | Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
@@ -3425,7 +3425,7 @@ All errors follow the format:
 | `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console of firmware before 3.9.0) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
 | `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, LAN or USB network `ota_begin`) in a safe mode that turned the iCE40/PSRAM off |
 | `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
-| `"cloud_ca: change it from the cloud or the USB console"`, `"cloud_proxy: ..."`, `"sig_policy: ..."`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
+| `"cloud_ca: change it from the cloud or over USB"`, `"cloud_proxy: ..."`, `"sig_policy: change it from the cloud or the USB console"`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
 | `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
 
 Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
@@ -3548,8 +3548,8 @@ Setting or clearing either reconnects the cloud. Reading is T0; setting and clea
 
 **Never from the external LAN.** Installing or clearing the CA and setting or clearing the proxy are
 refused on an Ethernet or Wi-Fi TCP connection whatever the LAN policy (even `open`), with
-`cloud_ca: change it from the cloud or the USB console` or
-`cloud_proxy: change it from the cloud or the USB console`. Reading both (`{"cmd":"cloud_ca"}`,
+`cloud_ca: change it from the cloud or over USB` or
+`cloud_proxy: change it from the cloud or over USB`. Reading both (`{"cmd":"cloud_ca"}`,
 `{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
 own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
 real server name and relay the host-bound (v2) login, which defeats it.
