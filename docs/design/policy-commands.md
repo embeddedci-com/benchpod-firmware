@@ -36,7 +36,7 @@ Who may set it:
 |---|---|
 | USB console | anything (the way back) |
 | Cloud (command channel or tunnel) | only a stricter value than the current one ("ratchet") |
-| LAN TCP | nothing: `sig_policy: change it from the cloud or the USB console` |
+| LAN TCP (Ethernet, Wi-Fi and, from 3.9.0, the USB network adapter) | nothing: `sig_policy: change it from the cloud or the USB console` |
 
 Loosening from the cloud: `sig_policy: only the USB console can loosen the policy (now required)`.
 
@@ -51,8 +51,9 @@ Firmware that has this command sets `FW_INFO_FLAG_ENFORCES_SIG` in its fw_info b
 
 ## 2. LAN policy
 
-Values: `open` (today), `locked` (LAN TCP gets T0 and T1 only), `off` (no LAN TCP listener and no
-mDNS advertisement). Persisted in config flash. Missing record = `open`.
+Values: `open` (the default), `locked` (LAN TCP gets T0 and T1 only), `off` (Ethernet and Wi-Fi
+connections to 8080 are refused and mDNS stops there). From firmware 3.9.0 the policy covers the
+external LAN only: connections over the USB network adapter are never locked or refused. Persisted in config flash. Missing record = `open`.
 
 JSON:
 
@@ -60,15 +61,18 @@ JSON:
     {"cmd":"lan_policy","set":"locked"}     -> same reply with the new policy
 
 Who may set it: the USB console and the cloud (command channel or tunnel), both directions. LAN TCP
-never: `lan_policy: change it from the cloud or the USB console`.
+never, the USB network adapter included: `lan_policy: change it from the cloud or the USB console`.
 
 Effect, immediately:
 
-- `locked`: a T2 or T3 command on a LAN TCP connection gets
-  `locked: <verb> needs the cloud or the USB console`. SCPI is T0/T1 only and keeps working.
-- `off`: the TCP 8080 listener stops, open LAN connections close, mDNS stops advertising
-  `_benchpod._tcp`. The cloud link and USB are unaffected. Setting `open` or `locked` again starts the
-  listener and mDNS again. The reply to `set:"off"` goes out before the listener stops.
+- `locked`: a T2 or T3 command on an Ethernet or Wi-Fi connection gets
+  `locked: <verb> needs the cloud or USB` (firmware before 3.9.0: `... the cloud or the USB console`).
+  SCPI is T0/T1 only and keeps working.
+- `off`: new Ethernet and Wi-Fi connections to 8080 are accepted and reset at once, open ones close,
+  and mDNS (`_benchpod._tcp`, `_scpi-raw._tcp`) leaves the Ethernet and Wi-Fi interfaces. The
+  listener itself stays up for the USB network adapter (firmware before 3.9.0 stopped it). The cloud
+  link, ping, DHCP and USB (console and network adapter) are unaffected. Setting `open` or `locked`
+  again brings mDNS back. The reply to `set:"off"` goes out before the connections close.
 
 Console: `lan-policy` prints `lan-policy <policy>`; `lan-policy <open|locked|off>` sets it.
 
@@ -110,3 +114,25 @@ server sends `{"cmd":"sig_policy","set":"required"}` to a pod of that org when a
 - the latest published firmware release is fully signed.
 
 Turning the setting off cannot loosen pods (ratchet); the UI says so and points to the USB console.
+
+## 4. USB network setting (firmware 3.9.0)
+
+Values: `on` (default) and `off`. Persisted in the policy record. `off` turns the pod's USB device
+into a console-only device: no network adapter, so no API and no cloud over USB.
+
+JSON:
+
+    {"cmd":"usb_network"}                 -> {"status":"ok","data":{"setting":"on"}}
+    {"cmd":"usb_network","set":"off"}     -> same reply with the new setting
+
+JSON `status` reports the effective state under `usb` (`net`, `setting`, and `off_reason`
+`setting` or `wifi` when the adapter is off).
+
+Who may set it: the USB console (`usb-network on|off`) and a JSON connection over the USB link.
+Never the cloud or Ethernet or Wi-Fi: `usb_network: change it on the device (the USB console, or
+over the USB link)`. Over the USB link it can be turned off but not back on (the link is gone).
+
+Effect: about 0.4 s after the change the pod drops off USB for 0.5 s and enumerates again with the
+new descriptor. While Wi-Fi is configured the adapter stays enumerated with its link down,
+whatever this setting says (`off_reason: wifi`).
+

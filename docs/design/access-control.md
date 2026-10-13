@@ -11,6 +11,10 @@ builds refuse `tls=false` in `cloud_set`. Not built: `lan_iface=eth`, option B a
 policy, retiring the v1 login (the server still accepts it), the rollback floor, B2, E and
 secure boot.
 
+Firmware 3.9.0 (2026-10-13) added the USB network adapter (CDC-NCM next to the console) and the
+`usb_network` setting. The LAN policy now covers the external LAN only (Ethernet and Wi-Fi); the
+USB link counts as physical presence. Section 8 describes the transports as they are now.
+
 The rest is the original proposal, written against firmware `main` at 054ca7c and
 embeddedci-server `main` before any of this. Line numbers are from those trees.
 
@@ -102,7 +106,8 @@ code or gateware). Every verb in `dispatch_line` (`command_handler.c:3766-3843`)
 
 SCPI (`scpi_server.c:744-816`) has only T0 queries and T1 setters (`SOURce`, `OUTPut`,
 `DIGital`, `OUTPut:POWer`), so it needs the T1 gate only. The USB console is physical access
-and is treated as T3-capable.
+and is treated as T3-capable. Since 3.9.0 a connection over the USB network adapter is physical
+access too: `locked` does not apply to it (section 8).
 
 Implementation note: the tier is a function of `(cmd, buf)`, not of `cmd` alone, because
 `eth`, `dac_limits` and `calibrate` mix reads and writes. One table plus three sub-verb checks
@@ -114,7 +119,8 @@ added to `dispatch_line` without a tier.
 ### A. Admin lock (persisted policy flag)
 
 A persisted `lan_policy` in the config sector: `open` (today), `locked` (LAN gets T0 + T1;
-T2/T3 return `"locked: <verb> needs the cloud or the USB console"`), and `off` (see C). The
+T2/T3 return `"locked: <verb> needs the cloud or the USB console"`; firmware 3.9.0 says
+`"locked: <verb> needs the cloud or USB"`), and `off` (see C). The
 check sits in `dispatch_line` next to the DAC limits check, keyed on the transport of
 `conn_id` (TCP 0..4, console 5, cloud 6, tunnels 7..9, `command_handler.h:15-34`).
 
@@ -165,7 +171,9 @@ on the pod). Better audit and per-user revocation, about twice the work. Worth i
 ### C. LAN API off, cloud-only, or bound to one interface
 
 - `lan_policy=off`: do not call `server_start` (`net_server.c:432`) and drop the mDNS service.
-  The pod stays fully usable through the cloud tunnels.
+  The pod stays fully usable through the cloud tunnels. (Built differently in 3.9.0: the listener
+  stays up for the USB network adapter, and connections arriving over Ethernet or Wi-Fi are reset
+  at accept. See section 8.)
 - Bind to an interface: `tcp_bind_netif` (lwIP 2.1) on the eth netif only, so a Wi-Fi uplink
   (often a corporate WLAN) never exposes 8080. Useful as `lan_iface=eth|wifi|both`.
 - Pros: trivial (1 to 2 days), and the strongest LAN posture.
@@ -259,7 +267,7 @@ held (F3).
 |---|---|---|
 | Python SDK, MCP, Go CLI (T0/T1) | none | Map the new `locked:` error to a typed exception with the fix in the message |
 | CLI `cloud register` | needs `cloud_set` on LAN | allowed while unclaimed; afterwards via cloud |
-| CLI `install-blobs`, `flash-self` | USB console and DFU: unaffected by A | send `.sig` once D lands (old firmware ignores the extra field) |
+| CLI `install-blobs`, `flash-self` | USB console and DFU: unaffected by A (3.9.0: uploads go over the USB network adapter, also unaffected) | send `.sig` once D lands (old firmware ignores the extra field) |
 | MCP `calibrate` (run) over LAN | T2, refused when locked | works over `embeddedci:<name>` for admins |
 | hwe2e LAN suite | uses `ota_*`, `dac_limits`, `calibrate` | bench pods stay `open` (dev builds default to `open`) |
 | Older firmware | no `lan_policy` capability | server hides the toggle when the capability flag is absent and shows "update firmware to lock LAN access" |
@@ -289,3 +297,41 @@ rollback floor.
 **Later:** B2 per-user client keys, optional TLS LAN mode (E) on a pod with spare heap, H5 secure
 boot and product state for physical-attack resistance, and customer-owned signing keys if the
 customer asks to sign its own builds.
+
+## 8. Firmware 3.9.0: transports with the USB network adapter
+
+From 3.9.0 the pod's USB device is a network adapter (CDC-NCM, a /30 link on 10.237.x.y) as well as
+the console (CDC-ACM). The table is the state of firmware `main`; file references are
+`stm32h563/src/`.
+
+| Transport | What it reaches | Under `lan_policy` | Treated as |
+|---|---|---|---|
+| Ethernet and Wi-Fi, TCP 8080 | JSON, SCPI and CMSIS-DAP on one listener (`net_server.c`, bound to any address) | `locked`: T2/T3 refused (`cmd_gate.c`). `off`: the connection is accepted and reset at once (`srv_accept`, keyed on the pod's local address), open connections close, mDNS leaves eth and Wi-Fi | LAN |
+| USB network adapter, TCP 8080 | The same listener, reached on the pod's USB address | Never applies | LAN, with the physical-presence exceptions below |
+| USB console (CDC-ACM) | Text commands that stay on the console (`status`, `dfu`, `identity`, `lan-policy`, `sig-policy`, `usb-network`, `set-wifi`, recovery tools). Uploads and instrument commands moved to the JSON API in 3.9.0 (`console_moved.c`) | Never applies | Physical presence |
+| Cloud WSS | Outbound from the pod over Ethernet, Wi-Fi or USB (through `benchpod usb-bridge`, a CONNECT proxy on the computer) | Never applies: the pod dials out | Cloud |
+
+What `lan_policy` does not touch: the outbound cloud link, ping, the Ethernet DHCP client and Wi-Fi.
+Under `off` the pod is still on the network and online in the cloud; only inbound connections to
+8080 over Ethernet and Wi-Fi are refused.
+
+A connection over the USB network adapter is a LAN connection (`POLICY_SRC_LAN`) with these
+exceptions (`usb_link`):
+
+- `locked` and `off` do not apply to it.
+- It may change the company CA and the proxy (`cloud_ca`, `cloud_proxy`, `ota_begin` target `ca`)
+  and the `usb_network` setting, like the console and the cloud.
+
+It stays LAN for the rest: the cloud-job lease gate applies, and it cannot change `sig_policy` or
+`lan_policy` (those need the USB console or the cloud).
+
+**The `usb_network` setting** (`on` by default, persisted in the policy record): `off` makes the
+USB descriptor console-only (CDC-ACM, bcdUSB 0x0200, no BOS), so the computer sees no network
+adapter at all and cloud over USB stops too. It applies at a re-enumeration about 0.4 s after the
+change. Only the console (`usb-network on|off`) and a connection over the USB link may change it;
+the cloud and Ethernet or Wi-Fi get `usb_network: change it on the device (the USB console, or over
+the USB link)` (`pod_policy.c`). The reason: it decides whether the cable is a network path, which
+is a physical-presence decision. The web app therefore shows it read-only.
+
+Wi-Fi is a separate switch: while Wi-Fi is configured the adapter stays enumerated but reports its
+link down, and status says `off_reason: wifi`.

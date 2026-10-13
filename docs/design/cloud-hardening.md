@@ -59,7 +59,8 @@ Sent on acquire, on every renew, on release, and right after a pod (re)connects 
   `ota_status`, ...). Captures (they own the PSRAM bus), T1, T2 and T3 get
   `busy: a cloud job holds this pod (<holder>, <N> s left)`.
 - SCPI on the LAN: queries pass, setters get the same busy error.
-- The cloud's own connections and the USB console are unaffected.
+- The cloud's own connections and the USB console are unaffected. Connections over the USB network
+  adapter (firmware 3.9.0) are LAN connections here and are gated like the LAN.
 - Capabilities and status: `"lease_state":true`; status also shows `"lease":{"held":..,"holder":..,"left_s":..}`.
 
 ## 3. Company CA certificate and HTTP proxy
@@ -71,7 +72,8 @@ embedded ISRG roots, so the cloud link fails there.
 
 - Stored in a new W25Q slot `ca` at 0x180000 (64 KB slot, PEM up to 16 KB), outside the release
   blob list (like the `fw` copy slot). Written with the existing upload path: OTA target `ca`
-  (`ota_begin` `"target":"ca"`, console `upload-begin ca <size> <sha256>`, WS `ota.begin`). No
+  (`ota_begin` `"target":"ca"`, WS `ota.begin`; the console's `upload-begin ca <size> <sha256>` until
+  firmware 3.9.0, which moved uploads to the JSON API over the USB network adapter). No
   signature needed (it is configuration, not code); T2. Never from the LAN (see "Who may change
   the CA and proxy" below).
 - Accepted only if it parses as one or more X.509 CA certificates; refused otherwise.
@@ -96,11 +98,12 @@ embedded ISRG roots, so the cloud link fails there.
 ### Who may change the CA and proxy
 
 Like `sig_policy`, only the USB console and the cloud (WS `ota.begin` target `ca`, the cloud
-command channel and cloud tunnels) may install or clear the CA or set or clear the proxy. A LAN TCP
-connection is refused whatever the LAN policy (`open` included), before anything changes:
-`cloud_ca: change it from the cloud or the USB console` (for `ota_begin` target `ca` and
-`cloud_ca` `clear`) and `cloud_proxy: change it from the cloud or the USB console` (`set`,
-`clear`). Reads (`cloud_ca`, `cloud_proxy` without `set`/`clear`) stay allowed on the LAN.
+command channel and cloud tunnels) may install or clear the CA or set or clear the proxy, and from
+firmware 3.9.0 also a connection over the USB network adapter (physical presence). An Ethernet or
+Wi-Fi connection is refused whatever the LAN policy (`open` included), before anything changes:
+`cloud_ca: change it from the cloud or over USB` (for `ota_begin` target `ca` and `cloud_ca`
+`clear`) and `cloud_proxy: change it from the cloud or over USB` (`set`, `clear`). Firmware before
+3.9.0 says `... or the USB console`. Reads (`cloud_ca`, `cloud_proxy` without `set`/`clear`) stay allowed on the LAN.
 
 Why: with both, a LAN attacker can point the pod at their own proxy and present a certificate for
 the real server name signed by their own CA. The pod then does a v2 login over the attacker's TLS,
@@ -110,5 +113,7 @@ section 1 no longer helps, even with signatures `required`.
 ### CLI
 
 `benchpod cloud ca show|set <file.pem>|clear` and `benchpod cloud proxy show|set <host:port>
-[--user U --password P]|clear`, over USB (console commands above) or the cloud. Over the LAN (JSON)
-only `show` works; the pod refuses `set` and `clear` there.
+[--user U --password P]|clear`, over USB (the console, or the USB network adapter on firmware
+3.9.0 and later) or the cloud. Over Ethernet or Wi-Fi only `show` works; the pod refuses `set` and
+`clear` there. `benchpod usb-bridge` uses this: it sets the pod's proxy to the computer's end of
+the USB link, so the pod's cloud connection rides the USB cable.
