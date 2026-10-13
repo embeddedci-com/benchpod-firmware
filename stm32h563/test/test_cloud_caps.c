@@ -147,7 +147,7 @@ static void test_worst_case_fits(void) {
 
     /* Both texts made of characters that escape to two bytes ('"', '\\'): the cut keeps them
        at one byte each, or this frame overflowed (it did once the uplink field was added). */
-    char lc[160];
+    char lc[640];   /* escaped (2 B each) it is more than the frame holds */
     memset(lc, '\\', sizeof(lc) - 1);
     lc[sizeof(lc) - 1] = '\0';
     c.last_crash = lc;

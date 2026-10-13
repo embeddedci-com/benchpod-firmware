@@ -56,7 +56,10 @@ static void test_too_large(void) {
     size_t n = cloud_reply_cap_end(out, sizeof(out));
     CHECK(n > 0);
     CHECK(strstr(out, "\"status\":\"error\"") != NULL);
-    CHECK(strstr(out, "reply too large for the cloud channel (1736 bytes, limit 1535)") != NULL);
+    char want[96];
+    snprintf(want, sizeof(want), "reply too large for the cloud channel (%u bytes, limit %u)",
+             (unsigned)(CLOUD_REPLY_CAP_MAX + 200), (unsigned)(CLOUD_REPLY_CAP_MAX - 1));
+    CHECK(strstr(out, want) != NULL);
     CHECK(out[n - 1] == '}');
 }
 
