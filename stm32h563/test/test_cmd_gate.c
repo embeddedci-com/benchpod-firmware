@@ -62,7 +62,7 @@ static void test_locked_lan(void) {
     CHECK(gate("{\"cmd\":\"ping\"}", &c) == NULL, "T0 refused");
     CHECK(gate("{\"cmd\":\"generate\"}", &c) == NULL, "T1 refused");
     const char *r = gate("{\"cmd\":\"cloud_set\",\"host\":\"x\"}", &c);
-    CHECK(r && strcmp(r, "locked: cloud_set needs the cloud or the USB console") == 0, "T2: %s", r);
+    CHECK(r && strcmp(r, "locked: cloud_set needs the cloud or USB") == 0, "T2: %s", r);
     CHECK(starts(gate("{\"cmd\":\"ota_begin\"}", &c), "locked: ota_begin"), "T3: %s", s_why);
     /* an unknown verb is T3, so it is locked too (not "unknown cmd" first) */
     CHECK(starts(gate("{\"cmd\":\"no_such_verb\"}", &c), "locked:"), "unknown verb: %s", s_why);

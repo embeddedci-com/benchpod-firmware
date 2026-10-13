@@ -257,7 +257,7 @@ that applies answers with its message and the command does not run.
 
 | Gate | Applies to | Message |
 |---|---|---|
-| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or the USB console` |
+| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
 | A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
@@ -3387,7 +3387,7 @@ All errors follow the format:
 | `"command too long"` | A JSON line longer than 1279 bytes |
 | `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
-| `"locked: <cmd> needs the cloud or the USB console"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
+| `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
 | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
@@ -3475,7 +3475,7 @@ $ nc 192.168.1.220 8080
 {"status":"ok","data":{"public":"ue5UfSsOAhQYZ332ELokjOI8-uyjcbrd1ic3Nmypvzk"}}
 
 {"cmd":"cloud_set","host":"www.embeddedci.com","device_id":"<uuid>","tls":true}
-{"status":"error","message":"locked: cloud_set needs the cloud or the USB console"}
+{"status":"error","message":"locked: cloud_set needs the cloud or USB"}
 ```
 
 The last reply is what a pod with the LAN policy `locked` answers; on an `open` LAN it stores the
@@ -3516,7 +3516,7 @@ value.
 ```
 
 The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
-command there gets `locked: <verb> needs the cloud or the USB console`) or `off` (connections to
+command there gets `locked: <verb> needs the cloud or USB`) or `off` (connections to
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
 means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
