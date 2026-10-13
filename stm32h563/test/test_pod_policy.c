@@ -110,13 +110,16 @@ static void test_power_cut(void) {
 static void test_cloud_link_gate(void) {
     boot_blank();
     CHECK(pod_policy_lan() == POD_LAN_OPEN, "precondition: LAN open");
-    const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN);
+    const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN, false);
     CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or the USB console"),
           "LAN gate: %s", why ? why : "(null)");
-    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB) == NULL, "USB refused");
-    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD) == NULL, "cloud refused");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB, false) == NULL, "USB refused");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
+    /* the USB network adapter is physical presence for these two settings, under every LAN policy */
+    CHECK(pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN, true) == NULL, "USB network refused");
     pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB);
-    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_LAN) != NULL, "locked LAN allowed");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_LAN, false) != NULL, "locked LAN allowed");
+    CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_LAN, true) == NULL, "USB network refused under a locked LAN");
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
 }
 

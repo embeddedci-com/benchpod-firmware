@@ -7,6 +7,7 @@
  * image chunks normally arrive as WS ota.* frames, with base64 ota_data commands
  * for LAN testing.
  */
+#include "net_server.h"   /* net_conn_on_usb: the USB link may set the CA and proxy */
 #include "command_handler.h"
 #include "command_handler_internal.h"
 #include "at_driver.h"
@@ -90,7 +91,8 @@ void handle_ota_begin(int conn_id, const char *json) {
     if (target < 0) { send_error(conn_id, "unknown target"); return; }
     /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
     if (target == OTA_TARGET_CA) {
-        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
+        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id),
+                                                     net_conn_on_usb(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
     /* Refuse if another transport's update or a capture/measure/LA is in flight. */

@@ -3210,7 +3210,7 @@ Refusals:
 |---|---|
 | `size` or `sha256` missing | `"missing size/sha256"` |
 | Unknown `target` | `"unknown target"` |
-| `ca` from the LAN | `"cloud_ca: change it from the cloud or the USB console"` |
+| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or the USB console"` |
 | Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
 | A capture or upload is running | `"busy: a capture or upload is running"` |
 | Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
@@ -3520,7 +3520,8 @@ command there gets `locked: <verb> needs the cloud or the USB console`) or `off`
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
 means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
-loosening `sig_policy`, changing `lan_policy`, the company CA and proxy) stays off it too. The wire
+loosening `sig_policy`, changing `lan_policy`) stays off it too; the one exception is the company CA
+and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
 values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
 <value>`), never from the LAN or the USB network.
 
@@ -3544,13 +3545,19 @@ must parse as X.509 and is trusted in addition to the built-in roots.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
 Setting or clearing either reconnects the cloud. Reading is T0; setting and clearing are T2.
 
-**Never from the LAN.** Installing or clearing the CA and setting or clearing the proxy are refused
-on a LAN TCP connection whatever the LAN policy (even `open`), with
+**Never from the external LAN.** Installing or clearing the CA and setting or clearing the proxy are
+refused on an Ethernet or Wi-Fi TCP connection whatever the LAN policy (even `open`), with
 `cloud_ca: change it from the cloud or the USB console` or
 `cloud_proxy: change it from the cloud or the USB console`. Reading both (`{"cmd":"cloud_ca"}`,
 `{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
 own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
 real server name and relay the host-bound (v2) login, which defeats it.
+
+**Allowed over the USB network adapter** (firmware 3.9.0+). A connection on the USB link is
+physical presence, like the USB console (anything on that computer can open the console anyway),
+so it may install or clear the CA and set or clear the proxy. This is how `benchpod cloud ca` and
+`cloud proxy` (and `usb-bridge`) change them over USB. Everything else on the USB link stays LAN
+tier.
 
 ### While a cloud job holds the pod
 
