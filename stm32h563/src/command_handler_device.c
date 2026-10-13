@@ -206,8 +206,8 @@ void handle_status(int conn_id, const char *json) {
        1344: safe_mode + safe_reason (up to ~130 B). */
     /* 1408: gateware + gateware_embedded.
        1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since.
-       1664: usb{} (~110 B). */
-    char resp[1664];
+       1792: usb{} (~150 B; a v3 status measured 1535 B with it). */
+    char resp[1792];
     cloud_caps_t caps;
     cloud_caps_collect(&caps);
     bp_emit_t e;
@@ -219,9 +219,16 @@ void handle_status(int conn_id, const char *json) {
             esp_wifi_ctrl_state_str(), cloud_client_state_str());
     /* USB network adapter (CDC-NCM): on unless Wi-Fi is configured; ip is the pod's end of
        the /30, host_ip the address its DHCP server hands the computer. */
-    bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\"},",
-            usb_net_enabled() ? "on" : "off", usb_net_link_up() ? "true" : "false",
-            usb_netif_pod_ip(), usb_netif_host_ip());
+    /* source: what the USB-C port powering the pod advertises (usb_cc.h, v3; null on v2). */
+    {
+        usb_cc_t cc;
+        bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
+        bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
+                usb_net_enabled() ? "on" : "off", usb_net_link_up() ? "true" : "false",
+                usb_netif_pod_ip(), usb_netif_host_ip());
+        if (have_cc) bp_emit(&e, "\"source\":\"%s\",\"source_ma\":%d},", cc.advertised, cc.advertised_ma);
+        else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
+    }
     bp_emit(&e, "\"rx_dropped\":%lu,\"tx_dropped\":%lu,"
                 "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped(),

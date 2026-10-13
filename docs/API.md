@@ -1324,7 +1324,7 @@ counters and the capability list. No parameters.
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
- "usb":{"net":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86"},
+ "usb":{"net":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
@@ -1345,7 +1345,7 @@ counters and the capability list. No parameters.
 | `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
-| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` while Wi-Fi credentials are stored; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` while Wi-Fi credentials are stored; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
