@@ -27,15 +27,21 @@ static int lan_changes;
 static pod_lan_policy_t last_lan;
 void pod_policy_on_lan_change(pod_lan_policy_t now) { lan_changes++; last_lan = now; }
 
+static int usb_net_changes;
+static bool last_usb_net = true;
+void pod_policy_on_usb_net_change(bool on) { usb_net_changes++; last_usb_net = on; }
+
 /* A fresh boot: reset what the module holds by loading over an erased store. */
 static void boot_blank(void) {
     mock_flash_reset();
     /* force the in-RAM copy back to defaults through the USB path, then wipe the flash again */
     pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_USB);
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
+    pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
+    usb_net_changes = 0;
 }
 
 static void test_defaults(void) {
@@ -130,6 +136,28 @@ static void test_names(void) {
     CHECK(!strcmp(pod_policy_lan_name(POD_LAN_LOCKED), "locked"), "lan name");
 }
 
+/* The USB network setting: on by default; only the device changes it (the console, or the USB
+   link itself), never the cloud or Ethernet/Wi-Fi; it survives a reboot and is separate from
+   the LAN policy. */
+static void test_usb_net(void) {
+    boot_blank();
+    CHECK(pod_policy_usb_net(), "default must be on");
+    const char *why = pod_policy_set_usb_net(false, POLICY_SRC_CLOUD, false);
+    CHECK(why && strstr(why, "on the device"), "cloud allowed: %s", why ? why : "(null)");
+    why = pod_policy_set_usb_net(false, POLICY_SRC_LAN, false);
+    CHECK(why != NULL, "Ethernet/Wi-Fi allowed");
+    CHECK(pod_policy_usb_net() && usb_net_changes == 0, "a refused change changed it");
+    CHECK(pod_policy_set_usb_net(false, POLICY_SRC_LAN, true) == NULL, "the USB link refused");
+    CHECK(!pod_policy_usb_net() && usb_net_changes == 1 && !last_usb_net, "off not applied");
+    CHECK(pod_policy_lan() == POD_LAN_OPEN && lan_changes == 0, "the LAN policy moved");
+    CHECK(pod_policy_set_usb_net(false, POLICY_SRC_USB, false) == NULL && usb_net_changes == 1,
+          "same value must not re-enumerate");
+    pod_policy_load();   /* reboot */
+    CHECK(!pod_policy_usb_net(), "off lost on reboot");
+    CHECK(pod_policy_set_usb_net(true, POLICY_SRC_USB, false) == NULL && pod_policy_usb_net() &&
+          last_usb_net, "the console could not turn it back on");
+}
+
 int main(void) {
     test_defaults();
     test_sig_ratchet();
@@ -137,6 +165,7 @@ int main(void) {
     test_persists();
     test_power_cut();
     test_cloud_link_gate();
+    test_usb_net();
     test_names();
     if (failures) { printf("test_pod_policy: %d FAILED\n", failures); return 1; }
     printf("test_pod_policy: all passed\n");

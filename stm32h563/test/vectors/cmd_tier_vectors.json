@@ -36,6 +36,7 @@
     "eth": "T0",
     "sig_policy": "T0",
     "lan_policy": "T0",
+    "usb_network": "T0",
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
     "generate": "T1",
@@ -227,6 +228,10 @@
     },
     {
       "line": "{\"cmd\":\"lan_policy\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"usb_network\"}",
       "tier": "T0"
     },
     {
@@ -500,6 +505,10 @@
     },
     {
       "line": "{\"cmd\":\"lan_policy\",\"set\":\"off\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"usb_network\",\"set\":\"off\"}",
       "tier": "T2"
     },
     {

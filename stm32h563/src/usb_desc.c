@@ -52,7 +52,17 @@ static const tusb_desc_device_t s_device = {
     .bNumConfigurations = 1,
 };
 
-uint8_t const *tud_descriptor_device_cb(void) { return (uint8_t const *)&s_device; }
+/* With the USB network setting off the pod is its console only: USB 2.0 and no BOS, so Windows
+   does not look for the NCM function the Microsoft OS 2.0 set names. */
+static tusb_desc_device_t s_device_console;
+
+uint8_t const *tud_descriptor_device_cb(void)
+{
+    if (usb_net_setting_on()) return (uint8_t const *)&s_device;
+    s_device_console = s_device;
+    s_device_console.bcdUSB = 0x0200;
+    return (uint8_t const *)&s_device_console;
+}
 
 /* ---- configuration --------------------------------------------------------------------- */
 #define CONFIG_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_CDC_NCM_DESC_LEN)
@@ -65,10 +75,18 @@ static const uint8_t s_config[] = {
                            (uint8_t)(NCM_NETWORK_CAPS_ETH_FILTER | NCM_NETWORK_CAPS_NTB_INPUT_SIZE)),
 };
 
+/* The console only (USB network setting off): the same CDC interface numbers and endpoints. */
+#define CONFIG_CONSOLE_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN)
+
+static const uint8_t s_config_console[] = {
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NCM, 0, CONFIG_CONSOLE_LEN, 0, 500),
+    TUD_CDC_DESCRIPTOR(ITF_CDC, STR_CDC, EP_CDC_NOTIF, 8, EP_CDC_OUT, EP_CDC_IN, 64),
+};
+
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
 {
     (void)index;
-    return s_config;
+    return usb_net_setting_on() ? s_config : s_config_console;
 }
 
 /* ---- BOS + Microsoft OS 2.0 (Windows binds UsbNcm.sys to the NCM function) ------------- */
@@ -80,7 +98,7 @@ static const uint8_t s_bos[] = {
     TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT),
 };
 
-uint8_t const *tud_descriptor_bos_cb(void) { return s_bos; }
+uint8_t const *tud_descriptor_bos_cb(void) { return usb_net_setting_on() ? s_bos : NULL; }
 
 static const uint8_t s_ms_os_20[MS_OS_20_DESC_LEN] = {
     /* set header: length, type, Windows 8.1+, total length */

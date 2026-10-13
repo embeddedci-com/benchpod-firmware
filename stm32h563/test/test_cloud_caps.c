@@ -190,7 +190,7 @@ static void test_status_list(void) {
     CHECK(bp_emit_ok(&e));
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"dac_loop_sources\",\"dac_loop_input_map\","
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
@@ -205,7 +205,7 @@ static void test_status_list(void) {
     cloud_caps_emit_list(&e, &d);
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"gpio_read\",\"capture_trigger\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"gpio_read\",\"capture_trigger\","
                       "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog")) printf("  %s\n", buf);
 

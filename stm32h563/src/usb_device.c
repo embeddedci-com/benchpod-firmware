@@ -15,6 +15,7 @@
  *
  * NOTE: ICACHE stays DISABLED (we never enable it); see the UID read note in board_uid.h.
  */
+#include "pod_policy.h"
 #include "usb_device.h"
 #include "console_io.h"
 #include "board_uid.h"
@@ -167,6 +168,7 @@ static volatile uint8_t  s_tx_head, s_tx_tail;   /* net task fills head, usb tas
 static bool              s_rx_renew;             /* usb task: ask the driver for the next frame */
 static bool              s_rx_stalled;           /* usb task: a frame waits for a free slot */
 static volatile bool     s_net_enabled = true;   /* off while Wi-Fi is provisioned (usb_net_set_enabled) */
+static volatile bool     s_net_setting = true;   /* the stored USB network setting (pod_policy) */
 static usb_net_stats_t   s_stats;
 static TaskHandle_t      s_usb_task;
 static volatile bool     s_kick;                 /* a wake-up is queued for the usb task */
@@ -174,9 +176,13 @@ static TaskHandle_t volatile s_tx_waiter;        /* the net task waits for a fre
 
 #define NEXT(i, n) ((uint8_t)(((i) + 1) % (n)))
 
-bool usb_net_link_up(void) { return s_net_enabled && s_mounted && !tud_suspended(); }
+bool usb_net_link_up(void) { return s_net_enabled && s_net_setting && s_mounted && !tud_suspended(); }
 
 bool usb_net_enabled(void) { return s_net_enabled; }
+
+bool usb_net_setting_on(void) { return s_net_setting; }
+
+bool usb_net_on(void) { return s_net_enabled && s_net_setting; }
 
 /* The NCM function stays enumerated either way (the console shares the device); off
    tells the host the cable is out, so it drops the address and its route. */
@@ -184,7 +190,8 @@ void usb_net_set_enabled(bool on)
 {
     if (s_net_enabled == on) return;
     s_net_enabled = on;
-    tud_network_link_state(BOARD_TUD_RHPORT, on);   /* deferred onto the usb task */
+    if (s_net_setting)                              /* else there is no NCM function */
+        tud_network_link_state(BOARD_TUD_RHPORT, on);   /* deferred onto the usb task */
 }
 
 /* The NCM driver's link state at (re)enumeration. */
@@ -329,9 +336,20 @@ void usb_net_host_mac(uint8_t mac[6]) { uid_mac(0x06, mac); }
 void tud_mount_cb(void)   { s_mounted = true; }
 void tud_umount_cb(void)  { s_mounted = false; }
 
-static volatile bool s_reattach;
+static volatile bool     s_reattach;
+static volatile uint32_t s_reattach_at;   /* HAL tick when a delayed reattach is due, 0: none */
 
 void usb_reattach_request(void) { s_reattach = true; }
+
+/* The USB network setting changed (pod_policy): enumerate again with or without the NCM
+   function. Delayed, so the reply that confirmed it (on the console or over the USB link
+   itself) reaches the computer first. */
+void pod_policy_on_usb_net_change(bool on)
+{
+    s_net_setting = on;
+    uint32_t at = HAL_GetTick() + 400u;
+    s_reattach_at = at ? at : 1u;
+}
 
 /* Drop off the bus and come back: the host enumerates the device again, as after
    unplugging the cable. */
@@ -352,6 +370,10 @@ static void usb_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (s_reattach_at && (int32_t)(HAL_GetTick() - s_reattach_at) >= 0) {
+            s_reattach_at = 0;
+            s_reattach = true;
+        }
         if (s_reattach) usb_reattach();
         /* Waits up to 1 ms for a USB event, so the console ring and the transmit slots,
            which other tasks fill without waking us, are drained at least every tick. */
@@ -364,6 +386,7 @@ static void usb_task(void *arg)
 void MX_USB_DEVICE_Init(void)
 {
     usb_hw_init();
+    s_net_setting = pod_policy_usb_net();   /* loaded before USB (main.c): off never shows NCM */
 
     tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
     if (!tusb_init(BOARD_TUD_RHPORT, &dev_init)) return;

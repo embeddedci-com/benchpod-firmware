@@ -58,7 +58,8 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
                    ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
                    ",\"sensor_types\""     /* sensor_types lists the emulated I2C sensors */
-                   ",\"usb_net\"");       /* the pod's API on a USB network adapter (usb_netif.c) */
+                   ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
+                   ",\"usb_net_setting\"");  /* usb_network on/off, device-only (pod_policy.h) */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
     if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
     if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");

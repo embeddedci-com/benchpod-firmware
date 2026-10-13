@@ -17,6 +17,7 @@
  * A refused change returns the reason and changes nothing.
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "fw_sign.h"
 
@@ -54,6 +55,16 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src);
    presence, like the USB console (anything on the computer can open the console anyway), so it
    may change these two settings; it stays LAN tier for everything else. */
 const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool usb_link);
+
+/* The USB network adapter (firmware 3.9.0+), default on. Off, the pod enumerates as its console
+   only: the computer sees no network adapter. Independent of the LAN policy, which covers
+   Ethernet and Wi-Fi. Only the device may change it: the USB console, or a connection on the USB
+   link itself (usb_link), which can turn it off but not back on (the link is gone then); never
+   the cloud or Ethernet/Wi-Fi. */
+bool pod_policy_usb_net(void);
+const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link);
+/* Called after the USB network setting changed (usb_device re-enumerates). Weak no-op. */
+void pod_policy_on_usb_net_change(bool on);
 
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);

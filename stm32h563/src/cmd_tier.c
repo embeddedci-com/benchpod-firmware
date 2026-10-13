@@ -56,6 +56,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_eth) },
     { { "sig_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_sig_policy) },
     { { "lan_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_policy) },
+    { { "usb_network", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_usb_network) },
     { { "cloud_ca", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_ca) },
     { { "cloud_proxy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_proxy) },
     /* T1: instrument control */
@@ -137,7 +138,7 @@ static int mixed_write(const char *cmd, const char *json) {
     if (strcmp(cmd, "calibrate") == 0)
         return bp_json_get(json, "source", v, sizeof(v)) ||
                (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0);
-    if (strcmp(cmd, "sig_policy") == 0 || strcmp(cmd, "lan_policy") == 0)
+    if (strcmp(cmd, "sig_policy") == 0 || strcmp(cmd, "lan_policy") == 0 || strcmp(cmd, "usb_network") == 0)
         return bp_json_get(json, "set", v, sizeof(v));
     if (strcmp(cmd, "cloud_ca") == 0 || strcmp(cmd, "cloud_proxy") == 0)
         return bp_json_get(json, "set", v, sizeof(v)) ||
