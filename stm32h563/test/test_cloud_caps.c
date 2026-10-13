@@ -37,6 +37,7 @@ static cloud_caps_t typical(void) {
         .nrst_pin = true, .pod_current = true,
         .current_out_min_ua = 0, .current_out_max_ua = 24000,
         .board = "stm32h563",
+        .uplink = "eth",
         .safe_mode = false, .safe_reason = "", .reset_cause = "power-on", .last_crash = "none",
         .boot_id = 0x2a, .unclean_resets = 0,
     };
@@ -52,7 +53,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets", "sensor_types", "gps",
+        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -75,6 +76,8 @@ static void test_typical_frame(void) {
     CHECK(strstr(f, "\"last_crash\":\"none\"}") != NULL);
     CHECK(strstr(f, "\"boot_id\":\"0000002a\",\"unclean_resets\":0,") != NULL);
     CHECK(strstr(f, "boot_health_cut") == NULL);
+    char up[16];
+    CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "eth") == 0);
     check_features(f);
     printf("typical capabilities frame: %u bytes (limit %u)\n", (unsigned)n, (unsigned)CLOUD_CAPS_MAX);
 }
@@ -95,6 +98,7 @@ static void test_worst_case_fits(void) {
     c.adc_cal_a_uv = c.adc_cal_b_nv = LONG_MIN;
     c.current_out_min_ua = c.current_out_max_ua = LONG_MIN;
     c.board = "stm32h563-digital-v3r2";
+    c.uplink = "unknown";   /* the longest uplink name */
     c.safe_mode = true;
     c.reset_cause = "independent-watchdog";
     c.boot_id = 0xFFFFFFFFu;
@@ -140,6 +144,32 @@ static void test_worst_case_fits(void) {
     c.safe_reason = lr;
     n = cloud_caps_build(&c, f, sizeof(f));
     CHECK(n > 0 && n <= CLOUD_CAPS_MAX);
+
+    /* Both texts made of characters that escape to two bytes ('"', '\\'): the cut keeps them
+       at one byte each, or this frame overflowed (it did once the uplink field was added). */
+    char lc[160];
+    memset(lc, '\\', sizeof(lc) - 1);
+    lc[sizeof(lc) - 1] = '\0';
+    c.last_crash = lc;
+    c.safe_reason = lr;
+    n = cloud_caps_build(&c, f, sizeof(f));
+    CHECK(n > 0 && n <= CLOUD_CAPS_MAX);
+    CHECK(strstr(f, "\"boot_health_cut\":true") != NULL);
+    check_features(f);
+}
+
+/* "uplink" names the interface under the cloud link; an unset one (a caller that did not fill it)
+   still sends the key, as "unknown", so the server can tell an old firmware (no key) apart. */
+static void test_uplink(void) {
+    static char f[CLOUD_CAPS_MAX + 1];
+    char up[16];
+    cloud_caps_t c = typical();
+    c.uplink = "wifi";
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
+    CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "wifi") == 0);
+    c.uplink = NULL;
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
+    CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "unknown") == 0);
 }
 
 static void test_too_small_buffer(void) {
@@ -185,6 +215,7 @@ static void test_status_list(void) {
 }
 
 int main(void) {
+    test_uplink();
     test_typical_frame();
     test_status_list();
     test_worst_case_fits();
