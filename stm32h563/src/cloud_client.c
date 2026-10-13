@@ -22,6 +22,7 @@
 #include "cloud_caps.h"
 #include "altcp_bp_proxy.h"
 #include "usb_device.h"     /* usb_net_link_up: the cloud over `benchpod usb-bridge` */
+#include "net_server.h"      /* net_uplink_name: eth or Wi-Fi under the link */
 #include "mbedtls/base64.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
 
@@ -712,6 +713,10 @@ static bool cl_send_capabilities(void) {
     cloud_caps_t c;
     cloud_caps_collect(&c);
     c.device_id = s_cfg.device_id;
+    /* The local address of the TCP connection under TLS (and the proxy layer, if any) names the
+       interface this link runs over, eth or Wi-Fi. */
+    const ip_addr_t *local = altcp_get_ip(s_pcb, 1);
+    c.uplink = net_uplink_name(local ? ip4_addr_get_u32(ip_2_ip4(local)) : 0);
     /* cloud_caps_build keeps the frame inside one WS frame (it shortens the free-form boot
        health when it has to), so a long crash line can no longer make the connect fail and
        loop. Static: net-task only. */

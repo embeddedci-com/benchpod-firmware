@@ -552,6 +552,20 @@ static void route_if_fill(net_route_if_t *r, const struct netif *n)
     r->usable = netif_is_up(n) && netif_is_link_up(n) && r->ip != 0;
 }
 
+const char *net_uplink_name(uint32_t local_ip)
+{
+    net_route_if_t ifs[3];
+    route_if_fill(&ifs[0], &s_eth.netif);
+    route_if_fill(&ifs[1], &s_wifi.netif);
+    route_if_fill(&ifs[2], &s_usb_netif);   /* through `benchpod usb-bridge` on the computer */
+    switch (net_route_owner(ifs, 3, local_ip)) {
+    case 0:  return "eth";
+    case 1:  return "wifi";
+    case 2:  return "usb";
+    default: return "unknown";
+    }
+}
+
 struct netif *net_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
 {
     struct netif *order[3] = { &s_eth.netif, &s_wifi.netif, &s_usb_netif };   /* priority */

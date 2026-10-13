@@ -716,6 +716,13 @@ When the pod connects to the cloud it advertises a `capabilities` frame. Alongsi
 | `adc_cal_b_nv` | Affine slope *b* in nanovolts per count. |
 | `adc_cal_unwrap` | `true`: the front end is bipolar, so a 16-bit count `< 32768` is unwrapped (`count += 65536`) before scaling. |
 
+The frame also says which interface carries the cloud link, read from the local address of its
+TCP connection (so it is the interface in use, not only the preferred one):
+
+| Field | Meaning |
+|---|---|
+| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
+
 ---
 
 ### `la_capture` — deep raw logic-analyzer capture
