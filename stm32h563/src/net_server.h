@@ -15,6 +15,8 @@ void        net_init(void);
 void        net_poll(void);
 const char *net_ip_str(void);
 const char *net_mac_str(void);
+/* The :8080 connection conn_id came in on the USB network adapter (not Ethernet or Wi-Fi). */
+bool        net_conn_on_usb(int conn_id);
 /* Wi-Fi STA IPv4 as a string, "(none)" until the Wi-Fi netif has a DHCP lease.
    Unlike wifi_get_ip() (Ethernet-preferred), this is the Wi-Fi interface only —
    used by the `wifi-show` console command. */

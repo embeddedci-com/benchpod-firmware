@@ -189,7 +189,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  upload-begin|-data|-end|-commit|-status|-abort  firmware/blob upload (upload_rx.h)\r\n"
         "  upload-sig <0|1> <b64url half> | upload-sig  signed manifest for the next upload-begin\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
-        "  lan-policy [open|locked|off]               what the LAN API may do\r\n"
+        "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA for the cloud link (upload-begin ca ...)\r\n"
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"

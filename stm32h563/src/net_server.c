@@ -74,6 +74,8 @@ static struct tcp_pcb *conn_pcb[NET_MAX_CONN];
    touch the lwIP pcb, which only the net task may do.  The worker flags them here
    and the net task applies them in net_poll(). */
 static volatile uint8_t s_close_req[NET_MAX_CONN];    /* worker asked to close    */
+static volatile bool    s_conn_usb[NET_MAX_CONN];     /* accepted on the USB network adapter */
+static bool             s_lan_up;                     /* the external LAN may connect (lan_access) */
 static volatile int8_t  s_nodelay_req[NET_MAX_CONN];  /* -1 none, 0/1 desired     */
 
 /* ---- multihoming: one LwIP, two netifs (Ethernet always + Wi-Fi via the
@@ -343,10 +345,16 @@ static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     }
     if (id < 0) { tcp_abort(newpcb); return ERR_ABRT; }   /* too many clients */
 
+    /* The LAN policy is for the external LAN (Ethernet, Wi-Fi). The USB network adapter means
+       physical presence: it stays reachable under "off" too (pod_policy.h). */
+    bool usb = ip4_addr_eq(ip_2_ip4(&newpcb->local_ip), netif_ip4_addr(&s_usb_netif));
+    if (!usb && !s_lan_up) { tcp_abort(newpcb); return ERR_ABRT; }
+
     conn_tx_reset(id);           /* clear any stale bytes from a prior conn on this slot */
     s_close_req[id]   = 0;
     s_nodelay_req[id] = -1;
     conn_pcb[id] = newpcb;
+    s_conn_usb[id] = usb;
     tcp_setprio(newpcb, TCP_PRIO_MIN);
     ip_set_option(newpcb, SOF_KEEPALIVE);   /* a dead idle client frees its slot (~50 s) */
     tcp_arg(newpcb, (void *)(intptr_t)(id + 1));
@@ -433,7 +441,7 @@ static void net_frame_cloud_reply(void)
         cloud_client_send_command_response(req_id, reply, rl);
 }
 
-static struct tcp_pcb *s_listen;   /* the :8080 listener; NULL while the LAN policy is "off" */
+static struct tcp_pcb *s_listen;   /* the :8080 listener (srv_accept applies the LAN policy) */
 
 static void server_start(void)
 {
@@ -444,15 +452,6 @@ static void server_start(void)
     pcb = tcp_listen(pcb);
     tcp_accept(pcb, srv_accept);
     s_listen = pcb;
-}
-
-static void server_stop(void)
-{
-    if (!s_listen) return;
-    tcp_close(s_listen);
-    s_listen = NULL;
-    for (int id = 0; id < NET_MAX_CONN; id++)
-        if (conn_pcb[id]) s_close_req[id] = 1;   /* closed by net_apply_worker_requests */
 }
 
 /* ---- DHCP management (per interface) ----------------------------------- */
@@ -734,31 +733,32 @@ static void mdns_register(struct netif *netif)
                           TCP_SERVER_PORT, mdns_txt, NULL);
 }
 
-/* LAN policy "off" (pod_policy.h): no :8080 listener and no mDNS advertisement; the cloud link
-   and USB are untouched. The worker asks (pod_policy_on_lan_change); the net task applies it,
-   since it owns lwIP. */
+/* LAN policy "off" (pod_policy.h): the external LAN (Ethernet, Wi-Fi) gets no :8080 connections
+   and no mDNS advertisement; the cloud link and USB (console and network adapter) are untouched.
+   The worker asks (pod_policy_on_lan_change); the net task applies it, since it owns lwIP. */
 static volatile int8_t s_lan_req = -1;   /* -1 none, 0 = stop LAN access, 1 = start it */
-static bool            s_lan_up;
 
 static void lan_access(bool up)
 {
     if (up == s_lan_up) return;
     s_lan_up = up;
     if (up) {
-        server_start();
         mdns_register(&s_eth.netif);
         mdns_register(&s_wifi.netif);
-        mdns_register(&s_usb_netif);
         if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
         if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
-        if (netif_is_link_up(&s_usb_netif)) mdns_resp_announce(&s_usb_netif);
     } else {
-        server_stop();
         mdns_resp_remove_netif(&s_eth.netif);
         mdns_resp_remove_netif(&s_wifi.netif);
-        mdns_resp_remove_netif(&s_usb_netif);
+        for (int id = 0; id < NET_MAX_CONN; id++)
+            if (conn_pcb[id] && !s_conn_usb[id]) s_close_req[id] = 1;   /* net_apply_worker_requests */
     }
-    log_printf("[net] LAN access %s\r\n", up ? "on" : "off (policy)");
+    log_printf("[net] external LAN access %s\r\n", up ? "on" : "off (policy; USB stays on)");
+}
+
+bool net_conn_on_usb(int conn_id)
+{
+    return conn_id >= 0 && conn_id < NET_MAX_CONN && conn_pcb[conn_id] && s_conn_usb[conn_id];
 }
 
 void pod_policy_on_lan_change(pod_lan_policy_t now) { s_lan_req = (now == POD_LAN_OFF) ? 0 : 1; }
@@ -821,7 +821,10 @@ void net_init(void)
     netif_set_up(&s_usb_netif);
     log_printf("[net] usb: pod %s, host %s\r\n", usb_netif_pod_ip(), usb_netif_host_ip());
 
-    /* The :8080 listener and mDNS, unless the LAN policy is "off" (pod_policy.h). */
+    /* The :8080 listener and mDNS: always on the USB network adapter, on the external LAN unless
+       the LAN policy is "off" (pod_policy.h). */
+    server_start();
+    mdns_register(&s_usb_netif);
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
     log_printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d\r\n",
@@ -855,7 +858,7 @@ void net_poll(void)
         bool is_up = netif_is_link_up(&s_usb_netif);
         if (was_up != is_up) {
             log_printf("[net] usb link %s\r\n", is_up ? "up" : "down");
-            if (is_up && s_lan_up) mdns_resp_announce(&s_usb_netif);
+            if (is_up) mdns_resp_announce(&s_usb_netif);
         }
     }
     sys_check_timeouts();

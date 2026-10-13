@@ -22,7 +22,7 @@ nc <device-ip> 8080
 
 **Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
 
-The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS unless the [LAN policy](#lan_policy--what-the-lan-api-may-do) is `off`.
+The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS (on Ethernet and Wi-Fi unless the [LAN policy](#lan_policy--what-the-external-lan-may-do) is `off`; on the USB link always).
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
 
@@ -48,14 +48,15 @@ connection to the pod has the full command set, which includes:
 - uploading firmware to the pod itself over OTA.
 
 There is no login, no API key, and no allow-list. The USB network adapter (firmware 3.9.0+)
-is the same tier as the LAN: port `8080` on it is this API, under the same LAN policy. The
+is the same tier as the LAN: port `8080` on it is this API. The LAN policy, though, is for the
+external LAN only: the USB adapter stays on and open under every policy (physical presence). The
 USB-CDC console is a separate, higher channel and assumes physical access.
 
-**The LAN policy limits this.** `lan_policy` (below) is `open` by default, which is everything
-above. `locked` keeps the LAN to reads and instrument control (tiers T0 and T1 of
-`src/cmd_tier.c`): persisted settings (Wi-Fi, cloud, DAC limits, calibration, the policies) and
-firmware updates then need the cloud or the USB console. `off` stops the TCP listener and the
-mDNS advertisement. Only the cloud and the USB console can change it, from the web app's device
+**The LAN policy limits this on the external LAN** (Ethernet and Wi-Fi). `lan_policy` (below) is
+`open` by default, which is everything above. `locked` keeps the external LAN to reads and
+instrument control (tiers T0 and T1 of `src/cmd_tier.c`): persisted settings (Wi-Fi, cloud, DAC
+limits, calibration, the policies) and firmware updates then need the cloud or USB. `off` refuses
+TCP connections over Ethernet and Wi-Fi and stops the mDNS advertisement there. Only the cloud and the USB console can change it, from the web app's device
 settings or `benchpod lan-policy set`.
 
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
@@ -1354,7 +1355,7 @@ counters and the capability list. No parameters.
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
-| `lan_policy` | string | The [LAN policy](#lan_policy--what-the-lan-api-may-do). |
+| `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. |
 | `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures` | integer | Network-stack and heap health counters. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. |
@@ -3489,7 +3490,7 @@ cloud the policy can only get stricter (`sig_policy: only the USB console can lo
 (now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
 value.
 
-### `lan_policy` — what the LAN API may do
+### `lan_policy` — what the external LAN may do
 
 ```json
 {"cmd":"lan_policy"}
@@ -3500,9 +3501,14 @@ value.
 {"status":"ok","data":{"policy":"locked"}}
 ```
 
-`open` (default), `locked` (a T2/T3 command on the LAN gets `locked: <verb> needs the cloud or
-the USB console`) or `off` (no TCP listener on 8080, no mDNS). Set from the cloud or the USB
-console (`lan-policy <value>`), never from the LAN.
+The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
+command there gets `locked: <verb> needs the cloud or the USB console`) or `off` (connections to
+8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
+adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
+means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
+loosening `sig_policy`, changing `lan_policy`, the company CA and proxy) stays off it too. The wire
+values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
+<value>`), never from the LAN or the USB network.
 
 ### `cloud_ca` / `cloud_proxy`: company CA and HTTP proxy for the cloud link
 

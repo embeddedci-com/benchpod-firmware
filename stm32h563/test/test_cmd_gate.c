@@ -81,6 +81,13 @@ static void test_locked_lan(void) {
     cmd_gate_ctx_t cl = open_ctx(POLICY_SRC_CLOUD);
     cl.lan_policy = POD_LAN_LOCKED;
     CHECK(gate("{\"cmd\":\"ota_begin\"}", &cl) == NULL, "cloud locked out");
+    /* the policy is for the external LAN: a connection on the USB network adapter stays open */
+    cmd_gate_ctx_t un = open_ctx(POLICY_SRC_LAN);
+    un.usb_link = true;
+    for (int p = POD_LAN_LOCKED; p <= POD_LAN_OFF; p++) {
+        un.lan_policy = (pod_lan_policy_t)p;
+        CHECK(gate("{\"cmd\":\"cloud_set\"}", &un) == NULL, "USB network locked by policy %d: %s", p, s_why);
+    }
 }
 
 static void test_lease(void) {

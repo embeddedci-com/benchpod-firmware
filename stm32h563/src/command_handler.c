@@ -10,6 +10,7 @@
  * Everything here runs on the hw worker task (hw_worker.c).
  */
 #include "command_handler.h"
+#include "net_server.h"
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "signal_engine.h"   /* la_vccio_get_mv */
@@ -313,6 +314,7 @@ void dispatch_line(int conn_id, const char *buf) {
         cmd_gate_ctx_t g = {
             .src = command_handler_policy_src(conn_id),
             .lan_policy = pod_policy_lan(),
+            .usb_link = net_conn_on_usb(conn_id),
             .tunnel_max_tier = -1,
             .skip_hw = boot_guard_skip_hw(),
             .has_analog = board_has_analog(),

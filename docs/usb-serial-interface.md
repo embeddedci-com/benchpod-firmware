@@ -62,7 +62,7 @@ descriptor, compatible ID `WINNCM`).
 | Computer's address | The other host of that `/30`, handed out by the pod's DHCP server (lease 1 hour) |
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
 | mDNS | `_benchpod._tcp` is advertised on this link too (unless the LAN policy is `off`) |
-| Security | The same tier as the LAN API, and the [LAN policy](API.md#lan_policy--what-the-lan-api-may-do) applies. What the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`) is refused on it too |
+| Security | LAN tier: what the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`, the company CA and proxy) is refused on it too. The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
 | Throughput | USB full speed (12 Mbit/s): about 0.9 MB/s from the pod (`speedtest`), against 1.3 MB/s on 100 Mbit Ethernet |
 
 The JSON `status` reports it as `usb` (`net`, `link`, `ip`, `host_ip`) and the
@@ -145,7 +145,7 @@ command prints `usage: ...` and changes nothing.
 | `identity` | `identity <short id> <public key base64url>`, or `identity unknown <why>`. |
 | `identity-wipe <short id\|unknown>` | Erase the device key and make a new one, the way back for a pod whose identity record the firmware will not replace. The argument must be the current short id (6 hex digits), or `unknown` when there is none; anything else prints `identity-wipe error confirm with the current id: identity-wipe <id>`. Replies `identity-wipe ok <new short id>`, then the pod logs in to the cloud again (the server needs a new registration). Only here: the JSON `identity_wipe` is refused on the LAN and the cloud. `benchpod identity wipe --connection usb` drives it. |
 | `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
-| `lan-policy [open\|locked\|off]` | Show or set what the LAN API may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` stops the TCP listener and mDNS until set back. |
+| `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
 | `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Install one with `upload-begin ca <size> <sha256>` (no signature). `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
 | `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
 | `ca-damage` | Development builds only: damage the CA slot to try the built-in-roots fallback. |

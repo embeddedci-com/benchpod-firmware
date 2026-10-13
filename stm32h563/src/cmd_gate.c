@@ -29,7 +29,8 @@ const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap) {
     /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and
        USB, and a cloud tunnel never goes above what the server allowed its user. */
-    if (tier >= CMD_TIER_T2 && ctx->src == POLICY_SRC_LAN && ctx->lan_policy != POD_LAN_OPEN) {
+    if (tier >= CMD_TIER_T2 && ctx->src == POLICY_SRC_LAN && !ctx->usb_link &&
+        ctx->lan_policy != POD_LAN_OPEN) {
         snprintf(why, why_cap, "locked: %s needs the cloud or the USB console", cmd);
         return why;
     }
