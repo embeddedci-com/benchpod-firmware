@@ -49,8 +49,11 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src);
 /* The cloud link's trust settings (company CA install or clear, HTTP proxy set or clear):
    NULL = this source may change them, else the refusal for `verb`. The LAN never may, whatever
    the LAN policy: a LAN attacker who installs their own CA and points the pod at their proxy
-   could otherwise terminate its TLS and relay the host-bound login (cloud-hardening.md). */
-const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src);
+   could otherwise terminate its TLS and relay the host-bound login (cloud-hardening.md).
+   usb_link: a LAN connection on the USB network adapter (firmware 3.9.0+). That is physical
+   presence, like the USB console (anything on the computer can open the console anyway), so it
+   may change these two settings; it stays LAN tier for everything else. */
+const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool usb_link);
 
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);

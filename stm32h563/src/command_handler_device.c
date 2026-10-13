@@ -24,6 +24,8 @@
 #include "b64url.h"
 #include "cloud_client.h"
 #include "esp_wifi_ctrl.h"
+#include "usb_device.h"
+#include "usb_netif.h"
 #include "board_info.h"
 #include "board_rev.h"
 #include "usb_cc.h"
@@ -203,8 +205,9 @@ void handle_status(int conn_id, const char *json) {
     /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[].
        1344: safe_mode + safe_reason (up to ~130 B). */
     /* 1408: gateware + gateware_embedded.
-       1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since. */
-    char resp[1536];
+       1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since.
+       1792: usb{} (~150 B; a v3 status measured 1535 B with it). */
+    char resp[1792];
     cloud_caps_t caps;
     cloud_caps_collect(&caps);
     bp_emit_t e;
@@ -214,6 +217,18 @@ void handle_status(int conn_id, const char *json) {
                 "\"ip\":\"%s\",\"rssi_dbm\":%s,\"wifi\":\"%s\",\"cloud\":\"%s\",",
             FIRMWARE_VERSION, BOARD_NAME, wstate, ip, rssi_field,
             esp_wifi_ctrl_state_str(), cloud_client_state_str());
+    /* USB network adapter (CDC-NCM): on unless Wi-Fi is configured; ip is the pod's end of
+       the /30, host_ip the address its DHCP server hands the computer. */
+    /* source: what the USB-C port powering the pod advertises (usb_cc.h, v3; null on v2). */
+    {
+        usb_cc_t cc;
+        bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
+        bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
+                usb_net_enabled() ? "on" : "off", usb_net_link_up() ? "true" : "false",
+                usb_netif_pod_ip(), usb_netif_host_ip());
+        if (have_cc) bp_emit(&e, "\"source\":\"%s\",\"source_ma\":%d},", cc.advertised, cc.advertised_ma);
+        else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
+    }
     bp_emit(&e, "\"rx_dropped\":%lu,\"tx_dropped\":%lu,"
                 "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped(),

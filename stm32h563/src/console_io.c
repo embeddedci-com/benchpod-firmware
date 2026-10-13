@@ -2,7 +2,7 @@
  * console_io.c — USART2 + USB-CDC byte multiplexer and printf retarget.
  */
 #include "console_io.h"
-#include "usbd_cdc_if.h"
+#include "usb_device.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 

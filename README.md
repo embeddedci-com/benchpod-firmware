@@ -9,7 +9,8 @@ The board ("vbench-pod", v2) is a **two-chip** system:
 
 - An **STM32H563ZIT6** runs the C firmware (FreeRTOS + LwIP): Ethernet + optional
   ESP32-C3 Wi-Fi, a cloud WebSocket control channel + byte-tunnel (TLS), a
-  JSON-over-TCP / SCPI command server, a USB-CDC console, and an on-pod
+  JSON-over-TCP / SCPI command server (also over USB: the pod's USB port is a
+  CDC-NCM network adapter next to the USB-CDC console), and an on-pod
   CMSIS-DAP SWD probe.
 - A **Lattice iCE40UltraPlus (iCE40UP5K-SG48)** FPGA is an SPI slave to the
   STM32 and owns the timing-critical analog + digital datapath: it drives the
@@ -23,7 +24,7 @@ PSRAM. Analog front-end, power (INA238 + eFuse), I²C mux (TCA9554), and CAN
 
 ```
 bench-pod-firmware/
-├── stm32h563/   ← STM32H563 firmware (C, FreeRTOS + LwIP + ST USB) — THE firmware
+├── stm32h563/   ← STM32H563 firmware (C, FreeRTOS + LwIP + TinyUSB) — THE firmware
 ├── ice40/       ← iCE40 gateware (Verilog, IceStorm toolchain) — v2
 ├── docs/        ← protocol + design docs (API.md, datapath reviews, …)
 └── calibration/ ← per-board DAC/ADC cal (measured against a 34401A DMM)
@@ -36,12 +37,13 @@ bench-pod-firmware/
 
 ## Firmware — `stm32h563/`
 
-Bare-metal-ish C on **FreeRTOS**, with **LwIP** for networking and ST's USB
-device stack for the console. Highlights:
+Bare-metal-ish C on **FreeRTOS**, with **LwIP** for networking and **TinyUSB**
+for the USB device (the console plus a CDC-NCM network adapter). Highlights:
 
 - **Connectivity.** Ethernet (LAN8742 PHY, DHCP-only) is primary; an on-board
   **ESP32-C3** provides Wi-Fi over `esp-hosted` (SPI4), unified with the eth
-  netif (eth-priority). The pod also flashes its own blank C3 over the ROM
+  netif (eth-priority). Without Wi-Fi configured, the USB port is a network
+  adapter too (a /30 with its own DHCP server), so one cable carries the API. The pod also flashes its own blank C3 over the ROM
   bootloader.
 - **Cloud.** A direct **WSS** control channel to the EmbeddedCI server (LwIP
   `altcp_tls` + mbedTLS, cert-pinned) carries commands, plus a **byte-tunnel**
@@ -109,5 +111,5 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 - [`docs/tri-capture-unified-psram.md`](docs/tri-capture-unified-psram.md) — the concurrent DAC/ADC/LA PSRAM datapath.
 - [`docs/dac-control-loop.md`](docs/dac-control-loop.md) — in-fabric DAC closed-loop control.
 - [`docs/dap-over-tunnel.md`](docs/dap-over-tunnel.md) — CMSIS-DAP over the cloud tunnel.
-- [`docs/usb-serial-interface.md`](docs/usb-serial-interface.md) — the USB CDC-ACM console.
+- [`docs/usb-serial-interface.md`](docs/usb-serial-interface.md) — the USB CDC-ACM console and the USB network adapter.
 - [`docs/solarpanel-simulation.md`](docs/solarpanel-simulation.md) — analog front-end calibration.

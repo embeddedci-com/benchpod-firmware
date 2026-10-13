@@ -20,7 +20,9 @@ Connect with any TCP client:
 nc <device-ip> 8080
 ```
 
-The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS unless the [LAN policy](#lan_policy--what-the-lan-api-may-do) is `off`.
+**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
+
+The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS (on Ethernet and Wi-Fi unless the [LAN policy](#lan_policy--what-the-external-lan-may-do) is `off`; on the USB link always).
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
 
@@ -45,14 +47,16 @@ connection to the pod has the full command set, which includes:
 - driving the SWD probe — i.e. halting, reading, and reflashing an attached target,
 - uploading firmware to the pod itself over OTA.
 
-There is no login, no API key, and no allow-list. The USB-CDC console is equivalent and
-assumes physical access.
+There is no login, no API key, and no allow-list. The USB network adapter (firmware 3.9.0+)
+is the same tier as the LAN: port `8080` on it is this API. The LAN policy, though, is for the
+external LAN only: the USB adapter stays on and open under every policy (physical presence). The
+USB-CDC console is a separate, higher channel and assumes physical access.
 
-**The LAN policy limits this.** `lan_policy` (below) is `open` by default, which is everything
-above. `locked` keeps the LAN to reads and instrument control (tiers T0 and T1 of
-`src/cmd_tier.c`): persisted settings (Wi-Fi, cloud, DAC limits, calibration, the policies) and
-firmware updates then need the cloud or the USB console. `off` stops the TCP listener and the
-mDNS advertisement. Only the cloud and the USB console can change it, from the web app's device
+**The LAN policy limits this on the external LAN** (Ethernet and Wi-Fi). `lan_policy` (below) is
+`open` by default, which is everything above. `locked` keeps the external LAN to reads and
+instrument control (tiers T0 and T1 of `src/cmd_tier.c`): persisted settings (Wi-Fi, cloud, DAC
+limits, calibration, the policies) and firmware updates then need the cloud or USB. `off` refuses
+TCP connections over Ethernet and Wi-Fi and stops the mDNS advertisement there. Only the cloud and the USB console can change it, from the web app's device
 settings or `benchpod lan-policy set`.
 
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
@@ -253,7 +257,7 @@ that applies answers with its message and the command does not run.
 
 | Gate | Applies to | Message |
 |---|---|---|
-| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or the USB console` |
+| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
 | A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
@@ -717,7 +721,7 @@ TCP connection (so it is the interface in use, not only the preferred one):
 
 | Field | Meaning |
 |---|---|
-| `uplink` | `"eth"`, `"wifi"`, or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
+| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
 
 ---
 
@@ -970,8 +974,8 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
 | `current_out` | always, when it has `ua`: the 4-20 mA output shares the DAC, so setting a current moves the limited path. Without `ua` it only reads the range and is allowed |
 
-The USB console applies the same rules to `dac`, `path`, `adc`, `current-out`, `dacraw`, `dacmux` and `calsw`;
-`dac-limits` shows them and `dac-limits clear` removes them.
+Firmware before 3.9.0 applied the same rules to the USB console's analog commands and had
+`dac-limits` there; from 3.9.0 the console has no analog commands.
 
 Between reset and the moment boot parks the DAC (after the iCE40 is up), the DAC reads 0 V.
 Hold the module off with its own enable pin for that window.
@@ -1121,8 +1125,6 @@ The pod cannot see the loop: with no supply or an open loop, `current_out` still
 
 `status.caps` contains `"current_out"` when the firmware supports it. The cloud capabilities
 frame has `"current_out":true` and the range as `current_out_min_ua` / `current_out_max_ua`.
-On the USB console, `current-out 12` holds 12 mA (the console takes mA) and `current-out`
-shows the range.
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
@@ -1233,8 +1235,6 @@ offset of `current_in` is calibrated. The gain, and `ext`, `cal1` and `cal2`, us
 fits: calibrating those needs a reference voltage. `status.caps` contains `"calibrate"`
 when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
-On the USB console, `calibrate` shows the calibration, `calibrate current_in` runs it, and
-`calibrate clear` removes it. `adc current_in` uses it.
 
 #### Loopback / self-cal examples
 
@@ -1327,6 +1327,7 @@ counters and the capability list. No parameters.
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
+ "usb":{"net":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
@@ -1347,6 +1348,7 @@ counters and the capability list. No parameters.
 | `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` while Wi-Fi credentials are stored; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
@@ -1356,7 +1358,7 @@ counters and the capability list. No parameters.
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
-| `lan_policy` | string | The [LAN policy](#lan_policy--what-the-lan-api-may-do). |
+| `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. |
 | `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures` | integer | Network-stack and heap health counters. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. |
@@ -1373,6 +1375,7 @@ counters and the capability list. No parameters.
 
 | Value | Meaning |
 |---|---|
+| `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
 | `signal`, `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: signal generation, GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
@@ -1986,9 +1989,9 @@ State is **not** persisted: after a reset both eFuses return to off.
 > `target_power` with `delay_ms` → `uart_proxy_start` → the eFuse switches mid-
 > capture and you catch the boot banner.
 
-> The USB console has `power <1|2> <on|off>` (no delay) and `pstat`; see
-> [usb-serial-interface.md](usb-serial-interface.md). Read the eFuses'
-> fault/valid status with `target_status`.
+> Read the eFuses' fault/valid status with `target_status`. (Firmware before 3.9.0 also had
+> `power` and `pstat` on the USB console; a computer on the USB cable now uses these JSON
+> commands over the [USB network adapter](usb-serial-interface.md#usb-network-adapter).)
 
 ---
 
@@ -2029,7 +2032,8 @@ interval never misses a trip.
 ### `power_status` — one-shot rail measurement
 
 Reads both on-board INA238 current monitors (`0x40` = internal 5 V rail, `0x44` = external
-rail) and reports each rail's bus voltage and current. This is the cheap "what is the DUT
+rail) and reports each rail's bus voltage and current. Boards with the pod's own current monitor
+(`0x41`, capability `pod_current`) add `pod`: what the pod itself draws from its 5 V input. This is the cheap "what is the DUT
 drawing right now" call; for a waveform over time use
 [`power_profile`](#power_profile--record-a-rail-current-profile).
 
@@ -2045,7 +2049,8 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 
 ```json
 {"status":"ok","data":{"internal":{"ok":true,"bus_mv":5008,"current_ua":142300},
-                       "external":{"ok":false,"bus_mv":0,"current_ua":0}}}
+                       "external":{"ok":false,"bus_mv":0,"current_ua":0},
+                       "pod":{"ok":true,"bus_mv":5012,"current_ua":231000,"total_ua":373300}}}
 ```
 
 | Field | Type | Description |
@@ -2053,6 +2058,7 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 | `<rail>.ok` | boolean | `false` when that INA238 did not answer (an unpopulated / unpowered rail). |
 | `<rail>.bus_mv` | integer | Bus (DUT-side) voltage in mV. |
 | `<rail>.current_ua` | integer | Current in µA, computed from the measured shunt voltage and the known shunt resistance — signed, so a back-feeding DUT reads negative. |
+| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's internal rail bypasses that shunt), and `total_ua` = pod + internal rail, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` (development builds) shows the same reading. |
 
 Both reads are taken under the hardware lock that serialises this I2C bus against the console
 `ina` command, the eFuse expander and the profile sampler.
@@ -3055,7 +3061,9 @@ work in safe mode, so a pod can always be put back on the network.
 ### `cloud_status`
 
 Reply: `{"state":"connected","last_error":"","configured":true,"host":"www.embeddedci.com","port":443,"tls":true,"verify":true,"device_id":"<uuid>"}`.
-`state` is `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`.
+`state` is `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. `waiting-wifi` waits
+for an Ethernet or Wi-Fi address, or for the USB network link with a proxy set (the link has no
+router, so the cloud rides `benchpod usb-bridge` on the computer).
 
 ### `cloud_set` — store the cloud settings
 
@@ -3096,8 +3104,10 @@ side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 {"cmd":"wifi_clear"}
 ```
 
-Wired Ethernet stays the primary link; Wi-Fi is the fallback. An empty or missing `password` is an
-open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
+Wired Ethernet stays the primary link; Wi-Fi is the fallback. Wi-Fi and the [USB network
+adapter](usb-serial-interface.md#usb-network-adapter) are one or the other: `wifi_set` turns USB
+networking off (the reply may still go out over it), and `wifi_clear` turns it back on. An empty or
+missing `password` is an open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
 replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `"ssid too long"`,
 `"password too long"`, `"config save failed"`. The same operations are `wifi-set` / `wifi-clear` on
 the [USB console](usb-serial-interface.md).
@@ -3169,8 +3179,8 @@ firmware itself goes to the MCU flash; the blob targets go to slots in the W25Q 
 `gw1` (the two iCE40 images), `esp` (the ESP32-C3 Wi-Fi image) and `ca` (a company CA, see
 [`cloud_ca`](#cloud_ca--cloud_proxy-company-ca-and-http-proxy-for-the-cloud-link)). Over the
 cloud the server sends the image as WS `ota.*` frames; over the LAN the image goes in base64url
-`ota_data` chunks; the USB console has `upload-*` (see
-[usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
+`ota_data` chunks, also over the USB network adapter (the USB console's `upload-*` commands are gone
+from firmware 3.9.0; see [usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
 or the web app instead of these commands.
 
 One transport holds an update session at a time. Every `ota_*` reply carries the session:
@@ -3200,7 +3210,7 @@ Refusals:
 |---|---|
 | `size` or `sha256` missing | `"missing size/sha256"` |
 | Unknown `target` | `"unknown target"` |
-| `ca` from the LAN | `"cloud_ca: change it from the cloud or the USB console"` |
+| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or over USB"` |
 | Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
 | A capture or upload is running | `"busy: a capture or upload is running"` |
 | Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
@@ -3238,6 +3248,14 @@ commands can share a line with `;`. Queries answer one line; bulk samples come a
 ASCII. Errors go to the error queue (16 deep): read them with `SYSTem:ERRor?`. The instrument
 state (`SOURce`, `SENSe`, the trace) is shared by every SCPI connection. Upper-case letters are
 the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWer1`).
+
+**VISA.** The pod is a raw socket instrument. Its VISA resource string is
+`TCPIP::<address>::8080::SOCKET`: the LAN address, the pod's USB network address over USB
+(`TCPIP::10.237.x.y::8080::SOCKET`, from `status.usb.ip`), or its mDNS host name
+(`TCPIP::benchpod-a1b2c3.local::8080::SOCKET`). Set the termination character to `\n` for reads and
+writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface,
+so VISA and LXI discovery tools list it. SCPI follows the same rules as the JSON API there: the
+external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 
 ### IEEE 488.2 common commands
 
@@ -3369,7 +3387,7 @@ All errors follow the format:
 | `"command too long"` | A JSON line longer than 1279 bytes |
 | `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
-| `"locked: <cmd> needs the cloud or the USB console"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
+| `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
 | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
@@ -3404,10 +3422,10 @@ All errors follow the format:
 | `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
 | `"identity not available"` | Device identity not initialised (should not occur after boot) |
 | `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
-| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
-| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, console `upload-begin`) in a safe mode that turned the iCE40/PSRAM off |
+| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console of firmware before 3.9.0) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
+| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, LAN or USB network `ota_begin`) in a safe mode that turned the iCE40/PSRAM off |
 | `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
-| `"cloud_ca: change it from the cloud or the USB console"`, `"cloud_proxy: ..."`, `"sig_policy: ..."`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
+| `"cloud_ca: change it from the cloud or over USB"`, `"cloud_proxy: ..."`, `"sig_policy: change it from the cloud or the USB console"`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
 | `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
 
 Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
@@ -3457,7 +3475,7 @@ $ nc 192.168.1.220 8080
 {"status":"ok","data":{"public":"ue5UfSsOAhQYZ332ELokjOI8-uyjcbrd1ic3Nmypvzk"}}
 
 {"cmd":"cloud_set","host":"www.embeddedci.com","device_id":"<uuid>","tls":true}
-{"status":"error","message":"locked: cloud_set needs the cloud or the USB console"}
+{"status":"error","message":"locked: cloud_set needs the cloud or USB"}
 ```
 
 The last reply is what a pod with the LAN policy `locked` answers; on an `open` LAN it stores the
@@ -3486,7 +3504,7 @@ cloud the policy can only get stricter (`sig_policy: only the USB console can lo
 (now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
 value.
 
-### `lan_policy` — what the LAN API may do
+### `lan_policy` — what the external LAN may do
 
 ```json
 {"cmd":"lan_policy"}
@@ -3497,9 +3515,15 @@ value.
 {"status":"ok","data":{"policy":"locked"}}
 ```
 
-`open` (default), `locked` (a T2/T3 command on the LAN gets `locked: <verb> needs the cloud or
-the USB console`) or `off` (no TCP listener on 8080, no mDNS). Set from the cloud or the USB
-console (`lan-policy <value>`), never from the LAN.
+The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
+command there gets `locked: <verb> needs the cloud or USB`) or `off` (connections to
+8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
+adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
+means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
+loosening `sig_policy`, changing `lan_policy`) stays off it too; the one exception is the company CA
+and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
+values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
+<value>`), never from the LAN or the USB network.
 
 ### `cloud_ca` / `cloud_proxy`: company CA and HTTP proxy for the cloud link
 
@@ -3515,19 +3539,26 @@ See `docs/design/cloud-hardening.md` section 3.
 
 `cloud_ca` replies `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`. A company CA is
 installed with the upload path as target `ca` (`ota_begin` with `"target":"ca"` from the cloud, WS
-`ota.begin`, the USB console `upload-begin ca`, or `benchpod cloud ca set corp.pem` over USB); it
+`ota.begin`, `ota_begin` over the USB network adapter, or the USB console's `upload-begin ca` on
+firmware before 3.9.0; `benchpod cloud ca set corp.pem` picks the way); it
 must parse as X.509 and is trusted in addition to the built-in roots.
 `cloud_proxy` replies `{"host":"...","port":3128,"auth":true}` or `{}`; the password is never shown.
 The pod sends `CONNECT <server>:443` with the server's host name and, when set, Basic proxy auth.
 Setting or clearing either reconnects the cloud. Reading is T0; setting and clearing are T2.
 
-**Never from the LAN.** Installing or clearing the CA and setting or clearing the proxy are refused
-on a LAN TCP connection whatever the LAN policy (even `open`), with
-`cloud_ca: change it from the cloud or the USB console` or
-`cloud_proxy: change it from the cloud or the USB console`. Reading both (`{"cmd":"cloud_ca"}`,
+**Never from the external LAN.** Installing or clearing the CA and setting or clearing the proxy are
+refused on an Ethernet or Wi-Fi TCP connection whatever the LAN policy (even `open`), with
+`cloud_ca: change it from the cloud or over USB` or
+`cloud_proxy: change it from the cloud or over USB`. Reading both (`{"cmd":"cloud_ca"}`,
 `{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
 own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
 real server name and relay the host-bound (v2) login, which defeats it.
+
+**Allowed over the USB network adapter** (firmware 3.9.0+). A connection on the USB link is
+physical presence, like the USB console (anything on that computer can open the console anyway),
+so it may install or clear the CA and set or clear the proxy. This is how `benchpod cloud ca` and
+`cloud proxy` (and `usb-bridge`) change them over USB. Everything else on the USB link stays LAN
+tier.
 
 ### While a cloud job holds the pod
 

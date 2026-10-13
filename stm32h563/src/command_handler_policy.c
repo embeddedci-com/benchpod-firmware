@@ -2,6 +2,7 @@
  * command_handler_policy.c — the sig_policy and lan_policy JSON commands
  * (docs/design/policy-commands.md, pod_policy.h).
  */
+#include "net_server.h"   /* net_conn_on_usb: the USB link may set the CA and proxy */
 #include "command_handler.h"
 #include "command_handler_internal.h"
 #include "at_driver.h"
@@ -82,7 +83,8 @@ static bool ca_json_cert(void *ctx, const char *subject, const char *sha256_hex)
 void handle_cloud_ca(int conn_id, const char *json) {
     char v[8] = {0};
     if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id));
+        const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id),
+                                                     net_conn_on_usb(conn_id));
         if (!why) why = bus_busy_reason();   /* the W25Q write takes the shared bus */
         if (!why) why = cloud_extras_ca_clear();
         if (why) { send_error(conn_id, why); return; }
@@ -122,12 +124,12 @@ void handle_cloud_proxy(int conn_id, const char *json) {
     if (bp_json_get(json, "set", spec, sizeof(spec))) {
         bp_json_get(json, "user", user, sizeof(user));
         bp_json_get(json, "password", pass, sizeof(pass));
-        why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        why = pod_policy_cloud_link_gate("cloud_proxy", src, net_conn_on_usb(conn_id));
         if (!why) why = bus_busy_reason();   /* the W25Q write takes the shared bus */
         if (!why) why = cloud_extras_proxy_set(spec, user, pass);
         memset(pass, 0, sizeof(pass));
     } else if (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        why = pod_policy_cloud_link_gate("cloud_proxy", src);
+        why = pod_policy_cloud_link_gate("cloud_proxy", src, net_conn_on_usb(conn_id));
         if (!why) why = bus_busy_reason();
         if (!why) why = cloud_extras_proxy_set(NULL, NULL, NULL);
     }

@@ -31,8 +31,9 @@
    up).  Our payloads never exceed 65535 B so 14 is a safe ceiling. */
 #define BP_WS_HEADER_MAX        14u
 
-/* cl_ws_send scratch: holds the WS header + the largest payload we ever send. */
-#define BP_WS_FRAME_MAX         1750u
+/* cl_ws_send scratch: holds the WS header + the largest payload we ever send: a command.response
+   envelope (request and device ids, ~150 B) around a BP_CLOUD_REPLY_MAX reply. */
+#define BP_WS_FRAME_MAX         2048u
 
 /* Per-frame scratch: the text-frame copy + the inbound base64 scratch.  One full
    server->device frame must fit here (BP_CLOUD_RX_MAX >= BP_TUNNEL_OUT_FRAME_MAX). */
@@ -49,8 +50,10 @@
 /* A single-reply command's captured reply (command_handler cloud_cap_buf) and the
    matching reply[] the cloud client grafts into the response envelope.  1536, not 1024: the
    14-entry `la_pins` / `gpio` read reply reaches ~1324 B in its worst case (test_la_pins.c;
-   the 12-entry reply was 1135 B). */
-#define BP_CLOUD_REPLY_MAX      1536u
+   the 12-entry reply was 1135 B). 1792, not 1536: firmware 3.9.0's `status` (usb{} and the
+   usb task's stack line) measured 1628 B with a crash report in it and failed over the cloud;
+   1792 is status's own buffer (command_handler_device.c), so any status fits. */
+#define BP_CLOUD_REPLY_MAX      1792u
 
 /* The inbound command JSON extracted from a command.request envelope. Larger than a plain
    control command so a compact closed-loop curve LUT (base64url) rides in one command. Must
@@ -64,7 +67,7 @@
 
 /* Assembled outbound frame buffers. */
 #define BP_TUNNEL_OUT_FRAME_MAX 1300u  /* tunnel.data envelope + id + base64(chunk) */
-#define BP_CLOUD_CMD_FRAME_MAX  1736u  /* command.response envelope + ids + reply    */
+#define BP_CLOUD_CMD_FRAME_MAX  2000u  /* command.response envelope + ids + reply    */
 
 /* ---- relationships (fail the build if a coupled size drifts) -------------- */
 
