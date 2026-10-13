@@ -25,7 +25,7 @@
 
 #define USB_NETIF_MTU      1500
 #define DHCPD_LEASE_S      3600
-#define TX_WAIT_TICKS      5      /* a full TX queue drains at ~1 frame/ms on full speed */
+#define TX_WAIT_MS         5      /* a full TX queue drains at ~1 frame/ms on full speed */
 
 static usb_dhcpd_cfg_t  s_dhcp;
 static struct udp_pcb  *s_dhcp_pcb;
@@ -36,13 +36,9 @@ static err_t usb_netif_linkoutput(struct netif *netif, struct pbuf *p)
     (void)netif;
     if (p->tot_len > USB_NET_FRAME_MAX) return ERR_IF;
     if (!usb_net_link_up()) return ERR_IF;
-    uint8_t *slot = usb_net_tx_slot();
     /* Waiting here holds up the net task for a few ms at most, but a dropped TCP
        segment costs a retransmission timeout (200 ms+). */
-    for (int i = 0; !slot && i < TX_WAIT_TICKS; i++) {
-        vTaskDelay(1);
-        slot = usb_net_tx_slot();
-    }
+    uint8_t *slot = usb_net_tx_slot(TX_WAIT_MS);
     if (!slot) return ERR_MEM;
     u16_t n = pbuf_copy_partial(p, slot, p->tot_len, 0);
     usb_net_tx_commit(n);

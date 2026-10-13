@@ -26,11 +26,11 @@
 #define CFG_TUD_CDC_TX_BUFSIZE   256
 #define CFG_TUD_CDC_EP_BUFSIZE   64
 
-/* NCM transfer blocks. CDC-NCM 1.0 Table 6-4: 2048 is the minimum. One OUT NTB holds
-   two full frames; two IN NTBs keep the IN endpoint busy while the next one fills
-   (ncm.h: up to 50% more on full speed). */
+/* NCM transfer blocks. CDC-NCM 1.0 Table 6-4: 2048 is the minimum. 3200 holds two
+   full frames, so one transfer carries two TCP segments; two IN NTBs keep the IN
+   endpoint busy while the next one fills (ncm.h: up to 50% more on full speed). */
 #define CFG_TUD_NCM_OUT_NTB_MAX_SIZE 3200
-#define CFG_TUD_NCM_IN_NTB_MAX_SIZE  2048
+#define CFG_TUD_NCM_IN_NTB_MAX_SIZE  3200
 #define CFG_TUD_NCM_OUT_NTB_N        1
 #define CFG_TUD_NCM_IN_NTB_N         2
 

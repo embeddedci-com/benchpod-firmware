@@ -34,8 +34,9 @@ bool usb_net_enabled(void);
 /* The oldest received frame, or false when none is waiting. Release it when done. */
 bool usb_net_rx_peek(const uint8_t **frame, uint16_t *len);
 void usb_net_rx_release(void);
-/* A free transmit slot (USB_NET_FRAME_MAX bytes), or NULL when all are queued. */
-uint8_t *usb_net_tx_slot(void);
+/* A free transmit slot (USB_NET_FRAME_MAX bytes), waiting up to wait_ms for one while
+   all are queued; NULL when none freed in time. */
+uint8_t *usb_net_tx_slot(uint32_t wait_ms);
 /* Queue the slot from usb_net_tx_slot() with `len` bytes of frame. */
 void usb_net_tx_commit(uint16_t len);
 

@@ -20,6 +20,7 @@
 #include "board_uid.h"
 
 #include "tusb.h"
+#include "device/usbd_pvt.h"   /* usbd_defer_func: wake the usb task */
 #include "stm32h5xx_hal.h"
 
 #include "FreeRTOS.h"
@@ -167,6 +168,9 @@ static bool              s_rx_renew;             /* usb task: ask the driver for
 static bool              s_rx_stalled;           /* usb task: a frame waits for a free slot */
 static volatile bool     s_net_enabled = true;   /* off while Wi-Fi is provisioned (usb_net_set_enabled) */
 static usb_net_stats_t   s_stats;
+static TaskHandle_t      s_usb_task;
+static volatile bool     s_kick;                 /* a wake-up is queued for the usb task */
+static TaskHandle_t volatile s_tx_waiter;        /* the net task waits for a free transmit slot */
 
 #define NEXT(i, n) ((uint8_t)(((i) + 1) % (n)))
 
@@ -202,9 +206,32 @@ void usb_net_rx_release(void)
     s_rx_tail = NEXT(s_rx_tail, RX_SLOTS);
 }
 
-uint8_t *usb_net_tx_slot(void)
+static void kick_cb(void *param) { (void)param; s_kick = false; }
+
+/* Wake the usb task now rather than at its next 1 ms poll: an event in TinyUSB's queue
+   ends its wait. One wake-up in flight is enough. */
+static void usb_task_kick(void)
 {
-    if (NEXT(s_tx_head, TX_SLOTS) == s_tx_tail) { s_stats.tx_full++; return NULL; }
+    if (s_kick || !s_usb_task) return;
+    s_kick = true;
+    usbd_defer_func(kick_cb, NULL, false);
+}
+
+uint8_t *usb_net_tx_slot(uint32_t wait_ms)
+{
+    if (NEXT(s_tx_head, TX_SLOTS) != s_tx_tail) return s_tx[s_tx_head].data;
+    s_stats.tx_full++;
+    if (wait_ms == 0) return NULL;
+    /* The usb task notifies us as soon as it hands a slot to the NCM driver. */
+    s_tx_waiter = xTaskGetCurrentTaskHandle();
+    TickType_t t0 = xTaskGetTickCount(), limit = pdMS_TO_TICKS(wait_ms);
+    while (NEXT(s_tx_head, TX_SLOTS) == s_tx_tail) {
+        TickType_t gone = xTaskGetTickCount() - t0;
+        if (gone >= limit) { s_tx_waiter = NULL; return NULL; }
+        usb_task_kick();
+        ulTaskNotifyTake(pdTRUE, limit - gone);
+    }
+    s_tx_waiter = NULL;
     return s_tx[s_tx_head].data;
 }
 
@@ -213,6 +240,7 @@ void usb_net_tx_commit(uint16_t len)
     s_tx[s_tx_head].len = len;
     __DMB();
     s_tx_head = NEXT(s_tx_head, TX_SLOTS);
+    usb_task_kick();
 }
 
 /* Runs inside the NCM driver (usb task). Returning false keeps the frame in the
@@ -273,6 +301,8 @@ static void net_pump(void)
         tud_network_xmit(s, 0);
         s_stats.tx_frames++;
         s_tx_tail = NEXT(s_tx_tail, TX_SLOTS);
+        TaskHandle_t w = s_tx_waiter;
+        if (w) xTaskNotifyGive(w);
     }
 }
 
@@ -349,5 +379,5 @@ void MX_USB_DEVICE_Init(void)
 
     /* Above the net task (+2): the console and the frame slots must keep moving while
        the net task runs a TLS handshake. Its work per wake-up is short. */
-    xTaskCreate(usb_task, "usb", 768, NULL, tskIDLE_PRIORITY + 3, NULL);
+    xTaskCreate(usb_task, "usb", 768, NULL, tskIDLE_PRIORITY + 3, &s_usb_task);
 }

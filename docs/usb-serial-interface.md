@@ -63,7 +63,7 @@ descriptor, compatible ID `WINNCM`).
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
 | mDNS | `_benchpod._tcp` is advertised on this link too (unless the LAN policy is `off`) |
 | Security | The same tier as the LAN API, and the [LAN policy](API.md#lan_policy--what-the-lan-api-may-do) applies. What the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`) is refused on it too |
-| Throughput | USB full speed (12 Mbit/s): about 0.6 MB/s of capture read-back |
+| Throughput | USB full speed (12 Mbit/s): about 0.9 MB/s from the pod (`speedtest`), against 1.3 MB/s on 100 Mbit Ethernet |
 
 The JSON `status` reports it as `usb` (`net`, `link`, `ip`, `host_ip`) and the
 console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP server
