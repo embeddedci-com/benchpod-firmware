@@ -7,6 +7,8 @@
  * surface lands in later phases.
  */
 #include "console.h"
+#include "usb_device.h"
+#include "usb_netif.h"
 #include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
 #include "console_io.h"
 #include "signal_engine.h"
@@ -463,6 +465,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         op(out, ctx, "  device : benchpod\r\n");
         op(out, ctx, "  mac    : %s\r\n", net_mac_str());
         op(out, ctx, "  ip     : %s\r\n", net_ip_str());
+        {
+            usb_net_stats_t us;
+            usb_net_stats(&us);
+            op(out, ctx, "  usb    : pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
+               usb_netif_pod_ip(), usb_netif_host_ip(), usb_net_link_up() ? "up" : "down",
+               (unsigned long)us.rx_frames, (unsigned long)us.rx_drops,
+               (unsigned long)us.tx_frames, (unsigned long)us.tx_full);
+        }
         op(out, ctx, "  dma    : spi1=%s spi4=%s\r\n",
            signal_engine_dma_active() ? "on" : "off",
            esp_hosted_spi_dma_active() ? "on" : "off");
