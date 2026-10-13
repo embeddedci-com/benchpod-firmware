@@ -96,7 +96,7 @@
 #define LWIP_IGMP                  1   /* also makes IP_OPTIONS_SEND derive to 1 so IGMP reports carry a router-alert option */
 #define LWIP_MDNS_RESPONDER        1
 #define LWIP_NUM_NETIF_CLIENT_DATA 1
-#define MDNS_MAX_SERVICES          1
+#define MDNS_MAX_SERVICES          2   /* _benchpod._tcp + _scpi-raw._tcp (VISA/LXI discovery), ~400 B of MEM_SIZE each per netif */
 #define MEMP_NUM_UDP_PCB           5   /* DHCP + cloud DNS + 1 global mDNS pcb */
 
 /* DNS: needed so the cloud client can resolve the server hostname (the RP2350

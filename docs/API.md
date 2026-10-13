@@ -3253,6 +3253,14 @@ ASCII. Errors go to the error queue (16 deep): read them with `SYSTem:ERRor?`. T
 state (`SOURce`, `SENSe`, the trace) is shared by every SCPI connection. Upper-case letters are
 the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWer1`).
 
+**VISA.** The pod is a raw socket instrument. Its VISA resource string is
+`TCPIP::<address>::8080::SOCKET`: the LAN address, the pod's USB network address over USB
+(`TCPIP::10.237.x.y::8080::SOCKET`, from `status.usb.ip`), or its mDNS host name
+(`TCPIP::benchpod-a1b2c3.local::8080::SOCKET`). Set the termination character to `\n` for reads and
+writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface,
+so VISA and LXI discovery tools list it. SCPI follows the same rules as the JSON API there: the
+external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
+
 ### IEEE 488.2 common commands
 
 | Command | Description |
