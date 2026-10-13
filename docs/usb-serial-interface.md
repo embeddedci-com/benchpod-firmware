@@ -54,7 +54,9 @@ From firmware 3.9.0 the pod's USB device also has a CDC-NCM network adapter
 (interfaces 2-3), so a computer on the USB cable reaches the full JSON API, SCPI
 and the byte tunnels on port `8080` with no Ethernet or Wi-Fi. macOS, Linux and
 Windows 11 bind it with their in-box drivers (Windows through a Microsoft OS 2.0
-descriptor, compatible ID `WINNCM`).
+descriptor, compatible ID `WINNCM`); those three are tested. Windows 10 (1903 or
+newer) is supported but not tested: if the adapter shows up without a driver there,
+update its driver in Device Manager and pick "UsbNcm Host Device".
 
 | Property | Value |
 |---|---|
