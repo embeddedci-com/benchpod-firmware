@@ -119,6 +119,17 @@ worker task, prints the output, then prints the prompt `"> "`.
   captures. While a capture, upload or update runs they print
   `<cmd> refused: busy: a capture, upload or update is using the PSRAM bus; try again when it ends`.
 
+### Stable replies
+
+These console replies are read by host tools (the `benchpod` CLI, the `embeddedci` SDK and MCP
+server, the web app's setup wizard over WebSerial), including older releases still in use, so
+their formats do not change: `status` (`device : benchpod`, the `ip`, `usb` and `board` lines),
+`ping` (`PING ok`), `identity`, `identity-wipe ok`, `sig-policy`, `lan-policy`, `ca`/`ca none`,
+`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, the `upload-*` acknowledgements,
+`usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
+existing one keeps its place. `stm32h563/test/check_console_contract.py` (run with the host tests)
+fails when one of these format strings changes.
+
 ### Command reference
 
 `help` prints a short version of this list on the device. On a usage error a
