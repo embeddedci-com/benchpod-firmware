@@ -21,6 +21,7 @@
 #include "cloud_extras.h"
 #include "cloud_caps.h"
 #include "altcp_bp_proxy.h"
+#include "usb_device.h"     /* usb_net_link_up: the cloud over `benchpod usb-bridge` */
 #include "mbedtls/base64.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick: the lease deadline clock */
 
@@ -1360,6 +1361,18 @@ bool cloud_client_tx_busy(void) {
 
 /* ---- net-loop driver ------------------------------------------------------ */
 
+/* A way out: an Ethernet or Wi-Fi address, or the USB network link with a proxy set. The USB
+   link has no router, so without a proxy (`benchpod usb-bridge` on the computer, at its end of
+   the /30) the cloud cannot ride it. */
+static bool cl_net_ready(void)
+{
+    if (wifi_get_state() == WIFI_READY) return true;
+    if (!usb_net_link_up()) return false;
+    cloud_proxy_t p;
+    cloud_extras_proxy_get(&p);
+    return p.host[0] != '\0';
+}
+
 void cloud_client_poll(void) {
     /* Serve a wedge-snapshot request latched by another task (e.g. the worker at a load_bin
        stall): log the link state HERE, on the net task, so altcp_sndbuf/s_pcb are read safely. */
@@ -1375,7 +1388,7 @@ void cloud_client_poll(void) {
     case CL_WAIT_WIFI:
         /* Also wait (up to CL_EXTRAS_WAIT_MS after boot) for the company CA and proxy settings,
            which the hw worker reads from the W25Q at boot (cloud_extras.h). */
-        if (wifi_get_state() == WIFI_READY &&
+        if (cl_net_ready() &&
             (cloud_extras_ready() || to_ms_since_boot(get_absolute_time()) > CL_EXTRAS_WAIT_MS))
             cl_set_state(CL_RESOLVE);
         return;

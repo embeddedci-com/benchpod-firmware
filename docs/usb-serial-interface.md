@@ -79,9 +79,11 @@ the screen is locked. If the pod was plugged in or rebooted then, run
 `usb-reattach` on the console (or unplug and plug the cable) after unlocking.
 
 The cloud link does not ride this adapter on its own (the pod gets no router from
-the computer). `benchpod usb-bridge` runs an HTTP CONNECT proxy on the computer
-and sets it as the pod's cloud proxy, so the pod reaches embeddedci.com through
-the computer.
+the computer). `benchpod usb-bridge` runs an HTTP CONNECT proxy on the computer's
+end of the link and sets it as the pod's cloud proxy (`proxy-set`), so the pod
+reaches embeddedci.com through the computer; it clears the proxy again when it
+stops. With a proxy set, the pod's cloud client starts on the USB link alone; it
+no longer waits for an Ethernet or Wi-Fi address.
 
 ---
 

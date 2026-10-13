@@ -3054,7 +3054,9 @@ work in safe mode, so a pod can always be put back on the network.
 ### `cloud_status`
 
 Reply: `{"state":"connected","last_error":"","configured":true,"host":"www.embeddedci.com","port":443,"tls":true,"verify":true,"device_id":"<uuid>"}`.
-`state` is `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`.
+`state` is `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. `waiting-wifi` waits
+for an Ethernet or Wi-Fi address, or for the USB network link with a proxy set (the link has no
+router, so the cloud rides `benchpod usb-bridge` on the computer).
 
 ### `cloud_set` — store the cloud settings
 
