@@ -235,7 +235,7 @@ static bool parse_loop_input_map(int conn_id, const char *json,
      {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
      {"cmd":"generate","waveform":"sine","freq":10,"amplitude_ua":4000,"offset_ua":12000}
    Reply: {"bits":16} (plus "cotrig" with on_capture). The peaks must stay inside what the
-   output can do; there is no silent clipping. */
+   output can do; there is no silent clipping. "route":false skips the routing. */
 static void handle_generate16(int conn_id, const char *json, const char *waveform, float freq,
                               uint32_t duration, float sr_hz) {
     char path_s[16] = {0}, amp_s[24] = {0}, off_s[24] = {0};
@@ -271,7 +271,11 @@ static void handle_generate16(int conn_id, const char *json, const char *wavefor
         why = wave16_codes_for_volts(idx, amp_in, off_in, &amp, &mid);
     }
     if (why) { send_error(conn_id, why); return; }
-    if (analog_path_set(route) != 0) { send_error(conn_id, "route failed"); return; }
+    /* "route":false keeps the analog switching as it is (e.g. cal1 for a DAC -> ADC loopback,
+       which routing the output would undo); the volts still use `path`'s calibration. */
+    char route_s[8] = {0};
+    bool route_off = json_get_value(json, "route", route_s, sizeof(route_s)) && strcmp(route_s, "false") == 0;
+    if (!route_off && analog_path_set(route) != 0) { send_error(conn_id, "route failed"); return; }
 
     bool want_cotrig = json_flag(json, "on_capture");
     bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;

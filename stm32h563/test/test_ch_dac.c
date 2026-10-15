@@ -283,7 +283,13 @@ static void test_generate16(void) {
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"triangle\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":1.5}");
     CHECK(strcmp(g_reply, "err:unknown waveform") == 0, "%s", g_reply);
 
+    /* route:false leaves the analog switching alone (a cal1 loopback). */
+    g_route = -1;
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"5v\",\"amplitude_v\":0.1,\"offset_v\":2.5,\"route\":false}");
+    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0 && g_route == -1, "route:false %s route %d", g_reply, g_route);
+
     /* The 8-bit form does not touch the 16-bit path. */
+    g_gen16_calls = 0;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"amplitude\":100,\"offset\":128}");
     CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 0, "8-bit form unchanged: %s", g_reply);
 }

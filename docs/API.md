@@ -312,6 +312,8 @@ Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the 
 | `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. Both peaks (`offset_v ± amplitude_v`) must be inside what the output can do; nothing is clipped. |
 | `amplitude_ua`, `offset_ua` | number (µA) | together | Peak and centre on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
 
+| `route` | boolean | no | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. Default: route the output. |
+
 `waveform`, `freq`, `duration_ms`, `sample_rate_mhz` and `on_capture` work as in the 8-bit form below. The reply is `{"bits":16}`, with `"cotrig"` added for `on_capture`. One step is about 50 µV on the 3v3 output (the 8-bit form: about 13 mV).
 
 | Condition | Message |
