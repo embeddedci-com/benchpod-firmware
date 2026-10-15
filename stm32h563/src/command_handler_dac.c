@@ -23,6 +23,8 @@
 #include "cloud_client.h"   /* cloud_client_request_link_snapshot (load_bin stall) */
 #include "dac_limits.h"
 #include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
+#include "i2c_bus.h"        /* analog_path_*: the calibrated generate routes its output */
+#include "wave16.h"         /* the calibrated generate's 16-bit waveforms (host-tested) */
 #include "FreeRTOS.h"       /* pvPortMalloc: per-call curve buffers */
 
 #include <stdio.h>
@@ -228,6 +230,60 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     return true;
 }
 
+/* The calibrated `generate` form: volts on a DAC path, or microamps on the 4-20 mA output,
+   played at the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
+     {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+     {"cmd":"generate","waveform":"sine","freq":10,"amplitude_ua":4000,"offset_ua":12000}
+   Reply: {"bits":16} (plus "cotrig" with on_capture). The peaks must stay inside what the
+   output can do; there is no silent clipping. "route":false skips the routing. */
+static void handle_generate16(int conn_id, const char *json, const char *waveform, float freq,
+                              uint32_t duration, float sr_hz) {
+    char path_s[16] = {0}, amp_s[24] = {0}, off_s[24] = {0};
+    wave16_shape_t shape;
+    if (wave16_shape_from_name(waveform, &shape) != 0) { send_error(conn_id, "unknown waveform"); return; }
+    bool ua = json_get_value(json, "amplitude_ua", amp_s, sizeof(amp_s));
+    if (!ua) json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s));
+    if (!json_get_value(json, ua ? "offset_ua" : "offset_v", off_s, sizeof(off_s))) {
+        send_error(conn_id, ua ? "offset_ua is required with amplitude_ua"
+                               : "offset_v is required with amplitude_v");
+        return;
+    }
+    char *end_a = NULL, *end_o = NULL;
+    double amp_in = strtod(amp_s, &end_a), off_in = strtod(off_s, &end_o);
+    if (end_a == amp_s || *end_a != '\0' || end_o == off_s || *end_o != '\0') {
+        send_error(conn_id, "amplitude and offset must be numbers");
+        return;
+    }
+    analog_path_t route;
+    double amp = 0.0, mid = 0.0;
+    const char *why;
+    if (ua) {
+        route = ANALOG_PATH_CURRENT_OUT;
+        why = wave16_codes_for_ua(amp_in, off_in, &amp, &mid);
+    } else {
+        if (!json_get_value(json, "path", path_s, sizeof(path_s)) ||
+            analog_path_from_name(path_s, &route) != 0 ||
+            (route != ANALOG_PATH_DAC_3V3 && route != ANALOG_PATH_DAC_5V && route != ANALOG_PATH_DAC_12V)) {
+            send_error(conn_id, "path must be 3v3|5v|12v with amplitude_v");
+            return;
+        }
+        int idx = route == ANALOG_PATH_DAC_3V3 ? 0 : route == ANALOG_PATH_DAC_5V ? 1 : 2;
+        why = wave16_codes_for_volts(idx, amp_in, off_in, &amp, &mid);
+    }
+    if (why) { send_error(conn_id, why); return; }
+    /* "route":false keeps the analog switching as it is (e.g. cal1 for a DAC -> ADC loopback,
+       which routing the output would undo); the volts still use `path`'s calibration. */
+    char route_s[8] = {0};
+    bool route_off = json_get_value(json, "route", route_s, sizeof(route_s)) && strcmp(route_s, "false") == 0;
+    if (!route_off && analog_path_set(route) != 0) { send_error(conn_id, "route failed"); return; }
+
+    bool want_cotrig = json_flag(json, "on_capture");
+    bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;
+    if (dac_generate16(shape, freq, amp, mid, duration, sr_hz) != 0) { send_error(conn_id, "generate failed"); return; }
+    send_ok_str(conn_id, want_cotrig ? (cotrig ? "{\"bits\":16,\"cotrig\":true}" : "{\"bits\":16,\"cotrig\":false}")
+                                     : "{\"bits\":16}");
+}
+
 void handle_generate(int conn_id, const char *json) {
     char waveform[16] = {0};
     char freq_s[16]   = {0};
@@ -246,6 +302,13 @@ void handle_generate(int conn_id, const char *json) {
     uint8_t  offset    = off_s[0]  ? (uint8_t)atoi(off_s)   : 128;
     uint32_t duration  = dur_s[0]  ? (uint32_t)atoi(dur_s)  : 0;
     float    sr_hz     = parse_sample_rate_hz(json);   /* 0 = auto */
+
+    char probe[8];
+    if (json_get_value(json, "amplitude_v", probe, sizeof(probe)) ||
+        json_get_value(json, "amplitude_ua", probe, sizeof(probe))) {
+        handle_generate16(conn_id, json, waveform, freq, duration, sr_hz);
+        return;
+    }
 
     /* Co-trigger (v27): defer this generator's DAC start to the next capture's t0. Arm it BEFORE
        dac_generate_* sends START_DAC (the interleaved LOAD_WAVE doesn't disturb the pending arm). */

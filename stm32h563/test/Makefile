@@ -61,6 +61,7 @@ DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/cal_data.c ../src/
 ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
 CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c
 DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c
+WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/current_out.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c
@@ -96,7 +97,8 @@ CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c
 CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
 CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c
 CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
-              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c
+              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c \
+              ../src/wave16.c ../src/current_out.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
                   ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/psram_alloc.c
 CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/bp_json.c ../src/config_store.c \
@@ -309,6 +311,10 @@ build/test_dac_code16: $(DACCODE16_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(DACCODE16_SRCS) -lm -o $@
 
+build/test_wave16: $(WAVE16_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(WAVE16_SRCS) -lm -o $@
+
 build/test_bus_recovery: $(BUSREC_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BUSREC_SRCS) -lm -o $@
@@ -383,7 +389,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_flash_layout build/test_board_variant build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_capture build/test_ch_net $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_dac_limits build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_capture build/test_ch_net $(OTA_TARGET)
 
 TESTS += build/test_bp_log
 
@@ -452,6 +458,8 @@ run: $(TESTS)
 	@tail -n 1 build/test_current_out.log
 	@./build/test_dac_code16 > build/test_dac_code16.log || { cat build/test_dac_code16.log; exit 1; }
 	@tail -n 1 build/test_dac_code16.log
+	@./build/test_wave16 > build/test_wave16.log || { cat build/test_wave16.log; exit 1; }
+	@tail -n 1 build/test_wave16.log
 	@./build/test_esp_wifi_ctrl
 	@./build/test_esp_part_table
 	@./build/test_ch_transport > build/test_ch_transport.log || { cat build/test_ch_transport.log; exit 1; }

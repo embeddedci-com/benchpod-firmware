@@ -146,6 +146,7 @@ C_SOURCES := \
   src/adc_cal.c \
   src/adc_cal_hw.c \
   src/current_out.c \
+  src/wave16.c \
   src/flash_compat.c \
   src/flash_layout.c \
   src/fw_info.c \

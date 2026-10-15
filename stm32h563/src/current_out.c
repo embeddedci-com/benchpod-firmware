@@ -31,6 +31,10 @@ long current_out_ua(uint16_t code) {
     double floor_ua = (double)CURRENT_OUT_CAL_FLOOR_UA;
     return lround(ua > floor_ua ? ua : floor_ua);
 }
+double current_out_code_exact(double ua) {
+    return (ua - zero_ua()) / ua_per_code();
+}
+
 long current_out_min_ua(void)      { return current_out_ua(0); }
 long current_out_max_ua(void)      { return current_out_ua(0xFFFF); }
 

@@ -28,10 +28,11 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
                "\"dac_fullscale_mv\":%d,\"dac_channels\":%d,"
                "\"dac_deep_replay\":%s,\"dac_replay_max_samples\":%lu,"
                "\"dac_control_loop\":%s,\"dac_loop_sources\":%s,\"dac_loop_input_map\":%s,"
-               "\"dac_cotrig\":%s,",
+               "\"dac_cotrig\":%s,\"generate_bits\":%d,",
             tf(c->dac_ac), tf(c->dac_replay), tf(c->dac_dc), c->dac_bits, c->dac_replay_bits,
             c->dac_fullscale_mv, c->dac_channels, tf(c->deep_replay), c->replay_max_samples,
-            tf(c->control_loop), tf(c->loop_sources), tf(c->loop_input_map), tf(c->cotrig));
+            tf(c->control_loop), tf(c->loop_sources), tf(c->loop_input_map), tf(c->cotrig),
+            c->generate16 ? 16 : c->dac_bits);
     bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
                "\"nrst_pin\":%s,"
                "\"power_profile\":true,"
@@ -68,6 +69,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->deep_replay)     bp_emit_raw(e, ",\"dac_deep_replay\"");
     if (c->control_loop)    bp_emit_raw(e, ",\"dac_control_loop\"");
     if (c->cotrig)          bp_emit_raw(e, ",\"dac_cotrig\"");
+    if (c->generate16)      bp_emit_raw(e, ",\"generate16\"");   /* generate takes volts/uA, 16-bit */
     if (c->loop_sources)    bp_emit_raw(e, ",\"dac_loop_sources\"");
     if (c->loop_input_map)  bp_emit_raw(e, ",\"dac_loop_input_map\"");
     if (c->gpio_read)       bp_emit_raw(e, ",\"gpio_read\"");

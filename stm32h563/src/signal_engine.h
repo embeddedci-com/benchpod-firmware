@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #include "fpga_config.h"   /* FPGA_PSRAM_*_BASE + derived FPGA_*_MAX_SAMPLES caps */
+#include "wave16.h"        /* wave16_shape_t for dac_generate16 */
 
 /* Size of the FPGA waveform BRAM in BYTES (gateware dac8551_engine.v has ADDR_W=12
  * -> 4096 byte addresses). Also bounds a few host-side scratch buffers. LOAD_WAVE
@@ -49,6 +50,12 @@ int dac_generate_square(float freq, uint8_t amplitude, uint8_t offset,
                         uint32_t duration_ms, float sample_rate_hz);
 int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
                           uint32_t duration_ms, float sample_rate_hz);
+
+/* The same three shapes at the DAC8551's full 16 bits: `amp` (peak) and `mid` are 16-bit DAC
+   codes, fractional, from wave16_codes_for_volts/_for_ua (wave16.h), so the calibrated
+   `generate` form is not held to 256 levels. Same timing rules as above. */
+int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
+                   uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
    DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (3 + 51) ~= 889 kS/s;

@@ -33,6 +33,7 @@ static cloud_caps_t typical(void) {
         .dac_bits = 16, .dac_replay_bits = 16, .dac_fullscale_mv = 4096, .dac_channels = 1,
         .deep_replay = true, .replay_max_samples = 4194304,
         .control_loop = true, .loop_sources = true, .loop_input_map = true, .cotrig = true,
+        .generate16 = true,
         .gpio_read = true, .capture_trigger = true, .spi_master = true,
         .nrst_pin = true, .pod_current = true,
         .current_out_min_ua = 0, .current_out_max_ua = 24000,
@@ -50,7 +51,7 @@ static void check_features(const char *f) {
         "device_id", "firmware_version", "flash_kb", "sig_policy", "lan_policy", "scope", "analog",
         "adc_bits", "adc_cal_a_uv", "adc_cal_b_nv", "dac", "dac_replay", "dac_dc",
         "dac_deep_replay", "dac_replay_max_samples", "dac_control_loop", "dac_loop_sources",
-        "dac_loop_input_map", "dac_cotrig", "gpio_read", "capture_trigger", "spi_master",
+        "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
         "boot_id", "unclean_resets", "sensor_types", "gps", "uplink",
@@ -192,14 +193,14 @@ static void test_status_list(void) {
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
                       "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
-                      "\"dac_control_loop\",\"dac_cotrig\",\"dac_loop_sources\",\"dac_loop_input_map\","
+                      "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
     /* The digital board: cloud_caps_collect clears every analog feature, so the list names none. */
     cloud_caps_t d = typical();
     d.analog = d.dac_ac = d.dac_dc = d.dac_replay = d.deep_replay = false;
-    d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = false;
+    d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = d.generate16 = false;
     d.pod_current = d.nrst_pin = d.usb_cc = false;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &d);
