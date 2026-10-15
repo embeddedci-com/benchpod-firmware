@@ -73,9 +73,18 @@ static void test_volts(void) {
     CHECK(fabsf(top - 3.13f) < 0.0005f && fabsf(bottom - 0.17f) < 0.0005f, "3v3 sine %.4f..%.4f V", bottom, top);
 }
 
+/* "0 to 3.3 V" works although the calibrated 3v3 range starts a few mV above 0: the trough is
+   clamped to code 0, not refused. */
+static void test_volts_edges_clamped(void) {
+    double a = 0, m = 0;
+    CHECK(wave16_codes_for_volts(0, 1.65, 1.65, &a, &m) == NULL, "0..3.3 V on 3v3 accepted");
+    wave16_fill(WAVE16_SQUARE, 2, a, m, buf);
+    CHECK(buf[1] == 0 && buf[0] >= 65000, "clamped to the path ends: %u %u", buf[0], buf[1]);
+}
+
 static void test_volts_refusals(void) {
     double a, m;
-    const char *why = wave16_codes_for_volts(0, 1.0, 3.0, &a, &m);
+    const char *why = wave16_codes_for_volts(0, 1.0, 3.0, &a, &m);   /* 4 V: far past 3.3 */
     CHECK(why && strstr(why, "outside the 3v3 output"), "peak above the range refused: %s", why ? why : "(null)");
     CHECK(wave16_codes_for_volts(0, 0.0, 1.0, &a, &m) != NULL, "zero amplitude refused");
     CHECK(wave16_codes_for_volts(0, -0.5, 1.0, &a, &m) != NULL, "negative amplitude refused");
@@ -101,6 +110,7 @@ int main(void) {
     test_shape_names();
     test_fill();
     test_volts();
+    test_volts_edges_clamped();
     test_volts_refusals();
     test_ua();
     cal_data_select(BOARD_REV_V2);

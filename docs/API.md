@@ -309,7 +309,7 @@ Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `path` | string | with `amplitude_v` | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
-| `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. Both peaks (`offset_v ± amplitude_v`) must be inside what the output can do; nothing is clipped. |
+| `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
 | `amplitude_ua`, `offset_ua` | number (µA) | together | Peak and centre on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
 
 | `route` | boolean | no | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. Default: route the output. |
@@ -318,7 +318,7 @@ Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the 
 
 | Condition | Message |
 |---|---|
-| A peak outside the output's range | `generate: the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
+| A peak more than 5% of the range past the output's range | `generate: the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
 | `amplitude_v` without a 3v3/5v/12v `path` | `generate: path must be 3v3\|5v\|12v with amplitude_v` |
 | `amplitude_v` without `offset_v` (or `_ua`) | `generate: offset_v is required with amplitude_v` |
 | `amplitude` not above 0 | `generate: amplitude_v must be above 0 V` |

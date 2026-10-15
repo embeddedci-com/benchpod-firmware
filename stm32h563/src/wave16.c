@@ -70,8 +70,10 @@ const char *wave16_codes_for_volts(int path, double amplitude_v, double offset_v
     const double a = DAC_CAL[path].a, b = DAC_CAL[path].b;
     const double lo_v = a, hi_v = a + b * 65535.0 / 256.0;
     const double min_v = lo_v < hi_v ? lo_v : hi_v, max_v = lo_v < hi_v ? hi_v : lo_v;
-    /* Half a 16-bit step of slack, so a peak at exactly the end of the range is accepted. */
-    const double slack = fabs(b) / 512.0;
+    /* The calibrated ends sit a few mV inside the nominal range (3v3: about 0.002 to 3.305 V),
+       so "0 to 3.3 V" must work: a peak up to 5% of the range past an end is clamped to it
+       (wave16_fill clamps each sample), as the 8-bit form always did. Further out is refused. */
+    const double slack = (max_v - min_v) * 0.05;
     const double top = offset_v + amplitude_v, bottom = offset_v - amplitude_v;
     if (bottom < min_v - slack || top > max_v + slack) {
         snprintf(s_msg, sizeof(s_msg),

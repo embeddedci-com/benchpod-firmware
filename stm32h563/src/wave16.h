@@ -25,8 +25,9 @@ int wave16_shape_from_name(const char *name, wave16_shape_t *shape);
 void wave16_fill(wave16_shape_t shape, uint32_t n, double amp, double mid, uint16_t *out);
 
 /* Volts on DAC path `path` (cal_data.h dac[] index: 0 = 3v3, 1 = 5v, 2 = 12v) -> *amp and *mid
-   in 16-bit codes for wave16_fill. NULL on success, else why the request is refused (the peaks
-   fall outside what the path can output, or the amplitude is not positive). */
+   in 16-bit codes for wave16_fill. NULL on success, else why the request is refused (a peak
+   more than 5% of the range past what the path can output, or the amplitude is not positive).
+   A peak within that margin is clamped to the path's end. */
 const char *wave16_codes_for_volts(int path, double amplitude_v, double offset_v,
                                    double *amp, double *mid);
 
