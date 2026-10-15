@@ -814,17 +814,15 @@ void signal_engine_psram_report_wedge(void) {
    reflash the iCE40 from its flash bitstream (the proven fix — a full CRESET reconfigure)
    and re-test.  A plain reboot therefore self-heals the iCE40 side, so the cloud
    `psram_recover` command (which just reboots) restores a wedged pod without a physical
-   power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported. */
+   power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported.
+   An iCE40 that never configured (a new board's blank config flash) is the gateware update's
+   job, below: it also runs when the gw0 blob arrives after boot. */
 void psram_boot_selftest_with_recovery(void) {
-    /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up.  A new board's
-       config flash is blank: the iCE40 never configured (CDONE low) and, still hunting its
-       flash for a bitstream, it also fails step 1 below, so the step-2 reflash never triggers.
-       Check CDONE as well. */
+    /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up. */
     const bool configured = ice40_is_configured() != 0;
     psram_boot_selftest();
-    if (!configured || psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        printf("[psram-selftest] %s: loading gateware image 0 from the W25Q...\n",
-               configured ? "iCE40->PSRAM inoperable" : "iCE40 not configured (blank config flash?)");
+    if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
+        printf("[psram-selftest] iCE40->PSRAM inoperable: loading gateware image 0 from the W25Q...\n");
         if (ice40_reflash_image(0) == 0) {
             sleep_ms(5);
             signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
@@ -841,22 +839,35 @@ void psram_boot_selftest_with_recovery(void) {
    pod keeps its old gateware and new gateware features stay missing until something reprograms
    it. Bring it in line with the gateware this firmware was built with, keeping the image kind
    that is running. Only from a slot holding exactly that gateware (blob_store.h), and only when
-   the versions differ, so once per update. Runs at boot and after a gateware blob is installed. */
+   the versions differ, so once per update. Runs at boot and after a gateware blob is installed.
+   A new board's config flash is blank: the iCE40 never configured (CDONE low; boot holds it in
+   reset) and answers v0. Load image 0 into it. Its blobs usually arrive after the firmware
+   (flash-self installs them once the firmware boots), so the gw0 install brings it up without a
+   reboot. */
 void signal_engine_gateware_update(void) {
+    const int configured = ice40_is_configured();
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();
     int deep = (running != 0) && (signal_engine_fpga_features() & FPGA_FEATURE_DEEP_REPLAY);
-    int img = boot_policy_gateware_image(running, embedded, deep);
+    int img = boot_policy_gateware_image(running, embedded, deep, configured);
     if (img < 0) return;
     blob_id_t slot = img == 1 ? BLOB_GW1 : BLOB_GW0;
     if (blob_state(slot) != BLOB_STATE_OK) {
-        printf("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
-               "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
-               blob_name(slot), blob_state_str(blob_state(slot)));
+        if (!configured)
+            printf("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
+                   "hold its gateware (%s): install the gateware blobs\n",
+                   blob_name(slot), blob_state_str(blob_state(slot)));
+        else
+            printf("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
+                   "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
+                   blob_name(slot), blob_state_str(blob_state(slot)));
         return;
     }
-    printf("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
-           (unsigned)running, (unsigned)embedded, img);
+    if (!configured)
+        printf("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
+    else
+        printf("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
+               (unsigned)running, (unsigned)embedded, img);
     if (ice40_reflash_image(img) == 0) {
         sleep_ms(5);
         signal_engine_refresh_version();

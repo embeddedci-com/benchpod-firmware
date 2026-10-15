@@ -22,8 +22,9 @@ const char *boot_policy_off_str(uint32_t off) {
     }
 }
 
-int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep)
+int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep, int configured)
 {
+    if (!configured) return 0;
     if (running == 0 || embedded == 0 || running == embedded) return -1;
     return running_is_deep ? 1 : 0;
 }

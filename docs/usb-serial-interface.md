@@ -168,7 +168,7 @@ command prints `usage: ...` and changes nothing.
 | Command | Description |
 |---|---|
 | `help` | List the commands. |
-| `status` | One `key : value` line each: `device : benchpod`, `mac`, `ip`, `usb` (`net on` or `net off (Wi-Fi configured)`, the pod's and the computer's address, `link up\|down`, frame counters), `dma`, `psram` (boot self-test), `psbus`, `board` (board, firmware version, revision, `nrst_pin`, `usb_cc`), `fpga` (gateware version, reachable or not), `gw` (when the running gateware differs from the embedded one), `hint`, `safe` (safe-mode report), `clock`, `adc`, `dac`, `replay`, `cloud` (`registered state=... device_id=...` or `not registered`), `reset`, `crash`, `boot`, one `stack` line per task, `flash`, `lwip`, `heap`. Tools grep for `benchpod` to recognize a pod. |
+| `status` | One `key : value` line each: `device : benchpod`, `mac`, `ip`, `usb` (`net on` or `net off (Wi-Fi configured)`, the pod's and the computer's address, `link up\|down`, frame counters), `dma`, `psram` (boot self-test), `psbus`, `board` (board, firmware version, revision, `nrst_pin`, `usb_cc`), `fpga` (gateware version, reachable or not), `gw` (when the running gateware differs from the embedded one), `hint`, `safe` (safe-mode report), `clock`, `adc`, `dac`, `replay` (on the digital board, firmware 3.9.2+: one `analog : none` line instead), `cloud` (`registered state=... device_id=...` or `not registered`), `reset`, `crash`, `boot`, one `stack` line per task, `flash`, `lwip`, `heap`. Tools grep for `benchpod` to recognize a pod. |
 | `ping` | SPI-ping the iCE40: `PING ok  version=0x..` or `PING failed`. |
 | `uid` | The MCU's 96-bit unique ID. |
 | `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
@@ -220,6 +220,7 @@ command prints `usage: ...` and changes nothing.
 | `blobs` | One `blob <name> <state> <size> <version> <sha256\|->` line per W25Q release slot (`gw0`, `gw1`, `esp`); `state` is `ok`, `outdated`, `missing` or `unknown` (see JSON `blob_status`). Then `fw-copy <size> bytes, sha256 <prefix>...` or `fw-copy none`: the firmware image the last install stored in the W25Q. |
 | `flash-ice40` | Reflash the iCE40 configuration flash with gateware image 0 from the W25Q `gw0` slot and reconfigure. |
 | `flash-id` | Development builds only. Read the iCE40 configuration flash's JEDEC ID (W25Q64 = `ef 40 17`). |
+| `ice40-erase [gw0] yes` | Development builds only. Erase the start of the iCE40 configuration flash (and, with `gw0`, that blob slot) and hold the iCE40 in reset, so the next boot sees a new board: firmware 3.9.2+ loads image 0 from `gw0` at boot, or as soon as `gw0` is installed. |
 
 Firmware 3.9.0 removed the console uploads (`upload-begin`, `-data`, `-end`, `-commit`,
 `-status`, `-abort`, `upload-sig`): firmware, blob and CA uploads go over the JSON API (`ota_*`),

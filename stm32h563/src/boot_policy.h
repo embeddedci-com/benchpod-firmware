@@ -33,7 +33,9 @@ const char *boot_policy_off_str(uint32_t off);
    gateware matches this firmware, or -1 to leave it: the running version (`running`, 0 = the
    iCE40 did not answer) differs from the one this firmware was built for (`embedded`,
    0 = unknown at build time).
-   Keeps the kind of image that is running: 1 when it is the deep-replay image, else 0. */
-int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep);
+   Keeps the kind of image that is running: 1 when it is the deep-replay image, else 0.
+   An iCE40 that never configured (`configured` 0: CDONE low, a new board's blank config flash)
+   gets image 0 whatever the versions say: any gateware beats none. */
+int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_is_deep, int configured);
 
 #endif /* BOOT_POLICY_H */
