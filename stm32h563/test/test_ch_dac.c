@@ -274,12 +274,12 @@ static void test_generate16(void) {
 
     g_gen16_calls = 0; g_route = -1;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":3.0}");
-    CHECK(strncmp(g_reply, "err:generate: the peaks", 23) == 0 && g_gen16_calls == 0 && g_route == -1,
+    CHECK(strncmp(g_reply, "err:the peaks", 13) == 0 && g_gen16_calls == 0 && g_route == -1,
           "out of range refused before routing: %s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"ext\",\"amplitude_v\":1.0,\"offset_v\":1.0}");
-    CHECK(strcmp(g_reply, "err:generate: path must be 3v3|5v|12v with amplitude_v") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0}");
-    CHECK(strcmp(g_reply, "err:generate: offset_v is required with amplitude_v") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "err:offset_v is required with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"triangle\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":1.5}");
     CHECK(strcmp(g_reply, "err:unknown waveform") == 0, "%s", g_reply);
 

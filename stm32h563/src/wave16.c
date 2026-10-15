@@ -59,11 +59,11 @@ static long mv(double v) { return lround(v * 1000.0); }
 const char *wave16_codes_for_volts(int path, double amplitude_v, double offset_v,
                                    double *amp, double *mid) {
     if (path < 0 || path > 2) {
-        snprintf(s_msg, sizeof(s_msg), "generate: path must be 3v3|5v|12v");
+        snprintf(s_msg, sizeof(s_msg), "path must be 3v3|5v|12v");
         return s_msg;
     }
     if (!(amplitude_v > 0.0)) {
-        snprintf(s_msg, sizeof(s_msg), "generate: amplitude_v must be above 0 V");
+        snprintf(s_msg, sizeof(s_msg), "amplitude_v must be above 0 V");
         return s_msg;
     }
     /* The fit is on 8-bit codes driving the DAC's high byte: code16 = (volts - a) / b * 256. */
@@ -77,7 +77,7 @@ const char *wave16_codes_for_volts(int path, double amplitude_v, double offset_v
     const double top = offset_v + amplitude_v, bottom = offset_v - amplitude_v;
     if (bottom < min_v - slack || top > max_v + slack) {
         snprintf(s_msg, sizeof(s_msg),
-                 "generate: the peaks %ld to %ld mV are outside the %s output's %ld to %ld mV",
+                 "the peaks %ld to %ld mV are outside the %s output's %ld to %ld mV",
                  mv(bottom), mv(top), PATH_NAMES[path], mv(min_v), mv(max_v));
         return s_msg;
     }
@@ -89,14 +89,14 @@ const char *wave16_codes_for_volts(int path, double amplitude_v, double offset_v
 
 const char *wave16_codes_for_ua(double amplitude_ua, double offset_ua, double *amp, double *mid) {
     if (!(amplitude_ua > 0.0)) {
-        snprintf(s_msg, sizeof(s_msg), "generate: amplitude_ua must be above 0 uA");
+        snprintf(s_msg, sizeof(s_msg), "amplitude_ua must be above 0 uA");
         return s_msg;
     }
     const double top = offset_ua + amplitude_ua, bottom = offset_ua - amplitude_ua;
     /* Like current_out: a trough from 4000 uA up to the live zero is played as code 0. */
     if (bottom < (double)CURRENT_OUT_REQUEST_MIN_UA - 0.5 || top > (double)current_out_max_ua() + 0.5) {
         snprintf(s_msg, sizeof(s_msg),
-                 "generate: the peaks %ld to %ld uA are outside the 4-20 mA output's %ld to %ld uA",
+                 "the peaks %ld to %ld uA are outside the 4-20 mA output's %ld to %ld uA",
                  lround(bottom), lround(top), current_out_min_ua(), current_out_max_ua());
         return s_msg;
     }

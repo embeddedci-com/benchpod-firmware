@@ -244,14 +244,14 @@ static void handle_generate16(int conn_id, const char *json, const char *wavefor
     bool ua = json_get_value(json, "amplitude_ua", amp_s, sizeof(amp_s));
     if (!ua) json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s));
     if (!json_get_value(json, ua ? "offset_ua" : "offset_v", off_s, sizeof(off_s))) {
-        send_error(conn_id, ua ? "generate: offset_ua is required with amplitude_ua"
-                               : "generate: offset_v is required with amplitude_v");
+        send_error(conn_id, ua ? "offset_ua is required with amplitude_ua"
+                               : "offset_v is required with amplitude_v");
         return;
     }
     char *end_a = NULL, *end_o = NULL;
     double amp_in = strtod(amp_s, &end_a), off_in = strtod(off_s, &end_o);
     if (end_a == amp_s || *end_a != '\0' || end_o == off_s || *end_o != '\0') {
-        send_error(conn_id, "generate: amplitude and offset must be numbers");
+        send_error(conn_id, "amplitude and offset must be numbers");
         return;
     }
     analog_path_t route;
@@ -264,7 +264,7 @@ static void handle_generate16(int conn_id, const char *json, const char *wavefor
         if (!json_get_value(json, "path", path_s, sizeof(path_s)) ||
             analog_path_from_name(path_s, &route) != 0 ||
             (route != ANALOG_PATH_DAC_3V3 && route != ANALOG_PATH_DAC_5V && route != ANALOG_PATH_DAC_12V)) {
-            send_error(conn_id, "generate: path must be 3v3|5v|12v with amplitude_v");
+            send_error(conn_id, "path must be 3v3|5v|12v with amplitude_v");
             return;
         }
         int idx = route == ANALOG_PATH_DAC_3V3 ? 0 : route == ANALOG_PATH_DAC_5V ? 1 : 2;

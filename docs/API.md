@@ -318,10 +318,10 @@ Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the 
 
 | Condition | Message |
 |---|---|
-| A peak more than 5% of the range past the output's range | `generate: the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
-| `amplitude_v` without a 3v3/5v/12v `path` | `generate: path must be 3v3\|5v\|12v with amplitude_v` |
-| `amplitude_v` without `offset_v` (or `_ua`) | `generate: offset_v is required with amplitude_v` |
-| `amplitude` not above 0 | `generate: amplitude_v must be above 0 V` |
+| A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
+| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
+| `amplitude` not above 0 | `amplitude_v must be above 0 V` |
 
 #### Level request (8-bit)
 
