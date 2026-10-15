@@ -197,18 +197,19 @@ static void test_status_list(void) {
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
-    /* The digital board: cloud_caps_collect clears every analog feature, so the list names none. */
+    /* The digital board: cloud_caps_collect clears every analog feature, so the list names none,
+       not even "signal" (the scope's old name). */
     cloud_caps_t d = typical();
     d.analog = d.dac_ac = d.dac_dc = d.dac_replay = d.deep_replay = false;
     d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = d.generate16 = false;
     d.pod_current = d.nrst_pin = d.usb_cc = false;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &d);
-    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
+    CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
                       "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"gpio_read\",\"capture_trigger\","
                       "\"spi_master\",\"spi_stream\"]") == 0);
-    if (strstr(buf, "analog")) printf("  %s\n", buf);
+    if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 
     /* The frame does not carry usb_cc (the server never read it): adding the field changed nothing. */
     static char f[CLOUD_CAPS_MAX + 1];

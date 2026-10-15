@@ -53,8 +53,11 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
 
 void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     /* Firmware features every pod has, then the ones that depend on the board, the analog front
-       end and the running gateware image. */
-    bp_emit_raw(e, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
+       end and the running gateware image. "signal" is the scope's old name, kept first for older
+       clients on the analog board only: the digital board has no scope (its status says
+       analog:false, and the SDK only reads "signal" from firmware without that flag). */
+    bp_emit_raw(e, c->analog ? ",\"caps\":[\"signal\"," : ",\"caps\":[");
+    bp_emit_raw(e, "\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
                    ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */

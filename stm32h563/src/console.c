@@ -63,6 +63,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdlib.h>
 
 #include "blob_store.h"
+#include "board_variant.h"
 #include "device_identity.h"   /* identity / identity-wipe */
 #include "b64url.h"
 #include "w25q.h"
@@ -175,7 +176,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
         "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
-        "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n");
+        "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
+        "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
 #endif
 }
 
@@ -477,15 +479,21 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  safe   : %s\r\n", boot_guard_report());
         if (clock_on_hsi())
             op(out, ctx, "  clock  : the 25 MHz crystal did not start; running from the internal HSI\r\n");
-        op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
-           ADC_BITS, ADC_CHANNELS, ADC_FULLSCALE_MV);
-        op(out, ctx, "  dac    : ac=%s replay=%s dc=%s  gen %d-bit / replay %d-bit x%d, %d mV FS\r\n",
-           DAC_AC ? "yes" : "no", DAC_REPLAY ? "yes" : "no", DAC_DC ? "yes" : "no",
-           DAC_BITS, DAC_REPLAY_BITS, DAC_CHANNELS, DAC_FULLSCALE_MV);
-        op(out, ctx, "  replay : deep=%s (needs v%u), max %lu samples (%s)\r\n",
-           deep ? "yes" : "no", DAC_DEEP_REPLAY_MIN_GW,
-           (unsigned long)(deep ? FPGA_DAC_REPLAY_MAX_SAMPLES : SIGNAL_MAX_SAMPLES),
-           deep ? "PSRAM" : "BRAM");
+        /* The digital board has the gateware's ADC/DAC engines but nothing behind them
+           (board_variant.h), so it names no ADC or DAC, like its status (analog:false). */
+        if (!board_has_analog()) {
+            op(out, ctx, "  analog : none (digital board: no ADC, DAC or 4-20 mA)\r\n");
+        } else {
+            op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
+               ADC_BITS, ADC_CHANNELS, ADC_FULLSCALE_MV);
+            op(out, ctx, "  dac    : ac=%s replay=%s dc=%s  gen %d-bit / replay %d-bit x%d, %d mV FS\r\n",
+               DAC_AC ? "yes" : "no", DAC_REPLAY ? "yes" : "no", DAC_DC ? "yes" : "no",
+               DAC_BITS, DAC_REPLAY_BITS, DAC_CHANNELS, DAC_FULLSCALE_MV);
+            op(out, ctx, "  replay : deep=%s (needs v%u), max %lu samples (%s)\r\n",
+               deep ? "yes" : "no", DAC_DEEP_REPLAY_MIN_GW,
+               (unsigned long)(deep ? FPGA_DAC_REPLAY_MAX_SAMPLES : SIGNAL_MAX_SAMPLES),
+               deep ? "PSRAM" : "BRAM");
+        }
         /* Cloud registration, so `benchpod discover` can report whether this pod is already
            claimed WITHOUT the pod being on the network — the TCP/JSON `cloud_status` command
            can only answer once there is a network to answer over, and a pod fresh out of its
@@ -596,6 +604,27 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
             vTaskDelay(pdMS_TO_TICKS(200));
             NVIC_SystemReset();
+        }
+#endif
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
+    } else if (!strcmp(argv[0], "ice40-erase")) {
+        /* Make this pod a new board again, to prove the blank-board gateware load: erase the
+           start of the iCE40 config flash (its image begins at 0) and hold the iCE40 in reset,
+           so the next boot finds it unconfigured. "gw0" also empties that slot, like a pod
+           whose blobs arrive after its firmware. */
+        const bool gw0 = argc >= 3 && !strcmp(argv[1], "gw0");
+        if (argc < 2 || strcmp(argv[argc - 1], "yes") || (argc >= 3 && !gw0)) {
+            op(out, ctx, "  ice40-erase [gw0] yes : blank the iCE40 config flash (and slot gw0); then reboot\r\n");
+        } else if (w25q_session_open() != 0) {
+            op(out, ctx, "  ice40-erase: the W25Q flash does not answer\r\n");
+        } else {
+            int rc = w25q_erase_block(0);
+            if (rc == 0 && gw0) rc = blob_store_clear(BLOB_GW0);
+            w25q_session_close();
+            ice40_hold_off_bus();
+            op(out, ctx, rc == 0 ? "  iCE40 config flash erased%s, iCE40 held in reset: reboot to test the blank-board path\r\n"
+                                 : "  ice40-erase failed%s (see device log)\r\n",
+               gw0 ? " (and slot gw0)" : "");
         }
 #endif
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
