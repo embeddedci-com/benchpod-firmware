@@ -450,6 +450,9 @@ void esp_wifi_ctrl_poll(void) {
     /* A backoff that expires mid-flash would release the C3's reset and knock it out of its
        ROM loader, so leave the straps alone while a console command holds them. */
     if (s_paused) return;
+    /* A C3 flash runs in the background on the hw worker and owns EN/BOOT until it ends, also
+       when new credentials (wifi-set, wifi-clear) reload this control in the meantime. */
+    if (esp_rom_flash_busy()) return;
     /* Gate the whole co-processor on configuration. */
     if (!s_configured) {
         if (s_started) { esp_hosted_spi_stop(); s_started = false; s_state = WC_DOWN; }
@@ -497,8 +500,8 @@ void esp_wifi_ctrl_poll(void) {
     case WC_WAIT_READY:
         if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline)) {
             if (!s_flash_tried && blob_store_present(BLOB_ESP)) {
-                /* Hold the C3 in reset and hand it to the worker: the ROM-loader flash
-                   blocks for ~140 s, which the net task (lwIP, cloud) cannot afford. */
+                /* Hold the C3 in reset and hand it to the worker, which runs the ~2 minute
+                   ROM-loader flash in the background (esp_rom_flash_start). */
                 esp_hosted_spi_stop(); s_started = false;
                 s_flash_tried = true;
                 s_flash_done  = false;
