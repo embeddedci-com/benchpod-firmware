@@ -41,6 +41,7 @@ typedef struct {
     bool          deep_replay;
     unsigned long replay_max_samples;
     bool          control_loop, loop_sources, loop_input_map, cotrig;
+    bool          generate16;     /* generate's calibrated form: volts/uA at 16 bits (wave16.h) */
     bool          gpio_read, capture_trigger, spi_master;
     bool          gps;            /* UART2 in the gateware (v48+): the emulated GPS receiver */
     bool          nrst_pin;

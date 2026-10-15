@@ -294,9 +294,34 @@ Use this as a lightweight keepalive or to confirm the firmware is reachable befo
 
 ### `generate` — DAC waveform output
 
-Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the iCE40). The waveform is built from 8-bit levels and scaled to the 16-bit DAC.
+Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the iCE40). There are two forms:
 
-#### Request
+- **Calibrated, 16-bit** (firmware 3.9.1+, caps `generate16`, `generate_bits` 16): give the waveform in volts on a DAC output (`path`, `amplitude_v`, `offset_v`), or in microamps on the 4-20 mA output (`amplitude_ua`, `offset_ua`). The pod routes the output, turns the values into DAC codes with the same per-path calibration as [`dac_out`](#dac_out--route-an-output-path-and-set-a-calibrated-voltage) and [`current_out`](#current_out--hold-a-current-on-the-4-20-ma-output-j9), and builds the waveform at the DAC's full 16 bits.
+- **Levels, 8-bit** (every firmware): `amplitude` and `offset` are 8-bit levels, the waveform is built from them and played in the DAC's high byte: 256 steps over the output's range, and no calibration.
+
+#### Calibrated request (16-bit)
+
+```json
+{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
+{"cmd":"generate","waveform":"square","freq":10,"amplitude_ua":4000,"offset_ua":12000}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `path` | string | with `amplitude_v` | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
+| `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. Both peaks (`offset_v ± amplitude_v`) must be inside what the output can do; nothing is clipped. |
+| `amplitude_ua`, `offset_ua` | number (µA) | together | Peak and centre on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
+
+`waveform`, `freq`, `duration_ms`, `sample_rate_mhz` and `on_capture` work as in the 8-bit form below. The reply is `{"bits":16}`, with `"cotrig"` added for `on_capture`. One step is about 50 µV on the 3v3 output (the 8-bit form: about 13 mV).
+
+| Condition | Message |
+|---|---|
+| A peak outside the output's range | `generate: the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
+| `amplitude_v` without a 3v3/5v/12v `path` | `generate: path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without `offset_v` (or `_ua`) | `generate: offset_v is required with amplitude_v` |
+| `amplitude` not above 0 | `generate: amplitude_v must be above 0 V` |
+
+#### Level request (8-bit)
 
 ```json
 {"cmd":"generate","waveform":"<type>","freq":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"duration_ms":<ms>}
@@ -1382,6 +1407,7 @@ counters and the capability list. No parameters.
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
 | `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |
+| `generate16` | [`generate`](#generate--dac-waveform-output) takes volts or microamps and plays them at 16 bits (firmware 3.9.1+, analog board only). The frame's `generate_bits` is then 16, else 8. |
 | `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
 | `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
 | `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |

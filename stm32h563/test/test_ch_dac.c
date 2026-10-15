@@ -7,6 +7,7 @@
  *
  * The DAC engine, PSRAM, the heavy gate and the clock are fakes.
  */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -17,6 +18,9 @@
 #include "adc_pool.h"
 #include "cloud_client.h"
 #include "dac_limits.h"
+#include "i2c_bus.h"
+#include "wave16.h"
+#include "cal_data.h"
 #include "pico_compat.h"
 
 static int fails;
@@ -70,6 +74,22 @@ uint32_t signal_engine_dac_replay_rate_hz(void) { return 80000u; }
 int dac_generate_sine(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
 int dac_generate_square(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
 int dac_generate_sawtooth(float f, uint8_t a, uint8_t o, uint32_t d, float hz) { (void)f; (void)a; (void)o; (void)d; (void)hz; return 0; }
+static int g_route = -1;
+static double g_gen_amp, g_gen_mid;
+static wave16_shape_t g_gen_shape;
+static int g_gen16_calls;
+int analog_path_set(analog_path_t p) { g_route = (int)p; return 0; }
+int analog_path_from_name(const char *n, analog_path_t *out) {
+    if (strcmp(n, "3v3") == 0) *out = ANALOG_PATH_DAC_3V3;
+    else if (strcmp(n, "5v") == 0) *out = ANALOG_PATH_DAC_5V;
+    else if (strcmp(n, "12v") == 0) *out = ANALOG_PATH_DAC_12V;
+    else if (strcmp(n, "ext") == 0) *out = ANALOG_PATH_ADC_EXT;
+    else return -1;
+    return 0;
+}
+int dac_generate16(wave16_shape_t s, float f, double amp, double mid, uint32_t d, float hz) {
+    (void)f; (void)d; (void)hz; g_gen_shape = s; g_gen_amp = amp; g_gen_mid = mid; g_gen16_calls++; return 0;
+}
 int dac_set_constant(uint8_t v, uint32_t div) { (void)v; (void)div; return 0; }
 void dac_stop(void) {}
 bool fpga_dac_arm_on_capture(void) { return false; }
@@ -240,7 +260,37 @@ static void test_teardown(void) {
     heavy_release(0);
 }
 
+/* The calibrated generate: volts or uA, routed, 16-bit; the 0..255 form is left alone. */
+static void test_generate16(void) {
+    g_gen16_calls = 0; g_route = -1;
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"path\":\"3v3\",\"amplitude_v\":1.48,\"offset_v\":1.65}");
+    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0, "volts reply %s", g_reply);
+    CHECK(g_gen16_calls == 1 && g_route == ANALOG_PATH_DAC_3V3 && g_gen_shape == WAVE16_SINE, "volts routed + played");
+    CHECK(fabs(g_gen_mid - (double)dac_code16_for_volts(0, 1.65f)) <= 1.0, "mid %.1f", g_gen_mid);
+
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"square\",\"freq\":10,\"amplitude_ua\":4000,\"offset_ua\":12000,\"on_capture\":true}");
+    CHECK(strcmp(g_reply, "ok:{\"bits\":16,\"cotrig\":false}") == 0, "uA reply %s", g_reply);
+    CHECK(g_route == ANALOG_PATH_CURRENT_OUT && g_gen_shape == WAVE16_SQUARE, "uA routes the 4-20 mA output");
+
+    g_gen16_calls = 0; g_route = -1;
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":3.0}");
+    CHECK(strncmp(g_reply, "err:generate: the peaks", 23) == 0 && g_gen16_calls == 0 && g_route == -1,
+          "out of range refused before routing: %s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"ext\",\"amplitude_v\":1.0,\"offset_v\":1.0}");
+    CHECK(strcmp(g_reply, "err:generate: path must be 3v3|5v|12v with amplitude_v") == 0, "%s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0}");
+    CHECK(strcmp(g_reply, "err:generate: offset_v is required with amplitude_v") == 0, "%s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"triangle\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":1.5}");
+    CHECK(strcmp(g_reply, "err:unknown waveform") == 0, "%s", g_reply);
+
+    /* The 8-bit form does not touch the 16-bit path. */
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"amplitude\":100,\"offset\":128}");
+    CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 0, "8-bit form unchanged: %s", g_reply);
+}
+
 int main(void) {
+    cal_data_select(0);
+    test_generate16();
     test_load_bin_refusals();
     test_load_bin_ram();
     test_load_bin_psram_tunnel();

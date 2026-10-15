@@ -64,6 +64,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->loop_sources = analog && caps.loop_sources;
     c->loop_input_map = analog && caps.loop_input_map;
     c->cotrig = analog && caps.cotrig;
+    c->generate16 = analog && DAC_AC;
     c->gpio_read = caps.gpio_read;
     c->capture_trigger = caps.capture_trigger;
     c->spi_master = caps.spi_master;

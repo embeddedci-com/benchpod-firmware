@@ -1295,6 +1295,39 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
                                duration_ms, sample_rate_hz);
 }
 
+int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
+                   uint32_t duration_ms, float sample_rate_hz) {
+    if (freq <= 0.0f || !(fabs(amp) >= 0.5)) {
+        printf("[sig] ERROR: generate16 invalid params (freq=%ld mHz amp=%ld)\n",
+               (long)lroundf(freq * 1000.0f), (long)lround(amp));
+        return -1;
+    }
+    uint32_t period  = 0;
+    uint32_t divider = compute_divider_and_period(freq, sample_rate_hz, &period);
+    if (divider == 0 || period == 0) return -1;
+
+    /* The table goes straight into the 16-bit buffer: no 8-bit step on the way. */
+    wave16_fill(shape, period, amp, mid, sample_buf16);
+    if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
+    if (fpga_start_dac(period, divider) != 0) return -1;
+
+    float eff_rate = dac_effective_rate_hz(divider);
+    printf("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
+           "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
+           shape == WAVE16_SQUARE ? "square" : shape == WAVE16_SAWTOOTH ? "sawtooth" : "sine",
+           (unsigned long)lroundf(freq * 1000.0f), (long)lround(amp), (long)lround(mid),
+           duration_ms > 0 ? "timed" : "continuous",
+           (unsigned long)period, (unsigned long)divider, (unsigned long)lroundf(eff_rate));
+
+    if (duration_ms > 0) {
+        dac_stop_at = make_timeout_time_ms(duration_ms);
+        dac_timed   = true;
+    } else {
+        dac_timed   = false;
+    }
+    return 0;
+}
+
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
                                 float sample_rate_hz) {
     if (!data || len == 0 || len > SIGNAL_BUF_SIZE) {

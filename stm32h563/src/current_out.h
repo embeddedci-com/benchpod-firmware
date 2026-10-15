@@ -56,4 +56,9 @@ long current_out_max_ua(void);
    request was refused: below CURRENT_OUT_REQUEST_MIN_UA or above current_out_max_ua(). */
 const char *current_out_code(long ua, uint16_t *code);
 
+/* The fractional 16-bit code on the fitted line for `ua`, not rounded or clamped (the
+   generator's 16-bit waveforms, wave16.h). Below the floor the real output stays at code 0's
+   current; callers clamp. */
+double current_out_code_exact(double ua);
+
 #endif /* CURRENT_OUT_H */
