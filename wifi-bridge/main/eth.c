@@ -61,7 +61,6 @@ static esp_err_t eth_input(esp_eth_handle_t h, uint8_t *buf, uint32_t len, void 
         // esp_wifi_internal_tx copies the frame.
         if (esp_wifi_internal_tx(WIFI_IF_STA, buf, (uint16_t)len) == ESP_OK) {
             g_bridge.wifi_tx++;
-            board_activity();
         } else {
             g_bridge.wifi_tx_err++;
         }

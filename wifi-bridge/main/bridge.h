@@ -15,9 +15,7 @@
 #define PIN_PHY_NRST    4   // LAN8742A nRST, 10k pull-down (R16)
 #define PIN_MDC         23
 #define PIN_MDIO        18
-#define PIN_LED_WIFI    13  // green, active high
-#define PIN_LED_ACT     14  // yellow, active high
-#define PIN_LED_STAT    33  // red, active high
+#define PIN_STATUS      13  // STATUS test pad TP8 (no LEDs on the board); GPIO14 and GPIO33 unused
 #define PIN_BTN_FACTORY 34  // input only, 10k pull-up (R20), active low
 #define PIN_BTN_PAIR    35  // input only, 10k pull-up (R41) + 100 nF (C27), active low
 
@@ -39,12 +37,11 @@ void bridge_counters(bwp_counters_t *c);
 void bridge_status(bwp_status_t *s);
 uint8_t bridge_flags(void);
 
-// ---- board.c: LEDs, button, RMII clock, safe reboot
+// ---- board.c: buttons, STATUS test pad, RMII clock, safe reboot
 void board_init(void);
 void board_rmii_clock(bool on);
-void board_activity(void);       // pulse the activity LED
 void board_reboot(void);         // stops the RMII clock first (GPIO0 is a boot strap)
-void board_start_tasks(void);    // LED + factory-reset button task
+void board_start_tasks(void);    // buttons + STATUS pad task
 
 // ---- eth.c
 esp_err_t eth_start(void);

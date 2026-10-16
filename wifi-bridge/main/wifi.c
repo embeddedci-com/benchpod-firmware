@@ -103,7 +103,6 @@ static esp_err_t wifi_rx(void *buffer, uint16_t len, void *eb)
     if (a == L2_FORWARD) {
         if (eth_send(buffer, len) == ESP_OK) {
             g_bridge.eth_tx++;
-            board_activity();
         } else {
             g_bridge.eth_tx_err++;
         }
