@@ -1,0 +1,44 @@
+menu "BenchPod Wi-Fi bridge"
+
+    config BRIDGE_HW_REV
+        string "Hardware revision reported in HELLO"
+        default "A"
+
+    choice BRIDGE_RMII_CLK
+        prompt "RMII 50 MHz reference clock"
+        default BRIDGE_RMII_CLK_EXT_OSC
+        help
+            Rev A ships with the 50 MHz oscillator X1 on GPIO0 (OE on GPIO32). The build option
+            without X1 and with R15 fitted has the ESP32 generate the clock on GPIO17.
+
+        config BRIDGE_RMII_CLK_EXT_OSC
+            bool "External oscillator into GPIO0 (X1 fitted)"
+        config BRIDGE_RMII_CLK_GPIO17_OUT
+            bool "ESP32 outputs the clock on GPIO17 (R15 fitted, X1 not fitted)"
+    endchoice
+
+    config BRIDGE_PHY_ADDR
+        int "LAN8742A PHY address"
+        range 0 31
+        default 0
+
+    config BRIDGE_COUNTRY
+        string "Wi-Fi country code"
+        default "US"
+        help
+            Regulatory domain, fixed (no 802.11d adoption from the AP). "US" limits the radio to
+            channels 1-11, as FCC/ISED require for a product sold in the US and Canada.
+
+    config BRIDGE_HELLO_INTERVAL_MS
+        int "HELLO interval (ms)"
+        default 2000
+
+    config BRIDGE_FACTORY_RESET_HOLD_MS
+        int "Factory-reset button hold time (ms)"
+        default 5000
+
+    config BRIDGE_MARK_VALID_DELAY_S
+        int "Seconds a new OTA image must run before it is marked valid"
+        default 30
+
+endmenu

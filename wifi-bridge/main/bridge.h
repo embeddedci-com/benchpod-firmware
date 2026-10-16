@@ -1,0 +1,90 @@
+// BenchPod Wi-Fi bridge: interfaces between the firmware modules.
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "bwp.h"
+#include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "l2fwd.h"
+
+// ---- Hardware rev A pin map (benchpod-private/pcb/wifi-bridge, tools/gen_schematic.py)
+#define PIN_OSC_OE      32  // 50 MHz oscillator output enable, 10k pull-down (R14)
+#define PIN_PHY_NRST    4   // LAN8742A nRST, 10k pull-down (R16)
+#define PIN_MDC         23
+#define PIN_MDIO        18
+#define PIN_LED_WIFI    13  // green, active high
+#define PIN_LED_ACT     14  // yellow, active high
+#define PIN_LED_STAT    33  // red, active high
+#define PIN_BTN_FACTORY 34  // input only, 10k pull-up (R20), active low
+
+// ---- Shared forwarding state (main.c)
+typedef struct {
+    portMUX_TYPE lock;  // guards fwd
+    l2fwd_t fwd;
+    // Counters: each one is written by one task only (see bwp_counters_t for meanings).
+    volatile uint32_t eth_rx, wifi_tx, wifi_tx_err, drop_eth;  // Ethernet rx task
+    volatile uint32_t wifi_rx, eth_tx, eth_tx_err, drop_wifi;  // Wi-Fi task
+} bridge_t;
+
+extern bridge_t g_bridge;
+
+// Copies the learned pod MAC; false if none yet.
+bool bridge_pod_mac(uint8_t mac[6]);
+void bridge_counters(bwp_counters_t *c);
+// Collects state, flags, Wi-Fi details and counters for HELLO, STATUS and the console.
+void bridge_status(bwp_status_t *s);
+uint8_t bridge_flags(void);
+
+// ---- board.c: LEDs, button, RMII clock, safe reboot
+void board_init(void);
+void board_rmii_clock(bool on);
+void board_activity(void);       // pulse the activity LED
+void board_reboot(void);         // stops the RMII clock first (GPIO0 is a boot strap)
+void board_start_tasks(void);    // LED + factory-reset button task
+
+// ---- eth.c
+esp_err_t eth_start(void);
+esp_err_t eth_send(const uint8_t *frame, size_t len);
+bool eth_link_up(void);
+void eth_get_mac(uint8_t mac[6]);
+
+// ---- wifi.c
+esp_err_t wifi_start(void);
+void wifi_pod_mac_changed(void);  // learned or changed pod MAC: (re)start the station with it
+void wifi_creds_changed(void);    // stored credentials changed or were cleared
+bool wifi_is_connected(void);
+uint8_t wifi_state(void);         // bwp_state_t
+// Fills SSID, channel, RSSI, BSSID and the last disconnect reason.
+void wifi_fill_status(bwp_status_t *s);
+// Blocking scan, strongest first. Returns BWP_OK or BWP_E_BUSY / BWP_E_INTERNAL.
+bwp_result_t wifi_scan(bwp_ap_t *aps, size_t max, size_t *n);
+
+// ---- creds.c: Wi-Fi credentials in NVS (encrypted NVS in production builds)
+bool creds_load(char ssid[33], size_t *ssid_len, char pass[65]);
+bool creds_present(void);
+esp_err_t creds_store(const char *ssid, size_t ssid_len, const char *pass);
+esp_err_t creds_clear(void);
+// Clears credentials and tells the Wi-Fi module (button, console, control channel).
+esp_err_t bridge_clear_wifi(void);
+esp_err_t bridge_set_wifi(const char *ssid, size_t ssid_len, const char *pass);
+
+// ---- ota.c: shared by the control channel and the console
+void ota_init(void);
+bwp_result_t ota_begin(uint32_t size, const char **msg);
+bwp_result_t ota_data(uint32_t offset, const uint8_t *data, size_t len, uint32_t *next, const char **msg);
+bwp_result_t ota_end(const char **msg);
+void ota_abort(void);
+bool ota_active(void);
+void ota_poll(void);              // aborts a transfer idle for more than 60 s
+void ota_schedule_mark_valid(void);
+
+// ---- control.c
+void control_start(void);
+void control_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame
+void control_notify(void);                    // state changed: send an unsolicited STATUS
+
+// ---- console.c
+void console_start(void);
