@@ -17,7 +17,7 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit(e, ",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
                "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
                "\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
-               "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,",
+               "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lan_tls\":true,",
             c->flash_kb, c->sig_policy, c->lan_policy);
     bp_emit(e, "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
                "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
