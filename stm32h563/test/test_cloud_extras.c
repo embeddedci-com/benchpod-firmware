@@ -26,6 +26,7 @@ const blob_manifest_t *blob_manifest(blob_id_t id) { (void)id; return NULL; }
 
 /* The CA upload check reads the staged image; unused here. */
 int ota_read_staged(uint32_t off, uint8_t *buf, uint32_t n) { (void)off; (void)buf; (void)n; return -1; }
+int lan_tls_validate_staged(uint32_t size, char *why, size_t cap) { (void)size; (void)why; (void)cap; return 0; }
 
 static int failures;
 #define CHECK(cond) do { \

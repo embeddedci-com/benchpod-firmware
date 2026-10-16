@@ -49,6 +49,7 @@
 #include <string.h>
 
 #include "pico/time.h"
+#include "lan_tls.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -249,6 +250,13 @@ void handle_status(int conn_id, const char *json) {
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
                 "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",
             caps.sig_policy, (unsigned)fw_sign_key_count(), caps.lan_policy);
+    {
+        /* The LAN API over TLS (lan_tls.h): clients pin this certificate's sha256. */
+        lan_tls_info_t tls;
+        lan_tls_get_info(&tls);
+        bp_emit(&e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
+                pod_policy_https_only() ? "true" : "false", tls.ready ? tls.sha256 : "");
+    }
     {
         uint32_t left = 0;
         bool held = lease_gate_active(HAL_GetTick(), &left);

@@ -111,6 +111,10 @@
    mbedTLS so cloud_client.c can open a wss:// connection.  See
    config/mbedtls_bench_config.h and src/mbedtls_port.c. */
 #define LWIP_ALTCP              1
+/* altcp pcbs: the cloud link (TLS over TCP, through the proxy layer when one is set: up to 3 per
+   connection, 2 connections), both LAN listeners (8080: 1, 8443: 2) and 5 LAN connections (a
+   TLS one takes 2). The default (MEMP_NUM_TCP_PCB = 10) is too few once 8443 exists. */
+#define MEMP_NUM_ALTCP_PCB      20
 #define LWIP_ALTCP_TLS          1
 #define LWIP_ALTCP_TLS_MBEDTLS  1
 

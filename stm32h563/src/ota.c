@@ -8,6 +8,7 @@
 #include "fw_sign.h"
 #include "b64url.h"
 #include "psram_regions.h"   /* staging lands on the LA capture region */
+#include "lan_tls.h"         /* LAN_TLS_UPLOAD_MAX: the "tls" target's size limit */
 
 #include "mbedtls/sha256.h"
 #include <stdbool.h>
@@ -74,7 +75,7 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
-static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca" };
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls" };
 
 int ota_target_from_name(const char *name) {
     if (!name || !name[0]) return OTA_TARGET_FIRMWARE;
@@ -102,7 +103,18 @@ __attribute__((weak)) int ota_validate_staged(ota_target_t t, uint32_t size, cha
 }
 
 static uint32_t target_max_size(ota_target_t t) {
+    if (t == OTA_TARGET_TLS) return LAN_TLS_UPLOAD_MAX;
     return t == OTA_TARGET_FIRMWARE ? ota_max_size() : blob_slot_capacity(target_blob(t));
+}
+
+/* Configuration an admin installs (company CA, LAN TLS certificate): not code, so no signature,
+   and it must make sense before it is accepted (ota_validate_staged). */
+static bool target_is_config(ota_target_t t) { return t == OTA_TARGET_CA || t == OTA_TARGET_TLS; }
+
+__attribute__((weak)) int ota_install_staged_config(ota_target_t t, uint32_t size, char *why, size_t cap) {
+    (void)t; (void)size;
+    snprintf(why, cap, "not supported");
+    return -1;
 }
 
 static void set_err(const char *e) {
@@ -163,7 +175,7 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
                         const uint8_t *sig, size_t sig_len) {
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
-    if ((unsigned)target > OTA_TARGET_CA) { set_err("bad target"); return -1; }
+    if ((unsigned)target > OTA_TARGET_TLS) { set_err("bad target"); return -1; }
     s_target  = target;
     s_version = version;
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
@@ -172,7 +184,7 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
     s_size = size;
     /* Signatures cover code (firmware, gateware, the C3 image); the company CA is configuration
        an admin installs, so it is neither checked nor refused by the signature policy. */
-    if (target != OTA_TARGET_CA && check_signature(sig, sig_len, expect) != 0) return -1;
+    if (!target_is_config(target) && check_signature(sig, sig_len, expect) != 0) return -1;
     memcpy(s_expect, expect, 32);
     s_size     = size;
     s_received = 0;
@@ -291,8 +303,8 @@ int ota_end(void) {
     if (rc > 0) { set_err("sha256 mismatch"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE && staged_fits_this_flash() != 0) return -1;
     if (s_target == OTA_TARGET_FIRMWARE && staged_keeps_enforcement() != 0) return -1;
-    if (s_target == OTA_TARGET_CA) {
-        char why[64] = "";
+    if (target_is_config(s_target)) {
+        char why[80] = "";
         if (ota_validate_staged(s_target, s_size, why, sizeof(why)) != 0) { set_err(why[0] ? why : "invalid"); return -1; }
     }
     s_state = OTA_VERIFIED;
@@ -556,6 +568,16 @@ static int staged_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
 int ota_install_blob(void) {
     if (s_state != OTA_VERIFIED) { set_err("no verified image staged"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE) { set_err("not a blob"); return -1; }
+    if (s_target == OTA_TARGET_TLS) {
+        char why[80] = "";
+        if (ota_install_staged_config(s_target, s_size, why, sizeof(why)) != 0) {
+            set_err(why[0] ? why : "install failed");
+            return -1;
+        }
+        s_state = OTA_INSTALLED;
+        printf("[ota] installed %s (%lu bytes)\n", ota_target_name(s_target), (unsigned long)s_size);
+        return 0;
+    }
     blob_id_t id = target_blob(s_target);
     /* The W25Q shares the bus with the PSRAM and the gateware's PSRAM masters: a W25Q session
        quiesces them like every runtime bus grab. blob_store_write hashes what it wrote back against the

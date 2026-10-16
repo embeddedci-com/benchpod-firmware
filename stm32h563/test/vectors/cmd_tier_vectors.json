@@ -39,6 +39,7 @@
     "usb_network": "T0",
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
+    "lan_tls": "T0",
     "generate": "T1",
     "measure": "T1",
     "load": "T1",
@@ -240,6 +241,10 @@
     },
     {
       "line": "{\"cmd\":\"cloud_proxy\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_tls\"}",
       "tier": "T0"
     },
     {
@@ -529,6 +534,22 @@
     },
     {
       "line": "{\"cmd\":\"cloud_proxy\",\"clear\":false}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_tls\",\"https_only\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_tls\",\"https_only\":false}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_tls\",\"regenerate\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_tls\",\"regenerate\":false}",
       "tier": "T0"
     },
     {

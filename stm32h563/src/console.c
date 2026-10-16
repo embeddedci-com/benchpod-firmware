@@ -72,6 +72,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "pod_policy.h"
 #include "cloud_extras.h"
 #include "fw_sign.h"
+#include "lan_tls.h"
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 
@@ -150,6 +151,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
+        "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate (port 8443)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
         "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
         "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n");
@@ -891,6 +893,22 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         if (why) op(out, ctx, "usb-network error %s\r\n", why);
         else     op(out, ctx, "usb-network %s\r\n", pod_policy_usb_net() ? "on" : "off");
+    } else if (!strcmp(argv[0], "lan-tls")) {
+        /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
+        const char *why = NULL;
+        if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
+            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false, false);
+        else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
+            why = lan_tls_regenerate();
+        else if (argc >= 2)
+            why = "use https-only on|off or regenerate";
+        static lan_tls_info_t in;   /* console task only */
+        lan_tls_get_info(&in);
+        if (why)            op(out, ctx, "lan-tls error %s\r\n", why);
+        else if (!in.ready) op(out, ctx, "lan-tls port %d https-only %s none %s\r\n", LAN_TLS_PORT,
+                               pod_policy_https_only() ? "on" : "off", in.error);
+        else                op(out, ctx, "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\"\r\n", LAN_TLS_PORT,
+                               pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key, in.subject);
     } else if (!strcmp(argv[0], "lan-policy")) {
         const char *why = NULL;
         if (argc >= 2) {

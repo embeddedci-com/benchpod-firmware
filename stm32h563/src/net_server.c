@@ -2,7 +2,8 @@
  * net_server.c — LwIP (NO_SYS=1) bring-up + the JSON/SCPI TCP command server.
  *
  * Replaces the RP2350 ESP32-AT path: the wired RMII interface comes up via DHCP,
- * and a TCP server on port 8080 hands each connection's bytes to the hw worker
+ * and a TCP server on port 8080 (plaintext) and 8443 (TLS, lan_tls.h) hands each connection's
+ * bytes to the hw worker
  * task (hw_worker_submit_bytes) — command_handler now runs THERE, not here, so a
  * long command can't stall lwIP.  This file runs entirely on the net task and
  * owns lwIP exclusively (NO_SYS=1 is single-threaded): it drains the worker's
@@ -35,6 +36,11 @@
 #include "lwip/init.h"
 #include "lwip/netif.h"
 #include "lwip/tcp.h"
+#include "lwip/altcp.h"
+#include "lwip/altcp_tcp.h"
+#include "lwip/altcp_tls.h"
+#include "altcp_tls_bp/altcp_tls_bp.h"
+#include "lan_tls.h"
 #include "lwip/timeouts.h"
 
 #include "lwip/dhcp.h"
@@ -64,9 +70,19 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 #include <stdint.h>
 
 #define TCP_SERVER_PORT   8080
-#define NET_MAX_CONN      5            /* TCP conn ids 0..4 (= CH_MAX_CONN) */
+#define NET_MAX_CONN      5            /* TCP conn ids 0..4 (= CH_MAX_CONN), plaintext and TLS */
+/* TLS sessions at once: each holds ~25-30 KB of FreeRTOS heap (16 KB IN record buffer, 4 KB OUT,
+   handshake state). A TLS client beyond this, or one arriving while the heap is below the floor
+   (room the cloud link needs to reconnect), is refused. Plaintext slots are not affected. */
+#define LAN_TLS_MAX_SESSIONS   2
+#define LAN_TLS_HEAP_FLOOR     (48u * 1024u)
 
-static struct tcp_pcb *conn_pcb[NET_MAX_CONN];
+static struct altcp_pcb *conn_pcb[NET_MAX_CONN];
+/* The TLS configuration a connection holds (lan_tls_ref), NULL for plaintext. */
+static struct altcp_tls_config *s_conn_tls[NET_MAX_CONN];
+static bool s_conn_refused[NET_MAX_CONN];   /* srv_recv refused data (TLS: kick when room) */
+static volatile int8_t s_https_req = -1;    /* -1 none, else the new HTTPS-only setting */
+static bool s_https_only;                   /* the net task's copy (pod_policy_https_only) */
 
 /* ---- worker -> net requests (the worker task can't touch lwIP) ------------
    The hw worker executes commands and produces replies into the conn_tx rings,
@@ -255,14 +271,28 @@ int wifi_get_rssi(int *out_rssi_dbm) { if (out_rssi_dbm) *out_rssi_dbm = -1; ret
 /* ---- raw TCP server callbacks ------------------------------------------ */
 static int conn_id_of(void *arg) { return (int)(intptr_t)arg - 1; }
 
-static err_t srv_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+/* The slot no longer has a connection: drop its TLS configuration reference (lan_tls_collect
+   frees a retired one later, after lwIP has freed the TLS state that points at it). */
+static void conn_detach(int id)
+{
+    conn_pcb[id] = NULL;
+    s_conn_refused[id] = false;
+    if (s_conn_tls[id]) { lan_tls_unref(s_conn_tls[id]); s_conn_tls[id] = NULL; }
+}
+
+static void conn_unhook(struct altcp_pcb *pcb)
+{
+    altcp_arg(pcb, NULL); altcp_recv(pcb, NULL); altcp_err(pcb, NULL);
+}
+
+static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
     int id = conn_id_of(arg);
 
     if (p == NULL) {                          /* remote closed */
-        if (id >= 0 && id < NET_MAX_CONN) { hw_worker_submit_closed(id); conn_pcb[id] = NULL; }
-        tcp_arg(tpcb, NULL); tcp_recv(tpcb, NULL); tcp_err(tpcb, NULL);
-        tcp_close(tpcb);
+        if (id >= 0 && id < NET_MAX_CONN) { hw_worker_submit_closed(id); conn_detach(id); }
+        conn_unhook(tpcb);
+        if (altcp_close(tpcb) != ERR_OK) altcp_abort(tpcb);
         return ERR_OK;
     }
     if (err != ERR_OK) { pbuf_free(p); return err; }
@@ -281,7 +311,7 @@ static err_t srv_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
        count never reached `total`, so the completion ack never fired and the client
        timed out.  See docs / the concurrent-capture hwe2e tests. */
     if (id >= 0 && id < NET_MAX_CONN) {
-        if (!hw_worker_can_accept(p->tot_len)) return ERR_MEM;
+        if (!hw_worker_can_accept(p->tot_len)) { s_conn_refused[id] = true; return ERR_MEM; }
 
         static uint8_t seg[HW_WORK_DATA_MAX];   /* net task only (single-threaded) */
         u16_t off = 0;
@@ -307,20 +337,20 @@ static err_t srv_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
                            "aborting to avoid silent truncation\n",
                            id, (unsigned)off, (unsigned)p->tot_len);
                     hw_worker_submit_closed(id);
-                    conn_pcb[id] = NULL;
-                    tcp_arg(tpcb, NULL); tcp_recv(tpcb, NULL); tcp_err(tpcb, NULL);
+                    conn_detach(id);
+                    conn_unhook(tpcb);
                     pbuf_free(p);
-                    tcp_abort(tpcb);
+                    altcp_abort(tpcb);
                     return ERR_ABRT;
                 }
             }
             off += n;
         }
-        tcp_recved(tpcb, p->tot_len);
+        altcp_recved(tpcb, p->tot_len);
         pbuf_free(p);
         return ERR_OK;
     }
-    tcp_recved(tpcb, p->tot_len);
+    altcp_recved(tpcb, p->tot_len);
     pbuf_free(p);
     return ERR_OK;
 }
@@ -329,12 +359,20 @@ static void srv_err(void *arg, err_t err)
 {
     (void)err;
     int id = conn_id_of(arg);
-    if (id >= 0 && id < NET_MAX_CONN) { hw_worker_submit_closed(id); conn_pcb[id] = NULL; }
+    if (id >= 0 && id < NET_MAX_CONN) { hw_worker_submit_closed(id); conn_detach(id); }
 }
 
-static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
+static int tls_sessions(void)
 {
-    (void)arg;
+    int n = 0;
+    for (int i = 0; i < NET_MAX_CONN; i++) if (s_conn_tls[i]) n++;
+    return n;
+}
+
+/* arg: the listener's TLS configuration, NULL for the plaintext listener. */
+static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
+{
+    struct altcp_tls_config *tls = arg;
     if (err != ERR_OK || newpcb == NULL) return ERR_VAL;
 
     int id = -1;
@@ -343,23 +381,35 @@ static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     for (int i = 0; i < NET_MAX_CONN; i++) {
         if (conn_pcb[i] == NULL && !hw_worker_conn_busy(i)) { id = i; break; }
     }
-    if (id < 0) { tcp_abort(newpcb); return ERR_ABRT; }   /* too many clients */
+    if (id < 0) { altcp_abort(newpcb); return ERR_ABRT; }   /* too many clients */
 
     /* The LAN policy is for the external LAN (Ethernet, Wi-Fi). The USB network adapter means
-       physical presence: it stays reachable under "off" too (pod_policy.h). */
-    bool usb = ip4_addr_eq(ip_2_ip4(&newpcb->local_ip), netif_ip4_addr(&s_usb_netif));
-    if (!usb && !s_lan_up) { tcp_abort(newpcb); return ERR_ABRT; }
+       physical presence: it stays reachable under "off" too (pod_policy.h). So does plaintext
+       under HTTPS-only: the USB link never crosses a network. */
+    bool usb = ip4_addr_eq(ip_2_ip4(altcp_get_ip(newpcb, 1)), netif_ip4_addr(&s_usb_netif));
+    if (!usb && !s_lan_up) { altcp_abort(newpcb); return ERR_ABRT; }
+    if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
+    if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS || xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR)) {
+        log_printf("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
+                   (unsigned)xPortGetFreeHeapSize());
+        altcp_abort(newpcb);
+        return ERR_ABRT;
+    }
 
     conn_tx_reset(id);           /* clear any stale bytes from a prior conn on this slot */
     s_close_req[id]   = 0;
     s_nodelay_req[id] = -1;
     conn_pcb[id] = newpcb;
     s_conn_usb[id] = usb;
-    tcp_setprio(newpcb, TCP_PRIO_MIN);
-    ip_set_option(newpcb, SOF_KEEPALIVE);   /* a dead idle client frees its slot (~50 s) */
-    tcp_arg(newpcb, (void *)(intptr_t)(id + 1));
-    tcp_recv(newpcb, srv_recv);
-    tcp_err(newpcb, srv_err);
+    s_conn_refused[id] = false;
+    s_conn_tls[id] = tls;
+    if (tls) lan_tls_ref(tls);
+    altcp_setprio(newpcb, TCP_PRIO_MIN);
+    /* a dead idle client frees its slot (~50 s) */
+    altcp_keepalive_enable(newpcb, TCP_KEEPIDLE_DEFAULT, TCP_KEEPINTVL_DEFAULT, TCP_KEEPCNT_DEFAULT);
+    altcp_arg(newpcb, (void *)(intptr_t)(id + 1));
+    altcp_recv(newpcb, srv_recv);
+    altcp_err(newpcb, srv_err);
     return ERR_OK;
 }
 
@@ -369,21 +419,27 @@ static err_t srv_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 static void net_tx_drain(void)
 {
     for (int id = 0; id < NET_MAX_CONN; id++) {
-        struct tcp_pcb *pcb = conn_pcb[id];
+        struct altcp_pcb *pcb = conn_pcb[id];
         if (!pcb) continue;
         if (hw_worker_conn_busy(id)) continue;   /* (cannot be: accept skips busy slots) */
         bool wrote = false;
         const uint8_t *chunk;
         size_t n;
         while ((n = conn_tx_peek(id, &chunk)) > 0) {
-            u16_t sb = tcp_sndbuf(pcb);
+            u16_t sb = altcp_sndbuf(pcb);
             if (sb == 0) break;
             if (n > sb) n = sb;
-            if (tcp_write(pcb, chunk, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) break;
+            if (altcp_write(pcb, chunk, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) break;
             conn_tx_advance(id, n);
             wrote = true;
         }
-        if (wrote) tcp_output(pcb);
+        if (wrote) altcp_output(pcb);
+        /* A TLS connection whose plaintext srv_recv refused: hand it back once there is room
+           (plaintext TCP retries by itself on the next segment or tcp_fasttmr). */
+        if (s_conn_refused[id] && s_conn_tls[id] && hw_worker_can_accept(HW_WORK_DATA_MAX)) {
+            s_conn_refused[id] = false;
+            altcp_tls_bp_kick(pcb);
+        }
     }
     for (int t = 0; t < CH_CLOUD_TUNNEL_CONN_COUNT; t++) {
         int id = CH_CLOUD_TUNNEL_CONN + t;
@@ -412,18 +468,18 @@ static void net_apply_worker_requests(void)
     for (int id = 0; id < NET_MAX_CONN; id++) {
         if (s_nodelay_req[id] >= 0) {
             if (conn_pcb[id]) {
-                if (s_nodelay_req[id]) tcp_nagle_disable(conn_pcb[id]);
-                else                   tcp_nagle_enable(conn_pcb[id]);
+                if (s_nodelay_req[id]) altcp_nagle_disable(conn_pcb[id]);
+                else                   altcp_nagle_enable(conn_pcb[id]);
             }
             s_nodelay_req[id] = -1;
         }
         if (s_close_req[id]) {
             s_close_req[id] = 0;
             if (conn_pcb[id]) {
-                struct tcp_pcb *pcb = conn_pcb[id];
-                conn_pcb[id] = NULL;
-                tcp_arg(pcb, NULL); tcp_recv(pcb, NULL); tcp_err(pcb, NULL);
-                if (tcp_close(pcb) != ERR_OK) tcp_abort(pcb);
+                struct altcp_pcb *pcb = conn_pcb[id];
+                conn_detach(id);
+                conn_unhook(pcb);
+                if (altcp_close(pcb) != ERR_OK) altcp_abort(pcb);
             }
             conn_tx_reset(id);
             hw_worker_submit_closed(id);   /* worker releases gate/stream state */
@@ -441,17 +497,49 @@ static void net_frame_cloud_reply(void)
         cloud_client_send_command_response(req_id, reply, rl);
 }
 
-static struct tcp_pcb *s_listen;   /* the :8080 listener (srv_accept applies the LAN policy) */
+static struct altcp_pcb *s_listen;       /* :8080 (srv_accept applies the LAN policy) */
+static struct altcp_pcb *s_tls_listen;   /* :8443, with s_tls_listen_cfg */
+static struct altcp_tls_config *s_tls_listen_cfg;
+static uint32_t s_tls_listen_gen;
+
+static struct altcp_pcb *listen_on(struct altcp_pcb *pcb, u16_t port, void *arg)
+{
+    if (pcb == NULL) return NULL;
+    if (altcp_bind(pcb, IP_ANY_TYPE, port) != ERR_OK) { altcp_close(pcb); return NULL; }
+    struct altcp_pcb *l = altcp_listen(pcb);
+    if (l == NULL) { altcp_close(pcb); return NULL; }
+    altcp_arg(l, arg);
+    altcp_accept(l, srv_accept);
+    return l;
+}
+
+/* (Re)start the :8443 listener with the current certificate. Open TLS sessions keep the
+   configuration they started with (lan_tls_ref). */
+static void tls_listener_sync(void)
+{
+    struct altcp_tls_config *cfg = lan_tls_config();
+    s_tls_listen_gen = lan_tls_generation();
+    if (s_tls_listen && s_tls_listen_cfg == cfg) return;
+    if (s_tls_listen) {
+        altcp_accept(s_tls_listen, NULL);
+        altcp_close(s_tls_listen);
+        s_tls_listen = NULL;
+    }
+    if (s_tls_listen_cfg) { lan_tls_unref(s_tls_listen_cfg); s_tls_listen_cfg = NULL; }
+    if (!cfg) return;
+    s_tls_listen = listen_on(altcp_tls_new(cfg, IPADDR_TYPE_ANY), LAN_TLS_PORT, cfg);
+    if (s_tls_listen) {
+        s_tls_listen_cfg = cfg;
+        lan_tls_ref(cfg);
+    } else {
+        log_printf("[net] could not listen on :%d\n", LAN_TLS_PORT);
+    }
+}
 
 static void server_start(void)
 {
-    if (s_listen) return;
-    struct tcp_pcb *pcb = tcp_new();
-    if (pcb == NULL) return;
-    if (tcp_bind(pcb, IP_ADDR_ANY, TCP_SERVER_PORT) != ERR_OK) { memp_free(MEMP_TCP_PCB, pcb); return; }
-    pcb = tcp_listen(pcb);
-    tcp_accept(pcb, srv_accept);
-    s_listen = pcb;
+    if (!s_listen) s_listen = listen_on(altcp_tcp_new_ip_type(IPADDR_TYPE_ANY), TCP_SERVER_PORT, NULL);
+    tls_listener_sync();
 }
 
 /* ---- DHCP management (per interface) ----------------------------------- */
@@ -737,6 +825,11 @@ static void mdns_txt(struct mdns_service *svc, void *arg)
     n = snprintf(kv, sizeof(kv), "id=%s",   s_mdns_id);       mdns_resp_add_service_txtitem(svc, kv, n);
     n = snprintf(kv, sizeof(kv), "host=%s", s_mdns_host);     mdns_resp_add_service_txtitem(svc, kv, n);
     n = snprintf(kv, sizeof(kv), "port=%d", TCP_SERVER_PORT); mdns_resp_add_service_txtitem(svc, kv, n);
+    if (s_tls_listen) {
+        n = snprintf(kv, sizeof(kv), "tls=%d", LAN_TLS_PORT);    mdns_resp_add_service_txtitem(svc, kv, n);
+    }
+    n = snprintf(kv, sizeof(kv), "https_only=%d", s_https_only ? 1 : 0);
+    mdns_resp_add_service_txtitem(svc, kv, n);
 }
 
 static void mdns_register(struct netif *netif)
@@ -779,7 +872,33 @@ bool net_conn_on_usb(int conn_id)
     return conn_id >= 0 && conn_id < NET_MAX_CONN && conn_pcb[conn_id] && s_conn_usb[conn_id];
 }
 
+bool net_conn_on_tls(int conn_id)
+{
+    return conn_id >= 0 && conn_id < NET_MAX_CONN && conn_pcb[conn_id] && s_conn_tls[conn_id];
+}
+
+int net_tls_sessions(void) { return tls_sessions(); }
+
 void pod_policy_on_lan_change(pod_lan_policy_t now) { s_lan_req = (now == POD_LAN_OFF) ? 0 : 1; }
+void pod_policy_on_https_only_change(bool on) { s_https_req = on ? 1 : 0; }
+
+/* HTTPS-only (pod_policy.h): plaintext :8080 connections from the external LAN close and new
+   ones are refused (srv_accept). The USB link keeps plaintext. Net task. */
+static void https_only_apply(bool on)
+{
+    if (on == s_https_only) return;
+    s_https_only = on;
+    if (on)
+        for (int id = 0; id < NET_MAX_CONN; id++)
+            if (conn_pcb[id] && !s_conn_usb[id] && !s_conn_tls[id]) s_close_req[id] = 1;
+    /* The TXT record carries the setting: tell the LAN. */
+    if (s_lan_up) {
+        if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
+        if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
+    }
+    log_printf("[net] HTTPS-only %s: plaintext :%d %s\r\n", on ? "on" : "off", TCP_SERVER_PORT,
+               on ? "answers on USB only" : "open again");
+}
 
 /* ---- public API -------------------------------------------------------- */
 void net_init(void)
@@ -839,14 +958,17 @@ void net_init(void)
     netif_set_up(&s_usb_netif);
     log_printf("[net] usb: pod %s, host %s\r\n", usb_netif_pod_ip(), usb_netif_host_ip());
 
-    /* The :8080 listener and mDNS: always on the USB network adapter, on the external LAN unless
-       the LAN policy is "off" (pod_policy.h). */
+    /* The :8080 and :8443 listeners and mDNS: always on the USB network adapter, on the external
+       LAN unless the LAN policy is "off" (pod_policy.h). The TLS certificate first (generated on
+       the first boot of firmware with LAN TLS). */
+    s_https_only = pod_policy_https_only();
+    lan_tls_init();
     server_start();
     mdns_register(&s_usb_netif);
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
-    log_printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d\r\n",
-           TCP_SERVER_PORT);
+    log_printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d, TLS on :%d%s\r\n",
+           TCP_SERVER_PORT, LAN_TLS_PORT, s_https_only ? " (HTTPS-only)" : "");
 }
 
 /* Carry out a reload a settings command requested (net_reload.h): after its reply has left the
@@ -888,6 +1010,9 @@ void net_poll(void)
     esp_wifi_ctrl_poll();            /* drive Wi-Fi association (if configured) */
     net_tx_drain();                  /* worker reply rings -> lwIP              */
     if (s_lan_req >= 0) { int8_t r = s_lan_req; s_lan_req = -1; lan_access(r == 1); }
+    if (s_https_req >= 0) { int8_t r = s_https_req; s_https_req = -1; https_only_apply(r == 1); }
+    if (s_tls_listen_gen != lan_tls_generation()) tls_listener_sync();   /* new certificate */
+    lan_tls_collect();
     net_apply_worker_requests();     /* worker-requested close / Nagle toggles  */
     net_frame_cloud_reply();         /* a finished cloud command -> response    */
     net_eth_apply_request();         /* apply a pending eth stop/start/restart  */

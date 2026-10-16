@@ -9,7 +9,8 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 | Property | Value |
 |---|---|
 | Protocol | TCP |
-| Default port | `8080` |
+| Default port | `8080` (plaintext) |
+| TLS port | `8443` (TLS 1.2, firmware 3.9.3+), same protocol; see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
 | Framing | Newline-delimited (`\n`) — one JSON object per line |
 | Encoding | UTF-8 |
 | Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `"busy"`) |
@@ -23,6 +24,12 @@ nc <device-ip> 8080
 **Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
 
 The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS (on Ethernet and Wi-Fi unless the [LAN policy](#lan_policy--what-the-external-lan-may-do) is `off`; on the USB link always).
+
+**Over TLS.** From firmware 3.9.3 the same API also listens on port `8443` with TLS 1.2. Everything below works the same way on it (JSON, SCPI, the raw modes). The pod's certificate is its own (generated on first boot, or one you install), so clients pin its SHA-256 on first use; `benchpod`, the `embeddedci` SDK and the MCP server do this for you and use `8443` by default when the pod has it. With [HTTPS-only](#lan_tls--the-lan-api-over-tls) on, `8080` answers only on the USB network adapter. Test it by hand with:
+
+```bash
+openssl s_client -connect <device-ip>:8443 -quiet
+```
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
 
@@ -39,8 +46,10 @@ The pod has two command channels, and they have deliberately different trust mod
 ### The LAN API is unauthenticated
 
 The JSON-over-TCP and SCPI interfaces on port `8080` have **no authentication, no
-authorization, and no transport encryption**. Any client that can open a TCP
-connection to the pod has the full command set, which includes:
+authorization, and no transport encryption**. Port `8443` (firmware 3.9.3+) is the same API over
+TLS: it adds **encryption and integrity** against the network path (a Wi-Fi bridge, a shared
+switch), not authentication. Any client that can open a TCP connection to either port has the
+full command set, which includes:
 
 - driving the DAC and the analog outputs,
 - switching target power on and off (`target_power`),
@@ -58,6 +67,12 @@ instrument control (tiers T0 and T1 of `src/cmd_tier.c`): persisted settings (Wi
 limits, calibration, the policies) and firmware updates then need the cloud or USB. `off` refuses
 TCP connections over Ethernet and Wi-Fi and stops the mDNS advertisement there. Only the cloud and the USB console can change it, from the web app's device
 settings or `benchpod lan-policy set`.
+
+**HTTPS-only** (`lan_tls` with `https_only`, default off) turns plaintext `8080` off on the
+external LAN, so only TLS crosses Ethernet and Wi-Fi; the USB network adapter keeps `8080`. A
+plaintext LAN connection may turn it on but never off, and may not replace or regenerate the TLS
+certificate: an active man-in-the-middle on `8080` could otherwise swap the certificate before a
+client pins it. See [`lan_tls`](#lan_tls--the-lan-api-over-tls).
 
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
 VLAN or behind a firewall rule that admits only the hosts that need it. This is the
@@ -239,6 +254,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
+| `lan_tls` | T0/T2 | The LAN API's TLS certificate (port 8443) and the HTTPS-only setting | object | no |
 | `ota_begin` | T3 | Start a firmware or blob update | object | no |
 | `ota_data` | T3 | Send one base64url chunk of the image | object | no |
 | `ota_end` | T3 | Verify the staged image's SHA-256 (and signature) | object | no |
@@ -1387,6 +1403,7 @@ counters and the capability list. No parameters.
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
+| `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. |
 | `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures` | integer | Network-stack and heap health counters. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
@@ -1405,6 +1422,7 @@ counters and the capability list. No parameters.
 |---|---|
 | `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
 | `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
+| `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
 | `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
@@ -3227,7 +3245,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` target is not signed). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -3577,6 +3595,61 @@ get `usb_network: change it on the device (the USB console, or over the USB link
 everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
 credentials also turn the adapter off (status `usb.off_reason`).
 
+### `lan_tls` — the LAN API over TLS
+
+Firmware 3.9.3+. See `docs/design/lan-tls.md`.
+
+```json
+{"cmd":"lan_tls"}
+{"cmd":"lan_tls","https_only":true}
+{"cmd":"lan_tls","regenerate":true}
+```
+
+```json
+{"status":"ok","data":{"port":8443,"https_only":false,"sessions":1,"origin":"generated",
+ "key":"EC P-256","subject":"CN=benchpod-baea06","san":["benchpod-baea06","benchpod-baea06.local"],
+ "not_after":"9999-12-31","sha256":"3f1c...e9"}}
+```
+
+The pod also serves this API on TCP `8443` with TLS 1.2 (ECDHE, AES-GCM or ChaCha20-Poly1305). On
+the first boot of firmware with LAN TLS it generates an ECDSA P-256 key and a self-signed
+certificate for `benchpod-xxxxxx` and `benchpod-xxxxxx.local` (its mDNS name), valid to 9999 (the
+pod has no clock), and keeps both in its internal config flash. `sha256` is the SHA-256 of the
+certificate (DER), the value clients pin. `origin` is `generated` or `user`. `sessions` is the
+number of TLS connections open now: at most 2 at once (each needs ~25 KB of RAM), a third is
+refused at connect; plaintext connections do not count. When there is no certificate the reply has
+`error` instead of the certificate fields.
+
+| Field | Effect |
+|---|---|
+| `https_only` | `true`: plaintext connections to `8080` over Ethernet and Wi-Fi are refused and open ones closed, so only `8443` answers there. `8080` keeps answering on the [USB network adapter](usb-serial-interface.md#usb-network-adapter). Default `false`. Stored; survives reboots and updates. |
+| `regenerate` | `true`: a new key and self-signed certificate. New connections get it; open ones keep the old one. Clients that pinned the old one must trust the new one (`benchpod lan-tls trust`). |
+
+**Your own certificate.** Upload a PEM bundle, the certificate (optionally followed by its chain)
+and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the upload path as target
+`tls`: `ota_begin` with `"target":"tls"` and the bundle's `size` and `sha256`, `ota_data` chunks,
+`ota_end` (the pod checks that both parse and that the key matches the certificate) and
+`ota_commit` (stored and used for new connections; the reply's `state` is `installed`). At most
+7.6 KB. `benchpod lan-tls set-cert --cert pod.pem --key pod.key` does all of it.
+
+**Who may change it.** Reading works from anywhere, and so does turning `https_only` on. Turning
+it off, `regenerate` and the upload need the USB console, the USB network adapter, the cloud, or a
+LAN connection over TLS. A plaintext LAN connection gets
+`lan_tls: change it over TLS (port 8443), over USB or from the cloud`. Reading is T0; the changes
+are T2 (so `locked` keeps them off the external LAN). mDNS: the `_benchpod._tcp` TXT record carries
+`tls=8443` and `https_only=0|1`.
+
+**Raw sockets and VISA.** `8443` speaks the same SCPI as `8080`, wrapped in TLS. VISA's raw socket
+resource (`TCPIP::<host>::8080::SOCKET`) has no TLS, so with HTTPS-only on, run a local TLS
+wrapper and point VISA at it, for example with the pod's certificate from
+`benchpod lan-tls show --pem > pod.pem`:
+
+```bash
+socat TCP-LISTEN:5025,reuseaddr,fork OPENSSL:benchpod-baea06.local:8443,cafile=pod.pem
+```
+
+then use `TCPIP::127.0.0.1::5025::SOCKET`.
+
 ### `cloud_ca` / `cloud_proxy`: company CA and HTTP proxy for the cloud link
 
 See `docs/design/cloud-hardening.md` section 3.
@@ -3625,7 +3698,7 @@ the lease itself at the announced expiry or when the cloud link drops. `status` 
 ## Implementation Notes
 
 - **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects are not supported, except the `trigger` object of the captures; arrays only where a command documents one (`data` of `can_write`, `reply_data` of `can_respond`). Fields must be at the top level of the JSON object, and unknown fields are ignored.
-- **No authentication:** Any TCP client that can reach port 8080 has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
+- **No authentication:** Any TCP client that can reach port 8080 (or 8443, its TLS form) has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
 - **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `"busy"` until the first one's reply is complete.
 - **DAC runs until stopped:** A `generate` with `duration_ms` 0 runs the DAC until `dac_stop`, the next `generate`, `measure` or `replay`, or `OUTPut OFF` over SCPI.
 - **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.

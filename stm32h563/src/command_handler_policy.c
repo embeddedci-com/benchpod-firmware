@@ -10,6 +10,7 @@
 #include "fw_sign.h"
 #include "bp_json.h"
 #include "cloud_extras.h"
+#include "lan_tls.h"
 
 #include <string.h>
 
@@ -72,6 +73,58 @@ void handle_usb_network(int conn_id, const char *json) {
     char data[48];
     snprintf(data, sizeof(data), "{\"setting\":\"%s\"}", pod_policy_usb_net() ? "on" : "off");
     send_ok_str(conn_id, data);
+}
+
+/* ---- LAN TLS (lan_tls.h, docs/design/lan-tls.md) ----------------------------- */
+
+/* {"cmd":"lan_tls"[,"https_only":true|false][,"regenerate":true]}
+   -> {"port":8443,"https_only":bool,"sessions":N,"origin":..,"key":..,"subject":..,"san":[..],
+       "not_after":..,"sha256":..[,"error":..]}
+   Installing a certificate goes through the upload path (OTA target "tls"). Reading works from
+   anywhere; turning HTTPS-only on too. Turning it off and regenerating need the USB link, the
+   cloud or a LAN connection over TLS (pod_policy_lan_tls_gate). */
+void handle_lan_tls(int conn_id, const char *json) {
+    const policy_src_t src = command_handler_policy_src(conn_id);
+    const bool usb = net_conn_on_usb(conn_id), tls = net_conn_on_tls(conn_id);
+    char v[8] = {0};
+    if (bp_json_get(json, "https_only", v, sizeof(v))) {
+        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
+            send_error(conn_id, "lan_tls: https_only must be true or false");
+            return;
+        }
+        const char *why = pod_policy_set_https_only(!strcmp(v, "true"), src, usb, tls);
+        if (why) { send_error(conn_id, why); return; }
+    }
+    if (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0) {
+        const char *why = pod_policy_lan_tls_gate(src, usb, tls);
+        if (!why) why = lan_tls_regenerate();
+        if (why) { send_error(conn_id, why); return; }
+    }
+    lan_tls_info_t in;
+    lan_tls_get_info(&in);
+    char resp[640];   /* worker stack (12 KB) */
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"port\":%d,\"https_only\":%s,\"sessions\":%d,",
+            LAN_TLS_PORT, pod_policy_https_only() ? "true" : "false", net_tls_sessions());
+    if (in.ready) {
+        bp_emit_raw(&e, "\"origin\":");    bp_emit_jstr(&e, in.origin);
+        bp_emit_raw(&e, ",\"key\":");      bp_emit_jstr(&e, in.key);
+        bp_emit_raw(&e, ",\"subject\":");  bp_emit_jstr(&e, in.subject);
+        bp_emit_raw(&e, ",\"san\":[");
+        for (int i = 0; i < in.nsan; i++) {
+            if (i) bp_emit_raw(&e, ",");
+            bp_emit_jstr(&e, in.san[i]);
+        }
+        bp_emit_raw(&e, "],\"not_after\":"); bp_emit_jstr(&e, in.not_after);
+        bp_emit_raw(&e, ",\"sha256\":");     bp_emit_jstr(&e, in.sha256);
+    } else {
+        bp_emit_raw(&e, "\"error\":");
+        bp_emit_jstr(&e, in.error[0] ? in.error : "no certificate");
+    }
+    bp_emit_raw(&e, "}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "lan_tls: reply too large"); return; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
 /* ---- cloud link: company CA and HTTP proxy (cloud_extras.h) ----------------- */

@@ -2,6 +2,7 @@
  * cloud_extras.c — company CA and HTTP proxy for the cloud link (see cloud_extras.h).
  */
 #include "cloud_extras.h"
+#include "lan_tls.h"
 #include "blob_store.h"
 #include "w25q.h"
 #include "cloud_ca.h"
@@ -163,6 +164,7 @@ const char *cloud_extras_ca_check(const uint8_t *pem, size_t len) {
 
 /* The staged company CA must parse before ota_end accepts it (ota.h). */
 int ota_validate_staged(ota_target_t t, uint32_t size, char *why, size_t cap) {
+    if (t == OTA_TARGET_TLS) return lan_tls_validate_staged(size, why, cap);
     if (t != OTA_TARGET_CA) return 0;
     if (size > CLOUD_CA_MAX_BYTES) { snprintf(why, cap, "company CA larger than %u bytes", CLOUD_CA_MAX_BYTES); return -1; }
     uint8_t *buf = pvPortMalloc(size + 1);

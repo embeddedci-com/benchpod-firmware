@@ -51,9 +51,10 @@ typedef enum {
     OTA_TARGET_GW1,
     OTA_TARGET_ESP,
     OTA_TARGET_CA,      /* the company CA for the cloud link: configuration, not code (no signature) */
+    OTA_TARGET_TLS,     /* the LAN TLS certificate + key (lan_tls.h): configuration, internal flash */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp", "ca" (NULL or "" = firmware). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca", "tls" (NULL or "" = firmware). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);
@@ -150,8 +151,13 @@ int ota_end(void);
    Returns <0 if no verified image is staged or the write failed. */
 int ota_commit(void);
 /* The blob half of ota_commit: copy the verified staged blob into its slot, state -> installed.
-   Calls blob_store_on_installed() so the pod can put the new blob to use. */
+   Calls blob_store_on_installed() so the pod can put the new blob to use. Target "tls" goes to
+   ota_install_staged_config instead (internal flash, not a W25Q slot). */
 int ota_install_blob(void);
+/* Install a verified configuration upload that does not live in a W25Q slot (target "tls":
+   lan_tls.c reads it with ota_read_staged). 0 = installed, else -1 with why filled. Weak default
+   refuses, so the host tests link without lan_tls. */
+int ota_install_staged_config(ota_target_t t, uint32_t size, char *why, size_t cap);
 /* Re-hash the staged image with the PSRAM bus ALREADY held by the caller (ota_commit, right
    before it goes RAM-resident): 0 = still the verified image, -1 = changed or unreadable. */
 int ota_reverify_held(void);

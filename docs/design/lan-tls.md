@@ -55,7 +55,7 @@ plaintext part. It does not add client authentication (see "Not in scope").
             and the TLS listener uses it for new connections (open TLS sessions keep the old one).
 
 `status` gains `"lan_tls":{"port":8443,"https_only":false,"sha256":"..."}` and the capability
-`lan_tls`. USB console: `tls`, `tls https-only on|off`, `tls regenerate`, and the existing upload
+`lan_tls`. USB console: `lan-tls`, `lan-tls https-only on|off`, `lan-tls regenerate`, and the existing upload
 path with target `tls`.
 
 ### Who may change what
@@ -86,20 +86,20 @@ firmware reads as off.
 - Trust: trust on first use, pinned by the SHA-256 of the pod's certificate (DER) per address in a
   file the CLI and the SDK share: `~/.config/benchpod/known_pods.json` (the CLI's config dir). A
   mismatch is an error that names both fingerprints and how to accept the new one
-  (`benchpod tls trust <host>`). When the CLI or SDK replaces or regenerates the cert itself, it
+  (`benchpod lan-tls trust <host>`). When the CLI or SDK replaces or regenerates the cert itself, it
   updates the pin from the reply. With a CA bundle (`--tls-ca`, `BENCHPOD_TLS_CA`), the client
   verifies chain and host name instead of pinning (for user certificates signed by a company CA).
 - A pod that refuses plaintext (https_only) with the client on an explicit `:8080` gets a clear
   error that says to use `host` or `host:8443`.
 
-CLI commands (match `benchpod cloud ca ...` style):
+CLI commands (named like `benchpod lan-policy`):
 
-    benchpod tls [show]                         cert subject, SAN, origin, SHA-256, https-only, port
-    benchpod tls set-cert --cert x.pem --key y.key
-    benchpod tls regenerate
-    benchpod tls https-only on|off
-    benchpod tls trust [<host>]                 pin the pod's current cert (after a deliberate change)
-    benchpod tls forget [<host>]                drop the pin
+    benchpod lan-tls [show]                     cert subject, SAN, origin, SHA-256, https-only, port
+    benchpod lan-tls set-cert --cert x.pem --key y.key
+    benchpod lan-tls regenerate
+    benchpod lan-tls https-only on|off
+    benchpod lan-tls trust [<host>]                 pin the pod's current cert (after a deliberate change)
+    benchpod lan-tls forget [<host>]                drop the pin
 
 SDK: `BenchPod.lan_tls()`, `set_lan_tls_https_only()`, `set_lan_tls_cert()`, `regenerate_lan_tls()`;
 TLS transport options `tls=None|True|False`, `tls_ca=`. MCP: `connect` follows the SDK; a `lan_tls`
@@ -115,7 +115,7 @@ the cloud command channel (`lan_tls`), T2 like `lan_policy`.
 
 8080 stays the raw-socket port. With HTTPS-only on, raw-socket tools need a TLS wrapper on the
 computer, for example `socat TCP-LISTEN:5025,reuseaddr,fork OPENSSL:benchpod-xxxxxx.local:8443,cafile=pod.pem`
-with `pod.pem` from `benchpod tls show --pem`.
+with `pod.pem` from `benchpod lan-tls show --pem`.
 
 ## Resource budget (to be measured on hardware)
 

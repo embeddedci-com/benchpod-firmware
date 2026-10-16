@@ -935,6 +935,9 @@ struct altcp_tls_config *altcp_tls_create_config_server(u8_t cert_count)
   }
 
   mbedtls_ssl_conf_ca_chain(&conf->conf, NULL, NULL);
+  /* BenchPod: a server here never asks for client certificates (ALTCP_MBEDTLS_AUTHMODE is the
+     client's setting); OPTIONAL would add a CertificateRequest to every handshake. */
+  mbedtls_ssl_conf_authmode(&conf->conf, MBEDTLS_SSL_VERIFY_NONE);
   return conf;
 }
 
