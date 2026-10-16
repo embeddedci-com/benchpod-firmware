@@ -2,6 +2,7 @@
 # Build the Wi-Fi bridge firmware in the pinned ESP-IDF Docker image (idf-image).
 #
 #   ./build.sh              dev build -> build/benchpod-wifi-bridge.bin (+ bootloader, partition table)
+#   ./build.sh production   production build (secure boot v2, flash encryption) -> build-prod/, unsigned
 #   ./build.sh <idf.py args> anything else for idf.py, e.g. ./build.sh menuconfig, ./build.sh size
 #
 # Dev builds sign the app with keys/dev_signing_key.pem (RSA-3072), generated on the first build
@@ -16,7 +17,14 @@ if [ "${1:-}" = "--in-container" ]; then
     mkdir -p keys
     python -m espsecure generate_signing_key --version 2 --scheme rsa3072 keys/dev_signing_key.pem
   fi
-  if [ $# -eq 0 ]; then
+  if [ "${1:-}" = "production" ]; then
+    # Separate build dir and sdkconfig, so dev and production settings never mix.
+    idf.py -B build-prod -D SDKCONFIG=build-prod/sdkconfig \
+      -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.production" build
+    echo "=== unsigned production artifacts: sign them on the release signing machine ==="
+    ls -l build-prod/benchpod-wifi-bridge.bin build-prod/bootloader/bootloader.bin \
+      build-prod/partition_table/partition-table.bin
+  elif [ $# -eq 0 ]; then
     idf.py build
     idf.py size
     echo "=== artifacts ==="

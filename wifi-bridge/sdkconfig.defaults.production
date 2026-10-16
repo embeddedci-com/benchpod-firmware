@@ -1,0 +1,24 @@
+# Production overlay: secure boot v2, flash encryption (release mode), encrypted NVS.
+# Applied on top of sdkconfig.defaults by:  ./build.sh production
+# Burning these eFuses is permanent: read docs/SECURITY.md before flashing a board with this.
+
+# Secure boot v2 (RSA-3072): the ROM checks the bootloader, the bootloader checks the app, the
+# app checks OTA images, all against the digest of our release key burned into eFuse BLOCK2.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=n
+CONFIG_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_V2_ENABLED=y
+# The release key never leaves the signing machine (HSM): build unsigned, sign with
+# `espsecure.py sign_data --version 2` there. See docs/SECURITY.md.
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n
+
+# Flash encryption, release mode: the app partitions and nvs_keys are encrypted with a per-chip
+# key that cannot be read back; the UART bootloader cannot decrypt flash.
+CONFIG_SECURE_FLASH_ENC_ENABLED=y
+CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
+
+# NVS (Wi-Fi passphrase) encrypted with XTS keys kept in the encrypted nvs_keys partition.
+CONFIG_NVS_ENCRYPTION=y
+
+# No ROM download mode after the factory flash: recovery goes through the app (signed OTA from
+# the pod or over the console) and the bootloader's rollback. Decision to confirm, see SECURITY.md.
+CONFIG_SECURE_DISABLE_ROM_DL_MODE=y

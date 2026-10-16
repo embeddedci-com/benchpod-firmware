@@ -3,3 +3,4 @@ sdkconfig
 sdkconfig.old
 keys/
 managed_components/
+build-prod/
