@@ -112,8 +112,10 @@ BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_S
 LANTLSPEM_SRCS := test_lan_tls_pem.c ../src/lan_tls_pem.c
 CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
+# The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
+ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
 ifneq ($(HAVE_MBEDTLS),)
-OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras
+OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras build/test_esp_rom_job
 endif
 
 .PHONY: all clean run docs-check
@@ -336,6 +338,10 @@ build/test_cloud_extras: $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a moc
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Ishim_rtos -Imocks -I$(MBEDTLS)/include $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a -lm -o $@
 
+build/test_esp_rom_job: $(ESPROMJOB_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(ESPROMJOB_SRCS) -lm -o $@
+
 build/test_ota: $(OTA_SRCS) mocks/mock_ota_psram.h mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) -I$(MBEDTLS)/include $(OTA_SRCS) -lm -o $@
@@ -486,8 +492,10 @@ ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_blob_store
 	@./build/test_cloud_extras > build/test_cloud_extras.log || { cat build/test_cloud_extras.log; exit 1; }
 	@tail -n 1 build/test_cloud_extras.log
+	@./build/test_esp_rom_job > build/test_esp_rom_job.log || { cat build/test_esp_rom_job.log; exit 1; }
+	@tail -n 1 build/test_esp_rom_job.log
 else
-	@echo "SKIP test_ota, test_blob_store and test_cloud_extras (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
+	@echo "SKIP test_ota, test_blob_store, test_cloud_extras and test_esp_rom_job (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
 endif
 	@$(MAKE) --no-print-directory docs-check
 

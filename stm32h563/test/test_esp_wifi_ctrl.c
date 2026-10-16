@@ -11,7 +11,8 @@
  *   - two misses and then an answer do NOT restart (the count is consecutive);
  *   - a boot event from the C3 while connected (or mid-connect) is a slave
  *     reset: link down + restart, counted separately;
- *   - a boot event while waiting for the boot event is just the boot event.
+ *   - a boot event while waiting for the boot event is just the boot event;
+ *   - a reload while a background C3 flash runs does not start the C3 until it ends.
  *
  * And that the credentials never reach the C3's flash:
  *   - SetStorage(RAM) is sent, and answered, before SetMode and SetConfig;
@@ -186,6 +187,8 @@ int config_load(config_t *out) {
 static int s_flash_submits;
 bool hw_worker_submit_esp_flash(void) { s_flash_submits++; return true; }
 bool blob_store_present(blob_id_t id) { (void)id; return false; }   /* no image: never auto-flash here */
+static bool s_c3_flashing;                   /* a background C3 flash owns EN/BOOT */
+bool esp_rom_flash_busy(void) { return s_c3_flashing; }
 
 /* ---- scenarios -------------------------------------------------------------- */
 
@@ -399,6 +402,23 @@ static void test_storage_refusal_does_not_stick(void) {
     CHECK(sent_at(313) >= 0 && sent_at(313) < sent_at(284));
 }
 
+/* A C3 flash runs in the background now, so wifi-set / wifi-clear can reload the control in the
+   middle of it.  The control must not start the C3 (that releases EN and knocks the ROM loader
+   out) until the flash ends. */
+static void test_reload_during_c3_flash_waits(void) {
+    fresh();
+    CHECK(bring_up());
+    s_c3_flashing = true;
+    int starts = C.starts;
+    esp_wifi_ctrl_reload();                  /* new credentials mid-flash */
+    run_ms(5000);
+    CHECK(C.starts == starts);               /* the C3 stays the flash's */
+    s_c3_flashing = false;
+    run_ms(100);
+    CHECK(C.starts == starts + 1);           /* started once the flash ended */
+    CHECK(bring_up());
+}
+
 int main(void) {
     esp_wifi_ctrl_init();
     test_healthy_link_stays_up();
@@ -412,6 +432,7 @@ int main(void) {
     test_storage_refused_sends_no_credentials();
     test_storage_unanswered_sends_no_credentials();
     test_storage_refusal_does_not_stick();
+    test_reload_during_c3_flash_waits();
     CHECK(s_flash_submits == 0);
     if (failures) { printf("FAIL test_esp_wifi_ctrl: %d failure(s)\n", failures); return 1; }
     printf("PASS test_esp_wifi_ctrl\n");

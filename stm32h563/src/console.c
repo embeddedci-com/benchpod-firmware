@@ -33,6 +33,8 @@ bool clock_on_hsi(void);   /* main.c */
 #include "command_handler.h"   /* mirror re-sync after a reconfiguration */
 #include "command_handler_internal.h"   /* heavy_in_flight: calibrate must not cut a capture */
 #include "esp_rom_flash.h"
+#include "esp_rom_job.h"     /* esp_rom_result_str */
+#include "bp_log.h"
 #include "esp_hosted_spi.h"   /* stop the Wi-Fi transport before flashing the C3 */
 #include "esp_wifi_ctrl.h"    /* wifi-set / wifi-show provisioning */
 #include "config_store.h"
@@ -164,7 +166,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
         "  esp-mon [ms]         print the C3's UART output\r\n"
         "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
-        "  flash-esp32          C3: flash the esp-hosted image from the W25Q\r\n"
+        "  flash-esp32          C3: flash the esp-hosted image from the W25Q (background, ~2 min)\r\n"
         "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
         "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
         "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
@@ -352,6 +354,9 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
     bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
     op(out, ctx, "  ssid: %s\r\n", have ? cfg.ssid : "");
     op(out, ctx, "  state: %s\r\n", esp_wifi_ctrl_state_str());
+    uint32_t done = 0, total = 0;
+    if (esp_rom_flash_progress(&done, &total))
+        op(out, ctx, "  c3 flash: block %lu/%lu\r\n", (unsigned long)done, (unsigned long)total);
     op(out, ctx, "  ip: %s\r\n", wifi_sta_ip());
     int rssi;
     if (esp_wifi_ctrl_rssi(&rssi)) op(out, ctx, "  rssi: %d dBm\r\n", rssi);
@@ -360,6 +365,16 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
     esp_wifi_ctrl_slave_lost_counts(&noresp, &reboot);
     op(out, ctx, "  c3 restarts: %lu no response, %lu rebooted while up\r\n",
        (unsigned long)noresp, (unsigned long)reboot);
+}
+
+/* The end of a console flash-esp32 (hw worker): the result line, then Wi-Fi gets the C3 back. */
+static void flash_esp32_done(int result)
+{
+    if (result >= 0)
+        log_printf("flash-esp32: ESP32-C3 flashed + booted (%s)\n", esp_rom_result_str(result));
+    else
+        log_printf("flash-esp32: failed, %s (C3 left in reset; see log)\n", esp_rom_result_str(result));
+    net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
 }
 
 /* `ca`: one line per company CA certificate (cloud_extras_ca_each). */
@@ -936,6 +951,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
         else
             op(out, ctx, "fw-copy none\r\n");
+    } else if (esp_rom_flash_busy() &&
+               (!strcmp(argv[0], "flash-esp32-sync") || !strcmp(argv[0], "flash-esp32") ||
+                !strcmp(argv[0], "esp-reset-pulse") || !strcmp(argv[0], "esp-mon"))) {
+        uint32_t done = 0, total = 0;
+        (void)esp_rom_flash_progress(&done, &total);
+        op(out, ctx, "  %s refused: the ESP32-C3 is being flashed (block %lu/%lu); wait for the "
+                     "\"[espflash] done\" line\r\n", argv[0], (unsigned long)done, (unsigned long)total);
     } else if (!strcmp(argv[0], "flash-esp32-sync")) {
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
         uint32_t magic = 0;
@@ -948,16 +970,21 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* ~140 s on the shared bus: not under a capture, upload or update */
         op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
     } else if (!strcmp(argv[0], "flash-esp32")) {
+        /* Runs in the background (~2 min): the console and the API keep answering, and the log
+           carries the progress and the result (flash_esp32_done). */
         net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        if (!blob_store_present(BLOB_ESP)) {
-            op(out, ctx, "  no ESP32-C3 image in the W25Q (install blob esp first)\r\n");
-        } else if (esp_rom_flash_from_slot() == 0) {
-            op(out, ctx, "  ESP32-C3 flashed + booted (%u bytes)\r\n",
+        int rc = esp_rom_flash_start(flash_esp32_done);
+        if (rc == 0) {
+            op(out, ctx, "  flashing the ESP32-C3 in the background (%u bytes, about 2 minutes);\r\n"
+                         "  the log shows the progress and ends with \"flash-esp32: ...\"\r\n",
                (unsigned)blob_store_info(BLOB_ESP)->len);
         } else {
-            op(out, ctx, "  flash-esp32 failed (C3 left in reset; see log)\r\n");
+            op(out, ctx, "  flash-esp32 failed: %s\r\n",
+               rc == ESP_FLASH_START_NO_IMAGE ? "no ESP32-C3 image in the W25Q (install blob esp first)"
+               : rc == ESP_FLASH_START_BAD_SLOT ? "the esp slot does not match its checksum"
+               : "a flash is already running");
+            net_wifi_hold_for_flash(false);
         }
-        net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
     } else if (!strcmp(argv[0], "wifi-set")) {
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
     } else if (!strcmp(argv[0], "esp-reset-pulse")) {

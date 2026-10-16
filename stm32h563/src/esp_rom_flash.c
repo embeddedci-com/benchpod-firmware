@@ -8,62 +8,74 @@
  *   USART1 TX PA9  -> C3 U0RXD (pin 30)     BOOT PF12 -> C3 IO9 (download strap)
  *   USART1 RX PA10 <- C3 U0TXD (pin 31)     EN   PF11 -> C3 EN  (reset, act-low)
  *
- * Implements the esptool SLIP command protocol, ROM-loader variant (no stub
- * upload): SYNC, SPI_ATTACH, FLASH_BEGIN, FLASH_DATA, FLASH_END, SPI_FLASH_MD5.
- * All UART I/O is raw-register polled (robust against overrun); HAL is used only
- * to program the baud generator.  Verbose progress via printf to the console.
- *
- * ⚠ NOT hardware-verified — strap/reset timing, USART1 kernel clock, and framing
- *   are bench bring-up items.  Prove the wiring with esp_rom_flash_sync() first.
+ * This file is the hardware half: straps, USART1 on interrupts (RX into a ring, TX from the
+ * job's frame buffer), the W25Q image source, and the background flash the hw worker drives.
+ * The SLIP protocol and the write sequence are in esp_rom_job.c.
  */
 #include "esp_rom_flash.h"
+#include "esp_rom_job.h"
 #include "esp_part_table.h"
 #include "board_pins.h"
 #include "watchdog.h"
 #include "blob_store.h"
 #include "w25q.h"
-#include "signal_engine.h"
 
 #include "stm32h5xx_hal.h"
-#include "mbedtls/md5.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
 
-/* ---- ROM protocol constants ---------------------------------------------- */
-#define ESP_SYNC            0x08
-#define ESP_READ_REG        0x0A
-#define ESP_SPI_ATTACH      0x0D
-#define ESP_FLASH_BEGIN     0x02
-#define ESP_FLASH_DATA      0x03
-#define ESP_FLASH_END       0x04
-#define ESP_SPI_FLASH_MD5   0x13
+#define ESP_UART_FLASH_BAUD 115200u
 
-#define ESP_CHECKSUM_MAGIC  0xEF
-#define FLASH_WRITE_SIZE    0x400u          /* ROM-loader FLASH_DATA block size  */
-#define ROM_STATUS_BYTES    2               /* ROM (no stub) trailing status len */
-#define FLASH_DATA_ATTEMPTS 3               /* esptool's WRITE_BLOCK_ATTEMPTS        */
-
-/* SLIP framing bytes. */
-#define SLIP_END            0xC0
-#define SLIP_ESC            0xDB
-#define SLIP_ESC_END        0xDC
-#define SLIP_ESC_ESC        0xDD
-
-/* Chip-detect magic register (all ESP32 targets). */
-#define CHIP_DETECT_MAGIC_REG   0x40001000u
-#define ESP_UART_FLASH_BAUD     115200u
-
-/* Static I/O scratch (kept off the caller's stack). */
-static uint8_t  s_cmd[8 + 16 + FLASH_WRITE_SIZE];         /* header+data          */
-static uint8_t  s_slip[2 * (8 + 16 + FLASH_WRITE_SIZE) + 2]; /* worst-case encoded */
-static uint8_t  s_resp[256];                              /* decoded response     */
-static uint8_t  s_block[16 + FLASH_WRITE_SIZE];           /* FLASH_DATA packet    */
+/* Above configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5): FreeRTOS critical sections do not
+   mask it, so no byte is lost while a task holds one.  The handler calls no FreeRTOS API. */
+#define ESP_UART_IRQ_PRIO   4
 
 static UART_HandleTypeDef s_uart;
 
-/* ---- raw USART1 I/O -------------------------------------------------------- */
+/* ---- USART1 on interrupts ---------------------------------------------------- */
+
+#define RX_RING 1024u                       /* power of two */
+static volatile uint8_t  s_rx[RX_RING];
+static volatile uint32_t s_rx_head;         /* written by the ISR   */
+static volatile uint32_t s_rx_tail;         /* written by the task  */
+static volatile uint32_t s_rx_overruns;     /* UART overruns + ring full: should stay 0 */
+static const uint8_t * volatile s_tx_p;
+static volatile uint32_t s_tx_left;
+
+void USART1_IRQHandler(void)
+{
+    uint32_t isr = ESP_UART->ISR;
+    if (isr & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) {
+        if (isr & USART_ISR_ORE) s_rx_overruns++;
+        ESP_UART->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    }
+    while (ESP_UART->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t b = (uint8_t)(ESP_UART->RDR & 0xFF);
+        uint32_t h = s_rx_head;
+        if (h - s_rx_tail < RX_RING) { s_rx[h & (RX_RING - 1)] = b; s_rx_head = h + 1; }
+        else s_rx_overruns++;
+    }
+    if ((ESP_UART->CR1 & USART_CR1_TXEIE_TXFNFIE) && (ESP_UART->ISR & USART_ISR_TXE_TXFNF)) {
+        if (s_tx_left) { ESP_UART->TDR = *s_tx_p++; s_tx_left--; }
+        if (!s_tx_left) ESP_UART->CR1 &= ~USART_CR1_TXEIE_TXFNFIE;
+    }
+}
+
+static bool scheduler_running(void)
+{
+    return xTaskGetSchedulerState() == taskSCHEDULER_RUNNING;
+}
+
+/* Wait without spinning the CPU (the hw worker runs at a low priority). */
+static void sleep_ms_rtos(uint32_t ms)
+{
+    if (scheduler_running()) vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1);
+    else HAL_Delay(ms);
+}
 
 static void uart_init(uint32_t baud)
 {
@@ -94,50 +106,49 @@ static void uart_init(uint32_t baud)
     s_uart.Init.OverSampling = UART_OVERSAMPLING_16;
     s_uart.Init.ClockPrescaler = UART_PRESCALER_DIV1;
     HAL_UART_Init(&s_uart);
+
+    s_rx_tail = s_rx_head;
+    s_tx_left = 0;
+    ESP_UART->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    HAL_NVIC_SetPriority(USART1_IRQn, ESP_UART_IRQ_PRIO, 0);
+    HAL_NVIC_EnableIRQ(USART1_IRQn);
+    ESP_UART->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
 }
 
 static void uart_deinit(void)
 {
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+    ESP_UART->CR1 &= ~(USART_CR1_RXNEIE_RXFNEIE | USART_CR1_TXEIE_TXFNFIE);
+    s_tx_left = 0;
     HAL_UART_DeInit(&s_uart);
     __HAL_RCC_USART1_CLK_DISABLE();
 }
 
-static void uart_putc(uint8_t b)
+static int uart_rx_byte(void)
 {
-    while (!(ESP_UART->ISR & USART_ISR_TXE_TXFNF)) { }
-    ESP_UART->TDR = b;
+    uint32_t t = s_rx_tail;
+    if (t == s_rx_head) return -1;
+    int b = s_rx[t & (RX_RING - 1)];
+    s_rx_tail = t + 1;
+    return b;
 }
 
-static void uart_tx(const uint8_t *p, uint32_t n)
+static void uart_flush_rx(void) { s_rx_tail = s_rx_head; }
+
+/* esp_rom_io_t.send: drop stale input, then hand the frame to the TX interrupt.  The job keeps
+   `frame` untouched until its next send, which comes after this one is answered or timed out. */
+static uint32_t uart_send(const uint8_t *frame, uint32_t n)
 {
-    while (n--) uart_putc(*p++);
+    uint32_t t0 = HAL_GetTick();
+    while (s_tx_left && HAL_GetTick() - t0 < 500u) sleep_ms_rtos(1);   /* never in practice */
+    uart_flush_rx();
+    s_tx_p = frame;
+    s_tx_left = n;
+    ESP_UART->CR1 |= USART_CR1_TXEIE_TXFNFIE;
+    return n * 10u * 1000u / ESP_UART_FLASH_BAUD + 2u;
 }
 
-static void uart_tx_done(void)
-{
-    while (!(ESP_UART->ISR & USART_ISR_TC)) { }
-}
-
-/* Read one byte, clearing overrun; returns byte 0..255 or -1 on timeout. */
-static int uart_getc(uint32_t deadline)
-{
-    for (;;) {
-        uint32_t isr = ESP_UART->ISR;
-        if (isr & USART_ISR_ORE) ESP_UART->ICR = USART_ICR_ORECF;
-        if (isr & USART_ISR_RXNE_RXFNE) return (int)(ESP_UART->RDR & 0xFF);
-        if ((int32_t)(HAL_GetTick() - deadline) >= 0) return -1;
-    }
-}
-
-static void uart_flush_rx(void)
-{
-    uint32_t end = HAL_GetTick() + 30;
-    while ((int32_t)(HAL_GetTick() - end) < 0) {
-        uint32_t isr = ESP_UART->ISR;
-        if (isr & USART_ISR_ORE) ESP_UART->ICR = USART_ICR_ORECF;
-        if (isr & USART_ISR_RXNE_RXFNE) { (void)ESP_UART->RDR; end = HAL_GetTick() + 30; }
-    }
-}
+static uint32_t now_ms(void) { return HAL_GetTick(); }
 
 /* ---- EN / BOOT strap control ---------------------------------------------- */
 
@@ -155,9 +166,9 @@ static void strap_enter_download(void)
 {
     HAL_GPIO_WritePin(ESP_BOOT_PORT, ESP_BOOT_PIN, GPIO_PIN_RESET);   /* IO9 low   */
     HAL_GPIO_WritePin(ESP_EN_PORT,   ESP_EN_PIN,   GPIO_PIN_RESET);   /* hold rst  */
-    HAL_Delay(50);                                                    /* drain EN RC */
+    sleep_ms_rtos(50);                                                /* drain EN RC */
     HAL_GPIO_WritePin(ESP_EN_PORT,   ESP_EN_PIN,   GPIO_PIN_SET);     /* release   */
-    HAL_Delay(200);                                                   /* ROM boot  */
+    sleep_ms_rtos(200);                                               /* ROM boot  */
     uart_flush_rx();                                                  /* toss banner */
 }
 
@@ -166,316 +177,141 @@ static void strap_boot_app(void)
 {
     HAL_GPIO_WritePin(ESP_BOOT_PORT, ESP_BOOT_PIN, GPIO_PIN_SET);     /* IO9 high  */
     HAL_GPIO_WritePin(ESP_EN_PORT,   ESP_EN_PIN,   GPIO_PIN_RESET);
-    HAL_Delay(50);
+    sleep_ms_rtos(50);
     HAL_GPIO_WritePin(ESP_EN_PORT,   ESP_EN_PIN,   GPIO_PIN_SET);
 }
 
-/* ---- SLIP command / response --------------------------------------------- */
-
-static void slip_put(uint8_t **w, uint8_t b)
+static void strap_hold_reset(void)
 {
-    if (b == SLIP_END) { *(*w)++ = SLIP_ESC; *(*w)++ = SLIP_ESC_END; }
-    else if (b == SLIP_ESC) { *(*w)++ = SLIP_ESC; *(*w)++ = SLIP_ESC_ESC; }
-    else *(*w)++ = b;
+    strap_gpio_init();
+    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
 }
 
-/* Send a command frame: 8-byte header (dir=0, op, size, checksum) + data. */
-static void esp_send(uint8_t op, const uint8_t *data, uint16_t dlen, uint32_t checksum)
+/* Straps + UART into the ROM loader; esp_rom_job takes it from there. */
+static void rom_enter(void)
 {
-    uint8_t *h = s_cmd;
-    h[0] = 0x00; h[1] = op;
-    h[2] = (uint8_t)dlen; h[3] = (uint8_t)(dlen >> 8);
-    h[4] = (uint8_t)checksum;        h[5] = (uint8_t)(checksum >> 8);
-    h[6] = (uint8_t)(checksum >> 16); h[7] = (uint8_t)(checksum >> 24);
-    if (dlen) memcpy(h + 8, data, dlen);
-
-    uint8_t *w = s_slip;
-    *w++ = SLIP_END;
-    for (uint32_t i = 0; i < 8u + dlen; i++) slip_put(&w, s_cmd[i]);
-    *w++ = SLIP_END;
-
-    uart_flush_rx();
-    uart_tx(s_slip, (uint32_t)(w - s_slip));
-    uart_tx_done();
+    strap_gpio_init();
+    uart_init(ESP_UART_FLASH_BAUD);
+    strap_enter_download();
 }
 
-/* Read one SLIP frame into s_resp; returns decoded length or -1 on timeout. */
-static int slip_read(uint32_t timeout_ms)
+/* Run a job to its end on the calling task (short jobs only: sync, the NVS erase). */
+static int run_blocking(esp_rom_job_t *j)
 {
-    uint32_t deadline = HAL_GetTick() + timeout_ms;
-    int c;
-    /* find frame start */
-    do { c = uart_getc(deadline); if (c < 0) return -1; } while (c != SLIP_END);
-    /* collect until closing END */
-    uint32_t n = 0;
-    for (;;) {
-        c = uart_getc(deadline);
-        if (c < 0) return -1;
-        if (c == SLIP_END) { if (n == 0) continue; return (int)n; }  /* skip empty */
-        if (c == SLIP_ESC) {
-            c = uart_getc(deadline);
-            if (c < 0) return -1;
-            c = (c == SLIP_ESC_END) ? SLIP_END : (c == SLIP_ESC_ESC) ? SLIP_ESC : c;
-        }
-        if (n < sizeof(s_resp)) s_resp[n++] = (uint8_t)c;
+    while (esp_rom_job_step(j)) {
+        watchdog_heartbeat(WD_TASK_WORKER, "worker");
+        sleep_ms_rtos(1);
     }
+    return j->result;
 }
 
-/* Send a command and wait for its matching response. On success returns 0 and
- * (optionally) the 4-byte value and a pointer/len to the payload (minus status).
- * `payload`/`plen` may be NULL. */
-static int esp_command(uint8_t op, const uint8_t *data, uint16_t dlen, uint32_t checksum,
-                       uint32_t *value_out, const uint8_t **payload, int *plen,
-                       uint32_t timeout_ms)
+/* ---- the image source -------------------------------------------------------- */
+
+/* One block straight from the slot, the bus taken for that read only.  The masters were
+   quiesced when the flash started and the busy gate keeps them stopped, so the gateware does
+   not need the bus between blocks; commands that touch it in between run on this same worker
+   and so never overlap a read. */
+static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
-    esp_send(op, data, dlen, checksum);
-    uint32_t deadline = HAL_GetTick() + timeout_ms;
-    for (;;) {
-        int32_t remain = (int32_t)(deadline - HAL_GetTick());
-        if (remain <= 0) return -1;
-        int n = slip_read((uint32_t)remain);
-        if (n < 0) return -1;
-        if (n < 8 + ROM_STATUS_BYTES) continue;         /* runt / not a response  */
-        if (s_resp[0] != 0x01 || s_resp[1] != op) continue; /* not our response   */
-        uint16_t size = (uint16_t)(s_resp[2] | (s_resp[3] << 8));
-        if ((uint32_t)(8 + size) > (uint32_t)n || size < ROM_STATUS_BYTES) continue;
-        const uint8_t *body = s_resp + 8;
-        if (body[size - ROM_STATUS_BYTES] != 0)         /* status byte: 0 = OK    */
-            return -(int)(100 + body[size - ROM_STATUS_BYTES + 1]);  /* -100-errcode */
-        if (value_out) *value_out = (uint32_t)s_resp[4] | ((uint32_t)s_resp[5] << 8) |
-                                    ((uint32_t)s_resp[6] << 16) | ((uint32_t)s_resp[7] << 24);
-        if (payload) *payload = body;
-        if (plen)    *plen = (int)size - ROM_STATUS_BYTES;
-        return 0;
-    }
+    w25q_open();
+    int rc = blob_store_read(ctx, off, buf, n);
+    w25q_close();
+    return rc;
 }
 
-static void put_le32(uint8_t *p, uint32_t v)
-{ p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
-
-/* ---- SYNC + chip detect --------------------------------------------------- */
-
-static int esp_sync(void)
+/* The same read for code that already holds the bus (the partition-table lookup). */
+static int slot_read_held(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
-    uint8_t d[36];
-    d[0] = 0x07; d[1] = 0x07; d[2] = 0x12; d[3] = 0x20;
-    memset(d + 4, 0x55, 32);
-    for (int attempt = 0; attempt < 10; attempt++) {
-        if (esp_command(ESP_SYNC, d, sizeof(d), 0, NULL, NULL, NULL, 120) == 0) {
-            uart_flush_rx();     /* ROM emits several SYNC replies — drain the rest */
-            return 0;
-        }
-    }
-    return -1;
-}
-
-static int esp_read_reg(uint32_t addr, uint32_t *val)
-{
-    uint8_t d[4]; put_le32(d, addr);
-    return esp_command(ESP_READ_REG, d, 4, 0, val, NULL, NULL, 200);
+    return blob_store_read(ctx, off, buf, n);
 }
 
 /* ---- public: wiring test -------------------------------------------------- */
 
 int esp_rom_flash_sync(uint32_t *chip_magic_out)
 {
+    if (esp_rom_flash_busy()) return -1;
     log_printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
-    strap_gpio_init();
-    uart_init(ESP_UART_FLASH_BAUD);
-    strap_enter_download();
-
-    if (esp_sync() != 0) {
+    rom_enter();
+    static esp_rom_io_t io;
+    io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL };
+    static esp_rom_job_t j;
+    esp_rom_job_start_sync(&j, &io);
+    int rc = run_blocking(&j);
+    uart_deinit();
+    if (rc != ESP_ROM_OK) {
         log_printf("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
-        HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
-        uart_deinit();
+        strap_hold_reset();
         return -1;
     }
-    uint32_t magic = 0;
-    (void)esp_read_reg(CHIP_DETECT_MAGIC_REG, &magic);
-    log_printf("[espflash] SYNC ok — C3 ROM responding (chip magic 0x%08lx)\n", (unsigned long)magic);
-    if (chip_magic_out) *chip_magic_out = magic;
-
-    /* leave in download mode, powered — caller decides next step */
-    uart_deinit();
-    return 0;
+    if (chip_magic_out) *chip_magic_out = j.chip_magic;
+    return 0;   /* left in download mode, powered: the caller decides the next step */
 }
 
-/* ---- erase + write + verify one region ------------------------------------ */
+/* ---- public: background flash from the W25Q slot ------------------------------- */
 
-/* Enter download mode, SYNC, erase [offset, offset+len), write what `rd` reads there (rd NULL:
-   leave it blank, written as 0xFF) and verify by on-chip MD5.  On success the C3 is still in
-   its ROM loader; on failure it is held in reset.  The UART is released either way. */
-static int rom_write(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
+static esp_rom_job_t     s_job;
+static esp_rom_io_t      s_io;
+static volatile bool     s_active;
+static esp_flash_done_fn s_done;
+static uint32_t          s_t0;
+
+bool esp_rom_flash_busy(void) { return s_active; }
+
+bool esp_rom_flash_progress(uint32_t *done, uint32_t *total)
 {
-    if (len == 0) return -1;
-    mbedtls_md5_context md5;
-    mbedtls_md5_init(&md5);
-    mbedtls_md5_starts(&md5);
-
-    log_printf("[espflash] %s %u bytes at 0x%06lx\n", rd ? "programming" : "erasing",
-               (unsigned)len, (unsigned long)offset);
-    strap_gpio_init();
-    uart_init(ESP_UART_FLASH_BAUD);
-    strap_enter_download();
-
-    if (esp_sync() != 0) {
-        log_printf("[espflash] SYNC failed\n");
-        goto fail;
-    }
-    uint32_t magic = 0;
-    (void)esp_read_reg(CHIP_DETECT_MAGIC_REG, &magic);
-    log_printf("[espflash] C3 ROM synced (magic 0x%08lx)\n", (unsigned long)magic);
-
-    /* SPI_ATTACH(0): default flash pins. Non-fatal — C3 flash is usually already
-       attached; FLASH_BEGIN/DATA + MD5 are the real correctness gates. */
-    {
-        uint8_t a[8] = {0};
-        if (esp_command(ESP_SPI_ATTACH, a, sizeof(a), 0, NULL, NULL, NULL, 1000) != 0)
-            log_printf("[espflash] SPI_ATTACH warning (continuing)\n");
-    }
-
-    uint32_t num_blocks = (uint32_t)((len + FLASH_WRITE_SIZE - 1) / FLASH_WRITE_SIZE);
-    {
-        /* 20 bytes: the C3 ROM sets SPI_FLASH_SUPPORTS_ENCRYPTED_FLASH, so esptool
-           appends a 5th word (encrypted=0) for non-stub FLASH_BEGIN. */
-        uint8_t b[20];
-        put_le32(b + 0, (uint32_t)len);         /* erase size          */
-        put_le32(b + 4, num_blocks);            /* num packets         */
-        put_le32(b + 8, FLASH_WRITE_SIZE);      /* packet size         */
-        put_le32(b + 12, offset);               /* flash offset        */
-        put_le32(b + 16, 0);                    /* not encrypted       */
-        log_printf("[espflash] FLASH_BEGIN (%lu blocks, erasing)...\n", (unsigned long)num_blocks);
-        /* ROM may erase the whole region up front (esptool budgets ~30 s/MB). */
-        if (esp_command(ESP_FLASH_BEGIN, b, sizeof(b), 0, NULL, NULL, NULL, 40000) != 0) {
-            log_printf("[espflash] FLASH_BEGIN failed\n");
-            goto fail;
-        }
-    }
-
-    for (uint32_t seq = 0; seq < num_blocks; seq++) {
-        uint32_t off = seq * FLASH_WRITE_SIZE;
-        uint32_t n = (len - off < FLASH_WRITE_SIZE) ? (uint32_t)(len - off) : FLASH_WRITE_SIZE;
-        uint8_t *pk = s_block;                  /* separate from esp_send's s_cmd */
-        put_le32(pk + 0, FLASH_WRITE_SIZE);     /* data length (padded)           */
-        put_le32(pk + 4, seq);
-        put_le32(pk + 8, 0);
-        put_le32(pk + 12, 0);
-        if (!rd) {
-            memset(pk + 16, 0xFF, n);
-        } else if (rd(ctx, off, pk + 16, n) != 0) {
-            log_printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
-            goto fail;
-        }
-        mbedtls_md5_update(&md5, pk + 16, n);   /* each block is read once, so hashed once */
-        if (n < FLASH_WRITE_SIZE) memset(pk + 16 + n, 0xFF, FLASH_WRITE_SIZE - n);
-
-        uint32_t checksum = ESP_CHECKSUM_MAGIC;
-        for (uint32_t i = 0; i < FLASH_WRITE_SIZE; i++) checksum ^= pk[16 + i];
-
-        /* FLASH_DATA payload = 16-byte sub-header + padded block; the command
-           checksum covers only the block bytes (esptool convention).  Like esptool, resend a
-           block whose reply was lost (the ROM accepts the same seq again) before giving up
-           on a two-minute flash. */
-        int rc = -1;
-        for (int attempt = 1; attempt <= FLASH_DATA_ATTEMPTS && rc != 0; attempt++) {
-            rc = esp_command(ESP_FLASH_DATA, pk, (uint16_t)(16 + FLASH_WRITE_SIZE),
-                             checksum, NULL, NULL, NULL, 3000);
-            if (rc != 0)
-                log_printf("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
-                       (unsigned long)(seq + 1), (unsigned long)num_blocks, attempt, rc);
-        }
-        if (rc != 0) goto fail;
-        if ((seq & 0x3F) == 0 || seq == num_blocks - 1)
-            log_printf("[espflash]  block %lu/%lu\n", (unsigned long)(seq + 1),
-                   (unsigned long)num_blocks);
-        /* The whole image takes ~140 s at 115200 baud, far past the worker's 60 s watchdog
-           grace, so prove liveness per block.  Only the hw worker ever runs this. */
-        watchdog_heartbeat(WD_TASK_WORKER, "worker");
-    }
-
-    /* Verify with on-chip MD5 over the written region [offset, offset+len). */
-    {
-        uint8_t want[16], want_hex[33];
-        mbedtls_md5_finish(&md5, want);
-        for (int i = 0; i < 16; i++)
-            snprintf((char *)want_hex + i * 2, 3, "%02x", want[i]);
-
-        uint8_t m[16];
-        put_le32(m + 0, offset); put_le32(m + 4, (uint32_t)len);
-        put_le32(m + 8, 0);      put_le32(m + 12, 0);
-        const uint8_t *got = NULL; int glen = 0;
-        if (esp_command(ESP_SPI_FLASH_MD5, m, sizeof(m), 0, NULL, &got, &glen, 10000) != 0
-            || glen < 32) {
-            log_printf("[espflash] MD5 read failed\n");
-            goto fail;
-        }
-        if (memcmp(got, want_hex, 32) != 0) {
-            log_printf("[espflash] MD5 MISMATCH — flash corrupt\n");
-            log_printf("[espflash]   want %.32s\n", (const char *)want_hex);
-            log_printf("[espflash]   got  %.32s\n", (const char *)got);
-            goto fail;
-        }
-        log_printf("[espflash] MD5 verified (%.32s)\n", (const char *)want_hex);
-    }
-
-    /* FLASH_END: stay in loader (param 1) — we do our own clean strap reset. */
-    {
-        uint8_t e[4]; put_le32(e, 1);
-        (void)esp_command(ESP_FLASH_END, e, sizeof(e), 0, NULL, NULL, NULL, 1000);
-    }
-
-    uart_deinit();
-    mbedtls_md5_free(&md5);
-    return 0;
-
-fail:
-    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);   /* leave off */
-    uart_deinit();
-    mbedtls_md5_free(&md5);
-    return -1;
+    if (!s_active) return false;
+    if (done)  *done  = esp_rom_job_blocks_done(&s_job);
+    if (total) *total = s_job.blocks;
+    return true;
 }
 
-/* ---- public: full program ------------------------------------------------- */
-
-int esp_rom_flash_program_src(esp_src_read_fn rd, void *ctx, size_t len, uint32_t offset)
+int esp_rom_flash_start(esp_flash_done_fn done)
 {
-    if (!rd) return -1;
-    if (rom_write(rd, ctx, len, offset) != 0) return -1;
-    log_printf("[espflash] done — resetting C3 into application\n");
-    strap_boot_app();
-    return 0;
-}
-
-/* ---- public: program from the W25Q slot ----------------------------------- */
-
-/* One block of the image straight from its slot; the bus is held for the whole flash (below). */
-static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
-{
-    return blob_store_read(ctx, off, buf, n);
-}
-
-int esp_rom_flash_from_slot(void)
-{
+    if (s_active) return ESP_FLASH_START_BUSY;
     if (!blob_store_present(BLOB_ESP)) {
         log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
-        return -1;
+        return ESP_FLASH_START_NO_IMAGE;
     }
-    w25q_session_open();   /* every bus grab below shares the PSRAM bus: quiesce first */
+    w25q_session_open();   /* quiesces the gateware's PSRAM masters, which stay stopped (gate) */
     int intact = blob_store_verify(BLOB_ESP) == 0;
     w25q_session_close();
     if (!intact) {
         log_printf("[espflash] slot esp does not match its checksum: not flashed\n");
-        return -1;
+        return ESP_FLASH_START_BAD_SLOT;
     }
-    /* Hold the bus for the whole ~2 minutes. Taking it per block cost a lost C3 reply every
-       ~37 blocks (29 resends per flash, measured), against ~1 per flash with the image in
-       internal flash. The gateware's PSRAM masters are quiesced and the hw worker running this
-       is busy, so nothing else wants the bus meanwhile. */
-    w25q_session_open();
-    int rc = esp_rom_flash_program_src(slot_read, (void *)(uintptr_t)BLOB_ESP,
-                                       blob_store_info(BLOB_ESP)->len, 0);
-    w25q_session_close();
-    return rc;
+    s_active = true;       /* from here the busy gate holds off every PSRAM-bus user */
+    s_done = done;
+    s_t0 = HAL_GetTick();
+    s_rx_overruns = 0;
+    rom_enter();
+    s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP };
+    esp_rom_job_start(&s_job, &s_io, blob_store_info(BLOB_ESP)->len, 0);
+    return 0;
+}
+
+void esp_rom_flash_poll(void)
+{
+    if (!s_active) return;
+    if (esp_rom_job_step(&s_job)) return;
+    int rc = s_job.result;
+    uart_deinit();
+    unsigned secs = (unsigned)((HAL_GetTick() - s_t0) / 1000u);
+    if (rc >= 0) {
+        log_printf("[espflash] done (%s, %lu block(s) resent, %lu MD5 retries, %lu UART overruns, %u s)"
+                   " — resetting C3 into application\n", esp_rom_result_str(rc),
+                   (unsigned long)s_job.resends, (unsigned long)s_job.md5_retries,
+                   (unsigned long)s_rx_overruns, secs);
+        strap_boot_app();
+    } else {
+        log_printf("[espflash] failed: %s (%lu block(s) resent, %lu UART overruns, %u s); "
+                   "C3 left in reset\n", esp_rom_result_str(rc), (unsigned long)s_job.resends,
+                   (unsigned long)s_rx_overruns, secs);
+        strap_hold_reset();
+    }
+    esp_flash_done_fn done = s_done;
+    s_done = NULL;
+    s_active = false;
+    if (done) done(rc);
 }
 
 /* ---- public: wipe the C3's NVS partition ----------------------------------- */
@@ -484,6 +320,10 @@ int esp_rom_flash_erase_nvs(void)
 {
     uint32_t off = 0, size = 0;
     int rc = -1;
+    if (esp_rom_flash_busy()) {
+        log_printf("[espflash] a C3 flash is running: NVS not erased\n");
+        return -1;           /* the C3 is the flash's: leave its straps alone */
+    }
     if (!blob_store_present(BLOB_ESP)) {
         log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): "
                    "cannot locate the C3's NVS partition\n");
@@ -493,30 +333,38 @@ int esp_rom_flash_erase_nvs(void)
        erase (esp_part_find_nvs refuses the bootloader and the table, not the application). */
     w25q_session_open();
     bool found = blob_store_verify(BLOB_ESP) == 0
-              && esp_part_find_nvs_rd(slot_read, (void *)(uintptr_t)BLOB_ESP, &off, &size);
+              && esp_part_find_nvs_rd(slot_read_held, (void *)(uintptr_t)BLOB_ESP, &off, &size);
     w25q_session_close();
     if (!found) {
         log_printf("[espflash] no usable NVS partition in the W25Q C3 image's partition table\n");
         goto out;
     }
-    rc = rom_write(NULL, NULL, size, off);
+    rom_enter();
+    {
+        static esp_rom_io_t io;
+        io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL };   /* NULL: erase */
+        static esp_rom_job_t j;
+        esp_rom_job_start(&j, &io, size, off);
+        rc = run_blocking(&j) == ESP_ROM_OK ? 0 : -1;   /* an unverified erase is not "blank" */
+    }
+    uart_deinit();
     if (rc == 0) log_printf("[espflash] C3 NVS erased and verified blank (0x%06lx, %lu bytes)\n",
                             (unsigned long)off, (unsigned long)size);
 out:
-    strap_gpio_init();
-    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);   /* in reset either way */
+    strap_hold_reset();      /* in reset either way */
     return rc;
 }
 
 void esp_uart_monitor(uint32_t ms)
 {
+    if (esp_rom_flash_busy()) { log_printf("[esp-mon] a C3 flash is running\n"); return; }
     uart_init(ESP_UART_FLASH_BAUD);     /* USART1 only — does not touch EN/BOOT */
     log_printf("[esp-mon] C3 UART0 for %lu ms:\n", (unsigned long)ms);
     uint32_t end = HAL_GetTick() + ms;
     char line[160]; int li = 0;
     while ((int32_t)(HAL_GetTick() - end) < 0) {
-        int c = uart_getc(HAL_GetTick() + 20);
-        if (c < 0) continue;
+        int c = uart_rx_byte();
+        if (c < 0) { sleep_ms_rtos(1); continue; }
         if (c == '\n' || li >= (int)sizeof(line) - 1) {
             line[li] = '\0';
             if (li) log_printf("[c3] %s\n", line);

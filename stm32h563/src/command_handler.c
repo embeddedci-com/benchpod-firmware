@@ -32,6 +32,7 @@
 #include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
+#include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,7 +177,9 @@ void command_handler_release_adc(int conn_id) { heavy_release(conn_id); }
    OTA and captures mutual exclusion (a capture can't start mid-OTA and vice-versa). */
 bool heavy_in_flight(void) {
     ota_state_t o = ota_get_state();
-    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED;
+    /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
+       stopped, so it holds off captures, uploads and updates like they hold off each other. */
+    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || esp_rom_flash_busy();
 }
 
 bool capture_or_upload_busy(void) {
@@ -188,6 +191,8 @@ bool heavy_or_claimed(void) {
 }
 
 const char *bus_busy_reason(void) {
+    if (esp_rom_flash_busy())
+        return "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends";
     return heavy_or_claimed() ? "busy: a capture, upload or update is using the PSRAM bus; "
                                 "try again when it ends"
                               : NULL;
