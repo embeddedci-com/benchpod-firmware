@@ -6,16 +6,26 @@ bridge's RJ45, standing in for the pod during bring-up. The bridge learns this m
 the "pod" MAC, so the machine also gets its network through the bridge.
 
     sudo ./bridgectl.py -i eth0 hello            # wait for a HELLO and print it
+    sudo ./bridgectl.py -i eth0 pair             # offer a new key (bridge unpaired, or paired with us)
     sudo ./bridgectl.py -i eth0 status
     sudo ./bridgectl.py -i eth0 scan
     sudo ./bridgectl.py -i eth0 set-wifi "lab net" "passphrase"
     sudo ./bridgectl.py -i eth0 clear-wifi | reboot | factory-reset
     sudo ./bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
 
+Pairing: an unpaired bridge trusts the first key it is offered; after that every request is
+signed (HMAC-SHA256) with that key and the bridge's per-boot nonce from HELLO. The key and the
+request counter are kept in --state (default ~/.config/benchpod-bridge/<bridge MAC>.json).
+
 Linux only (AF_PACKET), needs root or CAP_NET_RAW. The codec has no such requirement and is
 unit-tested in test_bridgectl.py.
 """
 import argparse
+import hashlib
+import hmac
+import json
+import os
+import secrets
 import socket
 import struct
 import sys
@@ -28,14 +38,18 @@ RESPONSE = 0x80
 
 HELLO, STATUS, SCAN, SET_WIFI, CLEAR_WIFI = 0x01, 0x02, 0x03, 0x04, 0x05
 OTA_BEGIN, OTA_DATA, OTA_END, REBOOT, FACTORY_RESET, OTA_ABORT = 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B
+PAIR = 0x0C
 
 T_RESULT, T_MODEL, T_FW_VERSION, T_HW_REV, T_STATE, T_BRIDGE_MAC, T_POD_MAC = 1, 2, 3, 4, 5, 6, 7
 T_SSID, T_PASSPHRASE, T_CHANNEL, T_RSSI, T_BSSID, T_AUTHMODE, T_AP = 8, 9, 10, 11, 12, 13, 14
 T_IMAGE_SIZE, T_OFFSET, T_DATA, T_UPTIME, T_REASON, T_COUNTERS, T_MESSAGE, T_FLAGS = 15, 16, 17, 18, 19, 20, 21, 22
+T_NONCE, T_KEY, T_COUNTER, T_AUTH = 0x17, 0x18, 0x19, 0x1A
+F_PAIRED = 0x20
 
 STATES = ["unconfigured", "wait-pod", "joining", "connected", "auth-failed", "no-ap"]
 RESULTS = ["ok", "bad-request", "unsupported", "busy", "storage", "ota-not-started", "ota-bad-offset",
-           "ota-verify", "ota-too-large", "internal", "ota-wrong-image"]
+           "ota-verify", "ota-too-large", "internal", "ota-wrong-image", "not-paired", "auth",
+           "already-paired"]
 AUTH = ["open", "wep", "wpa", "wpa2", "wpa/wpa2", "wpa2-ent", "wpa3", "wpa2/wpa3"]
 COUNTERS = ["eth_rx", "wifi_tx", "wifi_tx_err", "wifi_rx", "eth_tx", "eth_tx_err", "dropped"]
 BROADCAST = b"\xff" * 6
@@ -51,6 +65,29 @@ def encode(dst, src, mtype, seq, tlvs=b""):
     frame = dst + src + struct.pack(">H", ETHERTYPE) + MAGIC + struct.pack(">BBHH", VERSION, mtype, seq, len(tlvs))
     frame += tlvs
     return frame.ljust(60, b"\0")
+
+
+def auth_tag(key, nonce, signed_part):
+    """Truncated HMAC-SHA256 over nonce + frame bytes from the magic up to the AUTH TLV."""
+    return hmac.new(key, nonce + signed_part, hashlib.sha256).digest()[:16]
+
+
+def encode_signed(dst, src, mtype, seq, tlvs, key, nonce, counter):
+    tlvs += tlv(T_COUNTER, struct.pack(">I", counter))
+    blen = len(tlvs) + 3 + 16
+    head = dst + src + struct.pack(">H", ETHERTYPE) + MAGIC + struct.pack(">BBHH", VERSION, mtype, seq, blen)
+    frame = head + tlvs
+    frame += tlv(T_AUTH, auth_tag(key, nonce, frame[14:]))
+    return frame.ljust(60, b"\0")
+
+
+def verify(frame, key, nonce):
+    """True if the frame carries a valid AUTH as its last TLV."""
+    blen = struct.unpack_from(">H", frame, 20)[0]
+    end = 22 + blen
+    if blen < 19 or frame[end - 19] != T_AUTH or frame[end - 18:end - 16] != b"\x00\x10":
+        return False
+    return hmac.compare_digest(auth_tag(key, nonce, frame[14:end - 19]), frame[end - 16:end])
 
 
 def parse_tlvs(body):
@@ -108,7 +145,7 @@ def describe(msg):
         elif tag == T_REASON:
             lines.append(f"last-disconnect-reason: {v[0]}")
         elif tag == T_FLAGS:
-            lines.append(f"flags: 0x{v[0]:02x}")
+            lines.append(f"flags: 0x{v[0]:02x}" + (" (paired)" if v[0] & F_PAIRED else ""))
         elif tag == T_COUNTERS:
             vals = struct.unpack(">7I", v)
             lines.append("counters: " + " ".join(f"{n}={x}" for n, x in zip(COUNTERS, vals)))
@@ -121,12 +158,44 @@ def describe(msg):
     return lines
 
 
+class State:
+    """Pairing key and request counter for one bridge, in a small JSON file."""
+
+    def __init__(self, path):
+        self.path = path
+        try:
+            with open(path) as f:
+                d = json.load(f)
+        except FileNotFoundError:
+            d = {}
+        self.key = bytes.fromhex(d["key"]) if "key" in d else None
+        self.nonce = bytes.fromhex(d.get("nonce", ""))
+        self.counter = d.get("counter", 0)
+
+    def next_counter(self, nonce):
+        if nonce != self.nonce:  # the bridge rebooted: a new counter sequence
+            self.nonce, self.counter = nonce, 0
+        self.counter += 1
+        self.save()
+        return self.counter
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"key": self.key.hex() if self.key else None, "nonce": self.nonce.hex(),
+                       "counter": self.counter}, f)
+
+
 class Link:
     def __init__(self, ifname):
         self.sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETHERTYPE))
         self.sock.bind((ifname, 0))
         self.mac = self.sock.getsockname()[4]
         self.bridge = None
+        self.nonce = None
+        self.paired = False
+        self.state = None
         self.seq = 0
 
     def recv(self, timeout):
@@ -134,12 +203,16 @@ class Link:
         while (left := end - time.monotonic()) > 0:
             self.sock.settimeout(left)
             try:
-                msg = decode(self.sock.recv(2048))
+                raw = self.sock.recv(2048)
+                msg = decode(raw)
             except socket.timeout:
                 return None
             if msg:
                 if msg["type"] == HELLO:
                     self.bridge = msg["src"]
+                    self.nonce = first(msg["tlvs"], T_NONCE, self.nonce)
+                    self.paired = bool(first(msg["tlvs"], T_FLAGS, b"\0")[0] & F_PAIRED)
+                msg["raw"] = raw
                 return msg
         return None
 
@@ -151,16 +224,26 @@ class Link:
                 return msg
         raise SystemExit("no HELLO from a bridge")
 
-    def request(self, mtype, tlvs=b"", timeout=1.0, retries=3):
+    def request(self, mtype, tlvs=b"", timeout=1.0, retries=3, sign=None):
         dst = self.bridge or BROADCAST
         self.seq = (self.seq % 0xFFFF) + 1
-        frame = encode(dst, self.mac, mtype, self.seq, tlvs)
+        if sign is None:
+            sign = self.paired and self.state.key is not None
         for _ in range(retries):
+            # A retry is a new frame with a new counter: the bridge rejects a repeated one.
+            if sign:
+                key = self.state.key
+                frame = encode_signed(dst, self.mac, mtype, self.seq, tlvs, key, self.nonce,
+                                      self.state.next_counter(self.nonce))
+            else:
+                frame = encode(dst, self.mac, mtype, self.seq, tlvs)
             self.sock.send(frame)
             end = time.monotonic() + timeout
             while (left := end - time.monotonic()) > 0:
                 msg = self.recv(left)
                 if msg and msg["type"] == mtype | RESPONSE and msg["seq"] == self.seq:
+                    if sign and result_of(msg)[0] == 0 and not verify(msg["raw"], key, self.nonce):
+                        raise SystemExit("response has no valid AUTH: not our bridge?")
                     return msg
         raise SystemExit(f"no response to request 0x{mtype:02x}")
 
@@ -199,14 +282,31 @@ def ota(link, path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-i", "--interface", required=True)
-    ap.add_argument("command", choices=["hello", "status", "scan", "set-wifi", "clear-wifi", "reboot",
+    ap.add_argument("--state", help="pairing state file (default ~/.config/benchpod-bridge/<bridge MAC>.json)")
+    ap.add_argument("command", choices=["hello", "pair", "status", "scan", "set-wifi", "clear-wifi", "reboot",
                                         "factory-reset", "ota"])
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
     link = Link(a.interface)
     hello = link.hello()
+    path = a.state or os.path.expanduser(
+        f"~/.config/benchpod-bridge/{mac_str(link.bridge).replace(':', '')}.json")
+    link.state = State(path)
+    if link.paired and link.state.key is None and a.command not in ("hello", "pair"):
+        raise SystemExit(f"bridge is paired with another device and {path} has no key: "
+                         "press PAIR on the bridge, then run `pair`")
     if a.command == "hello":
         print("\n".join(describe(hello)))
+    elif a.command == "pair":
+        key = secrets.token_bytes(32)
+        # Unpaired: unsigned (trust on first use). Paired with us: signed, rotates the key.
+        msg = link.request(PAIR, tlv(T_KEY, key), sign=link.paired and link.state.key is not None)
+        r, m = result_of(msg)
+        if r:
+            raise SystemExit(f"error: {RESULTS[r] if r < len(RESULTS) else r} {m}")
+        link.state.key, link.state.counter = key, 0
+        link.state.save()
+        print(f"ok: paired, key in {path}")
     elif a.command == "status":
         print("\n".join(describe(link.request(STATUS))))
     elif a.command == "scan":

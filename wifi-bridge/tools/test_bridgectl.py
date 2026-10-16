@@ -15,10 +15,17 @@ BRIDGE = bytes.fromhex("02bb00000001")
 POD = bytes.fromhex("0080e1123456")
 
 HELLO = bytes.fromhex(
-    "ffffffffffff" "02bb00000001" "88b5" "4257" "01" "01" "0000" "003d"
+    "ffffffffffff" "02bb00000001" "88b5" "4257" "01" "01" "0000" "0048"
     "02001462656e6368706f642d776966692d627269646765"
     "030005302e312e30" "04000141" "05000101" "1600010b"
-    "06000602bb00000001" "0700060080e1123456")
+    "06000602bb00000001" "0700060080e1123456" "1700080102030405060708")
+
+# test_main.c --dump: CLEAR_WIFI seq 0x0103 signed with key 00..1f, nonce 01..08, counter 5
+KEY = bytes(range(32))
+NONCE = bytes(range(1, 9))
+CLEAR_WIFI_SIGNED = bytes.fromhex(
+    "02bb000000010080e112345688b54257" "01050103001a" "19000400000005"
+    "1a0010" "8c32e64d4c6382dfc653effee85b0837").ljust(60, b"\0")
 
 SET_WIFI = bytes.fromhex(
     "02bb000000010080e112345688b54257010401020011"
@@ -42,6 +49,16 @@ class Codec(unittest.TestCase):
         r = b.decode(SET_WIFI_RESPONSE)
         self.assertEqual((r["type"], r["seq"]), (b.SET_WIFI | b.RESPONSE, 0x0102))
         self.assertEqual(b.result_of(r), (0, ""))
+
+    def test_signed_golden(self):
+        self.assertEqual(b.encode_signed(BRIDGE, POD, b.CLEAR_WIFI, 0x0103, b"", KEY, NONCE, 5), CLEAR_WIFI_SIGNED)
+        self.assertTrue(b.verify(CLEAR_WIFI_SIGNED, KEY, NONCE))
+        self.assertFalse(b.verify(CLEAR_WIFI_SIGNED, KEY, bytes(8)))
+        tampered = bytearray(CLEAR_WIFI_SIGNED)
+        tampered[28] ^= 1  # counter
+        self.assertFalse(b.verify(bytes(tampered), KEY, NONCE))
+        self.assertFalse(b.verify(b.encode(BRIDGE, POD, b.STATUS, 1), KEY, NONCE))
+        self.assertEqual(b.first(b.decode(HELLO)["tlvs"], b.T_NONCE), NONCE)
 
     def test_rejects(self):
         self.assertIsNone(b.decode(b"\0" * 60))
