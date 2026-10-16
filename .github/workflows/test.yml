@@ -5,6 +5,8 @@
 #   • ice40 gateware sims  — `make -C ice40 test` (iverilog/vvp/yosys) + the
 #     tools/gen_protocol.py --check the target already runs.
 #   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
+#   • wifi-bridge host tests — `make -C wifi-bridge/test` + tools/test_bridgectl.py (native cc,
+#     python3; the ESP-IDF build itself needs Docker and is not run here).
 #   • motor-emulator gateware (ECP5) — `make -C motor-emulator/ecp5 test-rtl all` (every RTL
 #     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
 #     yosys gate-level netlist). The gate-level benches run as a matrix, one job per bench in
@@ -54,6 +56,7 @@ jobs:
       ice40: ${{ steps.filter.outputs.ice40 }}
       stm32: ${{ steps.filter.outputs.stm32 }}
       motor: ${{ steps.filter.outputs.motor }}
+      bridge: ${{ steps.filter.outputs.bridge }}
       gl_benches: ${{ steps.benches.outputs.gl_benches }}
     steps:
       - name: Checkout (tree only, for the diff)
@@ -82,6 +85,7 @@ jobs:
             echo "ice40=true" >> "$GITHUB_OUTPUT"
             echo "stm32=true" >> "$GITHUB_OUTPUT"
             echo "motor=true" >> "$GITHUB_OUTPUT"
+            echo "bridge=true" >> "$GITHUB_OUTPUT"
             exit 0
           }
           if [ "$RELEASE" = true ]; then all "release"; fi
@@ -97,10 +101,12 @@ jobs:
           ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
           stm32=$(match '^(stm32h563/|esp32-hosted-slave/|\.gitmodules$|\.github/workflows/test\.yml$)')
           motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
-          echo "ice40=$ice40 stm32=$stm32 motor=$motor"
+          bridge=$(match '^(wifi-bridge/|\.github/workflows/test\.yml$)')
+          echo "ice40=$ice40 stm32=$stm32 motor=$motor bridge=$bridge"
           echo "ice40=$ice40" >> "$GITHUB_OUTPUT"
           echo "stm32=$stm32" >> "$GITHUB_OUTPUT"
           echo "motor=$motor" >> "$GITHUB_OUTPUT"
+          echo "bridge=$bridge" >> "$GITHUB_OUTPUT"
 
   ice40-sim:
     # a required check: skipped by this `if` it reports success; runs when `changes` failed
@@ -157,6 +163,19 @@ jobs:
           submodules: recursive
       - name: Run STM32H563 host unit tests
         run: make -C stm32h563/test
+
+  wifi-bridge-host:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.bridge != 'false' }}
+    # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wi-Fi bridge core (protocol codec, forwarding rules)
+        run: make -C wifi-bridge/test
+      - name: Wi-Fi bridge reference client codec
+        run: python3 wifi-bridge/tools/test_bridgectl.py
 
   motor-emulator-sim:
     # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)
