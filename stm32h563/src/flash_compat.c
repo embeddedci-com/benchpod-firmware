@@ -5,8 +5,8 @@
  *
  * STM32H5: 1 MB or 2 MB flash in 2 equal banks, 8 KB sectors; programmed in
  * 16-byte quad-words.  `offset` is relative to FLASH_BASE (0x08000000) and is a
- * 2 MB-reference offset: the persistence records (0x1E4000..0x1FFFFF on a 2 MB
- * part, with the OTA self-test scratch at 0x1F0000) are mapped to the top 96 KB
+ * 2 MB-reference offset: the persistence records (0x1E0000..0x1FFFFF on a 2 MB
+ * part, with the OTA self-test scratch at 0x1F0000) are mapped to the top 128 KB
  * of the flash this chip has (flash_layout.h), so erasing them never touches code.
  */
 #include "hardware/flash.h"

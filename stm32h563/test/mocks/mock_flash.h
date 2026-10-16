@@ -1,4 +1,4 @@
-/* RAM-backed model of the STM32H5 internal flash tail (bank 2, sectors 114-127)
+/* RAM-backed model of the STM32H5 internal flash tail (bank 2, sectors 112-127)
    for the config-store tests. Models what matters for power-loss safety:
    8 KB sector erase, 16-byte quad-word programs, ECC per quad-word (a torn or
    doubly programmed quad-word reads as an ECC double error), and a power cut
@@ -11,8 +11,8 @@
 #include <stddef.h>
 #include <setjmp.h>
 
-#define MOCK_FLASH_BASE_OFF  0x1E4000u     /* s114: the pod policy store (pod_policy.h) */
-#define MOCK_FLASH_BYTES     0x1C000u      /* 0x1E4000..0x1FFFFF */
+#define MOCK_FLASH_BASE_OFF  0x1E0000u     /* s112: the LAN TLS certificate store (lan_tls.h) */
+#define MOCK_FLASH_BYTES     0x20000u      /* 0x1E0000..0x1FFFFF */
 #define MOCK_QW              16u
 
 extern uint8_t mock_flash[MOCK_FLASH_BYTES];
