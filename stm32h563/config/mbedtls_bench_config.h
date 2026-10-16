@@ -131,6 +131,9 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_CLI_C
 #define MBEDTLS_SSL_SRV_C                    /* the LAN API on 8443 (lan_tls.c, net_server.c) */
+#define MBEDTLS_SSL_CACHE_C                  /* its session cache: resumed handshakes (lwipopts.h) */
+#define MBEDTLS_SSL_SESSION_TICKETS          /* and tickets, server side only (lwipopts.h) */
+#define MBEDTLS_SSL_TICKET_C
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION   /* set SNI host on the ClientHello */
 #define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE

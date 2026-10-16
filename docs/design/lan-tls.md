@@ -117,7 +117,20 @@ the cloud command channel (`lan_tls`), T2 like `lan_policy`.
 computer, for example `socat TCP-LISTEN:5025,reuseaddr,fork OPENSSL:benchpod-xxxxxx.local:8443,cafile=pod.pem`
 with `pod.pem` from `benchpod lan-tls show --pem`.
 
-## Resource budget (to be measured on hardware)
+## Measured on hardware (benchpod-a1f6f2, 2026-10-16)
+
+- Flash 621 KB of 896 KB; static RAM +1.4 KB. Heap per TLS session ~22 KB (187.5 KB free with
+  none, 165.5 with one, 143.6 with two); a third is reset.
+- Full handshake 0.46 s (EC P-256), 1.07 s (RSA 2048); resumed ~20 ms. Clients open a connection
+  per command, so the pod resumes TLS 1.2 sessions (tickets + a 4-entry cache, server side only;
+  the cloud client is unchanged) and the CLI and SDK keep the last session per pod. Without it the
+  SDK's LA rate e2e failed: the 0.46 s handshake outlasted its pulse train.
+- A new certificate is swapped into the open listener (altcp_tls_bp_set_listen_config): closing
+  and binding :8443 again fails in lwIP while a connection still has that local port.
+- HTTPS-only: plaintext 8080 on Ethernet completes the TCP handshake and is then reset (as LAN
+  policy off does), since the check runs at accept.
+
+## Resource budget (design estimate)
 
 - Flash: + mbedTLS server side (ssl_srv), x509write, pk_write, PEM write, ECDSA sign paths.
 - RAM: static +~1 KB; heap per TLS session ~25-30 KB, parsed cert + key ~2 KB while listening.

@@ -903,14 +903,24 @@ altcp_tls_create_config(int is_server, u8_t cert_count, u8_t pkey_count, int hav
   mbedtls_ssl_conf_dbg(&conf->conf, altcp_mbedtls_debug, stdout);
 #endif
 #if defined(MBEDTLS_SSL_CACHE_C) && ALTCP_MBEDTLS_USE_SESSION_CACHE
-  mbedtls_ssl_conf_session_cache(&conf->conf, &conf->cache, mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
-  mbedtls_ssl_cache_set_timeout(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS);
-  mbedtls_ssl_cache_set_max_entries(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_SIZE);
+  /* BenchPod: init the cache (upstream relied on zeroed memory) and only for servers (the LAN TLS
+     listener: a resumed handshake skips ECDHE + ECDSA, ~460 ms -> a few ms); freed in
+     altcp_tls_free_config. */
+  mbedtls_ssl_cache_init(&conf->cache);
+  if (is_server) {
+    mbedtls_ssl_conf_session_cache(&conf->conf, &conf->cache, mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
+    mbedtls_ssl_cache_set_timeout(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS);
+    mbedtls_ssl_cache_set_max_entries(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_SIZE);
+  }
 #endif
 
 #if defined(MBEDTLS_SSL_SESSION_TICKETS) && ALTCP_MBEDTLS_USE_SESSION_TICKETS
   mbedtls_ssl_ticket_init(&conf->ticket_ctx);
-
+  /* BenchPod: tickets for the LAN TLS server only (Go's client resumes TLS 1.2 only by ticket,
+     not by session id). The cloud client keeps its handshake as it was: no ticket extension. */
+  if (!is_server) {
+    mbedtls_ssl_conf_session_tickets(&conf->conf, MBEDTLS_SSL_SESSION_TICKETS_DISABLED);
+  } else {
   ret = mbedtls_ssl_ticket_setup(&conf->ticket_ctx, mbedtls_ctr_drbg_random, &altcp_tls_entropy_rng->ctr_drbg,
     ALTCP_MBEDTLS_SESSION_TICKET_CIPHER, ALTCP_MBEDTLS_SESSION_TICKET_TIMEOUT_SECONDS);
   if (ret) {
@@ -922,6 +932,7 @@ altcp_tls_create_config(int is_server, u8_t cert_count, u8_t pkey_count, int hav
 
   mbedtls_ssl_conf_session_tickets_cb(&conf->conf, mbedtls_ssl_ticket_write, mbedtls_ssl_ticket_parse,
     &conf->ticket_ctx);
+  }
 #endif
 
   return conf;
@@ -1118,6 +1129,12 @@ altcp_tls_free_config(struct altcp_tls_config *conf)
     mbedtls_x509_crt_free(conf->ca);
   }
   mbedtls_ssl_config_free(&conf->conf);
+#if defined(MBEDTLS_SSL_CACHE_C) && ALTCP_MBEDTLS_USE_SESSION_CACHE
+  mbedtls_ssl_cache_free(&conf->cache);   /* BenchPod: upstream leaked the cached sessions */
+#endif
+#if defined(MBEDTLS_SSL_SESSION_TICKETS) && ALTCP_MBEDTLS_USE_SESSION_TICKETS
+  mbedtls_ssl_ticket_free(&conf->ticket_ctx);   /* BenchPod: upstream never freed it */
+#endif
   altcp_mbedtls_free_config(conf);
   altcp_mbedtls_unref_entropy();
 }
