@@ -3,7 +3,7 @@
 //   Ethernet (LAN8742A, RMII) --eth.c--> l2fwd --esp_wifi_internal_tx--> Wi-Fi station
 //   Wi-Fi station --wifi_rx--> l2fwd --esp_eth_transmit--> Ethernet
 //   EtherType 0x88B5 from the pod --> control.c (docs/PROTOCOL.md)
-//   UART0 (CP2102N) --> console.c
+//   UART0 (TC2030 pads) --> console.c (factory/debug only)
 //
 // No IP address, no esp_netif, no open ports, no SoftAP.
 #include <string.h>
@@ -54,6 +54,9 @@ uint8_t bridge_flags(void)
     if (ota_active()) {
         f |= BWP_F_OTA_ACTIVE;
     }
+    if (ota_pending_verify()) {
+        f |= BWP_F_PENDING_VERIFY;
+    }
     if (bridge_pod_mac(mac)) {
         f |= BWP_F_POD_KNOWN;
     }
@@ -92,14 +95,12 @@ void app_main(void)
     l2fwd_init(&g_bridge.fwd, mac);
 
     ota_init();
+    ota_check_pending();  // before anything that may hang: the rollback timer must run
     control_start();
     ESP_ERROR_CHECK(wifi_start());
-    if (eth_start() == ESP_OK) {
-        ota_schedule_mark_valid();
-    } else {
-        // Keep running: the console still works for diagnostics and recovery, and a new OTA image
-        // that cannot start Ethernet is never marked valid, so the bootloader rolls it back at
-        // the next reset.
+    if (eth_start() != ESP_OK) {
+        // Keep running for the debug console. A new OTA image that cannot start Ethernet never
+        // hears from the pod, so its confirmation timer reboots it back to the previous slot.
         ESP_LOGE(TAG, "Ethernet did not start; bridging disabled");
     }
     board_start_tasks();

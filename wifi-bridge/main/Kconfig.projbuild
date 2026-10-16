@@ -37,8 +37,11 @@ menu "BenchPod Wi-Fi bridge"
         int "Factory-reset button hold time (ms)"
         default 5000
 
-    config BRIDGE_MARK_VALID_DELAY_S
-        int "Seconds a new OTA image must run before it is marked valid"
-        default 30
+    config BRIDGE_CONFIRM_TIMEOUT_S
+        int "Seconds a new OTA image waits for the pod before it rolls back"
+        default 120
+        help
+            A new image is confirmed by the first valid control request from the pod. Without
+            one in this time the bridge reboots and the bootloader returns to the previous slot.
 
 endmenu

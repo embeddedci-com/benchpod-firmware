@@ -1,7 +1,8 @@
 # Wi-Fi bridge control protocol (BWP v1)
 
 How the BenchPod (or a laptop, for bring-up) talks to the Wi-Fi bridge over the Ethernet cable
-between them. The bridge implements it in `components/bridge_core/bwp.c`; the pod side is a
+between them. This is the bridge's only management path once it is flashed: its USB-C is power
+only, and the UART is on factory pads. The bridge implements it in `components/bridge_core/bwp.c`; the pod side is a
 follow-up and implements the same spec. `tools/bridgectl.py` is a reference client for Linux.
 
 ## Transport
@@ -72,7 +73,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x13 | REASON | u8, last Wi-Fi disconnect reason (ESP-IDF `wifi_err_reason_t`, low byte) |
 | 0x14 | COUNTERS | 7 x u32: eth_rx, wifi_tx, wifi_tx_err, wifi_rx, eth_tx, eth_tx_err, dropped |
 | 0x15 | MESSAGE | string, human-readable detail for an error |
-| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned |
+| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned, 0x10 new image on trial (not confirmed yet) |
 
 ## States
 
@@ -134,11 +135,15 @@ Notes:
   must hold at least the first 112 bytes of the image: the bridge checks the app descriptor's
   project name (`benchpod-wifi-bridge`) and refuses anything else. OTA_END verifies the image
   (SHA-256 and the RSA-3072 signature, see [SECURITY.md](SECURITY.md)) before it marks it bootable.
-  After REBOOT the new image must come up and run for 30 s with Ethernet started, or the
-  bootloader rolls back to the previous one.
+  After REBOOT the new image is **on trial** (FLAGS 0x10): the first valid request from the pod
+  (any type) confirms it. Without one within 120 s, or if it crashes first, the bridge reboots
+  into the previous image. So after REBOOT the pod waits for HELLO, sends STATUS, and compares
+  FW_VERSION: the old version means the update rolled back. A request is handled only after
+  the confirmation, so an OTA_BEGIN to a bridge on trial confirms the running image first and
+  never erases the fallback slot.
 - **Who may send requests:** physical access to the cable is the trust boundary. The bridge
   accepts requests from the device it learned as the pod, never from Wi-Fi. SET_WIFI carries the
-  passphrase in the clear over that cable, the same as typing it into the console. OTA images
+  passphrase in the clear over that cable. OTA images
   are signed, so a device on the cable cannot install its own firmware.
 
 ## Forwarding (data frames, for reference)
@@ -191,5 +196,7 @@ Response: SET_WIFI | 0x80, seq 0x0102, RESULT OK
   report STATUS as the `wifi-bridge` uplink (state, SSID, RSSI) in `status`.
 - Map `set-wifi`, the web Settings tab and a Wi-Fi picker (SCAN) to SET_WIFI / CLEAR_WIFI / SCAN
   when a bridge says HELLO.
-- Relay bridge firmware: OTA_BEGIN, 1024-byte OTA_DATA in order, OTA_END, REBOOT.
+- Relay bridge firmware: OTA_BEGIN, 1024-byte OTA_DATA in order, OTA_END, REBOOT, then wait for
+  HELLO, send STATUS (this confirms the new image) and check FW_VERSION. The bridge image could
+  ship inside the pod firmware or be fetched from the cloud; to decide.
 - Power control of the always-on USB-A port to power-cycle a bridge that stops sending HELLO.

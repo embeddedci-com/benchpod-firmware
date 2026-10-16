@@ -71,6 +71,7 @@ enum {
     BWP_F_ETH_LINK = 0x02,     // Ethernet link up
     BWP_F_OTA_ACTIVE = 0x04,   // an OTA transfer is in progress
     BWP_F_POD_KNOWN = 0x08,    // pod MAC learned
+    BWP_F_PENDING_VERIFY = 0x10,  // running a new OTA image that the pod has not confirmed yet
 };
 
 typedef enum {

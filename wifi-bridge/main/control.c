@@ -92,6 +92,9 @@ static void handle(uint8_t *buf, size_t len)
     if (m.type & BWP_RESPONSE) {
         return;  // the bridge never sends requests
     }
+    // A valid request from the pod proves a new image works end to end: keep it. Before any
+    // OTA_BEGIN is handled, which would otherwise overwrite the rollback slot.
+    ota_confirm();
     uint8_t dst[6], mac[6];
     memcpy(dst, m.src, 6);
     eth_get_mac(mac);

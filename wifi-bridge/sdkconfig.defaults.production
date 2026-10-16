@@ -19,6 +19,6 @@ CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y
 # NVS (Wi-Fi passphrase) encrypted with XTS keys kept in the encrypted nvs_keys partition.
 CONFIG_NVS_ENCRYPTION=y
 
-# No ROM download mode after the factory flash: recovery goes through the app (signed OTA from
-# the pod or over the console) and the bootloader's rollback. Decision to confirm, see SECURITY.md.
+# No ROM download mode after the factory flash: updates go through the pod (signed OTA with a
+# trial boot and rollback). Decision to confirm (RMA repairs), see SECURITY.md.
 CONFIG_SECURE_DISABLE_ROM_DL_MODE=y

@@ -1,4 +1,7 @@
-// Line-based console on UART0 (CP2102N, USB-C), 115200 8N1: setup without a pod and recovery.
+// Factory and debug console on UART0, 115200 8N1. UART0 is only on the Tag-Connect TC2030 pads
+// inside the case (USB-C is power only), so this is not a user setup path: Wi-Fi setup, status
+// and updates go through the pod's control channel (control.c). Here: identify a board in
+// production test, read status and logs, and set Wi-Fi on the bench without a pod.
 // Every command ends with a line "OK" or "ERR <message>"; data lines come before it. Log lines
 // (starting "I (", "W (", "E (") can interleave; `log off` silences them for scripted use.
 #include <stdio.h>
@@ -12,15 +15,13 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "freertos/task.h"
-#include "mbedtls/base64.h"
 #include "sdkconfig.h"
 
 #define UART      CONFIG_ESP_CONSOLE_UART_NUM
-#define CON_LINE_MAX  1600  // fits "ota-data <offset> <base64 of 1024 bytes>"
+#define CON_LINE_MAX  256
 #define MAX_ARGS  4
 
 static char s_line[CON_LINE_MAX];
-static uint8_t s_bin[BWP_OTA_CHUNK_MAX + 4];
 static bool s_echo = true;
 
 static const char *STATE_NAMES[] = {"unconfigured", "wait-pod", "joining", "connected", "auth-failed", "no-ap"};
@@ -79,6 +80,7 @@ static void cmd_status(void)
     bu_mac_str(mac, m);
     printf("bridge-mac: %s\n", m);
     printf("ota: %s\n", (s.flags & BWP_F_OTA_ACTIVE) ? "in-progress" : "idle");
+    printf("image: %s\n", (s.flags & BWP_F_PENDING_VERIFY) ? "on-trial (waiting for the pod)" : "confirmed");
     printf("uptime: %lu\n", (unsigned long)s.uptime_s);
     printf("counters: eth_rx=%lu wifi_tx=%lu wifi_tx_err=%lu wifi_rx=%lu eth_tx=%lu eth_tx_err=%lu dropped=%lu\n",
            (unsigned long)s.counters.eth_rx, (unsigned long)s.counters.wifi_tx,
@@ -128,34 +130,6 @@ static void cmd_set_wifi(int argc, char **argv)
     }
 }
 
-static void cmd_ota(int argc, char **argv)
-{
-    const char *msg = NULL;
-    bwp_result_t r;
-    if (strcmp(argv[0], "ota-begin") == 0 && argc == 2) {
-        r = ota_begin(strtoul(argv[1], NULL, 0), &msg);
-    } else if (strcmp(argv[0], "ota-data") == 0 && argc == 3) {
-        size_t n = 0;
-        uint32_t next = 0;
-        if (mbedtls_base64_decode(s_bin, sizeof(s_bin), &n, (const unsigned char *)argv[2], strlen(argv[2])) != 0 ||
-            n > BWP_OTA_CHUNK_MAX) {
-            err("bad-request: DATA must be base64 of 1-1024 bytes", NULL);
-            return;
-        }
-        r = ota_data(strtoul(argv[1], NULL, 0), s_bin, n, &next, &msg);
-        printf("next: %lu\n", (unsigned long)next);
-    } else if (strcmp(argv[0], "ota-end") == 0 && argc == 1) {
-        r = ota_end(&msg);
-    } else if (strcmp(argv[0], "ota-abort") == 0 && argc == 1) {
-        ota_abort();
-        r = BWP_OK;
-    } else {
-        err("usage: ota-begin <size> | ota-data <offset> <base64> | ota-end | ota-abort", NULL);
-        return;
-    }
-    result(r, msg);
-}
-
 static void cmd_help(void)
 {
     printf("help                        this list\n"
@@ -167,11 +141,7 @@ static void cmd_help(void)
            "reboot                      restart the bridge\n"
            "factory-reset               erase credentials and restart\n"
            "log on|off                  show or hide log lines\n"
-           "echo on|off                 echo typed characters\n"
-           "ota-begin <size>            firmware update over this console (signed image)\n"
-           "ota-data <offset> <base64>  up to 1024 bytes per line, in order\n"
-           "ota-end                     verify the image; boots after reboot\n"
-           "ota-abort\n");
+           "echo on|off                 echo typed characters\n");
     ok();
 }
 
@@ -216,8 +186,6 @@ static void execute(char *line)
     } else if (strcmp(c, "echo") == 0 && argc == 2) {
         s_echo = strcmp(argv[1], "off") != 0;
         ok();
-    } else if (strncmp(c, "ota-", 4) == 0) {
-        cmd_ota(argc, argv);
     } else {
         err("unknown command %s (try help)", c);
     }

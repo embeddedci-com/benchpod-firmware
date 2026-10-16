@@ -1,10 +1,14 @@
-// Firmware update, shared by the control channel (relayed by the pod) and the UART console.
+// Firmware update over the control channel, relayed by the pod.
 //
 // Chunks arrive in order (bridge_util.c: bu_ota_*). The first chunk must identify a
 // benchpod-wifi-bridge app. esp_ota_end checks the SHA-256 and the RSA-3072 signature: with
 // CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT (dev) or secure boot v2 (production) only an
-// image signed with our key is accepted. A new image must run for
-// CONFIG_BRIDGE_MARK_VALID_DELAY_S with Ethernet started, or the bootloader rolls back.
+// image signed with our key is accepted.
+//
+// Rollback: the pod is the only management path, so a new image confirms itself only once it
+// has handled a valid control request from the pod (Ethernet, EMAC rx and the control channel
+// all work). Without one within CONFIG_BRIDGE_CONFIRM_TIMEOUT_S it reboots, and the bootloader
+// goes back to the previous slot.
 #include <string.h>
 
 #include "bridge.h"
@@ -14,6 +18,7 @@
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 static const char *TAG = "ota";
@@ -169,21 +174,50 @@ bwp_result_t ota_end(const char **msg)
     return r;
 }
 
-static void mark_valid(void *arg)
+static volatile bool s_pending;
+static esp_timer_handle_t s_confirm_timer;
+
+bool ota_pending_verify(void)
 {
-    esp_ota_img_states_t st;
-    const esp_partition_t *run = esp_ota_get_running_partition();
-    if (esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "new image marked valid");
+    return s_pending;
+}
+
+void ota_confirm(void)
+{
+    if (!s_pending) {
+        return;
+    }
+    if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+        s_pending = false;
+        esp_timer_stop(s_confirm_timer);
+        ESP_LOGI(TAG, "new image confirmed by the pod");
     }
 }
 
-void ota_schedule_mark_valid(void)
+static void rollback_task(void *arg)
 {
-    esp_timer_handle_t t;
-    const esp_timer_create_args_t args = {.callback = mark_valid, .name = "ota_valid"};
-    if (esp_timer_create(&args, &t) == ESP_OK) {
-        esp_timer_start_once(t, (uint64_t)CONFIG_BRIDGE_MARK_VALID_DELAY_S * 1000000ULL);
+    board_reboot();  // does not return
+}
+
+static void confirm_timeout(void *arg)
+{
+    // esp_timer task: hand the reboot to a short-lived task (board_reboot sleeps).
+    ESP_LOGE(TAG, "no control request from the pod in %d s: rebooting to roll back",
+             CONFIG_BRIDGE_CONFIRM_TIMEOUT_S);
+    xTaskCreate(rollback_task, "rollback", 2048, NULL, 10, NULL);
+}
+
+void ota_check_pending(void)
+{
+    esp_ota_img_states_t st;
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(run, &st) != ESP_OK || st != ESP_OTA_IMG_PENDING_VERIFY) {
+        return;
     }
+    s_pending = true;
+    const esp_timer_create_args_t args = {.callback = confirm_timeout, .name = "ota_confirm"};
+    if (esp_timer_create(&args, &s_confirm_timer) == ESP_OK) {
+        esp_timer_start_once(s_confirm_timer, (uint64_t)CONFIG_BRIDGE_CONFIRM_TIMEOUT_S * 1000000ULL);
+    }
+    ESP_LOGW(TAG, "new image on trial: waiting up to %d s for the pod", CONFIG_BRIDGE_CONFIRM_TIMEOUT_S);
 }

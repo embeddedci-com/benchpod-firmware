@@ -79,7 +79,10 @@ bwp_result_t ota_end(const char **msg);
 void ota_abort(void);
 bool ota_active(void);
 void ota_poll(void);              // aborts a transfer idle for more than 60 s
-void ota_schedule_mark_valid(void);
+// Rollback guard: on a new image's first boot, starts the confirmation timer.
+void ota_check_pending(void);
+void ota_confirm(void);           // a valid control request from the pod arrived
+bool ota_pending_verify(void);
 
 // ---- control.c
 void control_start(void);

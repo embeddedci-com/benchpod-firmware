@@ -20,8 +20,9 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | Fixed regulatory domain (`CONFIG_BRIDGE_COUNTRY`, default `US`), no 802.11d adoption | `main/wifi.c` |
 | Passphrase is write-only: no message or console command returns it; buffers holding it are zeroed after use | `main/control.c`, `main/console.c`, `main/wifi.c` |
 | Wi-Fi library keeps no copy of the credentials (`WIFI_STORAGE_RAM`, `CONFIG_ESP_WIFI_NVS_ENABLED=n`); our app stores them once, in NVS | `main/creds.c` |
-| OTA images must be signed (RSA-3072, secure boot v2 signature block) and named `benchpod-wifi-bridge`; a new image that does not come up is rolled back | `main/ota.c` |
-| Factory reset (button held 5 s, console, control channel) erases the credentials | `main/board.c` |
+| OTA images must be signed (RSA-3072, secure boot v2 signature block) and named `benchpod-wifi-bridge`; two app slots, and a new image stays only once the pod has talked to it (else rollback) |
+| No user-reachable serial port: USB-C is power only, UART0 is on TC2030 pads inside the case, the console cannot update firmware | hardware, `main/console.c` | `main/ota.c` |
+| Factory reset (button held 5 s, control channel, debug console) erases the credentials | `main/board.c` |
 
 ## Dev builds (unlocked)
 
@@ -31,7 +32,7 @@ boot** (`CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT`, `CONFIG_SECURE_SIGNED_ON_UPD
 RSA scheme, so `CONFIG_ESP32_REV_MIN_3`): the running app checks an update's signature against the
 public key in its own signature block. `build.sh` signs with `keys/dev_signing_key.pem`, created
 on the first build and git-ignored. So a dev bridge only takes OTA images from the checkout that
-built it; flash over USB (`idf.py flash`) to switch keys.
+built it; flash over the TC2030 pads with esptool to switch keys.
 
 ## Production
 
@@ -53,12 +54,12 @@ It turns on:
    encrypts the `nvs` partition with them. This is what protects the Wi-Fi passphrase: flash
    encryption alone does not cover NVS.
 4. **ROM download mode disabled** (`CONFIG_SECURE_DISABLE_ROM_DL_MODE`): **a decision to
-   confirm.** With it, a bricked bridge cannot be reflashed over the CP2102N at all; recovery is
-   rollback plus signed OTA (from the pod, or `ota-*` on the console). Without it, esptool still
-   works over USB but can only write flash the chip will then decrypt into garbage or reject
-   (secure boot), so the risk is low; ESP32 (unlike S2/S3/C3) has no "secure download mode" in
-   between. Leaving it enabled makes repairs easier; disabling it is the stricter story for
-   EN 18031.
+   confirm.** The UART is only on the TC2030 pads inside the case, so a user cannot reach it
+   either way. With download mode disabled, a returned bridge whose OTA path is broken cannot be
+   reflashed at all (rollback should prevent that state). With it enabled, esptool over the pads
+   can only write flash the chip then decrypts into garbage or rejects (secure boot), so the risk
+   is low; ESP32 (unlike S2/S3/C3) has no "secure download mode" in between. Enabled makes RMA
+   repairs possible; disabled is the stricter story for EN 18031.
 
 JTAG is disabled by secure boot and flash encryption release mode (default Kconfig).
 
@@ -80,7 +81,7 @@ The signed app is both the factory image and the OTA image the pod relays.
 ### Factory flashing order
 
 1. Flash the signed bootloader (0x1000), partition table (0x10000), `ota_data_initial.bin`
-   (0x17000) and signed app (0x20000) in plain text, over J2 or the CP2102N.
+   (0x17000) and signed app (0x20000) in plain text, over the TC2030 pads.
 2. Power up once. The bootloader enables secure boot (burns the key
    digest), generates the flash-encryption key, encrypts flash in place and resets. The app's
    first `nvs_flash_init` generates the NVS keys. This takes a few seconds; do not cut power.
@@ -98,6 +99,6 @@ The signed app is both the factory image and the OTA image the pod relays.
   repo's top-level `SECURITY.md` covers disclosure; support period still to define.
 - **Control-channel authentication:** today physical access to the cable is the trust boundary
   (see PROTOCOL.md). If the bridge may ever sit on a shared switch, add a pairing key (pod and
-  bridge exchange a secret over the console or a button press, then HMAC every request).
+  bridge exchange a secret on a button press, then HMAC every request).
 - None of the above has been run on a real chip: eFuse burning is irreversible, so try it on a
   sacrificial rev A board first.
