@@ -20,7 +20,8 @@ follow-up and implements the same spec. `tools/bridgectl.py` is a reference clie
   answers with `type | 0x80` and the same `seq`, to the request's source MAC. Requests are
   handled one at a time, in order. A lost frame is the pod's to retry (suggested timeout 1 s,
   10 s for SCAN, 30 s for OTA_BEGIN which erases flash). Every request is idempotent, or made
-  so by the OTA offset rule below.
+  so by the OTA offset rule below. When paired, a retry is signed again with a new COUNTER (a
+  repeated counter is refused as a replay).
 - Unsolicited messages from the bridge use `seq = 0`: HELLO every 2 s, and STATUS (0x82)
   whenever the state changes.
 
@@ -73,7 +74,11 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x13 | REASON | u8, last Wi-Fi disconnect reason (ESP-IDF `wifi_err_reason_t`, low byte) |
 | 0x14 | COUNTERS | 7 x u32: eth_rx, wifi_tx, wifi_tx_err, wifi_rx, eth_tx, eth_tx_err, dropped |
 | 0x15 | MESSAGE | string, human-readable detail for an error |
-| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned, 0x10 new image on trial (not confirmed yet) |
+| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned, 0x10 new image on trial (not confirmed yet), 0x20 paired |
+| 0x17 | NONCE | 8 bytes, random, new on every boot of the bridge (HELLO, refusals) |
+| 0x18 | KEY | 32 bytes, the pairing key the pod offers (PAIR) |
+| 0x19 | COUNTER | u32, request counter, strictly increasing for one NONCE |
+| 0x1A | AUTH | 16 bytes, truncated HMAC-SHA256; always the last TLV, see "Pairing" |
 
 ## States
 
@@ -101,12 +106,15 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 8 | OTA_TOO_LARGE | image larger than the OTA slot, or a chunk past IMAGE_SIZE |
 | 9 | INTERNAL | anything else; see MESSAGE |
 | 10 | OTA_WRONG_IMAGE | the image is not a `benchpod-wifi-bridge` app |
+| 11 | NOT_PAIRED | the request needs pairing: send PAIR first |
+| 12 | AUTH | paired, and AUTH is missing or wrong, or COUNTER did not increase; the response carries NONCE |
+| 13 | ALREADY_PAIRED | PAIR from a pod that is not the paired one: the user must press PAIR on the bridge |
 
 ## Messages
 
 | Type | Name | Direction | Request body | Response body |
 |---|---|---|---|---|
-| 0x01 | HELLO | bridge → pod, every 2 s, seq 0 | MODEL, FW_VERSION, HW_REV, STATE, FLAGS, BRIDGE_MAC, POD_MAC (if learned) | (none) |
+| 0x01 | HELLO | bridge → pod, every 2 s, seq 0 | MODEL, FW_VERSION, HW_REV, STATE, FLAGS, BRIDGE_MAC, POD_MAC (if learned), NONCE | (none) |
 | 0x02 | STATUS | pod → bridge | (empty) | RESULT, STATE, FLAGS, SSID (if configured), CHANNEL + RSSI + BSSID (if connected), REASON (if any), UPTIME, POD_MAC (if learned), COUNTERS |
 | 0x03 | SCAN | pod → bridge | (empty) | RESULT, up to 20 AP, strongest first |
 | 0x04 | SET_WIFI | pod → bridge | SSID, PASSPHRASE (omit or empty for open) | RESULT, after the credentials are stored |
@@ -115,8 +123,13 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x07 | OTA_DATA | pod → bridge | OFFSET, DATA | RESULT, OFFSET = next expected offset |
 | 0x08 | OTA_END | pod → bridge | (empty) | RESULT, after hash + signature verification; the new image boots on the next REBOOT |
 | 0x09 | REBOOT | pod → bridge | (empty) | RESULT, then the bridge restarts after ~200 ms |
-| 0x0A | FACTORY_RESET | pod → bridge | (empty) | RESULT, then credentials are erased and the bridge restarts |
+| 0x0A | FACTORY_RESET | pod → bridge | (empty) | RESULT, then credentials and pairing are erased and the bridge restarts |
 | 0x0B | OTA_ABORT | pod → bridge | (empty) | RESULT; drops a partial transfer |
+| 0x0C | PAIR | pod → bridge | KEY | RESULT, after the key is stored |
+
+Every request except HELLO carries COUNTER + AUTH once the bridge is paired (FLAGS 0x20), and
+the bridge then signs its response the same way (echoing the COUNTER). Before pairing only
+STATUS, SCAN and PAIR are accepted; anything else gets NOT_PAIRED.
 
 Notes:
 
@@ -141,10 +154,50 @@ Notes:
   FW_VERSION: the old version means the update rolled back. A request is handled only after
   the confirmation, so an OTA_BEGIN to a bridge on trial confirms the running image first and
   never erases the fallback slot.
-- **Who may send requests:** physical access to the cable is the trust boundary. The bridge
-  accepts requests from the device it learned as the pod, never from Wi-Fi. SET_WIFI carries the
-  passphrase in the clear over that cable. OTA images
-  are signed, so a device on the cable cannot install its own firmware.
+- **Who may send requests:** only the paired pod (next section), only from the Ethernet side,
+  never from Wi-Fi. SET_WIFI carries the passphrase in the clear over the cable (the cable is
+  point to point; AUTH protects integrity, not confidentiality). OTA images are signed on top,
+  so even the paired pod cannot install its own firmware.
+
+## Pairing
+
+The bridge obeys one pod. The pod proves it is that pod with a 32-byte key they share.
+
+```
+ unpaired --PAIR(KEY), unsigned, from any pod------------> paired     (trust on first use)
+ paired   --PAIR(KEY), signed with the current key-------> paired     (key rotation)
+ paired   --PAIR button / FACTORY_RESET / power-up restore--> unpaired (next pod that offers wins)
+```
+
+- **First contact:** a pod that sees a HELLO without FLAGS 0x20 generates a random 32-byte key
+  (from a true RNG), sends PAIR with it, and stores it for that bridge (by BRIDGE_MAC) once the
+  response is OK. The bridge stores it in NVS (encrypted in production builds).
+- **Requests while paired:** the pod adds `COUNTER` (u32) and then `AUTH` as the last TLV:
+
+  ```
+  AUTH = HMAC-SHA256(key, NONCE || frame[14 .. start of the AUTH TLV])[0..16]
+  ```
+
+  i.e. over the bridge's current NONCE (from HELLO) and every byte from the magic up to the
+  AUTH TLV's tag, with the header's body length already counting the AUTH TLV (19 bytes).
+  Ethernet addresses and padding are not covered. COUNTER must be higher than the last one the
+  bridge accepted for this NONCE; the pod starts again at 1 whenever HELLO shows a new NONCE
+  (the bridge rebooted). Gaps are fine.
+- **Responses to signed requests** are signed the same way by the bridge, with the request's
+  COUNTER, so the pod knows the answer came from its bridge. HELLO and unsolicited STATUS are
+  not signed (HELLO has to be readable to learn the NONCE).
+- **Refusals** (NOT_PAIRED, AUTH, ALREADY_PAIRED) are unsigned and carry NONCE and a MESSAGE. On
+  AUTH the pod resyncs its nonce and retries once; if that fails too, its key is stale (the
+  bridge was re-paired or reset) and it tells the user to press PAIR on the bridge.
+- **PAIR button** (GPIO35, a press): the bridge forgets the key, clears FLAGS 0x20 in the next
+  HELLO, and accepts the next PAIR from whichever pod sends it. It also re-learns the pod MAC
+  from the next frame, so a new pod can take over without unplugging the cable. Wi-Fi settings
+  are kept. The FACTORY button never touches pairing, except through the power-up factory
+  restore, which erases NVS and with it the key.
+- **Trust on first use** means a device on the cable before the pod (or right after a PAIR
+  press) could pair instead. The pod notices: its PAIR gets ALREADY_PAIRED, which it reports.
+  After pairing, a device on the cable can no longer change settings, reboot the bridge or
+  start an update; it can still read HELLO and disturb the link physically.
 
 ## Forwarding (data frames, for reference)
 
@@ -164,16 +217,18 @@ The bridge is a layer-2 pipe for one MAC:
 
 ## Example frames
 
-From `test/build/test_bridge --dump` (the unit tests check the HELLO bytes):
+From `test/build/test_bridge --dump`. The C and Python tests check the HELLO and signed
+CLEAR_WIFI bytes; the AUTH value was also checked with Python's `hmac` module.
 
 ```
-HELLO, bridge 02:bb:00:00:00:01 → broadcast, state WAIT_POD, flags 0x0b, pod 00:80:e1:12:34:56
+HELLO, bridge 02:bb:00:00:00:01 → broadcast, state WAIT_POD, flags 0x0b, pod 00:80:e1:12:34:56,
+nonce 01 02 03 04 05 06 07 08
 ff ff ff ff ff ff 02 bb 00 00 00 01 88 b5 42 57
-01 01 00 00 00 3d 02 00 14 62 65 6e 63 68 70 6f
+01 01 00 00 00 48 02 00 14 62 65 6e 63 68 70 6f
 64 2d 77 69 66 69 2d 62 72 69 64 67 65 03 00 05
 30 2e 31 2e 30 04 00 01 41 05 00 01 01 16 00 01
 0b 06 00 06 02 bb 00 00 00 01 07 00 06 00 80 e1
-12 34 56
+12 34 56 17 00 08 01 02 03 04 05 06 07 08
 
 SET_WIFI, pod → bridge, seq 0x0102, SSID "lab", passphrase "secret12" (padded to 60 bytes)
 02 bb 00 00 00 01 00 80 e1 12 34 56 88 b5 42 57
@@ -186,14 +241,27 @@ Response: SET_WIFI | 0x80, seq 0x0102, RESULT OK
 01 84 01 02 00 04 01 00 01 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 00 00 00 00 00 00 00 00 00 00 00 00
+
+CLEAR_WIFI, seq 0x0103, paired: key 00 01 .. 1f, nonce 01 .. 08, COUNTER 5, AUTH
+02 bb 00 00 00 01 00 80 e1 12 34 56 88 b5 42 57
+01 05 01 03 00 1a 19 00 04 00 00 00 05 1a 00 10
+8c 32 e6 4d 4c 63 82 df c6 53 ef fe e8 5b 08 37
+00 00 00 00 00 00 00 00 00 00 00 00
 ```
+
+(The SET_WIFI example is shown without COUNTER + AUTH to keep it short. The bridge accepts
+SET_WIFI only signed, like the CLEAR_WIFI example: unpaired it answers NOT_PAIRED.)
 
 ## What the pod needs (follow-up, not in this repo change)
 
 - lwIP: a hook for EtherType 0x88B5 on the Ethernet netif (`LWIP_HOOK_UNKNOWN_ETH_PROTOCOL`),
   sending raw frames with `netif->linkoutput`.
-- A small client: remember the bridge MAC from HELLO, request/response with seq and retries,
-  report STATUS as the `wifi-bridge` uplink (state, SSID, RSSI) in `status`.
+- A small client: remember the bridge MAC and NONCE from HELLO, request/response with seq and
+  retries, report STATUS as the `wifi-bridge` uplink (state, SSID, RSSI) in `status`.
+- Pairing: a true-random key per bridge in the pod's config flash, PAIR on first contact, a
+  COUNTER per bridge nonce, HMAC-SHA256 signing and verification (the bridge's
+  `components/bridge_core/bwp.c` and `pairing.c` are plain C and can be reused). Show "press
+  PAIR on the bridge" when it answers ALREADY_PAIRED or keeps answering AUTH.
 - Map `set-wifi`, the web Settings tab and a Wi-Fi picker (SCAN) to SET_WIFI / CLEAR_WIFI / SCAN
   when a bridge says HELLO.
 - Relay bridge firmware: OTA_BEGIN, 1024-byte OTA_DATA in order, OTA_END, REBOOT, then wait for

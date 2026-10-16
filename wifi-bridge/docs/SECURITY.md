@@ -16,6 +16,7 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | No IP stack on either port: no esp_netif, no lwIP interface, no open ports, no SoftAP code (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`), no Espressif cloud services | `main/wifi.c`, `main/eth.c`, `sdkconfig.defaults` |
 | Frames only for the one learned pod MAC; everything else dropped | `components/bridge_core/l2fwd.c` |
 | Control channel accepted only from the Ethernet port, only from the pod; never from Wi-Fi, never forwarded | `l2fwd.c`, `docs/PROTOCOL.md` |
+| Paired pod only: trust on first use, then every request and its response carry a truncated HMAC-SHA256 over a per-boot nonce and a strictly increasing counter (no replay across requests or reboots). The pairing key is stored in NVS (encrypted in production). A dedicated PAIR button, not the FACTORY button, forgets it | `components/bridge_core/pairing.c`, `main/control.c`, PROTOCOL.md "Pairing" |
 | Wi-Fi: no WEP or WPA1/TKIP; WPA2-PSK minimum unless the user stores no passphrase (open network); WPA3-SAE and PMF when the AP offers them | `main/wifi.c` |
 | Fixed regulatory domain (`CONFIG_BRIDGE_COUNTRY`, default `US`), no 802.11d adoption | `main/wifi.c` |
 | Passphrase is write-only: no message or console command returns it; buffers holding it are zeroed after use | `main/control.c`, `main/console.c`, `main/wifi.c` |
@@ -94,7 +95,8 @@ The signed app is both the factory image and the OTA image the pod relays.
 The factory partition holds an ordinary signed app: with secure boot the bootloader verifies it
 like any OTA image, and flash encryption encrypts it on the first boot like the others. The
 bootloader's power-up factory reset (GPIO34 held 5 s) works the same in dev and production
-builds: it erases `nvs` and `otadata` and boots the factory image; it does not touch eFuses,
+builds: it erases `nvs` (Wi-Fi credentials and the pairing key) and `otadata` and boots the
+factory image; it does not touch eFuses,
 `nvs_keys` (the NVS keys are reused, the erased NVS starts empty) or the signature checks. The
 factory image is as old as the factory flash, so the pod should update a bridge that comes back
 with an old FW_VERSION. Anti-rollback conflicts with this: once a newer image raises the eFuse
@@ -110,8 +112,10 @@ button reset leaves nothing bootable. Do not enable anti-rollback without redesi
   revocation on ESP32), document who can sign.
 - **Vulnerability disclosure and update policy** (EN 18031 / Cyber Trust Mark paperwork): the
   repo's top-level `SECURITY.md` covers disclosure; support period still to define.
-- **Control-channel authentication:** today physical access to the cable is the trust boundary
-  (see PROTOCOL.md). If the bridge may ever sit on a shared switch, add a pairing key (pod and
-  bridge exchange a secret on a button press, then HMAC every request).
+- **Pairing is trust on first use:** a device on the cable before the pod (or right after a PAIR
+  press) could pair instead; the pod sees ALREADY_PAIRED and should tell the user. The key
+  crosses the cable once, in the clear, at pairing. Passphrases in SET_WIFI are integrity-
+  protected but not encrypted. Good enough for a point-to-point cable; for a shared switch,
+  encrypt SET_WIFI with a key derived from the pairing key.
 - None of the above has been run on a real chip: eFuse burning is irreversible, so try it on a
   sacrificial rev A board first.
