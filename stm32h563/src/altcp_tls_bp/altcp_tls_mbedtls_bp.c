@@ -1219,6 +1219,15 @@ altcp_mbedtls_listen(struct altcp_pcb *conn, u8_t backlog, err_t *err)
   return NULL;
 }
 
+/* BenchPod: see altcp_tls_bp.h. */
+void
+altcp_tls_bp_set_listen_config(struct altcp_pcb *listen_conn, struct altcp_tls_config *conf)
+{
+  if (listen_conn != NULL && listen_conn->state != NULL && conf != NULL) {
+    ((altcp_mbedtls_state_t *)listen_conn->state)->conf = conf;
+  }
+}
+
 static void
 altcp_mbedtls_abort(struct altcp_pcb *conn)
 {

@@ -513,13 +513,24 @@ static struct altcp_pcb *listen_on(struct altcp_pcb *pcb, u16_t port, void *arg)
     return l;
 }
 
-/* (Re)start the :8443 listener with the current certificate. Open TLS sessions keep the
-   configuration they started with (lan_tls_ref). */
+/* Start the :8443 listener, or give it the current certificate. Open TLS sessions keep the
+   configuration they started with (lan_tls_ref). The listener stays open across a change: closing
+   and binding :8443 again fails in lwIP while a connection (say, the one that installed the new
+   certificate) still has that local port, and the port would then go dark. */
 static void tls_listener_sync(void)
 {
     struct altcp_tls_config *cfg = lan_tls_config();
     s_tls_listen_gen = lan_tls_generation();
     if (s_tls_listen && s_tls_listen_cfg == cfg) return;
+    if (s_tls_listen && cfg) {
+        altcp_tls_bp_set_listen_config(s_tls_listen, cfg);
+        altcp_arg(s_tls_listen, cfg);   /* srv_accept's arg: the configuration accepted conns hold */
+        lan_tls_ref(cfg);
+        lan_tls_unref(s_tls_listen_cfg);
+        s_tls_listen_cfg = cfg;
+        log_printf("[net] :%d now serves the new certificate\n", LAN_TLS_PORT);
+        return;
+    }
     if (s_tls_listen) {
         altcp_accept(s_tls_listen, NULL);
         altcp_close(s_tls_listen);
