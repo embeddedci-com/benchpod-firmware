@@ -1,10 +1,17 @@
 # BenchPod Wi-Fi bridge, 8 MB flash (ESP32-WROOM-32E-N8). Partition table at 0x10000
 # (CONFIG_PARTITION_TABLE_OFFSET) so a secure-boot v2 bootloader fits in front of it; the same
 # layout is used for dev and production builds.
+#
+# factory: written once at the factory over the TC2030 pads, never touched by OTA
+#          (esp_ota_get_next_update_partition only returns ota_0/ota_1). The bootloader boots it
+#          after a power-up factory reset (button held 5 s, CONFIG_BOOTLOADER_FACTORY_RESET),
+#          which also erases nvs and otadata.
+# ota_0/1: images from the pod, with trial boot and rollback.
 # Name,     Type, SubType,  Offset,   Size,     Flags
 nvs,        data, nvs,      0x11000,  0x6000,
 otadata,    data, ota,      0x17000,  0x2000,
 phy_init,   data, phy,      0x19000,  0x1000,
 nvs_keys,   data, nvs_keys, 0x1A000,  0x1000,   encrypted
-ota_0,      app,  ota_0,    0x20000,  0x300000,
-ota_1,      app,  ota_1,    0x320000, 0x300000,
+factory,    app,  factory,  0x20000,  0x200000,
+ota_0,      app,  ota_0,    0x220000, 0x2E0000,
+ota_1,      app,  ota_1,    0x500000, 0x2E0000,

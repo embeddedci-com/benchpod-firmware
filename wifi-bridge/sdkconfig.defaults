@@ -15,6 +15,17 @@ CONFIG_PARTITION_TABLE_OFFSET=0x10000
 # OTA: roll back to the previous image unless the new one marks itself valid.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
+# Last-resort recovery: factory-reset button (GPIO34, active low, external pull-up R20) held for
+# 5 s at power-up -> the bootloader erases nvs (Wi-Fi credentials) and otadata and boots the
+# factory partition, even if both OTA images are broken. Held while running (main/board.c) it
+# only clears the Wi-Fi credentials.
+CONFIG_BOOTLOADER_FACTORY_RESET=y
+CONFIG_BOOTLOADER_NUM_PIN_FACTORY_RESET=34
+CONFIG_BOOTLOADER_FACTORY_RESET_PIN_LOW=y
+CONFIG_BOOTLOADER_OTA_DATA_ERASE=y
+CONFIG_BOOTLOADER_DATA_FACTORY_RESET="nvs"
+CONFIG_BOOTLOADER_HOLD_TIME_GPIO=5
+
 # Signed OTA images even on unlocked dev chips: the running app only accepts an update signed
 # with the same RSA-3072 key (secure boot v2 signature block). build.sh creates a per-checkout
 # dev key if there is none; production signs with the release key instead.

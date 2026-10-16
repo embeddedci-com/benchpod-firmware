@@ -22,7 +22,7 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | Wi-Fi library keeps no copy of the credentials (`WIFI_STORAGE_RAM`, `CONFIG_ESP_WIFI_NVS_ENABLED=n`); our app stores them once, in NVS | `main/creds.c` |
 | OTA images must be signed (RSA-3072, secure boot v2 signature block) and named `benchpod-wifi-bridge`; two app slots, and a new image stays only once the pod has talked to it (else rollback) |
 | No user-reachable serial port: USB-C is power only, UART0 is on TC2030 pads inside the case, the console cannot update firmware | hardware, `main/console.c` | `main/ota.c` |
-| Factory reset (button held 5 s, control channel, debug console) erases the credentials | `main/board.c` |
+| Factory reset erases the credentials: button held 5 s while running, control channel, debug console; button held at power-up also restores the factory image (bootloader) | `main/board.c` |
 
 ## Dev builds (unlocked)
 
@@ -37,7 +37,8 @@ built it; flash over the TC2030 pads with esptool to switch keys.
 ## Production
 
 `./build.sh production` builds with `sdkconfig.defaults.production` on top, into `build-prod/`
-(checked: it builds, bootloader 0xB000 bytes, fits in front of the partition table at 0x10000).
+(checked: it builds, bootloader 0xC000 bytes with factory reset, fits in front of the partition
+table at 0x10000).
 It turns on:
 
 1. **Secure boot v2** (RSA-3072). The first boot burns the SHA-256 of our release public key into
@@ -87,6 +88,18 @@ The signed app is both the factory image and the OTA image the pod relays.
    first `nvs_flash_init` generates the NVS keys. This takes a few seconds; do not cut power.
 3. Check with `espefuse.py summary` *before* step 2 on the first boards of a batch (ROM download
    mode is gone afterwards if it is disabled), and `version`/`status` on the console after.
+
+### Factory image and the factory-reset button
+
+The factory partition holds an ordinary signed app: with secure boot the bootloader verifies it
+like any OTA image, and flash encryption encrypts it on the first boot like the others. The
+bootloader's power-up factory reset (GPIO34 held 5 s) works the same in dev and production
+builds: it erases `nvs` and `otadata` and boots the factory image; it does not touch eFuses,
+`nvs_keys` (the NVS keys are reused, the erased NVS starts empty) or the signature checks. The
+factory image is as old as the factory flash, so the pod should update a bridge that comes back
+with an old FW_VERSION. Anti-rollback conflicts with this: once a newer image raises the eFuse
+secure version above the factory image's, the bootloader refuses the factory image and the
+button reset leaves nothing bootable. Do not enable anti-rollback without redesigning that.
 
 ### Still open
 
