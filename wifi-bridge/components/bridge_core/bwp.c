@@ -3,6 +3,8 @@
 
 #include <string.h>
 
+#include "hmac_sha256.h"
+
 static void put_be16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
@@ -127,6 +129,66 @@ size_t bwp_finish(bwp_writer_t *w)
         w->len = BWP_MIN_FRAME;
     }
     return w->len;
+}
+
+static void auth_mac(const uint8_t key[BWP_KEY_LEN], const uint8_t nonce[BWP_NONCE_LEN], const uint8_t *from,
+                     size_t len, uint8_t out[BWP_AUTH_LEN])
+{
+    hmac_sha256_ctx_t h;
+    uint8_t full[32];
+    hmac_sha256_init(&h, key, BWP_KEY_LEN);
+    hmac_sha256_update(&h, nonce, BWP_NONCE_LEN);
+    hmac_sha256_update(&h, from, len);
+    hmac_sha256_final(&h, full);
+    memcpy(out, full, BWP_AUTH_LEN);
+    memset(full, 0, sizeof(full));
+}
+
+void bwp_sign(bwp_writer_t *w, const uint8_t key[BWP_KEY_LEN], const uint8_t nonce[BWP_NONCE_LEN],
+              uint32_t counter)
+{
+    bwp_put_u32(w, BWP_T_COUNTER, counter);
+    if (w->overflow || w->len + 3 + BWP_AUTH_LEN > w->cap) {
+        w->overflow = true;
+        return;
+    }
+    // The MAC covers the header with its final body length, so patch it first.
+    put_be16(w->buf + 20, (uint16_t)(w->len + 3 + BWP_AUTH_LEN - BWP_ETH_HDR_LEN - BWP_HDR_LEN));
+    uint8_t mac[BWP_AUTH_LEN];
+    auth_mac(key, nonce, w->buf + BWP_ETH_HDR_LEN, w->len - BWP_ETH_HDR_LEN, mac);
+    bwp_put(w, BWP_T_AUTH, mac, sizeof(mac));
+}
+
+bwp_verify_t bwp_verify(const uint8_t *frame, const bwp_msg_t *m, const uint8_t key[BWP_KEY_LEN],
+                        const uint8_t nonce[BWP_NONCE_LEN], uint32_t *counter)
+{
+    bwp_iter_t it;
+    uint8_t tag;
+    const uint8_t *v, *auth = NULL;
+    uint16_t vl;
+    bool bad = false;
+    bwp_iter_init(&it, m->body, m->body_len);
+    while (bwp_iter_next(&it, &tag, &v, &vl)) {
+        if (auth) {
+            bad = true;  // something after AUTH: not covered by the MAC
+        }
+        if (tag == BWP_T_AUTH) {
+            if (vl != BWP_AUTH_LEN || auth) {
+                bad = true;
+            }
+            auth = v;
+        }
+    }
+    if (!auth || !bwp_get_u32(m->body, m->body_len, BWP_T_COUNTER, counter)) {
+        return BWP_VERIFY_MISSING;
+    }
+    if (bad) {
+        return BWP_VERIFY_BAD;
+    }
+    uint8_t want[BWP_AUTH_LEN];
+    const uint8_t *from = frame + BWP_ETH_HDR_LEN;
+    auth_mac(key, nonce, from, (size_t)(auth - 3 - from), want);
+    return ct_memcmp(want, auth, BWP_AUTH_LEN) == 0 ? BWP_VERIFY_OK : BWP_VERIFY_BAD;
 }
 
 bool bwp_tlv_valid(const uint8_t *body, size_t len)
@@ -261,6 +323,7 @@ size_t bwp_build_hello(uint8_t *buf, size_t cap, const uint8_t dst[6], const bwp
     if (h->flags & BWP_F_POD_KNOWN) {
         bwp_put(&w, BWP_T_POD_MAC, h->pod_mac, 6);
     }
+    bwp_put(&w, BWP_T_NONCE, h->nonce, BWP_NONCE_LEN);
     return bwp_finish(&w);
 }
 

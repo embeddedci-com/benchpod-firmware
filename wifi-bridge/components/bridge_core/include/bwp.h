@@ -38,6 +38,7 @@ enum {
     BWP_REBOOT = 0x09,
     BWP_FACTORY_RESET = 0x0A,
     BWP_OTA_ABORT = 0x0B,
+    BWP_PAIR = 0x0C,
 };
 
 // TLV tags
@@ -64,7 +65,15 @@ enum {
     BWP_T_COUNTERS = 0x14,     // 7 x u32, see bwp_counters_t
     BWP_T_MESSAGE = 0x15,      // string, human-readable detail for an error
     BWP_T_FLAGS = 0x16,        // u8, BWP_F_*
+    BWP_T_NONCE = 0x17,        // 8 bytes, random per boot (HELLO); part of every AUTH
+    BWP_T_KEY = 0x18,          // 32 bytes, pairing key offered by the pod (PAIR)
+    BWP_T_COUNTER = 0x19,      // u32, request counter, strictly increasing per nonce
+    BWP_T_AUTH = 0x1A,         // 16 bytes, truncated HMAC-SHA256; must be the last TLV
 };
+
+#define BWP_KEY_LEN   32
+#define BWP_NONCE_LEN 8
+#define BWP_AUTH_LEN  16
 
 enum {
     BWP_F_CONFIGURED = 0x01,   // Wi-Fi credentials stored
@@ -72,6 +81,7 @@ enum {
     BWP_F_OTA_ACTIVE = 0x04,   // an OTA transfer is in progress
     BWP_F_POD_KNOWN = 0x08,    // pod MAC learned
     BWP_F_PENDING_VERIFY = 0x10,  // running a new OTA image that the pod has not confirmed yet
+    BWP_F_PAIRED = 0x20,       // a pod's key is stored: requests must carry COUNTER + AUTH
 };
 
 typedef enum {
@@ -86,6 +96,9 @@ typedef enum {
     BWP_E_OTA_TOO_LARGE = 8,
     BWP_E_INTERNAL = 9,
     BWP_E_OTA_WRONG_IMAGE = 10,
+    BWP_E_NOT_PAIRED = 11,      // the request needs a paired bridge: send PAIR first
+    BWP_E_AUTH = 12,            // missing or wrong AUTH, or a replayed COUNTER (response has NONCE)
+    BWP_E_ALREADY_PAIRED = 13,  // PAIR without valid AUTH while paired: press PAIR on the bridge
 } bwp_result_t;
 
 typedef enum {
@@ -139,6 +152,10 @@ void bwp_nest_begin(bwp_writer_t *w, uint8_t tag);
 void bwp_nest_end(bwp_writer_t *w);
 // Patches the body length, zero-pads to 60 bytes. Returns the frame length, 0 on overflow.
 size_t bwp_finish(bwp_writer_t *w);
+// Appends COUNTER and AUTH = HMAC-SHA256(key, nonce || frame[14 .. start of AUTH TLV])[0..16].
+// Call last, right before bwp_finish.
+void bwp_sign(bwp_writer_t *w, const uint8_t key[BWP_KEY_LEN], const uint8_t nonce[BWP_NONCE_LEN],
+              uint32_t counter);
 
 // ---- Reader
 
@@ -179,6 +196,16 @@ bool bwp_get_u32(const uint8_t *body, size_t len, uint8_t tag, uint32_t *out);
 // Copies a string TLV into out (NUL-terminated). False if missing or longer than cap - 1.
 bool bwp_get_str(const uint8_t *body, size_t len, uint8_t tag, char *out, size_t cap);
 
+typedef enum {
+    BWP_VERIFY_OK = 0,
+    BWP_VERIFY_MISSING,  // no AUTH or no COUNTER
+    BWP_VERIFY_BAD,      // wrong length, not the last TLV, or wrong MAC
+} bwp_verify_t;
+
+// Checks a parsed frame's AUTH (see bwp_sign) and returns its COUNTER.
+bwp_verify_t bwp_verify(const uint8_t *frame, const bwp_msg_t *m, const uint8_t key[BWP_KEY_LEN],
+                        const uint8_t nonce[BWP_NONCE_LEN], uint32_t *counter);
+
 // ---- Messages
 
 #define BWP_MODEL "benchpod-wifi-bridge"
@@ -190,6 +217,7 @@ typedef struct {
     uint8_t flags;          // BWP_F_*
     uint8_t bridge_mac[6];
     uint8_t pod_mac[6];     // sent when flags has BWP_F_POD_KNOWN
+    uint8_t nonce[BWP_NONCE_LEN];
 } bwp_hello_t;
 
 typedef struct {

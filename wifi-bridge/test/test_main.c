@@ -7,7 +7,9 @@
 
 #include "bridge_util.h"
 #include "bwp.h"
+#include "hmac_sha256.h"
 #include "l2fwd.h"
+#include "pairing.h"
 
 static int failures, checks;
 
@@ -26,6 +28,9 @@ static const uint8_t OTHER[6] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
 static const uint8_t ROUTER[6] = {0x60, 0x00, 0x00, 0x00, 0x00, 0x01};
 static const uint8_t BCAST[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static const uint8_t MDNS[6] = {0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb};
+static const uint8_t NONCE[BWP_NONCE_LEN] = {1, 2, 3, 4, 5, 6, 7, 8};
+static const uint8_t NONCE2[BWP_NONCE_LEN] = {9, 9, 9, 9, 9, 9, 9, 9};
+static uint8_t KEY_A[BWP_KEY_LEN], KEY_B[BWP_KEY_LEN];  // filled in main()
 
 static size_t frame(uint8_t *f, const uint8_t dst[6], const uint8_t src[6], uint16_t type)
 {
@@ -66,14 +71,15 @@ static void dump(const char *name, const uint8_t *f, size_t n)
 // HELLO with fixed values; the same bytes are in docs/PROTOCOL.md and tools/test_bridgectl.py.
 static const char HELLO_HEX[] =
     "ffffffffffff" "02bb00000001" "88b5"               // dst, src, EtherType
-    "4257" "01" "01" "0000" "003d"                     // magic, version, HELLO, seq, body length
+    "4257" "01" "01" "0000" "0048"                     // magic, version, HELLO, seq, body length
     "02001462656e6368706f642d776966692d627269646765"  // MODEL
     "030005302e312e30"                               // FW_VERSION "0.1.0"
     "04000141"                                         // HW_REV "A"
     "05000101"                                         // STATE WAIT_POD
     "1600010b"                                         // FLAGS
     "06000602bb00000001"                               // BRIDGE_MAC
-    "0700060080e1123456";                              // POD_MAC
+    "0700060080e1123456"                               // POD_MAC
+    "1700080102030405060708";                          // NONCE
 
 static void build_example_hello(uint8_t *buf, size_t *n)
 {
@@ -81,6 +87,7 @@ static void build_example_hello(uint8_t *buf, size_t *n)
                      .flags = BWP_F_CONFIGURED | BWP_F_ETH_LINK | BWP_F_POD_KNOWN};
     memcpy(h.bridge_mac, BRIDGE, 6);
     memcpy(h.pod_mac, POD, 6);
+    memcpy(h.nonce, NONCE, sizeof(NONCE));
     *n = bwp_build_hello(buf, BWP_MAX_FRAME, NULL, &h);
 }
 
@@ -397,6 +404,201 @@ static void test_control_frames(void)
     CHECK(l2fwd_from_wifi(&s, f, 60) == L2_DROP && s.last_why == L2_WHY_CONTROL);
 }
 
+// ---- Authentication and pairing
+
+static void hex_of(const uint8_t *b, size_t n, char *out)
+{
+    for (size_t i = 0; i < n; i++) {
+        snprintf(out + 2 * i, 3, "%02x", b[i]);
+    }
+}
+
+static void test_hmac_vectors(void)
+{
+    uint8_t out[32];
+    char hex[65];
+    sha256_ctx_t c;
+    sha256_init(&c);
+    sha256_update(&c, "abc", 3);
+    sha256_final(&c, out);
+    hex_of(out, 32, hex);
+    CHECK(strcmp(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0);
+
+    // RFC 4231 test cases 1, 2 and 6 (key longer than a block).
+    hmac_sha256_ctx_t h;
+    uint8_t k1[20];
+    memset(k1, 0x0b, sizeof(k1));
+    hmac_sha256_init(&h, k1, sizeof(k1));
+    hmac_sha256_update(&h, "Hi There", 8);
+    hmac_sha256_final(&h, out);
+    hex_of(out, 32, hex);
+    CHECK(strcmp(hex, "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7") == 0);
+
+    hmac_sha256_init(&h, (const uint8_t *)"Jefe", 4);
+    hmac_sha256_update(&h, "what do ya want ", 16);  // split update
+    hmac_sha256_update(&h, "for nothing?", 12);
+    hmac_sha256_final(&h, out);
+    hex_of(out, 32, hex);
+    CHECK(strcmp(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843") == 0);
+
+    uint8_t k6[131];
+    memset(k6, 0xaa, sizeof(k6));
+    const char *m6 = "Test Using Larger Than Block-Size Key - Hash Key First";
+    hmac_sha256_init(&h, k6, sizeof(k6));
+    hmac_sha256_update(&h, m6, strlen(m6));
+    hmac_sha256_final(&h, out);
+    hex_of(out, 32, hex);
+    CHECK(strcmp(hex, "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54") == 0);
+
+    CHECK(ct_memcmp("abcd", "abcd", 4) == 0 && ct_memcmp("abcd", "abce", 4) != 0);
+}
+
+// A request from the pod; signed when key is given.
+static size_t request(uint8_t *buf, uint8_t type, const uint8_t *key, const uint8_t *nonce, uint32_t counter)
+{
+    bwp_writer_t w;
+    bwp_begin(&w, buf, BWP_MAX_FRAME, BRIDGE, POD, type, (uint16_t)counter);
+    if (type == BWP_PAIR) {
+        bwp_put(&w, BWP_T_KEY, KEY_B, BWP_KEY_LEN);
+    } else if (type == BWP_SET_WIFI) {
+        bwp_put_str(&w, BWP_T_SSID, "lab");
+        bwp_put_str(&w, BWP_T_PASSPHRASE, "secret12");
+    }
+    if (key) {
+        bwp_sign(&w, key, nonce, counter);
+    }
+    return bwp_finish(&w);
+}
+
+static void test_sign_verify(void)
+{
+    uint8_t f[BWP_MAX_FRAME];
+    bwp_msg_t m;
+    uint32_t ctr = 0;
+    size_t n = request(f, BWP_SET_WIFI, KEY_A, NONCE, 7);
+    CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK);
+    CHECK(bwp_verify(f, &m, KEY_A, NONCE, &ctr) == BWP_VERIFY_OK && ctr == 7);
+    CHECK(bwp_verify(f, &m, KEY_B, NONCE, &ctr) == BWP_VERIFY_BAD);   // other key
+    CHECK(bwp_verify(f, &m, KEY_A, NONCE2, &ctr) == BWP_VERIFY_BAD);  // other boot of the bridge
+
+    // Any changed byte in the header or body breaks it; padding and Ethernet addresses do not count.
+    for (size_t i = BWP_ETH_HDR_LEN; i < (size_t)(BWP_ETH_HDR_LEN + BWP_HDR_LEN + m.body_len); i++) {
+        uint8_t g[BWP_MAX_FRAME];
+        memcpy(g, f, n);
+        g[i] ^= 0x01;
+        bwp_msg_t mm;
+        if (bwp_parse(g, n, &mm) == BWP_PARSE_OK) {
+            CHECK(bwp_verify(g, &mm, KEY_A, NONCE, &ctr) != BWP_VERIFY_OK);
+        }
+    }
+
+    // Unsigned: missing.
+    n = request(f, BWP_SET_WIFI, NULL, NULL, 0);
+    CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK && bwp_verify(f, &m, KEY_A, NONCE, &ctr) == BWP_VERIFY_MISSING);
+
+    // A TLV appended after AUTH is not covered: rejected.
+    bwp_writer_t w;
+    bwp_begin(&w, f, sizeof(f), BRIDGE, POD, BWP_CLEAR_WIFI, 1);
+    bwp_sign(&w, KEY_A, NONCE, 1);
+    bwp_put_u8(&w, BWP_T_STATE, 0);
+    n = bwp_finish(&w);
+    CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK && bwp_verify(f, &m, KEY_A, NONCE, &ctr) == BWP_VERIFY_BAD);
+}
+
+static pair_verdict_t check_req(bwp_pairing_t *p, uint8_t type, const uint8_t *key, uint32_t counter,
+                                bool *authed)
+{
+    uint8_t f[BWP_MAX_FRAME];
+    size_t n = request(f, type, key, p->nonce, counter);
+    bwp_msg_t m;
+    uint32_t c;
+    const uint8_t *nk;
+    CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK);
+    pair_verdict_t v = pairing_check(p, f, &m, authed, &c, &nk);
+    if (v == PAIR_STORE_KEY) {
+        CHECK(nk && memcmp(nk, KEY_B, BWP_KEY_LEN) == 0);
+        pairing_set_key(p, nk);  // the firmware stores it in NVS first
+    }
+    if (*authed) {
+        CHECK(c == counter);
+    }
+    return v;
+}
+
+static void test_pairing(void)
+{
+    bwp_pairing_t p;
+    bool authed;
+    pairing_init(&p, NONCE, NULL);
+    CHECK(!p.paired);
+
+    // Unpaired: STATUS and SCAN work unauthenticated; changes need pairing first.
+    CHECK(check_req(&p, BWP_STATUS, NULL, 0, &authed) == PAIR_ACCEPT && !authed);
+    CHECK(check_req(&p, BWP_SCAN, NULL, 0, &authed) == PAIR_ACCEPT);
+    CHECK(check_req(&p, BWP_SET_WIFI, NULL, 0, &authed) == PAIR_NOT_PAIRED);
+    CHECK(check_req(&p, BWP_OTA_BEGIN, NULL, 0, &authed) == PAIR_NOT_PAIRED);
+    CHECK(check_req(&p, BWP_FACTORY_RESET, NULL, 0, &authed) == PAIR_NOT_PAIRED);
+    CHECK(pairing_result(PAIR_NOT_PAIRED) == BWP_E_NOT_PAIRED);
+
+    // First pod to offer a key pairs (trust on first use).
+    CHECK(check_req(&p, BWP_PAIR, NULL, 0, &authed) == PAIR_STORE_KEY && p.paired);
+    CHECK(memcmp(p.key, KEY_B, BWP_KEY_LEN) == 0);
+
+    // Paired: unsigned or wrongly signed requests are refused, STATUS included.
+    CHECK(check_req(&p, BWP_STATUS, NULL, 0, &authed) == PAIR_AUTH_MISSING);
+    CHECK(check_req(&p, BWP_SET_WIFI, KEY_A, 1, &authed) == PAIR_AUTH_BAD);
+    CHECK(pairing_result(PAIR_AUTH_BAD) == BWP_E_AUTH);
+    // Another pod cannot take over by offering its key.
+    CHECK(check_req(&p, BWP_PAIR, NULL, 0, &authed) == PAIR_ALREADY_PAIRED);
+    CHECK(check_req(&p, BWP_PAIR, KEY_A, 5, &authed) == PAIR_ALREADY_PAIRED);
+    CHECK(memcmp(p.key, KEY_B, BWP_KEY_LEN) == 0);
+
+    // The paired pod: counters must increase.
+    CHECK(check_req(&p, BWP_SET_WIFI, KEY_B, 1, &authed) == PAIR_ACCEPT && authed);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 2, &authed) == PAIR_ACCEPT && authed);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 2, &authed) == PAIR_REPLAY);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 1, &authed) == PAIR_REPLAY);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 10, &authed) == PAIR_ACCEPT);  // gaps are fine (lost frames)
+    // Counter 0 is never valid once paired.
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 0, &authed) == PAIR_REPLAY);
+
+    // Key rotation by the paired pod (authenticated PAIR).
+    CHECK(check_req(&p, BWP_PAIR, KEY_B, 11, &authed) == PAIR_STORE_KEY && authed);
+
+    // After a reboot (new nonce) the counter starts over, and frames from the old boot fail.
+    uint8_t old[BWP_MAX_FRAME];
+    size_t on = request(old, BWP_CLEAR_WIFI, KEY_B, NONCE, 12);
+    uint8_t key[BWP_KEY_LEN];
+    memcpy(key, p.key, sizeof(key));
+    pairing_init(&p, NONCE2, key);
+    CHECK(p.paired && p.last_counter == 0);
+    bwp_msg_t m;
+    uint32_t c;
+    const uint8_t *nk;
+    CHECK(bwp_parse(old, on, &m) == BWP_PARSE_OK);
+    CHECK(pairing_check(&p, old, &m, &authed, &c, &nk) == PAIR_AUTH_BAD);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 1, &authed) == PAIR_ACCEPT);
+
+    // PAIR button: forget; the next pod that offers a key wins.
+    pairing_forget(&p);
+    CHECK(!p.paired);
+    static const uint8_t zero[BWP_KEY_LEN];
+    CHECK(memcmp(p.key, zero, BWP_KEY_LEN) == 0);
+    CHECK(check_req(&p, BWP_CLEAR_WIFI, KEY_B, 2, &authed) == PAIR_NOT_PAIRED);
+    CHECK(check_req(&p, BWP_PAIR, NULL, 0, &authed) == PAIR_STORE_KEY && p.paired);
+    CHECK(check_req(&p, BWP_STATUS, KEY_B, 1, &authed) == PAIR_ACCEPT);  // fresh counter with the new key
+
+    // PAIR without a proper KEY.
+    pairing_forget(&p);
+    bwp_writer_t w;
+    uint8_t f[BWP_MAX_FRAME];
+    bwp_begin(&w, f, sizeof(f), BRIDGE, POD, BWP_PAIR, 1);
+    bwp_put(&w, BWP_T_KEY, KEY_B, 16);
+    size_t n = bwp_finish(&w);
+    CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK);
+    CHECK(pairing_check(&p, f, &m, &authed, &c, &nk) == PAIR_BAD_KEY && !p.paired);
+}
+
 // ---- Helpers
 
 static void test_tokenize(void)
@@ -480,6 +682,10 @@ static void test_image_ident(void)
 
 int main(int argc, char **argv)
 {
+    for (int i = 0; i < BWP_KEY_LEN; i++) {
+        KEY_A[i] = (uint8_t)i;
+        KEY_B[i] = (uint8_t)(0xa0 + i);
+    }
     if (argc > 1 && strcmp(argv[1], "--dump") == 0) {
         uint8_t buf[BWP_MAX_FRAME];
         size_t n;
@@ -493,6 +699,10 @@ int main(int argc, char **argv)
         dump("SET_WIFI", buf, n);
         n = bwp_build_result(buf, sizeof(buf), POD, BRIDGE, BWP_SET_WIFI, 0x0102, BWP_OK, NULL);
         dump("SET_WIFI response", buf, n);
+        bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_CLEAR_WIFI, 0x0103);
+        bwp_sign(&w, KEY_A, NONCE, 5);
+        n = bwp_finish(&w);
+        dump("CLEAR_WIFI signed, key 00..1f, nonce 01..08, counter 5", buf, n);
         return 0;
     }
     test_hello();
@@ -509,6 +719,9 @@ int main(int argc, char **argv)
     test_reasons();
     test_ota_seq();
     test_image_ident();
+    test_hmac_vectors();
+    test_sign_verify();
+    test_pairing();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

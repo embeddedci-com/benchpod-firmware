@@ -3,7 +3,7 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 CORE := ../components/bridge_core
-SRCS := test_main.c $(CORE)/bwp.c $(CORE)/l2fwd.c $(CORE)/bridge_util.c
+SRCS := test_main.c $(CORE)/bwp.c $(CORE)/l2fwd.c $(CORE)/bridge_util.c $(CORE)/hmac_sha256.c $(CORE)/pairing.c
 
 all: run
 
