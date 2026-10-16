@@ -66,6 +66,19 @@ const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link);
 /* Called after the USB network setting changed (usb_device re-enumerates). Weak no-op. */
 void pod_policy_on_usb_net_change(bool on);
 
+/* HTTPS-only (lan_tls.h, docs/design/lan-tls.md), default off. On, the external LAN (Ethernet,
+   Wi-Fi) gets no plaintext :8080 connections, only TLS on :8443; the USB network adapter keeps
+   plaintext. Turning it on is allowed from anywhere. Turning it off, like replacing or
+   regenerating the TLS certificate (pod_policy_lan_tls_gate), needs the USB console, the USB link,
+   the cloud, or a LAN connection over TLS: never a plaintext LAN connection, which an active
+   man-in-the-middle could have injected. */
+bool pod_policy_https_only(void);
+const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link, bool tls_link);
+/* NULL = this source may change the LAN TLS identity or turn HTTPS-only off, else the refusal. */
+const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link, bool tls_link);
+/* Called after HTTPS-only changed (net_server closes plaintext LAN connections). Weak no-op. */
+void pod_policy_on_https_only_change(bool on);
+
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);
 /* "open"/"locked"/"off" -> value, -1 if unknown. */

@@ -159,6 +159,8 @@ C_SOURCES := \
   src/lease_gate.c \
   src/net_reload.c \
   src/cloud_extras.c \
+  src/lan_tls.c \
+  src/lan_tls_pem.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/rng.c \

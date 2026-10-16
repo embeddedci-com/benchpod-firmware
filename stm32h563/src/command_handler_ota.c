@@ -95,6 +95,12 @@ void handle_ota_begin(int conn_id, const char *json) {
                                                      net_conn_on_usb(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
+    /* The LAN TLS certificate: never from a plaintext LAN connection (pod_policy_lan_tls_gate). */
+    if (target == OTA_TARGET_TLS) {
+        const char *why = pod_policy_lan_tls_gate(command_handler_policy_src(conn_id),
+                                                  net_conn_on_usb(conn_id), net_conn_on_tls(conn_id));
+        if (why) { send_error(conn_id, why); return; }
+    }
     /* Refuse if another transport's update or a capture/measure/LA is in flight. */
     const ota_owner_t who = ota_owner_for_conn(conn_id);
     const char *busy = ota_begin_gate(who);

@@ -21,6 +21,8 @@
 
 _Static_assert(AB_HDR_SIZE + AB_STORE_MAX_PAYLOAD <= FLASH_PAGE_SIZE,
                "an A/B record must fit in one 256 B program buffer");
+_Static_assert(AB_HDR_SIZE + AB_STORE_MAX_VAR_PAYLOAD <= FLASH_SHIM_SECTOR_SIZE,
+               "a large A/B record must fit its sector");
 _Static_assert(sizeof(config_t) <= AB_STORE_MAX_PAYLOAD,
                "config_t must fit in an A/B record");
 
@@ -45,6 +47,7 @@ uint32_t ab_crc32(uint32_t crc, const void *data, size_t n)
 }
 
 static uint32_t hdr_len(const ab_hdr_t *h) { return h->ver_len & 0xFFFFu; }
+static size_t   store_max(const ab_store_t *s) { return s->max_len ? s->max_len : AB_STORE_MAX_PAYLOAD; }
 static uint32_t hdr_ver(const ab_hdr_t *h) { return h->ver_len >> 16; }
 
 /* Is slot i a complete record? Fills *h. When out != NULL, also copies the
@@ -58,7 +61,7 @@ static bool slot_read(const ab_store_t *s, int i, ab_hdr_t *h, void *out, size_t
     }
     if (h->magic != s->magic) return false;          /* blank or foreign */
     uint32_t len = hdr_len(h);
-    if (len > AB_STORE_MAX_PAYLOAD) return false;
+    if (len > store_max(s)) return false;
 
     uint32_t crc = ab_crc32(0, &h->seq, sizeof(h->seq));
     crc = ab_crc32(crc, &h->ver_len, sizeof(h->ver_len));
@@ -109,20 +112,17 @@ static bool slot_payload_equals(const ab_store_t *s, int i, const void *data, si
     return true;
 }
 
-/* Erase slot `target` and write one record into it: payload first, header last. */
+/* Erase slot `target` and write one record into it: payload first, header last. The payload goes
+   in page-sized pieces from a stack buffer (a large record does not fit one), each in its own
+   interrupts-off window. */
 static int write_record(const ab_store_t *s, int target, uint32_t seq, const void *data, size_t len)
 {
-    uint8_t rec[AB_HDR_SIZE + AB_STORE_MAX_PAYLOAD] __attribute__((aligned(16)));
+    uint8_t page[FLASH_PAGE_SIZE] __attribute__((aligned(16)));
     ab_hdr_t h;
     h.magic   = s->magic;
     h.seq     = seq;
     h.ver_len = ((uint32_t)s->version << 16) | (uint32_t)len;
     h.crc     = ab_crc32(ab_crc32(ab_crc32(0, &h.seq, 4), &h.ver_len, 4), data, len);
-
-    size_t body = (len + AB_QW - 1u) & ~(size_t)(AB_QW - 1u);
-    memset(rec, 0xFF, sizeof(rec));
-    memcpy(rec, &h, sizeof(h));
-    if (len) memcpy(rec + AB_HDR_SIZE, data, len);
 
     uint32_t off = s->slot_off[target];
     printf("[%s] writing slot %c (0x%06lx) seq %lu, %u B\n", s->tag, 'A' + target,
@@ -131,8 +131,20 @@ static int write_record(const ab_store_t *s, int target, uint32_t seq, const voi
     /* Interrupts off, as before: bank-2 erase/program while bank 1 keeps running. */
     uint32_t irqs = save_and_disable_interrupts();
     flash_range_erase(off, FLASH_SHIM_SECTOR_SIZE);
-    if (body) flash_range_program(off + AB_HDR_SIZE, rec + AB_HDR_SIZE, body);
-    flash_range_program(off, rec, AB_HDR_SIZE);         /* the commit point */
+    restore_interrupts(irqs);
+    size_t body = (len + AB_QW - 1u) & ~(size_t)(AB_QW - 1u);
+    for (size_t pos = 0; pos < body; pos += sizeof(page)) {
+        size_t n = body - pos < sizeof(page) ? body - pos : sizeof(page);
+        memset(page, 0xFF, n);
+        if (pos < len) memcpy(page, (const uint8_t *)data + pos, (len - pos < n) ? len - pos : n);
+        irqs = save_and_disable_interrupts();
+        flash_range_program(off + AB_HDR_SIZE + (uint32_t)pos, page, n);
+        restore_interrupts(irqs);
+    }
+    memset(page, 0xFF, AB_HDR_SIZE);
+    memcpy(page, &h, sizeof(h));
+    irqs = save_and_disable_interrupts();
+    flash_range_program(off, page, AB_HDR_SIZE);         /* the commit point */
     restore_interrupts(irqs);
 
     ab_hdr_t rh;
@@ -178,9 +190,25 @@ int ab_store_load(const ab_store_t *s, void *out, size_t len)
     return 0;
 }
 
+int ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_out)
+{
+    bool v[2]; ab_hdr_t h[2];
+    int n = scan(s, v, h);
+    if (n < 0 || hdr_len(&h[n]) == 0) return -1;            /* none, or a tombstone */
+    if (hdr_ver(&h[n]) != s->version || hdr_len(&h[n]) > cap) {
+        printf("[%s] record version %lu len %lu not loadable (want version %u, at most %u B)\n",
+               s->tag, (unsigned long)hdr_ver(&h[n]), (unsigned long)hdr_len(&h[n]),
+               (unsigned)s->version, (unsigned)cap);
+        return -1;
+    }
+    if (!slot_read(s, n, &h[n], out, cap)) return -1;
+    if (len_out) *len_out = hdr_len(&h[n]);
+    return 0;
+}
+
 int ab_store_save(const ab_store_t *s, const void *data, size_t len)
 {
-    if (!data || len == 0 || len > AB_STORE_MAX_PAYLOAD) return -1;
+    if (!data || len == 0 || len > store_max(s)) return -1;
     bool v[2]; ab_hdr_t h[2];
     int n = scan(s, v, h);
     if (n >= 0 && hdr_ver(&h[n]) == s->version && hdr_len(&h[n]) == len &&

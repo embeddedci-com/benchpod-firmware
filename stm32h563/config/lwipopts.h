@@ -111,6 +111,20 @@
    mbedTLS so cloud_client.c can open a wss:// connection.  See
    config/mbedtls_bench_config.h and src/mbedtls_port.c. */
 #define LWIP_ALTCP              1
+/* altcp pcbs: the cloud link (TLS over TCP, through the proxy layer when one is set: up to 3 per
+   connection, 2 connections), both LAN listeners (8080: 1, 8443: 2) and 5 LAN connections (a
+   TLS one takes 2). The default (MEMP_NUM_TCP_PCB = 10) is too few once 8443 exists. */
+#define MEMP_NUM_ALTCP_PCB      20
+/* LAN TLS (8443): TLS 1.2 session resumption from a small server-side cache. Clients open one
+   connection per command, and a full handshake (ECDHE + ECDSA in software) costs ~460 ms; a
+   resumed one is a few ms. 4 sessions (~200 B each on the FreeRTOS heap), kept for an hour. */
+#define ALTCP_MBEDTLS_USE_SESSION_CACHE            1
+#define ALTCP_MBEDTLS_SESSION_CACHE_SIZE           4
+#define ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS (60 * 60)
+/* And session tickets (Go's TLS 1.2 client resumes only by ticket): stateless, AES-256-GCM keys
+   from the TRNG, rotated by mbedTLS; server side only (altcp_tls_mbedtls_bp.c). */
+#define ALTCP_MBEDTLS_USE_SESSION_TICKETS          1
+#define ALTCP_MBEDTLS_SESSION_TICKET_TIMEOUT_SECONDS (60 * 60)
 #define LWIP_ALTCP_TLS          1
 #define LWIP_ALTCP_TLS_MBEDTLS  1
 

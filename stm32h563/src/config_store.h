@@ -41,7 +41,14 @@
  * magic must match). The next save writes the new format; the legacy sector is
  * left alone until a clear, so it stays a fallback until then.
  *
+ * Large records: a store with max_len set (lan_tls.h) holds records of up to max_len bytes
+ * (at most AB_STORE_MAX_VAR_PAYLOAD, one sector less its header), read with
+ * ab_store_load_var. The payload is programmed in page-sized pieces, each in its own
+ * interrupts-off window; the header still goes last.
+ *
  * Flash map (bank 2, 8 KB sectors, offsets from 0x08000000):
+ *   0x1E0000  s112  LAN TLS certificate + key slot B (lan_tls.h)
+ *   0x1E2000  s113  LAN TLS certificate + key slot A
  *   0x1E4000  s114  pod policy slot B (pod_policy.h)
  *   0x1E6000  s115  pod policy slot A
  *   0x1E8000  s116  per-pod ADC calibration slot B (adc_cal.h); FLASH_BLOBS ends here
@@ -59,6 +66,7 @@
  * ---------------------------------------------------------------------------*/
 
 #define AB_STORE_MAX_PAYLOAD  240u     /* record (16 B header + payload) <= 256 B */
+#define AB_STORE_MAX_VAR_PAYLOAD (0x2000u - 16u)   /* a large record fills at most one sector */
 
 typedef struct {
     const char *tag;           /* log prefix, e.g. "cfg" */
@@ -67,12 +75,17 @@ typedef struct {
     uint16_t    version;       /* payload schema version stored in the header */
     uint32_t    legacy_off;    /* old single-sector layout; 0 = none */
     uint32_t    legacy_magic;  /* first word of a valid legacy struct */
+    uint16_t    max_len;       /* largest payload; 0 = AB_STORE_MAX_PAYLOAD */
 } ab_store_t;
 
 /* Copy the newest record's payload into out (exactly len bytes).
    0 = loaded (from a slot or, failing that, the legacy sector);
    -1 = none, cleared, or a record of another length/version. */
 int  ab_store_load(const ab_store_t *s, void *out, size_t len);
+
+/* The newest record of any length up to cap: 0 and *len_out = its length, or -1 (none, cleared,
+   another version, or longer than cap). For stores with max_len set. */
+int  ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_out);
 
 /* Write data as the newest record (no-op if identical to the newest). 0 on success. */
 int  ab_store_save(const ab_store_t *s, const void *data, size_t len);
