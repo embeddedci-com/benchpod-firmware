@@ -1,4 +1,4 @@
-// Board support for hardware rev A: RMII clock enable, PHY reset line, LEDs, factory-reset button.
+// Board support for hardware rev A: RMII clock enable, PHY reset line, LEDs, FACTORY and PAIR buttons.
 #include "bridge.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -25,8 +25,9 @@ void board_init(void)
     gpio_set_level(PIN_LED_ACT, 0);
     gpio_set_level(PIN_LED_STAT, 1);  // red until Ethernet is up
 
-    gpio_config_t in = {.pin_bit_mask = 1ULL << PIN_BTN_FACTORY, .mode = GPIO_MODE_INPUT};
-    gpio_config(&in);  // GPIO34 has no internal pull; R20 pulls it up
+    gpio_config_t in = {.pin_bit_mask = (1ULL << PIN_BTN_FACTORY) | (1ULL << PIN_BTN_PAIR),
+                        .mode = GPIO_MODE_INPUT};
+    gpio_config(&in);  // GPIO34/35 have no internal pulls; R20 and R41 pull them up
 }
 
 void board_rmii_clock(bool on)
@@ -67,6 +68,8 @@ static void led_task(void *arg)
     int64_t pressed_since = 0;
     bool reset_done = false;
     int64_t reset_flash_until = 0;
+    int64_t pair_since = 0, pair_flash_until = 0;
+    bool pair_done = false;
     for (;;) {
         int64_t now_us = esp_timer_get_time();
         int64_t now = now_us / 1000;
@@ -84,6 +87,22 @@ static void led_task(void *arg)
             bridge_clear_wifi();
             reset_done = true;
             reset_flash_until = now + 1000;
+        }
+
+        // PAIR button: a press (50 ms, debounced; C27 filters bounce too) forgets the pairing.
+        // Separate from FACTORY so pairing can never wipe settings.
+        bool pair = gpio_get_level(PIN_BTN_PAIR) == 0;
+        if (pair && !pair_since) {
+            pair_since = now;
+            pair_done = false;
+        } else if (!pair) {
+            pair_since = 0;
+        }
+        if (pair_since && !pair_done && now - pair_since >= 50) {
+            ESP_LOGW(TAG, "PAIR button: forgetting the paired pod");
+            control_forget_pairing();
+            pair_done = true;
+            pair_flash_until = now + 900;
         }
 
         // Green: Wi-Fi state.
@@ -105,6 +124,8 @@ static void led_task(void *arg)
         int stat;
         if (now < reset_flash_until) {
             stat = 1;
+        } else if (now < pair_flash_until) {
+            stat = blink(now, 300, 150);  // three blinks: pairing forgotten
         } else if (pressed_since && now - pressed_since >= 1000 && !reset_done) {
             stat = blink(now, 100, 50);
         } else if (ota_active()) {

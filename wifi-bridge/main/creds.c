@@ -72,6 +72,46 @@ esp_err_t creds_clear(void)
     return err;
 }
 
+bool pairkey_load(uint8_t key[BWP_KEY_LEN])
+{
+    nvs_handle_t h;
+    bool ok = false;
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = BWP_KEY_LEN;
+        ok = nvs_get_blob(h, "pairkey", key, &n) == ESP_OK && n == BWP_KEY_LEN;
+        nvs_close(h);
+    }
+    return ok;
+}
+
+esp_err_t pairkey_store(const uint8_t key[BWP_KEY_LEN])
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_blob(h, "pairkey", key, BWP_KEY_LEN);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
+esp_err_t pairkey_clear(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    nvs_erase_key(h, "pairkey");
+    err = nvs_commit(h);
+    nvs_close(h);
+    return err;
+}
+
 esp_err_t bridge_set_wifi(const char *ssid, size_t ssid_len, const char *pass)
 {
     esp_err_t err = creds_store(ssid, ssid_len, pass);

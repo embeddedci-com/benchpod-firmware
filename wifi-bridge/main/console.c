@@ -80,6 +80,7 @@ static void cmd_status(void)
     bu_mac_str(mac, m);
     printf("bridge-mac: %s\n", m);
     printf("ota: %s\n", (s.flags & BWP_F_OTA_ACTIVE) ? "in-progress" : "idle");
+    printf("paired: %s\n", (s.flags & BWP_F_PAIRED) ? "yes" : "no");
     printf("image: %s\n", (s.flags & BWP_F_PENDING_VERIFY) ? "on-trial (waiting for the pod)" : "confirmed");
     printf("uptime: %lu\n", (unsigned long)s.uptime_s);
     printf("counters: eth_rx=%lu wifi_tx=%lu wifi_tx_err=%lu wifi_rx=%lu eth_tx=%lu eth_tx_err=%lu dropped=%lu\n",
@@ -139,7 +140,8 @@ static void cmd_help(void)
            "set-wifi <ssid> [pass]      store credentials and connect (quote values with spaces)\n"
            "clear-wifi                  erase credentials and disconnect\n"
            "reboot                      restart the bridge\n"
-           "factory-reset               erase credentials and restart\n"
+           "factory-reset               erase credentials and pairing, restart\n"
+           "unpair                      forget the paired pod (same as the PAIR button)\n"
            "log on|off                  show or hide log lines\n"
            "echo on|off                 echo typed characters\n");
     ok();
@@ -176,10 +178,13 @@ static void execute(char *line)
         vTaskDelay(pdMS_TO_TICKS(100));
         board_reboot();
     } else if (strcmp(c, "factory-reset") == 0) {
-        creds_clear() == ESP_OK ? ok() : err("storage", NULL);
+        creds_clear() == ESP_OK && pairkey_clear() == ESP_OK ? ok() : err("storage", NULL);
         fflush(stdout);
         vTaskDelay(pdMS_TO_TICKS(100));
         board_reboot();
+    } else if (strcmp(c, "unpair") == 0) {
+        control_forget_pairing();
+        ok();
     } else if (strcmp(c, "log") == 0 && argc == 2) {
         esp_log_level_set("*", strcmp(argv[1], "off") == 0 ? ESP_LOG_NONE : ESP_LOG_INFO);
         ok();

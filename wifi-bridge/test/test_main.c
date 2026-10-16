@@ -503,6 +503,15 @@ static void test_sign_verify(void)
     bwp_put_u8(&w, BWP_T_STATE, 0);
     n = bwp_finish(&w);
     CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK && bwp_verify(f, &m, KEY_A, NONCE, &ctr) == BWP_VERIFY_BAD);
+
+    // Signing a finished, padded response in place.
+    n = bwp_build_result(f, sizeof(f), POD, BRIDGE, BWP_SET_WIFI, 3, BWP_OK, NULL);
+    CHECK(n == BWP_MIN_FRAME);
+    n = bwp_sign_frame(f, sizeof(f), KEY_A, NONCE, 9);
+    CHECK(n > 0 && bwp_parse(f, n, &m) == BWP_PARSE_OK);
+    CHECK(bwp_verify(f, &m, KEY_A, NONCE, &ctr) == BWP_VERIFY_OK && ctr == 9);
+    uint8_t r = 99;
+    CHECK(bwp_get_u8(m.body, m.body_len, BWP_T_RESULT, &r) && r == BWP_OK);
 }
 
 static pair_verdict_t check_req(bwp_pairing_t *p, uint8_t type, const uint8_t *key, uint32_t counter,

@@ -159,6 +159,18 @@ void bwp_sign(bwp_writer_t *w, const uint8_t key[BWP_KEY_LEN], const uint8_t non
     bwp_put(w, BWP_T_AUTH, mac, sizeof(mac));
 }
 
+size_t bwp_sign_frame(uint8_t *buf, size_t cap, const uint8_t key[BWP_KEY_LEN],
+                      const uint8_t nonce[BWP_NONCE_LEN], uint32_t counter)
+{
+    bwp_writer_t w = {.buf = buf, .cap = cap > BWP_MAX_FRAME ? BWP_MAX_FRAME : cap};
+    w.len = BWP_ETH_HDR_LEN + BWP_HDR_LEN + get_be16(buf + 20);  // drop the padding
+    if (w.len > w.cap) {
+        return 0;
+    }
+    bwp_sign(&w, key, nonce, counter);
+    return bwp_finish(&w);
+}
+
 bwp_verify_t bwp_verify(const uint8_t *frame, const bwp_msg_t *m, const uint8_t key[BWP_KEY_LEN],
                         const uint8_t nonce[BWP_NONCE_LEN], uint32_t *counter)
 {

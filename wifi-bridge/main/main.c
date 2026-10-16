@@ -57,6 +57,9 @@ uint8_t bridge_flags(void)
     if (ota_pending_verify()) {
         f |= BWP_F_PENDING_VERIFY;
     }
+    if (control_paired()) {
+        f |= BWP_F_PAIRED;
+    }
     if (bridge_pod_mac(mac)) {
         f |= BWP_F_POD_KNOWN;
     }
@@ -96,8 +99,8 @@ void app_main(void)
 
     ota_init();
     ota_check_pending();  // before anything that may hang: the rollback timer must run
-    control_start();
     ESP_ERROR_CHECK(wifi_start());
+    control_start();  // after Wi-Fi: the RF noise makes esp_random() a true RNG for the nonce
     if (eth_start() != ESP_OK) {
         // Keep running for the debug console. A new OTA image that cannot start Ethernet never
         // hears from the pod, so its confirmation timer reboots it back to the previous slot.

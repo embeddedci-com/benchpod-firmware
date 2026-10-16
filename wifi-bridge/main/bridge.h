@@ -19,6 +19,7 @@
 #define PIN_LED_ACT     14  // yellow, active high
 #define PIN_LED_STAT    33  // red, active high
 #define PIN_BTN_FACTORY 34  // input only, 10k pull-up (R20), active low
+#define PIN_BTN_PAIR    35  // input only, 10k pull-up (R41) + 100 nF (C27), active low
 
 // ---- Shared forwarding state (main.c)
 typedef struct {
@@ -70,6 +71,10 @@ esp_err_t creds_clear(void);
 // Clears credentials and tells the Wi-Fi module (button, console, control channel).
 esp_err_t bridge_clear_wifi(void);
 esp_err_t bridge_set_wifi(const char *ssid, size_t ssid_len, const char *pass);
+// Pairing key of the pod (control channel), same NVS namespace.
+bool pairkey_load(uint8_t key[BWP_KEY_LEN]);
+esp_err_t pairkey_store(const uint8_t key[BWP_KEY_LEN]);
+esp_err_t pairkey_clear(void);
 
 // ---- ota.c: shared by the control channel and the console
 void ota_init(void);
@@ -88,6 +93,8 @@ bool ota_pending_verify(void);
 void control_start(void);
 void control_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame
 void control_notify(void);                    // state changed: send an unsolicited STATUS
+void control_forget_pairing(void);            // PAIR button: the next pod that offers a key wins
+bool control_paired(void);
 
 // ---- console.c
 void console_start(void);

@@ -156,6 +156,10 @@ size_t bwp_finish(bwp_writer_t *w);
 // Call last, right before bwp_finish.
 void bwp_sign(bwp_writer_t *w, const uint8_t key[BWP_KEY_LEN], const uint8_t nonce[BWP_NONCE_LEN],
               uint32_t counter);
+// Signs an already finished frame (e.g. from bwp_build_status) in place. Returns the new length,
+// 0 if it does not fit.
+size_t bwp_sign_frame(uint8_t *buf, size_t cap, const uint8_t key[BWP_KEY_LEN],
+                      const uint8_t nonce[BWP_NONCE_LEN], uint32_t counter);
 
 // ---- Reader
 
