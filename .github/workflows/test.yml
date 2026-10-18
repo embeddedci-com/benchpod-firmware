@@ -6,7 +6,9 @@
 #     tools/gen_protocol.py --check the target already runs.
 #   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
 #   • wifi-bridge host tests — `make -C wifi-bridge/test` + tools/test_bridgectl.py (native cc,
-#     python3; the ESP-IDF build itself needs Docker and is not run here).
+#     python3), and the ESP-IDF build of the bridge firmware (dev and production configs) in the
+#     pinned espressif/idf image from wifi-bridge/idf-image, so a change that breaks the image
+#     build fails the PR. Dev builds sign with a throwaway key made in the job; nothing is uploaded.
 #   • motor-emulator gateware (ECP5) — `make -C motor-emulator/ecp5 test-rtl all` (every RTL
 #     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
 #     yosys gate-level netlist). The gate-level benches run as a matrix, one job per bench in
@@ -176,6 +178,27 @@ jobs:
         run: make -C wifi-bridge/test
       - name: Wi-Fi bridge reference client codec
         run: python3 wifi-bridge/tools/test_bridgectl.py
+
+  wifi-bridge-build:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.bridge != 'false' }}
+    # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The ESP-IDF image is several GB; the hosted runner needs room for it (as in release-stm32.yml).
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
+            /usr/local/lib/node_modules "$AGENT_TOOLSDIRECTORY"
+          docker image prune -a -f
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the bridge firmware (dev config, ESP-IDF in Docker)
+        run: cd wifi-bridge && ./build.sh
+      - name: Build the bridge firmware (production config, secure boot + flash encryption)
+        run: cd wifi-bridge && ./build.sh production
 
   motor-emulator-sim:
     # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)
