@@ -65,6 +65,9 @@ static void test_mixed_verbs(void) {
     expect("cloud_ca", "{\"cmd\":\"cloud_ca\"}", CMD_TIER_T0);
     expect("cloud_ca", "{\"cmd\":\"cloud_ca\",\"clear\":true}", CMD_TIER_T2);
     expect("cloud_proxy", "{\"cmd\":\"cloud_proxy\",\"set\":\"p:3128\"}", CMD_TIER_T2);
+    expect("lan_tls", "{\"cmd\":\"lan_tls\"}", CMD_TIER_T0);
+    expect("lan_tls", "{\"cmd\":\"lan_tls\",\"https_only\":false}", CMD_TIER_T2);
+    expect("lan_tls", "{\"cmd\":\"lan_tls\",\"regenerate\":true}", CMD_TIER_T2);
 }
 
 static char *slurp(const char *path) {
@@ -204,7 +207,7 @@ static void test_flags_match_the_old_lists(void) {
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
     EXPECT_SET(CMD_F_MIXED, "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy", "usb_network",
-               "cloud_ca", "cloud_proxy");
+               "cloud_ca", "cloud_proxy", "lan_tls");
 }
 
 int main(void) {

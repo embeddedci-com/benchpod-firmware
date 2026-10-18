@@ -8,7 +8,7 @@
 /*
  * ota — hostless firmware update, staged in external PSRAM.
  *
- * The firmware image (~0.5 MB; it must fit the 1 MB H563's 912 KB code area) is
+ * The firmware image (~0.5 MB; it must fit the 1 MB H563's 896 KB code area) is
  * streamed into the 8 MB PSRAM, its SHA-256 verified, then a RAM-resident routine
  * erases + rewrites the internal flash from PSRAM and resets.  The same staging
  * carries the blobs (ESP32-C3 image, iCE40 gateware) to their W25Q slots.
@@ -27,12 +27,12 @@
  */
 
 /* Max image we will accept: everything below the persistence sectors at the top of flash
-   (flash_layout.h): 0x1E4000 on a 2 MB part, 0x0E4000 on a 1 MB part.  There sit the pod policy, the per-pod
+   (flash_layout.h): 0x1E0000 on a 2 MB part, 0x0E0000 on a 1 MB part.  There sit the LAN TLS certificate, the pod policy, the per-pod
    ADC calibration (adc_cal.h), the DAC output limits (dac_limits.h), the OTA self-test scratch
    sector, the Wi-Fi and cloud config slots and the DEVICE IDENTITY KEY; ota_commit erases and
    rewrites up to the image size, so a larger image would wipe them, and a pod without its key
    cannot authenticate to the cloud again.  OTA_MAX_SIZE is the 2 MB part's limit. */
-#define OTA_MAX_SIZE   0x1E4000u   /* 1936 KB */
+#define OTA_MAX_SIZE   0x1E0000u   /* 1920 KB */
 uint32_t ota_max_size(void);
 
 typedef enum {
@@ -51,9 +51,10 @@ typedef enum {
     OTA_TARGET_GW1,
     OTA_TARGET_ESP,
     OTA_TARGET_CA,      /* the company CA for the cloud link: configuration, not code (no signature) */
+    OTA_TARGET_TLS,     /* the LAN TLS certificate + key (lan_tls.h): configuration, internal flash */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp", "ca" (NULL or "" = firmware). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca", "tls" (NULL or "" = firmware). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);
@@ -150,8 +151,13 @@ int ota_end(void);
    Returns <0 if no verified image is staged or the write failed. */
 int ota_commit(void);
 /* The blob half of ota_commit: copy the verified staged blob into its slot, state -> installed.
-   Calls blob_store_on_installed() so the pod can put the new blob to use. */
+   Calls blob_store_on_installed() so the pod can put the new blob to use. Target "tls" goes to
+   ota_install_staged_config instead (internal flash, not a W25Q slot). */
 int ota_install_blob(void);
+/* Install a verified configuration upload that does not live in a W25Q slot (target "tls":
+   lan_tls.c reads it with ota_read_staged). 0 = installed, else -1 with why filled. Weak default
+   refuses, so the host tests link without lan_tls. */
+int ota_install_staged_config(ota_target_t t, uint32_t size, char *why, size_t cap);
 /* Re-hash the staged image with the PSRAM bus ALREADY held by the caller (ota_commit, right
    before it goes RAM-resident): 0 = still the verified image, -1 = changed or unreadable. */
 int ota_reverify_held(void);

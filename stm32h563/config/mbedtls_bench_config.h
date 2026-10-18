@@ -2,7 +2,8 @@
  * mbedtls_bench_config.h — mbedTLS 3.6 config for the bench-pod's outbound
  * TLS 1.2 WebSocket client (cloud_client.c, via LwIP altcp_tls).
  *
- * Scope: a CLIENT only, TLS 1.2 only (TLS 1.3 deliberately off so we don't pull
+ * Scope: TLS 1.2 only: the client, and since the LAN TLS listener (8443, lan_tls.c) also the
+ * server side; TLS 1.2 only (TLS 1.3 deliberately off so we don't pull
  * in the mandatory PSA-crypto subsystem).  No filesystem, no POSIX sockets (the
  * BIO is LwIP's altcp), no threading.  Heap is routed to FreeRTOS via
  * mbedtls_platform_set_calloc_free() (see mbedtls_port.c) and entropy comes from
@@ -120,9 +121,19 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_X509_CRT_PARSE_C
 
+/* ---- LAN TLS server certificate (lan_tls.c): generate a key, write a self-signed cert ---- */
+#define MBEDTLS_PK_WRITE_C
+#define MBEDTLS_PEM_WRITE_C
+#define MBEDTLS_X509_CREATE_C
+#define MBEDTLS_X509_CRT_WRITE_C
+
 /* ---- TLS 1.2 client ------------------------------------------------------ */
 #define MBEDTLS_SSL_TLS_C
 #define MBEDTLS_SSL_CLI_C
+#define MBEDTLS_SSL_SRV_C                    /* the LAN API on 8443 (lan_tls.c, net_server.c) */
+#define MBEDTLS_SSL_CACHE_C                  /* its session cache: resumed handshakes (lwipopts.h) */
+#define MBEDTLS_SSL_SESSION_TICKETS          /* and tickets, server side only (lwipopts.h) */
+#define MBEDTLS_SSL_TICKET_C
 #define MBEDTLS_SSL_PROTO_TLS1_2
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION   /* set SNI host on the ClientHello */
 #define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE

@@ -68,6 +68,7 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | Computer's address | The other host of that `/30`, handed out by the pod's DHCP server (lease 1 hour) |
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
 | mDNS | `_benchpod._tcp` and `_scpi-raw._tcp` are advertised on this link too (under every LAN policy) |
+| TLS | Port `8443` (TLS) answers here too. With [HTTPS-only](API.md#lan_tls--the-lan-api-over-tls) on, plaintext `8080` still answers on this link: it never crosses a network |
 | Security | LAN tier: what the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`) is refused on it too. The one exception: it may install or clear the company CA and set or clear the cloud proxy (physical presence, like the console). The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
 | SCPI and VISA | The same `:8080` socket: `TCPIP::10.237.x.y::8080::SOCKET` |
 | Several pods | Each pod has its own `/30`, so two pods on one computer get two adapters and two addresses. Not tested yet with two physical pods |
@@ -139,7 +140,7 @@ worker task, prints the output, then prints the prompt `"> "`.
 - **Quoting:** only `wifi-set` understands double quotes (an SSID or password
   with spaces). Every other command splits on whitespace.
 - **Machine-readable replies:** the commands an installer drives
-  (`identity*`, `sig-policy`, `lan-policy`, `ca*`, `proxy*`, `blobs`) start their reply with the command name and then `ok`, `error <why>`
+  (`identity*`, `sig-policy`, `lan-policy`, `lan-tls`, `ca*`, `proxy*`, `blobs`) start their reply with the command name and then `ok`, `error <why>`
   or the value, with no leading spaces. The other commands print indented,
   human-readable lines.
 - **Shared hardware:** the commands that capture into the PSRAM or drive the
@@ -188,6 +189,7 @@ command prints `usage: ...` and changes nothing.
 | `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
 | `usb-network [on\|off]` | Show or set the [USB network adapter](#usb-network-adapter) setting (default `on`). Replies `usb-network <on\|off>` or `usb-network error <why>`. `off` re-enumerates the pod as its console only (the computer sees no network adapter); `on` brings the adapter back. Stored, separate from `lan-policy`; only the console and the USB link itself may change it. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
+| `lan-tls [https-only on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>"`, `lan-tls port 8443 https-only <on\|off> none <why>` without a certificate, or `lan-tls error <why>`. `https-only on` refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it); `regenerate` makes a new key and self-signed certificate. The console may always change both. |
 | `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Installing one needs the network: JSON `ota_begin` with target `ca` over the USB network adapter, the cloud or (firmware before 3.9.0) the console's `upload-begin ca`; `benchpod cloud ca set` does it. `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
 | `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
 | `ca-damage` | Development builds only: damage the CA slot to try the built-in-roots fallback. |

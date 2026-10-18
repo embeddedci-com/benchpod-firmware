@@ -38,7 +38,7 @@ typedef struct {
 static QueueHandle_t s_q;
 
 /* The Wi-Fi control asked for the ESP32-C3 reflash while a capture, upload or update owned the
-   shared bus: it holds the W25Q for ~140 s, so it waits for the bus instead of cutting in. */
+   shared bus: it reads the W25Q for ~2 minutes, so it waits for the bus instead of cutting in. */
 static bool s_esp_flash_deferred;
 
 /* Scratch work item for producers (each producer runs on its own task; the queue
@@ -200,6 +200,16 @@ bool hw_worker_cloud_pending(void) { return s_cloud_pending; }
 
 /* ---- worker task ---------------------------------------------------------- */
 
+/* The Wi-Fi control's automatic C3 flash.  It runs in the background (esp_rom_flash_poll in the
+   loop below), so commands keep being served during its ~2 minutes; an unverified write (no MD5
+   came back) still boots the C3, and the Wi-Fi control sees whether it comes up. */
+static void esp_flash_finished(int result) { esp_wifi_ctrl_flash_done(result >= 0); }
+
+static void start_esp_flash(void)
+{
+    if (esp_rom_flash_start(esp_flash_finished) != 0) esp_wifi_ctrl_flash_done(false);
+}
+
 static void handle_work(cmd_work_t *w) {
     switch (w->kind) {
     case WK_BYTES:
@@ -265,7 +275,7 @@ static void handle_work(cmd_work_t *w) {
             s_esp_flash_deferred = true;
             break;
         }
-        esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
+        start_esp_flash();
         break;
     default:
         break;
@@ -293,8 +303,9 @@ static void worker_task(void *arg) {
         if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */
             s_esp_flash_deferred = false;
             printf("[hw] running the deferred ESP32-C3 flash\n");
-            esp_wifi_ctrl_flash_done(esp_rom_flash_from_slot() == 0);
+            start_esp_flash();
         }
+        esp_rom_flash_poll();     /* a C3 flash: one step, never a wait */
         {
             extern volatile uint32_t g_malloc_failures;   /* main.c */
             static uint32_t seen;

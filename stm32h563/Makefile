@@ -159,6 +159,8 @@ C_SOURCES := \
   src/lease_gate.c \
   src/net_reload.c \
   src/cloud_extras.c \
+  src/lan_tls.c \
+  src/lan_tls_pem.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/rng.c \
@@ -174,6 +176,7 @@ C_SOURCES := \
   src/command_handler_spi.c \
   src/command_handler_transport.c \
   src/esp_rom_flash.c \
+  src/esp_rom_job.c \
   src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \

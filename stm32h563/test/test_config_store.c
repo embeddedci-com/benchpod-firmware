@@ -303,6 +303,59 @@ static void test_cloud_store(void)
     }
 }
 
+/* A large record (max_len, ab_store_load_var): round trip, alternation, and a power cut at every
+   step of a save keeps either the old or the new record, never a mix or nothing. */
+static void test_large_records(void)
+{
+    static const ab_store_t big = {
+        .tag = "big", .slot_off = { 0x1E2000u, 0x1E0000u }, .magic = 0x42494731u, .version = 1,
+        .max_len = 6000,
+    };
+    static uint8_t a[5003], b[4100], got[6000];
+    for (size_t i = 0; i < sizeof(a); i++) a[i] = (uint8_t)(i * 7u + 1u);
+    for (size_t i = 0; i < sizeof(b); i++) b[i] = (uint8_t)(i * 13u + 5u);
+    size_t n = 0;
+
+    mock_flash_reset();
+    CHECK(ab_store_load_var(&big, got, sizeof(got), &n) == -1, "big: blank store loaded");
+    CHECK(ab_store_save(&big, a, sizeof(a)) == 0, "big: save a");
+    CHECK(ab_store_load_var(&big, got, sizeof(got), &n) == 0 && n == sizeof(a) &&
+          memcmp(got, a, n) == 0, "big: a round trip (n=%u)", (unsigned)n);
+    CHECK(ab_store_load_var(&big, got, 100, &n) == -1, "big: loaded into a too-small buffer");
+    CHECK(ab_store_save(&big, b, sizeof(b)) == 0, "big: save b");
+    CHECK(ab_store_load_var(&big, got, sizeof(got), &n) == 0 && n == sizeof(b) &&
+          memcmp(got, b, n) == 0, "big: b round trip");
+    CHECK(hdr_seq(0x1E2000u) == 1 && hdr_seq(0x1E0000u) == 2, "big: did not alternate slots");
+    CHECK(ab_store_save(&big, a, 6001) == -1, "big: took more than max_len");
+    CHECK(mock_flash_max_erases_irq_off <= 1, "big: %d erases in one interrupts-off window",
+          mock_flash_max_erases_irq_off);
+    CHECK(mock_flash_double_programs == 0, "big: double programs");
+
+    /* Small stores keep their limit. */
+    static const ab_store_t small = { .tag = "small", .slot_off = { 0x1E6000u, 0x1E4000u },
+                                      .magic = 0x534D4C31u, .version = 1 };
+    CHECK(ab_store_save(&small, a, AB_STORE_MAX_PAYLOAD + 1) == -1, "small: took a large record");
+
+    for (int cut = 1; cut < 400; cut++) {
+        mock_flash_reset();
+        CHECK(ab_store_save(&big, a, sizeof(a)) == 0, "big cut %d: seed", cut);
+        int torn = 0;
+        mock_flash_cut_after = cut;
+        if (setjmp(mock_flash_power_jmp) == 0) ab_store_save(&big, b, sizeof(b)); else torn = 1;
+        mock_flash_cut_after = 0;
+        n = 0;
+        int rc = ab_store_load_var(&big, got, sizeof(got), &n);
+        CHECK(rc == 0, "big cut %d: nothing loads", cut);
+        if (rc == 0)
+            CHECK((n == sizeof(a) && memcmp(got, a, n) == 0) || (!torn && n == sizeof(b) && memcmp(got, b, n) == 0) ||
+                  (torn && n == sizeof(b) && memcmp(got, b, n) == 0),
+                  "big cut %d: loaded a mix (n=%u)", cut, (unsigned)n);
+        if (!torn) break;
+    }
+    ab_store_clear(&big);
+    CHECK(ab_store_load_var(&big, got, sizeof(got), &n) == -1, "big: loads after clear");
+}
+
 int main(void)
 {
     test_round_trip_and_alternation();
@@ -311,6 +364,7 @@ int main(void)
     test_legacy_migration();
     test_clear();
     test_cloud_store();
+    test_large_records();
     if (fails) { printf("test_config_store: %d FAILED\n", fails); return 1; }
     printf("test_config_store: all passed\n");
     return 0;
