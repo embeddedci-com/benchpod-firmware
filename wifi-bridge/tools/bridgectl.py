@@ -242,6 +242,10 @@ class Link:
             while (left := end - time.monotonic()) > 0:
                 msg = self.recv(left)
                 if msg and msg["type"] == mtype | RESPONSE and msg["seq"] == self.seq:
+                    last = first(msg["tlvs"], T_COUNTER)
+                    if sign and result_of(msg)[0] == 12 and last:  # REPLAY: continue above the bridge
+                        self.state.counter = max(self.state.counter, struct.unpack(">I", last)[0])
+                        break  # resend with a fresh counter
                     if sign and result_of(msg)[0] == 0 and not verify(msg["raw"], key, self.nonce):
                         raise SystemExit("response has no valid AUTH: not our bridge?")
                     return msg

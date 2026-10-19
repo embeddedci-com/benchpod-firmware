@@ -47,6 +47,9 @@ SPIFLASH_SRCS := test_spi_flash.c ../src/spi_flash.c
 SPISTREAM_SRCS := test_spi_stream.c ../src/spi_stream.c
 LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
+# Wi-Fi bridge client, tested against the bridge firmware's own codec and pairing logic.
+BRIDGE_CORE := ../../wifi-bridge/components/bridge_core
+WIFIBRIDGE_SRCS := test_wifi_bridge.c ../src/wifi_bridge.c $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/pairing.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 # hw_worker.c is #included by its test; shim_worker has the FreeRTOS + HAL headers it needs.
@@ -257,6 +260,10 @@ build/test_eth_diag: $(ETHDIAG_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(ETHDIAG_SRCS) -lm -o $@
 
+build/test_wifi_bridge: $(WIFIBRIDGE_SRCS) ../src/wifi_bridge.h $(wildcard $(BRIDGE_CORE)/include/*.h)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -I$(BRIDGE_CORE)/include $(WIFIBRIDGE_SRCS) -o $@
+
 build/test_power_profile: $(PWRPROF_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(PWRPROF_SRCS) -lm -o $@
@@ -399,7 +406,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_capture build/test_ch_net $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_capture build/test_ch_net $(OTA_TARGET)
 
 TESTS += build/test_bp_log
 
@@ -442,6 +449,7 @@ run: $(TESTS)
 	@./build/test_spi_stream
 	@./build/test_bp_log
 	@./build/test_eth_diag
+	@./build/test_wifi_bridge
 	@./build/test_power_profile
 	@./build/test_boot_policy
 	@./build/test_boot_guard > build/test_boot_guard.log || { cat build/test_boot_guard.log; exit 1; }

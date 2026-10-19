@@ -158,6 +158,11 @@ static void handle(uint8_t *buf, size_t len)
         bwp_put_u8(&w, BWP_T_RESULT, pairing_result(v));
         bwp_put_str(&w, BWP_T_MESSAGE, why[v]);
         bwp_put(&w, BWP_T_NONCE, s_pair.nonce, BWP_NONCE_LEN);
+        if (v == PAIR_REPLAY) {
+            // The MAC was right, only the counter is old: a rebooted pod that started again at 1.
+            // Tell it where to continue. This reveals nothing: counters are not secret.
+            bwp_put_u32(&w, BWP_T_COUNTER, s_pair.last_counter);
+        }
         send(bwp_finish(&w));
         return;
     }

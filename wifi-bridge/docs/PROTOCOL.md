@@ -186,9 +186,16 @@ The bridge obeys one pod. The pod proves it is that pod with a 32-byte key they 
 - **Responses to signed requests** are signed the same way by the bridge, with the request's
   COUNTER, so the pod knows the answer came from its bridge. HELLO and unsolicited STATUS are
   not signed (HELLO has to be readable to learn the NONCE).
-- **Refusals** (NOT_PAIRED, AUTH, ALREADY_PAIRED) are unsigned and carry NONCE and a MESSAGE. On
-  AUTH the pod resyncs its nonce and retries once; if that fails too, its key is stale (the
-  bridge was re-paired or reset) and it tells the user to press PAIR on the bridge.
+- **Refusals** (NOT_PAIRED, AUTH, ALREADY_PAIRED) are unsigned and carry NONCE and a MESSAGE.
+  When the AUTH was right but the COUNTER was not above the last accepted one (a replay, or a
+  pod that rebooted and started again at 1), the refusal also carries COUNTER = the last
+  accepted value, and the pod continues above it. On AUTH the pod first resyncs its nonce and
+  counter and retries once; if that fails too, its key is not the paired one (the bridge was
+  re-paired with another pod) and it tells the user to press PAIR on the bridge.
+- **The pod's key** is derived, not stored: `SHA-256(Ed25519-sign(device key,
+  "benchpod-wifi-bridge-pair:v1" || bridge MAC))`. Ed25519 signatures are deterministic, so the
+  pod gets the same key after every reboot without writing flash, a different key for every
+  bridge, and nobody without the pod's device key can compute it.
 - **PAIR button** (GPIO35, a press): the bridge forgets the key, clears FLAGS 0x20 in the next
   HELLO, and accepts the next PAIR from whichever pod sends it. It also re-learns the pod MAC
   from the next frame, so a new pod can take over without unplugging the cable. Wi-Fi settings
