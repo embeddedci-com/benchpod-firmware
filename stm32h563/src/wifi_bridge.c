@@ -6,6 +6,8 @@
 
 #include <string.h>
 
+#include "hmac_sha256.h"
+
 #define BE32(p) (((uint32_t)(p)[0] << 24) | ((uint32_t)(p)[1] << 16) | ((uint32_t)(p)[2] << 8) | (p)[3])
 
 static bool elapsed(uint32_t now, uint32_t since, uint32_t ms)
@@ -41,30 +43,42 @@ static void finish(wb_t *b, wb_req_state_t st)
     b->req_state = b->req_internal ? WB_REQ_IDLE : st;  /* our own requests leave no reply behind */
 }
 
+/* Header || body || [COUNTER, AUTH], sent in parts so a large body is never copied. The AUTH is
+   the one bwp_sign makes: HMAC-SHA256(key, nonce || header from the magic || body || COUNTER). */
 static void send_req(wb_t *b, uint32_t now)
 {
+    const uint8_t *body = b->req_ext ? b->req_ext : b->req_tlvs;
+    uint8_t head[BWP_ETH_HDR_LEN + BWP_HDR_LEN], tail[WB_TRAILER_LEN];
+    size_t tl = 0;
     bwp_writer_t w;
-    bwp_begin(&w, b->tx, sizeof(b->tx), b->mac, b->pod_mac, b->req_type, b->req_seq);
-    if (w.len + b->req_len <= w.cap) {
-        memcpy(w.buf + w.len, b->req_tlvs, b->req_len);  /* TLVs encoded by the caller */
-        w.len += b->req_len;
-    } else {
-        w.overflow = true;
-    }
+    bwp_begin(&w, head, sizeof(head), b->mac, b->pod_mac, b->req_type, b->req_seq);
+    uint16_t total = (uint16_t)(b->req_len + (b->req_signed ? WB_TRAILER_LEN : 0));
+    head[20] = (uint8_t)(total >> 8);
+    head[21] = (uint8_t)total;
     if (b->req_signed) {
         b->req_counter = ++b->counter;
-        bwp_sign(&w, b->key, b->nonce, b->req_counter);
+        uint32_t c = b->req_counter;
+        tail[0] = BWP_T_COUNTER, tail[1] = 0, tail[2] = 4;
+        tail[3] = (uint8_t)(c >> 24), tail[4] = (uint8_t)(c >> 16), tail[5] = (uint8_t)(c >> 8), tail[6] = (uint8_t)c;
+        uint8_t mac[32];
+        hmac_sha256_ctx_t h;
+        hmac_sha256_init(&h, b->key, BWP_KEY_LEN);
+        hmac_sha256_update(&h, b->nonce, BWP_NONCE_LEN);
+        hmac_sha256_update(&h, head + BWP_ETH_HDR_LEN, BWP_HDR_LEN);
+        hmac_sha256_update(&h, body, b->req_len);
+        hmac_sha256_update(&h, tail, 7);
+        hmac_sha256_final(&h, mac);
+        tail[7] = BWP_T_AUTH, tail[8] = 0, tail[9] = BWP_AUTH_LEN;
+        memcpy(tail + 10, mac, BWP_AUTH_LEN);
+        tl = WB_TRAILER_LEN;
     }
-    size_t n = bwp_finish(&w);
     b->req_sent = now;
     b->req_tries++;
-    if (n) {
-        b->io.send(b->tx, n, b->io.ctx);
-    }
+    b->io.send(head, sizeof(head), body, b->req_len, tail, tl, b->io.ctx);
 }
 
 static void start_req(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, bool internal,
-                      uint32_t now)
+                      const uint8_t *borrowed, uint32_t now)
 {
     b->req_state = WB_REQ_PENDING;
     b->req_internal = internal;
@@ -73,7 +87,10 @@ static void start_req(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, ui
         b->seq = 1;  /* seq 0 is for unsolicited messages */
     }
     b->req_seq = b->seq;
-    memcpy(b->req_tlvs, tlvs, len);
+    b->req_ext = borrowed;
+    if (!borrowed && len) {
+        memcpy(b->req_tlvs, tlvs, len);
+    }
     b->req_len = (uint16_t)len;
     b->req_timeout = timeout_ms;
     b->req_tries = 0;
@@ -357,21 +374,32 @@ void wb_poll(wb_t *b, uint32_t now)
             uint8_t t[3 + BWP_PUBKEY_LEN] = {BWP_T_PUBKEY, 0, BWP_PUBKEY_LEN};
             memcpy(t + 3, b->pub, BWP_PUBKEY_LEN);  /* public: the key itself is never sent */
             b->next_pair = now + WB_PAIR_RETRY_MS;
-            start_req(b, BWP_PAIR, t, sizeof(t), 1000, true, now);
+            start_req(b, BWP_PAIR, t, sizeof(t), 1000, true, NULL, now);
         }
     } else if (b->have_key && (int32_t)(now - b->next_status) >= 0) {
         b->next_status = now + WB_STATUS_EVERY_MS;
-        start_req(b, BWP_STATUS, NULL, 0, 1000, true, now);
+        start_req(b, BWP_STATUS, NULL, 0, 1000, true, NULL, now);
     }
 }
 
+static int request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, bool borrow,
+                   uint32_t now);
+
 int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, uint32_t now)
+{
+    return len > WB_REQ_MAX ? -3 : request(b, type, tlvs, len, timeout_ms, false, now);
+}
+
+int wb_request_ext(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, uint32_t now)
+{
+    return len > WB_BODY_MAX ? -3 : request(b, type, tlvs, len, timeout_ms, true, now);
+}
+
+static int request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, bool borrow,
+                   uint32_t now)
 {
     if (!present(b, now)) {
         return -2;
-    }
-    if (len > WB_REQ_MAX) {
-        return -3;
     }
     if (!b->have_secret || (bridge_paired(b) && !b->have_key)) {
         return -3;  /* info.problem says why */
@@ -382,7 +410,7 @@ int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t 
     if (!bridge_paired(b) && type != BWP_STATUS && type != BWP_SCAN) {
         return -1;  /* auto-pair runs first (wb_poll); the caller retries */
     }
-    start_req(b, type, tlvs, len, timeout_ms, false, now);
+    start_req(b, type, tlvs, len, timeout_ms, false, borrow ? tlvs : NULL, now);
     return 0;
 }
 

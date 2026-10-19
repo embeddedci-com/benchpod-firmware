@@ -42,4 +42,12 @@ void wifi_bridge_get_info(wb_info_t *out);
    contract as wifi_bridge_call; validates the SSID and passphrase first. */
 int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, const char **err);
 
+/* Bridge firmware updates (wifi_bridge_ota.c) on the hw worker: one step per call, from its loop. */
+void wifi_bridge_ota_poll(void);
+bool wifi_bridge_ota_busy(void);          /* an update holds the image bus (bus_busy_reason) */
+const char *wifi_bridge_ota_status(void);
+void wifi_bridge_ota_force(void);         /* `bridge update`: now, whatever the versions */
+/* Slot "bridge" holds an image with its manifest; *version = the manifest's. */
+bool wifi_bridge_image(uint32_t *version);
+
 #endif /* WIFI_BRIDGE_NET_H */
