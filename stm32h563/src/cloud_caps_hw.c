@@ -9,6 +9,7 @@
 #include "board_variant.h"
 #include "boot_guard.h"
 #include "cal_data.h"        /* ADC_CAL_EXT: the front-SMA cal shipped in capabilities */
+#include "adc_cal.h"         /* adc_cal_fit: this pod's front-end offset */
 #include "current_out.h"
 #include "fault.h"
 #include "flash_layout.h"
@@ -46,8 +47,9 @@ void cloud_caps_collect(cloud_caps_t *c) {
        handle_adc_read applies), so the server scales raw counts to the probe voltage. Shipped as
        integers (a in microvolts, b in nanovolts per count): newlib-nano's printf has no %f, and a
        %g once sent a malformed frame. The server divides back. */
-    c->adc_cal_a_uv = lround((double)ADC_CAL_EXT.a * 1000000.0);
-    c->adc_cal_b_nv = lround((double)ADC_CAL_EXT.b * 1000000000.0);
+    cal_lin_t ext = adc_cal_fit(ADC_CAL_EXT);   /* with this pod's front-end offset (adc_cal.h) */
+    c->adc_cal_a_uv = lround((double)ext.a * 1000000.0);
+    c->adc_cal_b_nv = lround((double)ext.b * 1000000000.0);
     c->dac_ac = analog && DAC_AC;
     c->dac_replay = analog && DAC_REPLAY;
     c->dac_dc = analog && DAC_DC;

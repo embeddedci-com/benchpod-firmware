@@ -193,7 +193,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `dac_out` | T1 | Route a DAC output path + set a calibrated voltage | object | no |
 | `current_out` | T1 | Hold a current on the 4-20 mA output (J9), in µA | object | no |
 | `adc_read` | T1 | Route an ADC source + return a calibrated reading (mV) | object | no |
-| `calibrate` | T0/T2 | Run, read or clear this pod's own ADC calibration (the `current_in` input, J8) | object | no |
+| `calibrate` | T0/T2 | Run, read or clear this pod's own ADC offset calibration (measured on the `current_in` input, J8; applies to every ADC source from 3.9.3) | object | no |
 | `dac_mux` | T1 | Low-level DAC output mux (U55); prefer `dac_out` | object | no |
 | `cal_switch` | T1 | Low-level calibration relays (U58); prefer `analog_path` | object | no |
 | `dac_control_loop` | T1 | Arm (or disarm) the in-fabric closed-loop DAC | object | no |
@@ -756,9 +756,13 @@ When the pod connects to the cloud it advertises a `capabilities` frame. Alongsi
 
 | Field | Meaning |
 |---|---|
-| `adc_cal_a_uv` | Affine intercept *a* in microvolts (`V = a + b·count`). |
+| `adc_cal_a_uv` | Affine intercept *a* in microvolts (`V = a + b·count`). From firmware 3.9.3 it includes this pod's own offset when the pod is calibrated (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)), and the frame is sent again after a `calibrate`, so the server picks the new fit up without a reconnect. |
 | `adc_cal_b_nv` | Affine slope *b* in nanovolts per count. |
 | `adc_cal_unwrap` | `true`: the front end is bipolar, so a 16-bit count `< 32768` is unwrapped (`count += 65536`) before scaling. |
+
+From firmware 3.9.3 the same three fields are also in the [`status`](#status) reply on an analog
+board (on the LAN and through cloud tunnels, not on the cloud command channel), so a LAN client
+scales captures like the server does.
 
 The frame also says which interface carries the cloud link, read from the local address of its
 TCP connection (so it is the interface in use, not only the preferred one):
@@ -1208,7 +1212,7 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 - `ua`: the loop current in µA. The pod reads the voltage across a 249 Ω resistor, so
   `ua = mv × 1000 / 249`. 4 mA is 996 mV and 20 mA is 4980 mV.
 - `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
-  (see [`calibrate`](#calibrate--calibrate-the-current_in-input-j8)). It is 0 on a pod that was
+  (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)). It is 0 on a pod that was
   never calibrated.
 
 `count` is always raw.
@@ -1220,16 +1224,22 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 
 Firmware up to 3.3.0 used a different name for this source. That name is no longer accepted.
 
-#### `calibrate` — calibrate the `current_in` input (J8)
+#### `calibrate` — calibrate the ADC offset on the `current_in` input (J8)
 
 `current_in` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
 pin 2 is ground. The pod reads the voltage across that resistor, so 4 mA is 996 mV and
 20 mA is 4980 mV.
 
 Every ADC source is scaled with a fit, `volts = a + b × count`. The fits are built into
-the firmware and are the same on every pod. Each pod still has its own offset of a few mV
-on `current_in`. `calibrate` measures that offset and stores it on the pod. From then on the pod
-uses its own fit for `current_in`: the built-in one with the offset taken out of `a`.
+the firmware and are the same on every pod. Each pod still has its own offset, from part
+tolerances in the ADC front end: measured from +13 mV to -50 mV at the input on pods of one
+batch. `calibrate` measures that offset on `current_in` and stores it on the pod.
+
+All four ADC sources (`ext`, `current_in`, `cal1`, `cal2`) share the same front end after the
+input relays, so the offset is the same for all of them. From firmware 3.9.3 the pod takes it
+out of every source's fit: `adc_read`, captures (through `adc_cal_a_uv` in `status` and the
+capabilities frame) and the control loop's input map. Older firmware applies it to
+`current_in` only.
 
 Disconnect J8 first. With nothing connected the terminal is at 0 V, so the pod needs no
 reference.
@@ -1266,18 +1276,19 @@ reference.
 The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
 takes about 0.3 s and leaves the `current_in` path routed.
 
-A reading outside ±50 mV is refused, because it means something is driving J8. The old
-calibration stays in place.
+A reading outside ±150 mV is refused, because it means something is driving J8 (older
+firmware: ±50 mV). The old calibration stays in place.
 
 ```json
 {"cmd":"calibrate","source":"current_in"}   // a 4 mA loop is still connected
-→ {"status":"error","message":"calibrate: current_in reads 996 mV, it must be within +/-50 mV of zero.
+→ {"status":"error","message":"calibrate: current_in reads 996 mV, it must be within +/-150 mV of zero.
    Something is driving J8. Disconnect it and try again"}
 ```
 
 The calibration is stored in flash. It survives a reboot and a firmware update. Only the
-offset of `current_in` is calibrated. The gain, and `ext`, `cal1` and `cal2`, use the built-in
-fits: calibrating those needs a reference voltage. `status.caps` contains `"calibrate"`
+offset is calibrated: the gain uses the built-in fits (within 0.3 % on measured pods), because
+calibrating it needs a reference voltage. On `cal1` and `cal2` the DAC output stages add a few
+mV of their own on top. `status.caps` contains `"calibrate"`
 when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
 
@@ -1374,6 +1385,7 @@ counters and the capability list. No parameters.
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
  "usb":{"net":"on","setting":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
+ "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
  "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
  "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
@@ -1397,6 +1409,7 @@ counters and the capability list. No parameters.
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
+| `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Left out of a `status` sent through the cloud command channel, which caps a reply's size; cloud clients read the fit from the capabilities. |
 | `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). Diagnostic only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |

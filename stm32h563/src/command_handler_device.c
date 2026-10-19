@@ -207,8 +207,11 @@ void handle_status(int conn_id, const char *json) {
        1344: safe_mode + safe_reason (up to ~130 B). */
     /* 1408: gateware + gateware_embedded.
        1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since.
-       1792: usb{} (~150 B; a v3 status measured 1535 B with it). */
-    char resp[1792];
+       1792: usb{} (~150 B; a v3 status measured 1535 B with it).
+       2048: the ADC fit, adc_cal_a_uv / adc_cal_b_nv (~60 B; a v3 status measured 1725 B
+       before it), LAN and tunnels only: the cloud command channel caps a reply at
+       BP_CLOUD_REPLY_MAX. The net task has ~12 KB of stack left, the hw task ~7 KB. */
+    char resp[2048];
     cloud_caps_t caps;
     cloud_caps_collect(&caps);
     bp_emit_t e;
@@ -238,6 +241,13 @@ void handle_status(int conn_id, const char *json) {
                 "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped(),
             ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_vccio_get_mv());
+    /* The front-SMA fit captures are scaled with, this pod's offset included (adc_cal.h): the
+       same values the cloud capabilities carry, so a LAN client scales like the server does.
+       Not on the cloud command channel: a status there is already within ~60 B of
+       BP_CLOUD_REPLY_MAX, and cloud clients get the fit from the capabilities frame. */
+    if (caps.analog && conn_id != CH_CLOUD_CONN)
+        bp_emit(&e, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,",
+                caps.adc_cal_a_uv, caps.adc_cal_b_nv);
     /* Board revision decides which of the rev3 features below actually exist,
        so clients read it once here rather than probing each command. */
     bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",

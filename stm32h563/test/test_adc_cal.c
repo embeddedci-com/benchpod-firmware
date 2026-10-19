@@ -117,9 +117,9 @@ static void test_refusals_keep_the_old_calibration(void) {
     CHECK(why && strstr(why, "996 mV") && strstr(why, "Disconnect"), "driven J8: %s", why ? why : "(stored)");
 
     /* Just past the limit on both sides. */
-    adc_reading_t hi = burst(65484, 65484), lo = burst(60, 60);
-    CHECK(mv(hi.volts) > 50 && adc_cal_current_in_store(&hi) != NULL, "+%ld mV stored", mv(hi.volts));
-    CHECK(mv(lo.volts) < -50 && adc_cal_current_in_store(&lo) != NULL, "%ld mV stored", mv(lo.volts));
+    adc_reading_t hi = burst(65385, 65385), lo = burst(160, 160);
+    CHECK(mv(hi.volts) > 150 && adc_cal_current_in_store(&hi) != NULL, "+%ld mV stored", mv(hi.volts));
+    CHECK(mv(lo.volts) < -150 && adc_cal_current_in_store(&lo) != NULL, "%ld mV stored", mv(lo.volts));
 
     /* A moving input averages to about 0 V here, and must still be refused. */
     adc_reading_t moving = burst(64500, 1050);
@@ -145,7 +145,31 @@ static void test_load_rejects_out_of_range(void) {
     CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set() && adc_cal_current_in_offset_uv() == 0, "a 996 mV offset was loaded");
     rec.current_in_offset_uv = -ADC_CAL_MAX_OFFSET_UV;
     CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0, "setup");
-    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_mv() == -50, "an offset at the limit was not loaded");
+    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_mv() == -150, "an offset at the limit was not loaded");
+}
+
+/* benchpod-445e46 (2026-10-19): J8 open reads count 49, -50 mV, a normal part spread for this
+   front end. It is stored, and the offset comes out of EVERY source's fit: they share the chain
+   from R90 to the ADC, so an open SMA (ext) and the cal loopbacks read true afterwards. */
+static void test_offset_applies_to_every_source(void) {
+    mock_flash_reset();
+    adc_cal_load();
+    cal_lin_t ext0 = adc_cal_fit(ADC_CAL_EXT), cal2_0 = adc_cal_fit(ADC_CAL_CAL2);
+    CHECK(ext0.a == ADC_CAL_EXT.a && cal2_0.a == ADC_CAL_CAL2.a, "an uncalibrated pod changed a fit");
+    adc_reading_t open = burst(49, 49);
+    CHECK(mv(open.volts) <= -40 && mv(open.volts) >= -60, "J8 open at count 49 reads %ld mV", mv(open.volts));
+    const char *why = adc_cal_current_in_store(&open);
+    CHECK(why == NULL, "a -50 mV offset was refused: %s", why ? why : "");
+    float off = (float)adc_cal_current_in_offset_uv() / 1e6f;
+    cal_lin_t fits[3] = { ADC_CAL_EXT, ADC_CAL_CAL1, ADC_CAL_CAL2 };
+    for (int i = 0; i < 3; i++) {
+        cal_lin_t f = adc_cal_fit(fits[i]);
+        CHECK(f.b == fits[i].b, "source %d: the gain changed", i);
+        /* a is about 65.7 V (0 V sits at the 16-bit wrap), so float rounding is ~8 uV */
+        CHECK(fabsf((fits[i].a - f.a) - off) < 20e-6f, "source %d: offset not taken out of a", i);
+    }
+    cal_lin_t ci = adc_cal_current_in_fit();
+    CHECK(ci.a == adc_cal_fit(ADC_CAL_CAL1).a && ci.b == ADC_CAL_CAL1.b, "current_in is not the cal1 fit with the offset");
 }
 
 /* The store sits in its own two sectors, below the DAC limits. */
@@ -190,6 +214,7 @@ int main(void) {
     test_loop_current();
     test_refusals_keep_the_old_calibration();
     test_load_rejects_out_of_range();
+    test_offset_applies_to_every_source();
     test_stays_in_its_sectors();
     test_revision_selects_the_fits();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }

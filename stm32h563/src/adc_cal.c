@@ -33,11 +33,12 @@ bool    adc_cal_current_in_is_set(void)    { return s_active.current_in_set != 0
 int32_t adc_cal_current_in_offset_uv(void) { return s_active.current_in_set ? s_active.current_in_offset_uv : 0; }
 int32_t adc_cal_current_in_offset_mv(void) { return (int32_t)lroundf((float)adc_cal_current_in_offset_uv() / 1000.0f); }
 
-cal_lin_t adc_cal_current_in_fit(void) {
-    cal_lin_t c = ADC_CAL_CAL1;
-    c.a -= (float)adc_cal_current_in_offset_uv() / 1000000.0f;
-    return c;
+cal_lin_t adc_cal_fit(cal_lin_t base) {
+    base.a -= (float)adc_cal_current_in_offset_uv() / 1000000.0f;
+    return base;
 }
+
+cal_lin_t adc_cal_current_in_fit(void) { return adc_cal_fit(ADC_CAL_CAL1); }
 
 const char *adc_cal_current_in_store(const adc_reading_t *rd) {
     if (!rd) return "calibrate: no reading";

@@ -20,6 +20,7 @@
 #include "adc_pool.h"
 #include "b64url.h"
 #include "cal_data.h"       /* ADC_CAL_EXT: the loop's input map */
+#include "adc_cal.h"        /* adc_cal_fit: this pod's front-end offset */
 #include "cloud_client.h"   /* cloud_client_request_link_snapshot (load_bin stall) */
 #include "dac_limits.h"
 #include "dac_loop_params.h"  /* closed-loop DAC: curve upsample + parameter validation (host-tested) */
@@ -223,7 +224,8 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     }
     /* ADC_CAL_EXT: the front-SMA fit. That is where an external sense amp is wired, and the
        only path a closed loop can read a DUT through. */
-    dac_loop_adc_cal_t cal = { ADC_CAL_EXT.a, ADC_CAL_EXT.b };
+    cal_lin_t ext = adc_cal_fit(ADC_CAL_EXT);   /* with this pod's front-end offset (adc_cal.h) */
+    dac_loop_adc_cal_t cal = { ext.a, ext.b };
     dac_loop_params_err_t e = dac_loop_inmap_derive(&in, cal, out);
     if (e != DAC_LOOP_PARAMS_OK) { send_error(conn_id, dac_loop_params_err_str(e)); return false; }
     *out_present = true;
