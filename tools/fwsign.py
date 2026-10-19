@@ -6,7 +6,7 @@ Every asset gets a detached 128-byte manifest, `<asset>.sig`:
   off size field
     0    4 magic "BPSG"
     4    2 format (1)
-    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp
+    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware)
     7    1 flags (0)
     8    4 image size
    12   32 SHA-256 of the image
@@ -52,7 +52,8 @@ FORMAT = 1
 CONTEXT = b"benchpod-fw-sign:v1\x00"
 MANIFEST_LEN = 128
 SIGNED_LEN = 64
-TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3}
+# ota_target_t numbering in the firmware (4 ca and 5 tls are configuration, never signed).
+TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6}
 FW_INFO_OFFSET = 0x400
 FW_INFO_MAGIC = 0x57465042  # "BPFW"
 
@@ -192,7 +193,8 @@ def cmd_pubkey(a):
 def cmd_sign(a):
     image = open(a.image, "rb").read()
     release = pack_version(a.release)
-    version = int(a.version, 0) if a.version is not None else (release if a.target == "firmware" else 0)
+    # Firmware and the bridge's firmware carry their own version (the pod compares the bridge's).
+    version = int(a.version, 0) if a.version is not None else (release if a.target in ("firmware", "bridge") else 0)
     sig = sign(load_seed(a.key), image, a.target, version, release)
     out = a.out or a.image + ".sig"
     with open(out, "wb") as f:
@@ -333,7 +335,7 @@ def main():
     s.add_argument("--key", required=True)
     s.add_argument("--target", required=True, choices=TARGETS)
     s.add_argument("--release", required=True, help="firmware release, X.Y.Z")
-    s.add_argument("--version", help="asset version (default: the release for firmware, 0 else)")
+    s.add_argument("--version", help="asset version (default: the release for firmware and bridge, 0 else)")
     s.add_argument("-o", "--out")
     s.add_argument("image")
     s.set_defaults(fn=cmd_sign)

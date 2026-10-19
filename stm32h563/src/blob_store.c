@@ -21,6 +21,7 @@ static const struct {
     [BLOB_FW]  = { "fw",  0x600000u, 0x100000u },
     [BLOB_CA]  = { "ca",  0x180000u, 0x010000u },
     [BLOB_PROXY] = { "proxy", 0x190000u, 0x002000u },
+    [BLOB_BRIDGE] = { "bridge", 0x700000u, 0x100000u },
 };
 
 static blob_info_t s_info[BLOB_SLOT_COUNT];
@@ -36,11 +37,19 @@ uint32_t blob_slot_base(blob_id_t id)     { return id < BLOB_SLOT_COUNT ? k_slot
 uint32_t blob_slot_capacity(blob_id_t id) { return id < BLOB_SLOT_COUNT ? k_slots[id].size - BLOB_HDR_SIZE : 0u; }
 const char *blob_name(blob_id_t id)       { return id < BLOB_SLOT_COUNT ? k_slots[id].name : "?"; }
 
+bool blob_listed(blob_id_t id)
+{
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (id == BLOB_BRIDGE) return true;
+#endif
+    return id < BLOB_COUNT;
+}
+
 int blob_from_name(const char *name)
 {
     if (!name) return -1;
-    for (int i = 0; i < BLOB_COUNT; i++)
-        if (strcmp(name, k_slots[i].name) == 0) return i;
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++)
+        if (blob_listed((blob_id_t)i) && strcmp(name, k_slots[i].name) == 0) return i;
     return -1;
 }
 
@@ -137,7 +146,20 @@ static int hash_flash(uint32_t addr, uint32_t len, uint8_t out[32])
 int blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
                      blob_src_fn src, void *ctx)
 {
-    if (!slot_ok(id) || !src || !sha256 || len == 0 || len > blob_slot_capacity(id)) return -1;
+    return blob_store_write_ext(id, len, version, sha256, src, ctx, NULL, 0);
+}
+
+int blob_store_read_extra(blob_id_t id, uint8_t *buf, size_t len)
+{
+    if (!blob_store_present(id) || len > BLOB_EXTRA_MAX) return -1;
+    return w25q_read(k_slots[id].base + BLOB_EXTRA_OFF, buf, len);
+}
+
+int blob_store_write_ext(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
+                         blob_src_fn src, void *ctx, const uint8_t *extra, size_t extra_len)
+{
+    if (!slot_ok(id) || !src || !sha256 || len == 0 || len > blob_slot_capacity(id) ||
+        extra_len > BLOB_EXTRA_MAX) return -1;
     const uint32_t base = k_slots[id].base;
     const uint32_t data = base + BLOB_HDR_SIZE;
     static uint8_t page[W25Q_PAGE];
@@ -169,6 +191,10 @@ int blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t
     h.version     = version;
     memcpy(h.sha256, sha256, 32);
     const uint32_t commit = BLOB_COMMIT_MAGIC;
+    if (extra_len && w25q_program(base + BLOB_EXTRA_OFF, extra, (uint32_t)extra_len) != 0) {
+        printf("[blob] %s: extra write failed\n", k_slots[id].name);
+        return -1;
+    }
     if (w25q_program(base, (const uint8_t *)&h, sizeof(h)) != 0 ||
         w25q_program(base + BLOB_COMMIT_OFF, (const uint8_t *)&commit, sizeof(commit)) != 0) {
         printf("[blob] %s: header write failed\n", k_slots[id].name);

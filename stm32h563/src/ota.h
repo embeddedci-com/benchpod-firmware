@@ -52,9 +52,13 @@ typedef enum {
     OTA_TARGET_ESP,
     OTA_TARGET_CA,      /* the company CA for the cloud link: configuration, not code (no signature) */
     OTA_TARGET_TLS,     /* the LAN TLS certificate + key (lan_tls.h): configuration, internal flash */
+    OTA_TARGET_BRIDGE,  /* the Wi-Fi bridge's firmware -> W25Q slot "bridge" with its signed manifest,
+                           relayed to the bridge by wifi_bridge_ota.c. BENCHPOD_WIFI_BRIDGE builds only;
+                           always needs a good signature (the bridge checks it again). */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp", "ca", "tls" (NULL or "" = firmware). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge" (NULL or "" = firmware; "bridge" only with
+   BENCHPOD_WIFI_BRIDGE). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);

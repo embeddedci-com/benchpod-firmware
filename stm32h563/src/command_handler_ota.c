@@ -197,7 +197,9 @@ void handle_blob_status(int conn_id, const char *json) {
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"blobs\":[");
-    for (int i = 0; i < BLOB_COUNT; i++) {
+    bool first = true;
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+        if (!blob_listed((blob_id_t)i)) continue;   /* + "bridge" in BENCHPOD_WIFI_BRIDGE builds */
         const blob_info_t *in = blob_store_info((blob_id_t)i);
         char hex[65] = "";
         if (in->present)
@@ -206,9 +208,10 @@ void handle_blob_status(int conn_id, const char *json) {
            installer should send it; unknown = this build expects nothing in particular. */
         bp_emit(&e, "%s{\"name\":\"%s\",\"state\":\"%s\",\"present\":%s,\"size\":%lu,"
                     "\"version\":%lu,\"sha256\":\"%s\"}",
-                i ? "," : "", blob_name((blob_id_t)i), blob_state_str(blob_state((blob_id_t)i)),
+                first ? "" : ",", blob_name((blob_id_t)i), blob_state_str(blob_state((blob_id_t)i)),
                 in->present ? "true" : "false", (unsigned long)in->len,
                 (unsigned long)in->version, hex);
+        first = false;
     }
     bp_emit_raw(&e, "]}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
