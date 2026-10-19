@@ -224,7 +224,7 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     }
     /* ADC_CAL_EXT: the front-SMA fit. That is where an external sense amp is wired, and the
        only path a closed loop can read a DUT through. */
-    cal_lin_t ext = adc_cal_fit(ADC_CAL_EXT);   /* with this pod's front-end offset (adc_cal.h) */
+    cal_lin_t ext = adc_cal_source_fit(ADC_CAL_SRC_EXT);   /* with this pod's offset and gain (adc_cal.h) */
     dac_loop_adc_cal_t cal = { ext.a, ext.b };
     dac_loop_params_err_t e = dac_loop_inmap_derive(&in, cal, out);
     if (e != DAC_LOOP_PARAMS_OK) { send_error(conn_id, dac_loop_params_err_str(e)); return false; }

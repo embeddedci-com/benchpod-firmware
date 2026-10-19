@@ -37,12 +37,12 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
                "\"nrst_pin\":%s,"
                "\"power_profile\":true,"
-               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"can\":true,\"pod_current\":%s,"
+               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"pod_current\":%s,"
                "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
                "\"sensor_types\":true,\"gps\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
             tf(c->spi_master),   /* spi_stream: firmware, on the SPI master */
-            tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->pod_current),
+            tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->analog), tf(c->pod_current),
             tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->gps));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
@@ -69,7 +69,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"lan_tls\""         /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
                    ",\"wifi_scan\"");     /* wifi_scan: the built-in Wi-Fi or a Wi-Fi bridge (wifi_scan.h) */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
-    if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
+    if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"cal_dmm\",\"current_out\"");
     if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");
     if (c->dac_dc)          bp_emit_raw(e, ",\"dac_dc\"");
     if (c->dac_replay)      bp_emit_raw(e, ",\"dac_replay\"");

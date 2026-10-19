@@ -47,7 +47,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
        handle_adc_read applies), so the server scales raw counts to the probe voltage. Shipped as
        integers (a in microvolts, b in nanovolts per count): newlib-nano's printf has no %f, and a
        %g once sent a malformed frame. The server divides back. */
-    cal_lin_t ext = adc_cal_fit(ADC_CAL_EXT);   /* with this pod's front-end offset (adc_cal.h) */
+    cal_lin_t ext = adc_cal_source_fit(ADC_CAL_SRC_EXT);   /* with this pod's offset and gain (adc_cal.h) */
     c->adc_cal_a_uv = lround((double)ext.a * 1000000.0);
     c->adc_cal_b_nv = lround((double)ext.b * 1000000000.0);
     c->dac_ac = analog && DAC_AC;

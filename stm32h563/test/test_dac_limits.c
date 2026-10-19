@@ -39,6 +39,7 @@ static void test_no_limits_changes_nothing(void) {
     CHECK(allowed("dac_control_loop", "{\"cmd\":\"dac_control_loop\",\"vmin\":0,\"vmax\":65535,\"in_trip\":5}"),
           "loop refused without limits");
     CHECK(allowed("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}"), "current_out refused without limits");
+    CHECK(allowed("calibrate", "{\"cmd\":\"calibrate\",\"adc\":\"cal1\"}"), "DMM calibration refused without limits");
     CHECK(dac_limits_check_current_out() == NULL, "console current-out refused without limits");
 }
 
@@ -73,6 +74,11 @@ static void test_inverted_solar(void) {
     /* the 4-20 mA output shares the DAC: a current is refused, reading its range is not */
     CHECK(refused("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}", "shares that DAC"), "current_out allowed");
     CHECK(allowed("current_out", "{\"cmd\":\"current_out\"}"), "current_out range read refused");
+    /* The DMM calibration moves the DAC (or what its volts mean); the J8 offset and a read do not. */
+    CHECK(refused("calibrate", "{\"cmd\":\"calibrate\",\"adc\":\"cal1\"}", "DMM calibration"), "adc gain allowed");
+    CHECK(refused("calibrate", "{\"cmd\":\"calibrate\",\"dac\":\"5v\",\"code1\":1,\"uv1\":1,\"code2\":2,\"uv2\":2}", "enabled:false"), "dac line allowed");
+    CHECK(allowed("calibrate", "{\"cmd\":\"calibrate\",\"source\":\"current_in\"}"), "J8 offset refused");
+    CHECK(allowed("calibrate", "{\"cmd\":\"calibrate\"}"), "calibrate read refused");
     CHECK(refused("analog_path", "{\"path\":\"current_out\"}", "near 0 V"), "current_out route allowed on an inverted stage");
     CHECK(dac_limits_check_current_out() != NULL, "console current-out allowed");
 

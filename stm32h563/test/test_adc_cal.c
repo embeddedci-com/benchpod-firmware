@@ -207,6 +207,159 @@ static void test_revision_selects_the_fits(void) {
     CHECK(ADC_CAL_CAL1.a == v2_cal1.a, "an unknown revision must fall back to v2");
 }
 
+
+/* ---- The DMM parts (version 2) ------------------------------------------------------------ */
+
+static const ab_store_t s_v1_store = {
+    .tag = "adc-cal", .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
+    .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION_1,
+};
+
+/* A rev3 pod with the J8 offset of benchpod-445e46 (count 49, about -50 mV). */
+static void fresh_rev3_pod(bool with_offset) {
+    mock_flash_reset();
+    cal_data_select(3);
+    adc_cal_load();
+    if (with_offset) {
+        adc_reading_t open = burst(49, 49);
+        CHECK(adc_cal_current_in_store(&open) == NULL, "setup: offset");
+    }
+}
+
+/* A pod that last saved on firmware 3.4.0 to 3.9.2 has a version-1 record. Its offset loads;
+   nothing is written until the next save, which writes version 2 and keeps the offset. */
+static void test_version1_record_migrates(void) {
+    mock_flash_reset();
+    cal_data_select(3);
+    adc_cal_v1_t v1 = { .current_in_set = 1, .current_in_offset_uv = -50210 };
+    CHECK(ab_store_save(&s_v1_store, &v1, sizeof(v1)) == 0, "setup");
+    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_uv() == -50210, "v1 offset not loaded: %ld", (long)adc_cal_current_in_offset_uv());
+    adc_cal_v1_t back;
+    CHECK(ab_store_load(&s_v1_store, &back, sizeof(back)) == 0 && back.current_in_offset_uv == -50210, "loading rewrote the v1 record");
+    CHECK(!adc_cal_dac_is_set(0) && !adc_cal_dac_is_set(1) && !adc_cal_dac_is_set(2) && !adc_cal_gain_is_set(0), "v1 brought DMM parts");
+
+    /* The next save is version 2, with the offset kept. */
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "dac store after migration");
+    CHECK(ab_store_load(&s_v1_store, &back, sizeof(back)) != 0, "the newest record is still version 1");
+    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_uv() == -50210 && adc_cal_dac_is_set(1), "v2 lost the offset or the line");
+
+    /* A v1 record without an offset is nothing. */
+    mock_flash_reset();
+    adc_cal_v1_t none = {0};
+    CHECK(ab_store_save(&s_v1_store, &none, sizeof(none)) == 0 && adc_cal_load() == -1, "an empty v1 record loaded");
+}
+
+/* benchpod-445e46, 5 V output: asked 1.000 / 4.000 V, the DMM read 0.9959 / 3.9929 V. After
+   storing those, the pod's line goes through both readings, every DAC user converts with it,
+   and asking 1.000 V again picks the code that gives 1.000 V. */
+static void test_dac_line_from_two_readings(void) {
+    fresh_rev3_pod(false);
+    cal_lin_t comp = DAC_CAL_COMPILED[1];
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "445e46 5 V readings refused");
+    CHECK(adc_cal_dac_is_set(1) && !adc_cal_dac_is_set(0) && !adc_cal_dac_is_set(2), "wrong path stored");
+    CHECK(labs(lroundf(dac_volts_for_code16(1, c1) * 1e6f) - 995900) <= 30 &&
+          labs(lroundf(dac_volts_for_code16(1, c2) * 1e6f) - 3992900) <= 30, "the line misses the readings");
+    uint16_t again = dac_code16_for_volts(1, 1.0f);
+    CHECK(again > c1 && labs(lroundf(dac_volts_for_code16(1, again) * 1e6f) - 1000000) <= 80,
+          "1.000 V now gives %ld uV at code %u", lroundf(dac_volts_for_code16(1, again) * 1e6f), (unsigned)again);
+    double gain_ppm = ((double)DAC_CAL[1].b / comp.b - 1.0) * 1e6;
+    CHECK(gain_ppm < -900 && gain_ppm > -1100, "gain %ld ppm, want about -1000", lround(gain_ppm));
+    CHECK(DAC_CAL[0].a == DAC_CAL_COMPILED[0].a && DAC_CAL[2].b == DAC_CAL_COMPILED[2].b, "other paths changed");
+
+    /* +-12 V: asked -5 / +5 V, read -5.0255 / 4.980 V. */
+    uint16_t m5 = dac_code16_for_volts(2, -5.0f), p5 = dac_code16_for_volts(2, 5.0f);
+    CHECK(adc_cal_dac_store(2, m5, -5025500, p5, 4980000) == NULL, "445e46 12 V readings refused");
+    CHECK(labs(lroundf(dac_volts_for_code16(2, dac_code16_for_volts(2, 0.0f)) * 1e6f)) <= 400, "0 V on 12v is off");
+
+    /* Reboot keeps both; clearing the DAC part goes back to the compiled lines only. */
+    cal_lin_t five = DAC_CAL[1];
+    CHECK(adc_cal_load() == 0 && DAC_CAL[1].a == five.a && DAC_CAL[1].b == five.b, "line lost over a reload");
+    CHECK(adc_cal_clear_part("dac") == 0 && DAC_CAL[1].b == comp.b && !adc_cal_dac_is_set(1), "clear dac");
+    CHECK(adc_cal_load() == -1, "a cleared (empty) calibration loaded");
+    CHECK(adc_cal_clear_part("nonsense") == -2, "unknown part accepted");
+}
+
+static void test_dac_refusals(void) {
+    fresh_rev3_pod(false);
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    const char *why = adc_cal_dac_store(1, c1, 995900, (uint16_t)(c1 + 1000), 1070000);
+    CHECK(why && strstr(why, "at least"), "close codes: %s", why ? why : "(stored)");
+    why = adc_cal_dac_store(1, c1, 995900, c2, 12000);                  /* DMM still on the wrong SMA */
+    CHECK(why && strstr(why, "reads 12 mV") && strstr(why, "5v SMA"), "wrong SMA: %s", why ? why : "(stored)");
+    why = adc_cal_dac_store(1, c1, 1090000, c2, 3910000);               /* each within tolerance, slope -6 % */
+    CHECK(why && strstr(why, "gain"), "slope: %s", why ? why : "(stored)");
+    why = adc_cal_dac_store(3, c1, 995900, c2, 3992900);
+    CHECK(why != NULL, "path 3 stored");
+    CHECK(!adc_cal_dac_is_set(1) && DAC_CAL[1].b == DAC_CAL_COMPILED[1].b, "a refusal changed the line");
+    CHECK(adc_cal_load() == -1, "a refusal saved something");
+}
+
+/* The ADC gain: measured against a DMM-calibrated output, after the offset. cal1 reads 0.18 %
+   low here; the gain takes it out of cal1 and current_in, and nothing else. */
+static void test_adc_gain(void) {
+    fresh_rev3_pod(false);
+    CHECK(adc_cal_gain_ready(ADC_CAL_SRC_CAL1) && strstr(adc_cal_gain_ready(ADC_CAL_SRC_CAL1), "offset"), "gain without the offset");
+    adc_reading_t open = burst(49, 49);
+    CHECK(adc_cal_current_in_store(&open) == NULL, "setup");
+    const char *why = adc_cal_gain_ready(ADC_CAL_SRC_CAL1);
+    CHECK(why && strstr(why, "5v output"), "gain without the DAC line: %s", why ? why : "(ready)");
+    CHECK(adc_cal_gain_ready(7) != NULL, "unknown source ready");
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "setup: 5v line");
+    CHECK(adc_cal_gain_ready(ADC_CAL_SRC_CAL1) == NULL, "cal1 not ready");
+    CHECK(adc_cal_gain_ready(ADC_CAL_SRC_EXT) != NULL, "ext ready without the 12v line");
+
+    cal_lin_t ext_before = adc_cal_source_fit(ADC_CAL_SRC_EXT), cal1_before = adc_cal_source_fit(ADC_CAL_SRC_CAL1);
+    adc_cal_gain_meas_t m = { .v = { 0.9959f, 3.9929f }, .r = { 0.9959f / 1.0018f + 0.001f, 3.9929f / 1.0018f + 0.001f } };
+    CHECK(adc_cal_gain_store(ADC_CAL_SRC_CAL1, &m) == NULL, "a 0.18 %% gain was refused");
+    CHECK(fabsf(m.gain - 1.0018f) < 2e-5f && adc_cal_gain_is_set(ADC_CAL_SRC_CAL1), "gain %f", (double)m.gain);
+    CHECK(fabsf(m.residual_v + 0.001f) < 5e-5f, "residual %f V, want about -1 mV", (double)m.residual_v);
+    cal_lin_t cal1 = adc_cal_source_fit(ADC_CAL_SRC_CAL1);
+    CHECK(fabsf(cal1.b / cal1_before.b - 1.0018f) < 2e-5f && fabsf(cal1.a / cal1_before.a - 1.0018f) < 2e-5f, "cal1 fit not scaled");
+    cal_lin_t ci = adc_cal_current_in_fit();
+    CHECK(ci.a == cal1.a && ci.b == cal1.b, "current_in does not follow cal1's gain");
+    cal_lin_t ext = adc_cal_source_fit(ADC_CAL_SRC_EXT);
+    CHECK(ext.a == ext_before.a && ext.b == ext_before.b, "ext changed with cal1's gain");
+    /* 0 V stays 0 V: the count the offset reads as zero still reads zero. */
+    CHECK(labs(current_in_mv(49)) <= 1, "open J8 reads %ld mV after the gain", current_in_mv(49));
+
+    /* Persisted; a gain 5 % off is refused and keeps the old one. */
+    CHECK(adc_cal_load() == 0 && fabsf(adc_cal_gain(ADC_CAL_SRC_CAL1) - 1.0018f) < 2e-5f, "gain lost over a reload");
+    adc_cal_gain_meas_t bad = { .v = { 0.9959f, 3.9929f }, .r = { 0.9959f / 1.05f, 3.9929f / 1.05f } };
+    why = adc_cal_gain_store(ADC_CAL_SRC_CAL1, &bad);
+    CHECK(why && strstr(why, "5 V output"), "5 %% gain: %s", why ? why : "(stored)");
+    CHECK(fabsf(adc_cal_gain(ADC_CAL_SRC_CAL1) - 1.0018f) < 2e-5f, "a refused gain replaced the old one");
+
+    /* Clearing the gains keeps the offset and the line; clearing the offset keeps the gains. */
+    CHECK(adc_cal_clear_part("offset") == 0 && !adc_cal_current_in_is_set() && adc_cal_gain_is_set(ADC_CAL_SRC_CAL1) && adc_cal_dac_is_set(1), "clear offset");
+    CHECK(adc_cal_clear_part("adc") == 0 && !adc_cal_gain_is_set(ADC_CAL_SRC_CAL1) && adc_cal_dac_is_set(1), "clear adc");
+    CHECK(adc_cal_load() == 0 && adc_cal_dac_is_set(1) && !adc_cal_current_in_is_set(), "parts after reload");
+    CHECK(adc_cal_clear() == 0 && !adc_cal_dac_is_set(1) && DAC_CAL[1].b == DAC_CAL_COMPILED[1].b, "clear all");
+}
+
+/* A version-2 record with a DAC line or a gain out of range is ignored as a whole. */
+static void test_load_rejects_bad_dmm_parts(void) {
+    static const ab_store_t store = {
+        .tag = "adc-cal", .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
+        .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION,
+    };
+    fresh_rev3_pod(false);
+    adc_cal_t rec = { .current_in_set = 1, .current_in_offset_uv = -50210, .dac_set = 2 };
+    rec.dac[1] = DAC_CAL_COMPILED[1];
+    rec.dac[1].b *= 1.05f;                                   /* 5 % gain */
+    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0, "setup");
+    CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set() && DAC_CAL[1].b == DAC_CAL_COMPILED[1].b, "a 5 %% DAC line loaded");
+    rec.dac[1] = DAC_CAL_COMPILED[1];
+    rec.dac_set = 0;
+    rec.adc_gain_set = 1;
+    rec.adc_gain[0] = NAN;
+    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == -1, "a NaN gain loaded");
+    rec.adc_gain[0] = 1.001f;
+    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == 0 && adc_cal_gain_is_set(0), "a good record did not load");
+}
+
 int main(void) {
     test_uncalibrated_changes_nothing();
     test_store_apply_persist();
@@ -217,6 +370,11 @@ int main(void) {
     test_offset_applies_to_every_source();
     test_stays_in_its_sectors();
     test_revision_selects_the_fits();
+    test_version1_record_migrates();
+    test_dac_line_from_two_readings();
+    test_dac_refusals();
+    test_adc_gain();
+    test_load_rejects_bad_dmm_parts();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }
     printf("test_adc_cal: all passed\n");
     return 0;

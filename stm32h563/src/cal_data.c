@@ -44,12 +44,28 @@ static const cal_set_t CAL_V3 = {
 
 static const cal_set_t *s_active = &CAL_V2;
 
+/* The DAC lines in use (cal_dac_active): the one s_dac points to is read, the other is built. */
+static cal_lin_t s_dac_tbl[2][3];
+static const cal_lin_t *volatile s_dac = CAL_V2.dac;
+
+void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask) {
+    cal_lin_t *next = (s_dac == s_dac_tbl[0]) ? s_dac_tbl[1] : s_dac_tbl[0];
+    for (int i = 0; i < 3; i++)
+        next[i] = (pod && (mask & (1u << i))) ? pod[i] : s_active->dac[i];
+    s_dac = next;
+}
+
 void cal_data_select(int board_rev) {
     s_active = (board_rev == BOARD_REV_V3) ? &CAL_V3 : &CAL_V2;
+    s_dac = s_active->dac;   /* the compiled lines until adc_cal_load puts this pod's in */
 }
 
 const cal_set_t *cal_data(void) {
     return s_active;
+}
+
+const cal_lin_t *cal_dac_active(void) {
+    return s_dac;
 }
 
 uint16_t dac_code16_for_volts(int path, float volts) {

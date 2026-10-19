@@ -52,7 +52,18 @@ void cal_data_select(int board_rev);
 /* The active set.  A plain RAM read, safe from any task. */
 const cal_set_t *cal_data(void);
 
-#define DAC_CAL       (cal_data()->dac)
+/* The DAC output lines every DAC user converts with (DAC_CAL): the revision's compiled ones, with
+   this pod's own DMM-measured line in place of any path that has one (adc_cal.h, set at boot and
+   on every `calibrate` that changes them).  Two tables and a pointer swap, so a reader on another
+   task never sees half a line. */
+const cal_lin_t *cal_dac_active(void);
+
+/* Put this pod's lines in: bit n of `mask` set = path n uses pod[n], else the compiled line.
+   mask 0 (or pod NULL) = the compiled lines.  Call after cal_data_select(). */
+void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask);
+
+#define DAC_CAL           (cal_dac_active())
+#define DAC_CAL_COMPILED  (cal_data()->dac)
 #define ADC_CAL_CAL1  (cal_data()->adc_cal1)
 #define ADC_CAL_CAL2  (cal_data()->adc_cal2)
 #define ADC_CAL_EXT   (cal_data()->adc_ext)

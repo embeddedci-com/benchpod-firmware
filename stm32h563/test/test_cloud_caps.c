@@ -201,7 +201,7 @@ static void test_status_list(void) {
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
                       "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
-                      "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
+                      "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);

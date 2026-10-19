@@ -137,9 +137,10 @@ static int mixed_write(const char *cmd, const char *json) {
     if (strcmp(cmd, "dac_limits") == 0)
         return bp_json_get(json, "path", v, sizeof(v)) ||
                (bp_json_get(json, "enabled", v, sizeof(v)) && strcmp(v, "false") == 0);
-    if (strcmp(cmd, "calibrate") == 0)
-        return bp_json_get(json, "source", v, sizeof(v)) ||
-               (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0);
+    if (strcmp(cmd, "calibrate") == 0)   /* run, store or clear; a bare one (or clear:false) reads */
+        return bp_json_get(json, "source", v, sizeof(v)) || bp_json_get(json, "dac", v, sizeof(v)) ||
+               bp_json_get(json, "adc", v, sizeof(v)) ||
+               (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
     if (strcmp(cmd, "sig_policy") == 0 || strcmp(cmd, "lan_policy") == 0 || strcmp(cmd, "usb_network") == 0)
         return bp_json_get(json, "set", v, sizeof(v));
     if (strcmp(cmd, "cloud_ca") == 0 || strcmp(cmd, "cloud_proxy") == 0)
