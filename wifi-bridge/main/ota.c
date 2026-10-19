@@ -1,14 +1,17 @@
 // Firmware update over the control channel, relayed by the pod.
 //
-// Chunks arrive in order (bridge_util.c: bu_ota_*). The first chunk must identify a
-// benchpod-wifi-bridge app. esp_ota_end checks the SHA-256 and the RSA-3072 signature: with
-// CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT (dev) or secure boot v2 (production) only an
-// image signed with our key is accepted.
+// OTA_BEGIN must carry the pod's signed manifest (components/bridge_core/fwsig.h): an Ed25519
+// signature by one of the pod's release keys (plus the developer key in development builds),
+// for target "bridge" and this exact size. Chunks arrive in order (bridge_util.c: bu_ota_*) and
+// are hashed as they are written; OTA_END compares the SHA-256 with the manifest before the image
+// is marked bootable. The first chunk must also identify a benchpod-wifi-bridge app. In
+// production builds secure boot v2 adds its own RSA-3072 check in esp_ota_end.
 //
 // Rollback: the pod is the only management path, so a new image confirms itself only once it
 // has handled a valid control request from the pod (Ethernet, EMAC rx and the control channel
 // all work). Without one within CONFIG_BRIDGE_CONFIRM_TIMEOUT_S it reboots, and the bootloader
 // goes back to the previous slot.
+#include <stdio.h>
 #include <string.h>
 
 #include "bridge.h"
@@ -17,6 +20,9 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
+#include "fw_keys_gen.h"
+#include "fwsig.h"
+#include "hmac_sha256.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -27,6 +33,12 @@ static esp_ota_handle_t s_handle;
 static const esp_partition_t *s_part;
 static bu_ota_seq_t s_seq;
 static int64_t s_last_us;
+static fwsig_t s_sig;              // the manifest of the transfer in progress
+static sha256_ctx_t s_hash;        // of the bytes written so far
+
+// The pod's signing keys: keys/release-N.pub, plus its developer key in development builds
+// (build.sh generates fw_keys_gen.h from stm32h563/keys with tools/fwsign.py keys-header).
+static const uint8_t k_keys[FW_SIGN_KEY_COUNT][32] = FW_SIGN_KEYS_INIT;
 
 void ota_init(void)
 {
@@ -66,14 +78,21 @@ void ota_poll(void)
     xSemaphoreGive(s_lock);
 }
 
-bwp_result_t ota_begin(uint32_t size, const char **msg)
+bwp_result_t ota_begin(uint32_t size, const uint8_t *sig, size_t sig_len, const char **msg)
 {
+    static char why[40];
     bwp_result_t r = BWP_OK;
     *msg = NULL;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     abort_locked();
     s_part = esp_ota_get_next_update_partition(NULL);
-    if (!s_part) {
+    fwsig_result_t v = fwsig_check(sig, sig_len, k_keys, FW_SIGN_KEY_COUNT, FWSIG_TARGET_BRIDGE, size, &s_sig);
+    if (v != FWSIG_OK) {
+        r = BWP_E_OTA_VERIFY;
+        snprintf(why, sizeof(why), "signature: %s", sig ? fwsig_result_str(v) : "none");
+        *msg = why;
+        ESP_LOGW(TAG, "begin refused: %s", why);
+    } else if (!s_part) {
         r = BWP_E_INTERNAL;
         *msg = "no OTA partition";
     } else if (size < BU_IMG_DESC_END || size > s_part->size) {
@@ -87,6 +106,7 @@ bwp_result_t ota_begin(uint32_t size, const char **msg)
             *msg = esp_err_to_name(err);
         } else {
             bu_ota_begin(&s_seq, size);
+            sha256_init(&s_hash);
             s_last_us = esp_timer_get_time();
         }
     }
@@ -132,6 +152,7 @@ bwp_result_t ota_data(uint32_t offset, const uint8_t *data, size_t len, uint32_t
             *msg = esp_err_to_name(err);
             break;
         }
+        sha256_update(&s_hash, data, len);
         bu_ota_advance(&s_seq, offset, len);
         break;
     }
@@ -155,8 +176,16 @@ bwp_result_t ota_end(const char **msg)
         r = BWP_E_OTA_BAD_OFFSET;
         *msg = "image incomplete";
     } else {
+        uint8_t h[32];
+        sha256_final(&s_hash, h);
         memset(&s_seq, 0, sizeof(s_seq));
-        esp_err_t err = esp_ota_end(s_handle);  // verifies hash and signature
+        if (memcmp(h, s_sig.sha256, sizeof(h)) != 0) {
+            esp_ota_abort(s_handle);
+            xSemaphoreGive(s_lock);
+            *msg = "image does not match its signed manifest";
+            return BWP_E_OTA_VERIFY;
+        }
+        esp_err_t err = esp_ota_end(s_handle);  // the image's own checks (+ RSA with secure boot)
         if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
             r = BWP_E_OTA_VERIFY;
             *msg = "image verification failed (hash or signature)";

@@ -76,7 +76,7 @@ esp_err_t pairkey_clear(void);
 
 // ---- ota.c: shared by the control channel and the console
 void ota_init(void);
-bwp_result_t ota_begin(uint32_t size, const char **msg);
+bwp_result_t ota_begin(uint32_t size, const uint8_t *sig, size_t sig_len, const char **msg);
 bwp_result_t ota_data(uint32_t offset, const uint8_t *data, size_t len, uint32_t *next, const char **msg);
 bwp_result_t ota_end(const char **msg);
 void ota_abort(void);

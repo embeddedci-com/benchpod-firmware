@@ -9,6 +9,8 @@
 #include "bridge_util.h"
 #include "bwp.h"
 #include "bwp_crypto.h"
+#include "fwsig.h"
+#include "hmac_sha256.h"
 #include "hmac_sha256.h"
 #include "l2fwd.h"
 #include "pairing.h"
@@ -330,6 +332,37 @@ static void test_set_wifi(void)
 static void unhex32(const char *h, uint8_t out[32])
 {
     CHECK(unhex(h, out) == 32);
+}
+
+// The pod's own signing test vectors (stm32h563/test/vectors, made by tools/fwsign.py vectors):
+// the bridge must reach the same verdict as the pod for every case.
+#include "fwsign_vectors.h"
+
+static void test_fwsig(void)
+{
+    for (size_t i = 0; i < sizeof(vec_cases) / sizeof(vec_cases[0]); i++) {
+        const __typeof__(vec_cases[0]) *c = &vec_cases[i];
+        const __typeof__(vec_images[0]) *img = &vec_images[c->image];
+        fwsig_t m;
+        fwsig_result_t r = fwsig_check(c->sig, c->sig_len, &vec_pub, 1, c->target, (uint32_t)img->len, &m);
+        if (r == FWSIG_OK) {
+            uint8_t h[32];
+            sha256_ctx_t ctx;
+            sha256_init(&ctx);
+            sha256_update(&ctx, img->data, img->len);
+            sha256_final(&ctx, h);
+            if (memcmp(h, m.sha256, 32) != 0) {
+                r = FWSIG_IMAGE;
+            }
+        }
+        if (strcmp(fwsig_result_str(r), c->want) != 0) {
+            printf("fwsig case \"%s\": got %s, want %s\n", c->name, fwsig_result_str(r), c->want);
+        }
+        CHECK(strcmp(fwsig_result_str(r), c->want) == 0);
+    }
+    // No trusted keys: nothing passes.
+    CHECK(fwsig_check(vec_cases[0].sig, 128, &vec_pub, 0, vec_cases[0].target,
+                      (uint32_t)vec_images[vec_cases[0].image].len, NULL) == FWSIG_UNKNOWN_KEY);
 }
 
 static void test_crypto(void)
@@ -831,6 +864,7 @@ int main(int argc, char **argv)
     test_scan_result();
     test_set_wifi();
     test_crypto();
+    test_fwsig();
     test_passphrase_rules();
     test_learning();
     test_forwarding();

@@ -5,18 +5,16 @@
 #   ./build.sh production   production build (secure boot v2, flash encryption) -> build-prod/, unsigned
 #   ./build.sh <idf.py args> anything else for idf.py, e.g. ./build.sh menuconfig, ./build.sh size
 #
-# Dev builds sign the app with keys/dev_signing_key.pem (RSA-3072), generated on the first build
-# and never committed. A bridge only accepts OTA images signed with the key of the image it runs.
+# Updates: the bridge installs only images that come with the pod's signed manifest (Ed25519, see
+# components/bridge_core/fwsig.h). The keys it trusts are compiled in from main/fw_keys_gen.h,
+# generated here on the host from ../stm32h563/keys/release-*.pub plus, unless RELEASE=1, the
+# pod's developer key (~/.config/benchpod/fw-signing-dev.key, the one `make -C ../stm32h563
+# dev-key` makes). Production builds add ESP32 secure boot v2 (RSA-3072, see docs/SECURITY.md).
 set -euo pipefail
 cd "$(dirname "$0")"
 
 if [ "${1:-}" = "--in-container" ]; then
   shift
-  if [ ! -f keys/dev_signing_key.pem ]; then
-    echo "=== generating dev signing key keys/dev_signing_key.pem (not for production) ==="
-    mkdir -p keys
-    python -m espsecure generate_signing_key --version 2 --scheme rsa3072 keys/dev_signing_key.pem
-  fi
   if [ "${1:-}" = "production" ]; then
     # Separate build dir and sdkconfig, so dev and production settings never mix.
     idf.py -B build-prod -D SDKCONFIG=build-prod/sdkconfig \
@@ -34,6 +32,23 @@ if [ "${1:-}" = "--in-container" ]; then
   fi
   exit 0
 fi
+
+# Trusted update keys -> main/fw_keys_gen.h (host side: the container only sees wifi-bridge/).
+pubs=(../stm32h563/keys/release-*.pub)
+dev_key="${DEV_SIGN_KEY:-$HOME/.config/benchpod/fw-signing-dev.key}"
+if [ "${RELEASE:-0}" != 1 ] && [ -f "$dev_key" ]; then
+  mkdir -p build-keys
+  if python3 ../tools/fwsign.py pubkey "$dev_key" 2>/dev/null | cut -d' ' -f1 > build-keys/dev-signing.pub &&
+     [ -s build-keys/dev-signing.pub ]; then
+    pubs+=(build-keys/dev-signing.pub)
+  else
+    echo "warning: could not read the developer key $dev_key (pip3 install cryptography); release keys only" >&2
+  fi
+fi
+args=()
+for p in "${pubs[@]}"; do args+=(--pub "$p"); done
+python3 ../tools/fwsign.py keys-header "${args[@]}" -o main/fw_keys_gen.h
+echo "=== trusted update keys: ${#pubs[@]} (${pubs[*]##*/}) ==="
 
 tty=()
 [ -t 0 ] && tty=(-it)

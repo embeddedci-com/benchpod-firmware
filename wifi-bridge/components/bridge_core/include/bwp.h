@@ -71,6 +71,7 @@ enum {
     BWP_T_COUNTER = 0x19,      // u32, request counter, strictly increasing per nonce
     BWP_T_AUTH = 0x1A,         // 16 bytes, truncated HMAC-SHA256; must be the last TLV
     BWP_T_ENC_PASSPHRASE = 0x1B,  // 89 bytes, sealed passphrase (bwp_crypto.h)
+    BWP_T_SIGNATURE = 0x1C,    // 128 bytes, the pod's signed manifest of an OTA image (fwsig.h)
 };
 
 #define BWP_KEY_LEN   32
