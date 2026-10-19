@@ -6,6 +6,7 @@
     "status": "T0",
     "cloud_status": "T0",
     "wifi_status": "T0",
+    "wifi_scan": "T0",
     "la_pins": "T0",
     "usb_cc": "T0",
     "target_status": "T0",
@@ -108,6 +109,10 @@
     },
     {
       "line": "{\"cmd\":\"wifi_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"wifi_scan\",\"id\":3}",
       "tier": "T0"
     },
     {

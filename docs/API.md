@@ -247,6 +247,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `cloud_ca` | T0/T2 | Read or clear the company CA for the cloud link | object | no |
 | `cloud_proxy` | T0/T2 | Read, set or clear the HTTP proxy for the cloud link | object | no |
 | `wifi_status` | T0 | Wi-Fi state and transport counters | object | no |
+| `wifi_scan` | T0 | Start a Wi-Fi scan, or read its networks | object | no |
 | `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
 | `wifi_clear` | T2 | Forget the Wi-Fi credentials (pod and ESP32-C3) | `"cleared"` | no |
 | `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
@@ -1437,6 +1438,7 @@ counters and the capability list. No parameters.
 | `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
 | `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
 | `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
+| `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. |
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
 | `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
@@ -3159,6 +3161,56 @@ Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xa
 `state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
 often it was lost. `c3_nvs` is the outcome of the last `wifi_clear` since boot on the ESP32-C3's
 side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
+
+### `wifi_scan` — the networks the pod's Wi-Fi sees
+
+For a Wi-Fi picker: the networks in range, to choose the SSID for `wifi_set`. The pod scans with
+its own Wi-Fi, or with a Wi-Fi bridge when one is plugged in (development builds), and answers in
+the same format either way. Pods that list `wifi_scan` in `caps` have it (firmware 3.9.4+).
+
+A scan takes a few seconds, and the pod keeps answering other commands meanwhile, so it is two
+steps: start it, then read it with the `id` the first reply gave.
+
+```json
+{"cmd":"wifi_scan"}
+{"cmd":"wifi_scan","id":3}
+```
+
+The first form starts a scan (or joins the one already running) and answers at once:
+
+```json
+{"state":"scanning","id":3,"via":"built-in"}
+```
+
+The second form answers `"scanning"` again until the scan is over, then:
+
+```json
+{"state":"done","id":3,"via":"built-in",
+ "networks":[{"ssid":"lab","rssi":-48,"channel":6,"auth":"wpa2/wpa3"},
+             {"ssid":"guest","rssi":-71,"channel":11,"auth":"open"}],
+ "truncated":false}
+```
+
+Read it every half second or so; a scan is normally done within 5 seconds. `networks` is strongest
+first, one entry per network (the strongest access point of a network that has several), at most
+20; a hidden network has an empty `ssid`. `rssi` is in dBm. `auth` is `open`, `wep`, `wpa`, `wpa2`,
+`wpa/wpa2`, `wpa2-ent`, `wpa3`, `wpa2/wpa3`, `wapi`, `owe` or `other`. The list is cut to fit one
+cloud reply; `truncated` is `true` when weaker networks were left out for that. With a Wi-Fi bridge,
+the first form waits for the bridge and answers `"done"` (`"via":"wifi-bridge"`, `"id":0`) at once.
+
+How the pod scans depends on its Wi-Fi state:
+
+- **Joined:** the Wi-Fi radio scans alongside the connection; the pod stays joined, and traffic
+  over Wi-Fi (the cloud link among it) pauses for moments while the radio visits other channels.
+- **Not configured, or a failed join:** the radio is switched on for the scan alone and off again
+  afterwards. USB networking is not affected.
+- **Joining:** the scan waits for the join to finish (up to 30 seconds).
+
+Errors: `"wifi_scan: <why>"`, for example `"wifi_scan: Wi-Fi is still connecting; try the scan
+again in a moment"`, `"wifi_scan: the ESP32-C3 is being flashed or erased; try again when that is
+done"`, or `"wifi_scan: no scan with that id; start one with {"cmd":"wifi_scan"}"` (an `id` the pod
+never gave out, for example after a reboot). With a bridge: `"Wi-Fi bridge: <why>"`. The same scan
+is `wifi-scan` on the [USB console](usb-serial-interface.md).
 
 ### `wifi_set` / `wifi_clear`
 

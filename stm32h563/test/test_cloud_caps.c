@@ -54,7 +54,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink",
+        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink", "wifi_scan",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -200,7 +200,7 @@ static void test_status_list(void) {
     CHECK(bp_emit_ok(&e));
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
@@ -216,7 +216,7 @@ static void test_status_list(void) {
     cloud_caps_emit_list(&e, &d);
     CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"gpio_read\",\"capture_trigger\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
                       "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 

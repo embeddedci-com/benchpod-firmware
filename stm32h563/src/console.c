@@ -167,6 +167,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  eth <stop|start|restart|stats>  the wired link: down/up (PHY reset + DHCP), counters\r\n"
         "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3 (USB networking off)\r\n"
         "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
+        "  wifi-scan            networks the pod's Wi-Fi sees: scan <rssi> <channel> <auth> <ssid>, scan done <n>\r\n"
         "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3; USB networking on)\r\n"
         "  wifi-static <ip> <mask> <gw>  static Wi-Fi address (diagnostic)\r\n"
         "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
@@ -191,8 +192,7 @@ static void cmd_help(console_out_t out, void *ctx)
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
-        "Wi-Fi bridge (development build only; wifi-set/-show/-clear use it when one is plugged in):\r\n"
-        "  wifi-scan            networks the Wi-Fi bridge sees: scan <rssi> <channel> <auth> <ssid>, scan done <n>\r\n"
+        "Wi-Fi bridge (development build only; wifi-set/-show/-clear/-scan use it when one is plugged in):\r\n"
         "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
         "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
@@ -1235,26 +1235,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
     } else if (!strcmp(argv[0], "bridge")) {
         cmd_bridge(argc, argv, out, ctx);
-    } else if (!strcmp(argv[0], "wifi-scan")) {
-        /* For a Wi-Fi picker (the web UI, the CLI): one parseable line per network, strongest
-           first, then "scan done <n>"; or "wifi-scan error <why>". Through the bridge only. */
-        static const char *const auth[] = {"open", "wep", "wpa", "wpa2", "wpa/wpa2", "wpa2-ent", "wpa3", "wpa2/wpa3"};
-        const char *err = NULL;
-        int rc = wifi_bridge_present() ? wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err) : -1;
-        if (!wifi_bridge_present()) err = "no Wi-Fi bridge on the Ethernet port (scanning needs one)";
-        if (rc == 0 && g_wifi_bridge_reply.result != BWP_OK) err = wb_result_str(g_wifi_bridge_reply.result);
-        if (rc != 0 || err) {
-            op(out, ctx, "wifi-scan error %s\r\n", err);
-        } else {
-            for (unsigned k = 0; k < g_wifi_bridge_reply.n_aps; k++) {
-                const bwp_ap_t *a = &g_wifi_bridge_reply.aps[k];
-                /* The SSID last: it may hold spaces. */
-                op(out, ctx, "scan %d %u %s %s\r\n", a->rssi, a->channel,
-                   a->authmode < 8 ? auth[a->authmode] : "other", a->ssid);
-            }
-            op(out, ctx, "scan done %u\r\n", g_wifi_bridge_reply.n_aps);
-        }
 #endif
+    } else if (!strcmp(argv[0], "wifi-scan")) {
+        /* For a Wi-Fi picker (the CLI): "scan <rssi> <channel> <auth> <ssid>" per network,
+           strongest first, then "scan done <n>"; or "wifi-scan error <why>". Through a Wi-Fi
+           bridge when one is plugged in, else the built-in Wi-Fi, whose list follows the prompt
+           when the scan ends (the worker does not wait for it). */
+        wifi_scan_console();
     } else if (!strcmp(argv[0], "wifi-clear")) {
         /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
         config_clear();

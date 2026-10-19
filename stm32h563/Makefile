@@ -103,6 +103,7 @@ C_SOURCES := \
   src/cloud_client.c \
   src/cloud_rx.c \
   src/cloud_caps.c \
+  src/wifi_scan.c \
   src/cloud_caps_hw.c \
   src/cloud_reply_cap.c \
   src/ws_frame.c \

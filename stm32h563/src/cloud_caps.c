@@ -17,7 +17,8 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit(e, ",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
                "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
                "\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
-               "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lan_tls\":true,",
+               "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lan_tls\":true,"
+               "\"wifi_scan\":true,",
             c->flash_kb, c->sig_policy, c->lan_policy);
     bp_emit(e, "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
                "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
@@ -65,7 +66,8 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"sensor_types\""     /* sensor_types lists the emulated I2C sensors */
                    ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
                    ",\"usb_net_setting\""  /* usb_network on/off, device-only (pod_policy.h) */
-                   ",\"lan_tls\"");        /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
+                   ",\"lan_tls\""         /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
+                   ",\"wifi_scan\"");     /* wifi_scan: the built-in Wi-Fi or a Wi-Fi bridge (wifi_scan.h) */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
     if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"current_out\"");
     if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");

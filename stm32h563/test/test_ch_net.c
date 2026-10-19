@@ -2,7 +2,8 @@
  * test_ch_net.c — host tests for src/command_handler_net.c: the speed test (the PROTO_SPEEDTEST
  * download sink with its ack cadence and done mark, the paced upload source) and the
  * provisioning replies (cloud_set / wifi_set on the real config stores over the RAM flash model,
- * their refusals, and the eth argument checks), and wifi_clear's deferred ESP32-C3 NVS erase.
+ * their refusals, and the eth argument checks), wifi_clear's deferred ESP32-C3 NVS erase, and
+ * wifi_scan's start-then-read replies and the console's deferred print.
  */
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +80,24 @@ void cloud_client_last_error(char *out, size_t n) { snprintf(out, n, "a \"quoted
 bool esp_wifi_ctrl_connected(void) { return false; }
 const char *esp_wifi_ctrl_state_str(void) { return "idle"; }
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *a, uint32_t *b) { *a = 0; *b = 0; }
+/* wifi_scan: the Wi-Fi control's request/result faked. */
+static uint32_t g_scan_req;
+static esp_wifi_scan_state_t g_scan_state = ESP_WIFI_SCAN_RUNNING;
+static wifi_scan_list_t g_scan_list;
+static const char *g_scan_err;
+uint32_t esp_wifi_ctrl_scan_request(void) { return ++g_scan_req; }
+esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_list_t **l, const char **err) {
+    if (id == 0 || id > g_scan_req) return ESP_WIFI_SCAN_UNKNOWN;
+    if (l) *l = &g_scan_list;
+    if (err) *err = g_scan_err;
+    return g_scan_state;
+}
+static char g_console[2048];
+static size_t g_nconsole;
+void console_io_write(const uint8_t *b, size_t n) {
+    if (n > sizeof(g_console) - 1 - g_nconsole) n = sizeof(g_console) - 1 - g_nconsole;
+    memcpy(g_console + g_nconsole, b, n); g_nconsole += n; g_console[g_nconsole] = '\0';
+}
 static esp_hosted_pump_stats_t g_stats;
 const esp_hosted_pump_stats_t *esp_hosted_spi_stats(void) { return &g_stats; }
 
@@ -234,6 +253,70 @@ static void test_eth(void) {
     CHECK(strcmp(g_reply, "ok:{\"hz\":50000000,\"ppm\":0,\"on_hsi\":false}") == 0, "%s", g_reply);
 }
 
+/* ---- wifi_scan ---------------------------------------------------------------------------- */
+static void test_wifi_scan(void) {
+    g_scan_state = ESP_WIFI_SCAN_RUNNING;
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\"}");
+    CHECK(strcmp(g_reply, "ok:{\"state\":\"scanning\",\"id\":1,\"via\":\"built-in\"}") == 0, "%s", g_reply);
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":1}");
+    CHECK(strcmp(g_reply, "ok:{\"state\":\"scanning\",\"id\":1,\"via\":\"built-in\"}") == 0, "%s", g_reply);
+    CHECK(g_scan_req == 1, "reading a scan started another one");
+
+    wifi_scan_list_clear(&g_scan_list);
+    wifi_scan_list_add(&g_scan_list, "lab", 3, -50, 6, 3);
+    wifi_scan_list_add(&g_scan_list, "guest", 5, -70, 1, 0);
+    g_scan_state = ESP_WIFI_SCAN_DONE;
+    clear_tx();
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":1}");
+    CHECK(strcmp(g_tx, "{\"status\":\"ok\",\"data\":{\"state\":\"done\",\"id\":1,\"via\":\"built-in\","
+                       "\"networks\":[{\"ssid\":\"lab\",\"rssi\":-50,\"channel\":6,\"auth\":\"wpa2\"},"
+                       "{\"ssid\":\"guest\",\"rssi\":-70,\"channel\":1,\"auth\":\"open\"}],"
+                       "\"truncated\":false}}\n") == 0, "%s", g_tx);
+
+    /* A full list of long SSIDs is cut to the cloud reply cap, and says so. */
+    wifi_scan_list_clear(&g_scan_list);
+    for (int i = 0; i < 20; i++) {
+        char n[40];
+        snprintf(n, sizeof(n), "%02d-\x01\x02\x03\x04\x05\x06\x07-abcdefghijklmnopqrstu", i);
+        wifi_scan_list_add(&g_scan_list, n, strlen(n), -40 - i, 1, 7);
+    }
+    clear_tx();
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":1}");
+    CHECK(g_ntx > 0 && g_ntx < 1792, "reply %zu bytes", g_ntx);
+    CHECK(strstr(g_tx, "\"truncated\":true}}\n") != NULL, "not marked truncated: %s", g_tx);
+
+    g_scan_state = ESP_WIFI_SCAN_FAILED;
+    g_scan_err = "the ESP32-C3 did not finish the scan";
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":1}");
+    CHECK(strcmp(g_reply, "err:wifi_scan: the ESP32-C3 did not finish the scan") == 0, "%s", g_reply);
+    handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":99}");
+    CHECK(strncmp(g_reply, "err:wifi_scan: no scan with that id", 35) == 0, "%s", g_reply);
+
+    /* The console's scan prints when it ends, then a new prompt; nothing while it runs. */
+    g_scan_err = NULL;
+    g_scan_state = ESP_WIFI_SCAN_RUNNING;
+    g_nconsole = 0; g_console[0] = '\0';
+    wifi_scan_console();
+    CHECK(strstr(g_console, "Wi-Fi scan running") != NULL, "%s", g_console);
+    g_nconsole = 0; g_console[0] = '\0';
+    wifi_scan_poll();
+    CHECK(g_nconsole == 0, "printed while running: %s", g_console);
+    wifi_scan_list_clear(&g_scan_list);
+    wifi_scan_list_add(&g_scan_list, "my lab", 6, -50, 6, 7);
+    g_scan_state = ESP_WIFI_SCAN_DONE;
+    wifi_scan_poll();
+    CHECK(strcmp(g_console, "\r\nscan -50 6 wpa2/wpa3 my lab\r\nscan done 1\r\n> ") == 0, "%s", g_console);
+    g_nconsole = 0; g_console[0] = '\0';
+    wifi_scan_poll();
+    CHECK(g_nconsole == 0, "printed twice: %s", g_console);
+    g_scan_state = ESP_WIFI_SCAN_FAILED;
+    g_scan_err = "Wi-Fi is still connecting; try the scan again in a moment";
+    wifi_scan_console();
+    g_nconsole = 0; g_console[0] = '\0';
+    wifi_scan_poll();
+    CHECK(strstr(g_console, "wifi-scan error Wi-Fi is still connecting") != NULL, "%s", g_console);
+}
+
 int main(void) {
     mock_flash_reset();
     test_speedtest_down();
@@ -242,6 +325,7 @@ int main(void) {
     test_wifi_set();
     test_wifi_clear_c3();
     test_eth();
+    test_wifi_scan();
     if (fails) { printf("test_ch_net: %d FAILED\n", fails); return 1; }
     printf("test_ch_net: all passed\n");
     return 0;

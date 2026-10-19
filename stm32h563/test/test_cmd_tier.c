@@ -191,7 +191,7 @@ static void expect_set(unsigned flag, const char *what, const char *const *want,
 
 static void test_flags_match_the_old_lists(void) {
     EXPECT_SET(CMD_F_NO_HW, "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
-               "wifi_set", "wifi_status", "wifi_clear", "eth", "speedtest",
+               "wifi_set", "wifi_status", "wifi_scan", "wifi_clear", "eth", "speedtest",
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
                "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
