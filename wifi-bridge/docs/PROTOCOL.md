@@ -2,8 +2,8 @@
 
 How the BenchPod (or a laptop, for bring-up) talks to the Wi-Fi bridge over the Ethernet cable
 between them. This is the bridge's only management path once it is flashed: its USB-C is power
-only, and the UART is on factory pads. The bridge implements it in `components/bridge_core/bwp.c`; the pod side is a
-follow-up and implements the same spec. `tools/bridgectl.py` is a reference client for Linux.
+only, and the UART is on factory pads. The bridge implements it in `components/bridge_core/bwp.c`; the pod's client is
+`stm32h563/src/wifi_bridge.c` (development builds), which links the same codec. `tools/bridgectl.py` is a reference client for Linux.
 
 ## Transport
 
@@ -192,8 +192,8 @@ The bridge obeys one pod. The pod proves it is that pod with a 32-byte key they 
   accepted value, and the pod continues above it. On AUTH the pod first resyncs its nonce and
   counter and retries once; if that fails too, its key is not the paired one (the bridge was
   re-paired with another pod) and it tells the user to press PAIR on the bridge.
-- **The pod's key** is derived, not stored: `SHA-256(Ed25519-sign(device key,
-  "benchpod-wifi-bridge-pair:v1" || bridge MAC))`. Ed25519 signatures are deterministic, so the
+- **The pod's key** is derived, not stored: `SHA-256(Ed25519 signature by the pod's device key
+  over "benchpod-wifi-bridge-pair:v1" || 0x00 || bridge MAC)` (`device_identity_sign_ctx`). Ed25519 signatures are deterministic, so the
   pod gets the same key after every reboot without writing flash, a different key for every
   bridge, and nobody without the pod's device key can compute it.
 - **PAIR button** (GPIO35, a press): the bridge forgets the key, clears FLAGS 0x20 in the next
@@ -259,19 +259,29 @@ CLEAR_WIFI, seq 0x0103, paired: key 00 01 .. 1f, nonce 01 .. 08, COUNTER 5, AUTH
 (The SET_WIFI example is shown without COUNTER + AUTH to keep it short. The bridge accepts
 SET_WIFI only signed, like the CLEAR_WIFI example: unpaired it answers NOT_PAIRED.)
 
-## What the pod needs (follow-up, not in this repo change)
+## The pod's side
 
-- lwIP: a hook for EtherType 0x88B5 on the Ethernet netif (`LWIP_HOOK_UNKNOWN_ETH_PROTOCOL`),
-  sending raw frames with `netif->linkoutput`.
-- A small client: remember the bridge MAC and NONCE from HELLO, request/response with seq and
-  retries, report STATUS as the `wifi-bridge` uplink (state, SSID, RSSI) in `status`.
-- Pairing: a true-random key per bridge in the pod's config flash, PAIR on first contact, a
-  COUNTER per bridge nonce, HMAC-SHA256 signing and verification (the bridge's
-  `components/bridge_core/bwp.c` and `pairing.c` are plain C and can be reused). Show "press
-  PAIR on the bridge" when it answers ALREADY_PAIRED or keeps answering AUTH.
-- Map `set-wifi`, the web Settings tab and a Wi-Fi picker (SCAN) to SET_WIFI / CLEAR_WIFI / SCAN
-  when a bridge says HELLO.
+`stm32h563/src/wifi_bridge.c` (protocol client, host-tested against this repo's pairing code)
+and `wifi_bridge_net.c` (lwIP `LWIP_HOOK_UNKNOWN_ETH_PROTOCOL` on the Ethernet netif, frames
+out through `netif->linkoutput`). Built only in development firmware for now (`WIFI_BRIDGE` in
+`stm32h563/Makefile`; off with `RELEASE=1`). What it does:
+
+- Tracks HELLO (bridge MAC, NONCE, state, flags); the bridge counts as present while HELLOs keep
+  coming on a live Ethernet link (6 s).
+- Pairs on first contact with the derived key above, signs every request, verifies every signed
+  answer, retries three times with a new COUNTER, resyncs after either side reboots.
+- Polls STATUS every 10 s (which also confirms a bridge firmware update on trial).
+- `wifi_set` / `wifi_clear` / `wifi_status` (JSON) and `wifi-set` / `wifi-clear` / `wifi-show`
+  (USB console) go to the bridge while one is present; the console's `bridge` command shows it
+  and runs `scan`, `reboot` and `factory-reset yes`.
+
+Still to do on the pod:
+
+- Report the `wifi-bridge` uplink with RSSI in the cloud capabilities and `status`, and a SCAN
+  verb for a Wi-Fi picker in the web UI (both need the server too).
 - Relay bridge firmware: OTA_BEGIN, 1024-byte OTA_DATA in order, OTA_END, REBOOT, then wait for
-  HELLO, send STATUS (this confirms the new image) and check FW_VERSION. The bridge image could
-  ship inside the pod firmware or be fetched from the cloud; to decide.
-- Power control of the always-on USB-A port to power-cycle a bridge that stops sending HELLO.
+  HELLO, send STATUS (this confirms the new image) and check FW_VERSION. Needs a bigger request
+  buffer on the pod (`WB_REQ_MAX`) and a decision on where the image comes from (embedded in the
+  pod firmware, a W25Q blob slot, or the cloud).
+- Power control of the always-on USB-A port (v4 board) to power-cycle a bridge that stops
+  sending HELLO.

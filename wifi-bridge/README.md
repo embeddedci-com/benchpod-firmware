@@ -131,8 +131,8 @@ flashed from here only accepts OTA images built from here, so keep that key for 
 
 Nothing below has been tried on hardware yet. Go in order: each step needs the one before. Log
 lines are what the firmware prints at 115200 (`./flash.sh --monitor`); the debug console takes
-commands on the same port (`help`, `status`). There is no pod-side support yet, so a Linux
-laptop wired to the RJ45 stands in for the pod (`tools/bridgectl.py`).
+commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on the RJ45 as the
+"pod" (`tools/bridgectl.py`); step 13 swaps in a real pod.
 
 1. **Power.** USB-C only, no ESP-Prog VDD: 3V3 test pad 3.3 V, idle draw about 0.1 A
    (0.5 W budget). Then switch to ESP-Prog power for flashing.
@@ -170,6 +170,12 @@ laptop wired to the RJ45 stands in for the pod (`tools/bridgectl.py`).
 12. **Recovery paths.** Unplug the cable (`eth: link down`) and plug in a second laptop
     (`pod MAC changed to …`, Wi-Fi restarts with the new MAC). Reboot the AP: the bridge
     reconnects on its own.
+
+13. **With a pod.** Flash a development build of the pod firmware (`make -C stm32h563`, the
+    default `WIFI_BRIDGE=1`), press PAIR on the bridge (it is paired with the laptop), and cable
+    it to the pod. Pod log: `[bridge] Wi-Fi bridge found: …`; pod console `bridge` shows
+    `paired`, then `wifi-set "<ssid>" "<pass>"` and `wifi-show` (`via: wifi-bridge`). The pod
+    gets its DHCP lease, mDNS name and cloud connection over Wi-Fi.
 
 Record results, and anything changed, in this section or in the PR that fixes it.
 
