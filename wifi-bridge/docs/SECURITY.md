@@ -101,8 +101,12 @@ gh secret set BRIDGE_SECURE_BOOT_KEY --env release --repo embeddedci-com/benchpo
 rm -P bridge-secure-boot.pem   # the working copy
 ```
 
-Until the secret exists, the release job builds and Ed25519-signs the development-config image
-(what pods relay today) and skips the RSA-signed production factory image with a warning.
+The secret was set on 2026-10-19. Each firmware release then also publishes
+`benchpod-wifi-bridge-factory.zip`: the RSA-signed bootloader and app, the partition table,
+`ota_data_initial.bin`, the app's pod manifest and `flash_args` with the offsets (the step was
+dry-run with a throwaway key; it has not run in a real release yet). Without the secret the job
+skips it with a warning. Pods relay the development-config image either way until the dev gate is
+lifted.
 
 ### Factory flashing order
 

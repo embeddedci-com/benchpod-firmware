@@ -247,16 +247,21 @@ jobs:
           fi
           RELEASE=1 ./build.sh production
           # Sign inside the same pinned image (espsecure); the key only lives in this step's container.
+          # The container runs as root: build-prod/ is root's, so the signed images go to factory/
+          # (the runner's), readable (only the key file is private).
+          mkdir -p factory
           docker run --rm -e BRIDGE_SECURE_BOOT_KEY -v "$PWD:/project" -w /project "$(cat idf-image)" bash -ec '
-            umask 077; printf "%s\n" "$BRIDGE_SECURE_BOOT_KEY" > /tmp/k.pem
-            python -m espsecure sign_data --version 2 --keyfile /tmp/k.pem --output build-prod/bootloader-signed.bin build-prod/bootloader/bootloader.bin
-            python -m espsecure sign_data --version 2 --keyfile /tmp/k.pem --output build-prod/benchpod-wifi-bridge-signed.bin build-prod/benchpod-wifi-bridge.bin
-            rm -f /tmp/k.pem'
+            (umask 077; printf "%s\n" "$BRIDGE_SECURE_BOOT_KEY" > /tmp/k.pem)
+            python -m espsecure sign_data --version 2 --keyfile /tmp/k.pem --output factory/bootloader-signed.bin build-prod/bootloader/bootloader.bin
+            python -m espsecure sign_data --version 2 --keyfile /tmp/k.pem --output factory/benchpod-wifi-bridge-signed.bin build-prod/benchpod-wifi-bridge.bin
+            python -m espsecure verify_signature --version 2 --keyfile /tmp/k.pem factory/bootloader-signed.bin
+            python -m espsecure verify_signature --version 2 --keyfile /tmp/k.pem factory/benchpod-wifi-bridge-signed.bin
+            rm -f /tmp/k.pem
+            chmod a+r factory/*'
+          sudo chown -R "$(id -u):$(id -g)" factory
+          cp build-prod/partition_table/partition-table.bin build-prod/ota_data_initial.bin factory/
           BV=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
-          python3 ../tools/fwsign.py sign --key env:FW_SIGNING_KEY --target bridge --release "$BV" build-prod/benchpod-wifi-bridge-signed.bin
-          mkdir -p factory && cp build-prod/bootloader-signed.bin build-prod/partition_table/partition-table.bin \
-            build-prod/ota_data_initial.bin build-prod/benchpod-wifi-bridge-signed.bin \
-            build-prod/benchpod-wifi-bridge-signed.bin.sig factory/
+          python3 ../tools/fwsign.py sign --key env:FW_SIGNING_KEY --target bridge --release "$BV" factory/benchpod-wifi-bridge-signed.bin
           printf '0x1000 bootloader-signed.bin\n0x10000 partition-table.bin\n0x17000 ota_data_initial.bin\n0x20000 benchpod-wifi-bridge-signed.bin\n' > factory/flash_args
           (cd factory && zip -q ../../stm32h563/build/benchpod-wifi-bridge-factory.zip *)
           echo "assets=benchpod-wifi-bridge-factory.zip" >> "$GITHUB_OUTPUT"
