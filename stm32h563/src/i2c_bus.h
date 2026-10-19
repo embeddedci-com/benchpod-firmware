@@ -186,7 +186,7 @@ void la_pullups_all_off(void);
 #define DACMUX_CTRL1_12V_ADC  3u   /* S4 */
 #define DACMUX_CTRL2_12V_VMID 0u   /* S1 */
 #define DACMUX_CTRL2_ADC_VMID 1u   /* S2 */
-#define DACMUX_CTRL2_GND      2u   /* S3 */
+#define DACMUX_CTRL2_S3       2u   /* S3: not connected on the board (no ground here) */
 
 /* Configure U55/U58 control pins as outputs, all driven low (everything off:
    no relay energised, no DAC routed to an SMA). Called at boot. */

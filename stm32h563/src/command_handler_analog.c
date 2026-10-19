@@ -18,6 +18,7 @@
 #include "adc_scale.h"     /* circular-mean + unwrap for adc_read's sample burst */
 #include "adc_cal.h"       /* per-pod ADC calibration on top of cal_data.h */
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
+#include "cloud_client.h"  /* cloud_client_request_caps_resend: the server scales captures with the fit */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -200,10 +201,10 @@ void handle_adc_read(int conn_id, const char *json) {
     if (rc != 0) { send_error(conn_id, "adc read failed"); return; }
     /* Per-source affine fit.  The UNWRAP is not per-source — it belongs to the
        shared front end and adc_scale_burst always applies it (adc_scale.h). */
-    cal_lin_t c = ADC_CAL_CAL1;
+    cal_lin_t c = ADC_CAL_CAL1;                     /* current_in has no fit of its own */
     if      (p == ANALOG_PATH_CAL2)    c = ADC_CAL_CAL2;
     else if (p == ANALOG_PATH_ADC_EXT) c = ADC_CAL_EXT;
-    else if (p == ANALOG_PATH_CURRENT_IN)     c = adc_cal_current_in_fit();   /* cal1 fit + this pod's offset (adc_cal.h) */
+    c = adc_cal_fit(c);                             /* this pod's front-end offset (adc_cal.h) */
     adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
     if (!rd.valid) {
         /* Plausible-looking garbage is worse than an error: a sweep would record it. */
@@ -217,8 +218,8 @@ void handle_adc_read(int conn_id, const char *json) {
     }
     char payload[112];
     if (p == ANALOG_PATH_CURRENT_IN) {
-        /* Say which per-pod offset is in `mv` (only `current_in` has one), and give the loop
-           current the voltage stands for, so no client needs to know the sense resistor. */
+        /* Say which per-pod offset was taken out of `mv` (every source gets it), and give the
+           loop current the voltage stands for, so no client needs to know the sense resistor. */
         snprintf(payload, sizeof(payload),
                  "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"offset_mv\":%ld,\"ua\":%ld}",
                  analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
@@ -257,13 +258,14 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd) {
      {"cmd":"calibrate"}                  -> the stored calibration
      {"cmd":"calibrate","source":"current_in"}   -> calibrate `current_in`: J8 must be DISCONNECTED
      {"cmd":"calibrate","clear":true}     -> back to the compiled-in fit
-   `current_in` is the only source a pod can calibrate on its own: with J8 open the terminal is 0 V,
-   so what it reads is its offset. A reading outside +/-50 mV means something is driving J8:
-   it is refused and the old calibration stays. */
+   `current_in` is the source a pod can calibrate on its own: with J8 open the terminal is 0 V,
+   so what it reads is the front end's offset, which every source shares (adc_cal.h). A reading
+   outside +/-150 mV means something is driving J8: it is refused and the old calibration stays. */
 void handle_calibrate(int conn_id, const char *json) {
     char v[16] = {0};
     if (json_get_value(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0) {
         if (adc_cal_clear() != 0) { send_error(conn_id, "could not clear the calibration"); return; }
+        cloud_client_request_caps_resend();
         calibrate_reply(conn_id, NULL);
         return;
     }
@@ -276,5 +278,6 @@ void handle_calibrate(int conn_id, const char *json) {
     if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
     const char *why = adc_cal_current_in_store(&rd);
     if (why) { send_error(conn_id, why); return; }
+    cloud_client_request_caps_resend();   /* the ext fit in the capabilities changed */
     calibrate_reply(conn_id, &rd);
 }
