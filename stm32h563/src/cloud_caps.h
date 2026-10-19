@@ -49,10 +49,15 @@ typedef struct {
     bool          pod_current;
     long          current_out_min_ua, current_out_max_ua;
     const char   *board;
-    /* The interface the cloud link runs over: "eth", "wifi" or "unknown" (NULL = "unknown").
+    /* The interface the cloud link runs over: "eth", "wifi", "usb", "wifi-bridge" or "unknown"
+       (NULL = "unknown").
        Only the cloud client knows it (cloud_caps_collect leaves it NULL); the status reply's
        "net"/"wifi" fields describe the interfaces, not which one carries the cloud. */
     const char   *uplink;
+    /* With "wifi-bridge" (development builds: the link runs over Ethernet into a connected Wi-Fi
+       bridge box), the bridge's RSSI is sent as "uplink_rssi_dbm". */
+    bool          has_uplink_rssi;
+    int           uplink_rssi_dbm;
     /* Boot health. */
     bool          safe_mode;
     const char   *safe_reason;    /* "" when not in safe mode */

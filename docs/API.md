@@ -765,7 +765,8 @@ TCP connection (so it is the interface in use, not only the preferred one):
 
 | Field | Meaning |
 |---|---|
-| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
+| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), `"wifi-bridge"` (development builds: the Ethernet port goes into a connected [Wi-Fi bridge](#wifi_set--wifi_clear) box), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
+| `uplink_rssi_dbm` | With `"wifi-bridge"` only: the bridge's Wi-Fi signal (dBm) when the link came up. |
 
 ---
 
@@ -3197,7 +3198,7 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 
 ```json
 {"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
- "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"problem":null,
+ "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"problem":null,"update":"idle",
            "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
            "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
                        "eth_tx_err":0,"dropped":76}}}
@@ -3207,6 +3208,10 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 `no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
 "the bridge is paired with another pod: press PAIR on the bridge" means the user has to press PAIR
 on the bridge. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
+`bridge.update` says what the pod's automatic bridge firmware update is doing (`"idle"`,
+`"updating 0.1.0 to 0.2.0: 45%"`, `"updated to 0.2.0"`, `"update to 0.2.0 failed: ..."`); the
+image comes from W25Q blob slot `bridge` (OTA target `bridge`, listed by `blob_status` in
+development builds).
 
 > **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
 > stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
@@ -3265,7 +3270,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`, `tls`, and `bridge` in development builds; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -3300,7 +3305,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the three release slots (`gw0`, `gw1`, `esp`); the company CA is read with `cloud_ca`.
+It lists the three release slots (`gw0`, `gw1`, `esp`), plus `bridge` (the Wi-Fi bridge's firmware, which the pod relays to the bridge) in development builds; the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
