@@ -27,6 +27,7 @@ bench-pod-firmware/
 ├── stm32h563/   ← STM32H563 firmware (C, FreeRTOS + LwIP + TinyUSB) — THE firmware
 ├── ice40/       ← iCE40 gateware (Verilog, IceStorm toolchain) — v2
 ├── docs/        ← protocol + design docs (API.md, datapath reviews, …)
+├── wifi-bridge/ ← ESP32 Ethernet-to-Wi-Fi bridge box for v4 pods (ESP-IDF)
 └── calibration/ ← per-board DAC/ADC cal (measured against a 34401A DMM)
 ```
 
