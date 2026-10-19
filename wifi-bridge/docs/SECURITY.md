@@ -56,13 +56,14 @@ It turns on:
    the first boot `nvs_flash_init` generates XTS keys into the encrypted `nvs_keys` partition and
    encrypts the `nvs` partition with them. This is what protects the Wi-Fi passphrase: flash
    encryption alone does not cover NVS.
-4. **ROM download mode disabled** (`CONFIG_SECURE_DISABLE_ROM_DL_MODE`): **a decision to
-   confirm.** The UART is only on the TC2030 pads inside the case, so a user cannot reach it
-   either way. With download mode disabled, a returned bridge whose OTA path is broken cannot be
-   reflashed at all (rollback should prevent that state). With it enabled, esptool over the pads
-   can only write flash the chip then decrypts into garbage or rejects (secure boot), so the risk
-   is low; ESP32 (unlike S2/S3/C3) has no "secure download mode" in between. Enabled makes RMA
-   repairs possible; disabled is the stricter story for EN 18031.
+4. **ROM download mode disabled** (`CONFIG_SECURE_DISABLE_ROM_DL_MODE`, decided 2026-10-19).
+   Keeping it would not help repairs: release-mode flash encryption already turns off the ROM
+   loader's encrypted writes, so anything esptool writes over the pads is decrypted by the chip
+   into garbage, and the per-chip key cannot be read to pre-encrypt an image. A production bridge
+   is therefore repaired through the app only: signed OTA from the pod, rollback, and the factory
+   image (FACTORY button at power-up). Disabling the ROM loader costs nothing on top and removes
+   what it still exposes (eFuse reads, a target for glitching). ESP32 (unlike S2/S3/C3) has no
+   "secure download mode" in between. Development builds keep it, for flashing and recovery.
 
 JTAG is disabled by secure boot and flash encryption release mode (default Kconfig).
 
