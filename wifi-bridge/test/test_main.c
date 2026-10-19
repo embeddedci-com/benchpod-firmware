@@ -1,12 +1,14 @@
 // Host unit tests for bridge_core: protocol codec, forwarding rules, helpers.
 // Build and run: make -C test   (any C11 compiler; no ESP-IDF needed)
 // `./build/test_bridge --dump` prints the example frames used in docs/PROTOCOL.md.
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "bridge_util.h"
 #include "bwp.h"
+#include "bwp_crypto.h"
 #include "hmac_sha256.h"
 #include "l2fwd.h"
 #include "pairing.h"
@@ -251,37 +253,130 @@ static void test_scan_result(void)
     CHECK(count == BWP_SCAN_MAX_APS);  // capped at 20
 }
 
+static const uint8_t SEAL_NONCE[BWP_SEAL_NONCE_LEN] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+                                                        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24};
+
+static bool contains(const uint8_t *hay, size_t n, const char *needle)
+{
+    size_t k = strlen(needle);
+    for (size_t i = 0; i + k <= n; i++) {
+        if (memcmp(hay + i, needle, k) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void put_sealed(bwp_writer_t *w, const uint8_t *key, const char *pass)
+{
+    uint8_t sealed[BWP_SEALED_PASS_LEN];
+    CHECK(bwp_seal_passphrase(key, SEAL_NONCE, pass, sealed) == 0);
+    bwp_put(w, BWP_T_ENC_PASSPHRASE, sealed, sizeof(sealed));
+}
+
 static void test_set_wifi(void)
 {
     uint8_t buf[BWP_MAX_FRAME];
     bwp_writer_t w;
     bwp_msg_t m;
     bwp_set_wifi_t sw;
+    uint8_t key[BWP_KEY_LEN], other[BWP_KEY_LEN];
+    memset(key, 0x42, sizeof(key));
+    memset(other, 0x43, sizeof(other));
 
+    bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
+    bwp_put_str(&w, BWP_T_SSID, "lab net");
+    put_sealed(&w, key, "correct horse");
+    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK);
+    CHECK(bwp_parse_set_wifi(&m, key, &sw) == BWP_OK);
+    CHECK(strcmp(sw.ssid, "lab net") == 0 && sw.ssid_len == 7 && strcmp(sw.passphrase, "correct horse") == 0);
+    CHECK(bwp_parse_set_wifi(&m, other, &sw) == BWP_E_BAD_REQUEST && sw.passphrase[0] == 0);  // wrong key
+    CHECK(bwp_parse_set_wifi(&m, NULL, &sw) == BWP_E_BAD_REQUEST);                            // not paired
+    // The plaintext is not in the frame.
+    CHECK(!contains(buf, sizeof(buf), "correct horse"));
+
+    // A cleartext passphrase is refused, whatever it is.
     bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
     bwp_put_str(&w, BWP_T_SSID, "lab net");
     bwp_put_str(&w, BWP_T_PASSPHRASE, "correct horse");
     CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK);
-    CHECK(bwp_parse_set_wifi(&m, &sw) == BWP_OK);
-    CHECK(strcmp(sw.ssid, "lab net") == 0 && sw.ssid_len == 7 && strcmp(sw.passphrase, "correct horse") == 0);
+    CHECK(bwp_parse_set_wifi(&m, key, &sw) == BWP_E_BAD_REQUEST);
 
     // Open network: no passphrase TLV.
     bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
     bwp_put_str(&w, BWP_T_SSID, "guest");
     CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK);
-    CHECK(bwp_parse_set_wifi(&m, &sw) == BWP_OK && sw.passphrase[0] == 0);
+    CHECK(bwp_parse_set_wifi(&m, key, &sw) == BWP_OK && sw.passphrase[0] == 0);
 
-    // Missing SSID, too long SSID, short passphrase.
+    // Missing SSID, too long SSID, short passphrase (sealed but invalid), truncated seal.
     bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
-    bwp_put_str(&w, BWP_T_PASSPHRASE, "12345678");
-    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, &sw) == BWP_E_BAD_REQUEST);
+    put_sealed(&w, key, "12345678");
+    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, key, &sw) == BWP_E_BAD_REQUEST);
     bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
     bwp_put_str(&w, BWP_T_SSID, "123456789012345678901234567890123");
-    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, &sw) == BWP_E_BAD_REQUEST);
+    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, key, &sw) == BWP_E_BAD_REQUEST);
     bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
     bwp_put_str(&w, BWP_T_SSID, "x");
-    bwp_put_str(&w, BWP_T_PASSPHRASE, "short");
-    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, &sw) == BWP_E_BAD_REQUEST);
+    put_sealed(&w, key, "short");
+    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, key, &sw) == BWP_E_BAD_REQUEST);
+    uint8_t sealed[BWP_SEALED_PASS_LEN];
+    bwp_seal_passphrase(key, SEAL_NONCE, "correct horse", sealed);
+    bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 5);
+    bwp_put_str(&w, BWP_T_SSID, "x");
+    bwp_put(&w, BWP_T_ENC_PASSPHRASE, sealed, sizeof(sealed) - 1);
+    CHECK(bwp_parse(buf, bwp_finish(&w), &m) == BWP_PARSE_OK && bwp_parse_set_wifi(&m, key, &sw) == BWP_E_BAD_REQUEST);
+}
+
+static void unhex32(const char *h, uint8_t out[32])
+{
+    CHECK(unhex(h, out) == 32);
+}
+
+static void test_crypto(void)
+{
+    // RFC 7748 section 6.1.
+    uint8_t a_sk[32], b_sk[32], a_pk[32], b_pk[32], want[32], shared[32];
+    unhex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a", a_sk);
+    unhex32("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb", b_sk);
+    bwp_x25519_public(a_sk, a_pk);
+    bwp_x25519_public(b_sk, b_pk);
+    unhex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a", want);
+    CHECK(memcmp(a_pk, want, 32) == 0);
+    unhex32("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f", want);
+    CHECK(memcmp(b_pk, want, 32) == 0);
+
+    // Both sides get the same pairing key; it depends on both public keys.
+    uint8_t k_pod[32], k_bridge[32], k_other[32];
+    CHECK(bwp_pair_key(a_sk, b_pk, a_pk, b_pk, k_pod) == 0);
+    CHECK(bwp_pair_key(b_sk, a_pk, a_pk, b_pk, k_bridge) == 0);
+    CHECK(memcmp(k_pod, k_bridge, 32) == 0);
+    CHECK(bwp_pair_key(a_sk, b_pk, b_pk, a_pk, k_other) == 0 && memcmp(k_pod, k_other, 32) != 0);
+    (void)shared;
+    // A low-order (all-zero) peer key is refused.
+    static const uint8_t zero[32];
+    CHECK(bwp_pair_key(a_sk, zero, a_pk, zero, k_other) == -1);
+    CHECK(memcmp(k_other, zero, 32) == 0);
+
+    // Seal/open: fixed length whatever the passphrase, different nonce -> different bytes.
+    uint8_t s1[BWP_SEALED_PASS_LEN], s2[BWP_SEALED_PASS_LEN];
+    char out[65];
+    CHECK(bwp_seal_passphrase(k_pod, SEAL_NONCE, "secret12", s1) == 0);
+    CHECK(bwp_open_passphrase(k_bridge, s1, sizeof(s1), out) == 8 && strcmp(out, "secret12") == 0);
+    uint8_t n2[BWP_SEAL_NONCE_LEN];
+    memcpy(n2, SEAL_NONCE, sizeof(n2));
+    n2[0] ^= 1;
+    CHECK(bwp_seal_passphrase(k_pod, n2, "secret12", s2) == 0);
+    CHECK(memcmp(s1 + BWP_SEAL_NONCE_LEN, s2 + BWP_SEAL_NONCE_LEN, BWP_PASS_BLOCK) != 0);
+    char p64[65];
+    memset(p64, 'a', 64);
+    p64[64] = 0;
+    CHECK(bwp_seal_passphrase(k_pod, SEAL_NONCE, p64, s2) == 0);
+    CHECK(bwp_open_passphrase(k_pod, s2, sizeof(s2), out) == 64 && strcmp(out, p64) == 0);
+    char p65[66];
+    memset(p65, 'a', 65);
+    p65[65] = 0;
+    CHECK(bwp_seal_passphrase(k_pod, SEAL_NONCE, p65, s2) == -1);
+    CHECK(bwp_open_passphrase(k_pod, s1, sizeof(s1) - 1, out) == -1);
 }
 
 static void test_passphrase_rules(void)
@@ -459,7 +554,7 @@ static size_t request(uint8_t *buf, uint8_t type, const uint8_t *key, const uint
     bwp_writer_t w;
     bwp_begin(&w, buf, BWP_MAX_FRAME, BRIDGE, POD, type, (uint16_t)counter);
     if (type == BWP_PAIR) {
-        bwp_put(&w, BWP_T_KEY, KEY_B, BWP_KEY_LEN);
+        bwp_put(&w, BWP_T_PUBKEY, KEY_B, BWP_KEY_LEN);  // stands in for the pod's public key
     } else if (type == BWP_SET_WIFI) {
         bwp_put_str(&w, BWP_T_SSID, "lab");
         bwp_put_str(&w, BWP_T_PASSPHRASE, "secret12");
@@ -602,7 +697,7 @@ static void test_pairing(void)
     bwp_writer_t w;
     uint8_t f[BWP_MAX_FRAME];
     bwp_begin(&w, f, sizeof(f), BRIDGE, POD, BWP_PAIR, 1);
-    bwp_put(&w, BWP_T_KEY, KEY_B, 16);
+    bwp_put(&w, BWP_T_PUBKEY, KEY_B, 16);
     size_t n = bwp_finish(&w);
     CHECK(bwp_parse(f, n, &m) == BWP_PARSE_OK);
     CHECK(pairing_check(&p, f, &m, &authed, &c, &nk) == PAIR_BAD_KEY && !p.paired);
@@ -703,15 +798,30 @@ int main(int argc, char **argv)
         bwp_writer_t w;
         bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_SET_WIFI, 0x0102);
         bwp_put_str(&w, BWP_T_SSID, "lab");
-        bwp_put_str(&w, BWP_T_PASSPHRASE, "secret12");
+        put_sealed(&w, KEY_A, "secret12");
+        bwp_sign(&w, KEY_A, NONCE, 6);
         n = bwp_finish(&w);
-        dump("SET_WIFI", buf, n);
+        dump("SET_WIFI, key 00..1f, bridge nonce 01..08, seal nonce 01..18, counter 6", buf, n);
         n = bwp_build_result(buf, sizeof(buf), POD, BRIDGE, BWP_SET_WIFI, 0x0102, BWP_OK, NULL);
-        dump("SET_WIFI response", buf, n);
+        n = bwp_sign_frame(buf, sizeof(buf), KEY_A, NONCE, 6);
+        dump("SET_WIFI response, signed", buf, n);
         bwp_begin(&w, buf, sizeof(buf), BRIDGE, POD, BWP_CLEAR_WIFI, 0x0103);
         bwp_sign(&w, KEY_A, NONCE, 5);
         n = bwp_finish(&w);
         dump("CLEAR_WIFI signed, key 00..1f, nonce 01..08, counter 5", buf, n);
+        uint8_t pod_sk[32], br_sk[32], pod_pk[32], br_pk[32], k[32], sealed[BWP_SEALED_PASS_LEN];
+        for (int i = 0; i < 32; i++) {
+            pod_sk[i] = (uint8_t)(0x10 + i);
+            br_sk[i] = (uint8_t)(0x80 + i);
+        }
+        bwp_x25519_public(pod_sk, pod_pk);
+        bwp_x25519_public(br_sk, br_pk);
+        bwp_pair_key(pod_sk, br_pk, pod_pk, br_pk, k);
+        dump("pod public key, secret 10..2f", pod_pk, 32);
+        dump("bridge public key, secret 80..9f", br_pk, 32);
+        dump("pairing key", k, 32);
+        bwp_seal_passphrase(k, SEAL_NONCE, "secret12", sealed);
+        dump("sealed \"secret12\" under that key, nonce 01..18", sealed, sizeof(sealed));
         return 0;
     }
     test_hello();
@@ -720,6 +830,7 @@ int main(int argc, char **argv)
     test_status();
     test_scan_result();
     test_set_wifi();
+    test_crypto();
     test_passphrase_rules();
     test_learning();
     test_forwarding();

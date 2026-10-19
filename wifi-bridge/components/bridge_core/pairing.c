@@ -56,10 +56,10 @@ pair_verdict_t pairing_check(bwp_pairing_t *p, const uint8_t *frame, const bwp_m
     if (m->type == BWP_PAIR) {
         const uint8_t *k;
         uint16_t n;
-        if (!bwp_find(m->body, m->body_len, BWP_T_KEY, &k, &n) || n != BWP_KEY_LEN) {
+        if (!bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &k, &n) || n != 32) {
             return PAIR_BAD_KEY;
         }
-        *new_key = k;
+        *new_key = k;  // the pod's X25519 public key
         return PAIR_STORE_KEY;
     }
     return PAIR_ACCEPT;

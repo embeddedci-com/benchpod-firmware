@@ -51,7 +51,7 @@ enum {
     BWP_T_BRIDGE_MAC = 0x06,   // 6 bytes
     BWP_T_POD_MAC = 0x07,      // 6 bytes
     BWP_T_SSID = 0x08,         // 1..32 bytes
-    BWP_T_PASSPHRASE = 0x09,   // 0, 8..63 printable ASCII, or 64 hex digits
+    BWP_T_PASSPHRASE = 0x09,   // cleartext passphrase: refused on the wire, use ENC_PASSPHRASE
     BWP_T_CHANNEL = 0x0A,      // u8
     BWP_T_RSSI = 0x0B,         // i8, dBm
     BWP_T_BSSID = 0x0C,        // 6 bytes
@@ -66,9 +66,11 @@ enum {
     BWP_T_MESSAGE = 0x15,      // string, human-readable detail for an error
     BWP_T_FLAGS = 0x16,        // u8, BWP_F_*
     BWP_T_NONCE = 0x17,        // 8 bytes, random per boot (HELLO); part of every AUTH
-    BWP_T_KEY = 0x18,          // 32 bytes, pairing key offered by the pod (PAIR)
+    BWP_T_PUBKEY = 0x18,       // 32 bytes, X25519 public key: the pod's in PAIR, the bridge's in
+                               // the PAIR answer and in HELLO while paired
     BWP_T_COUNTER = 0x19,      // u32, request counter, strictly increasing per nonce
     BWP_T_AUTH = 0x1A,         // 16 bytes, truncated HMAC-SHA256; must be the last TLV
+    BWP_T_ENC_PASSPHRASE = 0x1B,  // 89 bytes, sealed passphrase (bwp_crypto.h)
 };
 
 #define BWP_KEY_LEN   32
@@ -222,6 +224,7 @@ typedef struct {
     uint8_t bridge_mac[6];
     uint8_t pod_mac[6];     // sent when flags has BWP_F_POD_KNOWN
     uint8_t nonce[BWP_NONCE_LEN];
+    uint8_t bridge_pub[32]; // sent when flags has BWP_F_PAIRED: the pod recomputes the key from it
 } bwp_hello_t;
 
 typedef struct {
@@ -260,8 +263,10 @@ typedef struct {
     char passphrase[65];
 } bwp_set_wifi_t;
 
-// Decodes and validates SET_WIFI. Returns BWP_OK or BWP_E_BAD_REQUEST.
-bwp_result_t bwp_parse_set_wifi(const bwp_msg_t *m, bwp_set_wifi_t *out);
+// Decodes and validates SET_WIFI. The passphrase must come sealed (ENC_PASSPHRASE) under the
+// pairing key; a cleartext PASSPHRASE TLV is refused. No passphrase at all: an open network.
+// Returns BWP_OK or BWP_E_BAD_REQUEST.
+bwp_result_t bwp_parse_set_wifi(const bwp_msg_t *m, const uint8_t key[BWP_KEY_LEN], bwp_set_wifi_t *out);
 
 // ---- Shared validation (also used by the UART console)
 
