@@ -5,8 +5,9 @@
  *
  * BenchPod v4 has no radio; a small external box bridges the pod's Ethernet port to Wi-Fi
  * (benchpod-firmware/wifi-bridge, protocol in wifi-bridge/docs/PROTOCOL.md). This module is the
- * protocol client: it tracks the bridge's HELLO, pairs with it on first contact, signs every
- * request (HMAC-SHA256, per-bridge-boot nonce, counter), retries, and polls STATUS every 10 s.
+ * protocol client: it tracks the bridge's HELLO, pairs with it on first contact (X25519: the key is
+ * computed on both sides and never sent), signs every request (HMAC-SHA256, per-bridge-boot nonce,
+ * counter), seals the Wi-Fi passphrase, retries, and polls STATUS every 10 s.
  * The frame codec and the HMAC are the bridge's own code (wifi-bridge/components/bridge_core),
  * linked into this firmware, so both ends encode the same bytes.
  *
@@ -21,6 +22,7 @@
 #include <stdint.h>
 
 #include "bwp.h"
+#include "bwp_crypto.h"
 
 #define WB_HELLO_TIMEOUT_MS   6000u   /* bridge gone after three missed HELLOs */
 #define WB_STATUS_EVERY_MS    10000u  /* background STATUS while paired */
@@ -36,8 +38,9 @@
 typedef struct {
     /* Send one Ethernet frame on the pod's wired port. */
     void (*send)(const uint8_t *frame, size_t len, void *ctx);
-    /* The pairing key for a bridge (deterministic per pod and bridge MAC). 0 = ok. */
-    int (*derive_key)(const uint8_t bridge_mac[6], uint8_t key[BWP_KEY_LEN], void *ctx);
+    /* The pod's X25519 secret for a bridge: deterministic per pod and bridge MAC, so the pairing
+       key can be recomputed after a reboot without storing it. 0 = ok. */
+    int (*derive_secret)(const uint8_t bridge_mac[6], uint8_t secret[32], void *ctx);
     void *ctx;
 } wb_io_t;
 
@@ -87,7 +90,11 @@ typedef struct {
     uint8_t mac[6];
     uint8_t nonce[BWP_NONCE_LEN];
     bool have_nonce;
-    uint8_t key[BWP_KEY_LEN];
+    uint8_t secret[32];          /* ours, for this bridge */
+    uint8_t pub[BWP_PUBKEY_LEN];
+    bool have_secret;
+    uint8_t bridge_pub[BWP_PUBKEY_LEN];
+    uint8_t key[BWP_KEY_LEN];    /* the pairing key, from X25519(secret, bridge_pub) */
     bool have_key;
     uint32_t counter;            /* last COUNTER sent with this nonce */
     uint16_t seq;
@@ -123,6 +130,10 @@ void wb_poll(wb_t *b, uint32_t now);
 /* Start a caller's request (body = TLVs, without COUNTER/AUTH). 0: started; -1: another one is in
    flight (retry shortly); -2: no bridge present; -3: not usable (not paired, see info.problem). */
 int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, uint32_t now);
+/* SET_WIFI with the passphrase sealed under the pairing key (seal_nonce: 24 fresh random bytes).
+   Same return values as wb_request; -4: SSID or passphrase invalid. */
+int wb_request_set_wifi(wb_t *b, const char *ssid, const char *pass, const uint8_t seal_nonce[BWP_SEAL_NONCE_LEN],
+                        uint32_t timeout_ms, uint32_t now);
 wb_req_state_t wb_request_state(const wb_t *b);
 const wb_reply_t *wb_request_reply(const wb_t *b);
 /* The caller has read the reply: free the slot. */

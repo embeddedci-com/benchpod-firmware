@@ -38,7 +38,8 @@ extern wb_reply_t g_wifi_bridge_reply;
 /* Snapshot of what the pod knows about the bridge (any task; refreshed by the net task every 100 ms). */
 void wifi_bridge_get_info(wb_info_t *out);
 
-/* Encoders for the request bodies the commands send. Return the TLV length, 0 if it does not fit. */
-size_t wifi_bridge_tlvs_set_wifi(uint8_t *buf, size_t cap, const char *ssid, const char *pass);
+/* SET_WIFI with the passphrase sealed under the pairing key (never sent in the clear). Same
+   contract as wifi_bridge_call; validates the SSID and passphrase first. */
+int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, const char **err);
 
 #endif /* WIFI_BRIDGE_NET_H */

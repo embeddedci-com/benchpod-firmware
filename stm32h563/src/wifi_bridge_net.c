@@ -14,6 +14,7 @@
 #include "lwip/pbuf.h"
 #include "mbedtls/sha256.h"
 #include "net_server.h"
+#include "rng.h"
 #include "stm32h5xx_hal.h"
 #include "task.h"
 #include "watchdog.h"
@@ -41,23 +42,24 @@ static void io_send(const uint8_t *frame, size_t len, void *ctx)
     pbuf_free(p);
 }
 
-/* key = SHA-256(Ed25519 signature of the bridge MAC under DEVICE_ID_CTX_WIFI_BRIDGE): the same
-   after every reboot, different for every bridge, and only this pod can compute it. */
-static int io_key(const uint8_t mac[6], uint8_t key[BWP_KEY_LEN], void *ctx)
+/* Our X25519 secret for a bridge = SHA-256(Ed25519 signature of the bridge MAC under
+   DEVICE_ID_CTX_WIFI_BRIDGE): the same after every reboot, different for every bridge, and only
+   this pod can compute it. With the bridge's public key (HELLO) it gives the pairing key again. */
+static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
 {
     (void)ctx;
     uint8_t sig[DEVICE_ID_SIG_LEN];
     if (device_identity_sign_ctx(DEVICE_ID_CTX_WIFI_BRIDGE, mac, 6, sig) != 0) {
         return -1;
     }
-    int r = mbedtls_sha256(sig, sizeof(sig), key, 0);
+    int r = mbedtls_sha256(sig, sizeof(sig), secret, 0);
     memset(sig, 0, sizeof(sig));
     return r == 0 ? 0 : -1;
 }
 
 void wifi_bridge_net_init(struct netif *eth)
 {
-    static const wb_io_t io = {.send = io_send, .derive_key = io_key, .ctx = NULL};
+    static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .ctx = NULL};
     s_eth = eth;
     wb_init(&s_wb, eth->hwaddr, &io);
     log_printf("[bridge] Wi-Fi bridge control channel on (dev build)\r\n");
@@ -126,6 +128,9 @@ void wifi_bridge_get_info(wb_info_t *out)
 
 /* ---- worker side: one request at a time, through net_call_sync */
 typedef struct {
+    const char *ssid;            /* set: a sealed SET_WIFI instead of type/tlvs */
+    const char *pass;
+    uint8_t seal_nonce[BWP_SEAL_NONCE_LEN];
     uint8_t type;
     const uint8_t *tlvs;
     size_t len;
@@ -138,7 +143,8 @@ typedef struct {
 static void on_net_start(void *arg)
 {
     call_t *c = arg;
-    c->rc = wb_request(&s_wb, c->type, c->tlvs, c->len, c->timeout_ms, HAL_GetTick());
+    c->rc = c->ssid ? wb_request_set_wifi(&s_wb, c->ssid, c->pass, c->seal_nonce, c->timeout_ms, HAL_GetTick())
+                    : wb_request(&s_wb, c->type, c->tlvs, c->len, c->timeout_ms, HAL_GetTick());
 }
 
 static void on_net_take(void *arg)
@@ -151,10 +157,10 @@ static void on_net_take(void *arg)
     }
 }
 
-int wifi_bridge_call(uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, wb_reply_t *out,
-                     const char **err)
+static int run_call(call_t *cp, wb_reply_t *out, const char **err)
 {
-    call_t c = {.type = type, .tlvs = tlvs, .len = len, .timeout_ms = timeout_ms, .rc = -1, .out = out};
+    call_t c = *cp;
+    uint32_t timeout_ms = c.timeout_ms;
     /* Long enough for the first pairing (a few seconds) plus every retry of this request. */
     uint32_t start = HAL_GetTick(), limit = 6000u + WB_TRIES * timeout_ms + 1000u;
     memset(out, 0, sizeof(*out));
@@ -169,6 +175,10 @@ int wifi_bridge_call(uint8_t type, const uint8_t *tlvs, size_t len, uint32_t tim
         }
         if (c.rc == -2) {
             *err = "no Wi-Fi bridge on the Ethernet port";
+            return -1;
+        }
+        if (c.rc == -4) {
+            *err = "SSID 1-32 bytes; password empty, 8-63 printable characters or 64 hex digits";
             return -1;
         }
         if (c.rc == -3) {
@@ -201,19 +211,20 @@ int wifi_bridge_call(uint8_t type, const uint8_t *tlvs, size_t len, uint32_t tim
     }
 }
 
-size_t wifi_bridge_tlvs_set_wifi(uint8_t *buf, size_t cap, const char *ssid, const char *pass)
+int wifi_bridge_call(uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, wb_reply_t *out,
+                     const char **err)
 {
-    size_t a = strlen(ssid), b = strlen(pass);
-    size_t n = 3 + a + (b ? 3 + b : 0);
-    if (a > 0xff || b > 0xff || n > cap) {
-        return 0;
+    call_t c = {.type = type, .tlvs = tlvs, .len = len, .timeout_ms = timeout_ms, .rc = -1, .out = out};
+    return run_call(&c, out, err);
+}
+
+int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, const char **err)
+{
+    call_t c = {.ssid = ssid, .pass = pass, .type = BWP_SET_WIFI, .timeout_ms = 1000, .rc = -1, .out = out};
+    if (rng_fill(c.seal_nonce, sizeof(c.seal_nonce)) != 0) {  /* a fresh nonce per message */
+        memset(out, 0, sizeof(*out));
+        *err = "no random numbers (TRNG failed)";
+        return -1;
     }
-    size_t i = 0;
-    buf[i++] = BWP_T_SSID, buf[i++] = 0, buf[i++] = (uint8_t)a;
-    memcpy(buf + i, ssid, a), i += a;
-    if (b) {
-        buf[i++] = BWP_T_PASSPHRASE, buf[i++] = 0, buf[i++] = (uint8_t)b;
-        memcpy(buf + i, pass, b), i += b;
-    }
-    return i;
+    return run_call(&c, out, err);
 }

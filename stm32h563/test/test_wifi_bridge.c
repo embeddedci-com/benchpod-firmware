@@ -4,6 +4,7 @@
    pod and bridge reboots, a bridge paired with another pod, the PAIR button, spoofed answers. */
 #include "wifi_bridge.h"
 #include "pairing.h"
+#include "bwp_crypto.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -17,8 +18,10 @@ static const uint8_t BRIDGE[6] = {0x24, 0x0a, 0xc4, 0x00, 0x00, 0x03};
 /* ---- simulated bridge (a slice of wifi-bridge/main/control.c) */
 typedef struct {
     bwp_pairing_t pair;
-    uint8_t state, nonce_seed;
+    uint8_t state, nonce_seed, key_seed;
+    uint8_t pub[32];        /* our X25519 public key from the pairing (sent in HELLO) */
     char ssid[33];
+    char pass[65];
     int drop_next;          /* swallow this many pod frames */
     int handled;            /* requests it acted on */
     uint8_t out[8][BWP_MAX_FRAME];
@@ -55,6 +58,7 @@ static void sim_hello(void)
     memcpy(h.bridge_mac, BRIDGE, 6);
     memcpy(h.pod_mac, POD, 6);
     memcpy(h.nonce, sim.pair.nonce, BWP_NONCE_LEN);
+    memcpy(h.bridge_pub, sim.pub, 32);
     sim_emit(bwp_build_hello(sim.out[sim.n_out], BWP_MAX_FRAME, POD, &h));
 }
 
@@ -89,8 +93,23 @@ static void sim_rx(const uint8_t *f, size_t len)
     sim.last_counter_seen = counter;
     size_t n;
     if (m.type == BWP_PAIR) {
-        pairing_set_key(&sim.pair, nk);
-        n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, BWP_OK, NULL);
+        /* As the bridge firmware does: a fresh key pair, the key from X25519, answer, then switch. */
+        uint8_t secret[32], pub[32], key[32];
+        memset(secret, 0x80 + ++sim.key_seed, sizeof(secret));
+        bwp_x25519_public(secret, pub);
+        CHECK(bwp_pair_key(secret, nk, nk, pub, key) == 0);
+        bwp_writer_t w;
+        bwp_begin(&w, out, BWP_MAX_FRAME, POD, BRIDGE, m.type | BWP_RESPONSE, m.seq);
+        bwp_put_u8(&w, BWP_T_RESULT, BWP_OK);
+        bwp_put(&w, BWP_T_PUBKEY, pub, 32);
+        n = bwp_finish(&w);
+        if (authed) {
+            n = bwp_sign_frame(out, BWP_MAX_FRAME, sim.pair.key, sim.pair.nonce, counter);
+        }
+        sim_emit(n);
+        pairing_set_key(&sim.pair, key);
+        memcpy(sim.pub, pub, 32);
+        return;
     } else if (m.type == BWP_STATUS) {
         bwp_status_t s = {.state = sim.state, .flags = BWP_F_PAIRED, .channel = 6, .rssi = -58, .uptime_s = 77};
         strcpy(s.ssid, sim.ssid);
@@ -98,9 +117,10 @@ static void sim_rx(const uint8_t *f, size_t len)
         n = bwp_build_status(out, BWP_MAX_FRAME, POD, BRIDGE, m.seq, &s);
     } else if (m.type == BWP_SET_WIFI) {
         bwp_set_wifi_t sw;
-        uint8_t r = bwp_parse_set_wifi(&m, &sw);
+        uint8_t r = bwp_parse_set_wifi(&m, sim.pair.key, &sw);
         if (r == BWP_OK) {
             strcpy(sim.ssid, sw.ssid);
+            strcpy(sim.pass, sw.passphrase);
             sim.state = BWP_ST_JOINING;
         }
         n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, r, r ? "bad SSID" : NULL);
@@ -120,25 +140,49 @@ static void sim_rx(const uint8_t *f, size_t len)
 /* ---- pod side */
 static wb_t pod;
 static int sent;
+static bool leaked;   /* the passphrase seen in clear in any frame the pod sent */
+
+static bool contains(const uint8_t *hay, size_t n, const char *needle)
+{
+    size_t k = strlen(needle);
+    for (size_t i = 0; i + k <= n; i++) {
+        if (memcmp(hay + i, needle, k) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 static void io_send(const uint8_t *f, size_t len, void *ctx)
 {
     (void)ctx;
     sent++;
+    if (contains(f, len, "correct horse")) {
+        leaked = true;
+    }
     sim_rx(f, len);
 }
 
-static int io_key(const uint8_t mac[6], uint8_t key[BWP_KEY_LEN], void *ctx)
+static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
 {
     uint8_t seed = *(uint8_t *)ctx;  /* stands in for the pod's device key */
-    for (int i = 0; i < BWP_KEY_LEN; i++) {
-        key[i] = (uint8_t)(mac[i % 6] ^ seed ^ i);
+    for (int i = 0; i < 32; i++) {
+        secret[i] = (uint8_t)(mac[i % 6] ^ seed ^ i);
     }
     return 0;
 }
 
 static uint8_t pod_seed = 0x5a;
-static const wb_io_t IO = {.send = io_send, .derive_key = io_key, .ctx = &pod_seed};
+static const wb_io_t IO = {.send = io_send, .derive_secret = io_secret, .ctx = &pod_seed};
+
+/* The key the pod should have: from its secret for this bridge and the bridge's public key. */
+static void expected_key(uint8_t key[32])
+{
+    uint8_t secret[32], pub[32];
+    io_secret(BRIDGE, secret, &pod_seed);
+    bwp_x25519_public(secret, pub);
+    CHECK(bwp_pair_key(secret, sim.pub, pub, sim.pub, key) == 0);
+}
 
 /* Deliver what the bridge sent, then let both sides run for `ms`. */
 static void run(uint32_t ms)
@@ -176,21 +220,22 @@ static wb_req_state_t call(uint8_t type, const uint8_t *tlvs, size_t len, uint32
     return wb_request_state(&pod);
 }
 
-static size_t set_wifi_tlvs(uint8_t *buf, const char *ssid, const char *pass)
+static wb_req_state_t call_set_wifi(const char *ssid, const char *pass)
 {
-    size_t n = 0;
-    size_t a = strlen(ssid), b = strlen(pass);
-    buf[n++] = BWP_T_SSID, buf[n++] = 0, buf[n++] = (uint8_t)a;
-    memcpy(buf + n, ssid, a), n += a;
-    buf[n++] = BWP_T_PASSPHRASE, buf[n++] = 0, buf[n++] = (uint8_t)b;
-    memcpy(buf + n, pass, b), n += b;
-    return n;
+    static const uint8_t nonce[BWP_SEAL_NONCE_LEN] = {7};
+    int r = wb_request_set_wifi(&pod, ssid, pass, nonce, 1000, now_ms);
+    if (r != 0) {
+        return WB_REQ_TIMEOUT;
+    }
+    for (int i = 0; i < 1000 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
+        run(10);
+    }
+    return wb_request_state(&pod);
 }
 
 int main(void)
 {
     wb_info_t info;
-    uint8_t t[128];
 
     memset(&sim, 0, sizeof(sim));
     sim.state = BWP_ST_CONNECTED;  /* STATUS carries RSSI only when connected */
@@ -210,22 +255,31 @@ int main(void)
     CHECK(info.present && memcmp(info.mac, BRIDGE, 6) == 0);
     CHECK(sim.pair.paired);
     uint8_t expect[BWP_KEY_LEN];
-    io_key(BRIDGE, expect, &pod_seed);
-    CHECK(memcmp(sim.pair.key, expect, BWP_KEY_LEN) == 0);
+    expected_key(expect);
+    CHECK(memcmp(sim.pair.key, expect, BWP_KEY_LEN) == 0);  /* same key on both sides, never sent */
+    CHECK(memcmp(pod.key, expect, BWP_KEY_LEN) == 0);
     CHECK(info.paired && info.problem == NULL);
     CHECK(info.have_status && info.rssi == -58 && info.counters.eth_rx == 1234);
     CHECK(strcmp(info.fw_version, "0.1.0") == 0);
 
-    /* A caller's SET_WIFI: signed, answered, and the signed answer is accepted. */
-    size_t n = set_wifi_tlvs(t, "lab net", "correct horse");
-    CHECK(call(BWP_SET_WIFI, t, n, 1000) == WB_REQ_DONE);
+    /* A caller's SET_WIFI: signed, the passphrase sealed, answered, the signed answer accepted. */
+    CHECK(call_set_wifi("lab net", "correct horse") == WB_REQ_DONE);
     CHECK(wb_request_reply(&pod)->result == BWP_OK);
-    CHECK(strcmp(sim.ssid, "lab net") == 0);
+    CHECK(strcmp(sim.ssid, "lab net") == 0 && strcmp(sim.pass, "correct horse") == 0);
+    CHECK(!leaked);
+    wb_request_release(&pod);
+    CHECK(call_set_wifi("guest", "") == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    CHECK(sim.pass[0] == 0);
     wb_request_release(&pod);
 
+    /* Invalid SSID or passphrase: refused before anything is sent. */
+    static const uint8_t nonce0[BWP_SEAL_NONCE_LEN];
+    CHECK(wb_request_set_wifi(&pod, "", "correct horse", nonce0, 1000, now_ms) == -4);
+    CHECK(wb_request_set_wifi(&pod, "lab", "short", nonce0, 1000, now_ms) == -4);
+
     /* A bad request comes back as the bridge's error, still signed. */
-    n = set_wifi_tlvs(t, "", "x");
-    CHECK(call(BWP_SET_WIFI, t, n, 1000) == WB_REQ_DONE);
+    static const uint8_t bad[] = {BWP_T_SSID, 0, 0};
+    CHECK(call(BWP_SET_WIFI, bad, sizeof(bad), 1000) == WB_REQ_DONE);
     CHECK(wb_request_reply(&pod)->result == BWP_E_BAD_REQUEST);
     CHECK(strcmp(wb_request_reply(&pod)->message, "bad SSID") == 0);
     wb_request_release(&pod);
@@ -289,9 +343,12 @@ int main(void)
 
     /* PAIR pressed on the bridge: HELLO without the paired flag -> the pod pairs again. */
     pairing_forget(&sim.pair);
+    memset(sim.pub, 0, sizeof(sim.pub));
     run(2100);
     run(6000);
+    expected_key(expect);  /* a new pairing: new bridge key pair, new key */
     CHECK(sim.pair.paired && memcmp(sim.pair.key, expect, BWP_KEY_LEN) == 0);
+    CHECK(memcmp(pod.key, expect, BWP_KEY_LEN) == 0);
     CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     wb_request_release(&pod);
 
@@ -307,6 +364,7 @@ int main(void)
     CHECK(!info.paired && info.problem != NULL);
     /* ...until PAIR is pressed there. */
     pairing_forget(&sim.pair);
+    memset(sim.pub, 0, sizeof(sim.pub));
     run(8000);
     wb_get_info(&pod, now_ms, &info);
     CHECK(info.paired && info.problem == NULL && sim.pair.paired);

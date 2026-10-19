@@ -288,7 +288,7 @@ ifeq ($(WIFI_BRIDGE),1)
 DEFS      += -DBENCHPOD_WIFI_BRIDGE=1
 INCLUDES  += -I$(BRIDGE_CORE)/include
 C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c \
-             $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c
+             $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c
 endif
 
 OPT := -Og -g3

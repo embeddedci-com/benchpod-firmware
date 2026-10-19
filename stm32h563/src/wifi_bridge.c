@@ -93,8 +93,10 @@ static void forget_bridge(wb_t *b)
     b->seen = false;
     b->have_nonce = false;
     b->have_key = false;
+    b->have_secret = false;
     b->counter = 0;
     memset(b->key, 0, sizeof(b->key));
+    memset(b->secret, 0, sizeof(b->secret));
     memset(&b->info, 0, sizeof(b->info));
 }
 
@@ -111,13 +113,27 @@ static void copy_str(const bwp_msg_t *m, uint8_t tag, char *out, size_t cap)
     }
 }
 
+/* The pairing key from the bridge's public key (from its PAIR answer or HELLO). If the bridge
+   paired with another pod, this key is simply wrong and its requests get AUTH refusals. */
+static void learn_bridge_pub(wb_t *b, const uint8_t pub[BWP_PUBKEY_LEN])
+{
+    if (!b->have_secret || (b->have_key && memcmp(pub, b->bridge_pub, BWP_PUBKEY_LEN) == 0)) {
+        return;
+    }
+    memcpy(b->bridge_pub, pub, BWP_PUBKEY_LEN);
+    b->have_key = bwp_pair_key(b->secret, pub, b->pub, pub, b->key) == 0;
+}
+
 static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
 {
     if (!b->seen || memcmp(m->src, b->mac, 6) != 0) {
         forget_bridge(b);  /* a different bridge: new key, new counter */
         memcpy(b->mac, m->src, 6);
-        b->have_key = b->io.derive_key(b->mac, b->key, b->io.ctx) == 0;
-        b->info.problem = b->have_key ? NULL : "no device identity on this pod: cannot pair";
+        b->have_secret = b->io.derive_secret(b->mac, b->secret, b->io.ctx) == 0;
+        if (b->have_secret) {
+            bwp_x25519_public(b->secret, b->pub);
+        }
+        b->info.problem = b->have_secret ? NULL : "no device identity on this pod: cannot pair";
         b->next_pair = now;
         b->next_status = now;
     }
@@ -138,6 +154,9 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
     copy_str(m, BWP_T_HW_REV, b->info.hw_rev, sizeof(b->info.hw_rev));
     if (!bridge_paired(b)) {
         b->info.paired = false;  /* PAIR pressed, factory reset or a new bridge: we pair again */
+        b->have_key = false;
+    } else if (bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) && n == BWP_PUBKEY_LEN) {
+        learn_bridge_pub(b, v);  /* after our reboot, or the bridge was paired by another pod */
     }
 }
 
@@ -251,9 +270,14 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
         break;
     case BWP_OK:
         if (b->req_type == BWP_PAIR) {
+            if (!bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) || n != BWP_PUBKEY_LEN) {
+                break;  /* no public key in the answer: try again later */
+            }
+            b->have_key = false;
+            learn_bridge_pub(b, v);
             b->info.flags |= BWP_F_PAIRED;
-            b->info.paired = true;
-            b->info.problem = NULL;
+            b->info.paired = b->have_key;
+            b->info.problem = b->have_key ? NULL : "the bridge sent a bad public key";
             b->next_status = now;
         } else if (b->req_type == BWP_STATUS) {
             parse_status(b, m, now);
@@ -325,18 +349,17 @@ void wb_poll(wb_t *b, uint32_t now)
         }
         return;
     }
-    if (b->req_state != WB_REQ_IDLE || !here || !b->have_key || !b->have_nonce) {
+    if (b->req_state != WB_REQ_IDLE || !here || !b->have_secret || !b->have_nonce) {
         return;
     }
     if (!bridge_paired(b)) {
         if ((int32_t)(now - b->next_pair) >= 0) {
-            uint8_t t[3 + BWP_KEY_LEN] = {BWP_T_KEY, 0, BWP_KEY_LEN};
-            memcpy(t + 3, b->key, BWP_KEY_LEN);
+            uint8_t t[3 + BWP_PUBKEY_LEN] = {BWP_T_PUBKEY, 0, BWP_PUBKEY_LEN};
+            memcpy(t + 3, b->pub, BWP_PUBKEY_LEN);  /* public: the key itself is never sent */
             b->next_pair = now + WB_PAIR_RETRY_MS;
             start_req(b, BWP_PAIR, t, sizeof(t), 1000, true, now);
-            memset(t, 0, sizeof(t));
         }
-    } else if ((int32_t)(now - b->next_status) >= 0) {
+    } else if (b->have_key && (int32_t)(now - b->next_status) >= 0) {
         b->next_status = now + WB_STATUS_EVERY_MS;
         start_req(b, BWP_STATUS, NULL, 0, 1000, true, now);
     }
@@ -350,7 +373,7 @@ int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t 
     if (len > WB_REQ_MAX) {
         return -3;
     }
-    if (!b->have_key) {
+    if (!b->have_secret || (bridge_paired(b) && !b->have_key)) {
         return -3;  /* info.problem says why */
     }
     if (b->req_state != WB_REQ_IDLE) {
@@ -361,6 +384,33 @@ int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t 
     }
     start_req(b, type, tlvs, len, timeout_ms, false, now);
     return 0;
+}
+
+int wb_request_set_wifi(wb_t *b, const char *ssid, const char *pass, const uint8_t seal_nonce[BWP_SEAL_NONCE_LEN],
+                        uint32_t timeout_ms, uint32_t now)
+{
+    size_t a = strlen(ssid), p = strlen(pass);
+    if (!bwp_ssid_valid((const uint8_t *)ssid, a) || !bwp_passphrase_valid(pass, p)) {
+        return -4;
+    }
+    if (!present(b, now)) {
+        return -2;
+    }
+    if (!bridge_paired(b) || !b->have_key) {
+        return b->have_secret && !bridge_paired(b) ? -1 : -3;  /* pairing first: sealing needs the key */
+    }
+    uint8_t t[WB_REQ_MAX];
+    size_t n = 0;
+    t[n++] = BWP_T_SSID, t[n++] = 0, t[n++] = (uint8_t)a;
+    memcpy(t + n, ssid, a), n += a;
+    if (p) {
+        t[n++] = BWP_T_ENC_PASSPHRASE, t[n++] = 0, t[n++] = BWP_SEALED_PASS_LEN;
+        bwp_seal_passphrase(b->key, seal_nonce, pass, t + n);
+        n += BWP_SEALED_PASS_LEN;
+    }
+    int r = wb_request(b, BWP_SET_WIFI, t, n, timeout_ms, now);
+    memset(t, 0, sizeof(t));
+    return r;
 }
 
 wb_req_state_t wb_request_state(const wb_t *b)

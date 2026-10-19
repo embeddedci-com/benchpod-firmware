@@ -426,15 +426,8 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
     }
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_present()) {   /* the bridge box keeps the credentials, not the pod */
-        uint8_t t[WB_REQ_MAX];
-        size_t n = wifi_bridge_tlvs_set_wifi(t, sizeof(t), cfg.ssid, cfg.password);
-        const char *err = "the SSID or password does not fit";
-        int rc = (n && bwp_passphrase_valid(cfg.password, strlen(cfg.password)) &&
-                  bwp_ssid_valid((const uint8_t *)cfg.ssid, strlen(cfg.ssid)))
-                     ? wifi_bridge_call(BWP_SET_WIFI, t, n, 1000, &g_wifi_bridge_reply, &err) : -1;
-        if (n && rc == -1 && !strcmp(err, "the SSID or password does not fit"))
-            err = "SSID 1-32 bytes; password empty, 8-63 printable characters or 64 hex digits";
-        memset(t, 0, sizeof(t));
+        const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
+        int rc = wifi_bridge_set_wifi(cfg.ssid, cfg.password, &g_wifi_bridge_reply, &err);
         memset(cfg.password, 0, sizeof(cfg.password));
         if (bridge_failed(out, ctx, "wifi-set", rc, err)) return;
         op(out, ctx, "[cfg] credentials written to flash\r\n");   /* the marker benchpod-cli waits for */

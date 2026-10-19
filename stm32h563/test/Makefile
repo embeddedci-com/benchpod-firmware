@@ -49,7 +49,8 @@ LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 # Wi-Fi bridge client, tested against the bridge firmware's own codec and pairing logic.
 BRIDGE_CORE := ../../wifi-bridge/components/bridge_core
-WIFIBRIDGE_SRCS := test_wifi_bridge.c ../src/wifi_bridge.c $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/pairing.c
+WIFIBRIDGE_SRCS := test_wifi_bridge.c ../src/wifi_bridge.c $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/pairing.c \
+                   $(BRIDGE_CORE)/bwp_crypto.c ../lib/monocypher/src/monocypher.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
 # hw_worker.c is #included by its test; shim_worker has the FreeRTOS + HAL headers it needs.
@@ -262,7 +263,7 @@ build/test_eth_diag: $(ETHDIAG_SRCS)
 
 build/test_wifi_bridge: $(WIFIBRIDGE_SRCS) ../src/wifi_bridge.h $(wildcard $(BRIDGE_CORE)/include/*.h)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -I$(BRIDGE_CORE)/include $(WIFIBRIDGE_SRCS) -o $@
+	$(CC) $(CFLAGS) -I$(BRIDGE_CORE)/include -I../lib/monocypher/src $(WIFIBRIDGE_SRCS) -o $@
 
 build/test_power_profile: $(PWRPROF_SRCS)
 	@mkdir -p build

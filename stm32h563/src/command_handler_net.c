@@ -47,19 +47,8 @@ static void bridge_send_error(int conn_id, const char *err, const wb_reply_t *r)
 /* true when a bridge took the request (a reply has been sent either way). */
 static bool bridge_wifi_set(int conn_id, const char *ssid, const char *pass) {
     if (!wifi_bridge_present()) return false;
-    if (!bwp_ssid_valid((const uint8_t *)ssid, strlen(ssid))) {
-        send_error(conn_id, "Wi-Fi bridge: the SSID must be 1-32 bytes"); return true;
-    }
-    if (!bwp_passphrase_valid(pass, strlen(pass))) {
-        send_error(conn_id, "Wi-Fi bridge: the password must be empty, 8-63 printable characters or 64 hex digits");
-        return true;
-    }
-    uint8_t t[WB_REQ_MAX];
-    size_t n = wifi_bridge_tlvs_set_wifi(t, sizeof(t), ssid, pass);
-    const char *err = NULL;
-    int rc = n ? wifi_bridge_call(BWP_SET_WIFI, t, n, 1000, &g_wifi_bridge_reply, &err) : -1;
-    memset(t, 0, sizeof(t));
-    if (!n) err = "the SSID or password does not fit";
+    const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
+    int rc = wifi_bridge_set_wifi(ssid, pass, &g_wifi_bridge_reply, &err);
     if (rc != 0 || g_wifi_bridge_reply.result != BWP_OK) { bridge_send_error(conn_id, rc ? err : NULL, &g_wifi_bridge_reply); return true; }
     char resp[160];
     bp_emit_t e;
