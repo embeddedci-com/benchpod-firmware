@@ -13,9 +13,11 @@ the "pod" MAC, so the machine also gets its network through the bridge.
     sudo ./bridgectl.py -i eth0 clear-wifi | reboot | factory-reset
     sudo ./bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
 
-Pairing: an unpaired bridge trusts the first key it is offered; after that every request is
-signed (HMAC-SHA256) with that key and the bridge's per-boot nonce from HELLO. The key and the
-request counter are kept in --state (default ~/.config/benchpod-bridge/<bridge MAC>.json).
+Pairing: an unpaired bridge pairs with the first device that sends PAIR. Both sides compute the
+key with X25519 (it is never sent); after that every request is signed (HMAC-SHA256) with it and
+the bridge's per-boot nonce from HELLO, and set-wifi seals the passphrase (XChaCha20). The secret,
+the key and the request counter are kept in --state (default ~/.config/benchpod-bridge/<MAC>.json).
+The crypto is pure Python (no packages), checked against the C code in test_bridgectl.py.
 
 Linux only (AF_PACKET), needs root or CAP_NET_RAW. The codec has no such requirement and is
 unit-tested in test_bridgectl.py.
@@ -43,7 +45,7 @@ PAIR = 0x0C
 T_RESULT, T_MODEL, T_FW_VERSION, T_HW_REV, T_STATE, T_BRIDGE_MAC, T_POD_MAC = 1, 2, 3, 4, 5, 6, 7
 T_SSID, T_PASSPHRASE, T_CHANNEL, T_RSSI, T_BSSID, T_AUTHMODE, T_AP = 8, 9, 10, 11, 12, 13, 14
 T_IMAGE_SIZE, T_OFFSET, T_DATA, T_UPTIME, T_REASON, T_COUNTERS, T_MESSAGE, T_FLAGS = 15, 16, 17, 18, 19, 20, 21, 22
-T_NONCE, T_KEY, T_COUNTER, T_AUTH = 0x17, 0x18, 0x19, 0x1A
+T_NONCE, T_PUBKEY, T_COUNTER, T_AUTH, T_ENC_PASSPHRASE = 0x17, 0x18, 0x19, 0x1A, 0x1B
 F_PAIRED = 0x20
 
 STATES = ["unconfigured", "wait-pod", "joining", "connected", "auth-failed", "no-ap"]
@@ -65,6 +67,89 @@ def encode(dst, src, mtype, seq, tlvs=b""):
     frame = dst + src + struct.pack(">H", ETHERTYPE) + MAGIC + struct.pack(">BBHH", VERSION, mtype, seq, len(tlvs))
     frame += tlvs
     return frame.ljust(60, b"\0")
+
+
+# ---- crypto, matching components/bridge_core/bwp_crypto.c (Monocypher 4.0.2)
+
+_P = 2 ** 255 - 19
+
+
+def x25519(k, u):
+    """RFC 7748 X25519 scalar multiplication."""
+    k = bytearray(k)
+    k[0] &= 248
+    k[31] &= 127
+    k[31] |= 64
+    k = int.from_bytes(k, "little")
+    x1 = int.from_bytes(u, "little") & ((1 << 255) - 1)
+    x2, z2, x3, z3, swap = 1, 0, x1, 1, 0
+    for t in reversed(range(255)):
+        kt = (k >> t) & 1
+        swap ^= kt
+        if swap:
+            x2, x3, z2, z3 = x3, x2, z3, z2
+        swap = kt
+        a, b = (x2 + z2) % _P, (x2 - z2) % _P
+        aa, bb = a * a % _P, b * b % _P
+        e = (aa - bb) % _P
+        c, d = (x3 + z3) % _P, (x3 - z3) % _P
+        da, cb = d * a % _P, c * b % _P
+        x3, z3 = (da + cb) ** 2 % _P, x1 * (da - cb) ** 2 % _P
+        x2, z2 = aa * bb % _P, e * (aa + 121665 * e) % _P
+    if swap:
+        x2, z2 = x3, z3
+    return (x2 * pow(z2, _P - 2, _P) % _P).to_bytes(32, "little")
+
+
+def x25519_public(secret):
+    return x25519(secret, (9).to_bytes(32, "little"))
+
+
+def pair_key(my_secret, peer_pub, pod_pub, bridge_pub):
+    shared = x25519(my_secret, peer_pub)
+    if shared == bytes(32):
+        raise ValueError("bad public key")
+    return hashlib.blake2b(b"BWP pairing v1" + pod_pub + bridge_pub, digest_size=32, key=shared).digest()
+
+
+def _rounds(st):
+    def qr(a, b, c, d):
+        st[a] = (st[a] + st[b]) & 0xFFFFFFFF; st[d] ^= st[a]; st[d] = ((st[d] << 16) | (st[d] >> 16)) & 0xFFFFFFFF
+        st[c] = (st[c] + st[d]) & 0xFFFFFFFF; st[b] ^= st[c]; st[b] = ((st[b] << 12) | (st[b] >> 20)) & 0xFFFFFFFF
+        st[a] = (st[a] + st[b]) & 0xFFFFFFFF; st[d] ^= st[a]; st[d] = ((st[d] << 8) | (st[d] >> 24)) & 0xFFFFFFFF
+        st[c] = (st[c] + st[d]) & 0xFFFFFFFF; st[b] ^= st[c]; st[b] = ((st[b] << 7) | (st[b] >> 25)) & 0xFFFFFFFF
+    for _ in range(10):
+        qr(0, 4, 8, 12); qr(1, 5, 9, 13); qr(2, 6, 10, 14); qr(3, 7, 11, 15)
+        qr(0, 5, 10, 15); qr(1, 6, 11, 12); qr(2, 7, 8, 13); qr(3, 4, 9, 14)
+
+
+_SIGMA = struct.unpack("<4I", b"expand 32-byte k")
+
+
+def xchacha20(key, nonce24, data):
+    """XChaCha20 as Monocypher's crypto_chacha20_x: HChaCha20 sub-key, then ChaCha20 (djb, 64-bit counter)."""
+    st = list(_SIGMA) + list(struct.unpack("<8I", key)) + list(struct.unpack("<4I", nonce24[:16]))
+    _rounds(st)
+    sub = struct.pack("<8I", *(st[0:4] + st[12:16]))
+    out = bytearray()
+    for blk in range((len(data) + 63) // 64):
+        init = list(_SIGMA) + list(struct.unpack("<8I", sub)) + [blk & 0xFFFFFFFF, blk >> 32] + \
+            list(struct.unpack("<2I", nonce24[16:24]))
+        st = init[:]
+        _rounds(st)
+        ks = struct.pack("<16I", *((x + y) & 0xFFFFFFFF for x, y in zip(st, init)))
+        chunk = data[blk * 64:(blk + 1) * 64]
+        out += bytes(c ^ k for c, k in zip(chunk, ks))
+    return bytes(out)
+
+
+def seal_passphrase(key, nonce24, passphrase):
+    """ENC_PASSPHRASE: nonce || XChaCha20(BLAKE2b(key, "BWP passphrase v1"), [len, pass, zeros])."""
+    p = passphrase.encode() if isinstance(passphrase, str) else passphrase
+    if len(p) > 64:
+        raise ValueError("passphrase longer than 64 bytes")
+    k = hashlib.blake2b(b"BWP passphrase v1", digest_size=32, key=key).digest()
+    return nonce24 + xchacha20(k, nonce24, (bytes([len(p)]) + p).ljust(65, b"\0"))
 
 
 def auth_tag(key, nonce, signed_part):
@@ -159,7 +244,7 @@ def describe(msg):
 
 
 class State:
-    """Pairing key and request counter for one bridge, in a small JSON file."""
+    """Our X25519 secret, the pairing key and the request counter for one bridge, in a JSON file."""
 
     def __init__(self, path):
         self.path = path
@@ -168,9 +253,17 @@ class State:
                 d = json.load(f)
         except FileNotFoundError:
             d = {}
-        self.key = bytes.fromhex(d["key"]) if "key" in d else None
-        self.nonce = bytes.fromhex(d.get("nonce", ""))
+        h = lambda k: bytes.fromhex(d[k]) if d.get(k) else None  # noqa: E731
+        self.secret, self.bridge_pub, self.key = h("secret"), h("bridge_pub"), h("key")
+        self.nonce = bytes.fromhex(d.get("nonce") or "")
         self.counter = d.get("counter", 0)
+
+    def learn_bridge_pub(self, pub):
+        """The bridge's public key from HELLO: recompute the key (its pairing may be newer)."""
+        if self.secret and pub and pub != self.bridge_pub:
+            self.bridge_pub = pub
+            self.key = pair_key(self.secret, pub, x25519_public(self.secret), pub)
+            self.save()
 
     def next_counter(self, nonce):
         if nonce != self.nonce:  # the bridge rebooted: a new counter sequence
@@ -183,8 +276,9 @@ class State:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
-            json.dump({"key": self.key.hex() if self.key else None, "nonce": self.nonce.hex(),
-                       "counter": self.counter}, f)
+            hx = lambda b: b.hex() if b else None  # noqa: E731
+            json.dump({"secret": hx(self.secret), "bridge_pub": hx(self.bridge_pub), "key": hx(self.key),
+                       "nonce": self.nonce.hex(), "counter": self.counter}, f)
 
 
 class Link:
@@ -195,6 +289,7 @@ class Link:
         self.bridge = None
         self.nonce = None
         self.paired = False
+        self.bridge_pub = None
         self.state = None
         self.seq = 0
 
@@ -212,6 +307,7 @@ class Link:
                     self.bridge = msg["src"]
                     self.nonce = first(msg["tlvs"], T_NONCE, self.nonce)
                     self.paired = bool(first(msg["tlvs"], T_FLAGS, b"\0")[0] & F_PAIRED)
+                    self.bridge_pub = first(msg["tlvs"], T_PUBKEY) if self.paired else None
                 msg["raw"] = raw
                 return msg
         return None
@@ -296,19 +392,23 @@ def main():
     path = a.state or os.path.expanduser(
         f"~/.config/benchpod-bridge/{mac_str(link.bridge).replace(':', '')}.json")
     link.state = State(path)
+    link.state.learn_bridge_pub(link.bridge_pub)
     if link.paired and link.state.key is None and a.command not in ("hello", "pair"):
         raise SystemExit(f"bridge is paired with another device and {path} has no key: "
                          "press PAIR on the bridge, then run `pair`")
     if a.command == "hello":
         print("\n".join(describe(hello)))
     elif a.command == "pair":
-        key = secrets.token_bytes(32)
+        secret = secrets.token_bytes(32)
+        pub = x25519_public(secret)
         # Unpaired: unsigned (trust on first use). Paired with us: signed, rotates the key.
-        msg = link.request(PAIR, tlv(T_KEY, key), sign=link.paired and link.state.key is not None)
+        msg = link.request(PAIR, tlv(T_PUBKEY, pub), sign=link.paired and link.state.key is not None)
         r, m = result_of(msg)
         if r:
             raise SystemExit(f"error: {RESULTS[r] if r < len(RESULTS) else r} {m}")
-        link.state.key, link.state.counter = key, 0
+        bpub = first(msg["tlvs"], T_PUBKEY)
+        link.state.secret, link.state.bridge_pub = secret, bpub
+        link.state.key, link.state.counter = pair_key(secret, bpub, pub, bpub), 0
         link.state.save()
         print(f"ok: paired, key in {path}")
     elif a.command == "status":
@@ -318,7 +418,11 @@ def main():
     elif a.command == "set-wifi":
         if len(a.args) not in (1, 2):
             raise SystemExit("set-wifi <ssid> [passphrase]")
-        body = tlv(T_SSID, a.args[0]) + (tlv(T_PASSPHRASE, a.args[1]) if len(a.args) == 2 else b"")
+        if not link.state.key:
+            raise SystemExit("not paired with this bridge: run `pair` first")
+        body = tlv(T_SSID, a.args[0])
+        if len(a.args) == 2 and a.args[1]:  # sealed: the passphrase never crosses the cable in clear
+            body += tlv(T_ENC_PASSPHRASE, seal_passphrase(link.state.key, secrets.token_bytes(24), a.args[1]))
         check(link.request(SET_WIFI, body))
     elif a.command == "clear-wifi":
         check(link.request(CLEAR_WIFI))

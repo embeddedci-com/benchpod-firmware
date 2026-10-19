@@ -16,7 +16,8 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | No IP stack on either port: no esp_netif, no lwIP interface, no open ports, no SoftAP code (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`), no Espressif cloud services | `main/wifi.c`, `main/eth.c`, `sdkconfig.defaults` |
 | Frames only for the one learned pod MAC; everything else dropped | `components/bridge_core/l2fwd.c` |
 | Control channel accepted only from the Ethernet port, only from the pod; never from Wi-Fi, never forwarded | `l2fwd.c`, `docs/PROTOCOL.md` |
-| Paired pod only: trust on first use, then every request and its response carry a truncated HMAC-SHA256 over a per-boot nonce and a strictly increasing counter (no replay across requests or reboots). The pairing key is stored in NVS (encrypted in production). A dedicated PAIR button, not the FACTORY button, forgets it | `components/bridge_core/pairing.c`, `main/control.c`, PROTOCOL.md "Pairing" |
+| Paired pod only: trust on first use, the key agreed with X25519 (never sent), then every request and its response carry a truncated HMAC-SHA256 over a per-boot nonce and a strictly increasing counter (no replay across requests or reboots). The pairing key is stored in NVS (encrypted in production). A dedicated PAIR button, not the FACTORY button, forgets it |
+| No secret in the clear on the cable: the Wi-Fi passphrase travels sealed (XChaCha20 under a key derived from the pairing key, padded so its length does not show); a cleartext passphrase is refused | `components/bridge_core/bwp_crypto.c` (Monocypher), PROTOCOL.md "Encrypted passphrase" | `components/bridge_core/pairing.c`, `main/control.c`, PROTOCOL.md "Pairing" |
 | Wi-Fi: no WEP or WPA1/TKIP; WPA2-PSK minimum unless the user stores no passphrase (open network); WPA3-SAE and PMF when the AP offers them | `main/wifi.c` |
 | Fixed regulatory domain (`CONFIG_BRIDGE_COUNTRY`, default `US`), no 802.11d adoption | `main/wifi.c` |
 | Passphrase is write-only: no message or console command returns it; buffers holding it are zeroed after use | `main/control.c`, `main/console.c`, `main/wifi.c` |
@@ -113,9 +114,9 @@ button reset leaves nothing bootable. Do not enable anti-rollback without redesi
 - **Vulnerability disclosure and update policy** (EN 18031 / Cyber Trust Mark paperwork): the
   repo's top-level `SECURITY.md` covers disclosure; support period still to define.
 - **Pairing is trust on first use:** a device on the cable before the pod (or right after a PAIR
-  press) could pair instead; the pod sees ALREADY_PAIRED and should tell the user. The key
-  crosses the cable once, in the clear, at pairing. Passphrases in SET_WIFI are integrity-
-  protected but not encrypted. Good enough for a point-to-point cable; for a shared switch,
-  encrypt SET_WIFI with a key derived from the pairing key.
+  press) could pair instead, or actively sit in the middle of the first pairing; the pod sees
+  ALREADY_PAIRED in the first case and should tell the user. Recording the cable is not enough:
+  the key is agreed with X25519 and the passphrase is encrypted. Closing the active case needs an
+  out-of-band check (e.g. a short code on the bridge label compared in the pod's UI): not planned.
 - None of the above has been run on a real chip: eFuse burning is irreversible, so try it on a
   sacrificial rev A board first.
