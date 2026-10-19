@@ -287,7 +287,7 @@ BRIDGE_CORE := ../wifi-bridge/components/bridge_core
 ifeq ($(WIFI_BRIDGE),1)
 DEFS      += -DBENCHPOD_WIFI_BRIDGE=1
 INCLUDES  += -I$(BRIDGE_CORE)/include
-C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c \
+C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c
 endif
 
@@ -343,10 +343,15 @@ ICE40_DEEP_BIN := ../ice40/bench_pod_fpga_vbench_pod_deep.bin
 # firmware knows which blobs it was built with.
 BLOB_DIR      := $(BUILD_DIR)/blobs
 GEN_BLOB_MANIFEST := $(BUILD_DIR)/blob_manifest_gen.h
-$(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard $(ICE40_LOOP_BIN).gwversion) $(wildcard $(ESP_SLAVE_BIN)) | $(BUILD_DIR)
+# The Wi-Fi bridge's firmware joins the blobs when a bridge build is there (../wifi-bridge/build.sh;
+# the release job builds it), in builds with the bridge client only.
+BRIDGE_BIN     ?= ../wifi-bridge/build/benchpod-wifi-bridge.bin
+BRIDGE_VERSION := $(shell sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' ../wifi-bridge/CMakeLists.txt)
+BRIDGE_BLOB_ARGS := $(if $(and $(filter 1,$(WIFI_BRIDGE)),$(wildcard $(BRIDGE_BIN))),--bridge $(BRIDGE_BIN) --bridge-version $(BRIDGE_VERSION))
+$(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard $(ICE40_LOOP_BIN).gwversion) $(wildcard $(ESP_SLAVE_BIN)) $(if $(BRIDGE_BLOB_ARGS),$(BRIDGE_BIN)) | $(BUILD_DIR)
 	@v=$$(cat $(ICE40_LOOP_BIN).gwversion 2>/dev/null); \
 	 python3 tools/blob_manifest.py --gw0 $(ICE40_LOOP_BIN) --gw1 $(ICE40_DEEP_BIN) --esp $(ESP_SLAVE_BIN) \
-	   --gw-version $${v:-0} --out-dir $(BLOB_DIR) --header $@
+	   $(BRIDGE_BLOB_ARGS) --gw-version $${v:-0} --out-dir $(BLOB_DIR) --header $@
 	@echo "blobs: $$(ls $(BLOB_DIR) | tr '\n' ' ')"
 $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
 

@@ -26,14 +26,9 @@ CONFIG_BOOTLOADER_OTA_DATA_ERASE=y
 CONFIG_BOOTLOADER_DATA_FACTORY_RESET="nvs"
 CONFIG_BOOTLOADER_HOLD_TIME_GPIO=5
 
-# Signed OTA images even on unlocked dev chips: the running app only accepts an update signed
-# with the same RSA-3072 key (secure boot v2 signature block). build.sh creates a per-checkout
-# dev key if there is none; production signs with the release key instead.
-CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
-CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
-CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
-CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
-CONFIG_SECURE_BOOT_SIGNING_KEY="keys/dev_signing_key.pem"
+# OTA images are checked by the app itself against the pod's Ed25519 signing keys (main/ota.c,
+# fw_keys_gen.h), the same keys the pod uses for its own firmware. Production adds ESP32 secure
+# boot v2 (RSA-3072, sdkconfig.defaults.production).
 
 # Wi-Fi: station only (no SoftAP code at all), credentials kept by our app in NVS only.
 CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n

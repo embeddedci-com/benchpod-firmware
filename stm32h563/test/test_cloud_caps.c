@@ -99,7 +99,9 @@ static void test_worst_case_fits(void) {
     c.adc_cal_a_uv = c.adc_cal_b_nv = LONG_MIN;
     c.current_out_min_ua = c.current_out_max_ua = LONG_MIN;
     c.board = "stm32h563-digital-v3r2";
-    c.uplink = "unknown";   /* the longest uplink name */
+    c.uplink = "wifi-bridge";   /* the longest uplink name, with its RSSI */
+    c.has_uplink_rssi = true;
+    c.uplink_rssi_dbm = -100;
     c.safe_mode = true;
     c.reset_cause = "independent-watchdog";
     c.boot_id = 0xFFFFFFFFu;
@@ -168,9 +170,16 @@ static void test_uplink(void) {
     c.uplink = "wifi";
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
     CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "wifi") == 0);
+    CHECK(!bp_json_get_top(f, "uplink_rssi_dbm", up, sizeof(up)));
     c.uplink = NULL;
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
     CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "unknown") == 0);
+    c.uplink = "wifi-bridge";   /* development builds: over Ethernet into a Wi-Fi bridge box */
+    c.has_uplink_rssi = true;
+    c.uplink_rssi_dbm = -61;
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
+    CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "wifi-bridge") == 0);
+    CHECK(bp_json_get_top(f, "uplink_rssi_dbm", up, sizeof(up)) && strcmp(up, "-61") == 0);
 }
 
 static void test_too_small_buffer(void) {

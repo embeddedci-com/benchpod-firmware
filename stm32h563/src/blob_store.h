@@ -15,7 +15,9 @@
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
  *             listings (blob_status, the console, the manifest) stop at BLOB_COUNT. Only on a
  *             W25Q of at least 7 MB.
- *   0x700000  free
+ *   0x700000  slot BRIDGE: the Wi-Fi bridge's firmware, 1 MB, with the pod's signed manifest kept
+ *             in its header sector (BLOB_EXTRA_OFF): wifi_bridge_ota.c relays both to the bridge.
+ *             Listed (blob_status, the console) only in builds with BENCHPOD_WIFI_BRIDGE.
  *
  * A slot is a 4 KB header sector followed by the data. A write erases the slot (header first,
  * so it reads as empty from that moment), programs and read-back-hashes the data, then programs
@@ -41,6 +43,9 @@ typedef enum {
     BLOB_FW = BLOB_COUNT,   /* internal: STM32 firmware copy written at OTA commit */
     BLOB_CA,                /* internal: the company CA for the cloud link (cloud_extras.h) */
     BLOB_PROXY,             /* internal: the HTTP proxy for the cloud link (cloud_extras.h) */
+    BLOB_BRIDGE,            /* the Wi-Fi bridge's firmware: a release blob in BENCHPOD_WIFI_BRIDGE
+                               builds (blob_listed), after the internal slots so their ids, stored in
+                               the W25Q headers, do not move */
     BLOB_SLOT_COUNT
 } blob_id_t;
 
@@ -49,6 +54,8 @@ typedef enum {
 #define BLOB_HDR_VERSION   1u
 #define BLOB_COMMIT_OFF    0x80u         /* commit word, inside the header sector */
 #define BLOB_COMMIT_MAGIC  0x544D4F43u   /* "COMT" */
+#define BLOB_EXTRA_OFF     0x100u        /* optional extra bytes in the header sector (a manifest) */
+#define BLOB_EXTRA_MAX     0x100u
 
 typedef struct {
     uint32_t magic;          /* BLOB_HDR_MAGIC */
@@ -72,7 +79,10 @@ typedef struct {
 uint32_t    blob_slot_base(blob_id_t id);
 uint32_t    blob_slot_capacity(blob_id_t id);    /* data bytes the slot can hold */
 const char *blob_name(blob_id_t id);             /* "gw0", "gw1", "esp" */
-int         blob_from_name(const char *name);    /* blob_id_t, or -1 */
+int         blob_from_name(const char *name);    /* blob_id_t of a listed blob, or -1 */
+/* The blobs a release carries and listings show: gw0, gw1, esp, plus bridge in
+   BENCHPOD_WIFI_BRIDGE builds. */
+bool        blob_listed(blob_id_t id);
 
 /* Read the headers into the cache. Bus held by the caller. Returns the number of slots present,
    or -1 when no usable W25Q answers (then every slot reads as empty). */
@@ -91,6 +101,12 @@ typedef int (*blob_src_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
    header. Bus held by the caller. 0 = ok; <0 = failed, slot left empty. Updates the cache. */
 int  blob_store_write(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
                       blob_src_fn src, void *ctx);
+/* The same, also keeping `extra` (<= BLOB_EXTRA_MAX bytes, e.g. the signed manifest) in the header
+   sector, written before the commit so it is there whenever the slot reads as present. */
+int  blob_store_write_ext(blob_id_t id, uint32_t len, uint32_t version, const uint8_t sha256[32],
+                          blob_src_fn src, void *ctx, const uint8_t *extra, size_t extra_len);
+/* Read those extra bytes of a present slot. Bus held. 0 = ok. */
+int  blob_store_read_extra(blob_id_t id, uint8_t *buf, size_t len);
 
 /* Empty a slot: erase its header sector, so it reads as absent from now on (and after a reboot).
    Bus held by the caller. 0 = ok. Updates the cache. */

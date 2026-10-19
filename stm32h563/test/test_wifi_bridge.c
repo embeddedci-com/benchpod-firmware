@@ -5,6 +5,9 @@
 #include "wifi_bridge.h"
 #include "pairing.h"
 #include "bwp_crypto.h"
+#include "wifi_bridge_ota.h"
+
+#include <stdlib.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +32,12 @@ typedef struct {
     int n_out;
     uint8_t last_type;
     uint32_t last_counter_seen;
+    /* OTA, as wifi-bridge/main/ota.c does it */
+    char fw[16];
+    uint8_t img[8192];
+    uint32_t ota_size, ota_next, ota_last_off, ota_last_len, ota_version;
+    bool ota_active, ota_done, refuse_begin, rollback;
+    int data_frames;
 } sim_t;
 
 static sim_t sim;
@@ -53,7 +62,7 @@ static void sim_emit(size_t n)
 
 static void sim_hello(void)
 {
-    bwp_hello_t h = {.fw_version = "0.1.0", .hw_rev = "A", .state = sim.state,
+    bwp_hello_t h = {.fw_version = sim.fw, .hw_rev = "A", .state = sim.state,
                      .flags = (uint8_t)(BWP_F_ETH_LINK | BWP_F_POD_KNOWN | (sim.pair.paired ? BWP_F_PAIRED : 0))};
     memcpy(h.bridge_mac, BRIDGE, 6);
     memcpy(h.pod_mac, POD, 6);
@@ -124,6 +133,63 @@ static void sim_rx(const uint8_t *f, size_t len)
             sim.state = BWP_ST_JOINING;
         }
         n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, r, r ? "bad SSID" : NULL);
+    } else if (m.type == BWP_OTA_BEGIN) {
+        uint32_t size = 0;
+        const uint8_t *sg;
+        uint16_t sl = 0;
+        uint8_t r = BWP_OK;
+        if (!bwp_get_u32(m.body, m.body_len, BWP_T_IMAGE_SIZE, &size) ||
+            !bwp_find(m.body, m.body_len, BWP_T_SIGNATURE, &sg, &sl) || sl != 128 || size > sizeof(sim.img)) {
+            r = BWP_E_BAD_REQUEST;
+        } else if (sim.refuse_begin) {
+            r = BWP_E_OTA_VERIFY;
+        } else {
+            sim.ota_size = size, sim.ota_next = 0, sim.ota_last_len = 0, sim.ota_active = true, sim.ota_done = false;
+            sim.ota_version = (uint32_t)sg[44] | (uint32_t)sg[45] << 8 | (uint32_t)sg[46] << 16 | (uint32_t)sg[47] << 24;
+        }
+        n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, r,
+                             r == BWP_E_OTA_VERIFY ? "signature: unknown-key" : NULL);
+    } else if (m.type == BWP_OTA_DATA) {
+        uint32_t off = 0;
+        const uint8_t *d;
+        uint16_t dl = 0;
+        uint8_t r = BWP_OK;
+        sim.data_frames++;
+        if (!bwp_get_u32(m.body, m.body_len, BWP_T_OFFSET, &off) || !bwp_find(m.body, m.body_len, BWP_T_DATA, &d, &dl)) {
+            r = BWP_E_BAD_REQUEST;
+        } else if (!sim.ota_active) {
+            r = BWP_E_OTA_NOT_STARTED;
+        } else if (sim.ota_last_len && off == sim.ota_last_off && dl == sim.ota_last_len) {
+            /* a retransmission: ack again */
+        } else if (off != sim.ota_next || off + dl > sim.ota_size) {
+            r = BWP_E_OTA_BAD_OFFSET;
+        } else {
+            memcpy(sim.img + off, d, dl);
+            sim.ota_last_off = off, sim.ota_last_len = dl, sim.ota_next += dl;
+        }
+        bwp_writer_t w;
+        bwp_begin(&w, out, BWP_MAX_FRAME, POD, BRIDGE, m.type | BWP_RESPONSE, m.seq);
+        bwp_put_u8(&w, BWP_T_RESULT, r);
+        bwp_put_u32(&w, BWP_T_OFFSET, sim.ota_next);
+        n = bwp_finish(&w);
+    } else if (m.type == BWP_OTA_END) {
+        extern uint8_t g_image[];
+        bool good = sim.ota_active && sim.ota_next == sim.ota_size && memcmp(sim.img, g_image, sim.ota_size) == 0;
+        sim.ota_active = false;
+        sim.ota_done = good;
+        n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, good ? BWP_OK : BWP_E_OTA_VERIFY, NULL);
+    } else if (m.type == BWP_REBOOT) {
+        n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, BWP_OK, NULL);
+        if (authed) {
+            n = bwp_sign_frame(out, BWP_MAX_FRAME, sim.pair.key, sim.pair.nonce, counter);
+        }
+        sim_emit(n);
+        if (sim.ota_done && !sim.rollback) {
+            wbo_version_str(sim.ota_version, sim.fw);
+        }
+        sim.ota_done = false;
+        sim_boot();
+        return;
     } else if (m.type == BWP_SCAN) {
         bwp_ap_t aps[2] = {{.ssid = "lab", .rssi = -40, .channel = 1, .authmode = 3},
                            {.ssid = "guest", .rssi = -70, .channel = 11, .authmode = 0}};
@@ -153,9 +219,19 @@ static bool contains(const uint8_t *hay, size_t n, const char *needle)
     return false;
 }
 
-static void io_send(const uint8_t *f, size_t len, void *ctx)
+static void io_send(const uint8_t *head, size_t hl, const uint8_t *body, size_t bl, const uint8_t *tail, size_t tl,
+                    void *ctx)
 {
     (void)ctx;
+    static uint8_t f[BWP_MAX_FRAME];
+    size_t len = hl + bl + tl;
+    memcpy(f, head, hl);
+    if (bl) memcpy(f + hl, body, bl);
+    if (tl) memcpy(f + hl + bl, tail, tl);
+    if (len < BWP_MIN_FRAME) {
+        memset(f + len, 0, BWP_MIN_FRAME - len);
+        len = BWP_MIN_FRAME;
+    }
     sent++;
     if (contains(f, len, "correct horse")) {
         leaked = true;
@@ -185,9 +261,14 @@ static void expected_key(uint8_t key[32])
 }
 
 /* Deliver what the bridge sent, then let both sides run for `ms`. */
+static void (*tick_hook)(void);   /* the relay, while its tests run */
+
 static void run(uint32_t ms)
 {
     for (uint32_t t = 0; t <= ms; t += 10) {
+        if (tick_hook) {
+            tick_hook();
+        }
         int n = sim.n_out;
         sim.n_out = 0;
         for (int i = 0; i < n; i++) {
@@ -233,6 +314,139 @@ static wb_req_state_t call_set_wifi(const char *ssid, const char *pass)
     return wb_request_state(&pod);
 }
 
+/* ---- the firmware relay (wifi_bridge_ota.c) against the simulated bridge */
+uint8_t g_image[5000];   /* filled in test_relay */
+static wbo_t relay;
+static wbo_image_t slot;
+static bool bus_free = true;
+
+static int ro_start(void *ctx, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms)
+{
+    (void)ctx;
+    int r = wb_request_ext(&pod, type, tlvs, len, timeout_ms, now_ms);
+    return r == 0 ? 0 : r == -1 ? -1 : -2;
+}
+
+static wb_req_state_t ro_take(void *ctx, wb_reply_t *out)
+{
+    (void)ctx;
+    wb_req_state_t st = wb_request_state(&pod);
+    if (st == WB_REQ_DONE || st == WB_REQ_TIMEOUT) {
+        *out = *wb_request_reply(&pod);
+        wb_request_release(&pod);
+    }
+    return st;
+}
+
+static int ro_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
+{
+    (void)ctx;
+    if (off + n > sizeof(g_image)) {
+        return -1;
+    }
+    memcpy(buf, g_image + off, n);
+    return 0;
+}
+
+static void relay_tick(void)
+{
+    wb_info_t i;
+    wb_get_info(&pod, now_ms, &i);
+    wbo_poll(&relay, &i, &slot, bus_free, now_ms);
+}
+
+static void test_relay(void)
+{
+    static const wbo_io_t io = {.start = ro_start, .take = ro_take, .read = ro_read, .alloc = malloc, .release = free};
+    for (size_t i = 0; i < sizeof(g_image); i++) {
+        g_image[i] = (uint8_t)(i * 7 + 3);
+    }
+    memset(&slot, 0, sizeof(slot));
+    slot.present = true;
+    slot.size = sizeof(g_image);
+    slot.version = wbo_pack_version("0.2.0");
+    memcpy(slot.manifest, "BPSG", 4);
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    slot.manifest[46] = (uint8_t)(slot.version >> 16);
+
+    sim.drop_next = 0;
+    bus_free = false;   /* the bus is busy: the update waits */
+    wb_set_link(&pod, true, now_ms);
+    static wb_reply_t reply;
+    wbo_init(&relay, &io, &reply);
+    tick_hook = relay_tick;
+    run(3000);
+    wb_info_t info;
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.present && info.paired);
+
+    CHECK(wbo_pack_version("0.1.0") == 0x000100 && wbo_pack_version("1.2.3") == 0x010203);
+    CHECK(wbo_pack_version("1.2") == 0 && wbo_pack_version("1.2.3x") == 0 && wbo_pack_version(NULL) == 0);
+
+    run(6000);
+    CHECK(relay.state == WBO_IDLE && strstr(wbo_status(&relay), "bus is busy") != NULL);
+    bus_free = true;
+
+    /* Newer image: updated on its own, one chunk lost on the way, then back with 0.2.0. */
+    sim.drop_next = 0;
+    int dropped_at = 0;
+    for (int t = 0; t < 2000 && relay.state == WBO_IDLE; t++) {
+        run(10);
+    }
+    for (int t = 0; t < 4000 && relay.state != WBO_IDLE; t++) {
+        if (relay.state == WBO_DATA && !dropped_at && relay.off >= 2048) {
+            sim.drop_next = 1;  /* lose one chunk: the client resends it */
+            dropped_at = 1;
+        }
+        run(10);
+    }
+    CHECK(dropped_at);
+    CHECK(strcmp(sim.fw, "0.2.0") == 0);
+    CHECK(memcmp(sim.img, g_image, sizeof(g_image)) == 0);
+    CHECK(strcmp(wbo_status(&relay), "updated to 0.2.0") == 0);
+    CHECK(sim.data_frames >= 5);  /* 5000 bytes in 1 KB chunks, plus the resend */
+
+    /* Same version now: nothing happens. */
+    int frames = sim.data_frames;
+    run(12000);
+    CHECK(relay.state == WBO_IDLE && sim.data_frames == frames);
+
+    /* A newer one that the bridge rolls back: failed, and not retried by itself... */
+    slot.version = wbo_pack_version("0.3.0");
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    sim.rollback = true;
+    run(30000);
+    CHECK(relay.state == WBO_WAIT_BACK);
+    run(WBO_COME_BACK_MS + 6000);
+    CHECK(relay.state == WBO_IDLE && strcmp(sim.fw, "0.2.0") == 0);
+    CHECK(strstr(wbo_status(&relay), "update to 0.3.0 failed: the bridge came back with its old firmware") != NULL);
+    frames = sim.data_frames;
+    run(12000);
+    CHECK(sim.data_frames == frames);
+    /* ...until forced: then it works. */
+    sim.rollback = false;
+    wbo_force(&relay);
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.3.0") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.3.0") == 0 && strcmp(wbo_status(&relay), "updated to 0.3.0") == 0);
+
+    /* The bridge refuses the manifest: failed with its reason. */
+    slot.version = wbo_pack_version("0.4.0");
+    sim.refuse_begin = true;
+    run(12000);
+    CHECK(strstr(wbo_status(&relay), "update to 0.4.0 failed: ota-verify: signature: unknown-key") != NULL);
+    CHECK(strcmp(sim.fw, "0.3.0") == 0);
+    sim.refuse_begin = false;
+
+    /* Forced without a bridge: says why. */
+    wb_set_link(&pod, false, now_ms);
+    wbo_force(&relay);
+    run(100);
+    CHECK(strstr(wbo_status(&relay), "cannot update: no Wi-Fi bridge") != NULL);
+    tick_hook = NULL;
+}
+
 int main(void)
 {
     wb_info_t info;
@@ -240,6 +454,7 @@ int main(void)
     memset(&sim, 0, sizeof(sim));
     sim.state = BWP_ST_CONNECTED;  /* STATUS carries RSSI only when connected */
     strcpy(sim.ssid, "old net");
+    strcpy(sim.fw, "0.1.0");
     sim_boot();
     wb_init(&pod, POD, &IO);
     wb_set_link(&pod, true, now_ms);
@@ -388,6 +603,8 @@ int main(void)
     wb_set_link(&pod, false, now_ms);
     wb_get_info(&pod, now_ms, &info);
     CHECK(!info.present);
+
+    test_relay();
 
     CHECK(strcmp(wb_state_str(BWP_ST_CONNECTED), "connected") == 0);
     CHECK(strcmp(wb_result_str(BWP_E_ALREADY_PAIRED), "already-paired") == 0);

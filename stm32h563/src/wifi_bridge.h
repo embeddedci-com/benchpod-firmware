@@ -30,14 +30,16 @@
 #define WB_TRIES              3       /* sends per request (each re-signed with a new counter) */
 #define WB_MSG_MAX            64
 #define WB_SCAN_MAX           BWP_SCAN_MAX_APS
-/* Request bodies the pod sends today: SET_WIFI is the largest (3+32 + 3+64 bytes). OTA relay
-   (1024-byte chunks) needs this raised; RAM is tight on the STM32 (see the Makefile size). */
+/* Small request bodies (PAIR, SET_WIFI...) are copied into the client; larger ones (OTA_BEGIN with
+   its manifest, 1 KB OTA_DATA) are borrowed from the caller (wb_request_ext), so RAM stays low. */
 #define WB_REQ_MAX            128
-#define WB_TX_MAX             (BWP_ETH_HDR_LEN + BWP_HDR_LEN + WB_REQ_MAX + 7 + 3 + BWP_AUTH_LEN)
+#define WB_TRAILER_LEN        (7 + 3 + BWP_AUTH_LEN)   /* COUNTER + AUTH */
+#define WB_BODY_MAX           (BWP_MAX_BODY - WB_TRAILER_LEN)
 
 typedef struct {
-    /* Send one Ethernet frame on the pod's wired port. */
-    void (*send)(const uint8_t *frame, size_t len, void *ctx);
+    /* Send one Ethernet frame on the pod's wired port: head || body || tail, zero-padded to 60. */
+    void (*send)(const uint8_t *head, size_t head_len, const uint8_t *body, size_t body_len,
+                 const uint8_t *tail, size_t tail_len, void *ctx);
     /* The pod's X25519 secret for a bridge: deterministic per pod and bridge MAC, so the pairing
        key can be recomputed after a reboot without storing it. 0 = ok. */
     int (*derive_secret)(const uint8_t bridge_mac[6], uint8_t secret[32], void *ctx);
@@ -111,13 +113,13 @@ typedef struct {
     uint32_t req_counter;        /* counter of the latest send (to check the signed reply) */
     bool req_signed;
     uint8_t req_tlvs[WB_REQ_MAX];
+    const uint8_t *req_ext;      /* borrowed body (wb_request_ext), NULL: req_tlvs */
     uint16_t req_len;
     uint32_t req_timeout;
     uint32_t req_sent;
     uint8_t req_tries;
     bool req_resynced;           /* already retried after a REPLAY resync */
     wb_reply_t reply;
-    uint8_t tx[WB_TX_MAX < BWP_MIN_FRAME ? BWP_MIN_FRAME : WB_TX_MAX];
 } wb_t;
 
 void wb_init(wb_t *b, const uint8_t pod_mac[6], const wb_io_t *io);
@@ -130,6 +132,9 @@ void wb_poll(wb_t *b, uint32_t now);
 /* Start a caller's request (body = TLVs, without COUNTER/AUTH). 0: started; -1: another one is in
    flight (retry shortly); -2: no bridge present; -3: not usable (not paired, see info.problem). */
 int wb_request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, uint32_t now);
+/* The same with a body of up to WB_BODY_MAX bytes that the caller keeps unchanged until the request
+   is no longer pending (retries resend it). */
+int wb_request_ext(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, uint32_t now);
 /* SET_WIFI with the passphrase sealed under the pairing key (seal_nonce: 24 fresh random bytes).
    Same return values as wb_request; -4: SSID or passphrase invalid. */
 int wb_request_set_wifi(wb_t *b, const char *ssid, const char *pass, const uint8_t seal_nonce[BWP_SEAL_NONCE_LEN],

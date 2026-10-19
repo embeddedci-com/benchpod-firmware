@@ -214,7 +214,8 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). |
-| `bridge [scan \| reboot \| factory-reset yes]` | Development builds only. The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters); `scan` lists the networks it sees; `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
+| `wifi-scan` | Development builds only. The networks the Wi-Fi bridge sees, strongest first, for a Wi-Fi picker: one line per network, `scan <rssi_dbm> <channel> <auth> <ssid>` (the SSID last, it may hold spaces; auth is `open`, `wep`, `wpa`, `wpa2`, `wpa/wpa2`, `wpa2-ent`, `wpa3`, `wpa2/wpa3` or `other`), then `scan done <n>`. Without a bridge or on failure: `wifi-scan error <why>`. Takes a few seconds. |
+| `bridge [scan \| update \| reboot \| factory-reset yes]` | Development builds only. The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
 #### Wi-Fi bridge (development builds)
 
@@ -235,6 +236,13 @@ Makefile). While a bridge sends its HELLO on the Ethernet port:
 
 The pod pairs with the bridge on its own the first time it sees it. If `wifi-show` reports `the
 bridge is paired with another pod`, press PAIR on the bridge.
+
+**Bridge firmware.** The pod keeps the bridge's firmware in W25Q blob slot `bridge` (installed
+like the other blobs, OTA target `bridge`; it must carry a good signed manifest whatever the
+signature policy). When the slot holds a newer version than the bridge reports, the pod updates
+the bridge by itself (about a minute, during which captures and uploads answer `busy: the Wi-Fi
+bridge is being updated`), and `bridge` shows the progress. A version that failed or rolled back
+is not tried again until the pod restarts or `bridge update` asks for it.
 
 #### Firmware, gateware and blobs
 

@@ -75,12 +75,21 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
-static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls" };
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge" };
+
+/* Targets this build takes: the Wi-Fi bridge's image only with BENCHPOD_WIFI_BRIDGE. */
+static bool target_known(ota_target_t t) {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    return (unsigned)t <= OTA_TARGET_BRIDGE;
+#else
+    return (unsigned)t <= OTA_TARGET_TLS;
+#endif
+}
 
 int ota_target_from_name(const char *name) {
     if (!name || !name[0]) return OTA_TARGET_FIRMWARE;
     for (int i = 0; i < (int)(sizeof(k_target_names) / sizeof(k_target_names[0])); i++)
-        if (strcmp(name, k_target_names[i]) == 0) return i;
+        if (strcmp(name, k_target_names[i]) == 0) return target_known((ota_target_t)i) ? i : -1;
     return -1;
 }
 
@@ -92,8 +101,12 @@ ota_target_t ota_target(void) { return s_target; }
 
 /* The blob slot a target writes (only for a blob target). */
 static blob_id_t target_blob(ota_target_t t) {
+    if (t == OTA_TARGET_BRIDGE) return BLOB_BRIDGE;
     return t == OTA_TARGET_CA ? BLOB_CA : (blob_id_t)(t - OTA_TARGET_GW0);
 }
+
+/* The manifest of the bridge image being received: kept with the blob, the bridge checks it. */
+static uint8_t s_sig_copy[FW_SIGN_MANIFEST_LEN];
 
 /* A configuration blob must make sense before it is installed (the company CA must parse);
    cloud_extras.c provides the check on the pod, the host tests take this default. 0 = fine. */
@@ -164,7 +177,11 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
             snprintf(s_sig_key + 2 * i, 3, "%02x", m.key_id[i]);
     printf("[ota] signature: %s%s%s (policy %s)\n", fw_sign_result_name(s_sig),
            s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()));
-    if (fw_sign_accept(s_sig, fw_sign_policy())) return 0;
+    /* The bridge refuses an update without a good manifest whatever our policy, so do not store one. */
+    if (s_target == OTA_TARGET_BRIDGE ? s_sig == FW_SIG_OK : fw_sign_accept(s_sig, fw_sign_policy())) {
+        if (s_target == OTA_TARGET_BRIDGE) memcpy(s_sig_copy, sig, FW_SIGN_MANIFEST_LEN);
+        return 0;
+    }
     char e[64];
     snprintf(e, sizeof(e), "signature: %s", fw_sign_result_name(s_sig));
     set_err(e);
@@ -175,7 +192,7 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
                         const uint8_t *sig, size_t sig_len) {
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
-    if ((unsigned)target > OTA_TARGET_TLS) { set_err("bad target"); return -1; }
+    if (!target_known(target)) { set_err("bad target"); return -1; }
     s_target  = target;
     s_version = version;
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
@@ -583,7 +600,10 @@ int ota_install_blob(void) {
        quiesces them like every runtime bus grab. blob_store_write hashes what it wrote back against the
        verified digest, so anything that wrote into the staging area since ota_end is caught. */
     w25q_session_open();
-    int rc = blob_store_write(id, s_size, s_version, s_expect, staged_src, NULL);
+    int rc = id == BLOB_BRIDGE   /* the manifest goes with it: the bridge checks it again */
+                 ? blob_store_write_ext(id, s_size, s_version, s_expect, staged_src, NULL,
+                                        s_sig_copy, sizeof(s_sig_copy))
+                 : blob_store_write(id, s_size, s_version, s_expect, staged_src, NULL);
     w25q_session_close();
     if (rc != 0) { set_err("blob write failed"); return -1; }
     s_state = OTA_INSTALLED;

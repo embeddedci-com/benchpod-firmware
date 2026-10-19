@@ -37,6 +37,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+#endif
 
 /* JSON parsing/emitting is shared (see bp_json.h).  These thin aliases keep the
    handler bodies below reading the way they did before the parser was unified. */
@@ -193,6 +196,10 @@ bool heavy_or_claimed(void) {
 const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends";
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_ota_busy())
+        return "busy: the Wi-Fi bridge is being updated (about a minute); try again when it ends";
+#endif
     return heavy_or_claimed() ? "busy: a capture, upload or update is using the PSRAM bus; "
                                 "try again when it ends"
                               : NULL;

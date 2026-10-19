@@ -192,7 +192,9 @@ static void cmd_help(console_out_t out, void *ctx)
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
         "Wi-Fi bridge (development build only; wifi-set/-show/-clear use it when one is plugged in):\r\n"
-        "  bridge | bridge scan | bridge reboot | bridge factory-reset yes\r\n");
+        "  wifi-scan            networks the Wi-Fi bridge sees: scan <rssi> <channel> <auth> <ssid>, scan done <n>\r\n"
+        "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
+        "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
 }
 
@@ -361,6 +363,12 @@ static void bridge_show(console_out_t out, void *ctx)
        i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev,
        i.paired ? "paired" : "not paired");
     if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
+    uint32_t iv;
+    if (wifi_bridge_image(&iv))
+        op(out, ctx, "  pod's bridge image: %u.%u.%u  update: %s\r\n", (unsigned)(iv >> 16) & 0xff,
+           (unsigned)(iv >> 8) & 0xff, (unsigned)iv & 0xff, wifi_bridge_ota_status());
+    else
+        op(out, ctx, "  pod's bridge image: none (slot \"bridge\" empty)  update: %s\r\n", wifi_bridge_ota_status());
     if (i.have_status) {
         op(out, ctx, "  channel: %u  last disconnect reason: %u  bridge uptime: %lu s  (status %lu ms old)\r\n",
            i.channel, i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms);
@@ -389,6 +397,9 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
                a->authmode < 8 ? auth[a->authmode] : "other", a->ssid);
         }
         op(out, ctx, "  %u networks\r\n", g_wifi_bridge_reply.n_aps);
+    } else if (!strcmp(argv[1], "update")) {
+        wifi_bridge_ota_force();   /* the hw worker's loop runs it, after this line returns */
+        op(out, ctx, "  bridge update requested: follow it with `bridge` (it reports the progress)\r\n");
     } else if (!strcmp(argv[1], "reboot")) {
         rc = wifi_bridge_call(BWP_REBOOT, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
         if (!bridge_failed(out, ctx, "bridge reboot", rc, err)) op(out, ctx, "  the Wi-Fi bridge restarts\r\n");
@@ -397,7 +408,7 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
         if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err))
             op(out, ctx, "  the Wi-Fi bridge forgot its Wi-Fi and its pairing, and restarts\r\n");
     } else {
-        op(out, ctx, "  usage: bridge | bridge scan | bridge reboot | bridge factory-reset yes\r\n");
+        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n");
     }
 }
 #endif
@@ -1035,7 +1046,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
     } else if (!strcmp(argv[0], "blobs")) {
         /* One line per W25Q slot: name, state against this firmware, what it holds. */
-        for (int i = 0; i < BLOB_COUNT; i++) {
+        for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+            if (!blob_listed((blob_id_t)i)) continue;
             const blob_info_t *in = blob_store_info((blob_id_t)i);
             char hex[65] = "-";
             if (in->present)
@@ -1223,6 +1235,25 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
     } else if (!strcmp(argv[0], "bridge")) {
         cmd_bridge(argc, argv, out, ctx);
+    } else if (!strcmp(argv[0], "wifi-scan")) {
+        /* For a Wi-Fi picker (the web UI, the CLI): one parseable line per network, strongest
+           first, then "scan done <n>"; or "wifi-scan error <why>". Through the bridge only. */
+        static const char *const auth[] = {"open", "wep", "wpa", "wpa2", "wpa/wpa2", "wpa2-ent", "wpa3", "wpa2/wpa3"};
+        const char *err = NULL;
+        int rc = wifi_bridge_present() ? wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err) : -1;
+        if (!wifi_bridge_present()) err = "no Wi-Fi bridge on the Ethernet port (scanning needs one)";
+        if (rc == 0 && g_wifi_bridge_reply.result != BWP_OK) err = wb_result_str(g_wifi_bridge_reply.result);
+        if (rc != 0 || err) {
+            op(out, ctx, "wifi-scan error %s\r\n", err);
+        } else {
+            for (unsigned k = 0; k < g_wifi_bridge_reply.n_aps; k++) {
+                const bwp_ap_t *a = &g_wifi_bridge_reply.aps[k];
+                /* The SSID last: it may hold spaces. */
+                op(out, ctx, "scan %d %u %s %s\r\n", a->rssi, a->channel,
+                   a->authmode < 8 ? auth[a->authmode] : "other", a->ssid);
+            }
+            op(out, ctx, "scan done %u\r\n", g_wifi_bridge_reply.n_aps);
+        }
 #endif
     } else if (!strcmp(argv[0], "wifi-clear")) {
         /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */

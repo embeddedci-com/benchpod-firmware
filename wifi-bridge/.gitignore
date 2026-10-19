@@ -2,5 +2,8 @@ build/
 sdkconfig
 sdkconfig.old
 keys/
+build-keys/
+main/fw_keys_gen.h
 managed_components/
 build-prod/
+factory/

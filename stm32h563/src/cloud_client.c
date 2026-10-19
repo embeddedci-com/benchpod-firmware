@@ -50,6 +50,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+#endif
 
 /* Ping often and time out fast so a WEDGED server->pod direction self-heals quickly.  The failure
    mode (a single Cloudflare-proxied WS shared by a bulk DAC upload + a UART flood) stalls
@@ -717,6 +720,17 @@ static bool cl_send_capabilities(void) {
        interface this link runs over, eth or Wi-Fi. */
     const ip_addr_t *local = altcp_get_ip(s_pcb, 1);
     c.uplink = net_uplink_name(local ? ip4_addr_get_u32(ip_2_ip4(local)) : 0);
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (!strcmp(c.uplink, "eth") && wifi_bridge_present()) {   /* the Ethernet goes into a Wi-Fi bridge */
+        wb_info_t bi;
+        wifi_bridge_get_info(&bi);
+        if (bi.state == BWP_ST_CONNECTED) {
+            c.uplink = "wifi-bridge";
+            c.has_uplink_rssi = bi.have_status;
+            c.uplink_rssi_dbm = bi.rssi;
+        }
+    }
+#endif
     /* cloud_caps_build keeps the frame inside one WS frame (it shortens the free-form boot
        health when it has to), so a long crash line can no longer make the connect fail and
        loop. Static: net-task only. */

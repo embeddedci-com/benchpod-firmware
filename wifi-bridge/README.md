@@ -64,14 +64,19 @@ ESP-IDF v5.5 in Docker, the same pinned image as `../esp32-hosted-slave` (`idf-i
 digest). Docker is Colima on the Mac.
 
 ```sh
-./build.sh                # dev build -> build/benchpod-wifi-bridge.bin (signed with the dev key)
+./build.sh                # dev build -> build/benchpod-wifi-bridge.bin + .sig (the pod's dev key)
 ./build.sh production     # secure boot v2 + flash encryption -> build-prod/ (unsigned, see SECURITY.md)
 ./build.sh menuconfig     # any other idf.py command
 ```
 
-The first dev build creates `keys/dev_signing_key.pem` (git-ignored). A bridge accepts OTA images
-only when they are signed with the same key as the image it runs, so keep that file if you want
-to update dev bridges over the network.
+Updates are signed with the **pod's** signing keys: the bridge installs an image only with the
+pod's signed manifest (`tools/fwsign.py`, target `bridge`), by one of the pod's release keys
+(`stm32h563/keys`) or, in a development build, the pod's developer key
+(`~/.config/benchpod/fw-signing-dev.key`, from `make -C ../stm32h563 dev-key`). `build.sh` compiles
+those keys in (`main/fw_keys_gen.h`; `RELEASE=1 ./build.sh` leaves the dev key out) and signs a
+dev image with the dev key (`build/benchpod-wifi-bridge.bin.sig`, needs `pip3 install
+cryptography`). Production builds also use ESP32 secure boot (RSA-3072), see
+[docs/SECURITY.md](docs/SECURITY.md).
 
 Build-time options (`idf.py menuconfig` → *BenchPod Wi-Fi bridge*): RMII clock source
 (oscillator on GPIO0, or the GPIO17 output option with R15 fitted and X1 not fitted), PHY
@@ -126,8 +131,8 @@ Without an ESP-Prog, any 3.3 V USB-UART on TXD0/RXD0/GND works for the log. For 
 then have to pull IO0 (pad 6) to GND while pulsing EN (pad 1) to GND by hand, because there are
 no buttons.
 
-The image signs itself with this checkout's dev key (`keys/dev_signing_key.pem`). A bridge
-flashed from here only accepts OTA images built from here, so keep that key for the first boards.
+A dev image trusts the pod's release keys and your dev key: a bridge flashed from here accepts
+updates from release CI and from any dev build signed with the same dev key.
 
 ## Bring-up checklist (first rev A boards)
 
@@ -183,10 +188,14 @@ Record results, and anything changed, in this section or in the PR that fixes it
 
 ## Firmware updates
 
-The pod relays a signed image over the control channel: OTA_BEGIN (erases the inactive slot),
-1024-byte OTA_DATA chunks in order (a lost ack is safe to retry, a gap is answered with the
-expected offset), OTA_END (checks SHA-256, the RSA-3072 signature and the project name, then
-selects the new slot), REBOOT.
+The pod keeps the bridge's firmware in its W25Q blob slot `bridge` (installed like its other
+blobs: `blob-bridge.bin` with its signed manifest, OTA target `bridge`). When that image is newer
+than what the bridge reports in HELLO, the pod updates the bridge by itself (development pod
+builds; `bridge update` on the pod's console forces it): OTA_BEGIN with the manifest (the bridge
+checks the Ed25519 signature, target and size, then erases the inactive slot), 1024-byte
+OTA_DATA chunks in order (a lost ack is safe to retry, a gap is answered with the expected
+offset), OTA_END (SHA-256 against the manifest, the project name and, in production, the secure
+boot signature; then the new slot is selected), REBOOT.
 
 ```
 ota_0 [running, confirmed] --OTA--> ota_1 [new] --reboot--> ota_1 on trial (FLAGS 0x10 in HELLO)
@@ -201,7 +210,8 @@ sends STATUS anyway to read the new version); if HELLO still shows the old FW_VE
 update rolled back. The trial timeout is `CONFIG_BRIDGE_CONFIRM_TIMEOUT_S`.
 
 `tools/bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin` does the same from a Linux
-machine wired to the bridge.
+machine wired to the bridge (it sends `build/benchpod-wifi-bridge.bin.sig` as the manifest). A
+version that failed or rolled back is not retried by the pod until it restarts or is forced.
 
 ## Buttons and recovery
 

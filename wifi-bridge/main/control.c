@@ -240,7 +240,11 @@ static void handle(uint8_t *buf, size_t len)
         return;
     case BWP_OTA_BEGIN: {
         uint32_t size;
-        r = bwp_get_u32(m.body, m.body_len, BWP_T_IMAGE_SIZE, &size) ? ota_begin(size, &msg) : BWP_E_BAD_REQUEST;
+        const uint8_t *sig = NULL;
+        uint16_t sig_len = 0;
+        bwp_find(m.body, m.body_len, BWP_T_SIGNATURE, &sig, &sig_len);  // the pod's signed manifest
+        r = bwp_get_u32(m.body, m.body_len, BWP_T_IMAGE_SIZE, &size) ? ota_begin(size, sig, sig_len, &msg)
+                                                                     : BWP_E_BAD_REQUEST;
         reply(&m, dst, r, msg);
         return;
     }

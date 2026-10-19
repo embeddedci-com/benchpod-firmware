@@ -18,6 +18,12 @@
 #include "stm32h5xx_hal.h"
 #include "task.h"
 #include "watchdog.h"
+#include "blob_store.h"
+#include "ota.h"
+#include "command_handler_internal.h"
+#include "esp_rom_flash.h"
+#include "w25q.h"
+#include "wifi_bridge_ota.h"
 
 static wb_t s_wb;                  /* net task only */
 static struct netif *s_eth;
@@ -26,19 +32,25 @@ static wb_info_t s_info;           /* snapshot for other tasks, copied under a c
 static uint32_t s_info_at;
 wb_reply_t g_wifi_bridge_reply;    /* hw worker only, see the header */
 
-static void io_send(const uint8_t *frame, size_t len, void *ctx)
+static void io_send(const uint8_t *head, size_t hl, const uint8_t *body, size_t bl, const uint8_t *tail,
+                    size_t tl, void *ctx)
 {
     (void)ctx;
     if (!s_eth || !netif_is_link_up(s_eth)) {
         return;
     }
-    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)len, PBUF_RAM);
+    size_t len = hl + bl + tl;
+    size_t padded = len < BWP_MIN_FRAME ? BWP_MIN_FRAME : len;
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)padded, PBUF_RAM);  /* contiguous, from the lwIP heap */
     if (!p) {
         return;
     }
-    if (pbuf_take(p, frame, (u16_t)len) == ERR_OK) {
-        s_eth->linkoutput(s_eth, p);
-    }
+    uint8_t *f = p->payload;
+    memcpy(f, head, hl);
+    if (bl) memcpy(f + hl, body, bl);
+    if (tl) memcpy(f + hl + bl, tail, tl);
+    memset(f + len, 0, padded - len);
+    s_eth->linkoutput(s_eth, p);
     pbuf_free(p);
 }
 
@@ -160,6 +172,11 @@ static void on_net_take(void *arg)
 static int run_call(call_t *cp, wb_reply_t *out, const char **err)
 {
     call_t c = *cp;
+    if (wifi_bridge_ota_busy()) {
+        memset(out, 0, sizeof(*out));
+        *err = "the Wi-Fi bridge is being updated (about a minute); try again when it ends";
+        return -1;
+    }
     uint32_t timeout_ms = c.timeout_ms;
     /* Long enough for the first pairing (a few seconds) plus every retry of this request. */
     uint32_t start = HAL_GetTick(), limit = 6000u + WB_TRIES * timeout_ms + 1000u;
@@ -227,4 +244,123 @@ int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, co
         return -1;
     }
     return run_call(&c, out, err);
+}
+
+/* ---- bridge firmware updates (wifi_bridge_ota.c), driven from the hw worker ---------------- */
+static wbo_t s_relay;          /* hw worker only */
+static wbo_image_t s_img;      /* what slot "bridge" holds, with its manifest */
+static uint8_t s_img_sha[32];
+static bool s_img_read, s_quiesced;
+
+typedef struct { uint8_t type; const uint8_t *tlvs; size_t len; uint32_t timeout_ms; int rc; } ext_t;
+typedef struct { wb_reply_t *out; wb_req_state_t st; } take_t;
+
+static void on_net_ext(void *arg)
+{
+    ext_t *e = arg;
+    e->rc = wb_request_ext(&s_wb, e->type, e->tlvs, e->len, e->timeout_ms, HAL_GetTick());
+}
+
+static void on_net_take_any(void *arg)
+{
+    take_t *t = arg;
+    t->st = wb_request_state(&s_wb);
+    if (t->st == WB_REQ_DONE || t->st == WB_REQ_TIMEOUT) {
+        *t->out = *wb_request_reply(&s_wb);
+        wb_request_release(&s_wb);
+    }
+}
+
+static int ro_start(void *ctx, uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms)
+{
+    (void)ctx;
+    ext_t e = {.type = type, .tlvs = tlvs, .len = len, .timeout_ms = timeout_ms};
+    if (!net_call_sync(on_net_ext, &e, 2000)) return -1;
+    return e.rc == 0 ? 0 : e.rc == -1 ? -1 : -2;
+}
+
+static wb_req_state_t ro_take(void *ctx, wb_reply_t *out)
+{
+    (void)ctx;
+    take_t t = {.out = out, .st = WB_REQ_PENDING};
+    return net_call_sync(on_net_take_any, &t, 2000) ? t.st : WB_REQ_PENDING;
+}
+
+/* Like the ESP32-C3 flasher: stop the gateware's PSRAM masters once when the update starts (the
+   busy gate, wifi_bridge_ota_busy -> bus_busy_reason, keeps them stopped), then take the bus for
+   each read only. */
+static int ro_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
+{
+    (void)ctx;
+    if (!s_quiesced) {
+        w25q_session_open();
+        w25q_session_close();
+        s_quiesced = true;
+    }
+    w25q_open();
+    int rc = blob_store_read((void *)(uintptr_t)BLOB_BRIDGE, off, buf, n);
+    w25q_close();
+    return rc;
+}
+
+static void *ro_alloc(size_t n) { return pvPortMalloc(n); }
+static void ro_release(void *p) { vPortFree(p); }
+
+static uint32_t le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+/* Read the slot's manifest once per image (the blob store kept it in the header sector). */
+static void refresh_image(void)
+{
+    const blob_info_t *bi = blob_store_info(BLOB_BRIDGE);
+    if (!bi || !bi->present) {
+        s_img.present = false;
+        s_img_read = false;
+        return;
+    }
+    if (s_img_read && memcmp(s_img_sha, bi->sha256, 32) == 0) return;
+    if (bus_busy_reason()) return;   /* read it when the bus is free */
+    uint8_t *m = s_img.manifest;
+    w25q_open();
+    int rc = blob_store_read_extra(BLOB_BRIDGE, m, WBO_MANIFEST_LEN);
+    w25q_close();
+    s_img_read = true;
+    memcpy(s_img_sha, bi->sha256, 32);
+    /* The pod checked the signature when the image was installed; here only that the manifest
+       is the one for this image (the bridge checks the signature again). */
+    s_img.present = rc == 0 && memcmp(m, "BPSG", 4) == 0 && m[6] == OTA_TARGET_BRIDGE &&
+                    le32(m + 8) == bi->len && memcmp(m + 12, bi->sha256, 32) == 0;
+    s_img.size = bi->len;
+    s_img.version = le32(m + 44);
+}
+
+void wifi_bridge_ota_poll(void)
+{
+    static const wbo_io_t io = {.start = ro_start, .take = ro_take, .read = ro_read,
+                                .alloc = ro_alloc, .release = ro_release};
+    static bool init;
+    if (!init) {
+        wbo_init(&s_relay, &io, &g_wifi_bridge_reply);   /* shared: see wifi_bridge_call */
+        init = true;
+    }
+    refresh_image();
+    wb_info_t i;
+    wifi_bridge_get_info(&i);
+    bool was = wbo_busy(&s_relay);
+    char before[sizeof(s_relay.status)];
+    strcpy(before, s_relay.status);
+    wbo_poll(&s_relay, &i, &s_img, !heavy_or_claimed() && !esp_rom_flash_busy(), HAL_GetTick());
+    if (!wbo_busy(&s_relay)) s_quiesced = false;
+    if (wbo_busy(&s_relay) != was || (strcmp(before, s_relay.status) != 0 && !strstr(s_relay.status, "%")))
+        log_printf("[bridge] %s\r\n", s_relay.status);
+}
+
+bool wifi_bridge_ota_busy(void) { return wbo_busy(&s_relay); }
+const char *wifi_bridge_ota_status(void) { return wbo_status(&s_relay); }
+void wifi_bridge_ota_force(void) { wbo_force(&s_relay); }
+bool wifi_bridge_image(uint32_t *version) {
+    if (version) *version = s_img.version;
+    return s_img.present;
 }

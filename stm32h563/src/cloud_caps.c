@@ -48,6 +48,7 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     /* Which interface carries this connection, so the server can record eth vs Wi-Fi per connect. */
     bp_emit_raw(e, ",\"uplink\":");
     bp_emit_jstr(e, c->uplink ? c->uplink : "unknown");
+    if (c->has_uplink_rssi) bp_emit(e, ",\"uplink_rssi_dbm\":%d", c->uplink_rssi_dbm);
     bp_emit_raw(e, ",");
 }
 

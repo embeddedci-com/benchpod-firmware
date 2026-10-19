@@ -11,7 +11,7 @@ the "pod" MAC, so the machine also gets its network through the bridge.
     sudo ./bridgectl.py -i eth0 scan
     sudo ./bridgectl.py -i eth0 set-wifi "lab net" "passphrase"
     sudo ./bridgectl.py -i eth0 clear-wifi | reboot | factory-reset
-    sudo ./bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
+    sudo ./bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin   # + .sig, which build.sh makes
 
 Pairing: an unpaired bridge pairs with the first device that sends PAIR. Both sides compute the
 key with X25519 (it is never sent); after that every request is signed (HMAC-SHA256) with it and
@@ -45,7 +45,7 @@ PAIR = 0x0C
 T_RESULT, T_MODEL, T_FW_VERSION, T_HW_REV, T_STATE, T_BRIDGE_MAC, T_POD_MAC = 1, 2, 3, 4, 5, 6, 7
 T_SSID, T_PASSPHRASE, T_CHANNEL, T_RSSI, T_BSSID, T_AUTHMODE, T_AP = 8, 9, 10, 11, 12, 13, 14
 T_IMAGE_SIZE, T_OFFSET, T_DATA, T_UPTIME, T_REASON, T_COUNTERS, T_MESSAGE, T_FLAGS = 15, 16, 17, 18, 19, 20, 21, 22
-T_NONCE, T_PUBKEY, T_COUNTER, T_AUTH, T_ENC_PASSPHRASE = 0x17, 0x18, 0x19, 0x1A, 0x1B
+T_NONCE, T_PUBKEY, T_COUNTER, T_AUTH, T_ENC_PASSPHRASE, T_SIGNATURE = 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C
 F_PAIRED = 0x20
 
 STATES = ["unconfigured", "wait-pod", "joining", "connected", "auth-failed", "no-ap"]
@@ -361,9 +361,15 @@ def check(msg):
     print("ok")
 
 
-def ota(link, path):
+def ota(link, path, sig_path=None):
     image = open(path, "rb").read()
-    check(link.request(OTA_BEGIN, tlv(T_IMAGE_SIZE, struct.pack(">I", len(image))), timeout=30))
+    sig_path = sig_path or path + ".sig"  # tools/fwsign.py sign --target bridge (the pod's keys)
+    if not os.path.exists(sig_path):
+        raise SystemExit(f"{sig_path}: no signed manifest (python3 tools/fwsign.py sign --key KEY "
+                         f"--target bridge --release X.Y.Z {path})")
+    manifest = open(sig_path, "rb").read()
+    body = tlv(T_IMAGE_SIZE, struct.pack(">I", len(image))) + tlv(T_SIGNATURE, manifest)
+    check(link.request(OTA_BEGIN, body, timeout=30))
     off = 0
     while off < len(image):
         chunk = image[off:off + 1024]
@@ -431,9 +437,9 @@ def main():
     elif a.command == "factory-reset":
         check(link.request(FACTORY_RESET))
     elif a.command == "ota":
-        if len(a.args) != 1:
-            raise SystemExit("ota <image.bin>")
-        ota(link, a.args[0])
+        if len(a.args) not in (1, 2):
+            raise SystemExit("ota <image.bin> [<image.bin.sig>]")
+        ota(link, *a.args)
 
 
 if __name__ == "__main__":

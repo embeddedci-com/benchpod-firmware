@@ -9,6 +9,9 @@
 #include "ota.h"
 #include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+#endif
 #include "esp_wifi_ctrl.h"
 #include "net_reload.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
@@ -306,6 +309,9 @@ static void worker_task(void *arg) {
             start_esp_flash();
         }
         esp_rom_flash_poll();     /* a C3 flash: one step, never a wait */
+#if defined(BENCHPOD_WIFI_BRIDGE)
+        wifi_bridge_ota_poll();   /* a Wi-Fi bridge update: one step, never a wait */
+#endif
         {
             extern volatile uint32_t g_malloc_failures;   /* main.c */
             static uint32_t seen;
