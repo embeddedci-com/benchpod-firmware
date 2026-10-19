@@ -226,7 +226,7 @@ static void fresh_rev3_pod(bool with_offset) {
     }
 }
 
-/* A pod that last saved on firmware 3.4.0 to 3.9.2 has a version-1 record. Its offset loads;
+/* A pod that last saved on firmware 3.4.0 to 3.9.3 has a version-1 record. Its offset loads;
    nothing is written until the next save, which writes version 2 and keeps the offset. */
 static void test_version1_record_migrates(void) {
     mock_flash_reset();

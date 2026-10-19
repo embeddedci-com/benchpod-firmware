@@ -22,7 +22,7 @@ static const ab_store_t s_store = {
     .version  = ADC_CAL_VERSION,
 };
 
-/* The same slots read as version 1, for a pod that last saved on firmware 3.4.0 to 3.9.2. */
+/* The same slots read as version 1, for a pod that last saved on firmware 3.4.0 to 3.9.3. */
 static const ab_store_t s_store_v1 = {
     .tag      = "adc-cal",
     .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
@@ -278,7 +278,7 @@ int adc_cal_load(void) {
     adc_cal_t rec;
     memset(&rec, 0, sizeof(rec));
     if (ab_store_load(&s_store, &rec, sizeof(rec)) != 0) {
-        /* Not version 2: a pod that last saved on firmware 3.4.0 to 3.9.2 has version 1. Take its
+        /* Not version 2: a pod that last saved on firmware 3.4.0 to 3.9.3 has version 1. Take its
            offset; nothing is written until the next save. */
         adc_cal_v1_t v1;
         memset(&rec, 0, sizeof(rec));

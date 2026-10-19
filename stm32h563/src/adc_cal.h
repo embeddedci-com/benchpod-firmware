@@ -35,7 +35,7 @@
  * DAC-side stages add a little).
  *
  * Only the offset needs nothing but an open J8. The rest is the optional DMM-guided calibration
- * (embeddedci-server/docs/benchpod-dmm-calibration.md), firmware 3.9.3:
+ * (embeddedci-server/docs/benchpod-dmm-calibration.md), firmware 3.9.4:
  *   - DAC: this pod's own line per output path (3v3, 5v, 12v), from two set points the pod drove
  *     and a DMM read on that output's SMA (adc_cal_dac_store). It replaces the compiled line for
  *     every DAC user through cal_data_set_pod_dac (DAC_CAL): dac_out, the calibrated generate,
@@ -46,7 +46,7 @@
  *     0 V, and the gain does not depend on the offset, so either can be redone alone.
  *
  * Stored in its own power-loss-safe A/B store (config_store.h), sectors s116/s117
- * (0x1E8000 / 0x1EA000), carved from the top of FLASH_BLOBS. Version 1 (firmware 3.4.0 to 3.9.2)
+ * (0x1E8000 / 0x1EA000), carved from the top of FLASH_BLOBS. Version 1 (firmware 3.4.0 to 3.9.3)
  * held only the offset; version 2 adds the DMM parts. A version-1 record still loads (its offset);
  * the next save writes version 2 to the other slot, so a power cut during that leaves version 1
  * readable. Older firmware ignores a version-2 record and runs uncalibrated.
@@ -100,7 +100,7 @@ typedef struct {
     uint32_t  reserved[6];            /* room for more (the 4-20 mA output, ...) */
 } adc_cal_t;
 
-/* Version 1, as firmware 3.4.0 to 3.9.2 stored it. */
+/* Version 1, as firmware 3.4.0 to 3.9.3 stored it. */
 typedef struct {
     uint8_t  current_in_set;
     uint8_t  rsvd8[3];

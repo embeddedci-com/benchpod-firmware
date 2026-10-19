@@ -757,7 +757,7 @@ When the pod connects to the cloud it advertises a `capabilities` frame. Alongsi
 
 | Field | Meaning |
 |---|---|
-| `adc_cal_a_uv` | Affine intercept *a* in microvolts (`V = a + b·count`). From firmware 3.9.3 it includes this pod's own offset when the pod is calibrated, and the `ext` gain when one was measured with a DMM (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)), and the frame is sent again after a `calibrate`, so the server picks the new fit up without a reconnect. |
+| `adc_cal_a_uv` | Affine intercept *a* in microvolts (`V = a + b·count`). From firmware 3.9.3 it includes this pod's own offset when the pod is calibrated, and from 3.9.4 the `ext` gain when one was measured with a DMM (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)), and the frame is sent again after a `calibrate`, so the server picks the new fit up without a reconnect. |
 | `adc_cal_b_nv` | Affine slope *b* in nanovolts per count. |
 | `adc_cal_unwrap` | `true`: the front end is bipolar, so a 16-bit count `< 32768` is unwrapped (`count += 65536`) before scaling. |
 
@@ -1249,8 +1249,8 @@ reference.
 |---|---|
 | `{"cmd":"calibrate","source":"current_in"}` | Calibrate `current_in` with J8 disconnected, store the result, return it |
 | `{"cmd":"calibrate"}` | Return the stored calibration |
-| `{"cmd":"calibrate","clear":true}` | Remove it and go back to the built-in fits (from 3.9.3 also the DMM parts below) |
-| `{"cmd":"calibrate","clear":"offset"}` | Remove one part only: `offset`, `dac` or `adc` (firmware 3.9.3+) |
+| `{"cmd":"calibrate","clear":true}` | Remove it and go back to the built-in fits (from 3.9.4 also the DMM parts below) |
+| `{"cmd":"calibrate","clear":"offset"}` | Remove one part only: `offset`, `dac` or `adc` (firmware 3.9.4+) |
 
 ```json
 {"cmd":"calibrate","source":"current_in"}
@@ -1274,7 +1274,7 @@ reference.
 | `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
-| `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.3+), see [below](#dmm-guided-calibration-firmware-393) |
+| `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
 
 The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
 takes about 0.3 s and leaves the `current_in` path routed.
@@ -1294,7 +1294,7 @@ calibrating it needs a reference voltage (see the DMM-guided calibration below).
 `cal2` the DAC output stages add a few mV of their own on top. `status.caps` contains `"calibrate"`
 when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
 
-##### DMM-guided calibration (firmware 3.9.3)
+##### DMM-guided calibration (firmware 3.9.4)
 
 With a bench DMM the pod can also take out what is left after the offset: its own DAC offset and
 gain per output path, and then the ADC gain per source. Every step is optional and saved on its
@@ -1354,7 +1354,7 @@ are set: clear them, calibrate, set them again. The J8 offset does not move the 
 | `measured` | After an `adc` run: what the output put out (`v1_uv`, `v2_uv`), what the ADC read before the gain (`r1_uv`, `r2_uv`) and the mean offset left after it (`residual_uv`) |
 
 The record is stored with the offset (version 2). A pod updated from an older firmware keeps its
-offset; going back to firmware older than 3.9.3 loses the whole calibration (the older firmware
+offset; going back to firmware older than 3.9.4 loses the whole calibration (the older firmware
 ignores the newer record), and the J8 offset is one `calibrate` again.
 
 
@@ -1508,7 +1508,7 @@ counters and the capability list. No parameters.
 | `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
-| `cal_dmm` | `calibrate` takes the DMM-guided forms (`dac`, `adc`, a partial `clear`): firmware 3.9.3+, analog board only. |
+| `cal_dmm` | `calibrate` takes the DMM-guided forms (`dac`, `adc`, a partial `clear`): firmware 3.9.4+, analog board only. |
 | `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |
 | `generate16` | [`generate`](#generate--dac-waveform-output) takes volts or microamps and plays them at 16 bits (firmware 3.9.1+, analog board only). The frame's `generate_bits` is then 16, else 8. |
 | `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
