@@ -68,6 +68,9 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+#endif
 
 #define TCP_SERVER_PORT   8080
 #define NET_MAX_CONN      5            /* TCP conn ids 0..4 (= CH_MAX_CONN), plaintext and TLS */
@@ -939,6 +942,9 @@ void net_init(void)
                                       NETIF_CHECKSUM_GEN_UDP |
                                       NETIF_CHECKSUM_GEN_TCP));
     netif_set_default(&s_eth.netif);
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    wifi_bridge_net_init(&s_eth.netif);   /* the Wi-Fi bridge's control channel (dev builds) */
+#endif
 
     /* Wi-Fi netif over the ESP32-C3. The netif is registered (inert until the
        link comes up); the co-processor itself stays in reset until Wi-Fi is
@@ -1019,6 +1025,9 @@ void net_poll(void)
        queued replies into lwIP and applies the worker's close/nodelay requests. */
     cloud_client_poll();             /* drive the outbound WSS control channel */
     esp_wifi_ctrl_poll();            /* drive Wi-Fi association (if configured) */
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    wifi_bridge_net_poll();          /* Wi-Fi bridge: pairing, retries, STATUS  */
+#endif
     net_tx_drain();                  /* worker reply rings -> lwIP              */
     if (s_lan_req >= 0) { int8_t r = s_lan_req; s_lan_req = -1; lan_access(r == 1); }
     if (s_https_req >= 0) { int8_t r = s_https_req; s_https_req = -1; https_only_apply(r == 1); }

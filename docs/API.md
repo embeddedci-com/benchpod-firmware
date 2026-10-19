@@ -3188,6 +3188,26 @@ mode, or a capture, upload or update held the shared bus for a minute. After `fa
 region included). `wifi_clear` does not touch the device identity key, the cloud configuration
 (`cloud_clear`) or calibration data.
 
+**With a Wi-Fi bridge (development builds).** BenchPod v4 has no radio; a bridge box on the
+Ethernet port carries Wi-Fi ([wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)).
+Development firmware talks to it (release builds leave it out for now). While a bridge says HELLO
+on the Ethernet port, `wifi_set` stores the credentials on the bridge (reply
+`{"ssid":"lab","via":"wifi-bridge"}`, the pod's own flash, USB networking and the ESP32-C3 are left
+alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` describes the bridge:
+
+```json
+{"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
+ "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"problem":null,
+           "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
+           "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
+                       "eth_tx_err":0,"dropped":76}}}
+```
+
+`state` is then the bridge's: `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or
+`no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
+"the bridge is paired with another pod: press PAIR on the bridge" means the user has to press PAIR
+on the bridge. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
+
 > **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
 > stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
 > `flash-esp32`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.

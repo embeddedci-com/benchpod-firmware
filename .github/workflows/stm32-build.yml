@@ -16,7 +16,7 @@
 # The release workflow calls this one (workflow_call) and waits for it.
 #
 # Path gating, pull requests only: both jobs run only when the PR changes what the build reads
-# (stm32h563/, esp32-hosted-slave/, tools/fwsign.py, .gitmodules or this workflow). A push to
+# (stm32h563/, esp32-hosted-slave/, wifi-bridge/components/, tools/fwsign.py, .gitmodules or this workflow). A push to
 # main (a merge), the release and a failed `changes` job always run them. Skipped by its `if`,
 # build-and-test reports success, so the required check stays green.
 name: STM32 firmware build
@@ -62,7 +62,7 @@ jobs:
           if ! git fetch -q --depth=1 --filter=blob:none origin "$PR_BASE"; then all "base $PR_BASE not fetchable"; fi
           changed=$(git diff --name-only --no-renames "$PR_BASE" HEAD)
           echo "changed files:"; sed 's/^/  /' <<< "$changed"
-          if grep -Eq '^(stm32h563/|esp32-hosted-slave/|tools/fwsign\.py$|\.gitmodules$|\.github/workflows/stm32-build\.yml$)' <<< "$changed"; then
+          if grep -Eq '^(stm32h563/|esp32-hosted-slave/|wifi-bridge/components/|tools/fwsign\.py$|\.gitmodules$|\.github/workflows/stm32-build\.yml$)' <<< "$changed"; then
             stm32=true
           else
             stm32=false
@@ -185,6 +185,10 @@ jobs:
             || { echo "::error::the RELEASE=1 image lacks the TLS-only cloud_set check"; exit 1; }
           if strings stm32h563/build/bench_pod_stm32.elf | grep -q 'ca-damage ok'; then
             echo "::error::the RELEASE=1 image still has the development ca-damage command"; exit 1
+          fi
+          # The Wi-Fi bridge client is dev-only until the bridge hardware is verified (WIFI_BRIDGE).
+          if strings stm32h563/build/bench_pod_stm32.elf | grep -q 'Wi-Fi bridge control channel on'; then
+            echo "::error::the RELEASE=1 image has the development Wi-Fi bridge client"; exit 1
           fi
 
       - name: OTA commit code stays in RAM

@@ -78,6 +78,12 @@ bool clock_on_hsi(void);   /* main.c */
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+#include "wifi_manager.h"
+#endif
+
+
 /* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
  * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
  * pins are the shared PSRAM bus), so switching copies the selected image from its W25Q blob
@@ -182,6 +188,11 @@ static void cmd_help(console_out_t out, void *ctx)
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
         "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
+#endif
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    out(ctx,
+        "Wi-Fi bridge (development build only; wifi-set/-show/-clear use it when one is plugged in):\r\n"
+        "  bridge | bridge scan | bridge reboot | bridge factory-reset yes\r\n");
 #endif
 }
 
@@ -316,6 +327,81 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
     return p;
 }
 
+#if defined(BENCHPOD_WIFI_BRIDGE)
+
+/* ---- Wi-Fi bridge (dev builds): wifi-set / wifi-show / wifi-clear go to the external bridge box
+   when one says HELLO on the Ethernet port; `bridge` shows it and runs scan / reboot / reset. */
+
+static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
+{
+    if (rc != 0) {
+        op(out, ctx, "  %s: %s\r\n", what, err);
+        return true;
+    }
+    if (g_wifi_bridge_reply.result != BWP_OK) {
+        op(out, ctx, "  %s: %s%s%s\r\n", what, wb_result_str(g_wifi_bridge_reply.result),
+           g_wifi_bridge_reply.message[0] ? ": " : "", g_wifi_bridge_reply.message);
+        return true;
+    }
+    return false;
+}
+
+static void bridge_show(console_out_t out, void *ctx)
+{
+    wb_info_t i;
+    wifi_bridge_get_info(&i);
+    op(out, ctx, "  ssid: %s\r\n", i.have_status ? i.ssid : "");
+    op(out, ctx, "  state: %s\r\n", i.present ? wb_state_str(i.state) : "no bridge");
+    op(out, ctx, "  ip: %s\r\n", wifi_get_ip());
+    if (i.have_status && i.state == BWP_ST_CONNECTED)
+        op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
+    else
+        op(out, ctx, "  rssi: \r\n");
+    op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s hw %s, %s\r\n", i.mac[0], i.mac[1],
+       i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev,
+       i.paired ? "paired" : "not paired");
+    if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
+    if (i.have_status) {
+        op(out, ctx, "  channel: %u  last disconnect reason: %u  bridge uptime: %lu s  (status %lu ms old)\r\n",
+           i.channel, i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms);
+        op(out, ctx, "  frames: eth_rx %lu wifi_tx %lu (err %lu) wifi_rx %lu eth_tx %lu (err %lu) dropped %lu\r\n",
+           (unsigned long)i.counters.eth_rx, (unsigned long)i.counters.wifi_tx,
+           (unsigned long)i.counters.wifi_tx_err, (unsigned long)i.counters.wifi_rx,
+           (unsigned long)i.counters.eth_tx, (unsigned long)i.counters.eth_tx_err,
+           (unsigned long)i.counters.dropped);
+    }
+}
+
+static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
+{
+    static const char *const auth[] = {"open", "wep", "wpa", "wpa2", "wpa/wpa2", "wpa2-ent", "wpa3", "wpa2/wpa3"};
+    const char *err = NULL;
+    int rc;
+    if (argc == 1) {
+        if (!wifi_bridge_present()) op(out, ctx, "  no Wi-Fi bridge on the Ethernet port\r\n");
+        else bridge_show(out, ctx);
+    } else if (!strcmp(argv[1], "scan")) {
+        rc = wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err);
+        if (bridge_failed(out, ctx, "bridge scan", rc, err)) return;
+        for (unsigned k = 0; k < g_wifi_bridge_reply.n_aps; k++) {
+            const bwp_ap_t *a = &g_wifi_bridge_reply.aps[k];
+            op(out, ctx, "  %4d dBm  ch %2u  %-9s  %s\r\n", a->rssi, a->channel,
+               a->authmode < 8 ? auth[a->authmode] : "other", a->ssid);
+        }
+        op(out, ctx, "  %u networks\r\n", g_wifi_bridge_reply.n_aps);
+    } else if (!strcmp(argv[1], "reboot")) {
+        rc = wifi_bridge_call(BWP_REBOOT, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
+        if (!bridge_failed(out, ctx, "bridge reboot", rc, err)) op(out, ctx, "  the Wi-Fi bridge restarts\r\n");
+    } else if (!strcmp(argv[1], "factory-reset") && argc == 3 && !strcmp(argv[2], "yes")) {
+        rc = wifi_bridge_call(BWP_FACTORY_RESET, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
+        if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err))
+            op(out, ctx, "  the Wi-Fi bridge forgot its Wi-Fi and its pairing, and restarts\r\n");
+    } else {
+        op(out, ctx, "  usage: bridge | bridge scan | bridge reboot | bridge factory-reset yes\r\n");
+    }
+}
+#endif
+
 /* wifi-set "<ssid>" "<password>" — save creds + kick the ESP32 (re)connect.
    Prints the markers the benchpod-cli parses ("[cfg] credentials written to
    flash").  Non-blocking: the association RPC runs on the net task, so the
@@ -338,6 +424,25 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
         op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
         return;
     }
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_present()) {   /* the bridge box keeps the credentials, not the pod */
+        uint8_t t[WB_REQ_MAX];
+        size_t n = wifi_bridge_tlvs_set_wifi(t, sizeof(t), cfg.ssid, cfg.password);
+        const char *err = "the SSID or password does not fit";
+        int rc = (n && bwp_passphrase_valid(cfg.password, strlen(cfg.password)) &&
+                  bwp_ssid_valid((const uint8_t *)cfg.ssid, strlen(cfg.ssid)))
+                     ? wifi_bridge_call(BWP_SET_WIFI, t, n, 1000, &g_wifi_bridge_reply, &err) : -1;
+        if (n && rc == -1 && !strcmp(err, "the SSID or password does not fit"))
+            err = "SSID 1-32 bytes; password empty, 8-63 printable characters or 64 hex digits";
+        memset(t, 0, sizeof(t));
+        memset(cfg.password, 0, sizeof(cfg.password));
+        if (bridge_failed(out, ctx, "wifi-set", rc, err)) return;
+        op(out, ctx, "[cfg] credentials written to flash\r\n");   /* the marker benchpod-cli waits for */
+        op(out, ctx, "  saved SSID \"%s\" on the Wi-Fi bridge: it joins in the background; run wifi-show for status\r\n",
+           cfg.ssid);
+        return;
+    }
+#endif
     if (config_save(&cfg) != 0) {
         op(out, ctx, "  wifi-set: config save failed\r\n");
         return;
@@ -350,6 +455,9 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
 
 static void cmd_wifi_show(console_out_t out, void *ctx)
 {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_present()) { bridge_show(out, ctx); return; }
+#endif
     config_t cfg;
     bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
     op(out, ctx, "  ssid: %s\r\n", have ? cfg.ssid : "");
@@ -1114,6 +1222,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             op(out, ctx, "identity-wipe ok %s\r\n", id);
             net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
         }
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    } else if (!strcmp(argv[0], "wifi-clear") && wifi_bridge_present()) {
+        const char *err = NULL;
+        int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
+        if (!bridge_failed(out, ctx, "wifi-clear", rc, err))
+            op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
+    } else if (!strcmp(argv[0], "bridge")) {
+        cmd_bridge(argc, argv, out, ctx);
+#endif
     } else if (!strcmp(argv[0], "wifi-clear")) {
         /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
         config_clear();

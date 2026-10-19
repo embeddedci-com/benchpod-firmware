@@ -274,6 +274,23 @@ INCLUDES := \
   -I$(MBEDTLS)/library \
   -Ilib/esp_hosted/common
 
+# WIFI_BRIDGE=1: the pod side of the Wi-Fi bridge control channel (EtherType 0x88B5, see
+# ../wifi-bridge/docs/PROTOCOL.md): src/wifi_bridge*.c plus the bridge firmware's own codec and
+# HMAC from ../wifi-bridge/components/bridge_core. On by default in dev builds, off in release
+# builds (RELEASE=1) until the bridge hardware has been verified. Override with WIFI_BRIDGE=0/1.
+ifeq ($(RELEASE),1)
+WIFI_BRIDGE ?= 0
+else
+WIFI_BRIDGE ?= 1
+endif
+BRIDGE_CORE := ../wifi-bridge/components/bridge_core
+ifeq ($(WIFI_BRIDGE),1)
+DEFS      += -DBENCHPOD_WIFI_BRIDGE=1
+INCLUDES  += -I$(BRIDGE_CORE)/include
+C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c \
+             $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c
+endif
+
 OPT := -Og -g3
 
 # -MMD -MP emits a per-object .d file of header deps (included below) so editing a
