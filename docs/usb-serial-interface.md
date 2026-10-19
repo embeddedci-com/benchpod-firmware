@@ -214,6 +214,27 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). |
+| `bridge [scan \| reboot \| factory-reset yes]` | Development builds only. The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters); `scan` lists the networks it sees; `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
+
+#### Wi-Fi bridge (development builds)
+
+BenchPod v4 has no radio: a small bridge box on the Ethernet port carries the pod's traffic to
+Wi-Fi ([wifi-bridge/README.md](../wifi-bridge/README.md), protocol in
+[wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)). Development builds talk to it
+(release builds leave it out until the bridge hardware is verified, `WIFI_BRIDGE` in the
+Makefile). While a bridge sends its HELLO on the Ethernet port:
+
+- `wifi-set` stores the credentials **on the bridge**, not in the pod's flash, so USB networking
+  and the ESP32-C3 are not affected. It prints the same `[cfg] credentials written to flash`
+  marker, then `saved SSID "<ssid>" on the Wi-Fi bridge: ...`. Errors: `wifi-set: <reason>`.
+- `wifi-show` prints the bridge's view with the same `ssid:`, `state:`, `ip:` and `rssi:` lines,
+  plus `via: wifi-bridge <mac> fw <version> hw <rev>, paired|not paired`, a `problem:` line when
+  pairing fails, and the bridge's channel, uptime and frame counters. `state` is the bridge state:
+  `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or `no-ap`.
+- `wifi-clear` clears the bridge's credentials.
+
+The pod pairs with the bridge on its own the first time it sees it. If `wifi-show` reports `the
+bridge is paired with another pod`, press PAIR on the bridge.
 
 #### Firmware, gateware and blobs
 

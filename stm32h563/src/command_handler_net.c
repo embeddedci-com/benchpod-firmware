@@ -28,6 +28,83 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"
+
+/* ---- Wi-Fi bridge (dev builds): wifi_set / wifi_clear / wifi_status go to the external bridge
+   box when one says HELLO on the Ethernet port (wifi-bridge/docs/PROTOCOL.md). The pod's own
+   config_t stays untouched, so the ESP32-C3 path and USB networking are not affected. */
+
+/* Formats a refusal or error from the bridge, or why it was not asked. */
+static void bridge_send_error(int conn_id, const char *err, const wb_reply_t *r) {
+    char m[128];
+    if (err) snprintf(m, sizeof(m), "Wi-Fi bridge: %s", err);
+    else     snprintf(m, sizeof(m), "Wi-Fi bridge: %s%s%s", wb_result_str(r->result),
+                      r->message[0] ? ": " : "", r->message);
+    send_error(conn_id, m);
+}
+
+/* true when a bridge took the request (a reply has been sent either way). */
+static bool bridge_wifi_set(int conn_id, const char *ssid, const char *pass) {
+    if (!wifi_bridge_present()) return false;
+    const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
+    int rc = wifi_bridge_set_wifi(ssid, pass, &g_wifi_bridge_reply, &err);
+    if (rc != 0 || g_wifi_bridge_reply.result != BWP_OK) { bridge_send_error(conn_id, rc ? err : NULL, &g_wifi_bridge_reply); return true; }
+    char resp[160];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"ssid\":");
+    bp_emit_jstr(&e, ssid);
+    bp_emit_raw(&e, ",\"via\":\"wifi-bridge\"}}\n");
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+    return true;
+}
+
+static bool bridge_wifi_clear(int conn_id) {
+    if (!wifi_bridge_present()) return false;
+    const char *err = NULL;
+    int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
+    if (rc != 0 || g_wifi_bridge_reply.result != BWP_OK) { bridge_send_error(conn_id, rc ? err : NULL, &g_wifi_bridge_reply); return true; }
+    send_ok_str(conn_id, "\"cleared\"");
+    return true;
+}
+
+static bool bridge_wifi_status(int conn_id) {
+    if (!wifi_bridge_present()) return false;
+    wb_info_t i;
+    wifi_bridge_get_info(&i);
+    char resp[768];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,\"connected\":%s,\"ssid\":",
+            wb_state_str(i.state), (i.flags & BWP_F_CONFIGURED) ? "true" : "false",
+            i.state == BWP_ST_CONNECTED ? "true" : "false");
+    bp_emit_jstr(&e, i.have_status ? i.ssid : "");
+    bp_emit(&e, ",\"via\":\"wifi-bridge\",\"bridge\":{\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"fw\":",
+            i.mac[0], i.mac[1], i.mac[2], i.mac[3], i.mac[4], i.mac[5]);
+    bp_emit_jstr(&e, i.fw_version);
+    bp_emit_raw(&e, ",\"hw\":");
+    bp_emit_jstr(&e, i.hw_rev);
+    bp_emit(&e, ",\"paired\":%s,\"problem\":", i.paired ? "true" : "false");
+    if (i.problem) bp_emit_jstr(&e, i.problem); else bp_emit_raw(&e, "null");
+    if (i.have_status && i.state == BWP_ST_CONNECTED)
+        bp_emit(&e, ",\"rssi_dbm\":%d,\"channel\":%u", i.rssi, i.channel);
+    else
+        bp_emit_raw(&e, ",\"rssi_dbm\":null,\"channel\":null");
+    bp_emit(&e, ",\"reason\":%u,\"uptime_s\":%lu,\"status_age_ms\":%lu,\"counters\":{\"eth_rx\":%lu,"
+            "\"wifi_tx\":%lu,\"wifi_tx_err\":%lu,\"wifi_rx\":%lu,\"eth_tx\":%lu,\"eth_tx_err\":%lu,\"dropped\":%lu}}}}\n",
+            i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms,
+            (unsigned long)i.counters.eth_rx, (unsigned long)i.counters.wifi_tx,
+            (unsigned long)i.counters.wifi_tx_err, (unsigned long)i.counters.wifi_rx,
+            (unsigned long)i.counters.eth_tx, (unsigned long)i.counters.eth_tx_err,
+            (unsigned long)i.counters.dropped);
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "wifi_status: reply too long"); return true; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+    return true;
+}
+#endif
+
+
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
 
@@ -229,6 +306,12 @@ void handle_wifi_set(int conn_id, const char *json) {
     if (bp_json_get_fit(json, "password", cfg.password, sizeof(cfg.password)) < 0) {   /* open AP: empty */
         send_error(conn_id, "password too long"); return;
     }
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (bridge_wifi_set(conn_id, cfg.ssid, cfg.password)) {   /* a bridge box keeps it, not the pod */
+        memset(&cfg, 0, sizeof(cfg));
+        return;
+    }
+#endif
     if (config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
     net_wifi_reload_after_reply();   /* (re)connect with the new creds, once this reply is out */
 
@@ -282,6 +365,9 @@ void wifi_clear_poll(void) {
 
 void handle_wifi_clear(int conn_id, const char *json) {
     (void)json;
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (bridge_wifi_clear(conn_id)) return;
+#endif
     config_clear();
     net_wifi_reload_after_reply();   /* drops Wi-Fi once this reply is out (the cloud may ride it) */
     s_c3_nvs    = C3_NVS_PENDING;    /* then wifi_clear_poll erases the C3's NVS */
@@ -409,6 +495,9 @@ void handle_speedtest(int conn_id, const char *buf) {
 
 void handle_wifi_status(int conn_id, const char *json) {
     (void)json;
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (bridge_wifi_status(conn_id)) return;
+#endif
     config_t cfg;
     bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
     /* esp-hosted transport counters since the link came up.  `batch` is the

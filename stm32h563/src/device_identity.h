@@ -38,6 +38,9 @@
    docs/design/cloud-hardening.md). */
 #define DEVICE_ID_CTX_WS_AUTH_V2 "benchpod-ws-auth:v2"
 #define DEVICE_ID_CTX_POP      "benchpod-pop:v1"
+/* Not a published signature: wifi_bridge_net.c hashes this signature over the bridge's MAC into
+   the pairing key for that bridge (Ed25519 is deterministic, so the key needs no storage). */
+#define DEVICE_ID_CTX_WIFI_BRIDGE "benchpod-wifi-bridge-pair:v1"
 
 /* Largest message device_identity_sign_ctx will sign (context + NUL + payload): the v2 login
    payload is a host name (< 64 B) + NUL + a server nonce (<= 128 B). */

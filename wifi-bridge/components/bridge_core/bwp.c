@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "bwp_crypto.h"
 #include "hmac_sha256.h"
 
 static void put_be16(uint8_t *p, uint16_t v)
@@ -336,6 +337,9 @@ size_t bwp_build_hello(uint8_t *buf, size_t cap, const uint8_t dst[6], const bwp
         bwp_put(&w, BWP_T_POD_MAC, h->pod_mac, 6);
     }
     bwp_put(&w, BWP_T_NONCE, h->nonce, BWP_NONCE_LEN);
+    if (h->flags & BWP_F_PAIRED) {
+        bwp_put(&w, BWP_T_PUBKEY, h->bridge_pub, BWP_PUBKEY_LEN);
+    }
     return bwp_finish(&w);
 }
 
@@ -440,7 +444,7 @@ bool bwp_passphrase_valid(const char *pass, size_t len)
     return true;
 }
 
-bwp_result_t bwp_parse_set_wifi(const bwp_msg_t *m, bwp_set_wifi_t *out)
+bwp_result_t bwp_parse_set_wifi(const bwp_msg_t *m, const uint8_t key[BWP_KEY_LEN], bwp_set_wifi_t *out)
 {
     const uint8_t *v;
     uint16_t n;
@@ -451,10 +455,14 @@ bwp_result_t bwp_parse_set_wifi(const bwp_msg_t *m, bwp_set_wifi_t *out)
     memcpy(out->ssid, v, n);
     out->ssid_len = n;
     if (bwp_find(m->body, m->body_len, BWP_T_PASSPHRASE, &v, &n)) {
-        if (n > 64 || !bwp_passphrase_valid((const char *)v, n)) {
+        return BWP_E_BAD_REQUEST;  // never in the clear on the wire
+    }
+    if (bwp_find(m->body, m->body_len, BWP_T_ENC_PASSPHRASE, &v, &n)) {
+        int len = key ? bwp_open_passphrase(key, v, n, out->passphrase) : -1;
+        if (len < 0 || !bwp_passphrase_valid(out->passphrase, (size_t)len)) {
+            memset(out->passphrase, 0, sizeof(out->passphrase));
             return BWP_E_BAD_REQUEST;
         }
-        memcpy(out->passphrase, v, n);
     }
     return BWP_OK;
 }

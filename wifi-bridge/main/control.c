@@ -9,6 +9,7 @@
 
 #include "bridge.h"
 #include "bridge_util.h"
+#include "bwp_crypto.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -34,6 +35,7 @@ static bwp_ap_t s_aps[BWP_SCAN_MAX_APS];
 static const uint8_t BCAST[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static bwp_pairing_t s_pair;      // owned by the control task
 static volatile bool s_paired;    // copy for HELLO flags and the console
+static uint8_t s_pub[BWP_PUBKEY_LEN];  // our X25519 public key from the pairing (HELLO)
 static bool s_sign;               // sign the response to the request being handled
 static uint32_t s_counter;        // its COUNTER
 
@@ -70,6 +72,7 @@ static void forget_pairing(void)
 {
     pairkey_clear();
     pairing_forget(&s_pair);
+    memset(s_pub, 0, sizeof(s_pub));
     s_paired = false;
     // Let a different pod on the cable become "the pod" without unplugging it.
     portENTER_CRITICAL(&g_bridge.lock);
@@ -110,6 +113,7 @@ static void send_hello(void)
     bwp_hello_t h = {.fw_version = esp_app_get_description()->version, .hw_rev = CONFIG_BRIDGE_HW_REV,
                      .state = wifi_state(), .flags = bridge_flags()};
     memcpy(h.nonce, s_pair.nonce, BWP_NONCE_LEN);
+    memcpy(h.bridge_pub, s_pub, BWP_PUBKEY_LEN);
     eth_get_mac(h.bridge_mac);
     bool known = bridge_pod_mac(h.pod_mac);
     send(bwp_build_hello(s_out, sizeof(s_out), known ? h.pod_mac : NULL, &h));
@@ -158,6 +162,11 @@ static void handle(uint8_t *buf, size_t len)
         bwp_put_u8(&w, BWP_T_RESULT, pairing_result(v));
         bwp_put_str(&w, BWP_T_MESSAGE, why[v]);
         bwp_put(&w, BWP_T_NONCE, s_pair.nonce, BWP_NONCE_LEN);
+        if (v == PAIR_REPLAY) {
+            // The MAC was right, only the counter is old: a rebooted pod that started again at 1.
+            // Tell it where to continue. This reveals nothing: counters are not secret.
+            bwp_put_u32(&w, BWP_T_COUNTER, s_pair.last_counter);
+        }
         send(bwp_finish(&w));
         return;
     }
@@ -168,20 +177,38 @@ static void handle(uint8_t *buf, size_t len)
 
     switch (m.type) {
     case BWP_PAIR: {
-        uint8_t key[BWP_KEY_LEN];
-        memcpy(key, new_key, BWP_KEY_LEN);
-        if (pairkey_store(key) != ESP_OK) {
+        // X25519: a fresh key pair for this pairing; the key is derived on both sides and never
+        // crosses the cable. Our public key goes back in the answer (and in every HELLO).
+        uint8_t secret[32], pub[BWP_PUBKEY_LEN], key[BWP_KEY_LEN];
+        esp_fill_random(secret, sizeof(secret));
+        bwp_x25519_public(secret, pub);
+        if (bwp_pair_key(secret, new_key, new_key, pub, key) != 0) {
+            r = BWP_E_BAD_REQUEST;
+            msg = "bad public key";
+        } else if (pairkey_store(key, pub) != ESP_OK) {
             r = BWP_E_STORAGE;
         } else {
-            pairing_set_key(&s_pair, key);
-            s_paired = true;
             r = BWP_OK;
+        }
+        secure_zero(secret, sizeof(secret));
+        bwp_writer_t w;
+        bwp_begin(&w, s_out, sizeof(s_out), dst, mac, m.type | BWP_RESPONSE, m.seq);
+        bwp_put_u8(&w, BWP_T_RESULT, r);
+        if (r == BWP_OK) {
+            bwp_put(&w, BWP_T_PUBKEY, pub, sizeof(pub));
+        } else if (msg) {
+            bwp_put_str(&w, BWP_T_MESSAGE, msg);
+        }
+        send(bwp_finish(&w));  // a rotation is answered under the old key, so switch after
+        if (r == BWP_OK) {
+            pairing_set_key(&s_pair, key);
+            memcpy(s_pub, pub, sizeof(s_pub));
+            s_paired = true;
             char m6[18];
             bu_mac_str(dst, m6);
             ESP_LOGI(TAG, "%s with pod %s", authed ? "pairing key rotated" : "paired", m6);
         }
         secure_zero(key, sizeof(key));
-        reply(&m, dst, r, NULL);  // signed with the old key if the request was (rotation)
         return;
     }
     case BWP_STATUS:
@@ -195,14 +222,14 @@ static void handle(uint8_t *buf, size_t len)
     }
     case BWP_SET_WIFI: {
         bwp_set_wifi_t sw;
-        r = bwp_parse_set_wifi(&m, &sw);
+        r = bwp_parse_set_wifi(&m, s_pair.paired ? s_pair.key : NULL, &sw);
         if (r == BWP_OK && ota_active()) {
             r = BWP_E_BUSY;
             msg = "OTA in progress";
         } else if (r == BWP_OK && bridge_set_wifi(sw.ssid, sw.ssid_len, sw.passphrase) != ESP_OK) {
             r = BWP_E_STORAGE;
         } else if (r != BWP_OK) {
-            msg = "SSID 1-32 bytes; passphrase empty, 8-63 printable ASCII or 64 hex digits";
+            msg = "SSID 1-32 bytes; passphrase sealed (ENC_PASSPHRASE), empty, 8-63 printable ASCII or 64 hex";
         }
         secure_zero(&sw, sizeof(sw));
         reply(&m, dst, r, msg);
@@ -303,7 +330,7 @@ void control_start(void)
 {
     uint8_t nonce[BWP_NONCE_LEN], key[BWP_KEY_LEN];
     esp_fill_random(nonce, sizeof(nonce));  // true random: Wi-Fi (RF) is already started
-    bool have = pairkey_load(key);
+    bool have = pairkey_load(key, s_pub);
     pairing_init(&s_pair, nonce, have ? key : NULL);
     secure_zero(key, sizeof(key));
     s_paired = have;

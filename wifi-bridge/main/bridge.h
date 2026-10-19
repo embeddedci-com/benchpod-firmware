@@ -68,9 +68,10 @@ esp_err_t creds_clear(void);
 // Clears credentials and tells the Wi-Fi module (button, console, control channel).
 esp_err_t bridge_clear_wifi(void);
 esp_err_t bridge_set_wifi(const char *ssid, size_t ssid_len, const char *pass);
-// Pairing key of the pod (control channel), same NVS namespace.
-bool pairkey_load(uint8_t key[BWP_KEY_LEN]);
-esp_err_t pairkey_store(const uint8_t key[BWP_KEY_LEN]);
+// Pairing (control channel), same NVS namespace: the key shared with the pod and our X25519
+// public key from that pairing (sent in HELLO, so the pod can recompute the key after a reboot).
+bool pairkey_load(uint8_t key[BWP_KEY_LEN], uint8_t pub[32]);
+esp_err_t pairkey_store(const uint8_t key[BWP_KEY_LEN], const uint8_t pub[32]);
 esp_err_t pairkey_clear(void);
 
 // ---- ota.c: shared by the control channel and the console

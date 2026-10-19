@@ -176,4 +176,14 @@ struct ip4_addr;
 struct netif *net_route_src_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
 #define LWIP_HOOK_IP4_ROUTE_SRC(src, dest) net_route_src_hook((src), (dest))
 
+/* Wi-Fi bridge control channel (EtherType 0x88B5, wifi_bridge_net.c): ethernet_input hands
+   frames with an EtherType it does not know to this hook. It takes the bridge's frames on the
+   wired netif (returns ERR_OK = 0 and frees the pbuf) and refuses everything else (lwIP drops
+   it as before). Dev builds only, see WIFI_BRIDGE in the Makefile. */
+#if defined(BENCHPOD_WIFI_BRIDGE)
+struct pbuf;
+int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif);
+#define LWIP_HOOK_UNKNOWN_ETH_PROTOCOL(p, netif) wifi_bridge_eth_input((p), (netif))
+#endif
+
 #endif /* __LWIPOPTS_H__ */

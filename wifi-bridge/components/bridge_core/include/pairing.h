@@ -1,8 +1,11 @@
 // Control-channel pairing: which requests the bridge accepts, and from whom.
 //
-//   unpaired --PAIR(KEY) from the pod--> paired      (trust on first use)
-//   paired   --PAIR(KEY) with valid AUTH--> paired, new key (rotation by the same pod)
+//   unpaired --PAIR(PUBKEY) from the pod--> paired      (trust on first use)
+//   paired   --PAIR(PUBKEY) with valid AUTH--> paired, new key (rotation by the same pod)
 //   paired   --PAIR button / factory reset--> unpaired (the next pod that offers a key wins)
+//
+// PAIR carries the pod's X25519 public key; the bridge answers with its own and both compute the
+// key with bwp_pair_key (bwp_crypto.h). The key itself never crosses the cable.
 //
 // While unpaired only STATUS, SCAN and PAIR are accepted. While paired every request must carry
 // COUNTER + AUTH (bwp_sign) with the stored key and the bridge's per-boot nonce, and the counter
@@ -27,13 +30,14 @@ typedef struct {
 
 typedef enum {
     PAIR_ACCEPT = 0,     // handle the request
-    PAIR_STORE_KEY,      // a PAIR to accept: persist *new_key, then call pairing_set_key
+    PAIR_STORE_KEY,      // a PAIR to accept: *new_key is the pod's public key; derive the key
+                         // (bwp_pair_key), persist it, then call pairing_set_key
     PAIR_NOT_PAIRED,     // BWP_E_NOT_PAIRED
     PAIR_ALREADY_PAIRED, // BWP_E_ALREADY_PAIRED
     PAIR_AUTH_MISSING,   // BWP_E_AUTH
     PAIR_AUTH_BAD,       // BWP_E_AUTH
     PAIR_REPLAY,         // BWP_E_AUTH: counter not above the last accepted one
-    PAIR_BAD_KEY,        // BWP_E_BAD_REQUEST: PAIR without a 32-byte KEY
+    PAIR_BAD_KEY,        // BWP_E_BAD_REQUEST: PAIR without a 32-byte PUBKEY
 } pair_verdict_t;
 
 // key: the stored pairing key, or NULL when none is stored.

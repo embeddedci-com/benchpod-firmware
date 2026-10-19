@@ -3,13 +3,15 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined
 CORE := ../components/bridge_core
-SRCS := test_main.c $(CORE)/bwp.c $(CORE)/l2fwd.c $(CORE)/bridge_util.c $(CORE)/hmac_sha256.c $(CORE)/pairing.c
+MONO := ../components/monocypher
+SRCS := test_main.c $(CORE)/bwp.c $(CORE)/l2fwd.c $(CORE)/bridge_util.c $(CORE)/hmac_sha256.c $(CORE)/pairing.c \
+        $(CORE)/bwp_crypto.c $(MONO)/monocypher.c
 
 all: run
 
 build/test_bridge: $(SRCS) $(wildcard $(CORE)/include/*.h)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -I$(CORE)/include -o $@ $(SRCS)
+	$(CC) $(CFLAGS) -I$(CORE)/include -I$(MONO) -o $@ $(SRCS)
 
 run: build/test_bridge
 	./build/test_bridge
