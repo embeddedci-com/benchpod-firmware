@@ -239,6 +239,9 @@ void command_handler_poll(void) {
     /* ---- wifi_clear: erase the ESP32-C3's NVS once the reply is out ---- */
     wifi_clear_poll();
 
+    /* ---- the console's wifi-scan: print the networks once the scan ends ---- */
+    wifi_scan_poll();
+
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
 

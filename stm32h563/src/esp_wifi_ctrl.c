@@ -22,6 +22,7 @@
 #include "esp_rom_flash.h"
 #include "blob_store.h"
 #include "hw_worker.h"
+#include "wifi_scan.h"
 
 #include "pico/time.h"
 #include "bp_log.h"
@@ -39,6 +40,10 @@ enum {
     ID_REQ_WIFI_CONNECT = 282, ID_RESP_WIFI_CONNECT = 538,
     ID_REQ_WIFI_SETCFG  = 284, ID_RESP_WIFI_SETCFG  = 540,
     ID_REQ_WIFI_SETSTORAGE = 313, ID_RESP_WIFI_SETSTORAGE = 569,
+    ID_REQ_SCAN_START   = 286, ID_RESP_SCAN_START   = 542,
+    ID_REQ_SCAN_AP_NUM  = 288, ID_RESP_SCAN_AP_NUM  = 544,
+    ID_REQ_SCAN_CLEAR   = 290, ID_RESP_SCAN_CLEAR   = 546,
+    ID_REQ_SCAN_AP_REC  = 351, ID_RESP_SCAN_AP_REC  = 607,
     ID_EVENT_STA_CONNECTED    = 775,
     ID_EVENT_STA_DISCONNECTED = 776,
 };
@@ -58,6 +63,16 @@ enum {
    which is what a stuck HANDSHAKE looks like) means the C3 is gone, and the link restarts. */
 #define RSSI_MAX_MISSES       3
 #define RSSI_PERIOD_MS        5000
+/* Wi-Fi scan (esp_wifi_ctrl_scan_request).  The C3 runs it as a blocking esp_wifi_scan_start:
+   its answer comes when the scan is over, about 2 s for the 2.4 GHz channels (longer while
+   joined: it returns to the home channel between channels). */
+#define SCAN_TIMEOUT_MS       12000
+/* A request that finds the link mid-connect waits for it to finish (joined: scan alongside;
+   failed: scan on its own) this long, then fails. */
+#define SCAN_WAIT_MS          30000
+/* Access points read back one at a time (GetApRecord: one record per frame, since this SPI host
+   does not reassemble fragmented frames); the rest are dropped with ClearApList. */
+#define SCAN_READ_MAX         40
 
 /* ---- tiny protobuf writer ------------------------------------------------- */
 typedef struct { uint8_t *buf; size_t cap, len; bool err; } pb_w;
@@ -190,6 +205,12 @@ typedef enum {
     WC_UP,
     WC_UP_RSSI,    /* connected; a periodic GetRssi is outstanding */
     WC_BACKOFF,
+    /* A Wi-Fi scan (esp_wifi_ctrl_scan_request): joined, from WC_UP; else on a C3 started for
+       the scan alone (s_scan_only), which is held in reset again when it ends. */
+    WC_SCAN_START, /* ScanStart(block) sent: answered when the scan is over */
+    WC_SCAN_NUM,   /* GetApNum */
+    WC_SCAN_REC,   /* GetApRecord, one access point per request */
+    WC_SCAN_CLEAR, /* ClearApList: frees what was not read */
 } wc_state_t;
 
 static config_t       s_cfg;
@@ -215,7 +236,23 @@ static uint8_t        s_rssi_misses;    /* consecutive unanswered GetRssi while 
 static volatile uint32_t s_lost_rssi;   /* link restarts: C3 stopped answering */
 static volatile uint32_t s_lost_reboot; /* link restarts: C3 announced a new boot */
 
+/* Wi-Fi scan.  The worker task asks (s_scan_req_id), the net task runs it and publishes the
+   result (s_scan_list, s_scan_err, then s_scan_done_id). */
+static volatile uint32_t s_scan_req_id;   /* the newest request; 0 = none since boot */
+static volatile uint32_t s_scan_done_id;  /* the newest request answered */
+static uint32_t       s_scan_run_id;      /* the request being run, 0 = none */
+static const char *volatile s_scan_err;   /* NULL = s_scan_list is the answer */
+static wifi_scan_list_t s_scan_list;
+static bool           s_scan_only;        /* the C3 runs for this scan only */
+static absolute_time_t s_scan_wait;       /* a request waiting for a connect gives up here */
+static bool           s_scan_waiting;
+static int32_t        s_scan_num;         /* GetApNum's answer */
+static int            s_scan_read;        /* GetApRecord requests sent */
+static volatile bool  s_scan_rec_ok;      /* the last GetApRecord answer held a record */
+static wifi_scan_ap_t s_scan_rec;
+
 const char *esp_wifi_ctrl_state_str(void) {
+    if (s_scan_only) return "scanning";     /* the C3 runs for a scan, not for a link */
     switch (s_state) {
         case WC_DOWN:        return s_configured ? "starting" : "disabled";
         case WC_WAIT_READY:  return "waiting-slave";
@@ -224,6 +261,8 @@ const char *esp_wifi_ctrl_state_str(void) {
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: return "connecting";
         case WC_UP: case WC_UP_RSSI: return "connected";
         case WC_BACKOFF:     return "backoff";
+        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR:
+            return "connected";             /* a scan alongside the link */
         default:             return "unknown";
     }
 }
@@ -241,7 +280,11 @@ void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted) 
 }
 
 bool esp_wifi_ctrl_configured(void) { return s_configured; }
-bool esp_wifi_ctrl_connected(void) { return s_state == WC_UP || s_state == WC_UP_RSSI; }
+bool esp_wifi_ctrl_connected(void) {
+    return s_state == WC_UP || s_state == WC_UP_RSSI ||
+           (!s_scan_only && (s_state == WC_SCAN_START || s_state == WC_SCAN_NUM ||
+                             s_state == WC_SCAN_REC || s_state == WC_SCAN_CLEAR));
+}
 
 /* Last measured STA RSSI (dBm). Returns true + fills *dbm iff a reading is known. */
 bool esp_wifi_ctrl_rssi(int *dbm) {
@@ -347,6 +390,34 @@ static void on_serial_frame(const esp_hosted_rx_t *rx) {
             if (field == 1 && wire == 0) s_resp_status = (int32_t)iv;
             else if (field == 2 && wire == 0) { s_rssi = (int32_t)iv; s_have_rssi = true; }
         }
+    } else if (msg_id == ID_RESP_SCAN_AP_NUM && payload) {
+        /* Rpc_Resp_WifiScanGetApNum { resp = 1; number = 2 } */
+        pb_r pr = { payload, payload + payload_len };
+        while (pb_next(&pr, &field, &wire, &iv, &b, &bl)) {
+            if (field == 1 && wire == 0) s_resp_status = (int32_t)iv;
+            else if (field == 2 && wire == 0) s_scan_num = (int32_t)iv;
+        }
+    } else if (msg_id == ID_RESP_SCAN_AP_REC && payload) {
+        /* Rpc_Resp_WifiScanGetApRecord { resp = 1; wifi_ap_record ap_record = 2 { ssid = 2;
+           primary = 3; rssi = 5 (int32); authmode = 6 } } */
+        pb_r pr = { payload, payload + payload_len };
+        while (pb_next(&pr, &field, &wire, &iv, &b, &bl)) {
+            if (field == 1 && wire == 0) s_resp_status = (int32_t)iv;
+            else if (field == 2 && wire == 2) {
+                pb_r ar = { b, b + bl };
+                uint32_t af, aw; uint64_t ai; const uint8_t *ab = NULL; size_t abl = 0;
+                memset(&s_scan_rec, 0, sizeof(s_scan_rec));
+                while (pb_next(&ar, &af, &aw, &ai, &ab, &abl)) {
+                    if (af == 2 && aw == 2) {
+                        size_t n = abl < sizeof(s_scan_rec.ssid) - 1 ? abl : sizeof(s_scan_rec.ssid) - 1;
+                        memcpy(s_scan_rec.ssid, ab, n);
+                    } else if (af == 3 && aw == 0) s_scan_rec.channel = (uint8_t)ai;
+                    else if (af == 5 && aw == 0) s_scan_rec.rssi = (int8_t)(int32_t)ai;
+                    else if (af == 6 && aw == 0) s_scan_rec.authmode = (uint8_t)ai;
+                }
+                s_scan_rec_ok = true;
+            }
+        }
     } else if (payload) {
         pb_r pr = { payload, payload + payload_len };
         while (pb_next(&pr, &field, &wire, &iv, &b, &bl))
@@ -372,7 +443,120 @@ static bool send_req(uint32_t req_id, uint32_t resp_id,
     return esp_hosted_spi_send(ESP_SERIAL_IF, 0, tlv, (uint16_t)tn) == 0;
 }
 
+/* ---- Wi-Fi scan -------------------------------------------------------------- */
+
+/* Answer the running request (err NULL: s_scan_list is the answer).  State is the caller's. */
+static void scan_publish(const char *err) {
+    s_scan_err = err;
+    if (err) log_printf("[wifi] scan failed: %s\n", err);
+    else     log_printf("[wifi] scan: %u networks (%u access points)\n",
+                        (unsigned)s_scan_list.n, (unsigned)s_scan_list.seen);
+    __sync_synchronize();               /* the list and the error before the id that publishes them */
+    s_scan_done_id = s_scan_run_id;
+    s_scan_run_id  = 0;
+    s_scan_waiting = false;
+}
+
+/* The scan is over: answer it, then back to the link (joined) or the C3 back into reset (a C3
+   started for the scan; a configured pod's next poll starts its normal connect). */
+static void scan_finish(const char *err) {
+    scan_publish(err);
+    s_await_resp = 0;
+    if (s_scan_only) {
+        s_scan_only = false;
+        esp_hosted_spi_stop(); s_started = false;
+        s_state = WC_DOWN;
+    } else {
+        s_rssi_deadline = make_timeout_time_ms(1000);
+        s_state = WC_UP;
+    }
+}
+
+static void scan_send_start(void) {
+    wifi_scan_list_clear(&s_scan_list);
+    uint8_t p[8];
+    pb_w w = { p, sizeof(p), 0, false };
+    pb_int(&w, 2, 1);                   /* Rpc_Req_WifiScanStart.block: answer when done */
+    if (w.err || !send_req(ID_REQ_SCAN_START, ID_RESP_SCAN_START, p, w.len)) {
+        scan_finish("could not send the scan request to the ESP32-C3");
+        return;
+    }
+    s_deadline = make_timeout_time_ms(SCAN_TIMEOUT_MS);
+    s_state = WC_SCAN_START;
+}
+
+static void scan_send_record(void) {
+    s_scan_rec_ok = false;
+    if (!send_req(ID_REQ_SCAN_AP_REC, ID_RESP_SCAN_AP_REC, NULL, 0)) {
+        scan_finish("could not read the scan result from the ESP32-C3");
+        return;
+    }
+    s_scan_read++;
+    s_state = WC_SCAN_REC;
+}
+
+/* Net task: take a new request (esp_wifi_ctrl_scan_request) when nothing else holds the C3. */
+static void scan_intake(void) {
+    uint32_t want = s_scan_req_id;
+    if (s_scan_run_id || want == s_scan_done_id) return;
+    if (s_paused || esp_rom_flash_busy() || s_state == WC_FLASHING) {
+        s_scan_run_id = want;
+        scan_publish("the ESP32-C3 is being flashed or erased; try again when that is done");
+        return;
+    }
+    if (s_state == WC_UP) {             /* joined: scan alongside, the link stays up */
+        s_scan_run_id = want;
+        s_scan_only = false;
+        scan_send_start();
+        return;
+    }
+    if (!s_configured || s_state == WC_BACKOFF || (s_state == WC_DOWN && !s_started)) {
+        /* No link to keep: start the C3 for the scan alone (Init, SetStorage, SetMode, Start,
+           no credentials, no Connect). */
+        s_scan_run_id = want;
+        s_scan_only = true;
+        if (s_started) esp_hosted_spi_stop();
+        s_await_resp = 0;
+        esp_hosted_spi_start(); s_started = true;
+        s_state = WC_WAIT_READY;
+        s_boot_deadline = make_timeout_time_ms(SLAVE_BOOT_TIMEOUT_MS);
+        return;
+    }
+    /* Mid-connect (or a GetRssi outstanding): wait for it to end, joined or failed. */
+    if (!s_scan_waiting) {
+        s_scan_waiting = true;
+        s_scan_wait = make_timeout_time_ms(SCAN_WAIT_MS);
+    } else if (time_reached(s_scan_wait)) {
+        s_scan_run_id = want;
+        scan_publish("Wi-Fi is still connecting; try the scan again in a moment");
+    }
+}
+
+uint32_t esp_wifi_ctrl_scan_request(void) {
+    uint32_t id = s_scan_req_id;
+    if (id != s_scan_done_id) return id;   /* one is waiting or running: share its answer */
+    if (++id == 0) id = 1;
+    s_scan_req_id = id;
+    return id;
+}
+
+esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_list_t **list,
+                                                const char **err) {
+    uint32_t done = s_scan_done_id;
+    if (id == 0 || id > s_scan_req_id) return ESP_WIFI_SCAN_UNKNOWN;
+    if (done < id) return ESP_WIFI_SCAN_RUNNING;
+    __sync_synchronize();
+    if (s_scan_err) { if (err) *err = s_scan_err; return ESP_WIFI_SCAN_FAILED; }
+    if (list) *list = &s_scan_list;
+    return ESP_WIFI_SCAN_DONE;
+}
+
 static void to_backoff(const char *why) {
+    if (s_scan_run_id) {                /* a failure mid-scan ends the scan with it */
+        bool only = s_scan_only;
+        scan_finish(why);
+        if (only) return;               /* nothing to back off from: the C3 is off again */
+    }
     log_printf("[wifi] %s — backoff\n", why);
     s_await_resp = 0;
     s_state = WC_BACKOFF;
@@ -439,6 +623,8 @@ void esp_wifi_ctrl_image_installed(void) {
 }
 
 void esp_wifi_ctrl_reload(void) {
+    if (s_scan_run_id) scan_publish("the Wi-Fi settings changed during the scan; scan again");
+    s_scan_only = false;
     if (s_started) { esp_hosted_spi_stop(); s_started = false; }
     s_flash_tried = false;   /* new credentials (or a manual flash) earn another automatic try */
     esp_netif_set_link_up(false);
@@ -447,6 +633,7 @@ void esp_wifi_ctrl_reload(void) {
 }
 
 void esp_wifi_ctrl_poll(void) {
+    scan_intake();
     /* A backoff that expires mid-flash would release the C3's reset and knock it out of its
        ROM loader, so leave the straps alone while a console command holds them. */
     if (s_paused) return;
@@ -454,7 +641,7 @@ void esp_wifi_ctrl_poll(void) {
        when new credentials (wifi-set, wifi-clear) reload this control in the meantime. */
     if (esp_rom_flash_busy()) return;
     /* Gate the whole co-processor on configuration. */
-    if (!s_configured) {
+    if (!s_configured && !s_scan_only) {
         if (s_started) { esp_hosted_spi_stop(); s_started = false; s_state = WC_DOWN; }
         return;
     }
@@ -480,6 +667,7 @@ void esp_wifi_ctrl_poll(void) {
         switch (s_state) {
         case WC_INIT: case WC_SETSTORAGE: case WC_SETMODE: case WC_SETCFG: case WC_START:
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
+        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR:
             s_lost_reboot++;
             slave_lost("it announced a new boot");
             return;
@@ -498,6 +686,10 @@ void esp_wifi_ctrl_poll(void) {
         return;
 
     case WC_WAIT_READY:
+        if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline) && s_scan_only) {
+            to_backoff("the ESP32-C3 did not start (no boot event; flash-esp32 reinstalls it)");
+            return;
+        }
         if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline)) {
             if (!s_flash_tried && blob_store_present(BLOB_ESP)) {
                 /* Hold the C3 in reset and hand it to the worker, which runs the ~2 minute
@@ -554,7 +746,10 @@ void esp_wifi_ctrl_poll(void) {
         return;
 
     case WC_SETMODE:
-        if (s_resp_ready) {
+        if (s_resp_ready && s_scan_only) {      /* a scan needs no credentials */
+            if (send_req(ID_REQ_WIFI_START, ID_RESP_WIFI_START, NULL, 0)) s_state = WC_START;
+            else to_backoff("start send failed");
+        } else if (s_resp_ready) {
             uint8_t p[192];
             size_t n = build_set_config(p, sizeof(p), s_cfg.ssid, s_cfg.password);
             if (n && send_req(ID_REQ_WIFI_SETCFG, ID_RESP_WIFI_SETCFG, p, n)) s_state = WC_SETCFG;
@@ -570,7 +765,9 @@ void esp_wifi_ctrl_poll(void) {
         return;
 
     case WC_START:
-        if (s_resp_ready) {
+        if (s_resp_ready && s_scan_only) {
+            scan_send_start();
+        } else if (s_resp_ready) {
             if (send_req(ID_REQ_WIFI_CONNECT, ID_RESP_WIFI_CONNECT, NULL, 0)) s_state = WC_CONNECT;
             else to_backoff("connect send failed");
         } else if (time_reached(s_deadline)) to_backoff("start timeout");
@@ -631,6 +828,56 @@ void esp_wifi_ctrl_poll(void) {
         } else if (time_reached(s_deadline)) {
             (void)rssi_missed("request timed out");
         }
+        return;
+
+    case WC_SCAN_START:
+        if (s_resp_ready) {
+            if (s_resp_status != 0) {
+                static char why[64];
+                snprintf(why, sizeof(why), "the ESP32-C3 refused the scan (error 0x%lx)",
+                         (unsigned long)(uint32_t)s_resp_status);
+                scan_finish(why);
+            } else if (send_req(ID_REQ_SCAN_AP_NUM, ID_RESP_SCAN_AP_NUM, NULL, 0)) {
+                s_scan_num = 0;
+                s_state = WC_SCAN_NUM;
+            } else {
+                scan_finish("could not read the scan result from the ESP32-C3");
+            }
+        } else if (time_reached(s_deadline)) {
+            scan_finish("the ESP32-C3 did not finish the scan");
+        }
+        return;
+
+    case WC_SCAN_NUM:
+        if (s_resp_ready) {
+            s_scan_read = 0;
+            if (s_scan_num > 0) scan_send_record();
+            else scan_finish(NULL);
+        } else if (time_reached(s_deadline)) {
+            scan_finish("the ESP32-C3 did not report the scan result");
+        }
+        return;
+
+    case WC_SCAN_REC:
+        if (s_resp_ready) {
+            if (s_scan_rec_ok)
+                wifi_scan_list_add(&s_scan_list, s_scan_rec.ssid, strlen(s_scan_rec.ssid),
+                                   s_scan_rec.rssi, s_scan_rec.channel, s_scan_rec.authmode);
+            if (s_scan_rec_ok && s_scan_read < s_scan_num && s_scan_read < SCAN_READ_MAX) {
+                scan_send_record();
+            } else if (s_scan_read < s_scan_num) {   /* drop the rest on the C3 */
+                if (send_req(ID_REQ_SCAN_CLEAR, ID_RESP_SCAN_CLEAR, NULL, 0)) s_state = WC_SCAN_CLEAR;
+                else scan_finish(NULL);
+            } else {
+                scan_finish(NULL);
+            }
+        } else if (time_reached(s_deadline)) {
+            scan_finish("the ESP32-C3 did not report the scan result");
+        }
+        return;
+
+    case WC_SCAN_CLEAR:
+        if (s_resp_ready || time_reached(s_deadline)) scan_finish(NULL);
         return;
 
     case WC_BACKOFF:

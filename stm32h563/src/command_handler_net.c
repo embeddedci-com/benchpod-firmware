@@ -23,6 +23,9 @@
 #include "pico_compat.h"    /* sleep_ms (yields to FreeRTOS), time_reached */
 #include "net_reload.h"     /* net_reload_pending: the wifi_clear reply is out */
 #include "boot_guard.h"     /* boot_guard_skip_hw: no W25Q in safe mode */
+#include "wifi_scan.h"
+#include "console_io.h"     /* the console wifi-scan's networks, printed when the scan ends */
+#include "bp_limits.h"      /* BP_CLOUD_REPLY_MAX: a wifi_scan reply fits the cloud channel */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -375,6 +378,134 @@ void handle_wifi_clear(int conn_id, const char *json) {
     s_c3_nvs    = C3_NVS_PENDING;    /* then wifi_clear_poll erases the C3's NVS */
     s_c3_giveup = make_timeout_time_ms(C3_WIPE_WAIT_MS);
     send_ok_str(conn_id, "\"cleared\"");
+}
+
+/* ---- wifi_scan / console wifi-scan: the networks the pod's Wi-Fi sees ---------------------
+   Through a Wi-Fi bridge when one is plugged in (development builds), else the built-in ESP32-C3
+   (esp_wifi_ctrl_scan_request), with one list format (wifi_scan.h) either way.
+
+   {"cmd":"wifi_scan"} starts a scan, or joins the one running, and answers at once:
+     {"state":"scanning","id":N,"via":"built-in"}
+   {"cmd":"wifi_scan","id":N} reads it: "scanning" again, or
+     {"state":"done","id":N,"via":"built-in"|"wifi-bridge","networks":[{"ssid","rssi","channel",
+      "auth"}...],"truncated":false}
+   or an error saying why it failed. The scan takes a few seconds on the net task; nothing here
+   waits for it, so the API keeps answering. A bridge answers within its own call (id 0, "done").
+   The list is the strongest networks first, cut to fit the cloud reply cap ("truncated"). */
+#define WIFI_SCAN_TAIL 32u   /* ,"truncated":false}}\n and the NUL, after the list */
+
+static void wifi_scan_send_done(int conn_id, uint32_t id, const char *via, const wifi_scan_list_t *l) {
+    static char resp[BP_CLOUD_REPLY_MAX];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"done\",\"id\":%lu,\"via\":\"%s\",",
+            (unsigned long)id, via);
+    unsigned n = wifi_scan_emit_networks(&e, l, sizeof(resp) - WIFI_SCAN_TAIL);
+    bp_emit(&e, ",\"truncated\":%s}}\n", n < l->n ? "true" : "false");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "wifi_scan: reply too long"); return; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+}
+
+#if defined(BENCHPOD_WIFI_BRIDGE)
+static wifi_scan_list_t s_bridge_scan;
+
+/* The bridge's scan into s_bridge_scan (up to 10 s): NULL, or why it failed. */
+static const char *bridge_scan(void) {
+    static char why[96];
+    const char *err = NULL;
+    int rc = wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err);
+    if (rc == 0 && g_wifi_bridge_reply.result != BWP_OK) err = wb_result_str(g_wifi_bridge_reply.result);
+    if (rc != 0 || err) {
+        snprintf(why, sizeof(why), "Wi-Fi bridge: %s", err ? err : "no answer");
+        return why;
+    }
+    wifi_scan_list_clear(&s_bridge_scan);
+    for (unsigned k = 0; k < g_wifi_bridge_reply.n_aps; k++) {
+        const bwp_ap_t *a = &g_wifi_bridge_reply.aps[k];
+        wifi_scan_list_add(&s_bridge_scan, a->ssid, strnlen(a->ssid, sizeof(a->ssid)), a->rssi,
+                           a->channel, a->authmode);
+    }
+    return NULL;
+}
+#endif
+
+void handle_wifi_scan(int conn_id, const char *json) {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_present()) {
+        const char *why = bridge_scan();
+        if (why) send_error(conn_id, why);
+        else     wifi_scan_send_done(conn_id, 0, "wifi-bridge", &s_bridge_scan);
+        return;
+    }
+#endif
+    char idbuf[16] = {0};
+    uint32_t id = (json_get_value(json, "id", idbuf, sizeof(idbuf)) && idbuf[0])
+                      ? (uint32_t)strtoul(idbuf, NULL, 10) : esp_wifi_ctrl_scan_request();
+    const wifi_scan_list_t *l = NULL;
+    const char *err = NULL;
+    char m[160];
+    switch (esp_wifi_ctrl_scan_result(id, &l, &err)) {
+    case ESP_WIFI_SCAN_RUNNING:
+        snprintf(m, sizeof(m), "{\"state\":\"scanning\",\"id\":%lu,\"via\":\"built-in\"}",
+                 (unsigned long)id);
+        send_ok_str(conn_id, m);
+        return;
+    case ESP_WIFI_SCAN_DONE:
+        wifi_scan_send_done(conn_id, id, "built-in", l);
+        return;
+    case ESP_WIFI_SCAN_FAILED:
+        snprintf(m, sizeof(m), "wifi_scan: %s", err);
+        send_error(conn_id, m);
+        return;
+    default:
+        send_error(conn_id, "wifi_scan: no scan with that id; start one with {\"cmd\":\"wifi_scan\"}");
+        return;
+    }
+}
+
+/* Console: one parseable line per network, strongest first, then "scan done <n>"; or
+   "wifi-scan error <why>". The SSID is last: it may hold spaces. */
+static void wifi_scan_print(const wifi_scan_list_t *l, const char *err) {
+    char line[96];
+    if (err) {
+        snprintf(line, sizeof(line), "wifi-scan error %s\r\n", err);
+        console_io_write((const uint8_t *)line, strlen(line));
+        return;
+    }
+    for (unsigned k = 0; k < l->n; k++) {
+        snprintf(line, sizeof(line), "scan %d %u %s %s\r\n", l->ap[k].rssi, l->ap[k].channel,
+                 wifi_scan_auth_str(l->ap[k].authmode), l->ap[k].ssid);
+        console_io_write((const uint8_t *)line, strlen(line));
+    }
+    snprintf(line, sizeof(line), "scan done %u\r\n", (unsigned)l->n);
+    console_io_write((const uint8_t *)line, strlen(line));
+}
+
+static uint32_t s_console_scan;   /* the console's built-in scan, printed when it ends */
+
+void wifi_scan_console(void) {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_present()) {
+        const char *why = bridge_scan();
+        wifi_scan_print(&s_bridge_scan, why);
+        return;
+    }
+#endif
+    s_console_scan = esp_wifi_ctrl_scan_request();
+    static const char msg[] = "  Wi-Fi scan running (a few seconds); the networks follow\r\n";
+    console_io_write((const uint8_t *)msg, sizeof(msg) - 1);
+}
+
+void wifi_scan_poll(void) {
+    if (!s_console_scan) return;
+    const wifi_scan_list_t *l = NULL;
+    const char *err = NULL;
+    esp_wifi_scan_state_t st = esp_wifi_ctrl_scan_result(s_console_scan, &l, &err);
+    if (st == ESP_WIFI_SCAN_RUNNING) return;
+    s_console_scan = 0;
+    console_io_write((const uint8_t *)"\r\n", 2);   /* off the prompt line */
+    wifi_scan_print(l, st == ESP_WIFI_SCAN_DONE ? NULL : err ? err : "the scan was lost");
+    console_io_write((const uint8_t *)"> ", 2);
 }
 
 /* {"cmd":"eth","action":"stop"|"start"|"restart"} — manually control the wired

@@ -24,6 +24,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_status) },
     { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status) },
     { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status) },
+    { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan) },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins) },
     { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc) },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status) },

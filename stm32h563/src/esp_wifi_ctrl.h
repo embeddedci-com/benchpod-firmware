@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "wifi_scan.h"
+
 /* ---- Wi-Fi control over the esp-hosted RPC channel -------------------------
  *
  * Drives the ESP32-C3 through the esp-hosted protobuf RPC (on ESP_SERIAL_IF) to
@@ -56,5 +58,25 @@ void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted);
 /* A new ESP32-C3 image was installed into its W25Q slot: a C3 that never booted gets another
    automatic flash attempt. */
 void esp_wifi_ctrl_image_installed(void);
+
+/* ---- Wi-Fi scan through the ESP32-C3 ----
+   Joined: the C3 scans alongside the connection (it stays up).  Not configured, or after a
+   failed connect: the C3 is started for the scan alone and held in reset again afterwards.
+   Mid-connect: the request waits for the connect to end (up to 30 s).  The scan runs on the net
+   task (esp_wifi_ctrl_poll); asking and reading never wait. */
+typedef enum {
+    ESP_WIFI_SCAN_UNKNOWN = 0,   /* no such request */
+    ESP_WIFI_SCAN_RUNNING,
+    ESP_WIFI_SCAN_DONE,          /* *list holds the networks */
+    ESP_WIFI_SCAN_FAILED,        /* *err says why */
+} esp_wifi_scan_state_t;
+
+/* Worker task: ask for a scan.  Returns its id (never 0); a request made while another is
+   waiting or running shares that one's id and answer. */
+uint32_t esp_wifi_ctrl_scan_request(void);
+
+/* Worker task: where request `id` stands.  The list stays valid until the next request. */
+esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_list_t **list,
+                                                const char **err);
 
 #endif /* ESP_WIFI_CTRL_H */

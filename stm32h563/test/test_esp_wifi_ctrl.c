@@ -14,6 +14,13 @@
  *   - a boot event while waiting for the boot event is just the boot event;
  *   - a reload while a background C3 flash runs does not start the C3 until it ends.
  *
+ * The Wi-Fi scan (esp_wifi_ctrl_scan_request):
+ *   - unconfigured: the C3 is started for the scan alone (no SetConfig, no Connect) and held in
+ *     reset again afterwards; the networks come back strongest first;
+ *   - joined: the scan runs alongside, the link never drops, RSSI polling resumes;
+ *   - a C3 that never finishes the scan, or never boots, fails the request with a reason;
+ *   - requests made while one is running share its answer.
+ *
  * And that the credentials never reach the C3's flash:
  *   - SetStorage(RAM) is sent, and answered, before SetMode and SetConfig;
  *   - a C3 that refuses it, or does not answer it, is never sent the credentials.
@@ -141,9 +148,38 @@ static void deliver(uint32_t type, uint32_t msg_id, const buf_t *inner) {
     s_serial_cb(&rx);
 }
 
+/* The fake C3's scan result (popped one record per GetApRecord, like esp_wifi_scan_get_ap_record). */
+static struct {
+    int n, next;
+    const char *ssid[8]; int rssi[8]; unsigned ch[8], auth[8];
+    bool mute_start;     /* never answers ScanStart */
+    int starts;
+} S;
+
 static void answer(uint32_t req) {
     buf_t in = {0};
-    if (req == 257) {                               /* GetMac */
+    if (req == 286) {                               /* ScanStart(block): answered when done */
+        if (S.mute_start) return;
+        S.starts++;
+        S.next = 0;
+        w_int(&in, 1, 0);
+    } else if (req == 288) {                        /* GetApNum */
+        w_int(&in, 1, 0);
+        w_int(&in, 2, (uint64_t)(S.n - S.next));
+    } else if (req == 351) {                        /* GetApRecord */
+        if (S.next < S.n) {
+            buf_t rec = {0};
+            int k = S.next++;
+            w_bytes(&rec, 2, (const uint8_t *)S.ssid[k], strlen(S.ssid[k]));
+            w_int(&rec, 3, S.ch[k]);
+            w_int(&rec, 5, (uint64_t)(int64_t)S.rssi[k]);
+            w_int(&rec, 6, S.auth[k]);
+            w_int(&in, 1, 0);
+            w_bytes(&in, 2, rec.b, rec.n);
+        } else {
+            w_int(&in, 1, 0x300F);                  /* ESP_ERR_WIFI_NOT_STARTED-ish: none left */
+        }
+    } else if (req == 257) {                               /* GetMac */
         static const uint8_t mac[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
         w_bytes(&in, 1, mac, 6);
         w_int(&in, 2, 0);
@@ -178,8 +214,10 @@ static void run_ms(uint32_t ms) {
 /* ---- faked neighbours ------------------------------------------------------- */
 void esp_netif_set_link_up(bool up) { L.up = up; if (up) L.ups++; else L.downs++; }
 void esp_netif_set_hwaddr(const uint8_t mac[6]) { (void)mac; }
+static bool s_no_ssid;                       /* config_load finds no Wi-Fi configured */
 int config_load(config_t *out) {
     memset(out, 0, sizeof(*out));
+    if (s_no_ssid) return 0;
     strcpy(out->ssid, "bench-lab");
     strcpy(out->password, "not-a-real-password");
     return 0;
@@ -419,6 +457,143 @@ static void test_reload_during_c3_flash_waits(void) {
     CHECK(bring_up());
 }
 
+/* ---- Wi-Fi scan ---------------------------------------------------------------- */
+
+static void fake_networks(void) {
+    memset(&S, 0, sizeof(S));
+    static const char *names[] = {"guest", "bench-lab", "office", "bench-lab", ""};
+    static const int   rssi[]  = {-71, -64, -48, -52, -80};
+    for (int i = 0; i < 5; i++) {
+        S.ssid[i] = names[i]; S.rssi[i] = rssi[i]; S.ch[i] = 1u + (unsigned)i; S.auth[i] = 3;
+    }
+    S.n = 5;
+}
+
+/* Run until request `id` is answered (or `limit_ms` passes). */
+static esp_wifi_scan_state_t scan_wait(uint32_t id, uint32_t limit_ms, const wifi_scan_list_t **l,
+                                       const char **err) {
+    esp_wifi_scan_state_t st = ESP_WIFI_SCAN_RUNNING;
+    for (uint32_t t = 0; t < limit_ms && (st = esp_wifi_ctrl_scan_result(id, l, err)) == ESP_WIFI_SCAN_RUNNING; t += 10) {
+        run_ms(10);
+        if (C.running && !C.ready) C.ready = true;   /* the C3 boots as soon as it is released */
+    }
+    return st;
+}
+
+static void test_scan_unconfigured(void) {
+    s_no_ssid = true;
+    fresh();
+    fake_networks();
+    C.tx_ok = true; C.answer = true;
+    run_ms(100);
+    CHECK(!C.running);                         /* nothing configured: the C3 stays off */
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    CHECK(id != 0);
+    CHECK(esp_wifi_ctrl_scan_request() == id); /* a second ask shares the first */
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(scan_wait(id, 5000, &l, &err) == ESP_WIFI_SCAN_DONE);
+    CHECK(l && l->n == 4 && l->seen == 5);     /* bench-lab merged: its strongest kept */
+    CHECK(l && strcmp(l->ap[0].ssid, "office") == 0 && l->ap[0].rssi == -48);
+    CHECK(l && strcmp(l->ap[1].ssid, "bench-lab") == 0 && l->ap[1].rssi == -52 && l->ap[1].channel == 4);
+    CHECK(l && l->ap[3].ssid[0] == '\0');
+    CHECK(sent_at(313) >= 0 && sent_at(313) < sent_at(286));   /* RAM storage before the scan */
+    CHECK(sent_at(280) >= 0 && sent_at(280) < sent_at(286));   /* WifiStart before the scan */
+    CHECK(sent_at(284) < 0);                   /* no SetConfig */
+    CHECK(sent_at(282) < 0);                   /* no Connect */
+    run_ms(100);
+    CHECK(!C.running);                         /* held in reset again */
+    CHECK(!L.up);
+    CHECK(strcmp(esp_wifi_ctrl_state_str(), "disabled") == 0);
+    CHECK(esp_wifi_ctrl_scan_request() != id); /* the next ask is a new scan */
+    s_no_ssid = false;
+}
+
+static void test_scan_unconfigured_c3_silent(void) {
+    s_no_ssid = true;
+    fresh();
+    fake_networks();
+    C.tx_ok = true; C.answer = true;
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    esp_wifi_scan_state_t st = ESP_WIFI_SCAN_RUNNING;
+    for (int t = 0; t < 30000 && (st = esp_wifi_ctrl_scan_result(id, &l, &err)) == ESP_WIFI_SCAN_RUNNING; t += 10)
+        run_ms(10);                            /* C.ready never set: no boot event */
+    CHECK(st == ESP_WIFI_SCAN_FAILED);
+    CHECK(err && strstr(err, "did not start"));
+    CHECK(!C.running);
+    CHECK(s_flash_submits == 0);               /* a scan never flashes the C3 */
+    s_no_ssid = false;
+}
+
+static void test_scan_joined(void) {
+    fresh();
+    fake_networks();
+    CHECK(bring_up());
+    int downs = L.downs, starts = C.starts;
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(scan_wait(id, 5000, &l, &err) == ESP_WIFI_SCAN_DONE);
+    CHECK(l && l->n == 4);
+    CHECK(L.up && L.downs == downs);           /* the link never dropped */
+    CHECK(C.starts == starts && C.running);    /* the C3 was not restarted */
+    CHECK(connected());
+    int nlog = C.nlog;
+    run_ms(12000);                             /* RSSI polling resumes */
+    bool rssi = false;
+    for (int i = nlog; i < C.nlog; i++) if (C.log[i] == 341) rssi = true;
+    CHECK(rssi);
+    CHECK(connected());
+}
+
+static void test_scan_joined_timeout_keeps_link(void) {
+    fresh();
+    fake_networks();
+    CHECK(bring_up());
+    S.mute_start = true;                       /* the C3 never finishes the scan */
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(scan_wait(id, 20000, &l, &err) == ESP_WIFI_SCAN_FAILED);
+    CHECK(err && strstr(err, "did not finish"));
+    CHECK(L.up && connected());                /* still joined; RSSI liveness owns the C3 */
+    S.mute_start = false;
+    id = esp_wifi_ctrl_scan_request();
+    CHECK(scan_wait(id, 5000, &l, &err) == ESP_WIFI_SCAN_DONE);
+}
+
+/* Mid-connect, the request waits for the association, then scans alongside it. */
+static void test_scan_waits_for_connect(void) {
+    fresh();
+    fake_networks();
+    C.tx_ok = true; C.answer = true;
+    run_ms(20);
+    C.ready = true;
+    for (int i = 0; i < 50 && C.last_req != 257; i++) run_ms(10);   /* up to GetMac */
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    run_ms(500);
+    CHECK(esp_wifi_ctrl_scan_result(id, NULL, NULL) == ESP_WIFI_SCAN_RUNNING);
+    CHECK(S.starts == 0);
+    evt_connected();
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(scan_wait(id, 5000, &l, &err) == ESP_WIFI_SCAN_DONE);
+    CHECK(S.starts == 1);
+    CHECK(L.up && connected());
+}
+
+/* A reload (wifi-set / wifi-clear) mid-scan answers it with an error, not a stale list. */
+static void test_scan_reload_fails_it(void) {
+    fresh();
+    fake_networks();
+    CHECK(bring_up());
+    S.mute_start = true;
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    run_ms(100);
+    esp_wifi_ctrl_reload();
+    const char *err = NULL;
+    CHECK(esp_wifi_ctrl_scan_result(id, NULL, &err) == ESP_WIFI_SCAN_FAILED);
+    CHECK(err && strstr(err, "settings changed"));
+    S.mute_start = false;
+}
+
 int main(void) {
     esp_wifi_ctrl_init();
     test_healthy_link_stays_up();
@@ -433,6 +608,12 @@ int main(void) {
     test_storage_unanswered_sends_no_credentials();
     test_storage_refusal_does_not_stick();
     test_reload_during_c3_flash_waits();
+    test_scan_unconfigured();
+    test_scan_unconfigured_c3_silent();
+    test_scan_joined();
+    test_scan_joined_timeout_keeps_link();
+    test_scan_waits_for_connect();
+    test_scan_reload_fails_it();
     CHECK(s_flash_submits == 0);
     if (failures) { printf("FAIL test_esp_wifi_ctrl: %d failure(s)\n", failures); return 1; }
     printf("PASS test_esp_wifi_ctrl\n");
