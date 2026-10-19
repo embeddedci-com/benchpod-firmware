@@ -173,7 +173,7 @@ static void sim_rx(const uint8_t *f, size_t len)
         bwp_put_u32(&w, BWP_T_OFFSET, sim.ota_next);
         n = bwp_finish(&w);
     } else if (m.type == BWP_OTA_END) {
-        extern const uint8_t g_image[];
+        extern uint8_t g_image[];
         bool good = sim.ota_active && sim.ota_next == sim.ota_size && memcmp(sim.img, g_image, sim.ota_size) == 0;
         sim.ota_active = false;
         sim.ota_done = good;
@@ -315,7 +315,7 @@ static wb_req_state_t call_set_wifi(const char *ssid, const char *pass)
 }
 
 /* ---- the firmware relay (wifi_bridge_ota.c) against the simulated bridge */
-const uint8_t g_image[5000] = {1};   /* filled in test_relay */
+uint8_t g_image[5000];   /* filled in test_relay */
 static wbo_t relay;
 static wbo_image_t slot;
 static bool bus_free = true;
@@ -359,7 +359,7 @@ static void test_relay(void)
 {
     static const wbo_io_t io = {.start = ro_start, .take = ro_take, .read = ro_read, .alloc = malloc, .release = free};
     for (size_t i = 0; i < sizeof(g_image); i++) {
-        ((uint8_t *)g_image)[i] = (uint8_t)(i * 7 + 3);
+        g_image[i] = (uint8_t)(i * 7 + 3);
     }
     memset(&slot, 0, sizeof(slot));
     slot.present = true;
