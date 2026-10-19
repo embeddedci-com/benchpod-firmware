@@ -52,5 +52,13 @@ echo "=== trusted update keys: ${#pubs[@]} (${pubs[*]##*/}) ==="
 
 tty=()
 [ -t 0 ] && tty=(-it)
-exec docker run --rm "${tty[@]}" -v "$PWD:/project" -w /project "$(cat idf-image)" \
+docker run --rm "${tty[@]}" -v "$PWD:/project" -w /project "$(cat idf-image)" \
   bash /project/build.sh --in-container "$@"
+
+# A dev build signs its image with the pod's developer key, so a pod (or bridgectl) can send it
+# as an update: build/benchpod-wifi-bridge.bin.sig. Release images are signed by the release job.
+version=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
+if [ $# -eq 0 ] && [ "${RELEASE:-0}" != 1 ] && [ -f "$dev_key" ] && [ -f build/benchpod-wifi-bridge.bin ]; then
+  python3 ../tools/fwsign.py sign --key "$dev_key" --target bridge --release "$version" \
+    build/benchpod-wifi-bridge.bin || echo "warning: not signed (pip3 install cryptography)" >&2
+fi

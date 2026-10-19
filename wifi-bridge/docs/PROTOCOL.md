@@ -80,6 +80,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x19 | COUNTER | u32, request counter, strictly increasing for one NONCE |
 | 0x1A | AUTH | 16 bytes, truncated HMAC-SHA256; always the last TLV, see "Pairing" |
 | 0x1B | ENC_PASSPHRASE | 89 bytes, the sealed passphrase, see "Encrypted passphrase" |
+| 0x1C | SIGNATURE | 128 bytes, the pod's signed manifest of an OTA image (`tools/fwsign.py`, target `bridge`) |
 
 ## States
 
@@ -120,7 +121,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x03 | SCAN | pod → bridge | (empty) | RESULT, up to 20 AP, strongest first |
 | 0x04 | SET_WIFI | pod → bridge | SSID, ENC_PASSPHRASE (omit for an open network) | RESULT, after the credentials are stored |
 | 0x05 | CLEAR_WIFI | pod → bridge | (empty) | RESULT, after the credentials are erased; Wi-Fi disconnects |
-| 0x06 | OTA_BEGIN | pod → bridge | IMAGE_SIZE | RESULT, after the slot is erased (can take seconds) |
+| 0x06 | OTA_BEGIN | pod → bridge | IMAGE_SIZE, SIGNATURE | RESULT, after the manifest checks out and the slot is erased (can take seconds) |
 | 0x07 | OTA_DATA | pod → bridge | OFFSET, DATA | RESULT, OFFSET = next expected offset |
 | 0x08 | OTA_END | pod → bridge | (empty) | RESULT, after hash + signature verification; the new image boots on the next REBOOT |
 | 0x09 | REBOOT | pod → bridge | (empty) | RESULT, then the bridge restarts after ~200 ms |
@@ -147,8 +148,12 @@ Notes:
   same length is a retransmission (our ack was lost): acknowledged again, not written. Any other
   offset gets OTA_BAD_OFFSET with the expected OFFSET, so the pod can resume. The first chunk
   must hold at least the first 112 bytes of the image: the bridge checks the app descriptor's
-  project name (`benchpod-wifi-bridge`) and refuses anything else. OTA_END verifies the image
-  (SHA-256 and the RSA-3072 signature, see [SECURITY.md](SECURITY.md)) before it marks it bootable.
+  project name (`benchpod-wifi-bridge`) and refuses anything else. OTA_BEGIN must carry the pod's
+  signed manifest (SIGNATURE): an Ed25519 signature by one of the pod's own release keys over
+  target `bridge`, size, SHA-256 and version (the format of `tools/fwsign.py`); anything else is
+  answered OTA_VERIFY with `signature: <reason>`. OTA_END compares the received image's SHA-256
+  with the manifest (and, in production builds, secure boot checks its RSA-3072 signature, see
+  [SECURITY.md](SECURITY.md)) before it marks it bootable.
   After REBOOT the new image is **on trial** (FLAGS 0x10): the first valid request from the pod
   (any type) confirms it. Without one within 120 s, or if it crashes first, the bridge reboots
   into the previous image. So after REBOOT the pod waits for HELLO, sends STATUS, and compares
@@ -311,16 +316,18 @@ out through `netif->linkoutput`). Built only in development firmware for now (`W
   and resyncs after either side reboots.
 - Polls STATUS every 10 s (which also confirms a bridge firmware update on trial).
 - `wifi_set` / `wifi_clear` / `wifi_status` (JSON) and `wifi-set` / `wifi-clear` / `wifi-show`
-  (USB console) go to the bridge while one is present; the console's `bridge` command shows it
-  and runs `scan`, `reboot` and `factory-reset yes`.
+  (USB console) go to the bridge while one is present; `wifi-scan` lists networks for a picker;
+  the console's `bridge` command shows it and runs `scan`, `update`, `reboot` and
+  `factory-reset yes`.
+- Reports `"uplink":"wifi-bridge"` with `"uplink_rssi_dbm"` in the cloud capabilities when the
+  cloud link runs over Ethernet into a connected bridge.
+- Keeps the bridge firmware in its W25Q blob slot `bridge` with the signed manifest, and updates
+  the bridge by itself when that image is newer than HELLO's FW_VERSION
+  (`stm32h563/src/wifi_bridge_ota.c`): OTA_BEGIN with SIGNATURE, 1 KB OTA_DATA in order, OTA_END,
+  REBOOT, then HELLO with the new version (its STATUS poll confirms the trial). A failed or
+  rolled-back version is not retried until the pod restarts or `bridge update` forces it.
 
 Still to do on the pod:
 
-- Report the `wifi-bridge` uplink with RSSI in the cloud capabilities and `status`, and a SCAN
-  verb for a Wi-Fi picker in the web UI (both need the server too).
-- Relay bridge firmware: OTA_BEGIN, 1024-byte OTA_DATA in order, OTA_END, REBOOT, then wait for
-  HELLO, send STATUS (this confirms the new image) and check FW_VERSION. Needs a bigger request
-  buffer on the pod (`WB_REQ_MAX`) and a decision on where the image comes from (embedded in the
-  pod firmware, a W25Q blob slot, or the cloud).
 - Power control of the always-on USB-A port (v4 board) to power-cycle a bridge that stops
   sending HELLO.

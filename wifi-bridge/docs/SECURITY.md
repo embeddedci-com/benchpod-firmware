@@ -22,19 +22,19 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | Fixed regulatory domain (`CONFIG_BRIDGE_COUNTRY`, default `US`), no 802.11d adoption | `main/wifi.c` |
 | Passphrase is write-only: no message or console command returns it; buffers holding it are zeroed after use | `main/control.c`, `main/console.c`, `main/wifi.c` |
 | Wi-Fi library keeps no copy of the credentials (`WIFI_STORAGE_RAM`, `CONFIG_ESP_WIFI_NVS_ENABLED=n`); our app stores them once, in NVS | `main/creds.c` |
-| OTA images must be signed (RSA-3072, secure boot v2 signature block) and named `benchpod-wifi-bridge`; two app slots, and a new image stays only once the pod has talked to it (else rollback) |
+| OTA images must come with the pod's signed manifest (Ed25519, the pod's own release keys; target `bridge`, size and SHA-256 checked) and be named `benchpod-wifi-bridge`; production adds secure boot v2 (RSA-3072). Two app slots, and a new image stays only once the pod has talked to it (else rollback) |
 | No user-reachable serial port: USB-C is power only, UART0 is on TC2030 pads inside the case, the console cannot update firmware | hardware, `main/console.c` | `main/ota.c` |
 | Factory reset erases the credentials: button held 5 s while running, control channel, debug console; button held at power-up also restores the factory image (bootloader) | `main/board.c` |
 
 ## Dev builds (unlocked)
 
 `sdkconfig.defaults` leaves the chip open: no eFuses burned, flash readable, JTAG and ROM
-download mode enabled, NVS in plain text. What it does turn on is **signed OTA without secure
-boot** (`CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT`, `CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT`,
-RSA scheme, so `CONFIG_ESP32_REV_MIN_3`): the running app checks an update's signature against the
-public key in its own signature block. `build.sh` signs with `keys/dev_signing_key.pem`, created
-on the first build and git-ignored. So a dev bridge only takes OTA images from the checkout that
-built it; flash over the TC2030 pads with esptool to switch keys.
+download mode enabled, NVS in plain text. Updates are still **signed**, with the pod's keys:
+OTA_BEGIN must carry the pod's 128-byte manifest (`tools/fwsign.py`, Ed25519 over the target,
+size, SHA-256 and version), and `main/ota.c` checks it against the keys compiled in from
+`../stm32h563/keys/release-*.pub` (plus the pod's developer key unless `RELEASE=1`), then
+compares the received image's SHA-256 with it at OTA_END. The pod checks the same manifest when
+the image is installed into its blob slot. One signing key and one process for both devices.
 
 ## Production
 
@@ -80,7 +80,29 @@ espsecure.py sign_data --version 2 --keyfile release_signing_key.pem \
   --output benchpod-wifi-bridge-signed.bin build-prod/benchpod-wifi-bridge.bin
 ```
 
-The signed app is both the factory image and the OTA image the pod relays.
+The RSA-signed app is the factory image. An OTA image for production bridges needs both
+signatures: the secure-boot one (in the image) and the pod's manifest (next to it).
+
+### Two keys, one process (decided 2026-10-19)
+
+- **Updates:** the pod's Ed25519 release key (`FW_SIGNING_KEY` in the GitHub `release`
+  environment, already used for the pod's firmware and blobs). Nothing new to manage.
+- **Secure boot:** ESP32 v3 secure boot v2 only takes RSA-3072, so the bridge needs one more key.
+  It lives next to the pod key, as `BRIDGE_SECURE_BOOT_KEY` in the same `release` environment
+  (same required reviewers). ESP32 allows one key and no revocation: keep an offline backup.
+
+Creating it, once, on a trusted machine (not in CI):
+
+```sh
+espsecure generate-signing-key --version 2 --scheme rsa3072 bridge-secure-boot.pem   # esptool v5
+#   (esptool v4: espsecure.py generate_signing_key --version 2 --scheme rsa3072 ...)
+# two offline copies (e.g. encrypted USB sticks in two places), then:
+gh secret set BRIDGE_SECURE_BOOT_KEY --env release --repo embeddedci-com/benchpod-firmware < bridge-secure-boot.pem
+rm -P bridge-secure-boot.pem   # the working copy
+```
+
+Until the secret exists, the release job builds and Ed25519-signs the development-config image
+(what pods relay today) and skips the RSA-signed production factory image with a warning.
 
 ### Factory flashing order
 

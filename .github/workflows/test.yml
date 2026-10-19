@@ -103,7 +103,7 @@ jobs:
           ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
           stm32=$(match '^(stm32h563/|esp32-hosted-slave/|wifi-bridge/components/|\.gitmodules$|\.github/workflows/test\.yml$)')
           motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
-          bridge=$(match '^(wifi-bridge/|\.github/workflows/test\.yml$)')
+          bridge=$(match '^(wifi-bridge/|stm32h563/test/vectors/fwsign|stm32h563/keys/|tools/fwsign\.py$|\.github/workflows/test\.yml$)')
           echo "ice40=$ice40 stm32=$stm32 motor=$motor bridge=$bridge"
           echo "ice40=$ice40" >> "$GITHUB_OUTPUT"
           echo "stm32=$stm32" >> "$GITHUB_OUTPUT"
