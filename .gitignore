@@ -58,3 +58,6 @@ esp32-hosted-slave/work/
 .claude/
 # kicad .net files
 /*.net
+
+# the calibration scripts' Python environment (calibration/scripts/requirements-host.txt)
+calibration/.venv/
