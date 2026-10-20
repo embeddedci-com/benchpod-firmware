@@ -242,5 +242,15 @@ const char *dac_limits_check_command(const char *cmd, const char *json) {
         return num(json, "ua", &ua) ? dac_limits_check_current_out() : NULL;   /* bare = read the range */
     }
     if (!strcmp(cmd, "dac_control_loop")) return check_loop(json);
+    if (!strcmp(cmd, "calibrate") &&
+        (bp_json_get(json, "dac", path, sizeof(path)) || bp_json_get(json, "adc", path, sizeof(path)))) {
+        /* The DMM calibration (adc_cal.h): the ADC gain step drives the DAC itself, and a new DAC
+           line moves what the window's volts mean. The J8 offset does neither and stays allowed. */
+        snprintf(s_msg, sizeof(s_msg),
+                 "refused: %s, and the DMM calibration drives the DAC outside them. "
+                 "Clear them with dac_limits enabled:false, calibrate, then set them again",
+                 describe());
+        return s_msg;
+    }
     return NULL;
 }

@@ -51,6 +51,10 @@ static void test_mixed_verbs(void) {
     expect("calibrate", "{\"cmd\":\"calibrate\"}", CMD_TIER_T0);
     expect("calibrate", "{\"cmd\":\"calibrate\",\"source\":\"current_in\"}", CMD_TIER_T2);
     expect("calibrate", "{\"cmd\":\"calibrate\",\"clear\":true}", CMD_TIER_T2);
+    expect("calibrate", "{\"cmd\":\"calibrate\",\"clear\":false}", CMD_TIER_T0);
+    expect("calibrate", "{\"cmd\":\"calibrate\",\"clear\":\"dac\"}", CMD_TIER_T2);
+    expect("calibrate", "{\"cmd\":\"calibrate\",\"dac\":\"5v\",\"code1\":1,\"uv1\":1,\"code2\":2,\"uv2\":2}", CMD_TIER_T2);
+    expect("calibrate", "{\"cmd\":\"calibrate\",\"adc\":\"cal1\"}", CMD_TIER_T2);
     expect("eth", "{\"cmd\":\"eth\",\"action\":\"stats\"}", CMD_TIER_T0);
     expect("eth", "{\"cmd\":\"eth\",\"action\":\"refclk\"}", CMD_TIER_T0);
     expect("eth", "{\"cmd\":\"eth\",\"action\":\"restart\"}", CMD_TIER_T2);

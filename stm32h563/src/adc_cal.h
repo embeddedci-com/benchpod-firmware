@@ -34,17 +34,46 @@
  * 445e46 against a DMM: ext and current_in exact, cal1 and cal2 within a few mV (their own
  * DAC-side stages add a little).
  *
- * Only the offset. Gain stays the shared fit (within 0.3 % on both pods): it needs a reference.
+ * Only the offset needs nothing but an open J8. The rest is the optional DMM-guided calibration
+ * (embeddedci-server/docs/benchpod-dmm-calibration.md), firmware 3.9.4:
+ *   - DAC: this pod's own line per output path (3v3, 5v, 12v), from two set points the pod drove
+ *     and a DMM read on that output's SMA (adc_cal_dac_store). It replaces the compiled line for
+ *     every DAC user through cal_data_set_pod_dac (DAC_CAL): dac_out, the calibrated generate,
+ *     the DAC output limits.
+ *   - ADC gain per source (cal1, cal2, ext), measured through a loopback against a DAC path that
+ *     has its DMM line (adc_cal_gain_store). `current_in` is scaled with the cal1 fit and follows
+ *     its gain. With offset and gain a source reads volts = g * (a + b*count - offset): 0 V stays
+ *     0 V, and the gain does not depend on the offset, so either can be redone alone.
+ *
+ * The record holds RAW MEASUREMENTS, never a fit: the mean ADC count with J8 open (the zero), the
+ * DAC codes the pod drove with what the DMM read, and the ADC counts a loopback read with the
+ * voltage the DAC put in. Every fit is derived from them at boot, on top of the compiled general
+ * fits (cal_data.h). So a general fit measured again in a later firmware never changes what a
+ * stored value means (an offset in microvolts on the old fit did: #45 moved baea06 from +4.4 to
+ * -1.1 mV), and a gain is not frozen at calibration day.
+ *
+ *   offset    = general cal1 fit at the zero count, taken out of every source's fit (the model
+ *               of 3.9.3, so a migrated pod reads exactly as it did there)
+ *   DAC line  = the line through the two (code16, DMM uV) points of the path
+ *   ADC gain  = the slope of the two (count, input uV) points of the source, over the slope the
+ *               source's general fit (offset removed) gives between the same counts
  *
  * Stored in its own power-loss-safe A/B store (config_store.h), sectors s116/s117
- * (0x1E8000 / 0x1EA000), carved from the top of FLASH_BLOBS. The record has spare words so
- * more per-pod calibration (other sources, gain) can share these sectors.
+ * (0x1E8000 / 0x1EA000), carved from the top of FLASH_BLOBS, as a PAIR: every save writes the
+ * version-2 record and then a version-1 record (the offset in uV from the zero and the current
+ * cal1 fit) into the other slot. Firmware 3.4.0 to 3.9.3 reads only the newest record and only
+ * version 1, so a downgraded pod keeps its offset. This firmware takes the version-2 record when
+ * it is the newest or exactly one save behind the version-1 copy; a version-1 record that older
+ * firmware wrote after a downgrade (or its clear) is newer than that and wins. A pod that only has
+ * a version-1 record converts it at load through the fit it was measured with (adc_cal1_v1); the
+ * next save writes the pair.
  * ------------------------------------------------------------------------------------------*/
 
 #define ADC_CAL_SLOT_A_OFFSET  0x1EA000u
 #define ADC_CAL_SLOT_B_OFFSET  0x1E8000u
 #define ADC_CAL_RECORD_MAGIC   0x4C414341u   /* "ACAL" */
-#define ADC_CAL_VERSION        1u
+#define ADC_CAL_VERSION        2u
+#define ADC_CAL_VERSION_1      1u            /* the offset-only record, loaded for migration */
 
 /* R81, the sense resistor from J8 pin 1 to pod GND: `current_in` reads the voltage across it. */
 #define CURRENT_IN_SENSE_OHMS  249
@@ -64,25 +93,69 @@
 #define ADC_CAL_SAMPLES  (ADC_CAL_BURST * ADC_CAL_BURSTS)
 #define ADC_CAL_GAP_MS   3u
 
-typedef struct {
-    uint8_t  current_in_set;         /* 1 = current_in_offset_uv holds a measured offset */
-    uint8_t  rsvd8[3];
-    int32_t  current_in_offset_uv;   /* what `current_in` reads with J8 open, microvolts */
-    uint32_t reserved[6];     /* room for more per-pod calibration */
-} adc_cal_t;
+/* DMM limits. A DAC reading must lie within ADC_CAL_DAC_TOL_UV + ADC_CAL_DAC_TOL_PPM of what the
+   compiled line gives at that code (measured pods: under 30 mV and 0.3 %), the two codes at least
+   ADC_CAL_DAC_MIN_SPAN apart, and every gain within ADC_CAL_MAX_GAIN_PPM of the compiled one. */
+#define ADC_CAL_DAC_TOL_UV      100000
+#define ADC_CAL_DAC_TOL_PPM     20000
+#define ADC_CAL_DAC_MIN_SPAN    16384u
+#define ADC_CAL_MAX_GAIN_PPM    20000
 
-/* Load from flash into the active copy. 0 = a calibration was loaded, -1 = none stored. */
+/* DAC output paths: the DAC_CAL index (cal_data.h). */
+#define ADC_CAL_DAC_PATHS  3
+/* ADC sources with a gain of their own (current_in follows cal1). */
+enum { ADC_CAL_SRC_CAL1 = 0, ADC_CAL_SRC_CAL2 = 1, ADC_CAL_SRC_EXT = 2, ADC_CAL_SRCS = 3 };
+
+/* Two points a DAC line is derived from: the 16-bit codes the pod drove and what the DMM read. */
+typedef struct {
+    uint16_t code16[2];
+    int32_t  uv[2];
+} adc_cal_dac_pts_t;
+
+/* Two points an ADC gain is derived from: the mean count the loopback read, unwrapped, in
+   thousandths of a count, and the voltage the DAC put in (from its DMM line at the time). */
+typedef struct {
+    int32_t count_mc[2];
+    int32_t uv[2];
+} adc_cal_gain_pts_t;
+
+typedef struct {
+    uint8_t  zero_set;                /* 1 = zero_count_mc holds a measured zero */
+    uint8_t  dac_set;                 /* bit n = dac[n] holds points (0 3v3, 1 5v, 2 12v) */
+    uint8_t  gain_set;                /* bit n = gain[n] holds points (ADC_CAL_SRC_*) */
+    uint8_t  rsvd8;
+    int32_t  zero_count_mc;           /* mean count with J8 open (0 V), unwrapped, milli-counts */
+    adc_cal_dac_pts_t  dac[ADC_CAL_DAC_PATHS];
+    adc_cal_gain_pts_t gain[ADC_CAL_SRCS];
+    uint32_t reserved[6];             /* room for more (the 4-20 mA output, ...) */
+} adc_cal_t;                          /* 116 bytes */
+
+/* Version 1, as firmware 3.4.0 to 3.9.3 stored it. */
+typedef struct {
+    uint8_t  current_in_set;
+    uint8_t  rsvd8[3];
+    int32_t  current_in_offset_uv;
+    uint32_t reserved[6];
+} adc_cal_v1_t;
+
+/* Load from flash into the active copy and put this pod's DAC lines in (cal_data_set_pod_dac).
+   0 = a calibration was loaded, -1 = none stored (or one out of range, ignored as a whole). */
 int adc_cal_load(void);
 
-/* The `current_in` offset of this pod. 0 uV when it was never calibrated. */
+/* The `current_in` offset of this pod (derived from the zero count). 0 uV when it was never
+   calibrated. */
 bool    adc_cal_current_in_is_set(void);
 int32_t adc_cal_current_in_offset_uv(void);
 int32_t adc_cal_current_in_offset_mv(void);   /* rounded, for replies */
 
-/* A source's compiled-in fit with this pod's offset removed (unchanged when never calibrated). */
+/* A compiled-in fit with this pod's offset removed, no gain (unchanged when never calibrated). */
 cal_lin_t adc_cal_fit(cal_lin_t base);
 
-/* The fit to scale `current_in` counts with on this pod: ADC_CAL_CAL1, offset removed. */
+/* The fit a source is scaled with on this pod: its cal_data.h fit (cal1, cal2, ext), offset
+   removed and gain applied. ADC_CAL_SRC_*. */
+cal_lin_t adc_cal_source_fit(int src);
+
+/* The fit to scale `current_in` counts with on this pod: cal1's (adc_cal_source_fit). */
 cal_lin_t adc_cal_current_in_fit(void);
 
 /* A calibrated `current_in` reading in volts as the loop current in microamps: 0.996 V is
@@ -91,17 +164,67 @@ static inline long current_in_ua(float volts) {
     return lroundf(volts * 1000000.0f / (float)CURRENT_IN_SENSE_OHMS);
 }
 
+/* The zero: the mean count `current_in` read with J8 open, unwrapped, in milli-counts. */
+int32_t adc_cal_zero_count_mc(void);
+
 /* Store a reading of `current_in` taken with J8 open and scaled with ADC_CAL_CAL1 (NOT with
-   adc_cal_current_in_fit) as the offset. NULL = stored, else why it was refused (not settled, or
-   outside +/-ADC_CAL_MAX_OFFSET_UV). A refusal keeps the old calibration. */
+   adc_cal_current_in_fit): its count is the zero. NULL = stored, else why it was refused (not
+   settled, or outside +/-ADC_CAL_MAX_OFFSET_UV). A refusal keeps the old calibration. */
 const char *adc_cal_current_in_store(const adc_reading_t *rd);
 
-/* Remove the per-pod calibration (flash and active copy). 0 on success. */
+/* ---- DMM parts ---- */
+
+/* This pod's DMM line for a DAC path, and whether it has one. */
+bool      adc_cal_dac_is_set(int path);
+cal_lin_t adc_cal_dac_line(int path);
+
+/* Store this pod's line for `path` (0 3v3, 1 5v, 2 12v) from two points: the 16-bit code the pod
+   drove and what the DMM read, in microvolts. NULL = stored and in use, else why it was refused. */
+const char *adc_cal_dac_store(int path, uint16_t code1, int32_t uv1, uint16_t code2, int32_t uv2);
+
+/* A source's gain correction, and whether it was measured. */
+bool  adc_cal_gain_is_set(int src);
+float adc_cal_gain(int src);
+
+/* The DAC path that drives a source's loopback (cal1: 5v, cal2 and ext: 12v), and its two set
+   points in volts. */
+int   adc_cal_gain_path(int src);
+float adc_cal_gain_point(int src, int i);
+
+/* NULL when a gain measurement of `src` may run: the offset is calibrated and the driving path
+   has its DMM line. Else why not. */
+const char *adc_cal_gain_ready(int src);
+
+/* A gain measurement: what the DAC put out at the two set points (v, volts, from its DMM line)
+   and the mean count the ADC read there (count, unwrapped). adc_cal_gain_store fills the rest. */
+typedef struct {
+    float v[2];
+    float count[2];
+    float r[2];          /* what the source read before the gain (general fit, offset removed) */
+    float gain;
+    float residual_v;    /* what is left at the set points after the gain, mean, volts */
+} adc_cal_gain_meas_t;
+
+/* Store a measurement's points and use the gain they give. NULL = stored, else why it was refused. */
+const char *adc_cal_gain_store(int src, adc_cal_gain_meas_t *m);
+
+/* Names for replies and requests: "3v3"/"5v"/"12v" and "cal1"/"cal2"/"ext" (-1 = unknown). */
+const char *adc_cal_src_name(int src);
+int         adc_cal_src_index(const char *name);
+
+/* Remove the per-pod calibration (flash and active copy), or one part of it: "offset", "dac"
+   or "adc" (NULL = all). 0 on success, -1 failed, -2 unknown part. */
 int adc_cal_clear(void);
+int adc_cal_clear_part(const char *part);
 
 /* Hardware (adc_cal_hw.c, not in the host tests): route `current_in`, let it settle and take the
    bursts, scaled with ADC_CAL_CAL1. 0 = *out filled (check out->valid), -1 = route failed,
    -2 = capture failed. Needs the iCE40 up; the caller owns the ADC. */
 int adc_cal_measure_current_in(adc_reading_t *out);
+
+/* Hardware: drive the source's two set points through its loopback and fill m->v and m->count.
+   0 = done, -1 = route or DAC failed, -2 = capture failed, -3 = a burst was not settled
+   (*span_out = its span). Leaves the outputs off. The caller owns the ADC. */
+int adc_cal_measure_gain(int src, adc_cal_gain_meas_t *m, uint32_t *span_out);
 
 #endif /* ADC_CAL_H */

@@ -17,6 +17,7 @@ static const cal_set_t CAL_V2 = {
     /* Not measured on a v2 board: the nominal transfer function (current_out.h),
      * 100 * 4.096 V / 102 k and 100 * 4.096 V / 25.5 k / 65536. */
     .current_out = { 4015.686f, 0.24509804f },
+    .adc_cal1_v1 = { 65.832398f, -0.001004471f },   /* = adc_cal1 above; frozen (cal_data.h) */
 };
 
 /* rev3: measured 2026-10-12 on pod .220 against an HP 34401A, in 16-bit DAC codes
@@ -40,16 +41,33 @@ static const cal_set_t CAL_V3 = {
     .adc_ext  = { 65.708158f, -0.0010026443f },
     .current_out = { 4025.338f, 0.24518720f },
     .current_out_floor_ua = 4055.0f,
+    .adc_cal1_v1 = { 65.712125f, -0.0010027157f },   /* = adc_cal1 above since 3.8.1; frozen (cal_data.h) */
 };
 
 static const cal_set_t *s_active = &CAL_V2;
 
+/* The DAC lines in use (cal_dac_active): the one s_dac points to is read, the other is built. */
+static cal_lin_t s_dac_tbl[2][3];
+static const cal_lin_t *volatile s_dac = CAL_V2.dac;
+
+void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask) {
+    cal_lin_t *next = (s_dac == s_dac_tbl[0]) ? s_dac_tbl[1] : s_dac_tbl[0];
+    for (int i = 0; i < 3; i++)
+        next[i] = (pod && (mask & (1u << i))) ? pod[i] : s_active->dac[i];
+    s_dac = next;
+}
+
 void cal_data_select(int board_rev) {
     s_active = (board_rev == BOARD_REV_V3) ? &CAL_V3 : &CAL_V2;
+    s_dac = s_active->dac;   /* the compiled lines until adc_cal_load puts this pod's in */
 }
 
 const cal_set_t *cal_data(void) {
     return s_active;
+}
+
+const cal_lin_t *cal_dac_active(void) {
+    return s_dac;
 }
 
 uint16_t dac_code16_for_volts(int path, float volts) {

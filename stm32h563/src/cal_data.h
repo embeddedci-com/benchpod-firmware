@@ -42,6 +42,11 @@ typedef struct {
      * (then `a` is the live zero). */
     cal_lin_t current_out;
     float     current_out_floor_ua;
+
+    /* The cal1 fit a version-1 per-pod record (adc_cal.h, firmware 3.4.0 to 3.9.3) was measured
+     * with. Those records hold an offset in microvolts on this fit, not the raw count, so it is
+     * kept here as it was even when adc_cal1 is measured again: the record converts exactly. */
+    cal_lin_t adc_cal1_v1;
 } cal_set_t;
 
 /* Pick the set for a board revision (BOARD_REV_V3 -> rev3, anything else -> v2).  Call once
@@ -52,7 +57,18 @@ void cal_data_select(int board_rev);
 /* The active set.  A plain RAM read, safe from any task. */
 const cal_set_t *cal_data(void);
 
-#define DAC_CAL       (cal_data()->dac)
+/* The DAC output lines every DAC user converts with (DAC_CAL): the revision's compiled ones, with
+   this pod's own DMM-measured line in place of any path that has one (adc_cal.h, set at boot and
+   on every `calibrate` that changes them).  Two tables and a pointer swap, so a reader on another
+   task never sees half a line. */
+const cal_lin_t *cal_dac_active(void);
+
+/* Put this pod's lines in: bit n of `mask` set = path n uses pod[n], else the compiled line.
+   mask 0 (or pod NULL) = the compiled lines.  Call after cal_data_select(). */
+void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask);
+
+#define DAC_CAL           (cal_dac_active())
+#define DAC_CAL_COMPILED  (cal_data()->dac)
 #define ADC_CAL_CAL1  (cal_data()->adc_cal1)
 #define ADC_CAL_CAL2  (cal_data()->adc_cal2)
 #define ADC_CAL_EXT   (cal_data()->adc_ext)
