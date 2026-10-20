@@ -254,7 +254,7 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     static const char *const path_name[ADC_CAL_DAC_PATHS] = { "3v3", "5v", "12v" };
     cal_lin_t fit = adc_cal_current_in_fit();
     bool dmm = false;
-    char payload[640];
+    char payload[768];
     int n = snprintf(payload, sizeof(payload),
                      "{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
                      "\"a_uv\":%ld,\"b_nv\":%ld,\"dac\":{",
@@ -287,6 +287,8 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
                       lroundf((adc_cal_gain(i) - 1.0f) * 1e6f));
     }
     if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "},\"dmm\":%s", dmm ? "true" : "false");
+    if (adc_cal_current_in_is_set() && n < (int)sizeof(payload))   /* the raw zero the offset is derived from */
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"zero_count_mc\":%ld", (long)adc_cal_zero_count_mc());
     if (rd && n < (int)sizeof(payload))
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
                       adc_count_u16(rd->count), (unsigned)rd->span, (unsigned)ADC_CAL_SAMPLES);

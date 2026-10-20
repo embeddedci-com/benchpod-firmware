@@ -190,6 +190,21 @@ int ab_store_load(const ab_store_t *s, void *out, size_t len)
     return 0;
 }
 
+int ab_store_load_version(const ab_store_t *s, uint16_t version, void *out, size_t len, uint32_t *behind)
+{
+    bool v[2]; ab_hdr_t h[2];
+    int n = scan(s, v, h);
+    if (n < 0 || hdr_len(&h[n]) == 0) return -1;            /* none, or cleared */
+    int best = -1;
+    for (int i = 0; i < 2; i++) {
+        if (!v[i] || hdr_ver(&h[i]) != version || hdr_len(&h[i]) != len) continue;
+        if (best < 0 || i == n) best = i;                    /* the newest wins a tie of versions */
+    }
+    if (best < 0 || !slot_read(s, best, &h[best], out, len)) return -1;
+    if (behind) *behind = h[n].seq - h[best].seq;
+    return 0;
+}
+
 int ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_out)
 {
     bool v[2]; ab_hdr_t h[2];

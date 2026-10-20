@@ -31,6 +31,11 @@ static adc_reading_t burst(uint16_t lo, uint16_t hi) {
 
 static long mv(float volts) { return lroundf(volts * 1000.0f); }
 
+/* The unwrapped count, in milli-counts, where the general cal1 fit reads `volts`. */
+static int32_t count_mc_for_cal1(double volts) {
+    return (int32_t)lround((volts - ADC_CAL_CAL1.a) / ADC_CAL_CAL1.b * 1000.0);
+}
+
 /* What adc_read reports for a steady count on `current_in`: scaled with this pod's fit. */
 static long current_in_mv(uint16_t count) {
     uint16_t b16[16];
@@ -140,12 +145,12 @@ static void test_load_rejects_out_of_range(void) {
         .tag = "adc-cal", .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
         .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION,
     };
-    adc_cal_t rec = { .current_in_set = 1, .current_in_offset_uv = 996000 };
+    adc_cal_t rec = { .zero_set = 1, .zero_count_mc = count_mc_for_cal1(0.996) };
     CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0, "setup");
-    CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set() && adc_cal_current_in_offset_uv() == 0, "a 996 mV offset was loaded");
-    rec.current_in_offset_uv = -ADC_CAL_MAX_OFFSET_UV;
+    CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set() && adc_cal_current_in_offset_uv() == 0, "a 996 mV zero was loaded");
+    rec.zero_count_mc = count_mc_for_cal1(-0.1499);
     CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0, "setup");
-    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_mv() == -150, "an offset at the limit was not loaded");
+    CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_mv() == -150, "a zero at the limit was not loaded");
 }
 
 /* benchpod-445e46 (2026-10-19): J8 open reads count 49, -50 mV, a normal part spread for this
@@ -241,7 +246,9 @@ static void test_version1_record_migrates(void) {
     /* The next save is version 2, with the offset kept. */
     uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
     CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "dac store after migration");
-    CHECK(ab_store_load(&s_v1_store, &back, sizeof(back)) != 0, "the newest record is still version 1");
+    /* The newest record is the version-1 copy for older firmware, with the same offset. */
+    CHECK(ab_store_load(&s_v1_store, &back, sizeof(back)) == 0 && labs((long)back.current_in_offset_uv + 50210) <= 1,
+          "no version-1 copy next to the version-2 record");
     CHECK(adc_cal_load() == 0 && adc_cal_current_in_offset_uv() == -50210 && adc_cal_dac_is_set(1), "v2 lost the offset or the line");
 
     /* A v1 record without an offset is nothing. */
@@ -312,7 +319,11 @@ static void test_adc_gain(void) {
     CHECK(adc_cal_gain_ready(ADC_CAL_SRC_EXT) != NULL, "ext ready without the 12v line");
 
     cal_lin_t ext_before = adc_cal_source_fit(ADC_CAL_SRC_EXT), cal1_before = adc_cal_source_fit(ADC_CAL_SRC_CAL1);
-    adc_cal_gain_meas_t m = { .v = { 0.9959f, 3.9929f }, .r = { 0.9959f / 1.0018f + 0.001f, 3.9929f / 1.0018f + 0.001f } };
+    /* What cal1 must read (offset removed, no gain) for a 0.18 % low gain and 1 mV left over. */
+    adc_cal_gain_meas_t m = { .v = { 0.9959f, 3.9929f } };
+    float off = (float)adc_cal_current_in_offset_uv() / 1e6f;
+    for (int i = 0; i < 2; i++)
+        m.count[i] = (float)(count_mc_for_cal1(m.v[i] / 1.0018 + 0.001 + off) / 1000.0);
     CHECK(adc_cal_gain_store(ADC_CAL_SRC_CAL1, &m) == NULL, "a 0.18 %% gain was refused");
     CHECK(fabsf(m.gain - 1.0018f) < 2e-5f && adc_cal_gain_is_set(ADC_CAL_SRC_CAL1), "gain %f", (double)m.gain);
     CHECK(fabsf(m.residual_v + 0.001f) < 5e-5f, "residual %f V, want about -1 mV", (double)m.residual_v);
@@ -327,7 +338,8 @@ static void test_adc_gain(void) {
 
     /* Persisted; a gain 5 % off is refused and keeps the old one. */
     CHECK(adc_cal_load() == 0 && fabsf(adc_cal_gain(ADC_CAL_SRC_CAL1) - 1.0018f) < 2e-5f, "gain lost over a reload");
-    adc_cal_gain_meas_t bad = { .v = { 0.9959f, 3.9929f }, .r = { 0.9959f / 1.05f, 3.9929f / 1.05f } };
+    adc_cal_gain_meas_t bad = { .v = { 0.9959f, 3.9929f } };
+    for (int i = 0; i < 2; i++) bad.count[i] = (float)(count_mc_for_cal1(bad.v[i] / 1.05 + off) / 1000.0);
     why = adc_cal_gain_store(ADC_CAL_SRC_CAL1, &bad);
     CHECK(why && strstr(why, "5 V output"), "5 %% gain: %s", why ? why : "(stored)");
     CHECK(fabsf(adc_cal_gain(ADC_CAL_SRC_CAL1) - 1.0018f) < 2e-5f, "a refused gain replaced the old one");
@@ -346,18 +358,101 @@ static void test_load_rejects_bad_dmm_parts(void) {
         .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION,
     };
     fresh_rev3_pod(false);
-    adc_cal_t rec = { .current_in_set = 1, .current_in_offset_uv = -50210, .dac_set = 2 };
-    rec.dac[1] = DAC_CAL_COMPILED[1];
-    rec.dac[1].b *= 1.05f;                                   /* 5 % gain */
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    adc_cal_t rec = { .zero_set = 1, .zero_count_mc = 65585000, .dac_set = 2 };
+    rec.dac[1] = (adc_cal_dac_pts_t){ { c1, c2 }, { 1000000, 4150000 } };   /* 5 % gain */
     CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0, "setup");
     CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set() && DAC_CAL[1].b == DAC_CAL_COMPILED[1].b, "a 5 %% DAC line loaded");
-    rec.dac[1] = DAC_CAL_COMPILED[1];
     rec.dac_set = 0;
-    rec.adc_gain_set = 1;
-    rec.adc_gain[0] = NAN;
-    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == -1, "a NaN gain loaded");
-    rec.adc_gain[0] = 1.001f;
-    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == 0 && adc_cal_gain_is_set(0), "a good record did not load");
+    rec.gain_set = 1;
+    rec.gain[0] = (adc_cal_gain_pts_t){ { 61000000, 61000000 }, { 1000000, 4000000 } };   /* same count twice */
+    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == -1, "a gain from one count loaded");
+    rec.gain[0] = (adc_cal_gain_pts_t){ { count_mc_for_cal1(1.0), count_mc_for_cal1(4.0) }, { 1001000, 4004000 } };
+    CHECK(ab_store_save(&store, &rec, sizeof(rec)) == 0 && adc_cal_load() == 0 && adc_cal_gain_is_set(0) &&
+          fabsf(adc_cal_gain(0) - 1.001f) < 2e-5f, "a good record did not load: gain %f", (double)adc_cal_gain(0));
+}
+
+/* The record holds the zero COUNT, not an offset on a fit: when the general fit changes (here
+   rev3's set swapped for v2's), J8 open still reads 0 and the offset follows the new fit. */
+static void test_new_general_fit_keeps_the_zero(void) {
+    fresh_rev3_pod(true);                              /* zero at count 49 (65585 unwrapped) */
+    CHECK(current_in_mv(49) == 0, "rev3: J8 open reads %ld mV", current_in_mv(49));
+    long off_rev3 = (long)adc_cal_current_in_offset_uv();
+    cal_data_select(2);                                /* another general fit */
+    CHECK(adc_cal_load() == 0 && adc_cal_zero_count_mc() == 65585000, "zero count changed: %ld", (long)adc_cal_zero_count_mc());
+    CHECK(current_in_mv(49) == 0, "v2 fit: J8 open reads %ld mV", current_in_mv(49));
+    CHECK(labs((long)adc_cal_current_in_offset_uv() - off_rev3) > 1000, "the offset did not follow the new fit");
+    cal_data_select(3);
+    adc_cal_load();
+}
+
+/* 3.9.3 stored the offset in uV (version 1); this firmware converts it to the zero count through
+   the fit it was measured with. bca439 (+12.8 mV) and 445e46 (-50.575 mV) then read every source
+   exactly as 3.9.3 did: its fit minus that offset. */
+static void test_v1_converts_to_the_same_readings(void) {
+    static const int32_t offsets_uv[2] = { 12800, -50575 };
+    static const uint16_t counts[] = { 30, 49, 65521, 64548, 61562, 40000, 20000 };
+    for (int k = 0; k < 2; k++) {
+        mock_flash_reset();
+        cal_data_select(3);
+        adc_cal_v1_t v1 = { .current_in_set = 1, .current_in_offset_uv = offsets_uv[k] };
+        CHECK(ab_store_save(&s_v1_store, &v1, sizeof(v1)) == 0 && adc_cal_load() == 0, "setup %d", k);
+        CHECK(labs((long)adc_cal_current_in_offset_uv() - offsets_uv[k]) <= 1, "offset %ld uV, 3.9.3 had %ld",
+              (long)adc_cal_current_in_offset_uv(), (long)offsets_uv[k]);
+        cal_lin_t base[3] = { ADC_CAL_CAL1, ADC_CAL_CAL2, ADC_CAL_EXT };
+        for (int src = 0; src < 3; src++) {
+            cal_lin_t mine = adc_cal_source_fit(src);
+            for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++) {
+                double c = counts[i] < 32768 ? counts[i] + 65536.0 : counts[i];
+                double was = base[src].a - offsets_uv[k] / 1e6 + base[src].b * c;
+                double now = (double)mine.a + (double)mine.b * c;
+                CHECK(fabs(now - was) < 20e-6, "pod %d source %d count %u: %.6f V, 3.9.3 read %.6f V", k, src,
+                      (unsigned)counts[i], now, was);
+            }
+        }
+    }
+}
+
+/* Every save also leaves a version-1 record that firmware 3.4.0 to 3.9.3 reads (the newest one,
+   version 1 only), so a downgraded pod keeps its offset. What that firmware then writes or
+   clears wins over the version-2 record. */
+static void test_downgrade_keeps_the_offset(void) {
+    fresh_rev3_pod(true);
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "setup: 5v line");
+    int32_t uv = adc_cal_current_in_offset_uv();
+
+    /* Old firmware: ab_store_load of the newest record, version 1, 32 bytes. */
+    adc_cal_v1_t old;
+    CHECK(ab_store_load(&s_v1_store, &old, sizeof(old)) == 0 && old.current_in_set &&
+          labs((long)old.current_in_offset_uv - uv) <= 1, "old firmware cannot read the offset");
+    /* This firmware still takes the version-2 record behind it. */
+    CHECK(adc_cal_load() == 0 && adc_cal_dac_is_set(1), "the version-2 record was not taken");
+
+    /* The downgraded pod calibrates again (old firmware writes a newer version 1). */
+    adc_cal_v1_t again = { .current_in_set = 1, .current_in_offset_uv = -40000 };
+    CHECK(ab_store_save(&s_v1_store, &again, sizeof(again)) == 0, "setup");
+    CHECK(adc_cal_load() == 0 && labs((long)adc_cal_current_in_offset_uv() + 40000) <= 1 && !adc_cal_dac_is_set(1),
+          "the old firmware's calibration lost to a stale version-2 record");
+
+    /* ... or clears it. */
+    fresh_rev3_pod(true);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "setup");
+    static const ab_store_t old_store = {
+        .tag = "adc-cal", .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
+        .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION_1,
+    };
+    CHECK(ab_store_clear(&old_store) == 0 && adc_cal_load() == -1, "a clear on old firmware did not stick");
+
+    /* A power cut between the two writes leaves the version-2 record newest: still taken. */
+    fresh_rev3_pod(false);
+    static const ab_store_t v2_store = {
+        .tag = "adc-cal", .slot_off = { ADC_CAL_SLOT_A_OFFSET, ADC_CAL_SLOT_B_OFFSET },
+        .magic = ADC_CAL_RECORD_MAGIC, .version = ADC_CAL_VERSION,
+    };
+    adc_cal_t only = { .zero_set = 1, .zero_count_mc = 65585000 };
+    CHECK(ab_store_save(&v2_store, &only, sizeof(only)) == 0 && adc_cal_load() == 0 && adc_cal_zero_count_mc() == 65585000,
+          "a lone version-2 record was not taken");
 }
 
 int main(void) {
@@ -375,6 +470,9 @@ int main(void) {
     test_dac_refusals();
     test_adc_gain();
     test_load_rejects_bad_dmm_parts();
+    test_new_general_fit_keeps_the_zero();
+    test_v1_converts_to_the_same_readings();
+    test_downgrade_keeps_the_offset();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }
     printf("test_adc_cal: all passed\n");
     return 0;

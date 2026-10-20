@@ -42,10 +42,8 @@ int adc_cal_measure_gain(int src, adc_cal_gain_meas_t *m, uint32_t *span_out) {
        (the ext route leaves the DAC mux as it is, so route the output first). */
     analog_path_t route = src == ADC_CAL_SRC_CAL1 ? ANALOG_PATH_CAL1
                         : src == ADC_CAL_SRC_CAL2 ? ANALOG_PATH_CAL2 : ANALOG_PATH_DAC_12V;
-    /* The source's compiled fit with this pod's offset, without a gain: the gain is what this
-       measures. */
-    cal_lin_t base = adc_cal_fit(src == ADC_CAL_SRC_CAL2 ? ADC_CAL_CAL2
-                               : src == ADC_CAL_SRC_EXT ? ADC_CAL_EXT : ADC_CAL_CAL1);
+    /* Any fit only to check the burst settled: what is kept is its mean count. */
+    cal_lin_t base = ADC_CAL_CAL1;
     int rc = 0;
     for (int i = 0; i < 2 && rc == 0; i++) {
         uint16_t code = dac_code16_for_volts(path, adc_cal_gain_point(src, i));   /* the DMM line */
@@ -61,7 +59,7 @@ int adc_cal_measure_gain(int src, adc_cal_gain_meas_t *m, uint32_t *span_out) {
             break;
         }
         m->v[i] = dac_volts_for_code16(path, code);
-        m->r[i] = rd.volts;
+        m->count[i] = rd.count_uw;
     }
     analog_path_set(ANALOG_PATH_OFF);   /* nothing left driving the outputs */
     return rc;

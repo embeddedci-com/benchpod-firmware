@@ -42,6 +42,11 @@ typedef struct {
      * (then `a` is the live zero). */
     cal_lin_t current_out;
     float     current_out_floor_ua;
+
+    /* The cal1 fit a version-1 per-pod record (adc_cal.h, firmware 3.4.0 to 3.9.3) was measured
+     * with. Those records hold an offset in microvolts on this fit, not the raw count, so it is
+     * kept here as it was even when adc_cal1 is measured again: the record converts exactly. */
+    cal_lin_t adc_cal1_v1;
 } cal_set_t;
 
 /* Pick the set for a board revision (BOARD_REV_V3 -> rev3, anything else -> v2).  Call once

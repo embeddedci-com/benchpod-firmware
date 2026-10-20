@@ -1351,11 +1351,22 @@ are set: clear them, calibrate, set them again. The J8 offset does not move the 
 | `dac.<path>` | This pod's line, `volts = a + b × code16` with `a_uv` in µV and `b_pv` in pV per 16-bit code; against the built-in line its `offset_uv` (at 0 V on `12v`, at code 0 on the others) and `gain_ppm`. `null`: the built-in line |
 | `adc_gain_ppm.<source>` | The gain correction in ppm. `null`: the built-in gain |
 | `dmm` | `true` when any DMM part is stored |
+| `zero_count_mc` | The raw zero the offset is derived from: the mean count `current_in` read with J8 open, unwrapped, in thousandths of a count (firmware 3.9.4+, only when calibrated) |
 | `measured` | After an `adc` run: what the output put out (`v1_uv`, `v2_uv`), what the ADC read before the gain (`r1_uv`, `r2_uv`) and the mean offset left after it (`residual_uv`) |
 
-The record is stored with the offset (version 2). A pod updated from an older firmware keeps its
-offset; going back to firmware older than 3.9.4 loses the whole calibration (the older firmware
-ignores the newer record), and the J8 offset is one `calibrate` again.
+**What the pod stores** (firmware 3.9.4+): raw measurements, never a fit. The mean count with J8
+open (the zero), the two codes and DMM readings per DAC output, and the two counts and input
+voltages per ADC source. Every fit is derived from them at boot, with the general fits built into
+that firmware: the offset is the general `cal1` fit at the zero count, a DAC line goes through its
+two points, and a gain is the slope of its two points over the general fit's slope. So a general
+fit measured again in a later firmware never changes what a stored value means, and J8 open keeps
+reading 0 V.
+
+A pod updated from firmware 3.4.0 to 3.9.3 keeps its offset: that firmware stored it in µV on the
+general fit of its day, which the pod converts to the zero count once, exactly. Every save also
+writes a copy in the old format (the offset in µV) that older firmware reads, so going back to
+firmware 3.4.0 to 3.9.3 keeps the offset (the DMM parts are not used there). What the older
+firmware then calibrates or clears is what a later update finds.
 
 
 #### Loopback / self-cal examples

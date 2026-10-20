@@ -83,6 +83,12 @@ typedef struct {
    -1 = none, cleared, or a record of another length/version. */
 int  ab_store_load(const ab_store_t *s, void *out, size_t len);
 
+/* A record of `version` in either slot, for a store that keeps two versions side by side (a new
+   record and, for older firmware, an old-format copy: adc_cal.h). Its payload goes to out (exactly
+   len bytes) and *behind is how many saves older it is than the newest record (0 = it is the
+   newest). -1 = no valid record of that version and length, or the newest record is a tombstone. */
+int  ab_store_load_version(const ab_store_t *s, uint16_t version, void *out, size_t len, uint32_t *behind);
+
 /* The newest record of any length up to cap: 0 and *len_out = its length, or -1 (none, cleared,
    another version, or longer than cap). For stores with max_len set. */
 int  ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_out);

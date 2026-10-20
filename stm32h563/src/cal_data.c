@@ -17,6 +17,7 @@ static const cal_set_t CAL_V2 = {
     /* Not measured on a v2 board: the nominal transfer function (current_out.h),
      * 100 * 4.096 V / 102 k and 100 * 4.096 V / 25.5 k / 65536. */
     .current_out = { 4015.686f, 0.24509804f },
+    .adc_cal1_v1 = { 65.832398f, -0.001004471f },   /* = adc_cal1 above; frozen (cal_data.h) */
 };
 
 /* rev3: measured 2026-10-12 on pod .220 against an HP 34401A, in 16-bit DAC codes
@@ -40,6 +41,7 @@ static const cal_set_t CAL_V3 = {
     .adc_ext  = { 65.708158f, -0.0010026443f },
     .current_out = { 4025.338f, 0.24518720f },
     .current_out_floor_ua = 4055.0f,
+    .adc_cal1_v1 = { 65.712125f, -0.0010027157f },   /* = adc_cal1 above since 3.8.1; frozen (cal_data.h) */
 };
 
 static const cal_set_t *s_active = &CAL_V2;
