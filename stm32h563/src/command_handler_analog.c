@@ -20,6 +20,7 @@
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
 #include "cloud_client.h"  /* cloud_client_request_caps_resend: the server scales captures with the fit */
 #include "dac_limits.h"    /* dac_limits_path_index: "3v3"/"5v"/"12v" */
+#include "at_driver.h"     /* at_send_data: calibrate sends its own (large) reply */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -254,9 +255,11 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     static const char *const path_name[ADC_CAL_DAC_PATHS] = { "3v3", "5v", "12v" };
     cal_lin_t fit = adc_cal_current_in_fit();
     bool dmm = false;
-    char payload[768];
+    /* The whole frame is built here and sent as is: with the DMM parts it is up to about 650 B,
+       past send_ok_str's 256 B. */
+    char payload[832];
     int n = snprintf(payload, sizeof(payload),
-                     "{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
+                     "{\"status\":\"ok\",\"data\":{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
                      "\"a_uv\":%ld,\"b_nv\":%ld,\"dac\":{",
                      adc_cal_current_in_is_set() ? "true" : "false",
                      (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv(),
@@ -297,9 +300,10 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
                       ",\"measured\":{\"v1_uv\":%ld,\"v2_uv\":%ld,\"r1_uv\":%ld,\"r2_uv\":%ld,\"residual_uv\":%ld}",
                       lroundf(gm->v[0] * 1e6f), lroundf(gm->v[1] * 1e6f), lroundf(gm->r[0] * 1e6f),
                       lroundf(gm->r[1] * 1e6f), lroundf(gm->residual_v * 1e6f));
-    if (n < (int)sizeof(payload) - 1) snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
-    else { send_error(conn_id, "calibrate: reply too long"); return; }
-    send_ok_str(conn_id, payload);
+    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "}}\n");
+    if (n >= (int)sizeof(payload)) { send_error(conn_id, "calibrate: reply too long"); return; }
+    printf("[cmd] -> ok  %s", payload);
+    if (at_send_data(conn_id, (const uint8_t *)payload, (size_t)n) != 0) at_close_connection(conn_id);
 }
 
 /* A whole number from the request, e.g. "uv1":-5025500. */
