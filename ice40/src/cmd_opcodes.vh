@@ -16,6 +16,7 @@
     localparam OP_FPGA_FEATURES      = 8'h18;
     localparam OP_DAC_LOOP_INMAP     = 8'h1C;
     localparam OP_START_DAC_LOOP     = 8'h15;
+    localparam OP_DAC_CTRL           = 8'h38;
     localparam OP_START_CAPTURE      = 8'h20;
     localparam OP_ADC_PROBE          = 8'h21;
     localparam OP_CAPTURE_TEST       = 8'h23;

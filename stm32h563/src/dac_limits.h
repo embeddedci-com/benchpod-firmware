@@ -90,7 +90,8 @@ const char *dac_limits_check_route(const char *path);
 const char *dac_limits_check_volts(const char *path, float volts);
 
 /* Setting a current on the 4-20 mA output (current_out.h). It shares the DAC with the limited
-   path, so it is refused while limits are set. NULL = allowed. */
+   path, so it is refused while limits are set, except on analog v3r2 where it has its own DAC
+   channel (dac_quad.h). NULL = allowed. */
 const char *dac_limits_check_current_out(void);
 
 /* Hardware (dac_limits_hw.c, not in the host tests): hold the DAC at the park level and route the

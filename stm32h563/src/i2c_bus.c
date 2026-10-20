@@ -12,6 +12,7 @@
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "signal_engine.h"   /* la_vccio_get_mv — the pull-ups are 3V3-referenced */
+#include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -341,15 +342,17 @@ void analog_switch_init(void)
        TCA9554's 0xFF power-on output default never briefly energises a relay or
        routes the DAC to an unknown SMA. */
     s_u55_out = 0x00; s_u58_out = 0x00;
-    tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
-    tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
+    if (!dac_quad_present()) {   /* v3r2 has no U55 */
+        tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
+        tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
+    }
     tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_OUTPUT, 0x00);
     tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_CONFIG, (uint8_t)~U58_OUTPUT_MASK);
 }
 
 int dacmux_set_ctrl1(bool en, uint8_t sel)
 {
-    if (sel > 3u) return -1;
+    if (sel > 3u || dac_quad_present()) return -1;
     /* P0=EN, P1=A0, P2=A1 */
     s_u55_out = (uint8_t)((s_u55_out & ~0x07u)
                 | (en ? 0x01u : 0u)
@@ -360,7 +363,7 @@ int dacmux_set_ctrl1(bool en, uint8_t sel)
 
 int dacmux_set_ctrl2(bool en, uint8_t sel)
 {
-    if (sel > 3u) return -1;
+    if (sel > 3u || dac_quad_present()) return -1;
     /* P3=EN, P4=A0, P5=A1 */
     s_u55_out = (uint8_t)((s_u55_out & ~0x38u)
                 | (en ? 0x08u : 0u)
@@ -371,6 +374,7 @@ int dacmux_set_ctrl2(bool en, uint8_t sel)
 
 int dacmux_read(uint8_t *out_reg)
 {
+    if (dac_quad_present()) return -1;
     return tca9554_read_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, out_reg);
 }
 
@@ -400,7 +404,7 @@ void analog_switch_dump(void)
         { "U55 dacmux@0x24", I2C_ADDR_TCA9554_DACMUX, U55_OUTPUT_MASK },
         { "U58 calsw @0x26", I2C_ADDR_TCA9554_ANASW,  U58_OUTPUT_MASK },
     };
-    for (unsigned i = 0; i < 2; i++) {
+    for (unsigned i = dac_quad_present() ? 1u : 0u; i < 2; i++) {   /* v3r2: no U55 */
         uint8_t in = 0xEE, out = 0xEE, cfg = 0xEE;
         int err = tca9554_read_reg(chips[i].a, 0x00u, &in)
                 | tca9554_read_reg(chips[i].a, TCA_REG_OUTPUT, &out)
@@ -415,89 +419,23 @@ void analog_switch_dump(void)
 /* ---- High-level analog paths — the ONE place switch states are defined ----
    Every layer (console dac/adc/measure, JSON analog_path, SDK) routes through
    here, so a path can never be wired two different ways in two places. */
+/* The switch states come from analog_path_switches() (analog_path.c, host-tested): U55 mux,
+   then U58 relays, in that order, as always.  Analog v3r2 has no U55: there dac_quad_route points
+   the DAC8554 at the path's channel (parking the voltage output it leaves) before the relays move,
+   like v3 moved the mux first. */
 int analog_path_set(analog_path_t path)
 {
+    analog_switches_t sw;
+    bool quad = dac_quad_present();
+    if (analog_path_switches(path, quad, &sw) != 0) return -1;
     int r = 0;
-    switch (path) {
-    case ANALOG_PATH_OFF:                                    /* all quiet */
-        r |= dacmux_set_ctrl1(false, 0);
-        r |= dacmux_set_ctrl2(false, 0);
-        r |= calsw_set(false, false, false, false);
-        break;
-    case ANALOG_PATH_DAC_3V3:                                /* DAC -> 3V3 SMA */
-        r |= dacmux_set_ctrl1(true, DACMUX_CTRL1_3V3);
-        r |= dacmux_set_ctrl2(false, 0);
-        r |= calsw_set(false, false, false, false);
-        break;
-    case ANALOG_PATH_DAC_5V:                                 /* DAC -> 5V SMA */
-        r |= dacmux_set_ctrl1(true, DACMUX_CTRL1_5V);
-        r |= dacmux_set_ctrl2(false, 0);
-        r |= calsw_set(false, false, false, false);
-        break;
-    case ANALOG_PATH_DAC_12V:                                /* DAC -> ±12V diff SMA */
-        r |= dacmux_set_ctrl1(true, DACMUX_CTRL1_12V);
-        r |= dacmux_set_ctrl2(true, DACMUX_CTRL2_12V_VMID);
-        r |= calsw_set(false, false, false, false);
-        break;
-    case ANALOG_PATH_ADC_EXT:                                /* ADC <- RF4 SMA (÷12) */
-        r |= calsw_set(false, false, false, false);          /* leave DAC mux as-is */
-        break;
-    case ANALOG_PATH_CAL1:                                   /* 5V DAC -> ADC (K1) */
-        r |= dacmux_set_ctrl1(true, DACMUX_CTRL1_5V);
-        r |= dacmux_set_ctrl2(false, 0);
-        r |= calsw_set(true, false, false, true);
-        break;
-    case ANALOG_PATH_CAL2:                                   /* ±12V diff -> ADC (K2/U51) */
-        r |= dacmux_set_ctrl1(true, DACMUX_CTRL1_12V_ADC);
-        r |= dacmux_set_ctrl2(true, DACMUX_CTRL2_ADC_VMID);
-        r |= calsw_set(false, true, false, true);
-        break;
-    case ANALOG_PATH_CURRENT_IN:                                    /* ADC <- amps terminal */
-        r |= calsw_set(false, false, true, false);           /* leave DAC mux as-is */
-        break;
-    case ANALOG_PATH_CURRENT_OUT:                            /* DAC -> 4-20 mA output (J9) only */
-        /* The XTR116 follows the DAC buffer whatever the mux does, so there is nothing to
-           switch ON. This switches the voltage outputs OFF, so they do not follow the current.
-           The relays are left as-is: the ADC source (e.g. current_in) stays routed. */
-        r |= dacmux_set_ctrl1(false, 0);
-        r |= dacmux_set_ctrl2(false, 0);
-        break;
-    default:
-        return -1;
+    if (quad) r |= dac_quad_route(path);
+    if (sw.mux) {
+        r |= dacmux_set_ctrl1(sw.ctrl1_en, sw.ctrl1_sel);
+        r |= dacmux_set_ctrl2(sw.ctrl2_en, sw.ctrl2_sel);
     }
+    if (sw.relays) r |= calsw_set(sw.cal1, sw.cal2, sw.current_in, sw.cal_path);
     return r;
-}
-
-static const struct { const char *name; analog_path_t path; } s_path_tbl[] = {
-    { "off",     ANALOG_PATH_OFF     },
-    { "dac_3v3", ANALOG_PATH_DAC_3V3 }, { "3v3", ANALOG_PATH_DAC_3V3 },
-    { "dac_5v",  ANALOG_PATH_DAC_5V  }, { "5v",  ANALOG_PATH_DAC_5V  },
-    { "dac_12v", ANALOG_PATH_DAC_12V }, { "12v", ANALOG_PATH_DAC_12V },
-    { "adc_ext", ANALOG_PATH_ADC_EXT }, { "ext", ANALOG_PATH_ADC_EXT },
-                                        { "sma", ANALOG_PATH_ADC_EXT },
-    { "cal1",    ANALOG_PATH_CAL1    },
-    { "cal2",    ANALOG_PATH_CAL2    },
-    { "current_in",     ANALOG_PATH_CURRENT_IN     },
-    { "current_out",    ANALOG_PATH_CURRENT_OUT    },
-};
-
-const char *analog_path_name(analog_path_t path)
-{
-    /* canonical names only (first hit per enum in the table) */
-    static const char *canon[ANALOG_PATH__COUNT] = {
-        "off", "dac_3v3", "dac_5v", "dac_12v", "adc_ext", "cal1", "cal2", "current_in",
-        "current_out",
-    };
-    return (path < ANALOG_PATH__COUNT) ? canon[path] : "";
-}
-
-int analog_path_from_name(const char *name, analog_path_t *out)
-{
-    if (!name || !out) return -1;
-    for (unsigned i = 0; i < sizeof(s_path_tbl) / sizeof(s_path_tbl[0]); i++) {
-        if (strcmp(name, s_path_tbl[i].name) == 0) { *out = s_path_tbl[i].path; return 0; }
-    }
-    return -1;
 }
 
 void i2c_bus_status(void)

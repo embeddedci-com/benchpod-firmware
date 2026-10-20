@@ -20,6 +20,7 @@
 #include "pico_compat.h"   /* sleep_ms (yields to FreeRTOS) */
 #include "cloud_client.h"  /* cloud_client_request_caps_resend: the server scales captures with the fit */
 #include "dac_limits.h"    /* dac_limits_path_index: "3v3"/"5v"/"12v" */
+#include "dac_quad.h"      /* analog v3r2: a DAC8554 channel per output */
 #include "at_driver.h"     /* at_send_data: calibrate sends its own (large) reply */
 
 #include <stdio.h>
@@ -37,6 +38,10 @@
    as-is; a bare command just reports state. */
 void handle_dac_mux(int conn_id, const char *json) {
     char s[8] = {0};
+    if (dac_quad_present()) {
+        send_error(conn_id, "dac_mux: this board (analog v3r2) has no DAC mux, one DAC channel per output; use analog_path");
+        return;
+    }
     if (json_get_value(json, "ctrl1_en", s, sizeof(s))) {
         int sel = json_get_value(json, "ctrl1_sel", s, sizeof(s)) ? atoi(s) : 0;
         if (sel < 0 || sel > 3) { send_error(conn_id, "ctrl1_sel 0..3"); return; }
@@ -147,7 +152,8 @@ void handle_dac_out(int conn_id, const char *json) {
    `ua` in the reply is the current the nearest 16-bit DAC code gives. A request from 4000 uA up
    to min_ua gives min_ua; anything else outside min_ua..max_ua is refused, there is no clamp.
    Setting a current switches the DAC voltage outputs off first (analog path current_out): they
-   share the DAC and would follow it. The loop needs an external floating supply; the pod cannot see
+   share the DAC and would follow it.  Analog v3r2 has a DAC channel for it (dac_quad.h): the
+   voltage outputs stay as they are. The loop needs an external floating supply; the pod cannot see
    whether current flows. dac_stop does not return the loop to 4 mA: send 4000 uA for that. */
 void handle_current_out(int conn_id, const char *json) {
     char ua_s[24] = {0}, payload[112];
@@ -163,9 +169,14 @@ void handle_current_out(int conn_id, const char *json) {
     uint16_t code = 0;
     const char *why = current_out_code(lround(req), &code);
     if (why) { send_error(conn_id, why); return; }
-    /* Outputs off first, then the level: the voltage outputs never see the new code. */
-    if (analog_path_set(ANALOG_PATH_CURRENT_OUT) != 0) { send_error(conn_id, "route failed"); return; }
-    if (dac_set_constant16(code, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
+    if (dac_quad_present()) {
+        /* Analog v3r2: channel D is the 4-20 mA output's own, the voltage outputs stay as they are. */
+        if (dac_quad_current_out(code) != 0) { send_error(conn_id, "dac set failed"); return; }
+    } else {
+        /* Outputs off first, then the level: the voltage outputs never see the new code. */
+        if (analog_path_set(ANALOG_PATH_CURRENT_OUT) != 0) { send_error(conn_id, "route failed"); return; }
+        if (dac_set_constant16(code, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
+    }
     snprintf(payload, sizeof(payload), "{\"ua\":%ld,\"code\":%u,\"min_ua\":%ld,\"max_ua\":%ld}",
              current_out_ua(code), (unsigned)code, current_out_min_ua(), current_out_max_ua());
     send_ok_str(conn_id, payload);

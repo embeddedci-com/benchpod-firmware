@@ -49,9 +49,9 @@ typedef struct {
     cal_lin_t adc_cal1_v1;
 } cal_set_t;
 
-/* Pick the set for a board revision (BOARD_REV_V3 -> rev3, anything else -> v2).  Call once
-   at boot, right after board_rev_init() and before anything converts a voltage.  Until then
-   the v2 set is active. */
+/* Pick the set for a board revision (BOARD_REV_V3 -> rev3, BOARD_REV_V3R2 -> v3r2, anything
+   else -> v2).  Call once at boot, right after board_rev_init() and before anything converts a
+   voltage.  Until then the v2 set is active. */
 void cal_data_select(int board_rev);
 
 /* The active set.  A plain RAM read, safe from any task. */

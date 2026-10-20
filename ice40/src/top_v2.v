@@ -141,13 +141,25 @@ module top (
     // engine loads THIS start's values.  (Until v33 the copy and the start were the same edge and
     // every start's first waveform pass ran at the PREVIOUS period.)  STOP rides an identical
     // instance with no payload, so start and stop keep the same latency and relative order.
-    wire [28:0] dac_ctl_48;
+    // v49: the frame control byte (OP_DAC_CTRL, the DAC8554 channel) rides along, so it changes
+    // only at a start and is constant while the engine streams.
+    wire [7:0]  dac_ctrl;                    // stream control byte (cmd_dispatch, clk)
+    wire        dac_wr_stb;                  // OP_DAC_CTRL: one static frame...
+    wire [23:0] dac_wr_cfg;                  // ...{ctrl, code_hi, code_lo}
+    wire [36:0] dac_ctl_48;
+    wire [7:0]  dac_fctl_48    = dac_ctl_48[36:29];
     wire [12:0] dac_period_48  = dac_ctl_48[28:16];
     wire [15:0] dac_divider_48 = dac_ctl_48[15:0];
     wire        dac_start_48, dac_stop_48;
-    cdc_pulse_payload #(.W(29), .INIT({13'd0, 16'd2})) dac_start_cdc (
-        .src_clk(clk), .src_pulse(dac_start_eff), .src_data({dac_period, dac_divider}),
+    cdc_pulse_payload #(.W(37), .INIT({8'd0, 13'd0, 16'd2})) dac_start_cdc (
+        .src_clk(clk), .src_pulse(dac_start_eff), .src_data({dac_ctrl, dac_period, dac_divider}),
         .dst_clk(clk48), .dst_pulse(dac_start_48), .dst_data(dac_ctl_48));
+    // The static frame: its clk48 copy is the engine's holding register until the next request.
+    wire        dac_wr_48;
+    wire [23:0] dac_wr_frame_48;
+    cdc_pulse_payload #(.W(24)) dac_wr_cdc (
+        .src_clk(clk), .src_pulse(dac_wr_stb), .src_data(dac_wr_cfg),
+        .dst_clk(clk48), .dst_pulse(dac_wr_48), .dst_data(dac_wr_frame_48));
     cdc_pulse_payload #(.W(1)) dac_stop_cdc (
         .src_clk(clk), .src_pulse(dac_stop_pulse | dac_autostop), .src_data(1'b0),
         .dst_clk(clk48), .dst_pulse(dac_stop_48), .dst_data());
@@ -304,6 +316,7 @@ module top (
     dac8551_engine dac_i (
         .clk(clk48), .rst(rst48), .start(dac_start_48), .stop(dac_stop_48),
         .period_samples(dac_period_48), .divider(dac_divider_48),
+        .ctrl(dac_fctl_48), .wr_req(dac_wr_48), .wr_frame(dac_wr_frame_48),
         .wave_addr(dac_wave_addr), .wave_data(wave_rdata),
         .psram_mode(psram_run_48 | dac_loop_mode48),
         .strm_data(dac_loop_mode48 ? loop_strm_data : rd_strm_data),
@@ -708,7 +721,14 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 47) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 49) ----
+    // GATEWARE_VERSION 49 = v48 + OP_DAC_CTRL (0x38) for the analog v3r2 board's quad DAC8554:
+    //   the stream control byte (top byte of every DAC frame, taken at each start through
+    //   dac_start_cdc; 0 at power-up = the DAC8551 frame, so v2/v3 boards are unchanged) and a
+    //   one-shot static frame {ctrl, code} through its own cdc_pulse_payload, which the engine
+    //   slots in at the next sample slot (dac8551_engine header).  tb_dac8554, tb_top_capture.
+    //   Loop 4066 -> 4133 LC (78%), deep 3780 -> 3842 LC (73%).  SEED_LOOP 17 -> 57 (clk48
+    //   55.31), SEED_DEEP 13 -> 48 (59.54); see the Makefile.
     // GATEWARE_VERSION 47 = v46 + GW-1 (both images, no protocol change): every capture arm,
     //   including the zero-count abort, empties psram_dual_writer's two staging FIFOs and the LA
     //   SPRAM ring, and the arm wins over a pop on the same edge in the writer's region-address
@@ -1081,7 +1101,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd48), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd49), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1093,6 +1113,7 @@ module top (
         .dac_period(dac_period), .dac_divider(dac_divider), .dac_running(dac_running),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
+        .dac_ctrl(dac_ctrl), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
