@@ -98,6 +98,9 @@ def main(argv=None):
         dmm = open_dmm(args)
     except DMMError as e:
         sys.exit(f"dmm: {e}")
+    except Exception as e:  # GPIB errors from ni_gpib_usb (a timeout: the DMM does not answer)
+        sys.exit(f"dmm: the DMM does not answer on GPIB address {args.addr} ({e}). Is it on, is the "
+                 "GPIB cable seated, and is its HP-IB address set to that (Shift > I/O MENU)?")
     try:
         if args.cmd == "idn":
             print(dmm.idn().strip())
@@ -107,6 +110,8 @@ def main(argv=None):
             cmd_watch(dmm, args)
     except DMMError as e:
         sys.exit(f"dmm: {e}")
+    except Exception as e:
+        sys.exit(f"dmm: GPIB error while reading ({e})")
     finally:
         dmm.close()
 
