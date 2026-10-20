@@ -27,8 +27,10 @@
  * D directly and leaves the voltage outputs alone, and a voltage output does not move the loop
  * current any more.
  *
- * The DAC8554 powers up with every channel at code 0, which is -12 V on the +-12 V output, so
- * the firmware parks A..C as soon as the iCE40 can drive the DAC (signal_engine dac_quad_boot).
+ * The DAC8554 powers up with every channel at code 0, which would be -12 V on the +-12 V output,
+ * so that stage's +-14 V supply (U58 P4, ANA14_EN) is off from power-up and holds the output near
+ * 0 V.  dac_quad_boot parks A..C as soon as the iCE40 can drive the DAC, and only then switches
+ * the +-14 V supply on (it stays on).
  *
  * This file is the pure half (host-tested); signal_engine.c sends the frames.
  * ----------------------------------------------------------------------------------------------*/

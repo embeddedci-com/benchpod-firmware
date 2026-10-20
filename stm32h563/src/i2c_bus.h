@@ -197,6 +197,16 @@ int  dacmux_set_ctrl1(bool en, uint8_t sel);
 int  dacmux_set_ctrl2(bool en, uint8_t sel);
 int  dacmux_read(uint8_t *out_reg);           /* current U55 output register */
 
+/* U58's output register for a relay state: P0 cal1, P1 cal2, P2 current_in, P3 cal_path, and on
+   analog v3r2 P4 = ANA14_EN (the +-14 V supply, TPS65131 U49).  ana14 is false on v2/v3, which
+   gives exactly the pre-v3r2 byte.  Pure (analog_path.c). */
+uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14);
+
+/* Analog v3r2 only: switch the +-14 V supply of the analog stages (U58 P4; off at power-up, 100k
+   pull-down).  -1 on other boards, which never drive P4.  The relays keep their state. */
+int  ana14_set(bool on);
+bool ana14_is_on(void);
+
 /* Calibration switching (U58). Rejects cal1 && cal2 (returns -2). */
 int  calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path);
 int  calsw_read(uint8_t *out_reg);            /* current U58 output register */

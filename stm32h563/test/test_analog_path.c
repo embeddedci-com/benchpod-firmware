@@ -94,8 +94,18 @@ static void test_gate(void) {
     CHECK(!dac_quad_present(), "present before boot sets it");
 }
 
+/* U58's byte: the pre-v3r2 relay bits, and P4 (ANA14_EN) only when asked for (v3r2). */
+static void test_calsw_reg(void) {
+    for (unsigned m = 0; m < 16; m++) {
+        bool c1 = m & 1, c2 = m & 2, cur = m & 4, cp = m & 8;
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, false) == m, "relays %x: %02x", m, analog_calsw_reg(c1, c2, cur, cp, false));
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, true) == (m | 0x10u), "relays %x + ana14", m);
+    }
+}
+
 int main(void) {
     test_table();
+    test_calsw_reg();
     test_names();
     test_gate();
     if (fails) { printf("test_analog_path: %d failure(s)\n", fails); return 1; }

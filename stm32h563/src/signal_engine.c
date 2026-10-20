@@ -1020,9 +1020,20 @@ void dac_quad_boot(void) {
        iCE40 says nothing about them: park all three. */
     s_quad_ch   = DAC_QUAD_NONE;
     s_quad_live = DAC_QUAD_VOLTAGE_MASK;
-    (void)dac_quad_route(ANALOG_PATH_OFF);
+    if (dac_quad_route(ANALOG_PATH_OFF) != 0) {
+        printf("[sig] WARNING: DAC8554 park failed; +-14 V left %s\n", ana14_is_on() ? "on" : "off");
+        return;
+    }
     printf("[sig] DAC8554: voltage outputs parked (A 0x%04x, B 0x%04x, C 0x%04x)\n",
            dac_quad_park_code(DAC_QUAD_A), dac_quad_park_code(DAC_QUAD_B), dac_quad_park_code(DAC_QUAD_C));
+    /* The +-14 V supply of the +-12 V and cal2 stages (U58 P4) is off from power-up, which holds
+       the +-12 V output near 0 V whatever channel C does.  Only now that C sits at its 0 V code
+       is it switched on; the TPS65131 soft-starts in about 1 ms, so give it 5 ms.  It stays on. */
+    if (!ana14_is_on()) {
+        if (ana14_set(true) != 0) { printf("[sig] WARNING: +-14 V enable (U58 P4) failed\n"); return; }
+        sleep_ms(5);
+        printf("[sig] +-14 V on\n");
+    }
 }
 
 int dac_set_constant(uint8_t value, uint32_t divider) {

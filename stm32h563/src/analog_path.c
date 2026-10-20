@@ -32,6 +32,12 @@ int analog_path_switches(analog_path_t path, bool quad, analog_switches_t *out)
     return 0;
 }
 
+uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14)
+{
+    return (uint8_t)((cal1 ? 0x01u : 0u) | (cal2 ? 0x02u : 0u) | (current_in ? 0x04u : 0u)
+                     | (cal_path ? 0x08u : 0u) | (ana14 ? 0x10u : 0u));
+}
+
 static const struct { const char *name; analog_path_t path; } s_path_tbl[] = {
     { "off",     ANALOG_PATH_OFF     },
     { "dac_3v3", ANALOG_PATH_DAC_3V3 }, { "3v3", ANALOG_PATH_DAC_3V3 },

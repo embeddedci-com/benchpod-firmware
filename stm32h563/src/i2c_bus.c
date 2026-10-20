@@ -332,9 +332,14 @@ bool pca9555_la_pull_is_down(uint8_t la_pin)
 #define TCA_REG_CONFIG  0x03u
 #define U55_OUTPUT_MASK 0x3Fu   /* P0..P5 used */
 #define U58_OUTPUT_MASK 0x0Fu   /* P0..P3 used */
+#define U58_OUTPUT_MASK_QUAD 0x1Fu   /* analog v3r2: P4 = ANA14_EN too */
 
 static uint8_t s_u55_out;       /* DACMUX shadow */
 static uint8_t s_u58_out;       /* ANASW  shadow */
+static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
+
+/* U58's output pins: P4 only exists as ANA14_EN on v3r2, and is left an input elsewhere. */
+static uint8_t u58_mask(void) { return dac_quad_present() ? U58_OUTPUT_MASK_QUAD : U58_OUTPUT_MASK; }
 
 void analog_switch_init(void)
 {
@@ -346,9 +351,22 @@ void analog_switch_init(void)
         tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
         tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
     }
+    s_ana14 = false;   /* v3r2: +-14 V stays off (P4 low) until dac_quad_boot parked the DAC */
     tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_OUTPUT, 0x00);
-    tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_CONFIG, (uint8_t)~U58_OUTPUT_MASK);
+    tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_CONFIG, (uint8_t)~u58_mask());
 }
+
+int ana14_set(bool on)
+{
+    if (!dac_quad_present()) return -1;   /* P4 is not connected on v2/v3: never touch it */
+    s_ana14 = on;
+    s_u58_out = analog_calsw_reg((s_u58_out & 0x01u) != 0, (s_u58_out & 0x02u) != 0,
+                                 (s_u58_out & 0x04u) != 0, (s_u58_out & 0x08u) != 0, on);
+    (void)tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
+    return tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
+}
+
+bool ana14_is_on(void) { return s_ana14; }
 
 int dacmux_set_ctrl1(bool en, uint8_t sel)
 {
@@ -381,14 +399,12 @@ int dacmux_read(uint8_t *out_reg)
 int calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path)
 {
     if (cal1 && cal2) return -2;   /* mutually exclusive: never both DAC rails */
-    s_u58_out = (uint8_t)((cal1 ? 0x01u : 0u)
-                | (cal2 ? 0x02u : 0u)
-                | (current_in ? 0x04u : 0u)
-                | (cal_path ? 0x08u : 0u));
-    /* Re-assert the direction (P0..P3 = outputs) in case the power-on config
+    /* v3r2 keeps P4 (ANA14_EN) as it is; s_ana14 is only ever set there. */
+    s_u58_out = analog_calsw_reg(cal1, cal2, current_in, cal_path, s_ana14);
+    /* Re-assert the direction (P0..P3 = outputs, P4 too on v3r2) in case the power-on config
        write didn't take — otherwise the output write drives nothing and the
        relays never energise. */
-    (void)tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~U58_OUTPUT_MASK);
+    (void)tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
     return tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
 }
 
@@ -409,10 +425,11 @@ void analog_switch_dump(void)
         int err = tca9554_read_reg(chips[i].a, 0x00u, &in)
                 | tca9554_read_reg(chips[i].a, TCA_REG_OUTPUT, &out)
                 | tca9554_read_reg(chips[i].a, TCA_REG_CONFIG, &cfg);
+        uint8_t mask = (i == 1u) ? u58_mask() : chips[i].mask;   /* v3r2: P4 is ANA14_EN */
         log_printf("[exp] %s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
                chips[i].n, in, out, cfg,
                err ? "(I2C ERR)"
-                   : (cfg == (uint8_t)~chips[i].mask ? "dir OK" : "*** dir WRONG ***"));
+                   : (cfg == (uint8_t)~mask ? "dir OK" : "*** dir WRONG ***"));
     }
 }
 
