@@ -31,7 +31,8 @@
 
 /* SET_LED mask bit per colour. The bits are the iCE40 pads (bit0 = RGB0 pad 39, bit1 = RGB1 pad
    40, bit2 = RGB2 pad 41), which colour sits on which pad is the LED's pinout (LED1,
-   S4-3528RGBTA-A). */
+   S4-3528RGBTA-A), checked on a rev3 pod with `led 1|2|4`. The gateware's names for the bits
+   (green/yellow/red) are from the v1 board. */
 #define STATUS_LED_BLUE     0x01u
 #define STATUS_LED_GREEN    0x02u
 #define STATUS_LED_RED      0x04u
