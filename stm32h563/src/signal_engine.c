@@ -30,6 +30,7 @@
 #include "i2c_bus.h"   /* la_pullups_all_off — 3V3-referenced pull-ups vs the 1V8 bank */
 #include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
+#include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
 
 #include <string.h>
 #include <math.h>
@@ -428,6 +429,7 @@ static void log_dac_samples(uint32_t total) {
 /* LOAD_WAVE:  [CMD][len_lo][len_hi][N data bytes] */
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
+static void quad_stream_ctrl(void);
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
     /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
@@ -453,6 +455,7 @@ static int fpga_start_dac(uint32_t period, uint32_t divider) {
         (uint8_t)(period  & 0xFF), (uint8_t)((period  >> 8) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
+    quad_stream_ctrl();
     spi_cmd_write(CMD_START_DAC, args, sizeof(args));
     return 0;
 }
@@ -500,6 +503,7 @@ static int fpga_start_dac_psram(uint32_t base, uint32_t count, uint32_t divider)
         (uint8_t)(count   & 0xFF), (uint8_t)((count   >> 8) & 0xFF), (uint8_t)((count   >> 16) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
+    quad_stream_ctrl();
     spi_cmd_write(CMD_START_DAC_PSRAM, args, sizeof(args));
     return 0;
 }
@@ -927,10 +931,116 @@ void psram_boot_selftest(void) {
     }
 }
 
+/* ---- Quad DAC8554, analog v3r2 (dac_quad.h) ------------------------------------------------- */
+
+static int     s_quad_ch = DAC_QUAD_NONE;   /* the channel streams and held levels go to */
+static uint8_t s_quad_live;                 /* voltage channels possibly off their park level */
+
+/* DAC_CTRL (0x38, gateware >= DAC_CTRL_MIN_GW): [flags][ctrl][code(2)].  flags bit0 = ctrl is the
+   control byte of every later DAC start, bit1 = send {ctrl, code} once.  -2 = older gateware. */
+static int fpga_dac_ctrl(uint8_t flags, uint8_t ctrl, uint16_t code) {
+    if (s_fpga_version < DAC_CTRL_MIN_GW) return -2;
+    uint8_t args[4] = { flags, ctrl, (uint8_t)(code & 0xFFu), (uint8_t)(code >> 8) };
+    return spi_cmd_write(CMD_DAC_CTRL, args, sizeof(args));
+}
+
+/* Called before every DAC start: on v3r2 send the stream's control byte again.  The register
+   resets with the iCE40 (an image swap, a reload), and a start with 0x00 moves no output. */
+static void quad_stream_ctrl(void) {
+    if (!dac_quad_present()) return;
+    if (fpga_dac_ctrl(0x01u, dac_quad_ctrl(s_quad_ch), 0u) == -2)
+        printf("[sig] WARNING: gateware v%u has no DAC_CTRL (v%u+): the DAC8554 outputs will not move\n",
+               s_fpga_version, (unsigned)DAC_CTRL_MIN_GW);
+    if (s_quad_ch >= DAC_QUAD_A && s_quad_ch <= DAC_QUAD_C) s_quad_live |= (uint8_t)(1u << s_quad_ch);
+}
+
+int dac_quad_write(int ch, uint16_t code) {
+    if (!dac_quad_present() || ch < DAC_QUAD_A || ch > DAC_QUAD_D) return -1;
+    uint8_t st = 0;
+    bool running = fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN);
+    int rc = fpga_dac_ctrl(0x02u, dac_quad_ctrl(ch), code);
+    if (rc != 0) return rc;
+    /* The frame waits for the next sample slot of a running stream (at most 65536 clk48 plus a
+       frame, 1.4 ms) or goes out at once when the DAC is idle (about 1.2 us).  Another DAC_CTRL
+       frame before then would replace it, so wait it out. */
+    if (running) sleep_ms(2);
+    else         busy_wait_us(5);
+    if (ch <= DAC_QUAD_C) {
+        if (code == dac_quad_park_code(ch)) s_quad_live &= (uint8_t)~(1u << ch);
+        else                                s_quad_live |= (uint8_t)(1u << ch);
+    }
+    return 0;
+}
+
+/* dac_set_constant on v3r2: one frame on the selected channel instead of a looped 1-sample
+   stream, so the DAC engine stays free.  A stream plays to that same channel: stop it first. */
+static int dac_quad_hold(uint16_t code) {
+    if (dac_quiesce(false) != 0) return -1;
+    dac_timed = false;
+    if (s_quad_ch == DAC_QUAD_NONE) {
+        printf("[sig] DAC level 0x%04x not applied: no output selected (analog path off)\n", code);
+        return 0;
+    }
+    int rc = dac_quad_write(s_quad_ch, code);
+    printf("[sig] DAC channel %s held at 0x%04x (%u)\n", dac_quad_name(s_quad_ch), code, code);
+    return rc;
+}
+
+int dac_quad_current_out(uint16_t code) {
+    if (!dac_quad_present()) return -1;
+    if (s_quad_ch == DAC_QUAD_D) {           /* a 4-20 mA waveform plays there: stop it */
+        if (dac_quiesce(false) != 0) return -1;
+        dac_timed = false;
+    }
+    return dac_quad_write(DAC_QUAD_D, code);
+}
+
+int dac_quad_route(analog_path_t path) {
+    if (!dac_quad_present()) return 0;
+    dac_quad_plan_t p = dac_quad_plan(path, s_quad_ch, s_quad_live);
+    if (!p.touch) return 0;
+    if (p.stop) dac_stop();
+    int rc = 0;
+    for (int ch = DAC_QUAD_A; ch <= DAC_QUAD_C; ch++)
+        if (p.park & (1u << ch)) rc |= dac_quad_write(ch, dac_quad_park_code(ch));
+    s_quad_ch = p.ch;
+    return rc;
+}
+
+int dac_quad_channel(void) { return s_quad_ch; }
+
+void dac_quad_boot(void) {
+    if (!dac_quad_present()) return;
+    if (s_fpga_version < DAC_CTRL_MIN_GW) {
+        printf("[sig] WARNING: analog v3r2 needs gateware v%u+ (DAC_CTRL); v%u cannot drive the DAC8554\n",
+               (unsigned)DAC_CTRL_MIN_GW, s_fpga_version);
+        return;
+    }
+    /* Power-up left every channel at code 0 (-12 V on the +-12 V output), and a reload of the
+       iCE40 says nothing about them: park all three. */
+    s_quad_ch   = DAC_QUAD_NONE;
+    s_quad_live = DAC_QUAD_VOLTAGE_MASK;
+    if (dac_quad_route(ANALOG_PATH_OFF) != 0) {
+        printf("[sig] WARNING: DAC8554 park failed; +-14 V left %s\n", ana14_is_on() ? "on" : "off");
+        return;
+    }
+    printf("[sig] DAC8554: voltage outputs parked (A 0x%04x, B 0x%04x, C 0x%04x)\n",
+           dac_quad_park_code(DAC_QUAD_A), dac_quad_park_code(DAC_QUAD_B), dac_quad_park_code(DAC_QUAD_C));
+    /* The +-14 V supply of the +-12 V and cal2 stages (U58 P4) is off from power-up, which holds
+       the +-12 V output near 0 V whatever channel C does.  Only now that C sits at its 0 V code
+       is it switched on; the TPS65131 soft-starts in about 1 ms, so give it 5 ms.  It stays on. */
+    if (!ana14_is_on()) {
+        if (ana14_set(true) != 0) { printf("[sig] WARNING: +-14 V enable (U58 P4) failed\n"); return; }
+        sleep_ms(5);
+        printf("[sig] +-14 V on\n");
+    }
+}
+
 int dac_set_constant(uint8_t value, uint32_t divider) {
     /* Load a 1-byte waveform and start the sequencer with period=1.
        The DAC sequencer will keep clocking that same byte to the DAC chip
        continuously, giving a DC analog output for multimeter probing. */
+    if (dac_quad_present()) return dac_quad_hold((uint16_t)((unsigned)value << 8));
     if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
     if (divider > 65535) divider = 65535;
     /* DAC8551: one 16-bit sample (value in the high byte), 2 bytes. */
@@ -946,6 +1056,7 @@ int dac_set_constant(uint8_t value, uint32_t divider) {
 }
 
 int dac_set_constant16(uint16_t code, uint32_t divider) {
+    if (dac_quad_present()) return dac_quad_hold(code);
     if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
     if (divider > 65535) divider = 65535;
     /* One 16-bit sample, little-endian byte pair, the layout load/replay use. */
@@ -1454,6 +1565,7 @@ int dac_control_loop_start(const uint8_t *curve, size_t curve_len,
         (uint8_t)vmax,     (uint8_t)(vmax     >> 8),
         (uint8_t)tick_div, (uint8_t)(tick_div >> 8),
     };
+    quad_stream_ctrl();
     spi_cmd_write(CMD_START_DAC_LOOP, args, sizeof(args));
     dac_timed = false;
     return 0;

@@ -4,7 +4,8 @@ See [`PROTOCOL.md`](PROTOCOL.md) for the SPI command set.
 
 Lattice iCE40UltraPlus (**iCE40UP5K-SG48**) gateware for the EmbeddedCI BenchPod
 "vbench-pod" board. It is an **SPI slave to the STM32H563** and owns the
-timing-critical analog + digital datapath: the 16-bit serial DAC (DAC8551), the
+timing-critical analog + digital datapath: the 16-bit serial DAC (DAC8551, or the quad DAC8554 on
+analog v3r2), the
 16-bit serial ADC (MCP33131D-10), the 14-channel logic-analyzer bank, and the
 shared APS6404L **PSRAM** that captures stream into and deep DAC replay streams out of.
 
@@ -92,6 +93,12 @@ samples, `START_DAC_PSRAM`), or `dac_loop` (loop image, an in-fabric transfer fu
 that indexes a curve with the ADC or a fixed/sweep input, `START_DAC_LOOP`; see
 [`../docs/dac-control-loop.md`](../docs/dac-control-loop.md)).
 
+The analog v3r2 board has a quad DAC8554 instead (one channel per output) on the same pins and
+frame format. `DAC_CTRL` (0x38, v49) sets the frame's top byte: the stream control byte, which
+every later start takes (it picks the DAC8554 channel; 0, the power-up value, is the DAC8551's
+frame), and one-off static frames to any channel, which take the next sample slot of a running
+stream or go out at once when the DAC is idle. `tb_dac8554` and `tb_top_capture` cover both.
+
 ## Logic-analyzer bank, SWD and SPI
 
 The 14 bidirectional LA channels (`LA1`..`LA14`) are a shared resource: the
@@ -111,7 +118,7 @@ channel indices (nRESET is the pod's own pin since v37), decodes OpenOCD
 | `src/cmd_dispatch.v` | FSM that decodes SPI opcodes and drives the engines |
 | `src/engine_block.v` | Shared instrument cores wired to the version-specific top |
 | `src/adc_mcp33131.v` | 16-bit serial SAR ADC (MCP33131D-10) sampler |
-| `src/dac8551_engine.v` | 16-bit serial DAC (DAC8551) waveform sequencer |
+| `src/dac8551_engine.v` | 16-bit serial DAC (DAC8551 / DAC8554) waveform sequencer |
 | `src/la_psram_capture.v` | Packs the 14-ch LA word (2 bytes per sample) into the LA ring |
 | `src/spram_ring16.v` | 16-bit-packed single-port SPRAM burst ring (one per stream) |
 | `src/psram_dual_writer.v` | 48 MHz DDR QPI writer → two PSRAM regions |

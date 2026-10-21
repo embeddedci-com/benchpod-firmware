@@ -44,6 +44,25 @@ static const cal_set_t CAL_V3 = {
     .adc_cal1_v1 = { 65.712125f, -0.0010027157f },   /* = adc_cal1 above since 3.8.1; frozen (cal_data.h) */
 };
 
+/* Analog v3r2 (DAC8554 quad DAC, one channel per output): NOT MEASURED YET, a copy of CAL_V3.
+ * The output stages, the 4.096 V reference and the ADC front end are v3's, so the v3 lines are
+ * the best guess until a v3r2 board is swept the same way (calibration/rev3/ scripts, one DAC
+ * channel per path).  Expect the DAC lines to move by the DAC8554's own offset and gain error
+ * (+-(a few) mV, about 0.1 %), and the 4-20 mA floor with channel D's zero-code output. */
+static const cal_set_t CAL_V3R2 = {
+    .dac = {
+        {  0.0016304f,  0.01290215f },   /* 3V3 (channel A) */
+        {  0.0025176f,  0.01953943f },   /* 5V  (channel B) */
+        { -12.087242f,  0.09440379f },   /* 12V (channel C) */
+    },
+    .adc_cal1 = { 65.712125f, -0.0010027157f },
+    .adc_cal2 = { 65.812962f, -0.0010042767f },
+    .adc_ext  = { 65.708158f, -0.0010026443f },
+    .current_out = { 4025.338f, 0.24518720f },    /* channel D */
+    .current_out_floor_ua = 4055.0f,
+    .adc_cal1_v1 = { 65.712125f, -0.0010027157f },   /* = CAL_V3's: no v3r2 pod ran 3.4.0..3.9.3 */
+};
+
 static const cal_set_t *s_active = &CAL_V2;
 
 /* The DAC lines in use (cal_dac_active): the one s_dac points to is read, the other is built. */
@@ -58,7 +77,8 @@ void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask) {
 }
 
 void cal_data_select(int board_rev) {
-    s_active = (board_rev == BOARD_REV_V3) ? &CAL_V3 : &CAL_V2;
+    s_active = (board_rev == BOARD_REV_V3R2) ? &CAL_V3R2
+             : (board_rev == BOARD_REV_V3)   ? &CAL_V3 : &CAL_V2;
     s_dac = s_active->dac;   /* the compiled lines until adc_cal_load puts this pod's in */
 }
 
