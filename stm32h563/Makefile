@@ -146,6 +146,8 @@ C_SOURCES := \
   src/cal_data.c \
   src/adc_cal.c \
   src/adc_cal_hw.c \
+  src/status_led.c \
+  src/status_led_hw.c \
   src/current_out.c \
   src/wave16.c \
   src/flash_compat.c \

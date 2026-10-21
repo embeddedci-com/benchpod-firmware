@@ -77,6 +77,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "lan_tls.h"
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
+#include "status_led.h"
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
@@ -176,6 +177,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  flash-esp32          C3: flash the esp-hosted image from the W25Q (background, ~2 min)\r\n"
         "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
         "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
+        "  led <colour|mask>    show red, green, blue, cyan, magenta, yellow, white, off or a 0-7 mask for 5 s\r\n"
         "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
         "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
         "  (firmware and blob uploads: the JSON API, also over the USB network; recovery: dfu)\r\n");
@@ -678,6 +680,28 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         signal_engine_adc_spi_diag(n);
         op(out, ctx, "  (adc-spi printed on the device log)\r\n");
 #endif
+    } else if (!strcmp(argv[0], "led")) {
+        /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it
+           goes back to showing the pod's state (status_led.h). */
+        static const struct { const char *name; uint8_t mask; } colours[] = {
+            {"off", STATUS_LED_OFF}, {"red", STATUS_LED_RED}, {"green", STATUS_LED_GREEN},
+            {"blue", STATUS_LED_BLUE}, {"cyan", STATUS_LED_CYAN}, {"magenta", STATUS_LED_MAGENTA},
+            {"yellow", STATUS_LED_RED | STATUS_LED_GREEN},
+            {"white", STATUS_LED_RED | STATUS_LED_GREEN | STATUS_LED_BLUE},
+        };
+        int mask = -1;
+        if (argc >= 2) {
+            for (size_t i = 0; i < sizeof(colours) / sizeof(colours[0]); i++)
+                if (!strcmp(argv[1], colours[i].name)) mask = colours[i].mask;
+            if (mask < 0 && argv[1][0] >= '0' && argv[1][0] <= '7' && argv[1][1] == '\0')
+                mask = argv[1][0] - '0';
+        }
+        if (mask < 0) {
+            op(out, ctx, "usage: led red|green|blue|cyan|magenta|yellow|white|off|<0-7>\r\n");
+        } else {
+            status_led_override((uint8_t)mask, 5000u);
+            op(out, ctx, "led %u for 5 s\r\n", (unsigned)mask);
+        }
     } else if (!strcmp(argv[0], "psram-selftest")) {
         /* Layered PSRAM datapath test: STM32<->PSRAM, iCE40->PSRAM write, and (if
            that fails) whether the iCE40 even reaches the /CE net.  Same test run

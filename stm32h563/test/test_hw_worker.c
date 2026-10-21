@@ -75,6 +75,8 @@ void target_power_poll(void) {}
 void watchdog_heartbeat(int task, const char *name) { (void)task; (void)name; }
 void watchdog_test_hang_point(int task) { (void)task; }
 void boot_deferred_hw_init(void) {}
+void status_led_boot_finished(void) {}
+void status_led_service(void) {}
 bool heavy_or_claimed(void) { return false; }
 int  esp_rom_flash_start(esp_flash_done_fn done) { if (done) done(0); return 0; }
 void esp_rom_flash_poll(void) {}

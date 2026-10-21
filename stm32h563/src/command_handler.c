@@ -33,6 +33,7 @@
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
+#include "status_led.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -352,6 +353,8 @@ void dispatch_line(int conn_id, const char *buf) {
         if (why) { send_error(conn_id, why); return; }
     }
 
+    /* The status LED flashes for a command that drives the pod, not for the polled reads. */
+    status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light(cmd, buf));
     if (d && d->fn) d->fn(conn_id, buf);
     else send_error(conn_id, "unknown cmd");
 }
