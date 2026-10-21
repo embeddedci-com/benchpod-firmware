@@ -271,10 +271,11 @@ The pod's own current monitor (`pod(0x41)` in `ina`) is JSON `power_status` `pod
 
 #### PSRAM, capture and iCE40 diagnostics
 
-`psram-selftest` and `psram-test` are in every build; the others are development builds only.
+`led`, `psram-selftest` and `psram-test` are in every build; the others are development builds only.
 
 | Command | Description |
 |---|---|
+| `led <colour\|mask>` | Light the status LED in one colour for 5 s (`red`, `green`, `blue`, `cyan`, `magenta`, `yellow`, `white`, `off`, or a SET_LED mask `0`-`7`), then it shows the pod's state again. Checks the LED. |
 | `psram-selftest` | The layered boot test (STM32 to PSRAM, iCE40 write, iCE40 /CE reach); prints on the device log. Part of the safe-mode recovery path. |
 | `cap-selftest [n]` | Ramp through the ADC to PSRAM path (default 64): PASS = the path is fine, FAIL = an iCE40 capture timing error. |
 | `psram` | Diagnose the PSRAM bus, CS and arbitration (an `0xFF` ID). |

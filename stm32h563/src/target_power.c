@@ -64,14 +64,6 @@ static int efuse_index(int efuse)
     return -1;
 }
 
-/* Reflect eFuse state on the iCE40 green status LED: any eFuse ON -> green,
-   both OFF -> dark.  A visual confirmation that target power is live. */
-static void power_update_led(void)
-{
-    bool any_on = enabled_state[0] || enabled_state[1];
-    fpga_set_led(any_on ? 0x01u : 0x00u);   /* bit0 = green */
-}
-
 void target_power_init(void)
 {
     for (int i = 0; i < 2; i++) { enabled_state[i] = false; last_fault[i] = false; pending[i].armed = false; }
@@ -107,8 +99,7 @@ int target_power_enable(int efuse, bool on)
     int idx = efuse_index(efuse);
     if (idx < 0) return -1;
     if (tca9554_write_pin(PWR_ADDR, efuses[idx].en, on) != 0) return -1;
-    enabled_state[idx] = on;
-    power_update_led();
+    enabled_state[idx] = on;   /* the status LED shows it (status_led.h) */
     /* Notify only on a confirmed EN change (I2C write succeeded).  Report the
        current FLT alongside the new EN state. */
     if (event_cb) event_cb(efuse, on, efuse_fault_now(idx));

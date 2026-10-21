@@ -14,6 +14,7 @@
 #endif
 #include "esp_wifi_ctrl.h"
 #include "net_reload.h"
+#include "status_led.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
 
 #include "FreeRTOS.h"
@@ -291,6 +292,7 @@ static void worker_task(void *arg) {
     /* iCE40 / PSRAM bring-up happens here, after USB and the scheduler are up, so however it
        goes the USB console is already there.  Commands queue until it is done. */
     boot_deferred_hw_init();
+    status_led_boot_finished();   /* boot OK blinks green, a failed bring-up shows red */
     for (;;) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
         watchdog_test_hang_point(WD_TASK_WORKER);   /* no-op unless `test-hang hw` armed it */
@@ -326,6 +328,7 @@ static void worker_task(void *arg) {
         command_handler_poll();   /* async captures + paced bulk sends -> conn_tx rings */
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
+        status_led_service();     /* the RGB status LED follows the pod's state         */
         ota_watchdog(HAL_GetTick()); /* drop a staging session that stopped receiving   */
         vTaskDelay(pdMS_TO_TICKS(1));
     }

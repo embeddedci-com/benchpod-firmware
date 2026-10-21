@@ -78,6 +78,24 @@ W25Q config flash (`src/blob_store.h`), go in with `benchpod install-blobs` / `b
 flash-self` over USB or with any OTA, and the STM32 reprograms the iCE40 (`flash-ice40`,
 image swap) and the C3 (`flash-esp32`) from there. `blobs` on the console lists the slots.
 
+### Status LED
+
+The RGB LED next to the iCE40 shows what the pod is doing (`src/status_led.h`):
+
+| LED | Meaning |
+|---|---|
+| off while booting, then 3 green blinks | booted: the iCE40 and the PSRAM passed the boot self-test |
+| solid red | the iCE40 or PSRAM self-test failed, or the pod is in safe mode |
+| blinking red | a target-power eFuse reports a fault |
+| magenta | a firmware or gateware update is staging or verifying |
+| blue | a capture, upload or other job on the PSRAM bus is running |
+| short cyan flash | a command that drives the pod ran (polled reads such as `status` do not flash) |
+| green | target power is on, nothing else running |
+| off | idle |
+
+The STM32 drives the LED through the iCE40, so a pod whose iCE40 never configured stays dark.
+`led <colour>` on the console lights one colour for 5 s to check the LED.
+
 ## Gateware — `ice40/`
 
 The v2 iCE40 design (`src/top_v2.v`) is the SPI slave that owns the analog +
