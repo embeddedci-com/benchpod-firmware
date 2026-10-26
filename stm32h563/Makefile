@@ -308,6 +308,11 @@ $(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_EMI_TEST=1
 C_SOURCES += src/emi_test.c
+# EMI_SYSCLK=240: run the core at 240 MHz instead of 250, so the core clock's emissions move and
+# can be told apart from other sources at 250 MHz (the 25 MHz crystal x10, the PHY's 50 MHz x5).
+ifneq ($(EMI_SYSCLK),)
+DEFS      += -DBENCHPOD_SYSCLK_MHZ=$(EMI_SYSCLK)
+endif
 endif
 
 OPT := -Og -g3

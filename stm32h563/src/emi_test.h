@@ -74,7 +74,7 @@ uint8_t emi_test_led_state(void);
 /* One-line state for the console (`emi`) and the monitor line. */
 size_t emi_test_describe(char *buf, size_t cap);
 /* The same as a JSON object for `status` ("emi_test"):
-   {"running":true,"dac":"sine","uart_la":0,"uptime_s":12,"captures":40,"errors":0} */
+   {"running":true,"dac":"sine","uart_la":0,"core_mhz":250,"uptime_s":12,"captures":40,"errors":0} */
 size_t emi_test_json(char *buf, size_t cap);
 
 #endif

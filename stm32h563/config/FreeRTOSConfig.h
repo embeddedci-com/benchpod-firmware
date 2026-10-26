@@ -20,7 +20,12 @@
 #define configUSE_TIME_SLICING                  1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 #define configUSE_TICKLESS_IDLE                 0
-#define configCPU_CLOCK_HZ                      (250000000UL)
+/* The core clock in MHz: 250, or 240 in an EMI test build made with EMI_SYSCLK=240 (Makefile),
+   which moves the core clock's emissions to tell them apart from other 250 MHz sources. */
+#ifndef BENCHPOD_SYSCLK_MHZ
+#define BENCHPOD_SYSCLK_MHZ                     250
+#endif
+#define configCPU_CLOCK_HZ                      (BENCHPOD_SYSCLK_MHZ * 1000000UL)
 #define configTICK_RATE_HZ                      (1000U)
 #define configMAX_PRIORITIES                    (7)
 #define configMINIMAL_STACK_SIZE                (128U)        /* words */

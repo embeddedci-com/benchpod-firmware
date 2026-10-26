@@ -203,9 +203,9 @@ size_t emi_test_describe(char *buf, size_t cap) {
     char uart[8] = "off";
     if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
     int n = snprintf(buf, cap,
-                     "emi: %s, dac %s, uart %s, %lus, captures %lu, errors %lu%s%s",
+                     "emi: %s, dac %s, uart %s, core %lu MHz, %lus, captures %lu, errors %lu%s%s",
                      s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
-                     k_dac_names[s.dac], uart,
+                     k_dac_names[s.dac], uart, (unsigned long)(SystemCoreClock / 1000000u),
                      (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
                      s.last_err[0] ? ", last: " : "", s.last_err);
     if (n < 0) return 0;
@@ -215,9 +215,10 @@ size_t emi_test_describe(char *buf, size_t cap) {
 size_t emi_test_json(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
     int n = snprintf(buf, cap,
-                     "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"uptime_s\":%lu,"
+                     "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                      "\"captures\":%lu,\"errors\":%lu}",
-                     s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la, (unsigned long)up,
+                     s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
+                     (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                      (unsigned long)s.captures, (unsigned long)s.errors);
     if (n < 0 || (size_t)n >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)n;

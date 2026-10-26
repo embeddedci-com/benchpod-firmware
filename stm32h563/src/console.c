@@ -288,11 +288,11 @@ static void cmd_selftest(console_out_t out, void *ctx)
           25 MHz HSE crystal itself is correct, so it doubles as a crystal check. */
     uint32_t sysclk  = HAL_RCC_GetSysClockFreq();
     bool     src_pll = __HAL_RCC_GET_SYSCLK_SOURCE() == RCC_SYSCLKSOURCE_STATUS_PLLCLK;
-    uint32_t want = 250000000u, tol = want / 100u;
+    uint32_t want = configCPU_CLOCK_HZ, tol = want / 100u;
     bool sys_ok = src_pll &&
                   (sysclk > want ? sysclk - want : want - sysclk) <= tol;
-    ST("sysclk", sys_ok, "%lu Hz (expect ~250M, src=%s)",
-       (unsigned long)sysclk, src_pll ? "PLL1" : "other");
+    ST("sysclk", sys_ok, "%lu Hz (expect ~%luM, src=%s)",
+       (unsigned long)sysclk, (unsigned long)(want / 1000000u), src_pll ? "PLL1" : "other");
 
     /* 4. SysTick timebase is advancing (not stuck). */
     uint32_t t0 = HAL_GetTick();
