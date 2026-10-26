@@ -13,8 +13,9 @@
  * watch it without a laptop driving the pod:
  *
  *   - LA voltage 3.3 V, target power on at both eFuses (J5 internal 5 V, J6 from J4)
- *   - the DAC playing one output (it is shared, so one at a time): a 1 kHz sine on 0-3.3 V by
- *     default, or DC on 0-5 V, 12 mA on the 4-20 mA output, or off
+ *   - the DAC playing one output: a 1 kHz sine on 0-3.3 V by default, or DC on 0-5 V, 12 mA on
+ *     the 4-20 mA output, or off. One at a time: the analog v3r1 board has one DAC behind muxes,
+ *     and the analog paths keep that meaning on the quad-DAC boards too
  *   - back-to-back deep captures, ADC + LA and LA only in turn, each read back over the PSRAM bus
  *     and formatted like a client's, then thrown away
  *   - optionally a 115200 baud NMEA stream out of one LA pin (`emi uart <la>`), so the pod's own
