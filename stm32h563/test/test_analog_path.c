@@ -85,12 +85,15 @@ static void test_names(void) {
 
 /* Only an analog board with the v3r2 strap gets the DAC8554 behaviour. */
 static void test_gate(void) {
-    CHECK(!dac_quad_for_board(BOARD_REV_V2, true), "v2");
-    CHECK(!dac_quad_for_board(BOARD_REV_V3, true), "v3 (analog-v3, v3r1)");
-    CHECK(!dac_quad_for_board(BOARD_REV_UNKNOWN, true), "unknown");
-    CHECK(!dac_quad_for_board(BOARD_REV_V3, false), "digital board");
-    CHECK(!dac_quad_for_board(BOARD_REV_V3R2, false), "v3r2 strap without the analog section");
-    CHECK(dac_quad_for_board(BOARD_REV_V3R2, true), "analog v3r2");
+    CHECK(!dac_quad_for_board(BOARD_REV_V2, true, false), "v2");
+    CHECK(!dac_quad_for_board(BOARD_REV_V3, true, false), "v3 (analog-v3, v3r1)");
+    CHECK(!dac_quad_for_board(BOARD_REV_UNKNOWN, true, false), "unknown");
+    CHECK(!dac_quad_for_board(BOARD_REV_V3, false, false), "digital board");
+    CHECK(!dac_quad_for_board(BOARD_REV_V3R2, false, false), "v3r2 strap without the analog section");
+    CHECK(dac_quad_for_board(BOARD_REV_V3R2, true, false), "analog v3r2");
+    /* Digital v3r3 has the v3 strap; its analog module has the DAC8554. */
+    CHECK(dac_quad_for_board(BOARD_REV_V3, true, true), "digital v3r3 + analog module");
+    CHECK(!dac_quad_for_board(BOARD_REV_V3, false, false), "digital v3r3, no module");
     CHECK(!dac_quad_present(), "present before boot sets it");
 }
 
