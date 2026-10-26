@@ -6,6 +6,7 @@
 
 #include "fpga_config.h"   /* FPGA_PSRAM_*_BASE + derived FPGA_*_MAX_SAMPLES caps */
 #include "wave16.h"        /* wave16_shape_t for dac_generate16 */
+#include "i2c_bus.h"       /* analog_path_t for dac_quad_route */
 
 /* Size of the FPGA waveform BRAM in BYTES (gateware dac8551_engine.v has ADDR_W=12
  * -> 4096 byte addresses). Also bounds a few host-side scratch buffers. LOAD_WAVE
@@ -293,6 +294,24 @@ uint32_t signal_engine_adc_max_samples(void);
 
 /* Stop DAC DMA output. */
 void dac_stop(void);
+
+/* ---- Quad DAC8554, analog v3r2 (dac_quad.h) ------------------------------------------------
+ * DAC_CTRL (0x38) sets the control byte of the 24-bit DAC frame: the channel every DAC start
+ * streams to, and one-off frames to any channel.  All of these are no-ops (or -1) unless
+ * dac_quad_present(). */
+#define DAC_CTRL_MIN_GW  49u
+
+/* Point the DAC at the path's channel and park the voltage channel(s) it leaves; called by
+   analog_path_set.  0 ok, <0 SPI failure or gateware older than DAC_CTRL_MIN_GW. */
+int  dac_quad_route(analog_path_t path);
+/* One frame: channel ch (DAC_QUAD_A..D) to code.  Waits until it went out. */
+int  dac_quad_write(int ch, uint16_t code);
+/* The 4-20 mA output (channel D), leaving the voltage outputs alone. */
+int  dac_quad_current_out(uint16_t code);
+/* The channel streams and held levels go to (DAC_QUAD_NONE when the analog path is off). */
+int  dac_quad_channel(void);
+/* At boot, as soon as the iCE40 can drive the DAC: park the three voltage outputs. */
+void dac_quad_boot(void);
 
 /* PSRAM blocking capture: the iCE40 streams `samples` 16-bit samples into the
    external PSRAM, then the MCU reads them back over its own XSPI.  Spins until

@@ -7,7 +7,8 @@
  *
  * The analog section is detected by its two I2C expanders: U55 (DAC mux, 0x24) and U58
  * (analog switching, 0x26). Both sit on the main +3V3 rail and the I2C0 bus, so they answer
- * from power-up, and they exist only on analog boards. An I2C ACK is definitive, needs no
+ * from power-up, and they exist only on analog boards. Analog v3r2 has no U55 (its DAC8554 has a
+ * channel per output, dac_quad.h): U58 alone answers there, which is enough. An I2C ACK is definitive, needs no
  * gateware and switches nothing. The ADC and DAC themselves cannot be detected: the DAC8551
  * has no data output, and the MCP33131 has no ID register (its data line just floats).
  *

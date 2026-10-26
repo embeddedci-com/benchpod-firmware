@@ -183,6 +183,8 @@
 #define BOARD_REV_ADC_CH             ADC_CHANNEL_15
 /* Nominal strap voltage of a rev3 board: 3300 * 10k/(10k+1k). */
 #define BOARD_REV_V3_NOMINAL_MV      3000
+/* Analog v3r2: R164 2.2k over R163 10k: 3300 * 10k/(10k+2.2k). */
+#define BOARD_REV_V3R2_NOMINAL_MV    2705
 
 /* ---------------------------------------------------------------------------
  * USB-C CC monitoring (rev3+)   [/CC_SENSE1 PC0, /CC_SENSE2 PC2]

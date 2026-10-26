@@ -386,9 +386,15 @@ $(OUT).bin: $(OUT).asc
 # v48 (UART2, the TX-only second UART; 4066 LC, 77%): swept 1..64 in both toolchains: 48/64 local,
 # 55/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 26 -> 17, the best in both (clk48 54.84 local /
 # 55.98 CI, clk -> clk48 10.73 / 9.84 ns).
-SEED_LOOP ?= 17
-# Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).
-SEED_LOOP_FALLBACK ?= 40 26 25 15 37 34 7 58 60 6 2
+# v49 (DAC8554: OP_DAC_CTRL stream control byte + one-shot static frame; 4133 LC, 78%): seed 17
+# first fell to clk48 43.55 MHz, bound by an OR of three flags in the DAC engine's enable; with that
+# back to one flop (run_i) and wave_addr out of the FSM's priority chain it closes at 52.48.
+# Swept 1..64 locally: 44/64 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 17 -> 57 (clk48 55.31, clk
+# 30.75, clk -> clk48 11.42 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
+SEED_LOOP ?= 57
+# v49: the v48 list (good in both toolchains then) without the seeds the v49 local sweep does
+# not close (15, 58, 2), then the best v49 local seeds.  Re-order after a CI sweep.
+SEED_LOOP_FALLBACK ?= 40 26 25 37 34 7 60 6 11 46 59 31
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -469,11 +475,16 @@ SEED_LOOP_FALLBACK ?= 40 26 25 15 37 34 7 58 60 6 2
 # v48 (UART2; 3780 LC, 71%): seed 57 FAILED clk48 (45.50 MHz).  Swept 1..64 in both toolchains:
 # 60/64 local, 64/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 57 -> 13 (clk48 59.54 local /
 # 59.26 CI, clk -> clk48 12.79 / 13.91 ns).  RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 13
+# v49 (DAC8554; 3842 LC, 73%): seed 13 still closes clk48 (57.33) but its clk -> clk48 paths
+# take 15.39 ns (MAX_X48_NS=15; the reader's gearbox, untouched).  Swept 1..64 locally: 55/64
+# reach MIN_CLK48_MHZ, 38 of them within MAX_X48_NS.  Pinned SEED_DEEP 13 -> 48 (clk48 59.54, clk
+# 32.30, clk -> clk48 12.80 ns).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 48
 # Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
-# the same cross-toolchain reason as SEED_FALLBACK above.
-SEED_DEEP_FALLBACK ?= 6 23 20 45 61 14 28 36 44 48 58 64
+# the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
+# added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
+SEED_DEEP_FALLBACK ?= 12 36 54 5 6 45 28 58 13 23 20 61 44 64
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -576,6 +587,13 @@ dactest:
 	         sim/tb_dac8551.v src/dac8551_engine.v
 	$(VVP) /tmp/$(PROJECT)_dac.vvp
 	@rm -f /tmp/$(PROJECT)_dac.vvp
+
+# DAC8554 support (v49): the stream control byte and the one-shot static frame (OP_DAC_CTRL).
+dac8554test:
+	iverilog -g2012 -o /tmp/$(PROJECT)_dac8554.vvp \
+	         sim/tb_dac8554.v src/dac8551_engine.v
+	$(VVP) /tmp/$(PROJECT)_dac8554.vvp
+	@rm -f /tmp/$(PROJECT)_dac8554.vvp
 
 # Self-checking simulation of the DAC8551 waveform-loop terminal (sleft counter).
 daclooptest:
@@ -722,7 +740,8 @@ topsmoketest:
 # Top-level end-to-end capture: SPI OP_CAPTURE -> producers -> rings -> dual writer
 # -> the two PSRAM regions, with the tb acting as the PSRAM write-slave.  Catches
 # datapath/arbiter/region-select bugs the isolated dualwrtest can't.  Also decodes the
-# DAC8551 pins across a restart onto a shorter waveform (the v33 clk48 control-CDC fix).
+# DAC8551 pins across a restart onto a shorter waveform (the v33 clk48 control-CDC fix), and
+# OP_DAC_CTRL's control byte and static frames (v49, the DAC8554).
 topcapturetest:
 	$(call topbench,tb_top_capture,loop deep)
 
@@ -765,7 +784,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
