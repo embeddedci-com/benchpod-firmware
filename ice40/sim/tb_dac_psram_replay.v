@@ -51,6 +51,7 @@ module tb_dac_psram_replay;
     dac8551_engine #(.ADDR_W(12)) dac (
         .clk(clk48), .rst(rst48), .start(start), .stop(stop),
         .period_samples(13'd0), .divider(16'd8),
+        .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(), .wave_data(8'h00),
         .psram_mode(1'b1), .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
         .dac_sync(sync), .dac_sclk(dsclk), .dac_din(din), .running(running)

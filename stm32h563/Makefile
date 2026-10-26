@@ -142,6 +142,8 @@ C_SOURCES := \
   src/device_identity.c \
   src/config_store.c \
   src/dac_limits.c \
+  src/dac_quad.c \
+  src/analog_path.c \
   src/dac_limits_hw.c \
   src/cal_data.c \
   src/adc_cal.c \

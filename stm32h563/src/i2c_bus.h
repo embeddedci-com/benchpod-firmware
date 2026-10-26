@@ -197,6 +197,16 @@ int  dacmux_set_ctrl1(bool en, uint8_t sel);
 int  dacmux_set_ctrl2(bool en, uint8_t sel);
 int  dacmux_read(uint8_t *out_reg);           /* current U55 output register */
 
+/* U58's output register for a relay state: P0 cal1, P1 cal2, P2 current_in, P3 cal_path, and on
+   analog v3r2 P4 = ANA14_EN (the +-14 V supply, TPS65131 U49).  ana14 is false on v2/v3, which
+   gives exactly the pre-v3r2 byte.  Pure (analog_path.c). */
+uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14);
+
+/* Analog v3r2 only: switch the +-14 V supply of the analog stages (U58 P4; off at power-up, 100k
+   pull-down).  -1 on other boards, which never drive P4.  The relays keep their state. */
+int  ana14_set(bool on);
+bool ana14_is_on(void);
+
 /* Calibration switching (U58). Rejects cal1 && cal2 (returns -2). */
 int  calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path);
 int  calsw_read(uint8_t *out_reg);            /* current U58 output register */
@@ -222,7 +232,13 @@ void analog_switch_dump(void);                /* diagnostic: dump U55/U58 regist
  * SMA), so `dac_12v` + read ADC is a self-contained loopback of the front end.
  * adc_ext / current_in only move relays, leaving any DAC output running.
  * current_out is the 4-20 mA output (J9): the XTR116 follows the DAC buffer on every
- * path, so the path only switches the voltage outputs off (current_out.h). */
+ * path, so the path only switches the voltage outputs off (current_out.h).
+ *
+ * Analog v3r2 (dac_quad.h) has no U55: dacmux_* return -1 there.  The relays are as above, and
+ * the DAC8554 channel replaces the mux: dac_3v3 = A, dac_5v and cal1 = B, dac_12v and cal2 = C
+ * (channel C drives the +-12 V SMA and the cal2 stage together), current_out = D.  The voltage
+ * channel the DAC leaves is parked at 0 V (dac_quad_park_code), and current_out leaves the
+ * voltage outputs alone. */
 typedef enum {
     ANALOG_PATH_OFF = 0,
     ANALOG_PATH_DAC_3V3,
@@ -235,6 +251,17 @@ typedef enum {
     ANALOG_PATH_CURRENT_OUT,
     ANALOG_PATH__COUNT
 } analog_path_t;
+
+/* One path's switch state (analog_path.c, pure): write U55 (`mux`) with ctrl1/ctrl2, then U58
+   (`relays`).  quad = analog v3r2, which has no U55, so mux is false there.  0 / -1 bad path. */
+typedef struct {
+    bool    mux;
+    bool    ctrl1_en;  uint8_t ctrl1_sel;
+    bool    ctrl2_en;  uint8_t ctrl2_sel;
+    bool    relays;
+    bool    cal1, cal2, current_in, cal_path;
+} analog_switches_t;
+int analog_path_switches(analog_path_t path, bool quad, analog_switches_t *out);
 
 /* Apply a path (sets all needed switches atomically). Returns 0 / <0 on I2C err. */
 int          analog_path_set(analog_path_t path);

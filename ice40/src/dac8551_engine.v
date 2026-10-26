@@ -32,6 +32,19 @@
 // sidx/sleft/period loop machinery (and wave_addr) are used ONLY by the BRAM path;
 // in psram_mode looping is the reader's job.  psram_mode=0 is byte-for-byte the
 // original BRAM engine (guarded so tb_dac8551 / tb_dac8551_loop are unaffected).
+//
+// QUAD DAC8554 (analog v3r2 board, gateware >= v49).  The DAC8554 takes the same 24-bit frame
+// with a control byte on top: DB23:22 A1:A0 (00), DB21:20 LD1:LD0 (01 = load and update the
+// channel), DB19 x, DB18:17 the channel, DB16 PD0 (0), then the 16 data bits.  `ctrl` is that
+// byte for every streamed frame; it is 0 on a DAC8551 board (the PD=00 frame it always sent).
+// It crosses in with each start, so it is stable while the engine runs.  `wr_req` asks for ONE
+// extra frame, `wr_frame` = {ctrl, code}, so another channel can be set while one streams: it
+// takes the next sample slot (the `dz` point) and the stream continues one slot later.  The
+// static frame runs through the BRAM fetch states (S_RDLO..S_LAT) whatever the source, so its
+// SYNC and frame-gap timing are the stream's, and does not step sidx/sleft.  The engine also
+// runs while one is pending or in flight when it is not streaming; STOP sets `dz` so an idle
+// engine sends it at once.  A START or STOP during the static frame itself (about 1 us) aborts
+// it, like a stream frame: the firmware sends DAC_CTRL frames after its start/stop, not before.
 // ============================================================================
 module dac8551_engine #(
     parameter ADDR_W = 12
@@ -42,6 +55,9 @@ module dac8551_engine #(
     input  wire              stop,
     input  wire [ADDR_W:0]   period_samples,  // 16-bit samples before looping
     input  wire [15:0]       divider,         // v40: the RELOAD, i.e. inter-sample clocks - 1
+    input  wire [7:0]        ctrl,            // v49: control byte of every streamed frame
+    input  wire              wr_req,          // v49: send wr_frame once (1-clk pulse)
+    input  wire [23:0]       wr_frame,        // v49: {ctrl, code}; held until the next wr_req
 
     // 8-bit waveform BRAM read port (shared sample_buf) — used when psram_mode=0
     output reg  [ADDR_W-1:0] wave_addr,
@@ -102,28 +118,39 @@ module dac8551_engine #(
     // in both images.  Same trick as `dz` below: test one flop instead of the wide compare.
     reg              last;
     reg              ph;
+    reg              wpend;       // a static frame is waiting for a slot
+    reg              wfr;         // the frame being fetched/shifted is the static one
+    // `run_i` = the FSM's enable: `running` (streaming), or a static frame pending or in flight.
+    // One flop like `running` was, so the enable cone did not grow (an OR of the three in the
+    // enable cost the loop image ~10 MHz of clk48 on its pinned seed).
+    reg              run_i;
 
     always @(posedge clk) begin
         strm_pop <= 1'b0;                      // default: single-cycle pop pulse
         if (rst) begin
             st<=S_IDLE; running<=1'b0; dac_sync<=1'b1; dac_sclk<=1'b0; dac_din<=1'b0;
-            sidx<=0; sleft<=0; wave_addr<=0; div_cnt<=0; dz<=1'b1;
+            sidx<=0; sleft<=0; div_cnt<=0; dz<=1'b1; wfr<=1'b0; run_i<=1'b0;
         end else if (stop) begin
             st<=S_IDLE; running<=1'b0; dac_sync<=1'b1; dac_sclk<=1'b0;
+            dz<=1'b1;                          // v49: an idle engine takes a static frame at once
+            run_i<=wpend;                      // ...if one is pending
         end else if (start) begin
-            running<=1'b1; sidx<=0; sleft<=period_samples; wave_addr<=0; dac_sync<=1'b1; dac_sclk<=1'b0;
+            running<=1'b1; run_i<=1'b1; sidx<=0; sleft<=period_samples; dac_sync<=1'b1; dac_sclk<=1'b0;
             div_cnt<=div_reload; dz<=div_reload_zero; st<=S_IDLE;
-        end else if (running) begin
+        end else if (run_i) begin
             case (st)
             S_IDLE: begin
-                dac_sync<=1'b1; dac_sclk<=1'b0;
+                dac_sync<=1'b1; dac_sclk<=1'b0; wfr<=1'b0;
+                if (!running && !wpend) run_i<=1'b0;    // idle again (SYNC rises this edge)
                 if (dz) begin
-                    div_cnt<=div_reload; dz<=div_reload_zero;
-                    if (psram_mode) begin
-                        st<=S_PLO;                 // fetch this sample from the stream FIFO
-                    end else begin
-                        wave_addr <= {sidx[ADDR_W-1:0], 1'b0};   // 2*sidx (low byte)
-                        st<=S_RDLO;
+                    // (wave_addr <= 2*sidx: the datapath block below)
+                    // An idle engine (only here for a static frame) keeps dz for the next one.
+                    if (wpend | running) begin div_cnt<=div_reload; dz<=div_reload_zero; end
+                    if (wpend) begin
+                        wpend<=1'b0; wfr<=1'b1;    // this slot sends the static frame
+                        st<=S_RDLO;                // BRAM-path timing; S_LAT loads wr_frame
+                    end else if (running) begin
+                        st <= psram_mode ? S_PLO : S_RDLO;   // stream FIFO, or the BRAM
                     end
                 end else begin
                     div_cnt <= div_cnt - 16'd1;
@@ -146,10 +173,7 @@ module dac8551_engine #(
                     dac_sync<=1'b0; st<=S_SHIFT;
                 end
             end
-            S_RDLO: begin                          // BRAM latency: addr now valid
-                wave_addr <= {sidx[ADDR_W-1:0], 1'b0} | {{(ADDR_W-1){1'b0}},1'b1}; // 2*sidx+1
-                st<=S_RDHI;
-            end
+            S_RDLO: st<=S_RDHI;                    // BRAM latency: addr now valid (wave_addr: below)
             S_RDHI: st<=S_LAT;                     // (lo captures the low byte)
             S_LAT: begin
                 dac_sync<=1'b0; st<=S_SHIFT;       // (sh loads {ctrl, high, low})
@@ -170,7 +194,9 @@ module dac8551_engine #(
                         // sidx/sleft (the reader loops the stream) and every start
                         // reloads them, so gating on psram_mode only put that OR of
                         // two synced flops into this branch's clock-enable cone.
-                        if (slast) begin                     // == (sleft <= 1)
+                        // A static frame (wfr) took a slot: the stream does not advance.
+                        if (wfr) ;
+                        else if (slast) begin                // == (sleft <= 1)
                             sidx  <= 0;
                             sleft <= period_samples;         // reload for the next loop
                         end else begin
@@ -184,6 +210,9 @@ module dac8551_engine #(
             default: st<=S_IDLE;
             endcase
         end
+        // A request wins over the take above (set after it), and survives start/stop.
+        if (rst) wpend <= 1'b0;
+        else if (wr_req) begin wpend <= 1'b1; run_i <= 1'b1; end
     end
 
     // Frame datapath (v42): lo, sh, bitc, last and ph are loaded at S_PLO/S_RDHI and S_PHI/S_LAT
@@ -193,16 +222,23 @@ module dac8551_engine #(
     // 48 MHz on most seeds, bound by that fan-out (rst48 -> sh/bitc CEN).  Here each register's
     // enable is its own state decode.  A stop or restart mid-frame still aborts it (the FSM
     // leaves S_SHIFT and raises SYNC); whatever these hold then is reloaded before the next one.
+    //
+    // wave_addr (v49) moved here too: its enable sat behind the same chain (start -> wave_addr
+    // CEN bound the v49 loop image).  It is only a BRAM read address, so loading 2*sidx at every
+    // expired S_IDLE (idle, static-frame and psram_mode slots included) reads harmlessly; a
+    // BRAM slot then reads 2*sidx in S_RDLO and 2*sidx+1 in S_RDHI as before.
     always @(posedge clk) begin
         case (st)
+        S_IDLE: if (dz) wave_addr <= {sidx[ADDR_W-1:0], 1'b0};                       // 2*sidx
+        S_RDLO: wave_addr <= {sidx[ADDR_W-1:0], 1'b0} | {{(ADDR_W-1){1'b0}},1'b1};  // 2*sidx+1
         S_PLO:  if (strm_valid) lo <= strm_data;
         S_RDHI: lo <= wave_data;                                   // capture low byte
         S_PHI:  if (strm_valid) begin
-                    sh <= {8'h00, strm_data, lo};                  // {ctrl, high, low}
+                    sh <= {ctrl, strm_data, lo};                   // {ctrl, high, low}
                     bitc <= 5'd0; last <= 1'b0; ph <= 1'b0;
                 end
         S_LAT:  begin
-                    sh <= {8'h00, wave_data, lo};                  // {ctrl, high, low}
+                    sh <= wfr ? wr_frame : {ctrl, wave_data, lo};  // static, or {ctrl, high, low}
                     bitc <= 5'd0; last <= 1'b0; ph <= 1'b0;
                 end
         S_SHIFT: begin

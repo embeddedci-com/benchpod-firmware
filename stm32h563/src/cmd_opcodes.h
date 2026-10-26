@@ -18,6 +18,7 @@
 #define CMD_FPGA_FEATURES      0x18u
 #define CMD_DAC_LOOP_INMAP     0x1Cu
 #define CMD_START_DAC_LOOP     0x15u
+#define CMD_DAC_CTRL           0x38u
 #define CMD_START_CAPTURE      0x20u
 #define CMD_ADC_PROBE          0x21u
 #define CMD_CAPTURE_TEST       0x23u

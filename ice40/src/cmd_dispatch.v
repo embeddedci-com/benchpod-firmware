@@ -62,6 +62,14 @@ module cmd_dispatch #(
     output reg               stop_after_stb,
     output wire [31:0]       stop_after_cfg,
 
+    // DAC frame control byte (OP_DAC_CTRL 0x38, v2 >= v49), for the quad DAC8554 on the analog
+    // v3r2 board.  dac_ctrl is the top byte of every streamed frame (0 = the DAC8551 frame), a
+    // persistent register the top carries into clk48 with each DAC start.  dac_wr_stb asks for
+    // ONE static frame {ctrl, code}, payload as wires off arg_buf like the loop strobes below.
+    output reg  [7:0]        dac_ctrl,
+    output reg               dac_wr_stb,
+    output wire [23:0]       dac_wr_cfg,      // {ctrl, code_hi, code_lo}
+
     // In-fabric DAC control loop (OP_START_DAC_LOOP 0x15, v2 >= v23).  dac_loop_mode is a
     // LEVEL (1 while the loop runs); cleared by STOP_DAC or any normal DAC start.  The curve is
     // the LOAD_WAVE BRAM, indexed by the loop input.
@@ -347,6 +355,7 @@ module cmd_dispatch #(
 `define CD_START_DAC_PSRAM     8'b??0?_??11    // 0x13
 `define CD_SET_DAC_STOP_AFTER  8'b????_0100    // 0x14
 `define CD_SET_TRIGGER         8'b??11_??11    // 0x33
+`define CD_DAC_CTRL            8'b??1?_1???    // 0x38
 `define CD_I2C_CONFIG          8'b??10_???0    // 0x60
 `define CD_UART_CONFIG         8'b?111_?0??
 `define CD_UART2_CONFIG        8'b?111_?1??    // 0x75    // 0x70
@@ -362,17 +371,17 @@ module cmd_dispatch #(
 `define CD_UART_READ           8'b???1_??11    // 0x73
 
 `ifndef SYNTHESIS
-    localparam N_COLLECT = 21, N_STREAM = 9;
+    localparam N_COLLECT = 22, N_STREAM = 9;
     localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
         OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
         OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
         OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
-        OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG };
+        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG };
     localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
         `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
         `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
         `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
-        `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG };
+        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG };
     localparam [N_STREAM*8-1:0] STREAM_OPS = {
         OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
         OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_UART_WRITE, OP_UART_READ, OP_UART2_WRITE };
@@ -478,6 +487,8 @@ module cmd_dispatch #(
     assign i2c_reg_wdata     = rx_byte;
     assign uart_tx_wdata     = rx_byte;
     assign stop_after_cfg    = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6]};
+    // DAC_CTRL [flags][ctrl][code_lo][code_hi(=rx_byte)] -> the frame {ctrl, code_hi, code_lo}.
+    assign dac_wr_cfg        = {arg_buf[7], rx_byte, arg_buf[8]};
     // Control-loop payloads (v38), in wire order [k(2)][vmin(2)][vmax(2)][tick(2)] /
     // [src][fixed(2)][step(2)] / [in_zero(2)][in_gain(2)][in_trip(2)][flags]; see the port list.
     assign loop_arm_cfg      = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6],
@@ -552,6 +563,8 @@ module cmd_dispatch #(
             dac_psram_base <= 24'd0;
             dac_psram_len  <= 24'd0;
             stop_after_stb <= 1'b0;
+            dac_ctrl       <= 8'h00;   // DAC8551 frame until DAC_CTRL says otherwise
+            dac_wr_stb     <= 1'b0;
             dac_loop_mode <= 1'b0;
             loop_arm_stb  <= 1'b0;  loop_src_stb <= 1'b0;  loop_inmap_stb <= 1'b0;
             cap_start     <= 1'b0;
@@ -616,6 +629,7 @@ module cmd_dispatch #(
             uart_rx_ovf_clr  <= 1'b0;
             loop_arm_stb     <= 1'b0;
             stop_after_stb   <= 1'b0;
+            dac_wr_stb       <= 1'b0;
             loop_src_stb     <= 1'b0;
             loop_inmap_stb   <= 1'b0;
 
@@ -685,6 +699,8 @@ module cmd_dispatch #(
                             // Capture-tied DAC auto-stop threshold: 4-byte payload
                             // [cyc_lo][cyc_1][cyc_2][cyc_hi] (24 MHz clk cycles; 0 = disarm).
                             OP_SET_DAC_STOP_AFTER: begin arg_rem <= 16'd4; state <= S_COLLECT; end
+                            // DAC frame control byte (v49): [flags][ctrl][code(2)].
+                            OP_DAC_CTRL: begin arg_rem <= 16'd4; state <= S_COLLECT; end
                             // ADC_PROBE: latch the live sample and shift out its 2
                             // bytes (LE) with NO PSRAM/CDC/orchestrator in the path.
                             OP_ADC_PROBE: begin
@@ -981,6 +997,13 @@ module cmd_dispatch #(
                                 //   [cyc_lo][cyc_1][cyc_2][cyc_hi(=rx_byte)]
                                 `CD_SET_DAC_STOP_AFTER: begin
                                     stop_after_stb <= 1'b1;
+                                end
+                                // DAC frame control (v49): [flags][ctrl][code_lo][code_hi(=rx_byte)].
+                                // flags bit0 = ctrl becomes the stream control byte (taken at the
+                                // next DAC start), bit1 = send {ctrl, code} once (dac_wr_cfg).
+                                `CD_DAC_CTRL: begin
+                                    if (arg_buf[6][0]) dac_ctrl <= arg_buf[7];
+                                    dac_wr_stb <= arg_buf[6][1];
                                 end
                                 // Capture trigger (persistent; the top applies it at every later
                                 // arm): [channel][mode][flags(reserved, =rx_byte)].  The mode is

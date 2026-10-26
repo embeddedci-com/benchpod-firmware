@@ -52,6 +52,7 @@ int analog_path_set(analog_path_t p) { (void)p; return 0; }
 int analog_path_from_name(const char *n, analog_path_t *p) { (void)n; *p = ANALOG_PATH_OFF; return 0; }
 const char *analog_path_name(analog_path_t p) { (void)p; return "off"; }
 int dac_set_constant16(uint16_t code, uint32_t div) { (void)code; (void)div; return 0; }
+int dac_quad_current_out(uint16_t code) { (void)code; return 0; }
 int adc_capture_psram(uint16_t *out, size_t n, float rate) { (void)rate; for (size_t i = 0; i < n; i++) out[i] = 65522; return 0; }
 
 int adc_cal_measure_current_in(adc_reading_t *out) {

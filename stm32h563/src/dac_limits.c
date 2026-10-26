@@ -6,6 +6,7 @@
  * level (route + dac_set_constant) is the caller's job (command_handler.c, main.c).
  */
 #include "dac_limits.h"
+#include "dac_quad.h"
 #include "bp_json.h"
 #include "cal_data.h"
 #include "config_store.h"
@@ -169,6 +170,7 @@ const char *dac_limits_check_volts(const char *path, float volts) {
 
 const char *dac_limits_check_current_out(void) {
     if (!s_active.enabled) return NULL;
+    if (dac_quad_present()) return NULL;   /* v3r2: the 4-20 mA output has its own DAC channel */
     snprintf(s_msg, sizeof(s_msg),
              "refused: %s, and the 4-20 mA output shares that DAC: setting a current moves it. "
              "Clear them with dac_limits enabled:false",
