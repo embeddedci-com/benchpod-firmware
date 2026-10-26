@@ -212,6 +212,8 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
 | `power_profile` | T1 | Record a current/voltage profile of one eFuse rail | object | on `stop` |
+| `module` | T0/T2 | Digital v3r3: the analog module's state, and its ID and calibration EEPROM | object | no |
+| `module_power` | T1 | Digital v3r3: switch the analog module's 5 V and the USB-A bridge port | object | no |
 | `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe | `"dap ready"` (string) | no |
 | `uart_proxy_start` | T1 | Enter transparent UART bridge mode | `"uart ready"` (string) | no |
 | `spi_start` | T1 | Claim four LA pins as an SPI master | object | no |
@@ -1503,7 +1505,8 @@ counters and the capability list. No parameters.
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
 | `heap_free`, `heap_min`, `stack_min`, `stacks` | integer, object | Heap and per-task stack headroom in bytes. |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). |
-| `analog` | boolean | `false` on the digital-only board (no DAC or ADC). |
+| `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
+| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Not on the cloud command channel, which caps a reply's size; send [`module`](#module--the-analog-module-and-its-eeprom) there. |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). |
 | `caps` | array of string | The capability list, below. |
 
@@ -3192,6 +3195,99 @@ Errors: `"missing match_id"`, `"missing reply_id"`, `"responder table full"`.
 ### `can_disable` — turn CAN off
 
 Reply `{"enabled":false}`.
+
+---
+
+<a id="analog-module-digital-v3r3"></a>
+## Analog module (digital v3r3)
+
+From digital v3r3 the BenchPod is two boards: the digital core board and an analog module that
+plugs into it over a 24-pin FFC. The module carries the DAC (a DAC8554, as on analog v3r2), the
+ADC, the analog switching expander (U58) and a 24C32 EEPROM for its ID and calibration. Its I2C
+devices sit on their own bus (the STM32's I2C2). Firmware 3.9.5 and later:
+
+- recognises digital v3r3 at boot by its module-link pins (the revision strap is the v3 one),
+- finds the module when it is plugged in (`MOD_PRESENT#` low) and U58 answers on the module bus.
+  `status.analog` is then `true` and every analog command works as on analog v3r2, with the
+  v3r2 calibration set until the module's own is used. Without a module, digital v3r3 behaves as
+  the digital-only board. Detection runs at boot: restart the pod after plugging the module in,
+- reads the module EEPROM at boot,
+- reports the module and the two rails it switches in `status.module` and `module`.
+
+The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards are not affected.
+
+<a id="module--the-analog-module-and-its-eeprom"></a>
+### `module`: the analog module and its EEPROM
+
+```json
+{"cmd":"module"}
+```
+
+```json
+{"status":"ok","data":{"present":true,"analog":true,"power":true,"bridge_power":true,
+ "eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
+| `analog` | boolean | The module was found at boot and is the pod's analog front end. |
+| `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
+| `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
+| `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
+| `layout` | integer | The header's layout version (1). |
+| `cal_len`, `cal_ok` | integer, boolean | The stored calibration blob's length in bytes (0 = none), and whether its CRC matched when it was last read. |
+
+`status.module` has the first five fields only.
+
+The EEPROM forms need a module plugged in with its power on. Reads are T0, writes T2 (they persist
+settings on the module):
+
+| Request | Does |
+|---|---|
+| `{"cmd":"module","eeprom":"read","addr":256,"len":32}` | Raw read, 1 to 128 bytes. Reply `{"addr":256,"len":32,"data":"<hex>"}`. |
+| `{"cmd":"module","eeprom":"write","addr":256,"data":"<hex>"}` | Raw write of 1 to 64 bytes into the calibration area, `0x100` to `0xfff`. Reply `{"addr":256,"len":N}`. |
+| `{"cmd":"module","eeprom":"id","type":"analog","rev":"1.0","serial":"AM-000123"}` | Write the ID fields (`type` defaults to `"analog"`, `serial` up to 16 characters) and keep the calibration fields. Replies with the module object. |
+| `{"cmd":"module","eeprom":"cal_commit","len":300}` | Record the first `len` bytes of the calibration area as the calibration blob: their length and CRC go into the header (0 clears it). Replies with the module object. |
+
+Errors: `module: this BenchPod has no module link (digital v3r3 only)` on any other board, and
+`module: no module plugged in, or module power is off` for the EEPROM forms.
+
+EEPROM layout, version 1 (little endian):
+
+| Address | Bytes | Content |
+|---|---|---|
+| `0x000` | 4 | Magic `"BPMD"` |
+| `0x004` | 1 | Layout version (1) |
+| `0x005` | 1 | Header length (32). A later layout may grow it; the header CRC is always its last two bytes. |
+| `0x006` | 1 | Module type (1 = analog) |
+| `0x007` | 2 | Hardware revision, major and minor |
+| `0x009` | 1 | Reserved (0) |
+| `0x00a` | 16 | Serial number, NUL padded |
+| `0x01a` | 2 | Calibration length in bytes |
+| `0x01c` | 2 | Calibration CRC-16/CCITT-FALSE |
+| `0x01e` | 2 | Header CRC-16/CCITT-FALSE over bytes `0x000` to `0x01d` |
+| `0x020` | 224 | Reserved |
+| `0x100` | up to 3840 | Calibration blob. The firmware stores it and checks its CRC; the calibration tools define its format. |
+
+<a id="module_power--module-and-bridge-port-power"></a>
+### `module_power`: module and bridge port power
+
+Digital v3r3 switches two 5 V rails: the analog module's (about 1.45 A limit) and the always-on
+USB-A bridge port (about 1 A limit). Both are on from power-up.
+
+```json
+{"cmd":"module_power","module":false}
+{"cmd":"module_power","bridge":true}
+{"cmd":"module_power"}
+```
+
+Reply `{"module":true,"bridge":true}`, the state after the change. Turning the module off stops
+the DAC and the +-14 V supply first. Turning it back on sets up U58 again (relays off), parks the
+DAC outputs and switches the +-14 V supply on, as at boot; if U58 does not answer, the reply is
+`module_power: module power is on, but U58 does not answer`. While the module is off, the analog
+commands fail. Refused on other boards with `module_power: this BenchPod has no module link
+(digital v3r3 only)`.
 
 ---
 
