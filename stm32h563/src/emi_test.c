@@ -186,10 +186,12 @@ size_t emi_test_avail(void) { return s.budget; }
 
 size_t emi_test_describe(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
+    char uart[8] = "off";
+    if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
     int n = snprintf(buf, cap,
-                     "emi: %s, dac %s, uart %s%d, %lus, captures %lu, errors %lu%s%s",
+                     "emi: %s, dac %s, uart %s, %lus, captures %lu, errors %lu%s%s",
                      s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
-                     k_dac_names[s.dac], s.uart_la ? "LA" : "off", s.uart_la,
+                     k_dac_names[s.dac], uart,
                      (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
                      s.last_err[0] ? ", last: " : "", s.last_err);
     if (n < 0) return 0;
