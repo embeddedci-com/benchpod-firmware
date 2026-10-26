@@ -449,6 +449,11 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
         return;
     }
 #endif
+    if (!esp_wifi_ctrl_module_present()) {
+        memset(&cfg, 0, sizeof(cfg));
+        op(out, ctx, "  wifi-set: " ESP_WIFI_NO_MODULE "\r\n");
+        return;
+    }
     if (config_save(&cfg) != 0) {
         op(out, ctx, "  wifi-set: config save failed\r\n");
         return;
@@ -1088,6 +1093,10 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
         else
             op(out, ctx, "fw-copy none\r\n");
+    } else if (!esp_wifi_ctrl_module_present() &&
+               (!strcmp(argv[0], "flash-esp32-sync") || !strcmp(argv[0], "flash-esp32") ||
+                !strcmp(argv[0], "esp-reset-pulse") || !strcmp(argv[0], "esp-mon"))) {
+        op(out, ctx, "  %s: " ESP_WIFI_NO_MODULE "\r\n", argv[0]);
     } else if (esp_rom_flash_busy() &&
                (!strcmp(argv[0], "flash-esp32-sync") || !strcmp(argv[0], "flash-esp32") ||
                 !strcmp(argv[0], "esp-reset-pulse") || !strcmp(argv[0], "esp-mon"))) {
@@ -1270,8 +1279,10 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
         config_clear();
         net_wifi_reload();          /* drop Wi-Fi now, whatever happens to the C3 */
-        const char *why = wifi_clear_c3_now();
-        if (!why)
+        const char *why = esp_wifi_ctrl_module_present() ? wifi_clear_c3_now() : NULL;
+        if (!esp_wifi_ctrl_module_present())   /* digital v3r3: no C3, no second copy */
+            op(out, ctx, "  Wi-Fi credentials cleared (pod flash; this BenchPod has no ESP32-C3)\r\n");
+        else if (!why)
             op(out, ctx, "  Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)\r\n");
         else
             op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"

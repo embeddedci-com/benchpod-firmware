@@ -27,6 +27,7 @@
 #include "usb_netif.h"
 #include "usb_device.h"
 #include "esp_wifi_ctrl.h"
+#include "board_variant.h"   /* board_has_wifi_module */
 #include "esp_rom_flash.h"
 #include "conn_tx.h"
 #include "hw_worker.h"
@@ -948,8 +949,10 @@ void net_init(void)
 
     /* Wi-Fi netif over the ESP32-C3. The netif is registered (inert until the
        link comes up); the co-processor itself stays in reset until Wi-Fi is
-       provisioned, gated inside esp_wifi_ctrl. */
-    esp_hosted_spi_init();
+       provisioned, gated inside esp_wifi_ctrl. Digital v3r3 has no C3: its EN, BOOT
+       and CS nets are left unconnected, so the pins stay as they are at reset. */
+    esp_wifi_ctrl_set_module_present(board_has_wifi_module());
+    if (esp_wifi_ctrl_module_present()) esp_hosted_spi_init();
     netif_add(&s_wifi.netif, &zero, &zero, &zero, NULL, &esp_netif_init, &ethernet_input);
     /* netif_add() prepends, leaving Wi-Fi first in netif_list. Put eth back in
        front so lwIP's own subnet scan (ICMP errors, anything that bypasses the
@@ -984,7 +987,8 @@ void net_init(void)
     mdns_register(&s_usb_netif);
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
-    log_printf("[net] LwIP up — eth(RMII/LAN8742) + wifi(ESP32-C3), TCP server on :%d, TLS on :%d%s\r\n",
+    log_printf("[net] LwIP up — eth(RMII/LAN8742)%s, TCP server on :%d, TLS on :%d%s\r\n",
+           esp_wifi_ctrl_module_present() ? " + wifi(ESP32-C3)" : "",
            TCP_SERVER_PORT, LAN_TLS_PORT, s_https_only ? " (HTTPS-only)" : "");
 }
 

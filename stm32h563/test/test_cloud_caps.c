@@ -220,6 +220,16 @@ static void test_status_list(void) {
                       "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 
+    /* Digital v3r3 has no ESP32-C3: no wifi_scan in the list, and false in the frame. */
+    d.no_wifi_scan = true;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_list(&e, &d);
+    CHECK(strstr(buf, "wifi_scan") == NULL && strstr(buf, "\"lan_tls\",\"gpio_read\"") != NULL);
+    {
+        static char g[CLOUD_CAPS_MAX + 1];
+        CHECK(cloud_caps_build(&d, g, sizeof(g)) > 0 && strstr(g, "\"wifi_scan\":false") != NULL);
+    }
+
     /* The frame does not carry usb_cc (the server never read it): adding the field changed nothing. */
     static char f[CLOUD_CAPS_MAX + 1];
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0 && strstr(f, "usb_cc") == NULL);

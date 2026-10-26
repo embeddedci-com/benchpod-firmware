@@ -1482,7 +1482,7 @@ counters and the capability list. No parameters.
 | `net` | string | `"ready"` when the Ethernet or Wi-Fi interface has an address, else `"disconnected"`. |
 | `ip` | string | The pod's IP (Ethernet preferred over Wi-Fi), or `"0.0.0.0"`. |
 | `rssi_dbm` | `null` | Always `null` on this firmware; the Wi-Fi signal is in the console's `wifi-show`. |
-| `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`. |
+| `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
@@ -1517,7 +1517,7 @@ counters and the capability list. No parameters.
 | `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
 | `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
 | `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
-| `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. |
+| `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. Not listed on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+); its frame carries `"wifi_scan":false`. |
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
 | `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
@@ -3382,7 +3382,9 @@ How the pod scans depends on its Wi-Fi state:
 Errors: `"wifi_scan: <why>"`, for example `"wifi_scan: Wi-Fi is still connecting; try the scan
 again in a moment"`, `"wifi_scan: the ESP32-C3 is being flashed or erased; try again when that is
 done"`, or `"wifi_scan: no scan with that id; start one with {"cmd":"wifi_scan"}"` (an `id` the pod
-never gave out, for example after a reboot). With a bridge: `"Wi-Fi bridge: <why>"`. The same scan
+never gave out, for example after a reboot). On digital v3r3, which has no ESP32-C3, the read form
+fails at once with `"wifi_scan: no Wi-Fi module: this BenchPod has no built-in Wi-Fi"` (firmware
+3.9.5+). With a bridge: `"Wi-Fi bridge: <why>"`. The same scan
 is `wifi-scan` on the [USB console](usb-serial-interface.md).
 
 ### `wifi_set` / `wifi_clear`
@@ -3397,7 +3399,12 @@ adapter](usb-serial-interface.md#usb-network-adapter) are one or the other: `wif
 networking off (the reply may still go out over it), and `wifi_clear` turns it back on. An empty or
 missing `password` is an open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
 replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `"ssid too long"`,
-`"password too long"`, `"config save failed"`. The same operations are `wifi-set` / `wifi-clear` on
+`"password too long"`, `"config save failed"`.
+
+**Digital v3r3 has no ESP32-C3** (firmware 3.9.5+). `wifi_set` answers `"no Wi-Fi module: this
+BenchPod has no built-in Wi-Fi"` and saves nothing, `wifi_clear` clears the pod's copy only
+(`c3_nvs` stays `none`), USB networking stays on, `status.wifi` is `absent`, and the pod never
+drives the C3's pins or tries to flash it. Credentials stored on an older board are ignored. The same operations are `wifi-set` / `wifi-clear` on
 the [USB console](usb-serial-interface.md).
 
 **Where the credentials are kept.** In one place: the STM32's config store (two flash sectors,
