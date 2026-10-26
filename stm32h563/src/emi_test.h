@@ -13,9 +13,11 @@
  * watch it without a laptop driving the pod:
  *
  *   - LA voltage 3.3 V, target power on at both eFuses (J5 internal 5 V, J6 from J4)
- *   - the DAC playing one output: a 1 kHz sine on 0-3.3 V by default, or DC on 0-5 V, 12 mA on
- *     the 4-20 mA output, or off. One at a time: the analog v3r1 board has one DAC behind muxes,
- *     and the analog paths keep that meaning on the quad-DAC boards too
+ *   - the DAC: on a quad-DAC board (DAC8554, analog v3r2 and the v4 analog module) all at once by
+ *     default (`all`): the 1 kHz sine on 0-3.3 V, 3.0 V DC on 0-5 V and 12 mA on the 4-20 mA
+ *     output; the +-12 V output stays at 0 V. The single-DAC boards (analog v3r1) have one DAC
+ *     behind muxes, so one output at a time there, the sine by default. Either can pick one
+ *     output (`emi dac sine|dc|current`) or none
  *   - back-to-back deep captures, ADC + LA and LA only in turn, each read back over the PSRAM bus
  *     and formatted like a client's, then thrown away
  *   - optionally a 115200 baud NMEA stream out of one LA pin (`emi uart <la>`), so the pod's own
@@ -42,6 +44,7 @@ typedef enum {
     EMI_DAC_DC,         /* 3.0 V DC on the 0-5 V output (J11 to J8: 12 mA in the loop input) */
     EMI_DAC_CURRENT,    /* 12 mA held on the 4-20 mA output (J9) */
     EMI_DAC_OFF,
+    EMI_DAC_ALL,        /* quad DAC only: the sine, the DC and the 12 mA together */
 } emi_dac_mode_t;
 
 /* Hw worker loop, every pass: start after the boot delay, then keep the activity running. */
@@ -57,11 +60,12 @@ size_t emi_test_avail(void);
 void emi_test_start(void);
 void emi_test_stop(void);
 bool emi_test_running(void);
-/* Console `emi dac <mode>`: change the DAC activity (applied at once when running). */
-void emi_test_set_dac(emi_dac_mode_t mode);
+/* Console `emi dac <mode>`: change the DAC activity (applied at once when running). Returns
+   false for `all` on a board without the quad DAC. */
+bool emi_test_set_dac(emi_dac_mode_t mode);
 /* Console `emi uart <1-14>|off`: NMEA out of an LA pin while running; 0 = off. */
 void emi_test_set_uart(int la);
-/* "sine", "dc", "current", "off"; -1 for anything else. */
+/* "sine", "dc", "current", "off", "all"; -1 for anything else. */
 int  emi_test_dac_from_name(const char *name);
 
 /* One-line state for the console (`emi`) and the monitor line. */

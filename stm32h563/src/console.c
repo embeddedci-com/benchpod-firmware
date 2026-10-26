@@ -199,7 +199,8 @@ static void cmd_help(console_out_t out, void *ctx)
     out(ctx,
         "EMI test build (runs the EMC activity loop from boot):\r\n"
         "  emi [status] | emi start | emi stop   the loop's state, start it, stop it (outputs and power off)\r\n"
-        "  emi dac sine|dc|current|off           what the DAC plays: 1 kHz sine on 3.3 V, 3 V DC on 5 V, 12 mA\r\n"
+        "  emi dac all|sine|dc|current|off       what the DAC plays: 1 kHz sine on 3.3 V, 3 V DC on 5 V, 12 mA,\r\n"
+        "                                        or all three (quad-DAC boards, their default)\r\n"
         "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n");
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
@@ -698,11 +699,16 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
         if (!strcmp(sub, "start"))                     emi_test_start();
         else if (!strcmp(sub, "stop"))                 emi_test_stop();
-        else if (!strcmp(sub, "dac") && mode >= 0)     emi_test_set_dac((emi_dac_mode_t)mode);
+        else if (!strcmp(sub, "dac") && mode >= 0) {
+            if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
+                op(out, ctx, "  emi dac all needs the quad DAC (analog v3r2 or the v4 analog module)\r\n");
+                return;
+            }
+        }
         else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
             emi_test_set_uart(la);
         else if (strcmp(sub, "status")) {
-            op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac sine|dc|current|off"
+            op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
                          " | emi uart <1-14>|off\r\n");
             return;
         }

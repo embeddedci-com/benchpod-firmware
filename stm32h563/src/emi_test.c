@@ -4,6 +4,9 @@
 #include "emi_test.h"
 #include "command_handler.h"
 #include "command_handler_internal.h"   /* capture_busy */
+#include "cal_data.h"                   /* dac_code16_for_volts */
+#include "dac_quad.h"
+#include "signal_engine.h"              /* dac_quad_write */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 
 #include <stdio.h>
@@ -22,10 +25,14 @@ static const char *const k_captures[] = {
     "{\"cmd\":\"la_capture\",\"samples\":1000000}",
 };
 
-static const char *const k_dac_names[] = { "sine", "dc", "current", "off" };
+static const char *const k_dac_names[] = { "sine", "dc", "current", "off", "all" };
+
+/* The DC level on the 0-5 V output (J11 to J8: 3 V over 249 ohm is 12 mA in the loop input). */
+#define EMI_DC_VOLTS  3.0f
 
 static struct {
     bool           booted;        /* the boot start has happened (or `emi stop` came first) */
+    bool           booted_mode;   /* the default DAC mode for this board is chosen */
     bool           running;
     emi_dac_mode_t dac;
     int            uart_la;       /* NMEA out of this LA pin, 0 = off */
@@ -40,19 +47,40 @@ static struct {
     const char    *cur;           /* the command in flight, for the error log */
     char           last_err[112];
     size_t         budget;
-} s = { .dac = EMI_DAC_SINE };
+} s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 static void run(const char *label, const char *json) {
     s.cur = label;
     command_handler_process(CH_EMI_CONN, (const uint8_t *)json, strlen(json));
 }
 
+static bool drives_current(emi_dac_mode_t m) { return m == EMI_DAC_CURRENT || m == EMI_DAC_ALL; }
+
+/* The quad DAC holds a written level per channel, but routing an output parks the voltage
+   channels it leaves: after the sine routes to channel A, write the DC back to channel B. */
+static void hold_dc_on_b(void) {
+    s.cur = "hold 0-5 V";
+    if (dac_quad_write(DAC_QUAD_B, dac_code16_for_volts(1, EMI_DC_VOLTS)) != 0) {
+        s.errors++;
+        snprintf(s.last_err, sizeof(s.last_err), "hold 0-5 V: DAC write failed");
+        printf("[emi] holding 0-5 V at the DC level failed\n");
+    }
+}
+
 /* Stop whatever the DAC plays (s.dac), then start `mode`. */
 static void apply_dac(emi_dac_mode_t mode) {
     run("dac_stop", "{\"cmd\":\"dac_stop\"}");
-    if (s.dac == EMI_DAC_CURRENT && mode != EMI_DAC_CURRENT)   /* dac_stop leaves the loop current */
+    if (s.dac == EMI_DAC_ALL)   /* parks the 0-5 V output it held */
+        run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
+    if (drives_current(s.dac) && !drives_current(mode))   /* dac_stop leaves the loop current */
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
     switch (mode) {
+    case EMI_DAC_ALL:
+        run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
+        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
+                        "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
+        hold_dc_on_b();
+        break;
     case EMI_DAC_SINE:
         run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
                         "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
@@ -87,6 +115,10 @@ void emi_test_start(void) {
     s.captures   = 0;
     s.errors     = 0;
     s.last_err[0] = '\0';
+    if (!s.booted_mode) {   /* first start: the quad DAC runs every output by default */
+        s.booted_mode = true;
+        if (dac_quad_present()) s.dac = EMI_DAC_ALL;
+    }
     printf("[emi] starting the EMI test activity\n");
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":1}");
@@ -100,7 +132,7 @@ void emi_test_stop(void) {
     if (!s.running) return;
     s.running = false;
     run("dac_stop", "{\"cmd\":\"dac_stop\"}");
-    if (s.dac == EMI_DAC_CURRENT) run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
+    if (drives_current(s.dac)) run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
     run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
     run("gps_stop", "{\"cmd\":\"gps_stop\"}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":0}");
@@ -111,9 +143,12 @@ void emi_test_stop(void) {
 
 bool emi_test_running(void) { return s.running; }
 
-void emi_test_set_dac(emi_dac_mode_t mode) {
+bool emi_test_set_dac(emi_dac_mode_t mode) {
+    if (mode == EMI_DAC_ALL && !dac_quad_present()) return false;
+    s.booted_mode = true;   /* a choice before the boot start sticks */
     if (s.running) apply_dac(mode);
     s.dac = mode;
+    return true;
 }
 
 void emi_test_set_uart(int la) {
