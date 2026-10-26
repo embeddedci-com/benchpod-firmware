@@ -179,6 +179,7 @@ command prints `usage: ...` and changes nothing.
 | `test-bootloop [net\|hw] yes` | Development builds only. Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
 | `test-hang <net\|hw> yes` | Development builds only. Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
 | `test-crash yes` | Development builds only. Fault on purpose; the next boot reports it as the last crash. |
+| `emi [status\|start\|stop]`, `emi dac <sine\|dc\|current\|off>`, `emi uart <1-14\|off>` | EMI test builds only (`make EMI_TEST=1`, never released). The build starts an activity loop 10 s after boot for emissions measurements: LA voltage 3.3 V, target power on at both eFuses, the DAC playing one output (`sine`: 1 kHz on 0-3.3 V, the default; `dc`: 3 V on 0-5 V; `current`: 12 mA on the 4-20 mA output; `off`), and back-to-back deep ADC + LA and LA captures read back and discarded. `emi uart <la>` adds 115200 baud NMEA out of that LA pin (it drives a DUT pin). `emi` prints the state (also every 5 s, and as `emi_test` in the JSON `status`); `emi stop` turns the DAC and target power off and frees the pod for clients. |
 
 #### Device identity and policies
 

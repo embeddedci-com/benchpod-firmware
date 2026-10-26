@@ -322,7 +322,7 @@ void dispatch_line(int conn_id, const char *buf) {
     const cmd_tier_t tier = cmd_tier_of(d, buf);
     /* High-frequency polled reads (the web UI refreshes them on a timer) would flood the serial
        console with identical lines, so they are not traced. */
-    if (!cmd_has(d, CMD_F_NOISY))
+    if (!cmd_has(d, CMD_F_NOISY) && conn_id != CH_EMI_CONN)   /* the EMI loop prints its own */
         printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
 
     /* Tier, lease, tunnel, safe-mode and board gates (cmd_gate.h, host-tested). */

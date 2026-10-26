@@ -14,6 +14,10 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len);
    routes replies for it any more. Kept so the ids after it stay where they are. */
 #define CH_CONSOLE_CONN 5
 
+/* The EMI test build (`make EMI_TEST=1`, emi_test.h) drives the pod through that reserved id:
+   its replies go to emi_test_reply() instead of a socket, and it counts as the USB console. */
+#define CH_EMI_CONN CH_CONSOLE_CONN
+
 /* Reserved pseudo-connection id for cloud-originated JSON commands (a server
    command.request arriving over the outbound WebSocket).  at_send_data() routes
    replies for this id into a capture buffer (see command_handler_dispatch_cloud)

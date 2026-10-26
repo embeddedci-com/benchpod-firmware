@@ -78,6 +78,9 @@ bool clock_on_hsi(void);   /* main.c */
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 #include "status_led.h"
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
@@ -191,6 +194,13 @@ static void cmd_help(console_out_t out, void *ctx)
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
         "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
+#endif
+#if defined(BENCHPOD_EMI_TEST)
+    out(ctx,
+        "EMI test build (runs the EMC activity loop from boot):\r\n"
+        "  emi [status] | emi start | emi stop   the loop's state, start it, stop it (outputs and power off)\r\n"
+        "  emi dac sine|dc|current|off           what the DAC plays: 1 kHz sine on 3.3 V, 3 V DC on 5 V, 12 mA\r\n"
+        "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n");
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
@@ -679,6 +689,26 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         int n = (argc >= 2) ? atoi(argv[1]) : 16;
         signal_engine_adc_spi_diag(n);
         op(out, ctx, "  (adc-spi printed on the device log)\r\n");
+#endif
+#if defined(BENCHPOD_EMI_TEST)
+    } else if (!strcmp(argv[0], "emi")) {
+        /* The EMC test build's activity loop (emi_test.h). */
+        const char *sub = argc >= 2 ? argv[1] : "status";
+        int mode = argc >= 3 ? emi_test_dac_from_name(argv[2]) : -1;
+        int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
+        if (!strcmp(sub, "start"))                     emi_test_start();
+        else if (!strcmp(sub, "stop"))                 emi_test_stop();
+        else if (!strcmp(sub, "dac") && mode >= 0)     emi_test_set_dac((emi_dac_mode_t)mode);
+        else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
+            emi_test_set_uart(la);
+        else if (strcmp(sub, "status")) {
+            op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac sine|dc|current|off"
+                         " | emi uart <1-14>|off\r\n");
+            return;
+        }
+        char line[200];
+        emi_test_describe(line, sizeof(line));
+        op(out, ctx, "  %s\r\n", line);
 #endif
     } else if (!strcmp(argv[0], "led")) {
         /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it
