@@ -88,6 +88,32 @@
 #define PWR_I2C_SDA_PORT             GPIOB
 #define PWR_I2C_SDA_PIN              GPIO_PIN_9
 #define PWR_I2C_AF                   GPIO_AF4_I2C1
+
+/* ---------------------------------------------------------------------------
+ * Module link (digital v3r3): the analog module on CN1, a 24-pin 1.0 mm FFC
+ *   PF0 = MOD_I2C_SDA, PF1 = MOD_I2C_SCL: STM32 I2C2 (AF4), 4.7k pull-ups (R193/R194)
+ *   PD8  = MOD_RESET#     (not connected on the module today; left alone)
+ *   PD9  = MOD_PRESENT#   10k pull-up (R186); the module ties it to GND
+ *   PD10 = MOD_PWR_EN     U59 SY6280AAC, +5V_MOD (~1.45 A); 10k pull-up (R183): on at power-up
+ *   PD13 = MOD_SPARE      (not connected on the module; left alone)
+ *   PD14 = BRIDGE_PWR_EN  U60 SY6280AAC, the always-on USB-A bridge port (~1 A); 10k pull-up
+ *                         (R190): on at power-up
+ * On every earlier board PD8..PD15 go to the H3 user header and PF0/PF1 to the H2 header (with
+ * pull-ups on the one-piece analog boards), so none of these is driven unless the board is
+ * recognised as digital v3r3 (module_link.h).
+ * ------------------------------------------------------------------------- */
+#define MOD_I2C                      I2C2
+#define MOD_I2C_SCL_PORT             GPIOF
+#define MOD_I2C_SCL_PIN              GPIO_PIN_1
+#define MOD_I2C_SDA_PORT             GPIOF
+#define MOD_I2C_SDA_PIN              GPIO_PIN_0
+#define MOD_I2C_AF                   GPIO_AF4_I2C2
+#define MOD_GPIO_PORT                GPIOD
+#define MOD_GPIO_CLK_EN()            __HAL_RCC_GPIOD_CLK_ENABLE()
+#define MOD_PRESENT_PIN              GPIO_PIN_9
+#define MOD_PWR_EN_PIN               GPIO_PIN_10
+#define BRIDGE_PWR_EN_PIN            GPIO_PIN_14
+
 #define EFUSE_INT_PORT               GPIOA
 #define EFUSE_INT_PIN                GPIO_PIN_8
 

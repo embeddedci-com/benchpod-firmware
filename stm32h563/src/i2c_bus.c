@@ -1,5 +1,6 @@
 /*
- * i2c_bus.c — STM32 I2C1 master for the power/IO bus (PB8 SCL / PB9 SDA).
+ * i2c_bus.c — STM32 I2C1 master for the power/IO bus (PB8 SCL / PB9 SDA), and I2C2 for the
+ * analog module bus of digital v3r3 (PF1 SCL / PF0 SDA).
  *
  * The I2C1 kernel clock is sourced from HSI (64 MHz) so the TIMINGR value below
  * is independent of the PLL/SYSCLK configuration.  TIMINGR = 0xF0420F17 gives a
@@ -24,8 +25,35 @@
 #define I2C_TIMING_100K   0xF0420F17u
 #define I2C_TIMEOUT_MS    20u
 
-static I2C_HandleTypeDef hi2c;
-static bool s_ready = false;
+/* One I2C master: the main power/IO bus (I2C1) or the module bus (I2C2, digital v3r3). */
+typedef struct {
+    I2C_HandleTypeDef h;
+    I2C_TypeDef      *inst;
+    GPIO_TypeDef     *scl_port;
+    uint16_t          scl_pin;
+    GPIO_TypeDef     *sda_port;
+    uint16_t          sda_pin;
+    uint8_t           af;
+    const char       *name;           /* "I2C1", "I2C2" for the log */
+    bool              ready;
+    volatile uint32_t clear_count;
+    int               clear_last_rc;
+    bool              clear_log_pending;
+} i2c_ctx_t;
+
+static i2c_ctx_t s_bus[I2C_BUS__COUNT] = {
+    [I2C_BUS_MAIN]   = { .inst = PWR_I2C, .scl_port = PWR_I2C_SCL_PORT, .scl_pin = PWR_I2C_SCL_PIN,
+                         .sda_port = PWR_I2C_SDA_PORT, .sda_pin = PWR_I2C_SDA_PIN,
+                         .af = PWR_I2C_AF, .name = "I2C1" },
+    [I2C_BUS_MODULE] = { .inst = MOD_I2C, .scl_port = MOD_I2C_SCL_PORT, .scl_pin = MOD_I2C_SCL_PIN,
+                         .sda_port = MOD_I2C_SDA_PORT, .sda_pin = MOD_I2C_SDA_PIN,
+                         .af = MOD_I2C_AF, .name = "I2C2" },
+};
+
+static i2c_ctx_t *bus_ctx(i2c_bus_id_t bus)
+{
+    return &s_bus[(unsigned)bus < I2C_BUS__COUNT ? bus : I2C_BUS_MAIN];
+}
 
 /* ---- transaction atomicity (fix for the I2C-on-the-worker-task regression) ---
  * All I2C now runs on the hw worker task, which the higher-priority net task can
@@ -47,86 +75,90 @@ static inline void i2c_leave(void) {
 
 static void bc_set_scl(void *ctx, bool high)
 {
-    (void)ctx;
-    PWR_I2C_SCL_PORT->BSRR = high ? (uint32_t)PWR_I2C_SCL_PIN : ((uint32_t)PWR_I2C_SCL_PIN << 16);
+    i2c_ctx_t *b = ctx;
+    b->scl_port->BSRR = high ? (uint32_t)b->scl_pin : ((uint32_t)b->scl_pin << 16);
 }
 static void bc_set_sda(void *ctx, bool high)
 {
-    (void)ctx;
-    PWR_I2C_SDA_PORT->BSRR = high ? (uint32_t)PWR_I2C_SDA_PIN : ((uint32_t)PWR_I2C_SDA_PIN << 16);
+    i2c_ctx_t *b = ctx;
+    b->sda_port->BSRR = high ? (uint32_t)b->sda_pin : ((uint32_t)b->sda_pin << 16);
 }
-static bool bc_get_scl(void *ctx) { (void)ctx; return (PWR_I2C_SCL_PORT->IDR & PWR_I2C_SCL_PIN) != 0u; }
-static bool bc_get_sda(void *ctx) { (void)ctx; return (PWR_I2C_SDA_PORT->IDR & PWR_I2C_SDA_PIN) != 0u; }
+static bool bc_get_scl(void *ctx) { i2c_ctx_t *b = ctx; return (b->scl_port->IDR & b->scl_pin) != 0u; }
+static bool bc_get_sda(void *ctx) { i2c_ctx_t *b = ctx; return (b->sda_port->IDR & b->sda_pin) != 0u; }
 static void bc_delay(void *ctx)   { (void)ctx; busy_wait_us(5); }   /* ~100 kHz */
 
-static const i2c_busclear_io_t s_bc_io = {
-    bc_set_scl, bc_set_sda, bc_get_scl, bc_get_sda, bc_delay, NULL,
-};
-
-static void i2c_pins_mode(uint32_t mode)
+static void i2c_pins_mode(i2c_ctx_t *b, uint32_t mode)
 {
     GPIO_InitTypeDef gp = {0};
     gp.Mode = mode;
     gp.Pull = GPIO_NOPULL;                 /* the board has external pull-ups */
     gp.Speed = GPIO_SPEED_FREQ_LOW;
-    gp.Alternate = PWR_I2C_AF;
-    gp.Pin = PWR_I2C_SCL_PIN;
-    HAL_GPIO_Init(PWR_I2C_SCL_PORT, &gp);
-    gp.Pin = PWR_I2C_SDA_PIN;
-    HAL_GPIO_Init(PWR_I2C_SDA_PORT, &gp);
+    gp.Alternate = b->af;
+    gp.Pin = b->scl_pin;
+    HAL_GPIO_Init(b->scl_port, &gp);
+    gp.Pin = b->sda_pin;
+    HAL_GPIO_Init(b->sda_port, &gp);
 }
 
-static volatile uint32_t s_clear_count;
-static int  s_clear_last_rc;
-static bool s_clear_log_pending;
+static void bus_gpio_clk_enable(i2c_ctx_t *b)
+{
+    if (b->inst == I2C2) __HAL_RCC_GPIOF_CLK_ENABLE();
+    else                 __HAL_RCC_GPIOB_CLK_ENABLE();
+}
+
+static bool bus_clk_enabled(i2c_ctx_t *b)
+{
+    return b->inst == I2C2 ? __HAL_RCC_I2C2_IS_CLK_ENABLED() : __HAL_RCC_I2C1_IS_CLK_ENABLED();
+}
 
 /* Take the pins from the peripheral, run the bus clear on them as open-drain
-   GPIO, hand them back as I2C1 AF4.  The caller re-inits the peripheral.
+   GPIO, hand them back as AF4.  The caller re-inits the peripheral.
    Pins are released (ODR high) BEFORE the mode switch so there is no glitch. */
-static int i2c_bus_clear_pins(void)
+static int i2c_bus_clear_pins(i2c_ctx_t *b)
 {
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    if (__HAL_RCC_I2C1_IS_CLK_ENABLED()) PWR_I2C->CR1 &= ~I2C_CR1_PE;
-    bc_set_scl(NULL, true);
-    bc_set_sda(NULL, true);
-    i2c_pins_mode(GPIO_MODE_OUTPUT_OD);
-    int rc = i2c_busclear_run(&s_bc_io);
-    i2c_pins_mode(GPIO_MODE_AF_OD);
-    s_clear_count++;
-    s_clear_last_rc = rc;
-    s_clear_log_pending = true;
+    const i2c_busclear_io_t io = { bc_set_scl, bc_set_sda, bc_get_scl, bc_get_sda, bc_delay, b };
+    bus_gpio_clk_enable(b);
+    if (bus_clk_enabled(b)) b->inst->CR1 &= ~I2C_CR1_PE;
+    bc_set_scl(b, true);
+    bc_set_sda(b, true);
+    i2c_pins_mode(b, GPIO_MODE_OUTPUT_OD);
+    int rc = i2c_busclear_run(&io);
+    i2c_pins_mode(b, GPIO_MODE_AF_OD);
+    b->clear_count++;
+    b->clear_last_rc = rc;
+    b->clear_log_pending = true;
     return rc;
 }
 
 /* No printf here: it runs with the scheduler suspended (i2c_enter). */
-static int i2c_hw_init(void)
+static int i2c_hw_init(i2c_ctx_t *b)
 {
-    hi2c.Instance = PWR_I2C;
-    hi2c.Init.Timing = I2C_TIMING_100K;
-    hi2c.Init.OwnAddress1 = 0;
-    hi2c.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-    hi2c.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-    hi2c.Init.OwnAddress2 = 0;
-    hi2c.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
-    hi2c.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-    hi2c.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-    if (HAL_I2C_Init(&hi2c) != HAL_OK) return -1;
-    HAL_I2CEx_ConfigAnalogFilter(&hi2c, I2C_ANALOGFILTER_ENABLE);
+    b->h.Instance = b->inst;
+    b->h.Init.Timing = I2C_TIMING_100K;
+    b->h.Init.OwnAddress1 = 0;
+    b->h.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    b->h.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    b->h.Init.OwnAddress2 = 0;
+    b->h.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    b->h.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    b->h.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&b->h) != HAL_OK) return -1;
+    HAL_I2CEx_ConfigAnalogFilter(&b->h, I2C_ANALOGFILTER_ENABLE);
     return 0;
 }
 
 /* Print the result of the last bus clear, once, from task context. */
-static void i2c_clear_log(void)
+static void i2c_clear_log(i2c_ctx_t *b)
 {
-    if (!s_clear_log_pending) return;
-    s_clear_log_pending = false;
-    int rc = s_clear_last_rc;
+    if (!b->clear_log_pending) return;
+    b->clear_log_pending = false;
+    int rc = b->clear_last_rc;
     if (rc >= 0) {
-        log_printf("[i2c] bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
-               (unsigned long)s_clear_count, rc);
+        log_printf("[i2c] %s bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
+               b->name, (unsigned long)b->clear_count, rc);
     } else {
-        log_printf("[i2c] bus clear #%lu FAILED: %s still held low\n",
-               (unsigned long)s_clear_count,
+        log_printf("[i2c] %s bus clear #%lu FAILED: %s still held low\n",
+               b->name, (unsigned long)b->clear_count,
                rc == I2C_BUSCLEAR_SCL_STUCK ? "SCL" : "SDA");
     }
 }
@@ -136,133 +168,173 @@ static void i2c_clear_log(void)
    HAL_I2C_IsDeviceReady reports "nobody answered" as HAL_ERROR + the TIMEOUT
    error bit, so a probe must not count that bit (`timeout_bit_counts`),
    or every scan of an empty address would clear the bus. */
-static bool i2c_needs_bus_clear(HAL_StatusTypeDef st, bool timeout_bit_counts)
+static bool i2c_needs_bus_clear(i2c_ctx_t *b, HAL_StatusTypeDef st, bool timeout_bit_counts)
 {
     if (st == HAL_BUSY || st == HAL_TIMEOUT) return true;
     uint32_t mask = HAL_I2C_ERROR_BERR | HAL_I2C_ERROR_ARLO;
     if (timeout_bit_counts) mask |= HAL_I2C_ERROR_TIMEOUT;
-    if (HAL_I2C_GetError(&hi2c) & mask) return true;
+    if (HAL_I2C_GetError(&b->h) & mask) return true;
     /* Between transfers both lines must be high.  SDA low = a slave stuck
        mid-byte. */
-    return !bc_get_sda(NULL) || !bc_get_scl(NULL);
+    return !bc_get_sda(b) || !bc_get_scl(b);
 }
 
 /* After a failed transaction (inside i2c_enter/i2c_leave).
    NACK: PE disable→enable toggle, keeps pin/timing config and resets the state
    machine.  Stuck bus: full bus clear + HAL re-init. */
-static void i2c_recover(HAL_StatusTypeDef st, bool timeout_bit_counts)
+static void i2c_recover(i2c_ctx_t *b, HAL_StatusTypeDef st, bool timeout_bit_counts)
 {
-    if (!i2c_needs_bus_clear(st, timeout_bit_counts)) {
-        __HAL_I2C_DISABLE(&hi2c);
+    if (!i2c_needs_bus_clear(b, st, timeout_bit_counts)) {
+        __HAL_I2C_DISABLE(&b->h);
         for (volatile int i = 0; i < 1000; i++) { __NOP(); }
-        __HAL_I2C_ENABLE(&hi2c);
+        __HAL_I2C_ENABLE(&b->h);
         return;
     }
-    (void)HAL_I2C_DeInit(&hi2c);          /* PE off, State = RESET */
-    (void)i2c_bus_clear_pins();
-    s_ready = (i2c_hw_init() == 0);
+    (void)HAL_I2C_DeInit(&b->h);          /* PE off, State = RESET */
+    (void)i2c_bus_clear_pins(b);
+    b->ready = (i2c_hw_init(b) == 0);
 }
 
-int i2c_bus_init(void)
+int i2c_bus_init_on(i2c_bus_id_t bus)
 {
+    i2c_ctx_t *b = bus_ctx(bus);
     RCC_PeriphCLKInitTypeDef pclk = {0};
 
-    s_ready = false;
+    b->ready = false;
 
-    /* I2C1 kernel clock = HSI (64 MHz). */
-    pclk.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
-    pclk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
+    /* Kernel clock = HSI (64 MHz), so the TIMINGR value does not depend on the PLL. */
+    if (b->inst == I2C2) {
+        pclk.PeriphClockSelection = RCC_PERIPHCLK_I2C2;
+        pclk.I2c2ClockSelection = RCC_I2C2CLKSOURCE_HSI;
+    } else {
+        pclk.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
+        pclk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
+    }
     if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
-        log_printf("[i2c] ERROR: kernel clock config failed\n");
+        log_printf("[i2c] ERROR: %s kernel clock config failed\n", b->name);
         return -1;
     }
 
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    __HAL_RCC_I2C1_CLK_ENABLE();
+    bus_gpio_clk_enable(b);
+    if (b->inst == I2C2) __HAL_RCC_I2C2_CLK_ENABLE();
+    else                 __HAL_RCC_I2C1_CLK_ENABLE();
 
     /* A reset mid-read can leave a slave holding SDA low (see i2c_bus.h).
-       Clear the bus first; this also leaves PB8/PB9 as AF4 open drain. */
-    if (hi2c.Instance != NULL) (void)HAL_I2C_DeInit(&hi2c);
-    (void)i2c_bus_clear_pins();
-    i2c_clear_log();
+       Clear the bus first; this also leaves the pins as AF4 open drain. */
+    if (b->h.Instance != NULL) (void)HAL_I2C_DeInit(&b->h);
+    (void)i2c_bus_clear_pins(b);
+    i2c_clear_log(b);
 
-    if (i2c_hw_init() != 0) {
-        log_printf("[i2c] ERROR: I2C1 init failed\n");
+    if (i2c_hw_init(b) != 0) {
+        log_printf("[i2c] ERROR: %s init failed\n", b->name);
         return -1;
     }
 
-    s_ready = true;
-    log_printf("[i2c] I2C1 ~100 kHz  SCL=PB8 SDA=PB9\n");
+    b->ready = true;
+    if (bus == I2C_BUS_MODULE) log_printf("[i2c] I2C2 ~100 kHz  SCL=PF1 SDA=PF0 (module bus)\n");
+    else                       log_printf("[i2c] I2C1 ~100 kHz  SCL=PB8 SDA=PB9\n");
     return 0;
 }
 
-bool i2c_bus_ready(void) { return s_ready; }
+int i2c_bus_init(void) { return i2c_bus_init_on(I2C_BUS_MAIN); }
 
-uint32_t i2c_bus_clear_count(void) { return s_clear_count; }
+bool i2c_bus_ready_on(i2c_bus_id_t bus) { return bus_ctx(bus)->ready; }
+bool i2c_bus_ready(void) { return i2c_bus_ready_on(I2C_BUS_MAIN); }
+
+uint32_t i2c_bus_clear_count(void) { return s_bus[I2C_BUS_MAIN].clear_count; }
 
 int i2c_bus_clear_and_reinit(void)
 {
+    i2c_ctx_t *b = &s_bus[I2C_BUS_MAIN];
     i2c_enter();
-    (void)HAL_I2C_DeInit(&hi2c);
-    int rc = i2c_bus_clear_pins();
-    s_ready = (i2c_hw_init() == 0);
+    (void)HAL_I2C_DeInit(&b->h);
+    int rc = i2c_bus_clear_pins(b);
+    b->ready = (i2c_hw_init(b) == 0);
     i2c_leave();
-    i2c_clear_log();
-    if (!s_ready) log_printf("[i2c] ERROR: I2C1 re-init failed\n");
+    i2c_clear_log(b);
+    if (!b->ready) log_printf("[i2c] ERROR: I2C1 re-init failed\n");
     return rc;
 }
 
 /* Close a transaction: recover on failure, leave the atomic section, then log
    (never printf with the scheduler suspended). */
-static int i2c_finish_ex(HAL_StatusTypeDef st, bool timeout_bit_counts)
+static int i2c_finish_ex(i2c_ctx_t *b, HAL_StatusTypeDef st, bool timeout_bit_counts)
 {
-    if (st != HAL_OK) i2c_recover(st, timeout_bit_counts);
+    if (st != HAL_OK) i2c_recover(b, st, timeout_bit_counts);
     i2c_leave();
-    i2c_clear_log();
+    i2c_clear_log(b);
     return (st == HAL_OK) ? 0 : -1;
 }
 
-static int i2c_finish(HAL_StatusTypeDef st) { return i2c_finish_ex(st, true); }
+static int i2c_finish(i2c_ctx_t *b, HAL_StatusTypeDef st) { return i2c_finish_ex(b, st, true); }
+
+int i2c_bus_write_on(i2c_bus_id_t bus, uint8_t addr, const uint8_t *buf, size_t len)
+{
+    i2c_ctx_t *b = bus_ctx(bus);
+    if (b->h.Instance == NULL) return -1;   /* never brought up (the module bus, off digital v3r3) */
+    i2c_enter();
+    HAL_StatusTypeDef st = HAL_I2C_Master_Transmit(&b->h, (uint16_t)(addr << 1),
+                                                   (uint8_t *)buf, (uint16_t)len,
+                                                   I2C_TIMEOUT_MS);
+    return i2c_finish(b, st);
+}
+
+int i2c_bus_read_on(i2c_bus_id_t bus, uint8_t addr, uint8_t *buf, size_t len)
+{
+    i2c_ctx_t *b = bus_ctx(bus);
+    if (b->h.Instance == NULL) return -1;
+    i2c_enter();
+    HAL_StatusTypeDef st = HAL_I2C_Master_Receive(&b->h, (uint16_t)(addr << 1),
+                                                  buf, (uint16_t)len, I2C_TIMEOUT_MS);
+    return i2c_finish(b, st);
+}
+
+int i2c_bus_write_read_on(i2c_bus_id_t bus, uint8_t addr, const uint8_t *wbuf, size_t wlen,
+                          uint8_t *rbuf, size_t rlen)
+{
+    /* A one-byte register pointer (TCA9554, INA) or a two-byte memory address (the module's
+       24C32) is a repeated-start Mem_Read; anything else is two discrete transfers. */
+    i2c_ctx_t *b = bus_ctx(bus);
+    if (b->h.Instance == NULL) return -1;
+    if (wlen == 1 || wlen == 2) {
+        uint16_t mem = (wlen == 1) ? wbuf[0] : (uint16_t)((wbuf[0] << 8) | wbuf[1]);
+        i2c_enter();
+        HAL_StatusTypeDef st = HAL_I2C_Mem_Read(&b->h, (uint16_t)(addr << 1), mem,
+                                                wlen == 1 ? I2C_MEMADD_SIZE_8BIT
+                                                          : I2C_MEMADD_SIZE_16BIT,
+                                                rbuf, (uint16_t)rlen, I2C_TIMEOUT_MS);
+        return i2c_finish(b, st);
+    }
+    if (i2c_bus_write_on(bus, addr, wbuf, wlen) != 0) return -1;
+    return i2c_bus_read_on(bus, addr, rbuf, rlen);
+}
+
+bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr)
+{
+    i2c_ctx_t *b = bus_ctx(bus);
+    if (b->h.Instance == NULL) return false;
+    i2c_enter();
+    HAL_StatusTypeDef st = HAL_I2C_IsDeviceReady(&b->h, (uint16_t)(addr << 1), 2, I2C_TIMEOUT_MS);
+    return i2c_finish_ex(b, st, false) == 0;
+}
 
 int i2c_bus_write(uint8_t addr, const uint8_t *buf, size_t len)
 {
-    i2c_enter();
-    HAL_StatusTypeDef st = HAL_I2C_Master_Transmit(&hi2c, (uint16_t)(addr << 1),
-                                                   (uint8_t *)buf, (uint16_t)len,
-                                                   I2C_TIMEOUT_MS);
-    return i2c_finish(st);
+    return i2c_bus_write_on(I2C_BUS_MAIN, addr, buf, len);
 }
 
 int i2c_bus_read(uint8_t addr, uint8_t *buf, size_t len)
 {
-    i2c_enter();
-    HAL_StatusTypeDef st = HAL_I2C_Master_Receive(&hi2c, (uint16_t)(addr << 1),
-                                                  buf, (uint16_t)len, I2C_TIMEOUT_MS);
-    return i2c_finish(st);
+    return i2c_bus_read_on(I2C_BUS_MAIN, addr, buf, len);
 }
 
 int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
                        uint8_t *rbuf, size_t rlen)
 {
-    /* All bus devices use a single register-pointer byte, so a repeated-start
-       Mem_Read covers them; fall back to discrete transfers otherwise. */
-    if (wlen == 1) {
-        i2c_enter();
-        HAL_StatusTypeDef st = HAL_I2C_Mem_Read(&hi2c, (uint16_t)(addr << 1),
-                                                wbuf[0], I2C_MEMADD_SIZE_8BIT,
-                                                rbuf, (uint16_t)rlen, I2C_TIMEOUT_MS);
-        return i2c_finish(st);
-    }
-    if (i2c_bus_write(addr, wbuf, wlen) != 0) return -1;
-    return i2c_bus_read(addr, rbuf, rlen);
+    return i2c_bus_write_read_on(I2C_BUS_MAIN, addr, wbuf, wlen, rbuf, rlen);
 }
 
-bool i2c_bus_probe(uint8_t addr)
-{
-    i2c_enter();
-    HAL_StatusTypeDef st = HAL_I2C_IsDeviceReady(&hi2c, (uint16_t)(addr << 1), 2, I2C_TIMEOUT_MS);
-    return i2c_finish_ex(st, false) == 0;
-}
+bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); }
 
 /* ---- LA pull-up control via TCA9554 @ 0x20 ----------------------------
    LA<n> (1..8) -> expander pin (U54: CTRL1=P2, CTRL2=P3, CTRL3=P1, CTRL4=P0,
@@ -337,6 +409,26 @@ bool pca9555_la_pull_is_down(uint8_t la_pin)
 static uint8_t s_u55_out;       /* DACMUX shadow */
 static uint8_t s_u58_out;       /* ANASW  shadow */
 static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
+/* Where U55/U58 sit: the main bus on the one-piece analog boards, the module bus (I2C2) when the
+   analog section is a plug-in module (module_link.h).  Set once at boot, before
+   analog_switch_init(). */
+static i2c_bus_id_t s_ana_bus = I2C_BUS_MAIN;
+
+void analog_switch_set_bus(i2c_bus_id_t bus) { s_ana_bus = bus; }
+
+static int ana_write(uint8_t addr, uint8_t reg, uint8_t val)
+{
+    if (s_ana_bus == I2C_BUS_MAIN) return tca9554_write_reg(addr, reg, val);
+    uint8_t tx[2] = { reg, val };
+    return i2c_bus_write_on(s_ana_bus, addr, tx, 2);
+}
+
+static int ana_read(uint8_t addr, uint8_t reg, uint8_t *val)
+{
+    if (s_ana_bus == I2C_BUS_MAIN) return tca9554_read_reg(addr, reg, val);
+    return i2c_bus_write_read_on(s_ana_bus, addr, &reg, 1, val, 1);
+}
+i2c_bus_id_t analog_switch_bus(void) { return s_ana_bus; }
 
 /* U58's output pins: P4 only exists as ANA14_EN on v3r2, and is left an input elsewhere. */
 static uint8_t u58_mask(void) { return dac_quad_present() ? U58_OUTPUT_MASK_QUAD : U58_OUTPUT_MASK; }
@@ -348,12 +440,12 @@ void analog_switch_init(void)
        routes the DAC to an unknown SMA. */
     s_u55_out = 0x00; s_u58_out = 0x00;
     if (!dac_quad_present()) {   /* v3r2 has no U55 */
-        tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
-        tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
+        ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
+        ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
     }
     s_ana14 = false;   /* v3r2: +-14 V stays off (P4 low) until dac_quad_boot parked the DAC */
-    tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_OUTPUT, 0x00);
-    tca9554_write_reg(I2C_ADDR_TCA9554_ANASW,  TCA_REG_CONFIG, (uint8_t)~u58_mask());
+    ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, 0x00);
+    ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
 }
 
 int ana14_set(bool on)
@@ -362,8 +454,8 @@ int ana14_set(bool on)
     s_ana14 = on;
     s_u58_out = analog_calsw_reg((s_u58_out & 0x01u) != 0, (s_u58_out & 0x02u) != 0,
                                  (s_u58_out & 0x04u) != 0, (s_u58_out & 0x08u) != 0, on);
-    (void)tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
-    return tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
+    (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
+    return ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
 }
 
 bool ana14_is_on(void) { return s_ana14; }
@@ -376,7 +468,7 @@ int dacmux_set_ctrl1(bool en, uint8_t sel)
                 | (en ? 0x01u : 0u)
                 | ((sel & 1u) ? 0x02u : 0u)
                 | ((sel & 2u) ? 0x04u : 0u));
-    return tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, s_u55_out);
+    return ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, s_u55_out);
 }
 
 int dacmux_set_ctrl2(bool en, uint8_t sel)
@@ -387,13 +479,13 @@ int dacmux_set_ctrl2(bool en, uint8_t sel)
                 | (en ? 0x08u : 0u)
                 | ((sel & 1u) ? 0x10u : 0u)
                 | ((sel & 2u) ? 0x20u : 0u));
-    return tca9554_write_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, s_u55_out);
+    return ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, s_u55_out);
 }
 
 int dacmux_read(uint8_t *out_reg)
 {
     if (dac_quad_present()) return -1;
-    return tca9554_read_reg(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, out_reg);
+    return ana_read(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, out_reg);
 }
 
 int calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path)
@@ -404,13 +496,13 @@ int calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path)
     /* Re-assert the direction (P0..P3 = outputs, P4 too on v3r2) in case the power-on config
        write didn't take — otherwise the output write drives nothing and the
        relays never energise. */
-    (void)tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
-    return tca9554_write_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
+    (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
+    return ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
 }
 
 int calsw_read(uint8_t *out_reg)
 {
-    return tca9554_read_reg(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, out_reg);
+    return ana_read(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, out_reg);
 }
 
 /* Diagnostic: dump both expanders' input/output/config registers. */
@@ -422,12 +514,12 @@ void analog_switch_dump(void)
     };
     for (unsigned i = dac_quad_present() ? 1u : 0u; i < 2; i++) {   /* v3r2: no U55 */
         uint8_t in = 0xEE, out = 0xEE, cfg = 0xEE;
-        int err = tca9554_read_reg(chips[i].a, 0x00u, &in)
-                | tca9554_read_reg(chips[i].a, TCA_REG_OUTPUT, &out)
-                | tca9554_read_reg(chips[i].a, TCA_REG_CONFIG, &cfg);
+        int err = ana_read(chips[i].a, 0x00u, &in)
+                | ana_read(chips[i].a, TCA_REG_OUTPUT, &out)
+                | ana_read(chips[i].a, TCA_REG_CONFIG, &cfg);
         uint8_t mask = (i == 1u) ? u58_mask() : chips[i].mask;   /* v3r2: P4 is ANA14_EN */
-        log_printf("[exp] %s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
-               chips[i].n, in, out, cfg,
+        log_printf("[exp] %s%s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
+               chips[i].n, s_ana_bus == I2C_BUS_MODULE ? " (module bus)" : "", in, out, cfg,
                err ? "(I2C ERR)"
                    : (cfg == (uint8_t)~mask ? "dir OK" : "*** dir WRONG ***"));
     }
@@ -455,26 +547,40 @@ int analog_path_set(analog_path_t path)
     return r;
 }
 
-void i2c_bus_status(void)
+static void i2c_scan(i2c_bus_id_t bus)
 {
-    if (!s_ready) { log_printf("[i2c] bus not initialised\n"); return; }
-    log_printf("[i2c] bus clears since boot: %lu\n", (unsigned long)s_clear_count);
-    log_printf("[i2c] scan:");
+    log_printf("[i2c] %s scan:", bus_ctx(bus)->name);
     for (uint8_t a = 0x08; a <= 0x77; a++) {
-        if (i2c_bus_probe(a)) {
+        if (i2c_bus_probe_on(bus, a)) {
             const char *name = "";
-            switch (a) {
-            case I2C_ADDR_INA238_INTERNAL: name = "INA238/226(int)"; break;
-            case I2C_ADDR_INA238_EXTERNAL: name = "INA238/226(ext)"; break;
-            case I2C_ADDR_INA_POD:         name = "INA226(pod)"; break;
-            case I2C_ADDR_TCA9554_LA:      name = "TCA9554(LA)"; break;
-            case I2C_ADDR_TCA9554_PWR:     name = "TCA9554(pwr)"; break;
-            case I2C_ADDR_TCA9554_DACMUX:  name = "TCA9554(dacmux)"; break;
-            case I2C_ADDR_TCA9554_ANASW:   name = "TCA9554(anasw)"; break;
-            default: break;
+            if (bus == I2C_BUS_MODULE) {
+                switch (a) {
+                case I2C_ADDR_TCA9554_ANASW:   name = "TCA9554(anasw)"; break;
+                case I2C_ADDR_MOD_EEPROM:      name = "24C32(module id)"; break;
+                default: break;
+                }
+            } else {
+                switch (a) {
+                case I2C_ADDR_INA238_INTERNAL: name = "INA238/226(int)"; break;
+                case I2C_ADDR_INA238_EXTERNAL: name = "INA238/226(ext)"; break;
+                case I2C_ADDR_INA_POD:         name = "INA226(pod)"; break;
+                case I2C_ADDR_TCA9554_LA:      name = "TCA9554(LA)"; break;
+                case I2C_ADDR_TCA9554_PWR:     name = "TCA9554(pwr)"; break;
+                case I2C_ADDR_TCA9554_DACMUX:  name = "TCA9554(dacmux)"; break;
+                case I2C_ADDR_TCA9554_ANASW:   name = "TCA9554(anasw)"; break;
+                default: break;
+                }
             }
             log_printf(" 0x%02x%s%s", a, name[0] ? "=" : "", name);
         }
     }
     log_printf("\n");
+}
+
+void i2c_bus_status(void)
+{
+    if (!s_bus[I2C_BUS_MAIN].ready) { log_printf("[i2c] bus not initialised\n"); return; }
+    log_printf("[i2c] bus clears since boot: %lu\n", (unsigned long)s_bus[I2C_BUS_MAIN].clear_count);
+    i2c_scan(I2C_BUS_MAIN);
+    if (s_bus[I2C_BUS_MODULE].ready) i2c_scan(I2C_BUS_MODULE);
 }
