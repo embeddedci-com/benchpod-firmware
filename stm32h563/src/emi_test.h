@@ -61,7 +61,8 @@ void emi_test_start(void);
 void emi_test_stop(void);
 bool emi_test_running(void);
 /* Console `emi dac <mode>`: change the DAC activity (applied at once when running). Returns
-   false for `all` on a board without the quad DAC. */
+   false for `all` on a board without the quad DAC, and for anything but `off` on a digital-only
+   board (no DAC or ADC: the loop there runs the LA captures only). */
 bool emi_test_set_dac(emi_dac_mode_t mode);
 /* Console `emi uart <1-14>|off`: NMEA out of an LA pin while running; 0 = off. */
 void emi_test_set_uart(int la);

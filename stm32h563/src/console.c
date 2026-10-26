@@ -701,7 +701,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else if (!strcmp(sub, "stop"))                 emi_test_stop();
         else if (!strcmp(sub, "dac") && mode >= 0) {
             if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
-                op(out, ctx, "  emi dac all needs the quad DAC (analog v3r2 or the v4 analog module)\r\n");
+                op(out, ctx, "  emi dac: %s\r\n", board_has_analog()
+                    ? "all needs the quad DAC (analog v3r2 or the v4 analog module)"
+                    : "this board has no DAC (digital-only board)");
                 return;
             }
         }

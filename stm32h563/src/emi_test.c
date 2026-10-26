@@ -8,6 +8,7 @@
 #include "dac_quad.h"
 #include "signal_engine.h"              /* dac_quad_write */
 #include "status_led.h"                 /* status_led_emi_t */
+#include "board_variant.h"              /* board_has_analog */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 
 #include <stdio.h>
@@ -124,12 +125,13 @@ void emi_test_start(void) {
     if (!s.booted_mode) {   /* first start: the quad DAC runs every output by default */
         s.booted_mode = true;
         if (dac_quad_present()) s.dac = EMI_DAC_ALL;
+        if (!board_has_analog()) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
     }
     printf("[emi] starting the EMI test activity\n");
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":1}");
     run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":1}");
-    apply_dac(s.dac);
+    if (board_has_analog()) apply_dac(s.dac);
     apply_uart(s.uart_la);
 }
 
@@ -137,9 +139,11 @@ void emi_test_stop(void) {
     s.booted = true;   /* a stop before the boot delay ran out also cancels the boot start */
     if (!s.running) return;
     s.running = false;
-    run("dac_stop", "{\"cmd\":\"dac_stop\"}");
-    if (drives_current(s.dac)) run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
-    run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
+    if (board_has_analog()) {
+        run("dac_stop", "{\"cmd\":\"dac_stop\"}");
+        if (drives_current(s.dac)) run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
+        run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
+    }
     run("gps_stop", "{\"cmd\":\"gps_stop\"}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":0}");
     run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":0}");
@@ -151,6 +155,7 @@ bool emi_test_running(void) { return s.running; }
 
 bool emi_test_set_dac(emi_dac_mode_t mode) {
     if (mode == EMI_DAC_ALL && !dac_quad_present()) return false;
+    if (mode != EMI_DAC_OFF && !board_has_analog()) return false;
     s.booted_mode = true;   /* a choice before the boot start sticks */
     if (s.running) apply_dac(mode);
     s.dac = mode;
@@ -239,6 +244,7 @@ void emi_test_poll(void) {
     if (!s.running) return;
     if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0) {
         s.cap_errors = s.errors;
+        if (!board_has_analog()) s.next_kind = 1;   /* LA only: capture_dual takes the ADC too */
         run(s.next_kind ? "la_capture" : "capture_dual", k_captures[s.next_kind]);
         s.next_kind = (s.next_kind + 1u) % (sizeof(k_captures) / sizeof(k_captures[0]));
         if (s.errors == s.cap_errors) s.cap_issued = true;
