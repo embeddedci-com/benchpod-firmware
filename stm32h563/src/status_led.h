@@ -21,6 +21,11 @@
  *   update                magenta        firmware or gateware staging / verify (OTA)
  *   busy                  blue           a capture, upload or other PSRAM-bus job in flight
  *   command               cyan flash     a command that drives the pod (not polled reads)
+ *   EMI test build        yellow         solid: the activity loop starts in a moment; blinking
+ *                                        (1 s on, 1 s off): it runs; yellow and red in turn: it
+ *                                        runs, and a command or capture failed in the last 30 s
+ *                                        (emi_test.h; never in other builds)
+ *   busy                  blue           (repeated from above: below the EMI pattern)
  *   target power on       green          an eFuse is on, nothing else going on
  *   idle                  off
  *
@@ -38,6 +43,7 @@
 #define STATUS_LED_RED      0x04u
 #define STATUS_LED_CYAN     (STATUS_LED_GREEN | STATUS_LED_BLUE)
 #define STATUS_LED_MAGENTA  (STATUS_LED_RED | STATUS_LED_BLUE)
+#define STATUS_LED_YELLOW   (STATUS_LED_RED | STATUS_LED_GREEN)
 #define STATUS_LED_OFF      0x00u
 
 #define STATUS_LED_BOOT_BLINKS     3u
@@ -45,6 +51,15 @@
 #define STATUS_LED_FAULT_BLINK_MS  250u
 #define STATUS_LED_CMD_FLASH_MS    150u
 #define STATUS_LED_REFRESH_MS      1000u   /* resend an unchanged mask this often */
+#define STATUS_LED_EMI_BLINK_MS    1000u
+
+/* The EMI test build's activity loop (emi_test.h), for status_led_in_t.emi. */
+typedef enum {
+    STATUS_LED_EMI_NONE = 0,   /* not the EMI build, or the loop is stopped */
+    STATUS_LED_EMI_WAITING,    /* starts in a moment (the boot delay) */
+    STATUS_LED_EMI_RUNNING,
+    STATUS_LED_EMI_ERRORS,     /* running, with a failure in the last 30 s */
+} status_led_emi_t;
 
 /* The pod's state, sampled once per poll. */
 typedef struct {
@@ -54,6 +69,7 @@ typedef struct {
     bool power_on;      /* an eFuse is on */
     bool updating;      /* firmware or gateware staging / verify */
     bool busy;          /* a capture, upload or other PSRAM-bus job */
+    uint8_t emi;        /* status_led_emi_t */
 } status_led_in_t;
 
 /* Reset all state (boot). */

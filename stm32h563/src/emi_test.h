@@ -68,6 +68,9 @@ void emi_test_set_uart(int la);
 /* "sine", "dc", "current", "off", "all"; -1 for anything else. */
 int  emi_test_dac_from_name(const char *name);
 
+/* What the status LED shows for the loop (a status_led_emi_t, status_led.h). */
+uint8_t emi_test_led_state(void);
+
 /* One-line state for the console (`emi`) and the monitor line. */
 size_t emi_test_describe(char *buf, size_t cap);
 /* The same as a JSON object for `status` ("emi_test"):

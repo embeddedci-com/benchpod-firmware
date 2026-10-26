@@ -7,6 +7,7 @@
 #include "cal_data.h"                   /* dac_code16_for_volts */
 #include "dac_quad.h"
 #include "signal_engine.h"              /* dac_quad_write */
+#include "status_led.h"                 /* status_led_emi_t */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 
 #include <stdio.h>
@@ -27,6 +28,9 @@ static const char *const k_captures[] = {
 
 static const char *const k_dac_names[] = { "sine", "dc", "current", "off", "all" };
 
+/* A failure turns the LED pattern red for this long (status_led.h). */
+#define EMI_LED_ERROR_MS  30000u
+
 /* The DC level on the 0-5 V output (J11 to J8: 3 V over 249 ohm is 12 mA in the loop input). */
 #define EMI_DC_VOLTS  3.0f
 
@@ -44,6 +48,7 @@ static struct {
     uint32_t       cap_errors;    /* s.errors when it went out */
     uint32_t       captures;      /* finished without an error */
     uint32_t       errors;
+    uint32_t       last_err_ms;   /* HAL_GetTick() of the last failure */
     const char    *cur;           /* the command in flight, for the error log */
     char           last_err[112];
     size_t         budget;
@@ -62,6 +67,7 @@ static void hold_dc_on_b(void) {
     s.cur = "hold 0-5 V";
     if (dac_quad_write(DAC_QUAD_B, dac_code16_for_volts(1, EMI_DC_VOLTS)) != 0) {
         s.errors++;
+        s.last_err_ms = HAL_GetTick();
         snprintf(s.last_err, sizeof(s.last_err), "hold 0-5 V: DAC write failed");
         printf("[emi] holding 0-5 V at the DC level failed\n");
     }
@@ -170,6 +176,7 @@ void emi_test_reply(const uint8_t *buf, size_t len) {
     static const char k_err[] = "{\"status\":\"error\"";
     if (len < sizeof(k_err) - 1 || memcmp(buf, k_err, sizeof(k_err) - 1) != 0) return;
     s.errors++;
+    s.last_err_ms = HAL_GetTick();
     const char *msg = strstr((const char *)buf, "\"message\":\"");
     char text[80] = {0};
     if (msg) {
@@ -183,6 +190,13 @@ void emi_test_reply(const uint8_t *buf, size_t len) {
 }
 
 size_t emi_test_avail(void) { return s.budget; }
+
+uint8_t emi_test_led_state(void) {
+    if (!s.booted) return STATUS_LED_EMI_WAITING;
+    if (!s.running) return STATUS_LED_EMI_NONE;
+    if (s.errors && HAL_GetTick() - s.last_err_ms < EMI_LED_ERROR_MS) return STATUS_LED_EMI_ERRORS;
+    return STATUS_LED_EMI_RUNNING;
+}
 
 size_t emi_test_describe(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;

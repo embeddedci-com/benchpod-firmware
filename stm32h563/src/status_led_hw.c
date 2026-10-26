@@ -9,6 +9,9 @@
 #include "signal_engine.h"
 #include "target_power.h"
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 
 #define SAMPLE_MS 20u   /* the CDONE read reconfigures a GPIO: not on every 1 ms worker pass */
 
@@ -55,6 +58,9 @@ void status_led_service(void) {
         .power_on    = on1 || on2,
         .updating    = o == OTA_RECEIVING || o == OTA_VERIFIED,
         .busy        = heavy_or_claimed(),
+#if defined(BENCHPOD_EMI_TEST)
+        .emi         = emi_test_led_state(),
+#endif
     };
     const int w = status_led_next_write(status_led_color(&in, now), now);
     if (w >= 0) fpga_set_led((uint8_t)w);

@@ -102,6 +102,39 @@ static void test_command_flash_across_wrap(void)
     CHECK(status_led_color(&BOOTED, t + STATUS_LED_CMD_FLASH_MS) == STATUS_LED_OFF);
 }
 
+/* The EMI test build: solid yellow before the loop starts, yellow blinking while it runs, yellow
+   and red in turn after a failure. It wins over busy (the loop is always busy) and power on, but
+   not over a failure, a power fault, the boot blinks or an update. */
+static void test_emi_pattern(void)
+{
+    status_led_reset();
+    const uint32_t t = 100000;
+    (void)status_led_color(&BOOTED, t - 2000);   /* the boot blinks are over by t */
+    status_led_in_t in = BOOTED;
+    in.busy = true;
+    in.power_on = true;
+    in.emi = STATUS_LED_EMI_WAITING;
+    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_YELLOW);
+    in.emi = STATUS_LED_EMI_RUNNING;
+    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_OFF);
+    in.emi = STATUS_LED_EMI_ERRORS;
+    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_RED);
+    in.updating = true;
+    CHECK(status_led_color(&in, t) == STATUS_LED_MAGENTA);
+    in.updating = false;
+    in.power_fault = true;
+    CHECK(status_led_color(&in, t) == STATUS_LED_RED);
+    in.power_fault = false;
+    in.hw_ok = false;
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_RED);
+    in.hw_ok = true;
+    in.emi = STATUS_LED_EMI_NONE;   /* stopped: the normal status again */
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
+}
+
 /* Only a change goes out, plus a refresh every STATUS_LED_REFRESH_MS (gateware loads reset it). */
 static void test_writes_only_on_change_or_refresh(void)
 {
@@ -123,6 +156,7 @@ int main(void)
     test_activity_colours_and_order();
     test_command_flash_across_wrap();
     test_writes_only_on_change_or_refresh();
+    test_emi_pattern();
     if (failures) { printf("test_status_led: %d FAILED\n", failures); return 1; }
     printf("test_status_led: all passed\n");
     return 0;
