@@ -58,6 +58,7 @@ curl-testable and robust, and it makes the Pi a reusable bench head. The brains
 | `scripts/bench_server.py` | Pi | HTTP server owning the DMM + board (`--mock` for no hardware) |
 | `scripts/dmm.py` | Pi | 34401A GPIB driver (linux-gpib) + `MockDMM` |
 | `scripts/dmm_read.py` | Mac | Read the DMM from the command line: `idn`, `read [-n N] [--json] [--range 100]`, `watch`. For calibration runs and sessions that read the DMM themselves |
+| `scripts/adc_comp_sweep.py` | Mac | ADC input divider compensation (R90/C140 vs R91/C72): sine sweep 200 Hz-150 kHz through the cal1 loopback with the SDK, no cable; fits the top-leg C and the HF/DC gain, exits 1 when it is off by more than 5 %. `--fit <json>` refits a saved sweep. Rev3 and later |
 | `scripts/board_console.py` | Pi | RP2350B console (pyserial) + `MockBoard` |
 | `scripts/cal_client.py` | Host | HTTP client + `linfit()` (stdlib only) |
 | `scripts/dac_cal.py` | Host | DAC + lower-range ADC cal (board sweep) |
