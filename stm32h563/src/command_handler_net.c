@@ -317,6 +317,11 @@ void handle_wifi_set(int conn_id, const char *json) {
         return;
     }
 #endif
+    if (!esp_wifi_ctrl_module_present()) {
+        memset(&cfg, 0, sizeof(cfg));
+        send_error(conn_id, ESP_WIFI_NO_MODULE);
+        return;
+    }
     if (config_save(&cfg) != 0) { send_error(conn_id, "config save failed"); return; }
     net_wifi_reload_after_reply();   /* (re)connect with the new creds, once this reply is out */
 
@@ -351,7 +356,9 @@ static const char *c3_nvs_str(void) {
 
 const char *wifi_clear_c3_now(void) {
     const char *why = NULL;
-    if (boot_guard_skip_hw())
+    if (!esp_wifi_ctrl_module_present())
+        why = ESP_WIFI_NO_MODULE;
+    else if (boot_guard_skip_hw())
         why = "safe mode: the W25Q that holds the C3 image is off";
     else if (!(why = bus_busy_reason()) && !net_wifi_wipe_c3())
         why = "the C3 did not answer its ROM loader or the erase did not verify (see log)";
@@ -375,8 +382,10 @@ void handle_wifi_clear(int conn_id, const char *json) {
 #endif
     config_clear();
     net_wifi_reload_after_reply();   /* drops Wi-Fi once this reply is out (the cloud may ride it) */
-    s_c3_nvs    = C3_NVS_PENDING;    /* then wifi_clear_poll erases the C3's NVS */
-    s_c3_giveup = make_timeout_time_ms(C3_WIPE_WAIT_MS);
+    if (esp_wifi_ctrl_module_present()) {   /* no C3 (digital v3r3): no copy to erase */
+        s_c3_nvs    = C3_NVS_PENDING;    /* then wifi_clear_poll erases the C3's NVS */
+        s_c3_giveup = make_timeout_time_ms(C3_WIPE_WAIT_MS);
+    }
     send_ok_str(conn_id, "\"cleared\"");
 }
 

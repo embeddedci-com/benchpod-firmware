@@ -17,6 +17,7 @@
 #include "i2c_bus.h"
 #include "ina238.h"
 #include "board_variant.h"
+#include "module_link.h"
 #include "tca9554.h"
 #include "target_power.h"
 #include "mcu_adc.h"
@@ -41,6 +42,7 @@
 #include "ice40_flash.h"
 #include "version.h"
 #include "dac_limits.h"
+#include "dac_quad.h"
 #include "pod_policy.h"
 #include "cloud_extras.h"
 #include "adc_cal.h"
@@ -172,7 +174,13 @@ int main(void)
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
     (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
-    board_variant_init();   /* analog board or digital-only (its I2C expanders answer or not) */
+    module_link_init();     /* digital v3r3: the analog module's link, I2C2 and its EEPROM */
+    board_variant_init();   /* analog board, analog module or digital-only (board_variant.h) */
+    /* Analog v3r2 and the analog module: a DAC8554 channel per output instead of the U55 muxes
+       (dac_quad.h).  The module runs on the v3r2 calibration set until it carries its own. */
+    dac_quad_set_present(dac_quad_for_board(board_rev_get(), board_has_analog(),
+                                            board_analog_is_module()));
+    if (board_analog_is_module()) cal_data_select(BOARD_REV_V3R2);
     if (board_has_analog())
         analog_switch_init(); /* U55 DAC mux + U58 cal switching, all off */
     dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */
@@ -233,8 +241,12 @@ void boot_deferred_hw_init(void)
     if (!ice40_is_configured()) ice40_hold_off_bus();
     /* An output stage on the DAC (dac_limits.h) sits at full output while its input is near 0 V,
        which is where reset left it.  Park it as soon as the iCE40 can drive the DAC (SPI1 only,
-       no PSRAM), not after the PSRAM self-test, which takes seconds. */
-    else if (dac_limits_get()->enabled) (void)dac_limits_park_now();
+       no PSRAM), not after the PSRAM self-test, which takes seconds.  On analog v3r2 every
+       voltage output gets parked: the DAC8554 powers up at code 0, -12 V on the +-12 V output. */
+    else {
+        dac_quad_boot();
+        if (dac_limits_get()->enabled) (void)dac_limits_park_now();
+    }
     /* Bring up the OCTOSPI/XSPI unconditionally: the same bus hosts the PSRAM AND
        the iCE40 config flash, and the config flash must be reachable (flash-ice40)
        even when the FPGA is unconfigured. */
@@ -249,6 +261,7 @@ void boot_deferred_hw_init(void)
     i2c_bus_status();       /* scan + name known devices */
     /* Park again: the self-test recovery or the gateware update may have reconfigured the
        iCE40 (or it was not configured above), which resets the DAC to 0 V. */
+    dac_quad_boot();
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
     boot_guard_sub_done(BOOT_SUB_HW);
     boot_guard_set_hw_ready();

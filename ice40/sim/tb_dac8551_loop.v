@@ -24,6 +24,7 @@ module tb_dac8551_loop;
     dac8551_engine #(.ADDR_W(12)) dut (
         .clk(clk), .rst(rst), .start(start), .stop(stop),
         .period_samples(period), .divider(divider),
+        .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(waddr), .wave_data(wdata),
         .psram_mode(1'b0), .strm_data(8'h00), .strm_valid(1'b0), .strm_pop(),
         .dac_sync(sync), .dac_sclk(sclk), .dac_din(din), .running(running)

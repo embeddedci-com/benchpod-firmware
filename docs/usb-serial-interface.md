@@ -201,7 +201,7 @@ command prints `usage: ...` and changes nothing.
 
 | Command | Description |
 |---|---|
-| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to the pod's flash and (re)connect the ESP32-C3 in the background (the C3 is given them on each bring-up and keeps them in RAM only). Turns [USB networking](#usb-network-adapter) off. Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`. |
+| `wifi-set "<ssid>" "<password>"` | Save Wi-Fi credentials to the pod's flash and (re)connect the ESP32-C3 in the background (the C3 is given them on each bring-up and keeps them in RAM only). Turns [USB networking](#usb-network-adapter) off. Prints `[cfg] credentials written to flash`, then `saved SSID "<ssid>" — connecting in the background; run wifi-show for status`. Errors: `wifi-set: ssid too long`, `wifi-set: password too long`, `wifi-set: config save failed`, and on digital v3r3, which has no ESP32-C3, `wifi-set: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` (nothing is saved). |
 | `wifi-show` | `ssid`, `state` (as `status.wifi` in the JSON API), `ip`, `rssi` and the C3 restart counters. The password is never printed. |
 | `wifi-scan` | The networks the pod's Wi-Fi sees, strongest first, for a Wi-Fi picker (firmware 3.9.4+; before that, development builds with a Wi-Fi bridge only): one line per network, `scan <rssi_dbm> <channel> <auth> <ssid>` (the SSID last, it may hold spaces; auth is `open`, `wep`, `wpa`, `wpa2`, `wpa/wpa2`, `wpa2-ent`, `wpa3`, `wpa2/wpa3`, `wapi`, `owe` or `other`), then `scan done <n>`; on failure `wifi-scan error <why>`. The pod first prints `Wi-Fi scan running (a few seconds); the networks follow` and its prompt, and the list follows a few seconds later with a new prompt (the pod keeps serving its API meanwhile). With a Wi-Fi bridge plugged in, the bridge scans and the list comes before the prompt. See [`wifi_scan`](API.md#wifi_scan--the-networks-the-pods-wi-fi-sees) for what a scan does to a joined connection. |
 | `wifi-clear` | Erase the stored credentials and drop Wi-Fi (USB networking comes back on), then erase the ESP32-C3's NVS partition, where firmware up to 3.7.0 left a second copy (about 3 s). See [`wifi-clear` result](#wifi-clear-result). |
@@ -214,7 +214,7 @@ command prints `usage: ...` and changes nothing.
 | `esp-reset-pulse` | Diagnostic: reset the C3 unannounced; Wi-Fi must recover on its own. |
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
-| `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). |
+| `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
 | `bridge [scan \| update \| reboot \| factory-reset yes]` | Development builds only. The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
 #### Wi-Fi bridge (development builds)
@@ -342,6 +342,7 @@ guarantees is described under [`wifi_set` / `wifi_clear`](API.md#wifi_set--wifi_
 |---|---|
 | Both wiped | `Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)` |
 | Pod wiped, C3 not | `Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not erased (<why>): an old copy may remain there; run wifi-clear again or flash-esp32` |
+| No C3 on the board (digital v3r3) | `Wi-Fi credentials cleared (pod flash; this BenchPod has no ESP32-C3)` |
 
 `<why>` is `safe mode: ...`, `busy: ...` (a capture, upload or update holds the shared bus), or
 `the C3 did not answer its ROM loader or the erase did not verify (see log)`; the `[espflash]`

@@ -21,11 +21,19 @@
 
 void esp_wifi_ctrl_init(void);
 
+/* The board has the ESP32-C3 at all (board_variant.h board_has_wifi_module; digital v3r3 has
+   none).  Set before esp_wifi_ctrl_init().  Without it: never configured (USB networking stays
+   on), the C3 pins are never driven, nothing is flashed, the state is "absent" and a scan ends
+   with ESP_WIFI_NO_MODULE. */
+#define ESP_WIFI_NO_MODULE "no Wi-Fi module: this BenchPod has no built-in Wi-Fi"
+void esp_wifi_ctrl_set_module_present(bool present);
+bool esp_wifi_ctrl_module_present(void);
+
 /* Advance the connect state machine: brings the ESP32 up + runs the RPC sequence
    when configured, retries on failure/disconnect. No-op when unconfigured. */
 void esp_wifi_ctrl_poll(void);
 
-/* True if a Wi-Fi SSID is provisioned (config_store). */
+/* True if a Wi-Fi SSID is provisioned (config_store) and the C3 is fitted. */
 bool esp_wifi_ctrl_configured(void);
 
 /* True once associated (sta-connected event seen). */

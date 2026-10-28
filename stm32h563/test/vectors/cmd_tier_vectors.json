@@ -38,6 +38,7 @@
     "sig_policy": "T0",
     "lan_policy": "T0",
     "usb_network": "T0",
+    "module": "T0",
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
     "lan_tls": "T0",
@@ -61,6 +62,7 @@
     "la_voltage": "T1",
     "nrst": "T1",
     "target_power": "T1",
+    "module_power": "T1",
     "power_profile": "T1",
     "dap_start": "T1",
     "uart_proxy_start": "T1",
@@ -239,6 +241,18 @@
     {
       "line": "{\"cmd\":\"usb_network\"}",
       "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"module\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"module\",\"eeprom\":\"read\",\"addr\":256,\"len\":32}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"module_power\",\"bridge\":false}",
+      "tier": "T1"
     },
     {
       "line": "{\"cmd\":\"cloud_ca\"}",
@@ -519,6 +533,14 @@
     },
     {
       "line": "{\"cmd\":\"usb_network\",\"set\":\"off\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"module\",\"eeprom\":\"write\",\"addr\":256,\"data\":\"00ff\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"module\",\"eeprom\":\"id\",\"rev\":\"1.0\",\"serial\":\"AM-1\"}",
       "tier": "T2"
     },
     {

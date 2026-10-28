@@ -199,16 +199,27 @@ module tb_top_capture;
     integer    dac_bits = 0, dac_nfr = 0, dac_rec = 0, dac_in_frame = 0;
     reg [23:0] dac_sh = 24'd0;
     reg [15:0] dac_fr [0:63];
+    reg [23:0] dac_fr24 [0:63];                // the whole frame, control byte included (v49)
     always @(negedge dac_sync) dac_bits = 0;
     always @(posedge dac_sclk) dac_in_frame = (dac_sync === 1'b0);
     always @(negedge dac_sclk) if (dac_in_frame) begin
         dac_sh   = {dac_sh[22:0], dac_din};
         dac_bits = dac_bits + 1;
         if (dac_bits == 24 && dac_rec) begin
-            if (dac_nfr < 64) dac_fr[dac_nfr] = dac_sh[15:0];
+            if (dac_nfr < 64) begin dac_fr[dac_nfr] = dac_sh[15:0]; dac_fr24[dac_nfr] = dac_sh; end
             dac_nfr = dac_nfr + 1;
         end
     end
+
+    // OP_DAC_CTRL (0x38, v49): flags(1) + ctrl(1) + code(2).
+    task cmd_dac_ctrl(input [7:0] flags, input [7:0] ctrl, input [15:0] code);
+        reg [7:0] junk; begin
+            csn = 1'b0; #(SPI_HALF);
+            spi_byte(8'h38, junk); spi_byte(flags, junk); spi_byte(ctrl, junk);
+            spi_byte(code[7:0], junk); spi_byte(code[15:8], junk);
+            #(SPI_HALF); csn = 1'b1; #(4*SPI_HALF);
+        end
+    endtask
 
     // OP_START_MEASURE (0x30): count(2) [= DAC period AND ADC count] + dac_div(2) + cap_div(2).
     // MEASURE (DAC period == ADC count, DAC and ADC started on one cycle).  OP_START_MEASURE (0x30)
@@ -585,6 +596,7 @@ module tb_top_capture;
     localparam NA = 8, NL = 8, NP = 64;
     localparam STOP_N = 300;                 // stop-after cycles for the trigger co-trigger pass
     reg [7:0] r; integer i;
+    integer ns, nb;                          // DAC_CTRL: stream / static frame counts
     reg [15:0] got; reg [15:0] want;
     integer base_la6, base_la2, base_dac, base_auto;
     initial begin
@@ -806,6 +818,51 @@ module tb_top_capture;
         end
         $display("  [dac]    restart %0d->%0d samples: first %0d frames %04h %04h %04h %04h %04h ...",
                  DAC_PA, DAC_PB, DAC_NF, dac_fr[0], dac_fr[1], dac_fr[2], dac_fr[3], dac_fr[4]);
+        // Until a DAC_CTRL, every frame is the DAC8551's {0x00, sample}.
+        for (i = 0; i < DAC_NF; i = i + 1)
+            if (dac_fr24[i][23:16] !== 8'h00) begin
+                $display("FAIL dac-ctrl: frame %0d control byte %02h before any DAC_CTRL, want 00", i, dac_fr24[i][23:16]);
+                errors = errors + 1;
+            end
+
+        // ---- DAC_CTRL (v49, the analog v3r2 DAC8554) through SPI, cmd_dispatch and both clk48
+        //      crossings: (1) the stream control byte rides the next start; (2) a static frame
+        //      mid-stream takes one sample slot and the stream skips nothing; (3) a static frame
+        //      while the DAC is idle goes out alone; (4) control byte 0 restores the DAC8551 frame. ----
+        cmd_dac_ctrl(8'h01, 8'h12, 16'h0000);           // stream to channel B
+        dac_nfr = 0; dac_rec = 1;
+        cmd_start_dac(DAC_PB, 16'd200);
+        i = 0; while (dac_nfr < 2 && i < 4000) begin #100; i = i + 1; end
+        cmd_dac_ctrl(8'h02, 8'h16, 16'hBEEF);           // channel D, once, mid-stream
+        i = 0; while (dac_nfr < 8 && i < 8000) begin #100; i = i + 1; end
+        dac_rec = 0;
+        cmd_op0(8'h12); #2000;
+        ns = 0; nb = 0;                                 // stream frames, static frames
+        for (i = 0; i < 8 && i < dac_nfr; i = i + 1) begin
+            if (dac_fr24[i] === 24'h16BEEF) nb = nb + 1;
+            else begin
+                want = 16'hB000 + (ns % DAC_PB);
+                if (dac_fr24[i] !== {8'h12, want}) begin
+                    $display("FAIL dac-ctrl: frame %0d = %06h, want stream sample %0d = 12%04h", i, dac_fr24[i], ns, want);
+                    errors = errors + 1;
+                end
+                ns = ns + 1;
+            end
+        end
+        if (dac_nfr < 8 || nb != 1) begin
+            $display("FAIL dac-ctrl: %0d frames, %0d static ones (want >= 8 and 1)", dac_nfr, nb); errors = errors + 1; end
+        $display("  [dacctl] stream ctrl 12 + one static 16BEEF mid-stream: %06h %06h %06h %06h %06h %06h ...",
+                 dac_fr24[0], dac_fr24[1], dac_fr24[2], dac_fr24[3], dac_fr24[4], dac_fr24[5]);
+        dac_nfr = 0; dac_rec = 1;
+        cmd_dac_ctrl(8'h02, 8'h14, 16'h1234);           // channel C, DAC idle
+        #20000;
+        dac_rec = 0;
+        if (dac_nfr != 1 || dac_fr24[0] !== 24'h141234) begin
+            $display("FAIL dac-ctrl idle: %0d frame(s), first %06h (want 1, 141234)", dac_nfr, dac_fr24[0]); errors = errors + 1; end
+        cmd1(8'h03, r);
+        if (r[0] !== 1'b0) begin $display("FAIL dac-ctrl idle: STATUS DAC_RUN set by a static frame"); errors = errors + 1; end
+        cmd_dac_ctrl(8'h01, 8'h00, 16'h0000);           // back to the DAC8551 frame
+        $display("  [dacctl] idle static 141234 alone, DAC_RUN stays 0; control byte back to 00");
 
         // ---- MEASURE after a longer DAC run (v34): OP_START_MEASURE sets the DAC period (= count)
         //      and arms an ADC capture on the same cycle.  Its DAC start takes the same clk48

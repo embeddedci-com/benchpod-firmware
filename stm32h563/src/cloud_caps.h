@@ -47,6 +47,8 @@ typedef struct {
     bool          nrst_pin;
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;
+    /* No Wi-Fi to scan: no ESP32-C3 (digital v3r3) and no Wi-Fi bridge build. Drops wifi_scan. */
+    bool          no_wifi_scan;
     long          current_out_min_ua, current_out_max_ua;
     const char   *board;
     /* The interface the cloud link runs over: "eth", "wifi", "usb", "wifi-bridge" or "unknown"

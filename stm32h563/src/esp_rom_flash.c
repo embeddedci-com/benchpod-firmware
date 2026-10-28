@@ -19,6 +19,7 @@
 #include "watchdog.h"
 #include "blob_store.h"
 #include "w25q.h"
+#include "esp_wifi_ctrl.h"   /* esp_wifi_ctrl_module_present */
 
 #include "stm32h5xx_hal.h"
 #include "FreeRTOS.h"
@@ -229,7 +230,7 @@ static int slot_read_held(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 
 int esp_rom_flash_sync(uint32_t *chip_magic_out)
 {
-    if (esp_rom_flash_busy()) return -1;
+    if (esp_rom_flash_busy() || !esp_wifi_ctrl_module_present()) return -1;
     log_printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
     rom_enter();
     static esp_rom_io_t io;
@@ -268,6 +269,7 @@ bool esp_rom_flash_progress(uint32_t *done, uint32_t *total)
 int esp_rom_flash_start(esp_flash_done_fn done)
 {
     if (s_active) return ESP_FLASH_START_BUSY;
+    if (!esp_wifi_ctrl_module_present()) return ESP_FLASH_START_NO_MODULE;
     if (!blob_store_present(BLOB_ESP)) {
         log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): install blob esp\n");
         return ESP_FLASH_START_NO_IMAGE;
@@ -324,6 +326,7 @@ int esp_rom_flash_erase_nvs(void)
         log_printf("[espflash] a C3 flash is running: NVS not erased\n");
         return -1;           /* the C3 is the flash's: leave its straps alone */
     }
+    if (!esp_wifi_ctrl_module_present()) return -1;
     if (!blob_store_present(BLOB_ESP)) {
         log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): "
                    "cannot locate the C3's NVS partition\n");
