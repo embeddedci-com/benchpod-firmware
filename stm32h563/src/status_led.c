@@ -35,6 +35,14 @@ uint8_t status_led_color(const status_led_in_t *in, uint32_t now_ms) {
         return ((since_boot / STATUS_LED_BOOT_BLINK_MS) & 1u) ? STATUS_LED_OFF : STATUS_LED_GREEN;
 
     if (in->updating) return STATUS_LED_MAGENTA;
+    /* The EMI build's loop keeps the pod busy all the time: its own pattern says it runs. */
+    const bool emi_phase = ((now_ms / STATUS_LED_EMI_BLINK_MS) & 1u) != 0;
+    switch (in->emi) {
+    case STATUS_LED_EMI_WAITING: return STATUS_LED_YELLOW;
+    case STATUS_LED_EMI_RUNNING: return emi_phase ? STATUS_LED_OFF : STATUS_LED_YELLOW;
+    case STATUS_LED_EMI_ERRORS:  return emi_phase ? STATUS_LED_RED : STATUS_LED_YELLOW;
+    default: break;
+    }
     if (in->busy) return STATUS_LED_BLUE;
     if (s_cmd_armed) {
         if (within(now_ms, s_cmd_ms, STATUS_LED_CMD_FLASH_MS)) return STATUS_LED_CYAN;

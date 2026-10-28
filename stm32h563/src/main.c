@@ -270,6 +270,12 @@ void boot_deferred_hw_init(void)
 }
 
 /* --- clock tree: 25 MHz crystal (or HSI 64 MHz) -> PLL1 -> 250 MHz SYSCLK --- */
+/* BENCHPOD_SYSCLK_MHZ (FreeRTOSConfig.h) sets PLLN for a VCO of twice the core clock from either
+   PLL input (5 MHz from the crystal, 4 MHz from the HSI). */
+_Static_assert((BENCHPOD_SYSCLK_MHZ * 2) % 5 == 0 && (BENCHPOD_SYSCLK_MHZ * 2) % 4 == 0,
+               "BENCHPOD_SYSCLK_MHZ must give a whole PLLN from 5 and 4 MHz");
+_Static_assert(BENCHPOD_SYSCLK_MHZ > 200 && BENCHPOD_SYSCLK_MHZ <= 250,
+               "VOS0 and the flash latency below are set for 200-250 MHz");
 
 bool clock_on_hsi(void) { return s_clock_on_hsi; }
 
@@ -288,7 +294,7 @@ static void SystemClock_Config(void)
     osc.PLL.PLLState = RCC_PLL_ON;
     osc.PLL.PLLSource = RCC_PLL1_SOURCE_HSE;
     osc.PLL.PLLM = 5;                           /* 25/5 = 5 MHz PLL input */
-    osc.PLL.PLLN = 100;                         /* 5 * 100 = 500 MHz VCO */
+    osc.PLL.PLLN = BENCHPOD_SYSCLK_MHZ * 2 / 5; /* 5 * 100 = 500 MHz VCO (EMI_SYSCLK=240: 96, 480) */
     osc.PLL.PLLP = 2;                           /* 500/2 = 250 MHz */
     osc.PLL.PLLQ = 2;
     osc.PLL.PLLR = 2;
@@ -310,7 +316,7 @@ static void SystemClock_Config(void)
         hsi.PLL.PLLState = RCC_PLL_ON;
         hsi.PLL.PLLSource = RCC_PLL1_SOURCE_HSI;
         hsi.PLL.PLLM = 16;                           /* 64/16 = 4 MHz PLL input */
-        hsi.PLL.PLLN = 125;                          /* 4 * 125 = 500 MHz VCO */
+        hsi.PLL.PLLN = BENCHPOD_SYSCLK_MHZ * 2 / 4;  /* 4 * 125 = 500 MHz VCO */
         hsi.PLL.PLLP = 2;                            /* 250 MHz, as with the crystal */
         hsi.PLL.PLLQ = 2;
         hsi.PLL.PLLR = 2;

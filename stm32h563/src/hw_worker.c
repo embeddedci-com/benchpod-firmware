@@ -15,6 +15,9 @@
 #include "esp_wifi_ctrl.h"
 #include "net_reload.h"
 #include "status_led.h"
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 #include "stm32h5xx_hal.h"   /* HAL_GetTick for the OTA staging watchdog */
 
 #include "FreeRTOS.h"
@@ -329,6 +332,9 @@ static void worker_task(void *arg) {
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
         status_led_service();     /* the RGB status LED follows the pod's state         */
+#if defined(BENCHPOD_EMI_TEST)
+        emi_test_poll();          /* the EMC test build's activity loop (emi_test.h)    */
+#endif
         ota_watchdog(HAL_GetTick()); /* drop a staging session that stopped receiving   */
         vTaskDelay(pdMS_TO_TICKS(1));
     }

@@ -34,6 +34,9 @@
 #include "fault.h"       /* reset cause + last-crash summary for status */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "ice40_flash.h"
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
 #include "fw_sign.h"
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
@@ -239,6 +242,15 @@ void handle_status(int conn_id, const char *json) {
         if (have_cc) bp_emit(&e, "\"source\":\"%s\",\"source_ma\":%d},", cc.advertised, cc.advertised_ma);
         else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
     }
+#if defined(BENCHPOD_EMI_TEST)
+    /* The EMC test build (emi_test.h): the measurement script checks it runs. Not on the cloud
+       command channel, whose status is already near BP_CLOUD_REPLY_MAX. */
+    if (conn_id != CH_CLOUD_CONN) {
+        char emi[160];
+        emi_test_json(emi, sizeof(emi));
+        bp_emit(&e, "\"emi_test\":%s,", emi);
+    }
+#endif
     bp_emit(&e, "\"rx_dropped\":%lu,\"tx_dropped\":%lu,"
                 "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped(),

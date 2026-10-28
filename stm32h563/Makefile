@@ -7,7 +7,10 @@
 # as submodules under lib/.
 
 TARGET            := bench_pod_stm32
-BUILD_DIR         := build
+# EMI_TEST=1 (EMC test build, see "EMI test build" below) builds into its own directory, so its
+# image is never mistaken for the normal one in build/.
+EMI_TEST          ?= 0
+BUILD_DIR         := $(if $(filter 1,$(EMI_TEST)),build-emi,build)
 
 # Split DFU images (built by `all`; recipes further below). Defined up here so the
 # `all:` prerequisite list — read before those recipes — sees them.
@@ -299,6 +302,22 @@ C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c
 endif
 
+# EMI test build: EMI_TEST=1 adds src/emi_test.c, which runs the EMC lab's worst-case activity
+# from boot (target power, DAC, back-to-back captures) for spectrum-analyser measurements, and the
+# `emi` console command. Development only: never released, so refused together with RELEASE=1.
+ifeq ($(EMI_TEST),1)
+ifeq ($(RELEASE),1)
+$(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_EMI_TEST=1
+C_SOURCES += src/emi_test.c
+# EMI_SYSCLK=240: run the core at 240 MHz instead of 250, so the core clock's emissions move and
+# can be told apart from other sources at 250 MHz (the 25 MHz crystal x10, the PHY's 50 MHz x5).
+ifneq ($(EMI_SYSCLK),)
+DEFS      += -DBENCHPOD_SYSCLK_MHZ=$(EMI_SYSCLK)
+endif
+endif
+
 OPT := -Og -g3
 
 # -MMD -MP emits a per-object .d file of header deps (included below) so editing a
@@ -557,5 +576,6 @@ help:
 	@echo "  build/blobs/   : blob-{gw0,gw1,esp}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
+	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"
 	@echo "Vars:    CUBE=$(CUBE)  OPENOCD_INTERFACE=$(OPENOCD_INTERFACE)"
 	@echo "         DFU_UTIL=$(DFU_UTIL)  DFU_FLASH_ADDR=$(DFU_FLASH_ADDR)"

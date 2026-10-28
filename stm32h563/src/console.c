@@ -78,6 +78,9 @@ bool clock_on_hsi(void);   /* main.c */
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 #include "status_led.h"
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
@@ -192,6 +195,14 @@ static void cmd_help(console_out_t out, void *ctx)
         "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
 #endif
+#if defined(BENCHPOD_EMI_TEST)
+    out(ctx,
+        "EMI test build (runs the EMC activity loop from boot):\r\n"
+        "  emi [status] | emi start | emi stop   the loop's state, start it, stop it (outputs and power off)\r\n"
+        "  emi dac all|sine|dc|current|off       what the DAC plays: 1 kHz sine on 3.3 V, 3 V DC on 5 V, 12 mA,\r\n"
+        "                                        or all three (quad-DAC boards, their default)\r\n"
+        "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n");
+#endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
         "Wi-Fi bridge (development build only; wifi-set/-show/-clear/-scan use it when one is plugged in):\r\n"
@@ -277,11 +288,11 @@ static void cmd_selftest(console_out_t out, void *ctx)
           25 MHz HSE crystal itself is correct, so it doubles as a crystal check. */
     uint32_t sysclk  = HAL_RCC_GetSysClockFreq();
     bool     src_pll = __HAL_RCC_GET_SYSCLK_SOURCE() == RCC_SYSCLKSOURCE_STATUS_PLLCLK;
-    uint32_t want = 250000000u, tol = want / 100u;
+    uint32_t want = configCPU_CLOCK_HZ, tol = want / 100u;
     bool sys_ok = src_pll &&
                   (sysclk > want ? sysclk - want : want - sysclk) <= tol;
-    ST("sysclk", sys_ok, "%lu Hz (expect ~250M, src=%s)",
-       (unsigned long)sysclk, src_pll ? "PLL1" : "other");
+    ST("sysclk", sys_ok, "%lu Hz (expect ~%luM, src=%s)",
+       (unsigned long)sysclk, (unsigned long)(want / 1000000u), src_pll ? "PLL1" : "other");
 
     /* 4. SysTick timebase is advancing (not stuck). */
     uint32_t t0 = HAL_GetTick();
@@ -684,6 +695,33 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         int n = (argc >= 2) ? atoi(argv[1]) : 16;
         signal_engine_adc_spi_diag(n);
         op(out, ctx, "  (adc-spi printed on the device log)\r\n");
+#endif
+#if defined(BENCHPOD_EMI_TEST)
+    } else if (!strcmp(argv[0], "emi")) {
+        /* The EMC test build's activity loop (emi_test.h). */
+        const char *sub = argc >= 2 ? argv[1] : "status";
+        int mode = argc >= 3 ? emi_test_dac_from_name(argv[2]) : -1;
+        int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
+        if (!strcmp(sub, "start"))                     emi_test_start();
+        else if (!strcmp(sub, "stop"))                 emi_test_stop();
+        else if (!strcmp(sub, "dac") && mode >= 0) {
+            if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
+                op(out, ctx, "  emi dac: %s\r\n", board_has_analog()
+                    ? "all needs the quad DAC (analog v3r2 or the v4 analog module)"
+                    : "this board has no DAC (digital-only board)");
+                return;
+            }
+        }
+        else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
+            emi_test_set_uart(la);
+        else if (strcmp(sub, "status")) {
+            op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
+                         " | emi uart <1-14>|off\r\n");
+            return;
+        }
+        char line[200];
+        emi_test_describe(line, sizeof(line));
+        op(out, ctx, "  %s\r\n", line);
 #endif
     } else if (!strcmp(argv[0], "led")) {
         /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it

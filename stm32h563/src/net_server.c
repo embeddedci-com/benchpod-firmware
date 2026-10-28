@@ -32,6 +32,9 @@
 #include "conn_tx.h"
 #include "hw_worker.h"
 #include "bp_limits.h"
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"
+#endif
 #include "net_reload.h"
 
 #include "lwip/init.h"
@@ -214,6 +217,9 @@ int at_send_data(int conn_id, const uint8_t *buf, size_t len)
         command_handler_cloud_capture_append(buf, len);
         return 0;
     }
+#if defined(BENCHPOD_EMI_TEST)
+    if (conn_id == CH_EMI_CONN) { emi_test_reply(buf, len); return 0; }
+#endif
     /* Real TCP conns and cloud tunnels: enqueue into the conn's TX ring; the net
        task moves it into lwIP.  All or nothing (conn_tx_write): when the ring cannot
        take the whole buffer nothing is queued and this fails, so the peer never sees a
@@ -227,6 +233,9 @@ int at_send_data(int conn_id, const uint8_t *buf, size_t len)
 size_t at_send_avail(int conn_id)
 {
     if (conn_id == CH_CLOUD_CONN)   return 0xFFFFu;   /* captured to RAM, framed once */
+#if defined(BENCHPOD_EMI_TEST)
+    if (conn_id == CH_EMI_CONN)     return emi_test_avail();
+#endif
     /* Real TCP conns and cloud tunnels: pace against the ring free space (the net
        task, in turn, only drains a tunnel ring as fast as the TLS/WS send buffer
        allows — so bulk_pump can never overrun the wire).  This ring-based pacing
