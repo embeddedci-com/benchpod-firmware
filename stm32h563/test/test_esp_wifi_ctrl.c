@@ -224,7 +224,8 @@ int config_load(config_t *out) {
 }
 static int s_flash_submits;
 bool hw_worker_submit_esp_flash(void) { s_flash_submits++; return true; }
-bool blob_store_present(blob_id_t id) { (void)id; return false; }   /* no image: never auto-flash here */
+static bool s_have_image;                    /* the esp slot holds an image (auto-flash armed) */
+bool blob_store_present(blob_id_t id) { (void)id; return s_have_image; }   /* default: no image */
 static bool s_c3_flashing;                   /* a background C3 flash owns EN/BOOT */
 bool esp_rom_flash_busy(void) { return s_c3_flashing; }
 
@@ -594,6 +595,32 @@ static void test_scan_reload_fails_it(void) {
     S.mute_start = false;
 }
 
+/* Digital v3r3 has no ESP32-C3. With an SSID stored (from an older board) and a C3 image in the
+   W25Q, the control still never releases the C3's reset, never tries to flash it, keeps Wi-Fi
+   unconfigured (so USB networking stays on), and a scan fails at once with "no Wi-Fi module". */
+static void test_no_c3_module(void) {
+    int submits = s_flash_submits;
+    s_have_image = true;
+    esp_wifi_ctrl_set_module_present(false);
+    fresh();
+    CHECK(!esp_wifi_ctrl_configured());
+    CHECK(strcmp(esp_wifi_ctrl_state_str(), "absent") == 0);
+    C.tx_ok = true; C.answer = true;
+    run_ms(60000);                             /* past the 20 s boot wait and a backoff */
+    CHECK(C.starts == 0 && !C.running);
+    CHECK(s_flash_submits == submits);
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    run_ms(20);
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(esp_wifi_ctrl_scan_result(id, &l, &err) == ESP_WIFI_SCAN_FAILED);
+    CHECK(err && strcmp(err, ESP_WIFI_NO_MODULE) == 0);
+    CHECK(C.starts == 0);
+    esp_wifi_ctrl_set_module_present(true);
+    s_have_image = false;
+    fresh();
+    CHECK(esp_wifi_ctrl_configured());         /* the same settings on a board with the C3 */
+}
+
 int main(void) {
     esp_wifi_ctrl_init();
     test_healthy_link_stays_up();
@@ -614,6 +641,7 @@ int main(void) {
     test_scan_joined_timeout_keeps_link();
     test_scan_waits_for_connect();
     test_scan_reload_fails_it();
+    test_no_c3_module();
     CHECK(s_flash_submits == 0);
     if (failures) { printf("FAIL test_esp_wifi_ctrl: %d failure(s)\n", failures); return 1; }
     printf("PASS test_esp_wifi_ctrl\n");

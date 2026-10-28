@@ -79,6 +79,8 @@ const char *cloud_client_state_str(void) { return "disabled"; }
 void cloud_client_last_error(char *out, size_t n) { snprintf(out, n, "a \"quoted\" error"); }
 bool esp_wifi_ctrl_connected(void) { return false; }
 const char *esp_wifi_ctrl_state_str(void) { return "idle"; }
+static bool g_c3 = true;   /* the board has the ESP32-C3 (digital v3r3 does not) */
+bool esp_wifi_ctrl_module_present(void) { return g_c3; }
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *a, uint32_t *b) { *a = 0; *b = 0; }
 /* wifi_scan: the Wi-Fi control's request/result faked. */
 static uint32_t g_scan_req;
@@ -317,6 +319,25 @@ static void test_wifi_scan(void) {
     CHECK(strstr(g_console, "wifi-scan error Wi-Fi is still connecting") != NULL, "%s", g_console);
 }
 
+/* Digital v3r3 has no ESP32-C3: wifi_set says so and saves nothing, wifi_clear still clears the
+   pod's copy but never reaches for a C3, and the console erase reports it. */
+static void test_no_c3(void) {
+    config_t cfg = {0};
+    int wipes = g_wipes;
+    config_clear();
+    g_c3 = false;
+    clear_tx();
+    handle_wifi_set(0, "{\"cmd\":\"wifi_set\",\"ssid\":\"lab\",\"password\":\"pw\"}");
+    CHECK(strcmp(g_reply, "err:" ESP_WIFI_NO_MODULE) == 0, "%s", g_reply);
+    CHECK(config_load(&cfg) != 0 || cfg.ssid[0] == '\0', "saved without a C3");
+    handle_wifi_clear(0, "{}");
+    CHECK(strcmp(g_reply, "ok:\"cleared\"") == 0, "%s", g_reply);
+    wifi_clear_poll();
+    CHECK(g_wipes == wipes, "tried to erase a C3 that is not there");
+    CHECK(wifi_clear_c3_now() != NULL && g_wipes == wipes, "console erase without a C3");
+    g_c3 = true;
+}
+
 int main(void) {
     mock_flash_reset();
     test_speedtest_down();
@@ -324,6 +345,7 @@ int main(void) {
     test_cloud_set();
     test_wifi_set();
     test_wifi_clear_c3();
+    test_no_c3();
     test_eth();
     test_wifi_scan();
     if (fails) { printf("test_ch_net: %d FAILED\n", fails); return 1; }

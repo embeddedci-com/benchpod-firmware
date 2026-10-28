@@ -58,6 +58,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "sig_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_sig_policy) },
     { { "lan_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_policy) },
     { { "usb_network", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_usb_network) },
+    { { "module", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_module) },
     { { "cloud_ca", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_ca) },
     { { "cloud_proxy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_proxy) },
     { { "lan_tls", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_tls) },
@@ -82,6 +83,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "la_voltage", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_la_voltage) },
     { { "nrst", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_nrst) },
     { { "target_power", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_target_power) },
+    { { "module_power", CMD_TIER_T1 }, 0, CMD_FN(handle_module_power) },
     { { "power_profile", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_power_profile) },
     { { "dap_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_dap_start) },
     { { "uart_proxy_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_uart_proxy_start) },
@@ -149,6 +151,8 @@ static int mixed_write(const char *cmd, const char *json) {
     if (strcmp(cmd, "lan_tls") == 0)
         return bp_json_get(json, "https_only", v, sizeof(v)) ||
                (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
+    if (strcmp(cmd, "module") == 0)   /* an EEPROM write (ID or calibration); a read is T0 */
+        return bp_json_get(json, "eeprom", v, sizeof(v)) && strcmp(v, "read") != 0;
     if (strcmp(cmd, "eth") == 0) {
         bp_json_get(json, "action", v, sizeof(v));
         return strcmp(v, "stats") != 0 && strcmp(v, "refclk") != 0;

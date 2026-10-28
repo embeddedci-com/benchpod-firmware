@@ -47,6 +47,7 @@ typedef void (*esp_flash_done_fn)(int result);
 #define ESP_FLASH_START_BUSY     -1   /* a flash is already running */
 #define ESP_FLASH_START_NO_IMAGE -2   /* slot esp is empty          */
 #define ESP_FLASH_START_BAD_SLOT -3   /* slot esp fails its SHA-256 */
+#define ESP_FLASH_START_NO_MODULE -4  /* no ESP32-C3 on this board (digital v3r3) */
 int esp_rom_flash_start(esp_flash_done_fn done);
 
 /* Advance a background flash; cheap when none runs.  hw worker loop only. */

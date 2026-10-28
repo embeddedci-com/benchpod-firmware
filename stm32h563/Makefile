@@ -70,6 +70,9 @@ C_SOURCES := \
   src/mcu_adc.c \
   src/board_rev.c \
   src/board_variant.c \
+  src/module_link.c \
+  src/module_eeprom.c \
+  src/command_handler_module.c \
   src/usb_cc.c \
   src/nrst_ctrl.c \
   src/psram_alloc.c \

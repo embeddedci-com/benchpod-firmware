@@ -9,9 +9,9 @@ static bool s_present;
 void dac_quad_set_present(bool present) { s_present = present; }
 bool dac_quad_present(void)              { return s_present; }
 
-bool dac_quad_for_board(int board_rev, bool has_analog)
+bool dac_quad_for_board(int board_rev, bool has_analog, bool module)
 {
-    return has_analog && board_rev == BOARD_REV_V3R2;
+    return has_analog && (module || board_rev == BOARD_REV_V3R2);
 }
 
 uint8_t dac_quad_ctrl(int ch)

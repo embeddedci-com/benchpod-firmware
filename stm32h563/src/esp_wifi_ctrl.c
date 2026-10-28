@@ -251,7 +251,13 @@ static int            s_scan_read;        /* GetApRecord requests sent */
 static volatile bool  s_scan_rec_ok;      /* the last GetApRecord answer held a record */
 static wifi_scan_ap_t s_scan_rec;
 
+static bool s_module = true;   /* the C3 is fitted (esp_wifi_ctrl_set_module_present) */
+
+void esp_wifi_ctrl_set_module_present(bool present) { s_module = present; }
+bool esp_wifi_ctrl_module_present(void) { return s_module; }
+
 const char *esp_wifi_ctrl_state_str(void) {
+    if (!s_module) return "absent";
     if (s_scan_only) return "scanning";     /* the C3 runs for a scan, not for a link */
     switch (s_state) {
         case WC_DOWN:        return s_configured ? "starting" : "disabled";
@@ -499,6 +505,11 @@ static void scan_send_record(void) {
 static void scan_intake(void) {
     uint32_t want = s_scan_req_id;
     if (s_scan_run_id || want == s_scan_done_id) return;
+    if (!s_module) {
+        s_scan_run_id = want;
+        scan_publish(ESP_WIFI_NO_MODULE);
+        return;
+    }
     if (s_paused || esp_rom_flash_busy() || s_state == WC_FLASHING) {
         s_scan_run_id = want;
         scan_publish("the ESP32-C3 is being flashed or erased; try again when that is done");
@@ -614,6 +625,11 @@ void esp_wifi_ctrl_init(void) {
     s_configured = (config_load(&s_cfg) == 0 && s_cfg.ssid[0] != '\0');
     esp_hosted_spi_set_serial_cb(on_serial_frame);
     s_state = WC_DOWN;
+    if (!s_module) {   /* digital v3r3: stored credentials (from an older board) stay unused */
+        s_configured = false;
+        log_printf("[wifi] no ESP32-C3 on this board: built-in Wi-Fi off\n");
+        return;
+    }
     if (s_configured) log_printf("[wifi] configured for SSID \"%s\"\n", s_cfg.ssid);
     else              log_printf("[wifi] no SSID configured — Wi-Fi disabled\n");
 }
@@ -634,6 +650,7 @@ void esp_wifi_ctrl_reload(void) {
 
 void esp_wifi_ctrl_poll(void) {
     scan_intake();
+    if (!s_module) return;   /* nothing to start, nothing to flash */
     /* A backoff that expires mid-flash would release the C3's reset and knock it out of its
        ROM loader, so leave the straps alone while a console command holds them. */
     if (s_paused) return;

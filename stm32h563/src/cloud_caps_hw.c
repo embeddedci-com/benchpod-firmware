@@ -7,6 +7,7 @@
 
 #include "board_info.h"
 #include "board_variant.h"
+#include "esp_wifi_ctrl.h"   /* esp_wifi_ctrl_module_present */
 #include "boot_guard.h"
 #include "cal_data.h"        /* ADC_CAL_EXT: the front-SMA cal shipped in capabilities */
 #include "adc_cal.h"         /* adc_cal_fit: this pod's front-end offset */
@@ -40,6 +41,9 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->sig_policy = fw_sign_policy_name(fw_sign_policy());
     c->lan_policy = pod_policy_lan_name(pod_policy_lan());
     c->analog = analog;
+#if !defined(BENCHPOD_WIFI_BRIDGE)
+    c->no_wifi_scan = !esp_wifi_ctrl_module_present();   /* digital v3r3: no ESP32-C3 */
+#endif
     c->adc_bits = ADC_BITS;
     c->adc_fullscale_mv = ADC_FULLSCALE_MV;
     c->adc_channels = ADC_CHANNELS;

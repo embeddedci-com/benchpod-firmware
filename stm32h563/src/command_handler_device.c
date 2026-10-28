@@ -41,6 +41,7 @@
 #include "fw_sign.h"
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "lease_gate.h"
+#include "module_link.h"   /* digital v3r3: the module object */
 #include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
 #include "la_pins.h"
 #include "psram.h"       /* psram_selftest_str */
@@ -213,8 +214,9 @@ void handle_status(int conn_id, const char *json) {
        1792: usb{} (~150 B; a v3 status measured 1535 B with it).
        2048: the ADC fit, adc_cal_a_uv / adc_cal_b_nv (~60 B; a v3 status measured 1725 B
        before it), LAN and tunnels only: the cloud command channel caps a reply at
-       BP_CLOUD_REPLY_MAX. The net task has ~12 KB of stack left, the hw task ~7 KB. */
-    char resp[2048];
+       BP_CLOUD_REPLY_MAX. The net task has ~12 KB of stack left, the hw task ~7 KB.
+       2304: module{} on digital v3r3 (~90 B), LAN and tunnels only. */
+    char resp[2304];
     cloud_caps_t caps;
     cloud_caps_collect(&caps);
     bp_emit_t e;
@@ -319,6 +321,13 @@ void handle_status(int conn_id, const char *json) {
     }
     /* Analog front end (board_variant.h): false on the digital-only board. */
     bp_emit(&e, ",\"analog\":%s", caps.analog ? "true" : "false");
+    /* Digital v3r3 only (module_link.h): the analog module and the two rails it switches, short
+       form (~90 B; `module` has the EEPROM ID). Not on the cloud command channel, for the same
+       reason as the ADC fit above. */
+    if (module_link_board() && conn_id != CH_CLOUD_CONN) {
+        bp_emit_raw(&e, ",\"module\":");
+        module_emit_state(&e, false);
+    }
     /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
     bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":", caps.safe_mode ? "true" : "false");
     bp_emit_jstr(&e, caps.safe_reason);

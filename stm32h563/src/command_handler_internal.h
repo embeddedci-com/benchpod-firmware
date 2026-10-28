@@ -7,6 +7,7 @@
 
 #include "command_handler.h"   /* the pseudo-connection ids */
 #include "la_pins.h"
+#include "bp_json.h"   /* bp_emit_t */
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -138,6 +139,13 @@ void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
 void handle_identity_wipe(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
+
+/* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */
+void handle_module(int conn_id, const char *json);
+void handle_module_power(int conn_id, const char *json);
+/* The module object: {"present":..,"analog":..,"power":..,"bridge_power":..,"eeprom":..}, and
+   with `id` the EEPROM's ID fields (the `module` reply; status takes the short form). */
+void module_emit_state(bp_emit_t *e, bool id);
 void handle_nrst(int conn_id, const char *json);
 void handle_fpga_image(int conn_id, const char *json);
 void handle_psram_recover(int conn_id, const char *json);

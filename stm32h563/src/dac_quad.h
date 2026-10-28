@@ -40,10 +40,11 @@
 void dac_quad_set_present(bool present);
 bool dac_quad_present(void);
 
-/* The one gate: the DAC8554 is assumed only on an analog board whose strap reads v3r2.  v2, v3,
-   an unknown or unrecognised strap (which runs as v3) and the digital boards keep the DAC8551
+/* The one gate: the DAC8554 is assumed only on an analog board whose strap reads v3r2, or on the
+   analog module of digital v3r3 (`module`, board_variant.h), which has the same DAC.  v2, v3, an
+   unknown or unrecognised strap (which runs as v3) and the digital boards keep the DAC8551
    behaviour, byte for byte: no DAC_CTRL frame is ever sent to them. */
-bool dac_quad_for_board(int board_rev, bool has_analog);
+bool dac_quad_for_board(int board_rev, bool has_analog, bool module);
 
 #define DAC_QUAD_A     0
 #define DAC_QUAD_B     1
