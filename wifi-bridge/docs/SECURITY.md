@@ -146,4 +146,4 @@ button reset leaves nothing bootable. Do not enable anti-rollback without redesi
   the key is agreed with X25519 and the passphrase is encrypted. Closing the active case needs an
   out-of-band check (e.g. a short code on the bridge label compared in the pod's UI): not planned.
 - None of the above has been run on a real chip: eFuse burning is irreversible, so try it on a
-  sacrificial rev A board first.
+  sacrificial board first.

@@ -2,13 +2,13 @@ menu "BenchPod Wi-Fi bridge"
 
     config BRIDGE_HW_REV
         string "Hardware revision reported in HELLO"
-        default "A"
+        default "2"
 
     choice BRIDGE_RMII_CLK
         prompt "RMII 50 MHz reference clock"
         default BRIDGE_RMII_CLK_EXT_OSC
         help
-            Rev A ships with the 50 MHz oscillator X1 on GPIO0 (OE on GPIO32). The build option
+            Rev 1 and rev 2 ship with the 50 MHz oscillator X1 on GPIO0 (OE on GPIO32). The build option
             without X1 and with R15 fitted has the ESP32 generate the clock on GPIO17.
 
         config BRIDGE_RMII_CLK_EXT_OSC
