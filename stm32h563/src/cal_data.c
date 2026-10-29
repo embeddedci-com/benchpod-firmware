@@ -65,6 +65,10 @@ static const cal_set_t CAL_V3R2 = {
 
 static const cal_set_t *s_active = &CAL_V2;
 
+float cal_adc_low_ratio(void) {
+    return s_active->adc_low_ratio > 0.0f ? s_active->adc_low_ratio : ADC_LOW_RANGE_RATIO_NOMINAL;
+}
+
 /* The DAC lines in use (cal_dac_active): the one s_dac points to is read, the other is built. */
 static cal_lin_t s_dac_tbl[2][3];
 static const cal_lin_t *volatile s_dac = CAL_V2.dac;

@@ -244,6 +244,14 @@ const char *dac_limits_check_command(const char *cmd, const char *json) {
         return num(json, "ua", &ua) ? dac_limits_check_current_out() : NULL;   /* bare = read the range */
     }
     if (!strcmp(cmd, "dac_control_loop")) return check_loop(json);
+    if (!strcmp(cmd, "adc_range") && bp_json_get(json, "test", path, sizeof(path)) && strcmp(path, "false") != 0) {
+        /* The range self-test drives the 5 V output (1 V and 3.5 V) into the cal1 loopback. */
+        snprintf(s_msg, sizeof(s_msg),
+                 "refused: %s, and the ADC range self-test drives the 5 V output. "
+                 "Clear them with dac_limits enabled:false, run the test, then set them again",
+                 describe());
+        return s_msg;
+    }
     if (!strcmp(cmd, "calibrate") &&
         (bp_json_get(json, "dac", path, sizeof(path)) || bp_json_get(json, "adc", path, sizeof(path)))) {
         /* The DMM calibration (adc_cal.h): the ADC gain step drives the DAC itself, and a new DAC

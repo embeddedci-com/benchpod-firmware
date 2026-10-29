@@ -71,6 +71,13 @@ const char *module_ee_type_str(uint8_t type)
     return type == MOD_TYPE_ANALOG ? "analog" : "unknown";
 }
 
+bool module_ee_has_low_range(int rc, const module_id_t *id)
+{
+    if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
+    return id->rev_major > MOD_LOW_RANGE_REV_MAJOR ||
+           (id->rev_major == MOD_LOW_RANGE_REV_MAJOR && id->rev_minor >= MOD_LOW_RANGE_REV_MINOR);
+}
+
 size_t module_ee_chunk(uint16_t addr, size_t len)
 {
     size_t room = MOD_EE_PAGE - (addr % MOD_EE_PAGE);

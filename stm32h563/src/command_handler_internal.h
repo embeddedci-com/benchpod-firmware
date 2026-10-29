@@ -160,6 +160,7 @@ void handle_dac_out(int conn_id, const char *json);
 void handle_current_out(int conn_id, const char *json);
 void handle_adc_read(int conn_id, const char *json);
 void handle_calibrate(int conn_id, const char *json);
+void handle_adc_range(int conn_id, const char *json);
 
 /* Captures and the paced bulk read-back (command_handler_capture.c). */
 void handle_capture(int conn_id, const char *json);

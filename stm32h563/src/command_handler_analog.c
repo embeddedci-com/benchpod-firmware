@@ -86,10 +86,35 @@ void handle_cal_switch(int conn_id, const char *json) {
     if (calsw_read(&reg) != 0) { send_error(conn_id, "cal_switch read failed"); return; }
     char payload[112];
     snprintf(payload, sizeof(payload),
-        "{\"reg\":%u,\"cal1\":%u,\"cal2\":%u,\"current_in\":%u,\"cal_path\":%u}",
+        "{\"reg\":%u,\"cal1\":%u,\"cal2\":%u,\"current_in\":%u,\"cal_path\":%u,\"low_range\":%u}",
         reg, (reg & 0x01u) ? 1u : 0u, (reg & 0x02u) ? 1u : 0u,
-        (reg & 0x04u) ? 1u : 0u, (reg & 0x08u) ? 1u : 0u);
+        (reg & 0x04u) ? 1u : 0u, (reg & 0x08u) ? 1u : 0u, (reg & U58_LOW_RANGE_BIT) ? 1u : 0u);
     send_ok_str(conn_id, payload);
+}
+
+/* The optional "range" of analog_path / adc_read: normal|low (i2c_bus.h adc_range_t).  *want is
+   false without one (the range stays as it is).  false = refused, the error is sent. */
+static bool range_arg(int conn_id, const char *json, analog_path_t p, adc_range_t *r, bool *want) {
+    char v[12] = {0};
+    *want = json_get_value(json, "range", v, sizeof(v));
+    if (!*want) return true;
+    if (adc_range_from_name(v, r) != 0) { send_error(conn_id, "range must be normal or low"); return false; }
+    if (*r != ADC_RANGE_LOW) return true;
+    if (!adc_range_supported()) { send_error(conn_id, ADC_RANGE_UNSUPPORTED); return false; }
+    if (!analog_path_keeps_low_range(p)) {
+        send_error(conn_id, "range: the low range is for ext, cal1 and current_in (cal2 and off use normal)");
+        return false;
+    }
+    return true;
+}
+
+/* Switch the range once the path is set (adc_range_set waits for K5).  false = the error is sent. */
+static bool range_apply(int conn_id, adc_range_t r) {
+    int rc = adc_range_set(r);
+    if (rc == 0) return true;
+    send_error(conn_id, rc == -1 ? ADC_RANGE_UNSUPPORTED
+                      : rc == -2 ? "range: cal2 has no low range" : "range: relay switch failed");
+    return false;
 }
 
 /* analog_path — apply a named analog path (the SINGLE SOURCE OF TRUTH lives in
@@ -101,11 +126,15 @@ void handle_analog_path(int conn_id, const char *json) {
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
     analog_path_t p;
     if (analog_path_from_name(name, &p) != 0) { send_error(conn_id, "unknown path"); return; }
+    adc_range_t r = ADC_RANGE_NORMAL;
+    bool want = false;
+    if (!range_arg(conn_id, json, p, &r, &want)) return;
     if (analog_path_set(p) != 0) { send_error(conn_id, "analog_path failed"); return; }
+    if (want && !range_apply(conn_id, r)) return;
     uint8_t u55 = 0, u58 = 0; dacmux_read(&u55); calsw_read(&u58);
-    char payload[80];
-    snprintf(payload, sizeof(payload), "{\"path\":\"%s\",\"u55\":%u,\"u58\":%u}",
-             analog_path_name(p), u55, u58);
+    char payload[96];
+    snprintf(payload, sizeof(payload), "{\"path\":\"%s\",\"u55\":%u,\"u58\":%u,\"range\":\"%s\"}",
+             analog_path_name(p), u55, u58, adc_range_name(adc_range_get()));
     send_ok_str(conn_id, payload);
 }
 
@@ -205,8 +234,12 @@ void handle_adc_read(int conn_id, const char *json) {
             send_error(conn_id, "source must be ext|cal1|cal2|current_in"); return;
         }
     }
+    adc_range_t want_r = ADC_RANGE_NORMAL;
+    bool want = false;
+    if (!range_arg(conn_id, json, p, &want_r, &want)) return;
     if (!heavy_begin(conn_id)) return;
     if (analog_path_set(p) != 0) { heavy_release(conn_id); send_error(conn_id, "route failed"); return; }
+    if (want && !range_apply(conn_id, want_r)) { heavy_release(conn_id); return; }
     sleep_ms(20);    /* let the G6K relays (~4ms) + front-end RC settle (yields to FreeRTOS) */
     uint16_t s16[16] = {0};
     int rc = adc_capture_psram(s16, 16, 0.0f);
@@ -216,9 +249,14 @@ void handle_adc_read(int conn_id, const char *json) {
        shared front end and adc_scale_burst always applies it (adc_scale.h). */
     /* This pod's fit for the source: compiled, its offset and gain (adc_cal.h). current_in has no
        fit of its own and is scaled like cal1. */
-    cal_lin_t c = adc_cal_source_fit(p == ANALOG_PATH_CAL2 ? ADC_CAL_SRC_CAL2
-                                   : p == ANALOG_PATH_ADC_EXT ? ADC_CAL_SRC_EXT : ADC_CAL_SRC_CAL1);
+    adc_range_t range = adc_range_get();
+    cal_lin_t c = adc_cal_range_fit(p == ANALOG_PATH_CAL2 ? ADC_CAL_SRC_CAL2
+                                  : p == ANALOG_PATH_ADC_EXT ? ADC_CAL_SRC_EXT : ADC_CAL_SRC_CAL1,
+                                    range == ADC_RANGE_LOW ? 1 : 0);
     adc_reading_t rd = adc_scale_burst(s16, 16, c.a, c.b);
+    /* Samples on the ADC's rails: the input is past the range's full scale (adc_scale.h), and the
+       reading is only a bound.  A clipped burst is usually also a wide one, refused below. */
+    bool over = adc_count_clipped(s16, 16) > 0;
     if (!rd.valid) {
         /* Plausible-looking garbage is worse than an error: a sweep would record it. */
         char msg[176];   /* 112 cut the advice off the end */
@@ -229,21 +267,20 @@ void handle_adc_read(int conn_id, const char *json) {
         send_error(conn_id, msg);
         return;
     }
-    char payload[112];
-    if (p == ANALOG_PATH_CURRENT_IN) {
+    /* The range the reading was taken in, its full scale and whether it clipped. */
+    char payload[200];
+    int n = snprintf(payload, sizeof(payload),
+                     "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"range\":\"%s\","
+                     "\"fullscale_mv\":%ld,\"overrange\":%s",
+                     analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
+                     adc_count_u16(rd.count), (unsigned)rd.span, adc_range_name(range),
+                     adc_cal_fullscale_mv(c), over ? "true" : "false");
+    if (p == ANALOG_PATH_CURRENT_IN && n > 0 && n < (int)sizeof(payload))
         /* Say which per-pod offset was taken out of `mv` (every source gets it), and give the
            loop current the voltage stands for, so no client needs to know the sense resistor. */
-        snprintf(payload, sizeof(payload),
-                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"offset_mv\":%ld,\"ua\":%ld}",
-                 analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
-                 adc_count_u16(rd.count), (unsigned)rd.span, (long)adc_cal_current_in_offset_mv(),
-                 current_in_ua(rd.volts));
-    } else {
-        snprintf(payload, sizeof(payload),
-                 "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u}",
-                 analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
-                 adc_count_u16(rd.count), (unsigned)rd.span);
-    }
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"offset_mv\":%ld,\"ua\":%ld",
+                      (long)adc_cal_current_in_offset_mv(), current_in_ua(rd.volts));
+    if (n > 0 && n < (int)sizeof(payload)) snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
     send_ok_str(conn_id, payload);
 }
 
@@ -258,13 +295,16 @@ static void dac_line_vs_compiled(int path, cal_lin_t pod, long *offset_uv, long 
 }
 
 /* The per-pod calibration as a reply. a_uv / b_nv are the fit this pod scales `current_in` with
-   (volts = a + b*count), in the units of the capabilities frame's adc_cal_a_uv / adc_cal_b_nv, so a
+   in the range in use (volts = a + b*count; `range` says which on a board with the low range), in the units of the capabilities frame's adc_cal_a_uv / adc_cal_b_nv, so a
    client can scale raw `current_in` counts the way adc_read does. `dac` and `adc_gain_ppm` are the
    DMM parts (null = the compiled fit); a DAC line is volts = a + b*code16, a in uV, b in pV per
    16-bit code. `rd` (an offset run) and `gm` (a gain run) add what was measured. */
 static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_gain_meas_t *gm) {
     static const char *const path_name[ADC_CAL_DAC_PATHS] = { "3v3", "5v", "12v" };
-    cal_lin_t fit = adc_cal_current_in_fit();
+    /* In the range in use (analog module v3r4: adc_range), so a client scales a current_in
+       capture with the fit it was taken in. */
+    adc_range_t range = adc_range_get();
+    cal_lin_t fit = adc_cal_range_fit(ADC_CAL_SRC_CAL1, range == ADC_RANGE_LOW ? 1 : 0);
     bool dmm = false;
     /* The whole frame is built here and sent as is: with the DMM parts it is up to about 650 B,
        past send_ok_str's 256 B. */
@@ -300,7 +340,19 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, "%s\"%s\":%ld", sep, adc_cal_src_name(i),
                       lroundf((adc_cal_gain(i) - 1.0f) * 1e6f));
     }
-    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "},\"dmm\":%s", dmm ? "true" : "false");
+    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
+    /* The low range's gain (analog module v3r4), on pods that have it. */
+    if (adc_range_supported() && n < (int)sizeof(payload)) {
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"range\":\"%s\"", adc_range_name(range));
+        if (adc_cal_low_gain_is_set()) {
+            dmm = true;
+            n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_low_gain_ppm\":%ld",
+                          lroundf((adc_cal_low_gain() - 1.0f) * 1e6f));
+        } else {
+            n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_low_gain_ppm\":null");
+        }
+    }
+    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"dmm\":%s", dmm ? "true" : "false");
     if (adc_cal_current_in_is_set() && n < (int)sizeof(payload))   /* the raw zero the offset is derived from */
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"zero_count_mc\":%ld", (long)adc_cal_zero_count_mc());
     if (rd && n < (int)sizeof(payload))
@@ -372,12 +424,21 @@ void handle_calibrate(int conn_id, const char *json) {
     }
     if (json_get_value(json, "adc", v, sizeof(v))) {
         int src = adc_cal_src_index(v);
+        /* "range":"low": the low range's gain, through cal1 (adc_cal.h). */
+        char rv[12] = {0};
+        bool low = json_get_value(json, "range", rv, sizeof(rv)) && strcmp(rv, "normal") != 0;
+        if (low && strcmp(rv, "low") != 0) { send_error(conn_id, "calibrate: range must be normal or low"); return; }
+        if (low && !adc_range_supported()) { send_error(conn_id, ADC_RANGE_UNSUPPORTED); return; }
+        if (low && src != ADC_CAL_SRC_CAL1) {
+            send_error(conn_id, "calibrate: the low range is calibrated through cal1 (adc cal1), and serves every source");
+            return;
+        }
         const char *why = adc_cal_gain_ready(src);
         if (why) { send_error(conn_id, why); return; }
         if (!heavy_begin(conn_id)) return;
         adc_cal_gain_meas_t m = {0};
         uint32_t span = 0;
-        int rc = adc_cal_measure_gain(src, &m, &span);
+        int rc = adc_cal_measure_gain(src, low, &m, &span);
         heavy_release(conn_id);
         if (rc == -3) {
             char msg[160];
@@ -387,7 +448,7 @@ void handle_calibrate(int conn_id, const char *json) {
             return;
         }
         if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
-        why = adc_cal_gain_store(src, &m);
+        why = low ? adc_cal_low_gain_store(&m) : adc_cal_gain_store(src, &m);
         if (why) { send_error(conn_id, why); return; }
         cloud_client_request_caps_resend();   /* the ext fit in the capabilities may have changed */
         calibrate_reply(conn_id, NULL, &m);
@@ -404,4 +465,70 @@ void handle_calibrate(int conn_id, const char *json) {
     if (why) { send_error(conn_id, why); return; }
     cloud_client_request_caps_resend();   /* the ext fit in the capabilities changed */
     calibrate_reply(conn_id, &rd, NULL);
+}
+
+/* adc_range — the ADC input range (analog module v3r4 and later, relay K5; i2c_bus.h).
+     {"cmd":"adc_range"}                  -> {"range":"normal","supported":true,"fullscale_mv":32850,
+                                              "normal_fullscale_mv":32850,"low_fullscale_mv":5461}
+     {"cmd":"adc_range","range":"low"}    -> switch, wait for K5 to settle (10 ms), the same reply
+     {"cmd":"adc_range","test":true}      -> the self-test through the cal1 loopback (adc_cal.h)
+   The range applies to ext, cal1 and current_in (it is one divider in front of all of them); cal2
+   and the `off` path put it back to normal, as does a restart.  The low range has a 1.82 MOhm
+   input: 1x leads, not 10x probes.  The full scales come from this pod's ext fits.  On a board
+   without K5 the range is always normal and asking for low is refused. */
+void handle_adc_range(int conn_id, const char *json) {
+    char v[12] = {0};
+    if (json_get_value(json, "test", v, sizeof(v)) && strcmp(v, "false") != 0) {
+        if (!adc_range_supported()) { send_error(conn_id, ADC_RANGE_UNSUPPORTED); return; }
+        if (!heavy_begin(conn_id)) return;
+        adc_range_test_pt_t pts[ADC_RANGE_TEST_POINTS];
+        uint32_t span = 0;
+        int rc = adc_range_selftest(pts, &span);
+        heavy_release(conn_id);
+        if (rc == -3) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "adc_range: cal1 not settled (%lu counts pk-pk). Is something connected to the 5 V output?",
+                     (unsigned long)span);
+            send_error(conn_id, msg);
+            return;
+        }
+        if (rc != 0) { send_error(conn_id, rc == -1 ? "route failed" : "adc read failed"); return; }
+        bool pass = true;
+        char payload[256];
+        int n = snprintf(payload, sizeof(payload), "{\"points\":[");
+        for (int i = 0; i < ADC_RANGE_TEST_POINTS && n < (int)sizeof(payload); i++) {
+            pass = pass && pts[i].ok;
+            n += snprintf(payload + n, sizeof(payload) - (size_t)n,
+                          "%s{\"set_mv\":%ld,\"normal_mv\":%ld,\"low_mv\":%ld,\"ok\":%s}", i ? "," : "",
+                          lroundf(pts[i].set_v * 1000.0f), lroundf(pts[i].normal_v * 1000.0f),
+                          lroundf(pts[i].low_v * 1000.0f), pts[i].ok ? "true" : "false");
+        }
+        if (n < (int)sizeof(payload))
+            snprintf(payload + n, sizeof(payload) - (size_t)n, "],\"pass\":%s,\"range\":\"%s\"}",
+                     pass ? "true" : "false", adc_range_name(adc_range_get()));
+        send_ok_str(conn_id, payload);
+        return;
+    }
+    if (json_get_value(json, "range", v, sizeof(v))) {
+        adc_range_t r;
+        if (adc_range_from_name(v, &r) != 0) { send_error(conn_id, "range must be normal or low"); return; }
+        if (r == ADC_RANGE_LOW && !adc_range_supported()) { send_error(conn_id, ADC_RANGE_UNSUPPORTED); return; }
+        if (!range_apply(conn_id, r)) return;
+    }
+    adc_range_t r = adc_range_get();
+    cal_lin_t normal = adc_cal_range_fit(ADC_CAL_SRC_EXT, 0), low = adc_cal_range_fit(ADC_CAL_SRC_EXT, 1);
+    cal_lin_t cur = r == ADC_RANGE_LOW ? low : normal;
+    /* adc_cal_a_uv / adc_cal_b_nv: the ext fit captures are scaled with now, as in the
+       capabilities frame, so a client rescales without waiting for the re-sent frame. */
+    char payload[224];
+    int n = snprintf(payload, sizeof(payload),
+                     "{\"range\":\"%s\",\"supported\":%s,\"fullscale_mv\":%ld,\"normal_fullscale_mv\":%ld,",
+                     adc_range_name(r), adc_range_supported() ? "true" : "false", adc_cal_fullscale_mv(cur),
+                     adc_cal_fullscale_mv(normal));
+    if (adc_range_supported() && n > 0 && n < (int)sizeof(payload))
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, "\"low_fullscale_mv\":%ld,", adc_cal_fullscale_mv(low));
+    if (n > 0 && n < (int)sizeof(payload))
+        snprintf(payload + n, sizeof(payload) - (size_t)n, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld}",
+                 lround((double)cur.a * 1000000.0), lround((double)cur.b * 1000000000.0));
+    send_ok_str(conn_id, payload);
 }

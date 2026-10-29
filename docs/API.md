@@ -193,6 +193,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `dac_out` | T1 | Route a DAC output path + set a calibrated voltage | object | no |
 | `current_out` | T1 | Hold a current on the 4-20 mA output (J9), in µA | object | no |
 | `adc_read` | T1 | Route an ADC source + return a calibrated reading (mV) | object | no |
+| `adc_range` | T1 | Read or switch the ADC input range (normal ±32.8 V / low ±5.46 V, analog module v3r4+), or run its self-test | object | no |
 | `calibrate` | T0/T2 | Run, read or clear this pod's own calibration: the ADC offset (measured on the `current_in` input, J8; applies to every ADC source from 3.9.3) and, from 3.9.3, the DMM-guided DAC lines and ADC gains | object | no |
 | `dac_mux` | T1 | Low-level DAC output mux (U55); prefer `dac_out` | object | no |
 | `cal_switch` | T1 | Low-level calibration relays (U58); prefer `analog_path` | object | no |
@@ -762,9 +763,12 @@ When the pod connects to the cloud it advertises a `capabilities` frame. Alongsi
 | `adc_cal_a_uv` | Affine intercept *a* in microvolts (`V = a + b·count`). From firmware 3.9.3 it includes this pod's own offset when the pod is calibrated, and from 3.9.4 the `ext` gain when one was measured with a DMM (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)), and the frame is sent again after a `calibrate`, so the server picks the new fit up without a reconnect. |
 | `adc_cal_b_nv` | Affine slope *b* in nanovolts per count. |
 | `adc_cal_unwrap` | `true`: the front end is bipolar, so a 16-bit count `< 32768` is unwrapped (`count += 65536`) before scaling. |
+| `adc_low_range` | `true` when the board has the ADC [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). Analog boards only. |
+| `adc_range` | `"normal"` or `"low"`: the range the pod is in, the one `adc_cal_a_uv` / `adc_cal_b_nv` are for (firmware 3.9.5+). The frame is sent again on every range change, so the server scales a capture with the range it was taken in. |
+| `adc_range_fs_mv` | That range's input full scale in mV (±): about 32800 normal, 5460 low (firmware 3.9.5+). |
 
 From firmware 3.9.3 the same three fields are also in the [`status`](#status) reply on an analog
-board (on the LAN and through cloud tunnels, not on the cloud command channel), so a LAN client
+board (from 3.9.5 with `adc_range` and `adc_range_fs_mv`) (on the LAN and through cloud tunnels, not on the cloud command channel), so a LAN client
 scales captures like the server does.
 
 The frame also says which interface carries the cloud link, read from the local address of its
@@ -1049,7 +1053,7 @@ encoding and can't wire a path two different ways.
 | `dac_3v3` (`3v3`) | DAC → 3.3 V output SMA | — |
 | `dac_5v` (`5v`) | DAC → 5 V output SMA | — |
 | `dac_12v` (`12v`) | DAC → ±12 V **bipolar** differential output SMA | — |
-| `adc_ext` (`ext`, `sma`) | ADC ← front-panel input SMA | ~1 MΩ high-Z, ÷12 |
+| `adc_ext` (`ext`, `sma`) | ADC ← front-panel input SMA | ~1 MΩ high-Z, ÷12 (low range: 1.82 MΩ, ÷2) |
 | `cal1` | Internal 5 V DAC → ADC loopback | 5 V path |
 | `cal2` | Internal ±12 V differential DAC → ADC loopback | ±12 V path |
 | `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground) | J8 |
@@ -1063,8 +1067,15 @@ the front end.
 
 ```json
 {"cmd":"analog_path","path":"cal1"}
-→ {"status":"ok","data":{"path":"cal1","u55":3,"u58":9}}
+→ {"status":"ok","data":{"path":"cal1","u55":3,"u58":9,"range":"normal"}}
+
+{"cmd":"analog_path","path":"ext","range":"low"}      // analog module v3r4+
+→ {"status":"ok","data":{"path":"adc_ext","u55":0,"u58":32,"range":"low"}}
 ```
+
+`range` (firmware 3.9.5+, optional) also sets the [ADC input range](#adc_range--the-adc-input-range-analog-module-v3r4)
+after routing; without it the range stays as it is. `off` and `cal2` put the range back to
+`normal`. The reply's `range` is the range in use.
 
 #### `dac_out` — route an output path **and** set a calibrated voltage
 
@@ -1201,9 +1212,25 @@ driving the node by a preceding `measure`/`generate`, say) and has no single
 voltage, so `adc_read` returns an **error** naming the span rather than averaging
 it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 
+`range` (firmware 3.9.5+, optional): `normal` or `low` switches the
+[ADC input range](#adc_range--the-adc-input-range-analog-module-v3r4) before the reading
+(`low` needs analog module v3r4+ and is refused for `cal2`). Without it the reading is taken in the
+range the pod is in. From 3.9.5 the reply also says which:
+
+| Field | Meaning |
+|---|---|
+| `range` | `normal` or `low`: the range the reading was taken in, and scaled with |
+| `fullscale_mv` | That range's input full scale (±), from this pod's fit: about 32800 normal, 5460 low |
+| `overrange` | `true` when a sample of the burst sat on one of the ADC's rails (code 0x7FFF or 0x8000): the input is past `fullscale_mv` and `mv` is only a bound. Use the normal range |
+
 ```json
 {"cmd":"adc_read","source":"ext"}
-→ {"status":"ok","data":{"source":"adc_ext","mv":11980,"count":63037,"span":4}}
+→ {"status":"ok","data":{"source":"adc_ext","mv":11980,"count":63037,"span":4,"range":"normal",
+   "fullscale_mv":32856,"overrange":false}}
+
+{"cmd":"adc_read","source":"ext","range":"low"}       // ~167 uV per count instead of ~1 mV
+→ {"status":"ok","data":{"source":"adc_ext","mv":1203,"count":58322,"span":9,"range":"low",
+   "fullscale_mv":5462,"overrange":false}}
 
 {"cmd":"adc_read","source":"cal1"}   // DAC still playing a waveform into the loopback
 → {"status":"error","message":"adc_read: input not settled on cal1 (51811 counts pk-pk
@@ -1222,10 +1249,83 @@ it. Stop the DAC (`dac_stop`) or let the node settle and read again.
 
 ```json
 {"cmd":"adc_read","source":"current_in"}
-→ {"status":"ok","data":{"source":"current_in","mv":3985,"count":61562,"span":6,"offset_mv":10,"ua":16004}}
+→ {"status":"ok","data":{"source":"current_in","mv":3985,"count":61562,"span":6,"range":"normal",
+   "fullscale_mv":32856,"overrange":false,"offset_mv":10,"ua":16004}}
 ```
 
 Firmware up to 3.3.0 used a different name for this source. That name is no longer accepted.
+
+#### `adc_range` — the ADC input range (analog module v3r4)
+
+Analog module v3r4 adds a relay (K5) that swaps the bottom leg of the ADC input divider:
+
+| Range | Divider | Full scale | Resolution | Input impedance |
+|---|---|---|---|---|
+| `normal` (default) | 910k / 82.5k, about ÷12 | ±32.8 V | ~1 mV per count | ~1 MΩ |
+| `low` | 910k / 910k, ÷2 | ±5.46 V | ~167 µV per count | 1.82 MΩ |
+
+The low range gives about 6x the resolution on signals up to ±5 V. **Use 1x leads**: its
+1.82 MΩ input does not match a 10x scope probe, which expects 1 MΩ.
+
+The divider is in front of every ADC source, so the range applies to `ext`, `cal1` and
+`current_in` (4-20 mA is 0.996 to 4.98 V, inside the low range). `cal2` (±12 V) has no low range.
+The range stays until it is changed, `analog_path` `off` or `cal2` is routed, or the pod restarts;
+each of those puts it back to `normal`. Older boards (and modules before v3r4, whose EEPROM says a
+revision below 3.4) have no K5: the range is always `normal` there and `low` is refused. The pod
+reads the module revision at boot, so restart it after programming a module's EEPROM.
+
+```json
+{"cmd":"adc_range"}
+→ {"status":"ok","data":{"range":"normal","supported":true,"fullscale_mv":32856,
+   "normal_fullscale_mv":32856,"low_fullscale_mv":5462,"adc_cal_a_uv":65708158,"adc_cal_b_nv":-1002644}}
+
+{"cmd":"adc_range","range":"low"}
+→ {"status":"ok","data":{"range":"low","supported":true,"fullscale_mv":5462,
+   "normal_fullscale_mv":32856,"low_fullscale_mv":5462,"adc_cal_a_uv":10923784,"adc_cal_b_nv":-166687}}
+
+{"cmd":"adc_range","range":"low"}          // a board without K5
+→ {"status":"error","message":"range: the low range needs analog module v3r4 or later"}
+```
+
+| Field | Meaning |
+|---|---|
+| `range` | The range in use |
+| `supported` | The board has the low range |
+| `fullscale_mv` | The full scale (±) of the range in use, from this pod's `ext` fit |
+| `normal_fullscale_mv`, `low_fullscale_mv` | Both ranges' full scale (`low_fullscale_mv` only when supported) |
+| `adc_cal_a_uv`, `adc_cal_b_nv` | The `ext` fit of the range in use, as in the [capabilities frame](#capabilities-frame--adc-calibration-fields): scale captures with it from now on |
+
+Switching waits 10 ms for the relay (1.4 ms operate, 1.3 ms release) and the divider to settle
+before it replies, so a capture sent next sees the new range. Captures are raw counts: the
+capabilities frame and `status` carry the fit of the range in use (`adc_cal_a_uv`,
+`adc_cal_b_nv`, `adc_range`), and the frame is sent again on every change. A sample on an ADC rail
+(code 0x7FFF or 0x8000) is past the range's full scale. Set the range before starting the control
+loop: its input map uses the fit of the range in use when it starts.
+
+**Calibration.** The low range is the normal fit times the divider ratio
+(82.5k/992.5k ÷ 0.5 ≈ 0.1662), offset included: the offset arises after the divider, so the
+`calibrate` zero (J8 open) serves both ranges. The resistors' tolerance (1 %) leaves the
+uncalibrated low range within a few percent. `{"cmd":"calibrate","adc":"cal1","range":"low"}`
+measures this pod's low-range gain through the `cal1` loopback (the 5 V output at 1 V and 4 V, inside
+the ±5.46 V range) and stores it; one gain serves every source, since K5 changes the same divider
+for all of them. It needs what `adc` `cal1` needs (the offset and the 5 V output's DMM line), and
+refuses a gain more than 5 % off. See [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8).
+
+**Self-test.** `{"cmd":"adc_range","test":true}` drives the 5 V output into the `cal1` loopback at
+1 V and 3.5 V (under 4 V, inside the low range) and reads each point in both ranges, each with its
+own fit. A point passes when both readings agree with the set point and each other within 5 % +
+30 mV: an uncalibrated low range passes, a relay that does not switch (6x off) does not. Takes
+about 0.5 s, leaves the outputs off and the range `normal`, and is refused while
+[DAC output limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set.
+
+```json
+{"cmd":"adc_range","test":true}
+→ {"status":"ok","data":{"points":[{"set_mv":1000,"normal_mv":1001,"low_mv":999,"ok":true},
+   {"set_mv":3500,"normal_mv":3502,"low_mv":3497,"ok":true}],"pass":true,"range":"normal"}}
+```
+
+`status.caps` contains `"adc_low_range"` on a board with the low range, and `status` (LAN and
+tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_range`.
 
 #### `calibrate` — calibrate the ADC offset on the `current_in` input (J8)
 
@@ -1252,7 +1352,8 @@ reference.
 | `{"cmd":"calibrate","source":"current_in"}` | Calibrate `current_in` with J8 disconnected, store the result, return it |
 | `{"cmd":"calibrate"}` | Return the stored calibration |
 | `{"cmd":"calibrate","clear":true}` | Remove it and go back to the built-in fits (from 3.9.4 also the DMM parts below) |
-| `{"cmd":"calibrate","clear":"offset"}` | Remove one part only: `offset`, `dac` or `adc` (firmware 3.9.4+) |
+| `{"cmd":"calibrate","clear":"offset"}` | Remove one part only: `offset`, `dac` or `adc` (firmware 3.9.4+; from 3.9.5 `adc` also clears the low-range gain) |
+| `{"cmd":"calibrate","adc":"cal1","range":"low"}` | The [low range](#adc_range--the-adc-input-range-analog-module-v3r4)'s gain through the `cal1` loopback (analog module v3r4+, firmware 3.9.5+) |
 
 ```json
 {"cmd":"calibrate","source":"current_in"}
@@ -1352,6 +1453,8 @@ are set: clear them, calibrate, set them again. The J8 offset does not move the 
 |---|---|
 | `dac.<path>` | This pod's line, `volts = a + b × code16` with `a_uv` in µV and `b_pv` in pV per 16-bit code; against the built-in line its `offset_uv` (at 0 V on `12v`, at code 0 on the others) and `gain_ppm`. `null`: the built-in line |
 | `adc_gain_ppm.<source>` | The gain correction in ppm. `null`: the built-in gain |
+| `range` | On a board with the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (firmware 3.9.5+): the range `a_uv` / `b_nv` are for, the range in use |
+| `adc_low_gain_ppm` | The [low range](#adc_range--the-adc-input-range-analog-module-v3r4)'s gain correction in ppm, against the divider's nominal ratio; `null`: not measured. Only on a board with the low range (firmware 3.9.5+) |
 | `dmm` | `true` when any DMM part is stored |
 | `zero_count_mc` | The raw zero the offset is derived from: the mean count `current_in` read with J8 open, unwrapped, in thousandths of a count (firmware 3.9.4+, only when calibrated) |
 | `measured` | After an `adc` run: what the output put out (`v1_uv`, `v2_uv`), what the ADC read before the gain (`r1_uv`, `r2_uv`) and the mean offset left after it (`residual_uv`) |
@@ -1521,6 +1624,7 @@ counters and the capability list. No parameters.
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
 | `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
+| `adc_low_range` | The ADC has the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
 | `cal_dmm` | `calibrate` takes the DMM-guided forms (`dac`, `adc`, a partial `clear`): firmware 3.9.4+, analog board only. |
 | `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |

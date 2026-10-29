@@ -14,6 +14,8 @@
 #include "pico_compat.h"
 #include "signal_engine.h"   /* la_vccio_get_mv — the pull-ups are 3V3-referenced */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
+#include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
+#include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -403,12 +405,13 @@ bool pca9555_la_pull_is_down(uint8_t la_pin)
 #define TCA_REG_OUTPUT  0x01u
 #define TCA_REG_CONFIG  0x03u
 #define U55_OUTPUT_MASK 0x3Fu   /* P0..P5 used */
-#define U58_OUTPUT_MASK 0x0Fu   /* P0..P3 used */
-#define U58_OUTPUT_MASK_QUAD 0x1Fu   /* analog v3r2: P4 = ANA14_EN too */
 
 static uint8_t s_u55_out;       /* DACMUX shadow */
 static uint8_t s_u58_out;       /* ANASW  shadow */
 static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
+static bool    s_low_hw;        /* analog module v3r4: K5 on U58 P5 (latched in analog_switch_init) */
+static bool    s_low;           /* K5 energised: the ADC low range */
+static analog_path_t s_path = ANALOG_PATH_OFF;   /* the last path that moved the relays */
 /* Where U55/U58 sit: the main bus on the one-piece analog boards, the module bus (I2C2) when the
    analog section is a plug-in module (module_link.h).  Set once at boot, before
    analog_switch_init(). */
@@ -430,20 +433,34 @@ static int ana_read(uint8_t addr, uint8_t reg, uint8_t *val)
 }
 i2c_bus_id_t analog_switch_bus(void) { return s_ana_bus; }
 
-/* U58's output pins: P4 only exists as ANA14_EN on v3r2, and is left an input elsewhere. */
-static uint8_t u58_mask(void) { return dac_quad_present() ? U58_OUTPUT_MASK_QUAD : U58_OUTPUT_MASK; }
+/* U58's output pins: P4 only exists as ANA14_EN on v3r2, P5 as LOW_RANGE_EN on module v3r4; each
+   is left an input elsewhere. */
+static uint8_t u58_mask(void) { return analog_u58_mask(dac_quad_present(), s_low_hw); }
+
+/* The U58 byte for a relay state, with P4 and P5 as they are. */
+static uint8_t u58_reg(bool cal1, bool cal2, bool current_in, bool cal_path)
+{
+    return analog_calsw_reg(cal1, cal2, current_in, cal_path, s_ana14, s_low);
+}
+
+static uint8_t u58_bit(uint8_t m) { return (s_u58_out & m) != 0; }
 
 void analog_switch_init(void)
 {
     /* Drive the output register LOW *before* switching pins to outputs, so the
        TCA9554's 0xFF power-on output default never briefly energises a relay or
        routes the DAC to an unknown SMA. */
-    s_u55_out = 0x00; s_u58_out = 0x00;
+    s_u55_out = 0x00; s_u58_out = 0x00; s_path = ANALOG_PATH_OFF;
     if (!dac_quad_present()) {   /* v3r2 has no U55 */
         ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_OUTPUT, 0x00);
         ana_write(I2C_ADDR_TCA9554_DACMUX, TCA_REG_CONFIG, (uint8_t)~U55_OUTPUT_MASK);
     }
     s_ana14 = false;   /* v3r2: +-14 V stays off (P4 low) until dac_quad_boot parked the DAC */
+    /* K5 off (normal range).  P5 only becomes an output on a module that says it has K5: on any
+       other board it may be unconnected or something else, so it stays an input. */
+    if (s_low) cloud_client_request_caps_resend();   /* module power cycled in the low range */
+    s_low = false;
+    s_low_hw = module_adc_low_range();
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, 0x00);
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
 }
@@ -452,8 +469,7 @@ int ana14_set(bool on)
 {
     if (!dac_quad_present()) return -1;   /* P4 is not connected on v2/v3: never touch it */
     s_ana14 = on;
-    s_u58_out = analog_calsw_reg((s_u58_out & 0x01u) != 0, (s_u58_out & 0x02u) != 0,
-                                 (s_u58_out & 0x04u) != 0, (s_u58_out & 0x08u) != 0, on);
+    s_u58_out = u58_reg(u58_bit(0x01u), u58_bit(0x02u), u58_bit(0x04u), u58_bit(0x08u));
     (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
     return ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
 }
@@ -491,8 +507,13 @@ int dacmux_read(uint8_t *out_reg)
 int calsw_set(bool cal1, bool cal2, bool current_in, bool cal_path)
 {
     if (cal1 && cal2) return -2;   /* mutually exclusive: never both DAC rails */
-    /* v3r2 keeps P4 (ANA14_EN) as it is; s_ana14 is only ever set there. */
-    s_u58_out = analog_calsw_reg(cal1, cal2, current_in, cal_path, s_ana14);
+    if (cal2 && s_low) {          /* +-12 V has no low range (adc_range_t) */
+        s_low = false;
+        cloud_client_request_caps_resend();
+    }
+    /* v3r2 keeps P4 (ANA14_EN) as it is, module v3r4 P5 (K5); s_ana14 and s_low are only ever
+       set there. */
+    s_u58_out = u58_reg(cal1, cal2, current_in, cal_path);
     /* Re-assert the direction (P0..P3 = outputs, P4 too on v3r2) in case the power-on config
        write didn't take — otherwise the output write drives nothing and the
        relays never energise. */
@@ -510,14 +531,14 @@ void analog_switch_dump(void)
 {
     static const struct { const char *n; uint8_t a; uint8_t mask; } chips[] = {
         { "U55 dacmux@0x24", I2C_ADDR_TCA9554_DACMUX, U55_OUTPUT_MASK },
-        { "U58 calsw @0x26", I2C_ADDR_TCA9554_ANASW,  U58_OUTPUT_MASK },
+        { "U58 calsw @0x26", I2C_ADDR_TCA9554_ANASW,  0x0Fu },
     };
     for (unsigned i = dac_quad_present() ? 1u : 0u; i < 2; i++) {   /* v3r2: no U55 */
         uint8_t in = 0xEE, out = 0xEE, cfg = 0xEE;
         int err = ana_read(chips[i].a, 0x00u, &in)
                 | ana_read(chips[i].a, TCA_REG_OUTPUT, &out)
                 | ana_read(chips[i].a, TCA_REG_CONFIG, &cfg);
-        uint8_t mask = (i == 1u) ? u58_mask() : chips[i].mask;   /* v3r2: P4 is ANA14_EN */
+        uint8_t mask = (i == 1u) ? u58_mask() : chips[i].mask;   /* v3r2: P4 is ANA14_EN, v3r4: P5 K5 */
         log_printf("[exp] %s%s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
                chips[i].n, s_ana_bus == I2C_BUS_MODULE ? " (module bus)" : "", in, out, cfg,
                err ? "(I2C ERR)"
@@ -532,19 +553,52 @@ void analog_switch_dump(void)
    then U58 relays, in that order, as always.  Analog v3r2 has no U55: there dac_quad_route points
    the DAC8554 at the path's channel (parking the voltage output it leaves) before the relays move,
    like v3 moved the mux first. */
+/* K5 to `low` in the shadow (written with the next U58 write).  True when it moved: the ADC fit
+   in the capabilities follows the range. */
+static bool low_range_shadow(bool low)
+{
+    if (s_low == low) return false;
+    s_low = low;
+    s_u58_out = u58_reg(u58_bit(0x01u), u58_bit(0x02u), u58_bit(0x04u), u58_bit(0x08u));
+    cloud_client_request_caps_resend();
+    return true;
+}
+
 int analog_path_set(analog_path_t path)
 {
     analog_switches_t sw;
     bool quad = dac_quad_present();
     if (analog_path_switches(path, quad, &sw) != 0) return -1;
     int r = 0;
+    /* off and cal2 put the range back to normal; calsw_set below writes K5 with the relays.
+       current_out does not move the relays: K5 has nothing to change there. */
+    bool k5_moved = !analog_path_keeps_low_range(path) && low_range_shadow(false);
     if (quad) r |= dac_quad_route(path);
     if (sw.mux) {
         r |= dacmux_set_ctrl1(sw.ctrl1_en, sw.ctrl1_sel);
         r |= dacmux_set_ctrl2(sw.ctrl2_en, sw.ctrl2_sel);
     }
     if (sw.relays) r |= calsw_set(sw.cal1, sw.cal2, sw.current_in, sw.cal_path);
+    else if (k5_moved) r |= ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
+    if (sw.relays) s_path = path;
+    if (k5_moved) sleep_ms(ADC_RANGE_SETTLE_MS);
     return r;
+}
+
+bool adc_range_supported(void) { return s_low_hw; }
+
+adc_range_t adc_range_get(void) { return s_low ? ADC_RANGE_LOW : ADC_RANGE_NORMAL; }
+
+int adc_range_set(adc_range_t r)
+{
+    bool low = r == ADC_RANGE_LOW;
+    if (low && !s_low_hw) return -1;
+    if (low && s_path == ANALOG_PATH_CAL2) return -2;   /* after `off` the ADC sees ext: fine */
+    if (!low_range_shadow(low)) return 0;
+    (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
+    int rc = ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);
+    sleep_ms(ADC_RANGE_SETTLE_MS);   /* K5: 1.4 ms operate / 1.3 ms release, then the divider RC */
+    return rc == 0 ? 0 : -3;
 }
 
 static void i2c_scan(i2c_bus_id_t bus)

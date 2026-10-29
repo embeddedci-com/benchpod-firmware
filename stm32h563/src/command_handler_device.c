@@ -260,8 +260,9 @@ void handle_status(int conn_id, const char *json) {
        Not on the cloud command channel: a status there is already within ~60 B of
        BP_CLOUD_REPLY_MAX, and cloud clients get the fit from the capabilities frame. */
     if (caps.analog && conn_id != CH_CLOUD_CONN)
-        bp_emit(&e, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,",
-                caps.adc_cal_a_uv, caps.adc_cal_b_nv);
+        bp_emit(&e, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
+                    "\"adc_range\":\"%s\",\"adc_range_fs_mv\":%ld,",
+                caps.adc_cal_a_uv, caps.adc_cal_b_nv, caps.adc_range, caps.adc_range_fs_mv);
     /* Board revision decides which of the rev3 features below actually exist,
        so clients read it once here rather than probing each command. */
     bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",

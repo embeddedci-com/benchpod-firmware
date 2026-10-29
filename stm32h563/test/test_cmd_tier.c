@@ -206,7 +206,7 @@ static void test_flags_match_the_old_lists(void) {
                "can_disable", "module");
     EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "stream", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
-               "current_out", "adc_read", "calibrate", "dac_control_loop", "dac_loop_probe",
+               "current_out", "adc_read", "adc_range", "calibrate", "dac_control_loop", "dac_loop_probe",
                "dac_loop_input");
     EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "stream", "la_capture",
                "sensor_regs", "sensor_la", "can_read", "psram_ping", "test");

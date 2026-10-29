@@ -32,10 +32,35 @@ int analog_path_switches(analog_path_t path, bool quad, analog_switches_t *out)
     return 0;
 }
 
-uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14)
+uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14,
+                         bool low_range)
 {
     return (uint8_t)((cal1 ? 0x01u : 0u) | (cal2 ? 0x02u : 0u) | (current_in ? 0x04u : 0u)
-                     | (cal_path ? 0x08u : 0u) | (ana14 ? 0x10u : 0u));
+                     | (cal_path ? 0x08u : 0u) | (ana14 ? 0x10u : 0u)
+                     | (low_range ? U58_LOW_RANGE_BIT : 0u));
+}
+
+uint8_t analog_u58_mask(bool quad, bool low_range)
+{
+    return (uint8_t)(0x0Fu | (quad ? 0x10u : 0u) | (low_range ? U58_LOW_RANGE_BIT : 0u));
+}
+
+bool analog_path_keeps_low_range(analog_path_t path)
+{
+    /* off parks everything; cal2's +-12 V would sit far past the low range's +-5.46 V. */
+    return (unsigned)path < ANALOG_PATH__COUNT && path != ANALOG_PATH_OFF && path != ANALOG_PATH_CAL2;
+}
+
+static const char *const s_range_name[ADC_RANGE__COUNT] = { "normal", "low" };
+
+const char *adc_range_name(adc_range_t r) { return (unsigned)r < ADC_RANGE__COUNT ? s_range_name[r] : ""; }
+
+int adc_range_from_name(const char *name, adc_range_t *out)
+{
+    if (!name || !out) return -1;
+    for (unsigned i = 0; i < ADC_RANGE__COUNT; i++)
+        if (strcmp(name, s_range_name[i]) == 0) { *out = (adc_range_t)i; return 0; }
+    return -1;
 }
 
 static const struct { const char *name; analog_path_t path; } s_path_tbl[] = {

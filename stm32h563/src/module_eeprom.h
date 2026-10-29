@@ -69,6 +69,14 @@ const char *module_ee_result_str(int rc);
 /* "analog" for MOD_TYPE_ANALOG, else "unknown". */
 const char *module_ee_type_str(uint8_t type);
 
+/* The first analog module revision with the ADC low range (relay K5 on U58 P5, i2c_bus.h). */
+#define MOD_LOW_RANGE_REV_MAJOR 3u
+#define MOD_LOW_RANGE_REV_MINOR 4u
+
+/* The module has the ADC low range: an analog module of revision 3.4 or later.  Only a decoded
+   header (MOD_EE_OK) says so: a blank or unreadable EEPROM never drives P5. */
+bool module_ee_has_low_range(int rc, const module_id_t *id);
+
 /* Bytes of a write at `addr` that fit before the next page boundary (a 24C32 page write wraps
    inside its page), capped at `len`. */
 size_t module_ee_chunk(uint16_t addr, size_t len);

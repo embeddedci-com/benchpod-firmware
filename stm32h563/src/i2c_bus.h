@@ -227,10 +227,17 @@ int  dacmux_set_ctrl1(bool en, uint8_t sel);
 int  dacmux_set_ctrl2(bool en, uint8_t sel);
 int  dacmux_read(uint8_t *out_reg);           /* current U55 output register */
 
-/* U58's output register for a relay state: P0 cal1, P1 cal2, P2 current_in, P3 cal_path, and on
-   analog v3r2 P4 = ANA14_EN (the +-14 V supply, TPS65131 U49).  ana14 is false on v2/v3, which
-   gives exactly the pre-v3r2 byte.  Pure (analog_path.c). */
-uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14);
+/* U58's output register for a relay state: P0 cal1, P1 cal2, P2 current_in, P3 cal_path, on
+   analog v3r2 P4 = ANA14_EN (the +-14 V supply, TPS65131 U49), and on analog module v3r4 P5 =
+   LOW_RANGE_EN (relay K5, the ADC low range).  ana14 and low_range false give exactly the
+   pre-v3r2 byte.  Pure (analog_path.c). */
+#define U58_LOW_RANGE_BIT 0x20u
+uint8_t analog_calsw_reg(bool cal1, bool cal2, bool current_in, bool cal_path, bool ana14,
+                         bool low_range);
+/* U58's output pins (the CONFIG register is its complement): P0..P3 always, P4 on analog v3r2
+   and the module (quad), P5 only on a module with the low range (module_ee_has_low_range).  A pin
+   outside the mask stays an input, held low by its pull-down.  Pure (analog_path.c). */
+uint8_t analog_u58_mask(bool quad, bool low_range);
 
 /* Analog v3r2 only: switch the +-14 V supply of the analog stages (U58 P4; off at power-up, 100k
    pull-down).  -1 on other boards, which never drive P4.  The relays keep their state. */
@@ -300,5 +307,33 @@ const char  *analog_path_name(analog_path_t path);
 /* Parse a user name/alias into a path. Accepts canonical names plus aliases
    3v3/5v/12v (= dac_*), ext/sma (= adc_ext). Returns 0 / <0 if unknown. */
 int          analog_path_from_name(const char *name, analog_path_t *out);
+
+/* ---- ADC input range (analog module v3r4 and later) ---------------------------------------
+ * Relay K5 (U58 P5 -> TPL7407 OUT5, LOW_RANGE_EN, 4.7k pull-down on P5) swaps the bottom leg of
+ * the ADC input divider:
+ *   normal (K5 off, the default): 910k / 82.5k, about /12, +-32.8 V full scale, ~1 MOhm input
+ *   low    (K5 on):               910k / 910k,  /2,       +-5.46 V full scale, 1.82 MOhm input
+ * The divider is shared by every ADC source, so the range applies to ext, cal1 and current_in.
+ * cal2 (+-12 V) has no low range: routing it, or `off`, puts the range back to normal.  So do
+ * boot and analog_switch_init.  K5 is a G6K (1.4 ms operate, 1.3 ms release): adc_range_set
+ * waits ADC_RANGE_SETTLE_MS after it moves before it returns. */
+typedef enum { ADC_RANGE_NORMAL = 0, ADC_RANGE_LOW, ADC_RANGE__COUNT } adc_range_t;
+#define ADC_RANGE_SETTLE_MS 10u
+/* The refusal when a board has no K5. */
+#define ADC_RANGE_UNSUPPORTED "range: the low range needs analog module v3r4 or later"
+
+/* "normal" / "low"; "" out of range.  adc_range_from_name: 0 / -1 unknown.  Pure. */
+const char *adc_range_name(adc_range_t r);
+int         adc_range_from_name(const char *name, adc_range_t *out);
+/* The path leaves the range as it is (true) or puts it back to normal (off, cal2).  Pure. */
+bool        analog_path_keeps_low_range(analog_path_t path);
+
+/* This board has K5 (latched in analog_switch_init from the module EEPROM). */
+bool        adc_range_supported(void);
+/* The range in use (K5's state). */
+adc_range_t adc_range_get(void);
+/* Switch the range and wait for K5 to settle.  0, -1 not supported (low on a board without K5),
+   -2 low while cal2 is routed, -3 I2C error.  Normal is always accepted. */
+int         adc_range_set(adc_range_t r);
 
 #endif /* I2C_BUS_H */

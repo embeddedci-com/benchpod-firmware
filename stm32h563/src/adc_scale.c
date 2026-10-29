@@ -37,3 +37,10 @@ adc_reading_t adc_scale_burst(const uint16_t *raw, size_t n, float a, float b) {
     r.valid    = (r.span <= ADC_BURST_MAX_SPAN);
     return r;
 }
+
+size_t adc_count_clipped(const uint16_t *raw, size_t n)
+{
+    size_t k = 0;
+    for (size_t i = 0; raw && i < n; i++) k += adc_sample_clipped(raw[i]) ? 1u : 0u;
+    return k;
+}

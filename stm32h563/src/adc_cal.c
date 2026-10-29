@@ -42,7 +42,8 @@ static struct {
     float     offset_v;                    /* general cal1 fit at the zero; 0 without one */
     cal_lin_t dac[ADC_CAL_DAC_PATHS];      /* this pod's lines (where dac_set) */
     float     gain[ADC_CAL_SRCS];          /* 1.0 where gain_set is clear */
-} s_der = { .gain = { 1.0f, 1.0f, 1.0f } };
+    float     gain_low;                    /* 1.0 where low_set is clear */
+} s_der = { .gain = { 1.0f, 1.0f, 1.0f }, .gain_low = 1.0f };
 
 /* Refusal text. No %f: newlib-nano's printf has none, so volts are printed as whole mV.
    Commands are dispatched one at a time and the caller copies the text into its reply
@@ -56,6 +57,7 @@ static bool in_range(double v) { return fabs(v) * 1e6 <= ADC_CAL_MAX_OFFSET_UV; 
 static bool path_ok(int path) { return path >= 0 && path < ADC_CAL_DAC_PATHS; }
 static bool src_ok(int src) { return src >= 0 && src < ADC_CAL_SRCS; }
 static bool gain_ok(double g) { return isfinite(g) && fabs(g - 1.0) * 1e6 <= ADC_CAL_MAX_GAIN_PPM; }
+static bool low_gain_ok(double g) { return isfinite(g) && fabs(g - 1.0) * 1e6 <= ADC_CAL_MAX_LOW_GAIN_PPM; }
 
 const char *adc_cal_src_name(int src) { return src_ok(src) ? s_src_name[src] : "?"; }
 int adc_cal_src_index(const char *name) {
@@ -109,6 +111,16 @@ static double gain_from(int src, const adc_cal_gain_pts_t *p) {
     return dv / dr;
 }
 
+/* The low-range gain two cal1 points give: their slope over the low range's slope before the
+   gain, ratio * g_cal1 * the compiled cal1 slope. */
+static double low_gain_from(const adc_cal_gain_pts_t *p, double g_cal1) {
+    double dc = ((double)p->count_mc[1] - (double)p->count_mc[0]) / 1000.0;
+    double dr = (double)cal_adc_low_ratio() * g_cal1 * (double)ADC_CAL_CAL1.b * dc;
+    double dv = ((double)p->uv[1] - (double)p->uv[0]) / 1e6;
+    if (fabs(dv) < 1.0 || dr == 0.0) return NAN;
+    return dv / dr;
+}
+
 /* The record turned into what the readers use, with the compiled fits of the running firmware.
    false = something in it is out of range (nothing is changed then). */
 static bool derive(const adc_cal_t *r) {
@@ -135,7 +147,14 @@ static bool derive(const adc_cal_t *r) {
         if (!gain_ok(g)) return false;
         gain[i] = (float)g;
     }
+    float gain_low = 1.0f;
+    if (r->low_set) {
+        double g = low_gain_from(&r->gain_low, gain[ADC_CAL_SRC_CAL1]);
+        if (!low_gain_ok(g)) return false;
+        gain_low = (float)g;
+    }
     s_der.offset_v = offset;
+    s_der.gain_low = gain_low;
     memcpy(s_der.dac, dac, sizeof(dac));
     memcpy(s_der.gain, gain, sizeof(gain));
     s_rec = *r;
@@ -143,7 +162,7 @@ static bool derive(const adc_cal_t *r) {
     return true;
 }
 
-static bool record_empty(const adc_cal_t *r) { return !r->zero_set && !r->dac_set && !r->gain_set; }
+static bool record_empty(const adc_cal_t *r) { return !r->zero_set && !r->dac_set && !r->gain_set && !r->low_set; }
 
 static void derive_nothing(void) {
     adc_cal_t empty;
@@ -208,6 +227,29 @@ cal_lin_t adc_cal_source_fit(int src) {
 }
 
 cal_lin_t adc_cal_current_in_fit(void) { return adc_cal_source_fit(ADC_CAL_SRC_CAL1); }
+
+bool  adc_cal_low_gain_is_set(void) { return s_rec.low_set != 0; }
+float adc_cal_low_gain(void) { return s_der.gain_low; }
+
+cal_lin_t adc_cal_range_fit(int src, int range) {
+    cal_lin_t f = adc_cal_source_fit(src);
+    if (range != 1) return f;
+    float k = cal_adc_low_ratio() * s_der.gain_low;
+    f.a *= k;
+    f.b *= k;
+    return f;
+}
+
+long adc_cal_fullscale_mv(cal_lin_t fit) { return lround(fabs((double)fit.b) * 32768.0 * 1000.0); }
+
+const float ADC_RANGE_TEST_V[ADC_RANGE_TEST_POINTS] = { 1.0f, 3.5f };
+
+bool adc_range_test_point_ok(float set_v, float normal_v, float low_v) {
+    double tol = fabs((double)set_v) * ADC_RANGE_TEST_TOL_PPM / 1e6 + ADC_RANGE_TEST_TOL_MV / 1000.0;
+    if (!isfinite(normal_v) || !isfinite(low_v)) return false;
+    return fabs((double)low_v - (double)normal_v) <= tol && fabs((double)normal_v - (double)set_v) <= tol &&
+           fabs((double)low_v - (double)set_v) <= tol;
+}
 
 const char *adc_cal_current_in_store(const adc_reading_t *rd) {
     if (!rd) return "calibrate: no reading";
@@ -326,6 +368,35 @@ const char *adc_cal_gain_store(int src, adc_cal_gain_meas_t *m) {
     return apply(&rec, "calibrate: the gain is out of range");
 }
 
+const char *adc_cal_low_gain_store(adc_cal_gain_meas_t *m) {
+    const char *why = adc_cal_gain_ready(ADC_CAL_SRC_CAL1);
+    if (why) return why;
+    if (!m) return "calibrate: no measurement";
+    double g_cal1 = s_der.gain[ADC_CAL_SRC_CAL1], k = (double)cal_adc_low_ratio() * g_cal1;
+    adc_cal_gain_pts_t p;
+    for (int i = 0; i < 2; i++) {
+        p.count_mc[i] = (int32_t)lroundf(m->count[i] * 1000.0f);
+        p.uv[i] = (int32_t)lroundf(m->v[i] * 1e6f);
+        m->r[i] = (float)(k * (fit_at(ADC_CAL_CAL1, (double)p.count_mc[i] / 1000.0) - s_der.offset_v));
+    }
+    double g = low_gain_from(&p, g_cal1);
+    if (!isfinite(g)) return "calibrate: the set points are too close";
+    m->gain = (float)g;
+    m->residual_v = (float)(((m->v[0] - g * m->r[0]) + (m->v[1] - g * m->r[1])) / 2.0);
+    if (!low_gain_ok(g)) {
+        snprintf(s_msg, sizeof(s_msg),
+                 "calibrate: the low range reads %ld and %ld mV where the DAC gives %ld and %ld mV, a gain "
+                 "%ld ppm off (limit %d). Is something connected to the 5 V output? Nothing was stored",
+                 lroundf(m->r[0] * 1000.0f), lroundf(m->r[1] * 1000.0f), lroundf(m->v[0] * 1000.0f),
+                 lroundf(m->v[1] * 1000.0f), lround((g - 1.0) * 1e6), ADC_CAL_MAX_LOW_GAIN_PPM);
+        return s_msg;
+    }
+    adc_cal_t rec = s_rec;
+    rec.gain_low = p;
+    rec.low_set = 1;
+    return apply(&rec, "calibrate: the low-range gain is out of range");
+}
+
 int adc_cal_clear(void) {
     derive_nothing();
     return ab_store_clear(&s_store);
@@ -343,6 +414,8 @@ int adc_cal_clear_part(const char *part) {
     } else if (strcmp(part, "adc") == 0) {
         rec.gain_set = 0;
         memset(rec.gain, 0, sizeof(rec.gain));
+        rec.low_set = 0;
+        memset(&rec.gain_low, 0, sizeof(rec.gain_low));
     } else {
         return -2;
     }

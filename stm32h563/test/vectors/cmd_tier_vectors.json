@@ -55,6 +55,7 @@
     "dac_out": "T1",
     "current_out": "T1",
     "adc_read": "T1",
+    "adc_range": "T1",
     "dac_control_loop": "T1",
     "dac_loop_input": "T1",
     "la": "T1",
