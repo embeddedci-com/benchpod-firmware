@@ -42,7 +42,7 @@ typedef enum {
 } fw_sig_policy_t;
 
 typedef struct {
-    uint8_t  target;          /* ota_target_t numbering: 0 firmware, 1 gw0, 2 gw1, 3 esp */
+    uint8_t  target;          /* ota_target_t numbering: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge */
     uint8_t  flags;
     uint32_t size;
     uint8_t  sha256[32];

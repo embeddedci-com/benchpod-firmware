@@ -29,8 +29,9 @@ fw_sig_result_t fw_sign_check_keys(const uint8_t *sig, size_t sig_len, uint8_t t
                                    const uint8_t (*keys)[32], size_t nkeys,
                                    fw_sig_manifest_t *out) {
     if (sig == NULL || sig_len == 0) return FW_SIG_NONE;
+    /* signed targets: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (4 ca and 5 tls are never signed) */
     if (sig_len != FW_SIGN_MANIFEST_LEN || memcmp(sig, "BPSG", 4) != 0 || rd16(sig + 4) != 1u ||
-        sig[6] > 3u)
+        (sig[6] > 3u && sig[6] != 6u))
         return FW_SIG_FORMAT;
 
     fw_sig_manifest_t m;
