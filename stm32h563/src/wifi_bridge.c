@@ -178,6 +178,7 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
     }
     update_state(b, m->body, m->body_len, now);
     bwp_get_u8(m->body, m->body_len, BWP_T_FLAGS, &b->info.flags);
+    b->info.hello_flags = b->info.flags;
     copy_str(m, BWP_T_FW_VERSION, b->info.fw_version, sizeof(b->info.fw_version));
     copy_str(m, BWP_T_HW_REV, b->info.hw_rev, sizeof(b->info.hw_rev));
     if (!bridge_paired(b)) {

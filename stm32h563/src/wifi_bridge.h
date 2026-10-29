@@ -67,6 +67,8 @@ typedef struct {
     uint8_t mac[6];
     char fw_version[16];
     char hw_rev[8];
+    uint8_t hello_flags;         /* BWP_F_* from the HELLO that carried fw_version: a STATUS has
+                                    no version, so its flags can be the next boot's (OTA relay) */
     uint8_t state;               /* bwp_state_t, from the latest HELLO or STATUS */
     uint8_t flags;               /* BWP_F_* */
     bool paired;                 /* the bridge accepts our key (a signed request succeeded) */

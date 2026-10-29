@@ -6,10 +6,11 @@
  * When the slot holds a newer image than the bridge runs (the signed manifest's version against
  * HELLO's FW_VERSION), the pod relays it on its own: OTA_BEGIN with the manifest, 1 KB OTA_DATA
  * chunks in order (resuming at the bridge's offset after a loss), OTA_END, REBOOT, then waits for
- * HELLO to show the new version. The bridge checks the manifest itself and, after the reboot,
- * runs the image on trial until the pod's next request confirms it. A version that did not come
- * back (refused, failed or rolled back) is not tried again until the pod reboots or `bridge
- * update` forces it.
+ * HELLO to show the new version, confirmed. The bridge checks the manifest itself and, after the
+ * reboot, runs the image on trial (BWP_F_PENDING_VERIFY) until the pod's next request confirms
+ * it. A version the bridge refused or rolled back is not tried again until the pod reboots or
+ * `bridge update` forces it; one that failed on the way (no answer, the bridge restarted or did
+ * not come back) is retried on its own, WBO_TRIES attempts in all.
  *
  * One step per wbo_poll call, never a wait: it runs from the hw worker's loop like the ESP32-C3
  * flasher. Plain C with callbacks, host-tested in test/test_wifi_bridge.c. Built only with
@@ -25,6 +26,7 @@
 #define WBO_CHECK_EVERY_MS 5000u
 #define WBO_COME_BACK_MS   180000u   /* the bridge reboots, maybe runs a trial and rolls back */
 #define WBO_MANIFEST_LEN   128u
+#define WBO_TRIES          3u        /* attempts per version when the transfer fails on the way */
 
 typedef struct {
     /* Start a request with a borrowed body (wb_request_ext). 0 = sent, -1 = slot busy (try again
@@ -53,14 +55,17 @@ typedef enum {
     WBO_DATA,        /* sending chunks */
     WBO_END,         /* OTA_END sent: the bridge verifies */
     WBO_REBOOT,      /* REBOOT sent */
-    WBO_WAIT_BACK,   /* waiting for HELLO with the new version */
+    WBO_WAIT_BACK,   /* waiting for HELLO with the new version, confirmed */
 } wbo_state_t;
 
 typedef struct {
     wbo_io_t io;
     wbo_state_t state;
     uint32_t size, off, want, failed, next_check, deadline;
+    uint32_t tries_for;      /* the version `tries` counts attempts of */
+    uint8_t tries;
     bool forced, resend;
+    bool seen_new;           /* WAIT_BACK: HELLO showed the new version (on trial) */
     uint8_t *buf;            /* allocated while an update runs: the request body */
     wb_reply_t *reply;       /* only read in the step that took it: may be shared (wbo_init) */
     char status[80];

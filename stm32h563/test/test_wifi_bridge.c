@@ -37,6 +37,9 @@ typedef struct {
     uint8_t img[8192];
     uint32_t ota_size, ota_next, ota_last_off, ota_last_len, ota_version;
     bool ota_active, ota_done, refuse_begin, rollback;
+    bool pending;           /* running a new image on trial: PENDING_VERIFY in HELLO */
+    char prev_fw[16];       /* what a rollback returns to */
+    uint32_t trial_until;   /* with rollback: when the trial ends without a confirmation */
     int data_frames;
 } sim_t;
 
@@ -63,7 +66,8 @@ static void sim_emit(size_t n)
 static void sim_hello(void)
 {
     bwp_hello_t h = {.fw_version = sim.fw, .hw_rev = "A", .state = sim.state,
-                     .flags = (uint8_t)(BWP_F_ETH_LINK | BWP_F_POD_KNOWN | (sim.pair.paired ? BWP_F_PAIRED : 0))};
+                     .flags = (uint8_t)(BWP_F_ETH_LINK | BWP_F_POD_KNOWN | (sim.pair.paired ? BWP_F_PAIRED : 0) |
+                                        (sim.pending ? BWP_F_PENDING_VERIFY : 0))};
     memcpy(h.bridge_mac, BRIDGE, 6);
     memcpy(h.pod_mac, POD, 6);
     memcpy(h.nonce, sim.pair.nonce, BWP_NONCE_LEN);
@@ -100,6 +104,9 @@ static void sim_rx(const uint8_t *f, size_t len)
     }
     sim.handled++;
     sim.last_counter_seen = counter;
+    if (sim.pending && !sim.rollback) {
+        sim.pending = false;  /* a valid request from the pod confirms the new image (ota_confirm) */
+    }
     size_t n;
     if (m.type == BWP_PAIR) {
         /* As the bridge firmware does: a fresh key pair, the key from X25519, answer, then switch. */
@@ -120,7 +127,7 @@ static void sim_rx(const uint8_t *f, size_t len)
         memcpy(sim.pub, pub, 32);
         return;
     } else if (m.type == BWP_STATUS) {
-        bwp_status_t s = {.state = sim.state, .flags = BWP_F_PAIRED, .channel = 6, .rssi = -58, .uptime_s = 77};
+        bwp_status_t s = {.state = sim.state, .flags = (uint8_t)(BWP_F_PAIRED | (sim.pending ? BWP_F_PENDING_VERIFY : 0)), .channel = 6, .rssi = -58, .uptime_s = 77};
         strcpy(s.ssid, sim.ssid);
         s.counters.eth_rx = 1234;
         n = bwp_build_status(out, BWP_MAX_FRAME, POD, BRIDGE, m.seq, &s);
@@ -184,8 +191,11 @@ static void sim_rx(const uint8_t *f, size_t len)
             n = bwp_sign_frame(out, BWP_MAX_FRAME, sim.pair.key, sim.pair.nonce, counter);
         }
         sim_emit(n);
-        if (sim.ota_done && !sim.rollback) {
+        if (sim.ota_done) {  /* boots the new image on trial; a rollback build never confirms it */
+            strcpy(sim.prev_fw, sim.fw);
             wbo_version_str(sim.ota_version, sim.fw);
+            sim.pending = true;
+            sim.trial_until = now_ms + 8000;
         }
         sim.ota_done = false;
         sim_boot();
@@ -273,6 +283,15 @@ static void run(uint32_t ms)
         sim.n_out = 0;
         for (int i = 0; i < n; i++) {
             wb_rx(&pod, sim.out[i], sim.out_len[i], now_ms);
+        }
+        if (sim.pending && sim.rollback && (int32_t)(now_ms - sim.trial_until) >= 0) {
+            strcpy(sim.fw, sim.prev_fw);  /* no confirmation in time: the bootloader goes back */
+            sim.pending = false;
+            sim_boot();
+            /* As the real bridge does: its first unsolicited STATUS (state change, no version,
+               flags without PENDING_VERIFY) comes before the HELLO. */
+            bwp_status_t us = {.state = sim.state, .flags = BWP_F_PAIRED};
+            sim_emit(bwp_build_status(sim.out[sim.n_out], BWP_MAX_FRAME, POD, BRIDGE, 0, &us));
         }
         if (now_ms % 2000 == 0) {
             sim_hello();
@@ -415,11 +434,14 @@ static void test_relay(void)
     slot.version = wbo_pack_version("0.3.0");
     slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
     sim.rollback = true;
-    run(30000);
-    CHECK(relay.state == WBO_WAIT_BACK);
-    run(WBO_COME_BACK_MS + 6000);
+    for (int t = 0; t < 3000 && !strstr(wbo_status(&relay), "on trial"); t++) {
+        run(10);
+    }
+    CHECK(relay.state == WBO_WAIT_BACK && strcmp(sim.fw, "0.3.0") == 0);
+    CHECK(strstr(wbo_status(&relay), "updating to 0.3.0: on trial") != NULL);
+    run(12000);  /* the trial ends: the bridge is back on 0.2.0, and the pod says so at once */
     CHECK(relay.state == WBO_IDLE && strcmp(sim.fw, "0.2.0") == 0);
-    CHECK(strstr(wbo_status(&relay), "update to 0.3.0 failed: the bridge came back with its old firmware") != NULL);
+    CHECK(strstr(wbo_status(&relay), "update to 0.3.0 failed: the bridge rolled back") != NULL);
     frames = sim.data_frames;
     run(12000);
     CHECK(sim.data_frames == frames);
@@ -431,12 +453,58 @@ static void test_relay(void)
     }
     CHECK(strcmp(sim.fw, "0.3.0") == 0 && strcmp(wbo_status(&relay), "updated to 0.3.0") == 0);
 
+    /* Lost on the way (the bridge stops answering mid-transfer, as when it loses power): retried
+       on its own, and the next attempt goes through. */
+    slot.version = wbo_pack_version("0.3.1");
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    for (int t = 0; t < 3000 && relay.state != WBO_DATA; t++) {
+        run(10);
+    }
+    CHECK(relay.state == WBO_DATA);
+    sim.drop_next = 1000;
+    for (int t = 0; t < 3000 && relay.state != WBO_IDLE; t++) {
+        run(10);
+    }
+    CHECK(strstr(wbo_status(&relay), "update to 0.3.1 failed (will retry): no answer to OTA_DATA") != NULL);
+    sim.drop_next = 0;
+    sim.ota_active = false;  /* the bridge restarted: its transfer is gone */
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.3.1") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.3.1") == 0 && strcmp(wbo_status(&relay), "updated to 0.3.1") == 0);
+
+    /* Lost every time: WBO_TRIES attempts, then it gives up like any failure. */
+    slot.version = wbo_pack_version("0.3.2");
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    for (int t = 0; t < 20000 && !strstr(wbo_status(&relay), "0.3.2 failed: "); t++) {
+        if (relay.state == WBO_DATA) {
+            sim.drop_next = 1000;
+        }
+        if (relay.state == WBO_IDLE) {
+            sim.drop_next = 0;
+            sim.ota_active = false;
+        }
+        run(10);
+    }
+    CHECK(strstr(wbo_status(&relay), "update to 0.3.2 failed: no answer") != NULL);
+    CHECK(relay.tries == WBO_TRIES);
+    frames = sim.data_frames;
+    run(12000);
+    CHECK(sim.data_frames == frames);  /* not tried again by itself */
+    sim.drop_next = 0;
+    sim.ota_active = false;
+    wbo_force(&relay);
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.3.2") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.3.2") == 0);
+
     /* The bridge refuses the manifest: failed with its reason. */
     slot.version = wbo_pack_version("0.4.0");
     sim.refuse_begin = true;
     run(12000);
     CHECK(strstr(wbo_status(&relay), "update to 0.4.0 failed: ota-verify: signature: unknown-key") != NULL);
-    CHECK(strcmp(sim.fw, "0.3.0") == 0);
+    CHECK(strcmp(sim.fw, "0.3.2") == 0);
     sim.refuse_begin = false;
 
     /* Forced without a bridge: says why. */
