@@ -24,6 +24,11 @@ int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif);
 /* Any task: a bridge said HELLO recently on a live Ethernet link. */
 bool wifi_bridge_present(void);
 
+/* Net task: true once each time the bridge's Wi-Fi comes up (state "connected"). The Ethernet
+   DHCP uses it to send DISCOVER right away instead of waiting out lwIP's backoff, whose
+   earlier tries the bridge dropped while it was still joining. */
+bool wifi_bridge_take_joined(void);
+
 /* hw worker only (it is the single net_call_sync caller). Sends one request and waits for the
    answer, the timeout, or the bridge going away; waits first while the pod pairs on first
    contact. Returns 0 with *out filled when the bridge answered (out->result may be an error),
