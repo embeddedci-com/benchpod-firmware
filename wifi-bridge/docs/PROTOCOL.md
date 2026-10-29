@@ -56,7 +56,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x01 | RESULT | u8, see "Result codes" |
 | 0x02 | MODEL | string, `benchpod-wifi-bridge` |
 | 0x03 | FW_VERSION | string, e.g. `0.1.0` |
-| 0x04 | HW_REV | string, e.g. `A` |
+| 0x04 | HW_REV | string, e.g. `3`; empty while the firmware cannot tell the board revisions apart |
 | 0x05 | STATE | u8, see "States" |
 | 0x06 | BRIDGE_MAC | 6 bytes |
 | 0x07 | POD_MAC | 6 bytes, the learned pod MAC (also the bridge's Wi-Fi MAC) |

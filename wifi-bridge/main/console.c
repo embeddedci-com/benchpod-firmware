@@ -162,7 +162,8 @@ static void execute(char *line)
     if (strcmp(c, "help") == 0 || strcmp(c, "?") == 0) {
         cmd_help();
     } else if (strcmp(c, "version") == 0) {
-        printf("%s %s hw %s\n", BWP_MODEL, esp_app_get_description()->version, CONFIG_BRIDGE_HW_REV);
+        printf("%s %s", BWP_MODEL, esp_app_get_description()->version);
+        printf(CONFIG_BRIDGE_HW_REV[0] ? " hw %s\n" : "\n", CONFIG_BRIDGE_HW_REV);
         ok();
     } else if (strcmp(c, "status") == 0) {
         cmd_status();

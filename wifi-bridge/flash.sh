@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Flash a Wi-Fi bridge over its Tag-Connect pads with an Espressif ESP-Prog.
+# Flash a Wi-Fi bridge over its Tag-Connect pads with an Espressif ESP-Prog or an Olimex ESP-PROG.
 #
 #   ./flash.sh                 flash build/ (from ./build.sh) and open the log
-#   ./flash.sh -p PORT         pick the serial port (default: the ESP-Prog's UART, auto-detected)
+#   ./flash.sh -p PORT         pick the serial port (default: the programmer's UART, auto-detected)
 #   ./flash.sh --erase         erase the whole flash first: no Wi-Fi settings, no pairing, factory state
 #   ./flash.sh --no-monitor    flash only
 #   ./flash.sh --monitor       only open the log (115200 8N1, Ctrl-] quits)
 #
-# Wiring: TC2030-IDC cable from the bridge's J2 pads to the ESP-Prog's PROG header (pin 1 = EN on
-# both). Power the bridge from the ESP-Prog (VDD jumper on 3.3 V) with USB-C unplugged, or from
-# USB-C with the ESP-Prog's VDD jumper removed, never both. The ESP-Prog drives EN and IO0 itself
-# (DTR/RTS auto-reset), so no buttons are needed.
+# Wiring: README.md, "Flash". Espressif ESP-Prog: TC2030-IDC cable into its PROG header, pin 1 =
+# EN on both. Olimex ESP-PROG: the IDC's wires to its 0.1" header, TX and RX crossed, 3.3V left
+# open, the bridge powered from USB-C. Either programmer drives EN and IO0 itself (DTR/RTS
+# auto-reset), so no buttons are needed.
 #
 # Runs on the host, not in Docker (Docker on macOS cannot reach USB serial ports). Needs esptool:
 #   pip3 install esptool     (or: pipx install esptool)
@@ -43,16 +43,21 @@ else
 fi
 
 if [ -z "$port" ]; then
-  # The ESP-Prog is an FT2232H with two ports: channel A is JTAG, channel B (the second) is the
-  # UART wired to the PROG header. macOS: /dev/cu.usbserial-<serial>0 / ...1; Linux: ttyUSB0 / 1.
+  # Espressif's ESP-Prog is an FT2232H with two ports: channel A is JTAG, channel B (the second)
+  # is the UART wired to the PROG header. macOS: /dev/cu.usbserial-<serial>0 / ...1; Linux:
+  # ttyUSB0 / 1. The Olimex ESP-PROG is a CH340 with one port: /dev/cu.wchusbserial<loc> with
+  # WCH's macOS driver (which can also leave a /dev/cu.usbserial-<loc> for the same chip),
+  # /dev/cu.usbserial-<loc> with Apple's.
   ports=()
-  for p in /dev/cu.usbserial-* /dev/ttyUSB*; do
-    [ -e "$p" ] && ports+=("$p")
+  for p in /dev/cu.wchusbserial* /dev/cu.usbserial-* /dev/ttyUSB*; do
+    [ -e "$p" ] || continue
+    case "$p" in /dev/cu.usbserial-*) [ -e "/dev/cu.wchusbserial${p#/dev/cu.usbserial-}" ] && continue ;; esac
+    ports+=("$p")
   done
   case ${#ports[@]} in
-    0) echo "no ESP-Prog found (no /dev/cu.usbserial-* or /dev/ttyUSB*): plugged in? pass -p PORT" >&2; exit 1 ;;
+    0) echo "no programmer found (no /dev/cu.wchusbserial*, /dev/cu.usbserial-* or /dev/ttyUSB*): plugged in? pass -p PORT" >&2; exit 1 ;;
     1) port="${ports[0]}" ;;
-    2) port="${ports[1]}" ;;  # sorted by the shell glob: channel B
+    2) port="${ports[1]}" ;;  # an ESP-Prog, sorted by the shell glob: channel B
     *) echo "several serial adapters found, pass one with -p:" >&2; printf '  %s\n' "${ports[@]}" >&2; exit 1 ;;
   esac
   echo "=== using $port ==="

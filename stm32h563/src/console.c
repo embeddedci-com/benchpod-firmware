@@ -372,8 +372,8 @@ static void bridge_show(console_out_t out, void *ctx)
         op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
     else
         op(out, ctx, "  rssi: \r\n");
-    op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s hw %s, %s\r\n", i.mac[0], i.mac[1],
-       i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev,
+    op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s%s%s, %s\r\n", i.mac[0], i.mac[1],
+       i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev[0] ? " hw " : "", i.hw_rev,
        i.paired ? "paired" : "not paired");
     if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
     uint32_t iv;

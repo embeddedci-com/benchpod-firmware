@@ -10,7 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "l2fwd.h"
 
-// ---- Hardware rev A pin map (benchpod-private/pcb/wifi-bridge, tools/gen_schematic.py)
+// ---- Hardware pin map (benchpod-private pcb/wifi-bridge)
 #define PIN_OSC_OE      32  // 50 MHz oscillator output enable, 10k pull-down (R14)
 #define PIN_PHY_NRST    4   // LAN8742A nRST, 10k pull-down (R16)
 #define PIN_MDC         23

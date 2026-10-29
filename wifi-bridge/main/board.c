@@ -1,4 +1,4 @@
-// Board support for hardware rev A: RMII clock enable, PHY reset line, FACTORY and PAIR buttons,
+// Board support: RMII clock enable, PHY reset line, FACTORY and PAIR buttons,
 // and the STATUS test pad (TP8). The board has no LEDs; Ethernet link/activity are the RJ45's.
 #include "bridge.h"
 #include "driver/gpio.h"
