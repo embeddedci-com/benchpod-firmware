@@ -1453,6 +1453,7 @@ are set: clear them, calibrate, set them again. The J8 offset does not move the 
 |---|---|
 | `dac.<path>` | This pod's line, `volts = a + b × code16` with `a_uv` in µV and `b_pv` in pV per 16-bit code; against the built-in line its `offset_uv` (at 0 V on `12v`, at code 0 on the others) and `gain_ppm`. `null`: the built-in line |
 | `adc_gain_ppm.<source>` | The gain correction in ppm. `null`: the built-in gain |
+| `range` | On a board with the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (firmware 3.9.5+): the range `a_uv` / `b_nv` are for, the range in use |
 | `adc_low_gain_ppm` | The [low range](#adc_range--the-adc-input-range-analog-module-v3r4)'s gain correction in ppm, against the divider's nominal ratio; `null`: not measured. Only on a board with the low range (firmware 3.9.5+) |
 | `dmm` | `true` when any DMM part is stored |
 | `zero_count_mc` | The raw zero the offset is derived from: the mean count `current_in` read with J8 open, unwrapped, in thousandths of a count (firmware 3.9.4+, only when calibrated) |

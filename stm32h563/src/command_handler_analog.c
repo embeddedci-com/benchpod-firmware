@@ -295,13 +295,16 @@ static void dac_line_vs_compiled(int path, cal_lin_t pod, long *offset_uv, long 
 }
 
 /* The per-pod calibration as a reply. a_uv / b_nv are the fit this pod scales `current_in` with
-   (volts = a + b*count), in the units of the capabilities frame's adc_cal_a_uv / adc_cal_b_nv, so a
+   in the range in use (volts = a + b*count; `range` says which on a board with the low range), in the units of the capabilities frame's adc_cal_a_uv / adc_cal_b_nv, so a
    client can scale raw `current_in` counts the way adc_read does. `dac` and `adc_gain_ppm` are the
    DMM parts (null = the compiled fit); a DAC line is volts = a + b*code16, a in uV, b in pV per
    16-bit code. `rd` (an offset run) and `gm` (a gain run) add what was measured. */
 static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_gain_meas_t *gm) {
     static const char *const path_name[ADC_CAL_DAC_PATHS] = { "3v3", "5v", "12v" };
-    cal_lin_t fit = adc_cal_current_in_fit();
+    /* In the range in use (analog module v3r4: adc_range), so a client scales a current_in
+       capture with the fit it was taken in. */
+    adc_range_t range = adc_range_get();
+    cal_lin_t fit = adc_cal_range_fit(ADC_CAL_SRC_CAL1, range == ADC_RANGE_LOW ? 1 : 0);
     bool dmm = false;
     /* The whole frame is built here and sent as is: with the DMM parts it is up to about 650 B,
        past send_ok_str's 256 B. */
@@ -340,6 +343,7 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
     /* The low range's gain (analog module v3r4), on pods that have it. */
     if (adc_range_supported() && n < (int)sizeof(payload)) {
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"range\":\"%s\"", adc_range_name(range));
         if (adc_cal_low_gain_is_set()) {
             dmm = true;
             n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_low_gain_ppm\":%ld",

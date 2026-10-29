@@ -191,7 +191,13 @@ static void test_low_range_calibrate(void) {
 
     g_low_hw = true;
     handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
-    CHECK(whole_frame() && strstr(g_reply, "\"adc_low_gain_ppm\":null"), "low gain null: %s", g_reply);
+    CHECK(whole_frame() && strstr(g_reply, "\"adc_low_gain_ppm\":null") && strstr(g_reply, "\"range\":\"normal\"") &&
+          strstr(g_reply, "\"b_nv\":-1002"), "low gain null: %s", g_reply);
+    g_range = ADC_RANGE_LOW;
+    handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
+    CHECK(whole_frame() && strstr(g_reply, "\"range\":\"low\"") && strstr(g_reply, "\"b_nv\":-166"),
+          "the current_in fit of the low range: %s", g_reply);
+    g_range = ADC_RANGE_NORMAL;
     handle_calibrate(0, "{\"cmd\":\"calibrate\",\"adc\":\"ext\",\"range\":\"low\"}");
     CHECK(strstr(g_reply, "err:") && strstr(g_reply, "through cal1"), "low on ext: %s", g_reply);
     handle_calibrate(0, "{\"cmd\":\"calibrate\",\"adc\":\"cal1\",\"range\":\"high\"}");
