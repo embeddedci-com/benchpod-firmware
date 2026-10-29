@@ -149,6 +149,21 @@ int main(void) {
         CHECK(r.valid && r.span == 0u, "single-sample burst is valid with span 0");
     }
 
+    /* ---- 8. clipped samples: the two's-complement rails, nothing else ---- */
+    {
+        fill(s, 16, 65530);
+        CHECK(adc_count_clipped(s, 16) == 0u, "0 V is not clipped");
+        s[3] = 0x7FFF; s[9] = 0x8000;
+        CHECK(adc_count_clipped(s, 16) == 2u, "both rails count");
+        s[3] = 0x7FFE; s[9] = 0x8001;
+        CHECK(adc_count_clipped(s, 16) == 0u, "one count inside the rails is not clipped");
+        CHECK(adc_count_clipped(NULL, 16) == 0u, "NULL");
+        /* The rails are the full scale of a fit: the normal range's ext fit reads about +-32.8 V
+           there, so a clipped sample is past that. */
+        double v_pos = EXT_A + EXT_B * (0x8000 + 0.0), v_neg = EXT_A + EXT_B * (0x7FFF + 65536.0);
+        CHECK(v_pos > 32.0 && v_neg < -32.0, "rails at +-32 V (%.2f, %.2f)", v_pos, v_neg);
+    }
+
     if (fails == 0) printf("test_adc_scale: PASS\n");
     else            printf("test_adc_scale: %d FAILURES\n", fails);
     return fails ? 1 : 0;

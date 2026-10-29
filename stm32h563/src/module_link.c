@@ -181,6 +181,11 @@ int module_eeprom_write(uint16_t addr, const uint8_t *buf, size_t len)
     return 0;
 }
 
+bool module_adc_low_range(void)
+{
+    return s_link && s_present && module_ee_has_low_range(s_id_rc, &s_id);
+}
+
 int module_id(module_id_t *id)
 {
     if (id) *id = s_id;

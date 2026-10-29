@@ -63,6 +63,11 @@ int  module_id_reload(void);
 /* The calibration blob's CRC matched at the last read (false with no blob). */
 bool module_cal_valid(void);
 
+/* The module has the ADC low range (module_ee_has_low_range on the header read at boot).  False
+   off digital v3r3 and without a module.  Latched by analog_switch_init(): a module programmed as
+   3.4 at runtime gets the low range after the next restart. */
+bool module_adc_low_range(void);
+
 /* Write the ID fields (type, revision, serial), keeping the calibration fields. 0 / -1. */
 int  module_id_write(uint8_t type, uint8_t rev_major, uint8_t rev_minor, const char *serial);
 /* Record `len` bytes at MOD_EE_CAL_ADDR as the calibration blob: reads them back, stores their

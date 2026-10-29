@@ -25,6 +25,10 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
                "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,",
             tf(c->analog), tf(c->analog), c->adc_bits, c->adc_fullscale_mv, c->adc_channels,
             c->adc_cal_a_uv, c->adc_cal_b_nv);
+    /* The ADC input range the fit above is for (analog module v3r4: adc_range). */
+    if (c->analog)
+        bp_emit(e, "\"adc_low_range\":%s,\"adc_range\":\"%s\",\"adc_range_fs_mv\":%ld,",
+                tf(c->adc_low_range), c->adc_range ? c->adc_range : "normal", c->adc_range_fs_mv);
     bp_emit(e, "\"dac\":%s,\"dac_replay\":%s,\"dac_dc\":%s,\"dac_bits\":%d,\"dac_replay_bits\":%d,"
                "\"dac_fullscale_mv\":%d,\"dac_channels\":%d,"
                "\"dac_deep_replay\":%s,\"dac_replay_max_samples\":%lu,"
@@ -69,6 +73,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"lan_tls\"");        /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
     if (!c->no_wifi_scan) bp_emit_raw(e, ",\"wifi_scan\"");   /* the built-in Wi-Fi or a Wi-Fi bridge (wifi_scan.h) */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
+    if (c->adc_low_range) bp_emit_raw(e, ",\"adc_low_range\"");   /* adc_range low (module v3r4) */
     if (c->analog) bp_emit_raw(e, ",\"analog\",\"scope\",\"dac_limits\",\"calibrate\",\"cal_dmm\",\"current_out\"");
     if (c->dac_ac)          bp_emit_raw(e, ",\"dac\"");
     if (c->dac_dc)          bp_emit_raw(e, ",\"dac_dc\"");

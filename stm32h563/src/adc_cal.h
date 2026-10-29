@@ -123,11 +123,12 @@ typedef struct {
     uint8_t  zero_set;                /* 1 = zero_count_mc holds a measured zero */
     uint8_t  dac_set;                 /* bit n = dac[n] holds points (0 3v3, 1 5v, 2 12v) */
     uint8_t  gain_set;                /* bit n = gain[n] holds points (ADC_CAL_SRC_*) */
-    uint8_t  rsvd8;
+    uint8_t  low_set;                 /* 1 = gain_low holds points (was reserved, 0 before 3.9.5) */
     int32_t  zero_count_mc;           /* mean count with J8 open (0 V), unwrapped, milli-counts */
     adc_cal_dac_pts_t  dac[ADC_CAL_DAC_PATHS];
     adc_cal_gain_pts_t gain[ADC_CAL_SRCS];
-    uint32_t reserved[6];             /* room for more (the 4-20 mA output, ...) */
+    adc_cal_gain_pts_t gain_low;      /* the low range through cal1 (was reserved[0..3]) */
+    uint32_t reserved[2];             /* room for more (the 4-20 mA output, ...) */
 } adc_cal_t;                          /* 116 bytes */
 
 /* Version 1, as firmware 3.4.0 to 3.9.3 stored it. */
@@ -208,12 +209,46 @@ typedef struct {
 /* Store a measurement's points and use the gain they give. NULL = stored, else why it was refused. */
 const char *adc_cal_gain_store(int src, adc_cal_gain_meas_t *m);
 
+/* ---- The ADC low range (analog module v3r4, i2c_bus.h adc_range_t) ----
+ *
+ * The low range reads volts = ratio * g_low * (the normal fit of the source), where ratio is the
+ * revision's (cal_adc_low_ratio) and g_low this pod's low-range gain.  The offset needs nothing
+ * new: it arises after the divider, so the zero count measured on the normal range is the zero
+ * of the low range too, and taking it out of the normal fit takes it out of the low one.  g_low
+ * corrects the divider's resistor tolerances.  K5 swaps the same leg for every source, so one
+ * gain, measured through the cal1 loopback (the 5 V output at 1 V and 4 V, inside the low
+ * range's +-5.46 V), serves ext, cal1 and current_in.  Its points sit in gain_low and it is
+ * derived, like the others, against the cal1 fit in use (its own gain included). */
+#define ADC_CAL_MAX_LOW_GAIN_PPM  50000   /* four 1 % resistors */
+
+/* The fit a source is scaled with on this pod in a range: adc_cal_source_fit for the normal
+   range, times ratio and the low-range gain for the low one.  range: 0 normal, 1 low. */
+cal_lin_t adc_cal_range_fit(int src, int range);
+bool      adc_cal_low_gain_is_set(void);
+float     adc_cal_low_gain(void);
+/* Store a low-range measurement through cal1 (adc_cal_measure_gain with low set).  Needs what a
+   cal1 gain needs (adc_cal_gain_ready).  NULL = stored, else why it was refused. */
+const char *adc_cal_low_gain_store(adc_cal_gain_meas_t *m);
+
+/* The input full scale of a fit in millivolts: half the 16-bit circle, |b| * 32768. */
+long adc_cal_fullscale_mv(cal_lin_t fit);
+
+/* The range self-test (`adc_range` test): the cal1 loopback at ADC_RANGE_TEST_V, read in both
+   ranges.  A point passes when the two readings agree within ADC_RANGE_TEST_TOL_PPM of the set
+   point plus ADC_RANGE_TEST_TOL_MV (an uncalibrated low range is within a few %; a K5 that does
+   not move reads 6x off), and both are within that of the set point.  Pure. */
+#define ADC_RANGE_TEST_POINTS  2
+#define ADC_RANGE_TEST_TOL_PPM 50000
+#define ADC_RANGE_TEST_TOL_MV  30
+extern const float ADC_RANGE_TEST_V[ADC_RANGE_TEST_POINTS];   /* 1.0 V and 3.5 V: under 4 V */
+bool adc_range_test_point_ok(float set_v, float normal_v, float low_v);
+
 /* Names for replies and requests: "3v3"/"5v"/"12v" and "cal1"/"cal2"/"ext" (-1 = unknown). */
 const char *adc_cal_src_name(int src);
 int         adc_cal_src_index(const char *name);
 
 /* Remove the per-pod calibration (flash and active copy), or one part of it: "offset", "dac"
-   or "adc" (NULL = all). 0 on success, -1 failed, -2 unknown part. */
+   or "adc" (the gains, the low range's included) (NULL = all). 0 on success, -1 failed, -2 unknown part. */
 int adc_cal_clear(void);
 int adc_cal_clear_part(const char *part);
 
@@ -223,8 +258,16 @@ int adc_cal_clear_part(const char *part);
 int adc_cal_measure_current_in(adc_reading_t *out);
 
 /* Hardware: drive the source's two set points through its loopback and fill m->v and m->count.
+   low: in the low range (cal1 only; -1 otherwise or without K5).
    0 = done, -1 = route or DAC failed, -2 = capture failed, -3 = a burst was not settled
-   (*span_out = its span). Leaves the outputs off. The caller owns the ADC. */
-int adc_cal_measure_gain(int src, adc_cal_gain_meas_t *m, uint32_t *span_out);
+   (*span_out = its span). Leaves the outputs off and the range normal. The caller owns the ADC. */
+int adc_cal_measure_gain(int src, bool low, adc_cal_gain_meas_t *m, uint32_t *span_out);
+
+/* Hardware: the range self-test.  For each ADC_RANGE_TEST_V point, drive it on the 5 V output
+   into cal1 and read it in the normal range (normal_v) and the low range (low_v), each with its
+   fit (adc_cal_range_fit).  Same return codes as adc_cal_measure_gain; leaves the outputs off and
+   the range normal. */
+typedef struct { float set_v, normal_v, low_v; bool ok; } adc_range_test_pt_t;
+int adc_range_selftest(adc_range_test_pt_t pts[ADC_RANGE_TEST_POINTS], uint32_t *span_out);
 
 #endif /* ADC_CAL_H */

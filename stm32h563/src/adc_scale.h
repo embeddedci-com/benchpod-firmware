@@ -59,6 +59,16 @@ typedef struct {
  * `n` must be >= 1; raw must be non-NULL.  A degenerate call returns valid=0. */
 adc_reading_t adc_scale_burst(const uint16_t *raw, size_t n, float a, float b);
 
+/* The MCP33131's output is two's complement: its rails are 0x7FFF (+FS) and 0x8000 (-FS), side by
+ * side on the 16-bit circle, half a turn from 0 V (adc_scale_burst's branch cut).  A sample on
+ * either rail is clipped: the input is past the range's full scale (+-32.8 V normal, +-5.46 V
+ * low).  The server and the SDK flag raw captures the same way. */
+#define ADC_RAIL_POS 0x7FFFu
+#define ADC_RAIL_NEG 0x8000u
+static inline int adc_sample_clipped(uint16_t raw) { return raw == ADC_RAIL_POS || raw == ADC_RAIL_NEG; }
+/* How many of `n` samples sit on a rail. */
+size_t adc_count_clipped(const uint16_t *raw, size_t n);
+
 /* The mean count as the 16-bit integer a reply reports.  A mean of 65535.6 rounds to
  * 65536, which is count 0 on the circle (seen on pod .220, whose `current_in` zero sits there). */
 static inline int adc_count_u16(float count) { return (int)(lroundf(count) & 0xFFFF); }

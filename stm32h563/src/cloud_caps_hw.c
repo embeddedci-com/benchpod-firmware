@@ -11,6 +11,7 @@
 #include "boot_guard.h"
 #include "cal_data.h"        /* ADC_CAL_EXT: the front-SMA cal shipped in capabilities */
 #include "adc_cal.h"         /* adc_cal_fit: this pod's front-end offset */
+#include "i2c_bus.h"         /* adc_range_get: the ADC input range */
 #include "current_out.h"
 #include "fault.h"
 #include "flash_layout.h"
@@ -51,9 +52,15 @@ void cloud_caps_collect(cloud_caps_t *c) {
        handle_adc_read applies), so the server scales raw counts to the probe voltage. Shipped as
        integers (a in microvolts, b in nanovolts per count): newlib-nano's printf has no %f, and a
        %g once sent a malformed frame. The server divides back. */
-    cal_lin_t ext = adc_cal_source_fit(ADC_CAL_SRC_EXT);   /* with this pod's offset and gain (adc_cal.h) */
+    /* The fit of the range in use (analog module v3r4: adc_range); every range change re-sends
+       the capabilities, so the server scales a capture with the range it was taken in. */
+    adc_range_t range = analog ? adc_range_get() : ADC_RANGE_NORMAL;
+    cal_lin_t ext = adc_cal_range_fit(ADC_CAL_SRC_EXT, range == ADC_RANGE_LOW ? 1 : 0);   /* with this pod's offset and gain (adc_cal.h) */
     c->adc_cal_a_uv = lround((double)ext.a * 1000000.0);
     c->adc_cal_b_nv = lround((double)ext.b * 1000000000.0);
+    c->adc_low_range = analog && adc_range_supported();
+    c->adc_range = adc_range_name(range);
+    c->adc_range_fs_mv = adc_cal_fullscale_mv(ext);
     c->dac_ac = analog && DAC_AC;
     c->dac_replay = analog && DAC_REPLAY;
     c->dac_dc = analog && DAC_DC;

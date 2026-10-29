@@ -81,6 +81,26 @@ int main(void)
     CHECK(strcmp(module_ee_type_str(MOD_TYPE_ANALOG), "analog") == 0 &&
           strcmp(module_ee_type_str(7), "unknown") == 0, "type string");
 
+    /* The ADC low range (K5) from analog module 3.4 on, and only from a decoded header. */
+    {
+        static const struct { uint8_t major, minor; bool low; } revs[] = {
+            { 3, 3, false }, { 3, 4, true }, { 3, 5, true }, { 2, 9, false }, { 4, 0, true }, { 0, 0, false },
+        };
+        module_id_t m = { 0 };
+        m.type = MOD_TYPE_ANALOG;
+        for (unsigned i = 0; i < sizeof(revs) / sizeof(revs[0]); i++) {
+            m.rev_major = revs[i].major; m.rev_minor = revs[i].minor;
+            CHECK(module_ee_has_low_range(MOD_EE_OK, &m) == revs[i].low, "low range at rev %u.%u",
+                  revs[i].major, revs[i].minor);
+        }
+        m.rev_major = 3; m.rev_minor = 4;
+        CHECK(!module_ee_has_low_range(MOD_EE_BLANK, &m), "blank EEPROM: no low range");
+        CHECK(!module_ee_has_low_range(MOD_EE_BAD_CRC, &m), "bad CRC: no low range");
+        CHECK(!module_ee_has_low_range(MOD_EE_OK, NULL), "no header");
+        m.type = 7;
+        CHECK(!module_ee_has_low_range(MOD_EE_OK, &m), "not an analog module");
+    }
+
     if (fails) { printf("test_module_eeprom: %d failure(s)\n", fails); return 1; }
     printf("test_module_eeprom: all passed\n");
     return 0;

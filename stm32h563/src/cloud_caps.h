@@ -35,7 +35,10 @@ typedef struct {
     const char   *lan_policy;
     bool          analog;
     int           adc_bits, adc_fullscale_mv, adc_channels;
-    long          adc_cal_a_uv, adc_cal_b_nv;
+    long          adc_cal_a_uv, adc_cal_b_nv;   /* the ext fit of the range in use */
+    bool          adc_low_range;  /* the ADC low range (analog module v3r4, K5): adc_range */
+    const char   *adc_range;      /* "normal" / "low": the range adc_cal_* and adc_range_fs_mv are for */
+    long          adc_range_fs_mv; /* that range's input full scale, mV (+-) */
     bool          dac_ac, dac_replay, dac_dc;
     int           dac_bits, dac_replay_bits, dac_fullscale_mv, dac_channels;
     bool          deep_replay;

@@ -15,7 +15,14 @@ The sweep only fixes the RATIO of the legs (Ct/Cb): the reported Ct assumes a bo
 Measured 2026-10-20 on baea06 (rev3 with the 2-6 pF trimmer): top 11.4 pF against 107 pF, flat
 needs 9.7 pF, HF gain +16 % over DC.  v3r2 and the analog module fix it with 9.1 pF + 100 pF 1 %.
 
+--range low (analog module v3r4 and later): relay K5 swaps the bottom leg for R182 910k || C269
+47 pF and puts C271 47 pF across R90, so the model is top 910k || 56.4 pF (9.1 + 47 + 0.3 stray)
+against bottom 910k || ~55 pF (47 + ~8 stray), flat at equal capacitors.  The sine stays under
+4 V (offset 2.0 V, peak 1.8 V by default): the low range's full scale is +-5.46 V.  Run it on both
+ranges on the first board to settle C269/C271 (C270 is a DNP trim pad).
+
     python3 adc_comp_sweep.py --pod usb --out ../rev3/comp_sweep.json
+    python3 adc_comp_sweep.py --pod usb --range low --out ../v3r4/comp_sweep_low.json
     python3 adc_comp_sweep.py --fit ../rev3/comp_sweep.json          # refit a saved sweep
 
 Prints a JSON summary as the last line (for scripts/ship-pod); exits 1 when the HF/DC gain is
@@ -36,13 +43,31 @@ FS = 400000.0          # ADC rate the sweep runs at
 DAC_RATE = 888888.0    # DAC update rate: its sample-and-hold sinc
 
 
-def measure(pod, freqs, samples, amplitude):
+# Per range: the divider and the sine that stays inside the range.
+RANGES = {
+    "normal": {"r_top": 910e3, "r_bottom": 82.5e3, "c_bottom": 107e-12, "amplitude": 2.4, "offset": 2.5},
+    "low":    {"r_top": 910e3, "r_bottom": 910e3,  "c_bottom": 55e-12,  "amplitude": 1.8, "offset": 2.0},
+}
+
+
+def route(pod, rng):
+    """The cal1 loopback in `rng`.  The raw command, so any SDK version works; the reply says
+    the range the pod is in, so a board without the low range fails here, not in the fit."""
+    r = pod.command({"cmd": "analog_path", "path": "cal1", "range": rng})
+    if r.get("range", "normal") != rng:
+        raise SystemExit(f"the pod is in the {r.get('range')} range, not {rng}")
+
+
+def measure(pod, freqs, samples, amplitude, offset=2.5, rng="normal"):
     """Sine amplitude in ADC counts per frequency, through the cal1 loopback."""
+    if offset + amplitude > (4.0 if rng == "low" else 5.0) or offset - amplitude < 0.0:
+        raise SystemExit(f"the sine {offset - amplitude:.2f}..{offset + amplitude:.2f} V does not fit "
+                         f"the {rng} range on the 5 V output (low: under 4 V)")
     rows = []
-    pod.analog_path("cal1")
+    route(pod, rng)
     try:
         for f in freqs:
-            pod.generate("sine", freq_hz=f, amplitude=amplitude, offset=2.5, dac_path="5v",
+            pod.generate("sine", freq_hz=f, amplitude=amplitude, offset=offset, dac_path="5v",
                          route=False)
             time.sleep(0.3)
             cap = pod.capture_adc(samples, sample_rate_hz=FS)
@@ -119,10 +144,14 @@ def main():
     ap.add_argument("--out", help="write the sweep and the fit to this JSON file")
     ap.add_argument("--freqs", help="comma list of frequencies in Hz")
     ap.add_argument("--samples", type=int, default=32768)
-    ap.add_argument("--amplitude", type=float, default=2.4, help="sine peak in volts")
-    ap.add_argument("--r-top", type=float, default=910e3, help="R90")
-    ap.add_argument("--r-bottom", type=float, default=82.5e3, help="R91")
-    ap.add_argument("--c-bottom", type=float, default=107e-12, help="C72 + strays (farads)")
+    ap.add_argument("--range", choices=list(RANGES), default="normal",
+                    help="ADC input range: low = K5 on, analog module v3r4+ (sets the defaults below)")
+    ap.add_argument("--amplitude", type=float, help="sine peak in volts (normal 2.4, low 1.8)")
+    ap.add_argument("--offset", type=float, help="sine centre in volts (normal 2.5, low 2.0)")
+    ap.add_argument("--r-top", type=float, help="R90 (910k)")
+    ap.add_argument("--r-bottom", type=float, help="R91 82.5k, low range R182 910k")
+    ap.add_argument("--c-bottom", type=float,
+                    help="bottom leg C + strays in farads: C72 107p, low range C269 + ~8p = 55p")
     ap.add_argument("--max-error", type=float, default=0.05,
                     help="fail when the HF/DC gain is off by more than this (0.05 = 5 %%)")
     args = ap.parse_args()
@@ -131,28 +160,33 @@ def main():
         with open(args.fit) as fh:
             saved = json.load(fh)
         rows, pod_name = saved["rows"], saved.get("pod", "")
-    else:
+        if args.range == "normal" and saved.get("range"):
+            args.range = saved["range"]   # refit with the range it was measured in
+    for k, v in RANGES[args.range].items():
+        if getattr(args, k) is None:
+            setattr(args, k, v)
+    if not args.fit:
         from embeddedci.benchpod import BenchPod
         freqs = [int(v) for v in args.freqs.split(",")] if args.freqs else FREQS
         pod_name = args.pod
-        rows = measure(BenchPod(args.pod), freqs, args.samples, args.amplitude)
+        rows = measure(BenchPod(args.pod), freqs, args.samples, args.amplitude, args.offset, args.range)
 
     fit = fit_divider(rows, args.r_top, args.r_bottom, args.c_bottom)
     ok = bool(abs(fit["hf_dc_gain"] - 1) <= args.max_error)
     for p in fit["points"]:
         print(f"{p['f']:9d} Hz gain {p['gain']:.4f} model {p['model']:.4f}")
-    print(f"top leg {fit['c_top_pf']} pF against {fit['c_bottom_pf']} pF, flat needs "
+    print(f"{args.range} range: top leg {fit['c_top_pf']} pF against {fit['c_bottom_pf']} pF, flat needs "
           f"{fit['c_top_flat_pf']} pF: HF/DC gain {fit['hf_dc_gain']:.3f} "
           f"(fit {fit['fit_rms_pct']} % rms) -> {'ok' if ok else 'OFF'}")
     if args.out:
         with open(args.out, "w") as fh:
-            json.dump({"type": "adc_comp_sweep", "pod": pod_name, "source": "cal1",
+            json.dump({"type": "adc_comp_sweep", "pod": pod_name, "source": "cal1", "range": args.range,
                        "date": datetime.datetime.now().isoformat(timespec="seconds"),
                        "r_top": args.r_top, "r_bottom": args.r_bottom, "rows": rows,
                        "fit": fit}, fh, indent=1)
         print("wrote", args.out)
     summary = {k: v for k, v in fit.items() if k != "points"}
-    print(json.dumps({"ok": ok, **summary}))
+    print(json.dumps({"ok": ok, "range": args.range, **summary}))
     sys.exit(0 if ok else 1)
 
 

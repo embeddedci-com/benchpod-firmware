@@ -79,6 +79,7 @@ static double g_gen_amp, g_gen_mid;
 static wave16_shape_t g_gen_shape;
 static int g_gen16_calls;
 int analog_path_set(analog_path_t p) { g_route = (int)p; return 0; }
+adc_range_t adc_range_get(void) { return ADC_RANGE_NORMAL; }
 int analog_path_from_name(const char *n, analog_path_t *out) {
     if (strcmp(n, "3v3") == 0) *out = ANALOG_PATH_DAC_3V3;
     else if (strcmp(n, "5v") == 0) *out = ANALOG_PATH_DAC_5V;

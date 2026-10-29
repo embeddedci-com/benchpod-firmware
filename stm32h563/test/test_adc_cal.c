@@ -455,6 +455,85 @@ static void test_downgrade_keeps_the_offset(void) {
           "a lone version-2 record was not taken");
 }
 
+/* The low range: the nominal fit is the normal one times the ratio (offset included, so the zero
+   count reads 0 V in both ranges); a measured low-range gain through cal1 scales every source's
+   low fit and nothing in the normal range; it persists, is checked at load and clears with "adc". */
+static void test_low_range(void) {
+    fresh_rev3_pod(true);
+    float k = cal_adc_low_ratio();
+    CHECK(fabsf(k - 0.166247f) < 1e-5f, "nominal ratio %f", (double)k);
+    CHECK(fabsf(ADC_LOW_RANGE_RATIO_NOMINAL - 82.5f / 992.5f * 2.0f) < 1e-7f, "ratio from the resistors");
+    for (int src = 0; src < ADC_CAL_SRCS; src++) {
+        cal_lin_t n = adc_cal_range_fit(src, 0), l = adc_cal_range_fit(src, 1), f = adc_cal_source_fit(src);
+        CHECK(n.a == f.a && n.b == f.b, "normal range = the source fit (%d)", src);
+        CHECK(fabsf(l.a - k * n.a) < 1e-6f && fabsf(l.b - k * n.b) < 1e-9f, "low = ratio * normal (%d)", src);
+    }
+    /* Full scale: about +-32.8 V normal, +-5.46 V low. */
+    long fs_n = adc_cal_fullscale_mv(adc_cal_range_fit(ADC_CAL_SRC_EXT, 0));
+    long fs_l = adc_cal_fullscale_mv(adc_cal_range_fit(ADC_CAL_SRC_EXT, 1));
+    CHECK(fs_n > 32700 && fs_n < 32950, "normal full scale %ld mV", fs_n);
+    CHECK(fs_l > 5430 && fs_l < 5490, "low full scale %ld mV", fs_l);
+    /* The open-J8 count reads 0 V in the low range too. */
+    {
+        cal_lin_t l = adc_cal_range_fit(ADC_CAL_SRC_CAL1, 1);
+        double v = (double)l.a + (double)l.b * 65585.0;   /* count 49, unwrapped */
+        CHECK(fabs(v) < 0.0005, "zero in the low range reads %f V", v);
+    }
+
+    /* A low-range gain needs what a cal1 gain needs (the 5v line). */
+    adc_cal_gain_meas_t m = { .v = { 0.9959f, 3.9929f } };
+    CHECK(adc_cal_low_gain_store(&m) != NULL && !adc_cal_low_gain_is_set(), "low gain without the 5v line");
+    uint16_t c1 = dac_code16_for_volts(1, 1.0f), c2 = dac_code16_for_volts(1, 4.0f);
+    CHECK(adc_cal_dac_store(1, c1, 995900, c2, 3992900) == NULL, "setup: 5v line");
+
+    /* The pod's divider reads 1.2 % low in the low range: counts the nominal low fit reads as
+       v / 1.012. */
+    float off = (float)adc_cal_current_in_offset_uv() / 1e6f;
+    for (int i = 0; i < 2; i++)
+        m.count[i] = (float)(count_mc_for_cal1(m.v[i] / 1.012 / k + off) / 1000.0);
+    cal_lin_t ext_n = adc_cal_range_fit(ADC_CAL_SRC_EXT, 0), ext_l = adc_cal_range_fit(ADC_CAL_SRC_EXT, 1);
+    CHECK(adc_cal_low_gain_store(&m) == NULL, "a 1.2 %% low gain was refused");
+    CHECK(adc_cal_low_gain_is_set() && fabsf(adc_cal_low_gain() - 1.012f) < 5e-5f, "low gain %f", (double)adc_cal_low_gain());
+    CHECK(fabsf(m.residual_v) < 2e-4f, "residual %f V", (double)m.residual_v);
+    cal_lin_t ext_l2 = adc_cal_range_fit(ADC_CAL_SRC_EXT, 1), ext_n2 = adc_cal_range_fit(ADC_CAL_SRC_EXT, 0);
+    CHECK(fabsf(ext_l2.b / ext_l.b - 1.012f) < 5e-5f, "ext's low fit follows the gain");
+    CHECK(ext_n2.a == ext_n.a && ext_n2.b == ext_n.b, "the normal range changed");
+    CHECK(adc_cal_gain_is_set(ADC_CAL_SRC_CAL1) == false, "a low gain set the normal cal1 gain");
+
+    /* Persisted; 8 % is refused and keeps the old one. */
+    CHECK(adc_cal_load() == 0 && fabsf(adc_cal_low_gain() - 1.012f) < 5e-5f, "low gain lost over a reload");
+    adc_cal_gain_meas_t bad = { .v = { 0.9959f, 3.9929f } };
+    for (int i = 0; i < 2; i++) bad.count[i] = (float)(count_mc_for_cal1(bad.v[i] / 1.08 / k + off) / 1000.0);
+    const char *why = adc_cal_low_gain_store(&bad);
+    CHECK(why && strstr(why, "low range"), "8 %% low gain: %s", why ? why : "(stored)");
+    CHECK(fabsf(adc_cal_low_gain() - 1.012f) < 5e-5f, "a refused low gain replaced the old one");
+
+    /* A later cal1 gain keeps the low range where its points put it. */
+    adc_cal_gain_meas_t g = { .v = { 0.9959f, 3.9929f } };
+    for (int i = 0; i < 2; i++) g.count[i] = (float)(count_mc_for_cal1(g.v[i] / 1.0018 + off) / 1000.0);
+    cal_lin_t cal1_l = adc_cal_range_fit(ADC_CAL_SRC_CAL1, 1);
+    CHECK(adc_cal_gain_store(ADC_CAL_SRC_CAL1, &g) == NULL, "setup: cal1 gain");
+    cal_lin_t cal1_l2 = adc_cal_range_fit(ADC_CAL_SRC_CAL1, 1);
+    CHECK(fabsf(cal1_l2.b / cal1_l.b - 1.0f) < 2e-5f, "the low cal1 fit moved with the normal gain (%f)",
+          (double)(cal1_l2.b / cal1_l.b));
+
+    /* "adc" clears the low range's gain with the others. */
+    CHECK(adc_cal_clear_part("adc") == 0 && !adc_cal_low_gain_is_set() && adc_cal_low_gain() == 1.0f, "clear adc");
+    CHECK(adc_cal_load() == 0 && !adc_cal_low_gain_is_set(), "clear survives a reload");
+    CHECK(adc_cal_clear() == 0, "clear all");
+}
+
+/* The range self-test: both ranges read the set point; a K5 that does not move is 6x off. */
+static void test_range_selftest_eval(void) {
+    CHECK(ADC_RANGE_TEST_V[1] < 4.0f, "the test stays under 4 V");
+    CHECK(adc_range_test_point_ok(3.5f, 3.502f, 3.49f), "a good point");
+    CHECK(adc_range_test_point_ok(1.0f, 1.0f, 1.06f), "an uncalibrated low range 6 %% off at 1 V (inside 50 mV + 30 mV)");
+    CHECK(!adc_range_test_point_ok(3.5f, 3.5f, 3.5f * 0.166247f), "K5 stuck off");
+    CHECK(!adc_range_test_point_ok(3.5f, 3.5f / 0.166247f, 3.5f), "K5 stuck on");
+    CHECK(!adc_range_test_point_ok(3.5f, 3.5f, 3.75f), "low range 7 %% off");
+    CHECK(!adc_range_test_point_ok(3.5f, NAN, 3.5f), "no reading");
+}
+
 int main(void) {
     test_uncalibrated_changes_nothing();
     test_store_apply_persist();
@@ -473,6 +552,8 @@ int main(void) {
     test_new_general_fit_keeps_the_zero();
     test_v1_converts_to_the_same_readings();
     test_downgrade_keeps_the_offset();
+    test_low_range();
+    test_range_selftest_eval();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }
     printf("test_adc_cal: all passed\n");
     return 0;

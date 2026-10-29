@@ -97,18 +97,52 @@ static void test_gate(void) {
     CHECK(!dac_quad_present(), "present before boot sets it");
 }
 
-/* U58's byte: the pre-v3r2 relay bits, and P4 (ANA14_EN) only when asked for (v3r2). */
+/* U58's byte: the pre-v3r2 relay bits, P4 (ANA14_EN) only when asked for (v3r2), P5 (K5, the
+   ADC low range) only when asked for (module v3r4). */
 static void test_calsw_reg(void) {
     for (unsigned m = 0; m < 16; m++) {
         bool c1 = m & 1, c2 = m & 2, cur = m & 4, cp = m & 8;
-        CHECK(analog_calsw_reg(c1, c2, cur, cp, false) == m, "relays %x: %02x", m, analog_calsw_reg(c1, c2, cur, cp, false));
-        CHECK(analog_calsw_reg(c1, c2, cur, cp, true) == (m | 0x10u), "relays %x + ana14", m);
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, false, false) == m, "relays %x: %02x", m,
+              analog_calsw_reg(c1, c2, cur, cp, false, false));
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, true, false) == (m | 0x10u), "relays %x + ana14", m);
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, false, true) == (m | 0x20u), "relays %x + low range", m);
+        CHECK(analog_calsw_reg(c1, c2, cur, cp, true, true) == (m | 0x30u), "relays %x + both", m);
     }
+    CHECK(U58_LOW_RANGE_BIT == 0x20u, "K5 is P5");
+}
+
+/* U58's output pins: P5 is only ever an output on a board with K5. */
+static void test_u58_mask(void) {
+    CHECK(analog_u58_mask(false, false) == 0x0Fu, "v2/v3: P0..P3");
+    CHECK(analog_u58_mask(true, false) == 0x1Fu, "v3r2 / module: P4 too");
+    CHECK(analog_u58_mask(true, true) == 0x3Fu, "module v3r4: P5 too");
+    CHECK((uint8_t)~analog_u58_mask(true, false) & U58_LOW_RANGE_BIT, "module v3r3: P5 stays an input");
+}
+
+/* The range: names, and which paths keep it. */
+static void test_range(void) {
+    adc_range_t r;
+    CHECK(adc_range_from_name("low", &r) == 0 && r == ADC_RANGE_LOW, "low");
+    CHECK(adc_range_from_name("normal", &r) == 0 && r == ADC_RANGE_NORMAL, "normal");
+    CHECK(adc_range_from_name("high", &r) == -1 && adc_range_from_name(NULL, &r) == -1, "unknown");
+    CHECK(strcmp(adc_range_name(ADC_RANGE_LOW), "low") == 0 && strcmp(adc_range_name(ADC_RANGE__COUNT), "") == 0,
+          "names");
+    static const struct { analog_path_t p; bool keeps; } keep[] = {
+        { ANALOG_PATH_OFF, false }, { ANALOG_PATH_CAL2, false },
+        { ANALOG_PATH_ADC_EXT, true }, { ANALOG_PATH_CAL1, true }, { ANALOG_PATH_CURRENT_IN, true },
+        { ANALOG_PATH_DAC_3V3, true }, { ANALOG_PATH_DAC_5V, true }, { ANALOG_PATH_DAC_12V, true },
+        { ANALOG_PATH_CURRENT_OUT, true }, { ANALOG_PATH__COUNT, false },
+    };
+    for (unsigned i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
+        CHECK(analog_path_keeps_low_range(keep[i].p) == keep[i].keeps, "path %d keeps the range: %d",
+              (int)keep[i].p, keep[i].keeps);
 }
 
 int main(void) {
     test_table();
     test_calsw_reg();
+    test_u58_mask();
+    test_range();
     test_names();
     test_gate();
     if (fails) { printf("test_analog_path: %d failure(s)\n", fails); return 1; }

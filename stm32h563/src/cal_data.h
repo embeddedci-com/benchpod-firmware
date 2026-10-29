@@ -47,7 +47,19 @@ typedef struct {
      * with. Those records hold an offset in microvolts on this fit, not the raw count, so it is
      * kept here as it was even when adc_cal1 is measured again: the record converts exactly. */
     cal_lin_t adc_cal1_v1;
+
+    /* The ADC low range (analog module v3r4, relay K5, i2c_bus.h): what the low range reads per
+     * volt the normal range reads at the same count, the same for every source (K5 only swaps
+     * the divider's bottom leg; the offset arises after it, so it stays in counts).  0 = the
+     * nominal ADC_LOW_RANGE_RATIO_NOMINAL. */
+    float adc_low_ratio;
 } cal_set_t;
+
+/* The low range's ratio from the resistors: (82.5k / (910k + 82.5k)) / (910k / (910k + 910k)).
+   Replace with a measured adc_low_ratio once a v3r4 module has been swept (adc16_sweep.py --range
+   low); until then each pod's `calibrate` low-range gain corrects the resistor tolerances. */
+#define ADC_LOW_RANGE_RATIO_NOMINAL (82.5f / 992.5f / 0.5f)
+float cal_adc_low_ratio(void);
 
 /* Pick the set for a board revision (BOARD_REV_V3 -> rev3, BOARD_REV_V3R2 -> v3r2, anything
    else -> v2).  Call once at boot, right after board_rev_init() and before anything converts a

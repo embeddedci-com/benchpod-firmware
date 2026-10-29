@@ -29,6 +29,7 @@ static cloud_caps_t typical(void) {
         .analog = true,
         .adc_bits = 16, .adc_fullscale_mv = 4096, .adc_channels = 1,
         .adc_cal_a_uv = -1234567, .adc_cal_b_nv = 98765,
+        .adc_low_range = true, .adc_range = "low", .adc_range_fs_mv = 5461,
         .dac_ac = true, .dac_replay = true, .dac_dc = true,
         .dac_bits = 16, .dac_replay_bits = 16, .dac_fullscale_mv = 4096, .dac_channels = 1,
         .deep_replay = true, .replay_max_samples = 4194304,
@@ -53,7 +54,7 @@ static void check_features(const char *f) {
         "dac_deep_replay", "dac_replay_max_samples", "dac_control_loop", "dac_loop_sources",
         "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
-        "current_out_max_ua", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
+        "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
         "boot_id", "unclean_resets", "sensor_types", "gps", "uplink", "wifi_scan",
     };
     char v[64];
@@ -74,6 +75,7 @@ static void test_typical_frame(void) {
     CHECK(strstr(f, "\"type\":\"capabilities\"") != NULL);
     CHECK(strstr(f, "\"device_id\":\"0b7d2c1e-5a4f-4c3b-9e8d-7f6a5b4c3d2e\"") != NULL);
     CHECK(strstr(f, "\"adc_cal_a_uv\":-1234567") != NULL);
+    CHECK(strstr(f, "\"adc_low_range\":true,\"adc_range\":\"low\",\"adc_range_fs_mv\":5461,") != NULL);
     CHECK(strstr(f, "\"last_crash\":\"none\"}") != NULL);
     CHECK(strstr(f, "\"boot_id\":\"0000002a\",\"unclean_resets\":0,") != NULL);
     CHECK(strstr(f, "boot_health_cut") == NULL);
@@ -97,6 +99,8 @@ static void test_worst_case_fits(void) {
     c.adc_bits = c.adc_fullscale_mv = c.adc_channels = INT_MIN;
     c.dac_bits = c.dac_replay_bits = c.dac_fullscale_mv = c.dac_channels = INT_MIN;
     c.adc_cal_a_uv = c.adc_cal_b_nv = LONG_MIN;
+    c.adc_range = "normal";
+    c.adc_range_fs_mv = LONG_MIN;
     c.current_out_min_ua = c.current_out_max_ua = LONG_MIN;
     c.board = "stm32h563-digital-v3r2";
     c.uplink = "wifi-bridge";   /* the longest uplink name, with its RSSI */
@@ -200,7 +204,7 @@ static void test_status_list(void) {
     CHECK(bp_emit_ok(&e));
     CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"capture_b64\",\"can\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
                       "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
@@ -211,7 +215,7 @@ static void test_status_list(void) {
     cloud_caps_t d = typical();
     d.analog = d.dac_ac = d.dac_dc = d.dac_replay = d.deep_replay = false;
     d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = d.generate16 = false;
-    d.pod_current = d.nrst_pin = d.usb_cc = false;
+    d.pod_current = d.nrst_pin = d.usb_cc = d.adc_low_range = false;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &d);
     CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
