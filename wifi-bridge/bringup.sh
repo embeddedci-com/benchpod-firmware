@@ -2,14 +2,14 @@
 # Bring up a new Wi-Fi bridge board and the pod it plugs into, in one go.
 #
 #   ./bringup.sh               bridge + pod: build both, flash the bridge, flash the pod
-#   ./bringup.sh bridge        build and flash the bridge only (ESP-Prog + TC2030 on J2)
+#   ./bringup.sh bridge        build and flash the bridge only (programmer + TC2030 on J2)
 #   ./bringup.sh pod           build and flash the pod only (USB), with the bridge client and image
 #   ./bringup.sh -n ...        print the commands instead of running them
 #
 # Options:
 #   --no-build                 flash what is already built
 #   --no-erase                 keep the bridge's flash (Wi-Fi settings, pairing); default: erase it
-#   -p PORT                    the ESP-Prog's UART port (default: auto-detected by flash.sh)
+#   -p PORT                    the programmer's UART port (default: auto-detected by flash.sh)
 #   --connection C             how benchpod reaches the pod (default: usb / the saved connection)
 #
 # Bridge: ./build.sh (Docker), then ./flash.sh --erase. Pod: a development build of ../stm32h563
@@ -57,14 +57,13 @@ bridge_build() {
   need docker
   run ./build.sh
   # sdkconfig keeps the value from the first build, so a Kconfig default changed later does not
-  # reach an old tree: check what this image will report in HELLO.
+  # reach an old tree (one built before 2026-10-29 reports hardware rev "A").
   if [ "$dry" = 0 ] && [ -f sdkconfig ]; then
     rev=$(sed -n 's/^CONFIG_BRIDGE_HW_REV="\(.*\)"/\1/p' sdkconfig)
     if [ "$rev" != "$want_rev" ]; then
-      echo "sdkconfig says hardware rev \"$rev\", the board is rev $want_rev: rm sdkconfig and rebuild" >&2
+      echo "sdkconfig says hardware rev \"$rev\", Kconfig \"$want_rev\": rm sdkconfig and rebuild" >&2
       exit 1
     fi
-    echo "=== bridge image reports hardware rev $rev ==="
   fi
 }
 
@@ -115,7 +114,7 @@ esac
 cat <<'EOF'
 
 === done. Next ===
-  bridge log:   ./flash.sh --monitor     (expect "hardware rev 2", "eth: started", "PHY addr 0")
+  bridge log:   ./flash.sh --monitor     (expect "eth: started", "PHY addr 0")
   cable the bridge to the pod's RJ45, then on the pod console:
                 bridge                   (found, paired)
                 wifi-set "<ssid>" "<passphrase>"

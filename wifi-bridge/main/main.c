@@ -91,7 +91,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     const esp_app_desc_t *d = esp_app_get_description();
-    ESP_LOGI(TAG, "%s %s, hardware rev %s", BWP_MODEL, d->version, CONFIG_BRIDGE_HW_REV);
+    if (CONFIG_BRIDGE_HW_REV[0]) {
+        ESP_LOGI(TAG, "%s %s, hardware rev %s", BWP_MODEL, d->version, CONFIG_BRIDGE_HW_REV);
+    } else {
+        ESP_LOGI(TAG, "%s %s", BWP_MODEL, d->version);
+    }
 
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_ETH);

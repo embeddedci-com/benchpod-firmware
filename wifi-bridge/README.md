@@ -3,12 +3,13 @@
 Firmware for the small Ethernet-to-Wi-Fi box that gives a BenchPod v4 (which has no radio) a
 Wi-Fi uplink: an **ESP32-WROOM-32E-N8** with a **LAN8742A** PHY, clipped to the pod, powered from
 its USB-A port. The bridge's USB-C is **power only**; everything else goes through the pod.
-Hardware: benchpod-private `pcb/wifi-bridge`, tags `wifi-bridge-rev1` and `wifi-bridge-rev2` (the
-silkscreen says "WiFi Bridge rev2"); design: benchpod-private `enclosure/wifi-bridge.md`. Rev 2 only
-changes Ethernet passives and the ESD part, so the pins and this firmware are the same for both.
+Hardware: benchpod-private `pcb/wifi-bridge`; design: benchpod-private `enclosure/wifi-bridge.md`.
+The board revisions so far (tags `wifi-bridge-rev1`, `wifi-bridge-rev2`) differ only in Ethernet
+protection parts: same pins, same firmware, and the firmware cannot tell them apart, so it reports
+no hardware revision (`CONFIG_BRIDGE_HW_REV` is empty) until a revision it can identify.
 
-> **Status: build-verified and host-tested only. Nothing here has run on hardware yet** (rev 1 was
-> never built; rev 2 boards are the first). See "What is verified".
+> **Status: build-verified and host-tested only. Nothing here has run on hardware yet** (the first
+> boards are ordered). See "What is verified".
 
 ## What it does
 
@@ -55,7 +56,7 @@ changes Ethernet passives and the ESD part, so the pins and this firmware are th
 | `main/` | ESP-IDF app: `eth.c` (EMAC + PHY), `wifi.c` (station), `control.c` (0x88B5), `console.c` (UART0 debug), `ota.c`, `creds.c` (NVS), `board.c` (clock, buttons, STATUS pad) |
 | `test/` | Host unit tests for `bridge_core` |
 | `tools/bridgectl.py` | Reference control-channel client (Linux raw socket), stands in for the pod during bring-up |
-| `build.sh`, `flash.sh` | Build in Docker; flash from the host with an ESP-Prog |
+| `build.sh`, `flash.sh` | Build in Docker; flash from the host with an ESP-Prog or Olimex ESP-PROG |
 | `bringup.sh` | New boards in one go: builds and flashes the bridge, then a pod build with the bridge client and this image |
 | `partitions.csv` | 8 MB: nvs, otadata, phy_init, nvs_keys, factory (2 MB), ota_0 and ota_1 (2.9 MB each); table at 0x10000 |
 | `sdkconfig.defaults`, `sdkconfig.defaults.production` | dev (unlocked) and production overlays |
@@ -97,28 +98,42 @@ python3 tools/test_bridgectl.py   # Python client codec against the same example
 ## Flash (factory and bench)
 
 The bridge has no USB data and no BOOT/RESET buttons: UART0, EN and GPIO0 are only on the
-**Tag-Connect TC2030** pads (J2). J2 follows the ESP-Prog program header pin order (1 EN, 2 3V3,
-3 TXD0, 4 GND, 5 RXD0, 6 IO0), so you need:
+**Tag-Connect TC2030** pads (J2). J2 follows the Espressif ESP-Prog program header pin order
+(1 EN, 2 3V3, 3 TXD0, 4 GND, 5 RXD0, 6 IO0). You need a **Tag-Connect TC2030-IDC** cable (the
+legged version: its legs fit the footprint one way only; the red wire is pin 1) and a USB-UART
+programmer with DTR/RTS auto-reset, which puts the ESP32 into the ROM loader and back by itself:
 
-- an Espressif **ESP-Prog** (USB to UART with DTR/RTS auto-reset), and
-- a **Tag-Connect TC2030-IDC** cable (the legged version), plugged into the ESP-Prog's **PROG**
-  header (not JTAG), pin 1 to pin 1.
+- **Espressif ESP-Prog**: plug the IDC into its **PROG** header (not JTAG), pin 1 to pin 1. Power
+  the bridge from the ESP-Prog (PROG VDD jumper on 3.3 V) with USB-C unplugged, **or** from USB-C
+  with the VDD jumper removed, never both.
+- **Olimex ESP-PROG** (CH340, 0.1" header 5V, EN, 3.3V, GND, TX, DCM, RX): wire the IDC to it
+  with jumper wires. TX and RX are named from the programmer's side, so they cross. Its 3.3 V
+  regulator is always on, so leave 3.3V open and power the bridge from USB-C (plug USB-C in
+  before or together with the programmer's USB).
 
-Power the bridge from the ESP-Prog (PROG VDD jumper on 3.3 V) with USB-C unplugged, **or** from
-USB-C with the ESP-Prog's VDD jumper removed, never both. The ESP-Prog resets the ESP32 into the
-ROM loader and back by itself.
+  | IDC pin (J2) | Olimex header |
+  |---|---|
+  | 1 EN (red wire) | EN |
+  | 2 3V3 | not connected |
+  | 3 TXD0 | RX |
+  | 4 GND | GND |
+  | 5 RXD0 | TX |
+  | 6 IO0 | DCM |
+
+  On macOS its port is `/dev/cu.wchusbserial<n>` with WCH's driver, `/dev/cu.usbserial-<n>`
+  with Apple's.
 
 ```sh
 brew install esptool        # once (or: pip3 install esptool); esptool runs on the host
 ./build.sh                  # in Docker
-./flash.sh                  # finds the ESP-Prog's UART port, flashes, opens the log
+./flash.sh                  # finds the programmer's UART port, flashes, opens the log
 ./flash.sh --erase          # same, but erase everything first (no Wi-Fi settings, no pairing)
 ./flash.sh -p /dev/cu.usbserial-XXXX1 --no-monitor
 ```
 
 The ESP-Prog shows up as two ports (an FT2232H). Channel A is JTAG; the UART is channel B, the
 second one (`/dev/cu.usbserial-<serial>1` on macOS, `/dev/ttyUSB1` on Linux). `flash.sh` picks
-it when the ESP-Prog is the only adapter plugged in. Without `flash.sh`:
+it when the ESP-Prog is the only adapter plugged in; the Olimex's single port likewise. Without `flash.sh`:
 
 ```sh
 cd build && esptool --chip esp32 -p /dev/cu.usbserial-XXXX1 -b 460800 write_flash @flash_args
@@ -129,7 +144,7 @@ Offsets: bootloader 0x1000, partition table 0x10000, otadata 0x17000, app 0x2000
 release you want users to fall back to. After the factory flash every update goes over the
 network into ota_0/ota_1 (below).
 
-Without an ESP-Prog, any 3.3 V USB-UART on TXD0/RXD0/GND works for the log. For flashing you
+Without either programmer, any 3.3 V USB-UART on TXD0/RXD0/GND works for the log. For flashing you
 then have to pull IO0 (pad 6) to GND while pulsing EN (pad 1) to GND by hand, because there are
 no buttons.
 
@@ -142,14 +157,14 @@ updates from release CI and from any dev build signed with the same dev key.
 
 ```sh
 ./bringup.sh                 # bridge + pod
-./bringup.sh bridge          # bridge only: ./build.sh, check it reports hardware rev 2, ./flash.sh --erase
+./bringup.sh bridge          # bridge only: ./build.sh, ./flash.sh --erase
 ./bringup.sh pod             # pod only: a dev build of ../stm32h563 with this image, then benchpod flash-self
 ./bringup.sh -n              # print the commands without running them
 ./bringup.sh pod --connection usb:benchpod-baea06   # pick one of several pods
 ```
 
 Options: `--no-build` flashes what is already built, `--no-erase` keeps the bridge's settings and
-pairing, `-p PORT` picks the ESP-Prog port. The pod part needs the bridge build first (its image
+pairing, `-p PORT` picks the programmer port. The pod part needs the bridge build first (its image
 goes into the pod's blob slot `bridge`) and sets up what CI sets up for a pod build: the
 submodules, the released gateware (`make -C ../ice40 release-images`) and the ESP32-C3 image (if
 it is missing it stops and asks for `make -C ../stm32h563 fetch`). It then insists that the pod
@@ -161,19 +176,19 @@ client out (`WIFI_BRIDGE=0` in release builds), so only a dev pod build sees the
 Wiring for the bridge as in "Flash" above. When it finishes, cable the bridge to the pod's RJ45
 and follow the checklist below from step 3.
 
-## Bring-up checklist (first rev 2 boards)
+## Bring-up checklist (first boards)
 
 Nothing below has been tried on hardware yet. Go in order: each step needs the one before. Log
 lines are what the firmware prints at 115200 (`./flash.sh --monitor`); the debug console takes
 commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on the RJ45 as the
 "pod" (`tools/bridgectl.py`); step 13 swaps in a real pod.
 
-1. **Power.** USB-C only, no ESP-Prog VDD: 3V3 test pad 3.3 V, idle draw about 0.1 A
-   (0.5 W budget). Then switch to ESP-Prog power for flashing.
+1. **Power.** USB-C only, no programmer power: 3V3 test pad 3.3 V, idle draw about 0.1 A
+   (0.5 W budget).
 2. **ROM loader and flash.** `./flash.sh --erase`. If esptool cannot connect: check the pin 1
    orientation of the TC2030, the PROG (not JTAG) header, and that GPIO0 reaches the ROM loader
    (R11 pull-up, R12 470 ohm in series).
-3. **Boot.** Expect `bridge: benchpod-wifi-bridge 0.1.0, hardware rev 2` and
+3. **Boot.** Expect `bridge: benchpod-wifi-bridge 0.1.0` and
    `ota: running benchpod-wifi-bridge 0.1.0 from factory`. A boot loop or download mode on a
    normal reset means GPIO0 is held low: X1 must be tri-state while OE (GPIO32) is low.
 4. **RMII clock and PHY.** Expect `eth: started, bridge MAC …, PHY addr 0`. `EMAC init failed
@@ -274,7 +289,7 @@ read low at every boot and reset the bridge each time, so check R20 in productio
 (GPIO35) is also input-only and relies on R41; C27 debounces it, and the firmware needs it low
 for 50 ms. A stuck-low PAIR would unpair once per press-and-release cycle, never in a loop.
 
-## Pins (rev 1 and rev 2)
+## Pins
 
 | Function | GPIO | Notes |
 |---|---|---|
