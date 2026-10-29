@@ -726,7 +726,7 @@ static bool cl_send_capabilities(void) {
         wifi_bridge_get_info(&bi);
         if (bi.state == BWP_ST_CONNECTED) {
             c.uplink = "wifi-bridge";
-            c.has_uplink_rssi = bi.have_status;
+            c.has_uplink_rssi = wb_rssi_known(&bi);
             c.uplink_rssi_dbm = bi.rssi;
         }
     }

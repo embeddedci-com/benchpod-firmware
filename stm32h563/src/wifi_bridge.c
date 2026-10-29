@@ -141,6 +141,17 @@ static void learn_bridge_pub(wb_t *b, const uint8_t pub[BWP_PUBKEY_LEN])
     b->have_key = bwp_pair_key(b->secret, pub, b->pub, pub, b->key) == 0;
 }
 
+/* The state from a HELLO or an unsolicited STATUS: on a change, fetch the signed STATUS (SSID,
+   rssi) now instead of at the next poll. */
+static void update_state(wb_t *b, const uint8_t *body, uint16_t len, uint32_t now)
+{
+    uint8_t st = b->info.state;
+    if (bwp_get_u8(body, len, BWP_T_STATE, &st) && st != b->info.state) {
+        b->info.state = st;
+        b->next_status = now;
+    }
+}
+
 static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
 {
     if (!b->seen || memcmp(m->src, b->mac, 6) != 0) {
@@ -165,7 +176,7 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
         b->counter = 0;
         b->next_status = now;
     }
-    bwp_get_u8(m->body, m->body_len, BWP_T_STATE, &b->info.state);
+    update_state(b, m->body, m->body_len, now);
     bwp_get_u8(m->body, m->body_len, BWP_T_FLAGS, &b->info.flags);
     copy_str(m, BWP_T_FW_VERSION, b->info.fw_version, sizeof(b->info.fw_version));
     copy_str(m, BWP_T_HW_REV, b->info.hw_rev, sizeof(b->info.hw_rev));
@@ -185,6 +196,7 @@ static void parse_status(wb_t *b, const bwp_msg_t *m, uint32_t now)
     const uint8_t *v;
     uint16_t n;
     bwp_get_u8(m->body, m->body_len, BWP_T_STATE, &i->state);
+    i->status_state = i->state;
     bwp_get_u8(m->body, m->body_len, BWP_T_FLAGS, &i->flags);
     copy_str(m, BWP_T_SSID, i->ssid, sizeof(i->ssid));
     i->channel = bwp_get_u8(m->body, m->body_len, BWP_T_CHANNEL, &v8) ? v8 : 0;
@@ -339,7 +351,7 @@ void wb_rx(wb_t *b, const uint8_t *frame, size_t len, uint32_t now)
     if (m.seq == 0) {
         /* Unsolicited STATUS on a state change: unsigned, so it only refreshes the state. */
         if (m.type == (BWP_STATUS | BWP_RESPONSE)) {
-            bwp_get_u8(m.body, m.body_len, BWP_T_STATE, &b->info.state);
+            update_state(b, m.body, m.body_len, now);
             bwp_get_u8(m.body, m.body_len, BWP_T_FLAGS, &b->info.flags);
         }
         return;

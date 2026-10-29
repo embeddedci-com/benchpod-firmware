@@ -92,7 +92,7 @@ static bool bridge_wifi_status(int conn_id) {
     if (i.problem) bp_emit_jstr(&e, i.problem); else bp_emit_raw(&e, "null");
     bp_emit_raw(&e, ",\"update\":");
     bp_emit_jstr(&e, wifi_bridge_ota_status());
-    if (i.have_status && i.state == BWP_ST_CONNECTED)
+    if (wb_rssi_known(&i))
         bp_emit(&e, ",\"rssi_dbm\":%d,\"channel\":%u", i.rssi, i.channel);
     else
         bp_emit_raw(&e, ",\"rssi_dbm\":null,\"channel\":null");

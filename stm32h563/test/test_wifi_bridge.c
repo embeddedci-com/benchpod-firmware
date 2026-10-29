@@ -487,6 +487,24 @@ int main(void)
     CHECK(sim.pass[0] == 0);
     wb_request_release(&pod);
 
+    /* The join race: a HELLO says connected before any signed STATUS has. The rssi from the
+       older STATUS (taken while joining) is not shown, and the state change fetches a fresh
+       STATUS at once instead of at the next poll. */
+    run(WB_STATUS_EVERY_MS + 100);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.have_status && info.state == BWP_ST_JOINING && !wb_rssi_known(&info));
+    sim.state = BWP_ST_CONNECTED;
+    sim.drop_next = 3;  /* the immediate STATUS and its retries are lost */
+    sim_hello();
+    run(20);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.state == BWP_ST_CONNECTED && !wb_rssi_known(&info));
+    CHECK(sim.drop_next < 3);  /* the fetch went out right away */
+    sim.drop_next = 0;
+    run(WB_STATUS_EVERY_MS + 1000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(wb_rssi_known(&info) && info.rssi == -58);
+
     /* Invalid SSID or passphrase: refused before anything is sent. */
     static const uint8_t nonce0[BWP_SEAL_NONCE_LEN];
     CHECK(wb_request_set_wifi(&pod, "", "correct horse", nonce0, 1000, now_ms) == -4);
