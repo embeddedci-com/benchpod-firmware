@@ -1277,11 +1277,11 @@ reads the module revision at boot, so restart it after programming a module's EE
 ```json
 {"cmd":"adc_range"}
 → {"status":"ok","data":{"range":"normal","supported":true,"fullscale_mv":32856,
-   "normal_fullscale_mv":32856,"low_fullscale_mv":5462}}
+   "normal_fullscale_mv":32856,"low_fullscale_mv":5462,"adc_cal_a_uv":65708158,"adc_cal_b_nv":-1002644}}
 
 {"cmd":"adc_range","range":"low"}
 → {"status":"ok","data":{"range":"low","supported":true,"fullscale_mv":5462,
-   "normal_fullscale_mv":32856,"low_fullscale_mv":5462}}
+   "normal_fullscale_mv":32856,"low_fullscale_mv":5462,"adc_cal_a_uv":10923784,"adc_cal_b_nv":-166687}}
 
 {"cmd":"adc_range","range":"low"}          // a board without K5
 → {"status":"error","message":"range: the low range needs analog module v3r4 or later"}
@@ -1293,6 +1293,7 @@ reads the module revision at boot, so restart it after programming a module's EE
 | `supported` | The board has the low range |
 | `fullscale_mv` | The full scale (±) of the range in use, from this pod's `ext` fit |
 | `normal_fullscale_mv`, `low_fullscale_mv` | Both ranges' full scale (`low_fullscale_mv` only when supported) |
+| `adc_cal_a_uv`, `adc_cal_b_nv` | The `ext` fit of the range in use, as in the [capabilities frame](#capabilities-frame--adc-calibration-fields): scale captures with it from now on |
 
 Switching waits 10 ms for the relay (1.4 ms operate, 1.3 ms release) and the divider to settle
 before it replies, so a capture sent next sees the new range. Captures are raw counts: the

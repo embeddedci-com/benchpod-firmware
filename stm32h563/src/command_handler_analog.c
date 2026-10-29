@@ -513,16 +513,18 @@ void handle_adc_range(int conn_id, const char *json) {
     }
     adc_range_t r = adc_range_get();
     cal_lin_t normal = adc_cal_range_fit(ADC_CAL_SRC_EXT, 0), low = adc_cal_range_fit(ADC_CAL_SRC_EXT, 1);
-    char payload[176];
-    if (adc_range_supported())
-        snprintf(payload, sizeof(payload),
-                 "{\"range\":\"%s\",\"supported\":true,\"fullscale_mv\":%ld,\"normal_fullscale_mv\":%ld,"
-                 "\"low_fullscale_mv\":%ld}",
-                 adc_range_name(r), adc_cal_fullscale_mv(r == ADC_RANGE_LOW ? low : normal),
-                 adc_cal_fullscale_mv(normal), adc_cal_fullscale_mv(low));
-    else
-        snprintf(payload, sizeof(payload),
-                 "{\"range\":\"normal\",\"supported\":false,\"fullscale_mv\":%ld,\"normal_fullscale_mv\":%ld}",
-                 adc_cal_fullscale_mv(normal), adc_cal_fullscale_mv(normal));
+    cal_lin_t cur = r == ADC_RANGE_LOW ? low : normal;
+    /* adc_cal_a_uv / adc_cal_b_nv: the ext fit captures are scaled with now, as in the
+       capabilities frame, so a client rescales without waiting for the re-sent frame. */
+    char payload[224];
+    int n = snprintf(payload, sizeof(payload),
+                     "{\"range\":\"%s\",\"supported\":%s,\"fullscale_mv\":%ld,\"normal_fullscale_mv\":%ld,",
+                     adc_range_name(r), adc_range_supported() ? "true" : "false", adc_cal_fullscale_mv(cur),
+                     adc_cal_fullscale_mv(normal));
+    if (adc_range_supported() && n > 0 && n < (int)sizeof(payload))
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, "\"low_fullscale_mv\":%ld,", adc_cal_fullscale_mv(low));
+    if (n > 0 && n < (int)sizeof(payload))
+        snprintf(payload + n, sizeof(payload) - (size_t)n, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld}",
+                 lround((double)cur.a * 1000000.0), lround((double)cur.b * 1000000000.0));
     send_ok_str(conn_id, payload);
 }

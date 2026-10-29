@@ -213,6 +213,8 @@ static void test_adc_range_and_read(void) {
     g_range = ADC_RANGE_NORMAL;
     handle_adc_range(0, "{\"cmd\":\"adc_range\"}");
     CHECK(strstr(g_reply, "ok:") && strstr(g_reply, "\"range\":\"normal\",\"supported\":false"), "no K5: %s", g_reply);
+    CHECK(!strstr(g_reply, "low_fullscale_mv") && strstr(g_reply, "\"adc_cal_a_uv\":") && strstr(g_reply, "\"adc_cal_b_nv\":-1002"),
+          "no K5 fields: %s", g_reply);
     handle_adc_range(0, "{\"cmd\":\"adc_range\",\"range\":\"low\"}");
     CHECK(strstr(g_reply, "err:") && strstr(g_reply, "v3r4"), "low without K5: %s", g_reply);
     handle_adc_range(0, "{\"cmd\":\"adc_range\",\"test\":true}");
@@ -224,6 +226,8 @@ static void test_adc_range_and_read(void) {
     handle_adc_range(0, "{\"cmd\":\"adc_range\",\"range\":\"low\"}");
     CHECK(strstr(g_reply, "\"range\":\"low\",\"supported\":true,\"fullscale_mv\":54") &&
           strstr(g_reply, "\"normal_fullscale_mv\":32") && strstr(g_reply, "\"low_fullscale_mv\":54"), "low: %s", g_reply);
+    CHECK(strstr(g_reply, "\"adc_cal_b_nv\":-166"), "the low fit: %s", g_reply);
+    CHECK(strlen(g_reply) + 26 < 256, "reply %u B, send_ok_str holds 256 with its wrapper", (unsigned)strlen(g_reply));
     handle_adc_range(0, "{\"cmd\":\"adc_range\",\"range\":\"medium\"}");
     CHECK(strstr(g_reply, "err:") && strstr(g_reply, "normal or low"), "bad name: %s", g_reply);
 
