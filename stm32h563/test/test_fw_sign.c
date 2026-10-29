@@ -65,11 +65,17 @@ static void test_none_and_unknown_keys(void) {
     CHECK(fw_sign_check_keys(vec_cases[0].sig, 128, 0, (uint32_t)vec_images[0].len,
                              vec_images[0].sha256, NULL, 0, NULL) == FW_SIG_UNKNOWN_KEY,
           "no keys");
-    /* a target number past esp is a format error, not a crash */
+    /* a target number that is never signed is a format error, not a crash */
     uint8_t bad[128];
     memcpy(bad, vec_cases[0].sig, 128);
     bad[6] = 9;
     CHECK(fw_sign_check(bad, 128, 0, 1, vec_images[0].sha256, NULL) == FW_SIG_FORMAT, "target 9");
+    bad[6] = 4;
+    CHECK(fw_sign_check(bad, 128, 4, 1, vec_images[0].sha256, NULL) == FW_SIG_FORMAT, "target 4 (ca)");
+    /* the bridge target (6) gets past the format check: with the byte changed the signature
+       no longer matches */
+    bad[6] = 6;
+    CHECK(fw_sign_check(bad, 128, 6, 1, vec_images[0].sha256, NULL) == FW_SIG_SIGNATURE, "target 6 (bridge)");
 }
 
 static void test_policy(void) {
