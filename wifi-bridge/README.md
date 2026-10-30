@@ -153,7 +153,9 @@ updates from release CI and from any dev build signed with the same dev key.
 
 ## New boards: bringup.sh
 
-`bringup.sh` runs the flashing for a new bridge and the pod it goes with, in order:
+`bringup.sh` runs the flashing for a new bridge and the pod it goes with, in order. It needs
+esptool, dfu-util, Docker and `benchpod` 0.8.3 or later (older versions install the pod's
+`bridge` blob without its signature, which the pod refuses):
 
 ```sh
 ./bringup.sh                 # bridge + pod

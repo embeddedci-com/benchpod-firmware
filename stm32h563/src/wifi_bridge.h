@@ -67,11 +67,14 @@ typedef struct {
     uint8_t mac[6];
     char fw_version[16];
     char hw_rev[8];
+    uint8_t hello_flags;         /* BWP_F_* from the HELLO that carried fw_version: a STATUS has
+                                    no version, so its flags can be the next boot's (OTA relay) */
     uint8_t state;               /* bwp_state_t, from the latest HELLO or STATUS */
     uint8_t flags;               /* BWP_F_* */
     bool paired;                 /* the bridge accepts our key (a signed request succeeded) */
     const char *problem;         /* NULL, or why pairing / requests fail */
     bool have_status;            /* fields below come from a signed STATUS */
+    uint8_t status_state;        /* the state that STATUS reported: rssi/channel go with it */
     char ssid[33];
     uint8_t channel;
     int8_t rssi;
@@ -80,6 +83,14 @@ typedef struct {
     uint32_t status_age_ms;
     bwp_counters_t counters;
 } wb_info_t;
+
+/* True when rssi and channel describe the current connection: HELLO and the unsolicited STATUS
+   refresh only the state, so right after a join the last signed STATUS may still be from
+   before it (rssi 0). */
+static inline bool wb_rssi_known(const wb_info_t *i)
+{
+    return i->have_status && i->state == BWP_ST_CONNECTED && i->status_state == BWP_ST_CONNECTED;
+}
 
 typedef struct {
     wb_io_t io;

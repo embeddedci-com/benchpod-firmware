@@ -22,7 +22,7 @@ typedef enum {
 typedef enum {
     L2_EV_NONE = 0,
     L2_EV_LEARNED,  // first pod MAC since boot
-    L2_EV_CHANGED,  // a different device after an Ethernet link-down: restart Wi-Fi with its MAC
+    L2_EV_CHANGED,  // a different pod after an Ethernet link-down: restart Wi-Fi with its MAC
 } l2_event_t;
 
 typedef enum {
@@ -34,7 +34,7 @@ typedef enum {
     L2_WHY_NOT_FOR_POD,   // Wi-Fi frame for some other unicast address
     L2_WHY_CONTROL,       // control EtherType where it is not accepted
     L2_WHY_TO_BRIDGE,     // non-control frame addressed to the bridge
-    L2_WHY_NO_POD,        // pod MAC not learned yet
+    L2_WHY_NO_POD,        // pod MAC not learned yet, or not seen since a link-down
     L2_WHY_WIFI_DOWN,     // Wi-Fi not connected
     L2_WHY_REFLECTED,     // our own broadcast echoed back by the AP
 } l2_why_t;
@@ -43,12 +43,12 @@ typedef struct {
     uint8_t bridge_mac[6];  // the bridge's own Ethernet MAC (control channel address)
     uint8_t pod_mac[6];
     bool pod_known;
-    bool relearn;           // set on Ethernet link-down: the next valid source becomes the pod
+    bool relearn;           // set on Ethernet link-down: the next control frame's source becomes the pod
     l2_why_t last_why;      // reason for the last L2_DROP, for counters and tests
 } l2fwd_t;
 
 void l2fwd_init(l2fwd_t *s, const uint8_t bridge_mac[6]);
-// The cable was unplugged (or the pod rebooted): allow a different device to take over.
+// The cable was unplugged (or the pod rebooted): allow a different pod to take over.
 void l2fwd_link_down(l2fwd_t *s);
 // Ethernet -> Wi-Fi. ev reports a learned or changed pod MAC (may be NULL).
 l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *frame, size_t len, bool wifi_up, l2_event_t *ev);

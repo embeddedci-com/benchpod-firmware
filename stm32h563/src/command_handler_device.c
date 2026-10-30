@@ -24,6 +24,9 @@
 #include "b64url.h"
 #include "cloud_client.h"
 #include "esp_wifi_ctrl.h"
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"   /* status reports the bridge's Wi-Fi when there is no built-in link */
+#endif
 #include "usb_device.h"
 #include "usb_netif.h"
 #include "board_info.h"
@@ -201,6 +204,21 @@ void handle_status(int conn_id, const char *json) {
         }
     }
 
+    const char *wifi = esp_wifi_ctrl_state_str();
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    /* No built-in Wi-Fi link (v4 has no radio, a v3 has it off) and a Wi-Fi bridge on the
+       Ethernet port: "wifi" and rssi_dbm are the bridge's, e.g. "bridge connected". */
+    char wifi_buf[32];
+    if ((!strcmp(wifi, "disabled") || !strcmp(wifi, "absent")) && wifi_bridge_present()) {
+        wb_info_t bi;
+        wifi_bridge_get_info(&bi);
+        snprintf(wifi_buf, sizeof(wifi_buf), "bridge %s", wb_state_str(bi.state));
+        wifi = wifi_buf;
+        if (wb_rssi_known(&bi)) snprintf(rssi_field, sizeof(rssi_field), "%d", bi.rssi);
+        else                    strcpy(rssi_field, "null");
+    }
+#endif
+
     /* Built with the bounds-tracked emitter: the payload has grown past what a
        hand-sized buffer safely holds, and last_crash is free-form text (escaped
        via bp_emit_jstr) so it can never break the JSON. */
@@ -225,7 +243,7 @@ void handle_status(int conn_id, const char *json) {
                 "\"device\":\"benchpod\",\"version\":\"%s\",\"board\":\"%s\",\"net\":\"%s\","
                 "\"ip\":\"%s\",\"rssi_dbm\":%s,\"wifi\":\"%s\",\"cloud\":\"%s\",",
             FIRMWARE_VERSION, BOARD_NAME, wstate, ip, rssi_field,
-            esp_wifi_ctrl_state_str(), cloud_client_state_str());
+            wifi, cloud_client_state_str());
     /* USB network adapter (CDC-NCM): on unless Wi-Fi is configured; ip is the pod's end of
        the /30, host_ip the address its DHCP server hands the computer. */
     /* source: what the USB-C port powering the pod advertises (usb_cc.h, v3; null on v2). */

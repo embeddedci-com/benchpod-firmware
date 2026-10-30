@@ -582,6 +582,14 @@ static void dhcp_process(net_if_t *i)
     bool ip_changed = has_lease &&
                       strcmp(ip4addr_ntoa(netif_ip4_addr(netif)), i->ip) != 0;
 
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    /* The Ethernet goes into a Wi-Fi bridge that just joined: DISCOVER now. Its earlier tries
+       were dropped while it was joining, and lwIP's backoff would wait up to ~16 s more. */
+    if (i->is_eth && wifi_bridge_take_joined() && link_up && !has_lease && i->dhcp.state != NET_DHCP_OFF) {
+        dhcp_start(netif);
+        log_printf("[net] eth DHCP: the Wi-Fi bridge joined, requesting again\r\n");
+    }
+#endif
     switch (net_dhcp_step(&i->dhcp, link_up, has_lease, ip_changed, DHCP_REKICK_TICKS)) {
     case NET_DHCP_DO_DISCOVER:
         ip_addr_set_zero_ip4(&netif->ip_addr);

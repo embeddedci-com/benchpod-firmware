@@ -368,7 +368,7 @@ static void bridge_show(console_out_t out, void *ctx)
     op(out, ctx, "  ssid: %s\r\n", i.have_status ? i.ssid : "");
     op(out, ctx, "  state: %s\r\n", i.present ? wb_state_str(i.state) : "no bridge");
     op(out, ctx, "  ip: %s\r\n", wifi_get_ip());
-    if (i.have_status && i.state == BWP_ST_CONNECTED)
+    if (wb_rssi_known(&i))
         op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
     else
         op(out, ctx, "  rssi: \r\n");

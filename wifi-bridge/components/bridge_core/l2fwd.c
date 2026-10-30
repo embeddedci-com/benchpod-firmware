@@ -46,26 +46,29 @@ l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *f, size_t len, bool wifi_u
         return drop(s, L2_WHY_OWN_SRC);
     }
 
-    // Learn: the first valid source after boot, or after the cable was unplugged.
-    if (!s->pod_known || s->relearn) {
-        bool changed = s->pod_known && memcmp(s->pod_mac, src, 6) != 0;
-        if (ev && (!s->pod_known || changed)) {
-            *ev = s->pod_known ? L2_EV_CHANGED : L2_EV_LEARNED;
-        }
-        memcpy(s->pod_mac, src, 6);
-        s->pod_known = true;
-        s->relearn = false;
-    }
-
     if (ethertype(f) == BWP_ETHERTYPE) {
-        // Control frames are never forwarded. Accepted from the pod only, sent to us or broadcast.
+        // Control frames are never forwarded. Accepted sent to us or broadcast.
+        if (memcmp(dst, s->bridge_mac, 6) != 0 && !l2_is_multicast(dst)) {
+            return drop(s, L2_WHY_CONTROL);
+        }
+        // Learn from these only: a pod speaks this protocol, the switch or router the bridge may
+        // be plugged into by mistake does not, and its devices must never get onto Wi-Fi.
+        if (!s->pod_known || s->relearn) {
+            bool changed = s->pod_known && memcmp(s->pod_mac, src, 6) != 0;
+            if (ev && (!s->pod_known || changed)) {
+                *ev = s->pod_known ? L2_EV_CHANGED : L2_EV_LEARNED;
+            }
+            memcpy(s->pod_mac, src, 6);
+            s->pod_known = true;
+            s->relearn = false;
+        }
         if (memcmp(src, s->pod_mac, 6) != 0) {
             return drop(s, L2_WHY_OTHER_MAC);
         }
-        if (memcmp(dst, s->bridge_mac, 6) == 0 || l2_is_multicast(dst)) {
-            return L2_CONTROL;
-        }
-        return drop(s, L2_WHY_CONTROL);
+        return L2_CONTROL;
+    }
+    if (!s->pod_known) {
+        return drop(s, L2_WHY_NO_POD);
     }
     if (memcmp(src, s->pod_mac, 6) != 0) {
         return drop(s, L2_WHY_OTHER_MAC);
@@ -89,7 +92,9 @@ l2_action_t l2fwd_from_wifi(l2fwd_t *s, const uint8_t *f, size_t len)
     if (ethertype(f) == BWP_ETHERTYPE) {
         return drop(s, L2_WHY_CONTROL);  // never accept control frames from the radio side
     }
-    if (!s->pod_known) {
+    // After a link-down, nothing until the pod has shown it is on the cable: on a switch or router
+    // these frames would teach it that every Wi-Fi client lives on this port.
+    if (!s->pod_known || s->relearn) {
         return drop(s, L2_WHY_NO_POD);
     }
     if (memcmp(src, s->pod_mac, 6) == 0) {

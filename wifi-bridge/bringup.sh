@@ -19,7 +19,7 @@
 # client yet, so a pod on a release does not see the bridge.
 #
 # Afterwards: cable the bridge to the pod's RJ45 and power both; the steps from "Boot" on in the
-# README's bring-up checklist say what to look for. Needs esptool, dfu-util, benchpod and Docker.
+# README's bring-up checklist say what to look for. Needs esptool, dfu-util, benchpod 0.8.3+ and Docker.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -102,6 +102,13 @@ PY
 
 pod_flash() {
   need benchpod dfu-util
+  # benchpod before 0.8.3 does not know the "bridge" blob: it sends it without its signature and
+  # the pod refuses it ("signature: none"). A development build ("dev") is taken as new enough.
+  v=$(benchpod --version 2>/dev/null | sed -n 's/^benchpod version v\{0,1\}\([0-9][0-9.]*\).*/\1/p')
+  if [ -n "$v" ] && [ "$(printf '%s\n0.8.3\n' "$v" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != 0.8.3 ]; then
+    echo "benchpod $v cannot install the bridge blob: brew upgrade benchpod (0.8.3 or later)" >&2
+    [ "$dry" = 1 ] || exit 1
+  fi
   run benchpod "${conn[@]}" flash-self "$pod_bin" --blobs-dir "$pod_blobs" --enter-dfu
 }
 

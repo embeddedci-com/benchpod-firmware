@@ -99,6 +99,16 @@ int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif)
     return ERR_OK;
 }
 
+static bool s_joined_edge;
+static uint8_t s_last_state = 0xFF;
+
+bool wifi_bridge_take_joined(void)
+{
+    bool j = s_joined_edge;
+    s_joined_edge = false;
+    return j;
+}
+
 void wifi_bridge_net_poll(void)
 {
     if (!s_eth) {
@@ -116,6 +126,9 @@ void wifi_bridge_net_poll(void)
         taskEXIT_CRITICAL();
         s_info_at = now;
         s_present = i.present;
+        uint8_t st = i.present ? i.state : 0xFF;
+        if (st == BWP_ST_CONNECTED && s_last_state != BWP_ST_CONNECTED) s_joined_edge = true;
+        s_last_state = st;
         if (i.present != was) {
             char mac[18];
             snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", i.mac[0], i.mac[1], i.mac[2], i.mac[3],
@@ -166,6 +179,12 @@ static void on_net_take(void *arg)
     if (c->state == WB_REQ_DONE || c->state == WB_REQ_TIMEOUT) {
         *c->out = *wb_request_reply(&s_wb);
         wb_request_release(&s_wb);
+        /* The caller may read the status next: not the snapshot from before this answer. */
+        wb_info_t i;
+        wb_get_info(&s_wb, HAL_GetTick(), &i);
+        taskENTER_CRITICAL();
+        s_info = i;
+        taskEXIT_CRITICAL();
     }
 }
 

@@ -451,26 +451,49 @@ static void test_learning(void)
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OWN_SRC && !s.pod_known);
     CHECK(l2fwd_from_eth(&s, f, 10, true, &ev) == L2_DROP && s.last_why == L2_WHY_RUNT);
 
-    // First frame from the pod (DHCP discover) is learned, and dropped while Wi-Fi is down.
+    // Data frames never teach us anything: a router or switch on the port stays off Wi-Fi.
+    frame(f, BCAST, ROUTER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_NO_POD);
+    CHECK(ev == L2_EV_NONE && !s.pod_known);
+
+    // A control frame for someone else does not either.
+    frame(f, ROUTER, POD, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_CONTROL && !s.pod_known);
+
+    // The pod's first control frame is learned.
+    frame(f, BCAST, POD, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, false, &ev) == L2_CONTROL);
+    CHECK(ev == L2_EV_LEARNED && s.pod_known && memcmp(s.pod_mac, POD, 6) == 0);
     frame(f, BCAST, POD, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, false, &ev) == L2_DROP && s.last_why == L2_WHY_WIFI_DOWN);
-    CHECK(ev == L2_EV_LEARNED && s.pod_known && memcmp(s.pod_mac, POD, 6) == 0);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD && ev == L2_EV_NONE);
 
     // A second device on the cable is ignored while the link stays up.
     frame(f, ROUTER, OTHER, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC && ev == L2_EV_NONE);
+    frame(f, BRIDGE, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC && ev == L2_EV_NONE);
     CHECK(memcmp(s.pod_mac, POD, 6) == 0);
 
-    // Link down, same pod comes back: no event.
+    // Link down, plugged into a router: its traffic does not replace the pod.
     l2fwd_link_down(&s);
+    frame(f, BCAST, ROUTER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC && ev == L2_EV_NONE);
+    CHECK(memcmp(s.pod_mac, POD, 6) == 0 && s.relearn);
+    // And Wi-Fi broadcasts stay off that port until the pod has shown it is on the cable.
+    frame(f, BCAST, ROUTER, 0x0806);
+    CHECK(l2fwd_from_wifi(&s, f, 60) == L2_DROP && s.last_why == L2_WHY_NO_POD);
+
+    // Same pod comes back: data flows at once, its control frame ends the relearn, no event.
     frame(f, ROUTER, POD, 0x0800);
-    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD && ev == L2_EV_NONE && !s.relearn);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD && ev == L2_EV_NONE && s.relearn);
+    frame(f, BRIDGE, POD, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_NONE && !s.relearn);
 
     // Link down, a different pod is plugged in: CHANGED.
     l2fwd_link_down(&s);
-    frame(f, ROUTER, OTHER, 0x0800);
-    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD && ev == L2_EV_CHANGED);
+    frame(f, BRIDGE, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_CHANGED);
     CHECK(memcmp(s.pod_mac, OTHER, 6) == 0);
     frame(f, ROUTER, POD, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC);
@@ -482,6 +505,8 @@ static void test_forwarding(void)
     l2_event_t ev;
     uint8_t f[64];
     l2fwd_init(&s, BRIDGE);
+    frame(f, BRIDGE, POD, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL);
     frame(f, ROUTER, POD, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD);
 

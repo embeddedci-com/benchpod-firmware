@@ -73,6 +73,21 @@ static void fail(wbo_t *o, const char *why, const char *detail)
     stop(o);
 }
 
+/* Failed on the way (no answer, the bridge restarted or did not come back): try again on a
+   later check, WBO_TRIES attempts in all, then give up like fail(). */
+static void fail_transient(wbo_t *o, const char *why, const char *detail)
+{
+    if (o->tries >= WBO_TRIES) {
+        fail(o, why, detail);
+        return;
+    }
+    char v[16];
+    wbo_version_str(o->want, v);
+    snprintf(o->status, sizeof(o->status), "update to %s failed (will retry): %s%s%s", v, why,
+             detail && detail[0] ? ": " : "", detail ? detail : "");
+    stop(o);
+}
+
 static void put_tlv(uint8_t *p, uint8_t tag, size_t len)
 {
     p[0] = tag;
@@ -149,6 +164,12 @@ static void try_start(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, boo
         return;
     }
     o->want = img->version;
+    if (o->tries_for != o->want || forced) {
+        o->tries_for = o->want;
+        o->tries = 0;
+    }
+    o->tries++;
+    o->seen_new = false;
     o->size = img->size;
     o->off = 0;
     put_tlv(o->buf, BWP_T_IMAGE_SIZE, 4);
@@ -177,15 +198,27 @@ void wbo_poll(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, bool bus_fr
         return;
     }
     if (o->state == WBO_WAIT_BACK) {
-        if (br->present && wbo_pack_version(br->fw_version) == o->want) {
-            char v[16];
-            wbo_version_str(o->want, v);
+        char v[16];
+        wbo_version_str(o->want, v);
+        bool running = br->present && wbo_pack_version(br->fw_version) == o->want;
+        /* hello_flags, not flags: right after a rollback the bridge's first unsolicited STATUS
+           (confirmed, no version) arrives before the HELLO with its old version. */
+        if (running && (br->hello_flags & BWP_F_PENDING_VERIFY)) {
+            /* on trial: it stays only once our next request confirms it */
+            o->seen_new = true;
+            snprintf(o->status, sizeof(o->status), "updating to %s: on trial, waiting for the bridge to confirm", v);
+        } else if (running) {
             snprintf(o->status, sizeof(o->status), "updated to %s", v);
             o->failed = 0;
+            o->tries = 0;
             stop(o);
+        } else if (br->present && o->seen_new) {
+            fail(o, "the bridge rolled back to its previous firmware", NULL);
         } else if (elapsed(now, o->deadline)) {
-            fail(o, br->present ? "the bridge came back with its old firmware (rolled back?)"
-                                : "the bridge did not come back", NULL);
+            if (br->present)
+                fail(o, "the bridge came back with its old firmware (rolled back?)", NULL);
+            else
+                fail_transient(o, "the bridge did not come back", NULL);
         }
         return;
     }
@@ -217,7 +250,7 @@ void wbo_poll(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, bool bus_fr
     if (st == WB_REQ_TIMEOUT) {
         char why[48];
         snprintf(why, sizeof(why), "no answer to %s", step);
-        fail(o, why, o->reply->message);
+        fail_transient(o, why, o->reply->message);
         return;
     }
     uint8_t r = o->reply->result;

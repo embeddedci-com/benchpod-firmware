@@ -45,6 +45,7 @@ typedef struct {
 static QueueHandle_t s_q;
 static SemaphoreHandle_t s_scan_lock;
 static volatile uint8_t s_state = BWP_ST_UNCONFIGURED;
+static void set_state(uint8_t st);
 static volatile bool s_connected;
 static volatile uint8_t s_reason;
 // Owned by the Wi-Fi task:
@@ -70,6 +71,10 @@ void wifi_pod_mac_changed(void)
 void wifi_creds_changed(void)
 {
     __atomic_add_fetch(&s_creds_gen, 1, __ATOMIC_SEQ_CST);
+    // Before SET_WIFI is answered: a STATUS right behind it must not report the old network's result.
+    if (creds_present()) {
+        set_state(BWP_ST_JOINING);
+    }
     post(EV_APPLY, 0);
 }
 
