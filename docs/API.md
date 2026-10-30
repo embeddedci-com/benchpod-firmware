@@ -1585,7 +1585,7 @@ counters and the capability list. No parameters.
 | `net` | string | `"ready"` when the Ethernet or Wi-Fi interface has an address, else `"disconnected"`. |
 | `ip` | string | The pod's IP (Ethernet preferred over Wi-Fi), or `"0.0.0.0"`. |
 | `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is in the console's `wifi-show`. |
-| `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). Development builds with a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in link (`disabled` or `absent`) report the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
+| `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
@@ -3498,7 +3498,8 @@ is `wifi-scan` on the [USB console](usb-serial-interface.md).
 {"cmd":"wifi_clear"}
 ```
 
-Wired Ethernet stays the primary link; Wi-Fi is the fallback. Wi-Fi and the [USB network
+Wired Ethernet stays the primary link; Wi-Fi is the fallback: with both up, `status.ip` is the
+Ethernet address and outgoing traffic uses Ethernet. Wi-Fi and the [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) are one or the other: `wifi_set` turns USB
 networking off (the reply may still go out over it), and `wifi_clear` turns it back on. An empty or
 missing `password` is an open network. `wifi_set` replies `{"ssid":"lab"}` and reconnects after the reply; `wifi_clear`
@@ -3540,7 +3541,10 @@ region included). `wifi_clear` does not touch the device identity key, the cloud
 
 **With a Wi-Fi bridge.** BenchPod v4 has no radio; a bridge box on the
 Ethernet port carries Wi-Fi ([wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)).
-While a bridge says HELLO
+Built-in Wi-Fi wins: while it is configured, the pod takes no address through a bridge, the
+commands here and `wifi_scan` go to the built-in Wi-Fi, and `wifi_status` adds
+`"bridge_ignored":true`. This holds even when the built-in Wi-Fi cannot join. Send `wifi_clear`
+to use the bridge. Pairing and bridge updates carry on either way. Without built-in Wi-Fi configured, while a bridge says HELLO
 on the Ethernet port, `wifi_set` stores the credentials on the bridge (reply
 `{"ssid":"lab","via":"wifi-bridge"}`, the pod's own flash, USB networking and the ESP32-C3 are left
 alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` describes the bridge:

@@ -24,6 +24,13 @@ int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif);
 /* Any task: a bridge said HELLO recently on a live Ethernet link. */
 bool wifi_bridge_present(void);
 
+/* Any task: built-in Wi-Fi is configured, so it wins over a bridge: the pod takes no address on
+   the Ethernet port and wifi_set / wifi_clear / wifi_status / wifi_scan go to the built-in Wi-Fi.
+   The control channel stays up, so `bridge` and bridge updates still work. */
+bool wifi_bridge_ignored(void);
+/* Any task: a bridge is plugged in and not ignored: it is the pod's Wi-Fi. */
+bool wifi_bridge_in_use(void);
+
 /* Net task: true once each time the bridge's Wi-Fi comes up (state "connected"). The Ethernet
    DHCP uses it to send DISCOVER right away instead of waiting out lwIP's backoff, whose
    earlier tries the bridge dropped while it was still joining. */

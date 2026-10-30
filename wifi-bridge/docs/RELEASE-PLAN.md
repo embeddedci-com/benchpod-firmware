@@ -39,8 +39,8 @@ The test unit runs dev builds signed with the developer key; a release pod trust
    `set-wifi` joined through the C3 at -64 dBm, the LAN API answered, pod to host 2.9 Mbit/s, pings 72
    to 316 ms, `clear-wifi` worked. No hwe2e, no cloud check, and no baseline to compare those numbers with.
 5. A pod on Ethernet with no bridge: the client does nothing there. Run hwe2e.
-6. A pod with built-in Wi-Fi configured, then a bridge plugged in: not tested. Check which uplink wins
-   and that `set-wifi` and `clear-wifi` do what the docs say.
+6. A pod with built-in Wi-Fi configured, then a bridge plugged in: built-in Wi-Fi wins (see the
+   results in `BRINGUP-REV2.md`). Repeat on the release build.
 7. Overnight soak through the bridge (`.podlock/soak/bridge_soak.py`). Stopped after a short run on
    2026-10-30, not needed unless wanted.
 
@@ -60,5 +60,4 @@ The test unit runs dev builds signed with the developer key; a release pod trust
 - After a longer outage the cloud waits out its 35 s pong timeout before reconnecting.
 - The pod's "bridge found" log line can show the version from before an update.
 - Host-to-pod TCP is about 2.3 Mbit/s even wired (pod TCP receive window, about 11.7 KB).
-- With built-in Wi-Fi joined at .221, `status` still reported `ip` .220, the Ethernet lease (Ethernet preferred). Not checked whether the Ethernet link was up then.
 - `docs/API.md` mentions `benchpod firmware install`, which CLI 0.8.4 does not have.

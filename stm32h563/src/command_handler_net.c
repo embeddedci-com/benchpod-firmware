@@ -35,8 +35,9 @@
 #include "wifi_bridge_net.h"
 
 /* ---- Wi-Fi bridge: wifi_set / wifi_clear / wifi_status go to the external bridge
-   box when one says HELLO on the Ethernet port (wifi-bridge/docs/PROTOCOL.md). The pod's own
-   config_t stays untouched, so the ESP32-C3 path and USB networking are not affected. */
+   box when one says HELLO on the Ethernet port (wifi-bridge/docs/PROTOCOL.md), unless built-in
+   Wi-Fi is configured: then it wins (wifi_bridge_ignored). The pod's own config_t stays
+   untouched, so the ESP32-C3 path and USB networking are not affected. */
 
 /* Formats a refusal or error from the bridge, or why it was not asked. */
 static void bridge_send_error(int conn_id, const char *err, const wb_reply_t *r) {
@@ -49,7 +50,7 @@ static void bridge_send_error(int conn_id, const char *err, const wb_reply_t *r)
 
 /* true when a bridge took the request (a reply has been sent either way). */
 static bool bridge_wifi_set(int conn_id, const char *ssid, const char *pass) {
-    if (!wifi_bridge_present()) return false;
+    if (!wifi_bridge_in_use()) return false;
     const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
     int rc = wifi_bridge_set_wifi(ssid, pass, &g_wifi_bridge_reply, &err);
     if (rc != 0 || g_wifi_bridge_reply.result != BWP_OK) { bridge_send_error(conn_id, rc ? err : NULL, &g_wifi_bridge_reply); return true; }
@@ -64,7 +65,7 @@ static bool bridge_wifi_set(int conn_id, const char *ssid, const char *pass) {
 }
 
 static bool bridge_wifi_clear(int conn_id) {
-    if (!wifi_bridge_present()) return false;
+    if (!wifi_bridge_in_use()) return false;
     const char *err = NULL;
     int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
     if (rc != 0 || g_wifi_bridge_reply.result != BWP_OK) { bridge_send_error(conn_id, rc ? err : NULL, &g_wifi_bridge_reply); return true; }
@@ -73,7 +74,7 @@ static bool bridge_wifi_clear(int conn_id) {
 }
 
 static bool bridge_wifi_status(int conn_id) {
-    if (!wifi_bridge_present()) return false;
+    if (!wifi_bridge_in_use()) return false;
     wb_info_t i;
     wifi_bridge_get_info(&i);
     char resp[768];
@@ -390,7 +391,7 @@ void handle_wifi_clear(int conn_id, const char *json) {
 }
 
 /* ---- wifi_scan / console wifi-scan: the networks the pod's Wi-Fi sees ---------------------
-   Through a Wi-Fi bridge when one is plugged in, else the built-in ESP32-C3
+   Through a Wi-Fi bridge when one is in use, else the built-in ESP32-C3
    (esp_wifi_ctrl_scan_request), with one list format (wifi_scan.h) either way.
 
    {"cmd":"wifi_scan"} starts a scan, or joins the one running, and answers at once:
@@ -440,7 +441,7 @@ static const char *bridge_scan(void) {
 
 void handle_wifi_scan(int conn_id, const char *json) {
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_present()) {
+    if (wifi_bridge_in_use()) {
         const char *why = bridge_scan();
         if (why) send_error(conn_id, why);
         else     wifi_scan_send_done(conn_id, 0, "wifi-bridge", &s_bridge_scan);
@@ -494,7 +495,7 @@ static uint32_t s_console_scan;   /* the console's built-in scan, printed when i
 
 void wifi_scan_console(void) {
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_present()) {
+    if (wifi_bridge_in_use()) {
         const char *why = bridge_scan();
         wifi_scan_print(&s_bridge_scan, why);
         return;
@@ -663,15 +664,19 @@ void handle_wifi_status(int conn_id, const char *json) {
     bp_emit_t ej;
     bp_emit_init(&ej, ssid_j, sizeof(ssid_j));
     bp_emit_jstr(&ej, have ? cfg.ssid : "");
-    char resp[512];
+    bool bridge_ignored = false;
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    bridge_ignored = wifi_bridge_ignored();   /* plugged in, not used: built-in Wi-Fi wins */
+#endif
+    char resp[544];
     snprintf(resp, sizeof(resp),
-             "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,"
+             "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,%s"
              "\"connected\":%s,\"ssid\":%s,"
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
              "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
              "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_nvs\":\"%s\"}}\n",
              esp_wifi_ctrl_state_str(),
-             have ? "true" : "false",
+             have ? "true" : "false", bridge_ignored ? "\"bridge_ignored\":true," : "",
              esp_wifi_ctrl_connected() ? "true" : "false",
              bp_emit_ok(&ej) ? ssid_j : "\"\"",
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
