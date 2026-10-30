@@ -34,7 +34,7 @@ typedef enum {
     L2_WHY_NOT_FOR_POD,   // Wi-Fi frame for some other unicast address
     L2_WHY_CONTROL,       // control EtherType where it is not accepted
     L2_WHY_TO_BRIDGE,     // non-control frame addressed to the bridge
-    L2_WHY_NO_POD,        // pod MAC not learned yet
+    L2_WHY_NO_POD,        // pod MAC not learned yet, or not seen since a link-down
     L2_WHY_WIFI_DOWN,     // Wi-Fi not connected
     L2_WHY_REFLECTED,     // our own broadcast echoed back by the AP
 } l2_why_t;

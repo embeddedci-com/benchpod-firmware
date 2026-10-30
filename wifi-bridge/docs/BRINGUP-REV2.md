@@ -49,7 +49,7 @@ fixed share of 40 to 50 mA.
 
 ## Open issues
 
-1. **The bridge clones any device on its Ethernet port.** Fix written (the pod MAC is learned from control frames only), host-tested, not yet tried on hardware. Plugged into a router instead of the pod,
+1. **The bridge clones any device on its Ethernet port.** Fixed and HW-verified: the pod MAC is learned from control frames only, and nothing goes from Wi-Fi to Ethernet after a link-down until the pod is back. On the router for 60 s: `eth_rx` +149, `wifi_tx` +0, `eth_tx` +0, pod MAC unchanged. Plugged into a router instead of the pod,
    it logged `pod MAC changed to 34:60:f9:80:77:bf`, restarted its station with that MAC and
    forwarded about 85,000 frames in 90 s (1,425 dropped) between the wired LAN and Wi-Fi: a
    duplicate MAC on the network and a possible loop. It should forward only the paired pod's MAC

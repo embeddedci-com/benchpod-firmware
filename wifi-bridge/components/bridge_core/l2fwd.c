@@ -92,7 +92,9 @@ l2_action_t l2fwd_from_wifi(l2fwd_t *s, const uint8_t *f, size_t len)
     if (ethertype(f) == BWP_ETHERTYPE) {
         return drop(s, L2_WHY_CONTROL);  // never accept control frames from the radio side
     }
-    if (!s->pod_known) {
+    // After a link-down, nothing until the pod has shown it is on the cable: on a switch or router
+    // these frames would teach it that every Wi-Fi client lives on this port.
+    if (!s->pod_known || s->relearn) {
         return drop(s, L2_WHY_NO_POD);
     }
     if (memcmp(src, s->pod_mac, 6) == 0) {

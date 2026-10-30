@@ -480,6 +480,9 @@ static void test_learning(void)
     frame(f, BCAST, ROUTER, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC && ev == L2_EV_NONE);
     CHECK(memcmp(s.pod_mac, POD, 6) == 0 && s.relearn);
+    // And Wi-Fi broadcasts stay off that port until the pod has shown it is on the cable.
+    frame(f, BCAST, ROUTER, 0x0806);
+    CHECK(l2fwd_from_wifi(&s, f, 60) == L2_DROP && s.last_why == L2_WHY_NO_POD);
 
     // Same pod comes back: data flows at once, its control frame ends the relearn, no event.
     frame(f, ROUTER, POD, 0x0800);

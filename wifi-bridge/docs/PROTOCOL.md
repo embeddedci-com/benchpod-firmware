@@ -252,7 +252,8 @@ The bridge is a layer-2 pipe for one MAC:
   plugged in); the Wi-Fi station then restarts with the new MAC.
 - **Ethernet → Wi-Fi:** frames from the pod MAC, not addressed to the bridge, while Wi-Fi is
   connected. Everything else is dropped.
-- **Wi-Fi → Ethernet:** frames to the pod MAC or to a group address, except frames whose source
+- **Wi-Fi → Ethernet:** nothing after a link-down until the pod's next control frame. Then frames
+  to the pod MAC or to a group address, except frames whose source
   is the pod MAC (the AP echoing the pod's own broadcasts, which would break IPv6 duplicate
   address detection).
 - The Wi-Fi station uses the pod MAC, so DHCP, ARP, mDNS and the cloud connection see the pod.
