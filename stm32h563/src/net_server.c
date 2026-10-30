@@ -585,8 +585,14 @@ static void dhcp_process(net_if_t *i)
 #if defined(BENCHPOD_WIFI_BRIDGE)
     /* The Ethernet goes into a Wi-Fi bridge that just joined: DISCOVER now. Its earlier tries
        were dropped while it was joining, and lwIP's backoff would wait up to ~16 s more. */
-    if (i->is_eth && wifi_bridge_take_joined() && link_up && !has_lease && i->dhcp.state != NET_DHCP_OFF) {
-        dhcp_start(netif);
+    if (i->is_eth && wifi_bridge_take_joined() && link_up && i->dhcp.state != NET_DHCP_OFF) {
+        /* With a lease: maybe another network now. Ask to keep the address (RFC 2131 INIT-REBOOT):
+           the same network says yes and connections survive, another one says no. */
+        if (has_lease) {
+            dhcp_network_changed_link_up(netif);
+        } else {
+            dhcp_start(netif);
+        }
         log_printf("[net] eth DHCP: the Wi-Fi bridge joined, requesting again\r\n");
     }
 #endif
