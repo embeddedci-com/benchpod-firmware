@@ -245,10 +245,11 @@ only decrypts after AUTH has passed. An open network has no ENC_PASSPHRASE at al
 
 The bridge is a layer-2 pipe for one MAC:
 
-- **Learning:** the source of the first valid Ethernet frame (any EtherType, control frames
-  included) becomes the pod MAC. Multicast and all-zero sources and the bridge's own MAC never
-  count. After an Ethernet link-down the next valid source replaces it (another pod was plugged
-  in); the Wi-Fi station then restarts with the new MAC.
+- **Learning:** the source of the first valid control frame (EtherType 0x88B5, sent to the bridge
+  or a group address) becomes the pod MAC. Other frames never count, so a switch or router on the
+  port gets nothing onto Wi-Fi. Multicast and all-zero sources and the bridge's own MAC never
+  count. After an Ethernet link-down the next control frame's source replaces it (another pod was
+  plugged in); the Wi-Fi station then restarts with the new MAC.
 - **Ethernet → Wi-Fi:** frames from the pod MAC, not addressed to the bridge, while Wi-Fi is
   connected. Everything else is dropped.
 - **Wi-Fi → Ethernet:** frames to the pod MAC or to a group address, except frames whose source
