@@ -3,7 +3,7 @@
 How the BenchPod (or a laptop, for bring-up) talks to the Wi-Fi bridge over the Ethernet cable
 between them. This is the bridge's only management path once it is flashed: its USB-C is power
 only, and the UART is on factory pads. The bridge implements it in `components/bridge_core/bwp.c`; the pod's client is
-`stm32h563/src/wifi_bridge.c` (development builds), which links the same codec. `tools/bridgectl.py` is a reference client for Linux.
+`stm32h563/src/wifi_bridge.c`, which links the same codec. `tools/bridgectl.py` is a reference client for Linux.
 
 ## Transport
 

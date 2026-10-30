@@ -17,7 +17,8 @@
  *             W25Q of at least 7 MB.
  *   0x700000  slot BRIDGE: the Wi-Fi bridge's firmware, 1 MB, with the pod's signed manifest kept
  *             in its header sector (BLOB_EXTRA_OFF): wifi_bridge_ota.c relays both to the bridge.
- *             Listed (blob_status, the console) only in builds with BENCHPOD_WIFI_BRIDGE.
+ *             A release blob, listed (blob_status, the console) in builds with
+ *             BENCHPOD_WIFI_BRIDGE: every pod keeps it ready in case a bridge is plugged in.
  *
  * A slot is a 4 KB header sector followed by the data. A write erases the slot (header first,
  * so it reads as empty from that moment), programs and read-back-hashes the data, then programs

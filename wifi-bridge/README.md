@@ -172,8 +172,9 @@ submodules, the released gateware (`make -C ../ice40 release-images`) and the ES
 it is missing it stops and asks for `make -C ../stm32h563 fetch`). It then insists that the pod
 build has all four blobs (gw0, gw1, esp, bridge) and flashes with `benchpod flash-self
 ../stm32h563/build/bench_pod_stm32.bin --blobs-dir ../stm32h563/build/blobs --enter-dfu`, which
-writes the firmware over USB DFU and installs the blobs. Release pod firmware leaves the bridge
-client out (`WIFI_BRIDGE=0` in release builds), so only a dev pod build sees the bridge.
+writes the firmware over USB DFU and installs the blobs. Release pod firmware has the bridge client
+too, and carries the bridge's firmware as a release blob (slot "bridge"), ready for when a bridge
+is plugged in.
 
 Wiring for the bridge as in "Flash" above. When it finishes, cable the bridge to the pod's RJ45
 and follow the checklist below from step 3.
@@ -222,7 +223,7 @@ commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on t
     (`pod MAC changed to …`, Wi-Fi restarts with the new MAC). Reboot the AP: the bridge
     reconnects on its own.
 
-13. **With a pod.** Flash a development build of the pod firmware (`./bringup.sh pod`, or
+13. **With a pod.** Flash the pod firmware (`./bringup.sh pod`, or
     `make -C stm32h563` with the default `WIFI_BRIDGE=1` and `benchpod flash-self`), press PAIR on the bridge (it is paired with the laptop), and cable
     it to the pod. Pod log: `[bridge] Wi-Fi bridge found: …`; pod console `bridge` shows
     `paired`, then `wifi-set "<ssid>" "<pass>"` and `wifi-show` (`via: wifi-bridge`). The pod

@@ -287,13 +287,8 @@ INCLUDES := \
 
 # WIFI_BRIDGE=1: the pod side of the Wi-Fi bridge control channel (EtherType 0x88B5, see
 # ../wifi-bridge/docs/PROTOCOL.md): src/wifi_bridge*.c plus the bridge firmware's own codec and
-# HMAC from ../wifi-bridge/components/bridge_core. On by default in dev builds, off in release
-# builds (RELEASE=1) until the bridge hardware has been verified. Override with WIFI_BRIDGE=0/1.
-ifeq ($(RELEASE),1)
-WIFI_BRIDGE ?= 0
-else
+# HMAC from ../wifi-bridge/components/bridge_core. Override with WIFI_BRIDGE=0.
 WIFI_BRIDGE ?= 1
-endif
 BRIDGE_CORE := ../wifi-bridge/components/bridge_core
 ifeq ($(WIFI_BRIDGE),1)
 DEFS      += -DBENCHPOD_WIFI_BRIDGE=1

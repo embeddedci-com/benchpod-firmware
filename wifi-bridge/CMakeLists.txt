@@ -2,6 +2,6 @@
 cmake_minimum_required(VERSION 3.16)
 
 # The OTA path refuses images whose project name differs, so keep this name.
-set(PROJECT_VER "0.1.0")
+set(PROJECT_VER "0.1.1")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(benchpod-wifi-bridge)
