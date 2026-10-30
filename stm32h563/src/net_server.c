@@ -572,6 +572,8 @@ static void server_start(void)
    there is no dependence on a link-change callback edge being delivered — a
    missed edge can no longer strand us at 0.0.0.0 (net_dhcp self-heals from OFF
    when the link is up). */
+static void eth_reset_addr_state(void);
+
 static void dhcp_process(net_if_t *i)
 {
     struct netif *netif = &i->netif;
@@ -583,6 +585,16 @@ static void dhcp_process(net_if_t *i)
                       strcmp(ip4addr_ntoa(netif_ip4_addr(netif)), i->ip) != 0;
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
+    /* Built-in Wi-Fi is configured: it wins over a bridge, so no address through the bridge.
+       Clearing the built-in Wi-Fi ends this, and the OFF state then DISCOVERs. */
+    if (i->is_eth && wifi_bridge_ignored()) {
+        (void)wifi_bridge_take_joined();
+        if (i->dhcp.state != NET_DHCP_OFF) {
+            eth_reset_addr_state();
+            log_printf("[net] eth: Wi-Fi bridge ignored, built-in Wi-Fi is configured\r\n");
+        }
+        return;
+    }
     /* The Ethernet goes into a Wi-Fi bridge that just joined: DISCOVER now. Its earlier tries
        were dropped while it was joining, and lwIP's backoff would wait up to ~16 s more. */
     if (i->is_eth && wifi_bridge_take_joined() && link_up && i->dhcp.state != NET_DHCP_OFF) {

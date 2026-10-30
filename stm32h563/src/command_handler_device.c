@@ -206,10 +206,10 @@ void handle_status(int conn_id, const char *json) {
 
     const char *wifi = esp_wifi_ctrl_state_str();
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    /* No built-in Wi-Fi link (v4 has no radio, a v3 has it off) and a Wi-Fi bridge on the
+    /* No built-in Wi-Fi configured (v4 has no radio, a v3 has it off) and a Wi-Fi bridge on the
        Ethernet port: "wifi" and rssi_dbm are the bridge's, e.g. "bridge connected". */
     char wifi_buf[32];
-    if ((!strcmp(wifi, "disabled") || !strcmp(wifi, "absent")) && wifi_bridge_present()) {
+    if (wifi_bridge_in_use()) {
         wb_info_t bi;
         wifi_bridge_get_info(&bi);
         snprintf(wifi_buf, sizeof(wifi_buf), "bridge %s", wb_state_str(bi.state));

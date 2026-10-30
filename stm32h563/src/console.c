@@ -205,7 +205,8 @@ static void cmd_help(console_out_t out, void *ctx)
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
-        "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in):\r\n"
+        "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in, unless built-in\r\n"
+        "Wi-Fi is configured: that wins, wifi-clear it to use the bridge):\r\n"
         "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
         "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
@@ -345,7 +346,8 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
 #if defined(BENCHPOD_WIFI_BRIDGE)
 
 /* ---- Wi-Fi bridge: wifi-set / wifi-show / wifi-clear go to the external bridge box
-   when one says HELLO on the Ethernet port; `bridge` shows it and runs scan / reboot / reset. */
+   when one says HELLO on the Ethernet port, unless built-in Wi-Fi is configured (it wins,
+   wifi_bridge_ignored); `bridge` shows it and runs scan / reboot / reset. */
 
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
 {
@@ -367,6 +369,7 @@ static void bridge_show(console_out_t out, void *ctx)
     wifi_bridge_get_info(&i);
     op(out, ctx, "  ssid: %s\r\n", i.have_status ? i.ssid : "");
     op(out, ctx, "  state: %s\r\n", i.present ? wb_state_str(i.state) : "no bridge");
+    if (wifi_bridge_ignored()) op(out, ctx, "  not in use: built-in Wi-Fi is configured\r\n");
     op(out, ctx, "  ip: %s\r\n", wifi_get_ip());
     if (wb_rssi_known(&i))
         op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
@@ -449,7 +452,7 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
         return;
     }
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_present()) {   /* the bridge box keeps the credentials, not the pod */
+    if (wifi_bridge_in_use()) {   /* the bridge box keeps the credentials, not the pod */
         const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
         int rc = wifi_bridge_set_wifi(cfg.ssid, cfg.password, &g_wifi_bridge_reply, &err);
         memset(cfg.password, 0, sizeof(cfg.password));
@@ -478,7 +481,7 @@ static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
 static void cmd_wifi_show(console_out_t out, void *ctx)
 {
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_present()) { bridge_show(out, ctx); return; }
+    if (wifi_bridge_in_use()) { bridge_show(out, ctx); return; }
 #endif
     config_t cfg;
     bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
@@ -1299,7 +1302,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
         }
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    } else if (!strcmp(argv[0], "wifi-clear") && wifi_bridge_present()) {
+    } else if (!strcmp(argv[0], "wifi-clear") && wifi_bridge_in_use()) {
         const char *err = NULL;
         int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
         if (!bridge_failed(out, ctx, "wifi-clear", rc, err))

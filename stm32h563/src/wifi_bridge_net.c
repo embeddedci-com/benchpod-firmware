@@ -9,6 +9,7 @@
 #include "FreeRTOS.h"
 #include "bp_log.h"
 #include "device_identity.h"
+#include "esp_wifi_ctrl.h"
 #include "lwip/err.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
@@ -142,6 +143,16 @@ void wifi_bridge_net_poll(void)
 bool wifi_bridge_present(void)
 {
     return s_present;
+}
+
+bool wifi_bridge_ignored(void)
+{
+    return s_present && esp_wifi_ctrl_configured();
+}
+
+bool wifi_bridge_in_use(void)
+{
+    return s_present && !esp_wifi_ctrl_configured();
 }
 
 void wifi_bridge_get_info(wb_info_t *out)
