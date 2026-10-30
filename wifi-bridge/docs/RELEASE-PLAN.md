@@ -2,17 +2,14 @@
 
 State on 2026-10-30. Test results: [BRINGUP-REV2.md](BRINGUP-REV2.md).
 
-## Decide first
+## Decided (2026-10-30)
 
-1. **Secure boot or not for the image in the pod's `bridge` slot.** The release blob is the plain
-   `RELEASE=1 ./build.sh` build. A bridge with secure boot fuses burned refuses it: it needs the
-   RSA-signed image. Secure boot and flash encryption have never run on hardware, and testing them
-   burns fuses on that board for good. Plain build for now means fused bridges need another plan
-   (a second slot image, or the pod choosing by what the bridge reports).
-2. **Close the gap for pods in the field?** The server asks the pod which slots it has before an
-   update, and old firmware does not list `bridge`, so those pods get the image on their second
-   update. Fine unless a pod gets a bridge before that (then `benchpod install-blobs`). A server
-   change could send it right after the first update.
+- **The plain build goes in the pod's `bridge` slot** (`RELEASE=1 ./build.sh`) for now. A bridge with
+  secure boot fuses burned would refuse it, so fused bridges need another plan first. Secure boot and
+  flash encryption have never run on hardware.
+- **Pods in the field need nothing for the bridge:** they have built-in Wi-Fi. They get the image on
+  their second update (old firmware does not list the slot); that is fine and stays as it is. Their
+  built-in Wi-Fi must keep working after the upgrade (test below).
 
 ## Release steps, in this order
 
@@ -36,9 +33,15 @@ The test unit runs dev builds signed with the developer key; a release pod trust
    reflash it first. It must hold a build that trusts the release keys to accept the update.
 3. Over the cloud: install from the web app on a second pod and check the bridge part shows as
    "Wi-Fi bridge image". Then the same install again: the blob is skipped.
-4. A pod with no bridge: a normal release pod on Ethernet and one on its own Wi-Fi, to confirm the
-   client does nothing there. Run hwe2e on them.
-5. Overnight soak through the bridge (`.podlock/soak/bridge_soak.py`). Stopped after a short run on
+4. **Built-in Wi-Fi after the upgrade (must pass).** Update a pod on its own Wi-Fi (ESP32-C3) from
+   the current release over the cloud: it comes back on Wi-Fi with its credentials, on LAN and cloud.
+   Run hwe2e on it. Checked once on a dev build with the client (2026-10-30, not an upgrade):
+   `set-wifi` joined through the C3 at -64 dBm, the LAN API answered, pod to host 2.9 Mbit/s, pings 72
+   to 316 ms, `clear-wifi` worked. No hwe2e, no cloud check, and no baseline to compare those numbers with.
+5. A pod on Ethernet with no bridge: the client does nothing there. Run hwe2e.
+6. A pod with built-in Wi-Fi configured, then a bridge plugged in: not tested. Check which uplink wins
+   and that `set-wifi` and `clear-wifi` do what the docs say.
+7. Overnight soak through the bridge (`.podlock/soak/bridge_soak.py`). Stopped after a short run on
    2026-10-30, not needed unless wanted.
 
 ## Before bridges go to customers
@@ -57,4 +60,5 @@ The test unit runs dev builds signed with the developer key; a release pod trust
 - After a longer outage the cloud waits out its 35 s pong timeout before reconnecting.
 - The pod's "bridge found" log line can show the version from before an update.
 - Host-to-pod TCP is about 2.3 Mbit/s even wired (pod TCP receive window, about 11.7 KB).
+- With built-in Wi-Fi joined at .221, `status` still reported `ip` .220, the Ethernet lease (Ethernet preferred). Not checked whether the Ethernet link was up then.
 - `docs/API.md` mentions `benchpod firmware install`, which CLI 0.8.4 does not have.
