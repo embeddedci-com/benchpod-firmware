@@ -49,12 +49,12 @@ fixed share of 40 to 50 mA.
 
 ## Open issues
 
-1. **The bridge clones any device on its Ethernet port.** Plugged into a router instead of the pod,
+1. **The bridge clones any device on its Ethernet port.** Fix written (the pod MAC is learned from control frames only), host-tested, not yet tried on hardware. Plugged into a router instead of the pod,
    it logged `pod MAC changed to 34:60:f9:80:77:bf`, restarted its station with that MAC and
    forwarded about 85,000 frames in 90 s (1,425 dropped) between the wired LAN and Wi-Fi: a
    duplicate MAC on the network and a possible loop. It should forward only the paired pod's MAC
    (`l2fwd` `L2_EV_CHANGED` and `wifi_pod_mac_changed`), or at least not adopt a new MAC while paired.
-2. **`benchpod set-wifi` reports a join that did not happen.** With an SSID that does not exist it
+2. **`benchpod set-wifi` reports a join that did not happen.** Fix written in the pod and the CLI, host-tested, not yet tried on hardware. With an SSID that does not exist it
    printed `The Wi-Fi bridge joined "bench-no-such-ap"`, because the pod still showed the previous
    network's `connected` status. Fix on both sides: the pod drops the old status (state joining,
    no rssi) when SET_WIFI is accepted, and the CLI only accepts a join or failure for the SSID it set
