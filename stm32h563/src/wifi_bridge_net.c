@@ -179,6 +179,12 @@ static void on_net_take(void *arg)
     if (c->state == WB_REQ_DONE || c->state == WB_REQ_TIMEOUT) {
         *c->out = *wb_request_reply(&s_wb);
         wb_request_release(&s_wb);
+        /* The caller may read the status next: not the snapshot from before this answer. */
+        wb_info_t i;
+        wb_get_info(&s_wb, HAL_GetTick(), &i);
+        taskENTER_CRITICAL();
+        s_info = i;
+        taskEXIT_CRITICAL();
     }
 }
 

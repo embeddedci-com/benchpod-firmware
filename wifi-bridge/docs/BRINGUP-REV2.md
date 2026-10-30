@@ -54,7 +54,7 @@ fixed share of 40 to 50 mA.
    forwarded about 85,000 frames in 90 s (1,425 dropped) between the wired LAN and Wi-Fi: a
    duplicate MAC on the network and a possible loop. It should forward only the paired pod's MAC
    (`l2fwd` `L2_EV_CHANGED` and `wifi_pod_mac_changed`), or at least not adopt a new MAC while paired.
-2. **`benchpod set-wifi` reports a join that did not happen.** Fix written in the pod and the CLI, host-tested, not yet tried on hardware. With an SSID that does not exist it
+2. **`benchpod set-wifi` reports a join that did not happen.** Fixed in the bridge, pod and CLI, HW-verified: a missing network and a wrong password are reported as such, and the right password as joined, three rounds in a row. With an SSID that does not exist it
    printed `The Wi-Fi bridge joined "bench-no-such-ap"`, because the pod still showed the previous
    network's `connected` status. Fix on both sides: the pod drops the old status (state joining,
    no rssi) when SET_WIFI is accepted, and the CLI only accepts a join or failure for the SSID it set
