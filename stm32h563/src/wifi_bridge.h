@@ -15,7 +15,7 @@
  * time, and supplies send() and the pairing-key derivation. wifi_bridge_net.c is that glue on
  * the net task. Host-tested in test/test_wifi_bridge.c against the bridge's pairing logic.
  *
- * Built only when BENCHPOD_WIFI_BRIDGE is defined (dev builds, see the Makefile).
+ * Built only when BENCHPOD_WIFI_BRIDGE is defined (see the Makefile).
  */
 #include <stdbool.h>
 #include <stddef.h>

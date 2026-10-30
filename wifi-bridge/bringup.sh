@@ -12,11 +12,10 @@
 #   -p PORT                    the programmer's UART port (default: auto-detected by flash.sh)
 #   --connection C             how benchpod reaches the pod (default: usb / the saved connection)
 #
-# Bridge: ./build.sh (Docker), then ./flash.sh --erase. Pod: a development build of ../stm32h563
-# (WIFI_BRIDGE=1, the default outside release builds), which carries the bridge client and puts
+# Bridge: ./build.sh (Docker), then ./flash.sh --erase. Pod: a development build of ../stm32h563,
+# which carries the bridge client and puts
 # this bridge build into its blob slot "bridge"; then `benchpod flash-self` writes the firmware
-# over USB DFU and installs the blobs from the same build. Release pod firmware has no bridge
-# client yet, so a pod on a release does not see the bridge.
+# over USB DFU and installs the blobs from the same build.
 #
 # Afterwards: cable the bridge to the pod's RJ45 and power both; the steps from "Boot" on in the
 # README's bring-up checklist say what to look for. Needs esptool, dfu-util, benchpod 0.8.3+ and Docker.

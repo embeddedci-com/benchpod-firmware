@@ -186,9 +186,9 @@ jobs:
           if strings stm32h563/build/bench_pod_stm32.elf | grep -q 'ca-damage ok'; then
             echo "::error::the RELEASE=1 image still has the development ca-damage command"; exit 1
           fi
-          # The Wi-Fi bridge client is dev-only until the bridge hardware is verified (WIFI_BRIDGE).
-          if strings stm32h563/build/bench_pod_stm32.elf | grep -q 'Wi-Fi bridge control channel on'; then
-            echo "::error::the RELEASE=1 image has the development Wi-Fi bridge client"; exit 1
+          # Every pod can take a Wi-Fi bridge (WIFI_BRIDGE).
+          if ! strings stm32h563/build/bench_pod_stm32.elf | grep -q 'Wi-Fi bridge control channel on'; then
+            echo "::error::the RELEASE=1 image has no Wi-Fi bridge client"; exit 1
           fi
 
       - name: OTA commit code stays in RAM

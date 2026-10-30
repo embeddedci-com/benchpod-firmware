@@ -167,9 +167,8 @@ jobs:
         run: make -C ice40 release-images
 
       # The Wi-Fi bridge's firmware (wifi-bridge/, ESP-IDF in the pinned Docker image). RELEASE=1:
-      # it trusts only keys/release-N.pub for its updates. Published as its own assets below, not as
-      # a release blob yet: release pod firmware has no bridge client (WIFI_BRIDGE is off with
-      # RELEASE=1), so servers must not push it to pods.
+      # it trusts only keys/release-N.pub for its updates. Built first: it is a release blob, kept
+      # in the pod's W25Q slot "bridge" so a pod has it ready if a bridge is ever plugged in.
       - name: Build Wi-Fi bridge firmware
         working-directory: wifi-bridge
         run: RELEASE=1 ./build.sh
@@ -194,7 +193,7 @@ jobs:
         run: |
           sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
           # the blobs installers put in the pod's W25Q slots, under their release asset names
-          cp blobs/blob-gw0.bin blobs/blob-gw1.bin blobs/blob-esp.bin blobs/blobs-manifest.json .
+          cp blobs/blob-gw0.bin blobs/blob-gw1.bin blobs/blob-esp.bin blobs/blob-bridge.bin blobs/blobs-manifest.json .
           # which gateware goes with this firmware, and what hardware test it passed
           cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
@@ -218,16 +217,12 @@ jobs:
           $FWSIGN sign-blobs --key env:FW_SIGNING_KEY --release "${TAG#v}" blobs-manifest.json
           # the key must be one the firmware trusts
           $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target firmware bench_pod_stm32.bin
-          for b in gw0 gw1 esp; do
+          # blob-bridge.bin: the pod checks it when it is installed in its "bridge" slot, the bridge
+          # checks it again.
+          for b in gw0 gw1 esp bridge; do
             $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target $b blob-$b.bin
           done
-          # The Wi-Fi bridge's firmware, signed with the same key (target "bridge", its own version):
-          # the pod checks it when it is installed in its "bridge" slot, the bridge checks it again.
-          BV=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' ../../wifi-bridge/CMakeLists.txt)
-          cp ../../wifi-bridge/build/benchpod-wifi-bridge.bin .
-          $FWSIGN sign --key env:FW_SIGNING_KEY --target bridge --release "$BV" benchpod-wifi-bridge.bin
-          $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target bridge benchpod-wifi-bridge.bin
-          echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-esp.bin.sig benchpod-wifi-bridge.bin benchpod-wifi-bridge.bin.sig" >> "$GITHUB_OUTPUT"
+          echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-esp.bin.sig blob-bridge.bin.sig" >> "$GITHUB_OUTPUT"
 
       # Production bridge (secure boot v2 + flash encryption): a factory bundle whose bootloader and
       # app are RSA-3072 signed with BRIDGE_SECURE_BOOT_KEY (wifi-bridge/docs/SECURITY.md, "Two keys,
@@ -272,7 +267,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-esp.bin blob-bridge.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else

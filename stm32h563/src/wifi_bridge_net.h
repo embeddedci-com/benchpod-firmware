@@ -6,7 +6,7 @@
  *
  * Net task: wifi_bridge_net_init after the Ethernet netif is added, wifi_bridge_net_poll from
  * net_poll, and the lwIP LWIP_HOOK_UNKNOWN_ETH_PROTOCOL hook (config/lwipopts.h) feeds
- * wifi_bridge_eth_input. Only built with BENCHPOD_WIFI_BRIDGE (dev builds, see the Makefile).
+ * wifi_bridge_eth_input. Only built with BENCHPOD_WIFI_BRIDGE (see the Makefile).
  */
 #include <stdbool.h>
 #include <stddef.h>

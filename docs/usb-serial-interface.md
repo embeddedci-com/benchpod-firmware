@@ -216,15 +216,13 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
-| `bridge [scan \| update \| reboot \| factory-reset yes]` | Development builds only. The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
+| `bridge [scan \| update \| reboot \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge-development-builds)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
-#### Wi-Fi bridge (development builds)
+#### Wi-Fi bridge
 
 BenchPod v4 has no radio: a small bridge box on the Ethernet port carries the pod's traffic to
 Wi-Fi ([wifi-bridge/README.md](../wifi-bridge/README.md), protocol in
-[wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)). Development builds talk to it
-(release builds leave it out until the bridge hardware is verified, `WIFI_BRIDGE` in the
-Makefile). While a bridge sends its HELLO on the Ethernet port:
+[wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)). While a bridge sends its HELLO on the Ethernet port:
 
 - `wifi-set` stores the credentials **on the bridge**, not in the pod's flash, so USB networking
   and the ESP32-C3 are not affected. It prints the same `[cfg] credentials written to flash`

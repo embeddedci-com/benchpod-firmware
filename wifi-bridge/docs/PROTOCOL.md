@@ -3,7 +3,7 @@
 How the BenchPod (or a laptop, for bring-up) talks to the Wi-Fi bridge over the Ethernet cable
 between them. This is the bridge's only management path once it is flashed: its USB-C is power
 only, and the UART is on factory pads. The bridge implements it in `components/bridge_core/bwp.c`; the pod's client is
-`stm32h563/src/wifi_bridge.c` (development builds), which links the same codec. `tools/bridgectl.py` is a reference client for Linux.
+`stm32h563/src/wifi_bridge.c`, which links the same codec. `tools/bridgectl.py` is a reference client for Linux.
 
 ## Transport
 
@@ -310,8 +310,7 @@ Pairing vectors (X25519 secrets 10 11 .. 2f for the pod, 80 81 .. 9f for the bri
 
 `stm32h563/src/wifi_bridge.c` (protocol client, host-tested against this repo's pairing code)
 and `wifi_bridge_net.c` (lwIP `LWIP_HOOK_UNKNOWN_ETH_PROTOCOL` on the Ethernet netif, frames
-out through `netif->linkoutput`). Built only in development firmware for now (`WIFI_BRIDGE` in
-`stm32h563/Makefile`; off with `RELEASE=1`). What it does:
+out through `netif->linkoutput`). What it does:
 
 - Tracks HELLO (bridge MAC, NONCE, state, flags); the bridge counts as present while HELLOs keep
   coming on a live Ethernet link (6 s).

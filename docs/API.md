@@ -776,7 +776,7 @@ TCP connection (so it is the interface in use, not only the preferred one):
 
 | Field | Meaning |
 |---|---|
-| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), `"wifi-bridge"` (development builds: the Ethernet port goes into a connected [Wi-Fi bridge](#wifi_set--wifi_clear) box), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
+| `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), `"wifi-bridge"` (the Ethernet port goes into a connected [Wi-Fi bridge](#wifi_set--wifi_clear) box), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
 | `uplink_rssi_dbm` | With `"wifi-bridge"` only: the bridge's Wi-Fi signal (dBm) when the link came up. |
 
 ---
@@ -3442,7 +3442,7 @@ side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 ### `wifi_scan` — the networks the pod's Wi-Fi sees
 
 For a Wi-Fi picker: the networks in range, to choose the SSID for `wifi_set`. The pod scans with
-its own Wi-Fi, or with a Wi-Fi bridge when one is plugged in (development builds), and answers in
+its own Wi-Fi, or with a Wi-Fi bridge when one is plugged in, and answers in
 the same format either way. Pods that list `wifi_scan` in `caps` have it (firmware 3.9.4+).
 
 A scan takes a few seconds, and the pod keeps answering other commands meanwhile, so it is two
@@ -3538,9 +3538,9 @@ mode, or a capture, upload or update held the shared bus for a minute. After `fa
 region included). `wifi_clear` does not touch the device identity key, the cloud configuration
 (`cloud_clear`) or calibration data.
 
-**With a Wi-Fi bridge (development builds).** BenchPod v4 has no radio; a bridge box on the
+**With a Wi-Fi bridge.** BenchPod v4 has no radio; a bridge box on the
 Ethernet port carries Wi-Fi ([wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)).
-Development firmware talks to it (release builds leave it out for now). While a bridge says HELLO
+While a bridge says HELLO
 on the Ethernet port, `wifi_set` stores the credentials on the bridge (reply
 `{"ssid":"lab","via":"wifi-bridge"}`, the pod's own flash, USB networking and the ESP32-C3 are left
 alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` describes the bridge:
@@ -3619,7 +3619,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `ca`, `tls`, and `bridge` in development builds; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -3654,7 +3654,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the three release slots (`gw0`, `gw1`, `esp`), plus `bridge` (the Wi-Fi bridge's firmware, which the pod relays to the bridge) in development builds; the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in

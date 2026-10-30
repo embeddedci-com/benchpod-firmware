@@ -3,7 +3,7 @@
 
 /*
  * wifi_scan: one list of Wi-Fi networks, whichever radio found them (the built-in ESP32-C3 or,
- * on development builds, a Wi-Fi bridge box), so `wifi_scan` and the console `wifi-scan` answer
+ * a Wi-Fi bridge box), so `wifi_scan` and the console `wifi-scan` answer
  * the same way on every pod.
  *
  * The list holds the strongest WIFI_SCAN_MAX networks, strongest first, one entry per SSID (the

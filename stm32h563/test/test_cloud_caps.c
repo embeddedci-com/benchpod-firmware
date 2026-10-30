@@ -178,7 +178,7 @@ static void test_uplink(void) {
     c.uplink = NULL;
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
     CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "unknown") == 0);
-    c.uplink = "wifi-bridge";   /* development builds: over Ethernet into a Wi-Fi bridge box */
+    c.uplink = "wifi-bridge";   /* over Ethernet into a Wi-Fi bridge box */
     c.has_uplink_rssi = true;
     c.uplink_rssi_dbm = -61;
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
