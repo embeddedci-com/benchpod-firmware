@@ -24,6 +24,19 @@ Olimex ESP-PROG, pod console over USB, both logged during every test.
 | Missing AP (credentials for an SSID that does not exist) | Bridge goes `no-ap` and retries every 1 to 10 s; pod reports `bridge no-ap`. Real AP loss and return (router off) not tested yet. |
 | 10 rejoins (`set-wifi` with the same credentials) | Each about 3 s, no reset. |
 
+## Built-in Wi-Fi and a bridge together (2026-10-30, bridge 0.1.9)
+
+Pod with built-in Wi-Fi configured and joined, then the bridge plugged in, with the bridge also joined:
+
+| Test | Result |
+|---|---|
+| Bridge plugged in | Pod takes no address on Ethernet: .221 (built-in) answers, .220 does not. `wifi_status` reports the built-in Wi-Fi with `bridge_ignored`. `bridge` prints `not in use`, and pairing still works. |
+| `wifi_scan` | Runs on the built-in Wi-Fi (`via` built-in, 14 networks). |
+| Pod reboot | Comes back on built-in Wi-Fi with the cloud connected; no lease on Ethernet. |
+| `wifi-clear` | Pod answers through the bridge at .220 after 3.7 s, cloud connected; C3 NVS erased. |
+
+With Ethernet to a router and built-in Wi-Fi joined, both addresses answer and `status` reports the Ethernet one, as intended.
+
 ## Throughput (Mac on Wi-Fi to the pod, LAN JSON `speedtest`)
 
 | Direction | Through the bridge | Pod wired | Bridge cost |
