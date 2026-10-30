@@ -256,6 +256,8 @@ The bridge is a layer-2 pipe for one MAC:
   to the pod MAC or to a group address, except frames whose source
   is the pod MAC (the AP echoing the pod's own broadcasts, which would break IPv6 duplicate
   address detection).
+- **No pod:** 30 s after an Ethernet link-down without a control frame from a pod, the bridge leaves
+  Wi-Fi and turns the radio off (state WAIT_POD). The pod's next control frame turns it back on.
 - The Wi-Fi station uses the pod MAC, so DHCP, ARP, mDNS and the cloud connection see the pod.
   The bridge itself has no IP address and no open ports on either side.
 

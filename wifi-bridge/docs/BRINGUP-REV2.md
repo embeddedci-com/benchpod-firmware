@@ -36,16 +36,19 @@ not the bridge.
 
 ## Power (bench PSU on the USB-C input, 5 V)
 
-| State | USB input | 3V3 if the regulator is linear |
-|---|---|---|
-| Idle, joined | 0.154 A, 0.77 W | about 0.51 W |
-| Joining | 0.157 A shown for about 1 s (short peaks too fast for the PSU display) | about 0.52 W |
-| 7.9 Mbit/s traffic | 0.200 A, 1.0 W | about 0.66 W |
-| Ethernet into a router by mistake (see below) | 0.177 A | about 0.58 W |
+| State | USB input |
+|---|---|
+| Idle, joined | 0.154 A, 0.77 W |
+| Joining | 0.157 A shown for about 1 s (short peaks too fast for the PSU display) |
+| 7.9 Mbit/s traffic | 0.200 A, 1.0 W |
+| No pod for 30 s, Wi-Fi off | 0.061 A, 0.31 W |
+| Modem sleep (tried, not used) | 0.109 A idle, but pings of 370 ms on average, 1.8 s at worst, against about 8 ms |
 
-Over the 0.5 W budget: just at idle, about 30% under traffic. Wi-Fi power save is off
-(`Set ps type: 0`); modem sleep would lower idle at some latency cost. The LAN8742A at 100M is a
-fixed share of 40 to 50 mA.
+The ESP32 moved from the pod to the bridge, so the load is about what the pod carried before; there
+is no separate power budget. Wi-Fi power save stays off in normal use.
+
+Supply margin: under full traffic the bridge did not reset with the PSU stepped from 5 V down to
+3.6 V.
 
 ## Open issues
 
@@ -59,9 +62,10 @@ fixed share of 40 to 50 mA.
    network's `connected` status. Fix on both sides: the pod drops the old status (state joining,
    no rssi) when SET_WIFI is accepted, and the CLI only accepts a join or failure for the SSID it set
    (`setWifiThroughBridge` in benchpod-cli `commands_serial.go`).
-3. **Power over budget** (above).
-4. **Brownout message at every power-up from the bench PSU** (`E BOD` before the reset line, then a
-   normal boot). Not seen on reboots. Check on a normal USB supply and look at the 3V3 ramp.
+3. **Brownout message: not a fault.** `E BOD: Brownout detector was triggered` prints as the rail
+   collapses at power-off (raw console timestamps: 17 s before the next boot, nothing during that boot).
+4. **Duplicate MAC with a wired pod: fixed.** The bridge stayed on Wi-Fi with the pod's MAC after the
+   pod moved to a wired LAN. It now leaves Wi-Fi 30 s after a link-down without a pod; back about 2 s after the pod's first control frame. A pod reboot does not trigger it.
 5. **Minor:**
    - The pod's "bridge found" log line shows the version from before an update.
    - The pod's first request after a bridge reboot uses the old nonce (one AUTH refusal, then it recovers).

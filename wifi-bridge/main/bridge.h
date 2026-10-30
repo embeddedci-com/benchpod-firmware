@@ -52,6 +52,8 @@ void eth_get_mac(uint8_t mac[6]);
 // ---- wifi.c
 esp_err_t wifi_start(void);
 void wifi_pod_mac_changed(void);  // learned or changed pod MAC: (re)start the station with it
+void wifi_pod_gone(void);         // Ethernet link down: Wi-Fi goes off if no pod comes back
+void wifi_pod_back(void);         // the pod spoke on the control channel after a link-down
 void wifi_creds_changed(void);    // stored credentials changed or were cleared
 bool wifi_is_connected(void);
 uint8_t wifi_state(void);         // bwp_state_t
