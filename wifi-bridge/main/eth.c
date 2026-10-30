@@ -47,8 +47,13 @@ static esp_err_t eth_input(esp_eth_handle_t h, uint8_t *buf, uint32_t len, void 
     l2_event_t ev;
     g_bridge.eth_rx++;
     portENTER_CRITICAL(&g_bridge.lock);
+    bool waiting = g_bridge.fwd.relearn;
     l2_action_t a = l2fwd_from_eth(&g_bridge.fwd, buf, len, wifi_is_connected(), &ev);
+    bool back = waiting && !g_bridge.fwd.relearn;
     portEXIT_CRITICAL(&g_bridge.lock);
+    if (back) {
+        wifi_pod_back();
+    }
 
     if (ev != L2_EV_NONE) {
         char m[18];
@@ -90,6 +95,7 @@ static void eth_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         l2fwd_link_down(&g_bridge.fwd);  // a different pod may be plugged in next
         portEXIT_CRITICAL(&g_bridge.lock);
         ESP_LOGI(TAG, "link down");
+        wifi_pod_gone();
         break;
     default:
         break;

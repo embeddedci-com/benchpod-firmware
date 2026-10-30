@@ -30,7 +30,7 @@ typedef struct {
     SemaphoreHandle_t done;
 } scan_req_t;
 
-typedef enum { EV_APPLY, EV_STA_START, EV_CONNECTED, EV_DISCONNECTED, EV_SCAN } ev_kind_t;
+typedef enum { EV_APPLY, EV_STA_START, EV_CONNECTED, EV_DISCONNECTED, EV_SCAN, EV_POD_GONE, EV_POD_BACK } ev_kind_t;
 
 typedef struct {
     ev_kind_t kind;
@@ -41,6 +41,9 @@ typedef struct {
 #define REASON_ASSOC_LEAVE 8  // we left on purpose (disconnect, stop, MAC change)
 #define BACKOFF_MIN_MS 1000
 #define BACKOFF_MAX_MS 30000
+// No pod for this long after a link-down: off Wi-Fi, radio off. Long enough for a pod to reboot.
+// On the air the station would keep using the pod's MAC, also once the pod is on a wired LAN.
+#define POD_GONE_PARK_MS 30000
 
 static QueueHandle_t s_q;
 static SemaphoreHandle_t s_scan_lock;
@@ -54,6 +57,8 @@ static uint8_t s_sta_mac[6];
 static uint32_t s_creds_gen = 1, s_conn_gen;
 static int s_backoff_ms;
 static int64_t s_retry_at;  // esp_timer time in us, 0: none
+static int64_t s_park_at;   // same, 0: none
+static bool s_parked;
 
 static void post(ev_kind_t kind, uint16_t reason)
 {
@@ -66,6 +71,16 @@ static void post(ev_kind_t kind, uint16_t reason)
 void wifi_pod_mac_changed(void)
 {
     post(EV_APPLY, 0);
+}
+
+void wifi_pod_gone(void)
+{
+    post(EV_POD_GONE, 0);
+}
+
+void wifi_pod_back(void)
+{
+    post(EV_POD_BACK, 0);
 }
 
 void wifi_creds_changed(void)
@@ -169,7 +184,7 @@ static void apply(void)
         set_state(BWP_ST_UNCONFIGURED);
         return;
     }
-    if (!bridge_pod_mac(pod)) {
+    if (s_parked || !bridge_pod_mac(pod)) {
         memset(pass, 0, sizeof(pass));
         set_state(BWP_ST_WAIT_POD);
         return;
@@ -305,17 +320,34 @@ static void do_scan(scan_req_t *r)
     }
 }
 
+static void park(void)
+{
+    ESP_LOGI(TAG, "no pod for %d s: Wi-Fi off until it is back", POD_GONE_PARK_MS / 1000);
+    s_parked = true;
+    s_retry_at = 0;
+    leave();
+    esp_wifi_stop();
+    s_started = false;
+    apply();
+}
+
 static void wifi_task(void *arg)
 {
     ev_t ev;
     for (;;) {
         TickType_t wait = portMAX_DELAY;
-        if (s_retry_at) {
-            int64_t ms = (s_retry_at - esp_timer_get_time()) / 1000;
+        int64_t next = s_retry_at && (!s_park_at || s_retry_at < s_park_at) ? s_retry_at : s_park_at;
+        if (next) {
+            int64_t ms = (next - esp_timer_get_time()) / 1000;
             wait = ms > 0 ? pdMS_TO_TICKS(ms) : 0;
         }
         if (xQueueReceive(s_q, &ev, wait) != pdTRUE) {
-            if (s_retry_at && esp_timer_get_time() >= s_retry_at) {
+            int64_t now = esp_timer_get_time();
+            if (s_park_at && now >= s_park_at) {
+                s_park_at = 0;
+                park();
+            }
+            if (s_retry_at && now >= s_retry_at) {
                 s_retry_at = 0;
                 apply();
             }
@@ -341,6 +373,10 @@ static void wifi_task(void *arg)
         case EV_DISCONNECTED:
             esp_wifi_internal_reg_rxcb(WIFI_IF_STA, NULL);
             s_connected = false;
+            if (s_parked) {
+                s_connecting = false;
+                break;
+            }
             if (ev.reason == REASON_ASSOC_LEAVE) {
                 // Usually our own leave(), and a newer attempt may already be in flight. If
                 // nothing is, retry anyway (an AP can send this reason too).
@@ -363,6 +399,19 @@ static void wifi_task(void *arg)
         case EV_SCAN:
             do_scan(ev.scan);
             xSemaphoreGive(ev.scan->done);
+            break;
+        case EV_POD_GONE:
+            if (!s_parked) {
+                s_park_at = esp_timer_get_time() + (int64_t)POD_GONE_PARK_MS * 1000;
+            }
+            break;
+        case EV_POD_BACK:
+            s_park_at = 0;
+            if (s_parked) {
+                s_parked = false;
+                ESP_LOGI(TAG, "pod is back: Wi-Fi on");
+                esp_wifi_start();  // EV_STA_START applies
+            }
             break;
         }
     }

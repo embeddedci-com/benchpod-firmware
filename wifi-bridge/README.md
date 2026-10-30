@@ -185,8 +185,8 @@ lines are what the firmware prints at 115200 (`./flash.sh --monitor`); the debug
 commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on the RJ45 as the
 "pod" (`tools/bridgectl.py`); step 13 swaps in a real pod.
 
-1. **Power.** USB-C only, no programmer power: 3V3 test pad 3.3 V, idle draw about 0.1 A
-   (0.5 W budget).
+1. **Power.** USB-C only, no programmer power: 3V3 test pad 3.3 V, about 0.15 A from USB on
+   Wi-Fi, 0.2 A under traffic, 0.06 A with Wi-Fi off (no pod).
 2. **ROM loader and flash.** `./flash.sh --erase`. If esptool cannot connect: check the pin 1
    orientation of the TC2030, the PROG (not JTAG) header, and that GPIO0 reaches the ROM loader
    (R11 pull-up, R12 470 ohm in series).
