@@ -34,7 +34,7 @@
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
 
-/* ---- Wi-Fi bridge (dev builds): wifi_set / wifi_clear / wifi_status go to the external bridge
+/* ---- Wi-Fi bridge: wifi_set / wifi_clear / wifi_status go to the external bridge
    box when one says HELLO on the Ethernet port (wifi-bridge/docs/PROTOCOL.md). The pod's own
    config_t stays untouched, so the ESP32-C3 path and USB networking are not affected. */
 
@@ -390,7 +390,7 @@ void handle_wifi_clear(int conn_id, const char *json) {
 }
 
 /* ---- wifi_scan / console wifi-scan: the networks the pod's Wi-Fi sees ---------------------
-   Through a Wi-Fi bridge when one is plugged in (development builds), else the built-in ESP32-C3
+   Through a Wi-Fi bridge when one is plugged in, else the built-in ESP32-C3
    (esp_wifi_ctrl_scan_request), with one list format (wifi_scan.h) either way.
 
    {"cmd":"wifi_scan"} starts a scan, or joins the one running, and answers at once:

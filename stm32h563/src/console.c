@@ -205,7 +205,7 @@ static void cmd_help(console_out_t out, void *ctx)
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
-        "Wi-Fi bridge (development build only; wifi-set/-show/-clear/-scan use it when one is plugged in):\r\n"
+        "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in):\r\n"
         "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
         "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
@@ -344,7 +344,7 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
 
-/* ---- Wi-Fi bridge (dev builds): wifi-set / wifi-show / wifi-clear go to the external bridge box
+/* ---- Wi-Fi bridge: wifi-set / wifi-show / wifi-clear go to the external bridge box
    when one says HELLO on the Ethernet port; `bridge` shows it and runs scan / reboot / reset. */
 
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)

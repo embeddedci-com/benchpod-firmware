@@ -59,7 +59,7 @@ typedef struct {
        Only the cloud client knows it (cloud_caps_collect leaves it NULL); the status reply's
        "net"/"wifi" fields describe the interfaces, not which one carries the cloud. */
     const char   *uplink;
-    /* With "wifi-bridge" (development builds: the link runs over Ethernet into a connected Wi-Fi
+    /* With "wifi-bridge" (the link runs over Ethernet into a connected Wi-Fi
        bridge box), the bridge's RSSI is sent as "uplink_rssi_dbm". */
     bool          has_uplink_rssi;
     int           uplink_rssi_dbm;

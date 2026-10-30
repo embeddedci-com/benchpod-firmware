@@ -235,8 +235,7 @@ Record results, and anything changed, in this section or in the PR that fixes it
 
 The pod keeps the bridge's firmware in its W25Q blob slot `bridge` (installed like its other
 blobs: `blob-bridge.bin` with its signed manifest, OTA target `bridge`). When that image is newer
-than what the bridge reports in HELLO, the pod updates the bridge by itself (development pod
-builds; `bridge update` on the pod's console forces it): OTA_BEGIN with the manifest (the bridge
+than what the bridge reports in HELLO, the pod updates the bridge by itself (`bridge update` on the pod's console forces it): OTA_BEGIN with the manifest (the bridge
 checks the Ed25519 signature, target and size, then erases the inactive slot), 1024-byte
 OTA_DATA chunks in order (a lost ack is safe to retry, a gap is answered with the expected
 offset), OTA_END (SHA-256 against the manifest, the project name and, in production, the secure

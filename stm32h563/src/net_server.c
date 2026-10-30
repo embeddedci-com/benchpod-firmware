@@ -967,7 +967,7 @@ void net_init(void)
                                       NETIF_CHECKSUM_GEN_TCP));
     netif_set_default(&s_eth.netif);
 #if defined(BENCHPOD_WIFI_BRIDGE)
-    wifi_bridge_net_init(&s_eth.netif);   /* the Wi-Fi bridge's control channel (dev builds) */
+    wifi_bridge_net_init(&s_eth.netif);   /* the Wi-Fi bridge's control channel */
 #endif
 
     /* Wi-Fi netif over the ESP32-C3. The netif is registered (inert until the

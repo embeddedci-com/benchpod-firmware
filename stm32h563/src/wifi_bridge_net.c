@@ -74,7 +74,7 @@ void wifi_bridge_net_init(struct netif *eth)
     static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .ctx = NULL};
     s_eth = eth;
     wb_init(&s_wb, eth->hwaddr, &io);
-    log_printf("[bridge] Wi-Fi bridge control channel on (dev build)\r\n");
+    log_printf("[bridge] Wi-Fi bridge control channel on\r\n");
 }
 
 int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif)
