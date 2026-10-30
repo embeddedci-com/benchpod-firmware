@@ -313,6 +313,11 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
             parse_status(b, m, now);
         } else if (b->req_type == BWP_SCAN) {
             parse_scan(b, m);
+        } else if (b->req_type == BWP_SET_WIFI) {
+            /* What we knew was about the previous network: nobody may read it as this join's. */
+            b->info.have_status = false;
+            b->info.state = b->info.status_state = BWP_ST_JOINING;
+            b->next_status = now;
         }
         break;
     default:

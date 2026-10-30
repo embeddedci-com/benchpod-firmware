@@ -551,6 +551,9 @@ int main(void)
     CHECK(strcmp(sim.ssid, "lab net") == 0 && strcmp(sim.pass, "correct horse") == 0);
     CHECK(!leaked);
     wb_request_release(&pod);
+    /* Accepted: the previous network's connected status is gone, not read as this join's. */
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(!info.have_status && info.state == BWP_ST_JOINING && !wb_rssi_known(&info));
     CHECK(call_set_wifi("guest", "") == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     CHECK(sim.pass[0] == 0);
     wb_request_release(&pod);
