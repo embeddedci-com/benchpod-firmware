@@ -1264,6 +1264,8 @@ Analog module v3r4 adds a relay (K5) that swaps the bottom leg of the ADC input 
 | `normal` (default) | 910k / 82.5k, about ÷12 | ±32.8 V | ~1 mV per count | ~1 MΩ |
 | `low` | 910k / 910k, ÷2 | ±5.46 V | ~167 µV per count | 1.82 MΩ |
 
+The ADC has a gap of about 3 counts at its zero crossing: a signal crossing 0 V jumps by that much, and one resting at 0 V can flip across it, which looks like extra noise. Readings away from 0 V are not affected, and calibration does not remove it.
+
 The low range gives about 6x the resolution on signals up to ±5 V. **Use 1x leads**: its
 1.82 MΩ input does not match a 10x scope probe, which expects 1 MΩ.
 
