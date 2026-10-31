@@ -286,6 +286,15 @@ static void test_dac_line_from_two_readings(void) {
     CHECK(adc_cal_clear_part("dac") == 0 && DAC_CAL[1].b == comp.b && !adc_cal_dac_is_set(1), "clear dac");
     CHECK(adc_cal_load() == -1, "a cleared (empty) calibration loaded");
     CHECK(adc_cal_clear_part("nonsense") == -2, "unknown part accepted");
+
+    /* The divider sweep's result: stored alone, kept over a reload, refused out of range, gone
+       with the ADC part, and a bad stored value hides itself without losing the calibration. */
+    CHECK(!adc_cal_comp_is_set(), "a sweep result without a sweep");
+    CHECK(adc_cal_comp_store(4999, 9360) != NULL && adc_cal_comp_store(9678, 500) != NULL, "out of range accepted");
+    CHECK(adc_cal_comp_store(9678, 9360) == NULL && adc_cal_comp_is_set(), "sweep result refused");
+    CHECK(adc_cal_load() == 0 && adc_cal_comp_hf_dc_e4() == 9678 && adc_cal_comp_c_top_ff() == 9360, "lost over a reload");
+    CHECK(adc_cal_clear_part("adc") == 0 && !adc_cal_comp_is_set(), "clear adc kept the sweep result");
+    CHECK(adc_cal_load() == -1, "a cleared sweep result left a record");
 }
 
 static void test_dac_refusals(void) {
