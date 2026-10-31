@@ -1378,6 +1378,7 @@ reference.
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
+| `adc_comp` | The recorded frequency response of the ADC input (firmware 3.9.5+), `hf_dc_e4` and `c_top_ff`, or `null`. See [below](#adc-frequency-response-record-firmware-395) |
 
 The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
 takes about 0.3 s and leaves the `current_in` path routed.
@@ -1458,6 +1459,18 @@ are set: clear them, calibrate, set them again. The J8 offset does not move the 
 | `dmm` | `true` when any DMM part is stored |
 | `zero_count_mc` | The raw zero the offset is derived from: the mean count `current_in` read with J8 open, unwrapped, in thousandths of a count (firmware 3.9.4+, only when calibrated) |
 | `measured` | After an `adc` run: what the output put out (`v1_uv`, `v2_uv`), what the ADC read before the gain (`r1_uv`, `r2_uv`) and the mean offset left after it (`residual_uv`) |
+
+##### ADC frequency response record (firmware 3.9.5+)
+
+```json
+{"cmd":"calibrate","comp_hf_dc_e4":9678,"comp_c_top_ff":9360}
+```
+
+Records what a frequency sweep through the `cal1` loopback measured on this pod: the high-frequency
+gain of the ADC input divider against its DC gain, times 10000 (`comp_hf_dc_e4`, 5000 to 15000), and
+the fitted capacitance of the divider's top leg in femtofarads (`comp_c_top_ff`, 1000 to 65000).
+Both go together. It is a record only: **no reading is scaled with it**, and DC accuracy does not
+depend on it. Out of range is refused. `{"cmd":"calibrate","clear":"adc"}` and `"clear":true` remove it.
 
 **What the pod stores** (firmware 3.9.4+): raw measurements, never a fit. The mean count with J8
 open (the zero), the two codes and DMM readings per DAC output, and the two counts and input

@@ -162,7 +162,7 @@ static bool derive(const adc_cal_t *r) {
     return true;
 }
 
-static bool record_empty(const adc_cal_t *r) { return !r->zero_set && !r->dac_set && !r->gain_set && !r->low_set; }
+static bool record_empty(const adc_cal_t *r) { return !r->comp_hf_dc_e4 && !r->zero_set && !r->dac_set && !r->gain_set && !r->low_set; }
 
 static void derive_nothing(void) {
     adc_cal_t empty;
@@ -397,6 +397,23 @@ const char *adc_cal_low_gain_store(adc_cal_gain_meas_t *m) {
     return apply(&rec, "calibrate: the low-range gain is out of range");
 }
 
+bool adc_cal_comp_is_set(void) {
+    return s_rec.comp_hf_dc_e4 >= ADC_CAL_COMP_HF_DC_MIN_E4 && s_rec.comp_hf_dc_e4 <= ADC_CAL_COMP_HF_DC_MAX_E4 &&
+           s_rec.comp_c_top_ff >= ADC_CAL_COMP_C_TOP_MIN_FF && s_rec.comp_c_top_ff <= ADC_CAL_COMP_C_TOP_MAX_FF;
+}
+uint16_t adc_cal_comp_hf_dc_e4(void) { return adc_cal_comp_is_set() ? s_rec.comp_hf_dc_e4 : 0; }
+uint16_t adc_cal_comp_c_top_ff(void) { return adc_cal_comp_is_set() ? s_rec.comp_c_top_ff : 0; }
+
+const char *adc_cal_comp_store(long hf_dc_e4, long c_top_ff) {
+    if (hf_dc_e4 < ADC_CAL_COMP_HF_DC_MIN_E4 || hf_dc_e4 > ADC_CAL_COMP_HF_DC_MAX_E4 ||
+        c_top_ff < ADC_CAL_COMP_C_TOP_MIN_FF || c_top_ff > ADC_CAL_COMP_C_TOP_MAX_FF)
+        return "calibrate: the sweep result is out of range";
+    adc_cal_t rec = s_rec;
+    rec.comp_hf_dc_e4 = (uint16_t)hf_dc_e4;
+    rec.comp_c_top_ff = (uint16_t)c_top_ff;
+    return commit(&rec) == 0 ? NULL : "calibrate: could not save to flash";
+}
+
 int adc_cal_clear(void) {
     derive_nothing();
     return ab_store_clear(&s_store);
@@ -416,6 +433,8 @@ int adc_cal_clear_part(const char *part) {
         memset(rec.gain, 0, sizeof(rec.gain));
         rec.low_set = 0;
         memset(&rec.gain_low, 0, sizeof(rec.gain_low));
+        rec.comp_hf_dc_e4 = 0;
+        rec.comp_c_top_ff = 0;
     } else {
         return -2;
     }

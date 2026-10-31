@@ -353,6 +353,11 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
         }
     }
     if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"dmm\":%s", dmm ? "true" : "false");
+    if (adc_cal_comp_is_set() && n < (int)sizeof(payload))
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_comp\":{\"hf_dc_e4\":%u,\"c_top_ff\":%u}",
+                      (unsigned)adc_cal_comp_hf_dc_e4(), (unsigned)adc_cal_comp_c_top_ff());
+    else if (n < (int)sizeof(payload))
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_comp\":null");
     if (adc_cal_current_in_is_set() && n < (int)sizeof(payload))   /* the raw zero the offset is derived from */
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"zero_count_mc\":%ld", (long)adc_cal_zero_count_mc());
     if (rd && n < (int)sizeof(payload))
@@ -388,6 +393,8 @@ static bool json_long(const char *json, const char *key, long *out) {
                                                  -> this pod's DAC line for a path, from two
                                                     DMM readings of set points it drove
      {"cmd":"calibrate","adc":"cal1"}            -> an ADC gain (cal1|cal2|ext) via a loopback
+     {"cmd":"calibrate","comp_hf_dc_e4":N,"comp_c_top_ff":N}
+                                                 -> record the ADC divider sweep's result (not applied)
      {"cmd":"calibrate","clear":true}            -> back to the compiled-in fits
      {"cmd":"calibrate","clear":"dac"}           -> one part: offset|dac|adc
    `current_in` is the source a pod can calibrate on its own: with J8 open the terminal is 0 V,
@@ -418,6 +425,17 @@ void handle_calibrate(int conn_id, const char *json) {
             return;
         }
         const char *why = adc_cal_dac_store(path, (uint16_t)c1, (int32_t)u1, (uint16_t)c2, (int32_t)u2);
+        if (why) { send_error(conn_id, why); return; }
+        calibrate_reply(conn_id, NULL, NULL);
+        return;
+    }
+    if (json_get_value(json, "comp_hf_dc_e4", v, sizeof(v))) {
+        long hf, ctop;
+        if (!json_long(json, "comp_hf_dc_e4", &hf) || !json_long(json, "comp_c_top_ff", &ctop)) {
+            send_error(conn_id, "calibrate: comp_hf_dc_e4 and comp_c_top_ff go together");
+            return;
+        }
+        const char *why = adc_cal_comp_store(hf, ctop);
         if (why) { send_error(conn_id, why); return; }
         calibrate_reply(conn_id, NULL, NULL);
         return;

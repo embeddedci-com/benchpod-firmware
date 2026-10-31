@@ -24,6 +24,10 @@ ranges on the first board to settle C269/C271 (C270 is a DNP trim pad).
     python3 adc_comp_sweep.py --pod usb --out ../rev3/comp_sweep.json
     python3 adc_comp_sweep.py --pod usb --range low --out ../v3r4/comp_sweep_low.json
     python3 adc_comp_sweep.py --fit ../rev3/comp_sweep.json          # refit a saved sweep
+    python3 adc_comp_sweep.py --pod usb --store                      # also record it on the pod
+
+--store records the HF/DC gain and the top-leg capacitance in the pod's calibration, for reference
+(firmware 3.9.5+, normal range): nothing scales a reading with them.
 
 Prints a JSON summary as the last line (for scripts/ship-pod); exits 1 when the HF/DC gain is
 off by more than --max-error.  Leaves the DAC stopped and the analog path off.
@@ -142,6 +146,7 @@ def main():
     ap.add_argument("--pod", default="usb", help="connection: usb, a host, or embeddedci:<name>")
     ap.add_argument("--fit", metavar="JSON", help="refit a saved sweep instead of measuring")
     ap.add_argument("--out", help="write the sweep and the fit to this JSON file")
+    ap.add_argument("--store", action="store_true", help="record the result on the pod (normal range)")
     ap.add_argument("--freqs", help="comma list of frequencies in Hz")
     ap.add_argument("--samples", type=int, default=32768)
     ap.add_argument("--range", choices=list(RANGES), default="normal",
@@ -169,7 +174,8 @@ def main():
         from embeddedci.benchpod import BenchPod
         freqs = [int(v) for v in args.freqs.split(",")] if args.freqs else FREQS
         pod_name = args.pod
-        rows = measure(BenchPod(args.pod), freqs, args.samples, args.amplitude, args.offset, args.range)
+        pod = BenchPod(args.pod)
+        rows = measure(pod, freqs, args.samples, args.amplitude, args.offset, args.range)
 
     fit = fit_divider(rows, args.r_top, args.r_bottom, args.c_bottom)
     ok = bool(abs(fit["hf_dc_gain"] - 1) <= args.max_error)
@@ -185,6 +191,11 @@ def main():
                        "r_top": args.r_top, "r_bottom": args.r_bottom, "rows": rows,
                        "fit": fit}, fh, indent=1)
         print("wrote", args.out)
+    if args.store:
+        if args.fit or args.range != "normal":
+            ap.error("--store takes a fresh sweep in the normal range")
+        pod.store_adc_compensation(fit["hf_dc_gain"], fit["c_top_pf"])
+        print("recorded on the pod")
     summary = {k: v for k, v in fit.items() if k != "points"}
     print(json.dumps({"ok": ok, "range": args.range, **summary}))
     sys.exit(0 if ok else 1)

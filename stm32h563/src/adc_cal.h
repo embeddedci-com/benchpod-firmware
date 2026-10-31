@@ -128,7 +128,10 @@ typedef struct {
     adc_cal_dac_pts_t  dac[ADC_CAL_DAC_PATHS];
     adc_cal_gain_pts_t gain[ADC_CAL_SRCS];
     adc_cal_gain_pts_t gain_low;      /* the low range through cal1 (was reserved[0..3]) */
-    uint32_t reserved[2];             /* room for more (the 4-20 mA output, ...) */
+    uint16_t comp_hf_dc_e4;           /* ADC divider sweep: HF/DC gain x 10000, 0 = not measured
+                                         (was reserved, 0 before 3.9.5). Only recorded, not applied */
+    uint16_t comp_c_top_ff;           /* the same sweep's fitted top-leg capacitance, femtofarads */
+    uint32_t reserved[1];             /* room for more (the 4-20 mA output, ...) */
 } adc_cal_t;                          /* 116 bytes */
 
 /* Version 1, as firmware 3.4.0 to 3.9.3 stored it. */
@@ -208,6 +211,19 @@ typedef struct {
 
 /* Store a measurement's points and use the gain they give. NULL = stored, else why it was refused. */
 const char *adc_cal_gain_store(int src, adc_cal_gain_meas_t *m);
+
+/* The ADC input divider's frequency response on this pod, from adc_comp_sweep.py on the host.
+   Recorded for reference: nothing scales a reading with it. A stored value outside the limits
+   reads as not measured and never affects the rest of the calibration. */
+#define ADC_CAL_COMP_HF_DC_MIN_E4  5000
+#define ADC_CAL_COMP_HF_DC_MAX_E4  15000
+#define ADC_CAL_COMP_C_TOP_MIN_FF  1000
+#define ADC_CAL_COMP_C_TOP_MAX_FF  65000
+bool     adc_cal_comp_is_set(void);
+uint16_t adc_cal_comp_hf_dc_e4(void);
+uint16_t adc_cal_comp_c_top_ff(void);
+/* Store a sweep's result. NULL = stored, else why it was refused. */
+const char *adc_cal_comp_store(long hf_dc_e4, long c_top_ff);
 
 /* ---- The ADC low range (analog module v3r4, i2c_bus.h adc_range_t) ----
  *
