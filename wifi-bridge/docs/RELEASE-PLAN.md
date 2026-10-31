@@ -37,7 +37,8 @@ The test unit runs dev builds signed with the developer key; a release pod trust
    the current release over the cloud: it comes back on Wi-Fi with its credentials, on LAN and cloud.
    Run hwe2e on it. Checked once on a dev build with the client (2026-10-30, not an upgrade):
    `set-wifi` joined through the C3 at -64 dBm, the LAN API answered, pod to host 2.9 Mbit/s, pings 72
-   to 316 ms, `clear-wifi` worked. No hwe2e, no cloud check, and no baseline to compare those numbers with.
+   to 316 ms, `clear-wifi` worked. hwe2e LAN + cloud on built-in Wi-Fi passed on a dev build (122 pass, 0
+   fail, 22 skip). Still needs the real upgrade, and there is no baseline for those speed numbers.
 5. A pod on Ethernet with no bridge: the client does nothing there. Run hwe2e.
 6. A pod with built-in Wi-Fi configured, then a bridge plugged in: built-in Wi-Fi wins (see the
    results in `BRINGUP-REV2.md`). Repeat on the release build.

@@ -34,6 +34,14 @@ Pod with built-in Wi-Fi configured and joined, then the bridge plugged in, with 
 | `wifi_scan` | Runs on the built-in Wi-Fi (`via` built-in, 14 networks). |
 | Pod reboot | Comes back on built-in Wi-Fi with the cloud connected; no lease on Ethernet. |
 | `wifi-clear` | Pod answers through the bridge at .220 after 3.7 s, cloud connected; C3 NVS erased. |
+| Built-in network gone (`bench-no-such-ap`), bridge joined | Pod stays offline by design: nothing answers on .220 or .221. `wifi-clear` over USB brings it back through the bridge at .220 after 3.7 s. |
+
+Hardware tests on this build (dev build, not a release; skips need fixtures or env settings not set up):
+
+| Path | LAN + cloud result |
+|---|---|
+| Through the bridge | LAN 70 pass, 0 fail, 6 skip; cloud 52 pass, 0 fail, 16 skip |
+| Built-in Wi-Fi only (Ethernet port empty) | 122 pass, 0 fail, 22 skip |
 
 With Ethernet to a router and built-in Wi-Fi joined, both addresses answer and `status` reports the Ethernet one, as intended.
 
