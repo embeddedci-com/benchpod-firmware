@@ -1,20 +1,20 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=50
-source_sha256=9bb1a892e3e46c6b4f0f79dcea50fa8f7d60553d7b9f502069b22b507fbf05f9
-built_from=52f56a8
+source_sha256=b518dce7c86f0088db8daaa75d3e412601a8dfb57a859ab1244cd9522577a0e0
+built_from=123dcd2
 promoted=2026-11-03
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=hwe2e TestHW (76 tests: 71 pass, 5 skip for bench wiring/board; LA+capture tests 16/16 on the deep image) on benchpod-30a9f1 (analog v3r2) with firmware PR #91, 2026-11-03
-loop.sha256=6388498058fd7b41bb175242cf3dbcbf39f3ac65750bf0a88629d4ba62ef8354
-loop.seed=57
+hw_verified=hwe2e TestHW (80 tests: 73 pass, 5 skip for bench wiring/board, 2 new LA change tests fail on test expectations; LA+capture tests 18/20 on the deep image, same 2) on benchpod-30a9f1 (analog v3r2) with firmware PR #91, 2026-11-03
+loop.sha256=a67f9123142f9cc8e3309a8e0b5bf63883f8b90ffff6f53f029a986a4258e5ad
+loop.seed=31
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=51.59
-deep.sha256=734f8f5a2cfd2420876ac0e55eb693ecc5b64e1eea81344d9467e47a47379130
-deep.seed=48
+loop.clk48_mhz=54.52
+deep.sha256=71548eaa29bc1f57cdb6da8e3eb977a03aac5e79c57de4d9258c692754e351be
+deep.seed=31
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=54.27
+deep.clk48_mhz=57.07
