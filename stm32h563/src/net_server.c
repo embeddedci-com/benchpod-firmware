@@ -1068,6 +1068,9 @@ void net_poll(void)
     wifi_bridge_net_poll();          /* Wi-Fi bridge: pairing, retries, STATUS  */
 #endif
     net_tx_drain();                  /* worker reply rings -> lwIP              */
+#if defined(BENCHPOD_EMI_TEST)
+    if (!s_eth_admin_down) emi_test_net_poll(&s_eth.netif);   /* the EMI build's UDP stream */
+#endif
     if (s_lan_req >= 0) { int8_t r = s_lan_req; s_lan_req = -1; lan_access(r == 1); }
     if (s_https_req >= 0) { int8_t r = s_https_req; s_https_req = -1; https_only_apply(r == 1); }
     if (s_tls_listen_gen != lan_tls_generation()) tls_listener_sync();   /* new certificate */

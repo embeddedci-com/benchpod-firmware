@@ -717,12 +717,18 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         }
         else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
             emi_test_set_uart(la);
+        else if (!strcmp(sub, "net") && argc >= 3 && ((argv[2][0] >= '0' && argv[2][0] <= '9') || !strcmp(argv[2], "off"))) {
+            if (!emi_test_set_net_rate(strcmp(argv[2], "off") ? (unsigned)atoi(argv[2]) : 0u)) {
+                op(out, ctx, "  emi net: at most %u Mbit/s\r\n", EMI_NET_MAX_MBIT);
+                return;
+            }
+        }
         else if (strcmp(sub, "status")) {
             op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                         " | emi uart <1-14>|off\r\n");
+                         " | emi uart <1-14>|off | emi net <mbit>|off\r\n");
             return;
         }
-        char line[200];
+        char line[256];
         emi_test_describe(line, sizeof(line));
         op(out, ctx, "  %s\r\n", line);
 #endif
