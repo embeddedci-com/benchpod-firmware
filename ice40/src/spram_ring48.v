@@ -19,16 +19,22 @@
 // strobed while !in_rdy is dropped and sets `overflow` (the raw path; the change encoder
 // never strobes then).
 //
+// PRE-TRIGGER (v50): while `hold_out` is up nothing leaves the ring, and once it holds PRE_WORDS
+// words each new word drops the oldest, so it keeps the newest pre-trigger window (half the ring:
+// the other half takes the post-trigger burst while the drain catches up).
+//
 // A word strobed with in_len = 1..5 is a short TAIL (la_byte_pack's flush): the producer
 // writes nothing after it, so it is the word on the output when nothing is left behind it,
 // and only its first in_len bytes are sent.
 // ============================================================================
 module spram_ring48 #(
-    parameter AW = 14
+    parameter AW = 14,
+    parameter PRE_AW = AW - 1          // PRE_WORDS = 1 << PRE_AW
 )(
     input  wire        clk,
     input  wire        rst,
     input  wire        clr_ovf,
+    input  wire        hold_out,            // pre-trigger: send nothing, drop the oldest past PRE_WORDS
     input  wire [47:0] in_word,
     input  wire        in_stb,
     input  wire [2:0]  in_len,              // 0 = whole word, 1..5 = a tail of that many bytes
@@ -52,8 +58,10 @@ module spram_ring48 #(
     reg  [2:0]   out_i;                      // byte index 0..5
     reg  [2:0]   tail_len;                   // 0, or the bytes of the tail word written last
 
+    wire [AW:0] fill = wr_ptr - rd_ptr;
+    wire pre_drop = hold_out && (fill[AW:PRE_AW] != 0);   // >= PRE_WORDS resident
     wire do_write = in_p_v && !s_full;
-    wire do_read  = !do_write && !s_empty && !nxt_v && !rd1;
+    wire do_read  = !hold_out && !do_write && !s_empty && !nxt_v && !rd1;
 
     // The port, write XOR read per edge (true single port, as spram_ring16), driven straight
     // from the decision: the SPRAM registers its own inputs, so the fabric registers spram_ring16
@@ -86,7 +94,7 @@ module spram_ring48 #(
 
             // ---- the port's pointers ----
             if (do_write) wr_ptr <= wr_ptr + 1'b1;
-            if (do_read)  rd_ptr <= rd_ptr + 1'b1;
+            if (do_read || (do_write && pre_drop)) rd_ptr <= rd_ptr + 1'b1;   // read, or drop the oldest
             rd1 <= do_read;
 
             // ---- input ----

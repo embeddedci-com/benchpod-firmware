@@ -31,13 +31,13 @@ module tb_la_change;
     wire [13:0] pa, pb;
     la48_sampler #(.N(14)) smp (.clk48(clk48), .clkdiv(clkdiv), .la_in(la), .pa(pa), .pb(pb));
 
-    reg         start = 1'b0, hold = 1'b0;
+    reg         start = 1'b0, hold = 1'b0, pretrig = 1'b0;
     reg  [23:0] count = 24'd0;
     reg  [23:0] limit = 24'hFFFFFF;          // region bytes (huge unless a run tests the end)
     wire [47:0] cwd;
     wire        cstb, cbusy, cdone, covf, rdy;
     la_change_capture #(.N(14)) enc (
-        .clk(clk), .rst(rst), .pa(pa), .pb(pb), .start(start), .hold(hold), .count(count), .limit(limit),
+        .clk(clk), .rst(rst), .pa(pa), .pb(pb), .start(start), .hold(hold), .pretrig(pretrig), .count(count), .limit(limit),
         .wd(cwd), .wstb(cstb), .wrdy(rdy), .busy(cbusy), .done(cdone), .overflow(covf));
 
     reg  [7:0]  rb = 8'd0;
@@ -53,7 +53,7 @@ module tb_la_change;
     wire [7:0]  odata;
     wire        ostb, rempty, rovf;
     spram_ring48 #(.AW(AW)) ring (
-        .clk(clk), .rst(rst), .clr_ovf(start),
+        .clk(clk), .rst(rst), .clr_ovf(start), .hold_out(pretrig & hold),
         .in_word(raw ? pwd : cwd), .in_stb(raw ? pstb : cstb), .in_len(raw ? plen : 3'd0), .in_rdy(rdy),
         .out_data(odata), .out_stb(ostb), .out_full(out_full), .empty(rempty), .overflow(rovf));
 
@@ -83,19 +83,20 @@ module tb_la_change;
     integer    ndec;                         // decoded ticks
     integer    end_seen;
     integer    max_d;                        // largest delta seen (keep-alive check)
+    integer    end_cause;                    // END's state field
 
     // Decode the byte stream into per-tick states.
     task decode;
         integer i, t, d; reg [23:0] e; reg [13:0] st; begin
-            ndec = 0; end_seen = 0; t = -1; st = 0; max_d = 0;
+            ndec = 0; end_seen = 0; t = -1; st = 0; max_d = 0; end_cause = -1;
             for (i = 0; i + 2 < nb && !end_seen; i = i + 3) begin
                 e = {bytes[i+2], bytes[i+1], bytes[i]};
                 d = e[23:14];
                 if (i == 0) begin
-                    if (d != 0) begin $display("FAIL first event delta %0d, want 0", d); errors = errors + 1; end
+                    if (d != 0 && !pretrig) begin $display("FAIL first event delta %0d, want 0", d); errors = errors + 1; end
                     t = 0; st = e[13:0];
                 end else if (d == 0) begin
-                    end_seen = 1;
+                    end_seen = 1; end_cause = e[13:0];
                 end else begin
                     if (d > max_d) max_d = d;
                     while (ndec < t + d) begin dec[ndec] = st; ndec = ndec + 1; end
@@ -141,6 +142,28 @@ module tb_la_change;
         end
     endtask
 
+
+    // Pre-trigger: the decoded ticks are the LAST ndec ticks the encoder took (counted back from the
+    // end), and the trigger is count*256 ticks before the end.
+    task check_pre(input [8*24-1:0] what, input integer post_ticks, input integer min_pre);
+        integer i, bad; begin
+            decode;
+            bad = 0;
+            if (!end_seen || end_cause != 0) begin $display("FAIL %0s: END %0d cause %0d", what, end_seen, end_cause); errors = errors + 1; end
+            if (ndec < post_ticks + min_pre) begin
+                $display("FAIL %0s: %0d ticks decoded, want >= %0d (post %0d + pre %0d)", what, ndec, post_ticks + min_pre, post_ticks, min_pre); errors = errors + 1;
+            end
+            for (i = 0; i < ndec && i < nref; i = i + 1)
+                if (dec[ndec - 1 - i] !== ref_s[nref - 1 - i]) begin
+                    if (bad < 4) $display("FAIL %0s: tick end-%0d decoded %04h, encoder took %04h", what, i, dec[ndec-1-i], ref_s[nref-1-i]);
+                    bad = bad + 1;
+                end
+            errors = errors + bad;
+            $display("  %0s: %0d bytes, %0d ticks (%0d before the trigger, %0d taken in all), cause %0d",
+                     what, nb, ndec, ndec - post_ticks, nref, end_cause);
+        end
+    endtask
+
     task arm(input [23:0] c);
         begin
             @(negedge clk); nb = 0; nref = 0; pin0 = npin; count = c; start = 1'b1;
@@ -183,6 +206,15 @@ module tb_la_change;
         pat = 1; arm(24'd4); wait_done; pat = 0;
 `ifdef SMALL_RING
         check("burst, small ring", 1024, 1'b1);
+        if (end_cause != 1) begin $display("FAIL burst, small ring: END cause %0d, want 1 (ring full)", end_cause); errors = errors + 1; end
+
+        // H: PRE-TRIGGER through a 16-word ring (an 8-word window): 400 clk of 4 M edges/s before
+        // the trigger, so the window drops its oldest words; the tail must still line up exactly.
+        pretrig = 1'b1; slow = 0; pat = 4; hold = 1'b1; arm(24'd2);
+        repeat (400) @(posedge clk); @(negedge clk); hold = 1'b0;
+        wait_done; pat = 0;
+        check_pre("pre-trigger, small ring", 2 * 256, 8);
+        pretrig = 1'b0;
 
         // E: SUSTAINED.  A steady 4 M edges/s (12 MB/s) through the same 16-word ring with the
         // sink at ~70% duty (~17 MB/s, the PSRAM writer's rate): 64 x 256 ticks is ~1365 events,
@@ -192,6 +224,7 @@ module tb_la_change;
         if (nb / 3 < 1300) begin $display("FAIL sustained: only %0d events", nb / 3); errors = errors + 1; end
 `else
         check("burst", 1024, 1'b0);
+        if (end_cause != 0) begin $display("FAIL burst: END cause %0d, want 0", end_cause); errors = errors + 1; end
 
         // B: sparse changes, gaps > 1023 ticks
         pat = 0; k = 0; arm(24'd24);
@@ -206,6 +239,14 @@ module tb_la_change;
         limit = 24'd600; pat = 4; arm(24'd16); wait_done; pat = 0; limit = 24'hFFFFFF;
         check("region end", 16 * 256, 1'b1);
         if (nb > 600) begin $display("FAIL region end: %0d bytes written, region is 600", nb); errors = errors + 1; end
+        if (end_cause != 2) begin $display("FAIL region end: END cause %0d, want 2", end_cause); errors = errors + 1; end
+
+        // I: PRE-TRIGGER, full ring: 3000 clk of a counting bus before the trigger all stay (no drop)
+        pretrig = 1'b1; pat = 3; hold = 1'b1; arm(24'd3);
+        repeat (3000) @(posedge clk); @(negedge clk); hold = 1'b0;
+        wait_done; pat = 0;
+        check_pre("pre-trigger", 3 * 256, 2 * 3000 - 4);
+        pretrig = 1'b0;
 
         // C: trigger hold for 200 clk, counting bus
         pat = 3; hold = 1'b1; arm(24'd3);

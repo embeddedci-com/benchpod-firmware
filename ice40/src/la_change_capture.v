@@ -18,7 +18,9 @@
 //   the unchanged state as a keep-alive event, so delta never overflows.  The last
 //   tick of the capture always gets an event, so the stream ends exactly at
 //   count * 256 - 1.  The stream then ends with an END event: delta 0 again (any
-//   later delta-0 event is END; the bytes after it are padding or stale).
+//   later delta-0 event is END; the bytes after it are padding or stale).  END's state field
+//   says why the stream ended: 0 = the full duration, 1 = the ring was full, 2 = the region
+//   end (see below).
 //
 // ---- duration ----
 //   `count` is in units of 256 ticks (128 clk = 5.33 us); 24 bits reach ~89 s.
@@ -31,11 +33,20 @@
 //   END are written as soon as the ring has room, and everything before the stop is
 //   exact.  The firmware reports such a capture as cut short (CAP_OVF).
 //
+// ---- pre-trigger (v50) ----
+//   With `pretrig`, the encoder also records while `hold` (the trigger wait) is up, from the arm;
+//   only the ticks after the trigger count toward the duration.  spram_ring48 keeps the newest
+//   pre-trigger words and drops the oldest (top_v2), so the stream may start mid-way: every event
+//   carries the full state, and the last event sits on the last tick, so the decoder counts the
+//   times back from the end: the trigger is count * 256 ticks before it.
+//
 // ---- region end (v50) ----
 //   `limit` is the LA region's size in bytes, latched at the arm (top_v2 passes the ADC
 //   region base: the firmware sets it to the end of the free PSRAM before a change capture,
 //   which never runs with the ADC).  A word that would leave no room for the END word stops
 //   the capture the same way a full ring does, so the stream never runs past the region.
+//   Pre-trigger words don't count here: the ring keeps at most its PRE_WORDS of them, and the
+//   firmware takes those 6 * PRE_WORDS bytes off the limit it sends.
 // ============================================================================
 module la_change_capture #(
     parameter N  = 14,
@@ -46,7 +57,8 @@ module la_change_capture #(
     input  wire [N-1:0]  pa,         // sample at tick 2k
     input  wire [N-1:0]  pb,         // sample at tick 2k+1
     input  wire          start,      // 1-cycle arm
-    input  wire          hold,       // trigger wait: nothing is recorded or counted
+    input  wire          hold,       // trigger wait: nothing is counted (nor recorded without pretrig)
+    input  wire          pretrig,    // record during hold too (a pre-trigger window)
     input  wire [23:0]   count,      // duration in units of 256 ticks (0 = off)
     input  wire [23:0]   limit,      // region size in bytes (latched at start)
     output wire [47:0]   wd,         // word for the ring: {later event, earlier event}
@@ -69,12 +81,13 @@ module la_change_capture #(
     reg [6:0]    pre;                // clk cycles within the current 256-tick unit
     reg [23:0]   left;               // 256-tick units left, including this one
     reg [23:0]   room;               // region bytes left
+    reg  [1:0]   cause;              // why the stream ends (END's state): 0 done, 1 ring full, 2 region end
     reg          lv;                 // an odd event is held in l
     reg [23:0]   l;
 
     // ---- this cycle's events ----
     wire          ev_a    = first | (ra != p);
-    wire          last    = (left == 24'd1) && (pre == 7'd127);
+    wire          last    = !hold && (left == 24'd1) && (pre == 7'd127);
     wire          force_b = last | (!ev_a && (since >= KEEPALIVE));
     wire          ev_b    = (rb != ra) | force_b;
     wire [DW-1:0] dl_a    = first ? {DW{1'b0}} : since;
@@ -84,10 +97,10 @@ module la_change_capture #(
     wire [23:0]   e_one   = ev_a ? e0 : e1;            // the event when only one fired
     wire          two     = ev_a & ev_b;
     wire          any     = ev_a | ev_b;
-    wire [23:0]   e_end   = {{DW{1'b0}}, p};           // END: delta 0
+    wire [23:0]   e_end   = {{(24-2){1'b0}}, cause};   // END: delta 0, state = the cause
 
     // A word goes out when two events meet: two this cycle, or one plus the held one.
-    wire          step      = run & ~hold;
+    wire          step      = run & (~hold | pretrig);
     wire          need_word = two | (lv & any);
     wire [47:0]   run_word  = lv ? {e_one, l} : {e1, e0};
     assign wd   = ending ? (lv ? {e_end, l} : {e_end, e_end}) : run_word;
@@ -103,6 +116,7 @@ module la_change_capture #(
             ending   <= 1'b0;
             done     <= (count == 24'd0);
             overflow <= 1'b0;
+            cause    <= 2'd0;
             first    <= 1'b1;
             since    <= {DW{1'b0}};
             pre      <= 7'd0;
@@ -118,8 +132,9 @@ module la_change_capture #(
                 // ring full, or no room for this word and END: stop before this cycle's events,
                 // keep everything before exact
                 run <= 1'b0; ending <= 1'b1; overflow <= 1'b1;
+                cause <= wrdy ? 2'd2 : 2'd1;
             end else begin
-                if (need_word) room <= room - 24'd6;
+                if (need_word && !hold) room <= room - 24'd6;   // pre-trigger words: the firmware reserves them
                 first <= 1'b0;
                 p     <= rb;
                 since <= ev_b ? {{(DW-1){1'b0}}, 1'b1}
@@ -132,8 +147,10 @@ module la_change_capture #(
                 end else if (any && !two) begin
                     l <= e_one; lv <= 1'b1;
                 end
-                pre <= pre + 7'd1;
-                if (pre == 7'd127) left <= left - 24'd1;
+                if (!hold) begin                        // only the post-trigger ticks count
+                    pre <= pre + 7'd1;
+                    if (pre == 7'd127) left <= left - 24'd1;
+                end
                 if (last) begin run <= 1'b0; ending <= 1'b1; end
             end
         end

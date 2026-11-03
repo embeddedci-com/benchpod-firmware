@@ -100,6 +100,7 @@ module engine_block #(
     output wire         trig_en,
     output wire         trig_edge,
     output wire         trig_pol,
+    output wire         trig_pre,
     input  wire         trig_wait,
     input  wire         trig_fired,
     input  wire         cap_busy,         // STATUS busy bit (top's capture engine)
@@ -209,7 +210,7 @@ module engine_block #(
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp),
         .psram_cs_force(psram_cs_force),
-        .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol),
+        .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol), .trig_pre(trig_pre),
         .trig_wait(trig_wait), .trig_fired(trig_fired), .la_levels(la_levels),
         .dac_running(dac_running), .cap_busy(cap_busy), .cap_done(cap_done),
         .cap_overflow(cap_overflow),
