@@ -22,11 +22,19 @@
 // down by 2 (the carry into bit 1 is 0 instead of q[0]).  uart_engine uses it to time a
 // half bit from a full-bit load.  Tie it to 0 otherwise.
 //
+// K / CI (v51) generalise the step: q <= q + K + CI (mod 2^W) when en.  The defaults are the
+// counter above (UP=1: K = 0, CI = 1; UP=0: K = all-ones, CI = 0).  A bit whose K bit is 1 is a
+// down-count cell (b = ~load), a bit whose K bit is 0 an up-count cell (b = load): either way the
+// carry adds K's bit, and the LUT selects val[i] while loading.  co is then the carry out of
+// q + K + CI (for a subtract of k, K = -k: co = (q >= k)).  la_change_capture subtracts 6.
+//
 // Simulate with the yosys iCE40 cell models (cells_sim.v), as simtest and uarttest do.
 // ============================================================================
 module lc_counter #(
     parameter W  = 16,
-    parameter UP = 0
+    parameter UP = 0,
+    parameter [W-1:0] K = UP ? {W{1'b0}} : {W{1'b1}},
+    parameter CI = UP
 )(
     input  wire         clk,
     input  wire         rst,      // synchronous, wins over everything
@@ -39,17 +47,13 @@ module lc_counter #(
 );
     wire [W:0]   c;
     wire [W-1:0] d;
-    wire         b  = UP ? load : ~load;
-    wire         b0 = UP ? load : ~(load | hold0);
-    assign c[0] = UP ? 1'b1 : 1'b0;
+    assign c[0] = CI ? 1'b1 : 1'b0;
 
     // Down (b = ~load): O = I2 ? ~(I1 ^ I3) : I0.   Up (b = load): O = I2 ? I0 : I1 ^ I3.
-    localparam [15:0] INIT = UP ? 16'hA3AC : 16'hCA3A;
-
     genvar i;
     generate for (i = 0; i < W; i = i + 1) begin : bit_
-        wire bi = (i == 0) ? b0 : b;
-        SB_LUT4  #(.LUT_INIT(INIT)) lut (.I0(val[i]), .I1(q[i]), .I2(bi), .I3(c[i]), .O(d[i]));
+        wire bi = K[i] ? ((i == 0) ? ~(load | hold0) : ~load) : load;
+        SB_LUT4  #(.LUT_INIT(K[i] ? 16'hCA3A : 16'hA3AC)) lut (.I0(val[i]), .I1(q[i]), .I2(bi), .I3(c[i]), .O(d[i]));
         SB_CARRY                    cy  (.I0(q[i]), .I1(bi), .CI(c[i]), .CO(c[i+1]));
     end endgenerate
     assign co = c[W];

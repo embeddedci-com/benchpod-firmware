@@ -813,7 +813,7 @@ ringtest:
 
 # The v50 LA change capture, sampler to bytes (tb_la_change.v), with the full ring and with a
 # 16-word ring that must overflow under a max-rate burst.
-LACHANGE_SRC = src/la48_sampler.v src/la_change_capture.v src/spram_ring48.v src/la_byte_pack.v
+LACHANGE_SRC = src/la48_sampler.v src/la_change_capture.v src/spram_ring48.v src/la_byte_pack.v src/lc_counter.v $(CELLS_SIM)
 lachangetest:
 	@set -e; for d in "" -DSMALL_RING; do \
 	  echo "== tb_la_change $$d"; \
