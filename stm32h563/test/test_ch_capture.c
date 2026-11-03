@@ -96,7 +96,17 @@ int fpga_la_psram_read(uint32_t off, uint8_t *b, uint32_t n) {
     for (uint32_t i = 0; i < n && off + i < g_nev; i++) b[i] = g_ev[off + i];
     return 0;
 }
-int fpga_la_change_start(size_t n, uint32_t k) { g_chg_samples = n; g_chg_k = k; return 0; }
+static bool     g_chg_pre;
+int fpga_la_change_start(size_t n, uint32_t k, bool pre) {
+    g_chg_samples = n; g_chg_k = k; g_chg_pre = pre; return 0;
+}
+int fpga_la_change_wait(void) { if (g_wait_rc > 0) g_bus = true; return g_wait_rc; }
+int fpga_dual_change_start(uint32_t an, float ahz, size_t ln, uint32_t k, float *aact) {
+    (void)an; (void)ahz; g_chg_samples = ln; g_chg_k = k; g_chg_pre = false; *aact = 400000.0f; return 0;
+}
+uint32_t signal_engine_la_change_units(void) { return (uint32_t)((g_chg_samples * g_chg_k + 255u) / 256u); }
+static bool g_trig_pre;
+int fpga_set_trigger_pre(unsigned la, uint8_t mode, bool pre) { (void)la; (void)mode; g_trig_pre = pre; return 0; }
 uint32_t signal_engine_la_change_divisor(float hz) { return la_change_divisor(hz, g_gw); }
 bool signal_engine_last_cap_overflowed(void) { return g_ovf; }
 void fpga_la_psram_release(void) { g_bus = false; }
@@ -341,7 +351,7 @@ static void test_la_change_capture(void) {
     uint32_t keep = g_nev; uint8_t save[4096]; memcpy(save, g_ev, g_nev);
     g_nev = 0; ev(0, 0);
     for (int i = 1; i <= 300; i++) ev(3, (uint32_t)(i & 1));
-    ev(1147, 0); ev(0, 0);                              /* to the last tick (2047), END */
+    ev(1022, 0); ev(125, 0); ev(0, 0);                 /* keep-alive, the last tick (2047), END */
     clear_tx(); g_wait_rc = 0; g_avail = 230;
     handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000}");
     g_wait_rc = 1;
@@ -349,12 +359,12 @@ static void test_la_change_capture(void) {
     int nf = parse(d, &nd, l, &nl, &more, first, sizeof(first));
     bool ok = true;
     for (int t = 0; t < 2000; t++) ok &= l[t] == (uint16_t)((t >= 3 && t <= 900) ? (t / 3) & 1 : 0);
-    CHECK(nf > 5 && nl == 2000 && !more && ok, "small frames: %d frames, %zu samples, more %d, levels ok %d",
-          nf, nl, more, ok);
+    CHECK(nf > 5 && nl == 2000 && !more && ok, "small frames: %d frames, %zu samples, more %d, levels ok %d, err %s",
+          nf, nl, more, ok, g_err);
     g_avail = 1u << 20;
     memcpy(g_ev, save, keep); g_nev = keep;
 
-    /* 24 MS/s: sample i = ticks 2i..2i+1; ticks 400/401 share sample 200, which shows 3 */
+    /* 24 MS/s: sample i is the state at tick 2i: tick 400 shows at sample 200, tick 401 at 201 */
     clear_tx(); g_wait_rc = 0; g_rate_hz = 24e6f;
     handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":1000}");
     CHECK(g_chg_k == 2 && g_chg_samples == 1000, "24 MS/s: k %u", g_chg_k);
@@ -362,17 +372,51 @@ static void test_la_change_capture(void) {
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
     CHECK(strstr(first, "\"la_rate_hz\":24000000,") != NULL, "24 MS/s first frame: %.90s", first);
-    CHECK(nl == 1000 && l[49] == 0 && l[50] == 1 && l[125] == 3 && l[200] == 3 && l[749] == 3 && l[750] == 0,
-          "24 MS/s: %zu samples, levels %u %u %u %u %u", nl, l[49], l[50], l[125], l[200], l[750]);
+    CHECK(nl == 1000 && l[49] == 0 && l[50] == 1 && l[125] == 3 && l[200] == 5 && l[201] == 3 &&
+          l[749] == 3 && l[750] == 0,
+          "24 MS/s: %zu samples, levels %u %u %u %u %u %u", nl, l[49], l[50], l[125], l[200], l[201], l[750]);
 
-    /* a full buffer: the error says why and what to do */
+    /* a full buffer: the samples up to where it stopped come back, marked truncated */
+    keep = g_nev; memcpy(save, g_ev, g_nev);
+    g_nev = 0; ev(0, 0); ev(100, 1); ev(150, 3); ev(0, 1);     /* END cause 1 (ring full) at tick 250 */
     clear_tx(); g_wait_rc = 0; g_rate_hz = 48e6f; g_ovf = true;
     handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000}");
-    g_wait_rc = -1;
+    g_wait_rc = 1;
     pump_all();
-    CHECK(strstr(g_err, "faster than the pod can store at 48 MS/s") && strstr(g_err, "12 MS/s or lower"),
-          "overflow error: %s", g_err);
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(strstr(first, "\"truncated\":\"busy\"") && nl == 251 && !more && l[99] == 0 && l[100] == 1 && l[250] == 3,
+          "overflow: %zu samples, first frame %.120s", nl, first);
+    CHECK(!g_bus && g_owner == -1, "bus or gate held after a truncated read-back");
     g_ovf = false;
+
+    /* a stream that ends before its last tick is refused, not passed off as whole */
+    g_nev = 0; ev(0, 0); ev(100, 1); ev(0, 0);
+    clear_tx(); g_wait_rc = 0;
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000}");
+    g_wait_rc = 1;
+    pump_all();
+    CHECK(strstr(g_err, "incomplete") != NULL, "short stream: %s", g_err);
+
+    /* PRE-TRIGGER: the stream starts mid-way (the first delta means nothing) and ends 2048 ticks
+       after the trigger, so the trigger is at tick 2547 - 2047 = 500; 100 samples before it come back */
+    g_nev = 0; ev(77, 1); ev(300, 2); ev(400, 6); ev(1022, 6); ev(825, 6); ev(0, 0);
+    clear_tx(); g_wait_rc = 0; g_rate_hz = 48e6f;
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"trigger\":{\"la\":5,\"edge\":\"rising\",\"pre_samples\":100}}");
+    CHECK(g_chg_k == 1 && g_chg_pre && g_trig_pre, "pre-trigger arm: k %u pre %d trig %d (%s)", g_chg_k, g_chg_pre, g_trig_pre, g_err);
+    g_wait_rc = 1; g_trig_status = 1;
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(strstr(first, "\"pre_samples\":100,") && nl == 2100 && !more && l[0] == 2 && l[100] == 2 &&
+          l[299] == 2 && l[300] == 6 && l[2099] == 6,
+          "pre-trigger: %zu samples, levels %u %u %u %u, first %.100s", nl, l[0], l[299], l[300], l[2099], first);
+    g_trig_status = 0;
+
+    /* pre_samples needs gateware v50 */
+    g_gw = 49; clear_tx();
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"trigger\":{\"la\":5,\"pre_samples\":100}}");
+    CHECK(strstr(g_err, "pre_samples needs gateware") != NULL, "gw 49 pre: %s", g_err);
+    g_gw = 50;
+    memcpy(g_ev, save, keep); g_nev = keep;
 
     /* older gateware keeps the raw path (which caps at 12 MS/s) */
     clear_tx(); g_wait_rc = 0; g_gw = 49; g_chg_k = 0; g_la_req_hz = 0;
@@ -382,12 +426,34 @@ static void test_la_change_capture(void) {
     g_wait_rc = 0; g_gw = 47; g_rate_hz = 0;
 }
 
+/* capture_dual with the LA above 12 MS/s on gateware >= v50: the ADC samples as usual, then the LA
+   decoded from its change stream into the same la_edges frames. */
+static void test_capture_dual_changes(void) {
+    for (size_t i = 0; i < 1000; i++) g_adc[i] = (uint16_t)(i * 7);
+    g_nev = 0;
+    ev(0, 0); ev(100, 1); ev(150, 3); ev(150, 5); ev(1, 3); ev(871, 3); ev(228, 0); ev(547, 0); ev(0, 0);
+    g_gw = 50; clear_tx(); g_wait_rc = 0; g_chg_k = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":48}");
+    CHECK(capture_busy() && g_chg_k == 1 && g_chg_samples == 2000, "dual change: k %u, %zu, %s", g_chg_k, g_chg_samples, g_err);
+    g_wait_rc = 1;
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "dual change first frame: %.100s", first);
+    bool ok = nd == 1000;
+    for (size_t i = 0; i < 1000 && ok; i++) if (d[i] != g_adc[i]) ok = false;
+    CHECK(ok && nl == 2000 && !more && l[99] == 0 && l[100] == 1 && l[400] == 5 && l[401] == 3 && l[1500] == 0,
+          "dual change: adc %zu ok %d, la %zu, more %d", nd, ok, nl, more);
+    CHECK(!g_bus && g_owner == -1, "bus or gate held after the dual change read-back");
+    g_wait_rc = 0; g_gw = 47;
+}
+
 int main(void) {
     test_test_pattern_decimal_paced();
     test_test_pattern_b64();
     test_capture_dual();
     test_la_capture_reports_achieved_rate();
     test_la_change_capture();
+    test_capture_dual_changes();
     test_stall();
     test_trigger_timeout();
     test_conn_closed();

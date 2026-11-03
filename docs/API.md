@@ -711,6 +711,7 @@ Accepted by `capture`, `capture_dual` and `la_capture`:
 |---|---|---|---|---|
 | `trigger.la` | integer | yes | — | LA channel 1..14 to watch. **Any** pin, whatever its function — triggers observe, they do not claim. |
 | `trigger.edge` | string | no | `"rising"` | `rising`, `falling`, `high` or `low`. |
+| `trigger.pre_samples` | integer | no | `0` | `la_capture` only, gateware v50+: also return up to this many samples from before the trigger (see [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture)). |
 | `trigger_timeout_ms` | integer | no | `10000` | 1..600000. How long to wait before giving up. |
 
 Omitting `trigger` (or passing `null`) captures immediately, exactly as before.
@@ -827,8 +828,25 @@ Its limit is how often the signals change, not the number of samples: about 6 mi
 second, all channels together, plus a buffer of about 32 000 changes for bursts. UART, I2C, CAN
 and SPI with gaps between transfers stay well below it. A signal that changes faster for longer
 than the buffer lasts, such as continuous SPI at 10 MHz or more for over about 1.5 ms, ends the
-capture with the error below; capture at 12 MS/s or lower for such signals. `capture_dual` stays
-at 12 MS/s at most.
+capture early: the reply then holds the samples up to that point, and its first packet carries
+`"truncated":"busy"` (or `"memory"` when the changes filled the free capture memory). Capture at
+12 MS/s or lower for such signals. `capture_dual` takes the same rates for its LA part
+(`la_rate_mhz` above 12); there, a capture that stops early fails with `"capture failed"`.
+
+#### Pre-trigger (gateware v50 and later)
+
+With `trigger.pre_samples`, the reply also holds up to that many samples from before the trigger,
+at any rate up to 48 MS/s (the pod records the changes from the arm, so this always uses the same
+method as above):
+
+```json
+{"cmd":"la_capture","samples":10000,"sample_rate_mhz":24,"trigger":{"la":3,"edge":"falling","pre_samples":2000}}
+```
+
+The first reply packet carries `"pre_samples":N`, the samples actually returned before the
+trigger: fewer than asked when the capture was armed only shortly before the trigger, or when the
+signals changed often before it (the pod keeps about the last 16 000 changes before the trigger).
+The trigger is at sample index N; `samples` more follow it.
 
 | Condition | Message |
 |---|---|
@@ -836,7 +854,8 @@ at 12 MS/s at most.
 | `samples` = 0 or too deep | `"samples out of range"` |
 | Another capture or upload is running | `"busy"` |
 | The capture did not arm | `"la capture failed"` |
-| Above 12 MS/s: the signals changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
+| A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
+| `trigger.pre_samples` on gateware older than v50 | `"trigger pre_samples needs gateware v50 or newer (this pod runs v49)"` |
 
 ---
 

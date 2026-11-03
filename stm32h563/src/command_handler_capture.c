@@ -16,6 +16,7 @@
 #include "bp_json.h"
 #include "bp_err.h"
 #include "signal_engine.h"
+#include "la_rate.h"
 #include "stm32h5xx_hal.h"  /* HAL_GetTick: bulk stall timer */
 #include "psram.h"          /* psram_bus_acquire for a resumed read-back */
 #include "psram_alloc.h"
@@ -80,8 +81,28 @@ static struct {
     size_t bytes;
     bool   stop_dac;   /* HW-cut a concurrently-running DAC during this capture; free it after */
     uint32_t rate_hz;  /* ACHIEVED rate (whole divider, maybe burst-capped), reported as la_rate_hz */
-    uint32_t chg_k;    /* > 0: a change capture (gw >= v50, above 12 MS/s), 48 MHz / chg_k */
+    uint32_t chg_k;    /* > 0: a change capture (gw >= v50: above 12 MS/s, or a pre-trigger), 48 MHz / chg_k */
+    uint32_t pre;      /* pre-trigger samples asked for (change capture only) */
 } lacap;
+
+/* ---- change capture: scan the event stream before the read-back ----
+   One pass over the events in the LA region (on the poll, a few KB per call) finds END, its cause
+   and the last tick, so the read-back knows the stream is whole, where the trigger is (a
+   pre-trigger stream starts mid-way and is counted back from its last tick) and how many samples
+   it really holds when it stopped early. */
+static struct {
+    bool     active;
+    int      conn_id;
+    size_t   samples;    /* post-t0 samples asked for */
+    uint32_t k, pre, la_hz;
+    uint32_t off, region;/* region bytes scanned so far / available */
+    uint64_t t;          /* tick of the last event, from the first one in the region */
+    bool     first, ended;
+    uint32_t cause;      /* END's state: 0 done, 1 ring full, 2 region end */
+    size_t   adc_n;      /* capture_dual: ADC samples sent ahead of the LA */
+    uint32_t adc_hz;
+    bool     b64;
+} chgscan;
 
 /* ---- v2 async unified simultaneous capture (CMD_CAPTURE 0x31) ----
    Arms the ADC + raw-LA producers off ONE trigger; command_handler_poll() reads
@@ -96,6 +117,7 @@ static struct {
     float  la_rate_hz;    /* the server needs these for a correct, aligned timebase.   */
     bool   stop_dac;      /* HW-cut a concurrently-running DAC during this capture; free it after */
     bool   b64;           /* reply the ADC region as base64 ("enc":"b64", see bulk.b64) */
+    uint32_t chg_k;       /* > 0: the LA is a change capture (gw >= v50, LA above 12 MS/s) */
 } dualcap;
 
 /* ---- Resume support for a stalled capture_dual read-back ----
@@ -143,7 +165,8 @@ static struct {
     uint32_t progress_ms; /* HAL_GetTick() of the last chunk the connection took */
     /* LA change capture read-back (gw >= v50): the LA region holds 3-byte change events
        (ice40/src/la_change_capture.v), decoded here into the same la_edges frames a raw LA
-       capture sends, at sample index = tick / chg_k.  `sent` = samples already final. */
+       capture sends: sample i is the state at tick chg_base + i * chg_k (point sampling).  `sent` =
+       samples already final. */
     bool     chg;
     bool     chg_hdr;     /* the first frame (with the metadata) went out */
     bool     chg_first;   /* the next event is t0 */
@@ -153,6 +176,9 @@ static struct {
     uint32_t chg_end;     /* region bytes: never read past them */
     uint16_t chg_n, chg_i;/* events buffered in psram_chunk: bytes held, bytes used */
     uint64_t chg_t;       /* tick of the last event */
+    uint64_t chg_base;    /* tick of sample 0: sample i is the state at chg_base + i * chg_k */
+    uint32_t chg_pre;     /* samples before the trigger (pre-trigger), reported as pre_samples */
+    uint32_t chg_trunc;   /* 0, or why the stream stopped early (1 too busy, 2 memory full) */
     long     chg_pend_i;  /* edge held until the index moves on (-1 none): a later event in the */
     unsigned chg_pend_w;  /* same sample replaces it, so a sample shows its last state */
 } bulk;
@@ -218,7 +244,7 @@ static void bulk_take_trigger(void) {
 /* Parse "trigger" / "trigger_timeout_ms" and, when present, gate on the gateware version and
    program SET_TRIGGER.  Call it AFTER the rest of the request validates and BEFORE the capture
    is armed — the fabric latches the trigger at the arm.  false = the error was already sent. */
-static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *out) {
+static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *out, bool allow_pre) {
     char err[LA_PINS_ERR_MAX];
     trig_reply.present = false;   /* a previous capture's outcome must never ride this reply */
     if (!la_trigger_parse(json, out, err, sizeof(err))) { send_error(conn_id, err); return false; }
@@ -231,7 +257,17 @@ static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *o
         send_error(conn_id, err);
         return false;
     }
-    if (fpga_set_trigger(out->la, (uint8_t)out->edge) != 0) {
+    if (out->pre_samples && !allow_pre) {
+        send_error(conn_id, "trigger pre_samples is only for la_capture");
+        return false;
+    }
+    if (out->pre_samples && ver < LA_CHANGE_MIN_GW) {
+        snprintf(err, sizeof(err), "trigger pre_samples needs gateware v%u or newer (this pod runs v%u)",
+                 (unsigned)LA_CHANGE_MIN_GW, (unsigned)ver);
+        send_error(conn_id, err);
+        return false;
+    }
+    if (fpga_set_trigger_pre(out->la, (uint8_t)out->edge, out->pre_samples != 0u) != 0) {
         send_error(conn_id, "could not arm the capture trigger (SPI)");
         return false;
     }
@@ -273,7 +309,7 @@ static void capture_trigger_done(void) {
    capture/measure (v2cap), a deep LA→PSRAM capture (lacap), a unified capture
    (dualcap), or a paced bulk send (bulk). */
 bool capture_busy(void) {
-    return v2cap.active || lacap.active || dualcap.active || bulk.active;
+    return v2cap.active || lacap.active || chgscan.active || dualcap.active || bulk.active;
 }
 
 /* Scratch for one PSRAM-sourced chunk (deep LA capture read-back).  Sized to one
@@ -346,12 +382,14 @@ static void bulk_begin_capture16_resume(int conn_id, size_t offset) {
 }
 
 
-/* Stream an LA change capture: `samples` at 48 MHz / k, decoded from the events in the LA region
-   (`region` bytes) into la_edges frames.  The shared bus must already be held. */
-static void bulk_begin_la_changes(int conn_id, size_t samples, uint32_t k, uint32_t region) {
-    bulk_begin_capture16(conn_id, 0, samples);
+/* Stream an LA change capture: `samples` from tick `base` at 48 MHz / k, decoded from the events in
+   the first `region` bytes of the LA region, after `adc_n` dense ADC samples (capture_dual; 0 for
+   la_capture).  The shared bus must already be held. */
+static void bulk_begin_la_changes(int conn_id, size_t adc_n, size_t samples, uint32_t k, uint32_t region,
+                                  uint64_t base, uint32_t pre, uint32_t trunc) {
+    bulk_begin_capture16(conn_id, adc_n, samples);
     bulk.chg        = true;
-    bulk.chg_hdr    = false;
+    bulk.chg_hdr    = adc_n > 0;          /* capture_dual: the ADC frames carried the metadata */
     bulk.chg_first  = true;
     bulk.chg_done   = false;
     bulk.chg_k      = k;
@@ -360,6 +398,9 @@ static void bulk_begin_la_changes(int conn_id, size_t samples, uint32_t k, uint3
     bulk.chg_n      = 0;
     bulk.chg_i      = 0;
     bulk.chg_t      = 0;
+    bulk.chg_base   = base;
+    bulk.chg_pre    = pre;
+    bulk.chg_trunc  = trunc;
     bulk.chg_pend_i = -1;
 }
 
@@ -367,10 +408,16 @@ static void bulk_begin_la_changes(int conn_id, size_t samples, uint32_t k, uint3
    (the caller returns), true otherwise. */
 static bool bulk_pump_changes(int conn, size_t avail) {
     int pos = 0;
+    size_t la_total = bulk.total - bulk.adc_samples;    /* LA indices are LA-relative, as in capture_dual */
     if (!bulk.chg_hdr) {
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
         if (bulk.la_rate_hz)
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+        if (bulk.chg_pre)
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"pre_samples\":%lu,", (unsigned long)bulk.chg_pre);
+        if (bulk.chg_trunc)
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"truncated\":\"%s\",",
+                            bulk.chg_trunc == 1 ? "busy" : "memory");
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la\":true,\"la_edges\":[");
     } else {
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[");
@@ -412,12 +459,15 @@ static bool bulk_pump_changes(int conn, size_t avail) {
         if (bulk.chg_first)  bulk.chg_first = false;            /* t0: delta 0, the state at t0 */
         else if (d == 0u)  { bulk.chg_done = true; break; }     /* END */
         else                 bulk.chg_t += d;
-        uint64_t idx = bulk.chg_t / bulk.chg_k;
-        if (idx >= bulk.total) { bulk.chg_done = true; break; }
+        /* sample i is the state at tick base + i*k: an event at t shows from the first sample at or
+           after it, and every event up to base belongs to sample 0 */
+        uint64_t idx = bulk.chg_t <= bulk.chg_base ? 0u
+                     : (bulk.chg_t - bulk.chg_base + bulk.chg_k - 1u) / bulk.chg_k;
+        if (idx >= la_total) { bulk.chg_done = true; break; }
         if (bulk.chg_pend_i >= 0 && (uint64_t)bulk.chg_pend_i != idx) {
             if ((unsigned)bulk.la_last != bulk.chg_pend_w || bulk.la_last < 0)
                 CHG_EMIT(bulk.chg_pend_i, bulk.chg_pend_w);
-            bulk.sent = (size_t)idx;                            /* samples before idx are final */
+            bulk.sent = bulk.adc_samples + (size_t)idx;         /* LA samples before idx are final */
         }
         bulk.chg_pend_i = (long)idx;
         bulk.chg_pend_w = w;
@@ -430,7 +480,8 @@ static bool bulk_pump_changes(int conn, size_t avail) {
     }
 #undef CHG_EMIT
     bool last = bulk.chg_done;
-    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "],\"la_upto\":%u", (unsigned)bulk.sent);
+    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "],\"la_upto\":%u",
+                    (unsigned)(bulk.sent - bulk.adc_samples));
     if (last) pos += bulk_emit_trigger(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos);
     pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, ",\"more\":%s}\n", last ? "false" : "true");
     if (at_send_data(conn, (const uint8_t *)chunk_buf, (size_t)pos) != 0) {
@@ -468,7 +519,7 @@ static void bulk_pump(void) {
         }
         bulk.progress_ms = HAL_GetTick();
 
-        if (bulk.chg) {
+        if (bulk.chg && bulk.sent >= bulk.adc_samples) {
             if (avail < 200) return;
             if (!bulk_pump_changes(conn, avail)) return;
             continue;
@@ -640,6 +691,86 @@ static void bulk_pump(void) {
     heavy_release(conn);
 }
 
+/* A change capture's end: the error that tells the user why it failed, the bus and the gate freed. */
+static void chgscan_fail(const char *why) {
+    char msg[240];
+    snprintf(msg, sizeof(msg), "la capture failed: %s", why);
+    chgscan.active = false;
+    fpga_capture_psram_release();
+    trig_reply.present = false;
+    send_error(chgscan.conn_id, msg);
+    heavy_release(chgscan.conn_id);
+}
+
+/* Scan a few KB of the change stream per poll; at END check it and start the read-back. */
+static void chgscan_step(void) {
+    for (int reads = 0; reads < 16 && !chgscan.ended; reads++) {
+        uint32_t left = chgscan.region - chgscan.off;
+        if (left < 3u) break;
+        uint32_t n = left < 255u ? left : 255u;
+        n -= n % 3u;
+        if (fpga_la_psram_read(chgscan.off, psram_chunk, n) != 0) {
+            chgscan_fail("PSRAM read-back failed");
+            return;
+        }
+        for (uint32_t i = 0; i + 3u <= n; i += 3u) {
+            uint32_t e = (uint32_t)psram_chunk[i] | ((uint32_t)psram_chunk[i + 1] << 8) |
+                         ((uint32_t)psram_chunk[i + 2] << 16);
+            uint32_t d = e >> 14;
+            chgscan.off += 3u;
+            if (chgscan.first) { chgscan.first = false; continue; }   /* t = 0: the stream's first event */
+            if (d == 0u) { chgscan.ended = true; chgscan.cause = e & 0x3FFFu; break; }
+            chgscan.t += d;
+        }
+    }
+    if (!chgscan.ended && chgscan.region - chgscan.off >= 3u) return;   /* more next poll */
+
+    char why[200];
+    uint32_t k = chgscan.k, mhz10 = chgscan.la_hz / 100000u;
+    uint64_t post = (uint64_t)signal_engine_la_change_units() * LA_CHANGE_UNIT_TICKS;
+    if (!chgscan.ended) { chgscan_fail("the change stream has no end (PSRAM data damaged or cut)"); return; }
+    if (chgscan.cause == 0u && signal_engine_last_cap_overflowed()) {
+        chgscan_fail("the PSRAM bus was taken during the capture");
+        return;
+    }
+    uint64_t base = 0;
+    uint32_t pre = 0, trunc = 0;
+    size_t   total = chgscan.samples;
+    if (chgscan.cause == 0u) {
+        /* whole: the last event is on the last tick after t0 */
+        if (chgscan.t + 1u < post || (chgscan.pre == 0u && chgscan.t + 1u != post)) {
+            chgscan_fail("the change stream is incomplete");
+            return;
+        }
+        uint64_t trig = chgscan.t + 1u - post;               /* t0 (0 without a pre-trigger) */
+        if (chgscan.pre) {
+            uint64_t avail = trig / k;
+            pre = avail < chgscan.pre ? (uint32_t)avail : chgscan.pre;
+        }
+        base  = trig - (uint64_t)pre * k;
+        total = chgscan.samples + pre;
+    } else {
+        snprintf(why, sizeof(why), chgscan.cause == 1u
+                 ? "the signals changed faster than the pod can store at %lu.%lu MS/s (about 6 million changes per "
+                   "second, all channels together); capture at 12 MS/s or lower"
+                 : "the changes filled the free capture memory at %lu.%lu MS/s; capture fewer samples or at a lower rate",
+                 (unsigned long)(mhz10 / 10u), (unsigned long)(mhz10 % 10u));
+        if (chgscan.pre) { chgscan_fail(why); return; }      /* the trigger can't be placed */
+        uint64_t have = chgscan.t / k + 1u;                  /* samples up to the last event */
+        if (have < total) total = (size_t)have;
+        trunc = chgscan.cause == 1u ? 1u : 2u;
+        printf("[cmd] la_capture: stopped early (%s): returning %u of %u samples\n",
+               trunc == 1u ? "too busy" : "memory full", (unsigned)total, (unsigned)chgscan.samples);
+    }
+    chgscan.active = false;
+    printf("[cmd] la_capture: change capture ready (%u samples%s), streaming...\n",
+           (unsigned)total, pre ? " incl. pre-trigger" : "");
+    bulk_begin_la_changes(chgscan.conn_id, chgscan.adc_n, total, k, chgscan.off, base, pre, trunc);
+    bulk.la_rate_hz  = chgscan.la_hz;
+    bulk.adc_rate_hz = chgscan.adc_n ? chgscan.adc_hz : 0u;
+    bulk.b64         = chgscan.b64;
+}
+
 /* command_handler_poll's capture pass: trigger timeouts, async completions, then the paced
    bulk read-back. */
 void capture_poll(void) {
@@ -689,7 +820,7 @@ void capture_poll(void) {
 
     /* ---- v2 deep LA→PSRAM capture: poll for completion, then stream from PSRAM ---- */
     if (lacap.active) {
-        int r = fpga_la_capture_psram_wait();
+        int r = lacap.chg_k ? fpga_la_change_wait() : fpga_la_capture_psram_wait();
         if (r != 0) {                          /* done (1) or timeout (-1) */
             capture_trigger_done();
             int    cid     = lacap.conn_id;
@@ -702,13 +833,18 @@ void capture_poll(void) {
                PSRAM region + send the official stop so the depth budget + UI state stay in sync. */
             if (stopdac) dac_stop();
             if (r > 0 && chg_k) {
-                /* change capture: decode its events into the raw capture's edge frames.  No
-                   resume (capture_read) for it: last_cap describes raw words. */
+                /* change capture: scan the events first (chgscan below), then decode them into the
+                   raw capture's edge frames.  No resume (capture_read): last_cap describes raw words. */
                 last_cap.valid = false;
-                printf("[cmd] la_capture: change capture ready (%u samples at %lu MS/s), streaming...\n",
-                       (unsigned)samples, (unsigned long)(la_hz / 1000000u));
-                bulk_begin_la_changes(cid, samples, chg_k, signal_engine_la_max_samples(false) * 2u);
-                bulk.la_rate_hz = la_hz;
+                memset(&chgscan, 0, sizeof(chgscan));
+                chgscan.active  = true;
+                chgscan.conn_id = cid;
+                chgscan.samples = samples;
+                chgscan.k       = chg_k;
+                chgscan.pre     = lacap.pre;
+                chgscan.la_hz   = la_hz;
+                chgscan.region  = signal_engine_la_max_samples(false) * 2u;
+                chgscan.first   = true;
             } else if (r > 0) {
                 /* _wait() took the shared bus.  Stream the trace back through the SAME
                    16-bit read-back as capture_dual but with NO ADC region (adc_samples=0),
@@ -730,19 +866,13 @@ void capture_poll(void) {
             } else {
                 fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
-                if (chg_k && signal_engine_last_cap_overflowed()) {
-                    char msg[200];
-                    snprintf(msg, sizeof(msg), "la capture failed: the signals changed faster than the pod "
-                             "can store at %lu MS/s (about 6 million changes per second, all channels "
-                             "together); capture at 12 MS/s or lower", (unsigned long)(la_hz / 1000000u));
-                    send_error(cid, msg);
-                } else {
-                    send_error(cid, "la capture failed");
-                }
+                send_error(cid, "la capture failed");
                 heavy_release(cid);
             }
         }
     }
+
+    if (chgscan.active) chgscan_step();
 
     /* ---- v2 unified simultaneous capture: DEEP, chunked straight from PSRAM ----
        Both regions can be multi-MB, so we never buffer them in SRAM: fpga_capture_
@@ -775,6 +905,21 @@ void capture_poll(void) {
                 trig_reply.present = false;
                 send_error(cid, "capture failed (ADC region not written; run cap-selftest)");
                 heavy_release(cid);
+            } else if (r > 0 && dualcap.chg_k && la_n) {
+                /* the LA is a change capture: scan its stream (chgscan), then the ADC samples
+                   followed by the LA edges.  No capture_read resume: last_cap describes raw words. */
+                last_cap.valid = false;
+                memset(&chgscan, 0, sizeof(chgscan));
+                chgscan.active  = true;
+                chgscan.conn_id = cid;
+                chgscan.samples = la_n;
+                chgscan.k       = dualcap.chg_k;
+                chgscan.la_hz   = la_hz;
+                chgscan.region  = signal_engine_adc_cap_base() - signal_engine_la_cap_base();
+                chgscan.first   = true;
+                chgscan.adc_n   = adc_n;
+                chgscan.adc_hz  = adc_hz;
+                chgscan.b64     = dualcap.b64;
             } else if (r > 0) {
                 /* Data is safely in PSRAM now — the capture itself succeeded; all that's
                    left is streaming it back.  Log it so a stall during read-back is
@@ -827,6 +972,10 @@ void capture_conn_closed(int conn_id) {
     if (dualcap.active && dualcap.conn_id == conn_id) {
         cap_owned = true; cap_stopdac |= dualcap.stop_dac; dualcap.active = false;
     }
+    if (chgscan.active && chgscan.conn_id == conn_id) {   /* captured, not yet streaming: free the bus */
+        chgscan.active = false;
+        fpga_capture_psram_release();
+    }
     if (cap_owned) {
         fpga_capture_abort();              /* also turns SET_TRIGGER off */
         if (trigwait.active && trigwait.conn_id == conn_id) trigwait.active = false;
@@ -875,7 +1024,7 @@ void handle_capture(int conn_id, const char *json) {
         return;
     }
     la_trigger_t trig;
-    if (!capture_trigger_begin(conn_id, json, &trig)) return;
+    if (!capture_trigger_begin(conn_id, json, &trig, false)) return;
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     /* Arm the iCE40 to stream 16-bit samples into PSRAM, then return;
        command_handler_poll() reads them back and replies once it finishes, so the
@@ -928,6 +1077,8 @@ void handle_capture_dual(int conn_id, const char *json) {
        replay at the top of PSRAM. */
     float adc_hz = parse_named_rate_hz(json, "adc_rate_mhz");
     float la_hz  = parse_named_rate_hz(json, "la_rate_mhz");
+    /* LA above 12 MS/s on gateware >= v50: the LA records its changes (48, 24 or 16 MS/s) */
+    uint32_t chg_k = la_n ? signal_engine_la_change_divisor(la_hz) : 0u;
     /* Dynamic tri-capture zone allocation (gateware >= v22): pack LA (@0) + ADC + any
        resident deep-DAC into 8 MB and REJECT up front if the combined depth won't fit or
        the combined sustained rate would overrun the bus (docs/tri-capture-unified-psram.md).
@@ -937,7 +1088,7 @@ void handle_capture_dual(int conn_id, const char *json) {
         psram_request_t req = {
             .la_samples  = (uint32_t)la_n,  .adc_samples = (uint32_t)adc_n,
             .dac_bytes   = signal_engine_dac_resident_bytes(),
-            .la_rate_hz  = (uint32_t)lroundf(la_hz),
+            .la_rate_hz  = chg_k ? 0u : (uint32_t)lroundf(la_hz),   /* a change stream is drain-paced */
             .adc_rate_hz = (uint32_t)lroundf(adc_hz),
             .dac_rate_hz = signal_engine_dac_resident_bytes() ? DAC_MAX_RATE_HZ : 0u,
         };
@@ -951,6 +1102,13 @@ void handle_capture_dual(int conn_id, const char *json) {
             return;
         }
         adc_base = lo.adc_base;   /* ADC packed right after LA (LA @ base 0) */
+        if (chg_k) {
+            /* the change stream's size depends on the signals: give it everything below the ADC,
+               which goes to the top of the free space (under a resident deep-DAC waveform) */
+            uint32_t ceil = FPGA_PSRAM_TOTAL - signal_engine_dac_resident_bytes();
+            uint32_t top  = (ceil - (uint32_t)adc_n * 2u) & ~0x3Fu;
+            if (top > adc_base) adc_base = top;
+        }
     } else if (adc_n > signal_engine_adc_max_samples() || la_n > signal_engine_la_max_samples(true)) {
         send_error(conn_id, "samples out of range (per-stream PSRAM region limit)");
         return;
@@ -963,13 +1121,21 @@ void handle_capture_dual(int conn_id, const char *json) {
     if (json_get_value(json, "stop_dac_after_us", s, sizeof(s)) && s[0]) stop_us = (uint32_t)strtoul(s, NULL, 10);
     bool stop_dac_armed = stop_us > 0 && signal_engine_fpga_version() >= DAC_CAPTURE_STOP_MIN_GW;
     la_trigger_t trig;
-    if (!capture_trigger_begin(conn_id, json, &trig)) return;
+    if (!capture_trigger_begin(conn_id, json, &trig, false)) return;
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     fpga_set_capture_bases(0u, adc_base);  /* latch runtime zones; no-op on gw < v22 */
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float adc_actual = 0.0f, la_actual = 0.0f;
-    if (fpga_dual_capture_start_hz((uint32_t)adc_n, adc_hz, (uint32_t)la_n, la_hz,
-                                   &adc_actual, &la_actual) != 0) {
+    int armed;
+    if (chg_k && signal_engine_fpga_version() >= CAPTURE_BASES_MIN_GW) {
+        armed = fpga_dual_change_start((uint32_t)adc_n, adc_hz, la_n, chg_k, &adc_actual);
+        la_actual = 48e6f / (float)chg_k;
+    } else {
+        chg_k = 0;
+        armed = fpga_dual_capture_start_hz((uint32_t)adc_n, adc_hz, (uint32_t)la_n, la_hz,
+                                           &adc_actual, &la_actual);
+    }
+    if (armed != 0) {
         heavy_release(conn_id);
         capture_trigger_cancel(&trig);
         send_error(conn_id, "capture failed");
@@ -985,6 +1151,7 @@ void handle_capture_dual(int conn_id, const char *json) {
     dualcap.la_rate_hz  = la_actual;
     dualcap.stop_dac    = stop_dac_armed;   /* free the HW-cut DAC when this capture completes */
     dualcap.b64         = wants_b64(json);
+    dualcap.chg_k       = chg_k;
     /* Log the ACHIEVED rate as integer kHz — newlib-nano's printf has no %f, so the
        old "@%.3fMS/s" silently printed nothing (the frequency vanished from the
        console). Integer kHz via %lu prints correctly. */
@@ -1273,15 +1440,18 @@ void handle_la_capture(int conn_id, const char *json) {
         stop_us = (uint32_t)strtoul(stop_s, NULL, 10);
     bool stop_dac_armed = stop_us > 0 && signal_engine_fpga_version() >= DAC_CAPTURE_STOP_MIN_GW;
     la_trigger_t trig;
-    if (!capture_trigger_begin(conn_id, json, &trig)) return;
+    if (!capture_trigger_begin(conn_id, json, &trig, true)) return;
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float la_actual = 0.0f;
     /* Above the raw sampler's 12 MS/s, gateware >= v50 records the CHANGES at 48 MS/s and the
        read-back turns them into the same edges a raw capture sends (48, 24 or 16 MS/s, the
        nearest to the request); older gateware keeps the raw path, which caps at 12 MS/s. */
-    uint32_t chg_k = signal_engine_la_change_divisor(sr_hz);
-    int armed = chg_k ? fpga_la_change_start(samples, chg_k)
+    /* A pre-trigger (trigger.pre_samples) always records the changes, at any rate. */
+    uint32_t pre   = trig.present ? trig.pre_samples : 0u;
+    uint32_t chg_k = pre ? la_change_divisor_pre(sr_hz, signal_engine_fpga_version())
+                         : signal_engine_la_change_divisor(sr_hz);
+    int armed = chg_k ? fpga_la_change_start(samples, chg_k, pre != 0u)
                       : fpga_la_capture_psram_start(samples, sr_hz, &la_actual);
     if (chg_k) la_actual = 48e6f / (float)chg_k;
     if (armed != 0) {
@@ -1298,4 +1468,5 @@ void handle_la_capture(int conn_id, const char *json) {
     lacap.stop_dac = stop_dac_armed;
     lacap.rate_hz  = (uint32_t)lroundf(la_actual);
     lacap.chg_k    = chg_k;
+    lacap.pre      = pre;
 }

@@ -105,3 +105,10 @@ uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version) {
     uint32_t k = (uint32_t)lroundf(48e6f / sample_rate_hz);
     return k < 1u ? 1u : k > 3u ? 3u : k;
 }
+
+uint32_t la_change_divisor_pre(float sample_rate_hz, uint8_t gw_version) {
+    if (gw_version < LA_CHANGE_MIN_GW) return 0;
+    if (!(sample_rate_hz > 0.0f)) return 4u;
+    float k = roundf(48e6f / sample_rate_hz);
+    return k < 1.0f ? 1u : k > 65535.0f ? 65535u : (uint32_t)k;
+}

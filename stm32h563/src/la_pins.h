@@ -167,6 +167,7 @@ typedef struct {
     uint8_t   la;           /* 1..14 */
     la_edge_t edge;
     uint32_t  timeout_ms;
+    uint32_t  pre_samples;  /* trigger.pre_samples: samples to keep before the trigger (la_capture, gw >= v50) */
 } la_trigger_t;
 
 const char *la_edge_name(la_edge_t edge);

@@ -44,6 +44,12 @@ int main(void) {
     CHECK(la_change_divisor(20e6f, 50) == 2,  "20 MS/s -> k 2 (24 MS/s)");
     CHECK(la_change_divisor(16e6f, 50) == 3,  "16 MS/s -> k 3");
     CHECK(la_change_divisor(12.5e6f, 50) == 3,"12.5 MS/s -> k 3 (16 MS/s)");
+    /* pre-trigger: the change capture at any rate */
+    CHECK(la_change_divisor_pre(0.0f, 50) == 4,    "pre, rate 0 -> 12 MS/s (k 4)");
+    CHECK(la_change_divisor_pre(1e6f, 50) == 48,   "pre, 1 MS/s -> k 48");
+    CHECK(la_change_divisor_pre(48e6f, 50) == 1,   "pre, 48 MS/s -> k 1");
+    CHECK(la_change_divisor_pre(100.0f, 50) == 65535, "pre, 100 S/s -> k capped at 65535");
+    CHECK(la_change_divisor_pre(1e6f, 49) == 0,    "pre on gw 49 -> 0");
     /* ---- THE regression: small captures track the requested rate exactly ---- */
     la_plan_t p = la_psram_plan(HFOSC, 4096, 6.0e6f);
     CHECK(p.divider == 4, "6 MS/s x4096 divider=%u want 4 (ADC-floor 0.3 MS/s regression!)", p.divider);
@@ -68,23 +74,23 @@ int main(void) {
     la_plan_t edge = la_psram_plan(HFOSC, LA_RING_BYTES / 2, 12.0e6f);
     CHECK(edge.divider == 2 && !edge.capped, "ring-sized capture at full 12 MS/s (div=%u capped=%u)", edge.divider, edge.capped);
 
-    /* ---- deep captures (bigger than the ring) are conservatively burst-capped to the
-     *      real rates they were HW-verified lossless at on gateware v31 (whose divider d
-     *      really sampled every d+1 clocks): TestHW_RawLA_Long 65536 -> 6 MS/s, 131072 ->
-     *      4 MS/s, 262144 -> 3.43 MS/s; console lastress 65535 -> 6 MS/s. ---- */
+    /* ---- deep captures (bigger than the ring) are burst-capped to rates proven lossless on
+     *      hardware.  v31 (64 KB spram_ring16): 65536 -> 6 MS/s, 131072 -> 4, 262144 -> 3.43.
+     *      v50's 96 KB spram_ring48 lifts the first two to 12 and 4.8 MS/s (the plan below);
+     *      sim: tb_top_lachange 48000 @ 12; hardware: hw_auto deep raw captures 2026-11-03. ---- */
     la_plan_t deep = la_psram_plan(HFOSC, 65535, 12.0e6f);
-    CHECK(deep.divider == 4 && deep.capped && deep.rate_hz == 6000000u,
-          "65535 @ 12 MS/s must burst-cap to 6 MS/s (div=%u capped=%u rate=%u)",
+    CHECK(deep.divider == 2 && !deep.capped && deep.rate_hz == 12000000u,
+          "65535 @ 12 MS/s fits the 96 KB ring at the full rate (div=%u capped=%u rate=%u)",
           deep.divider, deep.capped, deep.rate_hz);
     CHECK(peak_bytes(65535, deep.rate_hz) <= (double)LA_RING_BYTES + 512.0,
-          "65535 capped peak %.0f must fit ring %u", peak_bytes(65535, deep.rate_hz), LA_RING_BYTES);
+          "65535 peak %.0f must fit ring %u", peak_bytes(65535, deep.rate_hz), LA_RING_BYTES);
     {
         static const struct { uint32_t n; uint32_t max_rate_hz; } hw[] = {
-            { 65536u, 6000000u }, { 131072u, 4000000u }, { 262144u, 3428572u },
+            { 65536u, 12000000u }, { 131072u, 4800000u }, { 262144u, 3428572u },
         };
         for (unsigned i = 0; i < sizeof hw / sizeof hw[0]; i++) {
             la_plan_t q = la_psram_plan(HFOSC, hw[i].n, 12.0e6f);
-            CHECK(q.capped && q.rate_hz <= hw[i].max_rate_hz,
+            CHECK(q.rate_hz <= hw[i].max_rate_hz,
                   "%u @ 12 MS/s -> %u S/s, must not exceed the HW-verified %u (capped=%u)",
                   hw[i].n, q.rate_hz, hw[i].max_rate_hz, q.capped);
         }

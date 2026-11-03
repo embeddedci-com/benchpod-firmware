@@ -26,7 +26,7 @@
  * that fit the ring run at the full 12 MS/s ceiling, while captures larger than the ring
  * are burst-capped to the fastest rate whose peak occupancy still fits. */
 #define LA_PSRAM_MIN_DIV    2u          /* 24 MHz / 2 = 12 MS/s peak (la_psram_capture period >= 2) */
-#define LA_RING_BYTES       65536u      /* spram_ring16 depth (ice40 la_ring_i, AW=15: 32K words -> 64 KB) */
+#define LA_RING_BYTES       98304u      /* spram_ring48 depth (ice40 la_ring_i, AW=14: 16K 48-bit words -> 96 KB, v50) */
 /* SUSTAINED deep-capture drain is bounded by the single-port spram_ring16, NOT the
  * 24 MB/s DDR writer: each sample costs 1 write + a 3-cycle read on the shared SPRAM
  * port, and a read can only start in the sampler's idle gap.  At the 12 MS/s peak there
@@ -124,5 +124,8 @@ dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool fro
 #define LA_CHANGE_MIN_GW  50u
 #define LA_RAW_MAX_HZ     12e6f
 uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version);
+/* A pre-trigger capture always uses the change capture: k = 48 MHz / rate rounded, 1..65535 (any
+   rate up to 48 MS/s); rate 0 ("max") keeps the raw default of 12 MS/s (k = 4).  0 = older gateware. */
+uint32_t la_change_divisor_pre(float sample_rate_hz, uint8_t gw_version);
 
 #endif /* LA_RATE_H */

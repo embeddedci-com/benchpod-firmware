@@ -245,6 +245,7 @@ int  fpga_gpio_get(uint16_t *levels);
    1 rising, 2 falling, 3 high, 4 low; mode 0 = off (la ignored).  It persists in the fabric until
    changed, so send mode 0 after every triggered capture.  0 ok, -1 bad args/SPI, -2 too old. */
 int  fpga_set_trigger(unsigned la, uint8_t mode);
+int  fpga_set_trigger_pre(unsigned la, uint8_t mode, bool pre);   /* flags bit0: pre-trigger window (gw >= v50) */
 #define TRIGGER_STATUS_WAITING 0x01u   /* armed, condition not seen yet */
 #define TRIGGER_STATUS_FIRED   0x02u   /* a triggered capture fired since the last arm */
 int  fpga_trigger_status(uint8_t *status);   /* 0 ok, -1 SPI, -2 too old */
@@ -680,8 +681,19 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
 int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz);
 /* la_change_divisor() for the running gateware: 0 = the raw path. */
 uint32_t signal_engine_la_change_divisor(float sample_rate_hz);
-/* Arm a change capture of `samples` at 48 MHz / k (gateware >= v50); -1 when it can't. */
-int fpga_la_change_start(size_t samples, uint32_t k);
+/* Arm a change capture of `samples` at 48 MHz / k after t0 (gateware >= v50); `pre` = SET_TRIGGER
+   asked for a pre-trigger window.  -1 when it can't (it then leaves the fabric idle). */
+int fpga_la_change_start(size_t samples, uint32_t k, bool pre);
+/* capture_dual with the LA as a change capture (gw >= v50): the LA region ends at the ADC base. */
+int fpga_dual_change_start(uint32_t adc_count, float adc_req_hz, size_t la_samples, uint32_t k,
+                           float *adc_rate_hz);
+/* The ring keeps at most this much pre-trigger stream (PRE_WORDS = 8192 words of 6 bytes). */
+#define LA_CHANGE_PRE_BYTES  (8192u * 6u)
+/* The last change capture's duration in 256-tick units. */
+uint32_t signal_engine_la_change_units(void);
+/* Wait for a change capture: 1 = done, bus held (CAP_OVF is not a failure, see
+   signal_engine_last_cap_overflowed), 0 = running, -1 = timeout / iCE40 not answering. */
+int fpga_la_change_wait(void);
 /* The last capture that ended failed on CAP_OVF (a full buffer), not a timeout. */
 bool signal_engine_last_cap_overflowed(void);
 

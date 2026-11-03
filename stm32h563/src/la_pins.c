@@ -486,6 +486,15 @@ bool la_trigger_parse(const char *json, la_trigger_t *out, char *err, size_t cap
         }
         out->timeout_ms = (uint32_t)ms;
     }
+    if (bp_json_get(obj, "pre_samples", s, sizeof(s)) && strcmp(s, "null") != 0) {
+        end = NULL;
+        long pre = strtol(s, &end, 10);
+        if (end == s || *end != '\0' || pre < 0 || pre > 16777215L) {
+            snprintf(err, cap, "trigger pre_samples must be 0..16777215");
+            return false;
+        }
+        out->pre_samples = (uint32_t)pre;
+    }
     out->present = true;
     out->la      = (uint8_t)la;
     out->edge    = edge;
