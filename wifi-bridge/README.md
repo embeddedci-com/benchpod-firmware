@@ -271,7 +271,10 @@ dev key), so the pod can put a newer EMC build or the normal firmware on it. Aft
 confirms itself as soon as Ethernet has started and its first frame went out, without waiting
 for the pod, so it never rolls back on its own (an image whose Ethernet or radio does not come
 up still rolls back after 120 s). It reports its version as `<version>-emc` (`version`, HELLO), and its
-signature carries asset version 0, so the pod never installs or replaces it on its own.
+signature carries asset version 0, so the pod never installs or replaces it on its own: a bridge
+that reports `-emc` is never updated automatically, even when the pod holds a newer release image
+(`bridge` shows "no automatic update: the bridge runs an EMC test build"); `bridge update` still
+replaces it.
 
 ```sh
 ./build.sh emc                 # -> build-emc/ (sdkconfig.defaults + sdkconfig.defaults.emc)

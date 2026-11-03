@@ -24,6 +24,13 @@ uint32_t wbo_pack_version(const char *s)
     return (uint32_t)a << 16 | (uint32_t)b << 8 | c;
 }
 
+bool wbo_is_emc_build(const char *fw_version)
+{
+    static const char k_suffix[] = "-emc";
+    size_t n = fw_version ? strlen(fw_version) : 0, k = sizeof(k_suffix) - 1;
+    return n > k && strcmp(fw_version + n - k, k_suffix) == 0;
+}
+
 void wbo_version_str(uint32_t v, char out[16])
 {
     snprintf(out, 16, "%u.%u.%u", (unsigned)(v >> 16) & 0xff, (unsigned)(v >> 8) & 0xff, (unsigned)v & 0xff);
@@ -145,6 +152,10 @@ static void try_start(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, boo
         why = "the bridge is not paired with this pod";
     } else if (br->flags & (BWP_F_PENDING_VERIFY | BWP_F_OTA_ACTIVE)) {
         why = "the bridge is busy with another update";
+    } else if (!forced && wbo_is_emc_build(br->fw_version)) {
+        /* The lab's image: replaced only on request (`bridge update`), never by a newer release. */
+        snprintf(o->status, sizeof(o->status), "no automatic update: the bridge runs an EMC test build");
+        return;
     } else if (!forced && (have == 0 || img->version <= have || img->version == o->failed)) {
         return;  /* up to date (or an unknown version, or one that failed): nothing to do */
     } else if (!bus_free) {
