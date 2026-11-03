@@ -524,15 +524,22 @@ module top (
         if (rst)               la_chg <= 1'b0;
         else if (la_cap_start) la_chg <= la_chg_sel;
 
+    // One SB_MAC16 down-counter serves both LA producers (only one runs per capture): the raw
+    // producer's samples left, or the change encoder's 256-tick units left.  It lives in
+    // la_psram_capture; a change arm loads it with la_cap_count (ext_load) and the encoder steps
+    // it where its own fabric counter used to (ext_en).
+    wire       la_cnt_en_chg, la_cnt_one;
+
     wire       la_raw_stb, la_raw_busy, la_raw_done;
     wire [7:0] la_raw_data;
-    la_psram_capture #(.N(14), .CNT_W(24)) la_ps_i (
+    la_psram_capture #(.N(14), .CNT_W(24), .SHARE(1)) la_ps_i (
         .clk(clk), .rst(rst | (la_cap_start & la_chg_sel)), .la_in(la_sample),
         .start(la_cap_start & ~la_chg_sel), .sample_count(la_cap_count), .divider(la_cap_divider),
         .hold(trig_wait),
         .ps_start(), .ps_stop(),
         .wr_data(la_raw_data), .wr_stb(la_raw_stb), .full(1'b0),   // drops show as la_ring_ovf
-        .busy(la_raw_busy), .done(la_raw_done), .overflow()
+        .busy(la_raw_busy), .done(la_raw_done), .overflow(),
+        .ext_load(~rst & la_cap_start & la_chg_sel), .ext_en(la_cnt_en_chg), .cnt_one(la_cnt_one)
     );
     // raw bytes -> 48-bit ring words; the tail is flushed once the producer is done
     wire [47:0] la_pk_wd;
@@ -554,13 +561,14 @@ module top (
     // Any arm that is not a change capture (another LA mode, an ADC-only capture, the all-zero
     // abort) resets the encoder, and a change arm resets the raw producer: a producer left running
     // by an abort strobed into the next capture's ring (review B2).
-    la_change_capture #(.N(14)) la_chg_i (
+    la_change_capture #(.N(14), .EXT_CNT(1)) la_chg_i (
         .clk(clk), .rst(rst | (la_cap_start & ~la_chg_sel)),
         .pa(la48_a), .pb(la48_b),
         .start(la_cap_start & la_chg_sel), .hold(trig_wait), .pretrig(trig_pre), .count(la_cap_count),
         .limit(adc_cap_base),                       // the firmware puts the LA region end here
         .wd(la_chg_wd), .wstb(la_chg_stb), .wrdy(la_ring_in_rdy),
-        .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf)
+        .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf),
+        .cnt_en(la_cnt_en_chg), .cnt_one(la_cnt_one)
     );
 
     wire       la_busy     = la_raw_busy | la_chg_busy;

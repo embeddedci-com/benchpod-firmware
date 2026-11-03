@@ -50,7 +50,12 @@
 // ============================================================================
 module la_change_capture #(
     parameter N  = 14,
-    parameter DW = 10                // delta width (24 - N)
+    parameter DW = 10,               // delta width (24 - N)
+    // EXT_CNT = 1 (top_v2): the 256-tick unit counter is la_psram_capture's SB_MAC16 down-counter
+    // (a change capture never runs alongside the raw producer): the caller loads it with `count`
+    // on the `start` edge, `cnt_en` steps it, and `cnt_one` says it reads 1.  EXT_CNT = 0 keeps a
+    // fabric counter here (tb_la_change).
+    parameter EXT_CNT = 0
 )(
     input  wire          clk,
     input  wire          rst,
@@ -66,7 +71,9 @@ module la_change_capture #(
     input  wire          wrdy,       // ring takes a word strobed this cycle
     output reg           busy,       // encoding or waiting to write END
     output reg           done,       // sticky until the next start
-    output reg           overflow    // sticky until the next start: stopped early
+    output reg           overflow,   // sticky until the next start: stopped early
+    output wire          cnt_en,     // EXT_CNT: step the unit counter this edge
+    input  wire          cnt_one     // EXT_CNT: the unit counter reads 1
 );
     localparam [DW-1:0] KEEPALIVE = 10'd1020;
 
@@ -79,7 +86,7 @@ module la_change_capture #(
     reg [N-1:0]  p;                  // state of the last recorded tick
     reg [DW-1:0] since;              // ticks from the last event to ra
     reg [6:0]    pre;                // clk cycles within the current 256-tick unit
-    reg [23:0]   left;               // 256-tick units left, including this one
+    reg [23:0]   left;               // 256-tick units left, including this one (EXT_CNT = 0)
     reg [23:0]   room;               // region bytes left
     reg  [1:0]   cause;              // why the stream ends (END's state): 0 done, 1 ring full, 2 region end
     reg          lv;                 // an odd event is held in l
@@ -87,7 +94,8 @@ module la_change_capture #(
 
     // ---- this cycle's events ----
     wire          ev_a    = first | (ra != p);
-    wire          last    = !hold && (left == 24'd1) && (pre == 7'd127);
+    wire          left_one = EXT_CNT ? cnt_one : (left == 24'd1);
+    wire          last    = !hold && left_one && (pre == 7'd127);
     wire          force_b = last | (!ev_a && (since >= KEEPALIVE));
     wire          ev_b    = (rb != ra) | force_b;
     wire [DW-1:0] dl_a    = first ? {DW{1'b0}} : since;
@@ -105,6 +113,9 @@ module la_change_capture #(
     wire [47:0]   run_word  = lv ? {e_one, l} : {e1, e0};
     assign wd   = ending ? (lv ? {e_end, l} : {e_end, e_end}) : run_word;
     assign wstb = (ending | (step & need_word & (room >= 24'd12))) & wrdy;
+    // the unit counter steps where `left` does below
+    assign cnt_en = ~rst & ~start & ~ending & step & ~(need_word & (~wrdy | (room < 24'd12)))
+                  & ~hold & (pre == 7'd127);
 
     always @(posedge clk) begin
         if (rst) begin
@@ -120,7 +131,7 @@ module la_change_capture #(
             first    <= 1'b1;
             since    <= {DW{1'b0}};
             pre      <= 7'd0;
-            left     <= count;
+            if (!EXT_CNT) left <= count;
             lv       <= 1'b0;
             room     <= limit;
         end else if (ending) begin
@@ -149,7 +160,7 @@ module la_change_capture #(
                 end
                 if (!hold) begin                        // only the post-trigger ticks count
                     pre <= pre + 7'd1;
-                    if (pre == 7'd127) left <= left - 24'd1;
+                    if (!EXT_CNT && pre == 7'd127) left <= left - 24'd1;
                 end
                 if (last) begin run <= 1'b0; ending <= 1'b1; end
             end
