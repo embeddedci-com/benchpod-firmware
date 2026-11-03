@@ -1,20 +1,20 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=50
-source_sha256=b518dce7c86f0088db8daaa75d3e412601a8dfb57a859ab1244cd9522577a0e0
-built_from=a4c5fb3
+gateware_version=51
+source_sha256=aaf9db050ff746c5d06890214a1ec2d23d22593435e9755489bbb591cf841643
+built_from=09256e7
 promoted=2026-11-03
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=hwe2e TestHW (80 tests: 75 pass, 5 skip for bench wiring/board; LA+capture tests 11/11 on the deep image) on benchpod-30a9f1 (analog v3r2) with firmware PR #91, 2026-11-03
-loop.sha256=79c938d94b8cafa470b2d81cd47c99407b877c1a1d0e3ea95f24ef87fd77ed88
-loop.seed=40
+hw_verified=hwe2e on benchpod-30a9f1 (analog v3r2) 2026-11-03: TestHW image 0 75 pass/5 skip/0 fail; image 1 LA+capture+deep set 18 pass/1 skip (cotrig loopback flat once, 5/6 reruns pass); embeddedci-python main 831 pass/2 known-stale fail/75 skip
+loop.sha256=7bfc55510c8c388c8549711b0bdfe855efb3bcf5a05f0f797e6e795741f176b4
+loop.seed=7
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=53.98
-deep.sha256=71548eaa29bc1f57cdb6da8e3eb977a03aac5e79c57de4d9258c692754e351be
-deep.seed=31
+loop.clk48_mhz=54.40
+deep.sha256=72142b739c1778ad5b06390c47934f9c17d33e844e523e1d7339b9acef5eea78
+deep.seed=16
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=57.07
+deep.clk48_mhz=55.27
