@@ -776,6 +776,14 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels, version 50) ----
+    // GATEWARE_VERSION 51 = v50 + LC / clk48 HEADROOM PASS (both images, no protocol change, every
+    //   bench unchanged): la_byte_pack writes byte lanes with their own enables (a dynamic
+    //   part-select was a 40-bit mux); spram_ring48 shifts its output word instead of a byte mux;
+    //   the change encoder steps la_psram_capture's SB_MAC16 counter (the two LA producers never
+    //   run together) and keeps `room` in an lc_counter that now takes a constant step; plain
+    //   AND/OR for two constant compares; and dac8551_engine steps sidx/sleft off a registered
+    //   frame-end flag `fe`, the cone that bound the v50 loop image's failing clk48 seeds.
+    //   Loop 4777 -> 4583 LC (90% -> 87%), deep 4445 -> 4345 LC (84% -> 82%).
     // GATEWARE_VERSION 50 = v49 + LA CHANGE CAPTURE: OP_CAPTURE with la_div = 0xFFFF samples the
     //   LA at 48 MS/s (la48_sampler, clk48) and records only the ticks where a channel changed
     //   (la_change_capture: 3 bytes per event, la_cnt in units of 256 ticks).  Both LA formats go
@@ -1168,7 +1176,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd50), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd51), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
