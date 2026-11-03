@@ -77,7 +77,7 @@ module spram_ring48 #(
     assign in_rdy = !in_p_v || do_write;
 
     assign out_stb  = out_v && !out_full;
-    assign out_data = out_w[8*out_i +: 8];
+    assign out_data = out_w[7:0];                 // out_w shifts down a byte per byte sent
     // the word being sent is the tail: one was written and nothing is behind it
     wire   is_tail  = (tail_len != 3'd0) && s_empty && !in_p_v && !rd1 && !nxt_v;
     wire   out_last = out_stb && (out_i == (is_tail ? tail_len - 3'd1 : 3'd5));
@@ -105,7 +105,10 @@ module spram_ring48 #(
             end
 
             // ---- output: nxt -> out, bytes out ----
-            if (out_stb) out_i <= out_last ? 3'd0 : out_i + 3'd1;
+            if (out_stb) begin
+                out_i <= out_last ? 3'd0 : out_i + 3'd1;
+                out_w <= {8'd0, out_w[47:8]};
+            end
             if ((!out_v || out_last) && nxt_v) begin
                 out_w <= nxt; out_v <= 1'b1; nxt_v <= 1'b0;
             end else if (out_last) begin

@@ -524,15 +524,22 @@ module top (
         if (rst)               la_chg <= 1'b0;
         else if (la_cap_start) la_chg <= la_chg_sel;
 
+    // One SB_MAC16 down-counter serves both LA producers (only one runs per capture): the raw
+    // producer's samples left, or the change encoder's 256-tick units left.  It lives in
+    // la_psram_capture; a change arm loads it with la_cap_count (ext_load) and the encoder steps
+    // it where its own fabric counter used to (ext_en).
+    wire       la_cnt_en_chg, la_cnt_one;
+
     wire       la_raw_stb, la_raw_busy, la_raw_done;
     wire [7:0] la_raw_data;
-    la_psram_capture #(.N(14), .CNT_W(24)) la_ps_i (
+    la_psram_capture #(.N(14), .CNT_W(24), .SHARE(1)) la_ps_i (
         .clk(clk), .rst(rst | (la_cap_start & la_chg_sel)), .la_in(la_sample),
         .start(la_cap_start & ~la_chg_sel), .sample_count(la_cap_count), .divider(la_cap_divider),
         .hold(trig_wait),
         .ps_start(), .ps_stop(),
         .wr_data(la_raw_data), .wr_stb(la_raw_stb), .full(1'b0),   // drops show as la_ring_ovf
-        .busy(la_raw_busy), .done(la_raw_done), .overflow()
+        .busy(la_raw_busy), .done(la_raw_done), .overflow(),
+        .ext_load(~rst & la_cap_start & la_chg_sel), .ext_en(la_cnt_en_chg), .cnt_one(la_cnt_one)
     );
     // raw bytes -> 48-bit ring words; the tail is flushed once the producer is done
     wire [47:0] la_pk_wd;
@@ -554,13 +561,14 @@ module top (
     // Any arm that is not a change capture (another LA mode, an ADC-only capture, the all-zero
     // abort) resets the encoder, and a change arm resets the raw producer: a producer left running
     // by an abort strobed into the next capture's ring (review B2).
-    la_change_capture #(.N(14)) la_chg_i (
+    la_change_capture #(.N(14), .EXT_CNT(1)) la_chg_i (
         .clk(clk), .rst(rst | (la_cap_start & ~la_chg_sel)),
         .pa(la48_a), .pb(la48_b),
         .start(la_cap_start & la_chg_sel), .hold(trig_wait), .pretrig(trig_pre), .count(la_cap_count),
         .limit(adc_cap_base),                       // the firmware puts the LA region end here
         .wd(la_chg_wd), .wstb(la_chg_stb), .wrdy(la_ring_in_rdy),
-        .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf)
+        .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf),
+        .cnt_en(la_cnt_en_chg), .cnt_one(la_cnt_one)
     );
 
     wire       la_busy     = la_raw_busy | la_chg_busy;
@@ -768,6 +776,16 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels, version 50) ----
+    // GATEWARE_VERSION 51 = v50 + LC / clk48 HEADROOM PASS (both images, no protocol change, every
+    //   bench unchanged): la_byte_pack writes byte lanes with their own enables (a dynamic
+    //   part-select was a 40-bit mux); spram_ring48 shifts its output word instead of a byte mux;
+    //   the change encoder steps la_psram_capture's SB_MAC16 counter (the two LA producers never
+    //   run together) and keeps `room` in an lc_counter that now takes a constant step; plain
+    //   AND/OR for two constant compares; and dac8551_engine steps sidx/sleft off a registered
+    //   frame-end flag `fe`, the cone that bound the v50 loop image's failing clk48 seeds; and
+    //   dac_loop's clamp compares are the sign of a subtract (abc9 had mapped one to a LUT ripple).
+    //   Loop 4777 -> 4579 LC (90% -> 87%), deep 4445 -> 4306 LC (84% -> 82%).  Loop seeds reaching
+    //   MIN_CLK48_MHZ: 29/48 -> 36/48 local, 37/48 CI.  Seeds 7/16: clk48 54.40 / 55.27 MHz.
     // GATEWARE_VERSION 50 = v49 + LA CHANGE CAPTURE: OP_CAPTURE with la_div = 0xFFFF samples the
     //   LA at 48 MS/s (la48_sampler, clk48) and records only the ticks where a channel changed
     //   (la_change_capture: 3 bytes per event, la_cnt in units of 256 ticks).  Both LA formats go
@@ -1160,7 +1178,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd50), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd51), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

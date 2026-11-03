@@ -27,7 +27,12 @@
 
 module la_psram_capture #(
     parameter N     = 12,          // LA channels sampled (low N bits of la_in; 9..16)
-    parameter CNT_W = 16           // sample-count width
+    parameter CNT_W = 16,          // sample-count width
+    // SHARE = 1 (top_v2): the change encoder (la_change_capture), which never runs alongside
+    // this producer, borrows the sample counter's SB_MAC16 for its 256-tick units: `ext_load`
+    // loads it with sample_count, `ext_en` steps it, and `cnt_one` says it reads 1.  SHARE = 0
+    // ignores the ext_* inputs (tb_la_psram_capture leaves them open).
+    parameter SHARE = 0
 )(
     input  wire              clk,            // 48 MHz capture clock
     input  wire              rst,
@@ -55,7 +60,12 @@ module la_psram_capture #(
     // status
     output reg               busy,
     output reg               done,           // sticky until next start
-    output reg               overflow        // sticky: a byte was pushed while full
+    output reg               overflow,       // sticky: a byte was pushed while full
+
+    // the shared counter (SHARE = 1)
+    input  wire              ext_load,
+    input  wire              ext_en,
+    output wire              cnt_one         // the counter reads 1
 );
     // 2-flop sync of the raw LA lines (metastability guard), as in la_capture.v.
     reg [N-1:0] q1, q2;
@@ -72,9 +82,11 @@ module la_psram_capture #(
     reg             writing_hi;    // 0 = write low byte on tick; 1 = write high byte
     reg [N-1:0]     latched;       // sample held across the 2-byte write
     dsp_counter #(.UP(0)) samps_i (
-        .clk(clk), .load(~rst & start), .load_val({{(32-CNT_W){1'b0}}, sample_count}),
-        .en(~rst & ~start & busy & ~hold & writing_hi),
+        .clk(clk), .load((~rst & start) | (SHARE ? ext_load : 1'b0)),
+        .load_val({{(32-CNT_W){1'b0}}, sample_count}),
+        .en((~rst & ~start & busy & ~hold & writing_hi) | (SHARE ? ext_en : 1'b0)),
         .q(samps_q), .flag());
+    assign cnt_one = (samps_left == {{(CNT_W-1){1'b0}}, 1'b1});
 
     // Sample period = EXACTLY `divider` clocks (floor 2).  One period is: the tick cycle
     // (low byte), the hi-byte cycle — which does NOT decrement divcnt — then div_reload
@@ -113,7 +125,7 @@ module la_psram_capture #(
                 wr_stb     <= 1'b1;
                 if (full) overflow <= 1'b1;
                 writing_hi <= 1'b0;
-                if (samps_left == {{(CNT_W-1){1'b0}}, 1'b1}) begin
+                if (cnt_one) begin
                     busy    <= 1'b0;
                     done    <= 1'b1;
                     ps_stop <= 1'b1;   // last byte + flush in the same cycle (as ADC)

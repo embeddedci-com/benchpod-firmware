@@ -188,6 +188,8 @@ module dac_loop #(
     // at v36 (vsum -> compare -> v), and once vmin/vmax became clk48 registers (v38) their path
     // into that cone became a timed one too.  One more clk48 cycle per tick.
     reg        lt_min, gt_max;
+    wire signed [18:0] d_min = $signed({vsum[17], vsum}) - $signed({3'b0, vmin});   // < 0: below vmin
+    wire signed [18:0] d_max = $signed({3'b0, vmax}) - $signed({vsum[17], vsum});   // < 0: above vmax
     reg [3:0]  st;
     // Tick timer: a registered DOWN-counter (reload = tick_div, fire at 0) with a
     // registered `tick_z` flag, so the S_IDLE fire test reads ONE bit instead of a
@@ -324,8 +326,11 @@ module dac_loop #(
                 st <= S_CMP;
             end
             S_CMP: begin
-                lt_min <= (vsum < $signed({2'b0, vmin}));
-                gt_max <= (vsum > $signed({2'b0, vmax}));
+                // v51: the sign of a 19-bit difference, which maps onto the carry chain.  As
+                // `<` / `>` abc9 sometimes mapped the vmax compare to a 7-deep LUT ripple (the
+                // v51 loop image's clk48 then capped at 49.52 MHz on every seed).
+                lt_min <= d_min[18];             // vsum < vmin
+                gt_max <= d_max[18];             // vsum > vmax
                 st <= S_CLAMP;
             end
             S_CLAMP: begin

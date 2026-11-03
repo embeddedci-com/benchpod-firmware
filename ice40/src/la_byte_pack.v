@@ -18,20 +18,26 @@ module la_byte_pack (
     output wire [2:0]  wlen,       // valid bytes of a flushed partial word; 0 = whole word
     output wire        partial     // bytes are held
 );
-    reg [47:0] sh;
+    reg [39:0] sh;                 // bytes 0..4 of the word being filled
     reg [2:0]  n;                  // bytes held, 0..5
 
     wire complete = in_stb && (n == 3'd5);
     assign partial = (n != 3'd0);
-    assign wd      = complete ? {in_data, sh[39:0]} : sh;
+    // Byte 5 is in_data: the sixth byte on a complete word, and never sent from a partial one
+    // (wlen <= 5), so it needs no flop.
+    assign wd      = {in_data, sh};
     assign wstb    = complete || (flush && partial && !in_stb);
     assign wlen    = complete ? 3'd0 : n;
 
+    // Byte lane k takes in_data when it is the k-th byte: one enable per lane, so each flop's
+    // D is in_data itself (a dynamic part-select mapped to a 40-bit mux, 76 LUTs in v50).
+    genvar k;
+    generate for (k = 0; k < 5; k = k + 1) begin : lane
+        always @(posedge clk) if (!rst && in_stb && n == k) sh[8*k +: 8] <= in_data;
+    end endgenerate
     always @(posedge clk) begin
         if (rst) n <= 3'd0;
-        else if (in_stb) begin
-            sh[8*n +: 8] <= in_data;
-            n <= complete ? 3'd0 : n + 3'd1;
-        end else if (flush && partial) n <= 3'd0;
+        else if (in_stb) n <= complete ? 3'd0 : n + 3'd1;
+        else if (flush && partial) n <= 3'd0;
     end
 endmodule

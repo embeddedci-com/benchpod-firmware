@@ -420,10 +420,16 @@ $(OUT).bin: $(OUT).asc
 # CI sweep (Linux yosys) of the same netlist: seed 31 only reaches 44.99 MHz there.  Seed 40 is the
 # best seed good in BOTH toolchains (clk48 53.98 local / 53.98 CI, clk -> clk48 13.19 / 13.05 ns).
 # Pinned SEED_LOOP 31 -> 40.  RE-VERIFY on hardware.
-SEED_LOOP ?= 40
-# v49: the v48 list (good in both toolchains then) without the seeds the v49 local sweep does
-# not close (15, 58, 2), then the best v49 local seeds.  Re-order after a CI sweep.
-SEED_LOOP_FALLBACK ?= 10 46 15 11 7 27 8 42 5 17
+# v51 (LC / clk48 headroom pass; 4579 LC, 87%): the v50 seeds that missed 48 MHz were bound by
+# dac8551_engine's sidx/sleft enable cone, now one registered flag (fe).  After the version bump
+# abc9 also mapped dac_loop's vmax compare to a LUT ripple that capped clk48 at 49.52 MHz on every
+# seed; the compares are now the sign of a subtract.  Swept 1..48 in both toolchains: 36/48 local,
+# 37/48 CI reach MIN_CLK48_MHZ (v50: 29/48 local), 29 in both.  Pinned SEED_LOOP 40 -> 7, the best
+# in both (clk48 54.40 local / 58.30 CI, clk 28.44, clk -> clk48 12.76 / 12.14 ns, clk48 -> clk
+# 8.24 / 9.15 ns).  RE-VERIFY on hardware.
+SEED_LOOP ?= 7
+# v51: the next seeds good in both toolchains, by the lower of the two clk48 results.
+SEED_LOOP_FALLBACK ?= 36 37 46 40 16 38 2 21 19 41 5
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -511,12 +517,16 @@ SEED_LOOP_FALLBACK ?= 10 46 15 11 7 27 8 42 5 17
 # v50 (LA change capture + pre-trigger; 4445 LC, 84%): seed 48 closes (clk48 55.73) but its
 # clk -> clk48 paths take 14.64 ns, near MAX_X48_NS.  Swept 1..32 locally.  Pinned SEED_DEEP 48 -> 31
 # (clk48 57.07, clk 27.65, clk -> clk48 12.80 ns).  The CI sweep closes it too (55.24 MHz, 13.44 ns).
-SEED_DEEP ?= 31
-# Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).  A timing
+# v51 (4306 LC, 82%; no deep logic but the LA path and the DAC engine changed): seed 31 misses
+# MIN_CLK48_MHZ.  Swept 1..48 in both toolchains: 38/48 local, 45/48 CI, 35 in both.  Pinned
+# SEED_DEEP 31 -> 16 (clk48 55.27 local / 55.35 CI, clk 29.03, clk -> clk48 13.95 / 13.99 ns,
+# clk48 -> clk 4.39 / 5.68 ns; 9 ties but sits at 14.99 ns clk -> clk48).  RE-VERIFY deep replay.
+SEED_DEEP ?= 16
+# Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 16 17 5 18 48 12 36 54 6 45 28 58 13 23 20 61 44 64
+SEED_DEEP_FALLBACK ?= 24 47 39 12 9 46 2 40 34 43 28
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -813,7 +823,7 @@ ringtest:
 
 # The v50 LA change capture, sampler to bytes (tb_la_change.v), with the full ring and with a
 # 16-word ring that must overflow under a max-rate burst.
-LACHANGE_SRC = src/la48_sampler.v src/la_change_capture.v src/spram_ring48.v src/la_byte_pack.v
+LACHANGE_SRC = src/la48_sampler.v src/la_change_capture.v src/spram_ring48.v src/la_byte_pack.v src/lc_counter.v $(CELLS_SIM)
 lachangetest:
 	@set -e; for d in "" -DSMALL_RING; do \
 	  echo "== tb_la_change $$d"; \

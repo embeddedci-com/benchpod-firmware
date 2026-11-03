@@ -129,13 +129,13 @@ module dac8551_engine #(
         strm_pop <= 1'b0;                      // default: single-cycle pop pulse
         if (rst) begin
             st<=S_IDLE; running<=1'b0; dac_sync<=1'b1; dac_sclk<=1'b0; dac_din<=1'b0;
-            sidx<=0; sleft<=0; div_cnt<=0; dz<=1'b1; wfr<=1'b0; run_i<=1'b0;
+            div_cnt<=0; dz<=1'b1; wfr<=1'b0; run_i<=1'b0;      // (sidx/sleft: below)
         end else if (stop) begin
             st<=S_IDLE; running<=1'b0; dac_sync<=1'b1; dac_sclk<=1'b0;
             dz<=1'b1;                          // v49: an idle engine takes a static frame at once
             run_i<=wpend;                      // ...if one is pending
         end else if (start) begin
-            running<=1'b1; run_i<=1'b1; sidx<=0; sleft<=period_samples; dac_sync<=1'b1; dac_sclk<=1'b0;
+            running<=1'b1; run_i<=1'b1; dac_sync<=1'b1; dac_sclk<=1'b0;   // (sidx/sleft: below)
             div_cnt<=div_reload; dz<=div_reload_zero; st<=S_IDLE;
         end else if (run_i) begin
             case (st)
@@ -187,22 +187,7 @@ module dac8551_engine #(
                         // DAC8551 must see with SYNC still low (t7 >= 0 ns).  Raising both on
                         // one edge left their order to routing skew; S_IDLE raises SYNC on the
                         // next clk instead (t7 = 1 clk), which costs no sample time.
-                        // Loop the waveform.  `sleft <= 1` (shallow compare on the
-                        // down-counter) is the last sample, equivalent to the old
-                        // `sidx + 1 >= period_samples` but without the add+compare.
-                        // Stepped in EVERY mode (v34): psram_mode never reads
-                        // sidx/sleft (the reader loops the stream) and every start
-                        // reloads them, so gating on psram_mode only put that OR of
-                        // two synced flops into this branch's clock-enable cone.
-                        // A static frame (wfr) took a slot: the stream does not advance.
-                        if (wfr) ;
-                        else if (slast) begin                // == (sleft <= 1)
-                            sidx  <= 0;
-                            sleft <= period_samples;         // reload for the next loop
-                        end else begin
-                            sidx  <= sidx  + 1'b1;
-                            sleft <= sleft - 1'b1;
-                        end
+                        // (the stream steps in its own block below, off `fe`)
                         st<=S_IDLE;
                     end
                 end
@@ -213,6 +198,37 @@ module dac8551_engine #(
         // A request wins over the take above (set after it), and survives start/stop.
         if (rst) wpend <= 1'b0;
         else if (wr_req) begin wpend <= 1'b1; run_i <= 1'b1; end
+    end
+
+    // The stream index (v51): sidx/sleft step at the frame end, i.e. the edge where the FSM sees
+    // S_SHIFT with ph and last up.  That edge always follows a cycle in S_SHIFT with !ph and last
+    // up (ph alternates there, and last only changes on a ph edge), so `fe` registers the
+    // decision one cycle early and the enable of these 2 x (ADDR_W+1) flops tests rst/stop/start
+    // and one flop, instead of the st/ph/last/wfr/run_i cone that bound the v50 loop image's clk48
+    // (ph -> last -> 3 LUTs -> sidx/sleft CEN, 22-23 ns on the failing seeds).  `fe` also leaves
+    // out a cycle with rst/stop/start, which takes the FSM out of S_SHIFT before that edge.
+    //   Loop the waveform.  `sleft <= 1` (shallow compare on the down-counter) is the last
+    //   sample, equivalent to the old `sidx + 1 >= period_samples` without the add+compare.
+    //   Stepped in EVERY mode (v34): psram_mode never reads sidx/sleft (the reader loops the
+    //   stream) and every start reloads them.  A static frame (wfr) took a slot: no step.
+    reg fe;
+    always @(posedge clk) begin
+        fe <= ~rst & ~stop & ~start & run_i & (st == S_SHIFT) & ~ph & last & ~wfr;
+        if (rst) begin
+            sidx <= 0; sleft <= 0;
+        end else if (stop) begin
+            // hold
+        end else if (start) begin
+            sidx <= 0; sleft <= period_samples;
+        end else if (fe) begin
+            if (slast) begin                     // == (sleft <= 1)
+                sidx  <= 0;
+                sleft <= period_samples;         // reload for the next loop
+            end else begin
+                sidx  <= sidx  + 1'b1;
+                sleft <= sleft - 1'b1;
+            end
+        end
     end
 
     // Frame datapath (v42): lo, sh, bitc, last and ph are loaded at S_PLO/S_RDHI and S_PHI/S_LAT
