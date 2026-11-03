@@ -3,6 +3,8 @@
 #
 #   ./build.sh              dev build -> build/benchpod-wifi-bridge.bin (+ bootloader, partition table)
 #   ./build.sh production   production build (secure boot v2, flash encryption) -> build-prod/, unsigned
+#   ./build.sh emc          EMC test build (README "EMC test build") -> build-emc/; development only:
+#                           refused with RELEASE=1, never signed, never released
 #   ./build.sh <idf.py args> anything else for idf.py, e.g. ./build.sh menuconfig, ./build.sh size
 #
 # Updates: the bridge installs only images that come with the pod's signed manifest (Ed25519, see
@@ -22,6 +24,12 @@ if [ "${1:-}" = "--in-container" ]; then
     echo "=== unsigned production artifacts: sign them on the release signing machine ==="
     ls -l build-prod/benchpod-wifi-bridge.bin build-prod/bootloader/bootloader.bin \
       build-prod/partition_table/partition-table.bin
+  elif [ "${1:-}" = "emc" ]; then
+    idf.py -B build-emc -D SDKCONFIG=build-emc/sdkconfig -D BRIDGE_EMC_BUILD=1 \
+      -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.emc" build
+    echo "=== EMC test build (development only): flash with ./flash.sh --emc ==="
+    ls -l build-emc/benchpod-wifi-bridge.bin build-emc/bootloader/bootloader.bin \
+      build-emc/partition_table/partition-table.bin
   elif [ $# -eq 0 ]; then
     idf.py build
     idf.py size
@@ -31,6 +39,11 @@ if [ "${1:-}" = "--in-container" ]; then
     idf.py "$@"
   fi
   exit 0
+fi
+
+if [ "${1:-}" = "emc" ] && [ "${RELEASE:-0}" = 1 ]; then
+  echo "the EMC test build is development only and cannot be combined with RELEASE=1" >&2
+  exit 2
 fi
 
 # Trusted update keys -> main/fw_keys_gen.h (host side: the container only sees wifi-bridge/).
@@ -61,4 +74,24 @@ version=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
 if [ $# -eq 0 ] && [ "${RELEASE:-0}" != 1 ] && [ -f "$dev_key" ] && [ -f build/benchpod-wifi-bridge.bin ]; then
   python3 ../tools/fwsign.py sign --key "$dev_key" --target bridge --release "$version" \
     build/benchpod-wifi-bridge.bin || echo "warning: not signed (pip3 install cryptography)" >&2
+fi
+# The EMC test build too, so the pod can send it (README "EMC test build"): only dev images trust
+# the dev key. Asset version 0: the pod never installs it on its own, only with `bridge update`.
+# build-emc/blobs/ holds it as the pod's blob slot "bridge" for `benchpod install-blobs --dir`.
+if [ "${1:-}" = emc ] && [ -f "$dev_key" ] && [ -f build-emc/benchpod-wifi-bridge.bin ]; then
+  mkdir -p build-emc/blobs
+  cp build-emc/benchpod-wifi-bridge.bin build-emc/blobs/blob-bridge.bin
+  if python3 ../tools/fwsign.py sign --key "$dev_key" --target bridge --release "$version" --version 0 \
+       build-emc/blobs/blob-bridge.bin; then
+    python3 - build-emc/blobs <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+data = open(os.path.join(d, "blob-bridge.bin"), "rb").read()
+json.dump({"format": 1, "blobs": [{"name": "bridge", "file": "blob-bridge.bin", "size": len(data),
+           "sha256": hashlib.sha256(data).hexdigest(), "version": 0}]},
+          open(os.path.join(d, "blobs-manifest.json"), "w"), indent=2)
+PY
+  else
+    echo "warning: not signed (pip3 install cryptography)" >&2
+  fi
 fi

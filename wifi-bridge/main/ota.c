@@ -211,7 +211,7 @@ bool ota_pending_verify(void)
     return s_pending;
 }
 
-void ota_confirm(void)
+static void confirm(const char *by)
 {
     if (!s_pending) {
         return;
@@ -219,9 +219,21 @@ void ota_confirm(void)
     if (esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
         s_pending = false;
         esp_timer_stop(s_confirm_timer);
-        ESP_LOGI(TAG, "new image confirmed by the pod");
+        ESP_LOGI(TAG, "new image confirmed by %s", by);
     }
 }
+
+void ota_confirm(void)
+{
+    confirm("the pod");
+}
+
+#if CONFIG_BRIDGE_EMC_TEST
+void ota_confirm_self(void)
+{
+    confirm("itself (EMC test build: Ethernet started, first frame sent)");
+}
+#endif
 
 static void rollback_task(void *arg)
 {

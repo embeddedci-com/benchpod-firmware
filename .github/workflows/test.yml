@@ -199,6 +199,10 @@ jobs:
         run: cd wifi-bridge && ./build.sh
       - name: Build the bridge firmware (production config, secure boot + flash encryption)
         run: cd wifi-bridge && ./build.sh production
+      - name: Build the bridge EMC test firmware (development only; RELEASE=1 must refuse it)
+        run: |
+          cd wifi-bridge && ./build.sh emc
+          if RELEASE=1 ./build.sh emc; then echo "RELEASE=1 ./build.sh emc did not refuse" >&2; exit 1; fi
 
   motor-emulator-sim:
     # not part of a firmware release; runs when motor-emulator/ changed (or `changes` failed)

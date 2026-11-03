@@ -1,0 +1,3 @@
+# EMC test build overlay (development only, never released): applied on top of sdkconfig.defaults
+# by `./build.sh emc` into build-emc/. See README.md, "EMC test build", and main/emc_test.c.
+CONFIG_BRIDGE_EMC_TEST=y

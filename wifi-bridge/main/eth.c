@@ -61,6 +61,12 @@ static esp_err_t eth_input(esp_eth_handle_t h, uint8_t *buf, uint32_t len, void 
         ESP_LOGI(TAG, "pod MAC %s %s", ev == L2_EV_LEARNED ? "learned:" : "changed to", m);
         wifi_pod_mac_changed();
     }
+#if CONFIG_BRIDGE_EMC_TEST
+    if (a != L2_CONTROL) {
+        emc_test_eth_rx(buf, len);  // on the air instead of bridged; takes the frame
+        return ESP_OK;
+    }
+#endif
     switch (a) {
     case L2_FORWARD:
         // esp_wifi_internal_tx copies the frame.

@@ -47,4 +47,41 @@ menu "BenchPod Wi-Fi bridge"
             A new image is confirmed by the first valid control request from the pod. Without
             one in this time the bridge reboots and the bootloader returns to the previous slot.
 
+    config BRIDGE_EMC_TEST
+        bool "EMC test build (development only, never released)"
+        default n
+        help
+            The EMC lab's worst case from boot (main/emc_test.c): no access point, the radio
+            sends raw 802.11 frames back to back on one channel (the pod's Ethernet frames when
+            they arrive, a generated pattern otherwise) while Ethernet runs as usual. Built by
+            `./build.sh emc` into build-emc/. Refused together with secure boot or flash
+            encryption (the production overlay) and with RELEASE=1.
+
+    if BRIDGE_EMC_TEST
+
+        config BRIDGE_EMC_CHANNEL
+            int "EMC test: Wi-Fi channel at boot"
+            range 1 14
+            default 6
+            help
+                Must be allowed by BRIDGE_COUNTRY (US: 1-11); `emc channel` changes it at run time.
+
+        config BRIDGE_EMC_RATE
+            string "EMC test: PHY rate at boot"
+            default "1m"
+            help
+                1m 2m 5.5m 11m (DSSS, long preamble), 2ms 5.5ms 11ms (short preamble),
+                6m 9m 12m 18m 24m 36m 48m 54m (OFDM), mcs0-mcs7 (HT20, long GI). 1m is the
+                highest TX power and the longest time on the air per frame.
+
+        config BRIDGE_EMC_TX_POWER
+            int "EMC test: TX power cap at boot (0.25 dBm units, 0 = the module's normal maximum)"
+            range 0 84
+            default 0
+            help
+                Only lowers the power: a value above the maximum the radio has after start (PHY
+                init data, the same as in normal operation) is refused.
+
+    endif
+
 endmenu

@@ -39,6 +39,15 @@ void bridge_counters(bwp_counters_t *c)
     c->eth_tx = g_bridge.eth_tx;
     c->eth_tx_err = g_bridge.eth_tx_err;
     c->dropped = g_bridge.drop_eth + g_bridge.drop_wifi;
+#if CONFIG_BRIDGE_EMC_TEST
+    // EMC test build: the pod's `bridge` shows the radio's counts (no UART needed).
+    emc_counts_t e;
+    emc_test_counts(&e);
+    c->wifi_tx = e.sent;           // frames put on the air
+    c->wifi_tx_err = e.errors;     // sends that failed (a full queue is not counted)
+    c->wifi_rx = e.sent_eth;       // of those, frames that carried the pod's frames
+    c->dropped = e.eth_skipped;    // the pod's frames replaced before the radio took them
+#endif
 }
 
 uint8_t bridge_flags(void)
@@ -72,6 +81,11 @@ void bridge_status(bwp_status_t *s)
     s->state = wifi_state();
     s->flags = bridge_flags();
     wifi_fill_status(s);
+#if CONFIG_BRIDGE_EMC_TEST
+    emc_counts_t e;
+    emc_test_counts(&e);
+    s->channel = e.channel;  // the channel it transmits on
+#endif
     s->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
     bridge_pod_mac(s->pod_mac);
     bridge_counters(&s->counters);
@@ -103,13 +117,25 @@ void app_main(void)
 
     ota_init();
     ota_check_pending();  // before anything that may hang: the rollback timer must run
+#if CONFIG_BRIDGE_EMC_TEST
+    // EMC test build: the radio transmits from boot instead of joining a network.
+    if (emc_test_start() != ESP_OK) {
+        ESP_LOGE(TAG, "EMC test: the radio did not start");
+    }
+#else
     ESP_ERROR_CHECK(wifi_start());
+#endif
     control_start();  // after Wi-Fi: the RF noise makes esp_random() a true RNG for the nonce
     if (eth_start() != ESP_OK) {
         // Keep running for the debug console. A new OTA image that cannot start Ethernet never
         // hears from the pod, so its confirmation timer reboots it back to the previous slot.
         ESP_LOGE(TAG, "Ethernet did not start; bridging disabled");
     }
+#if CONFIG_BRIDGE_EMC_TEST
+    else {
+        emc_test_eth_started();
+    }
+#endif
     board_start_tasks();
     console_start();
 }

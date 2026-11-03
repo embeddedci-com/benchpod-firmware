@@ -54,6 +54,10 @@ static void result(bwp_result_t r, const char *msg)
     }
 }
 
+#if CONFIG_BRIDGE_EMC_TEST
+static void emc_show(void);
+#endif
+
 static void cmd_status(void)
 {
     bwp_status_t s;
@@ -88,6 +92,9 @@ static void cmd_status(void)
            (unsigned long)s.counters.wifi_tx_err, (unsigned long)s.counters.wifi_rx,
            (unsigned long)s.counters.eth_tx, (unsigned long)s.counters.eth_tx_err,
            (unsigned long)s.counters.dropped);
+#if CONFIG_BRIDGE_EMC_TEST
+    emc_show();
+#endif
     ok();
 }
 
@@ -131,6 +138,60 @@ static void cmd_set_wifi(int argc, char **argv)
     }
 }
 
+#if CONFIG_BRIDGE_EMC_TEST
+static void emc_show(void)
+{
+    static const char *states[] = {"not transmitting", "pattern", "pod frames", "stopped"};
+    emc_counts_t c;
+    emc_test_counts(&c);
+    printf("emc: %s\n", states[emc_test_state()]);
+    printf("emc-radio: channel %u, rate %s, power %.2f dBm (maximum %.2f), country %s\n", c.channel, c.rate,
+           c.power_qdbm / 4.0, c.power_max_qdbm / 4.0, CONFIG_BRIDGE_COUNTRY);
+    printf("emc-air: %u%% of the time since boot (estimate, without gaps)\n",
+           c.uptime_us ? (unsigned)(c.airtime_us * 100 / c.uptime_us) : 0);
+    printf("emc-counters: sent=%lu sent_eth=%lu sent_pattern=%lu eth_rx=%lu eth_skipped=%lu busy=%lu errors=%lu\n",
+           (unsigned long)c.sent, (unsigned long)c.sent_eth, (unsigned long)c.sent_pattern,
+           (unsigned long)c.eth_rx, (unsigned long)c.eth_skipped, (unsigned long)c.busy, (unsigned long)c.errors);
+    if (c.errors) {
+        printf("emc-last-error: %s\n", esp_err_to_name(c.last_err));
+    }
+}
+
+static void cmd_emc(int argc, char **argv)
+{
+    const char *why = NULL;
+    if (argc == 1) {
+        emc_show();
+    } else if (argc == 2 && strcmp(argv[1], "start") == 0) {
+        emc_test_run(true);
+    } else if (argc == 2 && strcmp(argv[1], "stop") == 0) {
+        emc_test_run(false);
+    } else if (argc == 3 && strcmp(argv[1], "channel") == 0) {
+        why = emc_test_set_channel(atoi(argv[2]));
+    } else if (argc == 3 && strcmp(argv[1], "rate") == 0) {
+        why = emc_test_set_rate(argv[2]);
+    } else if (argc == 3 && strcmp(argv[1], "power") == 0) {
+        char *end;
+        double dbm = strcmp(argv[2], "max") == 0 ? 0 : strtod(argv[2], &end);
+        if (strcmp(argv[2], "max") != 0 && (*end || dbm <= 0)) {
+            why = "power: max or dBm, e.g. 15.5";
+        } else {
+            why = emc_test_set_power((int)(dbm * 4 + 0.5));
+        }
+    } else {
+        why = "usage: emc [start|stop|channel <n>|rate <name>|power max|<dBm>]";
+    }
+    if (why) {
+        err("%s", why);
+        return;
+    }
+    if (argc > 1) {
+        emc_show();
+    }
+    ok();
+}
+#endif
+
 static void cmd_help(void)
 {
     printf("help                        this list\n"
@@ -144,6 +205,13 @@ static void cmd_help(void)
            "unpair                      forget the paired pod (same as the PAIR button)\n"
            "log on|off                  show or hide log lines\n"
            "echo on|off                 echo typed characters\n");
+#if CONFIG_BRIDGE_EMC_TEST
+    printf("emc                         EMC test: radio settings and counters\n"
+           "emc start|stop              transmit or not\n"
+           "emc channel <n>             channel (the country's channels only)\n"
+           "emc rate <name>             1m 2m 5.5m 11m 2ms 5.5ms 11ms 6m-54m mcs0-mcs7\n"
+           "emc power max|<dBm>         power cap, never above the module's maximum\n");
+#endif
     ok();
 }
 
@@ -167,6 +235,10 @@ static void execute(char *line)
         ok();
     } else if (strcmp(c, "status") == 0) {
         cmd_status();
+#if CONFIG_BRIDGE_EMC_TEST
+    } else if (strcmp(c, "emc") == 0) {
+        cmd_emc(argc, argv);
+#endif
     } else if (strcmp(c, "scan") == 0) {
         cmd_scan();
     } else if (strcmp(c, "set-wifi") == 0) {

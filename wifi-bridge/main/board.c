@@ -55,6 +55,28 @@ static int wave(int64_t now_ms, int period_ms, int on_ms)
     return (now_ms % period_ms) < on_ms;
 }
 
+#if CONFIG_BRIDGE_EMC_TEST
+// Pulses of 100 ms, 100 ms apart, `n` of them at the start of every second.
+static int pulses(int64_t now_ms, int n)
+{
+    int t = now_ms % 1000;
+    return t < n * 200 && t % 200 < 100;
+}
+
+// EMC test build: what the radio does, for a scope or logic analyser on TP8.
+static int status_level(int64_t now, bool button_feedback)
+{
+    if (button_feedback) {
+        return wave(now, 100, 50);
+    }
+    switch (emc_test_state()) {
+    case EMC_TX_ETH: return pulses(now, 3);      // sending the pod's frames
+    case EMC_TX_PATTERN: return pulses(now, 2);  // sending the pattern (no frames from the pod)
+    case EMC_STOPPED: return pulses(now, 1);     // `emc stop`
+    default: return wave(now, 200, 100);         // 5 Hz: not transmitting (see the console)
+    }
+}
+#else
 // Level on the STATUS test pad (TP8), for a scope or logic analyser. Highest priority first.
 static int status_level(int64_t now, bool button_feedback)
 {
@@ -73,6 +95,7 @@ static int status_level(int64_t now, bool button_feedback)
     default: return 0;                                      // no Wi-Fi credentials
     }
 }
+#endif
 
 static void button_task(void *arg)
 {

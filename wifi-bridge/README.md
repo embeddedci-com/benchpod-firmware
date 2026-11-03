@@ -53,13 +53,13 @@ no hardware revision (`CONFIG_BRIDGE_HW_REV` is empty) until a revision it can i
 | Path | |
 |---|---|
 | `components/bridge_core/` | Pure C, no ESP-IDF: protocol codec (`bwp.c`), forwarding rules (`l2fwd.c`), console tokenizer, OTA sequencing, reason mapping (`bridge_util.c`) |
-| `main/` | ESP-IDF app: `eth.c` (EMAC + PHY), `wifi.c` (station), `control.c` (0x88B5), `console.c` (UART0 debug), `ota.c`, `creds.c` (NVS), `board.c` (clock, buttons, STATUS pad) |
+| `main/` | ESP-IDF app: `eth.c` (EMAC + PHY), `wifi.c` (station), `control.c` (0x88B5), `console.c` (UART0 debug), `ota.c`, `creds.c` (NVS), `board.c` (clock, buttons, STATUS pad), `emc_test.c` (EMC test build only) |
 | `test/` | Host unit tests for `bridge_core` |
 | `tools/bridgectl.py` | Reference control-channel client (Linux raw socket), stands in for the pod during bring-up |
 | `build.sh`, `flash.sh` | Build in Docker; flash from the host with an ESP-Prog or Olimex ESP-PROG |
 | `bringup.sh` | New boards in one go: builds and flashes the bridge, then a pod build with the bridge client and this image |
 | `partitions.csv` | 8 MB: nvs, otadata, phy_init, nvs_keys, factory (2 MB), ota_0 and ota_1 (2.9 MB each); table at 0x10000 |
-| `sdkconfig.defaults`, `sdkconfig.defaults.production` | dev (unlocked) and production overlays |
+| `sdkconfig.defaults`, `sdkconfig.defaults.production`, `sdkconfig.defaults.emc` | dev (unlocked), production and EMC test overlays |
 
 ## Build
 
@@ -69,6 +69,7 @@ digest). Docker is Colima on the Mac.
 ```sh
 ./build.sh                # dev build -> build/benchpod-wifi-bridge.bin + .sig (the pod's dev key)
 ./build.sh production     # secure boot v2 + flash encryption -> build-prod/ (unsigned, see SECURITY.md)
+./build.sh emc            # EMC test build -> build-emc/ (development only, see "EMC test build")
 ./build.sh menuconfig     # any other idf.py command
 ```
 
@@ -121,7 +122,8 @@ programmer with DTR/RTS auto-reset, which puts the ESP32 into the ROM loader and
   | 6 IO0 | DCM |
 
   On macOS its port is `/dev/cu.wchusbserial<n>` with WCH's driver, `/dev/cu.usbserial-<n>`
-  with Apple's.
+  with Apple's. If esptool fails with "Invalid head of packet (serial noise)", use `-b 115200`
+  (seen once at 460800 on the bench).
 
 ```sh
 brew install esptool        # once (or: pip3 install esptool); esptool runs on the host
@@ -257,6 +259,109 @@ update rolled back. The trial timeout is `CONFIG_BRIDGE_CONFIRM_TIMEOUT_S`.
 machine wired to the bridge (it sends `build/benchpod-wifi-bridge.bin.sig` as the manifest). A
 version that failed or rolled back is not retried by the pod until it restarts or is forced.
 
+## EMC test build
+
+For the EMC lab (benchpod-compliance `emc/test-plan.md`): a development-only image that runs the
+bridge's worst case from boot, with no access point. A shielded chamber has none, and the normal
+firmware only transmits while it has joined a network. Like the pod's `EMI_TEST=1` build, it is
+never released: `RELEASE=1 ./build.sh emc` and the production overlay (secure boot, flash
+encryption) both refuse it. `build.sh` signs it with the developer key only, which release
+images do not trust. It takes signed updates like a dev image (the pod's release keys and the
+dev key), so the pod can put a newer EMC build or the normal firmware on it. After an update it
+confirms itself as soon as Ethernet has started and its first frame went out, without waiting
+for the pod, so it never rolls back on its own (an image whose Ethernet or radio does not come
+up still rolls back after 120 s). It reports its version as `<version>-emc` (`version`, HELLO), and its
+signature carries asset version 0, so the pod never installs or replaces it on its own.
+
+```sh
+./build.sh emc                 # -> build-emc/ (sdkconfig.defaults + sdkconfig.defaults.emc)
+./flash.sh --emc               # TC2030 pads, as in "Flash"; opens the console
+./flash.sh                     # afterwards: back to the normal dev build
+```
+
+Without a programmer, through the pod: the bridge must run a dev image (which trusts the dev key)
+and be paired with that pod, and the pod must run a dev build too (release pod firmware refuses
+the dev-signed blob with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`, is one). Its EMI
+loop keeps the pod busy, so `emi stop` on the pod console first and `emi start` after. Put the
+image into the pod's blob slot `bridge` and force the update; a release `benchpod flash-self`
+puts the pod's release firmware and bridge blob back. The pod confirms the new image by talking
+to it, and an EMC image also confirms itself, so either stays after reboots.
+
+```sh
+benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
+# pod console: `bridge update`, then `bridge` until it shows fw 0.1.1-emc
+benchpod install-blobs --only bridge --force                        # afterwards: the release blob
+# pod console: `bridge update` again
+```
+
+What it does (`main/emc_test.c`):
+
+- **Radio from boot, no join.** Station mode with the production country code
+  (`CONFIG_BRIDGE_COUNTRY`, `US`: channels 1-11) and the PHY init data's power limits, as in
+  normal use, so the pre-certified module runs as designed. It sends raw 802.11 data frames with
+  `esp_wifi_80211_tx` back to back on one channel: broadcast (no ACKs, no retries), from the
+  bridge's own station MAC, 1500 bytes. A full driver queue just waits a tick, so the
+  transmitter never idles.
+- **Ethernet as in normal use.** EMAC and LAN8742A up, the 50 MHz RMII clock running, the
+  control channel answering (HELLO every 2 s, pairing). The pod's other frames, normally bridged,
+  go on the air instead: each 802.11 frame carries the newest frame from the pod (its EtherType
+  and payload in LLC/SNAP, cut to 1468 bytes). The pod's EMI build streams EtherType 0x88B6 at
+  about 20 Mbit/s, more than 1 Mbit/s can carry, so most are skipped
+  (`eth_skipped`) and the radio stays busy. Without frames from the pod it sends a generated
+  0x88B6 pattern.
+- **Defaults:** channel 6, 1 Mbit/s DSSS (the ESP32's highest TX power and longest time on the
+  air per frame), power at the module's normal maximum. Build-time: `idf.py menuconfig` →
+  *BenchPod Wi-Fi bridge* → `BRIDGE_EMC_CHANNEL`, `BRIDGE_EMC_RATE`, `BRIDGE_EMC_TX_POWER` (only
+  shown with `BRIDGE_EMC_TEST`). Run time: the console below.
+- **Power never above the normal maximum.** The cap starts at what the radio has after start
+  (the same as in production, which never changes it) and `emc power` can only lower it.
+
+Seeing it run without a shell: TP8 (the board has no LEDs) shows the state, the console on the
+TC2030 pads prints a line every 5 s, and the pod's `bridge` shows the counts in its STATUS
+fields: `channel` is the transmit channel, `wifi_tx` frames sent, `err` failed sends, `wifi_rx`
+sent frames that carried the pod's frames, `dropped` the pod's frames skipped.
+
+| TP8 | Meaning |
+|---|---|
+| 3 pulses (100 ms) every second | transmitting the pod's frames |
+| 2 pulses every second | transmitting the pattern (no frames from the pod in the last second) |
+| 1 pulse every second | stopped (`emc stop`) |
+| 5 Hz square wave | not transmitting: radio did not start or every send fails (see the console) |
+| 10 Hz square wave | a button acted (PAIR, FACTORY), as in the normal build |
+
+```
+I (90717) emc: TX ch 6 1m 19.50 dBm | 74 frames/s, air 91% | eth rx 42791, on air 1967, pattern 4902, busy 90004, err 0
+> emc
+emc: pod frames
+emc-radio: channel 6, rate 1m, power 19.50 dBm (maximum 19.50), country US
+emc-air: 92% of the time since boot (estimate, without gaps)
+emc-counters: sent=6502 sent_eth=1600 sent_pattern=4902 eth_rx=34694 eth_skipped=33092 busy=85099 errors=0
+OK
+```
+
+(Bench, 2026-11-03: the pod's EMI build streaming 20 Mbit/s, about 1650 frames/s, of which
+the radio carries about 75 at 1 Mbit/s.) `air` is the time on the air from the frame sizes and
+the rate (preamble included, inter-frame gaps not), so it can read a little high, and above
+100 % in the first report after boot, while the driver's queue fills; use a spectrum analyser in
+zero span for the real duty cycle. `busy` counts sends
+the driver's full queue refused (normal); `err` other failures.
+
+| Command | |
+|---|---|
+| `emc` | state, channel, rate, power, counters (also at the end of `status`) |
+| `emc stop`, `emc start` | stop and resume transmitting (Ethernet keeps running) |
+| `emc channel <n>` | the country's channels only |
+| `emc rate <name>` | `1m 2m 5.5m 11m` (DSSS, long preamble), `2ms 5.5ms 11ms` (short), `6m 9m 12m 18m 24m 36m 48m 54m` (OFDM), `mcs0`-`mcs7` (HT20, long GI); restarts the radio |
+| `emc power max` or `emc power <dBm>` | power cap in 0.25 dB steps, from 2 dBm up to the maximum; the driver rounds to its steps |
+
+Not used: Espressif's certification test mode (`esp_phy_cert_test.h`, `esp_phy_wifi_tx`; ESP-IDF
+v5.5 supports it on the ESP32). It replaces the Wi-Fi driver with a PHY test mode, so it cannot
+send the pod's frames, and it sets channel and power outside the driver's country checks.
+
+Limits: the radio is not on a live link, so it does not show receive behaviour (EN 301 489
+immunity judges the radio by a live link; for that the lab needs an access point and the normal
+firmware). Build-verified only: not yet run on a bridge.
+
 ## Buttons and recovery
 
 Two buttons, so pairing a new pod can never wipe settings by accident:
@@ -382,6 +487,8 @@ sudo tools/bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
 | Python client codec and signing match the C encoder byte for byte | `tools/test_bridgectl.py` |
 | Anything on hardware: RMII clock and PHY bring-up, link, forwarding, Wi-Fi join with the pod MAC, multicast (mDNS) delivery through the station, throughput, OTA + signature check + trial boot and rollback, the PAIR button and both FACTORY gestures (bootloader factory reset on GPIO34 included), pairing with a real pod, console on the TC2030 pads, TP8 patterns | **not tested** |
 | eFuse flows (secure boot, flash encryption): irreversible, try on a sacrificial board | **not tested** |
+| EMC test build (`./build.sh emc`) builds; the production overlay and `RELEASE=1` refuse it; dev and production images unchanged apart from line numbers in `ESP_ERROR_CHECK` | yes (build only) |
+| EMC test build on a bridge (rev 2, 2026-11-03): round trip through the pod (EMC to normal, normal to EMC, reboot stays EMC, EMC to normal), the EMC image confirming itself 2 s after boot, TC2030 flash into factory, continuous TX (about 75 frames/s at 1 Mbit/s, 92 % air estimate, 0 errors), the pod's 20 Mbit/s 0x88B6 frames on the air, channel/rate/power/stop/start (channel 13 refused under US, power capped at 19.5 dBm) | yes, from the counters; not yet seen on a spectrum analyser; TP8 not probed |
 
 Things to watch at bring-up:
 
