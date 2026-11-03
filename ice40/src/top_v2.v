@@ -782,8 +782,10 @@ module top (
     //   the change encoder steps la_psram_capture's SB_MAC16 counter (the two LA producers never
     //   run together) and keeps `room` in an lc_counter that now takes a constant step; plain
     //   AND/OR for two constant compares; and dac8551_engine steps sidx/sleft off a registered
-    //   frame-end flag `fe`, the cone that bound the v50 loop image's failing clk48 seeds.
-    //   Loop 4777 -> 4583 LC (90% -> 87%), deep 4445 -> 4345 LC (84% -> 82%).
+    //   frame-end flag `fe`, the cone that bound the v50 loop image's failing clk48 seeds; and
+    //   dac_loop's clamp compares are the sign of a subtract (abc9 had mapped one to a LUT ripple).
+    //   Loop 4777 -> 4579 LC (90% -> 87%), deep 4445 -> 4306 LC (84% -> 82%).  Loop seeds reaching
+    //   MIN_CLK48_MHZ: 29/48 -> 36/48 local, 37/48 CI.  Seeds 7/16: clk48 54.40 / 55.27 MHz.
     // GATEWARE_VERSION 50 = v49 + LA CHANGE CAPTURE: OP_CAPTURE with la_div = 0xFFFF samples the
     //   LA at 48 MS/s (la48_sampler, clk48) and records only the ticks where a channel changed
     //   (la_change_capture: 3 bytes per event, la_cnt in units of 256 ticks).  Both LA formats go
