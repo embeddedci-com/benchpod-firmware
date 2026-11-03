@@ -23,8 +23,14 @@
  *   - optionally a 115200 baud NMEA stream out of one LA pin (`emi uart <la>`), so the pod's own
  *     LA drivers toggle; off by default, since it drives a pin of the DUT
  *
- * The network side runs as usual (cloud, LAN, USB network); Ethernet traffic comes from the
- * laptop (the measurement script pings the pod).
+ *   - a stream of raw Ethernet frames out of the Ethernet port (default 20 Mbit/s, full
+ *     1514-byte frames, EtherType 0x88B6, to a locally administered MAC nobody owns), so the
+ *     wired link carries traffic with no laptop script. Layer 2 only: it needs a link, not an IP
+ *     address, DHCP or a peer. Through a Wi-Fi bridge it keeps the bridge's radio transmitting
+ *     too. Each frame starts with "BPEMI", a sequence number and the pod's uptime, so a capture
+ *     (`tcpdump ether proto 0x88b6`) can count losses. `emi net <mbit>|off` sets the rate
+ *
+ * The rest of the network runs as usual (cloud, LAN, USB network).
  *
  * The loop drives the pod with its own JSON commands on the pseudo-connection CH_EMI_CONN,
  * whose replies go to emi_test_reply() instead of a socket: every check and gate a client meets
@@ -38,6 +44,17 @@
 #define EMI_TEST_START_DELAY_MS  10000u
 /* A monitor line on the USB console this often. */
 #define EMI_TEST_REPORT_MS       5000u
+/* The Ethernet stream: default and top rate, frame size (a full 1500-byte MTU plus the 14-byte
+   header), EtherType (IEEE 802 local experimental 2; 0x88B5 is the Wi-Fi bridge's control
+   channel) and destination (locally administered unicast, 02 'B' 'P' 'E' 'M' 'I': switches flood
+   it like any unknown address, an access point keeps it off the air). The default is 20 Mbit/s,
+   twice the "at least 10 % of line rate" CISPR 32 asks of a LAN port on a 100 Mbit/s link, since
+   the lab runs the build unattended. */
+#define EMI_NET_DEFAULT_MBIT     20u
+#define EMI_NET_MAX_MBIT         50u
+#define EMI_NET_FRAME            1514u
+#define EMI_NET_ETHERTYPE        0x88B6u
+#define EMI_NET_DST_MAC          { 0x02, 0x42, 0x50, 0x45, 0x4D, 0x49 }
 
 typedef enum {
     EMI_DAC_SINE = 0,   /* 1 kHz sine, 0.15-3.15 V on the 0-3.3 V output (to the BNC) */
@@ -66,6 +83,15 @@ bool emi_test_running(void);
 bool emi_test_set_dac(emi_dac_mode_t mode);
 /* Console `emi uart <1-14>|off`: NMEA out of an LA pin while running; 0 = off. */
 void emi_test_set_uart(int la);
+/* Console `emi net <mbit>|off`: the Ethernet stream's rate, 0 = off; false above
+   EMI_NET_MAX_MBIT. */
+bool emi_test_set_net_rate(unsigned mbit);
+
+struct netif;
+/* Net task, every net_poll pass: send the stream's frames that are due, on `eth` only.
+   lwIP is NO_SYS and owned by the net task, so the stream lives there, not on the hw worker. */
+void emi_test_net_poll(struct netif *eth);
+
 /* "sine", "dc", "current", "off", "all"; -1 for anything else. */
 int  emi_test_dac_from_name(const char *name);
 
@@ -75,7 +101,8 @@ uint8_t emi_test_led_state(void);
 /* One-line state for the console (`emi`) and the monitor line. */
 size_t emi_test_describe(char *buf, size_t cap);
 /* The same as a JSON object for `status` ("emi_test"):
-   {"running":true,"dac":"sine","uart_la":0,"core_mhz":250,"uptime_s":12,"captures":40,"errors":0} */
+   {"running":true,"dac":"sine","uart_la":0,"core_mhz":250,"uptime_s":12,"captures":40,"errors":0,
+    "net_mbit":10,"net_sent":12000,"net_drops":0} */
 size_t emi_test_json(char *buf, size_t cap);
 
 #endif

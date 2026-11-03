@@ -10,6 +10,8 @@
 #include "status_led.h"                 /* status_led_emi_t */
 #include "board_variant.h"              /* board_has_analog */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
+#include "lwip/netif.h"
+#include "lwip/pbuf.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -54,6 +56,22 @@ static struct {
     char           last_err[112];
     size_t         budget;
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
+
+/* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
+   (emi_test_net_poll), which alone touches lwIP; aligned 32-bit words, so no lock. */
+static struct {
+    volatile uint32_t mbit;       /* 0 = off */
+    volatile uint32_t sent;
+    volatile uint32_t drops;      /* no pbuf, or the MAC refused the frame */
+    /* net task only */
+    uint32_t          t_last;
+    uint32_t          credit;     /* bytes allowed to go now */
+    uint32_t          seq;
+} ns = { .mbit = EMI_NET_DEFAULT_MBIT };
+
+/* At most this many frames per net_poll pass (HAL_ETH_Transmit waits for each one), so the
+   stream never holds the net task for long. */
+#define EMI_NET_BURST  4u
 
 static void run(const char *label, const char *json) {
     s.cur = label;
@@ -168,6 +186,48 @@ void emi_test_set_uart(int la) {
     if (s.running) apply_uart(la);
 }
 
+bool emi_test_set_net_rate(unsigned mbit) {
+    if (mbit > EMI_NET_MAX_MBIT) return false;
+    ns.mbit = mbit;
+    return true;
+}
+
+void emi_test_net_poll(struct netif *eth) {
+    static const uint8_t k_dst[6] = EMI_NET_DST_MAC;
+    const uint32_t now = HAL_GetTick();
+    const uint32_t dt  = now - ns.t_last;
+    ns.t_last = now;
+    const uint32_t mbit = ns.mbit;
+    /* Layer 2 only: no IP address, DHCP or peer needed, just a link. */
+    if (!s.running || !mbit || !netif_is_up(eth) || !netif_is_link_up(eth)) {
+        ns.credit = 0;
+        return;
+    }
+    /* mbit Mbit/s = mbit * 125 bytes per ms; cap the credit at one burst, so a stalled pass
+       does not turn into a flood afterwards. */
+    const uint32_t cap = EMI_NET_BURST * EMI_NET_FRAME;
+    ns.credit += (dt > 100u ? 100u : dt) * mbit * 125u;
+    if (ns.credit > cap) ns.credit = cap;
+    while (ns.credit >= EMI_NET_FRAME) {
+        ns.credit -= EMI_NET_FRAME;
+        struct pbuf *p = pbuf_alloc(PBUF_RAW, EMI_NET_FRAME, PBUF_RAM);
+        if (!p) { ns.drops++; break; }
+        uint8_t *d = (uint8_t *)p->payload;
+        const uint32_t seq = ns.seq++;
+        memcpy(d, k_dst, 6);
+        memcpy(d + 6, eth->hwaddr, 6);
+        d[12] = (uint8_t)(EMI_NET_ETHERTYPE >> 8);
+        d[13] = (uint8_t)EMI_NET_ETHERTYPE;
+        memcpy(d + 14, "BPEMI", 5);
+        memcpy(d + 19, &seq, 4);   /* little-endian, like the pod's other binary formats */
+        memcpy(d + 23, &now, 4);
+        for (uint32_t i = 27; i < EMI_NET_FRAME; i++) d[i] = (uint8_t)(seq + i);
+        if (eth->linkoutput(eth, p) == ERR_OK) ns.sent++;
+        else                                   ns.drops++;
+        pbuf_free(p);
+    }
+}
+
 int emi_test_dac_from_name(const char *name) {
     for (int i = 0; i < (int)(sizeof(k_dac_names) / sizeof(k_dac_names[0])); i++)
         if (!strcmp(name, k_dac_names[i])) return i;
@@ -203,30 +263,42 @@ uint8_t emi_test_led_state(void) {
     return STATUS_LED_EMI_RUNNING;
 }
 
+/* "off", or "20 Mbit/s, sent 1200, drops 0". */
+static void net_describe(char *buf, size_t cap) {
+    if (!ns.mbit) { snprintf(buf, cap, "off"); return; }
+    snprintf(buf, cap, "%lu Mbit/s, sent %lu, drops %lu", (unsigned long)ns.mbit,
+             (unsigned long)ns.sent, (unsigned long)ns.drops);
+}
+
 size_t emi_test_describe(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
     char uart[8] = "off";
     if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
-    int n = snprintf(buf, cap,
-                     "emi: %s, dac %s, uart %s, core %lu MHz, %lus, captures %lu, errors %lu%s%s",
-                     s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
-                     k_dac_names[s.dac], uart, (unsigned long)(SystemCoreClock / 1000000u),
-                     (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
-                     s.last_err[0] ? ", last: " : "", s.last_err);
-    if (n < 0) return 0;
-    return (size_t)n < cap ? (size_t)n : cap - 1;
+    char net[64];
+    net_describe(net, sizeof(net));
+    int len = snprintf(buf, cap,
+                       "emi: %s, dac %s, uart %s, net %s, core %lu MHz, %lus, captures %lu, "
+                       "errors %lu%s%s",
+                       s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
+                       k_dac_names[s.dac], uart, net, (unsigned long)(SystemCoreClock / 1000000u),
+                       (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
+                       s.last_err[0] ? ", last: " : "", s.last_err);
+    if (len < 0) return 0;
+    return (size_t)len < cap ? (size_t)len : cap - 1;
 }
 
 size_t emi_test_json(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
-    int n = snprintf(buf, cap,
-                     "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
-                     "\"captures\":%lu,\"errors\":%lu}",
-                     s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
-                     (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
-                     (unsigned long)s.captures, (unsigned long)s.errors);
-    if (n < 0 || (size_t)n >= cap) { if (cap) buf[0] = '\0'; return 0; }
-    return (size_t)n;
+    int len = snprintf(buf, cap,
+                       "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
+                       "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
+                       "\"net_sent\":%lu,\"net_drops\":%lu}",
+                       s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
+                       (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
+                       (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
+                       (unsigned long)ns.sent, (unsigned long)ns.drops);
+    if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
+    return (size_t)len;
 }
 
 void emi_test_poll(void) {
@@ -252,7 +324,7 @@ void emi_test_poll(void) {
     }
     if (now - s.t_report >= EMI_TEST_REPORT_MS) {
         s.t_report = now;
-        char line[200];
+        char line[256];
         emi_test_describe(line, sizeof(line));
         printf("[emi] %s\n", line);
     }
