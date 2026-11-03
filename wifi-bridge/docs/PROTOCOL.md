@@ -22,8 +22,9 @@ only, and the UART is on factory pads. The bridge implements it in `components/b
   10 s for SCAN, 30 s for OTA_BEGIN which erases flash). Every request is idempotent, or made
   so by the OTA offset rule below. When paired, a retry is signed again with a new COUNTER (a
   repeated counter is refused as a replay).
-- Unsolicited messages from the bridge use `seq = 0`: HELLO every 2 s, and STATUS (0x82)
-  whenever the state changes.
+- Unsolicited messages from the bridge use `seq = 0`: HELLO every 2 s while the Ethernet link
+  is up and at once when it comes up (before anything else), and STATUS (0x82) whenever the
+  state changes.
 
 ## Frame layout
 
@@ -203,15 +204,18 @@ is agreed with X25519 and never sent: someone recording the cable learns nothing
   AUTH TLV's tag, with the header's body length already counting the AUTH TLV (19 bytes).
   Ethernet addresses and padding are not covered. COUNTER must be higher than the last one the
   bridge accepted for this NONCE; the pod starts again at 1 whenever HELLO shows a new NONCE
-  (the bridge rebooted). Gaps are fine.
+  (the bridge rebooted). Gaps are fine. When its Ethernet link drops (a bridge reboot resets
+  the PHY), the pod signs nothing until the next HELLO tells it the current NONCE: the same one
+  (a cable flap; the counter carries on) or a new one (the counter starts over).
 - **Responses to signed requests** are signed the same way by the bridge, with the request's
   COUNTER, so the pod knows the answer came from its bridge. HELLO and unsolicited STATUS are
   not signed (HELLO has to be readable to learn the NONCE).
 - **Refusals** (NOT_PAIRED, AUTH, ALREADY_PAIRED) are unsigned and carry NONCE and a MESSAGE.
   When the AUTH was right but the COUNTER was not above the last accepted one (a replay, or a
   pod that rebooted and started again at 1), the refusal also carries COUNTER = the last
-  accepted value, and the pod continues above it. On AUTH the pod first resyncs its nonce and
-  counter and retries once; if that fails too, its key is not the paired one (the bridge was
+  accepted value, and the pod continues above it. On AUTH with a NONCE it did not know (it
+  missed a reboot) the pod resyncs its nonce and counter and sends again, once more even when
+  that was its last try; if that fails too, its key is not the paired one (the bridge was
   re-paired with another pod) and it tells the user to press PAIR on the bridge.
 - **PAIR button** (GPIO35, a press): the bridge forgets the key, clears FLAGS 0x20 in the next
   HELLO, and accepts the next PAIR from whichever pod sends it. It also re-learns the pod MAC

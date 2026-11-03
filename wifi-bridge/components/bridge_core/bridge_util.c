@@ -127,3 +127,14 @@ void bu_mac_str(const uint8_t m[6], char out[18])
 {
     snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
 }
+
+bool bu_hello_due(bu_hello_timer_t *t, bool link_up, int64_t now_us, int64_t interval_us)
+{
+    bool came_up = link_up && !t->link;
+    t->link = link_up;
+    if (!link_up || (!came_up && now_us < t->next_us)) {
+        return false;
+    }
+    t->next_us = now_us + interval_us;
+    return true;
+}

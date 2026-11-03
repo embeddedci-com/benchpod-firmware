@@ -27,6 +27,8 @@ typedef struct {
     char pass[65];
     int drop_next;          /* swallow this many pod frames */
     int handled;            /* requests it acted on */
+    int refused;            /* requests it refused (AUTH, REPLAY, NOT_PAIRED, ...) */
+    bool quiet;             /* no HELLO on the 2 s timer (a bridge still booting, link not up yet) */
     uint8_t out[8][BWP_MAX_FRAME];
     size_t out_len[8];
     int n_out;
@@ -92,6 +94,7 @@ static void sim_rx(const uint8_t *f, size_t len)
     uint8_t *out = sim.out[sim.n_out];
     sim.last_type = m.type;
     if (v != PAIR_ACCEPT && v != PAIR_STORE_KEY) {
+        sim.refused++;
         bwp_writer_t w;
         bwp_begin(&w, out, BWP_MAX_FRAME, POD, BRIDGE, m.type | BWP_RESPONSE, m.seq);
         bwp_put_u8(&w, BWP_T_RESULT, pairing_result(v));
@@ -293,7 +296,7 @@ static void run(uint32_t ms)
             bwp_status_t us = {.state = sim.state, .flags = BWP_F_PAIRED};
             sim_emit(bwp_build_status(sim.out[sim.n_out], BWP_MAX_FRAME, POD, BRIDGE, 0, &us));
         }
-        if (now_ms % 2000 == 0) {
+        if (now_ms % 2000 == 0 && !sim.quiet) {
             sim_hello();
         }
         wb_poll(&pod, now_ms);
@@ -624,6 +627,54 @@ int main(void)
     CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     CHECK(sim.last_counter_seen < 5);
     wb_request_release(&pod);
+
+    /* The bridge reboots as on the bench: its PHY drops the link while it restarts, the link comes
+       back before its first HELLO (the bridge's HELLO timer skips HELLOs while the link is down),
+       and a request comes in right then. The pod must not sign it with the old boot's nonce (the
+       bridge logged "refused request 0x02: AUTH wrong"): it waits for the new nonce. */
+    int refused = sim.refused;
+    wb_set_link(&pod, false, now_ms);
+    sim_boot();
+    sim.quiet = true;
+    run(500);
+    wb_set_link(&pod, true, now_ms);
+    CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 1000, now_ms) == -1);  /* not yet: no nonce */
+    run(500);
+    CHECK(sim.refused == refused);  /* nothing went out signed with the old nonce, background polls included */
+    sim.quiet = false;
+    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    CHECK(sim.refused == refused);
+    wb_request_release(&pod);
+
+    /* A link flap without a reboot: the same nonce comes back in the next HELLO, so the counter
+       carries on (resetting it would draw a "COUNTER not increasing" refusal). */
+    wb_set_link(&pod, false, now_ms);
+    run(300);
+    wb_set_link(&pod, true, now_ms);
+    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    CHECK(sim.refused == refused);
+    wb_request_release(&pod);
+
+    /* A reboot the pod did not see (no link drop, no HELLO yet) on the last of the three sends:
+       the AUTH refusal carries the new nonce, and the pod re-signs once more instead of telling
+       the caller the bridge is paired with another pod. */
+    sim.quiet = true;  /* no HELLO brings the new nonce in this window */
+    for (int i = 0; i < 300 && pod.req_state == WB_REQ_PENDING; i++) {
+        run(10);  /* let a background STATUS finish */
+    }
+    sim.drop_next = 2;
+    CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 200, now_ms) == 0);
+    run(250);   /* sends 1 and 2 lost */
+    sim_boot();
+    for (int i = 0; i < 100 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
+        run(10);
+    }
+    CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    CHECK(sim.refused == refused + 1);  /* the one refusal that taught it the nonce */
+    wb_request_release(&pod);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.paired && info.problem == NULL);
+    sim.quiet = false;
 
     /* A spoofed answer (right seq, unsigned) to a signed request is ignored. */
     sim.drop_next = 1;

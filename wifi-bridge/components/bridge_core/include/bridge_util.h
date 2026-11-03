@@ -47,6 +47,17 @@ bool bu_ota_complete(const bu_ota_seq_t *s);
 #define BU_IMG_DESC_END 112
 bool bu_image_ident(const uint8_t *img, size_t len, char project[33], char version[33]);
 
+// HELLO pacing: every interval while the Ethernet link is up, and at once when it comes up. A
+// HELLO carries this boot's nonce; the pod signs nothing after a link drop until it has one, so
+// the first HELLO after a reboot must not wait for the timer.
+typedef struct {
+    bool link;       // the link as of the last call
+    int64_t next_us; // when the next HELLO is due
+} bu_hello_timer_t;
+
+// True when a HELLO is due now (and schedules the next one). Never while the link is down.
+bool bu_hello_due(bu_hello_timer_t *t, bool link_up, int64_t now_us, int64_t interval_us);
+
 // Formats a MAC as aa:bb:cc:dd:ee:ff (out: 18 bytes).
 void bu_mac_str(const uint8_t mac[6], char out[18]);
 

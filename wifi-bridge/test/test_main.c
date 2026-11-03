@@ -800,6 +800,26 @@ static void test_reasons(void)
     CHECK(bu_state_for_reason(200) == BWP_ST_JOINING);  // BEACON_TIMEOUT
 }
 
+// The first HELLO of a boot goes out the moment the link is up, not up to one interval later:
+// until it arrives, a pod that saw the link drop signs nothing (it would use the old nonce).
+static void test_hello_timer(void)
+{
+    const int64_t iv = 2000000;
+    bu_hello_timer_t t = {0};
+    CHECK(!bu_hello_due(&t, false, 0, iv));        // boot: the PHY link is not up yet
+    CHECK(!bu_hello_due(&t, false, 600000, iv));   // the timer's first slot passes with no link
+    CHECK(bu_hello_due(&t, true, 2200000, iv));    // link up at 2.2 s: HELLO now
+    CHECK(!bu_hello_due(&t, true, 2210000, iv));   // not again right away
+    CHECK(!bu_hello_due(&t, true, 4199999, iv));
+    CHECK(bu_hello_due(&t, true, 4200000, iv));    // then every interval
+    CHECK(!bu_hello_due(&t, true, 4300000, iv));
+    CHECK(!bu_hello_due(&t, false, 4400000, iv));  // link down: none
+    CHECK(!bu_hello_due(&t, false, 9000000, iv));  // ...also when the interval has passed
+    CHECK(bu_hello_due(&t, true, 9100000, iv));    // link back: at once
+    CHECK(!bu_hello_due(&t, true, 9200000, iv));
+    CHECK(bu_hello_due(&t, true, 11100000, iv));
+}
+
 static void test_ota_seq(void)
 {
     bu_ota_seq_t s = {0};
@@ -896,6 +916,7 @@ int main(int argc, char **argv)
     test_control_frames();
     test_tokenize();
     test_reasons();
+    test_hello_timer();
     test_ota_seq();
     test_image_ident();
     test_hmac_vectors();
