@@ -21,9 +21,12 @@
  *   update                magenta        firmware or gateware staging / verify (OTA)
  *   busy                  blue           a capture, upload or other PSRAM-bus job in flight
  *   command               cyan flash     a command that drives the pod (not polled reads)
- *   EMI test build        yellow         solid: the activity loop starts in a moment; blinking
- *                                        (1 s on, 1 s off): it runs; yellow and red in turn: it
- *                                        runs, and a command or capture failed in the last 30 s
+ *   EMI test build        blue           solid: the activity loop starts in a moment; blinking
+ *                                        (1 s on, 1 s off): it runs; blue and red in turn: it
+ *                                        runs, and a command or capture failed in the last 30 s.
+ *                                        One die only: the LED's dies sit side by side with no
+ *                                        diffuser, so a mix such as yellow shows as red next to
+ *                                        green. Plain "busy" is solid blue; the 1 s blink is not.
  *                                        (emi_test.h; never in other builds)
  *   busy                  blue           (repeated from above: below the EMI pattern)
  *   target power on       green          an eFuse is on, nothing else going on
