@@ -1,8 +1,10 @@
 // EMC test build (CONFIG_BRIDGE_EMC_TEST, `./build.sh emc`): the bridge's worst case for the EMC
 // lab, from boot, without an access point (a shielded chamber has none, and a station that has
 // not joined does not transmit). Development only: refused with the production overlay and with
-// RELEASE=1. Its version is "<version>-emc", which the pod does not auto-update; a forced
-// `bridge update` on the pod puts the normal firmware back.
+// RELEASE=1. It takes signed updates like a dev image (the pod's release keys and the dev key),
+// and after an update confirms itself once Ethernet has started and the first frame went out,
+// so it never rolls back on its own. Its version is "<version>-emc", which the pod does not
+// auto-update; a forced `bridge update` on the pod puts a newer EMC build or the normal firmware on.
 //
 //   Ethernet as usual: EMAC + LAN8742A up, 50 MHz RMII clock running, control channel (HELLO).
 //   The pod's other frames (its EMI build streams EtherType 0x88B6 at about 20 Mbit/s) go on the
@@ -76,6 +78,7 @@ static struct {
     uint8_t *pending;        // newest Ethernet frame (malloc'd by the EMAC driver), NULL: none
     uint32_t pending_len;
     volatile bool running;
+    volatile bool eth_started;  // a new image on trial confirms itself once a frame went out too
     bool radio_up;
     uint8_t channel, ch_first, ch_last;
     const rate_t *rate;
@@ -153,6 +156,11 @@ static esp_err_t radio_start(void)
                       ? CONFIG_BRIDGE_EMC_TX_POWER : s.power_max;
     }
     return radio_settings();
+}
+
+void emc_test_eth_started(void)
+{
+    s.eth_started = true;
 }
 
 void emc_test_eth_rx(uint8_t *frame, size_t len)
@@ -247,6 +255,12 @@ static void tx_task(void *arg)
             s.airtime_us += airtime_us(r, len);
             s.last_ok_us = esp_timer_get_time();
             len = 0;
+            if (s.eth_started) {
+                // Radio and Ethernet work: keep this image (OTA trial boot) without waiting for
+                // the pod, so an EMC build never rolls back on its own. No-op when not on trial.
+                ota_confirm_self();
+                s.eth_started = false;
+            }
         } else if (err == ESP_ERR_NO_MEM) {
             s.busy++;  // the driver's queue is full: the radio is sending, try again next tick
             vTaskDelay(1);
@@ -399,7 +413,7 @@ esp_err_t emc_test_start(void)
     ESP_LOGW(TAG, "EMC TEST BUILD: transmitting from boot, no access point; channel %u, rate %s, "
                   "power cap %.2f dBm (maximum %.2f dBm), country %s",
              s.channel, s.rate->name, s.power / 4.0, s.power_max / 4.0, CONFIG_BRIDGE_COUNTRY);
-    xTaskCreate(tx_task, "emc_tx", 3072, NULL, 4, NULL);
+    xTaskCreate(tx_task, "emc_tx", 4096, NULL, 4, NULL);
     xTaskCreate(report_task, "emc_report", 3072, NULL, 2, NULL);
     return err;
 }

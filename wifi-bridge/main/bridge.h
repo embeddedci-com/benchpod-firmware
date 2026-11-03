@@ -87,6 +87,7 @@ void ota_poll(void);              // aborts a transfer idle for more than 60 s
 // Rollback guard: on a new image's first boot, starts the confirmation timer.
 void ota_check_pending(void);
 void ota_confirm(void);           // a valid control request from the pod arrived
+void ota_confirm_self(void);      // EMC test build: Ethernet and radio work, no pod needed
 bool ota_pending_verify(void);
 
 // ---- control.c
@@ -110,6 +111,7 @@ typedef struct {
 } emc_counts_t;
 esp_err_t emc_test_start(void);                  // instead of wifi_start()
 void emc_test_eth_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame
+void emc_test_eth_started(void);  // a new image on trial confirms itself with the first frame sent
 emc_state_t emc_test_state(void);
 void emc_test_counts(emc_counts_t *c);
 void emc_test_run(bool on);

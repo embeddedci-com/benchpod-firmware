@@ -266,7 +266,11 @@ bridge's worst case from boot, with no access point. A shielded chamber has none
 firmware only transmits while it has joined a network. Like the pod's `EMI_TEST=1` build, it is
 never released: `RELEASE=1 ./build.sh emc` and the production overlay (secure boot, flash
 encryption) both refuse it. `build.sh` signs it with the developer key only, which release
-images do not trust. It reports its version as `<version>-emc` (`version`, HELLO), and its
+images do not trust. It takes signed updates like a dev image (the pod's release keys and the
+dev key), so the pod can put a newer EMC build or the normal firmware on it. After an update it
+confirms itself as soon as Ethernet has started and its first frame went out, without waiting
+for the pod, so it never rolls back on its own (an image whose Ethernet or radio does not come
+up still rolls back after 120 s). It reports its version as `<version>-emc` (`version`, HELLO), and its
 signature carries asset version 0, so the pod never installs or replaces it on its own.
 
 ```sh
@@ -281,7 +285,7 @@ the dev-signed blob with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`, 
 loop keeps the pod busy, so `emi stop` on the pod console first and `emi start` after. Put the
 image into the pod's blob slot `bridge` and force the update; a release `benchpod flash-self`
 puts the pod's release firmware and bridge blob back. The pod confirms the new image by talking
-to it, so it stays after reboots (tested: no rollback).
+to it, and an EMC image also confirms itself, so either stays after reboots.
 
 ```sh
 benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
@@ -484,7 +488,7 @@ sudo tools/bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
 | Anything on hardware: RMII clock and PHY bring-up, link, forwarding, Wi-Fi join with the pod MAC, multicast (mDNS) delivery through the station, throughput, OTA + signature check + trial boot and rollback, the PAIR button and both FACTORY gestures (bootloader factory reset on GPIO34 included), pairing with a real pod, console on the TC2030 pads, TP8 patterns | **not tested** |
 | eFuse flows (secure boot, flash encryption): irreversible, try on a sacrificial board | **not tested** |
 | EMC test build (`./build.sh emc`) builds; the production overlay and `RELEASE=1` refuse it; dev and production images unchanged apart from line numbers in `ESP_ERROR_CHECK` | yes (build only) |
-| EMC test build on a bridge (rev 2, 2026-11-03): install by OTA through the pod and confirmation across a reboot, TC2030 flash into factory, continuous TX (about 75 frames/s at 1 Mbit/s, 92 % air estimate, 0 errors), the pod's 20 Mbit/s 0x88B6 frames on the air, channel/rate/power/stop/start (channel 13 refused under US, power capped at 19.5 dBm) | yes, from the counters; not yet seen on a spectrum analyser; TP8 not probed |
+| EMC test build on a bridge (rev 2, 2026-11-03): round trip through the pod (EMC to normal, normal to EMC, reboot stays EMC, EMC to normal), the EMC image confirming itself 2 s after boot, TC2030 flash into factory, continuous TX (about 75 frames/s at 1 Mbit/s, 92 % air estimate, 0 errors), the pod's 20 Mbit/s 0x88B6 frames on the air, channel/rate/power/stop/start (channel 13 refused under US, power capped at 19.5 dBm) | yes, from the counters; not yet seen on a spectrum analyser; TP8 not probed |
 
 Things to watch at bring-up:
 

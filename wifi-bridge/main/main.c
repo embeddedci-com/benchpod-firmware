@@ -131,6 +131,11 @@ void app_main(void)
         // hears from the pod, so its confirmation timer reboots it back to the previous slot.
         ESP_LOGE(TAG, "Ethernet did not start; bridging disabled");
     }
+#if CONFIG_BRIDGE_EMC_TEST
+    else {
+        emc_test_eth_started();
+    }
+#endif
     board_start_tasks();
     console_start();
 }
