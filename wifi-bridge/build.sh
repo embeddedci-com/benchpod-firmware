@@ -75,3 +75,23 @@ if [ $# -eq 0 ] && [ "${RELEASE:-0}" != 1 ] && [ -f "$dev_key" ] && [ -f build/b
   python3 ../tools/fwsign.py sign --key "$dev_key" --target bridge --release "$version" \
     build/benchpod-wifi-bridge.bin || echo "warning: not signed (pip3 install cryptography)" >&2
 fi
+# The EMC test build too, so the pod can send it (README "EMC test build"): only dev images trust
+# the dev key. Asset version 0: the pod never installs it on its own, only with `bridge update`.
+# build-emc/blobs/ holds it as the pod's blob slot "bridge" for `benchpod install-blobs --dir`.
+if [ "${1:-}" = emc ] && [ -f "$dev_key" ] && [ -f build-emc/benchpod-wifi-bridge.bin ]; then
+  mkdir -p build-emc/blobs
+  cp build-emc/benchpod-wifi-bridge.bin build-emc/blobs/blob-bridge.bin
+  if python3 ../tools/fwsign.py sign --key "$dev_key" --target bridge --release "$version" --version 0 \
+       build-emc/blobs/blob-bridge.bin; then
+    python3 - build-emc/blobs <<'PY'
+import hashlib, json, os, sys
+d = sys.argv[1]
+data = open(os.path.join(d, "blob-bridge.bin"), "rb").read()
+json.dump({"format": 1, "blobs": [{"name": "bridge", "file": "blob-bridge.bin", "size": len(data),
+           "sha256": hashlib.sha256(data).hexdigest(), "version": 0}]},
+          open(os.path.join(d, "blobs-manifest.json"), "w"), indent=2)
+PY
+  else
+    echo "warning: not signed (pip3 install cryptography)" >&2
+  fi
+fi

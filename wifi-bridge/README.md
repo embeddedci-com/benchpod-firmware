@@ -264,13 +264,25 @@ For the EMC lab (benchpod-compliance `emc/test-plan.md`): a development-only ima
 bridge's worst case from boot, with no access point. A shielded chamber has none, and the normal
 firmware only transmits while it has joined a network. Like the pod's `EMI_TEST=1` build, it is
 never released: `RELEASE=1 ./build.sh emc` and the production overlay (secure boot, flash
-encryption) both refuse it, `build.sh` never signs it, and it refuses OTA updates. It reports its
-version as `<version>-emc` (`version`, HELLO), which the pod does not auto-update.
+encryption) both refuse it. `build.sh` signs it with the developer key only, which release
+images do not trust. It reports its version as `<version>-emc` (`version`, HELLO), and its
+signature carries asset version 0, so the pod never installs or replaces it on its own.
 
 ```sh
 ./build.sh emc                 # -> build-emc/ (sdkconfig.defaults + sdkconfig.defaults.emc)
-./flash.sh --emc --erase       # TC2030 pads, as in "Flash"; opens the console
+./flash.sh --emc               # TC2030 pads, as in "Flash"; opens the console
 ./flash.sh                     # afterwards: back to the normal dev build
+```
+
+Without a programmer, through the pod (the bridge must run a dev image, which trusts the dev
+key, and be paired with that pod): put the image into the pod's blob slot `bridge` and force
+the update; the reverse puts the release image back.
+
+```sh
+benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
+# pod console: `bridge update`, then `bridge` until it shows fw 0.1.1-emc
+benchpod install-blobs --only bridge --force                        # afterwards: the release blob
+# pod console: `bridge update` again
 ```
 
 What it does (`main/emc_test.c`):
@@ -285,7 +297,7 @@ What it does (`main/emc_test.c`):
   control channel answering (HELLO every 2 s, pairing). The pod's other frames, normally bridged,
   go on the air instead: each 802.11 frame carries the newest frame from the pod (its EtherType
   and payload in LLC/SNAP, cut to 1468 bytes). The pod's EMI build streams EtherType 0x88B6 at
-  about 10 Mbit/s (`emi-eth-stream`), more than 1 Mbit/s can carry, so most are skipped
+  about 20 Mbit/s, more than 1 Mbit/s can carry, so most are skipped
   (`eth_skipped`) and the radio stays busy. Without frames from the pod it sends a generated
   0x88B6 pattern.
 - **Defaults:** channel 6, 1 Mbit/s DSSS (the ESP32's highest TX power and longest time on the
@@ -295,8 +307,10 @@ What it does (`main/emc_test.c`):
 - **Power never above the normal maximum.** The cap starts at what the radio has after start
   (the same as in production, which never changes it) and `emc power` can only lower it.
 
-Seeing it run without a shell: TP8 (the board has no LEDs) shows the state, and the console on
-the TC2030 pads prints a line every 5 s.
+Seeing it run without a shell: TP8 (the board has no LEDs) shows the state, the console on the
+TC2030 pads prints a line every 5 s, and the pod's `bridge` shows the counts in its STATUS
+fields: `channel` is the transmit channel, `wifi_tx` frames sent, `err` failed sends, `wifi_rx`
+sent frames that carried the pod's frames, `dropped` the pod's frames skipped.
 
 | TP8 | Meaning |
 |---|---|

@@ -1,10 +1,11 @@
 // EMC test build (CONFIG_BRIDGE_EMC_TEST, `./build.sh emc`): the bridge's worst case for the EMC
 // lab, from boot, without an access point (a shielded chamber has none, and a station that has
 // not joined does not transmit). Development only: refused with the production overlay and with
-// RELEASE=1, and it takes no OTA updates.
+// RELEASE=1. Its version is "<version>-emc", which the pod does not auto-update; a forced
+// `bridge update` on the pod puts the normal firmware back.
 //
 //   Ethernet as usual: EMAC + LAN8742A up, 50 MHz RMII clock running, control channel (HELLO).
-//   The pod's other frames (its EMI build streams EtherType 0x88B6 at about 10 Mbit/s) go on the
+//   The pod's other frames (its EMI build streams EtherType 0x88B6 at about 20 Mbit/s) go on the
 //   air instead of being bridged: eth.c hands them to emc_test_eth_rx().
 //   Radio: raw 802.11 data frames (esp_wifi_80211_tx), back to back, broadcast, on one channel at
 //   one rate. Each frame carries the newest Ethernet frame (LLC/SNAP, its EtherType and payload,
