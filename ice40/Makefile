@@ -417,10 +417,13 @@ $(OUT).bin: $(OUT).asc
 # 1..48 locally: 29/48 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 57 -> 31 (clk48 54.52, clk 29.40,
 # clk -> clk48 11.42 ns), the best clk48 with a clk -> clk48 well inside MAX_X48_NS.  CI sweep not
 # run yet.  RE-VERIFY on hardware.
-SEED_LOOP ?= 31
+# CI sweep (Linux yosys) of the same netlist: seed 31 only reaches 44.99 MHz there.  Seed 40 is the
+# best seed good in BOTH toolchains (clk48 53.98 local / 53.98 CI, clk -> clk48 13.19 / 13.05 ns).
+# Pinned SEED_LOOP 31 -> 40.  RE-VERIFY on hardware.
+SEED_LOOP ?= 40
 # v49: the v48 list (good in both toolchains then) without the seeds the v49 local sweep does
 # not close (15, 58, 2), then the best v49 local seeds.  Re-order after a CI sweep.
-SEED_LOOP_FALLBACK ?= 28 40 46 10 4 39 26 25 37 34 7 60 6 11 59
+SEED_LOOP_FALLBACK ?= 10 46 15 11 7 27 8 42 5 17
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -507,7 +510,7 @@ SEED_LOOP_FALLBACK ?= 28 40 46 10 4 39 26 25 37 34 7 60 6 11 59
 # 32.30, clk -> clk48 12.80 ns).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
 # v50 (LA change capture + pre-trigger; 4445 LC, 84%): seed 48 closes (clk48 55.73) but its
 # clk -> clk48 paths take 14.64 ns, near MAX_X48_NS.  Swept 1..32 locally.  Pinned SEED_DEEP 48 -> 31
-# (clk48 57.07, clk 27.65, clk -> clk48 12.80 ns).  CI sweep not run yet.  RE-VERIFY deep replay.
+# (clk48 57.07, clk 27.65, clk -> clk48 12.80 ns).  The CI sweep closes it too (55.24 MHz, 13.44 ns).
 SEED_DEEP ?= 31
 # Good in both toolchains, ordered by the lower of the two clk48 results (v48 sweeps).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
