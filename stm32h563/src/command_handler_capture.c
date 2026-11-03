@@ -1137,7 +1137,16 @@ void handle_la_capture(int conn_id, const char *json) {
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float la_actual = 0.0f;
-    if (fpga_la_capture_psram_start(samples, sr_hz, &la_actual) != 0) {
+    /* "mode":"changes" (gateware >= v50): a 48 MS/s change capture of "units" x 256 ticks;
+       "samples" is then the number of 16-bit words of the event stream to read back. */
+    char mode_s[12] = {0}, units_s[16] = {0};
+    json_get_value(json, "mode", mode_s, sizeof(mode_s));
+    json_get_value(json, "units", units_s, sizeof(units_s));
+    bool changes = strcmp(mode_s, "changes") == 0;
+    int  armed   = changes ? fpga_la_change_start((uint32_t)strtoul(units_s, NULL, 10), samples)
+                           : fpga_la_capture_psram_start(samples, sr_hz, &la_actual);
+    if (changes) la_actual = 48000000.0f;
+    if (armed != 0) {
         heavy_release(conn_id);
         capture_trigger_cancel(&trig);
         send_error(conn_id, "la capture failed");

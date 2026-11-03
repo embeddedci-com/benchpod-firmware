@@ -216,6 +216,13 @@ void fpga_set_dac_stop_after_us(uint32_t us);
    Older gateware keeps getting the old opcodes. */
 #define CAPTURE_OPCODE_ONLY_MIN_GW  40u
 
+/* LA CHANGE capture (v50): CMD_CAPTURE with la_div = LA_CHANGE_DIV samples at 48 MS/s and stores
+   only the ticks where a channel changed, 3 bytes each; la_cnt is the duration in units of
+   LA_CHANGE_UNIT_TICKS 48 MHz ticks.  Format in ice40/src/la_change_capture.v. */
+#define LA_CHANGE_MIN_GW      50u
+#define LA_CHANGE_DIV         0xFFFFu
+#define LA_CHANGE_UNIT_TICKS  256u
+
 /* Stage a co-trigger for the NEXT DAC start: after this, the following START_DAC / START_DAC_PSRAM
    latches its params (and, deep, primes its reader FIFO) but HOLDS the engine start until the next
    capture arm.  Returns true if armed (gw >= v27), false if the gateware can't co-trigger (caller
@@ -671,6 +678,9 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
    The sample rate is clamped so the writer keeps up (see the .c).  Hands the
    shared bus to the iCE40.  Returns 0, or -1 (no v2>=8 gateware / bad count). */
 int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz);
+/* Arm a change capture of `units` x 256 ticks; the read-back is `words` 16-bit words of the
+   event stream (the caller sizes it; the stream ends at its END event).  -1 on gateware < v50. */
+int fpga_la_change_start(uint32_t units, size_t words);
 
 /* Poll an armed capture.  Returns 1 = done (the shared bus has been ACQUIRED for
    the MCU; read it back then release), 0 = still capturing, -1 = timeout. */

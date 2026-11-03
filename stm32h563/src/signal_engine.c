@@ -2183,6 +2183,31 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     return 0;
 }
 
+int fpga_la_change_start(uint32_t units, size_t words) {
+    if (s_fpga_version < LA_CHANGE_MIN_GW) {
+        printf("[la] change capture needs gateware >= %u (have %u)\n",
+               (unsigned)LA_CHANGE_MIN_GW, (unsigned)s_fpga_version);
+        return -1;
+    }
+    if (units == 0 || units > 0xFFFFFFu || words == 0 || words > signal_engine_la_max_samples(false))
+        return -1;
+    /* la_div goes on the wire as is: fpga_capture_cmd would encode it as a period */
+    uint8_t args[10] = {
+        0, 0, 0, 0, 0,
+        (uint8_t)units, (uint8_t)(units >> 8), (uint8_t)(units >> 16),
+        (uint8_t)LA_CHANGE_DIV, (uint8_t)(LA_CHANGE_DIV >> 8),
+    };
+    capture_regions_dirty(0u, (uint32_t)words);
+    psram_bus_handover();
+    spi_cmd_write(CMD_CAPTURE, args, sizeof(args));
+    cotrig_consume();
+    uint64_t window_ms = (uint64_t)units * LA_CHANGE_UNIT_TICKS / 48000u;
+    psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
+    printf("[la] change capture armed (%lu x 256 ticks at 48 MS/s, ~%lu ms, read-back %u words)\n",
+           (unsigned long)units, (unsigned long)window_ms, (unsigned)words);
+    return 0;
+}
+
 int fpga_la_capture_psram_wait(void) {
     uint8_t st = 0;
     fpga_status_read(&st);
