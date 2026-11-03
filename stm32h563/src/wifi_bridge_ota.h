@@ -80,6 +80,9 @@ bool wbo_busy(const wbo_t *o);
 void wbo_force(wbo_t *o);
 /* "idle", "updating to 0.2.0: 45%", "updated to 0.2.0", "failed: ...", ... */
 const char *wbo_status(const wbo_t *o);
+/* The bridge reports an EMC test build ("<version>-emc", wifi-bridge `./build.sh emc`): the pod
+   never updates it on its own, only on `bridge update`. */
+bool wbo_is_emc_build(const char *fw_version);
 /* "X.Y.Z" -> X << 16 | Y << 8 | Z, 0 if it is not one. */
 uint32_t wbo_pack_version(const char *s);
 void wbo_version_str(uint32_t v, char out[16]);

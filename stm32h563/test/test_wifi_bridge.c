@@ -510,6 +510,23 @@ static void test_relay(void)
     CHECK(strcmp(sim.fw, "0.3.2") == 0);
     sim.refuse_begin = false;
 
+    /* A bridge on an EMC test build ("-emc") keeps it: a newer image is not installed on its own,
+       the status says why, and `bridge update` still replaces it. */
+    CHECK(wbo_is_emc_build("0.1.1-emc") && !wbo_is_emc_build("0.1.1") && !wbo_is_emc_build("-emc"));
+    CHECK(!wbo_is_emc_build("0.1.1-emc2") && !wbo_is_emc_build("") && !wbo_is_emc_build(NULL));
+    strcpy(sim.fw, "0.3.2-emc");
+    slot.version = wbo_pack_version("0.5.0");
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    frames = sim.data_frames;
+    run(12000);
+    CHECK(relay.state == WBO_IDLE && sim.data_frames == frames && strcmp(sim.fw, "0.3.2-emc") == 0);
+    CHECK(strstr(wbo_status(&relay), "no automatic update: the bridge runs an EMC test build") != NULL);
+    wbo_force(&relay);
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.5.0") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.5.0") == 0);
+
     /* Forced without a bridge: says why. */
     wb_set_link(&pod, false, now_ms);
     wbo_force(&relay);
