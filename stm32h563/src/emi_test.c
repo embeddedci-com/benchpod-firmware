@@ -263,7 +263,7 @@ uint8_t emi_test_led_state(void) {
     return STATUS_LED_EMI_RUNNING;
 }
 
-/* "off", or "10 Mbit/s, sent 1200, drops 0". */
+/* "off", or "20 Mbit/s, sent 1200, drops 0". */
 static void net_describe(char *buf, size_t cap) {
     if (!ns.mbit) { snprintf(buf, cap, "off"); return; }
     snprintf(buf, cap, "%lu Mbit/s, sent %lu, drops %lu", (unsigned long)ns.mbit,

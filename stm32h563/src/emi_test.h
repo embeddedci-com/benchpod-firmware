@@ -23,7 +23,7 @@
  *   - optionally a 115200 baud NMEA stream out of one LA pin (`emi uart <la>`), so the pod's own
  *     LA drivers toggle; off by default, since it drives a pin of the DUT
  *
- *   - a stream of raw Ethernet frames out of the Ethernet port (default 10 Mbit/s, full
+ *   - a stream of raw Ethernet frames out of the Ethernet port (default 20 Mbit/s, full
  *     1514-byte frames, EtherType 0x88B6, to a locally administered MAC nobody owns), so the
  *     wired link carries traffic with no laptop script. Layer 2 only: it needs a link, not an IP
  *     address, DHCP or a peer. Through a Wi-Fi bridge it keeps the bridge's radio transmitting
@@ -47,8 +47,10 @@
 /* The Ethernet stream: default and top rate, frame size (a full 1500-byte MTU plus the 14-byte
    header), EtherType (IEEE 802 local experimental 2; 0x88B5 is the Wi-Fi bridge's control
    channel) and destination (locally administered unicast, 02 'B' 'P' 'E' 'M' 'I': switches flood
-   it like any unknown address, an access point keeps it off the air). */
-#define EMI_NET_DEFAULT_MBIT     10u
+   it like any unknown address, an access point keeps it off the air). The default is 20 Mbit/s,
+   twice the "at least 10 % of line rate" CISPR 32 asks of a LAN port on a 100 Mbit/s link, since
+   the lab runs the build unattended. */
+#define EMI_NET_DEFAULT_MBIT     20u
 #define EMI_NET_MAX_MBIT         50u
 #define EMI_NET_FRAME            1514u
 #define EMI_NET_ETHERTYPE        0x88B6u
