@@ -111,7 +111,7 @@ CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src
 CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
-                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/psram_alloc.c
+                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/psram_alloc.c ../src/la_rate.c
 CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
               ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)

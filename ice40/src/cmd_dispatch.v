@@ -127,6 +127,7 @@ module cmd_dispatch #(
     output reg               trig_en,
     output reg               trig_edge,
     output reg               trig_pol,
+    output reg               trig_pre,         // SET_TRIGGER flags bit0 (v50): change capture keeps a pre-trigger window
     input  wire              trig_wait,     // TRIGGER_STATUS (0x34) bit0: armed, condition not seen yet
     input  wire              trig_fired,    // TRIGGER_STATUS (0x34) bit1: fired since the last arm
     // Status inputs (for STATUS cmd)
@@ -573,7 +574,7 @@ module cmd_dispatch #(
             cap_test_ramp <= 1'b0;   /* persistent — reset only, not per-cycle */
             psram_cs_force <= 1'b0;
             trig_ch   <= 4'd0;  trig_en  <= 1'b0;   /* untriggered until SET_TRIGGER */
-            trig_edge <= 1'b0;  trig_pol <= 1'b0;
+            trig_edge <= 1'b0;  trig_pol <= 1'b0;  trig_pre <= 1'b0;
             cs_active_d <= 1'b0;
 
             gpio_set_stb     <= 1'b0;
@@ -1013,6 +1014,7 @@ module cmd_dispatch #(
                                     trig_en   <= (arg_buf[8] != 8'd0) && (arg_buf[8] <= 8'd4);
                                     trig_edge <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd2);
                                     trig_pol  <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd3);
+                                    trig_pre  <= rx_byte[0];   // flags: the last byte
                                 end
                                 `CD_I2C_CONFIG: begin
                                     // [addr7][sda_ch][scl_ch][flags][trig_reg]

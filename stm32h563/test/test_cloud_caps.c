@@ -35,7 +35,7 @@ static cloud_caps_t typical(void) {
         .deep_replay = true, .replay_max_samples = 4194304,
         .control_loop = true, .loop_sources = true, .loop_input_map = true, .cotrig = true,
         .generate16 = true,
-        .gpio_read = true, .capture_trigger = true, .spi_master = true,
+        .gpio_read = true, .capture_trigger = true, .spi_master = true, .la_max_rate_hz = 48000000ul,
         .nrst_pin = true, .pod_current = true,
         .current_out_min_ua = 0, .current_out_max_ua = 24000,
         .board = "stm32h563",
@@ -55,7 +55,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink", "wifi_scan",
+        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink", "wifi_scan", "la_max_rate_hz",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {

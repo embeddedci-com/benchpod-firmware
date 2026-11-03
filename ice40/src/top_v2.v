@@ -372,7 +372,7 @@ module top (
     wire [13:0] la_sample;        // live 14-channel LA readback
     wire [13:0] la_levels;        // la_sample through a 2-flop synchroniser (GPIO_GET + trigger)
     wire [3:0]  trig_ch;          // capture trigger config (OP_SET_TRIGGER 0x33, v35) — see below
-    wire        trig_en, trig_edge, trig_pol;
+    wire        trig_en, trig_edge, trig_pol, trig_pre;
 
     // The unified OP_CAPTURE (0x31) pulses cap_start AND la_cap_start on the SAME
     // cycle, so the two captures share t0.  OP_START_CAPTURE (0x20) pulses only
@@ -514,17 +514,60 @@ module top (
     //      sample -> LA ring.  Armed by la_cap_start.  (Its own ps_start/ps_stop
     //      writer-control outputs are unused — the writer is driven by the unified
     //      trigger + drain controller below.) ----
-    wire       la_wr_stb, la_busy, la_done, la_overflow;
-    wire [7:0] la_wr_data;
-    wire       la_ring_in_full;
+    //
+    // v50: OP_CAPTURE's la_div = 0xFFFF selects the CHANGE capture instead (la_change_capture:
+    // 48 MS/s, 3 bytes per edge, la_cnt in units of 256 ticks).  0xFFFF as a raw period (65537
+    // clk, 366 S/s) was never sent.  Both producers feed the same 48-bit SPRAM ring.
+    wire       la_chg_sel = (la_cap_divider == 16'hFFFF);
+    reg        la_chg = 1'b0;                  // this run is a change capture (latched at the arm)
+    always @(posedge clk)
+        if (rst)               la_chg <= 1'b0;
+        else if (la_cap_start) la_chg <= la_chg_sel;
+
+    wire       la_raw_stb, la_raw_busy, la_raw_done;
+    wire [7:0] la_raw_data;
     la_psram_capture #(.N(14), .CNT_W(24)) la_ps_i (
-        .clk(clk), .rst(rst), .la_in(la_sample),
-        .start(la_cap_start), .sample_count(la_cap_count), .divider(la_cap_divider),
+        .clk(clk), .rst(rst | (la_cap_start & la_chg_sel)), .la_in(la_sample),
+        .start(la_cap_start & ~la_chg_sel), .sample_count(la_cap_count), .divider(la_cap_divider),
         .hold(trig_wait),
         .ps_start(), .ps_stop(),
-        .wr_data(la_wr_data), .wr_stb(la_wr_stb), .full(la_ring_in_full),
-        .busy(la_busy), .done(la_done), .overflow(la_overflow)
+        .wr_data(la_raw_data), .wr_stb(la_raw_stb), .full(1'b0),   // drops show as la_ring_ovf
+        .busy(la_raw_busy), .done(la_raw_done), .overflow()
     );
+    // raw bytes -> 48-bit ring words; the tail is flushed once the producer is done
+    wire [47:0] la_pk_wd;
+    wire [2:0]  la_pk_len;
+    wire        la_pk_stb, la_pk_partial;
+    la_byte_pack la_pk_i (
+        .clk(clk), .rst(rst | arm),
+        .in_data(la_raw_data), .in_stb(la_raw_stb), .flush(la_raw_done),
+        .wd(la_pk_wd), .wstb(la_pk_stb), .wlen(la_pk_len), .partial(la_pk_partial)
+    );
+
+    // 48 MS/s pairs (clk48 -> clk, phase-locked) and the change encoder
+    wire [13:0] la48_a, la48_b;
+    la48_sampler #(.N(14)) la48_i (
+        .clk48(clk48), .clkdiv(clkdiv), .la_in(la_sample), .pa(la48_a), .pb(la48_b));
+    wire [47:0] la_chg_wd;
+    wire        la_chg_stb, la_chg_busy, la_chg_done, la_chg_ovf;
+    wire        la_ring_in_rdy;
+    // Any arm that is not a change capture (another LA mode, an ADC-only capture, the all-zero
+    // abort) resets the encoder, and a change arm resets the raw producer: a producer left running
+    // by an abort strobed into the next capture's ring (review B2).
+    la_change_capture #(.N(14)) la_chg_i (
+        .clk(clk), .rst(rst | (la_cap_start & ~la_chg_sel)),
+        .pa(la48_a), .pb(la48_b),
+        .start(la_cap_start & la_chg_sel), .hold(trig_wait), .pretrig(trig_pre), .count(la_cap_count),
+        .limit(adc_cap_base),                       // the firmware puts the LA region end here
+        .wd(la_chg_wd), .wstb(la_chg_stb), .wrdy(la_ring_in_rdy),
+        .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf)
+    );
+
+    wire       la_busy     = la_raw_busy | la_chg_busy;
+    // raw: done once the packer's tail is out too (the drain controller waits on la_done)
+    wire       la_done     = la_chg ? la_chg_done : (la_raw_done & ~la_pk_partial);
+    wire       la_overflow = la_chg & la_chg_ovf;   // not sticky into a later raw/ADC capture (review B1)
+    wire       la_wr_stb   = la_raw_stb | la_chg_stb;              // producer output (benches count it)
 
     // ---- capture burst buffering ----
     // The LA stream (12 MS/s burst) keeps its deep 16-bit-packed SPRAM ring
@@ -552,9 +595,12 @@ module top (
     // v47: every arm (including the zero-count abort) empties the ring, as it does the writer's
     // staging FIFOs: LA words an aborted capture left in it used to drain into the start of the
     // next capture's region.
-    spram_ring16 #(.AW(15)) la_ring_i (
+    // v50: spram_ring48 (3 SPRAM, 16K words = 96 KB) replaces spram_ring16 (2 SPRAM, 64 KB).
+    spram_ring48 #(.AW(14)) la_ring_i (
         .clk(clk), .rst(rst | arm), .clr_ovf(arm),     // v46: per-capture overflow, like the other sources
-        .in_data(la_wr_data), .in_stb(la_wr_stb), .in_full(la_ring_in_full),
+        .hold_out(la_chg & trig_pre & trig_wait),   // pre-trigger window: nothing drains yet
+        .in_word(la_chg ? la_chg_wd : la_pk_wd), .in_stb(la_chg ? la_chg_stb : la_pk_stb),
+        .in_len(la_chg ? 3'd0 : la_pk_len), .in_rdy(la_ring_in_rdy),
         .out_data(la_ring_out), .out_stb(la_ring_out_stb), .out_full(la_wr_full),
         .empty(la_ring_empty), .overflow(la_ring_ovf)
     );
@@ -616,7 +662,7 @@ module top (
     // grant wait.  (`~ps_idle` kept too; as an OR term it can only add activity.)
     // (The ADC ring's ~empty term is gone with the ring; ADC bytes now sit in the
     //  writer's staging FIFO, covered by wr_req | wr_busy | ~ps_idle below.)
-    wire       pipe_active = adc_wr_stb | la_wr_stb | ~la_ring_empty
+    wire       pipe_active = adc_wr_stb | la_wr_stb | la_pk_stb | la_pk_partial | ~la_ring_empty
                              | ~ps_idle | wr_req | wr_busy;
     wire       producers_done = (~run_adc | adc_done_r) & (~run_la | la_done);
     always @(posedge clk) begin
@@ -721,7 +767,16 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 49) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 50) ----
+    // GATEWARE_VERSION 50 = v49 + LA CHANGE CAPTURE: OP_CAPTURE with la_div = 0xFFFF samples the
+    //   LA at 48 MS/s (la48_sampler, clk48) and records only the ticks where a channel changed
+    //   (la_change_capture: 3 bytes per event, la_cnt in units of 256 ticks).  Both LA formats go
+    //   through spram_ring48 (3 SPRAM, 96 KB, 48-bit words; replaces spram_ring16); raw bytes are
+    //   packed 6 per word by la_byte_pack.  tb_la_change, tb_top_lachange.
+    //   Also: END carries why the stream ended; a pre-trigger window (SET_TRIGGER flags bit0); any
+    //   other arm resets the change encoder (and a change arm the raw producer); its overflow no
+    //   longer sticks into later captures.  Loop 4133 -> 4777 LC (90%), deep 3842 -> 4445 LC (84%);
+    //   SPRAM 2 -> 3.  Seeds 31/31: clk48 54.52 / 57.07 MHz.  New MAX_X24_NS gate on clk48 -> clk.
     // GATEWARE_VERSION 49 = v48 + OP_DAC_CTRL (0x38) for the analog v3r2 board's quad DAC8554:
     //   the stream control byte (top byte of every DAC frame, taken at each start through
     //   dac_start_cdc; 0 at power-up = the DAC8551 frame, so v2/v3 boards are unchanged) and a
@@ -877,6 +932,10 @@ module top (
     //     HW-regressed deep DAC PSRAM replay before (see the v28/v31/v32 seed notes in the
     //     Makefile), so the window was dropped rather than shipped on a thin placement.  Bring it
     //     back only after an LC-reduction pass on the deep image.
+    //     v50: back for the CHANGE capture only (SET_TRIGGER flags bit0 = trig_pre): spram_ring48
+    //     keeps the newest PRE_WORDS words while the trigger waits (hold_out) and the encoder
+    //     records from the arm.  No new opcode or STATUS bytes: the firmware finds the trigger by
+    //     counting back from the stream's last tick.
     //   tb_top_capture covers the four modes, the co-trigger + stop-after relative to the trigger,
     //   abort while waiting, and re-arm with different parameters.
     // GATEWARE_VERSION 34 = v33 + ROBUSTNESS PASS after the v33 DAC restart bug:
@@ -1101,7 +1160,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd49), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd50), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1122,7 +1181,7 @@ module top (
         .cap_start(cap_start), .cap_count(cap_count), .cap_divider(cap_divider),
         .adc_cap_base(adc_cap_base),
         .cap_test_ramp(cap_test_ramp), .psram_cs_force(psram_cs_force),
-        .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol),
+        .trig_ch(trig_ch), .trig_en(trig_en), .trig_edge(trig_edge), .trig_pol(trig_pol), .trig_pre(trig_pre),
         .trig_wait(trig_wait), .trig_fired(trig_fired),
         .cap_busy(cap_busy_w),
         .cap_done(cap_done_r),

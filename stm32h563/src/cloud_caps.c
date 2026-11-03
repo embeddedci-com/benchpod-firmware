@@ -38,6 +38,7 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
             c->dac_fullscale_mv, c->dac_channels, tf(c->deep_replay), c->replay_max_samples,
             tf(c->control_loop), tf(c->loop_sources), tf(c->loop_input_map), tf(c->cotrig),
             c->generate16 ? 16 : c->dac_bits);
+    bp_emit(e, "\"la_max_rate_hz\":%lu,", c->la_max_rate_hz);
     bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
                "\"nrst_pin\":%s,"
                "\"power_profile\":true,"

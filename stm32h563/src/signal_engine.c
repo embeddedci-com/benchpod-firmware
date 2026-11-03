@@ -601,7 +601,12 @@ int fpga_status_read(uint8_t *out_status) {
    bytes or was armed over an in-flight capture — the read-back is then truncated/
    corrupt.  Log + return true so callers fail loudly instead of returning garbage.
    On < v9 gateware the bit is always 0, so this is a no-op there. */
+static bool s_cap_overflowed;   /* the last capture that ended reported CAP_OVF (not a timeout) */
+static uint32_t s_la_change_units;   /* the last change capture's duration in 256-tick units */
+bool signal_engine_last_cap_overflowed(void) { return s_cap_overflowed; }
+
 static bool cap_overflowed(uint8_t st, const char *what) {
+    s_cap_overflowed = false;
     /* A CONFIGURED iCE40 always drives STATUS bit 7 = 0 (cmd_dispatch hardwires it; bit 6 is
        LOOP_TRIPPED since gw v30).  If it is set the iCE40 isn't driving MISO at all — STATUS
        floated to 0xFF via the pull-ups because the FPGA is UNCONFIGURED/wedged (it
@@ -615,6 +620,7 @@ static bool cap_overflowed(uint8_t st, const char *what) {
         return true;
     }
     if (st & STATUS_CAP_OVF) {
+        s_cap_overflowed = true;
         printf("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
                "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
                "truncated/corrupt. Lower the rate.\n", what);
@@ -2125,6 +2131,10 @@ int adc_capture_psram(uint16_t *out16, size_t samples, float sample_rate_hz) {
    "do NOT inherit the ADC's min-divider floor" rule that the shipped 0.3-MS/s bug
    violated.  Conservative drain estimate; HW-tuned on the bench. */
 
+uint32_t signal_engine_la_change_divisor(float sample_rate_hz) {
+    return la_change_divisor(sample_rate_hz, s_fpga_version);
+}
+
 int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz) {
     /* Dynamic ceiling: LA can use everything from the front up to a resident deep-DAC
        waveform (or the whole chip if none).  LA-only here (adc_in_capture=false) — the
@@ -2180,6 +2190,73 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
            (unsigned)samples, (unsigned long)divider,
            (unsigned long)(ksps / 1000u), (unsigned long)(ksps % 1000u),
            (unsigned long)window_ms);
+    return 0;
+}
+
+/* LA change capture (gateware >= v50): `samples` at 48 MHz / k after t0 (the arm, or the trigger).
+   The duration rounds up to whole 256-tick units; the read-back stops at `samples`.  The stream may
+   fill all the free LA space: the gateware takes the end from the ADC base (latched at the arm; the
+   ADC is not in this capture), so the base is set for the arm and put back right after.  With
+   `pre`, SET_TRIGGER already asked for a pre-trigger window (fpga_set_trigger_pre): the ring keeps
+   up to LA_CHANGE_PRE_BYTES of it, which the gateware does not count, so they come off the limit. */
+int fpga_la_change_start(size_t samples, uint32_t k, bool pre) {
+    if (s_fpga_version < LA_CHANGE_MIN_GW || k == 0) return -1;
+    uint32_t la_max = signal_engine_la_max_samples(false);
+    if (samples == 0 || samples > la_max) return -1;
+    uint64_t ticks = (uint64_t)samples * k;
+    uint32_t units = (uint32_t)((ticks + LA_CHANGE_UNIT_TICKS - 1u) / LA_CHANGE_UNIT_TICKS);
+    if (units == 0 || units > 0xFFFFFFu) return -1;
+    uint32_t region = la_max * 2u;                 /* bytes from the LA base up to the ceiling */
+    if (pre) {
+        if (region <= LA_CHANGE_PRE_BYTES + 4096u) return -1;
+        region -= LA_CHANGE_PRE_BYTES;
+    }
+    s_cap_overflowed = false;
+    s_la_change_units = units;
+    uint32_t la_base = s_la_cap_base, adc_base = s_adc_cap_base;
+    capture_regions_dirty(0u, la_max);             /* the stream may use all of it */
+    psram_bus_handover();
+    if (fpga_set_capture_bases(la_base, FPGA_PSRAM_LA_BASE + region) != 0) return -1;
+    uint8_t args[10] = {
+        0, 0, 0, 0, 0,
+        (uint8_t)units, (uint8_t)(units >> 8), (uint8_t)(units >> 16),
+        (uint8_t)LA_CHANGE_DIV, (uint8_t)(LA_CHANGE_DIV >> 8),
+    };
+    int rc = spi_cmd_write(CMD_CAPTURE, args, sizeof(args));   /* la_div goes on the wire as is */
+    /* latched by the arm: restore the map, even when the arm failed */
+    if (fpga_set_capture_bases(la_base, adc_base) != 0 || rc != 0) {
+        printf("[la] change capture: SPI write failed, aborting\n");
+        fpga_capture_abort();
+        return -1;
+    }
+    cotrig_consume();
+    uint64_t window_ms = ticks / 48000u;
+    psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
+    printf("[la] change capture armed (%u samples at 48/%lu MS/s, %lu x 256 ticks, ~%lu ms%s)\n",
+           (unsigned)samples, (unsigned long)k, (unsigned long)units, (unsigned long)window_ms,
+           pre ? ", pre-trigger" : "");
+    return 0;
+}
+uint32_t signal_engine_la_change_units(void) { return s_la_change_units; }
+
+/* Wait for a change capture.  Unlike the raw wait, CAP_OVF is not a failure: the stream up to its
+   END is exact and END says why it stopped (signal_engine_last_cap_overflowed() reports the flag).
+   1 = done (the shared bus is now held), 0 = running, -1 = timeout or an unresponsive iCE40. */
+int fpga_la_change_wait(void) {
+    uint8_t st = 0;
+    fpga_status_read(&st);
+    if (st & STATUS_CAP_DONE) {
+        if (st & 0x80u) { (void)cap_overflowed(st, "LA change capture"); return -1; }
+        s_cap_overflowed = (st & STATUS_CAP_OVF) != 0;
+        uint32_t spin = 0;
+        while (!busy_read() && spin < 100000u) spin++;
+        psram_bus_acquire();
+        return 1;
+    }
+    if (time_reached(psram_cap_deadline)) {
+        printf("[la] ERROR: change capture timed out (CAP_DONE never set)\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -2311,6 +2388,44 @@ int fpga_dual_capture_start(uint32_t adc_count, uint16_t adc_div,
     return 0;
 }
 
+/* capture_dual with the LA as a change capture (gateware >= v50, LA above 12 MS/s): the ADC as
+   usual, the LA at 48 MHz / k for `la_samples`.  The caller placed the ADC region at the top
+   (fpga_set_capture_bases), so the LA stream may use everything below it: the gateware takes the
+   ADC base as the LA region's end.  The read-back scans the stream like la_capture's. */
+int fpga_dual_change_start(uint32_t adc_count, float adc_req_hz, size_t la_samples, uint32_t k,
+                           float *adc_rate_hz) {
+    if (s_fpga_version < LA_CHANGE_MIN_GW || k == 0 || la_samples == 0) return -1;
+    if (adc_count > ADC_CAP_MAX_SAMPLES) return -1;
+    uint32_t ad = adc_count ? adc_divider_from_rate_hz(adc_req_hz) : 2u;
+    if (ad < 2u) ad = 2u;
+    if (ad > 65535u) ad = 65535u;
+    if (adc_rate_hz) *adc_rate_hz = (float)adc_capture_hz() / (float)ad;
+    uint64_t ticks = (uint64_t)la_samples * k;
+    uint32_t units = (uint32_t)((ticks + LA_CHANGE_UNIT_TICKS - 1u) / LA_CHANGE_UNIT_TICKS);
+    if (units == 0 || units > 0xFFFFFFu) return -1;
+    s_cap_overflowed  = false;
+    s_la_change_units = units;
+    capture_regions_dirty(adc_count, (s_adc_cap_base - s_la_cap_base) / 2u);
+    psram_bus_acquire();
+    if (adc_count) psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
+    psram_bus_release();
+    psram_bus_handover();
+    uint16_t adc_wire = cap_divider_wire(ad, s_fpga_version);
+    uint8_t args[10] = {
+        (uint8_t)adc_count, (uint8_t)(adc_count >> 8), (uint8_t)(adc_count >> 16),
+        (uint8_t)adc_wire,  (uint8_t)(adc_wire  >> 8),
+        (uint8_t)units, (uint8_t)(units >> 8), (uint8_t)(units >> 16),
+        (uint8_t)LA_CHANGE_DIV, (uint8_t)(LA_CHANGE_DIV >> 8),
+    };
+    if (spi_cmd_write(CMD_CAPTURE, args, sizeof(args)) != 0) { fpga_capture_abort(); return -1; }
+    cotrig_consume();
+    uint64_t adc_ms = (uint64_t)adc_count * ad / (adc_capture_hz() / 1000u);
+    uint64_t la_ms  = ticks / 48000u;
+    uint64_t win_ms = adc_ms > la_ms ? adc_ms : la_ms;
+    psram_cap_deadline = make_timeout_time_ms((uint32_t)(win_ms + 5000u));
+    return 0;
+}
+
 /* Poll a started dual capture: 0 = still running, 1 = done (both regions read
    into out_adc/out_la), -1 = error/timeout/overflow. */
 int fpga_dual_capture_poll(uint16_t *out_adc, uint16_t adc_count,
@@ -2434,15 +2549,19 @@ int fpga_gpio_get(uint16_t *levels) {
     return 0;
 }
 
-int fpga_set_trigger(unsigned la, uint8_t mode) {
+int fpga_set_trigger(unsigned la, uint8_t mode) { return fpga_set_trigger_pre(la, mode, false); }
+
+/* SET_TRIGGER with flags bit0 = keep a pre-trigger window (change capture, gateware >= v50). */
+int fpga_set_trigger_pre(unsigned la, uint8_t mode, bool pre) {
     if (s_fpga_version < CAPTURE_TRIGGER_MIN_GW) return -2;
+    if (pre && s_fpga_version < LA_CHANGE_MIN_GW) return -2;
     if (mode > 4u) return -1;
     int idx = 0;
     if (mode != 0u) {
         idx = la_wire_index(la);
         if (idx < 0) return -1;
     }
-    uint8_t args[3] = { (uint8_t)idx, mode, 0u };   /* [channel][mode][flags: reserved, 0] */
+    uint8_t args[3] = { (uint8_t)idx, mode, pre ? 1u : 0u };   /* [channel][mode][flags: bit0 pre-trigger] */
     return spi_cmd_write(CMD_SET_TRIGGER, args, sizeof(args)) == 0 ? 0 : -1;
 }
 
