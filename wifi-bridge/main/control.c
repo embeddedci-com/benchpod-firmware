@@ -297,20 +297,27 @@ static void handle(uint8_t *buf, size_t len)
 
 static void control_task(void *arg)
 {
-    int64_t next_hello = 0;
+    bu_hello_timer_t hello = {0};
+    int64_t next_poll = 0;
     const int64_t interval = (int64_t)CONFIG_BRIDGE_HELLO_INTERVAL_MS * 1000;
     item_t it;
     for (;;) {
+        // HELLO also right after a link-up (eth.c's link event wakes us with IT_NOTIFY), so a
+        // pod learns a new boot's nonce before the unsolicited STATUS and before it signs.
         int64_t now = esp_timer_get_time();
-        if (now >= next_hello) {
-            if (eth_link_up()) {
-                send_hello();
-            }
-            ota_poll();
-            next_hello = now + interval;
+        if (bu_hello_due(&hello, eth_link_up(), now, interval)) {
+            send_hello();
         }
-        if (xQueueReceive(s_q, &it, pdMS_TO_TICKS((next_hello - now) / 1000 + 1)) != pdTRUE) {
+        if (now >= next_poll) {
+            ota_poll();
+            next_poll = now + interval;
+        }
+        int64_t wake = hello.link && hello.next_us < next_poll ? hello.next_us : next_poll;
+        if (xQueueReceive(s_q, &it, pdMS_TO_TICKS((wake - now) / 1000 + 1)) != pdTRUE) {
             continue;
+        }
+        if (bu_hello_due(&hello, eth_link_up(), esp_timer_get_time(), interval)) {
+            send_hello();  // the link came up while we waited: before the STATUS it woke us for
         }
         if (it.kind == IT_NOTIFY) {
             uint8_t pod[6];

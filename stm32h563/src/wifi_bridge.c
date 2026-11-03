@@ -120,6 +120,12 @@ static void forget_bridge(wb_t *b)
 void wb_set_link(wb_t *b, bool up, uint32_t now)
 {
     (void)now;
+    if (b->link_up && !up) {
+        /* The bridge may be rebooting (its PHY drops the link): its next boot has a new nonce,
+           and a request signed with the old one is refused. Sign nothing until a HELLO says
+           which nonce is current (the bytes stay, so a flap without a reboot keeps the counter). */
+        b->have_nonce = false;
+    }
     b->link_up = up;
 }
 
@@ -169,12 +175,15 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
     b->last_hello = now;
     const uint8_t *v;
     uint16_t n;
-    if (bwp_find(m->body, m->body_len, BWP_T_NONCE, &v, &n) && n == BWP_NONCE_LEN &&
-        (!b->have_nonce || memcmp(v, b->nonce, BWP_NONCE_LEN) != 0)) {
-        memcpy(b->nonce, v, BWP_NONCE_LEN);  /* the bridge rebooted: its counter starts over */
+    if (bwp_find(m->body, m->body_len, BWP_T_NONCE, &v, &n) && n == BWP_NONCE_LEN) {
+        if (memcmp(v, b->nonce, BWP_NONCE_LEN) != 0) {
+            memcpy(b->nonce, v, BWP_NONCE_LEN);  /* the bridge rebooted: its counter starts over */
+            b->counter = 0;
+            b->next_status = now;
+        } else if (!b->have_nonce) {
+            b->next_status = now;  /* back after a link drop, same boot: the counter carries on */
+        }
         b->have_nonce = true;
-        b->counter = 0;
-        b->next_status = now;
     }
     update_state(b, m->body, m->body_len, now);
     bwp_get_u8(m->body, m->body_len, BWP_T_FLAGS, &b->info.flags);
@@ -272,7 +281,11 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
             memcpy(b->nonce, v, BWP_NONCE_LEN);  /* we missed a reboot of the bridge */
             b->have_nonce = true;
             b->counter = 0;
-            if (b->req_tries < WB_TRIES) {
+            /* Re-sign with the new nonce, also when this answered the last send: the refusal
+               says nothing about our key yet. Once only, so a bridge that keeps rebooting
+               cannot keep us here. */
+            if (b->req_tries < WB_TRIES || !b->req_resynced) {
+                b->req_resynced = b->req_tries >= WB_TRIES;
                 send_req(b, now);
                 return;
             }
@@ -427,6 +440,9 @@ static int request(wb_t *b, uint8_t type, const uint8_t *tlvs, size_t len, uint3
     }
     if (!bridge_paired(b) && type != BWP_STATUS && type != BWP_SCAN) {
         return -1;  /* auto-pair runs first (wb_poll); the caller retries */
+    }
+    if (bridge_paired(b) && !b->have_nonce) {
+        return -1;  /* after a link drop: wait for the HELLO with the current nonce */
     }
     start_req(b, type, tlvs, len, timeout_ms, false, borrow ? tlvs : NULL, now);
     return 0;
