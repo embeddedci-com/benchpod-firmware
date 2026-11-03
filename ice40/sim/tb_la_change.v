@@ -33,10 +33,11 @@ module tb_la_change;
 
     reg         start = 1'b0, hold = 1'b0;
     reg  [23:0] count = 24'd0;
+    reg  [23:0] limit = 24'hFFFFFF;          // region bytes (huge unless a run tests the end)
     wire [47:0] cwd;
     wire        cstb, cbusy, cdone, covf, rdy;
     la_change_capture #(.N(14)) enc (
-        .clk(clk), .rst(rst), .pa(pa), .pb(pb), .start(start), .hold(hold), .count(count),
+        .clk(clk), .rst(rst), .pa(pa), .pb(pb), .start(start), .hold(hold), .count(count), .limit(limit),
         .wd(cwd), .wstb(cstb), .wrdy(rdy), .busy(cbusy), .done(cdone), .overflow(covf));
 
     reg  [7:0]  rb = 8'd0;
@@ -199,6 +200,12 @@ module tb_la_change;
         check("sparse", 24 * 256, 1'b0);
         if (max_d < 1000) begin $display("FAIL sparse: largest delta %0d, the run never needed a keep-alive", max_d); errors = errors + 1; end
         else $display("  sparse: largest delta %0d (keep-alive)", max_d);
+
+        // F: REGION END.  A 600-byte region under a steady 4 M edges/s: the stream must stop with
+        // overflow, END inside the region, and everything before it exact.
+        limit = 24'd600; pat = 4; arm(24'd16); wait_done; pat = 0; limit = 24'hFFFFFF;
+        check("region end", 16 * 256, 1'b1);
+        if (nb > 600) begin $display("FAIL region end: %0d bytes written, region is 600", nb); errors = errors + 1; end
 
         // C: trigger hold for 200 clk, counting bus
         pat = 3; hold = 1'b1; arm(24'd3);

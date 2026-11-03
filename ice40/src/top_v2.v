@@ -555,6 +555,7 @@ module top (
         .clk(clk), .rst(rst),
         .pa(la48_a), .pb(la48_b),
         .start(la_cap_start & la_chg_sel), .hold(trig_wait), .count(la_cap_count),
+        .limit(adc_cap_base),                       // the firmware puts the LA region end here
         .wd(la_chg_wd), .wstb(la_chg_stb), .wrdy(la_ring_in_rdy),
         .busy(la_chg_busy), .done(la_chg_done), .overflow(la_chg_ovf)
     );

@@ -30,6 +30,12 @@
 //   capture STOPS there instead of dropping it: `overflow` is set, the held event and
 //   END are written as soon as the ring has room, and everything before the stop is
 //   exact.  The firmware reports such a capture as cut short (CAP_OVF).
+//
+// ---- region end (v50) ----
+//   `limit` is the LA region's size in bytes, latched at the arm (top_v2 passes the ADC
+//   region base: the firmware sets it to the end of the free PSRAM before a change capture,
+//   which never runs with the ADC).  A word that would leave no room for the END word stops
+//   the capture the same way a full ring does, so the stream never runs past the region.
 // ============================================================================
 module la_change_capture #(
     parameter N  = 14,
@@ -42,6 +48,7 @@ module la_change_capture #(
     input  wire          start,      // 1-cycle arm
     input  wire          hold,       // trigger wait: nothing is recorded or counted
     input  wire [23:0]   count,      // duration in units of 256 ticks (0 = off)
+    input  wire [23:0]   limit,      // region size in bytes (latched at start)
     output wire [47:0]   wd,         // word for the ring: {later event, earlier event}
     output wire          wstb,
     input  wire          wrdy,       // ring takes a word strobed this cycle
@@ -61,6 +68,7 @@ module la_change_capture #(
     reg [DW-1:0] since;              // ticks from the last event to ra
     reg [6:0]    pre;                // clk cycles within the current 256-tick unit
     reg [23:0]   left;               // 256-tick units left, including this one
+    reg [23:0]   room;               // region bytes left
     reg          lv;                 // an odd event is held in l
     reg [23:0]   l;
 
@@ -83,7 +91,7 @@ module la_change_capture #(
     wire          need_word = two | (lv & any);
     wire [47:0]   run_word  = lv ? {e_one, l} : {e1, e0};
     assign wd   = ending ? (lv ? {e_end, l} : {e_end, e_end}) : run_word;
-    assign wstb = (ending | (step & need_word)) & wrdy;
+    assign wstb = (ending | (step & need_word & (room >= 24'd12))) & wrdy;
 
     always @(posedge clk) begin
         if (rst) begin
@@ -100,15 +108,18 @@ module la_change_capture #(
             pre      <= 7'd0;
             left     <= count;
             lv       <= 1'b0;
+            room     <= limit;
         end else if (ending) begin
             if (wrdy) begin
                 ending <= 1'b0; busy <= 1'b0; done <= 1'b1; lv <= 1'b0;
             end
         end else if (step) begin
-            if (need_word && !wrdy) begin
-                // ring full: stop before this cycle's events, keep everything before exact
+            if (need_word && (!wrdy || room < 24'd12)) begin
+                // ring full, or no room for this word and END: stop before this cycle's events,
+                // keep everything before exact
                 run <= 1'b0; ending <= 1'b1; overflow <= 1'b1;
             end else begin
+                if (need_word) room <= room - 24'd6;
                 first <= 1'b0;
                 p     <= rb;
                 since <= ev_b ? {{(DW-1){1'b0}}, 1'b1}
