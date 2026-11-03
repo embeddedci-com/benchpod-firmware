@@ -306,7 +306,7 @@ module tb_top_deep;
 
         // ==== 3. CORR-2: an overflowed capture, then a clean one ====
         bus_own = 1'b1;                          // the writer cannot drain: the LA ring fills
-        cmd_capture(24'd0, 16'd0, 24'd40000, 16'd2);
+        cmd_capture(24'd0, 16'd0, 24'd60000, 16'd2);   // 120 KB > the 96 KB ring (v50; was 40000 for 64 KB)
         while (dut.la_busy) #1000;
         if (!dut.la_ring_ovf) begin $display("FAIL: the LA ring did not overflow"); errors = errors + 1; end
         bus_own = 1'b0;

@@ -1,0 +1,130 @@
+// ============================================================================
+// la_change_capture.v — LA "change" capture (v50): records only the samples where a
+// channel changed, at the full 48 MS/s, so a long capture costs bytes per EDGE instead
+// of bytes per sample.
+//
+// Input: one PAIR of 48 MS/s samples per 24 MHz clk (la48_sampler): pa = tick 2k,
+// pb = tick 2k+1.  A tick is one 48 MHz sample period (20.83 ns).  The pair is clk48
+// logic, so it is registered here (ra, rb) before anything reads it: the clk48 -> clk
+// path is untimed and has only about one clk48 period, enough for a flop-to-flop hop
+// but not for the compares below (32 ns when they read pa/pb directly).
+//
+// ---- stream format (what lands in PSRAM, 3 bytes per event, little-endian) ----
+//   event = {delta[9:0], state[13:0]}: byte0 = state[7:0],
+//           byte1 = {delta[1:0], state[13:8]}, byte2 = delta[9:2]
+//   The first event has delta 0 and gives the state at t0 (the arm, or the trigger).
+//   Every later event has delta >= 1: advance the time by `delta` ticks, then the
+//   channels read `state`.  When nothing changes for ~1020 ticks the encoder writes
+//   the unchanged state as a keep-alive event, so delta never overflows.  The last
+//   tick of the capture always gets an event, so the stream ends exactly at
+//   count * 256 - 1.  The stream then ends with an END event: delta 0 again (any
+//   later delta-0 event is END; the bytes after it are padding or stale).
+//
+// ---- duration ----
+//   `count` is in units of 256 ticks (128 clk = 5.33 us); 24 bits reach ~89 s.
+//
+// ---- packing and overflow ----
+//   A cycle yields 0, 1 or 2 events; they are paired into 48-bit words (2 events) for
+//   spram_ring48, holding an odd one over in `l`.  That is at most one word per clk,
+//   which is what the ring's port can write.  If the ring cannot take a word, the
+//   capture STOPS there instead of dropping it: `overflow` is set, the held event and
+//   END are written as soon as the ring has room, and everything before the stop is
+//   exact.  The firmware reports such a capture as cut short (CAP_OVF).
+// ============================================================================
+module la_change_capture #(
+    parameter N  = 14,
+    parameter DW = 10                // delta width (24 - N)
+)(
+    input  wire          clk,
+    input  wire          rst,
+    input  wire [N-1:0]  pa,         // sample at tick 2k
+    input  wire [N-1:0]  pb,         // sample at tick 2k+1
+    input  wire          start,      // 1-cycle arm
+    input  wire          hold,       // trigger wait: nothing is recorded or counted
+    input  wire [23:0]   count,      // duration in units of 256 ticks (0 = off)
+    output wire [47:0]   wd,         // word for the ring: {later event, earlier event}
+    output wire          wstb,
+    input  wire          wrdy,       // ring takes a word strobed this cycle
+    output reg           busy,       // encoding or waiting to write END
+    output reg           done,       // sticky until the next start
+    output reg           overflow    // sticky until the next start: stopped early
+);
+    localparam [DW-1:0] KEEPALIVE = 10'd1020;
+
+    reg [N-1:0]  ra, rb;             // the pair, in the clk domain
+    always @(posedge clk) begin ra <= pa; rb <= pb; end
+
+    reg          run;                // encoding (busy and not yet ending)
+    reg          ending;             // write the held event + END, then done
+    reg          first;              // next recorded sample is t0
+    reg [N-1:0]  p;                  // state of the last recorded tick
+    reg [DW-1:0] since;              // ticks from the last event to ra
+    reg [6:0]    pre;                // clk cycles within the current 256-tick unit
+    reg [23:0]   left;               // 256-tick units left, including this one
+    reg          lv;                 // an odd event is held in l
+    reg [23:0]   l;
+
+    // ---- this cycle's events ----
+    wire          ev_a    = first | (ra != p);
+    wire          last    = (left == 24'd1) && (pre == 7'd127);
+    wire          force_b = last | (!ev_a && (since >= KEEPALIVE));
+    wire          ev_b    = (rb != ra) | force_b;
+    wire [DW-1:0] dl_a    = first ? {DW{1'b0}} : since;
+    wire [DW-1:0] dl_b    = ev_a ? {{(DW-1){1'b0}}, 1'b1} : since + 1'b1;
+    wire [23:0]   e0      = {dl_a, ra};
+    wire [23:0]   e1      = {dl_b, rb};
+    wire [23:0]   e_one   = ev_a ? e0 : e1;            // the event when only one fired
+    wire          two     = ev_a & ev_b;
+    wire          any     = ev_a | ev_b;
+    wire [23:0]   e_end   = {{DW{1'b0}}, p};           // END: delta 0
+
+    // A word goes out when two events meet: two this cycle, or one plus the held one.
+    wire          step      = run & ~hold;
+    wire          need_word = two | (lv & any);
+    wire [47:0]   run_word  = lv ? {e_one, l} : {e1, e0};
+    assign wd   = ending ? (lv ? {e_end, l} : {e_end, e_end}) : run_word;
+    assign wstb = (ending | (step & need_word)) & wrdy;
+
+    always @(posedge clk) begin
+        if (rst) begin
+            run <= 1'b0; ending <= 1'b0; busy <= 1'b0; done <= 1'b0; overflow <= 1'b0;
+            lv <= 1'b0;
+        end else if (start) begin
+            run      <= (count != 24'd0);
+            busy     <= (count != 24'd0);
+            ending   <= 1'b0;
+            done     <= (count == 24'd0);
+            overflow <= 1'b0;
+            first    <= 1'b1;
+            since    <= {DW{1'b0}};
+            pre      <= 7'd0;
+            left     <= count;
+            lv       <= 1'b0;
+        end else if (ending) begin
+            if (wrdy) begin
+                ending <= 1'b0; busy <= 1'b0; done <= 1'b1; lv <= 1'b0;
+            end
+        end else if (step) begin
+            if (need_word && !wrdy) begin
+                // ring full: stop before this cycle's events, keep everything before exact
+                run <= 1'b0; ending <= 1'b1; overflow <= 1'b1;
+            end else begin
+                first <= 1'b0;
+                p     <= rb;
+                since <= ev_b ? {{(DW-1){1'b0}}, 1'b1}
+                       : ev_a ? {{(DW-2){1'b0}}, 2'd2}
+                       :        since + 2'd2;
+                // pair bookkeeping: what is held after this cycle
+                if (lv) begin
+                    if (two) l <= e1;
+                    lv <= lv ^ any ^ two;   // held+1 -> word, none held; held+2 -> word, e1 held
+                end else if (any && !two) begin
+                    l <= e_one; lv <= 1'b1;
+                end
+                pre <= pre + 7'd1;
+                if (pre == 7'd127) left <= left - 24'd1;
+                if (last) begin run <= 1'b0; ending <= 1'b1; end
+            end
+        end
+    end
+endmodule

@@ -35,6 +35,10 @@ SRC = src/top_v2.v            \
       src/adc_mcp33131.v      \
       src/psram_dual_writer.v \
       src/spram_ring16.v      \
+      src/spram_ring48.v      \
+      src/la_byte_pack.v      \
+      src/la48_sampler.v      \
+      src/la_change_capture.v \
       src/dac8551_engine.v    \
       src/cdc_pulse_payload.v \
       src/dac_loop.v          \
@@ -175,9 +179,14 @@ NEXTPNR = nextpnr-ice40 $(NEXTPNR_FLAGS)
 #   one clk48 period (20.8 ns) minus how far clk lags clk48 through its divider flop and global
 #   buffer (a few ns).  nextpnr still reports their max delay; hardware-verified v41 placements sit
 #   at 12.1-14.5 ns.  Checked like MIN_CLK48_MHZ (warning; a failure with PNR_STRICT=1).
+# MAX_X24_NS (v50): the other direction, clk48 -> clk, also untimed.  Since v50 it carries the
+#   48 MS/s LA sample pairs (la48_sampler -> la_change_capture's ra/rb), latched one clk48 period
+#   before clk rises, so a path gets about 20.8 ns plus clk's lag.  It must stay flop-to-flop:
+#   <= 6.2 ns before v50; 32.6 ns when the encoder's compares read the pair directly.
 PNR_STRICT    ?= 0
 MIN_CLK48_MHZ ?= 50
 MAX_X48_NS    ?= 15
+MAX_X24_NS    ?= 15
 
 # $(call pnr,<in.json>,<out.asc>,<pinned seed>,<fallback seeds>)
 #
@@ -207,6 +216,13 @@ define pnr
 	    fi; \
 	    f48=$$(grep "Max frequency for clock 'clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/'); \
 	    x48=$$(grep -E "Max delay posedge clk +-> posedge clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
+	    x24=$$(grep -E "Max delay posedge clk48[^ ]* +-> posedge clk +:" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
+	    if [ -z "$$x24" ]; then \
+	      rm -f $(2); \
+	      echo "ERROR: $(2): the nextpnr log ($$log) has no clk48 -> clk max delay line, so the"; \
+	      echo "       MAX_X24_NS gate cannot run."; \
+	      exit 1; \
+	    fi; \
 	    if [ -z "$$f48" ] || [ -z "$$x48" ]; then \
 	      rm -f $(2); \
 	      echo "ERROR: $(2): the nextpnr log ($$log) has no $${f48:+clk -> clk48 max delay}$${f48:-clk48 Max frequency} line,"; \
@@ -225,6 +241,12 @@ define pnr
 	      echo "*** WARNING: $(2): the untimed clk -> clk48 paths take $$x48 ns (MAX_X48_NS=$(MAX_X48_NS))."; \
 	      echo "***          They must fit in 20.8 ns minus clk's lag behind clk48; re-sweep the seed."; \
 	      bad="$${bad:+$$bad, }clk->clk48 $$x48 ns"; \
+	    fi; \
+	    echo "nextpnr: $(2): clk48 -> clk (untimed) max delay $$x24 ns (MAX_X24_NS=$(MAX_X24_NS))"; \
+	    if awk -v x="$$x24" -v m="$(MAX_X24_NS)" 'BEGIN { exit !(x > m) }'; then \
+	      echo "*** WARNING: $(2): the untimed clk48 -> clk paths take $$x24 ns (MAX_X24_NS=$(MAX_X24_NS))."; \
+	      echo "***          A clk48 signal feeds clk logic without a flop first, or the seed placed it far."; \
+	      bad="$${bad:+$$bad, }clk48->clk $$x24 ns"; \
 	    fi; \
 	    if [ -n "$$bad" ] && [ "$(PNR_STRICT)" = "1" ]; then \
 	      rm -f $(2); \
@@ -266,7 +288,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -779,12 +801,27 @@ ringtest:
 	$(VVP) /tmp/$(PROJECT)_ring.vvp
 	@rm -f /tmp/$(PROJECT)_ring.vvp
 
+# The v50 LA change capture, sampler to bytes (tb_la_change.v), with the full ring and with a
+# 16-word ring that must overflow under a max-rate burst.
+LACHANGE_SRC = src/la48_sampler.v src/la_change_capture.v src/spram_ring48.v src/la_byte_pack.v
+lachangetest:
+	@set -e; for d in "" -DSMALL_RING; do \
+	  echo "== tb_la_change $$d"; \
+	  iverilog -g2012 -I src $$d -o /tmp/$(PROJECT)_lachange.vvp -s tb_la_change sim/tb_la_change.v $(LACHANGE_SRC); \
+	  $(VVP) /tmp/$(PROJECT)_lachange.vvp; \
+	done
+	@rm -f /tmp/$(PROJECT)_lachange.vvp
+
+# The v50 change capture through the whole top (SPI arm -> PSRAM), on both images.
+toplachangetest:
+	$(call topbench,tb_top_lachange,loop deep)
+
 # Unit tests of tools/ice40_release.py (promote's stale-image refusal, the MANIFEST fields).
 releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
