@@ -773,8 +773,10 @@ module top (
     //   (la_change_capture: 3 bytes per event, la_cnt in units of 256 ticks).  Both LA formats go
     //   through spram_ring48 (3 SPRAM, 96 KB, 48-bit words; replaces spram_ring16); raw bytes are
     //   packed 6 per word by la_byte_pack.  tb_la_change, tb_top_lachange.
-    //   Loop 4133 -> 4690 LC (88%), deep 3842 -> 4399 LC (83%); SPRAM 2 -> 3.  Pinned seeds hold: loop
-    //   clk48 50.83, deep 55.84 MHz.  New MAX_X24_NS gate on clk48 -> clk (loop 6.98, deep 8.93 ns).
+    //   Also: END carries why the stream ended; a pre-trigger window (SET_TRIGGER flags bit0); any
+    //   other arm resets the change encoder (and a change arm the raw producer); its overflow no
+    //   longer sticks into later captures.  Loop 4133 -> 4777 LC (90%), deep 3842 -> 4445 LC (84%);
+    //   SPRAM 2 -> 3.  Seeds 31/31: clk48 54.52 / 57.07 MHz.  New MAX_X24_NS gate on clk48 -> clk.
     // GATEWARE_VERSION 49 = v48 + OP_DAC_CTRL (0x38) for the analog v3r2 board's quad DAC8554:
     //   the stream control byte (top byte of every DAC frame, taken at each start through
     //   dac_start_cdc; 0 at power-up = the DAC8551 frame, so v2/v3 boards are unchanged) and a
