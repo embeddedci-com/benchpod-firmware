@@ -122,7 +122,8 @@ programmer with DTR/RTS auto-reset, which puts the ESP32 into the ROM loader and
   | 6 IO0 | DCM |
 
   On macOS its port is `/dev/cu.wchusbserial<n>` with WCH's driver, `/dev/cu.usbserial-<n>`
-  with Apple's.
+  with Apple's. If esptool fails with "Invalid head of packet (serial noise)", use `-b 115200`
+  (seen once at 460800 on the bench).
 
 ```sh
 brew install esptool        # once (or: pip3 install esptool); esptool runs on the host
@@ -274,9 +275,13 @@ signature carries asset version 0, so the pod never installs or replaces it on i
 ./flash.sh                     # afterwards: back to the normal dev build
 ```
 
-Without a programmer, through the pod (the bridge must run a dev image, which trusts the dev
-key, and be paired with that pod): put the image into the pod's blob slot `bridge` and force
-the update; the reverse puts the release image back.
+Without a programmer, through the pod: the bridge must run a dev image (which trusts the dev key)
+and be paired with that pod, and the pod must run a dev build too (release pod firmware refuses
+the dev-signed blob with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`, is one). Its EMI
+loop keeps the pod busy, so `emi stop` on the pod console first and `emi start` after. Put the
+image into the pod's blob slot `bridge` and force the update; a release `benchpod flash-self`
+puts the pod's release firmware and bridge blob back. The pod confirms the new image by talking
+to it, so it stays after reboots (tested: no rollback).
 
 ```sh
 benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
@@ -321,18 +326,20 @@ sent frames that carried the pod's frames, `dropped` the pod's frames skipped.
 | 10 Hz square wave | a button acted (PAIR, FACTORY), as in the normal build |
 
 ```
-I (15230) emc: TX ch 6 1m 19.50 dBm | 76 frames/s, air 96% | eth rx 41210, on air 377, pattern 0, busy 1630, err 0
+I (90717) emc: TX ch 6 1m 19.50 dBm | 74 frames/s, air 91% | eth rx 42791, on air 1967, pattern 4902, busy 90004, err 0
 > emc
 emc: pod frames
 emc-radio: channel 6, rate 1m, power 19.50 dBm (maximum 19.50), country US
-emc-air: 95% of the time since boot (estimate, without gaps)
-emc-counters: sent=1102 sent_eth=1102 sent_pattern=0 eth_rx=118734 eth_skipped=117632 busy=4890 errors=0
+emc-air: 92% of the time since boot (estimate, without gaps)
+emc-counters: sent=6502 sent_eth=1600 sent_pattern=4902 eth_rx=34694 eth_skipped=33092 busy=85099 errors=0
 OK
 ```
 
-(The numbers above show the format; they are not a measurement.) `air` is the time on the air
-from the frame sizes and the rate (preamble included, inter-frame gaps not), so it can read a
-little high; use a spectrum analyser in zero span for the real duty cycle. `busy` counts sends
+(Bench, 2026-11-03: the pod's EMI build streaming 20 Mbit/s, about 1650 frames/s, of which
+the radio carries about 75 at 1 Mbit/s.) `air` is the time on the air from the frame sizes and
+the rate (preamble included, inter-frame gaps not), so it can read a little high, and above
+100 % in the first report after boot, while the driver's queue fills; use a spectrum analyser in
+zero span for the real duty cycle. `busy` counts sends
 the driver's full queue refused (normal); `err` other failures.
 
 | Command | |
@@ -477,7 +484,7 @@ sudo tools/bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin
 | Anything on hardware: RMII clock and PHY bring-up, link, forwarding, Wi-Fi join with the pod MAC, multicast (mDNS) delivery through the station, throughput, OTA + signature check + trial boot and rollback, the PAIR button and both FACTORY gestures (bootloader factory reset on GPIO34 included), pairing with a real pod, console on the TC2030 pads, TP8 patterns | **not tested** |
 | eFuse flows (secure boot, flash encryption): irreversible, try on a sacrificial board | **not tested** |
 | EMC test build (`./build.sh emc`) builds; the production overlay and `RELEASE=1` refuse it; dev and production images unchanged apart from line numbers in `ESP_ERROR_CHECK` | yes (build only) |
-| EMC test build on a bridge: continuous TX, channel/rate/power changes, the pod's frames on the air, TP8 | **not tested** |
+| EMC test build on a bridge (rev 2, 2026-11-03): install by OTA through the pod and confirmation across a reboot, TC2030 flash into factory, continuous TX (about 75 frames/s at 1 Mbit/s, 92 % air estimate, 0 errors), the pod's 20 Mbit/s 0x88B6 frames on the air, channel/rate/power/stop/start (channel 13 refused under US, power capped at 19.5 dBm) | yes, from the counters; not yet seen on a spectrum analyser; TP8 not probed |
 
 Things to watch at bring-up:
 
