@@ -218,8 +218,8 @@ void fpga_set_dac_stop_after_us(uint32_t us);
 
 /* LA CHANGE capture (v50): CMD_CAPTURE with la_div = LA_CHANGE_DIV samples at 48 MS/s and stores
    only the ticks where a channel changed, 3 bytes each; la_cnt is the duration in units of
-   LA_CHANGE_UNIT_TICKS 48 MHz ticks.  Format in ice40/src/la_change_capture.v. */
-#define LA_CHANGE_MIN_GW      50u
+   LA_CHANGE_UNIT_TICKS 48 MHz ticks.  Format in ice40/src/la_change_capture.v.  The gateware
+   floor and la_change_divisor() are in la_rate.h. */
 #define LA_CHANGE_DIV         0xFFFFu
 #define LA_CHANGE_UNIT_TICKS  256u
 
@@ -678,9 +678,12 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
    The sample rate is clamped so the writer keeps up (see the .c).  Hands the
    shared bus to the iCE40.  Returns 0, or -1 (no v2>=8 gateware / bad count). */
 int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz);
-/* Arm a change capture of `units` x 256 ticks; the read-back is `words` 16-bit words of the
-   event stream (the caller sizes it; the stream ends at its END event).  -1 on gateware < v50. */
-int fpga_la_change_start(uint32_t units, size_t words);
+/* la_change_divisor() for the running gateware: 0 = the raw path. */
+uint32_t signal_engine_la_change_divisor(float sample_rate_hz);
+/* Arm a change capture of `samples` at 48 MHz / k (gateware >= v50); -1 when it can't. */
+int fpga_la_change_start(size_t samples, uint32_t k);
+/* The last capture that ended failed on CAP_OVF (a full buffer), not a timeout. */
+bool signal_engine_last_cap_overflowed(void);
 
 /* Poll an armed capture.  Returns 1 = done (the shared bus has been ACQUIRED for
    the MCU; read it back then release), 0 = still capturing, -1 = timeout. */

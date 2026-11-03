@@ -80,6 +80,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->generate16 = analog && DAC_AC;
     c->gpio_read = caps.gpio_read;
     c->capture_trigger = caps.capture_trigger;
+    c->la_max_rate_hz = signal_engine_la_change_divisor(48e6f) ? 48000000ul : 12000000ul;
     c->spi_master = caps.spi_master;
     c->gps = caps.uart2;
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */

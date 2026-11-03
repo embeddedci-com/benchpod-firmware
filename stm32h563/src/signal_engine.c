@@ -601,7 +601,11 @@ int fpga_status_read(uint8_t *out_status) {
    bytes or was armed over an in-flight capture — the read-back is then truncated/
    corrupt.  Log + return true so callers fail loudly instead of returning garbage.
    On < v9 gateware the bit is always 0, so this is a no-op there. */
+static bool s_cap_overflowed;   /* the last capture that ended reported CAP_OVF (not a timeout) */
+bool signal_engine_last_cap_overflowed(void) { return s_cap_overflowed; }
+
 static bool cap_overflowed(uint8_t st, const char *what) {
+    s_cap_overflowed = false;
     /* A CONFIGURED iCE40 always drives STATUS bit 7 = 0 (cmd_dispatch hardwires it; bit 6 is
        LOOP_TRIPPED since gw v30).  If it is set the iCE40 isn't driving MISO at all — STATUS
        floated to 0xFF via the pull-ups because the FPGA is UNCONFIGURED/wedged (it
@@ -615,6 +619,7 @@ static bool cap_overflowed(uint8_t st, const char *what) {
         return true;
     }
     if (st & STATUS_CAP_OVF) {
+        s_cap_overflowed = true;
         printf("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
                "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
                "truncated/corrupt. Lower the rate.\n", what);
@@ -2125,6 +2130,10 @@ int adc_capture_psram(uint16_t *out16, size_t samples, float sample_rate_hz) {
    "do NOT inherit the ADC's min-divider floor" rule that the shipped 0.3-MS/s bug
    violated.  Conservative drain estimate; HW-tuned on the bench. */
 
+uint32_t signal_engine_la_change_divisor(float sample_rate_hz) {
+    return la_change_divisor(sample_rate_hz, s_fpga_version);
+}
+
 int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *actual_hz) {
     /* Dynamic ceiling: LA can use everything from the front up to a resident deep-DAC
        waveform (or the whole chip if none).  LA-only here (adc_in_capture=false) — the
@@ -2183,28 +2192,36 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     return 0;
 }
 
-int fpga_la_change_start(uint32_t units, size_t words) {
-    if (s_fpga_version < LA_CHANGE_MIN_GW) {
-        printf("[la] change capture needs gateware >= %u (have %u)\n",
-               (unsigned)LA_CHANGE_MIN_GW, (unsigned)s_fpga_version);
-        return -1;
-    }
-    if (units == 0 || units > 0xFFFFFFu || words == 0 || words > signal_engine_la_max_samples(false))
-        return -1;
-    /* la_div goes on the wire as is: fpga_capture_cmd would encode it as a period */
+/* LA change capture (gateware >= v50): `samples` at 48 MHz / k.  The duration rounds up to whole
+   256-tick units; the read-back stops at `samples`.  The region it may fill is all the free LA
+   space: the gateware takes its end from the ADC base (latched at the arm, the ADC is not in this
+   capture), so the base is set for the arm and put back right after. */
+int fpga_la_change_start(size_t samples, uint32_t k) {
+    if (s_fpga_version < LA_CHANGE_MIN_GW || k == 0) return -1;
+    uint32_t la_max = signal_engine_la_max_samples(false);
+    if (samples == 0 || samples > la_max) return -1;
+    uint64_t ticks = (uint64_t)samples * k;
+    uint32_t units = (uint32_t)((ticks + LA_CHANGE_UNIT_TICKS - 1u) / LA_CHANGE_UNIT_TICKS);
+    if (units > 0xFFFFFFu) return -1;
+    s_cap_overflowed = false;
+    uint32_t region = la_max * 2u;                 /* bytes from the LA base up to the ceiling */
+    uint32_t la_base = s_la_cap_base, adc_base = s_adc_cap_base;
+    capture_regions_dirty(0u, la_max);             /* the stream may use all of it */
+    psram_bus_handover();
+    fpga_set_capture_bases(la_base, FPGA_PSRAM_LA_BASE + region);
     uint8_t args[10] = {
         0, 0, 0, 0, 0,
         (uint8_t)units, (uint8_t)(units >> 8), (uint8_t)(units >> 16),
         (uint8_t)LA_CHANGE_DIV, (uint8_t)(LA_CHANGE_DIV >> 8),
     };
-    capture_regions_dirty(0u, (uint32_t)words);
-    psram_bus_handover();
-    spi_cmd_write(CMD_CAPTURE, args, sizeof(args));
+    spi_cmd_write(CMD_CAPTURE, args, sizeof(args));  /* la_div goes on the wire as is */
+    fpga_set_capture_bases(la_base, adc_base);       /* latched by the arm: restore the map */
     cotrig_consume();
-    uint64_t window_ms = (uint64_t)units * LA_CHANGE_UNIT_TICKS / 48000u;
+    uint64_t window_ms = ticks / 48000u;
     psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
-    printf("[la] change capture armed (%lu x 256 ticks at 48 MS/s, ~%lu ms, read-back %u words)\n",
-           (unsigned long)units, (unsigned long)window_ms, (unsigned)words);
+    printf("[la] change capture armed (%u samples at %lu MS/s, %lu x 256 ticks, ~%lu ms)\n",
+           (unsigned)samples, (unsigned long)(48u / k), (unsigned long)units,
+           (unsigned long)window_ms);
     return 0;
 }
 

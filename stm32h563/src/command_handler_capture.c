@@ -80,6 +80,7 @@ static struct {
     size_t bytes;
     bool   stop_dac;   /* HW-cut a concurrently-running DAC during this capture; free it after */
     uint32_t rate_hz;  /* ACHIEVED rate (whole divider, maybe burst-capped), reported as la_rate_hz */
+    uint32_t chg_k;    /* > 0: a change capture (gw >= v50, above 12 MS/s), 48 MHz / chg_k */
 } lacap;
 
 /* ---- v2 async unified simultaneous capture (CMD_CAPTURE 0x31) ----
@@ -140,6 +141,20 @@ static struct {
     bool     b64;         /* dense 16-bit chunks carry "b64":"<base64url of little-endian
                              uint16>" instead of "data":[decimal,...] (see wants_b64) */
     uint32_t progress_ms; /* HAL_GetTick() of the last chunk the connection took */
+    /* LA change capture read-back (gw >= v50): the LA region holds 3-byte change events
+       (ice40/src/la_change_capture.v), decoded here into the same la_edges frames a raw LA
+       capture sends, at sample index = tick / chg_k.  `sent` = samples already final. */
+    bool     chg;
+    bool     chg_hdr;     /* the first frame (with the metadata) went out */
+    bool     chg_first;   /* the next event is t0 */
+    bool     chg_done;    /* END read, or past `total` */
+    uint32_t chg_k;
+    uint32_t chg_off;     /* region byte offset of the next unread event */
+    uint32_t chg_end;     /* region bytes: never read past them */
+    uint16_t chg_n, chg_i;/* events buffered in psram_chunk: bytes held, bytes used */
+    uint64_t chg_t;       /* tick of the last event */
+    long     chg_pend_i;  /* edge held until the index moves on (-1 none): a later event in the */
+    unsigned chg_pend_w;  /* same sample replaces it, so a sample shows its last state */
 } bulk;
 
 /* A client that stays connected but stops reading held the PSRAM bus and the busy gate for as
@@ -282,6 +297,7 @@ static void bulk_begin(int conn_id, size_t total, bool is16) {
     bulk.adc_rate_hz = 0;   /* default: omit; a rate-aware caller sets these after */
     bulk.la_rate_hz  = 0;
     bulk.b64         = false;   /* default: decimal; an "enc":"b64" caller sets it after */
+    bulk.chg         = false;
     bulk_take_trigger();
 }
 
@@ -304,6 +320,7 @@ static void bulk_begin_capture16(int conn_id, size_t adc_samples, size_t la_samp
     bulk.la_rate_hz  = 0;
     bulk.la_last     = -1;   /* LA region streams transitions; first LA sample is an edge */
     bulk.b64         = false;
+    bulk.chg         = false;
     bulk_take_trigger();
 }
 
@@ -325,8 +342,108 @@ static void bulk_begin_capture16_resume(int conn_id, size_t offset) {
     bulk.la_last     = -1;   /* re-reading LA from `offset`: emit its first sample as an edge */
     bulk.trig_present = false;   /* a resume is a read-back, not a capture: no trigger outcome */
     bulk.b64         = false;
+    bulk.chg         = false;
 }
 
+
+/* Stream an LA change capture: `samples` at 48 MHz / k, decoded from the events in the LA region
+   (`region` bytes) into la_edges frames.  The shared bus must already be held. */
+static void bulk_begin_la_changes(int conn_id, size_t samples, uint32_t k, uint32_t region) {
+    bulk_begin_capture16(conn_id, 0, samples);
+    bulk.chg        = true;
+    bulk.chg_hdr    = false;
+    bulk.chg_first  = true;
+    bulk.chg_done   = false;
+    bulk.chg_k      = k;
+    bulk.chg_off    = 0;
+    bulk.chg_end    = region;
+    bulk.chg_n      = 0;
+    bulk.chg_i      = 0;
+    bulk.chg_t      = 0;
+    bulk.chg_pend_i = -1;
+}
+
+/* One la_edges frame of a change capture read-back.  Returns false when the connection died
+   (the caller returns), true otherwise. */
+static bool bulk_pump_changes(int conn, size_t avail) {
+    int pos = 0;
+    if (!bulk.chg_hdr) {
+        pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
+        if (bulk.la_rate_hz)
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+        pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la\":true,\"la_edges\":[");
+    } else {
+        pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[");
+    }
+    size_t limit = sizeof(chunk_buf);
+    if (avail < limit) limit = avail;
+    limit -= 56 + (bulk.trig_present ? 48u : 0u) + 24u;   /* footer + trigger + the final flush */
+    bool first = true;
+    int  reads = 0;
+#define CHG_EMIT(i, w) do { \
+        pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "%s[%lu,%u]", \
+                        first ? "" : ",", (unsigned long)(i), (unsigned)(w)); \
+        first = false; bulk.la_last = (int)(w); } while (0)
+    while (!bulk.chg_done && (size_t)pos + 24u <= limit) {
+        if (bulk.chg_i >= bulk.chg_n) {
+            if (reads == 8) break;                          /* bound the work per frame */
+            uint32_t left = bulk.chg_end - bulk.chg_off;
+            if (left < 3u) { bulk.chg_done = true; break; }
+            uint32_t n = left < 255u ? left : 255u;         /* 85 events in psram_chunk */
+            n -= n % 3u;
+            if (fpga_la_psram_read(bulk.chg_off, psram_chunk, n) != 0) {
+                printf("[cmd] PSRAM read-back failed at byte %lu\n", (unsigned long)bulk.chg_off);
+                bulk.active = false;
+                fpga_capture_psram_release();
+                send_error(conn, "capture read-back failed");
+                heavy_release(conn);
+                return false;
+            }
+            bulk.chg_n = (uint16_t)n;
+            bulk.chg_i = 0;
+            reads++;
+        }
+        const uint8_t *b = &psram_chunk[bulk.chg_i];
+        bulk.chg_i   += 3u;
+        bulk.chg_off += 3u;
+        uint32_t e = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16);
+        uint32_t d = e >> 14;
+        unsigned w = e & 0x3FFFu;
+        if (bulk.chg_first)  bulk.chg_first = false;            /* t0: delta 0, the state at t0 */
+        else if (d == 0u)  { bulk.chg_done = true; break; }     /* END */
+        else                 bulk.chg_t += d;
+        uint64_t idx = bulk.chg_t / bulk.chg_k;
+        if (idx >= bulk.total) { bulk.chg_done = true; break; }
+        if (bulk.chg_pend_i >= 0 && (uint64_t)bulk.chg_pend_i != idx) {
+            if ((unsigned)bulk.la_last != bulk.chg_pend_w || bulk.la_last < 0)
+                CHG_EMIT(bulk.chg_pend_i, bulk.chg_pend_w);
+            bulk.sent = (size_t)idx;                            /* samples before idx are final */
+        }
+        bulk.chg_pend_i = (long)idx;
+        bulk.chg_pend_w = w;
+    }
+    if (bulk.chg_done) {
+        if (bulk.chg_pend_i >= 0 && ((unsigned)bulk.la_last != bulk.chg_pend_w || bulk.la_last < 0))
+            CHG_EMIT(bulk.chg_pend_i, bulk.chg_pend_w);
+        bulk.chg_pend_i = -1;
+        bulk.sent = bulk.total;
+    }
+#undef CHG_EMIT
+    bool last = bulk.chg_done;
+    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "],\"la_upto\":%u", (unsigned)bulk.sent);
+    if (last) pos += bulk_emit_trigger(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos);
+    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, ",\"more\":%s}\n", last ? "false" : "true");
+    if (at_send_data(conn, (const uint8_t *)chunk_buf, (size_t)pos) != 0) {
+        printf("[cmd] read-back send failed at %u/%u — conn %d dropped\n", (unsigned)bulk.sent, (unsigned)bulk.total, conn);
+        bulk.active = false;
+        fpga_capture_psram_release();
+        heavy_release(conn);
+        at_close_connection(conn);
+        return false;
+    }
+    bulk.chg_hdr = true;
+    return true;
+}
 
 static void bulk_pump(void) {
     if (!bulk.active) return;
@@ -350,6 +467,12 @@ static void bulk_pump(void) {
             return;
         }
         bulk.progress_ms = HAL_GetTick();
+
+        if (bulk.chg) {
+            if (avail < 200) return;
+            if (!bulk_pump_changes(conn, avail)) return;
+            continue;
+        }
 
         /* ---- LA region of a deep unified capture: stream TRANSITIONS (run-length) ----
            Digital lanes are mostly static, so sending one (index,word) pair per CHANGE
@@ -573,11 +696,20 @@ void capture_poll(void) {
             size_t samples = lacap.bytes / 2u;
             bool   stopdac = lacap.stop_dac;
             uint32_t la_hz = lacap.rate_hz;
+            uint32_t chg_k = lacap.chg_k;
             lacap.active = false;
             /* Firmware-side cleanup after the iCE40's mid-capture DAC cut (v21): free the deep-DAC
                PSRAM region + send the official stop so the depth budget + UI state stay in sync. */
             if (stopdac) dac_stop();
-            if (r > 0) {
+            if (r > 0 && chg_k) {
+                /* change capture: decode its events into the raw capture's edge frames.  No
+                   resume (capture_read) for it: last_cap describes raw words. */
+                last_cap.valid = false;
+                printf("[cmd] la_capture: change capture ready (%u samples at %lu MS/s), streaming...\n",
+                       (unsigned)samples, (unsigned long)(la_hz / 1000000u));
+                bulk_begin_la_changes(cid, samples, chg_k, signal_engine_la_max_samples(false) * 2u);
+                bulk.la_rate_hz = la_hz;
+            } else if (r > 0) {
                 /* _wait() took the shared bus.  Stream the trace back through the SAME
                    16-bit read-back as capture_dual but with NO ADC region (adc_samples=0),
                    so the whole thing is the LA region → run-length edges on the wire.  Also
@@ -598,7 +730,15 @@ void capture_poll(void) {
             } else {
                 fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
-                send_error(cid, "la capture failed");
+                if (chg_k && signal_engine_last_cap_overflowed()) {
+                    char msg[200];
+                    snprintf(msg, sizeof(msg), "la capture failed: the signals changed faster than the pod "
+                             "can store at %lu MS/s (about 6 million changes per second, all channels "
+                             "together); capture at 12 MS/s or lower", (unsigned long)(la_hz / 1000000u));
+                    send_error(cid, msg);
+                } else {
+                    send_error(cid, "la capture failed");
+                }
                 heavy_release(cid);
             }
         }
@@ -1137,15 +1277,13 @@ void handle_la_capture(int conn_id, const char *json) {
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float la_actual = 0.0f;
-    /* "mode":"changes" (gateware >= v50): a 48 MS/s change capture of "units" x 256 ticks;
-       "samples" is then the number of 16-bit words of the event stream to read back. */
-    char mode_s[12] = {0}, units_s[16] = {0};
-    json_get_value(json, "mode", mode_s, sizeof(mode_s));
-    json_get_value(json, "units", units_s, sizeof(units_s));
-    bool changes = strcmp(mode_s, "changes") == 0;
-    int  armed   = changes ? fpga_la_change_start((uint32_t)strtoul(units_s, NULL, 10), samples)
-                           : fpga_la_capture_psram_start(samples, sr_hz, &la_actual);
-    if (changes) la_actual = 48000000.0f;
+    /* Above the raw sampler's 12 MS/s, gateware >= v50 records the CHANGES at 48 MS/s and the
+       read-back turns them into the same edges a raw capture sends (48, 24 or 16 MS/s, the
+       nearest to the request); older gateware keeps the raw path, which caps at 12 MS/s. */
+    uint32_t chg_k = signal_engine_la_change_divisor(sr_hz);
+    int armed = chg_k ? fpga_la_change_start(samples, chg_k)
+                      : fpga_la_capture_psram_start(samples, sr_hz, &la_actual);
+    if (chg_k) la_actual = 48e6f / (float)chg_k;
     if (armed != 0) {
         heavy_release(conn_id);
         capture_trigger_cancel(&trig);
@@ -1159,4 +1297,5 @@ void handle_la_capture(int conn_id, const char *json) {
     lacap.bytes    = samples * 2u;
     lacap.stop_dac = stop_dac_armed;
     lacap.rate_hz  = (uint32_t)lroundf(la_actual);
+    lacap.chg_k    = chg_k;
 }

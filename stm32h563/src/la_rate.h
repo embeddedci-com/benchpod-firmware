@@ -117,4 +117,12 @@ uint32_t dac_sample_clocks(uint32_t divider, bool from_psram);
  * maximum rate (DAC_MIN_DIVIDER).  Requests outside the range are clamped and flagged. */
 dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram);
 
+/* LA CHANGE capture (gateware >= LA_CHANGE_MIN_GW): above the raw sampler's LA_RAW_MAX_HZ the
+   firmware records the changes at 48 MS/s instead and reads them back as 48 MHz / k samples,
+   k = 1..3 (48, 24, 16 MS/s), the k nearest the request.  Returns k, or 0 for the raw path
+   (rate <= 12 MS/s, rate 0 = "max" which stays raw, or older gateware). */
+#define LA_CHANGE_MIN_GW  50u
+#define LA_RAW_MAX_HZ     12e6f
+uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version);
+
 #endif /* LA_RATE_H */

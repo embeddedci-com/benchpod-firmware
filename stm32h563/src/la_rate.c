@@ -99,3 +99,9 @@ dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool fro
     p.rate_hz = (dac_clk_hz + clocks / 2u) / clocks;
     return p;
 }
+
+uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version) {
+    if (gw_version < LA_CHANGE_MIN_GW || !(sample_rate_hz > LA_RAW_MAX_HZ)) return 0;
+    uint32_t k = (uint32_t)lroundf(48e6f / sample_rate_hz);
+    return k < 1u ? 1u : k > 3u ? 3u : k;
+}

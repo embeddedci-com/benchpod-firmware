@@ -34,6 +34,16 @@ static double peak_bytes(uint32_t samples, uint32_t rate_hz) {
 }
 
 int main(void) {
+    /* LA change capture: only above 12 MS/s on v50+, k nearest the request, 48/24/16 MS/s */
+    CHECK(la_change_divisor(12e6f, 50) == 0,  "12 MS/s stays raw");
+    CHECK(la_change_divisor(0.0f, 50) == 0,   "rate 0 (max) stays raw");
+    CHECK(la_change_divisor(48e6f, 49) == 0,  "gateware < v50 stays raw");
+    CHECK(la_change_divisor(48e6f, 50) == 1,  "48 MS/s -> k 1");
+    CHECK(la_change_divisor(100e6f, 50) == 1, "above 48 MS/s -> k 1");
+    CHECK(la_change_divisor(24e6f, 50) == 2,  "24 MS/s -> k 2");
+    CHECK(la_change_divisor(20e6f, 50) == 2,  "20 MS/s -> k 2 (24 MS/s)");
+    CHECK(la_change_divisor(16e6f, 50) == 3,  "16 MS/s -> k 3");
+    CHECK(la_change_divisor(12.5e6f, 50) == 3,"12.5 MS/s -> k 3 (16 MS/s)");
     /* ---- THE regression: small captures track the requested rate exactly ---- */
     la_plan_t p = la_psram_plan(HFOSC, 4096, 6.0e6f);
     CHECK(p.divider == 4, "6 MS/s x4096 divider=%u want 4 (ADC-floor 0.3 MS/s regression!)", p.divider);

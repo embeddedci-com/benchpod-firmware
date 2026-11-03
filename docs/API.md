@@ -794,7 +794,7 @@ Capture all 14 LA channels into PSRAM and stream them back. The reply uses the L
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | LA samples. The limit is the PSRAM left above a resident deep-replay waveform (up to the whole 8 MB, 2 bytes per sample). |
-| `sample_rate_mhz` | number (MHz) | no | max | LA sample clock. The pod runs the closest rate at or below it that it can reach (see below). |
+| `sample_rate_mhz` | number (MHz) | no | max (12) | LA sample clock, up to 48 on gateware v50 and later. The pod runs the closest rate at or below it that it can reach (see below); above 12 MS/s, the nearest of 48, 24 and 16. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
 
@@ -816,12 +816,27 @@ The achieved rate can be lower than the request for two reasons:
 Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
 
+#### Above 12 MS/s (gateware v50 and later)
+
+A request above 12 MS/s runs at 48, 24 or 16 MS/s, the one nearest the request (`la_rate_hz`
+says which). The pod records only the moments a channel changes, at 48 MS/s, and sends them as
+the same `la_edges` reply, so nothing changes for the host. The capabilities report the top rate
+as `la_max_rate_hz` (48000000; 12000000 on older gateware, which runs such a request at 12 MS/s).
+
+Its limit is how often the signals change, not the number of samples: about 6 million changes per
+second, all channels together, plus a buffer of about 32 000 changes for bursts. UART, I2C, CAN
+and SPI with gaps between transfers stay well below it. A signal that changes faster for longer
+than the buffer lasts, such as continuous SPI at 10 MHz or more for over about 1.5 ms, ends the
+capture with the error below; capture at 12 MS/s or lower for such signals. `capture_dual` stays
+at 12 MS/s at most.
+
 | Condition | Message |
 |---|---|
 | LA voltage not set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
 | `samples` = 0 or too deep | `"samples out of range"` |
 | Another capture or upload is running | `"busy"` |
 | The capture did not arm | `"la capture failed"` |
+| Above 12 MS/s: the signals changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
 
 ---
 
