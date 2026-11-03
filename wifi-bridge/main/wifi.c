@@ -420,6 +420,11 @@ static void wifi_task(void *arg)
 bwp_result_t wifi_scan(bwp_ap_t *aps, size_t max, size_t *n)
 {
     *n = 0;
+#if CONFIG_BRIDGE_EMC_TEST
+    if (!s_scan_lock) {
+        return BWP_E_UNSUPPORTED;  // the station never started: the radio runs the EMC test
+    }
+#endif
     if (xSemaphoreTake(s_scan_lock, 0) != pdTRUE) {
         return BWP_E_BUSY;
     }

@@ -103,7 +103,14 @@ void app_main(void)
 
     ota_init();
     ota_check_pending();  // before anything that may hang: the rollback timer must run
+#if CONFIG_BRIDGE_EMC_TEST
+    // EMC test build: the radio transmits from boot instead of joining a network.
+    if (emc_test_start() != ESP_OK) {
+        ESP_LOGE(TAG, "EMC test: the radio did not start");
+    }
+#else
     ESP_ERROR_CHECK(wifi_start());
+#endif
     control_start();  // after Wi-Fi: the RF noise makes esp_random() a true RNG for the nonce
     if (eth_start() != ESP_OK) {
         // Keep running for the debug console. A new OTA image that cannot start Ethernet never

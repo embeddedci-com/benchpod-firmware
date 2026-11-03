@@ -83,6 +83,11 @@ bwp_result_t ota_begin(uint32_t size, const uint8_t *sig, size_t sig_len, const 
     static char why[40];
     bwp_result_t r = BWP_OK;
     *msg = NULL;
+#if CONFIG_BRIDGE_EMC_TEST
+    (void)size, (void)sig, (void)sig_len;
+    *msg = "EMC test build: no updates (flash over the TC2030 pads)";
+    return BWP_E_UNSUPPORTED;
+#endif
     xSemaphoreTake(s_lock, portMAX_DELAY);
     abort_locked();
     s_part = esp_ota_get_next_update_partition(NULL);

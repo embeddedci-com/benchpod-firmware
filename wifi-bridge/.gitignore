@@ -6,4 +6,5 @@ build-keys/
 main/fw_keys_gen.h
 managed_components/
 build-prod/
+build-emc/
 factory/

@@ -3,6 +3,8 @@
 #
 #   ./build.sh              dev build -> build/benchpod-wifi-bridge.bin (+ bootloader, partition table)
 #   ./build.sh production   production build (secure boot v2, flash encryption) -> build-prod/, unsigned
+#   ./build.sh emc          EMC test build (README "EMC test build") -> build-emc/; development only:
+#                           refused with RELEASE=1, never signed, never released
 #   ./build.sh <idf.py args> anything else for idf.py, e.g. ./build.sh menuconfig, ./build.sh size
 #
 # Updates: the bridge installs only images that come with the pod's signed manifest (Ed25519, see
@@ -22,6 +24,12 @@ if [ "${1:-}" = "--in-container" ]; then
     echo "=== unsigned production artifacts: sign them on the release signing machine ==="
     ls -l build-prod/benchpod-wifi-bridge.bin build-prod/bootloader/bootloader.bin \
       build-prod/partition_table/partition-table.bin
+  elif [ "${1:-}" = "emc" ]; then
+    idf.py -B build-emc -D SDKCONFIG=build-emc/sdkconfig -D BRIDGE_EMC_BUILD=1 \
+      -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.emc" build
+    echo "=== EMC test build (development only): flash with ./flash.sh --emc ==="
+    ls -l build-emc/benchpod-wifi-bridge.bin build-emc/bootloader/bootloader.bin \
+      build-emc/partition_table/partition-table.bin
   elif [ $# -eq 0 ]; then
     idf.py build
     idf.py size
@@ -31,6 +39,11 @@ if [ "${1:-}" = "--in-container" ]; then
     idf.py "$@"
   fi
   exit 0
+fi
+
+if [ "${1:-}" = "emc" ] && [ "${RELEASE:-0}" = 1 ]; then
+  echo "the EMC test build is development only and cannot be combined with RELEASE=1" >&2
+  exit 2
 fi
 
 # Trusted update keys -> main/fw_keys_gen.h (host side: the container only sees wifi-bridge/).

@@ -6,6 +6,7 @@
 #   ./flash.sh --erase         erase the whole flash first: no Wi-Fi settings, no pairing, factory state
 #   ./flash.sh --no-monitor    flash only
 #   ./flash.sh --monitor       only open the log (115200 8N1, Ctrl-] quits)
+#   ./flash.sh --emc           flash the EMC test build (build-emc/, from ./build.sh emc) instead
 #
 # Wiring: README.md, "Flash". Espressif ESP-Prog: TC2030-IDC cable into its PROG header, pin 1 =
 # EN on both. Olimex ESP-PROG: the IDC's wires to its 0.1" header, TX and RX crossed, 3.3V left
@@ -17,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-port="" erase=0 flash=1 monitor=1 baud=460800
+port="" erase=0 flash=1 monitor=1 baud=460800 dir=build
 while [ $# -gt 0 ]; do
   case "$1" in
     -p|--port) port="$2"; shift 2 ;;
@@ -25,7 +26,8 @@ while [ $# -gt 0 ]; do
     --erase) erase=1; shift ;;
     --no-monitor) monitor=0; shift ;;
     --monitor) flash=0; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --emc) dir=build-emc; shift ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown option $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -64,17 +66,19 @@ if [ -z "$port" ]; then
 fi
 
 if [ "$flash" = 1 ]; then
-  if [ ! -f build/flash_args ]; then
-    echo "build/flash_args missing: run ./build.sh first" >&2
+  if [ ! -f "$dir/flash_args" ]; then
+    hint="./build.sh"
+    [ "$dir" = build-emc ] && hint="./build.sh emc"
+    echo "$dir/flash_args missing: run $hint first" >&2
     exit 1
   fi
   if [ "$erase" = 1 ]; then
     echo "=== erasing the whole flash ==="
     "${esptool[@]}" --chip esp32 -p "$port" -b "$baud" erase_flash
   fi
-  echo "=== flashing bootloader, partition table, otadata, app (factory slot) ==="
+  echo "=== flashing $dir: bootloader, partition table, otadata, app (factory slot) ==="
   # Defaults: reset into the ROM loader via DTR/RTS before, hard reset after (esptool v4 and v5).
-  (cd build && "${esptool[@]}" --chip esp32 -p "$port" -b "$baud" write_flash @flash_args)
+  (cd "$dir" && "${esptool[@]}" --chip esp32 -p "$port" -b "$baud" write_flash @flash_args)
 fi
 
 if [ "$monitor" = 1 ]; then

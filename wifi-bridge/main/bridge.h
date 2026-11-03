@@ -96,5 +96,27 @@ void control_notify(void);                    // state changed: send an unsolici
 void control_forget_pairing(void);            // PAIR button: the next pod that offers a key wins
 bool control_paired(void);
 
+// ---- emc_test.c: the EMC test build only (CONFIG_BRIDGE_EMC_TEST)
+typedef enum { EMC_FAILING, EMC_TX_PATTERN, EMC_TX_ETH, EMC_STOPPED } emc_state_t;
+typedef struct {
+    bool running;
+    uint8_t channel;
+    const char *rate;
+    int8_t power_qdbm, power_max_qdbm;  // 0.25 dBm
+    uint32_t eth_rx, eth_skipped;        // frames from the Ethernet side; replaced before sending
+    uint32_t sent, sent_eth, sent_pattern, busy, errors;
+    esp_err_t last_err;
+    uint64_t airtime_us, uptime_us;
+} emc_counts_t;
+esp_err_t emc_test_start(void);                  // instead of wifi_start()
+void emc_test_eth_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame
+emc_state_t emc_test_state(void);
+void emc_test_counts(emc_counts_t *c);
+void emc_test_run(bool on);
+// Setters return NULL or why they failed.
+const char *emc_test_set_channel(int ch);
+const char *emc_test_set_rate(const char *name);
+const char *emc_test_set_power(int qdbm);  // <= 0: the maximum
+
 // ---- console.c
 void console_start(void);
