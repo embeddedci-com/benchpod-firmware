@@ -102,9 +102,10 @@ static void test_command_flash_across_wrap(void)
     CHECK(status_led_color(&BOOTED, t + STATUS_LED_CMD_FLASH_MS) == STATUS_LED_OFF);
 }
 
-/* The EMI test build: solid blue before the loop starts, blue blinking while it runs, blue
-   and red in turn after a failure. It wins over busy (the loop is always busy) and power on, but
-   not over a failure, a power fault, the boot blinks or an update. */
+/* The EMI test build: solid green before the loop starts, green blinking while it runs, red fast
+   blink while something fails, blue blinking after an earlier failure. It wins over busy (the loop
+   is always busy) and power on, but not over a failure, a power fault, the boot blinks or an
+   update. */
 static void test_emi_pattern(void)
 {
     status_led_reset();
@@ -114,14 +115,18 @@ static void test_emi_pattern(void)
     in.busy = true;
     in.power_on = true;
     in.emi = STATUS_LED_EMI_WAITING;
-    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
-    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_BLUE);
+    CHECK(status_led_color(&in, t) == STATUS_LED_GREEN);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_GREEN);
     in.emi = STATUS_LED_EMI_RUNNING;
+    CHECK(status_led_color(&in, t) == STATUS_LED_GREEN);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_OFF);
+    in.emi = STATUS_LED_EMI_FAILING;
+    CHECK(status_led_color(&in, t) == STATUS_LED_RED);
+    CHECK(status_led_color(&in, t + STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_OFF);
+    CHECK(status_led_color(&in, t + 2 * STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_RED);
+    in.emi = STATUS_LED_EMI_RECOVERED;
     CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_OFF);
-    in.emi = STATUS_LED_EMI_ERRORS;
-    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
-    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_RED);
     in.updating = true;
     CHECK(status_led_color(&in, t) == STATUS_LED_MAGENTA);
     in.updating = false;
@@ -133,6 +138,19 @@ static void test_emi_pattern(void)
     in.hw_ok = true;
     in.emi = STATUS_LED_EMI_NONE;   /* stopped: the normal status again */
     CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
+}
+
+/* What the loop's state maps to: green only while nothing ever failed; red while failing; blue
+   once anything failed or the pod restarted, until power is removed. */
+static void test_emi_state(void)
+{
+    CHECK(status_led_emi_state(false, false, false, false) == STATUS_LED_EMI_WAITING);
+    CHECK(status_led_emi_state(false, false, false, true) == STATUS_LED_EMI_RECOVERED);   /* restarted */
+    CHECK(status_led_emi_state(true, false, true, true) == STATUS_LED_EMI_NONE);          /* stopped */
+    CHECK(status_led_emi_state(true, true, false, false) == STATUS_LED_EMI_RUNNING);
+    CHECK(status_led_emi_state(true, true, true, false) == STATUS_LED_EMI_FAILING);
+    CHECK(status_led_emi_state(true, true, true, true) == STATUS_LED_EMI_FAILING);
+    CHECK(status_led_emi_state(true, true, false, true) == STATUS_LED_EMI_RECOVERED);
 }
 
 /* Only a change goes out, plus a refresh every STATUS_LED_REFRESH_MS (gateware loads reset it). */
@@ -157,6 +175,7 @@ int main(void)
     test_command_flash_across_wrap();
     test_writes_only_on_change_or_refresh();
     test_emi_pattern();
+    test_emi_state();
     if (failures) { printf("test_status_led: %d FAILED\n", failures); return 1; }
     printf("test_status_led: all passed\n");
     return 0;

@@ -23,6 +23,13 @@ void status_led_command(uint32_t now_ms) {
 /* Wrap-safe "less than ms have passed since t". */
 static bool within(uint32_t now_ms, uint32_t t, uint32_t ms) { return (uint32_t)(now_ms - t) < ms; }
 
+status_led_emi_t status_led_emi_state(bool booted, bool running, bool failing_now, bool failed_before) {
+    if (!booted) return failed_before ? STATUS_LED_EMI_RECOVERED : STATUS_LED_EMI_WAITING;
+    if (!running) return STATUS_LED_EMI_NONE;
+    if (failing_now) return STATUS_LED_EMI_FAILING;
+    return failed_before ? STATUS_LED_EMI_RECOVERED : STATUS_LED_EMI_RUNNING;
+}
+
 uint8_t status_led_color(const status_led_in_t *in, uint32_t now_ms) {
     if (!in->boot_done) return STATUS_LED_OFF;
     if (!s_boot_seen) { s_boot_seen = true; s_boot_ms = now_ms; }
@@ -38,9 +45,11 @@ uint8_t status_led_color(const status_led_in_t *in, uint32_t now_ms) {
     /* The EMI build's loop keeps the pod busy all the time: its own pattern says it runs. */
     const bool emi_phase = ((now_ms / STATUS_LED_EMI_BLINK_MS) & 1u) != 0;
     switch (in->emi) {
-    case STATUS_LED_EMI_WAITING: return STATUS_LED_BLUE;
-    case STATUS_LED_EMI_RUNNING: return emi_phase ? STATUS_LED_OFF : STATUS_LED_BLUE;
-    case STATUS_LED_EMI_ERRORS:  return emi_phase ? STATUS_LED_RED : STATUS_LED_BLUE;
+    case STATUS_LED_EMI_WAITING:   return STATUS_LED_GREEN;
+    case STATUS_LED_EMI_RUNNING:   return emi_phase ? STATUS_LED_OFF : STATUS_LED_GREEN;
+    case STATUS_LED_EMI_FAILING:
+        return ((now_ms / STATUS_LED_FAULT_BLINK_MS) & 1u) ? STATUS_LED_OFF : STATUS_LED_RED;
+    case STATUS_LED_EMI_RECOVERED: return emi_phase ? STATUS_LED_OFF : STATUS_LED_BLUE;
     default: break;
     }
     if (in->busy) return STATUS_LED_BLUE;
