@@ -102,7 +102,7 @@ static void test_command_flash_across_wrap(void)
     CHECK(status_led_color(&BOOTED, t + STATUS_LED_CMD_FLASH_MS) == STATUS_LED_OFF);
 }
 
-/* The EMI test build: solid yellow before the loop starts, yellow blinking while it runs, yellow
+/* The EMI test build: solid blue before the loop starts, blue blinking while it runs, blue
    and red in turn after a failure. It wins over busy (the loop is always busy) and power on, but
    not over a failure, a power fault, the boot blinks or an update. */
 static void test_emi_pattern(void)
@@ -114,13 +114,13 @@ static void test_emi_pattern(void)
     in.busy = true;
     in.power_on = true;
     in.emi = STATUS_LED_EMI_WAITING;
-    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
-    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
+    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_BLUE);
     in.emi = STATUS_LED_EMI_RUNNING;
-    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_OFF);
     in.emi = STATUS_LED_EMI_ERRORS;
-    CHECK(status_led_color(&in, t) == STATUS_LED_YELLOW);
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_RED);
     in.updating = true;
     CHECK(status_led_color(&in, t) == STATUS_LED_MAGENTA);
