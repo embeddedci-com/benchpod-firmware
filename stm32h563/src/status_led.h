@@ -21,14 +21,18 @@
  *   update                magenta        firmware or gateware staging / verify (OTA)
  *   busy                  blue           a capture, upload or other PSRAM-bus job in flight
  *   command               cyan flash     a command that drives the pod (not polled reads)
- *   EMI test build        blue           solid: the activity loop starts in a moment; blinking
- *                                        (1 s on, 1 s off): it runs; blue and red in turn: it
- *                                        runs, and a command or capture failed, or Ethernet had a
- *                                        problem (no link, a frame not sent), in the last 30 s.
- *                                        One die only: the LED's dies sit side by side with no
- *                                        diffuser, so a mix such as yellow shows as red next to
- *                                        green. Plain "busy" is solid blue; the 1 s blink is not.
- *                                        (emi_test.h; never in other builds)
+ *   EMI test build        green / red / blue, one die at a time (the LED's dies sit side by side
+ *                                        with no diffuser, so a mix such as yellow shows as red
+ *                                        next to green). Made for a test lab to read at a glance:
+ *                                        solid green: the loop starts in a moment;
+ *                                        green blinking (1 s on, 1 s off): it runs, no failure
+ *                                        since power-on;
+ *                                        red, fast blink: a function is failing now (a command or
+ *                                        capture failed in the last 5 s, or Ethernet has no link
+ *                                        or could not send a frame);
+ *                                        blue blinking (1 s): it runs again after an earlier
+ *                                        failure or an unexpected restart; stays until power is
+ *                                        removed. (emi_test.h; never in other builds)
  *   busy                  blue           (repeated from above: below the EMI pattern)
  *   target power on       green          an eFuse is on, nothing else going on
  *   idle                  off
@@ -60,10 +64,16 @@
 /* The EMI test build's activity loop (emi_test.h), for status_led_in_t.emi. */
 typedef enum {
     STATUS_LED_EMI_NONE = 0,   /* not the EMI build, or the loop is stopped */
-    STATUS_LED_EMI_WAITING,    /* starts in a moment (the boot delay) */
-    STATUS_LED_EMI_RUNNING,
-    STATUS_LED_EMI_ERRORS,     /* running, with a failure in the last 30 s */
+    STATUS_LED_EMI_WAITING,    /* starts in a moment (the boot delay): solid green */
+    STATUS_LED_EMI_RUNNING,    /* runs, no failure since power-on: green blinking */
+    STATUS_LED_EMI_FAILING,    /* a function fails now: red, fast blink */
+    STATUS_LED_EMI_RECOVERED,  /* runs (or starts) after an earlier failure or restart: blue blinking */
 } status_led_emi_t;
+
+/* The EMI pattern from the loop's state. `failing_now`: a failure in the last few seconds or one
+   that lasts (no Ethernet link); `failed_before`: any failure or an unexpected restart since
+   power-on. */
+status_led_emi_t status_led_emi_state(bool booted, bool running, bool failing_now, bool failed_before);
 
 /* The pod's state, sampled once per poll. */
 typedef struct {
