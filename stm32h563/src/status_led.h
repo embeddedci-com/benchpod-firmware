@@ -23,7 +23,8 @@
  *   command               cyan flash     a command that drives the pod (not polled reads)
  *   EMI test build        blue           solid: the activity loop starts in a moment; blinking
  *                                        (1 s on, 1 s off): it runs; blue and red in turn: it
- *                                        runs, and a command or capture failed in the last 30 s.
+ *                                        runs, and a command or capture failed, or Ethernet had a
+ *                                        problem (no link, a frame not sent), in the last 30 s.
  *                                        One die only: the LED's dies sit side by side with no
  *                                        diffuser, so a mix such as yellow shows as red next to
  *                                        green. Plain "busy" is solid blue; the 1 s blink is not.

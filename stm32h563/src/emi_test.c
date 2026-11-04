@@ -63,6 +63,11 @@ static struct {
     volatile uint32_t mbit;       /* 0 = off */
     volatile uint32_t sent;
     volatile uint32_t drops;      /* no pbuf, or the MAC refused the frame */
+    volatile uint32_t link_losses; /* the link went down while the stream ran */
+    volatile uint32_t t_err;      /* HAL_GetTick() of the last Ethernet problem */
+    volatile bool     err;        /* t_err is set (since the last start) */
+    volatile bool     link;       /* the link is up (as the net task last saw it) */
+    bool              had_link;   /* net task: the link was up since the start */
     /* net task only */
     uint32_t          t_last;
     uint32_t          credit;     /* bytes allowed to go now */
@@ -140,6 +145,9 @@ void emi_test_start(void) {
     s.captures   = 0;
     s.errors     = 0;
     s.last_err[0] = '\0';
+    ns.err         = false;   /* the net task re-reads the link from here on */
+    ns.had_link    = false;
+    ns.link_losses = 0;
     if (!s.booted_mode) {   /* first start: the quad DAC runs every output by default */
         s.booted_mode = true;
         if (dac_quad_present()) s.dac = EMI_DAC_ALL;
@@ -198,11 +206,25 @@ void emi_test_net_poll(struct netif *eth) {
     const uint32_t dt  = now - ns.t_last;
     ns.t_last = now;
     const uint32_t mbit = ns.mbit;
-    /* Layer 2 only: no IP address, DHCP or peer needed, just a link. */
-    if (!s.running || !mbit || !netif_is_up(eth) || !netif_is_link_up(eth)) {
+    if (!s.running || !mbit) {
         ns.credit = 0;
         return;
     }
+    /* Layer 2 only: no IP address, DHCP or peer needed, just a link. */
+    const bool link = netif_is_up(eth) && netif_is_link_up(eth);
+    if (!link) {
+        if (ns.link) ns.link_losses++;
+        ns.link   = false;
+        ns.credit = 0;
+        /* No link counts as a problem once it had come up, or after the grace period. */
+        if (ns.had_link || now - s.t_start >= EMI_NET_LINK_GRACE_MS) {
+            ns.t_err = now;
+            ns.err   = true;
+        }
+        return;
+    }
+    ns.link     = true;
+    ns.had_link = true;
     /* mbit Mbit/s = mbit * 125 bytes per ms; cap the credit at one burst, so a stalled pass
        does not turn into a flood afterwards. */
     const uint32_t cap = EMI_NET_BURST * EMI_NET_FRAME;
@@ -211,7 +233,7 @@ void emi_test_net_poll(struct netif *eth) {
     while (ns.credit >= EMI_NET_FRAME) {
         ns.credit -= EMI_NET_FRAME;
         struct pbuf *p = pbuf_alloc(PBUF_RAW, EMI_NET_FRAME, PBUF_RAM);
-        if (!p) { ns.drops++; break; }
+        if (!p) { ns.drops++; ns.t_err = now; ns.err = true; break; }
         uint8_t *d = (uint8_t *)p->payload;
         const uint32_t seq = ns.seq++;
         memcpy(d, k_dst, 6);
@@ -222,8 +244,13 @@ void emi_test_net_poll(struct netif *eth) {
         memcpy(d + 19, &seq, 4);   /* little-endian, like the pod's other binary formats */
         memcpy(d + 23, &now, 4);
         for (uint32_t i = 27; i < EMI_NET_FRAME; i++) d[i] = (uint8_t)(seq + i);
-        if (eth->linkoutput(eth, p) == ERR_OK) ns.sent++;
-        else                                   ns.drops++;
+        if (eth->linkoutput(eth, p) == ERR_OK) {
+            ns.sent++;
+        } else {
+            ns.drops++;
+            ns.t_err = now;
+            ns.err   = true;
+        }
         pbuf_free(p);
     }
 }
@@ -259,22 +286,25 @@ size_t emi_test_avail(void) { return s.budget; }
 uint8_t emi_test_led_state(void) {
     if (!s.booted) return STATUS_LED_EMI_WAITING;
     if (!s.running) return STATUS_LED_EMI_NONE;
-    if (s.errors && HAL_GetTick() - s.last_err_ms < EMI_LED_ERROR_MS) return STATUS_LED_EMI_ERRORS;
+    const uint32_t now = HAL_GetTick();
+    if (s.errors && now - s.last_err_ms < EMI_LED_ERROR_MS) return STATUS_LED_EMI_ERRORS;
+    if (ns.err && now - ns.t_err < EMI_LED_ERROR_MS) return STATUS_LED_EMI_ERRORS;   /* Ethernet */
     return STATUS_LED_EMI_RUNNING;
 }
 
-/* "off", or "20 Mbit/s, sent 1200, drops 0". */
+/* "off", or "20 Mbit/s, sent 1200, drops 0, link up, link losses 0". */
 static void net_describe(char *buf, size_t cap) {
     if (!ns.mbit) { snprintf(buf, cap, "off"); return; }
-    snprintf(buf, cap, "%lu Mbit/s, sent %lu, drops %lu", (unsigned long)ns.mbit,
-             (unsigned long)ns.sent, (unsigned long)ns.drops);
+    snprintf(buf, cap, "%lu Mbit/s, sent %lu, drops %lu, link %s, link losses %lu",
+             (unsigned long)ns.mbit, (unsigned long)ns.sent, (unsigned long)ns.drops,
+             ns.link ? "up" : "down", (unsigned long)ns.link_losses);
 }
 
 size_t emi_test_describe(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
     char uart[8] = "off";
     if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
-    char net[64];
+    char net[112];
     net_describe(net, sizeof(net));
     int len = snprintf(buf, cap,
                        "emi: %s, dac %s, uart %s, net %s, core %lu MHz, %lus, captures %lu, "
@@ -292,11 +322,12 @@ size_t emi_test_json(char *buf, size_t cap) {
     int len = snprintf(buf, cap,
                        "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
-                       "\"net_sent\":%lu,\"net_drops\":%lu}",
+                       "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu}",
                        s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
-                       (unsigned long)ns.sent, (unsigned long)ns.drops);
+                       (unsigned long)ns.sent, (unsigned long)ns.drops,
+                       ns.link ? "true" : "false", (unsigned long)ns.link_losses);
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
 }
