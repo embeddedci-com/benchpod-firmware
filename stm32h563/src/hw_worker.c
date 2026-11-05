@@ -192,12 +192,14 @@ bool hw_worker_submit_esp_flash(void)  { return submit(WK_ESP_FLASH, -1, NULL, 0
 bool hw_worker_take_cloud_reply(char *req_id, size_t req_id_cap,
                                 char *reply, size_t reply_cap, size_t *reply_len) {
     if (!s_cloud_ready) return false;
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);       /* read the reply only after ready */
     strncpy(req_id, s_cloud_req_id, req_id_cap - 1);
     req_id[req_id_cap - 1] = '\0';
     size_t n = s_cloud_reply_len < reply_cap - 1 ? s_cloud_reply_len : reply_cap - 1;
     memcpy(reply, s_cloud_reply, n);
     reply[n] = '\0';
     *reply_len = n;
+    __atomic_thread_fence(__ATOMIC_RELEASE);       /* done reading before freeing the slot */
     s_cloud_ready   = false;   /* free the slot for the next cloud command */
     s_cloud_pending = false;
     return true;
@@ -232,6 +234,7 @@ static void handle_work(cmd_work_t *w) {
             (const char *)w->data, s_cloud_reply, sizeof(s_cloud_reply));
         strncpy(s_cloud_req_id, w->req_id, sizeof(s_cloud_req_id) - 1);
         s_cloud_req_id[sizeof(s_cloud_req_id) - 1] = '\0';
+        __atomic_thread_fence(__ATOMIC_RELEASE);   /* reply and id written before ready */
         s_cloud_ready = true;   /* net task frames it as command.response */
         break;
     }
