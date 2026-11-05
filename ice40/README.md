@@ -124,8 +124,10 @@ every clk <-> clk48 path is untimed. They fall in two groups:
   (hardware-verified placements sit at 4 to 14 ns).
 
 There is no cheap way to have them timed: an SB_PLL40 output is still a separate clock net to
-nextpnr. The structural fix is one 48 MHz domain for everything; that was built and sim-proven
-in 2026-07 but does not place on the up5k at this fill, so the gates stay the mitigation.
+nextpnr. The structural fix is one 48 MHz domain for everything. That was built and sim-proven
+(2026-07, re-measured on v51): it fits (about 88% LC) but closes only 27 to 30 MHz on every
+seed. Its long paths span the die at 5 to 9 LUT levels and are mostly routing, so pipelining
+just moves the critical path. The gates stay the mitigation.
 
 ## STM32 SPI link
 
