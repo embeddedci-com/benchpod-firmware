@@ -944,8 +944,7 @@ static void cl_handle_tunnel_open(const char *json) {
     int slot = cl_tunnel_slot_by_id(id);      /* re-open of a known id reuses its slot */
     if (slot < 0) slot = cl_tunnel_free_slot();
     if (slot < 0) return;                      /* all tunnels in use (the server caps this) */
-    strncpy(s_tunnels[slot], id, sizeof(s_tunnels[slot]) - 1);
-    s_tunnels[slot][sizeof(s_tunnels[slot]) - 1] = '\0';
+    snprintf(s_tunnels[slot], sizeof(s_tunnels[slot]), "%s", id);   /* truncates, always terminated */
     /* The highest command tier the server allows this tunnel's user (policy-commands.md section
        3); an older server sends none, which means everything, as before. */
     char tier_s[8] = {0};
