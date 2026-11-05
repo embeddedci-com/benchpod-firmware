@@ -37,7 +37,9 @@
 #define IFNAME0 's'
 #define IFNAME1 't'
 
-#define ETH_DMA_TRANSMIT_TIMEOUT                (20U)
+/* How long low_level_output waits for a free TX descriptor when all of them are queued.  A
+   full 1514-byte frame is 1.2 ms on the wire at 10 Mbit, so this covers one frame draining. */
+#define ETH_TX_SLOT_WAIT_MS                     (3U)
 
 /* One full Ethernet frame per RX buffer (was 1000 < a 1514-byte frame, which split every
    full packet across TWO DMA buffers — halving effective RX buffering and adding reassembly).
@@ -94,6 +96,7 @@ static uint8_t RxAllocStatus;
 static volatile uint32_t s_rx_alloc_fail;   /* RX pool empty events (eth_diag) */
 static uint32_t s_rx_missed, s_rx_missed_ovf;  /* accumulated: DMACMFCR clears on read */
 static volatile uint32_t s_rx_frames, s_rx_bcast;  /* every received frame (the MMC counts unicast only) */
+static uint32_t s_tx_full_drops;            /* frames dropped: no TX descriptor freed in time */
 
 _Static_assert(ETH_DIAG_MACCR_DM == ETH_MACCR_DM && ETH_DIAG_MACCR_FES == ETH_MACCR_FES,
                "eth_diag MACCR bits must match the CMSIS definitions");
@@ -155,6 +158,35 @@ static void board_eth_mac(uint8_t mac[6])
   mac[3] = (uint8_t)(h >> 8);
   mac[4] = (uint8_t)h;
   mac[5] = (uint8_t)(h2 >> 24);
+}
+
+/* Stop the MAC + DMA and take back every frame still queued for transmit.  Transmit is
+   zero-copy and asynchronous (low_level_output holds a pbuf reference until the DMA is done
+   with it), and HAL_ETH_Start does not reset the TX ring: frames left in it after a stop would
+   leak and keep their descriptors busy forever.  So every stop in this file goes through here,
+   which frees them and rewinds the ring to descriptor 0, where the DMA starts again.  Net task. */
+static void eth_stop(void)
+{
+  (void)HAL_ETH_Stop(&EthHandle);   /* no-op when not started */
+  ETH_TxDescListTypeDef *l = &EthHandle.TxDescList;
+  for (uint32_t i = 0; i < ETH_TX_DESC_CNT; i++) {
+    if (l->PacketAddress[i]) {
+      pbuf_free((struct pbuf *)l->PacketAddress[i]);
+      l->PacketAddress[i] = NULL;
+    }
+    DMATxDscrTab[i].DESC0 = 0;
+    DMATxDscrTab[i].DESC1 = 0;
+    DMATxDscrTab[i].DESC2 = 0;
+    DMATxDscrTab[i].DESC3 = 0;
+  }
+  l->CurTxDesc = 0;
+  l->releaseIndex = 0;
+  l->BuffersInUse = 0;
+  l->CurrentPacketAddress = NULL;
+  /* The DMA is stopped: point it back at the start of the ring (as HAL_ETH_Init does). */
+  ETH->DMACTDRLR = ETH_TX_DESC_CNT - 1U;
+  ETH->DMACTDLAR = (uint32_t)DMATxDscrTab;
+  ETH->DMACTDTPR = (uint32_t)DMATxDscrTab;
 }
 
 static void low_level_init(struct netif *netif)
@@ -257,7 +289,6 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 {
   uint32_t i = 0U;
   struct pbuf *q = NULL;
-  err_t errval = ERR_OK;
   ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT] = {0};
 
   memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
@@ -287,16 +318,25 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
 
-  if( HAL_ETH_Transmit(&EthHandle, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT)== HAL_OK )
-  {
-    errval = ERR_OK;
+  /* Zero-copy, non-blocking: the DMA reads the pbuf after we return, so hold a reference until
+     HAL_ETH_ReleaseTxPacket hands it to HAL_ETH_TxFreeCallback (lwIP does not rewrite a segment
+     while its pbuf is still referenced).  The old blocking HAL_ETH_Transmit spun the net task
+     for every frame's wire time, and on its 20 ms timeout it gave the descriptor back while the
+     DMA could still be reading a pbuf lwIP then freed. */
+  if (EthHandle.gState != HAL_ETH_STATE_STARTED) return ERR_IF;   /* link down */
+  (void)HAL_ETH_ReleaseTxPacket(&EthHandle);
+  pbuf_ref(p);
+  uint32_t t0 = HAL_GetTick();
+  while (HAL_ETH_Transmit_IT(&EthHandle, &TxConfig) != HAL_OK) {
+    /* Every descriptor is queued: wait for one frame to leave, briefly. */
+    if (HAL_GetTick() - t0 >= ETH_TX_SLOT_WAIT_MS) {
+      s_tx_full_drops++;
+      pbuf_free(p);
+      return ERR_IF;
+    }
+    (void)HAL_ETH_ReleaseTxPacket(&EthHandle);
   }
-  else
-  {
-    errval = ERR_IF;
-  }
-
-  return errval;
+  return ERR_OK;
 }
 
 
@@ -339,6 +379,7 @@ void ethernetif_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+    (void)HAL_ETH_ReleaseTxPacket(&EthHandle);   /* free the pbufs of transmitted frames */
     do
     {
       p = low_level_input( netif );
@@ -598,7 +639,7 @@ void ethernet_link_check_state(struct netif *netif)
 
   if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
   {
-    HAL_ETH_Stop(&EthHandle);
+    eth_stop();
     netif_set_down(netif);
     netif_set_link_down(netif);
   }
@@ -658,7 +699,7 @@ void ethernet_link_check_state(struct netif *netif)
    interface stays down until an explicit start. */
 void ethernetif_stop(struct netif *netif)
 {
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 }
@@ -670,7 +711,7 @@ void ethernetif_stop(struct netif *netif)
    self-heal escalation and the `eth start`/`eth restart` command. */
 void ethernetif_phy_restart(struct netif *netif)
 {
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   uint32_t bcr = 0;
   if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr,
                                LAN8742_BCR, LAN8742_BCR_SOFT_RESET) == HAL_OK) {
@@ -714,7 +755,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
   memset(r, 0, sizeof(*r));
   r->mbit = mbit;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 
@@ -778,7 +819,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
   r->crc   = ETH->MMCRCRCEPR - crc0;
   r->align = ETH->MMCRAEPR   - align0;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   ethernetif_phy_restart(netif);     /* soft reset: loopback off, autoneg back on */
   return 0;
 }
@@ -804,7 +845,7 @@ int ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out)
   if (!hz_out) return -1;
   *hz_out = 0;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 
@@ -871,7 +912,7 @@ int ethernetif_force_speed(struct netif *netif, int mbit, int full)
   uint32_t bcr = (mbit == 0) ? (LAN8742_BCR_AUTONEGO_EN | LAN8742_BCR_RESTART_AUTONEGO)
                              : ((mbit == 100 ? LAN8742_BCR_SPEED_SELECT : 0u) |
                                 (full        ? LAN8742_BCR_DUPLEX_MODE  : 0u));
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BCR, bcr) != HAL_OK) {
     netif_set_down(netif);
     netif_set_link_down(netif);
@@ -986,4 +1027,5 @@ void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d)
   d->rx_missed_ovf = s_rx_missed_ovf;
   d->rx_alloc_fail = s_rx_alloc_fail;
   d->rx_alloc_stuck = (RxAllocStatus == RX_ALLOC_ERROR);
+  d->tx_full_drops = s_tx_full_drops;
 }
