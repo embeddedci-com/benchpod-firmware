@@ -45,7 +45,10 @@ static const char *const  s_names[WD_TASK_COUNT] = {
 };
 
 /* The early-warning interrupt runs above FreeRTOS's syscall priority, so it fires even when a
-   task is spinning in a critical section; it calls no RTOS API, it only reads. */
+   task is spinning in a critical section.  So it may only READ RTOS state: fault_note_watchdog
+   takes the running task's name (xTaskGetCurrentTaskHandle, pcTaskGetName on a non-NULL
+   handle, neither of which locks, blocks or asserts).  No printf, no queue, no critical
+   section: those would deadlock or assert at this priority. */
 static void iwdg_ewi_enable(void) {
     NVIC_SetPriority(IWDG_IRQn, 0);
     NVIC_EnableIRQ(IWDG_IRQn);

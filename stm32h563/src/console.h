@@ -9,7 +9,7 @@
 typedef void (*console_out_t)(void *ctx, const char *s);
 
 /* Execute one command line, writing all output through `out`.  `line` is
-   modified in place (tokenised).  Transport-agnostic; serialized via hw_lock. */
+   modified in place (tokenised).  Transport-agnostic; runs on the hw worker task. */
 void console_exec(char *line, console_out_t out, void *ctx);
 
 /* Local interactive console over the USB-CDC VCP / USART2.  console_poll() (net

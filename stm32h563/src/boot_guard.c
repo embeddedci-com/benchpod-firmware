@@ -24,6 +24,7 @@ static volatile boot_record_t s_rec __attribute__((section(".noinit")));
 static bool s_safe;
 static uint32_t s_off;
 static volatile bool s_hw_ready;
+static uint32_t s_prior_failed;   /* the count before this boot (boot_guard_planned_reset) */
 static char s_report[128];
 
 static const char *const s_names[BOOT_STAGE_COUNT] = {
@@ -67,6 +68,7 @@ void boot_guard_begin(bool fresh_start) {
     }
 
     /* This boot counts as failed until boot_guard_healthy() says otherwise. */
+    s_prior_failed = failed;
     s_rec.magic = BOOT_GUARD_MAGIC;
     s_rec.failed = failed + 1;
     s_rec.last_stage = last;
@@ -104,6 +106,16 @@ void boot_guard_healthy(void) {
     if (s_safe) return;
     s_rec.failed = 0;
     s_rec.stage = BOOT_STAGE_RUNNING;
+    __DSB();
+}
+
+void boot_guard_planned_reset(bool planned) {
+    /* A reset somebody asked for (reboot, dfu, an OTA commit, psram_recover) says nothing
+       about this boot: give back the count it took, so two quick reboots in a row do not put
+       the third boot in safe mode.  A crash before this boot is still counted.  Safe mode
+       keeps counting (see boot_guard_healthy): it ends with a power-on or the reset button. */
+    if (s_safe) return;
+    s_rec.failed = planned ? s_prior_failed : s_prior_failed + 1u;
     __DSB();
 }
 

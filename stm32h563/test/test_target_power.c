@@ -60,8 +60,6 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
 
 /* ---- stubs for the rest of target_power.c's externals ------------------- */
 void     fpga_set_led(uint8_t mask) { (void)mask; }
-void     hw_lock(void)   {}
-void     hw_unlock(void) {}
 uint64_t time_us_64(void) { return 0; }
 
 /* ---- tests -------------------------------------------------------------- */

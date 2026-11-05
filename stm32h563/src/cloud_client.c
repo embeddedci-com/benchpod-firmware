@@ -866,7 +866,10 @@ void cloud_client_send_command_response(const char *request_id,
                request_id, cloud_client_state_str());
         return;
     }
-    if (strstr(reply, "\"status\":\"error\"")) {
+    /* Every error reply starts with this (send_error, cloud_reply_cap); an ok reply can carry
+       the same text in its data (a DUT's own JSON in uart_read), so only the start counts. */
+    static const char k_err[] = "{\"status\":\"error\"";
+    if (strncmp(reply, k_err, sizeof(k_err) - 1) == 0) {
         char msg[320] = {0};   /* pin-conflict / la_voltage refusals run to ~250 characters */
         cl_json_str(reply, "message", msg, sizeof(msg));
         cl_send_command_error(request_id, msg);

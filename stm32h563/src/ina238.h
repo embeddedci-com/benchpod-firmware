@@ -39,7 +39,7 @@ int ina238_read_id(uint8_t addr, uint16_t *id);
 /* ---- single-register access, for the profile sampler (power_profile.c) ----
  * ina238_read() writes CONFIG and reads both channels on every call, which is one
  * transaction too many for a ~1 kHz sampler that must not block the hw worker.  These
- * split it into one I2C transaction each; the caller holds hw_lock around them.
+ * split it into one I2C transaction each (hw worker task only, like all I2C).
  */
 
 /* ADC_CONFIG (0x01) at power-on: MODE 0xF (continuous shunt+bus), 1052 us per channel,

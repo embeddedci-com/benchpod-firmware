@@ -49,6 +49,9 @@ bool boot_guard_skip_net(void);
 bool boot_guard_skip_hw(void);
 /* The pod has been up long enough: this boot counts as good. */
 void boot_guard_healthy(void);
+/* Call right before a reset that was asked for (reboot, dfu, OTA commit): this boot then does
+   not count as failed.  planned=false undoes it (the reset did not happen after all). */
+void boot_guard_planned_reset(bool planned);
 /* "" normally; in safe mode "safe mode: <reason>" for the console `status`. */
 const char *boot_guard_report(void);
 /* "" normally; in safe mode the reason alone, e.g. `2 failed boots in a row, the last in

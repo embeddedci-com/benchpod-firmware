@@ -32,8 +32,8 @@ int target_power_schedule(int efuse, bool on, uint32_t delay_ms);
 void target_power_poll(void);
 
 /* Fill *out with eFuse state.  efuse is 1 or 2.  Returns 0, -1 on error.
-   Reads V/FLT over I2C, so callers must serialize it with hw_lock (see
-   target_power_poll's note) — do NOT call it from the net task. */
+   Reads V/FLT over I2C, which only the hw worker task drives: do NOT call it from the
+   net task (target_power_get_cached is the RAM-only read for that). */
 int target_power_get_status(int efuse, target_power_status_t *out);
 
 /* Read the tracked EN state and last-sampled FLT for an eFuse (1 or 2) WITHOUT any

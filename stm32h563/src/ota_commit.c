@@ -21,6 +21,7 @@
 #include "signal_engine.h"   /* signal_engine_quiesce_psram_masters() before the bus grab */
 #include "board_pins.h"
 #include "flash_layout.h"
+#include "boot_guard.h"
 #include "stm32h5xx_hal.h"
 
 #include <stdio.h>
@@ -303,7 +304,9 @@ int ota_commit(void) {
         s_sector_crc[sct] = ram_crc32(s_sector, FLASH_SECTOR_BYTES);
     }
     s_bank_bytes = flash_layout_bank_size();
+    boot_guard_planned_reset(true);               /* the commit ends in a reset (from RAM) */
     if (ram_commit_all(nsectors, total, s_sector) != 0) {   /* returns only if refused */
+        boot_guard_planned_reset(false);
         psram_bus_release();
         printf("[ota] commit refused: the raw PSRAM read does not match the verified image; "
                "nothing was erased\n");

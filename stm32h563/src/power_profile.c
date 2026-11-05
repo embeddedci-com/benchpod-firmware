@@ -4,7 +4,6 @@
 #include "power_profile.h"
 #include "ina238.h"
 #include "i2c_bus.h"
-#include "hw_lock.h"
 #include "target_power.h"
 #include "pico/time.h"
 #include "bp_log.h"
@@ -217,18 +216,12 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
 
     uint8_t addr = (efuse == 2) ? I2C_ADDR_INA238_EXTERNAL : I2C_ADDR_INA238_INTERNAL;
     pp_adc_cfg_t cfg;
-    hw_lock();
     ina_chip_t chip = ina238_chip(addr);
-    hw_unlock();
     pp_rate_select_chip(rate_hz, chip, &cfg);
     uint16_t mv = 0;
-    hw_lock();
     int rc = (chip == INA_CHIP_NONE) ? -1 : ina238_set_adcrange_fine(addr);
     if (rc == 0) rc = ina238_write_adc_config(addr, cfg.adc_config);
-    hw_unlock();
-    hw_lock();
     if (rc == 0) rc = ina238_read_bus_mv(addr, &mv);
-    hw_unlock();
     if (rc != 0) {
         free_store();
         snprintf(err, cap, "power profile: the current monitor for efuse %d (I2C 0x%02X) is not responding", efuse, addr);
@@ -261,10 +254,8 @@ static void finish(bool truncated) {
     s.running   = false;
     s.truncated = truncated;
     s.t_stop    = time_us_64();
-    hw_lock();
     if (ina238_restore_adc_config(s.addr) != 0)
         log_printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
-    hw_unlock();
     pp_decim_finish(&s.dec);
     log_printf("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
            (unsigned)s.st.n, (unsigned)((s.t_stop - s.t_start) / 1000u));
@@ -286,9 +277,7 @@ void power_profile_poll(void) {
        own measured timestamp, so the shunt cadence just slips a pass and the integrals stay right. */
     if (now >= s.next_bus) {
         uint16_t mv = 0;
-        hw_lock();
         int rc = ina238_read_bus_mv(s.addr, &mv);
-        hw_unlock();
         s.next_bus = now + PP_BUS_PERIOD_US;
         if (rc == 0) s.last_mv = mv;
         return;   /* one I2C transaction per worker pass */
@@ -296,9 +285,7 @@ void power_profile_poll(void) {
 
     if (now >= s.next_shunt) {
         int32_t ua = 0;
-        hw_lock();
         int rc = ina238_read_shunt_ua(s.addr, &ua);
-        hw_unlock();
         /* Keep the cadence while on time; after a stall, resume one period from now rather than
            read the same conversion several times in a row. */
         s.next_shunt += s.cfg.period_us;

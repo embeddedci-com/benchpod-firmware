@@ -7,7 +7,7 @@
  * The INA238 runs in continuous shunt+bus mode with conversion time x averaging chosen so one
  * conversion period ~= the requested sample period.  The hw worker reads VSHUNT once per period
  * and VBUS every ~10 ms (the last bus value is held for the samples in between), one I2C
- * transaction per worker pass under hw_lock, so the worker is never blocked for longer than a
+ * transaction per worker pass, so the worker is never blocked for longer than a
  * single register read.  Statistics (min/avg/peak, energy, charge) run over every sample read;
  * the samples kept for the reply are bin-averaged down to at most keep_samples.  ADC_CONFIG is
  * put back to its reset value when the profile ends.

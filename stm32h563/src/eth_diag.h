@@ -41,6 +41,7 @@ typedef struct {
     uint32_t rx_missed_ovf;   /* DMA: times that counter overflowed */
     uint32_t rx_alloc_fail;   /* driver: RX buffer pool empty (receive stalls until one frees) */
     bool     rx_alloc_stuck;  /* the pool is empty right now */
+    uint32_t tx_full_drops;   /* driver: frames dropped, no TX descriptor came free in time */
 } eth_diag_t;
 
 /* "100M full", "10M half", ... from PHYSCSR; "none" without a resolved mode. */

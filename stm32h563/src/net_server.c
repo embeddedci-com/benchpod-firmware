@@ -1105,17 +1105,28 @@ void net_poll(void)
    and the wifi-static netif calls directly, and the net task (higher priority, every tick) could
    preempt it mid-update: lwIP list or heap corruption.  net_call_sync hands the call over and
    waits for it.  Single caller at a time (the worker runs every command and console line). */
-static volatile net_call_fn_t    s_net_call;
+static volatile net_call_fn_t    s_net_call;       /* the pending call, NULL once taken */
 static void *volatile            s_net_call_arg;
-static volatile uint32_t         s_net_call_done;
+static volatile uint32_t         s_net_call_id;    /* id of the pending call */
+static volatile uint32_t         s_net_call_done;  /* id of the last call that finished */
+static uint32_t                  s_net_call_seq;   /* caller side: the last id handed out */
 
+/* The pending call is taken in a critical section, so the caller's timeout can only withdraw a
+   call that has not started.  (Withdrawing used to clear the slot while the net task might
+   already be running the call; that task then cleared the slot again when done, wiping the
+   next call the worker had put there, which timed out too.) */
 static void net_run_pending_call(void)
 {
-    net_call_fn_t fn = s_net_call;
-    if (!fn) return;
-    fn(s_net_call_arg);
+    if (!s_net_call) return;
+    taskENTER_CRITICAL();
+    net_call_fn_t fn  = s_net_call;
+    void         *arg = s_net_call_arg;
+    uint32_t      id  = s_net_call_id;
     s_net_call = NULL;
-    s_net_call_done++;
+    taskEXIT_CRITICAL();
+    if (!fn) return;
+    fn(arg);
+    s_net_call_done = id;
 }
 
 bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
@@ -1124,16 +1135,25 @@ bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
         fn(arg);                           /* already the net task (or before it runs) */
         return true;
     }
-    uint32_t seq = s_net_call_done;
+    taskENTER_CRITICAL();
+    uint32_t id = ++s_net_call_seq;
+    s_net_call_id  = id;
     s_net_call_arg = arg;
     s_net_call     = fn;
+    taskEXIT_CRITICAL();
     uint32_t t0 = HAL_GetTick();
-    while (s_net_call_done == seq) {
+    while (s_net_call_done != id) {
         if (HAL_GetTick() - t0 > timeout_ms) {
-            s_net_call = NULL;             /* withdraw it; the net task is not polling */
-            log_printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
-                   (unsigned long)timeout_ms);
-            return false;
+            taskENTER_CRITICAL();
+            bool pending = (s_net_call != NULL && s_net_call_id == id);
+            if (pending) s_net_call = NULL;   /* not started: withdraw it */
+            taskEXIT_CRITICAL();
+            if (pending) {
+                log_printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
+                       (unsigned long)timeout_ms);
+                return false;
+            }
+            /* Started: the net task is running it now; it returns, so wait for that. */
         }
         vTaskDelay(1);
     }

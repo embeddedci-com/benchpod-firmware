@@ -18,7 +18,12 @@
 #define CONN_TX_SLOTS     (CONN_TX_TCP_SLOTS + CH_CLOUD_TUNNEL_CONN_COUNT)
 
 /* head advanced only by the producer (worker), tail only by the consumer (net);
-   both free-running 16-bit counters.  used = (uint16_t)(head - tail). */
+   both free-running 16-bit counters.  used = (uint16_t)(head - tail).
+   The fences order the plain buffer accesses against the index that publishes them: the data
+   is written before head moves, read after head is seen, and read before tail gives the room
+   back.  volatile alone does not stop the compiler moving the buffer accesses across them. */
+#define RING_RELEASE() __atomic_thread_fence(__ATOMIC_RELEASE)
+#define RING_ACQUIRE() __atomic_thread_fence(__ATOMIC_ACQUIRE)
 typedef struct {
     volatile uint16_t head;
     volatile uint16_t tail;
@@ -56,11 +61,13 @@ size_t conn_tx_write(int conn_id, const uint8_t *buf, size_t len) {
     if (!r) return 0;
     uint16_t head = r->head;
     size_t free = CONN_TX_MASK - (uint16_t)(head - r->tail);
+    RING_ACQUIRE();   /* the consumer finished reading the room it gave back */
     /* All or nothing: a reply line, a DAP response or a tunnel frame cut short is worse than
        one not sent, because the peer cannot resynchronize on the rest of it. */
     if (len > free) return 0;
     for (size_t i = 0; i < len; i++)
         r->buf[(head + i) & CONN_TX_MASK] = buf[i];
+    RING_RELEASE();
     r->head = (uint16_t)(head + len);
     return len;
 }
@@ -70,6 +77,7 @@ size_t conn_tx_peek(int conn_id, const uint8_t **out) {
     if (!r) return 0;
     uint16_t used = (uint16_t)(r->head - r->tail);
     if (used == 0) return 0;
+    RING_ACQUIRE();   /* the bytes up to head are written */
     uint16_t tpos    = (uint16_t)(r->tail & CONN_TX_MASK);
     uint16_t to_end  = (uint16_t)(CONN_TX_RING_SIZE - tpos);
     uint16_t contig  = used < to_end ? used : to_end;
@@ -79,7 +87,9 @@ size_t conn_tx_peek(int conn_id, const uint8_t **out) {
 
 void conn_tx_advance(int conn_id, size_t n) {
     ring_t *r = ring_of(conn_id);
-    if (r) r->tail = (uint16_t)(r->tail + n);
+    if (!r) return;
+    RING_RELEASE();   /* done reading what we give back */
+    r->tail = (uint16_t)(r->tail + n);
 }
 
 void conn_tx_reset(int conn_id) {

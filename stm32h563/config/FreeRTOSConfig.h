@@ -63,8 +63,8 @@
 #define configUSE_TRACE_FACILITY                1
 #define configUSE_STATS_FORMATTING_FUNCTIONS    0
 
-/* Software timers (used later by the LwIP/timeout glue). */
-#define configUSE_TIMERS                        1
+/* Software timers: none (lwIP runs NO_SYS on the net task, TinyUSB defers through its queue). */
+#define configUSE_TIMERS                        0   /* nothing uses software timers: no timer task */
 #define configTIMER_TASK_PRIORITY               (configMAX_PRIORITIES - 1)
 #define configTIMER_QUEUE_LENGTH                10
 #define configTIMER_TASK_STACK_DEPTH            (256)
@@ -82,7 +82,7 @@
 #define INCLUDE_uxTaskGetStackHighWaterMark     1
 #define INCLUDE_xTaskGetIdleTaskHandle          1
 #define INCLUDE_eTaskGetState                   1
-#define INCLUDE_xTimerPendFunctionCall          1
+#define INCLUDE_xTimerPendFunctionCall          0
 #define INCLUDE_xTaskAbortDelay                 1
 #define INCLUDE_xQueueGetMutexHolder            1
 
