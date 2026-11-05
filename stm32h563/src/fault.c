@@ -57,7 +57,9 @@ static const char *addr_str(uint32_t v) {
 /* Copy the crashing task's name into the record (fault context: no allocation, bounded).
    It is the task that was RUNNING (FreeRTOS's current task), not the last one to send a
    watchdog heartbeat: the hint named "net" for a fault in the hw worker during the v3
-   bring-up.  Before the scheduler runs there is no task: "boot".  The hint is the fallback. */
+   bring-up.  Before the scheduler runs there is no task: "boot".  The hint is the fallback.
+   Also runs from the IWDG early-warning interrupt (above the syscall priority): only reads, and
+   pcTaskGetName only gets a non-NULL handle, so its configASSERT cannot fire there. */
 static void record_task_name(void) {
     const char *n = NULL;
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
