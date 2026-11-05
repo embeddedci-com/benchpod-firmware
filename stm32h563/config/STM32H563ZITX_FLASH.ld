@@ -56,6 +56,10 @@ MEMORY
   FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 896K
 }
 
+/* main.c icache_init() makes 0x080E0000 and up non-cacheable (the persistence records and
+   bank 2 are written at run time). It must start exactly where the code region ends. */
+ASSERT(ORIGIN(FLASH) + LENGTH(FLASH) == 0x080E0000, "FLASH end moved: update the non-cacheable MPU region in main.c icache_init()")
+
 /* Sections */
 SECTIONS
 {

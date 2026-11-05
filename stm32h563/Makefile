@@ -200,7 +200,7 @@ C_SOURCES += lib/monocypher/src/monocypher.c \
              lib/monocypher/src/optional/monocypher-ed25519.c
 
 # HAL driver sources (curated; unused funcs are GC'd anyway).
-HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_rcc.c \
+HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_icache.c stm32h5xx_hal_rcc.c \
          stm32h5xx_hal_rcc_ex.c stm32h5xx_hal_gpio.c stm32h5xx_hal_pwr.c \
          stm32h5xx_hal_pwr_ex.c stm32h5xx_hal_flash.c stm32h5xx_hal_flash_ex.c \
          stm32h5xx_hal_dma.c stm32h5xx_hal_dma_ex.c stm32h5xx_hal_uart.c \
