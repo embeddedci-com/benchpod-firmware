@@ -288,7 +288,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -790,6 +790,11 @@ topcapturetest:
 # The DEEP image's whole top (-DUSE_DEEP_REPLAY, v46): a deep replay keeps its sample order while
 # the STM32 takes the bus (bus_own swept over a reader burst and the DAC engine's byte pops), a
 # capture alongside the replay read back mid-replay, and an overflowed capture then a clean one.
+# v52: the ADC capture's sample 0 is converted at a fixed offset from t0, the LA's sample-0 instant,
+# whatever the arm's phase against the free-running engine, the previous divider or a trigger.
+topadct0test:
+	$(call topbench,tb_top_adc_t0,loop deep)
+
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
 
@@ -841,7 +846,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

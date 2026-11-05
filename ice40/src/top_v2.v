@@ -380,8 +380,17 @@ module top (
     wire        arm = cap_start | la_cap_start;
     // A producer is "in this run" only if it was armed AND its count is non-zero (see the drain
     // controller below).  Named here because the trigger needs the same terms.
-    wire        arm_adc = cap_start    & (cap_count    != 24'd0);
-    wire        arm_la  = la_cap_start & (la_cap_count != 24'd0);
+    // v52: the two != 0 tests come from flops.  OP_CAPTURE is the only arm (v40), and cmd_dispatch
+    // holds both counts in its argument buffer from the payload's 9th byte on, a whole SPI byte
+    // (>= 100 clk) before the 10th raises the arm, so the registered tests are exact on the arm
+    // cycle and the 24-bit decodes stay off the arm's paths (it also gates the ADC restart).
+    reg         adc_cnt_nz = 1'b0, la_cnt_nz = 1'b0;
+    always @(posedge clk) begin
+        adc_cnt_nz <= (cap_count    != 24'd0);
+        la_cnt_nz  <= (la_cap_count != 24'd0);
+    end
+    wire        arm_adc = cap_start    & adc_cnt_nz;
+    wire        arm_la  = la_cap_start & la_cnt_nz;
 
     // ---- capture trigger: gated start (OP_SET_TRIGGER 0x33 / OP_TRIGGER_STATUS 0x34, v2 >= v35) ----
     // With a trigger set, an arm still LOADS the producers (their counts are only valid on the arm
@@ -451,8 +460,16 @@ module top (
     SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_adc_sdo (
         .PACKAGE_PIN(adc_sdo), .D_IN_0(adc_sdo_pu));
     wire adc_sample_stb_raw;
+    // v52: restart the free-running engine on the t0 of a capture that includes the ADC, so its
+    // sample i is converted at t0 + (i+1)*divider like the LA producer's (see adc_mcp33131).  An
+    // LA-only capture leaves it running (the loop image's live ADC input).  arm_adc covers an
+    // untriggered t0 (the arm cycle, before run_adc is written); run_adc a triggered one.
+    // (run_adc, written on the arm edge, holds the previous capture's value during the arm,
+    // hence the mux; adc_cnt_nz is the registered count test, see arm_adc.)
+    reg  run_adc;
+    wire adc_restart = t0 & (arm ? adc_cnt_nz : run_adc);
     adc_mcp33131 adc_i (
-        .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider),
+        .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider), .restart(adc_restart),
         .adc_cnvst(adc_cnvst), .adc_sclk(adc_sclk),
         .adc_sdi(adc_sdi), .adc_sdo(adc_sdo_pu),
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
@@ -494,7 +511,7 @@ module top (
         if (rst) begin
             adc_run<=1'b0; adc_done_r<=1'b0; adc_ovf_r<=1'b0; adc_pst<=2'd0;
         end else if (cap_start) begin
-            adc_run<=(cap_count!=24'd0); adc_done_r<=(cap_count==24'd0); adc_ovf_r<=1'b0;
+            adc_run<=adc_cnt_nz; adc_done_r<=~adc_cnt_nz; adc_ovf_r<=1'b0;
             adc_pst<=2'd0;                     // (adc_left loads in its dsp_counter)
         end else if (adc_run) begin
             if (adc_sample_stb && adc_pst==2'd0 && !trig_wait) adc_pst<=2'd1;
@@ -661,7 +678,7 @@ module top (
     // writer, then hold `active` until BOTH armed producers have finished AND both
     // rings have drained to PSRAM (pipe quiet for a margin) — then stop the writer
     // and raise cap_done (STATUS CAP_DONE) so firmware can read both regions back.
-    reg        cap_active, cap_done_r, run_adc, run_la;
+    reg        cap_active, cap_done_r, run_la;   // (run_adc: declared at the ADC engine)
     reg [6:0]  quiet;
     // Writer "still has work" indicator.  Under the bus arbiter `ps_idle` (=in S_IDLE)
     // blips HIGH whenever the writer is merely WAITING FOR A GRANT with data pending,

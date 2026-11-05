@@ -23,6 +23,7 @@ module adc_mcp33131 (
     input  wire        rst,
     input  wire        en,            // capture active (level; synchronised in top_v2)
     input  wire [15:0] divider,       // sample period in clk cycles
+    input  wire        restart,       // v52: 1-cycle: drop any conversion, first new one `divider` clk later
     // ADC pins
     output reg         adc_cnvst,
     output reg         adc_sclk,
@@ -45,6 +46,7 @@ module adc_mcp33131 (
 
     reg [1:0]  st;
     reg [15:0] period_cnt;
+    reg        first_p;           // v52: the period after a restart ends 3 clk early (see restart)
     reg        period_zero;       // registered "period expired": keeps the 16-bit
                                   // compare off the conversion-start transition path
     // One 5-bit counter serves the conversion wait (S_CONV, to CONV_CYCLES) and the bit count
@@ -59,7 +61,7 @@ module adc_mcp33131 (
         sample_stb <= 1'b0;
         if (rst) begin
             st <= S_IDLE; adc_cnvst <= 1'b0; adc_sclk <= 1'b0;
-            period_cnt <= 16'd0; period_zero <= 1'b1; cnt <= 5'd0; sclk_ph <= 1'b0;
+            period_cnt <= 16'd0; period_zero <= 1'b1; cnt <= 5'd0; sclk_ph <= 1'b0; first_p <= 1'b0;
         end else begin
             // Sample period = EXACTLY max(divider, 60) clocks.  period_cnt loads the
             // period at a conversion start and counts down; the registered flag is set
@@ -68,9 +70,35 @@ module adc_mcp33131 (
             // made every period divider + 1 clocks.)  Safe because the load is >= 60.
             if (!period_zero) begin
                 period_cnt  <= period_cnt - 16'd1;
-                period_zero <= (period_cnt == 16'd2);
+                // Set as the count leaves 2 (normally) or 5 (the first period after a restart).
+                // v52: tested as <= 2 / <= 5, not == 2 / == 5, so a divider below that (0 or 1 used
+                // to wrap the count into a 65536-clock period) expires at once: back to back.
+                // Same LUT tree as the old == compare; the load below stays a constant.
+                period_zero <= (period_cnt[15:3] == 13'd0) &
+                               (first_p ? ~(period_cnt[2] & period_cnt[1])
+                                        : ~(period_cnt[2] | (period_cnt[1] & period_cnt[0])));
             end
-            case (st)
+            if (restart) begin
+                // v52: the capture's t0.  The engine free-runs (the loop image reads it between
+                // captures), so before v52 the first captured sample was whatever conversion was
+                // in flight at t0: up to a period EARLY, or up to the PREVIOUS capture's period
+                // late, with its first interval at the old divider.  Abort the conversion or read
+                // in flight (its sample is never strobed) and start the period counter as a
+                // conversion start would, so the first conversion of the capture starts exactly
+                // `divider` clocks after t0, like the LA producer's first sample, and every later
+                // one `divider` after that.  CNVST drops here; the next rise is >= divider clk
+                // later, which meets the ADC's 1 us tCYC for any divider >= 27 (firmware floors 60).
+                // The first period is 3 clk short: the LA producer's sample is the pad as its
+                // 2-flop synchroniser saw it, 3 clk before the edge that latches it, so with
+                // divider - 3 the ADC's first conversion starts on the very edge the LA's first
+                // sample was taken (tb_top_adc_t0).  A divider <= 5 starts at once.
+                st          <= S_IDLE;
+                adc_cnvst   <= 1'b0;
+                adc_sclk    <= 1'b0;
+                period_cnt  <= divider;
+                first_p     <= 1'b1;
+                period_zero <= 1'b0;
+            end else case (st)
             S_IDLE: begin
                 adc_sclk <= 1'b0;
                 if (en && period_zero) begin
@@ -84,6 +112,7 @@ module adc_mcp33131 (
                     // (adc_min_divider).  A shorter period cannot break the engine: the next
                     // conversion just starts as soon as this one has been read out.
                     period_cnt  <= divider;
+                    first_p     <= 1'b0;
                     period_zero <= 1'b0;
                     st          <= S_CONV;
                 end
