@@ -1337,12 +1337,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
     } else if (!strcmp(argv[0], "dfu")) {
         op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
         HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
+        boot_guard_planned_reset(true);
         dfu_boot_request();     /* arms the flag + system reset; never returns */
     } else if (!strcmp(argv[0], "selftest")) {
         cmd_selftest(out, ctx);
     } else if (!strcmp(argv[0], "reboot")) {
         op(out, ctx, "  rebooting...\r\n");
         HAL_Delay(50);
+        boot_guard_planned_reset(true);
         NVIC_SystemReset();
     } else if (console_moved_to(argv[0])) {
         /* An older benchpod CLI / embeddedci SDK: say what to update, not "unknown command". */

@@ -16,6 +16,7 @@
 #include "console.h"     /* console_rx_dropped / console_tx_dropped for status */
 #include "signal_engine.h"
 #include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */
+#include "boot_guard.h"       /* boot_guard_planned_reset before the psram_recover reboot */
 #include "wifi_manager.h"
 #include "target_power.h"
 #include "device_identity.h"
@@ -71,6 +72,7 @@ static absolute_time_t  s_recover_at;
 void device_poll(void) {
     if (s_recover_pending && time_reached(s_recover_at)) {
         printf("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
+        boot_guard_planned_reset(true);
         NVIC_SystemReset();   /* does not return */
     }
 }
