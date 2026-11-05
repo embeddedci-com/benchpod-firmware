@@ -288,7 +288,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -799,6 +799,11 @@ topadct0test:
 topboottest:
 	$(call topbench,tb_top_boot,loop deep)
 
+# v52: the STM32 -> iCE40 SPI link at 1.95, 3.9 and 5 MHz against an STM32 model (pad delays, MISO
+# setup, a drifting phase): PING/VERSION/STATUS and a 256-byte register write + streamed read-back.
+topspilinktest:
+	$(call topbench,tb_top_spilink,loop deep)
+
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
 
@@ -850,7 +855,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

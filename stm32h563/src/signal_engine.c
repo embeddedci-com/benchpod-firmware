@@ -560,8 +560,39 @@ static void fpga_capture_cmd(uint32_t adc_count, uint32_t adc_period,
 
 /* ---- Diagnostics --------------------------------------------------------- */
 
+/* ---- SPI1 link rate follows the gateware ------------------------------------
+   Every gateware answers at /128 (1.95 MHz); v52+ (SPI_FAST_LINK_MIN_GW) is clean at /64 (3.9 MHz,
+   ~30% margin in ice40/sim/tb_top_spilink.v).  The rate is chosen from the version just read, and
+   a version read always starts at /128, so a reflash to older gateware never leaves the link too
+   fast to reach it. */
+static uint32_t s_spi_div = 128u;
+
+static uint32_t spi_link_set_div(uint32_t div) {
+    uint32_t presc;
+    switch (div) {
+    case 64:  presc = SPI_BAUDRATEPRESCALER_64;  break;
+    case 128: presc = SPI_BAUDRATEPRESCALER_128; break;
+    case 256: presc = SPI_BAUDRATEPRESCALER_256; break;
+    default:  return 0;
+    }
+    if (div != s_spi_div || hspi_ice.Init.BaudRatePrescaler != presc) {
+        hspi_ice.Init.BaudRatePrescaler = presc;
+        if (HAL_SPI_Init(&hspi_ice) != HAL_OK) return 0;
+        s_spi_div = div;
+    }
+    return 250000000u / div;   /* SPI1 kernel = PLL1Q = 250 MHz */
+}
+
+static void spi_link_for_version(uint8_t version) {
+    uint32_t div = (version >= SPI_FAST_LINK_MIN_GW) ? 64u : 128u;
+    if (div != s_spi_div && spi_link_set_div(div))
+        printf("[sig] SPI1 link at %lu Hz (/%lu) for gateware %u\n",
+               (unsigned long)(250000000u / div), (unsigned long)div, version);
+}
+
 int fpga_ping(int attempts, uint8_t *out_version) {
     if (attempts < 1) attempts = 1;
+    (void)spi_link_set_div(128u);   /* every gateware answers here; the version picks the rate */
     for (int i = 1; i <= attempts; i++) {
         uint8_t reply = 0;
         spi_cmd_read(CMD_PING, NULL, 0, &reply, 1);
@@ -570,6 +601,7 @@ int fpga_ping(int attempts, uint8_t *out_version) {
             spi_cmd_read(CMD_VERSION, NULL, 0, &version, 1);
             printf("[sig] FPGA OK on attempt %d/%d, gateware version %u\n",
                    i, attempts, version);
+            spi_link_for_version(version);
             if (out_version) *out_version = version;
             return 0;
         }
@@ -633,20 +665,13 @@ static bool cap_overflowed(uint8_t st, const char *what) {
    Change the SPI1 SCK live, and loop-test read reliability at that clock, so the
    real usable SPI frequency can be swept from one flash without reflashing. */
 uint32_t signal_engine_spi_set_prescaler(uint32_t div) {
-    /* Floor /128 (1.95 MHz, the boot setting).  The gateware samples MOSI once, 2-3 clk (24 MHz)
-       after it sees SCK rise through its synchronizer, and updates MISO 3-4 clk after SCK falls,
-       so an SCK half period under ~150 ns (above ~3.3 MHz, i.e. /64 and faster) corrupts
-       commands by design, not because of the board.  Refuse those rather than leave the link
-       in a state that silently mangles every command. */
-    uint32_t presc;
-    switch (div) {
-    case 128: presc = SPI_BAUDRATEPRESCALER_128; break;
-    case 256: presc = SPI_BAUDRATEPRESCALER_256; break;
-    default:  return 0;
-    }
-    hspi_ice.Init.BaudRatePrescaler = presc;
-    if (HAL_SPI_Init(&hspi_ice) != HAL_OK) return 0;
-    return 250000000u / div;   /* SPI1 kernel = PLL1Q = 250 MHz */
+    /* Gateware before v52 samples MOSI 2-3 clk (24 MHz) after it sees SCK rise and moves MISO
+       3-4 clk after it sees SCK fall, so an SCK half period under ~150 ns (/64 and faster)
+       corrupts commands by design: those get /128 or /256 only.  v52+ (SPI_FAST_LINK_MIN_GW)
+       also takes /64; /32 is out of reach for its synchroniser.  The next version read
+       (fpga_ping, refresh) sets the rate back from the version. */
+    if (div == 64u && s_fpga_version < SPI_FAST_LINK_MIN_GW) return 0;
+    return spi_link_set_div(div);
 }
 
 /* Loop n rounds of {PING, VERSION, STATUS} reads and report reliability: how
@@ -1849,6 +1874,7 @@ bool signal_engine_refresh_version(void) {
        net task), so the transaction must be serialised or it corrupts an in-flight
        transfer — same rule as signal_engine_poll(). */
     hw_lock();
+    (void)spi_link_set_div(128u);   /* the gateware may have been replaced: /128 reaches any */
     uint8_t ping = 0;
     spi_cmd_read(CMD_PING, NULL, 0, &ping, 1);
     bool ok = (ping == PING_REPLY_MAGIC);
@@ -1856,6 +1882,7 @@ bool signal_engine_refresh_version(void) {
         uint8_t v = 0;
         spi_cmd_read(CMD_VERSION, NULL, 0, &v, 1);
         s_fpga_version = v;
+        spi_link_for_version(v);
     }
     hw_unlock();
     return ok;

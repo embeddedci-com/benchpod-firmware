@@ -192,7 +192,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
         "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
-        "  spi-clk <128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
+        "  spi-clk <64|128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
 #endif
 #if defined(BENCHPOD_EMI_TEST)
@@ -683,7 +683,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         uint32_t div = (uint32_t)atoi(argv[1]);
         uint32_t hz = signal_engine_spi_set_prescaler(div);
         if (hz) op(out, ctx, "  SPI1 SCK = %lu Hz (/%lu)\r\n", (unsigned long)hz, (unsigned long)div);
-        else    op(out, ctx, "  bad divisor (use 128 or 256; faster than /128 exceeds the iCE40's MOSI sampling)\r\n");
+        else    op(out, ctx, "  bad divisor (128 or 256; 64 needs gateware >= 52; /32 and faster exceed the iCE40's SCK sampling)\r\n");
 #endif
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
     } else if (!strcmp(argv[0], "spi-diag")) {

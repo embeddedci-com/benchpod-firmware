@@ -87,6 +87,12 @@ uint8_t signal_engine_fpga_version(void);
    failure. Quiet — for `status`; use fpga_ping() for the verbose bring-up path. */
 bool signal_engine_refresh_version(void);
 
+/* Minimum gateware version whose SPI slave takes the link at SPI1 kernel / 64 (3.9 MHz; v52 moves
+   MISO on the SCK rise and samples MOSI aligned with SCK).  Older gateware is clean only at /128.
+   fpga_ping() and signal_engine_refresh_version() always talk at /128 first, then pick the rate
+   from the version they read. */
+#define SPI_FAST_LINK_MIN_GW  52u
+
 /* Minimum gateware version that supports streaming DAC replay from PSRAM. */
 #define DAC_DEEP_REPLAY_MIN_GW  17u
 
