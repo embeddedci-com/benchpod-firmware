@@ -15,6 +15,26 @@ characterization tooling.
 > split below is optional. Setup: `brew install libusb && pip install -r scripts/requirements-host.txt`.
 > The `pi-gpib-setup.md` linux-gpib instructions are retained only for reference.
 
+## Supported DMMs
+
+`scripts/dmm.py` finds the meter on its own (`open_dmm()`, used by `dmm_read.py`): it tries
+each driver in turn and takes the first meter that answers `*IDN?` with its model.
+
+| Meter | Connection | Notes |
+|---|---|---|
+| HP/Agilent/Keysight 34401A | GPIB through an NI GPIB-USB-HS, `scripts/ni_gpib_usb.py` (pyusb) | GPIB address 22 by default (`--addr`) |
+| OWON XDM2041, XDM1041 | its USB port, a USB serial port at 115200 8N1 (pyserial) | Found by its CH340 USB ID; `--port` or `DMM_PORT` for another port. Written from OWON's programming manual, not yet tried on a meter |
+
+- `--dmm auto|34401a|owon|mock` (or `DMM=`) picks one when both are plugged in.
+- Ranges are the largest voltage you expect: `--range 5.5` is the 34401A's 10 V range and the
+  OWON's 5 V range (55,000 counts, reads up to 5.5 V). `--range 10` on the OWON is its 50 V
+  range, a digit less.
+- The OWON has no NPLC: `--nplc` 5 and above selects its slow rate, 0.5 to 5 medium, below that
+  fast. After a range or rate change the driver waits 1.5 s and drops the first reading.
+- Another meter is a class with `detect`, `idn`, `read_dc`, `set_range` and `close`, added to
+  `DRIVERS` in `dmm.py`. `scripts/test_dmm.py` tests the drivers without hardware:
+  `python3 -m unittest calibration/scripts/test_dmm.py`.
+
 ## Architecture
 
 The DMM is GPIB-only and lives on a Raspberry Pi (with an NI GPIB-USB-HS). The
@@ -56,8 +76,9 @@ curl-testable and robust, and it makes the Pi a reusable bench head. The brains
 | File | Where | Purpose |
 |---|---|---|
 | `scripts/bench_server.py` | Pi | HTTP server owning the DMM + board (`--mock` for no hardware) |
-| `scripts/dmm.py` | Pi | 34401A GPIB driver (linux-gpib) + `MockDMM` |
-| `scripts/dmm_read.py` | Mac | Read the DMM from the command line: `idn`, `read [-n N] [--json] [--range 100]`, `watch`. For calibration runs and sessions that read the DMM themselves |
+| `scripts/dmm.py` | Mac | DMM drivers (34401A over the NI GPIB-USB-HS, OWON XDM over USB serial), `open_dmm()` auto-detection + `MockDMM` |
+| `scripts/dmm_read.py` | Mac | Read the DMM from the command line: `idn`, `read [-n N] [--json] [--range 5.5]`, `watch`; `--dmm`, `--port` pick the meter. For calibration runs and sessions that read the DMM themselves |
+| `scripts/test_dmm.py` | Mac | Host tests for `dmm.py` (a simulated OWON, the range mapping, detection order) |
 | `scripts/adc_comp_sweep.py` | Mac | ADC input divider compensation (R90/C140 vs R91/C72): sine sweep 200 Hz-150 kHz through the cal1 loopback with the SDK, no cable; fits the top-leg C and the HF/DC gain, exits 1 when it is off by more than 5 %. `--fit <json>` refits a saved sweep. `--range low` sweeps the ÷2 low range (analog module v3r4+, relay K5: 910k ‖ 56.4 pF over 910k ‖ ~55 pF, sine kept under 4 V). Rev3 and later |
 | `scripts/board_console.py` | Pi | RP2350B console (pyserial) + `MockBoard` |
 | `scripts/cal_client.py` | Host | HTTP client + `linfit()` (stdlib only) |
