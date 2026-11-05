@@ -68,10 +68,14 @@ module psram_dual_writer #(
     output reg         idle,              // both FIFOs drained + not in a burst
     output reg         bus_lost,          // 1 clk: a burst was cut short by bus_own (v43)
     // pad-facing outputs (clk48-timed — see header)
-    output reg  [3:0]  psram_io_o,        // nibble on the bus this clk48 cycle
-    output reg         psram_io_oe,       // 1 = drive io pads this clk48 cycle
-    output reg         psram_cs,          // active low (clk48 reg)
-    output reg         psram_sclk_d1      // DDR D_OUT_1 for the SCLK pad (top ties D_OUT_0=0)
+    // v52: power-up values (CS high, not driving).  Without them the flops configured as 0 and
+    // rst48 as 0 too, so CS was driven low for the 2-3 clk48 before the reset reached this domain.
+    // (psram_io_o has none: it is not driven while psram_io_oe = 0, and a constant power-up value
+    // leaves the yosys SB_IO model's combinational output X until the nibble first changes.)
+    output reg  [3:0]  psram_io_o,             // nibble on the bus this clk48 cycle
+    output reg         psram_io_oe   = 1'b0,   // 1 = drive io pads this clk48 cycle
+    output reg         psram_cs      = 1'b1,   // active low (clk48 reg)
+    output reg         psram_sclk_d1 = 1'b0    // DDR D_OUT_1 for the SCLK pad (top ties D_OUT_0=0)
 );
     // 32-byte staging FIFO per stream.  These FIFOs have an ASYNC (combinational) read
     // (sel_head below), so on the iCE40 — which has no LUT-RAM — they map to flip-flops
@@ -266,11 +270,11 @@ module psram_dual_writer #(
     // latched nib1.  All clk-domain reads happen only on the detection cycle, so the
     // nib1 emission never races the next clk edge.  The toggle detect + latch is the
     // shared cell_gearbox48 (the deep-replay reader uses the same one).
-    reg        sub;                       // 0 = waiting for a new cell, 1 = emit nib1 next
+    reg        sub = 1'b0;                // 0 = waiting for a new cell, 1 = emit nib1 next
     wire       new_cell;
     wire [3:0] n1_l;                      // latched second nibble
     wire       drv_l, cs_l, clk_l;        // latched controls
-    reg        rst48_q, rst48;            // reset synced into clk48 (release only)
+    reg        rst48_q = 1'b1, rst48 = 1'b1;   // reset synced into clk48; in reset from power-up
 
     cell_gearbox48 #(.W(7)) gb_i (
         .clk48(clk48), .tgl(cell_tgl), .cell_in({cell_n1, cell_drv, cell_cs, cell_clk}),

@@ -118,7 +118,7 @@ module cmd_dispatch #(
     // PSRAM_CS (0x25) boot self-test: force the iCE40's PSRAM /CS output LOW so the
     // STM32 can check (PE4 as input) whether the iCE40 actually reaches the shared
     // /CE net — pins the "iCE40 can't write PSRAM" fault on the pad45->/CE joint.
-    output reg               psram_cs_force,
+    output reg               psram_cs_force = 1'b0,   // v52: power-up value (the PSRAM pads read it before the first reset edge)
     // Capture trigger (OP_SET_TRIGGER 0x33, v2 >= v35).  Persistent; the mode byte is decoded
     // here at SET time so the top's per-cycle test is one mux and two compares.  trig_en = 0 is
     // an untriggered capture (the <= v34 behaviour).  trig_pol = the level that fires (1 for

@@ -49,7 +49,12 @@ module psram_pads (
     inout  wire       psram_io2,
     inout  wire       psram_io3
 );
-    wire       drive = ~bus_own;
+    // v52: no pad drives before the first clk48 edge.  The CS/IO pads' output registers power up
+    // as 0, so CS would be driven low until that edge loads them; `ready` (0 at power-up, 1 from
+    // that edge on) keeps every output enable off until then, and the board pull-up holds CS high.
+    reg        ready = 1'b0;
+    always @(posedge clk48) ready <= 1'b1;
+    wire       drive = ~bus_own & ready;
 
     // cycle-k values, exactly v40's mux
     wire       oe_k  = replay ? rd_io_oe : ps_io_oe;
@@ -65,7 +70,7 @@ module psram_pads (
         f0   <= d0_k;
         f1   <= d1_k;
     end
-    wire       io_oe = selftest | (drive & oe_q);
+    wire       io_oe = (selftest & ready) | (drive & oe_q);
 
     // SCLK: DDR (PIN_TYPE 1000_00), OE = drive.  High half = D_OUT_0 captured at the rising edge,
     // low half = D_OUT_1 captured at the falling edge; both now come straight from flops.

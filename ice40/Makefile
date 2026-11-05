@@ -288,7 +288,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -795,6 +795,10 @@ topcapturetest:
 topadct0test:
 	$(call topbench,tb_top_adc_t0,loop deep)
 
+# v52: the PSRAM pads idle (CS high, SCLK low, IO released) from configuration on, both images.
+topboottest:
+	$(call topbench,tb_top_boot,loop deep)
+
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
 
@@ -846,7 +850,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
