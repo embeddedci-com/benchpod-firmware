@@ -33,7 +33,7 @@ module tb_uart_engine;
     reg        rx_re = 1'b0;
     wire [7:0] rx_rdata;
     wire [8:0] rx_avail;
-    wire       rx_overflow;
+    wire       rx_overflow, rx_frame_err;
     reg        rx_ovf_clr = 1'b0;
 
     // loopback
@@ -48,7 +48,7 @@ module tb_uart_engine;
         .rx_ch(), .tx_ch(), .armed(uart_armed),
         .tx_we(tx_we), .tx_wdata(tx_wdata), .tx_full(tx_full), .tx_empty(tx_empty),
         .rx_re(rx_re), .rx_rdata(rx_rdata), .rx_avail(rx_avail),
-        .rx_overflow(rx_overflow), .rx_ovf_clr(rx_ovf_clr),
+        .rx_overflow(rx_overflow), .rx_ovf_clr(rx_ovf_clr), .rx_frame_err(rx_frame_err),
         .rx_in(tx_out & ~glitch),  // <-- loopback (+ injected low pulses)
         .tx_out(tx_out)
     );
@@ -173,6 +173,27 @@ module tb_uart_engine;
         tick(4);
         start_boundary(16);
         pop(b0); check_eq(b0, 8'hFF, "rx @div16 (bare start bit)");
+
+        // ---- Test 1c (v52): a frame whose stop bit is low is a framing error, not a byte ----
+        // A 30-bit-time break (the line held low) used to read as a 0x00, then the still-low line
+        // started the next frame at once: a stream of 0x00 until the line rose.  Now no byte is
+        // stored, the sticky rx_frame_err is set (cleared with rx_overflow by the status read),
+        // and the receiver waits for the line to go high before it looks for a start bit.
+        tick(20);
+        b2 = rx_avail[7:0];
+        @(posedge clk); glitch = 1'b1; tick(30 * 16); glitch = 1'b0;
+        tick(3 * 16);
+        if (rx_avail[7:0] !== b2) begin
+            $display("FAIL: a break stored %0d byte(s)", rx_avail[7:0] - b2); errors = errors + 1;
+        end else $display("ok:   a 30-bit break stores no byte");
+        if (rx_frame_err !== 1'b1) begin $display("FAIL: rx_frame_err not set by a break"); errors = errors + 1; end
+        else $display("ok:   rx_frame_err set by a break");
+        @(posedge clk); rx_ovf_clr = 1'b1; @(posedge clk); rx_ovf_clr = 1'b0;
+        if (rx_frame_err !== 1'b0) begin $display("FAIL: rx_frame_err not cleared by the status read"); errors = errors + 1; end
+        push(8'h3C); tick(FRAME_CLKS + 100);
+        if (rx_avail[7:0] !== b2 + 8'd1) begin $display("FAIL: the byte after a break was not received"); errors = errors + 1; end
+        else begin pop(b0); check_eq(b0, 8'h3C, "rx after a break"); end
+        if (rx_frame_err !== 1'b0) begin $display("FAIL: a good frame set rx_frame_err"); errors = errors + 1; end
 
         // ---- Test 2: overflow flag when RX FIFO fills (257 bytes) ----
         // push 257 bytes through; FIFO depth is 256, so at least one is dropped.

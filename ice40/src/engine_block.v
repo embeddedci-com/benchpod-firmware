@@ -181,7 +181,7 @@ module engine_block #(
     wire [3:0]  uart_cfg_rx_ch, uart_cfg_tx_ch;  wire [23:0] uart_cfg_div;
     wire        uart_tx_we, uart_rx_re, uart_rx_ovf_clr;
     wire [7:0]  uart_tx_wdata, uart_rx_rdata;  wire [8:0] uart_rx_avail;
-    wire        uart_tx_full, uart_tx_empty, uart_rx_overflow, uart_armed;
+    wire        uart_tx_full, uart_tx_empty, uart_rx_overflow, uart_rx_frame_err, uart_armed;
     wire [3:0]  uart_rx_ch, uart_tx_ch;  wire uart_tx_out;
     wire        uart_rx_in = la_in[uart_rx_ch];
     wire        uart2_cfg_stb, uart2_tx_we, uart2_tx_full, uart2_tx_empty, uart2_armed;
@@ -246,7 +246,8 @@ module engine_block #(
         .uart_tx_we(uart_tx_we), .uart_tx_wdata(uart_tx_wdata),
         .uart_rx_re(uart_rx_re), .uart_rx_rdata(uart_rx_rdata), .uart_rx_ovf_clr(uart_rx_ovf_clr),
         .uart_rx_avail(uart_rx_avail), .uart_tx_full(uart_tx_full),
-        .uart_tx_empty(uart_tx_empty), .uart_rx_overflow(uart_rx_overflow), .uart_armed(uart_armed),
+        .uart_tx_empty(uart_tx_empty), .uart_rx_overflow(uart_rx_overflow), .uart_rx_frame_err(uart_rx_frame_err),
+        .uart_armed(uart_armed),
         .uart2_cfg_stb(uart2_cfg_stb), .uart2_tx_we(uart2_tx_we), .uart2_tx_full(uart2_tx_full),
         .uart2_tx_empty(uart2_tx_empty), .uart2_armed(uart2_armed)
     );
@@ -261,7 +262,7 @@ module engine_block #(
         .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .disable_stb(1'b0),
         .rx_ch(), .tx_ch(uart2_tx_ch), .armed(uart2_armed),
         .tx_we(uart2_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart2_tx_full), .tx_empty(uart2_tx_empty),
-        .rx_re(1'b0), .rx_rdata(), .rx_avail(), .rx_overflow(), .rx_ovf_clr(1'b0),
+        .rx_re(1'b0), .rx_rdata(), .rx_avail(), .rx_overflow(), .rx_ovf_clr(1'b0), .rx_frame_err(),
         .rx_in(1'b1), .tx_out(uart2_tx_out)
     );
 
@@ -272,7 +273,7 @@ module engine_block #(
         .rx_ch(uart_rx_ch), .tx_ch(uart_tx_ch), .armed(uart_armed),
         .tx_we(uart_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart_tx_full), .tx_empty(uart_tx_empty),
         .rx_re(uart_rx_re), .rx_rdata(uart_rx_rdata), .rx_avail(uart_rx_avail),
-        .rx_overflow(uart_rx_overflow), .rx_ovf_clr(uart_rx_ovf_clr),
+        .rx_overflow(uart_rx_overflow), .rx_ovf_clr(uart_rx_ovf_clr), .rx_frame_err(uart_rx_frame_err),
         .rx_in(uart_rx_in), .tx_out(uart_tx_out)
     );
 

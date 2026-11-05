@@ -263,6 +263,7 @@ module cmd_dispatch #(
     input  wire              uart_tx_full,
     input  wire              uart_tx_empty,
     input  wire              uart_rx_overflow,
+    input  wire              uart_rx_frame_err,   // v52: UART_STATUS flags bit7
     input  wire              uart_armed,
 
     // ---- UART2: a second, TX-only UART (v48; config payload = UART_CONFIG's) ----
@@ -532,7 +533,7 @@ module cmd_dispatch #(
         begin
             case (rem)
                 2'd3:    uart_status_next = {7'b0, uart_rx_avail[8]};   // byte 1
-                default: uart_status_next = {1'b0, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
+                default: uart_status_next = {uart_rx_frame_err, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
                                              uart_tx_empty, uart_tx_full};   // byte 2 (rem 2)
             endcase
         end

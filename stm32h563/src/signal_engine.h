@@ -740,6 +740,7 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART2_STATUS_TX_FULL    (1u << 4)   /* v48+: UART2, the TX-only second UART */
 #define UART2_STATUS_TX_EMPTY   (1u << 5)
 #define UART2_STATUS_ARMED      (1u << 6)
+#define UART_STATUS_RX_FRAME_ERR (1u << 7)  /* v52+: sticky, a stop bit read low (byte dropped) */
 
 /* Arm the soft UART on the given RX/TX LA channels at `baud` (the firmware
    computes the FPGA bit-period divisor).  enable=false configures without

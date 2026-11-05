@@ -80,7 +80,7 @@ OPCODES = [
     ("UART_DISABLE",    0x71, "none",                                           "none"),
     ("UART_WRITE",      0x72, "len(2) + N data bytes",                          "none (TX FIFO)"),
     ("UART_READ",       0x73, "len(2)",                                         "N bytes (RX FIFO)"),
-    ("UART_STATUS",     0x74, "none",                                           "3 bytes: rx_avail(2), flags: bit0 tx_full, bit1 tx_empty, bit2 rx_overflow (sticky; reading the status clears it), bit3 armed; v48+: bit4 UART2 tx_full, bit5 UART2 tx_empty, bit6 UART2 armed"),
+    ("UART_STATUS",     0x74, "none",                                           "3 bytes: rx_avail(2), flags: bit0 tx_full, bit1 tx_empty, bit2 rx_overflow (sticky; reading the status clears it), bit3 armed; v48+: bit4 UART2 tx_full, bit5 UART2 tx_empty, bit6 UART2 armed; v52+: bit7 rx framing error (sticky like rx_overflow: a frame's stop bit read low, a break or the wrong baud; that byte is dropped, and a held-low line is one error)"),
     ("UART2_CONFIG",    0x75, "rx_ch (ignored) + tx_ch + div(3) + flags",       "none (v48+; a second, TX-only UART on one LA channel, for streams the pod sends the DUT while the UART proxy keeps its console, e.g. NMEA sentences of an emulated GPS receiver. Payload laid out as UART_CONFIG; flags bit0 = enable, so a config with enable 0 disarms it and releases the channel)"),
     ("UART2_WRITE",     0x76, "len(2) + N data bytes",                          "none (v48+; UART2's 256-byte TX FIFO. UART_STATUS bit4 reports it full)"),
 ]
