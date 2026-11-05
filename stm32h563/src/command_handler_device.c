@@ -16,6 +16,7 @@
 #include "console.h"     /* console_rx_dropped / console_tx_dropped for status */
 #include "signal_engine.h"
 #include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */
+#include "boot_guard.h"       /* boot_guard_planned_reset before the psram_recover reboot */
 #include "wifi_manager.h"
 #include "target_power.h"
 #include "device_identity.h"
@@ -45,7 +46,6 @@
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "lease_gate.h"
 #include "module_link.h"   /* digital v3r3: the module object */
-#include "hw_lock.h"     /* serialize the shared I2C bus (power_status vs the profile sampler) */
 #include "la_pins.h"
 #include "psram.h"       /* psram_selftest_str */
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
@@ -71,6 +71,7 @@ static absolute_time_t  s_recover_at;
 void device_poll(void) {
     if (s_recover_pending && time_reached(s_recover_at)) {
         printf("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
+        boot_guard_planned_reset(true);
         NVIC_SystemReset();   /* does not return */
     }
 }
@@ -144,20 +145,11 @@ void handle_power_status(int conn_id, const char *json) {
     int ibus = 0, ish = 0, icur = 0;
     int ebus = 0, esh = 0, ecur = 0;
     int pbus = 0, psh = 0, pcur = 0;
-    /* I2C1 is shared with the console `ina` command, the TCA9554 expanders and the
-       power_profile sampler, all of which take hw_lock — this one read did not, so a
-       concurrent transaction could interleave and return a torn register. */
-    hw_lock();
     bool int_ok = (ina238_read(I2C_ADDR_INA238_INTERNAL, &ibus, &ish, &icur) == 0);
-    hw_unlock();
-    hw_lock();
     bool ext_ok = (ina238_read(I2C_ADDR_INA238_EXTERNAL, &ebus, &esh, &ecur) == 0);
-    hw_unlock();
     bool pod = ina_pod_present(), pod_ok = false;
     if (pod) {
-        hw_lock();
         pod_ok = (ina238_read(I2C_ADDR_INA_POD, &pbus, &psh, &pcur) == 0);
-        hw_unlock();
     }
 
     char resp[352];

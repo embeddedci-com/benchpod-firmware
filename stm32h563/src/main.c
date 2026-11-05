@@ -31,7 +31,6 @@
 #include "usb_device.h"
 #include "net_server.h"
 #include "device_identity.h"
-#include "hw_lock.h"
 #include "psram.h"
 #include "dfu_boot.h"
 #include "fault.h"
@@ -151,7 +150,6 @@ int main(void)
        bus and the target rails (a stray DUT rail is dangerous).  The iCE40, PSRAM and their
        self-test run later on the hw worker task (boot_deferred_hw_init), AFTER USB and the
        scheduler are up, so nothing they do can keep the USB console from appearing. */
-    hw_lock_init();         /* serializes console + TCP command dispatch */
 
     /* Identify the PCB revision FIRST: it decides the TPS2116 LA-bank mux
        polarity (inverted between v2 and v3), whether the dedicated NRST pin

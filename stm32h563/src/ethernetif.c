@@ -37,7 +37,9 @@
 #define IFNAME0 's'
 #define IFNAME1 't'
 
-#define ETH_DMA_TRANSMIT_TIMEOUT                (20U)
+/* How long low_level_output waits for a free TX descriptor when all of them are queued.  A
+   full 1514-byte frame is 1.2 ms on the wire at 10 Mbit, so this covers one frame draining. */
+#define ETH_TX_SLOT_WAIT_MS                     (3U)
 
 /* One full Ethernet frame per RX buffer (was 1000 < a 1514-byte frame, which split every
    full packet across TWO DMA buffers — halving effective RX buffering and adding reassembly).
@@ -94,6 +96,8 @@ static uint8_t RxAllocStatus;
 static volatile uint32_t s_rx_alloc_fail;   /* RX pool empty events (eth_diag) */
 static uint32_t s_rx_missed, s_rx_missed_ovf;  /* accumulated: DMACMFCR clears on read */
 static volatile uint32_t s_rx_frames, s_rx_bcast;  /* every received frame (the MMC counts unicast only) */
+static uint32_t s_tx_full_drops;            /* frames dropped: no TX descriptor freed in time */
+static uint32_t s_eth_reinit_fails;         /* MAC/DMA re-inits after a stop that did not complete */
 
 _Static_assert(ETH_DIAG_MACCR_DM == ETH_MACCR_DM && ETH_DIAG_MACCR_FES == ETH_MACCR_FES,
                "eth_diag MACCR bits must match the CMSIS definitions");
@@ -157,6 +161,76 @@ static void board_eth_mac(uint8_t mac[6])
   mac[5] = (uint8_t)(h2 >> 24);
 }
 
+/* ---- stop / restart ---------------------------------------------------------------------
+   HAL_ETH_Stop + HAL_ETH_Start do not bring the DMA back cleanly.  The DMA keeps its own
+   position in both descriptor rings across a stop, and HAL_ETH_Start re-arms all four RX
+   descriptors from the HAL's rebuild index.  When a stop catches received frames the driver has
+   not read yet (any stop under load: `eth restart`, the DHCP self-heal, a link drop during a
+   transfer), the read position ends up behind the DMA's: the driver waits on a descriptor the
+   DMA never fills, nothing frees one, and Ethernet is dead until a reboot (measured on 3.9.6
+   and on this driver: link up, MAC counting unicast frames, the driver receiving none, no DHCP
+   lease ever again).  So the first start after a stop re-initialises MAC + DMA (HAL_ETH_Init
+   from the READY state: a DMA soft reset that rewinds both rings, without HAL_ETH_MspInit's
+   PHY reset pulse), after giving back every buffer the descriptors still hold.  Net task. */
+static bool     s_eth_stopped;      /* stopped since the last (re)init: reinit before starting */
+static uint32_t s_mmc_base[6];      /* the MMC counters reset with the DMA: totals carried over */
+enum { MMC_RX_GOOD, MMC_RX_CRC, MMC_RX_ALIGN, MMC_TX_GOOD, MMC_TX_COL1, MMC_TX_COLN };
+
+static void eth_mac_filter(void)
+{
+  /* Let the MAC receive multicast frames so mDNS queries (dst 01:00:5E:00:00:FB)
+     actually reach LwIP — the default filter after HAL_ETH_Init drops them. */
+  ETH_MACFilterConfigTypeDef filter = {0};
+  HAL_ETH_GetMACFilterConfig(&EthHandle, &filter);
+  filter.PassAllMulticast = ENABLE;
+  HAL_ETH_SetMACFilterConfig(&EthHandle, &filter);
+}
+
+static void eth_stop(void)
+{
+  (void)HAL_ETH_Stop(&EthHandle);   /* no-op when not started */
+  s_eth_stopped = true;
+}
+
+/* Before a start: re-initialise if stopped.  0 = ready to start, -1 = the DMA reset did not
+   complete (no RMII reference clock yet): stay down and try again on the next link check. */
+static int eth_prepare_start(void)
+{
+  if (!s_eth_stopped) return 0;
+  /* Frames still queued for transmit: the DMA is stopped and about to be reset, so they are
+     ours again. */
+  ETH_TxDescListTypeDef *tl = &EthHandle.TxDescList;
+  for (uint32_t i = 0; i < ETH_TX_DESC_CNT; i++) {
+    if (tl->PacketAddress[i]) { pbuf_free((struct pbuf *)tl->PacketAddress[i]); tl->PacketAddress[i] = NULL; }
+  }
+  tl->BuffersInUse = 0;
+  tl->releaseIndex = 0;
+  tl->CurrentPacketAddress = NULL;
+  /* RX buffers armed in descriptors, and a frame half assembled, go back to the pool. */
+  ETH_RxDescListTypeDef *rl = &EthHandle.RxDescList;
+  for (uint32_t i = 0; i < ETH_RX_DESC_CNT; i++) {
+    uint32_t b = DMARxDscrTab[i].BackupAddr0;
+    if (b) { LWIP_MEMPOOL_FREE(RX_POOL, (void *)(b - offsetof(RxBuff_t, buff))); DMARxDscrTab[i].BackupAddr0 = 0; }
+  }
+  if (rl->pRxStart) pbuf_free((struct pbuf *)rl->pRxStart);
+  rl->pRxStart = rl->pRxEnd = NULL;
+  rl->RxDataLength = 0;
+  RxAllocStatus = RX_ALLOC_OK;
+  s_mmc_base[MMC_RX_GOOD]  += ETH->MMCRUPGR;
+  s_mmc_base[MMC_RX_CRC]   += ETH->MMCRCRCEPR;
+  s_mmc_base[MMC_RX_ALIGN] += ETH->MMCRAEPR;
+  s_mmc_base[MMC_TX_GOOD]  += ETH->MMCTPCGR;
+  s_mmc_base[MMC_TX_COL1]  += ETH->MMCTSCGPR;
+  s_mmc_base[MMC_TX_COLN]  += ETH->MMCTMCGPR;
+  if (HAL_ETH_Init(&EthHandle) != HAL_OK) {
+    s_eth_reinit_fails++;
+    return -1;
+  }
+  eth_mac_filter();
+  s_eth_stopped = false;
+  return 0;
+}
+
 static void low_level_init(struct netif *netif)
 {
   static uint8_t macaddress[6];   /* HAL keeps the pointer: must outlive this call */
@@ -187,14 +261,7 @@ static void low_level_init(struct netif *netif)
   /* NETIF_FLAG_IGMP lets LwIP join the mDNS multicast group (224.0.0.251). */
   netif->flags |= NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_IGMP;
 
-  /* Let the MAC receive multicast frames so mDNS queries (dst 01:00:5E:00:00:FB)
-     actually reach LwIP — the default filter after HAL_ETH_Init drops them. */
-  {
-    ETH_MACFilterConfigTypeDef filter = {0};
-    HAL_ETH_GetMACFilterConfig(&EthHandle, &filter);
-    filter.PassAllMulticast = ENABLE;
-    HAL_ETH_SetMACFilterConfig(&EthHandle, &filter);
-  }
+  eth_mac_filter();
 
   /* Initialize the RX POOL */
   LWIP_MEMPOOL_INIT(RX_POOL);
@@ -257,7 +324,6 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 {
   uint32_t i = 0U;
   struct pbuf *q = NULL;
-  err_t errval = ERR_OK;
   ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT] = {0};
 
   memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
@@ -287,16 +353,25 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
 
-  if( HAL_ETH_Transmit(&EthHandle, &TxConfig, ETH_DMA_TRANSMIT_TIMEOUT)== HAL_OK )
-  {
-    errval = ERR_OK;
+  /* Zero-copy, non-blocking: the DMA reads the pbuf after we return, so hold a reference until
+     HAL_ETH_ReleaseTxPacket hands it to HAL_ETH_TxFreeCallback (lwIP does not rewrite a segment
+     while its pbuf is still referenced).  The old blocking HAL_ETH_Transmit spun the net task
+     for every frame's wire time, and on its 20 ms timeout it gave the descriptor back while the
+     DMA could still be reading a pbuf lwIP then freed. */
+  if (EthHandle.gState != HAL_ETH_STATE_STARTED) return ERR_IF;   /* link down */
+  (void)HAL_ETH_ReleaseTxPacket(&EthHandle);
+  pbuf_ref(p);
+  uint32_t t0 = HAL_GetTick();
+  while (HAL_ETH_Transmit_IT(&EthHandle, &TxConfig) != HAL_OK) {
+    /* Every descriptor is queued: wait for one frame to leave, briefly. */
+    if (HAL_GetTick() - t0 >= ETH_TX_SLOT_WAIT_MS) {
+      s_tx_full_drops++;
+      pbuf_free(p);
+      return ERR_IF;
+    }
+    (void)HAL_ETH_ReleaseTxPacket(&EthHandle);
   }
-  else
-  {
-    errval = ERR_IF;
-  }
-
-  return errval;
+  return ERR_OK;
 }
 
 
@@ -339,6 +414,7 @@ void ethernetif_input(struct netif *netif)
 {
   struct pbuf *p = NULL;
 
+    (void)HAL_ETH_ReleaseTxPacket(&EthHandle);   /* free the pbufs of transmitted frames */
     do
     {
       p = low_level_input( netif );
@@ -598,7 +674,7 @@ void ethernet_link_check_state(struct netif *netif)
 
   if(netif_is_link_up(netif) && (PHYLinkState <= LAN8742_STATUS_LINK_DOWN))
   {
-    HAL_ETH_Stop(&EthHandle);
+    eth_stop();
     netif_set_down(netif);
     netif_set_link_down(netif);
   }
@@ -632,6 +708,7 @@ void ethernet_link_check_state(struct netif *netif)
 
     if(linkchanged)
     {
+      if (eth_prepare_start() != 0) return;   /* stays down; retried on the next check */
       /* Get MAC Config MAC */
       HAL_ETH_GetMACConfig(&EthHandle, &MACConf);
       MACConf.DuplexMode = duplex;
@@ -658,7 +735,7 @@ void ethernet_link_check_state(struct netif *netif)
    interface stays down until an explicit start. */
 void ethernetif_stop(struct netif *netif)
 {
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 }
@@ -670,7 +747,7 @@ void ethernetif_stop(struct netif *netif)
    self-heal escalation and the `eth start`/`eth restart` command. */
 void ethernetif_phy_restart(struct netif *netif)
 {
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   uint32_t bcr = 0;
   if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr,
                                LAN8742_BCR, LAN8742_BCR_SOFT_RESET) == HAL_OK) {
@@ -714,7 +791,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
   memset(r, 0, sizeof(*r));
   r->mbit = mbit;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 
@@ -726,6 +803,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
   }
   HAL_Delay(20);
 
+  if (eth_prepare_start() != 0) { ethernetif_phy_restart(netif); return -1; }
   ETH_MACConfigTypeDef mac = {0};
   HAL_ETH_GetMACConfig(&EthHandle, &mac);
   mac.DuplexMode = ETH_FULLDUPLEX_MODE;
@@ -778,7 +856,7 @@ int ethernetif_loopback_test(struct netif *netif, int mbit, uint32_t n, eth_loop
   r->crc   = ETH->MMCRCRCEPR - crc0;
   r->align = ETH->MMCRAEPR   - align0;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   ethernetif_phy_restart(netif);     /* soft reset: loopback off, autoneg back on */
   return 0;
 }
@@ -804,7 +882,7 @@ int ethernetif_measure_refclk(struct netif *netif, uint32_t *hz_out)
   if (!hz_out) return -1;
   *hz_out = 0;
 
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   netif_set_down(netif);
   netif_set_link_down(netif);
 
@@ -871,7 +949,7 @@ int ethernetif_force_speed(struct netif *netif, int mbit, int full)
   uint32_t bcr = (mbit == 0) ? (LAN8742_BCR_AUTONEGO_EN | LAN8742_BCR_RESTART_AUTONEGO)
                              : ((mbit == 100 ? LAN8742_BCR_SPEED_SELECT : 0u) |
                                 (full        ? LAN8742_BCR_DUPLEX_MODE  : 0u));
-  HAL_ETH_Stop(&EthHandle);
+  eth_stop();
   if (HAL_ETH_WritePHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_BCR, bcr) != HAL_OK) {
     netif_set_down(netif);
     netif_set_link_down(netif);
@@ -973,12 +1051,12 @@ void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d)
   d->netif_link = netif_is_link_up(netif);
   d->rx_frames = s_rx_frames;
   d->rx_bcast = s_rx_bcast;
-  d->rx_good = ETH->MMCRUPGR;
-  d->rx_crc = ETH->MMCRCRCEPR;
-  d->rx_align = ETH->MMCRAEPR;
-  d->tx_good = ETH->MMCTPCGR;
-  d->tx_col_single = ETH->MMCTSCGPR;
-  d->tx_col_multi = ETH->MMCTMCGPR;
+  d->rx_good = s_mmc_base[MMC_RX_GOOD] + ETH->MMCRUPGR;
+  d->rx_crc = s_mmc_base[MMC_RX_CRC] + ETH->MMCRCRCEPR;
+  d->rx_align = s_mmc_base[MMC_RX_ALIGN] + ETH->MMCRAEPR;
+  d->tx_good = s_mmc_base[MMC_TX_GOOD] + ETH->MMCTPCGR;
+  d->tx_col_single = s_mmc_base[MMC_TX_COL1] + ETH->MMCTSCGPR;
+  d->tx_col_multi = s_mmc_base[MMC_TX_COLN] + ETH->MMCTMCGPR;
   uint32_t mfc = ETH->DMACMFCR;   /* clears on read */
   s_rx_missed += mfc & ETH_DMACMFCR_MFC;
   if (mfc & ETH_DMACMFCR_MFCO) s_rx_missed_ovf++;
@@ -986,4 +1064,5 @@ void ethernetif_diag_refresh(struct netif *netif, eth_diag_t *d)
   d->rx_missed_ovf = s_rx_missed_ovf;
   d->rx_alloc_fail = s_rx_alloc_fail;
   d->rx_alloc_stuck = (RxAllocStatus == RX_ALLOC_ERROR);
+  d->tx_full_drops = s_tx_full_drops;
 }

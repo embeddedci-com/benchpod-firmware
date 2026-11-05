@@ -31,7 +31,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     memset(c, 0, sizeof(*c));
     /* The cached gateware version is current: the hw worker re-reads it after boot bring-up, the
        boot gateware update and every image swap, and re-announces when it is done. Reading it
-       over SPI1 here would race the worker, which drives SPI1 without hw_lock. */
+       over SPI1 here, on the net task, would race the worker, which owns SPI1. */
     signal_engine_caps_t caps;
     signal_engine_caps(&caps);
     /* A digital-only board has the gateware's DAC/ADC engines but no DAC or ADC behind them

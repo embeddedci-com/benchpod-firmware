@@ -36,7 +36,7 @@ int eth_diag_format(const eth_diag_t *d, char *buf, size_t cap) {
                         (unsigned long)d->tx_col_single, (unsigned long)d->tx_col_multi);
     return snprintf(buf, cap,
                     "phy link %s aneg %s%s mode %s partner 0x%04x symerr %u | mac %s%s | lwip link %s | "
-                    "rx frames %lu (bcast %lu) unicast %lu crc %lu align %lu missed %lu%s allocfail %lu%s | tx good %lu col %lu/%lu",
+                    "rx frames %lu (bcast %lu) unicast %lu crc %lu align %lu missed %lu%s allocfail %lu%s | tx good %lu col %lu/%lu txfull %lu",
                     (d->bsr & ETH_DIAG_BSR_LINK) ? "up" : "DOWN",
                     (d->bsr & ETH_DIAG_BSR_ANEG_DONE) ? "done" : "NOT DONE",
                     (d->bsr & ETH_DIAG_BSR_RFAULT) ? " REMOTE-FAULT" : "",
@@ -48,7 +48,7 @@ int eth_diag_format(const eth_diag_t *d, char *buf, size_t cap) {
                     (unsigned long)d->rx_missed, d->rx_missed_ovf ? "+ovf" : "",
                     (unsigned long)d->rx_alloc_fail, d->rx_alloc_stuck ? " (pool empty now)" : "",
                     (unsigned long)d->tx_good, (unsigned long)d->tx_col_single,
-                    (unsigned long)d->tx_col_multi);
+                    (unsigned long)d->tx_col_multi, (unsigned long)d->tx_full_drops);
 }
 
 int eth_diag_error_delta(const eth_diag_t *prev, const eth_diag_t *cur, char *buf, size_t cap) {
@@ -57,6 +57,7 @@ int eth_diag_error_delta(const eth_diag_t *prev, const eth_diag_t *cur, char *bu
         {"align",     cur->rx_align - prev->rx_align},
         {"missed",    cur->rx_missed - prev->rx_missed},
         {"allocfail", cur->rx_alloc_fail - prev->rx_alloc_fail},
+        {"txfull",    cur->tx_full_drops - prev->tx_full_drops},
         {"col",       (cur->tx_col_single + cur->tx_col_multi) - (prev->tx_col_single + prev->tx_col_multi)},
         {"symerr",    (uint16_t)(cur->symbol_errors - prev->symbol_errors)},
     };

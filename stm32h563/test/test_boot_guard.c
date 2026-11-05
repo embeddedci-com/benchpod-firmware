@@ -172,8 +172,36 @@ static void test_hw_ready(void) {
     CHECK(boot_hw_ready(), "not ready after bring-up");
 }
 
+/* Two quick deliberate reboots (each before "healthy") must not put the third boot in safe
+   mode; a crash between them still counts; undoing the mark counts the boot again. */
+static void test_planned_reset(void) {
+    reset(true, "");
+    for (int i = 0; i < 4; i++) {
+        boot_guard_planned_reset(true);
+        reset(false, "");
+        CHECK(!boot_guard_safe_mode(), "planned reboot %d led to safe mode", i);
+        CHECK(s_rec.failed == 1, "planned reboot %d: failed %u", i, (unsigned)s_rec.failed);
+    }
+    boot_dies_in(BOOT_SUB_HW);              /* a real failure... */
+    reset(false, "");
+    CHECK(s_rec.failed == 2, "crash after planned reboots: failed %u", (unsigned)s_rec.failed);
+    boot_guard_planned_reset(true);         /* ...is not forgiven by the next planned reboot */
+    reset(false, "");
+    CHECK(s_rec.failed == 2, "planned reboot forgave a crash: failed %u", (unsigned)s_rec.failed);
+    boot_guard_planned_reset(true);
+    boot_guard_planned_reset(false);        /* the reset did not happen: this boot counts */
+    CHECK(s_rec.failed == 2, "undo: failed %u", (unsigned)s_rec.failed);
+    boot_dies_in(BOOT_SUB_HW);
+    reset(false, "");
+    CHECK(boot_guard_safe_mode(), "undone planned reset still kept the crash count down");
+    boot_guard_planned_reset(true);         /* safe mode keeps counting */
+    reset(false, "");
+    CHECK(boot_guard_safe_mode(), "planned reboot left safe mode");
+}
+
 int main(void) {
     test_counts_to_safe_mode();
+    test_planned_reset();
     test_healthy_clears();
     test_culprits();
     test_test_loop_ends_in_safe_mode();
