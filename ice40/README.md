@@ -39,6 +39,12 @@ STM32 ─ SPI ─► cmd_dispatch ─ engine_block ─┤ ADC producer ───
   covers ADC-only and LA-only captures. Since v40 it is the only capture arm: the older
   `OP_START_CAPTURE` (0x20), `OP_START_MEASURE` (0x30) and `OP_LA_CAPTURE` (0x69) are
   ignored.
+- **Sample alignment** (v52). Sample i of both streams is taken on the same clk edge,
+  `t0 + (i+1) * divider - 3` (the LA through its 2-flop pad synchroniser). The ADC engine
+  free-runs between captures (the loop image reads it), so a capture that includes the ADC
+  restarts it at t0: the conversion in flight is dropped and the first one starts on the LA's
+  sample-0 edge. Until v51 the ADC's sample 0 was whatever conversion was in flight at t0,
+  up to a period early or up to the previous capture's period late (`tb_top_adc_t0`).
 - **Capture trigger** (v35). `OP_SET_TRIGGER` (0x33) sets a persistent
   channel/mode (rising/falling/high/low) on the synchronised LA levels. An arm
   then *loads* the producers but holds them until the condition is seen; that
@@ -70,9 +76,9 @@ STM32 ─ SPI ─► cmd_dispatch ─ engine_block ─┤ ADC producer ───
   enforces the region caps; nothing in the gateware bounds a stream to its region.
 - **Clocks.** An external 48 MHz `clk48` feeds the PSRAM serializers and the DAC
   engine; the control plane and capture datapath run on `clk` = clk48 / 2 (24 MHz).
-  The clk to clk48 hop is a synchronous 1:2 gearbox (`cell_gearbox48`). The promoted
-  v47 images close `clk` at about 30 to 33 MHz and `clk48` at about 55 to 58 MHz
-  (`ice40/release/MANIFEST` records the exact figures).
+  The clk to clk48 hop is a synchronous 1:2 gearbox (`cell_gearbox48`). Both clocks close
+  with margin on the pinned seeds; `ice40/release/MANIFEST` records the figures of the
+  promoted images. See "Clock-domain crossings" below for what nextpnr does not time.
 - **Integrity.** Before every capture the STM32 stamps a no-write sentinel at the
   ADC region base; if it survives the read-back the iCE40 never wrote (a
   datapath/timing fault, not the analog ADC). `STATUS` carries CAP_DONE / CAP_BUSY
@@ -98,6 +104,38 @@ frame format. `DAC_CTRL` (0x38, v49) sets the frame's top byte: the stream contr
 every later start takes (it picks the DAC8554 channel; 0, the power-up value, is the DAC8551's
 frame), and one-off static frames to any channel, which take the next sample slot of a running
 stream or go out at once when the DAC is idle. `tb_dac8554` and `tb_top_capture` cover both.
+
+## Clock-domain crossings
+
+`clocks.py` constrains `clk48` (48 MHz) and `clk` (24 MHz), but `clk` is clk48 divided by a
+fabric flop and an SB_GB, and nextpnr-ice40 does not analyse paths between two clock nets. So
+every clk <-> clk48 path is untimed. They fall in two groups:
+
+- **Synchronised crossings**, correct for any delay: `cdc_pulse_payload` (DAC start/stop and
+  their arguments, the static DAC frame, the loop parameters, the live ADC sample into the loop,
+  the loop telemetry back), the 2-flop level synchronisers (`psram_run_s`, `loop_mode_s`,
+  `dac_run_sync`, the reader's `roomok_s` and `run48_s`, the writer's `rst48`), and the async
+  inputs (`bus_own`, SPI SCK/CSn/MOSI, the LA pads).
+- **Phase-locked transfers**, which rely on clk being clk48 / 2 with a short skew: the PSRAM
+  cell gearbox (`cell_gearbox48`, the writer's and the reader's clk-domain cells into clk48),
+  the 48 MS/s LA pairs (`la48_sampler`, clk48 into clk) and the clk48 registers the cells and
+  pairs feed. These are what the Makefile's `MAX_X48_NS` / `MAX_X24_NS` gates watch: nextpnr
+  still reports their max delay, and a placement over 15 ns fails the build with `PNR_STRICT=1`
+  (hardware-verified placements sit at 4 to 14 ns).
+
+There is no cheap way to have them timed: an SB_PLL40 output is still a separate clock net to
+nextpnr. The structural fix is one 48 MHz domain for everything; that was built and sim-proven
+in 2026-07 but does not place on the up5k at this fill, so the gates stay the mitigation.
+
+## STM32 SPI link
+
+`spi_slave` oversamples SCK, CSn and MOSI on `clk`; SCK is not on a global-clock pin and all
+eight global buffers are in use, so it cannot clock the slave. Since v52 MOSI passes the same
+two flops as SCK, MISO moves right after each detected rise, and between bytes MISO is the reply
+register's MSB directly. The link is clean down to a 95 ns SCK half period with no inter-byte
+gap (`tb_top_spilink`, an STM32 model with pad delays): the firmware runs SPI1 at /64 (3.9 MHz)
+on gateware 52 and later and at /128 (1.95 MHz) before. /32 (7.8 MHz) would need a one-flop SCK
+synchroniser or an SCK-clocked slave, which needs a global buffer.
 
 ## Logic-analyzer bank, SWD and SPI
 

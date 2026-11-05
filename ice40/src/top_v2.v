@@ -797,7 +797,24 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 50) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 52) ----
+    // GATEWARE_VERSION 52 = v51 + the 2026-11 review fixes (both images):
+    //   * ADC capture timebase: a capture that includes the ADC restarts the free-running engine
+    //     at t0 (adc_mcp33131 `restart`), so its first conversion starts on the LA's sample-0 edge,
+    //     t0 + divider - 3, and every interval is the new divider.  Until v51 sample 0 was the
+    //     conversion in flight at t0: up to a period early, or up to the previous capture's period
+    //     late.  A divider of 0 or 1 no longer wraps the period count (65536 clk); the arm's
+    //     count != 0 tests come from flops.  tb_top_adc_t0.
+    //   * START_DAC_PSRAM over a running replay restarts the reader at the new base/length (it
+    //     kept streaming the old waveform; the firmware always stopped first).  tb_top_deep 4.
+    //   * PSRAM pads idle from configuration on: the writer's and reader's pad flops and rst48
+    //     have power-up values and psram_pads holds every output enable off until the first clk48
+    //     edge (CS was driven low for 2-3 clk48 after configuration).  tb_top_boot.
+    //   * UART RX: a low stop bit drops the byte, sets UART_STATUS flags bit7 (sticky) and waits
+    //     for the line to rise, so a break is one error, not a stream of 0x00.  tb_uart_engine.
+    //   * SPI link: spi_slave moves MISO on the detected SCK rise, samples MOSI aligned with SCK
+    //     and drives a reply's MSB straight from tx_byte, so the STM32 can run SPI1 at /64
+    //     (3.9 MHz) instead of /128; the firmware does on v52+.  tb_top_spilink.
     // GATEWARE_VERSION 51 = v50 + LC / clk48 HEADROOM PASS (both images, no protocol change, every
     //   bench unchanged): la_byte_pack writes byte lanes with their own enables (a dynamic
     //   part-select was a 40-bit mux); spram_ring48 shifts its output word instead of a byte mux;
@@ -1200,7 +1217,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd51), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd52), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

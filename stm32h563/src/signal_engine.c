@@ -56,17 +56,15 @@ static SPI_HandleTypeDef hspi_ice;
 #define SPI_TIMEOUT_MS    100U
 
 /* SPI1 kernel clock = PLL1Q = 250 MHz.  The usable SCK ceiling is set by the
-   iCE40, NOT the STM32 master: in top_v2.v the spi_slave runs on the 24 MHz
-   CONTROL-plane clock (clk = clk48/2), and its 2-flop SCK synchroniser adds
-   ~2 clk = ~83 ns before MISO updates — so MISO is only valid ~100 ns after the
-   SCK edge, and the master (sampling on the next edge) must give it a half-period
-   ≥ that.  Measured on the v2.0.0 PCB via the console spi-diag sweep:
-     /128 = 1.95 MHz → 100% clean (ping 900/900);  /64 = 3.9 MHz → marginal
-     (ping ~5/100, MISO sampled before valid).
-   So /128 is the reliable max — a 2x speedup over the old /256 bring-up clock,
-   on top of the DMA CPU-availability win.  (spi_slave.v's "8 MHz/48 MHz" note is
-   stale for v2; going faster needs the *gateware* to move spi_slave onto the
-   48 MHz clk48 domain with proper CDC — not a firmware change.) */
+   iCE40, NOT the STM32 master: spi_slave oversamples SCK on the 24 MHz control
+   clock.  Gateware up to v51 moved MISO 3-4 clk after it saw SCK fall, so the master
+   needed a ~170 ns half period.  Measured on the v2.0.0 PCB via the console spi-diag
+   sweep:  /128 = 1.95 MHz → 100% clean (ping 900/900);  /64 = 3.9 MHz → marginal
+   (ping ~5/100, MISO sampled before valid).
+   v52 moves MISO on the SCK rise and samples MOSI aligned with SCK: clean at /64 in
+   ice40/sim/tb_top_spilink.v with ~30% margin.  The boot rate stays /128 (any
+   gateware answers there); spi_link_for_version() switches to /64 once VERSION
+   reads >= SPI_FAST_LINK_MIN_GW. */
 #define SPI_ICE_PRESCALER SPI_BAUDRATEPRESCALER_128
 #define SPI_CLOCK_HZ      1953125U      /* 250 MHz / 128 */
 #include "fpga_config.h"               /* FPGA_HFOSC_HZ — single source: tools/gen_protocol.py */
