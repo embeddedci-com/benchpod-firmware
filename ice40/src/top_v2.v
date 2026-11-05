@@ -337,7 +337,12 @@ module top (
 `ifdef USE_DEEP_REPLAY
     dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5), .PAD_PIPE(1)) rdr_i (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48),   // v46: NOT reset by bus_own
-        .run(dac_psram_run), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
+        // v52: run drops on the cycle of every DAC start (the RAW one, so a co-trigger still
+        // prefills at stage time).  The reader loads base/length and flushes its FIFO only while
+        // not running, so a START_DAC_PSRAM over a running replay used to keep streaming the old
+        // waveform from where it was.  The low run_i lasts 2 clk (run & run_d), which the clk48
+        // side's 2-flop sync sees, so this is a STOP_DAC + START_DAC_PSRAM in one command.
+        .run(dac_psram_run & ~dac_start), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
         .bus_own(bus_own_synced),
         .data(rd_strm_data), .data_valid(rd_strm_valid), .data_pop(rd_strm_pop),
         .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
