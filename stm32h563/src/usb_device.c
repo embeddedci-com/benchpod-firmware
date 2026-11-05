@@ -13,7 +13,8 @@
  * a barrier, except the console ring, whose producers are serialized by a critical
  * section (an ISR may log).
  *
- * NOTE: ICACHE stays DISABLED (we never enable it); see the UID read note in board_uid.h.
+ * The ICACHE is on for the code region only (main.c icache_init); the UID area stays
+ * uncached. See the UID read note in board_uid.h.
  */
 #include "pod_policy.h"
 #include "usb_device.h"

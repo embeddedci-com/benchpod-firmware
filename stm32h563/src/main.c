@@ -58,6 +58,7 @@ UART_HandleTypeDef huart2;
 static bool s_clock_on_hsi;
 
 static void SystemClock_Config(void);
+static void icache_init(void);
 static void MX_USART2_UART_Init(void);
 void Error_Handler(void);
 
@@ -117,6 +118,7 @@ int main(void)
 
     HAL_Init();
     SystemClock_Config();
+    icache_init();
     /* Latch the reset cause + any surviving crash record before anything can
        overwrite the .noinit slot, and clear the RCC flags. */
     fault_boot_init();
@@ -276,6 +278,45 @@ _Static_assert(BENCHPOD_SYSCLK_MHZ > 200 && BENCHPOD_SYSCLK_MHZ <= 250,
                "VOS0 and the flash latency below are set for 200-250 MHz");
 
 bool clock_on_hsi(void) { return s_clock_on_hsi; }
+
+/* Instruction cache, code region only.
+ *
+ * The H5 ICACHE caches every C-bus read of the flash, data included, not just instruction
+ * fetches. Two areas must therefore never be cached:
+ *  - flash this firmware erases and programs: the persistence records in the top 128 KB of
+ *    the chip (flash_layout.h) and, on a 2 MB part, bank 2. A cached line would keep returning
+ *    the old bytes after a write;
+ *  - the system/OTP/UID area at 0x08FFF000 (see board_uid.h).
+ * The MPU marks everything from the end of the code budget (0x080E0000, the linker script's
+ * FLASH limit) to the end of that area as Normal non-cacheable, so the ICACHE bypasses it.
+ * The in-place OTA commit rewrites the code region itself, so it turns the ICACHE off before
+ * its first erase (ota_commit.c); the chip resets right after.
+ * Measured on a v3r2 pod (2026-11-05): crypto and control code about 2-3x faster, a 1M-sample
+ * LAN ADC read-back 5.6 s -> 3.8 s. */
+static void icache_init(void)
+{
+    MPU_Attributes_InitTypeDef attr = {0};
+    MPU_Region_InitTypeDef region = {0};
+
+    HAL_MPU_Disable();
+    attr.Number = MPU_ATTRIBUTES_NUMBER0;
+    attr.Attributes = INNER_OUTER(MPU_NOT_CACHEABLE);
+    HAL_MPU_ConfigMemoryAttributes(&attr);
+
+    region.Enable = MPU_REGION_ENABLE;
+    region.Number = MPU_REGION_NUMBER0;
+    region.AttributesIndex = MPU_ATTRIBUTES_NUMBER0;
+    region.BaseAddress = 0x080E0000UL;
+    region.LimitAddress = 0x08FFFFFFUL;
+    region.AccessPermission = MPU_REGION_ALL_RW;
+    region.DisableExec = MPU_INSTRUCTION_ACCESS_ENABLE;
+    region.IsShareable = MPU_ACCESS_NOT_SHAREABLE;
+    HAL_MPU_ConfigRegion(&region);
+    HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
+
+    (void)HAL_ICACHE_ConfigAssociativityMode(ICACHE_2WAYS);
+    (void)HAL_ICACHE_Enable();
+}
 
 static void SystemClock_Config(void)
 {

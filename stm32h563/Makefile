@@ -200,7 +200,7 @@ C_SOURCES += lib/monocypher/src/monocypher.c \
              lib/monocypher/src/optional/monocypher-ed25519.c
 
 # HAL driver sources (curated; unused funcs are GC'd anyway).
-HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_rcc.c \
+HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_icache.c stm32h5xx_hal_rcc.c \
          stm32h5xx_hal_rcc_ex.c stm32h5xx_hal_gpio.c stm32h5xx_hal_pwr.c \
          stm32h5xx_hal_pwr_ex.c stm32h5xx_hal_flash.c stm32h5xx_hal_flash_ex.c \
          stm32h5xx_hal_dma.c stm32h5xx_hal_dma_ex.c stm32h5xx_hal_uart.c \
@@ -312,7 +312,10 @@ DEFS      += -DBENCHPOD_SYSCLK_MHZ=$(EMI_SYSCLK)
 endif
 endif
 
-OPT := -Og -g3
+# -O2: measured on a v3r2 pod (2026-11-05, with the ICACHE on) AES-GCM 1.75x and SHA-256 1.2x
+# faster than -Og, a 1M-sample LAN ADC read-back 3.8 s -> 2.3 s, for 8 KB more flash.
+# ota_commit.c's RAM-resident code is guarded against -O2 turning loops into libcalls.
+OPT := -O2 -g3
 
 # -MMD -MP emits a per-object .d file of header deps (included below) so editing a
 # header forces a recompile — without it, editing e.g. la_rate.h left a stale la_rate.o.
