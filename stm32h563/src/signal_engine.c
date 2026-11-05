@@ -26,7 +26,6 @@
 #include "ice40_flash.h"
 #include "xfer.h"
 #include "dma_wait.h"
-#include "hw_lock.h"   /* serialize SPI1/iCE40 access vs the net task */
 #include "i2c_bus.h"   /* la_pullups_all_off — 3V3-referenced pull-ups vs the 1V8 bank */
 #include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
@@ -679,7 +678,7 @@ void signal_engine_spi_diag(int n) {
    the LIVE adc_mcp33131 sample straight off the free-running engine, bypassing
    the capture orchestrator, the 24->48 MHz CDC, AND the PSRAM datapath.  Lets us
    tell whether a bad ADC read (e.g. the 0x5555 family) is the engine/silicon or
-   the streaming path.  Console holds hw_lock (no locking here, like spi_diag). */
+   the streaming path.  Console only (hw worker task), like spi_diag. */
 int signal_engine_adc_spi(uint16_t *out) {
     uint8_t resp[2] = { 0, 0 };
     int rc = spi_cmd_read(CMD_ADC_PROBE, NULL, 0, resp, sizeof(resp));
@@ -1328,21 +1327,13 @@ void signal_engine_fabric_to_idle(void) {
 
 /* ---- Poll (main loop) ---------------------------------------------------- */
 
-/* Runs in the console task.  Its SPI1 accesses (DAC-expiry stop, async-capture
-   read-back) share the iCE40 bus with the net task, so they MUST hold hw_lock —
-   otherwise a net-task transaction can interleave mid-transfer and corrupt the
-   bus.  This matters more now that a DMA read-back yields the CPU (blocks on the
-   completion semaphore) for its whole duration, guaranteeing the net task runs
-   during it.  hw_lock is taken only around the actual bus ops (not the whole
-   poll) to keep the hold time short; the callback just sets a flag, so it runs
-   outside the lock. */
+/* Runs on the hw worker task, the only task that drives SPI1 to the iCE40 (the net task
+   reads cached state only, see cloud_caps_hw.c). */
 void signal_engine_poll(void) {
     /* DAC duration expiry (RP-side timer, same as old impl). */
     if (dac_timed && time_reached(dac_stop_at)) {
         dac_timed = false;
-        hw_lock();
         fpga_stop_dac();
-        hw_unlock();
         printf("[sig] DAC stopped (duration expired)\n");
     }
 }
@@ -1844,11 +1835,7 @@ uint8_t signal_engine_fpga_version(void) { return s_fpga_version; }
    boot-time snapshot.  Quiet (no [sig] diagnostics, unlike fpga_ping) — returns true
    iff the FPGA answered PING; on failure the cache is left untouched. */
 bool signal_engine_refresh_version(void) {
-    /* Holds hw_lock: SPI1 to the iCE40 is shared by the worker, console and net tasks
-       (this is called from the console `status` path AND cl_send_capabilities on the
-       net task), so the transaction must be serialised or it corrupts an in-flight
-       transfer — same rule as signal_engine_poll(). */
-    hw_lock();
+    /* hw worker task only (console `status`, boot and image-swap paths), like every SPI1 use. */
     uint8_t ping = 0;
     spi_cmd_read(CMD_PING, NULL, 0, &ping, 1);
     bool ok = (ping == PING_REPLY_MAGIC);
@@ -1857,7 +1844,6 @@ bool signal_engine_refresh_version(void) {
         spi_cmd_read(CMD_VERSION, NULL, 0, &v, 1);
         s_fpga_version = v;
     }
-    hw_unlock();
     return ok;
 }
 

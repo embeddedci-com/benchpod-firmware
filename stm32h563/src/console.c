@@ -39,7 +39,6 @@ bool clock_on_hsi(void);   /* main.c */
 #include "esp_wifi_ctrl.h"    /* wifi-set / wifi-show provisioning */
 #include "config_store.h"
 #include "stm32h5xx_hal.h"
-#include "hw_lock.h"
 #include "dfu_boot.h"
 #include "fault.h"
 #include "watchdog.h"
@@ -432,8 +431,8 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
 /* wifi-set "<ssid>" "<password>" — save creds + kick the ESP32 (re)connect.
    Prints the markers the benchpod-cli parses ("[cfg] credentials written to
    flash").  Non-blocking: the association RPC runs on the net task, so the
-   result is read back with wifi-show (blocking here would stall that RPC, which
-   runs under the same hw_lock this handler holds). */
+   result is read back with wifi-show (blocking here would stall the worker task,
+   which runs this handler, for the whole RPC). */
 static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
 {
     config_t cfg;
@@ -1360,9 +1359,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
 
 void console_exec(char *cmd, console_out_t out, void *ctx)
 {
-    hw_lock();
     console_exec_locked(cmd, out, ctx);
-    hw_unlock();
 }
 
 /* ---- local interactive console ----------------------------------------- */

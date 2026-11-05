@@ -29,8 +29,6 @@ uint64_t time_us_64(void) { return g_now_us; }
 void *pvPortMalloc(size_t size) { return malloc(size); }
 void  vPortFree(void *p)        { free(p); }
 
-void hw_lock(void)   {}
-void hw_unlock(void) {}
 
 /* ---- eFuse fault stub (power_profile reads the cached FLT, never I2C) ---- */
 

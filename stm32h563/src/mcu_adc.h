@@ -22,7 +22,7 @@
  * hundred millivolts apart.
  *
  * Not thread-safe: ADC1 has one regular sequencer and callers share it.  All
- * current callers run from the hw worker / boot path under hw_lock.
+ * current callers run from the hw worker / boot path, one at a time.
  * ==========================================================================*/
 
 /* Configure ADC1 (12-bit, single conversion), run the hardware calibration and

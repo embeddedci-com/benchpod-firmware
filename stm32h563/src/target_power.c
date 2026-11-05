@@ -9,7 +9,6 @@
 #include "tca9554.h"
 #include "signal_engine.h"
 #include "pico_compat.h"
-#include "hw_lock.h"   /* serialize I2C access vs the net task */
 #include "bp_log.h"
 #include <stdio.h>
 
@@ -117,23 +116,19 @@ int target_power_schedule(int efuse, bool on, uint32_t delay_ms)
     return 0;
 }
 
-/* Runs in the console task; target_power_enable() drives the TCA9554 over I2C,
-   the same bus the net task uses — so take hw_lock around the deferred enable to
-   serialize it (same reasoning as signal_engine_poll's SPI1 ops). */
+/* Runs on the hw worker task, the only task that drives I2C1 (the net task reads the
+   cached state through target_power_get_cached). */
 void target_power_poll(void)
 {
     for (int i = 0; i < 2; i++) {
         if (pending[i].armed && time_reached(pending[i].at)) {
             pending[i].armed = false;
-            hw_lock();
             target_power_enable(i + 1, pending[i].on);
-            hw_unlock();
         }
     }
 
     /* Sample FLT (active-low) every 10 ms and notify on a rising edge — there is
-       no other periodic FLT sampling, so this is what makes a fault async.  The
-       reads hit the same I2C bus the net task uses, so serialize with hw_lock.
+       no other periodic FLT sampling, so this is what makes a fault async.
        Not every worker pass: the two reads cost ~1 ms of I2C at 100 kHz, which held the
        power_profile sampler (same bus, same task) to ~400 reads/s.  FLT stays asserted
        through the eFuse's ~110 ms auto-retry, so 10 ms sampling still sees every trip. */
@@ -142,9 +137,7 @@ void target_power_poll(void)
     if (now_us < next_flt_us) return;
     next_flt_us = now_us + 10000u;
     for (int i = 0; i < 2; i++) {
-        hw_lock();
         bool flt = efuse_fault_now(i);
-        hw_unlock();
         if (flt && !last_fault[i] && event_cb)
             event_cb(i + 1, enabled_state[i], true);
         last_fault[i] = flt;

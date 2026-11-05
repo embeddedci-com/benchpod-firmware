@@ -175,7 +175,6 @@ C_SOURCES := \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/rng.c \
-  src/hw_lock.c \
   src/psram.c \
   src/ice40_flash.c \
   src/w25q.c \
