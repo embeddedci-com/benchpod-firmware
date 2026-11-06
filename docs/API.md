@@ -3731,14 +3731,15 @@ records) is erased.
 {"cmd":"emi_log","offset":0,"count":48}
 ```
 
-Without `count` it answers the log's state; with `count` (at most `max_count`: 48, or 16 over the
-cloud) it also returns that many raw 64-byte slots from slot `offset` on, base64url without
-padding, in slot order:
+Without `count` it answers the log's state and the loop's (`emi_test`, the full object; `status`
+carries a short one); with `count` (at most `max_count`: 16, or 12 over the cloud, so the reply fits
+a connection's 2 KB send buffer) it returns that many raw 64-byte slots from slot `offset` on,
+base64url without padding, in slot order, instead of `emi_test`:
 
 ```json
 {"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
   "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
-  "write_errors":0,"glitch_us_last":2100,"glitch_us_max":2600,"max_count":48,"offset":0,"count":48,
+  "write_errors":0,"glitch_us_last":404,"glitch_us_max":3041,"max_count":16,"offset":0,"count":16,
   "data":"RUwBAg..."}}
 ```
 
@@ -3751,8 +3752,12 @@ reads the whole log and prints it with a summary per run.
 
 The W25Q shares its bus with the PSRAM: a read with `count` while the EMI loop runs waits for no
 capture to be in flight (else `"busy: an EMI capture is using the bus, retry in a moment"`; the loop
-then holds its next capture back for 1.5 s, so a retry finds the bus free) and stops the DAC for a
-few milliseconds, as a log write does (`glitch_us_last`).
+then holds its next capture back for 1.5 s, so a retry finds the bus free) and stops the DAC's
+waveform for a moment, as a log write does (`glitch_us_last`). Measured on an analog v3r2 pod: 0.4 ms
+for one record, about 3 ms for 14 at once, about 60 ms when a sector erase comes with it (only once
+the 256 records erased at boot are used up, after about 20 hours). Only the sine on the 0-3.3 V
+output stops: the 0-5 V DC and the 4-20 mA output hold their level. The whole log (7,040 slots)
+downloads in about 10 s over the LAN while the loop runs.
 
 ---
 
