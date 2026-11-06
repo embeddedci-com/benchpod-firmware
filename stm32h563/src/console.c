@@ -730,6 +730,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             emi_test_log_describe(info, sizeof(info));
             op(out, ctx, "  %.150s\r\n", info);
             if (strlen(info) > 150) op(out, ctx, "  %s\r\n", info + 150);
+#if defined(EMI_LOG_TEST_SECTORS)
+            if (argc >= 4 && !strcmp(argv[2], "fill")) {   /* a small-ring test build only */
+                emi_test_log_fill((uint32_t)atol(argv[3]));
+                return;
+            }
+#endif
             const bool all = argc >= 3 && !strcmp(argv[2], "all");
             const long n = argc >= 3 && !all ? atol(argv[2]) : 20;
             if (!all && n <= 0) { op(out, ctx, "usage: emi log [n|all]\r\n"); return; }

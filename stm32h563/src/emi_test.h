@@ -117,6 +117,9 @@ uint32_t emi_test_run(void);
 /* Console `emi log [n|all]`: print the last n records (0 = all) on the device log, a few lines
    per worker pass; false when there is no log. */
 bool   emi_test_log_print(uint32_t n);
+#if defined(EMI_LOG_TEST_SECTORS)
+void   emi_test_log_fill(uint32_t n);   /* test builds only: `emi log fill <n>` */
+#endif
 /* "run log: run 12, 345 records in 7040 slots (...), ..." for `emi log`. */
 size_t emi_test_log_describe(char *buf, size_t cap);
 

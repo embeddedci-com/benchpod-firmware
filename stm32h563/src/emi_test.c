@@ -406,6 +406,8 @@ static void log_flush(void) {
                erased ? " (with a sector erase)" : "");
 }
 
+static void log_fill_poll(void);
+
 /* Every worker pass once booted: events, checkpoints, the write, the print job. */
 static void log_poll(uint32_t now) {
     if (!log_ok()) return;
@@ -424,6 +426,7 @@ static void log_poll(uint32_t now) {
         s.t_checkpoint = now;
         log_checkpoint();
     }
+    log_fill_poll();
     if (lg.n && log_bus_free() && (now - lg.t_flush >= EMI_LOG_FLUSH_MS || lg.n >= EMI_LOG_QUEUE - 2u))
         log_flush();
 
@@ -471,6 +474,18 @@ static void log_poll(uint32_t now) {
         pj.left--;
     }
 }
+
+#if defined(EMI_LOG_TEST_SECTORS)
+/* Test builds with a small ring (make EMI_LOG_SECTORS=<n>): `emi log fill <n>` queues n
+   checkpoints as fast as the queue drains, to see the ring wrap and erase between captures. */
+static uint32_t s_fill;
+void emi_test_log_fill(uint32_t n) { s_fill = n; }
+static void log_fill_poll(void) {
+    while (s_fill && lg.n < EMI_LOG_QUEUE - 2u) { log_checkpoint(); s_fill--; }
+}
+#else
+static void log_fill_poll(void) {}
+#endif
 
 bool emi_test_log_print(uint32_t n) {
     if (!log_ok()) return false;
