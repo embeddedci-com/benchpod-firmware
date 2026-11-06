@@ -23,9 +23,11 @@
  * number, the next write goes to the slot after it. Slots are written in order; before the write
  * position reaches a sector that is not empty, that sector (the 64 oldest records) is erased.
  *
- * Capacity: 110 sectors x 64 = 7,040 records. A one-hour run takes about 15 (start, a few events,
- * 12 checkpoints), so the log holds roughly the last 470 one-hour runs or 2,000 to 3,500 short
- * ones; a 24-hour run takes about 300.
+ * Capacity: 110 sectors x 64 = 7,040 slots. emi_test.c keeps 16 sectors (1,024 slots, about 80
+ * hours of checkpoints) erased ahead of the write position, erased at boot, so a run never waits
+ * for an erase in practice; that leaves about 6,000 records of history. A one-hour run takes
+ * about 15 (start, a few events, 12 checkpoints), so the log holds roughly the last 400 one-hour
+ * runs or 1,700 to 3,000 short ones; a 24-hour run takes about 300.
  *
  * This file is the record format and the ring logic only, over three flash callbacks, so it runs
  * in the host tests. emi_test.c gives it the W25Q (w25q_open/close after

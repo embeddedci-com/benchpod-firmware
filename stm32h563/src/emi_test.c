@@ -210,10 +210,11 @@ static void apply_uart(int la) {
    is checked: any time the DAC was not playing goes into glitch_us (0 in the normal path), and
    the longest into the next checkpoint. */
 
-/* Erased at boot, ahead of the write position: 4 sectors, 256 records, about 20 hours of
-   checkpoints. A run that uses them up erases the next sector between two captures (that capture
-   waits up to the W25Q's 400 ms sector erase; the outputs keep running). */
-#define EMI_LOG_BOOT_RESERVE   (4u * EMI_LOG_PER_SECTOR)
+/* Erased at boot, ahead of the write position: 16 sectors, 1,024 records, about 80 hours of
+   checkpoints (about 0.7 s, at most 6.4 s at the W25Q's 400 ms sector erase, inside the start
+   delay). A run that uses them up erases the next sector between two captures (that capture
+   waits up to 400 ms; the outputs keep running). */
+#define EMI_LOG_BOOT_RESERVE   (16u * EMI_LOG_PER_SECTOR)
 #define EMI_LOG_QUEUE          16u
 /* Write queued records at most this often (except when the queue fills), so a flapping link
    cannot turn into a stream of W25Q sessions. */

@@ -192,6 +192,10 @@ def download(pod, progress=print):
     slots, step = info["slots"], info.get("max_count", 16)
     progress(f"run log: {info['valid']} records in {slots} slots, this run {info['run']}; "
              f"reading {step} slots at a time")
+    if "session_us_max" in info:
+        progress(f"write errors {info.get('write_errors', 0)}, W25Q session last "
+                 f"{info['session_us_last']} us, max {info['session_us_max']} us, DAC gap max "
+                 f"{info.get('glitch_us_max', 0)} us ({info.get('dac_stops', 0)} sessions stopped it)")
     raw = bytearray()
     off = 0
     while off < slots:

@@ -3722,9 +3722,10 @@ That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
 started or stopped) and a `CHECK` every 5 minutes (captures, errors, frames sent and dropped, link
-losses, the longest DAC gap a log write caused). A one-hour run takes about 15 records, so the
-ring keeps the last few hundred to few thousand runs; when it is full the oldest sector (64
-records) is erased.
+losses, the longest DAC gap a log write caused, 0 normally). A one-hour run takes about 15
+records. 16 sectors (1,024 records, about 80 hours of checkpoints) are kept erased ahead of the
+write position, erased at boot before the loop starts, so the ring keeps about 6,000 records of
+history: the last few hundred to few thousand runs.
 
 ```json
 {"cmd":"emi_log"}
@@ -3739,7 +3740,8 @@ base64url without padding, in slot order, instead of `emi_test`:
 ```json
 {"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
   "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
-  "write_errors":0,"glitch_us_last":404,"glitch_us_max":3041,"max_count":16,"offset":0,"count":16,
+  "write_errors":0,"session_us_last":420,"session_us_max":3100,"glitch_us_last":0,"glitch_us_max":0,
+  "dac_stops":0,"max_count":16,"offset":0,"count":16,
   "data":"RUwBAg..."}}
 ```
 
@@ -3752,12 +3754,16 @@ reads the whole log and prints it with a summary per run.
 
 The W25Q shares its bus with the PSRAM: a read with `count` while the EMI loop runs waits for no
 capture to be in flight (else `"busy: an EMI capture is using the bus, retry in a moment"`; the loop
-then holds its next capture back for 1.5 s, so a retry finds the bus free) and stops the DAC's
-waveform for a moment, as a log write does (`glitch_us_last`). Measured on an analog v3r2 pod: 0.4 ms
-for one record, about 3 ms for 14 at once, about 60 ms when a sector erase comes with it (only once
-the 256 records erased at boot are used up, after about 20 hours). Only the sine on the 0-3.3 V
-output stops: the 0-5 V DC and the 4-20 mA output hold their level. The whole log (7,040 slots)
-downloads in about 10 s over the LAN while the loop runs.
+then holds its next capture back for 1.5 s, so a retry finds the bus free). Log writes and reads do
+not interrupt the outputs: the sine plays from the gateware's BRAM table and the 0-5 V DC and
+4-20 mA outputs are held by the quad DAC, none of which use the bus, so the DAC keeps running
+through a W25Q session. Only a deep DAC replay (from PSRAM) would be stopped and started again;
+the EMI loop never plays one. A session delays the loop's next capture instead: `session_us_last`
+and `session_us_max` are its time (measured on an analog v3r2 pod: 0.4 ms for one record, about
+3 ms for a batch of 14, up to about 0.4 s when a sector erase comes with it, which happens only
+once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
+time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
+The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
 
 ---
 
