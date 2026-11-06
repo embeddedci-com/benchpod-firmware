@@ -211,9 +211,10 @@ static void apply_uart(int la) {
    the longest into the next checkpoint. */
 
 /* Erased at boot, ahead of the write position: 16 sectors, 1,024 records, about 80 hours of
-   checkpoints (about 0.7 s, at most 6.4 s at the W25Q's 400 ms sector erase, inside the start
-   delay). A run that uses them up erases the next sector between two captures (that capture
-   waits up to 400 ms; the outputs keep running). */
+   checkpoints (measured 58 ms a sector, so about 1 s when all 16 need it, at most 6.4 s at the
+   W25Q's 400 ms worst case, inside the start delay; sectors already blank are skipped). A run
+   that uses them up erases the next sector between two captures (that capture waits about 60 ms,
+   up to 400 ms; the outputs keep running). */
 #define EMI_LOG_BOOT_RESERVE   (16u * EMI_LOG_PER_SECTOR)
 #define EMI_LOG_QUEUE          16u
 /* Write queued records at most this often (except when the queue fills), so a flapping link

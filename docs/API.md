@@ -3740,7 +3740,7 @@ base64url without padding, in slot order, instead of `emi_test`:
 ```json
 {"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
   "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
-  "write_errors":0,"session_us_last":420,"session_us_max":3100,"glitch_us_last":0,"glitch_us_max":0,
+  "write_errors":0,"session_us_last":273,"session_us_max":2969,"glitch_us_last":0,"glitch_us_max":0,
   "dac_stops":0,"max_count":16,"offset":0,"count":16,
   "data":"RUwBAg..."}}
 ```
@@ -3759,9 +3759,9 @@ not interrupt the outputs: the sine plays from the gateware's BRAM table and the
 4-20 mA outputs are held by the quad DAC, none of which use the bus, so the DAC keeps running
 through a W25Q session. Only a deep DAC replay (from PSRAM) would be stopped and started again;
 the EMI loop never plays one. A session delays the loop's next capture instead: `session_us_last`
-and `session_us_max` are its time (measured on an analog v3r2 pod: 0.4 ms for one record, about
-3 ms for a batch of 14, up to about 0.4 s when a sector erase comes with it, which happens only
-once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
+and `session_us_max` are its time (measured on an analog v3r2 pod: 0.3 to 0.4 ms for one record,
+about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the W25Q's worst case
+is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
 time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
 The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
 
