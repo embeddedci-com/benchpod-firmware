@@ -267,6 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
 
@@ -3712,6 +3713,46 @@ It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
 particular).
+
+### `emi_log` — the EMI test build's run log
+
+Only in the EMI test build (`make EMI_TEST=1`, never released); other builds answer `"unknown cmd"`.
+That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0x200000` (440 KB,
+7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
+`START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
+`EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
+started or stopped) and a `CHECK` every 5 minutes (captures, errors, frames sent and dropped, link
+losses, the longest DAC gap a log write caused). A one-hour run takes about 15 records, so the
+ring keeps the last few hundred to few thousand runs; when it is full the oldest sector (64
+records) is erased.
+
+```json
+{"cmd":"emi_log"}
+{"cmd":"emi_log","offset":0,"count":48}
+```
+
+Without `count` it answers the log's state; with `count` (at most `max_count`: 48, or 16 over the
+cloud) it also returns that many raw 64-byte slots from slot `offset` on, base64url without
+padding, in slot order:
+
+```json
+{"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
+  "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
+  "write_errors":0,"glitch_us_last":2100,"glitch_us_max":2600,"max_count":48,"offset":0,"count":48,
+  "data":"RUwBAg..."}}
+```
+
+`run` is this boot's run number; `queued` records wait in RAM for the next write, `lost` found no
+room there. A slot is empty (all `0xFF`) or a record: `u16 magic 0x4C45` ("EL"), `u8 type` (1
+START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue), `u32 seq` (grows across
+runs: sort by it), `u32 run`, `u32 uptime_ms`, 44 bytes of payload, and a CRC-32 (zlib's) of the
+first 60 bytes; the payloads are in `stm32h563/src/emi_log.c`. `stm32h563/tools/emi/emi_log_dump.py`
+reads the whole log and prints it with a summary per run.
+
+The W25Q shares its bus with the PSRAM: a read with `count` while the EMI loop runs waits for no
+capture to be in flight (else `"busy: an EMI capture is using the bus, retry in a moment"`; the loop
+then holds its next capture back for 1.5 s, so a retry finds the bus free) and stops the DAC for a
+few milliseconds, as a log write does (`glitch_us_last`).
 
 ---
 
