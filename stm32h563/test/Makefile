@@ -557,6 +557,7 @@ endif
 # the console replies host tools parse must not change (check_console_contract.py).
 PYTHON ?= python3
 docs-check:
+	@$(PYTHON) ../tools/emi/test_emi_tools.py
 	@$(PYTHON) check_docs_coverage.py
 	@$(PYTHON) check_console_contract.py
 
