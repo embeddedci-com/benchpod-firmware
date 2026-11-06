@@ -13,7 +13,8 @@
  *   EVENT       on a change: LED state (green -> red, red -> blue, ...), Ethernet link lost or
  *               back, the activity started or stopped
  *   CHECKPOINT  every EMI_LOG_CHECKPOINT_MS: captures, errors, frames sent and dropped, link
- *               losses, LED state, the longest DAC glitch a log write caused
+ *               losses, LED state, the longest DAC gap a log write caused (0: the
+ *               outputs keep running through log writes, emi_test.c)
  *
  * Every record carries a sequence number that only grows (across runs), the run number, the
  * uptime and a CRC-32 (zlib's) over its first 60 bytes. Erased flash (0xFF) is an empty slot; a
@@ -27,8 +28,8 @@
  * ones; a 24-hour run takes about 300.
  *
  * This file is the record format and the ring logic only, over three flash callbacks, so it runs
- * in the host tests. emi_test.c gives it the W25Q (inside w25q_session_open/close, on the hw
- * worker) and decides when the bus may be taken.
+ * in the host tests. emi_test.c gives it the W25Q (w25q_open/close after
+ * signal_engine_quiesce_psram_keep_dac, on the hw worker) and decides when the bus may be taken.
  */
 #ifndef EMI_LOG_H
 #define EMI_LOG_H
@@ -93,7 +94,7 @@ typedef struct {
         struct {
             uint32_t captures, errors, net_sent, net_drops, link_losses;
             uint32_t rec_dropped;   /* records the RAM queue had no room for */
-            uint32_t glitch_us_max; /* the longest DAC interruption a log write caused */
+            uint32_t glitch_us_max; /* the longest DAC interruption a log write caused, 0 normally */
             uint8_t  dac, net_mbit, running, link;
             char     text[12];      /* the last error, cut */
         } cp;

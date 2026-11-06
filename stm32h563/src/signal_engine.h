@@ -60,6 +60,12 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
    the waveform BRAM (a W25Q session's quiesce). Microseconds instead of the table's rebuild.
    -1 = nothing to restart (another load replaced it, or a timed generate). */
 int dac_restart_generated(void);
+/* EMI test build: the run log's quiesce. Stops the DAC only when a deep replay (the one DAC source
+   that masters the PSRAM bus) is resident; else waits only for no capture busy and the writer
+   drained. true = it stopped the DAC (the caller starts it again). */
+bool signal_engine_quiesce_psram_keep_dac(void);
+/* EMI test build: the FPGA STATUS DAC_RUN bit (false when STATUS does not read). */
+bool signal_engine_dac_run_bit(void);
 #endif
 int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);

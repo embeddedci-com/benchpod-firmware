@@ -12,7 +12,7 @@
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 #include "fault.h"                      /* fault_last_reset_str */
 #include "emi_log.h"
-#include "w25q.h"                       /* w25q_session_open: the run log's flash */
+#include "w25q.h"                       /* w25q_open: the run log's flash */
 #include "version.h"                    /* FIRMWARE_VERSION */
 #include "bp_json.h"
 #include "at_driver.h"                  /* at_send_data */
@@ -160,9 +160,9 @@ static void start_dac(emi_dac_mode_t mode) {
     }
 }
 
-/* After a W25Q session: its quiesce stopped the DAC engine (the sine) but left the quad DAC's
-   held channels (the DC on B, the 12 mA) and the sine's table in the gateware's BRAM, so the sine
-   only needs its START_DAC again. The DC is written again (a single-DAC board has no held
+/* After a W25Q session whose quiesce stopped the DAC (the deep-replay fallback, or a DAC_RUN
+   found clear): the stop left the quad DAC's held channels (the DC on B, the 12 mA) and the
+   sine's table in the gateware's BRAM, so the sine only needs its START_DAC again. The DC is written again (a single-DAC board has no held
    channel); the 4-20 mA output keeps its current (dac_stop leaves it). Falls back to start_dac
    when the table is gone. */
 static void resume_dac(emi_dac_mode_t mode) {
@@ -199,21 +199,24 @@ static void apply_uart(int la) {
 
 
 /* ---- the run log (emi_log.h) ---------------------------------------------------------------
-   The W25Q shares its bus with the PSRAM, so every log access is a W25Q session: it quiesces the
-   gateware's PSRAM masters, which stops the DAC, and it may not start while a capture or upload
-   owns the bus (heavy_or_claimed). So the log is scanned and the sectors it needs erased at boot,
-   before the activity starts; records wait in a RAM queue and are written between two captures,
-   all in one session, and the DAC mode is started again right after. The time from the session's
-   start to the DAC playing again is measured (glitch_us), and the longest goes into the next
-   checkpoint. */
+   The W25Q shares its bus with the PSRAM, so every log access is a W25Q session, and it may not
+   start while a capture or upload owns the bus (heavy_or_claimed). The DAC keeps playing through
+   it: the sine plays from the gateware's BRAM table and the DC and 4-20 mA outputs are held by the
+   quad DAC, none of which touch the bus (signal_engine_quiesce_psram_keep_dac). Only a deep
+   replay, which reads the PSRAM, would be stopped and started again; the EMI loop never plays
+   one. So the log is scanned and the sectors it needs erased at boot, before the activity starts;
+   records wait in a RAM queue and are written between two captures, all in one session, which
+   delays the next capture by the session's time (session_us). After a session the DAC_RUN bit
+   is checked: any time the DAC was not playing goes into glitch_us (0 in the normal path), and
+   the longest into the next checkpoint. */
 
 /* Erased at boot, ahead of the write position: 4 sectors, 256 records, about 20 hours of
-   checkpoints. A run that uses them up erases the next sector between two captures (a longer DAC
-   gap, up to the W25Q's 400 ms sector erase). */
+   checkpoints. A run that uses them up erases the next sector between two captures (that capture
+   waits up to the W25Q's 400 ms sector erase; the outputs keep running). */
 #define EMI_LOG_BOOT_RESERVE   (4u * EMI_LOG_PER_SECTOR)
 #define EMI_LOG_QUEUE          16u
 /* Write queued records at most this often (except when the queue fills), so a flapping link
-   cannot turn into a stream of DAC gaps. */
+   cannot turn into a stream of W25Q sessions. */
 #define EMI_LOG_FLUSH_MS       1000u
 /* emi_log: records per read. The reply must fit a LAN connection's 2 KB TX ring whole (conn_tx):
    16 records are 1,366 characters of base64 beside ~420 of state. 12 on the cloud link
@@ -239,8 +242,10 @@ static struct {
     uint32_t  t_flush;
     uint32_t  writes;        /* records written since boot */
     uint32_t  sessions;      /* W25Q sessions while the DAC ran */
-    uint32_t  glitch_us_last, glitch_us_max;
-    uint32_t  flash_us_last;  /* of glitch_us_last: the W25Q session alone (quiesce + flash) */
+    uint32_t  dac_stops;     /* of those, how many found the DAC stopped (deep-replay fallback) */
+    uint32_t  glitch_us_last, glitch_us_max;    /* the DAC not playing, 0 when it kept running */
+    uint32_t  session_us_last, session_us_max;  /* the W25Q session (wait for the bus + flash) */
+    bool      dac_stopped;   /* this session's quiesce stopped the DAC */
     bool      tried;         /* the boot scan ran */
 } lg;
 
@@ -271,22 +276,33 @@ static const emi_log_io_t k_log_io = { log_read, log_program, log_erase, NULL };
 /* The bus is free for a W25Q session: no capture of the loop's or a client's, no upload. */
 static bool log_bus_free(void) { return !s.cap_issued && !heavy_or_claimed(); }
 
-/* Open a W25Q session; *t0 = when (the DAC stops here). */
+/* Open a W25Q session that leaves the DAC playing (unless a deep replay holds the bus);
+   *t0 = when. Not w25q_session_open: its quiesce stops the DAC, for the OTA and CA writers. */
 static int log_session_open(uint32_t *t0) {
     *t0 = time_us_32();
-    return w25q_session_open();
+    lg.dac_stopped = signal_engine_quiesce_psram_keep_dac();
+    return w25q_open();
 }
-/* Close it and put the DAC back; counts the glitch when the DAC was playing. */
+/* Close it. The DAC is started again only when the quiesce stopped it, or when the sine's
+   DAC_RUN bit is found clear; that time is the glitch, 0 when the DAC kept running. */
 static void log_session_close(uint32_t t0) {
-    w25q_session_close();
-    lg.flash_us_last = time_us_32() - t0;
+    w25q_close();
+    const uint32_t session = time_us_32() - t0;
+    lg.session_us_last = session;
+    if (session > lg.session_us_max) lg.session_us_max = session;
     if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF) {
-        resume_dac(s.dac);
-        const uint32_t us = time_us_32() - t0;
+        const bool sine = s.dac == EMI_DAC_SINE || s.dac == EMI_DAC_ALL;
+        uint32_t us = 0;
+        if (lg.dac_stopped || (sine && !signal_engine_dac_run_bit())) {
+            resume_dac(s.dac);
+            us = time_us_32() - t0;
+            lg.dac_stops++;
+        }
         lg.sessions++;
         lg.glitch_us_last = us;
         if (us > lg.glitch_us_max) lg.glitch_us_max = us;
     }
+    lg.dac_stopped = false;
 }
 
 static void log_queue(const emi_rec_t *r) {
@@ -401,9 +417,9 @@ static void log_flush(void) {
     lg.n = 0;
     lg.t_flush = HAL_GetTick();
     if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF)
-        printf("[emi] run log: wrote %u, DAC gap %lu us (W25Q session %lu us)%s\n", done,
-               (unsigned long)lg.glitch_us_last, (unsigned long)lg.flash_us_last,
-               erased ? " (with a sector erase)" : "");
+        printf("[emi] run log: wrote %u, W25Q session %lu us%s, DAC gap %lu us\n", done,
+               (unsigned long)lg.session_us_last, erased ? " (with a sector erase)" : "",
+               (unsigned long)lg.glitch_us_last);
 }
 
 static void log_fill_poll(void);
@@ -511,13 +527,16 @@ size_t emi_test_log_describe(char *buf, size_t cap) {
     else
         n = snprintf(buf, cap,
                      "run log: run %lu, %lu records in %lu slots (0x%06lx-0x%06lx), %lu queued, %lu lost, "
-                     "%lu written, %lu erases, %lu write errors, DAC gap last %lu us, max %lu us",
+                     "%lu written, %lu erases, %lu write errors, W25Q session last %lu us, max %lu us, "
+                     "DAC gap last %lu us, max %lu us (%lu of %lu sessions)",
                      (unsigned long)s_log.run, (unsigned long)s_log.valid, (unsigned long)s_log.slots,
                      (unsigned long)EMI_LOG_BASE,
                      (unsigned long)(EMI_LOG_BASE + s_log.slots * EMI_LOG_REC),
                      (unsigned long)lg.n, (unsigned long)lg.dropped, (unsigned long)lg.writes,
                      (unsigned long)s_log.erases, (unsigned long)s_log.write_errors,
-                     (unsigned long)lg.glitch_us_last, (unsigned long)lg.glitch_us_max);
+                     (unsigned long)lg.session_us_last, (unsigned long)lg.session_us_max,
+                     (unsigned long)lg.glitch_us_last, (unsigned long)lg.glitch_us_max,
+                     (unsigned long)lg.dac_stops, (unsigned long)lg.sessions);
     if (n < 0) return 0;
     return (size_t)n < cap ? (size_t)n : cap - 1;
 }
@@ -565,13 +584,16 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"base\":%lu,\"record\":%u,\"slots\":%lu,\"valid\":%lu,"
                 "\"run\":%lu,\"next_seq\":%lu,\"write_slot\":%lu,\"oldest_slot\":%lu,\"queued\":%u,"
                 "\"lost\":%lu,\"written\":%lu,\"erases\":%lu,\"write_errors\":%lu,"
-                "\"glitch_us_last\":%lu,\"glitch_us_max\":%lu,\"max_count\":%lu,\"offset\":%lu,\"count\":%lu",
+                "\"session_us_last\":%lu,\"session_us_max\":%lu,\"glitch_us_last\":%lu,\"glitch_us_max\":%lu,"
+                "\"dac_stops\":%lu,\"max_count\":%lu,\"offset\":%lu,\"count\":%lu",
             (unsigned long)EMI_LOG_BASE, (unsigned)EMI_LOG_REC, (unsigned long)s_log.slots,
             (unsigned long)s_log.valid, (unsigned long)s_log.run, (unsigned long)s_log.next_seq,
             (unsigned long)s_log.write_slot, (unsigned long)emi_log_oldest_slot(&s_log), lg.n,
             (unsigned long)lg.dropped, (unsigned long)lg.writes, (unsigned long)s_log.erases,
-            (unsigned long)s_log.write_errors, (unsigned long)lg.glitch_us_last,
-            (unsigned long)lg.glitch_us_max, (unsigned long)max, (unsigned long)offset,
+            (unsigned long)s_log.write_errors, (unsigned long)lg.session_us_last,
+            (unsigned long)lg.session_us_max, (unsigned long)lg.glitch_us_last,
+            (unsigned long)lg.glitch_us_max, (unsigned long)lg.dac_stops, (unsigned long)max,
+            (unsigned long)offset,
             (unsigned long)count);
     if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
         char st[352];
