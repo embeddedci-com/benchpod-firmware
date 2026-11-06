@@ -429,8 +429,16 @@ static void log_dac_samples(uint32_t total) {
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
 static void quad_stream_ctrl(void);
+#if defined(BENCHPOD_EMI_TEST)
+/* The table dac_generate16 last loaded and started, for dac_restart_generated; 0 = none (any
+   other load replaced it). */
+static uint32_t s_gen_period, s_gen_divider;
+#endif
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period = 0;
+#endif
     /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
        clk48 while this writes it on clk: a running DAC played a half-rewritten table at the old
        period, with torn 16-bit samples (and a torn curve entry can step the loop output anywhere
@@ -1429,6 +1437,10 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
     wave16_fill(shape, period, amp, mid, sample_buf16);
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
     if (fpga_start_dac(period, divider) != 0) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period  = period;
+    s_gen_divider = divider;
+#endif
 
     float eff_rate = dac_effective_rate_hz(divider);
     printf("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
@@ -1846,6 +1858,14 @@ bool signal_engine_refresh_version(void) {
     }
     return ok;
 }
+
+#if defined(BENCHPOD_EMI_TEST)
+int dac_restart_generated(void) {
+    if (!s_gen_period || dac_timed) return -1;
+    (void)dac_quiesce(false);
+    return fpga_start_dac(s_gen_period, s_gen_divider);
+}
+#endif
 
 void dac_stop(void) {
     dac_timed = false;

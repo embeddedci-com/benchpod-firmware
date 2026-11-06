@@ -55,6 +55,12 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
 /* The same three shapes at the DAC8551's full 16 bits: `amp` (peak) and `mid` are 16-bit DAC
    codes, fractional, from wave16_codes_for_volts/_for_ua (wave16.h), so the calibrated
    `generate` form is not held to 256 levels. Same timing rules as above. */
+#if defined(BENCHPOD_EMI_TEST)
+/* EMI test build: start the table dac_generate16 last loaded again, after a stop that left it in
+   the waveform BRAM (a W25Q session's quiesce). Microseconds instead of the table's rebuild.
+   -1 = nothing to restart (another load replaced it, or a timed generate). */
+int dac_restart_generated(void);
+#endif
 int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);
 

@@ -253,11 +253,13 @@ void handle_status(int conn_id, const char *json) {
         else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
     }
 #if defined(BENCHPOD_EMI_TEST)
-    /* The EMC test build (emi_test.h): the measurement script checks it runs. Not on the cloud
-       command channel, whose status is already near BP_CLOUD_REPLY_MAX. */
+    /* The EMC test build (emi_test.h): the short state (the whole of it is in emi_log's reply).
+       The full object made the LAN status 2115 bytes, more than a connection's TX ring takes
+       whole, so the pod closed the connection instead of answering. Not on the cloud command
+       channel, whose status is already near BP_CLOUD_REPLY_MAX. */
     if (conn_id != CH_CLOUD_CONN) {
-        char emi[400];
-        emi_test_json(emi, sizeof(emi));
+        char emi[160];
+        if (!emi_test_json_short(emi, sizeof(emi))) snprintf(emi, sizeof(emi), "null");
         bp_emit(&e, "\"emi_test\":%s,", emi);
     }
 #endif
@@ -349,7 +351,12 @@ void handle_status(int conn_id, const char *json) {
     bp_emit_raw(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, "status too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
-        at_close_connection(conn_id);
+        /* A reply the connection's TX ring cannot take whole (conn_tx: all or nothing) says so
+           instead of the connection just closing. */
+        char msg[64];
+        snprintf(msg, sizeof(msg), "status too large for this connection (%u bytes)",
+                 (unsigned)bp_emit_len(&e));
+        send_error(conn_id, msg);
     }
 }
 

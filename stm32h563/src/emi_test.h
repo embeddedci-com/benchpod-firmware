@@ -122,10 +122,14 @@ size_t emi_test_log_describe(char *buf, size_t cap);
 
 /* One-line state for the console (`emi`) and the monitor line. */
 size_t emi_test_describe(char *buf, size_t cap);
-/* The same as a JSON object for `status` ("emi_test"):
+/* The same as a JSON object, in the emi_log reply ("emi_test"):
    {"running":true,"dac":"sine","uart_la":0,"core_mhz":250,"uptime_s":12,"captures":40,"errors":0,
     "net_mbit":10,"net_sent":12000,"net_drops":0,"net_link":true,"net_link_losses":0,
-    "led":"green","failed_since_power_on":false,"reset_cause":"power-on","run":12,"log_records":345} */
+    "led":"green","failed_since_power_on":false,"reset_cause":"power-on"} */
 size_t emi_test_json(char *buf, size_t cap);
+/* The short form for `status` ("emi_test"), whose LAN reply has to fit one connection's 2 KB TX
+   ring whole (conn_tx): {"running":true,"led":"green","failed_since_power_on":false,
+   "captures":40,"errors":0,"net_link":true,"run":3} */
+size_t emi_test_json_short(char *buf, size_t cap);
 
 #endif

@@ -75,6 +75,7 @@ static struct {
     uint32_t       hold_until;    /* no new capture before this: a log read wants the bus */
     uint8_t        last_led;      /* for the run log's LED events */
     bool           last_link;
+    bool           link_seen;     /* the link was up once since the start */
     uint32_t       t_checkpoint;
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
@@ -159,6 +160,25 @@ static void start_dac(emi_dac_mode_t mode) {
     }
 }
 
+/* After a W25Q session: its quiesce stopped the DAC engine (the sine) but left the quad DAC's
+   held channels (the DC on B, the 12 mA) and the sine's table in the gateware's BRAM, so the sine
+   only needs its START_DAC again. The DC is written again (a single-DAC board has no held
+   channel); the 4-20 mA output keeps its current (dac_stop leaves it). Falls back to start_dac
+   when the table is gone. */
+static void resume_dac(emi_dac_mode_t mode) {
+    switch (mode) {
+    case EMI_DAC_ALL:
+    case EMI_DAC_SINE:
+        if (dac_restart_generated() != 0) start_dac(mode);
+        break;
+    case EMI_DAC_DC:
+        start_dac(mode);
+        break;
+    default:
+        break;
+    }
+}
+
 /* Stop whatever the DAC plays (s.dac), then start `mode`. */
 static void apply_dac(emi_dac_mode_t mode) {
     run("dac_stop", "{\"cmd\":\"dac_stop\"}");
@@ -195,9 +215,11 @@ static void apply_uart(int la) {
 /* Write queued records at most this often (except when the queue fills), so a flapping link
    cannot turn into a stream of DAC gaps. */
 #define EMI_LOG_FLUSH_MS       1000u
-/* emi_log: records per read (48 = 3 KB, 4 KB of base64); 16 on the cloud link (BP_CLOUD_REPLY_MAX). */
-#define EMI_LOG_READ_MAX       48u
-#define EMI_LOG_READ_MAX_CLOUD 16u
+/* emi_log: records per read. The reply must fit a LAN connection's 2 KB TX ring whole (conn_tx):
+   16 records are 1,366 characters of base64 beside ~420 of state. 12 on the cloud link
+   (BP_CLOUD_REPLY_MAX, 1,792). */
+#define EMI_LOG_READ_MAX       16u
+#define EMI_LOG_READ_MAX_CLOUD 12u
 /* After a log read, the loop waits this long before its next capture, so a client reading the log
    chunk after chunk finds the bus free. */
 #define EMI_LOG_READ_HOLD_MS   1500u
@@ -218,6 +240,7 @@ static struct {
     uint32_t  writes;        /* records written since boot */
     uint32_t  sessions;      /* W25Q sessions while the DAC ran */
     uint32_t  glitch_us_last, glitch_us_max;
+    uint32_t  flash_us_last;  /* of glitch_us_last: the W25Q session alone (quiesce + flash) */
     bool      tried;         /* the boot scan ran */
 } lg;
 
@@ -256,8 +279,9 @@ static int log_session_open(uint32_t *t0) {
 /* Close it and put the DAC back; counts the glitch when the DAC was playing. */
 static void log_session_close(uint32_t t0) {
     w25q_session_close();
+    lg.flash_us_last = time_us_32() - t0;
     if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF) {
-        start_dac(s.dac);
+        resume_dac(s.dac);
         const uint32_t us = time_us_32() - t0;
         lg.sessions++;
         lg.glitch_us_last = us;
@@ -377,7 +401,8 @@ static void log_flush(void) {
     lg.n = 0;
     lg.t_flush = HAL_GetTick();
     if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF)
-        printf("[emi] run log: wrote %u, DAC gap %lu us%s\n", done, (unsigned long)lg.glitch_us_last,
+        printf("[emi] run log: wrote %u, DAC gap %lu us (W25Q session %lu us)%s\n", done,
+               (unsigned long)lg.glitch_us_last, (unsigned long)lg.flash_us_last,
                erased ? " (with a sector erase)" : "");
 }
 
@@ -390,7 +415,10 @@ static void log_poll(uint32_t now) {
         s.last_led = led;
     }
     const bool link = ns.link;
-    if (s.running && link != s.last_link) log_event(link ? EMI_EV_LINK_BACK : EMI_EV_LINK_LOST, 0, 0);
+    /* Only once the link was up since the start: its first coming up is no event. */
+    if (s.running && ns.had_link && s.link_seen && link != s.last_link)
+        log_event(link ? EMI_EV_LINK_BACK : EMI_EV_LINK_LOST, 0, 0);
+    if (s.running && ns.had_link) s.link_seen = true;
     s.last_link = link;
     if (now - s.t_checkpoint >= EMI_LOG_CHECKPOINT_MS) {
         s.t_checkpoint = now;
@@ -530,6 +558,10 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
             (unsigned long)s_log.write_errors, (unsigned long)lg.glitch_us_last,
             (unsigned long)lg.glitch_us_max, (unsigned long)max, (unsigned long)offset,
             (unsigned long)count);
+    if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
+        char st[352];
+        if (emi_test_json(st, sizeof(st))) bp_emit(&e, ",\"emi_test\":%s", st);
+    }
     if (count) {
         bp_emit_raw(&e, ",\"data\":\"");
         char *dst = resp + bp_emit_len(&e);
@@ -557,6 +589,7 @@ void emi_test_start(void) {
     s.errors     = 0;
     s.last_err[0] = '\0';
     ns.err         = false;   /* the net task re-reads the link from here on */
+    s.link_seen    = false;
     ns.had_link    = false;
     ns.link_losses = 0;
     if (!s.booted_mode) {   /* first start: the quad DAC runs every output by default */
@@ -783,22 +816,32 @@ size_t emi_test_describe(char *buf, size_t cap) {
     return (size_t)len < cap ? (size_t)len : cap - 1;
 }
 
+size_t emi_test_json_short(char *buf, size_t cap) {
+    int len = snprintf(buf, cap,
+                       "{\"running\":%s,\"led\":\"%s\",\"failed_since_power_on\":%s,"
+                       "\"captures\":%lu,\"errors\":%lu,\"net_link\":%s,\"run\":%lu}",
+                       s.running ? "true" : "false", led_name(emi_test_led_state()),
+                       s_failed_before ? "true" : "false", (unsigned long)s.captures,
+                       (unsigned long)s.errors, ns.link ? "true" : "false",
+                       (unsigned long)emi_test_run());
+    if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
+    return (size_t)len;
+}
+
 size_t emi_test_json(char *buf, size_t cap) {
     const uint32_t up = s.running ? (HAL_GetTick() - s.t_start) / 1000u : 0u;
     int len = snprintf(buf, cap,
                        "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
-                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
-                       "\"run\":%lu,\"log_records\":%lu}",
+                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\"}",
                        s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
                        (unsigned long)ns.sent, (unsigned long)ns.drops,
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
-                       fault_last_reset_str() ? fault_last_reset_str() : "unknown",
-                       (unsigned long)emi_test_run(), (unsigned long)(log_ok() ? s_log.valid : 0u));
+                       fault_last_reset_str() ? fault_last_reset_str() : "unknown");
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
 }
