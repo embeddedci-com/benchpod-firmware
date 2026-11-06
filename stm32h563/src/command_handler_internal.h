@@ -135,6 +135,9 @@ void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
 void handle_power_status(int conn_id, const char *json);
 void handle_status(int conn_id, const char *json);
+#if defined(BENCHPOD_EMI_TEST)
+void handle_emi_log(int conn_id, const char *json);   /* emi_test.c: the EMI build's run log */
+#endif
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
 void handle_identity_wipe(int conn_id, const char *json);

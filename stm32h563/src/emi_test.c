@@ -11,10 +11,19 @@
 #include "board_variant.h"              /* board_has_analog */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 #include "fault.h"                      /* fault_last_reset_str */
+#include "emi_log.h"
+#include "w25q.h"                       /* w25q_session_open: the run log's flash */
+#include "version.h"                    /* FIRMWARE_VERSION */
+#include "bp_json.h"
+#include "at_driver.h"                  /* at_send_data */
+#include "b64url.h"
+#include "pico/time.h"                  /* time_us_32: the DAC glitch of a log write */
+#include "FreeRTOS.h"                   /* pvPortMalloc: the log lives on the heap */
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* What a bulk read-back may send to CH_EMI_CONN per worker pass (emi_test_avail). */
@@ -63,6 +72,10 @@ static struct {
     const char    *cur;           /* the command in flight, for the error log */
     char           last_err[112];
     size_t         budget;
+    uint32_t       hold_until;    /* no new capture before this: a log read wants the bus */
+    uint8_t        last_led;      /* for the run log's LED events */
+    bool           last_link;
+    uint32_t       t_checkpoint;
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -80,11 +93,26 @@ static struct {
     uint32_t          t_last;
     uint32_t          credit;     /* bytes allowed to go now */
     uint32_t          seq;
+    uint32_t          mon_sent;   /* the monitor line generation last sent */
+    uint32_t          mon_frames;
 } ns = { .mbit = EMI_NET_DEFAULT_MBIT };
+
+/* The monitor line, every EMI_TEST_REPORT_MS (publish_monitor, hw worker): on the USB console while
+   the loop runs, and as a BPMON frame on the Ethernet port from boot on (emi_test_net_poll, net
+   task). Two buffers: the worker writes the one the net task is not reading, then flips `cur`. */
+typedef struct {
+    char              buf[2][384];
+    volatile uint8_t  cur;
+    volatile uint32_t gen;
+} emi_mon_t;
+/* On the heap (allocated by the first publish_monitor): the pod's RAM has no 1 KB to spare. */
+static emi_mon_t *volatile s_mon;
 
 /* At most this many frames per net_poll pass (HAL_ETH_Transmit waits for each one), so the
    stream never holds the net task for long. */
 #define EMI_NET_BURST  4u
+
+static void send_monitor(struct netif *eth);
 
 static void run(const char *label, const char *json) {
     s.cur = label;
@@ -105,13 +133,9 @@ static void hold_dc_on_b(void) {
     }
 }
 
-/* Stop whatever the DAC plays (s.dac), then start `mode`. */
-static void apply_dac(emi_dac_mode_t mode) {
-    run("dac_stop", "{\"cmd\":\"dac_stop\"}");
-    if (s.dac == EMI_DAC_ALL)   /* parks the 0-5 V output it held */
-        run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
-    if (drives_current(s.dac) && !drives_current(mode))   /* dac_stop leaves the loop current */
-        run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
+/* Start `mode` on outputs that are stopped or already play it. Also what puts the DAC back after
+   a W25Q session (a run log write or read), whose quiesce stopped it. */
+static void start_dac(emi_dac_mode_t mode) {
     switch (mode) {
     case EMI_DAC_ALL:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
@@ -135,6 +159,16 @@ static void apply_dac(emi_dac_mode_t mode) {
     }
 }
 
+/* Stop whatever the DAC plays (s.dac), then start `mode`. */
+static void apply_dac(emi_dac_mode_t mode) {
+    run("dac_stop", "{\"cmd\":\"dac_stop\"}");
+    if (s.dac == EMI_DAC_ALL)   /* parks the 0-5 V output it held */
+        run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
+    if (drives_current(s.dac) && !drives_current(mode))   /* dac_stop leaves the loop current */
+        run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
+    start_dac(mode);
+}
+
 static void apply_uart(int la) {
     run("gps_stop", "{\"cmd\":\"gps_stop\"}");
     if (la <= 0) return;
@@ -142,6 +176,375 @@ static void apply_uart(int la) {
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"gps_start\",\"tx\":%d,\"baud\":115200,\"rate_hz\":10}", la);
     run("gps_start", cmd);
 }
+
+
+/* ---- the run log (emi_log.h) ---------------------------------------------------------------
+   The W25Q shares its bus with the PSRAM, so every log access is a W25Q session: it quiesces the
+   gateware's PSRAM masters, which stops the DAC, and it may not start while a capture or upload
+   owns the bus (heavy_or_claimed). So the log is scanned and the sectors it needs erased at boot,
+   before the activity starts; records wait in a RAM queue and are written between two captures,
+   all in one session, and the DAC mode is started again right after. The time from the session's
+   start to the DAC playing again is measured (glitch_us), and the longest goes into the next
+   checkpoint. */
+
+/* Erased at boot, ahead of the write position: 4 sectors, 256 records, about 20 hours of
+   checkpoints. A run that uses them up erases the next sector between two captures (a longer DAC
+   gap, up to the W25Q's 400 ms sector erase). */
+#define EMI_LOG_BOOT_RESERVE   (4u * EMI_LOG_PER_SECTOR)
+#define EMI_LOG_QUEUE          16u
+/* Write queued records at most this often (except when the queue fills), so a flapping link
+   cannot turn into a stream of DAC gaps. */
+#define EMI_LOG_FLUSH_MS       1000u
+/* emi_log: records per read (48 = 3 KB, 4 KB of base64); 16 on the cloud link (BP_CLOUD_REPLY_MAX). */
+#define EMI_LOG_READ_MAX       48u
+#define EMI_LOG_READ_MAX_CLOUD 16u
+/* After a log read, the loop waits this long before its next capture, so a client reading the log
+   chunk after chunk finds the bus free. */
+#define EMI_LOG_READ_HOLD_MS   1500u
+
+/* The log's state and queue: on the heap, allocated at boot (log_boot), since the pod's RAM is
+   nearly all taken; buffers for reads are allocated while they are needed. */
+typedef struct {
+    emi_log_t log;
+    emi_rec_t q[EMI_LOG_QUEUE];
+} emi_logmem_t;
+static emi_logmem_t *s_lm;
+#define s_log  (s_lm->log)
+static bool log_ok(void) { return s_lm && s_lm->log.ok; }
+static struct {
+    unsigned  n;
+    uint32_t  dropped;       /* queue full */
+    uint32_t  t_flush;
+    uint32_t  writes;        /* records written since boot */
+    uint32_t  sessions;      /* W25Q sessions while the DAC ran */
+    uint32_t  glitch_us_last, glitch_us_max;
+    bool      tried;         /* the boot scan ran */
+} lg;
+
+/* The `emi log` print job: walks the slots, a sector at a time read in one session, and prints
+   a few lines per worker pass on the device log. */
+static struct {
+    bool     active;
+    uint32_t slot, left, printed;
+    int      cached;         /* the sector in buf, -1 = none */
+    uint32_t t;
+    uint8_t *buf;            /* EMI_LOG_SECTOR bytes while the job runs */
+} pj = { .cached = -1 };
+
+static int log_read(void *ctx, uint32_t addr, uint8_t *buf, uint32_t len) {
+    (void)ctx;
+    return w25q_read(addr, buf, len);
+}
+static int log_program(void *ctx, uint32_t addr, const uint8_t *buf, uint32_t len) {
+    (void)ctx;
+    return w25q_program(addr, buf, len);
+}
+static int log_erase(void *ctx, uint32_t addr) {
+    (void)ctx;
+    return w25q_erase_sector(addr);
+}
+static const emi_log_io_t k_log_io = { log_read, log_program, log_erase, NULL };
+
+/* The bus is free for a W25Q session: no capture of the loop's or a client's, no upload. */
+static bool log_bus_free(void) { return !s.cap_issued && !heavy_or_claimed(); }
+
+/* Open a W25Q session; *t0 = when (the DAC stops here). */
+static int log_session_open(uint32_t *t0) {
+    *t0 = time_us_32();
+    return w25q_session_open();
+}
+/* Close it and put the DAC back; counts the glitch when the DAC was playing. */
+static void log_session_close(uint32_t t0) {
+    w25q_session_close();
+    if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF) {
+        start_dac(s.dac);
+        const uint32_t us = time_us_32() - t0;
+        lg.sessions++;
+        lg.glitch_us_last = us;
+        if (us > lg.glitch_us_max) lg.glitch_us_max = us;
+    }
+}
+
+static void log_queue(const emi_rec_t *r) {
+    if (!log_ok()) return;
+    if (lg.n >= EMI_LOG_QUEUE) { lg.dropped++; return; }
+    s_lm->q[lg.n] = *r;
+    s_lm->q[lg.n].uptime_ms = HAL_GetTick();
+    lg.n++;
+}
+
+/* Copy src into a fixed-size record field, cut to fit. */
+static void cut(char *dst, size_t n, const char *src) {
+    size_t i = 0;
+    if (src) for (; i + 1 < n && src[i]; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+static void log_event(uint8_t kind, uint8_t from, uint8_t to) {
+    emi_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.type = EMI_REC_EVENT;
+    r.led = emi_test_led_state();
+    r.u.ev.kind = kind;
+    r.u.ev.from = from;
+    r.u.ev.to = to;
+    r.u.ev.captures = s.captures;
+    r.u.ev.errors = s.errors;
+    r.u.ev.net_sent = ns.sent;
+    cut(r.u.ev.text, sizeof(r.u.ev.text), s.last_err);
+    log_queue(&r);
+}
+
+static void log_checkpoint(void) {
+    emi_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.type = EMI_REC_CHECKPOINT;
+    r.led = emi_test_led_state();
+    r.u.cp.captures = s.captures;
+    r.u.cp.errors = s.errors;
+    r.u.cp.net_sent = ns.sent;
+    r.u.cp.net_drops = ns.drops;
+    r.u.cp.link_losses = ns.link_losses;
+    r.u.cp.rec_dropped = lg.dropped;
+    r.u.cp.glitch_us_max = lg.glitch_us_max;
+    r.u.cp.dac = (uint8_t)s.dac;
+    r.u.cp.net_mbit = (uint8_t)ns.mbit;
+    r.u.cp.running = s.running;
+    r.u.cp.link = ns.link;
+    cut(r.u.cp.text, sizeof(r.u.cp.text), s.last_err);
+    log_queue(&r);
+}
+
+/* At boot, before the activity: scan, erase the reserve, write RUN_START. */
+static void log_boot(void) {
+    lg.tried = true;
+    const uint32_t t0 = HAL_GetTick();
+    s_lm = pvPortMalloc(sizeof(*s_lm));
+    if (!s_lm) { printf("[emi] run log: out of memory, no log this run\n"); return; }
+    memset(s_lm, 0, sizeof(*s_lm));
+    if (w25q_session_open() != 0) {
+        printf("[emi] run log: the W25Q does not answer, no log this run\n");
+        return;
+    }
+    int rc = emi_log_scan(&s_log, &k_log_io, EMI_LOG_BASE, EMI_LOG_SECTORS);
+    const uint32_t t_scan = HAL_GetTick();
+    int erased = rc == 0 ? emi_log_prepare(&s_log, EMI_LOG_BOOT_RESERVE) : -1;
+    if (rc == 0 && erased >= 0) {
+        emi_rec_t r;
+        memset(&r, 0, sizeof(r));
+        r.type = EMI_REC_RUN_START;
+        r.led = emi_test_led_state();
+        r.uptime_ms = HAL_GetTick();
+        cut(r.u.start.fw, sizeof(r.u.start.fw), FIRMWARE_VERSION);
+        cut(r.u.start.reset, sizeof(r.u.start.reset), fault_last_reset_str());
+        r.u.start.core_mhz = (uint16_t)(SystemCoreClock / 1000000u);
+        r.u.start.dac = (uint8_t)s.dac;
+        r.u.start.net_mbit = (uint8_t)ns.mbit;
+        r.u.start.gw_version = signal_engine_fpga_version();
+        if (emi_log_append(&s_log, &r) == 0) lg.writes++;
+    }
+    w25q_session_close();
+    if (rc != 0 || erased < 0) {
+        s_lm->log.ok = false;
+        printf("[emi] run log: scan or erase failed (%d/%d), no log this run\n", rc, erased);
+        return;
+    }
+    printf("[emi] run log: run %lu, %lu records in %lu slots, scan %lu ms, erased %d sectors in %lu ms\n",
+           (unsigned long)s_log.run, (unsigned long)s_log.valid, (unsigned long)s_log.slots,
+           (unsigned long)(t_scan - t0), erased, (unsigned long)(HAL_GetTick() - t_scan));
+}
+
+/* Write the queued records, in one session. */
+static void log_flush(void) {
+    uint32_t t0;
+    if (log_session_open(&t0) != 0) { printf("[emi] run log: W25Q session failed\n"); return; }
+    unsigned done = 0;
+    int erased = 0;
+    for (; done < lg.n; done++) {
+        if (s_log.ready == 0) {
+            int e = emi_log_prepare(&s_log, EMI_LOG_PER_SECTOR);
+            if (e < 0) break;
+            erased += e;
+        }
+        if (emi_log_append(&s_log, &s_lm->q[done]) != 0) break;
+        lg.writes++;
+    }
+    log_session_close(t0);
+    if (done < lg.n) {
+        printf("[emi] run log: write failed, %u records lost\n", lg.n - done);
+        lg.dropped += lg.n - done;
+    }
+    lg.n = 0;
+    lg.t_flush = HAL_GetTick();
+    if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF)
+        printf("[emi] run log: wrote %u, DAC gap %lu us%s\n", done, (unsigned long)lg.glitch_us_last,
+               erased ? " (with a sector erase)" : "");
+}
+
+/* Every worker pass once booted: events, checkpoints, the write, the print job. */
+static void log_poll(uint32_t now) {
+    if (!log_ok()) return;
+    const uint8_t led = emi_test_led_state();
+    if (led != s.last_led) {
+        log_event(EMI_EV_LED, s.last_led, led);
+        s.last_led = led;
+    }
+    const bool link = ns.link;
+    if (s.running && link != s.last_link) log_event(link ? EMI_EV_LINK_BACK : EMI_EV_LINK_LOST, 0, 0);
+    s.last_link = link;
+    if (now - s.t_checkpoint >= EMI_LOG_CHECKPOINT_MS) {
+        s.t_checkpoint = now;
+        log_checkpoint();
+    }
+    if (lg.n && log_bus_free() && (now - lg.t_flush >= EMI_LOG_FLUSH_MS || lg.n >= EMI_LOG_QUEUE - 2u))
+        log_flush();
+
+    /* The print job: up to 4 lines per pass, a pass at most every 5 ms (the USB console's pace). */
+    if (!pj.active || now - pj.t < 5u) return;
+    pj.t = now;
+    for (unsigned lines = 0, steps = 0; lines < 4 && steps < 256; steps++) {
+        if (!pj.left) {
+            printf("[emi] log: %lu records printed\n", (unsigned long)pj.printed);
+            pj.active = false;
+            pj.cached = -1;
+            vPortFree(pj.buf);
+            pj.buf = NULL;
+            return;
+        }
+        const uint32_t slot = pj.slot;
+        if (!emi_log_slot_good(&s_log, slot)) { pj.slot = (slot + 1u) % s_log.slots; pj.left--; continue; }
+        const int sector = (int)(slot / EMI_LOG_PER_SECTOR);
+        if (sector != pj.cached) {
+            if (!log_bus_free()) { s.hold_until = now + EMI_LOG_READ_HOLD_MS; return; }
+            uint32_t t0;
+            if (log_session_open(&t0) != 0) return;
+            int rc = w25q_read(EMI_LOG_BASE + (uint32_t)sector * EMI_LOG_SECTOR, pj.buf, EMI_LOG_SECTOR);
+            log_session_close(t0);
+            if (rc) {
+                printf("[emi] log: read failed\n");
+                pj.active = false;
+                vPortFree(pj.buf);
+                pj.buf = NULL;
+                return;
+            }
+            pj.cached = sector;
+            s.hold_until = now + EMI_LOG_READ_HOLD_MS;
+            return;   /* print from the next pass on */
+        }
+        emi_rec_t r;
+        char line[200];
+        if (emi_log_decode(pj.buf + (slot % EMI_LOG_PER_SECTOR) * EMI_LOG_REC, &r)) {
+            emi_log_format(&r, line, sizeof(line));
+            printf("[emi] log %s\n", line);
+            pj.printed++;
+            lines++;
+        }
+        pj.slot = (slot + 1u) % s_log.slots;
+        pj.left--;
+    }
+}
+
+bool emi_test_log_print(uint32_t n) {
+    if (!log_ok()) return false;
+    const uint32_t span = s_log.slots - s_log.ready;
+    uint32_t from = n ? emi_log_slot_back(&s_log, n) : s_log.slots;
+    if (from == s_log.slots) from = emi_log_oldest_slot(&s_log);
+    pj.slot = from;
+    pj.left = (s_log.write_slot + s_log.slots - from) % s_log.slots;
+    if (!pj.left && span) pj.left = s_log.slots;   /* full ring, from the oldest */
+    if (!pj.buf) pj.buf = pvPortMalloc(EMI_LOG_SECTOR);
+    if (!pj.buf) return false;
+    pj.printed = 0;
+    pj.cached = -1;
+    pj.t = 0;
+    pj.active = true;
+    return true;
+}
+
+size_t emi_test_log_describe(char *buf, size_t cap) {
+    int n;
+    if (!log_ok())
+        n = snprintf(buf, cap, "run log: %s", lg.tried ? "not available (W25Q)" : "not read yet");
+    else
+        n = snprintf(buf, cap,
+                     "run log: run %lu, %lu records in %lu slots (0x%06lx-0x%06lx), %lu queued, %lu lost, "
+                     "%lu written, %lu erases, %lu write errors, DAC gap last %lu us, max %lu us",
+                     (unsigned long)s_log.run, (unsigned long)s_log.valid, (unsigned long)s_log.slots,
+                     (unsigned long)EMI_LOG_BASE,
+                     (unsigned long)(EMI_LOG_BASE + s_log.slots * EMI_LOG_REC),
+                     (unsigned long)lg.n, (unsigned long)lg.dropped, (unsigned long)lg.writes,
+                     (unsigned long)s_log.erases, (unsigned long)s_log.write_errors,
+                     (unsigned long)lg.glitch_us_last, (unsigned long)lg.glitch_us_max);
+    if (n < 0) return 0;
+    return (size_t)n < cap ? (size_t)n : cap - 1;
+}
+
+static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, uint32_t max,
+                                char *resp, size_t resp_cap, uint8_t *raw);
+
+/* {"cmd":"emi_log"} the log's state; with "count" (and "offset", slots from 0) also that many raw
+   64-byte slots as base64url in "data", in slot order (a host sorts them by seq). */
+void handle_emi_log(int conn_id, const char *json) {
+    if (!log_ok()) { send_error(conn_id, lg.tried ? "emi_log: no run log (W25Q)" : "emi_log: not read yet, retry after boot"); return; }
+    char v[16];
+    uint32_t offset = bp_json_get(json, "offset", v, sizeof(v)) ? (uint32_t)strtoul(v, NULL, 10) : 0u;
+    uint32_t count  = bp_json_get(json, "count", v, sizeof(v)) ? (uint32_t)strtoul(v, NULL, 10) : 0u;
+    const uint32_t max = conn_id == CH_CLOUD_CONN ? EMI_LOG_READ_MAX_CLOUD : EMI_LOG_READ_MAX;
+    if (offset >= s_log.slots) count = 0;
+    if (count > max) count = max;
+    if (count > s_log.slots - offset) count = s_log.slots - offset;
+    /* The buffers come from the heap for the length of the call (the pod's RAM is nearly full). */
+    enum { RESP_CAP = 1024 + B64URL_ENCODED_LEN(EMI_LOG_READ_MAX * EMI_LOG_REC) };
+    char *resp = pvPortMalloc(RESP_CAP + EMI_LOG_READ_MAX * EMI_LOG_REC);
+    if (!resp) { send_error(conn_id, "emi_log: out of memory"); return; }
+    uint8_t *raw = (uint8_t *)resp + RESP_CAP;
+    handle_emi_log_with(conn_id, offset, count, max, resp, RESP_CAP, raw);
+    vPortFree(resp);
+}
+
+static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, uint32_t max,
+                                char *resp, size_t resp_cap, uint8_t *raw) {
+    if (count) {
+        if (!log_bus_free()) {
+            s.hold_until = HAL_GetTick() + EMI_LOG_READ_HOLD_MS;   /* the next try finds it free */
+            send_error(conn_id, "busy: an EMI capture is using the bus, retry in a moment");
+            return;
+        }
+        uint32_t t0;
+        if (log_session_open(&t0) != 0) { send_error(conn_id, "emi_log: W25Q session failed"); return; }
+        int rc = w25q_read(emi_log_slot_addr(&s_log, offset), raw, count * EMI_LOG_REC);
+        log_session_close(t0);
+        s.hold_until = HAL_GetTick() + EMI_LOG_READ_HOLD_MS;
+        if (rc) { send_error(conn_id, "emi_log: read failed"); return; }
+    }
+    bp_emit_t e;
+    bp_emit_init(&e, resp, resp_cap);
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"base\":%lu,\"record\":%u,\"slots\":%lu,\"valid\":%lu,"
+                "\"run\":%lu,\"next_seq\":%lu,\"write_slot\":%lu,\"oldest_slot\":%lu,\"queued\":%u,"
+                "\"lost\":%lu,\"written\":%lu,\"erases\":%lu,\"write_errors\":%lu,"
+                "\"glitch_us_last\":%lu,\"glitch_us_max\":%lu,\"max_count\":%lu,\"offset\":%lu,\"count\":%lu",
+            (unsigned long)EMI_LOG_BASE, (unsigned)EMI_LOG_REC, (unsigned long)s_log.slots,
+            (unsigned long)s_log.valid, (unsigned long)s_log.run, (unsigned long)s_log.next_seq,
+            (unsigned long)s_log.write_slot, (unsigned long)emi_log_oldest_slot(&s_log), lg.n,
+            (unsigned long)lg.dropped, (unsigned long)lg.writes, (unsigned long)s_log.erases,
+            (unsigned long)s_log.write_errors, (unsigned long)lg.glitch_us_last,
+            (unsigned long)lg.glitch_us_max, (unsigned long)max, (unsigned long)offset,
+            (unsigned long)count);
+    if (count) {
+        bp_emit_raw(&e, ",\"data\":\"");
+        char *dst = resp + bp_emit_len(&e);
+        const size_t room = resp_cap - bp_emit_len(&e);
+        const size_t n = b64url_encode(raw, count * EMI_LOG_REC, dst, room);
+        if (!n) { send_error(conn_id, "emi_log: reply too large"); return; }
+        e.len += n;
+        bp_emit_raw(&e, "\"");
+    }
+    bp_emit_raw(&e, "}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "emi_log: reply too large"); return; }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
+}
+
+uint32_t emi_test_run(void) { return log_ok() ? s_log.run : 0u; }
 
 void emi_test_start(void) {
     s.booted = true;
@@ -167,6 +570,7 @@ void emi_test_start(void) {
     run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":1}");
     if (board_has_analog()) apply_dac(s.dac);
     apply_uart(s.uart_la);
+    log_event(EMI_EV_STARTED, 0, 0);
 }
 
 void emi_test_stop(void) {
@@ -183,6 +587,7 @@ void emi_test_stop(void) {
     run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":0}");
     /* A capture still in flight finishes on its own and frees the heavy gate. */
     printf("[emi] stopped: DAC off, target power off\n");
+    log_event(EMI_EV_STOPPED, 0, 0);
 }
 
 bool emi_test_running(void) { return s.running; }
@@ -214,6 +619,12 @@ void emi_test_net_poll(struct netif *eth) {
     const uint32_t dt  = now - ns.t_last;
     ns.t_last = now;
     const uint32_t mbit = ns.mbit;
+    emi_mon_t *const m = s_mon;
+    const uint32_t gen = m ? m->gen : 0u;
+    if (m && gen != ns.mon_sent && netif_is_up(eth) && netif_is_link_up(eth)) {
+        ns.mon_sent = gen;
+        send_monitor(eth);
+    }
     if (!s.running || !mbit) {
         ns.credit = 0;
         return;
@@ -261,6 +672,28 @@ void emi_test_net_poll(struct netif *eth) {
         }
         pbuf_free(p);
     }
+}
+
+/* One BPMON frame: broadcast, so a laptop sees it without promiscuous mode; padded to the 60-byte
+   minimum. */
+static void send_monitor(struct netif *eth) {
+    static const uint8_t k_bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+    emi_mon_t *const m = s_mon;
+    const char *text = m->buf[m->cur];
+    size_t len = strnlen(text, sizeof(m->buf[0]));
+    size_t frame = 14u + len;
+    if (frame < 60u) frame = 60u;
+    struct pbuf *p = pbuf_alloc(PBUF_RAW, (u16_t)frame, PBUF_RAM);
+    if (!p) return;
+    uint8_t *d = (uint8_t *)p->payload;
+    memset(d, 0, frame);
+    memcpy(d, k_bcast, 6);
+    memcpy(d + 6, eth->hwaddr, 6);
+    d[12] = (uint8_t)(EMI_NET_ETHERTYPE >> 8);
+    d[13] = (uint8_t)EMI_NET_ETHERTYPE;
+    memcpy(d + 14, text, len);
+    if (eth->linkoutput(eth, p) == ERR_OK) ns.mon_frames++;
+    pbuf_free(p);
 }
 
 int emi_test_dac_from_name(const char *name) {
@@ -356,23 +789,54 @@ size_t emi_test_json(char *buf, size_t cap) {
                        "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
-                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\"}",
+                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
+                       "\"run\":%lu,\"log_records\":%lu}",
                        s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
                        (unsigned long)ns.sent, (unsigned long)ns.drops,
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
-                       fault_last_reset_str() ? fault_last_reset_str() : "unknown");
+                       fault_last_reset_str() ? fault_last_reset_str() : "unknown",
+                       (unsigned long)emi_test_run(), (unsigned long)(log_ok() ? s_log.valid : 0u));
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
+}
+
+static void publish_monitor(uint32_t now) {
+    if (now - s.t_report < EMI_TEST_REPORT_MS) return;
+    s.t_report = now;
+    char line[320];
+    emi_test_describe(line, sizeof(line));
+    if (s.running) printf("[emi] %s\n", line);
+    if (!s_mon) {
+        emi_mon_t *m = pvPortMalloc(sizeof(*m));
+        if (!m) return;
+        memset(m, 0, sizeof(*m));
+        s_mon = m;
+    }
+    emi_mon_t *const mon = s_mon;
+    const uint8_t next = mon->cur ^ 1u;
+    const char *reset = fault_last_reset_str();
+    snprintf(mon->buf[next], sizeof(mon->buf[next]), "BPMON run %lu, reset %s, uptime %lu ms, seq %lu, %s",
+             (unsigned long)emi_test_run(), reset ? reset : "unknown", (unsigned long)now,
+             (unsigned long)ns.seq, line);
+    __asm volatile ("dmb" ::: "memory");
+    mon->cur = next;
+    mon->gen++;
 }
 
 void emi_test_poll(void) {
     const uint32_t now = HAL_GetTick();
     s.budget = EMI_SINK_BUDGET;   /* the read-back's share of this worker pass */
+    if (!lg.tried && !s.running) {   /* the run log, before the activity starts */
+        log_boot();
+        s.last_led = emi_test_led_state();
+        s.t_checkpoint = now;
+    }
     if (!s.booted) {
         if (now >= EMI_TEST_START_DELAY_MS) emi_test_start();
+        publish_monitor(now);
         return;
     }
     if (s.cap_issued && !capture_busy() && heavy_owner_conn() != CH_EMI_CONN) {
@@ -380,19 +844,15 @@ void emi_test_poll(void) {
         if (s.errors == s.cap_errors) s.captures++;   /* else its read-back failed */
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
     }
+    log_poll(now);
+    publish_monitor(now);
     if (!s.running) return;
-    if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0) {
+    if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0 && (int32_t)(now - s.hold_until) >= 0) {
         s.cap_errors = s.errors;
         if (!board_has_analog()) s.next_kind = 1;   /* LA only: capture_dual takes the ADC too */
         run(s.next_kind ? "la_capture" : "capture_dual", k_captures[s.next_kind]);
         s.next_kind = (s.next_kind + 1u) % (sizeof(k_captures) / sizeof(k_captures[0]));
         if (s.errors == s.cap_errors) s.cap_issued = true;
         else                          s.t_next_cap = now + 1000u;   /* refused: the other kind next */
-    }
-    if (now - s.t_report >= EMI_TEST_REPORT_MS) {
-        s.t_report = now;
-        char line[256];
-        emi_test_describe(line, sizeof(line));
-        printf("[emi] %s\n", line);
     }
 }

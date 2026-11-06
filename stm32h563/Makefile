@@ -304,7 +304,11 @@ ifeq ($(RELEASE),1)
 $(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_EMI_TEST=1
-C_SOURCES += src/emi_test.c
+C_SOURCES += src/emi_test.c src/emi_log.c
+# EMI_LOG_SECTORS=<n>: shrink the run log (emi_log.h) to n sectors (>= 2) to watch it wrap on a bench.
+ifneq ($(EMI_LOG_SECTORS),)
+DEFS      += -DEMI_LOG_TEST_SECTORS=$(EMI_LOG_SECTORS)
+endif
 # EMI_SYSCLK=240: run the core at 240 MHz instead of 250, so the core clock's emissions move and
 # can be told apart from other sources at 250 MHz (the 25 MHz crystal x10, the PHY's 50 MHz x5).
 ifneq ($(EMI_SYSCLK),)

@@ -229,12 +229,12 @@ int emi_log_scan(emi_log_t *l, const emi_log_io_t *io, uint32_t base, uint32_t s
     if (sectors < 2) return -1;   /* the ring keeps one sector of records while it erases another */
     l->slots = sectors * EMI_LOG_PER_SECTOR;
     uint32_t newest_slot = 0;
-    static uint8_t sec[EMI_LOG_SECTOR];
-    for (uint32_t s = 0; s < sectors; s++) {
-        if (io->read(io->ctx, base + s * EMI_LOG_SECTOR, sec, EMI_LOG_SECTOR) != 0) return -2;
-        for (uint32_t k = 0; k < EMI_LOG_PER_SECTOR; k++) {
-            const uint32_t slot = s * EMI_LOG_PER_SECTOR + k;
-            const uint8_t *p = sec + k * EMI_LOG_REC;
+    uint8_t chunk[4u * EMI_LOG_REC];   /* small: this runs on the hw worker's stack */
+    for (uint32_t c = 0; c < l->slots / 4u; c++) {
+        if (io->read(io->ctx, base + c * sizeof(chunk), chunk, sizeof(chunk)) != 0) return -2;
+        for (uint32_t k = 0; k < 4u; k++) {
+            const uint32_t slot = c * 4u + k;
+            const uint8_t *p = chunk + k * EMI_LOG_REC;
             emi_rec_t r;
             if (emi_log_blank(p)) {
                 bit_set(l->blank, slot, true);

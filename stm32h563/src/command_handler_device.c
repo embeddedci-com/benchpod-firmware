@@ -256,7 +256,7 @@ void handle_status(int conn_id, const char *json) {
     /* The EMC test build (emi_test.h): the measurement script checks it runs. Not on the cloud
        command channel, whose status is already near BP_CLOUD_REPLY_MAX. */
     if (conn_id != CH_CLOUD_CONN) {
-        char emi[320];
+        char emi[400];
         emi_test_json(emi, sizeof(emi));
         bp_emit(&e, "\"emi_test\":%s,", emi);
     }
