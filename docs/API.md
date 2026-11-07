@@ -4139,8 +4139,10 @@ the first boot of firmware with LAN TLS it generates an ECDSA P-256 key and a se
 certificate for `benchpod-xxxxxx` and `benchpod-xxxxxx.local` (its mDNS name), valid to 9999 (the
 pod has no clock), and keeps both in its internal config flash. `sha256` is the SHA-256 of the
 certificate (DER), the value clients pin. `origin` is `generated` or `user`. `sessions` is the
-number of TLS connections open now: at most 2 at once (each needs ~25 KB of RAM), a third is
-refused at connect; plaintext connections do not count. When there is no certificate the reply has
+number of TLS connections open now: at most 3 at once (each needs about 22 KB of RAM), a fourth is
+refused at connect, and so is one the pod has no room for; plaintext connections do not count.
+Firmware 3.9.3 to 3.9.6 allowed 2, so a UART session, a capture and one more command over TLS
+could not run together there. When there is no certificate the reply has
 `error` instead of the certificate fields.
 
 | Field | Effect |
