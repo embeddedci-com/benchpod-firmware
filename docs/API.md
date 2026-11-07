@@ -3278,8 +3278,15 @@ back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
 ### `psram_recover` — reboot to recover the PSRAM
 
 When `status.psram_ok` is `false`, this acks with `{"recover":"rebooting"}` and reboots the pod
-about 0.4 s later; the boot self-test reflashes the iCE40 and brings the datapath back without a
-power cycle. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
+about 0.4 s later; the boot self-test reloads the iCE40 from its config flash and brings the
+datapath back without a power cycle. The config flash is rewritten only when the image in it no
+longer matches a gateware slot, so reboots do not wear it.
+
+**The iCE40 recovers by itself.** When the pod is idle the firmware pings the iCE40 every 30 s.
+One that answered since boot and stops answering (an ESD hit can hang or unconfigure it) is reloaded
+from its config flash (no write) after 10 s, at most 6 times an hour; the DAC outputs are parked as
+at boot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
+log says what it did. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
 reconnects" as success and check `status.psram_ok` again.
 
 ---
@@ -3721,7 +3728,7 @@ That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0
 7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
-started or stopped) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
+started or stopped, a recovery step with its result) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
 losses, the longest DAC gap a log write caused, 0 normally). A `CHECK` is written when a value that
 shows trouble changed (errors, dropped frames, link losses, the LED, the link, the DAC gap, lost
 records), at most every 10 s, and once a minute when nothing changed. A quiet hour takes about 60
@@ -3774,6 +3781,17 @@ about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the
 is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
 time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
 The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
+
+**Recovery.** While the loop runs, the EMI build gets itself running again when it stays stuck
+(`stm32h563/src/recovery.h`): captures that keep failing for 10 s reload the iCE40 from its config
+flash (no write), a second time 30 s later, and when that does not help, the STM32 resets (30 s
+after the last reload). An Ethernet link that stays down for 20 s gets a PHY reset and a new DHCP
+request, at most once a minute. Limits: 6 iCE40 reloads an hour, 2 STM32 resets until the pod ran
+10 minutes without a failure or was powered off and on (the count survives the resets), 10 PHY
+resets an hour; past them the pod stays red. Each step is an `EVENT` (kind 6, `recovery`) whose text
+says what it did and how it went, e.g. `iCE40 reload ok v51` or `STM32 reset (1 of 2)`; the next
+run's `START` then has the reset cause `recovery reset`. A hang of the STM32 itself is the watchdog's
+(about 30 s). The console's `emi fault` makes such failures on purpose to test it.
 
 **The lab page.** The EMI build also answers HTTP on port 80 of every interface it has an address
 on: `http://<the pod's address>/` is a page for a test lab that shows the loop's state live (the

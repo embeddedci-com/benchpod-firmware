@@ -31,7 +31,7 @@ TYPES = {1: "START", 2: "EVENT", 3: "CHECK"}
 LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
-          5: "activity stopped"}
+          5: "activity stopped", 6: "recovery"}
 
 
 def _str(b):
@@ -111,6 +111,8 @@ def fmt(r):
         return head + (f"START fw {r['fw']} reset {r['reset']} core {r['core_mhz']} MHz dac {r['dac']} "
                        f"net {r['net_mbit']} Mbit/s gw {r['gw_version']}")
     if r["type"] == "EVENT":
+        if r["kind"] == "recovery":
+            return head + f"EVENT recovery: {r['text']}, captures {r['captures']}, errors {r['errors']}"
         what = f"led {r['led_from']} -> {r['led_to']}" if r["is_led"] else r["kind"]
         last = f", last: {r['text']}" if r["text"] else ""
         return head + (f"EVENT {what}, captures {r['captures']}, errors {r['errors']}, "
