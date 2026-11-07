@@ -64,11 +64,13 @@ module dac_psram_reader #(
     output wire        data_valid,
     input  wire        data_pop,
     // ---- PSRAM pad interface (ALL clk48-registered; muxed onto the pins in top_v2) ----
-    output reg  [3:0]  io_o,
-    output reg         io_oe,
+    // v52: power-up values.  cs configured as 0 made `active` 1, so the top's pad mux picked this
+    // reader and drove PSRAM CS low on the first clk48 edge, before rst48 had reached it.
+    output reg  [3:0]  io_o  = 4'h0,
+    output reg         io_oe = 1'b0,
     input  wire [3:0]  io_i,
-    output reg         cs,
-    output reg         sclk,               // clk48 SCLK level (drive both DDR halves in top)
+    output reg         cs    = 1'b1,
+    output reg         sclk  = 1'b0,       // clk48 SCLK level (drive both DDR halves in top)
     output wire        active              // clk48: reader mid-burst (immediate pad-mux select)
 );
     // Nibble timing on clk48: each nibble spans 2 clk48 SCLK-low then 2 clk48 SCLK-high

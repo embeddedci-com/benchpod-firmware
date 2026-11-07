@@ -101,6 +101,12 @@ bool signal_engine_refresh_version(void);
 /* What the boot self-test did about the iCE40 (passed, reloaded, rewrote its flash), for status. */
 const char *ice40_boot_note(void);
 
+/* Minimum gateware version whose SPI slave takes the link at SPI1 kernel / 64 (3.9 MHz; v52 moves
+   MISO on the SCK rise and samples MOSI aligned with SCK).  Older gateware is clean only at /128.
+   fpga_ping() and signal_engine_refresh_version() always talk at /128 first, then pick the rate
+   from the version they read. */
+#define SPI_FAST_LINK_MIN_GW  52u
+
 /* Minimum gateware version that supports streaming DAC replay from PSRAM. */
 #define DAC_DEEP_REPLAY_MIN_GW  17u
 
@@ -754,6 +760,7 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART2_STATUS_TX_FULL    (1u << 4)   /* v48+: UART2, the TX-only second UART */
 #define UART2_STATUS_TX_EMPTY   (1u << 5)
 #define UART2_STATUS_ARMED      (1u << 6)
+#define UART_STATUS_RX_FRAME_ERR (1u << 7)  /* v52+: sticky, a stop bit read low (byte dropped) */
 
 /* Arm the soft UART on the given RX/TX LA channels at `baud` (the firmware
    computes the FPGA bit-period divisor).  enable=false configures without

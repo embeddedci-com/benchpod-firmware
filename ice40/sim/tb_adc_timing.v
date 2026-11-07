@@ -57,7 +57,7 @@ module adc_timing_harness #(
 
     // Production engine: SCLK = clk/2 = 12 MHz, hard-wired (no SCLK_DIV param).
     adc_mcp33131 dut (
-        .clk(clk), .rst(rst), .en(1'b1), .divider(DIVIDER),
+        .clk(clk), .rst(rst), .en(1'b1), .divider(DIVIDER), .restart(1'b0),
         .adc_cnvst(cnvst), .adc_sclk(sclk), .adc_sdi(sdi), .adc_sdo(sdo_at_fpga),
         .sample(sample), .sample_stb(sample_stb)
     );

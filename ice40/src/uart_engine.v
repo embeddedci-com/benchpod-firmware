@@ -110,6 +110,7 @@ module uart_engine (
     output wire [8:0]  rx_avail,
     output reg         rx_overflow,   // sticky; cleared by status read strobe
     input  wire        rx_ovf_clr,
+    output reg         rx_frame_err,  // v52: sticky: a frame's stop bit read low; cleared with rx_overflow
 
     // ---- UART bus (to/from la_bank) ----
     input  wire        rx_in,
@@ -247,6 +248,7 @@ module uart_engine (
     (* fsm_encoding = "none" *) reg [1:0]  rx_state;
     wire [DIV_W-1:0] rx_cnt;
     reg [2:0]  rx_bit;
+    reg        rx_brk;                // v52: in RX_STOP after a low stop bit, waiting for the line to rise
 
     // The bit timer in one logic cell per bit (lc_counter), always loaded with div.
     // The half bit to the middle of the start bit is div counted down in steps of 2
@@ -267,13 +269,14 @@ module uart_engine (
 
     always @(posedge clk) begin
         rx_push <= 1'b0;
-        if (rx_ovf_clr) rx_overflow <= 1'b0;
+        if (rx_ovf_clr) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; end
 
         if (rst || !armed) begin
             rx_state    <= RX_IDLE;
             rx_bit      <= 3'd0;
             rx_sr       <= 8'h00;
-            if (rst) rx_overflow <= 1'b0;
+            rx_brk      <= 1'b0;
+            if (rst) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; end
         end else begin
             case (rx_state)
                 RX_IDLE: begin
@@ -297,12 +300,20 @@ module uart_engine (
                     end
                 end
                 RX_STOP: begin
-                    if (rx_exp) begin
-                        // sample point at middle of stop bit; push regardless of
-                        // framing (best-effort), flag overflow if FIFO is full.
-                        if (rx_fifo_full) rx_overflow <= 1'b1;
-                        else rx_push <= 1'b1;
-                        rx_state <= RX_IDLE;
+                    // Sample point at the middle of the stop bit.  v52: a low stop bit is a
+                    // framing error (a break, or the wrong baud): the byte is dropped and the
+                    // receiver waits here for the line to rise, so a held-low line is one error,
+                    // not a stream of 0x00 frames.  (Until v51 every frame was pushed.)  The timer
+                    // runs on meanwhile; the next start edge reloads it.
+                    if (rx_brk) begin
+                        if (rx_s1) begin rx_brk <= 1'b0; rx_state <= RX_IDLE; end
+                    end else if (rx_exp) begin
+                        if (!rx_s1) begin rx_frame_err <= 1'b1; rx_brk <= 1'b1; end
+                        else begin
+                            if (rx_fifo_full) rx_overflow <= 1'b1;
+                            else rx_push <= 1'b1;
+                            rx_state <= RX_IDLE;
+                        end
                     end
                 end
             endcase

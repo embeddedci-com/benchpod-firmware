@@ -25,8 +25,9 @@ module tb_adc_mcp33131;
     always @(negedge sclk)  sr = {sr[14:0], 1'b0};
     always @(*) sdo_r = sr[15];
 
+    reg restart = 1'b0;
     adc_mcp33131 dut (
-        .clk(clk), .rst(rst), .en(en), .divider(divider),
+        .clk(clk), .rst(rst), .en(en), .divider(divider), .restart(restart),
         .adc_cnvst(cnvst), .adc_sclk(sclk), .adc_sdi(sdi), .adc_sdo(sdo_r),
         .sample(sample), .sample_stb(sample_stb)
     );
@@ -70,9 +71,40 @@ module tb_adc_mcp33131;
         check_period(16'd60,   60);   // the floor itself (~400 kS/s)
         check_period(16'd2,    58);   // below the firmware floor: back-to-back conversions
         check_period(16'd240, 240);   // 100 kS/s
+        check_period(16'd1,    58);   // v52: 0 and 1 wrapped the countdown (a 65536-clock period)
+        check_period(16'd0,    58);
+
+        // v52: restart (the capture's t0) at every phase of a conversion and of its read: the
+        // next strobe always comes the same number of clocks later, and carries a good sample.
+        divider = 16'd100;
+        @(posedge sample_stb); @(posedge sample_stb);
+        begin : restart_sweep
+            integer ph, t_r, lat, lat0;
+            lat0 = -1;
+            for (ph = 0; ph < 100; ph = ph + 7) begin
+                @(posedge sample_stb);
+                repeat (ph) @(posedge clk);
+                @(negedge clk) restart = 1'b1;
+                @(posedge clk); t_r = cyc;
+                @(negedge clk) restart = 1'b0;
+                @(posedge sample_stb); lat = cyc - t_r;
+                #1;
+                if (lat0 < 0) lat0 = lat;
+                if (lat != lat0 || sample !== PATTERN) begin
+                    $display("FAIL tb_adc_mcp33131: restart %0d clk into a period: strobe %0d clk later (want %0d), sample %04h",
+                             ph, lat, lat0, sample);
+                    errors = errors + 1;
+                end
+            end
+            // the first conversion starts `divider` - 3 clk after the restart; start-to-strobe is 58 clk
+            if (lat0 != 100 - 3 + 58) begin
+                $display("FAIL tb_adc_mcp33131: restart-to-strobe %0d clk (want divider - 3 + 58 = 155)", lat0);
+                errors = errors + 1;
+            end
+        end
 
         if (errors == 0)
-            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (>= 60; back-to-back 58 below)", PATTERN);
+            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (>= 60; back-to-back 58 below, 0/1 too), restart latency fixed", PATTERN);
         else
             $display("FAIL tb_adc_mcp33131: %0d error(s)", errors);
         $finish;

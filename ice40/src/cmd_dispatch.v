@@ -118,7 +118,7 @@ module cmd_dispatch #(
     // PSRAM_CS (0x25) boot self-test: force the iCE40's PSRAM /CS output LOW so the
     // STM32 can check (PE4 as input) whether the iCE40 actually reaches the shared
     // /CE net — pins the "iCE40 can't write PSRAM" fault on the pad45->/CE joint.
-    output reg               psram_cs_force,
+    output reg               psram_cs_force = 1'b0,   // v52: power-up value (the PSRAM pads read it before the first reset edge)
     // Capture trigger (OP_SET_TRIGGER 0x33, v2 >= v35).  Persistent; the mode byte is decoded
     // here at SET time so the top's per-cycle test is one mux and two compares.  trig_en = 0 is
     // an untriggered capture (the <= v34 behaviour).  trig_pol = the level that fires (1 for
@@ -263,6 +263,7 @@ module cmd_dispatch #(
     input  wire              uart_tx_full,
     input  wire              uart_tx_empty,
     input  wire              uart_rx_overflow,
+    input  wire              uart_rx_frame_err,   // v52: UART_STATUS flags bit7
     input  wire              uart_armed,
 
     // ---- UART2: a second, TX-only UART (v48; config payload = UART_CONFIG's) ----
@@ -532,7 +533,7 @@ module cmd_dispatch #(
         begin
             case (rem)
                 2'd3:    uart_status_next = {7'b0, uart_rx_avail[8]};   // byte 1
-                default: uart_status_next = {1'b0, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
+                default: uart_status_next = {uart_rx_frame_err, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
                                              uart_tx_empty, uart_tx_full};   // byte 2 (rem 2)
             endcase
         end

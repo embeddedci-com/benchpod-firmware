@@ -195,7 +195,9 @@ module tb_top_deep;
 
     // ------------------------------------------------- DAC8551 decoder ----
     // Every frame must be the next waveform sample: sample k = {2k+1, 2k} (LE bytes 2k, 2k+1).
-    integer dac_bits = 0, dac_in_frame = 0, nfr = 0, fr_bad = 0, expi = 0;
+    integer dac_bits = 0, dac_in_frame = 0, nfr = 0, fr_bad = 0, expi = 0, ns_cur = NS;
+    // v52: a DAC start (START_DAC_PSRAM) restarts the waveform at sample 0
+    always @(posedge dut.clk) if (dut.dac_start) expi = 0;
     reg [23:0] dac_sh = 24'd0;
     reg [15:0] want_fr;
     always @(negedge dac_sync) dac_bits = 0;
@@ -211,9 +213,9 @@ module tb_top_deep;
                 fr_bad = fr_bad + 1;
                 // resynchronise on the value if it is a valid sample, so one slip is one error
                 if (dac_sh[0] == 1'b0 && dac_sh[8] == 1'b1 && dac_sh[15:8] == dac_sh[7:0] + 8'd1
-                    && dac_sh[7:1] < NS) expi = dac_sh[7:1];
+                    && dac_sh[7:1] < ns_cur) expi = dac_sh[7:1];
             end
-            expi = (expi + 1) % NS;
+            expi = (expi + 1) % ns_cur;
             nfr = nfr + 1;
         end
     end
@@ -316,6 +318,22 @@ module tb_top_deep;
         wait_done(400, st);
         if (st[5]) begin $display("FAIL: a clean capture after an overflow reports CAP_OVF (STATUS=%02x)", st); errors = errors + 1; end
         else $display("  [ovf] overflowed capture: CAP_OVF set; next clean capture: CAP_OVF clear");
+
+        // ==== 4. v52: START_DAC_PSRAM over a running replay restarts it at the new base/length ====
+        // Until v51 the reader reloaded its address and length only while stopped, so a second
+        // START_DAC_PSRAM kept streaming the old waveform from where it was (the firmware stops
+        // first).  The new one here is the first 20 samples: the stream must restart at sample 0
+        // and wrap at 20.
+        fr_bad = 0;
+        cmd_start_dac_psram(WBASE, NS, 16'd20);
+        wait (nfr >= 30 + i);
+        ns_cur = 20; i = nfr;
+        cmd_start_dac_psram(WBASE, 24'd20, 16'd20);
+        wait (nfr >= i + 70);
+        cmd_op0(8'h12);
+        #5000;
+        if (fr_bad) begin $display("FAIL: a START_DAC_PSRAM over a running replay: %0d frames off the new waveform", fr_bad); errors = errors + 1; end
+        else $display("  [restart] START_DAC_PSRAM over a running replay: restarts at sample 0, wraps at the new length");
 
         if (collide) begin $display("FAIL: FPGA and PSRAM drove the data bus together on %0d clk48", collide); errors = errors + 1; end
         if (errors == 0) $display("PASS tb_top_deep: deep replay keeps its order across bus_own, replay + capture + read-back, overflow clears on arm");

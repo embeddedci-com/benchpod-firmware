@@ -288,7 +288,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -427,9 +427,12 @@ $(OUT).bin: $(OUT).asc
 # 37/48 CI reach MIN_CLK48_MHZ (v50: 29/48 local), 29 in both.  Pinned SEED_LOOP 40 -> 7, the best
 # in both (clk48 54.40 local / 58.30 CI, clk 28.44, clk -> clk48 12.76 / 12.14 ns, clk48 -> clk
 # 8.24 / 9.15 ns).  RE-VERIFY on hardware.
-SEED_LOOP ?= 7
-# v51: the next seeds good in both toolchains, by the lower of the two clk48 results.
-SEED_LOOP_FALLBACK ?= 36 37 46 40 16 38 2 21 19 41 5
+# v52 (review fixes: ADC t0 restart, SPI slave, UART framing; 4641 LC, 88%): seed 7 fell to
+# 52.96 MHz.  Swept 1..48 locally: 32/48 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 7 -> 35 (clk48 56.69,
+# clk 29.13, clk -> clk48 13.59 ns, clk48 -> clk 9.43 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
+SEED_LOOP ?= 35
+# v52: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
+SEED_LOOP_FALLBACK ?= 25 45 14 21 40 2 9 13 41 24 23
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -521,12 +524,18 @@ SEED_LOOP_FALLBACK ?= 36 37 46 40 16 38 2 21 19 41 5
 # MIN_CLK48_MHZ.  Swept 1..48 in both toolchains: 38/48 local, 45/48 CI, 35 in both.  Pinned
 # SEED_DEEP 31 -> 16 (clk48 55.27 local / 55.35 CI, clk 29.03, clk -> clk48 13.95 / 13.99 ns,
 # clk48 -> clk 4.39 / 5.68 ns; 9 ties but sits at 14.99 ns clk -> clk48).  RE-VERIFY deep replay.
-SEED_DEEP ?= 16
+# v52 (4287 LC, 81%): seed 16 fell to 48.53 MHz.  Swept 1..48 locally: 40/48 reach MIN_CLK48_MHZ,
+# nine tie at 56.95.  Pinned SEED_DEEP 16 -> 41, the tie with the shortest clk -> clk48 paths
+# (13.92 ns; clk 27.46, clk48 -> clk 6.22 ns).  CI then failed seed 41: clk -> clk48 18.40 ns.
+# Swept 1..64 in both (CI run 42391635281): 51/64 local; 11 seeds keep clk48 >= 50 MHz and
+# clk -> clk48 <= MAX_X48_NS in both.  Pinned SEED_DEEP 41 -> 5, the one with the most
+# clk -> clk48 margin (13.88 CI / 14.09 local ns; clk48 57.07 CI / 55.60 local MHz).
+SEED_DEEP ?= 5
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 24 47 39 12 9 46 2 40 34 43 28
+SEED_DEEP_FALLBACK ?= 54 13 32 53 39 35 12 45 24 64
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -790,6 +799,20 @@ topcapturetest:
 # The DEEP image's whole top (-DUSE_DEEP_REPLAY, v46): a deep replay keeps its sample order while
 # the STM32 takes the bus (bus_own swept over a reader burst and the DAC engine's byte pops), a
 # capture alongside the replay read back mid-replay, and an overflowed capture then a clean one.
+# v52: the ADC capture's sample 0 is converted at a fixed offset from t0, the LA's sample-0 instant,
+# whatever the arm's phase against the free-running engine, the previous divider or a trigger.
+topadct0test:
+	$(call topbench,tb_top_adc_t0,loop deep)
+
+# v52: the PSRAM pads idle (CS high, SCLK low, IO released) from configuration on, both images.
+topboottest:
+	$(call topbench,tb_top_boot,loop deep)
+
+# v52: the STM32 -> iCE40 SPI link at 1.95, 3.9 and 5 MHz against an STM32 model (pad delays, MISO
+# setup, a drifting phase): PING/VERSION/STATUS and a 256-byte register write + streamed read-back.
+topspilinktest:
+	$(call topbench,tb_top_spilink,loop deep)
+
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
 
@@ -841,7 +864,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

@@ -337,7 +337,12 @@ module top (
 `ifdef USE_DEEP_REPLAY
     dac_psram_reader #(.CHUNK_BYTES(9'd8), .WAIT_CYCLES(4'd6), .FIFO_AW(5), .PAD_PIPE(1)) rdr_i (
         .clk(clk), .rst(rst), .clk48(clk48), .rst48(rst48),   // v46: NOT reset by bus_own
-        .run(dac_psram_run), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
+        // v52: run drops on the cycle of every DAC start (the RAW one, so a co-trigger still
+        // prefills at stage time).  The reader loads base/length and flushes its FIFO only while
+        // not running, so a START_DAC_PSRAM over a running replay used to keep streaming the old
+        // waveform from where it was.  The low run_i lasts 2 clk (run & run_d), which the clk48
+        // side's 2-flop sync sees, so this is a STOP_DAC + START_DAC_PSRAM in one command.
+        .run(dac_psram_run & ~dac_start), .base_addr(dac_psram_base), .len_bytes(psram_len_bytes),
         .bus_own(bus_own_synced),
         .data(rd_strm_data), .data_valid(rd_strm_valid), .data_pop(rd_strm_pop),
         .bus_gnt(rd_gnt), .bus_req(rd_req), .bus_busy(rd_busy),
@@ -380,8 +385,17 @@ module top (
     wire        arm = cap_start | la_cap_start;
     // A producer is "in this run" only if it was armed AND its count is non-zero (see the drain
     // controller below).  Named here because the trigger needs the same terms.
-    wire        arm_adc = cap_start    & (cap_count    != 24'd0);
-    wire        arm_la  = la_cap_start & (la_cap_count != 24'd0);
+    // v52: the two != 0 tests come from flops.  OP_CAPTURE is the only arm (v40), and cmd_dispatch
+    // holds both counts in its argument buffer from the payload's 9th byte on, a whole SPI byte
+    // (>= 100 clk) before the 10th raises the arm, so the registered tests are exact on the arm
+    // cycle and the 24-bit decodes stay off the arm's paths (it also gates the ADC restart).
+    reg         adc_cnt_nz = 1'b0, la_cnt_nz = 1'b0;
+    always @(posedge clk) begin
+        adc_cnt_nz <= (cap_count    != 24'd0);
+        la_cnt_nz  <= (la_cap_count != 24'd0);
+    end
+    wire        arm_adc = cap_start    & adc_cnt_nz;
+    wire        arm_la  = la_cap_start & la_cnt_nz;
 
     // ---- capture trigger: gated start (OP_SET_TRIGGER 0x33 / OP_TRIGGER_STATUS 0x34, v2 >= v35) ----
     // With a trigger set, an arm still LOADS the producers (their counts are only valid on the arm
@@ -451,8 +465,16 @@ module top (
     SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_adc_sdo (
         .PACKAGE_PIN(adc_sdo), .D_IN_0(adc_sdo_pu));
     wire adc_sample_stb_raw;
+    // v52: restart the free-running engine on the t0 of a capture that includes the ADC, so its
+    // sample i is converted at t0 + (i+1)*divider like the LA producer's (see adc_mcp33131).  An
+    // LA-only capture leaves it running (the loop image's live ADC input).  arm_adc covers an
+    // untriggered t0 (the arm cycle, before run_adc is written); run_adc a triggered one.
+    // (run_adc, written on the arm edge, holds the previous capture's value during the arm,
+    // hence the mux; adc_cnt_nz is the registered count test, see arm_adc.)
+    reg  run_adc;
+    wire adc_restart = t0 & (arm ? adc_cnt_nz : run_adc);
     adc_mcp33131 adc_i (
-        .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider),
+        .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider), .restart(adc_restart),
         .adc_cnvst(adc_cnvst), .adc_sclk(adc_sclk),
         .adc_sdi(adc_sdi), .adc_sdo(adc_sdo_pu),
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
@@ -494,7 +516,7 @@ module top (
         if (rst) begin
             adc_run<=1'b0; adc_done_r<=1'b0; adc_ovf_r<=1'b0; adc_pst<=2'd0;
         end else if (cap_start) begin
-            adc_run<=(cap_count!=24'd0); adc_done_r<=(cap_count==24'd0); adc_ovf_r<=1'b0;
+            adc_run<=adc_cnt_nz; adc_done_r<=~adc_cnt_nz; adc_ovf_r<=1'b0;
             adc_pst<=2'd0;                     // (adc_left loads in its dsp_counter)
         end else if (adc_run) begin
             if (adc_sample_stb && adc_pst==2'd0 && !trig_wait) adc_pst<=2'd1;
@@ -661,7 +683,7 @@ module top (
     // writer, then hold `active` until BOTH armed producers have finished AND both
     // rings have drained to PSRAM (pipe quiet for a margin) — then stop the writer
     // and raise cap_done (STATUS CAP_DONE) so firmware can read both regions back.
-    reg        cap_active, cap_done_r, run_adc, run_la;
+    reg        cap_active, cap_done_r, run_la;   // (run_adc: declared at the ADC engine)
     reg [6:0]  quiet;
     // Writer "still has work" indicator.  Under the bus arbiter `ps_idle` (=in S_IDLE)
     // blips HIGH whenever the writer is merely WAITING FOR A GRANT with data pending,
@@ -775,7 +797,24 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 50) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 52) ----
+    // GATEWARE_VERSION 52 = v51 + the 2026-11 review fixes (both images):
+    //   * ADC capture timebase: a capture that includes the ADC restarts the free-running engine
+    //     at t0 (adc_mcp33131 `restart`), so its first conversion starts on the LA's sample-0 edge,
+    //     t0 + divider - 3, and every interval is the new divider.  Until v51 sample 0 was the
+    //     conversion in flight at t0: up to a period early, or up to the previous capture's period
+    //     late.  A divider of 0 or 1 no longer wraps the period count (65536 clk); the arm's
+    //     count != 0 tests come from flops.  tb_top_adc_t0.
+    //   * START_DAC_PSRAM over a running replay restarts the reader at the new base/length (it
+    //     kept streaming the old waveform; the firmware always stopped first).  tb_top_deep 4.
+    //   * PSRAM pads idle from configuration on: the writer's and reader's pad flops and rst48
+    //     have power-up values and psram_pads holds every output enable off until the first clk48
+    //     edge (CS was driven low for 2-3 clk48 after configuration).  tb_top_boot.
+    //   * UART RX: a low stop bit drops the byte, sets UART_STATUS flags bit7 (sticky) and waits
+    //     for the line to rise, so a break is one error, not a stream of 0x00.  tb_uart_engine.
+    //   * SPI link: spi_slave moves MISO on the detected SCK rise, samples MOSI aligned with SCK
+    //     and drives a reply's MSB straight from tx_byte, so the STM32 can run SPI1 at /64
+    //     (3.9 MHz) instead of /128; the firmware does on v52+.  tb_top_spilink.
     // GATEWARE_VERSION 51 = v50 + LC / clk48 HEADROOM PASS (both images, no protocol change, every
     //   bench unchanged): la_byte_pack writes byte lanes with their own enables (a dynamic
     //   part-select was a 40-bit mux); spram_ring48 shifts its output word instead of a byte mux;
@@ -1178,7 +1217,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd51), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd52), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
