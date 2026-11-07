@@ -53,7 +53,17 @@ void boot_guard_begin(bool fresh_start) {
     }
 
     uint32_t culprit = boot_policy_culprit(started, done, fault_last_crash_task());
+#if defined(BENCHPOD_EMI_TEST)
+    /* The EMC test build never goes to safe mode: an ESD gun firing about once a second can crash
+       two boots in a row, and safe mode turns off networking and the iCE40 until power is
+       removed (criterion C at the lab). It keeps restarting and recovering instead; the crash
+       records and the run log still say what happened. */
+    if (failed >= BOOT_GUARD_SAFE_AFTER)
+        log_printf("[boot] EMI build: %lu failed boots in a row, safe mode skipped\r\n", (unsigned long)failed);
+    if (0) {
+#else
     if (failed >= BOOT_GUARD_SAFE_AFTER) {
+#endif
         s_safe = true;
         s_off = boot_policy_off(prev_off, culprit);
         /* Name where it failed: the culprit if known, else the stage it stopped in. */

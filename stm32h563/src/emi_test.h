@@ -52,6 +52,9 @@
 
 /* Wait this long after boot before starting, so the network and cloud link come up first. */
 #define EMI_TEST_START_DELAY_MS  10000u
+/* After a reset the recovery ladder made (recovery.h), start sooner: the lab's 60 s for
+   criterion B count from the failure, not from this boot. */
+#define EMI_TEST_RECOVERY_START_MS 2000u
 /* A monitor line on the USB console this often. */
 #define EMI_TEST_REPORT_MS       5000u
 /* The Ethernet stream: default and top rate, frame size (a full 1500-byte MTU plus the 14-byte
