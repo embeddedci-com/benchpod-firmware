@@ -3721,27 +3721,37 @@ That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0
 7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
-started or stopped) and a `CHECK` every 10 s (captures, errors, frames sent and dropped, link
-losses, the longest DAC gap a log write caused, 0 normally). An hour of running takes about 360
-records. 16 sectors (1,024 records, about 2.8 hours of checkpoints) are kept erased ahead of the
-write position, erased at boot before the loop starts, so the ring keeps about 6,000 records of
-history: about the last 16 hours of running, a full lab day.
+started or stopped) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
+losses, the longest DAC gap a log write caused, 0 normally). A `CHECK` is written when a value that
+shows trouble changed (errors, dropped frames, link losses, the LED, the link, the DAC gap, lost
+records), at most every 10 s, and once a minute when nothing changed. A quiet hour takes about 60
+records, an hour with trouble all the time at most 360. 16 sectors (1,024 records) are kept erased
+ahead of the write position, erased at boot before the loop starts, so a lab day never erases flash
+while it runs (unless it has trouble for more than about 2.8 hours in all); the ring keeps about
+6,000 records of history, about 100 quiet hours.
 
 ```json
 {"cmd":"emi_log"}
-{"cmd":"emi_log","offset":0,"count":48}
+{"cmd":"emi_log","offset":0,"count":16}
+{"cmd":"emi_log","after":345,"count":16}
 ```
 
 Without `count` it answers the log's state and the loop's (`emi_test`, the full object; `status`
 carries a short one); with `count` (at most `max_count`: 16, or 12 over the cloud, so the reply fits
 a connection's 2 KB send buffer) it returns that many raw 64-byte slots from slot `offset` on,
-base64url without padding, in slot order, instead of `emi_test`:
+base64url without padding, in slot order, instead of `emi_test`. With `after` (a sequence number)
+in place of `offset`, the read starts at the first record newer than it, and `count` is cut to the
+records there are (0 when there are none): a viewer that keeps a copy asks for `after` its newest
+`seq` until `count` is 0. An `after` older than the oldest record starts at the oldest. `offset` in
+the reply says where the read started; `uptime_ms` is the pod's uptime, to turn a record's
+`uptime_ms` in this run into a time of day. Without `count` the reply also carries `last_error` (the
+loop's last failure, empty when none) and `fw`:
 
 ```json
 {"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
   "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
   "write_errors":0,"session_us_last":273,"session_us_max":2969,"glitch_us_last":0,"glitch_us_max":0,
-  "dac_stops":0,"max_count":16,"offset":0,"count":16,
+  "dac_stops":0,"max_count":16,"uptime_ms":4821930,"offset":0,"count":16,
   "data":"RUwBAg..."}}
 ```
 
@@ -3764,6 +3774,19 @@ about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the
 is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
 time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
 The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
+
+**The lab page.** The EMI build also answers HTTP on port 80 of every interface it has an address
+on: `http://<the pod's address>/` is a page for a test lab that shows the loop's state live (the
+LED's meaning, the counters, the last error) and keeps a copy of the run log in the browser. It
+fetches the newest 500 records the first time (all of them with "Load full history"), then only
+what is new every 5 s, also after the network or the pod was down, and stamps records of the
+running boot with the laptop's clock; "Download CSV" and "Download all (JSON)" save the copy, the
+JSON with a status sample every 5 s. The page is built in from `stm32h563/tools/emi/lab_page.html`
+and uses nothing from the internet. Besides `GET /` there are only two read-only paths, the two
+calls the page makes: `GET /api/status` (`{"cmd":"emi_log"}`) and `GET /api/log?after=<seq>`
+(`{"cmd":"emi_log","after":<seq>,"count":16}`); each answers that command's reply line as JSON.
+Anything else is refused (404, or 405 for a method other than GET). HTTP/1.0, one request per
+connection; a request takes one of the pod's 5 LAN connection slots while it runs.
 
 ---
 

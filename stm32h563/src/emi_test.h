@@ -41,11 +41,12 @@
  * same line goes out of the Ethernet port as a broadcast frame on the stream's EtherType, starting
  * with "BPMON" (plus the run number, reset cause, uptime and the stream's sequence number), from
  * boot on and whether the loop runs or not: a laptop on the cable reads it in Wireshark or with
- * tools/emi/emi_watch.py, with no IP address.
+ * tools/emi/emi_watch.py, with no IP address. With an address, port 80 serves a page for the lab
+ * (emi_http.h) that shows the state and keeps a copy of the run log in the browser.
  *
  * Every run is also kept in the run log in the W25Q (emi_log.h): a RUN_START at boot, an EVENT on
- * every LED or link change, a CHECKPOINT every 10 s. `emi log` prints it, the JSON command
- * emi_log reads it out (tools/emi/emi_log_dump.py). Log writes go between two captures (the W25Q
+ * every LED or link change, a CHECKPOINT on a change (at most every 10 s) or once a minute.
+ * `emi log` prints it, the JSON command emi_log reads it out (tools/emi/emi_log_dump.py). Log writes go between two captures (the W25Q
  * shares the PSRAM bus); the DAC outputs keep running through them.
  */
 
