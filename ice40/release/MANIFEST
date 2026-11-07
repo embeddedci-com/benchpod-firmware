@@ -1,20 +1,20 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=52
-source_sha256=a0862b5dfbdbbbdde5f70b6d4c16af910004b05b4d10e9883b3f5d6de6d8187d
-built_from=a0e2790
+gateware_version=53
+source_sha256=d9532bb47020b2d75af874090d4670ab0fe7adde8e98a3acb67664842cb0b3a7
+built_from=e80aa68
 promoted=2026-11-07
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=hwe2e TestHW (LAN) 74 passed / 6 skipped / 0 failed on benchpod-30a9f1 (analog v3r2), fw 3.9.7 candidate, 2026-11-07
-loop.sha256=b2db964354fdf22d240b7854b15927cca684af47fa89d00372980943a07734a4
-loop.seed=35
+hw_verified=fw 3.10.0 combo on benchpod-30a9f1 (analog v3-r2): LAN hwe2e 75/0, SDK e2e 117/0, process-node 78/0, 12 MS/s LA + ADC matrix
+loop.sha256=1399b086bef58fe947e7a2e58f3080b5b2c24592c2d5247e4794641d0e89d36b
+loop.seed=51
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=56.69
-deep.sha256=42a4dbd6b7031a0fd5123b945ef2fd508d5ce5baae092005e01e6770bd9b4d3d
-deep.seed=5
+loop.clk48_mhz=54.11
+deep.sha256=d6e7e3b2a83195159909c427dee24ba20700ae383bd15359b4c7c5c368560d66
+deep.seed=37
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=55.60
+deep.clk48_mhz=57.61
