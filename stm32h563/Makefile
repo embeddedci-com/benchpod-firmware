@@ -524,6 +524,7 @@ $(OBJECTS): $(DEFS_STAMP)
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
+	@OBJDUMP=$(PREFIX)objdump sh tools/check_ramfunc_calls.sh $@ || { rm -f $@; exit 1; }
 
 $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 	$(HEX) $< $@

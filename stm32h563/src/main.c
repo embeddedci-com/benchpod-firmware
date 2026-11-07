@@ -314,6 +314,9 @@ static void icache_init(void)
     HAL_MPU_ConfigRegion(&region);
     HAL_MPU_Enable(MPU_PRIVILEGED_DEFAULT);
 
+    /* The reset-time invalidation runs on its own; the cache bypasses itself until it ends. Wait
+       for it anyway, so the cache is in a known state before it is configured. */
+    (void)HAL_ICACHE_WaitForInvalidateComplete();
     (void)HAL_ICACHE_ConfigAssociativityMode(ICACHE_2WAYS);
     (void)HAL_ICACHE_Enable();
 }
