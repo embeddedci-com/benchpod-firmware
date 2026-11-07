@@ -210,7 +210,7 @@ static void apply_uart(int la) {
    is checked: any time the DAC was not playing goes into glitch_us (0 in the normal path), and
    the longest into the next checkpoint. */
 
-/* Erased at boot, ahead of the write position: 16 sectors, 1,024 records, about 80 hours of
+/* Erased at boot, ahead of the write position: 16 sectors, 1,024 records, about 2.8 hours of
    checkpoints (measured 58 ms a sector, so about 1 s when all 16 need it, at most 6.4 s at the
    W25Q's 400 ms worst case, inside the start delay; sectors already blank are skipped). A run
    that uses them up erases the next sector between two captures (that capture waits about 60 ms,

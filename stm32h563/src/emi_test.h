@@ -44,9 +44,9 @@
  * tools/emi/emi_watch.py, with no IP address.
  *
  * Every run is also kept in the run log in the W25Q (emi_log.h): a RUN_START at boot, an EVENT on
- * every LED or link change, a CHECKPOINT every 5 minutes. `emi log` prints it, the JSON command
- * emi_log reads it out (tools/emi/emi_log_dump.py). A log write stops the DAC for a moment (the
- * W25Q shares the PSRAM bus): written between two captures, the DAC started again right after.
+ * every LED or link change, a CHECKPOINT every 10 s. `emi log` prints it, the JSON command
+ * emi_log reads it out (tools/emi/emi_log_dump.py). Log writes go between two captures (the W25Q
+ * shares the PSRAM bus); the DAC outputs keep running through them.
  */
 
 /* Wait this long after boot before starting, so the network and cloud link come up first. */
