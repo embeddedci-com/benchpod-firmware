@@ -704,8 +704,16 @@ static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
     send_error(cid, msg);
 }
 
-#define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture (24 MHz / 3):
-                                       12 MS/s overflowed at every depth and ADC rate on gw v52 */
+#define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture on gateware
+                                       before v53 (24 MHz / 3): the PSRAM writer starved the ADC FIFO
+                                       at 12 MS/s, at every depth and ADC rate (fixed in v53) */
+#define DUAL_LA_FULL_RATE_MIN_GW 53u
+
+/* The fastest raw LA a capture runs: 12 MS/s, or 8 MS/s with ADC samples on gateware before v53. */
+static float la_raw_ceiling(bool with_adc) {
+    return (with_adc && signal_engine_fpga_version() < DUAL_LA_FULL_RATE_MIN_GW) ? DUAL_LA_RAW_MAX_HZ
+                                                                                 : LA_RAW_MAX_HZ;
+}
 
 /* "3.4" for 3428571 Hz (newlib-nano's printf has no %f). */
 static void fmt_mhz(char *buf, size_t n, float hz) {
@@ -714,20 +722,22 @@ static void fmt_mhz(char *buf, size_t n, float hz) {
 }
 
 /* An explicit raw-LA rate (12 MS/s and below) is refused when the capture cannot run at it, rather
-   than slowed down: above the ceiling (8 MS/s with the ADC in the capture, 12 without), or a depth
+   than slowed down: above the ceiling (la_raw_ceiling: 12 MS/s, 8 with the ADC before gw v53), or a depth
    the burst buffer cannot take at that rate. The reply names both ways out. No rate (req_hz 0)
    always fits: la_psram_plan picks the fastest rate that does. */
 static bool la_rate_fits(int conn_id, size_t samples, float req_hz, bool with_adc) {
     if (req_hz <= 0.0f) return true;
-    const float ceiling = with_adc ? DUAL_LA_RAW_MAX_HZ : LA_RAW_MAX_HZ;
-    char req[12], top[12], msg[200];
+    const float ceiling = la_raw_ceiling(with_adc);
+    char req[12], top[12], msg[256];
     fmt_mhz(req, sizeof(req), req_hz);
     if (req_hz > ceiling * 1.001f) {
         /* the fastest that fits this depth under the ceiling */
         fmt_mhz(top, sizeof(top), (float)la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)samples, ceiling).rate_hz);
+        char cap[12];
+        fmt_mhz(cap, sizeof(cap), ceiling);
         snprintf(msg, sizeof(msg), "LA at %s MS/s does not fit: with ADC samples in the capture the raw LA "
-                 "runs at most 8.0 MS/s, %s MS/s for %lu samples (above 12 MS/s it records changes instead)",
-                 req, top, (unsigned long)samples);
+                 "runs at most %s MS/s on this gateware, %s MS/s for %lu samples (above 12 MS/s it records "
+                 "changes instead)", req, cap, top, (unsigned long)samples);
         send_error(conn_id, msg);
         return false;
     }
@@ -1158,7 +1168,7 @@ void handle_capture_dual(int conn_id, const char *json) {
         if (!la_rate_fits(conn_id, la_n, la_hz, adc_n != 0)) return;
         if (la_hz <= 0.0f) {
             la_plan_t lp = la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)la_n,
-                                         adc_n ? DUAL_LA_RAW_MAX_HZ : LA_RAW_MAX_HZ);
+                                         la_raw_ceiling(adc_n != 0));
             la_capped = lp.capped != 0;
             la_hz = (float)lp.rate_hz;
         }

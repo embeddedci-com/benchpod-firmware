@@ -633,9 +633,10 @@ front when they do not fit or when the combined sample rate would overrun the PS
 
 The raw LA (12 MS/s and below) follows the same rules as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
 without `la_rate_mhz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
-explicit rate that does not fit is refused with both ways out. With ADC samples in the same
-capture the raw LA runs at most 8 MS/s (12 MS/s overflows the PSRAM there, at any depth and ADC
-rate): a higher raw rate is refused, and above 12 MS/s it records changes instead. `la_rate_hz`
+explicit rate that does not fit is refused with both ways out. On gateware before v53, with ADC
+samples in the same capture the raw LA runs at most 8 MS/s (the PSRAM writer starved the ADC at
+12 MS/s, at any depth and ADC rate): a higher raw rate is refused there. Gateware v53 and later run
+the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_rate_hz`
 in the reply is the rate it ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
 samples. (Before firmware 3.10.0 a deep `capture_dual` ran at the requested or the full 12 MS/s
 and overflowed.)
@@ -666,7 +667,7 @@ packet carries `"la":true,"la_edges"` directly.
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
-| An explicit LA rate that does not fit (above 8 MS/s with the ADC, or too deep for the rate) | `"LA at <r> MS/s does not fit ..."`, naming the most samples at that rate and the fastest rate for that depth |
+| An explicit LA rate that does not fit (above 8 MS/s with the ADC on gateware before v53, or too deep for the rate) | `"LA at <r> MS/s does not fit ..."`, naming the most samples at that rate and the fastest rate for that depth |
 | More than 2 097 152 samples in a stream | `"capture_dual takes at most 2097152 LA and 2097152 ADC samples (la_capture: up to <n> LA)"` |
 | LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
 | The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
