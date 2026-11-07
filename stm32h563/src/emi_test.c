@@ -77,6 +77,7 @@ static struct {
     bool           last_link;
     bool           link_seen;     /* the link was up once since the start */
     uint32_t       t_checkpoint;
+    emi_cp_sig_t   cp_last;       /* the values in the last checkpoint */
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -337,7 +338,23 @@ static void log_event(uint8_t kind, uint8_t from, uint8_t to) {
     log_queue(&r);
 }
 
+static emi_cp_sig_t cp_sig(void) {
+    emi_cp_sig_t g;
+    memset(&g, 0, sizeof(g));
+    g.errors = s.errors;
+    g.net_drops = ns.drops;
+    g.link_losses = ns.link_losses;
+    g.rec_dropped = lg.dropped;
+    g.glitch_us_max = lg.glitch_us_max;
+    g.led = emi_test_led_state();
+    g.dac = (uint8_t)s.dac;
+    g.running = s.running;
+    g.link = ns.link;
+    return g;
+}
+
 static void log_checkpoint(void) {
+    s.cp_last = cp_sig();
     emi_rec_t r;
     memset(&r, 0, sizeof(r));
     r.type = EMI_REC_CHECKPOINT;
@@ -440,7 +457,8 @@ static void log_poll(uint32_t now) {
         log_event(link ? EMI_EV_LINK_BACK : EMI_EV_LINK_LOST, 0, 0);
     if (s.running && ns.had_link) s.link_seen = true;
     s.last_link = link;
-    if (now - s.t_checkpoint >= EMI_LOG_CHECKPOINT_MS) {
+    const emi_cp_sig_t sig = cp_sig();
+    if (emi_log_checkpoint_due(&s.cp_last, &sig, now - s.t_checkpoint)) {
         s.t_checkpoint = now;
         log_checkpoint();
     }
@@ -547,13 +565,22 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
                                 char *resp, size_t resp_cap, uint8_t *raw);
 
 /* {"cmd":"emi_log"} the log's state; with "count" (and "offset", slots from 0) also that many raw
-   64-byte slots as base64url in "data", in slot order (a host sorts them by seq). */
+   64-byte slots as base64url in "data", in slot order (a host sorts them by seq). With "after"
+   (a sequence number) in place of "offset": the slots from the first record newer than it, so a
+   viewer that keeps a copy fetches only what it does not have; "count" is then cut to the records
+   there are, and 0 when it has them all. An "after" older than the oldest record starts at the
+   oldest. The reply's "offset" says where the read started. */
 void handle_emi_log(int conn_id, const char *json) {
     if (!log_ok()) { send_error(conn_id, lg.tried ? "emi_log: no run log (W25Q)" : "emi_log: not read yet, retry after boot"); return; }
     char v[16];
     uint32_t offset = bp_json_get(json, "offset", v, sizeof(v)) ? (uint32_t)strtoul(v, NULL, 10) : 0u;
     uint32_t count  = bp_json_get(json, "count", v, sizeof(v)) ? (uint32_t)strtoul(v, NULL, 10) : 0u;
     const uint32_t max = conn_id == CH_CLOUD_CONN ? EMI_LOG_READ_MAX_CLOUD : EMI_LOG_READ_MAX;
+    if (bp_json_get(json, "after", v, sizeof(v))) {
+        uint32_t newer;
+        offset = emi_log_slot_after(&s_log, (uint32_t)strtoul(v, NULL, 10), &newer);
+        if (count > newer) count = newer;
+    }
     if (offset >= s_log.slots) count = 0;
     if (count > max) count = max;
     if (count > s_log.slots - offset) count = s_log.slots - offset;
@@ -587,7 +614,7 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
                 "\"run\":%lu,\"next_seq\":%lu,\"write_slot\":%lu,\"oldest_slot\":%lu,\"queued\":%u,"
                 "\"lost\":%lu,\"written\":%lu,\"erases\":%lu,\"write_errors\":%lu,"
                 "\"session_us_last\":%lu,\"session_us_max\":%lu,\"glitch_us_last\":%lu,\"glitch_us_max\":%lu,"
-                "\"dac_stops\":%lu,\"max_count\":%lu,\"offset\":%lu,\"count\":%lu",
+                "\"dac_stops\":%lu,\"max_count\":%lu,\"uptime_ms\":%lu,\"offset\":%lu,\"count\":%lu",
             (unsigned long)EMI_LOG_BASE, (unsigned)EMI_LOG_REC, (unsigned long)s_log.slots,
             (unsigned long)s_log.valid, (unsigned long)s_log.run, (unsigned long)s_log.next_seq,
             (unsigned long)s_log.write_slot, (unsigned long)emi_log_oldest_slot(&s_log), lg.n,
@@ -595,6 +622,7 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
             (unsigned long)s_log.write_errors, (unsigned long)lg.session_us_last,
             (unsigned long)lg.session_us_max, (unsigned long)lg.glitch_us_last,
             (unsigned long)lg.glitch_us_max, (unsigned long)lg.dac_stops, (unsigned long)max,
+            (unsigned long)HAL_GetTick(),
             (unsigned long)offset,
             (unsigned long)count);
     if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
@@ -915,6 +943,7 @@ void emi_test_poll(void) {
         log_boot();
         s.last_led = emi_test_led_state();
         s.t_checkpoint = now;
+        s.cp_last = cp_sig();
     }
     if (!s.booted) {
         if (now >= EMI_TEST_START_DELAY_MS) emi_test_start();
