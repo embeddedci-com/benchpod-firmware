@@ -2,6 +2,10 @@
 #include "boot_guard.h"
 #include "command_handler.h"
 #include "signal_engine.h"
+#include "recovery.h"
+#include "ice40_flash.h"     /* ice40_reload: the idle check's recovery (no write) */
+#include "dac_quad.h"        /* dac_quad_boot: park the outputs after a reload */
+#include "dac_limits.h"
 #include "target_power.h"
 #include "console.h"
 #include "watchdog.h"
@@ -292,6 +296,52 @@ static void handle_work(cmd_work_t *w) {
     }
 }
 
+#if !defined(BENCHPOD_EMI_TEST)
+/* The idle iCE40 check (recovery.h): every ICE40_CHECK_MS, when nothing uses the bus, ping the
+   iCE40. One that answered since boot and stops answering (an ESD hit that hung or unconfigured
+   it) is reloaded from its flash after RECOVERY_FAIL_MS (no erase, no write), at most
+   RECOVERY_RELOADS_PER_HOUR times an hour, and its outputs parked as at boot. Never an STM32 reset
+   here: that would also power-cycle the user's DUT. The EMI build has its own ladder
+   (emi_test.c). */
+#define ICE40_CHECK_MS       30000u
+#define ICE40_CHECK_FAIL_MS  2000u     /* while it fails, check this often */
+static recovery_t s_rcv;
+static bool       s_rcv_init, s_ice_seen_alive;
+static uint32_t   s_check_t, s_ping_fail_since;
+
+static void ice40_idle_check(uint32_t now) {
+    if (!boot_hw_ready()) return;
+    if (!s_rcv_init) { recovery_init(&s_rcv, now); s_rcv_init = true; s_check_t = now; }
+    if (now - s_check_t < (s_ping_fail_since ? ICE40_CHECK_FAIL_MS : ICE40_CHECK_MS)) return;
+    if (heavy_or_claimed() || capture_busy()) return;
+    s_check_t = now;
+    if (signal_engine_refresh_version()) {
+        s_ice_seen_alive = true;
+        s_ping_fail_since = 0;
+    } else if (s_ice_seen_alive && !s_ping_fail_since) {
+        s_ping_fail_since = now ? now : 1u;
+        printf("[hw] the iCE40 stopped answering\n");
+    }
+    uint32_t no_resets = RECOVERY_RESETS_MAX;   /* the idle check never resets the STM32 */
+    const uint32_t fail_ms = s_ping_fail_since ? now - s_ping_fail_since : 0u;
+    const recovery_action_t a = recovery_poll(&s_rcv, now, fail_ms, 0, &no_resets);
+    if (a == RECOVERY_ICE40_RELOAD) {
+        recovery_done(&s_rcv, a, now, &no_resets);
+        printf("[hw] recovery: the iCE40 has not answered for %lu s, reloading it from its flash\n",
+               (unsigned long)(fail_ms / 1000u));
+        const int rc = ice40_reload();
+        const bool alive = rc == 0 && signal_engine_refresh_version();
+        dac_quad_boot();                                    /* outputs parked, as at boot */
+        if (dac_limits_get()->enabled) (void)dac_limits_park_now();
+        printf("[hw] recovery: iCE40 reload %s, gateware v%u\n", alive ? "ok" : "FAILED",
+               (unsigned)signal_engine_fpga_version());
+        if (alive) s_ping_fail_since = 0;
+    } else if (recovery_exhausted(&s_rcv, now, fail_ms, no_resets)) {
+        printf("[hw] recovery: the iCE40 still does not answer and the reload limit is reached\n");
+    }
+}
+#endif
+
 static void worker_task(void *arg) {
     (void)arg;
     static cmd_work_t w;   /* static: the item is ~1.6 KB, keep it off the stack */
@@ -335,6 +385,9 @@ static void worker_task(void *arg) {
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
         status_led_service();     /* the RGB status LED follows the pod's state         */
+#if !defined(BENCHPOD_EMI_TEST)
+        ice40_idle_check(HAL_GetTick());   /* an iCE40 that stopped answering (recovery.h) */
+#endif
 #if defined(BENCHPOD_EMI_TEST)
         emi_test_poll();          /* the EMC test build's activity loop (emi_test.h)    */
 #endif

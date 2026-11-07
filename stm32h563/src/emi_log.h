@@ -11,10 +11,15 @@
  *
  *   RUN_START   at boot: run number, firmware version, reset cause, core clock, DAC mode
  *   EVENT       on a change: LED state (green -> red, red -> blue, ...), Ethernet link lost or
- *               back, the activity started or stopped
- *   CHECKPOINT  every EMI_LOG_CHECKPOINT_MS: captures, errors, frames sent and dropped, link
- *               losses, LED state, the longest DAC gap a log write caused (0: the
- *               outputs keep running through log writes, emi_test.c)
+ *               back, the activity started or stopped, a recovery step (iCE40 reload, STM32
+ *               reset, Ethernet restart; recovery.h) and its result
+ *   CHECKPOINT  captures, errors, frames sent and dropped, link losses, LED state, the longest
+ *               DAC gap a log write caused (0: the outputs keep running through log writes,
+ *               emi_test.c). Written when a value that shows trouble changed (errors, drops,
+ *               link losses, LED, link, DAC gap, lost records), at most every
+ *               EMI_LOG_CHECKPOINT_MIN_MS, and every EMI_LOG_HEARTBEAT_MS when nothing changed
+ *               (emi_log_checkpoint_due). Captures and frames sent grow all the time: they are in
+ *               every checkpoint but do not trigger one
  *
  * Every record carries a sequence number that only grows (across runs), the run number, the
  * uptime and a CRC-32 (zlib's) over its first 60 bytes. Erased flash (0xFF) is an empty slot; a
@@ -23,11 +28,13 @@
  * number, the next write goes to the slot after it. Slots are written in order; before the write
  * position reaches a sector that is not empty, that sector (the 64 oldest records) is erased.
  *
- * Capacity: 110 sectors x 64 = 7,040 slots. emi_test.c keeps 16 sectors (1,024 slots, about 80
- * hours of checkpoints) erased ahead of the write position, erased at boot, so a run never waits
- * for an erase in practice; that leaves about 6,000 records of history. A one-hour run takes
- * about 15 (start, a few events, 12 checkpoints), so the log holds roughly the last 400 one-hour
- * runs or 1,700 to 3,000 short ones; a 24-hour run takes about 300.
+ * Capacity: 110 sectors x 64 = 7,040 slots. emi_test.c keeps 16 sectors (1,024 slots) erased
+ * ahead of the write position, erased at boot, and about 6,000 records of history. A quiet hour
+ * takes about 60 records (the heartbeat), an hour with trouble all the time at most 360 (one
+ * checkpoint every 10 s), plus the events. So a lab day writes into flash erased at boot and
+ * never erases while it runs, unless it fails for more than about 2.8 hours in all; then a sector
+ * is erased between two captures (that capture waits about 60 ms, the outputs keep running). The
+ * history is about 100 quiet hours, or 16 hours of trouble.
  *
  * This file is the record format and the ring logic only, over three flash callbacks, so it runs
  * in the host tests. emi_test.c gives it the W25Q (w25q_open/close after
@@ -55,7 +62,8 @@
 #define EMI_LOG_MAX_SLOTS   (((EMI_LOG_END - EMI_LOG_BASE) / EMI_LOG_SECTOR) * EMI_LOG_PER_SECTOR)
 
 #define EMI_LOG_MAGIC       0x4C45u   /* "EL" as stored (little-endian) */
-#define EMI_LOG_CHECKPOINT_MS  (5u * 60u * 1000u)
+#define EMI_LOG_CHECKPOINT_MIN_MS  (10u * 1000u)   /* a changed value: at most this often */
+#define EMI_LOG_HEARTBEAT_MS       (60u * 1000u)   /* nothing changed: this often */
 
 typedef enum {
     EMI_REC_RUN_START  = 1,
@@ -69,6 +77,7 @@ typedef enum {
     EMI_EV_LINK_BACK  = 3,   /* the Ethernet link came back */
     EMI_EV_STARTED    = 4,   /* the activity started (boot start or `emi start`) */
     EMI_EV_STOPPED    = 5,   /* `emi stop` */
+    EMI_EV_RECOVERY   = 6,   /* a recovery step (recovery.h); the text says which and how it went */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */
@@ -102,6 +111,15 @@ typedef struct {
         } cp;
     } u;
 } emi_rec_t;
+
+/* What decides whether a checkpoint is due: the values that show trouble. */
+typedef struct {
+    uint32_t errors, net_drops, link_losses, rec_dropped, glitch_us_max;
+    uint8_t  led, dac, running, link;
+} emi_cp_sig_t;
+/* A checkpoint is due when `since_ms` (since the last one) reached EMI_LOG_HEARTBEAT_MS, or
+   reached EMI_LOG_CHECKPOINT_MIN_MS and `now` differs from `last`. */
+bool emi_log_checkpoint_due(const emi_cp_sig_t *last, const emi_cp_sig_t *now, uint32_t since_ms);
 
 /* 64 bytes with the magic and CRC. */
 void emi_log_encode(const emi_rec_t *r, uint8_t out[EMI_LOG_REC]);
@@ -158,5 +176,9 @@ bool emi_log_slot_good(const emi_log_t *l, uint32_t slot);
    fewer than n, then the walk starts at emi_log_oldest_slot. */
 uint32_t emi_log_slot_back(const emi_log_t *l, uint32_t n);
 uint32_t emi_log_slot_addr(const emi_log_t *l, uint32_t slot);
+/* The slot of the first record newer than sequence number `after` (the oldest slot when `after`
+   is older than every record) and, in *newer, how many records are newer (0: none, the slot is
+   then write_slot). For a viewer that keeps a copy and asks only for what it does not have. */
+uint32_t emi_log_slot_after(const emi_log_t *l, uint32_t after, uint32_t *newer);
 
 #endif /* EMI_LOG_H */

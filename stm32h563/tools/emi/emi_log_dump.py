@@ -2,7 +2,8 @@
 """Download and decode the run log of a BenchPod running the EMI test build.
 
 The EMI test build keeps every run (one power-on) in the W25Q: a RUN_START record at boot, an
-EVENT on every LED or link change, a CHECKPOINT every 5 minutes (src/emi_log.h). This reads the
+EVENT on every LED or link change, a CHECKPOINT with the counters (when a value that shows trouble
+changed, at most every 10 s, else once a minute; src/emi_log.h). This reads the
 whole ring with the JSON command emi_log, a chunk at a time, and prints it oldest first, then a
 summary per run.
 
@@ -30,7 +31,7 @@ TYPES = {1: "START", 2: "EVENT", 3: "CHECK"}
 LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
-          5: "activity stopped"}
+          5: "activity stopped", 6: "recovery"}
 
 
 def _str(b):
@@ -110,6 +111,8 @@ def fmt(r):
         return head + (f"START fw {r['fw']} reset {r['reset']} core {r['core_mhz']} MHz dac {r['dac']} "
                        f"net {r['net_mbit']} Mbit/s gw {r['gw_version']}")
     if r["type"] == "EVENT":
+        if r["kind"] == "recovery":
+            return head + f"EVENT recovery: {r['text']}, captures {r['captures']}, errors {r['errors']}"
         what = f"led {r['led_from']} -> {r['led_to']}" if r["is_led"] else r["kind"]
         last = f", last: {r['text']}" if r["text"] else ""
         return head + (f"EVENT {what}, captures {r['captures']}, errors {r['errors']}, "

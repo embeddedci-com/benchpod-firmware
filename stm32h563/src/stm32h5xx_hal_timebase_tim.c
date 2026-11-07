@@ -19,13 +19,26 @@
  */
 #include "stm32h5xx_hal.h"
 
+static uint32_t last_cyc = 0U;
+static uint32_t cyc_rem  = 0U;   /* sub-ms cycle remainder */
+
+/* The DWT is in the debug domain: a system reset (watchdog, `reboot`, OTA, a recovery reset) does
+   not stop or clear CYCCNT. Left as it was, the first HAL_GetTick after such a reset added the
+   whole count (up to 2^32 cycles, ~67 s at the boot's 64 MHz HSI), so the uptime started 0 to
+   about a minute off and every boot-relative delay ran short. Zero it once, at the first
+   HAL_InitTick of this boot (HAL_Init, before any HAL_GetTick); later calls (a clock change)
+   leave it running. */
 static void dwt_cyccnt_enable(void)
 {
-    if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
-        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    static uint8_t zeroed = 0U;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if (!zeroed) {
+        zeroed = 1U;
         DWT->CYCCNT = 0U;
-        DWT->CTRL  |= DWT_CTRL_CYCCNTENA_Msk;
+        last_cyc = 0U;
+        cyc_rem = 0U;
     }
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
 HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
@@ -47,9 +60,6 @@ HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
  */
 uint32_t HAL_GetTick(void)
 {
-    static uint32_t last_cyc = 0U;
-    static uint32_t cyc_rem  = 0U;   /* sub-ms cycle remainder */
-
     uint32_t cyc_per_ms = SystemCoreClock / 1000U;
     if (cyc_per_ms == 0U) {
         return uwTick;               /* SystemCoreClock not established yet */

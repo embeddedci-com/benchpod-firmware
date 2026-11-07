@@ -61,3 +61,4 @@ esp32-hosted-slave/work/
 
 # the calibration scripts' Python environment (calibration/scripts/requirements-host.txt)
 calibration/.venv/
+__pycache__/

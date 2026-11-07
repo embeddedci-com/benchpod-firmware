@@ -130,6 +130,39 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
+/* Reload the iCE40 from its config flash as it is: no erase, no write (ice40_flash.h). The same
+   PSRAM handling around the configuration as the image switch above. */
+int ice40_reload(void)
+{
+    psram_reset_to_spi();
+    int rc = ice40_flash_boot();
+    psram_init();
+    psram_bus_handover();
+    signal_engine_on_gateware_reconfigured();
+    command_handler_on_gateware_reconfigured();
+    return rc;
+}
+
+/* The image the iCE40 boots from equals gateware slot gw0 or gw1 (a read compare, no write). */
+int ice40_boot_image_intact(void)
+{
+    int known = 0;
+    for (int n = 0; n < 2; n++) {
+        blob_id_t id = n ? BLOB_GW1 : BLOB_GW0;
+        if (!blob_store_present(id)) continue;
+        known = 1;
+        psram_reset_to_spi();
+        int same = ice40_flash_matches_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
+        psram_init();
+        psram_bus_handover();
+        signal_engine_on_gateware_reconfigured();
+        command_handler_on_gateware_reconfigured();
+        if (same == 1) return 1;
+        if (same < 0) return -1;
+    }
+    return known ? 0 : -1;
+}
+
 #define CONSOLE_LINE_MAX 128
 
 /* Formatted output to a sink. */
@@ -187,6 +220,7 @@ static void cmd_help(console_out_t out, void *ctx)
     out(ctx,
         "development build only:\r\n"
         "  test-bootloop [net|hw] yes | test-hang net|hw yes | test-crash yes   prove safe mode / crash reports\r\n"
+        "  test-ice40-hold yes  hold the iCE40 in reset: the idle check reloads it by itself\r\n"
         "  i2c-scan | ina | expdump   I2C bus scan, INA monitors, expander dump\r\n"
         "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
         "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
@@ -202,7 +236,9 @@ static void cmd_help(console_out_t out, void *ctx)
         "                                        or all three (quad-DAC boards, their default)\r\n"
         "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n"
         "  emi log [n|all]                       the run log in the W25Q: its state, and the last n records\r\n"
-        "                                        (default 20) or all of them, printed on the device log\r\n");
+        "                                        (default 20) or all of them, printed on the device log\r\n"
+        "  emi fault ice40|ice40-stuck|off       test the recovery: hold the iCE40 in reset once, or after\r\n"
+        "                                        every reload and across resets (until `off` or power-off)\r\n");
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
@@ -595,6 +631,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
            iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
         op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+        op(out, ctx, "  ice40boot : %s\r\n", ice40_boot_note());
         /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
         op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
            (unsigned long)psram_bus_violations());
@@ -743,9 +780,17 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  (records printed on the device log)\r\n");
             return;
         }
+        else if (!strcmp(sub, "fault")) {
+            /* Test the recovery ladder (recovery.h) with a failure made on purpose. */
+            const char *f = argc >= 3 ? argv[2] : "";
+            if (!emi_test_fault(f)) { op(out, ctx, "usage: emi fault ice40|ice40-stuck|off\r\n"); return; }
+            op(out, ctx, "  emi fault %s\r\n", f);
+            return;
+        }
         else if (strcmp(sub, "status")) {
             op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]\r\n");
+                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]"
+                         " | emi fault ice40|ice40-stuck|off\r\n");
             return;
         }
         char line[256];
@@ -875,6 +920,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         } else {
             watchdog_test_hang(task);
             op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
+        }
+    } else if (!strcmp(argv[0], "test-ice40-hold")) {
+        /* Prove the idle iCE40 check (hw_worker.c, recovery.h): hold the iCE40 in reset as an ESD
+           hit that unconfigured it would leave it; the pod reloads it from its flash by itself. */
+        if (argc < 2 || strcmp(argv[1], "yes")) {
+            op(out, ctx, "  test-ice40-hold yes : hold the iCE40 in reset; the idle check reloads it (~10 s)\r\n");
+        } else {
+            ice40_hold_off_bus();
+            op(out, ctx, "  the iCE40 is held in reset\r\n");
         }
 #endif
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */

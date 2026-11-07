@@ -85,6 +85,15 @@ void emi_log_encode(const emi_rec_t *r, uint8_t out[EMI_LOG_REC]) {
     put32(out + 60, crc32_le(out, 60));
 }
 
+bool emi_log_checkpoint_due(const emi_cp_sig_t *last, const emi_cp_sig_t *now, uint32_t since_ms) {
+    if (since_ms >= EMI_LOG_HEARTBEAT_MS) return true;
+    if (since_ms < EMI_LOG_CHECKPOINT_MIN_MS) return false;
+    return last->errors != now->errors || last->net_drops != now->net_drops ||
+           last->link_losses != now->link_losses || last->rec_dropped != now->rec_dropped ||
+           last->glitch_us_max != now->glitch_us_max || last->led != now->led ||
+           last->dac != now->dac || last->running != now->running || last->link != now->link;
+}
+
 bool emi_log_blank(const uint8_t in[EMI_LOG_REC]) {
     for (unsigned i = 0; i < EMI_LOG_REC; i++) if (in[i] != 0xFF) return false;
     return true;
@@ -327,6 +336,17 @@ int emi_log_append(emi_log_t *l, emi_rec_t *r) {
 
 uint32_t emi_log_oldest_slot(const emi_log_t *l) {
     return (l->write_slot + l->ready) % l->slots;
+}
+
+uint32_t emi_log_slot_after(const emi_log_t *l, uint32_t after, uint32_t *newer) {
+    const uint32_t newest = l->any ? l->next_seq - 1u : 0u;
+    uint32_t n = (l->any && (int32_t)(newest - after) > 0) ? newest - after : 0u;
+    if (n > l->valid) n = l->valid;
+    *newer = n;
+    if (!n) return l->write_slot;
+    uint32_t slot = emi_log_slot_back(l, n);
+    if (slot >= l->slots) slot = emi_log_oldest_slot(l);
+    return slot;
 }
 
 uint32_t emi_log_slot_back(const emi_log_t *l, uint32_t n) {

@@ -98,6 +98,8 @@ uint8_t signal_engine_fpga_version(void);
    flash-ice40). Returns true iff the FPGA answered; leaves the cache intact on
    failure. Quiet — for `status`; use fpga_ping() for the verbose bring-up path. */
 bool signal_engine_refresh_version(void);
+/* What the boot self-test did about the iCE40 (passed, reloaded, rewrote its flash), for status. */
+const char *ice40_boot_note(void);
 
 /* Minimum gateware version that supports streaming DAC replay from PSRAM. */
 #define DAC_DEEP_REPLAY_MIN_GW  17u

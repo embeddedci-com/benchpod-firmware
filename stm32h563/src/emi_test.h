@@ -41,12 +41,13 @@
  * same line goes out of the Ethernet port as a broadcast frame on the stream's EtherType, starting
  * with "BPMON" (plus the run number, reset cause, uptime and the stream's sequence number), from
  * boot on and whether the loop runs or not: a laptop on the cable reads it in Wireshark or with
- * tools/emi/emi_watch.py, with no IP address.
+ * tools/emi/emi_watch.py, with no IP address. With an address, port 80 serves a page for the lab
+ * (emi_http.h) that shows the state and keeps a copy of the run log in the browser.
  *
  * Every run is also kept in the run log in the W25Q (emi_log.h): a RUN_START at boot, an EVENT on
- * every LED or link change, a CHECKPOINT every 5 minutes. `emi log` prints it, the JSON command
- * emi_log reads it out (tools/emi/emi_log_dump.py). A log write stops the DAC for a moment (the
- * W25Q shares the PSRAM bus): written between two captures, the DAC started again right after.
+ * every LED or link change, a CHECKPOINT on a change (at most every 10 s) or once a minute.
+ * `emi log` prints it, the JSON command emi_log reads it out (tools/emi/emi_log_dump.py). Log writes go between two captures (the W25Q
+ * shares the PSRAM bus); the DAC outputs keep running through them.
  */
 
 /* Wait this long after boot before starting, so the network and cloud link come up first. */
@@ -134,5 +135,11 @@ size_t emi_test_json(char *buf, size_t cap);
    ring whole (conn_tx): {"running":true,"led":"green","failed_since_power_on":false,
    "captures":40,"errors":0,"net_link":true,"run":3} */
 size_t emi_test_json_short(char *buf, size_t cap);
+
+/* Test the recovery ladder with a failure made on purpose (console `emi fault`): "ice40" holds the
+   iCE40 in reset once (as if an ESD hit unconfigured it: captures fail, the ladder reloads it);
+   "ice40-stuck" holds it again after every reload and across the ladder's STM32 resets, to see
+   the reset and the limits (cleared by "off" or a power-off). false for an unknown name. */
+bool emi_test_fault(const char *name);
 
 #endif

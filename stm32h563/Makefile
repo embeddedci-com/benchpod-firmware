@@ -57,6 +57,7 @@ MBEDTLS     := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 #######################################
 C_SOURCES := \
   src/main.c \
+  src/recovery.c \
   src/system_stm32h5xx.c \
   src/stm32h5xx_it.c \
   src/stm32h5xx_hal_timebase_tim.c \
@@ -304,7 +305,7 @@ ifeq ($(RELEASE),1)
 $(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_EMI_TEST=1
-C_SOURCES += src/emi_test.c src/emi_log.c
+C_SOURCES += src/emi_test.c src/emi_log.c src/emi_http.c $(BUILD_DIR)/gen/emi_page.c
 # EMI_LOG_SECTORS=<n>: shrink the run log (emi_log.h) to n sectors (>= 2) to watch it wrap on a bench.
 ifneq ($(EMI_LOG_SECTORS),)
 DEFS      += -DEMI_LOG_TEST_SECTORS=$(EMI_LOG_SECTORS)
@@ -488,6 +489,14 @@ test:
 # MBEDTLS_SSL_MAX_CONTENT_LEN (now split into IN/OUT) — alias it back for this file only.
 $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
                                                -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
+
+# The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
+$(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py
+	@mkdir -p $(dir $@)
+	python3 tools/emi/embed_page.py $< $@
+
+$(BUILD_DIR)/emi_page.o: $(BUILD_DIR)/gen/emi_page.c | $(BUILD_DIR)
+	$(CC) -c $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@

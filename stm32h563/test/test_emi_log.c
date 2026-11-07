@@ -231,6 +231,60 @@ static void test_slot_back(void) {
     CHECK(emi_log_oldest_slot(&l) == 0);
 }
 
+static void test_checkpoint_due(void) {
+    emi_cp_sig_t a, b;
+    memset(&a, 0, sizeof(a));
+    a.led = 2; a.running = 1; a.link = 1;
+    b = a;
+    CHECK(!emi_log_checkpoint_due(&a, &b, 0));
+    CHECK(!emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));        /* nothing changed */
+    CHECK(!emi_log_checkpoint_due(&a, &b, EMI_LOG_HEARTBEAT_MS - 1));
+    CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_HEARTBEAT_MS));              /* the heartbeat */
+    b.errors = 1;
+    CHECK(!emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS - 1));    /* not yet */
+    CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.net_drops = 3;     CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.link_losses = 1;   CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.led = 3;           CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.link = 0;          CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.glitch_us_max = 5; CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+    b = a; b.rec_dropped = 1;   CHECK(emi_log_checkpoint_due(&a, &b, EMI_LOG_CHECKPOINT_MIN_MS));
+}
+
+/* emi_log_slot_after: a viewer's "everything after seq N", across a wrap and a spoiled slot. */
+static void test_slot_after(void) {
+    wipe();
+    emi_log_t l;
+    CHECK(emi_log_scan(&l, &IO, BASE, 3) == 0);
+    uint32_t newer;
+    CHECK(emi_log_slot_after(&l, 0, &newer) == l.write_slot && newer == 0);   /* empty */
+    CHECK(emi_log_prepare(&l, 2 * EMI_LOG_PER_SECTOR) >= 0);
+    for (int i = 0; i < 10; i++) { emi_rec_t r = checkpoint((uint32_t)i); CHECK(emi_log_append(&l, &r) == 0); }
+    /* seq 1..10 in slots 0..9 */
+    CHECK(emi_log_slot_after(&l, 10, &newer) == l.write_slot && newer == 0);  /* has them all */
+    CHECK(emi_log_slot_after(&l, 99, &newer) == l.write_slot && newer == 0);  /* ahead: none */
+    CHECK(emi_log_slot_after(&l, 7, &newer) == 7 && newer == 3);
+    CHECK(emi_log_slot_after(&l, 0, &newer) == 0 && newer == 10);
+    /* Wrap: 3 sectors, write until the first sector was erased and reused. */
+    for (int i = 0; i < 3 * (int)EMI_LOG_PER_SECTOR; i++) {
+        if (l.ready == 0) CHECK(emi_log_prepare(&l, EMI_LOG_PER_SECTOR) >= 0);
+        emi_rec_t r = checkpoint((uint32_t)i);
+        CHECK(emi_log_append(&l, &r) == 0);
+    }
+    const uint32_t newest = l.next_seq - 1u;
+    uint32_t slot = emi_log_slot_after(&l, newest - 5, &newer);
+    CHECK(newer == 5);
+    emi_rec_t r;
+    uint8_t buf[EMI_LOG_REC];
+    f_read(NULL, emi_log_slot_addr(&l, slot), buf, EMI_LOG_REC);
+    CHECK(emi_log_decode(buf, &r) && r.seq == newest - 4);
+    /* Older than everything still there: the oldest record. */
+    slot = emi_log_slot_after(&l, 1, &newer);
+    CHECK(slot == emi_log_oldest_slot(&l) && newer == l.valid);
+    f_read(NULL, emi_log_slot_addr(&l, slot), buf, EMI_LOG_REC);
+    CHECK(emi_log_decode(buf, &r) && r.seq == newest - l.valid + 1);
+}
+
 int main(void) {
     test_encode_decode();
     test_empty_scan_and_first_run();
@@ -238,6 +292,8 @@ int main(void) {
     test_prepare_keeps_newest();
     test_spoiled_slot();
     test_slot_back();
+    test_checkpoint_due();
+    test_slot_after();
     if (failures) { printf("test_emi_log: %d FAILED\n", failures); return 1; }
     printf("test_emi_log: all passed\n");
     return 0;
