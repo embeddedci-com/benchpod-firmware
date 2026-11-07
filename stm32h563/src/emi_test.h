@@ -136,4 +136,10 @@ size_t emi_test_json(char *buf, size_t cap);
    "captures":40,"errors":0,"net_link":true,"run":3} */
 size_t emi_test_json_short(char *buf, size_t cap);
 
+/* Test the recovery ladder with a failure made on purpose (console `emi fault`): "ice40" holds the
+   iCE40 in reset once (as if an ESD hit unconfigured it: captures fail, the ladder reloads it);
+   "ice40-stuck" holds it again after every reload and across the ladder's STM32 resets, to see
+   the reset and the limits (cleared by "off" or a power-off). false for an unknown name. */
+bool emi_test_fault(const char *name);
+
 #endif

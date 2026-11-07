@@ -71,7 +71,7 @@ small{color:var(--muted)}
 const KEY = "bp-emi:" + location.host;
 const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"};
 const DACS = ["sine", "dc", "current", "off", "all"];
-const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped"};
+const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped", 6: "recovery"};
 const MAX_SAMPLES = 20000;
 const $ = id => document.getElementById(id);
 
@@ -104,6 +104,7 @@ function decode(b) {
 function details(r) {
   if (r.type === "START") return `pod started: firmware ${r.fw}, reset cause ${r.reset}, core ${r.core} MHz, DAC ${r.dac}, Ethernet stream ${r.mbit} Mbit/s, gateware ${r.gw}`;
   const last = r.text ? `, last error: ${r.text}` : "";
+  if (r.type === "EVENT" && r.kind === 6) return `recovery: ${r.text}, captures ${r.captures}, errors ${r.errors}`;
   if (r.type === "EVENT") return (r.kind === 1 ? `LED ${r.from} → ${r.to}` : (EVENTS[r.kind] || "event " + r.kind)) + `, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}` + last;
   return `${r.running ? "running" : "stopped"}, DAC ${r.dac}, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}, dropped ${r.drops}, link ${r.link ? "up" : "down"}, link losses ${r.losses}, DAC gap max ${r.gap} us` + (r.lost ? `, records lost ${r.lost}` : "") + last;
 }

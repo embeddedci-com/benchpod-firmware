@@ -57,6 +57,7 @@ MBEDTLS     := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 #######################################
 C_SOURCES := \
   src/main.c \
+  src/recovery.c \
   src/system_stm32h5xx.c \
   src/stm32h5xx_it.c \
   src/stm32h5xx_hal_timebase_tim.c \

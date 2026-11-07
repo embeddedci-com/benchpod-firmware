@@ -76,6 +76,43 @@ static int mem_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
     return 0;
 }
 
+/* Hand the bus to the iCE40, release it from reset and wait for CDONE: it reads its
+   configuration from the flash. The bus is the STM32's on entry (psram_bus_acquire, flash_pins). */
+static int release_and_wait_cdone(void)
+{
+    /* Hand the config-flash bus FULLY to the iCE40 before releasing it from reset (previously
+       CRESET was released while the STM32 still owned the bus, so the iCE40 came out of reset
+       into a flash it couldn't reach and CDONE never asserted).  Handover, not a plain release:
+       an outer hold left open here would keep PG0 high through the config read. */
+    psram_bus_release();
+    psram_bus_handover();
+    /* ...BUT hold the PSRAM /CS DRIVEN HIGH (not the Hi-Z psram_bus_release leaves) for the whole
+       config read: the shared SCLK/SO/SI edges the iCE40 clocks out can capacitively drag a Hi-Z
+       (pulled-up) /CS low, glitch-selecting the PSRAM so it drives IO0(=SO) and corrupts the
+       bitstream — an intermittent "CDONE never rose / iCE40 mute after reflash".  A driven high
+       resists it.  Cleaned up by the psram_init()/psram_bus_acquire() ice40_reflash_image() runs. */
+    psram_cs_park_high();
+    {
+        GPIO_InitTypeDef gz = {0};
+        gz.Mode = GPIO_MODE_ANALOG;          /* PE3 (flash /CS) -> Hi-Z (iCE40 drives it in config) */
+        gz.Pin  = ICE_FLASH_CS_PIN;
+        HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
+    }
+    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);  /* release iCE40 */
+    {
+        uint32_t t0 = HAL_GetTick();
+        while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {
+            if (HAL_GetTick() - t0 > CDONE_TIMEOUT_MS) {
+                printf("[ice40] CDONE never went high — configuration failed\n");
+                ice40_hold_off_bus();
+                return -1;
+            }
+        }
+    }
+    printf("[ice40] reconfigured OK (CDONE high)\n");
+    return 0;
+}
+
 int ice40_flash_program(const uint8_t *data, size_t len)
 {
     if (!data) return -1;
@@ -132,37 +169,7 @@ int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
     }
     printf("[ice40] verify OK (%u bytes)\n", (unsigned)len);
 
-    /* Hand the config-flash bus FULLY to the iCE40 before releasing it from reset (previously
-       CRESET was released while the STM32 still owned the bus, so the iCE40 came out of reset
-       into a flash it couldn't reach and CDONE never asserted).  Handover, not a plain release:
-       an outer hold left open here would keep PG0 high through the config read. */
-    psram_bus_release();
-    psram_bus_handover();
-    /* ...BUT hold the PSRAM /CS DRIVEN HIGH (not the Hi-Z psram_bus_release leaves) for the whole
-       config read: the shared SCLK/SO/SI edges the iCE40 clocks out can capacitively drag a Hi-Z
-       (pulled-up) /CS low, glitch-selecting the PSRAM so it drives IO0(=SO) and corrupts the
-       bitstream — an intermittent "CDONE never rose / iCE40 mute after reflash".  A driven high
-       resists it.  Cleaned up by the psram_init()/psram_bus_acquire() ice40_reflash_image() runs. */
-    psram_cs_park_high();
-    {
-        GPIO_InitTypeDef gz = {0};
-        gz.Mode = GPIO_MODE_ANALOG;          /* PE3 (flash /CS) -> Hi-Z (iCE40 drives it in config) */
-        gz.Pin  = ICE_FLASH_CS_PIN;
-        HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
-    }
-    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);  /* release iCE40 */
-    {
-        uint32_t t0 = HAL_GetTick();
-        while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {
-            if (HAL_GetTick() - t0 > CDONE_TIMEOUT_MS) {
-                printf("[ice40] CDONE never went high — configuration failed\n");
-                ice40_hold_off_bus();
-                return -1;
-            }
-        }
-    }
-    printf("[ice40] reconfigured OK (CDONE high)\n");
-    return 0;
+    return release_and_wait_cdone();
 
 fail:
     if (erased) {
@@ -172,6 +179,59 @@ fail:
     }
     psram_bus_release();
     return -1;
+}
+
+/* Reload the iCE40 from what its config flash holds now: reset it and let it read its bitstream,
+   with no erase and no write. For a fabric that hung or lost its configuration (ESD), and the
+   first step of every recovery; rewriting the flash is only for an image that is damaged. */
+int ice40_flash_boot(void)
+{
+    psram_bus_acquire();
+    flash_pins();
+    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);  /* iCE40 in reset */
+    sleep_ms(2);
+    w25q_wake();
+    sleep_ms(1);
+    uint8_t id[3] = {0};
+    if (w25q_read_id(id) != 0 || id[0] == 0x00 || id[0] == 0xFF) {
+        printf("[ice40] flash not responding (ID %02x %02x %02x): not reloaded\n", id[0], id[1], id[2]);
+        HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);
+        psram_bus_release();
+        return -1;
+    }
+    return release_and_wait_cdone();
+}
+
+/* Compare the config flash from offset 0 with `len` bytes of a source (a blob slot): 1 = equal,
+   0 = differs, <0 = could not read. Holds the bus and the iCE40 in reset while reading, then lets
+   the iCE40 reconfigure from the flash as it was. */
+static uint32_t s_mismatch_at = 0xFFFFFFFFu;
+uint32_t ice40_flash_last_mismatch(void) { return s_mismatch_at; }
+
+int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len)
+{
+    static uint8_t pg[W25Q_PAGE], rb[W25Q_PAGE];
+    psram_bus_acquire();
+    flash_pins();
+    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);
+    sleep_ms(2);
+    w25q_wake();
+    sleep_ms(1);
+    int same = 1;
+    for (uint32_t a = 0; a < len; a += W25Q_PAGE) {
+        uint32_t n = (len - a < W25Q_PAGE) ? (uint32_t)(len - a) : W25Q_PAGE;
+        if (rd(ctx, a, pg, n) != 0 || w25q_read(a, rb, n) != 0) { same = -1; break; }
+        if (memcmp(pg, rb, n) != 0) {
+            uint32_t k = 0; while (k < n && pg[k] == rb[k]) k++;
+            printf("[ice40] flash image differs at 0x%06lx: slot %02x, flash %02x\n",
+                   (unsigned long)(a + k), pg[k], rb[k]);
+            s_mismatch_at = a + k;
+            same = 0;
+            break;
+        }
+    }
+    (void)release_and_wait_cdone();
+    return same;
 }
 
 int ice40_is_configured(void) {
