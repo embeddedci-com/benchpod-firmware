@@ -13,3 +13,18 @@
 [submodule "stm32h563/lib/tinyusb"]
 	path = stm32h563/lib/tinyusb
 	url = https://github.com/hathach/tinyusb.git
+[submodule "stm32h563/lib/stm32cube/stm32h5xx_hal_driver"]
+	path = stm32h563/lib/stm32cube/stm32h5xx_hal_driver
+	url = https://github.com/STMicroelectronics/stm32h5xx_hal_driver.git
+[submodule "stm32h563/lib/stm32cube/cmsis_device_h5"]
+	path = stm32h563/lib/stm32cube/cmsis_device_h5
+	url = https://github.com/STMicroelectronics/cmsis_device_h5.git
+[submodule "stm32h563/lib/stm32cube/cmsis_core"]
+	path = stm32h563/lib/stm32cube/cmsis_core
+	url = https://github.com/STMicroelectronics/cmsis-core.git
+[submodule "stm32h563/lib/stm32cube/stm32-lan8742"]
+	path = stm32h563/lib/stm32cube/stm32-lan8742
+	url = https://github.com/STMicroelectronics/stm32-lan8742.git
+[submodule "stm32h563/lib/stm32cube/stm32-mw-mbedtls"]
+	path = stm32h563/lib/stm32cube/stm32-mw-mbedtls
+	url = https://github.com/STMicroelectronics/stm32-mw-mbedtls.git

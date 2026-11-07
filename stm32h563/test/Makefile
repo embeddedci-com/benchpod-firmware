@@ -86,11 +86,11 @@ SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
                  $(addprefix $(SCPI_LIB)/src/,error.c expression.c fifo.c ieee488.c \
                    lexer.c minimal.c parser.c units.c utils.c)
 
-# OTA staging/verify (src/ota.c). It hashes with mbedTLS, which lives in the STM32Cube tree the
-# firmware build already needs, so this one suite is conditional: without Cube the rest of the
+# OTA staging/verify (src/ota.c). It hashes with mbedTLS (the lib/stm32cube/stm32-mw-mbedtls
+# submodule), so this one suite is conditional: without the submodule checked out the rest of the
 # host tests still build and run, and `make test` says why this was skipped rather than failing.
-CUBE     ?= /opt/STM32CubeH5
-MBEDTLS  := $(CUBE)/Middlewares/Third_Party/mbed-crypto
+STM32CUBE ?= $(abspath ../lib/stm32cube)
+MBEDTLS  := $(STM32CUBE)/stm32-mw-mbedtls
 MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
 # Signed-manifest check (src/fw_sign.c) on the real Monocypher; fw_sign_keys_gen.h here holds the
 # test vectors' key (vectors/, made by tools/fwsign.py vectors).
@@ -561,7 +561,7 @@ ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_esp_rom_job > build/test_esp_rom_job.log || { cat build/test_esp_rom_job.log; exit 1; }
 	@tail -n 1 build/test_esp_rom_job.log
 else
-	@echo "SKIP test_ota, test_blob_store, test_cloud_extras and test_esp_rom_job (mbedTLS not found under $(MBEDTLS); set CUBE=<path to STM32CubeH5>)"
+	@echo "SKIP test_ota, test_blob_store, test_cloud_extras and test_esp_rom_job (mbedTLS not found under $(MBEDTLS); run git submodule update --init stm32h563/lib/stm32cube/stm32-mw-mbedtls)"
 endif
 	@$(MAKE) --no-print-directory docs-check
 

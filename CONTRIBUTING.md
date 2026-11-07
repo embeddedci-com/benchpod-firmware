@@ -12,7 +12,7 @@ Thanks for helping out. Issues and pull requests are welcome.
   ```bash
   git submodule update --init --recursive
   make -C stm32h563/test run        # host tests
-  make -C stm32h563 -j8 all         # firmware build (needs arm-none-eabi-gcc and STM32CubeH5)
+  make -C stm32h563 -j8 all         # firmware build (needs arm-none-eabi-gcc; git submodule update --init --recursive)
   make -C ice40 PNR_STRICT=1 test   # gateware simulation (needs the OSS CAD Suite)
   ```
 

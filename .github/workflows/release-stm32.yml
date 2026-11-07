@@ -35,9 +35,7 @@ on:
         description: "Public release tag to publish (e.g. v0.0.6)"
         required: true
 
-# CUBE = STM32CubeH5 SDK version referenced in place by stm32h563/Makefile.
 env:
-  CUBE_VERSION: v1.6.0
   TARGET_REPO: embeddedci-com/benchpod-firmware
 
 permissions:
@@ -122,21 +120,6 @@ jobs:
         with:
           release: "13.3.Rel1"
 
-      - name: Cache STM32CubeH5 SDK
-        id: cube-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/STM32CubeH5
-          key: stm32cubeh5-${{ env.CUBE_VERSION }}
-
-      - name: Fetch STM32CubeH5 SDK
-        if: steps.cube-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "${CUBE_VERSION}" \
-            --recurse-submodules --shallow-submodules \
-            https://github.com/STMicroelectronics/STM32CubeH5.git \
-            "${{ runner.temp }}/STM32CubeH5"
-
       # The STM32 build .incbin's the ESP32-C3 esp-hosted slave image; it's a
       # vendored binary and intentionally not committed (gitignored *.bin), so a
       # fresh checkout must produce it first (stm32h563/Makefile, `fetch` target)
@@ -175,7 +158,7 @@ jobs:
 
       - name: Build STM32 firmware
         # RELEASE=1: trust only keys/release-N.pub, never a developer key (fw_sign.h).
-        run: make -C stm32h563 RELEASE=1 CUBE="${{ runner.temp }}/STM32CubeH5"
+        run: make -C stm32h563 RELEASE=1
 
       - name: Check the blobs that go with this firmware are all there
         run: |
