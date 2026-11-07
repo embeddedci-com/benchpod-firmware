@@ -31,7 +31,11 @@
 #include <stdint.h>
 
 #define RECOVERY_FAIL_MS             10000u   /* captures failing this long: start the ladder */
-#define RECOVERY_RELOAD_GAP_MS       30000u   /* between reloads, and before the reset */
+#define RECOVERY_RELOAD_GAP_MS       10000u   /* between reloads, and before the reset */
+/* So failing captures from t0 get reloads at t0+10 s and t0+20 s and the reset at t0+30 s; the
+   boot and the EMI loop's quick start after a recovery reset (EMI_TEST_RECOVERY_START_MS) have it
+   running again by about t0+45 s, inside the 60 s of the lab's criterion B. (Was 30 s apart:
+   the reset came at t0+70 s.) */
 #define RECOVERY_RELOADS_PER_EPISODE 2u
 #define RECOVERY_RELOADS_PER_HOUR    6u
 #define RECOVERY_RESETS_MAX          2u

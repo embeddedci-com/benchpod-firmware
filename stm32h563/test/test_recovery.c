@@ -52,6 +52,9 @@ static void test_ladder_order(void) {
     CHECK(t.first_reload == 1000 + RECOVERY_FAIL_MS);
     CHECK(t.resets == RECOVERY_RESETS_MAX);
     CHECK(t.first_reset == t.first_reload + 2 * RECOVERY_RELOAD_GAP_MS);
+    /* The lab's criterion B: running again within 60 s of the failure. The reset must leave room
+       for the boot and the loop's quick start (EMI_TEST_RECOVERY_START_MS) after it. */
+    CHECK(t.first_reset - 1000 <= 30000);
     CHECK(resets == RECOVERY_RESETS_MAX);
     CHECK(recovery_exhausted(&r, 300000, 299000, resets));
     CHECK(!recovery_exhausted(&r, 300100, 299100, resets));   /* once per episode */

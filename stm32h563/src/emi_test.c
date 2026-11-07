@@ -24,6 +24,7 @@
 #include "lwip/pbuf.h"
 #include "recovery.h"
 #include "ice40_flash.h"                /* ice40_reload: the recovery's iCE40 step (no write) */
+#include "target_power.h"               /* power_poll_emi: an eFuse that tripped */
 #include "net_server.h"                 /* net_eth_restart */
 #include "boot_guard.h"                 /* boot_guard_planned_reset */
 
@@ -50,6 +51,14 @@ static const char *const k_dac_names[] = { "sine", "dc", "current", "off", "all"
    that the LED stays blue until power is removed (status_led.h). A missing Ethernet link stays red
    for as long as it lasts. */
 #define EMI_LED_FAIL_MS  5000u
+/* A capture still in flight after this long has hung (the loop's take well under 2 s): it counts
+   as failing from when it went out, for the LED and the recovery ladder alike. */
+#define EMI_CAP_HUNG_MS  10000u
+/* An eFuse that trips on the DUT supply (ESD or a surge on the target power) is a failure the
+   lab must see (red, then blue), and the loop turns that supply off and on again after
+   EMI_EFUSE_RETRY_MS so it can recover by itself, at most EMI_EFUSE_RETRIES_PER_HOUR times. */
+#define EMI_EFUSE_RETRY_MS          2000u
+#define EMI_EFUSE_RETRIES_PER_HOUR  6u
 
 /* Any failure, or a restart that was not a power-on, since power-on: the LED shows blue from then
    on. Not cleared by `emi stop` / `emi start`, only by removing power. */
@@ -85,6 +94,10 @@ static struct {
     emi_cp_sig_t   cp_last;       /* the values in the last checkpoint */
     /* the recovery ladder (recovery.h) */
     uint32_t       fail_since;    /* captures failing since (0 = working) */
+    bool           power_fault;   /* an eFuse tripped and has not come back yet (power_poll_emi) */
+    bool           efuse_fault[3];/* per eFuse (1, 2), the last seen FLT state */
+    uint32_t       efuse_retry_ms[EMI_EFUSE_RETRIES_PER_HOUR];   /* ring: when power was retried */
+    uint32_t       efuse_retry_n;
     uint32_t       cap_issued_at; /* the capture in flight went out then */
     uint32_t       link_down_since;
     bool           rcv_init;
@@ -437,6 +450,7 @@ bool emi_test_fault(const char *name) {
     ice40_hold_off_bus();
     return true;
 }
+static bool s_quick_start;   /* this boot is the recovery ladder's reset: start the loop sooner */
 static bool emi_recovery_reset_pending(void) {
     keep_init();
     return s_keep.reset_pending != 0;
@@ -773,10 +787,14 @@ static void recovery_poll_emi(uint32_t now) {
     if (!s.running) return;
     static bool stuck_applied;
     if (s_keep.fault_stuck && !stuck_applied) { stuck_applied = true; ice40_hold_off_bus(); }
-    if (s.cap_issued && now - s.cap_issued_at > 30000u && !s.fail_since)
+    if (s.cap_issued && now - s.cap_issued_at > EMI_CAP_HUNG_MS && !s.fail_since)
         s.fail_since = s.cap_issued_at ? s.cap_issued_at : 1u;   /* a capture that never ends */
     const uint32_t fail_ms = s.fail_since ? now - s.fail_since : 0u;
-    if (s.link_seen && !ns.link) { if (!s.link_down_since) s.link_down_since = now ? now : 1u; }
+    /* The Ethernet step's clock: the link down, or up while frames keep failing to go out (a
+       wedged MAC or PHY with the cable in: no link loss, so it needs its own trigger). */
+    const bool eth_failing = (s.link_seen && !ns.link) ||
+                             (ns.link && ns.err && now - ns.t_err < EMI_LED_FAIL_MS);
+    if (eth_failing) { if (!s.link_down_since) s.link_down_since = now ? now : 1u; }
     else s.link_down_since = 0;
     const uint32_t down_ms = s.link_down_since ? now - s.link_down_since : 0u;
     const recovery_action_t a = recovery_poll(&s_rcv, now, fail_ms, down_ms, &s_keep.resets);
@@ -787,6 +805,41 @@ static void recovery_poll_emi(uint32_t now) {
         printf("[emi] recovery: limits reached, the pod stays red until power is removed\n");
         log_event_text(EMI_EV_RECOVERY, "recovery limit reached");
     }
+}
+
+/* Every worker pass while the loop runs: an eFuse that tripped counts as a failure and gets its
+   supply turned off and on again (EMI_EFUSE_RETRY_MS later), within EMI_EFUSE_RETRIES_PER_HOUR. */
+static void power_poll_emi(uint32_t now) {
+    if (!s.running) { s.power_fault = false; return; }
+    bool any = false;
+    for (int e = 1; e <= 2; e++) {
+        bool en = false, fault = false;
+        if (target_power_get_cached(e, &en, &fault) != 0) continue;
+        if (fault) any = true;
+        if (fault && !s.efuse_fault[e]) {
+            s.errors++;
+            s.last_err_ms = now;
+            snprintf(s.last_err, sizeof(s.last_err), "eFuse %d tripped", e);
+            uint32_t recent = 0;
+            const uint32_t have = s.efuse_retry_n < EMI_EFUSE_RETRIES_PER_HOUR ? s.efuse_retry_n
+                                                                               : EMI_EFUSE_RETRIES_PER_HOUR;
+            for (uint32_t i = 0; i < have; i++)
+                if (now - s.efuse_retry_ms[i] < 3600000u) recent++;
+            char text[40];
+            if (recent < EMI_EFUSE_RETRIES_PER_HOUR) {
+                s.efuse_retry_ms[s.efuse_retry_n++ % EMI_EFUSE_RETRIES_PER_HOUR] = now;
+                (void)target_power_enable(e, false);
+                (void)target_power_schedule(e, true, EMI_EFUSE_RETRY_MS);
+                snprintf(text, sizeof(text), "eFuse %d tripped: power retry", e);
+            } else {
+                snprintf(text, sizeof(text), "eFuse %d tripped: retry limit", e);
+            }
+            printf("[emi] recovery: %s\n", text);
+            log_event_text(EMI_EV_RECOVERY, text);
+        }
+        s.efuse_fault[e] = fault;
+    }
+    s.power_fault = any;
 }
 
 uint32_t emi_test_run(void) { return log_ok() ? s_log.run : 0u; }
@@ -977,6 +1030,8 @@ static bool restarted(void) {
 }
 
 static bool failing_now(uint32_t now) {
+    if (s.fail_since) return true;   /* captures failing, or one hung: until one succeeds */
+    if (s.power_fault) return true;  /* an eFuse tripped (power_poll_emi) */
     if (s.errors && now - s.last_err_ms < EMI_LED_FAIL_MS) return true;
     if (ns.err && now - ns.t_err < EMI_LED_FAIL_MS) return true;   /* Ethernet */
     return false;
@@ -988,7 +1043,7 @@ uint8_t emi_test_led_state(void) {
         if (restarted()) s_failed_before = true;
     }
     const uint32_t now = HAL_GetTick();
-    if (s.running && (s.errors || ns.err)) s_failed_before = true;
+    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault)) s_failed_before = true;
     return status_led_emi_state(s.booted, s.running, s.running && failing_now(now), s_failed_before);
 }
 
@@ -1084,13 +1139,14 @@ void emi_test_poll(void) {
     const uint32_t now = HAL_GetTick();
     s.budget = EMI_SINK_BUDGET;   /* the read-back's share of this worker pass */
     if (!lg.tried && !s.running) {   /* the run log, before the activity starts */
+        s_quick_start = emi_recovery_reset_pending();   /* log_boot clears the flag */
         log_boot();
         s.last_led = emi_test_led_state();
         s.t_checkpoint = now;
         s.cp_last = cp_sig();
     }
     if (!s.booted) {
-        if (now >= EMI_TEST_START_DELAY_MS) emi_test_start();
+        if (now >= (s_quick_start ? EMI_TEST_RECOVERY_START_MS : EMI_TEST_START_DELAY_MS)) emi_test_start();
         publish_monitor(now);
         return;
     }
@@ -1102,6 +1158,7 @@ void emi_test_poll(void) {
     }
     log_poll(now);
     recovery_poll_emi(now);
+    power_poll_emi(now);
     publish_monitor(now);
     if (!s.running) return;
     if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0 && (int32_t)(now - s.hold_until) >= 0) {
