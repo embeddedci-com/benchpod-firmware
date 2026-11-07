@@ -70,6 +70,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "w25q.h"
 #include "ota.h"
 #include "flash_layout.h"
+#include "flash_compat.h"
 #include "pod_policy.h"
 #include "cloud_extras.h"
 #include "fw_sign.h"
@@ -710,7 +711,8 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
             for (int i = 0; i < n; i++)
                 op(out, ctx, "  stack  : %-7s %u B free (min)\r\n", t[i].name, t[i].stack_free);
         }
-        op(out, ctx, "  flash  : %lu KB\r\n", (unsigned long)(flash_layout_size() / 1024u));
+        op(out, ctx, "  flash  : %lu KB%s\r\n", (unsigned long)(flash_layout_size() / 1024u),
+           flash_compat_refused() ? ", RECORD WRITES REFUSED (outside the record area: a firmware bug)" : "");
         op(out, ctx, "  lwip   : mem max %lu of %lu B, pbuf pool max %u of %u\r\n",
            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);

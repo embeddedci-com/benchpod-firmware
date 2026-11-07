@@ -23,6 +23,10 @@
    flash_ecc_nmi_absorb() first (see below). Without that hook a torn quad-word
    still resets the MCU, exactly as a plain pointer read would. */
 int flash_read_checked(uint32_t offset, void *dst, size_t n);
+/* How many flash_range_erase/flash_range_program calls were refused because they fell outside the
+   persistence area in the top 128 KB (the rest of the flash is code, cached by the ICACHE). Not
+   zero means a firmware bug; `status` on the console shows it. */
+uint32_t flash_compat_refused(void);
 
 /* Call at the very top of NMI_Handler. Returns 1 if the NMI was an ECC double
    error raised by a flash_read_checked() probe (the flag is cleared and the

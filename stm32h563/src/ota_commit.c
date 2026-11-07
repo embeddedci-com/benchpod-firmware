@@ -21,6 +21,7 @@
 #include "signal_engine.h"   /* signal_engine_quiesce_psram_masters() before the bus grab */
 #include "board_pins.h"
 #include "flash_layout.h"
+#include "flash_compat.h"
 #include "boot_guard.h"
 #include "stm32h5xx_hal.h"
 
@@ -325,12 +326,19 @@ int ota_commit_selftest(void) {
        normal HAL path (safe, flash-resident). */
     /* The pattern is a formula, so it is built in the commit's sector buffer and recomputed for
        the verify instead of being kept in a second 8 KB buffer. */
-#define SELFTEST_PAT(i) ((uint8_t)(((i) * 197u + 31u) & 0xFFu))
-    for (uint32_t i = 0; i < FLASH_SECTOR_BYTES; i++)
-        s_sector[i] = SELFTEST_PAT(i);
-
     const uint32_t scratch_psram = OTA_PSRAM_BASE;   /* reuse offset 0 (OTA idle) */
     const uint32_t scratch_addr  = FLASH_BASE_ADDR + flash_layout_store_off(OTA_SCRATCH_REF_OFF);
+    /* A new pattern every run, read from the old one: every byte of the sector changes. The old
+       contents are read first through the normal (MPU non-cacheable) mapping, so if the ICACHE
+       did cache the record area the verify below would see these stale lines and fail. A fixed
+       pattern could not tell. A torn sector reads as anything; the seed does not matter then. */
+    uint8_t old0 = 0;
+    if (flash_read_checked(OTA_SCRATCH_REF_OFF, s_sector, FLASH_SECTOR_BYTES) == 0)
+        old0 = s_sector[0];                  /* the whole sector read: every line, ECC-safe */
+    const uint32_t seed = (uint32_t)(uint8_t)(old0 - 31u + 1u);
+#define SELFTEST_PAT(i) ((uint8_t)(((i) * 197u + 31u + seed) & 0xFFu))
+    for (uint32_t i = 0; i < FLASH_SECTOR_BYTES; i++)
+        s_sector[i] = SELFTEST_PAT(i);
     s_bank_bytes = flash_layout_bank_size();
     psram_bus_acquire();
     if (psram_write(scratch_psram, s_sector, FLASH_SECTOR_BYTES) != 0) {

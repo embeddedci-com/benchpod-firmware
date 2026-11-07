@@ -13,7 +13,7 @@ own. A submodule bump needs a firmware build, the host tests and a bench run bef
 |---|---|---|---|
 | STM32H5 HAL | `stm32h563/lib/stm32cube/stm32h5xx_hal_driver` | v1.6.0 (`2e49bfe`) | The commit STM32CubeH5 v1.6.0 pins. |
 | CMSIS device (STM32H5) | `stm32h563/lib/stm32cube/cmsis_device_h5` | v1.6.0 (`4a9d636`) | The commit STM32CubeH5 v1.6.0 pins. |
-| CMSIS core | `stm32h563/lib/stm32cube/cmsis_core` | v5.9.0_20250520 | `Include/` is byte-identical to STM32CubeH5 v1.6.0's `Drivers/CMSIS/Include` (Core 5.6). |
+| CMSIS core | `stm32h563/lib/stm32cube/cmsis_core` | v5.9.0_20250520 | `Include/` is byte-identical to STM32CubeH5 v1.6.0's `Drivers/CMSIS/Include` (Core 5.6). Dependabot ignores it: bump it by hand with the HAL. |
 | LAN8742 PHY driver | `stm32h563/lib/stm32cube/stm32-lan8742` | v1.0.4 (`9f365d0`) | The commit STM32CubeH5 v1.6.0 pins. |
 | mbedTLS (ST package) | `stm32h563/lib/stm32cube/stm32-mw-mbedtls` | v3.6.6_20260511 | TLS for the cloud link and the LAN TLS server, SHA-256 for OTA and blobs. Ahead of STM32CubeH5 v1.6.0 (3.6.4) for the 3.6.5 and 3.6.6 security fixes. |
 | FreeRTOS kernel | `stm32h563/lib/FreeRTOS-Kernel` | `ca75944` (main) | Port `GCC/ARM_CM33_NTZ`. |
@@ -41,4 +41,8 @@ another copy laid out like `lib/stm32cube/`.
 - **STM32CubeH5 v1.7.0** (HAL, CMSIS device, mbedTLS 3.6.6). Taking mbedTLS on its own was
   the security fix. The v1.7.0 HAL changes 66 files, including `stm32h5xx_hal_eth.c`, which the
   Ethernet restart fix in firmware 3.9.7 depends on, so it gets its own release and a full bench
-  run. Dependabot will open the HAL and CMSIS device bumps.
+  run. Dependabot opened the HAL and CMSIS device bumps (#112, #113); take CMSIS core with them.
+
+## RAM and flash
+
+How full each memory pool gets and where to find room: [design/memory-budget.md](design/memory-budget.md).

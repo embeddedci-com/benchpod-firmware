@@ -18,6 +18,12 @@
 
 #define H5_SECTOR_SIZE    0x2000u        /* 8 KB */
 
+/* Erases and programs refused because they fell outside the persistence area (a firmware bug:
+   the ICACHE would serve stale code-region lines). The callers (config_store.c, device_identity.c)
+   hold interrupts off around these calls, so no log here: the console `status` shows the count. */
+static volatile uint32_t s_refused;
+uint32_t flash_compat_refused(void) { return s_refused; }
+
 uint32_t save_and_disable_interrupts(void)
 {
     uint32_t primask = __get_PRIMASK();
@@ -40,7 +46,9 @@ static void addr_to_bank_sector(uint32_t abs, uint32_t *bank, uint32_t *sector)
 
 void flash_range_erase(uint32_t offset, size_t count)
 {
-    uint32_t abs = FLASH_BASE + flash_layout_store_off(offset);
+    uint32_t off = flash_layout_store_off(offset);
+    if (!flash_layout_writable(off, (uint32_t)count, flash_layout_size())) { s_refused++; return; }
+    uint32_t abs = FLASH_BASE + off;
     uint32_t nsectors = (uint32_t)((count + H5_SECTOR_SIZE - 1) / H5_SECTOR_SIZE);
     uint32_t bank, sector, err = 0;
     addr_to_bank_sector(abs, &bank, &sector);
@@ -58,7 +66,9 @@ void flash_range_erase(uint32_t offset, size_t count)
 
 void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
 {
-    uint32_t abs = FLASH_BASE + flash_layout_store_off(offset);
+    uint32_t off = flash_layout_store_off(offset);
+    if (!flash_layout_writable(off, (uint32_t)count, flash_layout_size())) { s_refused++; return; }
+    uint32_t abs = FLASH_BASE + off;
     HAL_FLASH_Unlock();
     for (size_t i = 0; i < count; i += 16) {
         /* Quad-word program reads 16 bytes from a word-aligned source. */

@@ -65,6 +65,24 @@ int main(void) {
     /* The pod policy did not move either. */
     CHECK(flash_layout_map(POD_POLICY_SLOT_B_OFFSET, FLASH_LAYOUT_SIZE_2MB) == 0x1E4000u, "pod policy moved");
 
+    /* flash_compat writes only inside the top 128 KB: everything below is cached code. */
+    for (unsigned i = 0; i < sizeof k_stores / sizeof k_stores[0]; i++) {
+        uint32_t two = flash_layout_map(k_stores[i].off, FLASH_LAYOUT_SIZE_2MB);
+        uint32_t one = flash_layout_map(k_stores[i].off, FLASH_LAYOUT_SIZE_1MB);
+        CHECK(flash_layout_writable(two, 0x2000u, FLASH_LAYOUT_SIZE_2MB), "%s not writable on 2 MB", k_stores[i].name);
+        CHECK(flash_layout_writable(one, 0x2000u, FLASH_LAYOUT_SIZE_1MB), "%s not writable on 1 MB", k_stores[i].name);
+    }
+    CHECK(!flash_layout_writable(0x000000u, 16u, FLASH_LAYOUT_SIZE_2MB), "code start writable");
+    CHECK(!flash_layout_writable(0x0DE000u, 0x2000u, FLASH_LAYOUT_SIZE_1MB), "last 1 MB code sector writable");
+    CHECK(!flash_layout_writable(0x1DE000u, 0x2000u, FLASH_LAYOUT_SIZE_2MB), "sector below the 2 MB store writable");
+    CHECK(!flash_layout_writable(0x1DFFF0u, 0x20u, FLASH_LAYOUT_SIZE_2MB), "write straddling into the store writable");
+    CHECK(!flash_layout_writable(0x1FE000u, 0x4000u, FLASH_LAYOUT_SIZE_2MB), "write past the end of flash writable");
+    CHECK(!flash_layout_writable(0x0FE000u, 0x2001u, FLASH_LAYOUT_SIZE_1MB), "write past the end of 1 MB flash writable");
+    CHECK(!flash_layout_writable(0x300000u, 16u, FLASH_LAYOUT_SIZE_2MB), "offset beyond the flash writable");
+    /* A 2 MB offset below the store passes through unmapped and stays refused on a 1 MB part. */
+    CHECK(!flash_layout_writable(flash_layout_map(0x1DE000u, FLASH_LAYOUT_SIZE_1MB), 16u, FLASH_LAYOUT_SIZE_1MB),
+          "unmapped low offset writable on 1 MB");
+
     if (fails) { printf("test_flash_layout: %d FAILED\n", fails); return 1; }
     printf("test_flash_layout: all passed\n");
     return 0;

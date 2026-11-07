@@ -29,6 +29,16 @@ static inline uint32_t flash_layout_map(uint32_t ref_off, uint32_t flash_size)
     return ref_off - FLASH_LAYOUT_REF_SIZE + flash_size;
 }
 
+/* The persistence records live in the top 128 KB of the chip. The ICACHE caches everything below
+   (main.c icache_init: the MPU keeps 0x080E0000 and up non-cacheable), so a record write anywhere
+   else would leave stale lines in the cache: flash_compat refuses it. */
+#define FLASH_LAYOUT_STORE_SPAN  0x20000u
+/* True when [off, off + count) is inside the top 128 KB of a part with `flash_size` bytes. `off`
+   is already mapped (flash_layout_map). */
+static inline int flash_layout_writable(uint32_t off, uint32_t count, uint32_t flash_size)
+{
+    return off >= flash_size - FLASH_LAYOUT_STORE_SPAN && off < flash_size && count <= flash_size - off;
+}
 /* Size of the internal flash in bytes: FLASH_LAYOUT_SIZE_1MB or FLASH_LAYOUT_SIZE_2MB. */
 uint32_t flash_layout_size(void);
 
