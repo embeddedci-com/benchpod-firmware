@@ -14,9 +14,9 @@ static volatile uint32_t s_us_hi;          /* high 32 bits of the µs counter */
 
 void pico_compat_init(void)
 {
-    /* DWT cycle counter for fine busy-waits. */
+    /* DWT cycle counter for fine busy-waits. HAL_InitTick zeroed it once at boot and HAL_GetTick
+       counts on it: never zero it again here (that made the uptime jump ahead). */
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CYCCNT = 0;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
     /* TIM2 @ 1 MHz, free-running 32-bit, update IRQ extends to 64-bit. */

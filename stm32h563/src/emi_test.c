@@ -740,7 +740,7 @@ static void recovery_take(recovery_action_t a, uint32_t now) {
         break;
     }
     case RECOVERY_MCU_RESET:
-        snprintf(text, sizeof(text), "STM32 reset (%lu of %u)", (unsigned long)(s_keep.resets + 1u),
+        snprintf(text, sizeof(text), "STM32 reset (%lu of %u)", (unsigned long)s_keep.resets,   /* counted already */
                  (unsigned)RECOVERY_RESETS_MAX);
         printf("[emi] recovery: still failing after the iCE40 reloads: %s\n", text);
         log_event_text(EMI_EV_RECOVERY, text);

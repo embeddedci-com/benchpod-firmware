@@ -29,6 +29,8 @@ int ice40_flash_boot(void);
 /* 1 when the config flash from offset 0 equals `len` bytes of the source, 0 when not, <0 when
    it could not be read. The iCE40 reconfigures from the flash afterwards. */
 int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len);
+/* Where the last compare found a difference (0xFFFFFFFF: none yet). */
+uint32_t ice40_flash_last_mismatch(void);
 /* ice40_flash_boot plus what every reconfiguration needs around it (PSRAM to SPI and back to
    QPI, the bus back to the iCE40, the firmware's register mirrors). Never writes the flash.
    Defined in console.c. 0 ok, -1 fail. */

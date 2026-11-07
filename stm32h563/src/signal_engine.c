@@ -838,6 +838,11 @@ void signal_engine_psram_report_wedge(void) {
    power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported.
    An iCE40 that never configured (a new board's blank config flash) is the gateware update's
    job, below: it also runs when the gw0 blob arrives after boot. */
+/* What the boot self-test did about the iCE40, for `status` (the early boot log is often gone
+   by the time a host opens the console). */
+static char s_ice40_boot_note[64] = "self-test passed";
+const char *ice40_boot_note(void) { return s_ice40_boot_note; }
+
 void psram_boot_selftest_with_recovery(void) {
     /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up. */
     const bool configured = ice40_is_configured() != 0;
@@ -848,14 +853,21 @@ void psram_boot_selftest_with_recovery(void) {
        reset never wears the config flash. */
     if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
         printf("[psram-selftest] iCE40->PSRAM inoperable: reloading the iCE40 from its flash (no write)...\n");
-        if (ice40_reload() == 0) {
+        const int rl = ice40_reload();
+        if (rl == 0) {
             sleep_ms(5);
             signal_engine_refresh_version();
             psram_boot_selftest();
         }
+        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "self-test failed, reload %s, then %s",
+                 rl == 0 ? "ok" : "failed",
+                 psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL ? "still failing" : "passed");
     }
     if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
         const int intact = ice40_boot_image_intact();
+        snprintf(s_ice40_boot_note + strlen(s_ice40_boot_note), sizeof(s_ice40_boot_note) - strlen(s_ice40_boot_note),
+                 "; image %s at 0x%lx", intact == 1 ? "intact" : intact == 0 ? "differs: rewritten" : "unknown",
+                 (unsigned long)ice40_flash_last_mismatch());
         if (intact == 0) {
             printf("[psram-selftest] the iCE40's flash image is damaged: writing gateware image 0 from the W25Q...\n");
             if (ice40_reflash_image(0) == 0) {
@@ -884,6 +896,17 @@ void psram_boot_selftest_with_recovery(void) {
    (flash-self installs them once the firmware boots), so the gw0 install brings it up without a
    reboot. */
 void signal_engine_gateware_update(void) {
+    /* Not configured at boot: first just reload it from its flash (no write). After an ESD hit or
+       a recovery reset its image is usually fine; only a flash that does not configure it (a new
+       board's blank flash, a damaged image) is written below. */
+    if (!ice40_is_configured() && ice40_reload() == 0 && ice40_is_configured()) {
+        sleep_ms(5);
+        signal_engine_refresh_version();
+        psram_boot_selftest();
+        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "not configured at boot, reload ok");
+        printf("[fpga] the iCE40 was not configured: reloaded from its flash, gateware v%u\n",
+               (unsigned)signal_engine_fpga_version());
+    }
     const int configured = ice40_is_configured();
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();

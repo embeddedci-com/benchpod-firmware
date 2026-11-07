@@ -220,6 +220,7 @@ static void cmd_help(console_out_t out, void *ctx)
     out(ctx,
         "development build only:\r\n"
         "  test-bootloop [net|hw] yes | test-hang net|hw yes | test-crash yes   prove safe mode / crash reports\r\n"
+        "  test-ice40-hold yes  hold the iCE40 in reset: the idle check reloads it by itself\r\n"
         "  i2c-scan | ina | expdump   I2C bus scan, INA monitors, expander dump\r\n"
         "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
         "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
@@ -630,6 +631,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
            iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
         op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+        op(out, ctx, "  ice40boot : %s\r\n", ice40_boot_note());
         /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
         op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
            (unsigned long)psram_bus_violations());
@@ -918,6 +920,15 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         } else {
             watchdog_test_hang(task);
             op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
+        }
+    } else if (!strcmp(argv[0], "test-ice40-hold")) {
+        /* Prove the idle iCE40 check (hw_worker.c, recovery.h): hold the iCE40 in reset as an ESD
+           hit that unconfigured it would leave it; the pod reloads it from its flash by itself. */
+        if (argc < 2 || strcmp(argv[1], "yes")) {
+            op(out, ctx, "  test-ice40-hold yes : hold the iCE40 in reset; the idle check reloads it (~10 s)\r\n");
+        } else {
+            ice40_hold_off_bus();
+            op(out, ctx, "  the iCE40 is held in reset\r\n");
         }
 #endif
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */

@@ -205,6 +205,9 @@ int ice40_flash_boot(void)
 /* Compare the config flash from offset 0 with `len` bytes of a source (a blob slot): 1 = equal,
    0 = differs, <0 = could not read. Holds the bus and the iCE40 in reset while reading, then lets
    the iCE40 reconfigure from the flash as it was. */
+static uint32_t s_mismatch_at = 0xFFFFFFFFu;
+uint32_t ice40_flash_last_mismatch(void) { return s_mismatch_at; }
+
 int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len)
 {
     static uint8_t pg[W25Q_PAGE], rb[W25Q_PAGE];
@@ -218,7 +221,14 @@ int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len)
     for (uint32_t a = 0; a < len; a += W25Q_PAGE) {
         uint32_t n = (len - a < W25Q_PAGE) ? (uint32_t)(len - a) : W25Q_PAGE;
         if (rd(ctx, a, pg, n) != 0 || w25q_read(a, rb, n) != 0) { same = -1; break; }
-        if (memcmp(pg, rb, n) != 0) { same = 0; break; }
+        if (memcmp(pg, rb, n) != 0) {
+            uint32_t k = 0; while (k < n && pg[k] == rb[k]) k++;
+            printf("[ice40] flash image differs at 0x%06lx: slot %02x, flash %02x\n",
+                   (unsigned long)(a + k), pg[k], rb[k]);
+            s_mismatch_at = a + k;
+            same = 0;
+            break;
+        }
     }
     (void)release_and_wait_cdone();
     return same;
