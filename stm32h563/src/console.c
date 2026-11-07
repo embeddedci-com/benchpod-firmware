@@ -632,6 +632,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
            iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
         op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+        {
+            uint32_t rd_retried = 0, rd_failed = 0; int rd_rc = 0;
+            signal_engine_psram_read_stats(&rd_retried, &rd_failed, &rd_rc);
+            op(out, ctx, "  psram rd : %lu read-backs retried, %lu failed (last rc %d)\r\n",
+               (unsigned long)rd_retried, (unsigned long)rd_failed, rd_rc);
+        }
         op(out, ctx, "  ice40boot : %s\r\n", ice40_boot_note());
         /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
         op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
