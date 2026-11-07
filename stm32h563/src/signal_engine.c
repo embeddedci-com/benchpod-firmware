@@ -429,8 +429,20 @@ static void log_dac_samples(uint32_t total) {
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
 static void quad_stream_ctrl(void);
+#if defined(BENCHPOD_EMI_TEST)
+/* The table dac_generate16 last loaded and started, for dac_restart_generated; 0 = none (any
+   other load replaced it). */
+static uint32_t s_gen_period, s_gen_divider;
+/* A deep replay was started and not stopped since: s_dac_ps_active covers it on >=v18 gateware,
+   this one on older gateware too (signal_engine_quiesce_psram_keep_dac). */
+static bool s_dac_ps_playing;
+#endif
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period = 0;
+    s_dac_ps_playing = false;   /* a BRAM load replaces a deep replay */
+#endif
     /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
        clk48 while this writes it on clk: a running DAC played a half-rewritten table at the old
        period, with torn 16-bit samples (and a torn curve entry can step the loop output anywhere
@@ -1429,6 +1441,10 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
     wave16_fill(shape, period, amp, mid, sample_buf16);
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
     if (fpga_start_dac(period, divider) != 0) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period  = period;
+    s_gen_divider = divider;
+#endif
 
     float eff_rate = dac_effective_rate_hz(divider);
     printf("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
@@ -1822,6 +1838,9 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
     s_dac_ps_active = (s_fpga_version >= CONCURRENT_PSRAM_MIN_GW);
+#if defined(BENCHPOD_EMI_TEST)
+    s_dac_ps_playing = true;
+#endif
     dac_timed = false;
     return 0;
 }
@@ -1847,8 +1866,48 @@ bool signal_engine_refresh_version(void) {
     return ok;
 }
 
+#if defined(BENCHPOD_EMI_TEST)
+int dac_restart_generated(void) {
+    if (!s_gen_period || dac_timed) return -1;
+    (void)dac_quiesce(false);
+    return fpga_start_dac(s_gen_period, s_gen_divider);
+}
+
+/* EMI test build: quiesce for the run log's W25Q sessions. Of the DAC's sources only the deep
+   replay (dac_psram_reader.v) masters the shared PSRAM bus; a waveform played from the BRAM table
+   (dac8551_engine.v, psram_mode=0) and the quad DAC's held channels drive their own pins and keep
+   running while the STM32 owns the bus. So the DAC is stopped only for a deep replay (the full
+   signal_engine_quiesce_psram_masters); otherwise this waits, bounded like it, for no capture
+   busy and the writer drained. true = it stopped the DAC. */
+bool signal_engine_quiesce_psram_keep_dac(void) {
+    if (s_dac_ps_active || s_dac_ps_playing) {
+        signal_engine_quiesce_psram_masters();
+        return true;
+    }
+    uint32_t t0 = HAL_GetTick();
+    for (;;) {
+        uint8_t st = 0;
+        if (fpga_status_read(&st) == 0 && !(st & STATUS_CAP_BUSY) && busy_read()) break;
+        if (HAL_GetTick() - t0 > 25u) {
+            printf("[sig] W25Q session: capture writer not idle after 25 ms (st=0x%02x)\n", st);
+            break;
+        }
+        sleep_ms(1);
+    }
+    return false;
+}
+
+bool signal_engine_dac_run_bit(void) {
+    uint8_t st = 0;
+    return fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN);
+}
+#endif
+
 void dac_stop(void) {
     dac_timed = false;
+#if defined(BENCHPOD_EMI_TEST)
+    s_dac_ps_playing = false;
+#endif
     /* Free the top-of-PSRAM deep-DAC region so a subsequent LA/ADC capture reclaims
        the full depth (no-op if no deep replay was resident). */
     signal_engine_dac_psram_release();

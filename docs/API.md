@@ -267,6 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
 
@@ -3712,6 +3713,57 @@ It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
 particular).
+
+### `emi_log` — the EMI test build's run log
+
+Only in the EMI test build (`make EMI_TEST=1`, never released); other builds answer `"unknown cmd"`.
+That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0x200000` (440 KB,
+7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
+`START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
+`EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
+started or stopped) and a `CHECK` every 5 minutes (captures, errors, frames sent and dropped, link
+losses, the longest DAC gap a log write caused, 0 normally). A one-hour run takes about 15
+records. 16 sectors (1,024 records, about 80 hours of checkpoints) are kept erased ahead of the
+write position, erased at boot before the loop starts, so the ring keeps about 6,000 records of
+history: the last few hundred to few thousand runs.
+
+```json
+{"cmd":"emi_log"}
+{"cmd":"emi_log","offset":0,"count":48}
+```
+
+Without `count` it answers the log's state and the loop's (`emi_test`, the full object; `status`
+carries a short one); with `count` (at most `max_count`: 16, or 12 over the cloud, so the reply fits
+a connection's 2 KB send buffer) it returns that many raw 64-byte slots from slot `offset` on,
+base64url without padding, in slot order, instead of `emi_test`:
+
+```json
+{"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
+  "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
+  "write_errors":0,"session_us_last":273,"session_us_max":2969,"glitch_us_last":0,"glitch_us_max":0,
+  "dac_stops":0,"max_count":16,"offset":0,"count":16,
+  "data":"RUwBAg..."}}
+```
+
+`run` is this boot's run number; `queued` records wait in RAM for the next write, `lost` found no
+room there. A slot is empty (all `0xFF`) or a record: `u16 magic 0x4C45` ("EL"), `u8 type` (1
+START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue), `u32 seq` (grows across
+runs: sort by it), `u32 run`, `u32 uptime_ms`, 44 bytes of payload, and a CRC-32 (zlib's) of the
+first 60 bytes; the payloads are in `stm32h563/src/emi_log.c`. `stm32h563/tools/emi/emi_log_dump.py`
+reads the whole log and prints it with a summary per run.
+
+The W25Q shares its bus with the PSRAM: a read with `count` while the EMI loop runs waits for no
+capture to be in flight (else `"busy: an EMI capture is using the bus, retry in a moment"`; the loop
+then holds its next capture back for 1.5 s, so a retry finds the bus free). Log writes and reads do
+not interrupt the outputs: the sine plays from the gateware's BRAM table and the 0-5 V DC and
+4-20 mA outputs are held by the quad DAC, none of which use the bus, so the DAC keeps running
+through a W25Q session. Only a deep DAC replay (from PSRAM) would be stopped and started again;
+the EMI loop never plays one. A session delays the loop's next capture instead: `session_us_last`
+and `session_us_max` are its time (measured on an analog v3r2 pod: 0.3 to 0.4 ms for one record,
+about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the W25Q's worst case
+is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
+time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
+The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
 
 ---
 

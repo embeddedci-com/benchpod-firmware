@@ -200,7 +200,9 @@ static void cmd_help(console_out_t out, void *ctx)
         "  emi [status] | emi start | emi stop   the loop's state, start it, stop it (outputs and power off)\r\n"
         "  emi dac all|sine|dc|current|off       what the DAC plays: 1 kHz sine on 3.3 V, 3 V DC on 5 V, 12 mA,\r\n"
         "                                        or all three (quad-DAC boards, their default)\r\n"
-        "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n");
+        "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n"
+        "  emi log [n|all]                       the run log in the W25Q: its state, and the last n records\r\n"
+        "                                        (default 20) or all of them, printed on the device log\r\n");
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
@@ -722,9 +724,28 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 return;
             }
         }
+        else if (!strcmp(sub, "log")) {
+            /* The run log (emi_log.h): its state here, the records on the device log. */
+            char info[320];
+            emi_test_log_describe(info, sizeof(info));
+            op(out, ctx, "  %.150s\r\n", info);
+            if (strlen(info) > 150) op(out, ctx, "  %s\r\n", info + 150);
+#if defined(EMI_LOG_TEST_SECTORS)
+            if (argc >= 4 && !strcmp(argv[2], "fill")) {   /* a small-ring test build only */
+                emi_test_log_fill((uint32_t)atol(argv[3]));
+                return;
+            }
+#endif
+            const bool all = argc >= 3 && !strcmp(argv[2], "all");
+            const long n = argc >= 3 && !all ? atol(argv[2]) : 20;
+            if (!all && n <= 0) { op(out, ctx, "usage: emi log [n|all]\r\n"); return; }
+            if (emi_test_log_print(all ? 0u : (uint32_t)n))
+                op(out, ctx, "  (records printed on the device log)\r\n");
+            return;
+        }
         else if (strcmp(sub, "status")) {
             op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                         " | emi uart <1-14>|off | emi net <mbit>|off\r\n");
+                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]\r\n");
             return;
         }
         char line[256];
