@@ -430,9 +430,12 @@ $(OUT).bin: $(OUT).asc
 # v52 (review fixes: ADC t0 restart, SPI slave, UART framing; 4641 LC, 88%): seed 7 fell to
 # 52.96 MHz.  Swept 1..48 locally: 32/48 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 7 -> 35 (clk48 56.69,
 # clk 29.13, clk -> clk48 13.59 ns, clk48 -> clk 9.43 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
-SEED_LOOP ?= 35
+# v53 (ADC-urgent pick in psram_dual_writer): swept 1..64 in both toolchains (CI run 42421449089).
+# Pinned SEED_LOOP 35 -> 51, the seed with the highest clk48 in the slower toolchain (53.75 CI /
+# 54.11 local MHz; clk -> clk48 13.62 / 12.46 ns).
+SEED_LOOP ?= 51
 # v52: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
-SEED_LOOP_FALLBACK ?= 25 45 14 21 40 2 9 13 41 24 23
+SEED_LOOP_FALLBACK ?= 38 52 7 39 58 41 35 54 61
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -530,12 +533,15 @@ SEED_LOOP_FALLBACK ?= 25 45 14 21 40 2 9 13 41 24 23
 # Swept 1..64 in both (CI run 42391635281): 51/64 local; 11 seeds keep clk48 >= 50 MHz and
 # clk -> clk48 <= MAX_X48_NS in both.  Pinned SEED_DEEP 41 -> 5, the one with the most
 # clk -> clk48 margin (13.88 CI / 14.09 local ns; clk48 57.07 CI / 55.60 local MHz).
-SEED_DEEP ?= 5
+# v53: seed 5 missed timing locally (45.03 MHz) and passed MAX_X48_NS in neither. Swept 1..64 in
+# both (CI run 42421449089): pinned SEED_DEEP 5 -> 37 (57.61 local / 59.54 CI MHz; clk -> clk48
+# 13.92 / 13.83 ns).
+SEED_DEEP ?= 37
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 54 13 32 53 39 35 12 45 24 64
+SEED_DEEP_FALLBACK ?= 23 25 53 21 62 59 34 33 31
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
