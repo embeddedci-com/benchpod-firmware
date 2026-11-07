@@ -67,8 +67,9 @@ int adc_capture_psram_poll(uint16_t *out, size_t n) { if (g_wait_rc > 0) memcpy(
 int measure_psram_start(const char *w, float f, uint8_t a, uint8_t o, size_t n, float hz) {
     (void)w; (void)f; (void)a; (void)o; (void)n; (void)hz; return 0;
 }
+static float g_dual_lhz = -1.0f;   /* the LA rate capture_dual asked the fabric for */
 int fpga_dual_capture_start_hz(uint32_t an, float ahz, uint32_t ln, float lhz, float *aact, float *lact) {
-    (void)an; (void)ahz; (void)ln; (void)lhz; *aact = 400000.0f; *lact = 24000000.0f; return 0;
+    (void)an; (void)ahz; (void)ln; g_dual_lhz = lhz; *aact = 400000.0f; *lact = 24000000.0f; return 0;
 }
 int fpga_capture_psram_wait(void) { if (g_wait_rc > 0) g_bus = true; return g_wait_rc; }
 int fpga_capture_psram_read16(size_t idx, uint16_t *out, size_t n, size_t adc_n) {
@@ -428,6 +429,36 @@ static void test_la_change_capture(void) {
 
 /* capture_dual with the LA above 12 MS/s on gateware >= v50: the ADC samples as usual, then the LA
    decoded from its change stream into the same la_edges frames. */
+/* A deep raw-LA capture_dual without a rate is lowered to what the burst ring drains (it ran at
+   12 MS/s and overflowed); a short one keeps the full 12 MS/s. An overflow says what to change. */
+static void test_capture_dual_la_rate_and_overflow(void) {
+    clear_tx(); g_wait_rc = 0; g_ovf = false;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000000,\"adc_rate_mhz\":0.4,\"la_samples\":1000000}");
+    CHECK(capture_busy(), "deep capture_dual refused: %s", g_err);
+    CHECK(g_dual_lhz > 0.0f && g_dual_lhz <= 4.0e6f, "deep LA asked the fabric for %.0f Hz", (double)g_dual_lhz);
+    g_wait_rc = -1; g_ovf = true;
+    pump_all();
+    CHECK(strncmp(g_err, "capture overflowed: the PSRAM could not keep up", 47) == 0, "overflow reply: %s", g_err);
+    CHECK(strstr(g_err, "Lower la_rate_mhz") != NULL, "overflow reply has no advice: %s", g_err);
+    g_ovf = false;
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
+    CHECK(capture_busy(), "short capture_dual refused: %s", g_err);
+    CHECK(g_dual_lhz == 8.0e6f, "short LA with the ADC asked for %.0f Hz, want 8 MS/s", (double)g_dual_lhz);
+    g_wait_rc = -1; pump_all();
+    CHECK(strcmp(g_err, "capture failed") == 0, "a plain failure: %s", g_err);
+    /* LA alone keeps the full 12 MS/s for a burst that fits the ring. */
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"la_samples\":2000}");
+    CHECK(capture_busy(), "LA-only capture_dual refused: %s", g_err);
+    CHECK(g_dual_lhz == 12.0e6f, "LA-only asked for %.0f Hz, want 12 MS/s", (double)g_dual_lhz);
+    g_wait_rc = -1; pump_all();
+    /* More than the fabric's per-stream region is refused up front, saying the limits. */
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":3000000}");
+    CHECK(!capture_busy() && strncmp(g_err, "capture_dual takes at most", 26) == 0, "oversize: %s", g_err);
+}
+
 static void test_capture_dual_changes(void) {
     for (size_t i = 0; i < 1000; i++) g_adc[i] = (uint16_t)(i * 7);
     g_nev = 0;
@@ -451,6 +482,7 @@ int main(void) {
     test_test_pattern_decimal_paced();
     test_test_pattern_b64();
     test_capture_dual();
+    test_capture_dual_la_rate_and_overflow();
     test_la_capture_reports_achieved_rate();
     test_la_change_capture();
     test_capture_dual_changes();

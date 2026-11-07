@@ -692,6 +692,20 @@ static void bulk_pump(void) {
 }
 
 /* A change capture's end: the error that tells the user why it failed, the bus and the gate freed. */
+/* A capture that ended without data. An overflow (STATUS bit 5: the PSRAM could not take the
+   samples as fast as they came) says what ran and what to change, instead of "capture failed". */
+#define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture (24 MHz / 3) */
+
+static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
+    if (!signal_engine_last_cap_overflowed()) { send_error(cid, "capture failed"); return; }
+    char msg[200];
+    snprintf(msg, sizeof(msg),
+             "capture overflowed: the PSRAM could not keep up with LA %lu kS/s + ADC %lu kS/s. "
+             "Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples",
+             (unsigned long)(la_hz / 1000u), (unsigned long)(adc_hz / 1000u));
+    send_error(cid, msg);
+}
+
 static void chgscan_fail(const char *why) {
     char msg[240];
     snprintf(msg, sizeof(msg), "la capture failed: %s", why);
@@ -946,7 +960,7 @@ void capture_poll(void) {
             } else {
                 fpga_capture_abort();          /* a timeout leaves the fabric capturing */
                 trig_reply.present = false;
-                send_error(cid, "capture failed");
+                send_capture_failed(cid, adc_n ? adc_hz : 0u, la_n ? la_hz : 0u);
                 heavy_release(cid);
             }
         }
@@ -1075,10 +1089,35 @@ void handle_capture_dual(int conn_id, const char *json) {
        — no adc+la sum limit.  Caps are DYNAMIC (>=v18): in a DUAL capture LA stays below
        the ADC region (adc_in_capture=true), and both shrink below a resident deep-DAC
        replay at the top of PSRAM. */
+    /* The fabric's dual capture takes at most LA_PSRAM_MAX_SAMPLES and ADC_CAP_MAX_SAMPLES (4 MB
+       each); a bigger request used to pass the planner and fail at the start as "capture failed". */
+    if (la_n > LA_PSRAM_MAX_SAMPLES || adc_n > ADC_CAP_MAX_SAMPLES) {
+        char msg[120];
+        snprintf(msg, sizeof(msg), "capture_dual takes at most %lu LA and %lu ADC samples (la_capture: up to %lu LA)",
+                 (unsigned long)LA_PSRAM_MAX_SAMPLES, (unsigned long)ADC_CAP_MAX_SAMPLES,
+                 (unsigned long)signal_engine_la_max_samples(false));
+        send_error(conn_id, msg);
+        return;
+    }
     float adc_hz = parse_named_rate_hz(json, "adc_rate_mhz");
     float la_hz  = parse_named_rate_hz(json, "la_rate_mhz");
     /* LA above 12 MS/s on gateware >= v50: the LA records its changes (48, 24 or 16 MS/s) */
     uint32_t chg_k = la_n ? signal_engine_la_change_divisor(la_hz) : 0u;
+    /* Raw LA: the same plan la_capture uses (la_psram_plan). No rate means the fastest; a
+       capture deeper than the burst ring is lowered to the fastest rate the ring drains
+       without dropping a sample. Without this an omitted rate ran at 12 MS/s, the bandwidth
+       check below saw 0, and a deep capture overflowed (1M samples: "capture failed"). */
+    bool la_capped = false;
+    if (la_n && !chg_k) {
+        /* With the ADC in the same capture the raw LA tops out at 8 MS/s: 12 MS/s overflowed at
+           every depth and every ADC rate on benchpod-30a9f1 (gw v52), 8 MS/s never did. (Before
+           3.10.0 the bandwidth check refused 12 MS/s + ADC outright.) */
+        float req = la_hz > 0.0f ? la_hz : LA_RAW_MAX_HZ;
+        if (adc_n && req > DUAL_LA_RAW_MAX_HZ) { req = DUAL_LA_RAW_MAX_HZ; la_capped = true; }
+        la_plan_t lp = la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)la_n, req);
+        la_capped = la_capped || lp.capped != 0;
+        la_hz = (float)lp.rate_hz;
+    }
     /* Dynamic tri-capture zone allocation (gateware >= v22): pack LA (@0) + ADC + any
        resident deep-DAC into 8 MB and REJECT up front if the combined depth won't fit or
        the combined sustained rate would overrun the bus (docs/tri-capture-unified-psram.md).
@@ -1088,7 +1127,10 @@ void handle_capture_dual(int conn_id, const char *json) {
         psram_request_t req = {
             .la_samples  = (uint32_t)la_n,  .adc_samples = (uint32_t)adc_n,
             .dac_bytes   = signal_engine_dac_resident_bytes(),
-            .la_rate_hz  = chg_k ? 0u : (uint32_t)lroundf(la_hz),   /* a change stream is drain-paced */
+            /* The LA's SUSTAINED load on the bus: it samples into the 96 KB burst ring, which
+               drains to the PSRAM at most LA_PSRAM_DRAIN_HZ; a short burst above that waits in the
+               ring (la_psram_plan lowered a deep one already). A change stream is drain-paced. */
+            .la_rate_hz  = chg_k ? 0u : (uint32_t)lroundf(la_hz > LA_PSRAM_DRAIN_HZ ? LA_PSRAM_DRAIN_HZ : la_hz),
             .adc_rate_hz = (uint32_t)lroundf(adc_hz),
             .dac_rate_hz = signal_engine_dac_resident_bytes() ? DAC_MAX_RATE_HZ : 0u,
         };
@@ -1141,6 +1183,9 @@ void handle_capture_dual(int conn_id, const char *json) {
         send_error(conn_id, "capture failed");
         return;
     }
+    if (la_capped)
+        printf("[cmd] capture_dual: LA rate lowered to %lu kS/s so %u samples fit the burst buffer "
+               "(no dropped samples)\n", (unsigned long)lroundf(la_actual / 1000.0f), (unsigned)la_n);
     capture_trigger_armed(conn_id, &trig);
     last_cap.valid = false;   /* the new capture is overwriting the PSRAM regions */
     dualcap.active      = true;
