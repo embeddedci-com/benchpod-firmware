@@ -374,6 +374,14 @@ static void log_checkpoint(void) {
     log_queue(&r);
 }
 
+/* The first time: the quad DAC runs every output by default; a digital-only board has no DAC. */
+static void choose_default_dac(void) {
+    if (s.booted_mode) return;
+    s.booted_mode = true;
+    if (dac_quad_present()) s.dac = EMI_DAC_ALL;
+    if (!board_has_analog()) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
+}
+
 /* At boot, before the activity: scan, erase the reserve, write RUN_START. */
 static void log_boot(void) {
     lg.tried = true;
@@ -397,7 +405,11 @@ static void log_boot(void) {
         cut(r.u.start.fw, sizeof(r.u.start.fw), FIRMWARE_VERSION);
         cut(r.u.start.reset, sizeof(r.u.start.reset), fault_last_reset_str());
         r.u.start.core_mhz = (uint16_t)(SystemCoreClock / 1000000u);
-        r.u.start.dac = (uint8_t)s.dac;
+        /* The mode the run will play: the boot start picks the default (choose_default_dac) only
+           later, once the DAC is known, so name that default here without fixing it. */
+        r.u.start.dac = (uint8_t)(s.booted_mode ? s.dac
+                                 : !board_has_analog() ? EMI_DAC_OFF
+                                 : dac_quad_present() ? EMI_DAC_ALL : s.dac);
         r.u.start.net_mbit = (uint8_t)ns.mbit;
         r.u.start.gw_version = signal_engine_fpga_version();
         if (emi_log_append(&s_log, &r) == 0) lg.writes++;
@@ -662,11 +674,7 @@ void emi_test_start(void) {
     s.link_seen    = false;
     ns.had_link    = false;
     ns.link_losses = 0;
-    if (!s.booted_mode) {   /* first start: the quad DAC runs every output by default */
-        s.booted_mode = true;
-        if (dac_quad_present()) s.dac = EMI_DAC_ALL;
-        if (!board_has_analog()) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
-    }
+    choose_default_dac();
     printf("[emi] starting the EMI test activity\n");
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":1}");
