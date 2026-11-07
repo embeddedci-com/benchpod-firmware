@@ -112,3 +112,14 @@ uint32_t la_change_divisor_pre(float sample_rate_hz, uint8_t gw_version) {
     float k = roundf(48e6f / sample_rate_hz);
     return k < 1.0f ? 1u : k > 65535.0f ? 65535u : (uint32_t)k;
 }
+
+uint32_t la_psram_max_samples_at(uint32_t cap_hz, float rate_hz, uint32_t limit)
+{
+    if (limit == 0u || !la_psram_plan(cap_hz, limit, rate_hz).capped) return limit;
+    uint32_t lo = 1u, hi = limit;          /* plan(lo) not capped, plan(hi) capped */
+    while (hi - lo > 1u) {
+        const uint32_t mid = lo + (hi - lo) / 2u;
+        if (la_psram_plan(cap_hz, mid, rate_hz).capped) hi = mid; else lo = mid;
+    }
+    return lo;
+}
