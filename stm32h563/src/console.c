@@ -130,6 +130,39 @@ int ice40_reflash_image(int n)
     return rc;
 }
 
+/* Reload the iCE40 from its config flash as it is: no erase, no write (ice40_flash.h). The same
+   PSRAM handling around the configuration as the image switch above. */
+int ice40_reload(void)
+{
+    psram_reset_to_spi();
+    int rc = ice40_flash_boot();
+    psram_init();
+    psram_bus_handover();
+    signal_engine_on_gateware_reconfigured();
+    command_handler_on_gateware_reconfigured();
+    return rc;
+}
+
+/* The image the iCE40 boots from equals gateware slot gw0 or gw1 (a read compare, no write). */
+int ice40_boot_image_intact(void)
+{
+    int known = 0;
+    for (int n = 0; n < 2; n++) {
+        blob_id_t id = n ? BLOB_GW1 : BLOB_GW0;
+        if (!blob_store_present(id)) continue;
+        known = 1;
+        psram_reset_to_spi();
+        int same = ice40_flash_matches_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
+        psram_init();
+        psram_bus_handover();
+        signal_engine_on_gateware_reconfigured();
+        command_handler_on_gateware_reconfigured();
+        if (same == 1) return 1;
+        if (same < 0) return -1;
+    }
+    return known ? 0 : -1;
+}
+
 #define CONSOLE_LINE_MAX 128
 
 /* Formatted output to a sink. */
@@ -202,7 +235,9 @@ static void cmd_help(console_out_t out, void *ctx)
         "                                        or all three (quad-DAC boards, their default)\r\n"
         "  emi uart <1-14>|off                   NMEA at 115200 baud out of an LA pin (drives a DUT pin)\r\n"
         "  emi log [n|all]                       the run log in the W25Q: its state, and the last n records\r\n"
-        "                                        (default 20) or all of them, printed on the device log\r\n");
+        "                                        (default 20) or all of them, printed on the device log\r\n"
+        "  emi fault ice40|ice40-stuck|off       test the recovery: hold the iCE40 in reset once, or after\r\n"
+        "                                        every reload and across resets (until `off` or power-off)\r\n");
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
     out(ctx,
@@ -743,9 +778,17 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                 op(out, ctx, "  (records printed on the device log)\r\n");
             return;
         }
+        else if (!strcmp(sub, "fault")) {
+            /* Test the recovery ladder (recovery.h) with a failure made on purpose. */
+            const char *f = argc >= 3 ? argv[2] : "";
+            if (!emi_test_fault(f)) { op(out, ctx, "usage: emi fault ice40|ice40-stuck|off\r\n"); return; }
+            op(out, ctx, "  emi fault %s\r\n", f);
+            return;
+        }
         else if (strcmp(sub, "status")) {
             op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]\r\n");
+                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]"
+                         " | emi fault ice40|ice40-stuck|off\r\n");
             return;
         }
         char line[256];

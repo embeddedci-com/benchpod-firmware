@@ -11,7 +11,8 @@
  *
  *   RUN_START   at boot: run number, firmware version, reset cause, core clock, DAC mode
  *   EVENT       on a change: LED state (green -> red, red -> blue, ...), Ethernet link lost or
- *               back, the activity started or stopped
+ *               back, the activity started or stopped, a recovery step (iCE40 reload, STM32
+ *               reset, Ethernet restart; recovery.h) and its result
  *   CHECKPOINT  captures, errors, frames sent and dropped, link losses, LED state, the longest
  *               DAC gap a log write caused (0: the outputs keep running through log writes,
  *               emi_test.c). Written when a value that shows trouble changed (errors, drops,
@@ -76,6 +77,7 @@ typedef enum {
     EMI_EV_LINK_BACK  = 3,   /* the Ethernet link came back */
     EMI_EV_STARTED    = 4,   /* the activity started (boot start or `emi start`) */
     EMI_EV_STOPPED    = 5,   /* `emi stop` */
+    EMI_EV_RECOVERY   = 6,   /* a recovery step (recovery.h); the text says which and how it went */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */

@@ -842,14 +842,32 @@ void psram_boot_selftest_with_recovery(void) {
     /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up. */
     const bool configured = ice40_is_configured() != 0;
     psram_boot_selftest();
+    /* A soft reset (watchdog, a recovery, `reboot`, an OTA) does not reset the iCE40: one that was
+       mid-capture fails the first self-test. Reloading it from its flash (no write) clears that.
+       The flash is rewritten only when the image in it no longer matches a gateware slot, so a
+       reset never wears the config flash. */
     if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        printf("[psram-selftest] iCE40->PSRAM inoperable: loading gateware image 0 from the W25Q...\n");
-        if (ice40_reflash_image(0) == 0) {
+        printf("[psram-selftest] iCE40->PSRAM inoperable: reloading the iCE40 from its flash (no write)...\n");
+        if (ice40_reload() == 0) {
             sleep_ms(5);
-            signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
-            psram_boot_selftest();   /* re-test after the reflash */
+            signal_engine_refresh_version();
+            psram_boot_selftest();
+        }
+    }
+    if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
+        const int intact = ice40_boot_image_intact();
+        if (intact == 0) {
+            printf("[psram-selftest] the iCE40's flash image is damaged: writing gateware image 0 from the W25Q...\n");
+            if (ice40_reflash_image(0) == 0) {
+                sleep_ms(5);
+                signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
+                psram_boot_selftest();   /* re-test after the reflash */
+            } else {
+                printf("[psram-selftest] gateware load failed, run flash-ice40 on the console\n");
+            }
         } else {
-            printf("[psram-selftest] gateware load failed, run flash-ice40 on the console\n");
+            printf("[psram-selftest] still failing after a reload, the flash image is %s: not rewritten\n",
+                   intact > 0 ? "intact" : "unknown (no gateware slot)");
         }
     }
 

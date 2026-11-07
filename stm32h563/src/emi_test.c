@@ -19,8 +19,13 @@
 #include "b64url.h"
 #include "pico/time.h"                  /* time_us_32: the DAC glitch of a log write */
 #include "FreeRTOS.h"                   /* pvPortMalloc: the log lives on the heap */
+#include "task.h"                       /* vTaskDelay before a recovery reset */
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "recovery.h"
+#include "ice40_flash.h"                /* ice40_reload: the recovery's iCE40 step (no write) */
+#include "net_server.h"                 /* net_eth_restart */
+#include "boot_guard.h"                 /* boot_guard_planned_reset */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +83,11 @@ static struct {
     bool           link_seen;     /* the link was up once since the start */
     uint32_t       t_checkpoint;
     emi_cp_sig_t   cp_last;       /* the values in the last checkpoint */
+    /* the recovery ladder (recovery.h) */
+    uint32_t       fail_since;    /* captures failing since (0 = working) */
+    uint32_t       cap_issued_at; /* the capture in flight went out then */
+    uint32_t       link_down_since;
+    bool           rcv_init;
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -338,6 +348,20 @@ static void log_event(uint8_t kind, uint8_t from, uint8_t to) {
     log_queue(&r);
 }
 
+/* A recovery step's record: the event, with its text. */
+static void log_event_text(uint8_t kind, const char *text) {
+    emi_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.type = EMI_REC_EVENT;
+    r.led = emi_test_led_state();
+    r.u.ev.kind = kind;
+    r.u.ev.captures = s.captures;
+    r.u.ev.errors = s.errors;
+    r.u.ev.net_sent = ns.sent;
+    cut(r.u.ev.text, sizeof(r.u.ev.text), text);
+    log_queue(&r);
+}
+
 static emi_cp_sig_t cp_sig(void) {
     emi_cp_sig_t g;
     memset(&g, 0, sizeof(g));
@@ -382,6 +406,42 @@ static void choose_default_dac(void) {
     if (!board_has_analog()) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
 }
 
+/* ---- recovery (recovery.h) -----------------------------------------------------------------
+   The recovery ladder's resets survive in .noinit (random at power-on, so a power-on clears them
+   through the magic): how many STM32 resets the ladder made, and whether the last reset was one,
+   for the next run's RUN_START. */
+#define EMI_RCV_MAGIC 0x31564352u   /* "RCV1" */
+static struct {
+    uint32_t magic;
+    uint32_t resets;
+    uint32_t reset_pending;
+    uint32_t fault_stuck;          /* `emi fault ice40-stuck`: survives the ladder's resets */
+} s_keep __attribute__((section(".noinit")));
+static recovery_t s_rcv;
+
+static void keep_init(void) {
+    if (s_keep.magic != EMI_RCV_MAGIC) {
+        s_keep.magic = EMI_RCV_MAGIC;
+        s_keep.resets = 0;
+        s_keep.reset_pending = 0;
+        s_keep.fault_stuck = 0;
+    }
+}
+
+bool emi_test_fault(const char *name) {
+    keep_init();
+    if (!strcmp(name, "off")) { s_keep.fault_stuck = 0; printf("[emi] fault test off\n"); return true; }
+    if (strcmp(name, "ice40") && strcmp(name, "ice40-stuck")) return false;
+    s_keep.fault_stuck = !strcmp(name, "ice40-stuck");
+    printf("[emi] fault test: holding the iCE40 in reset%s\n", s_keep.fault_stuck ? " (stuck: again after every reload)" : "");
+    ice40_hold_off_bus();
+    return true;
+}
+static bool emi_recovery_reset_pending(void) {
+    keep_init();
+    return s_keep.reset_pending != 0;
+}
+
 /* At boot, before the activity: scan, erase the reserve, write RUN_START. */
 static void log_boot(void) {
     lg.tried = true;
@@ -403,7 +463,8 @@ static void log_boot(void) {
         r.led = emi_test_led_state();
         r.uptime_ms = HAL_GetTick();
         cut(r.u.start.fw, sizeof(r.u.start.fw), FIRMWARE_VERSION);
-        cut(r.u.start.reset, sizeof(r.u.start.reset), fault_last_reset_str());
+        cut(r.u.start.reset, sizeof(r.u.start.reset),
+            emi_recovery_reset_pending() ? "recovery reset" : fault_last_reset_str());
         r.u.start.core_mhz = (uint16_t)(SystemCoreClock / 1000000u);
         /* The mode the run will play: the boot start picks the default (choose_default_dac) only
            later, once the DAC is known, so name that default here without fixing it. */
@@ -414,6 +475,7 @@ static void log_boot(void) {
         r.u.start.gw_version = signal_engine_fpga_version();
         if (emi_log_append(&s_log, &r) == 0) lg.writes++;
     }
+    s_keep.reset_pending = 0;
     w25q_session_close();
     if (rc != 0 || erased < 0) {
         s_lm->log.ok = false;
@@ -658,6 +720,75 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
+/* Take one recovery step (recovery.h). Each one goes into the run log with what it did. */
+static void recovery_take(recovery_action_t a, uint32_t now) {
+    char text[28];
+    switch (a) {
+    case RECOVERY_ICE40_RELOAD: {
+        printf("[emi] recovery: captures failing for %lu s, reloading the iCE40 from its flash\n",
+               (unsigned long)((now - s.fail_since) / 1000u));
+        const int rc = ice40_reload();   /* reset + configure from the flash: no erase, no write */
+        if (s_keep.fault_stuck) ice40_hold_off_bus();   /* `emi fault ice40-stuck`: it stays down */
+        const bool alive = rc == 0 && signal_engine_refresh_version();
+        snprintf(text, sizeof(text), "iCE40 reload %s v%u", alive ? "ok" : "FAILED",
+                 (unsigned)signal_engine_fpga_version());
+        printf("[emi] recovery: %s\n", text);
+        log_event_text(EMI_EV_RECOVERY, text);
+        s.cap_issued = false;
+        s.t_next_cap = now + 1000u;
+        if (board_has_analog()) apply_dac(s.dac);   /* the reload stopped the outputs */
+        break;
+    }
+    case RECOVERY_MCU_RESET:
+        snprintf(text, sizeof(text), "STM32 reset (%lu of %u)", (unsigned long)(s_keep.resets + 1u),
+                 (unsigned)RECOVERY_RESETS_MAX);
+        printf("[emi] recovery: still failing after the iCE40 reloads: %s\n", text);
+        log_event_text(EMI_EV_RECOVERY, text);
+        log_flush();                     /* the record first: the reset drops the RAM queue */
+        s_keep.reset_pending = 1;
+        boot_guard_planned_reset(true);  /* not a crash: no safe mode for it */
+        vTaskDelay(pdMS_TO_TICKS(50));   /* the console line out */
+        NVIC_SystemReset();
+        break;
+    case RECOVERY_ETH_RESTART:
+        snprintf(text, sizeof(text), "Ethernet restart (down %lus)",
+                 (unsigned long)((now - s.link_down_since) / 1000u));
+        printf("[emi] recovery: %s\n", text);
+        log_event_text(EMI_EV_RECOVERY, text);
+        net_eth_restart();               /* PHY reset + DHCP; harmless with the cable out */
+        break;
+    default:
+        break;
+    }
+}
+
+/* Every worker pass while the loop runs: how long captures and the link have been failing, and
+   the next recovery step if one is due. */
+static void recovery_poll_emi(uint32_t now) {
+    if (!s.rcv_init) {
+        keep_init();
+        recovery_init(&s_rcv, now);
+        s.rcv_init = true;
+    }
+    if (!s.running) return;
+    static bool stuck_applied;
+    if (s_keep.fault_stuck && !stuck_applied) { stuck_applied = true; ice40_hold_off_bus(); }
+    if (s.cap_issued && now - s.cap_issued_at > 30000u && !s.fail_since)
+        s.fail_since = s.cap_issued_at ? s.cap_issued_at : 1u;   /* a capture that never ends */
+    const uint32_t fail_ms = s.fail_since ? now - s.fail_since : 0u;
+    if (s.link_seen && !ns.link) { if (!s.link_down_since) s.link_down_since = now ? now : 1u; }
+    else s.link_down_since = 0;
+    const uint32_t down_ms = s.link_down_since ? now - s.link_down_since : 0u;
+    const recovery_action_t a = recovery_poll(&s_rcv, now, fail_ms, down_ms, &s_keep.resets);
+    if (a != RECOVERY_NONE) {
+        recovery_done(&s_rcv, a, now, &s_keep.resets);
+        recovery_take(a, now);
+    } else if (recovery_exhausted(&s_rcv, now, fail_ms, s_keep.resets)) {
+        printf("[emi] recovery: limits reached, the pod stays red until power is removed\n");
+        log_event_text(EMI_EV_RECOVERY, "recovery limit reached");
+    }
+}
+
 uint32_t emi_test_run(void) { return log_ok() ? s_log.run : 0u; }
 
 void emi_test_start(void) {
@@ -669,6 +800,8 @@ void emi_test_start(void) {
     s.t_next_cap = s.t_start;
     s.captures   = 0;
     s.errors     = 0;
+    s.fail_since = 0;
+    s.link_down_since = 0;
     s.last_err[0] = '\0';
     ns.err         = false;   /* the net task re-reads the link from here on */
     s.link_seen    = false;
@@ -963,10 +1096,12 @@ void emi_test_poll(void) {
     }
     if (s.cap_issued && !capture_busy() && heavy_owner_conn() != CH_EMI_CONN) {
         s.cap_issued = false;
-        if (s.errors == s.cap_errors) s.captures++;   /* else its read-back failed */
+        if (s.errors == s.cap_errors) { s.captures++; s.fail_since = 0; }   /* else its read-back failed */
+        else if (!s.fail_since) s.fail_since = now ? now : 1u;
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
     }
     log_poll(now);
+    recovery_poll_emi(now);
     publish_monitor(now);
     if (!s.running) return;
     if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0 && (int32_t)(now - s.hold_until) >= 0) {
@@ -974,7 +1109,10 @@ void emi_test_poll(void) {
         if (!board_has_analog()) s.next_kind = 1;   /* LA only: capture_dual takes the ADC too */
         run(s.next_kind ? "la_capture" : "capture_dual", k_captures[s.next_kind]);
         s.next_kind = (s.next_kind + 1u) % (sizeof(k_captures) / sizeof(k_captures[0]));
-        if (s.errors == s.cap_errors) s.cap_issued = true;
-        else                          s.t_next_cap = now + 1000u;   /* refused: the other kind next */
+        if (s.errors == s.cap_errors) { s.cap_issued = true; s.cap_issued_at = now; }
+        else {
+            s.t_next_cap = now + 1000u;   /* refused: the other kind next */
+            if (!s.fail_since) s.fail_since = now ? now : 1u;
+        }
     }
 }
