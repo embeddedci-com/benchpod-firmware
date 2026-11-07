@@ -242,6 +242,26 @@ static void test_can_accept(void) {
     drain();
 }
 
+/* Slots the net task reserved are not taken by other producers between its check and its sends. */
+static void test_reserve(void) {
+    drain();
+    fill(6, HW_WORK_QUEUE_DEPTH - 2);                       /* two slots left */
+    CHECK(hw_worker_reserve(2u * HW_WORK_DATA_MAX), "two free slots not reservable");
+    CHECK(!hw_worker_can_accept(1), "can_accept counts reserved slots as free");
+    CHECK(!hw_worker_submit_console("status"), "the console took a reserved slot");
+    uint8_t b = 0x55;
+    CHECK(hw_worker_submit_bytes_reserved(6, &b, 1), "reserved send 1 refused");
+    CHECK(hw_worker_submit_bytes_reserved(6, &b, 1), "reserved send 2 refused");
+    CHECK(s_reserved == 0, "reservation not used up: %u", (unsigned)s_reserved);
+    drain();
+    fill(6, HW_WORK_QUEUE_DEPTH - 1);                       /* one slot left */
+    CHECK(!hw_worker_reserve(2u * HW_WORK_DATA_MAX), "reserved more than is free");
+    CHECK(hw_worker_reserve(1), "one free slot not reservable");
+    hw_worker_unreserve(1);                                  /* an abandoned pbuf gives it back */
+    CHECK(hw_worker_submit_console("status"), "an unreserved slot refused to the console");
+    drain();
+}
+
 int main(void) {
     hw_worker_init();
     CHECK(s_q != NULL, "queue not created");
@@ -252,6 +272,7 @@ int main(void) {
     test_out_of_range_id();
     test_cloud_slot();
     test_can_accept();
+    test_reserve();
     if (failures) { printf("test_hw_worker: %d FAILED\n", failures); return 1; }
     printf("test_hw_worker: all passed\n");
     return 0;
