@@ -631,6 +631,15 @@ the LA region, the ADC region and any resident deep-replay waveform into the 8 M
 front when they do not fit or when the combined sample rate would overrun the PSRAM bus (see
 [tri-capture-unified-psram.md](tri-capture-unified-psram.md)).
 
+The raw LA (12 MS/s and below) gets the same rate plan as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
+without `la_rate_mhz` it runs at the fastest rate, and a capture larger than the 96 KB burst
+buffer (about 49 000 samples) is slowed until it fits, so no sample is dropped: about 3 MS/s at
+1 000 000 samples. With ADC samples in the same capture the raw LA runs at most 8 MS/s (12 MS/s
+overflows the PSRAM there, at any depth and ADC rate). `la_rate_hz` in the reply is the rate it
+ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
+samples. (Before firmware 3.10.0 a deep `capture_dual` ran at the requested or the full 12 MS/s
+and overflowed, and 12 MS/s with the ADC was refused.)
+
 #### Response
 
 Chunked reply: the ADC region as unsigned 16-bit counts in `data`, then the LA region as **edges**. The **first** packet also carries the **achieved** rates so the client can build an aligned time-base (the gateware floors the ADC to a divider ≥ 60, so the actual rate can differ from the request):
@@ -657,8 +666,10 @@ packet carries `"la":true,"la_edges"` directly.
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
+| More than 2 097 152 samples in a stream | `"capture_dual takes at most 2097152 LA and 2097152 ADC samples (la_capture: up to <n> LA)"` |
 | LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
 | The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
+| The PSRAM could not keep up during the capture (STATUS overflow bit) | `"capture overflowed: the PSRAM could not keep up with LA <n> kS/s + ADC <n> kS/s. Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"` |
 | A count exceeds its fixed region (gateware before v22) | `"samples out of range (per-stream PSRAM region limit)"` |
 | Another capture or upload is running | `"busy"` |
 | ADC samples on the digital-only board | the [digital-board refusal](#gates-that-apply-to-every-command) |
@@ -812,8 +823,9 @@ The achieved rate can be lower than the request for two reasons:
 - The sample period is a whole number of 24 MHz clocks, so the rate is 24 MHz ÷ *n* (*n* ≥ 2,
   so at most 12 MS/s), rounded down from the request: 2.304 MHz runs at 24/11 = 2.18 MHz.
   Request a rate of that form (12, 8, 6, 4.8, 4, 3, 2.4, 2, … MHz) to get it exactly.
-- A capture larger than the 64 KB burst buffer (32768 samples) is slowed until it fits, so no
-  sample is dropped: about 4 MS/s at 100 000 samples and 3 MS/s at 300 000 or more.
+- A capture larger than the 96 KB burst buffer (about 49 000 samples) is slowed until it fits,
+  so no sample is dropped: 4.8 MS/s at 100 000 samples, 3.4 MS/s at 300 000 and 3 MS/s from
+  about 1 000 000.
 
 Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
