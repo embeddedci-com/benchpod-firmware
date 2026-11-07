@@ -751,7 +751,7 @@ static void recovery_take(recovery_action_t a, uint32_t now) {
         NVIC_SystemReset();
         break;
     case RECOVERY_ETH_RESTART:
-        snprintf(text, sizeof(text), "Ethernet restart (down %lus)",
+        snprintf(text, sizeof(text), "Eth restart, down %lus",  /* fits the 27 chars a record keeps */
                  (unsigned long)((now - s.link_down_since) / 1000u));
         printf("[emi] recovery: %s\n", text);
         log_event_text(EMI_EV_RECOVERY, text);

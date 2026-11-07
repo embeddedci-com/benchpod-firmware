@@ -101,7 +101,20 @@ jobs:
       - name: OTA commit code stays in RAM
         run: stm32h563/tools/check_ramfunc_calls.sh stm32h563/build/bench_pod_stm32.elf
 
-      - name: Host tests (with Cube, so the OTA and blob store suites run)
+      # The EMC lab's test build (EMI_TEST=1, never released) shares every source and library
+      # with the release, plus src/emi_test.c and the lab page. Build it here so it keeps compiling
+      # and stays warning-free.
+      - name: EMI test build, no compiler warnings
+        run: |
+          set -o pipefail
+          make -C stm32h563 -j"$(nproc)" EMI_TEST=1 2>&1 | tee build-emi.log
+          if grep 'warning:' build-emi.log | grep -v 'is not implemented and will always fail' > warnings-emi.txt; then
+            echo "::error title=Compiler warnings::$(wc -l < warnings-emi.txt) warning(s) in the EMI_TEST=1 build"
+            cat warnings-emi.txt
+            exit 1
+          fi
+
+      - name: Host tests (with mbedTLS, so the OTA and blob store suites run)
         run: |
           set -o pipefail
           make -C stm32h563 test 2>&1 | tee test.log
