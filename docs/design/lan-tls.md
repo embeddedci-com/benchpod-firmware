@@ -15,10 +15,12 @@ plaintext part. It does not add client authentication (see "Not in scope").
   external LAN (Ethernet, Wi-Fi): new connections are refused and open ones closed. 8080 keeps
   answering on the USB network adapter, which is physical presence and never crosses the bridge;
   that is also the way back if a TLS client is lost.
-- At most **2 TLS sessions at once** (each takes ~25-30 KB of FreeRTOS heap: 16 KB IN record
-  buffer, 4 KB OUT, handshake state). A third TLS client is refused at accept, and so is any TLS
-  client while the heap is below a floor that keeps the cloud link's room. Plaintext slots are
-  unaffected.
+- At most **3 TLS sessions at once** (each takes 22,000 B of FreeRTOS heap once open: 16 KB IN
+  record buffer, 4 KB OUT, context). Three because the SDK opens a connection per command and keeps
+  one for a UART session or a capture, so a UART console, a capture and one command run together.
+  A fourth TLS client is refused at accept, and so is any TLS client that would take the heap below
+  a floor that keeps the cloud link's room (48 KB, plus 24 KB for the new session). Plaintext slots
+  are unaffected. (Firmware 3.9.3 to 3.9.6 allowed 2.)
 - mDNS: the `_benchpod._tcp` TXT gains `tls=8443` and `https_only=0|1`. The service port stays
   8080 (old clients). `_scpi-raw` stays on 8080.
 

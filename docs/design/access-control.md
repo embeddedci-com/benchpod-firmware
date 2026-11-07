@@ -229,7 +229,8 @@ account, so it is the most valuable for a large customer.
   the 16 KB input record buffer (`:138`; Python's `ssl` and Go's `crypto/tls` cannot negotiate a
   smaller max fragment length) plus 4 KB output and ~10-15 KB of context and handshake state:
   roughly 30-40 KB each. `NET_MAX_CONN` is 5 (`net_server.c:62`), so at most 1-2 TLS LAN
-  sessions fit, and only when the bulk cloud WS is idle.
+  sessions fit, and only when the bulk cloud WS is idle. (Measured once built: 22,000 B per open
+  session; firmware 3.9.7 allows 3, admitted only while the heap stays above the cloud floor.)
 - **Code and CPU.** `MBEDTLS_SSL_SRV_C` is off (only `SSL_CLI_C`, `:125`); adding it costs
   ~20 KB flash. The H563 has no AES or PKA accelerator, so software AES-GCM at 250 MHz would
   cap LAN captures well below what the 100M link carries today, and a P-256 ECDHE + ECDSA

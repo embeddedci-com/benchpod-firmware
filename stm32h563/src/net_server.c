@@ -79,11 +79,15 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 
 #define TCP_SERVER_PORT   8080
 #define NET_MAX_CONN      5            /* TCP conn ids 0..4 (= CH_MAX_CONN), plaintext and TLS */
-/* TLS sessions at once: each holds ~25-30 KB of FreeRTOS heap (16 KB IN record buffer, 4 KB OUT,
-   handshake state). A TLS client beyond this, or one arriving while the heap is below the floor
-   (room the cloud link needs to reconnect), is refused. Plaintext slots are not affected. */
-#define LAN_TLS_MAX_SESSIONS   2
+/* TLS sessions at once. The SDK opens a connection per command and keeps one for a UART session or
+   a capture, so "UART console + capture + one command" needs three. Each session holds 22,000 B
+   of FreeRTOS heap once open (measured on 3.9.7: 155 KB free idle, 133 KB with one, 111 KB with
+   two; 16 KB IN record buffer, 4 KB OUT, context). A client is refused when it would take the
+   heap below the floor (room the cloud link needs to reconnect): free heap under FLOOR + SESSION.
+   Plaintext slots are not affected. */
+#define LAN_TLS_MAX_SESSIONS   3
 #define LAN_TLS_HEAP_FLOOR     (48u * 1024u)
+#define LAN_TLS_SESSION_HEAP   (24u * 1024u)   /* 22,000 B measured, plus handshake slack */
 
 static struct altcp_pcb *conn_pcb[NET_MAX_CONN];
 /* The TLS configuration a connection holds (lan_tls_ref), NULL for plaintext. */
@@ -477,7 +481,8 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     bool usb = ip4_addr_eq(ip_2_ip4(altcp_get_ip(newpcb, 1)), netif_ip4_addr(&s_usb_netif));
     if (!usb && !s_lan_up) { altcp_abort(newpcb); return ERR_ABRT; }
     if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
-    if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS || xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR)) {
+    if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS ||
+                xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_SESSION_HEAP)) {
         log_printf("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
                    (unsigned)xPortGetFreeHeapSize());
         altcp_abort(newpcb);
