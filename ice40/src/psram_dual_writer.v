@@ -123,9 +123,15 @@ module psram_dual_writer #(
     reg         cell_clk;                 // 1 = pulse SCLK for these 2 nibbles
 
     // Region pick for the NEXT burst: prefer whichever FIFO is fuller (ties -> LA,
-    // the higher-rate stream), fall back to the non-empty one.
+    // the higher-rate stream), fall back to the non-empty one -- except that a half-full ADC
+    // FIFO (a_urgent, >= 16 bytes) always wins. Without it a raw LA at divider 2 (12 MS/s)
+    // brings in more than the bursts drain, its FIFO is full at every pick, the tie goes to
+    // the LA every time, and the 31-byte ADC FIFO overflowed after ~15 samples: the LA could
+    // not run at 12 MS/s with any ADC capture (v52 and before). With it the ADC waits at most
+    // one LA burst once half full; the LA's ring absorbs that (tb_top_capture div2+adc, v53).
     wire        any_data = !a_empty || !l_empty;
-    wire        pick_la  = !l_empty && ((l_cnt >= a_cnt) || a_empty);
+    wire        a_urgent = |a_cnt[AW:4];
+    wire        pick_la  = !l_empty && (a_empty || (!a_urgent && (l_cnt >= a_cnt)));
 
     // ---- bus arbitration handshake ----
     // req: a staging FIFO has data to drain.  busy: we hold the bus for the whole

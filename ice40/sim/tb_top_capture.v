@@ -1112,6 +1112,17 @@ module tb_top_capture;
         $display("  [trig]   re-arm falling LA10 @div2 then trigger off: first LA byte t0+%0d == arm+%0d; sim time %0t",
                  base_la2, la0_cyc - arm_cyc, $time);
 
+        // ==== LA AT DIVIDER 2 WITH THE ADC (gw v53) ====
+        // At divider 2 the LA brings in more than the PSRAM writer drains, so its staging FIFO is
+        // full at every pick. With the LA winning ties (l_cnt >= a_cnt) the ADC never got a burst
+        // and its 31-byte FIFO overflowed after ~15 samples (STATUS bit 5): a 12 MS/s LA could not
+        // run with any ADC capture. 2000 LA samples keep the writer busy for ~5500 clk; 64 ADC
+        // samples at divider 100 arrive meanwhile.
+        la_drv = 14'h0123; bus_own = 1'b0; per_on = 0; #1000;
+        cmd_capture(24'd64, 16'd100, 24'd2000, 16'd2);
+        wait_done(8000); #4000; bus_own = 1'b1;
+        $display("  [div2+adc] LA 2000 @div2 + ADC 64 @div100: done, overflow checked by wait_done");
+
         // ==== RE-ARM AND ABORT MID-CAPTURE with the bus released (P2 T-2) ====
         // A long ADC + LA capture is writing PSRAM; the firmware arms a new, short one (other
         // counts, dividers and pins) or aborts it (both counts 0). After the arm, once the burst

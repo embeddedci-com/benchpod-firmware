@@ -797,7 +797,12 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 52) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels, version 53) ----
+    // GATEWARE_VERSION 53 = v52 + an ADC-urgent pick in psram_dual_writer: a half-full ADC staging
+    //     FIFO wins the next burst. Until v52 a raw LA at divider 2 (12 MS/s) kept its FIFO full at
+    //     every pick, won every tie, and the ADC FIFO overflowed after ~15 samples: a 12 MS/s LA
+    //     could not run with any ADC capture (firmware 3.10.0 held it to 8 MS/s there).
+    //     tb_top_capture "div2+adc".
     // GATEWARE_VERSION 52 = v51 + the 2026-11 review fixes (both images):
     //   * ADC capture timebase: a capture that includes the ADC restarts the free-running engine
     //     at t0 (adc_mcp33131 `restart`), so its first conversion starts on the LA's sample-0 edge,
@@ -1217,7 +1222,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd52), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd53), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
