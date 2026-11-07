@@ -651,14 +651,14 @@ static bool cap_overflowed(uint8_t st, const char *what) {
     s_cap_overflowed = false;
     /* A CONFIGURED iCE40 always drives STATUS bit 7 = 0 (cmd_dispatch hardwires it; bit 6 is
        LOOP_TRIPPED since gw v30).  If it is set the iCE40 isn't driving MISO at all — STATUS
-       floated to 0xFF via the pull-ups because the FPGA is UNCONFIGURED/wedged (it
-       loses config on a power blip / the config-window race, and a plain reboot does
-       NOT reload it).  bit5 (overflow) is then a false positive, so check this FIRST
-       and tell the user the real fix — reconfigure — instead of "lower the rate". */
+       floated to 0xFF via the pull-ups because the FPGA is UNCONFIGURED/wedged (a power
+       blip, an ESD hit).  bit5 (overflow) is then a false positive, so check this FIRST
+       and tell the user the real fix instead of "lower the rate".  Every boot reloads the
+       iCE40 now (psram_boot_selftest_with_recovery), so a reboot is that fix. */
     if ((st & 0x80) != 0) {
         printf("[sig] ERROR: %s failed — iCE40 NOT RESPONDING (STATUS=0x%02x): the FPGA "
-               "is unconfigured/wedged, not overflowing.  Reconfigure it (console "
-               "`flash-ice40`); a plain reboot won't fix it.\n", what, st);
+               "is unconfigured/wedged, not overflowing.  Reboot the pod (it reloads the "
+               "iCE40 at boot); if that does not help, `flash-ice40` on the console.\n", what, st);
         return true;
     }
     if (st & STATUS_CAP_OVF) {
@@ -2168,14 +2168,28 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
    a capture the shared-bus hand-off from the iCE40 can make the FIRST QPI read
    transaction error even though the bus is fine a moment later; a settle + retry
    (each re-acquiring the bus) recovers it without failing the whole capture. */
+/* Whether the settle and the retries still do anything is not known (the hand-off race was
+   never measured): count them, so `status` on the console says whether a read ever needs one. */
+static uint32_t s_rd_retried, s_rd_failed;
+static int s_rd_last_rc;
+void signal_engine_psram_read_stats(uint32_t *retried, uint32_t *failed, int *last_rc) {
+    *retried = s_rd_retried; *failed = s_rd_failed; *last_rc = s_rd_last_rc;
+}
 static int psram_read_settled(uint32_t addr, uint8_t *buf, uint32_t len) {
     for (int attempt = 0; attempt < 3; attempt++) {
         sleep_ms(1);
         psram_bus_acquire();
         int rc = psram_read(addr, buf, len);
         psram_bus_release();
-        if (rc == 0) return 0;
+        if (rc == 0) {
+            if (attempt) s_rd_retried++;
+            return 0;
+        }
+        s_rd_last_rc = rc;
+        if (s_rd_retried + s_rd_failed < 8u)
+            printf("[sig] PSRAM read-back attempt %d failed (rc %d), retrying\n", attempt + 1, rc);
     }
+    s_rd_failed++;
     return -1;
 }
 

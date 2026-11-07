@@ -802,3 +802,6 @@ bool fpga_uart_rx_overflowed(void);
 /* Reprogram the iCE40 when its gateware is not the version this firmware was built with, from
    the matching W25Q slot; no-op otherwise. Runs at boot and after a gateware blob install. */
 void signal_engine_gateware_update(void);
+/* Capture read-backs that needed a retry, that failed all three tries, and the last error code
+   (psram_read_settled). */
+void signal_engine_psram_read_stats(uint32_t *retried, uint32_t *failed, int *last_rc);

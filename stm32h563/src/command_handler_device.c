@@ -498,7 +498,7 @@ void handle_fpga_image(int conn_id, const char *json) {
     heavy_release(conn_id);
     if (rc == -1) { send_error(conn_id, "image out of range (0=loop, 1=deep-replay)"); return; }
     if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return; }
-    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover to reboot+reflash)"); return; }
+    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return; }
     if (rc != 0)  { send_error(conn_id, "image switch failed"); return; }
     /* The live image (and thus dac_control_loop / dac_deep_replay / dac_replay_max_samples) just
        changed — re-announce so the cloud/webapp gate on the NEW image, not the connect-time one. */
