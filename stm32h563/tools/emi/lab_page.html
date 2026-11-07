@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BenchPod EMI test</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#5f6b7a;--line:#dfe3e8;--green:#1f9d55;--red:#d93025;--blue:#1a73e8;--amber:#b06000}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--fg:#e8eaed;--muted:#9aa4b1;--line:#2e343d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:14px}
+#state{display:flex;gap:16px;align-items:center}
+#dot{width:56px;height:56px;border-radius:50%;flex:none;background:var(--muted)}
+#state h2{margin:0;font-size:22px}
+#state p{margin:2px 0 0;color:var(--muted)}
+#conn{font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px 16px}
+.grid div span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+.grid div b{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button{font:inherit;padding:6px 12px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+button:hover{border-color:var(--muted)}
+label{color:var(--muted)}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td.d{white-space:normal;min-width:280px}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
+tr.ev td{font-weight:600}
+.l-green{color:var(--green)}.l-red{color:var(--red)}.l-blue{color:var(--blue)}
+.warn{color:var(--amber)}
+small{color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>BenchPod EMI test</h1>
+<p class="sub" id="host"></p>
+
+<div class="card" id="state">
+  <div id="dot"></div>
+  <div><h2 id="verdict">Connecting to the pod...</h2><p id="detail"></p><p id="conn"></p></div>
+</div>
+
+<div class="card grid" id="facts"></div>
+
+<div class="card">
+  <div class="bar">
+    <b>Run log</b>
+    <small id="logstate"></small>
+    <span style="flex:1"></span>
+    <label><input type="checkbox" id="evonly"> events only</label>
+    <button id="csv">Download CSV</button>
+    <button id="json">Download all (JSON)</button>
+    <button id="full">Load full history</button>
+    <button id="clear">Clear saved copy</button>
+  </div>
+  <div class="tw" style="max-height:520px;overflow-y:auto;margin-top:10px">
+    <table><thead><tr><th>#</th><th>Time</th><th>Run</th><th>Since boot</th><th>Type</th><th>LED</th><th>Details</th></tr></thead>
+    <tbody id="rows"></tbody></table>
+  </div>
+  <p><small>This page keeps a copy of the pod's run log in this browser and adds what is new every few seconds, also after the network or the pod was down. The pod keeps its own copy in flash. Times come from this computer's clock.</small></p>
+</div>
+</main>
+<script>
+"use strict";
+const KEY = "bp-emi:" + location.host;
+const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"};
+const DACS = ["sine", "dc", "current", "off", "all"];
+const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped", 6: "recovery"};
+const MAX_SAMPLES = 20000;
+const $ = id => document.getElementById(id);
+
+let store = {recs: {}, runs: {}, samples: []};
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.recs) store = s; } catch (e) {}
+let dirty = false, status = null, lastOk = 0, downSince = 0, fullHistory = false, syncing = false;
+
+function save() {
+  if (!dirty) return;
+  try { localStorage.setItem(KEY, JSON.stringify(store)); dirty = false; }
+  catch (e) { store.samples = store.samples.slice(-5000); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e2) {} }
+}
+
+/* ---- decoding the pod's 64-byte records (src/emi_log.h) ---- */
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b, n) { let c = 0xFFFFFFFF; for (let i = 0; i < n; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function b64url(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); while (s.length % 4) s += "="; const bin = atob(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+function str(b, a, z) { let s = ""; for (let i = a; i < z && b[i]; i++) s += String.fromCharCode(b[i]); return s; }
+function decode(b) {
+  const v = new DataView(b.buffer, b.byteOffset, 64);
+  if (v.getUint16(0, true) !== 0x4C45) return null;
+  const type = b[2];
+  if (type < 1 || type > 3 || v.getUint32(60, true) !== crc32(b, 60)) return null;
+  const r = {seq: v.getUint32(4, true), run: v.getUint32(8, true), up: v.getUint32(12, true), led: LEDS[b[3]] || "off"};
+  if (type === 1) Object.assign(r, {type: "START", fw: str(b, 16, 32), reset: str(b, 32, 48), core: v.getUint16(48, true), dac: DACS[b[50]] || "?", mbit: b[51], gw: v.getUint32(52, true)});
+  else if (type === 2) Object.assign(r, {type: "EVENT", kind: b[16], from: LEDS[b[17]] || "off", to: LEDS[b[18]] || "off", captures: v.getUint32(20, true), errors: v.getUint32(24, true), sent: v.getUint32(28, true), text: str(b, 32, 60)});
+  else Object.assign(r, {type: "CHECK", captures: v.getUint32(16, true), errors: v.getUint32(20, true), sent: v.getUint32(24, true), drops: v.getUint32(28, true), losses: v.getUint32(32, true), lost: v.getUint32(36, true), gap: v.getUint32(40, true), dac: DACS[b[44]] || "?", mbit: b[45], running: !!b[46], link: !!b[47], text: str(b, 48, 60)});
+  return r;
+}
+function details(r) {
+  if (r.type === "START") return `pod started: firmware ${r.fw}, reset cause ${r.reset}, core ${r.core} MHz, DAC ${r.dac}, Ethernet stream ${r.mbit} Mbit/s, gateware ${r.gw}`;
+  const last = r.text ? `, last error: ${r.text}` : "";
+  if (r.type === "EVENT" && r.kind === 6) return `recovery: ${r.text}, captures ${r.captures}, errors ${r.errors}`;
+  if (r.type === "EVENT") return (r.kind === 1 ? `LED ${r.from} → ${r.to}` : (EVENTS[r.kind] || "event " + r.kind)) + `, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}` + last;
+  return `${r.running ? "running" : "stopped"}, DAC ${r.dac}, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}, dropped ${r.drops}, link ${r.link ? "up" : "down"}, link losses ${r.losses}, DAC gap max ${r.gap} us` + (r.lost ? `, records lost ${r.lost}` : "") + last;
+}
+function wall(run, up) { const o = store.runs[run]; return o === undefined ? null : new Date(o + up); }
+function fmtTime(d) { return d ? d.toLocaleString() : ""; }
+function fmtUp(ms) { const s = Math.floor(ms / 1000); return `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; }
+
+/* ---- talking to the pod ---- */
+async function get(path) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 5000);
+  try {
+    const res = await fetch(path, {cache: "no-store", signal: ctl.signal});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    if (j.status !== "ok") { const e = new Error(j.message || "error"); e.busy = /^busy/.test(j.message || ""); throw e; }
+    return j.data;
+  } finally { clearTimeout(t); }
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function maxSeq() { let m = 0; for (const k in store.recs) if (+k > m) m = +k; return m; }
+
+async function poll() {
+  const t0 = Date.now();
+  try {
+    const d = await get("/api/status");
+    const t = (t0 + Date.now()) / 2;
+    status = d; lastOk = Date.now(); downSince = 0;
+    store.runs[d.run] = Math.round(t - d.uptime_ms);
+    const e = d.emi_test || {};
+    store.samples.push([Math.round(t), d.run, d.uptime_ms, e.running ? 1 : 0, e.led, e.captures, e.errors, e.net_sent, e.net_drops, e.net_link ? 1 : 0, e.net_link_losses]);
+    if (store.samples.length > MAX_SAMPLES) store.samples.splice(0, store.samples.length - MAX_SAMPLES);
+    dirty = true;
+    await sync(d);
+  } catch (err) {
+    if (!downSince) downSince = lastOk || Date.now();
+  }
+  save();
+  render();
+}
+
+async function sync(d) {
+  if (syncing || !d.valid) return;
+  syncing = true;
+  try {
+    const newest = d.next_seq - 1;
+    let after = maxSeq();
+    if (!after && !fullHistory) after = Math.max(0, newest - 500);
+    if (fullHistory) { after = 0; fullHistory = false; }
+    for (let i = 0, tries = 0; i < 60 && after < newest; i++) {
+      let r;
+      try { r = await get("/api/log?after=" + after); tries = 0; }
+      catch (e) { if (e.busy && ++tries < 15) { await sleep(500); i--; continue; } throw e; }
+      if (!r.count) break;
+      const raw = b64url(r.data || "");
+      let top = after;
+      for (let o = 0; o + 64 <= raw.length; o += 64) {
+        const rec = decode(raw.subarray(o, o + 64));
+        if (!rec) continue;
+        if (!store.recs[rec.seq]) { store.recs[rec.seq] = rec; dirty = true; }
+        if (rec.seq > top) top = rec.seq;
+      }
+      if (top <= after) break;
+      after = top;
+      render();
+    }
+  } finally { syncing = false; }
+}
+
+/* ---- the page ---- */
+const VERDICT = {
+  "green": ["var(--green)", "OK", "Running, no failure since power-on."],
+  "green (starting)": ["var(--green)", "Starting", "The pod is powering up its test activity."],
+  "red": ["var(--red)", "FAILING NOW", "A function of the pod is failing at this moment."],
+  "blue": ["var(--blue)", "Running again after a failure", "It failed (or restarted) since power-on and works again now."],
+  "off": ["var(--muted)", "Stopped", "The test activity is not running."]
+};
+function render() {
+  $("host").textContent = "Pod at " + location.host;
+  const e = status && status.emi_test;
+  if (e) {
+    const v = VERDICT[e.led] || VERDICT.off;
+    $("dot").style.background = v[0];
+    $("verdict").textContent = v[1];
+    $("detail").textContent = v[2] + (status.last_error ? " Last error: " + status.last_error : "");
+    const f = [["Run", status.run], ["Since boot", fmtUp(status.uptime_ms)], ["Activity", e.running ? "running" : "stopped"],
+      ["Captures", e.captures], ["Errors", e.errors], ["Frames sent", e.net_sent], ["Frames dropped", e.net_drops],
+      ["Ethernet link", e.net_link ? "up" : "down"], ["Link losses", e.net_link_losses], ["DAC", e.dac],
+      ["Reset cause", e.reset_cause], ["Firmware", status.fw || ""]];
+    $("facts").innerHTML = f.filter(x => x[1] !== "").map(x => `<div><span>${x[0]}</span><b></b></div>`).join("");
+    [...$("facts").querySelectorAll("b")].forEach((b, i) => b.textContent = f.filter(x => x[1] !== "")[i][1]);
+  }
+  const c = $("conn");
+  if (downSince) { c.className = "warn"; c.textContent = `No answer from the pod since ${new Date(downSince).toLocaleTimeString()}. The pod keeps logging; this page catches up when it answers again.`; }
+  else if (lastOk) { c.className = ""; c.textContent = `Connected, updated ${new Date(lastOk).toLocaleTimeString()}`; }
+  const seqs = Object.keys(store.recs).map(Number).sort((a, b) => b - a);
+  $("logstate").textContent = `${seqs.length} records here` + (status ? `, ${status.valid} on the pod` : "") + (syncing ? ", fetching..." : "");
+  const evonly = $("evonly").checked;
+  const rows = [];
+  for (const s of seqs) {
+    const r = store.recs[s];
+    if (evonly && r.type === "CHECK") continue;
+    rows.push(`<tr class="${r.type === "CHECK" ? "" : "ev"}"><td>${r.seq}</td><td>${fmtTime(wall(r.run, r.up))}</td><td>${r.run}</td><td>${fmtUp(r.up)}</td><td>${r.type}</td><td class="l-${r.led}">${r.led}</td><td class="d"></td></tr>`);
+    if (rows.length >= 400) break;
+  }
+  const tb = $("rows");
+  tb.innerHTML = rows.join("");
+  let i = 0;
+  for (const s of seqs) { const r = store.recs[s]; if (evonly && r.type === "CHECK") continue; if (i >= tb.rows.length) break; tb.rows[i++].cells[6].textContent = details(r); }
+}
+
+function download(name, type, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-"); }
+$("csv").onclick = () => {
+  const q = s => `"${String(s).replace(/"/g, '""')}"`;
+  const lines = ["seq,time,run,since_boot_s,type,led,details"];
+  for (const s of Object.keys(store.recs).map(Number).sort((a, b) => a - b)) {
+    const r = store.recs[s], w = wall(r.run, r.up);
+    lines.push([r.seq, w ? w.toISOString() : "", r.run, (r.up / 1000).toFixed(1), r.type, r.led, q(details(r))].join(","));
+  }
+  download(`benchpod-emi-log-${stamp()}.csv`, "text/csv", lines.join("\n") + "\n");
+};
+$("json").onclick = () => download(`benchpod-emi-${stamp()}.json`, "application/json", JSON.stringify({
+  pod: location.host, saved: new Date().toISOString(), runs_start_epoch_ms: store.runs,
+  records: Object.values(store.recs).sort((a, b) => a.seq - b.seq),
+  samples_columns: ["time_ms", "run", "uptime_ms", "running", "led", "captures", "errors", "net_sent", "net_drops", "net_link", "net_link_losses"],
+  samples: store.samples}, null, 1));
+$("full").onclick = () => { fullHistory = true; if (status) sync(status).then(() => { save(); render(); }); };
+$("clear").onclick = () => { if (confirm("Delete the copy of the log kept in this browser? The pod keeps its own.")) { store = {recs: {}, runs: {}, samples: []}; dirty = true; save(); render(); } };
+$("evonly").onchange = render;
+
+render();
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>

@@ -427,8 +427,20 @@ static void log_dac_samples(uint32_t total) {
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
 static void quad_stream_ctrl(void);
+#if defined(BENCHPOD_EMI_TEST)
+/* The table dac_generate16 last loaded and started, for dac_restart_generated; 0 = none (any
+   other load replaced it). */
+static uint32_t s_gen_period, s_gen_divider;
+/* A deep replay was started and not stopped since: s_dac_ps_active covers it on >=v18 gateware,
+   this one on older gateware too (signal_engine_quiesce_psram_keep_dac). */
+static bool s_dac_ps_playing;
+#endif
 static int fpga_load_wave(const uint8_t *data, size_t len) {
     if (len == 0 || len > SIGNAL_BUF_SIZE) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period = 0;
+    s_dac_ps_playing = false;   /* a BRAM load replaces a deep replay */
+#endif
     /* The waveform BRAM is also the closed loop's curve, and the DAC engine / loop read it on
        clk48 while this writes it on clk: a running DAC played a half-rewritten table at the old
        period, with torn 16-bit samples (and a torn curve entry can step the loop output anywhere
@@ -849,18 +861,48 @@ void signal_engine_psram_report_wedge(void) {
    power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported.
    An iCE40 that never configured (a new board's blank config flash) is the gateware update's
    job, below: it also runs when the gw0 blob arrives after boot. */
+/* What the boot self-test did about the iCE40, for `status` (the early boot log is often gone
+   by the time a host opens the console). */
+static char s_ice40_boot_note[64] = "self-test passed";
+const char *ice40_boot_note(void) { return s_ice40_boot_note; }
+
 void psram_boot_selftest_with_recovery(void) {
     /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up. */
     const bool configured = ice40_is_configured() != 0;
     psram_boot_selftest();
+    /* A soft reset (watchdog, a recovery, `reboot`, an OTA) does not reset the iCE40: one that was
+       mid-capture fails the first self-test. Reloading it from its flash (no write) clears that.
+       The flash is rewritten only when the image in it no longer matches a gateware slot, so a
+       reset never wears the config flash. */
     if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        printf("[psram-selftest] iCE40->PSRAM inoperable: loading gateware image 0 from the W25Q...\n");
-        if (ice40_reflash_image(0) == 0) {
+        printf("[psram-selftest] iCE40->PSRAM inoperable: reloading the iCE40 from its flash (no write)...\n");
+        const int rl = ice40_reload();
+        if (rl == 0) {
             sleep_ms(5);
-            signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
-            psram_boot_selftest();   /* re-test after the reflash */
+            signal_engine_refresh_version();
+            psram_boot_selftest();
+        }
+        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "self-test failed, reload %s, then %s",
+                 rl == 0 ? "ok" : "failed",
+                 psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL ? "still failing" : "passed");
+    }
+    if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
+        const int intact = ice40_boot_image_intact();
+        snprintf(s_ice40_boot_note + strlen(s_ice40_boot_note), sizeof(s_ice40_boot_note) - strlen(s_ice40_boot_note),
+                 "; image %s at 0x%lx", intact == 1 ? "intact" : intact == 0 ? "differs: rewritten" : "unknown",
+                 (unsigned long)ice40_flash_last_mismatch());
+        if (intact == 0) {
+            printf("[psram-selftest] the iCE40's flash image is damaged: writing gateware image 0 from the W25Q...\n");
+            if (ice40_reflash_image(0) == 0) {
+                sleep_ms(5);
+                signal_engine_refresh_version();   /* re-ping the iCE40 + refresh cached version */
+                psram_boot_selftest();   /* re-test after the reflash */
+            } else {
+                printf("[psram-selftest] gateware load failed, run flash-ice40 on the console\n");
+            }
         } else {
-            printf("[psram-selftest] gateware load failed, run flash-ice40 on the console\n");
+            printf("[psram-selftest] still failing after a reload, the flash image is %s: not rewritten\n",
+                   intact > 0 ? "intact" : "unknown (no gateware slot)");
         }
     }
 
@@ -877,6 +919,17 @@ void psram_boot_selftest_with_recovery(void) {
    (flash-self installs them once the firmware boots), so the gw0 install brings it up without a
    reboot. */
 void signal_engine_gateware_update(void) {
+    /* Not configured at boot: first just reload it from its flash (no write). After an ESD hit or
+       a recovery reset its image is usually fine; only a flash that does not configure it (a new
+       board's blank flash, a damaged image) is written below. */
+    if (!ice40_is_configured() && ice40_reload() == 0 && ice40_is_configured()) {
+        sleep_ms(5);
+        signal_engine_refresh_version();
+        psram_boot_selftest();
+        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "not configured at boot, reload ok");
+        printf("[fpga] the iCE40 was not configured: reloaded from its flash, gateware v%u\n",
+               (unsigned)signal_engine_fpga_version());
+    }
     const int configured = ice40_is_configured();
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();
@@ -1452,6 +1505,10 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
     wave16_fill(shape, period, amp, mid, sample_buf16);
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
     if (fpga_start_dac(period, divider) != 0) return -1;
+#if defined(BENCHPOD_EMI_TEST)
+    s_gen_period  = period;
+    s_gen_divider = divider;
+#endif
 
     float eff_rate = dac_effective_rate_hz(divider);
     printf("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
@@ -1845,6 +1902,9 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
     s_dac_ps_active = (s_fpga_version >= CONCURRENT_PSRAM_MIN_GW);
+#if defined(BENCHPOD_EMI_TEST)
+    s_dac_ps_playing = true;
+#endif
     dac_timed = false;
     return 0;
 }
@@ -1872,8 +1932,48 @@ bool signal_engine_refresh_version(void) {
     return ok;
 }
 
+#if defined(BENCHPOD_EMI_TEST)
+int dac_restart_generated(void) {
+    if (!s_gen_period || dac_timed) return -1;
+    (void)dac_quiesce(false);
+    return fpga_start_dac(s_gen_period, s_gen_divider);
+}
+
+/* EMI test build: quiesce for the run log's W25Q sessions. Of the DAC's sources only the deep
+   replay (dac_psram_reader.v) masters the shared PSRAM bus; a waveform played from the BRAM table
+   (dac8551_engine.v, psram_mode=0) and the quad DAC's held channels drive their own pins and keep
+   running while the STM32 owns the bus. So the DAC is stopped only for a deep replay (the full
+   signal_engine_quiesce_psram_masters); otherwise this waits, bounded like it, for no capture
+   busy and the writer drained. true = it stopped the DAC. */
+bool signal_engine_quiesce_psram_keep_dac(void) {
+    if (s_dac_ps_active || s_dac_ps_playing) {
+        signal_engine_quiesce_psram_masters();
+        return true;
+    }
+    uint32_t t0 = HAL_GetTick();
+    for (;;) {
+        uint8_t st = 0;
+        if (fpga_status_read(&st) == 0 && !(st & STATUS_CAP_BUSY) && busy_read()) break;
+        if (HAL_GetTick() - t0 > 25u) {
+            printf("[sig] W25Q session: capture writer not idle after 25 ms (st=0x%02x)\n", st);
+            break;
+        }
+        sleep_ms(1);
+    }
+    return false;
+}
+
+bool signal_engine_dac_run_bit(void) {
+    uint8_t st = 0;
+    return fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN);
+}
+#endif
+
 void dac_stop(void) {
     dac_timed = false;
+#if defined(BENCHPOD_EMI_TEST)
+    s_dac_ps_playing = false;
+#endif
     /* Free the top-of-PSRAM deep-DAC region so a subsequent LA/ADC capture reclaims
        the full depth (no-op if no deep replay was resident). */
     signal_engine_dac_psram_release();

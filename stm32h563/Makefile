@@ -57,6 +57,7 @@ MBEDTLS     := $(CUBE)/Middlewares/Third_Party/mbed-crypto
 #######################################
 C_SOURCES := \
   src/main.c \
+  src/recovery.c \
   src/system_stm32h5xx.c \
   src/stm32h5xx_it.c \
   src/stm32h5xx_hal_timebase_tim.c \
@@ -200,7 +201,7 @@ C_SOURCES += lib/monocypher/src/monocypher.c \
              lib/monocypher/src/optional/monocypher-ed25519.c
 
 # HAL driver sources (curated; unused funcs are GC'd anyway).
-HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_rcc.c \
+HAL_C := stm32h5xx_hal.c stm32h5xx_hal_cortex.c stm32h5xx_hal_icache.c stm32h5xx_hal_rcc.c \
          stm32h5xx_hal_rcc_ex.c stm32h5xx_hal_gpio.c stm32h5xx_hal_pwr.c \
          stm32h5xx_hal_pwr_ex.c stm32h5xx_hal_flash.c stm32h5xx_hal_flash_ex.c \
          stm32h5xx_hal_dma.c stm32h5xx_hal_dma_ex.c stm32h5xx_hal_uart.c \
@@ -304,7 +305,11 @@ ifeq ($(RELEASE),1)
 $(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_EMI_TEST=1
-C_SOURCES += src/emi_test.c
+C_SOURCES += src/emi_test.c src/emi_log.c src/emi_http.c $(BUILD_DIR)/gen/emi_page.c
+# EMI_LOG_SECTORS=<n>: shrink the run log (emi_log.h) to n sectors (>= 2) to watch it wrap on a bench.
+ifneq ($(EMI_LOG_SECTORS),)
+DEFS      += -DEMI_LOG_TEST_SECTORS=$(EMI_LOG_SECTORS)
+endif
 # EMI_SYSCLK=240: run the core at 240 MHz instead of 250, so the core clock's emissions move and
 # can be told apart from other sources at 250 MHz (the 25 MHz crystal x10, the PHY's 50 MHz x5).
 ifneq ($(EMI_SYSCLK),)
@@ -312,7 +317,10 @@ DEFS      += -DBENCHPOD_SYSCLK_MHZ=$(EMI_SYSCLK)
 endif
 endif
 
-OPT := -Og -g3
+# -O2: measured on a v3r2 pod (2026-11-05, with the ICACHE on) AES-GCM 1.75x and SHA-256 1.2x
+# faster than -Og, a 1M-sample LAN ADC read-back 3.8 s -> 2.3 s, for 8 KB more flash.
+# ota_commit.c's RAM-resident code is guarded against -O2 turning loops into libcalls.
+OPT := -O2 -g3
 
 # -MMD -MP emits a per-object .d file of header deps (included below) so editing a
 # header forces a recompile — without it, editing e.g. la_rate.h left a stale la_rate.o.
@@ -481,6 +489,14 @@ test:
 # MBEDTLS_SSL_MAX_CONTENT_LEN (now split into IN/OUT) — alias it back for this file only.
 $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
                                                -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
+
+# The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
+$(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py
+	@mkdir -p $(dir $@)
+	python3 tools/emi/embed_page.py $< $@
+
+$(BUILD_DIR)/emi_page.o: $(BUILD_DIR)/gen/emi_page.c | $(BUILD_DIR)
+	$(CC) -c $(CFLAGS) $< -o $@
 
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@

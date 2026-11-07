@@ -39,6 +39,10 @@ static const cmd_desc_t k_tiers[] = {
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status) },
     { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status) },
     { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status) },
+#if defined(BENCHPOD_EMI_TEST)
+    /* EMI test build only (emi_test.h): read the run log out of the W25Q */
+    { { "emi_log", CMD_TIER_T0 }, 0, CMD_FN(handle_emi_log) },
+#endif
     { { "dac_loop_probe", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_probe) },
     /* T0, observational: they read the DUT */
     { { "capture", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture) },

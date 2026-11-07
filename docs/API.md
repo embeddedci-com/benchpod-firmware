@@ -267,6 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
 
@@ -3277,8 +3278,15 @@ back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
 ### `psram_recover` — reboot to recover the PSRAM
 
 When `status.psram_ok` is `false`, this acks with `{"recover":"rebooting"}` and reboots the pod
-about 0.4 s later; the boot self-test reflashes the iCE40 and brings the datapath back without a
-power cycle. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
+about 0.4 s later; the boot self-test reloads the iCE40 from its config flash and brings the
+datapath back without a power cycle. The config flash is rewritten only when the image in it no
+longer matches a gateware slot, so reboots do not wear it.
+
+**The iCE40 recovers by itself.** When the pod is idle the firmware pings the iCE40 every 30 s.
+One that answered since boot and stops answering (an ESD hit can hang or unconfigure it) is reloaded
+from its config flash (no write) after 10 s, at most 6 times an hour; the DAC outputs are parked as
+at boot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
+log says what it did. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
 reconnects" as success and check `status.psram_ok` again.
 
 ---
@@ -3712,6 +3720,91 @@ It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
 particular).
+
+### `emi_log` — the EMI test build's run log
+
+Only in the EMI test build (`make EMI_TEST=1`, never released); other builds answer `"unknown cmd"`.
+That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0x200000` (440 KB,
+7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
+`START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
+`EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
+started or stopped, a recovery step with its result) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
+losses, the longest DAC gap a log write caused, 0 normally). A `CHECK` is written when a value that
+shows trouble changed (errors, dropped frames, link losses, the LED, the link, the DAC gap, lost
+records), at most every 10 s, and once a minute when nothing changed. A quiet hour takes about 60
+records, an hour with trouble all the time at most 360. 16 sectors (1,024 records) are kept erased
+ahead of the write position, erased at boot before the loop starts, so a lab day never erases flash
+while it runs (unless it has trouble for more than about 2.8 hours in all); the ring keeps about
+6,000 records of history, about 100 quiet hours.
+
+```json
+{"cmd":"emi_log"}
+{"cmd":"emi_log","offset":0,"count":16}
+{"cmd":"emi_log","after":345,"count":16}
+```
+
+Without `count` it answers the log's state and the loop's (`emi_test`, the full object; `status`
+carries a short one); with `count` (at most `max_count`: 16, or 12 over the cloud, so the reply fits
+a connection's 2 KB send buffer) it returns that many raw 64-byte slots from slot `offset` on,
+base64url without padding, in slot order, instead of `emi_test`. With `after` (a sequence number)
+in place of `offset`, the read starts at the first record newer than it, and `count` is cut to the
+records there are (0 when there are none): a viewer that keeps a copy asks for `after` its newest
+`seq` until `count` is 0. An `after` older than the oldest record starts at the oldest. `offset` in
+the reply says where the read started; `uptime_ms` is the pod's uptime, to turn a record's
+`uptime_ms` in this run into a time of day. Without `count` the reply also carries `last_error` (the
+loop's last failure, empty when none) and `fw`:
+
+```json
+{"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
+  "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
+  "write_errors":0,"session_us_last":273,"session_us_max":2969,"glitch_us_last":0,"glitch_us_max":0,
+  "dac_stops":0,"max_count":16,"uptime_ms":4821930,"offset":0,"count":16,
+  "data":"RUwBAg..."}}
+```
+
+`run` is this boot's run number; `queued` records wait in RAM for the next write, `lost` found no
+room there. A slot is empty (all `0xFF`) or a record: `u16 magic 0x4C45` ("EL"), `u8 type` (1
+START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue), `u32 seq` (grows across
+runs: sort by it), `u32 run`, `u32 uptime_ms`, 44 bytes of payload, and a CRC-32 (zlib's) of the
+first 60 bytes; the payloads are in `stm32h563/src/emi_log.c`. `stm32h563/tools/emi/emi_log_dump.py`
+reads the whole log and prints it with a summary per run.
+
+The W25Q shares its bus with the PSRAM: a read with `count` while the EMI loop runs waits for no
+capture to be in flight (else `"busy: an EMI capture is using the bus, retry in a moment"`; the loop
+then holds its next capture back for 1.5 s, so a retry finds the bus free). Log writes and reads do
+not interrupt the outputs: the sine plays from the gateware's BRAM table and the 0-5 V DC and
+4-20 mA outputs are held by the quad DAC, none of which use the bus, so the DAC keeps running
+through a W25Q session. Only a deep DAC replay (from PSRAM) would be stopped and started again;
+the EMI loop never plays one. A session delays the loop's next capture instead: `session_us_last`
+and `session_us_max` are its time (measured on an analog v3r2 pod: 0.3 to 0.4 ms for one record,
+about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the W25Q's worst case
+is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
+time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
+The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
+
+**Recovery.** While the loop runs, the EMI build gets itself running again when it stays stuck
+(`stm32h563/src/recovery.h`): captures that keep failing for 10 s reload the iCE40 from its config
+flash (no write), a second time 30 s later, and when that does not help, the STM32 resets (30 s
+after the last reload). An Ethernet link that stays down for 20 s gets a PHY reset and a new DHCP
+request, at most once a minute. Limits: 6 iCE40 reloads an hour, 2 STM32 resets until the pod ran
+10 minutes without a failure or was powered off and on (the count survives the resets), 10 PHY
+resets an hour; past them the pod stays red. Each step is an `EVENT` (kind 6, `recovery`) whose text
+says what it did and how it went, e.g. `iCE40 reload ok v51` or `STM32 reset (1 of 2)`; the next
+run's `START` then has the reset cause `recovery reset`. A hang of the STM32 itself is the watchdog's
+(about 30 s). The console's `emi fault` makes such failures on purpose to test it.
+
+**The lab page.** The EMI build also answers HTTP on port 80 of every interface it has an address
+on: `http://<the pod's address>/` is a page for a test lab that shows the loop's state live (the
+LED's meaning, the counters, the last error) and keeps a copy of the run log in the browser. It
+fetches the newest 500 records the first time (all of them with "Load full history"), then only
+what is new every 5 s, also after the network or the pod was down, and stamps records of the
+running boot with the laptop's clock; "Download CSV" and "Download all (JSON)" save the copy, the
+JSON with a status sample every 5 s. The page is built in from `stm32h563/tools/emi/lab_page.html`
+and uses nothing from the internet. Besides `GET /` there are only two read-only paths, the two
+calls the page makes: `GET /api/status` (`{"cmd":"emi_log"}`) and `GET /api/log?after=<seq>`
+(`{"cmd":"emi_log","after":<seq>,"count":16}`); each answers that command's reply line as JSON.
+Anything else is refused (404, or 405 for a method other than GET). HTTP/1.0, one request per
+connection; a request takes one of the pod's 5 LAN connection slots while it runs.
 
 ---
 

@@ -464,7 +464,7 @@ static const char *holder_name(char *buf, size_t cap) {
 
 static const char *busy_msg(void) {
     static char msg[96];
-    char who[24];
+    char who[32];   /* "LAN connection " + an int */
     snprintf(msg, sizeof(msg), "busy: %s update from %s is in progress",
              ota_target_name(s_target), holder_name(who, sizeof(who)));
     return msg;

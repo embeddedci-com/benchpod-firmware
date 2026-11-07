@@ -37,7 +37,17 @@
  * applies here too. A heavy command from a client meanwhile gets "busy"; `emi stop` hands the
  * pod back. All of it runs on the hw worker (console commands do too).
  *
- * The USB console prints a monitor line every EMI_TEST_REPORT_MS and `emi` shows the state.
+ * The USB console prints a monitor line every EMI_TEST_REPORT_MS and `emi` shows the state. The
+ * same line goes out of the Ethernet port as a broadcast frame on the stream's EtherType, starting
+ * with "BPMON" (plus the run number, reset cause, uptime and the stream's sequence number), from
+ * boot on and whether the loop runs or not: a laptop on the cable reads it in Wireshark or with
+ * tools/emi/emi_watch.py, with no IP address. With an address, port 80 serves a page for the lab
+ * (emi_http.h) that shows the state and keeps a copy of the run log in the browser.
+ *
+ * Every run is also kept in the run log in the W25Q (emi_log.h): a RUN_START at boot, an EVENT on
+ * every LED or link change, a CHECKPOINT on a change (at most every 10 s) or once a minute.
+ * `emi log` prints it, the JSON command emi_log reads it out (tools/emi/emi_log_dump.py). Log writes go between two captures (the W25Q
+ * shares the PSRAM bus); the DAC outputs keep running through them.
  */
 
 /* Wait this long after boot before starting, so the network and cloud link come up first. */
@@ -103,12 +113,33 @@ int  emi_test_dac_from_name(const char *name);
 /* What the status LED shows for the loop (a status_led_emi_t, status_led.h). */
 uint8_t emi_test_led_state(void);
 
+/* The run log (emi_log.h). This boot's run number, 0 when the log is not available. */
+uint32_t emi_test_run(void);
+/* Console `emi log [n|all]`: print the last n records (0 = all) on the device log, a few lines
+   per worker pass; false when there is no log. */
+bool   emi_test_log_print(uint32_t n);
+#if defined(EMI_LOG_TEST_SECTORS)
+void   emi_test_log_fill(uint32_t n);   /* test builds only: `emi log fill <n>` */
+#endif
+/* "run log: run 12, 345 records in 7040 slots (...), ..." for `emi log`. */
+size_t emi_test_log_describe(char *buf, size_t cap);
+
 /* One-line state for the console (`emi`) and the monitor line. */
 size_t emi_test_describe(char *buf, size_t cap);
-/* The same as a JSON object for `status` ("emi_test"):
+/* The same as a JSON object, in the emi_log reply ("emi_test"):
    {"running":true,"dac":"sine","uart_la":0,"core_mhz":250,"uptime_s":12,"captures":40,"errors":0,
     "net_mbit":10,"net_sent":12000,"net_drops":0,"net_link":true,"net_link_losses":0,
     "led":"green","failed_since_power_on":false,"reset_cause":"power-on"} */
 size_t emi_test_json(char *buf, size_t cap);
+/* The short form for `status` ("emi_test"), whose LAN reply has to fit one connection's 2 KB TX
+   ring whole (conn_tx): {"running":true,"led":"green","failed_since_power_on":false,
+   "captures":40,"errors":0,"net_link":true,"run":3} */
+size_t emi_test_json_short(char *buf, size_t cap);
+
+/* Test the recovery ladder with a failure made on purpose (console `emi fault`): "ice40" holds the
+   iCE40 in reset once (as if an ESD hit unconfigured it: captures fail, the ladder reloads it);
+   "ice40-stuck" holds it again after every reload and across the ladder's STM32 resets, to see
+   the reset and the limits (cleared by "off" or a power-off). false for an unknown name. */
+bool emi_test_fault(const char *name);
 
 #endif

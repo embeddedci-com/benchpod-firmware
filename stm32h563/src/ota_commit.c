@@ -237,6 +237,11 @@ RAMFUNC static int ram_commit_all(uint32_t nsectors, uint32_t total, uint8_t *bu
         }
         ram_iwdg_kick();
     }
+    /* The ICACHE also caches data reads of the code region (main.c icache_init): turn it off
+       before rewriting that region, or the read-back in ram_flash_sector() would compare the
+       new image against cached old bytes. Register-only; the chip resets at the end. */
+    ICACHE->CR &= ~ICACHE_CR_EN;
+    while (ICACHE->SR & ICACHE_SR_BUSYF) { }
     ram_flash_unlock();
     for (uint32_t s = 0; s < nsectors; s++) {
         uint32_t base = s << FLASH_SECTOR_SHIFT;

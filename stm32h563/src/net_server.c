@@ -34,6 +34,7 @@
 #include "bp_limits.h"
 #if defined(BENCHPOD_EMI_TEST)
 #include "emi_test.h"
+#include "emi_http.h"
 #endif
 #include "net_reload.h"
 
@@ -284,6 +285,77 @@ int wifi_get_rssi(int *out_rssi_dbm) { if (out_rssi_dbm) *out_rssi_dbm = -1; ret
 /* ---- raw TCP server callbacks ------------------------------------------ */
 static int conn_id_of(void *arg) { return (int)(intptr_t)arg - 1; }
 
+#if defined(BENCHPOD_EMI_TEST)
+/* The lab page on :80 (emi_http.h). An HTTP connection takes a LAN slot like an :8080 one: an API
+   request goes to the hw worker as that slot's JSON command, and the slot closes once the reply's
+   line is out. The page is sent from flash. Net task only. */
+enum { HTTP_NONE = 0, HTTP_WAIT, HTTP_PAGE, HTTP_API, HTTP_DONE };
+static uint8_t s_http[NET_MAX_CONN];
+static size_t  s_http_off[NET_MAX_CONN];
+static struct altcp_pcb *s_http_listen;
+
+static void http_finish(int id) { s_http[id] = HTTP_DONE; s_close_req[id] = 1; }
+
+/* The first segment of a request: answer it. Anything after it is read and dropped. */
+static void http_recv(int id, struct altcp_pcb *pcb, struct pbuf *p)
+{
+    if (s_http[id] == HTTP_WAIT) {
+        char req[256];
+        const u16_t n = pbuf_copy_partial(p, req, sizeof(req), 0);
+        emi_http_req_t r;
+        emi_http_parse(req, n, emi_page_html_len, &r);
+        if (r.kind == EMI_HTTP_API && !hw_worker_can_accept(r.cmd_len)) {
+            r.kind = EMI_HTTP_ERROR;
+            r.head_len = (size_t)snprintf(r.head, sizeof(r.head),
+                "HTTP/1.0 503 Service Unavailable\r\nContent-Length: 5\r\nConnection: close\r\n\r\nbusy\n");
+        }
+        if (!r.head_len || altcp_write(pcb, r.head, (u16_t)r.head_len, TCP_WRITE_FLAG_COPY) != ERR_OK) {
+            http_finish(id);
+        } else if (r.kind == EMI_HTTP_PAGE) {
+            s_http[id] = HTTP_PAGE;
+            s_http_off[id] = 0;
+        } else if (r.kind == EMI_HTTP_API &&
+                   hw_worker_submit_bytes(id, (const uint8_t *)r.cmd, r.cmd_len)) {
+            s_http[id] = HTTP_API;
+        } else {
+            http_finish(id);
+        }
+        altcp_output(pcb);
+    }
+    altcp_recved(pcb, p->tot_len);
+    pbuf_free(p);
+}
+
+/* The page, as fast as the send buffer takes it; closed once all of it is queued. */
+static void http_page_out(int id, struct altcp_pcb *pcb)
+{
+    bool wrote = false;
+    while (s_http_off[id] < emi_page_html_len) {
+        size_t n = emi_page_html_len - s_http_off[id];
+        const u16_t sb = altcp_sndbuf(pcb);
+        if (sb == 0) break;
+        if (n > sb) n = sb;
+        if (altcp_write(pcb, emi_page_html + s_http_off[id], (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) break;
+        s_http_off[id] += n;
+        wrote = true;
+    }
+    if (wrote) altcp_output(pcb);
+    if (s_http_off[id] >= emi_page_html_len) http_finish(id);
+}
+
+static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err);
+static err_t http_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
+{
+    (void)arg;
+    const err_t r = srv_accept(NULL, newpcb, err);
+    if (r == ERR_OK) {
+        const int id = conn_id_of(newpcb->arg);
+        if (id >= 0 && id < NET_MAX_CONN) s_http[id] = HTTP_WAIT;
+    }
+    return r;
+}
+#endif
+
 /* The slot no longer has a connection: drop its TLS configuration reference (lan_tls_collect
    frees a retired one later, after lwIP has freed the TLS state that points at it). */
 static void conn_detach(int id)
@@ -309,6 +381,9 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
         return ERR_OK;
     }
     if (err != ERR_OK) { pbuf_free(p); return err; }
+#if defined(BENCHPOD_EMI_TEST)
+    if (id >= 0 && id < NET_MAX_CONN && s_http[id]) { http_recv(id, tpcb, p); return ERR_OK; }
+#endif
 
     /* Hand the inbound bytes to the worker task (it owns command_handler).
        ALL-OR-NOTHING: only consume this pbuf if the WHOLE thing fits the worker
@@ -410,6 +485,9 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     }
 
     conn_tx_reset(id);           /* clear any stale bytes from a prior conn on this slot */
+#if defined(BENCHPOD_EMI_TEST)
+    s_http[id] = HTTP_NONE;      /* http_accept marks its own */
+#endif
     s_close_req[id]   = 0;
     s_nodelay_req[id] = -1;
     conn_pcb[id] = newpcb;
@@ -435,6 +513,11 @@ static void net_tx_drain(void)
         struct altcp_pcb *pcb = conn_pcb[id];
         if (!pcb) continue;
         if (hw_worker_conn_busy(id)) continue;   /* (cannot be: accept skips busy slots) */
+#if defined(BENCHPOD_EMI_TEST)
+        if (s_http[id] == HTTP_PAGE) { http_page_out(id, pcb); continue; }
+        if (s_http[id] == HTTP_WAIT || s_http[id] == HTTP_DONE) continue;
+        bool http_line_out = false;
+#endif
         bool wrote = false;
         const uint8_t *chunk;
         size_t n;
@@ -443,10 +526,16 @@ static void net_tx_drain(void)
             if (sb == 0) break;
             if (n > sb) n = sb;
             if (altcp_write(pcb, chunk, (u16_t)n, TCP_WRITE_FLAG_COPY) != ERR_OK) break;
+#if defined(BENCHPOD_EMI_TEST)
+            if (s_http[id] == HTTP_API && memchr(chunk, '\n', n)) http_line_out = true;
+#endif
             conn_tx_advance(id, n);
             wrote = true;
         }
         if (wrote) altcp_output(pcb);
+#if defined(BENCHPOD_EMI_TEST)
+        if (http_line_out) http_finish(id);   /* the API reply is one line */
+#endif
         /* A TLS connection whose plaintext srv_recv refused: hand it back once there is room
            (plaintext TCP retries by itself on the next segment or tcp_fasttmr). */
         if (s_conn_refused[id] && s_conn_tls[id] && hw_worker_can_accept(HW_WORK_DATA_MAX)) {
@@ -564,6 +653,13 @@ static void server_start(void)
 {
     if (!s_listen) s_listen = listen_on(altcp_tcp_new_ip_type(IPADDR_TYPE_ANY), TCP_SERVER_PORT, NULL);
     tls_listener_sync();
+#if defined(BENCHPOD_EMI_TEST)
+    if (!s_http_listen) {
+        s_http_listen = listen_on(altcp_tcp_new_ip_type(IPADDR_TYPE_ANY), EMI_HTTP_PORT, NULL);
+        if (s_http_listen) altcp_accept(s_http_listen, http_accept);
+        else log_printf("[net] could not listen on :%d (the lab page)\n", EMI_HTTP_PORT);
+    }
+#endif
 }
 
 /* ---- DHCP management (per interface) ----------------------------------- */

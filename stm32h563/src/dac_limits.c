@@ -35,7 +35,7 @@ static dac_limits_t s_active;
 
    Refusal text. Commands are dispatched one at a time and the caller copies the text into its
    reply straight away, so one buffer is enough. */
-static char s_msg[240];
+static char s_msg[320];   /* "refused: " + describe() (< 96) + what (cut to 32) + fixed text */
 
 static const char *const s_path_names[3] = { "3v3", "5v", "12v" };
 
@@ -139,7 +139,7 @@ static const char *describe(void) {
 const char *dac_limits_check_raw(const char *what) {
     if (!s_active.enabled) return NULL;
     snprintf(s_msg, sizeof(s_msg),
-             "refused: %s, and %s writes raw DAC codes that can't be checked against them. "
+             "refused: %s, and %.32s writes raw DAC codes that can't be checked against them. "
              "Use dac_out or the control loop, or clear them with dac_limits enabled:false",
              describe(), what);
     return s_msg;

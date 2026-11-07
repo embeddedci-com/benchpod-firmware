@@ -240,8 +240,8 @@ void handle_cloud_set(int conn_id, const char *json) {
     memset(&cfg, 0, sizeof(cfg));
     cfg.magic   = CLOUD_CONFIG_MAGIC;
     cfg.version = CLOUD_CONFIG_VERSION;
-    strncpy(cfg.host, host, sizeof(cfg.host) - 1);
-    strncpy(cfg.device_id, did, sizeof(cfg.device_id) - 1);
+    snprintf(cfg.host, sizeof(cfg.host), "%s", host);             /* cfg is zeroed above; */
+    snprintf(cfg.device_id, sizeof(cfg.device_id), "%s", did);    /* both stay terminated */
     cfg.port    = (uint16_t)port;
     cfg.tls     = tls ? 1 : 0;
     cfg.enabled = (!have_en || cloud_truthy(en_s)) ? 1 : 0;   /* default enabled */

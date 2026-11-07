@@ -55,6 +55,18 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
 /* The same three shapes at the DAC8551's full 16 bits: `amp` (peak) and `mid` are 16-bit DAC
    codes, fractional, from wave16_codes_for_volts/_for_ua (wave16.h), so the calibrated
    `generate` form is not held to 256 levels. Same timing rules as above. */
+#if defined(BENCHPOD_EMI_TEST)
+/* EMI test build: start the table dac_generate16 last loaded again, after a stop that left it in
+   the waveform BRAM (a W25Q session's quiesce). Microseconds instead of the table's rebuild.
+   -1 = nothing to restart (another load replaced it, or a timed generate). */
+int dac_restart_generated(void);
+/* EMI test build: the run log's quiesce. Stops the DAC only when a deep replay (the one DAC source
+   that masters the PSRAM bus) is resident; else waits only for no capture busy and the writer
+   drained. true = it stopped the DAC (the caller starts it again). */
+bool signal_engine_quiesce_psram_keep_dac(void);
+/* EMI test build: the FPGA STATUS DAC_RUN bit (false when STATUS does not read). */
+bool signal_engine_dac_run_bit(void);
+#endif
 int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);
 
@@ -86,6 +98,8 @@ uint8_t signal_engine_fpga_version(void);
    flash-ice40). Returns true iff the FPGA answered; leaves the cache intact on
    failure. Quiet — for `status`; use fpga_ping() for the verbose bring-up path. */
 bool signal_engine_refresh_version(void);
+/* What the boot self-test did about the iCE40 (passed, reloaded, rewrote its flash), for status. */
+const char *ice40_boot_note(void);
 
 /* Minimum gateware version whose SPI slave takes the link at SPI1 kernel / 64 (3.9 MHz; v52 moves
    MISO on the SCK rise and samples MOSI aligned with SCK).  Older gateware is clean only at /128.

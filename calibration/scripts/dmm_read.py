@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Read the bench DMM (34401A over the NI GPIB-USB-HS) from the command line.
+"""Read the bench DMM from the command line.
 
 A thin CLI over dmm.py, so a calibration run (or a Claude session) reads the DMM itself instead
-of someone typing readings in. DC volts only.
+of someone typing readings in. DC volts only. The meter is found on its own: an HP/Agilent
+34401A on the NI GPIB-USB-HS, or an OWON XDM1041/XDM2041 on its USB serial port.
 
-    dmm_read.py idn                      # *IDN?: checks the adapter, the cable and the address
+    dmm_read.py idn                      # *IDN?: which meter answered (checks cable, adapter, port)
     dmm_read.py read                     # one reading, in volts
     dmm_read.py read -n 10 --json        # mean of 10 readings with min/max/std, as JSON
-    dmm_read.py read --range 100         # the 100 V range (the +/-12 V output)
+    dmm_read.py --range 5.5 read         # the smallest range that reads up to 5.5 V
     dmm_read.py watch --interval 0.5     # a reading every 0.5 s until Ctrl-C (or --count N)
+    dmm_read.py --dmm owon --port /dev/cu.usbserial-1410 idn   # that meter, on that port
 
-Ranges: 0.1, 1, 10 (default), 100, 1000 or auto. Fixed ranges are steadier for calibration;
-the 10 V range covers 0 to 5 V, use 100 for the 12 V output. --nplc sets the integration time
-in power-line cycles (10 = 0.2 s a reading, low noise; 1 = fast). --mock reads a fake DMM.
+--range is the largest voltage you expect, in volts, or auto (default 10). Each meter picks
+its smallest range that reads that far: 5.5 is the 34401A's 10 V range and the OWON's 5 V
+range, 10 is the 34401A's 10 V range and the OWON's 50 V range. Fixed ranges are steadier for
+calibration. --nplc sets the integration time in power-line cycles on the 34401A (10 = 0.2 s a
+reading, low noise; 1 = fast); the OWON has slow, medium and fast instead: 5 and above is slow.
+--dmm picks the meter (auto, 34401a, owon or mock; default auto, or $DMM); --port is the
+OWON's serial port (default $DMM_PORT, else the USB serial port that answers as an OWON).
 
-Needs libusb and pyusb on the Mac (calibration/scripts/requirements-host.txt):
+Needs libusb, pyusb and pyserial on the Mac (calibration/scripts/requirements-host.txt):
     brew install libusb
     python3 -m venv calibration/.venv
     calibration/.venv/bin/pip install -r calibration/scripts/requirements-host.txt
@@ -30,19 +36,22 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from dmm import Agilent34401A, DMMError, MockDMM  # noqa: E402
-
-RANGES = ["0.1", "1", "10", "100", "1000", "auto"]
+from dmm import KINDS, DMMError, open_dmm  # noqa: E402
 
 
-def open_dmm(args):
-    if args.mock:
-        return MockDMM()
-    auto = args.range == "auto"
-    dmm = Agilent34401A(gpib_addr=args.addr, nplc=args.nplc, vrange="DEF" if auto else args.range)
-    if auto:
-        dmm._write("VOLT:DC:RANG:AUTO ON")
-    return dmm
+def range_arg(s):
+    """argparse type for --range: a positive number of volts, or auto."""
+    if s.strip().lower() == "auto":
+        return "auto"
+    try:
+        v = float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{s!r} is not a number of volts or auto") from None
+    if v <= 0:
+        raise argparse.ArgumentTypeError("the range must be above 0 V")
+    if v > 1000:
+        raise argparse.ArgumentTypeError("the meters read up to 1000 V")
+    return s
 
 
 def stats(values):
@@ -56,7 +65,8 @@ def cmd_read(dmm, args):
     values = [dmm.read_dc() for _ in range(max(1, args.samples))]
     s = stats(values)
     if args.json:
-        print(json.dumps({**s, "range": args.range, "nplc": args.nplc}))
+        print(json.dumps({**s, "range": args.range, "nplc": args.nplc, "meter": dmm.name,
+                          "meter_range": dmm.range_label}))
     elif s["n"] == 1:
         print(f"{s['volts']:.7f} V")
     else:
@@ -80,10 +90,16 @@ def cmd_watch(dmm, args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--addr", type=int, default=22, help="GPIB primary address of the DMM (default 22)")
-    ap.add_argument("--range", choices=RANGES, default="10", help="DC volts range (default 10)")
-    ap.add_argument("--nplc", type=float, default=10, help="integration time in power-line cycles (default 10)")
-    ap.add_argument("--mock", action="store_true", help="a fake DMM, no hardware")
+    ap.add_argument("--dmm", choices=KINDS, default=None,
+                    help="which meter (default auto: the first one that answers; or $DMM)")
+    ap.add_argument("--port", default=None,
+                    help="the OWON's serial port (default $DMM_PORT, else auto-detected)")
+    ap.add_argument("--addr", type=int, default=22, help="GPIB primary address of the 34401A (default 22)")
+    ap.add_argument("--range", type=range_arg, default="10",
+                    help="largest voltage expected, in volts, or auto (default 10)")
+    ap.add_argument("--nplc", type=float, default=10,
+                    help="integration time in power-line cycles (default 10; OWON: 5+ = slow)")
+    ap.add_argument("--mock", action="store_true", help="a fake DMM, no hardware (= --dmm mock)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("idn", help="identify the DMM")
     rd = sub.add_parser("read", help="read DC volts")
@@ -95,12 +111,11 @@ def main(argv=None):
     w.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     try:
-        dmm = open_dmm(args)
+        dmm = open_dmm("mock" if args.mock else args.dmm, vrange=args.range, nplc=args.nplc,
+                       gpib_addr=args.addr, port=args.port)
     except DMMError as e:
-        sys.exit(f"dmm: {e}")
-    except Exception as e:  # GPIB errors from ni_gpib_usb (a timeout: the DMM does not answer)
-        sys.exit(f"dmm: the DMM does not answer on GPIB address {args.addr} ({e}). Is it on, is the "
-                 "GPIB cable seated, and is its HP-IB address set to that (Shift > I/O MENU)?")
+        sys.exit(f"dmm: {e}. Is the meter on and its USB cable in? A 34401A needs its HP-IB "
+                 f"address set to {args.addr} (Shift > I/O MENU); an OWON may need --port.")
     try:
         if args.cmd == "idn":
             print(dmm.idn().strip())
@@ -110,8 +125,8 @@ def main(argv=None):
             cmd_watch(dmm, args)
     except DMMError as e:
         sys.exit(f"dmm: {e}")
-    except Exception as e:
-        sys.exit(f"dmm: GPIB error while reading ({e})")
+    except Exception as e:  # GPIB or serial errors from the transport
+        sys.exit(f"dmm: {dmm.name} error while reading ({e})")
     finally:
         dmm.close()
 
