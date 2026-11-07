@@ -139,6 +139,10 @@ static uint32_t link_timer;
    before the first deep recovery. This is what lets a boot that missed its lease
    self-heal instead of printing "still no lease" forever. */
 #define DHCP_ESCALATE_REKICKS  3
+#define DHCP_ESCALATE_GAP_MS   (5u * 60u * 1000u)   /* at most one PHY reset for DHCP this often */
+static uint32_t s_dhcp_rx_mark;       /* rx_frames at the last re-kick */
+static bool     s_dhcp_escalated;
+static uint32_t s_dhcp_escalate_ms;
 
 /* Ethernet admin control (from the `eth` console/JSON command or the DHCP
    self-heal). Touching HAL_ETH + lwIP must happen on the net task, so other tasks
@@ -728,7 +732,20 @@ static void dhcp_process(net_if_t *i)
            autoneg is likely wedged (a state a power cycle "fixes"). Do a PHY soft
            reset to re-establish the link from scratch, then re-acquire. This is
            the self-heal for a boot that got stuck at "requesting address" forever. */
-        if (i->is_eth && ++i->dhcp_fails >= DHCP_ESCALATE_REKICKS) {
+        /* Only when nothing arrives: frames still coming in (ARP, mDNS, a laptop's chatter) mean
+           the PHY and MAC work and the network simply gives no lease (no DHCP server, e.g. a
+           laptop on the cable for BPMON), and resetting the PHY then only drops the link every
+           minute. And at most once per DHCP_ESCALATE_GAP_MS. */
+        bool rx_moved = false;
+        if (i->is_eth) {
+            rx_moved = s_eth_diag_primed && s_eth_diag.rx_frames != s_dhcp_rx_mark;
+            s_dhcp_rx_mark = s_eth_diag.rx_frames;
+            if (rx_moved) i->dhcp_fails = 0;
+        }
+        if (i->is_eth && ++i->dhcp_fails >= DHCP_ESCALATE_REKICKS &&
+            (!s_dhcp_escalated || (uint32_t)(HAL_GetTick() - s_dhcp_escalate_ms) >= DHCP_ESCALATE_GAP_MS)) {
+            s_dhcp_escalated = true;
+            s_dhcp_escalate_ms = HAL_GetTick();
             i->dhcp_fails = 0;
             i->dhcp.state = NET_DHCP_OFF;   /* re-DISCOVER once the link is back up */
             i->dhcp.wait_ticks = 0;
@@ -739,7 +756,8 @@ static void dhcp_process(net_if_t *i)
             break;
         }
         dhcp_start(netif);
-        log_printf("[net] %s DHCP: still no lease, re-probing...\r\n", tag);
+        log_printf("[net] %s DHCP: still no lease, re-probing%s...\r\n", tag,
+                   rx_moved ? " (frames arrive: the link works, no PHY reset)" : "");
         if (i->is_eth) eth_diag_print();
         break;
     case NET_DHCP_DO_BOUND:
