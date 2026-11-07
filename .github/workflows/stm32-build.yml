@@ -1,10 +1,10 @@
 # Build the STM32H563 firmware and run its host tests on every PR and push to main, so a
 # compiler warning, a build break or a skipped test is caught before a release tag is cut.
 #
-#   • Firmware build with the same ARM GCC and STM32CubeH5 as release-stm32.yml. The job fails
+#   • Firmware build with the same ARM GCC and STM32CubeH5 submodules as release-stm32.yml. The job fails
 #     on any compiler or linker warning except newlib's nosys stub notices
 #     ("_read is not implemented and will always fail" etc.), which are expected.
-#   • Host tests WITH Cube, so test_ota and test_blob_store (which need Cube's mbed-crypto)
+#   • Host tests WITH mbedTLS, so test_ota and test_blob_store (which need lib/stm32cube/stm32-mw-mbedtls)
 #     run instead of being skipped. The job fails if they are skipped.
 #
 #   • A RELEASE=1 build (release-build), so the release configuration is compiled on every PR
@@ -26,9 +26,6 @@ on:
   push:
     branches: [main]
   workflow_call:
-
-env:
-  CUBE_VERSION: v1.6.0
 
 permissions:
   contents: read
@@ -87,25 +84,10 @@ jobs:
         with:
           release: "13.3.Rel1"
 
-      - name: Cache STM32CubeH5 SDK
-        id: cube-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/STM32CubeH5
-          key: stm32cubeh5-${{ env.CUBE_VERSION }}
-
-      - name: Fetch STM32CubeH5 SDK
-        if: steps.cube-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "${CUBE_VERSION}" \
-            --recurse-submodules --shallow-submodules \
-            https://github.com/STMicroelectronics/STM32CubeH5.git \
-            "${{ runner.temp }}/STM32CubeH5"
-
       - name: Build STM32 firmware
         run: |
           set -o pipefail
-          make -C stm32h563 -j"$(nproc)" CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee build.log
+          make -C stm32h563 -j"$(nproc)" 2>&1 | tee build.log
 
       - name: No compiler warnings
         run: |
@@ -119,10 +101,23 @@ jobs:
       - name: OTA commit code stays in RAM
         run: stm32h563/tools/check_ramfunc_calls.sh stm32h563/build/bench_pod_stm32.elf
 
-      - name: Host tests (with Cube, so the OTA and blob store suites run)
+      # The EMC lab's test build (EMI_TEST=1, never released) shares every source and library
+      # with the release, plus src/emi_test.c and the lab page. Build it here so it keeps compiling
+      # and stays warning-free.
+      - name: EMI test build, no compiler warnings
         run: |
           set -o pipefail
-          make -C stm32h563 test CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee test.log
+          make -C stm32h563 -j"$(nproc)" EMI_TEST=1 2>&1 | tee build-emi.log
+          if grep 'warning:' build-emi.log | grep -v 'is not implemented and will always fail' > warnings-emi.txt; then
+            echo "::error title=Compiler warnings::$(wc -l < warnings-emi.txt) warning(s) in the EMI_TEST=1 build"
+            cat warnings-emi.txt
+            exit 1
+          fi
+
+      - name: Host tests (with mbedTLS, so the OTA and blob store suites run)
+        run: |
+          set -o pipefail
+          make -C stm32h563 test 2>&1 | tee test.log
           if grep -q '^SKIP' test.log; then
             echo "::error title=Host tests skipped::$(grep '^SKIP' test.log)"
             exit 1
@@ -143,21 +138,6 @@ jobs:
         with:
           release: "13.3.Rel1"
 
-      - name: Cache STM32CubeH5 SDK
-        id: cube-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/STM32CubeH5
-          key: stm32cubeh5-${{ env.CUBE_VERSION }}
-
-      - name: Fetch STM32CubeH5 SDK
-        if: steps.cube-cache.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "${CUBE_VERSION}" \
-            --recurse-submodules --shallow-submodules \
-            https://github.com/STMicroelectronics/STM32CubeH5.git \
-            "${{ runner.temp }}/STM32CubeH5"
-
       # The gateware blobs as the release embeds them (copies of ice40/release/, no toolchain).
       # Not fatal here: a PR may carry unpromoted gateware; the release workflow fails on it.
       - name: Install the hardware-verified iCE40 images
@@ -166,7 +146,7 @@ jobs:
       - name: Build STM32 firmware (RELEASE=1)
         run: |
           set -o pipefail
-          make -C stm32h563 -j"$(nproc)" RELEASE=1 CUBE="${{ runner.temp }}/STM32CubeH5" 2>&1 | tee build.log
+          make -C stm32h563 -j"$(nproc)" RELEASE=1 2>&1 | tee build.log
 
       - name: No compiler warnings
         run: |

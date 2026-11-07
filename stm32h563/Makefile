@@ -2,9 +2,9 @@
 #
 # `make` builds, `make test` runs the host tests, `make flash-dfu` / `make flash`
 # program a pod, `make clean`, `make help`.
-# Uses the STM32CubeH5 HAL (and its mbed-crypto) referenced in place from $(CUBE),
-# plus FreeRTOS, LwIP, the ST USB device stack, scpi-parser and Monocypher
-# as submodules under lib/.
+# Every library is a git submodule under lib/ (so Dependabot sees each one): the STM32CubeH5
+# pieces under lib/stm32cube/ (HAL, CMSIS, LAN8742, mbedTLS; see docs/DEPENDENCIES.md), plus
+# FreeRTOS, LwIP, TinyUSB, scpi-parser and Monocypher.
 
 TARGET            := bench_pod_stm32
 # EMI_TEST=1 (EMC test build, see "EMI test build" below) builds into its own directory, so its
@@ -15,8 +15,9 @@ BUILD_DIR         := $(if $(filter 1,$(EMI_TEST)),build-emi,build)
 # Split DFU images (built by `all`; recipes further below). Defined up here so the
 # `all:` prerequisite list — read before those recipes — sees them.
 
-# STM32CubeH5 SDK location (override on the command line if installed elsewhere).
-CUBE              ?= /opt/STM32CubeH5
+# STM32CubeH5 components, one submodule each (docs/DEPENDENCIES.md). STM32CUBE=<dir> points
+# the build at another copy laid out the same way.
+STM32CUBE         ?= $(abspath lib/stm32cube)
 
 # Programmer: OpenOCD interface cfg (stlink, cmsis-dap, jlink, ...).
 OPENOCD_INTERFACE ?= stlink
@@ -42,15 +43,15 @@ BIN     := $(CP) -O binary -S
 #######################################
 # SDK / library paths
 #######################################
-CMSIS_CORE  := $(CUBE)/Drivers/CMSIS/Include
-CMSIS_DEV   := $(CUBE)/Drivers/CMSIS/Device/ST/STM32H5xx
-HAL         := $(CUBE)/Drivers/STM32H5xx_HAL_Driver
+CMSIS_CORE  := $(STM32CUBE)/cmsis_core/Include
+CMSIS_DEV   := $(STM32CUBE)/cmsis_device_h5
+HAL         := $(STM32CUBE)/stm32h5xx_hal_driver
 FREERTOS    := lib/FreeRTOS-Kernel
 FREERTOS_PORT := $(FREERTOS)/portable/GCC/ARM_CM33_NTZ/non_secure
 TUSB        := lib/tinyusb/src
 LWIP        := lib/stm32_mw_lwip
-LAN8742     := $(CUBE)/Drivers/BSP/Components/lan8742
-MBEDTLS     := $(CUBE)/Middlewares/Third_Party/mbed-crypto
+LAN8742     := $(STM32CUBE)/stm32-lan8742
+MBEDTLS     := $(STM32CUBE)/stm32-mw-mbedtls
 
 #######################################
 # Sources
@@ -505,7 +506,7 @@ $(BUILD_DIR)/%.o: %.s | $(BUILD_DIR)
 	$(AS) -c $(ASFLAGS) $< -o $@
 
 # The compile flags and defines are part of every object: RELEASE=1 adds -DBENCHPOD_RELEASE=1, a
-# different CUBE moves the include paths. make only compares file times, so without this a
+# different STM32CUBE moves the include paths. make only compares file times, so without this a
 # `make RELEASE=1` after a dev build relinked the dev objects into a "release" image. The stamp is
 # rewritten only when its content changes, so an unchanged build rebuilds nothing.
 DEFS_STAMP := $(BUILD_DIR)/flags.stamp
@@ -587,5 +588,5 @@ help:
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"
-	@echo "Vars:    CUBE=$(CUBE)  OPENOCD_INTERFACE=$(OPENOCD_INTERFACE)"
+	@echo "Vars:    STM32CUBE=$(STM32CUBE)  OPENOCD_INTERFACE=$(OPENOCD_INTERFACE)"
 	@echo "         DFU_UTIL=$(DFU_UTIL)  DFU_FLASH_ADDR=$(DFU_FLASH_ADDR)"
