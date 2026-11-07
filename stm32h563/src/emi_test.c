@@ -628,6 +628,9 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
     if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
         char st[352];
         if (emi_test_json(st, sizeof(st))) bp_emit(&e, ",\"emi_test\":%s", st);
+        bp_emit_raw(&e, ",\"last_error\":");
+        bp_emit_jstr(&e, s.last_err);
+        bp_emit(&e, ",\"fw\":\"%s\"", FIRMWARE_VERSION);
     }
     if (count) {
         bp_emit_raw(&e, ",\"data\":\"");
