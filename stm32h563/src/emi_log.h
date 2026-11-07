@@ -23,11 +23,11 @@
  * number, the next write goes to the slot after it. Slots are written in order; before the write
  * position reaches a sector that is not empty, that sector (the 64 oldest records) is erased.
  *
- * Capacity: 110 sectors x 64 = 7,040 slots. emi_test.c keeps 16 sectors (1,024 slots, about 80
- * hours of checkpoints) erased ahead of the write position, erased at boot, so a run never waits
- * for an erase in practice; that leaves about 6,000 records of history. A one-hour run takes
- * about 15 (start, a few events, 12 checkpoints), so the log holds roughly the last 400 one-hour
- * runs or 1,700 to 3,000 short ones; a 24-hour run takes about 300.
+ * Capacity: 110 sectors x 64 = 7,040 slots. emi_test.c keeps 16 sectors (1,024 slots, about 2.8
+ * hours of checkpoints) erased ahead of the write position, erased at boot; a longer run erases
+ * the next sector between two captures (about every 10 minutes). That leaves about 6,000 records
+ * of history. A checkpoint every 10 s is 360 records an hour, so the log holds about the last
+ * 16 hours of running: a full lab day, with the events.
  *
  * This file is the record format and the ring logic only, over three flash callbacks, so it runs
  * in the host tests. emi_test.c gives it the W25Q (w25q_open/close after
@@ -55,7 +55,7 @@
 #define EMI_LOG_MAX_SLOTS   (((EMI_LOG_END - EMI_LOG_BASE) / EMI_LOG_SECTOR) * EMI_LOG_PER_SECTOR)
 
 #define EMI_LOG_MAGIC       0x4C45u   /* "EL" as stored (little-endian) */
-#define EMI_LOG_CHECKPOINT_MS  (5u * 60u * 1000u)
+#define EMI_LOG_CHECKPOINT_MS  (10u * 1000u)
 
 typedef enum {
     EMI_REC_RUN_START  = 1,

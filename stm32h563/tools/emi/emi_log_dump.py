@@ -2,7 +2,7 @@
 """Download and decode the run log of a BenchPod running the EMI test build.
 
 The EMI test build keeps every run (one power-on) in the W25Q: a RUN_START record at boot, an
-EVENT on every LED or link change, a CHECKPOINT every 5 minutes (src/emi_log.h). This reads the
+EVENT on every LED or link change, a CHECKPOINT every 10 s (src/emi_log.h). This reads the
 whole ring with the JSON command emi_log, a chunk at a time, and prints it oldest first, then a
 summary per run.
 

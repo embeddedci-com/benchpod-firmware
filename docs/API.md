@@ -3721,11 +3721,11 @@ That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0
 7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
-started or stopped) and a `CHECK` every 5 minutes (captures, errors, frames sent and dropped, link
-losses, the longest DAC gap a log write caused, 0 normally). A one-hour run takes about 15
-records. 16 sectors (1,024 records, about 80 hours of checkpoints) are kept erased ahead of the
+started or stopped) and a `CHECK` every 10 s (captures, errors, frames sent and dropped, link
+losses, the longest DAC gap a log write caused, 0 normally). An hour of running takes about 360
+records. 16 sectors (1,024 records, about 2.8 hours of checkpoints) are kept erased ahead of the
 write position, erased at boot before the loop starts, so the ring keeps about 6,000 records of
-history: the last few hundred to few thousand runs.
+history: about the last 16 hours of running, a full lab day.
 
 ```json
 {"cmd":"emi_log"}
