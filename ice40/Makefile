@@ -526,13 +526,16 @@ SEED_LOOP_FALLBACK ?= 25 45 14 21 40 2 9 13 41 24 23
 # clk48 -> clk 4.39 / 5.68 ns; 9 ties but sits at 14.99 ns clk -> clk48).  RE-VERIFY deep replay.
 # v52 (4287 LC, 81%): seed 16 fell to 48.53 MHz.  Swept 1..48 locally: 40/48 reach MIN_CLK48_MHZ,
 # nine tie at 56.95.  Pinned SEED_DEEP 16 -> 41, the tie with the shortest clk -> clk48 paths
-# (13.92 ns; clk 27.46, clk48 -> clk 6.22 ns).  CI sweep not run yet.  RE-VERIFY deep replay.
-SEED_DEEP ?= 41
+# (13.92 ns; clk 27.46, clk48 -> clk 6.22 ns).  CI then failed seed 41: clk -> clk48 18.40 ns.
+# Swept 1..64 in both (CI run 42391635281): 51/64 local; 11 seeds keep clk48 >= 50 MHz and
+# clk -> clk48 <= MAX_X48_NS in both.  Pinned SEED_DEEP 41 -> 5, the one with the most
+# clk -> clk48 margin (13.88 CI / 14.09 local ns; clk48 57.07 CI / 55.60 local MHz).
+SEED_DEEP ?= 5
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 13 43 39 46 22 45 5 3 9 11 14
+SEED_DEEP_FALLBACK ?= 54 13 32 53 39 35 12 45 24 64
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
