@@ -2,19 +2,19 @@
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=52
 source_sha256=a0862b5dfbdbbbdde5f70b6d4c16af910004b05b4d10e9883b3f5d6de6d8187d
-built_from=f2ddf19
-promoted=2026-11-04
+built_from=a0e2790
+promoted=2026-11-07
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=hwe2e on benchpod-30a9f1 (analog v3r2) 2026-11-04 with dev fw (SPI /64): TestHW 74 pass/6 skip/0 fail incl. the deep-image group; SDK+MCP+OpenHTF e2e 135 pass/65 skip/0 fail; process-node HIL 79/80 (1 LAN TLS handshake reset, 33/33 on rerun); spi-diag 3000/3000 at /64
+hw_verified=hwe2e TestHW (LAN) 74 passed / 6 skipped / 0 failed on benchpod-30a9f1 (analog v3r2), fw 3.9.7 candidate, 2026-11-07
 loop.sha256=b2db964354fdf22d240b7854b15927cca684af47fa89d00372980943a07734a4
 loop.seed=35
 loop.defines=-DVERSION_V2
 loop.clk48_mhz=56.69
-deep.sha256=7ddd0969c3c563e9ae6e6681878d925ab40fac22015d7e5a9fb372656527f092
-deep.seed=41
+deep.sha256=42a4dbd6b7031a0fd5123b945ef2fd508d5ce5baae092005e01e6770bd9b4d3d
+deep.seed=5
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=56.95
+deep.clk48_mhz=55.60
