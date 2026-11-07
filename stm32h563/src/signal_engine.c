@@ -32,6 +32,7 @@
 #include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
 
 #include <string.h>
+#include "fault.h"            /* fault_last_reset_str: a soft reset leaves the iCE40 running */
 #include <math.h>
 #include <stdio.h>
 
@@ -863,13 +864,34 @@ void signal_engine_psram_report_wedge(void) {
    job, below: it also runs when the gw0 blob arrives after boot. */
 /* What the boot self-test did about the iCE40, for `status` (the early boot log is often gone
    by the time a host opens the console). */
-static char s_ice40_boot_note[64] = "self-test passed";
+static char s_ice40_boot_note[128] = "self-test passed";
 const char *ice40_boot_note(void) { return s_ice40_boot_note; }
 
 void psram_boot_selftest_with_recovery(void) {
     /* Runs on the hw worker task (boot_deferred_hw_init), after USB is up. */
     const bool configured = ice40_is_configured() != 0;
+    /* Only a power-on resets the iCE40 with the STM32. After any other reset (`reboot`, an OTA,
+       a watchdog, the reset pin) it keeps running with the registers the last session set: a
+       capture_dual's packed capture base, a deep-DAC reservation, the control loop. The firmware
+       restarts with power-on copies of those (signal_engine_on_gateware_reconfigured), so the
+       first capture wrote where the firmware did not look and the self-test failed (measured: 2/2
+       after a capture_dual, 2/2 mid-capture). Reload the iCE40 from its flash first (no write):
+       both sides then start from power-on values. */
+    if (configured && strcmp(fault_last_reset_str(), "power-on") != 0) {
+        const int rl = ice40_reload();
+        if (rl == 0) {
+            sleep_ms(5);
+            signal_engine_refresh_version();
+        }
+        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "%s reset: reload %s, ",
+                 fault_last_reset_str(), rl == 0 ? "ok" : "failed");
+    } else {
+        s_ice40_boot_note[0] = '\0';
+    }
+    const size_t pre = strlen(s_ice40_boot_note);
     psram_boot_selftest();
+    snprintf(s_ice40_boot_note + pre, sizeof(s_ice40_boot_note) - pre, "self-test %s",
+             psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL ? "failed" : "passed");
     /* A soft reset (watchdog, a recovery, `reboot`, an OTA) does not reset the iCE40: one that was
        mid-capture fails the first self-test. Reloading it from its flash (no write) clears that.
        The flash is rewritten only when the image in it no longer matches a gateware slot, so a
@@ -882,7 +904,7 @@ void psram_boot_selftest_with_recovery(void) {
             signal_engine_refresh_version();
             psram_boot_selftest();
         }
-        snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "self-test failed, reload %s, then %s",
+        snprintf(s_ice40_boot_note + pre, sizeof(s_ice40_boot_note) - pre, "self-test failed, reload %s, then %s",
                  rl == 0 ? "ok" : "failed",
                  psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL ? "still failing" : "passed");
     }
