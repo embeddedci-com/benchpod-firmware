@@ -27,6 +27,7 @@
 #include "target_power.h"               /* power_poll_emi: an eFuse that tripped */
 #include "net_server.h"                 /* net_eth_restart */
 #include "boot_guard.h"                 /* boot_guard_planned_reset */
+#include "esp_wifi_ctrl.h"              /* C3 restarts (c3_restarts.h) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,6 +102,11 @@ static struct {
     uint32_t       cap_issued_at; /* the capture in flight went out then */
     uint32_t       link_down_since;
     bool           rcv_init;
+    /* ESP32-C3 restarts (the built-in Wi-Fi, v3 boards): counted from the pod's own counts */
+    bool           c3_init;
+    uint32_t       c3_seen, c3_seen_assoc;   /* the pod's counts at the last look */
+    uint32_t       c3_restarts;   /* restarts while the activity ran, association failures left out */
+    uint32_t       c3_last_ms;    /* HAL_GetTick() of the last one, 0 = none */
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -1031,6 +1037,7 @@ static bool restarted(void) {
 
 static bool failing_now(uint32_t now) {
     if (s.fail_since) return true;   /* captures failing, or one hung: until one succeeds */
+    if (s.c3_last_ms && now - s.c3_last_ms < EMI_LED_FAIL_MS) return true;   /* the C3 restarted */
     if (s.power_fault) return true;  /* an eFuse tripped (power_poll_emi) */
     if (s.errors && now - s.last_err_ms < EMI_LED_FAIL_MS) return true;
     if (ns.err && now - ns.t_err < EMI_LED_FAIL_MS) return true;   /* Ethernet */
@@ -1043,7 +1050,8 @@ uint8_t emi_test_led_state(void) {
         if (restarted()) s_failed_before = true;
     }
     const uint32_t now = HAL_GetTick();
-    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault)) s_failed_before = true;
+    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault || s.c3_restarts))
+        s_failed_before = true;
     return status_led_emi_state(s.booted, s.running, s.running && failing_now(now), s_failed_before);
 }
 
@@ -1071,12 +1079,15 @@ size_t emi_test_describe(char *buf, size_t cap) {
     if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
     char net[112];
     net_describe(net, sizeof(net));
+    char c3[24] = "";
+    if (esp_wifi_ctrl_module_present())
+        snprintf(c3, sizeof(c3), ", c3 restarts %lu", (unsigned long)s.c3_restarts);
     int len = snprintf(buf, cap,
                        "emi: %s, led %s, dac %s, uart %s, net %s, core %lu MHz, %lus, captures %lu, "
-                       "errors %lu%s%s",
+                       "errors %lu%s%s%s",
                        s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
                        led_name(emi_test_led_state()), k_dac_names[s.dac], uart, net, (unsigned long)(SystemCoreClock / 1000000u),
-                       (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
+                       (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors, c3,
                        s.last_err[0] ? ", last: " : "", s.last_err);
     if (len < 0) return 0;
     return (size_t)len < cap ? (size_t)len : cap - 1;
@@ -1100,14 +1111,16 @@ size_t emi_test_json(char *buf, size_t cap) {
                        "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
-                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\"}",
+                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
+                       "\"c3_restarts\":%lu}",
                        s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
                        (unsigned long)ns.sent, (unsigned long)ns.drops,
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
-                       fault_last_reset_str() ? fault_last_reset_str() : "unknown");
+                       fault_last_reset_str() ? fault_last_reset_str() : "unknown",
+                       (unsigned long)s.c3_restarts);
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
 }
@@ -1135,6 +1148,39 @@ static void publish_monitor(uint32_t now) {
     mon->gen++;
 }
 
+/* The pod restarts its ESP32-C3 when the C3 stops answering, reboots by itself or fails a setup
+   step (esp_wifi_ctrl.c, c3_restarts.h). While the activity runs, each one is a failure the lab
+   should see: red for EMI_LED_FAIL_MS, then blue, and an event in the run log. An access point
+   that refuses the association is the network's doing, not the pod's, so those restarts are
+   left out (a pod set up for a Wi-Fi network that is not there would be red all day). */
+static void c3_poll_emi(uint32_t now) {
+    if (!esp_wifi_ctrl_module_present()) return;
+    const c3_restarts_t *r = esp_wifi_ctrl_restarts();
+    const uint32_t total = r->total, assoc = r->count[C3_RESTART_ASSOC];
+    if (!s.c3_init || !s.running) {   /* restarts before the start (or after a stop): baseline */
+        s.c3_init = true;
+        s.c3_seen = total;
+        s.c3_seen_assoc = assoc;
+        return;
+    }
+    if (total == s.c3_seen) return;
+    const uint32_t real = (total - s.c3_seen) - (assoc - s.c3_seen_assoc);
+    s.c3_seen = total;
+    s.c3_seen_assoc = assoc;
+    if (!real) return;
+    s.c3_restarts += real;
+    s.c3_last_ms = now ? now : 1u;
+    char reason[C3_RESTART_REASON_LEN];
+    memcpy(reason, r->last_reason, sizeof(reason));   /* the net task writes it: take a copy */
+    reason[sizeof(reason) - 1] = '\0';
+    snprintf(s.last_err, sizeof(s.last_err), "ESP32-C3 restart: %s", reason);
+    printf("[emi] ESP32-C3 restarted (%lu this run): %s\n", (unsigned long)s.c3_restarts, reason);
+    char text[28];
+    snprintf(text, sizeof(text), "C3 restart: %s",
+             c3_restart_cause_name((c3_restart_cause_t)r->last_cause));
+    log_event_text(EMI_EV_C3_RESTART, text);
+}
+
 void emi_test_poll(void) {
     const uint32_t now = HAL_GetTick();
     s.budget = EMI_SINK_BUDGET;   /* the read-back's share of this worker pass */
@@ -1156,6 +1202,7 @@ void emi_test_poll(void) {
         else if (!s.fail_since) s.fail_since = now ? now : 1u;
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
     }
+    c3_poll_emi(now);
     log_poll(now);
     recovery_poll_emi(now);
     power_poll_emi(now);

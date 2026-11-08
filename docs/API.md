@@ -1655,6 +1655,7 @@ counters and the capability list. No parameters.
 | `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is in the console's `wifi-show`. |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
+| `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
@@ -3509,9 +3510,27 @@ Forgets the cloud settings and disconnects. Reply `"cleared"`.
 
 ### `wifi_status`
 
-Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_nvs":"none"}`.
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none"}`.
 `state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
-often it was lost. `c3_nvs` is the outcome of the last `wifi_clear` since boot on the ESP32-C3's
+often it was lost (`c3_lost_*`: since this boot).
+
+`c3_restarts` (firmware 3.10.1+) counts every time the pod restarted the C3 from reset since
+power-on, by cause. The counts survive software and watchdog resets and OTA updates; a power-on
+or the reset pin sets them to 0, and `boots` counts the boots they cover (1: this boot only).
+
+| Cause | The pod restarted the C3 because |
+|---|---|
+| `no_response` | it stopped answering while the link was up (3 RSSI requests in a row) |
+| `rebooted` | it announced a new boot in the middle of the session (it reset by itself) |
+| `no_boot` | it never announced a boot after its reset was released |
+| `setup` | a setup step (init, storage, mode, config, start, connect, MAC) failed or timed out |
+| `assoc` | the access point did not take the association (wrong password, out of range) |
+| `flash` | its automatic flash from the `esp` slot failed or could not be queued |
+
+After the first restart the object adds `last` (the reason, at most 39 characters),
+`last_cause`, `last_uptime_s` (the uptime of the boot that did it) and `last_this_boot`. The pod
+also sends `c3_restarts` and `c3_restart_last` (the last cause) in the capabilities it sends
+embeddedci.com on every connect. `c3_nvs` is the outcome of the last `wifi_clear` since boot on the ESP32-C3's
 side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 
 ### `wifi_scan` — the networks the pod's Wi-Fi sees
@@ -3746,7 +3765,7 @@ That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0
 7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
-started or stopped, a recovery step with its result) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
+started or stopped, a recovery step with its result, an ESP32-C3 restart with its cause) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
 losses, the longest DAC gap a log write caused, 0 normally). A `CHECK` is written when a value that
 shows trouble changed (errors, dropped frames, link losses, the LED, the link, the DAC gap, lost
 records), at most every 10 s, and once a minute when nothing changed. A quiet hour takes about 60
@@ -3812,7 +3831,15 @@ hour (`eFuse 1 tripped: power retry`). The EMI build never goes to safe mode aft
 10 minutes without a failure or was powered off and on (the count survives the resets), 10 PHY
 resets an hour; past them the pod stays red. Each step is an `EVENT` (kind 6, `recovery`) whose text
 says what it did and how it went, e.g. `iCE40 reload ok v51` or `STM32 reset (1 of 2)`; the next
-run's `START` then has the reset cause `recovery reset`. A hang of the STM32 itself is the watchdog's
+run's `START` then has the reset cause `recovery reset`.
+
+On a board with the built-in Wi-Fi (ESP32-C3, v3 boards) a C3 restart while the activity runs is a
+failure too (red for 5 s, then blue): the pod restarts the C3 when it stops answering, reboots by
+itself or fails a setup step (see [`wifi_status`](#wifi_status)), so an ESD hit that resets it
+shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the cause, e.g.
+`C3 restart: rebooted`, and `emi_test` counts them (`c3_restarts`). A restart because the access
+point refused the association is left out: that is the network, not the pod. The digital v3r3
+and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.
 
 **The lab page.** The EMI build also answers HTTP on port 80 of every interface it has an address

@@ -668,13 +668,16 @@ void handle_wifi_status(int conn_id, const char *json) {
 #if defined(BENCHPOD_WIFI_BRIDGE)
     bridge_ignored = wifi_bridge_ignored();   /* plugged in, not used: built-in Wi-Fi wins */
 #endif
-    char resp[544];
-    snprintf(resp, sizeof(resp),
+    char restarts[288];   /* c3_restarts_json: every cause, the last reason (~250 B) */
+    if (!c3_restarts_json(esp_wifi_ctrl_restarts(), restarts, sizeof(restarts)))
+        snprintf(restarts, sizeof(restarts), "null");
+    char resp[832];
+    int rn = snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,%s"
              "\"connected\":%s,\"ssid\":%s,"
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
              "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
-             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_nvs\":\"%s\"}}\n",
+             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_restarts\":%s,\"c3_nvs\":\"%s\"}}\n",
              esp_wifi_ctrl_state_str(),
              have ? "true" : "false", bridge_ignored ? "\"bridge_ignored\":true," : "",
              esp_wifi_ctrl_connected() ? "true" : "false",
@@ -682,6 +685,7 @@ void handle_wifi_status(int conn_id, const char *json) {
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
              (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot,
-             c3_nvs_str());
+             restarts, c3_nvs_str());
+    if (rn < 0 || (size_t)rn >= sizeof(resp)) { send_error(conn_id, "wifi_status: reply too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
 }

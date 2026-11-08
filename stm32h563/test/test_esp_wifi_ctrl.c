@@ -280,6 +280,8 @@ static void test_rssi_timeouts_restart_c3(void) {
     CHECK(bring_up());
     uint32_t nr0, rb0; esp_wifi_ctrl_slave_lost_counts(&nr0, &rb0);
     int stops = C.stops, starts = C.starts;
+    const c3_restarts_t *R = esp_wifi_ctrl_restarts();
+    uint32_t tot0 = R->total, cnr0 = R->count[C3_RESTART_NO_RESPONSE];
 
     C.answer = false;                        /* C3 crashed: requests go unanswered */
     uint32_t t = wait_for_link_down(60000);
@@ -293,6 +295,10 @@ static void test_rssi_timeouts_restart_c3(void) {
     uint32_t nr, rb; esp_wifi_ctrl_slave_lost_counts(&nr, &rb);
     CHECK(nr == nr0 + 1);
     CHECK(rb == rb0);
+    CHECK(R->total == tot0 + 1);             /* the since-power-on counts, by cause */
+    CHECK(R->count[C3_RESTART_NO_RESPONSE] == cnr0 + 1);
+    CHECK(R->last_cause == C3_RESTART_NO_RESPONSE);
+    CHECK(strcmp(R->last_reason, "no response to RSSI requests") == 0);
 
     /* After the backoff the C3 is released from reset again and can re-associate. */
     run_ms(6000);
@@ -347,6 +353,7 @@ static void test_boot_event_while_up_restarts(void) {
     uint32_t nr, rb; esp_wifi_ctrl_slave_lost_counts(&nr, &rb);
     CHECK(rb == rb0 + 1);
     CHECK(nr == nr0);
+    CHECK(esp_wifi_ctrl_restarts()->last_cause == C3_RESTART_REBOOTED);
     run_ms(6000);
     CHECK(C.running);
     CHECK(bring_up());
@@ -622,6 +629,7 @@ static void test_no_c3_module(void) {
 }
 
 int main(void) {
+    esp_wifi_ctrl_restarts_boot(true);
     esp_wifi_ctrl_init();
     test_healthy_link_stays_up();
     test_rssi_timeouts_restart_c3();

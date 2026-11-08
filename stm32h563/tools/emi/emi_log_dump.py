@@ -31,7 +31,8 @@ TYPES = {1: "START", 2: "EVENT", 3: "CHECK"}
 LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
-          5: "activity stopped", 6: "recovery"}
+          5: "activity stopped", 6: "recovery",
+          7: "ESP32-C3 restart"}
 
 
 def _str(b):

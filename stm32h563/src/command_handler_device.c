@@ -236,6 +236,9 @@ void handle_status(int conn_id, const char *json) {
                 "\"ip\":\"%s\",\"rssi_dbm\":%s,\"wifi\":\"%s\",\"cloud\":\"%s\",",
             FIRMWARE_VERSION, BOARD_NAME, wstate, ip, rssi_field,
             wifi, cloud_client_state_str());
+    /* C3 restarts since power-on (c3_restarts.h); the causes are in wifi_status. */
+    if (esp_wifi_ctrl_module_present())
+        bp_emit(&e, "\"c3_restarts\":%lu,", (unsigned long)esp_wifi_ctrl_restarts()->total);
     /* USB network adapter (CDC-NCM): on unless Wi-Fi is configured; ip is the pod's end of
        the /30, host_ip the address its DHCP server hands the computer. */
     /* source: what the USB-C port powering the pod advertises (usb_cc.h, v3; null on v2). */

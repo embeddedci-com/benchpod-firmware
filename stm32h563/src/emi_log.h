@@ -78,6 +78,7 @@ typedef enum {
     EMI_EV_STARTED    = 4,   /* the activity started (boot start or `emi start`) */
     EMI_EV_STOPPED    = 5,   /* `emi stop` */
     EMI_EV_RECOVERY   = 6,   /* a recovery step (recovery.h); the text says which and how it went */
+    EMI_EV_C3_RESTART = 7,   /* the pod restarted its ESP32-C3 (c3_restarts.h); the text has the cause */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */

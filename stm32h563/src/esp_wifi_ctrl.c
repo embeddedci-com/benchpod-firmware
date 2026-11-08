@@ -26,6 +26,7 @@
 
 #include "pico/time.h"
 #include "bp_log.h"
+#include "c3_restarts.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -235,6 +236,12 @@ static volatile bool  s_paused;         /* a console command owns the C3 straps 
 static uint8_t        s_rssi_misses;    /* consecutive unanswered GetRssi while up */
 static volatile uint32_t s_lost_rssi;   /* link restarts: C3 stopped answering */
 static volatile uint32_t s_lost_reboot; /* link restarts: C3 announced a new boot */
+/* Every C3 restart since power-on, by cause: kept through software and watchdog resets. */
+#if defined(__arm__)
+static c3_restarts_t s_restarts __attribute__((section(".noinit")));
+#else
+static c3_restarts_t s_restarts;
+#endif
 
 /* Wi-Fi scan.  The worker task asks (s_scan_req_id), the net task runs it and publishes the
    result (s_scan_list, s_scan_err, then s_scan_done_id). */
@@ -284,6 +291,9 @@ void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted) 
     if (no_response) *no_response = s_lost_rssi;
     if (rebooted)    *rebooted    = s_lost_reboot;
 }
+
+void esp_wifi_ctrl_restarts_boot(bool power_on) { c3_restarts_boot(&s_restarts, power_on); }
+const c3_restarts_t *esp_wifi_ctrl_restarts(void) { return &s_restarts; }
 
 bool esp_wifi_ctrl_configured(void) { return s_configured; }
 bool esp_wifi_ctrl_connected(void) {
@@ -562,13 +572,17 @@ esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_lis
     return ESP_WIFI_SCAN_DONE;
 }
 
-static void to_backoff(const char *why) {
+/* Every backoff ends in a full restart of the C3 from reset (WC_BACKOFF), so it is counted
+   here, with its cause (c3_restarts.h). */
+static void to_backoff(c3_restart_cause_t cause, const char *why) {
     if (s_scan_run_id) {                /* a failure mid-scan ends the scan with it */
         bool only = s_scan_only;
         scan_finish(why);
         if (only) return;               /* nothing to back off from: the C3 is off again */
     }
-    log_printf("[wifi] %s — backoff\n", why);
+    c3_restarts_note(&s_restarts, cause, why, (uint32_t)(time_us_64() / 1000000u));
+    log_printf("[wifi] %s — backoff (C3 restart %lu since power-on)\n", why,
+               (unsigned long)s_restarts.total);
     s_await_resp = 0;
     s_state = WC_BACKOFF;
     s_deadline = make_timeout_time_ms(RETRY_BACKOFF_MS);
@@ -579,14 +593,14 @@ static void to_backoff(const char *why) {
    another RETRY_BACKOFF_MS), hold the C3 in reset, and let the normal backoff restart
    it from reset.  s_started stays true so the poll does not skip the backoff; the
    WC_BACKOFF expiry clears it.  Runs on the net task, the only task that touches lwIP. */
-static void slave_lost(const char *why) {
+static void slave_lost(c3_restart_cause_t cause, const char *why) {
     esp_netif_set_link_up(false);
     esp_hosted_spi_stop();
     s_rssi_misses = 0;
     s_evt_connected = s_evt_disconnected = false;
     log_printf("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
            why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
-    to_backoff("ESP32-C3 restart");
+    to_backoff(cause, why);
 }
 
 /* One GetRssi went unanswered.  Returns true if that was the last straw (the link was
@@ -600,7 +614,7 @@ static bool rssi_missed(const char *what) {
         return false;
     }
     s_lost_rssi++;
-    slave_lost("no response to RSSI requests");
+    slave_lost(C3_RESTART_NO_RESPONSE, "no response to RSSI requests");
     return true;
 }
 
@@ -616,7 +630,7 @@ static bool esp_wifi_ctrl_reconnect_if_dropped(void) {
         s_deadline = make_timeout_time_ms(15000);
         s_state = WC_WAIT_ASSOC;
     } else {
-        to_backoff("reconnect send failed");
+        to_backoff(C3_RESTART_SETUP, "reconnect send failed");
     }
     return true;
 }
@@ -669,7 +683,7 @@ void esp_wifi_ctrl_poll(void) {
             log_printf("[wifi] ESP32-C3 flashed — starting it\n");
             s_state = WC_DOWN;              /* s_started is false: the next poll releases reset */
         } else {
-            to_backoff("ESP32-C3 flash failed");
+            to_backoff(C3_RESTART_FLASH, "ESP32-C3 flash failed");
         }
         return;
     }
@@ -686,7 +700,7 @@ void esp_wifi_ctrl_poll(void) {
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
         case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR:
             s_lost_reboot++;
-            slave_lost("it announced a new boot");
+            slave_lost(C3_RESTART_REBOOTED, "it announced a new boot");
             return;
         default:                            /* waiting for it anyway, or restarting */
             break;
@@ -704,7 +718,7 @@ void esp_wifi_ctrl_poll(void) {
 
     case WC_WAIT_READY:
         if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline) && s_scan_only) {
-            to_backoff("the ESP32-C3 did not start (no boot event; flash-esp32 reinstalls it)");
+            to_backoff(C3_RESTART_NO_BOOT, "the ESP32-C3 did not start (no boot event; flash-esp32 reinstalls it)");
             return;
         }
         if (!esp_hosted_spi_ready() && time_reached(s_boot_deadline)) {
@@ -719,10 +733,10 @@ void esp_wifi_ctrl_poll(void) {
                            "esp-hosted image (~2-3 min)\n", SLAVE_BOOT_TIMEOUT_MS / 1000u);
                     s_state = WC_FLASHING;
                 } else {
-                    to_backoff("could not queue the ESP32-C3 flash");
+                    to_backoff(C3_RESTART_FLASH, "could not queue the ESP32-C3 flash");
                 }
             } else {
-                to_backoff("no boot event from the ESP32-C3 (already flashed once; "
+                to_backoff(C3_RESTART_NO_BOOT, "no boot event from the ESP32-C3 (already flashed once; "
                            "run flash-esp32 or check the board)");
             }
             return;
@@ -731,7 +745,7 @@ void esp_wifi_ctrl_poll(void) {
             s_evt_connected = s_evt_disconnected = false;
             uint8_t p[128]; size_t n = build_init_cfg(p, sizeof(p));
             if (n && send_req(ID_REQ_WIFI_INIT, ID_RESP_WIFI_INIT, p, n)) s_state = WC_INIT;
-            else to_backoff("init build/send failed");
+            else to_backoff(C3_RESTART_SETUP, "init build/send failed");
         }
         return;
 
@@ -741,8 +755,8 @@ void esp_wifi_ctrl_poll(void) {
             size_t n = build_set_storage(p, sizeof(p), WIFI_STORAGE_RAM);
             if (n && send_req(ID_REQ_WIFI_SETSTORAGE, ID_RESP_WIFI_SETSTORAGE, p, n))
                 s_state = WC_SETSTORAGE;
-            else to_backoff("setstorage build/send failed");
-        } else if (time_reached(s_deadline)) to_backoff("init timeout");
+            else to_backoff(C3_RESTART_SETUP, "setstorage build/send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "init timeout");
         return;
 
     case WC_SETSTORAGE:
@@ -752,33 +766,33 @@ void esp_wifi_ctrl_poll(void) {
             if (s_resp_status != 0) {
                 printf("[wifi] ESP32-C3 refused RAM storage (0x%lx): credentials not sent\n",
                        (unsigned long)(uint32_t)s_resp_status);
-                to_backoff("setstorage failed");
+                to_backoff(C3_RESTART_SETUP, "setstorage failed");
                 return;
             }
             uint8_t p[16];
             size_t n = build_set_mode(p, sizeof(p), WIFI_MODE_STA);
             if (n && send_req(ID_REQ_SET_MODE, ID_RESP_SET_MODE, p, n)) s_state = WC_SETMODE;
-            else to_backoff("setmode build/send failed");
-        } else if (time_reached(s_deadline)) to_backoff("setstorage timeout");
+            else to_backoff(C3_RESTART_SETUP, "setmode build/send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "setstorage timeout");
         return;
 
     case WC_SETMODE:
         if (s_resp_ready && s_scan_only) {      /* a scan needs no credentials */
             if (send_req(ID_REQ_WIFI_START, ID_RESP_WIFI_START, NULL, 0)) s_state = WC_START;
-            else to_backoff("start send failed");
+            else to_backoff(C3_RESTART_SETUP, "start send failed");
         } else if (s_resp_ready) {
             uint8_t p[192];
             size_t n = build_set_config(p, sizeof(p), s_cfg.ssid, s_cfg.password);
             if (n && send_req(ID_REQ_WIFI_SETCFG, ID_RESP_WIFI_SETCFG, p, n)) s_state = WC_SETCFG;
-            else to_backoff("setcfg build/send failed");
-        } else if (time_reached(s_deadline)) to_backoff("setmode timeout");
+            else to_backoff(C3_RESTART_SETUP, "setcfg build/send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "setmode timeout");
         return;
 
     case WC_SETCFG:
         if (s_resp_ready) {
             if (send_req(ID_REQ_WIFI_START, ID_RESP_WIFI_START, NULL, 0)) s_state = WC_START;
-            else to_backoff("start send failed");
-        } else if (time_reached(s_deadline)) to_backoff("setcfg timeout");
+            else to_backoff(C3_RESTART_SETUP, "start send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "setcfg timeout");
         return;
 
     case WC_START:
@@ -786,15 +800,15 @@ void esp_wifi_ctrl_poll(void) {
             scan_send_start();
         } else if (s_resp_ready) {
             if (send_req(ID_REQ_WIFI_CONNECT, ID_RESP_WIFI_CONNECT, NULL, 0)) s_state = WC_CONNECT;
-            else to_backoff("connect send failed");
-        } else if (time_reached(s_deadline)) to_backoff("start timeout");
+            else to_backoff(C3_RESTART_SETUP, "connect send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "start timeout");
         return;
 
     case WC_CONNECT:
         if (s_resp_ready) {
             if (send_req(ID_REQ_GET_MAC, ID_RESP_GET_MAC, NULL, 0)) s_state = WC_GETMAC;
-            else to_backoff("getmac send failed");
-        } else if (time_reached(s_deadline)) to_backoff("connect timeout");
+            else to_backoff(C3_RESTART_SETUP, "getmac send failed");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "connect timeout");
         return;
 
     case WC_GETMAC:
@@ -809,7 +823,7 @@ void esp_wifi_ctrl_poll(void) {
             s_await_resp = 0;
             s_deadline = make_timeout_time_ms(15000);   /* assoc can take a few s */
             s_state = WC_WAIT_ASSOC;
-        } else if (time_reached(s_deadline)) to_backoff("getmac timeout");
+        } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "getmac timeout");
         return;
 
     case WC_WAIT_ASSOC:
@@ -821,7 +835,7 @@ void esp_wifi_ctrl_poll(void) {
             s_rssi_misses = 0;
             s_state = WC_UP;
         } else if (s_evt_disconnected || time_reached(s_deadline)) {
-            to_backoff("association failed");
+            to_backoff(C3_RESTART_ASSOC, "association failed");
         }
         return;
 

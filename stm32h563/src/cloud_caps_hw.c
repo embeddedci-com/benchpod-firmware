@@ -99,4 +99,10 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->last_crash = fault_last_crash_str();
     c->boot_id = fault_boot_id();
     c->unclean_resets = fault_unclean_resets();
+    c->c3 = esp_wifi_ctrl_module_present();
+    {
+        const c3_restarts_t *r = esp_wifi_ctrl_restarts();
+        c->c3_restarts = r->total;
+        c->c3_restart_last = r->total ? c3_restart_cause_name((c3_restart_cause_t)r->last_cause) : NULL;
+    }
 }

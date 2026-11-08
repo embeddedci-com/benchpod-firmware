@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "c3_restarts.h"
 
 #include "wifi_scan.h"
 
@@ -60,8 +61,14 @@ bool esp_wifi_ctrl_rssi(int *dbm);
 /* How many times the link was torn down and the C3 restarted because the C3 itself
    went away while connected or connecting: `no_response` = RSSI_MAX_MISSES GetRssi
    requests in a row went unanswered (crashed/hung C3, stuck HANDSHAKE); `rebooted` =
-   the C3 announced a new boot mid-session.  Since power-on.  Either pointer may be NULL. */
+   the C3 announced a new boot mid-session.  Since this boot.  Either pointer may be NULL.
+   esp_wifi_ctrl_restarts() has every cause, since power-on. */
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *no_response, uint32_t *rebooted);
+
+/* Every C3 restart since power-on, by cause (c3_restarts.h). Call _boot once at boot, before the
+   controller runs: a power-on or the reset pin starts the counts over, other resets keep them. */
+void esp_wifi_ctrl_restarts_boot(bool power_on);
+const c3_restarts_t *esp_wifi_ctrl_restarts(void);
 
 /* A new ESP32-C3 image was installed into its W25Q slot: a C3 that never booted gets another
    automatic flash attempt. */

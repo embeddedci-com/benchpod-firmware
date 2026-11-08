@@ -534,8 +534,13 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
     else                           op(out, ctx, "  rssi: \r\n");
     uint32_t noresp = 0, reboot = 0;
     esp_wifi_ctrl_slave_lost_counts(&noresp, &reboot);
-    op(out, ctx, "  c3 restarts: %lu no response, %lu rebooted while up\r\n",
+    op(out, ctx, "  c3 lost this boot: %lu no response, %lu rebooted while up\r\n",
        (unsigned long)noresp, (unsigned long)reboot);
+    static char line[200];   /* static: the console stack is tight */
+    c3_restarts_describe(esp_wifi_ctrl_restarts(), line, sizeof(line));
+    op(out, ctx, "  ");
+    out(ctx, line);          /* not op(): its 160-byte buffer would cut the line */
+    op(out, ctx, "\r\n");
 }
 
 /* The end of a console flash-esp32 (hw worker): the result line, then Wi-Fi gets the C3 back. */
@@ -711,6 +716,11 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         op(out, ctx, "  crash  : %s\r\n", fault_last_crash_str());
         op(out, ctx, "  boot   : id %08lx  unclean resets not yet reported %lu\r\n",
            (unsigned long)fault_boot_id(), (unsigned long)fault_unclean_resets());
+        if (esp_wifi_ctrl_module_present()) {
+            const c3_restarts_t *r = esp_wifi_ctrl_restarts();
+            op(out, ctx, "  c3     : %lu restarts since power-on%s%s\r\n", (unsigned long)r->total,
+               r->total ? ", last: " : "", r->total ? r->last_reason : "");
+        }
         {
             sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
             int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
