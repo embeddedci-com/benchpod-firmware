@@ -60,9 +60,52 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
 
 /* ---- stubs for the rest of target_power.c's externals ------------------- */
 void     fpga_set_led(uint8_t mask) { (void)mask; }
-uint64_t time_us_64(void) { return 0; }
+static uint64_t s_now_us;
+uint64_t time_us_64(void) { return s_now_us; }
 
 /* ---- tests -------------------------------------------------------------- */
+
+/* FLT (active-low on P5 for eFuse 1) counts only after FLT_CONFIRM_SAMPLES 10 ms samples in a
+   row: a single-sample glitch is no trip, a held FLT is. */
+static int s_events;
+static void on_event(int efuse, bool enabled, bool fault) { (void)enabled; if (efuse == 1 && fault) s_events++; }
+static void poll_at(uint64_t ms, bool flt1)
+{
+    regs[REG_INPUT] = (uint8_t)(0xFFu & ~(flt1 ? (1u << 5) : 0u));   /* FLT high = clear */
+    s_now_us = ms * 1000u;
+    target_power_poll();
+}
+static void test_flt_debounce(void)
+{
+    mock_reset();
+    target_power_init();
+    target_power_set_event_cb(on_event);
+    s_events = 0;
+    bool en = false, flt = false;
+    uint64_t t = 1000;
+    poll_at(t += 10, false);
+    poll_at(t += 10, true);                      /* one glitch */
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt);
+    poll_at(t += 10, false);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);                      /* two in a row: still a glitch */
+    poll_at(t += 10, false);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt && s_events == 0);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);                      /* held: a trip */
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(flt && s_events == 1);
+    poll_at(t += 10, true);                      /* still held: one event, not one per sample */
+    CHECK(s_events == 1);
+    poll_at(t += 10, false);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt);
+    target_power_set_event_cb(NULL);
+}
+
 
 /* Core invariant: OUTPUT latch driven safe (0x00) BEFORE CONFIG enables outputs. */
 static void test_init_safe_ordering(void)
@@ -109,6 +152,7 @@ static void test_enable_disable(void)
 
 int main(void)
 {
+    test_flt_debounce();
     test_init_safe_ordering();
     test_init_aborts_if_output_write_fails();
     test_enable_disable();

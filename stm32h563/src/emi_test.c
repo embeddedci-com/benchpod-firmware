@@ -101,6 +101,7 @@ static struct {
     uint32_t       fail_since;    /* captures failing since (0 = working) */
     bool           power_fault;   /* an eFuse tripped and has not come back yet (power_poll_emi) */
     bool           efuse_fault[3];/* per eFuse (1, 2), the last seen FLT state */
+    bool           efuse_off[3];  /* per eFuse: switched off at the retry limit */
     uint32_t       efuse_retry_ms[EMI_EFUSE_RETRIES_PER_HOUR];   /* ring: when power was retried */
     uint32_t       efuse_retry_n;
     uint32_t       cap_issued_at; /* the capture in flight went out then */
@@ -824,7 +825,7 @@ static void recovery_poll_emi(uint32_t now) {
 /* Every worker pass while the loop runs: an eFuse that tripped counts as a failure and gets its
    supply turned off and on again (EMI_EFUSE_RETRY_MS later), within EMI_EFUSE_RETRIES_PER_HOUR. */
 static void power_poll_emi(uint32_t now) {
-    if (!s.running) { s.power_fault = false; return; }
+    if (!s.running) { s.power_fault = false; s.efuse_off[1] = s.efuse_off[2] = false; return; }
     bool any = false;
     for (int e = 1; e <= 2; e++) {
         bool en = false, fault = false;
@@ -846,12 +847,18 @@ static void power_poll_emi(uint32_t now) {
                 (void)target_power_schedule(e, true, EMI_EFUSE_RETRY_MS);
                 snprintf(text, sizeof(text), "eFuse %d tripped: power retry", e);
             } else {
-                snprintf(text, sizeof(text), "eFuse %d tripped: retry limit", e);
+                /* Out of retries: leave that output off (it would keep tripping into the fault,
+                   once per retry of the eFuse itself) and count it as failing until `emi stop`
+                   or a power cycle: recovering (blue) at first, red after 60 s. */
+                (void)target_power_enable(e, false);
+                s.efuse_off[e] = true;
+                snprintf(text, sizeof(text), "eFuse %d tripped: off (retry limit)", e);
             }
             printf("[emi] recovery: %s\n", text);
             log_event_text(EMI_EV_RECOVERY, text);
         }
         s.efuse_fault[e] = fault;
+        if (s.efuse_off[e]) any = true;
     }
     s.power_fault = any;
 }

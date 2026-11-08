@@ -32,7 +32,15 @@ static const efuse_pins_t efuses[2] = {
 #define PWR_CONFIG    ((uint8_t)~PWR_EN_MASK)   /* 0x7E: P7,P0 output; rest input */
 
 static bool            enabled_state[2];
-static bool            last_fault[2];        /* last FLT level sampled in poll, for edge detection */
+static bool            last_fault[2];        /* FLT confirmed (debounced) in poll, for edge detection */
+static uint8_t         flt_run[2];           /* consecutive samples that read FLT asserted */
+
+/* FLT counts only when it reads asserted on this many 10 ms samples in a row. A real trip holds
+   FLT for the eFuse's whole fault and retry time (over 100 ms); measured on a digital v3r2 pod,
+   FLT on eFuse 1 read asserted for single samples while its output stayed at 5.1 V with no load,
+   during LA captures and the EMI build's Ethernet stream (pickup on the FLT line), and each one
+   counted as a trip. */
+#define FLT_CONFIRM_SAMPLES 3u
 static struct {
     bool            armed;
     bool            on;
@@ -65,7 +73,9 @@ static int efuse_index(int efuse)
 
 void target_power_init(void)
 {
-    for (int i = 0; i < 2; i++) { enabled_state[i] = false; last_fault[i] = false; pending[i].armed = false; }
+    for (int i = 0; i < 2; i++) {
+        enabled_state[i] = false; last_fault[i] = false; flt_run[i] = 0; pending[i].armed = false;
+    }
 
     /* Glitch-free bring-up.  The TCA9554 powers up with ALL pins as inputs
        (high-Z) and the output latch = 0xFF, so from power-on until we run, the
@@ -137,7 +147,9 @@ void target_power_poll(void)
     if (now_us < next_flt_us) return;
     next_flt_us = now_us + 10000u;
     for (int i = 0; i < 2; i++) {
-        bool flt = efuse_fault_now(i);
+        if (efuse_fault_now(i)) { if (flt_run[i] < 255u) flt_run[i]++; }
+        else                    flt_run[i] = 0;
+        const bool flt = flt_run[i] >= FLT_CONFIRM_SAMPLES;
         if (flt && !last_fault[i] && event_cb)
             event_cb(i + 1, enabled_state[i], true);
         last_fault[i] = flt;

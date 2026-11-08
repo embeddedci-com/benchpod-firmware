@@ -3836,7 +3836,7 @@ after that reset the loop starts 2 s into the boot instead of 10 s, so the pod r
 inside a minute. An Ethernet link that stays down for 20 s, or stays up while frames keep failing
 to go out, gets a PHY reset and a new DHCP request, at most once a minute. An eFuse that trips is
 a failure (blue recovering, then blue) and its supply is turned off and on again 2 s later, at most 6 times an
-hour (`eFuse 1 tripped: power retry`). The EMI build never goes to safe mode after crashed boots. Limits: 6 iCE40 reloads an hour, 2 STM32 resets until the pod ran
+hour (`eFuse 1 tripped: power retry`); past that the output stays off and counts as failing (`eFuse 1 tripped: off (retry limit)`), so the LED turns red 60 s later, until `emi stop` or a power cycle. A trip is FLT held for 30 ms (3 samples 10 ms apart), so a glitch on the FLT line does not count. The EMI build never goes to safe mode after crashed boots. Limits: 6 iCE40 reloads an hour, 2 STM32 resets until the pod ran
 10 minutes without a failure or was powered off and on (the count survives the resets), 10 PHY
 resets an hour; past them the LED is red while the failure lasts. Each step is an `EVENT` (kind 6, `recovery`) whose text
 says what it did and how it went, e.g. `iCE40 reload ok v51` or `STM32 reset (1 of 2)`; the next
