@@ -95,6 +95,8 @@ void emi_log_encode(const emi_rec_t *r, uint8_t out[EMI_LOG_REC]) {
         put32(out + 44, r->u.sum.eth_missed);
         put32(out + 48, r->u.sum.bridge_tx_err);
         put32(out + 52, r->u.sum.cloud_down_s);
+        put16(out + 56, r->u.sum.bridge_restarts);
+        put16(out + 58, r->u.sum.bridge_silences);
         break;
     }
     put32(out + 60, crc32_le(out, 60));
@@ -156,6 +158,8 @@ bool emi_log_decode(const uint8_t in[EMI_LOG_REC], emi_rec_t *r) {
         r->u.sum.eth_missed = get32(in + 44);
         r->u.sum.bridge_tx_err = get32(in + 48);
         r->u.sum.cloud_down_s = get32(in + 52);
+        r->u.sum.bridge_restarts = get16(in + 56);
+        r->u.sum.bridge_silences = get16(in + 58);
         break;
     default:
         r->u.cp.captures = get32(in + 16);
@@ -236,14 +240,15 @@ size_t emi_log_format(const emi_rec_t *r, char *buf, size_t cap) {
         m = snprintf(buf + n, cap - (size_t)n,
                      "SUM cloud drops %u (down %lu s), c3 restarts %u, i2c clears %u, can bus-off %u, "
                      "psram retry %lu fail %u, iCE40 lost %u, eFuse rev blocks %lu/%lu, eth crc %lu "
-                     "missed %lu, bridge tx err %lu",
+                     "missed %lu, bridge tx err %lu, bridge restarts %u silent %u",
                      (unsigned)r->u.sum.cloud_drops, (unsigned long)r->u.sum.cloud_down_s,
                      (unsigned)r->u.sum.c3_restarts, (unsigned)r->u.sum.i2c_clears,
                      (unsigned)r->u.sum.can_busoff, (unsigned long)r->u.sum.psram_retry,
                      (unsigned)r->u.sum.psram_fail, (unsigned)r->u.sum.cdone_lost,
                      (unsigned long)r->u.sum.rev_block[0], (unsigned long)r->u.sum.rev_block[1],
                      (unsigned long)r->u.sum.eth_crc, (unsigned long)r->u.sum.eth_missed,
-                     (unsigned long)r->u.sum.bridge_tx_err);
+                     (unsigned long)r->u.sum.bridge_tx_err, (unsigned)r->u.sum.bridge_restarts,
+                     (unsigned)r->u.sum.bridge_silences);
         break;
     default:
         m = snprintf(buf + n, cap - (size_t)n,

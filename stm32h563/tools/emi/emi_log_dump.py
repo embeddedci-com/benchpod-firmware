@@ -31,6 +31,7 @@ TYPES = {1: "START", 2: "EVENT", 3: "CHECK", 4: "SUM"}
 SUM16 = ("cloud_drops", "c3_restarts", "i2c_clears", "can_busoff", "psram_fail", "cdone_lost")
 SUM32 = ("psram_retry", "rev_block_1", "rev_block_2", "eth_crc", "eth_missed", "bridge_tx_err",
          "cloud_down_s")
+SUM_TAIL = ("bridge_restarts", "bridge_silences")   # u16 at 56
 LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
@@ -65,6 +66,7 @@ def decode(slot):
     elif typ == 4:
         r.update(zip(SUM16, struct.unpack_from("<HHHHHH", slot, 16)))
         r.update(zip(SUM32, struct.unpack_from("<IIIIIII", slot, 28)))
+        r.update(zip(SUM_TAIL, struct.unpack_from("<HH", slot, 56)))
     else:
         vals = struct.unpack_from("<IIIIIII", slot, 16)
         dac, mbit, running, link = slot[44], slot[45], slot[46], slot[47]
@@ -96,6 +98,7 @@ def encode(r):
     elif typ == 4:
         struct.pack_into("<HHHHHH", b, 16, *(r.get(k, 0) for k in SUM16))
         struct.pack_into("<IIIIIII", b, 28, *(r.get(k, 0) for k in SUM32))
+        struct.pack_into("<HH", b, 56, *(r.get(k, 0) for k in SUM_TAIL))
     else:
         struct.pack_into("<IIIIIII", b, 16, *(r.get(k, 0) for k in (
             "captures", "errors", "net_sent", "net_drops", "link_losses", "rec_dropped",
@@ -132,7 +135,8 @@ def fmt(r):
                        f"{r['c3_restarts']}, i2c clears {r['i2c_clears']}, can bus-off {r['can_busoff']}, "
                        f"psram retry {r['psram_retry']} fail {r['psram_fail']}, iCE40 lost {r['cdone_lost']}, "
                        f"eFuse rev blocks {r['rev_block_1']}/{r['rev_block_2']}, eth crc {r['eth_crc']} "
-                       f"missed {r['eth_missed']}, bridge tx err {r['bridge_tx_err']}")
+                       f"missed {r['eth_missed']}, bridge tx err {r['bridge_tx_err']}, bridge restarts "
+                       f"{r['bridge_restarts']} silent {r['bridge_silences']}")
     last = f", last: {r['text']}" if r["text"] else ""
     return head + (f"CHECK led {r['led']}, {'running' if r['running'] else 'stopped'}, dac {r['dac']}, "
                    f"captures {r['captures']}, errors {r['errors']}, sent {r['net_sent']}, "

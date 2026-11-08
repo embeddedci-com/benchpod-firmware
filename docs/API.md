@@ -3878,7 +3878,16 @@ reverse blocks per eFuse, Ethernet frames received with a CRC or alignment error
 missed for want of a receive buffer, and the Wi-Fi bridge's failed Wi-Fi transmits (its own
 count). Layout after the common header: `u16` cloud drops, C3 restarts, I2C clears, CAN bus-off,
 PSRAM fails, iCE40 losses at bytes 16-27, then `u32` PSRAM retries, eFuse 1 and 2 reverse blocks,
-Ethernet CRC, Ethernet missed, bridge transmit errors and cloud-down seconds at bytes 28-55. A restart because the access
+Ethernet CRC, Ethernet missed, bridge transmit errors and cloud-down seconds at bytes 28-55,
+then `u16` Wi-Fi bridge restarts and silences this run at bytes 56-59.
+
+With a Wi-Fi bridge on the Ethernet port (the lab's configuration 2: the bridge's EMC test build
+puts the pod's frames on the air), the bridge is part of the equipment under test: once the pod
+has seen one this run, its failures are the pod's, as `health` events and on the LED (blue
+recovering, red after 60 s): a restart (`bridge restart: brownout`, the reason from the bridge's
+next STATUS), no HELLO for 10 s (`bridge silent 10 s`, then `bridge back after 14 s`), and its radio
+reporting that it is not transmitting (`bridge radio not transmitting`, then `bridge radio back`).
+The console's `bridge` shows the bridge's reset reason, the reboots the pod saw and the EMC radio. A restart because the access
 point refused the association is left out: that is the network, not the pod. The digital v3r3
 and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.

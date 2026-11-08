@@ -120,6 +120,16 @@ static struct {
     uint32_t       c3_seen, c3_seen_assoc;   /* the pod's counts at the last look */
     uint32_t       c3_restarts;   /* restarts while the activity ran, association failures left out */
     uint32_t       c3_last_ms;    /* HAL_GetTick() of the last one, 0 = none */
+    /* the Wi-Fi bridge (lab configuration 2): watched once one was seen this run */
+    bool           br_seen;
+    uint32_t       br_reboots_seen;   /* the pod's count at the last look */
+    uint32_t       br_restarts;       /* restarts this run */
+    uint32_t       br_restart_ms;     /* the last one (0 = none), for the LED */
+    uint32_t       br_restart_pending;/* a restart waiting for its reason (the next STATUS), since */
+    uint32_t       br_silent_from;    /* no HELLO since (0 = present) */
+    bool           br_silent_logged;
+    uint32_t       br_silences;       /* this run */
+    bool           br_radio_failing;  /* the EMC build's radio reports it is not transmitting */
     /* the LED's verdict (emi_test_led_state) */
     uint32_t       failing_from;  /* failing without a break since (0 = not failing) */
     bool           gave_up;       /* the recovery is out of steps for this failure */
@@ -1063,6 +1073,8 @@ static bool restarted(void) {
 
 static bool failing_now(uint32_t now) {
     if (s.fail_since) return true;   /* captures failing, or one hung: until one succeeds */
+    if (s.br_silent_logged || s.br_radio_failing) return true;   /* the Wi-Fi bridge */
+    if (s.br_restart_ms && now - s.br_restart_ms < EMI_LED_FAIL_MS) return true;
     if (s.c3_last_ms && now - s.c3_last_ms < EMI_LED_FAIL_MS) return true;   /* the C3 restarted */
     if (s.power_fault) return true;  /* an eFuse tripped (power_poll_emi) */
     if (s.errors && now - s.last_err_ms < EMI_LED_FAIL_MS) return true;
@@ -1076,7 +1088,8 @@ uint8_t emi_test_led_state(void) {
         if (restarted()) s_failed_before = true;
     }
     const uint32_t now = HAL_GetTick();
-    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault || s.c3_restarts))
+    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault || s.c3_restarts ||
+                      s.br_restarts || s.br_silences || s.br_radio_failing))
         s_failed_before = true;
     /* Red only for a failure that fails criterion B: still failing EMI_LED_VERDICT_MS after it
        began, or the recovery is out of steps. Until then the pod is recovering (blue, fast). Not
@@ -1289,6 +1302,78 @@ static void health_poll(uint32_t now) {
     }
 }
 
+/* The Wi-Fi bridge in the lab's configuration 2 (the pod's frames on the air from the bridge's EMC
+   test build): part of the equipment under test, so once a bridge was seen this run, its failures
+   are the pod's: a restart (with the reason from its next STATUS), silence for EMI_BRIDGE_SILENT_MS,
+   and its radio reporting it is not transmitting. Each is a health event and counts for the LED.
+   Without a bridge this does nothing. */
+#define EMI_BRIDGE_SILENT_MS 10000u
+static void bridge_poll_emi(uint32_t now) {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    static wb_info_t bi;   /* static: the hw worker's stack is tight */
+    wifi_bridge_get_info(&bi);
+    char text[64];
+    if (!s.br_seen) {
+        if (!bi.present) return;
+        s.br_seen = true;
+        s.br_reboots_seen = bi.reboots;
+        printf("[emi] Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s: watched (configuration 2)\n",
+               bi.mac[0], bi.mac[1], bi.mac[2], bi.mac[3], bi.mac[4], bi.mac[5], bi.fw_version);
+        return;
+    }
+    if (!bi.present) {
+        if (!s.br_silent_from) s.br_silent_from = now ? now : 1u;
+        if (!s.br_silent_logged && now - s.br_silent_from >= EMI_BRIDGE_SILENT_MS) {
+            s.br_silent_logged = true;
+            s.br_silences++;
+            s.last_err_ms = now;
+            snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge silent");
+            printf("[emi] health: Wi-Fi bridge silent for %lu s\n", (unsigned long)(EMI_BRIDGE_SILENT_MS / 1000u));
+            log_event_text(EMI_EV_HEALTH, "bridge silent 10 s");
+        }
+        return;
+    }
+    if (s.br_silent_logged) {
+        snprintf(text, sizeof(text), "bridge back after %lu s", (unsigned long)((now - s.br_silent_from) / 1000u));
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+    }
+    s.br_silent_from = 0;
+    s.br_silent_logged = false;
+    if (bi.reboots != s.br_reboots_seen) {
+        s.br_restarts += bi.reboots - s.br_reboots_seen;
+        s.br_reboots_seen = bi.reboots;
+        s.br_restart_ms = now ? now : 1u;
+        s.br_restart_pending = now ? now : 1u;
+        s.last_err_ms = now;
+        snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge restarted");
+    }
+    /* Its reason comes with the next STATUS after the new boot (the pod asks at once); give up on
+       it after 10 s. */
+    if (s.br_restart_pending && ((bi.have_status && bi.status_age_ms < now - s.br_restart_pending) ||
+                                 now - s.br_restart_pending >= 10000u)) {
+        const bool fresh = bi.have_status && bi.status_age_ms < now - s.br_restart_pending;
+        snprintf(text, sizeof(text), "bridge restart: %s", fresh ? wb_reset_str(bi.reset) : "unknown");
+        printf("[emi] health: Wi-Fi %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        s.br_restart_pending = 0;
+    }
+    const bool radio_failing = bi.have_status && bi.emc == BWP_EMC_FAILING;
+    if (radio_failing != s.br_radio_failing) {
+        s.br_radio_failing = radio_failing;
+        snprintf(text, sizeof(text), radio_failing ? "bridge radio not transmitting" : "bridge radio back");
+        printf("[emi] health: Wi-Fi %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        if (radio_failing) {
+            s.last_err_ms = now;
+            snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge radio not transmitting");
+        }
+    }
+#else
+    (void)now;
+#endif
+}
+
 static void health_run_reset(void) {
     hs.cdone_lost = 0;
     hs.cloud_down_from = 0;
@@ -1296,6 +1381,14 @@ static void health_run_reset(void) {
     hs.cloud_down_ms = 0;
     hs.t_cloud = 0;
     hs.t_summary = 0;
+    s.br_seen = false;
+    s.br_restarts = 0;
+    s.br_restart_ms = 0;
+    s.br_restart_pending = 0;
+    s.br_silent_from = 0;
+    s.br_silent_logged = false;
+    s.br_silences = 0;
+    s.br_radio_failing = false;
 }
 
 static void cloud_poll(uint32_t now) {
@@ -1364,6 +1457,8 @@ static void summary_poll(uint32_t now) {
     r.u.sum.eth_missed = d.rx_missed;
     r.u.sum.bridge_tx_err = bridge_err;
     r.u.sum.cloud_down_s = hs.cloud_down_ms / 1000u;
+    r.u.sum.bridge_restarts = (uint16_t)(s.br_restarts > 0xFFFFu ? 0xFFFFu : s.br_restarts);
+    r.u.sum.bridge_silences = (uint16_t)(s.br_silences > 0xFFFFu ? 0xFFFFu : s.br_silences);
     log_queue(&r);
     char line[320];
     emi_log_format(&r, line, sizeof(line));
@@ -1394,7 +1489,7 @@ void emi_test_poll(void) {
     c3_poll_emi(now);
     if (s.running) {
         health_poll(now);
-        if (now - hs.t_cloud >= 1000u || !hs.t_cloud) cloud_poll(now);
+        if (now - hs.t_cloud >= 1000u || !hs.t_cloud) { cloud_poll(now); bridge_poll_emi(now); }
         summary_poll(now);
     }
     log_poll(now);

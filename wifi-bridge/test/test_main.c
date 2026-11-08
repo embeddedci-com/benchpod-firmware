@@ -209,6 +209,19 @@ static void test_status(void)
     CHECK(bwp_find(m.body, m.body_len, BWP_T_COUNTERS, &c, &cl) && cl == 28);
     CHECK(c[3] == 1 && c[27] == 7);
     CHECK(!bwp_find(m.body, m.body_len, BWP_T_REASON, &c, &cl));
+    CHECK(!bwp_find(m.body, m.body_len, BWP_T_RESET, &c, &cl));   // 0: not sent
+    CHECK(!bwp_find(m.body, m.body_len, BWP_T_EMC, &c, &cl));
+
+    // Reset reason and the EMC radio state, when set.
+    s.reset = BWP_RESET_BROWNOUT;
+    s.emc = BWP_EMC_FAILING;
+    n = bwp_build_status(buf, sizeof(buf), POD, BRIDGE, 44, &s);
+    CHECK(bwp_parse(buf, n, &m) == BWP_PARSE_OK);
+    uint8_t rr = 0, emc = 0;
+    CHECK(bwp_get_u8(m.body, m.body_len, BWP_T_RESET, &rr) && rr == BWP_RESET_BROWNOUT);
+    CHECK(bwp_get_u8(m.body, m.body_len, BWP_T_EMC, &emc) && emc == BWP_EMC_FAILING);
+    s.reset = 0;
+    s.emc = 0;
 
     // Not connected: no channel/RSSI/BSSID.
     s.state = BWP_ST_AUTH_FAILED;

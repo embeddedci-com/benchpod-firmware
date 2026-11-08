@@ -426,6 +426,8 @@ static void bridge_show(console_out_t out, void *ctx)
     if (i.have_status) {
         op(out, ctx, "  channel: %u  last disconnect reason: %u  bridge uptime: %lu s  (status %lu ms old)\r\n",
            i.channel, i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms);
+        op(out, ctx, "  bridge boot: %s, reboots seen %lu%s%s\r\n", wb_reset_str(i.reset),
+           (unsigned long)i.reboots, i.emc ? "  EMC radio: " : "", i.emc ? wb_emc_str(i.emc) : "");
         op(out, ctx, "  frames: eth_rx %lu wifi_tx %lu (err %lu) wifi_rx %lu eth_tx %lu (err %lu) dropped %lu\r\n",
            (unsigned long)i.counters.eth_rx, (unsigned long)i.counters.wifi_tx,
            (unsigned long)i.counters.wifi_tx_err, (unsigned long)i.counters.wifi_rx,

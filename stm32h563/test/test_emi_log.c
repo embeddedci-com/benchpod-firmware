@@ -294,6 +294,7 @@ static void test_summary_round_trip(void) {
     a.u.sum.psram_fail = 0; a.u.sum.cdone_lost = 1; a.u.sum.psram_retry = 4;
     a.u.sum.rev_block[0] = 31; a.u.sum.rev_block[1] = 0; a.u.sum.eth_crc = 5; a.u.sum.eth_missed = 0;
     a.u.sum.bridge_tx_err = 977642; a.u.sum.cloud_down_s = 125;
+    a.u.sum.bridge_restarts = 2; a.u.sum.bridge_silences = 1;
     uint8_t raw[EMI_LOG_REC];
     emi_log_encode(&a, raw);
     CHECK(emi_log_decode(raw, &b));
@@ -302,7 +303,7 @@ static void test_summary_round_trip(void) {
     char line[320];
     CHECK(emi_log_format(&b, line, sizeof(line)) > 0);
     CHECK(strstr(line, "#77 run 3 +600.0s SUM cloud drops 8 (down 125 s), c3 restarts 2, i2c clears 1") == line);
-    CHECK(strstr(line, "eFuse rev blocks 31/0, eth crc 5 missed 0, bridge tx err 977642") != NULL);
+    CHECK(strstr(line, "eFuse rev blocks 31/0, eth crc 5 missed 0, bridge tx err 977642, bridge restarts 2 silent 1") != NULL);
     raw[2] = 5;   /* an unknown type stays unknown */
     { uint32_t c = 0xFFFFFFFFu; for (int i = 0; i < 60; i++) { c ^= raw[i]; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); } c = ~c; raw[60] = (uint8_t)c; raw[61] = (uint8_t)(c >> 8); raw[62] = (uint8_t)(c >> 16); raw[63] = (uint8_t)(c >> 24); }
     CHECK(!emi_log_decode(raw, &b));

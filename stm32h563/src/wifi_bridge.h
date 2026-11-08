@@ -82,6 +82,10 @@ typedef struct {
     uint32_t uptime_s;
     uint32_t status_age_ms;
     bwp_counters_t counters;
+    uint8_t reset;               /* bwp_reset_t of the bridge's current boot, 0: not reported */
+    uint8_t emc;                 /* bwp_emc_t: the EMC test build's radio, 0: not an EMC build */
+    uint32_t reboots;            /* boots of this bridge the pod saw (a new HELLO nonce), since it
+                                    first saw it */
 } wb_info_t;
 
 /* True when rssi and channel describe the current connection: HELLO and the unsolicited STATUS
@@ -103,6 +107,7 @@ typedef struct {
     uint8_t mac[6];
     uint8_t nonce[BWP_NONCE_LEN];
     bool have_nonce;
+    bool nonce_known;            /* nonce holds one of this bridge's boots (kept over link drops) */
     uint8_t secret[32];          /* ours, for this bridge */
     uint8_t pub[BWP_PUBKEY_LEN];
     bool have_secret;
@@ -157,6 +162,9 @@ void wb_request_release(wb_t *b);
 
 void wb_get_info(const wb_t *b, uint32_t now, wb_info_t *out);
 const char *wb_state_str(uint8_t state);
+/* "power-on", "brownout", ... for wb_info_t.reset; "pod frames", "failing", ... for .emc. */
+const char *wb_reset_str(uint8_t reset);
+const char *wb_emc_str(uint8_t emc);
 const char *wb_result_str(uint8_t result);
 
 #endif /* WIFI_BRIDGE_H */

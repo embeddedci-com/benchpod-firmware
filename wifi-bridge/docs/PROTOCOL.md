@@ -82,6 +82,8 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x1A | AUTH | 16 bytes, truncated HMAC-SHA256; always the last TLV, see "Pairing" |
 | 0x1B | ENC_PASSPHRASE | 89 bytes, the sealed passphrase, see "Encrypted passphrase" |
 | 0x1C | SIGNATURE | 128 bytes, the pod's signed manifest of an OTA image (`tools/fwsign.py`, target `bridge`) |
+| 0x1D | RESET | u8: why the bridge last booted: 1 power-on, 2 reset pin, 3 software, 4 panic, 5 watchdog, 6 brownout, 7 other (STATUS) |
+| 0x1E | EMC | u8, the EMC test build only: 1 transmitting the pod's frames, 2 transmitting its pattern, 3 stopped, 4 not transmitting (STATUS) |
 
 ## States
 

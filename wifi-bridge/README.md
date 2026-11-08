@@ -316,6 +316,10 @@ What it does (`main/emc_test.c`):
   air per frame), power at the module's normal maximum. Build-time: `idf.py menuconfig` →
   *BenchPod Wi-Fi bridge* → `BRIDGE_EMC_CHANNEL`, `BRIDGE_EMC_RATE`, `BRIDGE_EMC_TX_POWER` (only
   shown with `BRIDGE_EMC_TEST`). Run time: the console below.
+- **Recovers by itself.** A radio that sent nothing for 10 s is restarted; after 3 restarts in a
+  row that did not help, the bridge reboots. STATUS tells the pod why the bridge last booted and
+  what the radio does (`BWP_T_RESET`, `BWP_T_EMC`), so the pod's EMI build logs a bridge restart
+  with its reason and counts a radio that is not transmitting as a failure (LED).
 - **Power never above the normal maximum.** The cap starts at what the radio has after start
   (the same as in production, which never changes it) and `emc power` can only lower it.
 

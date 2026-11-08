@@ -155,6 +155,8 @@ static void emc_show(void)
     if (c.errors) {
         printf("emc-last-error: %s\n", esp_err_to_name(c.last_err));
     }
+    printf("emc-recovery: %lu radio restarts since boot (nothing sent for 10 s; a reboot after 3 in a row)\n",
+           (unsigned long)c.radio_restarts);
 }
 
 static void cmd_emc(int argc, char **argv)

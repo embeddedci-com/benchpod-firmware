@@ -43,6 +43,7 @@ typedef struct {
     char prev_fw[16];       /* what a rollback returns to */
     uint32_t trial_until;   /* with rollback: when the trial ends without a confirmation */
     int data_frames;
+    uint8_t reset, emc;     /* STATUS: BWP_T_RESET, BWP_T_EMC (0: not sent) */
 } sim_t;
 
 static sim_t sim;
@@ -133,6 +134,8 @@ static void sim_rx(const uint8_t *f, size_t len)
         bwp_status_t s = {.state = sim.state, .flags = (uint8_t)(BWP_F_PAIRED | (sim.pending ? BWP_F_PENDING_VERIFY : 0)), .channel = 6, .rssi = -58, .uptime_s = 77};
         strcpy(s.ssid, sim.ssid);
         s.counters.eth_rx = 1234;
+        s.reset = sim.reset;
+        s.emc = sim.emc;
         n = bwp_build_status(out, BWP_MAX_FRAME, POD, BRIDGE, m.seq, &s);
     } else if (m.type == BWP_SET_WIFI) {
         bwp_set_wifi_t sw;
@@ -638,9 +641,23 @@ int main(void)
     CHECK(info.paired && info.problem == NULL && info.have_status);
     CHECK(sim.pair.last_counter > bridge_last);
 
+    /* Reset reason and the EMC radio state, from STATUS; no reboot seen yet. */
+    CHECK(info.reset == 0 && info.emc == 0 && info.reboots == 0);
+    sim.reset = BWP_RESET_BROWNOUT;
+    sim.emc = BWP_EMC_FAILING;
+    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE);
+    wb_request_release(&pod);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.reset == BWP_RESET_BROWNOUT && info.emc == BWP_EMC_FAILING);
+    CHECK(strcmp(wb_reset_str(info.reset), "brownout") == 0 && strcmp(wb_emc_str(info.emc), "not transmitting") == 0);
+    sim.reset = 0;
+    sim.emc = 0;
+
     /* The bridge reboots: new nonce in HELLO, the counter starts over, requests still work. */
     sim_boot();
     run(2100);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.reboots == 1);
     CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     CHECK(sim.last_counter_seen < 5);
     wb_request_release(&pod);
@@ -662,6 +679,8 @@ int main(void)
     CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     CHECK(sim.refused == refused);
     wb_request_release(&pod);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.reboots == 2);   /* the reboot behind the link drop */
 
     /* A link flap without a reboot: the same nonce comes back in the next HELLO, so the counter
        carries on (resetting it would draw a "COUNTER not increasing" refusal). */
@@ -671,6 +690,8 @@ int main(void)
     CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
     CHECK(sim.refused == refused);
     wb_request_release(&pod);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.reboots == 2);   /* a flap is no reboot */
 
     /* A reboot the pod did not see (no link drop, no HELLO yet) on the last of the three sends:
        the AUTH refusal carries the new nonce, and the pod re-signs once more instead of telling
@@ -691,6 +712,7 @@ int main(void)
     wb_request_release(&pod);
     wb_get_info(&pod, now_ms, &info);
     CHECK(info.paired && info.problem == NULL);
+    CHECK(info.reboots == 3);   /* learned from the AUTH refusal */
     sim.quiet = false;
 
     /* A spoofed answer (right seq, unsigned) to a signed request is ignored. */

@@ -373,6 +373,12 @@ size_t bwp_build_status(uint8_t *buf, size_t cap, const uint8_t dst[6], const ui
         put_be32(c + 4 * i, v[i]);
     }
     bwp_put(&w, BWP_T_COUNTERS, c, sizeof(c));
+    if (s->reset) {
+        bwp_put_u8(&w, BWP_T_RESET, s->reset);
+    }
+    if (s->emc) {
+        bwp_put_u8(&w, BWP_T_EMC, s->emc);
+    }
     return bwp_finish(&w);
 }
 

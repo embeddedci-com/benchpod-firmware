@@ -121,13 +121,13 @@ class LogDumpTest(unittest.TestCase):
         r = {"type": "SUM", "seq": 77, "run": 3, "uptime_ms": 600000, "cloud_drops": 8,
              "c3_restarts": 2, "i2c_clears": 1, "can_busoff": 0, "psram_fail": 0, "cdone_lost": 1,
              "psram_retry": 4, "rev_block_1": 31, "rev_block_2": 0, "eth_crc": 5, "eth_missed": 0,
-             "bridge_tx_err": 977642, "cloud_down_s": 125}
+             "bridge_tx_err": 977642, "cloud_down_s": 125, "bridge_restarts": 2, "bridge_silences": 1}
         x = dump.decode(dump.encode(r))
         self.assertEqual(x["bridge_tx_err"], 977642)
         line = dump.fmt(x)
         # the same line the pod prints (test_emi_log.c checks the C side)
         self.assertTrue(line.startswith("#77 run 3 +600.0s SUM cloud drops 8 (down 125 s), c3 restarts 2, i2c clears 1"))
-        self.assertIn("eFuse rev blocks 31/0, eth crc 5 missed 0, bridge tx err 977642", line)
+        self.assertIn("eFuse rev blocks 31/0, eth crc 5 missed 0, bridge tx err 977642, bridge restarts 2 silent 1", line)
 
     def test_ring_order_and_summary(self):
         # A wrapped ring: the newest records sit at the start of the dump, then empty slots, then

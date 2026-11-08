@@ -109,6 +109,7 @@ static void forget_bridge(wb_t *b)
     }
     b->seen = false;
     b->have_nonce = false;
+    b->nonce_known = false;
     b->have_key = false;
     b->have_secret = false;
     b->counter = 0;
@@ -158,6 +159,13 @@ static void update_state(wb_t *b, const uint8_t *body, uint16_t len, uint32_t no
     }
 }
 
+/* A nonce from the bridge: a different one than the boot we knew means it rebooted. */
+static void note_nonce(wb_t *b, const uint8_t *v)
+{
+    if (b->nonce_known && memcmp(v, b->nonce, BWP_NONCE_LEN) != 0) b->info.reboots++;
+    b->nonce_known = true;
+}
+
 static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
 {
     if (!b->seen || memcmp(m->src, b->mac, 6) != 0) {
@@ -176,7 +184,8 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
     const uint8_t *v;
     uint16_t n;
     if (bwp_find(m->body, m->body_len, BWP_T_NONCE, &v, &n) && n == BWP_NONCE_LEN) {
-        if (memcmp(v, b->nonce, BWP_NONCE_LEN) != 0) {
+        if (memcmp(v, b->nonce, BWP_NONCE_LEN) != 0 || !b->nonce_known) {
+            note_nonce(b, v);
             memcpy(b->nonce, v, BWP_NONCE_LEN);  /* the bridge rebooted: its counter starts over */
             b->counter = 0;
             b->next_status = now;
@@ -213,6 +222,8 @@ static void parse_status(wb_t *b, const bwp_msg_t *m, uint32_t now)
     i->rssi = bwp_get_u8(m->body, m->body_len, BWP_T_RSSI, &v8) ? (int8_t)v8 : 0;
     i->reason = bwp_get_u8(m->body, m->body_len, BWP_T_REASON, &v8) ? v8 : 0;
     i->uptime_s = bwp_get_u32(m->body, m->body_len, BWP_T_UPTIME, &v32) ? v32 : 0;
+    i->reset = bwp_get_u8(m->body, m->body_len, BWP_T_RESET, &v8) ? v8 : 0;
+    i->emc = bwp_get_u8(m->body, m->body_len, BWP_T_EMC, &v8) ? v8 : 0;
     if (bwp_find(m->body, m->body_len, BWP_T_COUNTERS, &v, &n) && n == 28) {
         uint32_t *c[7] = {&i->counters.eth_rx, &i->counters.wifi_tx, &i->counters.wifi_tx_err, &i->counters.wifi_rx,
                           &i->counters.eth_tx, &i->counters.eth_tx_err, &i->counters.dropped};
@@ -278,6 +289,7 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
     case BWP_E_AUTH:
         if (bwp_find(m->body, m->body_len, BWP_T_NONCE, &v, &n) && n == BWP_NONCE_LEN &&
             (!b->have_nonce || memcmp(v, b->nonce, BWP_NONCE_LEN) != 0)) {
+            note_nonce(b, v);
             memcpy(b->nonce, v, BWP_NONCE_LEN);  /* we missed a reboot of the bridge */
             b->have_nonce = true;
             b->counter = 0;
@@ -512,4 +524,29 @@ const char *wb_result_str(uint8_t r)
                                         "ota-bad-offset", "ota-verify", "ota-too-large", "internal",
                                         "ota-wrong-image", "not-paired", "auth", "already-paired"};
     return r < sizeof(names) / sizeof(names[0]) ? names[r] : "error";
+}
+
+const char *wb_reset_str(uint8_t reset)
+{
+    switch (reset) {
+    case BWP_RESET_POWER_ON: return "power-on";
+    case BWP_RESET_PIN:      return "reset pin";
+    case BWP_RESET_SOFTWARE: return "software";
+    case BWP_RESET_PANIC:    return "panic";
+    case BWP_RESET_WATCHDOG: return "watchdog";
+    case BWP_RESET_BROWNOUT: return "brownout";
+    case BWP_RESET_OTHER:    return "other";
+    default:                 return "unknown";
+    }
+}
+
+const char *wb_emc_str(uint8_t emc)
+{
+    switch (emc) {
+    case BWP_EMC_TX_POD:     return "transmitting pod frames";
+    case BWP_EMC_TX_PATTERN: return "transmitting pattern";
+    case BWP_EMC_STOPPED:    return "stopped";
+    case BWP_EMC_FAILING:    return "not transmitting";
+    default:                 return "none";
+    }
 }

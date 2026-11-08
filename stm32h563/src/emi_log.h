@@ -132,6 +132,8 @@ typedef struct {
             uint32_t eth_missed;    /* Ethernet frames dropped for want of a receive descriptor */
             uint32_t bridge_tx_err; /* the Wi-Fi bridge's failed Wi-Fi transmits (its own count) */
             uint32_t cloud_down_s;  /* seconds this run the cloud was set up but not connected */
+            uint16_t bridge_restarts;  /* the Wi-Fi bridge restarted, this run */
+            uint16_t bridge_silences;  /* the Wi-Fi bridge went silent for 10 s, this run */
         } sum;
     } u;
 } emi_rec_t;
