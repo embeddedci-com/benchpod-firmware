@@ -631,14 +631,15 @@ the LA region, the ADC region and any resident deep-replay waveform into the 8 M
 front when they do not fit or when the combined sample rate would overrun the PSRAM bus (see
 [tri-capture-unified-psram.md](tri-capture-unified-psram.md)).
 
-The raw LA (12 MS/s and below) gets the same rate plan as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
-without `la_rate_mhz` it runs at the fastest rate, and a capture larger than the 96 KB burst
-buffer (about 49 000 samples) is slowed until it fits, so no sample is dropped: about 3 MS/s at
-1 000 000 samples. With ADC samples in the same capture the raw LA runs at most 8 MS/s (12 MS/s
-overflows the PSRAM there, at any depth and ADC rate). `la_rate_hz` in the reply is the rate it
-ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
+The raw LA (12 MS/s and below) follows the same rules as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
+without `la_rate_mhz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
+explicit rate that does not fit is refused with both ways out. On gateware before v53, with ADC
+samples in the same capture the raw LA runs at most 8 MS/s (the PSRAM writer starved the ADC at
+12 MS/s, at any depth and ADC rate): a higher raw rate is refused there. Gateware v53 and later run
+the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_rate_hz`
+in the reply is the rate it ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
 samples. (Before firmware 3.10.0 a deep `capture_dual` ran at the requested or the full 12 MS/s
-and overflowed, and 12 MS/s with the ADC was refused.)
+and overflowed.)
 
 #### Response
 
@@ -666,6 +667,7 @@ packet carries `"la":true,"la_edges"` directly.
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
+| An explicit LA rate that does not fit (above 8 MS/s with the ADC on gateware before v53, or too deep for the rate) | `"LA at <r> MS/s does not fit ..."`, naming the most samples at that rate and the fastest rate for that depth |
 | More than 2 097 152 samples in a stream | `"capture_dual takes at most 2097152 LA and 2097152 ADC samples (la_capture: up to <n> LA)"` |
 | LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
 | The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
@@ -823,9 +825,13 @@ The achieved rate can be lower than the request for two reasons:
 - The sample period is a whole number of 24 MHz clocks, so the rate is 24 MHz ÷ *n* (*n* ≥ 2,
   so at most 12 MS/s), rounded down from the request: 2.304 MHz runs at 24/11 = 2.18 MHz.
   Request a rate of that form (12, 8, 6, 4.8, 4, 3, 2.4, 2, … MHz) to get it exactly.
-- A capture larger than the 96 KB burst buffer (about 49 000 samples) is slowed until it fits,
-  so no sample is dropped: 4.8 MS/s at 100 000 samples, 3.4 MS/s at 300 000 and 3 MS/s from
-  about 1 000 000.
+- Without `sample_rate_mhz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
+  runs at the fastest rate that fits it, so no sample is dropped: 4.8 MS/s at 100 000 samples,
+  3.4 MS/s at 300 000 and 3 MS/s from about 1 000 000. An explicit rate that does not fit the
+  depth is refused (firmware 3.10.0 and later; it used to be slowed down), and the message names
+  both ways out: `"LA at 12.0 MS/s does not fit 1000000 samples: at most 65536 samples at 12.0
+  MS/s, or at most 3.0 MS/s for 1000000 samples (or leave the rate out for the fastest that
+  fits)"`.
 
 Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
@@ -864,7 +870,7 @@ The trigger is at sample index N; `samples` more follow it.
 | Condition | Message |
 |---|---|
 | LA voltage not set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
-| `samples` = 0 or too deep | `"samples out of range"` |
+| `samples` = 0 or too deep | `"samples out of range: 1 to <max>"`, with `" (a DAC waveform in the PSRAM holds the rest; dac_stop frees it)"` when a resident deep-DAC waveform is what limits it |
 | Another capture or upload is running | `"busy"` |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
@@ -3976,7 +3982,7 @@ All errors follow the format:
 | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
-| `"samples out of range"` | `samples` outside the command's range (see each command) |
+| `"samples out of range"` | `samples` outside the command's range (see each command); firmware 3.10.0 and later add the range, `"samples out of range: 1 to <max>"` |
 | `"samples out of range (use capture_dual for deep captures)"` | `capture` / `stream` with more than 32768 samples |
 | `"capture failed"` | The capture did not arm or did not complete |
 | `"missing waveform"` | `measure` request without `waveform` field |

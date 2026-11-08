@@ -190,5 +190,14 @@ int main(void) {
 
     if (fails == 0) printf("PASS — all la_rate tests\n");
     else            printf("FAIL — %d la_rate test(s)\n", fails);
+        /* la_psram_max_samples_at: the deepest capture la_psram_plan runs at the rate asked. */
+    {
+        const uint32_t m12 = la_psram_max_samples_at(HFOSC, 12.0e6f, 4000000u);
+        CHECK(m12 > 49000u && m12 < 70000u, "max samples at 12 MS/s: %u", (unsigned)m12);
+        CHECK(!la_psram_plan(HFOSC, m12, 12.0e6f).capped && la_psram_plan(HFOSC, m12 + 1u, 12.0e6f).capped,
+              "max samples at 12 MS/s is not the edge");
+        CHECK(la_psram_max_samples_at(HFOSC, 3.0e6f, 4000000u) == 4000000u, "3 MS/s fits any depth");
+        CHECK(la_psram_max_samples_at(HFOSC, 12.0e6f, 1000u) == 1000u, "a limit below the edge");
+    }
     return fails ? 1 : 0;
 }

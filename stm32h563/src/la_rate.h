@@ -59,6 +59,10 @@ typedef struct {
  * Deliberately does NOT apply the ADC's conversion-time floor — the LA has none. */
 la_plan_t la_psram_plan(uint32_t cap_hz, uint32_t samples, float req_rate_hz);
 
+/* The most samples (at most `limit`) a raw capture at `rate_hz` takes without la_psram_plan
+   lowering the rate (the burst buffer's limit). `limit` when the rate is at or below the drain. */
+uint32_t la_psram_max_samples_at(uint32_t cap_hz, float rate_hz, uint32_t limit);
+
 /* Encode a capture sample PERIOD (24 MHz clocks) as the wire divider for gateware
  * `gw_version`: the period itself on >= EXACT_CAP_DIVIDER_MIN_GW, period - 1 before
  * (where the engines added a clock).  Clamped to 16 bits.  ADC and LA alike; NOT the

@@ -453,6 +453,28 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     CHECK(capture_busy(), "LA-only capture_dual refused: %s", g_err);
     CHECK(g_dual_lhz == 12.0e6f, "LA-only asked for %.0f Hz, want 12 MS/s", (double)g_dual_lhz);
     g_wait_rc = -1; pump_all();
+    /* An explicit rate that cannot run is refused, not slowed down: above the 8 MS/s ceiling with
+       the ADC, and a depth the burst buffer cannot take at the rate asked. */
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
+    CHECK(!capture_busy() && strstr(g_err, "runs at most 8.0 MS/s on this gateware, 8.0 MS/s for 2000 samples") != NULL, "12 MS/s + ADC: %s", g_err);
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":8}");
+    CHECK(!capture_busy() && strstr(g_err, "does not fit 1000000 samples") != NULL &&
+          strstr(g_err, "at most 3.0 MS/s for 1000000 samples") != NULL, "deep 8 MS/s: %s", g_err);
+    clear_tx(); g_wait_rc = 0;
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":3}");
+    CHECK(capture_busy() && g_dual_lhz == 3.0e6f, "deep 3 MS/s refused: %s", g_err);
+    g_wait_rc = -1; pump_all();
+    /* Gateware v53 fixed the writer: 12 MS/s with the ADC runs (for a depth the burst buffer takes). */
+    { uint8_t gw = g_gw; g_gw = 53; clear_tx(); g_wait_rc = 0;
+      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
+      CHECK(capture_busy() && g_dual_lhz == 12.0e6f, "gw 53, 12 MS/s + ADC refused: %s", g_err);
+      g_wait_rc = -1; pump_all();
+      clear_tx(); g_wait_rc = 0;
+      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
+      CHECK(capture_busy() && g_dual_lhz == 12.0e6f, "gw 53, no rate + ADC: %.0f Hz", (double)g_dual_lhz);
+      g_wait_rc = -1; pump_all(); g_gw = gw; }
     /* More than the fabric's per-stream region is refused up front, saying the limits. */
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":3000000}");
