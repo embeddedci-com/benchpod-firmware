@@ -189,6 +189,7 @@ size_t emi_log_format(const emi_rec_t *r, char *buf, size_t cap) {
         case EMI_EV_STARTED:   snprintf(what, sizeof(what), "activity started"); break;
         case EMI_EV_STOPPED:   snprintf(what, sizeof(what), "activity stopped"); break;
         case EMI_EV_C3_RESTART: snprintf(what, sizeof(what), "ESP32-C3 restart"); break;
+        case EMI_EV_HEALTH:    snprintf(what, sizeof(what), "health"); break;
         default:               snprintf(what, sizeof(what), "event %u", (unsigned)r->u.ev.kind); break;
         }
         if (r->u.ev.kind == EMI_EV_RECOVERY)   /* the text is the step itself (emi_log_dump.py) */

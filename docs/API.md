@@ -3856,7 +3856,16 @@ On a board with the built-in Wi-Fi (ESP32-C3, v3 boards) a C3 restart while the 
 failure too (blue recovering for 5 s, then blue): the pod restarts the C3 when it stops answering, reboots by
 itself or fails a setup step (see [`wifi_status`](#wifi_status)), so an ESD hit that resets it
 shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the cause, e.g.
-`C3 restart: rebooted`, and `emi_test` counts them (`c3_restarts`). A restart because the access
+`C3 restart: rebooted`, and `emi_test` counts them (`c3_restarts`).
+
+Things the pod counts that the LED does not show are `EVENT`s too (kind 8, `health`), checked once
+a second and logged at most once per item every 10 s (eFuse reverse blocking: every 60 s) with the
+count since the last one: a cloud
+connection that dropped (`cloud drop +1: idle timeout (no pong)`), an I2C bus clear, a capture
+read-back from the PSRAM that needed a retry or failed, a CAN bus-off recovery, eFuse reverse-current
+blocking (`eFuse1 rev block +31`, see `target_status`), the iCE40 losing its configuration
+(CDONE low) and the LA supply switching source (the TPS2116's status pin). They do not change the
+LED. A restart because the access
 point refused the association is left out: that is the network, not the pod. The digital v3r3
 and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.

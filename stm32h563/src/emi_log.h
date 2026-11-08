@@ -79,6 +79,10 @@ typedef enum {
     EMI_EV_STOPPED    = 5,   /* `emi stop` */
     EMI_EV_RECOVERY   = 6,   /* a recovery step (recovery.h); the text says which and how it went */
     EMI_EV_C3_RESTART = 7,   /* the pod restarted its ESP32-C3 (c3_restarts.h); the text has the cause */
+    EMI_EV_HEALTH     = 8,   /* something the pod counts changed: a cloud drop, an I2C bus clear,
+                                a PSRAM read retry, a CAN bus-off, eFuse reverse blocking, the iCE40
+                                losing its configuration, the LA supply switching (emi_test.c,
+                                health_poll); the text says which and how many. No LED change */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */

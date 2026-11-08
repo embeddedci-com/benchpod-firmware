@@ -24,10 +24,14 @@
 #include "lwip/pbuf.h"
 #include "recovery.h"
 #include "ice40_flash.h"                /* ice40_reload: the recovery's iCE40 step (no write) */
-#include "target_power.h"               /* power_poll_emi: an eFuse that tripped */
+#include "target_power.h"               /* power_poll_emi: an eFuse that tripped; reverse blocks */
 #include "net_server.h"                 /* net_eth_restart */
 #include "boot_guard.h"                 /* boot_guard_planned_reset */
 #include "esp_wifi_ctrl.h"              /* C3 restarts (c3_restarts.h) */
+#include "cloud_client.h"               /* health: cloud drops */
+#include "i2c_bus.h"                    /* health: I2C bus clears */
+#include "can_bus.h"                    /* health: CAN bus-off recoveries */
+#include "ice40_flash.h"                /* health: CDONE */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1205,6 +1209,73 @@ static void c3_poll_emi(uint32_t now) {
     log_event_text(EMI_EV_C3_RESTART, text);
 }
 
+/* Health: things the pod counts that the LED does not show, each an EMI_EV_HEALTH event in the
+   run log when it changes, at most one per item every EMI_HEALTH_GAP_MS (the count in between is
+   summed into the next). Read once a second. */
+#define EMI_HEALTH_GAP_MS 10000u
+enum { H_CLOUD, H_I2C, H_PS_RETRY, H_PS_FAIL, H_CAN, H_REV1, H_REV2, H_CDONE, H_VCCIO, H_N };
+static struct {
+    bool     init;
+    uint32_t t_read;
+    uint32_t last[H_N];       /* the value at the last event (or the start) */
+    uint32_t t_event[H_N];
+} hs;
+
+static uint32_t health_value(int i) {
+    switch (i) {
+    case H_CLOUD:    return cloud_client_drops(NULL);
+    case H_I2C:      return i2c_bus_clear_count();
+    case H_PS_RETRY: { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return r; }
+    case H_PS_FAIL:  { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return f; }
+    case H_CAN:      { can_status_t st; return can_get_status(&st) == 0 ? st.bus_off_recoveries : 0u; }
+    case H_REV1:     return target_power_reverse_blocks(1);
+    case H_REV2:     return target_power_reverse_blocks(2);
+    case H_CDONE:    return ice40_is_configured() ? 1u : 0u;
+    case H_VCCIO:    return (uint32_t)la_vccio_status_pin();
+    default:         return 0u;
+    }
+}
+
+static void health_poll(uint32_t now) {
+    if (now - hs.t_read < 1000u && hs.init) return;
+    hs.t_read = now;
+    if (!hs.init) {
+        for (int i = 0; i < H_N; i++) hs.last[i] = health_value(i);
+        hs.init = true;
+        return;
+    }
+    for (int i = 0; i < H_N; i++) {
+        const uint32_t v = health_value(i);
+        /* Reverse blocking is harmless and frequent with a Wi-Fi bridge on the pod's 5 V: a minute
+           between its events, so it does not crowd the run log. */
+        const uint32_t gap = (i == H_REV1 || i == H_REV2) ? 6u * EMI_HEALTH_GAP_MS : EMI_HEALTH_GAP_MS;
+        if (v == hs.last[i] || now - hs.t_event[i] < gap) continue;
+        char text[64];   /* the console line gets it all; the run log keeps the first 27 */
+        const uint32_t d = v - hs.last[i];
+        switch (i) {
+        case H_CLOUD: {
+            const char *why = "";
+            (void)cloud_client_drops(&why);
+            snprintf(text, sizeof(text), "cloud drop +%lu: %s", (unsigned long)d, why);
+            break;
+        }
+        case H_I2C:      snprintf(text, sizeof(text), "I2C bus clear +%lu", (unsigned long)d); break;
+        case H_PS_RETRY: snprintf(text, sizeof(text), "PSRAM read retry +%lu", (unsigned long)d); break;
+        case H_PS_FAIL:  snprintf(text, sizeof(text), "PSRAM read fail +%lu", (unsigned long)d); break;
+        case H_CAN:      snprintf(text, sizeof(text), "CAN bus-off +%lu", (unsigned long)d); break;
+        case H_REV1:     snprintf(text, sizeof(text), "eFuse1 rev block +%lu", (unsigned long)d); break;
+        case H_REV2:     snprintf(text, sizeof(text), "eFuse2 rev block +%lu", (unsigned long)d); break;
+        case H_CDONE:    snprintf(text, sizeof(text), v ? "iCE40 configured" : "iCE40 config lost"); break;
+        case H_VCCIO:    snprintf(text, sizeof(text), "LA supply ST -> %lu", (unsigned long)v); break;
+        default:         text[0] = '\0'; break;
+        }
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        hs.last[i] = v;
+        hs.t_event[i] = now;
+    }
+}
+
 void emi_test_poll(void) {
     const uint32_t now = HAL_GetTick();
     s.budget = EMI_SINK_BUDGET;   /* the read-back's share of this worker pass */
@@ -1227,6 +1298,7 @@ void emi_test_poll(void) {
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
     }
     c3_poll_emi(now);
+    if (s.running) health_poll(now);
     log_poll(now);
     recovery_poll_emi(now);
     power_poll_emi(now);

@@ -39,6 +39,10 @@ void cloud_client_reload(void);
    net_reload waits for this before it reloads the link after a settings change. */
 bool cloud_client_tx_busy(void);
 
+/* How many established connections dropped since boot; *last_reason (may be NULL) is the reason
+   text of the last one ("idle timeout (no pong)", "link dropped", ...), a static string. */
+uint32_t cloud_client_drops(const char **last_reason);
+
 /* Human-readable current state (for the cloud_status command). */
 const char *cloud_client_state_str(void);
 

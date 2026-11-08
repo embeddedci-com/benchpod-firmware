@@ -32,7 +32,7 @@ LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
           5: "activity stopped", 6: "recovery",
-          7: "ESP32-C3 restart"}
+          7: "ESP32-C3 restart", 8: "health"}
 
 
 def _str(b):
