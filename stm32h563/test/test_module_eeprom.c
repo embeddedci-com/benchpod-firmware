@@ -69,6 +69,25 @@ int main(void)
     CHECK(module_ee_chunk(0x10F, 5) == 5, "fits");
     CHECK(module_ee_chunk(0x11F, 1) == 1, "last byte of a page");
 
+    /* The calibration blob: magic, version, length, then the record as is. */
+    {
+        uint8_t rec[116], back[116], blob[200];
+        for (unsigned i = 0; i < sizeof(rec); i++) rec[i] = (uint8_t)(i * 7 + 3);
+        size_t n = module_ee_cal_encode(rec, sizeof(rec), 2, blob, sizeof(blob));
+        CHECK(n == MOD_EE_CAL_HDR + sizeof(rec), "blob length %u", (unsigned)n);
+        CHECK(blob[0] == 'A' && blob[1] == 'C' && blob[2] == 'A' && blob[3] == 'L', "blob magic");
+        CHECK(blob[4] == 2 && blob[5] == 0 && blob[6] == 116 && blob[7] == 0, "blob version and length");
+        memset(back, 0, sizeof(back));
+        CHECK(module_ee_cal_decode(blob, n, 2, back, sizeof(back)) == 0 && memcmp(rec, back, sizeof(rec)) == 0,
+              "blob round trip");
+        CHECK(module_ee_cal_decode(blob, n, 3, back, sizeof(back)) != 0, "another record version");
+        CHECK(module_ee_cal_decode(blob, n, 2, back, 32) != 0, "another record length");
+        CHECK(module_ee_cal_decode(blob, n - 1, 2, back, sizeof(back)) != 0, "a short blob");
+        blob[0] ^= 1;
+        CHECK(module_ee_cal_decode(blob, n, 2, back, sizeof(back)) != 0, "bad magic");
+        CHECK(module_ee_cal_encode(rec, sizeof(rec), 2, blob, 100) == 0, "does not fit");
+    }
+
     /* Raw writes stay in the calibration area. */
     CHECK(module_ee_raw_write_ok(MOD_EE_CAL_ADDR, 32), "cal start");
     CHECK(module_ee_raw_write_ok(MOD_EE_SIZE - 1, 1), "last byte");

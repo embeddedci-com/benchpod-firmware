@@ -353,6 +353,10 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
         }
     }
     if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"dmm\":%s", dmm ? "true" : "false");
+    /* Where the calibration in use was loaded from or last saved to: the analog module's EEPROM
+       ("module", digital v3r3) or only the pod's flash ("pod"). */
+    if (n < (int)sizeof(payload))
+        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"stored\":\"%s\"", adc_cal_from_str(adc_cal_from()));
     if (adc_cal_comp_is_set() && n < (int)sizeof(payload))
         n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_comp\":{\"hf_dc_e4\":%u,\"c_top_ff\":%u}",
                       (unsigned)adc_cal_comp_hf_dc_e4(), (unsigned)adc_cal_comp_c_top_ff());

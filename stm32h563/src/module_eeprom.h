@@ -18,8 +18,12 @@
  *           28  calibration CRC-16/CCITT-FALSE
  *           30  header CRC-16/CCITT-FALSE over bytes 0..29
  *   0x020  reserved up to 0x0FF (raw writes are refused here)
- *   0x100  calibration blob, up to 3840 bytes.  The firmware stores and checks it but does not
- *          interpret it: the format is the calibration tools' to define.
+ *   0x100  calibration blob, up to 3840 bytes (its length and CRC in the header). The pod's
+ *          ADC/DAC calibration lives here (module_ee_cal_encode), so it travels with the module:
+ *            0  magic "ACAL"
+ *            4  record version (the adc_cal.h record version, 2)
+ *            6  record length in bytes (116 for version 2)
+ *            8  the record, as adc_cal.h stores it in the pod's flash
  *
  * A blank chip reads all 0xFF.
  */
@@ -83,5 +87,15 @@ size_t module_ee_chunk(uint16_t addr, size_t len);
 
 /* A raw write may only land in the calibration area: [MOD_EE_CAL_ADDR, MOD_EE_SIZE). */
 bool module_ee_raw_write_ok(uint32_t addr, size_t len);
+
+/* The calibration blob (layout above): an 8-byte header and the record. */
+#define MOD_EE_CAL_MAGIC   0x4C414341u   /* "ACAL", the adc_cal.h record magic */
+#define MOD_EE_CAL_HDR     8u
+
+/* Encode a calibration record into `out` (cap bytes). The blob length, or 0 when it does not fit. */
+size_t module_ee_cal_encode(const void *rec, uint16_t rec_len, uint16_t rec_ver, uint8_t *out, size_t cap);
+/* Decode a blob of `n` bytes: 0 and the record in `rec` when its magic, version `want_ver` and length
+   `rec_len` match; -1 otherwise. */
+int    module_ee_cal_decode(const uint8_t *blob, size_t n, uint16_t want_ver, void *rec, uint16_t rec_len);
 
 #endif /* MODULE_EEPROM_H */

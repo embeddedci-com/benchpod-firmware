@@ -234,3 +234,28 @@ int module_cal_commit(uint16_t len)
     id.cal_crc = len ? crc : 0;
     return write_hdr(&id);
 }
+
+int module_cal_save(const uint8_t *blob, uint16_t len)
+{
+    if (!s_link || !s_present || len > MOD_EE_CAL_MAX || (len && !blob)) return -1;
+    if (ee_read_hdr() == MOD_EE_OK && s_id.cal_len != 0 && module_cal_commit(0) != 0) return -1;
+    if (len == 0) return module_cal_commit(0);
+    if (module_eeprom_write(MOD_EE_CAL_ADDR, blob, len) != 0) return -1;
+    if (module_cal_commit(len) != 0) return -1;
+    return (s_id_rc == MOD_EE_OK && s_id.cal_len == len && s_cal_valid) ? 0 : -1;
+}
+
+int module_cal_load(uint8_t *buf, size_t cap, uint16_t *len)
+{
+    if (!s_link || !s_present) return -1;
+    int rc = ee_read_hdr();
+    if (rc == MOD_EE_BLANK) return -1;
+    if (rc != MOD_EE_OK) return -2;
+    if (s_id.cal_len == 0) return -1;
+    if (!s_cal_valid || s_id.cal_len > cap) return -2;
+    if (module_eeprom_read(MOD_EE_CAL_ADDR, buf, s_id.cal_len) != 0) return -2;
+    if (module_ee_crc16(buf, s_id.cal_len, 0xFFFFu) != s_id.cal_crc) return -2;
+    if (len) *len = s_id.cal_len;
+    return 0;
+}
+
