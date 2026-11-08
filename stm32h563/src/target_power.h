@@ -12,8 +12,11 @@
 
 typedef struct {
     bool enabled;          /* current EN output state (tracked)            */
-    bool fault;            /* FLT asserted (active-low input)              */
-    bool valid;            /* V/power-good asserted (active-high input)    */
+    bool fault;            /* a confirmed fault: FLT held 30 ms and not reverse-current blocking */
+    bool flt_pin;          /* the FLT pin asserted right now (active-low input) */
+    uint32_t reverse_blocks; /* held FLTs that were reverse-current blocking, since boot */
+    bool valid;            /* pin 3 high: on the TPS259470A that is AUXOFF (input valid, inrush
+                              done), not output power good */
     bool status_supported; /* true — V/FLT are wired via the expander      */
 } target_power_status_t;
 
@@ -52,5 +55,19 @@ int target_power_get_cached(int efuse, bool *enabled, bool *fault);
    so it must be brief and do its own cross-task guarding. */
 typedef void (*target_power_event_fn)(int efuse, bool enabled, bool fault);
 void target_power_set_event_cb(target_power_event_fn cb);
+
+/* What a held FLT means. The TPS259470A pulls FLT low for real faults (overtemperature, a
+   persistent overcurrent in current limit, ILM open or shorted) and ALSO while it blocks reverse
+   current: when VOUT - VIN > 29 mV (VREVTH) it turns its blocking FET off within 1 us and only
+   turns it on again once VIN - VOUT > 104 mV (VFWDTH; datasheet SLVSFC9C, 7.3.7 and Table 7-3).
+   With a light load on the output, a dip of the input rail (the pod's +5V_IN when a Wi-Fi bridge
+   on the USB-A port transmits) leaves VOUT above VIN, and FLT stays low until VOUT has leaked
+   down 104 mV: tens of ms with no load. That is no fault. The check gets the eFuse (1 or 2)
+   and returns true for a real fault, false for reverse-current blocking; without a check (host
+   tests) every held FLT is a fault. It runs on the hw worker (I2C). */
+typedef bool (*target_power_flt_check_fn)(int efuse);
+void target_power_set_flt_check(target_power_flt_check_fn fn);
+/* How many held FLTs the check called reverse-current blocking, per eFuse since boot. */
+uint32_t target_power_reverse_blocks(int efuse);
 
 #endif /* TARGET_POWER_H */

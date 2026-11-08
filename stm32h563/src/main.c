@@ -34,6 +34,7 @@
 #include "psram.h"
 #include "dfu_boot.h"
 #include "fault.h"
+#include "efuse_flt.h"
 #include "watchdog.h"
 #include "boot_guard.h"
 #include "cloud_client.h"
@@ -173,6 +174,7 @@ int main(void)
        each EN / U53 IN net.) */
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
+    efuse_flt_init();       /* FLT: a real fault, or reverse-current blocking */
     (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
     module_link_init();     /* digital v3r3: the analog module's link, I2C2 and its EEPROM */
     board_variant_init();   /* analog board, analog module or digital-only (board_variant.h) */

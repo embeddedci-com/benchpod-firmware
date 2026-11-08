@@ -120,14 +120,14 @@ void handle_target_status(int conn_id, const char *json) {
 
     /* Payload (~112 chars) + wrapper exceeds send_ok_str's 128-byte buffer,
        so build and send the response directly like handle_status. */
-    char resp[224];
+    char resp[320];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
-             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d},"
-             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d},"
+             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu},"
+             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu},"
              "\"status_supported\":%s}}\n",
-             e1.enabled, e1.fault, e1.valid,
-             e2.enabled, e2.fault, e2.valid,
+             e1.enabled, e1.fault, e1.valid, e1.flt_pin, (unsigned long)e1.reverse_blocks,
+             e2.enabled, e2.fault, e2.valid, e2.flt_pin, (unsigned long)e2.reverse_blocks,
              e1.status_supported ? "true" : "false");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);

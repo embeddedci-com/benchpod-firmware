@@ -10,6 +10,7 @@
  * right EN bit without disturbing the other eFuse.
  */
 #include "target_power.h"
+#include "efuse_flt.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -60,9 +61,59 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
 
 /* ---- stubs for the rest of target_power.c's externals ------------------- */
 void     fpga_set_led(uint8_t mask) { (void)mask; }
-uint64_t time_us_64(void) { return 0; }
+static uint64_t s_now_us;
+/* the output's current monitor, for efuse_flt.c */
+static int s_out_mv = 5100, s_out_ua = 0, s_ina_rc = 0;
+int ina238_read(uint8_t addr, int *bus_mv, int *shunt_uv, int *current_ua)
+{
+    (void)addr; *bus_mv = s_out_mv; *shunt_uv = 0; *current_ua = s_out_ua; return s_ina_rc;
+}
+uint64_t time_us_64(void) { return s_now_us; }
 
 /* ---- tests -------------------------------------------------------------- */
+
+
+/* FLT (active-low on P5 for eFuse 1) counts only after FLT_CONFIRM_SAMPLES 10 ms samples in a
+   row: a single-sample glitch is no trip, a held FLT is. */
+static int s_events;
+static void on_event(int efuse, bool enabled, bool fault) { (void)enabled; if (efuse == 1 && fault) s_events++; }
+static void poll_at(uint64_t ms, bool flt1)
+{
+    regs[REG_INPUT] = (uint8_t)(0xFFu & ~(flt1 ? (1u << 5) : 0u));   /* FLT high = clear */
+    s_now_us = ms * 1000u;
+    target_power_poll();
+}
+static void test_flt_debounce(void)
+{
+    mock_reset();
+    target_power_init();
+    target_power_set_event_cb(on_event);
+    s_events = 0;
+    bool en = false, flt = false;
+    uint64_t t = 1000;
+    poll_at(t += 10, false);
+    poll_at(t += 10, true);                      /* one glitch */
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt);
+    poll_at(t += 10, false);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);                      /* two in a row: still a glitch */
+    poll_at(t += 10, false);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt && s_events == 0);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);
+    poll_at(t += 10, true);                      /* held: a trip */
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(flt && s_events == 1);
+    poll_at(t += 10, true);                      /* still held: one event, not one per sample */
+    CHECK(s_events == 1);
+    poll_at(t += 10, false);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt);
+    target_power_set_event_cb(NULL);
+}
+
 
 /* Core invariant: OUTPUT latch driven safe (0x00) BEFORE CONFIG enables outputs. */
 static void test_init_safe_ordering(void)
@@ -107,8 +158,49 @@ static void test_enable_disable(void)
     CHECK(target_power_enable(3, true)  != 0);    /* invalid eFuse index rejected */
 }
 
+/* The rule: output collapsed or carrying current = a fault; up with no current = reverse blocking. */
+static void test_flt_rule(void)
+{
+    CHECK(!efuse_flt_is_fault(1, 5100, 0));        /* reverse-current blocking, no load */
+    CHECK(!efuse_flt_is_fault(1, 5050, -2000));    /* reverse current, briefly */
+    CHECK(efuse_flt_is_fault(1, 4200, 2000000));   /* in current limit at 2 A */
+    CHECK(efuse_flt_is_fault(2, 300, 0));          /* short or shutdown: output down */
+}
+
+/* With the check registered, a held FLT with the output up and no current is no trip (counted as
+   reverse blocking); when the output then collapses while FLT stays held, it is. */
+static void test_flt_reverse_blocking(void)
+{
+    mock_reset();
+    target_power_init();
+    efuse_flt_init();
+    target_power_set_event_cb(on_event);
+    s_events = 0; s_out_mv = 5100; s_out_ua = 0; s_ina_rc = 0;
+    bool en = false, flt = false;
+    uint64_t t = 100000;   /* after test_flt_debounce: the poll paces itself on the clock */
+    for (int i = 0; i < 8; i++) poll_at(t += 10, true);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(!flt && s_events == 0 && target_power_reverse_blocks(1) == 1);
+    s_out_mv = 200;                                 /* the output collapses: a real fault */
+    for (int i = 0; i < 10; i++) poll_at(t += 10, true);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(flt && s_events == 1);
+    poll_at(t += 10, false);
+    s_out_mv = 5100;
+    s_ina_rc = -1;                                  /* the monitor does not answer: a fault */
+    for (int i = 0; i < 3; i++) poll_at(t += 10, true);
+    (void)target_power_get_cached(1, &en, &flt);
+    CHECK(flt && s_events == 2);
+    s_ina_rc = 0;
+    target_power_set_flt_check(NULL);
+    target_power_set_event_cb(NULL);
+}
+
 int main(void)
 {
+    test_flt_debounce();
+    test_flt_rule();
+    test_flt_reverse_blocking();
     test_init_safe_ordering();
     test_init_aborts_if_output_write_fails();
     test_enable_disable();
