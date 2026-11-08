@@ -12,6 +12,16 @@ static uint16_t ethertype(const uint8_t *f)
     return (uint16_t)((f[12] << 8) | f[13]);
 }
 
+// IEEE 802.1D/Q: frames to 01-80-C2-00-00-00 through -0F (STP, pause, LACP, 802.1X, LLDP, ...) belong
+// to one link and a bridge never forwards them. The pod's EMI test build sends its 20 Mbit/s stream
+// to 01-80-C2-00-00-0F for exactly that reason: it must load the pod's cable and stop at the first
+// switch (or at this bridge) instead of filling a network, or the Wi-Fi.
+static bool link_local(const uint8_t *dst)
+{
+    static const uint8_t pfx[5] = {0x01, 0x80, 0xC2, 0x00, 0x00};
+    return memcmp(dst, pfx, 5) == 0 && dst[5] <= 0x0F;
+}
+
 static l2_action_t drop(l2fwd_t *s, l2_why_t why)
 {
     s->last_why = why;
@@ -76,6 +86,9 @@ l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *f, size_t len, bool wifi_u
     if (memcmp(dst, s->bridge_mac, 6) == 0) {
         return drop(s, L2_WHY_TO_BRIDGE);
     }
+    if (link_local(dst)) {
+        return drop(s, L2_WHY_LINK_LOCAL);
+    }
     if (!wifi_up) {
         return drop(s, L2_WHY_WIFI_DOWN);
     }
@@ -99,6 +112,9 @@ l2_action_t l2fwd_from_wifi(l2fwd_t *s, const uint8_t *f, size_t len)
     }
     if (memcmp(src, s->pod_mac, 6) == 0) {
         return drop(s, L2_WHY_REFLECTED);  // e.g. the AP echoing the pod's broadcast (breaks IPv6 DAD)
+    }
+    if (link_local(dst)) {
+        return drop(s, L2_WHY_LINK_LOCAL);
     }
     if (l2_is_multicast(dst) || memcmp(dst, s->pod_mac, 6) == 0) {
         return L2_FORWARD;

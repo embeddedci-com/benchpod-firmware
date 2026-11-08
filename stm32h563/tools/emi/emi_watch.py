@@ -4,7 +4,9 @@
 The EMI test build (make EMI_TEST=1) sends two kinds of raw frames on EtherType 0x88B6:
 
   BPEMI  the traffic stream (default 20 Mbit/s): "BPEMI", a 32-bit sequence number and the
-         pod's uptime in ms (little-endian), then filler
+         pod's uptime in ms (little-endian), then filler. Sent to 01-80-C2-00-00-0F, which a switch
+         never forwards: only a laptop cabled straight to the pod sees it (LOST and STOPPED need
+         that); behind a switch the script follows the BPMON frames only
   BPMON  every 5 s, broadcast: one line of text, "BPMON run 12, reset power-on, uptime 61234 ms,
          seq 98765, emi: running, led green, ..." (the USB console's monitor line)
 

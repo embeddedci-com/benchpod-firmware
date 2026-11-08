@@ -37,6 +37,7 @@ typedef enum {
     L2_WHY_NO_POD,        // pod MAC not learned yet, or not seen since a link-down
     L2_WHY_WIFI_DOWN,     // Wi-Fi not connected
     L2_WHY_REFLECTED,     // our own broadcast echoed back by the AP
+    L2_WHY_LINK_LOCAL,    // 01-80-C2-00-00-00..0F: IEEE 802.1 link-local, never bridged
 } l2_why_t;
 
 typedef struct {

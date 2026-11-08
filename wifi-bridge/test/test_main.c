@@ -517,6 +517,16 @@ static void test_forwarding(void)
     CHECK(l2fwd_from_eth(&s, f, 60, true, NULL) == L2_FORWARD);
     frame(f, ROUTER, POD, 0x86dd);
     CHECK(l2fwd_from_eth(&s, f, 60, true, NULL) == L2_FORWARD);
+    // IEEE 802.1 link-local (the EMI build's stream, LLDP, STP ...) is never bridged
+    static const uint8_t LL_0F[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x0F};
+    static const uint8_t LL_0E[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E};
+    static const uint8_t NOT_LL[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x10};
+    frame(f, LL_0F, POD, 0x88b6);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, NULL) == L2_DROP && s.last_why == L2_WHY_LINK_LOCAL);
+    frame(f, LL_0E, POD, 0x88cc);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, NULL) == L2_DROP && s.last_why == L2_WHY_LINK_LOCAL);
+    frame(f, NOT_LL, POD, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, NULL) == L2_FORWARD);
 
     // Wi-Fi side
     frame(f, POD, ROUTER, 0x0800);
@@ -530,6 +540,9 @@ static void test_forwarding(void)
     frame(f, BCAST, POD, 0x86dd);  // AP reflecting the pod's own multicast: breaks IPv6 DAD
     CHECK(l2fwd_from_wifi(&s, f, 60) == L2_DROP && s.last_why == L2_WHY_REFLECTED);
     CHECK(l2fwd_from_wifi(&s, f, 13) == L2_DROP && s.last_why == L2_WHY_RUNT);
+    static const uint8_t LL_00[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x00};
+    frame(f, LL_00, ROUTER, 0x0026);   // an STP BPDU from the Wi-Fi side
+    CHECK(l2fwd_from_wifi(&s, f, 60) == L2_DROP && s.last_why == L2_WHY_LINK_LOCAL);
 }
 
 static void test_control_frames(void)
