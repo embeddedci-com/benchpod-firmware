@@ -52,6 +52,10 @@ static const char *const k_dac_names[] = { "sine", "dc", "current", "off", "all"
    that the LED stays blue until power is removed (status_led.h). A missing Ethernet link stays red
    for as long as it lasts. */
 #define EMI_LED_FAIL_MS  5000u
+/* Failing this long without a break is a fail under the lab's criterion B (it must recover within
+   60 s): the LED turns from blue (recovering) to red. The recovery ladder (recovery.h) is back by
+   about 45 s after a failure starts. */
+#define EMI_LED_VERDICT_MS  60000u
 /* A capture still in flight after this long has hung (the loop's take well under 2 s): it counts
    as failing from when it went out, for the LED and the recovery ladder alike. */
 #define EMI_CAP_HUNG_MS  10000u
@@ -107,6 +111,9 @@ static struct {
     uint32_t       c3_seen, c3_seen_assoc;   /* the pod's counts at the last look */
     uint32_t       c3_restarts;   /* restarts while the activity ran, association failures left out */
     uint32_t       c3_last_ms;    /* HAL_GetTick() of the last one, 0 = none */
+    /* the LED's verdict (emi_test_led_state) */
+    uint32_t       failing_from;  /* failing without a break since (0 = not failing) */
+    bool           gave_up;       /* the recovery is out of steps for this failure */
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -808,7 +815,8 @@ static void recovery_poll_emi(uint32_t now) {
         recovery_done(&s_rcv, a, now, &s_keep.resets);
         recovery_take(a, now);
     } else if (recovery_exhausted(&s_rcv, now, fail_ms, s_keep.resets)) {
-        printf("[emi] recovery: limits reached, the pod stays red until power is removed\n");
+        s.gave_up = true;   /* red now, until the failure ends by itself */
+        printf("[emi] recovery: limits reached, the LED is red while the failure lasts\n");
         log_event_text(EMI_EV_RECOVERY, "recovery limit reached");
     }
 }
@@ -1052,7 +1060,15 @@ uint8_t emi_test_led_state(void) {
     const uint32_t now = HAL_GetTick();
     if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault || s.c3_restarts))
         s_failed_before = true;
-    return status_led_emi_state(s.booted, s.running, s.running && failing_now(now), s_failed_before);
+    /* Red only for a failure that fails criterion B: still failing EMI_LED_VERDICT_MS after it
+       began, or the recovery is out of steps. Until then the pod is recovering (blue, fast). Not
+       latched: a pod that comes back after a long burst test goes blue (the lab reads the LED
+       60 s after each test). */
+    const bool failing = s.running && failing_now(now);
+    if (!failing) { s.failing_from = 0; s.gave_up = false; }
+    else if (!s.failing_from) s.failing_from = now ? now : 1u;
+    const bool too_long = failing && (s.gave_up || now - s.failing_from >= EMI_LED_VERDICT_MS);
+    return status_led_emi_state(s.booted, s.running, failing, too_long, s_failed_before);
 }
 
 static const char *led_name(uint8_t st) {
@@ -1060,6 +1076,7 @@ static const char *led_name(uint8_t st) {
     case STATUS_LED_EMI_WAITING:   return "green (starting)";
     case STATUS_LED_EMI_RUNNING:   return "green";
     case STATUS_LED_EMI_FAILING:   return "red";
+    case STATUS_LED_EMI_RECOVERING: return "blue (recovering)";
     case STATUS_LED_EMI_RECOVERED: return "blue";
     default:                       return "off";
     }

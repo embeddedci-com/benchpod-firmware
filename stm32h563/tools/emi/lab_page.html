@@ -31,7 +31,7 @@ th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-
 td.d{white-space:normal;min-width:280px}
 th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
 tr.ev td{font-weight:600}
-.l-green{color:var(--green)}.l-red{color:var(--red)}.l-blue{color:var(--blue)}
+.l-green{color:var(--green)}.l-red{color:var(--red)}.l-blue{color:var(--blue)}.l-recovering{color:var(--blue)}
 .warn{color:var(--amber)}
 small{color:var(--muted)}
 </style>
@@ -69,7 +69,7 @@ small{color:var(--muted)}
 <script>
 "use strict";
 const KEY = "bp-emi:" + location.host;
-const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"};
+const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"};
 const DACS = ["sine", "dc", "current", "off", "all"];
 const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped", 6: "recovery", 7: "ESP32-C3 restart"};
 const MAX_SAMPLES = 20000;
@@ -178,7 +178,8 @@ async function sync(d) {
 const VERDICT = {
   "green": ["var(--green)", "OK", "Running, no failure since power-on."],
   "green (starting)": ["var(--green)", "Starting", "The pod is powering up its test activity."],
-  "red": ["var(--red)", "FAILING NOW", "A function of the pod is failing at this moment."],
+  "red": ["var(--red)", "FAILED", "A function has been failing for over 60 s, or the pod ran out of recovery steps: a fail under criterion B."],
+  "blue (recovering)": ["var(--blue)", "Recovering", "A function is failing now; the pod is getting itself running again (it has 60 s)."],
   "blue": ["var(--blue)", "Running again after a failure", "It failed (or restarted) since power-on and works again now."],
   "off": ["var(--muted)", "Stopped", "The test activity is not running."]
 };

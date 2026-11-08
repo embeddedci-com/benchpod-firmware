@@ -3801,7 +3801,7 @@ loop's last failure, empty when none) and `fw`:
 
 `run` is this boot's run number; `queued` records wait in RAM for the next write, `lost` found no
 room there. A slot is empty (all `0xFF`) or a record: `u16 magic 0x4C45` ("EL"), `u8 type` (1
-START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue), `u32 seq` (grows across
+START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue, 5 blue recovering), `u32 seq` (grows across
 runs: sort by it), `u32 run`, `u32 uptime_ms`, 44 bytes of payload, and a CRC-32 (zlib's) of the
 first 60 bytes; the payloads are in `stm32h563/src/emi_log.c`. `stm32h563/tools/emi/emi_log_dump.py`
 reads the whole log and prints it with a summary per run.
@@ -3819,6 +3819,15 @@ is 400 ms), which happens only once the 1,024 records erased at boot are used up
 time the DAC was found stopped after a session (0 normally) and `dac_stops` how many sessions did.
 The whole log (7,040 slots) downloads in about 10 s over the LAN while the loop runs.
 
+**The LED's verdict.** The color is the verdict for a test lab: green passes every test; blue
+passes criterion B (blue, fast blink: a function fails now and the pod is getting itself running
+again; blue, 1 s blink: it runs again after a failure or restart); red, fast blink, fails: a
+function has been failing for 60 s without a break, or the recovery below ran out of steps. Red is
+not latched: a pod that comes back after a long burst test turns blue, so the lab reads the LED
+60 s after each test. An eFuse trip or an iCE40 that dropped out go through this too (no red at
+once), and `emi_test` and the `emi` line name the state (`led`: `green`, `blue (recovering)`,
+`blue`, `red`).
+
 **Recovery.** While the loop runs, the EMI build gets itself running again when it stays stuck
 (`stm32h563/src/recovery.h`): captures that keep failing for 10 s (or one that has not finished
 after 10 s) reload the iCE40 from its config flash (no write), a second time 10 s later, and when
@@ -3826,15 +3835,15 @@ that does not help, the STM32 resets (10 s after the last reload, 30 s after the
 after that reset the loop starts 2 s into the boot instead of 10 s, so the pod runs again well
 inside a minute. An Ethernet link that stays down for 20 s, or stays up while frames keep failing
 to go out, gets a PHY reset and a new DHCP request, at most once a minute. An eFuse that trips is
-a failure (red, then blue) and its supply is turned off and on again 2 s later, at most 6 times an
+a failure (blue recovering, then blue) and its supply is turned off and on again 2 s later, at most 6 times an
 hour (`eFuse 1 tripped: power retry`). The EMI build never goes to safe mode after crashed boots. Limits: 6 iCE40 reloads an hour, 2 STM32 resets until the pod ran
 10 minutes without a failure or was powered off and on (the count survives the resets), 10 PHY
-resets an hour; past them the pod stays red. Each step is an `EVENT` (kind 6, `recovery`) whose text
+resets an hour; past them the LED is red while the failure lasts. Each step is an `EVENT` (kind 6, `recovery`) whose text
 says what it did and how it went, e.g. `iCE40 reload ok v51` or `STM32 reset (1 of 2)`; the next
 run's `START` then has the reset cause `recovery reset`.
 
 On a board with the built-in Wi-Fi (ESP32-C3, v3 boards) a C3 restart while the activity runs is a
-failure too (red for 5 s, then blue): the pod restarts the C3 when it stops answering, reboots by
+failure too (blue recovering for 5 s, then blue): the pod restarts the C3 when it stops answering, reboots by
 itself or fails a setup step (see [`wifi_status`](#wifi_status)), so an ESD hit that resets it
 shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the cause, e.g.
 `C3 restart: rebooted`, and `emi_test` counts them (`c3_restarts`). A restart because the access

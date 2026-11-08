@@ -124,33 +124,45 @@ static void test_emi_pattern(void)
     CHECK(status_led_color(&in, t) == STATUS_LED_RED);
     CHECK(status_led_color(&in, t + STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_OFF);
     CHECK(status_led_color(&in, t + 2 * STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_RED);
+    in.emi = STATUS_LED_EMI_RECOVERING;   /* failing now, inside the time to recover: blue, fast */
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
+    CHECK(status_led_color(&in, t + STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_OFF);
+    CHECK(status_led_color(&in, t + 2 * STATUS_LED_FAULT_BLINK_MS) == STATUS_LED_BLUE);
     in.emi = STATUS_LED_EMI_RECOVERED;
     CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_OFF);
     in.updating = true;
     CHECK(status_led_color(&in, t) == STATUS_LED_MAGENTA);
     in.updating = false;
+    /* An eFuse trip or an iCE40 that dropped out: the loop judges them (recovering, then red),
+       no red at once. */
     in.power_fault = true;
-    CHECK(status_led_color(&in, t) == STATUS_LED_RED);
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     in.power_fault = false;
     in.hw_ok = false;
-    CHECK(status_led_color(&in, t + STATUS_LED_EMI_BLINK_MS) == STATUS_LED_RED);
+    CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
     in.hw_ok = true;
     in.emi = STATUS_LED_EMI_NONE;   /* stopped: the normal status again */
     CHECK(status_led_color(&in, t) == STATUS_LED_BLUE);
+    in.power_fault = true;           /* and the normal build's eFuse red */
+    CHECK(status_led_color(&in, t) == STATUS_LED_RED);
+    in.power_fault = false;
 }
 
-/* What the loop's state maps to: green only while nothing ever failed; red while failing; blue
-   once anything failed or the pod restarted, until power is removed. */
+/* What the loop's state maps to: green only while nothing ever failed; blue, fast, while failing
+   inside the time to recover; red once it fails longer (or gave up); blue once anything failed or
+   the pod restarted, until power is removed. */
 static void test_emi_state(void)
 {
-    CHECK(status_led_emi_state(false, false, false, false) == STATUS_LED_EMI_WAITING);
-    CHECK(status_led_emi_state(false, false, false, true) == STATUS_LED_EMI_RECOVERED);   /* restarted */
-    CHECK(status_led_emi_state(true, false, true, true) == STATUS_LED_EMI_NONE);          /* stopped */
-    CHECK(status_led_emi_state(true, true, false, false) == STATUS_LED_EMI_RUNNING);
-    CHECK(status_led_emi_state(true, true, true, false) == STATUS_LED_EMI_FAILING);
-    CHECK(status_led_emi_state(true, true, true, true) == STATUS_LED_EMI_FAILING);
-    CHECK(status_led_emi_state(true, true, false, true) == STATUS_LED_EMI_RECOVERED);
+    /* (booted, running, failing_now, failing_too_long, failed_before) */
+    CHECK(status_led_emi_state(false, false, false, false, false) == STATUS_LED_EMI_WAITING);
+    CHECK(status_led_emi_state(false, false, false, false, true) == STATUS_LED_EMI_RECOVERED);   /* restarted */
+    CHECK(status_led_emi_state(true, false, true, true, true) == STATUS_LED_EMI_NONE);           /* stopped */
+    CHECK(status_led_emi_state(true, true, false, false, false) == STATUS_LED_EMI_RUNNING);
+    CHECK(status_led_emi_state(true, true, true, false, false) == STATUS_LED_EMI_RECOVERING);   /* first failure */
+    CHECK(status_led_emi_state(true, true, true, false, true) == STATUS_LED_EMI_RECOVERING);
+    CHECK(status_led_emi_state(true, true, true, true, true) == STATUS_LED_EMI_FAILING);        /* over 60 s */
+    CHECK(status_led_emi_state(true, true, false, false, true) == STATUS_LED_EMI_RECOVERED);
 }
 
 /* Only a change goes out, plus a refresh every STATUS_LED_REFRESH_MS (gateware loads reset it). */

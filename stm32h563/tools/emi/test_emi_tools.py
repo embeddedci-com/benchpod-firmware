@@ -132,7 +132,7 @@ class LogDumpTest(unittest.TestCase):
         self.assertEqual([r["seq"] for r in recs], [5, 6, 9, 10, 11])
         s = dump.summarize(recs)
         self.assertIn("run 1: fw 3.9.6, reset power-on", s[0])
-        self.assertIn("FAILED NOW", s[0])
+        self.assertIn("LED: FAILED (failing over 60 s", s[0])
         self.assertIn("run 2: fw 3.9.6, reset watchdog", s[1])
         self.assertIn("no failure", s[1])
         self.assertIn("captures 99", s[1])

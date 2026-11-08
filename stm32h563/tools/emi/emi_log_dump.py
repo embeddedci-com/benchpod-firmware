@@ -28,7 +28,7 @@ import zlib
 REC = 64
 MAGIC = 0x4C45
 TYPES = {1: "START", 2: "EVENT", 3: "CHECK"}
-LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"}
+LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
           5: "activity stopped", 6: "recovery",
@@ -149,7 +149,8 @@ def summarize(recs):
         st = s["start"]
         head = (f"run {n}: fw {st['fw']}, reset {st['reset']}" if st else
                 f"run {n}: (start record overwritten)")
-        verdict = ("FAILED NOW" if "red" in s["leds"] else "FAILED, RECOVERED" if "blue" in s["leds"]
+        verdict = ("FAILED (failing over 60 s, or out of recovery steps)" if "red" in s["leds"]
+                   else "FAILED, RECOVERED" if ("blue" in s["leds"] or "recovering" in s["leds"])
                    else "no failure")
         cp = s["last"]
         tail = (f", last checkpoint: captures {cp['captures']}, errors {cp['errors']}, drops "

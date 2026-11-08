@@ -15,7 +15,8 @@ macOS), prints every BPMON line and flags what a lab needs to know:
   STOPPED   no stream frames for --stall seconds (the pod still sends BPMON: the loop stopped)
   SILENT    no frames at all for --silent seconds (pod off, hung, or the cable is out)
   REBOOT    the run number changed, or the uptime or the sequence went back
-  LED       the LED left green: red (failing now) or blue (failed earlier, recovered)
+  LED       the LED left green: blue (recovering) while a function fails, blue once it runs again,
+            red when it failed for over 60 s or ran out of recovery steps (a fail)
 
 Everything printed also goes to a log file (default emi-watch-<date>-<time>.log).
 
@@ -75,7 +76,7 @@ class PcapStream:
 _RUN = re.compile(r"run (\d+)")
 _RESET = re.compile(r"reset ([\w-]+)")
 _UPTIME = re.compile(r"uptime (\d+) ms")
-_LED = re.compile(r"led (green \(starting\)|green|red|blue|off)")
+_LED = re.compile(r"led (green \(starting\)|green|red|blue \(recovering\)|blue|off)")
 
 
 class Watcher:
@@ -162,11 +163,12 @@ class Watcher:
         m = _LED.search(text)
         if m:
             led = m.group(1)
-            if led != p["led"] and led in ("red", "blue", "off"):
-                meaning = {"red": "failing now", "blue": "failed earlier, recovered",
-                           "off": "not running"}[led]
+            if led != p["led"] and led in ("red", "blue (recovering)", "blue", "off"):
+                meaning = {"red": "FAILED: failing over 60 s or out of recovery steps",
+                           "blue (recovering)": "failing now, recovering",
+                           "blue": "failed earlier, recovered", "off": "not running"}[led]
                 self.say(ts, f"{mac}: LED {led} ({meaning})", "LED")
-            elif led != p["led"] and p["led"] in ("red", "blue", "off"):
+            elif led != p["led"] and p["led"] in ("red", "blue (recovering)", "blue", "off"):
                 self.say(ts, f"{mac}: LED {led} again", "LED")
             p["led"] = led
 
