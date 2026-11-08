@@ -27,7 +27,10 @@ import zlib
 
 REC = 64
 MAGIC = 0x4C45
-TYPES = {1: "START", 2: "EVENT", 3: "CHECK"}
+TYPES = {1: "START", 2: "EVENT", 3: "CHECK", 4: "SUM"}
+SUM16 = ("cloud_drops", "c3_restarts", "i2c_clears", "can_busoff", "psram_fail", "cdone_lost")
+SUM32 = ("psram_retry", "rev_block_1", "rev_block_2", "eth_crc", "eth_missed", "bridge_tx_err",
+         "cloud_down_s")
 LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"}
 DACS = ["sine", "dc", "current", "off", "all"]
 EVENTS = {1: "led", 2: "ethernet link lost", 3: "ethernet link back", 4: "activity started",
@@ -59,6 +62,9 @@ def decode(slot):
         r.update(kind=EVENTS.get(kind, f"event {kind}"), led_from=LEDS.get(frm, "off"),
                  led_to=LEDS.get(to, "off"), is_led=kind == 1, captures=caps, errors=errs,
                  net_sent=sent, text=_str(slot[32:60]))
+    elif typ == 4:
+        r.update(zip(SUM16, struct.unpack_from("<HHHHHH", slot, 16)))
+        r.update(zip(SUM32, struct.unpack_from("<IIIIIII", slot, 28)))
     else:
         vals = struct.unpack_from("<IIIIIII", slot, 16)
         dac, mbit, running, link = slot[44], slot[45], slot[46], slot[47]
@@ -87,6 +93,9 @@ def encode(r):
         b[18] = {v: k for k, v in LEDS.items()}.get(r.get("led_to"), 0)
         struct.pack_into("<III", b, 20, r.get("captures", 0), r.get("errors", 0), r.get("net_sent", 0))
         b[32:60] = r.get("text", "").encode()[:27].ljust(28, b"\0")
+    elif typ == 4:
+        struct.pack_into("<HHHHHH", b, 16, *(r.get(k, 0) for k in SUM16))
+        struct.pack_into("<IIIIIII", b, 28, *(r.get(k, 0) for k in SUM32))
     else:
         struct.pack_into("<IIIIIII", b, 16, *(r.get(k, 0) for k in (
             "captures", "errors", "net_sent", "net_drops", "link_losses", "rec_dropped",
@@ -118,6 +127,12 @@ def fmt(r):
         last = f", last: {r['text']}" if r["text"] else ""
         return head + (f"EVENT {what}, captures {r['captures']}, errors {r['errors']}, "
                        f"sent {r['net_sent']}{last}")
+    if r["type"] == "SUM":
+        return head + (f"SUM cloud drops {r['cloud_drops']} (down {r['cloud_down_s']} s), c3 restarts "
+                       f"{r['c3_restarts']}, i2c clears {r['i2c_clears']}, can bus-off {r['can_busoff']}, "
+                       f"psram retry {r['psram_retry']} fail {r['psram_fail']}, iCE40 lost {r['cdone_lost']}, "
+                       f"eFuse rev blocks {r['rev_block_1']}/{r['rev_block_2']}, eth crc {r['eth_crc']} "
+                       f"missed {r['eth_missed']}, bridge tx err {r['bridge_tx_err']}")
     last = f", last: {r['text']}" if r["text"] else ""
     return head + (f"CHECK led {r['led']}, {'running' if r['running'] else 'stopped'}, dac {r['dac']}, "
                    f"captures {r['captures']}, errors {r['errors']}, sent {r['net_sent']}, "

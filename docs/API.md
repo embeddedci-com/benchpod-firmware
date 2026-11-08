@@ -3811,7 +3811,7 @@ loop's last failure, empty when none) and `fw`:
 
 `run` is this boot's run number; `queued` records wait in RAM for the next write, `lost` found no
 room there. A slot is empty (all `0xFF`) or a record: `u16 magic 0x4C45` ("EL"), `u8 type` (1
-START, 2 EVENT, 3 CHECK), `u8 led` (1 starting, 2 green, 3 red, 4 blue, 5 blue recovering), `u32 seq` (grows across
+START, 2 EVENT, 3 CHECK, 4 SUM), `u8 led` (1 starting, 2 green, 3 red, 4 blue, 5 blue recovering), `u32 seq` (grows across
 runs: sort by it), `u32 run`, `u32 uptime_ms`, 44 bytes of payload, and a CRC-32 (zlib's) of the
 first 60 bytes; the payloads are in `stm32h563/src/emi_log.c`. `stm32h563/tools/emi/emi_log_dump.py`
 reads the whole log and prints it with a summary per run.
@@ -3860,12 +3860,25 @@ shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the ca
 
 Things the pod counts that the LED does not show are `EVENT`s too (kind 8, `health`), checked once
 a second and logged at most once per item every 10 s (eFuse reverse blocking: every 60 s) with the
-count since the last one: a cloud
-connection that dropped (`cloud drop +1: idle timeout (no pong)`), an I2C bus clear, a capture
-read-back from the PSRAM that needed a retry or failed, a CAN bus-off recovery, eFuse reverse-current
-blocking (`eFuse1 rev block +31`, see `target_status`), the iCE40 losing its configuration
-(CDONE low) and the LA supply switching source (the TPS2116's status pin). They do not change the
-LED. A restart because the access
+count since the last one: an I2C bus clear, a capture read-back from the PSRAM that needed a retry
+or failed, a CAN bus-off recovery, eFuse reverse-current blocking (`eFuse1 rev block +31`, see
+`target_status`), the iCE40 losing its configuration (CDONE low) and the LA supply switching source
+(the TPS2116's status pin). They do not change the LED.
+
+The cloud link is not under test (a lab network may have no internet), so it never changes the
+LED, and a drop that reconnects is only counted. A cloud link that is set up but stays down for
+2 minutes is a `health` event (`cloud down 2 min: idle timeout (no pong)`), and so is its return
+(`cloud back after 7 min`): the shared lab view stops updating meanwhile.
+
+Every 10 minutes while the loop runs, also when nothing went wrong, a `SUM` record (type 4) keeps
+the totals, so after a failure the log shows which one started climbing first: cloud drops and
+the seconds the cloud was down this run, ESP32-C3 restarts, I2C bus clears, CAN bus-off
+recoveries, PSRAM read-back retries and failures, iCE40 configuration losses this run, eFuse
+reverse blocks per eFuse, Ethernet frames received with a CRC or alignment error and frames
+missed for want of a receive buffer, and the Wi-Fi bridge's failed Wi-Fi transmits (its own
+count). Layout after the common header: `u16` cloud drops, C3 restarts, I2C clears, CAN bus-off,
+PSRAM fails, iCE40 losses at bytes 16-27, then `u32` PSRAM retries, eFuse 1 and 2 reverse blocks,
+Ethernet CRC, Ethernet missed, bridge transmit errors and cloud-down seconds at bytes 28-55. A restart because the access
 point refused the association is left out: that is the network, not the pod. The digital v3r3
 and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.

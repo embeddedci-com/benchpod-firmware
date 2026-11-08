@@ -32,6 +32,10 @@
 #include "i2c_bus.h"                    /* health: I2C bus clears */
 #include "can_bus.h"                    /* health: CAN bus-off recoveries */
 #include "ice40_flash.h"                /* health: CDONE */
+#include "eth_diag.h"                   /* summary: Ethernet CRC and missed frames */
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"            /* summary: the bridge's failed transmits */
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -605,7 +609,7 @@ static void log_poll(uint32_t now) {
             return;   /* print from the next pass on */
         }
         emi_rec_t r;
-        char line[200];
+        char line[320];   /* a SUMMARY line runs to ~260 characters */
         if (emi_log_decode(pj.buf + (slot % EMI_LOG_PER_SECTOR) * EMI_LOG_REC, &r)) {
             emi_log_format(&r, line, sizeof(line));
             printf("[emi] log %s\n", line);
@@ -869,10 +873,13 @@ static void power_poll_emi(uint32_t now) {
 
 uint32_t emi_test_run(void) { return log_ok() ? s_log.run : 0u; }
 
+static void health_run_reset(void);   /* below, with the health state */
+
 void emi_test_start(void) {
     s.booted = true;
     if (s.running) return;
     s.running    = true;
+    health_run_reset();
     s.t_start    = HAL_GetTick();
     s.t_report   = s.t_start;
     s.t_next_cap = s.t_start;
@@ -1213,17 +1220,26 @@ static void c3_poll_emi(uint32_t now) {
    run log when it changes, at most one per item every EMI_HEALTH_GAP_MS (the count in between is
    summed into the next). Read once a second. */
 #define EMI_HEALTH_GAP_MS 10000u
-enum { H_CLOUD, H_I2C, H_PS_RETRY, H_PS_FAIL, H_CAN, H_REV1, H_REV2, H_CDONE, H_VCCIO, H_N };
+/* The cloud link is not under test (a lab network may have no internet at all), so it never
+   touches the LED, and a drop that reconnects is only counted (SUMMARY). Down for
+   EMI_CLOUD_DOWN_MS is an event, and so is its coming back: the shared lab view stops updating. */
+#define EMI_CLOUD_DOWN_MS (2u * 60u * 1000u)
+enum { H_I2C, H_PS_RETRY, H_PS_FAIL, H_CAN, H_REV1, H_REV2, H_CDONE, H_VCCIO, H_N };
 static struct {
     bool     init;
     uint32_t t_read;
     uint32_t last[H_N];       /* the value at the last event (or the start) */
     uint32_t t_event[H_N];
+    uint32_t cdone_lost;      /* CDONE went low this run */
+    uint32_t cloud_down_from; /* set up but not connected since (0 = connected or not set up) */
+    bool     cloud_down_logged;
+    uint32_t cloud_down_ms;   /* this run, in total */
+    uint32_t t_cloud;         /* the last cloud_poll */
+    uint32_t t_summary;       /* the last SUMMARY (or the start) */
 } hs;
 
 static uint32_t health_value(int i) {
     switch (i) {
-    case H_CLOUD:    return cloud_client_drops(NULL);
     case H_I2C:      return i2c_bus_clear_count();
     case H_PS_RETRY: { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return r; }
     case H_PS_FAIL:  { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return f; }
@@ -1253,19 +1269,16 @@ static void health_poll(uint32_t now) {
         char text[64];   /* the console line gets it all; the run log keeps the first 27 */
         const uint32_t d = v - hs.last[i];
         switch (i) {
-        case H_CLOUD: {
-            const char *why = "";
-            (void)cloud_client_drops(&why);
-            snprintf(text, sizeof(text), "cloud drop +%lu: %s", (unsigned long)d, why);
-            break;
-        }
         case H_I2C:      snprintf(text, sizeof(text), "I2C bus clear +%lu", (unsigned long)d); break;
         case H_PS_RETRY: snprintf(text, sizeof(text), "PSRAM read retry +%lu", (unsigned long)d); break;
         case H_PS_FAIL:  snprintf(text, sizeof(text), "PSRAM read fail +%lu", (unsigned long)d); break;
         case H_CAN:      snprintf(text, sizeof(text), "CAN bus-off +%lu", (unsigned long)d); break;
         case H_REV1:     snprintf(text, sizeof(text), "eFuse1 rev block +%lu", (unsigned long)d); break;
         case H_REV2:     snprintf(text, sizeof(text), "eFuse2 rev block +%lu", (unsigned long)d); break;
-        case H_CDONE:    snprintf(text, sizeof(text), v ? "iCE40 configured" : "iCE40 config lost"); break;
+        case H_CDONE:
+            if (!v) hs.cdone_lost++;
+            snprintf(text, sizeof(text), v ? "iCE40 configured" : "iCE40 config lost");
+            break;
         case H_VCCIO:    snprintf(text, sizeof(text), "LA supply ST -> %lu", (unsigned long)v); break;
         default:         text[0] = '\0'; break;
         }
@@ -1274,6 +1287,87 @@ static void health_poll(uint32_t now) {
         hs.last[i] = v;
         hs.t_event[i] = now;
     }
+}
+
+static void health_run_reset(void) {
+    hs.cdone_lost = 0;
+    hs.cloud_down_from = 0;
+    hs.cloud_down_logged = false;
+    hs.cloud_down_ms = 0;
+    hs.t_cloud = 0;
+    hs.t_summary = 0;
+}
+
+static void cloud_poll(uint32_t now) {
+    const char *st = cloud_client_state_str();
+    const bool set_up = strcmp(st, "disabled") != 0;
+    const bool up = strcmp(st, "connected") == 0;
+    const uint32_t dt = hs.t_cloud ? now - hs.t_cloud : 0u;
+    hs.t_cloud = now;
+    if (up || !set_up) {
+        if (hs.cloud_down_logged) {
+            char text[48];
+            snprintf(text, sizeof(text), "cloud back after %lu min",
+                     (unsigned long)((now - hs.cloud_down_from + 30000u) / 60000u));
+            printf("[emi] health: %s\n", text);
+            log_event_text(EMI_EV_HEALTH, text);
+        }
+        hs.cloud_down_from = 0;
+        hs.cloud_down_logged = false;
+        return;
+    }
+    hs.cloud_down_ms += dt;
+    if (!hs.cloud_down_from) hs.cloud_down_from = now ? now : 1u;
+    if (!hs.cloud_down_logged && now - hs.cloud_down_from >= EMI_CLOUD_DOWN_MS) {
+        char err[48], text[80];
+        cloud_client_last_error(err, sizeof(err));
+        const char *why = err;
+        if (!err[0]) (void)cloud_client_drops(&why);
+        snprintf(text, sizeof(text), "cloud down 2 min%s%s", why && why[0] ? ": " : "", why ? why : "");
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        hs.cloud_down_logged = true;
+    }
+}
+
+/* Every EMI_LOG_SUMMARY_MS while the loop runs: every total, changed or not. */
+static void summary_poll(uint32_t now) {
+    if (!hs.t_summary) { hs.t_summary = now ? now : 1u; return; }
+    if (now - hs.t_summary < EMI_LOG_SUMMARY_MS) return;
+    hs.t_summary = now;
+    emi_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.type = EMI_REC_SUMMARY;
+    r.led = emi_test_led_state();
+    uint32_t retry = 0, fail = 0; int rc = 0;
+    signal_engine_psram_read_stats(&retry, &fail, &rc);
+    can_status_t cs;
+    const uint32_t busoff = can_get_status(&cs) == 0 ? cs.bus_off_recoveries : 0u;
+    static eth_diag_t d;   /* static: about 100 bytes, the hw worker's stack is tight */
+    net_eth_diag(&d);
+    uint32_t bridge_err = 0;
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) { static wb_info_t bi; wifi_bridge_get_info(&bi); bridge_err = bi.counters.wifi_tx_err; }
+#endif
+#define SAT16(x) ((uint16_t)((x) > 0xFFFFu ? 0xFFFFu : (x)))
+    r.u.sum.cloud_drops = SAT16(cloud_client_drops(NULL));
+    r.u.sum.c3_restarts = SAT16(esp_wifi_ctrl_restarts()->total);
+    r.u.sum.i2c_clears  = SAT16(i2c_bus_clear_count());
+    r.u.sum.can_busoff  = SAT16(busoff);
+    r.u.sum.psram_fail  = SAT16(fail);
+    r.u.sum.cdone_lost  = SAT16(hs.cdone_lost);
+#undef SAT16
+    r.u.sum.psram_retry = retry;
+    r.u.sum.rev_block[0] = target_power_reverse_blocks(1);
+    r.u.sum.rev_block[1] = target_power_reverse_blocks(2);
+    r.u.sum.eth_crc = d.rx_crc + d.rx_align;
+    r.u.sum.eth_missed = d.rx_missed;
+    r.u.sum.bridge_tx_err = bridge_err;
+    r.u.sum.cloud_down_s = hs.cloud_down_ms / 1000u;
+    log_queue(&r);
+    char line[320];
+    emi_log_format(&r, line, sizeof(line));
+    printf("[emi] %s\n", line);
 }
 
 void emi_test_poll(void) {
@@ -1298,7 +1392,11 @@ void emi_test_poll(void) {
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
     }
     c3_poll_emi(now);
-    if (s.running) health_poll(now);
+    if (s.running) {
+        health_poll(now);
+        if (now - hs.t_cloud >= 1000u || !hs.t_cloud) cloud_poll(now);
+        summary_poll(now);
+    }
     log_poll(now);
     recovery_poll_emi(now);
     power_poll_emi(now);
