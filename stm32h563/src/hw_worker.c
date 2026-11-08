@@ -64,8 +64,30 @@ static size_t        s_cloud_reply_len;
 
 /* ---- producers ------------------------------------------------------------ */
 
-static bool submit_u(uint8_t kind, int conn_id, const uint8_t *buf, size_t len,
-                     const char *req_id, uint32_t u32, TickType_t wait) {
+/* Queue slots the net task reserved for the rest of a pbuf (hw_worker_reserve). The other
+   producers (console, cloud, teardown) only take a slot beyond them, so the check-then-send in the
+   net task cannot lose its room to another task in between (it used to spin, and abort the
+   connection after 0.5 s). */
+static volatile uint32_t s_reserved;
+
+/* Send `w` into an unreserved slot (reserved: it may use a reserved one and gives it back). */
+static bool queue_send(const cmd_work_t *w, TickType_t wait, bool reserved) {
+    for (TickType_t waited = 0;; waited++) {
+        bool sent = false;
+        taskENTER_CRITICAL();
+        if (reserved || uxQueueSpacesAvailable(s_q) > s_reserved) {
+            sent = xQueueSend(s_q, w, 0) == pdTRUE;
+            if (sent && reserved && s_reserved) s_reserved--;
+        }
+        taskEXIT_CRITICAL();
+        if (sent) return true;
+        if (waited >= wait) return false;
+        vTaskDelay(1);
+    }
+}
+
+static bool submit_r(uint8_t kind, int conn_id, const uint8_t *buf, size_t len,
+                     const char *req_id, uint32_t u32, TickType_t wait, bool reserved) {
     if (!s_q) return false;
     cmd_work_t w;
     w.kind    = kind;
@@ -76,7 +98,12 @@ static bool submit_u(uint8_t kind, int conn_id, const uint8_t *buf, size_t len,
     if (buf && len) memcpy(w.data, buf, len);
     w.req_id[0] = '\0';
     if (req_id) { strncpy(w.req_id, req_id, sizeof(w.req_id) - 1); w.req_id[sizeof(w.req_id) - 1] = '\0'; }
-    return xQueueSend(s_q, &w, wait) == pdTRUE;
+    return queue_send(&w, wait, reserved);
+}
+
+static bool submit_u(uint8_t kind, int conn_id, const uint8_t *buf, size_t len,
+                     const char *req_id, uint32_t u32, TickType_t wait) {
+    return submit_r(kind, conn_id, buf, len, req_id, u32, wait, false);
 }
 
 static bool submit(uint8_t kind, int conn_id, const uint8_t *buf, size_t len,
@@ -100,11 +127,36 @@ bool hw_worker_submit_bytes(int conn_id, const uint8_t *buf, size_t len) {
    work items without blocking.  net_server uses this for all-or-nothing pbuf
    acceptance so a fast bulk upload (e.g. a deep-replay load_bin) is never
    partially consumed and truncated when the queue momentarily fills. */
+static size_t segs_for(size_t len) {
+    size_t segs = (len + (HW_WORK_DATA_MAX - 1)) / HW_WORK_DATA_MAX;
+    return segs ? segs : 1u;
+}
+
 bool hw_worker_can_accept(size_t len) {
     if (!s_q) return false;
-    size_t segs = (len + (HW_WORK_DATA_MAX - 1)) / HW_WORK_DATA_MAX;
-    if (segs == 0) segs = 1;
-    return uxQueueSpacesAvailable(s_q) >= segs;
+    return uxQueueSpacesAvailable(s_q) >= s_reserved + segs_for(len);
+}
+
+bool hw_worker_reserve(size_t len) {
+    if (!s_q) return false;
+    const size_t segs = segs_for(len);
+    bool ok;
+    taskENTER_CRITICAL();
+    ok = uxQueueSpacesAvailable(s_q) >= s_reserved + segs;
+    if (ok) s_reserved += (uint32_t)segs;
+    taskEXIT_CRITICAL();
+    return ok;
+}
+
+void hw_worker_unreserve(size_t segs) {
+    taskENTER_CRITICAL();
+    s_reserved = segs >= s_reserved ? 0u : s_reserved - (uint32_t)segs;
+    taskEXIT_CRITICAL();
+}
+
+bool hw_worker_submit_bytes_reserved(int conn_id, const uint8_t *buf, size_t len) {
+    if (conn_id >= 0 && conn_id < HW_PEND_IDS && s_parked[conn_id]) return false;
+    return submit_r(WK_BYTES, conn_id, buf, len, NULL, 0, 0, true);
 }
 
 /* ---- connection teardown that is never dropped ------------------------------

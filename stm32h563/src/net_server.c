@@ -407,7 +407,9 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
        count never reached `total`, so the completion ack never fired and the client
        timed out.  See docs / the concurrent-capture hwe2e tests. */
     if (id >= 0 && id < NET_MAX_CONN) {
-        if (!hw_worker_can_accept(p->tot_len)) { s_conn_refused[id] = true; return ERR_MEM; }
+        if (!hw_worker_reserve(p->tot_len)) { s_conn_refused[id] = true; return ERR_MEM; }
+        size_t reserved = (p->tot_len + HW_WORK_DATA_MAX - 1u) / HW_WORK_DATA_MAX;
+        if (reserved == 0) reserved = 1;
 
         static uint8_t seg[HW_WORK_DATA_MAX];   /* net task only (single-threaded) */
         u16_t off = 0;
@@ -415,12 +417,12 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
             u16_t n = (u16_t)(p->tot_len - off);
             if (n > sizeof(seg)) n = sizeof(seg);
             pbuf_copy_partial(p, seg, n, off);
-            /* can_accept() reserved room, so this succeeds on the common path.  If
-               another producer task (console) raced a slot away in between, wait
-               briefly for the worker to drain instead of truncating the tail — the
-               pbuf is already partly consumed and can't be rewound for redelivery. */
+            /* hw_worker_reserve() set the room aside, so no other producer can take it: this
+               succeeds unless a teardown for this slot got parked meanwhile.  Then wait briefly
+               instead of truncating the tail (the pbuf is partly consumed, it can't be
+               rewound for redelivery). */
             int spins = 0;
-            while (!hw_worker_submit_bytes(id, seg, n)) {
+            while (!hw_worker_submit_bytes_reserved(id, seg, n)) {
                 vTaskDelay(pdMS_TO_TICKS(5));
                 if (++spins >= 100) {            /* ~0.5 s: worker wedged (should never) */
                     /* We already consumed `off` bytes of this pbuf into the worker and
@@ -432,6 +434,7 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
                     log_printf("[net] conn %d: worker wedged mid-pbuf after %u/%u bytes — "
                            "aborting to avoid silent truncation\n",
                            id, (unsigned)off, (unsigned)p->tot_len);
+                    hw_worker_unreserve(reserved);
                     hw_worker_submit_closed(id);
                     conn_detach(id);
                     conn_unhook(tpcb);
@@ -440,6 +443,7 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
                     return ERR_ABRT;
                 }
             }
+            if (reserved) reserved--;
             off += n;
         }
         altcp_recved(tpcb, p->tot_len);

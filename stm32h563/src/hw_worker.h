@@ -45,6 +45,13 @@ bool hw_worker_submit_bytes(int conn_id, const uint8_t *buf, size_t len);
    items).  Lets a producer accept an inbound buffer all-or-nothing so a bulk
    upload is never partially taken and truncated when the queue briefly fills. */
 bool hw_worker_can_accept(size_t len);
+/* Reserve the queue slots `len` bytes take (ceil(len / HW_WORK_DATA_MAX)) for the net task, all or
+   nothing: other producers cannot take them. Send each segment with
+   hw_worker_submit_bytes_reserved (it uses one), and give back what is left with
+   hw_worker_unreserve(segments) if the pbuf is abandoned. Net task only. */
+bool hw_worker_reserve(size_t len);
+bool hw_worker_submit_bytes_reserved(int conn_id, const uint8_t *buf, size_t len);
+void hw_worker_unreserve(size_t segments);
 
 /* A TCP connection closed (net task): the worker runs command_handler_conn_closed
    so gate/stream state is released on the task that owns it. */
