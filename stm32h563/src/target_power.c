@@ -33,7 +33,7 @@ static const efuse_pins_t efuses[2] = {
 
 static bool            enabled_state[2];
 static bool            last_fault[2];        /* FLT confirmed (debounced) in poll, for edge detection */
-static uint8_t         flt_run[2];           /* consecutive samples that read FLT asserted */
+static uint16_t        flt_run[2];           /* consecutive samples that read FLT asserted */
 
 /* FLT counts only when it reads asserted on this many 10 ms samples in a row. A real trip holds
    FLT for the eFuse's whole fault and retry time (over 100 ms); measured on a digital v3r2 pod,
@@ -41,6 +41,19 @@ static uint8_t         flt_run[2];           /* consecutive samples that read FL
    during LA captures and the EMI build's Ethernet stream (pickup on the FLT line), and each one
    counted as a trip. */
 #define FLT_CONFIRM_SAMPLES 3u
+/* While FLT stays held but was called reverse-current blocking, look again this often (samples),
+   so a real fault that follows (an overload while blocked) is still seen. */
+#define FLT_RECHECK_SAMPLES 10u
+
+static target_power_flt_check_fn flt_check;
+static uint32_t reverse_blocks[2];
+
+void target_power_set_flt_check(target_power_flt_check_fn fn) { flt_check = fn; }
+
+uint32_t target_power_reverse_blocks(int efuse)
+{
+    return (efuse == 1 || efuse == 2) ? reverse_blocks[efuse - 1] : 0u;
+}
 static struct {
     bool            armed;
     bool            on;
@@ -75,6 +88,7 @@ void target_power_init(void)
 {
     for (int i = 0; i < 2; i++) {
         enabled_state[i] = false; last_fault[i] = false; flt_run[i] = 0; pending[i].armed = false;
+        reverse_blocks[i] = 0;
     }
 
     /* Glitch-free bring-up.  The TCA9554 powers up with ALL pins as inputs
@@ -147,9 +161,20 @@ void target_power_poll(void)
     if (now_us < next_flt_us) return;
     next_flt_us = now_us + 10000u;
     for (int i = 0; i < 2; i++) {
-        if (efuse_fault_now(i)) { if (flt_run[i] < 255u) flt_run[i]++; }
+        if (efuse_fault_now(i)) { if (flt_run[i] < 60000u) flt_run[i]++; }
         else                    flt_run[i] = 0;
-        const bool flt = flt_run[i] >= FLT_CONFIRM_SAMPLES;
+        bool flt = flt_run[i] >= FLT_CONFIRM_SAMPLES;
+        /* Held, and not yet known to be a real fault: ask whether it is reverse-current blocking
+           (on the confirming sample, then every FLT_RECHECK_SAMPLES while it stays held). */
+        if (flt && !last_fault[i] && flt_check) {
+            const uint16_t n = flt_run[i];
+            const bool look = n == FLT_CONFIRM_SAMPLES ||
+                              (n > FLT_CONFIRM_SAMPLES && (n - FLT_CONFIRM_SAMPLES) % FLT_RECHECK_SAMPLES == 0u);
+            if (!look || !flt_check(i + 1)) {
+                if (look && n == FLT_CONFIRM_SAMPLES) reverse_blocks[i]++;
+                flt = false;
+            }
+        }
         if (flt && !last_fault[i] && event_cb)
             event_cb(i + 1, enabled_state[i], true);
         last_fault[i] = flt;
@@ -167,8 +192,13 @@ int target_power_get_status(int efuse, target_power_status_t *out)
     out->status_supported = true;
     (void)tca9554_read_pin(PWR_ADDR, e->v, &v);
     (void)tca9554_read_pin(PWR_ADDR, e->flt, &flt);
-    out->valid = v;             /* active-high */
-    out->fault = (flt == false); /* active-low: asserted when the pin reads 0 */
+    out->valid = v;             /* active-high. On the TPS259470A pin 3 is AUXOFF, not power good:
+                                   high once the INPUT is valid and the inrush is done; no output
+                                   fault takes it low (datasheet 7.3.10) */
+    /* fault: the confirmed one (held 30 ms, not reverse-current blocking); flt_pin: the pin now */
+    out->flt_pin = (flt == false);   /* active-low: asserted when the pin reads 0 */
+    out->fault = last_fault[idx];
+    out->reverse_blocks = reverse_blocks[idx];
     return 0;
 }
 
