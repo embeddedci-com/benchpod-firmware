@@ -72,7 +72,30 @@ enum {
     BWP_T_AUTH = 0x1A,         // 16 bytes, truncated HMAC-SHA256; must be the last TLV
     BWP_T_ENC_PASSPHRASE = 0x1B,  // 89 bytes, sealed passphrase (bwp_crypto.h)
     BWP_T_SIGNATURE = 0x1C,    // 128 bytes, the pod's signed manifest of an OTA image (fwsig.h)
+    BWP_T_RESET = 0x1D,        // u8, bwp_reset_t: why the bridge's last boot happened (STATUS)
+    BWP_T_EMC = 0x1E,          // u8, bwp_emc_t: the EMC test build's radio (STATUS; absent otherwise)
 };
+
+// Why the bridge booted (BWP_T_RESET), from ESP-IDF's esp_reset_reason().
+typedef enum {
+    BWP_RESET_UNKNOWN = 0,
+    BWP_RESET_POWER_ON = 1,
+    BWP_RESET_PIN = 2,        // the EN pin / reset button
+    BWP_RESET_SOFTWARE = 3,   // esp_restart(): an update, a console reboot, the EMC radio recovery
+    BWP_RESET_PANIC = 4,      // an exception or abort
+    BWP_RESET_WATCHDOG = 5,   // interrupt, task or other watchdog
+    BWP_RESET_BROWNOUT = 6,   // the supply dipped
+    BWP_RESET_OTHER = 7,
+} bwp_reset_t;
+
+// The EMC test build's radio (BWP_T_EMC).
+typedef enum {
+    BWP_EMC_NONE = 0,         // not an EMC test build (the field is not sent)
+    BWP_EMC_TX_POD = 1,       // transmitting, carrying the pod's frames
+    BWP_EMC_TX_PATTERN = 2,   // transmitting its own pattern (no frames from the pod in the last second)
+    BWP_EMC_STOPPED = 3,      // stopped from its console
+    BWP_EMC_FAILING = 4,      // not transmitting: no frame went out in the last second
+} bwp_emc_t;
 
 #define BWP_KEY_LEN   32
 #define BWP_NONCE_LEN 8
@@ -239,6 +262,8 @@ typedef struct {
     uint32_t uptime_s;
     uint8_t pod_mac[6];
     bwp_counters_t counters;
+    uint8_t reset;          // bwp_reset_t, 0: not sent
+    uint8_t emc;            // bwp_emc_t, 0: not sent (not an EMC test build)
 } bwp_status_t;
 
 typedef struct {

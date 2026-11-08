@@ -78,6 +78,7 @@ static void test_typical_frame(void) {
     CHECK(strstr(f, "\"adc_low_range\":true,\"adc_range\":\"low\",\"adc_range_fs_mv\":5461,") != NULL);
     CHECK(strstr(f, "\"last_crash\":\"none\"}") != NULL);
     CHECK(strstr(f, "\"boot_id\":\"0000002a\",\"unclean_resets\":0,") != NULL);
+    CHECK(strstr(f, "c3_restarts") == NULL);   /* no C3 on the board: no counts */
     CHECK(strstr(f, "boot_health_cut") == NULL);
     char up[16];
     CHECK(bp_json_get_top(f, "uplink", up, sizeof(up)) && strcmp(up, "eth") == 0);
@@ -110,6 +111,9 @@ static void test_worst_case_fits(void) {
     c.reset_cause = "independent-watchdog";
     c.boot_id = 0xFFFFFFFFu;
     c.unclean_resets = 0xFFFFFFFFu;
+    c.c3 = true;                      /* the C3 counts at their longest */
+    c.c3_restarts = 0xFFFFFFFFu;
+    c.c3_restart_last = "no_response";
     /* boot_guard's report is 127 characters, fault's crash line 159; a control character
        escapes to six bytes (\u00XX). */
     char reason[128], crash[160];
@@ -126,6 +130,7 @@ static void test_worst_case_fits(void) {
     CHECK(n <= CLOUD_CAPS_MAX);
     CHECK(f[n - 1] == '}');
     CHECK(strstr(f, "\"boot_health_cut\":true") != NULL);
+    CHECK(strstr(f, "\"c3_restarts\":4294967295,\"c3_restart_last\":\"no_response\",") != NULL);
     CHECK(strstr(f, "\"safe_mode\":true") != NULL);
     CHECK(strstr(f, "\"reset_cause\":\"independent-watchdog\"") != NULL);
     check_features(f);

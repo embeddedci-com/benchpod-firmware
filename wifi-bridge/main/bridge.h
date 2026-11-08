@@ -97,6 +97,8 @@ void control_notify(void);                    // state changed: send an unsolici
 void control_forget_pairing(void);            // PAIR button: the next pod that offers a key wins
 bool control_paired(void);
 
+uint8_t bridge_reset_reason(void);   // main.c: bwp_reset_t of this boot, for STATUS
+
 // ---- emc_test.c: the EMC test build only (CONFIG_BRIDGE_EMC_TEST)
 typedef enum { EMC_FAILING, EMC_TX_PATTERN, EMC_TX_ETH, EMC_STOPPED } emc_state_t;
 typedef struct {
@@ -108,6 +110,7 @@ typedef struct {
     uint32_t sent, sent_eth, sent_pattern, busy, errors;
     esp_err_t last_err;
     uint64_t airtime_us, uptime_us;
+    uint32_t radio_restarts;   // the radio restarted because nothing went out for EMC_STUCK_MS
 } emc_counts_t;
 esp_err_t emc_test_start(void);                  // instead of wifi_start()
 void emc_test_eth_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame

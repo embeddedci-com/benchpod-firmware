@@ -81,6 +81,23 @@ void emi_log_encode(const emi_rec_t *r, uint8_t out[EMI_LOG_REC]) {
         out[47] = r->u.cp.link;
         put_str(out + 48, r->u.cp.text, 12);
         break;
+    case EMI_REC_SUMMARY:
+        put16(out + 16, r->u.sum.cloud_drops);
+        put16(out + 18, r->u.sum.c3_restarts);
+        put16(out + 20, r->u.sum.i2c_clears);
+        put16(out + 22, r->u.sum.can_busoff);
+        put16(out + 24, r->u.sum.psram_fail);
+        put16(out + 26, r->u.sum.cdone_lost);
+        put32(out + 28, r->u.sum.psram_retry);
+        put32(out + 32, r->u.sum.rev_block[0]);
+        put32(out + 36, r->u.sum.rev_block[1]);
+        put32(out + 40, r->u.sum.eth_crc);
+        put32(out + 44, r->u.sum.eth_missed);
+        put32(out + 48, r->u.sum.bridge_tx_err);
+        put32(out + 52, r->u.sum.cloud_down_s);
+        put16(out + 56, r->u.sum.bridge_restarts);
+        put16(out + 58, r->u.sum.bridge_silences);
+        break;
     }
     put32(out + 60, crc32_le(out, 60));
 }
@@ -102,7 +119,7 @@ bool emi_log_blank(const uint8_t in[EMI_LOG_REC]) {
 bool emi_log_decode(const uint8_t in[EMI_LOG_REC], emi_rec_t *r) {
     if (get16(in) != EMI_LOG_MAGIC) return false;
     if (get32(in + 60) != crc32_le(in, 60)) return false;
-    if (in[2] < EMI_REC_RUN_START || in[2] > EMI_REC_CHECKPOINT) return false;
+    if (in[2] < EMI_REC_RUN_START || in[2] > EMI_REC_SUMMARY) return false;
     memset(r, 0, sizeof(*r));
     r->type = in[2];
     r->led = in[3];
@@ -126,6 +143,23 @@ bool emi_log_decode(const uint8_t in[EMI_LOG_REC], emi_rec_t *r) {
         r->u.ev.errors = get32(in + 24);
         r->u.ev.net_sent = get32(in + 28);
         get_str(in + 32, r->u.ev.text, 28);
+        break;
+    case EMI_REC_SUMMARY:
+        r->u.sum.cloud_drops = get16(in + 16);
+        r->u.sum.c3_restarts = get16(in + 18);
+        r->u.sum.i2c_clears = get16(in + 20);
+        r->u.sum.can_busoff = get16(in + 22);
+        r->u.sum.psram_fail = get16(in + 24);
+        r->u.sum.cdone_lost = get16(in + 26);
+        r->u.sum.psram_retry = get32(in + 28);
+        r->u.sum.rev_block[0] = get32(in + 32);
+        r->u.sum.rev_block[1] = get32(in + 36);
+        r->u.sum.eth_crc = get32(in + 40);
+        r->u.sum.eth_missed = get32(in + 44);
+        r->u.sum.bridge_tx_err = get32(in + 48);
+        r->u.sum.cloud_down_s = get32(in + 52);
+        r->u.sum.bridge_restarts = get16(in + 56);
+        r->u.sum.bridge_silences = get16(in + 58);
         break;
     default:
         r->u.cp.captures = get32(in + 16);
@@ -153,6 +187,7 @@ const char *emi_log_led_name(uint8_t led) {
     case 2:  return "green";
     case 3:  return "red";
     case 4:  return "blue";
+    case 5:  return "recovering";
     default: return "off";
     }
 }
@@ -187,14 +222,34 @@ size_t emi_log_format(const emi_rec_t *r, char *buf, size_t cap) {
         case EMI_EV_LINK_BACK: snprintf(what, sizeof(what), "ethernet link back"); break;
         case EMI_EV_STARTED:   snprintf(what, sizeof(what), "activity started"); break;
         case EMI_EV_STOPPED:   snprintf(what, sizeof(what), "activity stopped"); break;
+        case EMI_EV_C3_RESTART: snprintf(what, sizeof(what), "ESP32-C3 restart"); break;
+        case EMI_EV_HEALTH:    snprintf(what, sizeof(what), "health"); break;
         default:               snprintf(what, sizeof(what), "event %u", (unsigned)r->u.ev.kind); break;
         }
-        m = snprintf(buf + n, cap - (size_t)n, "EVENT %s, captures %lu, errors %lu, sent %lu%s%s",
-                     what, (unsigned long)r->u.ev.captures, (unsigned long)r->u.ev.errors,
-                     (unsigned long)r->u.ev.net_sent, r->u.ev.text[0] ? ", last: " : "",
-                     r->u.ev.text);
+        if (r->u.ev.kind == EMI_EV_RECOVERY)   /* the text is the step itself (emi_log_dump.py) */
+            m = snprintf(buf + n, cap - (size_t)n, "EVENT recovery: %s, captures %lu, errors %lu",
+                         r->u.ev.text, (unsigned long)r->u.ev.captures, (unsigned long)r->u.ev.errors);
+        else
+            m = snprintf(buf + n, cap - (size_t)n, "EVENT %s, captures %lu, errors %lu, sent %lu%s%s",
+                         what, (unsigned long)r->u.ev.captures, (unsigned long)r->u.ev.errors,
+                         (unsigned long)r->u.ev.net_sent, r->u.ev.text[0] ? ", last: " : "",
+                         r->u.ev.text);
         break;
     }
+    case EMI_REC_SUMMARY:
+        m = snprintf(buf + n, cap - (size_t)n,
+                     "SUM cloud drops %u (down %lu s), c3 restarts %u, i2c clears %u, can bus-off %u, "
+                     "psram retry %lu fail %u, iCE40 lost %u, eFuse rev blocks %lu/%lu, eth crc %lu "
+                     "missed %lu, bridge tx err %lu, bridge restarts %u silent %u",
+                     (unsigned)r->u.sum.cloud_drops, (unsigned long)r->u.sum.cloud_down_s,
+                     (unsigned)r->u.sum.c3_restarts, (unsigned)r->u.sum.i2c_clears,
+                     (unsigned)r->u.sum.can_busoff, (unsigned long)r->u.sum.psram_retry,
+                     (unsigned)r->u.sum.psram_fail, (unsigned)r->u.sum.cdone_lost,
+                     (unsigned long)r->u.sum.rev_block[0], (unsigned long)r->u.sum.rev_block[1],
+                     (unsigned long)r->u.sum.eth_crc, (unsigned long)r->u.sum.eth_missed,
+                     (unsigned long)r->u.sum.bridge_tx_err, (unsigned)r->u.sum.bridge_restarts,
+                     (unsigned)r->u.sum.bridge_silences);
+        break;
     default:
         m = snprintf(buf + n, cap - (size_t)n,
                      "CHECK led %s, %s, dac %s, captures %lu, errors %lu, sent %lu, drops %lu, "

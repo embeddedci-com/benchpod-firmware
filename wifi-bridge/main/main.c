@@ -12,6 +12,7 @@
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_system.h"   // esp_reset_reason
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
@@ -75,6 +76,22 @@ uint8_t bridge_flags(void)
     return f;
 }
 
+// Why this boot happened, for STATUS (BWP_T_RESET).
+uint8_t bridge_reset_reason(void)
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return BWP_RESET_POWER_ON;
+    case ESP_RST_EXT:      return BWP_RESET_PIN;
+    case ESP_RST_SW:       return BWP_RESET_SOFTWARE;
+    case ESP_RST_PANIC:    return BWP_RESET_PANIC;
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return BWP_RESET_WATCHDOG;
+    case ESP_RST_BROWNOUT: return BWP_RESET_BROWNOUT;
+    default:               return BWP_RESET_OTHER;
+    }
+}
+
 void bridge_status(bwp_status_t *s)
 {
     memset(s, 0, sizeof(*s));
@@ -87,6 +104,15 @@ void bridge_status(bwp_status_t *s)
     s->channel = e.channel;  // the channel it transmits on
 #endif
     s->uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    s->reset = bridge_reset_reason();
+#if CONFIG_BRIDGE_EMC_TEST
+    switch (emc_test_state()) {
+    case EMC_TX_ETH:     s->emc = BWP_EMC_TX_POD; break;
+    case EMC_TX_PATTERN: s->emc = BWP_EMC_TX_PATTERN; break;
+    case EMC_STOPPED:    s->emc = BWP_EMC_STOPPED; break;
+    default:             s->emc = BWP_EMC_FAILING; break;
+    }
+#endif
     bridge_pod_mac(s->pod_mac);
     bridge_counters(&s->counters);
 }

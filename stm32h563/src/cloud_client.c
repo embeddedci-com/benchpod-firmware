@@ -346,8 +346,23 @@ static bool        s_send_full;    /* the last cl_tcp_send failed only because t
 static const char *s_pend_buf;     /* a command.response that met a full buffer, resent from the poll */
 static size_t      s_pend_len;
 
+/* Connections that were up and dropped, since boot, and why the last one did (the EMI build's
+   health events, cloud_client_drops). */
+static volatile uint32_t s_drops;
+static char s_drop_reason[48];   /* a copy: some reasons are built on the stack */
+
+uint32_t cloud_client_drops(const char **last_reason)
+{
+    if (last_reason) *last_reason = s_drop_reason;
+    return s_drops;
+}
+
 static void cl_backoff(const char *reason) {
     printf("[cloud] backoff: %s\n", reason);
+    if (s_state == CL_CONNECTED) {
+        snprintf(s_drop_reason, sizeof(s_drop_reason), "%s", reason ? reason : "");
+        s_drops++;
+    }
     s_pend_len = 0;                 /* the server times the request out and retries it */
     cl_drop_link();
     cl_set_state(CL_BACKOFF);

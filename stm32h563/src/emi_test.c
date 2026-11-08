@@ -24,9 +24,18 @@
 #include "lwip/pbuf.h"
 #include "recovery.h"
 #include "ice40_flash.h"                /* ice40_reload: the recovery's iCE40 step (no write) */
-#include "target_power.h"               /* power_poll_emi: an eFuse that tripped */
+#include "target_power.h"               /* power_poll_emi: an eFuse that tripped; reverse blocks */
 #include "net_server.h"                 /* net_eth_restart */
 #include "boot_guard.h"                 /* boot_guard_planned_reset */
+#include "esp_wifi_ctrl.h"              /* C3 restarts (c3_restarts.h) */
+#include "cloud_client.h"               /* health: cloud drops */
+#include "i2c_bus.h"                    /* health: I2C bus clears */
+#include "can_bus.h"                    /* health: CAN bus-off recoveries */
+#include "ice40_flash.h"                /* health: CDONE */
+#include "eth_diag.h"                   /* summary: Ethernet CRC and missed frames */
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h"            /* summary: the bridge's failed transmits */
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,6 +60,10 @@ static const char *const k_dac_names[] = { "sine", "dc", "current", "off", "all"
    that the LED stays blue until power is removed (status_led.h). A missing Ethernet link stays red
    for as long as it lasts. */
 #define EMI_LED_FAIL_MS  5000u
+/* Failing this long without a break is a fail under the lab's criterion B (it must recover within
+   60 s): the LED turns from blue (recovering) to red. The recovery ladder (recovery.h) is back by
+   about 45 s after a failure starts. */
+#define EMI_LED_VERDICT_MS  60000u
 /* A capture still in flight after this long has hung (the loop's take well under 2 s): it counts
    as failing from when it went out, for the LED and the recovery ladder alike. */
 #define EMI_CAP_HUNG_MS  10000u
@@ -96,11 +109,30 @@ static struct {
     uint32_t       fail_since;    /* captures failing since (0 = working) */
     bool           power_fault;   /* an eFuse tripped and has not come back yet (power_poll_emi) */
     bool           efuse_fault[3];/* per eFuse (1, 2), the last seen FLT state */
+    bool           efuse_off[3];  /* per eFuse: switched off at the retry limit */
     uint32_t       efuse_retry_ms[EMI_EFUSE_RETRIES_PER_HOUR];   /* ring: when power was retried */
     uint32_t       efuse_retry_n;
     uint32_t       cap_issued_at; /* the capture in flight went out then */
     uint32_t       link_down_since;
     bool           rcv_init;
+    /* ESP32-C3 restarts (the built-in Wi-Fi, v3 boards): counted from the pod's own counts */
+    bool           c3_init;
+    uint32_t       c3_seen, c3_seen_assoc;   /* the pod's counts at the last look */
+    uint32_t       c3_restarts;   /* restarts while the activity ran, association failures left out */
+    uint32_t       c3_last_ms;    /* HAL_GetTick() of the last one, 0 = none */
+    /* the Wi-Fi bridge (lab configuration 2): watched once one was seen this run */
+    bool           br_seen;
+    uint32_t       br_reboots_seen;   /* the pod's count at the last look */
+    uint32_t       br_restarts;       /* restarts this run */
+    uint32_t       br_restart_ms;     /* the last one (0 = none), for the LED */
+    uint32_t       br_restart_pending;/* a restart waiting for its reason (the next STATUS), since */
+    uint32_t       br_silent_from;    /* no HELLO since (0 = present) */
+    bool           br_silent_logged;
+    uint32_t       br_silences;       /* this run */
+    bool           br_radio_failing;  /* the EMC build's radio reports it is not transmitting */
+    /* the LED's verdict (emi_test_led_state) */
+    uint32_t       failing_from;  /* failing without a break since (0 = not failing) */
+    bool           gave_up;       /* the recovery is out of steps for this failure */
 } s = { .dac = EMI_DAC_SINE };   /* EMI_DAC_ALL on a quad-DAC board, set at the start */
 
 /* The Ethernet stream. The rate is set by the console on the hw worker and read by the net task
@@ -587,7 +619,7 @@ static void log_poll(uint32_t now) {
             return;   /* print from the next pass on */
         }
         emi_rec_t r;
-        char line[200];
+        char line[320];   /* a SUMMARY line runs to ~260 characters */
         if (emi_log_decode(pj.buf + (slot % EMI_LOG_PER_SECTOR) * EMI_LOG_REC, &r)) {
             emi_log_format(&r, line, sizeof(line));
             printf("[emi] log %s\n", line);
@@ -802,7 +834,8 @@ static void recovery_poll_emi(uint32_t now) {
         recovery_done(&s_rcv, a, now, &s_keep.resets);
         recovery_take(a, now);
     } else if (recovery_exhausted(&s_rcv, now, fail_ms, s_keep.resets)) {
-        printf("[emi] recovery: limits reached, the pod stays red until power is removed\n");
+        s.gave_up = true;   /* red now, until the failure ends by itself */
+        printf("[emi] recovery: limits reached, the LED is red while the failure lasts\n");
         log_event_text(EMI_EV_RECOVERY, "recovery limit reached");
     }
 }
@@ -810,7 +843,7 @@ static void recovery_poll_emi(uint32_t now) {
 /* Every worker pass while the loop runs: an eFuse that tripped counts as a failure and gets its
    supply turned off and on again (EMI_EFUSE_RETRY_MS later), within EMI_EFUSE_RETRIES_PER_HOUR. */
 static void power_poll_emi(uint32_t now) {
-    if (!s.running) { s.power_fault = false; return; }
+    if (!s.running) { s.power_fault = false; s.efuse_off[1] = s.efuse_off[2] = false; return; }
     bool any = false;
     for (int e = 1; e <= 2; e++) {
         bool en = false, fault = false;
@@ -832,22 +865,31 @@ static void power_poll_emi(uint32_t now) {
                 (void)target_power_schedule(e, true, EMI_EFUSE_RETRY_MS);
                 snprintf(text, sizeof(text), "eFuse %d tripped: power retry", e);
             } else {
-                snprintf(text, sizeof(text), "eFuse %d tripped: retry limit", e);
+                /* Out of retries: leave that output off (it would keep tripping into the fault,
+                   once per retry of the eFuse itself) and count it as failing until `emi stop`
+                   or a power cycle: recovering (blue) at first, red after 60 s. */
+                (void)target_power_enable(e, false);
+                s.efuse_off[e] = true;
+                snprintf(text, sizeof(text), "eFuse %d tripped: off (retry limit)", e);
             }
             printf("[emi] recovery: %s\n", text);
             log_event_text(EMI_EV_RECOVERY, text);
         }
         s.efuse_fault[e] = fault;
+        if (s.efuse_off[e]) any = true;
     }
     s.power_fault = any;
 }
 
 uint32_t emi_test_run(void) { return log_ok() ? s_log.run : 0u; }
 
+static void health_run_reset(void);   /* below, with the health state */
+
 void emi_test_start(void) {
     s.booted = true;
     if (s.running) return;
     s.running    = true;
+    health_run_reset();
     s.t_start    = HAL_GetTick();
     s.t_report   = s.t_start;
     s.t_next_cap = s.t_start;
@@ -1031,6 +1073,9 @@ static bool restarted(void) {
 
 static bool failing_now(uint32_t now) {
     if (s.fail_since) return true;   /* captures failing, or one hung: until one succeeds */
+    if (s.br_silent_logged || s.br_radio_failing) return true;   /* the Wi-Fi bridge */
+    if (s.br_restart_ms && now - s.br_restart_ms < EMI_LED_FAIL_MS) return true;
+    if (s.c3_last_ms && now - s.c3_last_ms < EMI_LED_FAIL_MS) return true;   /* the C3 restarted */
     if (s.power_fault) return true;  /* an eFuse tripped (power_poll_emi) */
     if (s.errors && now - s.last_err_ms < EMI_LED_FAIL_MS) return true;
     if (ns.err && now - ns.t_err < EMI_LED_FAIL_MS) return true;   /* Ethernet */
@@ -1043,8 +1088,18 @@ uint8_t emi_test_led_state(void) {
         if (restarted()) s_failed_before = true;
     }
     const uint32_t now = HAL_GetTick();
-    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault)) s_failed_before = true;
-    return status_led_emi_state(s.booted, s.running, s.running && failing_now(now), s_failed_before);
+    if (s.running && (s.errors || ns.err || s.fail_since || s.power_fault || s.c3_restarts ||
+                      s.br_restarts || s.br_silences || s.br_radio_failing))
+        s_failed_before = true;
+    /* Red only for a failure that fails criterion B: still failing EMI_LED_VERDICT_MS after it
+       began, or the recovery is out of steps. Until then the pod is recovering (blue, fast). Not
+       latched: a pod that comes back after a long burst test goes blue (the lab reads the LED
+       60 s after each test). */
+    const bool failing = s.running && failing_now(now);
+    if (!failing) { s.failing_from = 0; s.gave_up = false; }
+    else if (!s.failing_from) s.failing_from = now ? now : 1u;
+    const bool too_long = failing && (s.gave_up || now - s.failing_from >= EMI_LED_VERDICT_MS);
+    return status_led_emi_state(s.booted, s.running, failing, too_long, s_failed_before);
 }
 
 static const char *led_name(uint8_t st) {
@@ -1052,6 +1107,7 @@ static const char *led_name(uint8_t st) {
     case STATUS_LED_EMI_WAITING:   return "green (starting)";
     case STATUS_LED_EMI_RUNNING:   return "green";
     case STATUS_LED_EMI_FAILING:   return "red";
+    case STATUS_LED_EMI_RECOVERING: return "blue (recovering)";
     case STATUS_LED_EMI_RECOVERED: return "blue";
     default:                       return "off";
     }
@@ -1071,12 +1127,15 @@ size_t emi_test_describe(char *buf, size_t cap) {
     if (s.uart_la) snprintf(uart, sizeof(uart), "LA%d", s.uart_la);
     char net[112];
     net_describe(net, sizeof(net));
+    char c3[24] = "";
+    if (esp_wifi_ctrl_module_present())
+        snprintf(c3, sizeof(c3), ", c3 restarts %lu", (unsigned long)s.c3_restarts);
     int len = snprintf(buf, cap,
                        "emi: %s, led %s, dac %s, uart %s, net %s, core %lu MHz, %lus, captures %lu, "
-                       "errors %lu%s%s",
+                       "errors %lu%s%s%s",
                        s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
                        led_name(emi_test_led_state()), k_dac_names[s.dac], uart, net, (unsigned long)(SystemCoreClock / 1000000u),
-                       (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors,
+                       (unsigned long)up, (unsigned long)s.captures, (unsigned long)s.errors, c3,
                        s.last_err[0] ? ", last: " : "", s.last_err);
     if (len < 0) return 0;
     return (size_t)len < cap ? (size_t)len : cap - 1;
@@ -1100,14 +1159,16 @@ size_t emi_test_json(char *buf, size_t cap) {
                        "{\"running\":%s,\"dac\":\"%s\",\"uart_la\":%d,\"core_mhz\":%lu,\"uptime_s\":%lu,"
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
-                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\"}",
+                       "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
+                       "\"c3_restarts\":%lu}",
                        s.running ? "true" : "false", k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
                        (unsigned long)ns.sent, (unsigned long)ns.drops,
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
-                       fault_last_reset_str() ? fault_last_reset_str() : "unknown");
+                       fault_last_reset_str() ? fault_last_reset_str() : "unknown",
+                       (unsigned long)s.c3_restarts);
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
 }
@@ -1135,6 +1196,275 @@ static void publish_monitor(uint32_t now) {
     mon->gen++;
 }
 
+/* The pod restarts its ESP32-C3 when the C3 stops answering, reboots by itself or fails a setup
+   step (esp_wifi_ctrl.c, c3_restarts.h). While the activity runs, each one is a failure the lab
+   should see: red for EMI_LED_FAIL_MS, then blue, and an event in the run log. An access point
+   that refuses the association is the network's doing, not the pod's, so those restarts are
+   left out (a pod set up for a Wi-Fi network that is not there would be red all day). */
+static void c3_poll_emi(uint32_t now) {
+    if (!esp_wifi_ctrl_module_present()) return;
+    const c3_restarts_t *r = esp_wifi_ctrl_restarts();
+    const uint32_t total = r->total, assoc = r->count[C3_RESTART_ASSOC];
+    if (!s.c3_init || !s.running) {   /* restarts before the start (or after a stop): baseline */
+        s.c3_init = true;
+        s.c3_seen = total;
+        s.c3_seen_assoc = assoc;
+        return;
+    }
+    if (total == s.c3_seen) return;
+    const uint32_t real = (total - s.c3_seen) - (assoc - s.c3_seen_assoc);
+    s.c3_seen = total;
+    s.c3_seen_assoc = assoc;
+    if (!real) return;
+    s.c3_restarts += real;
+    s.c3_last_ms = now ? now : 1u;
+    char reason[C3_RESTART_REASON_LEN];
+    memcpy(reason, r->last_reason, sizeof(reason));   /* the net task writes it: take a copy */
+    reason[sizeof(reason) - 1] = '\0';
+    snprintf(s.last_err, sizeof(s.last_err), "ESP32-C3 restart: %s", reason);
+    printf("[emi] ESP32-C3 restarted (%lu this run): %s\n", (unsigned long)s.c3_restarts, reason);
+    char text[28];
+    snprintf(text, sizeof(text), "C3 restart: %s",
+             c3_restart_cause_name((c3_restart_cause_t)r->last_cause));
+    log_event_text(EMI_EV_C3_RESTART, text);
+}
+
+/* Health: things the pod counts that the LED does not show, each an EMI_EV_HEALTH event in the
+   run log when it changes, at most one per item every EMI_HEALTH_GAP_MS (the count in between is
+   summed into the next). Read once a second. */
+#define EMI_HEALTH_GAP_MS 10000u
+/* The cloud link is not under test (a lab network may have no internet at all), so it never
+   touches the LED, and a drop that reconnects is only counted (SUMMARY). Down for
+   EMI_CLOUD_DOWN_MS is an event, and so is its coming back: the shared lab view stops updating. */
+#define EMI_CLOUD_DOWN_MS (2u * 60u * 1000u)
+enum { H_I2C, H_PS_RETRY, H_PS_FAIL, H_CAN, H_REV1, H_REV2, H_CDONE, H_VCCIO, H_N };
+static struct {
+    bool     init;
+    uint32_t t_read;
+    uint32_t last[H_N];       /* the value at the last event (or the start) */
+    uint32_t t_event[H_N];
+    uint32_t cdone_lost;      /* CDONE went low this run */
+    uint32_t cloud_down_from; /* set up but not connected since (0 = connected or not set up) */
+    bool     cloud_down_logged;
+    uint32_t cloud_down_ms;   /* this run, in total */
+    uint32_t t_cloud;         /* the last cloud_poll */
+    uint32_t t_summary;       /* the last SUMMARY (or the start) */
+} hs;
+
+static uint32_t health_value(int i) {
+    switch (i) {
+    case H_I2C:      return i2c_bus_clear_count();
+    case H_PS_RETRY: { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return r; }
+    case H_PS_FAIL:  { uint32_t r = 0, f = 0; int rc = 0; signal_engine_psram_read_stats(&r, &f, &rc); return f; }
+    case H_CAN:      { can_status_t st; return can_get_status(&st) == 0 ? st.bus_off_recoveries : 0u; }
+    case H_REV1:     return target_power_reverse_blocks(1);
+    case H_REV2:     return target_power_reverse_blocks(2);
+    case H_CDONE:    return ice40_is_configured() ? 1u : 0u;
+    case H_VCCIO:    return (uint32_t)la_vccio_status_pin();
+    default:         return 0u;
+    }
+}
+
+static void health_poll(uint32_t now) {
+    if (now - hs.t_read < 1000u && hs.init) return;
+    hs.t_read = now;
+    if (!hs.init) {
+        for (int i = 0; i < H_N; i++) hs.last[i] = health_value(i);
+        hs.init = true;
+        return;
+    }
+    for (int i = 0; i < H_N; i++) {
+        const uint32_t v = health_value(i);
+        /* Reverse blocking is harmless and frequent with a Wi-Fi bridge on the pod's 5 V: a minute
+           between its events, so it does not crowd the run log. */
+        const uint32_t gap = (i == H_REV1 || i == H_REV2) ? 6u * EMI_HEALTH_GAP_MS : EMI_HEALTH_GAP_MS;
+        if (v == hs.last[i] || now - hs.t_event[i] < gap) continue;
+        char text[64];   /* the console line gets it all; the run log keeps the first 27 */
+        const uint32_t d = v - hs.last[i];
+        switch (i) {
+        case H_I2C:      snprintf(text, sizeof(text), "I2C bus clear +%lu", (unsigned long)d); break;
+        case H_PS_RETRY: snprintf(text, sizeof(text), "PSRAM read retry +%lu", (unsigned long)d); break;
+        case H_PS_FAIL:  snprintf(text, sizeof(text), "PSRAM read fail +%lu", (unsigned long)d); break;
+        case H_CAN:      snprintf(text, sizeof(text), "CAN bus-off +%lu", (unsigned long)d); break;
+        case H_REV1:     snprintf(text, sizeof(text), "eFuse1 rev block +%lu", (unsigned long)d); break;
+        case H_REV2:     snprintf(text, sizeof(text), "eFuse2 rev block +%lu", (unsigned long)d); break;
+        case H_CDONE:
+            if (!v) hs.cdone_lost++;
+            snprintf(text, sizeof(text), v ? "iCE40 configured" : "iCE40 config lost");
+            break;
+        case H_VCCIO:    snprintf(text, sizeof(text), "LA supply ST -> %lu", (unsigned long)v); break;
+        default:         text[0] = '\0'; break;
+        }
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        hs.last[i] = v;
+        hs.t_event[i] = now;
+    }
+}
+
+/* The Wi-Fi bridge in the lab's configuration 2 (the pod's frames on the air from the bridge's EMC
+   test build): part of the equipment under test, so once a bridge was seen this run, its failures
+   are the pod's: a restart (with the reason from its next STATUS), silence for EMI_BRIDGE_SILENT_MS,
+   and its radio reporting it is not transmitting. Each is a health event and counts for the LED.
+   Without a bridge this does nothing. */
+#define EMI_BRIDGE_SILENT_MS 10000u
+static void bridge_poll_emi(uint32_t now) {
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    static wb_info_t bi;   /* static: the hw worker's stack is tight */
+    wifi_bridge_get_info(&bi);
+    char text[64];
+    if (!s.br_seen) {
+        if (!bi.present) return;
+        s.br_seen = true;
+        s.br_reboots_seen = bi.reboots;
+        printf("[emi] Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s: watched (configuration 2)\n",
+               bi.mac[0], bi.mac[1], bi.mac[2], bi.mac[3], bi.mac[4], bi.mac[5], bi.fw_version);
+        return;
+    }
+    if (!bi.present) {
+        if (!s.br_silent_from) s.br_silent_from = now ? now : 1u;
+        if (!s.br_silent_logged && now - s.br_silent_from >= EMI_BRIDGE_SILENT_MS) {
+            s.br_silent_logged = true;
+            s.br_silences++;
+            s.last_err_ms = now;
+            snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge silent");
+            printf("[emi] health: Wi-Fi bridge silent for %lu s\n", (unsigned long)(EMI_BRIDGE_SILENT_MS / 1000u));
+            log_event_text(EMI_EV_HEALTH, "bridge silent 10 s");
+        }
+        return;
+    }
+    if (s.br_silent_logged) {
+        snprintf(text, sizeof(text), "bridge back after %lu s", (unsigned long)((now - s.br_silent_from) / 1000u));
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+    }
+    s.br_silent_from = 0;
+    s.br_silent_logged = false;
+    if (bi.reboots != s.br_reboots_seen) {
+        s.br_restarts += bi.reboots - s.br_reboots_seen;
+        s.br_reboots_seen = bi.reboots;
+        s.br_restart_ms = now ? now : 1u;
+        s.br_restart_pending = now ? now : 1u;
+        s.last_err_ms = now;
+        snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge restarted");
+    }
+    /* Its reason comes with the next STATUS after the new boot (the pod asks at once); give up on
+       it after 10 s. */
+    if (s.br_restart_pending && ((bi.have_status && bi.status_age_ms < now - s.br_restart_pending) ||
+                                 now - s.br_restart_pending >= 10000u)) {
+        const bool fresh = bi.have_status && bi.status_age_ms < now - s.br_restart_pending;
+        snprintf(text, sizeof(text), "bridge restart: %s", fresh ? wb_reset_str(bi.reset) : "unknown");
+        printf("[emi] health: Wi-Fi %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        s.br_restart_pending = 0;
+    }
+    const bool radio_failing = bi.have_status && bi.emc == BWP_EMC_FAILING;
+    if (radio_failing != s.br_radio_failing) {
+        s.br_radio_failing = radio_failing;
+        snprintf(text, sizeof(text), radio_failing ? "bridge radio not transmitting" : "bridge radio back");
+        printf("[emi] health: Wi-Fi %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        if (radio_failing) {
+            s.last_err_ms = now;
+            snprintf(s.last_err, sizeof(s.last_err), "Wi-Fi bridge radio not transmitting");
+        }
+    }
+#else
+    (void)now;
+#endif
+}
+
+static void health_run_reset(void) {
+    hs.cdone_lost = 0;
+    hs.cloud_down_from = 0;
+    hs.cloud_down_logged = false;
+    hs.cloud_down_ms = 0;
+    hs.t_cloud = 0;
+    hs.t_summary = 0;
+    s.br_seen = false;
+    s.br_restarts = 0;
+    s.br_restart_ms = 0;
+    s.br_restart_pending = 0;
+    s.br_silent_from = 0;
+    s.br_silent_logged = false;
+    s.br_silences = 0;
+    s.br_radio_failing = false;
+}
+
+static void cloud_poll(uint32_t now) {
+    const char *st = cloud_client_state_str();
+    const bool set_up = strcmp(st, "disabled") != 0;
+    const bool up = strcmp(st, "connected") == 0;
+    const uint32_t dt = hs.t_cloud ? now - hs.t_cloud : 0u;
+    hs.t_cloud = now;
+    if (up || !set_up) {
+        if (hs.cloud_down_logged) {
+            char text[48];
+            snprintf(text, sizeof(text), "cloud back after %lu min",
+                     (unsigned long)((now - hs.cloud_down_from + 30000u) / 60000u));
+            printf("[emi] health: %s\n", text);
+            log_event_text(EMI_EV_HEALTH, text);
+        }
+        hs.cloud_down_from = 0;
+        hs.cloud_down_logged = false;
+        return;
+    }
+    hs.cloud_down_ms += dt;
+    if (!hs.cloud_down_from) hs.cloud_down_from = now ? now : 1u;
+    if (!hs.cloud_down_logged && now - hs.cloud_down_from >= EMI_CLOUD_DOWN_MS) {
+        char err[48], text[80];
+        cloud_client_last_error(err, sizeof(err));
+        const char *why = err;
+        if (!err[0]) (void)cloud_client_drops(&why);
+        snprintf(text, sizeof(text), "cloud down 2 min%s%s", why && why[0] ? ": " : "", why ? why : "");
+        printf("[emi] health: %s\n", text);
+        log_event_text(EMI_EV_HEALTH, text);
+        hs.cloud_down_logged = true;
+    }
+}
+
+/* Every EMI_LOG_SUMMARY_MS while the loop runs: every total, changed or not. */
+static void summary_poll(uint32_t now) {
+    if (!hs.t_summary) { hs.t_summary = now ? now : 1u; return; }
+    if (now - hs.t_summary < EMI_LOG_SUMMARY_MS) return;
+    hs.t_summary = now;
+    emi_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.type = EMI_REC_SUMMARY;
+    r.led = emi_test_led_state();
+    uint32_t retry = 0, fail = 0; int rc = 0;
+    signal_engine_psram_read_stats(&retry, &fail, &rc);
+    can_status_t cs;
+    const uint32_t busoff = can_get_status(&cs) == 0 ? cs.bus_off_recoveries : 0u;
+    static eth_diag_t d;   /* static: about 100 bytes, the hw worker's stack is tight */
+    net_eth_diag(&d);
+    uint32_t bridge_err = 0;
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) { static wb_info_t bi; wifi_bridge_get_info(&bi); bridge_err = bi.counters.wifi_tx_err; }
+#endif
+#define SAT16(x) ((uint16_t)((x) > 0xFFFFu ? 0xFFFFu : (x)))
+    r.u.sum.cloud_drops = SAT16(cloud_client_drops(NULL));
+    r.u.sum.c3_restarts = SAT16(esp_wifi_ctrl_restarts()->total);
+    r.u.sum.i2c_clears  = SAT16(i2c_bus_clear_count());
+    r.u.sum.can_busoff  = SAT16(busoff);
+    r.u.sum.psram_fail  = SAT16(fail);
+    r.u.sum.cdone_lost  = SAT16(hs.cdone_lost);
+#undef SAT16
+    r.u.sum.psram_retry = retry;
+    r.u.sum.rev_block[0] = target_power_reverse_blocks(1);
+    r.u.sum.rev_block[1] = target_power_reverse_blocks(2);
+    r.u.sum.eth_crc = d.rx_crc + d.rx_align;
+    r.u.sum.eth_missed = d.rx_missed;
+    r.u.sum.bridge_tx_err = bridge_err;
+    r.u.sum.cloud_down_s = hs.cloud_down_ms / 1000u;
+    r.u.sum.bridge_restarts = (uint16_t)(s.br_restarts > 0xFFFFu ? 0xFFFFu : s.br_restarts);
+    r.u.sum.bridge_silences = (uint16_t)(s.br_silences > 0xFFFFu ? 0xFFFFu : s.br_silences);
+    log_queue(&r);
+    char line[320];
+    emi_log_format(&r, line, sizeof(line));
+    printf("[emi] %s\n", line);
+}
+
 void emi_test_poll(void) {
     const uint32_t now = HAL_GetTick();
     s.budget = EMI_SINK_BUDGET;   /* the read-back's share of this worker pass */
@@ -1155,6 +1485,12 @@ void emi_test_poll(void) {
         if (s.errors == s.cap_errors) { s.captures++; s.fail_since = 0; }   /* else its read-back failed */
         else if (!s.fail_since) s.fail_since = now ? now : 1u;
         s.t_next_cap = now + EMI_CAPTURE_GAP_MS;
+    }
+    c3_poll_emi(now);
+    if (s.running) {
+        health_poll(now);
+        if (now - hs.t_cloud >= 1000u || !hs.t_cloud) { cloud_poll(now); bridge_poll_emi(now); }
+        summary_poll(now);
     }
     log_poll(now);
     recovery_poll_emi(now);

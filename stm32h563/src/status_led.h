@@ -66,14 +66,20 @@ typedef enum {
     STATUS_LED_EMI_NONE = 0,   /* not the EMI build, or the loop is stopped */
     STATUS_LED_EMI_WAITING,    /* starts in a moment (the boot delay): solid green */
     STATUS_LED_EMI_RUNNING,    /* runs, no failure since power-on: green blinking */
-    STATUS_LED_EMI_FAILING,    /* a function fails now: red, fast blink */
+    STATUS_LED_EMI_FAILING,    /* failing for longer than the lab allows to recover (criterion B: 60 s),
+                                  or out of recovery steps: red, fast blink. A fail in any test */
     STATUS_LED_EMI_RECOVERED,  /* runs (or starts) after an earlier failure or restart: blue blinking */
+    STATUS_LED_EMI_RECOVERING, /* a function fails now, still inside the time to recover: blue, fast
+                                  blink. (Added last: the run log stores these values.) */
 } status_led_emi_t;
 
 /* The EMI pattern from the loop's state. `failing_now`: a failure in the last few seconds or one
-   that lasts (no Ethernet link); `failed_before`: any failure or an unexpected restart since
-   power-on. */
-status_led_emi_t status_led_emi_state(bool booted, bool running, bool failing_now, bool failed_before);
+   that lasts (no Ethernet link); `failing_too_long`: it has been failing for longer than the
+   recovery window, or the recovery is out of steps; `failed_before`: any failure or an unexpected
+   restart since power-on. So the color is the verdict: green passes every test, blue passes
+   criterion B (recovered, or recovering), red fails. */
+status_led_emi_t status_led_emi_state(bool booted, bool running, bool failing_now, bool failing_too_long,
+                                      bool failed_before);
 
 /* The pod's state, sampled once per poll. */
 typedef struct {

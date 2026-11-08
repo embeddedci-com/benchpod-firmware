@@ -34,6 +34,7 @@
 #include "psram.h"
 #include "dfu_boot.h"
 #include "fault.h"
+#include "esp_wifi_ctrl.h"
 #include "efuse_flt.h"
 #include "watchdog.h"
 #include "boot_guard.h"
@@ -145,7 +146,9 @@ int main(void)
        the failed-boot count over. */
     {
         const char *why = fault_last_reset_str();
-        boot_guard_begin(strcmp(why, "power-on") == 0 || strcmp(why, "pin") == 0);
+        const bool fresh = strcmp(why, "power-on") == 0 || strcmp(why, "pin") == 0;
+        boot_guard_begin(fresh);
+        esp_wifi_ctrl_restarts_boot(fresh);   /* C3 restart counts: kept through soft resets */
     }
     boot_guard_stage(BOOT_STAGE_EARLY_HW);
 

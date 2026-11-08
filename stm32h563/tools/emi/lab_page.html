@@ -31,7 +31,7 @@ th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-
 td.d{white-space:normal;min-width:280px}
 th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
 tr.ev td{font-weight:600}
-.l-green{color:var(--green)}.l-red{color:var(--red)}.l-blue{color:var(--blue)}
+.l-green{color:var(--green)}.l-red{color:var(--red)}.l-blue{color:var(--blue)}.l-recovering{color:var(--blue)}
 .warn{color:var(--amber)}
 small{color:var(--muted)}
 </style>
@@ -69,9 +69,9 @@ small{color:var(--muted)}
 <script>
 "use strict";
 const KEY = "bp-emi:" + location.host;
-const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue"};
+const LEDS = {1: "starting", 2: "green", 3: "red", 4: "blue", 5: "recovering"};
 const DACS = ["sine", "dc", "current", "off", "all"];
-const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped", 6: "recovery"};
+const EVENTS = {1: "LED", 2: "Ethernet link lost", 3: "Ethernet link back", 4: "activity started", 5: "activity stopped", 6: "recovery", 7: "ESP32-C3 restart", 8: "health"};
 const MAX_SAMPLES = 20000;
 const $ = id => document.getElementById(id);
 
@@ -94,16 +94,18 @@ function decode(b) {
   const v = new DataView(b.buffer, b.byteOffset, 64);
   if (v.getUint16(0, true) !== 0x4C45) return null;
   const type = b[2];
-  if (type < 1 || type > 3 || v.getUint32(60, true) !== crc32(b, 60)) return null;
+  if (type < 1 || type > 4 || v.getUint32(60, true) !== crc32(b, 60)) return null;
   const r = {seq: v.getUint32(4, true), run: v.getUint32(8, true), up: v.getUint32(12, true), led: LEDS[b[3]] || "off"};
   if (type === 1) Object.assign(r, {type: "START", fw: str(b, 16, 32), reset: str(b, 32, 48), core: v.getUint16(48, true), dac: DACS[b[50]] || "?", mbit: b[51], gw: v.getUint32(52, true)});
   else if (type === 2) Object.assign(r, {type: "EVENT", kind: b[16], from: LEDS[b[17]] || "off", to: LEDS[b[18]] || "off", captures: v.getUint32(20, true), errors: v.getUint32(24, true), sent: v.getUint32(28, true), text: str(b, 32, 60)});
+  else if (type === 4) Object.assign(r, {type: "SUM", cloudDrops: v.getUint16(16, true), c3: v.getUint16(18, true), i2c: v.getUint16(20, true), canOff: v.getUint16(22, true), psFail: v.getUint16(24, true), iceLost: v.getUint16(26, true), psRetry: v.getUint32(28, true), rev1: v.getUint32(32, true), rev2: v.getUint32(36, true), ethCrc: v.getUint32(40, true), ethMissed: v.getUint32(44, true), bridgeErr: v.getUint32(48, true), cloudDown: v.getUint32(52, true), brRestarts: v.getUint16(56, true), brSilent: v.getUint16(58, true)});
   else Object.assign(r, {type: "CHECK", captures: v.getUint32(16, true), errors: v.getUint32(20, true), sent: v.getUint32(24, true), drops: v.getUint32(28, true), losses: v.getUint32(32, true), lost: v.getUint32(36, true), gap: v.getUint32(40, true), dac: DACS[b[44]] || "?", mbit: b[45], running: !!b[46], link: !!b[47], text: str(b, 48, 60)});
   return r;
 }
 function details(r) {
   if (r.type === "START") return `pod started: firmware ${r.fw}, reset cause ${r.reset}, core ${r.core} MHz, DAC ${r.dac}, Ethernet stream ${r.mbit} Mbit/s, gateware ${r.gw}`;
   const last = r.text ? `, last error: ${r.text}` : "";
+  if (r.type === "SUM") return `totals: cloud drops ${r.cloudDrops} (down ${r.cloudDown} s), Wi-Fi chip restarts ${r.c3}, I2C clears ${r.i2c}, CAN bus-off ${r.canOff}, PSRAM retry ${r.psRetry} fail ${r.psFail}, iCE40 lost ${r.iceLost}, eFuse reverse blocks ${r.rev1}/${r.rev2}, Ethernet CRC ${r.ethCrc} missed ${r.ethMissed}, bridge Wi-Fi tx errors ${r.bridgeErr}, bridge restarts ${r.brRestarts}, bridge silent ${r.brSilent}`;
   if (r.type === "EVENT" && r.kind === 6) return `recovery: ${r.text}, captures ${r.captures}, errors ${r.errors}`;
   if (r.type === "EVENT") return (r.kind === 1 ? `LED ${r.from} → ${r.to}` : (EVENTS[r.kind] || "event " + r.kind)) + `, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}` + last;
   return `${r.running ? "running" : "stopped"}, DAC ${r.dac}, captures ${r.captures}, errors ${r.errors}, frames sent ${r.sent}, dropped ${r.drops}, link ${r.link ? "up" : "down"}, link losses ${r.losses}, DAC gap max ${r.gap} us` + (r.lost ? `, records lost ${r.lost}` : "") + last;
@@ -178,7 +180,8 @@ async function sync(d) {
 const VERDICT = {
   "green": ["var(--green)", "OK", "Running, no failure since power-on."],
   "green (starting)": ["var(--green)", "Starting", "The pod is powering up its test activity."],
-  "red": ["var(--red)", "FAILING NOW", "A function of the pod is failing at this moment."],
+  "red": ["var(--red)", "FAILED", "A function has been failing for over 60 s, or the pod ran out of recovery steps: a fail under criterion B."],
+  "blue (recovering)": ["var(--blue)", "Recovering", "A function is failing now; the pod is getting itself running again (it has 60 s)."],
   "blue": ["var(--blue)", "Running again after a failure", "It failed (or restarted) since power-on and works again now."],
   "off": ["var(--muted)", "Stopped", "The test activity is not running."]
 };
@@ -206,14 +209,14 @@ function render() {
   const rows = [];
   for (const s of seqs) {
     const r = store.recs[s];
-    if (evonly && r.type === "CHECK") continue;
-    rows.push(`<tr class="${r.type === "CHECK" ? "" : "ev"}"><td>${r.seq}</td><td>${fmtTime(wall(r.run, r.up))}</td><td>${r.run}</td><td>${fmtUp(r.up)}</td><td>${r.type}</td><td class="l-${r.led}">${r.led}</td><td class="d"></td></tr>`);
+    if (evonly && (r.type === "CHECK" || r.type === "SUM")) continue;
+    rows.push(`<tr class="${r.type === "CHECK" || r.type === "SUM" ? "" : "ev"}"><td>${r.seq}</td><td>${fmtTime(wall(r.run, r.up))}</td><td>${r.run}</td><td>${fmtUp(r.up)}</td><td>${r.type}</td><td class="l-${r.led}">${r.led}</td><td class="d"></td></tr>`);
     if (rows.length >= 400) break;
   }
   const tb = $("rows");
   tb.innerHTML = rows.join("");
   let i = 0;
-  for (const s of seqs) { const r = store.recs[s]; if (evonly && r.type === "CHECK") continue; if (i >= tb.rows.length) break; tb.rows[i++].cells[6].textContent = details(r); }
+  for (const s of seqs) { const r = store.recs[s]; if (evonly && (r.type === "CHECK" || r.type === "SUM")) continue; if (i >= tb.rows.length) break; tb.rows[i++].cells[6].textContent = details(r); }
 }
 
 function download(name, type, text) {

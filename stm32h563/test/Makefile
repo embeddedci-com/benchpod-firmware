@@ -75,7 +75,8 @@ DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c
 WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/current_out.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
-WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c ../src/wifi_scan.c ../src/bp_json.c
+WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c
+C3RESTARTS_SRCS := test_c3_restarts.c ../src/c3_restarts.c
 WIFISCAN_SRCS := test_wifi_scan.c ../src/wifi_scan.c ../src/bp_json.c
 # Where wifi-clear erases on the ESP32-C3: the NVS partition, looked up in the slave image.
 ESPPART_SRCS  := test_esp_part_table.c ../src/esp_part_table.c
@@ -115,7 +116,7 @@ CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
                   ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/psram_alloc.c ../src/la_rate.c
-CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
+CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
               ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
@@ -327,6 +328,10 @@ build/test_esp_wifi_ctrl: $(WIFICTRL_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Ishim $(WIFICTRL_SRCS) -lm -o $@
 
+build/test_c3_restarts: $(C3RESTARTS_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(C3RESTARTS_SRCS) -o $@
+
 build/test_esp_part_table: $(ESPPART_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(ESPPART_SRCS) -lm -o $@
@@ -453,7 +458,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -536,6 +541,7 @@ run: $(TESTS)
 	@./build/test_wave16 > build/test_wave16.log || { cat build/test_wave16.log; exit 1; }
 	@tail -n 1 build/test_wave16.log
 	@./build/test_esp_wifi_ctrl
+	@./build/test_c3_restarts
 	@./build/test_wifi_scan
 	@./build/test_esp_part_table
 	@./build/test_ch_transport > build/test_ch_transport.log || { cat build/test_ch_transport.log; exit 1; }

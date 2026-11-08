@@ -82,6 +82,8 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x1A | AUTH | 16 bytes, truncated HMAC-SHA256; always the last TLV, see "Pairing" |
 | 0x1B | ENC_PASSPHRASE | 89 bytes, the sealed passphrase, see "Encrypted passphrase" |
 | 0x1C | SIGNATURE | 128 bytes, the pod's signed manifest of an OTA image (`tools/fwsign.py`, target `bridge`) |
+| 0x1D | RESET | u8: why the bridge last booted: 1 power-on, 2 reset pin, 3 software, 4 panic, 5 watchdog, 6 brownout, 7 other (STATUS) |
+| 0x1E | EMC | u8, the EMC test build only: 1 transmitting the pod's frames, 2 transmitting its pattern, 3 stopped, 4 not transmitting (STATUS) |
 
 ## States
 
@@ -256,6 +258,10 @@ The bridge is a layer-2 pipe for one MAC:
   plugged in); the Wi-Fi station then restarts with the new MAC.
 - **Ethernet → Wi-Fi:** frames from the pod MAC, not addressed to the bridge, while Wi-Fi is
   connected. Everything else is dropped.
+- **Link-local:** frames to 01-80-C2-00-00-00 through -0F (IEEE 802.1: STP, pause, LACP, 802.1X,
+  LLDP, ...) are never forwarded, in either direction, as no 802.1 bridge forwards them. The pod's
+  EMI test build sends its 20 Mbit/s stream to 01-80-C2-00-00-0F so it loads the pod's cable and
+  stops at the bridge.
 - **Wi-Fi → Ethernet:** nothing after a link-down until the pod's next control frame. Then frames
   to the pod MAC or to a group address, except frames whose source
   is the pod MAC (the AP echoing the pod's own broadcasts, which would break IPv6 duplicate

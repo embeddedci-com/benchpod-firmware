@@ -69,7 +69,12 @@ typedef enum {
     EMI_REC_RUN_START  = 1,
     EMI_REC_EVENT      = 2,
     EMI_REC_CHECKPOINT = 3,
+    EMI_REC_SUMMARY    = 4,   /* every EMI_LOG_SUMMARY_MS: every health total, changed or not */
 } emi_rec_type_t;
+
+/* A SUMMARY keeps the totals the pod counts (since boot unless noted) every 10 minutes, also on
+   a clean run, so after a failure the log shows which one started climbing first. */
+#define EMI_LOG_SUMMARY_MS  (10u * 60u * 1000u)
 
 typedef enum {
     EMI_EV_LED        = 1,   /* the LED state changed: from -> to (status_led_emi_t values) */
@@ -78,6 +83,11 @@ typedef enum {
     EMI_EV_STARTED    = 4,   /* the activity started (boot start or `emi start`) */
     EMI_EV_STOPPED    = 5,   /* `emi stop` */
     EMI_EV_RECOVERY   = 6,   /* a recovery step (recovery.h); the text says which and how it went */
+    EMI_EV_C3_RESTART = 7,   /* the pod restarted its ESP32-C3 (c3_restarts.h); the text has the cause */
+    EMI_EV_HEALTH     = 8,   /* something the pod counts changed: a cloud drop, an I2C bus clear,
+                                a PSRAM read retry, a CAN bus-off, eFuse reverse blocking, the iCE40
+                                losing its configuration, the LA supply switching (emi_test.c,
+                                health_poll); the text says which and how many. No LED change */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */
@@ -109,6 +119,22 @@ typedef struct {
             uint8_t  dac, net_mbit, running, link;
             char     text[12];      /* the last error, cut */
         } cp;
+        struct {
+            uint16_t cloud_drops;   /* established cloud connections that dropped */
+            uint16_t c3_restarts;   /* ESP32-C3 restarts since power-on */
+            uint16_t i2c_clears;    /* I2C bus clears */
+            uint16_t can_busoff;    /* CAN bus-off recoveries */
+            uint16_t psram_fail;    /* capture read-backs that failed all tries */
+            uint16_t cdone_lost;    /* the iCE40 lost its configuration (CDONE low), this run */
+            uint32_t psram_retry;   /* capture read-backs that needed a retry */
+            uint32_t rev_block[2];  /* eFuse 1 / 2 reverse-current blocks */
+            uint32_t eth_crc;       /* Ethernet frames received with a CRC or alignment error */
+            uint32_t eth_missed;    /* Ethernet frames dropped for want of a receive descriptor */
+            uint32_t bridge_tx_err; /* the Wi-Fi bridge's failed Wi-Fi transmits (its own count) */
+            uint32_t cloud_down_s;  /* seconds this run the cloud was set up but not connected */
+            uint16_t bridge_restarts;  /* the Wi-Fi bridge restarted, this run */
+            uint16_t bridge_silences;  /* the Wi-Fi bridge went silent for 10 s, this run */
+        } sum;
     } u;
 } emi_rec_t;
 

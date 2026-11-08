@@ -82,6 +82,8 @@ const char *esp_wifi_ctrl_state_str(void) { return "idle"; }
 static bool g_c3 = true;   /* the board has the ESP32-C3 (digital v3r3 does not) */
 bool esp_wifi_ctrl_module_present(void) { return g_c3; }
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *a, uint32_t *b) { *a = 0; *b = 0; }
+static c3_restarts_t g_c3_restarts;
+const c3_restarts_t *esp_wifi_ctrl_restarts(void) { return &g_c3_restarts; }
 /* wifi_scan: the Wi-Fi control's request/result faked. */
 static uint32_t g_scan_req;
 static esp_wifi_scan_state_t g_scan_state = ESP_WIFI_SCAN_RUNNING;

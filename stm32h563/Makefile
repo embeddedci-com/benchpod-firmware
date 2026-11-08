@@ -107,6 +107,7 @@ C_SOURCES := \
   src/esp_hosted_pump.c \
   src/esp_netif.c \
   src/esp_wifi_ctrl.c \
+  src/c3_restarts.c \
   src/efuse_flt.c \
   src/cloud_config.c \
   src/cloud_client.c \

@@ -117,6 +117,11 @@ static void emit_health(bp_emit_t *e, const cloud_caps_t *c, bool cut) {
     }
     bp_emit(e, "\"boot_id\":\"%08lx\",\"unclean_resets\":%lu,",
             (unsigned long)c->boot_id, (unsigned long)c->unclean_resets);
+    if (c->c3) {   /* the built-in Wi-Fi's co-processor: how often the pod had to restart it */
+        bp_emit(e, "\"c3_restarts\":%lu,", (unsigned long)c->c3_restarts);
+        if (c->c3_restarts && c->c3_restart_last)
+            bp_emit(e, "\"c3_restart_last\":\"%s\",", c->c3_restart_last);
+    }
     bp_emit(e, "\"safe_mode\":%s,\"safe_reason\":", tf(c->safe_mode));
     bp_emit_jstr(e, reason);
     bp_emit_raw(e, ",\"reset_cause\":");

@@ -42,6 +42,11 @@
 static const char *TAG = "emc";
 
 #define EMC_REPORT_MS 5000
+// Recovery, as the pod's EMI build has for its own functions: a radio that sent nothing for
+// EMC_STUCK_MS (it stopped, or every send fails) is restarted; after EMC_RESTARTS_MAX restarts in
+// a row without a frame going out, the bridge reboots (the pod sees the reset reason, "software").
+#define EMC_STUCK_MS      10000
+#define EMC_RESTARTS_MAX  3
 #define FRAME_MAX     1500  // esp_wifi_80211_tx limit, 802.11 header included
 #define HDR_LEN       24
 #define SNAP_LEN      8
@@ -80,6 +85,8 @@ static struct {
     volatile bool running;
     volatile bool eth_started;  // a new image on trial confirms itself once a frame went out too
     bool radio_up;
+    uint32_t radio_restarts;     // since boot
+    uint32_t restarts_in_row;    // since the last frame went out
     uint8_t channel, ch_first, ch_last;
     const rate_t *rate;
     int8_t power, power_max;  // 0.25 dBm
@@ -254,6 +261,7 @@ static void tx_task(void *arg)
             from_eth ? s.sent_eth++ : s.sent_pattern++;
             s.airtime_us += airtime_us(r, len);
             s.last_ok_us = esp_timer_get_time();
+            s.restarts_in_row = 0;
             len = 0;
             if (s.eth_started) {
                 // Radio and Ethernet work: keep this image (OTA trial boot) without waiting for
@@ -272,11 +280,42 @@ static void tx_task(void *arg)
     }
 }
 
+// Called every EMC_REPORT_MS: restart a radio that has sent nothing for EMC_STUCK_MS, reboot after
+// EMC_RESTARTS_MAX restarts that did not help.
+static void recovery_check(void)
+{
+    if (!s.running) {
+        return;
+    }
+    const int64_t now = esp_timer_get_time();
+    const int64_t since = s.last_ok_us ? s.last_ok_us : s.t_start;
+    if (now - since < (int64_t)EMC_STUCK_MS * 1000) {
+        return;
+    }
+    if (s.restarts_in_row >= EMC_RESTARTS_MAX) {
+        ESP_LOGE(TAG, "recovery: nothing sent after %u radio restarts, rebooting", (unsigned)s.restarts_in_row);
+        vTaskDelay(pdMS_TO_TICKS(100));  // the console line out
+        esp_restart();
+    }
+    s.restarts_in_row++;
+    s.radio_restarts++;
+    ESP_LOGW(TAG, "recovery: nothing sent for %lld s, restarting the radio (%u of %u)",
+             (long long)((now - since) / 1000000), (unsigned)s.restarts_in_row, (unsigned)EMC_RESTARTS_MAX);
+    xSemaphoreTake(s.lock, portMAX_DELAY);
+    esp_err_t err = radio_start();
+    xSemaphoreGive(s.lock);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "recovery: radio start: %s", esp_err_to_name(err));
+    }
+    s.last_ok_us = now;  // the next check is EMC_STUCK_MS from now
+}
+
 static void report_task(void *arg)
 {
     emc_counts_t prev = {0};
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(EMC_REPORT_MS));
+        recovery_check();
         emc_counts_t c;
         emc_test_counts(&c);
         uint64_t air = c.airtime_us - prev.airtime_us;
@@ -307,6 +346,7 @@ void emc_test_counts(emc_counts_t *c)
     c->errors = s.errors;
     c->last_err = s.last_err;
     c->airtime_us = s.airtime_us;
+    c->radio_restarts = s.radio_restarts;
     c->uptime_us = esp_timer_get_time() - s.t_start;
 }
 

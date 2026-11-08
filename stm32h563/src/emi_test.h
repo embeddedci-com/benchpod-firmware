@@ -67,7 +67,13 @@
 #define EMI_NET_MAX_MBIT         50u
 #define EMI_NET_FRAME            1514u
 #define EMI_NET_ETHERTYPE        0x88B6u
-#define EMI_NET_DST_MAC          { 0x02, 0x42, 0x50, 0x45, 0x4D, 0x49 }
+/* The stream's destination: 01-80-C2-00-00-0F, in the IEEE 802.1 range of link-local addresses
+   (01-80-C2-00-00-00 to -0F) that a standard switch never forwards, and an unassigned one (the others
+   are STP, pause, LACP, 802.1X, LLDP ...). So the 20 Mbit/s loads the pod's cable as CISPR 32 wants,
+   and stops at the first switch instead of flooding the lab's network (an address nobody owns, as
+   before, is sent out of every port). A laptop cabled straight to the pod still sees it. The BPMON
+   status frame stays broadcast: small, once every 5 s, it reaches a laptop anywhere on the network. */
+#define EMI_NET_DST_MAC          { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x0F }
 /* An Ethernet problem (no link, or a frame the pod could not send) counts as a failure like a
    failed capture (red now, blue afterwards, status_led.h), so a lab watching only the LED sees the
    LAN port fail during an immunity test. A link that has not come up yet after a start is given this long

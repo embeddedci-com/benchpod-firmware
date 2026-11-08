@@ -71,6 +71,9 @@ typedef struct {
     const char   *last_crash;     /* "none" after a clean start */
     uint32_t      boot_id;        /* random per boot: the server's key for one boot's crash */
     uint32_t      unclean_resets; /* crashes + watchdog resets since the last frame went out */
+    bool          c3;             /* the board has the built-in ESP32-C3 (Wi-Fi): the two below */
+    uint32_t      c3_restarts;    /* C3 restarts since power-on (c3_restarts.h) */
+    const char   *c3_restart_last;/* the last one's cause name ("no_response", ...), NULL if none */
 } cloud_caps_t;
 
 /* Build the frame into out (cap >= CLOUD_CAPS_MAX + 1 recommended). Returns its length, or 0
