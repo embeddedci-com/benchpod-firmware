@@ -44,6 +44,23 @@ static void addr_to_bank_sector(uint32_t abs, uint32_t *bank, uint32_t *sector)
     }
 }
 
+/* Drop every ICACHE line after an erase or program. The MPU marks the persistence area
+   non-cacheable (main.c icache_init), but on benchpod-c2f662 (3.10.0, 2026-11-08) the record
+   read-back after a write still returned the old bytes ("slot B: CRC mismatch", calibrate "could not
+   save to flash", 4 of 8 saves), and with the ICACHE off 12 of 12 saved. So the cache is
+   invalidated here as well. Writes are rare; the invalidation takes about 512 cycles (8 KB of
+   16-byte lines), during which the cache bypasses itself. Register-level and bounded: the callers
+   hold interrupts off, so HAL_GetTick timeouts would not advance. */
+static void icache_drop(void)
+{
+    if ((ICACHE->CR & ICACHE_CR_EN) == 0u) return;
+    for (uint32_t n = 0; (ICACHE->SR & ICACHE_SR_BUSYF) && n < 100000u; n++) { }
+    ICACHE->FCR = ICACHE_FCR_CBSYENDF;
+    ICACHE->CR |= ICACHE_CR_CACHEINV;
+    for (uint32_t n = 0; !(ICACHE->SR & ICACHE_SR_BSYENDF) && n < 100000u; n++) { }
+    ICACHE->FCR = ICACHE_FCR_CBSYENDF;
+}
+
 void flash_range_erase(uint32_t offset, size_t count)
 {
     uint32_t off = flash_layout_store_off(offset);
@@ -62,6 +79,7 @@ void flash_range_erase(uint32_t offset, size_t count)
     HAL_FLASH_Unlock();
     HAL_FLASHEx_Erase(&e, &err);
     HAL_FLASH_Lock();
+    icache_drop();
 }
 
 void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
@@ -79,6 +97,7 @@ void flash_range_program(uint32_t offset, const uint8_t *data, size_t count)
         HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, abs + i, (uint32_t)(uintptr_t)qw);
     }
     HAL_FLASH_Lock();
+    icache_drop();
 }
 
 /* ---- ECC-safe reads (see flash_compat.h) ------------------------------------
