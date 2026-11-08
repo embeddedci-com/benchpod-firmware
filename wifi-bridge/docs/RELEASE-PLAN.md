@@ -15,7 +15,7 @@ State on 2026-10-30. Test results: [BRINGUP-REV2.md](BRINGUP-REV2.md).
 
 1. Deploy the server (`make deploy-prod`, list other sessions' commits on main first). It must know
    `blob-bridge.bin.sig` before a release carries it, or the pod refuses the unsigned blob.
-2. Set the bridge version: `PROJECT_VER` in `wifi-bridge/CMakeLists.txt` is 0.1.1. Bump the pod's
+2. Set the bridge version: `PROJECT_VER` in `wifi-bridge/CMakeLists.txt` (0.1.2 for fw 3.10.1). Bump the pod's
    `FIRMWARE_VERSION` (patch).
 3. Tag the firmware. CI builds and signs everything, including `blob-bridge.bin`.
 4. Restart the server after tagging, so it sees the release.
