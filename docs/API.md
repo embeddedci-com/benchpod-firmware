@@ -2329,15 +2329,25 @@ No parameters.
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse1":{"enabled":1,"fault":0,"valid":1},"efuse2":{"enabled":0,"fault":0,"valid":0},"status_supported":true}}
+{"status":"ok","data":{"efuse1":{"enabled":1,"fault":0,"valid":1,"flt_pin":0,"reverse_blocks":0},"efuse2":{"enabled":0,"fault":0,"valid":0,"flt_pin":0,"reverse_blocks":0},"status_supported":true}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `efuseN.enabled` | integer | `1` if the eFuse EN output is currently driven on. |
-| `efuseN.fault` | integer | `1` if the eFuse signalled an over-current/fault (`FLT`, active-low on the wire). |
-| `efuseN.valid` | integer | `1` if the eFuse output voltage is valid (`V`, power-good). |
+| `efuseN.fault` | integer | `1` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
+| `efuseN.flt_pin` | integer | `1` if the `FLT` pin is asserted right now (firmware 3.10.1+). |
+| `efuseN.reverse_blocks` | integer | How many times since boot a held `FLT` was reverse-current blocking, not a fault (firmware 3.10.1+). |
+| `efuseN.valid` | integer | `1` once the eFuse's input supply is valid and its inrush is done (the TPS259470A's `AUXOFF` pin). It is not output power good: no output fault takes it low. |
 | `status_supported` | boolean | `true` — `V`/`FLT` are wired through the power expander. |
+
+The TPS259470A pulls `FLT` low for real faults and also while it blocks reverse current: when
+its output is more than 29 mV above its input it turns off its blocking FET, and turns it back on
+only once the input is 104 mV above the output. With a light load, a dip of the pod's 5 V (a Wi-Fi
+bridge on the USB-A port transmitting, for example) can hold `FLT` low for tens of ms while the
+output stays up. So a held `FLT` (firmware 3.10.1+) is a fault only when the output's current
+monitor shows the output collapsed (below 1 V) or carrying current (over 250 mA, the limits are
+about 2 A and 3 A); otherwise it counts in `reverse_blocks`.
 
 `FLT` is also sampled every 10 ms in the background, so a trip is reported asynchronously
 (and over the cloud as an `efuse.event` frame) without polling this command. The eFuses
