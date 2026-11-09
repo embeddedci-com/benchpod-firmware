@@ -78,7 +78,9 @@ module top (
     // so no crossing is timed (MAX_X48_NS in the Makefile watches clk -> clk48).
     reg clkdiv = 1'b0;
     always @(posedge clk48) clkdiv <= ~clkdiv;
-    wire clk;
+    // keep: the 24 MHz net must stay named `clk` for clocks.py.  yosys 0.70 otherwise names it
+    // after a load (adc_i.clk, adc_cdc.src_clk) and the 24 MHz constraint silently drops out.
+    (* keep *) wire clk;
     SB_GB clk_gb (.USER_SIGNAL_TO_GLOBAL_BUFFER(clkdiv), .GLOBAL_BUFFER_OUTPUT(clk));
 
     // ---- reset (async-assert at power-up, sync-deassert per domain) ----------
