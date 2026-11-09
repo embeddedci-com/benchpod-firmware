@@ -174,18 +174,18 @@ int main(void) {
         CHECK(q.divider == 69 && q.rate_hz == 400000u, "400 kS/s RAM: divider %u (want 69), %u S/s", q.divider, q.rate_hz);
         /* the maximum: 0 asks for it; faster requests are clamped to it and flagged */
         q = dac_replay_plan(clk, 0.0f, false);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 888889u && q.clamped == 0, "max RAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 0, "max RAM: divider %u, %u S/s", q.divider, q.rate_hz);
         q = dac_replay_plan(clk, 0.0f, true);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 0, "max PSRAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 857143u && q.clamped == 0, "max PSRAM: divider %u, %u S/s", q.divider, q.rate_hz);
         q = dac_replay_plan(clk, 2.0e6f, false);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 888889u && q.clamped == 1, "2 MS/s RAM: clamp to the max (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 1, "2 MS/s RAM: clamp to the max (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
         q = dac_replay_plan(clk, 12.0e6f, true);
         CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 1, "12 MS/s PSRAM: clamp to the max (flag %u)", q.clamped);
-        q = dac_replay_plan(clk, 885000.f, false);   /* rounds to the minimum divider: not a clamp */
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 0, "885 kS/s RAM: divider %u flag %u", q.divider, q.clamped);
+        q = dac_replay_plan(clk, 870000.f, false);   /* rounds to the minimum divider: not a clamp */
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 0, "870 kS/s RAM: divider %u flag %u", q.divider, q.clamped);
         q = dac_replay_plan(clk, 100.f, false);       /* below 48 MHz / (65535 + 51) ~= 732 S/s */
         CHECK(q.divider == DAC_MAX_DIVIDER && q.clamped == 2 && q.rate_hz == 732u, "100 S/s: clamp to the slowest (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
-        CHECK(dac_sample_clocks(0, false) == 54 && dac_sample_clocks(3, true) == 55, "sample clocks floor the divider at 3");
+        CHECK(dac_sample_clocks(0, false) == 55 && dac_sample_clocks(3, true) == 56 && dac_sample_clocks(4, false) == 55, "sample clocks floor the divider at 4");
     }
 
     if (fails == 0) printf("PASS — all la_rate tests\n");

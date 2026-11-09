@@ -92,8 +92,9 @@ it came out bigger.
 ## DAC
 
 `dac8551_engine` shifts 24-bit frames to the DAC8551 on `clk48` (SCLK 24 MHz). One
-sample takes max(divider, 3) + 51 clk48, so the fastest update is 48 MHz / 54, about
-889 kS/s. It plays from one of three sources: the 4 KB `LOAD_WAVE` BRAM (up to 2048
+sample takes max(divider, 3) + 51 clk48. The gateware floor of 3 meets the DAC8551's frame gap
+(t9 >= 100 ns); the DAC8554 on analog v3r2 and later needs 130 ns, so the firmware sends a
+divider of at least 4 (146 ns) and the fastest update is 48 MHz / 55, about 873 kS/s. It plays from one of three sources: the 4 KB `LOAD_WAVE` BRAM (up to 2048
 samples, `START_DAC`), PSRAM through `dac_psram_reader` (deep image, up to 4,194,304
 samples, `START_DAC_PSRAM`), or `dac_loop` (loop image, an in-fabric transfer function
 that indexes a curve with the ADC or a fixed/sweep input, `START_DAC_LOOP`; see
