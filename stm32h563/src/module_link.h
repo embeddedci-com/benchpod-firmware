@@ -74,4 +74,13 @@ int  module_id_write(uint8_t type, uint8_t rev_major, uint8_t rev_minor, const c
    length and CRC in the header. 0 / -1. A blank or invalid header gets an empty ID. */
 int  module_cal_commit(uint16_t len);
 
+/* The calibration blob (module_ee_cal_encode) on the module.
+   module_cal_save: first drops the header's calibration fields (so a write cut short never leaves the
+   old blob valid), writes `len` bytes at MOD_EE_CAL_ADDR, records them (module_cal_commit) and checks
+   the CRC read back. 0 / -1. len 0 only drops the fields.
+   module_cal_load: the blob into buf (cap bytes), its length in *len. 0 = a valid blob, -1 = none
+   (blank EEPROM or no calibration recorded), -2 = the EEPROM is unreadable or its blob CRC fails. */
+int  module_cal_save(const uint8_t *blob, uint16_t len);
+int  module_cal_load(uint8_t *buf, size_t cap, uint16_t *len);
+
 #endif /* MODULE_LINK_H */

@@ -142,7 +142,28 @@ typedef struct {
     uint32_t reserved[6];
 } adc_cal_v1_t;
 
-/* Load from flash into the active copy and put this pod's DAC lines in (cal_data_set_pod_dac).
+/* A second copy of the record, kept with the analog front end: the analog module's EEPROM on
+   digital v3r3 (adc_cal_hw.c). Registered before adc_cal_load().
+   load: 0 = a record in *out, -1 = none stored there, -2 = unreadable (corrupt, no answer).
+   save: 0 / -1; rec NULL = drop the copy. */
+typedef struct {
+    int (*load)(adc_cal_t *out);
+    int (*save)(const adc_cal_t *rec);
+} adc_cal_mirror_t;
+void adc_cal_set_mirror(const adc_cal_mirror_t *m);
+/* adc_cal_hw.c: use the analog module's EEPROM as the mirror (module_link.h). */
+void adc_cal_hw_use_module(void);
+
+/* Where the calibration in use came from. */
+typedef enum { ADC_CAL_FROM_NONE = 0, ADC_CAL_FROM_POD, ADC_CAL_FROM_MODULE } adc_cal_from_t;
+adc_cal_from_t adc_cal_from(void);
+const char    *adc_cal_from_str(adc_cal_from_t f);   /* "none", "pod", "module" */
+/* The module copy matched the record in use at the last load or save (false without a mirror). */
+bool adc_cal_mirror_ok(void);
+
+/* Load into the active copy and put this pod's DAC lines in (cal_data_set_pod_dac). With a mirror
+   (an analog module), the module's record wins: the calibration belongs to the analog front end.
+   A module with no record yet gets the pod's (a pod calibrated before its module stored one).
    0 = a calibration was loaded, -1 = none stored (or one out of range, ignored as a whole). */
 int adc_cal_load(void);
 

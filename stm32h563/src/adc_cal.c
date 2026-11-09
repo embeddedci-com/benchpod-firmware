@@ -181,8 +181,29 @@ static adc_cal_v1_t v1_copy(const adc_cal_t *r) {
     return v1;
 }
 
-/* Save a record (the version-2 record, then its version-1 copy) and use it. An empty record
-   clears the store instead. The record has passed derive() already. */
+static const adc_cal_mirror_t *s_mirror;
+static adc_cal_from_t s_from;
+static bool s_mirror_ok;
+
+void adc_cal_set_mirror(const adc_cal_mirror_t *m) { s_mirror = m; s_mirror_ok = false; }
+adc_cal_from_t adc_cal_from(void) { return s_from; }
+bool adc_cal_mirror_ok(void) { return s_mirror && s_mirror_ok; }
+const char *adc_cal_from_str(adc_cal_from_t f) {
+    return f == ADC_CAL_FROM_MODULE ? "module" : f == ADC_CAL_FROM_POD ? "pod" : "none";
+}
+
+/* The module copy of `rec` (NULL or empty = drop it). 0 / -1; no mirror = 0. */
+static int mirror_save(const adc_cal_t *rec) {
+    if (!s_mirror || !s_mirror->save) return 0;
+    bool empty = !rec || record_empty(rec);
+    s_mirror_ok = s_mirror->save(empty ? NULL : rec) == 0;
+    if (!s_mirror_ok) printf("[adc-cal] ERROR: the module copy was not saved\n");
+    return s_mirror_ok ? 0 : -1;
+}
+
+/* Save a record (the version-2 record, then its version-1 copy, then the module copy) and use it.
+   An empty record clears the stores instead. The record has passed derive() already.
+   0, -1 = the pod's flash failed (nothing changed), -2 = saved on the pod but not on the module. */
 static int commit(const adc_cal_t *rec) {
     if (record_empty(rec)) {
         if (ab_store_clear(&s_store) != 0) return -1;
@@ -192,7 +213,18 @@ static int commit(const adc_cal_t *rec) {
         if (ab_store_save(&s_store_v1, &v1, sizeof(v1)) != 0) return -1;
     }
     (void)derive(rec);
+    s_from = record_empty(rec) ? ADC_CAL_FROM_NONE : s_mirror ? ADC_CAL_FROM_MODULE : ADC_CAL_FROM_POD;
+    if (mirror_save(rec) != 0) {
+        if (!record_empty(rec)) s_from = ADC_CAL_FROM_POD;
+        return -2;
+    }
     return 0;
+}
+
+static const char *commit_msg(int rc) {
+    return rc == -2 ? "calibrate: saved on the pod, but not in the analog module's EEPROM (is the module "
+                      "plugged in and powered?)"
+                    : "calibrate: could not save to flash";
 }
 
 /* Check a changed record and save it. NULL = done, else why not (range_msg when it is out of
@@ -201,8 +233,8 @@ static const char *apply(const adc_cal_t *rec, const char *range_msg) {
     adc_cal_t keep = s_rec;
     if (!derive(rec)) return range_msg;
     (void)derive(&keep);   /* derive() made it current: back to the old one until it is saved */
-    if (commit(rec) != 0) return "calibrate: could not save to flash";
-    return NULL;
+    int rc = commit(rec);
+    return rc == 0 ? NULL : commit_msg(rc);
 }
 
 bool    adc_cal_current_in_is_set(void)    { return s_rec.zero_set != 0; }
@@ -411,12 +443,16 @@ const char *adc_cal_comp_store(long hf_dc_e4, long c_top_ff) {
     adc_cal_t rec = s_rec;
     rec.comp_hf_dc_e4 = (uint16_t)hf_dc_e4;
     rec.comp_c_top_ff = (uint16_t)c_top_ff;
-    return commit(&rec) == 0 ? NULL : "calibrate: could not save to flash";
+    int rc = commit(&rec);
+    return rc == 0 ? NULL : commit_msg(rc);
 }
 
 int adc_cal_clear(void) {
     derive_nothing();
-    return ab_store_clear(&s_store);
+    s_from = ADC_CAL_FROM_NONE;
+    int rc = ab_store_clear(&s_store);
+    if (mirror_save(NULL) != 0 && rc == 0) rc = -1;
+    return rc;
 }
 
 int adc_cal_clear_part(const char *part) {
@@ -438,7 +474,8 @@ int adc_cal_clear_part(const char *part) {
     } else {
         return -2;
     }
-    return commit(&rec);   /* less than before: always in range */
+    int rc = commit(&rec);   /* less than before: always in range */
+    return rc == -2 ? -3 : rc;   /* -2 is "no such part" */
 }
 
 /* The record to load: the version-2 record when it is the newest or the pair of the newest
@@ -464,7 +501,21 @@ static bool pick_record(adc_cal_t *out) {
 }
 
 int adc_cal_load(void) {
-    adc_cal_t rec;
+    adc_cal_t rec, mod;
+    s_from = ADC_CAL_FROM_NONE;
+    s_mirror_ok = false;
+    int mrc = (s_mirror && s_mirror->load) ? s_mirror->load(&mod) : -2;
+    if (mrc == 0 && !record_empty(&mod)) {
+        if (derive(&mod)) {
+            s_from = ADC_CAL_FROM_MODULE;
+            s_mirror_ok = true;
+            printf("[adc-cal] calibration from the analog module's EEPROM\n");
+            return 0;
+        }
+        printf("[adc-cal] the module's calibration is out of range, ignored\n");
+    } else if (mrc == -2 && s_mirror) {
+        printf("[adc-cal] the module's calibration is unreadable, using the pod's\n");
+    }
     if (!pick_record(&rec) || record_empty(&rec)) {
         derive_nothing();
         return -1;
@@ -473,6 +524,13 @@ int adc_cal_load(void) {
         printf("[adc-cal] stored calibration out of range, ignored\n");
         derive_nothing();
         return -1;
+    }
+    s_from = ADC_CAL_FROM_POD;
+    if (mrc == -1) {   /* a module with no record yet: give it the pod's */
+        if (mirror_save(&rec) == 0) {
+            s_from = ADC_CAL_FROM_MODULE;
+            printf("[adc-cal] copied the pod's calibration to the analog module's EEPROM\n");
+        }
     }
     return 0;
 }

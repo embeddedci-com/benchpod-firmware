@@ -1434,6 +1434,7 @@ reference.
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
 | `adc_comp` | The recorded frequency response of the ADC input (firmware 3.9.5+), `hf_dc_e4` and `c_top_ff`, or `null`. See [below](#adc-frequency-response-record-firmware-395) |
+| `stored` | Where the calibration in use is kept (firmware 3.10.1+): `"module"` (also in the analog module's EEPROM, digital v3r3, see [`module`](#module--the-analog-module-and-its-eeprom)), `"pod"` (only the pod's flash) or `"none"` |
 
 The measurement averages 32 bursts of 16 samples, the same burst `adc_read` takes. It
 takes about 0.3 s and leaves the `current_in` path routed.
@@ -3458,7 +3459,31 @@ EEPROM layout, version 1 (little endian):
 | `0x01c` | 2 | Calibration CRC-16/CCITT-FALSE |
 | `0x01e` | 2 | Header CRC-16/CCITT-FALSE over bytes `0x000` to `0x01d` |
 | `0x020` | 224 | Reserved |
-| `0x100` | up to 3840 | Calibration blob. The firmware stores it and checks its CRC; the calibration tools define its format. |
+| `0x100` | up to 3840 | Calibration blob: the module's ADC/DAC calibration (below). Its length and CRC are in the header. |
+
+The calibration blob (firmware 3.10.1+), little endian:
+
+| Offset | Bytes | Content |
+|---|---|---|
+| 0 | 4 | Magic `"ACAL"` |
+| 4 | 2 | Record version (2) |
+| 6 | 2 | Record length in bytes (116 for version 2) |
+| 8 | 116 | The calibration record, the same bytes the pod keeps in its own flash |
+
+The calibration belongs to the analog front end, so on digital v3r3 it lives on the module:
+
+- every [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8) save (the J8 zero, the DMM-guided DAC
+  lines and ADC gains, the frequency-response record, a clear) writes the pod's flash and then the
+  module's blob. The header's calibration fields are dropped first, so a write cut short leaves no
+  old blob that still checks out. When the module write fails the pod keeps the new calibration and
+  `calibrate` answers `calibrate: saved on the pod, but not in the analog module's EEPROM (is the module
+  plugged in and powered?)`;
+- at boot the module's record is loaded when its blob is valid, so a module moved to another digital
+  board brings its calibration along. A module with no blob yet (calibrated with older firmware, or
+  never) gets the pod's record copied to it; an unreadable blob or one of another record version is
+  left alone and the pod's record is used.
+
+`calibrate` reports where the calibration in use is kept in `stored`.
 
 <a id="module_power--module-and-bridge-port-power"></a>
 ### `module_power`: module and bridge port power

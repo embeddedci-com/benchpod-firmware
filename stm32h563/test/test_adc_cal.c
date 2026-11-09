@@ -543,6 +543,80 @@ static void test_range_selftest_eval(void) {
     CHECK(!adc_range_test_point_ok(3.5f, NAN, 3.5f), "no reading");
 }
 
+/* A fake analog-module EEPROM for the mirror (adc_cal_set_mirror). */
+static adc_cal_t s_mod;
+static int s_mod_state;       /* 0 = holds s_mod, -1 = no record, -2 = unreadable */
+static int s_mod_save_rc;     /* what the next saves return */
+static int s_mod_saves;
+static int mod_load(adc_cal_t *out) { if (s_mod_state == 0) *out = s_mod; return s_mod_state; }
+static int mod_save(const adc_cal_t *rec) {
+    s_mod_saves++;
+    if (s_mod_save_rc != 0) return s_mod_save_rc;
+    if (rec) { s_mod = *rec; s_mod_state = 0; } else { s_mod_state = -1; }
+    return 0;
+}
+static const adc_cal_mirror_t s_fake = { mod_load, mod_save };
+
+static void mod_reset(int state) {
+    memset(&s_mod, 0, sizeof(s_mod));
+    s_mod_state = state; s_mod_save_rc = 0; s_mod_saves = 0;
+}
+
+static void test_module_mirror(void) {
+    /* Calibrating with a module saves the record in both places. */
+    mock_flash_reset();
+    mod_reset(-1);
+    adc_cal_set_mirror(&s_fake);
+    adc_cal_load();
+    adc_reading_t open = burst(65529, 65529);
+    CHECK(adc_cal_current_in_store(&open) == NULL, "the zero was refused");
+    CHECK(s_mod_state == 0 && s_mod.zero_set && s_mod_saves == 1, "the module did not get the record");
+    CHECK(adc_cal_from() == ADC_CAL_FROM_MODULE && adc_cal_mirror_ok(), "not reported as stored on the module");
+    int32_t zero = s_mod.zero_count_mc;
+
+    /* A reboot loads the module's record, even when the pod's flash holds another one. */
+    adc_cal_t other = s_mod;
+    other.zero_count_mc = count_mc_for_cal1(-0.020);
+    s_mod = other;
+    CHECK(adc_cal_load() == 0 && adc_cal_from() == ADC_CAL_FROM_MODULE, "the module record was not loaded");
+    CHECK(adc_cal_zero_count_mc() == other.zero_count_mc, "the pod's record won over the module's");
+
+    /* A module with no record (a pod calibrated before this firmware) gets the pod's at boot. */
+    mod_reset(-1);
+    CHECK(adc_cal_load() == 0 && adc_cal_zero_count_mc() == zero, "the pod's record was not loaded");
+    CHECK(s_mod_state == 0 && s_mod.zero_count_mc == zero && adc_cal_from() == ADC_CAL_FROM_MODULE,
+          "the pod's record was not copied to the module");
+
+    /* An unreadable module falls back to the pod's record and is not overwritten. */
+    mod_reset(-2);
+    CHECK(adc_cal_load() == 0 && adc_cal_zero_count_mc() == zero, "no fallback to the pod's record");
+    CHECK(s_mod_saves == 0 && adc_cal_from() == ADC_CAL_FROM_POD && !adc_cal_mirror_ok(),
+          "an unreadable module was written or reported as in use");
+
+    /* A module that fails the save: the pod keeps the new record, and the reply says so. */
+    mod_reset(-1);
+    adc_cal_load();
+    s_mod_save_rc = -1;
+    adc_reading_t open2 = burst(65527, 65527);
+    const char *why = adc_cal_current_in_store(&open2);
+    CHECK(why && strstr(why, "analog module") != NULL, "a failed module save was not reported: %s", why ? why : "NULL");
+    CHECK(adc_cal_from() == ADC_CAL_FROM_POD && !adc_cal_mirror_ok(), "a failed module save reported as stored");
+
+    /* Clearing drops the module copy too. */
+    s_mod_save_rc = 0;
+    s_mod_state = 0;
+    CHECK(adc_cal_clear() == 0 && s_mod_state == -1 && adc_cal_from() == ADC_CAL_FROM_NONE, "clear left the module copy");
+
+    /* Without a mirror (every board but digital v3r3) the record is the pod's. */
+    adc_cal_set_mirror(NULL);
+    mock_flash_reset();
+    adc_cal_load();
+    CHECK(adc_cal_current_in_store(&open) == NULL && adc_cal_from() == ADC_CAL_FROM_POD, "no-mirror store");
+    CHECK(strcmp(adc_cal_from_str(ADC_CAL_FROM_MODULE), "module") == 0 &&
+          strcmp(adc_cal_from_str(ADC_CAL_FROM_POD), "pod") == 0 &&
+          strcmp(adc_cal_from_str(ADC_CAL_FROM_NONE), "none") == 0, "names");
+}
+
 int main(void) {
     test_uncalibrated_changes_nothing();
     test_store_apply_persist();
@@ -563,6 +637,7 @@ int main(void) {
     test_downgrade_keeps_the_offset();
     test_low_range();
     test_range_selftest_eval();
+    test_module_mirror();
     if (fails) { printf("test_adc_cal: %d FAILED\n", fails); return 1; }
     printf("test_adc_cal: all passed\n");
     return 0;

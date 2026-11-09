@@ -88,3 +88,25 @@ bool module_ee_raw_write_ok(uint32_t addr, size_t len)
 {
     return len > 0 && addr >= MOD_EE_CAL_ADDR && addr < MOD_EE_SIZE && len <= MOD_EE_SIZE - addr;
 }
+
+size_t module_ee_cal_encode(const void *rec, uint16_t rec_len, uint16_t rec_ver, uint8_t *out, size_t cap)
+{
+    size_t n = MOD_EE_CAL_HDR + (size_t)rec_len;
+    if (!rec || !out || n > cap || n > MOD_EE_CAL_MAX) return 0;
+    wr16(out, (uint16_t)MOD_EE_CAL_MAGIC);
+    wr16(out + 2, (uint16_t)(MOD_EE_CAL_MAGIC >> 16));
+    wr16(out + 4, rec_ver);
+    wr16(out + 6, rec_len);
+    memcpy(out + MOD_EE_CAL_HDR, rec, rec_len);
+    return n;
+}
+
+int module_ee_cal_decode(const uint8_t *blob, size_t n, uint16_t want_ver, void *rec, uint16_t rec_len)
+{
+    if (!blob || !rec || n < MOD_EE_CAL_HDR) return -1;
+    uint32_t magic = (uint32_t)rd16(blob) | ((uint32_t)rd16(blob + 2) << 16);
+    if (magic != MOD_EE_CAL_MAGIC || rd16(blob + 4) != want_ver || rd16(blob + 6) != rec_len) return -1;
+    if (n < MOD_EE_CAL_HDR + (size_t)rec_len) return -1;
+    memcpy(rec, blob + MOD_EE_CAL_HDR, rec_len);
+    return 0;
+}

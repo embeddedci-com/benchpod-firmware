@@ -8,6 +8,8 @@
 #include "i2c_bus.h"         /* analog_path_set */
 #include "pico_compat.h"     /* sleep_ms */
 #include "signal_engine.h"   /* adc_capture_psram_start / _poll */
+#include "module_link.h"     /* module_cal_load / _save */
+#include "module_eeprom.h"   /* module_ee_cal_encode / _decode */
 
 static uint16_t s_buf[ADC_CAL_SAMPLES];
 
@@ -107,3 +109,27 @@ int adc_range_selftest(adc_range_test_pt_t pts[ADC_RANGE_TEST_POINTS], uint32_t 
     analog_path_set(ANALOG_PATH_OFF);
     return rc;
 }
+
+/* ---- The analog module's copy (digital v3r3) ------------------------------------------------ */
+
+static int mod_load(adc_cal_t *out) {
+    uint8_t buf[MOD_EE_CAL_HDR + sizeof(adc_cal_t)];
+    uint16_t len = 0;
+    int rc = module_cal_load(buf, sizeof(buf), &len);
+    if (rc != 0) return rc;
+    /* Another record version (newer firmware wrote it) is not this firmware's to use or replace. */
+    return module_ee_cal_decode(buf, len, ADC_CAL_VERSION, out, sizeof(*out)) == 0 ? 0 : -2;
+}
+
+static int mod_save(const adc_cal_t *rec) {
+    if (!rec) return module_cal_save(NULL, 0);
+    uint8_t buf[MOD_EE_CAL_HDR + sizeof(adc_cal_t)];
+    size_t n = module_ee_cal_encode(rec, sizeof(*rec), ADC_CAL_VERSION, buf, sizeof(buf));
+    return n ? module_cal_save(buf, (uint16_t)n) : -1;
+}
+
+void adc_cal_hw_use_module(void) {
+    static const adc_cal_mirror_t m = { mod_load, mod_save };
+    adc_cal_set_mirror(&m);
+}
+
