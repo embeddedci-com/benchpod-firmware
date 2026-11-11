@@ -26,7 +26,7 @@ if [ "${1:-}" = "--in-container" ]; then
       build-prod/partition_table/partition-table.bin
   elif [ "${1:-}" = "emc" ]; then
     idf.py -B build-emc -D SDKCONFIG=build-emc/sdkconfig -D BRIDGE_EMC_BUILD=1 \
-      -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.emc" build
+      -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.emc;build-emc/overrides" build
     echo "=== EMC test build (development only): flash with ./flash.sh --emc ==="
     ls -l build-emc/benchpod-wifi-bridge.bin build-emc/bootloader/bootloader.bin \
       build-emc/partition_table/partition-table.bin
@@ -44,6 +44,20 @@ fi
 if [ "${1:-}" = "emc" ] && [ "${RELEASE:-0}" = 1 ]; then
   echo "the EMC test build is development only and cannot be combined with RELEASE=1" >&2
   exit 2
+fi
+
+# EMC build options (README "EMC test build"): EMC_RADIO=0 (radio silent at boot), EMC_ETH_MBIT=<n>
+# (Ethernet stream at boot). Written as an sdkconfig overlay; the build's sdkconfig is regenerated
+# every time so a previous build's options never stick.
+if [ "${1:-}" = "emc" ]; then
+  mkdir -p build-emc
+  rm -f build-emc/sdkconfig
+  {
+    [ "${EMC_RADIO:-1}" = 0 ] && echo "# CONFIG_BRIDGE_EMC_RADIO is not set"
+    echo "CONFIG_BRIDGE_EMC_ETH_MBIT=${EMC_ETH_MBIT:-0}"
+  } > build-emc/overrides
+  echo "=== EMC build: radio $([ "${EMC_RADIO:-1}" = 0 ] && echo silent || echo transmitting) at boot," \
+    "Ethernet stream ${EMC_ETH_MBIT:-0} Mbit/s ==="
 fi
 
 # Trusted update keys -> main/fw_keys_gen.h (host side: the container only sees wifi-bridge/).

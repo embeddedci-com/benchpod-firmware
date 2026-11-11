@@ -278,9 +278,17 @@ replaces it.
 
 ```sh
 ./build.sh emc                 # -> build-emc/ (sdkconfig.defaults + sdkconfig.defaults.emc)
+EMC_RADIO=0 EMC_ETH_MBIT=20 ./build.sh emc   # or: radio silent, 20 Mbit/s Ethernet stream from boot
 ./flash.sh --emc               # TC2030 pads, as in "Flash"; opens the console
 ./flash.sh                     # afterwards: back to the normal dev build
 ```
+
+Options, at build time (`./build.sh emc` regenerates its config each time) or on the console:
+`EMC_RADIO=0` keeps the radio silent from boot (`emc start` turns it on), to measure the Ethernet
+side alone; `EMC_ETH_MBIT=<n>` sends a stream of 1514-byte EtherType 0x88B6 frames out of the
+Ethernet port at that rate, like the pod's EMI build (`emc eth <mbit>|off`), so the bridge's
+Ethernet transmitter runs loaded without a pod. The frames go to 01:80:C2:00:00:0F, which
+switches do not forward.
 
 Without a programmer, through the pod: the bridge must run a dev image (which trusts the dev key)
 and be paired with that pod, and the pod must run a dev build too (release pod firmware refuses

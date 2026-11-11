@@ -14,6 +14,12 @@
 //   cut to fit), or a generated 0x88B6 pattern of the largest size when none is waiting, so the
 //   transmitter never idles.
 //
+//   Ethernet stream (CONFIG_BRIDGE_EMC_ETH_MBIT, `emc eth <mbit>|off`): full 1514-byte frames
+//   of EtherType 0x88B6 out of the Ethernet port, like the pod's EMI build, to the same reserved
+//   link-local group address (01:80:C2:00:00:0F, which switches do not forward), so the bridge's
+//   own Ethernet transmitter and RMII run loaded without a pod. Off by default; the radio can be
+//   off at boot (CONFIG_BRIDGE_EMC_RADIO=n) to measure the Ethernet side alone.
+//
 // The radio runs as in production: station mode, the same country code (CONFIG_BRIDGE_COUNTRY,
 // so only its channels), the PHY init data's power limits. The power cap can only go down from
 // what the radio has after start, never above.
@@ -51,6 +57,9 @@ static const char *TAG = "emc";
 #define HDR_LEN       24
 #define SNAP_LEN      8
 #define PATTERN_TYPE  0x88B6
+#define ETH_FRAME     1514  // Ethernet frame without FCS
+#define ETH_WIRE_BITS ((ETH_FRAME + 4 + 8 + 12) * 8)  // + FCS, preamble/SFD, inter-frame gap
+#define ETH_MBIT_MAX  90
 
 typedef enum { K_DSSS_LONG, K_DSSS_SHORT, K_OFDM, K_HT } kind_t;
 
@@ -83,6 +92,8 @@ static struct {
     uint8_t *pending;        // newest Ethernet frame (malloc'd by the EMAC driver), NULL: none
     uint32_t pending_len;
     volatile bool running;
+    volatile uint32_t eth_mbit;                   // Ethernet stream, 0 = off
+    volatile uint32_t eth_sent, eth_no_link, eth_errors;
     volatile bool eth_started;  // a new image on trial confirms itself once a frame went out too
     bool radio_up;
     uint32_t radio_restarts;     // since boot
@@ -98,7 +109,13 @@ static struct {
     volatile int64_t last_ok_us, last_eth_us;
     esp_err_t last_err;
     int64_t t_start;
-} s = {.mux = portMUX_INITIALIZER_UNLOCKED, .running = true};
+} s = {.mux = portMUX_INITIALIZER_UNLOCKED,
+#if CONFIG_BRIDGE_EMC_RADIO
+       .running = true,
+#else
+       .running = false,
+#endif
+       .eth_mbit = CONFIG_BRIDGE_EMC_ETH_MBIT};
 
 // Time on the air for one frame of `len` bytes (FCS added), preamble included; no gaps.
 static uint32_t airtime_us(const rate_t *r, size_t len)
@@ -280,6 +297,83 @@ static void tx_task(void *arg)
     }
 }
 
+// The Ethernet stream: frames at s.eth_mbit (wire rate, preamble and gap included), paced by the
+// microsecond timer in 10 ms batches (one FreeRTOS tick). Each frame starts with "BPEMI", a sequence
+// number and the uptime in ms, as the pod's, so `tcpdump ether proto 0x88b6` can count them.
+static void eth_stream_task(void *arg)
+{
+    static const uint8_t dst[6] = {0x01, 0x80, 0xC2, 0x00, 0x00, 0x0F};
+    static uint8_t f[ETH_FRAME];
+    uint32_t seq = 0, x = 0x9E3779B9u;
+    for (size_t i = 14; i < ETH_FRAME; i++) {  // payload pattern, filled once
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        f[i] = (uint8_t)x;
+    }
+    memcpy(f, dst, 6);
+    f[12] = PATTERN_TYPE >> 8;
+    f[13] = PATTERN_TYPE & 0xff;
+    int64_t t_last = esp_timer_get_time();
+    double owed = 0;  // frames due and not yet sent
+    for (;;) {
+        vTaskDelay(1);
+        const uint32_t mbit = s.eth_mbit;
+        const int64_t now = esp_timer_get_time();
+        if (!mbit) {
+            owed = 0;
+            t_last = now;
+            continue;
+        }
+        owed += (double)(now - t_last) * mbit / ETH_WIRE_BITS;  // us x Mbit/s = bits
+        t_last = now;
+        if (owed > 64) {
+            owed = 64;  // after a stall (no link): no burst to catch up
+        }
+        while (owed >= 1) {
+            owed -= 1;
+            eth_get_mac(f + 6);
+            seq++;
+            uint32_t ms = (uint32_t)(now / 1000);
+            memcpy(f + 14, "BPEMI", 5);
+            memcpy(f + 19, &seq, 4);
+            memcpy(f + 23, &ms, 4);
+            esp_err_t err = eth_send(f, ETH_FRAME);
+            if (err == ESP_OK) {
+                s.eth_sent++;
+                if (s.eth_started && !s.running) {
+                    // Radio off at boot: Ethernet alone confirms a new image (see tx_task).
+                    ota_confirm_self();
+                    s.eth_started = false;
+                }
+            } else if (err == ESP_ERR_INVALID_STATE) {
+                s.eth_no_link++;
+                owed = 0;
+                break;
+            } else {
+                s.eth_errors++;
+                break;
+            }
+        }
+    }
+}
+
+const char *emc_test_set_eth(uint32_t mbit)
+{
+    if (mbit > ETH_MBIT_MAX) {
+        static char why[48];
+        snprintf(why, sizeof(why), "eth stream: 0 (off) to %u Mbit/s", ETH_MBIT_MAX);
+        return why;
+    }
+    s.eth_mbit = mbit;
+    if (mbit) {
+        ESP_LOGI(TAG, "Ethernet stream %lu Mbit/s", (unsigned long)mbit);
+    } else {
+        ESP_LOGI(TAG, "Ethernet stream off");
+    }
+    return NULL;
+}
+
 // Called every EMC_REPORT_MS: restart a radio that has sent nothing for EMC_STUCK_MS, reboot after
 // EMC_RESTARTS_MAX restarts that did not help.
 static void recovery_check(void)
@@ -320,11 +414,13 @@ static void report_task(void *arg)
         emc_test_counts(&c);
         uint64_t air = c.airtime_us - prev.airtime_us;
         ESP_LOGI(TAG, "%s ch %u %s %.2f dBm | %lu frames/s, air %u%% | eth rx %lu, on air %lu, pattern %lu, "
-                      "busy %lu, err %lu",
+                      "busy %lu, err %lu | eth stream %lu Mbit/s: %lu frames/s, no link %lu, err %lu",
                  c.running ? "TX" : "stopped", c.channel, c.rate, c.power_qdbm / 4.0,
                  (unsigned long)((c.sent - prev.sent) * 1000 / EMC_REPORT_MS),
                  (unsigned)(air / (EMC_REPORT_MS * 10)), (unsigned long)c.eth_rx, (unsigned long)c.sent_eth,
-                 (unsigned long)c.sent_pattern, (unsigned long)c.busy, (unsigned long)c.errors);
+                 (unsigned long)c.sent_pattern, (unsigned long)c.busy, (unsigned long)c.errors,
+                 (unsigned long)c.eth_mbit, (unsigned long)((c.eth_sent - prev.eth_sent) * 1000 / EMC_REPORT_MS),
+                 (unsigned long)c.eth_no_link, (unsigned long)c.eth_errors);
         prev = c;
     }
 }
@@ -347,6 +443,10 @@ void emc_test_counts(emc_counts_t *c)
     c->last_err = s.last_err;
     c->airtime_us = s.airtime_us;
     c->radio_restarts = s.radio_restarts;
+    c->eth_mbit = s.eth_mbit;
+    c->eth_sent = s.eth_sent;
+    c->eth_no_link = s.eth_no_link;
+    c->eth_errors = s.eth_errors;
     c->uptime_us = esp_timer_get_time() - s.t_start;
 }
 
@@ -450,10 +550,12 @@ esp_err_t emc_test_start(void)
     esp_err_t err = radio_start();
     xSemaphoreGive(s.lock);
 
-    ESP_LOGW(TAG, "EMC TEST BUILD: transmitting from boot, no access point; channel %u, rate %s, "
-                  "power cap %.2f dBm (maximum %.2f dBm), country %s",
-             s.channel, s.rate->name, s.power / 4.0, s.power_max / 4.0, CONFIG_BRIDGE_COUNTRY);
+    ESP_LOGW(TAG, "EMC TEST BUILD: radio %s from boot, no access point; channel %u, rate %s, "
+                  "power cap %.2f dBm (maximum %.2f dBm), country %s; Ethernet stream %lu Mbit/s",
+             s.running ? "transmitting" : "stopped", s.channel, s.rate->name, s.power / 4.0, s.power_max / 4.0,
+             CONFIG_BRIDGE_COUNTRY, (unsigned long)s.eth_mbit);
     xTaskCreate(tx_task, "emc_tx", 4096, NULL, 4, NULL);
+    xTaskCreate(eth_stream_task, "emc_eth", 3072, NULL, 4, NULL);
     xTaskCreate(report_task, "emc_report", 3072, NULL, 2, NULL);
     return err;
 }

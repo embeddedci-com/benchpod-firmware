@@ -111,6 +111,7 @@ typedef struct {
     esp_err_t last_err;
     uint64_t airtime_us, uptime_us;
     uint32_t radio_restarts;   // the radio restarted because nothing went out for EMC_STUCK_MS
+    uint32_t eth_mbit, eth_sent, eth_no_link, eth_errors;  // the Ethernet stream
 } emc_counts_t;
 esp_err_t emc_test_start(void);                  // instead of wifi_start()
 void emc_test_eth_rx(uint8_t *frame, size_t len);  // takes ownership of the malloc'd frame
@@ -122,6 +123,7 @@ void emc_test_run(bool on);
 const char *emc_test_set_channel(int ch);
 const char *emc_test_set_rate(const char *name);
 const char *emc_test_set_power(int qdbm);  // <= 0: the maximum
+const char *emc_test_set_eth(uint32_t mbit);  // the Ethernet stream, 0 = off
 
 // ---- console.c
 void console_start(void);

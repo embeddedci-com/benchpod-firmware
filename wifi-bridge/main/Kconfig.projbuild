@@ -74,6 +74,22 @@ menu "BenchPod Wi-Fi bridge"
                 6m 9m 12m 18m 24m 36m 48m 54m (OFDM), mcs0-mcs7 (HT20, long GI). 1m is the
                 highest TX power and the longest time on the air per frame.
 
+        config BRIDGE_EMC_RADIO
+            bool "EMC test: radio transmits from boot"
+            default y
+            help
+                n: the radio starts but sends nothing until `emc start`, to measure the Ethernet
+                side alone (with BRIDGE_EMC_ETH_MBIT). `EMC_RADIO=0 ./build.sh emc`.
+
+        config BRIDGE_EMC_ETH_MBIT
+            int "EMC test: Ethernet stream at boot (Mbit/s, 0 = off)"
+            range 0 90
+            default 0
+            help
+                Full 1514-byte frames of EtherType 0x88B6 out of the Ethernet port at this wire
+                rate, like the pod's EMI build, to 01:80:C2:00:00:0F (not forwarded by switches).
+                `emc eth <mbit>|off` changes it at run time. `EMC_ETH_MBIT=20 ./build.sh emc`.
+
         config BRIDGE_EMC_TX_POWER
             int "EMC test: TX power cap at boot (0.25 dBm units, 0 = the module's normal maximum)"
             range 0 84
