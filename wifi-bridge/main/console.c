@@ -155,8 +155,9 @@ static void emc_show(void)
     if (c.errors) {
         printf("emc-last-error: %s\n", esp_err_to_name(c.last_err));
     }
-    printf("emc-eth: stream %lu Mbit/s (0 = off), sent=%lu no_link=%lu errors=%lu\n", (unsigned long)c.eth_mbit,
-           (unsigned long)c.eth_sent, (unsigned long)c.eth_no_link, (unsigned long)c.eth_errors);
+    printf("emc-eth: stream %lu Mbit/s (0 = off), sent=%lu no_link=%lu errors=%lu, RMII TX drive %d\n",
+           (unsigned long)c.eth_mbit, (unsigned long)c.eth_sent, (unsigned long)c.eth_no_link,
+           (unsigned long)c.eth_errors, emc_test_drive());
     printf("emc-recovery: %lu radio restarts since boot (nothing sent for 10 s; a reboot after 3 in a row)\n",
            (unsigned long)c.radio_restarts);
 }
@@ -172,6 +173,8 @@ static void cmd_emc(int argc, char **argv)
         emc_test_run(false);
     } else if (argc == 3 && strcmp(argv[1], "channel") == 0) {
         why = emc_test_set_channel(atoi(argv[2]));
+    } else if (argc == 3 && strcmp(argv[1], "drive") == 0) {
+        why = emc_test_set_drive(atoi(argv[2]));
     } else if (argc == 3 && strcmp(argv[1], "eth") == 0) {
         why = strcmp(argv[2], "off") == 0 ? emc_test_set_eth(0) : emc_test_set_eth((uint32_t)atoi(argv[2]));
     } else if (argc == 3 && strcmp(argv[1], "rate") == 0) {
@@ -185,7 +188,7 @@ static void cmd_emc(int argc, char **argv)
             why = emc_test_set_power((int)(dbm * 4 + 0.5));
         }
     } else {
-        why = "usage: emc [start|stop|channel <n>|rate <name>|power max|<dBm>|eth <mbit>|off]";
+        why = "usage: emc [start|stop|channel <n>|rate <name>|power max|<dBm>|eth <mbit>|off|drive <0-3>]";
     }
     if (why) {
         err("%s", why);
@@ -215,6 +218,7 @@ static void cmd_help(void)
     printf("emc                         EMC test: radio settings and counters\n"
            "emc start|stop              transmit or not\n"
            "emc eth <mbit>|off          Ethernet stream (0x88B6 frames out of the port)\n"
+           "emc drive <0-3>             RMII TX pins' drive strength (2 = default)\n"
            "emc channel <n>             channel (the country's channels only)\n"
            "emc rate <name>             1m 2m 5.5m 11m 2ms 5.5ms 11ms 6m-54m mcs0-mcs7\n"
            "emc power max|<dBm>         power cap, never above the module's maximum\n");

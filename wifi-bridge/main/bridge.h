@@ -124,6 +124,8 @@ const char *emc_test_set_channel(int ch);
 const char *emc_test_set_rate(const char *name);
 const char *emc_test_set_power(int qdbm);  // <= 0: the maximum
 const char *emc_test_set_eth(uint32_t mbit);  // the Ethernet stream, 0 = off
+const char *emc_test_set_drive(int level);    // RMII TX pins' drive strength 0-3
+int emc_test_drive(void);
 
 // ---- console.c
 void console_start(void);

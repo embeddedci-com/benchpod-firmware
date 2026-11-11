@@ -34,6 +34,7 @@
 
 #include "bridge.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -356,6 +357,33 @@ static void eth_stream_task(void *arg)
             }
         }
     }
+}
+
+// RMII TX pins (fixed IO_MUX pins of the ESP32 EMAC): TXD0, TXD1, TX_EN. Their drive strength
+// sets the edge rate the RMII lines carry next to the PHY; `emc drive <0-3>` (0 about 5 mA,
+// 1 about 10 mA, 2 about 20 mA = the default, 3 about 40 mA).
+static const gpio_num_t k_rmii_tx[] = {GPIO_NUM_19, GPIO_NUM_22, GPIO_NUM_21};
+
+const char *emc_test_set_drive(int level)
+{
+    if (level < 0 || level > 3) {
+        return "drive: 0 (weakest) to 3 (strongest); 2 is the default";
+    }
+    for (size_t i = 0; i < sizeof(k_rmii_tx) / sizeof(k_rmii_tx[0]); i++) {
+        esp_err_t err = gpio_set_drive_capability(k_rmii_tx[i], (gpio_drive_cap_t)level);
+        if (err != ESP_OK) {
+            return esp_err_to_name(err);
+        }
+    }
+    ESP_LOGI(TAG, "RMII TX drive %d", level);
+    return NULL;
+}
+
+int emc_test_drive(void)
+{
+    gpio_drive_cap_t cap = GPIO_DRIVE_CAP_DEFAULT;
+    gpio_get_drive_capability(k_rmii_tx[0], &cap);
+    return (int)cap;
 }
 
 const char *emc_test_set_eth(uint32_t mbit)

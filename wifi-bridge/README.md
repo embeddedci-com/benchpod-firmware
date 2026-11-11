@@ -288,7 +288,8 @@ Options, at build time (`./build.sh emc` regenerates its config each time) or on
 side alone; `EMC_ETH_MBIT=<n>` sends a stream of 1514-byte EtherType 0x88B6 frames out of the
 Ethernet port at that rate, like the pod's EMI build (`emc eth <mbit>|off`), so the bridge's
 Ethernet transmitter runs loaded without a pod. The frames go to 01:80:C2:00:00:0F, which
-switches do not forward.
+switches do not forward. `emc drive <0-3>` sets the drive strength of the RMII TX pins (TXD0, TXD1,
+TX_EN; 2 is the ESP32 default), to see how the RMII edge rate shows up in the emissions.
 
 Without a programmer, through the pod: the bridge must run a dev image (which trusts the dev key)
 and be paired with that pod, and the pod must run a dev build too (release pod firmware refuses
