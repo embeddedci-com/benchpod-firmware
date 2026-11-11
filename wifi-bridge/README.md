@@ -278,7 +278,7 @@ replaces it.
 
 ```sh
 ./build.sh emc                 # -> build-emc/ (sdkconfig.defaults + sdkconfig.defaults.emc)
-EMC_RADIO=0 EMC_ETH_MBIT=20 ./build.sh emc   # or: radio silent, 20 Mbit/s Ethernet stream from boot
+EMC_RADIO=0 EMC_ETH_MBIT=10 ./build.sh emc   # or: radio silent, 10 Mbit/s (10% load) Ethernet stream from boot
 ./flash.sh --emc               # TC2030 pads, as in "Flash"; opens the console
 ./flash.sh                     # afterwards: back to the normal dev build
 ```
