@@ -610,10 +610,11 @@ seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
 RELEASE_TOOL  = python3 ../tools/ice40_release.py
 # (--opt=value: the values start with a dash, which argparse would take for an option)
 RELEASE_FLAGS = --synth-flags="$(SYNTH_FLAGS)" --pnr-flags="$(NEXTPNR_FLAGS)" \
-                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)"
+                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)" \
+                --defines-emu="$(DEFINES) $(EMU_DEFINES)"
 promote:
 	@test -n "$(HW_VERIFIED)" || { echo 'usage: make promote HW_VERIFIED="<which hardware test this build passed>"'; exit 2; }
-	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) $(RELEASE_FLAGS)
+	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) --seed-emu $(SEED_EMU) $(RELEASE_FLAGS)
 check-release:
 	$(RELEASE_TOOL) check $(RELEASE_FLAGS)
 # Put the promoted images where stm32h563/Makefile embeds them (what the release job runs).

@@ -75,10 +75,11 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
-static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge" };
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2" };
 
 /* Targets this build takes: the Wi-Fi bridge's image only with BENCHPOD_WIFI_BRIDGE. */
 static bool target_known(ota_target_t t) {
+    if (t == OTA_TARGET_GW2) return true;
 #if defined(BENCHPOD_WIFI_BRIDGE)
     return (unsigned)t <= OTA_TARGET_BRIDGE;
 #else
@@ -102,6 +103,7 @@ ota_target_t ota_target(void) { return s_target; }
 /* The blob slot a target writes (only for a blob target). */
 static blob_id_t target_blob(ota_target_t t) {
     if (t == OTA_TARGET_BRIDGE) return BLOB_BRIDGE;
+    if (t == OTA_TARGET_GW2) return BLOB_GW2;
     return t == OTA_TARGET_CA ? BLOB_CA : (blob_id_t)(t - OTA_TARGET_GW0);
 }
 

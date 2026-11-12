@@ -92,12 +92,13 @@ bool clock_on_hsi(void);   /* main.c */
  * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
  * pins are the shared PSRAM bus), so switching copies the selected image from its W25Q blob
  * slot (blob_store.h) to offset 0 of the same flash via the proven ice40_flash_program +
- * CRESET-reconfig path (~2 s).  n: 0=closed-loop, 1=deep-DAC-replay.  Returns 0 ok, -1 fail. */
+ * CRESET-reconfig path (~2 s).  n: 0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation.
+ * Returns 0 ok, -1 fail. */
 uint8_t ice40_embedded_gw_version(void) { return (uint8_t)blob_manifest_gw_version(); }
 
 int ice40_reflash_image(int n)
 {
-    blob_id_t id = (n == 1) ? BLOB_GW1 : BLOB_GW0;
+    blob_id_t id = (blob_id_t)ice40_image_slot(n);
     if (!blob_store_present(id)) {
         printf("[ice40] no gateware image %d in the W25Q (slot %s is empty)\n", n, blob_name(id));
         return -1;
@@ -144,12 +145,18 @@ int ice40_reload(void)
     return rc;
 }
 
-/* The image the iCE40 boots from equals gateware slot gw0 or gw1 (a read compare, no write). */
+/* The W25Q slot of gateware image n (0 loop, 1 deep, 2 emulation). */
+int ice40_image_slot(int n)
+{
+    return n == 2 ? (int)BLOB_GW2 : n == 1 ? (int)BLOB_GW1 : (int)BLOB_GW0;
+}
+
+/* The image the iCE40 boots from equals gateware slot gw0, gw1 or gw2 (a read compare, no write). */
 int ice40_boot_image_intact(void)
 {
     int known = 0;
-    for (int n = 0; n < 2; n++) {
-        blob_id_t id = n ? BLOB_GW1 : BLOB_GW0;
+    for (int n = 0; n < 3; n++) {
+        blob_id_t id = (blob_id_t)ice40_image_slot(n);
         if (!blob_store_present(id)) continue;
         known = 1;
         psram_reset_to_spi();

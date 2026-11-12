@@ -6,7 +6,7 @@ Every asset gets a detached 128-byte manifest, `<asset>.sig`:
   off size field
     0    4 magic "BPSG"
     4    2 format (1)
-    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware)
+    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware), 7 gw2
     7    1 flags (0)
     8    4 image size
    12   32 SHA-256 of the image
@@ -53,7 +53,7 @@ CONTEXT = b"benchpod-fw-sign:v1\x00"
 MANIFEST_LEN = 128
 SIGNED_LEN = 64
 # ota_target_t numbering in the firmware (4 ca and 5 tls are configuration, never signed).
-TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6}
+TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6, "gw2": 7}
 FW_INFO_OFFSET = 0x400
 FW_INFO_MAGIC = 0x57465042  # "BPFW"
 

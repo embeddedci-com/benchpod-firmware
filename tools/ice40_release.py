@@ -16,7 +16,10 @@ MANIFEST, and the release job embeds those.
            gateware sources (a source hash + GATEWARE_VERSION).  A gateware change without a
            new promote fails here: build, test on hardware, promote.
   install  check, then put the promoted images where the STM32 build embeds them
-           (ice40/bench_pod_fpga_vbench_pod_{loop,deep}.bin + .gwversion).
+           (ice40/bench_pod_fpga_vbench_pod_{loop,deep,emu}.bin + .gwversion).
+
+Three images: loop (closed-loop DAC), deep (deep DAC replay) and, from gateware v54, emu (the
+sensor emulation image, W25Q slot gw2).
 
 The source hash covers what determines the bitstream's logic: ice40/src/*.v and *.vh, the pin
 constraints and clocks.py.  It does not cover the Makefile (seeds, synthesis flags): a seed
@@ -37,7 +40,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 ICE40 = ROOT / "ice40"
 REL = ICE40 / "release"
 MANIFEST = REL / "MANIFEST"
-IMAGES = ("loop", "deep")
+IMAGES = ("loop", "deep", "emu")
 
 
 def image_path(kind, base=None):
@@ -181,8 +184,8 @@ def cmd_promote(args):
     for kind in IMAGES:
         dst = image_path(kind, REL)
         shutil.copyfile(image_path(kind), dst)
-        seed = args.seed_loop if kind == "loop" else args.seed_deep
-        defines = args.defines_loop if kind == "loop" else args.defines_deep
+        seed = getattr(args, f"seed_{kind}", "unknown")
+        defines = getattr(args, f"defines_{kind}", "")
         lines += [f"{kind}.sha256={sha256(dst)}", f"{kind}.seed={seed}",
                   f"{kind}.defines={defines.strip() or 'unknown'}",
                   f"{kind}.clk48_mhz={clk48_fmax(kind)}"]
@@ -232,7 +235,8 @@ def flag_notes(m, args):
     with.  Informational only: the promoted images stay the hardware-tested ones (see above)."""
     current = {"synth_flags": getattr(args, "synth_flags", ""), "pnr_flags": getattr(args, "pnr_flags", ""),
                "loop.defines": getattr(args, "defines_loop", ""),
-               "deep.defines": getattr(args, "defines_deep", "")}
+               "deep.defines": getattr(args, "defines_deep", ""),
+               "emu.defines": getattr(args, "defines_emu", "")}
     notes = []
     for key, now in current.items():
         now = (now or "").strip()
@@ -262,6 +266,7 @@ def main():
     p.add_argument("--hw-verified", required=True)
     p.add_argument("--seed-loop", default="unknown")
     p.add_argument("--seed-deep", default="unknown")
+    p.add_argument("--seed-emu", default="unknown")
     c = sub.add_parser("check")
     i = sub.add_parser("install")
     for q in (p, c, i):
@@ -269,6 +274,7 @@ def main():
         q.add_argument("--pnr-flags", default="", help="nextpnr-ice40 flags without the seed")
         q.add_argument("--defines-loop", default="", help="Verilog defines of the loop image")
         q.add_argument("--defines-deep", default="", help="Verilog defines of the deep image")
+        q.add_argument("--defines-emu", default="", help="Verilog defines of the emulation image")
     p.set_defaults(fn=cmd_promote)
     c.set_defaults(fn=cmd_check)
     i.set_defaults(fn=cmd_install)
