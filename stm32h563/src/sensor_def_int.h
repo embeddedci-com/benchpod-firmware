@@ -248,3 +248,5 @@ const char *sdj_raw(const sdj_t *j, uint32_t o, uint32_t *len, bool *has_escape)
 /* Decode a string (escapes resolved, \u to UTF-8); false if it does not fit. */
 bool sdj_str(const sdj_t *j, uint32_t o, char *out, size_t cap, size_t *len);
 bool sdj_num(const sdj_t *j, uint32_t o, double *v);
+/* The path of the value or key at `off`, from the document's root: "registers[3].s16be". */
+void sdj_path_at(const sdj_t *j, uint32_t root, uint32_t off, char *out, size_t cap);

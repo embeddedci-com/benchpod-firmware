@@ -39,7 +39,7 @@ void cc_fail(sd_cc_t *c, int code, uint32_t json_off, int32_t expr_off, const ch
 }
 
 /* The path of the value (or key) at off: "registers[3].s16be". */
-static void path_at(const sdj_t *j, uint32_t root, uint32_t off, char *out, size_t cap) {
+void sdj_path_at(const sdj_t *j, uint32_t root, uint32_t off, char *out, size_t cap) {
     size_t n = 0;
     uint32_t cur = sdj_ws(j, root);
     out[0] = '\0';
@@ -880,8 +880,8 @@ static bool compile_analog(sd_cc_t *c, uint32_t root) {
     if (sdj_find(J, root, "excitation", &x)) { if ((e = get_enum(c, x, exc)) < 0) return false; h->excitation = (uint8_t)e; }
     if (!sdj_find(J, root, "range", &v)) { cc_fail(c, SD_E_SCHEMA, root, -1, "kind analog needs 'range'", NULL); return false; }
     if (!check_keys(c, v, rkeys)) return false;
-    if (!sdj_find(J, v, "min", &x) || !get_num(c, x, -1e6, 1e6, false, &h->range_min)) { if (!c->failed) cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "missing 'min'", NULL); return false; }
-    if (!sdj_find(J, v, "max", &x) || !get_num(c, x, -1e6, 1e6, false, &h->range_max)) { if (!c->failed) cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "missing 'max'", NULL); return false; }
+    if (!sdj_find(J, v, "min", &x) || !get_num(c, x, -1e15, 1e15, false, &h->range_min)) { if (!c->failed) cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "missing 'min'", NULL); return false; }
+    if (!sdj_find(J, v, "max", &x) || !get_num(c, x, -1e15, 1e15, false, &h->range_max)) { if (!c->failed) cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "missing 'max'", NULL); return false; }
     if (h->range_min > h->range_max) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "min is above max", NULL); return false; }
     if (!(h->value = expr_field(c, root, "value", true, (uint8_t)(CTX_LETS_BELOW | (h->excitation ? CTX_ANALOG : 0)), false))) return false;
     return true;
@@ -1126,6 +1126,6 @@ int sd_compile(const char *json, size_t json_len, void *prog, size_t prog_cap,
     return SD_OK;
 out:
     if (!err->code) err->code = SD_E_SCHEMA;
-    path_at(&c->j, c->root, err->json_off, err->path, sizeof(err->path));
+    sdj_path_at(&c->j, c->root, err->json_off, err->path, sizeof(err->path));
     return err->code;
 }
