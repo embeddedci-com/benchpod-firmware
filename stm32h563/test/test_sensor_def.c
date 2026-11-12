@@ -445,6 +445,7 @@ static void test_gps(void) {
             if (n == m && memcmp(eng, ref, n) == 0) eq++;
             gps_nmea_advance(&f, period_ms);
         }
+        if (q == 0) printf("  steps: a full GPS epoch (6 sentences, 3 GSV) takes %u VM steps at most\n", sd_max_steps(&s.in));
     }
     CHECK(worst < 1e-9, "the moving position tracks gps_nmea_advance (worst %.3g deg)", worst);
     CHECK(eq == epochs, "moving epochs byte-equal %u of %u", eq, epochs);
@@ -469,7 +470,6 @@ static void test_gps(void) {
     CHECK(sd_uart_next_ms(&s.in) == t0 + 200, "5 Hz after the change (%lld)", (long long)(sd_uart_next_ms(&s.in) - t0));
     /* a buffer too small */
     CHECK(sd_uart_epoch(&s.in, eng, 10, &n, &at) == SD_E_SPACE, "small buffer refused");
-    printf("  steps: GPS epoch took %u VM steps at most\n", sd_max_steps(&s.in));
 }
 
 /* ---- the expression VM, through tiny definitions ------------------------------------------ */

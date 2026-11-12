@@ -122,12 +122,15 @@ static int power_on(sd_inst_t *in, uint8_t img[SD_REGIMAGE], sd_img_result_t *re
         rc = write_entry(in, &e[i], i, tmp, true);
         if (rc) return rc;
     }
-    /* phase 2: the data entries again, against the power-on configuration */
-    memcpy(in->img_base, tmp, SD_REGIMAGE);
-    rc = sd_prepare(in);
-    if (rc) return rc;
-    rc = rewrite(in, img);
-    if (rc) return rc;
+    /* phase 2: the data entries again, against the power-on configuration (only when an
+       expression reads reg[]; otherwise phase 1 already gave the final values) */
+    if (h->uses_reg) {
+        memcpy(in->img_base, tmp, SD_REGIMAGE);
+        rc = sd_prepare(in);
+        if (rc) return rc;
+        rc = rewrite(in, img);
+        if (rc) return rc;
+    }
     apply_corrupt(in, img);
     memset(res, 0, sizeof(*res));
     memset(res->changed, 0xFF, sizeof(res->changed));

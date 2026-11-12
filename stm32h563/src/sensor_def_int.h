@@ -106,6 +106,7 @@ typedef struct {
     uint16_t name, label;        /* string records */
     uint8_t  n_params, n_lets, n_states, n_funcs, n_frags, n_entries, n_rules, n_msgs, n_reqs;
     uint8_t  fill;
+    uint8_t  uses_reg;           /* some expression reads reg[]: power on needs its second pass */
     int8_t   utc_param;          /* param index of utc_start, -1 none */
     uint8_t  n_cmds;
     uint16_t params, lets, states, funcs, frags, entries, owner, rules, msgs, reqs;
@@ -129,6 +130,16 @@ typedef struct {
     uint16_t value;
     double   range_min, range_max;
 } sdp_hdr_t;
+
+/* Program offsets are 16 bits; every record and the code fit SD_PROG_MAX. */
+_Static_assert(SD_PROG_MAX <= 0xFFFFu, "program offsets are 16-bit");
+_Static_assert(SD_STIM_MAX <= 0xFFFFu, "stimulus offsets are 16-bit");
+_Static_assert(SD_SCRATCH <= 0xFFFFu && SD_STACK <= 0xFFFFu, "VM indexes are 16-bit");
+_Static_assert(SD_MAX_ENTRIES <= 255u, "the owner map holds an entry index in a byte (0xFF = none)");
+_Static_assert(SD_MAX_RULES <= 32u, "on_write sets are a 32-bit mask");
+_Static_assert(SD_STIM_FAULTS <= 32u, "active faults are a 32-bit mask");
+_Static_assert(SD_MAX_PARAMS <= 16u, "stuck params are a 16-bit mask");
+_Static_assert(SD_JSON_MAX <= 0xFFFFu, "JSON offsets of names are 16-bit");
 
 static inline const sdp_hdr_t *sdp_hdr(const uint8_t *p) { return (const sdp_hdr_t *)(const void *)p; }
 /* A string record: u8 length then the characters. */

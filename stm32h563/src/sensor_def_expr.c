@@ -297,6 +297,7 @@ static uint16_t parse_primary(ps_t *ps) {
                 if (!n || !add_kid(ps, n, a)) return 0;
                 ND(n).op = regs[k].op;
                 c->deps |= DEP_REG;
+                if (c->h) c->h->uses_reg = 1;
                 return n;
             }
         return resolve(ps, &t);
