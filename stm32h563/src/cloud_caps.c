@@ -42,7 +42,7 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
                "\"nrst_pin\":%s,"
                "\"power_profile\":true,"
-               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"pod_current\":%s,"
+               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"can_fd\":true,\"pod_current\":%s,"
                "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
                "\"sensor_types\":true,\"gps\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
@@ -68,6 +68,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
                    ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
+                   ",\"can_fd\""  /* CAN FD: can_config data_bitrate, 64-byte frames */
                    ",\"sensor_types\""     /* sensor_types lists the emulated I2C sensors */
                    ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
                    ",\"usb_net_setting\""  /* usb_network on/off, device-only (pod_policy.h) */
