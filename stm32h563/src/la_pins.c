@@ -12,9 +12,33 @@ typedef struct {
     uint8_t fn;      /* la_fn_t */
     uint8_t gpio;    /* la_gpio_mode_t, meaningful only when fn == LA_FN_GPIO */
     uint8_t level;   /* commanded level for gpio output / open_drain */
+    uint8_t owner;   /* sensor-manager slots owning the pin (bit per slot), 0 = none */
 } la_pin_t;
 
 static la_pin_t s_pin[LA_PINS_COUNT + 1];   /* index 1..14 */
+static la_owner_namer_t s_namer;
+
+void la_pins_set_owner_namer(la_owner_namer_t namer) { s_namer = namer; }
+
+void la_pins_set_owner(unsigned la, uint8_t owner_mask) {
+    if (la >= 1u && la <= LA_PINS_COUNT) s_pin[la].owner = owner_mask;
+}
+
+uint8_t la_pins_owner(unsigned la) {
+    return (la >= 1u && la <= LA_PINS_COUNT) ? s_pin[la].owner : 0u;
+}
+
+bool la_fn_is_sensor(la_fn_t fn) {
+    return fn == LA_FN_I2C_SDA || fn == LA_FN_I2C_SCL || (fn >= LA_FN_SENSOR_TX && fn <= LA_FN_SENSOR_CS);
+}
+
+/* The first owner's instance name of a pin, or NULL. */
+static const char *owner_name(unsigned la) {
+    uint8_t m = s_pin[la].owner;
+    for (unsigned s = 0; m && s < LA_PINS_OWNER_SLOTS; s++)
+        if ((m & (1u << s)) && s_namer) return s_namer(s);
+    return NULL;
+}
 
 static bool la_ok(unsigned la) { return la >= 1u && la <= LA_PINS_COUNT; }
 
@@ -26,7 +50,8 @@ const char *la_fn_name(la_fn_t fn) {
     static const char *const names[LA_FN__COUNT] = {
         "none", "gpio", "uart_rx", "uart_tx", "swd_clk", "swd_dio",
         "i2c_sda", "i2c_scl", "step", "step_dir",
-        "spi_sck", "spi_mosi", "spi_miso", "spi_cs", "gps_tx",
+        "spi_sck", "spi_mosi", "spi_miso", "spi_cs",
+        "sensor_tx", "sensor_rx", "sensor_drdy", "sensor_sck", "sensor_mosi", "sensor_miso", "sensor_cs",
     };
     return ((unsigned)fn < (unsigned)LA_FN__COUNT) ? names[fn] : "none";
 }
@@ -103,20 +128,31 @@ static const char *release_hint(la_fn_t fn, unsigned la, char *buf, size_t cap) 
         return buf;
     case LA_FN_UART_RX: case LA_FN_UART_TX: return "stop the uart proxy first";
     case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: return "end the SWD session first";
-    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: return "stop the sensor emulation first ({\"cmd\":\"sensor_stop\"})";
+    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL:
+    case LA_FN_SENSOR_TX: case LA_FN_SENSOR_RX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_SCK:
+    case LA_FN_SENSOR_MOSI: case LA_FN_SENSOR_MISO: case LA_FN_SENSOR_CS: {
+        const char *inst = owner_name(la);
+        if (inst) snprintf(buf, cap, "stop the sensor emulation first ({\"cmd\":\"sensor_stop\",\"instance\":\"%s\"})", inst);
+        else      snprintf(buf, cap, "stop the sensor emulation first ({\"cmd\":\"sensor_stop\",\"all\":true})");
+        return buf;
+    }
     case LA_FN_STEP:    case LA_FN_STEP_DIR: return "wait for the step train to finish";
     case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_MISO: case LA_FN_SPI_CS:
         return "stop the SPI session first ({\"cmd\":\"spi_stop\"})";
-    case LA_FN_GPS_TX: return "stop the GPS receiver first ({\"cmd\":\"gps_stop\"})";
     default: return "";
     }
 }
 
 static void conflict_msg(unsigned la, char *err, size_t cap) {
-    char hint[64];
+    char hint[112];
     la_fn_t owner = (la_fn_t)s_pin[la].fn;
-    snprintf(err, cap, "pin conflict: LA%u is in use by %s; %s",
-             la, la_fn_name(owner), release_hint(owner, la, hint, sizeof(hint)));
+    const char *inst = la_fn_is_sensor(owner) ? owner_name(la) : NULL;
+    if (inst)
+        snprintf(err, cap, "pin conflict: LA%u is in use by sensor:%s (%s); %s",
+                 la, inst, la_fn_name(owner), release_hint(owner, la, hint, sizeof(hint)));
+    else
+        snprintf(err, cap, "pin conflict: LA%u is in use by %s; %s",
+                 la, la_fn_name(owner), release_hint(owner, la, hint, sizeof(hint)));
 }
 
 /* Why a function can't share its line with an engaged pull-DOWN (NULL = it can).  Pull-ups
@@ -125,7 +161,8 @@ static const char *pull_down_reason(la_fn_t fn, la_gpio_mode_t mode) {
     switch (fn) {
     case LA_FN_GPIO:
         return (mode == LA_GPIO_OPEN_DRAIN) ? "a released line would read low" : NULL;
-    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_GPS_TX: return "the line idles high";
+    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_SENSOR_TX: case LA_FN_SENSOR_RX:
+        return "the line idles high";
     case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: return "an open-drain bus needs pull-ups";
     case LA_FN_SWD_DIO: return "SWDIO is pulled up when released";
     default: return NULL;   /* none, gpio input/output, swd_clk, step, step_dir, spi_* (driven) */
@@ -140,7 +177,7 @@ static const char *fn_display(la_fn_t fn, la_gpio_mode_t mode, char *buf, size_t
 }
 
 bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, size_t n,
-                         uint16_t free_fns, uint16_t pull_mask, char *err, size_t cap) {
+                         uint32_t free_fns, uint16_t pull_mask, char *err, size_t cap) {
     for (size_t i = 0; i < n; i++) {
         unsigned la = las[i];
         if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..14)", la); return false; }
@@ -229,6 +266,7 @@ void la_pins_claim(la_fn_t fn, la_gpio_mode_t mode, uint8_t level, const uint8_t
         s_pin[la].fn    = (uint8_t)fn;
         s_pin[la].gpio  = (fn == LA_FN_GPIO) ? (uint8_t)mode : (uint8_t)LA_GPIO_NONE;
         s_pin[la].level = level ? 1u : 0u;
+        s_pin[la].owner = 0u;   /* a sensor sets its owner bits after the claim */
     }
 }
 
@@ -409,7 +447,23 @@ bool la_pins_plan_step(unsigned la, unsigned dir_la, la_step_plan_t *plan, char 
 void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     la_gpio_mode_t m = la_pins_gpio(la);
     int level = la_pins_level(la);
-    bp_emit(e, "{\"la\":%u,\"function\":\"%s\",\"gpio\":", la, la_fn_name(la_pins_fn(la)));
+    bp_emit(e, "{\"la\":%u,\"function\":\"%s\",", la, la_fn_name(la_pins_fn(la)));
+    /* An emulated sensor's pin names its instance: "owner":"sensor:env". A shared I2C line names
+       the first and counts the others ("sensor:env+2"; sensor_status lists every instance's
+       pins), which keeps the whole la_pins reply inside the cloud reply cap. */
+    if (s_pin[la].owner && s_namer) {
+        const char *first = NULL;
+        unsigned more = 0;
+        for (unsigned s = 0; s < LA_PINS_OWNER_SLOTS; s++) {
+            const char *n = (s_pin[la].owner & (1u << s)) ? s_namer(s) : NULL;
+            if (!n) continue;
+            if (!first) first = n;
+            else more++;
+        }
+        if (first && more) bp_emit(e, "\"owner\":\"sensor:%s+%u\",", first, more);
+        else if (first)    bp_emit(e, "\"owner\":\"sensor:%s\",", first);
+    }
+    bp_emit_raw(e, "\"gpio\":");
     if (m != LA_GPIO_NONE) bp_emit(e, "\"%s\"", la_gpio_mode_name(m));
     else                   bp_emit_raw(e, "null");
     if (level >= 0) bp_emit(e, ",\"level\":%d,\"pull\":", level);
