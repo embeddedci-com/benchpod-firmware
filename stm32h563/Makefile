@@ -371,9 +371,10 @@ $(BUILD_DIR)/mbedtls/%.o: $(MBEDTLS)/library/%.c | $(BUILD_DIR)/mbedtls
 # (src/blob_store.h), and an installer sends them from build/blobs/ (below).
 ICE40_LOOP_BIN := ../ice40/bench_pod_fpga_vbench_pod_loop.bin
 ICE40_DEEP_BIN := ../ice40/bench_pod_fpga_vbench_pod_deep.bin
+ICE40_EMU_BIN  := ../ice40/bench_pod_fpga_vbench_pod_emu.bin
 
 # The blobs that go with this firmware, as the pod's W25Q slots hold them (src/blob_store.h):
-# build/blobs/blob-{gw0,gw1,esp}.bin + blobs-manifest.json for installers, and blob_manifest_gen.h so the
+# build/blobs/blob-{gw0,gw1,gw2,esp}.bin (gw2 = the emulation image, gateware v54+) + blobs-manifest.json for installers, and blob_manifest_gen.h so the
 # firmware knows which blobs it was built with.
 BLOB_DIR      := $(BUILD_DIR)/blobs
 GEN_BLOB_MANIFEST := $(BUILD_DIR)/blob_manifest_gen.h
@@ -382,9 +383,9 @@ GEN_BLOB_MANIFEST := $(BUILD_DIR)/blob_manifest_gen.h
 BRIDGE_BIN     ?= ../wifi-bridge/build/benchpod-wifi-bridge.bin
 BRIDGE_VERSION := $(shell sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' ../wifi-bridge/CMakeLists.txt)
 BRIDGE_BLOB_ARGS := $(if $(and $(filter 1,$(WIFI_BRIDGE)),$(wildcard $(BRIDGE_BIN))),--bridge $(BRIDGE_BIN) --bridge-version $(BRIDGE_VERSION))
-$(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard $(ICE40_LOOP_BIN).gwversion) $(wildcard $(ESP_SLAVE_BIN)) $(if $(BRIDGE_BLOB_ARGS),$(BRIDGE_BIN)) | $(BUILD_DIR)
+$(GEN_BLOB_MANIFEST): tools/blob_manifest.py $(wildcard $(ICE40_LOOP_BIN)) $(wildcard $(ICE40_DEEP_BIN)) $(wildcard $(ICE40_EMU_BIN)) $(wildcard $(ICE40_LOOP_BIN).gwversion) $(wildcard $(ESP_SLAVE_BIN)) $(if $(BRIDGE_BLOB_ARGS),$(BRIDGE_BIN)) | $(BUILD_DIR)
 	@v=$$(cat $(ICE40_LOOP_BIN).gwversion 2>/dev/null); \
-	 python3 tools/blob_manifest.py --gw0 $(ICE40_LOOP_BIN) --gw1 $(ICE40_DEEP_BIN) --esp $(ESP_SLAVE_BIN) \
+	 python3 tools/blob_manifest.py --gw0 $(ICE40_LOOP_BIN) --gw1 $(ICE40_DEEP_BIN) --gw2 $(ICE40_EMU_BIN) --esp $(ESP_SLAVE_BIN) \
 	   $(BRIDGE_BLOB_ARGS) --gw-version $${v:-0} --out-dir $(BLOB_DIR) --header $@
 	@echo "blobs: $$(ls $(BLOB_DIR) | tr '\n' ' ')"
 $(BUILD_DIR)/blob_manifest.o: $(GEN_BLOB_MANIFEST)
@@ -589,7 +590,7 @@ help:
 	@echo "  flash          : SWD flash via OpenOCD (needs a probe; verifies)"
 	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
 	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
-	@echo "  build/blobs/   : blob-{gw0,gw1,esp}.bin + blobs-manifest.json for the W25Q blob slots"
+	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"

@@ -10,8 +10,9 @@
 // edge, MISO sampled on the rising edge with a setup time, an optional idle gap between bytes
 // (the H5 SPI's MIDI, master inter-data idleness), and board/pad delays on SCK, MOSI and MISO.
 // The master's clock has an arbitrary, drifting phase against clk48.  Each rate runs PING,
-// VERSION, STATUS and a 256-byte I2C register-file write + read-back (every byte value, a
-// streaming reply), so every reply path the firmware uses goes through it.
+// VERSION, STATUS and, in the emulation image (v54: the only one with I2C targets), a 256-byte
+// I2C register-image write + read-back (every byte value, a streaming reply), so every reply
+// path the firmware uses goes through it.
 //
 //   * /128 (1.95 MHz), no gap: what every firmware so far sends: must pass.
 //   * /64  (3.9 MHz),  no gap: must pass from v52 (v51 fails it here as on hardware).
@@ -19,7 +20,7 @@
 //     turnaround); a change that eats /64's ~30% margin fails here first.
 // (/32, 7.8 MHz, is out of reach: the two-flop SCK synchroniser puts ~140 ns between a rise and
 // the next MISO bit; see spi_slave.v.)
-// Runs on both images (make topspilinktest).
+// Runs on all three images (make topspilinktest).
 // ============================================================================
 `timescale 1ns/1ps
 module tb_top_spilink;
@@ -90,15 +91,18 @@ module tb_top_spilink;
                 cs_low; xfer(8'h02, j); xfer(8'h00, r); cs_high; check("VERSION", r, dut.engines_i.GATEWARE_VERSION);
                 cs_low; xfer(8'h03, j); xfer(8'h00, r); cs_high; check("STATUS bit 7", r & 8'h80, 8'h00);
             end
-            // 256-byte register file: write every value, read it back streamed
-            cs_low; xfer(8'h62, j); xfer(8'h00, j); xfer(8'h00, j); xfer(8'h01, j);
+`ifdef USE_EMULATION
+            // 256-byte register image of I2C target 2 (v54: the emulation image's I2C_* commands
+            // take a target byte): write every value, read it back streamed
+            cs_low; xfer(8'h62, j); xfer(8'h02, j); xfer(8'h00, j); xfer(8'h00, j); xfer(8'h01, j);
             for (k = 0; k < 256; k = k + 1) xfer(k[7:0] ^ 8'h5A, j);
             cs_high;
             // read as the firmware does (fpga_i2c_read_regs): ask for len + 1, drop the lead byte
-            cs_low; xfer(8'h63, j); xfer(8'h00, j); xfer(8'h01, j); xfer(8'h01, j);
+            cs_low; xfer(8'h63, j); xfer(8'h02, j); xfer(8'h00, j); xfer(8'h01, j); xfer(8'h01, j);
             xfer(8'h00, j);
             for (k = 0; k < 256; k = k + 1) begin xfer(8'h00, r); check("REG read-back", r, k[7:0] ^ 8'h5A); end
             cs_high;
+`endif
             if (fails_rate == 0)
                 $display("     %0.2f MHz, %0d-SCK gap: %0d PING/VERSION/STATUS rounds + 256-byte write/read-back clean",
                          500.0 / half, g, rounds);

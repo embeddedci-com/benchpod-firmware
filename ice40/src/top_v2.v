@@ -32,6 +32,7 @@
 // apart.  The SPI command set is in ice40/PROTOCOL.md.
 // ============================================================================
 `include "sys_config.vh"   // SYS_CLK_MHZ — single source (tools/gen_protocol.py)
+`include "image_config.vh" // which of the three images this build is (HAS_DAC_LOOP / HAS_EMULATION)
 module top (
     input  wire        clk48,
 
@@ -221,7 +222,7 @@ module top (
     // value mid-change.  dac_loop now publishes one coherent snapshot and holds it >= 12 clk48,
     // so cdc_pulse_payload carries it across whole (same rule as every other crossing).
     wire [32:0] loop_tlm_clk;                            // {tripped, in, v}
-`ifndef USE_DEEP_REPLAY
+`ifdef HAS_DAC_LOOP
     // ---- loop parameters: clk -> clk48 through cdc_pulse_payload (v38) ----
     // Until v37 the loop read k/vmin/vmax/tick/src/fixed/step/in_* as clk registers straight
     // from clk48 logic.  clocks.py declares clk and clk48 unrelated, so those paths were never
@@ -282,7 +283,7 @@ module top (
         .src_clk(clk48), .src_pulse(loop_tlm_stb), .src_data({loop_tripped, loop_in, loop_v}),
         .dst_clk(clk), .dst_pulse(), .dst_data(loop_tlm_clk));
 `else
-    assign dac_loop_mode48 = 1'b0;      // deep-replay build: no control loop
+    assign dac_loop_mode48 = 1'b0;      // deep and emulation builds: no control loop
     assign loop_tripped = 1'b0;
     assign loop_tlm_stb = 1'b0; assign loop_tlm_clk = 33'd0;
     assign loop_raddr = 12'd0; assign loop_strm_data = 8'd0;
@@ -1219,10 +1220,12 @@ module top (
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
     localparam [7:0] IMG_FEATURES = 8'h02;   // deep-DAC-PSRAM-replay
+`elsif USE_EMULATION
+    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd53), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd54), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

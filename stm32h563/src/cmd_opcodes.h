@@ -47,6 +47,12 @@
 #define CMD_I2C_LOAD_REGS      0x62u
 #define CMD_I2C_READ_REGS      0x63u
 #define CMD_I2C_STATUS         0x64u
+#define CMD_I2C_LOAD_ATTRS     0x6Au
+#define CMD_I2C_READ_ATTRS     0x6Bu
+#define CMD_I2C_TIMES          0x6Cu
+#define CMD_I2C_DRDY           0x6Du
+#define CMD_EMU_PINMAP         0x6Eu
+#define CMD_EMU_CONFIG         0x6Fu
 #define CMD_LA_CAPTURE         0x69u
 #define CMD_UART_CONFIG        0x70u
 #define CMD_UART_DISABLE       0x71u
@@ -55,5 +61,11 @@
 #define CMD_UART_STATUS        0x74u
 #define CMD_UART2_CONFIG       0x75u
 #define CMD_UART2_WRITE        0x76u
+#define CMD_UART2_READ         0x77u
+#define CMD_UART2_STATUS       0x78u
+#define CMD_EMU_FIFO_WRITE     0x7Au
+#define CMD_EMU_FIFO_STATUS    0x7Bu
+#define CMD_I2C_READ_LOG       0x79u
+#define CMD_SPIT_CONFIG        0x7Cu
 
 #endif /* CMD_OPCODES_H */
