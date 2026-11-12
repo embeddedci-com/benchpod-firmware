@@ -142,21 +142,32 @@ static const char *kind_name(sd_kind_t k) {
     }
 }
 
+/* An unsigned 64-bit value in decimal (newlib-nano printf has no %lld). */
+static void u64_dec(unsigned long long v, char *out, size_t cap, unsigned min_digits) {
+    char t[24];
+    unsigned n = 0;
+    do { t[n++] = (char)('0' + (int)(v % 10u)); v /= 10u; } while (v && n < sizeof(t));
+    while (n < min_digits && n < sizeof(t)) t[n++] = '0';
+    size_t i = 0;
+    while (n && i + 1 < cap) out[i++] = t[--n];
+    out[i] = '\0';
+}
+
 /* A double as JSON: integers as integers, else up to 6 decimals, trailing zeros cut
-   (newlib-nano printf has no %f). NaN/inf become null. */
+   (newlib-nano printf has neither %f nor %lld). NaN/inf become null. */
 static void emit_num(bp_emit_t *e, double v) {
     if (!(v == v) || v > 9.0e15 || v < -9.0e15) { bp_emit_raw(e, "null"); return; }
-    if (v == floor(v) && fabs(v) < 9.0e15) { bp_emit(e, "%lld", (long long)v); return; }
     bool neg = v < 0;
     double a = neg ? -v : v;
-    long long whole = (long long)floor(a);
-    long long frac = llround((a - (double)whole) * 1e6);
-    if (frac >= 1000000) { whole++; frac -= 1000000; }
-    if (frac == 0) { bp_emit(e, "%s%lld", neg ? "-" : "", whole); return; }
-    char f[24];
-    snprintf(f, sizeof(f), "%06lld", frac);
+    unsigned long long whole = (unsigned long long)floor(a);
+    unsigned long long frac = (unsigned long long)llround((a - (double)whole) * 1e6);
+    if (frac >= 1000000u) { whole++; frac -= 1000000u; }
+    char w[24], f[24];
+    u64_dec(whole, w, sizeof(w), 1);
+    if (frac == 0) { bp_emit(e, "%s%s", (neg && whole) ? "-" : "", w); return; }
+    u64_dec(frac, f, sizeof(f), 6);
     for (int i = 5; i > 0 && f[i] == '0'; i--) f[i] = '\0';
-    bp_emit(e, "%s%lld.%s", neg ? "-" : "", whole, f);
+    bp_emit(e, "%s%s.%s", neg ? "-" : "", w, f);
 }
 
 static void emit_strn(bp_emit_t *e, const char *s, size_t n) {
