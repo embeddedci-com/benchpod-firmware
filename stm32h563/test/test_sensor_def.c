@@ -602,7 +602,7 @@ static void test_vm(void) {
     expect_err("\"constants\":{\"K\":\"p\"}", "K", "constants.K: a constant can only use numbers and earlier constants");
     expect_err("\"lett\":[]", "1", "unknown key 'lett'");
     /* deep nesting is refused, not a crash */
-    char deep[700];
+    char deep[1024];
     size_t q = 0;
     for (int i = 0; i < 300; i++) deep[q++] = '(';
     deep[q++] = '1';

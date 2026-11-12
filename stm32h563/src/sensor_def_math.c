@@ -257,8 +257,9 @@ double sd_parse_number(const char *s, size_t n, size_t *used) {
     else if (e10 < 0 && e10 >= -22 && m <= (1ull << 53)) v = v / p10[-e10];
     else {
         int e = e10;
-        while (e > 22) { v *= 1e22; e -= 22; if (v == inf()) break; }
-        while (e < -22) { v /= 1e22; e += 22; if (v == 0) break; }
+        while (e > 22 && v != inf()) { v *= 1e22; e -= 22; }
+        while (e < -22 && v != 0) { v /= 1e22; e += 22; }
+        if (e > 22 || e < -22) e = 0;   /* already inf or 0 */
         v = e >= 0 ? v * p10[e] : v / p10[-e];
     }
     return neg ? -v : v;
