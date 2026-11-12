@@ -574,6 +574,7 @@ static bool compile_i2c_spi(sd_cc_t *c, uint32_t root, bool spi) {
         if (sdj_find(J, v, "page", &x)) {
             if (!get_int(c, x, 0, 65280, &a)) return false;
             if (h->addr_bits != 16 && a) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, x), -1, "page needs register_address_bits: 16", NULL); return false; }
+            if (a & 0xFF) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, x), -1, "i2c.page: must be a multiple of 0x100", NULL); return false; }
             h->page = (uint16_t)a;
         }
         if (sdj_find(J, v, "auto_increment", &x)) { bool b; if (!get_bool(c, x, &b)) return false; h->auto_inc = b; }

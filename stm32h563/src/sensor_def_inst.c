@@ -72,6 +72,13 @@ const char *sd_name(const sd_inst_t *in, size_t *len) {
     return s;
 }
 
+const char *sd_label(const sd_inst_t *in, size_t *len) {
+    uint8_t l = 0;
+    const char *s = sd_h(in)->label ? sdp_str(in->prog, sd_h(in)->label, &l) : "";
+    if (len) *len = l;
+    return s;
+}
+
 unsigned sd_n_params(const sd_inst_t *in) { return sd_h(in)->n_params; }
 
 int sd_param_index(const sd_inst_t *in, const char *key) {

@@ -4,7 +4,7 @@
  *   capture, stream, measure        16-bit ADC into PSRAM, read back from the RAM pool
  *   capture_dual, la_capture        deep ADC/LA captures, streamed chunked out of PSRAM
  *   capture_read                    resume a stalled capture_dual / la_capture read-back
- *   test, sensor_regs, sensor_la    synthetic and I2C-sensor byte read-backs
+ *   test, sensor_la                 synthetic and I2C-sensor byte read-backs
  *
  * The heavy handlers arm the capture and return; capture_poll (from command_handler_poll) waits
  * for completion and streams the reply through the bulk sender, paced by the connection's send
@@ -25,7 +25,7 @@
 #include "adc_pool.h"       /* the RAM sample buffer, shared with SCPI and the console */
 #include "b64url.h"
 #include "la_pins.h"        /* capture-trigger parsing/messages */
-#include "sensor_sim.h"
+#include "sensor_mgr.h"   /* sensor_la: an I2C instance's pins */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1461,29 +1461,17 @@ void handle_measure(int conn_id, const char *json) {
     dac_trace_note_capture(samples);   /* the read-back lands in the pool */
 }
 
-void handle_sensor_regs(int conn_id, const char *json) {
-    char start_s[8] = {0}, len_s[8] = {0};
-    json_get_value(json, "start", start_s, sizeof(start_s));
-    json_get_value(json, "len",   len_s,   sizeof(len_s));
-
-    uint8_t start = start_s[0] ? (uint8_t)strtol(start_s, NULL, 0) : 0;
-    size_t  len   = len_s[0]   ? (size_t)atoi(len_s)               : 256;
-
-    if (!sensor_sim_active()) { send_error(conn_id, "no sensor active"); return; }
-    if (len == 0 || (size_t)start + len > 256) {
-        send_error(conn_id, "start/len out of range");
-        return;
-    }
-    if (!heavy_begin(conn_id)) return;
-    if (sensor_sim_read_regs(start, adc_cmd_buf, len) != 0) {
-        heavy_release(conn_id);
-        send_error(conn_id, "read regs failed");
-        return;
-    }
-    bulk_begin(conn_id, len, false);   /* paced send; frees the gate when done */
-}
-
+/* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}: an I2C instance's
+   SDA/SCL captured, 4 samples per byte (see fpga_i2c_la_capture). SPI and UART instances: use
+   la_capture on their pins. */
 void handle_sensor_la(int conn_id, const char *json) {
+    char inst[40] = {0}, err[SM_ERR_MAX];
+    unsigned sda = 0, scl = 0;
+    if (!json_get_value(json, "instance", inst, sizeof(inst)) || !inst[0]) { send_error(conn_id, "missing instance"); return; }
+    if (sm_i2c_pins(inst, &sda, &scl, err, sizeof(err)) != 0) {
+        send_error(conn_id, err[0] ? err : "sensor_la captures I2C sensors only; use la_capture for SPI and UART pins");
+        return;
+    }
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     /* "samples" here = packed capture bytes (4 raw {SCL,SDA} samples per byte) */
@@ -1495,7 +1483,7 @@ void handle_sensor_la(int conn_id, const char *json) {
         return;
     }
     if (!heavy_begin(conn_id)) return;
-    if (fpga_i2c_la_capture(adc_cmd_buf, bytes, sr_hz) != 0) {
+    if (fpga_i2c_la_capture(adc_cmd_buf, bytes, sr_hz, sda, scl) != 0) {
         heavy_release(conn_id);
         send_error(conn_id, "la capture failed");
         return;

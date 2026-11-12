@@ -170,6 +170,7 @@ typedef struct sd_inst {
 int  sd_inst_init(sd_inst_t *in, const void *prog, size_t prog_len, sd_err_t *err);
 sd_kind_t sd_kind(const sd_inst_t *in);
 const char *sd_name(const sd_inst_t *in, size_t *len);
+const char *sd_label(const sd_inst_t *in, size_t *len);           /* "" when it has none */
 unsigned sd_n_params(const sd_inst_t *in);
 int  sd_param_index(const sd_inst_t *in, const char *key);          /* -1 unknown */
 int  sd_param_info(const sd_inst_t *in, unsigned i, sd_param_info_t *out);
@@ -236,6 +237,8 @@ typedef struct {
 } sd_bus_info_t;
 
 int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *out);
+/* The bytes of writable:false entries (a bit per byte): the gateware stores no DUT write there. */
+int sd_regs_ro_map(const sd_inst_t *in, uint8_t ro[SD_REGIMAGE / 8]);
 int sd_command(const sd_inst_t *in, unsigned i, sd_command_t *out);
 /* Data-ready rate (Hz, 0 = none) and enable, from the live image. */
 int sd_drdy_eval(sd_inst_t *in, const uint8_t live[SD_REGIMAGE], double *rate_hz, bool *enabled);

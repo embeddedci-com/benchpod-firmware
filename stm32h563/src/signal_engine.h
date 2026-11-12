@@ -175,7 +175,15 @@ uint16_t fpga_dac_loop_input(void);
 /* FPGA_FEATURES (0x18) bits — which optional block the running warmboot image carries. */
 #define FPGA_FEATURE_CONTROL_LOOP  0x01u
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
+#define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
 uint8_t  signal_engine_fpga_features(void);
+/* The running image: 0 loop, 1 deep replay, 2 sensor emulation, -1 unknown. Reads FPGA_FEATURES
+   over SPI (hw worker). */
+int      signal_engine_image_kind(void);
+/* "loop", "deep", "emulation", or "unknown" for any other value. */
+const char *signal_engine_image_name(int kind);
+/* The gateware version from which the emulation image exists (FPGA_FEATURES bit2). */
+#define EMULATION_MIN_GW  54u
 
 /* Is the CLOSED-LOOP engine actually present in the image that is running right now?
    The two swappable images report the SAME GATEWARE_VERSION (only FEATURES differs), so a
@@ -186,12 +194,12 @@ uint8_t  signal_engine_fpga_features(void);
    Reads FPGA_FEATURES live over SPI, so call it from the hw worker (heavy gate held). */
 bool     signal_engine_has_control_loop(void);
 
-/* iCE40 image switch (0=closed-loop, 1=deep-DAC-replay).  Despite the name this is not an
-   SB_WARMBOOT: it quiesces the PSRAM masters, then REFLASHES the iCE40 config flash from W25Q
-   slot gw0/gw1 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads version/features
-   and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
-   -3 reflash failed twice (falls back to image 0), -5 the PSRAM-write selftest failed on the
-   new image (falls back to image 0). */
+/* iCE40 image switch (0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation).  Despite the name
+   this is not an SB_WARMBOOT: it quiesces the PSRAM masters, then REFLASHES the iCE40 config flash
+   from W25Q slot gw0/gw1/gw2 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads
+   version/features and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
+   -2 the image's W25Q slot is empty (nothing changed), -3 reflash failed twice (falls back to
+   image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0). */
 int      fpga_warmboot(uint8_t image);
 
 /* Bring every gateware PSRAM master (deep-replay reader / closed loop / capture writer) to a
@@ -301,7 +309,7 @@ typedef struct {
     bool gpio_read;       /* GPIO_GET: live LA pin levels (gpio read, la_pins levels) */
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
     bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
-    bool uart2;           /* UART2_CONFIG: the TX-only second UART (gps_start) */
+    bool emulation;       /* the sensor-emulation image (v54+) runs or is installed in slot gw2 */
 } signal_engine_caps_t;
 
 /* Fill *out with the running image's feature flags. Safe to call from any task. */
@@ -639,48 +647,15 @@ void fpga_spi_cs(bool asserted);
 int  fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n);
 
 /* ===========================================================================
- * Emulated I2C sensor — generic FPGA-backed I2C target driven over SPI.
- *
- * The FPGA is sensor-agnostic: it serves a 256-byte register image (filled by
- * this firmware) as an I2C slave on two LA channels, captures DUT writes, and
- * runs a configurable conversion/busy-bit handshake.  Sensor-specific models
- * (sensor_bmp280.c, …) build the register image and pick the handshake config.
- * SDA/SCL are 1-based LA channel indices (LA1..LA14).
+ * Emulated sensors: the emulation image's blocks are in fpga_emu.h (sensor_mgr.c drives them).
  * ========================================================================== */
 
-typedef struct {
-    bool     armed;
-    uint16_t xfer_count;     /* completed I2C transactions */
-    uint16_t wr_count;       /* register bytes written by the DUT */
-    uint8_t  last_wr_addr;   /* last register the DUT wrote */
-    uint8_t  last_wr_val;    /* value of that last write */
-} i2c_sensor_status_t;
-
-/* Arm the I2C target: 7-bit address, SDA/SCL LA channels, and the generic
-   conversion handshake (writing trig_reg sets busy_mask in busy_reg for
-   conv_us microseconds).  Pass conv_us=0 / busy_mask=0 to disable the
-   handshake.  Returns 0 on success, -1 on bad channel. */
-int fpga_i2c_sensor_config(uint8_t addr7, unsigned sda_ch, unsigned scl_ch,
-                           bool enable, uint8_t trig_reg, uint8_t busy_reg,
-                           uint8_t busy_mask, uint16_t conv_us);
-
-/* Disarm the I2C target and release its SDA channel to high-Z. */
-void fpga_i2c_sensor_disable(void);
-
-/* Load `len` bytes of the register image starting at `start_addr` (0..255). */
-int fpga_i2c_load_regs(uint8_t start_addr, const uint8_t *data, size_t len);
-
-/* Read `len` register bytes back (shows what the DUT has written too). */
-int fpga_i2c_read_regs(uint8_t start_addr, uint8_t *buf, size_t len);
-
-/* Read the I2C target status block (transaction/write counters, last write). */
-int fpga_i2c_sensor_status(i2c_sensor_status_t *out);
-
-/* Raw I2C-bus logic-analyzer capture: sample SDA/SCL into `buf` as packed
-   bytes (4 samples/byte: scl,sda per sample, oldest in the high nibble).
-   `bytes` packed bytes are captured at sample_rate_hz (0 = max rate); blocks
-   for the capture window then reads the buffer back.  Returns 0 on success. */
-int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz);
+/* Raw I2C-bus logic-analyzer capture of an I2C sensor's two pins (sda_ch / scl_ch, LA1..LA14):
+   `bytes` packed bytes, 4 samples per byte (scl,sda per sample, oldest in the high bits), at
+   sample_rate_hz (0 = max rate), through the deep-LA path.  Blocks for the capture window, then
+   reads it back.  Returns 0 on success. */
+int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz, unsigned sda_ch,
+                        unsigned scl_ch);
 
 /* ---- deep multi-channel LA capture into PSRAM ----------------------------
    The iCE40 streams `samples` 14-channel LA samples (2 little-endian bytes each:
@@ -758,7 +733,7 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART_STATUS_TX_EMPTY    (1u << 1)
 #define UART_STATUS_RX_OVERFLOW (1u << 2)
 #define UART_STATUS_ARMED       (1u << 3)
-#define UART2_STATUS_TX_FULL    (1u << 4)   /* v48+: UART2, the TX-only second UART */
+#define UART2_STATUS_TX_FULL    (1u << 4)   /* v48..v53: UART2, the TX-only second UART */
 #define UART2_STATUS_TX_EMPTY   (1u << 5)
 #define UART2_STATUS_ARMED      (1u << 6)
 #define UART_STATUS_RX_FRAME_ERR (1u << 7)  /* v52+: sticky, a stop bit read low (byte dropped) */
@@ -785,19 +760,8 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags);
    actually read (0 if none available). */
 size_t fpga_uart_read(uint8_t *buf, size_t len);
 
-/* ---- UART2: a second, TX-only soft UART (gateware >= UART2_MIN_GW) ----------
- * Streams bytes to the DUT on one LA channel while the UART proxy keeps its own
- * pair (an emulated GPS receiver's NMEA, gps_sim.c).  Its status bits ride in
- * UART_STATUS (UART2_STATUS_*); fpga_uart_status() latches the proxy's sticky RX
- * overflow on every read, so polling UART2 never loses it. */
-#define UART2_MIN_GW     48u
-#define FPGA_UART2_FIFO  256u   /* TX FIFO depth (uart_engine.v) */
-
-/* Arm (enable) or disarm UART2 on 1-based LA channel tx_ch at `baud`.
-   0 ok, -1 bad channel/baud, -3 gateware older than UART2_MIN_GW. */
-int fpga_uart2_config(unsigned tx_ch, uint32_t baud, bool enable);
-/* Queue up to FPGA_UART2_FIFO bytes into its TX FIFO (call when it reports empty). */
-void fpga_uart2_fifo_write(const uint8_t *data, size_t len);
+/* UART2 (the emulated UART sensor, sensor_mgr.c) is in fpga_emu.h; from v54 it exists only in
+   the emulation image and has its own status (UART2_STATUS). */
 /* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
 bool fpga_uart_rx_overflowed(void);
 /* Reprogram the iCE40 when its gateware is not the version this firmware was built with, from

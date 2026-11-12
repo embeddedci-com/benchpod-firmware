@@ -112,6 +112,8 @@ int dac_limits_clear(void) { return 0; }
 const char *dac_limits_path_name(int path) { (void)path; return "5v"; }
 int dac_limits_path_index(const char *name) { (void)name; return 1; }
 int dac_limits_park_now(void) { return 0; }
+int signal_engine_image_kind(void) { return 0; }
+void sm_on_dac_stop(void) {}
 
 /* ---- helpers --------------------------------------------------------------------------- */
 static size_t rx(int conn, const uint8_t *b, size_t n) { return load_bin_receive(conn, b, n); }

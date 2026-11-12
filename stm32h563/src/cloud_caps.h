@@ -47,7 +47,7 @@ typedef struct {
     bool          generate16;     /* generate's calibrated form: volts/uA at 16 bits (wave16.h) */
     bool          gpio_read, capture_trigger, spi_master;
     unsigned long la_max_rate_hz;   /* LA top rate: 48 MHz with the change capture (gw >= v50), else 12 */
-    bool          gps;            /* UART2 in the gateware (v48+): the emulated GPS receiver */
+    bool          sensors_digital; /* the emulation image (gateware v54+) is installed or running: I2C/SPI/UART sensors */
     bool          nrst_pin;
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;

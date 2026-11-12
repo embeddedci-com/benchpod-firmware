@@ -255,6 +255,17 @@ int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *o) {
     return SD_OK;
 }
 
+int sd_regs_ro_map(const sd_inst_t *in, uint8_t ro[SD_REGIMAGE / 8]) {
+    if (!is_regs(in) || !ro) return SD_E_ARG;
+    const sdp_hdr_t *h = sd_h(in);
+    const uint8_t *own = in->prog + h->owner;
+    const sdp_entry_t *e = entries(in);
+    memset(ro, 0, SD_REGIMAGE / 8);
+    for (unsigned a = 0; a < SD_REGIMAGE; a++)
+        if (own[a] < h->n_entries && (e[own[a]].flags & SDE_RO)) ro[a >> 3] |= (uint8_t)(1u << (a & 7u));
+    return SD_OK;
+}
+
 int sd_command(const sd_inst_t *in, unsigned i, sd_command_t *out) {
     if (!is_regs(in) || !out) return SD_E_ARG;
     const sdp_hdr_t *h = sd_h(in);

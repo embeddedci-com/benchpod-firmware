@@ -15,7 +15,7 @@
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "signal_engine.h"
-#include "sensor_sim.h"
+#include "sensor_mgr.h"
 #include "psram.h"
 #include "b64url.h"
 #include "stm32h5xx_hal.h"
@@ -115,10 +115,9 @@ int fpga_set_capture_bases(uint32_t la, uint32_t adc) { (void)la; (void)adc; ret
 void fpga_set_dac_stop_after_us(uint32_t us) { (void)us; }
 int fpga_set_trigger(unsigned la, uint8_t mode) { (void)la; (void)mode; return 0; }
 int fpga_trigger_status(uint8_t *st) { *st = (uint8_t)g_trig_status; return 0; }
-int fpga_i2c_la_capture(uint8_t *b, size_t n, float hz) { (void)hz; for (size_t i = 0; i < n; i++) b[i] = (uint8_t)i; return 0; }
+int fpga_i2c_la_capture(uint8_t *b, size_t n, float hz, unsigned sda, unsigned scl) { (void)hz; (void)sda; (void)scl; for (size_t i = 0; i < n; i++) b[i] = (uint8_t)i; return 0; }
 void psram_bus_acquire(void) { g_bus = true; }
-bool sensor_sim_active(void) { return true; }
-int sensor_sim_read_regs(uint8_t s, uint8_t *b, size_t n) { for (size_t i = 0; i < n; i++) b[i] = (uint8_t)(s + i); return 0; }
+int sm_i2c_pins(const char *inst, unsigned *sda, unsigned *scl, char *err, size_t cap) { (void)inst; (void)err; (void)cap; *sda = 1; *scl = 2; return 0; }
 uint8_t  signal_engine_fpga_version(void) { return g_gw; }
 uint32_t signal_engine_adc_cap_base(void) { return 0x400000u; }
 uint32_t signal_engine_la_cap_base(void) { return 0; }

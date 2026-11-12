@@ -55,7 +55,7 @@ static void check_features(const char *f) {
         "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
         "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets", "sensor_types", "gps", "uplink", "wifi_scan", "la_max_rate_hz",
+        "boot_id", "unclean_resets", "sensors", "sensors_format", "sensors_digital", "uplink", "wifi_scan", "la_max_rate_hz",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -203,16 +203,16 @@ static void test_status_list(void) {
     bp_emit_t e;
     cloud_caps_t c = typical();
     c.usb_cc = true;
-    c.gps = true;
+    c.sensors_digital = true;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &c);
     CHECK(bp_emit_ok(&e));
-    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
+    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"can_fd\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
+                      "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
-                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"gps\",\"nrst_pin\","
+                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
     /* The digital board: cloud_caps_collect clears every analog feature, so the list names none,
@@ -223,9 +223,9 @@ static void test_status_list(void) {
     d.pod_current = d.nrst_pin = d.usb_cc = d.adc_low_range = false;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_list(&e, &d);
-    CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\","
+    CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"can_fd\",\"sensor_types\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
+                      "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
                       "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 

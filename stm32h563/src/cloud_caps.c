@@ -44,11 +44,11 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
                "\"power_profile\":true,"
                "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"can_fd\":true,\"pod_current\":%s,"
                "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
-               "\"sensor_types\":true,\"gps\":%s,",
+               "\"sensors\":true,\"sensors_format\":1,\"sensors_digital\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
             tf(c->spi_master),   /* spi_stream: firmware, on the SPI master */
             tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->analog), tf(c->pod_current),
-            tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->gps));
+            tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->sensors_digital));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
     /* Which interface carries this connection, so the server can record eth vs Wi-Fi per connect. */
@@ -64,12 +64,12 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
        clients on the analog board only: the digital board has no scope (its status says
        analog:false, and the SDK only reads "signal" from firmware without that flag). */
     bp_emit_raw(e, c->analog ? ",\"caps\":[\"signal\"," : ",\"caps\":[");
-    bp_emit_raw(e, "\"gpio\",\"power\",\"swd\",\"i2c_sensor\",\"uart\",\"la\""
+    bp_emit_raw(e, "\"gpio\",\"power\",\"swd\",\"uart\",\"la\""
                    ",\"analyzer\",\"command\",\"tunnel\",\"ota\""
                    ",\"la_pins\",\"power_profile\",\"capture_b64\""
                    ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
                    ",\"can_fd\""  /* CAN FD: can_config data_bitrate, 64-byte frames */
-                   ",\"sensor_types\""     /* sensor_types lists the emulated I2C sensors */
+                   ",\"sensors\""     /* emulated sensors from definitions (sensor_define, sensor_mgr.h) */
                    ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
                    ",\"usb_net_setting\""  /* usb_network on/off, device-only (pod_policy.h) */
                    ",\"lan_tls\"");        /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
@@ -89,7 +89,6 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->gpio_read)       bp_emit_raw(e, ",\"gpio_read\"");
     if (c->capture_trigger) bp_emit_raw(e, ",\"capture_trigger\"");
     if (c->spi_master)      bp_emit_raw(e, ",\"spi_master\",\"spi_stream\"");   /* spi_stream: firmware */
-    if (c->gps)             bp_emit_raw(e, ",\"gps\"");   /* gps_start: UART2, gateware v48+ */
     if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
     if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
     bp_emit_raw(e, "]");

@@ -212,7 +212,7 @@ static void test_flags_match_the_old_lists(void) {
     EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "stream", "la_capture",
                "sensor_regs", "sensor_la", "can_read", "psram_ping", "test");
     EXPECT_SET(CMD_F_STREAM, "capture", "stream", "capture_dual", "capture_read", "measure",
-               "test", "load", "replay", "load_bin", "sensor_regs", "sensor_la", "dap_start",
+               "test", "load", "replay", "load_bin", "sensor_la", "dap_start",
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
     EXPECT_SET(CMD_F_MIXED, "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy", "usb_network",

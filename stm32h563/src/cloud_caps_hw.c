@@ -82,7 +82,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->capture_trigger = caps.capture_trigger;
     c->la_max_rate_hz = signal_engine_la_change_divisor(48e6f) ? 48000000ul : 12000000ul;
     c->spi_master = caps.spi_master;
-    c->gps = caps.uart2;
+    c->sensors_digital = caps.emulation;
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
     c->usb_cc = usb_cc_supported();
     c->pod_current = ina_pod_present();      /* the pod's own current monitor (0x41) */

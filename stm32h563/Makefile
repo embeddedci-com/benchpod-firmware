@@ -56,6 +56,12 @@ MBEDTLS     := $(STM32CUBE)/stm32-mw-mbedtls
 #######################################
 # Sources
 #######################################
+# The sensor definition engine (sensor_def.h): pure C11, the same double math everywhere, so no
+# fused multiply-add (-ffp-contract=off below) and the pod computes the bytes the browser does.
+SENSOR_DEF_SRCS := src/sensor_def_json.c src/sensor_def_math.c src/sensor_def_vm.c src/sensor_def_expr.c \
+                   src/sensor_def_compile.c src/sensor_def_inst.c src/sensor_def_regs.c \
+                   src/sensor_def_uart.c src/sensor_def_analog.c src/sensor_stim.c
+
 C_SOURCES := \
   src/main.c \
   src/recovery.c \
@@ -133,13 +139,11 @@ C_SOURCES := \
   src/command_handler_pins.c \
   src/command_handler_power.c \
   src/scpi_server.c \
-  src/sensor_sim.c \
-  src/sensor_bmp280.c \
-  src/sensor_sht4x.c \
-  src/sensor_mpu6050.c \
-  src/gps_nmea.c \
-  src/gps_sim.c \
-  src/command_handler_gps.c \
+  src/command_handler_sensors.c \
+  src/sensor_cmd.c \
+  src/sensor_mgr.c \
+  src/sensor_port.c \
+  $(SENSOR_DEF_SRCS) \
   src/b64url.c \
   src/bp_json.c \
   src/conn_tx.c \
@@ -493,6 +497,7 @@ test:
 # The LwIP altcp_tls_mbedtls.c (our copy, src/altcp_tls_bp/altcp_tls_mbedtls_bp.c) is mbedTLS 2.x-era: it reads the now-private
 # ssl_context.out_left (needs MBEDTLS_ALLOW_PRIVATE_ACCESS) and the renamed-away
 # MBEDTLS_SSL_MAX_CONTENT_LEN (now split into IN/OUT) — alias it back for this file only.
+$(addprefix $(BUILD_DIR)/,$(notdir $(SENSOR_DEF_SRCS:.c=.o))): CFLAGS += -ffp-contract=off
 $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
                                                -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
 
