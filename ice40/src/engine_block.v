@@ -17,6 +17,7 @@
 //   FEATURES         : FPGA_FEATURES reply byte (bit0 loop image, bit1 deep image).
 // ============================================================================
 `include "sys_config.vh"   // SYS_CLK_MHZ — single source (tools/gen_protocol.py)
+`include "image_config.vh" // HAS_EMULATION: the sensor blocks are only in the emulation image (v54)
 
 module engine_block #(
     parameter N                = 14,
@@ -252,6 +253,7 @@ module engine_block #(
         .uart2_tx_empty(uart2_tx_empty), .uart2_armed(uart2_armed)
     );
 
+`ifdef HAS_EMULATION
     // ---- UART proxy engine ----
     // UART2 (v48): a second uart_engine used TX-only, for streams the pod sends the DUT
     // (an emulated GPS receiver's NMEA) while the proxy keeps the console.  RX is tied idle
@@ -266,6 +268,12 @@ module engine_block #(
         .rx_in(1'b1), .tx_out(uart2_tx_out)
     );
 
+`else
+    // loop and deep images (v54): no UART2
+    assign uart2_tx_ch = 4'd0; assign uart2_armed = 1'b0; assign uart2_tx_out = 1'b1;
+    assign uart2_tx_full = 1'b0; assign uart2_tx_empty = 1'b1;
+`endif
+
     uart_engine uart_i (
         .clk(clk), .rst(rst),
         .cfg_stb(uart_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
@@ -277,6 +285,7 @@ module engine_block #(
         .rx_in(uart_rx_in), .tx_out(uart_tx_out)
     );
 
+`ifdef HAS_EMULATION
     // ---- Emulated I2C sensor register file (256 bytes) ----
     i2c_regfile i2c_regfile_i (
         .clk(clk),
@@ -300,6 +309,12 @@ module engine_block #(
         .armed(i2c_armed), .xfer_count(i2c_xfer_count), .wr_count(i2c_wr_count),
         .last_wr_addr(i2c_last_wr_addr), .last_wr_val(i2c_last_wr_val)
     );
+`else
+    // loop and deep images (v54): no emulated I2C sensor
+    assign i2c_sda_ch = 4'd0; assign i2c_scl_ch = 4'd0; assign i2c_sda_drive_low = 1'b0;
+    assign i2c_armed = 1'b0; assign i2c_xfer_count = 16'd0; assign i2c_wr_count = 16'd0;
+    assign i2c_last_wr_addr = 8'd0; assign i2c_last_wr_val = 8'd0; assign i2c_reg_rdata = 8'd0;
+`endif
 
     // (The on-FPGA raw I2C-bus logic-analyzer capture — i2c_la_capture + its la_capture_buf
     //  SPRAM trace buffer, armed by OP_I2C_LA_START 0x65 / read back via 0x66 — was removed

@@ -59,6 +59,8 @@ SRC = src/top_v2.v            \
 DEFINES = -DVERSION_V2
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
 DEEP_DEFINES = -DUSE_DEEP_REPLAY
+# v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
+EMU_DEFINES = -DUSE_EMULATION
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
 # Pinned PnR seed.  TIMING is not the constraint: after the single-clock collapse
@@ -280,7 +282,7 @@ VVP = sh sim/run_vvp.sh
 # other one silently.
 define topbench
 	@set -e; for img in $(2); do \
-	  if [ "$$img" = deep ]; then defs="$(DEEP_DEFINES)"; else defs=; fi; \
+	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)";; *) defs=;; esac; \
 	  echo "== $(1): $$img image"; \
 	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
@@ -542,6 +544,9 @@ SEED_DEEP ?= 37
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
 SEED_DEEP_FALLBACK ?= 23 25 53 21 62 59 34 33 31
+# v54: the emulation image (USE_EMULATION).  Swept and pinned like the other two.
+SEED_EMU ?= 1
+SEED_EMU_FALLBACK ?= 2 3 4 5 6 7 8
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -552,6 +557,8 @@ $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,$(DEEP_DEFINES),$@)
+$(OUT)_emu.json: $(SRC) $(SYNTH_AUX)
+	$(call synth,$(EMU_DEFINES),$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -560,6 +567,10 @@ $(OUT)_deep.bin: $(OUT)_deep.json $(PCF)
 	$(call pnr,$<,$(OUT)_deep.asc,$(SEED_DEEP),$(SEED_DEEP_FALLBACK))
 	icepack $(OUT)_deep.asc $@
 	echo $(GW_VERSION) > $@.gwversion
+$(OUT)_emu.bin: $(OUT)_emu.json $(PCF)
+	$(call pnr,$<,$(OUT)_emu.asc,$(SEED_EMU),$(SEED_EMU_FALLBACK))
+	icepack $(OUT)_emu.asc $@
+	echo $(GW_VERSION) > $@.gwversion
 # -p0: power-on image = slot 0 (loop).  -a16: align images at 64 KB (SB_WARMBOOT jumps here).
 multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 	icemulti -p0 -a16 -o $(MULTI) $(OUT)_loop.bin $(OUT)_deep.bin
@@ -567,7 +578,7 @@ multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 
 # The two runtime images the firmware embeds (stm32h563/Makefile: image 0 = loop, 1 = deep) —
 # what pods actually run and what a release must build.  `make` (all) builds only one image.
-images: $(OUT)_loop.bin $(OUT)_deep.bin
+images: $(OUT)_loop.bin $(OUT)_deep.bin $(OUT)_emu.bin
 
 # Sweep PnR seeds for one image on its current netlist: make seed-sweep IMAGE=deep [SWEEP="1 32"].
 # Pin the seed with the best clk48 margin that is also good in CI's toolchain (the
@@ -792,7 +803,7 @@ check-protocol:
 # Uses $(SRC) so it tracks the shipping top; like every whole-top bench below, it runs on both
 # images (topbench).
 topsmoketest:
-	$(call topbench,tb_top_v2,loop deep)
+	$(call topbench,tb_top_v2,loop deep emu)
 
 # Top-level end-to-end capture: SPI OP_CAPTURE -> producers -> rings -> dual writer
 # -> the two PSRAM regions, with the tb acting as the PSRAM write-slave.  Catches
@@ -826,7 +837,7 @@ topdeeptest:
 # SPI engine armed over the SPI link onto one pad, each taking it over and handing it back, plus
 # the channel >= N guard.
 topmuxtest:
-	$(call topbench,tb_top_la_mux,loop deep)
+	$(call topbench,tb_top_la_mux,emu)
 
 # SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
 # behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
@@ -836,7 +847,7 @@ spitest:
 # UART2 (v48): the TX-only second UART next to the proxy through the whole top: both decoded
 # on the pads with bit timing, re-armed on another pin and rate, then disarmed.
 uart2test:
-	$(call topbench,tb_top_uart2,loop deep)
+	$(call topbench,tb_top_uart2,emu)
 
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
@@ -897,3 +908,7 @@ help:
 	@echo "  help         Show this message"
 
 # (labuftest removed in v24 with la_capture_buf.v — the on-FPGA I2C-LA trace buffer is gone.)
+
+# The gateware source list (scripts: make -s print-src).
+print-src:
+	@echo $(SRC)

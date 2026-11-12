@@ -276,6 +276,7 @@ module cmd_dispatch #(
 
     // Opcodes — generated from tools/gen_protocol.py (single source of truth).
     `include "cmd_opcodes.vh"
+    `include "image_config.vh"
 
     // ------------------------------------------------------------------------
     // FSM state-flow.  One SPI transaction (CSn low..high) walks one path:
@@ -688,7 +689,7 @@ module cmd_dispatch #(
                             // whether or not the loop is armed — a running loop picks the new
                             // source/value up on its next tick.
                             OP_DAC_LOOP_SRC: begin arg_rem <= 16'd5; state <= S_COLLECT; end
-`ifndef USE_DEEP_REPLAY
+`ifdef HAS_DAC_LOOP
                             // Only the control-loop image has a loop to map an input for. The
                             // registers themselves already DCE away in the deep build, but the
                             // DECODE did not, and perturbing this netlist cost the deep image
@@ -783,7 +784,8 @@ module cmd_dispatch #(
                                 state         <= S_ADC_PROBE_HI;
                             end
 
-                            // ---- emulated I2C sensor ----
+`ifdef HAS_EMULATION
+                            // ---- emulated I2C sensor (emulation image only, v54) ----
                             OP_I2C_CONFIG:  begin arg_rem <= 16'd9; state <= S_COLLECT; end
                             OP_I2C_DISABLE: begin i2c_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_I2C_LOAD_REGS,
@@ -799,10 +801,12 @@ module cmd_dispatch #(
                             // (shallow BRAM LA_START 0x67 / LA_READ 0x68 removed in v17 —
                             //  v2 uses the deep LA_CAPTURE 0x69 below; HAS_WIDE_LA=0.)
 
-                            // ---- UART proxy ----
-                            OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
                             OP_UART2_CONFIG: begin arg_rem <= 16'd6; state <= S_COLLECT; end
                             OP_UART2_WRITE:  state <= S_READ_LEN0;
+`endif
+
+                            // ---- UART proxy ----
+                            OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
                             OP_UART_DISABLE: begin uart_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_UART_WRITE,
                             OP_UART_READ:    state <= S_READ_LEN0;
@@ -918,7 +922,7 @@ module cmd_dispatch #(
                                 `CD_DAC_LOOP_SRC: begin
                                     loop_src_stb  <= 1'b1;
                                 end
-`ifndef USE_DEEP_REPLAY
+`ifdef HAS_DAC_LOOP
                                 // Loop input map (v30): [in_zero(2)][in_gain(2)][in_trip(2)]
                                 // [flags(1)], flags bit0=map_en, bit1=trip_en.
                                 `CD_DAC_LOOP_INMAP: begin

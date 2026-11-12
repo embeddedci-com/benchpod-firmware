@@ -118,7 +118,15 @@ module tb_top_v2;
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd53, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd54, "VERSION");
+        // FPGA_FEATURES (0x18): which image this is (v54: three images).
+`ifdef USE_DEEP_REPLAY
+        cmd1(8'h18, r); check(r, 8'h02, "FPGA_FEATURES deep");
+`elsif USE_EMULATION
+        cmd1(8'h18, r); check(r, 8'h04, "FPGA_FEATURES emulation");
+`else
+        cmd1(8'h18, r); check(r, 8'h01, "FPGA_FEATURES loop");
+`endif
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");
         cmd1(8'h34, r); check(r, 8'h00, "TRIGGER_STATUS");
