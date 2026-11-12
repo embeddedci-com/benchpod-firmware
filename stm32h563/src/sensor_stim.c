@@ -390,7 +390,7 @@ int sd_stim_compile(const char *json, size_t json_len, void *prog, size_t prog_c
     cc.err = err;
     st_cc_t *c = &cc;
     c->root = sdj_ws(&c->j, 0);
-    static const char *const keys[] = { "format", "kind", "name", "description", "repeat", "rate_hz", "signals", "faults", NULL };
+    static const char *const keys[] = { "format", "kind", "name", "label", "description", "repeat", "rate_hz", "signals", "faults", NULL };
     uint32_t v, hdr_at = 0;
     st_hdr_t h;
     memset(&h, 0, sizeof(h));

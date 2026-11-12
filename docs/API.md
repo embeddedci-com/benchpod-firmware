@@ -2963,7 +2963,8 @@ the firmware sent), `fifo_frames` and `fifo_drops`. UART `bus`: `sent_bytes`, `r
 ### `sensor_regs` — read an I2C/SPI image
 
 `{"cmd":"sensor_regs","instance":"env","start":"0xF7","len":8}` returns the bytes the DUT reads now
-(its own writes included) in one reply, so it works over the cloud:
+(its own writes included) in **one reply** (not the chunked uint8 array of firmware 3.10 and
+earlier: at most 256 bytes fit, and a single reply works over the cloud command channel):
 `{"instance":"env","start":"0xF7","len":8,"data_b64":"gAAAgAAAgAA="}` (standard base64). `start`
 0..255, `len` 1..256 (default the whole image).
 

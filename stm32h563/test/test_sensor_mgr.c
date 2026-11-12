@@ -409,7 +409,7 @@ static void test_drdy_faults_stimulus(void) {
     poll_ms(3);
 
     /* a stimulus ramps x */
-    const char *st = "{\"format\":1,\"kind\":\"stimulus\",\"name\":\"ramp\",\"rate_hz\":100,\"signals\":{"
+    const char *st = "{\"format\":1,\"kind\":\"stimulus\",\"name\":\"ramp\",\"label\":\"Ramp\",\"description\":\"x up\",\"rate_hz\":100,\"signals\":{"
                      "\"x\":[{\"shape\":\"ramp\",\"start\":0,\"end\":100,\"duration_s\":1}]},"
                      "\"faults\":[{\"at_s\":0.5,\"duration_s\":0.1,\"type\":\"no_response\"}]}";
     CHECK(define_text(NULL, st, strlen(st)), "stimulus: %s", g_err);
