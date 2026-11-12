@@ -290,7 +290,7 @@ void fpga_capture_abort(void);
  * These flags are computed from the RUNNING iCE40 image (version + feature bits) and
  * were, until now, derived twice: once in cloud_client.c's `capabilities` announce and
  * once — implicitly, as a hardcoded literal — in command_handler.c's `status` reply.
- * The two drifted. `status` advertised only ["signal","gpio","power","swd","i2c_sensor",
+ * The two drifted. `status` advertised only ["signal","gpio","power","swd","i2c_sensor" (since retired),
  * "uart","la"], so a client on a DIRECT LAN/serial connection could not see deep replay,
  * the control loop or the co-trigger AT ALL, while a cloud client saw all of them from
  * the announce. That made the SDK skip hardware tests for features the pod demonstrably

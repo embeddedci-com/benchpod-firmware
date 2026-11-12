@@ -137,7 +137,7 @@ The `cmd` field is required. All other fields are command-specific and documente
 
 ### Chunked data (multi-packet responses)
 
-Commands that return sample arrays (`capture`, `stream`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_regs`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
+Commands that return sample arrays (`capture`, `stream`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
 {"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
@@ -168,7 +168,7 @@ organization owner or admin). "T0/T2" commands read at T0 and change a setting a
 Commands that send several packets or switch the connection to raw bytes need a stream connection
 (a LAN socket or a cloud byte tunnel). The single-reply cloud command channel refuses `capture`,
 `stream`, `capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
-`sensor_regs`, `sensor_la`, `la_capture`, `dap_start`, `uart_proxy_start` and `speedtest` with
+`sensor_la`, `la_capture`, `dap_start`, `uart_proxy_start` and `speedtest` with
 `command not supported over cloud channel`. The USB console does not run JSON commands at all.
 
 | `cmd` | Tier | Purpose | `data` returned | Multi-packet |
@@ -200,7 +200,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `dac_control_loop` | T1 | Arm (or disarm) the in-fabric closed-loop DAC | object | no |
 | `dac_loop_input` | T1 | Retarget a running control loop's input | object | no |
 | `dac_loop_probe` | T0 | One live operating point of the control loop | object | no |
-| `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay) | object | no |
+| `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay, 2 = sensor emulation) | object | no |
 | `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
 | `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
 | `la` | T1 | LA pin control: step pulse trains + pull-ups (LA1-8) | object | no |
@@ -223,17 +223,18 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
 | `spi_flash` | T1 | SPI NOR flash operations (id, read, erase, program) | object | no |
-| `sensor_start` | T1 | Arm an emulated I2C sensor (BMP280, BME280, SHT4x, MPU-6050) | object | no |
-| `sensor_set` | T1 | Set the emulated sensor's readings | object | no |
-| `sensor_stop` | T1 | Disarm the emulated sensor | `null` | no |
-| `sensor_status` | T0 | Sensor, its readings and I2C-bus activity counters | object | no |
-| `sensor_types` | T0 | The emulated sensor models and their parameters | object | no |
-| `gps_start` | T1 | Start the emulated GPS receiver (NMEA over UART2) | object | no |
-| `gps_set` | T1 | Set the emulated GPS fix (position, speed, time, ...) | object | no |
-| `gps_stop` | T1 | Stop the emulated GPS receiver | `null` | no |
-| `gps_status` | T0 | The GPS receiver's session and current fix | object | no |
-| `sensor_regs` | T0 | Read the emulated register image | array of uint8 | yes |
-| `sensor_la` | T0 | Raw I2C-bus logic capture | array of uint8 | yes |
+| `sensor_define` | T1 | Upload and compile a sensor definition (chunked) | object | no |
+| `sensor_start` | T1 | Start an emulated sensor instance (I2C, SPI, UART or analog) | object | no |
+| `sensor_set` | T1 | Set an instance's readings | object | no |
+| `sensor_stimulus` | T1 | Upload a stimulus (chunked) | object | no |
+| `sensor_stimulus_start` | T1 | Play the stimulus | object | no |
+| `sensor_stimulus_stop` | T1 | Stop the stimulus | object | no |
+| `sensor_fault` | T1 | Inject a fault into an instance | object | no |
+| `sensor_fault_clear` | T1 | Clear an instance's faults | object | no |
+| `sensor_stop` | T1 | Stop an instance (or all) and forget its definition | object | no |
+| `sensor_status` | T0 | Instances, their values, faults and bus counters (paged) | object | no |
+| `sensor_regs` | T0 | Read an I2C/SPI instance's register image (base64) | object | no |
+| `sensor_la` | T0 | Raw I2C-bus logic capture of an I2C instance | array of uint8 | yes |
 | `can_config` | T1 | Bring up classic CAN or CAN FD (FDCAN1 / TCAN1044) | object | no |
 | `can_write` | T1 | Send one CAN frame | object | no |
 | `can_read` | T0 | Drain up to 8 received CAN frames | object | no |
@@ -1692,7 +1693,7 @@ counters and the capability list. No parameters.
 | `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
 | `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. Not listed on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+); its frame carries `"wifi_scan":false`. |
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
-| `gpio`, `power`, `swd`, `i2c_sensor`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensor_types` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), emulated I2C sensors, the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and the [sensor model list](#sensor_types--list-the-models) (BMP280, BME280, SHT4x, MPU-6050). |
+| `gpio`, `power`, `swd`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensors` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and [emulated sensors](#emulated-sensors) from definitions (format 1; `i2c_sensor`, `sensor_types` and `gps` are gone from firmware 3.11). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `adc_low_range` | The ADC has the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
@@ -1702,7 +1703,6 @@ counters and the capability list. No parameters.
 | `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
 | `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
 | `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
-| `gps` | The gateware has UART2 (v48+), so the pod can play a [GPS receiver](#emulated-gps-receiver). |
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
@@ -1898,8 +1898,8 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `gpio` | [`gpio`](#gpio--use-la-pins-as-gpio) with mode `input` / `output` / `open_drain` | `gpio` mode `off` |
 | `uart_rx`, `uart_tx` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
-| `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--arm-an-emulated-sensor) | `sensor_stop`, or a replacing `sensor_start` |
-| `gps_tx` | [`gps_start`](#gps_start--start-the-receiver) | `gps_stop`, or a replacing `gps_start` |
+| `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
+| `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
 | `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
 
@@ -1920,15 +1920,20 @@ Claiming a pin another function owns fails with a machine-parseable prefix:
 pin conflict: LA<n> is in use by <function>; <how to release>
 ```
 
+An emulated sensor's pin names its instance: `pin conflict: LA<n> is in use by
+sensor:<instance> (<function>); stop the sensor emulation first
+({"cmd":"sensor_stop","instance":"<instance>"})`. In `la_pins` such a pin carries
+`"owner":"sensor:<instance>"`; on an I2C line several sensors share, the first one and how many
+others: `"sensor:env+1"`.
+
 | Owner | `<how to release>` |
 |---|---|
 | `gpio` | `release it with {"cmd":"gpio","la":<n>,"mode":"off"}` |
 | `uart_rx` / `uart_tx` | `stop the uart proxy first` |
 | `swd_clk` / `swd_dio` | `end the SWD session first` |
-| `i2c_sda` / `i2c_scl` | `stop the sensor emulation first ({"cmd":"sensor_stop"})` |
+| `i2c_sda` / `i2c_scl` / `sensor_*` | `stop the sensor emulation first ({"cmd":"sensor_stop","instance":"<instance>"})` |
 | `step` / `step_dir` | `wait for the step train to finish` |
 | `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
-| `gps_tx` | `stop the GPS receiver first ({"cmd":"gps_stop"})` |
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
@@ -2685,373 +2690,293 @@ bits; a part that ships protected needs its status register written with `spi_xf
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
 
-## Emulated I2C sensor
+## Emulated sensors
 
-The pod can **pretend to be an I2C sensor** on two LA channels: the iCE40 FPGA
-acts as an I2C **slave (target)** that the DUT's I2C **master** reads, while the
-STM32 serves the register image. This lets a hardware-in-the-loop test present a
-device to a DUT and control what it reports, so the DUT can be tested both with
-the sensor "present" and "absent" without touching real hardware. The feature is
-advertised by the `"i2c_sensor"` capability in `status`; firmware that lists
-`"sensor_types"` there emulates the models below and answers
-[`sensor_types`](#sensor_types--list-the-models).
+The pod can **play sensors** for the DUT: I2C, SPI and UART sensors on LA channels, and analog
+sensors on the analog outputs. What a sensor does is not built into the firmware: the host sends a
+**sensor definition** (the format is documented in the public sensor library,
+`embeddedci-com/benchpod-sensors`, `docs/format.md`), the pod compiles it and plays it. The pod
+never stores definitions; they are gone after `sensor_stop`, a reboot or a firmware update.
 
-| `type` | Part | Address (alt) | Parameters for `sensor_set` |
+A definition is JSON (clients convert YAML). **Key order matters**: `constants`, `functions`,
+`fragments` and `let` refer to earlier entries, and the pod reads them in the order they appear
+in the text. A converter must keep the source order of every object.
+
+Up to **4 I2C sensors** (on one bus or on several), **1 SPI sensor**, **1 UART sensor** and **2
+analog sensors** (one on the DAC voltage output, one on the 4-20 mA output) run at the same time.
+Each one is an **instance** with a name the host picks: 1 to 16 characters of `a-z`, `0-9` and
+`_` (usually the definition's `name`; the limit keeps `la_pins` and `sensor_status` inside the
+cloud reply cap). At most 8 instances are defined at once.
+
+Capability in `status` `caps`: `"sensors"`. The cloud capabilities frame also carries
+`"sensors":true`, `"sensors_format":1` (the definition format version the pod takes) and
+`"sensors_digital"` (the emulation image is installed or running, so I2C, SPI and UART sensors
+work). These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
+of firmware 3.10 and earlier.
+
+Typical flow:
+
+1. `sensor_define` (one or more chunks) for each instance.
+2. `sensor_start` with its pins (`la_voltage` first, and pull-ups on I2C lines).
+3. `sensor_set` to change readings, `sensor_stimulus` + `sensor_stimulus_start` to play values over
+   time, `sensor_fault` to inject a fault.
+4. `sensor_stop`.
+
+### The emulation image
+
+I2C, SPI and UART sensors need the **emulation** gateware image (image 2, gateware v54 and
+later, W25Q slot `gw2`). The first `sensor_start` of such a sensor loads it when another image is
+running (about 2 seconds; the reply says `"image_loaded":true`). Loading it is refused while a
+DAC waveform plays (`generate`, `replay` or the control loop): `"loading the emulation image stops
+the DAC waveform that is playing: dac_stop it first"`. Without the image installed:
+`"the emulation image is not installed (W25Q slot gw2 is empty): install the gateware blobs"`.
+
+While the emulation image runs, the closed DAC loop (`dac_control_loop`, `dac_loop_input`,
+`dac_loop_probe`) and deep DAC replay (`load_bin` with `psram`, a deep `replay`) are not
+available; they fail with an error that names the way back:
+`"control loop is not in the emulation image, which the emulated sensors use:
+{"cmd":"sensor_stop","all":true} then {"cmd":"fpga_image","image":"loop"}"`. Captures, the UART
+proxy, SWD, GPIO, the SPI master, `generate` and shallow `replay` work in every image. The pod does
+not swap back by itself: after `sensor_stop` the emulation image stays loaded until
+[`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
+another image is refused while I2C, SPI or UART sensors run. Analog sensors work in every image
+and never load one.
+
+After any reconfiguration (an image reload, `flash-ice40`, the boot-time gateware update) the
+running instances are armed again with their values and the register bytes the DUT wrote; when the
+emulation image is no longer running, the I2C, SPI and UART instances stop and release their pins.
+
+### `sensor_define` — upload and compile a definition
+
+The JSON is sent base64 encoded (standard or URL alphabet, padding optional) in chunks: `offset` 0
+first, then each next chunk at the offset where the previous one ended. The chunk that reaches
+`total` compiles it. The cloud command channel takes a command of at most 1280 bytes, counting the
+whole command text (`{"cmd":"sensor_define",...}` with every field); `data_b64` itself takes at
+most 1240 characters. A chunk of 768 raw bytes (1024 base64 characters) always fits, with room for
+the other fields, in a command of at most 1152 bytes, which is what the SDK sends.
+
+```json
+{"cmd":"sensor_define","instance":"env","offset":0,"total":3225,"data_b64":"eyJmb3JtYXQi..."}
+```
+
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `bmp280` | Bosch BMP280 | `0x76` (`0x77`) | `temperature_c` (-100..150), `pressure_pa` (1000..200000) |
-| `bme280` | Bosch BME280 | `0x76` (`0x77`) | the BMP280's two, plus `humidity_pct` (0..100) |
-| `sht4x` | Sensirion SHT40/41/43/45 | `0x44` (`0x45`) | `temperature_c` (-40..125), `humidity_pct` (0..100) |
-| `mpu6050` | InvenSense MPU-6050 | `0x68` (`0x69`) | `accel_x_g`, `accel_y_g`, `accel_z_g` (-16..16), `gyro_x_dps`, `gyro_y_dps`, `gyro_z_dps` (-2000..2000), `temperature_c` (-40..85) |
+| `instance` | string | yes | Instance name. Defining a running instance stops it first. |
+| `offset` | integer | yes | Byte offset of this chunk in the JSON (before base64). |
+| `total` | integer | yes | Size of the whole JSON, 1..32768. |
+| `data_b64` | string | yes | This chunk, base64. |
+| `dry_run` | bool | no | Compile and report, keep nothing (validation). Send it on the last chunk. |
 
-Every parameter starts at its default (`sensor_types` lists them: 25 °C,
-101325 Pa, 40 %RH, an MPU-6050 lying flat at 1 g on Z) and keeps its value until
-the next `sensor_set` or `sensor_start`.
+One upload (a definition or a stimulus) is in flight at a time: a chunk at offset 0 starts a new
+one and drops the old. An upload idle for 60 s is dropped.
 
-Registers the DUT writes (a measurement range, a power mode, `ctrl_meas`) stay as
-the DUT wrote them: a `sensor_set` reloads only the model's measurement
-registers. The MPU-6050 also follows the DUT's configuration as it changes: its
-readings use the full-scale range the DUT selected, read 0 while the part is
-asleep (it powers up asleep, as the real one does, until the driver clears
-`PWR_MGMT_1` bit 6), and a `DEVICE_RESET` restores the power-on registers and
-reads back clear a few milliseconds later. A value past the selected range
-saturates at the 16-bit limit.
-
-Only one emulated sensor is active at a time. It stays armed (the FPGA keeps
-responding on the bus) until `sensor_stop`, a device reset, or a new
-`sensor_start`. These commands are **TCP/JSON only** — they are not on the serial
-console.
-
-> **BMP280 / BME280 basics.** Chip-id register `0xD0` reads `0x58` (BMP280) or
-> `0x60` (BME280). A DUT driver writes `ctrl_meas` (`0xF4`) to start a
-> conversion, polls the `status` register (`0xF3`) bit 3 while "measuring", then
-> reads the 20-bit temperature/pressure ADC words from `0xF7`–`0xFC` (BME280: and
-> the 16-bit humidity word at `0xFD`–`0xFE`) and decompresses them with the
-> calibration block at `0x88`–`0x9F` (BME280: and `0xA1`, `0xE1`–`0xE7`). The
-> emulator fills all of these and mimics the ~5.5 ms conversion handshake.
->
-> **SHT4x basics.** The part has no registers: the DUT writes a one-byte command
-> and reads six bytes back (temperature word, CRC, humidity word, CRC; CRC-8
-> polynomial `0x31`, init `0xFF`). The emulator answers `0xFD`, `0xF6` and `0xE0`
-> (measure at high, medium, low precision), `0x89` (serial number) and the heater
-> commands. It answers at once instead of NACKing during the measurement, which a
-> driver waiting the usual ~10 ms never notices.
->
-> **MPU-6050 basics.** `WHO_AM_I` (`0x75`) reads `0x68`. Accelerometer, die
-> temperature and gyroscope are big-endian 16-bit words from `0x3B` to `0x48`;
-> `INT_STATUS` (`0x3A`) bit 0 (data ready) is set while the part is awake.
-
-### `sensor_start` — arm an emulated sensor
-
-#### Request
+Replies: `{"status":"ok","data":{"instance":"env","received":768}}` for a chunk, and for the last:
 
 ```json
-{"cmd":"sensor_start","type":"bmp280","addr":"0x76","sda":<1-14>,"scl":<1-14>}
+{"instance":"env","kind":"i2c","name":"bme280","label":"Bosch BME280...","program_bytes":1648,
+ "i2c":{"address":"0x76","alt_addresses":["0x77"]},
+ "params":[{"key":"temperature_c","unit":"C","min":-100,"max":150,"default":25}]}
 ```
 
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `type` | string | yes | — | Sensor model: `"bmp280"`, `"bme280"`, `"sht4x"` or `"mpu6050"`. |
-| `sda` | integer | yes | — | LA channel (1..14) for the I2C **SDA** line. |
-| `scl` | integer | yes | — | LA channel (1..14) for the I2C **SCL** line. |
-| `addr` | string | no | the model's default | 7-bit I2C address as a hex/decimal string (e.g. `"0x77"`). |
+SPI definitions report `"spi":{"mode":3}`, UART `"uart":{"baud":9600,"format":"8N1"}`, analog
+`"analog":{"output":"voltage","min":0,"max":3.3}`. `params` lists every param unless the reply
+would not fit the cloud cap (16 params with long keys); it then ends early and the reply carries
+`"params_cut":true` (`sensor_status` lists every value).
 
-#### Response
+Errors:
 
-```json
-{"status":"ok","data":{"type":"bmp280","addr":118,"sda":1,"scl":2}}
-```
-
-`addr` is the numeric 7-bit address (e.g. `118` = `0x76`).
-
-#### Error cases
-
-| Condition | Message |
+| Condition | `message` |
 |---|---|
-| `type` field missing | `"missing type"` |
-| `sda` or `scl` missing | `"missing sda/scl"` |
-| `type` not a known model | `"unknown sensor type"` |
-| bad channel / FPGA config failed | `"sensor start failed (bad channel?)"` |
-| `sda` or `scl` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `sda`/`scl` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — an open-drain bus needs pull-ups |
+| bad instance name | `"instance must be 1..16 characters of a-z, 0-9 and _"` |
+| a chunk out of order | `"chunk at offset N, expected M (start again at offset 0)"` |
+| `total` out of range | `"total must be 1..32768 bytes"` |
+| not base64 / too long | `"data_b64 is not base64"`, `"data_b64 too long: at most 1240 characters per chunk"` |
+| the definition does not compile | `"invalid definition: registers[4].s16be: unknown name 'ax' at 17"` (format.md section 10) |
+| the heap is short | `"out of memory: compiling needs N bytes, M free"` |
+| 8 instances defined | `"8 instances are defined already: sensor_stop one first"` |
 
-`sda` and `scl` are **claimed** (functions `i2c_sda` / `i2c_scl`) until `sensor_stop`. The
-claim survives a client disconnect — the emulation is pod state. A `sensor_start` while a
-sensor is running may reuse the running sensor's own pins; if the new claim is refused, the
-**old sensor keeps running and nothing changes**.
+Memory: the upload, the compiler's scratch (about 28 KB) and the program live on the heap only
+while they are needed; a running instance holds its program (up to 8 KB, typically 1.5 to 3 KB),
+about 4.5 KB of state, a 256-byte register image (I2C/SPI) or 2.5 KB of UART buffers.
 
-### `sensor_set` — set the emulated readings
-
-Updates the values the DUT will read back and reloads the measurement registers.
-It takes any of the active model's parameters (see the table above, or
-[`sensor_types`](#sensor_types--list-the-models)); at least one is required, and a
-sensor must be active. Every value is checked before any is applied, so a
-rejected request changes nothing.
-
-#### Request
+### `sensor_start` — start an instance
 
 ```json
-{"cmd":"sensor_set","temperature_c":25.0,"pressure_pa":101325}
-{"cmd":"sensor_set","accel_x_g":0.0,"accel_y_g":0.71,"accel_z_g":0.71}
+{"cmd":"sensor_start","instance":"env","address":"0x77","pins":{"sda":2,"scl":1,"drdy":7},
+ "values":{"humidity_pct":40}}
 ```
 
-#### Response
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `instance` | string | yes | A defined instance. |
+| `pins` | object | yes | I2C `sda`, `scl`, optional `drdy`; SPI `sclk`, `mosi`, `miso`, `cs`; UART `tx` (pod to DUT) and optional `rx` (DUT to pod); analog `output`: `"dac"` or `"current"`. Values are LA channels: `3` or `"LA3"`. The pod does not know wiring names: clients resolve them (the SDK and MCP take wiring names and send channels). |
+| `address` | string | no | I2C: the definition's `address` or one of its `alt_addresses` (`"0x77"` or `119`). |
+| `baud` | integer | no | UART: overrides the definition's baud rate (300..3000000). |
+| `values` | object | no | Initial param values (otherwise the defaults), checked like `sensor_set`. |
 
-The model and every parameter's value after the change:
+Reply:
 
 ```json
-{"status":"ok","data":{"type":"bmp280","values":{"temperature_c":25,"pressure_pa":101325}}}
+{"instance":"env","slot":"i2c0","image":"emulation","image_loaded":true,"address":"0x77",
+ "unavailable":["dac_control_loop","deep_replay"]}
 ```
 
-#### Error cases
+`slot` is the gateware block the instance uses: `i2c0`..`i2c3`, `spi0`, `uart0`, `analog0` (the DAC
+voltage output) or `analog1` (the 4-20 mA output). UART replies add `"baud"`. `unavailable` is
+there while the emulation image runs.
 
-| Condition | Message |
+Pins are claimed as LA functions with the instance as owner (`la_pins` shows
+`"function":"i2c_sda","owner":"sensor:env"`, see
+[LA pin ownership](#la-pin-ownership-functions-and-conflicts)). Several I2C instances may share
+`sda`/`scl` when they use the same pair and different addresses. A pin conflict is refused as for
+every LA owner.
+
+What the gateware supports, and the limits that follow:
+
+- **I2C**: 8- or 16-bit register addresses (`i2c.page` is the 256-aligned window), the conversion
+  handshake (`trigger`, `busy`, `while_busy` flag, nack or stretch), commanded sensors, the FIFO
+  register, `writable: false` bytes (the DUT's writes are counted but not stored), data ready on
+  `drdy`. A target has 4 conversion times of at most 65535 us: a longer `time_us` / `busy_us` is
+  cut to 65.535 ms, and a definition with more than 4 distinct times uses the longest set one for
+  the rest. The pointer always auto-increments and wraps at the end of the window.
+- **SPI**: modes 0..3, read and increment bits, address mask, 0..3 dummy bytes, the FIFO register
+  and `writable: false`. The SPI target has no conversion handshake and no data-ready pin
+  (`"drdy"` is refused: `"the emulated SPI target has no data-ready pin"`); SCK up to about 2 MHz.
+- **UART**: 8N1 only (`"the emulated UART is 8N1 only (the definition asks for 7E1)"`); messages
+  go out at their times, requests are matched byte by byte and answered after `delay_ms`.
+- **FIFO**: one instance with a `fifo` runs at a time (the gateware has one 2047-byte FIFO); frames
+  are pushed at `rate_hz` while `enabled`, up to `depth` frames. When it is full new frames are
+  dropped (`overflow: drop_oldest` behaves like `drop_newest`: the gateware cannot drop the oldest
+  frame). `fifo_level` in a register reads the frames waiting.
+- **Data ready**: `on: conversion` asserts in the gateware at the end of each conversion;
+  `on: sample` with each FIFO frame and each stimulus step; `on: rate` at `rate_hz`. While the
+  definition's `enabled` condition is false the pin keeps its inactive level and never asserts (a
+  held level is released). All targets share one pulse width: the last started instance's
+  `pulse_us` (1..255).
+- **Analog**: one instance per output. The DAC instance picks the smallest output path that covers
+  its `range.max` (3v3, 5v, 12v); the current instance drives the 4-20 mA output. `excitation: adc`
+  is refused for now (`"excitation: adc is not supported by the pod yet"`). An analog start is
+  refused while a DAC waveform plays, and while an analog sensor plays an output, the commands that
+  drive it (`generate`, `replay`, `load`, `load_bin`, `measure`, `dac_set`, `dac_out`,
+  `dac_control_loop`, and `current_out`) are refused with `"the dac output is played by
+  sensor:ntc; stop it first ({"cmd":"sensor_stop","instance":"ntc"})"`. On a board where the
+  4-20 mA output shares the DAC (no quad DAC), both outputs count as the DAC. `dac_stop` stops the
+  analog instances on the DAC too (they stay defined).
+
+Errors include `"unknown sensor instance 'env'"`, `"env is running: sensor_stop it first"`,
+`"an I2C sensor needs pins sda and scl"`, `"address 0x76 is not one of this sensor's addresses"`,
+`"address 0x76 is used by sensor:env on this bus"`, `"all 4 I2C sensor slots are in use:
+sensor_stop one first"`, `"the sensor FIFO is used by sensor:imu (one FIFO sensor at a time)"`,
+`"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` and the pin conflicts.
+
+### `sensor_set` — change readings
+
+```json
+{"cmd":"sensor_set","instance":"env","values":{"temperature_c":31.5,"humidity_pct":60}}
+```
+
+Every value is checked before any is applied: a value outside the param's range is refused with
+its range (`"humidity_pct must be 0..100 %"`), an unknown key with `"env has no param 'x'"`.
+Reply: `{"instance":"env","values":{"temperature_c":31.5,"humidity_pct":60}}` (the values as sent).
+The DUT sees the new reading on its next read (I2C/SPI) or next message (UART); an analog output
+moves on the next poll.
+
+### `sensor_stimulus` — upload a stimulus
+
+Same chunking as `sensor_define`, without `instance` (a stimulus may drive several instances; its
+signals use `instance.param`, or `param` when only one instance runs). One stimulus is loaded at a
+time; a new one replaces it. The last chunk's reply:
+`{"program_bytes":412,"signals":["env.temperature_c"],"faults":2,"duration_s":95,"repeat":false}`.
+
+```json
+{"cmd":"sensor_stimulus","offset":0,"total":812,"data_b64":"..."}
+{"cmd":"sensor_stimulus_start"}
+{"cmd":"sensor_stimulus_start","at_s":30}
+{"cmd":"sensor_stimulus_stop"}
+```
+
+`sensor_stimulus_start` checks that every signal and fault names a running instance and one of its
+params (`"signal env.temp: env has no such param"`), then starts at t = 0 or `at_s`. Values are
+applied `rate_hz` times a second (default 50, at most 100), clamped to the param ranges. It ends
+after its last segment (signals hold their last value) unless it has `repeat: true`. Replies:
+`{"running":true}` and `{"running":false}`; stopping switches its faults off. Stopping or
+redefining an instance a running stimulus drives stops the stimulus.
+
+### `sensor_fault` — inject a fault now
+
+```json
+{"cmd":"sensor_fault","instance":"env","type":"no_response","duration_s":2}
+{"cmd":"sensor_fault","instance":"env","type":"corrupt","at":"0xFA","mask":"0x01"}
+{"cmd":"sensor_fault_clear","instance":"env"}
+```
+
+Types and fields as in the format's faults section: `type`, `duration_s`, `param`, `value`, `at`,
+`mask`, `rate_hz`; `at` and `mask` take integers or hex strings. Without `duration_s` a fault lasts
+until `sensor_fault_clear`; `bus_stuck` needs a `duration_s` of at most 1 s. At most 4 faults are
+on per instance. Reply: `{"instance":"env","fault":"no_response"}`; `sensor_fault_clear` replies
+`{"instance":"env","faults":[]}` and also clears the faults a stimulus switched on.
+
+| Type | What the pod does |
 |---|---|
-| no sensor armed | `"no sensor active"` |
-| a value that is not a number or is out of range | `"<key> must be a number from <min> to <max> (<unit>)"` |
-| none of the model's parameters present | `"no <type> parameter given (sensor_types lists them)"` |
-| the FPGA did not take the new image | `"sensor image reload failed"` |
+| `no_response` | I2C: the address is not acknowledged; SPI: MISO stays released; UART: no messages and no answers |
+| `bus_stuck` | I2C: SDA held low (the gateware), released after `duration_s` |
+| `stuck`, `offset`, `gain`, `corrupt`, `open`, `short` | in the engine: the next image, message or output carries it |
+| `garbage` | UART: random bytes at `rate_hz` (default 100) instead of the messages |
+| `drop` | UART: each message dropped with probability `value` |
+| `baud_error` | UART: UART2 runs `value` percent off the baud rate |
 
-### `sensor_stop` — disarm the sensor
+A fault that does not apply to the kind is refused: `"fault bus_stuck does not apply to a uart
+sensor"`.
 
-```json
-{"cmd":"sensor_stop"}
-```
+### `sensor_stop`
 
-Releases the SDA/SCL channels and stops responding on the bus. Response:
-`{"status":"ok","data":null}`. (Safe to call when nothing is armed.)
+`{"cmd":"sensor_stop","instance":"env"}` or `{"cmd":"sensor_stop","all":true}`. Releases the pins
+and forgets the definition. Reply: `{"stopped":["env"]}` (every name for `all`). The emulation
+image stays loaded.
 
-### `sensor_status` — query sensor + bus activity
-
-```json
-{"cmd":"sensor_status"}
-```
-
-#### Response (inactive)
+### `sensor_status`
 
 ```json
-{"status":"ok","data":{"active":false}}
+{"image":"emulation","stimulus":{"loaded":true,"running":true,"t_s":12.4},
+ "instances":[{"instance":"env","kind":"i2c","name":"bme280","slot":"i2c0","running":true,
+   "address":"0x76","pins":{"sda":2,"scl":1},
+   "values":{"temperature_c":25,"pressure_pa":101325,"humidity_pct":40},
+   "faults":[{"type":"no_response","left_s":1.25}],
+   "bus":{"writes":14,"transfers":null,"log_lost":0,"last_write":{"at":"0xF4","value":"0x27"}}}]}
 ```
 
-#### Response (active)
+`{"cmd":"sensor_status","instance":"env"}` reports one instance. Every reply fits the cloud reply
+cap (1792 bytes): when the next instance would not fit, the list ends there and the reply carries
+`"next":N`; ask again with `"first":N` for the rest. Six typical instances fit one reply; six with
+16 long-named params each take two or three.
 
-```json
-{"status":"ok","data":{"active":true,"type":"bmp280","addr":118,"sda":1,"scl":2,"transactions":5,"writes":3,"last_reg":244,"last_val":1,"values":{"temperature_c":25,"pressure_pa":101325}}}
-```
+Per instance: `slot` as in `sensor_start` (empty when not running); `pins`; `values` (the params
+as set); `faults`, a list of objects with `type`, the fields it was given (`param`, `value`, `at`,
+`mask`, `rate_hz`), `"stimulus":true` when a stimulus switched it on, and `left_s` (null: until
+cleared). I2C/SPI `bus`: `writes` (the DUT's data bytes), `transfers` (always `null`: the v54
+gateware counts written bytes, not transfers), `log_lost` (writes that happened while more than 32
+were pending, so the rules saw them only as "something was written"), `last_write`, `drdy` (asserts
+the firmware sent), `fifo_frames` and `fifo_drops`. UART `bus`: `sent_bytes`, `received_bytes`,
+`messages`, `answers`, `overruns` (a message or answer due while the last one was still going out),
+`dropped`. Analog instances report `output` (the value last driven, V or mA).
 
-| Field | Type | Description |
-|---|---|---|
-| `active` | boolean | Whether a sensor is armed. |
-| `type` | string | Model name (active only). |
-| `addr` | integer | 7-bit address (active only). |
-| `sda`, `scl` | integer | The LA channels of the bus (active only). |
-| `values` | object | Every parameter of the model and the value the DUT reads (active only). |
-| `transactions` | integer | I2C transactions the FPGA has handled. |
-| `writes` | integer | Register-write bytes the DUT has issued. |
-| `last_reg` | integer | Address of the last register the DUT wrote (0–255). |
-| `last_val` | integer | Value of that last write (0–255). |
+### `sensor_regs` — read an I2C/SPI image
 
-`transactions` going up proves the DUT actually probed the emulated sensor —
-useful to distinguish "DUT never tried" from "DUT tried and got the wrong data".
+`{"cmd":"sensor_regs","instance":"env","start":"0xF7","len":8}` returns the bytes the DUT reads now
+(its own writes included) in one reply, so it works over the cloud:
+`{"instance":"env","start":"0xF7","len":8,"data_b64":"gAAAgAAAgAA="}` (standard base64). `start`
+0..255, `len` 1..256 (default the whole image).
 
-An emulated sensor survives a gateware reconfiguration (`fpga_image` swap, a
-gateware reflash): the firmware arms it again on the new fabric with the same
-pins and values.
+### `sensor_la` — raw I2C bus capture
 
-### `sensor_types` — list the models
-
-```json
-{"cmd":"sensor_types"}
-```
-
-The models this firmware emulates, their addresses and the parameters `sensor_set`
-takes (key, unit, accepted range, the value at `sensor_start`). Advertised by the
-`"sensor_types"` capability in `status`.
-
-```json
-{"status":"ok","data":{"types":[
-  {"type":"bmp280","label":"Bosch BMP280: temperature and pressure","addr":118,"alt_addr":119,
-   "params":[{"key":"temperature_c","unit":"C","min":-100,"max":150,"default":25},
-             {"key":"pressure_pa","unit":"Pa","min":1000,"max":200000,"default":101325}]},
-  ...]}}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | The `sensor_start` type. |
-| `label` | string | The part, for a person. |
-| `addr`, `alt_addr` | integer | The default 7-bit address and the other strap option. |
-| `params[].key` | string | The `sensor_set` field. |
-| `params[].unit` | string | `C`, `Pa`, `%`, `g` or `dps`. |
-| `params[].min`, `max` | number | The accepted range (inclusive). |
-| `params[].default` | number | The value at `sensor_start`. |
-
-### `sensor_regs` — read the register image
-
-Returns the emulated device's registers (firmware-loaded values plus anything the
-DUT has written). Chunked array, same framing as `capture`.
-
-#### Request
-
-```json
-{"cmd":"sensor_regs","start":"0xF7","len":6}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `start` | string | no | `0` | First register address (hex/decimal string), 0–255. |
-| `len` | integer | no | `256` | Number of bytes; `start + len` must be ≤ 256. |
-
-#### Response
-
-```json
-{"status":"ok","data":[247,0,0,201,63,160],"more":false}
-```
-
-#### Error cases
-
-| Condition | Message |
-|---|---|
-| no sensor armed | `"no sensor active"` |
-| `len` = 0 or `start + len > 256` | `"start/len out of range"` |
-| another command holds the buffer | `"busy"` |
-| FPGA read failed | `"read regs failed"` |
-
-### `sensor_la` — raw I2C-bus logic capture
-
-Captures the raw SDA/SCL line states on the emulated sensor's channels. Each
-returned byte packs **four** `{SCL,SDA}` samples (oldest in the high nibble); an
-idle bus reads `0xFF`. Chunked array, same framing as `capture`.
-
-#### Request
-
-```json
-{"cmd":"sensor_la","samples":1024,"sample_rate_mhz":2.0}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `samples` | integer | no | `256` | Number of packed bytes (1..4096), **not** individual samples. |
-| `sample_rate_mhz` | number | no | max | Capture clock; same semantics as `capture`. |
-
-#### Error cases
-
-| Condition | Message |
-|---|---|
-| `samples` = 0 or > 4096 | `"samples out of range"` |
-| another command holds the buffer | `"busy"` |
-| FPGA capture failed | `"la capture failed"` |
-
----
-
-
-## Emulated GPS receiver
-
-The pod can **play a GPS module** on one LA channel: it prints NMEA 0183 sentences
-to the DUT's UART RX the way a u-blox NEO-6M or NEO-M8N does out of the box
-(9600 baud 8N1, one fix a second, `RMC` `VTG` `GGA` `GSA` `GSV` `GLL` with the
-`GP` talker and checksums). The test sets the position, speed, course, altitude,
-satellites, fix quality and time; between fixes the position moves along the
-course at the set speed and the clock advances, so the DUT's parser sees a live
-receiver. Without a fix (`"fix":0`) the sentences carry empty position fields and
-say so (`RMC` status `V`, `GGA` quality 0, `GSA` mode 1), as a receiver does
-before it locks.
-
-The receiver runs on **UART2**, a second, transmit-only UART in the gateware, so
-it does not take the UART proxy: the DUT's console keeps working next to it. It
-needs gateware v48 or newer; `status` lists the `"gps"` capability when the pod
-has it. Only one receiver runs at a time. It keeps running until `gps_stop` or a
-replacing `gps_start`, and survives a gateware reconfiguration (it is armed again
-on the new fabric).
-
-### `gps_start` — start the receiver
-
-#### Request
-
-```json
-{"cmd":"gps_start","tx":5,"baud":9600,"rate_hz":1,"utc":"2026-10-08T12:00:00Z","latitude_deg":50.8466,"longitude_deg":4.3528}
-```
-
-| Field | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `tx` | integer | yes | — | LA channel (1..14) wired to the DUT's UART **RX**. Claimed as `gps_tx`. |
-| `baud` | integer | no | `9600` | 300..921600. |
-| `rate_hz` | integer | no | `1` | Fixes a second, 1..10. |
-| `sentences` | string | no | all six | Comma-separated subset of `RMC`, `VTG`, `GGA`, `GSA`, `GSV`, `GLL`. |
-| any [`gps_set`](#gps_set--set-the-fix) field | | no | the current fix | Applied before the first sentence. |
-
-The sentences of one fix must fit the period at the baud rate (10 bits a byte):
-the full set with 8 satellites is about 450 bytes, so 9600 baud carries 1 or 2
-fixes a second; 10 Hz needs 115200 baud or fewer sentences.
-
-#### Response
-
-The same object as [`gps_status`](#gps_status--session-and-fix).
-
-#### Error cases
-
-| Condition | Message |
-|---|---|
-| the gateware has no UART2 | `"the GPS receiver needs gateware v48 or newer (this pod runs v<n>)"` |
-| `tx` missing or outside 1..14 | `"missing tx (the LA channel the DUT's RX is on)"` / `"tx must be an LA channel 1..14"` |
-| `baud`, `rate_hz` or `sentences` invalid | `"baud must be 300..921600"` / `"rate_hz must be 1..10"` / `"sentences: a list of RMC, VTG, GGA, GSA, GSV, GLL"` |
-| one fix does not fit the period | `"<r> Hz of <n>-byte epochs needs more than <baud> baud: lower rate_hz, drop sentences or raise baud"` |
-| a fix field invalid | as for `gps_set` |
-| `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| no LA voltage selected | as for every LA command |
-
-### `gps_set` — set the fix
-
-```json
-{"cmd":"gps_set","latitude_deg":50.8466,"longitude_deg":4.3528,"altitude_m":56,"speed_kmh":36,"course_deg":90,"satellites":9,"hdop":0.9,"fix":1,"utc":"2026-10-08T12:00:00Z"}
-```
-
-Any subset of the fields; the others keep their values. Every field is checked
-before any is applied. Without a running receiver the values are kept for the
-next `gps_start`. The next fix the receiver prints carries them.
-
-| Field | Type | Range | Default (after boot) | Description |
-|---|---|---|---|---|
-| `latitude_deg` | number | -90..90 | `0` | North positive. |
-| `longitude_deg` | number | -180..180 | `0` | East positive. |
-| `altitude_m` | number | -1000..20000 | `0` | Above mean sea level (`GGA`). |
-| `speed_kmh` | number | 0..2000 | `0` | Over ground; the position moves at this speed. |
-| `course_deg` | number | 0..360 | `0` | True course the position moves along. |
-| `satellites` | integer | 0..12 | `8` | Satellites used (`GGA`, `GSA`; `GSV` shows two more in view). |
-| `hdop` | number | 0.5..99 | `0.9` | Horizontal dilution (`GGA`, `GSA`). |
-| `fix` | integer | 0..2 | `1` | 0 no fix, 1 GPS, 2 DGPS. |
-| `utc` | string or integer | | `2026-01-01T00:00:00Z` | `"YYYY-MM-DDThh:mm:ssZ"` or seconds since 1970. The pod has no clock of its own: send the time you want the DUT to see. |
-
-Response: the same object as `gps_status`. Errors: `"<field> must be a number
-from <min> to <max>"`, `"utc must be like \"2026-10-08T12:00:00Z\" or seconds since 1970"`.
-
-### `gps_stop` — stop the receiver
-
-```json
-{"cmd":"gps_stop"}
-```
-
-Disarms UART2 and releases the `tx` channel. Response: `{"status":"ok","data":null}`.
-(Safe to call when nothing runs.) The fix values are kept.
-
-### `gps_status` — session and fix
-
-```json
-{"cmd":"gps_status"}
-```
-
-```json
-{"status":"ok","data":{"active":true,"tx":5,"baud":9600,"rate_hz":1,"sentences":"RMC,VTG,GGA,GSA,GSV,GLL","epochs":42,"overruns":0,"bytes":18690,"latitude_deg":50.8466,"longitude_deg":4.3528,"altitude_m":56,"speed_kmh":0,"course_deg":0,"hdop":0.9,"satellites":8,"fix":1,"utc":1791460842}}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `active` | boolean | Whether the receiver runs. `tx` .. `bytes` appear only while it does. |
-| `tx`, `baud`, `rate_hz`, `sentences` | | The session's settings. |
-| `epochs` | integer | Fixes printed since `gps_start`. |
-| `overruns` | integer | Fixes skipped because the previous one was still being sent (the baud rate is too low for the rate and sentences, or the line is stuck). |
-| `bytes` | integer | NMEA bytes handed to UART2. |
-| `latitude_deg` .. `fix` | | The fix the next sentences carry (it moves while `speed_kmh` > 0). |
-| `utc` | integer | Its time, seconds since 1970. |
+`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}` captures the two bus
+pins of a running **I2C** instance. `samples` is the number of packed bytes (1..4096, 4 samples per
+byte), `sample_rate_mhz` optional (default the highest rate). The data comes back chunked like the
+other sample arrays (a stream connection: not over the cloud command channel), one byte per four
+samples, oldest first in the high bits: bit7 SCL(s0), bit6 SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3),
+the format of the earlier single-sensor `sensor_la`. SPI and UART instances are refused
+(`"sensor_la captures I2C sensors only; use la_capture for the pins of acc"`): capture their pins
+with [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture).
 
 ## Device Identity (Ed25519)
 
@@ -3279,19 +3204,28 @@ deep-replay image it answers `"closed-loop DAC not in the running gateware image
 <a id="fpga_image--switch-the-running-gateware-image"></a>
 ### `fpga_image` — switch the running gateware image
 
-The iCE40 has two images: `0` (the closed-loop DAC) and `1` (deep DAC replay from PSRAM). The
-switch reflashes the iCE40's configuration and reconfigures it, which takes 2 to 3 seconds. The pod
-then announces its new capabilities to the cloud, and puts an external output stage back on its
-park level when DAC limits are set.
+The iCE40 has three images: `0` or `"loop"` (the closed-loop DAC), `1` or `"deep"` (deep DAC
+replay from PSRAM) and, from gateware v54, `2` or `"emulation"` (the
+[emulated sensors](#emulated-sensors): I2C and SPI targets, the sensor FIFO, UART2). Each lives in
+its own W25Q slot (`gw0`, `gw1`, `gw2`). The switch reflashes the iCE40's configuration from the
+slot and reconfigures it, which takes 2 to 3 seconds. The pod then announces its new capabilities
+to the cloud, and puts an external output stage back on its park level when DAC limits are set.
+`sensor_start` loads the emulation image by itself; nothing switches back by itself.
 
 ```json
-{"cmd":"fpga_image","image":1}
+{"cmd":"fpga_image","image":"emulation"}
+{"cmd":"fpga_image"}
 ```
 
-Reply: `{"image":1,"version":47,"features":<feature bits>}`. Errors: `"image required (0=loop,
-1=deep-replay)"`, `"image out of range (0=loop, 1=deep-replay)"`, `"image switch: reflash failed
-(CDONE never rose)"`, `"image switch: iCE40->PSRAM write inoperable after retries (run
-psram_recover to reboot+reflash)"`, `"image switch failed"` and `"busy"`.
+Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
+running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation.
+
+Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `"the emulation image needs
+gateware v54 or later"`, `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
+gateware blobs"`, `"image switch refused: the emulated sensors env, imu need the emulation image;
+stop them first ({"cmd":"sensor_stop","all":true})"`, `"image switch: reflash failed (CDONE never
+rose)"`, `"image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod
+restarts and reloads the iCE40)"`, `"image switch failed"` and `"busy"`.
 
 ### `psram_ping` — check the iCE40 to PSRAM write path
 
@@ -4133,19 +4067,11 @@ All errors follow the format:
 | `"missing rx"` / `"missing tx"` | `uart_proxy_start` request without `rx`/`tx` field |
 | `"invalid uart args"` | `uart_proxy_start` channel outside 1..14 or `rx`==`tx` |
 | `"uart busy"` | a UART proxy is already active (console or another connection) |
-| `"missing type"` | `sensor_start` request without `type` field |
-| `"missing sda/scl"` | `sensor_start` request without `sda`/`scl` field |
-| `"unknown sensor type"` | `sensor_start` `type` is not a known model |
-| `"sensor start failed (bad channel?)"` | `sensor_start` bad LA channel or FPGA config error |
-| `"no sensor active"` | `sensor_set`/`sensor_regs` with no sensor armed |
-| `"<key> must be a number from <min> to <max> (<unit>)"` | `sensor_set` value not a number / out of range |
-| `"no <type> parameter given (sensor_types lists them)"` | `sensor_set` with none of the model's parameters |
-| `"sensor image reload failed"` | `sensor_set` and the FPGA did not take the new image |
-| `"the GPS receiver needs gateware v48 or newer (this pod runs v<n>)"` | `gps_start` on gateware without UART2 |
-| `"missing tx (the LA channel the DUT's RX is on)"` / `"tx must be an LA channel 1..14"` | `gps_start` without a valid `tx` |
-| `"<r> Hz of <n>-byte epochs needs more than <baud> baud: ..."` | `gps_start` whose fixes do not fit the baud rate |
-| `"UART2 refused the configuration"` | `gps_start` and the gateware did not take the UART2 settings |
-| `"start/len out of range"` | `sensor_regs` `len` = 0 or `start`+`len` > 256 |
+| `"unknown sensor instance '<name>'"` | a `sensor_*` command naming an instance that is not defined |
+| `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
+| `"chunk at offset N, expected M (start again at offset 0)"` | `sensor_define` / `sensor_stimulus` chunk out of order |
+| `"<key> must be <min>..<max> <unit>"` | `sensor_set` / `sensor_start` value out of range |
+| `"start/len out of range (0..255)"` | `sensor_regs` `len` = 0 or `start`+`len` > 256 |
 | `"missing nonce"` | `identity_pop` request without `nonce` field |
 | `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
 | `"identity not available"` | Device identity not initialised (should not occur after boot) |
