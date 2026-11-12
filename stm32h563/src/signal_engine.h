@@ -71,7 +71,7 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
-   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (3 + 51) ~= 889 kS/s;
+   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (4 + 51) ~= 873 kS/s;
    faster requests are clamped to it). Replay a captured trace at the rate it was captured at,
    so the playback time base matches the recording. */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
@@ -83,7 +83,7 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
    the whole 8 MB region (up to FPGA_DAC_REPLAY_MAX_SAMPLES) — enough to replay a
    full stored ADC recording.  The caller must have staged the bytes into PSRAM and
    released the shared bus (psram_bus_release) so the iCE40 can read.  Pass 0 rate
-   for the max clock (48 MHz / (3 + 52) ~= 873 kS/s from PSRAM; faster requests are clamped). */
+   for the max clock (48 MHz / (4 + 52) ~= 857 kS/s from PSRAM; faster requests are clamped). */
 int dac_replay_psram(uint32_t count, float sample_rate_hz);
 
 /* The sample rate (S/s, rounded) the last dac_generate_arbitrary_rate / dac_replay_psram plays at:
@@ -201,10 +201,11 @@ int      fpga_warmboot(uint8_t image);
    on any runtime path that can race a live master (image swap, flash-ice40, OTA commit). */
 void     signal_engine_quiesce_psram_masters(void);
 
-/* DAC8551 peak update rate — clk48/(3+51) ~= 889 kS/s since the DAC divider floor of 3
-   (DAC_MIN_DIVIDER, DAC8551 frame timing; it was clk48/53 ~= 906 kS/s) — used as the bus-load
-   term for a resident deep-DAC replay in the tri-capture bandwidth pre-check. */
-#define DAC_MAX_RATE_HZ  889000u
+/* DAC peak update rate — clk48/(4+51) ~= 873 kS/s since the DAC divider floor of 4
+   (DAC_MIN_DIVIDER, DAC8554 frame timing; it was clk48/54 ~= 889 kS/s with the DAC8551 floor of 3,
+   and clk48/53 ~= 906 kS/s before that) — used as the bus-load term for a resident deep-DAC
+   replay in the tri-capture bandwidth pre-check. */
+#define DAC_MAX_RATE_HZ  873000u
 
 /* Latch the runtime PSRAM capture bases into the iCE40 (0x32) for dynamic tri-capture
    zone allocation, and mirror them for read-back.  Call BEFORE arming CAPTURE; keeps the

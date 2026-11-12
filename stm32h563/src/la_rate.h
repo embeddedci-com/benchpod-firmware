@@ -96,14 +96,17 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
 /* A deep (PSRAM) replay takes one more clk48 per sample: the dac_psram_reader FIFO is
  * first-word-fall-through and refills its head one clk48 after each pop, so the engine's
  * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 52);
- * the pod measures the same (48 MHz / (3 + 52) = 872.7 kS/s at the top). */
+ * the pod measured the same (48 MHz / (3 + 52) = 872.7 kS/s at the old divider floor of 3;
+ * 48 MHz / (4 + 52) ~= 857 kS/s at today's floor of 4). */
 #define DAC_PSRAM_EXTRA_CLK  1u
 
-/* Smallest DAC divider firmware sends — and, from gateware v34, the smallest the engine honours
- * (it floors lower ones to this).  The next DAC8551 frame's SYNC falls divider+3 clocks after the
- * previous frame's 24th SCLK falling edge; the datasheet needs >= 100 ns there (t9), and divider
- * 2 gave 5 x 20.8 = 104 ns.  3 gives 125 ns for ~2% of the peak update rate (48 MHz/54). */
-#define DAC_MIN_DIVIDER 3u
+/* Smallest DAC divider firmware sends.  The next frame's SYNC falls divider+3 clocks after the
+ * previous frame's 24th SCLK falling edge (t9).  The DAC8551 needs >= 100 ns there and the
+ * DAC8554 (analog v3r2 and later) >= 130 ns (SLAS431B, both IOVDD ranges).  Gateware v34+ floors
+ * the divider at 3 (6 clk = 125 ns), enough for the DAC8551 only, so the firmware floors it at 4:
+ * 7 x 20.8 = 146 ns on every board and every gateware, for ~2% of the peak update rate
+ * (48 MHz/55 ~= 873 kS/s, was 48 MHz/54 ~= 889 kS/s). */
+#define DAC_MIN_DIVIDER 4u
 #define DAC_MAX_DIVIDER 65535u   /* the 16-bit divider field */
 
 typedef struct {
