@@ -290,7 +290,7 @@ define topbench
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -633,6 +633,13 @@ simtest:
 	$(VVP) /tmp/$(PROJECT)_i2c.vvp
 	@rm -f /tmp/$(PROJECT)_i2c.vvp
 
+# v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
+i2cemutest:
+	iverilog -g2012 -o /tmp/$(PROJECT)_i2cemu.vvp -s tb_i2c_emu \
+	         sim/tb_i2c_emu.v src/i2c_emu.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_i2cemu.vvp
+	@rm -f /tmp/$(PROJECT)_i2cemu.vvp
+
 # Self-checking loopback simulation of the soft UART (needs iverilog/vvp).
 uarttest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_uart.vvp \
@@ -881,7 +888,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: simtest i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
