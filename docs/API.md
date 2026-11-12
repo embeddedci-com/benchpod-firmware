@@ -234,7 +234,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `gps_status` | T0 | The GPS receiver's session and current fix | object | no |
 | `sensor_regs` | T0 | Read the emulated register image | array of uint8 | yes |
 | `sensor_la` | T0 | Raw I2C-bus logic capture | array of uint8 | yes |
-| `can_config` | T1 | Bring up classic CAN (FDCAN1 / TCAN1044) | object | no |
+| `can_config` | T1 | Bring up classic CAN or CAN FD (FDCAN1 / TCAN1044) | object | no |
 | `can_write` | T1 | Send one CAN frame | object | no |
 | `can_read` | T0 | Drain up to 8 received CAN frames | object | no |
 | `can_status` | T0 | CAN state and error counters | object | no |
@@ -3323,9 +3323,14 @@ reconnects" as success and check `status.psram_ok` again.
 
 ## CAN
 
-Classic CAN on FDCAN1 with the TCAN1044 transceiver, on J1 pins 19 (`CAN+`) and 20 (`CAN−`).
-Every CAN command is a single reply, so all of them work over the cloud command channel, and they
-keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
+Classic CAN and CAN FD on FDCAN1 with the TCAN1044 transceiver, on J1 pins 19 (`CAN+`) and 20
+(`CAN−`). Every CAN command is a single reply, so all of them work over the cloud command channel,
+and they keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
+
+**CAN FD** (firmware 3.10.2 and later, capability `can_fd`): give `can_config` a `data_bitrate`.
+Frames then carry up to 64 data bytes, and with a `data_bitrate` above `bitrate` their data phase
+runs at the faster rate (bit-rate switching). Without `data_bitrate` the bus is classic CAN, as
+before.
 
 ### `can_config` — bring CAN up
 
@@ -3335,12 +3340,25 @@ keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `bitrate` | integer | `500000` | Bit rate in bit/s; one that has no exact bit timing is refused |
+| `bitrate` | integer | `500000` | Bit rate in bit/s (the arbitration rate on CAN FD); one that has no exact bit timing is refused |
+| `data_bitrate` | integer | none | Turns CAN FD on: the data-phase bit rate in bit/s, from `bitrate` up to 8000000. Above `bitrate` frames switch to it after arbitration; equal to `bitrate` gives FD frames without switching. Rates with exact timing work, for example 1, 2, 4, 5 and 8 Mbit/s; 3 or 6 Mbit/s are refused |
 | `mode` | string | `"normal"` | `normal`, `listen` (receive only), `internal` (internal loopback) or `external` (loopback through the transceiver); the loopback modes let a single pod test itself |
 | `term` | boolean | `false` | Switch the 120 Ω termination on |
 
-Reply: `{"bitrate":500000,"mode":"normal","term":true}`. Errors: `"mode must be
-normal|internal|external|listen"`, `"unsupported bitrate (no exact bit timing)"`, `"can init failed"`.
+```json
+{"cmd":"can_config","bitrate":500000,"data_bitrate":2000000,"mode":"normal","term":true}
+```
+
+Reply: `{"bitrate":500000,"data_bitrate":0,"fd":false,"mode":"normal","term":true}` (`data_bitrate`
+is 0 on classic CAN). Errors: `"mode must be normal|internal|external|listen"`, `"unsupported
+bitrate (no exact bit timing)"`, `"unsupported data_bitrate (no exact bit timing at 80 MHz; 1, 2,
+4, 5 and 8 Mbit/s work)"`, `"data_bitrate must be from bitrate up to 8000000"`, `"can init
+failed"`.
+
+The pod sets the bit timing itself: a sample point of about 87.5 % on classic CAN; on CAN FD 80 %
+in the arbitration phase and 80 % (up to 2 Mbit/s) or 75 % (above) in the data phase, with
+transmitter delay compensation on, as CiA 601-3 recommends. A CAN FD peer should use the same
+sample points.
 
 ### `can_write` — send one frame
 
@@ -3348,9 +3366,18 @@ normal|internal|external|listen"`, `"unsupported bitrate (no exact bit timing)"`
 {"cmd":"can_write","id":291,"ext":false,"rtr":false,"data":[1,2,3]}
 ```
 
-`id` is required; `ext` selects a 29-bit ID, `rtr` a remote frame, and `data` holds up to 8 bytes.
-Reply: `{"id":291,"ext":false,"dlc":3}`. Errors: `"missing id"`, `"can not enabled"`, `"bus off"`,
-`"tx failed (fifo full?)"`.
+`id` is required; `ext` selects a 29-bit ID, `rtr` a remote frame, and `data` holds up to 8 bytes
+on classic CAN, up to 64 on CAN FD. On a CAN FD bus a frame is an FD frame with bit-rate switching;
+`"fd":false` sends a classic frame instead (to talk to a classic node on the same bus), `"brs":false`
+keeps an FD frame's data phase at `bitrate`. CAN FD payloads are 0 to 8, 12, 16, 20, 24, 32, 48 or
+64 bytes: another length is padded with zeros up to the next one. A remote frame (`rtr`) is always
+classic, as CAN FD has none.
+
+Reply: `{"id":291,"ext":false,"dlc":3,"fd":false,"brs":false}`, where `dlc` is the number of data
+bytes sent (after padding). Errors: `"missing id"`, `"can not enabled"`, `"bus off"`, `"tx failed
+(fifo full?)"`, `"data is longer than 64 bytes"`, `"more than 8 data bytes needs CAN FD (can_config
+with data_bitrate)"`, `"more than 8 data bytes needs an FD frame"`, `"rtr needs a classic frame (CAN
+FD has no remote frames)"`.
 
 ### `can_read` — drain received frames
 
@@ -3358,12 +3385,16 @@ Reply: `{"id":291,"ext":false,"dlc":3}`. Errors: `"missing id"`, `"can not enabl
 {"cmd":"can_read","max":8}
 ```
 
-`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"dlc":3,"data":[1,2,3],"ts":12345}],"overflow":0}`.
-`overflow` counts frames dropped because the receive queue was full.
+`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"fd":false,"brs":false,"dlc":3,"data":[1,2,3],"ts":12345}],"overflow":0,"pending":0}`.
+`fd` and `brs` say whether the frame was a CAN FD frame and switched bit rate, `dlc` is the number
+of data bytes. `overflow` counts frames dropped because the receive queue was full, `pending` the
+frames still queued. A reply holds at most about five 64-byte FD frames (to fit a cloud reply), so
+read again while `pending` is above 0. The queue holds about 50 classic frames or 13 64-byte FD
+frames.
 
 ### `can_status` — state and counters
 
-Reply: `{"enabled":true,"mode":"normal","bitrate":500000,"term":true,"tec":0,"rec":0,"bus_off":false,"error_passive":false,"rx_pending":0,"rx_overflow":0,"responder_rules":0,"responder_hits":0,"bus_off_recoveries":0}`.
+Reply: `{"enabled":true,"mode":"normal","bitrate":500000,"data_bitrate":0,"fd":false,"term":true,"tec":0,"rec":0,"bus_off":false,"error_passive":false,"rx_pending":0,"rx_overflow":0,"responder_rules":0,"responder_hits":0,"bus_off_recoveries":0}`.
 
 ### `can_term` — termination
 
@@ -3380,8 +3411,12 @@ Up to 8 rules.
 {"cmd":"can_respond","clear":true}
 ```
 
-`reply_rtr` sends a remote frame. Reply: `{"rule":0,"rules":1}`, or `{"rules":0}` after a clear.
-Errors: `"missing match_id"`, `"missing reply_id"`, `"responder table full"`.
+`reply_rtr` sends a remote frame. `reply_data` holds up to 64 bytes; on a CAN FD bus the reply is an
+FD frame with bit-rate switching unless `"reply_fd":false` (classic) or `"reply_brs":false`, as for
+[`can_write`](#can_write--send-one-frame). An FD reply is only sent while the bus runs CAN FD.
+Reply: `{"rule":0,"rules":1}`, or `{"rules":0}` after a clear. Errors: `"missing match_id"`,
+`"missing reply_id"`, `"responder table full"`, `"invalid reply frame"`, and the `can_write` data
+errors.
 
 ### `can_disable` — turn CAN off
 

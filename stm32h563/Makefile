@@ -89,6 +89,8 @@ C_SOURCES := \
   src/tca9554.c \
   src/target_power.c \
   src/can_bus.c \
+  src/can_timing.c \
+  src/can_ring.c \
   src/console_io.c \
   src/bp_log.c \
   src/console.c \
