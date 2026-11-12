@@ -21,15 +21,18 @@
 // status read).
 // ============================================================================
 
-// ---- small 1-writer / 1-reader ring FIFO (depth 256) ----------------------
-module uart_fifo (
+// ---- small 1-writer / 1-reader ring FIFO (depth 2^AW, 256 by default) -------
+// (v54: AW is a parameter; the emulation image's shared sensor FIFO is the same ring at AW = 9.)
+module uart_fifo #(
+    parameter AW = 8
+)(
     input  wire        clk,
     input  wire        rst,
     input  wire        we,
     input  wire [7:0]  wdata,
     input  wire        re,
     output wire [7:0]  rdata,   // current head (1-cycle settle after a pop)
-    output wire [8:0]  count,   // occupancy 0..256
+    output wire [AW:0] count,   // occupancy 0..2^AW
     output wire        full,
     output wire        empty
 );
@@ -42,35 +45,35 @@ module uart_fifo (
     // in TX_LOAD, one cycle after an IDLE cycle that saw !empty with no pop.  RX's
     // reader (cmd_dispatch) samples once per SPI byte (>= 16 clks) and pops one
     // cycle after sampling, so it never samples the cycle after its own pop.
-    (* no_rw_check *) reg [7:0] mem [0:255];
-    reg [7:0] wptr, rptr;
-    reg [8:0] cnt;
+    (* no_rw_check *) reg [7:0] mem [0:(1<<AW)-1];
+    reg [AW-1:0] wptr, rptr;
+    reg [AW:0]   cnt;
     reg [7:0] rdata_r;
 
     assign rdata = rdata_r;
     assign count = cnt;
-    // cnt never exceeds 256 (it only counts up while not full), so bit 8 alone is "full".
-    assign full  = cnt[8];
-    assign empty = (cnt == 9'd0);
+    // cnt never exceeds 2^AW (it only counts up while not full), so its top bit alone is "full".
+    assign full  = cnt[AW];
+    assign empty = (cnt == {(AW+1){1'b0}});
 
     wire we_e = we & ~full;
     wire re_e = re & ~empty;
 
     // The next read pointer as one carry chain (rptr + re_e): it is both rptr's next value
     // and the head's read address, so no separate increment and 8-bit mux.
-    wire [7:0] rptr_nx = rptr + {7'd0, re_e};
+    wire [AW-1:0] rptr_nx = rptr + {{(AW-1){1'b0}}, re_e};
     // cnt +1 / -1 / 0 as one add: -1 is + all-ones, +1 is the carry in.
     wire       cnt_dn  = re_e & ~we_e;
     wire       cnt_up  = we_e & ~re_e;
-    wire [8:0] cnt_nx  = cnt + {9{cnt_dn}} + {8'd0, cnt_up};
+    wire [AW:0] cnt_nx = cnt + {(AW+1){cnt_dn}} + {{AW{1'b0}}, cnt_up};
 
     always @(posedge clk) begin
         if (rst) begin
-            wptr <= 8'd0;
-            rptr <= 8'd0;
-            cnt  <= 9'd0;
+            wptr <= {AW{1'b0}};
+            rptr <= {AW{1'b0}};
+            cnt  <= {(AW+1){1'b0}};
         end else begin
-            if (we_e) begin mem[wptr] <= wdata; wptr <= wptr + 8'd1; end
+            if (we_e) begin mem[wptr] <= wdata; wptr <= wptr + {{(AW-1){1'b0}}, 1'b1}; end
             rptr <= rptr_nx;
             cnt  <= cnt_nx;
         end

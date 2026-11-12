@@ -47,8 +47,9 @@ SRC = src/top_v2.v            \
       src/la_bank.v           \
       src/stepper_engine.v    \
       src/swd_engine.v        \
-      src/i2c_regfile.v       \
-      src/i2c_target.v        \
+      src/i2c_emu.v           \
+      src/emu_fifo.v          \
+      src/spi_target.v        \
       src/la_psram_capture.v  \
       src/uart_engine.v       \
       src/dsp_counter.v       \
@@ -290,7 +291,7 @@ define topbench
 	done
 endef
 
-.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -626,12 +627,7 @@ sim:
 	iverilog -g2012 -I src -Wall -o /tmp/$(PROJECT).sim $(SRC) && rm -f /tmp/$(PROJECT).sim
 	@echo "Syntax OK"
 
-# Self-checking simulation of the generic I2C target (needs iverilog/vvp).
-simtest:
-	iverilog -g2012 -o /tmp/$(PROJECT)_i2c.vvp \
-	         sim/tb_i2c_target.v src/i2c_target.v src/i2c_regfile.v src/lc_counter.v $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_i2c.vvp
-	@rm -f /tmp/$(PROJECT)_i2c.vvp
+# (simtest, the v24..v53 single I2C target, was replaced in v54 by i2cemutest.)
 
 # v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
 i2cemutest:
@@ -784,10 +780,13 @@ measuretest:
 
 # Self-checking simulation of the cmd_dispatch payload byte-counter (the arg_rem
 # down-counter that replaced the per-state arg_count+1>=arg_len add-compare).
+# v54: once as the loop image's decoder, once as the emulation image's (the I2C_* commands).
 argtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_args.vvp \
-	         sim/tb_dispatch_args.v src/cmd_dispatch.v
-	$(VVP) /tmp/$(PROJECT)_args.vvp
+	@set -e; for d in "" "$(EMU_DEFINES)"; do \
+	  echo "== tb_dispatch_args $$d"; \
+	  iverilog -g2012 -I src $$d -o /tmp/$(PROJECT)_args.vvp sim/tb_dispatch_args.v src/cmd_dispatch.v; \
+	  $(VVP) /tmp/$(PROJECT)_args.vvp; \
+	done
 	@rm -f /tmp/$(PROJECT)_args.vvp
 
 # Self-checking simulation of the stepper engine pulse-train generator.
@@ -835,7 +834,7 @@ topboottest:
 # v52: the STM32 -> iCE40 SPI link at 1.95, 3.9 and 5 MHz against an STM32 model (pad delays, MISO
 # setup, a drifting phase): PING/VERSION/STATUS and a 256-byte register write + streamed read-back.
 topspilinktest:
-	$(call topbench,tb_top_spilink,loop deep)
+	$(call topbench,tb_top_spilink,loop deep emu)
 
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
@@ -855,6 +854,11 @@ spitest:
 # on the pads with bit timing, re-armed on another pin and rate, then disarmed.
 uart2test:
 	$(call topbench,tb_top_uart2,emu)
+
+# v54: the emulated sensors through the whole emulation image: I2C targets, the FIFO, data ready
+# and the SPI target, driven over the SPI link, with bus models on the LA pads.
+topemutest:
+	$(call topbench,tb_top_emu,emu)
 
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
@@ -888,7 +892,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
@@ -919,3 +923,4 @@ help:
 # The gateware source list (scripts: make -s print-src).
 print-src:
 	@echo $(SRC)
+.PHONY: print-src topemutest

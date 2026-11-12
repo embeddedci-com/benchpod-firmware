@@ -32,22 +32,17 @@ module tb_dispatch_args;
 
     // capture BRAM read port (READ_CAPTURE) — behavioural ramp w/ 1-cycle latency
 
-    // I2C sensor config decode (I2C_CONFIG)
-    wire        i2c_cfg_stb;
-    wire [6:0]  i2c_cfg_addr7;
-    wire [3:0]  i2c_cfg_sda_ch, i2c_cfg_scl_ch;
-    wire        i2c_cfg_enable;
-    wire [7:0]  i2c_cfg_trig_reg, i2c_cfg_busy_reg, i2c_cfg_busy_mask;
-    wire [15:0] i2c_cfg_conv_us;
+    // I2C sensor config decode (I2C_CONFIG, v54: the emulation image's i2c_emu fields)
+    wire        i2c_cfg_stb, i2c_cfg_en_only;
+    wire [40:0] i2c_cfg_data;
+    wire [2:0]  emu_t;
 
-    // I2C register-file write port (I2C_LOAD_REGS)
+    // I2C register-image write port (I2C_LOAD_REGS) and read port (I2C_READ_REGS): registered,
+    // like the target's.  Cell a holds a ^ 8'h5A so every address reads back a distinct value.
     wire        i2c_reg_we;
-    wire [7:0]  i2c_reg_waddr, i2c_reg_wdata;
-    // I2C register-file read port (I2C_READ_REGS): registered, like i2c_regfile.v.
-    // Cell a holds a ^ 8'h5A so every address reads back a distinct value.
-    wire [7:0]  i2c_reg_raddr;
+    wire [7:0]  i2c_reg_addr, i2c_reg_wdata;
     reg  [7:0]  i2c_reg_rdata = 8'h00;
-    always @(posedge clk) i2c_reg_rdata <= i2c_reg_raddr ^ 8'h5A;
+    always @(posedge clk) i2c_reg_rdata <= i2c_reg_addr ^ 8'h5A;
 
     // UART TX FIFO write port (UART_WRITE)
     wire        uart_tx_we;
@@ -101,13 +96,10 @@ module tb_dispatch_args;
         .clk(clk), .rst(rst),
         .rx_byte(rx_byte), .rx_valid(rx_valid), .cs_active(cs_active), .tx_byte(tx_byte),
         .wave_we(wave_we), .wave_waddr(wave_waddr), .wave_wdata(wave_wdata),
-        .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_addr7(i2c_cfg_addr7),
-        .i2c_cfg_sda_ch(i2c_cfg_sda_ch), .i2c_cfg_scl_ch(i2c_cfg_scl_ch),
-        .i2c_cfg_enable(i2c_cfg_enable), .i2c_cfg_trig_reg(i2c_cfg_trig_reg),
-        .i2c_cfg_busy_reg(i2c_cfg_busy_reg), .i2c_cfg_busy_mask(i2c_cfg_busy_mask),
-        .i2c_cfg_conv_us(i2c_cfg_conv_us),
-        .i2c_reg_we(i2c_reg_we), .i2c_reg_waddr(i2c_reg_waddr), .i2c_reg_wdata(i2c_reg_wdata),
-        .i2c_reg_raddr(i2c_reg_raddr), .i2c_reg_rdata(i2c_reg_rdata),
+        .emu_t(emu_t), .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_en_only(i2c_cfg_en_only),
+        .i2c_cfg_data(i2c_cfg_data),
+        .i2c_reg_we(i2c_reg_we), .i2c_reg_addr(i2c_reg_addr), .i2c_reg_wdata(i2c_reg_wdata),
+        .i2c_reg_rdata(i2c_reg_rdata),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch),
         .uart_cfg_tx_ch(uart_cfg_tx_ch), .uart_cfg_div(uart_cfg_div),
         .uart_cfg_enable(uart_cfg_enable),
@@ -159,7 +151,7 @@ module tb_dispatch_args;
     reg [7:0]  rg_a [0:63];
     reg [7:0]  rg_d [0:63];
     always @(posedge clk) if (!rst && i2c_reg_we) begin
-        rg_a[rg_n] = i2c_reg_waddr; rg_d[rg_n] = i2c_reg_wdata; rg_n = rg_n + 1;
+        rg_a[rg_n] = i2c_reg_addr; rg_d[rg_n] = i2c_reg_wdata; rg_n = rg_n + 1;
     end
 
     integer i2c_cfg_n;  always @(posedge clk) if (i2c_cfg_stb)  i2c_cfg_n  = i2c_cfg_n  + 1;
@@ -206,11 +198,13 @@ module tb_dispatch_args;
         end
     endtask
 
-    // group A: I2C_LOAD_REGS [start][len][data..] writes n cells at start+0..n-1.
+    // group A: I2C_LOAD_REGS [target][start][len][data..] writes n cells at start+0..n-1 (v54:
+    // the target byte; emulation image only).
     task test_load_regs(input [7:0] start, input integer n);
         integer k; begin
             rg_n = 0; cs_hi;
-            feed(8'h62); feed(start); feed(n[7:0]); feed(n[15:8]);
+            feed(8'h62); feed(8'h03); feed(start); feed(n[7:0]); feed(n[15:8]);
+            if (emu_t !== 3'd3) begin $display("FAIL load_regs: emu_t=%0d (want 3)", emu_t); errors = errors + 1; end
             for (k = 0; k < n; k = k + 1) feed(8'hD0 + k[7:0]);
             cs_lo;
             if (rg_n !== n) begin
@@ -232,7 +226,7 @@ module tb_dispatch_args;
     task test_read_regs(input [7:0] start, input integer n);
         integer k; reg [7:0] got, want; begin
             cs_hi;
-            feed(8'h63); feed(start); feed(n[7:0]); feed(n[15:8]);
+            feed(8'h63); feed(8'h04); feed(start); feed(n[7:0]); feed(n[15:8]);
             for (k = 0; k < n; k = k + 1) begin
                 got  = tx_byte;                                   // shifted out during pad k
                 want = (k == 0 ? start : start + k[7:0] - 8'd1) ^ 8'h5A;
@@ -376,10 +370,12 @@ module tb_dispatch_args;
             cs_hi; feed(8'h1A); feed(8'h02); feed(8'h52); feed(8'h53); feed(8'h54); feed(8'h55); cs_lo;
             if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
                 $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
+`ifndef USE_EMULATION   // DAC_LOOP_INMAP: the loop image only
             cs_hi; feed(8'h1C); feed(8'h61); feed(8'h62); feed(8'h63); feed(8'h64); feed(8'h65); feed(8'h06);
                    feed(8'h03); cs_lo;
             if (n_inmap !== 1 || got_inmap !== {2'b11, 11'h665, 16'h6463, 16'h6261}) begin
                 $display("FAIL loop_inmap: %0d strobes, payload %h", n_inmap, got_inmap); errors=errors+1; end
+`endif
         end
     endtask
 
@@ -442,30 +438,31 @@ module tb_dispatch_args;
         end
     endtask
 
-    // collect: I2C_CONFIG (9 payload bytes) fires i2c_cfg_stb once + decodes.
+    // collect: I2C_CONFIG (v54, 8 payload bytes) fires i2c_cfg_stb once with i2c_emu's fields
+    // {en, addr7, a16, while_busy, mute, stuck, page, mask, sda, scl, drdy mode, active high, on conv};
+    // I2C_DISABLE (1 byte) fires it with en_only and the enable bit 0.  Captured in the strobe cycle.
+    reg [40:0] got_cfg;  reg got_eo;  reg [2:0] got_t;
+    always @(posedge clk) if (i2c_cfg_stb) begin got_cfg <= i2c_cfg_data; got_eo <= i2c_cfg_en_only; got_t <= emu_t; end
     task test_i2c_config;
         begin
             i2c_cfg_n = 0; cs_hi;
             feed(8'h60);                        // OP_I2C_CONFIG
+            feed(8'h02);  // target
             feed(8'h55);  // addr7
             feed(8'h03);  // sda_ch
             feed(8'h04);  // scl_ch
-            feed(8'h01);  // flags  -> enable
-            feed(8'hAA);  // trig_reg
-            feed(8'hBB);  // busy_reg
-            feed(8'hCC);  // busy_mask
-            feed(8'h12);  // conv_lo
-            feed(8'h34);  // conv_hi (final byte = rx_byte)
-            cs_lo;
-            if (i2c_cfg_n !== 1)                begin $display("FAIL i2c_cfg: stb fired %0d times (want 1)", i2c_cfg_n); errors=errors+1; end
-            if (i2c_cfg_addr7     !== 7'h55)    begin $display("FAIL i2c_cfg: addr7=%02h",     i2c_cfg_addr7);     errors=errors+1; end
-            if (i2c_cfg_sda_ch    !== 4'h3)     begin $display("FAIL i2c_cfg: sda=%0d",        i2c_cfg_sda_ch);    errors=errors+1; end
-            if (i2c_cfg_scl_ch    !== 4'h4)     begin $display("FAIL i2c_cfg: scl=%0d",        i2c_cfg_scl_ch);    errors=errors+1; end
-            if (i2c_cfg_enable    !== 1'b1)     begin $display("FAIL i2c_cfg: enable=%b",      i2c_cfg_enable);    errors=errors+1; end
-            if (i2c_cfg_trig_reg  !== 8'hAA)    begin $display("FAIL i2c_cfg: trig=%02h",      i2c_cfg_trig_reg);  errors=errors+1; end
-            if (i2c_cfg_busy_reg  !== 8'hBB)    begin $display("FAIL i2c_cfg: busy_reg=%02h",  i2c_cfg_busy_reg);  errors=errors+1; end
-            if (i2c_cfg_busy_mask !== 8'hCC)    begin $display("FAIL i2c_cfg: busy_mask=%02h", i2c_cfg_busy_mask); errors=errors+1; end
-            if (i2c_cfg_conv_us   !== 16'h3412) begin $display("FAIL i2c_cfg: conv_us=%04h",   i2c_cfg_conv_us);   errors=errors+1; end
+            feed(8'h2B);  // flags: enable, 16-bit, while_busy 2, stuck
+            feed(8'hAA);  // page
+            feed(8'hCC);  // mask
+            feed(8'h0D);  // drdy: pulse, active high, on conversion (final byte = rx_byte)
+            cs_lo; #200;
+            if (i2c_cfg_n !== 1) begin $display("FAIL i2c_cfg: stb fired %0d times (want 1)", i2c_cfg_n); errors=errors+1; end
+            if (got_t !== 3'd2 || got_eo !== 1'b0 ||
+                got_cfg !== {1'b1, 7'h55, 1'b1, 2'd2, 1'b0, 1'b1, 8'hAA, 8'hCC, 4'h3, 4'h4, 2'd1, 1'b1, 1'b1}) begin
+                $display("FAIL i2c_cfg: t=%0d en_only=%b fields=%h", got_t, got_eo, got_cfg); errors=errors+1; end
+            i2c_cfg_n = 0; cs_hi; feed(8'h61); feed(8'h01); cs_lo; #200;
+            if (i2c_cfg_n !== 1 || got_t !== 3'd1 || got_eo !== 1'b1 || got_cfg[40] !== 1'b0) begin
+                $display("FAIL i2c_disable: %0d strobes, t=%0d en_only=%b en=%b", i2c_cfg_n, got_t, got_eo, got_cfg[40]); errors=errors+1; end
         end
     endtask
 
@@ -538,10 +535,12 @@ module tb_dispatch_args;
         test_load_wave(1);     // boundary: single-byte payload
         test_load_wave(3);
         test_load_wave(8);
+`ifdef USE_EMULATION   // the I2C_* commands: the emulation image only (v54)
         test_load_regs(8'h10, 3);
         test_read_regs(8'hD0, 5);   // BMP280 chip-id window + the duplicated lead byte
         test_read_regs(8'hFC, 5);   // firmware's len+1 read of the last 4 cells (never reads 0x00)
         test_read_regs(8'h20, 1);   // single byte: r[start]
+`endif
         test_uart_write(5);    // length-prefixed inbound stream
         test_uart_write_zero;  // zero-length -> straight to DONE
         test_gpio_step;
@@ -553,7 +552,9 @@ module tb_dispatch_args;
         test_la_capture;
         test_bases_and_psram;
         test_strobed_payloads;
+`ifdef USE_EMULATION
         test_i2c_config;
+`endif
         test_uart_config;
 
         // instant responses

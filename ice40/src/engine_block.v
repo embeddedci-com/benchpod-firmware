@@ -167,17 +167,21 @@ module engine_block #(
     wire [4:0]  q_cfg_idle;
     wire [7:0]  q_done, q_flags;
     wire [N-1:0] la_in;
-    wire        i2c_cfg_stb, i2c_cfg_enable, i2c_disable_stb;
-    wire [6:0]  i2c_cfg_addr7;  wire [3:0] i2c_cfg_sda_ch, i2c_cfg_scl_ch;
-    wire [7:0]  i2c_cfg_trig_reg, i2c_cfg_busy_reg, i2c_cfg_busy_mask;
-    wire [15:0] i2c_cfg_conv_us;
-    wire        i2c_t_reg_we;  wire [7:0] i2c_t_reg_waddr, i2c_t_reg_wdata, i2c_t_reg_raddr, i2c_t_reg_rdata;
-    wire        i2c_reg_we;    wire [7:0] i2c_reg_waddr, i2c_reg_wdata, i2c_reg_raddr, i2c_reg_rdata;
-    wire        i2c_armed;     wire [15:0] i2c_xfer_count, i2c_wr_count;
-    wire [7:0]  i2c_last_wr_addr, i2c_last_wr_val;
-    wire        i2c_sda_drive_low;  wire [3:0] i2c_sda_ch, i2c_scl_ch;
-    wire        i2c_scl_in = la_in[i2c_scl_ch];
-    wire        i2c_sda_in = la_in[i2c_sda_ch];
+    // emulated sensors (v54, emulation image): cmd_dispatch <-> i2c_emu / spi target / FIFO / pins
+    wire [2:0]  emu_t;
+    wire        i2c_cfg_stb, i2c_cfg_en_only;  wire [40:0] i2c_cfg_data;
+    wire        i2c_reg_we, i2c_reg_attr, i2c_reg_log;  wire [7:0] i2c_reg_addr, i2c_reg_wdata, i2c_reg_rdata;
+    wire        i2c_tt_we;  wire [1:0] i2c_tt_idx;  wire [15:0] i2c_tt_val;
+    wire        i2c_fire_stb, i2c_fire_set;
+    wire [31:0] i2c_status;
+    wire [7:0]  emu_dr_width;
+    wire        emu_fifo_flush, emu_fifo_we, emu_fifo_stat_clr;
+    wire [41:0] emu_pinmap;
+    wire [11:0] emu_fifo_level;
+    wire        emu_fifo_ovf, emu_fifo_unf;
+    wire        spit_cfg_stb;  wire [55:0] spit_cfg;
+    wire [N-1:0] emu_on, emu_out, emu_oe;
+    reg  [13:0] la_s1, la_s2;   // the LA levels through a 2-flop synchroniser (see the end of the file)
     wire        uart_cfg_stb, uart_cfg_enable, uart_disable_stb;
     wire [3:0]  uart_cfg_rx_ch, uart_cfg_tx_ch;  wire [23:0] uart_cfg_div;
     wire        uart_tx_we, uart_rx_re, uart_rx_ovf_clr;
@@ -186,7 +190,9 @@ module engine_block #(
     wire [3:0]  uart_rx_ch, uart_tx_ch;  wire uart_tx_out;
     wire        uart_rx_in = la_in[uart_rx_ch];
     wire        uart2_cfg_stb, uart2_tx_we, uart2_tx_full, uart2_tx_empty, uart2_armed;
-    wire [3:0]  uart2_tx_ch;  wire uart2_tx_out;
+    wire        uart2_tx_out;
+    wire        uart2_rx_re, uart2_rx_overflow, uart2_rx_frame_err, uart2_rx_ovf_clr;
+    wire [7:0]  uart2_rx_rdata;  wire [8:0] uart2_rx_avail;
 
     // ---- command dispatcher ----
     // cap_done is the already-combined STATUS done bit (v2 folds in corr_done before
@@ -232,15 +238,16 @@ module engine_block #(
         .spi_mode(spi_mode), .spi_busy(spi_busy),
         .swd_feed_q(swd_feed_q), .q_cfg_stb(q_cfg_stb), .q_cfg_half(q_cfg_half),
         .q_cfg_idle(q_cfg_idle), .q_done(q_done), .q_flags(q_flags),
-        .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_addr7(i2c_cfg_addr7),
-        .i2c_cfg_sda_ch(i2c_cfg_sda_ch), .i2c_cfg_scl_ch(i2c_cfg_scl_ch), .i2c_cfg_enable(i2c_cfg_enable),
-        .i2c_cfg_trig_reg(i2c_cfg_trig_reg), .i2c_cfg_busy_reg(i2c_cfg_busy_reg),
-        .i2c_cfg_busy_mask(i2c_cfg_busy_mask), .i2c_cfg_conv_us(i2c_cfg_conv_us),
-        .i2c_disable_stb(i2c_disable_stb),
-        .i2c_reg_we(i2c_reg_we), .i2c_reg_waddr(i2c_reg_waddr), .i2c_reg_wdata(i2c_reg_wdata),
-        .i2c_reg_raddr(i2c_reg_raddr), .i2c_reg_rdata(i2c_reg_rdata),
-        .i2c_armed(i2c_armed), .i2c_xfer_count(i2c_xfer_count), .i2c_wr_count(i2c_wr_count),
-        .i2c_last_wr_addr(i2c_last_wr_addr), .i2c_last_wr_val(i2c_last_wr_val),
+        .emu_t(emu_t),
+        .i2c_cfg_stb(i2c_cfg_stb), .i2c_cfg_en_only(i2c_cfg_en_only), .i2c_cfg_data(i2c_cfg_data),
+        .i2c_reg_we(i2c_reg_we), .i2c_reg_attr(i2c_reg_attr), .i2c_reg_log(i2c_reg_log), .i2c_reg_addr(i2c_reg_addr),
+        .i2c_reg_wdata(i2c_reg_wdata), .i2c_reg_rdata(i2c_reg_rdata),
+        .i2c_tt_we(i2c_tt_we), .i2c_tt_idx(i2c_tt_idx), .i2c_tt_val(i2c_tt_val),
+        .i2c_fire_stb(i2c_fire_stb), .i2c_fire_set(i2c_fire_set), .i2c_status(i2c_status),
+        .emu_dr_width(emu_dr_width), .emu_fifo_flush(emu_fifo_flush), .emu_pinmap(emu_pinmap),
+        .emu_fifo_we(emu_fifo_we), .emu_fifo_level(emu_fifo_level), .emu_fifo_ovf(emu_fifo_ovf),
+        .emu_fifo_unf(emu_fifo_unf), .emu_fifo_stat_clr(emu_fifo_stat_clr),
+        .spit_cfg_stb(spit_cfg_stb), .spit_cfg(spit_cfg),
         .la_cap_start(la_cap_start), .la_cap_count(la_cap_count), .la_cap_divider(la_cap_divider),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch), .uart_cfg_tx_ch(uart_cfg_tx_ch),
         .uart_cfg_div(uart_cfg_div), .uart_cfg_enable(uart_cfg_enable), .uart_disable_stb(uart_disable_stb),
@@ -250,28 +257,33 @@ module engine_block #(
         .uart_tx_empty(uart_tx_empty), .uart_rx_overflow(uart_rx_overflow), .uart_rx_frame_err(uart_rx_frame_err),
         .uart_armed(uart_armed),
         .uart2_cfg_stb(uart2_cfg_stb), .uart2_tx_we(uart2_tx_we), .uart2_tx_full(uart2_tx_full),
-        .uart2_tx_empty(uart2_tx_empty), .uart2_armed(uart2_armed)
+        .uart2_tx_empty(uart2_tx_empty), .uart2_armed(uart2_armed),
+        .uart2_rx_re(uart2_rx_re), .uart2_rx_rdata(uart2_rx_rdata), .uart2_rx_avail(uart2_rx_avail),
+        .uart2_rx_overflow(uart2_rx_overflow), .uart2_rx_frame_err(uart2_rx_frame_err),
+        .uart2_rx_ovf_clr(uart2_rx_ovf_clr)
     );
 
 `ifdef HAS_EMULATION
-    // ---- UART proxy engine ----
-    // UART2 (v48): a second uart_engine used TX-only, for streams the pod sends the DUT
-    // (an emulated GPS receiver's NMEA) while the proxy keeps the console.  RX is tied idle
-    // and its FIFO is never read, so synthesis drops the RX half (+~150 LC, 1 BRAM).
+    // ---- UART2 (emulation image): v48 TX for streams the pod sends the DUT (an emulated GPS
+    // receiver's NMEA) while the proxy keeps the console; v54 RX too (a UART sensor's requests).
+    // Its TX reaches a pin through the pin map (EMU_PINMAP code 7), not a la_bank column. ----
+    wire [3:0] uart2_rx_ch;
     uart_engine uart2_i (
         .clk(clk), .rst(rst),
-        .cfg_stb(uart2_cfg_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(uart_cfg_tx_ch),
+        .cfg_stb(uart2_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
         .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .disable_stb(1'b0),
-        .rx_ch(), .tx_ch(uart2_tx_ch), .armed(uart2_armed),
+        .rx_ch(uart2_rx_ch), .tx_ch(), .armed(uart2_armed),
         .tx_we(uart2_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart2_tx_full), .tx_empty(uart2_tx_empty),
-        .rx_re(1'b0), .rx_rdata(), .rx_avail(), .rx_overflow(), .rx_ovf_clr(1'b0), .rx_frame_err(),
-        .rx_in(1'b1), .tx_out(uart2_tx_out)
+        .rx_re(uart2_rx_re), .rx_rdata(uart2_rx_rdata), .rx_avail(uart2_rx_avail),
+        .rx_overflow(uart2_rx_overflow), .rx_ovf_clr(uart2_rx_ovf_clr), .rx_frame_err(uart2_rx_frame_err),
+        .rx_in(la_in[uart2_rx_ch]), .tx_out(uart2_tx_out)
     );
-
 `else
     // loop and deep images (v54): no UART2
-    assign uart2_tx_ch = 4'd0; assign uart2_armed = 1'b0; assign uart2_tx_out = 1'b1;
+    assign uart2_armed = 1'b0; assign uart2_tx_out = 1'b1;
     assign uart2_tx_full = 1'b0; assign uart2_tx_empty = 1'b1;
+    assign uart2_rx_rdata = 8'd0; assign uart2_rx_avail = 9'd0;
+    assign uart2_rx_overflow = 1'b0; assign uart2_rx_frame_err = 1'b0;
 `endif
 
     uart_engine uart_i (
@@ -286,34 +298,90 @@ module engine_block #(
     );
 
 `ifdef HAS_EMULATION
-    // ---- Emulated I2C sensor register file (256 bytes) ----
-    i2c_regfile i2c_regfile_i (
-        .clk(clk),
-        .i2c_we(i2c_t_reg_we), .i2c_waddr(i2c_t_reg_waddr), .i2c_wdata(i2c_t_reg_wdata),
-        .i2c_raddr(i2c_t_reg_raddr), .i2c_rdata(i2c_t_reg_rdata),
-        .spi_we(i2c_reg_we), .spi_waddr(i2c_reg_waddr), .spi_wdata(i2c_reg_wdata),
-        .spi_raddr(i2c_reg_raddr), .spi_rdata(i2c_reg_rdata)
+    // ==== emulated sensors (v54, emulation image only) ====
+    // Four I2C targets in one time-multiplexed engine (i2c_emu), the shared FIFO its FIFO registers
+    // pop, and the pin map that puts their outputs (and the SPI target's MISO, UART2 TX) on LA
+    // wires.  emu_t picks the target of the SPI-side commands: 0..3 I2C, 4 the SPI target.
+    wire [N-1:0] i2c_pull;
+    wire [3:0]   i2c_drdy;
+    wire [15:0]  us_now;
+    wire [7:0]   i2c_emu_rdata;
+    wire [31:0]  i2c_emu_status;
+    wire         fifo_pop, fifo_unf_p, fifo_empty, fifo_full;
+    wire         i2c_fifo_pop, i2c_fifo_unf, spit_fifo_pop, spit_fifo_unf;
+    wire [7:0]   log_rdata;
+    wire         spit_ev;  wire [4:0] spit_ev_idx;  wire [15:0] spit_ev_data;
+    // two FIFO readers: an I2C target's FIFO register and the SPI target's (use one at a time)
+    assign fifo_pop   = i2c_fifo_pop | spit_fifo_pop;
+    assign fifo_unf_p = i2c_fifo_unf | spit_fifo_unf;
+    wire [7:0]   fifo_head;
+    i2c_emu #(.CLK_MHZ(`SYS_CLK_MHZ), .N(N)) i2c_emu_i (
+        .clk(clk), .rst(rst), .la_lvl(la_s2), .pull(i2c_pull), .drdy_pin(i2c_drdy), .us_now(us_now),
+        .sel_t(emu_t[1:0]), .cfg_stb(i2c_cfg_stb & ~emu_t[2]), .cfg_en_only(i2c_cfg_en_only),
+        .cfg_data(i2c_cfg_data),
+        .reg_we(i2c_reg_we & ~emu_t[2]), .reg_attr(i2c_reg_attr), .reg_addr(i2c_reg_addr),
+        .reg_wdata(i2c_reg_wdata), .reg_rdata(i2c_emu_rdata),
+        .tt_we(i2c_tt_we & ~emu_t[2]), .tt_idx(i2c_tt_idx), .tt_val(i2c_tt_val),
+        .fire_stb(i2c_fire_stb & ~emu_t[2]), .fire_set(i2c_fire_set), .dr_width(emu_dr_width),
+        .status(i2c_emu_status),
+        .log_t(emu_t), .log_idx(i2c_reg_addr[5:1]), .log_byte(i2c_reg_addr[0]), .log_rdata(log_rdata),
+        .sp_ev(spit_ev), .sp_idx(spit_ev_idx), .sp_data(spit_ev_data),
+        .fifo_pop(i2c_fifo_pop), .fifo_unf(i2c_fifo_unf), .fifo_head(fifo_head), .fifo_empty(fifo_empty)
     );
 
-    // ---- Generic I2C target (slave) ----
-    i2c_target #(.CLK_MHZ(`SYS_CLK_MHZ)) i2c_target_i (
-        .clk(clk), .rst(rst),
-        .cfg_stb(i2c_cfg_stb), .cfg_addr7(i2c_cfg_addr7),
-        .cfg_sda_ch(i2c_cfg_sda_ch), .cfg_scl_ch(i2c_cfg_scl_ch), .cfg_enable(i2c_cfg_enable),
-        .cfg_trig_reg(i2c_cfg_trig_reg), .cfg_busy_reg(i2c_cfg_busy_reg),
-        .cfg_busy_mask(i2c_cfg_busy_mask), .cfg_conv_us(i2c_cfg_conv_us), .disable_stb(i2c_disable_stb),
-        .sda_ch(i2c_sda_ch), .scl_ch(i2c_scl_ch), .scl_in(i2c_scl_in), .sda_in(i2c_sda_in),
-        .sda_drive_low(i2c_sda_drive_low),
-        .reg_we(i2c_t_reg_we), .reg_waddr(i2c_t_reg_waddr), .reg_wdata(i2c_t_reg_wdata),
-        .reg_raddr(i2c_t_reg_raddr), .reg_rdata(i2c_t_reg_rdata),
-        .armed(i2c_armed), .xfer_count(i2c_xfer_count), .wr_count(i2c_wr_count),
-        .last_wr_addr(i2c_last_wr_addr), .last_wr_val(i2c_last_wr_val)
+    // the shared sensor FIFO (2 KB in the free SPRAM): EMU_FIFO_WRITE pushes, FIFO registers pop
+    wire fifo_ovf_p;
+    wire [10:0] fifo_mlevel;
+    emu_fifo #(.AW(11)) emu_fifo_i (
+        .clk(clk), .rst(rst | emu_fifo_flush),
+        .we(emu_fifo_we), .wdata(uart_tx_wdata), .pop(fifo_pop), .head(fifo_head),
+        .empty(fifo_empty), .mlevel(fifo_mlevel), .full(fifo_full), .ovf(fifo_ovf_p)
     );
+    // EMU_FIFO_STATUS: {bytes in the memory (11), the head is valid}; the firmware adds them
+    assign emu_fifo_level = {fifo_mlevel, ~fifo_empty};
+    reg fifo_ovf_r = 1'b0, fifo_unf_r = 1'b0;   // sticky; EMU_FIFO_STATUS clears them
+    always @(posedge clk) begin
+        if (rst | emu_fifo_stat_clr) begin fifo_ovf_r <= 1'b0; fifo_unf_r <= 1'b0; end
+        else begin
+            if (fifo_ovf_p)              fifo_ovf_r <= 1'b1;
+            if (fifo_unf_p)              fifo_unf_r <= 1'b1;
+        end
+    end
+    assign emu_fifo_ovf = fifo_ovf_r;
+    assign emu_fifo_unf = fifo_unf_r;
+
+    // the SPI target (target 4 of the I2C_* image commands)
+    wire        spit_miso, spit_miso_oe;
+    wire [7:0]  spit_rdata;
+    wire [31:0] spit_status;
+    spi_target #(.N(N)) spit_i (
+        .clk(clk), .rst(rst), .la_lvl(la_s2), .miso(spit_miso), .miso_oe(spit_miso_oe),
+        .cfg_stb(spit_cfg_stb), .cfg(spit_cfg),
+        .reg_we(i2c_reg_we & emu_t[2]), .reg_attr(i2c_reg_attr), .reg_addr(i2c_reg_addr),
+        .reg_wdata(i2c_reg_wdata), .reg_rdata(spit_rdata), .status(spit_status),
+        .ev(spit_ev), .ev_idx(spit_ev_idx), .ev_data(spit_ev_data),
+        .fifo_pop(spit_fifo_pop), .fifo_unf(spit_fifo_unf), .fifo_head(fifo_head), .fifo_empty(fifo_empty)
+    );
+    assign i2c_reg_rdata = i2c_reg_log ? log_rdata : emu_t[2] ? spit_rdata  : i2c_emu_rdata;
+    assign i2c_status    = emu_t[2] ? spit_status : i2c_emu_status;
+
+    // the pin map (EMU_PINMAP): per LA wire, which emulated output drives it
+    genvar pc;
+    generate for (pc = 0; pc < N; pc = pc + 1) begin : g_pin
+        wire [2:0] code = emu_pinmap[3*pc +: 3];
+        assign emu_on[pc]  = (code != 3'd0);
+        // I2C: open drain; MISO: only while CS is low (and not muted); UART2 TX: only while armed
+        assign emu_oe[pc]  = (code == 3'd1) ? i2c_pull[pc] : (code == 3'd6) ? spit_miso_oe :
+                             (code == 3'd7) ? uart2_armed  : 1'b1;
+        assign emu_out[pc] = (code == 3'd2) ? i2c_drdy[0] : (code == 3'd3) ? i2c_drdy[1] :
+                             (code == 3'd4) ? i2c_drdy[2] : (code == 3'd5) ? i2c_drdy[3] :
+                             (code == 3'd6) ? spit_miso   : (code == 3'd7) ? uart2_tx_out : 1'b0;
+    end endgenerate
 `else
-    // loop and deep images (v54): no emulated I2C sensor
-    assign i2c_sda_ch = 4'd0; assign i2c_scl_ch = 4'd0; assign i2c_sda_drive_low = 1'b0;
-    assign i2c_armed = 1'b0; assign i2c_xfer_count = 16'd0; assign i2c_wr_count = 16'd0;
-    assign i2c_last_wr_addr = 8'd0; assign i2c_last_wr_val = 8'd0; assign i2c_reg_rdata = 8'd0;
+    // loop and deep images (v54): no emulated sensors
+    assign i2c_reg_rdata = 8'd0; assign i2c_status = 32'd0;
+    assign emu_fifo_level = 12'd0; assign emu_fifo_ovf = 1'b0; assign emu_fifo_unf = 1'b0;
+    assign emu_on = {N{1'b0}}; assign emu_out = {N{1'b0}}; assign emu_oe = {N{1'b0}};
 `endif
 
     // (The on-FPGA raw I2C-bus logic-analyzer capture — i2c_la_capture + its la_capture_buf
@@ -355,9 +423,8 @@ module engine_block #(
     la_bank #(.N(N)) la_bank_i (
         .clk(clk), .rst(rst),
         .set_stb(gpio_set_stb), .set_ch(gpio_set_ch), .set_mode(gpio_set_mode),
-        .i2c_active(i2c_armed), .i2c_sda_ch(i2c_sda_ch), .i2c_sda_drive_low(i2c_sda_drive_low),
+        .emu_on(emu_on), .emu_out(emu_out), .emu_oe(emu_oe),
         .uart_active(uart_armed), .uart_tx_ch(uart_tx_ch), .uart_tx_val(uart_tx_out),
-        .uart2_active(uart2_armed), .uart2_tx_ch(uart2_tx_ch), .uart2_tx_val(uart2_tx_out),
         .step_active(step_busy), .step_ch(step_la_ch), .step_val(step_la_val),
         .swd_active(swd_armed),
         .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val),
@@ -374,7 +441,6 @@ module engine_block #(
     // The same 14 levels through a 2-flop synchroniser (v35): GPIO_GET reads them and the capture
     // trigger in top_v2 tests them.  Deliberately no power-up init, so these flops are identical to
     // la_psram_capture's own q1/q2 and synthesis can merge the two chains.
-    reg [13:0] la_s1, la_s2;
     always @(posedge clk) begin
         la_s1 <= la_in[13:0];
         la_s2 <= la_s1;

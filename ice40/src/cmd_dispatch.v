@@ -204,31 +204,36 @@ module cmd_dispatch #(
     input  wire [7:0]        q_done,
     input  wire [7:0]        q_flags,
 
-    // ---- emulated I2C sensor: configuration ----
-    output reg               i2c_cfg_stb,
-    output wire [6:0]        i2c_cfg_addr7,
-    output wire [3:0]        i2c_cfg_sda_ch,
-    output wire [3:0]        i2c_cfg_scl_ch,
-    output wire              i2c_cfg_enable,
-    output wire [7:0]        i2c_cfg_trig_reg,
-    output wire [7:0]        i2c_cfg_busy_reg,
-    output wire [7:0]        i2c_cfg_busy_mask,
-    output wire [15:0]       i2c_cfg_conv_us,
-    output reg               i2c_disable_stb,
-
-    // ---- emulated I2C sensor: register file (SPI/load+readback port) ----
-    output reg               i2c_reg_we,
-    output wire [7:0]        i2c_reg_waddr,
+    // ---- emulated sensors (v54, emulation image; tied off in the loop and deep images) ----
+    // emu_t is the target the I2C_* commands address: 0..3 the I2C targets (i2c_emu), 4 the SPI
+    // target.  Every strobe below is qualified like the config wires above: the consumer samples
+    // its payload within a few clk, long before the next SPI byte changes arg_buf or rx_byte.
+    output reg  [2:0]        emu_t,
+    output reg               i2c_cfg_stb,      // I2C_CONFIG / I2C_DISABLE
+    output wire              i2c_cfg_en_only,  // I2C_DISABLE: write the enable bit only (to 0)
+    output wire [40:0]       i2c_cfg_data,     // i2c_emu's configuration fields
+    output reg               i2c_reg_we,       // I2C_LOAD_REGS / I2C_LOAD_ATTRS byte
+    output wire              i2c_reg_attr,     // the attribute byte (LOAD/READ_ATTRS)
+    output wire              i2c_reg_log,      // I2C_READ_LOG: the read-back is the write log
+    output wire [7:0]        i2c_reg_addr,     // load address (with the strobe) and read-back address
     output wire [7:0]        i2c_reg_wdata,
-    output wire [7:0]        i2c_reg_raddr,
-    input  wire [7:0]        i2c_reg_rdata,
-
-    // ---- emulated I2C sensor: status ----
-    input  wire              i2c_armed,
-    input  wire [15:0]       i2c_xfer_count,
-    input  wire [15:0]       i2c_wr_count,
-    input  wire [7:0]        i2c_last_wr_addr,
-    input  wire [7:0]        i2c_last_wr_val,
+    input  wire [7:0]        i2c_reg_rdata,    // the image byte at i2c_reg_addr, kept fresh by the target
+    output reg               i2c_tt_we,        // I2C_TIMES
+    output wire [1:0]        i2c_tt_idx,
+    output wire [15:0]       i2c_tt_val,
+    output reg               i2c_fire_stb,     // I2C_DRDY
+    output wire              i2c_fire_set,
+    input  wire [31:0]       i2c_status,       // emu_t's {flags, wr_count, last addr, last value}
+    output reg  [7:0]        emu_dr_width = 8'd50,   // EMU_CONFIG
+    output reg               emu_fifo_flush,
+    output reg  [41:0]       emu_pinmap = 42'd0,     // EMU_PINMAP: 3 bits per LA wire
+    output reg               emu_fifo_we,      // EMU_FIFO_WRITE byte (rx_byte)
+    input  wire [11:0]       emu_fifo_level,    // {bytes in the FIFO memory, head valid}
+    input  wire              emu_fifo_ovf,
+    input  wire              emu_fifo_unf,
+    output reg               emu_fifo_stat_clr,
+    output reg               spit_cfg_stb,     // SPIT_CONFIG (payload on the wires below)
+    output wire [55:0]       spit_cfg,         // the 7 payload bytes, first byte lowest
 
     // (The on-FPGA I2C-bus logic-analyzer capture — OP_I2C_LA_START 0x65 / OP_I2C_LA_READ
     //  0x66 → i2c_la_capture + la_capture_buf — was removed in v24 to reclaim ~150 LC + an
@@ -266,12 +271,18 @@ module cmd_dispatch #(
     input  wire              uart_rx_frame_err,   // v52: UART_STATUS flags bit7
     input  wire              uart_armed,
 
-    // ---- UART2: a second, TX-only UART (v48; config payload = UART_CONFIG's) ----
+    // ---- UART2: a second UART (v48 TX; v54 RX too, emulation image; config payload = UART_CONFIG's) ----
     output reg               uart2_cfg_stb,
     output reg               uart2_tx_we,
     input  wire              uart2_tx_full,
     input  wire              uart2_tx_empty,
-    input  wire              uart2_armed
+    input  wire              uart2_armed,
+    output reg               uart2_rx_re,
+    input  wire [7:0]        uart2_rx_rdata,
+    input  wire [8:0]        uart2_rx_avail,
+    input  wire              uart2_rx_overflow,
+    input  wire              uart2_rx_frame_err,
+    output reg               uart2_rx_ovf_clr
 );
 
     // Opcodes — generated from tools/gen_protocol.py (single source of truth).
@@ -317,14 +328,16 @@ module cmd_dispatch #(
     localparam S_REG_ADDR   = 5'd13;  // capture start_addr for I2C_LOAD_REGS/READ_REGS
     localparam S_REG_LOAD   = 5'd14;  // stream bytes into the I2C register file
     localparam S_REG_READ   = 5'd15;  // stream register file back out
-    localparam S_I2C_STATUS = 5'd16;  // stream the 7-byte I2C status block
+    localparam S_I2C_STATUS = 5'd16;  // stream the I2C/SPI target status block (v54: pad + 4 bytes)
+    localparam S_REG_TGT    = 5'd4;   // v54: the target byte of I2C_LOAD/READ_REGS/ATTRS
+    localparam S_STAT_TGT   = 5'd5;   // v54: the target byte of I2C_STATUS
     // (S_LA_READ 5'd17 retired with OP_I2C_LA_READ in v24)
     localparam S_UART_WRITE = 5'd18;  // stream bytes into the UART TX FIFO
     localparam S_UART_READ  = 5'd19;  // stream bytes back from the UART RX FIFO
     localparam S_UART_STATUS= 5'd20;  // stream the 3-byte UART status block
     localparam S_ADC_PROBE_HI=5'd21;  // ADC_PROBE: emit the high byte of the live sample
 
-    localparam I2C_STATUS_LEN  = 16'd7;
+    localparam I2C_STATUS_LEN  = 16'd3;
     localparam UART_STATUS_LEN = 16'd3;
 
     // ------------------------------------------------------------------------
@@ -341,56 +354,71 @@ module cmd_dispatch #(
     // *_OPS/*_PATS lists below, and re-derive the patterns so every one of them still matches
     // exactly one opcode of its set.  The sim-only checks below fail every bench otherwise.
 `define CD_START_DAC           8'b?00?_?00?    // 0x11
-`define CD_DAC_LOOP_SRC        8'b????_1?1?    // 0x1A
-`define CD_DAC_LOOP_INMAP      8'b????_11??    // 0x1C (loop image only)
+`define CD_DAC_LOOP_SRC        8'b?0??_1?1?    // 0x1A
+`define CD_DAC_LOOP_INMAP      8'b?0??_11??    // 0x1C (loop image only)
 `define CD_START_DAC_LOOP      8'b?0?1_?1?1    // 0x15
 `define CD_GPIO_SET            8'b??00_??00    // 0x40
-`define CD_SET_LED             8'b???0_??10    // 0x42
-`define CD_CAPTURE_TEST        8'b???0_??11    // 0x23
-`define CD_PSRAM_CS            8'b???0_?1??    // 0x25
+`define CD_SET_LED             8'b?1??_?01?    // 0x42
+`define CD_CAPTURE_TEST        8'b?0?0_?0??    // 0x23
+`define CD_PSRAM_CS            8'b?01?_?1??    // 0x25
 `define CD_SWD_ARM             8'b??01_?000    // 0x50
 `define CD_SPI_ARM             8'b?10?_?1?1    // 0x55
-`define CD_SPI_CS              8'b????_?11?    // 0x56
-`define CD_SWD_QCONFIG         8'b????_1??1    // 0x59
+`define CD_SPI_CS              8'b?1?1_??1?    // 0x56
+`define CD_SWD_QCONFIG         8'b?10?_1???    // 0x59
 `define CD_GPIO_STEP           8'b??00_???1    // 0x41
-`define CD_CAPTURE             8'b??1?_?001    // 0x31
-`define CD_SET_CAPTURE_BASES   8'b??1?_??10    // 0x32
+`define CD_CAPTURE             8'b?011_0?0?    // 0x31
+`define CD_SET_CAPTURE_BASES   8'b?01?_0??0    // 0x32
 `define CD_START_DAC_PSRAM     8'b??0?_??11    // 0x13
 `define CD_SET_DAC_STOP_AFTER  8'b????_0100    // 0x14
 `define CD_SET_TRIGGER         8'b??11_??11    // 0x33
-`define CD_DAC_CTRL            8'b??1?_1???    // 0x38
-`define CD_I2C_CONFIG          8'b??10_???0    // 0x60
-`define CD_UART_CONFIG         8'b?111_?0??
-`define CD_UART2_CONFIG        8'b?111_?1??    // 0x75    // 0x70
+`define CD_DAC_CTRL            8'b?01?_1???    // 0x38
+`define CD_I2C_CONFIG          8'b??10_0??0    // 0x60 (emulation image only, like the rest of 0x6x/0x7C)
+`define CD_UART_CONFIG         8'b?111_?0??    // 0x70
+`define CD_UART2_CONFIG        8'b?111_???1    // 0x75
+`define CD_I2C_DISABLE         8'b?11?_?0?1    // 0x61
+`define CD_I2C_TIMES           8'b???0_1?00    // 0x6C
+`define CD_I2C_DRDY            8'b??1?_1?01    // 0x6D
+`define CD_EMU_PINMAP          8'b?11?_??10    // 0x6E
+`define CD_EMU_CONFIG          8'b?1??_??11    // 0x6F
+`define CD_SPIT_CONFIG         8'b?111_1???    // 0x7C
 
 `define CD_LOAD_WAVE           8'b?0??_????    // 0x10
-`define CD_SWD_FEED            8'b????_??01    // 0x51
-`define CD_SWD_QFEED           8'b????_1???    // 0x58
+`define CD_SWD_FEED            8'b??0?_???1    // 0x51
+`define CD_SWD_QFEED           8'b??0?_1???    // 0x58
 `define CD_SWD_READ            8'b??0?_??1?    // 0x52
-`define CD_I2C_LOAD_REGS       8'b???0_???0    // 0x62
-`define CD_I2C_READ_REGS       8'b???0_???1    // 0x63
-`define CD_UART_WRITE          8'b??11_?0?0
-`define CD_UART2_WRITE         8'b????_?11?    // 0x76    // 0x72
-`define CD_UART_READ           8'b???1_??11    // 0x73
+`define CD_I2C_LOAD_REGS       8'b???0_0??0    // 0x62
+`define CD_I2C_READ_REGS       8'b???0_0??1    // 0x63
+`define CD_I2C_LOAD_ATTRS      8'b???0_1??0    // 0x6A
+`define CD_I2C_READ_ATTRS      8'b???0_1??1    // 0x6B
+`define CD_UART_WRITE          8'b??11_00?0    // 0x72
+`define CD_UART_READ           8'b???1_?011    // 0x73
+`define CD_UART2_WRITE         8'b????_?1?0    // 0x76
+`define CD_UART2_READ          8'b????_?1?1    // 0x77
+`define CD_EMU_FIFO_WRITE      8'b???1_1?1?    // 0x7A
+`define CD_I2C_READ_LOG        8'b??1?_??0?    // 0x79
 
 `ifndef SYNTHESIS
-    localparam N_COLLECT = 22, N_STREAM = 9;
+    localparam N_COLLECT = 28, N_STREAM = 14;
     localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
         OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
         OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
         OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
-        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG };
+        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG,
+        OP_I2C_DISABLE, OP_I2C_TIMES, OP_I2C_DRDY, OP_EMU_PINMAP, OP_EMU_CONFIG, OP_SPIT_CONFIG };
     localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
         `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
         `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
         `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
-        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG };
+        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG,
+        `CD_I2C_DISABLE, `CD_I2C_TIMES, `CD_I2C_DRDY, `CD_EMU_PINMAP, `CD_EMU_CONFIG, `CD_SPIT_CONFIG };
     localparam [N_STREAM*8-1:0] STREAM_OPS = {
         OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
-        OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_UART_WRITE, OP_UART_READ, OP_UART2_WRITE };
+        OP_I2C_LOAD_REGS, OP_I2C_READ_REGS, OP_I2C_LOAD_ATTRS, OP_I2C_READ_ATTRS,
+        OP_UART_WRITE, OP_UART_READ, OP_UART2_WRITE, OP_UART2_READ, OP_EMU_FIFO_WRITE, OP_I2C_READ_LOG };
     localparam [N_STREAM*8-1:0] STREAM_PATS = {
         `CD_LOAD_WAVE, `CD_SWD_FEED, `CD_SWD_QFEED, `CD_SWD_READ,
-        `CD_I2C_LOAD_REGS, `CD_I2C_READ_REGS, `CD_UART_WRITE, `CD_UART_READ, `CD_UART2_WRITE };
+        `CD_I2C_LOAD_REGS, `CD_I2C_READ_REGS, `CD_I2C_LOAD_ATTRS, `CD_I2C_READ_ATTRS,
+        `CD_UART_WRITE, `CD_UART_READ, `CD_UART2_WRITE, `CD_UART2_READ, `CD_EMU_FIFO_WRITE, `CD_I2C_READ_LOG };
 
     function pat_hit(input [7:0] c, input [7:0] p);   // casez semantics: z bits don't care
         integer b;
@@ -411,6 +439,16 @@ module cmd_dispatch #(
                 $display("FAIL cmd_dispatch: S_READ_LEN1 pattern of %02h vs opcode %02h", STREAM_OPS[b*8 +: 8], STREAM_OPS[a*8 +: 8]);
         if (OP_SWD_FEED[3] !== 1'b0 || OP_SWD_QFEED[3] !== 1'b1)
             $display("FAIL cmd_dispatch: swd_feed_q = current_cmd[3] no longer separates SWD_FEED/QFEED");
+        // v54 single-bit selects (see their assigns)
+        if (OP_I2C_CONFIG[0] !== 1'b0 || OP_I2C_DISABLE[0] !== 1'b1)
+            $display("FAIL cmd_dispatch: i2c_cfg_en_only = current_cmd[0] no longer separates I2C_CONFIG/DISABLE");
+        if (OP_I2C_LOAD_REGS[3] | OP_I2C_READ_REGS[3] | ~OP_I2C_LOAD_ATTRS[3] | ~OP_I2C_READ_ATTRS[3])
+            $display("FAIL cmd_dispatch: i2c_reg_attr = current_cmd[3] no longer separates REGS/ATTRS");
+        if (OP_I2C_READ_REGS[4] | OP_I2C_READ_ATTRS[4] | ~OP_I2C_READ_LOG[4])
+            $display("FAIL cmd_dispatch: i2c_reg_log = current_cmd[4] no longer picks READ_LOG");
+        if (OP_UART_WRITE[3:2] !== 2'b00 || OP_UART2_WRITE[3:2] !== 2'b01 || OP_EMU_FIFO_WRITE[3:2] !== 2'b10 ||
+            OP_UART_READ[2] !== 1'b0 || OP_UART2_READ[2] !== 1'b1)
+            $display("FAIL cmd_dispatch: the S_UART_WRITE/READ sink select bits moved");
     end
 `endif
 
@@ -465,14 +503,20 @@ module cmd_dispatch #(
     assign swd_feed_q        = current_cmd[3];
     assign q_cfg_half        = arg_buf[8][5:0];
     assign q_cfg_idle        = rx_byte[4:0];
-    assign i2c_cfg_addr7     = arg_buf[1][6:0];
-    assign i2c_cfg_sda_ch    = arg_buf[2][3:0];
-    assign i2c_cfg_scl_ch    = arg_buf[3][3:0];
-    assign i2c_cfg_enable    = arg_buf[4][0];
-    assign i2c_cfg_trig_reg  = arg_buf[5];
-    assign i2c_cfg_busy_reg  = arg_buf[6];
-    assign i2c_cfg_busy_mask = arg_buf[7];
-    assign i2c_cfg_conv_us   = {rx_byte, arg_buf[8]};
+    // I2C_CONFIG [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)] as i2c_emu's fields
+    // {en, addr7, a16, while_busy, mute, stuck, page, mask, sda, scl, drdy mode, active high, on
+    // conversion}.  I2C_DISABLE (bit0 of the opcode) writes only the enable bit, as 0.
+    assign i2c_cfg_en_only   = current_cmd[0];
+    assign i2c_cfg_data      = {arg_buf[6][0] & ~current_cmd[0], arg_buf[3][6:0], arg_buf[6][1],
+                                arg_buf[6][3:2], arg_buf[6][4], arg_buf[6][5], arg_buf[7], arg_buf[8],
+                                arg_buf[4][3:0], arg_buf[5][3:0], rx_byte[1:0], rx_byte[2], rx_byte[3]};
+    assign i2c_reg_attr      = current_cmd[3];        // LOAD/READ_ATTRS 0x6A/0x6B vs REGS 0x62/0x63
+    assign i2c_reg_log       = current_cmd[4];        // READ_LOG 0x79
+    assign i2c_tt_idx        = arg_buf[7][1:0];       // I2C_TIMES [target][index][time_lo][time_hi]
+    assign i2c_tt_val        = {rx_byte, arg_buf[8]};
+    assign i2c_fire_set      = rx_byte[0];            // I2C_DRDY [target][action]
+    assign spit_cfg          = {rx_byte, arg_buf[8], arg_buf[7], arg_buf[6], arg_buf[5], arg_buf[4],
+                                arg_buf[3]};
     assign uart_cfg_rx_ch    = arg_buf[4][3:0];
     assign uart_cfg_tx_ch    = arg_buf[5][3:0];
     assign uart_cfg_div      = {arg_buf[8], arg_buf[7], arg_buf[6]};
@@ -484,8 +528,7 @@ module cmd_dispatch #(
     assign wave_wdata        = rx_byte;
     assign wave_waddr        = arg_count[ADDR_W-1:0];
     assign swd_rd_addr       = arg_count[REPLY_AW-1:0];
-    assign i2c_reg_waddr     = arg_count[7:0];
-    assign i2c_reg_raddr     = arg_count[7:0];
+    assign i2c_reg_addr      = arg_count[7:0];
     assign swd_feed_byte     = rx_byte;
     assign i2c_reg_wdata     = rx_byte;
     assign uart_tx_wdata     = rx_byte;
@@ -512,17 +555,13 @@ module cmd_dispatch #(
     // Status blocks (combinational, no BRAM latency).  Byte 0 goes out from S_IDLE; each later
     // beat presents the NEXT byte, picked by the down-counter (arg_rem = LEN - index of the byte
     // being clocked, so the next index is LEN + 1 - arg_rem) instead of arg_count + 1.
-    // I2C (LEN 7): armed, xfer_lo, xfer_hi, wr_lo, wr_hi, last_wr_addr, last_wr_val.
+    // I2C (v54, after the pad byte): flags, wr_count (the DUT's writes are in the write log).
     function [7:0] i2c_status_next;
         input [2:0] rem;
         begin
             case (rem)
-                3'd7:    i2c_status_next = i2c_xfer_count[7:0];     // byte 1
-                3'd6:    i2c_status_next = i2c_xfer_count[15:8];    // byte 2
-                3'd5:    i2c_status_next = i2c_wr_count[7:0];       // byte 3
-                3'd4:    i2c_status_next = i2c_wr_count[15:8];      // byte 4
-                3'd3:    i2c_status_next = i2c_last_wr_addr;        // byte 5
-                default: i2c_status_next = i2c_last_wr_val;         // byte 6 (rem 2)
+                3'd3:    i2c_status_next = i2c_status[31:24];
+                default: i2c_status_next = i2c_status[23:16];      // rem 2
             endcase
         end
     endfunction
@@ -591,8 +630,18 @@ module cmd_dispatch #(
             q_cfg_stb        <= 1'b0;
 
             i2c_cfg_stb       <= 1'b0;
-            i2c_disable_stb   <= 1'b0;
             i2c_reg_we        <= 1'b0;
+            i2c_tt_we         <= 1'b0;
+            i2c_fire_stb      <= 1'b0;
+            emu_t             <= 3'd0;
+            emu_dr_width      <= 8'd50;
+            emu_fifo_flush    <= 1'b0;
+            emu_fifo_we       <= 1'b0;
+            emu_fifo_stat_clr <= 1'b0;
+            emu_pinmap        <= 42'd0;
+            spit_cfg_stb      <= 1'b0;
+            uart2_rx_re       <= 1'b0;
+            uart2_rx_ovf_clr  <= 1'b0;
             la_cap_start      <= 1'b0;
             la_cap_divider    <= 16'd2;
 
@@ -620,8 +669,15 @@ module cmd_dispatch #(
             spi_cs_stb     <= 1'b0;
             q_cfg_stb      <= 1'b0;
             i2c_cfg_stb     <= 1'b0;
-            i2c_disable_stb <= 1'b0;
             i2c_reg_we      <= 1'b0;
+            i2c_tt_we       <= 1'b0;
+            i2c_fire_stb    <= 1'b0;
+            emu_fifo_flush  <= 1'b0;
+            emu_fifo_we     <= 1'b0;
+            emu_fifo_stat_clr <= 1'b0;
+            spit_cfg_stb    <= 1'b0;
+            uart2_rx_re     <= 1'b0;
+            uart2_rx_ovf_clr <= 1'b0;
             la_cap_start    <= 1'b0;
             uart_cfg_stb     <= 1'b0;
             uart2_cfg_stb    <= 1'b0;
@@ -785,24 +841,36 @@ module cmd_dispatch #(
                             end
 
 `ifdef HAS_EMULATION
-                            // ---- emulated I2C sensor (emulation image only, v54) ----
-                            OP_I2C_CONFIG:  begin arg_rem <= 16'd9; state <= S_COLLECT; end
-                            OP_I2C_DISABLE: begin i2c_disable_stb <= 1'b1; state <= S_DONE; end
-                            OP_I2C_LOAD_REGS,
-                            OP_I2C_READ_REGS: state <= S_REG_ADDR;
-                            OP_I2C_STATUS: begin
-                                arg_rem   <= I2C_STATUS_LEN;
-                                tx_byte   <= {7'b0, i2c_armed};         // byte 0
-                                state     <= S_I2C_STATUS;
+                            // ---- emulated sensors (emulation image only, v54) ----
+                            OP_I2C_CONFIG:   begin arg_rem <= 16'd8; state <= S_COLLECT; end
+                            OP_I2C_DISABLE:  begin arg_rem <= 16'd1; state <= S_COLLECT; end
+                            OP_I2C_LOAD_REGS, OP_I2C_READ_REGS,
+                            OP_I2C_LOAD_ATTRS, OP_I2C_READ_ATTRS,
+                            OP_I2C_READ_LOG: state <= S_REG_TGT;
+                            OP_I2C_STATUS:   state <= S_STAT_TGT;
+                            OP_I2C_TIMES:    begin arg_rem <= 16'd4; state <= S_COLLECT; end
+                            OP_I2C_DRDY:     begin arg_rem <= 16'd2; state <= S_COLLECT; end
+                            OP_EMU_PINMAP:   begin arg_rem <= 16'd7; state <= S_COLLECT; end
+                            OP_EMU_CONFIG:   begin arg_rem <= 16'd2; state <= S_COLLECT; end
+                            OP_SPIT_CONFIG:  begin arg_rem <= 16'd7; state <= S_COLLECT; end
+                            OP_EMU_FIFO_WRITE: state <= S_READ_LEN0;
+                            // [level_lo][flags], one snapshot (the ADC_PROBE 2-byte path); clears the sticky flags
+                            OP_EMU_FIFO_STATUS: begin
+                                adc_dbg_latch     <= {emu_fifo_unf, emu_fifo_ovf, 2'b00, emu_fifo_level};
+                                tx_byte           <= emu_fifo_level[7:0];
+                                emu_fifo_stat_clr <= 1'b1;
+                                state             <= S_ADC_PROBE_HI;
                             end
-                            // (OP_I2C_LA_START 0x65 / OP_I2C_LA_READ 0x66 removed in v24 —
-                            //  the on-FPGA I2C-LA sampler is gone; sensor_la now uses the deep
-                            //  LA_CAPTURE 0x69 path + a firmware re-pack.)
-                            // (shallow BRAM LA_START 0x67 / LA_READ 0x68 removed in v17 —
-                            //  v2 uses the deep LA_CAPTURE 0x69 below; HAS_WIDE_LA=0.)
-
                             OP_UART2_CONFIG: begin arg_rem <= 16'd6; state <= S_COLLECT; end
-                            OP_UART2_WRITE:  state <= S_READ_LEN0;
+                            OP_UART2_WRITE,
+                            OP_UART2_READ:   state <= S_READ_LEN0;
+                            OP_UART2_STATUS: begin
+                                adc_dbg_latch    <= {uart2_rx_frame_err, uart2_rx_overflow, uart2_armed, uart2_tx_empty,
+                                                     uart2_tx_full, 2'b00, uart2_rx_avail};
+                                tx_byte          <= uart2_rx_avail[7:0];
+                                uart2_rx_ovf_clr <= 1'b1;
+                                state            <= S_ADC_PROBE_HI;
+                            end
 `endif
 
                             // ---- UART proxy ----
@@ -849,25 +917,26 @@ module cmd_dispatch #(
                                 end
                             // arg_count = start address (S_REG_ADDR) is the write/read
                             // port address in S_REG_LOAD/S_REG_READ.
-                            `CD_I2C_LOAD_REGS:
+                            `CD_I2C_LOAD_REGS, `CD_I2C_LOAD_ATTRS:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_REG_LOAD;
-                            `CD_I2C_READ_REGS:
+                            `CD_I2C_READ_REGS, `CD_I2C_READ_ATTRS, `CD_I2C_READ_LOG:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
-                                    tx_byte <= i2c_reg_rdata;   // i2c_reg_raddr = start address
+                                    tx_byte <= i2c_reg_rdata;   // i2c_reg_addr = start address
                                     state   <= S_REG_READ;
                                 end
-                            `CD_UART_WRITE, `CD_UART2_WRITE:
+                            `CD_UART_WRITE, `CD_UART2_WRITE, `CD_EMU_FIFO_WRITE:
                                 state <= ({rx_byte, arg_rem[7:0]} == 16'd0)
                                            ? S_DONE : S_UART_WRITE;
-                            `CD_UART_READ:
+                            `CD_UART_READ, `CD_UART2_READ:
                                 if ({rx_byte, arg_rem[7:0]} == 16'd0) state <= S_DONE;
                                 else begin
-                                    // preload head byte + pop so the FIFO advances.
-                                    tx_byte    <= uart_rx_rdata;
-                                    uart_rx_re <= 1'b1;
-                                    state      <= S_UART_READ;
+                                    // preload head byte + pop so the FIFO advances (opcode bit2: UART2).
+                                    tx_byte     <= current_cmd[2] ? uart2_rx_rdata : uart_rx_rdata;
+                                    uart_rx_re  <= ~current_cmd[2];
+                                    uart2_rx_re <=  current_cmd[2];
+                                    state       <= S_UART_READ;
                                 end
                             default: state <= S_DONE;
                         endcase
@@ -1021,11 +1090,36 @@ module cmd_dispatch #(
                                     trig_pol  <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd3);
                                     trig_pre  <= rx_byte[0];   // flags: the last byte
                                 end
+`ifdef HAS_EMULATION
+                                // [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)]: i2c_cfg_data
                                 `CD_I2C_CONFIG: begin
-                                    // [addr7][sda_ch][scl_ch][flags][trig_reg]
-                                    // [busy_reg][busy_mask][conv_lo][conv_hi(=rx_byte)]
-                                    i2c_cfg_stb       <= 1'b1;
+                                    i2c_cfg_stb <= 1'b1;
+                                    emu_t       <= arg_buf[2][2:0];
                                 end
+                                `CD_I2C_DISABLE: begin          // [target(=rx_byte)]
+                                    i2c_cfg_stb <= 1'b1;
+                                    emu_t       <= rx_byte[2:0];
+                                end
+                                `CD_I2C_TIMES: begin            // [target][index][time(2)]
+                                    i2c_tt_we   <= 1'b1;
+                                    emu_t       <= arg_buf[6][2:0];
+                                end
+                                `CD_I2C_DRDY: begin             // [target][action(=rx_byte)]
+                                    i2c_fire_stb <= 1'b1;
+                                    emu_t        <= arg_buf[8][2:0];
+                                end
+                                // 7 bytes, two LA wires each: wire 2j in the low nibble of byte j
+                                `CD_EMU_PINMAP:
+                                    emu_pinmap <= {rx_byte[6:4], rx_byte[2:0], arg_buf[8][6:4], arg_buf[8][2:0],
+                                                   arg_buf[7][6:4], arg_buf[7][2:0], arg_buf[6][6:4], arg_buf[6][2:0],
+                                                   arg_buf[5][6:4], arg_buf[5][2:0], arg_buf[4][6:4], arg_buf[4][2:0],
+                                                   arg_buf[3][6:4], arg_buf[3][2:0]};
+                                `CD_EMU_CONFIG: begin           // [dr_width][flags(=rx_byte)]
+                                    emu_dr_width   <= arg_buf[8];
+                                    emu_fifo_flush <= rx_byte[0];
+                                end
+                                `CD_SPIT_CONFIG: spit_cfg_stb <= 1'b1;   // 8 bytes: spit_cfg
+`endif
                                 `CD_UART_CONFIG: begin
                                     // [rx_ch][tx_ch][div_lo][div_mid][div_hi(=rx_byte)][flags]
                                     // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
@@ -1057,7 +1151,19 @@ module cmd_dispatch #(
                         end
                     end
 
-                    // ---- emulated I2C sensor: register file load / read ----
+                    // ---- emulated sensors: register image load / read (v54: target byte first) ----
+                    S_REG_TGT: begin
+                        emu_t <= rx_byte[2:0];
+                        state <= S_REG_ADDR;
+                    end
+                    // I2C_STATUS: the target byte; the reply starts with a pad byte while the target's
+                    // status snapshot (refreshed every 5 clk) catches up.
+                    S_STAT_TGT: begin
+                        emu_t   <= rx_byte[2:0];
+                        tx_byte <= 8'h00;
+                        arg_rem <= I2C_STATUS_LEN;
+                        state   <= S_I2C_STATUS;
+                    end
                     S_REG_ADDR: begin
                         arg_count     <= {4'd0, rx_byte};   // start address (+ READ_REGS preload)
                         state         <= S_READ_LEN0;
@@ -1099,9 +1205,11 @@ module cmd_dispatch #(
 
                     // ---- UART proxy: stream bytes into the TX FIFO ----
                     S_UART_WRITE: begin
-                        // opcode bit2 picks the FIFO: 0x72 UART_WRITE, 0x76 UART2_WRITE.
-                        uart_tx_we    <= ~current_cmd[2];
+                        // opcode bits 3:2 pick the FIFO: 0x72 UART_WRITE, 0x76 UART2_WRITE,
+                        // 0x7A EMU_FIFO_WRITE (v54).
+                        uart_tx_we    <= ~current_cmd[2] & ~current_cmd[3];
                         uart2_tx_we   <= current_cmd[2];
+                        emu_fifo_we   <= current_cmd[3];
                         if (last_byte) state <= S_DONE;
                         arg_rem   <= arg_rem   - 16'd1;
                     end
@@ -1111,9 +1219,10 @@ module cmd_dispatch #(
                     // subsequent padding byte sends the new head and pops again.
                     S_UART_READ: begin
                         if (!last_byte) begin
-                            tx_byte    <= uart_rx_rdata;
-                            uart_rx_re <= 1'b1;
-                            arg_rem    <= arg_rem   - 16'd1;
+                            tx_byte     <= current_cmd[2] ? uart2_rx_rdata : uart_rx_rdata;
+                            uart_rx_re  <= ~current_cmd[2];
+                            uart2_rx_re <=  current_cmd[2];
+                            arg_rem     <= arg_rem   - 16'd1;
                         end else begin
                             state <= S_DONE;
                         end
@@ -1186,6 +1295,17 @@ endmodule
 `undef CD_UART_CONFIG
 `undef CD_UART2_CONFIG
 `undef CD_UART2_WRITE
+`undef CD_UART2_READ
+`undef CD_I2C_DISABLE
+`undef CD_I2C_TIMES
+`undef CD_I2C_DRDY
+`undef CD_EMU_PINMAP
+`undef CD_EMU_CONFIG
+`undef CD_SPIT_CONFIG
+`undef CD_I2C_LOAD_ATTRS
+`undef CD_I2C_READ_ATTRS
+`undef CD_EMU_FIFO_WRITE
+`undef CD_I2C_READ_LOG
 `undef CD_LOAD_WAVE
 `undef CD_SWD_FEED
 `undef CD_SWD_QFEED

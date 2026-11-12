@@ -44,6 +44,8 @@ module tb_i2c_emu;
     wire [3:0]  drdy_pin;
     wire [15:0] us_now;
     wire        fifo_pop;
+    reg  [2:0]  log_t = 0;  reg [4:0] log_idx = 0;  reg log_byte = 0;  wire [7:0] log_rdata;
+    reg         sp_ev = 0;  reg [4:0] sp_idx = 0;  reg [15:0] sp_data = 0;
     // FIFO model: 0xA0, 0xA1, ...
     reg  [7:0]  fifo_head = 8'hA0;
     reg  [7:0]  fifo_left = 8'd0;
@@ -56,7 +58,9 @@ module tb_i2c_emu;
         .reg_we(reg_we), .reg_attr(reg_attr), .reg_addr(reg_addr), .reg_wdata(reg_wdata),
         .reg_rdata(reg_rdata), .tt_we(tt_we), .tt_idx(tt_idx), .tt_val(tt_val),
         .fire_stb(fire_stb), .fire_set(fire_set), .dr_width(dr_width), .status(status),
-        .fifo_pop(fifo_pop), .fifo_head(fifo_head), .fifo_empty(fifo_empty));
+        .log_t(log_t), .log_idx(log_idx), .log_byte(log_byte), .log_rdata(log_rdata),
+        .sp_ev(sp_ev), .sp_idx(sp_idx), .sp_data(sp_data),
+        .fifo_pop(fifo_pop), .fifo_unf(), .fifo_head(fifo_head), .fifo_empty(fifo_empty));
 
     integer errors = 0;
     task check(input [8*64-1:0] what, input [31:0] got, input [31:0] want);
@@ -105,6 +109,14 @@ module tb_i2c_emu;
             @(posedge clk); fire_stb <= 0; spi_gap;
         end
     endtask
+    // one write-log entry {address, value}
+    task get_log(input [2:0] t, input [4:0] i, output [15:0] e);
+        begin
+            @(posedge clk); log_t <= t; log_idx <= i; log_byte <= 0; repeat (3) @(posedge clk); e[15:8] = log_rdata;
+            log_byte <= 1; repeat (2) @(posedge clk); e[7:0] = log_rdata;
+        end
+    endtask
+    reg [15:0] le;
     task get_status(input [1:0] t, output [31:0] st);
         begin @(posedge clk); sel_t <= t; spi_gap; st = status; end
     endtask
@@ -137,7 +149,7 @@ module tb_i2c_emu;
     endtask
     // SCL is low on entry and exit; SDA changes TLOW/2 into the low phase
     task i2c_wbyte(input [7:0] b, output ack);
-        integer i;
+        integer i, k;
         begin
             for (i = 7; i >= 0; i = i - 1) begin
                 sda(b[i]); #(TLOW/2); scl_up; #(THIGH); scl(0); #(TLOW/2);
@@ -146,7 +158,7 @@ module tb_i2c_emu;
         end
     endtask
     task i2c_rbyte(input ack, output [7:0] b);
-        integer i;
+        integer i, k;
         begin
             sda(1);
             for (i = 7; i >= 0; i = i - 1) begin
@@ -159,7 +171,7 @@ module tb_i2c_emu;
     // register write / read with 8- or 16-bit pointers
     reg ack;
     task wr_regs(input [6:0] a, input a16, input [15:0] ptr, input integer n, input [63:0] data, output ok);
-        integer i;
+        integer i, k;
         begin
             ok = 1;
             i2c_start; i2c_wbyte({a, 1'b0}, ack); ok = ok & ack;
@@ -170,7 +182,7 @@ module tb_i2c_emu;
         end
     endtask
     task rd_regs(input [6:0] a, input a16, input [15:0] ptr, input integer n, output [63:0] data, output ok);
-        integer i;  reg [7:0] b;
+        integer i, k;  reg [7:0] b;
         begin
             ok = 1; data = 0;
             i2c_start; i2c_wbyte({a, 1'b0}, ack); ok = ok & ack;
@@ -183,7 +195,7 @@ module tb_i2c_emu;
     endtask
     // a read that does not set the pointer first
     task rd_cur(input [6:0] a, input integer n, output [63:0] data, output ok);
-        integer i;  reg [7:0] b;
+        integer i, k;  reg [7:0] b;
         begin
             ok = 1; data = 0;
             i2c_start; i2c_wbyte({a, 1'b1}, ack); ok = ack;
@@ -194,7 +206,7 @@ module tb_i2c_emu;
 
     reg ok;  reg [63:0] d;  reg [7:0] b8;  reg [31:0] st;
     realtime t0, t1;
-    integer i;
+    integer i, k;
     initial begin
         repeat (10) @(posedge clk); rst = 0; repeat (10) @(posedge clk);
         // bus 0: t0 = 0x76 (BMP280-like), t1 = 0x44 (level data ready on DRDY_CH... pin only)
@@ -237,9 +249,18 @@ module tb_i2c_emu;
         wr_regs(7'h76, 0, 16'hF5, 2, 16'hA5A0, ok); check("2 write ack", ok, 1);
         readback(0, 0, 8'hF5, b8); check("2 F5 stored", b8, 8'hA0);
         readback(0, 0, 8'hF6, b8); check("2 F6 stored", b8, 8'hA5);
-        get_status(0, st); check("2 write count +2", st[23:16], i + 2); check("2 last write", st[15:0], 16'hF6A5);
+        get_status(0, st); check("2 write count +2", st[23:16], i + 2); get_log(0, i, le);     check("2 log entry 1", le, 16'hF5A0);
+        get_log(0, i + 1, le); check("2 log entry 2", le, 16'hF6A5);
         wr_regs(7'h76, 0, 16'hD0, 1, 8'h99, ok);
         readback(0, 0, 8'hD0, b8); check("2 read-only D0 kept", b8, 8'h58);
+        get_log(0, i + 2, le); check("2 read-only write still logged", le, 16'hD099);
+        // a burst of 5 writes between two reads: all 5 are in the log
+        wr_regs(7'h76, 0, 16'h40, 5, 40'h0504030201, ok);
+        for (k = 0; k < 5; k = k + 1) begin get_log(0, i + 3 + k, le); check("2 burst logged", le, {8'h40 + k[7:0], k[7:0] + 8'd1}); end
+        get_status(0, st); check("2 count after the burst", st[23:16], i + 8);
+        // the SPI target's events go to ring 4 in slot 4
+        @(posedge clk); sp_idx <= 5'd7; sp_data <= 16'h1234; sp_ev <= 1; @(posedge clk); sp_ev <= 0; spi_gap;
+        get_log(4, 7, le); check("SPI target event in ring 4", le, 16'h1234);
 
         // ---- 3: busy flag ----
         wr_regs(7'h76, 0, 16'hF4, 1, 8'h27, ok);           // starts a 300 us conversion

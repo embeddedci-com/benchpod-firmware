@@ -79,10 +79,19 @@ module i2c_emu #(
     input  wire          fire_stb,      // firmware data-ready command for sel_t ...
     input  wire          fire_set,      // ... 1 = assert (a pulse in pulse mode), 0 = deassert
     input  wire [7:0]    dr_width,      // data-ready pulse width in us (all targets)
-    output reg  [31:0]   status,        // sel_t, refreshed every 5 clk: {flags, wr_count, last addr, last value}
+    output wire [31:0]   status,        // sel_t, refreshed every 5 clk: {flags, wr_count, 16'd0}
+    // ---- the write log (see WRITE LOG below) ----
+    input  wire [2:0]    log_t,         // read-back: target (0..4) ...
+    input  wire [4:0]    log_idx,       // ... entry
+    input  wire          log_byte,      // ... 0 = the address byte, 1 = the value
+    output wire [7:0]    log_rdata,
+    input  wire          sp_ev,         // the SPI target stored a byte (pulse) ...
+    input  wire [4:0]    sp_idx,        // ... at its write count before the increment
+    input  wire [15:0]   sp_data,       // ... {address, value}
 
     // ---- shared FIFO (reads of a FIFO register pop it) ----
     output reg           fifo_pop,
+    output reg           fifo_unf,      // a FIFO register was read while the FIFO was empty (pulse)
     input  wire [7:0]    fifo_head,
     input  wire          fifo_empty
 );
@@ -196,8 +205,13 @@ module i2c_emu #(
     wire [1:0]   ctx_wa = svcB ? sel_t : tB;
     // write mask: 1 = keep.  Engine: keep the configuration.  SPI: keep the state (and, for
     // I2C_DISABLE, everything but the enable bit).
+    // The engine's mask also keeps the wide fields that change only at events (the conversion end
+    // time, the pulse end time, the write counter): their data is the new value and the mask is
+    // their write enable, so they need no hold multiplexer.
+    wire         e_cend, e_dend, e_wrc;
+    wire [CW-1:0] eng_mask = {{(CW-CFG_LO){1'b1}}, 33'd0, {16{~e_cend}}, 6'd0, {8{~e_dend}}, {8{~e_wrc}}};
     wire [CW-1:0] ctx_mask = svcB ? (cfg_eo ? {1'b0, {(CW-1){1'b1}}} : {{(CW-CFG_LO){1'b0}}, {CFG_LO{1'b1}}})
-                                  : {{(CW-CFG_LO){1'b1}}, {CFG_LO{1'b0}}};
+                                  : eng_mask;
     genvar gi;
     generate for (gi = 0; gi < 7; gi = gi + 1) begin : g_ctx
         SB_RAM40_4K #(.READ_MODE(0), .WRITE_MODE(0)) ram (
@@ -207,7 +221,11 @@ module i2c_emu #(
     end endgenerate
 
     // register images: 1024 x {attr, data}
-    reg  [15:0] img [0:1023];
+    // no_rw_check: no read-during-write bypass.  A read of the word being written can only be the
+    // engine's own (a FIFO or read-only register keeps the pointer), and the cache it fills is
+    // rewritten on the next round; the cache and the last-write memory never read and write one
+    // address in the same clk (different slots).
+    (* no_rw_check *) reg  [15:0] img [0:1023];
     integer ii;
     initial for (ii = 0; ii < 1024; ii = ii + 1) img[ii] = 16'd0;   // block RAMs configure to 0
     reg  [15:0] img_rd;                // stage C
@@ -222,7 +240,7 @@ module i2c_emu #(
     end
 
     // cache (addresses 0..3) + conversion time table (16 + {target, index})
-    reg  [15:0] cch [0:255];
+    (* no_rw_check *) reg  [15:0] cch [0:255];
     initial for (ii = 0; ii < 256; ii = ii + 1) cch[ii] = 16'd0;
     reg  [15:0] cch_rd;                // stage B: cache word of tB, or a time in slot 4
     always @(posedge clk) begin
@@ -231,14 +249,28 @@ module i2c_emu #(
         else if (tt_pend) cch[{4'b0001, sel_t, tt_idx}] <= tt_val;
     end
 
-    // last write per target (address, value), and the SPI target's at address 4 (unused for now)
-    reg  [15:0] lw [0:255];
+    // WRITE LOG: every stored DUT data byte as {address, value}, a 32-entry ring per target at
+    // {target, wr_count[4:0]} (the SPI target is target 4).  The write counter in the context is
+    // the ring's write pointer, so the ring costs no pointer logic: the firmware keeps its own
+    // read count per target, reads the entries between it and wr_count (I2C_READ_LOG), and knows it
+    // lost some when wr_count moved by more than 32 between two reads.  Pointer-only writes are
+    // not logged (they do not count).
+    (* no_rw_check *) reg  [15:0] lw [0:255];
     initial for (ii = 0; ii < 256; ii = ii + 1) lw[ii] = 16'd0;
     reg  [15:0] lw_rd;
     reg         lw_we;  reg [15:0] lw_wd;
+    reg  [7:0]  lw_wa;
     always @(posedge clk) begin
-        if (lw_we) lw[{6'd0, tB}] <= lw_wd;
-        lw_rd <= lw[{6'd0, sel_t}];
+        if (lw_we) lw[lw_wa] <= lw_wd;
+        lw_rd <= lw[{log_t, log_idx}];
+    end
+    assign log_rdata = log_byte ? lw_rd[7:0] : lw_rd[15:8];
+    // the SPI target's events wait for slot 4
+    reg sp_pend = 1'b0;
+    always @(posedge clk) begin
+        if (rst) sp_pend <= 1'b0;
+        else if (sp_ev) sp_pend <= 1'b1;
+        else if (svcB)  sp_pend <= 1'b0;
     end
 
     // ------------------------------------------------------------------------------------------
@@ -268,30 +300,32 @@ module i2c_emu #(
                                        : (a_data | ((busy & a_busy) ? c_mask : 8'd0));
 
     reg [2:0] n_st, n_bc;  reg [7:0] n_sr, n_ptr;  reg n_rw, n_ak, n_rf, n_inw, n_sdal, n_scll;
-    reg [1:0] n_pst;  reg n_cact;  reg [15:0] n_cend;  reg [2:0] n_wd;  reg n_wdb, n_cchk, n_drl;
-    reg [7:0] n_dend, n_wrc;
+    reg [1:0] n_pst;  reg n_cact;  reg [2:0] n_wd;  reg n_wdb, n_cchk, n_drl;
     reg       n_sclp, n_sdap;
     reg       trig;  reg [1:0] trig_time;   // start a conversion (via pend)
+    reg       set_dend, inc_wrc;
     reg       load_rd;                      // a read byte is loaded this beat (pop / clear-on-read)
     reg       tv_take;
 
     always @(*) begin
         n_st = s_st;  n_bc = s_bc;  n_sr = s_sr;  n_rw = s_rw;  n_ak = s_ak;  n_rf = s_rf;
         n_pst = s_pst;  n_ptr = s_ptr;  n_inw = s_inw;  n_sdal = s_sdal;  n_scll = s_scll;
-        n_cact = s_cact;  n_cend = s_cend;  n_wd = s_wd;  n_wdb = s_wdb;  n_cchk = 1'b0;
-        n_drl = s_drl;  n_dend = s_dend;  n_wrc = s_wrc;
+        n_cact = s_cact;  n_wd = s_wd;  n_wdb = s_wdb;  n_cchk = 1'b0;
+        n_drl = s_drl;
         trig = 1'b0;  trig_time = a_time;  load_rd = 1'b0;  tv_take = 1'b0;
+        set_dend = 1'b0;  inc_wrc = 1'b0;
         img_we_d = 1'b0;  img_we_a = 1'b0;  lw_we = 1'b0;
         img_wa = {tB, s_ptr};  img_wd = byte_in;  lw_wd = {s_ptr, byte_in};
+        lw_wa  = {1'b0, tB, s_wrc[4:0]};
 
         // ---- conversions and data ready (independent of the bus) ----
         if (tv_v && tv_t == tB && pend[tB]) begin
-            n_cact = 1'b1;  n_cend = us_now + tv;  tv_take = 1'b1;
+            n_cact = 1'b1;  tv_take = 1'b1;               // n_cend: us_now + tv (e_cend)
         end else if (conv_end) begin
             n_cact = 1'b0;
-            if (c_dconv && c_dmode != 2'd0) begin n_drl = 1'b1; n_dend = us_now[7:0] + dr_width; end
+            if (c_dconv && c_dmode != 2'd0) begin n_drl = 1'b1; set_dend = 1'b1; end
         end
-        if (fire_on[tB])  begin n_drl = 1'b1; n_dend = us_now[7:0] + dr_width; end
+        if (fire_on[tB])  begin n_drl = 1'b1; set_dend = 1'b1; end
         if (fire_off[tB]) n_drl = 1'b0;
         if (s_drl && c_dmode == 2'd1 && us_now[7:0] == s_dend) n_drl = 1'b0;   // pulse over
         // the pointer moved onto a command register
@@ -357,7 +391,7 @@ module i2c_emu #(
                             // a data byte: store it (inside the window, not read-only), count it
                             img_we_d = s_inw & ~a_ro;
                             lw_we    = s_inw;
-                            if (s_inw) n_wrc = s_wrc + 8'd1;
+                            inc_wrc  = s_inw;
                             if (a_trig) begin trig = 1'b1; trig_time = a_time; end
                             if (!a_fifo) n_ptr = s_ptr + 8'd1;
                         end
@@ -405,13 +439,17 @@ module i2c_emu #(
             img_we_d = rw_pend & ~reg_attr;  img_we_a = rw_pend & reg_attr;
             img_wa   = {sel_t, rw_addr};     img_wd   = reg_wdata;
             img_ra   = {sel_t, reg_addr};
-            lw_we    = 1'b0;  trig = 1'b0;   tv_take  = 1'b0;   load_rd = 1'b0;
+            lw_we    = sp_pend;  lw_wa = {3'd4, sp_idx};  lw_wd = sp_data;
+            trig = 1'b0;   tv_take  = 1'b0;   load_rd = 1'b0;
+            set_dend = 1'b0;  inc_wrc = 1'b0;
         end
     end
 
+    assign e_cend = tv_take, e_dend = set_dend, e_wrc = inc_wrc;
     assign ctx_wd = {cfg_data,
                      n_st, n_bc, n_sr, n_rw, n_ak, n_rf, n_pst, n_ptr, n_inw, n_sclp, n_sdap,
-                     n_sdal, n_scll, n_cact, n_cend, n_wd, n_wdb, n_cchk, n_drl, n_dend, n_wrc};
+                     n_sdal, n_scll, n_cact, us_now + tv, n_wd, n_wdb, n_cchk, n_drl,
+                     us_now[7:0] + dr_width, s_wrc + 8'd1};
 
     // ------------------------------------------------------------------------------------------
     // registered side effects of stage B
@@ -420,13 +458,24 @@ module i2c_emu #(
     function [N-1:0] onehot(input [3:0] ch);
         onehot = ({{(N-1){1'b0}}, 1'b1} << ch);
     endfunction
-    wire [N-1:0] pull_next = (onehot(c_sda) & {N{c_en & (n_sdal | c_stuck)}}) |
-                             (onehot(c_scl) & {N{c_en & n_scll}});
+    // Stage C: the pull vector and the data-ready pin of the target stage B just computed, from
+    // registered copies (this keeps the channel decode off the bus state machine's clk path).
+    reg  [3:0] pc_sda, pc_scl;  reg pc_sdal, pc_scll, pc_dpin;
+    always @(posedge clk) begin
+        pc_sda  <= c_sda;  pc_scl <= c_scl;
+        pc_sdal <= c_en & (n_sdal | c_stuck);  pc_scll <= c_en & n_scll;
+        pc_dpin <= n_drl ~^ c_dpol;        // active high: the level; active low: inverted
+    end
+    wire [N-1:0] pull_next = (onehot(pc_sda) & {N{pc_sdal}}) | (onehot(pc_scl) & {N{pc_scll}});
     assign pull = pv[0] | pv[1] | pv[2] | pv[3];
+
+    reg [15:0] st_snap;
+    assign status = {st_snap, 16'd0};
 
     integer k;
     always @(posedge clk) begin
         fifo_pop <= 1'b0;
+        fifo_unf <= 1'b0;
         if (rst) begin
             cfg_pend <= 1'b0;  rw_pend <= 1'b0;  tt_pend <= 1'b0;
             fire_on <= 4'd0;  fire_off <= 4'd0;  pend <= 4'd0;  tv_v <= 1'b0;
@@ -448,19 +497,21 @@ module i2c_emu #(
             // slot 4: latch the pending conversion's time; the read-back byte; the status snapshot
             if (svcB) begin
                 tv <= cch_rd;  tv_t <= pt_A;  tv_v <= pv_A;
-                status <= {c_en, busy_sel, s_drl, s_st[2:0], s_inw, 1'b0, s_wrc, lw_rd};
+                st_snap <= {c_en, busy_sel, s_drl, s_st[2:0], s_inw, 1'b0, s_wrc};
             end
             if (svcC) reg_rdata <= reg_attr ? img_rd[15:8] : img_rd[7:0];
 
             // a target's stage B
+            if (!svcC) begin
+                pv[tC] <= pull_next;
+                drdy_pin[tC] <= pc_dpin;
+            end
             if (!svcB) begin
-                pv[tB] <= pull_next;
-                drdy_pin[tB] <= n_drl ~^ c_dpol;   // active high: the level; active low: inverted
                 if (!fire_stb || sel_t != tB) begin fire_on[tB] <= 1'b0; fire_off[tB] <= 1'b0; end
                 if (tv_take) tv_v <= 1'b0;
                 if (trig) begin pend[tB] <= 1'b1; tidx[tB] <= trig_time; end
                 else if (tv_take) pend[tB] <= 1'b0;
-                if (load_rd && a_fifo && !fifo_empty) fifo_pop <= 1'b1;
+                if (load_rd && a_fifo) begin fifo_pop <= ~fifo_empty; fifo_unf <= fifo_empty; end
             end
         end
     end
