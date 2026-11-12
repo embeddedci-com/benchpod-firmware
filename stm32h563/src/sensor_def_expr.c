@@ -304,7 +304,7 @@ static uint16_t parse_primary(ps_t *ps) {
     case TK_OP:
         if (t.op == '(') {
             next(ps);
-            if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
+            if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
             uint16_t e = parse_ternary(ps);
             ps->nest--;
             if (!e || !expect(ps, ')', "')'")) return 0;
@@ -312,7 +312,7 @@ static uint16_t parse_primary(ps_t *ps) {
         }
         if (t.op == '[') {
             next(ps);
-            if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
+            if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
             uint16_t n = node(ps, N_TABLE, t.at);
             if (!n) return 0;
             unsigned cnt = 0;
@@ -363,7 +363,7 @@ static uint16_t parse_pow(ps_t *ps) {
     if (is_op(ps, P_POW)) {
         uint32_t at = peek(ps)->at;
         next(ps);
-        if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, at, "expression nested too deep", NULL); return 0; }
+        if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, at, "expression nested too deep", NULL); return 0; }
         uint16_t b = parse_pow(ps);   /* right associative */
         ps->nest--;
         return mk_bin(ps, OP_POW, a, b, at);
@@ -375,7 +375,7 @@ static uint16_t parse_unary(ps_t *ps) {
     tok_t t = *peek(ps);
     if (t.k == TK_OP && (t.op == '!' || t.op == '~' || t.op == '-' || t.op == '+')) {
         next(ps);
-        if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
+        if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
         uint16_t a = parse_unary(ps);
         ps->nest--;
         if (!a) return 0;
@@ -395,59 +395,61 @@ static uint16_t parse_unary(ps_t *ps) {
     return parse_primary(ps);
 }
 
-/* binary levels, high to low */
-static const int k_levels[][4] = {
-    { '*', '/', '%', 0 }, { '+', '-', 0, 0 }, { P_SHL, P_SHR, 0, 0 }, { '&', 0, 0, 0 },
-    { '^', 0, 0, 0 }, { '|', 0, 0, 0 }, { '<', P_LE, '>', P_GE }, { P_EQ, P_NE, 0, 0 },
-};
-#define N_LEVELS (int)(sizeof(k_levels) / sizeof(k_levels[0]))
-
-static uint16_t parse_bin(ps_t *ps, int level) {
-    if (level < 0) return parse_pow(ps);
-    uint16_t a = parse_bin(ps, level - 1);
-    while (a) {
-        tok_t *t = peek(ps);
-        int hit = 0;
-        for (int k = 0; k < 4 && k_levels[level][k]; k++)
-            if (t->k == TK_OP && t->op == k_levels[level][k]) hit = t->op;
-        if (!hit) break;
-        uint32_t at = t->at;
-        next(ps);
-        uint16_t b = parse_bin(ps, level - 1);
-        a = mk_bin(ps, binop_of(hit), a, b, at);
+/* Binary operators by precedence (higher binds tighter): precedence climbing, so the C stack
+   grows with the operators actually nested, not with the number of levels. */
+static int prec_of(const tok_t *t) {
+    if (t->k != TK_OP) return -1;
+    switch (t->op) {
+    case P_OR: return 1;
+    case P_AND: return 2;
+    case P_EQ: case P_NE: return 3;
+    case '<': case P_LE: case '>': case P_GE: return 4;
+    case '|': return 5;
+    case '^': return 6;
+    case '&': return 7;
+    case P_SHL: case P_SHR: return 8;
+    case '+': case '-': return 9;
+    case '*': case '/': case '%': return 10;
+    default: return -1;
     }
-    return a;
 }
 
-static uint16_t parse_logic(ps_t *ps, bool is_or) {
-    uint16_t a = is_or ? parse_logic(ps, false) : parse_bin(ps, N_LEVELS - 1);
-    while (a) {
-        int want = is_or ? P_OR : P_AND;
-        if (!is_op(ps, want)) break;
-        uint32_t at = peek(ps)->at;
-        next(ps);
-        uint16_t b = is_or ? parse_logic(ps, false) : parse_bin(ps, N_LEVELS - 1);
-        if (!b) return 0;
-        if (ND(a).type == TY_STR || ND(b).type == TY_STR) { perr(ps, at, "a string as a condition", NULL); return 0; }
-        if (is_num(ps, a)) {
-            bool ta = ND(a).u.num != 0;
-            if (is_or ? ta : !ta) { ND(a).u.num = is_or ? 1 : 0; continue; }
-            if (is_num(ps, b)) { ND(b).u.num = ND(b).u.num != 0; a = b; continue; }
-        }
-        uint16_t n = node(ps, is_or ? N_OR : N_AND, at);
-        if (!n || !add_kid(ps, n, a) || !add_kid(ps, n, b)) return 0;
-        ND(n).type = TY_NUM;
-        a = n;
+static SD_NOINLINE uint16_t mk_logic(ps_t *ps, bool is_or, uint16_t a, uint16_t b, uint32_t at) {
+    if (!a || !b) return 0;
+    if (ND(a).type == TY_STR || ND(b).type == TY_STR) { perr(ps, at, "a string as a condition", NULL); return 0; }
+    if (is_num(ps, a)) {
+        bool ta = ND(a).u.num != 0;
+        if (is_or ? ta : !ta) { ND(a).u.num = is_or ? 1 : 0; return a; }
+        if (is_num(ps, b)) { ND(b).u.num = ND(b).u.num != 0; return b; }
     }
-    return a;
+    uint16_t n = node(ps, is_or ? N_OR : N_AND, at);
+    if (!n || !add_kid(ps, n, a) || !add_kid(ps, n, b)) return 0;
+    ND(n).type = TY_NUM;
+    return n;
+}
+
+static uint16_t parse_bin(ps_t *ps, int min_prec) {
+    uint16_t a = parse_pow(ps);
+    for (;;) {
+        if (!a) return 0;
+        tok_t t = *peek(ps);
+        int p = prec_of(&t);
+        if (p < min_prec || p < 0) return a;
+        next(ps);
+        if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, t.at, "expression nested too deep", NULL); return 0; }
+        uint16_t b = parse_bin(ps, p + 1);   /* left associative */
+        ps->nest--;
+        if (t.op == P_OR || t.op == P_AND) a = mk_logic(ps, t.op == P_OR, a, b, t.at);
+        else a = mk_bin(ps, binop_of(t.op), a, b, t.at);
+    }
 }
 
 static uint16_t parse_ternary(ps_t *ps) {
-    uint16_t c0 = parse_logic(ps, true);
+    uint16_t c0 = parse_bin(ps, 1);
     if (!c0 || !is_op(ps, '?')) return c0;
     uint32_t at = peek(ps)->at;
     next(ps);
-    if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, at, "expression nested too deep", NULL); return 0; }
+    if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, at, "expression nested too deep", NULL); return 0; }
     uint16_t a = parse_ternary(ps);
     if (!a || !expect(ps, ':', "':' of '?:'")) return 0;
     uint16_t b = parse_ternary(ps);
@@ -461,13 +463,22 @@ static uint16_t parse_ternary(ps_t *ps) {
     return n;
 }
 
+/* A built-in call with only numbers: its value (kept out of parse_call, which recurses). */
+static SD_NOINLINE uint16_t fold_builtin(ps_t *ps, uint16_t n, int bi, unsigned argc, uint32_t at) {
+    double a[64], r;
+    unsigned q = 0;
+    for (uint16_t k = ND(n).kid; k && q < 64; k = ND(k).next) a[q++] = ND(k).u.num;
+    if (sd_builtin_num(bi, a, argc, &r) == SD_OK) return num_node(ps, r, at);
+    return n;
+}
+
 /* A call: built-in, solve(), user function or fragment.  The '(' is next. */
 static uint16_t parse_call(ps_t *ps, const tok_t *id, bool holes_ok, int *hole_pos) {
     sd_cc_t *c = ps->c;
     const char *s = c->src + id->at;
     char buf[40];
     next(ps);   /* '(' */
-    if (++ps->nest > (int)SD_CC_MAXDEPTH) { perr(ps, id->at, "expression nested too deep", NULL); return 0; }
+    if (++ps->nest > (int)SD_CC_MAXNEST) { perr(ps, id->at, "expression nested too deep", NULL); return 0; }
     bool is_solve = id->len == 5 && memcmp(s, "solve", 5) == 0;
     int bi = is_solve ? -1 : sd_builtin_find(s, id->len);
     int si = -1;
@@ -570,12 +581,7 @@ static uint16_t parse_call(ps_t *ps, const tok_t *id, bool holes_ok, int *hole_p
             if (ND(k).type == TY_STR) { perr(ps, ND(k).src, "a string as a number argument", NULL); return 0; }
         ND(n).aux = (uint16_t)bi;
         ND(n).type = b->str_result ? TY_STR : TY_NUM;
-        if (allnum && !b->str_result) {   /* fold */
-            double a[64], r;
-            unsigned q = 0;
-            for (uint16_t k = ND(n).kid; k; k = ND(k).next) a[q++] = ND(k).u.num;
-            if (sd_builtin_num(bi, a, argc, &r) == SD_OK) return num_node(ps, r, id->at);
-        }
+        if (allnum && !b->str_result) return fold_builtin(ps, n, bi, argc, id->at);
         return n;
     }
     if (argc != y->nargs) { perr(ps, id->at, "'%s' takes a different number of arguments", nm(ps, id->at, id->len, buf, sizeof(buf))); return 0; }
@@ -610,6 +616,14 @@ static bool emit_num(sd_cc_t *c, double v) {
     return cc_emit8(c, OP_F64) && cc_emit(c, &v, 8);
 }
 
+/* A string constant: copy its chars (already in the program) after an OP_STR. */
+static SD_NOINLINE bool emit_cstr(sd_cc_t *c, uint64_t cval) {
+    uint32_t off = sdv_str_off(cval), len = sdv_str_len(cval);
+    char tmp[256];
+    memcpy(tmp, c->p + off, len);
+    return cc_emit8(c, OP_STR) && cc_emit8(c, (uint8_t)len) && cc_emit(c, tmp, len);
+}
+
 static bool emit_node(sd_cc_t *c, uint16_t n) {
     sd_node_t *d = &c->nodes[n];
     uint16_t k;
@@ -617,12 +631,7 @@ static bool emit_node(sd_cc_t *c, uint16_t n) {
     case N_NUM: return emit_num(c, d->u.num);
     case N_STR:
         return cc_emit8(c, OP_STR) && cc_emit8(c, (uint8_t)d->aux) && cc_emit(c, c->src + d->u.soff, d->aux);
-    case N_CSTR: {
-        uint32_t off = sdv_str_off(d->u.cval), len = sdv_str_len(d->u.cval);
-        char tmp[256];
-        memcpy(tmp, c->p + off, len);   /* the constant's chars, already in the program */
-        return cc_emit8(c, OP_STR) && cc_emit8(c, (uint8_t)len) && cc_emit(c, tmp, len);
-    }
+    case N_CSTR: return emit_cstr(c, d->u.cval);
     case N_VAR: return cc_emit8(c, OP_VAR) && cc_emit8(c, (uint8_t)d->aux);
     case N_LOCAL: return cc_emit8(c, OP_LOCAL) && cc_emit8(c, (uint8_t)d->aux);
     case N_UN: return emit_node(c, d->kid) && cc_emit8(c, d->op);

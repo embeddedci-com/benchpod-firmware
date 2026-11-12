@@ -45,7 +45,8 @@ typedef struct {
 #define SD_CC_NODES  256u
 #define SD_CC_SYMS   200u
 #define SD_CC_RANGES 512u
-#define SD_CC_MAXDEPTH 40u
+#define SD_CC_MAXDEPTH 40u   /* AST depth (emit and fold recurse over it) */
+#define SD_CC_MAXNEST  20u   /* parser nesting: parentheses, calls, operators (C stack) */
 
 typedef struct { uint16_t code_lo, code_hi, json; } sd_range_t;
 #define SD_CC_SRC (SD_MAX_EXPR + 8u)

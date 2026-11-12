@@ -483,6 +483,73 @@ static int call_func(sd_inst_t *in, unsigned f, uint16_t base_args, uint64_t *re
     return run(in, fn->code, base_args, false, res);
 }
 
+/* solve(f, target, lo, hi): the integer x in [lo, hi] whose f(x) is closest to target, by
+   binary search (an exact hit stops it), as the C models did. */
+#define SFAIL(c, m) do { sd_set_err(in, (c), (m)); return (c); } while (0)
+#define SPUSH(v) do { if (in->sp >= SD_STACK) SFAIL(SD_E_EVAL, "expression too deep (stack)"); in->stack[in->sp++] = (v); } while (0)
+#define SNEED(k) do { if (in->sp < (k) + base) SFAIL(SD_E_EVAL, "stack underflow"); } while (0)
+static SD_NOINLINE int do_solve(sd_inst_t *in, uint8_t f, uint8_t pos, uint16_t base) {
+            const sdp_hdr_t *h = sdp_hdr(in->prog);
+            if (f >= h->n_funcs) SFAIL(SD_E_EVAL, "bad solve");
+            const sdp_func_t *fn = (const sdp_func_t *)(const void *)(in->prog + h->funcs) + f;
+            unsigned nfixed = pos == 0xFF ? 0u : (unsigned)fn->nargs - 1u;
+            if (pos == 0xFF) pos = 0;
+            SNEED(nfixed + 3);
+            double v3[3];
+            for (unsigned i = 0; i < 3; i++) {
+                uint64_t v = in->stack[in->sp - 3 + i];
+                if (sdv_is_str(v)) SFAIL(SD_E_EVAL, "a string in solve()");
+                v3[i] = sdv_d(v);
+            }
+            in->sp = (uint16_t)(in->sp - 3);
+            uint16_t fixed_at = (uint16_t)(in->sp - nfixed);
+            double target = v3[0];
+            if (!(v3[1] == v3[1]) || !(v3[2] == v3[2]) || target != target) SFAIL(SD_E_SOLVE, "solve(): NaN argument");
+            double lod = ceil(v3[1]), hid = floor(v3[2]);
+            if (lod > hid) SFAIL(SD_E_SOLVE, "solve(): empty range");
+            if (hid - lod > 4.0e18 || fabs(lod) > 4.0e18 || fabs(hid) > 4.0e18) SFAIL(SD_E_SOLVE, "solve(): range too large");
+            int64_t lo = (int64_t)lod, hi = (int64_t)hid;
+            /* f(x): push the arguments with x at pos, call, read the result */
+            #define SOLVE_EVAL(x, out) do { \
+                uint16_t nb_ = in->sp; \
+                for (unsigned q_ = 0, k_ = 0; q_ < fn->nargs; q_++) \
+                    SPUSH(q_ == pos ? sdv_num((double)(x)) : in->stack[fixed_at + k_++]); \
+                uint64_t r_; int rc_ = call_func(in, f, nb_, &r_); \
+                if (rc_) return rc_; \
+                in->sp = nb_; \
+                if (sdv_is_str(r_)) SFAIL(SD_E_SOLVE, "solve(): the function gives a string"); \
+                (out) = sdv_d(r_); } while (0)
+            double flo, fhi;
+            SOLVE_EVAL(lo, flo);
+            SOLVE_EVAL(hi, fhi);
+            bool rising = !(flo > fhi);
+            double vlo = flo, vhi = fhi;
+            int64_t best = lo;
+            double best_err = sd_inf();
+            for (unsigned it = 0; lo <= hi && it < SD_SOLVE_MAX_ITER; it++) {
+                int64_t mid = lo + (hi - lo) / 2;
+                double v;
+                SOLVE_EVAL(mid, v);
+                if (!(v == v) || v == sd_inf() || v == -sd_inf()) { hi = mid - 1; continue; }
+                /* a monotonic function stays between the values at the bracket's ends */
+                if ((vlo == vlo && vhi == vhi) && fabs(vlo) != sd_inf() && fabs(vhi) != sd_inf() &&
+                    (rising ? (v < vlo || v > vhi) : (v > vlo || v < vhi)))
+                    SFAIL(SD_E_SOLVE, "solve(): the function is not monotonic");
+                double e = fabs(v - target);
+                if (e < best_err) { best_err = e; best = mid; }
+                if (v == target) break;
+                if (rising ? v < target : v > target) { lo = mid + 1; vlo = v; }
+                else { hi = mid - 1; vhi = v; }
+            }
+            #undef SOLVE_EVAL
+            in->sp = fixed_at;
+            SPUSH(sdv_num((double)best));
+            return SD_OK;
+}
+#undef SFAIL
+#undef SPUSH
+#undef SNEED
+
 static int run(sd_inst_t *in, uint16_t code, uint16_t base, bool frag, uint64_t *result) {
     const uint8_t *pc = in->prog + code;
     const uint8_t *end = in->prog + in->prog_len;
@@ -601,63 +668,10 @@ static int run(sd_inst_t *in, uint16_t code, uint16_t base, bool frag, uint64_t 
             break;
         }
         case OP_SOLVE: {
-            const sdp_hdr_t *h = sdp_hdr(in->prog);
             uint8_t f = pc[0], pos = pc[1];
             pc += 2;
-            if (f >= h->n_funcs) FAIL(SD_E_EVAL, "bad solve");
-            const sdp_func_t *fn = (const sdp_func_t *)(const void *)(in->prog + h->funcs) + f;
-            unsigned nfixed = pos == 0xFF ? 0u : (unsigned)fn->nargs - 1u;
-            if (pos == 0xFF) pos = 0;
-            NEED(nfixed + 3);
-            double v3[3];
-            for (unsigned i = 0; i < 3; i++) {
-                uint64_t v = in->stack[in->sp - 3 + i];
-                if (sdv_is_str(v)) FAIL(SD_E_EVAL, "a string in solve()");
-                v3[i] = sdv_d(v);
-            }
-            in->sp = (uint16_t)(in->sp - 3);
-            uint16_t fixed_at = (uint16_t)(in->sp - nfixed);
-            double target = v3[0];
-            if (!(v3[1] == v3[1]) || !(v3[2] == v3[2]) || target != target) FAIL(SD_E_SOLVE, "solve(): NaN argument");
-            double lod = ceil(v3[1]), hid = floor(v3[2]);
-            if (lod > hid) FAIL(SD_E_SOLVE, "solve(): empty range");
-            if (hid - lod > 4.0e18 || fabs(lod) > 4.0e18 || fabs(hid) > 4.0e18) FAIL(SD_E_SOLVE, "solve(): range too large");
-            int64_t lo = (int64_t)lod, hi = (int64_t)hid;
-            /* f(x): push the arguments with x at pos, call, read the result */
-            #define SOLVE_EVAL(x, out) do { \
-                uint16_t nb_ = in->sp; \
-                for (unsigned q_ = 0, k_ = 0; q_ < fn->nargs; q_++) \
-                    PUSH(q_ == pos ? sdv_num((double)(x)) : in->stack[fixed_at + k_++]); \
-                uint64_t r_; int rc_ = call_func(in, f, nb_, &r_); \
-                if (rc_) return rc_; \
-                in->sp = nb_; \
-                if (sdv_is_str(r_)) FAIL(SD_E_SOLVE, "solve(): the function gives a string"); \
-                (out) = sdv_d(r_); } while (0)
-            double flo, fhi;
-            SOLVE_EVAL(lo, flo);
-            SOLVE_EVAL(hi, fhi);
-            bool rising = !(flo > fhi);
-            double vlo = flo, vhi = fhi;
-            int64_t best = lo;
-            double best_err = sd_inf();
-            for (unsigned it = 0; lo <= hi && it < SD_SOLVE_MAX_ITER; it++) {
-                int64_t mid = lo + (hi - lo) / 2;
-                double v;
-                SOLVE_EVAL(mid, v);
-                if (!(v == v) || v == sd_inf() || v == -sd_inf()) { hi = mid - 1; continue; }
-                /* a monotonic function stays between the values at the bracket's ends */
-                if ((vlo == vlo && vhi == vhi) && fabs(vlo) != sd_inf() && fabs(vhi) != sd_inf() &&
-                    (rising ? (v < vlo || v > vhi) : (v > vlo || v < vhi)))
-                    FAIL(SD_E_SOLVE, "solve(): the function is not monotonic");
-                double e = fabs(v - target);
-                if (e < best_err) { best_err = e; best = mid; }
-                if (v == target) break;
-                if (rising ? v < target : v > target) { lo = mid + 1; vlo = v; }
-                else { hi = mid - 1; vhi = v; }
-            }
-            #undef SOLVE_EVAL
-            in->sp = fixed_at;
-            PUSH(sdv_num((double)best));
+            int rc = do_solve(in, f, pos, base);
+            if (rc) { in->err.expr_off = (int32_t)(pc - in->prog); return rc; }
             break;
         }
         case OP_CTAB: {
