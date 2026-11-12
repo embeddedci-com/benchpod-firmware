@@ -15,13 +15,25 @@ sample-rate clocks, buffers samples, and (for captures) streams them into
 PSRAM so the STM32 can read the result back over its own memory-mapped XSPI.
 
 > The legacy **v1** parallel-ADC gateware (for the retired RP2350 boards) was
-> removed 2026-07-09. `top_v2.v` is the only top. It is built as two images from the
-> same source: the **loop** image (`bench_pod_fpga_vbench_pod_loop.bin`, with the in-fabric
-> DAC control loop) and the **deep** image (`..._deep.bin`, built with `-DUSE_DEEP_REPLAY`,
-> with deep DAC replay from PSRAM). Both report the same gateware version; `FPGA_FEATURES`
-> (0x18) says which one is running. The firmware carries both and swaps them by rewriting the
-> iCE40 config flash (JSON `fpga_image`); SB_WARMBOOT cannot work on this board because the
-> config flash shares the PSRAM bus.
+> removed 2026-07-09. `top_v2.v` is the only top. Since v54 it is built as three images from
+> the same source (`src/image_config.vh`). All three report the same gateware version;
+> `FPGA_FEATURES` (0x18) says which one is running. The firmware keeps them in W25Q slots and
+> swaps them by rewriting the iCE40 config flash (JSON `fpga_image`); SB_WARMBOOT cannot work on
+> this board because the config flash shares the PSRAM bus.
+
+## Images
+
+| Image | File | Flag | FPGA_FEATURES | Carries |
+|---|---|---|---|---|
+| loop | `bench_pod_fpga_vbench_pod_loop.bin` | (none) | bit0 | the in-fabric DAC control loop (`dac_loop`) |
+| deep | `..._deep.bin` | `-DUSE_DEEP_REPLAY` | bit1 | deep DAC replay from PSRAM (`dac_psram_reader`, `psram_bus_arbiter`) |
+| emulation | `..._emu.bin` | `-DUSE_EMULATION` | bit2 | the emulated sensors: 4 I2C targets (`i2c_emu`), one SPI target (`spi_target`), the sensor FIFO (`emu_fifo`), UART2 TX and RX, the pin map |
+
+Every image also has the ADC capture, the LA capture (change capture included) into PSRAM, the
+UART proxy, SWD and its transfer queue, GPIO and the stepper, the SPI master and the shallow DAC
+generate (`LOAD_WAVE`/`START_DAC`). Until v53 the I2C target and UART2 were in the loop and deep
+images; v54 moved them out (about 650 LC each) and the firmware swaps to the emulation image when
+a sensor starts. Image-specific commands are gated on FPGA_FEATURES, never on the version.
 
 ## Capture datapath
 
@@ -143,12 +155,44 @@ synchroniser or an SCK-clocked slave, which needs a global buffer.
 ## Logic-analyzer bank, SWD and SPI
 
 The 14 bidirectional LA channels (`LA1`..`LA14`) are a shared resource: the
-SWD/SPI engine, the stepper pulse generator, the I²C target, the UART proxy and
-static GPIO all drive them through a priority mux
-(`swd > stepper > i2c > uart > static`). `swd_engine.v` takes SWCLK/SWDIO as LA
+SWD/SPI engine, the stepper pulse generator, the emulated sensors' pin map (emulation image),
+the UART proxy and static GPIO all drive them through a priority mux
+(`swd > stepper > emu > uart > static`). `swd_engine.v` takes SWCLK/SWDIO as LA
 channel indices (nRESET is the pod's own pin since v37), decodes OpenOCD
 `remote_bitbang` batches, and since v45 also runs whole SWD transfers from a queue
 (`SWD_QFEED`). Since v44 the same engine is an SPI master on four LA channels.
+
+## Sensor emulation (emulation image)
+
+The gateware is sensor-agnostic: the firmware interprets the sensor definitions and fills
+register images, FIFOs and timing tables over SPI ([`PROTOCOL.md`](PROTOCOL.md): `I2C_*`,
+`EMU_*`, `SPIT_CONFIG`, `UART2_*`).
+
+- **I2C targets** (`i2c_emu.v`). Four targets, each with its own address, SDA/SCL LA wires (a
+  shared bus or separate ones), a 256-byte image and its configuration. One copy of the logic
+  serves them in turn: a 5-clk round (4 targets + a slot for the SPI side), so each target samples
+  its bus at 4.8 MHz (400 kHz I2C is safe; 1 MHz only with SCL high >= 0.42 us). Each target's
+  112-bit context (configuration + bus state) is a word in seven block RAMs; the images are one
+  1024x16 memory whose high byte holds per-register attributes: TRIG, CMD (a pointer write starts
+  a conversion), BUSY (OR the target's mask while converting), FIFO, CLR (a read drops a data-ready
+  level), RO, and a 2-bit index into the target's four conversion times. 8- or 16-bit register
+  addressing (a 256-byte window at `page`), while_busy flag / nack / stretch (bounded by the
+  conversion time, at most 65.5 ms), mute and bus_stuck faults, data ready (pulse or level, on
+  conversion end or by command), and the SCL-silence watchdog (7..8 ms).
+- **Write log.** Every DUT data byte stored by a target (I2C or SPI) is logged as {address,
+  value} in a 32-entry ring per target, indexed by the target's write counter, so the firmware
+  sees every write between two polls (`I2C_READ_LOG`).
+- **SPI target** (`spi_target.v`). Modes 0..3, an address byte with configurable read and
+  increment bits and address mask, 0..3 dummy bytes, its own image (target 4 of the `I2C_*`
+  commands; FIFO and RO attributes), mute. SCK up to about 2 MHz.
+- **FIFO** (`emu_fifo.v`). 2047 bytes in the one free SPRAM, pushed by the firmware, popped by
+  FIFO registers of any target.
+- **UART2**: TX (v48) and, since v54, RX with its own 256-byte FIFO.
+- **Pin map** (`EMU_PINMAP`). One 3-bit driver code per LA wire: an I2C line (open drain: pulled
+  low while any target wants it), a target's data ready, the SPI target's MISO or UART2 TX. It is
+  one la_bank column, under SWD/SPI master and the stepper, over the UART proxy and GPIO.
+
+The emulation image uses all 30 block RAMs and all 4 SPRAMs.
 
 ## Modules
 
@@ -173,8 +217,11 @@ channel indices (nRESET is the pod's own pin since v37), decodes OpenOCD
 | `src/la_bank.v` | 14 bidirectional LA channels + driver priority mux |
 | `src/stepper_engine.v` | Microsecond-precise step-pulse generator |
 | `src/swd_engine.v` | OpenOCD `remote_bitbang` SWD decoder, SWD transfer queue, SPI master, reply buffer |
-| `src/i2c_target.v` / `src/i2c_regfile.v` | I²C sensor emulation (target + 256-byte register file) |
-| `src/uart_engine.v` | Soft UART proxy |
+| `src/i2c_emu.v` | Emulation image: 4 I²C targets in one time-multiplexed engine (context and register images in block RAM), write log |
+| `src/spi_target.v` | Emulation image: the emulated SPI sensor |
+| `src/emu_fifo.v` | Emulation image: the shared 2 KB sensor FIFO in the free SPRAM |
+| `src/uart_engine.v` | Soft UART proxy (and UART2 in the emulation image) |
+| `src/image_config.vh` | Which of the three images a build is |
 | `src/dsp_counter.v` / `src/dsp_counter2.v` | Counters packed into SB_MAC16 DSP blocks to save logic cells |
 | `src/lc_counter.v` | Loadable counter in one logic cell per bit |
 | `src/cmd_opcodes.vh` | SPI opcode table (generated by `tools/gen_protocol.py`) |
@@ -185,7 +232,7 @@ channel indices (nRESET is the pod's own pin since v37), decodes OpenOCD
 Open-source IceStorm toolchain (`brew install icestorm yosys nextpnr-ice40`):
 
 ```
-make images          # build both runtime images: ..._loop.bin and ..._deep.bin (pinned seeds)
+make images          # build the three runtime images: ..._loop.bin, ..._deep.bin, ..._emu.bin (pinned seeds)
 make                 # build bench_pod_fpga_vbench_pod.bin (one image, for flash/flash-ram)
 make flash           # build + program the config flash via an FTDI programmer (iceprog)
 make flash-ram       # build + load straight into FPGA SRAM (volatile)
@@ -200,8 +247,9 @@ Pin constraints live in `vbench_pod.pcf`. Use yosys 0.65 (0.66 places worse with
 ### Releases embed promoted images
 
 The images are not embedded in the firmware binary. A firmware build packs
-`ice40/bench_pod_fpga_vbench_pod_{loop,deep}.bin` into the blobs that go with it
-(`build/blobs/blob-gw0.bin` = loop, `blob-gw1.bin` = deep, kept in the pod's W25Q) and
+`ice40/bench_pod_fpga_vbench_pod_{loop,deep,emu}.bin` into the blobs that go with it
+(`build/blobs/blob-gw0.bin` = loop, `blob-gw1.bin` = deep, `blob-gw2.bin` = emulation, kept in
+the pod's W25Q) and
 records their gateware version. A release build uses `ice40/release/` instead: images that passed a hardware test, promoted
 with `make promote HW_VERIFIED="<which test>"` (which records the source hash, seeds,
 toolchain and clk48 margins in `release/MANIFEST`) and installed with
@@ -223,7 +271,8 @@ hand.
 steppertest …`) and whole-top benches that drive real SPI transactions through
 the SB_IO pads (`make topsmoketest topcapturetest spitest swdqtest` on the loop
 image, `make topdeeptest` on the deep image: replay across bus_own, a capture
-read back mid-replay, overflow cleared by the next arm).
+read back mid-replay, overflow cleared by the next arm; `make i2cemutest topemutest uart2test`
+on the emulation image's sensors).
 `make check-protocol` verifies the generated files (opcode table, `sys_config.vh`,
 the firmware headers and [`PROTOCOL.md`](PROTOCOL.md)) are in sync with
 `tools/gen_protocol.py`.
