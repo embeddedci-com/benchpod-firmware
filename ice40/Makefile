@@ -436,9 +436,12 @@ $(OUT).bin: $(OUT).asc
 # v53 (ADC-urgent pick in psram_dual_writer): swept 1..64 in both toolchains (CI run 42421449089).
 # Pinned SEED_LOOP 35 -> 51, the seed with the highest clk48 in the slower toolchain (53.75 CI /
 # 54.11 local MHz; clk -> clk48 13.62 / 12.46 ns).
-SEED_LOOP ?= 51
-# v52: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
-SEED_LOOP_FALLBACK ?= 38 52 7 39 58 41 35 54 61
+# v54 (the I2C target and UART2 moved to the emulation image; 3998 LC, 75%): swept 1..32 locally:
+# all 32 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 51 -> 25 (clk48 61.18, clk 28.07, clk -> clk48
+# 10.08 ns, clk48 -> clk 5.58 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
+SEED_LOOP ?= 25
+# v54: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
+SEED_LOOP_FALLBACK ?= 17 19 21 24 30 26 13
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -539,15 +542,23 @@ SEED_LOOP_FALLBACK ?= 38 52 7 39 58 41 35 54 61
 # v53: seed 5 missed timing locally (45.03 MHz) and passed MAX_X48_NS in neither. Swept 1..64 in
 # both (CI run 42421449089): pinned SEED_DEEP 5 -> 37 (57.61 local / 59.54 CI MHz; clk -> clk48
 # 13.92 / 13.83 ns).
-SEED_DEEP ?= 37
+# v54 (no I2C target, no UART2; 3663 LC, 69%): seed 37 fell to 51.58 MHz.  Swept 1..32 locally: all 32
+# reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 37 -> 11 (clk48 59.54, clk 29.31, clk -> clk48 13.34 ns,
+# clk48 -> clk 5.58 ns; 14 ties on clk48 at 14.67 ns).  CI sweep not run yet.  RE-VERIFY deep replay.
+SEED_DEEP ?= 11
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 23 25 53 21 62 59 34 33 31
-# v54: the emulation image (USE_EMULATION).  Swept and pinned like the other two.
-SEED_EMU ?= 1
-SEED_EMU_FALLBACK ?= 2 3 4 5 6 7 8
+SEED_DEEP_FALLBACK ?= 3 27 29 21 7 14
+# v54: the emulation image (USE_EMULATION; 4 I2C targets, write log, SPI target, FIFO, UART2 TX+RX;
+# 4891 LC, 92%, 30/30 block RAM, 4/4 SPRAM).  Its binding clock is clk (24 MHz), not clk48: the
+# image has no clk48 logic beyond what every image has.  Swept 1..42 locally: ALL 42 place, close
+# and reach MIN_CLK48_MHZ (clk48 54.2..66.4 MHz), clk 25.1..28.8 MHz.  Pinned SEED_EMU 27 (clk48
+# 66.37, clk 28.05, clk -> clk48 10.73 ns, clk48 -> clk 6.22 ns).  The fallbacks are the next seeds
+# with clk >= 27.5 MHz.  CI sweep not run yet.  Not hardware-tested.
+SEED_EMU ?= 27
+SEED_EMU_FALLBACK ?= 5 3 42 2 22 28 1 19
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
