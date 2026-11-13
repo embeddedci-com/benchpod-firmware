@@ -105,8 +105,10 @@ the call's own arguments use paths such as `values.temperature_c`, `live_regs` a
   `dummy_bytes`. Both: `conversion`, `data_ready` (`active_high`, `level`, `on`, `pulse_us`,
   `clear_on_read`), `fifo` (`at`, `frame_len`, `depth`, `drop`), `commands` (`at`, `busy_us`,
   `command`: the command's address).
-- `dynamic`: image addresses rebuilt on every change; `read_only`: addresses the pod restores
-  after a DUT write (`writable: false`).
+- `dynamic`: image addresses rebuilt on every change: the bytes whose owner, a register or a
+  command's answer, reads a param, `reg[]`, `t`, a state and so on (or has `reload: "always"`).
+  A command-map sensor (an SHT3x: `register_address_bits: 16` without a page) lists its answers
+  here. `read_only`: addresses the pod restores after a DUT write (`writable: false`).
 - UART: `"uart": {"baud", "data_bits", "parity": "N"|"E"|"O", "stop_bits", "messages", "requests"}`.
 - Analog: `"analog": {"output": "voltage"|"current", "excitation", "min", "max"}`.
 

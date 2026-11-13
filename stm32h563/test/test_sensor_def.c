@@ -234,6 +234,15 @@ static void test_sht4x(void) {
     static const float hums[] = { 0.0f, 33.3f, 75.0f, 100.0f, 51.1f };
     static const uint8_t cmds[] = { 0xFD, 0xF6, 0xE0, 0x39, 0x32, 0x24, 0x1E, 0x15 };
     char where[400];
+    /* dynamic: every measurement answer (it reads the params), not the serial number (0x89) */
+    {
+        uint8_t dyn[32];
+        bool ok = sd_regs_dyn_map(&s.in, dyn) == SD_OK;
+        for (unsigned c = 0; c < sizeof(cmds); c++)
+            for (unsigned k = 0; k < 6; k++) { unsigned ix = (cmds[c] + k) & 0xFF; ok = ok && (dyn[ix >> 3] & (1u << (ix & 7))); }
+        for (unsigned k = 0; k < 6; k++) { unsigned ix = 0x89 + k; ok = ok && !(dyn[ix >> 3] & (1u << (ix & 7))); }
+        CHECK(ok, "sht4x: the measurement answers are dynamic, the serial number is not");
+    }
     for (unsigned k = 0; k < 5; k++) {
         setp(&s, "temperature_c", temps[k]);
         setp(&s, "humidity_pct", hums[k]);
@@ -1025,6 +1034,15 @@ static void test_command_map(void) {
         for (unsigned k = 0; k < spans[i]; k++) { unsigned ix = (cm_at(img, order[i]) + k) & 0xFF; clash |= seen[ix]; seen[ix] = 1; }
     CHECK(!clash, "the layout keeps every block and base byte apart");
     CHECK(sd_regs_ro_map(&s.in, ro) == SD_OK && (ro[0x24 >> 3] & (1u << (0x24 & 7))) && (ro[0xE0 >> 3] & (1u << (0xE0 & 7))), "base bytes read-only");
+    /* dynamic bytes: the answers that read a param (0x2400) or reg[] (0x2318), nothing else (a
+       command map has no registers, so this was empty before command answers counted) */
+    {
+        uint8_t dyn[32], want[32] = { 0 };
+        for (unsigned k = 0; k < 6; k++) { unsigned ix = (cm_at(img, 0x2400) + k) & 0xFF; want[ix >> 3] |= (uint8_t)(1u << (ix & 7)); }
+        for (unsigned k = 0; k < 3; k++) { unsigned ix = (cm_at(img, 0x2318) + k) & 0xFF; want[ix >> 3] |= (uint8_t)(1u << (ix & 7)); }
+        CHECK(sd_regs_dyn_map(&s.in, dyn) == SD_OK && memcmp(dyn, want, sizeof(dyn)) == 0,
+              "dynamic: the param and reg[] answers of a command map");
+    }
     /* a set command's data: reg[] and `written` see it at its command's addresses */
     memcpy(live, img, 256);
     unsigned w = cm_at(img, 0x241D);

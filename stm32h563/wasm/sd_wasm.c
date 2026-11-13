@@ -420,10 +420,12 @@ static void o_addr_lists(void) {
         if (e[i].flags & SDE_CMD) continue;
         for (unsigned b = 0; b < e[i].len && e[i].at + b < SD_REGIMAGE; b++) {
             unsigned a = e[i].at + b;
-            if (e[i].flags & SDE_DYN) dyn[a / 8] |= (uint8_t)(1u << (a % 8));
             if (e[i].flags & SDE_RO) ro[a / 8] |= (uint8_t)(1u << (a % 8));
         }
     }
+    /* dynamic: by the owner map, command answers included (a command map sensor such as an
+       SHT3x has nothing but commands, and its answers follow the params) */
+    (void)sd_regs_dyn_map(&g_in, dyn);
     for (int list = 0; list < 2; list++) {
         const uint8_t *m = list ? ro : dyn;
         o_key(list ? "read_only" : "dynamic"); o_ch('[');
