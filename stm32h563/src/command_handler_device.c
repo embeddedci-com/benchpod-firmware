@@ -288,6 +288,10 @@ void handle_status(int conn_id, const char *json) {
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
     bp_emit(&e, "\"flash_kb\":%lu,", caps.flash_kb);
+    /* Emulated sensors: the definition format the pod takes, and whether I2C/SPI/UART sensors work
+       (the emulation image is installed or running). Clients tell from these that the pod may be on
+       the emulation image, which has neither the loop's nor the deep image's feature. */
+    bp_emit(&e, "\"sensors_format\":1,\"sensors_digital\":%s,", caps.sensors_digital ? "true" : "false");
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
                 "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",

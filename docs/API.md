@@ -2708,10 +2708,10 @@ Each one is an **instance** with a name the host picks: 1 to 16 characters of `a
 `_` (usually the definition's `name`; the limit keeps `la_pins` and `sensor_status` inside the
 cloud reply cap). At most 8 instances are defined at once.
 
-Capability in `status` `caps`: `"sensors"`. The cloud capabilities frame also carries
-`"sensors":true`, `"sensors_format":1` (the definition format version the pod takes) and
-`"sensors_digital"` (the emulation image is installed or running, so I2C, SPI and UART sensors
-work). These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
+Capability in `status` `caps`: `"sensors"`. `status` and the cloud capabilities frame also carry
+`"sensors_format":1` (the definition format version the pod takes) and `"sensors_digital"` (the
+emulation image is installed or running, so I2C, SPI and UART sensors work); the cloud frame also
+has `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
 of firmware 3.10 and earlier.
 
 Typical flow:
