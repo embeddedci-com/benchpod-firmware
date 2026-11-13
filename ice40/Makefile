@@ -47,6 +47,7 @@ SRC = src/top_v2.v            \
       src/la_bank.v           \
       src/stepper_engine.v    \
       src/swd_engine.v        \
+      src/i2c_master.v        \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -886,7 +887,7 @@ swdqtest:
 # v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
 # modes 0-3, on swd_engine alone against behavioural targets.
 i2cmastertest:
-	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v
 	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
