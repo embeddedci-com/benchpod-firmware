@@ -2754,7 +2754,7 @@ command and reply fits one cloud frame.
 | Field | Meaning |
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
-| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. A target may stretch the clock |
+| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
 | `pullups` | `pod` (default): both pins must be LA1..LA6 with the pod's pull-up switched on (`{"cmd":"la","la":1,"pullup":"on"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
