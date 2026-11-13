@@ -250,3 +250,47 @@ void handle_i2c_scan(int conn_id, const char *json) {
     snprintf(p + n, pcap - n, "]}");
     send_ok_str(conn_id, p);
 }
+
+/* ---- send and capture (la_capture "send":{"bus":"i2c",...}, command_handler_bus_send.c) ----
+   The transaction is built before the capture is armed and run right after it, so a trigger on
+   SDA catches its START.  Smaller than i2c_xfer so the result rides the capture's last frame. */
+
+int i2c_capture_prepare(const char *obj, char *err, size_t cap) {
+    if (!fpga_i2c_armed()) { snprintf(err, cap, "send: no I2C session: send i2c_start first"); return -1; }
+    uint32_t addr, nr = 0;
+    if (!get_u32(obj, "addr", &addr) || addr > 0x7Fu) { snprintf(err, cap, "send: addr must be 0..127"); return -1; }
+    if (has_key(obj, "read") && (!get_u32(obj, "read", &nr) || nr > BUS_SEND_MAX)) {
+        snprintf(err, cap, "send: read must be 0..%u", (unsigned)BUS_SEND_MAX); return -1;
+    }
+    char b64[B64URL_ENCODED_LEN(BUS_SEND_MAX) + 8];
+    size_t nw = 0;
+    if (has_key(obj, "write") &&
+        (bp_json_get_fit(obj, "write", b64, sizeof(b64)) != 1 ||
+         b64url_decode(b64, s_reply, BUS_SEND_MAX + 4u, &nw) != 0 || nw > BUS_SEND_MAX)) {
+        snprintf(err, cap, "send: write must be 0..%u bytes of base64url", (unsigned)BUS_SEND_MAX); return -1;
+    }
+    if (i2c_txn_xfer(&s_t, (uint8_t)addr, s_reply, nw, nr) != 0) { snprintf(err, cap, "send: invalid i2c transfer"); return -1; }
+    return 0;
+}
+
+void i2c_capture_run(char *out, size_t cap) {
+    uint32_t budget = i2c_txn_us(&s_t, s_half) * 2u + I2C_STRETCH_BUDGET_MS * 1000u;
+    bool arb = false;
+    int rc = fpga_i2c_run(s_t.tok, s_t.ntok, s_reply, s_t.nreply, budget, &arb);
+    if (rc == -2 || arb) fpga_i2c_recover(s_sda, s_scl, s_half);
+    if (rc != 0 || arb) {
+        snprintf(out, cap, "{\"bus\":\"i2c\",\"error\":\"%s\"}",
+                 arb ? "arbitration lost" : rc == -2 ? "SCL held low" : "transfer failed");
+        return;
+    }
+    i2c_result_t r;
+    i2c_txn_result(&s_t, s_reply, &r);
+    int n = snprintf(out, cap, "{\"bus\":\"i2c\",\"ack\":%s", r.ack ? "true" : "false");
+    if (r.nack_at >= 0) n += snprintf(out + n, cap - (size_t)n, ",\"nack_at\":%d", r.nack_at);
+    if (s_t.nr > 0) {
+        n += snprintf(out + n, cap - (size_t)n, ",\"rx\":\"");
+        if (r.nrx) n += (int)b64url_encode(s_reply + r.rx_off, r.nrx, out + n, cap - (size_t)n);
+        n += snprintf(out + n, cap - (size_t)n, "\"");
+    }
+    snprintf(out + n, cap - (size_t)n, "}");
+}

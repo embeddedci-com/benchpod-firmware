@@ -874,6 +874,27 @@ trigger: fewer than asked when the capture was armed only shortly before the tri
 signals changed often before it (the pod keeps about the last 16 000 changes before the trigger).
 The trigger is at sample index N; `samples` more follow it.
 
+#### Send and capture
+
+`send` runs one transaction right after the capture is armed, in the same command, so a trigger on
+the bus line catches it (this also works over the cloud, which runs one command at a time):
+
+```json
+{"cmd":"la_capture","samples":4096,"sample_rate_mhz":12,"trigger":{"la":1,"edge":"falling"},
+ "send":{"bus":"i2c","addr":72,"write":"Dw","read":2}}
+```
+
+| `send` | Needs | Result in the last reply packet |
+|---|---|---|
+| `{"bus":"i2c","addr":A,"write":"<b64url>","read":N}` | an [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) session; write and read up to 32 bytes | `"send":{"bus":"i2c","ack":true,"rx":"ARc"}` as `i2c_xfer` reports it (`nack_at` on a NACK) |
+| `{"bus":"spi","tx":"<b64url>"}` | an [`spi_start`](#spi_start--claim-four-pins-for-spi) session, CS not held; 1..32 bytes in one CS frame | `"send":{"bus":"spi","rx":"..."}` |
+| `{"bus":"gpio","la":N,"level":0\|1}` | LA N already a gpio `output` or `open_drain` | `"send":{"bus":"gpio","la":5,"level":0}` |
+
+Trigger on the line the transaction starts with: SDA falling (I2C START), CS falling (SPI), or the
+gpio pin's edge. A transfer that fails reports `"send":{"bus":"i2c","error":"SCL held low"}`, and the
+capture still returns. A `send` that does not validate (no session, bad fields) is refused before
+anything is armed.
+
 | Condition | Message |
 |---|---|
 | LA voltage not set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |

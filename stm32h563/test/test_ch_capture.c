@@ -82,7 +82,26 @@ bool fpga_capture_adc_sentinel_survived(void) { return false; }
 void fpga_capture_extend_deadline_ms(uint32_t ms) { (void)ms; }
 /* the deep-LA engine rounds the request to a whole divider: 2.304 MHz -> 24 MHz / 11 */
 static float g_la_req_hz;
-int fpga_la_capture_psram_start(size_t n, float hz, float *act) { (void)n; g_la_req_hz = hz; if (act) *act = 24000000.0f / 11.0f; return 0; }
+static bool g_la_armed;     /* set by the fake arm: the send must run after it */
+int fpga_la_capture_psram_start(size_t n, float hz, float *act) { (void)n; g_la_req_hz = hz; g_la_armed = true; if (act) *act = 24000000.0f / 11.0f; return 0; }
+
+/* la_capture's "send" (command_handler_bus_send.c): prepared before the arm, run after it. */
+static int  g_send_state;      /* 0 none, 1 prepared, 2 ran */
+static bool g_send_ran_after_arm;
+bool bus_send_prepare(int c, const char *json) {
+    g_send_state = 0;
+    if (!strstr(json, "\"send\"")) return true;
+    if (strstr(json, "\"bus\":\"bad\"")) { send_error(c, "send bus must be i2c, spi or gpio"); return false; }
+    g_send_state = 1;
+    return true;
+}
+void bus_send_run(void) { if (g_send_state == 1) { g_send_ran_after_arm = g_la_armed; g_send_state = 2; } }
+void bus_send_cancel(void) { g_send_state = 0; }
+size_t bus_send_take(char *out, size_t cap) {
+    if (g_send_state != 2) return 0;
+    g_send_state = 0;
+    return (size_t)snprintf(out, cap, ",\"send\":{\"bus\":\"i2c\",\"ack\":true,\"rx\":\"ARc\"}");
+}
 int fpga_la_capture_psram_wait(void) { if (g_wait_rc > 0) g_bus = true; return g_wait_rc; }
 /* LA change capture (gw >= v50): g_ev is the event stream the gateware wrote to the LA region */
 #include "la_rate.h"
@@ -271,6 +290,28 @@ static void test_la_capture_reports_achieved_rate(void) {
     handle_capture_read(6, "{\"cmd\":\"capture_read\",\"offset\":0}");
     pump_all();
     CHECK(strstr(g_tx, "\"la_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
+    g_wait_rc = 0;
+}
+
+static void test_la_capture_send(void) {
+    /* a bad send arms nothing */
+    clear_tx();
+    g_la_armed = false;
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":500,\"send\":{\"bus\":\"bad\"}}");
+    CHECK(!capture_busy() && !g_la_armed && strstr(g_err, "send bus") != NULL, "bad send armed: %s", g_err);
+
+    /* the send runs after the arm and its result rides the last frame */
+    for (size_t i = 0; i < 500; i++) g_la[i] = 0;
+    clear_tx();
+    g_la_armed = false; g_send_ran_after_arm = false;
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":500,\"send\":{\"bus\":\"i2c\",\"addr\":72,\"read\":2}}");
+    CHECK(capture_busy() && g_send_ran_after_arm, "send did not run after the arm: %s", g_err);
+    g_wait_rc = 1;
+    pump_all();
+    char *last = strrchr(g_tx, '{');
+    (void)last;
+    CHECK(strstr(g_tx, ",\"send\":{\"bus\":\"i2c\",\"ack\":true,\"rx\":\"ARc\"},\"more\":false}") != NULL,
+          "no send result in the last frame: %.200s", g_tx + (g_ntx > 200 ? g_ntx - 200 : 0));
     g_wait_rc = 0;
 }
 
@@ -500,6 +541,7 @@ static void test_capture_dual_changes(void) {
 }
 
 int main(void) {
+    test_la_capture_send();
     test_test_pattern_decimal_paced();
     test_test_pattern_b64();
     test_capture_dual();
