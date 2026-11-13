@@ -42,7 +42,7 @@ typedef struct {
     uint16_t ans_len;
     bool     ans_pending;
     uint64_t ans_due_us;
-    uint32_t sent, received, messages, answers, overruns, dropped;
+    uint32_t sent, received, messages, answers, overruns, dropped, late;
     uint32_t baud_now;
     uint64_t garbage_next_us;
     uint32_t rng;
@@ -650,7 +650,15 @@ static void uart_poll(sm_inst_t *s, uint64_t now) {
         size_t len = 0;
         int64_t at = 0;
         set_time(s, now);
-        if (sd_uart_epoch(s->in, (char *)u->epoch, sizeof(u->epoch), &len, &at) == SD_OK && len) {
+        int erc = sd_uart_epoch(s->in, (char *)u->epoch, sizeof(u->epoch), &len, &at);
+        /* A late poll (a capture held the loop) finds several epochs due: send the newest, as a
+           receiver that was busy would, instead of a burst that overruns the FIFO. */
+        for (int64_t nx = sd_uart_next_ms(s->in); erc == SD_OK && nx >= 0 && now_ms >= nx;
+             nx = sd_uart_next_ms(s->in)) {
+            erc = sd_uart_epoch(s->in, (char *)u->epoch, sizeof(u->epoch), &len, &at);
+            u->late++;
+        }
+        if (erc == SD_OK && len) {
             bool dropped = mute || garbage ||
                            (drop && df->f.has_value && (double)(xorshift(&u->rng) % 1000000u) < df->f.value * 1e6);
             if (dropped) u->dropped++;
@@ -1611,9 +1619,10 @@ static void emit_inst(bp_emit_t *e, const sm_inst_t *s) {
     } else if (s->running && s->kind == SD_KIND_UART) {
         const sm_uart_t *u = s->u;
         bp_emit(e, ",\"bus\":{\"sent_bytes\":%lu,\"received_bytes\":%lu,\"messages\":%lu,\"answers\":%lu,"
-                   "\"overruns\":%lu,\"dropped\":%lu}",
+                   "\"overruns\":%lu,\"dropped\":%lu,\"late\":%lu}",
                 (unsigned long)u->sent, (unsigned long)u->received, (unsigned long)u->messages,
-                (unsigned long)u->answers, (unsigned long)u->overruns, (unsigned long)u->dropped);
+                (unsigned long)u->answers, (unsigned long)u->overruns, (unsigned long)u->dropped,
+                (unsigned long)u->late);
     }
     bp_emit_raw(e, "}");
 }

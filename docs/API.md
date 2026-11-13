@@ -2957,8 +2957,10 @@ cleared). I2C/SPI `bus`: `writes` (the DUT's data bytes), `transfers` (always `n
 gateware counts written bytes, not transfers), `log_lost` (writes that happened while more than 32
 were pending, so the rules saw them only as "something was written"), `last_write`, `drdy` (asserts
 the firmware sent), `fifo_frames` and `fifo_drops`. UART `bus`: `sent_bytes`, `received_bytes`,
-`messages`, `answers`, `overruns` (a message or answer due while the last one was still going out),
-`dropped`. Analog instances report `output` (the value last driven, V or mA).
+`messages`, `answers`, `overruns` (a message or answer due while the last one was still going out:
+the baud rate is too low for the rate and the messages), `dropped` (the `drop` fault), `late`
+(epochs skipped because the pod was busy when they fell due, for example during a long capture:
+the pod sends the newest one, as a busy receiver would). Analog instances report `output` (the value last driven, V or mA).
 
 ### `sensor_regs` — read an I2C/SPI image
 
