@@ -41,8 +41,6 @@
 //   enable, 7-bit address, SDA and SCL LA channels (any; targets may share a bus), 8- or 16-bit
 //   register addressing (16-bit: the image is the 256-byte window whose high address byte is
 //   `page`; outside it reads 0x00 and writes are ignored; the pointer wraps inside the window),
-//   or (8-bit addressing only, in the page field's two low bits) word registers (pointer p =
-//   image bytes 2p, 2p+1) or a command map (two pointer bytes h, l: offset = image[h] XOR l),
 //   while_busy = flag (reads go on, BUSY registers OR in `mask`) / nack (a read address is not
 //   acknowledged while converting) / stretch (the read address is acknowledged, then SCL is held
 //   low until the conversion ends: bounded by the conversion time, at most 65.5 ms), the faults
@@ -137,12 +135,6 @@ module i2c_emu #(
     wire [1:0] c_dmode = ctx[74:73];   // data ready: 0 off, 1 pulse, 2 level
     wire       c_dpol  = ctx[72];      // 1 = active high
     wire       c_dconv = ctx[71];      // assert at the end of each conversion
-    // Pointer modes (v54, from firmware 3.10.2).  With 8-bit addressing the page field has no
-    // use, so I2C_CONFIG's page byte selects how the pointer byte(s) map onto the image:
-    // page[0] word registers, page[1] command map (earlier firmware sends 0: bytes).
-    wire       c_cmap  = ~c_a16 & c_page[1];   // two pointer bytes: offset = image[high] ^ low
-    wire       c_word  = ~c_a16 & c_page[0];   // one pointer byte p: offset = 2p (p[7] ignored)
-    wire       c_two   = c_a16 | c_cmap;       // the pointer has two bytes
     // state
     wire [2:0] s_st    = ctx[70:68];
     wire [2:0] s_bc    = ctx[67:65];
@@ -390,16 +382,10 @@ module i2c_emu #(
                     n_sr = byte_in;  n_bc = s_bc + 3'd1;
                     if (s_bc == 3'd7) begin
                         n_ak = 1'b0;  n_st = ST_ACK;
-                        if (s_pst == 2'd0 && c_two) begin
-                            // the high pointer byte.  The pointer moves onto it, so the next
-                            // round caches image byte h: in command-map mode that is the base
-                            // of h's commands (the single window ignores it until the low byte)
-                            n_ptr = byte_in;  n_pst = 2'd1;  n_inw = (byte_in == c_page);
+                        if (s_pst == 2'd0 && c_a16) begin
+                            n_pst = 2'd1;  n_inw = (byte_in == c_page);
                         end else if (s_pst != 2'd2) begin
-                            n_ptr = c_cmap ? (a_data ^ byte_in)              // base(h) XOR low byte
-                                  : c_word ? {byte_in[6:0], 1'b0}            // word p = bytes 2p, 2p+1
-                                  : byte_in;
-                            n_pst = 2'd2;  n_cchk = 1'b1;
+                            n_ptr = byte_in;  n_pst = 2'd2;  n_cchk = 1'b1;
                             if (!c_a16) n_inw = 1'b1;
                         end else begin
                             // a data byte: store it (inside the window, not read-only), count it

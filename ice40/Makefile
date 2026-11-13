@@ -58,6 +58,11 @@ SRC = src/top_v2.v            \
       src/psram_pads.v        \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
+# The emulation image reads src/i2c_emu_modes.v (the engine with the word-register and command-map
+# pointer modes) in place of src/i2c_emu.v.  The loop and deep images keep reading src/i2c_emu.v,
+# unchanged since the v54 promote, so they synthesize to their hardware-verified bitstreams:
+# yosys numbers cells across every file it reads, so any change there re-rolls their placement.
+EMU_SRC = $(filter-out src/i2c_emu.v,$(SRC)) src/i2c_emu_modes.v
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
 DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
@@ -283,9 +288,10 @@ VVP = sh sim/run_vvp.sh
 # other one silently.
 define topbench
 	@set -e; for img in $(2); do \
-	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)";; *) defs=;; esac; \
+	  srcs="$(SRC)"; \
+	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)"; srcs="$(EMU_SRC)";; *) defs=;; esac; \
 	  echo "== $(1): $$img image"; \
-	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
+	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $$srcs $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
 	  rm -f /tmp/$(PROJECT)_$(1)_$$img.vvp; \
 	done
@@ -317,7 +323,7 @@ all: $(OUT).bin
 SYNTH_FLAGS = -abc9 -dsp -spram -top top
 SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
 define synth
-	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(SRC); \
+	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(or $(3),$(SRC)); \
 	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
 	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
 	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
@@ -569,8 +575,8 @@ $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,$(DEEP_DEFINES),$@)
-$(OUT)_emu.json: $(SRC) $(SYNTH_AUX)
-	$(call synth,$(EMU_DEFINES),$@)
+$(OUT)_emu.json: $(EMU_SRC) $(SYNTH_AUX)
+	$(call synth,$(EMU_DEFINES),$@,$(EMU_SRC))
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -644,7 +650,7 @@ sim:
 # v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
 i2cemutest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_i2cemu.vvp -s tb_i2c_emu \
-	         sim/tb_i2c_emu.v src/i2c_emu.v $(CELLS_SIM)
+	         sim/tb_i2c_emu.v src/i2c_emu_modes.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_i2cemu.vvp
 	@rm -f /tmp/$(PROJECT)_i2cemu.vvp
 
