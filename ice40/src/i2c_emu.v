@@ -41,6 +41,8 @@
 //   enable, 7-bit address, SDA and SCL LA channels (any; targets may share a bus), 8- or 16-bit
 //   register addressing (16-bit: the image is the 256-byte window whose high address byte is
 //   `page`; outside it reads 0x00 and writes are ignored; the pointer wraps inside the window),
+//   or (v55, 8-bit addressing only, in the page field's two low bits) word registers (pointer p =
+//   image bytes 2p, 2p+1) or a command map (two pointer bytes h, l: offset = image[h] XOR l),
 //   while_busy = flag (reads go on, BUSY registers OR in `mask`) / nack (a read address is not
 //   acknowledged while converting) / stretch (the read address is acknowledged, then SCL is held
 //   low until the conversion ends: bounded by the conversion time, at most 65.5 ms), the faults
