@@ -311,6 +311,7 @@ int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *o) {
     o->n_commands = h->n_cmds;
     o->register_bytes = h->reg_bytes == 2 ? 2 : 1;
     o->command_map = h->cmap != 0;
+    o->n_map_blocks = h->n_blocks;
     return SD_OK;
 }
 
@@ -335,6 +336,19 @@ int sd_command(const sd_inst_t *in, unsigned i, sd_command_t *out) {
     const sdp_entry_t *e = &entries(in)[first + i];
     out->at = e->at;
     out->busy_us = e->busy_us;
+    int32_t a = sd_map_addr(in->prog, e->at);
+    out->addr = (uint16_t)(h->cmap ? e->pad : (a < 0 ? 0 : a));
+    return SD_OK;
+}
+
+int sd_map_block(const sd_inst_t *in, unsigned i, sd_map_block_t *out) {
+    if (!is_regs(in) || !out) return SD_E_ARG;
+    const sdp_hdr_t *h = sd_h(in);
+    if (i >= h->n_blocks) return SD_E_ARG;
+    const sdp_block_t *b = &blocks(h, in->prog)[i];
+    out->addr = b->addr;
+    out->at = b->idx;
+    out->span = b->span;
     return SD_OK;
 }
 

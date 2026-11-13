@@ -91,15 +91,20 @@ the call's own arguments use paths such as `values.temperature_c`, `live_regs` a
 {"ok": true, "kind": "i2c", "name": "bme280", "label": "Bosch BME280: ...", "program_bytes": 1656,
  "params": [{"key": "temperature_c", "unit": "C", "label": "Temperature", "min": -100, "max": 150, "default": 25}],
  "bus": {"address": 118, "alt": [119], "addr_bits": 8, "page": 0, "auto_increment": true, "wrap": 255,
+         "register_bytes": 1, "command_map": false,
          "conversion": {"trigger": 244, "busy_at": 243, "busy_mask": 8, "while_busy": "flag", "us": 5500},
          "data_ready": null, "fifo": null, "commands": []},
  "dynamic": [247, 248], "read_only": [208]}
 ```
 
-- I2C `bus`: `address`, `alt`, `addr_bits`, `page`, `auto_increment`, `wrap`. SPI `bus`:
+- I2C `bus`: `address`, `alt`, `addr_bits`, `page`, `auto_increment`, `wrap`, `register_bytes`
+  (2: word registers, register p is image bytes 2p and 2p + 1), `command_map` (16-bit commands
+  without a page) and, with the command map, `map`: one `{addr, at, span}` per address, the
+  image bytes `at` .. `at + span - 1` serve addresses `addr` .. `addr + span - 1`. SPI `bus`:
   `spi_mode`, `read_bit`, `read_val`, `inc_bit` (null when none), `inc_val`, `address_mask`,
   `dummy_bytes`. Both: `conversion`, `data_ready` (`active_high`, `level`, `on`, `pulse_us`,
-  `clear_on_read`), `fifo` (`at`, `frame_len`, `depth`, `drop`), `commands` (`at`, `busy_us`).
+  `clear_on_read`), `fifo` (`at`, `frame_len`, `depth`, `drop`), `commands` (`at`, `busy_us`,
+  `command`: the command's address).
 - `dynamic`: image addresses rebuilt on every change; `read_only`: addresses the pod restores
   after a DUT write (`writable: false`).
 - UART: `"uart": {"baud", "data_bits", "parity": "N"|"E"|"O", "stop_bits", "messages", "requests"}`.

@@ -208,7 +208,9 @@ int sd_regs_rebuild(sd_inst_t *in, const uint8_t live[SD_REGIMAGE], uint8_t img[
 int sd_regs_after_write(sd_inst_t *in, const uint8_t live[SD_REGIMAGE], int addr, int value,
                         uint8_t img[SD_REGIMAGE], sd_img_result_t *res);
 
-typedef struct { uint8_t at; uint32_t busy_us; } sd_command_t;
+typedef struct { uint8_t at; uint32_t busy_us; uint16_t addr; } sd_command_t;   /* addr: the command */
+/* Command map: the image bytes of one address range (an entry's address and what follows). */
+typedef struct { uint16_t addr; uint8_t at, span; } sd_map_block_t;
 
 typedef struct {
     /* i2c */
@@ -237,12 +239,14 @@ typedef struct {
     /* i2c pointer mode */
     uint8_t  register_bytes;     /* 1 bytes, 2 word registers (pointer p = image bytes 2p, 2p+1) */
     bool     command_map;        /* 16-bit commands in any high byte (no page) */
+    uint8_t  n_map_blocks;       /* command map: sd_map_block() 0 .. n - 1 */
 } sd_bus_info_t;
 
 int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *out);
 /* The bytes of writable:false entries (a bit per byte): the gateware stores no DUT write there. */
 int sd_regs_ro_map(const sd_inst_t *in, uint8_t ro[SD_REGIMAGE / 8]);
 int sd_command(const sd_inst_t *in, unsigned i, sd_command_t *out);
+int sd_map_block(const sd_inst_t *in, unsigned i, sd_map_block_t *out);
 /* Data-ready rate (Hz, 0 = none) and enable, from the live image. */
 int sd_drdy_eval(sd_inst_t *in, const uint8_t live[SD_REGIMAGE], double *rate_hz, bool *enabled);
 /* FIFO: rate, enable and one frame (fifo_frame_len bytes) for the current values. */

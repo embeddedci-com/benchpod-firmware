@@ -155,7 +155,7 @@ static const char *k_stim_repeat =
 
 int main(int argc, char **argv) {
     g_dir = argc > 1 ? argv[1] : "../test/fixtures/sensor_defs";
-    static const char *const names[] = { "bme280", "bmp280", "sht4x", "mpu6050", "gps_nmea" };
+    static const char *const names[] = { "bme280", "bmp280", "sht4x", "mpu6050", "gps_nmea", "word_tmp117", "cmap_scd4x" };
     uint8_t live[256];
     for (unsigned i = 0; i < 256; i++) live[i] = (uint8_t)(i * 37u + 11u);
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

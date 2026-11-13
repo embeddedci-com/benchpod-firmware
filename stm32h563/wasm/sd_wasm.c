@@ -452,6 +452,18 @@ static void o_bus(void) {
         o_key("page"); o_u64(b.page);
         o_key("auto_increment"); o_bool(b.auto_increment);
         o_key("wrap"); o_u64(b.wrap);
+        o_key("register_bytes"); o_u64(b.register_bytes);
+        o_key("command_map"); o_bool(b.command_map);
+        if (b.command_map) {   /* image[h] ^ l lands on `at`: the bytes of addr .. addr + span - 1 */
+            o_key("map"); o_ch('[');
+            for (unsigned i = 0; i < b.n_map_blocks; i++) {
+                sd_map_block_t m;
+                if (sd_map_block(&g_in, i, &m) != SD_OK) continue;
+                if (i) o_ch(',');
+                o_ch('{'); o_key1("addr"); o_u64(m.addr); o_key("at"); o_u64(m.at); o_key("span"); o_u64(m.span); o_ch('}');
+            }
+            o_ch(']');
+        }
     } else {
         o_key1("spi_mode"); o_u64(b.spi_mode);
         o_key("read_bit"); o_u64(b.read_bit);
@@ -497,7 +509,7 @@ static void o_bus(void) {
         sd_command_t c;
         if (sd_command(&g_in, i, &c) != SD_OK) continue;
         if (i) o_ch(',');
-        o_ch('{'); o_key1("at"); o_u64(c.at); o_key("busy_us"); o_u64(c.busy_us); o_ch('}');
+        o_ch('{'); o_key1("at"); o_u64(c.at); o_key("busy_us"); o_u64(c.busy_us); o_key("command"); o_u64(c.addr); o_ch('}');
     }
     o_ch(']');
     o_ch('}');

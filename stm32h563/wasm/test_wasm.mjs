@@ -77,6 +77,19 @@ for (const [name, kind] of Object.entries(want)) {
   else if (kind === "i2c" && p.image.length !== 256) fail(`${name}: image is ${p.image.length} bytes`);
   else if (kind === "uart" && !p.text.startsWith("$GP")) fail(`${name}: epoch ${p.text.slice(0, 40)}`);
 }
+// The pointer modes in the bus info: word registers, and the command map's layout reaching
+// each command the way the gateware does (image[h] ^ l).
+{
+  const w = sd.validate(defText({ fixture: "word_tmp117" }));
+  if (!w.ok || w.bus.register_bytes !== 2 || w.bus.command_map) fail(`word_tmp117 bus: ${JSON.stringify(w.bus)}`);
+  const c = sd.validate(defText({ fixture: "cmap_scd4x" }));
+  const p = sd.preview(defText({ fixture: "cmap_scd4x" }), null, { tMs: 0 });
+  if (!c.ok || !c.bus.command_map || !c.bus.map.length || !p.ok) fail(`cmap_scd4x bus: ${JSON.stringify(c.bus).slice(0, 200)}`);
+  else for (const cmd of c.bus.commands) {
+    const at = p.image[cmd.command >> 8] ^ (cmd.command & 0xff);
+    if (at !== cmd.at) fail(`cmap_scd4x: command 0x${cmd.command.toString(16)} at ${cmd.at}, the lookup gives ${at}`);
+  }
+}
 // The wrapper's own conveniences.
 const bme = defText({ fixture: "bme280" });
 const typo = bme.replace('"registers"', '"registerz"');
