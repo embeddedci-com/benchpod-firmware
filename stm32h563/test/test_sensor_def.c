@@ -1040,8 +1040,6 @@ static void test_command_map(void) {
     CHECK(sd_regs_rebuild(&s.in, live, img, &r) == SD_OK && img[(cm_at(img, 0x2400) + 5) & 0xFF] == 42, "param in an answer");
     /* errors */
     static const struct { const char *j, *msg; } bad[] = {
-        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},"
-          "\"commands\":[{\"command\":9216,\"answer\":[1,2,3,4,5,6]},{\"command\":9219,\"answer\":[1]}]}", "run into the next address" },
         { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16,\"page\":9216},"
           "\"commands\":[{\"command\":9216,\"write_bytes\":2,\"answer\":[1]}]}", "write_bytes is for the command map" },
         { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},"
@@ -1051,6 +1049,20 @@ static void test_command_map(void) {
         rc = compile_text(&s, bad[i].j, strlen(bad[i].j), &e);
         sd_err_format(&e, m, sizeof(m));
         CHECK(rc != SD_OK && strstr(m, bad[i].msg), "command-map error %u: %s", i, m);
+    }
+    /* overlapping address ranges: each command keeps its own bytes */
+    {
+        const char *ov = "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},"
+                         "\"commands\":[{\"command\":11277,\"answer\":[1,2,3,4,5,6]},{\"command\":11280,\"answer\":[9,8]}],"
+                         "\"registers\":[{\"at\":4096,\"bytes\":[\"reg[0x2C10]\",\"reg[0x2C0F]\"]}]}";
+        rc = compile_text(&s, ov, strlen(ov), &e);
+        sd_err_format(&e, m, sizeof(m));
+        CHECK(rc == SD_OK, "overlapping commands compile: %s", m);
+        if (rc == SD_OK && sd_regs_power_on(&s.in, img, &r) == SD_OK) {
+            unsigned a = cm_at(img, 0x2C0D), b2 = cm_at(img, 0x2C10), z = cm_at(img, 0x1000);
+            CHECK(img[(a + 3) & 0xFF] == 4 && img[(a + 5) & 0xFF] == 6 && img[b2] == 9 && img[(b2 + 1) & 0xFF] == 8, "both answers whole");
+            CHECK(img[z] == 9 && img[(z + 1) & 0xFF] == 3, "reg[]: an exact address is its own command, else inside the one below");
+        }
     }
     /* too much for 256 bytes: three 100-byte answers in different high bytes */
     {

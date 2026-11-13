@@ -385,7 +385,9 @@ static bool compile_entry(sd_cc_t *c, uint32_t obj, sdp_entry_t *e, bool command
 
 /* ---- the command map's layout ----
    Each distinct address is a block: its entries' bytes, or the bytes a set command writes
-   (write_bytes), whichever is longer.  The gateware points command h:l at image[h] ^ l, so every
+   (write_bytes), whichever is longer.  Blocks may overlap in the address space (0x2C0D's six
+   bytes and 0x2C10): each gets its own image bytes, and an address that starts a block is that
+   block's.  The gateware points command h:l at image[h] ^ l, so every
    high byte h in use reserves image byte h for its base, and the base is picked so that all of
    h's blocks land on free bytes (high bytes with the most bytes first, the lowest base that
    fits).  Deterministic: the same definition always gets the same layout. */
@@ -422,12 +424,6 @@ static bool cmap_layout(sd_cc_t *c, uint32_t tab, unsigned q, uint32_t where) {
         b[j].span = (uint8_t)need;
         n++;
     }
-    for (unsigned j = 0; j + 1 < n; j++)
-        if ((unsigned)b[j].addr + b[j].span > b[j + 1].addr) {
-            fmt_addr(ab, b[j].addr);
-            cc_fail(c, SD_E_SCHEMA, sdj_ws(J, where), -1, "command map: the bytes of %s run into the next address", ab);
-            return false;
-        }
     uint8_t used[32] = { 0 }, his[256];
     unsigned nh = 0;
     for (unsigned j = 0; j < n; j++) {

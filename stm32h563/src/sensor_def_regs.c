@@ -37,14 +37,15 @@ bool sd_map_index(const uint8_t *prog, int64_t addr, unsigned *idx) {
         *idx = 2u * ((unsigned)addr & 0x7Fu);
         return true;
     }
-    if (h->cmap) {
+    if (h->cmap) {   /* an entry's own address first, else inside the nearest one below */
         const sdp_block_t *b = blocks(h, prog);
+        int best = -1;
         for (unsigned i = 0; i < h->n_blocks; i++)
-            if (addr >= b[i].addr && addr < (int64_t)b[i].addr + b[i].span) {
-                *idx = (b[i].idx + (unsigned)(addr - b[i].addr)) & 0xFFu;
-                return true;
-            }
-        return false;
+            if (addr >= b[i].addr && addr < (int64_t)b[i].addr + b[i].span && (best < 0 || b[i].addr > b[best].addr))
+                best = (int)i;
+        if (best < 0) return false;
+        *idx = (b[best].idx + (unsigned)(addr - b[best].addr)) & 0xFFu;
+        return true;
     }
     int64_t a = addr - (int64_t)h->page;
     if (a < 0 || a > 255) return false;
