@@ -15,9 +15,9 @@
 //   9  data ready: pulse at conversion end, firmware assert / deassert, a level cleared by a read
 //  10  the SCL-silence watchdog releases a target that was left driving SDA
 //  11  a reloaded register is served on the next read (the cache refresh)
-//  12  word registers (v55): pointer p = bytes 2p/2p+1, reads and writes per word, auto-increment
+//  12  word registers: pointer p = bytes 2p/2p+1, reads and writes per word, auto-increment
 //      to the next register, the CMD attribute on a word, p[7] ignored
-//  13  command map (v55): 16-bit commands in several high-byte windows (SHT3x/SCD4x-like), CMD
+//  13  command map: 16-bit commands in several high-byte windows (SHT3x/SCD4x-like), CMD
 //      busy + nack, writes with data, the log; 16-bit single-window and byte mode unchanged
 // ============================================================================
 `timescale 1ns/1ps

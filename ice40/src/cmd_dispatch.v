@@ -505,7 +505,7 @@ module cmd_dispatch #(
     assign q_cfg_idle        = rx_byte[4:0];
     // I2C_CONFIG [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)] as i2c_emu's fields
     // {en, addr7, a16, while_busy, mute, stuck, page, mask, sda, scl, drdy mode, active high, on
-    // conversion}.  I2C_DISABLE (bit0 of the opcode) writes only the enable bit, as 0.  v55: flags
+    // conversion}.  I2C_DISABLE (bit0 of the opcode) writes only the enable bit, as 0.  Flags
     // bit6 (word registers) and bit7 (command map) go into page bits 0 and 1, which only 16-bit
     // addressing uses (the firmware sends them with page 0 and bit1 clear).
     assign i2c_cfg_en_only   = current_cmd[0];

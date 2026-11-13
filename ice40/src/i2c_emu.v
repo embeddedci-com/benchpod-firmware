@@ -41,7 +41,7 @@
 //   enable, 7-bit address, SDA and SCL LA channels (any; targets may share a bus), 8- or 16-bit
 //   register addressing (16-bit: the image is the 256-byte window whose high address byte is
 //   `page`; outside it reads 0x00 and writes are ignored; the pointer wraps inside the window),
-//   or (v55, 8-bit addressing only, in the page field's two low bits) word registers (pointer p =
+//   or (8-bit addressing only, in the page field's two low bits) word registers (pointer p =
 //   image bytes 2p, 2p+1) or a command map (two pointer bytes h, l: offset = image[h] XOR l),
 //   while_busy = flag (reads go on, BUSY registers OR in `mask`) / nack (a read address is not
 //   acknowledged while converting) / stretch (the read address is acknowledged, then SCL is held
@@ -137,7 +137,7 @@ module i2c_emu #(
     wire [1:0] c_dmode = ctx[74:73];   // data ready: 0 off, 1 pulse, 2 level
     wire       c_dpol  = ctx[72];      // 1 = active high
     wire       c_dconv = ctx[71];      // assert at the end of each conversion
-    // v55 pointer modes.  With 8-bit addressing the page field has no use, so its two low bits
+    // Pointer modes (v54, from firmware 3.10.2).  With 8-bit addressing the page field has no use, so its two low bits
     // select how the pointer byte(s) map onto the image (cmd_dispatch folds I2C_CONFIG flags
     // bits 6/7 into them): page[0] word registers, page[1] command map.
     wire       c_cmap  = ~c_a16 & c_page[1];   // two pointer bytes: offset = image[high] ^ low

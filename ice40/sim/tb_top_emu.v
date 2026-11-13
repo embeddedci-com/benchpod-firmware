@@ -249,7 +249,7 @@ module tb_top_emu;
         i2c_rd(7'h76, 8'hD0, 1, d, ok); check("t0 disabled", ok, 0);
         i2c_rd(7'h68, 8'h75, 1, d, ok); check("t1 still answers", d[7:0], 8'h68);
 
-        // ---- v55 pointer modes through I2C_CONFIG flags bit6 (word) and bit7 (command map) ----
+        // ---- pointer modes through I2C_CONFIG flags bit6 (word) and bit7 (command map) ----
         load(8'h62, 0, 8'h10, 4, 32'h4433_2211);
         i2c_config(0, 7'h76, 8'h41, 8'h00, 8'h00);           // enable + word registers
         i2c_rd(7'h76, 8'h08, 2, d, ok); check("word register 0x08 = bytes 0x10/0x11", d[15:0], 16'h2211);
