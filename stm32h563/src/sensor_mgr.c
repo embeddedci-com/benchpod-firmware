@@ -530,9 +530,11 @@ static int regs_config(sm_inst_t *s, bool enable) {
     uint8_t wb = bi.while_busy;
     if (!bi.has_conversion && bi.n_commands) wb = 1u;
     uint8_t f = EMU_I2C_ENABLE | (uint8_t)((wb & 3u) << 2);
-    if (bi.command_map) f |= EMU_I2C_CMAP;            /* two pointer bytes, no page */
+    /* 16-bit window: ADDR16 and the page; else the page byte is the pointer mode */
+    uint8_t page = (uint8_t)(bi.page >> 8);
+    if (bi.command_map) page = EMU_I2C_PAGE_CMAP;
     else if (bi.addr_bits == 16) f |= EMU_I2C_ADDR16;
-    if (bi.register_bytes == 2) f |= EMU_I2C_WORD;
+    else if (bi.register_bytes == 2) page = EMU_I2C_PAGE_WORD;
     if (mute) f |= EMU_I2C_MUTE;
     if (fault_on(s, SD_FAULT_BUS_STUCK, NULL)) f |= EMU_I2C_BUS_STUCK;
     /* With its `enabled` condition false the pin stays configured (so it holds its inactive
@@ -545,7 +547,7 @@ static int regs_config(sm_inst_t *s, bool enable) {
         if (bi.drdy_on == 0 && s->drdy_en) drdy |= EMU_DRDY_ON_CONV;
     }
     return fpga_emu_i2c_config(s->target, s->addr7, (uint8_t)(s->pins.sda - 1), (uint8_t)(s->pins.scl - 1),
-                               f, (uint8_t)(bi.page >> 8), bi.conv_busy_mask, drdy);
+                               f, page, bi.conv_busy_mask, drdy);
 }
 
 /* Configure the gateware for an instance: image, attributes, times, config. */

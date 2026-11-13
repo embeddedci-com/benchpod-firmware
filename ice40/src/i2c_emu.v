@@ -137,9 +137,9 @@ module i2c_emu #(
     wire [1:0] c_dmode = ctx[74:73];   // data ready: 0 off, 1 pulse, 2 level
     wire       c_dpol  = ctx[72];      // 1 = active high
     wire       c_dconv = ctx[71];      // assert at the end of each conversion
-    // Pointer modes (v54, from firmware 3.10.2).  With 8-bit addressing the page field has no use, so its two low bits
-    // select how the pointer byte(s) map onto the image (cmd_dispatch folds I2C_CONFIG flags
-    // bits 6/7 into them): page[0] word registers, page[1] command map.
+    // Pointer modes (v54, from firmware 3.10.2).  With 8-bit addressing the page field has no
+    // use, so I2C_CONFIG's page byte selects how the pointer byte(s) map onto the image:
+    // page[0] word registers, page[1] command map (earlier firmware sends 0: bytes).
     wire       c_cmap  = ~c_a16 & c_page[1];   // two pointer bytes: offset = image[high] ^ low
     wire       c_word  = ~c_a16 & c_page[0];   // one pointer byte p: offset = 2p (p[7] ignored)
     wire       c_two   = c_a16 | c_cmap;       // the pointer has two bytes

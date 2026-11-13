@@ -149,9 +149,9 @@ static void data_write(fake_target_t *x, uint8_t a, uint8_t v) {
 static bool set_pointer(fake_target_t *x, int reg) {
     unsigned p;
     x->off_window = false;
-    if (x->flags & EMU_I2C_CMAP) p = (unsigned)x->regs[(reg >> 8) & 0xFF] ^ ((unsigned)reg & 0xFFu);
-    else if (x->flags & EMU_I2C_ADDR16) { p = (unsigned)reg & 0xFFu; x->off_window = ((reg >> 8) & 0xFF) != x->page; }
-    else if (x->flags & EMU_I2C_WORD) p = 2u * ((unsigned)reg & 0x7Fu);
+    if (x->flags & EMU_I2C_ADDR16) { p = (unsigned)reg & 0xFFu; x->off_window = ((reg >> 8) & 0xFF) != x->page; }
+    else if (x->page & EMU_I2C_PAGE_CMAP) p = (unsigned)x->regs[(reg >> 8) & 0xFF] ^ ((unsigned)reg & 0xFFu);
+    else if (x->page & EMU_I2C_PAGE_WORD) p = 2u * ((unsigned)reg & 0x7Fu);
     else p = (unsigned)reg & 0xFFu;
     x->pointer = (uint8_t)p;
     if (!x->off_window && (x->attrs[x->pointer] & EMU_ATTR_CMD)) start_conv(x, x->attrs[x->pointer]);

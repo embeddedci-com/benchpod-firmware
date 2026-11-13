@@ -33,8 +33,10 @@
 #define EMU_I2C_BUSY_STRETCH (2u << 2)
 #define EMU_I2C_MUTE        0x10u      /* fault: the address is not acknowledged */
 #define EMU_I2C_BUS_STUCK   0x20u      /* fault: SDA held low until a config clears it */
-#define EMU_I2C_WORD        0x40u      /* word registers: pointer p = image bytes 2p, 2p+1 (8-bit only) */
-#define EMU_I2C_CMAP        0x80u      /* command map: two pointer bytes, image[h] ^ l (send without ADDR16, page 0) */
+/* I2C_CONFIG page byte with 8-bit addressing (no EMU_I2C_ADDR16): the pointer mode. */
+#define EMU_I2C_PAGE_BYTES  0u
+#define EMU_I2C_PAGE_WORD   1u         /* word registers: pointer p = image bytes 2p, 2p+1 */
+#define EMU_I2C_PAGE_CMAP   2u         /* command map: two pointer bytes, image[h] ^ l */
 /* I2C_CONFIG drdy byte. */
 #define EMU_DRDY_OFF        0u
 #define EMU_DRDY_PULSE      1u

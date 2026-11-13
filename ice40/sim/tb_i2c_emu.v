@@ -354,7 +354,7 @@ module tb_i2c_emu;
 
         // ---- 12: word registers (target 3, 0x45 on bus 1, nack while busy) ----
         bus = 1;
-        // page field bit0 = word registers (cmd_dispatch: I2C_CONFIG flags bit6)
+        // page field bit0 = word registers (I2C_CONFIG's page byte with 8-bit addressing)
         config_t(3, 1, 7'h45, 0, 2'd1, 0, 0, 8'h01, 8'h00, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
         load(3, 0, 8'h00, 8'h0C); load(3, 0, 8'h01, 8'h80);      // reg 0x00 = 0x0C80
         load(3, 0, 8'h02, 8'h02); load(3, 0, 8'h03, 8'h20);      // reg 0x01 = 0x0220
@@ -387,7 +387,7 @@ module tb_i2c_emu;
         rd_cur(7'h45, 2, d, ok); check("12 CMD word: answer", d[15:0], 16'hEFBE);
 
         // ---- 13: command map (target 2, 0x50 on bus 1, nack while busy) ----
-        // page field bit1 = command map (I2C_CONFIG flags bit7): image[h] = base, offset = base ^ l
+        // page field bit1 = command map: image[h] = base, offset = base ^ l
         config_t(2, 1, 7'h50, 0, 2'd1, 0, 0, 8'h02, 8'h00, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
         load(2, 0, 8'h24, 8'h40);       // 0x24xx: 0x2400 -> 0x40, 0x2416 -> 0x56
         load(2, 0, 8'hE0, 8'h50);       // 0xE000 -> 0x50

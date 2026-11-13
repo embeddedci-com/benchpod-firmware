@@ -82,6 +82,9 @@ module tb_top_emu;
     task i2c_config(input [2:0] t, input [6:0] a, input [7:0] flags, input [7:0] mask, input [7:0] drdy);
         begin cs_lo; tx(8'h60); tx(t); tx(a); tx(SDA); tx(SCL); tx(flags); tx(8'h00); tx(mask); tx(drdy); cs_hi; end
     endtask
+    task i2c_config_page(input [2:0] t, input [6:0] a, input [7:0] flags, input [7:0] page);
+        begin cs_lo; tx(8'h60); tx(t); tx(a); tx(SDA); tx(SCL); tx(flags); tx(page); tx(8'h00); tx(8'h00); cs_hi; end
+    endtask
     task load(input [7:0] op, input [2:0] t, input [7:0] a, input integer n, input [63:0] d);
         integer i;
         begin
@@ -249,13 +252,13 @@ module tb_top_emu;
         i2c_rd(7'h76, 8'hD0, 1, d, ok); check("t0 disabled", ok, 0);
         i2c_rd(7'h68, 8'h75, 1, d, ok); check("t1 still answers", d[7:0], 8'h68);
 
-        // ---- pointer modes through I2C_CONFIG flags bit6 (word) and bit7 (command map) ----
+        // ---- pointer modes through I2C_CONFIG's page byte with 8-bit addressing (1 word, 2 command map) ----
         load(8'h62, 0, 8'h10, 4, 32'h4433_2211);
-        i2c_config(0, 7'h76, 8'h41, 8'h00, 8'h00);           // enable + word registers
+        i2c_config_page(0, 7'h76, 8'h01, 8'h01);             // enable, page 1: word registers
         i2c_rd(7'h76, 8'h08, 2, d, ok); check("word register 0x08 = bytes 0x10/0x11", d[15:0], 16'h2211);
         i2c_rd(7'h76, 8'h09, 2, d, ok); check("word register 0x09 = bytes 0x12/0x13", d[15:0], 16'h4433);
         load(8'h62, 0, 8'hEC, 1, 8'h15);                     // command map: 0xECxx -> 0x15 ^ low
-        i2c_config(0, 7'h76, 8'h81, 8'h00, 8'h00);           // enable + command map
+        i2c_config_page(0, 7'h76, 8'h01, 8'h02);             // enable, page 2: command map
         i2c_wr(7'h76, 8'hEC, 1, 8'h05, ok); check("command 0xEC05 ack", ok, 1);   // offset 0x10
         i2c_start; i2c_wbyte({7'h76, 1'b1}, ack); check("command read ack", ack, 1);
         i2c_rbyte(1, d[7:0]); i2c_rbyte(0, d[15:8]); i2c_stop;

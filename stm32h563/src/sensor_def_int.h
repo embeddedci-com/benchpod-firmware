@@ -129,7 +129,7 @@ typedef struct {
     uint8_t  current, excitation;
     uint16_t value;
     double   range_min, range_max;
-    /* i2c pointer modes (gateware v54 emulation image, I2C_CONFIG flags bit6/bit7) */
+    /* i2c pointer modes (gateware v54 emulation image, I2C_CONFIG page byte 1 / 2) */
     uint8_t  reg_bytes;          /* 2: word registers (pointer p = image bytes 2p, 2p+1) */
     uint8_t  cmap;               /* 1: 16-bit command map (no page): image[h] = base, at = base ^ l */
     uint8_t  n_blocks, n_bases;

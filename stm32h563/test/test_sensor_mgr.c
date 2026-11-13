@@ -263,7 +263,7 @@ static void test_sht4x(void) {
     sm_reset();
 }
 
-/* ---- word registers and the command map (I2C_CONFIG flags bit6 / bit7) ------------------- */
+/* ---- word registers and the command map (I2C_CONFIG page byte 1 / 2) ------------------- */
 static uint8_t crc8_31(uint8_t a, uint8_t b) {
     uint8_t c = 0xFF, d[2] = { a, b };
     for (int i = 0; i < 2; i++) { c ^= d[i]; for (int k = 0; k < 8; k++) c = (uint8_t)((c & 0x80) ? (c << 1) ^ 0x31 : c << 1); }
@@ -275,7 +275,7 @@ static void test_word_cmap(void) {
     CHECK(define_fixture("tw", "word_tmp117"), "word_tmp117");
     CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"tw\",\"pins\":{\"sda\":3,\"scl\":4}}"), "start: %s", g_err);
     fake_target_t *x = &g_fpga.t[0];
-    CHECK((x->flags & EMU_I2C_WORD) && !(x->flags & (EMU_I2C_ADDR16 | EMU_I2C_CMAP)) && x->page == 0, "word flag, page 0: 0x%02x", x->flags);
+    CHECK(!(x->flags & EMU_I2C_ADDR16) && x->page == EMU_I2C_PAGE_WORD, "8-bit, page byte 1 (word registers): 0x%02x 0x%02x", x->flags, x->page);
     uint8_t b[9], v[2];
     CHECK(fake_i2c_read(0x48, 0x00, b, 2) && b[0] == 0x0C && b[1] == 0x80, "TEMP_RESULT 25 C: %02X %02X", b[0], b[1]);
     CHECK(fake_i2c_read(0x48, 0x0F, b, 2) && b[0] == 0x01 && b[1] == 0x17, "DEVICE_ID");
@@ -300,7 +300,7 @@ static void test_word_cmap(void) {
     CHECK(define_fixture("co2", "cmap_scd4x"), "cmap_scd4x");
     CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"co2\",\"pins\":{\"sda\":3,\"scl\":4}}"), "start: %s", g_err);
     x = &g_fpga.t[0];
-    CHECK((x->flags & EMU_I2C_CMAP) && !(x->flags & (EMU_I2C_ADDR16 | EMU_I2C_WORD)) && x->page == 0, "command-map flag, page 0: 0x%02x", x->flags);
+    CHECK(!(x->flags & EMU_I2C_ADDR16) && x->page == EMU_I2C_PAGE_CMAP, "8-bit, page byte 2 (command map): 0x%02x 0x%02x", x->flags, x->page);
     CHECK(((x->flags >> 2) & 3u) == 1u, "commands only: nack while busy");
     CHECK(fake_i2c_write16(0x62, 0xEC05, NULL, 0), "read_measurement");
     CHECK(!fake_i2c_read(0x62, -1, b, 9), "not acknowledged for 1 ms");
