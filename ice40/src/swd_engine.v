@@ -405,7 +405,7 @@ module swd_engine #(
     end
 
     assign armed        = armed_r;
-    assign spi_mode     = armed_r & spi_r;
+    assign spi_mode     = armed_r & (spi_r | i2c_r);   // SPI_STATUS bit 0: armed as SPI or I2C master
     assign spi_busy     = (spi_mode & (spi_pending | (qst != Q_IDLE))) |
                           (i2c_on & ((spi_pending & ~i2c_arb) | i2c_busy));
     wire   q_busy       = q_active & ~qstop & ((qptr != fptr) | (qst != Q_IDLE));
