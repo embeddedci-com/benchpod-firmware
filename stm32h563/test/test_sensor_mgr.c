@@ -253,6 +253,8 @@ static void test_sht4x(void) {
     uint8_t b[6];
     CHECK(fake_i2c_write(0x44, 0xFD, NULL, 0), "command");
     CHECK(g_fpga.t[0].busy_until_us > g_fpga.now_us, "the command starts a measurement");
+    CHECK(((g_fpga.t[0].flags >> 2) & 3u) == 1u, "a command-only sensor runs in nack mode");
+    CHECK(!fake_i2c_read(0x44, -1, b, 6), "a read while measuring is not acknowledged");
     fake_advance_us(70000);
     CHECK(fake_i2c_read(0x44, -1, b, 6), "answer after the measurement");
     CHECK(g_fpga.t[0].times[(a >> 6) & 3] == 65535, "a command longer than 65.535 ms is clamped: %u", g_fpga.t[0].times[(a >> 6) & 3]);

@@ -510,7 +510,11 @@ static int regs_config(sm_inst_t *s, bool enable) {
                                    (uint8_t)(s->pins.mosi - 1), f, rb, ib, bi.address_mask);
     }
     if (!enable) return fpga_emu_i2c_disable(s->target);
-    uint8_t f = EMU_I2C_ENABLE | (uint8_t)((bi.while_busy & 3u) << 2);
+    /* Commands with busy_us are not acknowledged while busy (format 3.1); a definition with only
+       commands and no conversion block therefore runs in nack mode. */
+    uint8_t wb = bi.while_busy;
+    if (!bi.has_conversion && bi.n_commands) wb = 1u;
+    uint8_t f = EMU_I2C_ENABLE | (uint8_t)((wb & 3u) << 2);
     if (bi.addr_bits == 16) f |= EMU_I2C_ADDR16;
     if (mute) f |= EMU_I2C_MUTE;
     if (fault_on(s, SD_FAULT_BUS_STUCK, NULL)) f |= EMU_I2C_BUS_STUCK;
