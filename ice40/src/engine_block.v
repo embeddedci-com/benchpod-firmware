@@ -156,10 +156,11 @@ module engine_block #(
     wire [7:0]  swd_feed_byte;  wire [8:0] swd_rd_addr;  wire [7:0] swd_rd_data;
     wire [15:0] swd_reply_count;          // swd_armed is an output port
     wire [3:0]  swd_clk_ch, swd_dio_ch;
-    wire        swd_clk_val, swd_dio_val, swd_dio_oe;
-    wire        spi_arm_stb, spi_cs_stb, spi_cs_assert, spi_cpol;
+    wire        swd_clk_val, swd_clk_oe, swd_dio_val, swd_dio_oe;
+    wire        spi_arm_stb, spi_cs_stb, spi_cs_assert;
+    wire [2:0]  spi_flags;
     wire [3:0]  spi_sck_ch, spi_mosi_ch, spi_miso_ch, spi_cs_ch_arg;
-    wire [5:0]  spi_half;
+    wire [6:0]  spi_half;
     wire        spi_mode, spi_busy, swd_cs_on, swd_cs_val;
     wire [3:0]  swd_in_ch, swd_cs_ch;
     wire        swd_feed_q, q_cfg_stb;
@@ -234,7 +235,7 @@ module engine_block #(
         .swd_armed(swd_armed), .swd_reply_count(swd_reply_count),
         .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),
         .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
-        .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
+        .spi_flags(spi_flags), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
         .spi_mode(spi_mode), .spi_busy(spi_busy),
         .swd_feed_q(swd_feed_q), .q_cfg_stb(q_cfg_stb), .q_cfg_half(q_cfg_half),
         .q_cfg_idle(q_cfg_idle), .q_done(q_done), .q_flags(q_flags),
@@ -406,14 +407,14 @@ module engine_block #(
         .arm_stb(swd_arm_stb), .arm_clk_ch(swd_clk_ch_arg), .arm_dio_ch(swd_dio_ch_arg),
         .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),
         .spi_miso_ch(spi_miso_ch), .spi_cs_ch(spi_cs_ch_arg), .spi_half(spi_half),
-        .spi_cpol(spi_cpol), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
+        .spi_flags(spi_flags), .spi_cs_stb(spi_cs_stb), .spi_cs_assert(spi_cs_assert),
         .disarm_stb(swd_disarm_stb),
         .q_cfg_stb(q_cfg_stb), .q_cfg_half(q_cfg_half), .q_cfg_idle(q_cfg_idle), .feed_q(swd_feed_q),
         .feed_begin(swd_feed_begin), .feed_stb(swd_feed_stb), .feed_byte(swd_feed_byte),
-        .dio_in(la_in[swd_in_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
+        .dio_in(la_in[swd_in_ch]), .scl_in(la_in[swd_cs_ch]), .rd_addr(swd_rd_addr), .rd_data(swd_rd_data),
         .reply_count(swd_reply_count), .armed(swd_armed),
         .spi_mode(spi_mode), .spi_busy(spi_busy), .q_done(q_done), .q_flags(q_flags),
-        .clk_ch(swd_clk_ch), .clk_val(swd_clk_val),
+        .clk_ch(swd_clk_ch), .clk_val(swd_clk_val), .clk_oe(swd_clk_oe),
         .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
         .in_ch(swd_in_ch), .cs_ch(swd_cs_ch), .cs_val(swd_cs_val), .cs_on(swd_cs_on)
     );
@@ -427,7 +428,7 @@ module engine_block #(
         .uart_active(uart_armed), .uart_tx_ch(uart_tx_ch), .uart_tx_val(uart_tx_out),
         .step_active(step_busy), .step_ch(step_la_ch), .step_val(step_la_val),
         .swd_active(swd_armed),
-        .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val),
+        .swd_clk_ch(swd_clk_ch), .swd_clk_val(swd_clk_val), .swd_clk_oe(swd_clk_oe),
         .swd_dio_ch(swd_dio_ch), .swd_dio_val(swd_dio_val), .swd_dio_oe(swd_dio_oe),
         .swd_cs_active(swd_cs_on), .swd_cs_ch(swd_cs_ch), .swd_cs_val(swd_cs_val),
         .la(la), .la_in(la_in)

@@ -68,6 +68,7 @@ module la_bank #(
     input  wire              swd_active,
     input  wire [3:0]        swd_clk_ch,
     input  wire              swd_clk_val,
+    input  wire              swd_clk_oe,        // 0 = released (I2C master SCL, v55)
     input  wire [3:0]        swd_dio_ch,
     input  wire              swd_dio_val,
     input  wire              swd_dio_oe,
@@ -135,7 +136,7 @@ module la_bank #(
                             emu_on[c] ? emu_out[c]   :
                             m_uart[c] ? uart_tx_val  : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
-                            m_swdc[c] ? 1'b1         :
+                            m_swdc[c] ? swd_clk_oe   :
                             m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
                             emu_on[c] ? emu_oe[c]    :
