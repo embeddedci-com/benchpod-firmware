@@ -193,7 +193,8 @@ void handle_ota_commit(int conn_id, const char *json) {
 /* {"cmd":"blob_status"} — what each W25Q slot holds (cached headers, no bus access). */
 void handle_blob_status(int conn_id, const char *json) {
     (void)json;
-    static char resp[768];
+    /* ~175 B per slot: gw0, gw1, gw2, esp (+ bridge) need ~900 B; 768 was sized before gw2. */
+    static char resp[1280];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"blobs\":[");
