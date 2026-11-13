@@ -438,12 +438,20 @@ static void regs_writes(sm_inst_t *s, uint64_t now) {
     uint8_t pairs[2 * FPGA_EMU_LOG_ENTRIES];
     if (fpga_emu_read_log(s->target, (uint8_t)(s->wr_seen % FPGA_EMU_LOG_ENTRIES), n, pairs) != 0) return;
     s->wr_seen = wr;
+    sd_bus_info_t bi;
+    bool word = sd_bus_info(s->in, &bi) == SD_OK && bi.register_bytes == 2;
     for (unsigned k = 0; k < n; k++) {
         uint8_t a = pairs[2 * k], v = pairs[2 * k + 1];
         s->writes++;
         s->last_at = a;
         s->last_val = v;
         if (!ro_bit(s, a)) s->live[a] = v;
+        /* word registers: the MSB and the LSB of one register are one write for the rules
+           (they run once, at the LSB, with the whole word) */
+        if (word && !(a & 1u) && k + 1 < n && pairs[2 * k + 2] == (uint8_t)(a + 1u)) {
+            changed[a >> 3] |= (uint8_t)(1u << (a & 7u));
+            continue;
+        }
         if (sd_regs_after_write(s->in, s->live, a, v, img, &r) != SD_OK) continue;
         memcpy(s->live, img, SD_REGIMAGE);
         if (r.reset) reset = true;
@@ -522,7 +530,9 @@ static int regs_config(sm_inst_t *s, bool enable) {
     uint8_t wb = bi.while_busy;
     if (!bi.has_conversion && bi.n_commands) wb = 1u;
     uint8_t f = EMU_I2C_ENABLE | (uint8_t)((wb & 3u) << 2);
-    if (bi.addr_bits == 16) f |= EMU_I2C_ADDR16;
+    if (bi.command_map) f |= EMU_I2C_CMAP;            /* two pointer bytes, no page */
+    else if (bi.addr_bits == 16) f |= EMU_I2C_ADDR16;
+    if (bi.register_bytes == 2) f |= EMU_I2C_WORD;
     if (mute) f |= EMU_I2C_MUTE;
     if (fault_on(s, SD_FAULT_BUS_STUCK, NULL)) f |= EMU_I2C_BUS_STUCK;
     /* With its `enabled` condition false the pin stays configured (so it holds its inactive

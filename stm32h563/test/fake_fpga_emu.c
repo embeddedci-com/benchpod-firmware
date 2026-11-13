@@ -144,13 +144,30 @@ static void data_write(fake_target_t *x, uint8_t a, uint8_t v) {
     if (x->attrs[a] & EMU_ATTR_TRIG) start_conv(x, x->attrs[a]);
 }
 
+/* The pointer byte(s) as the gateware maps them: word registers (2p), the command map
+   (image[h] ^ l) or the 16-bit window (the low byte; outside the window: not served). */
+static bool set_pointer(fake_target_t *x, int reg) {
+    unsigned p;
+    x->off_window = false;
+    if (x->flags & EMU_I2C_CMAP) p = (unsigned)x->regs[(reg >> 8) & 0xFF] ^ ((unsigned)reg & 0xFFu);
+    else if (x->flags & EMU_I2C_ADDR16) { p = (unsigned)reg & 0xFFu; x->off_window = ((reg >> 8) & 0xFF) != x->page; }
+    else if (x->flags & EMU_I2C_WORD) p = 2u * ((unsigned)reg & 0x7Fu);
+    else p = (unsigned)reg & 0xFFu;
+    x->pointer = (uint8_t)p;
+    if (!x->off_window && (x->attrs[x->pointer] & EMU_ATTR_CMD)) start_conv(x, x->attrs[x->pointer]);
+    return !x->off_window;
+}
+
 bool fake_i2c_write(uint8_t addr7, uint8_t reg, const uint8_t *data, size_t n) {
+    return fake_i2c_write16(addr7, reg, data, n);
+}
+
+bool fake_i2c_write16(uint8_t addr7, uint16_t reg, const uint8_t *data, size_t n) {
     int t = fake_target_of(addr7);
     if (t < 0) return false;
     fake_target_t *x = &g_fpga.t[t];
     if (x->flags & (EMU_I2C_MUTE | EMU_I2C_BUS_STUCK)) return false;
-    x->pointer = reg;
-    if (x->attrs[reg] & EMU_ATTR_CMD) start_conv(x, x->attrs[reg]);
+    if (!set_pointer(x, reg)) return true;   /* outside the window: acknowledged, ignored */
     for (size_t i = 0; i < n; i++) data_write(x, x->pointer++, data[i]);
     return true;
 }
@@ -165,6 +182,7 @@ static uint8_t read_byte(fake_target_t *x, bool *advance) {
         memmove(g_fpga.fifo, g_fpga.fifo + 1, --g_fpga.fifo_len);
         return b;
     }
+    if (x->off_window) return 0;
     uint8_t v = x->regs[a];
     if ((at & EMU_ATTR_BUSY) && g_fpga.now_us < x->busy_until_us) v |= x->mask;
     return v;
@@ -175,10 +193,7 @@ bool fake_i2c_read(uint8_t addr7, int reg, uint8_t *out, size_t n) {
     if (t < 0) return false;
     fake_target_t *x = &g_fpga.t[t];
     if (x->flags & (EMU_I2C_MUTE | EMU_I2C_BUS_STUCK)) return false;
-    if (reg >= 0) {
-        x->pointer = (uint8_t)reg;
-        if (x->attrs[reg] & EMU_ATTR_CMD) start_conv(x, x->attrs[reg]);
-    }
+    if (reg >= 0) (void)set_pointer(x, reg);
     if (((x->flags >> 2) & 3u) == 1u && g_fpga.now_us < x->busy_until_us) return false;   /* nack while busy */
     for (size_t i = 0; i < n; i++) {
         bool adv;

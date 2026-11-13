@@ -263,6 +263,71 @@ static void test_sht4x(void) {
     sm_reset();
 }
 
+/* ---- word registers and the command map (I2C_CONFIG flags bit6 / bit7) ------------------- */
+static uint8_t crc8_31(uint8_t a, uint8_t b) {
+    uint8_t c = 0xFF, d[2] = { a, b };
+    for (int i = 0; i < 2; i++) { c ^= d[i]; for (int k = 0; k < 8; k++) c = (uint8_t)((c & 0x80) ? (c << 1) ^ 0x31 : c << 1); }
+    return c;
+}
+
+static void test_word_cmap(void) {
+    fresh();
+    CHECK(define_fixture("tw", "word_tmp117"), "word_tmp117");
+    CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"tw\",\"pins\":{\"sda\":3,\"scl\":4}}"), "start: %s", g_err);
+    fake_target_t *x = &g_fpga.t[0];
+    CHECK((x->flags & EMU_I2C_WORD) && !(x->flags & (EMU_I2C_ADDR16 | EMU_I2C_CMAP)) && x->page == 0, "word flag, page 0: 0x%02x", x->flags);
+    uint8_t b[9], v[2];
+    CHECK(fake_i2c_read(0x48, 0x00, b, 2) && b[0] == 0x0C && b[1] == 0x80, "TEMP_RESULT 25 C: %02X %02X", b[0], b[1]);
+    CHECK(fake_i2c_read(0x48, 0x0F, b, 2) && b[0] == 0x01 && b[1] == 0x17, "DEVICE_ID");
+    CHECK(fake_i2c_read(0x48, 0x01, b, 4) && b[0] == 0x02 && b[1] == 0x20 && b[2] == 0x60 && b[3] == 0x00, "CONFIG then the next register");
+    CHECK(fake_i2c_read(0x48, 0xFE, b, 2) && b[0] == 0x54 && b[1] == 0x49, "pointer 0xFE");
+    v[0] = 0x00; v[1] = 0x80;
+    CHECK(fake_i2c_write(0x48, 0x07, v, 2), "TEMP_OFFSET +1 C");
+    poll_ms(5);
+    CHECK(fake_i2c_read(0x48, 0x00, b, 2) && b[0] == 0x0D && b[1] == 0x00, "the offset applies: %02X %02X", b[0], b[1]);
+    v[0] = 0x02; v[1] = 0x22;
+    CHECK(fake_i2c_write(0x48, 0x01, v, 2), "CONFIG soft reset");
+    poll_ms(5);
+    CHECK(fake_i2c_read(0x48, 0x07, b, 2) && b[0] == 0 && b[1] == 0, "the reset reloads TEMP_OFFSET");
+    CHECK(fake_i2c_read(0x48, 0x00, b, 2) && b[0] == 0x0C && b[1] == 0x80, "and the result");
+    v[0] = 0x55; v[1] = 0xAA;
+    CHECK(fake_i2c_write(0x48, 0x0F, v, 2), "write to the read-only DEVICE_ID");
+    poll_ms(5);
+    CHECK(fake_i2c_read(0x48, 0x0F, b, 2) && b[0] == 0x01 && b[1] == 0x17, "DEVICE_ID kept");
+    sm_reset();
+
+    fresh();
+    CHECK(define_fixture("co2", "cmap_scd4x"), "cmap_scd4x");
+    CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"co2\",\"pins\":{\"sda\":3,\"scl\":4}}"), "start: %s", g_err);
+    x = &g_fpga.t[0];
+    CHECK((x->flags & EMU_I2C_CMAP) && !(x->flags & (EMU_I2C_ADDR16 | EMU_I2C_WORD)) && x->page == 0, "command-map flag, page 0: 0x%02x", x->flags);
+    CHECK(((x->flags >> 2) & 3u) == 1u, "commands only: nack while busy");
+    CHECK(fake_i2c_write16(0x62, 0xEC05, NULL, 0), "read_measurement");
+    CHECK(!fake_i2c_read(0x62, -1, b, 9), "not acknowledged for 1 ms");
+    fake_advance_us(1500);
+    CHECK(fake_i2c_read(0x62, -1, b, 9), "answer");
+    CHECK(b[0] == 0x02 && b[1] == 0x58 && b[2] == crc8_31(0x02, 0x58), "CO2 600 ppm with its CRC: %02X %02X %02X", b[0], b[1], b[2]);
+    CHECK(fake_i2c_write16(0x62, 0x3682, NULL, 0), "get_serial_number");
+    fake_advance_us(1500);
+    CHECK(fake_i2c_read(0x62, -1, b, 9) && b[0] == 0x12 && b[1] == 0x34 && b[3] == 0x56 && b[6] == 0x9A, "serial in another high byte");
+    CHECK(fake_i2c_write16(0x62, 0xE4B8, NULL, 0), "get_data_ready_status");
+    fake_advance_us(1500);
+    CHECK(fake_i2c_read(0x62, -1, b, 3) && b[0] == 0x80 && b[1] == 0x06 && b[2] == crc8_31(0x80, 0x06), "data ready");
+    CHECK(fake_i2c_write16(0x62, 0x21B1, NULL, 0) && fake_i2c_write16(0x62, 0x3F86, NULL, 0), "commands with no answer are acknowledged");
+    uint8_t off[3] = { 0x07, 0xE6, crc8_31(0x07, 0xE6) };
+    CHECK(fake_i2c_write16(0x62, 0x241D, off, 3), "set_temperature_offset with its word");
+    poll_ms(5);
+    CHECK(fake_i2c_write16(0x62, 0x2318, NULL, 0), "get_temperature_offset");
+    fake_advance_us(1500);
+    CHECK(fake_i2c_read(0x62, -1, b, 3) && b[0] == 0x07 && b[1] == 0xE6 && b[2] == off[2], "reads back the written word: %02X %02X", b[0], b[1]);
+    CHECK(run("{\"cmd\":\"sensor_set\",\"instance\":\"co2\",\"values\":{\"co2_ppm\":1200}}"), "set: %s", g_err);
+    poll_ms(3);
+    CHECK(fake_i2c_write16(0x62, 0xEC05, NULL, 0), "read_measurement again");
+    fake_advance_us(1500);
+    CHECK(fake_i2c_read(0x62, -1, b, 9) && b[0] == 0x04 && b[1] == 0xB0, "CO2 1200 ppm: %02X %02X", b[0], b[1]);
+    sm_reset();
+}
+
 /* ---- every bus at once, the pin rules ----------------------------------------------------- */
 
 static const char *k_spi_def =
@@ -550,6 +615,7 @@ int main(void) {
     test_define();
     test_bme280_mpu();
     test_sht4x();
+    test_word_cmap();
     test_all_buses();
     test_uart_requests();
     test_drdy_faults_stimulus();

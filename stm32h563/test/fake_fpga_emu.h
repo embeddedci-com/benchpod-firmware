@@ -22,6 +22,7 @@ typedef struct {
     uint64_t busy_until_us;
     unsigned drdy_asserts, drdy_deasserts, configs, loads, load_bytes;
     uint8_t  pointer;
+    bool     off_window;      /* 16-bit window: the pointer's high byte is not the page */
 } fake_target_t;
 
 typedef struct {
@@ -63,6 +64,8 @@ void fake_advance_us(uint64_t us);
 /* A DUT write transaction on an I2C address: the register pointer then `n` data bytes.
    Returns false when no enabled target acknowledges (mute, not configured). */
 bool fake_i2c_write(uint8_t addr7, uint8_t reg, const uint8_t *data, size_t n);
+/* The same with a 16-bit pointer (16-bit window or command map: high byte first on the bus). */
+bool fake_i2c_write16(uint8_t addr7, uint16_t reg, const uint8_t *data, size_t n);
 /* One DUT register write done right before the pod's next register load (a race). */
 void fake_race_write_before_load(uint8_t addr7, uint8_t reg, uint8_t val);
 /* A DUT read: set the pointer to reg (unless reg < 0: continue) and read n bytes. */
