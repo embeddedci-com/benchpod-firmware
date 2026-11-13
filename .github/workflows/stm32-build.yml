@@ -190,7 +190,7 @@ jobs:
           $FWSIGN sign --key env:FW_SIGNING_KEY --target firmware --release "$REL" bench_pod_stm32.bin
           $FWSIGN sign-blobs --key env:FW_SIGNING_KEY --release "$REL" blobs-manifest.json
           $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target firmware bench_pod_stm32.bin
-          for b in gw0 gw1; do
+          for b in gw0 gw1 gw2; do
             if [ -f blob-$b.bin ]; then $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target $b blob-$b.bin; fi
           done
           # a release-trusted key must not accept it
