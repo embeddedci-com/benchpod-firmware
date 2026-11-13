@@ -560,7 +560,7 @@ static void test_sensor_la_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(200);
     capture_poll();
-    CHECK(strcmp(g_err, "trigger timeout: no I2C traffic on LA1 (SDA of env) within 500 ms") == 0, "error: %s", g_err);
+    CHECK(strcmp(g_err, "trigger timeout: no falling edge on LA1 (SDA of env) within 500 ms; the DUT did not use the I2C bus") == 0, "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out sensor_la not aborted");
     /* the default timeout is 2 s */
     clear_tx();

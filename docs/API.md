@@ -2994,7 +2994,8 @@ then always caught, where a capture at once mostly missed it.
 While it waits the emulation keeps running (the DUT's reads and writes are answered as usual) and
 the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `busy`. When nothing happens on
 the bus in time the reply is the error
-`"trigger timeout: no I2C traffic on LA2 (SDA of env) within 2000 ms"`.
+`"trigger timeout: no falling edge on LA2 (SDA of env) within 2000 ms; the DUT did not use the I2C bus"`
+(the `trigger timeout:` form of the other captures).
 
 The data comes back chunked like the other sample arrays (a stream connection: not over the cloud
 command channel), one byte per four samples, oldest first in the high bits: bit7 SCL(s0), bit6

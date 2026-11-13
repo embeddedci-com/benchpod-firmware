@@ -244,7 +244,7 @@ static struct {
     absolute_time_t deadline;     /* trigger_timeout_ms after the arm */
     absolute_time_t next_check;   /* TRIGGER_STATUS is an SPI read: don't do it every pass */
     bool            fired;
-    char            msg[128];     /* a caller's own timeout message (sensor_la); "" = the generic one */
+    char            msg[160];     /* a caller's own timeout message (sensor_la); "" = the generic one */
 } trigwait;
 #define TRIGWAIT_POLL_US  5000
 
@@ -1734,8 +1734,8 @@ void handle_sensor_la(int conn_id, const char *json) {
     }
     capture_trigger_armed(conn_id, &trig);
     if (trig.present)
-        snprintf(trigwait.msg, sizeof(trigwait.msg), "trigger timeout: no I2C traffic on LA%u (SDA of %s) within %lu ms",
-                 sda, inst, (unsigned long)timeout_ms);
+        snprintf(trigwait.msg, sizeof(trigwait.msg), "trigger timeout: no falling edge on LA%u (SDA of %s) within %lu ms; "
+                 "the DUT did not use the I2C bus", sda, inst, (unsigned long)timeout_ms);
     last_cap.valid = false;   /* this capture overwrites the LA PSRAM region */
     memset(&sensla, 0, sizeof(sensla));
     sensla.active  = true;
