@@ -43,6 +43,7 @@ typedef struct {
     bool     ans_pending;
     uint64_t ans_due_us;
     uint32_t sent, received, messages, answers, overruns, dropped, late;
+    bool     garbage_was_on;   /* the garbage fault last poll: its start cuts the staged epoch */
     uint32_t baud_now;
     uint64_t garbage_next_us;
     uint32_t rng;
@@ -684,7 +685,10 @@ static void uart_poll(sm_inst_t *s, uint64_t now) {
         }
     }
 
-    /* garbage: random bytes at rate_hz instead of the messages */
+    /* garbage: random bytes at rate_hz instead of the messages. Its start cuts what is staged,
+       so no valid sentence goes out after the fault began (found on the bench). */
+    if (garbage && !u->garbage_was_on) { u->len = u->off = 0; u->garbage_next_us = 0; }
+    u->garbage_was_on = garbage;
     if (garbage && u->off >= u->len) {
         double hz = gf->f.rate_hz > 0 ? gf->f.rate_hz : 100.0;
         uint64_t period = (uint64_t)(1e6 / hz);
@@ -1479,7 +1483,9 @@ static void fifo_poll(sm_inst_t *s, uint64_t now) {
             s->drdy_count++;
         }
     }
-    unsigned frames = level / s->fifo_len;
+    /* Unread frames, a partly read one included: the SPI target holds the next FIFO byte ready
+       to shift out, so a full FIFO reads one byte short of depth x frame (found on the bench). */
+    unsigned frames = (level + s->fifo_len - 1u) / s->fifo_len;
     if (frames != s->fifo_level_frames) { s->fifo_level_frames = frames; s->dirty = true; }
 }
 
