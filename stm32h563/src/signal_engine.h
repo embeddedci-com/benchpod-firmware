@@ -650,13 +650,6 @@ int  fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n);
  * Emulated sensors: the emulation image's blocks are in fpga_emu.h (sensor_mgr.c drives them).
  * ========================================================================== */
 
-/* Raw I2C-bus logic-analyzer capture of an I2C sensor's two pins (sda_ch / scl_ch, LA1..LA14):
-   `bytes` packed bytes, 4 samples per byte (scl,sda per sample, oldest in the high bits), at
-   sample_rate_hz (0 = max rate), through the deep-LA path.  Blocks for the capture window, then
-   reads it back.  Returns 0 on success. */
-int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz, unsigned sda_ch,
-                        unsigned scl_ch);
-
 /* ---- deep multi-channel LA capture into PSRAM ----------------------------
    The iCE40 streams `samples` 14-channel LA samples (2 little-endian bytes each:
    byte 2k = LA1..LA8, byte 2k+1 = {00,LA9..LA14}) straight into the shared PSRAM, so the depth

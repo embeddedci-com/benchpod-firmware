@@ -1693,7 +1693,7 @@ counters and the capability list. No parameters.
 | `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
 | `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. Not listed on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+); its frame carries `"wifi_scan":false`. |
 | `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
-| `gpio`, `power`, `swd`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensors` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN and [emulated sensors](#emulated-sensors) from definitions (format 1; `i2c_sensor`, `sensor_types` and `gps` are gone from firmware 3.11). |
+| `gpio`, `power`, `swd`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensors`, `sensor_la_trigger` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN, [emulated sensors](#emulated-sensors) from definitions (format 1; `i2c_sensor`, `sensor_types` and `gps` are gone from firmware 3.10.3, see [Removed in firmware 3.10.3](#removed-in-firmware-3103)) and a [`sensor_la`](#sensor_la--raw-i2c-bus-capture) that waits for the bus's START (`trigger`, `timeout_ms`). |
 | `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
 | `adc_low_range` | The ADC has the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). |
 | `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
@@ -2712,7 +2712,7 @@ Capability in `status` `caps`: `"sensors"`. `status` and the cloud capabilities 
 `"sensors_format":1` (the definition format version the pod takes) and `"sensors_digital"` (the
 emulation image is installed or running, so I2C, SPI and UART sensors work); the cloud frame also
 has `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
-of firmware 3.10 and earlier.
+of firmware 3.10.1 and earlier (see [Removed in firmware 3.10.3](#removed-in-firmware-3103)).
 
 Typical flow:
 
@@ -2977,14 +2977,57 @@ earlier: at most 256 bytes fit, and a single reply works over the cloud command 
 
 ### `sensor_la` — raw I2C bus capture
 
-`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}` captures the two bus
-pins of a running **I2C** instance. `samples` is the number of packed bytes (1..4096, 4 samples per
-byte), `sample_rate_mhz` optional (default the highest rate). The data comes back chunked like the
-other sample arrays (a stream connection: not over the cloud command channel), one byte per four
-samples, oldest first in the high bits: bit7 SCL(s0), bit6 SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3),
-the format of the earlier single-sensor `sensor_la`. SPI and UART instances are refused
+`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":0.5}` captures the two bus
+pins of a running **I2C** instance. By default it **waits for the DUT's next transaction**: the
+capture starts on the first SDA fall (on an idle bus that is a START) and keeps 1/8 of the samples
+from before it, so the START itself is in the window. A DUT that reads its sensor every 200 ms is
+then always caught, where a capture at once mostly missed it.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `instance` | string | yes | | A running I2C instance. |
+| `samples` | integer | no | 256 | Packed bytes to return, 1..4096 (4 samples per byte). |
+| `sample_rate_mhz` | number | no | the highest rate | Sample rate. |
+| `trigger` | string | no | `"start"` | `"start"`: wait for the bus's next START, as above. `"none"`: capture at once (the behavior of firmware 3.10.3 and earlier). |
+| `timeout_ms` | integer | no | 2000 | How long `"start"` waits, 1..600000. |
+
+While it waits the emulation keeps running (the DUT's reads and writes are answered as usual) and
+the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `busy`. When nothing happens on
+the bus in time the reply is the error
+`"trigger timeout: no falling edge on LA2 (SDA of env) within 2000 ms; the DUT did not use the I2C bus"`
+(the `trigger timeout:` form of the other captures).
+
+The data comes back chunked like the other sample arrays (a stream connection: not over the cloud
+command channel), one byte per four samples, oldest first in the high bits: bit7 SCL(s0), bit6
+SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3), the format of the earlier single-sensor `sensor_la`. The
+first chunk carries `"la_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
+carries `"trigger":{"la":2,"edge":"falling","fired":true}`. When the START came sooner after the
+request than the pre-trigger part covers, the samples before the capture began repeat the level
+the bus had then. `status` `caps` lists `"sensor_la_trigger"` on firmware that takes `trigger` and
+`timeout_ms`; older firmware ignores both fields and captures at once.
+
+SPI and UART instances are refused
 (`"sensor_la captures I2C sensors only; use la_capture for the pins of acc"`): capture their pins
 with [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture).
+
+### Removed in firmware 3.10.3
+
+User-defined sensors replaced the built-in single-sensor commands. Firmware 3.10.1 and earlier still
+have them (their documentation is `docs/API.md` at the `v3.10.1` tag).
+
+| Removed | Replaced by |
+|---|---|
+| `sensor_start` with `type`, `addr`, `sda`, `scl` (one built-in model: `bmp280`, `bme280`, `sht4x`, `mpu6050`) | [`sensor_define`](#sensor_define--upload-and-compile-a-definition) with the model's definition from the sensor library, then [`sensor_start`](#sensor_start--start-an-instance) with `instance`, `address` and `pins` |
+| `sensor_set` without `instance` | `sensor_set` with `instance` |
+| `sensor_stop` without `instance` | `sensor_stop` with `instance` |
+| `sensor_status` (the one sensor and its bus counters) | `sensor_status` (every instance) |
+| `sensor_regs` without `instance` (a chunked uint8 array) | `sensor_regs` with `instance` (one reply, `data_b64`) |
+| `sensor_la` without `instance` | `sensor_la` with `instance` |
+| `sensor_types` | the sensor library (`embeddedci-com/benchpod-sensors`): each definition lists its values and ranges |
+| `gps_start`, `gps_set`, `gps_stop`, `gps_status` | the library's `gps_nmea` definition with `sensor_define`, `sensor_start` (a UART instance), `sensor_set` (the fix), `sensor_stop` and `sensor_status` |
+| capability `i2c_sensor` | `sensors` |
+| capability `sensor_types` | `sensors` (and `sensors_format`) |
+| capability `gps` | `sensors` with `sensors_digital` (UART sensors need the emulation image) |
 
 ## Device Identity (Ed25519)
 

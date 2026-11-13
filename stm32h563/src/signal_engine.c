@@ -3269,60 +3269,6 @@ int fpga_emu_uart2_status(uint16_t *rx_avail, uint8_t *flags) {
     return 0;
 }
 
-/* sensor_la: the two pins of an I2C sensor, captured. */
-int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz, unsigned sda_ch,
-                        unsigned scl_ch) {
-    if (!buf || bytes == 0 || bytes > SIGNAL_BUF_SIZE) return -1;
-
-    /* MIGRATED (gateware >= v24 removed the on-FPGA I2C-LA sampler + its 0x65/0x66
-       opcodes to reclaim ~150 LC + an SPRAM block): source the raw {SCL,SDA} samples
-       from the general DEEP-LA-into-PSRAM path (OP_LA_CAPTURE 0x69) and re-pack them
-       here into the SAME legacy 4-samples/byte layout the server/python I2C decoder
-       still expects — so `sensor_la` is byte-for-byte wire-compatible (no server or
-       client change).  Packed byte (oldest sample in the high bits, matching
-       i2c_la_capture.v): bit7=scl(s0) bit6=sda(s0) … bit1=scl(s3) bit0=sda(s3).
-       The two bus channels are the sensor instance's (1-based LA channels). */
-    if (sda_ch == 0 || scl_ch == 0 || sda_ch > 14u || scl_ch > 14u) return -1;
-    uint8_t sda_bit = (uint8_t)(sda_ch - 1u);   /* deep-LA word bit index (LA1..14 -> 0..13) */
-    uint8_t scl_bit = (uint8_t)(scl_ch - 1u);
-
-    size_t samples = bytes * 4u;            /* 4 packed {SCL,SDA} samples per output byte */
-
-    /* Arm the deep-LA capture (hands the shared PSRAM bus to the iCE40) and block until
-       it completes — mirroring the old synchronous fill contract of this function. */
-    if (fpga_la_capture_psram_start(samples, sample_rate_hz, NULL) != 0) return -1;
-    int r;
-    do { sleep_ms(1); r = fpga_la_capture_psram_wait(); } while (r == 0);  /* 1=done(bus held), -1=timeout */
-    if (r < 0) return -1;
-
-    /* Read the LA region back in chunks (2 bytes/sample, LE: byte0=LA1..8, byte1={00,LA9..14})
-       and re-pack 4 samples per output byte. */
-    uint8_t  chunk[256];                    /* 128 samples/chunk; no large new buffer (RAM is tight) */
-    size_t   out = 0;
-    uint32_t off = 0;
-    uint8_t  acc = 0;
-    unsigned nib = 0;
-    for (size_t s = 0; s < samples; ) {
-        size_t n = samples - s;
-        if (n > (sizeof(chunk) / 2u)) n = sizeof(chunk) / 2u;
-        if (fpga_la_psram_read(off, chunk, (uint32_t)(n * 2u)) != 0) { fpga_la_psram_release(); return -1; }
-        off += (uint32_t)(n * 2u);
-        for (size_t i = 0; i < n; i++) {
-            uint16_t w   = (uint16_t)chunk[2u*i] | ((uint16_t)(chunk[2u*i + 1u] & 0x0Fu) << 8);
-            uint8_t  scl = (uint8_t)((w >> scl_bit) & 1u);
-            uint8_t  sda = (uint8_t)((w >> sda_bit) & 1u);
-            acc = (uint8_t)((acc << 2) | (scl << 1) | sda);   /* oldest shifts up to bits[7:6] */
-            if (++nib == 4u) { buf[out++] = acc; acc = 0; nib = 0; }
-        }
-        s += n;
-    }
-    fpga_la_psram_release();
-    /* samples is a multiple of 4, so `out == bytes` and no partial byte remains. */
-    printf("[sensor] LA capture %u bytes (%u samples via deep-LA sda=%u scl=%u)\n",
-           (unsigned)bytes, (unsigned)samples, sda_ch, scl_ch);
-    return 0;
-}
-
 /* ===========================================================================
  * UART proxy — FPGA-backed soft UART on two LA channels, driven over SPI.
  *

@@ -3,7 +3,8 @@
  * (src/command_handler_capture.c): the chunk framing (decimal and "enc":"b64"), pacing against
  * the send ring, the deep capture_dual read-back (dense ADC region, then the LA region as
  * run-length edges) with its rates, the capture_read resume, the stall that drops a reader who
- * stopped, the trigger timeout, and the teardown of a capture whose conn went away.
+ * stopped, the trigger timeout, the teardown of a capture whose conn went away, and sensor_la
+ * (wait for the bus's START, the pre-trigger, the timeout, the immediate capture).
  *
  * The capture engine, PSRAM, the heavy gate, the send ring and the clocks are fakes; replies are
  * parsed back into samples and compared with what the fake engine captured.
@@ -115,7 +116,6 @@ int fpga_set_capture_bases(uint32_t la, uint32_t adc) { (void)la; (void)adc; ret
 void fpga_set_dac_stop_after_us(uint32_t us) { (void)us; }
 int fpga_set_trigger(unsigned la, uint8_t mode) { (void)la; (void)mode; return 0; }
 int fpga_trigger_status(uint8_t *st) { *st = (uint8_t)g_trig_status; return 0; }
-int fpga_i2c_la_capture(uint8_t *b, size_t n, float hz, unsigned sda, unsigned scl) { (void)hz; (void)sda; (void)scl; for (size_t i = 0; i < n; i++) b[i] = (uint8_t)i; return 0; }
 void psram_bus_acquire(void) { g_bus = true; }
 int sm_i2c_pins(const char *inst, unsigned *sda, unsigned *scl, char *err, size_t cap) { (void)inst; (void)err; (void)cap; *sda = 1; *scl = 2; return 0; }
 uint8_t  signal_engine_fpga_version(void) { return g_gw; }
@@ -499,6 +499,108 @@ static void test_capture_dual_changes(void) {
     g_wait_rc = 0; g_gw = 47;
 }
 
+/* sensor_la: the fake instance has SDA on LA1 (bit 0) and SCL on LA2 (bit 1); the packed reply
+   holds {scl,sda} per sample, 4 per byte, oldest in the high bits. */
+static unsigned packed(const uint16_t *b, size_t i) { return (b[i >> 2] >> (6u - 2u * (i & 3u))) & 3u; }
+static void test_sensor_la_waits_for_start(void) {
+    /* 16 bytes = 64 samples at 48 MS/s (k 1): 8 before the trigger, 56 after it (one 256-tick unit).
+       Idle (3) from the arm, START (SDA low, 2) at tick 1020, SCL low (0) at 1030, SDA high (1) at
+       1040, the last tick at 1020 + 255, END. */
+    g_nev = 0;
+    ev(77, 3); ev(1000, 3); ev(20, 2); ev(10, 0); ev(10, 1); ev(235, 1); ev(0, 0);
+    g_gw = 54; clear_tx(); g_wait_rc = 0; g_rate_hz = 48e6f; g_chg_k = 0; g_chg_pre = false; g_trig_pre = false;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":16}");
+    CHECK(capture_busy() && g_err[0] == '\0', "sensor_la refused: %s", g_err);
+    CHECK(g_chg_k == 1 && g_chg_samples == 56 && g_chg_pre && g_trig_pre,
+          "arm: k %u, %zu post samples, pre %d/%d", g_chg_k, g_chg_samples, g_chg_pre, g_trig_pre);
+    advance_ms(1500);                  /* the DUT is quiet for a while: still waiting */
+    capture_poll();
+    CHECK(capture_busy() && g_err[0] == '\0', "gave up before the timeout: %s", g_err);
+    g_wait_rc = 1; g_trig_status = 2;   /* TRIGGER_STATUS_FIRED */
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    bool ok = nd == 16;
+    for (size_t i = 0; i < 64 && ok; i++) {
+        unsigned want = i < 8 ? 3u : i < 18 ? 2u : i < 28 ? 0u : 1u;
+        if (packed(d, i) != want) { ok = false; printf("  sample %zu: %u, want %u\n", i, packed(d, i), want); }
+    }
+    CHECK(ok && !more, "levels: %zu bytes, more %d", nd, more);
+    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "first frame: %.90s", first);
+    CHECK(strstr(g_tx, "\"trigger\":{\"la\":1,\"edge\":\"falling\",\"fired\":true}") != NULL, "no trigger footer: %.200s", g_tx);
+    CHECK(!g_bus && g_owner == -1 && !capture_busy(), "bus or gate held after sensor_la");
+
+    /* the START right after the arm: the samples before the stream take its first level */
+    g_nev = 0;
+    ev(0, 3); ev(2, 2); ev(255, 2); ev(0, 0);   /* trigger at tick 2, last tick 257 */
+    clear_tx(); g_wait_rc = 0;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":16}");
+    g_wait_rc = 1;
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(nd == 16 && packed(d, 0) == 3 && packed(d, 7) == 3 && packed(d, 8) == 2 && packed(d, 63) == 2,
+          "early START: %zu bytes, %u %u %u %u (%s)", nd, packed(d, 0), packed(d, 7), packed(d, 8), packed(d, 63), g_err);
+
+    /* 500 kHz (the SDK default): 48 MHz / 96 */
+    clear_tx(); g_wait_rc = 0; g_rate_hz = 500e3f;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":4096}");
+    CHECK(g_chg_k == 96 && g_chg_samples == 16384 - 2048, "500 kHz: k %u, %zu post samples", g_chg_k, g_chg_samples);
+    capture_conn_closed(7);
+    heavy_release(7);
+    CHECK(!capture_busy(), "a dead conn's sensor_la kept running");
+    g_trig_status = 0; g_wait_rc = 0;
+}
+
+static void test_sensor_la_timeout(void) {
+    clear_tx(); g_wait_rc = 0; g_gw = 54; g_rate_hz = 500e3f;
+    int aborts = g_aborts;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":256,\"timeout_ms\":500}");
+    CHECK(capture_busy() && g_err[0] == '\0', "refused: %s", g_err);
+    advance_ms(400);
+    capture_poll();
+    CHECK(capture_busy(), "timed out early");
+    advance_ms(200);
+    capture_poll();
+    CHECK(strcmp(g_err, "trigger timeout: no falling edge on LA1 (SDA of env) within 500 ms; the DUT did not use the I2C bus") == 0, "error: %s", g_err);
+    CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out sensor_la not aborted");
+    /* the default timeout is 2 s */
+    clear_tx();
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":256}");
+    advance_ms(1900); capture_poll();
+    CHECK(capture_busy(), "default timeout shorter than 2 s");
+    advance_ms(200); capture_poll();
+    CHECK(strstr(g_err, "within 2000 ms") != NULL && !capture_busy(), "default timeout: %s", g_err);
+}
+
+static void test_sensor_la_immediate_and_errors(void) {
+    /* "trigger":"none": the raw capture at once, 2 bytes per sample, repacked */
+    g_nev = 0;
+    for (unsigned i = 0; i < 64; i++) { unsigned w = (i & 3u) | 0x0F00u; g_ev[g_nev++] = (uint8_t)w; g_ev[g_nev++] = (uint8_t)(w >> 8); }
+    clear_tx(); g_wait_rc = 0; g_gw = 54; g_rate_hz = 500e3f; g_chg_k = 0; g_la_req_hz = 0; g_trig_pre = false;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"samples\":16,\"trigger\":\"none\"}");
+    CHECK(capture_busy() && g_chg_k == 0 && g_la_req_hz == 500e3f && !g_trig_pre, "none: k %u, rate %g (%s)",
+          g_chg_k, (double)g_la_req_hz, g_err);
+    g_wait_rc = 1;
+    pump_all();
+    parse(d, &nd, l, &nl, &more, first, sizeof(first));
+    CHECK(nd == 16 && d[0] == 0x1B && d[15] == 0x1B && !more, "none: %zu bytes, %u %u", nd, d[0], d[15]);
+    CHECK(strstr(g_tx, "\"trigger\":") == NULL, "an immediate capture reports a trigger");
+    CHECK(!g_bus && g_owner == -1 && !capture_busy(), "bus or gate held after sensor_la none");
+
+    clear_tx(); g_wait_rc = 0;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"trigger\":\"rising\"}");
+    CHECK(strcmp(g_err, "trigger must be \"start\" or \"none\"") == 0 && !capture_busy(), "bad trigger: %s", g_err);
+    clear_tx();
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"timeout_ms\":0}");
+    CHECK(strcmp(g_err, "timeout_ms must be 1..600000") == 0 && !capture_busy(), "bad timeout: %s", g_err);
+    clear_tx();
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\",\"timeout_ms\":\"2s\"}");
+    CHECK(strcmp(g_err, "timeout_ms must be 1..600000") == 0, "bad timeout text: %s", g_err);
+    clear_tx(); g_gw = 49;
+    handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\"}");
+    CHECK(strstr(g_err, "needs gateware v50") && strstr(g_err, "\"none\"") && !capture_busy(), "gw 49: %s", g_err);
+    g_gw = 47; g_wait_rc = 0; g_rate_hz = 0;
+}
+
 int main(void) {
     test_test_pattern_decimal_paced();
     test_test_pattern_b64();
@@ -510,6 +612,9 @@ int main(void) {
     test_stall();
     test_trigger_timeout();
     test_conn_closed();
+    test_sensor_la_waits_for_start();
+    test_sensor_la_timeout();
+    test_sensor_la_immediate_and_errors();
     free(g_tx);
     if (fails) { printf("test_ch_capture: %d FAILED\n", fails); return 1; }
     printf("test_ch_capture: all passed\n");

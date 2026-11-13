@@ -70,6 +70,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"can\""     /* classic CAN on FDCAN1 / TCAN1044 (can_bus.c) */
                    ",\"can_fd\""  /* CAN FD: can_config data_bitrate, 64-byte frames */
                    ",\"sensors\""     /* emulated sensors from definitions (sensor_define, sensor_mgr.h) */
+                   ",\"sensor_la_trigger\""  /* sensor_la waits for the bus's START (trigger, timeout_ms) */
                    ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
                    ",\"usb_net_setting\""  /* usb_network on/off, device-only (pod_policy.h) */
                    ",\"lan_tls\"");        /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
