@@ -104,6 +104,33 @@ static struct {
     bool     b64;
 } chgscan;
 
+/* ---- sensor_la: an I2C instance's two pins, packed 4 samples per byte ----
+   Armed by handle_sensor_la, completed on the poll: the DUT keeps talking to the emulated
+   sensor while the pod waits (the gateware serves it and sm_poll keeps running), which is what
+   fires the trigger.  With trigger "start" it is an LA change capture with a pre-trigger window,
+   triggered on SDA falling (on an idle bus the first SDA fall is a START): the read-back scans the
+   events once for the end tick (that places the trigger), then decodes them into the packed
+   bytes.  With trigger "none" it is the raw deep-LA capture at once, repacked the same way.
+   Either way the packed bytes go out through the bulk sender as before (adc_cmd_buf). */
+static struct {
+    bool     active;     /* armed: waiting for the capture to complete */
+    bool     reading;    /* captured: scanning/decoding PSRAM (the bus is held) */
+    int      conn_id;
+    size_t   bytes;      /* packed output bytes (4 samples each) */
+    uint8_t  sda_bit, scl_bit;   /* LA word bit of each pin (LA1..14 -> 0..13) */
+    uint32_t k;          /* > 0: change capture at 48 MHz / k; 0: raw capture */
+    uint32_t pre;        /* samples before the trigger (change capture) */
+    uint32_t rate_hz;    /* achieved sample rate, reported as la_rate_hz */
+    /* read-back */
+    bool     decoding;   /* change capture: false = finding the end tick, true = decoding */
+    uint32_t off, region;/* PSRAM bytes read so far / at most */
+    uint64_t t;          /* tick of the last event, from the first one */
+    bool     first;
+    int64_t  base;       /* tick of sample 0 (before the stream's first event: negative) */
+    size_t   out;        /* samples produced */
+    unsigned state;      /* the LA word of the last event */
+} sensla;
+
 /* ---- v2 async unified simultaneous capture (CMD_CAPTURE 0x31) ----
    Arms the ADC + raw-LA producers off ONE trigger; command_handler_poll() reads
    BOTH regions back into adc_buf16 (ADC first, then the LA words) and streams the
@@ -217,6 +244,7 @@ static struct {
     absolute_time_t deadline;     /* trigger_timeout_ms after the arm */
     absolute_time_t next_check;   /* TRIGGER_STATUS is an SPI read: don't do it every pass */
     bool            fired;
+    char            msg[128];     /* a caller's own timeout message (sensor_la); "" = the generic one */
 } trigwait;
 #define TRIGWAIT_POLL_US  5000
 
@@ -244,11 +272,19 @@ static void bulk_take_trigger(void) {
 /* Parse "trigger" / "trigger_timeout_ms" and, when present, gate on the gateware version and
    program SET_TRIGGER.  Call it AFTER the rest of the request validates and BEFORE the capture
    is armed — the fabric latches the trigger at the arm.  false = the error was already sent. */
+static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool allow_pre);
 static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *out, bool allow_pre) {
     char err[LA_PINS_ERR_MAX];
     trig_reply.present = false;   /* a previous capture's outcome must never ride this reply */
     if (!la_trigger_parse(json, out, err, sizeof(err))) { send_error(conn_id, err); return false; }
     if (!out->present) return true;
+    return capture_trigger_program(conn_id, out, allow_pre);
+}
+
+/* Gate a parsed (or built) trigger on the gateware version and program SET_TRIGGER. */
+static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool allow_pre) {
+    char err[LA_PINS_ERR_MAX];
+    trig_reply.present = false;
     uint8_t ver = signal_engine_fpga_version();
     if (ver < CAPTURE_TRIGGER_MIN_GW) {
         snprintf(err, sizeof(err),
@@ -277,6 +313,7 @@ static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *o
 /* The capture armed: start the timeout budget on top of its own completion deadline. */
 static void capture_trigger_armed(int conn_id, const la_trigger_t *t) {
     if (!t->present) return;
+    trigwait.msg[0]     = '\0';   /* the generic `trigger timeout:` message unless the caller sets one */
     trigwait.active     = true;
     trigwait.conn_id    = conn_id;
     trigwait.t          = *t;
@@ -309,7 +346,8 @@ static void capture_trigger_done(void) {
    capture/measure (v2cap), a deep LA→PSRAM capture (lacap), a unified capture
    (dualcap), or a paced bulk send (bulk). */
 bool capture_busy(void) {
-    return v2cap.active || lacap.active || chgscan.active || dualcap.active || bulk.active;
+    return v2cap.active || lacap.active || chgscan.active || dualcap.active || sensla.active ||
+           sensla.reading || bulk.active;
 }
 
 /* Scratch for one PSRAM-sourced chunk (deep LA capture read-back).  Sized to one
@@ -838,6 +876,129 @@ static void chgscan_step(void) {
     bulk.b64         = chgscan.b64;
 }
 
+/* ---- sensor_la read-back ---- */
+
+/* Samples [out, until) of the packed reply take the level of LA word w (until is clamped). */
+static void sensla_put(unsigned w, size_t until) {
+    uint8_t *buf  = adc_cmd_buf;
+    size_t total = sensla.bytes * 4u;
+    uint8_t v = (uint8_t)((((w >> sensla.scl_bit) & 1u) << 1) | ((w >> sensla.sda_bit) & 1u));
+    if (until > total) until = total;
+    for (; sensla.out < until; sensla.out++)   /* oldest sample in the high bits */
+        buf[sensla.out >> 2] |= (uint8_t)(v << (6u - 2u * (unsigned)(sensla.out & 3u)));
+}
+
+static void sensla_fail(const char *why) {
+    int cid = sensla.conn_id;
+    sensla.reading = false;
+    fpga_la_psram_release();
+    trig_reply.present = false;
+    send_error(cid, why);
+    heavy_release(cid);
+}
+
+static void sensla_done(void) {
+    int cid = sensla.conn_id;
+    sensla.reading = false;
+    fpga_la_psram_release();
+    printf("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
+           (unsigned)(sensla.bytes * 4u), sensla.sda_bit + 1u, sensla.scl_bit + 1u,
+           sensla.k ? ", from the START" : "");
+    bulk_begin(cid, sensla.bytes, false);   /* paced send; frees the gate when done */
+    bulk.la_rate_hz = sensla.rate_hz;
+}
+
+/* The change stream ended (END, cause in its state field): place the trigger, so the decode pass
+   knows the tick of sample 0.  false = failed (the reply was sent). */
+static bool sensla_place(uint32_t cause) {
+    uint64_t post = (uint64_t)signal_engine_la_change_units() * LA_CHANGE_UNIT_TICKS;
+    if (cause == 1u) {
+        sensla_fail("la capture failed: the bus changed faster than the pod can store; use a lower sample_rate_mhz");
+        return false;
+    }
+    if (cause != 0u) {
+        sensla_fail("la capture failed: the changes filled the free capture memory; capture fewer samples");
+        return false;
+    }
+    if (signal_engine_last_cap_overflowed()) {
+        sensla_fail("la capture failed: the PSRAM bus was taken during the capture");
+        return false;
+    }
+    if (sensla.t + 1u < post) {
+        sensla_fail("la capture failed: the change stream is incomplete");
+        return false;
+    }
+    /* the stream ends `post` ticks after the trigger; sample 0 is `pre` samples before it.  When
+       the trigger came sooner than that after the arm, the samples before the stream's first
+       event take its level (the level at the arm). */
+    int64_t trig = (int64_t)(sensla.t + 1u - post);
+    sensla.base  = trig - (int64_t)sensla.pre * (int64_t)sensla.k;
+    return true;
+}
+
+/* A few KB per poll: the raw words, or the change events (two passes), into adc_cmd_buf. */
+static void sensla_step(void) {
+    const size_t total = sensla.bytes * 4u;
+    for (int reads = 0; reads < 16; reads++) {
+        if (!sensla.k) {
+            /* raw: 2 bytes per sample, LE (byte 0 = LA1..8, byte 1 = LA9..12) */
+            if (sensla.out >= total) { sensla_done(); return; }
+            size_t n = total - sensla.out;
+            if (n > sizeof(psram_chunk) / 2u) n = sizeof(psram_chunk) / 2u;
+            if (fpga_la_psram_read(sensla.off, psram_chunk, (uint32_t)(n * 2u)) != 0) {
+                sensla_fail("la capture failed: PSRAM read-back failed");
+                return;
+            }
+            sensla.off += (uint32_t)(n * 2u);
+            for (size_t i = 0; i < n; i++) {
+                unsigned w = (unsigned)psram_chunk[2u * i] | ((unsigned)(psram_chunk[2u * i + 1u] & 0x0Fu) << 8);
+                sensla_put(w, sensla.out + 1u);
+            }
+            continue;
+        }
+        uint32_t left = sensla.region - sensla.off;
+        if (left < 3u) {
+            sensla_fail("la capture failed: the change stream has no end (PSRAM data damaged or cut)");
+            return;
+        }
+        uint32_t n = left < 255u ? left : 255u;
+        n -= n % 3u;
+        if (fpga_la_psram_read(sensla.off, psram_chunk, n) != 0) {
+            sensla_fail("la capture failed: PSRAM read-back failed");
+            return;
+        }
+        for (uint32_t i = 0; i + 3u <= n; i += 3u) {
+            uint32_t e = (uint32_t)psram_chunk[i] | ((uint32_t)psram_chunk[i + 1] << 8) |
+                         ((uint32_t)psram_chunk[i + 2] << 16);
+            uint32_t d = e >> 14;
+            unsigned w = e & 0x3FFFu;
+            sensla.off += 3u;
+            if (sensla.first) {             /* the stream's first event: tick 0 (its delta means nothing) */
+                sensla.first = false;
+                sensla.state = w;
+                continue;
+            }
+            if (d == 0u) {                  /* END */
+                if (sensla.decoding) { sensla_put(sensla.state, total); sensla_done(); return; }
+                if (!sensla_place(w)) return;
+                sensla.decoding = true;     /* second pass from the start */
+                sensla.off = 0; sensla.t = 0; sensla.first = true;
+                break;
+            }
+            sensla.t += d;
+            if (sensla.decoding) {
+                /* sample i is the state at tick base + i*k: an event shows from the first sample
+                   at or after it, so the samples before that keep the previous level */
+                int64_t rel = (int64_t)sensla.t - sensla.base;
+                size_t idx = rel <= 0 ? 0u : (size_t)(((uint64_t)rel + sensla.k - 1u) / sensla.k);
+                sensla_put(sensla.state, idx);
+                sensla.state = w;
+                if (sensla.out >= total) { sensla_done(); return; }
+            }
+        }
+    }
+}
+
 /* command_handler_poll's capture pass: trigger timeouts, async completions, then the paced
    bulk read-back. */
 void capture_poll(void) {
@@ -852,11 +1013,13 @@ void capture_poll(void) {
         if (!trigwait.fired && time_reached(trigwait.deadline)) {
             int  conn = trigwait.conn_id;
             char msg[LA_PINS_ERR_MAX];
-            la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
+            if (trigwait.msg[0]) snprintf(msg, sizeof(msg), "%s", trigwait.msg);
+            else                 la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
             fpga_capture_abort();              /* also turns SET_TRIGGER off */
             trigwait.active = false;
             if (v2cap.active   && v2cap.conn_id   == conn) v2cap.active   = false;
             if (lacap.active   && lacap.conn_id   == conn) lacap.active   = false;
+            if (sensla.active  && sensla.conn_id  == conn) sensla.active  = false;
             if (dualcap.active && dualcap.conn_id == conn) dualcap.active = false;
             send_error(conn, msg);
             heavy_release(conn);
@@ -940,6 +1103,28 @@ void capture_poll(void) {
     }
 
     if (chgscan.active) chgscan_step();
+
+    /* ---- sensor_la: wait for the capture, then repack it on the poll ---- */
+    if (sensla.active) {
+        int r = sensla.k ? fpga_la_change_wait() : fpga_la_capture_psram_wait();
+        if (r != 0) {                          /* done (1, bus held) or timeout (-1) */
+            capture_trigger_done();
+            sensla.active = false;
+            if (r > 0) {
+                memset(adc_cmd_buf, 0, sensla.bytes);
+                sensla.reading  = true;
+                sensla.decoding = false;
+                sensla.off = 0; sensla.t = 0; sensla.first = true; sensla.out = 0; sensla.state = 0;
+                sensla.region = signal_engine_la_max_samples(false) * 2u;
+            } else {
+                fpga_capture_abort();          /* a timeout leaves the fabric capturing */
+                trig_reply.present = false;
+                send_error(sensla.conn_id, "la capture failed");
+                heavy_release(sensla.conn_id);
+            }
+        }
+    }
+    if (sensla.reading) sensla_step();
 
     /* ---- v2 unified simultaneous capture: DEEP, chunked straight from PSRAM ----
        Both regions can be multi-MB, so we never buffer them in SRAM: fpga_capture_
@@ -1039,9 +1224,16 @@ void capture_conn_closed(int conn_id) {
     if (dualcap.active && dualcap.conn_id == conn_id) {
         cap_owned = true; cap_stopdac |= dualcap.stop_dac; dualcap.active = false;
     }
+    if (sensla.active && sensla.conn_id == conn_id) {
+        cap_owned = true; sensla.active = false;
+    }
     if (chgscan.active && chgscan.conn_id == conn_id) {   /* captured, not yet streaming: free the bus */
         chgscan.active = false;
         fpga_capture_psram_release();
+    }
+    if (sensla.reading && sensla.conn_id == conn_id) {    /* captured, not yet streaming: free the bus */
+        sensla.reading = false;
+        fpga_la_psram_release();
     }
     if (cap_owned) {
         fpga_capture_abort();              /* also turns SET_TRIGGER off */
@@ -1462,8 +1654,12 @@ void handle_measure(int conn_id, const char *json) {
 }
 
 /* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}: an I2C instance's
-   SDA/SCL captured, 4 samples per byte (see fpga_i2c_la_capture). SPI and UART instances: use
-   la_capture on their pins. */
+   SDA/SCL captured, 4 samples per byte (oldest in the high bits: bit7 = scl(s0), bit6 = sda(s0) ...
+   bit0 = sda(s3)). SPI and UART instances: use la_capture on their pins.
+   "trigger":"start" (the default) waits up to "timeout_ms" (SENSOR_LA_TIMEOUT_DEFAULT_MS) for the
+   bus's next START (SDA falling) and keeps 1/8 of the capture before it; "none" captures at once.
+   Arm here, complete on the poll (sensla). */
+#define SENSOR_LA_TIMEOUT_DEFAULT_MS 2000u
 void handle_sensor_la(int conn_id, const char *json) {
     char inst[40] = {0}, err[SM_ERR_MAX];
     unsigned sda = 0, scl = 0;
@@ -1472,6 +1668,7 @@ void handle_sensor_la(int conn_id, const char *json) {
         send_error(conn_id, err[0] ? err : "sensor_la captures I2C sensors only; use la_capture for SPI and UART pins");
         return;
     }
+    if (sda == 0 || scl == 0 || sda > LA_PINS_COUNT || scl > LA_PINS_COUNT) { send_error(conn_id, "la capture failed"); return; }
     char samples_s[16] = {0};
     json_get_value(json, "samples", samples_s, sizeof(samples_s));
     /* "samples" here = packed capture bytes (4 raw {SCL,SDA} samples per byte) */
@@ -1482,13 +1679,73 @@ void handle_sensor_la(int conn_id, const char *json) {
         send_samples_range(conn_id, SIGNAL_BUF_SIZE, NULL);
         return;
     }
-    if (!heavy_begin(conn_id)) return;
-    if (fpga_i2c_la_capture(adc_cmd_buf, bytes, sr_hz, sda, scl) != 0) {
+    char trig_s[16] = {0};
+    bool wait_start = true;
+    if (json_get_value(json, "trigger", trig_s, sizeof(trig_s)) && strcmp(trig_s, "null") != 0) {
+        if      (strcmp(trig_s, "start") == 0) wait_start = true;
+        else if (strcmp(trig_s, "none") == 0)  wait_start = false;
+        else { send_error(conn_id, "trigger must be \"start\" or \"none\""); return; }
+    }
+    uint32_t timeout_ms = SENSOR_LA_TIMEOUT_DEFAULT_MS;
+    char to_s[16] = {0};
+    if (json_get_value(json, "timeout_ms", to_s, sizeof(to_s)) && strcmp(to_s, "null") != 0) {
+        char *end = NULL;
+        long ms = strtol(to_s, &end, 10);
+        if (end == to_s || *end != '\0' || ms < 1 || ms > (long)LA_TRIGGER_TIMEOUT_MAX_MS) {
+            send_error(conn_id, "timeout_ms must be 1..600000");
+            return;
+        }
+        timeout_ms = (uint32_t)ms;
+    }
+
+    const size_t total = bytes * 4u;
+    la_trigger_t trig;
+    memset(&trig, 0, sizeof(trig));
+    uint32_t k = 0, pre = 0;
+    if (wait_start) {
+        /* the pre-trigger needs the change capture (gateware >= v50; the emulation image is v54) */
+        k = la_change_divisor_pre(sr_hz, signal_engine_fpga_version());
+        if (!k) {
+            snprintf(err, sizeof(err), "sensor_la trigger \"start\" needs gateware v%u or newer (this pod runs v%u); "
+                     "send \"trigger\":\"none\"", (unsigned)LA_CHANGE_MIN_GW, (unsigned)signal_engine_fpga_version());
+            send_error(conn_id, err);
+            return;
+        }
+        pre = (uint32_t)(total / 8u);
+        trig.present     = true;
+        trig.la          = (uint8_t)sda;
+        trig.edge        = LA_EDGE_FALLING;   /* on an idle bus the first SDA fall is a START */
+        trig.timeout_ms  = timeout_ms;
+        trig.pre_samples = pre;
+        if (!capture_trigger_program(conn_id, &trig, true)) return;
+    } else {
+        trig_reply.present = false;
+    }
+    if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
+    float actual = 0.0f;
+    int armed = k ? fpga_la_change_start(total - pre, k, true)
+                  : fpga_la_capture_psram_start(total, sr_hz, &actual);
+    if (k) actual = 48e6f / (float)k;
+    if (armed != 0) {
         heavy_release(conn_id);
+        capture_trigger_cancel(&trig);
         send_error(conn_id, "la capture failed");
         return;
     }
-    bulk_begin(conn_id, bytes, false);   /* paced send; frees the gate when done */
+    capture_trigger_armed(conn_id, &trig);
+    if (trig.present)
+        snprintf(trigwait.msg, sizeof(trigwait.msg), "trigger timeout: no I2C traffic on LA%u (SDA of %s) within %lu ms",
+                 sda, inst, (unsigned long)timeout_ms);
+    last_cap.valid = false;   /* this capture overwrites the LA PSRAM region */
+    memset(&sensla, 0, sizeof(sensla));
+    sensla.active  = true;
+    sensla.conn_id = conn_id;
+    sensla.bytes   = bytes;
+    sensla.sda_bit = (uint8_t)(sda - 1u);
+    sensla.scl_bit = (uint8_t)(scl - 1u);
+    sensla.k       = k;
+    sensla.pre     = pre;
+    sensla.rate_hz = (uint32_t)lroundf(actual);
 }
 
 /* la_capture: general multi-channel logic-analyzer snapshot of ALL 14 LA
