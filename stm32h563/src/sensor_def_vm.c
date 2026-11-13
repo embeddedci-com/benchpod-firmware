@@ -584,12 +584,24 @@ static int run(sd_inst_t *in, uint16_t code, uint16_t base, bool frag, uint64_t 
             NEED(1);
             uint64_t a = in->stack[in->sp - 1];
             if (sdv_is_str(a)) FAIL(SD_E_EVAL, "a string as a register address");
-            int64_t addr = sd_to_i64(sdv_d(a)) - (int64_t)sdp_hdr(in->prog)->page;
-            unsigned k = op == OP_REG ? 1u : 2u, v = 0;
-            for (unsigned i = 0; i < k; i++) {
-                int64_t ad = addr + (int64_t)i;
-                unsigned b = (in->regsrc && ad >= 0 && ad < 256) ? in->regsrc[ad] : 0u;
-                v = op == OP_REG16LE ? (v | (b << (8 * i))) : ((v << 8) | b);
+            const sdp_hdr_t *ph = sdp_hdr(in->prog);
+            int64_t ra = sd_to_i64(sdv_d(a));
+            /* word registers: reg[p] is the 16-bit register (reg16le[p] its bytes swapped) */
+            unsigned k = (op == OP_REG && ph->reg_bytes != 2) ? 1u : 2u, v = 0;
+            if (ph->reg_bytes == 2 || ph->cmap) {
+                unsigned ix;
+                bool ok = sd_map_index(in->prog, ra, &ix);
+                for (unsigned i = 0; i < k; i++) {
+                    unsigned b = (in->regsrc && ok) ? in->regsrc[(ix + i) & 0xFFu] : 0u;
+                    v = op == OP_REG16LE ? (v | (b << (8 * i))) : ((v << 8) | b);
+                }
+            } else {
+                int64_t addr = ra - (int64_t)ph->page;
+                for (unsigned i = 0; i < k; i++) {
+                    int64_t ad = addr + (int64_t)i;
+                    unsigned b = (in->regsrc && ad >= 0 && ad < 256) ? in->regsrc[ad] : 0u;
+                    v = op == OP_REG16LE ? (v | (b << (8 * i))) : ((v << 8) | b);
+                }
             }
             in->stack[in->sp - 1] = sdv_num(v);
             break;

@@ -26,6 +26,54 @@ static const sdp_entry_t *entries(const sd_inst_t *in) {
     return (const sdp_entry_t *)(const void *)(in->prog + sd_h(in)->entries);
 }
 
+static const sdp_block_t *blocks(const sdp_hdr_t *h, const uint8_t *prog) {
+    return (const sdp_block_t *)(const void *)(prog + h->blocks);
+}
+
+bool sd_map_index(const uint8_t *prog, int64_t addr, unsigned *idx) {
+    const sdp_hdr_t *h = sdp_hdr(prog);
+    if (h->reg_bytes == 2) {
+        if (addr < 0 || addr > 255) return false;
+        *idx = 2u * ((unsigned)addr & 0x7Fu);
+        return true;
+    }
+    if (h->cmap) {
+        const sdp_block_t *b = blocks(h, prog);
+        for (unsigned i = 0; i < h->n_blocks; i++)
+            if (addr >= b[i].addr && addr < (int64_t)b[i].addr + b[i].span) {
+                *idx = (b[i].idx + (unsigned)(addr - b[i].addr)) & 0xFFu;
+                return true;
+            }
+        return false;
+    }
+    int64_t a = addr - (int64_t)h->page;
+    if (a < 0 || a > 255) return false;
+    *idx = (unsigned)a;
+    return true;
+}
+
+int32_t sd_map_addr(const uint8_t *prog, unsigned idx) {
+    const sdp_hdr_t *h = sdp_hdr(prog);
+    idx &= 0xFFu;
+    if (h->reg_bytes == 2) return (int32_t)(idx >> 1);
+    if (h->cmap) {
+        const sdp_block_t *b = blocks(h, prog);
+        for (unsigned i = 0; i < h->n_blocks; i++) {
+            unsigned off = (idx - b[i].idx) & 0xFFu;
+            if (off < b[i].span) return (int32_t)b[i].addr + (int32_t)off;
+        }
+        return -1;
+    }
+    return (int32_t)(idx + h->page);
+}
+
+/* Command map: the base byte of each high command byte (constant, read-only). */
+static void put_bases(const sd_inst_t *in, uint8_t *img) {
+    const sdp_hdr_t *h = sd_h(in);
+    const uint8_t *b = in->prog + h->bases;
+    for (unsigned i = 0; i < h->n_bases; i++) img[b[2 * i]] = b[2 * i + 1];
+}
+
 static bool is_regs(const sd_inst_t *in) {
     return in && in->prog && (sd_h(in)->kind == SD_KIND_I2C || sd_h(in)->kind == SD_KIND_SPI);
 }
@@ -104,6 +152,7 @@ static int rewrite(sd_inst_t *in, uint8_t *img) {
         int rc = write_entry(in, &e[i], i, img, true);
         if (rc) return rc;
     }
+    put_bases(in, img);
     return SD_OK;
 }
 
@@ -122,6 +171,7 @@ static int power_on(sd_inst_t *in, uint8_t img[SD_REGIMAGE], sd_img_result_t *re
         rc = write_entry(in, &e[i], i, tmp, true);
         if (rc) return rc;
     }
+    put_bases(in, tmp);
     /* phase 2: the data entries again, against the power-on configuration (only when an
        expression reads reg[]; otherwise phase 1 already gave the final values) */
     if (h->uses_reg) {
@@ -181,7 +231,14 @@ int sd_regs_after_write(sd_inst_t *in, const uint8_t live[SD_REGIMAGE], int addr
     if (!is_regs(in) || !live || !img || !res) return SD_E_ARG;
     const sdp_hdr_t *h = sd_h(in);
     in->err.code = 0;
-    in->vars[SDV_BUILTIN + SDB_WRITTEN] = sdv_num(addr < 0 ? -1.0 : (double)(addr + h->page));
+    /* addr is the image index the DUT wrote; `written` is its register address (word
+       registers: the register, and `value` the whole 16-bit word as it now reads) */
+    int32_t wa = addr < 0 ? -1 : sd_map_addr(in->prog, (unsigned)addr);
+    if (addr >= 0 && h->reg_bytes == 2) {
+        unsigned m = (unsigned)addr & 0xFEu;
+        value = (live[m] << 8) | live[m + 1u];
+    }
+    in->vars[SDV_BUILTIN + SDB_WRITTEN] = sdv_num(wa < 0 ? -1.0 : (double)wa);
     in->vars[SDV_BUILTIN + SDB_VALUE] = sdv_num(value < 0 ? -1.0 : (double)value);
     sd_vm_begin(in);
     take_base(in, live);
@@ -252,6 +309,8 @@ int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *o) {
     o->fifo_drop_newest = h->fifo_drop_newest;
     o->fifo_depth = h->fifo_depth;
     o->n_commands = h->n_cmds;
+    o->register_bytes = h->reg_bytes == 2 ? 2 : 1;
+    o->command_map = h->cmap != 0;
     return SD_OK;
 }
 
@@ -263,6 +322,8 @@ int sd_regs_ro_map(const sd_inst_t *in, uint8_t ro[SD_REGIMAGE / 8]) {
     memset(ro, 0, SD_REGIMAGE / 8);
     for (unsigned a = 0; a < SD_REGIMAGE; a++)
         if (own[a] < h->n_entries && (e[own[a]].flags & SDE_RO)) ro[a >> 3] |= (uint8_t)(1u << (a & 7u));
+    const uint8_t *b = in->prog + h->bases;   /* the command map's base bytes */
+    for (unsigned i = 0; i < h->n_bases; i++) ro[b[2 * i] >> 3] |= (uint8_t)(1u << (b[2 * i] & 7u));
     return SD_OK;
 }
 

@@ -88,6 +88,8 @@ typedef struct {
     uint8_t    let_hi;                       /* collected: highest let read + 1 */
     sd_err_t  *err;
     bool       failed;
+    uint32_t   last_addr;                    /* image_index: the register address it read */
+    bool       cm_laid;                      /* command map: the layout is done */
 } sd_cc_t;
 
 /* errors: record the first one */

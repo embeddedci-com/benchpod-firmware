@@ -129,7 +129,15 @@ typedef struct {
     uint8_t  current, excitation;
     uint16_t value;
     double   range_min, range_max;
+    /* i2c pointer modes (gateware v54 emulation image, I2C_CONFIG flags bit6/bit7) */
+    uint8_t  reg_bytes;          /* 2: word registers (pointer p = image bytes 2p, 2p+1) */
+    uint8_t  cmap;               /* 1: 16-bit command map (no page): image[h] = base, at = base ^ l */
+    uint8_t  n_blocks, n_bases;
+    uint16_t blocks, bases;      /* sdp_block_t[n_blocks] (by address); u8 {h, base}[n_bases] */
 } sdp_hdr_t;
+
+/* Command map: the image bytes of one address range (an entry's address and what follows). */
+typedef struct { uint16_t addr; uint8_t idx, span; } sdp_block_t;
 
 /* Program offsets are 16 bits; every record and the code fit SD_PROG_MAX. */
 _Static_assert(SD_PROG_MAX <= 0xFFFFu, "program offsets are 16-bit");
@@ -148,6 +156,13 @@ static inline const char *sdp_str(const uint8_t *p, uint16_t off, uint8_t *len) 
     *len = p[off];
     return (const char *)p + off + 1;
 }
+
+/* ---- addressing (sensor_def_regs.c) ----
+   Register address <-> image index for the target's pointer mode: byte (8-bit, or 16-bit inside
+   `page`), word registers (index of the register's MSB) or the command map.  sd_map_index: true
+   when the address is served; sd_map_addr: -1 when no address reaches that byte. */
+bool    sd_map_index(const uint8_t *prog, int64_t addr, unsigned *idx);
+int32_t sd_map_addr(const uint8_t *prog, unsigned idx);
 
 /* ---- opcodes ---- */
 enum {

@@ -234,6 +234,9 @@ typedef struct {
     uint8_t  fifo_at, fifo_frame_len, fifo_drop_newest;
     uint16_t fifo_depth;
     uint8_t  n_commands;
+    /* i2c pointer mode */
+    uint8_t  register_bytes;     /* 1 bytes, 2 word registers (pointer p = image bytes 2p, 2p+1) */
+    bool     command_map;        /* 16-bit commands in any high byte (no page) */
 } sd_bus_info_t;
 
 int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *out);

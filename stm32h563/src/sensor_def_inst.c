@@ -40,7 +40,9 @@ int sd_inst_init(sd_inst_t *in, const void *prog, size_t prog_len, sd_err_t *err
         !in_prog(L, h->rules, h->n_rules * sizeof(sdp_rule_t)) ||
         !in_prog(L, h->msgs, h->n_msgs * sizeof(sdp_msg_t)) ||
         !in_prog(L, h->reqs, h->n_reqs * sizeof(sdp_req_t)) ||
-        (h->n_entries && !in_prog(L, h->owner, SD_REGIMAGE)))
+        (h->n_entries && !in_prog(L, h->owner, SD_REGIMAGE)) ||
+        !in_prog(L, h->blocks, h->n_blocks * sizeof(sdp_block_t)) || !in_prog(L, h->bases, 2u * h->n_bases) ||
+        (h->reg_bytes != 0 && h->reg_bytes != 2) || h->cmap > 1 || (h->reg_bytes && h->cmap))
         goto bad;
     memset(in, 0, sizeof(*in));
     in->prog = p;

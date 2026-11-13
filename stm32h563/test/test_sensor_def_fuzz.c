@@ -146,9 +146,9 @@ static void mutate_in_string(char *b, size_t n) {
 }
 
 static void test_fixtures(void) {
-    static const char *names[] = { "bmp280", "bme280", "sht4x", "mpu6050", "gps_nmea" };
+    static const char *names[] = { "bmp280", "bme280", "sht4x", "mpu6050", "gps_nmea", "word_tmp117", "cmap_scd4x" };
     static char b[SD_JSON_MAX + 64];
-    for (unsigned i = 0; i < 5; i++) {
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         char path[96];
         snprintf(path, sizeof(path), "fixtures/sensor_defs/%s.json", names[i]);
         size_t n;
@@ -205,6 +205,17 @@ static void test_hostile(void) {
     for (int i = 0; i < 300; i++) { char e[48]; snprintf(e, sizeof(e), "%s{\"at\":%d,\"u8\":\"%d\"}", i ? "," : "", i % 256, i); n = cat(j, sizeof(j), n, e); }
     n = cat(j, sizeof(j), n, "]}");
     CHECK(try_def(j, n) == SD_E_LIMIT, "300 registers refused");
+    /* the command map's worst case: 255 one-byte commands, each in its own high byte (every
+       base byte taken), then 256 that cannot all fit */
+    for (int lim = 255; lim <= 256; lim++) {
+        n = 0;
+        n = cat(j, sizeof(j), n, "{\"format\":1,\"kind\":\"i2c\",\"name\":\"m\",\"i2c\":{\"address\":16,\"register_address_bits\":16},\"commands\":[");
+        for (int i = 0; i < lim && i < 255; i++) { char e[64]; snprintf(e, sizeof(e), "%s{\"command\":%d,\"answer\":[%d]}", i ? "," : "", i * 256 + 7, i); n = cat(j, sizeof(j), n, e); }
+        if (lim == 256) n = cat(j, sizeof(j), n, ",{\"command\":1800,\"answer\":[1,2]}");
+        n = cat(j, sizeof(j), n, "]}");
+        int mrc = try_def(j, n);
+        CHECK(lim == 255 ? mrc == SD_E_LIMIT || mrc == SD_OK : mrc != SD_OK, "command map, %d commands: %d", lim, mrc);
+    }
     /* a program that would not fit 8 KB: many long templates */
     n = 0;
     n = cat(j, sizeof(j), n, "{\"format\":1,\"kind\":\"uart\",\"name\":\"u\",\"messages\":[");

@@ -910,6 +910,169 @@ static void test_errors(void) {
     CHECK(rc == SD_E_SCHEMA && strstr(m, "registers[11]") && strstr(m, "unknown key 'u9'"), "unknown key report: %s", m);
 }
 
+/* ---- word registers (i2c.register_bytes: 2) ------------------------------------------------ */
+static void test_word_registers(void) {
+    static sensor_t s;
+    const char *json =
+        "{\"format\":1,\"kind\":\"i2c\",\"name\":\"tmpw\","
+        "\"params\":[{\"key\":\"temperature_c\",\"min\":-55,\"max\":150,\"default\":25}],"
+        "\"i2c\":{\"address\":72,\"register_bytes\":2},"
+        "\"let\":[{\"off\":\"s16(reg[0x07]) * 0.0078125\"}],"
+        "\"registers\":[{\"at\":0,\"s16be\":\"(temperature_c + off) / 0.0078125\"},{\"at\":1,\"u16be\":544},"
+        "{\"at\":7,\"s16be\":0},{\"at\":15,\"u16be\":279,\"writable\":false},{\"at\":254,\"u16be\":21577}],"
+        "\"on_write\":[{\"when\":\"written == 0x01 && (value & 0x0002)\",\"do\":\"reset\"},"
+        "{\"when\":\"written == 0x02\",\"do\":{\"set\":{\"at\":3,\"u16be\":\"value + 1\"}}}]}";
+    sd_err_t e;
+    char m[200];
+    int rc = compile_text(&s, json, strlen(json), &e);
+    sd_err_format(&e, m, sizeof(m));
+    CHECK(rc == SD_OK, "word-register definition compiles: %s", m);
+    if (rc) return;
+    sd_bus_info_t bi;
+    CHECK(sd_bus_info(&s.in, &bi) == SD_OK && bi.register_bytes == 2 && !bi.command_map && bi.addr_bits == 8, "bus info: word registers");
+    uint8_t img[256], live[256], ro[32];
+    sd_img_result_t r;
+    CHECK(sd_regs_power_on(&s.in, img, &r) == SD_OK, "power on");
+    CHECK(img[0] == 0x0C && img[1] == 0x80 && img[2] == 0x02 && img[3] == 0x20, "regs 0x00, 0x01 at bytes 0..3: %02X %02X %02X %02X", img[0], img[1], img[2], img[3]);
+    CHECK(img[0x1E] == 0x01 && img[0x1F] == 0x17, "reg 0x0F at bytes 0x1E/0x1F");
+    CHECK(img[0xFC] == 0x54 && img[0xFD] == 0x49, "reg 0xFE aliases 0x7E: bytes 0xFC/0xFD");
+    CHECK(sd_regs_ro_map(&s.in, ro) == SD_OK && (ro[0x1E >> 3] & (1u << (0x1E & 7))) && (ro[0x1F >> 3] & (1u << (0x1F & 7))) &&
+          !(ro[0] & 1u), "writable:false covers the word");
+    /* the DUT writes TEMP_OFFSET = +1 C (0x0080): reg[0x07] is the word, the result follows */
+    memcpy(live, img, 256);
+    live[14] = 0x00;
+    live[15] = 0x80;
+    CHECK(sd_regs_after_write(&s.in, live, 15, 0x80, img, &r) == SD_OK && img[0] == 0x0D && img[1] == 0x00, "offset word: %02X %02X", img[0], img[1]);
+    /* `written` is the register, `value` the whole word */
+    memcpy(live, img, 256);
+    live[4] = 0x12;
+    live[5] = 0x34;
+    CHECK(sd_regs_after_write(&s.in, live, 5, 0x34, img, &r) == SD_OK && img[6] == 0x12 && img[7] == 0x35, "written/value as a word: %02X %02X", img[6], img[7]);
+    memcpy(live, img, 256);
+    live[2] = 0x00;
+    live[3] = 0x22;
+    CHECK(sd_regs_after_write(&s.in, live, 3, 0x22, img, &r) == SD_OK && r.reset && img[14] == 0 && img[15] == 0 && img[0] == 0x0C, "soft reset from the word's bit 1");
+    /* errors */
+    static const struct { const char *j, *msg; } bad[] = {
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":72,\"register_bytes\":2},"
+          "\"registers\":[{\"at\":5,\"u16be\":1},{\"at\":133,\"u16be\":2}]}", "same register" },
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":72,\"register_bytes\":2,\"register_address_bits\":16,\"page\":256},"
+          "\"registers\":[{\"at\":256,\"u16be\":1}]}", "register_bytes: 2 needs" },
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":72,\"register_bytes\":2,\"wrap\":15},"
+          "\"registers\":[{\"at\":5,\"u16be\":1}]}", "wrap does not apply" },
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":72,\"register_bytes\":3},"
+          "\"registers\":[{\"at\":5,\"u16be\":1}]}", "i2c.register_bytes" },
+    };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        rc = compile_text(&s, bad[i].j, strlen(bad[i].j), &e);
+        sd_err_format(&e, m, sizeof(m));
+        CHECK(rc != SD_OK && strstr(m, bad[i].msg), "word error %u: %s", i, m);
+    }
+}
+
+/* ---- command map (register_address_bits: 16 without page) ---------------------------------- */
+static unsigned cm_at(const uint8_t *img, unsigned cmd) { return (unsigned)img[cmd >> 8] ^ (cmd & 0xFFu); }
+
+static void test_command_map(void) {
+    static sensor_t s;
+    const char *json =
+        "{\"format\":1,\"kind\":\"i2c\",\"name\":\"cmap\","
+        "\"params\":[{\"key\":\"tc\",\"min\":0,\"max\":100,\"default\":10}],"
+        "\"i2c\":{\"address\":68,\"register_address_bits\":16},"
+        "\"commands\":[{\"command\":9216,\"busy_us\":15000,\"answer\":[1,2,3,4,5,\"tc\"]},"      /* 0x2400 */
+        "{\"command\":9238,\"busy_us\":4000,\"answer\":[17,18,19,20,21,22]},"                  /* 0x2416 */
+        "{\"command\":57344,\"answer\":[33,34,35,36,37,38]},"                                  /* 0xE000 */
+        "{\"command\":62253,\"answer\":[128,16,225]},"                                         /* 0xF32D */
+        "{\"command\":9245,\"write_bytes\":3},"                                                /* 0x241D */
+        "{\"command\":8984,\"answer\":[\"reg[0x241D]\",\"reg[0x241E]\",\"reg[0x241F]\"]},"     /* 0x2318 */
+        "{\"command\":14214,\"busy_us\":500}],"                                                /* 0x3786 */
+        "\"on_write\":[{\"when\":\"written == 0x241F\",\"do\":{\"set\":{\"at\":62253,\"u8\":\"value\"}}}]}";
+    sd_err_t e;
+    char m[200];
+    int rc = compile_text(&s, json, strlen(json), &e);
+    sd_err_format(&e, m, sizeof(m));
+    CHECK(rc == SD_OK, "command-map definition compiles: %s", m);
+    if (rc) return;
+    sd_bus_info_t bi;
+    CHECK(sd_bus_info(&s.in, &bi) == SD_OK && bi.command_map && bi.addr_bits == 16 && bi.register_bytes == 1 && bi.n_commands == 7 && bi.page == 0, "bus info: command map");
+    uint8_t img[256], live[256], ro[32];
+    sd_img_result_t r;
+    CHECK(sd_regs_power_on(&s.in, img, &r) == SD_OK, "power on");
+    /* the gateware's lookup (image[h] ^ l) reaches each answer */
+    static const struct { unsigned cmd; uint8_t a[6]; unsigned n; } ans[] = {
+        { 0x2400, { 1, 2, 3, 4, 5, 10 }, 6 }, { 0x2416, { 17, 18, 19, 20, 21, 22 }, 6 },
+        { 0xE000, { 33, 34, 35, 36, 37, 38 }, 6 }, { 0xF32D, { 128, 16, 225 }, 3 }, { 0x2318, { 0, 0, 0 }, 3 },
+    };
+    for (unsigned i = 0; i < sizeof(ans) / sizeof(ans[0]); i++) {
+        unsigned ix = cm_at(img, ans[i].cmd);
+        bool ok = true;
+        for (unsigned k = 0; k < ans[i].n; k++) ok = ok && img[(ix + k) & 0xFF] == ans[i].a[k];
+        CHECK(ok, "command 0x%04X answers at byte 0x%02X", ans[i].cmd, ix);
+    }
+    /* sd_command's image index is the same byte (the manager sets CMD there) */
+    static const unsigned order[] = { 0x2400, 0x2416, 0xE000, 0xF32D, 0x241D, 0x2318, 0x3786 };
+    for (unsigned i = 0; i < 7; i++) {
+        sd_command_t c;
+        CHECK(sd_command(&s.in, i, &c) == SD_OK && c.at == cm_at(img, order[i]), "sd_command %u at the map's byte", i);
+    }
+    /* no two blocks or base bytes share a byte; base bytes are read-only */
+    uint8_t seen[256] = { 0 };
+    static const unsigned spans[] = { 6, 6, 6, 3, 3, 3, 1 };
+    bool clash = false;
+    static const unsigned his[] = { 0x24, 0xE0, 0xF3, 0x23, 0x37 };
+    for (unsigned i = 0; i < 5; i++) seen[his[i]] = 1;
+    for (unsigned i = 0; i < 7; i++)
+        for (unsigned k = 0; k < spans[i]; k++) { unsigned ix = (cm_at(img, order[i]) + k) & 0xFF; clash |= seen[ix]; seen[ix] = 1; }
+    CHECK(!clash, "the layout keeps every block and base byte apart");
+    CHECK(sd_regs_ro_map(&s.in, ro) == SD_OK && (ro[0x24 >> 3] & (1u << (0x24 & 7))) && (ro[0xE0 >> 3] & (1u << (0xE0 & 7))), "base bytes read-only");
+    /* a set command's data: reg[] and `written` see it at its command's addresses */
+    memcpy(live, img, 256);
+    unsigned w = cm_at(img, 0x241D);
+    live[w] = 0x01; live[(w + 1) & 0xFF] = 0xF4; live[(w + 2) & 0xFF] = 0x33;
+    CHECK(sd_regs_after_write(&s.in, live, (int)((w + 2) & 0xFF), 0x33, img, &r) == SD_OK, "after write");
+    unsigned g = cm_at(img, 0x2318);
+    CHECK(img[g] == 0x01 && img[(g + 1) & 0xFF] == 0xF4 && img[(g + 2) & 0xFF] == 0x33, "0x2318 answers the written data");
+    CHECK(img[cm_at(img, 0xF32D)] == 0x33, "written == 0x241F (the third data byte)");
+    CHECK(img[0x24] == live[0x24], "base byte unchanged");
+    /* a parameter change rebuilds the answer; a dynamic answer keeps the base bytes */
+    setp(&s, "tc", 42);
+    memcpy(live, img, 256);
+    CHECK(sd_regs_rebuild(&s.in, live, img, &r) == SD_OK && img[(cm_at(img, 0x2400) + 5) & 0xFF] == 42, "param in an answer");
+    /* errors */
+    static const struct { const char *j, *msg; } bad[] = {
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},"
+          "\"commands\":[{\"command\":9216,\"answer\":[1,2,3,4,5,6]},{\"command\":9219,\"answer\":[1]}]}", "run into the next address" },
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16,\"page\":9216},"
+          "\"commands\":[{\"command\":9216,\"write_bytes\":2,\"answer\":[1]}]}", "write_bytes is for the command map" },
+        { "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},"
+          "\"commands\":[{\"command\":9216,\"answer\":[1]}],\"conversion\":{\"trigger\":4660}}", "no register or command entry" },
+    };
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        rc = compile_text(&s, bad[i].j, strlen(bad[i].j), &e);
+        sd_err_format(&e, m, sizeof(m));
+        CHECK(rc != SD_OK && strstr(m, bad[i].msg), "command-map error %u: %s", i, m);
+    }
+    /* too much for 256 bytes: three 100-byte answers in different high bytes */
+    {
+        static char big[8192];
+        size_t o = (size_t)snprintf(big, sizeof(big), "{\"format\":1,\"kind\":\"i2c\",\"name\":\"x\",\"i2c\":{\"address\":68,\"register_address_bits\":16},\"commands\":[");
+        for (unsigned q = 0; q < 3; q++) {
+            o += (size_t)snprintf(big + o, sizeof(big) - o, "%s{\"command\":%u,\"answer\":[", q ? "," : "", 0x1000u * (q + 1));
+            for (unsigned k = 0; k < 100; k++) o += (size_t)snprintf(big + o, sizeof(big) - o, "%s%u", k ? "," : "", k);
+            o += (size_t)snprintf(big + o, sizeof(big) - o, "]}");
+        }
+        o += (size_t)snprintf(big + o, sizeof(big) - o, "]}");
+        rc = compile_text(&s, big, o, &e);
+        sd_err_format(&e, m, sizeof(m));
+        CHECK(rc != SD_OK && strstr(m, "do not fit"), "a layout that does not fit: %s", m);
+    }
+    /* the old single window is unchanged: page given -> no map */
+    const char *win = "{\"format\":1,\"kind\":\"i2c\",\"name\":\"w\",\"i2c\":{\"address\":68,\"register_address_bits\":16,\"page\":9216},"
+                      "\"commands\":[{\"command\":9216,\"answer\":[7,8]}]}";
+    CHECK(compile_text(&s, win, strlen(win), &e) == SD_OK && sd_bus_info(&s.in, &bi) == SD_OK && !bi.command_map && bi.page == 0x2400, "page keeps the window");
+    CHECK(sd_regs_power_on(&s.in, img, &r) == SD_OK && img[0] == 7 && img[1] == 8, "window image at offset 0");
+}
+
 /* ---- sizes -------------------------------------------------------------------------------- */
 static void test_sizes(void) {
     static const char *names[] = { "bmp280", "bme280", "sht4x", "mpu6050", "gps_nmea" };
@@ -937,6 +1100,8 @@ int main(void) {
     test_analog();
     test_stimulus();
     test_errors();
+    test_word_registers();
+    test_command_map();
     test_sizes();
     printf("  BMP/BME images differing from the C models: %u of %u cases (see notes)\n", g_bosch_diff_cases, g_bosch_cases);
     if (fails) { printf("test_sensor_def: %d FAILED\n", fails); return 1; }

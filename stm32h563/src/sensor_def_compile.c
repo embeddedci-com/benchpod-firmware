@@ -249,11 +249,23 @@ static const char *const k_types[SDT_N] = {
     "u32le", "s32be", "s32le", "bytes", "text" };
 static const uint8_t k_type_len[SDT_BYTES] = { 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4 };
 
-/* The image index of a register address (16-bit addressing: inside the page window). */
+/* The image index of a register address (16-bit addressing: inside the page window; word
+   registers: the register's MSB; command map: placed once every entry is known). */
 static bool image_index(sd_cc_t *c, uint32_t v, uint32_t *idx) {
     uint32_t a;
     const sdp_hdr_t *h = c->h;
     if (!get_int(c, v, 0, h->addr_bits == 16 ? 65535 : 255, &a)) return false;
+    c->last_addr = a;
+    if (h->reg_bytes == 2) { *idx = 2u * (a & 0x7Fu); return true; }
+    if (h->cmap) {
+        unsigned ix = 0;
+        if (c->cm_laid && !sd_map_index(c->p, a, &ix)) {
+            cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "no register or command entry at this address (command map)", NULL);
+            return false;
+        }
+        *idx = ix;
+        return true;
+    }
     if (a < h->page || a - h->page > h->wrap) {
         cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "register outside the image (page / wrap)", NULL);
         return false;
@@ -268,12 +280,13 @@ static bool compile_entry(sd_cc_t *c, uint32_t obj, sdp_entry_t *e, bool command
         "name", "reload", "writable", "description", NULL };
     static const char *const keys_cmd[] = { "command", "answer", "busy_us", "u8", "s8", "u16be",
         "u16le", "s16be", "s16le", "u24be", "u24le", "s24be", "s24le", "u32be", "u32le", "s32be",
-        "s32le", "bytes", "text", "name", "reload", "writable", "description", NULL };
+        "s32le", "bytes", "text", "name", "reload", "writable", "description", "write_bytes", NULL };
     if (!check_keys(c, obj, command ? keys_cmd : keys_reg)) return false;
     memset(e, 0, sizeof(*e));
     uint32_t it = obj, k, v, at_v = 0, val_v = 0;
     int type = -1, reload = -1;
     bool has_at = false, ro = false;
+    uint32_t wb = 0;
     while (sdj_obj_next(J, &it, &k, &v)) {
         if (sdj_key_is(J, k, command ? "command" : "at")) { at_v = v; has_at = true; continue; }
         if (sdj_key_is(J, k, "name")) {
@@ -288,6 +301,11 @@ static bool compile_entry(sd_cc_t *c, uint32_t obj, sdp_entry_t *e, bool command
             continue;
         }
         if (sdj_key_is(J, k, "writable")) { bool w; if (!get_bool(c, v, &w)) return false; ro = !w; continue; }
+        if (sdj_key_is(J, k, "write_bytes")) {
+            if (!get_int(c, v, 0, 255, &wb)) return false;
+            if (!c->h->cmap) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, v), -1, "write_bytes is for the command map (register_address_bits: 16 without page)", NULL); return false; }
+            continue;
+        }
         if (sdj_key_is(J, k, "busy_us")) { uint32_t b; if (!get_int(c, v, 0, 10000000, &b)) return false; e->busy_us = b; continue; }
         int t = -1;
         if (sdj_key_is(J, k, "answer")) t = SDT_BYTES;
@@ -298,10 +316,24 @@ static bool compile_entry(sd_cc_t *c, uint32_t obj, sdp_entry_t *e, bool command
         val_v = v;
     }
     if (!has_at) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, obj), -1, command ? "missing 'command'" : "missing 'at'", NULL); return false; }
+    /* the command map: a command with no answer is acknowledged only (its busy time, the data
+       bytes it writes), so it needs no value */
+    if (type < 0 && command && c->h->cmap) {
+        uint32_t idx;
+        if (!image_index(c, at_v, &idx)) return false;
+        e->at = (uint8_t)idx;
+        e->type = SDT_RAW;
+        e->flags = SDE_CMD;
+        if (!c->cm_laid) { e->pad = (uint16_t)c->last_addr; e->busy_us |= wb << 24; }
+        return true;
+    }
     if (type < 0) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, obj), -1, command ? "missing 'answer'" : "missing a value (u8, s16be, bytes, ...)", NULL); return false; }
     uint32_t idx;
     if (!image_index(c, at_v, &idx)) return false;
     e->at = (uint8_t)idx;
+    /* word registers and the command map keep the address: the duplicate check and the layout
+       read it (the layout also takes write_bytes from busy_us bits 31:24 and clears them) */
+    if (c->h->reg_bytes == 2 || (c->h->cmap && !c->cm_laid)) e->pad = (uint16_t)c->last_addr;
     e->type = (uint8_t)type;
     uint8_t deps = 0;
     if (type < SDT_BYTES) {
@@ -347,6 +379,112 @@ static bool compile_entry(sd_cc_t *c, uint32_t obj, sdp_entry_t *e, bool command
     if (reload == 1) e->flags |= SDE_DYN;
     if (ro) e->flags |= SDE_RO;
     if (command) e->flags |= SDE_CMD;
+    if (c->h->cmap && !c->cm_laid) e->busy_us |= wb << 24;
+    return true;
+}
+
+/* ---- the command map's layout ----
+   Each distinct address is a block: its entries' bytes, or the bytes a set command writes
+   (write_bytes), whichever is longer.  The gateware points command h:l at image[h] ^ l, so every
+   high byte h in use reserves image byte h for its base, and the base is picked so that all of
+   h's blocks land on free bytes (high bytes with the most bytes first, the lowest base that
+   fits).  Deterministic: the same definition always gets the same layout. */
+static void fmt_addr(char *b, unsigned a) {
+    static const char hx[] = "0123456789ABCDEF";
+    b[0] = '0'; b[1] = 'x';
+    for (int i = 0; i < 4; i++) b[2 + i] = hx[(a >> (12 - 4 * i)) & 15u];
+    b[6] = 0;
+}
+
+static bool cmap_layout(sd_cc_t *c, uint32_t tab, unsigned q, uint32_t where) {
+    sdp_entry_t *e = (sdp_entry_t *)(void *)(c->p + tab);
+    char ab[8];
+    unsigned nb = 0;
+    for (unsigned i = 0; i < q; i++) {
+        bool seen = false;
+        for (unsigned j = 0; j < i && !seen; j++) seen = e[j].pad == e[i].pad;
+        if (!seen) nb++;
+    }
+    uint32_t bt = cc_alloc(c, nb * sizeof(sdp_block_t));
+    if (!bt) return false;
+    sdp_block_t *b = (sdp_block_t *)(void *)(c->p + bt);
+    unsigned n = 0;
+    for (unsigned i = 0; i < q; i++) {   /* insertion by address, span = the longest */
+        unsigned need = e[i].len, wb = e[i].busy_us >> 24;
+        if (wb > need) need = wb;
+        if (need == 0) need = 1;
+        unsigned j = 0;
+        while (j < n && b[j].addr < e[i].pad) j++;
+        if (j < n && b[j].addr == e[i].pad) { if (need > b[j].span) b[j].span = (uint8_t)need; continue; }
+        memmove(&b[j + 1], &b[j], (n - j) * sizeof(sdp_block_t));
+        b[j].addr = e[i].pad;
+        b[j].idx = 0;
+        b[j].span = (uint8_t)need;
+        n++;
+    }
+    for (unsigned j = 0; j + 1 < n; j++)
+        if ((unsigned)b[j].addr + b[j].span > b[j + 1].addr) {
+            fmt_addr(ab, b[j].addr);
+            cc_fail(c, SD_E_SCHEMA, sdj_ws(J, where), -1, "command map: the bytes of %s run into the next address", ab);
+            return false;
+        }
+    uint8_t used[32] = { 0 }, his[256];
+    unsigned nh = 0;
+    for (unsigned j = 0; j < n; j++) {
+        unsigned hb = b[j].addr >> 8;
+        if (!(used[hb >> 3] & (1u << (hb & 7u)))) { used[hb >> 3] |= (uint8_t)(1u << (hb & 7u)); his[nh++] = (uint8_t)hb; }
+    }
+    uint32_t bs = cc_alloc(c, 2u * nh);
+    if (!bs) return false;
+    b = (sdp_block_t *)(void *)(c->p + bt);   /* (cc_alloc does not move the program) */
+    uint8_t done[32] = { 0 };
+    for (unsigned r = 0; r < nh; r++) {
+        int pick = -1;
+        unsigned best = 0;
+        for (unsigned k = 0; k < nh; k++) {   /* the unplaced high byte with the most bytes */
+            if (done[his[k] >> 3] & (1u << (his[k] & 7u))) continue;
+            unsigned tot = 0;
+            for (unsigned j = 0; j < n; j++) if ((b[j].addr >> 8) == his[k]) tot += b[j].span;
+            if (pick < 0 || tot > best) { pick = (int)k; best = tot; }
+        }
+        unsigned hb = his[pick];
+        done[hb >> 3] |= (uint8_t)(1u << (hb & 7u));
+        int base = -1;
+        for (unsigned t = 0; t < 256 && base < 0; t++) {
+            uint8_t tmp[32];
+            memcpy(tmp, used, sizeof(tmp));
+            bool ok = true;
+            for (unsigned j = 0; j < n && ok; j++) {
+                if ((b[j].addr >> 8) != hb) continue;
+                for (unsigned k = 0; k < b[j].span && ok; k++) {
+                    unsigned ix = ((t ^ (b[j].addr & 0xFFu)) + k) & 0xFFu;
+                    if (tmp[ix >> 3] & (1u << (ix & 7u))) ok = false;
+                    else tmp[ix >> 3] |= (uint8_t)(1u << (ix & 7u));
+                }
+            }
+            if (ok) { base = (int)t; memcpy(used, tmp, sizeof(used)); }
+        }
+        if (base < 0) {
+            fmt_addr(ab, hb << 8);
+            cc_fail(c, SD_E_LIMIT, sdj_ws(J, where), -1, "command map: the answers do not fit the 256-byte image (at the commands from %s)", ab);
+            return false;
+        }
+        for (unsigned j = 0; j < n; j++)
+            if ((b[j].addr >> 8) == hb) b[j].idx = (uint8_t)((unsigned)base ^ (b[j].addr & 0xFFu));
+        c->p[bs + 2u * r] = (uint8_t)hb;
+        c->p[bs + 2u * r + 1u] = (uint8_t)base;
+    }
+    c->h->blocks = (uint16_t)bt;
+    c->h->n_blocks = (uint8_t)n;
+    c->h->bases = (uint16_t)bs;
+    c->h->n_bases = (uint8_t)nh;
+    c->cm_laid = true;
+    for (unsigned i = 0; i < q; i++) {
+        unsigned ix = 0;
+        (void)sd_map_index(c->p, e[i].pad, &ix);
+        e[i].at = (uint8_t)ix;
+        e[i].busy_us &= 0x00FFFFFFu;
+    }
     return true;
 }
 
@@ -372,6 +510,16 @@ static bool compile_entries(sd_cc_t *c, uint32_t regs, uint32_t cmds) {
         }
     }
     c->h->n_entries = (uint8_t)q;
+    if (c->h->reg_bytes == 2) {   /* p and p ^ 0x80 are one register on the bus */
+        const sdp_entry_t *e = (const sdp_entry_t *)(const void *)(c->p + tab);
+        for (unsigned i = 0; i < q; i++)
+            for (unsigned j = 0; j < i; j++)
+                if (e[i].pad == (e[j].pad ^ 0x80u)) {
+                    cc_fail(c, SD_E_SCHEMA, sdj_ws(J, regs ? regs : cmds), -1, "word registers: p and p + 0x80 are the same register (the pointer's bit 7 is ignored)", NULL);
+                    return false;
+                }
+    }
+    if (c->h->cmap && !cmap_layout(c, tab, q, regs ? regs : cmds)) return false;
     /* owner map: which entry a byte belongs to (the last one covering it wins) */
     uint32_t own = cc_alloc(c, SD_REGIMAGE);
     if (!own) return false;
@@ -551,7 +699,7 @@ static bool compile_i2c_spi(sd_cc_t *c, uint32_t root, bool spi) {
     h->wrap = 0xFF;
     h->auto_inc = 1;
     if (!spi) {
-        static const char *const keys[] = { "address", "alt_addresses", "register_address_bits", "page", "auto_increment", "wrap", NULL };
+        static const char *const keys[] = { "address", "alt_addresses", "register_address_bits", "page", "auto_increment", "wrap", "register_bytes", NULL };
         if (!sdj_find(J, root, "i2c", &v)) { cc_fail(c, SD_E_SCHEMA, root, -1, "kind i2c needs an 'i2c' section with the address", NULL); return false; }
         if (!check_keys(c, v, keys)) return false;
         uint32_t a;
@@ -579,6 +727,18 @@ static bool compile_i2c_spi(sd_cc_t *c, uint32_t root, bool spi) {
         }
         if (sdj_find(J, v, "auto_increment", &x)) { bool b; if (!get_bool(c, x, &b)) return false; h->auto_inc = b; }
         if (sdj_find(J, v, "wrap", &x)) { if (!get_int(c, x, 0, 255, &a)) return false; h->wrap = (uint8_t)a; }
+        bool has_page = sdj_find(J, v, "page", &x);
+        if (sdj_find(J, v, "register_bytes", &x)) {
+            if (!get_int(c, x, 1, 2, &a)) return false;
+            if (a == 2 && h->addr_bits != 8) { cc_fail(c, SD_E_SCHEMA, sdj_ws(J, x), -1, "register_bytes: 2 needs register_address_bits: 8", NULL); return false; }
+            if (a == 2) h->reg_bytes = 2;
+        }
+        /* 16-bit addresses without a page: the command map (commands with any high byte) */
+        if (h->addr_bits == 16 && !has_page) h->cmap = 1;
+        if ((h->reg_bytes == 2 || h->cmap) && sdj_find(J, v, "wrap", &x)) {
+            cc_fail(c, SD_E_SCHEMA, sdj_ws(J, x), -1, h->cmap ? "wrap does not apply to the command map" : "wrap does not apply to word registers", NULL);
+            return false;
+        }
     } else {
         static const char *const keys[] = { "mode", "read_bit", "increment_bit", "address_mask", "dummy_bytes", NULL };
         static const char *const bkeys[] = { "bit", "value", NULL };
@@ -609,6 +769,7 @@ static bool compile_i2c_spi(sd_cc_t *c, uint32_t root, bool spi) {
         cmds = x;
     }
     if (!compile_entries(c, regs, cmds)) return false;
+    if (h->cmap) c->cm_laid = true;   /* later addresses (conversion, rules, ...) map through it */
 
     if (sdj_find(J, root, "conversion", &v)) {
         static const char *const keys[] = { "trigger", "time_us", "busy", "while_busy", NULL };
