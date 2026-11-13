@@ -249,7 +249,7 @@ static void test_sht4x(void) {
     CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"rh\",\"pins\":{\"sda\":3,\"scl\":4}}"), "start: %s", g_err);
     uint8_t a = g_fpga.t[0].attrs[0xFD];
     CHECK(a & EMU_ATTR_CMD, "0xFD is a command (attr 0x%02x)", a);
-    CHECK(g_fpga.t[0].times[(a >> 6) & 3] > 0, "with a conversion time");
+    CHECK(g_fpga.t[0].times[(a >> 6) & 3] == 8300, "0xFD measures for 8.3 ms: %u", g_fpga.t[0].times[(a >> 6) & 3]);
     uint8_t b[6];
     CHECK(fake_i2c_write(0x44, 0xFD, NULL, 0), "command");
     CHECK(g_fpga.t[0].busy_until_us > g_fpga.now_us, "the command starts a measurement");
@@ -257,7 +257,9 @@ static void test_sht4x(void) {
     CHECK(!fake_i2c_read(0x44, -1, b, 6), "a read while measuring is not acknowledged");
     fake_advance_us(70000);
     CHECK(fake_i2c_read(0x44, -1, b, 6), "answer after the measurement");
-    CHECK(g_fpga.t[0].times[(a >> 6) & 3] == 65535, "a command longer than 65.535 ms is clamped: %u", g_fpga.t[0].times[(a >> 6) & 3]);
+    uint8_t h = g_fpga.t[0].attrs[0x15];   /* a 110 ms heater command */
+    CHECK(g_fpga.t[0].times[(h >> 6) & 3] == 65535, "a command longer than 65.535 ms is clamped: %u", g_fpga.t[0].times[(h >> 6) & 3]);
+    CHECK(!(g_fpga.t[0].attrs[0x89] & EMU_ATTR_CMD), "the serial number answers at once");
     sm_reset();
 }
 

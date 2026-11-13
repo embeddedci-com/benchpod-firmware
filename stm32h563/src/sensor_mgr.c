@@ -463,24 +463,31 @@ static void regs_attrs(sm_inst_t *s, uint8_t attrs[SD_REGIMAGE], uint16_t times[
     sd_bus_info_t bi;
     memset(attrs, 0, SD_REGIMAGE);
     memset(times, 0, FPGA_EMU_TIMES * sizeof(uint16_t));
-    *nt = 1;
+    *nt = 0;
+    memset(times, 0, FPGA_EMU_TIMES * sizeof(times[0]));
     if (sd_bus_info(s->in, &bi) != SD_OK) return;
+    /* Slot 0 is the conversion's time; without a conversion all four slots go to commands. */
     times[0] = (uint16_t)(bi.conv_us > 0xFFFFu ? 0xFFFFu : bi.conv_us);
+    if (bi.has_conversion) *nt = 1;
     if (bi.has_conversion) {
         attrs[bi.conv_trigger] |= EMU_ATTR_TRIG | EMU_ATTR_TIME(0);
         if (bi.conv_busy_mask) attrs[bi.conv_busy_at] |= EMU_ATTR_BUSY;
     }
     for (unsigned i = 0; i < bi.n_commands; i++) {
         sd_command_t c;
-        if (sd_command(s->in, i, &c) != SD_OK) continue;
+        if (sd_command(s->in, i, &c) != SD_OK || c.busy_us == 0) continue;   /* answers at once */
         uint16_t us = (uint16_t)(c.busy_us > 0xFFFFu ? 0xFFFFu : c.busy_us);
         unsigned idx = *nt;
         for (unsigned k = 0; k < *nt; k++) if (times[k] == us) { idx = k; break; }
         if (idx == *nt) {
             if (*nt < FPGA_EMU_TIMES) times[(*nt)++] = us;
-            else {   /* more than 4 distinct times: the longest one that is set (never too short) */
-                idx = 0;
-                for (unsigned k = 1; k < FPGA_EMU_TIMES; k++) if (times[k] > times[idx]) idx = k;
+            else {   /* more than 4 distinct times: the shortest one that is not shorter, else
+                        the longest (a measurement never ends too early) */
+                int best = -1;
+                for (unsigned k = 0; k < FPGA_EMU_TIMES; k++)
+                    if (times[k] >= us && (best < 0 || times[k] < times[best])) best = (int)k;
+                if (best < 0) { best = 0; for (unsigned k = 1; k < FPGA_EMU_TIMES; k++) if (times[k] > times[best]) best = (int)k; }
+                idx = (unsigned)best;
             }
         }
         attrs[c.at] |= EMU_ATTR_CMD | EMU_ATTR_TIME(idx);
