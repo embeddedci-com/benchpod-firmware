@@ -1,7 +1,7 @@
 /*
  * command_handler_spi.c — the SPI master on the LA pins (gateware >= v44), as JSON commands.
  *
- *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}
+ *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
  *   {"cmd":"spi_xfer","tx":"<b64url>","cs":"release"|"hold"}   -> {"rx":"<b64url>"}
  *   {"cmd":"spi_flash","op":"id"}                              -> {"id":"ef4017",...}
  *   {"cmd":"spi_flash","op":"read","addr":N,"len":N}           -> {"data":"<b64url>"}
@@ -136,8 +136,11 @@ void handle_spi_start(int conn_id, const char *json) {
     if (has_key(json, "hz") && !get_u32(json, "hz", &hz)) {
         send_error(conn_id, "invalid hz"); return;
     }
-    if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || (mode != 0 && mode != 3))) {
-        send_error(conn_id, "mode must be 0 or 3"); return;
+    if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || mode > 3)) {
+        send_error(conn_id, "mode must be 0, 1, 2 or 3"); return;
+    }
+    if ((mode == 1 || mode == 2) && signal_engine_fpga_version() < SPI_MODES12_MIN_GW) {
+        send_error(conn_id, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware"); return;
     }
     if (fpga_spi_armed()) { send_error(conn_id, "spi busy: send spi_stop first"); return; }
 

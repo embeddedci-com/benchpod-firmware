@@ -3036,12 +3036,14 @@ int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
         if (w[i] < 0) return -1;
         for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
     }
-    if (mode != 0 && mode != 3) return -1;
+    if (mode > 3) return -1;
+    if ((mode == 1 || mode == 2) && s_fpga_version < SPI_MODES12_MIN_GW) return -3;
     if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
     if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
-    /* [sck][mosi][miso][cs][half][flags: bit0 CPOL] */
+    /* [sck][mosi][miso][cs][half][flags: bit0 CPOL, bit1 invert SCK (v55: CPOL xor CPHA)] */
+    unsigned cpol = (mode >> 1) & 1u, cpha = mode & 1u;
     uint8_t args[6] = { (uint8_t)w[0], (uint8_t)w[1], (uint8_t)w[2], (uint8_t)w[3],
-                        (uint8_t)half, (uint8_t)(mode == 3 ? 1u : 0u) };
+                        (uint8_t)half, (uint8_t)(cpol | ((cpol ^ cpha) << 1)) };
     spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
     spi_armed_local = true;
     printf("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",

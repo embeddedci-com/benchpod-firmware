@@ -2608,12 +2608,13 @@ command channel.
 |---|---|
 | `sck`, `mosi`, `miso`, `cs` | LA pins 1..14, all different |
 | `hz` | SCK rate, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
-| `mode` | 0 (default) or 3 |
+| `mode` | 0 (default), 1, 2 or 3 (CPOL = mode / 2, CPHA = mode % 2).  Modes 1 and 2 need gateware v55 (firmware with I2C master support) |
 
 Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
-Errors: `SPI master needs gateware v45+`, `spi busy: send spi_stop first`,
+Errors: `SPI master needs gateware v45+`, `SPI modes 1 and 2 need gateware v55+: update the pod's firmware`,
+`spi busy: send spi_stop first`,
 `swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
 
 ### `spi_stop` / `spi_status`

@@ -609,6 +609,8 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
    The shifter clocks at 24 MHz / (2 * half): half 2..63 = 6 MHz .. 190 kHz.  CS starts
    released (driven high); fpga_spi_cs() asserts it around a transaction. */
 #define SPI_MASTER_MIN_GW   45u   /* v45: bytes go out bit 0 first (fpga_spi_xfer reverses) */
+#define SPI_MODES12_MIN_GW  55u   /* v55: SPI modes 1 and 2 (SPI_ARM flags bit 1 inverts SCK) */
+#define I2C_MASTER_MIN_GW   55u   /* v55: the I2C master (SPI_ARM flags bit 2, i2c_master.v) */
 #define SWD_QUEUE_MIN_GW    45u
 
 /* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
@@ -635,7 +637,7 @@ unsigned fpga_spi_half_for_hz(uint32_t hz);
 uint32_t fpga_spi_hz_for_half(unsigned half);
 
 /* 0 ok; -1 bad channel (out of range or two roles on one pin); -2 SWD or SPI already armed;
-   -3 gateware too old.  mode is 0 or 3. */
+   -3 gateware too old.  mode is 0..3 (1 and 2 need gateware v55). */
 int  fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                   unsigned half, unsigned mode);
 void fpga_spi_disarm(void);
