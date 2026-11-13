@@ -16,6 +16,7 @@
 #include "bp_limits.h"
 #include "pico/time.h"
 #include "bp_log.h"
+#include "target_power.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -190,9 +191,18 @@ bool command_handler_step_busy(void) {
 
 /* ---- JSON commands ---------------------------------------------------------- */
 
+/* The pod's target power, for the listings' LA_WARN_UNPOWERED (RAM reads only). */
+static void note_target_power(void) {
+    bool a = false, b = false;
+    (void)target_power_get_cached(1, &a, NULL);
+    (void)target_power_get_cached(2, &b, NULL);
+    la_pins_set_target_powered(a || b);
+}
+
 /* {"cmd":"la_pins"} -> {"pins":[12 entries],"levels":M|null} */
 void handle_la_pins(int conn_id, const char *json) {
     (void)json;
+    note_target_power();
     uint16_t pulls  = la_pull_mask_now();
     uint16_t levels = 0;
     bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;
@@ -219,6 +229,7 @@ void handle_gpio(int conn_id, const char *json) {
     char resp[BP_CLOUD_REPLY_MAX];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
+    note_target_power();
 
     if (!req.has_mode && !req.has_level) {
         uint8_t ver = signal_engine_fpga_version();
@@ -246,6 +257,41 @@ void handle_gpio(int conn_id, const char *json) {
     la_pins_drive_mask(changed);
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
     la_pins_emit_list(&e, affected, pulls);
+    bp_emit_raw(&e, "}}\n");
+    send_emitted(conn_id, &e);
+}
+
+/* {"cmd":"la_dir","la":N|[N,...]|"all","dir":"dut_input"|"dut_output"|"bidir"|"unknown"}
+   {"cmd":"la_dir"}  (list)
+   Which way each pin's DUT signal goes, from the host's wiring profile (RAM only).  The pod
+   refuses a push-pull driver on a DUT output (la_pins.h). */
+void handle_la_dir(int conn_id, const char *json) {
+    char err[LA_PINS_ERR_MAX];
+    la_gpio_req_t req;
+    if (!la_gpio_req_parse(json, &req, err, sizeof(err))) { send_error(conn_id, err); return; }
+    if (req.has_mode || req.has_level) { send_error(conn_id, "la_dir takes la and dir only"); return; }
+    char resp[BP_CLOUD_REPLY_MAX];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    note_target_power();
+    uint16_t affected = 0x3FFFu;
+    if (req.all || req.n > 0) {
+        char ds[16];
+        la_dir_t d;
+        if (!bp_json_get(json, "dir", ds, sizeof(ds)) || !la_dir_parse(ds, &d)) {
+            send_error(conn_id, "dir must be dut_input, dut_output, bidir or unknown"); return;
+        }
+        uint8_t las[LA_PINS_COUNT];
+        size_t n = 0;
+        if (req.all) for (unsigned la = 1; la <= LA_PINS_COUNT; la++) las[n++] = (uint8_t)la;
+        else { memcpy(las, req.las, req.n); n = req.n; }
+        for (size_t i = 0; i < n; i++)
+            if (!la_pins_check_dir(las[i], d, err, sizeof(err))) { send_error(conn_id, err); return; }
+        affected = 0;
+        for (size_t i = 0; i < n; i++) { la_pins_set_dir(las[i], d); affected |= (uint16_t)(1u << (las[i] - 1u)); }
+    }
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(&e, affected, la_pull_mask_now());
     bp_emit_raw(&e, "}}\n");
     send_emitted(conn_id, &e);
 }

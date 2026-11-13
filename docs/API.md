@@ -206,6 +206,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la` | T1 | LA pin control: step pulse trains + pull-ups (LA1-8) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
+| `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
@@ -222,6 +223,11 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_status` | T0 | The SPI session's pins, rate and mode | object | no |
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
+| `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
+| `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
+| `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
+| `i2c_xfer` | T1 | Write, read, or write then read an I2C device | object | no |
+| `i2c_scan` | T1 | List the addresses that answer on the bus | object | no |
 | `spi_flash` | T1 | SPI NOR flash operations (id, read, erase, program) | object | no |
 | `sensor_define` | T1 | Upload and compile a sensor definition (chunked) | object | no |
 | `sensor_start` | T1 | Start an emulated sensor instance (I2C, SPI, UART or analog) | object | no |
@@ -867,6 +873,27 @@ The first reply packet carries `"pre_samples":N`, the samples actually returned 
 trigger: fewer than asked when the capture was armed only shortly before the trigger, or when the
 signals changed often before it (the pod keeps about the last 16 000 changes before the trigger).
 The trigger is at sample index N; `samples` more follow it.
+
+#### Send and capture
+
+`send` runs one transaction right after the capture is armed, in the same command, so a trigger on
+the bus line catches it (this also works over the cloud, which runs one command at a time):
+
+```json
+{"cmd":"la_capture","samples":4096,"sample_rate_mhz":12,"trigger":{"la":1,"edge":"falling"},
+ "send":{"bus":"i2c","addr":72,"write":"Dw","read":2}}
+```
+
+| `send` | Needs | Result in the last reply packet |
+|---|---|---|
+| `{"bus":"i2c","addr":A,"write":"<b64url>","read":N}` | an [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) session; write and read up to 32 bytes | `"send":{"bus":"i2c","ack":true,"rx":"ARc"}` as `i2c_xfer` reports it (`nack_at` on a NACK) |
+| `{"bus":"spi","tx":"<b64url>"}` | an [`spi_start`](#spi_start--claim-four-pins-for-spi) session, CS not held; 1..32 bytes in one CS frame | `"send":{"bus":"spi","rx":"..."}` |
+| `{"bus":"gpio","la":N,"level":0\|1}` | LA N already a gpio `output` or `open_drain` | `"send":{"bus":"gpio","la":5,"level":0}` |
+
+Trigger on the line the transaction starts with: SDA falling (I2C START), CS falling (SPI), or the
+gpio pin's edge. A transfer that fails reports `"send":{"bus":"i2c","error":"SCL held low"}`, and the
+capture still returns. A `send` that does not validate (no session, bad fields) is refused before
+anything is armed.
 
 | Condition | Message |
 |---|---|
@@ -1902,6 +1929,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
 | `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
+| `i2cm_sda`, `i2cm_scl` | [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) | `i2c_stop`, gateware reconfiguration |
 
 **Captures never own pins.** `la_capture`, `capture_dual`, `sensor_la` and capture triggers
 observe all 14 channels whatever their function.
@@ -1934,6 +1962,7 @@ others: `"sensor:env+1"`.
 | `i2c_sda` / `i2c_scl` / `sensor_*` | `stop the sensor emulation first ({"cmd":"sensor_stop","instance":"<instance>"})` |
 | `step` / `step_dir` | `wait for the step train to finish` |
 | `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
+| `i2cm_*` | `stop the I2C session first ({"cmd":"i2c_stop"})` |
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
@@ -1988,19 +2017,37 @@ Response:
 
 | Field | Meaning |
 |---|---|
-| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` |
+| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs`, the `sensor_*` functions, `i2cm_sda`, `i2cm_scl` |
 | `gpio` | `null`, or the gpio mode (`input` / `output` / `open_drain`) |
 | `level` | the **commanded** level of a gpio `output` / `open_drain` pin, else `null` |
 | `pull` | `null` on LA9–LA14; otherwise the fixed resistor and whether it is engaged |
+| `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
+| `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
 
-The reply always lists all 14 entries and is about 1.3 kB. It fits the cloud command channel, but
+The reply always lists all 14 entries and is about 1.3 kB (at most 1.6 kB with `dir` and `warn`). It fits the cloud command channel, but
 it is the largest single-reply command the pod has.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
 drive a DUT line.
 
 ---
+
+### `la_dir` — which way each pin's DUT signal goes
+
+```json
+{"cmd":"la_dir","la":[9,10],"dir":"dut_output"}
+```
+
+`la` is a pin, a list of pins or `"all"`; `dir` is `dut_input`, `dut_output`, `bidir` or `unknown`
+(the default after a reboot). Hosts send it from the wiring profile. On a pin wired to a DUT
+output the pod refuses every push-pull driver (a gpio `output`, UART TX, SPI SCK / MOSI / CS, SWD,
+the step train, an emulated sensor's TX / MISO / data-ready), because two push-pull outputs would
+drive against each other: `direction conflict: LA9 is wired to a DUT output and gpio output would
+drive against it; use gpio open_drain, or fix the wiring if LA9 is not a DUT output`. Open drain
+(`open_drain`, I2C) and inputs are allowed. A pin that is driven can't be marked `dut_output`
+until it is released. `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
+the pins it changed.
 
 ### `gpio` — use LA pins as GPIO
 
@@ -2608,12 +2655,13 @@ command channel.
 |---|---|
 | `sck`, `mosi`, `miso`, `cs` | LA pins 1..14, all different |
 | `hz` | SCK rate, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
-| `mode` | 0 (default) or 3 |
+| `mode` | 0 (default), 1, 2 or 3 (CPOL = mode / 2, CPHA = mode % 2).  Modes 1 and 2 need gateware v55 (firmware with I2C master support) |
 
 Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
-Errors: `SPI master needs gateware v45+`, `spi busy: send spi_stop first`,
+Errors: `SPI master needs gateware v45+`, `SPI modes 1 and 2 need gateware v55+: update the pod's firmware`,
+`spi busy: send spi_stop first`,
 `swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
 
 ### `spi_stop` / `spi_status`
@@ -2689,6 +2737,64 @@ bits; a part that ships protected needs its status register written with `spi_xf
 
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
+
+## I2C master
+
+The pod is an I2C master on any two LA pins (firmware with gateware v55 and later): read and write
+registers of a chip on the DUT's board, or scan the bus. The pins are open drain, so the bus needs
+pull-ups. SWD, SPI and I2C sessions exclude each other: they share one engine in the FPGA. Every
+command and reply fits one cloud frame.
+
+### `i2c_start` — claim two pins as an I2C master
+
+```json
+{"cmd":"i2c_start","sda":1,"scl":2,"hz":400000,"pullups":"pod"}
+```
+
+| Field | Meaning |
+|---|---|
+| `sda`, `scl` | LA pins 1..14, different |
+| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
+| `pullups` | `pod` (default): both pins must be LA1..LA6 with the pod's pull-up switched on (`{"cmd":"la","la":1,"pullup":"on"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
+
+The pod never switches a pull-up by itself; the error says which command does.
+Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
+
+Errors: `the I2C master needs gateware v55+: update the pod's firmware`, `I2C needs pull-ups: switch
+on LA1's with {"cmd":"la","la":1,"pullup":"on"}, or pass "pullups":"external"`, `LA7 has no pod
+pull-up (only LA1..LA6 do)...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
+session first`, and the usual `pin conflict:` / `pull conflict:`.
+
+### `i2c_stop` / `i2c_status`
+
+`{"cmd":"i2c_stop"}` releases both pins. `{"cmd":"i2c_status"}` returns `{"active":false}` or the
+session's pins, rate and pull-ups.
+
+### `i2c_xfer` — write, read, or write then read
+
+```json
+{"cmd":"i2c_xfer","addr":72,"write":"Dw","read":2}
+```
+
+| Field | Meaning |
+|---|---|
+| `addr` | the 7-bit address, 0..127 |
+| `write` | 0..128 bytes, base64url, sent after the address |
+| `read` | 0..248 bytes to read; after a write, a repeated START comes first. The last byte is NACKed |
+
+With neither, the pod sends the address alone (a probe). Reply:
+`{"addr":72,"ack":true,"rx":"ARc"}`. When a byte is not acknowledged, `ack` is false and `nack_at`
+says which: 0 the address, 1..N the Nth written byte, N+1 the address of the read. `rx` is empty
+when the device did not answer the read.
+
+Errors: `no I2C session: send i2c_start first`, `SCL held low: a target stretched the clock for
+over 200 ms, or the bus is stuck; the pod released the bus`, `arbitration lost: another master
+drove SDA low; the pod released the bus`.
+
+### `i2c_scan` — which addresses answer
+
+`{"cmd":"i2c_scan"}` probes 0x08..0x77 (`from` and `to` change the range) and returns
+`{"from":8,"to":119,"found":[72,118]}`.
 
 ## Emulated sensors
 

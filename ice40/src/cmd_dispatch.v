@@ -189,8 +189,8 @@ module cmd_dispatch #(
     output wire [3:0]        spi_mosi_ch,
     output wire [3:0]        spi_miso_ch,
     output wire [3:0]        spi_cs_ch,
-    output wire [5:0]        spi_half,
-    output wire              spi_cpol,
+    output wire [6:0]        spi_half,
+    output wire [2:0]        spi_flags,       // {i2c, inv, cpol} (v55: I2C master, SPI modes 1/2)
     output reg               spi_cs_stb,
     output wire              spi_cs_assert,
     input  wire              spi_mode,
@@ -497,8 +497,8 @@ module cmd_dispatch #(
     assign spi_mosi_ch       = arg_buf[5][3:0];
     assign spi_miso_ch       = arg_buf[6][3:0];
     assign spi_cs_ch         = arg_buf[7][3:0];
-    assign spi_half          = arg_buf[8][5:0];
-    assign spi_cpol          = rx_byte[0];
+    assign spi_half          = arg_buf[8][6:0];
+    assign spi_flags         = rx_byte[2:0];
     assign spi_cs_assert     = rx_byte[0];
     assign swd_feed_q        = current_cmd[3];
     assign q_cfg_half        = arg_buf[8][5:0];

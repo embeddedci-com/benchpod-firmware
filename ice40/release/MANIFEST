@@ -1,24 +1,24 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=54
-source_sha256=dc0de9c65f9a4664b396a92240d91420379c5a3a898b4fbe3f479f47217cca85
-built_from=3d01549
-promoted=2026-11-12
+gateware_version=55
+source_sha256=f4c2d2e6a1063892771111788ac5c37d6353aaadaf94b030964c9210ce6f9139
+built_from=497f4fc
+promoted=2026-11-13
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=benchpod-30a9f1 (analog v3r2) 2026-11-13: loop/deep bit-identical to the 2026-11-12 promote; emulation with word registers + command map: TMP117/INA219/SHT3x/SCD4x through a DUT, process-node suite 99/0 (current wiring), SDK e2e pod+gpio 99/0, cloud sensor smoke 2026-11-12. SPI target + UART2 RX not yet on hardware (bench wiring pending)
-loop.sha256=58a52809f45c0de3213b138b4761e6d886b0991b175d629265df7c69388b901c
+hw_verified=benchpod-30a9f1 2026-11-13: loop+emu byte-identical to the image that passed process-node 137/4-skipped incl. test_bus_master.py 16/16; deep re-pinned to seed 29 for CI: deep-image hwe2e DeepReplay, ConcurrentReplayCapture, ByteOrderAcrossCaptures, ImageSwapAfterDualCapture, ControlLoopWrongImageRejected pass (DeepReplayRate fails the same on published 3.10.3)
+loop.sha256=e7f995ab736fccc7e666841d032aa2b202ebc44155ad2afbc073df8b847f0ec7
 loop.seed=25
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=61.18
-deep.sha256=44b292e5d21a1a4c2712256eaf780c6d2b92a4789997d7e4624c74277516e000
-deep.seed=11
+loop.clk48_mhz=57.64
+deep.sha256=53a62b22d33be5951b654c15545c5f677670ebc48344e22f28cf1526bf04aeb2
+deep.seed=29
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=59.54
-emu.sha256=cfe8be93950d3609a2f54fa14919708d3652e864f22b7dc58e376da006a8746a
+deep.clk48_mhz=54.27
+emu.sha256=21b2fa3573bc8b63276f5a366d4114376ff8b20a1bf4d76f759dae54eca068b8
 emu.seed=27
 emu.defines=-DVERSION_V2 -DUSE_EMULATION
-emu.clk48_mhz=56.48
+emu.clk48_mhz=53.22

@@ -63,6 +63,26 @@
 // queued byte has not arrived yet (the link is slower than the wire), the engine holds SWCLK high
 // until it has: SWD lets the host stop the clock anywhere.  In queue mode SWDIO comes straight
 // from the sequencer state, which changes only on the falling edge.
+//
+// SPI modes 1 and 2 (v55).  The bit timing above (data changes on the falling edge, sampled on
+// the rising one) is modes 0 and 3.  Modes 1 and 2 are the same sequence with SCK inverted:
+// SPI_ARM flags bit 1 (`inv`) XORs the SCK output, and the internal idle level is set so the
+// pin idles at CPOL.
+//
+// I2C master (v55, SPI_ARM flags bit 2).  The engine's third job (i2c_master.v), on the same
+// queue and reply buffer, with its own counters.  The clk slot is SCL and the dio slot SDA, both
+// OPEN DRAIN (pulled low or released, never driven high); in_ch reads SDA and cs_ch names the
+// SCL channel, read back on scl_in for clock stretching.  The CS slot is not driven.  Each
+// SWD_FEED byte is a token, low 3 bits:
+//   1 START (also repeated START)   2 STOP
+//   3 WRITE: the NEXT feed byte is the data; the reply buffer gets {7'b0, nack}
+//   4 READ, then ACK                5 READ, then NACK; the reply buffer gets the byte
+// A bit is `half` clk with SCL low (SDA changes 1 clk after SCL falls) then SCL released: the
+// high half counts only once SCL reads high, so a target may stretch it (the firmware times
+// out a transfer that never finishes and disarms).  SDA is sampled at the end of the high
+// half.  Between tokens SCL rests low, except after STOP (bus idle).  A WRITE bit sent as 1
+// that reads 0 is a lost arbitration: the engine releases both lines, stops the queue and sets
+// q_flags bit 7.  SPI_STATUS busy covers I2C too.
 // ============================================================================
 
 module swd_engine #(
@@ -80,8 +100,8 @@ module swd_engine #(
     input  wire [3:0]  spi_mosi_ch,
     input  wire [3:0]  spi_miso_ch,
     input  wire [3:0]  spi_cs_ch,
-    input  wire [5:0]  spi_half,          // clk per SCK half period, 2..63 (the firmware clamps)
-    input  wire        spi_cpol,          // SCK idle level: 0 = mode 0, 1 = mode 3
+    input  wire [6:0]  spi_half,          // clk per SCK half period, 2..127 (the firmware clamps)
+    input  wire [2:0]  spi_flags,         // {i2c, inv, cpol}: inv = SPI mode 1 or 2; i2c = I2C master
     input  wire        spi_cs_stb,        // 1-cycle: SPI_CS
     input  wire        spi_cs_assert,     // 1 = drive CS low
     input  wire        disarm_stb,        // 1-cycle
@@ -96,7 +116,8 @@ module swd_engine #(
     input  wire        feed_begin,        // 1-cycle: new feed → reset reply ptr
     input  wire        feed_stb,          // 1-cycle per command byte
     input  wire [7:0]  feed_byte,
-    input  wire        dio_in,            // live level of in_ch (SWDIO, or MISO in SPI mode)
+    input  wire        dio_in,            // live level of in_ch (SWDIO, MISO, or SDA in I2C mode)
+    input  wire        scl_in,            // live level of cs_ch (SCL in I2C mode)
 
     // ---- reply read (SWD_READ) ----
     input  wire [REPLY_AW-1:0] rd_addr,
@@ -113,6 +134,7 @@ module swd_engine #(
     // ---- outputs to la_bank ----
     output wire [3:0]  clk_ch,
     output wire        clk_val,
+    output wire        clk_oe,
     output wire [3:0]  dio_ch,
     output wire        dio_val,
     output wire        dio_oe,
@@ -131,8 +153,12 @@ module swd_engine #(
     reg        swdio_out;                 // SWDIO, or MOSI in SPI mode
     reg        swdio_oe;
     reg        cs_n;
-    reg [5:0]  half_r;                    // SCK / SWCLK half period (SPI_ARM or SWD_QCONFIG)
-    reg        cpol_r;
+    reg [6:0]  half_r;                    // SCK / SWCLK / SCL half period (SPI_ARM or SWD_QCONFIG)
+    reg        cpol_r;                    // internal idle level (cpol ^ inv)
+    reg        inv_r;                     // SPI modes 1 and 2: SCK inverted
+    reg        i2c_r;                     // I2C master (i2c_master.v)
+    wire       i2c_take, i2c_push, i2c_busy, i2c_arb, scl_rel, sda_rel;
+    wire [7:0] i2c_pdata;
 
     // ---- reply buffer (inferred BRAM) ----
     reg [7:0]  rmem [0:(1<<REPLY_AW)-1];
@@ -149,10 +175,10 @@ module swd_engine #(
     // SWDIO / MISO is a pad-driven async input; 2-flop synchronise it before sampling, same
     // metastability idiom as spi_slave / i2c_target.  SWD bit-bang holds the line static for
     // many clocks around a 'c'; the shifters account for the 2-cycle latency (see the header).
-    reg dio_s0, dio_s1;
+    reg dio_s0, dio_s1, scl_s0, scl_s1;
     always @(posedge clk) begin
-        if (rst) begin dio_s0 <= 1'b0; dio_s1 <= 1'b0; end
-        else     begin dio_s0 <= dio_in; dio_s1 <= dio_s0; end
+        if (rst) begin dio_s0 <= 1'b0; dio_s1 <= 1'b0; scl_s0 <= 1'b0; scl_s1 <= 1'b0; end
+        else     begin dio_s0 <= dio_in; dio_s1 <= dio_s0; scl_s0 <= scl_in; scl_s1 <= scl_s0; end
     end
 
     // ---- the sequencer: SPI bytes or SWD transfers from the queue (one job at a time) ----
@@ -163,7 +189,7 @@ module swd_engine #(
     //         the pin at the rising edge) and shifted in at the top as the byte shifts out.
     //   SWD:  a unit is one transfer (see the header), idx 0..end_idx; the target's bit is taken
     //         at the end of the LOW half.
-    reg [5:0]  hcnt;                      // clk left in this half period
+    reg [6:0]  hcnt;                      // clk left in this half period
     reg [7:0]  sh;
     reg        qmode;                     // the current feed queues SWD transfers
     localparam Q_IDLE = 1'b0, Q_RUN = 1'b1;
@@ -174,7 +200,14 @@ module swd_engine #(
     reg        qready;                    // qptr != fptr, one edge late (t_rd is valid with it)
     reg        isrd, par, fail, perr, qstop;
     reg [2:0]  ack;
-    wire       run    = armed_r & (spi_r | qmode);
+    wire       run    = armed_r & ~i2c_r & (spi_r | qmode);
+    wire       i2c_on = armed_r & i2c_r;
+    i2c_master i2c_i (
+        .clk(clk), .rst(rst), .on(i2c_on), .arm(spi_arm_stb), .half(half_r),
+        .sda_s(dio_s1), .scl_s(scl_s1), .t_rd(t_rd), .qready(qready),
+        .take(i2c_take), .push(i2c_push), .pdata(i2c_pdata), .busy(i2c_busy), .arb(i2c_arb),
+        .scl_rel(scl_rel), .sda_rel(sda_rel)
+    );
     wire       q_active = armed_r & ~spi_r & qmode;
     wire       ack_ok = (ack == 3'b001);
     wire       spi_pending = (fptr != qptr);
@@ -197,8 +230,10 @@ module swd_engine #(
             swdio_out      <= 1'b0;
             swdio_oe       <= 1'b1;
             cs_n           <= 1'b1;
-            half_r         <= 6'd4;
+            half_r         <= 7'd4;
             cpol_r         <= 1'b1;
+            inv_r          <= 1'b0;
+            i2c_r          <= 1'b0;
             end_idx        <= 7'd53;
             wptr           <= {REPLY_AW{1'b0}};
             fptr           <= {REPLY_AW{1'b0}};
@@ -213,12 +248,15 @@ module swd_engine #(
             if (disarm_stb) begin
                 armed_r <= 1'b0;
                 spi_r   <= 1'b0;
+                i2c_r   <= 1'b0;
                 qst     <= Q_IDLE;
             end else if (arm_stb) begin
                 // Initial line state: SWCLK low, SWDIO driven low.  Matches the
                 // old swd_probe_arm().  Between queued transfers SWCLK rests high.
                 armed_r        <= 1'b1;
                 spi_r          <= 1'b0;
+                i2c_r          <= 1'b0;
+                inv_r          <= 1'b0;
                 clk_ch_r       <= arm_clk_ch;
                 dio_ch_r       <= arm_dio_ch;
                 in_ch_r        <= arm_dio_ch;
@@ -232,16 +270,19 @@ module swd_engine #(
                 qmode          <= 1'b0;
             end else if (spi_arm_stb) begin
                 // SCK at its idle level, MOSI driven low, CS driven high (released).
+                // I2C: both lines released, SCL read back on the CS channel.
                 armed_r        <= 1'b1;
-                spi_r          <= 1'b1;
+                spi_r          <= ~spi_flags[2];
+                i2c_r          <= spi_flags[2];
+                inv_r          <= spi_flags[1];
                 clk_ch_r       <= spi_sck_ch;
                 dio_ch_r       <= spi_mosi_ch;
                 in_ch_r        <= spi_miso_ch;
                 cs_ch_r        <= spi_cs_ch;
                 half_r         <= spi_half;
-                cpol_r         <= spi_cpol;
+                cpol_r         <= spi_flags[0] ^ spi_flags[1];
                 end_idx        <= 7'd7;                // a unit is one byte
-                swclk_lvl      <= spi_cpol;
+                swclk_lvl      <= spi_flags[0] ^ spi_flags[1];
                 swdio_out      <= 1'b0;
                 swdio_oe       <= 1'b1;
                 cs_n           <= 1'b1;
@@ -254,7 +295,11 @@ module swd_engine #(
             end
 
             if (spi_cs_stb) cs_n <= ~spi_cs_assert;
-            if (q_cfg_stb) begin half_r <= q_cfg_half; end_idx <= 7'd45 + {2'b00, q_cfg_idle}; end
+            if (q_cfg_stb) begin half_r <= {1'b0, q_cfg_half}; end_idx <= 7'd45 + {2'b00, q_cfg_idle}; end
+
+            // I2C master: it consumes queue bytes and appends replies (never with the sequencer)
+            if (i2c_take) qptr <= qptr + 1'b1;
+            if (i2c_push) begin rmem[wptr] <= i2c_pdata; wptr <= wptr + 1'b1; end
 
             if (feed_begin) begin
                 wptr  <= {REPLY_AW{1'b0}};
@@ -268,7 +313,7 @@ module swd_engine #(
             end
 
             // ---- SWD bit-bang (remote_bitbang bytes) ----
-            if (feed_stb && armed_r && !spi_r && !qmode) begin
+            if (feed_stb && armed_r && !spi_r && !i2c_r && !qmode) begin
                 case (feed_byte)
                     "d": begin swclk_lvl <= 1'b0; swdio_out <= 1'b0; end
                     "e": begin swclk_lvl <= 1'b0; swdio_out <= 1'b1; end
@@ -285,7 +330,7 @@ module swd_engine #(
             end
 
             // ---- SPI data bytes / SWD transfers: into the queue ----
-            if (feed_stb && run) begin
+            if (feed_stb && (run | i2c_on)) begin
                 tmem[fptr] <= feed_byte;
                 fptr       <= fptr + 1'b1;
             end
@@ -304,11 +349,11 @@ module swd_engine #(
                         fail      <= 1'b0;
                         par       <= 1'b0;
                         ph        <= 1'b0;
-                        hcnt      <= half_r - 6'd1;
+                        hcnt      <= half_r - 7'd1;
                         swclk_lvl <= 1'b0;
                         qst       <= Q_RUN;
                     end
-                end else if (hcnt != 6'd0) hcnt <= hcnt - 6'd1;
+                end else if (hcnt != 7'd0) hcnt <= hcnt - 7'd1;
                 else if (!ph) begin
                     // end of the low half: SWD takes the bit the target drove on the last rise
                     if (!spi_r && idx >= 7'd9 && idx <= 7'd11) ack <= {dio_s1, ack[2:1]};
@@ -323,11 +368,11 @@ module swd_engine #(
                     if (!spi_r && isrd && idx == 7'd44) perr <= par ^ dio_s1;
                     swclk_lvl <= 1'b1;
                     ph        <= 1'b1;
-                    hcnt      <= half_r - 6'd1;
+                    hcnt      <= half_r - 7'd1;
                 end else if (!(q_byte_in && !qready)) begin
                     // end of the high half: the falling edge and the next cycle
                     ph        <= 1'b0;
-                    hcnt      <= half_r - 6'd1;
+                    hcnt      <= half_r - 7'd1;
                     swclk_lvl <= 1'b0;
                     idx       <= idx + 7'd1;
                     if (spi_r) begin
@@ -360,16 +405,18 @@ module swd_engine #(
     end
 
     assign armed        = armed_r;
-    assign spi_mode     = armed_r & spi_r;
-    assign spi_busy     = spi_mode & (spi_pending | (qst != Q_IDLE));
+    assign spi_mode     = armed_r & (spi_r | i2c_r);   // SPI_STATUS bit 0: armed as SPI or I2C master
+    assign spi_busy     = (spi_mode & (spi_pending | (qst != Q_IDLE))) |
+                          (i2c_on & ((spi_pending & ~i2c_arb) | i2c_busy));
     wire   q_busy       = q_active & ~qstop & ((qptr != fptr) | (qst != Q_IDLE));
     assign q_done       = qptr[7:0];
-    assign q_flags      = {1'b0, qptr[8], perr, ack, qstop, q_busy};
+    assign q_flags      = {i2c_arb, qptr[8], perr, ack, qstop, q_busy};
     assign clk_ch       = clk_ch_r;
-    assign clk_val      = swclk_lvl;
+    assign clk_val      = ~i2c_r & (swclk_lvl ^ inv_r);
+    assign clk_oe       = ~i2c_r | ~scl_rel;
     assign dio_ch       = dio_ch_r;
-    assign dio_val      = q_active ? q_out : (spi_r ? sh[0] : swdio_out);
-    assign dio_oe       = q_active ? q_oe  : (spi_r | swdio_oe);
+    assign dio_val      = ~i2c_r & (q_active ? q_out : (spi_r ? sh[0] : swdio_out));
+    assign dio_oe       = i2c_r ? ~sda_rel : (q_active ? q_oe : (spi_r | swdio_oe));
     assign in_ch        = in_ch_r;
     assign cs_ch        = cs_ch_r;
     assign cs_val       = cs_n;

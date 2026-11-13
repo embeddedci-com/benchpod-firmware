@@ -2834,9 +2834,10 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
 }
 
 static bool spi_armed_local = false;   /* the same engine in SPI mode (below) */
+static bool i2c_armed_local = false;   /* the engine runs the I2C master (gw v55) */
 
 int fpga_swd_arm(unsigned swclk, unsigned swdio) {
-    if (swd_armed_local || spi_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
     int clk_idx = la_wire_index(swclk);
     int dio_idx = la_wire_index(swdio);
     if (clk_idx < 0 || dio_idx < 0 || clk_idx == dio_idx) return -1;
@@ -3030,18 +3031,20 @@ uint32_t fpga_spi_hz_for_half(unsigned half) {
 int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                  unsigned half, unsigned mode) {
     if (s_fpga_version < SPI_MASTER_MIN_GW) return -3;
-    if (swd_armed_local || spi_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
     int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
     for (int i = 0; i < 4; i++) {
         if (w[i] < 0) return -1;
         for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
     }
-    if (mode != 0 && mode != 3) return -1;
+    if (mode > 3) return -1;
+    if ((mode == 1 || mode == 2) && s_fpga_version < SPI_MODES12_MIN_GW) return -3;
     if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
     if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
-    /* [sck][mosi][miso][cs][half][flags: bit0 CPOL] */
+    /* [sck][mosi][miso][cs][half][flags: bit0 CPOL, bit1 invert SCK (v55: CPOL xor CPHA)] */
+    unsigned cpol = (mode >> 1) & 1u, cpha = mode & 1u;
     uint8_t args[6] = { (uint8_t)w[0], (uint8_t)w[1], (uint8_t)w[2], (uint8_t)w[3],
-                        (uint8_t)half, (uint8_t)(mode == 3 ? 1u : 0u) };
+                        (uint8_t)half, (uint8_t)(cpol | ((cpol ^ cpha) << 1)) };
     spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
     spi_armed_local = true;
     printf("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",
@@ -3103,6 +3106,93 @@ int fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n) {
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), buf, want);
     for (size_t i = 0; i < n; i++) rx[i] = rev8(buf[1 + i]);
     return 0;
+}
+
+/* ===========================================================================
+ * I2C master: the SWD engine's third job (gateware >= I2C_MASTER_MIN_GW, i2c_master.v).
+ *
+ * SPI_ARM with flags bit 2 puts the engine on two LA channels as an open-drain I2C master: SCL on
+ * the sck and cs slots (cs is read back for clock stretching), SDA on mosi and miso.  SWD_FEED
+ * queues tokens (fpga_i2c_run), SPI_STATUS bit 1 says when they are done, SWD_READ returns one
+ * byte per WRITE (its ACK bit, 1 = NACK) and per READ (the byte), and SWD_QSTATUS bit 7 says the
+ * master lost arbitration.  Bytes go MSB first: no bit reversal here.
+ * ========================================================================== */
+
+unsigned fpga_i2c_half_for_hz(uint32_t hz) {
+    /* Each speed's floor keeps SCL low long enough for its bus mode (tLOW: 4.7 us standard,
+       1.3 us fast, 0.5 us fast-mode plus); a target may stretch it further. */
+    const uint32_t clk = FPGA_HFOSC_HZ;
+    if (hz == 0) hz = 100000u;
+    uint32_t half = (clk + 2u * hz - 1u) / (2u * hz);
+    uint32_t floor = hz <= 100000u ? I2C_HALF_100K : hz <= 400000u ? I2C_HALF_400K : I2C_HALF_MIN;
+    if (half < floor) half = floor;
+    if (half > I2C_HALF_MAX) half = I2C_HALF_MAX;
+    return (unsigned)half;
+}
+
+uint32_t fpga_i2c_hz_for_half(unsigned half) {
+    return half ? FPGA_HFOSC_HZ / (2u * half) : 0u;
+}
+
+int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
+    if (s_fpga_version < I2C_MASTER_MIN_GW) return -3;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    int ws = la_wire_index(sda), wc = la_wire_index(scl);
+    if (ws < 0 || wc < 0 || ws == wc) return -1;
+    if (half < I2C_HALF_MIN) half = I2C_HALF_MIN;
+    if (half > I2C_HALF_MAX) half = I2C_HALF_MAX;
+    /* [sck=SCL][mosi=SDA][miso=SDA][cs=SCL][half][flags: bit2 I2C] */
+    uint8_t args[6] = { (uint8_t)wc, (uint8_t)ws, (uint8_t)ws, (uint8_t)wc, (uint8_t)half, 0x04u };
+    spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
+    i2c_armed_local = true;
+    printf("[i2c] armed  SDA=LA%u SCL=LA%u %lu Hz\n", sda, scl, (unsigned long)fpga_i2c_hz_for_half(half));
+    return 0;
+}
+
+void fpga_i2c_disarm(void) {
+    if (!i2c_armed_local) return;
+    spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
+    i2c_armed_local = false;
+    printf("[i2c] disarmed\n");
+}
+
+bool fpga_i2c_armed(void) { return i2c_armed_local; }
+
+int fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, uint32_t timeout_us,
+                 bool *arb_lost) {
+    if (!i2c_armed_local || !tok || n == 0 || n > I2C_QUEUE_MAX || nreply > I2C_QUEUE_MAX) return -1;
+    if (arb_lost) *arb_lost = false;
+    uint8_t hdr[3] = { CMD_SWD_FEED, (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, tok, n);
+    cs_deselect();
+
+    absolute_time_t deadline = make_timeout_time_us(timeout_us);
+    for (;;) {
+        uint8_t st = 0xFF;
+        spi_cmd_read(CMD_SPI_STATUS, NULL, 0, &st, 1);
+        if (st & 0xFC) return -4;                 /* MISO stuck high: the iCE40 is not answering */
+        if (!(st & SPI_STATUS_ARMED)) { i2c_armed_local = false; return -3; }
+        if (!(st & SPI_STATUS_BUSY)) break;
+        if (time_reached(deadline)) return -2;    /* SCL held low (stretched) for too long */
+    }
+    uint8_t q[2] = { 0, 0 };
+    spi_cmd_read(CMD_SWD_QSTATUS, NULL, 0, q, 2);
+    if (arb_lost) *arb_lost = (q[1] & 0x80u) != 0;
+    if (nreply == 0 || !reply) return 0;
+    /* SWD_READ repeats reply byte 0: read one more into the caller's spare byte and drop it. */
+    size_t want = nreply + 1;
+    uint8_t args[2] = { (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    spi_cmd_read(CMD_SWD_READ, args, sizeof(args), reply, want);
+    memmove(reply, reply + 1, nreply);
+    return 0;
+}
+
+/* After a stuck or lost transfer: arm again, which releases both lines and clears the flags. */
+int fpga_i2c_recover(unsigned sda, unsigned scl, unsigned half) {
+    i2c_armed_local = false;
+    return fpga_i2c_arm(sda, scl, half);
 }
 
 /* ===========================================================================

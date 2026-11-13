@@ -247,6 +247,26 @@ bool command_handler_psram_stage(uint32_t *base, uint32_t *len);
 void handle_spi_status(int conn_id, const char *json);
 void spi_session_end(void);
 void spi_on_gateware_reconfigured(void);
+/* command_handler_i2c.c: the I2C master (gateware v55) */
+void handle_la_dir(int conn_id, const char *json);
+/* Send and capture (command_handler_bus_send.c): la_capture's optional "send". */
+#define BUS_SEND_MAX         32u    /* bytes written / read by a capture's send */
+#define BUS_SEND_RESULT_MAX  128u   /* its result text: {"bus":"i2c","ack":true,"rx":"<44>"} */
+bool   bus_send_prepare(int conn_id, const char *json);   /* false: the error was sent */
+void   bus_send_run(void);
+void   bus_send_cancel(void);
+size_t bus_send_take(char *out, size_t cap);              /* ",\"send\":{...}" or 0 */
+int    i2c_capture_prepare(const char *obj, char *err, size_t cap);
+void   i2c_capture_run(char *out, size_t cap);
+int    spi_capture_prepare(const char *obj, char *err, size_t cap);
+void   spi_capture_run(char *out, size_t cap);
+void handle_i2c_start(int conn_id, const char *json);
+void handle_i2c_stop(int conn_id, const char *json);
+void handle_i2c_status(int conn_id, const char *json);
+void handle_i2c_xfer(int conn_id, const char *json);
+void handle_i2c_scan(int conn_id, const char *json);
+void i2c_session_end(void);
+void i2c_on_gateware_reconfigured(void);
 
 /* power_profile (command_handler_power.c). */
 void handle_power_profile(int conn_id, const char *json);

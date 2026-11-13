@@ -47,6 +47,8 @@ static void test_defaults_and_names(void) {
     CHECK(la_pins_owned_mask() == 0);
     CHECK_STR(la_fn_name(LA_FN_STEP_DIR), "step_dir");
     CHECK_STR(la_fn_name(LA_FN_SPI_SCK), "spi_sck");
+    CHECK_STR(la_fn_name(LA_FN_I2CM_SDA), "i2cm_sda");
+    CHECK_STR(la_fn_name(LA_FN_I2CM_SCL), "i2cm_scl");
     CHECK_STR(la_fn_name(LA_FN_SPI_CS), "spi_cs");
     CHECK_STR(la_fn_name(LA_FN_SWD_DIO), "swd_dio");
     CHECK(la_pull_dir(1) == LA_PULL_UP && la_pull_dir(6) == LA_PULL_UP);
@@ -93,6 +95,9 @@ static void test_claims_and_conflicts(void) {
     la_pins_claim(LA_FN_SPI_CS, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
     CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
     CHECK_STR(err, "pin conflict: LA9 is in use by spi_cs; stop the SPI session first ({\"cmd\":\"spi_stop\"})");
+    la_pins_claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 4 }, 1);
+    CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 4 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+    CHECK_STR(err, "pin conflict: LA4 is in use by i2cm_sda; stop the I2C session first ({\"cmd\":\"i2c_stop\"})");
 
     /* a replacing sensor_start treats the old sensor's pins as free */
     la_pins_reset();
@@ -125,6 +130,8 @@ static void test_pull_rules(void) {
                    "or use another channel");
     CHECK(!claim(LA_FN_I2C_SCL, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which i2c_scl can't work with (an open-drain bus needs pull-ups)") != NULL);
+    CHECK(!claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
+    CHECK(strstr(err, "which i2cm_sda can't work with (an open-drain bus needs pull-ups)") != NULL);
     CHECK(!claim(LA_FN_SWD_DIO, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which swd_dio can't work with (SWDIO is pulled up when released)") != NULL);
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, (uint8_t[]){ 7 }, 1, LA_FN_BIT(LA_FN_GPIO), down7));
@@ -337,7 +344,7 @@ static void test_sensor_owner(void) {
 
 static void test_json_entries(void) {
     la_pins_reset();
-    char buf[1600];
+    char buf[2048];
     bp_emit_t e;
 
     bp_emit_init(&e, buf, sizeof(buf));
@@ -358,7 +365,11 @@ static void test_json_entries(void) {
     /* Worst case the la_pins / gpio read reply can reach: every pin a gpio open_drain with its
        pull on (the longest entry), plus the envelope.  It must fit the cloud reply capture. */
     la_pins_reset();
-    for (unsigned la = 1; la <= 14; la++) la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ (uint8_t)la }, 1);
+    for (unsigned la = 1; la <= 14; la++) {
+        la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ (uint8_t)la }, 1);
+        la_pins_set_dir(la, LA_DIR_DUT_OUTPUT);                  /* the longest direction name */
+    }
+    la_pins_set_target_powered(false);                           /* every pulled-up pin warns */
     bp_emit_init(&e, buf, sizeof(buf));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
     la_pins_emit_list(&e, 0x3FFF, 0x00FF);
@@ -367,6 +378,67 @@ static void test_json_entries(void) {
     printf("  la_pins worst-case reply: %u bytes (cloud reply cap %u)\n",
            (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
     CHECK(bp_emit_len(&e) < BP_CLOUD_REPLY_MAX);
+    la_pins_set_target_powered(true);
+    for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
+}
+
+static void test_direction_and_warnings(void) {
+    la_pins_reset();
+    for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
+    la_dir_t d;
+    CHECK(la_dir_parse("dut_output", &d) && d == LA_DIR_DUT_OUTPUT);
+    CHECK(!la_dir_parse("output", &d));
+
+    /* a push-pull driver may not claim a DUT output; open drain and inputs may */
+    la_pins_set_dir(9, LA_DIR_DUT_OUTPUT);
+    CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 9 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+    CHECK_STR(err, "direction conflict: LA9 is wired to a DUT output and gpio output would drive "
+                   "against it; use gpio open_drain, or fix the wiring if LA9 is not a DUT output");
+    CHECK(!claim(LA_FN_SPI_MOSI, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
+    CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
+    CHECK(claim(LA_FN_SPI_MISO, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
+    la_pins_release(9);
+    CHECK(claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, (uint8_t[]){ 9 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+    CHECK(claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, (uint8_t[]){ 3 }, 1, 0, 0));
+    /* switching the open-drain pin to push-pull is a claim too */
+    CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 9 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+
+    /* the other order: a driven pin can't be marked a DUT output */
+    la_pins_reset();
+    la_pins_set_dir(9, LA_DIR_UNKNOWN);
+    CHECK(claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 10 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+    CHECK(!la_pins_check_dir(10, LA_DIR_DUT_OUTPUT, err, sizeof(err)));
+    CHECK_STR(err, "direction conflict: LA10 is driven by gpio output, so it can't be wired to a DUT output; stop that first");
+    CHECK(la_pins_check_dir(10, LA_DIR_BIDIR, err, sizeof(err)));
+    CHECK(la_pins_check_dir(11, LA_DIR_DUT_OUTPUT, err, sizeof(err)));
+
+    /* warnings */
+    la_pins_reset();
+    la_pins_set_target_powered(true);
+    la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, (uint8_t[]){ 3 }, 1);       /* 2.2k pull-up */
+    CHECK(la_pins_warnings(3, 0) == 0);
+    CHECK(la_pins_warnings(3, PULL(3)) == LA_WARN_PULL_VS_DRIVE);
+    la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 4 }, 1);
+    CHECK(la_pins_warnings(4, PULL(4)) == 0);                                  /* open drain + pull-up: normal */
+    la_pins_set_target_powered(false);
+    CHECK(la_pins_warnings(3, 0) == LA_WARN_UNPOWERED);                          /* driven high */
+    la_pins_set_level(3, 0);
+    CHECK(la_pins_warnings(3, 0) == 0);                                          /* driven low: fine */
+    CHECK(la_pins_warnings(4, PULL(4)) == LA_WARN_UNPOWERED);                   /* pulled up */
+    CHECK(la_pins_warnings(7, PULL(7)) == 0);                                   /* a pull-down is fine */
+    la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, (uint8_t[]){ 12 }, 1);
+    CHECK(la_pins_warnings(12, 0) == LA_WARN_UNPOWERED);                         /* TX idles high */
+    la_pins_set_target_powered(true);
+
+    /* the listing carries dir and warn */
+    char buf[256];
+    bp_emit_t e;
+    la_pins_set_dir(3, LA_DIR_DUT_INPUT);
+    bp_emit_init(&e, buf, sizeof(buf));
+    la_pins_set_level(3, 1);
+    la_pins_emit_entry(&e, 3, PULL(3));
+    CHECK_STR(buf, "{\"la\":3,\"function\":\"gpio\",\"gpio\":\"output\",\"level\":1,\"pull\":{\"dir\":\"up\",\"ohms\":\"2.2k\",\"on\":true},\"dir\":\"dut_input\",\"warn\":1}");
+    for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
 }
 
 static void test_trigger_parse(void) {
@@ -408,6 +480,7 @@ static void test_trigger_parse(void) {
 }
 
 int main(void) {
+    test_direction_and_warnings();
     test_defaults_and_names();
     test_claims_and_conflicts();
     test_pull_rules();

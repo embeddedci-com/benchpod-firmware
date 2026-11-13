@@ -45,6 +45,8 @@ typedef enum {
     LA_FN_SENSOR_MOSI,
     LA_FN_SENSOR_MISO,
     LA_FN_SENSOR_CS,
+    LA_FN_I2CM_SDA,   /* i2c_start: the I2C master (the SWD engine's third job, gateware v55) */
+    LA_FN_I2CM_SCL,
     LA_FN__COUNT
 } la_fn_t;
 
@@ -105,6 +107,32 @@ int la_pins_drive(unsigned la);
    checked over all pins first, then pull compatibility against `pull_mask` (engaged pulls). */
 bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, size_t n,
                          uint32_t free_fns, uint16_t pull_mask, char *err, size_t cap);
+/* ---- pin direction and warnings (pin safety) ----
+   The host tells the pod which way each LA pin's DUT signal goes (from the wiring profile, with
+   la_dir; RAM only, unknown after a reboot).  A push-pull driver (gpio output, UART TX, SPI SCK /
+   MOSI / CS, SWD, step, an emulated sensor's TX / MISO / data-ready) may not claim a pin wired to a
+   DUT output, and such a pin can't be marked a DUT output while one drives it: two push-pull
+   outputs would drive against each other.  Open drain (gpio open_drain, I2C) is allowed. */
+typedef enum { LA_DIR_UNKNOWN = 0, LA_DIR_DUT_INPUT, LA_DIR_DUT_OUTPUT, LA_DIR_BIDIR } la_dir_t;
+const char *la_dir_name(la_dir_t d);                      /* "unknown" / "dut_input" / ... */
+bool        la_dir_parse(const char *s, la_dir_t *out);
+la_dir_t    la_pins_dir(unsigned la);
+void        la_pins_set_dir(unsigned la, la_dir_t d);
+/* Does fn (gpio in `mode`) drive the pin push-pull? */
+bool        la_fn_drives(la_fn_t fn, la_gpio_mode_t mode);
+/* May `la` be marked `d` given its current function? */
+bool        la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap);
+
+/* Per-pin warnings (bits), in every pin listing as "warn": not refusals, the pod can't know them
+   for sure.  PULL_VS_DRIVE: a pull is on under a push-pull output (it only costs current).
+   UNPOWERED: the pod's target power is off while the pin is driven high or pulled up, which
+   back-powers an unpowered DUT through its I/O pins (fine when the DUT has its own supply). */
+#define LA_WARN_PULL_VS_DRIVE  0x01u
+#define LA_WARN_UNPOWERED      0x02u
+/* The pod's target power, for LA_WARN_UNPOWERED (set before a listing; default on). */
+void        la_pins_set_target_powered(bool on);
+uint8_t     la_pins_warnings(unsigned la, uint16_t pull_mask);
+
 /* May the pull on `la` be engaged, given the pin's current function? */
 bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap);
 /* Are all pins gpio output / open_drain (so a level can be set)? */

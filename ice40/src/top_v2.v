@@ -799,6 +799,11 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels, version 53) ----
+    // GATEWARE_VERSION 55 = v54 + an I2C MASTER as the SWD engine's third job (i2c_master.v; SPI_ARM
+    // flags bit 2, open-drain SCL/SDA, clock stretching, lost-arbitration flag in SWD_QSTATUS bit 7)
+    // and SPI MASTER MODES 1 and 2 (SPI_ARM flags bit 1 inverts SCK).  SPI_ARM's half byte is 7 bits
+    // (2..127; 100 kHz I2C needs 120) and SPI_STATUS bit 0 reads 1 for an I2C session too.  All three
+    // images.
     // GATEWARE_VERSION 53 = v52 + an ADC-urgent pick in psram_dual_writer: a half-full ADC staging
     //     FIFO wins the next burst. Until v52 a raw LA at divider 2 (12 MS/s) kept its FIFO full at
     //     every pick, won every tie, and the ADC FIFO overflowed after ~15 samples: a 12 MS/s LA
@@ -1225,7 +1230,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd54), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd55), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

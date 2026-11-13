@@ -47,6 +47,7 @@ SRC = src/top_v2.v            \
       src/la_bank.v           \
       src/stepper_engine.v    \
       src/swd_engine.v        \
+      src/i2c_master.v        \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -551,12 +552,16 @@ SEED_LOOP_FALLBACK ?= 17 19 21 24 30 26 13
 # v54 (no I2C target, no UART2; 3663 LC, 69%): seed 37 fell to 51.58 MHz.  Swept 1..32 locally: all 32
 # reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 37 -> 11 (clk48 59.54, clk 29.31, clk -> clk48 13.34 ns,
 # clk48 -> clk 5.58 ns; 14 ties on clk48 at 14.67 ns).  CI sweep not run yet.  RE-VERIFY deep replay.
-SEED_DEEP ?= 11
+# v55 (I2C master + SPI modes 1/2 in the engine; 3839 LC): CI failed seed 11 (clk -> clk48 15.22 ns,
+# 14.57 locally).  Swept 1..32 in both (CI run 43497781121): 30/32 local, 32/32 CI reach
+# MIN_CLK48_MHZ.  Pinned SEED_DEEP 11 -> 29, the most clk -> clk48 margin in the worse toolchain
+# (13.32 local / 13.59 CI ns; clk48 54.27 / 53.74 MHz).  RE-VERIFY deep replay on hardware.
+SEED_DEEP ?= 29
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 3 27 29 21 7 14
+SEED_DEEP_FALLBACK ?= 3 21 25 32 17
 # v54: the emulation image (USE_EMULATION; 4 I2C targets, write log, SPI target, FIFO, UART2 TX+RX;
 # 4891 LC, 92%, 30/30 block RAM, 4/4 SPRAM).  Its binding clock is clk (24 MHz), not clk48: the
 # image has no clk48 logic beyond what every image has.  Swept 1..42 locally: ALL 42 place, close
@@ -882,6 +887,12 @@ topemutest:
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
 swdqtest:
 	$(call topbench,tb_top_swdq,loop deep)
+
+# v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
+# modes 0-3, on swd_engine alone against behavioural targets.
+i2cmastertest:
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v
+	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:

@@ -1,7 +1,7 @@
 /*
  * command_handler_spi.c — the SPI master on the LA pins (gateware >= v44), as JSON commands.
  *
- *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}
+ *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
  *   {"cmd":"spi_xfer","tx":"<b64url>","cs":"release"|"hold"}   -> {"rx":"<b64url>"}
  *   {"cmd":"spi_flash","op":"id"}                              -> {"id":"ef4017",...}
  *   {"cmd":"spi_flash","op":"read","addr":N,"len":N}           -> {"data":"<b64url>"}
@@ -136,8 +136,11 @@ void handle_spi_start(int conn_id, const char *json) {
     if (has_key(json, "hz") && !get_u32(json, "hz", &hz)) {
         send_error(conn_id, "invalid hz"); return;
     }
-    if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || (mode != 0 && mode != 3))) {
-        send_error(conn_id, "mode must be 0 or 3"); return;
+    if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || mode > 3)) {
+        send_error(conn_id, "mode must be 0, 1, 2 or 3"); return;
+    }
+    if ((mode == 1 || mode == 2) && signal_engine_fpga_version() < SPI_MODES12_MIN_GW) {
+        send_error(conn_id, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware"); return;
     }
     if (fpga_spi_armed()) { send_error(conn_id, "spi busy: send spi_stop first"); return; }
 
@@ -389,4 +392,36 @@ void handle_spi_stream(int conn_id, const char *json) {
     snprintf(p, sizeof(p), "{\"sent\":%lu,\"ms\":%lu,\"cs\":\"%s\"}", (unsigned long)sent,
              (unsigned long)((time_us_64() - t0) / 1000u), s_cs_held ? "held" : "released");
     send_ok_str(conn_id, p);
+}
+
+/* ---- send and capture (la_capture "send":{"bus":"spi","tx":...}, command_handler_bus_send.c) ----
+   One CS frame, built before the capture is armed and run right after it (a trigger on CS
+   catches it). */
+
+static uint8_t s_cap_tx[BUS_SEND_MAX], s_cap_rx[BUS_SEND_MAX];
+static size_t  s_cap_n;
+
+int spi_capture_prepare(const char *obj, char *err, size_t cap) {
+    if (!fpga_spi_armed()) { snprintf(err, cap, "send: no SPI session: send spi_start first"); return -1; }
+    if (s_cs_held) { snprintf(err, cap, "send: CS is held by an earlier spi_xfer; release it first"); return -1; }
+    char b64[B64URL_ENCODED_LEN(BUS_SEND_MAX) + 8];
+    uint8_t tmp[BUS_SEND_MAX + 4];
+    size_t n = 0;
+    if (bp_json_get_fit(obj, "tx", b64, sizeof(b64)) != 1 ||
+        b64url_decode(b64, tmp, sizeof(tmp), &n) != 0 || n == 0 || n > BUS_SEND_MAX) {
+        snprintf(err, cap, "send: tx must be 1..%u bytes of base64url", (unsigned)BUS_SEND_MAX); return -1;
+    }
+    memcpy(s_cap_tx, tmp, n);
+    s_cap_n = n;
+    return 0;
+}
+
+void spi_capture_run(char *out, size_t cap) {
+    fpga_spi_cs(true);
+    int rc = fpga_spi_xfer(s_cap_tx, s_cap_rx, s_cap_n);
+    fpga_spi_cs(false);
+    if (rc != 0) { snprintf(out, cap, "{\"bus\":\"spi\",\"error\":\"transfer failed\"}"); return; }
+    int n = snprintf(out, cap, "{\"bus\":\"spi\",\"rx\":\"");
+    n += (int)b64url_encode(s_cap_rx, s_cap_n, out + n, cap - (size_t)n);
+    snprintf(out + n, cap - (size_t)n, "\"}");
 }

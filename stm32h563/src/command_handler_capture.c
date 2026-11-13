@@ -252,13 +252,25 @@ static struct { bool present; la_trigger_t t; bool fired; } trig_reply;
 
 /* The reply footer grows by ~46 B ("trigger":{"la":12,"edge":"falling","fired":true}) on a
    triggered capture; bulk_pump reserves that on top of its usual framing budget. */
-static size_t bulk_footer_reserve(void) { return bulk.trig_present ? 112u : 64u; }
+/* A capture's send result (la_capture "send", command_handler_bus_send.c) rides the same frame. */
+static char   bulk_send[BUS_SEND_RESULT_MAX + 16];
+static size_t bulk_send_len;
+
+static size_t bulk_footer_reserve(void) { return (bulk.trig_present ? 112u : 64u) + bulk_send_len; }
 
 static int bulk_emit_trigger(char *buf, size_t cap) {
-    if (!bulk.trig_present) return 0;
-    return snprintf(buf, cap, ",\"trigger\":{\"la\":%u,\"edge\":\"%s\",\"fired\":%s}",
-                    (unsigned)bulk.trig.la, la_edge_name(bulk.trig.edge),
-                    bulk.trig_fired ? "true" : "false");
+    int n = 0;
+    if (bulk.trig_present)
+        n = snprintf(buf, cap, ",\"trigger\":{\"la\":%u,\"edge\":\"%s\",\"fired\":%s}",
+                     (unsigned)bulk.trig.la, la_edge_name(bulk.trig.edge),
+                     bulk.trig_fired ? "true" : "false");
+    if (bulk_send_len && n >= 0 && (size_t)n + bulk_send_len < cap) {
+        memcpy(buf + n, bulk_send, bulk_send_len);
+        n += (int)bulk_send_len;
+        buf[n] = '\0';
+    }
+    bulk_send_len = 0;
+    return n;
 }
 
 /* Attach the trigger the just-finished capture ran with (if any) to this reply. */
@@ -267,6 +279,7 @@ static void bulk_take_trigger(void) {
     bulk.trig          = trig_reply.t;
     bulk.trig_fired    = trig_reply.fired;
     trig_reply.present = false;
+    bulk_send_len      = bus_send_take(bulk_send, sizeof(bulk_send));
 }
 
 /* Parse "trigger" / "trigger_timeout_ms" and, when present, gate on the gateware version and
@@ -1786,7 +1799,8 @@ void handle_la_capture(int conn_id, const char *json) {
         stop_us = (uint32_t)strtoul(stop_s, NULL, 10);
     bool stop_dac_armed = stop_us > 0 && signal_engine_fpga_version() >= DAC_CAPTURE_STOP_MIN_GW;
     la_trigger_t trig;
-    if (!capture_trigger_begin(conn_id, json, &trig, true)) return;
+    if (!bus_send_prepare(conn_id, json)) return;
+    if (!capture_trigger_begin(conn_id, json, &trig, true)) { bus_send_cancel(); return; }
     /* Above the raw sampler's 12 MS/s, gateware >= v50 records the CHANGES at 48 MS/s and the
        read-back turns them into the same edges a raw capture sends (48, 24 or 16 MS/s, the
        nearest to the request); older gateware keeps the raw path, which caps at 12 MS/s. */
@@ -1798,9 +1812,10 @@ void handle_la_capture(int conn_id, const char *json) {
        documented: check the depth at that.) */
     if (!chg_k && !la_rate_fits(conn_id, samples, sr_hz > LA_RAW_MAX_HZ ? LA_RAW_MAX_HZ : sr_hz, false)) {
         capture_trigger_cancel(&trig);
+        bus_send_cancel();
         return;
     }
-    if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
+    if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); bus_send_cancel(); return; }
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float la_actual = 0.0f;
     int armed = chg_k ? fpga_la_change_start(samples, chg_k, pre != 0u)
@@ -1809,10 +1824,12 @@ void handle_la_capture(int conn_id, const char *json) {
     if (armed != 0) {
         heavy_release(conn_id);
         capture_trigger_cancel(&trig);
+        bus_send_cancel();
         send_error(conn_id, "la capture failed");
         return;
     }
     capture_trigger_armed(conn_id, &trig);
+    bus_send_run();           /* the transaction, now the capture (and its trigger) is armed */
     last_cap.valid = false;   /* this capture overwrites the LA PSRAM region */
     lacap.active   = true;
     lacap.conn_id  = conn_id;
