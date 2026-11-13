@@ -764,8 +764,10 @@ size_t fpga_uart_read(uint8_t *buf, size_t len);
    the emulation image and has its own status (UART2_STATUS). */
 /* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
 bool fpga_uart_rx_overflowed(void);
-/* Reprogram the iCE40 when its gateware is not the version this firmware was built with, from
-   the matching W25Q slot; no-op otherwise. Runs at boot and after a gateware blob install. */
+/* Reprogram the iCE40 when its gateware is not the version this firmware was built with, or the
+   running kind's W25Q slot holds another image than the one recorded as written (a new build of
+   the same version: boot_policy_gateware_action), from that slot; no-op otherwise. With no record
+   yet it read-compares once and records. Runs at boot and after a gateware blob install. */
 void signal_engine_gateware_update(void);
 /* Capture read-backs that needed a retry, that failed all three tries, and the last error code
    (psram_read_settled). */

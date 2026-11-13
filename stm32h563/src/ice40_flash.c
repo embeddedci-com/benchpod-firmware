@@ -113,6 +113,44 @@ static int release_and_wait_cdone(void)
     return 0;
 }
 
+/* The identity record of the image at offset 0 (boot_policy.h), cached. */
+static gw_ident_t s_ident;
+static bool s_ident_ok;
+
+const gw_ident_t *ice40_ident(void) { return s_ident_ok ? &s_ident : NULL; }
+
+void ice40_ident_load(void)
+{
+    s_ident_ok = false;
+    if (w25q_open() != 0) return;
+    gw_ident_t r;
+    if (w25q_read(GW_IDENT_OFF, (uint8_t *)&r, sizeof(r)) == 0 && gw_ident_valid(&r)) {
+        s_ident = r;
+        s_ident_ok = true;
+    }
+    w25q_close();
+    if (s_ident_ok)
+        printf("[ice40] config flash image: from slot %u, %lu bytes, sha256 %02x%02x%02x%02x...\n",
+               (unsigned)s_ident.slot, (unsigned long)s_ident.len, s_ident.sha256[0], s_ident.sha256[1],
+               s_ident.sha256[2], s_ident.sha256[3]);
+    else
+        printf("[ice40] config flash image: not recorded yet\n");
+}
+
+/* Write `ident` at GW_IDENT_OFF and read it back. Bus held, sector erased. 0 = ok. */
+static int ident_write(const gw_ident_t *ident)
+{
+    gw_ident_t rb;
+    if (w25q_program(GW_IDENT_OFF, (const uint8_t *)ident, sizeof(*ident)) != 0 ||
+        w25q_read(GW_IDENT_OFF, (uint8_t *)&rb, sizeof(rb)) != 0 || memcmp(&rb, ident, sizeof(rb)) != 0) {
+        printf("[ice40] could not record the image identity (the next boot compares again)\n");
+        return -1;
+    }
+    s_ident = *ident;
+    s_ident_ok = true;
+    return 0;
+}
+
 int ice40_flash_program(const uint8_t *data, size_t len)
 {
     if (!data) return -1;
@@ -121,7 +159,12 @@ int ice40_flash_program(const uint8_t *data, size_t len)
 
 int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
 {
-    if (!rd || len == 0) return -1;
+    return ice40_flash_program_src_ident(rd, ctx, len, NULL);
+}
+
+int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, const gw_ident_t *ident)
+{
+    if (!rd || len == 0 || len > GW_IDENT_OFF) return -1;
     bool erased = false;   /* from the first erase on, the flash holds no whole image */
     static uint8_t pg[W25Q_PAGE];   /* source page */
     static uint8_t rb[W25Q_PAGE];   /* read-back page */
@@ -141,6 +184,10 @@ int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
     printf("[ice40] flash ID %02x %02x %02x, programming %u bytes\n",
            id[0], id[1], id[2], (unsigned)len);
 
+    /* The record names the image about to be replaced: drop it first, so a write that fails or is
+       cut leaves no record (the next boot compares) rather than a wrong one. */
+    s_ident_ok = false;
+    if (w25q_erase_sector(GW_IDENT_OFF) != 0) goto fail;
     /* Erase enough 4 KB sectors to hold the bitstream. */
     for (uint32_t a = 0; a < len; a += W25Q_SECTOR) {
         erased = true;
@@ -168,6 +215,7 @@ int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len)
         }
     }
     printf("[ice40] verify OK (%u bytes)\n", (unsigned)len);
+    if (ident) (void)ident_write(ident);   /* a failed record only costs a compare at next boot */
 
     return release_and_wait_cdone();
 
@@ -210,6 +258,11 @@ uint32_t ice40_flash_last_mismatch(void) { return s_mismatch_at; }
 
 int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len)
 {
+    return ice40_flash_matches_src_ident(rd, ctx, len, NULL);
+}
+
+int ice40_flash_matches_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, const gw_ident_t *ident)
+{
     static uint8_t pg[W25Q_PAGE], rb[W25Q_PAGE];
     psram_bus_acquire();
     flash_pins();
@@ -229,6 +282,10 @@ int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len)
             same = 0;
             break;
         }
+    }
+    if (same == 1 && ident && len <= GW_IDENT_OFF) {
+        s_ident_ok = false;
+        if (w25q_erase_sector(GW_IDENT_OFF) == 0) (void)ident_write(ident);
     }
     (void)release_and_wait_cdone();
     return same;

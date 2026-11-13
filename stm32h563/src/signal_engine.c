@@ -956,8 +956,33 @@ void signal_engine_gateware_update(void) {
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();
     int kind = signal_engine_image_kind();
-    int img = boot_policy_gateware_image(running, embedded, kind < 0 ? 0 : kind, configured);
-    if (img < 0) return;
+    if (kind < 0) kind = 0;
+    /* The identity of the running kind's slot against the recorded image (cached, no bus access):
+       a new image of the same version is written too, not only a new version. */
+    blob_id_t kslot = (blob_id_t)ice40_image_slot((kind == 1 || kind == 2) ? kind : 0);
+    const blob_info_t *kin = blob_store_info(kslot);
+    gw_ident_match_t ident = gw_ident_match(ice40_ident(), blob_state(kslot) == BLOB_STATE_OK,
+                                            (uint16_t)kslot, kin->len, kin->sha256);
+    int img = -1;
+    gw_action_t act = boot_policy_gateware_action(running, embedded, kind, configured, ident, &img);
+    if (act == GW_ACT_NONE) return;
+    if (act == GW_ACT_COMPARE) {
+        /* No record yet (the first boot with this check): read-compare once, record when equal.
+           Only a differing image is written, so the flash is not rewritten on every pod. */
+        const int same = ice40_image_matches_slot(img);
+        sleep_ms(5);
+        signal_engine_refresh_version();   /* the compare reconfigured the iCE40 from its flash */
+        if (same == 1) {
+            printf("[fpga] gateware v%u is image %d from slot %s: recorded\n", (unsigned)running, img,
+                   blob_name(kslot));
+            return;
+        }
+        if (same < 0) {
+            printf("[fpga] could not compare the iCE40's image with slot %s: left as it is\n", blob_name(kslot));
+            return;
+        }
+        /* differs: write it below */
+    }
     blob_id_t slot = (blob_id_t)ice40_image_slot(img);
     if (blob_state(slot) != BLOB_STATE_OK) {
         if (!configured)
@@ -972,6 +997,9 @@ void signal_engine_gateware_update(void) {
     }
     if (!configured)
         printf("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
+    else if (running == embedded)
+        printf("[fpga] gateware v%u, but slot %s holds another image of it (a new build): "
+               "reprogramming image %d...\n", (unsigned)running, blob_name(slot), img);
     else
         printf("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
                (unsigned)running, (unsigned)embedded, img);

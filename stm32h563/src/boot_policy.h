@@ -39,4 +39,56 @@ const char *boot_policy_off_str(uint32_t off);
    gets image 0 whatever the versions say: any gateware beats none. */
 int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_kind, int configured);
 
+/* The version alone misses a new image of the SAME gateware version (a dev rebuild, or the
+   emulation image of a later build of v54): it would never be written while that image kind
+   runs. So the firmware also records WHICH image it wrote to the iCE40's config flash: the slot
+   it came from and that slot's sha256 and length (the slot header, blob_store.h), in a small
+   record next to the image (GW_IDENT_OFF, ice40_flash.h). Written right after every write of the
+   config flash from a slot, erased before any write of it, so it never names an image that is
+   not there. */
+#define GW_IDENT_MAGIC    0x49574742u   /* "BGWI" */
+#define GW_IDENT_VERSION  1u
+
+typedef struct {
+    uint32_t magic;          /* GW_IDENT_MAGIC */
+    uint16_t version;        /* GW_IDENT_VERSION */
+    uint16_t slot;           /* blob_id_t the image was copied from */
+    uint32_t len;            /* image bytes */
+    uint8_t  sha256[32];     /* of the image, from the slot header */
+    uint32_t crc;            /* CRC-32 of everything above */
+} gw_ident_t;
+_Static_assert(sizeof(gw_ident_t) == 48, "gw_ident_t is stored raw in the W25Q");
+
+/* Fill a record for the image of `slot` (len bytes, sha256). */
+void gw_ident_make(gw_ident_t *r, uint16_t slot, uint32_t len, const uint8_t sha256[32]);
+/* 1 when r is a whole record (magic, version, CRC); 0 for a blank (erased) or torn one. */
+int  gw_ident_valid(const gw_ident_t *r);
+
+typedef enum {
+    GW_IDENT_NONE,      /* the running kind's slot does not hold what this firmware expects:
+                           nothing to compare against, leave the iCE40 alone */
+    GW_IDENT_UNKNOWN,   /* no valid record (first boot with this check, or a write was cut) */
+    GW_IDENT_SAME,      /* the record names exactly the slot's image */
+    GW_IDENT_DIFFERS,   /* the record names another image */
+} gw_ident_match_t;
+
+/* How the record `rec` (NULL or invalid = unknown) relates to the image in `slot` (len, sha256).
+   slot_ok 0 = the slot does not hold the blob this firmware expects (GW_IDENT_NONE). */
+gw_ident_match_t gw_ident_match(const gw_ident_t *rec, int slot_ok, uint16_t slot, uint32_t len,
+                                const uint8_t sha256[32]);
+
+typedef enum {
+    GW_ACT_NONE,      /* leave the iCE40 alone */
+    GW_ACT_WRITE,     /* write image *img from its slot (and record it) */
+    GW_ACT_COMPARE,   /* no record yet: read-compare the config flash with image *img's slot;
+                         record it when equal, write it when not. One pass, then recorded: a
+                         blank record never makes every boot rewrite the flash. */
+} gw_action_t;
+
+/* boot_policy_gateware_image, then the identity: same version, configured, and the running
+   kind's slot (`ident`, from gw_ident_match on that slot) is not the recorded image -> write it;
+   no record -> compare. *img is the image to act on (unchanged for GW_ACT_NONE). */
+gw_action_t boot_policy_gateware_action(uint8_t running, uint8_t embedded, int running_kind,
+                                        int configured, gw_ident_match_t ident, int *img);
+
 #endif /* BOOT_POLICY_H */

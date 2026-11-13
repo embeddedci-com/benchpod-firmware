@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "boot_policy.h"   /* gw_ident_t */
 
 /* Reprogram the iCE40 config flash (Winbond W25Q64) over the shared OCTOSPI bus.
  * The flash shares the quad data/clock lines with the PSRAM; its chip-select is
@@ -22,6 +23,20 @@ int ice40_flash_program(const uint8_t *data, size_t len);
 typedef int (*ice40_src_read_fn)(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 int ice40_flash_program_src(ice40_src_read_fn rd, void *ctx, size_t len);
 
+/* The same, and when `ident` is not NULL, record it (gw_ident_t, boot_policy.h) at GW_IDENT_OFF
+   once the image verified. Every write of the config flash erases the old record first, so a
+   record never outlives the image it names. */
+int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, const gw_ident_t *ident);
+
+/* Where the identity record of the image at offset 0 lives: the last 4 KB sector before slot GW0
+   (blob_store.h). Images are at most one slot (256 KB), far below it. */
+#define GW_IDENT_OFF 0x0FF000u
+/* Read the record into the cache (boot, bus free: blob_store_init time). */
+void ice40_ident_load(void);
+/* The cached record of the image the iCE40 boots from, NULL when there is none (blank, torn, not
+   read). Never touches the bus. */
+const gw_ident_t *ice40_ident(void);
+
 /* Reload the iCE40 from its config flash as it is (reset + configure, no erase, no write).
    0 ok (CDONE high), <0 fail. The caller re-inits the PSRAM bus and the register mirrors
    (ice40_reload does both). */
@@ -29,6 +44,8 @@ int ice40_flash_boot(void);
 /* 1 when the config flash from offset 0 equals `len` bytes of the source, 0 when not, <0 when
    it could not be read. The iCE40 reconfigures from the flash afterwards. */
 int ice40_flash_matches_src(ice40_src_read_fn rd, void *ctx, size_t len);
+/* The same, and when they are equal and `ident` is not NULL, record it (no image write). */
+int ice40_flash_matches_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, const gw_ident_t *ident);
 /* Where the last compare found a difference (0xFFFFFFFF: none yet). */
 uint32_t ice40_flash_last_mismatch(void);
 /* ice40_flash_boot plus what every reconfiguration needs around it (PSRAM to SPI and back to
@@ -52,6 +69,10 @@ void ice40_hold_off_bus(void);
    Defined in console.c.
    ~2 s.  Returns 0 ok, -1 fail. */
 int  ice40_reflash_image(int n);
+/* Read-compare the image the iCE40 boots from with gateware slot n, and record its identity when
+   they are equal (no write). 1 equal (recorded), 0 differs, <0 unknown (empty slot, read failed).
+   The iCE40 reconfigures from its flash afterwards. Defined in console.c. */
+int  ice40_image_matches_slot(int n);
 /* The W25Q blob slot (blob_id_t) that holds gateware image n: gw0, gw1 or gw2. */
 int  ice40_image_slot(int n);
 /* The number of runtime gateware images (loop, deep, emulation). */

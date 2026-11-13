@@ -264,6 +264,16 @@ flash from the matching W25Q slot, keeping the image kind that was running. A bl
 broken iCE40 gets image 0 (loop). The USB console command `flash-ice40` does the same by
 hand.
 
+At the same version it also checks which image is in the config flash: each time the
+firmware writes it from a slot, it records that slot's sha256 and length (from the slot
+header) in the W25Q sector at `0x0FF000`, and erases that record before any write. When the
+running kind's slot holds the blob the firmware expects but the record names another image
+(a dev rebuild, or a later build of the emulation image at the same gateware version), the
+image is rewritten from the slot. A pod with no record yet (the first boot of a firmware with
+this check, or a write that was cut) does one read-compare of the config flash with the slot:
+equal, it only records it; different, it rewrites it and records it. So a blank record costs
+at most one rewrite, never one per boot.
+
 ## Simulation
 
 `sim/` holds self-checking iverilog testbenches for the individual cores

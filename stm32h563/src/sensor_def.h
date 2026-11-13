@@ -245,6 +245,9 @@ typedef struct {
 int sd_bus_info(const sd_inst_t *in, sd_bus_info_t *out);
 /* The bytes of writable:false entries (a bit per byte): the gateware stores no DUT write there. */
 int sd_regs_ro_map(const sd_inst_t *in, uint8_t ro[SD_REGIMAGE / 8]);
+/* The bytes rebuilt on every change (a bit per byte): those whose owning entry, a register or a
+   command's answer, reads a param, reg[], t, a state, ... (or says reload: always). */
+int sd_regs_dyn_map(const sd_inst_t *in, uint8_t dyn[SD_REGIMAGE / 8]);
 int sd_command(const sd_inst_t *in, unsigned i, sd_command_t *out);
 int sd_map_block(const sd_inst_t *in, unsigned i, sd_map_block_t *out);
 /* Data-ready rate (Hz, 0 = none) and enable, from the live image. */
