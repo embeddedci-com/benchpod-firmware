@@ -33,6 +33,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop) },
     { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe) },   /* always refused off the USB console: it changes nothing */
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status) },
+    { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status) },
     { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor) },
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status) },
     { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status) },
@@ -95,6 +96,10 @@ static const cmd_desc_t k_tiers[] = {
     { { "spi_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_xfer) },
     { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream) },
     { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash) },
+    { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start) },
+    { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop) },
+    { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer) },
+    { { "i2c_scan", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_scan) },
     { { "sensor_define", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
     { { "sensor_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
     { { "sensor_set", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },

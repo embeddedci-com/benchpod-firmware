@@ -45,6 +45,8 @@ typedef enum {
     LA_FN_SENSOR_MOSI,
     LA_FN_SENSOR_MISO,
     LA_FN_SENSOR_CS,
+    LA_FN_I2CM_SDA,   /* i2c_start: the I2C master (the SWD engine's third job, gateware v55) */
+    LA_FN_I2CM_SCL,
     LA_FN__COUNT
 } la_fn_t;
 

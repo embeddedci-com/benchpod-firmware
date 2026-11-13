@@ -648,6 +648,33 @@ void fpga_spi_cs(bool asserted);
    is no longer armed (the gateware was reconfigured). */
 int  fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n);
 
+/* ---- I2C master over the FPGA (gateware >= I2C_MASTER_MIN_GW) ----------------
+   The SWD engine's third job, open drain on two LA channels (1..14); excludes SWD and SPI.  The
+   tokens (I2C_TOK_*) and their replies are in signal_engine.c's section comment. */
+#define I2C_TOK_START       1u
+#define I2C_TOK_STOP        2u
+#define I2C_TOK_WRITE       3u      /* followed by the data byte; replies {0, nack} */
+#define I2C_TOK_READ_ACK    4u      /* replies the byte */
+#define I2C_TOK_READ_NACK   5u
+#define I2C_QUEUE_MAX       512u    /* token bytes per run, and reply bytes */
+#define I2C_HALF_MIN        13u     /* ~923 kHz: tLOW 0.54 us (fast-mode plus >= 0.5 us) */
+#define I2C_HALF_400K       33u     /* ~364 kHz: tLOW 1.38 us (fast mode >= 1.3 us) */
+#define I2C_HALF_100K       120u    /* 100 kHz: tLOW 5 us (standard mode >= 4.7 us) */
+#define I2C_HALF_MAX        127u    /* ~94 kHz */
+unsigned fpga_i2c_half_for_hz(uint32_t hz);
+uint32_t fpga_i2c_hz_for_half(unsigned half);
+/* 0 ok; -1 bad channel; -2 SWD, SPI or I2C already armed; -3 gateware too old. */
+int  fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half);
+void fpga_i2c_disarm(void);
+bool fpga_i2c_armed(void);
+/* Run tok[0..n) and read the first nreply reply bytes into reply, which must hold nreply + 1.  0 ok (*arb_lost says whether the master
+   lost arbitration and stopped); -1 bad args / not armed; -2 not done within timeout_us (a target
+   holds SCL low); -3 the engine is no longer armed (gateware reconfigured); -4 no FPGA answer. */
+int  fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, uint32_t timeout_us,
+                  bool *arb_lost);
+/* Arm again on the same pins (releases both lines, clears the arbitration flag). */
+int  fpga_i2c_recover(unsigned sda, unsigned scl, unsigned half);
+
 /* ===========================================================================
  * Emulated sensors: the emulation image's blocks are in fpga_emu.h (sensor_mgr.c drives them).
  * ========================================================================== */

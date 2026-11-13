@@ -47,6 +47,8 @@ static void test_defaults_and_names(void) {
     CHECK(la_pins_owned_mask() == 0);
     CHECK_STR(la_fn_name(LA_FN_STEP_DIR), "step_dir");
     CHECK_STR(la_fn_name(LA_FN_SPI_SCK), "spi_sck");
+    CHECK_STR(la_fn_name(LA_FN_I2CM_SDA), "i2cm_sda");
+    CHECK_STR(la_fn_name(LA_FN_I2CM_SCL), "i2cm_scl");
     CHECK_STR(la_fn_name(LA_FN_SPI_CS), "spi_cs");
     CHECK_STR(la_fn_name(LA_FN_SWD_DIO), "swd_dio");
     CHECK(la_pull_dir(1) == LA_PULL_UP && la_pull_dir(6) == LA_PULL_UP);
@@ -93,6 +95,9 @@ static void test_claims_and_conflicts(void) {
     la_pins_claim(LA_FN_SPI_CS, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
     CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
     CHECK_STR(err, "pin conflict: LA9 is in use by spi_cs; stop the SPI session first ({\"cmd\":\"spi_stop\"})");
+    la_pins_claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 4 }, 1);
+    CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 4 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
+    CHECK_STR(err, "pin conflict: LA4 is in use by i2cm_sda; stop the I2C session first ({\"cmd\":\"i2c_stop\"})");
 
     /* a replacing sensor_start treats the old sensor's pins as free */
     la_pins_reset();
@@ -125,6 +130,8 @@ static void test_pull_rules(void) {
                    "or use another channel");
     CHECK(!claim(LA_FN_I2C_SCL, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which i2c_scl can't work with (an open-drain bus needs pull-ups)") != NULL);
+    CHECK(!claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
+    CHECK(strstr(err, "which i2cm_sda can't work with (an open-drain bus needs pull-ups)") != NULL);
     CHECK(!claim(LA_FN_SWD_DIO, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which swd_dio can't work with (SWDIO is pulled up when released)") != NULL);
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, (uint8_t[]){ 7 }, 1, LA_FN_BIT(LA_FN_GPIO), down7));

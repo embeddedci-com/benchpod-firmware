@@ -194,6 +194,8 @@ C_SOURCES := \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
+  src/command_handler_i2c.c \
+  src/i2c_txn.c \
   src/command_handler_transport.c \
   src/esp_rom_flash.c \
   src/esp_rom_job.c \

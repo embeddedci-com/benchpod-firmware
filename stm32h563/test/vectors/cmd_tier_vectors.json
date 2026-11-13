@@ -15,6 +15,7 @@
     "identity_pop": "T0",
     "identity_wipe": "T0",
     "spi_status": "T0",
+    "i2c_status": "T0",
     "sensor_status": "T0",
     "can_status": "T0",
     "ota_status": "T0",
@@ -70,6 +71,10 @@
     "spi_xfer": "T1",
     "spi_stream": "T1",
     "spi_flash": "T1",
+    "i2c_start": "T1",
+    "i2c_stop": "T1",
+    "i2c_xfer": "T1",
+    "i2c_scan": "T1",
     "sensor_define": "T1",
     "sensor_start": "T1",
     "sensor_set": "T1",
@@ -150,6 +155,14 @@
     {
       "line": "{\"cmd\":\"spi_status\"}",
       "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"i2c_status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"i2c_xfer\"}",
+      "tier": "T1"
     },
     {
       "line": "{\"cmd\":\"sensor_status\"}",

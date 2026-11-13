@@ -283,6 +283,7 @@ void command_handler_on_gateware_reconfigured(void) {
        re-apply the gpio pins' GPIO_SET latches, which the fabric also lost. */
     swd_disarm_and_release();
     spi_on_gateware_reconfigured();
+    i2c_on_gateware_reconfigured();
     /* An emulated sensor keeps its pins, values and live image: sm_poll() re-arms it on the new
        fabric (and releases the pins if that fails, or when the emulation image is gone), as the
        UART proxy does below. */

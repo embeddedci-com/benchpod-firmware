@@ -222,6 +222,11 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_status` | T0 | The SPI session's pins, rate and mode | object | no |
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
+| `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
+| `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
+| `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
+| `i2c_xfer` | T1 | Write, read, or write then read an I2C device | object | no |
+| `i2c_scan` | T1 | List the addresses that answer on the bus | object | no |
 | `spi_flash` | T1 | SPI NOR flash operations (id, read, erase, program) | object | no |
 | `sensor_define` | T1 | Upload and compile a sensor definition (chunked) | object | no |
 | `sensor_start` | T1 | Start an emulated sensor instance (I2C, SPI, UART or analog) | object | no |
@@ -1902,6 +1907,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
 | `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
+| `i2cm_sda`, `i2cm_scl` | [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) | `i2c_stop`, gateware reconfiguration |
 
 **Captures never own pins.** `la_capture`, `capture_dual`, `sensor_la` and capture triggers
 observe all 14 channels whatever their function.
@@ -1934,6 +1940,7 @@ others: `"sensor:env+1"`.
 | `i2c_sda` / `i2c_scl` / `sensor_*` | `stop the sensor emulation first ({"cmd":"sensor_stop","instance":"<instance>"})` |
 | `step` / `step_dir` | `wait for the step train to finish` |
 | `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
+| `i2cm_*` | `stop the I2C session first ({"cmd":"i2c_stop"})` |
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
@@ -2690,6 +2697,64 @@ bits; a part that ships protected needs its status register written with `spi_xf
 
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
+
+## I2C master
+
+The pod is an I2C master on any two LA pins (firmware with gateware v55 and later): read and write
+registers of a chip on the DUT's board, or scan the bus. The pins are open drain, so the bus needs
+pull-ups. SWD, SPI and I2C sessions exclude each other: they share one engine in the FPGA. Every
+command and reply fits one cloud frame.
+
+### `i2c_start` — claim two pins as an I2C master
+
+```json
+{"cmd":"i2c_start","sda":1,"scl":2,"hz":400000,"pullups":"pod"}
+```
+
+| Field | Meaning |
+|---|---|
+| `sda`, `scl` | LA pins 1..14, different |
+| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. A target may stretch the clock |
+| `pullups` | `pod` (default): both pins must be LA1..LA6 with the pod's pull-up switched on (`{"cmd":"la","la":1,"pullup":"on"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
+
+The pod never switches a pull-up by itself; the error says which command does.
+Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
+
+Errors: `the I2C master needs gateware v55+: update the pod's firmware`, `I2C needs pull-ups: switch
+on LA1's with {"cmd":"la","la":1,"pullup":"on"}, or pass "pullups":"external"`, `LA7 has no pod
+pull-up (only LA1..LA6 do)...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
+session first`, and the usual `pin conflict:` / `pull conflict:`.
+
+### `i2c_stop` / `i2c_status`
+
+`{"cmd":"i2c_stop"}` releases both pins. `{"cmd":"i2c_status"}` returns `{"active":false}` or the
+session's pins, rate and pull-ups.
+
+### `i2c_xfer` — write, read, or write then read
+
+```json
+{"cmd":"i2c_xfer","addr":72,"write":"Dw","read":2}
+```
+
+| Field | Meaning |
+|---|---|
+| `addr` | the 7-bit address, 0..127 |
+| `write` | 0..128 bytes, base64url, sent after the address |
+| `read` | 0..248 bytes to read; after a write, a repeated START comes first. The last byte is NACKed |
+
+With neither, the pod sends the address alone (a probe). Reply:
+`{"addr":72,"ack":true,"rx":"ARc"}`. When a byte is not acknowledged, `ack` is false and `nack_at`
+says which: 0 the address, 1..N the Nth written byte, N+1 the address of the read. `rx` is empty
+when the device did not answer the read.
+
+Errors: `no I2C session: send i2c_start first`, `SCL held low: a target stretched the clock for
+over 200 ms, or the bus is stuck; the pod released the bus`, `arbitration lost: another master
+drove SDA low; the pod released the bus`.
+
+### `i2c_scan` — which addresses answer
+
+`{"cmd":"i2c_scan"}` probes 0x08..0x77 (`from` and `to` change the range) and returns
+`{"from":8,"to":119,"found":[72,118]}`.
 
 ## Emulated sensors
 
