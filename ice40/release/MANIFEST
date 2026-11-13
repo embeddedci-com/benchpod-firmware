@@ -2,22 +2,22 @@
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=55
 source_sha256=f4c2d2e6a1063892771111788ac5c37d6353aaadaf94b030964c9210ce6f9139
-built_from=04ee281
+built_from=497f4fc
 promoted=2026-11-13
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=benchpod-30a9f1 2026-11-13: process-node 137 passed/4 skipped incl. test_bus_master.py 16/16 (I2C master 100k/400k/1M, SPI modes 0-3, send+capture, la_dir); rebuilt after rebase byte-identical
+hw_verified=benchpod-30a9f1 2026-11-13: loop+emu byte-identical to the image that passed process-node 137/4-skipped incl. test_bus_master.py 16/16; deep re-pinned to seed 29 for CI: deep-image hwe2e DeepReplay, ConcurrentReplayCapture, ByteOrderAcrossCaptures, ImageSwapAfterDualCapture, ControlLoopWrongImageRejected pass (DeepReplayRate fails the same on published 3.10.3)
 loop.sha256=e7f995ab736fccc7e666841d032aa2b202ebc44155ad2afbc073df8b847f0ec7
 loop.seed=25
 loop.defines=-DVERSION_V2
 loop.clk48_mhz=57.64
-deep.sha256=d1d35a712647db33fab3535f9bdfb19778eecaacad2dd3a7279b667b131ed75a
-deep.seed=11
+deep.sha256=53a62b22d33be5951b654c15545c5f677670ebc48344e22f28cf1526bf04aeb2
+deep.seed=29
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=56.95
+deep.clk48_mhz=54.27
 emu.sha256=21b2fa3573bc8b63276f5a366d4114376ff8b20a1bf4d76f759dae54eca068b8
 emu.seed=27
 emu.defines=-DVERSION_V2 -DUSE_EMULATION
