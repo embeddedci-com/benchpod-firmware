@@ -589,6 +589,19 @@ static int uart_arm(sm_inst_t *s) {
                                  s->u->baud_now, true);
 }
 
+/* pod -> DUT: the staged bytes into UART2's FIFO, a FIFO's worth whenever it is empty. */
+static void uart_pump(sm_uart_t *u) {
+    uint8_t flags = 0;
+    if (u->off < u->len && fpga_emu_uart2_status(NULL, &flags) == 0 && (flags & EMU_U2_TX_EMPTY)) {
+        size_t n = (size_t)(u->len - u->off);
+        if (n > FPGA_EMU_UART2_FIFO) n = FPGA_EMU_UART2_FIFO;
+        if (fpga_emu_uart2_write(&u->stage[u->off], n) == 0) {
+            u->off = (uint16_t)(u->off + n);
+            u->sent += (uint32_t)n;
+        }
+    }
+}
+
 static void uart_poll(sm_inst_t *s, uint64_t now) {
     sm_uart_t *u = s->u;
     int64_t now_ms = (int64_t)((now - s->t0_us) / 1000u);
@@ -629,7 +642,9 @@ static void uart_poll(sm_inst_t *s, uint64_t now) {
         u->answers++;
     }
 
-    /* the messages, at their times */
+    /* the messages, at their times: first finish what is staged, so a poll that came late (a
+       capture held the loop) sends the waiting epoch instead of skipping the next one */
+    uart_pump(u);
     int64_t due = sd_uart_next_ms(s->in);
     if (due >= 0 && now_ms >= due) {
         size_t len = 0;
@@ -665,14 +680,7 @@ static void uart_poll(sm_inst_t *s, uint64_t now) {
     }
 
     /* pod -> DUT */
-    if (u->off < u->len && fpga_emu_uart2_status(NULL, &flags) == 0 && (flags & EMU_U2_TX_EMPTY)) {
-        size_t n = (size_t)(u->len - u->off);
-        if (n > FPGA_EMU_UART2_FIFO) n = FPGA_EMU_UART2_FIFO;
-        if (fpga_emu_uart2_write(&u->stage[u->off], n) == 0) {
-            u->off = (uint16_t)(u->off + n);
-            u->sent += (uint32_t)n;
-        }
-    }
+    uart_pump(u);
 }
 
 /* ---------------------------------------------------------------------------------------------
