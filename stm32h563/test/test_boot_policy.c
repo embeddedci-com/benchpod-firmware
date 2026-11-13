@@ -50,6 +50,74 @@ int main(void) {
     CHECK(boot_policy_gateware_image(0, 0, 0, 0) == 0, "gw: never configured, embedded unknown -> still image 0");
     CHECK(boot_policy_gateware_image(48, 48, 1, 0) == 0, "gw: CDONE low wins over a stale version");
 
+    /* The image's identity (gw_ident_t): a record names the slot and its sha256 + length. */
+    uint8_t sha_a[32], sha_b[32];
+    memset(sha_a, 0xA1, sizeof(sha_a));
+    memset(sha_b, 0xB2, sizeof(sha_b));
+    gw_ident_t rec;
+    gw_ident_make(&rec, 0, 104090, sha_a);
+    CHECK(gw_ident_valid(&rec), "ident: a made record is valid");
+    gw_ident_t blank;
+    memset(&blank, 0xFF, sizeof(blank));
+    CHECK(!gw_ident_valid(&blank), "ident: an erased sector is not a record");
+    CHECK(!gw_ident_valid(NULL), "ident: NULL is not a record");
+    gw_ident_t torn = rec;
+    torn.sha256[7] ^= 1;
+    CHECK(!gw_ident_valid(&torn), "ident: a torn record fails its CRC");
+    CHECK(gw_ident_match(&rec, 1, 0, 104090, sha_a) == GW_IDENT_SAME, "ident: same slot + sha -> same");
+    CHECK(gw_ident_match(&rec, 1, 0, 104090, sha_b) == GW_IDENT_DIFFERS, "ident: new sha (dev rebuild) -> differs");
+    CHECK(gw_ident_match(&rec, 1, 0, 104091, sha_a) == GW_IDENT_DIFFERS, "ident: other length -> differs");
+    CHECK(gw_ident_match(&rec, 1, 8, 104090, sha_a) == GW_IDENT_DIFFERS, "ident: other slot -> differs");
+    CHECK(gw_ident_match(&blank, 1, 0, 104090, sha_a) == GW_IDENT_UNKNOWN, "ident: no record -> unknown");
+    CHECK(gw_ident_match(NULL, 1, 0, 104090, sha_a) == GW_IDENT_UNKNOWN, "ident: record not read -> unknown");
+    CHECK(gw_ident_match(&rec, 0, 0, 104090, sha_a) == GW_IDENT_NONE, "ident: slot not what the firmware expects -> none");
+
+    /* The action: version first (as before), then the identity at the same version. */
+    int img = -7;
+    CHECK(boot_policy_gateware_action(53, 54, 2, 1, GW_IDENT_SAME, &img) == GW_ACT_WRITE && img == 2,
+          "act: older version -> write, whatever the record says");
+    img = -7;
+    CHECK(boot_policy_gateware_action(54, 54, 2, 1, GW_IDENT_SAME, &img) == GW_ACT_NONE && img == -7,
+          "act: same version, recorded image -> nothing");
+    CHECK(boot_policy_gateware_action(54, 54, 2, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 2,
+          "act: same version, new emulation image -> write image 2");
+    CHECK(boot_policy_gateware_action(54, 54, 1, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 1,
+          "act: same version, new deep image -> write image 1");
+    CHECK(boot_policy_gateware_action(54, 54, 0, 1, GW_IDENT_UNKNOWN, &img) == GW_ACT_COMPARE && img == 0,
+          "act: no record yet -> compare first, never a blind rewrite");
+    CHECK(boot_policy_gateware_action(54, 54, 7, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 0,
+          "act: unknown kind -> image 0");
+    img = -7;
+    CHECK(boot_policy_gateware_action(54, 54, 0, 1, GW_IDENT_NONE, &img) == GW_ACT_NONE && img == -7,
+          "act: slot not the firmware's blob -> nothing");
+    CHECK(boot_policy_gateware_action(0, 54, 0, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_NONE,
+          "act: configured but not answering -> nothing");
+    CHECK(boot_policy_gateware_action(54, 0, 0, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_NONE,
+          "act: embedded version unknown -> nothing");
+    CHECK(boot_policy_gateware_action(0, 54, 0, 0, GW_IDENT_SAME, &img) == GW_ACT_WRITE && img == 0,
+          "act: never configured -> write image 0");
+
+    /* First boot after this update on a pod whose image is already right: the record is blank, so
+       one compare, it matches and is recorded; the next boot sees SAME and does nothing. No write. */
+    gw_ident_t store;
+    memset(&store, 0xFF, sizeof(store));
+    int writes = 0, compares = 0;
+    for (int boot = 0; boot < 5; boot++) {
+        gw_action_t a = boot_policy_gateware_action(54, 54, 0, 1, gw_ident_match(&store, 1, 0, 104090, sha_a), &img);
+        if (a == GW_ACT_COMPARE) { compares++; gw_ident_make(&store, 0, 104090, sha_a); }   /* matched */
+        if (a == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_a); }
+    }
+    CHECK(compares == 1 && writes == 0, "storm: matching image -> 1 compare, 0 writes (got %d, %d)", compares, writes);
+    /* ... and when it does not match: one write, then recorded. */
+    memset(&store, 0xFF, sizeof(store));
+    writes = compares = 0;
+    for (int boot = 0; boot < 5; boot++) {
+        gw_action_t a = boot_policy_gateware_action(54, 54, 0, 1, gw_ident_match(&store, 1, 0, 104090, sha_b), &img);
+        if (a == GW_ACT_COMPARE) { compares++; a = GW_ACT_WRITE; }   /* differs: write */
+        if (a == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_b); }
+    }
+    CHECK(compares == 1 && writes == 1, "storm: other image -> 1 compare, 1 write (got %d, %d)", compares, writes);
+
     if (fails) { printf("test_boot_policy: %d FAILED\n", fails); return 1; }
     printf("test_boot_policy: all passed\n");
     return 0;

@@ -15,8 +15,10 @@ void blob_store_on_installed(blob_id_t id)
     switch (id) {
     case BLOB_GW0:
     case BLOB_GW1:
+    case BLOB_GW2:
         /* The running gateware may now be updatable to the version this firmware expects
-           (the firmware was installed before its gateware). */
+           (the firmware was installed before its gateware), or this is a new image of the same
+           version for the kind that runs (its identity differs from the recorded one). */
         signal_engine_gateware_update();
         /* A blank iCE40 booted without gateware, so boot could not park the DAC8554 or switch the
            +-14 V supply on (analog v3r2).  Do it now that the gateware runs; once on, a later

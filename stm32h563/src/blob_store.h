@@ -5,6 +5,8 @@
  * W25Q layout (8 MB W25Q64; a 16 MB W25Q128 has the same layout plus free space):
  *
  *   0x000000  the gateware the iCE40 boots from (ice40_flash.c rewrites it)
+ *   0x0FF000  the identity of that image: the slot it was copied from, its sha256 and length
+ *             (gw_ident_t in boot_policy.h, GW_IDENT_OFF in ice40_flash.h)
  *   0x100000  slot GW0: gateware image 0 (closed loop)     256 KB
  *   0x140000  slot GW1: gateware image 1 (deep replay)     256 KB
  *   0x180000  slot CA: the company CA for the cloud link (PEM, cloud_extras.h)      64 KB

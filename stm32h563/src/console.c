@@ -119,8 +119,12 @@ int ice40_reflash_image(int n)
          the new gateware) -> psram_bus_release() (hand the bus to the iCE40).
        NB: an earlier attempt to run psram_init() BEFORE the boot (so the config read saw a QPI
        PSRAM) intermittently CORRUPTED the deep bitstream — reverted. */
+    /* Record which image this is (the slot and its header's sha256), so the boot check sees a new
+       image of the same gateware version (boot_policy_gateware_action). */
+    gw_ident_t ident;
+    gw_ident_make(&ident, (uint16_t)id, blob_store_info(id)->len, blob_store_info(id)->sha256);
     psram_reset_to_spi();
-    int rc = ice40_flash_program_src(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len);
+    int rc = ice40_flash_program_src_ident(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len, &ident);
     psram_init();                       /* re-enter QPI for the new gateware (bus-yank now safe: gw v26) */
     psram_bus_handover();               /* hand the shared bus back to the iCE40 */
     /* The fabric just reset every register it owns; the firmware's MIRRORS of those registers did
@@ -143,6 +147,23 @@ int ice40_reload(void)
     signal_engine_on_gateware_reconfigured();
     command_handler_on_gateware_reconfigured();
     return rc;
+}
+
+/* Compare the config flash with gateware slot n and record its identity when equal (ice40_flash.h).
+   The same PSRAM handling around the reconfiguration as ice40_reload. */
+int ice40_image_matches_slot(int n)
+{
+    blob_id_t id = (blob_id_t)ice40_image_slot(n);
+    if (!blob_store_present(id)) return -1;
+    gw_ident_t ident;
+    gw_ident_make(&ident, (uint16_t)id, blob_store_info(id)->len, blob_store_info(id)->sha256);
+    psram_reset_to_spi();
+    int same = ice40_flash_matches_src_ident(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len, &ident);
+    psram_init();
+    psram_bus_handover();
+    signal_engine_on_gateware_reconfigured();
+    command_handler_on_gateware_reconfigured();
+    return same;
 }
 
 /* The W25Q slot of gateware image n (0 loop, 1 deep, 2 emulation). */
