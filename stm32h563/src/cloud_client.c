@@ -1061,7 +1061,7 @@ size_t cloud_client_tunnel_avail(int conn_id) {
 
 /* ---- OTA over the WebSocket (server -> device ota.* frames) ---------------- */
 
-/* ota.begin: {"size":N,"sha256":"<hex>"[,"target":"gw0|gw1|esp","version":V,"sig":"<b64url>"]}
+/* ota.begin: {"size":N,"sha256":"<hex>"[,"target":"gw0|gw1|gw2|esp","version":V,"sig":"<b64url>"]}
    -> stage in PSRAM (on the worker). No target = the firmware; sig = the signed manifest. */
 static bool cl_handle_ota_begin(const char *json) {
     char size_s[16] = {0}, sha[80] = {0}, target[16] = {0}, ver_s[16] = {0}, sig[200] = {0};

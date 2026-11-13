@@ -174,7 +174,7 @@ void handle_test(int conn_id, const char *json);
 void handle_measure(int conn_id, const char *json);
 void handle_la_capture(int conn_id, const char *json);
 void handle_sensor_regs(int conn_id, const char *json);
-void handle_sensor_la(int conn_id, const char *json);
+void handle_sensor_la(int conn_id, const char *json);   /* an I2C instance's two pins, packed */
 bool capture_busy(void);                      /* an async capture or a bulk send is running */
 void capture_poll(void);                      /* trigger timeouts, completions, bulk read-back */
 void capture_on_gateware_reconfigured(void);
@@ -222,7 +222,7 @@ uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
 void     la_pins_drive_mask(uint16_t mask);   /* GPIO_SET each pin in mask to its table state */
 /* May `fn` claim las[0..n)?  Pins owned by a function in free_fns count as free.  false = the
    pin/pull conflict error was sent.  Commit with la_pins_claim once the FPGA side succeeded. */
-bool     la_claim_or_error(int conn_id, la_fn_t fn, const uint8_t *las, size_t n, uint16_t free_fns);
+bool     la_claim_or_error(int conn_id, la_fn_t fn, const uint8_t *las, size_t n, uint32_t free_fns);
 /* Start an `la` step train with ownership.  0 ok; otherwise err holds the reply text and the
    return is -1 bad arguments, -2 a train is already running ("busy"), -3 pin conflict. */
 int      la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_la, int dir,
@@ -233,18 +233,8 @@ void     handle_la_pins(int conn_id, const char *json);
 void     handle_gpio(int conn_id, const char *json);
 void     handle_la(int conn_id, const char *json);
 void     handle_la_voltage(int conn_id, const char *json);
-void     handle_sensor_start(int conn_id, const char *json);
-void     handle_sensor_set(int conn_id, const char *json);
-void     handle_sensor_stop(int conn_id, const char *json);
-void     handle_sensor_status(int conn_id, const char *json);
-void     handle_sensor_types(int conn_id, const char *json);
-void     sensor_poll(void);                     /* register-write watch + re-arm after a reconfiguration */
-/* command_handler_gps.c */
-void     handle_gps_start(int conn_id, const char *json);
-void     handle_gps_set(int conn_id, const char *json);
-void     handle_gps_stop(int conn_id, const char *json);
-void     handle_gps_status(int conn_id, const char *json);
-void     gps_poll(void);                        /* next NMEA epoch + UART2 FIFO feed */
+/* Emulated sensors (command_handler_sensors.c; the JSON is in sensor_cmd.c). */
+void     handle_sensor(int conn_id, const char *json);   /* every sensor_* verb but sensor_la */
 
 /* SPI master on the LA pins (command_handler_spi.c). */
 void handle_spi_start(int conn_id, const char *json);

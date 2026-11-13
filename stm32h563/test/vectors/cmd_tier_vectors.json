@@ -16,8 +16,6 @@
     "identity_wipe": "T0",
     "spi_status": "T0",
     "sensor_status": "T0",
-    "sensor_types": "T0",
-    "gps_status": "T0",
     "can_status": "T0",
     "ota_status": "T0",
     "blob_status": "T0",
@@ -72,12 +70,15 @@
     "spi_xfer": "T1",
     "spi_stream": "T1",
     "spi_flash": "T1",
+    "sensor_define": "T1",
     "sensor_start": "T1",
     "sensor_set": "T1",
+    "sensor_stimulus": "T1",
+    "sensor_stimulus_start": "T1",
+    "sensor_stimulus_stop": "T1",
+    "sensor_fault": "T1",
+    "sensor_fault_clear": "T1",
     "sensor_stop": "T1",
-    "gps_start": "T1",
-    "gps_set": "T1",
-    "gps_stop": "T1",
     "can_config": "T1",
     "can_write": "T1",
     "can_term": "T1",
@@ -152,14 +153,6 @@
     },
     {
       "line": "{\"cmd\":\"sensor_status\"}",
-      "tier": "T0"
-    },
-    {
-      "line": "{\"cmd\":\"sensor_types\"}",
-      "tier": "T0"
-    },
-    {
-      "line": "{\"cmd\":\"gps_status\"}",
       "tier": "T0"
     },
     {
@@ -392,15 +385,27 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"gps_start\"}",
+      "line": "{\"cmd\":\"sensor_define\"}",
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"gps_set\"}",
+      "line": "{\"cmd\":\"sensor_stimulus\"}",
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"gps_stop\"}",
+      "line": "{\"cmd\":\"sensor_stimulus_start\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_stimulus_stop\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_fault\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"sensor_fault_clear\"}",
       "tier": "T1"
     },
     {

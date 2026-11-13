@@ -30,7 +30,7 @@ typedef enum {
     LA_FN_UART_TX,
     LA_FN_SWD_CLK,    /* dap_start */
     LA_FN_SWD_DIO,
-    LA_FN_I2C_SDA,    /* sensor_start */
+    LA_FN_I2C_SDA,    /* sensor_start of an I2C sensor (shared by the I2C sensors on one bus) */
     LA_FN_I2C_SCL,
     LA_FN_STEP,       /* `la` step train */
     LA_FN_STEP_DIR,
@@ -38,11 +38,28 @@ typedef enum {
     LA_FN_SPI_MOSI,
     LA_FN_SPI_MISO,
     LA_FN_SPI_CS,
-    LA_FN_GPS_TX,     /* gps_start (UART2, gateware v48+) */
+    LA_FN_SENSOR_TX,  /* sensor_start: a UART sensor's TX (pod to DUT, UART2) */
+    LA_FN_SENSOR_RX,  /*   its RX (DUT to pod) */
+    LA_FN_SENSOR_DRDY,/*   a data-ready pin */
+    LA_FN_SENSOR_SCK, /*   the SPI sensor's pins (the emulated SPI target) */
+    LA_FN_SENSOR_MOSI,
+    LA_FN_SENSOR_MISO,
+    LA_FN_SENSOR_CS,
     LA_FN__COUNT
 } la_fn_t;
 
-#define LA_FN_BIT(fn) ((uint16_t)(1u << (unsigned)(fn)))
+#define LA_FN_BIT(fn) ((uint32_t)(1u << (unsigned)(fn)))
+_Static_assert(LA_FN__COUNT <= 32, "free_fns masks are 32-bit");
+
+/* Pins of an emulated sensor also carry an OWNER: a bit per sensor-manager slot (several I2C
+   sensors share SDA/SCL), named "sensor:<instance>" by the namer the manager registers. */
+#define LA_PINS_OWNER_SLOTS 8u
+typedef const char *(*la_owner_namer_t)(unsigned slot);   /* instance name, NULL = none */
+void    la_pins_set_owner_namer(la_owner_namer_t namer);
+void    la_pins_set_owner(unsigned la, uint8_t owner_mask);
+uint8_t la_pins_owner(unsigned la);
+/* Is fn one of the sensor functions (i2c_sda/scl and sensor_*)? */
+bool    la_fn_is_sensor(la_fn_t fn);
 
 typedef enum {
     LA_GPIO_NONE = 0,     /* not a gpio pin (also the parsed value of "off") */
@@ -87,7 +104,7 @@ int la_pins_drive(unsigned la);
    in `free_fns` count as free (a replacing sensor_start, gpio mode switches).  Ownership is
    checked over all pins first, then pull compatibility against `pull_mask` (engaged pulls). */
 bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, size_t n,
-                         uint16_t free_fns, uint16_t pull_mask, char *err, size_t cap);
+                         uint32_t free_fns, uint16_t pull_mask, char *err, size_t cap);
 /* May the pull on `la` be engaged, given the pin's current function? */
 bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap);
 /* Are all pins gpio output / open_drain (so a level can be set)? */

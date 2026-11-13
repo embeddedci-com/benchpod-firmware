@@ -15,7 +15,7 @@
 
 #include "signal_engine.h"
 #include "boot_policy.h"
-#include "sensor_sim.h"   /* sensor_sim_sda/scl — I2C-LA capture reuses the deep-LA path */
+#include "fpga_emu.h"     /* the emulation image's sensor blocks (sensor_mgr.c drives them) */
 
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
@@ -955,10 +955,10 @@ void signal_engine_gateware_update(void) {
     const int configured = ice40_is_configured();
     uint8_t running = signal_engine_fpga_version();
     uint8_t embedded = ice40_embedded_gw_version();
-    int deep = (running != 0) && (signal_engine_fpga_features() & FPGA_FEATURE_DEEP_REPLAY);
-    int img = boot_policy_gateware_image(running, embedded, deep, configured);
+    int kind = signal_engine_image_kind();
+    int img = boot_policy_gateware_image(running, embedded, kind < 0 ? 0 : kind, configured);
     if (img < 0) return;
-    blob_id_t slot = img == 1 ? BLOB_GW1 : BLOB_GW0;
+    blob_id_t slot = (blob_id_t)ice40_image_slot(img);
     if (blob_state(slot) != BLOB_STATE_OK) {
         if (!configured)
             printf("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
@@ -1409,12 +1409,21 @@ void signal_engine_fabric_to_idle(void) {
     }
     (void)fpga_set_trigger(0u, 0u);
     spi_cmd_write(CMD_UART_DISABLE, NULL, 0);
-    if (s_fpga_version >= UART2_MIN_GW) {          /* UART2_CONFIG with enable 0 */
+    if (s_fpga_version >= 48u) {                   /* UART2_CONFIG (v48+) with enable 0 */
         uint8_t off[6] = { 0, 0, 2, 0, 0, 0 };
         spi_cmd_write(CMD_UART2_CONFIG, off, sizeof(off));
     }
     spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
-    spi_cmd_write(CMD_I2C_DISABLE, NULL, 0);
+    /* The emulation image's sensor blocks (other images ignore the opcodes; gateware <= v53 takes
+       I2C_DISABLE without the target byte, and a byte too many is harmless): every target off, the
+       SPI target off, no emulated pin driver. */
+    for (uint8_t t = 0; t < FPGA_EMU_I2C_TARGETS; t++) spi_cmd_write(CMD_I2C_DISABLE, &t, 1);
+    if (s_fpga_version >= EMULATION_MIN_GW) {
+        uint8_t spit_off[7] = { 0 };
+        spi_cmd_write(CMD_SPIT_CONFIG, spit_off, sizeof(spit_off));
+        uint8_t no_pins[7] = { 0 };
+        spi_cmd_write(CMD_EMU_PINMAP, no_pins, sizeof(no_pins));
+    }
     for (uint8_t idx = 0; idx < 14u; idx++) {      /* every LA channel back to high-Z */
         uint8_t args[2] = { idx, 2u };
         spi_cmd_write(CMD_GPIO_SET, args, sizeof(args));
@@ -1738,6 +1747,26 @@ bool signal_engine_has_control_loop(void) {
     return (signal_engine_fpga_features() & FPGA_FEATURE_CONTROL_LOOP) != 0;
 }
 
+/* Which runtime image runs: 0 loop, 1 deep replay, 2 sensor emulation, -1 unknown (the iCE40 does
+   not answer, or gateware older than FPGA_FEATURES).  Reads FPGA_FEATURES live. */
+int signal_engine_image_kind(void) {
+    if (s_fpga_version == 0) return -1;
+    uint8_t f = signal_engine_fpga_features();
+    if (f & FPGA_FEATURE_EMULATION)    return 2;
+    if (f & FPGA_FEATURE_DEEP_REPLAY)  return 1;
+    if (f & FPGA_FEATURE_CONTROL_LOOP) return 0;
+    return s_fpga_version >= CAPTURE_BASES_MIN_GW ? -1 : 0;
+}
+
+const char *signal_engine_image_name(int kind) {
+    switch (kind) {
+    case 0:  return "loop";
+    case 1:  return "deep";
+    case 2:  return "emulation";
+    default: return "unknown";
+    }
+}
+
 /* Which optional block the running warmboot image carries (FPGA_FEATURES 0x18). */
 uint8_t signal_engine_fpga_features(void) {
     if (s_fpga_version >= CAPTURE_BASES_MIN_GW) {   /* >=v22 has the opcode */
@@ -1774,7 +1803,8 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->loop_input_map = ver >= DAC_LOOP_INMAP_MIN_GW;
     out->gpio_read       = ver >= GPIO_GET_MIN_GW;
     out->capture_trigger = ver >= CAPTURE_TRIGGER_MIN_GW;
-    out->uart2           = ver >= UART2_MIN_GW;
+    out->emulation       = ver >= EMULATION_MIN_GW &&
+                           ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
 }
 
@@ -1823,7 +1853,8 @@ void signal_engine_quiesce_psram_masters(void) {
 }
 
 int fpga_warmboot(uint8_t image) {
-    if (image > 1) return -1;
+    if (image >= ICE40_IMAGE_COUNT) return -1;
+    if (!blob_store_present((blob_id_t)ice40_image_slot(image))) return -2;
     /* Quiesce the running gateware so the swap takes the bus at a safe (masters-idle) boundary —
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();
@@ -3047,87 +3078,172 @@ int fpga_spi_xfer(const uint8_t *tx, uint8_t *rx, size_t n) {
 }
 
 /* ===========================================================================
- * Emulated I2C sensor — FPGA-backed generic I2C target driven over SPI.
- *
- * The FPGA holds a 256-byte register image and presents it as an I2C slave on
- * two LA channels; this RP firmware (the orchestrator) fills that image and
- * configures the bus.  All sensor-specific knowledge (register maps, IDs,
- * calibration math) lives in sensor_*.c — these are just thin SPI wrappers.
- *
- * Host LA channels are 1-based (LA1..LA14); the gateware indexes la[] 0-based,
- * so SDA/SCL channels are sent as (channel - 1) like the SWD/GPIO commands.
+ * Emulation image (v54+): the sensor blocks, thin SPI wrappers (fpga_emu.h, ice40/PROTOCOL.md).
+ * The sensor manager (sensor_mgr.c) drives them; LA channels are wire indices here.
  * ========================================================================== */
 
-int fpga_i2c_sensor_config(uint8_t addr7, unsigned sda_ch, unsigned scl_ch,
-                           bool enable, uint8_t trig_reg, uint8_t busy_reg,
-                           uint8_t busy_mask, uint16_t conv_us) {
-    int sda = la_wire_index(sda_ch);
-    int scl = la_wire_index(scl_ch);
-    if (sda < 0 || scl < 0 || sda == scl) return -1;
-
-    /* [addr7][sda_ch][scl_ch][flags][trig_reg][busy_reg][busy_mask][conv_lo][conv_hi] */
-    uint8_t args[9] = {
-        (uint8_t)(addr7 & 0x7F),
-        (uint8_t)sda, (uint8_t)scl,
-        (uint8_t)(enable ? 0x01 : 0x00),
-        trig_reg, busy_reg, busy_mask,
-        (uint8_t)(conv_us & 0xFF), (uint8_t)((conv_us >> 8) & 0xFF),
-    };
-    spi_cmd_write(CMD_I2C_CONFIG, args, sizeof(args));
-    printf("[i2c-sim] config addr=0x%02x SDA=LA%u SCL=LA%u %s trig=0x%02x "
-           "busy=0x%02x/0x%02x conv=%uus\n",
-           addr7, sda_ch, scl_ch, enable ? "enabled" : "disabled",
-           trig_reg, busy_reg, busy_mask, conv_us);
-    return 0;
+int fpga_emu_i2c_config(uint8_t target, uint8_t addr7, uint8_t sda_w, uint8_t scl_w, uint8_t flags,
+                        uint8_t page, uint8_t busy_mask, uint8_t drdy) {
+    if (target >= FPGA_EMU_I2C_TARGETS || sda_w > 13u || scl_w > 13u) return -1;
+    uint8_t args[8] = { target, (uint8_t)(addr7 & 0x7F), sda_w, scl_w, flags, page, busy_mask, drdy };
+    return spi_cmd_write(CMD_I2C_CONFIG, args, sizeof(args));
 }
 
-void fpga_i2c_sensor_disable(void) {
-    spi_cmd_write(CMD_I2C_DISABLE, NULL, 0);
-    printf("[i2c-sim] disabled\n");
+int fpga_emu_i2c_disable(uint8_t target) {
+    if (target >= FPGA_EMU_I2C_TARGETS) return -1;
+    return spi_cmd_write(CMD_I2C_DISABLE, &target, 1);
 }
 
-int fpga_i2c_load_regs(uint8_t start_addr, const uint8_t *data, size_t len) {
-    if (!data || len == 0 || (size_t)start_addr + len > 256) return -1;
-    /* [CMD][start_addr][len_lo][len_hi][N data bytes] */
-    uint8_t hdr[4] = { CMD_I2C_LOAD_REGS, start_addr,
-                       (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+/* [CMD][target][start][len_lo][len_hi][N bytes] */
+static int emu_load(uint8_t op, uint8_t target, uint8_t start, const uint8_t *data, size_t len) {
+    if (target >= FPGA_EMU_TARGETS || !data || len == 0 || (size_t)start + len > 256) return -1;
+    uint8_t hdr[5] = { op, target, start, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
     cs_select();
-    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
-    spi_write_blocking(SPI_PORT, data, len);
+    int rc = spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    if (rc == 0) rc = spi_write_blocking(SPI_PORT, data, len);
     cs_deselect();
-    return 0;
+    return rc;
 }
 
-int fpga_i2c_read_regs(uint8_t start_addr, uint8_t *buf, size_t len) {
-    if (!buf || len == 0 || (size_t)start_addr + len > 256) return -1;
-    /* I2C_READ_REGS sends r[start] twice, like SWD_READ (see fpga_spi_xfer): ask for one byte
-       more and clock the first into a scratch byte. The extra byte never reads past
-       r[start + len - 1], so the bound above still holds; len + 1 fits the 16-bit length. */
+/* The read-backs send their first byte twice (like SWD_READ): ask for one more, drop the first. */
+static int emu_read(uint8_t op, uint8_t target, uint8_t start, uint8_t *data, size_t len) {
+    if (target >= FPGA_EMU_TARGETS || !data || len == 0 || (size_t)start + len > 256) return -1;
     size_t want = len + 1;
-    uint8_t hdr[4] = { CMD_I2C_READ_REGS, start_addr,
-                       (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    uint8_t hdr[5] = { op, target, start, (uint8_t)(want & 0xFF), (uint8_t)(want >> 8) };
     uint8_t lead;
     cs_select();
     int rc = spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
     if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, &lead, 1);
-    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, buf, len);
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, data, len);
     cs_deselect();
     return rc == 0 ? 0 : -1;
 }
 
-int fpga_i2c_sensor_status(i2c_sensor_status_t *out) {
-    if (!out) return -1;
-    uint8_t b[7] = {0};
-    spi_cmd_read(CMD_I2C_STATUS, NULL, 0, b, sizeof(b));
-    out->armed        = (b[0] & 0x01) != 0;
-    out->xfer_count   = (uint16_t)(b[1] | ((uint16_t)b[2] << 8));
-    out->wr_count     = (uint16_t)(b[3] | ((uint16_t)b[4] << 8));
-    out->last_wr_addr = b[5];
-    out->last_wr_val  = b[6];
+int fpga_emu_load_regs(uint8_t t, uint8_t start, const uint8_t *d, size_t n)  { return emu_load(CMD_I2C_LOAD_REGS, t, start, d, n); }
+int fpga_emu_read_regs(uint8_t t, uint8_t start, uint8_t *d, size_t n)        { return emu_read(CMD_I2C_READ_REGS, t, start, d, n); }
+int fpga_emu_load_attrs(uint8_t t, uint8_t start, const uint8_t *a, size_t n) { return emu_load(CMD_I2C_LOAD_ATTRS, t, start, a, n); }
+int fpga_emu_read_attrs(uint8_t t, uint8_t start, uint8_t *a, size_t n)       { return emu_read(CMD_I2C_READ_ATTRS, t, start, a, n); }
+
+int fpga_emu_status(uint8_t target, uint8_t *flags, uint8_t *wr_count) {
+    if (target >= FPGA_EMU_TARGETS) return -1;
+    uint8_t b[3] = { 0 };   /* pad (the snapshot loads), flags, wr_count */
+    if (spi_cmd_read(CMD_I2C_STATUS, &target, 1, b, sizeof(b)) != 0) return -1;
+    if (flags) *flags = b[1];
+    if (wr_count) *wr_count = b[2];
     return 0;
 }
 
-int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
+int fpga_emu_read_log(uint8_t target, uint8_t first, uint8_t n, uint8_t *pairs) {
+    if (target >= FPGA_EMU_TARGETS || !pairs || n == 0 || n > FPGA_EMU_LOG_ENTRIES) return -1;
+    size_t want = 2u * n + 1u;   /* the first byte repeats */
+    uint8_t args[4] = { target, (uint8_t)((2u * first) & 63u), (uint8_t)(want & 0xFF), (uint8_t)(want >> 8) };
+    uint8_t lead;
+    cs_select();
+    uint8_t op = CMD_I2C_READ_LOG;
+    int rc = spi_write_blocking(SPI_PORT, &op, 1);
+    if (rc == 0) rc = spi_write_blocking(SPI_PORT, args, sizeof(args));
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, &lead, 1);
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, pairs, 2u * n);
+    cs_deselect();
+    return rc == 0 ? 0 : -1;
+}
+
+int fpga_emu_times(uint8_t target, uint8_t index, uint16_t time_us) {
+    if (target >= FPGA_EMU_I2C_TARGETS || index >= FPGA_EMU_TIMES) return -1;
+    uint8_t args[4] = { target, index, (uint8_t)(time_us & 0xFF), (uint8_t)(time_us >> 8) };
+    return spi_cmd_write(CMD_I2C_TIMES, args, sizeof(args));
+}
+
+int fpga_emu_drdy(uint8_t target, bool assert_it) {
+    if (target >= FPGA_EMU_I2C_TARGETS) return -1;
+    uint8_t args[2] = { target, assert_it ? 1u : 0u };
+    return spi_cmd_write(CMD_I2C_DRDY, args, sizeof(args));
+}
+
+int fpga_emu_pinmap(const uint8_t codes[14]) {
+    uint8_t args[7];
+    for (unsigned i = 0; i < 7; i++)
+        args[i] = (uint8_t)((codes[2 * i] & 0x0F) | ((codes[2 * i + 1] & 0x0F) << 4));
+    return spi_cmd_write(CMD_EMU_PINMAP, args, sizeof(args));
+}
+
+int fpga_emu_config(uint8_t dr_width_us, bool flush_fifo) {
+    uint8_t args[2] = { dr_width_us ? dr_width_us : 1u, flush_fifo ? 1u : 0u };
+    return spi_cmd_write(CMD_EMU_CONFIG, args, sizeof(args));
+}
+
+int fpga_emu_fifo_write(const uint8_t *data, size_t len) {
+    if (!data || len == 0 || len > 0xFFFFu) return -1;
+    uint8_t hdr[3] = { CMD_EMU_FIFO_WRITE, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
+    cs_select();
+    int rc = spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    if (rc == 0) rc = spi_write_blocking(SPI_PORT, data, len);
+    cs_deselect();
+    return rc;
+}
+
+int fpga_emu_fifo_status(uint16_t *level, bool *overflow, bool *underflow) {
+    uint8_t b[2] = { 0 };
+    if (spi_cmd_read(CMD_EMU_FIFO_STATUS, NULL, 0, b, sizeof(b)) != 0) return -1;
+    uint16_t st = (uint16_t)(b[0] | (b[1] << 8));
+    if (level) *level = (uint16_t)((st & 1u) + ((st >> 1) & 0x7FFu));
+    if (overflow) *overflow = (st & 0x4000u) != 0;
+    if (underflow) *underflow = (st & 0x8000u) != 0;
+    return 0;
+}
+
+int fpga_emu_spi_config(uint8_t cs_w, uint8_t sck_w, uint8_t mosi_w, uint8_t flags, uint8_t read_bit,
+                        uint8_t inc_bit, uint8_t addr_mask) {
+    if (cs_w > 13u || sck_w > 13u || mosi_w > 13u) return -1;
+    uint8_t args[7] = { cs_w, sck_w, mosi_w, flags, read_bit, inc_bit, addr_mask };
+    return spi_cmd_write(CMD_SPIT_CONFIG, args, sizeof(args));
+}
+
+int fpga_emu_uart2_config(uint8_t rx_w, uint8_t tx_w, uint32_t baud, bool enable) {
+    if (baud == 0) return -1;
+    uint32_t div = (uint32_t)(((uint64_t)FPGA_HFOSC_HZ + baud / 2) / baud);   /* as the proxy */
+    if (div < 2)        div = 2;
+    if (div > 0x3FFFFu) div = 0x3FFFFu;
+    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]; an unused pin points at wire 0, which the
+       pin map leaves undriven */
+    uint8_t args[6] = {
+        rx_w > 13u ? 0u : rx_w, tx_w > 13u ? 0u : tx_w,
+        (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
+        (uint8_t)(enable ? 0x01 : 0x00),
+    };
+    return spi_cmd_write(CMD_UART2_CONFIG, args, sizeof(args));
+}
+
+int fpga_emu_uart2_write(const uint8_t *data, size_t len) {
+    if (!data || len == 0) return -1;
+    if (len > FPGA_EMU_UART2_FIFO) len = FPGA_EMU_UART2_FIFO;
+    uint8_t hdr[3] = { CMD_UART2_WRITE, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
+    cs_select();
+    int rc = spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    if (rc == 0) rc = spi_write_blocking(SPI_PORT, data, len);
+    cs_deselect();
+    return rc;
+}
+
+int fpga_emu_uart2_read(uint8_t *data, size_t len) {
+    if (!data || len == 0 || len > FPGA_EMU_UART2_FIFO) return -1;
+    uint8_t args[2] = { (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
+    return spi_cmd_read(CMD_UART2_READ, args, sizeof(args), data, len);
+}
+
+int fpga_emu_uart2_status(uint16_t *rx_avail, uint8_t *flags) {
+    uint8_t b[2] = { 0 };
+    if (spi_cmd_read(CMD_UART2_STATUS, NULL, 0, b, sizeof(b)) != 0) return -1;
+    uint16_t avail = (uint16_t)(b[0] | ((b[1] & EMU_U2_RX_AVAIL_HI) ? 0x100u : 0u));
+    if (avail > FPGA_EMU_UART2_FIFO) return -1;   /* a floating MISO reads 0x1FF */
+    if (rx_avail) *rx_avail = avail;
+    if (flags) *flags = b[1];
+    return 0;
+}
+
+/* sensor_la: the two pins of an I2C sensor, captured. */
+int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz, unsigned sda_ch,
+                        unsigned scl_ch) {
     if (!buf || bytes == 0 || bytes > SIGNAL_BUF_SIZE) return -1;
 
     /* MIGRATED (gateware >= v24 removed the on-FPGA I2C-LA sampler + its 0x65/0x66
@@ -3137,10 +3253,8 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
        still expects — so `sensor_la` is byte-for-byte wire-compatible (no server or
        client change).  Packed byte (oldest sample in the high bits, matching
        i2c_la_capture.v): bit7=scl(s0) bit6=sda(s0) … bit1=scl(s3) bit0=sda(s3).
-       The two bus channels come from the active emulated sensor's config. */
-    unsigned sda_ch = sensor_sim_sda();     /* 1-based LA channels; 0 = no sensor armed */
-    unsigned scl_ch = sensor_sim_scl();
-    if (sda_ch == 0 || scl_ch == 0) return -1;
+       The two bus channels are the sensor instance's (1-based LA channels). */
+    if (sda_ch == 0 || scl_ch == 0 || sda_ch > 14u || scl_ch > 14u) return -1;
     uint8_t sda_bit = (uint8_t)(sda_ch - 1u);   /* deep-LA word bit index (LA1..14 -> 0..13) */
     uint8_t scl_bit = (uint8_t)(scl_ch - 1u);
 
@@ -3176,7 +3290,7 @@ int fpga_i2c_la_capture(uint8_t *buf, size_t bytes, float sample_rate_hz) {
     }
     fpga_la_psram_release();
     /* samples is a multiple of 4, so `out == bytes` and no partial byte remains. */
-    printf("[i2c-sim] LA capture %u bytes (%u samples via deep-LA sda=%u scl=%u)\n",
+    printf("[sensor] LA capture %u bytes (%u samples via deep-LA sda=%u scl=%u)\n",
            (unsigned)bytes, (unsigned)samples, sda_ch, scl_ch);
     return 0;
 }
@@ -3320,36 +3434,6 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
    gateware's sticky flag): latched here (s_uart_rx_ovf, declared above), logged once, and
    reported in `status`. */
 bool fpga_uart_rx_overflowed(void) { return s_uart_rx_ovf; }
-
-int fpga_uart2_config(unsigned tx_ch, uint32_t baud, bool enable) {
-    if (s_fpga_version < UART2_MIN_GW) return -3;
-    int tx = la_wire_index(tx_ch);
-    if (tx < 0 || baud == 0) return -1;
-    uint32_t div = (uint32_t)(((uint64_t)FPGA_HFOSC_HZ + baud / 2) / baud);   /* as the proxy */
-    if (div < 2)        div = 2;
-    if (div > 0x3FFFFu) div = 0x3FFFFu;
-    /* UART_CONFIG's payload: [rx_ch (unused)][tx_ch][div_lo][div_mid][div_hi][flags] */
-    uint8_t args[6] = {
-        0, (uint8_t)tx,
-        (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
-        (uint8_t)(enable ? 0x01 : 0x00),
-    };
-    spi_cmd_write(CMD_UART2_CONFIG, args, sizeof(args));
-    printf("[uart2] TX=LA%u baud=%lu (div=%lu) %s\n", tx_ch, (unsigned long)baud,
-           (unsigned long)div, enable ? "armed" : "disabled");
-    return 0;
-}
-
-void fpga_uart2_fifo_write(const uint8_t *data, size_t len) {
-    if (!data || len == 0) return;
-    if (len > FPGA_UART2_FIFO) len = FPGA_UART2_FIFO;
-    /* [CMD][len_lo][len_hi][N bytes] */
-    uint8_t hdr[3] = { CMD_UART2_WRITE, (uint8_t)(len & 0xFF), (uint8_t)((len >> 8) & 0xFF) };
-    cs_select();
-    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
-    spi_write_blocking(SPI_PORT, data, len);
-    cs_deselect();
-}
 
 size_t fpga_uart_read(uint8_t *buf, size_t len) {
     if (!buf || len == 0) return 0;

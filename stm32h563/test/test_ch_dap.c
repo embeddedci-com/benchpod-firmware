@@ -65,7 +65,7 @@ uint16_t la_pins_release_fn(la_fn_t fn) { (void)fn; return 0; }
 void la_pins_claim(la_fn_t fn, la_gpio_mode_t mode, uint8_t level, const uint8_t *las, size_t n) {
     (void)fn; (void)mode; (void)level; (void)las; (void)n;
 }
-bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint16_t free_fns) {
+bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t free_fns) {
     (void)c; (void)fn; (void)las; (void)n; (void)free_fns; return true;
 }
 bool require_la_voltage(int c) { (void)c; return true; }

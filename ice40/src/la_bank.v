@@ -3,16 +3,18 @@
 //
 // Owns the N bidirectional LA channels (LA1..LAN, wired in vbench_pod.pcf; N=14)
 // and muxes
-// five drivers onto them with fixed priority  swd > stepper > i2c > uart > static :
+// the drivers onto them with fixed priority  swd > stepper > emu > uart > static :
 //
 //   static   per-channel {out,oe} latches set by the GPIO_SET command
 //            (default oe=0 → high-Z).  This is the plain "drive a pin
 //            high/low/high-Z" path.
-//   i2c      while an emulated I2C sensor is armed, i2c_target owns the SDA
-//            channel as an OPEN-DRAIN output: it only ever pulls SDA low
-//            (out=0, oe=i2c_sda_drive_low) or releases it (oe=0, line pulled
-//            high externally) — it NEVER drives SDA high.  SCL is read-only
-//            (sampled via la_in); the bus needs external pull-ups.
+//   emu      (v54, emulation image) the emulated sensors' pins, one driver per channel
+//            chosen by the firmware's pin map (EMU_PINMAP): an I2C bus line as an
+//            OPEN-DRAIN output (only ever pulled low or released, never driven high;
+//            the bus needs pull-ups), a data-ready output, the SPI target's MISO or
+//            UART2 TX (push-pull).  Inputs (SCL, CS, SCK, MOSI, UART2 RX) are read
+//            through la_in.  Until v53 the single I2C target and UART2 TX had their
+//            own columns here.
 //   uart     while a UART proxy is armed, uart_engine owns the TX channel as a
 //            normal PUSH-PULL output (idle high); the RX channel is read-only
 //            (sampled via la_in).
@@ -44,19 +46,18 @@ module la_bank #(
     input  wire [3:0]        set_ch,     // 0..N-1
     input  wire [1:0]        set_mode,   // 0=low, 1=high, 2=high-Z
 
-    // ---- i2c override (open-drain SDA) ----
-    input  wire              i2c_active,        // emulated sensor armed
-    input  wire [3:0]        i2c_sda_ch,
-    input  wire              i2c_sda_drive_low, // 1 → pull SDA low; 0 → release
+    // ---- emulated sensors (v54, emulation image): per channel, the pin map's driver ----
+    // (I2C open drain, data ready, the SPI target's MISO, UART2 TX; see emu_pins in
+    // engine_block).  Replaces the v24..v53 single-I2C and UART2 columns; all 0 in the loop
+    // and deep images, so it synthesises away there.
+    input  wire [N-1:0]      emu_on,
+    input  wire [N-1:0]      emu_out,
+    input  wire [N-1:0]      emu_oe,
 
     // ---- uart override (push-pull TX) ----
     input  wire              uart_active,       // UART proxy armed
     input  wire [3:0]        uart_tx_ch,
     input  wire              uart_tx_val,       // TX line level (idle high)
-    // ---- uart2 override (v48, TX-only UART, push-pull; lowest priority) ----
-    input  wire              uart2_active,
-    input  wire [3:0]        uart2_tx_ch,
-    input  wire              uart2_tx_val,
 
     // ---- stepper override ----
     input  wire              step_active,
@@ -102,8 +103,8 @@ module la_bank #(
         end
     end
 
-    // ---- effective output/oe after mux (swd > stepper > i2c > uart > static) ----
-    // Each of the five overrides can target ANY channel, chosen at runtime by a
+    // ---- effective output/oe after mux (swd > stepper > emu > uart > static) ----
+    // Each override can target ANY channel, chosen at runtime by a
     // 4-bit channel index.  The original form did a per-channel indexed WRITE
     // (`eff_out[uart_tx_ch] = ...`) inside a priority if-chain, which synthesises to
     // a 4-bit magnitude-compare of every driver's channel against every one of the
@@ -116,10 +117,8 @@ module la_bank #(
         input en; input [3:0] ch;
         onehot = (en && ch < N) ? ({{(N-1){1'b0}}, 1'b1} << ch) : {N{1'b0}};
     endfunction
-    // uart: push-pull TX (idle high).  i2c: open-drain SDA (never drives high).
+    // uart: push-pull TX (idle high).
     wire [N-1:0] m_uart = onehot(uart_active, uart_tx_ch);
-    wire [N-1:0] m_urt2 = onehot(uart2_active, uart2_tx_ch);
-    wire [N-1:0] m_i2c  = onehot(i2c_active,  i2c_sda_ch);
     wire [N-1:0] m_step = onehot(step_active, step_ch);
     wire [N-1:0] m_swdc = onehot(swd_active,  swd_clk_ch);
     wire [N-1:0] m_swdd = onehot(swd_active,  swd_dio_ch);
@@ -128,21 +127,19 @@ module la_bank #(
     wire [N-1:0] eff_out, eff_oe;
     genvar c;
     generate for (c = 0; c < N; c = c + 1) begin : g_mux
-        // priority (high→low): swd_dio > swd_clk > spi cs > step > i2c > uart > static
+        // priority (high→low): swd_dio > swd_clk > spi cs > step > emu > uart > static
         assign eff_out[c] = m_swdd[c] ? swd_dio_val  :
                             m_swdc[c] ? swd_clk_val  :
                             m_swds[c] ? swd_cs_val   :
                             m_step[c] ? step_val     :
-                            m_i2c [c] ? 1'b0         :
-                            m_uart[c] ? uart_tx_val  :
-                            m_urt2[c] ? uart2_tx_val : s_out[c];
+                            emu_on[c] ? emu_out[c]   :
+                            m_uart[c] ? uart_tx_val  : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
                             m_swdc[c] ? 1'b1         :
                             m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
-                            m_i2c [c] ? i2c_sda_drive_low :
-                            m_uart[c] ? 1'b1         :
-                            m_urt2[c] ? 1'b1         : s_oe[c];
+                            emu_on[c] ? emu_oe[c]    :
+                            m_uart[c] ? 1'b1         : s_oe[c];
     end endgenerate
 
     // ---- bidirectional IO buffers ----

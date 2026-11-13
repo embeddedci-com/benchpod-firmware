@@ -1,0 +1,10 @@
+{"format":1,"kind":"i2c","name":"word_tmp117",
+ "params":[{"key":"temperature_c","unit":"C","min":-55,"max":150,"default":25}],
+ "i2c":{"address":72,"alt_addresses":[73,74,75],"register_bytes":2},
+ "constants":{"LSB_C":0.0078125},
+ "let":[{"offset_c":"s16(reg[0x07]) * LSB_C"}],
+ "registers":[{"at":0,"s16be":"(temperature_c + offset_c) / LSB_C","name":"TEMP_RESULT"},
+  {"at":1,"u16be":544,"name":"CONFIG"},{"at":2,"u16be":24576},{"at":3,"u16be":32768},
+  {"at":7,"s16be":0,"name":"TEMP_OFFSET"},{"at":15,"u16be":279,"name":"DEVICE_ID","writable":false},
+  {"at":254,"u16be":21577},{"at":255,"u16be":8800}],
+ "on_write":[{"when":"written == 0x01 && (value & 0x0002)","do":"reset"}]}

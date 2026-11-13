@@ -33,6 +33,22 @@
 #include <string.h>
 
 #include "pico/time.h"
+#include "sensor_mgr.h"     /* sm_on_dac_stop; the image hints name sensor_stop on the emulation image */
+
+/* The error for a feature the running gateware image lacks: which image has it, and on the
+   emulation image (sensors running) that the sensors come first. */
+static const char *image_hint(const char *what, int image) {
+    static char msg[224];
+    const char *name = image == 1 ? "deep" : "loop";
+    if (signal_engine_image_kind() == 2)
+        snprintf(msg, sizeof(msg), "%s is not in the emulation image, which the emulated sensors use: "
+                 "{\"cmd\":\"sensor_stop\",\"all\":true} then {\"cmd\":\"fpga_image\",\"image\":\"%s\"}",
+                 what, name);
+    else
+        snprintf(msg, sizeof(msg), "%s not in the running gateware image (switch with "
+                 "{\"cmd\":\"fpga_image\",\"image\":%d})", what, image);
+    return msg;
+}
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -468,6 +484,7 @@ void handle_load_bin(int conn_id, const char *json) {
        as "1" — the server sends `"psram": true`. */
     bool to_psram = json_get_value(json, "psram", psram_s, sizeof(psram_s)) &&
                     (psram_s[0] == 't' || psram_s[0] == 'T' || psram_s[0] == '1');
+    if (to_psram && signal_engine_image_kind() == 2) { send_error(conn_id, image_hint("deep replay", 1)); return; }
 
     /* Shallow cap is what `replay` can actually play out the DAC BRAM
        (SIGNAL_MAX_SAMPLES 16-bit samples = SIGNAL_BUF_SIZE bytes), NOT the size of the
@@ -556,6 +573,8 @@ void handle_replay(int conn_id, const char *json) {
     /* Claims the shared buffer (or no-ops if this conn already holds it from a
        preceding `load`).  Released as soon as the waveform is armed — the DAC then
        runs off the FPGA (BRAM or PSRAM), not adc_cmd_buf. */
+    /* The emulation image has no deep replay reader: say so instead of arming nothing. */
+    if (replay_in_psram && signal_engine_image_kind() == 2) { send_error(conn_id, image_hint("deep replay", 1)); return; }
     if (!heavy_begin(conn_id)) return;
     if (loaded_hold_conn == conn_id) loaded_hold_conn = -1;
     int rc;
@@ -606,6 +625,7 @@ void handle_replay(int conn_id, const char *json) {
 void handle_dac_stop(int conn_id, const char *json) {
     (void)json;
     dac_stop();
+    sm_on_dac_stop();   /* an analog sensor on the DAC stops driving it too */
     /* With DAC limits set (an external output stage), stopping must not leave the DAC wherever
        it was: hold it at the low-output end instead (dac_limits.h). */
     if (dac_limits_get()->enabled) {
@@ -844,8 +864,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
     if (rc == -3) {
         /* Right image family, wrong image: the deep-replay bitstream has no loop engine, and
            both images report the same version — so this is the ONLY thing that catches it. */
-        send_error(conn_id, "control loop not in the running gateware image "
-                            "(switch with {\"cmd\":\"fpga_image\",\"image\":0})");
+        send_error(conn_id, image_hint("control loop", 0));
         return;
     }
     if (rc != 0)  { send_error(conn_id, "control loop arm failed"); return; }
@@ -905,8 +924,7 @@ void handle_dac_loop_input(int conn_id, const char *json) {
     heavy_release(conn_id);
     if (rc == -2) { send_error(conn_id, "loop input sources need gateware v29+"); return; }
     if (rc == -3) {
-        send_error(conn_id, "control loop not in the running gateware image "
-                            "(switch with {\"cmd\":\"fpga_image\",\"image\":0})");
+        send_error(conn_id, image_hint("control loop", 0));
         return;
     }
     if (rc != 0) { send_error(conn_id, "loop input update failed"); return; }
@@ -939,8 +957,7 @@ void handle_dac_loop_probe(int conn_id, const char *json) {
        plausible-looking operating point that no loop produced. */
     if (!signal_engine_has_control_loop()) {
         heavy_release(conn_id);
-        send_error(conn_id, "closed-loop DAC not in the running gateware image "
-                            "(switch with {\"cmd\":\"fpga_image\",\"image\":0})");
+        send_error(conn_id, image_hint("closed-loop DAC", 0));
         return;
     }
     uint16_t i_adc = 0, v = fpga_dac_loop_probe();

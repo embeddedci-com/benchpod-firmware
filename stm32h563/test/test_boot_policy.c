@@ -38,6 +38,8 @@ int main(void) {
     CHECK(boot_policy_gateware_image(36, 36, 0, 1) == -1, "gw: same version, no update");
     CHECK(boot_policy_gateware_image(35, 36, 0, 1) == 0, "gw: older loop image -> reload image 0");
     CHECK(boot_policy_gateware_image(35, 36, 1, 1) == 1, "gw: older deep image -> reload image 1");
+    CHECK(boot_policy_gateware_image(53, 54, 2, 1) == 2, "gw: older emulation image -> reload image 2");
+    CHECK(boot_policy_gateware_image(53, 54, 7, 1) == 0, "gw: unknown image kind -> image 0");
     CHECK(boot_policy_gateware_image(37, 36, 0, 1) == 0, "gw: newer gateware than the firmware -> match the firmware");
     CHECK(boot_policy_gateware_image(0, 36, 0, 1) == -1, "gw: configured but not answering -> leave it (not a blank flash)");
     CHECK(boot_policy_gateware_image(35, 0, 0, 1) == -1, "gw: embedded version unknown -> never touch it");

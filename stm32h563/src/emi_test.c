@@ -245,12 +245,25 @@ static void apply_dac(emi_dac_mode_t mode) {
     start_dac(mode);
 }
 
+/* UART activity: an emulated UART sensor sending two NMEA sentences every 100 ms at 115200 baud
+   (the definition below, 302 bytes of JSON, base64 in one chunk). Starting it loads the emulation
+   image, which keeps the sine and DC outputs this loop plays. */
+#define EMI_UART_DEF_LEN 302
+static const char k_emi_uart_def_b64[] =
+    "eyJmb3JtYXQiOjEsImtpbmQiOiJ1YXJ0IiwibmFtZSI6ImVtaV91YXJ0IiwidWFydCI6eyJiYXVkIjoxMTUyMDAsImZvcm1hdCI6IjhOMSJ9"
+    "LCJtZXNzYWdlcyI6W3siZXZlcnlfbXMiOjEwMCwidGV4dCI6IiRHUFJNQywxMjM1MTksQSw0ODA3LjAzOCxOLDAxMTMxLjAwMCxFLDAyMi40"
+    "LDA4NC40LDIzMDM5NCwwMDMuMSxXIiwiZW5kIjoibm1lYSJ9LHsiZXZlcnlfbXMiOjEwMCwidGV4dCI6IiRHUEdHQSwxMjM1MTksNDgwNy4w"
+    "MzgsTiwwMTEzMS4wMDAsRSwxLDA4LDAuOSw1NDUuNCxNLDQ2LjksTSwsIiwiZW5kIjoibm1lYSJ9XX0=";
+
 static void apply_uart(int la) {
-    run("gps_stop", "{\"cmd\":\"gps_stop\"}");
+    run("sensor_stop", "{\"cmd\":\"sensor_stop\",\"instance\":\"emi_uart\"}");
     if (la <= 0) return;
-    char cmd[96];
-    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"gps_start\",\"tx\":%d,\"baud\":115200,\"rate_hz\":10}", la);
-    run("gps_start", cmd);
+    static char cmd[600];
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"sensor_define\",\"instance\":\"emi_uart\",\"offset\":0,\"total\":%d,"
+             "\"data_b64\":\"%s\"}", EMI_UART_DEF_LEN, k_emi_uart_def_b64);
+    run("sensor_define", cmd);
+    snprintf(cmd, sizeof(cmd), "{\"cmd\":\"sensor_start\",\"instance\":\"emi_uart\",\"pins\":{\"tx\":%d}}", la);
+    run("sensor_start", cmd);
 }
 
 

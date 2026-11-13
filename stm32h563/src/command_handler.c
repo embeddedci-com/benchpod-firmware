@@ -15,8 +15,7 @@
 #include "at_driver.h"
 #include "signal_engine.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
-#include "sensor_sim.h"
-#include "gps_sim.h"
+#include "sensor_mgr.h"   /* the emulated sensors: poll, reconfiguration, DAC conflicts */
 #include "scpi_server.h"
 #include "board_variant.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
@@ -246,11 +245,9 @@ void command_handler_poll(void) {
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
 
-    /* ---- emulated I2C sensor: register-write watch, re-arm after a reconfiguration ---- */
-    sensor_poll();
-
-    /* ---- emulated GPS receiver: the next NMEA epoch out of UART2 ---- */
-    gps_poll();
+    /* ---- emulated sensors: write logs, timers, UART2, stimulus, re-arm after a reconfiguration.
+       A few RAM checks when no sensor runs. ---- */
+    sm_poll();
 }
 
 /* ---- Command handlers ---- */
@@ -286,10 +283,10 @@ void command_handler_on_gateware_reconfigured(void) {
        re-apply the gpio pins' GPIO_SET latches, which the fabric also lost. */
     swd_disarm_and_release();
     spi_on_gateware_reconfigured();
-    /* An emulated sensor keeps its pins and values: sensor_poll() re-arms it on the new
-       fabric (and releases the pins if that fails), as the UART proxy does below. */
-    sensor_sim_on_gateware_reconfigured();
-    gps_sim_on_gateware_reconfigured();
+    /* An emulated sensor keeps its pins, values and live image: sm_poll() re-arms it on the new
+       fabric (and releases the pins if that fails, or when the emulation image is gone), as the
+       UART proxy does below. */
+    sm_on_gateware_reconfigured();
     capture_on_gateware_reconfigured();
     la_pins_on_gateware_reconfigured();
     uart_proxy_on_gateware_reconfigured();
@@ -350,6 +347,11 @@ void dispatch_line(int conn_id, const char *buf) {
        tunnel, cloud command channel). No-op on a pod without limits. */
     {
         const char *why = dac_limits_check_command(cmd, buf);
+        if (why) { send_error(conn_id, why); return; }
+    }
+    /* An analog sensor plays the DAC or the 4-20 mA output: nothing else may drive it. */
+    {
+        const char *why = sensor_mgr_command_conflict(cmd);
         if (why) { send_error(conn_id, why); return; }
     }
 

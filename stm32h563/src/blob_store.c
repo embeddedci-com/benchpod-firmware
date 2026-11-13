@@ -22,6 +22,7 @@ static const struct {
     [BLOB_CA]  = { "ca",  0x180000u, 0x010000u },
     [BLOB_PROXY] = { "proxy", 0x190000u, 0x002000u },
     [BLOB_BRIDGE] = { "bridge", 0x700000u, 0x100000u },
+    [BLOB_GW2] = { "gw2", 0x1A0000u, 0x040000u },
 };
 
 static blob_info_t s_info[BLOB_SLOT_COUNT];
@@ -42,7 +43,7 @@ bool blob_listed(blob_id_t id)
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (id == BLOB_BRIDGE) return true;
 #endif
-    return id < BLOB_COUNT;
+    return id < BLOB_COUNT || id == BLOB_GW2;
 }
 
 int blob_from_name(const char *name)
@@ -247,8 +248,9 @@ blob_state_t blob_state_of(const blob_info_t *have, const blob_manifest_t *want)
 
 blob_state_t blob_state(blob_id_t id)
 {
-    if (id >= BLOB_COUNT) return BLOB_STATE_UNKNOWN;
-    return blob_state_of(&s_info[id], blob_manifest(id));
+    const blob_manifest_t *want = blob_manifest(id);
+    if (!want) return BLOB_STATE_UNKNOWN;
+    return blob_state_of(&s_info[id], want);
 }
 
 const char *blob_state_str(blob_state_t s)

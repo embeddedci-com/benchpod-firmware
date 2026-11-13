@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ice40_release as rel  # noqa: E402
 
 FLAGS = dict(synth_flags="-abc9 -dsp -spram -top top", pnr_flags="--up5k --threads 1",
-             defines_loop="-DVERSION_V2", defines_deep="-DVERSION_V2 -DUSE_DEEP_REPLAY")
+             defines_loop="-DVERSION_V2", defines_deep="-DVERSION_V2 -DUSE_DEEP_REPLAY",
+             defines_emu="-DVERSION_V2 -DUSE_EMULATION")
 
 
 class Ice40ReleaseTest(unittest.TestCase):
@@ -50,7 +51,7 @@ class Ice40ReleaseTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def args(self, **kw):
-        a = dict(hw_verified="bench 1/1", seed_loop="26", seed_deep="57", **FLAGS)
+        a = dict(hw_verified="bench 1/1", seed_loop="26", seed_deep="57", seed_emu="27", **FLAGS)
         a.update(kw)
         return argparse.Namespace(**a)
 
@@ -67,6 +68,8 @@ class Ice40ReleaseTest(unittest.TestCase):
         self.assertEqual(m["pnr_flags"], FLAGS["pnr_flags"])
         self.assertEqual(m["loop.defines"], FLAGS["defines_loop"])
         self.assertEqual(m["deep.defines"], FLAGS["defines_deep"])
+        self.assertEqual(m["emu.defines"], FLAGS["defines_emu"])
+        self.assertEqual(m["emu.seed"], "27")
         self.assertIn("nextpnr_revision", m)
         self.assertEqual(rel.check(), [])
         self.assertEqual(rel.flag_notes(m, self.args()), [])
@@ -97,7 +100,7 @@ class Ice40ReleaseTest(unittest.TestCase):
         self.promote()
         kept = [ln for ln in rel.MANIFEST.read_text().splitlines()
                 if not ln.startswith(("synth_flags=", "pnr_flags=", "nextpnr_revision=", "loop.defines=",
-                                      "deep.defines="))]
+                                      "deep.defines=", "emu.defines="))]
         rel.MANIFEST.write_text("\n".join(kept) + "\n")
         self.assertEqual(rel.check(), [])
         notes = rel.flag_notes(rel.read_manifest(), self.args())

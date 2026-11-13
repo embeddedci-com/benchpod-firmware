@@ -10,6 +10,8 @@
  *   0x180000  slot CA: the company CA for the cloud link (PEM, cloud_extras.h)      64 KB
  *   0x190000  slot PROXY: the HTTP proxy for the cloud link (cloud_extras.h)        8 KB
  *   0x192000  free
+ *   0x1A0000  slot GW2: gateware image 2 (sensor emulation, gateware v54+)  256 KB
+ *   0x1E0000  free
  *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
@@ -47,6 +49,9 @@ typedef enum {
     BLOB_BRIDGE,            /* the Wi-Fi bridge's firmware: a release blob in BENCHPOD_WIFI_BRIDGE
                                builds (blob_listed), after the internal slots so their ids, stored in
                                the W25Q headers, do not move */
+    BLOB_GW2,               /* gateware image 2: sensor emulation (v54+). A release blob like gw0/gw1,
+                               listed by blob_listed, but numbered after the internal slots for the
+                               same reason as BLOB_BRIDGE */
     BLOB_SLOT_COUNT
 } blob_id_t;
 
@@ -79,9 +84,9 @@ typedef struct {
 /* Slot geometry. */
 uint32_t    blob_slot_base(blob_id_t id);
 uint32_t    blob_slot_capacity(blob_id_t id);    /* data bytes the slot can hold */
-const char *blob_name(blob_id_t id);             /* "gw0", "gw1", "esp" */
+const char *blob_name(blob_id_t id);             /* "gw0", "gw1", "gw2", "esp" */
 int         blob_from_name(const char *name);    /* blob_id_t of a listed blob, or -1 */
-/* The blobs a release carries and listings show: gw0, gw1, esp, plus bridge in
+/* The blobs a release carries and listings show: gw0, gw1, esp, gw2, plus bridge in
    BENCHPOD_WIFI_BRIDGE builds. */
 bool        blob_listed(blob_id_t id);
 
@@ -120,8 +125,8 @@ int  blob_store_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n);
 /* Hash a present slot's data against its header. Bus held. 0 = intact. */
 int  blob_store_verify(blob_id_t id);
 
-/* The blob a firmware build goes with (tools/blob_manifest.py -> blob_manifest.c). len 0 = the
-   build had no such blob, so nothing is expected. */
+/* The blob a firmware build goes with (tools/blob_manifest.py -> blob_manifest.c): gw0, gw1, esp
+   and gw2; NULL for the other slots. len 0 = the build had no such blob, so nothing is expected. */
 typedef struct {
     uint32_t len;
     uint32_t version;

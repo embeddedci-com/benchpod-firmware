@@ -21,7 +21,7 @@ static char err[LA_PINS_ERR_MAX];
 
 #define PULL(la) ((uint16_t)(1u << ((la) - 1u)))
 
-static bool claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, size_t n, uint16_t free_fns,
+static bool claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, size_t n, uint32_t free_fns,
                   uint16_t pulls) {
     err[0] = '\0';
     if (!la_pins_check_claim(fn, mode, las, n, free_fns, pulls, err, sizeof(err))) return false;
@@ -87,7 +87,7 @@ static void test_claims_and_conflicts(void) {
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 12 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
     CHECK_STR(err, "pin conflict: LA12 is in use by swd_dio; end the SWD session first");
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 2 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "pin conflict: LA2 is in use by i2c_scl; stop the sensor emulation first ({\"cmd\":\"sensor_stop\"})");
+    CHECK_STR(err, "pin conflict: LA2 is in use by i2c_scl; stop the sensor emulation first ({\"cmd\":\"sensor_stop\",\"all\":true})");
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 6 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
     CHECK_STR(err, "pin conflict: LA6 is in use by step; wait for the step train to finish");
     la_pins_claim(LA_FN_SPI_CS, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
@@ -98,7 +98,7 @@ static void test_claims_and_conflicts(void) {
     la_pins_reset();
     la_pins_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 1 }, 1);
     la_pins_claim(LA_FN_I2C_SCL, LA_GPIO_NONE, 0, (uint8_t[]){ 2 }, 1);
-    uint16_t i2c_free = LA_FN_BIT(LA_FN_I2C_SDA) | LA_FN_BIT(LA_FN_I2C_SCL);
+    uint32_t i2c_free = LA_FN_BIT(LA_FN_I2C_SDA) | LA_FN_BIT(LA_FN_I2C_SCL);
     CHECK(la_pins_check_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, (uint8_t[]){ 2 }, 1, i2c_free, 0, err, sizeof(err)));
     CHECK(la_pins_check_claim(LA_FN_I2C_SCL, LA_GPIO_NONE, (uint8_t[]){ 1 }, 1, i2c_free, 0, err, sizeof(err)));
 
@@ -309,6 +309,32 @@ static void test_voltage_refusal(void) {
     CHECK(len > 17 && strcmp(err + len - 17, "; stop them first") == 0);
 }
 
+static const char *test_namer(unsigned slot) { return slot == 0 ? "env" : slot == 1 ? "imu" : NULL; }
+
+/* Emulated sensors own their pins by instance: the conflict names the instance and the stop. */
+static void test_sensor_owner(void) {
+    la_pins_reset();
+    la_pins_set_owner_namer(test_namer);
+    la_pins_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 1 }, 1);
+    la_pins_set_owner(1, 0x03);
+    la_pins_claim(LA_FN_SENSOR_TX, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
+    la_pins_set_owner(9, 0x02);
+    CHECK(la_fn_is_sensor(LA_FN_SENSOR_TX) && la_fn_is_sensor(LA_FN_I2C_SDA) && !la_fn_is_sensor(LA_FN_GPIO));
+    CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 9 }, 1, 0, 0));
+    CHECK_STR(err, "pin conflict: LA9 is in use by sensor:imu (sensor_tx); stop the sensor emulation first ({\"cmd\":\"sensor_stop\",\"instance\":\"imu\"})");
+    char buf[256];
+    bp_emit_t e;
+    bp_emit_init(&e, buf, sizeof(buf));
+    la_pins_emit_entry(&e, 1, 0);
+    CHECK_STR(buf, "{\"la\":1,\"function\":\"i2c_sda\",\"owner\":\"sensor:env+1\",\"gpio\":null,\"level\":null,\"pull\":{\"dir\":\"up\",\"ohms\":\"4.7k\",\"on\":false}}");
+    /* a pull-down under a UART sensor line is refused like under the proxy */
+    CHECK(!claim(LA_FN_SENSOR_RX, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, PULL(7)));
+    la_pins_release(1);
+    CHECK(la_pins_owner(1) == 0);
+    la_pins_set_owner_namer(NULL);
+    la_pins_reset();
+}
+
 static void test_json_entries(void) {
     la_pins_reset();
     char buf[1600];
@@ -389,6 +415,7 @@ int main(void) {
     test_step_plans();
     test_step_args();
     test_voltage_refusal();
+    test_sensor_owner();
     test_json_entries();
     test_trigger_parse();
     if (failures) { printf("test_la_pins: %d FAILURE(S)\n", failures); return 1; }

@@ -1,8 +1,8 @@
 /*
- * test_gps.c — host tests for the emulated GPS receiver: the NMEA sentences (src/gps_nmea.c)
- * parsed back the way a DUT's parser reads them, and the runtime (src/gps_sim.c) against a
- * fake UART2: epochs on time, the 256-byte FIFO fed only when it is empty, overruns counted,
- * the re-arm after a gateware reconfiguration.
+ * test_gps.c — the NMEA reference (test/ref/gps_nmea.c, the pod's GPS receiver until the sensor
+ * definition engine replaced it) parsed back the way a DUT's parser reads them. test_sensor_def.c
+ * checks that the gps_nmea definition gives the same bytes, so these vendor checks still cover
+ * what the pod sends.
  */
 #include <math.h>
 #include <stdio.h>
@@ -10,34 +10,10 @@
 #include <string.h>
 
 #include "gps_nmea.h"
-#include "gps_sim.h"
-#include "signal_engine.h"
 
 static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL %s:%d: ", __func__, __LINE__); \
         printf(__VA_ARGS__); printf("\n"); fails++; } } while (0)
-
-/* ---- fake UART2 + clock -------------------------------------------------------------------- */
-static uint64_t t_now_us = 5000000;
-uint64_t time_us_64(void) { return t_now_us; }
-static int      t_cfg_rc, t_cfgs;
-static bool     t_armed, t_empty = true;
-static unsigned t_tx;
-static char     t_wire[8192];
-static size_t   t_nwire, t_max_write;
-int fpga_uart2_config(unsigned tx, uint32_t baud, bool en) {
-    (void)baud; if (t_cfg_rc) return t_cfg_rc; t_cfgs++; t_armed = en; t_tx = tx; return 0;
-}
-void fpga_uart2_fifo_write(const uint8_t *d, size_t n) {
-    if (n > t_max_write) t_max_write = n;
-    memcpy(t_wire + t_nwire, d, n); t_nwire += n;
-    t_empty = false;                 /* the FIFO holds them until the test drains it */
-}
-int fpga_uart_status(uint16_t *avail, uint8_t *flags) {
-    if (avail) *avail = 0;
-    if (flags) *flags = (uint8_t)((t_empty ? UART2_STATUS_TX_EMPTY : 0) | (t_armed ? UART2_STATUS_ARMED : 0));
-    return 0;
-}
 
 /* ---- a DUT-side parser ---------------------------------------------------------------------- */
 static int line_ok(const char *l, size_t n) {   /* "$...*hh\r\n" with a matching checksum */
@@ -184,85 +160,9 @@ static void test_helpers(void) {
     CHECK(f.lat_deg == lat0 && f.lon_deg == lon0, "standing still");
 }
 
-static void drain(void) { t_empty = true; }   /* the shifter sent everything */
-
-static void test_runtime(void) {
-    gps_fix_t f = brussels();
-    f.speed_kmh = 0;
-    gps_sim_set_fix(&f);
-    CHECK(gps_sim_start(5, 9600, 0, GPS_SENT_ALL) == -1, "rate 0 refused");
-    CHECK(gps_sim_start(5, 9600, 11, GPS_SENT_ALL) == -1, "rate 11 refused");
-    CHECK(gps_sim_start(5, 9600, 1, 0) == -1, "empty mask refused");
-    t_cfg_rc = -3;
-    CHECK(gps_sim_start(5, 9600, 1, GPS_SENT_ALL) == -3, "old gateware reported");
-    t_cfg_rc = 0;
-    CHECK(gps_sim_start(5, 9600, 1, GPS_SENT_ALL) == 0 && t_armed && t_tx == 5, "started");
-
-    /* first poll: one epoch, the first FIFO-full of it */
-    CHECK(gps_sim_poll() == 0, "poll");
-    size_t epoch = gps_sim_epoch_bytes(&f, GPS_SENT_ALL);
-    CHECK(t_nwire == 256 && epoch > 256, "first piece is a FIFO's worth (%zu of %zu)", t_nwire, epoch);
-    CHECK(gps_sim_poll() == 0 && t_nwire == 256, "nothing more until the FIFO is empty");
-    drain(); gps_sim_poll();
-    CHECK(t_nwire == epoch && t_max_write <= FPGA_UART2_FIFO, "rest of the epoch (%zu)", t_nwire);
-    t_wire[t_nwire] = '\0';
-    char expect[1024];
-    gps_nmea_epoch(&f, GPS_SENT_ALL, expect, sizeof(expect));
-    CHECK(strcmp(t_wire, expect) == 0, "the wire carries the epoch byte for byte");
-
-    /* next epoch one period later, with the clock one second on */
-    drain(); t_now_us += 500000; gps_sim_poll();
-    CHECK(t_nwire == epoch, "no epoch before the period");
-    t_now_us += 500000; gps_sim_poll();
-    CHECK(t_nwire > epoch, "second epoch at 1 s");
-    CHECK(strstr(t_wire + epoch, "123457.00") != NULL, "second epoch is at 12:34:57");
-
-    /* the FIFO never empties (no DUT clocking it out... a stuck line): overruns, no pile-up */
-    t_empty = false;
-    size_t before = t_nwire;
-    for (int i = 0; i < 3; i++) { t_now_us += 1000000; gps_sim_poll(); }
-    gps_sim_status_t st;
-    gps_sim_status(&st);
-    CHECK(st.overruns == 3 && t_nwire == before, "3 overruns, nothing written (%lu)", (unsigned long)st.overruns);
-    CHECK(st.active && st.tx_ch == 5 && st.rate_hz == 1 && st.baud == 9600, "status");
-
-    /* a worker stall of 10 s does not fire 10 epochs at once */
-    drain();
-    for (int i = 0; i < 4; i++) gps_sim_poll();   /* finish the pending epoch */
-    gps_sim_status(&st);
-    uint32_t epochs = st.epochs;
-    t_now_us += 10000000;
-    gps_sim_poll(); drain(); gps_sim_poll(); drain(); gps_sim_poll();
-    gps_sim_status(&st);
-    CHECK(st.epochs == epochs + 1, "one epoch after a stall, not ten (%lu -> %lu)",
-          (unsigned long)epochs, (unsigned long)st.epochs);
-
-    /* gateware reconfiguration: re-armed on the next poll; a failure stops it */
-    t_cfgs = 0;
-    gps_sim_on_gateware_reconfigured();
-    CHECK(gps_sim_poll() == 0 && t_cfgs == 1 && t_armed, "re-armed");
-    gps_sim_on_gateware_reconfigured();
-    t_cfg_rc = -1;
-    CHECK(gps_sim_poll() == -1, "failed re-arm reported");
-    gps_sim_status(&st);
-    CHECK(!st.active, "stopped after the failed re-arm");
-    t_cfg_rc = 0;
-
-    CHECK(gps_sim_start(7, 115200, 10, GPS_SENT_RMC | GPS_SENT_GGA) == 0, "restart at 10 Hz");
-    t_nwire = 0; drain();
-    for (int i = 0; i < 10; i++) { gps_sim_poll(); drain(); gps_sim_poll(); t_now_us += 100000; }
-    gps_sim_status(&st);
-    CHECK(st.epochs == 10 && st.overruns == 0, "10 epochs in 1 s at 10 Hz (%lu)", (unsigned long)st.epochs);
-    t_wire[t_nwire] = '\0';
-    CHECK(strstr(t_wire, ".10,") && strstr(t_wire, ".90,"), "tenths of a second in the timestamps");
-    gps_sim_stop();
-    CHECK(!t_armed, "stop disarms UART2");
-}
-
 int main(void) {
     test_sentences();
     test_helpers();
-    test_runtime();
     if (fails) { printf("test_gps: %d FAILED\n", fails); return 1; }
     printf("test_gps: all passed\n");
     return 0;

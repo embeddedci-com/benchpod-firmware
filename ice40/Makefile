@@ -47,8 +47,9 @@ SRC = src/top_v2.v            \
       src/la_bank.v           \
       src/stepper_engine.v    \
       src/swd_engine.v        \
-      src/i2c_regfile.v       \
-      src/i2c_target.v        \
+      src/i2c_emu.v           \
+      src/emu_fifo.v          \
+      src/spi_target.v        \
       src/la_psram_capture.v  \
       src/uart_engine.v       \
       src/dsp_counter.v       \
@@ -57,8 +58,15 @@ SRC = src/top_v2.v            \
       src/psram_pads.v        \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
+# The emulation image reads src/i2c_emu_modes.v (the engine with the word-register and command-map
+# pointer modes) in place of src/i2c_emu.v.  The loop and deep images keep reading src/i2c_emu.v,
+# unchanged since the v54 promote, so they synthesize to their hardware-verified bitstreams:
+# yosys numbers cells across every file it reads, so any change there re-rolls their placement.
+EMU_SRC = $(filter-out src/i2c_emu.v,$(SRC)) src/i2c_emu_modes.v
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
 DEEP_DEFINES = -DUSE_DEEP_REPLAY
+# v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
+EMU_DEFINES = -DUSE_EMULATION
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
 PREPACK = --pre-pack clocks.py
 # Pinned PnR seed.  TIMING is not the constraint: after the single-clock collapse
@@ -280,15 +288,16 @@ VVP = sh sim/run_vvp.sh
 # other one silently.
 define topbench
 	@set -e; for img in $(2); do \
-	  if [ "$$img" = deep ]; then defs="$(DEEP_DEFINES)"; else defs=; fi; \
+	  srcs="$(SRC)"; \
+	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)"; srcs="$(EMU_SRC)";; *) defs=;; esac; \
 	  echo "== $(1): $$img image"; \
-	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $(SRC) $(CELLS_SIM); \
+	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $$srcs $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
 	  rm -f /tmp/$(PROJECT)_$(1)_$$img.vvp; \
 	done
 endef
 
-.PHONY: all images seed-sweep promote check-release release-images flash flash-ram prog sim simtest uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -314,7 +323,7 @@ all: $(OUT).bin
 SYNTH_FLAGS = -abc9 -dsp -spram -top top
 SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
 define synth
-	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(SRC); \
+	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(or $(3),$(SRC)); \
 	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
 	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
 	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
@@ -433,9 +442,12 @@ $(OUT).bin: $(OUT).asc
 # v53 (ADC-urgent pick in psram_dual_writer): swept 1..64 in both toolchains (CI run 42421449089).
 # Pinned SEED_LOOP 35 -> 51, the seed with the highest clk48 in the slower toolchain (53.75 CI /
 # 54.11 local MHz; clk -> clk48 13.62 / 12.46 ns).
-SEED_LOOP ?= 51
-# v52: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
-SEED_LOOP_FALLBACK ?= 38 52 7 39 58 41 35 54 61
+# v54 (the I2C target and UART2 moved to the emulation image; 3998 LC, 75%): swept 1..32 locally:
+# all 32 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 51 -> 25 (clk48 61.18, clk 28.07, clk -> clk48
+# 10.08 ns, clk48 -> clk 5.58 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
+SEED_LOOP ?= 25
+# v54: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
+SEED_LOOP_FALLBACK ?= 17 19 21 24 30 26 13
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -536,12 +548,23 @@ SEED_LOOP_FALLBACK ?= 38 52 7 39 58 41 35 54 61
 # v53: seed 5 missed timing locally (45.03 MHz) and passed MAX_X48_NS in neither. Swept 1..64 in
 # both (CI run 42421449089): pinned SEED_DEEP 5 -> 37 (57.61 local / 59.54 CI MHz; clk -> clk48
 # 13.92 / 13.83 ns).
-SEED_DEEP ?= 37
+# v54 (no I2C target, no UART2; 3663 LC, 69%): seed 37 fell to 51.58 MHz.  Swept 1..32 locally: all 32
+# reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 37 -> 11 (clk48 59.54, clk 29.31, clk -> clk48 13.34 ns,
+# clk48 -> clk 5.58 ns; 14 ties on clk48 at 14.67 ns).  CI sweep not run yet.  RE-VERIFY deep replay.
+SEED_DEEP ?= 11
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 23 25 53 21 62 59 34 33 31
+SEED_DEEP_FALLBACK ?= 3 27 29 21 7 14
+# v54: the emulation image (USE_EMULATION; 4 I2C targets, write log, SPI target, FIFO, UART2 TX+RX;
+# 4891 LC, 92%, 30/30 block RAM, 4/4 SPRAM).  Its binding clock is clk (24 MHz), not clk48: the
+# image has no clk48 logic beyond what every image has.  Swept 1..42 locally: ALL 42 place, close
+# and reach MIN_CLK48_MHZ (clk48 54.2..66.4 MHz), clk 25.1..28.8 MHz.  Pinned SEED_EMU 27 (clk48
+# 66.37, clk 28.05, clk -> clk48 10.73 ns, clk48 -> clk 6.22 ns).  The fallbacks are the next seeds
+# with clk >= 27.5 MHz.  CI sweep not run yet.  Not hardware-tested.
+SEED_EMU ?= 27
+SEED_EMU_FALLBACK ?= 5 3 42 2 22 28 1 19
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -552,6 +575,8 @@ $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,$(DEEP_DEFINES),$@)
+$(OUT)_emu.json: $(EMU_SRC) $(SYNTH_AUX)
+	$(call synth,$(EMU_DEFINES),$@,$(EMU_SRC))
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -560,6 +585,10 @@ $(OUT)_deep.bin: $(OUT)_deep.json $(PCF)
 	$(call pnr,$<,$(OUT)_deep.asc,$(SEED_DEEP),$(SEED_DEEP_FALLBACK))
 	icepack $(OUT)_deep.asc $@
 	echo $(GW_VERSION) > $@.gwversion
+$(OUT)_emu.bin: $(OUT)_emu.json $(PCF)
+	$(call pnr,$<,$(OUT)_emu.asc,$(SEED_EMU),$(SEED_EMU_FALLBACK))
+	icepack $(OUT)_emu.asc $@
+	echo $(GW_VERSION) > $@.gwversion
 # -p0: power-on image = slot 0 (loop).  -a16: align images at 64 KB (SB_WARMBOOT jumps here).
 multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 	icemulti -p0 -a16 -o $(MULTI) $(OUT)_loop.bin $(OUT)_deep.bin
@@ -567,7 +596,7 @@ multiboot: $(OUT)_loop.bin $(OUT)_deep.bin
 
 # The two runtime images the firmware embeds (stm32h563/Makefile: image 0 = loop, 1 = deep) —
 # what pods actually run and what a release must build.  `make` (all) builds only one image.
-images: $(OUT)_loop.bin $(OUT)_deep.bin
+images: $(OUT)_loop.bin $(OUT)_deep.bin $(OUT)_emu.bin
 
 # Sweep PnR seeds for one image on its current netlist: make seed-sweep IMAGE=deep [SWEEP="1 32"].
 # Pin the seed with the best clk48 margin that is also good in CI's toolchain (the
@@ -587,10 +616,11 @@ seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
 RELEASE_TOOL  = python3 ../tools/ice40_release.py
 # (--opt=value: the values start with a dash, which argparse would take for an option)
 RELEASE_FLAGS = --synth-flags="$(SYNTH_FLAGS)" --pnr-flags="$(NEXTPNR_FLAGS)" \
-                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)"
+                --defines-loop="$(DEFINES)" --defines-deep="$(DEFINES) $(DEEP_DEFINES)" \
+                --defines-emu="$(DEFINES) $(EMU_DEFINES)"
 promote:
 	@test -n "$(HW_VERIFIED)" || { echo 'usage: make promote HW_VERIFIED="<which hardware test this build passed>"'; exit 2; }
-	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) $(RELEASE_FLAGS)
+	$(RELEASE_TOOL) promote --hw-verified "$(HW_VERIFIED)" --seed-loop $(SEED_LOOP) --seed-deep $(SEED_DEEP) --seed-emu $(SEED_EMU) $(RELEASE_FLAGS)
 check-release:
 	$(RELEASE_TOOL) check $(RELEASE_FLAGS)
 # Put the promoted images where stm32h563/Makefile embeds them (what the release job runs).
@@ -615,12 +645,14 @@ sim:
 	iverilog -g2012 -I src -Wall -o /tmp/$(PROJECT).sim $(SRC) && rm -f /tmp/$(PROJECT).sim
 	@echo "Syntax OK"
 
-# Self-checking simulation of the generic I2C target (needs iverilog/vvp).
-simtest:
-	iverilog -g2012 -o /tmp/$(PROJECT)_i2c.vvp \
-	         sim/tb_i2c_target.v src/i2c_target.v src/i2c_regfile.v src/lc_counter.v $(CELLS_SIM)
-	$(VVP) /tmp/$(PROJECT)_i2c.vvp
-	@rm -f /tmp/$(PROJECT)_i2c.vvp
+# (simtest, the v24..v53 single I2C target, was replaced in v54 by i2cemutest.)
+
+# v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
+i2cemutest:
+	iverilog -g2012 -o /tmp/$(PROJECT)_i2cemu.vvp -s tb_i2c_emu \
+	         sim/tb_i2c_emu.v src/i2c_emu_modes.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_i2cemu.vvp
+	@rm -f /tmp/$(PROJECT)_i2cemu.vvp
 
 # Self-checking loopback simulation of the soft UART (needs iverilog/vvp).
 uarttest:
@@ -766,10 +798,13 @@ measuretest:
 
 # Self-checking simulation of the cmd_dispatch payload byte-counter (the arg_rem
 # down-counter that replaced the per-state arg_count+1>=arg_len add-compare).
+# v54: once as the loop image's decoder, once as the emulation image's (the I2C_* commands).
 argtest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_args.vvp \
-	         sim/tb_dispatch_args.v src/cmd_dispatch.v
-	$(VVP) /tmp/$(PROJECT)_args.vvp
+	@set -e; for d in "" "$(EMU_DEFINES)"; do \
+	  echo "== tb_dispatch_args $$d"; \
+	  iverilog -g2012 -I src $$d -o /tmp/$(PROJECT)_args.vvp sim/tb_dispatch_args.v src/cmd_dispatch.v; \
+	  $(VVP) /tmp/$(PROJECT)_args.vvp; \
+	done
 	@rm -f /tmp/$(PROJECT)_args.vvp
 
 # Self-checking simulation of the stepper engine pulse-train generator.
@@ -792,7 +827,7 @@ check-protocol:
 # Uses $(SRC) so it tracks the shipping top; like every whole-top bench below, it runs on both
 # images (topbench).
 topsmoketest:
-	$(call topbench,tb_top_v2,loop deep)
+	$(call topbench,tb_top_v2,loop deep emu)
 
 # Top-level end-to-end capture: SPI OP_CAPTURE -> producers -> rings -> dual writer
 # -> the two PSRAM regions, with the tb acting as the PSRAM write-slave.  Catches
@@ -817,7 +852,7 @@ topboottest:
 # v52: the STM32 -> iCE40 SPI link at 1.95, 3.9 and 5 MHz against an STM32 model (pad delays, MISO
 # setup, a drifting phase): PING/VERSION/STATUS and a 256-byte register write + streamed read-back.
 topspilinktest:
-	$(call topbench,tb_top_spilink,loop deep)
+	$(call topbench,tb_top_spilink,loop deep emu)
 
 topdeeptest:
 	$(call topbench,tb_top_deep,deep)
@@ -826,7 +861,7 @@ topdeeptest:
 # SPI engine armed over the SPI link onto one pad, each taking it over and handing it back, plus
 # the channel >= N guard.
 topmuxtest:
-	$(call topbench,tb_top_la_mux,loop deep)
+	$(call topbench,tb_top_la_mux,emu)
 
 # SPI master (v44): SPI_ARM/CS/STATUS + SWD_FEED/READ through the whole top, against a
 # behavioural SPI flash on the LA pads (ID, program, erase, read; modes 0 and 3; re-arm; SWD after).
@@ -836,7 +871,12 @@ spitest:
 # UART2 (v48): the TX-only second UART next to the proxy through the whole top: both decoded
 # on the pads with bit timing, re-armed on another pin and rate, then disarmed.
 uart2test:
-	$(call topbench,tb_top_uart2,loop deep)
+	$(call topbench,tb_top_uart2,emu)
+
+# v54: the emulated sensors through the whole emulation image: I2C targets, the FIFO, data ready
+# and the SPI target, driven over the SPI link, with bus models on the LA pads.
+topemutest:
+	$(call topbench,tb_top_emu,emu)
 
 # SWD transfer queue (v45): SWD_QFEED/QCONFIG/QSTATUS through the whole top against a SW-DP
 # model (mixed reads/writes, a queue bigger than the link delivers, WAIT/parity/no-target stops).
@@ -870,7 +910,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: simtest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
@@ -897,3 +937,8 @@ help:
 	@echo "  help         Show this message"
 
 # (labuftest removed in v24 with la_capture_buf.v — the on-FPGA I2C-LA trace buffer is gone.)
+
+# The gateware source list (scripts: make -s print-src).
+print-src:
+	@echo $(SRC)
+.PHONY: print-src topemutest

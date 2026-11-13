@@ -45,6 +45,12 @@
     localparam OP_I2C_LOAD_REGS      = 8'h62;
     localparam OP_I2C_READ_REGS      = 8'h63;
     localparam OP_I2C_STATUS         = 8'h64;
+    localparam OP_I2C_LOAD_ATTRS     = 8'h6A;
+    localparam OP_I2C_READ_ATTRS     = 8'h6B;
+    localparam OP_I2C_TIMES          = 8'h6C;
+    localparam OP_I2C_DRDY           = 8'h6D;
+    localparam OP_EMU_PINMAP         = 8'h6E;
+    localparam OP_EMU_CONFIG         = 8'h6F;
     localparam OP_LA_CAPTURE         = 8'h69;
     localparam OP_UART_CONFIG        = 8'h70;
     localparam OP_UART_DISABLE       = 8'h71;
@@ -53,3 +59,9 @@
     localparam OP_UART_STATUS        = 8'h74;
     localparam OP_UART2_CONFIG       = 8'h75;
     localparam OP_UART2_WRITE        = 8'h76;
+    localparam OP_UART2_READ         = 8'h77;
+    localparam OP_UART2_STATUS       = 8'h78;
+    localparam OP_EMU_FIFO_WRITE     = 8'h7A;
+    localparam OP_EMU_FIFO_STATUS    = 8'h7B;
+    localparam OP_I2C_READ_LOG       = 8'h79;
+    localparam OP_SPIT_CONFIG        = 8'h7C;

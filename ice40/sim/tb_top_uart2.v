@@ -1,5 +1,5 @@
 // ============================================================================
-// tb_top_uart2.v — UART2 (v48, the TX-only second UART) end to end through top_v2.
+// tb_top_uart2.v — UART2 (v48 TX, v54 RX; the emulation image) end to end through top_v2.
 //
 // The host side is the real link: UART_CONFIG / UART2_CONFIG / UART_WRITE / UART2_WRITE /
 // UART_STATUS go through the SPI pads, spi_slave and cmd_dispatch.  The DUT side is two
@@ -14,6 +14,9 @@
 //   * second run with different parameters (AGENTS.md): UART2 re-armed on another channel at
 //     another rate drives the new pin at the new rate and releases the old one;
 //   * UART2_CONFIG with enable 0 disarms it and releases the pin; the proxy keeps running.
+//   * v54: UART2's TX pin comes from the pin map (EMU_PINMAP code 7, driven while armed);
+//     UART2 RX on its rx_ch: bytes the DUT sends are read back with UART2_READ, UART2_STATUS
+//     counts them and flags a break as a framing error (sticky, cleared by the read).
 //
 // Run:  make uart2test
 // ============================================================================
@@ -38,6 +41,9 @@ module tb_top_uart2;
             pulldown (la[gi]);           // an undriven pad reads 0: "released" is visible
         end
     endgenerate
+    // the DUT's TX into UART2 RX (LA10)
+    reg dut_tx_en = 1'b0, dut_tx = 1'b1;
+    assign la[9] = dut_tx_en ? dut_tx : 1'bz;
 
     top dut (
         .clk48(clk48),
@@ -95,6 +101,20 @@ module tb_top_uart2;
             cs_lo;
             spi_byte(op, junk); spi_byte(n[7:0], junk); spi_byte(n[15:8], junk);
             for (j = 0; j < n; j = j + 1) spi_byte(txb[j], junk);
+            cs_hi;
+        end
+    endtask
+    // EMU_PINMAP (0x6E): code on pad ch, every other pad 0
+    task emu_pin(input [3:0] ch, input [2:0] code);
+        integer j; reg [7:0] b;
+        begin
+            cs_lo; spi_byte(8'h6E, junk);
+            for (j = 0; j < 7; j = j + 1) begin
+                b = 8'h00;
+                if (ch == 2*j)     b[2:0] = code;
+                if (ch == 2*j + 1) b[6:4] = code;
+                spi_byte(b, junk);
+            end
             cs_hi;
         end
     endtask
@@ -187,6 +207,30 @@ module tb_top_uart2;
             end
     endtask
 
+    // the DUT sends one 8N1 byte at div_r clk per bit
+    integer div_r = 30;
+    task dut_send(input [7:0] b);
+        integer k;
+        begin
+            dut_tx = 1'b0; #(div_r * CLK_NS);
+            for (k = 0; k < 8; k = k + 1) begin dut_tx = b[k]; #(div_r * CLK_NS); end
+            dut_tx = 1'b1; #(div_r * CLK_NS * 2);
+        end
+    endtask
+    // UART2_STATUS (0x78): [avail_lo][flags]
+    task uart2_status;
+        begin cs_lo; spi_byte(8'h78, junk); spi_byte(8'h00, st0); spi_byte(8'h00, st1); cs_hi; end
+    endtask
+    reg [7:0] r2b [0:15];
+    task uart2_read(input integer n);   // UART2_READ (0x77): [len lo][len hi] then n bytes
+        integer k;
+        begin
+            cs_lo; spi_byte(8'h77, junk); spi_byte(n[7:0], junk); spi_byte(n[15:8], junk);
+            for (k = 0; k < n; k = k + 1) spi_byte(8'h00, r2b[k]);
+            cs_hi;
+        end
+    endtask
+
     integer j;
     localparam [8*6-1:0] NMEA = "$GPRMC";
     initial begin
@@ -195,6 +239,7 @@ module tb_top_uart2;
         // ---- run 1: proxy TX on LA2 @ div 50, UART2 on LA6 @ div 30 ----
         uart_cfg(8'h70, 4'd0, 4'd1, 24'd50, 1'b1);
         uart_cfg(8'h75, 4'd0, 4'd5, 24'd30, 1'b1);
+        emu_pin(4'd5, 3'd7);
         #(1000);
         if (la[5] !== 1'b1) begin $display("FAIL tb_top_uart2: UART2 TX not idle high after arm"); errors = errors + 1; end
         if (la[1] !== 1'b1) begin $display("FAIL tb_top_uart2: proxy TX not idle high after arm"); errors = errors + 1; end
@@ -221,6 +266,7 @@ module tb_top_uart2;
         // ---- run 2: UART2 re-armed on LA8 @ div 20; LA6 must be released ----
         rx_on = 1'b0;
         uart_cfg(8'h75, 4'd0, 4'd7, 24'd20, 1'b1);
+        emu_pin(4'd7, 3'd7);
         ch_a = 7; div_a = 20; n_a = 0;
         #(1000);
         if (la[7] !== 1'b1) begin $display("FAIL tb_top_uart2: re-armed UART2 not idle high on LA8"); errors = errors + 1; end
@@ -252,6 +298,24 @@ module tb_top_uart2;
         check(n_b, 3, "proxy after the UART2 disarm");
         check(buf_b[2], 8'h3C, "proxy byte after the UART2 disarm");
         check(n_a, 4, "disarmed UART2 sent nothing");
+
+        // ---- v54: UART2 RX on LA10 @ div 30 (TX left on LA8) ----
+        rx_on = 1'b0;
+        dut_tx_en = 1'b1; dut_tx = 1'b1; #(2000);     // the DUT's TX idles high before RX is armed
+        uart_cfg(8'h75, 4'd9, 4'd7, 24'd30, 1'b1);
+        #(2000);
+        uart2_status;                                   // clears the framing errors of the runs above (RX on a low pad)
+        dut_send(8'h41); dut_send(8'h54); dut_send(8'h0D);
+        uart2_status; check(st0, 8'd3, "UART2 RX: 3 bytes available"); check(st1 & 8'hC1, 8'h00, "UART2 RX: no errors");
+        uart2_read(3);
+        check(r2b[0], 8'h41, "UART2 RX byte 0"); check(r2b[1], 8'h54, "UART2 RX byte 1"); check(r2b[2], 8'h0D, "UART2 RX byte 2");
+        uart2_status; check(st0, 8'd0, "UART2 RX: drained");
+        dut_tx = 1'b0; #(30 * CLK_NS * 25); dut_tx = 1'b1; #(30 * CLK_NS * 4);    // a break
+        dut_send(8'h7E);
+        uart2_status; check(st1 & 8'h80, 8'h80, "UART2 RX: break = framing error"); check(st0, 8'd1, "UART2 RX: the byte after the break");
+        uart2_status; check(st1 & 8'h80, 8'h00, "UART2 RX: framing error cleared by the status read");
+        uart2_read(1); check(r2b[0], 8'h7E, "UART2 RX byte after the break");
+        dut_tx_en = 1'b0;
 
         if (errors == 0) $display("PASS tb_top_uart2: UART2 and the proxy run side by side, re-arm moves pin and rate, disarm releases the pin");
         else             $display("FAIL tb_top_uart2: %0d error(s)", errors);

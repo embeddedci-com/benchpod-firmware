@@ -1,20 +1,24 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=53
-source_sha256=d9532bb47020b2d75af874090d4670ab0fe7adde8e98a3acb67664842cb0b3a7
-built_from=e80aa68
-promoted=2026-11-07
+gateware_version=54
+source_sha256=dc0de9c65f9a4664b396a92240d91420379c5a3a898b4fbe3f479f47217cca85
+built_from=3d01549
+promoted=2026-11-12
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=fw 3.10.0 combo on benchpod-30a9f1 (analog v3-r2): LAN hwe2e 75/0, SDK e2e 117/0, process-node 78/0, 12 MS/s LA + ADC matrix
-loop.sha256=1399b086bef58fe947e7a2e58f3080b5b2c24592c2d5247e4794641d0e89d36b
-loop.seed=51
+hw_verified=benchpod-30a9f1 (analog v3r2) 2026-11-13: loop/deep bit-identical to the 2026-11-12 promote; emulation with word registers + command map: TMP117/INA219/SHT3x/SCD4x through a DUT, process-node suite 99/0 (current wiring), SDK e2e pod+gpio 99/0, cloud sensor smoke 2026-11-12. SPI target + UART2 RX not yet on hardware (bench wiring pending)
+loop.sha256=58a52809f45c0de3213b138b4761e6d886b0991b175d629265df7c69388b901c
+loop.seed=25
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=54.11
-deep.sha256=d6e7e3b2a83195159909c427dee24ba20700ae383bd15359b4c7c5c368560d66
-deep.seed=37
+loop.clk48_mhz=61.18
+deep.sha256=44b292e5d21a1a4c2712256eaf780c6d2b92a4789997d7e4624c74277516e000
+deep.seed=11
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=57.61
+deep.clk48_mhz=59.54
+emu.sha256=cfe8be93950d3609a2f54fa14919708d3652e864f22b7dc58e376da006a8746a
+emu.seed=27
+emu.defines=-DVERSION_V2 -DUSE_EMULATION
+emu.clk48_mhz=56.48

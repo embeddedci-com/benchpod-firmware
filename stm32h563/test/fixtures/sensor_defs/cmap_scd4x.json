@@ -1,0 +1,13 @@
+{"format":1,"kind":"i2c","name":"cmap_scd4x",
+ "params":[{"key":"co2_ppm","min":0,"max":40000,"default":600},{"key":"temperature_c","min":-10,"max":60,"default":25},
+  {"key":"humidity_pct","min":0,"max":100,"default":40}],
+ "i2c":{"address":98,"register_address_bits":16},
+ "functions":{"wc":{"args":["w","n"],"return":"n == 0 ? byte(w, 1) : n == 1 ? byte(w, 0) : crc8(0x31, 0xFF, byte(w, 1), byte(w, 0))"}},
+ "let":[{"co2":"sat_u16(co2_ppm)"},{"st":"sat_u16((temperature_c + 45) * 65536 / 175)"},{"srh":"sat_u16(humidity_pct * 65536 / 100)"}],
+ "commands":[
+  {"command":60421,"busy_us":1000,"answer":["wc(co2,0)","wc(co2,1)","wc(co2,2)","wc(st,0)","wc(st,1)","wc(st,2)","wc(srh,0)","wc(srh,1)","wc(srh,2)"]},
+  {"command":58552,"busy_us":1000,"answer":["wc(0x8006,0)","wc(0x8006,1)","wc(0x8006,2)"]},
+  {"command":13954,"busy_us":1000,"answer":["wc(0x1234,0)","wc(0x1234,1)","wc(0x1234,2)","wc(0x5678,0)","wc(0x5678,1)","wc(0x5678,2)","wc(0x9ABC,0)","wc(0x9ABC,1)","wc(0x9ABC,2)"]},
+  {"command":8625},{"command":16262},
+  {"command":9245,"write_bytes":3},
+  {"command":8984,"busy_us":1000,"answer":["reg[0x241D]","reg[0x241E]","reg[0x241F]"]}]}

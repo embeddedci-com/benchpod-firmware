@@ -1,7 +1,8 @@
 // ============================================================================
-// tb_top_la_mux.v — la_bank's driver priority (swd/spi > stepper > i2c > uart > static) end to
+// tb_top_la_mux.v — la_bank's driver priority (swd/spi > stepper > emu > uart > static) end to
 // end through top_v2: every driver is armed over the real SPI link (GPIO_SET, UART_CONFIG,
-// I2C_CONFIG, GPIO_STEP, SPI_ARM, SWD_DISARM, I2C_DISABLE, UART_DISABLE) onto the SAME pad, and
+// I2C_CONFIG + EMU_PINMAP, GPIO_STEP, SPI_ARM, SWD_DISARM, EMU_PINMAP 0, UART_DISABLE) onto the
+// SAME pad, and
 // the pad level, the bank's output enable and GPIO_GET are checked after each step, as each
 // driver takes the pad over and as each lets go again (falling back to the next one down).
 //
@@ -82,12 +83,27 @@ module tb_top_la_mux;
             spi_byte(8'd24, junk); spi_byte(8'd0, junk); spi_byte(8'd0, junk); spi_byte(8'h01, junk); cs_hi;
         end
     endtask
-    task i2c_config(input [3:0] sda_ch, input [3:0] scl_ch);   // addr 0x76, flags: enable
+    // v54: I2C target 0 at 0x76 on sda/scl, enabled; then the pin map makes the SDA pad an I2C line
+    task i2c_config(input [3:0] sda_ch, input [3:0] scl_ch);
         begin
-            cs_lo; spi_byte(8'h60, junk); spi_byte(8'h76, junk);
+            cs_lo; spi_byte(8'h60, junk); spi_byte(8'h00, junk); spi_byte(8'h76, junk);
             spi_byte({4'h0, sda_ch}, junk); spi_byte({4'h0, scl_ch}, junk);
-            spi_byte(8'h01, junk); spi_byte(8'h00, junk); spi_byte(8'h00, junk);
-            spi_byte(8'h00, junk); spi_byte(8'h00, junk); spi_byte(8'h00, junk); cs_hi;
+            spi_byte(8'h01, junk); spi_byte(8'h00, junk); spi_byte(8'h00, junk); spi_byte(8'h00, junk); cs_hi;
+            emu_pin(sda_ch, 3'd1);
+        end
+    endtask
+    // EMU_PINMAP: code on pad ch, every other pad 0
+    task emu_pin(input [3:0] ch, input [2:0] code);
+        integer j; reg [7:0] b;
+        begin
+            cs_lo; spi_byte(8'h6E, junk);
+            for (j = 0; j < 7; j = j + 1) begin
+                b = 8'h00;
+                if (ch == 2*j)     b[2:0] = code;
+                if (ch == 2*j + 1) b[6:4] = code;
+                spi_byte(b, junk);
+            end
+            cs_hi;
         end
     endtask
     task spi_arm(input [3:0] s, input [3:0] mo, input [3:0] mi, input [3:0] c, input cpol);
@@ -154,7 +170,7 @@ module tb_top_la_mux;
             if (lv !== (16'd1 << c)) begin $display("FAIL %0s: GPIO_GET %04h, want %04h", run, lv, 16'd1 << c); errors = errors + 1; end
 
             i2c_config(c, scl);      expect_pad("i2c over uart (released)", c, 1'b0, 1'b0, 14'd0);
-            if (!dut.engines_i.i2c_armed) begin $display("FAIL %0s: i2c not armed", run); errors = errors + 1; end
+            if (!dut.engines_i.emu_on[c]) begin $display("FAIL %0s: the pin map does not own the pad", run); errors = errors + 1; end
 
             gpio_step(c, 16'd4, 16'd0);
             count_edges(c, 6000);
@@ -178,7 +194,7 @@ module tb_top_la_mux;
             expect_pad("disarm: i2c again", c, 1'b0, 1'b0, (14'd1 << cs));
             expect_pad("disarm: static on cs", cs, 1'b0, 1'b1, 14'd0);
 
-            cmd0(8'h61);                    // I2C_DISABLE: uart again
+            emu_pin(c, 3'd0);               // pin map 0: uart again
             expect_pad("i2c off: uart again", c, 1'b1, 1'b1, (14'd1 << cs));
 
             cmd0(8'h71);                    // UART_DISABLE: the static low underneath

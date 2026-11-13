@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Describe the blobs a firmware build goes with: the two iCE40 gateware images and the
+"""Describe the blobs a firmware build goes with: the iCE40 gateware images and the
 ESP32-C3 esp-hosted image, which the pod keeps in W25Q slots (src/blob_store.h) rather than in
 its internal flash.
 
@@ -12,6 +12,10 @@ The file names are also the release asset names, so the manifest's "file" fields
 
 A missing input (a build without gateware) is written as size 0: the firmware then reports
 that slot's expected blob as unknown instead of failing the build.
+
+--gw2 (gateware v54+) is the third gateware image, the emulation image (blob-gw2.bin, slot
+"gw2"). It is listed like gw0, gw1 and esp (size 0 when the build has none), and the C header
+carries it last: gw0, gw1, esp, gw2 (src/blob_manifest.c).
 
 --bridge adds the Wi-Fi bridge's firmware (blob-bridge.bin, slot "bridge") to the JSON manifest
 only: the pod relays it to the bridge box, it is not part of what this firmware expects in its
@@ -48,8 +52,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--gw0", help="gateware image 0 (closed loop)")
     ap.add_argument("--gw1", help="gateware image 1 (deep replay)")
+    ap.add_argument("--gw2", help="gateware image 2 (sensor emulation, v54+)")
     ap.add_argument("--esp", help="ESP32-C3 esp-hosted merged image")
-    ap.add_argument("--gw-version", type=int, default=0, help="GATEWARE_VERSION of both images")
+    ap.add_argument("--gw-version", type=int, default=0, help="GATEWARE_VERSION of the gateware images")
     ap.add_argument("--bridge", help="Wi-Fi bridge firmware (wifi-bridge/build/benchpod-wifi-bridge.bin)")
     ap.add_argument("--bridge-version", default="0.0.0", help="its PROJECT_VER, X.Y.Z")
     ap.add_argument("--out-dir", required=True)
@@ -60,6 +65,7 @@ def main():
         (describe("gw0", a.gw0, a.gw_version), a.gw0),
         (describe("gw1", a.gw1, a.gw_version), a.gw1),
         (describe("esp", a.esp, 0), a.esp),
+        (describe("gw2", a.gw2, a.gw_version), a.gw2),
     ]
 
     extra = []
@@ -68,9 +74,10 @@ def main():
         extra.append((describe("bridge", a.bridge, major << 16 | minor << 8 | patch), a.bridge))
 
     os.makedirs(a.out_dir, exist_ok=True)
-    stale = os.path.join(a.out_dir, "blob-bridge.bin")
-    if not extra and os.path.exists(stale):
-        os.remove(stale)
+    for name in ("gw0", "gw1", "esp", "gw2", "bridge"):
+        stale = os.path.join(a.out_dir, "blob-" + name + ".bin")
+        if not any(e["name"] == name and e["file"] for e, _ in entries + extra) and os.path.exists(stale):
+            os.remove(stale)
     for e, src in entries + extra:
         if e["file"]:
             shutil.copyfile(src, os.path.join(a.out_dir, e["file"]))

@@ -38,6 +38,8 @@
 #include "fault.h"       /* reset cause + last-crash summary for status */
 #include "sys_health.h"  /* heap/stack headroom for status */
 #include "ice40_flash.h"
+#include "blob_store.h"
+#include "sensor_mgr.h"   /* sensor_mgr_digital_names: an image switch away from emulation */
 #if defined(BENCHPOD_EMI_TEST)
 #include "emi_test.h"
 #endif
@@ -286,6 +288,10 @@ void handle_status(int conn_id, const char *json) {
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
     bp_emit(&e, "\"flash_kb\":%lu,", caps.flash_kb);
+    /* Emulated sensors: the definition format the pod takes, and whether I2C/SPI/UART sensors work
+       (the emulation image is installed or running). Clients tell from these that the pod may be on
+       the emulation image, which has neither the loop's nor the deep image's feature. */
+    bp_emit(&e, "\"sensors_format\":1,\"sensors_digital\":%s,", caps.sensors_digital ? "true" : "false");
     /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
     bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
                 "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",
@@ -483,23 +489,56 @@ void handle_nrst(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"fpga_image","image":0|1} — switch the running iCE40 gateware IMAGE (0 = closed-loop,
-   1 = deep-DAC-PSRAM-replay). SB_WARMBOOT can't reconfigure at runtime on this board (its
-   config-SPI pins ARE the shared PSRAM bus), so fpga_warmboot() actually REFLASHES the selected
-   image and does a CRESET cold-reconfig (~2-3 s). Returns the new image's {version, features};
-   also asks the net task to re-announce capabilities so the server's cached caps track the swap. */
+/* {"cmd":"fpga_image","image":0|1|2|"loop"|"deep"|"emulation"} — switch the running iCE40
+   gateware IMAGE (0 = closed-loop, 1 = deep-DAC-PSRAM-replay, 2 = sensor emulation, gateware v54+).
+   SB_WARMBOOT can't reconfigure at runtime on this board (its config-SPI pins ARE the shared
+   PSRAM bus), so fpga_warmboot() actually REFLASHES the selected image and does a CRESET
+   cold-reconfig (~2-3 s). Returns the new image's {image, name, version, features}; also asks the
+   net task to re-announce capabilities so the server's cached caps track the swap.
+   {"cmd":"fpga_image"} alone reports the running image. Leaving the emulation image while I2C,
+   SPI or UART sensors run is refused (they need it): sensor_stop them first. */
 void handle_fpga_image(int conn_id, const char *json) {
-    char s[8] = {0};
+    char s[16] = {0};
     if (!json_get_value(json, "image", s, sizeof(s)) || !s[0]) {
-        send_error(conn_id, "image required (0=loop, 1=deep-replay)"); return;
+        int kind = signal_engine_image_kind();
+        char payload[112];
+        snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
+                 kind, signal_engine_image_name(kind), signal_engine_fpga_version(),
+                 signal_engine_fpga_features());
+        send_ok_str(conn_id, payload);
+        return;
     }
-    uint8_t img = (uint8_t)strtoul(s, NULL, 10);
+    int img = -1;
+    if (!strcmp(s, "0") || !strcmp(s, "loop")) img = 0;
+    else if (!strcmp(s, "1") || !strcmp(s, "deep")) img = 1;
+    else if (!strcmp(s, "2") || !strcmp(s, "emulation")) img = 2;
+    if (img < 0) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
+    if (img == 2 && signal_engine_fpga_version() < EMULATION_MIN_GW) {
+        send_error(conn_id, "the emulation image needs gateware v54 or later"); return;
+    }
+    if (img != 2) {
+        char names[96];
+        if (sensor_mgr_digital_names(names, sizeof(names))) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "image switch refused: the emulated sensors %s need the "
+                     "emulation image; stop them first ({\"cmd\":\"sensor_stop\",\"all\":true})", names);
+            send_error(conn_id, msg);
+            return;
+        }
+    }
     if (!heavy_begin(conn_id)) return;
-    int rc = fpga_warmboot(img);
+    int rc = fpga_warmboot((uint8_t)img);
     uint8_t ver = signal_engine_fpga_version();
     uint8_t feats = signal_engine_fpga_features();
     heavy_release(conn_id);
-    if (rc == -1) { send_error(conn_id, "image out of range (0=loop, 1=deep-replay)"); return; }
+    if (rc == -1) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
+    if (rc == -2) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "image %d is not installed on the pod (W25Q slot %s is empty): "
+                 "install the gateware blobs", img, blob_name((blob_id_t)ice40_image_slot(img)));
+        send_error(conn_id, msg);
+        return;
+    }
     if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return; }
     if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return; }
     if (rc != 0)  { send_error(conn_id, "image switch failed"); return; }
@@ -508,8 +547,9 @@ void handle_fpga_image(int conn_id, const char *json) {
     cloud_client_request_caps_resend();
     /* A reconfigure can glitch the DAC's SPI lines: put an output stage back on its park level. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
-    char payload[96];
-    snprintf(payload, sizeof(payload), "{\"image\":%u,\"version\":%u,\"features\":%u}", img, ver, feats);
+    char payload[112];
+    snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
+             img, signal_engine_image_name(img), ver, feats);
     send_ok_str(conn_id, payload);
 }
 
