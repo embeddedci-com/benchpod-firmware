@@ -15,6 +15,10 @@
 //   9  data ready: pulse at conversion end, firmware assert / deassert, a level cleared by a read
 //  10  the SCL-silence watchdog releases a target that was left driving SDA
 //  11  a reloaded register is served on the next read (the cache refresh)
+//  12  word registers (v55): pointer p = bytes 2p/2p+1, reads and writes per word, auto-increment
+//      to the next register, the CMD attribute on a word, p[7] ignored
+//  13  command map (v55): 16-bit commands in several high-byte windows (SHT3x/SCD4x-like), CMD
+//      busy + nack, writes with data, the log; 16-bit single-window and byte mode unchanged
 // ============================================================================
 `timescale 1ns/1ps
 module tb_i2c_emu;
@@ -348,6 +352,86 @@ module tb_i2c_emu;
         load(1, 0, 8'h3B, 8'h78);
         rd_cur(7'h44, 1, d, ok); check("11 reload again", d[7:0], 8'h78);
 
+        // ---- 12: word registers (target 3, 0x45 on bus 1, nack while busy) ----
+        bus = 1;
+        // page field bit0 = word registers (cmd_dispatch: I2C_CONFIG flags bit6)
+        config_t(3, 1, 7'h45, 0, 2'd1, 0, 0, 8'h01, 8'h00, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
+        load(3, 0, 8'h00, 8'h0C); load(3, 0, 8'h01, 8'h80);      // reg 0x00 = 0x0C80
+        load(3, 0, 8'h02, 8'h02); load(3, 0, 8'h03, 8'h20);      // reg 0x01 = 0x0220
+        load(3, 0, 8'h04, 8'h00); load(3, 0, 8'h05, 8'h00);      // reg 0x02 = 0x0000
+        load(3, 0, 8'h1E, 8'h01); load(3, 0, 8'h1F, 8'h17);      // reg 0x0F = 0x0117
+        load(3, 0, 8'hFC, 8'h54); load(3, 0, 8'hFD, 8'h49);      // reg 0x7E (= 0xFE) = 0x5449
+        load(3, 0, 8'hFE, 8'h22); load(3, 0, 8'hFF, 8'h60);      // reg 0x7F (= 0xFF) = 0x2260
+        load(3, 1, 8'h0A, 8'h42);                                // reg 0x05: CMD, time 1 (500 us)
+        load(3, 0, 8'h0A, 8'hBE); load(3, 0, 8'h0B, 8'hEF);
+        rd_regs(7'h45, 0, 16'h0F, 2, d, ok); check("12 ack", ok, 1); check("12 reg 0x0F", d[15:0], 16'h1701);
+        rd_regs(7'h45, 0, 16'h01, 2, d, ok); check("12 reg 0x01 (no overlap with 0x00)", d[15:0], 16'h2002);
+        rd_regs(7'h45, 0, 16'h00, 6, d, ok); check("12 regs 0x00..0x02 in one read", d[47:0], 48'h0000_2002_800C);
+        rd_cur(7'h45, 2, d, ok);             check("12 read on from the pointer (reg 0x02 LSB, reg 0x03)", d[15:0], 16'h0000);
+        rd_regs(7'h45, 0, 16'hFE, 4, d, ok); check("12 0xFE/0xFF alias 0x7E/0x7F", d[31:0], 32'h6022_4954);
+        rd_regs(7'h45, 0, 16'h7F, 3, d, ok); check("12 auto-increment wraps 0x7F -> 0x00", d[23:0], 24'h0C_6022);
+        get_status(3, st);  i = st[23:16];
+        wr_regs(7'h45, 0, 16'h07, 2, 16'hCDAB, ok); check("12 write ack", ok, 1);
+        readback(3, 0, 8'h0E, b8); check("12 reg 0x07 MSB at byte 0x0E", b8, 8'hAB);
+        readback(3, 0, 8'h0F, b8); check("12 reg 0x07 LSB at byte 0x0F", b8, 8'hCD);
+        get_log(3, i, le);     check("12 log MSB", le, 16'h0EAB);
+        get_log(3, i + 1, le); check("12 log LSB", le, 16'h0FCD);
+        rd_regs(7'h45, 0, 16'h07, 2, d, ok); check("12 reg 0x07 read back", d[15:0], 16'hCDAB);
+        wr_regs(7'h45, 0, 16'h02, 4, 32'h5678_1234, ok);         // regs 0x02 and 0x03 in one write
+        readback(3, 0, 8'h06, b8); check("12 burst write: reg 0x03 MSB", b8, 8'h78);
+        rd_regs(7'h45, 0, 16'h02, 2, d, ok); check("12 reg 0x02 after the burst", d[15:0], 16'h1234);
+        // the CMD attribute on a word register: setting the pointer starts a conversion
+        wr_regs(7'h45, 0, 16'h05, 0, 0, ok); t0 = $realtime;
+        rd_cur(7'h45, 2, d, ok); check("12 CMD word: read NACKed while busy", ok, 0);
+        while ($realtime - t0 < 520000) #1000;
+        rd_cur(7'h45, 2, d, ok); check("12 CMD word: answer", d[15:0], 16'hEFBE);
+
+        // ---- 13: command map (target 2, 0x50 on bus 1, nack while busy) ----
+        // page field bit1 = command map (I2C_CONFIG flags bit7): image[h] = base, offset = base ^ l
+        config_t(2, 1, 7'h50, 0, 2'd1, 0, 0, 8'h02, 8'h00, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
+        load(2, 0, 8'h24, 8'h40);       // 0x24xx: 0x2400 -> 0x40, 0x2416 -> 0x56
+        load(2, 0, 8'hE0, 8'h50);       // 0xE000 -> 0x50
+        load(2, 0, 8'hF3, 8'h4D);       // 0xF32D -> 0x60
+        load(2, 0, 8'h37, 8'hF0);       // 0x3780 -> 0x70
+        for (k = 0; k < 6; k = k + 1) begin
+            load(2, 0, 8'h40 + k[7:0], 8'hA0 + k[7:0]);   // 0x2400 answer
+            load(2, 0, 8'h50 + k[7:0], 8'hB0 + k[7:0]);   // 0xE000 answer
+            load(2, 0, 8'h56 + k[7:0], 8'hC0 + k[7:0]);   // 0x2416 answer
+        end
+        load(2, 0, 8'h60, 8'h80); load(2, 0, 8'h61, 8'h10); load(2, 0, 8'h62, 8'hE1);
+        load(2, 1, 8'h40, 8'h02);       // 0x2400: CMD, time 0
+        load(2, 1, 8'h56, 8'h42);       // 0x2416: CMD, time 1
+        set_time(2, 0, 16'd600);  set_time(2, 1, 16'd200);
+        wr_regs(7'h50, 1, 16'h2400, 0, 0, ok); check("13 0x2400 ack", ok, 1); t0 = $realtime;
+        rd_cur(7'h50, 6, d, ok); check("13 0x2400 NACKed while measuring", ok, 0);
+        while ($realtime - t0 < 620000) #1000;
+        rd_cur(7'h50, 6, d, ok); check("13 0x2400 answer", d[47:0], 48'hA5A4A3A2A1A0);
+        wr_regs(7'h50, 1, 16'hE000, 0, 0, ok);
+        rd_cur(7'h50, 6, d, ok); check("13 0xE000 (no conversion) answers at once", ok, 1);
+        check("13 0xE000 answer", d[47:0], 48'hB5B4B3B2B1B0);
+        rd_regs(7'h50, 1, 16'hF32D, 3, d, ok); check("13 0xF32D in one transfer", d[23:0], 24'hE11080);
+        wr_regs(7'h50, 1, 16'h2416, 0, 0, ok); t0 = $realtime;
+        rd_cur(7'h50, 6, d, ok); check("13 0x2416 NACKed (time 1)", ok, 0);
+        while ($realtime - t0 < 220000) #1000;
+        rd_cur(7'h50, 6, d, ok); check("13 0x2416 answer", d[47:0], 48'hC5C4C3C2C1C0);
+        get_status(2, st);  i = st[23:16];
+        wr_regs(7'h50, 1, 16'h3780, 3, 24'h33_2211, ok); check("13 write with data ack", ok, 1);
+        readback(2, 0, 8'h70, b8); check("13 0x3780 data 0", b8, 8'h11);
+        readback(2, 0, 8'h72, b8); check("13 0x3780 data 2", b8, 8'h33);
+        get_log(2, i, le);     check("13 log entry at the translated offset", le, 16'h7011);
+        get_log(2, i + 2, le); check("13 log entry 3", le, 16'h7233);
+        readback(2, 0, 8'h37, b8); check("13 the map entry is kept", b8, 8'hF0);
+        rd_regs(7'h50, 1, 16'h3780, 3, d, ok); check("13 0x3780 read back", d[23:0], 24'h332211);
+        // back to the 16-bit single window: test 4's layout still serves
+        config_t(2, 1, 7'h50, 1, 2'd2, 0, 0, 8'h24, 8'h01, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
+        load(2, 0, 8'h00, 8'hE0); load(2, 0, 8'h01, 8'hE1);
+        rd_regs(7'h50, 1, 16'h2401, 1, d, ok); check("13 single window 0x2401", d[7:0], 8'hE1);
+        rd_regs(7'h50, 1, 16'hE001, 1, d, ok); check("13 single window: 0xE001 outside", d[7:0], 8'h00);
+        // and byte mode: target 3 back to 8-bit, byte 0x01 is the LSB of word 0x00
+        config_t(3, 1, 7'h45, 0, 2'd1, 0, 0, 8'h00, 8'h00, SDA1, SCL1, 2'd0, 1'b1, 1'b0);
+        rd_regs(7'h45, 0, 16'h01, 2, d, ok); check("13 byte mode again", d[15:0], 16'h0280);
+        bus = 0;
+
         // ---- 100 kHz, and a disable ----
         TLOW = 4700; THIGH = 4000;
         rd_regs(7'h76, 0, 16'hF7, 3, d, ok); check("100k F7..F9", d[23:0], 24'h332211);
@@ -356,7 +440,7 @@ module tb_i2c_emu;
         rd_regs(7'h44, 0, 16'h0F, 1, d, ok); check("t1 unaffected", d[7:0], 8'hBC);
         readback(0, 0, 8'hD0, b8); check("disable keeps the image", b8, 8'h58);
 
-        if (errors == 0) $display("PASS tb_i2c_emu: 4 targets on 2 buses: reads, writes, busy flag/nack/stretch, 16-bit, FIFO, faults, data ready, watchdog");
+        if (errors == 0) $display("PASS tb_i2c_emu: 4 targets on 2 buses: reads, writes, busy flag/nack/stretch, 16-bit, FIFO, faults, data ready, watchdog, word registers, command map");
         else             $display("FAIL tb_i2c_emu: %0d error(s)", errors);
         $finish;
     end

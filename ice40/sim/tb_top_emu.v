@@ -249,6 +249,19 @@ module tb_top_emu;
         i2c_rd(7'h76, 8'hD0, 1, d, ok); check("t0 disabled", ok, 0);
         i2c_rd(7'h68, 8'h75, 1, d, ok); check("t1 still answers", d[7:0], 8'h68);
 
+        // ---- v55 pointer modes through I2C_CONFIG flags bit6 (word) and bit7 (command map) ----
+        load(8'h62, 0, 8'h10, 4, 32'h4433_2211);
+        i2c_config(0, 7'h76, 8'h41, 8'h00, 8'h00);           // enable + word registers
+        i2c_rd(7'h76, 8'h08, 2, d, ok); check("word register 0x08 = bytes 0x10/0x11", d[15:0], 16'h2211);
+        i2c_rd(7'h76, 8'h09, 2, d, ok); check("word register 0x09 = bytes 0x12/0x13", d[15:0], 16'h4433);
+        load(8'h62, 0, 8'hEC, 1, 8'h15);                     // command map: 0xECxx -> 0x15 ^ low
+        i2c_config(0, 7'h76, 8'h81, 8'h00, 8'h00);           // enable + command map
+        i2c_wr(7'h76, 8'hEC, 1, 8'h05, ok); check("command 0xEC05 ack", ok, 1);   // offset 0x10
+        i2c_start; i2c_wbyte({7'h76, 1'b1}, ack); check("command read ack", ack, 1);
+        i2c_rbyte(1, d[7:0]); i2c_rbyte(0, d[15:8]); i2c_stop;
+        check("command 0xEC05 answer = bytes 0x10/0x11", d[15:0], 16'h2211);
+        i2c_config(0, 7'h76, 8'h00, 8'h00, 8'h00);           // off again, byte mode
+
         // ---- the SPI target (BMP280 layout: bit7 = 1 read, mask 0x7F) ----
         pm[3*SMISO +: 3] = 3'd6; pinmap;
         load(8'h62, 4, 8'h50, 4, 32'h44332211);
@@ -276,7 +289,7 @@ module tb_top_emu;
         sbuf[0] = 8'hC0 | 8'h10; s_xfer(4);
         check("SPI muted: MISO released", {sbuf[3], sbuf[2]}, 16'h0000);
 
-        if (errors == 0) $display("PASS tb_top_emu: I2C targets, write log, FIFO, data ready, SPI target modes 0-3 through the SPI link and the pads");
+        if (errors == 0) $display("PASS tb_top_emu: I2C targets, word registers, command map, write log, FIFO, data ready, SPI target modes 0-3 through the SPI link and the pads");
         else             $display("FAIL tb_top_emu: %0d error(s)", errors);
         $finish;
     end

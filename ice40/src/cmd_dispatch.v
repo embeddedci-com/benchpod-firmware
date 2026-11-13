@@ -505,10 +505,14 @@ module cmd_dispatch #(
     assign q_cfg_idle        = rx_byte[4:0];
     // I2C_CONFIG [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)] as i2c_emu's fields
     // {en, addr7, a16, while_busy, mute, stuck, page, mask, sda, scl, drdy mode, active high, on
-    // conversion}.  I2C_DISABLE (bit0 of the opcode) writes only the enable bit, as 0.
+    // conversion}.  I2C_DISABLE (bit0 of the opcode) writes only the enable bit, as 0.  v55: flags
+    // bit6 (word registers) and bit7 (command map) go into page bits 0 and 1, which only 16-bit
+    // addressing uses (the firmware sends them with page 0 and bit1 clear).
     assign i2c_cfg_en_only   = current_cmd[0];
     assign i2c_cfg_data      = {arg_buf[6][0] & ~current_cmd[0], arg_buf[3][6:0], arg_buf[6][1],
-                                arg_buf[6][3:2], arg_buf[6][4], arg_buf[6][5], arg_buf[7], arg_buf[8],
+                                arg_buf[6][3:2], arg_buf[6][4], arg_buf[6][5],
+                                {arg_buf[7][7:2], arg_buf[7][1] | arg_buf[6][7], arg_buf[7][0] | arg_buf[6][6]},
+                                arg_buf[8],
                                 arg_buf[4][3:0], arg_buf[5][3:0], rx_byte[1:0], rx_byte[2], rx_byte[3]};
     assign i2c_reg_attr      = current_cmd[3];        // LOAD/READ_ATTRS 0x6A/0x6B vs REGS 0x62/0x63
     assign i2c_reg_log       = current_cmd[4];        // READ_LOG 0x79
