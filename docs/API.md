@@ -2833,7 +2833,12 @@ every LA owner.
 
 What the gateware supports, and the limits that follow:
 
-- **I2C**: 8- or 16-bit register addresses (`i2c.page` is the 256-aligned window), the conversion
+- **I2C**: 8- or 16-bit register addresses (`i2c.page` is the 256-aligned window), 16-bit word
+  registers (`i2c.register_bytes: 2`: up to 128 registers, pointer bit 7 ignored, so `p` and
+  `p + 0x80` are one register), 16-bit commands in any high byte (`register_address_bits: 16`
+  without `page`: the pod lays out every answer, and the bytes a set command writes
+  (`write_bytes`), plus one byte per high command byte, in the 256-byte image; a command the
+  definition does not list reads whatever its high byte's layout points at), the conversion
   handshake (`trigger`, `busy`, `while_busy` flag, nack or stretch), commanded sensors, the FIFO
   register, `writable: false` bytes (the DUT's writes are counted but not stored), data ready on
   `drdy`. A target has 4 conversion times of at most 65535 us: a longer `time_us` / `busy_us` is
