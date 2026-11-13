@@ -71,6 +71,7 @@
     "spi_xfer": "T1",
     "spi_stream": "T1",
     "spi_flash": "T1",
+    "la_dir": "T1",
     "i2c_start": "T1",
     "i2c_stop": "T1",
     "i2c_xfer": "T1",
@@ -162,6 +163,10 @@
     },
     {
       "line": "{\"cmd\":\"i2c_xfer\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"la_dir\"}",
       "tier": "T1"
     },
     {

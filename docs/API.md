@@ -206,6 +206,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la` | T1 | LA pin control: step pulse trains + pull-ups (LA1-8) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
+| `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
@@ -1995,19 +1996,37 @@ Response:
 
 | Field | Meaning |
 |---|---|
-| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` |
+| `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs`, the `sensor_*` functions, `i2cm_sda`, `i2cm_scl` |
 | `gpio` | `null`, or the gpio mode (`input` / `output` / `open_drain`) |
 | `level` | the **commanded** level of a gpio `output` / `open_drain` pin, else `null` |
 | `pull` | `null` on LA9–LA14; otherwise the fixed resistor and whether it is engaged |
+| `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
+| `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
 
-The reply always lists all 14 entries and is about 1.3 kB. It fits the cloud command channel, but
+The reply always lists all 14 entries and is about 1.3 kB (at most 1.6 kB with `dir` and `warn`). It fits the cloud command channel, but
 it is the largest single-reply command the pod has.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
 drive a DUT line.
 
 ---
+
+### `la_dir` — which way each pin's DUT signal goes
+
+```json
+{"cmd":"la_dir","la":[9,10],"dir":"dut_output"}
+```
+
+`la` is a pin, a list of pins or `"all"`; `dir` is `dut_input`, `dut_output`, `bidir` or `unknown`
+(the default after a reboot). Hosts send it from the wiring profile. On a pin wired to a DUT
+output the pod refuses every push-pull driver (a gpio `output`, UART TX, SPI SCK / MOSI / CS, SWD,
+the step train, an emulated sensor's TX / MISO / data-ready), because two push-pull outputs would
+drive against each other: `direction conflict: LA9 is wired to a DUT output and gpio output would
+drive against it; use gpio open_drain, or fix the wiring if LA9 is not a DUT output`. Open drain
+(`open_drain`, I2C) and inputs are allowed. A pin that is driven can't be marked `dut_output`
+until it is released. `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
+the pins it changed.
 
 ### `gpio` — use LA pins as GPIO
 

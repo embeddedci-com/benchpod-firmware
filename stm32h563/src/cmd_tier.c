@@ -96,6 +96,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "spi_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_xfer) },
     { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream) },
     { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash) },
+    { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir) },
     { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start) },
     { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop) },
     { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer) },

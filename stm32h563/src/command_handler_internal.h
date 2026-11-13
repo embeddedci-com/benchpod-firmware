@@ -248,6 +248,7 @@ void handle_spi_status(int conn_id, const char *json);
 void spi_session_end(void);
 void spi_on_gateware_reconfigured(void);
 /* command_handler_i2c.c: the I2C master (gateware v55) */
+void handle_la_dir(int conn_id, const char *json);
 void handle_i2c_start(int conn_id, const char *json);
 void handle_i2c_stop(int conn_id, const char *json);
 void handle_i2c_status(int conn_id, const char *json);

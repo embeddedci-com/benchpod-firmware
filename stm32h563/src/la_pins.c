@@ -16,6 +16,8 @@ typedef struct {
 } la_pin_t;
 
 static la_pin_t s_pin[LA_PINS_COUNT + 1];   /* index 1..14 */
+static uint8_t  s_dir[LA_PINS_COUNT + 1];   /* la_dir_t; survives la_pins_reset (it is the wiring) */
+static bool     s_powered = true;
 static la_owner_namer_t s_namer;
 
 void la_pins_set_owner_namer(la_owner_namer_t namer) { s_namer = namer; }
@@ -197,6 +199,17 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
             return false;
         }
     }
+    if (la_fn_drives(fn, mode)) {
+        for (size_t i = 0; i < n; i++) {
+            unsigned la = las[i];
+            if (s_dir[la] != LA_DIR_DUT_OUTPUT) continue;
+            char name[24];
+            snprintf(err, cap, "direction conflict: LA%u is wired to a DUT output and %s would drive "
+                     "against it; use gpio open_drain, or fix the wiring if LA%u is not a DUT output",
+                     la, fn_display(fn, mode, name, sizeof(name)), la);
+            return false;
+        }
+    }
     const char *reason = pull_down_reason(fn, mode);
     if (!reason) return true;
     for (size_t i = 0; i < n; i++) {
@@ -210,6 +223,64 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
         return false;
     }
     return true;
+}
+
+/* ---- direction and warnings ---- */
+
+const char *la_dir_name(la_dir_t d) {
+    switch (d) {
+    case LA_DIR_DUT_INPUT:  return "dut_input";
+    case LA_DIR_DUT_OUTPUT: return "dut_output";
+    case LA_DIR_BIDIR:      return "bidir";
+    default:                return "unknown";
+    }
+}
+
+bool la_dir_parse(const char *s, la_dir_t *out) {
+    for (int d = LA_DIR_UNKNOWN; d <= LA_DIR_BIDIR; d++)
+        if (strcmp(s, la_dir_name((la_dir_t)d)) == 0) { *out = (la_dir_t)d; return true; }
+    return false;
+}
+
+la_dir_t la_pins_dir(unsigned la) { return la_ok(la) ? (la_dir_t)s_dir[la] : LA_DIR_UNKNOWN; }
+void     la_pins_set_dir(unsigned la, la_dir_t d) { if (la_ok(la)) s_dir[la] = (uint8_t)d; }
+
+bool la_fn_drives(la_fn_t fn, la_gpio_mode_t mode) {
+    switch (fn) {
+    case LA_FN_GPIO: return mode == LA_GPIO_OUTPUT;
+    case LA_FN_UART_TX: case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: case LA_FN_STEP: case LA_FN_STEP_DIR:
+    case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_CS:
+    case LA_FN_SENSOR_TX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_MISO:
+        return true;
+    default: return false;   /* none, inputs, open drain (I2C, i2cm), gpio input / open_drain */
+    }
+}
+
+bool la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap) {
+    if (!la_ok(la)) { snprintf(err, cap, "LA%u is not a pin (use 1..14)", la); return false; }
+    la_fn_t fn = (la_fn_t)s_pin[la].fn;
+    la_gpio_mode_t mode = la_pins_gpio(la);
+    if (d != LA_DIR_DUT_OUTPUT || !la_fn_drives(fn, mode)) return true;
+    char name[24];
+    snprintf(err, cap, "direction conflict: LA%u is driven by %s, so it can't be wired to a DUT output; "
+             "stop that first", la, fn_display(fn, mode, name, sizeof(name)));
+    return false;
+}
+
+void la_pins_set_target_powered(bool on) { s_powered = on; }
+
+uint8_t la_pins_warnings(unsigned la, uint16_t pull_mask) {
+    if (!la_ok(la)) return 0;
+    la_fn_t fn = (la_fn_t)s_pin[la].fn;
+    la_gpio_mode_t mode = la_pins_gpio(la);
+    bool pull_on = (pull_mask & (1u << (la - 1u))) != 0 && la_pull_dir(la) != LA_PULL_NONE;
+    bool drives  = la_fn_drives(fn, mode);
+    uint8_t w = 0;
+    if (pull_on && drives) w |= LA_WARN_PULL_VS_DRIVE;
+    /* Driven high: a gpio output at 1, or an engine pin that idles high (UART TX, SPI CS, SWD). */
+    bool high = (fn == LA_FN_GPIO) ? (mode == LA_GPIO_OUTPUT && s_pin[la].level) : drives;
+    if (!s_powered && (high || (pull_on && la_pull_dir(la) == LA_PULL_UP))) w |= LA_WARN_UNPOWERED;
+    return w;
 }
 
 bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap) {
@@ -474,11 +545,15 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     else            bp_emit_raw(e, ",\"level\":null,\"pull\":");
     const char *ohms = la_pull_ohms(la);
     if (ohms)
-        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s}}",
+        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s}",
                 la_pull_dir(la) == LA_PULL_DOWN ? "down" : "up", ohms,
                 (pull_mask & (1u << (la - 1u))) ? "true" : "false");
     else
-        bp_emit_raw(e, "null}");
+        bp_emit_raw(e, "null");
+    if (s_dir[la] != LA_DIR_UNKNOWN) bp_emit(e, ",\"dir\":\"%s\"", la_dir_name((la_dir_t)s_dir[la]));
+    uint8_t w = la_pins_warnings(la, pull_mask);
+    if (w) bp_emit(e, ",\"warn\":%u", (unsigned)w);
+    bp_emit_raw(e, "}");
 }
 
 void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask) {
