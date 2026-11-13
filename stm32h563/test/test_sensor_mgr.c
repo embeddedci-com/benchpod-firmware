@@ -203,6 +203,14 @@ static void test_bme280_mpu(void) {
     CHECK(fake_i2c_write(0x77, 0xE0, &v, 1), "reset write");
     poll_ms(3);
     CHECK(g_fpga.t[0].regs[0xF4] == 0x00, "ctrl_meas back to its power-on value: 0x%02x", g_fpga.t[0].regs[0xF4]);
+    /* a driver that writes its setup right after the reset, while the pod loads the power-on
+       image: the setup survives (found on the bench with the process-node env driver) */
+    v = 0xB6;
+    CHECK(fake_i2c_write(0x77, 0xE0, &v, 1), "reset write");
+    fake_race_write_before_load(0x77, 0xF4, 0x27);
+    poll_ms(3);
+    poll_ms(3);
+    CHECK(g_fpga.t[0].regs[0xF4] == 0x27, "setup after a reset survives the reload: 0x%02x", g_fpga.t[0].regs[0xF4]);
 
     /* MPU-6050: wake it, then the accel range follows ACCEL_CONFIG */
     CHECK(run("{\"cmd\":\"sensor_set\",\"instance\":\"imu\",\"values\":{\"accel_z_g\":1}}"), "imu set");

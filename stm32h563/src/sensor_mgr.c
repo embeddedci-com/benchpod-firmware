@@ -448,8 +448,11 @@ static void regs_writes(sm_inst_t *s, uint64_t now) {
         memcpy(s->live, img, SD_REGIMAGE);
         if (r.reset) reset = true;
         for (unsigned b = 0; b < SD_REGIMAGE / 8; b++) changed[b] |= r.changed[b];
+        /* The DUT's byte goes back too: a load from an earlier poll (a reset's power-on image)
+           can have overwritten it in the gateware after the DUT wrote it, when a driver writes
+           its setup right after a soft reset. After every poll the gateware holds `live`. */
+        changed[a >> 3] |= (uint8_t)(1u << (a & 7u));
     }
-    /* The DUT's own bytes are in the gateware already; only the engine's changes go back. */
     (void)load_changed(s, changed, reset);
     s->rebuilds++;
     drdy_fifo_eval(s);

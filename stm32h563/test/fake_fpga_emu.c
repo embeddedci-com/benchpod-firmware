@@ -31,8 +31,15 @@ int fpga_emu_i2c_config(uint8_t t, uint8_t addr7, uint8_t sda_w, uint8_t scl_w, 
     return 0;
 }
 int fpga_emu_i2c_disable(uint8_t t) { if (t > 3) return -1; g_fpga.t[t].flags &= (uint8_t)~EMU_I2C_ENABLE; return 0; }
+/* A DUT write that lands while the pod reads the log and loads the image (the race a driver
+   hits when it writes its setup right after a soft reset): done just before the next load. */
+static struct { bool armed; uint8_t addr7, reg, val; } s_race;
+void fake_race_write_before_load(uint8_t addr7, uint8_t reg, uint8_t val) {
+    s_race.armed = true; s_race.addr7 = addr7; s_race.reg = reg; s_race.val = val;
+}
 int fpga_emu_load_regs(uint8_t t, uint8_t start, const uint8_t *d, size_t n) {
     if (t > 4 || start + n > 256 || !n) return -1;
+    if (s_race.armed) { s_race.armed = false; (void)fake_i2c_write(s_race.addr7, s_race.reg, &s_race.val, 1); }
     memcpy(&g_fpga.t[t].regs[start], d, n);
     g_fpga.t[t].loads++;
     g_fpga.t[t].load_bytes += (unsigned)n;
