@@ -106,8 +106,10 @@ void handle_ota_begin(int conn_id, const char *json) {
     const char *busy = ota_begin_gate(who);
     if (busy) { send_error(conn_id, busy); return; }
     uint32_t size = (uint32_t)strtoul(size_s, NULL, 0);
-    if (ota_begin_owned_b64(who, size, sha_s, (ota_target_t)target, (uint32_t)strtoul(ver_s, NULL, 0),
-                            sig_s) != 0) {
+    /* Ethernet or Wi-Fi (not the USB network adapter): only signed images (ota.h). */
+    const bool external_lan = command_handler_policy_src(conn_id) == POLICY_SRC_LAN && !net_conn_on_usb(conn_id);
+    if (ota_begin_owned_b64_from(who, external_lan, size, sha_s, (ota_target_t)target,
+                                 (uint32_t)strtoul(ver_s, NULL, 0), sig_s) != 0) {
         send_error(conn_id, ota_error());
         return;
     }

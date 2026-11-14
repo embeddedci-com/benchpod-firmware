@@ -673,8 +673,11 @@ static void test_blob_targets(void) {
     CHECK(ota_begin_target(blob_slot_capacity(BLOB_GW0) + 1, hex, OTA_TARGET_GW0, 46) != 0,
           "a gateware larger than its slot was accepted");
     ota_abort();
-    CHECK(ota_begin_target(0x300000u, hex, OTA_TARGET_ESP, 0) == 0,
-          "a 3 MB ESP image was refused: %s", ota_error());
+    /* An ESP image must be signed (security review 2026-11, M6): the size passes, the check refuses. */
+    CHECK(ota_begin_target(0x300000u, hex, OTA_TARGET_ESP, 0) != 0 && strstr(ota_error(), "esp images must be signed"),
+          "an unsigned 3 MB ESP image: %s", ota_error());
+    CHECK(ota_begin_target(blob_slot_capacity(BLOB_ESP) + 1, hex, OTA_TARGET_ESP, 0) != 0 &&
+          strcmp(ota_error(), "bad size") == 0, "an ESP image larger than its slot: %s", ota_error());
     ota_abort();
 
     /* A blob on a 1 MB pod: no fw_info block needed. */
@@ -702,7 +705,7 @@ static void test_blob_targets(void) {
     /* The staging area changed after verify (a capture wrote into it): the slot stays empty. */
     mock_w25q_reset();
     blob_store_load();
-    CHECK(ota_begin_target(N, hex, OTA_TARGET_ESP, 0) == 0, "begin");
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_GW0, 46) == 0, "begin: %s", ota_error());
     for (uint32_t off = 0; off < N; off += 1024) {
         uint32_t c = (N - off) < 1024 ? (N - off) : 1024;
         ota_data(off, img + off, c);
@@ -710,8 +713,8 @@ static void test_blob_targets(void) {
     CHECK(ota_end() == 0, "end");
     mock_psram[100] ^= 0x01;
     CHECK(ota_commit_blob_for_test() != 0, "a changed staging area was installed");
-    CHECK(!blob_store_present(BLOB_ESP), "the slot is present after a failed install");
-    CHECK(mock_installed[BLOB_ESP] == 0, "the installed hook ran after a failure");
+    CHECK(!blob_store_present(BLOB_GW0), "the slot is present after a failed install");
+    CHECK(mock_installed[BLOB_GW0] == 0, "the installed hook ran after a failure");
     ota_abort();
 }
 
@@ -780,6 +783,59 @@ static void test_signed_begin(void) {
     ota_abort();
 }
 
+/* Stage like signed_stage, as a begin from the external LAN (Ethernet, Wi-Fi) or not. */
+static int lan_stage(int image, const uint8_t *sig, size_t sig_len, ota_target_t target, bool external_lan) {
+    const uint8_t *img = vec_images[image].data;
+    uint32_t n = (uint32_t)vec_images[image].len;
+    char hex[65];
+    sha256_hex(img, n, hex);
+    ota_abort();
+    if (ota_begin_owned_from(OTA_OWNER_LAN(1), external_lan, n, hex, target, 0, sig, sig_len) != 0) return -1;
+    if (ota_data_by(OTA_OWNER_LAN(1), 0, img, n) != 0) return -1;
+    return ota_end_by(OTA_OWNER_LAN(1));
+}
+
+/* Security review 2026-11: H3 (the external LAN installs only signed images, whatever the policy),
+   M6 (ESP images signed from anywhere) and M7 (the rollback floor). */
+static void test_lan_signed_only_and_floor(void) {
+    enum { FW = 0, BLOB = 1 };
+    const uint8_t *good = vec_cases[0].sig, *flipped = vec_cases[5].sig;
+    mock_ota_psram_reset();
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT && !fw_sign_lan_unsigned() && fw_sign_floor() == 0,
+          "preconditions");
+    CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, true) != 0 &&
+          strcmp(ota_error(), "signature: none (LAN needs a signed image; use USB)") == 0,
+          "LAN unsigned firmware: %s", ota_error());
+    CHECK(lan_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE, true) != 0, "LAN took a bad signature");
+    CHECK(lan_stage(BLOB, NULL, 0, OTA_TARGET_GW1, true) != 0, "LAN took unsigned gateware");
+    CHECK(lan_stage(FW, good, 128, OTA_TARGET_FIRMWARE, true) == 0, "LAN signed firmware: %s", ota_error());
+    CHECK(lan_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1, true) == 0, "LAN signed gateware: %s", ota_error());
+    /* the USB link, the console and the cloud keep the policy (audit) */
+    CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, false) == 0, "USB link unsigned: %s", ota_error());
+    CHECK(lan_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE, false) == 0, "USB link audit: %s", ota_error());
+    /* opted out on the device: the behavior before 3.10.7 */
+    fw_sign_set_lan_unsigned(true);
+    CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, true) == 0, "lan_unsigned: %s", ota_error());
+    fw_sign_set_lan_unsigned(false);
+    /* the C3 image: signed, from anywhere */
+    CHECK(lan_stage(BLOB, NULL, 0, OTA_TARGET_ESP, false) != 0 &&
+          strstr(ota_error(), "esp images must be signed"), "unsigned esp: %s", ota_error());
+
+    /* rollback floor: a signed firmware below it is refused, at it accepted */
+    uint32_t rel = (uint32_t)good[48] | ((uint32_t)good[49] << 8) | ((uint32_t)good[50] << 16) | ((uint32_t)good[51] << 24);
+    fw_sign_set_floor(rel + 1);
+    CHECK(signed_stage(FW, good, 128, OTA_TARGET_FIRMWARE) != 0 && strncmp(ota_error(), "rollback: ", 10) == 0,
+          "below the floor: %s", ota_error());
+    CHECK(signed_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1) == 0, "the floor is for firmware: %s", ota_error());
+    fw_sign_set_floor(rel);
+    CHECK(signed_stage(FW, good, 128, OTA_TARGET_FIRMWARE) == 0, "at the floor: %s", ota_error());
+    /* an image without the floor flag does not raise it */
+    ota_floor_on_commit();
+    CHECK(fw_sign_floor() == rel, "a flagless image moved the floor");
+    fw_sign_set_floor(0);
+    ota_abort();
+}
+
 /* The transports carry the manifest as base64url. */
 static void test_sig_decode(void) {
     char b64[200];
@@ -840,6 +896,7 @@ int main(void) {
     test_watchdog_abandons_stalled_staging();
     test_watchdog_drops_uncommitted_verified_image();
     test_signed_begin();
+    test_lan_signed_only_and_floor();
     test_sig_decode();
     test_begin_owned_b64();
 

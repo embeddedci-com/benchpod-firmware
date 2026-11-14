@@ -117,6 +117,16 @@ int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_
    through here. */
 int ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                         uint32_t version, const char *sig_b64);
+/* The same with where the begin came from: external_lan = Ethernet or Wi-Fi (not the USB network
+   adapter, the console or the cloud). From there a code image needs a good signature whatever the
+   signature policy, unless lan_unsigned is set (fw_sign.h, pod_policy.h; firmware 3.10.7+). */
+int ota_begin_owned_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
+                         ota_target_t target, uint32_t version, const uint8_t *sig, size_t sig_len);
+int ota_begin_owned_b64_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
+                             ota_target_t target, uint32_t version, const char *sig_b64);
+/* Called by ota_commit for firmware before it flashes: a signed image with FW_SIG_FLAG_FLOOR
+   raises the rollback floor to its release. */
+void ota_floor_on_commit(void);
 int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len);
 int ota_end_by(ota_owner_t who);
 /* 0 = aborted; -1 = refused (another owner's live session; ota_busy_replace_for says why). */

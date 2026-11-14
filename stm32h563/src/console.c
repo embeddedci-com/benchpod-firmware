@@ -223,6 +223,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
+        "  lan-ota [signed|any]                       updates from Ethernet/Wi-Fi: signed only (default) or any\r\n"
+        "  rollback-floor [clear]                     the oldest signed firmware this pod takes\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
         "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate (port 8443)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
@@ -1165,6 +1167,23 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (why) op(out, ctx, "sig-policy error %s\r\n", why);
         else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
                     (unsigned)fw_sign_key_count());
+    } else if (!strcmp(argv[0], "lan-ota")) {
+        /* Firmware 3.10.7+: what the external LAN may install (pod_policy.h). "any" is the
+           behavior before 3.10.7; only the device turns it on. */
+        const char *why = NULL;
+        if (argc >= 2) {
+            if (strcmp(argv[1], "signed") && strcmp(argv[1], "any")) why = "use signed or any";
+            else why = pod_policy_set_lan_unsigned(!strcmp(argv[1], "any"), POLICY_SRC_USB, false);
+        }
+        if (why) op(out, ctx, "lan-ota error %s\r\n", why);
+        else     op(out, ctx, "lan-ota %s\r\n", pod_policy_lan_unsigned() ? "any" : "signed");
+    } else if (!strcmp(argv[0], "rollback-floor")) {
+        const char *why = NULL;
+        if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB);
+        char fl[16];
+        uint32_t f = pod_policy_rollback_floor();
+        if (why) op(out, ctx, "rollback-floor error %s\r\n", why);
+        else     op(out, ctx, "rollback-floor %s\r\n", f ? fw_sign_release_str(f, fl, sizeof(fl)) : "none");
 #if !defined(BENCHPOD_RELEASE)
     } else if (!strcmp(argv[0], "ca-damage")) {
         /* Development builds: damage the company CA slot to try the built-in-roots fallback. */

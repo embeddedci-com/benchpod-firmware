@@ -7,7 +7,8 @@ Every asset gets a detached 128-byte manifest, `<asset>.sig`:
     0    4 magic "BPSG"
     4    2 format (1)
     6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware), 7 gw2
-    7    1 flags (0)
+    7    1 flags: bit 0 = floor release (firmware: installing it raises the pod's rollback floor
+           to its release, firmware 3.10.7+); other bits 0
     8    4 image size
    12   32 SHA-256 of the image
    44    4 asset version (firmware: packed major<<16|minor<<8|patch; gateware: its version)
@@ -21,7 +22,7 @@ All integers little-endian. A key file holds the 32-byte Ed25519 seed as 64 hex 
 
   fwsign.py keygen OUT                      new key (file mode 0600); prints the public key only
   fwsign.py pubkey KEY                      public key + key_id of a key file
-  fwsign.py sign --key KEY --target T --release X.Y.Z [--version N] IMAGE [-o OUT]
+  fwsign.py sign --key KEY --target T --release X.Y.Z [--version N] [--floor] IMAGE [-o OUT]
   fwsign.py sign-blobs --key KEY --release X.Y.Z blobs-manifest.json
   fwsign.py verify --pub HEX|FILE [--pub ...] [--target T] IMAGE [SIG]
   fwsign.py keys-header --pub FILE [--pub FILE ...] -o OUT.h
@@ -115,17 +116,20 @@ def fw_info_of(image):
     return (layout, min_kb) if magic == FW_INFO_MAGIC else (0, 0)
 
 
-def build_body(image, target, version, release, kid):
+FLAG_FLOOR = 0x01
+
+
+def build_body(image, target, version, release, kid, flags=0):
     t = TARGETS[target]
     layout, min_kb = fw_info_of(image) if t == 0 else (0, 0)
-    body = MAGIC + struct.pack("<HBBI", FORMAT, t, 0, len(image)) + hashlib.sha256(image).digest()
+    body = MAGIC + struct.pack("<HBBI", FORMAT, t, flags, len(image)) + hashlib.sha256(image).digest()
     body += struct.pack("<IIHH", version, release, layout, min_kb) + kid
     assert len(body) == SIGNED_LEN
     return body
 
 
-def sign(priv, image, target, version, release):
-    body = build_body(image, target, version, release, key_id(raw_public(priv)))
+def sign(priv, image, target, version, release, flags=0):
+    body = build_body(image, target, version, release, key_id(raw_public(priv)), flags)
     return body + priv.sign(CONTEXT + body)
 
 
@@ -195,7 +199,9 @@ def cmd_sign(a):
     release = pack_version(a.release)
     # Firmware and the bridge's firmware carry their own version (the pod compares the bridge's).
     version = int(a.version, 0) if a.version is not None else (release if a.target in ("firmware", "bridge") else 0)
-    sig = sign(load_seed(a.key), image, a.target, version, release)
+    if a.floor and a.target != "firmware":
+        sys.exit("--floor is for the firmware target only")
+    sig = sign(load_seed(a.key), image, a.target, version, release, FLAG_FLOOR if a.floor else 0)
     out = a.out or a.image + ".sig"
     with open(out, "wb") as f:
         f.write(sig)
@@ -336,6 +342,8 @@ def main():
     s.add_argument("--target", required=True, choices=TARGETS)
     s.add_argument("--release", required=True, help="firmware release, X.Y.Z")
     s.add_argument("--version", help="asset version (default: the release for firmware and bridge, 0 else)")
+    s.add_argument("--floor", action="store_true",
+                   help="mark a firmware as a floor release: pods that install it refuse older signed firmware")
     s.add_argument("-o", "--out")
     s.add_argument("image")
     s.set_defaults(fn=cmd_sign)

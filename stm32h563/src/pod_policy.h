@@ -81,6 +81,22 @@ const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link);
 /* Called after HTTPS-only changed (net_server closes plaintext LAN connections). Weak no-op. */
 void pod_policy_on_https_only_change(bool on);
 
+/* Firmware images from the external LAN (firmware 3.10.7+, security review 2026-11 H3): by
+   default an OTA from Ethernet or Wi-Fi needs a good signature (FW_SIG_OK) whatever the
+   signature policy, because the LAN API has no client authentication. The USB console, the USB
+   network adapter and the cloud keep the signature policy as it is (audit: anything). lan_unsigned
+   on lets the external LAN install unsigned or developer-signed images again (the behavior before
+   3.10.7). Turning it on needs the USB console or the USB link; the cloud may only turn it off. */
+bool pod_policy_lan_unsigned(void);
+const char *pod_policy_set_lan_unsigned(bool on, policy_src_t src, bool usb_link);
+
+/* Rollback floor (firmware 3.10.7+, M7): a signed firmware image whose manifest release is below
+   it is refused. 0 = none, the default. It only goes up, when a signed firmware image carrying
+   FW_SIG_FLAG_FLOOR is committed (ota.c); clearing it needs the USB console. */
+uint32_t pod_policy_rollback_floor(void);
+const char *pod_policy_raise_floor(uint32_t release);
+const char *pod_policy_clear_floor(policy_src_t src);
+
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);
 /* "open"/"locked"/"off" -> value, -1 if unknown. */

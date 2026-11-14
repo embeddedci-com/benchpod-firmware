@@ -38,6 +38,8 @@ static void boot_blank(void) {
     pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_USB);
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
+    pod_policy_set_lan_unsigned(false, POLICY_SRC_USB, false);
+    pod_policy_clear_floor(POLICY_SRC_USB);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
@@ -174,8 +176,34 @@ static void test_lan_tls_gate(void) {
     CHECK(pod_policy_set_https_only(false, POLICY_SRC_CLOUD, false) == NULL && !pod_policy_https_only(), "cloud");
 }
 
+/* Security review 2026-11 H3/M7: "LAN images any" loosens, so only the device turns it on; the
+   floor only goes up from an image and is cleared on the console; both survive a reboot. */
+static void test_lan_unsigned_and_floor(void) {
+    boot_blank();
+    CHECK(!pod_policy_lan_unsigned() && !fw_sign_lan_unsigned(), "default must be signed only");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, false) != NULL, "Ethernet/Wi-Fi turned it on");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_CLOUD, false) != NULL, "the cloud turned it on");
+    CHECK(!pod_policy_lan_unsigned(), "a refused change changed it");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, true) == NULL && fw_sign_lan_unsigned(), "USB link");
+    pod_policy_load();
+    CHECK(pod_policy_lan_unsigned() && fw_sign_lan_unsigned(), "lost on reboot");
+    CHECK(pod_policy_set_lan_unsigned(false, POLICY_SRC_CLOUD, false) == NULL && !fw_sign_lan_unsigned(),
+          "the cloud could not tighten");
+
+    CHECK(pod_policy_rollback_floor() == 0 && fw_sign_floor() == 0, "default floor");
+    CHECK(pod_policy_raise_floor(0x030A07) == NULL && fw_sign_floor() == 0x030A07, "raise");
+    CHECK(pod_policy_raise_floor(0x030A05) == NULL && fw_sign_floor() == 0x030A07, "the floor went down");
+    pod_policy_load();
+    CHECK(pod_policy_rollback_floor() == 0x030A07 && fw_sign_floor() == 0x030A07, "floor lost on reboot");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN) != NULL,
+          "cleared from off the console");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_USB) == NULL && fw_sign_floor() == 0, "console clear");
+    CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
+}
+
 int main(void) {
     test_defaults();
+    test_lan_unsigned_and_floor();
     test_lan_tls_gate();
     test_sig_ratchet();
     test_lan();

@@ -3910,7 +3910,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 3.10.7 an update over Ethernet or Wi-Fi needs a good signature whatever the policy, and a signed firmware below the rollback floor is refused (same section). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4335,10 +4335,11 @@ See `docs/design/policy-commands.md` for the full rules.
 ```json
 {"cmd":"sig_policy"}
 {"cmd":"sig_policy","set":"required"}
+{"cmd":"sig_policy","lan_unsigned":false}
 ```
 
 ```json
-{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3}}
+{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3,"lan_unsigned":false,"rollback_floor":null}}
 ```
 
 `audit` (default) accepts every update and reports its signature check; `permissive` refuses a
@@ -4346,6 +4347,31 @@ bad signature; `required` refuses anything not signed by a key the firmware trus
 cloud the policy can only get stricter (`sig_policy: only the USB console can loosen the policy
 (now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
 value.
+
+**Updates from Ethernet and Wi-Fi need a signature** (firmware 3.10.7+). The LAN API has no
+client authentication, so whatever the policy, an update of the firmware, the gateware or the
+ESP32-C3 image that arrives over Ethernet or Wi-Fi must carry a good signature from a key the
+firmware trusts. Every published release is signed, so `benchpod flash-self --network` and the
+web app's install are not affected. An unsigned or developer-signed image (your own build) is
+refused with `signature: none (LAN needs a signed image; use USB)`: send it over the USB network
+adapter (`benchpod flash-self --network --connection usb`), the USB console or the cloud, where
+the policy above applies as before. `lan_unsigned` (`true`) brings back the behavior of firmware
+3.10.6 and earlier, where the LAN followed the policy too. Only the device may turn it on: the
+USB console (`lan-ota any`) or a connection over the USB network adapter. Ethernet and Wi-Fi get
+`lan_ota: change it on the device (the USB console, or over the USB link)`, the cloud may only turn
+it off. Stored; survives reboots and updates.
+
+**ESP32-C3 images are always signed** (firmware 3.10.7+), like the Wi-Fi bridge's firmware: the
+C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good signature gets
+`signature: none (esp images must be signed)` from every transport.
+
+**Rollback floor** (firmware 3.10.7+). `rollback_floor` is the oldest release (`"3.10.7"`, or
+`null` for none, the default) whose signed firmware the pod still takes: a signed firmware image
+older than that gets `rollback: <its release> is below this pod's floor <floor>`. The floor only
+goes up, when a signed release marked as a floor release (a flag in its signed manifest) is
+installed, so an older release with a known security problem cannot be put back later. No
+published release sets it yet. The USB console shows it with `rollback-floor` and lowers it to
+none with `rollback-floor clear`.
 
 ### `lan_policy` — what the external LAN may do
 

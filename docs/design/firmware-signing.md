@@ -87,6 +87,37 @@ together on any breaking change.
 - Blobs in the W25Q: the signature is checked at install time like firmware. Store the manifest
   in the slot header's reserved bytes so the planned bootloader can check the `fw` slot at boot.
 
+## Firmware 3.10.7: LAN updates, C3 images, rollback floor (security review 2026-11)
+
+- **H3, the LAN needs a signature.** With the defaults (`audit`, LAN `open`) any host on the LAN
+  could install any firmware, gateware or C3 image, and that firmware could read the device
+  identity key. From 3.10.7 an OTA that arrives over Ethernet or Wi-Fi needs `FW_SIG_OK`
+  whatever the policy (`ota_begin_owned_from(..., external_lan, ...)`, decided in
+  `command_handler_ota.c` from the connection: LAN source and not the USB link). The USB console,
+  the USB network adapter and the cloud keep the policy. Published releases are signed (every
+  release since 3.6.0 has `.sig` files for the firmware and all blobs), so updates of released
+  firmware are unchanged; only unsigned or developer-signed images from the LAN are refused.
+  `lan_unsigned` (policy record byte, `sig_policy` `"lan_unsigned":true`, console `lan-ota any`)
+  brings the old behavior back; only the device may turn it on.
+  The default signature policy stays `audit`: `permissive` would add nothing against an attacker
+  (who sends no signature) and would refuse developer-signed builds on release pods. Making
+  `required` the factory default is a product decision (it stops developer builds everywhere
+  except through the console's `sig-policy`).
+- **M6, C3 images.** `esp` needs `FW_SIG_OK` from every transport, like `bridge`. Gateware is
+  covered by the LAN rule; over USB or the cloud it follows the policy, so gateware development
+  keeps working. Blobs are still only checked against their header hash when they are loaded:
+  the signature is checked once, at install. Re-checking a stored manifest at load time would
+  need room for it in the blob slot header (a format change, left for later).
+- **M7, rollback floor.** Manifest flag bit 0 (`FW_SIG_FLAG_FLOOR`, `fwsign.py sign --floor`)
+  marks a firmware as a floor release. Committing a signed image with it raises the pod's floor
+  (policy record bytes 12..15, packed release) to its release; a signed firmware below the floor is
+  refused at `ota_begin`. Unsigned images carry no trustworthy version, so the floor does not
+  apply to them (the policy and the LAN rule decide). The floor only goes up; the USB console
+  clears it (`rollback-floor clear`). No release sets the flag yet: which release becomes the
+  first floor is a release decision (`release-stm32.yml` would pass `--floor` for that tag).
+- The policy record keeps its 16 bytes: the new fields live in what were reserved bytes, which
+  older firmware keeps as they are when it saves, so a downgrade and an upgrade keep them.
+
 ## Compatibility matrix
 
 | Combination | Result |
