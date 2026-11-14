@@ -5,6 +5,7 @@
  */
 #include "pod_policy.h"
 #include "fw_sign.h"
+#include "config_store.h"
 #include "mocks/mock_flash.h"
 
 #include <setjmp.h>
@@ -40,6 +41,7 @@ static void boot_blank(void) {
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
     pod_policy_set_lan_unsigned(false, POLICY_SRC_USB, false);
     pod_policy_clear_floor(POLICY_SRC_USB);
+    pod_policy_set_bridge_pin(NULL, NULL);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
@@ -201,8 +203,36 @@ static void test_lan_unsigned_and_floor(void) {
     CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
 }
 
+/* The pinned Wi-Fi bridge (H4) lives in a version 2 record; a version 1 copy stays the newest so
+   older firmware keeps loading the policies, and their save drops only the pin. */
+static void test_bridge_pin(void) {
+    boot_blank();
+    uint8_t mac[6] = {0x24, 0x0a, 0xc4, 1, 2, 3}, pub[32], m2[6], p2[32];
+    memset(pub, 0x77, sizeof(pub));
+    CHECK(!pod_policy_bridge_pin(m2, p2), "pinned by default");
+    pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB);
+    CHECK(pod_policy_set_bridge_pin(mac, pub) == NULL, "pin");
+    pod_policy_load();
+    CHECK(pod_policy_bridge_pin(m2, p2) && !memcmp(m2, mac, 6) && !memcmp(p2, pub, 32), "pin lost on reboot");
+    CHECK(pod_policy_lan() == POD_LAN_LOCKED, "policy lost next to the pin");
+    /* older firmware reads the version 1 record: it must be the newest and carry the policy */
+    static const ab_store_t v1 = { .tag = "old", .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+                                   .magic = POD_POLICY_RECORD_MAGIC, .version = 1 };
+    uint8_t rec[16];
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[5] == POD_LAN_LOCKED, "older firmware cannot load it");
+    /* ...and its own save (a policy change there) overwrites the version 2 record */
+    rec[5] = POD_LAN_OPEN;
+    CHECK(ab_store_save(&v1, rec, sizeof(rec)) == 0, "old save");
+    pod_policy_load();
+    CHECK(!pod_policy_bridge_pin(m2, p2) && pod_policy_lan() == POD_LAN_OPEN, "after an older firmware's save");
+    CHECK(pod_policy_set_bridge_pin(mac, pub) == NULL && pod_policy_set_bridge_pin(NULL, NULL) == NULL, "clear");
+    pod_policy_load();
+    CHECK(!pod_policy_bridge_pin(m2, p2), "clear not kept");
+}
+
 int main(void) {
     test_defaults();
+    test_bridge_pin();
     test_lan_unsigned_and_floor();
     test_lan_tls_gate();
     test_sig_ratchet();

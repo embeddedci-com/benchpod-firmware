@@ -264,8 +264,33 @@ static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
     return 0;
 }
 
+/* The pod's flash copy of the pinned bridge (pod_policy.c on the device). */
+static bool pin_stored;
+static uint8_t pin_mac_st[6], pin_pub_st[32];
+static int pin_saves;
+static bool io_load_pin(uint8_t mac[6], uint8_t pub[32], void *ctx)
+{
+    (void)ctx;
+    if (pin_stored) {
+        memcpy(mac, pin_mac_st, 6);
+        memcpy(pub, pin_pub_st, 32);
+    }
+    return pin_stored;
+}
+static void io_save_pin(const uint8_t *mac, const uint8_t *pub, void *ctx)
+{
+    (void)ctx;
+    pin_saves++;
+    pin_stored = mac != NULL;
+    if (mac) {
+        memcpy(pin_mac_st, mac, 6);
+        memcpy(pin_pub_st, pub, 32);
+    }
+}
+
 static uint8_t pod_seed = 0x5a;
-static const wb_io_t IO = {.send = io_send, .derive_secret = io_secret, .ctx = &pod_seed};
+static const wb_io_t IO = {.send = io_send, .derive_secret = io_secret, .load_pin = io_load_pin,
+                           .save_pin = io_save_pin, .ctx = &pod_seed};
 
 /* The key the pod should have: from its secret for this bridge and the bridge's public key. */
 static void expected_key(uint8_t key[32])
@@ -538,6 +563,121 @@ static void test_relay(void)
     tick_hook = NULL;
 }
 
+/* Security review 2026-11: H4 (a fake bridge must not get the Wi-Fi password), M8 (forged unsigned
+   frames must not wrap the counter or unpair the pod), plus the migration from firmware that kept
+   no pin and the no-address rule for the first pairing. */
+static void fresh_pod(void)
+{
+    wb_init(&pod, POD, &IO);
+    wb_set_link(&pod, true, now_ms);
+}
+
+static void test_security_review(void)
+{
+    wb_info_t info;
+    tick_hook = NULL;
+    sim.drop_next = 0;
+    sim.quiet = false;
+    sim.pending = false;
+    sim.rollback = false;
+
+    /* The pinned bridge survives a pod reboot: the key comes from the stored public key. */
+    CHECK(pin_stored && memcmp(pin_mac_st, BRIDGE, 6) == 0);
+    fresh_pod();
+    run(2100);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.present && info.paired && info.pinned);
+
+    /* H4: a HELLO from another MAC is ignored while a bridge is pinned (not adopted, no PAIR). */
+    static const uint8_t EVIL[6] = {0x02, 0xee, 0xee, 0xee, 0xee, 0x01};
+    bwp_hello_t h = {.fw_version = "9.9.9", .hw_rev = "A", .state = BWP_ST_UNCONFIGURED, .flags = BWP_F_ETH_LINK};
+    memcpy(h.bridge_mac, EVIL, 6);
+    memset(h.nonce, 0x42, BWP_NONCE_LEN);
+    uint8_t f[BWP_MAX_FRAME];
+    size_t n = bwp_build_hello(f, sizeof(f), NULL, &h);
+    int sent_before = sent;
+    wb_rx(&pod, f, n, now_ms);
+    wb_poll(&pod, now_ms);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(memcmp(info.mac, BRIDGE, 6) == 0 && info.foreign && info.paired);
+    CHECK(sent == sent_before);
+
+    /* M8: a forged REPLAY refusal with a counter near 2^32 must not be adopted. */
+    CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 300, now_ms) == 0);
+    uint16_t seq = pod.req_seq;
+    sim.drop_next = 1;
+    run(10);
+    bwp_writer_t w;
+    bwp_begin(&w, f, sizeof(f), POD, BRIDGE, BWP_STATUS | BWP_RESPONSE, seq);
+    bwp_put_u8(&w, BWP_T_RESULT, BWP_E_AUTH);
+    bwp_put(&w, BWP_T_NONCE, sim.pair.nonce, BWP_NONCE_LEN);
+    bwp_put_u32(&w, BWP_T_COUNTER, 0xFFFFFFFEu);
+    n = bwp_finish(&w);
+    wb_rx(&pod, f, n, now_ms);
+    CHECK(pod.counter < 0x80000000u);
+    for (int i = 0; i < 200 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
+        run(10);
+    }
+    CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+
+    /* M8: a forged AUTH refusal (no nonce change) to a signed request does not unpair the pod. */
+    CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 300, now_ms) == 0);
+    seq = pod.req_seq;
+    sim.drop_next = 1;
+    run(10);
+    bwp_begin(&w, f, sizeof(f), POD, BRIDGE, BWP_STATUS | BWP_RESPONSE, seq);
+    bwp_put_u8(&w, BWP_T_RESULT, BWP_E_AUTH);
+    n = bwp_finish(&w);
+    wb_rx(&pod, f, n, now_ms);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.paired && info.problem == NULL);
+    for (int i = 0; i < 200 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
+        run(10);
+    }
+    CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+
+    /* M8: a forged unsolicited STATUS without the paired flag changes nothing for a pinned bridge. */
+    bwp_status_t us = {.state = BWP_ST_CONNECTED, .flags = 0};
+    n = bwp_build_status(f, sizeof(f), POD, BRIDGE, 0, &us);
+    wb_rx(&pod, f, n, now_ms);
+    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+
+    /* Migration from firmware without a pin: a bridge that is already paired with this pod (HELLO
+       says PAIRED, with its public key) is adopted once a signed answer confirms it, and pinned. */
+    pin_stored = false;
+    fresh_pod();
+    wb_set_addressed(&pod, true);   /* the pod has a lease through the bridge */
+    run(2100);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.present && info.paired && info.pinned && pin_stored && memcmp(pin_mac_st, BRIDGE, 6) == 0);
+
+    /* H4: nothing pinned and an address on Ethernet (an office LAN): an unpaired "bridge" gets no
+       PAIR, so it never learns the pod's public key, and wifi_set is not sent to it. */
+    pin_stored = false;
+    pairing_forget(&sim.pair);
+    memset(sim.pub, 0, sizeof(sim.pub));
+    fresh_pod();
+    wb_set_addressed(&pod, true);
+    int handled = sim.handled;
+    run(8000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.present && !info.paired && !info.pairing_open && !sim.pair.paired && sim.handled == handled);
+    static const uint8_t nonce[BWP_SEAL_NONCE_LEN] = {7};
+    CHECK(wb_request_set_wifi(&pod, "lab", "correct horse", nonce, 1000, now_ms) != 0);
+    CHECK(!leaked);
+    /* No address (the bridge is the only thing on the cable): the first pairing is automatic. */
+    wb_set_addressed(&pod, false);
+    run(8000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.paired && info.pinned && sim.pair.paired);
+    CHECK(call_set_wifi("lab", "correct horse") == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    CHECK(!leaked);
+    wb_request_release(&pod);
+}
+
 int main(void)
 {
     wb_info_t info;
@@ -735,9 +875,18 @@ int main(void)
     fake[12] = 0x08;
     wb_rx(&pod, fake, fn, now_ms);
 
-    /* PAIR pressed on the bridge: HELLO without the paired flag -> the pod pairs again. */
+    /* PAIR pressed on the bridge: HELLO without the paired flag. The bridge is pinned, so the pod
+       does not pair again on its own (a forged HELLO could be behind it) and says what to do... */
     pairing_forget(&sim.pair);
     memset(sim.pub, 0, sizeof(sim.pub));
+    int pairs_before = sim.handled;
+    run(8000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(!sim.pair.paired && !info.paired && info.pinned && info.problem && strstr(info.problem, "bridge pair"));
+    CHECK(sim.handled == pairs_before);  /* no PAIR sent */
+    /* ...until the user allows a new pairing (`bridge pair` on the USB console). */
+    wb_allow_pairing(&pod, now_ms);
+    CHECK(!pin_stored);
     run(2100);
     run(6000);
     expected_key(expect);  /* a new pairing: new bridge key pair, new key */
@@ -756,12 +905,13 @@ int main(void)
     wb_request_release(&pod);
     wb_get_info(&pod, now_ms, &info);
     CHECK(!info.paired && info.problem != NULL);
-    /* ...until PAIR is pressed there. */
+    /* ...until PAIR is pressed there and the user allows the new pairing here. */
     pairing_forget(&sim.pair);
     memset(sim.pub, 0, sizeof(sim.pub));
+    wb_allow_pairing(&pod, now_ms);
     run(8000);
     wb_get_info(&pod, now_ms, &info);
-    CHECK(info.paired && info.problem == NULL && sim.pair.paired);
+    CHECK(info.paired && info.problem == NULL && sim.pair.paired && info.pinned && pin_stored);
 
     /* The bridge goes away (no HELLO): requests fail fast, the info says so. */
     sim.drop_next = 1000;
@@ -784,6 +934,7 @@ int main(void)
     CHECK(!info.present);
 
     test_relay();
+    test_security_review();
 
     CHECK(strcmp(wb_state_str(BWP_ST_CONNECTED), "connected") == 0);
     CHECK(strcmp(wb_result_str(BWP_E_ALREADY_PAIRED), "already-paired") == 0);

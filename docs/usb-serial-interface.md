@@ -219,7 +219,7 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
-| `bridge [scan \| update \| reboot \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
+| `bridge [scan \| update \| reboot \| pair \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, whether it is pinned, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same version; a bridge from this release on refuses an older one); `reboot` restarts it; `pair` (firmware 3.10.7+) forgets the pinned bridge so the next one that says HELLO in 2 minutes pairs; `factory-reset yes` makes it forget its Wi-Fi and its pairing (and opens the same 2-minute pairing window). |
 
 #### Wi-Fi bridge
 
@@ -244,7 +244,17 @@ Without built-in Wi-Fi configured, while a bridge sends its HELLO on the Etherne
 - `wifi-clear` clears the bridge's credentials.
 
 The pod pairs with the bridge on its own the first time it sees it. If `wifi-show` reports `the
-bridge is paired with another pod`, press PAIR on the bridge.
+bridge is paired with another pod`, press PAIR on the bridge, then run `bridge pair` here.
+
+**Pinned bridge** (firmware 3.10.7+). Once a pairing is confirmed (a signed answer from the
+bridge), the pod pins that bridge: its MAC and its pairing key are stored, HELLOs from any other
+bridge are ignored, and the pod never starts a pairing on its own again. The pod pairs on its own
+only with nothing pinned and while it has no address on Ethernet (a bridge is then the only
+thing on the cable; a pod on an office network has a lease and does not pair with whatever sends
+a HELLO there). To pair with another bridge, or again after PAIR was pressed on this one, run
+`bridge pair` on the pod's USB console: it forgets the pinned bridge and lets the next one that
+says HELLO pair within 2 minutes (`bridge factory-reset yes` does the same). A pod updated from
+older firmware adopts the bridge it is already paired with, without pressing anything.
 
 **Bridge firmware.** The pod keeps the bridge's firmware in W25Q blob slot `bridge` (installed
 like the other blobs, OTA target `bridge`; it must carry a good signed manifest whatever the

@@ -54,6 +54,10 @@ void wifi_bridge_get_info(wb_info_t *out);
    contract as wifi_bridge_call; validates the SSID and passphrase first. */
 int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, const char **err);
 
+/* hw worker only: `bridge pair` (and `bridge factory-reset yes`) on the USB console. Forgets the
+   pinned bridge and lets the next one that says HELLO pair within WB_PAIR_WINDOW_MS. */
+bool wifi_bridge_allow_pairing(void);
+
 /* Bridge firmware updates (wifi_bridge_ota.c) on the hw worker: one step per call, from its loop. */
 void wifi_bridge_ota_poll(void);
 bool wifi_bridge_ota_busy(void);          /* an update holds the image bus (bus_busy_reason) */

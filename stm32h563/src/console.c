@@ -276,6 +276,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in, unless built-in\r\n"
         "Wi-Fi is configured: that wins, wifi-clear it to use the bridge):\r\n"
         "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
+        "  bridge pair          forget the pinned bridge: the next one that says HELLO pairs (2 min)\r\n"
         "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
 }
@@ -446,6 +447,8 @@ static void bridge_show(console_out_t out, void *ctx)
     op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s%s%s, %s\r\n", i.mac[0], i.mac[1],
        i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev[0] ? " hw " : "", i.hw_rev,
        i.paired ? "paired" : "not paired");
+    op(out, ctx, "  pinned: %s%s%s\r\n", i.pinned ? "yes" : "no", i.pairing_open ? ", pairing open" : "",
+       i.foreign ? ", HELLOs from another bridge ignored" : "");
     if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
     uint32_t iv;
     if (wifi_bridge_image(&iv))
@@ -472,8 +475,18 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
     const char *err = NULL;
     int rc;
     if (argc == 1) {
-        if (!wifi_bridge_present()) op(out, ctx, "  no Wi-Fi bridge on the Ethernet port\r\n");
-        else bridge_show(out, ctx);
+        if (!wifi_bridge_present()) {
+            wb_info_t i;
+            wifi_bridge_get_info(&i);
+            op(out, ctx, "  no Wi-Fi bridge on the Ethernet port%s\r\n",
+               i.foreign ? " (HELLOs from another bridge than the pinned one are ignored: `bridge pair`)" : "");
+        } else {
+            bridge_show(out, ctx);
+        }
+    } else if (!strcmp(argv[1], "pair")) {
+        if (!wifi_bridge_allow_pairing()) { op(out, ctx, "  bridge pair: net task busy, try again\r\n"); return; }
+        op(out, ctx, "  pinned bridge forgotten: the next Wi-Fi bridge that says HELLO in 2 minutes pairs with\r\n"
+                     "  this pod (press PAIR on the bridge first if it is paired with another pod)\r\n");
     } else if (!strcmp(argv[1], "scan")) {
         rc = wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err);
         if (bridge_failed(out, ctx, "bridge scan", rc, err)) return;
@@ -491,10 +504,12 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
         if (!bridge_failed(out, ctx, "bridge reboot", rc, err)) op(out, ctx, "  the Wi-Fi bridge restarts\r\n");
     } else if (!strcmp(argv[1], "factory-reset") && argc == 3 && !strcmp(argv[2], "yes")) {
         rc = wifi_bridge_call(BWP_FACTORY_RESET, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err))
+        if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err)) {
+            wifi_bridge_allow_pairing();   /* asked for here: pair again with it after its restart */
             op(out, ctx, "  the Wi-Fi bridge forgot its Wi-Fi and its pairing, and restarts\r\n");
+        }
     } else {
-        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n");
+        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge pair | bridge factory-reset yes\r\n");
     }
 }
 #endif

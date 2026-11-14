@@ -27,6 +27,8 @@
 #define WB_HELLO_TIMEOUT_MS   6000u   /* bridge gone after three missed HELLOs */
 #define WB_STATUS_EVERY_MS    10000u  /* background STATUS while paired */
 #define WB_PAIR_RETRY_MS      5000u   /* auto-pair attempts at most this often */
+#define WB_PAIR_WINDOW_MS     120000u /* wb_allow_pairing: how long a new pairing may start */
+#define WB_COUNTER_MAX        0x7FFFFFFFu  /* an unsigned REPLAY counter above this is not believed */
 #define WB_TRIES              3       /* sends per request (each re-signed with a new counter) */
 #define WB_MSG_MAX            64
 #define WB_SCAN_MAX           BWP_SCAN_MAX_APS
@@ -43,6 +45,12 @@ typedef struct {
     /* The pod's X25519 secret for a bridge: deterministic per pod and bridge MAC, so the pairing
        key can be recomputed after a reboot without storing it. 0 = ok. */
     int (*derive_secret)(const uint8_t bridge_mac[6], uint8_t secret[32], void *ctx);
+    /* The pinned bridge, kept in the pod's flash (firmware 3.10.7+): its MAC and the public key
+       of the pairing. load_pin at wb_init (false: none); save_pin after the first pairing a signed
+       answer confirmed, and with NULLs when the user allows a new pairing (wb_allow_pairing).
+       Either may be NULL: nothing is kept over a reboot then. */
+    bool (*load_pin)(uint8_t mac[6], uint8_t pub[BWP_PUBKEY_LEN], void *ctx);
+    void (*save_pin)(const uint8_t *mac, const uint8_t *pub, void *ctx);
     void *ctx;
 } wb_io_t;
 
@@ -86,6 +94,10 @@ typedef struct {
     uint8_t emc;                 /* bwp_emc_t: the EMC test build's radio, 0: not an EMC build */
     uint32_t reboots;            /* boots of this bridge the pod saw (a new HELLO nonce), since it
                                     first saw it */
+    bool pinned;                 /* a bridge is pinned (mac is that bridge's) */
+    bool pairing_open;           /* a new pairing may start now (wb_allow_pairing, or nothing pinned
+                                    and no address on Ethernet) */
+    bool foreign;                /* HELLOs from another bridge than the pinned one (ignored) */
 } wb_info_t;
 
 /* True when rssi and channel describe the current connection: HELLO and the unsolicited STATUS
@@ -121,6 +133,18 @@ typedef struct {
     uint32_t next_status;
     uint32_t next_pair;
 
+    /* pinning (firmware 3.10.7+, security review 2026-11 H4): once a pairing is confirmed by a
+       signed answer the pod keeps that bridge's MAC and key; HELLOs from other MACs are ignored
+       and the pod never starts a pairing on its own again until the user allows it. */
+    bool pinned;
+    uint8_t pin_mac[6];
+    uint8_t pin_pub[BWP_PUBKEY_LEN];
+    bool eth_addressed;          /* the Ethernet netif has an IPv4 address (wb_set_addressed) */
+    bool pair_window;            /* wb_allow_pairing opened a window... */
+    uint32_t pair_until;         /* ...until then */
+    uint32_t foreign_at;         /* last HELLO from another MAC while pinned */
+    bool foreign_seen;
+
     /* the one request in flight */
     wb_req_state_t req_state;
     bool req_internal;           /* our own PAIR / STATUS, not a caller's */
@@ -140,6 +164,14 @@ typedef struct {
 
 void wb_init(wb_t *b, const uint8_t pod_mac[6], const wb_io_t *io);
 void wb_set_link(wb_t *b, bool up, uint32_t now);
+/* Whether the Ethernet netif has an IPv4 address. With nothing pinned the pod starts a pairing on
+   its own only while it has none: a bridge is the only thing on the cable then (it forwards nothing
+   before it has Wi-Fi), while a pod on an office LAN has a lease and must not pair with whatever
+   sends a HELLO there. */
+void wb_set_addressed(wb_t *b, bool addressed);
+/* The user asked for a new pairing (the USB console's `bridge pair`): forget the pinned bridge
+   and let the next bridge that says HELLO pair within WB_PAIR_WINDOW_MS, address or not. */
+void wb_allow_pairing(wb_t *b, uint32_t now);
 /* One received frame (any EtherType; non-BWP frames are ignored). */
 void wb_rx(wb_t *b, const uint8_t *frame, size_t len, uint32_t now);
 /* Timeouts, retries, auto-pair and the STATUS poll. Call often (every few ms is fine). */

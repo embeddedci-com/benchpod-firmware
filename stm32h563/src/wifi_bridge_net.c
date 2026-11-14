@@ -25,6 +25,7 @@
 #include "esp_rom_flash.h"
 #include "w25q.h"
 #include "wifi_bridge_ota.h"
+#include "pod_policy.h"
 
 static wb_t s_wb;                  /* net task only */
 static struct netif *s_eth;
@@ -70,9 +71,29 @@ static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
     return r == 0 ? 0 : -1;
 }
 
+/* The pinned bridge lives in the pod policy record (pod_policy.h), loaded at boot before this. */
+static bool io_load_pin(uint8_t mac[6], uint8_t pub[BWP_PUBKEY_LEN], void *ctx)
+{
+    (void)ctx;
+    return pod_policy_bridge_pin(mac, pub);
+}
+
+static void io_save_pin(const uint8_t *mac, const uint8_t *pub, void *ctx)
+{
+    (void)ctx;
+    const char *why = pod_policy_set_bridge_pin(mac, pub);
+    if (why) {
+        log_printf("[bridge] could not store the pinned bridge: %s\r\n", why);
+    } else if (mac) {
+        log_printf("[bridge] Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x pinned: other bridges are ignored\r\n",
+                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+}
+
 void wifi_bridge_net_init(struct netif *eth)
 {
-    static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .ctx = NULL};
+    static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .load_pin = io_load_pin,
+                               .save_pin = io_save_pin, .ctx = NULL};
     s_eth = eth;
     wb_init(&s_wb, eth->hwaddr, &io);
     log_printf("[bridge] Wi-Fi bridge control channel on\r\n");
@@ -118,6 +139,9 @@ void wifi_bridge_net_poll(void)
     uint32_t now = HAL_GetTick();
     bool was = s_present;
     wb_set_link(&s_wb, netif_is_link_up(s_eth), now);
+    /* No pairing on our own with an address on Ethernet (an office LAN), or with built-in Wi-Fi
+       configured (it wins anyway): `bridge pair` on the USB console then (wifi_bridge.h). */
+    wb_set_addressed(&s_wb, !ip4_addr_isany_val(*netif_ip4_addr(s_eth)) || esp_wifi_ctrl_configured());
     wb_poll(&s_wb, now);
     if ((uint32_t)(now - s_info_at) >= 100u) {
         wb_info_t i;
@@ -160,6 +184,17 @@ void wifi_bridge_get_info(wb_info_t *out)
     taskENTER_CRITICAL();
     *out = s_info;
     taskEXIT_CRITICAL();
+}
+
+static void on_net_allow_pairing(void *arg)
+{
+    (void)arg;
+    wb_allow_pairing(&s_wb, HAL_GetTick());
+}
+
+bool wifi_bridge_allow_pairing(void)
+{
+    return net_call_sync(on_net_allow_pairing, NULL, 2000);
 }
 
 /* ---- worker side: one request at a time, through net_call_sync */

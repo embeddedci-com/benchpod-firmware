@@ -31,6 +31,33 @@ static const ab_store_t k_store = {
     .legacy_magic = 0,
 };
 
+/* Version 2 (firmware 3.10.7+): the version 1 record plus the pinned Wi-Fi bridge. Every save
+   writes it and then a version 1 copy as the newest record, so older firmware still loads its
+   policies (adc_cal.c does the same). Older firmware that saves overwrites the version 2 record:
+   the pin is gone then and the pod adopts its bridge again (wifi_bridge.h). */
+typedef struct {
+    pod_policy_rec_t v1;
+    uint8_t  bridge_mac[6];
+    uint8_t  bridge_pinned;   /* 1: bridge_mac/bridge_pub hold the pinned bridge */
+    uint8_t  pad;
+    uint8_t  bridge_pub[32];
+    uint8_t  reserved[8];
+} pod_policy_rec2_t;
+_Static_assert(sizeof(pod_policy_rec2_t) == 64, "policy record v2 layout");
+
+static const ab_store_t k_store2 = {
+    .tag = "policy",
+    .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+    .magic = POD_POLICY_RECORD_MAGIC,
+    .version = 2,
+    .legacy_off = 0,
+    .legacy_magic = 0,
+};
+
+static bool    s_pinned;
+static uint8_t s_pin_mac[6];
+static uint8_t s_pin_pub[32];
+
 static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SIG_POLICY_AUDIT,
                                   .lan = POD_LAN_OPEN };
 
@@ -40,7 +67,18 @@ __attribute__((weak)) void pod_policy_on_https_only_change(bool on) { (void)on; 
 
 void pod_policy_load(void) {
     pod_policy_rec_t r;
-    if (ab_store_load(&k_store, &r, sizeof(r)) == 0 && r.magic == POD_POLICY_RECORD_MAGIC) {
+    pod_policy_rec2_t r2;
+    uint32_t b1 = 0, b2 = 0;
+    bool h1 = ab_store_load_version(&k_store, 1, &r, sizeof(r), &b1) == 0 && r.magic == POD_POLICY_RECORD_MAGIC;
+    bool h2 = ab_store_load_version(&k_store2, 2, &r2, sizeof(r2), &b2) == 0 &&
+              r2.v1.magic == POD_POLICY_RECORD_MAGIC;
+    if (h2 && (!h1 || b2 < b1)) { r = r2.v1; h1 = true; }   /* the newer of the two */
+    s_pinned = h2 && r2.bridge_pinned == 1;
+    if (s_pinned) {
+        memcpy(s_pin_mac, r2.bridge_mac, 6);
+        memcpy(s_pin_pub, r2.bridge_pub, 32);
+    }
+    if (h1) {
         /* A value from newer firmware this one does not know: take the strictest known one
            rather than silently opening up. */
         if (r.sig > FW_SIG_POLICY_REQUIRED) r.sig = FW_SIG_POLICY_REQUIRED;
@@ -63,10 +101,45 @@ void pod_policy_load(void) {
 fw_sig_policy_t  pod_policy_sig(void) { return (fw_sig_policy_t)s_rec.sig; }
 pod_lan_policy_t pod_policy_lan(void) { return (pod_lan_policy_t)s_rec.lan; }
 
-static const char *save(const pod_policy_rec_t *r) {
-    if (ab_store_save(&k_store, r, sizeof(*r)) != 0) return "could not save the policy";
+/* Both records: version 2 (with the pin), then the version 1 copy for older firmware. */
+static const char *save_all(const pod_policy_rec_t *r, bool pinned, const uint8_t mac[6], const uint8_t pub[32]) {
+    pod_policy_rec2_t r2;
+    memset(&r2, 0, sizeof(r2));
+    r2.v1 = *r;
+    if (pinned) {
+        r2.bridge_pinned = 1;
+        memcpy(r2.bridge_mac, mac, 6);
+        memcpy(r2.bridge_pub, pub, 32);
+    }
+    if (ab_store_save(&k_store2, &r2, sizeof(r2)) != 0 || ab_store_save(&k_store, r, sizeof(*r)) != 0)
+        return "could not save the policy";
     s_rec = *r;
+    s_pinned = pinned;
+    if (pinned) {
+        memcpy(s_pin_mac, mac, 6);
+        memcpy(s_pin_pub, pub, 32);
+    }
     return NULL;
+}
+
+static const char *save(const pod_policy_rec_t *r) {
+    return save_all(r, s_pinned, s_pin_mac, s_pin_pub);
+}
+
+bool pod_policy_bridge_pin(uint8_t mac[6], uint8_t pub[32]) {
+    if (!s_pinned) return false;
+    memcpy(mac, s_pin_mac, 6);
+    memcpy(pub, s_pin_pub, 32);
+    return true;
+}
+
+const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub) {
+    static const uint8_t zero[32];
+    if (!mac && !s_pinned) return NULL;
+    if (mac && s_pinned && !memcmp(mac, s_pin_mac, 6) && !memcmp(pub, s_pin_pub, 32)) return NULL;
+    const char *why = save_all(&s_rec, mac != NULL, mac ? mac : zero, mac ? pub : zero);
+    if (!why) log_printf("[policy] Wi-Fi bridge %s\n", mac ? "pinned" : "pin cleared");
+    return why;
 }
 
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
