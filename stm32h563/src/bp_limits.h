@@ -52,7 +52,8 @@
    14-entry `la_pins` / `gpio` read reply reaches ~1324 B in its worst case (test_la_pins.c;
    the 12-entry reply was 1135 B). 1792, not 1536: firmware 3.9.0's `status` (usb{} and the
    usb task's stack line) measured 1628 B with a crash report in it and failed over the cloud;
-   1792 is status's own buffer (command_handler_device.c), so any status fits. */
+   status on the cloud channel is a short form (command_handler_status.c) whose worst case
+   test_ch_status.c keeps STATUS_SHORT_MARGIN under this. */
 #define BP_CLOUD_REPLY_MAX      1792u
 
 /* The inbound command JSON extracted from a command.request envelope. Larger than a plain

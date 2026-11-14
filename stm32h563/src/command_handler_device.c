@@ -1,7 +1,8 @@
 /*
- * command_handler_device.c — the pod itself: status, target power, identity and the iCE40.
+ * command_handler_device.c — the pod itself: target power, identity and the iCE40 (status is in
+ * command_handler_status.c).
  *
- *   status, power_status, target_power, target_status
+ *   power_status, target_power, target_status
  *   identity_public, identity_pop, identity_wipe (USB console only)
  *   usb_cc, nrst
  *   fpga_image, psram_recover, psram_ping
@@ -13,7 +14,6 @@
 #include "at_driver.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
 #include "bp_err.h"
-#include "console.h"     /* console_rx_dropped / console_tx_dropped for status */
 #include "signal_engine.h"
 #include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */
 #include "boot_guard.h"       /* boot_guard_planned_reset before the psram_recover reboot */
@@ -25,9 +25,6 @@
 #include "b64url.h"
 #include "cloud_client.h"
 #include "esp_wifi_ctrl.h"
-#if defined(BENCHPOD_WIFI_BRIDGE)
-#include "wifi_bridge_net.h"   /* status reports the bridge's Wi-Fi when there is no built-in link */
-#endif
 #include "usb_device.h"
 #include "usb_netif.h"
 #include "board_info.h"
@@ -35,30 +32,20 @@
 #include "usb_cc.h"
 #include "nrst_ctrl.h"
 #include "dac_limits.h"
-#include "fault.h"       /* reset cause + last-crash summary for status */
-#include "sys_health.h"  /* heap/stack headroom for status */
 #include "ice40_flash.h"
 #include "blob_store.h"
 #include "sensor_mgr.h"   /* sensor_mgr_digital_names: an image switch away from emulation */
-#if defined(BENCHPOD_EMI_TEST)
-#include "emi_test.h"
-#endif
 #include "version.h"     /* FIRMWARE_VERSION (single source) */
-#include "fw_sign.h"
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
-#include "lease_gate.h"
 #include "module_link.h"   /* digital v3r3: the module object */
 #include "la_pins.h"
 #include "psram.h"       /* psram_selftest_str */
-#include "lwip/stats.h"    /* lwIP memory high-water marks in status */
-#include "lwip/memp.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "pico/time.h"
-#include "lan_tls.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -171,201 +158,6 @@ void handle_power_status(int conn_id, const char *json) {
     bp_emit_raw(&e, "}}\n");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
-    }
-}
-
-void handle_status(int conn_id, const char *json) {
-    (void)json;
-    const char *ip = wifi_get_ip();
-    const char *wstate;
-    wifi_state_t st = wifi_get_state();
-    switch (st) {
-        case WIFI_DISCONNECTED: wstate = "disconnected"; break;
-        case WIFI_CONNECTING:   wstate = "connecting";   break;
-        case WIFI_CONNECTED:    wstate = "connected";    break;
-        case WIFI_READY:        wstate = "ready";        break;
-        default:                wstate = "unknown";      break;
-    }
-
-    /* RSSI is null if not associated; otherwise the AP signal strength in
-       dBm.  Querying it costs an AT round-trip (~10s of ms) so we only do
-       it when associated. */
-    char rssi_field[24] = "null";
-    if (st == WIFI_CONNECTED || st == WIFI_READY) {
-        int rssi = 0;
-        if (wifi_get_rssi(&rssi) == 0) {
-            snprintf(rssi_field, sizeof(rssi_field), "%d", rssi);
-        }
-    }
-
-    const char *wifi = esp_wifi_ctrl_state_str();
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    /* No built-in Wi-Fi configured (v4 has no radio, a v3 has it off) and a Wi-Fi bridge on the
-       Ethernet port: "wifi" and rssi_dbm are the bridge's, e.g. "bridge connected". */
-    char wifi_buf[32];
-    if (wifi_bridge_in_use()) {
-        wb_info_t bi;
-        wifi_bridge_get_info(&bi);
-        snprintf(wifi_buf, sizeof(wifi_buf), "bridge %s", wb_state_str(bi.state));
-        wifi = wifi_buf;
-        if (wb_rssi_known(&bi)) snprintf(rssi_field, sizeof(rssi_field), "%d", bi.rssi);
-        else                    strcpy(rssi_field, "null");
-    }
-#endif
-
-    /* Built with the bounds-tracked emitter: the payload has grown past what a
-       hand-sized buffer safely holds, and last_crash is free-form text (escaped
-       via bp_emit_jstr) so it can never break the JSON. */
-    /* 1024, not 768: caps[] below is now the full, dynamically-built feature set (was a
-       7-name literal), which adds ~150 B on a v2 pod.  The emitter is bounds-tracked and
-       last_crash is free-form, so keep real headroom rather than sizing to today's payload. */
-    /* 1152: the LA-pin / trigger / power-profile names below add another ~60 B of caps[].
-       1344: safe_mode + safe_reason (up to ~130 B). */
-    /* 1408: gateware + gateware_embedded.
-       1536: stacks{} per task (~100 B for 5 tasks), and the lwip/flash fields added since.
-       1792: usb{} (~150 B; a v3 status measured 1535 B with it).
-       2048: the ADC fit, adc_cal_a_uv / adc_cal_b_nv (~60 B; a v3 status measured 1725 B
-       before it), LAN and tunnels only: the cloud command channel caps a reply at
-       BP_CLOUD_REPLY_MAX. The net task has ~12 KB of stack left, the hw task ~7 KB.
-       2304: module{} on digital v3r3 (~90 B), LAN and tunnels only. */
-    char resp[2304];
-    cloud_caps_t caps;
-    cloud_caps_collect(&caps);
-    bp_emit_t e;
-    bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
-                "\"device\":\"benchpod\",\"version\":\"%s\",\"board\":\"%s\",\"net\":\"%s\","
-                "\"ip\":\"%s\",\"rssi_dbm\":%s,\"wifi\":\"%s\",\"cloud\":\"%s\",",
-            FIRMWARE_VERSION, BOARD_NAME, wstate, ip, rssi_field,
-            wifi, cloud_client_state_str());
-    /* C3 restarts since power-on (c3_restarts.h); the causes are in wifi_status. */
-    if (esp_wifi_ctrl_module_present())
-        bp_emit(&e, "\"c3_restarts\":%lu,", (unsigned long)esp_wifi_ctrl_restarts()->total);
-    /* USB network adapter (CDC-NCM): on unless Wi-Fi is configured; ip is the pod's end of
-       the /30, host_ip the address its DHCP server hands the computer. */
-    /* source: what the USB-C port powering the pod advertises (usb_cc.h, v3; null on v2). */
-    {
-        usb_cc_t cc;
-        bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
-        /* setting: the stored USB network setting; off_reason when net is off. */
-        bp_emit(&e, "\"usb\":{\"net\":\"%s\",\"setting\":\"%s\",",
-                usb_net_on() ? "on" : "off", usb_net_setting_on() ? "on" : "off");
-        if (!usb_net_on())
-            bp_emit(&e, "\"off_reason\":\"%s\",", usb_net_setting_on() ? "wifi" : "setting");
-        bp_emit(&e, "\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
-                usb_net_link_up() ? "true" : "false", usb_netif_pod_ip(), usb_netif_host_ip());
-        if (have_cc) bp_emit(&e, "\"source\":\"%s\",\"source_ma\":%d},", cc.advertised, cc.advertised_ma);
-        else         bp_emit_raw(&e, "\"source\":null,\"source_ma\":null},");
-    }
-#if defined(BENCHPOD_EMI_TEST)
-    /* The EMC test build (emi_test.h): the short state (the whole of it is in emi_log's reply).
-       The full object made the LAN status 2115 bytes, more than a connection's TX ring takes
-       whole, so the pod closed the connection instead of answering. Not on the cloud command
-       channel, whose status is already near BP_CLOUD_REPLY_MAX. */
-    if (conn_id != CH_CLOUD_CONN) {
-        char emi[160];
-        if (!emi_test_json_short(emi, sizeof(emi))) snprintf(emi, sizeof(emi), "null");
-        bp_emit(&e, "\"emi_test\":%s,", emi);
-    }
-#endif
-    bp_emit(&e, "\"rx_dropped\":%lu,\"tx_dropped\":%lu,"
-                "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
-            (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped(),
-            ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_vccio_get_mv());
-    /* The front-SMA fit captures are scaled with, this pod's offset included (adc_cal.h): the
-       same values the cloud capabilities carry, so a LAN client scales like the server does.
-       Not on the cloud command channel: a status there is already within ~60 B of
-       BP_CLOUD_REPLY_MAX, and cloud clients get the fit from the capabilities frame. */
-    if (caps.analog && conn_id != CH_CLOUD_CONN)
-        bp_emit(&e, "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,"
-                    "\"adc_range\":\"%s\",\"adc_range_fs_mv\":%ld,",
-                caps.adc_cal_a_uv, caps.adc_cal_b_nv, caps.adc_range, caps.adc_range_fs_mv);
-    /* Board revision decides which of the rev3 features below actually exist,
-       so clients read it once here rather than probing each command. */
-    bp_emit(&e, "\"board_rev\":\"%s\",\"board_rev_mv\":%d,\"nrst_pin\":%s,",
-            board_rev_str(), board_rev_strap_mv(),
-            caps.nrst_pin ? "true" : "false");
-    /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
-       an image (flash_layout.h). */
-    bp_emit(&e, "\"flash_kb\":%lu,", caps.flash_kb);
-    /* Emulated sensors: the definition format the pod takes, and whether I2C/SPI/UART sensors work
-       (the emulation image is installed or running). Clients tell from these that the pod may be on
-       the emulation image, which has neither the loop's nor the deep image's feature. */
-    bp_emit(&e, "\"sensors_format\":1,\"sensors_digital\":%s,", caps.sensors_digital ? "true" : "false");
-    /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
-    bp_emit(&e, "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_keys\":%u,\"sig_policy_cmd\":true,"
-                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,",
-            caps.sig_policy, (unsigned)fw_sign_key_count(), caps.lan_policy);
-    {
-        /* The LAN API over TLS (lan_tls.h): clients pin this certificate's sha256. */
-        lan_tls_info_t tls;
-        lan_tls_get_info(&tls);
-        bp_emit(&e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
-                pod_policy_https_only() ? "true" : "false", tls.ready ? tls.sha256 : "");
-    }
-    {
-        uint32_t left = 0;
-        bool held = lease_gate_active(HAL_GetTick(), &left);
-        bp_emit(&e, "\"lease\":{\"held\":%s,\"holder\":\"%s\",\"left_s\":%lu},",
-                held ? "true" : "false", held ? lease_gate_holder() : "", (unsigned long)left);
-    }
-    /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data. */
-    bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
-            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
-            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
-    /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
-       differ after a firmware update until the boot-time gateware update has run. */
-    {
-        extern volatile uint32_t g_malloc_failures;   /* main.c: allocations that failed after boot */
-        bp_emit(&e, "\"malloc_failures\":%lu,", (unsigned long)g_malloc_failures);
-    }
-    bp_emit(&e, "\"gateware\":%u,\"gateware_embedded\":%u,\"loop_tripped\":%s,\"uart_rx_overflow\":%s,",
-            (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version(),
-            fpga_dac_loop_tripped() ? "true" : "false", fpga_uart_rx_overflowed() ? "true" : "false");
-    bp_emit(&e, "\"psram\":\"%s\",\"psram_ok\":%s,\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,"
-                "\"reset\":\"%s\",\"last_crash\":",
-            psram_selftest_str(), signal_engine_psram_operable() ? "true" : "false",
-            sys_health_heap_free(), sys_health_heap_min_free(),
-            sys_health_stack_min_free(), fault_last_reset_str());
-    bp_emit_jstr(&e, fault_last_crash_str());
-    /* Per-task stack headroom (minimum-ever free bytes), every task incl. IDLE and the timer
-       task, so stack_min says which task it is. */
-    {
-        sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
-        int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
-        bp_emit_raw(&e, ",\"stacks\":{");
-        for (int i = 0; i < n; i++) {
-            if (i) bp_emit_raw(&e, ",");
-            bp_emit_jstr(&e, t[i].name);
-            bp_emit(&e, ":%u", t[i].stack_free);
-        }
-        bp_emit_raw(&e, "}");
-    }
-    /* Analog front end (board_variant.h): false on the digital-only board. */
-    bp_emit(&e, ",\"analog\":%s", caps.analog ? "true" : "false");
-    /* Digital v3r3 only (module_link.h): the analog module and the two rails it switches, short
-       form (~90 B; `module` has the EEPROM ID). Not on the cloud command channel, for the same
-       reason as the ADC fit above. */
-    if (module_link_board() && conn_id != CH_CLOUD_CONN) {
-        bp_emit_raw(&e, ",\"module\":");
-        module_emit_state(&e, false);
-    }
-    /* Safe mode (boot_guard.h): the reason says what is off and why; "" when not. */
-    bp_emit(&e, ",\"safe_mode\":%s,\"safe_reason\":", caps.safe_mode ? "true" : "false");
-    bp_emit_jstr(&e, caps.safe_reason);
-    /* caps[]: the pod's advertised feature set, and the only capability source a client on a
-       direct LAN/serial connection ever sees. The same values as the cloud `capabilities` frame
-       (cloud_caps.h), so the two cannot drift. */
-    cloud_caps_emit_list(&e, &caps);
-    bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "status too large"); return; }
-    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
-        /* A reply the connection's TX ring cannot take whole (conn_tx: all or nothing) says so
-           instead of the connection just closing. */
-        char msg[64];
-        snprintf(msg, sizeof(msg), "status too large for this connection (%u bytes)",
-                 (unsigned)bp_emit_len(&e));
-        send_error(conn_id, msg);
     }
 }
 
