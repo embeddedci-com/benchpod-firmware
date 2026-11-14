@@ -1554,7 +1554,7 @@ int sm_regs(const char *inst, unsigned start, unsigned len, uint8_t *out, char *
     sm_inst_t *s = s_slot[slot];
     if (!is_regs(s)) { seterr(err, cap, "%s is not an I2C or SPI sensor", s->name); return -1; }
     if (!s->running) { seterr(err, cap, "%s is not running", s->name); return -1; }
-    if (len == 0 || start + len > SD_REGIMAGE) { seterr(err, cap, "start/len out of range (0..255)"); return -1; }
+    if (len == 0 || start >= SD_REGIMAGE || len > SD_REGIMAGE - start) { seterr(err, cap, "start/len out of range (0..255)"); return -1; }
     if (fpga_emu_read_regs(s->target, (uint8_t)start, out, len) != 0) { seterr(err, cap, "read regs failed"); return -1; }
     return 0;
 }

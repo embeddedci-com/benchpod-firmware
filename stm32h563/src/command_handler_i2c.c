@@ -285,12 +285,15 @@ void i2c_capture_run(char *out, size_t cap) {
     }
     i2c_result_t r;
     i2c_txn_result(&s_t, s_reply, &r);
-    int n = snprintf(out, cap, "{\"bus\":\"i2c\",\"ack\":%s", r.ack ? "true" : "false");
-    if (r.nack_at >= 0) n += snprintf(out + n, cap - (size_t)n, ",\"nack_at\":%d", r.nack_at);
+    bp_emit_t e;
+    bp_emit_init(&e, out, cap);
+    bp_emit(&e, "{\"bus\":\"i2c\",\"ack\":%s", r.ack ? "true" : "false");
+    if (r.nack_at >= 0) bp_emit(&e, ",\"nack_at\":%d", r.nack_at);
     if (s_t.nr > 0) {
-        n += snprintf(out + n, cap - (size_t)n, ",\"rx\":\"");
-        if (r.nrx) n += (int)b64url_encode(s_reply + r.rx_off, r.nrx, out + n, cap - (size_t)n);
-        n += snprintf(out + n, cap - (size_t)n, "\"");
+        bp_emit_raw(&e, ",\"rx\":\"");
+        bp_emit_b64url(&e, s_reply + r.rx_off, r.nrx);
+        bp_emit_raw(&e, "\"");
     }
-    snprintf(out + n, cap - (size_t)n, "}");
+    bp_emit_raw(&e, "}");
+    if (!bp_emit_ok(&e)) snprintf(out, cap, "{\"bus\":\"i2c\",\"error\":\"reply too long\"}");
 }

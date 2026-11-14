@@ -172,6 +172,23 @@ static void test_load_bin_psram_tunnel(void) {
     CHECK(g_played_psram == 5000 && g_owner == -1, "deep replay %s", g_reply);
 }
 
+/* Security review 2026-11 L20: a RAM `load` after a PSRAM upload left replay_in_psram set, so the
+   next `replay` played the stale PSRAM trace instead of the one just loaded. */
+static void test_load_after_psram_replays_ram(void) {
+    const int conn = CH_CLOUD_TUNNEL_CONN;
+    static uint8_t data[20000];
+    arm(conn, "{\"cmd\":\"load_bin\",\"total\":20000,\"psram\":true}");
+    size_t off = 0;
+    while (off < sizeof(data)) off += rx(conn, data + off, sizeof(data) - off < 3000 ? sizeof(data) - off : 3000);
+    CHECK(strcmp(g_reply, "ok:{\"total\":10000}") == 0, "psram upload: %s", g_reply);
+    handle_load(conn, "{\"cmd\":\"load\",\"offset\":0,\"data\":\"AQIDBA\"}");   /* same holder */
+    CHECK(strcmp(g_reply, "ok:{\"offset\":0,\"len\":4,\"total\":2}") == 0, "%s", g_reply);
+    g_played_len = 0;
+    g_played_psram = 0;
+    handle_replay(conn, "{\"cmd\":\"replay\"}");
+    CHECK(g_played_len == 4 && g_played_psram == 0, "replayed the old PSRAM trace: %s", g_reply);
+}
+
 static void test_stall_guard(void) {
     arm(1, "{\"cmd\":\"load_bin\",\"total\":4000}");
     static uint8_t data[4000];
@@ -303,6 +320,7 @@ int main(void) {
     test_load_bin_refusals();
     test_load_bin_ram();
     test_load_bin_psram_tunnel();
+    test_load_after_psram_replays_ram();
     test_stall_guard();
     test_hold_release();
     test_load();
