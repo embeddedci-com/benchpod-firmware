@@ -1456,6 +1456,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
                          "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
+    } else if (!strcmp(argv[0], "dfu") && pod_policy_sig() == FW_SIG_POLICY_REQUIRED) {
+        /* The ROM bootloader writes any image, signed or not: under "required" that would be the
+           way around the signature check (security review 2026-11, M11). Loosening the policy
+           first is possible from this console, but it is a visible, persisted change. */
+        op(out, ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
+                     "Update with signed firmware over the network or USB link (benchpod flash-self "
+                     "--network), or loosen it first (sig-policy permissive)\r\n");
     } else if (!strcmp(argv[0], "dfu")) {
         op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
         HAL_Delay(50);          /* let the notice drain before USB re-enumerates */

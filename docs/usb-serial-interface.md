@@ -175,7 +175,7 @@ command prints `usage: ...` and changes nothing.
 | `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
 | `reboot` | System reset. |
 | `usb-reattach` | Replies `usb-reattach ok`, then drops off the USB bus for half a second and connects again, so the computer enumerates the console and the network adapter anew (the serial port closes). |
-| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). |
+| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). Refused under `sig-policy required` (firmware 3.10.7+): `dfu error <why>`. |
 | `test-bootloop [net\|hw] yes` | Development builds only. Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
 | `test-hang <net\|hw> yes` | Development builds only. Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
 | `test-ice40-hold yes` | Development builds only. Hold the iCE40 in reset, as an ESD hit that unconfigured it would leave it. When the pod is idle it pings the iCE40 every 30 s and reloads one that stopped answering from its config flash (no write) after 10 s, at most 6 times an hour, then parks the outputs; the device log says so. |
@@ -402,6 +402,13 @@ adapter (`benchpod flash-self` uses DFU; the web app's one-click install uses th
 
 The CDC serial port disappears at this point and the STM32 ROM DFU device
 (`0483:df11`) enumerates instead.
+
+Under the `required` signature policy (`sig-policy required`), firmware 3.10.7 and later refuse
+`dfu`: the ROM bootloader writes any image, so it would get around the signature check. The
+reply is one line starting `dfu error sig-policy is required`. Update with signed firmware
+over the network or the USB network adapter instead (`benchpod flash-self --network`), or
+loosen the policy on this console first (`sig-policy permissive`), which shows in `status`.
+Holding BOOT while tapping RESET still enters the ROM bootloader: that needs the pod in hand.
 
 ---
 
