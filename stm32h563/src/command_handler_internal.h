@@ -21,7 +21,8 @@
  *   _dac        DAC output, uploads (load / load_bin), replay, the control loop
  *   _uart       the UART proxy        _dap      the on-pod CMSIS-DAP probe
  *   _net        network provisioning and the cloud speed test
- *   _device     status, power, identity, the iCE40   _analog   the analog front end
+ *   _device     power, identity, the iCE40   _status   the status reply
+ *   _analog     the analog front end
  *   _pins, _spi, _power, _can, _ota, _policy   LA pins, SPI, power profile, CAN, OTA, policy
  * A module with per-connection state has a <module>_conn_closed(conn_id) hook.
  * Not part of the public command_handler.h API.
@@ -130,7 +131,8 @@ void   speedtest_pump(void);                  /* the "up" direction's paced byte
 size_t speedtest_receive(int conn_id, const uint8_t *buf, size_t len);
 void   speedtest_conn_closed(int conn_id);
 
-/* The pod itself: status, power, identity, the iCE40 (command_handler_device.c). */
+/* The pod itself: power, identity, the iCE40 (command_handler_device.c); status
+   (command_handler_status.c). */
 void handle_target_power(int conn_id, const char *json);
 void handle_target_status(int conn_id, const char *json);
 void handle_power_status(int conn_id, const char *json);
