@@ -39,6 +39,32 @@ void l2fwd_link_down(l2fwd_t *s)
     s->relearn = true;
 }
 
+void l2fwd_set_auth_learn(l2fwd_t *s, bool on)
+{
+    s->auth_learn = on;
+}
+
+l2_event_t l2fwd_learn_pod(l2fwd_t *s, const uint8_t mac[6], bool force, bool *back)
+{
+    l2_event_t ev = L2_EV_NONE;
+    if (back) {
+        *back = false;
+    }
+    if (!s->pod_known || s->relearn || force) {
+        bool changed = s->pod_known && memcmp(s->pod_mac, mac, 6) != 0;
+        if (!s->pod_known || changed) {
+            ev = s->pod_known ? L2_EV_CHANGED : L2_EV_LEARNED;
+        }
+        if (back) {
+            *back = s->relearn;
+        }
+        memcpy(s->pod_mac, mac, 6);
+        s->pod_known = true;
+        s->relearn = false;
+    }
+    return ev;
+}
+
 l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *f, size_t len, bool wifi_up, l2_event_t *ev)
 {
     const uint8_t *dst = f, *src = f + 6;
@@ -60,6 +86,9 @@ l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *f, size_t len, bool wifi_u
         // Control frames are never forwarded. Accepted sent to us or broadcast.
         if (memcmp(dst, s->bridge_mac, 6) != 0 && !l2_is_multicast(dst)) {
             return drop(s, L2_WHY_CONTROL);
+        }
+        if (s->auth_learn) {
+            return L2_CONTROL;  // the control task authenticates it and learns (l2fwd_learn_pod)
         }
         // Learn from these only: a pod speaks this protocol, the switch or router the bridge may
         // be plugged into by mistake does not, and its devices must never get onto Wi-Fi.

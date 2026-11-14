@@ -74,11 +74,33 @@ static void forget_pairing(void)
     pairing_forget(&s_pair);
     memset(s_pub, 0, sizeof(s_pub));
     s_paired = false;
+    // The Wi-Fi credentials belonged to the pod we were paired with: the next pod (whoever
+    // presses PAIR and plugs in) must not get onto that network (security review 2026-11, M9).
+    bridge_clear_wifi();
     // Let a different pod on the cable become "the pod" without unplugging it.
     portENTER_CRITICAL(&g_bridge.lock);
+    l2fwd_set_auth_learn(&g_bridge.fwd, false);
     l2fwd_link_down(&g_bridge.fwd);
     portEXIT_CRITICAL(&g_bridge.lock);
-    ESP_LOGW(TAG, "pairing forgotten: the next pod that sends PAIR is trusted");
+    ESP_LOGW(TAG, "pairing and Wi-Fi forgotten: the next pod that sends PAIR is trusted");
+}
+
+// A request proved who the pod is (valid AUTH, or the PAIR we accepted): it is the pod MAC.
+static void learn_pod(const uint8_t mac[6], bool force)
+{
+    bool back;
+    portENTER_CRITICAL(&g_bridge.lock);
+    l2_event_t ev = l2fwd_learn_pod(&g_bridge.fwd, mac, force, &back);
+    portEXIT_CRITICAL(&g_bridge.lock);
+    if (back) {
+        wifi_pod_back();
+    }
+    if (ev != L2_EV_NONE) {
+        char m[18];
+        bu_mac_str(mac, m);
+        ESP_LOGI(TAG, "pod MAC %s %s", ev == L2_EV_LEARNED ? "learned:" : "changed to", m);
+        wifi_pod_mac_changed();
+    }
 }
 
 static void secure_zero(void *p, size_t n)
@@ -104,6 +126,12 @@ static void send_status(const uint8_t dst[6], uint16_t seq)
     bwp_status_t s;
     uint8_t mac[6];
     bridge_status(&s);
+    if (!s_sign) {
+        // Unsigned (not paired, or the unsolicited STATUS): state and flags only, not which
+        // network we are on (security review 2026-11, M9).
+        memset(s.ssid, 0, sizeof(s.ssid));
+        memset(s.bssid, 0, sizeof(s.bssid));
+    }
     eth_get_mac(mac);
     send(bwp_build_status(s_out, sizeof(s_out), dst, mac, seq, &s));
 }
@@ -171,6 +199,9 @@ static void handle(uint8_t *buf, size_t len)
         return;
     }
     s_sign = authed;
+    if (authed) {
+        learn_pod(m.src, false);
+    }
     // A valid request from the pod proves a new image works end to end: keep it. Before any
     // OTA_BEGIN is handled, which would otherwise overwrite the rollback slot.
     ota_confirm();
@@ -204,6 +235,10 @@ static void handle(uint8_t *buf, size_t len)
             pairing_set_key(&s_pair, key);
             memcpy(s_pub, pub, sizeof(s_pub));
             s_paired = true;
+            learn_pod(dst, true);  // the pod that paired is the pod, whoever spoke first
+            portENTER_CRITICAL(&g_bridge.lock);
+            l2fwd_set_auth_learn(&g_bridge.fwd, true);
+            portEXIT_CRITICAL(&g_bridge.lock);
             char m6[18];
             bu_mac_str(dst, m6);
             ESP_LOGI(TAG, "%s with pod %s", authed ? "pairing key rotated" : "paired", m6);
@@ -345,6 +380,9 @@ void control_start(void)
     pairing_init(&s_pair, nonce, have ? key : NULL);
     secure_zero(key, sizeof(key));
     s_paired = have;
+    portENTER_CRITICAL(&g_bridge.lock);
+    l2fwd_set_auth_learn(&g_bridge.fwd, have);  // paired: the pod MAC only from a signed request
+    portEXIT_CRITICAL(&g_bridge.lock);
     ESP_LOGI(TAG, "%s", have ? "paired with a pod" : "not paired: the first pod that sends PAIR is trusted");
     s_q = xQueueCreate(16, sizeof(item_t));
     xTaskCreate(control_task, "control", 6144, NULL, 6, NULL);

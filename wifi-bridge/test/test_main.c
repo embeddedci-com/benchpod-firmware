@@ -512,6 +512,55 @@ static void test_learning(void)
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC);
 }
 
+// Security review 2026-11, M9: once paired the pod MAC comes only from a signed request
+// (l2fwd_learn_pod), never from the source of an unauthenticated control frame.
+static void test_auth_learning(void)
+{
+    l2fwd_t s;
+    l2_event_t ev;
+    bool back;
+    uint8_t f[64];
+    l2fwd_init(&s, BRIDGE);
+    l2fwd_set_auth_learn(&s, true);
+    // A control frame from anyone reaches the control task, but teaches nothing.
+    frame(f, BCAST, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_NONE && !s.pod_known);
+    frame(f, ROUTER, OTHER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_NO_POD);
+    // The control task saw a valid AUTH from the pod.
+    CHECK(l2fwd_learn_pod(&s, POD, false, &back) == L2_EV_LEARNED && !back && memcmp(s.pod_mac, POD, 6) == 0);
+    frame(f, ROUTER, POD, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD);
+    // Spoofing: an unauthenticated control frame after a link-down does not take over.
+    l2fwd_link_down(&s);
+    frame(f, BRIDGE, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_NONE && s.relearn);
+    CHECK(memcmp(s.pod_mac, POD, 6) == 0);
+    frame(f, ROUTER, OTHER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC);
+    // The same pod signs again: the relearn ends, no event.
+    CHECK(l2fwd_learn_pod(&s, POD, false, &back) == L2_EV_NONE && back && !s.relearn);
+    // Learned and no relearn pending: another signed source changes nothing without force...
+    CHECK(l2fwd_learn_pod(&s, OTHER, false, &back) == L2_EV_NONE && memcmp(s.pod_mac, POD, 6) == 0);
+    // ...a new pairing does.
+    CHECK(l2fwd_learn_pod(&s, OTHER, true, &back) == L2_EV_CHANGED && memcmp(s.pod_mac, OTHER, 6) == 0);
+}
+
+static void test_version_rollback(void)
+{
+    uint32_t v = 1;
+    CHECK(bu_version_pack("0.1.2", &v) && v == 0x000102);
+    CHECK(bu_version_pack("3.10.7", &v) && v == 0x030A07);
+    CHECK(bu_version_pack("0.1.2-emc", &v) && v == 0x000102);
+    CHECK(!bu_version_pack("0.1", &v) && !bu_version_pack("a.b.c", &v) && !bu_version_pack("0.1.2x", &v) &&
+          !bu_version_pack("0.256.0", &v) && !bu_version_pack("", &v) && !bu_version_pack(NULL, &v));
+    CHECK(bu_ota_is_downgrade(0x000101, "0.1.2"));
+    CHECK(!bu_ota_is_downgrade(0x000102, "0.1.2") && !bu_ota_is_downgrade(0x000103, "0.1.2"));
+    CHECK(!bu_ota_is_downgrade(0, "0.1.2"));          // a test image (EMC build)
+    CHECK(!bu_ota_is_downgrade(0x000101, "dev"));     // unknown running version
+    CHECK(bu_ota_is_downgrade(0x000101, "0.1.2-emc"));
+}
+
 static void test_forwarding(void)
 {
     l2fwd_t s;
@@ -938,6 +987,8 @@ int main(int argc, char **argv)
     test_fwsig();
     test_passphrase_rules();
     test_learning();
+    test_auth_learning();
+    test_version_rollback();
     test_forwarding();
     test_control_frames();
     test_tokenize();

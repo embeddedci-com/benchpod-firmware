@@ -219,11 +219,28 @@ is agreed with X25519 and never sent: someone recording the cable learns nothing
   missed a reboot) the pod resyncs its nonce and counter and sends again, once more even when
   that was its last try; if that fails too, its key is not the paired one (the bridge was
   re-paired with another pod) and it tells the user to press PAIR on the bridge.
-- **PAIR button** (GPIO35, a press): the bridge forgets the key, clears FLAGS 0x20 in the next
-  HELLO, and accepts the next PAIR from whichever pod sends it. It also re-learns the pod MAC
-  from the next frame, so a new pod can take over without unplugging the cable. Wi-Fi settings
-  are kept. The FACTORY button never touches pairing, except through the power-up factory
+- **PAIR button** (GPIO35, a press): the bridge forgets the key and the Wi-Fi settings (from
+  0.1.3: they belonged to the pod it was paired with), clears FLAGS 0x20 in the next HELLO, and
+  accepts the next PAIR from whichever pod sends it. It also re-learns the pod MAC from the next
+  frame, so a new pod can take over without unplugging the cable.
+- **Pod MAC while paired** (0.1.3+): learned only from a request with a valid AUTH (or the PAIR
+  the bridge accepted), never from the source address of an unsigned frame, so a device on the
+  cable cannot make the bridge forward its traffic by sending a control frame after a link drop.
+- **Unsigned STATUS** (to an unpaired request, and the unsolicited one) carries the state and
+  flags but no SSID or BSSID (0.1.3+).
+- **Downgrades** (0.1.3+): a signed update whose version is below the running one is refused
+  (`ota-wrong-image`, "older than X"). Version 0 is a test image and passes. The FACTORY button never touches pairing, except through the power-up factory
   restore, which erases NVS and with it the key.
+- **The pod pins its bridge** (pod firmware 3.10.7+): after the first pairing a signed answer
+  confirmed, the pod keeps the bridge's MAC and `bridge_pub` in flash, ignores HELLOs from other
+  MACs, takes the key only from the pinned `bridge_pub` (never from a HELLO), and never sends
+  PAIR on its own again; the user allows a new pairing with `bridge pair` on the pod's USB
+  console (2 minutes). With nothing pinned the pod sends PAIR only while it has no IPv4 address
+  on Ethernet. It treats unsigned refusals as hints: an unsigned REPLAY COUNTER above 2^31 is
+  ignored (it would wrap the counter), an AUTH refusal only counts when every send of a request
+  was refused, and NOT_PAIRED or a STATUS without FLAGS 0x20 from a pinned bridge does not make
+  it pair again. A pod updated from older firmware has nothing pinned: it adopts the bridge it is
+  paired with from HELLO's `bridge_pub` once a signed answer confirms the key, and pins it.
 - **Trust on first use** means a device on the cable before the pod (or right after a PAIR
   press) could pair instead, or sit in the middle of the first pairing (an active attack; just
   recording is not enough). The pod notices the first case: its PAIR gets ALREADY_PAIRED, which
@@ -324,7 +341,8 @@ out through `netif->linkoutput`). What it does:
 
 - Tracks HELLO (bridge MAC, NONCE, state, flags); the bridge counts as present while HELLOs keep
   coming on a live Ethernet link (6 s).
-- Pairs on first contact (X25519, secret derived as above), seals the passphrase in SET_WIFI,
+- Pairs on first contact (X25519, secret derived as above) and pins that bridge (see Pairing),
+  seals the passphrase in SET_WIFI,
   signs every request, verifies every signed answer, retries three times with a new COUNTER,
   and resyncs after either side reboots.
 - Polls STATUS every 10 s (which also confirms a bridge firmware update on trial).
