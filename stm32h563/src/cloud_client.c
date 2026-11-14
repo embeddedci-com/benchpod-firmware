@@ -137,7 +137,8 @@ static struct altcp_bp_proxy_config  s_proxy_conf;
 static char                          s_proxy_auth[160];
 /* How long after boot the first connect waits for the W25Q settings. */
 #define CL_EXTRAS_WAIT_MS 20000u
-/* Sign the login with v1 instead of v2: set after a 401 to a v2 login (an older server). */
+/* Sign the login with v1 instead of v2: set after a 401 to a v2 login (an older server). Never in
+   a release build (see CL_WS_WAIT). */
 static bool s_auth_v1;
 static ip_addr_t                s_ip;                /* resolved server address */
 static volatile link_ev_t       s_link = LINK_IDLE;  /* connect/handshake event */
@@ -1545,6 +1546,7 @@ void cloud_client_poll(void) {
                        403 "signature mismatch" on those servers, 401 on newer ones): try v1 next
                        time. Safe, because a server that knows v2 refuses v1 from any pod that has
                        logged in with v2 once (cloud-hardening.md section 1). */
+#if !defined(BENCHPOD_RELEASE)
                     bool auth_refused = (code == 401 || code == 403);
                     if (auth_refused && !s_auth_v1) {
                         s_auth_v1 = true;
@@ -1552,6 +1554,13 @@ void cloud_client_poll(void) {
                     } else if (auth_refused) {
                         s_auth_v1 = false;   /* v1 refused too: back to v2 */
                     }
+#else
+                    /* Release firmware never signs v1 (security review 2026-11, L13): v1 is not
+                       bound to the host, so a server that answers 403 to v2 could collect a v1
+                       signature over the real server's nonce and relay it. embeddedci.com has
+                       taken v2 since October 2026 (cloud-hardening.md). Dev builds keep the fallback. */
+                    (void)code;
+#endif
                     cl_backoff("ws handshake rejected");
                     return;
                 }

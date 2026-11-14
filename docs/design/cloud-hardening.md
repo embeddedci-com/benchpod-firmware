@@ -33,6 +33,10 @@ Device-identity context constant `DEVICE_ID_CTX_WS_AUTH_V2 "benchpod-ws-auth:v2"
   `this pod logged in with the host-bound signature before; v1 is refused`.
 - Audit-log a refused v1 attempt from a v2 device (action `ws_auth`, denied).
 
+**Firmware 3.10.7 (security review 2026-11, L13):** release firmware no longer falls back to v1
+after a 401/403 to its v2 login, so a pod that never logged in with v2 cannot be talked into a
+v1 signature either. Dev builds keep the fallback for old local servers.
+
 **Also in this release (F2 quick fix):** release firmware refuses `cloud_set` with `tls=false` (and
 verification off). Dev builds keep allowing plain ws for local servers.
 
