@@ -176,6 +176,13 @@ struct ip4_addr;
 struct netif *net_route_src_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
 #define LWIP_HOOK_IP4_ROUTE_SRC(src, dest) net_route_src_hook((src), (dest))
 
+/* Strong host for the USB network adapter (net_server.c, rule in net_route.c): a packet for the
+   USB link's subnet that arrives on Ethernet or Wi-Fi is dropped, so a LAN host cannot pose as
+   the USB link (which counts as physical presence) by routing that address through the pod. */
+struct pbuf;
+int net_ip4_input_hook(struct pbuf *p, struct netif *inp);
+#define LWIP_HOOK_IP4_INPUT(p, inp) net_ip4_input_hook((p), (inp))
+
 /* Wi-Fi bridge control channel (EtherType 0x88B5, wifi_bridge_net.c): ethernet_input hands
    frames with an EtherType it does not know to this hook. It takes the bridge's frames on the
    wired netif (returns ERR_OK = 0 and frees the pbuf) and refuses everything else (lwIP drops

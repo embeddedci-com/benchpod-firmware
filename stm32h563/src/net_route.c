@@ -24,3 +24,10 @@ int net_route_owner(const net_route_if_t *ifs, int n, uint32_t local)
         if (ifs[i].ip == local) return i;
     return -1;
 }
+
+bool net_route_usb_ingress_drop(uint32_t dest, bool arrived_on_usb, uint32_t usb_ip, uint32_t usb_mask)
+{
+    if (arrived_on_usb || usb_ip == 0) return false;
+    if (usb_mask == 0) return dest == usb_ip;
+    return (dest & usb_mask) == (usb_ip & usb_mask);
+}

@@ -40,6 +40,7 @@
 
 #include "lwip/init.h"
 #include "lwip/netif.h"
+#include "lwip/ip4.h"          /* struct ip_hdr, IP_HLEN: net_ip4_input_hook */
 #include "lwip/tcp.h"
 #include "lwip/altcp.h"
 #include "lwip/altcp_tcp.h"
@@ -485,7 +486,9 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
 
     /* The LAN policy is for the external LAN (Ethernet, Wi-Fi). The USB network adapter means
        physical presence: it stays reachable under "off" too (pod_policy.h). So does plaintext
-       under HTTPS-only: the USB link never crosses a network. */
+       under HTTPS-only: the USB link never crosses a network. The local address is enough to tell
+       because net_ip4_input_hook drops packets for the USB subnet that arrive on another interface
+       (lwIP alone is weak host: any address on any interface). */
     bool usb = ip4_addr_eq(ip_2_ip4(altcp_get_ip(newpcb, 1)), netif_ip4_addr(&s_usb_netif));
     if (!usb && !s_lan_up) { altcp_abort(newpcb); return ERR_ABRT; }
     if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
@@ -834,6 +837,26 @@ struct netif *net_route_src_hook(const ip4_addr_t *src, const ip4_addr_t *dest)
     for (int k = 0; k < 3; k++) route_if_fill(&ifs[k], order[k]);
     int i = net_route_pick(ifs, 3, src ? ip4_addr_get_u32(src) : 0, ip4_addr_get_u32(dest));
     return (i < 0) ? NULL : order[i];
+}
+
+/* LWIP_HOOK_IP4_INPUT (config/lwipopts.h): drop a packet for the USB link's subnet that came in
+   on another interface. srv_accept marks a connection "USB link" by its local address, which is
+   only sound because of this. Returns 1 when the packet was eaten (freed here). */
+int net_ip4_input_hook(struct pbuf *p, struct netif *inp)
+{
+    if (p == NULL || p->len < IP_HLEN) return 0;   /* ip4_input drops it itself */
+    const struct ip_hdr *iph = (const struct ip_hdr *)p->payload;
+    if (net_route_usb_ingress_drop(ip4_addr_get_u32(&iph->dest), inp == &s_usb_netif,
+                                   ip4_addr_get_u32(netif_ip4_addr(&s_usb_netif)),
+                                   ip4_addr_get_u32(netif_ip4_netmask(&s_usb_netif)))) {
+        static uint32_t s_dropped;
+        if ((s_dropped++ & 0xFFu) == 0)
+            log_printf("[net] dropped a packet for the USB link that arrived on %c%c (%lu so far)\r\n",
+                       inp ? inp->name[0] : '?', inp ? inp->name[1] : '?', (unsigned long)s_dropped);
+        pbuf_free(p);
+        return 1;
+    }
+    return 0;
 }
 
 /* Clear the wired netif's address + DHCP state so acquisition restarts clean. */
