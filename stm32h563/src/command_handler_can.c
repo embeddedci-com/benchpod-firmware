@@ -260,8 +260,12 @@ void handle_can_term(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
+/* can_disable — stop CAN and switch the 120 ohm termination off, so a closed bus
+   leaves nothing on the wire for the next user.  can_term turns it back on
+   with CAN off when that is wanted. */
 void handle_can_disable(int conn_id, const char *json) {
     (void)json;
     can_disable();
-    send_ok_str(conn_id, "{\"enabled\":false}");
+    can_set_term(false);
+    send_ok_str(conn_id, "{\"enabled\":false,\"term\":false}");
 }

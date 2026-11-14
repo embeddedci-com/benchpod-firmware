@@ -247,7 +247,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `can_status` | T0 | CAN state and error counters | object | no |
 | `can_term` | T1 | Switch the 120 Ω CAN termination | object | no |
 | `can_respond` | T1 | Add or clear an automatic CAN reply rule | object | no |
-| `can_disable` | T1 | Turn CAN off | object | no |
+| `can_disable` | T1 | Turn CAN off (and its termination) | object | no |
 | `identity_public` | T0 | Get the device Ed25519 public key | object | no |
 | `identity_pop` | T0 | Sign a nonce (proof of possession) | object | no |
 | `identity_wipe` | T0 | Always refused here: only on the USB console | error | no |
@@ -3540,7 +3540,10 @@ errors.
 
 ### `can_disable` — turn CAN off
 
-Reply `{"enabled":false}`.
+Stops CAN and switches the 120 Ω termination off, so a closed bus leaves nothing on the wire.
+Reply `{"enabled":false,"term":false}`. Before firmware 3.10.6 the termination stayed as it was
+and the reply was `{"enabled":false}`; send `can_term` with `"on":false` as well for those.
+`can_term` still switches the termination on with CAN off when you want it.
 
 ---
 
