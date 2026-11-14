@@ -1222,7 +1222,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
         const char *why = NULL;
         if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
-            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false, false);
+            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
         else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
             why = lan_tls_regenerate();
         else if (argc >= 2)

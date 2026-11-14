@@ -4431,10 +4431,12 @@ and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the uplo
 `ota_commit` (stored and used for new connections; the reply's `state` is `installed`). At most
 7.6 KB. `benchpod lan-tls set-cert --cert pod.pem --key pod.key` does all of it.
 
-**Who may change it.** Reading works from anywhere, and so does turning `https_only` on. Turning
-it off, `regenerate` and the upload need the USB console, the USB network adapter, the cloud, or a
-LAN connection over TLS. A plaintext LAN connection gets
-`lan_tls: change it over TLS (port 8443), over USB or from the cloud`. Reading is T0; the changes
+**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `regenerate`
+and the upload need the USB console, the USB network adapter (`--connection usb`) or the cloud.
+The external LAN (Ethernet, Wi-Fi) gets `lan_tls: change it from the cloud or over USB`, over
+plaintext and over TLS alike: port `8443` has no client authentication, so a TLS connection does
+not show who is on the other end. Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make all
+of these changes and let plaintext LAN turn `https_only` on. Reading is T0; the changes
 are T2 (so `locked` keeps them off the external LAN). mDNS: the `_benchpod._tcp` TXT record carries
 `tls=8443` and `https_only=0|1`.
 

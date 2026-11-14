@@ -158,8 +158,25 @@ static void test_usb_net(void) {
           last_usb_net, "the console could not turn it back on");
 }
 
+/* Security review 2026-11 M10/L14: port 8443 has no client authentication, so neither a TLS nor
+   a plaintext LAN connection may change the LAN TLS identity or HTTPS-only (either way). */
+static void test_lan_tls_gate(void) {
+    boot_blank();
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, false) != NULL, "external LAN may change LAN TLS");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, true) == NULL, "USB link refused");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_USB, false) == NULL, "USB console refused");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL, "LAN turned HTTPS-only on");
+    CHECK(!pod_policy_https_only(), "a refused change changed it");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, true) == NULL && pod_policy_https_only(), "USB link");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL && pod_policy_https_only(),
+          "LAN turned HTTPS-only off");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_CLOUD, false) == NULL && !pod_policy_https_only(), "cloud");
+}
+
 int main(void) {
     test_defaults();
+    test_lan_tls_gate();
     test_sig_ratchet();
     test_lan();
     test_persists();

@@ -68,14 +68,16 @@ void pod_policy_on_usb_net_change(bool on);
 
 /* HTTPS-only (lan_tls.h, docs/design/lan-tls.md), default off. On, the external LAN (Ethernet,
    Wi-Fi) gets no plaintext :8080 connections, only TLS on :8443; the USB network adapter keeps
-   plaintext. Turning it on is allowed from anywhere. Turning it off, like replacing or
-   regenerating the TLS certificate (pod_policy_lan_tls_gate), needs the USB console, the USB link,
-   the cloud, or a LAN connection over TLS: never a plaintext LAN connection, which an active
-   man-in-the-middle could have injected. */
+   plaintext. Turning it on or off, like replacing or regenerating the TLS certificate
+   (pod_policy_lan_tls_gate), needs the USB console, the USB link or the cloud. Never the external
+   LAN, over TLS or not: port 8443 has no client authentication, so a LAN host could otherwise
+   swap the certificate or turn HTTPS-only off (and on: that cuts off every plaintext client).
+   Before 3.10.7 a LAN connection over TLS could do all of this, and plaintext LAN could turn
+   HTTPS-only on. */
 bool pod_policy_https_only(void);
-const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link, bool tls_link);
-/* NULL = this source may change the LAN TLS identity or turn HTTPS-only off, else the refusal. */
-const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link, bool tls_link);
+const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link);
+/* NULL = this source may change the LAN TLS identity or HTTPS-only, else the refusal. */
+const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link);
 /* Called after HTTPS-only changed (net_server closes plaintext LAN connections). Weak no-op. */
 void pod_policy_on_https_only_change(bool on);
 

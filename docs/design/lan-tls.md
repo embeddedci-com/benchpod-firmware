@@ -62,18 +62,22 @@ path with target `tls`.
 
 ### Who may change what
 
-Reading works from anywhere. Changes (`https_only` off, `regenerate`, the upload):
+Reading works from anywhere. Changes (`https_only` on or off, `regenerate`, the upload):
 
 | From | May change |
 |---|---|
 | USB console, USB network adapter | yes |
 | Cloud (command channel, tunnel) | yes (T2: organization owner/admin on the server) |
-| LAN over TLS (8443) | yes, unless the LAN policy is `locked` (T2) |
-| LAN plaintext (8080, Ethernet/Wi-Fi) | no: `lan_tls: change it over TLS (port 8443), over USB or from the cloud` |
+| LAN over TLS (8443) | no (firmware 3.10.7+; yes in 3.9.3 to 3.10.6) |
+| LAN plaintext (8080, Ethernet/Wi-Fi) | no: `lan_tls: change it from the cloud or over USB` |
 
-Turning `https_only` **on** is a tightening and is allowed from anywhere, plaintext LAN included.
-The plaintext refusal exists because an active man-in-the-middle on 8080 could otherwise swap the
-certificate and then also intercept TLS. A pinned TLS client cannot be spoofed that way.
+Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make these changes and allowed turning
+`https_only` on from anywhere. The 2026-11 security review (M10, L14) showed why that was wrong:
+8443 has no client authentication, so any LAN host can open a TLS session and swap the
+certificate (clients that do not pin it then trust the attacker's) or turn HTTPS-only off, and a
+plaintext LAN host could turn it on and cut off every plaintext client. From 3.10.7 only the USB
+console, the USB network adapter and the cloud may change them. The USB network adapter counts
+because packets for its subnet are only accepted on the USB interface (net_route.h).
 
 The setting lives in the pod policy record (a reserved byte, `https_only`). A record from older
 firmware reads as off.

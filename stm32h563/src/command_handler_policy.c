@@ -84,22 +84,22 @@ void handle_usb_network(int conn_id, const char *json) {
    -> {"port":8443,"https_only":bool,"sessions":N,"origin":..,"key":..,"subject":..,"san":[..],
        "not_after":..,"sha256":..[,"error":..]}
    Installing a certificate goes through the upload path (OTA target "tls"). Reading works from
-   anywhere; turning HTTPS-only on too. Turning it off and regenerating need the USB link, the
-   cloud or a LAN connection over TLS (pod_policy_lan_tls_gate). */
+   anywhere. Changing HTTPS-only and regenerating need the USB console, the USB link or the cloud
+   (pod_policy_lan_tls_gate): not the external LAN, TLS or not. */
 void handle_lan_tls(int conn_id, const char *json) {
     const policy_src_t src = command_handler_policy_src(conn_id);
-    const bool usb = net_conn_on_usb(conn_id), tls = net_conn_on_tls(conn_id);
+    const bool usb = net_conn_on_usb(conn_id);
     char v[8] = {0};
     if (bp_json_get(json, "https_only", v, sizeof(v))) {
         if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
             send_error(conn_id, "lan_tls: https_only must be true or false");
             return;
         }
-        const char *why = pod_policy_set_https_only(!strcmp(v, "true"), src, usb, tls);
+        const char *why = pod_policy_set_https_only(!strcmp(v, "true"), src, usb);
         if (why) { send_error(conn_id, why); return; }
     }
     if (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0) {
-        const char *why = pod_policy_lan_tls_gate(src, usb, tls);
+        const char *why = pod_policy_lan_tls_gate(src, usb);
         if (!why) why = lan_tls_regenerate();
         if (why) { send_error(conn_id, why); return; }
     }

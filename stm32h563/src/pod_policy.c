@@ -111,23 +111,24 @@ const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link) {
 
 bool pod_policy_https_only(void) { return s_rec.https_only != 0; }
 
-const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link, bool tls_link) {
-    if (src != POLICY_SRC_LAN || usb_link || tls_link) return NULL;
-    return "lan_tls: change it over TLS (port 8443), over USB or from the cloud";
+const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link) {
+    /* Not "or over TLS": port 8443 has no client authentication, so a TLS connection proves
+       nothing about who is on the other end (security review 2026-11, M10). */
+    if (src != POLICY_SRC_LAN || usb_link) return NULL;
+    return "lan_tls: change it from the cloud or over USB";
 }
 
-const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link, bool tls_link) {
-    if (!on) {
-        const char *why = pod_policy_lan_tls_gate(src, usb_link, tls_link);
-        if (why) return why;
-    }
+const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link) {
+    /* Both ways: on cuts off every plaintext client, off is what a man-in-the-middle wants. */
+    const char *why = pod_policy_lan_tls_gate(src, usb_link);
+    if (why) return why;
     if (on == pod_policy_https_only()) return NULL;
     pod_policy_rec_t r = s_rec;
     r.https_only = on ? 1 : 0;
-    const char *why = save(&r);
+    why = save(&r);
     if (why) return why;
     log_printf("[policy] HTTPS-only now %s (from %s)\n", on ? "on" : "off",
-               src == POLICY_SRC_USB ? "USB" : src == POLICY_SRC_CLOUD ? "cloud" : usb_link ? "the USB link" : "the LAN");
+               src == POLICY_SRC_USB ? "USB" : src == POLICY_SRC_CLOUD ? "cloud" : "the USB link");
     pod_policy_on_https_only_change(on);
     return NULL;
 }
