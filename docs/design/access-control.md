@@ -336,3 +336,30 @@ is a physical-presence decision. The web app therefore shows it read-only.
 
 Wi-Fi is a separate switch: while Wi-Fi is configured the adapter stays enumerated but reports its
 link down, and status says `off_reason: wifi`.
+
+## 9. Firmware 3.10.7: the security review of 2026-11
+
+What changed, and why (the review's numbers in brackets):
+
+- **The USB link is classified by the interface a packet arrived on** [H2]. `srv_accept` marked
+  a connection "USB link" by its local address, and lwIP accepts a packet for any of its
+  addresses on any interface, so a LAN host that routed the USB /30 through the pod's Ethernet
+  address got USB-link rights. `LWIP_HOOK_IP4_INPUT` (`net_ip4_input_hook`, rule in
+  `net_route.c`) now drops packets for the USB subnet that did not arrive on the USB interface.
+- **OTA from Ethernet or Wi-Fi needs a good signature** [H3], whatever `sig_policy` says; the USB
+  console, the USB link and the cloud keep the policy. `lan_unsigned` (console `lan-ota any`)
+  restores the old rule. The LAN policy stays `open` by default and the signature policy
+  `audit`: making `locked` or `required` the default would stop customers' LAN and developer
+  workflows, which is a product decision.
+- **ESP32-C3 images must be signed** from every transport [M6]. **Rollback floor** for signed
+  firmware, dormant until a release sets the manifest flag [M7]. Both in
+  `docs/design/firmware-signing.md`.
+- **LAN TLS identity and HTTPS-only** change only from the USB console, the USB link or the
+  cloud [M10, L14]: 8443 has no client authentication.
+- **The pod pins its Wi-Fi bridge** and treats unsigned bridge frames as hints [H4, M8];
+  the bridge learns the pod MAC only from signed requests and forgets Wi-Fi on PAIR [M9]
+  (`wifi-bridge/docs/PROTOCOL.md`, Pairing).
+- **Console `dfu` is refused under `required`** [M11]. Readout protection (RDP), write
+  protection and a protected area for the identity key are not set by any firmware: they are
+  irreversible or close to it on this MCU and need a factory and recovery plan first.
+- **Release firmware never signs the v1 cloud login** [L13].
