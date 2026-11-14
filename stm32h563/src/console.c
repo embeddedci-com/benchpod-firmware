@@ -1494,9 +1494,9 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* The ROM bootloader writes any image, signed or not: under "required" that would be the
            way around the signature check (security review 2026-11, M11). Loosening the policy
            first is possible from this console, but it is a visible, persisted change. */
-        op(out, ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
-                     "Update with signed firmware over the network or USB link (benchpod flash-self "
-                     "--network), or loosen it first (sig-policy permissive)\r\n");
+        out(ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
+                 "Update with signed firmware over the network or USB link (benchpod flash-self "
+                 "--network), or loosen it first (sig-policy permissive)\r\n");   /* > op()'s 160 B */
     } else if (!strcmp(argv[0], "dfu")) {
         op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
         HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
