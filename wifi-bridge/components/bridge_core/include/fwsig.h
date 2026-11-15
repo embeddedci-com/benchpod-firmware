@@ -16,6 +16,7 @@ extern "C" {
 
 #define FWSIG_LEN            128
 #define FWSIG_TARGET_BRIDGE  6   // ota_target_t numbering in the pod firmware
+#define FWSIG_TARGET_BRIDGE_ID 8 // an identity certificate (bwp_id.h), never an update
 
 typedef enum {
     FWSIG_OK = 0,
@@ -39,7 +40,11 @@ typedef struct {
 // caller's to compare with out->sha256 once it has all of it.
 fwsig_result_t fwsig_check(const uint8_t *sig, size_t len, const uint8_t (*keys)[32], size_t nkeys,
                            uint8_t target, uint32_t size, fwsig_t *out);
-const char *fwsig_result_str(fwsig_result_t r);  // the same words as the pod: "ok", "format", ...
+const char *fwsig_result_str(fwsig_result_t r);
+// An identity certificate (bwp_id.h) for this identity key: format, trusted key, signature,
+// target "bridge-id", size 32 and the key's SHA-256. FWSIG_OK or why not.
+fwsig_result_t fwsig_check_bridge_id(const uint8_t cert[FWSIG_LEN], const uint8_t id_pub[32],
+                                     const uint8_t (*keys)[32], size_t nkeys);  // the same words as the pod: "ok", "format", ...
 
 #ifdef __cplusplus
 }

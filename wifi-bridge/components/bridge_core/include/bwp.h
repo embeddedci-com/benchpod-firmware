@@ -39,6 +39,7 @@ enum {
     BWP_FACTORY_RESET = 0x0A,
     BWP_OTA_ABORT = 0x0B,
     BWP_PAIR = 0x0C,
+    BWP_SET_ID_CERT = 0x0D,  // bridge 0.1.3+: store the identity certificate (ID_CERT), signed
 };
 
 // TLV tags
@@ -74,6 +75,11 @@ enum {
     BWP_T_SIGNATURE = 0x1C,    // 128 bytes, the pod's signed manifest of an OTA image (fwsig.h)
     BWP_T_RESET = 0x1D,        // u8, bwp_reset_t: why the bridge's last boot happened (STATUS)
     BWP_T_EMC = 0x1E,          // u8, bwp_emc_t: the EMC test build's radio (STATUS; absent otherwise)
+    // bridge identity (bwp_id.h; bridge 0.1.3+, pod 3.10.7+)
+    BWP_T_POD_NONCE = 0x1F,    // 16 bytes, random per PAIR from the pod; in the signed transcript
+    BWP_T_ID_PUB = 0x20,       // 32 bytes, the bridge's Ed25519 identity key (HELLO, PAIR answer)
+    BWP_T_ID_CERT = 0x21,      // 128 bytes, its certificate (PAIR answer, SET_ID_CERT)
+    BWP_T_ID_SIG = 0x22,       // 64 bytes, the identity key's signature over the transcript (PAIR answer)
 };
 
 // Why the bridge booted (BWP_T_RESET), from ESP-IDF's esp_reset_reason().
@@ -108,6 +114,7 @@ enum {
     BWP_F_POD_KNOWN = 0x08,    // pod MAC learned
     BWP_F_PENDING_VERIFY = 0x10,  // running a new OTA image that the pod has not confirmed yet
     BWP_F_PAIRED = 0x20,       // a pod's key is stored: requests must carry COUNTER + AUTH
+    BWP_F_IDENTITY = 0x40,     // a valid identity certificate is stored (bridge 0.1.3+)
 };
 
 typedef enum {
@@ -249,6 +256,7 @@ typedef struct {
     uint8_t pod_mac[6];     // sent when flags has BWP_F_POD_KNOWN
     uint8_t nonce[BWP_NONCE_LEN];
     uint8_t bridge_pub[32]; // sent when flags has BWP_F_PAIRED: the pod recomputes the key from it
+    const uint8_t *id_pub;  // the bridge's identity key (32 bytes), NULL: not sent
 } bwp_hello_t;
 
 typedef struct {

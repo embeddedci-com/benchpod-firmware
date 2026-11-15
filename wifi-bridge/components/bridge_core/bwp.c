@@ -340,6 +340,9 @@ size_t bwp_build_hello(uint8_t *buf, size_t cap, const uint8_t dst[6], const bwp
     if (h->flags & BWP_F_PAIRED) {
         bwp_put(&w, BWP_T_PUBKEY, h->bridge_pub, BWP_PUBKEY_LEN);
     }
+    if (h->id_pub) {
+        bwp_put(&w, BWP_T_ID_PUB, h->id_pub, 32);
+    }
     return bwp_finish(&w);
 }
 

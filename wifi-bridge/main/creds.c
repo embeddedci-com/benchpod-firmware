@@ -4,6 +4,7 @@
 
 #include "bridge.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "nvs.h"
 
 static const char *TAG = "creds";
@@ -134,5 +135,54 @@ esp_err_t bridge_clear_wifi(void)
     esp_err_t err = creds_clear();
     ESP_LOGI(TAG, "Wi-Fi credentials cleared");
     wifi_creds_changed();
+    return err;
+}
+
+// ---- Bridge identity (bwp_id.h). The seed is made once, on the first boot of firmware 0.1.3+,
+// and kept in the same NVS as the pairing key (encrypted in production). FACTORY_RESET and the
+// PAIR button keep it; only erasing NVS (the power-up factory restore) makes a new one, which
+// then needs a new certificate.
+
+bool idseed_load_or_create(uint8_t seed[32])
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        return false;
+    }
+    size_t n = 32;
+    bool ok = nvs_get_blob(h, "idseed", seed, &n) == ESP_OK && n == 32;
+    if (!ok) {
+        esp_fill_random(seed, 32);
+        ok = nvs_set_blob(h, "idseed", seed, 32) == ESP_OK && nvs_commit(h) == ESP_OK;
+        ESP_LOGW(TAG, "%s", ok ? "new bridge identity key: it needs a certificate" : "could not store the identity key");
+    }
+    nvs_close(h);
+    return ok;
+}
+
+bool idcert_load(uint8_t cert[128])
+{
+    nvs_handle_t h;
+    bool ok = false;
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t n = 128;
+        ok = nvs_get_blob(h, "idcert", cert, &n) == ESP_OK && n == 128;
+        nvs_close(h);
+    }
+    return ok;
+}
+
+esp_err_t idcert_store(const uint8_t cert[128])
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_blob(h, "idcert", cert, 128);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
     return err;
 }

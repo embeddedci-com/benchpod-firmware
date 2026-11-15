@@ -10,6 +10,9 @@
 #include "bridge.h"
 #include "bridge_util.h"
 #include "bwp_crypto.h"
+#include "bwp_id.h"
+#include "fwsig.h"
+#include "monocypher-ed25519.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -36,6 +39,10 @@ static const uint8_t BCAST[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static bwp_pairing_t s_pair;      // owned by the control task
 static volatile bool s_paired;    // copy for HELLO flags and the console
 static uint8_t s_pub[BWP_PUBKEY_LEN];  // our X25519 public key from the pairing (HELLO)
+static uint8_t s_id_sk[64];       // the identity key (Monocypher's 64-byte form), bwp_id.h
+static uint8_t s_id_pub[32];
+static uint8_t s_cert[128];
+static volatile bool s_has_cert;  // s_cert is a valid certificate for s_id_pub
 static bool s_sign;               // sign the response to the request being handled
 static uint32_t s_counter;        // its COUNTER
 
@@ -136,10 +143,35 @@ static void send_status(const uint8_t dst[6], uint16_t seq)
     send(bwp_build_status(s_out, sizeof(s_out), dst, mac, seq, &s));
 }
 
+void control_identity(uint8_t id_pub[32], bool *has_cert)
+{
+    memcpy(id_pub, s_id_pub, 32);
+    *has_cert = s_has_cert;
+}
+
+const char *control_set_id_cert(const uint8_t cert[128])
+{
+    static char why[48];
+    size_t n;
+    const uint8_t (*keys)[32] = ota_trusted_keys(&n);
+    fwsig_result_t r = fwsig_check_bridge_id(cert, s_id_pub, keys, n);
+    if (r != FWSIG_OK) {
+        snprintf(why, sizeof(why), "certificate: %s", r == FWSIG_IMAGE ? "for another bridge" : fwsig_result_str(r));
+        return why;
+    }
+    if (idcert_store(cert) != ESP_OK) {
+        return "certificate: could not store it";
+    }
+    memcpy(s_cert, cert, 128);
+    s_has_cert = true;
+    ESP_LOGI(TAG, "identity certificate stored");
+    return NULL;
+}
+
 static void send_hello(void)
 {
     bwp_hello_t h = {.fw_version = esp_app_get_description()->version, .hw_rev = CONFIG_BRIDGE_HW_REV,
-                     .state = wifi_state(), .flags = bridge_flags()};
+                     .state = wifi_state(), .flags = bridge_flags(), .id_pub = s_id_pub};
     memcpy(h.nonce, s_pair.nonce, BWP_NONCE_LEN);
     memcpy(h.bridge_pub, s_pub, BWP_PUBKEY_LEN);
     eth_get_mac(h.bridge_mac);
@@ -227,6 +259,20 @@ static void handle(uint8_t *buf, size_t len)
         bwp_put_u8(&w, BWP_T_RESULT, r);
         if (r == BWP_OK) {
             bwp_put(&w, BWP_T_PUBKEY, pub, sizeof(pub));
+            // Who we are (bwp_id.h): the identity key, its certificate and the key's signature
+            // over this pairing, so the pod can tell a genuine bridge before it trusts the key.
+            uint8_t pod_nonce[BWP_POD_NONCE_LEN] = {0}, sig[BWP_ID_SIG_LEN];
+            const uint8_t *pn;
+            uint16_t pnl;
+            if (bwp_find(m.body, m.body_len, BWP_T_POD_NONCE, &pn, &pnl) && pnl == BWP_POD_NONCE_LEN) {
+                memcpy(pod_nonce, pn, BWP_POD_NONCE_LEN);
+            }
+            bwp_id_sign(s_id_sk, new_key, pub, s_pair.nonce, pod_nonce, sig);
+            bwp_put(&w, BWP_T_ID_PUB, s_id_pub, sizeof(s_id_pub));
+            if (s_has_cert) {
+                bwp_put(&w, BWP_T_ID_CERT, s_cert, sizeof(s_cert));
+            }
+            bwp_put(&w, BWP_T_ID_SIG, sig, sizeof(sig));
         } else if (msg) {
             bwp_put_str(&w, BWP_T_MESSAGE, msg);
         }
@@ -268,6 +314,17 @@ static void handle(uint8_t *buf, size_t len)
         }
         secure_zero(&sw, sizeof(sw));
         reply(&m, dst, r, msg);
+        return;
+    }
+    case BWP_SET_ID_CERT: {
+        const uint8_t *c;
+        uint16_t cl;
+        if (!bwp_find(m.body, m.body_len, BWP_T_ID_CERT, &c, &cl) || cl != BWP_ID_CERT_LEN) {
+            reply(&m, dst, BWP_E_BAD_REQUEST, "ID_CERT must be 128 bytes");
+            return;
+        }
+        msg = control_set_id_cert(c);
+        reply(&m, dst, msg ? BWP_E_BAD_REQUEST : BWP_OK, msg);
         return;
     }
     case BWP_CLEAR_WIFI:
@@ -376,6 +433,19 @@ void control_start(void)
 {
     uint8_t nonce[BWP_NONCE_LEN], key[BWP_KEY_LEN];
     esp_fill_random(nonce, sizeof(nonce));  // true random: Wi-Fi (RF) is already started
+    uint8_t seed[32];
+    if (idseed_load_or_create(seed)) {
+        crypto_ed25519_key_pair(s_id_sk, s_id_pub, seed);  // wipes seed
+        size_t nk;
+        const uint8_t (*keys)[32] = ota_trusted_keys(&nk);
+        s_has_cert = idcert_load(s_cert) && fwsig_check_bridge_id(s_cert, s_id_pub, keys, nk) == FWSIG_OK;
+    }
+    secure_zero(seed, sizeof(seed));
+    char hex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(hex + 2 * i, 3, "%02x", s_id_pub[i]);
+    }
+    ESP_LOGI(TAG, "identity %s, certificate %s", hex, s_has_cert ? "ok" : "none");
     bool have = pairkey_load(key, s_pub);
     pairing_init(&s_pair, nonce, have ? key : NULL);
     secure_zero(key, sizeof(key));

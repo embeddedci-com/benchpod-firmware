@@ -40,6 +40,12 @@ static sha256_ctx_t s_hash;        // of the bytes written so far
 // (build.sh generates fw_keys_gen.h from stm32h563/keys with tools/fwsign.py keys-header).
 static const uint8_t k_keys[FW_SIGN_KEY_COUNT][32] = FW_SIGN_KEYS_INIT;
 
+const uint8_t (*ota_trusted_keys(size_t *n))[32]
+{
+    *n = FW_SIGN_KEY_COUNT;
+    return k_keys;
+}
+
 void ota_init(void)
 {
     s_lock = xSemaphoreCreateMutex();

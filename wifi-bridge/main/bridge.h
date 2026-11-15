@@ -75,6 +75,16 @@ esp_err_t bridge_set_wifi(const char *ssid, size_t ssid_len, const char *pass);
 bool pairkey_load(uint8_t key[BWP_KEY_LEN], uint8_t pub[32]);
 esp_err_t pairkey_store(const uint8_t key[BWP_KEY_LEN], const uint8_t pub[32]);
 esp_err_t pairkey_clear(void);
+// Bridge identity (bwp_id.h): the Ed25519 seed (made on first use) and the certificate.
+bool idseed_load_or_create(uint8_t seed[32]);
+bool idcert_load(uint8_t cert[128]);
+esp_err_t idcert_store(const uint8_t cert[128]);
+// control.c: the identity key and whether a valid certificate is stored.
+void control_identity(uint8_t id_pub[32], bool *has_cert);
+// Checks a certificate against our identity key and the trusted keys, stores it. NULL = done.
+const char *control_set_id_cert(const uint8_t cert[128]);
+// ota.c: the keys updates and certificates are checked against.
+const uint8_t (*ota_trusted_keys(size_t *n))[32];
 
 // ---- ota.c: shared by the control channel and the console
 void ota_init(void);
