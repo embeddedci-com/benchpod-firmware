@@ -130,6 +130,7 @@ static int poll_reply(esp_rom_job_t *j)
 
 static void finish(esp_rom_job_t *j, int result)
 {
+    if (result < 0) j->failed_phase = j->phase;
     j->result = result;
     j->phase  = ESP_ROM_DONE;
     mbedtls_md5_free(&s_md5);

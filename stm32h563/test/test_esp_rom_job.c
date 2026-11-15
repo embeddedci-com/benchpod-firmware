@@ -257,6 +257,8 @@ static void test_lost_data_reply(void)
     rom.drop_data_seq = 3; rom.drop_data_n = 3;
     CHECK(run(&j, sizeof(image), 0) == ESP_ROM_ERR_DATA);
     CHECK(rom.data_seen == 3 + ESP_ROM_DATA_ATTEMPTS && rom.end_seen == 0 && rom.md5_seen == 0);
+    CHECK(esp_rom_job_blocks_done(&j) == 3);   /* blocks 0-2 went in, 3 failed */
+    CHECK(j.failed_phase == ESP_ROM_DATA);
 }
 
 static void test_rom_error_status(void)
@@ -308,6 +310,8 @@ static void test_sync(void)
     uint32_t t0 = now;
     CHECK(run(&j, sizeof(image), 0) == ESP_ROM_ERR_SYNC);
     CHECK(rom.sync_seen == ESP_ROM_SYNC_ATTEMPTS && rom.begin_seen == 0);
+    CHECK(esp_rom_job_blocks_done(&j) == 0);   /* a failed job does not claim the total */
+    CHECK(j.failed_phase == ESP_ROM_SYNC);
     CHECK(now - t0 < ESP_ROM_SYNC_ATTEMPTS * (ESP_ROM_SYNC_TIMEOUT_MS + 10));
 }
 

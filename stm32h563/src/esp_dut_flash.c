@@ -253,7 +253,9 @@ void esp_dut_flash_status(esp_dut_status_t *st)
     st->len         = s.p.len;
     st->phase = (s.st == ST_EN_LOW || s.st == ST_EN_SETTLE) ? "enter"
               : (s.st == ST_RUN_RESET) ? "reset"
-              : (s.st == ST_JOB) ? esp_rom_phase_str(s_job.phase) : "done";
+              : (s.st == ST_JOB) ? esp_rom_phase_str(s_job.phase)
+              : (s.have_result && s.result < 0 && s_job.failed_phase != ESP_ROM_IDLE)
+                    ? esp_rom_phase_str(s_job.failed_phase) : "done";
     st->done   = esp_rom_job_blocks_done(&s_job);
     st->total  = s_job.blocks;
     st->magic  = s_job.chip_magic;

@@ -2818,7 +2818,7 @@ partition table, application) with its own `start`, `run` only on the last.
 ```
 
 `phase` is `enter`, `sync`, `detect`, `baud`, `attach`, `params`, `erase`, `write`, `verify`, `end`,
-`reset` or `done`; `done`/`total` count 1 KB blocks. `result` is `null` while running, then `ok`
+`reset` or `done` (after a failure: the step it failed in); `done`/`total` count 1 KB blocks. `result` is `null` while running, then `ok`
 (the chip's MD5 matched), `unverified` (every block acknowledged, no MD5 came back), or the
 failure: `no answer from the ROM loader` (wiring, straps, or the target is not powered),
 `FLASH_BEGIN failed`, `a block was not acknowledged`, `MD5 mismatch`, `chip not supported

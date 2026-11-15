@@ -87,6 +87,7 @@ typedef struct {
     uint32_t chip_magic;
     bool     sync_only;                  /* esp_rom_job_start_sync: stop after the chip magic */
     esp_rom_opts_t opts;
+    esp_rom_phase_t failed_phase;        /* the phase a failed job stopped in (result < 0) */
     uint32_t baud;                       /* the rate the link runs at once BAUD is done (0 = unchanged) */
     uint32_t resends;                    /* FLASH_DATA blocks sent more than once          */
     uint32_t md5_retries;
@@ -113,9 +114,12 @@ void esp_rom_job_start_sync(esp_rom_job_t *j, const esp_rom_io_t *io);
 /* Advance the job; never waits.  true while it still runs, false once phase is ESP_ROM_DONE. */
 bool esp_rom_job_step(esp_rom_job_t *j);
 
-/* "block 513/1072" style progress: blocks acknowledged so far. */
+/* "block 513/1072" style progress: blocks acknowledged so far.  A job that failed reports how far
+   it got (0 when it never reached the data), not the total. */
 static inline uint32_t esp_rom_job_blocks_done(const esp_rom_job_t *j) {
-    return j->phase == ESP_ROM_DATA ? j->seq : (j->phase > ESP_ROM_DATA ? j->blocks : 0);
+    if (j->phase == ESP_ROM_DATA) return j->seq;
+    if (j->phase == ESP_ROM_DONE && j->result < 0 && j->seq < j->blocks) return j->seq;
+    return j->phase > ESP_ROM_DATA ? j->blocks : 0;
 }
 
 const char *esp_rom_result_str(int result);
