@@ -26,27 +26,6 @@ void wb_init(wb_t *b, const uint8_t pod_mac[6], const wb_io_t *io)
     memset(b, 0, sizeof(*b));
     memcpy(b->pod_mac, pod_mac, 6);
     b->io = *io;
-    if (b->io.load_pin && b->io.load_pin(b->mac, b->bridge_pub, b->io.ctx)) {
-        b->pinned = true;
-    }
-}
-
-void wb_set_addressed(wb_t *b, bool addressed)
-{
-    b->eth_addressed = addressed;
-}
-
-/* May the pod start a pairing (send PAIR with its public key) now? Never with a pinned bridge;
-   else inside a window the user opened, or while Ethernet has no address (see the header). */
-static bool pairing_allowed(const wb_t *b, uint32_t now)
-{
-    if (b->pinned) {
-        return false;
-    }
-    if (b->pair_window && (int32_t)(b->pair_until - now) > 0) {
-        return true;
-    }
-    return !b->eth_addressed;
 }
 
 static bool present(const wb_t *b, uint32_t now)
@@ -56,13 +35,14 @@ static bool present(const wb_t *b, uint32_t now)
 
 static bool bridge_paired(const wb_t *b)
 {
-    /* A pinned bridge we hold the key for is treated as paired whatever an unsigned frame says:
-       its requests stay signed, and a forged "not paired" cannot make the pod pair again. */
-    return (b->info.flags & BWP_F_PAIRED) != 0 || (b->pinned && b->have_key);
+    return (b->info.flags & BWP_F_PAIRED) != 0;
 }
 
-static const char *const RESET_PINNED =
-    "the Wi-Fi bridge was reset (PAIR): run `bridge pair` on the pod's USB console to pair it again";
+static const char *const NO_CERT =
+    "the Wi-Fi bridge has no identity certificate: it is not a genuine BenchPod bridge, or it needs "
+    "provisioning (`bridge cert` on the pod's USB console)";
+static const char *const BAD_ID = "the Wi-Fi bridge's identity check failed: not a genuine BenchPod bridge";
+static const char *const CHECKING = "checking the Wi-Fi bridge's identity";
 
 static void finish(wb_t *b, wb_req_state_t st)
 {
@@ -139,9 +119,70 @@ static void forget_bridge(wb_t *b)
     b->have_key = false;
     b->have_secret = false;
     b->counter = 0;
+    b->genuine = false;
+    b->pinned = false;
+    b->have_id = false;
     memset(b->key, 0, sizeof(b->key));
     memset(b->secret, 0, sizeof(b->secret));
     memset(&b->info, 0, sizeof(b->info));
+}
+
+/* Is (our bridge's MAC, pub) the pin stored after an earlier verified pairing? */
+static bool matches_pin(const wb_t *b, const uint8_t pub[BWP_PUBKEY_LEN])
+{
+    uint8_t mac[6], pp[BWP_PUBKEY_LEN];
+    return b->io.load_pin && b->io.load_pin(mac, pp, b->io.ctx) && memcmp(mac, b->mac, 6) == 0 &&
+           memcmp(pp, pub, BWP_PUBKEY_LEN) == 0;
+}
+
+/* Our X25519 public key for this bridge: recomputed from the secret when needed (not kept, RAM). */
+static void pod_pub(const wb_t *b, uint8_t pub[BWP_PUBKEY_LEN])
+{
+    bwp_x25519_public(b->secret, pub);
+}
+
+static bool verify_with_pod_pub(const wb_t *b, const uint8_t *id, const uint8_t *sig,
+                                const uint8_t bridge_pub[BWP_PUBKEY_LEN], const uint8_t *pod_nonce)
+{
+    uint8_t pp[BWP_PUBKEY_LEN];
+    pod_pub(b, pp);
+    return bwp_id_verify(id, sig, pp, bridge_pub, b->nonce, pod_nonce);
+}
+
+/* The PAIR answer's identity proof (bwp_id.h): the certificate for its identity key, and that key's
+   signature over both public keys and both nonces of this pairing. NULL = genuine. */
+static const char *check_identity(const wb_t *b, const bwp_msg_t *m, const uint8_t bridge_pub[BWP_PUBKEY_LEN])
+{
+    const uint8_t *id, *cert, *sig, *pn;
+    uint16_t il, cl, sl, pl;
+    if (!bwp_find(m->body, m->body_len, BWP_T_ID_PUB, &id, &il) || il != BWP_ID_PUB_LEN ||
+        !bwp_find(m->body, m->body_len, BWP_T_ID_CERT, &cert, &cl) || cl != BWP_ID_CERT_LEN) {
+        return NO_CERT;
+    }
+    if (!b->io.check_cert || !b->io.check_cert(cert, id, b->io.ctx)) {
+        return BAD_ID;
+    }
+    /* our nonce is still in the request body: the request is the one being answered */
+    if (!bwp_find(m->body, m->body_len, BWP_T_ID_SIG, &sig, &sl) || sl != BWP_ID_SIG_LEN ||
+        !bwp_find(b->req_tlvs, b->req_len, BWP_T_POD_NONCE, &pn, &pl) || pl != BWP_POD_NONCE_LEN ||
+        !verify_with_pod_pub(b, id, sig, bridge_pub, pn)) {
+        return BAD_ID;
+    }
+    return NULL;
+}
+
+/* PAIR, with our public key and a fresh nonce for the identity proof. Signed when the bridge is
+   paired (a key rotation, which is how an already paired bridge proves its identity). */
+static void start_pair(wb_t *b, uint32_t now)
+{
+    uint8_t t[2 * 3 + BWP_PUBKEY_LEN + BWP_POD_NONCE_LEN] = {BWP_T_PUBKEY, 0, BWP_PUBKEY_LEN};
+    pod_pub(b, t + 3);  /* public: the key itself is never sent */
+    uint8_t *n = t + 3 + BWP_PUBKEY_LEN;
+    n[0] = BWP_T_POD_NONCE, n[1] = 0, n[2] = BWP_POD_NONCE_LEN;
+    if (!b->io.random || b->io.random(n + 3, BWP_POD_NONCE_LEN, b->io.ctx) != 0) {
+        memset(n + 3, 0, BWP_POD_NONCE_LEN);
+    }
+    start_req(b, BWP_PAIR, t, sizeof(t), 1000, true, NULL, now);
 }
 
 void wb_set_link(wb_t *b, bool up, uint32_t now)
@@ -167,16 +208,13 @@ static void copy_str(const bwp_msg_t *m, uint8_t tag, char *out, size_t cap)
    paired with another pod, this key is simply wrong and its requests get AUTH refusals. */
 static void learn_bridge_pub(wb_t *b, const uint8_t pub[BWP_PUBKEY_LEN])
 {
-    if (b->pinned) {
-        pub = b->bridge_pub;  /* the pinned key only: never one from an unsigned frame */
-    }
     if (!b->have_secret || (b->have_key && memcmp(pub, b->bridge_pub, BWP_PUBKEY_LEN) == 0)) {
         return;
     }
-    if (pub != b->bridge_pub) {
-        memcpy(b->bridge_pub, pub, BWP_PUBKEY_LEN);
-    }
-    b->have_key = bwp_pair_key(b->secret, pub, b->pub, pub, b->key) == 0;
+    memcpy(b->bridge_pub, pub, BWP_PUBKEY_LEN);
+    uint8_t pp[BWP_PUBKEY_LEN];
+    pod_pub(b, pp);
+    b->have_key = bwp_pair_key(b->secret, pub, pp, pub, b->key) == 0;
 }
 
 /* The state from a HELLO or an unsolicited STATUS: on a change, fetch the signed STATUS (SSID,
@@ -199,18 +237,13 @@ static void note_nonce(wb_t *b, const uint8_t *v)
 
 static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
 {
-    if (b->pinned && memcmp(m->src, b->mac, 6) != 0) {
-        b->foreign_at = now;  /* not our bridge: never adopted, never paired with */
-        b->foreign_seen = true;
-        return;
+    if (b->seen && memcmp(m->src, b->mac, 6) != 0 && b->genuine && present(b, now)) {
+        return;  /* another bridge while our genuine one is here: it waits until ours is gone */
     }
     if (!b->seen || memcmp(m->src, b->mac, 6) != 0) {
         forget_bridge(b);  /* a different bridge: new key, new counter */
         memcpy(b->mac, m->src, 6);
         b->have_secret = b->io.derive_secret(b->mac, b->secret, b->io.ctx) == 0;
-        if (b->have_secret) {
-            bwp_x25519_public(b->secret, b->pub);
-        }
         b->info.problem = b->have_secret ? NULL : "no device identity on this pod: cannot pair";
         b->next_pair = now;
         b->next_status = now;
@@ -231,58 +264,48 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
         b->have_nonce = true;
     }
     update_state(b, m->body, m->body_len, now);
+    uint8_t was = b->info.flags;
     bwp_get_u8(m->body, m->body_len, BWP_T_FLAGS, &b->info.flags);
     b->info.hello_flags = b->info.flags;
+    if (!(was & BWP_F_IDENTITY) && (b->info.flags & BWP_F_IDENTITY) && !b->genuine) {
+        b->next_pair = now;  /* a certificate was just installed: check it now */
+    }
     copy_str(m, BWP_T_FW_VERSION, b->info.fw_version, sizeof(b->info.fw_version));
     copy_str(m, BWP_T_HW_REV, b->info.hw_rev, sizeof(b->info.hw_rev));
-    if (b->pinned) {
-        learn_bridge_pub(b, b->bridge_pub);  /* after our reboot: the key from the pinned public key */
-        if (!(b->info.flags & BWP_F_PAIRED)) {
-            /* PAIR pressed or a factory reset there (or a forged HELLO): no pairing on our own. */
-            b->info.paired = false;
-            b->info.problem = RESET_PINNED;
-        } else if (bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) && n == BWP_PUBKEY_LEN &&
-                   memcmp(v, b->bridge_pub, BWP_PUBKEY_LEN) != 0) {
-            b->info.paired = false;
-            b->info.problem = "the Wi-Fi bridge paired with another pod: press PAIR on it, then run "
-                              "`bridge pair` on this pod's USB console";
-        } else if (b->info.problem == RESET_PINNED) {
-            b->info.problem = NULL;
+    if (bwp_find(m->body, m->body_len, BWP_T_ID_PUB, &v, &n) && n == BWP_ID_PUB_LEN) {
+        memcpy(b->id_pub, v, BWP_ID_PUB_LEN);
+        b->have_id = true;
+    }
+    if (!bridge_paired(b)) {
+        if (b->have_key) {
+            b->next_pair = now;  /* it was paired: pair again now, not at the identity-check pace */
         }
-    } else if (!bridge_paired(b)) {
         b->info.paired = false;  /* PAIR pressed, factory reset or a new bridge: we pair again */
         b->have_key = false;
-    } else if (bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) && n == BWP_PUBKEY_LEN) {
-        learn_bridge_pub(b, v);  /* after our reboot, or the bridge was paired by another pod */
+        b->genuine = false;
+    } else if (bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) && n == BWP_PUBKEY_LEN &&
+               (!b->have_key || memcmp(v, b->bridge_pub, BWP_PUBKEY_LEN) != 0)) {
+        /* after our reboot, or the bridge was paired by another pod: a key from an unsigned frame
+           is genuine only if it is the one we verified and stored before; otherwise the bridge
+           proves itself again (a signed PAIR, wb_poll) before anything secret goes to it */
+        b->genuine = b->pinned = matches_pin(b, v);
+        learn_bridge_pub(b, v);
     }
 }
 
-/* A signed answer verified with our key: the pairing is real. Pin it on first confirmation. */
+/* A signed answer verified with our key. A genuine bridge is stored once (the pin). */
 static void confirm_pairing(wb_t *b)
 {
     b->info.paired = true;
-    b->info.problem = NULL;
-    if (b->pinned || !b->have_key) {
+    if (!b->genuine) {
+        if (b->info.problem != BAD_ID) b->info.problem = (b->info.flags & BWP_F_IDENTITY) ? CHECKING : NO_CERT;
         return;
     }
-    b->pinned = true;
-    b->pair_window = false;
-    if (b->io.save_pin) {
+    b->info.problem = NULL;
+    if (!b->pinned && b->have_key && b->io.save_pin) {
         b->io.save_pin(b->mac, b->bridge_pub, b->io.ctx);
     }
-}
-
-void wb_allow_pairing(wb_t *b, uint32_t now)
-{
-    b->pinned = false;
-    if (b->io.save_pin) {
-        b->io.save_pin(NULL, NULL, b->io.ctx);
-    }
-    forget_bridge(b);  /* the next HELLO, from whichever bridge, starts over */
-    b->foreign_seen = false;
-    b->pair_window = true;
-    b->pair_until = now + WB_PAIR_WINDOW_MS;
-    b->next_pair = now;
+    b->pinned = true;
 }
 
 static void parse_status(wb_t *b, const bwp_msg_t *m, uint32_t now)
@@ -403,12 +426,11 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
         b->info.problem = REJECTED;
         break;
     case BWP_E_NOT_PAIRED:
-        b->info.paired = false;
-        if (b->pinned) {
-            b->info.problem = RESET_PINNED;  /* unsigned: no pairing on our own */
-            break;
+        if (b->genuine && b->req_signed) {
+            break;  /* unsigned: a hint at most; the bridge's next HELLO says whether it is true */
         }
         b->info.flags &= (uint8_t)~BWP_F_PAIRED;  /* PAIR was pressed: pair again, now */
+        b->info.paired = false;
         b->next_pair = now;
         break;
     case BWP_OK:
@@ -416,11 +438,20 @@ static void on_reply(wb_t *b, const bwp_msg_t *m, const uint8_t *frame, uint32_t
             if (!bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) || n != BWP_PUBKEY_LEN) {
                 break;  /* no public key in the answer: try again later */
             }
+            const char *why = check_identity(b, m, v);
             b->have_key = false;
             learn_bridge_pub(b, v);
             b->info.flags |= BWP_F_PAIRED;
             b->info.paired = b->have_key;
-            b->info.problem = b->have_key ? NULL : "the bridge sent a bad public key";
+            /* The key stays in use either way (STATUS, SCAN and signed updates need no secret), but
+               only a genuine bridge gets wifi_set and is stored. */
+            b->genuine = b->have_key && why == NULL;
+            b->pinned = false;
+            b->info.problem = !b->have_key ? "the bridge sent a bad public key" : why;
+            if (b->genuine) {
+                confirm_pairing(b);
+            }
+            b->next_pair = now + WB_VERIFY_RETRY_MS;
             b->next_status = now;
         } else if (b->req_type == BWP_STATUS) {
             parse_status(b, m, now);
@@ -470,10 +501,7 @@ void wb_rx(wb_t *b, const uint8_t *frame, size_t len, uint32_t now)
     if (m.seq == 0) {
         /* Unsolicited STATUS on a state change: unsigned, so it only refreshes the state. */
         if (m.type == (BWP_STATUS | BWP_RESPONSE)) {
-            update_state(b, m.body, m.body_len, now);
-            if (!b->pinned) {
-                bwp_get_u8(m.body, m.body_len, BWP_T_FLAGS, &b->info.flags);  /* a hint at most */
-            }
+            update_state(b, m.body, m.body_len, now);  /* its FLAGS are left to HELLO */
         }
         return;
     }
@@ -503,12 +531,16 @@ void wb_poll(wb_t *b, uint32_t now)
         return;
     }
     if (!bridge_paired(b)) {
-        if (pairing_allowed(b, now) && (int32_t)(now - b->next_pair) >= 0) {
-            uint8_t t[3 + BWP_PUBKEY_LEN] = {BWP_T_PUBKEY, 0, BWP_PUBKEY_LEN};
-            memcpy(t + 3, b->pub, BWP_PUBKEY_LEN);  /* public: the key itself is never sent */
+        if ((int32_t)(now - b->next_pair) >= 0) {
             b->next_pair = now + WB_PAIR_RETRY_MS;
-            start_req(b, BWP_PAIR, t, sizeof(t), 1000, true, NULL, now);
+            start_pair(b, now);
         }
+    } else if (b->have_key && b->info.paired && !b->genuine && (b->info.flags & BWP_F_IDENTITY) &&
+               (int32_t)(now - b->next_pair) >= 0) {
+        /* Paired, but its identity not shown yet (updated from older firmware, or the bridge was
+           re-paired by another pod): a signed PAIR rotates the key and carries the proof. */
+        b->next_pair = now + WB_VERIFY_RETRY_MS;
+        start_pair(b, now);
     } else if (b->have_key && (int32_t)(now - b->next_status) >= 0) {
         b->next_status = now + WB_STATUS_EVERY_MS;
         start_req(b, BWP_STATUS, NULL, 0, 1000, true, NULL, now);
@@ -563,10 +595,9 @@ int wb_request_set_wifi(wb_t *b, const char *ssid, const char *pass, const uint8
     if (!bridge_paired(b) || !b->have_key) {
         return b->have_secret && !bridge_paired(b) ? -1 : -3;  /* pairing first: sealing needs the key */
     }
-    if (!b->info.paired) {
-        /* Not before a signed answer has confirmed the key: a HELLO's public key alone proves
-           nothing about who holds the other half. */
-        return b->info.problem ? -3 : -1;
+    if (!b->genuine) {
+        /* Only to a bridge that showed a valid certificate (firmware 3.10.7+). */
+        return b->info.problem == CHECKING || !b->info.paired ? -1 : -3;
     }
     uint8_t t[WB_REQ_MAX];
     size_t n = 0;
@@ -604,10 +635,14 @@ void wb_get_info(const wb_t *b, uint32_t now, wb_info_t *out)
     *out = b->info;
     out->present = present(b, now);
     memcpy(out->mac, b->mac, 6);
-    out->pinned = b->pinned;
-    out->pairing_open = pairing_allowed(b, now);
-    out->foreign = b->foreign_seen && !elapsed(now, b->foreign_at, WB_HELLO_TIMEOUT_MS);
     out->status_age_ms = out->have_status ? now - b->status_at : 0;
+    out->genuine = b->genuine;
+}
+
+bool wb_identity(const wb_t *b, uint8_t id_pub[BWP_ID_PUB_LEN])
+{
+    if (b->have_id) memcpy(id_pub, b->id_pub, BWP_ID_PUB_LEN);
+    return b->have_id;
 }
 
 const char *wb_state_str(uint8_t state)

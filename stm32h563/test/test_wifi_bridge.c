@@ -6,6 +6,10 @@
 #include "pairing.h"
 #include "bwp_crypto.h"
 #include "wifi_bridge_ota.h"
+#include "bwp_id.h"
+#include "fw_sign.h"
+#include "hmac_sha256.h"
+#include "monocypher-ed25519.h"
 
 #include <stdlib.h>
 
@@ -44,10 +48,46 @@ typedef struct {
     uint32_t trial_until;   /* with rollback: when the trial ends without a confirmation */
     int data_frames;
     uint8_t reset, emc;     /* STATUS: BWP_T_RESET, BWP_T_EMC (0: not sent) */
+    /* identity (bwp_id.h) */
+    uint8_t id_sk[64], id_pub[32], cert[128];
+    bool has_cert;
+    bool bad_id_sig;        /* sign the transcript wrongly */
+    bool old_firmware;      /* a bridge from before identities: no ID TLVs at all */
+    uint8_t last_pair_answer[BWP_MAX_FRAME];
+    size_t last_pair_len;
+    int pairs;              /* PAIR requests it accepted */
 } sim_t;
 
 static sim_t sim;
 static uint32_t now_ms;
+
+/* A certificate as tools/fwsign.py makes it, signed with the key from `seed`. The test build trusts
+   test/fw_sign_keys_gen.h: the vector key, whose seed is 00 01 .. 1f. */
+static void make_cert(uint8_t seed0, uint8_t target, const uint8_t id_pub[32], uint8_t cert[128])
+{
+    uint8_t seed[32], sk[64], pub[32], h[64], msg[sizeof(FW_SIGN_CONTEXT) + 64];
+    for (int i = 0; i < 32; i++) seed[i] = (uint8_t)(seed0 + i);
+    crypto_ed25519_key_pair(sk, pub, seed);
+    memset(cert, 0, 128);
+    memcpy(cert, "BPSG", 4);
+    cert[4] = 1;
+    cert[6] = target;
+    cert[8] = 32;                           /* size */
+    bwp_id_cert_digest(id_pub, cert + 12);  /* sha256 */
+    cert[48] = 7, cert[49] = 10, cert[50] = 3;   /* release 3.10.7 */
+    crypto_sha512(h, pub, 32);
+    memcpy(cert + 56, h, 8);                /* key_id */
+    memcpy(msg, FW_SIGN_CONTEXT, sizeof(FW_SIGN_CONTEXT));
+    memcpy(msg + sizeof(FW_SIGN_CONTEXT), cert, 64);
+    crypto_ed25519_sign(cert + 64, sk, msg, sizeof(msg));
+}
+
+static void sim_identity(uint8_t seed0)
+{
+    uint8_t seed[32];
+    memset(seed, seed0, sizeof(seed));
+    crypto_ed25519_key_pair(sim.id_sk, sim.id_pub, seed);
+}
 
 static void sim_boot(void)
 {
@@ -75,6 +115,10 @@ static void sim_hello(void)
     memcpy(h.pod_mac, POD, 6);
     memcpy(h.nonce, sim.pair.nonce, BWP_NONCE_LEN);
     memcpy(h.bridge_pub, sim.pub, 32);
+    if (!sim.old_firmware) {
+        h.id_pub = sim.id_pub;
+        if (sim.has_cert) h.flags |= BWP_F_IDENTITY;
+    }
     sim_emit(bwp_build_hello(sim.out[sim.n_out], BWP_MAX_FRAME, POD, &h));
 }
 
@@ -113,6 +157,7 @@ static void sim_rx(const uint8_t *f, size_t len)
     }
     size_t n;
     if (m.type == BWP_PAIR) {
+        sim.pairs++;
         /* As the bridge firmware does: a fresh key pair, the key from X25519, answer, then switch. */
         uint8_t secret[32], pub[32], key[32];
         memset(secret, 0x80 + ++sim.key_seed, sizeof(secret));
@@ -122,10 +167,23 @@ static void sim_rx(const uint8_t *f, size_t len)
         bwp_begin(&w, out, BWP_MAX_FRAME, POD, BRIDGE, m.type | BWP_RESPONSE, m.seq);
         bwp_put_u8(&w, BWP_T_RESULT, BWP_OK);
         bwp_put(&w, BWP_T_PUBKEY, pub, 32);
+        if (!sim.old_firmware) {   /* as control.c does: who we are, signed over this pairing */
+            uint8_t pn[BWP_POD_NONCE_LEN] = {0}, sig[64];
+            const uint8_t *v;
+            uint16_t vl;
+            if (bwp_find(m.body, m.body_len, BWP_T_POD_NONCE, &v, &vl) && vl == BWP_POD_NONCE_LEN) memcpy(pn, v, vl);
+            if (sim.bad_id_sig) pn[0] ^= 1;
+            bwp_id_sign(sim.id_sk, nk, pub, sim.pair.nonce, pn, sig);
+            bwp_put(&w, BWP_T_ID_PUB, sim.id_pub, 32);
+            if (sim.has_cert) bwp_put(&w, BWP_T_ID_CERT, sim.cert, 128);
+            bwp_put(&w, BWP_T_ID_SIG, sig, 64);
+        }
         n = bwp_finish(&w);
         if (authed) {
             n = bwp_sign_frame(out, BWP_MAX_FRAME, sim.pair.key, sim.pair.nonce, counter);
         }
+        memcpy(sim.last_pair_answer, out, n);
+        sim.last_pair_len = n;
         sim_emit(n);
         pairing_set_key(&sim.pair, key);
         memcpy(sim.pub, pub, 32);
@@ -206,6 +264,16 @@ static void sim_rx(const uint8_t *f, size_t len)
         sim.ota_done = false;
         sim_boot();
         return;
+    } else if (m.type == BWP_SET_ID_CERT) {
+        const uint8_t *c;
+        uint16_t cl;
+        uint8_t r = BWP_E_BAD_REQUEST;
+        if (bwp_find(m.body, m.body_len, BWP_T_ID_CERT, &c, &cl) && cl == 128) {
+            memcpy(sim.cert, c, 128);
+            sim.has_cert = true;   /* the real bridge checks it first (fwsig_check_bridge_id) */
+            r = BWP_OK;
+        }
+        n = bwp_build_result(out, BWP_MAX_FRAME, POD, BRIDGE, m.type, m.seq, r, NULL);
     } else if (m.type == BWP_SCAN) {
         bwp_ap_t aps[2] = {{.ssid = "lab", .rssi = -40, .channel = 1, .authmode = 3},
                            {.ssid = "guest", .rssi = -70, .channel = 11, .authmode = 0}};
@@ -264,33 +332,43 @@ static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
     return 0;
 }
 
-/* The pod's flash copy of the pinned bridge (pod_policy.c on the device). */
+/* The certificate check as wifi_bridge_net.c does it, against the test key. */
+static bool io_check_cert(const uint8_t cert[128], const uint8_t id_pub[32], void *ctx)
+{
+    (void)ctx;
+    uint8_t d[32];
+    bwp_id_cert_digest(id_pub, d);
+    return fw_sign_check(cert, 128, BWP_ID_CERT_TARGET, 32, d, NULL) == FW_SIG_OK;
+}
+static uint8_t rnd_ctr;
+static int io_random(uint8_t *buf, size_t n, void *ctx)
+{
+    (void)ctx;
+    for (size_t i = 0; i < n; i++) buf[i] = (uint8_t)(++rnd_ctr * 37 + i);
+    return 0;
+}
 static bool pin_stored;
 static uint8_t pin_mac_st[6], pin_pub_st[32];
 static int pin_saves;
 static bool io_load_pin(uint8_t mac[6], uint8_t pub[32], void *ctx)
 {
     (void)ctx;
-    if (pin_stored) {
-        memcpy(mac, pin_mac_st, 6);
-        memcpy(pub, pin_pub_st, 32);
-    }
+    if (pin_stored) { memcpy(mac, pin_mac_st, 6); memcpy(pub, pin_pub_st, 32); }
     return pin_stored;
 }
-static void io_save_pin(const uint8_t *mac, const uint8_t *pub, void *ctx)
+static void io_save_pin(const uint8_t mac[6], const uint8_t pub[32], void *ctx)
 {
     (void)ctx;
     pin_saves++;
-    pin_stored = mac != NULL;
-    if (mac) {
-        memcpy(pin_mac_st, mac, 6);
-        memcpy(pin_pub_st, pub, 32);
-    }
+    pin_stored = true;
+    memcpy(pin_mac_st, mac, 6);
+    memcpy(pin_pub_st, pub, 32);
 }
 
 static uint8_t pod_seed = 0x5a;
-static const wb_io_t IO = {.send = io_send, .derive_secret = io_secret, .load_pin = io_load_pin,
-                           .save_pin = io_save_pin, .ctx = &pod_seed};
+static const wb_io_t IO = {.send = io_send, .derive_secret = io_secret, .check_cert = io_check_cert,
+                           .random = io_random, .load_pin = io_load_pin, .save_pin = io_save_pin,
+                           .ctx = &pod_seed};
 
 /* The key the pod should have: from its secret for this bridge and the bridge's public key. */
 static void expected_key(uint8_t key[32])
@@ -563,32 +641,152 @@ static void test_relay(void)
     tick_hook = NULL;
 }
 
-/* Security review 2026-11: H4 (a fake bridge must not get the Wi-Fi password), M8 (forged unsigned
-   frames must not wrap the counter or unpair the pod), plus the migration from firmware that kept
-   no pin and the no-address rule for the first pairing. */
+/* ---- bridge identity (firmware 3.10.7, bwp_id.h) */
+static bwp_writer_t w_forge;
 static void fresh_pod(void)
 {
     wb_init(&pod, POD, &IO);
     wb_set_link(&pod, true, now_ms);
 }
 
-static void test_security_review(void)
+static void sim_unpair(void)
+{
+    pairing_forget(&sim.pair);
+    memset(sim.pub, 0, sizeof(sim.pub));
+}
+
+/* A new pod (nothing stored) meets the simulated bridge as it is now; true when it ends genuine. */
+static bool pair_from_scratch(void)
 {
     wb_info_t info;
+    sim_unpair();
+    pin_stored = false;
+    fresh_pod();
+    run(3000);
+    wb_get_info(&pod, now_ms, &info);
+    return info.genuine;
+}
+
+static void expect_refused(const char *what, const char *problem_part)
+{
+    wb_info_t info;
+    static const uint8_t nonce[BWP_SEAL_NONCE_LEN] = {9};
+    wb_get_info(&pod, now_ms, &info);
+    if (!(info.present && info.paired && !info.genuine && !pin_stored && info.problem &&
+          strstr(info.problem, problem_part))) {
+        printf("FAIL %s: present %d paired %d genuine %d pin %d problem %s\n", what, info.present, info.paired,
+               info.genuine, pin_stored, info.problem ? info.problem : "(none)");
+        failures++;
+    }
+    leaked = false;
+    CHECK(wb_request_set_wifi(&pod, "lab", "correct horse", nonce, 1000, now_ms) == -3);
+    CHECK(!leaked);
+}
+
+static void test_identity(void)
+{
+    wb_info_t info;
+    uint8_t good_cert[128];
     tick_hook = NULL;
     sim.drop_next = 0;
     sim.quiet = false;
     sim.pending = false;
     sim.rollback = false;
+    sim.state = BWP_ST_CONNECTED;
+    memcpy(good_cert, sim.cert, 128);
 
-    /* The pinned bridge survives a pod reboot: the key comes from the stored public key. */
-    CHECK(pin_stored && memcmp(pin_mac_st, BRIDGE, 6) == 0);
+    /* The genuine bridge, stored: after a pod reboot it is genuine again from the stored key,
+       without a new PAIR. */
+    CHECK(pair_from_scratch() && pin_stored);
+    int pairs = sim.pairs;
     fresh_pod();
     run(2100);
     wb_get_info(&pod, now_ms, &info);
-    CHECK(info.present && info.paired && info.pinned);
+    CHECK(info.genuine && info.paired && sim.pairs == pairs);
 
-    /* H4: a HELLO from another MAC is ignored while a bridge is pinned (not adopted, no PAIR). */
+    /* PAIR pressed on the bridge: the pod pairs again by itself, and checks the identity again. */
+    sim_unpair();
+    run(8000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.genuine && sim.pair.paired && sim.pairs == pairs + 1);
+
+    /* Refused: a certificate for another target, by an unknown key, for another bridge's key; a
+       wrong transcript signature; a bridge with no certificate; one from before identities. */
+    make_cert(0, 0 /* firmware */, sim.id_pub, sim.cert);
+    pair_from_scratch();
+    expect_refused("wrong target", "identity check failed");
+    make_cert(32, BWP_ID_CERT_TARGET, sim.id_pub, sim.cert);
+    pair_from_scratch();
+    expect_refused("unknown key", "identity check failed");
+    uint8_t other_id[32];
+    memset(other_id, 0x44, sizeof(other_id));
+    make_cert(0, BWP_ID_CERT_TARGET, other_id, sim.cert);
+    pair_from_scratch();
+    expect_refused("cert for another key", "identity check failed");
+    memcpy(sim.cert, good_cert, 128);
+    sim.bad_id_sig = true;
+    pair_from_scratch();
+    expect_refused("transcript signature", "identity check failed");
+    sim.bad_id_sig = false;
+    sim.old_firmware = true;
+    pair_from_scratch();
+    expect_refused("old bridge firmware", "no identity certificate");
+    sim.old_firmware = false;
+
+    /* Provisioning: a bridge without a certificate pairs (STATUS, SCAN and updates still work) but
+       gets nothing secret; once the certificate is installed (SET_ID_CERT, as `bridge cert` sends
+       it) the pod checks the bridge again by itself (a signed PAIR) and it is genuine. */
+    sim.has_cert = false;
+    pair_from_scratch();
+    expect_refused("no certificate", "no identity certificate");
+    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+    uint8_t t[3 + 128] = {BWP_T_ID_CERT, 0, 128};
+    memcpy(t + 3, good_cert, 128);
+    CHECK(wb_request_ext(&pod, BWP_SET_ID_CERT, t, sizeof(t), 1000, now_ms) == 0);   /* > WB_REQ_MAX: borrowed */
+    for (int i = 0; i < 300 && wb_request_state(&pod) == WB_REQ_PENDING; i++) run(10);
+    CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+    pairs = sim.pairs;
+    run(4000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.genuine && pin_stored && sim.pairs == pairs + 1 && info.problem == NULL);
+    leaked = false;
+    CHECK(call_set_wifi("lab", "correct horse") == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
+    wb_request_release(&pod);
+    CHECK(!leaked && strcmp(sim.pass, "correct horse") == 0);
+
+    /* Migration from firmware without identities: the bridge is already paired with this pod and
+       nothing is stored. The key from HELLO works for STATUS; a signed PAIR proves the identity. */
+    pin_stored = false;
+    pairs = sim.pairs;
+    fresh_pod();
+    run(4000);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.genuine && pin_stored && sim.pairs == pairs + 1);
+
+    /* Replay: an old PAIR answer (a genuine one, recorded) to a new PAIR is refused: the transcript
+       has the new pod nonce. */
+    uint8_t old_answer[BWP_MAX_FRAME];
+    size_t old_len = sim.last_pair_len;
+    memcpy(old_answer, sim.last_pair_answer, old_len);
+    sim_unpair();
+    pin_stored = false;
+    fresh_pod();
+    sim_hello();
+    sim.drop_next = 1;   /* the bridge never sees the PAIR: an attacker answers */
+    for (int i = 0; i < 300 && !(pod.req_state == WB_REQ_PENDING && pod.req_type == BWP_PAIR); i++) {
+        run(10);
+    }
+    CHECK(pod.req_state == WB_REQ_PENDING && pod.req_type == BWP_PAIR);
+    old_answer[18] = (uint8_t)(pod.req_seq >> 8);
+    old_answer[19] = (uint8_t)pod.req_seq;
+    wb_rx(&pod, old_answer, old_len, now_ms);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(!info.genuine && !pin_stored);
+    CHECK(pair_from_scratch());   /* the real bridge, afterwards */
+
+    /* Another bridge says HELLO while ours is here: ignored. */
     static const uint8_t EVIL[6] = {0x02, 0xee, 0xee, 0xee, 0xee, 0x01};
     bwp_hello_t h = {.fw_version = "9.9.9", .hw_rev = "A", .state = BWP_ST_UNCONFIGURED, .flags = BWP_F_ETH_LINK};
     memcpy(h.bridge_mac, EVIL, 6);
@@ -599,82 +797,27 @@ static void test_security_review(void)
     wb_rx(&pod, f, n, now_ms);
     wb_poll(&pod, now_ms);
     wb_get_info(&pod, now_ms, &info);
-    CHECK(memcmp(info.mac, BRIDGE, 6) == 0 && info.foreign && info.paired);
-    CHECK(sent == sent_before);
+    CHECK(memcmp(info.mac, BRIDGE, 6) == 0 && info.genuine && sent == sent_before);
 
-    /* M8: a forged REPLAY refusal with a counter near 2^32 must not be adopted. */
+    /* Forged unsigned refusals: a REPLAY counter near 2^32 is not adopted, an AUTH refusal of one
+       send does not unpair. */
     CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 300, now_ms) == 0);
     uint16_t seq = pod.req_seq;
     sim.drop_next = 1;
     run(10);
-    bwp_writer_t w;
-    bwp_begin(&w, f, sizeof(f), POD, BRIDGE, BWP_STATUS | BWP_RESPONSE, seq);
-    bwp_put_u8(&w, BWP_T_RESULT, BWP_E_AUTH);
-    bwp_put(&w, BWP_T_NONCE, sim.pair.nonce, BWP_NONCE_LEN);
-    bwp_put_u32(&w, BWP_T_COUNTER, 0xFFFFFFFEu);
-    n = bwp_finish(&w);
+    bwp_begin(&w_forge, f, sizeof(f), POD, BRIDGE, BWP_STATUS | BWP_RESPONSE, seq);
+    bwp_put_u8(&w_forge, BWP_T_RESULT, BWP_E_AUTH);
+    bwp_put(&w_forge, BWP_T_NONCE, sim.pair.nonce, BWP_NONCE_LEN);
+    bwp_put_u32(&w_forge, BWP_T_COUNTER, 0xFFFFFFFEu);
+    n = bwp_finish(&w_forge);
     wb_rx(&pod, f, n, now_ms);
     CHECK(pod.counter < 0x80000000u);
+    wb_get_info(&pod, now_ms, &info);
+    CHECK(info.paired && info.genuine);
     for (int i = 0; i < 200 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
         run(10);
     }
     CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
-    wb_request_release(&pod);
-
-    /* M8: a forged AUTH refusal (no nonce change) to a signed request does not unpair the pod. */
-    CHECK(wb_request(&pod, BWP_STATUS, NULL, 0, 300, now_ms) == 0);
-    seq = pod.req_seq;
-    sim.drop_next = 1;
-    run(10);
-    bwp_begin(&w, f, sizeof(f), POD, BRIDGE, BWP_STATUS | BWP_RESPONSE, seq);
-    bwp_put_u8(&w, BWP_T_RESULT, BWP_E_AUTH);
-    n = bwp_finish(&w);
-    wb_rx(&pod, f, n, now_ms);
-    wb_get_info(&pod, now_ms, &info);
-    CHECK(info.paired && info.problem == NULL);
-    for (int i = 0; i < 200 && wb_request_state(&pod) == WB_REQ_PENDING; i++) {
-        run(10);
-    }
-    CHECK(wb_request_state(&pod) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
-    wb_request_release(&pod);
-
-    /* M8: a forged unsolicited STATUS without the paired flag changes nothing for a pinned bridge. */
-    bwp_status_t us = {.state = BWP_ST_CONNECTED, .flags = 0};
-    n = bwp_build_status(f, sizeof(f), POD, BRIDGE, 0, &us);
-    wb_rx(&pod, f, n, now_ms);
-    CHECK(call(BWP_STATUS, NULL, 0, 1000) == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
-    wb_request_release(&pod);
-
-    /* Migration from firmware without a pin: a bridge that is already paired with this pod (HELLO
-       says PAIRED, with its public key) is adopted once a signed answer confirms it, and pinned. */
-    pin_stored = false;
-    fresh_pod();
-    wb_set_addressed(&pod, true);   /* the pod has a lease through the bridge */
-    run(2100);
-    wb_get_info(&pod, now_ms, &info);
-    CHECK(info.present && info.paired && info.pinned && pin_stored && memcmp(pin_mac_st, BRIDGE, 6) == 0);
-
-    /* H4: nothing pinned and an address on Ethernet (an office LAN): an unpaired "bridge" gets no
-       PAIR, so it never learns the pod's public key, and wifi_set is not sent to it. */
-    pin_stored = false;
-    pairing_forget(&sim.pair);
-    memset(sim.pub, 0, sizeof(sim.pub));
-    fresh_pod();
-    wb_set_addressed(&pod, true);
-    int handled = sim.handled;
-    run(8000);
-    wb_get_info(&pod, now_ms, &info);
-    CHECK(info.present && !info.paired && !info.pairing_open && !sim.pair.paired && sim.handled == handled);
-    static const uint8_t nonce[BWP_SEAL_NONCE_LEN] = {7};
-    CHECK(wb_request_set_wifi(&pod, "lab", "correct horse", nonce, 1000, now_ms) != 0);
-    CHECK(!leaked);
-    /* No address (the bridge is the only thing on the cable): the first pairing is automatic. */
-    wb_set_addressed(&pod, false);
-    run(8000);
-    wb_get_info(&pod, now_ms, &info);
-    CHECK(info.paired && info.pinned && sim.pair.paired);
-    CHECK(call_set_wifi("lab", "correct horse") == WB_REQ_DONE && wb_request_reply(&pod)->result == BWP_OK);
-    CHECK(!leaked);
     wb_request_release(&pod);
 }
 
@@ -686,6 +829,9 @@ int main(void)
     sim.state = BWP_ST_CONNECTED;  /* STATUS carries RSSI only when connected */
     strcpy(sim.ssid, "old net");
     strcpy(sim.fw, "0.1.0");
+    sim_identity(0x33);
+    make_cert(0, BWP_ID_CERT_TARGET, sim.id_pub, sim.cert);   /* a genuine bridge */
+    sim.has_cert = true;
     sim_boot();
     wb_init(&pod, POD, &IO);
     wb_set_link(&pod, true, now_ms);
@@ -704,7 +850,7 @@ int main(void)
     expected_key(expect);
     CHECK(memcmp(sim.pair.key, expect, BWP_KEY_LEN) == 0);  /* same key on both sides, never sent */
     CHECK(memcmp(pod.key, expect, BWP_KEY_LEN) == 0);
-    CHECK(info.paired && info.problem == NULL);
+    CHECK(info.paired && info.problem == NULL && info.genuine && pin_stored);
     CHECK(info.have_status && info.rssi == -58 && info.counters.eth_rx == 1234);
     CHECK(strcmp(info.fw_version, "0.1.0") == 0);
 
@@ -875,18 +1021,9 @@ int main(void)
     fake[12] = 0x08;
     wb_rx(&pod, fake, fn, now_ms);
 
-    /* PAIR pressed on the bridge: HELLO without the paired flag. The bridge is pinned, so the pod
-       does not pair again on its own (a forged HELLO could be behind it) and says what to do... */
+    /* PAIR pressed on the bridge: HELLO without the paired flag -> the pod pairs again. */
     pairing_forget(&sim.pair);
     memset(sim.pub, 0, sizeof(sim.pub));
-    int pairs_before = sim.handled;
-    run(8000);
-    wb_get_info(&pod, now_ms, &info);
-    CHECK(!sim.pair.paired && !info.paired && info.pinned && info.problem && strstr(info.problem, "bridge pair"));
-    CHECK(sim.handled == pairs_before);  /* no PAIR sent */
-    /* ...until the user allows a new pairing (`bridge pair` on the USB console). */
-    wb_allow_pairing(&pod, now_ms);
-    CHECK(!pin_stored);
     run(2100);
     run(6000);
     expected_key(expect);  /* a new pairing: new bridge key pair, new key */
@@ -905,13 +1042,12 @@ int main(void)
     wb_request_release(&pod);
     wb_get_info(&pod, now_ms, &info);
     CHECK(!info.paired && info.problem != NULL);
-    /* ...until PAIR is pressed there and the user allows the new pairing here. */
+    /* ...until PAIR is pressed there. */
     pairing_forget(&sim.pair);
     memset(sim.pub, 0, sizeof(sim.pub));
-    wb_allow_pairing(&pod, now_ms);
     run(8000);
     wb_get_info(&pod, now_ms, &info);
-    CHECK(info.paired && info.problem == NULL && sim.pair.paired && info.pinned && pin_stored);
+    CHECK(info.paired && info.problem == NULL && sim.pair.paired);
 
     /* The bridge goes away (no HELLO): requests fail fast, the info says so. */
     sim.drop_next = 1000;
@@ -934,7 +1070,7 @@ int main(void)
     CHECK(!info.present);
 
     test_relay();
-    test_security_review();
+    test_identity();
 
     CHECK(strcmp(wb_state_str(BWP_ST_CONNECTED), "connected") == 0);
     CHECK(strcmp(wb_result_str(BWP_E_ALREADY_PAIRED), "already-paired") == 0);

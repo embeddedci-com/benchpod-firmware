@@ -203,7 +203,7 @@ static void test_lan_unsigned_and_floor(void) {
     CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
 }
 
-/* The pinned Wi-Fi bridge (H4) lives in a version 2 record; a version 1 copy stays the newest so
+/* The stored genuine Wi-Fi bridge (H4) lives in a version 2 record; a version 1 copy stays the newest so
    older firmware keeps loading the policies, and their save drops only the pin. */
 static void test_bridge_pin(void) {
     boot_blank();

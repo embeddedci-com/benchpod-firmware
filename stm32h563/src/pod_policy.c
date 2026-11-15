@@ -31,14 +31,14 @@ static const ab_store_t k_store = {
     .legacy_magic = 0,
 };
 
-/* Version 2 (firmware 3.10.7+): the version 1 record plus the pinned Wi-Fi bridge. Every save
+/* Version 2 (firmware 3.10.7+): the version 1 record plus the last genuine Wi-Fi bridge. Every save
    writes it and then a version 1 copy as the newest record, so older firmware still loads its
    policies (adc_cal.c does the same). Older firmware that saves overwrites the version 2 record:
    the pin is gone then and the pod adopts its bridge again (wifi_bridge.h). */
 typedef struct {
     pod_policy_rec_t v1;
     uint8_t  bridge_mac[6];
-    uint8_t  bridge_pinned;   /* 1: bridge_mac/bridge_pub hold the pinned bridge */
+    uint8_t  bridge_pinned;   /* 1: bridge_mac/bridge_pub hold a bridge whose identity was verified */
     uint8_t  pad;
     uint8_t  bridge_pub[32];
     uint8_t  reserved[8];
@@ -66,7 +66,7 @@ static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SI
 
 /* The one buffer for a formatted refusal: callers (the hw worker, one command at a time) send it
    before asking again. */
-static char s_why[96];
+static char s_why[80];   /* the longest, sig_policy loosen, is 72 */
 
 __attribute__((weak)) void pod_policy_on_lan_change(pod_lan_policy_t now) { (void)now; }
 __attribute__((weak)) void pod_policy_on_usb_net_change(bool on) { (void)on; }
@@ -140,7 +140,7 @@ const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub) {
     if (!mac && !pinned) return NULL;
     if (mac && pinned && !memcmp(mac, r2.bridge_mac, 6) && !memcmp(pub, r2.bridge_pub, 32)) return NULL;
     const char *why = save_all(&s_rec, mac != NULL, mac ? mac : zero, mac ? pub : zero);
-    if (!why) log_printf("[policy] Wi-Fi bridge %s\n", mac ? "pinned" : "pin cleared");
+    if (!why) log_printf("[policy] Wi-Fi bridge %s\n", mac ? "stored" : "cleared");
     return why;
 }
 
