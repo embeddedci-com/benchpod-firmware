@@ -1,0 +1,77 @@
+# Sign a Wi-Fi bridge's identity certificate with the release key (wifi-bridge/docs/SECURITY.md,
+# "Bridge identity"). Pods from firmware 3.10.7 send the Wi-Fi password only to a bridge with a
+# valid certificate.
+#
+# Run it by hand (Actions > Sign bridge identity > Run workflow) with the bridge's identity public
+# key, the 64 hex digits that `bridge` on the pod's USB console (or `identity` on the bridge's own
+# console) prints. The job runs in the `release` environment, so it waits for a required reviewer
+# before it gets FW_SIGNING_KEY. The certificate comes back as the artifact `bridge-id-<key>`
+# (bridge-id.sig, 128 bytes, and bridge-id.hex); install it with
+# `wifi-bridge/tools/bridge_cert.py install` over the pod's USB console.
+name: Sign bridge identity
+
+on:
+  workflow_dispatch:
+    inputs:
+      identity:
+        description: "The bridge's identity public key (64 hex digits)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    if: github.repository == 'embeddedci-com/benchpod-firmware'
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the key
+        id: key
+        env:
+          IDENTITY: ${{ inputs.identity }}
+        run: |
+          id=$(printf '%s' "$IDENTITY" | tr 'A-F' 'a-f')
+          if ! printf '%s' "$id" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::identity must be exactly 64 hex digits"
+            exit 1
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      - name: Sign
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+          ID: ${{ steps.key.outputs.id }}
+        run: |
+          if [ -z "$FW_SIGNING_KEY" ]; then
+            echo "::error::FW_SIGNING_KEY is not set in the release environment"
+            exit 1
+          fi
+          python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography
+          release=$(sed -n 's/^#define FIRMWARE_VERSION "\(.*\)"/\1/p' stm32h563/src/version.h)
+          mkdir -p out
+          python3 tools/fwsign.py sign-bridge-id --key env:FW_SIGNING_KEY --id "$ID" --release "$release" -o out/bridge-id.sig
+          pubs=()
+          for p in stm32h563/keys/release-*.pub; do pubs+=(--pub "$p"); done
+          python3 tools/fwsign.py verify-bridge-id "${pubs[@]}" --id "$ID" out/bridge-id.sig
+          od -An -v -tx1 out/bridge-id.sig | tr -d ' \n' > out/bridge-id.hex
+          echo "$ID" > out/identity.txt
+          {
+            echo "### Bridge identity certificate"
+            echo "identity: \`$ID\`"
+            echo
+            echo "Install: \`python3 wifi-bridge/tools/bridge_cert.py install --port <pod USB console> bridge-id.sig\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the certificate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bridge-id-${{ steps.key.outputs.id }}
+          path: out/
+          if-no-files-found: error

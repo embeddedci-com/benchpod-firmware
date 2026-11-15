@@ -219,7 +219,7 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
-| `bridge [scan \| update \| reboot \| pair \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, whether it is pinned, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same version; a bridge from this release on refuses an older one); `reboot` restarts it; `pair` (firmware 3.10.7+) forgets the pinned bridge so the next one that says HELLO in 2 minutes pairs; `factory-reset yes` makes it forget its Wi-Fi and its pairing (and opens the same 2-minute pairing window). |
+| `bridge [scan \| update \| reboot \| cert <1-4> <hex> \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, its `identity:` key and whether it is `genuine:`, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same version; a bridge from 0.1.3 on refuses an older one); `reboot` restarts it; `cert` (firmware 3.10.7+) installs its identity certificate, 128 bytes as four quarters of 64 hex digits (parts 1 to 4, any order; the last one sends it: `certificate stored on the bridge ...`); `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
 #### Wi-Fi bridge
 
@@ -244,17 +244,24 @@ Without built-in Wi-Fi configured, while a bridge sends its HELLO on the Etherne
 - `wifi-clear` clears the bridge's credentials.
 
 The pod pairs with the bridge on its own the first time it sees it. If `wifi-show` reports `the
-bridge is paired with another pod`, press PAIR on the bridge, then run `bridge pair` here.
+bridge is paired with another pod`, press PAIR on the bridge.
 
-**Pinned bridge** (firmware 3.10.7+). Once a pairing is confirmed (a signed answer from the
-bridge), the pod pins that bridge: its MAC and its pairing key are stored, HELLOs from any other
-bridge are ignored, and the pod never starts a pairing on its own again. The pod pairs on its own
-only with nothing pinned and while it has no address on Ethernet (a bridge is then the only
-thing on the cable; a pod on an office network has a lease and does not pair with whatever sends
-a HELLO there). To pair with another bridge, or again after PAIR was pressed on this one, run
-`bridge pair` on the pod's USB console: it forgets the pinned bridge and lets the next one that
-says HELLO pair within 2 minutes (`bridge factory-reset yes` does the same). A pod updated from
-older firmware adopts the bridge it is already paired with, without pressing anything.
+**Genuine bridges only** (firmware 3.10.7+). Every bridge (firmware 0.1.3+) has its own identity
+key and, once provisioned, a certificate for it signed with our release key. When the pod pairs,
+the bridge shows the certificate and signs the pairing with its identity key; the pod checks both
+and only then sends it the Wi-Fi password (`wifi-set`) and stores it as its bridge. A bridge
+without a valid certificate (not genuine, or not provisioned yet, or older bridge firmware) still
+pairs, so `bridge`, `scan` and bridge updates work, but `wifi-set` is refused with `the Wi-Fi bridge
+has no identity certificate ...` or `the Wi-Fi bridge's identity check failed ...`. The pod pairs
+on its own with any bridge, whether it has an address on Ethernet or not: after PAIR on the
+bridge, with a replacement or after moving a bridge between pods, nothing is needed on the pod. While
+its genuine bridge is on the port, HELLOs from another bridge are ignored. A pod updated from
+older firmware checks the bridge it is already paired with by itself.
+
+Provisioning a bridge: `bridge` shows its `identity:` key (64 hex digits). Sign it (the release
+workflow "Sign bridge identity", or `tools/fwsign.py sign-bridge-id` with the developer key for a
+development pod) and install the 128-byte certificate with `bridge cert <1-4> <hex>`, a quarter
+(64 hex digits) at a time; `wifi-bridge/tools/bridge_cert.py install` does both steps.
 
 **Bridge firmware.** The pod keeps the bridge's firmware in W25Q blob slot `bridge` (installed
 like the other blobs, OTA target `bridge`; it must carry a good signed manifest whatever the

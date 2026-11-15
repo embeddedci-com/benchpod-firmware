@@ -3838,7 +3838,7 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 
 ```json
 {"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
- "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"pinned":true,"problem":null,"update":"idle",
+ "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"genuine":true,"problem":null,"update":"idle",
            "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
            "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
                        "eth_tx_err":0,"dropped":76}}}
@@ -3847,12 +3847,12 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 `state` is then the bridge's: `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or
 `no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
 "the bridge is paired with another pod: press PAIR on the bridge" means the user has to press PAIR
-on the bridge and then run `bridge pair` on the pod's USB console. `pinned` (firmware 3.10.7+) is
-`true` once the pod has pinned this bridge: after the first pairing a signed answer confirmed, the
-pod ignores HELLOs from every other bridge and never pairs again on its own, and it pairs on its
-own at all only while it has no address on Ethernet. `bridge pair` on the USB console allows a new
-pairing for 2 minutes ([USB serial interface, Wi-Fi bridge](usb-serial-interface.md#wi-fi-bridge)).
-`wifi_set` goes to a bridge only once a signed answer has confirmed its pairing. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
+on the bridge. `genuine` (firmware 3.10.7+) is `true` once the bridge showed a valid identity
+certificate and signed the pairing with its identity key; `wifi_set` goes only to a genuine bridge,
+else it fails with the `problem` text (`the Wi-Fi bridge has no identity certificate ...` or `the
+Wi-Fi bridge's identity check failed ...`). The pod pairs again by itself after PAIR on the bridge
+or with a replacement bridge. See [USB serial interface, Wi-Fi bridge](usb-serial-interface.md#wi-fi-bridge)
+for provisioning a certificate. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
 `bridge.update` says what the pod's automatic bridge firmware update is doing (`"idle"`,
 `"updating 0.1.0 to 0.2.0: 45%"`, `"updated to 0.2.0"`, `"update to 0.2.0 failed: ..."`); the
 image comes from W25Q blob slot `bridge` (OTA target `bridge`, listed by `blob_status` in

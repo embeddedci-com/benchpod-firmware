@@ -75,7 +75,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x13 | REASON | u8, last Wi-Fi disconnect reason (ESP-IDF `wifi_err_reason_t`, low byte) |
 | 0x14 | COUNTERS | 7 x u32: eth_rx, wifi_tx, wifi_tx_err, wifi_rx, eth_tx, eth_tx_err, dropped |
 | 0x15 | MESSAGE | string, human-readable detail for an error |
-| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned, 0x10 new image on trial (not confirmed yet), 0x20 paired |
+| 0x16 | FLAGS | u8: 0x01 credentials stored, 0x02 Ethernet link up, 0x04 OTA in progress, 0x08 pod MAC learned, 0x10 new image on trial (not confirmed yet), 0x20 paired, 0x40 a valid identity certificate is stored (0.1.3+) |
 | 0x17 | NONCE | 8 bytes, random, new on every boot of the bridge (HELLO, refusals) |
 | 0x18 | PUBKEY | 32 bytes, X25519 public key: the pod's in PAIR, the bridge's in the PAIR answer and in HELLO while paired |
 | 0x19 | COUNTER | u32, request counter, strictly increasing for one NONCE |
@@ -84,6 +84,10 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x1C | SIGNATURE | 128 bytes, the pod's signed manifest of an OTA image (`tools/fwsign.py`, target `bridge`) |
 | 0x1D | RESET | u8: why the bridge last booted: 1 power-on, 2 reset pin, 3 software, 4 panic, 5 watchdog, 6 brownout, 7 other (STATUS) |
 | 0x1E | EMC | u8, the EMC test build only: 1 transmitting the pod's frames, 2 transmitting its pattern, 3 stopped, 4 not transmitting (STATUS) |
+| 0x1F | POD_NONCE | 16 random bytes from the pod in PAIR, part of the identity transcript (0.1.3+) |
+| 0x20 | ID_PUB | 32 bytes, the bridge's Ed25519 identity key (HELLO, PAIR answer; 0.1.3+) |
+| 0x21 | ID_CERT | 128 bytes, its certificate (PAIR answer when it has one, SET_ID_CERT; 0.1.3+) |
+| 0x22 | ID_SIG | 64 bytes, the identity key's signature over the pairing transcript (PAIR answer; 0.1.3+) |
 
 ## States
 
@@ -119,7 +123,7 @@ be added without a version bump. A tag that appears twice: the first one counts.
 
 | Type | Name | Direction | Request body | Response body |
 |---|---|---|---|---|
-| 0x01 | HELLO | bridge → pod, every 2 s, seq 0 | MODEL, FW_VERSION, HW_REV, STATE, FLAGS, BRIDGE_MAC, POD_MAC (if learned), NONCE, PUBKEY (if paired) | (none) |
+| 0x01 | HELLO | bridge → pod, every 2 s, seq 0 | MODEL, FW_VERSION, HW_REV, STATE, FLAGS, BRIDGE_MAC, POD_MAC (if learned), NONCE, PUBKEY (if paired), ID_PUB (0.1.3+) | (none) |
 | 0x02 | STATUS | pod → bridge | (empty) | RESULT, STATE, FLAGS, SSID (if configured), CHANNEL + RSSI + BSSID (if connected), REASON (if any), UPTIME, POD_MAC (if learned), COUNTERS |
 | 0x03 | SCAN | pod → bridge | (empty) | RESULT, up to 20 AP, strongest first |
 | 0x04 | SET_WIFI | pod → bridge | SSID, ENC_PASSPHRASE (omit for an open network) | RESULT, after the credentials are stored |
@@ -130,7 +134,8 @@ be added without a version bump. A tag that appears twice: the first one counts.
 | 0x09 | REBOOT | pod → bridge | (empty) | RESULT, then the bridge restarts after ~200 ms |
 | 0x0A | FACTORY_RESET | pod → bridge | (empty) | RESULT, then credentials and pairing are erased and the bridge restarts |
 | 0x0B | OTA_ABORT | pod → bridge | (empty) | RESULT; drops a partial transfer |
-| 0x0C | PAIR | pod → bridge | PUBKEY (the pod's) | RESULT, PUBKEY (the bridge's), after the key is stored |
+| 0x0C | PAIR | pod → bridge | PUBKEY (the pod's), POD_NONCE (pod 3.10.7+) | RESULT, PUBKEY (the bridge's), after the key is stored; ID_PUB, ID_CERT (if stored), ID_SIG (0.1.3+) |
+| 0x0D | SET_ID_CERT | pod → bridge | ID_CERT | RESULT, after the bridge checked it (trusted key, target `bridge-id`, its own identity key) and stored it (0.1.3+) |
 
 Every request except HELLO carries COUNTER + AUTH once the bridge is paired (FLAGS 0x20), and
 the bridge then signs its response the same way (echoing the COUNTER). Before pairing only
@@ -229,18 +234,37 @@ is agreed with X25519 and never sent: someone recording the cable learns nothing
 - **Unsigned STATUS** (to an unpaired request, and the unsolicited one) carries the state and
   flags but no SSID or BSSID (0.1.3+).
 - **Downgrades** (0.1.3+): a signed update whose version is below the running one is refused
-  (`ota-wrong-image`, "older than X"). Version 0 is a test image and passes. The FACTORY button never touches pairing, except through the power-up factory
-  restore, which erases NVS and with it the key.
-- **The pod pins its bridge** (pod firmware 3.10.7+): after the first pairing a signed answer
-  confirmed, the pod keeps the bridge's MAC and `bridge_pub` in flash, ignores HELLOs from other
-  MACs, takes the key only from the pinned `bridge_pub` (never from a HELLO), and never sends
-  PAIR on its own again; the user allows a new pairing with `bridge pair` on the pod's USB
-  console (2 minutes). With nothing pinned the pod sends PAIR only while it has no IPv4 address
-  on Ethernet. It treats unsigned refusals as hints: an unsigned REPLAY COUNTER above 2^31 is
-  ignored (it would wrap the counter), an AUTH refusal only counts when every send of a request
-  was refused, and NOT_PAIRED or a STATUS without FLAGS 0x20 from a pinned bridge does not make
-  it pair again. A pod updated from older firmware has nothing pinned: it adopts the bridge it is
-  paired with from HELLO's `bridge_pub` once a signed answer confirms the key, and pins it.
+  (`ota-wrong-image`, "older than X"). Version 0 is a test image and passes.
+- The FACTORY button never touches pairing, except through the power-up factory restore, which
+  erases NVS and with it the key (and the identity key and certificate, see below).
+- **Identity** (bridge 0.1.3+, pod 3.10.7+; `components/bridge_core/include/bwp_id.h`). Each
+  bridge makes an Ed25519 identity key on its first boot of 0.1.3 (NVS, encrypted in
+  production) and sends the public half as ID_PUB. A certificate is the pod's signed manifest
+  format (`tools/fwsign.py sign-bridge-id`) with target 8 `bridge-id`, size 32 and the SHA-256 of
+  ID_PUB, signed with one of the pod's release keys (plus the developer key in development
+  builds). Target 8 is no update target on either side, so a certificate is never an image and
+  an image manifest is never a certificate. The MAC is not in the certificate: it can be copied
+  and proves nothing. The PAIR answer carries ID_PUB, ID_CERT and ID_SIG, an Ed25519 signature
+  by the identity key over
+
+  ```
+  "benchpod-bridge-pair:v1" || 0x00 || pod_pub || bridge_pub || NONCE || POD_NONCE
+  ```
+
+  so an answer cannot be replayed into another pairing (POD_NONCE is fresh per PAIR) or bound to
+  another key. The pod sends secrets (SET_WIFI) and stores the bridge only after the certificate
+  and the signature check out; a bridge without them still pairs (STATUS, SCAN and signed updates
+  need no secret), with a problem that says why. A bridge already paired when the pod meets it
+  (the pod restarted, or was updated from older firmware) proves itself with a signed PAIR, a key
+  rotation, as soon as its HELLO shows FLAGS 0x40; the pod stores the last genuine bridge's MAC
+  and `bridge_pub`, so after a reboot a HELLO with that key needs no new proof. While its genuine
+  bridge is present, the pod ignores HELLOs from other MACs. The pod pairs on its own with any
+  bridge that sends a HELLO without FLAGS 0x20, with or without an address on Ethernet: only a
+  genuine one gets anything secret. It treats unsigned refusals as hints: an unsigned REPLAY
+  COUNTER above 2^31 is ignored (it would wrap the counter), an AUTH refusal only counts when every
+  send of a request was refused, and an unsigned NOT_PAIRED to a genuine bridge's signed request,
+  or the FLAGS of an unsolicited STATUS, change nothing (HELLO says whether it is paired).
+  SET_ID_CERT installs a certificate (signed, so from the paired pod); the bridge checks it first.
 - **Trust on first use** means a device on the cable before the pod (or right after a PAIR
   press) could pair instead, or sit in the middle of the first pairing (an active attack; just
   recording is not enough). The pod notices the first case: its PAIR gets ALREADY_PAIRED, which
@@ -341,8 +365,8 @@ out through `netif->linkoutput`). What it does:
 
 - Tracks HELLO (bridge MAC, NONCE, state, flags); the bridge counts as present while HELLOs keep
   coming on a live Ethernet link (6 s).
-- Pairs on first contact (X25519, secret derived as above) and pins that bridge (see Pairing),
-  seals the passphrase in SET_WIFI,
+- Pairs on first contact (X25519, secret derived as above), checks the bridge's identity (see
+  Pairing), seals the passphrase in SET_WIFI (genuine bridges only),
   signs every request, verifies every signed answer, retries three times with a new COUNTER,
   and resyncs after either side reboots.
 - Polls STATUS every 10 s (which also confirms a bridge firmware update on trial).

@@ -356,9 +356,11 @@ What changed, and why (the review's numbers in brackets):
   `docs/design/firmware-signing.md`.
 - **LAN TLS identity and HTTPS-only** change only from the USB console, the USB link or the
   cloud [M10, L14]: 8443 has no client authentication.
-- **The pod pins its Wi-Fi bridge** and treats unsigned bridge frames as hints [H4, M8];
-  the bridge learns the pod MAC only from signed requests and forgets Wi-Fi on PAIR [M9]
-  (`wifi-bridge/docs/PROTOCOL.md`, Pairing).
+- **Genuine Wi-Fi bridges only** [H4]: each bridge has an identity key and a certificate signed
+  with the release key; the pod sends the Wi-Fi password only to a bridge that shows a valid
+  certificate and signs the pairing transcript (`wifi-bridge/docs/SECURITY.md`, Bridge identity).
+  Unsigned bridge frames are hints [M8]; the bridge learns the pod MAC only from signed requests
+  and forgets Wi-Fi on PAIR [M9] (`wifi-bridge/docs/PROTOCOL.md`, Pairing).
 - **Console `dfu` is refused under `required`** [M11]. Readout protection (RDP), write
   protection and a protected area for the identity key are not set by any firmware: they are
   irreversible or close to it on this MCU and need a factory and recovery plan first.

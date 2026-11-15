@@ -16,7 +16,7 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | No IP stack on either port: no esp_netif, no lwIP interface, no open ports, no SoftAP code (`CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n`), no Espressif cloud services | `main/wifi.c`, `main/eth.c`, `sdkconfig.defaults` |
 | Frames only for the one learned pod MAC; everything else dropped | `components/bridge_core/l2fwd.c` |
 | Control channel accepted only from the Ethernet port, only from the pod; never from Wi-Fi, never forwarded | `l2fwd.c`, `docs/PROTOCOL.md` |
-| Paired pod only: trust on first use, the key agreed with X25519 (never sent), then every request and its response carry a truncated HMAC-SHA256 over a per-boot nonce and a strictly increasing counter (no replay across requests or reboots). The pairing key is stored in NVS (encrypted in production). A dedicated PAIR button, not the FACTORY button, forgets it, and the Wi-Fi credentials with it (0.1.3+). While paired the pod MAC is learned only from signed requests, unsigned STATUS carries no SSID, and a signed update older than the running version is refused (0.1.3+). The pod pins its bridge after the first confirmed pairing (pod firmware 3.10.7+) |
+| Paired pod only: trust on first use, the key agreed with X25519 (never sent), then every request and its response carry a truncated HMAC-SHA256 over a per-boot nonce and a strictly increasing counter (no replay across requests or reboots). The pairing key is stored in NVS (encrypted in production). A dedicated PAIR button, not the FACTORY button, forgets it, and the Wi-Fi credentials with it (0.1.3+). While paired the pod MAC is learned only from signed requests, unsigned STATUS carries no SSID, and a signed update older than the running version is refused (0.1.3+). Each bridge has its own identity key and a certificate for it signed with our release key; pods from 3.10.7 send the Wi-Fi password only to a bridge that shows it and signs the pairing (see "Bridge identity" below) |
 | No secret in the clear on the cable: the Wi-Fi passphrase travels sealed (XChaCha20 under a key derived from the pairing key, padded so its length does not show); a cleartext passphrase is refused | `components/bridge_core/bwp_crypto.c` (Monocypher), PROTOCOL.md "Encrypted passphrase" | `components/bridge_core/pairing.c`, `main/control.c`, PROTOCOL.md "Pairing" |
 | Wi-Fi: no WEP or WPA1/TKIP; WPA2-PSK minimum unless the user stores no passphrase (open network); WPA3-SAE and PMF when the AP offers them | `main/wifi.c` |
 | Fixed regulatory domain (`CONFIG_BRIDGE_COUNTRY`, default `US`), no 802.11d adoption | `main/wifi.c` |
@@ -25,6 +25,39 @@ roughly the same things: secure update, protected credentials, minimal attack su
 | OTA images must come with the pod's signed manifest (Ed25519, the pod's own release keys; target `bridge`, size and SHA-256 checked) and be named `benchpod-wifi-bridge`; production adds secure boot v2 (RSA-3072). Two app slots, and a new image stays only once the pod has talked to it (else rollback) |
 | No user-reachable serial port: USB-C is power only, UART0 is on TC2030 pads inside the case, the console cannot update firmware | hardware, `main/console.c` | `main/ota.c` |
 | Factory reset erases the credentials: button held 5 s while running, control channel, debug console; button held at power-up also restores the factory image (bootloader) | `main/board.c` |
+
+## Bridge identity
+
+Firmware 0.1.3 and pod firmware 3.10.7 (protocol: [PROTOCOL.md](PROTOCOL.md), Pairing).
+
+- **The key.** On its first boot of 0.1.3 a bridge makes an Ed25519 identity key from its RNG and
+  keeps the seed in NVS next to the pairing key (encrypted in production builds). The PAIR
+  button and FACTORY_RESET keep it. Erasing NVS (the power-up factory restore) makes a new key,
+  and the bridge then needs a new certificate.
+- **The certificate.** A 128-byte manifest in the pod's signing format with target `bridge-id`
+  (8) over the SHA-256 of the identity public key, signed with the release key `FW_SIGNING_KEY`
+  (the developer key on development pods). The pod checks it against the keys it trusts for
+  updates; the bridge checks it against its own key and the same keys before it stores it.
+- **What the pod does with it.** Pairing with any bridge still works (the bridge stays usable for
+  STATUS, SCAN and signed updates), but the Wi-Fi password goes only to a bridge whose PAIR answer
+  carries a valid certificate and a signature by its identity key over both pairing keys and
+  both nonces. A fake bridge on the cable never gets the password. There is no fallback: a bridge
+  without a certificate cannot get Wi-Fi credentials from a 3.10.7 pod, so every bridge needs one
+  before it is shipped or used with new pod firmware.
+- **Provisioning a bridge.**
+  1. Plug it into a pod's Ethernet port; on the pod's USB console, `bridge` shows `identity:`, or
+     run `python3 tools/bridge_cert.py identity --port <pod console>`.
+  2. Sign it: Actions > "Sign bridge identity" (`.github/workflows/sign-bridge-id.yml`) with that
+     key. It runs in the `release` environment, so a reviewer approves the run, and returns the
+     certificate as an artifact (`bridge-id.sig`, `bridge-id.hex`). For a development pod and
+     bridge: `python3 ../tools/fwsign.py sign-bridge-id --key ~/.config/benchpod/fw-signing-dev.key
+     --id <key> --release 3.10.7 -o bridge-id.sig` (only pods that trust the developer key accept it).
+  3. `python3 tools/bridge_cert.py install --port <pod console> bridge-id.sig` (or `bridge cert
+     <1-4> <hex>` by hand, or `id-cert <hex>` on the bridge's own console, or `bridgectl.py
+     set-cert`). The pod checks the bridge again by itself and reports `genuine: yes`.
+- **Factory.** Step 1 to 3 belong in the factory flow after the first boot. Keeping the identity
+  out of the NVS the factory restore erases (a partition of its own, written at the factory) is
+  possible later; it needs the partition table changed over the pads.
 
 ## Dev builds (unlocked)
 
