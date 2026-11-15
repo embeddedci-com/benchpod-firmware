@@ -223,6 +223,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_status` | T0 | The SPI session's pins, rate and mode | object | no |
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
+| `esp_flash` | T1 | Flash an ESP32-family target over its UART ROM bootloader | object | no |
 | `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
 | `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
 | `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
@@ -2765,6 +2766,67 @@ bits; a part that ships protected needs its status register written with `spi_xf
 
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
+
+## ESP32 targets (flash over the UART ROM bootloader)
+
+`esp_flash` writes an image into an ESP32-family target's flash through the chip's own ROM
+bootloader, the way `esptool` does, with no USB cable to the target. ESP32, ESP32-S2, S3, C2, C3,
+C6 and H2; the ESP8266 is refused. Wiring, at 3.3 V:
+
+| Target | Pod |
+|---|---|
+| U0TXD (TXD0) | an LA pin, `rx` |
+| U0RXD (RXD0) | an LA pin, `tx` |
+| IO0 (IO9 on the C3, C6 and C2) | an LA pin, `boot`, driven open-drain |
+| EN | the pod's reset pin (`"en":"nrst"`, the default) or an LA pin, open-drain |
+| GND | GND |
+
+Stage the image in PSRAM first with `load_bin` and `"psram":true` (a stream connection, as for
+`spi_stream`), then start the flash. It runs in the background: `start` and `sync` answer at once
+and `status` reports progress. Meanwhile captures, uploads and updates answer busy.
+
+```json
+{"cmd":"esp_flash","op":"start","rx":3,"tx":4,"boot":5,"en":"nrst","offset":65536,"len":524288,
+ "baud":460800,"flash_size":4194304,"run":true}
+{"cmd":"esp_flash","op":"status"}
+```
+
+| Field | Meaning |
+|---|---|
+| `op` | `start` (write), `sync` (enter the loader and read the chip, flash untouched), `status`, `abort` |
+| `rx`, `tx`, `boot` | LA pins (1..14), see the wiring above |
+| `en` | `"nrst"` (default) or an LA pin |
+| `offset` | flash address, a multiple of 4096 (`start` only, default 0) |
+| `len` | bytes of the staged upload to write (`start` only) |
+| `baud` | rate after the ROM's CHANGE_BAUDRATE, 9600..2000000 (default 460800; the loader starts at 115200) |
+| `flash_size` | the target's flash size in bytes, a power of two (default 4 MB); `offset + len` must fit |
+| `run` | `true` (default): reset into the new image at the end; `false`: stay in the loader |
+
+Sequence: boot pin low, EN low 100 ms, EN released, 50 ms, SYNC (retried); the boot pin is
+released once the ROM answers. Then CHANGE_BAUDRATE, SPI_ATTACH, SPI_SET_PARAMS, FLASH_BEGIN
+(the ROM erases the region, seconds for a large image), the data in 1 KB blocks, the chip's MD5
+of the region, FLASH_END. With `run` the pod pulses EN with the boot pin released. Every pin is
+released at the end, whatever the result. Write each region of a multi-file image (bootloader,
+partition table, application) with its own `start`, `run` only on the last.
+
+`start` and `sync` reply `{"started":true,"op":"start"}`. `status` (and `abort`) reply:
+
+```json
+{"running":false,"op":"start","phase":"done","done":512,"total":512,"chip":"ESP32-S3",
+ "magic":"0x00000009","offset":65536,"len":524288,"baud":460800,"resends":0,"ms":21450,
+ "md5":"9e107d9d372bb6826bd81d3542a419d6","result":"ok"}
+```
+
+`phase` is `enter`, `sync`, `detect`, `baud`, `attach`, `params`, `erase`, `write`, `verify`, `end`,
+`reset` or `done`; `done`/`total` count 1 KB blocks. `result` is `null` while running, then `ok`
+(the chip's MD5 matched), `unverified` (every block acknowledged, no MD5 came back), or the
+failure: `no answer from the ROM loader` (wiring, straps, or the target is not powered),
+`FLASH_BEGIN failed`, `a block was not acknowledged`, `MD5 mismatch`, `chip not supported
+(ESP8266)`, `aborted`.
+
+Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
+staged upload`, `busy`, `busy: an ESP32 flash is running`, `uart busy: stop the uart proxy first`,
+a pin conflict, `this pod has no reset pin: wire EN to an LA pin and pass en`.
 
 ## I2C master
 

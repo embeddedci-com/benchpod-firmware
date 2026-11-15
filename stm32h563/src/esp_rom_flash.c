@@ -234,7 +234,7 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
     log_printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
     rom_enter();
     static esp_rom_io_t io;
-    io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL };
+    io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };
     static esp_rom_job_t j;
     esp_rom_job_start_sync(&j, &io);
     int rc = run_blocking(&j);
@@ -286,7 +286,7 @@ int esp_rom_flash_start(esp_flash_done_fn done)
     s_t0 = HAL_GetTick();
     s_rx_overruns = 0;
     rom_enter();
-    s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP };
+    s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP, NULL };
     esp_rom_job_start(&s_job, &s_io, blob_store_info(BLOB_ESP)->len, 0);
     return 0;
 }
@@ -345,7 +345,7 @@ int esp_rom_flash_erase_nvs(void)
     rom_enter();
     {
         static esp_rom_io_t io;
-        io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL };   /* NULL: erase */
+        io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };   /* NULL: erase */
         static esp_rom_job_t j;
         esp_rom_job_start(&j, &io, size, off);
         rc = run_blocking(&j) == ESP_ROM_OK ? 0 : -1;   /* an unverified erase is not "blank" */
