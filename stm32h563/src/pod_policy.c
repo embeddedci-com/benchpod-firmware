@@ -54,12 +54,19 @@ static const ab_store_t k_store2 = {
     .legacy_magic = 0,
 };
 
-static bool    s_pinned;
-static uint8_t s_pin_mac[6];
-static uint8_t s_pin_pub[32];
+/* The pin is not kept in RAM (the bridge client holds it): read from the version 2 record. */
+static bool load_pin(pod_policy_rec2_t *r2) {
+    uint32_t behind;
+    return ab_store_load_version(&k_store2, 2, r2, sizeof(*r2), &behind) == 0 &&
+           r2->v1.magic == POD_POLICY_RECORD_MAGIC && r2->bridge_pinned == 1;
+}
 
 static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SIG_POLICY_AUDIT,
                                   .lan = POD_LAN_OPEN };
+
+/* The one buffer for a formatted refusal: callers (the hw worker, one command at a time) send it
+   before asking again. */
+static char s_why[96];
 
 __attribute__((weak)) void pod_policy_on_lan_change(pod_lan_policy_t now) { (void)now; }
 __attribute__((weak)) void pod_policy_on_usb_net_change(bool on) { (void)on; }
@@ -73,11 +80,6 @@ void pod_policy_load(void) {
     bool h2 = ab_store_load_version(&k_store2, 2, &r2, sizeof(r2), &b2) == 0 &&
               r2.v1.magic == POD_POLICY_RECORD_MAGIC;
     if (h2 && (!h1 || b2 < b1)) { r = r2.v1; h1 = true; }   /* the newer of the two */
-    s_pinned = h2 && r2.bridge_pinned == 1;
-    if (s_pinned) {
-        memcpy(s_pin_mac, r2.bridge_mac, 6);
-        memcpy(s_pin_pub, r2.bridge_pub, 32);
-    }
     if (h1) {
         /* A value from newer firmware this one does not know: take the strictest known one
            rather than silently opening up. */
@@ -114,29 +116,29 @@ static const char *save_all(const pod_policy_rec_t *r, bool pinned, const uint8_
     if (ab_store_save(&k_store2, &r2, sizeof(r2)) != 0 || ab_store_save(&k_store, r, sizeof(*r)) != 0)
         return "could not save the policy";
     s_rec = *r;
-    s_pinned = pinned;
-    if (pinned) {
-        memcpy(s_pin_mac, mac, 6);
-        memcpy(s_pin_pub, pub, 32);
-    }
     return NULL;
 }
 
 static const char *save(const pod_policy_rec_t *r) {
-    return save_all(r, s_pinned, s_pin_mac, s_pin_pub);
+    pod_policy_rec2_t r2;
+    bool pinned = load_pin(&r2);
+    return save_all(r, pinned, r2.bridge_mac, r2.bridge_pub);
 }
 
 bool pod_policy_bridge_pin(uint8_t mac[6], uint8_t pub[32]) {
-    if (!s_pinned) return false;
-    memcpy(mac, s_pin_mac, 6);
-    memcpy(pub, s_pin_pub, 32);
+    pod_policy_rec2_t r2;
+    if (!load_pin(&r2)) return false;
+    memcpy(mac, r2.bridge_mac, 6);
+    memcpy(pub, r2.bridge_pub, 32);
     return true;
 }
 
 const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub) {
     static const uint8_t zero[32];
-    if (!mac && !s_pinned) return NULL;
-    if (mac && s_pinned && !memcmp(mac, s_pin_mac, 6) && !memcmp(pub, s_pin_pub, 32)) return NULL;
+    pod_policy_rec2_t r2;
+    bool pinned = load_pin(&r2);
+    if (!mac && !pinned) return NULL;
+    if (mac && pinned && !memcmp(mac, r2.bridge_mac, 6) && !memcmp(pub, r2.bridge_pub, 32)) return NULL;
     const char *why = save_all(&s_rec, mac != NULL, mac ? mac : zero, mac ? pub : zero);
     if (!why) log_printf("[policy] Wi-Fi bridge %s\n", mac ? "pinned" : "pin cleared");
     return why;
@@ -146,8 +148,8 @@ const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
     if ((unsigned)p > FW_SIG_POLICY_REQUIRED) return "sig_policy: unknown policy";
     if (src == POLICY_SRC_LAN) return "sig_policy: change it from the cloud or the USB console";
     if (src == POLICY_SRC_CLOUD && p < pod_policy_sig()) {
-        static char why[96];
-        snprintf(why, sizeof(why), "sig_policy: only the USB console can loosen the policy (now %s)",
+        char *why = s_why;
+        snprintf(why, sizeof(s_why), "sig_policy: only the USB console can loosen the policy (now %s)",
                  fw_sign_policy_name(pod_policy_sig()));
         return why;
     }
@@ -263,9 +265,8 @@ const char *pod_policy_clear_floor(policy_src_t src) {
 
 const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool usb_link) {
     if (src != POLICY_SRC_LAN || usb_link) return NULL;
-    static char why[80];
-    snprintf(why, sizeof(why), "%s: change it from the cloud or over USB", verb);
-    return why;
+    snprintf(s_why, sizeof(s_why), "%s: change it from the cloud or over USB", verb);
+    return s_why;
 }
 
 int pod_policy_sig_from_name(const char *name) {

@@ -26,7 +26,7 @@ void wb_init(wb_t *b, const uint8_t pod_mac[6], const wb_io_t *io)
     memset(b, 0, sizeof(*b));
     memcpy(b->pod_mac, pod_mac, 6);
     b->io = *io;
-    if (b->io.load_pin && b->io.load_pin(b->pin_mac, b->pin_pub, b->io.ctx)) {
+    if (b->io.load_pin && b->io.load_pin(b->mac, b->bridge_pub, b->io.ctx)) {
         b->pinned = true;
     }
 }
@@ -168,12 +168,14 @@ static void copy_str(const bwp_msg_t *m, uint8_t tag, char *out, size_t cap)
 static void learn_bridge_pub(wb_t *b, const uint8_t pub[BWP_PUBKEY_LEN])
 {
     if (b->pinned) {
-        pub = b->pin_pub;  /* the pinned key only: never one from an unsigned frame */
+        pub = b->bridge_pub;  /* the pinned key only: never one from an unsigned frame */
     }
     if (!b->have_secret || (b->have_key && memcmp(pub, b->bridge_pub, BWP_PUBKEY_LEN) == 0)) {
         return;
     }
-    memcpy(b->bridge_pub, pub, BWP_PUBKEY_LEN);
+    if (pub != b->bridge_pub) {
+        memcpy(b->bridge_pub, pub, BWP_PUBKEY_LEN);
+    }
     b->have_key = bwp_pair_key(b->secret, pub, b->pub, pub, b->key) == 0;
 }
 
@@ -197,7 +199,7 @@ static void note_nonce(wb_t *b, const uint8_t *v)
 
 static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
 {
-    if (b->pinned && memcmp(m->src, b->pin_mac, 6) != 0) {
+    if (b->pinned && memcmp(m->src, b->mac, 6) != 0) {
         b->foreign_at = now;  /* not our bridge: never adopted, never paired with */
         b->foreign_seen = true;
         return;
@@ -234,13 +236,13 @@ static void on_hello(wb_t *b, const bwp_msg_t *m, uint32_t now)
     copy_str(m, BWP_T_FW_VERSION, b->info.fw_version, sizeof(b->info.fw_version));
     copy_str(m, BWP_T_HW_REV, b->info.hw_rev, sizeof(b->info.hw_rev));
     if (b->pinned) {
-        learn_bridge_pub(b, b->pin_pub);  /* after our reboot: the key from the pinned public key */
+        learn_bridge_pub(b, b->bridge_pub);  /* after our reboot: the key from the pinned public key */
         if (!(b->info.flags & BWP_F_PAIRED)) {
             /* PAIR pressed or a factory reset there (or a forged HELLO): no pairing on our own. */
             b->info.paired = false;
             b->info.problem = RESET_PINNED;
         } else if (bwp_find(m->body, m->body_len, BWP_T_PUBKEY, &v, &n) && n == BWP_PUBKEY_LEN &&
-                   memcmp(v, b->pin_pub, BWP_PUBKEY_LEN) != 0) {
+                   memcmp(v, b->bridge_pub, BWP_PUBKEY_LEN) != 0) {
             b->info.paired = false;
             b->info.problem = "the Wi-Fi bridge paired with another pod: press PAIR on it, then run "
                               "`bridge pair` on this pod's USB console";
@@ -265,18 +267,14 @@ static void confirm_pairing(wb_t *b)
     }
     b->pinned = true;
     b->pair_window = false;
-    memcpy(b->pin_mac, b->mac, 6);
-    memcpy(b->pin_pub, b->bridge_pub, BWP_PUBKEY_LEN);
     if (b->io.save_pin) {
-        b->io.save_pin(b->pin_mac, b->pin_pub, b->io.ctx);
+        b->io.save_pin(b->mac, b->bridge_pub, b->io.ctx);
     }
 }
 
 void wb_allow_pairing(wb_t *b, uint32_t now)
 {
     b->pinned = false;
-    memset(b->pin_mac, 0, sizeof(b->pin_mac));
-    memset(b->pin_pub, 0, sizeof(b->pin_pub));
     if (b->io.save_pin) {
         b->io.save_pin(NULL, NULL, b->io.ctx);
     }
@@ -605,7 +603,7 @@ void wb_get_info(const wb_t *b, uint32_t now, wb_info_t *out)
 {
     *out = b->info;
     out->present = present(b, now);
-    memcpy(out->mac, b->pinned && !b->seen ? b->pin_mac : b->mac, 6);
+    memcpy(out->mac, b->mac, 6);
     out->pinned = b->pinned;
     out->pairing_open = pairing_allowed(b, now);
     out->foreign = b->foreign_seen && !elapsed(now, b->foreign_at, WB_HELLO_TIMEOUT_MS);

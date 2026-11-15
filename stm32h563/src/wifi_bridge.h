@@ -136,14 +136,14 @@ typedef struct {
     /* pinning (firmware 3.10.7+, security review 2026-11 H4): once a pairing is confirmed by a
        signed answer the pod keeps that bridge's MAC and key; HELLOs from other MACs are ignored
        and the pod never starts a pairing on its own again until the user allows it. */
+    /* While pinned, mac and bridge_pub above ARE the pinned bridge's (set at wb_init or by the
+       confirmed pairing, never from an unsigned frame): no second copy in RAM. */
     bool pinned;
-    uint8_t pin_mac[6];
-    uint8_t pin_pub[BWP_PUBKEY_LEN];
     bool eth_addressed;          /* the Ethernet netif has an IPv4 address (wb_set_addressed) */
     bool pair_window;            /* wb_allow_pairing opened a window... */
+    bool foreign_seen;           /* a HELLO from another MAC while pinned, at foreign_at */
     uint32_t pair_until;         /* ...until then */
-    uint32_t foreign_at;         /* last HELLO from another MAC while pinned */
-    bool foreign_seen;
+    uint32_t foreign_at;
 
     /* the one request in flight */
     wb_req_state_t req_state;

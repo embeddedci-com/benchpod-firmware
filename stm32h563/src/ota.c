@@ -31,7 +31,8 @@ static ota_target_t s_target = OTA_TARGET_FIRMWARE;
 static uint32_t    s_version;              /* gateware version of a blob   */
 static char        s_err[64];
 static fw_sig_result_t s_sig = FW_SIG_NONE;  /* last begin's signature check */
-static fw_sig_manifest_t s_manifest;        /* its fields when s_sig == FW_SIG_OK */
+static uint32_t    s_sig_release;          /* its manifest's release and flags (rollback floor) */
+static uint8_t     s_sig_flags;
 static char        s_sig_key[2 * FW_SIGN_KEY_ID_LEN + 1];
 static uint32_t    s_wd_seen;              /* s_received at the last watchdog mark */
 static uint32_t    s_wd_mark_ms;           /* caller clock at that mark            */
@@ -179,33 +180,32 @@ __attribute__((weak)) const char *pod_policy_raise_floor(uint32_t release) {
 /* Does the signature check let this image in? NULL = yes, else the refusal (63 chars at most:
    it becomes the session's error). external_lan: the begin came over Ethernet or Wi-Fi, not
    the USB network adapter, the console or the cloud. */
-static const char *signature_refusal(bool external_lan) {
-    static char e[64];
+static const char *signature_refusal(bool external_lan, char *e, size_t cap) {
     const char *res = fw_sign_result_name(s_sig);
     if (s_target == OTA_TARGET_BRIDGE || s_target == OTA_TARGET_ESP) {
         /* The bridge refuses an update without a good manifest whatever our policy, so do not
            store one. The C3 image sees the Wi-Fi password and every Wi-Fi frame: same rule
            (security review 2026-11, M6). */
         if (s_sig == FW_SIG_OK) return NULL;
-        snprintf(e, sizeof(e), "signature: %s (%s images must be signed)", res, ota_target_name(s_target));
+        snprintf(e, cap, "signature: %s (%s images must be signed)", res, ota_target_name(s_target));
         return e;
     }
     if (!fw_sign_accept(s_sig, fw_sign_policy())) {
-        snprintf(e, sizeof(e), "signature: %s", res);
+        snprintf(e, cap, "signature: %s", res);
         return e;
     }
     /* The LAN API has no client authentication: from Ethernet or Wi-Fi only a good signature,
        whatever the policy, unless the user allowed more on the device (H3). */
     if (external_lan && s_sig != FW_SIG_OK && !fw_sign_lan_unsigned()) {
-        snprintf(e, sizeof(e), "signature: %s (LAN needs a signed image; use USB)", res);
+        snprintf(e, cap, "signature: %s (LAN needs a signed image; use USB)", res);
         return e;
     }
     /* Rollback floor (M7): a signed firmware image older than the floor. Unsigned images carry
        no trustworthy version; the policy above decides about them. */
-    if (s_sig == FW_SIG_OK && s_target == OTA_TARGET_FIRMWARE && s_manifest.release < fw_sign_floor()) {
+    if (s_sig == FW_SIG_OK && s_target == OTA_TARGET_FIRMWARE && s_sig_release < fw_sign_floor()) {
         char a[16], b[16];
-        snprintf(e, sizeof(e), "rollback: %s is below this pod's floor %s",
-                 fw_sign_release_str(s_manifest.release, a, sizeof(a)), fw_sign_release_str(fw_sign_floor(), b, sizeof(b)));
+        snprintf(e, cap, "rollback: %s is below this pod's floor %s",
+                 fw_sign_release_str(s_sig_release, a, sizeof(a)), fw_sign_release_str(fw_sign_floor(), b, sizeof(b)));
         return e;
     }
     return NULL;
@@ -217,7 +217,8 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
     fw_sig_manifest_t m;
     memset(&m, 0, sizeof(m));
     s_sig = fw_sign_check(sig, sig_len, (uint8_t)s_target, s_size, expect, &m);
-    s_manifest = m;
+    s_sig_release = m.release;
+    s_sig_flags = m.flags;
     s_sig_key[0] = '\0';
     if (s_sig != FW_SIG_NONE && s_sig != FW_SIG_FORMAT)
         for (unsigned i = 0; i < FW_SIGN_KEY_ID_LEN; i++)
@@ -225,7 +226,8 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
     printf("[ota] signature: %s%s%s (policy %s%s)\n", fw_sign_result_name(s_sig),
            s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()),
            external_lan ? ", from the LAN" : "");
-    const char *why = signature_refusal(external_lan);
+    char e[64];
+    const char *why = signature_refusal(external_lan, e, sizeof(e));
     if (!why) {
         if (s_target == OTA_TARGET_BRIDGE) memcpy(s_sig_copy, sig, FW_SIGN_MANIFEST_LEN);
         return 0;
@@ -235,8 +237,8 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
 }
 
 void ota_floor_on_commit(void) {
-    if (s_target != OTA_TARGET_FIRMWARE || s_sig != FW_SIG_OK || !(s_manifest.flags & FW_SIG_FLAG_FLOOR)) return;
-    const char *why = pod_policy_raise_floor(s_manifest.release);
+    if (s_target != OTA_TARGET_FIRMWARE || s_sig != FW_SIG_OK || !(s_sig_flags & FW_SIG_FLAG_FLOOR)) return;
+    const char *why = pod_policy_raise_floor(s_sig_release);
     if (why) printf("[ota] rollback floor not raised: %s\n", why);
 }
 
