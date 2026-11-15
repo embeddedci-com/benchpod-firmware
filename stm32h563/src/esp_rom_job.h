@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-/* ---- ESP32-C3 ROM-loader write job, one step at a time --------------------
+/* ---- ESP32 ROM-loader write job, one step at a time -----------------------
  *
  * The esptool SLIP command set (SYNC, READ_REG, SPI_ATTACH, FLASH_BEGIN, FLASH_DATA,
  * SPI_FLASH_MD5, FLASH_END) as a state machine that never waits: esp_rom_job_step() looks at
@@ -16,8 +16,14 @@
  * Portable (no HAL): the UART, the clock and the image source come in through esp_rom_io_t,
  * which is how test_esp_rom_job.c drives it against a simulated C3 ROM.
  *
- * The C3 must already be in its ROM download mode (straps) with the UART up; the job does not
- * touch EN/BOOT.  It finishes with the C3 still in its loader (FLASH_END "stay").
+ * Used for the pod's own ESP32-C3 (esp_rom_flash.c) and for an ESP32-family DUT on the LA pins
+ * (esp_dut_flash.c).  With esp_rom_opts_t it also changes the baud rate (CHANGE_BAUDRATE) and
+ * sets the flash size (SPI_SET_PARAMS); without them it runs exactly the C3 sequence.  The chip
+ * magic picks the FLASH_BEGIN form: 4 words on the original ESP32, 5 (encrypted flag) on every
+ * later chip.  The ESP8266 is refused.
+ *
+ * The chip must already be in its ROM download mode (straps) with the UART up; the job does not
+ * touch EN/BOOT.  It finishes with the chip still in its loader (FLASH_END "stay").
  * -------------------------------------------------------------------------- */
 
 #define ESP_ROM_BLOCK            0x400u   /* ROM-loader FLASH_DATA block size        */
@@ -39,12 +45,24 @@ typedef struct {
     /* The image: `n` bytes at `off`.  NULL = erase (the region is written as 0xFF). */
     esp_rom_read_fn read;
     void           *read_ctx;
+    /* Optional: switch our UART to `baud` (after the ROM acknowledged CHANGE_BAUDRATE).  NULL =
+       the job never changes the baud rate. */
+    void           (*set_baud)(uint32_t baud);
 } esp_rom_io_t;
+
+typedef struct {
+    uint32_t baud;        /* > 0 (and io->set_baud): CHANGE_BAUDRATE to it after the chip magic */
+    uint32_t flash_size;  /* > 0: SPI_SET_PARAMS with this total flash size in bytes            */
+} esp_rom_opts_t;
+
+/* Chip magics (the word at 0x40001000, esptool's CHIP_DETECT_MAGIC_VALUE). */
+#define ESP_MAGIC_ESP32    0x00F01D83u
+#define ESP_MAGIC_ESP8266  0xFFF0C101u
 
 typedef enum {
     ESP_ROM_IDLE = 0,
-    ESP_ROM_SYNC, ESP_ROM_MAGIC, ESP_ROM_ATTACH, ESP_ROM_BEGIN, ESP_ROM_DATA, ESP_ROM_MD5,
-    ESP_ROM_END,
+    ESP_ROM_SYNC, ESP_ROM_MAGIC, ESP_ROM_BAUD, ESP_ROM_ATTACH, ESP_ROM_PARAMS, ESP_ROM_BEGIN,
+    ESP_ROM_DATA, ESP_ROM_MD5, ESP_ROM_END,
     ESP_ROM_DONE,                        /* finished: see result                         */
 } esp_rom_phase_t;
 
@@ -57,6 +75,7 @@ typedef enum {
 #define ESP_ROM_ERR_DATA    -4   /* a block was not acknowledged after ESP_ROM_DATA_ATTEMPTS */
 #define ESP_ROM_ERR_MD5     -5   /* the C3's MD5 differs: what it holds is not the image     */
 #define ESP_ROM_ERR_ARGS    -6
+#define ESP_ROM_ERR_CHIP    -7   /* a chip this job does not write (ESP8266)                 */
 
 typedef struct {
     const esp_rom_io_t *io;
@@ -67,6 +86,8 @@ typedef struct {
     uint8_t  status_len;                 /* ROM status bytes per reply (from the SYNC reply) */
     uint32_t chip_magic;
     bool     sync_only;                  /* esp_rom_job_start_sync: stop after the chip magic */
+    esp_rom_opts_t opts;
+    uint32_t baud;                       /* the rate the link runs at once BAUD is done (0 = unchanged) */
     uint32_t resends;                    /* FLASH_DATA blocks sent more than once          */
     uint32_t md5_retries;
     char     want_md5[33], got_md5[33];
@@ -82,6 +103,10 @@ typedef struct {
    first SYNC.  The job owns static buffers, so one job runs at a time. */
 void esp_rom_job_start(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset);
 
+/* The same with options (NULL = none, which is esp_rom_job_start). */
+void esp_rom_job_start_ex(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset,
+                          const esp_rom_opts_t *opts);
+
 /* Only SYNC and read the chip magic (the wiring test): ESP_ROM_OK or ESP_ROM_ERR_SYNC. */
 void esp_rom_job_start_sync(esp_rom_job_t *j, const esp_rom_io_t *io);
 
@@ -94,5 +119,11 @@ static inline uint32_t esp_rom_job_blocks_done(const esp_rom_job_t *j) {
 }
 
 const char *esp_rom_result_str(int result);
+
+/* "ESP32-S3" style name for a chip magic, or "unknown". */
+const char *esp_rom_chip_name(uint32_t magic);
+
+/* The chip-magic phase or later and the phase name ("sync", "data", ...), for status replies. */
+const char *esp_rom_phase_str(esp_rom_phase_t phase);
 
 #endif /* ESP_ROM_JOB_H */

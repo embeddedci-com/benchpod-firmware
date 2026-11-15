@@ -46,10 +46,15 @@ static struct {
     bool     corrupt;           /* flip a flash byte before the MD5                        */
     uint32_t reply_ms;          /* ROM processing time per command                         */
     uint32_t magic;
+    bool     refuse_baud;       /* answer CHANGE_BAUDRATE with an error                    */
+    uint32_t baud;              /* the ROM's line rate (115200 until CHANGE_BAUDRATE)     */
     /* What happened. */
-    int      sync_seen, data_seen, md5_seen, end_seen, begin_seen;
-    uint32_t begin_off, begin_size;
+    int      sync_seen, data_seen, md5_seen, end_seen, begin_seen, baud_seen, params_seen;
+    uint32_t begin_off, begin_size, begin_dlen, params_size;
 } rom;
+
+static uint32_t host_baud;      /* what the job set our UART to (io_set_baud) */
+static void io_set_baud(uint32_t b) { host_baud = b; }
 
 static void rom_reset(void)
 {
@@ -59,6 +64,8 @@ static void rom_reset(void)
     rom.bad_chk_seq = -1;
     rom.reply_ms = 2;
     rom.magic = 0x1bC0DB6fu;    /* holds SLIP_END and SLIP_ESC: the reply needs escapes */
+    rom.baud = 115200;
+    host_baud = 115200;
     memset(flash, 0x5A, sizeof(flash));
     rx_head = rx_tail = 0;
     now = 1000;
@@ -116,7 +123,22 @@ static uint32_t io_send(const uint8_t *frame, uint32_t n)
     const uint8_t *d = cmdbuf + 8;
     uint32_t at = now + wire + rom.reply_ms;
     rx_push(now + 1, 0x55);               /* line noise outside any frame */
+    if (host_baud != rom.baud) return wire;   /* the rates disagree: the ROM hears garbage */
     switch (op) {
+    case 0x0F:                             /* CHANGE_BAUDRATE: answer at the old rate, then switch */
+        rom.baud_seen++;
+        CHECK(dlen == 8 && le32(d + 4) == 0);
+        if (rom.refuse_baud) { reply(at, op, 0, NULL, 0, 1, 0x05); break; }
+        reply(at, op, 0, NULL, 0, 0, 0);
+        rom.baud = le32(d);
+        break;
+    case 0x0B:                             /* SPI_SET_PARAMS */
+        rom.params_seen++;
+        CHECK(dlen == 24);
+        rom.params_size = le32(d + 4);
+        CHECK(le32(d + 8) == 0x10000 && le32(d + 12) == 4096 && le32(d + 16) == 256);
+        reply(at, op, 0, NULL, 0, 0, 0);
+        break;
     case 0x08:                             /* SYNC: the ROM answers several times */
         rom.sync_seen++;
         if (rom.sync_ignore > 0) { rom.sync_ignore--; break; }
@@ -127,7 +149,8 @@ static uint32_t io_send(const uint8_t *frame, uint32_t n)
     case 0x02:
         rom.begin_seen++;
         rom.begin_size = le32(d); rom.begin_off = le32(d + 12);
-        CHECK(dlen == 20);
+        rom.begin_dlen = dlen;
+        CHECK(dlen == (rom.magic == 0x00F01D83u ? 16u : 20u));
         reply(at + 50, op, 0, NULL, 0, 0, 0);
         break;
     case 0x03: {
@@ -183,7 +206,7 @@ static int img_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
     return 0;
 }
 
-static esp_rom_io_t io = { io_send, io_rx_byte, now_ms, img_read, NULL };
+static esp_rom_io_t io = { io_send, io_rx_byte, now_ms, img_read, NULL, NULL };
 
 /* Run the job to the end, 1 ms per step (the worker loop). */
 static int run(esp_rom_job_t *j, uint32_t len, uint32_t off)
@@ -352,8 +375,86 @@ static void test_args(void)
     CHECK(rom.sync_seen == 0);
 }
 
+/* The original ESP32: 4-word FLASH_BEGIN; a later chip: 5 words. */
+static void test_esp32_classic_begin(void)
+{
+    rom_reset(); fill_image();
+    rom.magic = ESP_MAGIC_ESP32;
+    esp_rom_job_t j;
+    CHECK(run(&j, sizeof(image), 0x10000 - 0x8000) == ESP_ROM_OK);
+    CHECK(rom.begin_dlen == 16);
+    CHECK(strcmp(esp_rom_chip_name(j.chip_magic), "ESP32") == 0);
+
+    rom_reset(); fill_image();
+    rom.magic = 0x00000009u;              /* ESP32-S3 */
+    CHECK(run(&j, sizeof(image), 0) == ESP_ROM_OK);
+    CHECK(rom.begin_dlen == 20);
+    CHECK(strcmp(esp_rom_chip_name(j.chip_magic), "ESP32-S3") == 0);
+}
+
+static void test_esp8266_refused(void)
+{
+    rom_reset(); fill_image();
+    rom.magic = ESP_MAGIC_ESP8266;
+    esp_rom_job_t j;
+    CHECK(run(&j, sizeof(image), 0) == ESP_ROM_ERR_CHIP);
+    CHECK(rom.begin_seen == 0 && rom.data_seen == 0);
+}
+
+/* Options: CHANGE_BAUDRATE then SPI_SET_PARAMS, and the whole write at the new rate. */
+static int run_opts(esp_rom_job_t *j, const esp_rom_io_t *pio, const esp_rom_opts_t *o)
+{
+    esp_rom_job_start_ex(j, pio, sizeof(image), 0, o);
+    for (int guard = 0; guard < 2000000 && esp_rom_job_step(j); guard++) now++;
+    CHECK(j->phase == ESP_ROM_DONE);
+    return j->result;
+}
+
+static void test_opts_baud_and_params(void)
+{
+    esp_rom_io_t bio = io; bio.set_baud = io_set_baud;
+    esp_rom_opts_t o = { 460800, 8u * 1024u * 1024u };
+    esp_rom_job_t j;
+
+    rom_reset(); fill_image();
+    CHECK(run_opts(&j, &bio, &o) == ESP_ROM_OK);
+    CHECK(rom.baud_seen == 1 && rom.baud == 460800 && host_baud == 460800 && j.baud == 460800);
+    CHECK(rom.params_seen == 1 && rom.params_size == 8u * 1024u * 1024u);
+    CHECK(memcmp(flash, image, sizeof(image)) == 0);
+
+    /* Refused: stays at 115200 and still writes. */
+    rom_reset(); fill_image();
+    rom.refuse_baud = true;
+    CHECK(run_opts(&j, &bio, &o) == ESP_ROM_OK);
+    CHECK(rom.baud == 115200 && host_baud == 115200 && j.baud == 0);
+
+    /* No set_baud in the io: no CHANGE_BAUDRATE at all; no flash size: no SET_PARAMS. */
+    rom_reset(); fill_image();
+    esp_rom_opts_t none = { 460800, 0 };
+    CHECK(run_opts(&j, &io, &none) == ESP_ROM_OK);
+    CHECK(rom.baud_seen == 0 && rom.params_seen == 0);
+
+    /* Plain esp_rom_job_start (the C3 path) sends neither. */
+    rom_reset(); fill_image();
+    CHECK(run(&j, sizeof(image), 0) == ESP_ROM_OK);
+    CHECK(rom.baud_seen == 0 && rom.params_seen == 0);
+}
+
+static void test_names(void)
+{
+    CHECK(strcmp(esp_rom_chip_name(0x1B31506Fu), "ESP32-C3") == 0);
+    CHECK(strcmp(esp_rom_chip_name(0x2CE0806Fu), "ESP32-C6") == 0);
+    CHECK(strcmp(esp_rom_chip_name(0x12345678u), "unknown") == 0);
+    CHECK(strcmp(esp_rom_phase_str(ESP_ROM_DATA), "write") == 0);
+    CHECK(strcmp(esp_rom_phase_str(ESP_ROM_DONE), "done") == 0);
+}
+
 int main(void)
 {
+    test_esp32_classic_begin();
+    test_esp8266_refused();
+    test_opts_baud_and_params();
+    test_names();
     test_clean_write();
     test_lost_data_reply();
     test_rom_error_status();
