@@ -54,7 +54,8 @@ static struct {
 } rom;
 
 static uint32_t host_baud;      /* what the job set our UART to (io_set_baud) */
-static void io_set_baud(uint32_t b) { host_baud = b; }
+static bool host_baud_fails;   /* io_set_baud refuses (the pod's UART cannot follow) */
+static int io_set_baud(uint32_t b) { if (host_baud_fails) return -1; host_baud = b; return 0; }
 
 static void rom_reset(void)
 {
@@ -431,6 +432,13 @@ static void test_opts_baud_and_params(void)
     rom.refuse_baud = true;
     CHECK(run_opts(&j, &bio, &o) == ESP_ROM_OK);
     CHECK(rom.baud == 115200 && host_baud == 115200 && j.baud == 0);
+
+    /* The ROM switched but our UART could not: stop at once with ESP_ROM_ERR_BAUD. */
+    rom_reset(); fill_image();
+    host_baud_fails = true;
+    CHECK(run_opts(&j, &bio, &o) == ESP_ROM_ERR_BAUD);
+    CHECK(j.failed_phase == ESP_ROM_BAUD && rom.params_seen == 0);
+    host_baud_fails = false;
 
     /* No set_baud in the io: no CHANGE_BAUDRATE at all; no flash size: no SET_PARAMS. */
     rom_reset(); fill_image();

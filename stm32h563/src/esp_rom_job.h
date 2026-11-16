@@ -45,9 +45,9 @@ typedef struct {
     /* The image: `n` bytes at `off`.  NULL = erase (the region is written as 0xFF). */
     esp_rom_read_fn read;
     void           *read_ctx;
-    /* Optional: switch our UART to `baud` (after the ROM acknowledged CHANGE_BAUDRATE).  NULL =
-       the job never changes the baud rate. */
-    void           (*set_baud)(uint32_t baud);
+    /* Optional: switch our UART to `baud` (after the ROM acknowledged CHANGE_BAUDRATE); 0 when
+       it did.  NULL = the job never changes the baud rate. */
+    int            (*set_baud)(uint32_t baud);
 } esp_rom_io_t;
 
 typedef struct {
@@ -76,6 +76,7 @@ typedef enum {
 #define ESP_ROM_ERR_MD5     -5   /* the C3's MD5 differs: what it holds is not the image     */
 #define ESP_ROM_ERR_ARGS    -6
 #define ESP_ROM_ERR_CHIP    -7   /* a chip this job does not write (ESP8266)                 */
+#define ESP_ROM_ERR_BAUD    -8   /* the ROM changed its baud rate but our UART could not     */
 
 typedef struct {
     const esp_rom_io_t *io;

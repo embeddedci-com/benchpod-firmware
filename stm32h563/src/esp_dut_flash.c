@@ -97,10 +97,17 @@ static uint32_t io_send(const uint8_t *frame, uint32_t n)
 
 static uint32_t io_now(void) { return HAL_GetTick(); }
 
-static void io_set_baud(uint32_t baud)
+static int io_set_baud(uint32_t baud)
 {
-    if (fpga_uart_config(s.p.rx, s.p.tx, baud, true) == 0) s.uart_baud = baud;
-    else log_printf("[espdut] could not set the UART to %lu baud\n", (unsigned long)baud);
+    /* fpga_uart_config refuses to re-arm an armed UART (-2, "in use"): disarm it first. */
+    (void)fpga_uart_config(s.p.rx, s.p.tx, baud, false);
+    if (fpga_uart_config(s.p.rx, s.p.tx, baud, true) != 0) {
+        log_printf("[espdut] could not set the UART to %lu baud\n", (unsigned long)baud);
+        return -1;
+    }
+    s_rx_n = s_rx_i = 0;
+    s.uart_baud = baud;
+    return 0;
 }
 
 static int io_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)

@@ -300,8 +300,14 @@ bool esp_rom_job_step(esp_rom_job_t *j)
 
     case ESP_ROM_BAUD:
         if (r == 0) {
-            /* The answer came at the old rate; the ROM switches after sending it. */
-            j->io->set_baud(j->opts.baud);
+            /* The answer came at the old rate; the ROM switches after sending it.  If our UART
+               cannot follow, nothing more gets through: stop here, not 40 s later. */
+            if (j->io->set_baud(j->opts.baud) != 0) {
+                log_printf("[espflash] could not switch our UART to %lu baud\n",
+                           (unsigned long)j->opts.baud);
+                finish(j, ESP_ROM_ERR_BAUD);
+                break;
+            }
             j->baud = j->opts.baud;
             log_printf("[espflash] baud rate now %lu\n", (unsigned long)j->opts.baud);
         } else {
@@ -423,6 +429,7 @@ const char *esp_rom_result_str(int result)
     case ESP_ROM_ERR_DATA:   return "a block was not acknowledged";
     case ESP_ROM_ERR_MD5:    return "MD5 mismatch";
     case ESP_ROM_ERR_CHIP:   return "chip not supported (ESP8266)";
+    case ESP_ROM_ERR_BAUD:   return "could not change the baud rate";
     default:                 return "bad arguments";
     }
 }
