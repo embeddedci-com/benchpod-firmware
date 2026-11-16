@@ -212,7 +212,7 @@ void handle_current_out(int conn_id, const char *json) {
 }
 
 /* adc_read — route an ADC source AND return a CALIBRATED reading in mV.
-   {"cmd":"adc_read","source":"ext"} → {"source","mv","count","span"}.  `current_in` also
+   {"cmd":"adc_read","source":"ext"} → {"source","mv","uv","count","span"}.  `current_in` also
    returns "offset_mv", this pod's calibration offset that was taken out of `mv`
    (adc_cal.h; 0 when the pod was never calibrated), and "ua", the loop current in
    microamps (mv across the 249 ohm sense resistor).  `count` stays raw.  A short
@@ -267,12 +267,15 @@ void handle_adc_read(int conn_id, const char *json) {
         send_error(conn_id, msg);
         return;
     }
-    /* The range the reading was taken in, its full scale and whether it clipped. */
-    char payload[200];
+    /* The range the reading was taken in, its full scale and whether it clipped. `uv` is the
+       same reading in microvolts: `mv` alone rounds away what the low range resolves (about
+       167 uV a count, and the 16-sample average goes below a count). */
+    char payload[240];
     int n = snprintf(payload, sizeof(payload),
-                     "{\"source\":\"%s\",\"mv\":%d,\"count\":%d,\"span\":%u,\"range\":\"%s\","
-                     "\"fullscale_mv\":%ld,\"overrange\":%s",
+                     "{\"source\":\"%s\",\"mv\":%d,\"uv\":%ld,\"count\":%d,\"span\":%u,"
+                     "\"range\":\"%s\",\"fullscale_mv\":%ld,\"overrange\":%s",
                      analog_path_name(p), (int)lroundf(rd.volts * 1000.0f),
+                     (long)lroundf(rd.volts * 1e6f),
                      adc_count_u16(rd.count), (unsigned)rd.span, adc_range_name(range),
                      adc_cal_fullscale_mv(c), over ? "true" : "false");
     if (p == ANALOG_PATH_CURRENT_IN && n > 0 && n < (int)sizeof(payload))
