@@ -2771,7 +2771,7 @@ A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range 
 
 `esp_flash` writes an image into an ESP32-family target's flash through the chip's own ROM
 bootloader, the way `esptool` does, with no USB cable to the target. ESP32, ESP32-S2, S3, C2, C3,
-C6 and H2; the ESP8266 is refused. Wiring, at 3.3 V:
+C6 and H2; the ESP8266 is refused. Firmware 3.10.7 and later. Wiring, at 3.3 V:
 
 | Target | Pod |
 |---|---|
