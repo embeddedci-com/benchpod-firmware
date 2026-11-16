@@ -18,12 +18,17 @@
 #include "fpga_config.h"     /* FPGA_DAC_REPLAY_MAX_SAMPLES */
 #include "fw_sign.h"
 #include "ina238.h"
+#include "net_server.h"      /* net_mac_fmt */
 #include "nrst_ctrl.h"
 #include "pod_policy.h"
 #include "signal_engine.h"
 #include "usb_cc.h"
 #include "version.h"
+#if defined(BENCHPOD_WIFI_BRIDGE)
+#include "wifi_bridge_net.h" /* a bridge joins Wi-Fi with the pod's own MAC */
+#endif
 
+#include <stdio.h>
 #include <math.h>            /* lround: integer-scale the cal (nano printf has no %f) */
 #include <string.h>
 
@@ -105,4 +110,22 @@ void cloud_caps_collect(cloud_caps_t *c) {
         c->c3_restarts = r->total;
         c->c3_restart_last = r->total ? c3_restart_cause_name((c3_restart_cause_t)r->last_cause) : NULL;
     }
+    net_mac_fmt(c->eth_mac);
+    c->has_wifi = cloud_caps_wifi_mac(c->wifi_mac);
+}
+
+bool cloud_caps_wifi_mac(char out[18]) {
+    out[0] = '\0';
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) {
+        /* The bridge is the pod's Wi-Fi and joins with the pod's Ethernet MAC (wifi-bridge
+           README: Wi-Fi STA, MAC = pod MAC). */
+        net_mac_fmt(out);
+        return true;
+    }
+#endif
+    uint8_t m[6];
+    if (esp_wifi_ctrl_mac(m))
+        snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+    return esp_wifi_ctrl_module_present();
 }

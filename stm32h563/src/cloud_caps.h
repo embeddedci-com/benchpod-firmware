@@ -74,6 +74,14 @@ typedef struct {
     bool          c3;             /* the board has the built-in ESP32-C3 (Wi-Fi): the two below */
     uint32_t      c3_restarts;    /* C3 restarts since power-on (c3_restarts.h) */
     const char   *c3_restart_last;/* the last one's cause name ("no_response", ...), NULL if none */
+    /* The MACs a network admin registers before giving the pod an address, "aa:bb:cc:dd:ee:ff".
+       eth_mac: the Ethernet port's ("" when unknown). wifi_mac: the address the pod uses on
+       Wi-Fi: the C3's station MAC once the C3 told it (a join or a scan since power-on), or the
+       Ethernet MAC through a Wi-Fi bridge, which joins with the pod's MAC. "" = not known yet.
+       has_wifi: the pod has Wi-Fi at all (a C3, or a bridge plugged in). */
+    char          eth_mac[18];
+    char          wifi_mac[18];
+    bool          has_wifi;
 } cloud_caps_t;
 
 /* Build the frame into out (cap >= CLOUD_CAPS_MAX + 1 recommended). Returns its length, or 0
@@ -86,5 +94,9 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c);
 /* Fill *c from the drivers (firmware only, cloud_caps_hw.c). device_id is left NULL: only the
    cloud client has it. */
 void cloud_caps_collect(cloud_caps_t *c);
+
+/* The pod's Wi-Fi MAC into out ("" while not known, see cloud_caps_t.wifi_mac); returns whether
+   the pod has Wi-Fi at all (firmware only, cloud_caps_hw.c). */
+bool cloud_caps_wifi_mac(char out[18]);
 
 #endif /* CLOUD_CAPS_H */

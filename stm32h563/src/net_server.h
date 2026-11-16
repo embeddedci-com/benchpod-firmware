@@ -9,12 +9,14 @@
  *   net_poll()  — drive the stack: drain RX, run timeouts, link + DHCP checks.
  *                 Call repeatedly from the net task (the NO_SYS poll loop).
  *   net_ip_str()— current IPv4 address as a string ("0.0.0.0" until assigned).
- *   net_mac_str()— wired MAC as "aa:bb:cc:dd:ee:ff".
+ *   net_mac_str()— wired MAC as "aa:bb:cc:dd:ee:ff" (a static buffer: console only).
+ *   net_mac_fmt()— the same into the caller's buffer (any task).
  */
 void        net_init(void);
 void        net_poll(void);
 const char *net_ip_str(void);
 const char *net_mac_str(void);
+void        net_mac_fmt(char out[18]);
 /* The :8080 connection conn_id came in on the USB network adapter (not Ethernet or Wi-Fi). */
 bool        net_conn_on_usb(int conn_id);
 /* The LAN connection conn_id is a TLS session (:8443, lan_tls.h). */

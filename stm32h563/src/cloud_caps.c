@@ -116,6 +116,10 @@ static void emit_health(bp_emit_t *e, const cloud_caps_t *c, bool cut) {
         reason = r;
         crash = k;
     }
+    /* The MACs, so the web shows them, only when known (the server keeps the last ones it saw).
+       Left out of the shortened form: they are not features, and the frame must fit. */
+    if (!cut && c->eth_mac[0])  bp_emit(e, "\"eth_mac\":\"%s\",", c->eth_mac);
+    if (!cut && c->wifi_mac[0]) bp_emit(e, "\"wifi_mac\":\"%s\",", c->wifi_mac);
     bp_emit(e, "\"boot_id\":\"%08lx\",\"unclean_resets\":%lu,",
             (unsigned long)c->boot_id, (unsigned long)c->unclean_resets);
     if (c->c3) {   /* the built-in Wi-Fi's co-processor: how often the pod had to restart it */

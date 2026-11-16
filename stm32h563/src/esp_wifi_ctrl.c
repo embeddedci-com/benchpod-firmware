@@ -213,6 +213,7 @@ typedef enum {
     WC_SCAN_NUM,   /* GetApNum */
     WC_SCAN_REC,   /* GetApRecord, one access point per request */
     WC_SCAN_CLEAR, /* ClearApList: frees what was not read */
+    WC_SCAN_MAC,   /* GetMac before a scan-only run's ScanStart, while the MAC is not known */
 } wc_state_t;
 
 static config_t       s_cfg;
@@ -264,6 +265,12 @@ static bool s_module = true;   /* the C3 is fitted (esp_wifi_ctrl_set_module_pre
 void esp_wifi_ctrl_set_module_present(bool present) { s_module = present; }
 bool esp_wifi_ctrl_module_present(void) { return s_module; }
 
+bool esp_wifi_ctrl_mac(uint8_t out[6]) {
+    if (!s_module || !s_have_mac) return false;
+    memcpy(out, s_mac, 6);
+    return true;
+}
+
 const char *esp_wifi_ctrl_state_str(void) {
     if (!s_module) return "absent";
     if (s_scan_only) return "scanning";     /* the C3 runs for a scan, not for a link */
@@ -275,7 +282,7 @@ const char *esp_wifi_ctrl_state_str(void) {
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: return "connecting";
         case WC_UP: case WC_UP_RSSI: return "connected";
         case WC_BACKOFF:     return "backoff";
-        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR:
+        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR: case WC_SCAN_MAC:
             return "connected";             /* a scan alongside the link */
         default:             return "unknown";
     }
@@ -699,7 +706,7 @@ void esp_wifi_ctrl_poll(void) {
         switch (s_state) {
         case WC_INIT: case WC_SETSTORAGE: case WC_SETMODE: case WC_SETCFG: case WC_START:
         case WC_CONNECT: case WC_GETMAC: case WC_WAIT_ASSOC: case WC_UP: case WC_UP_RSSI:
-        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR:
+        case WC_SCAN_START: case WC_SCAN_NUM: case WC_SCAN_REC: case WC_SCAN_CLEAR: case WC_SCAN_MAC:
             s_lost_reboot++;
             slave_lost(C3_RESTART_REBOOTED, "it announced a new boot");
             return;
@@ -803,7 +810,12 @@ void esp_wifi_ctrl_poll(void) {
         return;
 
     case WC_START:
-        if (s_resp_ready && s_scan_only) {
+        if (s_resp_ready && s_scan_only && !s_have_mac) {
+            /* The C3's MAC is otherwise read only on a join: a scan learns it too, so a pod that
+               never joined can report its Wi-Fi MAC (status wifi_mac) for the network's admin. */
+            if (send_req(ID_REQ_GET_MAC, ID_RESP_GET_MAC, NULL, 0)) s_state = WC_SCAN_MAC;
+            else scan_send_start();
+        } else if (s_resp_ready && s_scan_only) {
             scan_send_start();
         } else if (s_resp_ready) {
             if (send_req(ID_REQ_WIFI_CONNECT, ID_RESP_WIFI_CONNECT, NULL, 0)) s_state = WC_CONNECT;
@@ -831,6 +843,15 @@ void esp_wifi_ctrl_poll(void) {
             s_deadline = make_timeout_time_ms(15000);   /* assoc can take a few s */
             s_state = WC_WAIT_ASSOC;
         } else if (time_reached(s_deadline)) to_backoff(C3_RESTART_SETUP, "getmac timeout");
+        return;
+
+    case WC_SCAN_MAC:
+        if (s_resp_ready || time_reached(s_deadline)) {
+            if (s_have_mac)
+                log_printf("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                       s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
+            scan_send_start();          /* no MAC: the scan runs anyway */
+        }
         return;
 
     case WC_WAIT_ASSOC:

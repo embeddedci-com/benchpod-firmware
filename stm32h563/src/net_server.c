@@ -1364,11 +1364,15 @@ const char *net_ip_str(void) { return wifi_get_ip(); }
 
 /* Wired MAC as "aa:bb:cc:dd:ee:ff" (set by ethernetif_init). Returned in a
    static buffer — single-threaded console/command use only. */
+void net_mac_fmt(char out[18])
+{
+    const uint8_t *m = s_eth.netif.hwaddr;   /* set once by ethernetif_init, never changed */
+    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
 const char *net_mac_str(void)
 {
     static char buf[18];
-    const uint8_t *m = s_eth.netif.hwaddr;
-    snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x",
-             m[0], m[1], m[2], m[3], m[4], m[5]);
+    net_mac_fmt(buf);
     return buf;
 }
