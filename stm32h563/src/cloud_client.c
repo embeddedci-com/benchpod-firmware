@@ -823,7 +823,10 @@ static void cl_send_reply_frame(const char *buf, size_t len) {
     cl_backoff("command.response send failed");
 }
 
-static void cl_send_command_error(const char *request_id, const char *error) {
+/* An error reply. code/args: the stable error code and its values (bp_errors.h), passed on as they
+   are so a cloud client sees the same refusal as a LAN one; NULL / "" when the reply had none. */
+static void cl_send_command_error_code(const char *request_id, const char *error, const char *code,
+                                       const char *args) {
     static char frame[BP_CLOUD_CMD_FRAME_MAX];
     bp_emit_t e;
     bp_emit_init(&e, frame, sizeof(frame));
@@ -831,8 +834,17 @@ static void cl_send_command_error(const char *request_id, const char *error) {
     bp_emit_jstr(&e, request_id);
     bp_emit(&e, ",\"device_id\":\"%s\",\"status\":\"error\",\"error\":", s_cfg.device_id);
     bp_emit_jstr(&e, error);
+    if (code && code[0]) {
+        bp_emit_raw(&e, ",\"code\":");
+        bp_emit_jstr(&e, code);
+        if (args && args[0] == '{') { bp_emit_raw(&e, ",\"args\":"); bp_emit_raw(&e, args); }
+    }
     bp_emit_raw(&e, "}");
     if (bp_emit_ok(&e)) cl_send_reply_frame(frame, bp_emit_len(&e));
+}
+
+static void cl_send_command_error(const char *request_id, const char *error) {
+    cl_send_command_error_code(request_id, error, NULL, NULL);
 }
 
 /* A command.request arrived: hand the command object to the hw worker for
@@ -887,8 +899,13 @@ void cloud_client_send_command_response(const char *request_id,
     static const char k_err[] = "{\"status\":\"error\"";
     if (strncmp(reply, k_err, sizeof(k_err) - 1) == 0) {
         char msg[320] = {0};   /* pin-conflict / la_voltage refusals run to ~250 characters */
+        char code[8] = {0};
+        static char args[256];   /* the args object verbatim; static: the net task's stack is small */
+        args[0] = 0;
         cl_json_str(reply, "message", msg, sizeof(msg));
-        cl_send_command_error(request_id, msg);
+        cl_json_str(reply, "code", code, sizeof(code));
+        if (code[0] && !bp_json_object_top(reply, "args", args, sizeof(args))) args[0] = 0;
+        cl_send_command_error_code(request_id, msg, code, args);
         return;
     }
     /* ok: graft the inner reply's status+data tail onto the envelope by skipping
