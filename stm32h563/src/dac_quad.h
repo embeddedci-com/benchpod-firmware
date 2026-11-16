@@ -76,4 +76,40 @@ dac_quad_plan_t dac_quad_plan(analog_path_t path, int cur_ch, uint8_t live);
    limited one, else the code nearest 0 V on its calibrated line (cal_data.h). */
 uint16_t dac_quad_park_code(int ch);
 
+/* ---- The ADC low range and the +-12 V output (channel C) -------------------------------------
+ *
+ * The ADC low range (i2c_bus.h adc_range_t, +-5.46 V full scale) exists only on the analog module
+ * v3r4 and later, which always has this DAC.  The +-12 V output reaches the ADC through the front
+ * SMA when it is cabled to the ADC input (the `calibrate adc:ext` setup), so while the low range
+ * is on, channel C stays within +-DAC_QUAD_LOW_RANGE_MAX_MV:
+ *   - a held level on C past it is refused (dac_out, sensor emulation, SCPI, anything that holds);
+ *   - a stream on C (generate, replay, load/load_bin, dac_set, measure, the control loop) is
+ *     refused outright: its samples are not checked one by one;
+ *   - switching to the low range is refused while C holds a level past it, or a level the pod
+ *     does not know (a stream played on C since its last held level).
+ * The normal range is never limited: C keeps its full +-12 V there.
+ *
+ * Pure: the checks take the state as arguments.  signal_engine.c and i2c_bus.c call them on the
+ * DAC writes and the range switch (the backstop nothing goes around); command_handler.c calls
+ * dac_quad_low_check_command first, for a refusal that names the command.  Each returns NULL
+ * when allowed, else the refusal text, which dac_quad_low_last() also returns afterwards.
+ * ----------------------------------------------------------------------------------------------*/
+
+#define DAC_QUAD_LOW_RANGE_MAX_MV 5000
+/* What a held level of exactly +-5 V may be off by: the 16-bit code rounds (about 1.5 mV a step
+   on the +-12 V line). */
+#define DAC_QUAD_LOW_RANGE_TOL_MV 5
+
+/* Holding `code` on channel `ch` (with the ADC in the low range when low). */
+const char *dac_quad_low_check_hold(bool low, int ch, uint16_t code);
+/* Starting a stream on channel `ch`. */
+const char *dac_quad_low_check_stream(bool low, int ch);
+/* Switching to the low range, with channel C at `c_code` (c_known false: a stream played on C). */
+const char *dac_quad_low_check_enter(bool c_known, uint16_t c_code);
+/* One JSON command (cmd = its "cmd" field), with the DAC pointing at `cur_ch`.  Covers dac_out
+   on 12v and the stream commands; the range switch is checked when it happens. */
+const char *dac_quad_low_check_command(const char *cmd, const char *json, bool low, int cur_ch);
+/* The text of the last refusal above ("" before any). */
+const char *dac_quad_low_last(void);
+
 #endif /* DAC_QUAD_H */

@@ -140,6 +140,87 @@ static void test_limits_current_out(void) {
     dac_limits_set_active(&none);
 }
 
+/* The ADC low range keeps the +-12 V output (channel C) within +-5 V (dac_quad.h). */
+static void test_low_range_guard(void) {
+    cal_data_select(BOARD_REV_V3R2);
+    const int C = DAC_QUAD_C;
+    uint16_t c0 = dac_code16_for_volts(C, 0.0f), c49 = dac_code16_for_volts(C, 4.9f),
+             c5 = dac_code16_for_volts(C, 5.0f), cm5 = dac_code16_for_volts(C, -5.0f),
+             c6 = dac_code16_for_volts(C, 6.0f), cm6 = dac_code16_for_volts(C, -6.0f),
+             c10 = dac_code16_for_volts(C, 10.0f);
+    const char *why;
+
+    /* Held levels: only C, only in the low range, and +-5 V itself still holds (the calibration
+       points sit there). */
+    CHECK(!dac_quad_low_check_hold(true, C, c49), "4.9 V held in low");
+    CHECK(!dac_quad_low_check_hold(true, C, c5) && !dac_quad_low_check_hold(true, C, cm5), "+-5 V held in low");
+    CHECK(!dac_quad_low_check_hold(true, C, c0), "0 V (the park) held in low");
+    why = dac_quad_low_check_hold(true, C, c6);
+    CHECK(why && strstr(why, "6000 mV") && strstr(why, "low range") && strstr(why, "\"range\":\"normal\""),
+          "6 V refused in low with what to do: %s", why ? why : "(null)");
+    CHECK(why && !strcmp(dac_quad_low_last(), why), "last refusal kept");
+    CHECK(dac_quad_low_check_hold(true, C, cm6), "-6 V refused in low");
+    CHECK(dac_quad_low_check_hold(true, C, 65535) && dac_quad_low_check_hold(true, C, 0), "full scale refused in low");
+    CHECK(!dac_quad_low_check_hold(false, C, c10) && !dac_quad_low_check_hold(false, C, 65535), "normal range: no limit");
+    CHECK(!dac_quad_low_check_hold(true, DAC_QUAD_B, 65535) && !dac_quad_low_check_hold(true, DAC_QUAD_D, 65535),
+          "other channels: no limit (5v tops out at ~5 V, D is the 4-20 mA output)");
+
+    /* Streams on C. */
+    CHECK(dac_quad_low_check_stream(true, C), "stream on C in low refused");
+    CHECK(!dac_quad_low_check_stream(false, C), "stream on C in normal allowed");
+    CHECK(!dac_quad_low_check_stream(true, DAC_QUAD_B) && !dac_quad_low_check_stream(true, DAC_QUAD_NONE),
+          "stream elsewhere in low allowed");
+
+    /* Entering the low range. */
+    CHECK(!dac_quad_low_check_enter(true, c0) && !dac_quad_low_check_enter(true, c5) &&
+          !dac_quad_low_check_enter(true, cm5), "enter low with C within +-5 V");
+    why = dac_quad_low_check_enter(true, c10);
+    CHECK(why && strstr(why, "10000 mV") && strstr(why, "\"path\":\"off\""), "enter low with C at 10 V: %s",
+          why ? why : "(null)");
+    why = dac_quad_low_check_enter(false, c0);
+    CHECK(why && strstr(why, "waveform"), "enter low after a stream on C: %s", why ? why : "(null)");
+
+    /* Commands, as the dispatcher sees them. */
+    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":6}", true, DAC_QUAD_NONE),
+          "dac_out 12v 6 V in low");
+    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"dac_12v\",\"volts\":-6.5}", true, C),
+          "dac_out dac_12v -6.5 V in low");
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":4.9}", true, C),
+          "dac_out 12v 4.9 V in low");
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":-5}", true, C),
+          "dac_out 12v -5 V in low");
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":10}", false, C),
+          "dac_out 12v 10 V in normal");
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":4.9}", true, C),
+          "dac_out 5v in low");
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\"}", true, C),
+          "dac_out 12v route only in low");
+    CHECK(dac_quad_low_check_command("generate",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"12v\",\"amplitude_v\":1,\"offset_v\":0}",
+          true, DAC_QUAD_B), "generate on 12v in low");
+    CHECK(!dac_quad_low_check_command("generate",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"5v\",\"amplitude_v\":1,\"offset_v\":2}",
+          true, C), "generate on 5v in low (routes away from C)");
+    CHECK(dac_quad_low_check_command("generate",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"5v\",\"route\":false,\"amplitude_v\":1,\"offset_v\":2}",
+          true, C), "generate route:false plays on C");
+    CHECK(!dac_quad_low_check_command("generate",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"amplitude_ua\":4000,\"offset_ua\":12000}",
+          true, C), "generate on the 4-20 mA output in low");
+    CHECK(dac_quad_low_check_command("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10}", true, C),
+          "8-bit generate on C in low");
+    static const char *const streams[] = { "dac_set", "load", "load_bin", "replay", "measure", "dac_control_loop" };
+    for (size_t i = 0; i < sizeof(streams) / sizeof(streams[0]); i++) {
+        CHECK(dac_quad_low_check_command(streams[i], "{}", true, C), "%s on C in low", streams[i]);
+        CHECK(!dac_quad_low_check_command(streams[i], "{}", true, DAC_QUAD_B), "%s on B in low", streams[i]);
+        CHECK(!dac_quad_low_check_command(streams[i], "{}", false, C), "%s on C in normal", streams[i]);
+    }
+    CHECK(!dac_quad_low_check_command("status", "{}", true, C), "other commands untouched");
+    CHECK(!dac_quad_low_check_command("calibrate", "{\"cmd\":\"calibrate\",\"adc\":\"cal1\",\"range\":\"low\"}", true, C),
+          "calibrate is checked where it drives, not refused here");
+    cal_data_select(BOARD_REV_V3);
+}
+
 int main(void) {
     test_ctrl_byte();
     test_strap_bands();
@@ -147,6 +228,7 @@ int main(void) {
     test_plans();
     test_park_codes();
     test_limits_current_out();
+    test_low_range_guard();
     if (fails) { printf("test_dac_quad: %d failure(s)\n", fails); return 1; }
     printf("test_dac_quad: all passed\n");
     return 0;
