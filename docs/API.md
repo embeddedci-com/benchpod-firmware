@@ -138,7 +138,7 @@ The `cmd` field is required. All other fields are command-specific and documente
 
 From the next firmware release, refusals carry a stable error code (`BP0001` and up) and the
 values that go with it in `args` (left out when the code has none). Codes never change meaning and
-are never reused; each has a page at `https://embeddedci.com/docs/errors/<code>` with the cause and
+are never reused; each is on `https://embeddedci.com/docs/errors#<code>` with the cause and
 the fix, and [`errors/ERRORS.md`](../errors/ERRORS.md) lists them. Read `code` and `args`, not the
 `message` text: the text may change, and a future firmware sends only a short form of it
 (`"BP0002 cmd=frobnicate"`). Errors without a code yet keep the first form. The codes, their args

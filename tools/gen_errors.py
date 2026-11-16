@@ -152,13 +152,13 @@ def gen_json(cat, digest):
                 entry[k] = e[k]
         codes[code] = entry
     doc = {"_generated": BANNER, "version": 1, "catalog_sha256": digest,
-           "docs_url": "https://embeddedci.com/docs/errors/{code}", "codes": codes}
+           "docs_url": "https://embeddedci.com/docs/errors#{code}", "codes": codes}
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
 
 def gen_md(cat):
     out = [f"<!-- {BANNER} -->", "", "# BenchPod error codes", "",
-           "The public pages are at https://embeddedci.com/docs/errors. Rules for adding a code: "
+           "The public page is https://embeddedci.com/docs/errors (one anchor per code). Rules for adding a code: "
            "the header of `errors/catalog.toml`.", "",
            "| Code | Name | Area | Since | Message |", "|---|---|---|---|---|"]
     for code, e in cat.items():

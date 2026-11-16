@@ -2,7 +2,7 @@
 
 # BenchPod error codes
 
-The public pages are at https://embeddedci.com/docs/errors. Rules for adding a code: the header of `errors/catalog.toml`.
+The public page is https://embeddedci.com/docs/errors (one anchor per code). Rules for adding a code: the header of `errors/catalog.toml`.
 
 | Code | Name | Area | Since | Message |
 |---|---|---|---|---|
