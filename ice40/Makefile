@@ -446,9 +446,12 @@ $(OUT).bin: $(OUT).asc
 # v54 (the I2C target and UART2 moved to the emulation image; 3998 LC, 75%): swept 1..32 locally:
 # all 32 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 51 -> 25 (clk48 61.18, clk 28.07, clk -> clk48
 # 10.08 ns, clk48 -> clk 5.58 ns).  CI sweep not run yet.  RE-VERIFY on hardware.
-SEED_LOOP ?= 25
+# v56 (UART parity + stop bits, status flags cleared after the read; 4179 LC): seed 25 failed the
+# CI gate (clk -> clk48 15.20 ns). Swept 1..32 in both toolchains: re-pinned SEED_LOOP 25 -> 11
+# (local clk48 56.95 MHz, clk -> clk48 9.84 ns; CI 56.35 MHz, 10.12 ns). HW-verified 2026-11-16.
+SEED_LOOP ?= 11
 # v54: the next local seeds by clk48, all within MAX_X48_NS (the CI sweep should re-order this).
-SEED_LOOP_FALLBACK ?= 17 19 21 24 30 26 13
+SEED_LOOP_FALLBACK ?= 26 20 9 22 16 12 3
 # v27 CO-TRIGGER + PIPELINED FIFO-EMPTY: the co-trigger topology re-rolled placement and seed 5 (at
 # clk48 51.26 MHz static) HW-REGRESSED deep replay — the binding clk48 path was the pre-existing
 # 6-LUT reader<->DAC FIFO-empty chain (rgray==wgray_r2 -> fetch/RCLKE/CE), whose scattered placement
@@ -556,12 +559,14 @@ SEED_LOOP_FALLBACK ?= 17 19 21 24 30 26 13
 # 14.57 locally).  Swept 1..32 in both (CI run 43497781121): 30/32 local, 32/32 CI reach
 # MIN_CLK48_MHZ.  Pinned SEED_DEEP 11 -> 29, the most clk -> clk48 margin in the worse toolchain
 # (13.32 local / 13.59 CI ns; clk48 54.27 / 53.74 MHz).  RE-VERIFY deep replay on hardware.
-SEED_DEEP ?= 29
+# v56: seed 29 reaches clk -> clk48 15.52 ns in CI. Re-pinned SEED_DEEP 29 -> 16 (local clk48 56.95
+# MHz, 12.80 ns; CI 57.33 MHz, 13.81 ns).
+SEED_DEEP ?= 16
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13
 # added (the v48 pin), and the v49 local seeds within MAX_X48_NS first.
-SEED_DEEP_FALLBACK ?= 3 21 25 32 17
+SEED_DEEP_FALLBACK ?= 5 20 23 1 8
 # v54: the emulation image (USE_EMULATION; 4 I2C targets, write log, SPI target, FIFO, UART2 TX+RX;
 # 4891 LC, 92%, 30/30 block RAM, 4/4 SPRAM).  Its binding clock is clk (24 MHz), not clk48: the
 # image has no clk48 logic beyond what every image has.  Swept 1..42 locally: ALL 42 place, close
