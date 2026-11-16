@@ -884,7 +884,8 @@ module cmd_dispatch #(
                             OP_UART_STATUS: begin
                                 arg_rem         <= UART_STATUS_LEN;
                                 tx_byte         <= uart_rx_avail[7:0];   // byte 0
-                                uart_rx_ovf_clr <= 1'b1;   // status read clears sticky overflow
+                                // v56: the sticky flags clear after the last byte (S_UART_STATUS), not
+                                // here: clearing here zeroed them before bytes 1 and 2 carried them out.
                                 state           <= S_UART_STATUS;
                             end
 
@@ -1237,6 +1238,7 @@ module cmd_dispatch #(
                             tx_byte   <= uart_status_next(arg_rem[1:0]);
                             arg_rem   <= arg_rem   - 16'd1;
                         end else begin
+                            uart_rx_ovf_clr <= 1'b1;   // the block is out: clear the sticky flags it read
                             state <= S_DONE;
                         end
                     end

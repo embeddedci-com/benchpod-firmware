@@ -801,7 +801,9 @@ module top (
     // ---- shared signal-engine control plane (v2: 14 LA channels, version 53) ----
     // GATEWARE_VERSION 56 = v55 + PARITY AND STOP BITS on the UART proxy (uart_engine.v): UART_CONFIG
     // flags bit 1 parity on, bit 2 odd, bit 3 two stop bits (0 = 8N1, what older firmware sends);
-    // UART_STATUS byte 1 bit 1 = sticky parity error (the byte is kept).  UART2 stays 8N1.  All
+    // UART_STATUS byte 1 bit 1 = sticky parity error (the byte is kept).  UART2 stays 8N1.
+    // The status read now clears the sticky flags after its last byte: until v55 it cleared them
+    // with byte 0 out, so overflow and framing error (and parity) always read 0.  All
     // three images.  tb_uart_engine.
     // GATEWARE_VERSION 55 = v54 + an I2C MASTER as the SWD engine's third job (i2c_master.v; SPI_ARM
     // flags bit 2, open-drain SCL/SDA, clock stretching, lost-arbitration flag in SWD_QSTATUS bit 7)
