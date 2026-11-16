@@ -21,6 +21,7 @@
 #include "config_store.h"
 #include "esp_rom_flash.h"
 #include "blob_store.h"
+#include "c3_image.h"   /* c3_image_set_missing */
 #include "hw_worker.h"
 #include "wifi_scan.h"
 
@@ -735,6 +736,12 @@ void esp_wifi_ctrl_poll(void) {
                 } else {
                     to_backoff(C3_RESTART_FLASH, "could not queue the ESP32-C3 flash");
                 }
+            } else if (!blob_store_present(BLOB_ESP)) {
+                /* No copy on the pod (it keeps none since 3.10.x): report esp as missing, so the
+                   next update or install-blobs sends the image and writes it into the C3. */
+                c3_image_set_missing(true);
+                to_backoff(C3_RESTART_NO_BOOT, "no boot event from the ESP32-C3 and no image on the pod: "
+                           "install the esp image (benchpod install-blobs, or update the firmware)");
             } else {
                 to_backoff(C3_RESTART_NO_BOOT, "no boot event from the ESP32-C3 (already flashed once; "
                            "run flash-esp32 or check the board)");

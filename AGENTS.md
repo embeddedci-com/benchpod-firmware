@@ -147,9 +147,11 @@ Report expected-failure rows indented, as `tb_adc_timing` does.
 ## Flashing
 
 Software DFU: `dfu` console cmd → `make flash-dfu` (~20 s, a ~0.5 MB image). The
-gateware and ESP32-C3 images live in W25Q blob slots, not in the image: after a gateware
-or C3 rebuild, `benchpod install-blobs --dir stm32h563/build/blobs` sends the changed
-ones (a gateware blob that matches the firmware updates the running iCE40 at once).
+gateware images live in W25Q blob slots, not in the image, and the ESP32-C3 image is written
+straight into the C3 (the pod keeps no copy: c3_update.c, c3_image.h): after a gateware or C3
+rebuild, `benchpod install-blobs --dir stm32h563/build/blobs` sends the changed ones (a gateware
+blob that matches the firmware updates the running iCE40 at once; an esp blob takes about 2 minutes
+in the C3).
 `flash-ice40` reprograms the iCE40 config flash from slot gw0. A DFU reflash does NOT reconfigure the iCE40; if a bad firmware
 left it unconfigured, run `flash-ice40` or power-cycle.
 

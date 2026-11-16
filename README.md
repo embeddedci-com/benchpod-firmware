@@ -68,15 +68,17 @@ make all                       # build .elf/.hex/.bin (~0.5 MB) + build/blobs/
 make fetch                     # one-time: fetch the ESP32-C3 esp-hosted slave blob
 printf 'dfu\r\n' > <usb-cdc>   # console cmd → ROM DFU  (or hold BOOT0 on a blank board)
 make flash-dfu                 # dfu-util writes flash and reboots into the app
-benchpod install-blobs --dir build/blobs   # gateware + ESP32-C3 images into the W25Q
+benchpod install-blobs --dir build/blobs   # gateware into the W25Q, the ESP32-C3 image into the C3
 ```
 
 One image fits both the 2 MB STM32H563ZIT6 and the 1 MB ZGT6 (928 KB code area; the
 persistence records sit in the top 96 KB of whichever flash the chip has). The iCE40
-gateware images and the ESP32-C3 image are not in the firmware: they live in slots of the
-W25Q config flash (`src/blob_store.h`), go in with `benchpod install-blobs` / `benchpod
-flash-self` over USB or with any OTA, and the STM32 reprograms the iCE40 (`flash-ice40`,
-image swap) and the C3 (`flash-esp32`) from there. `blobs` on the console lists the slots.
+gateware images and the ESP32-C3 image are not in the firmware. The gateware lives in slots of
+the W25Q config flash (`src/blob_store.h`) and the STM32 reprograms the iCE40 from there
+(`flash-ice40`, image swap). The C3 image is not kept on the pod: an update stages it in PSRAM and
+writes it straight into the C3 (`src/c3_update.c`), and `src/c3_image.h` records which one the C3
+runs. Both go in with `benchpod install-blobs` / `benchpod flash-self` over USB or with any OTA.
+`blobs` on the console lists them. Boards without the C3 (digital v3r3 and later) list no `esp`.
 
 ### Status LED
 

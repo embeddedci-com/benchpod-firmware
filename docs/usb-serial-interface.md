@@ -216,7 +216,7 @@ command prints `usage: ...` and changes nothing.
 | `esp-reset-pulse` | Diagnostic: reset the C3 unannounced; Wi-Fi must recover on its own. |
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
-| `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
+| `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the copy older firmware kept in the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). The pod keeps no copy since 3.10.x: without one this answers `flash-esp32 failed: no ESP32-C3 image in the W25Q`; install the image with `benchpod install-blobs --force --only esp` instead, which writes it straight into the C3. On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
 | `bridge [scan \| update \| reboot \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
 #### Wi-Fi bridge

@@ -183,8 +183,8 @@ bool heavy_in_flight(void) {
     ota_state_t o = ota_get_state();
     /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
        stopped, so it holds off captures, uploads and updates like they hold off each other. */
-    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || esp_rom_flash_busy() ||
-           esp_dut_flash_busy();
+    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
+           esp_rom_flash_busy() || esp_dut_flash_busy();
 }
 
 bool capture_or_upload_busy(void) {

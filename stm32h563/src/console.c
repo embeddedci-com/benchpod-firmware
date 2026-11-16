@@ -64,6 +64,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include <stdlib.h>
 
 #include "blob_store.h"
+#include "c3_image.h"
 #include "board_variant.h"
 #include "device_identity.h"   /* identity / identity-wipe */
 #include "b64url.h"
@@ -1246,12 +1247,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* One line per W25Q slot: name, state against this firmware, what it holds. */
         for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
             if (!blob_listed((blob_id_t)i)) continue;
-            const blob_info_t *in = blob_store_info((blob_id_t)i);
+            const blob_info_t *in = blob_report_info((blob_id_t)i);   /* esp: what the C3 runs */
             char hex[65] = "-";
             if (in->present)
                 for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
             op(out, ctx, "blob %s %s %lu %lu %s\r\n", blob_name((blob_id_t)i),
-               blob_state_str(blob_state((blob_id_t)i)), (unsigned long)in->len,
+               blob_state_str(blob_report_state((blob_id_t)i)), (unsigned long)in->len,
                (unsigned long)in->version, hex);
         }
         /* The firmware copy the last install left in the W25Q (for the bootloader planned next).

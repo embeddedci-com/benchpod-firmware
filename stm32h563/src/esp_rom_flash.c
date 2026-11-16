@@ -20,6 +20,8 @@
 #include "blob_store.h"
 #include "w25q.h"
 #include "esp_wifi_ctrl.h"   /* esp_wifi_ctrl_module_present */
+#include "ota.h"             /* ota_read_staged: an esp update staged in PSRAM */
+#include "c3_image.h"        /* where the C3 image keeps its NVS */
 
 #include "stm32h5xx_hal.h"
 #include "FreeRTOS.h"
@@ -220,6 +222,14 @@ static int slot_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
     return rc;
 }
 
+/* One block of an esp update staged in PSRAM (ota.c), the bus taken for that read only. The OTA
+   session quiesced the gateware's PSRAM masters and the busy gate keeps them stopped. */
+static int staged_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
+{
+    (void)ctx;
+    return ota_read_staged(off, buf, n);
+}
+
 /* The same read for code that already holds the bus (the partition-table lookup). */
 static int slot_read_held(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
 {
@@ -255,6 +265,7 @@ static esp_rom_io_t      s_io;
 static volatile bool     s_active;
 static esp_flash_done_fn s_done;
 static uint32_t          s_t0;
+static bool              s_from_slot;   /* the image came from the legacy W25Q slot */
 
 bool esp_rom_flash_busy(void) { return s_active; }
 
@@ -286,9 +297,31 @@ int esp_rom_flash_start(esp_flash_done_fn done)
     s_t0 = HAL_GetTick();
     s_rx_overruns = 0;
     rom_enter();
+    s_from_slot = true;
     s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP, NULL };
     esp_rom_job_start(&s_job, &s_io, blob_store_info(BLOB_ESP)->len, 0);
     return 0;
+}
+
+int esp_rom_flash_start_staged(uint32_t len, esp_flash_done_fn done)
+{
+    if (s_active) return ESP_FLASH_START_BUSY;
+    if (!esp_wifi_ctrl_module_present()) return ESP_FLASH_START_NO_MODULE;
+    if (len == 0) return ESP_FLASH_START_NO_IMAGE;
+    s_active = true;       /* from here the busy gate holds off every PSRAM-bus user */
+    s_done = done;
+    s_t0 = HAL_GetTick();
+    s_rx_overruns = 0;
+    rom_enter();
+    s_from_slot = false;   /* c3_update.c records what it wrote */
+    s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, staged_read, NULL, NULL };
+    esp_rom_job_start(&s_job, &s_io, len, 0);
+    return 0;
+}
+
+bool esp_rom_flash_staged_nvs(uint32_t *off, uint32_t *size)
+{
+    return esp_part_find_nvs_rd(staged_read, NULL, off, size);
 }
 
 void esp_rom_flash_poll(void)
@@ -310,6 +343,14 @@ void esp_rom_flash_poll(void)
                    (unsigned long)s_rx_overruns, secs);
         strap_hold_reset();
     }
+    if (s_from_slot) {
+        /* The C3 now runs the copy older firmware left in the slot, or nothing usable. */
+        const blob_info_t *in = blob_store_info(BLOB_ESP);
+        w25q_session_open();
+        int rec = rc >= 0 ? c3_image_save(in->len, in->version, in->sha256, 0u, 0u) : c3_image_forget();
+        w25q_session_close();
+        if (rec != 0) log_printf("[espflash] could not record the C3's image\n");
+    }
     esp_flash_done_fn done = s_done;
     s_done = NULL;
     s_active = false;
@@ -327,17 +368,22 @@ int esp_rom_flash_erase_nvs(void)
         return -1;           /* the C3 is the flash's: leave its straps alone */
     }
     if (!esp_wifi_ctrl_module_present()) return -1;
-    if (!blob_store_present(BLOB_ESP)) {
-        log_printf("[espflash] no ESP32-C3 image in the W25Q (slot esp is empty): "
-                   "cannot locate the C3's NVS partition\n");
+    /* Where the image the C3 runs keeps its NVS: recorded when the pod wrote it (c3_image.h),
+       else from the partition table of a copy older firmware left in the esp slot. */
+    bool found = c3_image_nvs(&off, &size);
+    if (!found && !blob_store_present(BLOB_ESP)) {
+        log_printf("[espflash] the C3's NVS partition is not known (no image recorded and no "
+                   "copy in the W25Q): install the esp image once, then retry\n");
         goto out;
     }
-    /* The slot is checked like a flash-esp32 would: a corrupt table must not choose what to
-       erase (esp_part_find_nvs refuses the bootloader and the table, not the application). */
-    w25q_session_open();
-    bool found = blob_store_verify(BLOB_ESP) == 0
-              && esp_part_find_nvs_rd(slot_read_held, (void *)(uintptr_t)BLOB_ESP, &off, &size);
-    w25q_session_close();
+    if (!found) {
+        /* The slot is checked like a flash-esp32 would: a corrupt table must not choose what to
+           erase (esp_part_find_nvs refuses the bootloader and the table, not the application). */
+        w25q_session_open();
+        found = blob_store_verify(BLOB_ESP) == 0
+             && esp_part_find_nvs_rd(slot_read_held, (void *)(uintptr_t)BLOB_ESP, &off, &size);
+        w25q_session_close();
+    }
     if (!found) {
         log_printf("[espflash] no usable NVS partition in the W25Q C3 image's partition table\n");
         goto out;

@@ -85,6 +85,12 @@ static void test_limits(void) {
     CHECK(blob_slot_capacity(BLOB_ESP) >= 0x400000u - BLOB_HDR_SIZE, "esp slot too small");
     /* gw2 (the emulation image) sits in the free space between the proxy slot and the ESP slot. */
     CHECK(blob_from_name("gw2") == BLOB_GW2 && blob_listed(BLOB_GW2), "gw2 is a listed release blob");
+    /* No ESP32-C3 on the board: esp is neither listed nor found by name; the others are. */
+    blob_store_set_esp_listed(false);
+    CHECK(!blob_listed(BLOB_ESP) && blob_from_name("esp") == -1, "esp listed on a board without the C3");
+    CHECK(blob_listed(BLOB_GW0) && blob_from_name("gw1") == BLOB_GW1, "the C3 setting hid a gateware slot");
+    blob_store_set_esp_listed(true);
+    CHECK(blob_listed(BLOB_ESP) && blob_from_name("esp") == BLOB_ESP, "esp not listed again");
     CHECK(blob_slot_base(BLOB_PROXY) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_PROXY) <= blob_slot_base(BLOB_GW2) &&
           blob_slot_base(BLOB_GW2) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_GW2) <= blob_slot_base(BLOB_ESP),
           "gw2 overlaps the proxy or esp slot");
