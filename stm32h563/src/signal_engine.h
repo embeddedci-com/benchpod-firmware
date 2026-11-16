@@ -347,6 +347,9 @@ int  dac_quad_write(int ch, uint16_t code);
 int  dac_quad_current_out(uint16_t code);
 /* The channel streams and held levels go to (DAC_QUAD_NONE when the analog path is off). */
 int  dac_quad_channel(void);
+/* The +-12 V output's (channel C's) held code: true when it holds *code, false after a stream
+   played on it or before the boot park (dac_quad.h, the ADC low range). */
+bool dac_quad_c_level(uint16_t *code);
 /* At boot, as soon as the iCE40 can drive the DAC: park the three voltage outputs. */
 void dac_quad_boot(void);
 

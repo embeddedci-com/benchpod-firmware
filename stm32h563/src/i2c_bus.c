@@ -594,6 +594,13 @@ int adc_range_set(adc_range_t r)
     bool low = r == ADC_RANGE_LOW;
     if (low && !s_low_hw) return -1;
     if (low && s_path == ANALOG_PATH_CAL2) return -2;   /* after `off` the ADC sees ext: fine */
+    if (low && !s_low) {
+        /* Not while the +-12 V output holds more than +-5 V (dac_quad.h): the text is in
+           dac_quad_low_last().  Only boards with the DAC8554 have the low range. */
+        uint16_t c = 0;
+        bool known = dac_quad_c_level(&c);
+        if (dac_quad_low_check_enter(known, c)) return -4;
+    }
     if (!low_range_shadow(low)) return 0;
     (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
     int rc = ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);

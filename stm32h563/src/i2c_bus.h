@@ -333,7 +333,9 @@ bool        adc_range_supported(void);
 /* The range in use (K5's state). */
 adc_range_t adc_range_get(void);
 /* Switch the range and wait for K5 to settle.  0, -1 not supported (low on a board without K5),
-   -2 low while cal2 is routed, -3 I2C error.  Normal is always accepted. */
+   -2 low while cal2 is routed, -3 I2C error, -4 low while the +-12 V output holds more than
+   +-5 V or a level the pod does not know (dac_quad.h; the text in dac_quad_low_last()).  Normal is
+   always accepted. */
 int         adc_range_set(adc_range_t r);
 
 #endif /* I2C_BUS_H */

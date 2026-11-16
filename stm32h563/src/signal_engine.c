@@ -427,7 +427,7 @@ static void log_dac_samples(uint32_t total) {
 /* LOAD_WAVE:  [CMD][len_lo][len_hi][N data bytes] */
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
-static void quad_stream_ctrl(void);
+static int quad_stream_ctrl(void);
 #if defined(BENCHPOD_EMI_TEST)
 /* The table dac_generate16 last loaded and started, for dac_restart_generated; 0 = none (any
    other load replaced it). */
@@ -465,7 +465,8 @@ static int fpga_start_dac(uint32_t period, uint32_t divider) {
         (uint8_t)(period  & 0xFF), (uint8_t)((period  >> 8) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
-    quad_stream_ctrl();
+    int rc = quad_stream_ctrl();
+    if (rc != 0) return rc;
     spi_cmd_write(CMD_START_DAC, args, sizeof(args));
     return 0;
 }
@@ -513,7 +514,8 @@ static int fpga_start_dac_psram(uint32_t base, uint32_t count, uint32_t divider)
         (uint8_t)(count   & 0xFF), (uint8_t)((count   >> 8) & 0xFF), (uint8_t)((count   >> 16) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
-    quad_stream_ctrl();
+    int rc = quad_stream_ctrl();
+    if (rc != 0) return rc;
     spi_cmd_write(CMD_START_DAC_PSRAM, args, sizeof(args));
     return 0;
 }
@@ -1066,6 +1068,17 @@ void psram_boot_selftest(void) {
 
 static int     s_quad_ch = DAC_QUAD_NONE;   /* the channel streams and held levels go to */
 static uint8_t s_quad_live;                 /* voltage channels possibly off their park level */
+/* The +-12 V output's level, for the ADC low range (dac_quad.h): the last code written to C, and
+   whether it still holds it (false from power-up until the boot park, and after a stream on C). */
+static uint16_t s_quad_c_code;
+static bool     s_quad_c_known;
+
+static bool adc_low(void) { return adc_range_get() == ADC_RANGE_LOW; }
+
+bool dac_quad_c_level(uint16_t *code) {
+    if (code) *code = s_quad_c_code;
+    return s_quad_c_known;
+}
 
 /* DAC_CTRL (0x38, gateware >= DAC_CTRL_MIN_GW): [flags][ctrl][code(2)].  flags bit0 = ctrl is the
    control byte of every later DAC start, bit1 = send {ctrl, code} once.  -2 = older gateware. */
@@ -1077,16 +1090,23 @@ static int fpga_dac_ctrl(uint8_t flags, uint8_t ctrl, uint16_t code) {
 
 /* Called before every DAC start: on v3r2 send the stream's control byte again.  The register
    resets with the iCE40 (an image swap, a reload), and a start with 0x00 moves no output. */
-static void quad_stream_ctrl(void) {
-    if (!dac_quad_present()) return;
+static int quad_stream_ctrl(void) {
+    if (!dac_quad_present()) return 0;
+    /* The ADC low range: no stream on the +-12 V output (dac_quad.h). */
+    const char *why = dac_quad_low_check_stream(adc_low(), s_quad_ch);
+    if (why) { printf("[sig] %s\n", why); return -4; }
+    if (s_quad_ch == DAC_QUAD_C) s_quad_c_known = false;
     if (fpga_dac_ctrl(0x01u, dac_quad_ctrl(s_quad_ch), 0u) == -2)
         printf("[sig] WARNING: gateware v%u has no DAC_CTRL (v%u+): the DAC8554 outputs will not move\n",
                s_fpga_version, (unsigned)DAC_CTRL_MIN_GW);
     if (s_quad_ch >= DAC_QUAD_A && s_quad_ch <= DAC_QUAD_C) s_quad_live |= (uint8_t)(1u << s_quad_ch);
+    return 0;
 }
 
 int dac_quad_write(int ch, uint16_t code) {
     if (!dac_quad_present() || ch < DAC_QUAD_A || ch > DAC_QUAD_D) return -1;
+    const char *why = dac_quad_low_check_hold(adc_low(), ch, code);   /* the ADC low range */
+    if (why) { printf("[sig] %s\n", why); return -4; }
     uint8_t st = 0;
     bool running = fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN);
     int rc = fpga_dac_ctrl(0x02u, dac_quad_ctrl(ch), code);
@@ -1096,6 +1116,7 @@ int dac_quad_write(int ch, uint16_t code) {
        frame before then would replace it, so wait it out. */
     if (running) sleep_ms(2);
     else         busy_wait_us(5);
+    if (ch == DAC_QUAD_C) { s_quad_c_code = code; s_quad_c_known = true; }
     if (ch <= DAC_QUAD_C) {
         if (code == dac_quad_park_code(ch)) s_quad_live &= (uint8_t)~(1u << ch);
         else                                s_quad_live |= (uint8_t)(1u << ch);
@@ -1701,7 +1722,8 @@ int dac_control_loop_start(const uint8_t *curve, size_t curve_len,
         (uint8_t)vmax,     (uint8_t)(vmax     >> 8),
         (uint8_t)tick_div, (uint8_t)(tick_div >> 8),
     };
-    quad_stream_ctrl();
+    int qrc = quad_stream_ctrl();
+    if (qrc != 0) return qrc;
     spi_cmd_write(CMD_START_DAC_LOOP, args, sizeof(args));
     dac_timed = false;
     return 0;

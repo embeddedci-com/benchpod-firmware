@@ -113,7 +113,8 @@ static bool range_apply(int conn_id, adc_range_t r) {
     int rc = adc_range_set(r);
     if (rc == 0) return true;
     send_error(conn_id, rc == -1 ? ADC_RANGE_UNSUPPORTED
-                      : rc == -2 ? "range: cal2 has no low range" : "range: relay switch failed");
+                      : rc == -2 ? "range: cal2 has no low range"
+                      : rc == -4 ? dac_quad_low_last() : "range: relay switch failed");
     return false;
 }
 
@@ -156,7 +157,9 @@ void handle_dac_out(int conn_id, const char *json) {
         /* The full 16 bits of the DAC8551: one step is 1/256 of the 8-bit one (about 76 uV on
            the 5v path).  `code` stays the 8-bit equivalent for older clients. */
         uint16_t c16 = dac_code16_for_volts(idx, (float)atof(volts_s));
-        if (dac_set_constant16(c16, 240) != 0) { send_error(conn_id, "dac set failed"); return; }
+        int rc = dac_set_constant16(c16, 240);
+        /* -4: the ADC low range keeps the +-12 V output within +-5 V (dac_quad.h). */
+        if (rc != 0) { send_error(conn_id, rc == -4 ? dac_quad_low_last() : "dac set failed"); return; }
         float got = dac_volts_for_code16(idx, c16);
         code16 = c16;
         code = (c16 + 128) >> 8;
