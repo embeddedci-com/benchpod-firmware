@@ -38,6 +38,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status) },
     { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status) },
     { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status) },
+    { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list) },
+    { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get) },
 #if defined(BENCHPOD_EMI_TEST)
     /* EMI test build only (emi_test.h): read the run log out of the W25Q */
     { { "emi_log", CMD_TIER_T0 }, 0, CMD_FN(handle_emi_log) },
@@ -87,6 +89,9 @@ static const cmd_desc_t k_tiers[] = {
     { { "la_voltage", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_la_voltage) },
     { { "nrst", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_nrst) },
     { { "target_power", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_target_power) },
+    { { "wiring_put", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_put) },
+    { { "wiring_delete", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_delete) },
+    { { "wiring_default", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_default) },
     { { "module_power", CMD_TIER_T1 }, 0, CMD_FN(handle_module_power) },
     { { "power_profile", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_power_profile) },
     { { "dap_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_dap_start) },

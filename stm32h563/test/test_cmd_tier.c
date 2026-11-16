@@ -204,7 +204,7 @@ static void test_flags_match_the_old_lists(void) {
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
                "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-               "can_disable", "module");
+               "can_disable", "module", "wiring_list", "wiring_get");
     EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "stream", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
                "current_out", "adc_read", "adc_range", "calibrate", "dac_control_loop", "dac_loop_probe",

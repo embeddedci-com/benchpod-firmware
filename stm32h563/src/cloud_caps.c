@@ -18,6 +18,7 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
                "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
                "\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lan_tls\":true,"
+               "\"wiring_store\":true,\"error_codes\":true,"
                "\"wifi_scan\":%s,",
             c->flash_kb, c->sig_policy, c->lan_policy, c->no_wifi_scan ? "false" : "true");
     bp_emit(e, "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
@@ -74,6 +75,8 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
                    ",\"usb_net\""       /* the pod's API on a USB network adapter (usb_netif.c) */
                    ",\"usb_net_setting\""  /* usb_network on/off, device-only (pod_policy.h) */
                    ",\"lan_tls\"");        /* the LAN API over TLS on 8443, lan_tls command (lan_tls.h) */
+    /* wiring_store and error_codes are in the capabilities frame only: the cloud status is at its
+       size limit. A LAN client finds them by asking (wiring_list; a "code" in a refusal). */
     if (!c->no_wifi_scan) bp_emit_raw(e, ",\"wifi_scan\"");   /* the built-in Wi-Fi or a Wi-Fi bridge (wifi_scan.h) */
     if (c->pod_current) bp_emit_raw(e, ",\"pod_current\"");
     if (c->adc_low_range) bp_emit_raw(e, ",\"adc_low_range\"");   /* adc_range low (module v3r4) */

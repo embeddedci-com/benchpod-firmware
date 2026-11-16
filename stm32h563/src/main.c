@@ -46,6 +46,7 @@
 #include "dac_quad.h"
 #include "pod_policy.h"
 #include "cloud_extras.h"
+#include "wiring_store.h"
 #include "adc_cal.h"
 #include "blob_store.h"
 #include "c3_image.h"
@@ -266,6 +267,7 @@ void boot_deferred_hw_init(void)
     w25q_open(); c3_image_load(); w25q_close();   /* which image the ESP32-C3 runs (c3_image.h) */
     ice40_ident_load();     /* which image the iCE40's config flash holds (boot_policy.h) */
     cloud_extras_load();    /* company CA + proxy for the cloud link (cloud_extras.h) */
+    wiring_store_load();    /* the wiring profiles stored on the pod (wiring_store.h) */
     /* Layered PSRAM datapath self-test; loads the embedded gateware when the iCE40 never
        configured (a new board) or cannot write the PSRAM. */
     psram_boot_selftest_with_recovery();

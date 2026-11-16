@@ -19,6 +19,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "signal_engine.h"
 #include "i2c_txn.h"
 #include "i2c_bus.h"
@@ -114,7 +115,7 @@ void handle_i2c_start(int conn_id, const char *json) {
     if (!bp_json_get(json, "pullups", pu, sizeof(pu))) strcpy(pu, "pod");
     bool external = strcmp(pu, "external") == 0;
     if (!external && strcmp(pu, "pod") != 0) { send_error(conn_id, "pullups must be pod or external"); return; }
-    if (fpga_i2c_armed()) { send_error(conn_id, "i2c busy: send i2c_stop first"); return; }
+    if (fpga_i2c_armed()) { bp_err_i2c_session_open(conn_id, BP_ERR_TEXT("i2c busy: send i2c_stop first")); return; }
 
     uint8_t pins[2] = { (uint8_t)sda, (uint8_t)scl };
     for (unsigned i = 0; i < 2; i++)
@@ -123,7 +124,7 @@ void handle_i2c_start(int conn_id, const char *json) {
 
     unsigned half = fpga_i2c_half_for_hz(hz);
     int rc = fpga_i2c_arm(sda, scl, half);
-    if (rc == -2) { send_error(conn_id, "swd, spi or i2c busy: end that session first"); return; }
+    if (rc == -2) { bp_err_bus_engine_busy(conn_id, BP_ERR_TEXT("swd, spi or i2c busy: end that session first"), "i2c"); return; }
     if (rc != 0)  { send_error(conn_id, "invalid i2c arguments"); return; }
     for (unsigned i = 0; i < 2; i++) la_pins_claim(k_fns[i], LA_GPIO_NONE, 0, &pins[i], 1);
     s_sda = pins[0]; s_scl = pins[1]; s_half = half; s_external = external;

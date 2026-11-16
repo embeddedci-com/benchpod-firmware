@@ -106,6 +106,12 @@ bool require_la_voltage(int conn_id);
 /* The command handlers in command_handler.c. Every handler has this one signature so the command
    table (cmd_tier.c) can reach it; the ones that take no arguments ignore `json`. */
 void handle_ping(int conn_id, const char *json);
+/* The wiring profiles stored on the pod (command_handler_wiring.c, wiring_store.h). */
+void handle_wiring_list(int conn_id, const char *json);
+void handle_wiring_get(int conn_id, const char *json);
+void handle_wiring_put(int conn_id, const char *json);
+void handle_wiring_delete(int conn_id, const char *json);
+void handle_wiring_default(int conn_id, const char *json);
 
 /* Network provisioning and the cloud speed test (command_handler_net.c). */
 void   handle_cloud_set(int conn_id, const char *json);

@@ -133,7 +133,17 @@ The `cmd` field is required. All other fields are command-specific and documente
 
 ```json
 {"status":"error","message":"<description>"}\n
+{"status":"error","code":"BP0002","args":{"cmd":"frobnicate"},"message":"<description>"}\n
 ```
+
+From the next firmware release, refusals carry a stable error code (`BP0001` and up) and the
+values that go with it in `args` (left out when the code has none). Codes never change meaning and
+are never reused; each is on `https://embeddedci.com/docs/errors#<code>` with the cause and
+the fix, and [`errors/ERRORS.md`](../errors/ERRORS.md) lists them. Read `code` and `args`, not the
+`message` text: the text may change, and a future firmware sends only a short form of it
+(`"BP0002 cmd=frobnicate"`). Errors without a code yet keep the first form. The codes, their args
+and their texts for each tool are in [`errors/errors.json`](../errors/errors.json), generated from
+[`errors/catalog.toml`](../errors/catalog.toml).
 
 ### Chunked data (multi-packet responses)
 
@@ -275,6 +285,11 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
+| `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
+| `wiring_put` | T1 | Store a wiring profile, up to 600 bytes a call | object | no |
+| `wiring_delete` | T1 | Delete a stored wiring profile | object | no |
+| `wiring_default` | T0/T1 | Read or set the default wiring profile | object | no |
 | `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
@@ -2397,6 +2412,7 @@ State is **not** persisted: after a reset both eFuses return to off.
 | `efuse` | integer | yes | — | Which eFuse to switch: `1` (internal 5 V) or `2` (external). |
 | `state` | integer | yes | — | `1` (non-zero) enables the eFuse; `0` disables it. |
 | `delay_ms` | integer | no | `0` | Apply the change after this many milliseconds. `0` = immediately. The command **acks right away** and the eFuse switches later from the pod's poll loop — so the connection is free to do something else meanwhile (e.g. enter `uart_proxy_start` to capture the target's boot output as it powers up). A new `target_power` for the same eFuse replaces a still-pending delayed change. |
+| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `state` `0`. A bad name is refused with `BP0008`. |
 
 #### Response
 
@@ -2473,6 +2489,10 @@ auto-retry after ~110 ms, and `FLT` stays asserted through the retry, so the sam
 interval never misses a trip.
 
 ---
+
+From the next firmware release each eFuse object also has `"profile"`: the wiring profile named
+when that rail was switched on (`target_power` `profile`), or `null` when it is off or none was
+named.
 
 ### `power_status` — one-shot rail measurement
 
@@ -4065,6 +4085,59 @@ slot: it describes the image the C3 runs, as recorded when the pod last wrote on
 updated from firmware that kept a copy in the W25Q, that copy is reported until the first `esp`
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
+
+### Wiring profiles: `wiring_list`, `wiring_get`, `wiring_put`, `wiring_delete`, `wiring_default`
+
+The pod keeps its wiring profiles (which board signal is on which LA channel, the I/O voltage, the
+power rail) itself, so every connection sees the same ones: LAN, USB and the cloud, from any
+computer. Up to 16 named profiles of at most 4096 bytes of JSON each, 16 KB in all, and one of them
+is the default (the one a tool uses when it names none). Names are 1 to 40 characters: lowercase
+letters, digits and dashes, not starting with a dash. The SDK, CLI, MCP server and apps read and
+write them for you (`bp.load_wiring`, `bp.save_wiring`, `benchpod wiring`); this is the protocol
+underneath.
+
+The pod treats a profile as opaque JSON: it only checks that it is one JSON object. The tools
+validate the contents. Every save gives the profile the next revision number.
+
+```json
+{"cmd":"wiring_list"}
+-> {"status":"ok","data":{"default":"k66","profiles":[{"name":"k66","rev":3,"bytes":812},
+    {"name":"nrf52840-dk","rev":1,"bytes":640}],"max_profiles":16,"max_bytes":4096,"free_bytes":14920}}
+```
+
+`wiring_get` and `wiring_put` move a profile in pieces of at most 600 bytes (base64url, no padding),
+so a piece always fits the cloud command channel. Read from `offset` 0 until `offset` plus the
+piece's length reaches `total`; when `rev` changes between pieces, start again.
+
+```json
+{"cmd":"wiring_get","name":"k66","offset":0}
+-> {"status":"ok","data":{"name":"k66","rev":3,"total":812,"offset":0,"data_b64":"eyJ2ZXJz..."}}
+
+{"cmd":"wiring_put","name":"k66","offset":0,"total":812,"data_b64":"eyJ2ZXJz...","if_revision":3}
+-> {"status":"ok","data":{"name":"k66","received":600,"total":812}}
+{"cmd":"wiring_put","name":"k66","offset":600,"total":812,"data_b64":"..."}
+-> {"status":"ok","data":{"name":"k66","rev":4,"default":true}}
+```
+
+Send the pieces in order, starting at `offset` 0; the save happens with the last one. One upload
+runs at a time for the whole pod: a new piece at offset 0 replaces an unfinished upload.
+`if_revision` (optional, on the first piece) is the revision you loaded, or 0 for a new name: when
+the pod's copy moved on since then the save is refused with `BP0009` instead of overwriting someone
+else's change. The first profile stored becomes the default.
+
+```json
+{"cmd":"wiring_delete","name":"nrf52840-dk"}  -> {"status":"ok","data":{"name":"nrf52840-dk","deleted":true}}
+{"cmd":"wiring_default"}                       -> {"status":"ok","data":{"default":"k66"}}
+{"cmd":"wiring_default","name":"nrf52840-dk"}  -> {"status":"ok","data":{"default":"nrf52840-dk"}}
+```
+
+The default profile cannot be deleted (`BP0013`): make another one the default first. Reading never
+touches the pod's flash bus. Saving, deleting and changing the default do, so they are refused with
+`BP0016` while the DAC runs or a capture holds the bus; stop the DAC first. A save survives a power
+loss: the pod keeps two copies and writes the older one. Refusals: `BP0006` (a missing value),
+`BP0007` (no such profile), `BP0008` (bad name), `BP0009` (revision conflict), `BP0010` (full),
+`BP0011` (too large), `BP0012` (not a JSON object), `BP0014` (piece out of order), `BP0015`
+(storage failed), see [error codes](https://embeddedci.com/docs/errors).
 
 ### `emi_log` — the EMI test build's run log
 
