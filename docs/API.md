@@ -2659,7 +2659,7 @@ cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0`
 
 ### `uart_proxy_start` — transparent UART bridge
 
-Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+, for Modbus RTU for example); the MCU forwards bytes both ways over SPI.
+Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins are 1.8/3.3 V only: a 5 V UART needs a level shifter, and an RS-485 bus (Modbus RTU) an external RS-485 transceiver, between the pod and the device; the MCU forwards bytes both ways over SPI.
 
 Like `dap_start`, this is **connection-scoped** and changes how the connection's bytes are interpreted:
 
