@@ -31,6 +31,8 @@
 #include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
+#include "dac_quad.h"      /* the ADC low range keeps the +-12 V output within +-5 V */
+#include "i2c_bus.h"       /* adc_range_get */
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
 #include "esp_dut_flash.h"   /* so does an ESP32 DUT flash (esp_dut_flash_busy) */
 #include "status_led.h"
@@ -352,6 +354,13 @@ void dispatch_line(int conn_id, const char *buf) {
        tunnel, cloud command channel). No-op on a pod without limits. */
     {
         const char *why = dac_limits_check_command(cmd, buf);
+        if (why) { send_error(conn_id, why); return; }
+    }
+    /* The ADC low range keeps the +-12 V output within +-5 V (dac_quad.h). The DAC writes and the
+       range switch check it too; this names the command in the refusal. */
+    {
+        const char *why = dac_quad_low_check_command(cmd, buf, adc_range_get() == ADC_RANGE_LOW,
+                                                     dac_quad_channel());
         if (why) { send_error(conn_id, why); return; }
     }
     /* An analog sensor plays the DAC or the 4-20 mA output: nothing else may drive it. */
