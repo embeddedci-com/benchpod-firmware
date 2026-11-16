@@ -195,12 +195,14 @@ C_SOURCES := \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
+  src/command_handler_esp.c \
   src/command_handler_i2c.c \
   src/command_handler_bus_send.c \
   src/i2c_txn.c \
   src/command_handler_transport.c \
   src/esp_rom_flash.c \
   src/esp_rom_job.c \
+  src/esp_dut_flash.c \
   src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \

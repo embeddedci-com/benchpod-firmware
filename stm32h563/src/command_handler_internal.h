@@ -244,6 +244,8 @@ void handle_spi_stop(int conn_id, const char *json);
 void handle_spi_xfer(int conn_id, const char *json);
 void handle_spi_flash(int conn_id, const char *json);
 void handle_spi_stream(int conn_id, const char *json);
+/* ESP32 DUT flashing over its UART ROM loader (command_handler_esp.c). */
+void handle_esp_flash(int conn_id, const char *json);
 /* The PSRAM bytes the last `load_bin` with "psram" staged: false when none. */
 bool command_handler_psram_stage(uint32_t *base, uint32_t *len);
 void handle_spi_status(int conn_id, const char *json);
