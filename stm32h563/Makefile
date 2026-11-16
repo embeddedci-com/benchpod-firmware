@@ -147,6 +147,7 @@ C_SOURCES := \
   $(SENSOR_DEF_SRCS) \
   src/b64url.c \
   src/bp_json.c \
+  src/bp_errors.c \
   src/conn_tx.c \
   src/hw_worker.c \
   src/ota.c \

@@ -29,6 +29,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "signal_engine.h"
 #include "spi_flash.h"
 #include "spi_stream.h"
@@ -142,7 +143,7 @@ void handle_spi_start(int conn_id, const char *json) {
     if ((mode == 1 || mode == 2) && signal_engine_fpga_version() < SPI_MODES12_MIN_GW) {
         send_error(conn_id, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware"); return;
     }
-    if (fpga_spi_armed()) { send_error(conn_id, "spi busy: send spi_stop first"); return; }
+    if (fpga_spi_armed()) { bp_err_spi_session_open(conn_id, BP_ERR_TEXT("spi busy: send spi_stop first")); return; }
 
     uint8_t pins[4];
     for (unsigned i = 0; i < 4; i++) pins[i] = (uint8_t)v[i];
@@ -151,7 +152,7 @@ void handle_spi_start(int conn_id, const char *json) {
 
     unsigned half = fpga_spi_half_for_hz(hz);
     int rc = fpga_spi_arm(v[0], v[1], v[2], v[3], half, mode);
-    if (rc == -2) { send_error(conn_id, "swd or spi busy: end the SWD session first"); return; }
+    if (rc == -2) { bp_err_bus_engine_busy(conn_id, BP_ERR_TEXT("swd or spi busy: end the SWD session first"), "spi"); return; }
     if (rc != 0)  { send_error(conn_id, "invalid spi arguments"); return; }
     for (unsigned i = 0; i < 4; i++) la_pins_claim(k_fns[i], LA_GPIO_NONE, 0, &pins[i], 1);
     memcpy(s_pins, pins, sizeof(s_pins));

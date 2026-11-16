@@ -12,6 +12,7 @@
 #include "command_handler.h"
 #include "net_server.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "signal_engine.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
@@ -91,6 +92,19 @@ void send_ok_str(int conn_id, const char *payload_json) {
 #define CH_ERR_RESP_MAX  (2u * LA_PINS_ERR_MAX + 48u)
 _Static_assert(CH_ERR_RESP_MAX > LA_PINS_ERR_MAX, "error reply must outgrow its longest message");
 
+/* A stable error code (bp_errors.h): the same reply buffer and the same never-a-torn-line rule as
+   send_error, with "code" and "args" next to the message. */
+void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_err_arg_t *args,
+                   size_t n) {
+    char resp[CH_ERR_RESP_MAX];
+    size_t len = bp_error_format(resp, sizeof(resp), code, text, args, n);
+    printf("[cmd] -> error BP%04u: %s\n", (unsigned)code, text ? text : "");
+    if (len == 0) return;   /* cannot happen with CH_ERR_RESP_MAX; the format keeps the code */
+    if (at_send_data(conn_id, (const uint8_t *)resp, len) != 0) {
+        at_close_connection(conn_id);
+    }
+}
+
 void send_error(int conn_id, const char *message) {
     char resp[CH_ERR_RESP_MAX];
     bp_emit_t e;
@@ -116,7 +130,8 @@ void send_error(int conn_id, const char *message) {
    a voltage is set; otherwise emits an error and returns false. */
 bool require_la_voltage(int conn_id) {
     if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
-        send_error(conn_id, "la voltage not set; set it with la_voltage (mv 1800 or 3300) first");
+        bp_err_la_voltage_not_set(conn_id,
+            BP_ERR_TEXT("la voltage not set; set it with la_voltage (mv 1800 or 3300) first"));
         return false;
     }
     return true;
@@ -372,7 +387,7 @@ void dispatch_line(int conn_id, const char *buf) {
     /* The status LED flashes for a command that drives the pod, not for the polled reads. */
     status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light(cmd, buf));
     if (d && d->fn) d->fn(conn_id, buf);
-    else send_error(conn_id, "unknown cmd");
+    else bp_err_unknown_command(conn_id, BP_ERR_TEXT("unknown cmd"), cmd);
 }
 
 size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_t out_cap) {

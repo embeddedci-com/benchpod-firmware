@@ -1,0 +1,85 @@
+# BenchPod error codes: the one source of truth.
+#
+# Every error a BenchPod user can see has a stable code here, BP0001 and up. Rules:
+# - Codes are assigned in order and NEVER reused or renumbered. A code that is no longer sent stays
+#   here with `retired = "<firmware version>"` (and `replaced_by` when another code took over), so
+#   its docs page keeps working for old pods and old logs.
+# - `area` groups codes on the docs index. It is a field, not a number range.
+# - `since` is the first firmware release that sends the code ("next" until it is released).
+# - `args` are the values sent with the code, by name: `int` or `str`. Adding an arg later is
+#   fine (hosts ignore unknown args and render missing ones as "?"); removing or renaming one is
+#   not: add a new code instead.
+# - `message`, `fix.*` and `cause` are templates: `{name}` is replaced by that arg. American
+#   English, no em-dashes, no chip part numbers (they are published on the docs pages).
+# - `fix` has one text per surface: `sdk` (Python), `cli`, `mcp` (an agent's tool calls) and `web`
+#   (the web and desktop apps). Each tells that caller exactly what to do.
+#
+# After an edit run `python3 tools/gen_errors.py` (CI runs it with --check). It writes
+# stm32h563/src/bp_errors.h (firmware), errors/errors.json (hosts and docs) and errors/ERRORS.md.
+
+[BP0001]
+name = "la_voltage_not_set"
+area = "io"
+since = "next"
+message = "The I/O voltage is not set"
+cause = """The pod starts with its I/O voltage unset and never picks one on its own, so it cannot \
+drive a board at a voltage the board does not take. Anything that uses the LA pins (UART, \
+flashing, captures, GPIO, I2C, SPI, sensor emulation) needs it first."""
+[BP0001.fix]
+sdk = "set the board's I/O voltage first: BenchPod(conn, la_voltage=3.3) (1.8 for a 1.8 V board), the benchpod_la_voltage fixture in conftest.py, or bp.set_la_voltage(3.3)"
+cli = "set the board's I/O voltage first: `benchpod la voltage 3.3V` (or 1.8V)"
+mcp = "call set_la_voltage with the board's I/O voltage (1.8 or 3.3) first"
+web = "Set the board's I/O voltage (1.8 V or 3.3 V) in the Pins pane first."
+
+[BP0002]
+name = "unknown_command"
+area = "protocol"
+since = "next"
+args = { cmd = "str" }
+message = "The pod does not know the command {cmd}"
+cause = """The firmware on the pod is older than the tool that sent the command, or the command \
+name is wrong. Newer SDK, CLI and MCP versions check the pod's capabilities first and say which \
+firmware a feature needs."""
+[BP0002.fix]
+sdk = "update the pod's firmware (`benchpod flash-self`, or the firmware update in the web app)"
+cli = "update the pod's firmware with `benchpod flash-self`"
+mcp = "tell the user the pod's firmware is too old for this; they can update it with `benchpod flash-self` or in the web app"
+web = "Update the pod's firmware on its Settings tab."
+
+[BP0003]
+name = "i2c_session_open"
+area = "i2c"
+since = "next"
+message = "An I2C session is already open"
+cause = "The pod runs one I2C master session at a time."
+[BP0003.fix]
+sdk = "close the open session first (its close(), or leave its with block)"
+cli = "end the other I2C command first"
+mcp = "call i2c_close first"
+web = "Close the open I2C session first."
+
+[BP0004]
+name = "spi_session_open"
+area = "spi"
+since = "next"
+message = "An SPI session is already open"
+cause = "The pod runs one SPI master session at a time."
+[BP0004.fix]
+sdk = "close the open session first (its close(), or leave its with block)"
+cli = "end the other SPI command first"
+mcp = "wait for the other SPI call to finish, then try again"
+web = "Close the open SPI session first."
+
+[BP0005]
+name = "bus_engine_busy"
+area = "spi"
+since = "next"
+args = { want = "str" }
+message = "The engine that runs SWD, SPI and I2C is in use, so {want} cannot start"
+cause = """Flashing (SWD), the SPI master and the I2C master share one engine on the pod. While one \
+of them runs, the other two wait."""
+[BP0005.fix]
+sdk = "wait for the running flash, SPI or I2C session to finish (close it), then try again"
+cli = "wait for the running flash, SPI or I2C command to finish, then try again"
+mcp = "wait for the running flash, spi or i2c call to finish (i2c_close for an open I2C session), then try again"
+web = "Wait for the running flash, SPI or I2C session to finish."
