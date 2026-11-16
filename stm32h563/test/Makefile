@@ -140,6 +140,8 @@ FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
+# Which image the ESP32-C3 runs (src/c3_image.c), over the same W25Q model.
+C3IMG_SRCS := test_c3_image.c ../src/c3_image.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 # The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
 # (default config), built once into an archive.
 LANTLSPEM_SRCS := test_lan_tls_pem.c ../src/lan_tls_pem.c
@@ -148,7 +150,7 @@ MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 # The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
 ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
 ifneq ($(HAVE_MBEDTLS),)
-OTA_TARGET := build/test_ota build/test_blob_store build/test_cloud_extras build/test_esp_rom_job
+OTA_TARGET := build/test_ota build/test_blob_store build/test_c3_image build/test_cloud_extras build/test_esp_rom_job
 endif
 
 .PHONY: all clean run docs-check
@@ -420,6 +422,10 @@ build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
 
+build/test_c3_image: $(C3IMG_SRCS) mocks/mock_w25q.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(C3IMG_SRCS) -lm -o $@
+
 build/mbedtls/libmbedtls_host.a: $(MBEDTLS_ALL)
 	@mkdir -p build/mbedtls
 	cd build/mbedtls && $(CC) -O1 -w -c -I$(MBEDTLS)/include -I$(MBEDTLS)/library $(MBEDTLS_ALL)
@@ -607,6 +613,7 @@ run: $(TESTS)
 ifneq ($(HAVE_MBEDTLS),)
 	@./build/test_ota
 	@./build/test_blob_store
+	@./build/test_c3_image
 	@./build/test_cloud_extras > build/test_cloud_extras.log || { cat build/test_cloud_extras.log; exit 1; }
 	@tail -n 1 build/test_cloud_extras.log
 	@./build/test_esp_rom_job > build/test_esp_rom_job.log || { cat build/test_esp_rom_job.log; exit 1; }

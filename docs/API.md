@@ -223,6 +223,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_status` | T0 | The SPI session's pins, rate and mode | object | no |
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
+| `esp_flash` | T1 | Flash an ESP32-family target over its UART ROM bootloader | object | no |
 | `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
 | `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
 | `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
@@ -2766,6 +2767,67 @@ bits; a part that ships protected needs its status register written with `spi_xf
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
 
+## ESP32 targets (flash over the UART ROM bootloader)
+
+`esp_flash` writes an image into an ESP32-family target's flash through the chip's own ROM
+bootloader, the way `esptool` does, with no USB cable to the target. ESP32, ESP32-S2, S3, C2, C3,
+C6 and H2; the ESP8266 is refused. Firmware 3.10.7 and later. Wiring, at 3.3 V:
+
+| Target | Pod |
+|---|---|
+| U0TXD (TXD0) | an LA pin, `rx` |
+| U0RXD (RXD0) | an LA pin, `tx` |
+| IO0 (IO9 on the C3, C6 and C2) | an LA pin, `boot`, driven open-drain |
+| EN | the pod's reset pin (`"en":"nrst"`, the default) or an LA pin, open-drain |
+| GND | GND |
+
+Stage the image in PSRAM first with `load_bin` and `"psram":true` (a stream connection, as for
+`spi_stream`), then start the flash. It runs in the background: `start` and `sync` answer at once
+and `status` reports progress. Meanwhile captures, uploads and updates answer busy.
+
+```json
+{"cmd":"esp_flash","op":"start","rx":3,"tx":4,"boot":5,"en":"nrst","offset":65536,"len":524288,
+ "baud":460800,"flash_size":4194304,"run":true}
+{"cmd":"esp_flash","op":"status"}
+```
+
+| Field | Meaning |
+|---|---|
+| `op` | `start` (write), `sync` (enter the loader and read the chip, flash untouched), `status`, `abort` |
+| `rx`, `tx`, `boot` | LA pins (1..14), see the wiring above |
+| `en` | `"nrst"` (default) or an LA pin |
+| `offset` | flash address, a multiple of 4096 (`start` only, default 0) |
+| `len` | bytes of the staged upload to write (`start` only) |
+| `baud` | rate after the ROM's CHANGE_BAUDRATE, 9600..2000000 (default 460800; the loader starts at 115200) |
+| `flash_size` | the target's flash size in bytes, a power of two (default 4 MB); `offset + len` must fit |
+| `run` | `true` (default): reset into the new image at the end; `false`: stay in the loader |
+
+Sequence: boot pin low, EN low 100 ms, EN released, 50 ms, SYNC (retried); the boot pin is
+released once the ROM answers. Then CHANGE_BAUDRATE, SPI_ATTACH, SPI_SET_PARAMS, FLASH_BEGIN
+(the ROM erases the region, seconds for a large image), the data in 1 KB blocks, the chip's MD5
+of the region, FLASH_END. With `run` the pod pulses EN with the boot pin released. Every pin is
+released at the end, whatever the result. Write each region of a multi-file image (bootloader,
+partition table, application) with its own `start`, `run` only on the last.
+
+`start` and `sync` reply `{"started":true,"op":"start"}`. `status` (and `abort`) reply:
+
+```json
+{"running":false,"op":"start","phase":"done","done":512,"total":512,"chip":"ESP32-S3",
+ "magic":"0x00000009","offset":65536,"len":524288,"baud":460800,"resends":0,"ms":21450,
+ "md5":"9e107d9d372bb6826bd81d3542a419d6","result":"ok"}
+```
+
+`phase` is `enter`, `sync`, `detect`, `baud`, `attach`, `params`, `erase`, `write`, `verify`, `end`,
+`reset` or `done` (after a failure: the step it failed in); `done`/`total` count 1 KB blocks. `result` is `null` while running, then `ok`
+(the chip's MD5 matched), `unverified` (every block acknowledged, no MD5 came back), or the
+failure: `no answer from the ROM loader` (wiring, straps, or the target is not powered),
+`FLASH_BEGIN failed`, `a block was not acknowledged`, `MD5 mismatch`, `chip not supported
+(ESP8266)`, `aborted`.
+
+Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
+staged upload`, `busy`, `busy: an ESP32 flash is running`, `uart busy: stop the uart proxy first`,
+a pin conflict, `this pod has no reset pin: wire EN to an LA pin and pass en`.
+
 ## I2C master
 
 The pod is an I2C master on any two LA pins (firmware with gateware v55 and later): read and write
@@ -3813,17 +3875,19 @@ values. `wifi_clear` therefore wipes both copies:
 1. At once, before the reply: the STM32's copy. A tombstone record is written, then the other slot
    and the legacy sector are erased, so a power loss part-way cannot bring an old config back.
 2. After the reply has gone out and Wi-Fi is down (the reply may ride the Wi-Fi link): the C3's
-   NVS partition (16 KB at `0x9000`, read from the partition table of the C3 image in the W25Q) is
+   NVS partition (16 KB at `0x9000`, from the partition table of the image the pod last wrote into
+   the C3, or of the copy older firmware kept in the W25Q) is
    erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
    This takes about 3 seconds, and like `flash-esp32` it stops a running DAC waveform (the W25Q
    shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
    next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
 
 `wifi_status` reports step 2 as `c3_nvs`: `pending`, then `erased`, or `failed` if the C3 did not
-answer its ROM loader, the erase did not verify, the W25Q holds no C3 image, the pod is in safe
+answer its ROM loader, the erase did not verify, the pod does not know where the C3 image keeps its
+NVS (no `esp` update since firmware that kept a copy, and no copy left), the pod is in safe
 mode, or a capture, upload or update held the shared bus for a minute. After `failed`, send
-`wifi_clear` again or run `flash-esp32` on the USB console (it rewrites the C3's whole image, NVS
-region included). `wifi_clear` does not touch the device identity key, the cloud configuration
+`wifi_clear` again, or install the `esp` image again (`benchpod install-blobs --force --only esp`: it
+rewrites the C3's whole image, NVS region included). `wifi_clear` does not touch the device identity key, the cloud configuration
 (`cloud_clear`) or calibration data.
 
 **With a Wi-Fi bridge.** BenchPod v4 has no radio; a bridge box on the
@@ -3895,9 +3959,11 @@ next `bytes` bytes, acking every 8 KB with `{"speedtest":"ack","bytes":N}` and f
 
 An update is staged in PSRAM, checked (SHA-256, signature, fit) and only then written. The
 firmware itself goes to the MCU flash; the blob targets go to slots in the W25Q flash: `gw0` and
-`gw1` (the two iCE40 images), `esp` (the ESP32-C3 Wi-Fi image) and `ca` (a company CA, see
+`gw1` (the two iCE40 images) and `ca` (a company CA, see
 [`cloud_ca`](#cloud_ca--cloud_proxy-company-ca-and-http-proxy-for-the-cloud-link)). Over the
-cloud the server sends the image as WS `ota.*` frames; over the LAN the image goes in base64url
+cloud the server sends the image as WS `ota.*` frames. `esp`, the ESP32-C3 Wi-Fi image (boards with
+the C3 only), is not kept on the pod: it is written from the staging straight into the C3 (see
+`ota_commit`). Over the cloud the server sends the image as WS `ota.*` frames; over the LAN the image goes in base64url
 `ota_data` chunks, also over the USB network adapter (the USB console's `upload-*` commands are gone
 from firmware 3.9.0; see [usb-serial-interface.md](usb-serial-interface.md)). Most clients use `benchpod firmware install`
 or the web app instead of these commands.
@@ -3909,7 +3975,8 @@ One transport holds an update session at a time. Every `ota_*` reply carries the
  "frames_seen":0,"sig":"ok","sig_key":"<key id>","owner":"lan:1","error":""}}
 ```
 
-`state` is `idle`, `receiving`, `verified`, `error` or `installed`. `sig` is the signature check of
+`state` is `idle`, `receiving`, `verified`, `error`, `installed` or `applying` (an `esp` image is
+being written into the ESP32-C3). `sig` is the signature check of
 the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or `image`. `owner` is
 `cloud`, `usb`, `lan:N` or `""`.
 
@@ -3921,7 +3988,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 | `ota_status` | none | The session, from any transport (T0). |
 | `ota_abort` | none | Drops the staged image. |
 | `ota_selftest` | none | Tests the flash writer on a scratch sector (never the firmware); replies `{"selftest":"pass"}`. |
-| `ota_commit` | none | Firmware: replies `{"committing":true}`, writes the image and resets. A blob: writes the slot and replies with the session. |
+| `ota_commit` | none | Firmware: replies `{"committing":true}`, writes the image and resets. A blob: writes the slot and replies with the session. `esp`: replies with `state` `applying` and writes the image into the ESP32-C3 in the background (about 2 minutes, Wi-Fi down meanwhile; a commit sent over Wi-Fi may lose its reply), then `state` becomes `installed`, or `error` with the reason (the C3 is then left without a usable image). Poll `ota_status` until then: nothing may begin, abort or overwrite the session meanwhile, and captures and uploads answer busy. |
 
 Refusals:
 
@@ -3937,6 +4004,8 @@ Refusals:
 | The policy refuses the signature | `"signature: <result>"` |
 | The image could not enforce `required` | `"image cannot enforce signatures (policy required)"` |
 | `ota_commit` before a successful `ota_end` | `"no verified image staged"` |
+| Any `ota_*` that would change the session while an `esp` image is written into the C3 | `"busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends"` |
+| `esp` on a board without the ESP32-C3 | `"this BenchPod has no ESP32-C3: it takes no esp image"` |
 | `ota_selftest` while the hardware is busy | `"busy"`, or `"ota selftest failed (see console log)"` |
 
 ### `blob_status` — what the W25Q slots hold
@@ -3955,6 +4024,12 @@ It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
 particular).
+
+`esp` is listed only on a board with the ESP32-C3 (digital v3r3 and later have none). It is not a
+slot: it describes the image the C3 runs, as recorded when the pod last wrote one into it. On a pod
+updated from firmware that kept a copy in the W25Q, that copy is reported until the first `esp`
+update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
+the C3 does not start and the pod has no copy to reinstall it from.
 
 ### `emi_log` — the EMI test build's run log
 

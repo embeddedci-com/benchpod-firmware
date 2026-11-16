@@ -41,6 +41,8 @@ typedef enum {
     OTA_VERIFIED,     /* staged image hash matched; ready to commit */
     OTA_ERROR,
     OTA_INSTALLED,    /* a blob was written to its W25Q slot (firmware never gets here: it resets) */
+    OTA_APPLYING,     /* esp: the staged image is being written into the ESP32-C3 (about 2 minutes);
+                         nothing starts, aborts or overwrites the session until it ends */
 } ota_state_t;
 
 /* What an update writes. The firmware goes to internal flash and resets; a blob goes to its
@@ -169,6 +171,18 @@ int ota_commit(void);
    Calls blob_store_on_installed() so the pod can put the new blob to use. Target "tls" goes to
    ota_install_staged_config instead (internal flash, not a W25Q slot). */
 int ota_install_blob(void);
+
+/* The esp target is not kept on the pod: ota_install_blob hands the verified, staged image to
+ * ota_apply_esp_staged (the ESP32-C3 updater, c3_update.c), which writes it into the C3 from the
+ * PSRAM staging area in the background, and the session stays OTA_APPLYING until the updater
+ * calls ota_apply_finished. A weak default refuses (host builds without the updater).
+ * 0 = started; otherwise `why` says what refused it. */
+int  ota_apply_esp_staged(uint32_t size, uint32_t version, const uint8_t sha256[32],
+                          char *why, size_t cap);
+/* The updater is done: ok -> OTA_INSTALLED; else OTA_ERROR with `why`. No-op unless applying. */
+void ota_apply_finished(bool ok, const char *why);
+/* What a call made while applying is told. */
+#define OTA_BUSY_APPLYING "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends"
 /* Install a verified configuration upload that does not live in a W25Q slot (target "tls":
    lan_tls.c reads it with ota_read_staged). 0 = installed, else -1 with why filled. Weak default
    refuses, so the host tests link without lan_tls. */

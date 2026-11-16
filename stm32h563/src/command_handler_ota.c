@@ -13,6 +13,7 @@
 #include "at_driver.h"
 #include "ota.h"
 #include "blob_store.h"
+#include "c3_image.h"
 #include "cloud_client.h"   /* frames_seen: wire-level vs staged, for stall triage */
 #include "b64url.h"
 #include "bp_json.h"
@@ -203,7 +204,7 @@ void handle_blob_status(int conn_id, const char *json) {
     bool first = true;
     for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
         if (!blob_listed((blob_id_t)i)) continue;   /* + "bridge" in BENCHPOD_WIFI_BRIDGE builds */
-        const blob_info_t *in = blob_store_info((blob_id_t)i);
+        const blob_info_t *in = blob_report_info((blob_id_t)i);   /* esp: what the C3 runs */
         char hex[65] = "";
         if (in->present)
             for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
@@ -211,7 +212,7 @@ void handle_blob_status(int conn_id, const char *json) {
            installer should send it; unknown = this build expects nothing in particular. */
         bp_emit(&e, "%s{\"name\":\"%s\",\"state\":\"%s\",\"present\":%s,\"size\":%lu,"
                     "\"version\":%lu,\"sha256\":\"%s\"}",
-                first ? "" : ",", blob_name((blob_id_t)i), blob_state_str(blob_state((blob_id_t)i)),
+                first ? "" : ",", blob_name((blob_id_t)i), blob_state_str(blob_report_state((blob_id_t)i)),
                 in->present ? "true" : "false", (unsigned long)in->len,
                 (unsigned long)in->version, hex);
         first = false;

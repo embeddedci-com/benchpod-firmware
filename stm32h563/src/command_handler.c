@@ -32,6 +32,7 @@
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
+#include "esp_dut_flash.h"   /* so does an ESP32 DUT flash (esp_dut_flash_busy) */
 #include "status_led.h"
 
 #include <stdio.h>
@@ -182,7 +183,8 @@ bool heavy_in_flight(void) {
     ota_state_t o = ota_get_state();
     /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
        stopped, so it holds off captures, uploads and updates like they hold off each other. */
-    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || esp_rom_flash_busy();
+    return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
+           esp_rom_flash_busy() || esp_dut_flash_busy();
 }
 
 bool capture_or_upload_busy(void) {
@@ -196,6 +198,8 @@ bool heavy_or_claimed(void) {
 const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends";
+    if (esp_dut_flash_busy())
+        return "busy: an ESP32 target is being flashed (esp_flash); try again when it ends";
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_ota_busy())
         return "busy: the Wi-Fi bridge is being updated (about a minute); try again when it ends";

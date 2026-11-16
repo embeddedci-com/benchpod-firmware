@@ -1,5 +1,5 @@
 /*
- * esp_rom_job.c — the ESP32-C3 ROM-loader write as a non-blocking state machine (see
+ * esp_rom_job.c — the ESP32 ROM-loader write as a non-blocking state machine (see
  * esp_rom_job.h).  Portable: everything hardware comes in through esp_rom_io_t.
  */
 #include "esp_rom_job.h"
@@ -15,7 +15,9 @@
 #define OP_FLASH_END       0x04
 #define OP_SYNC            0x08
 #define OP_READ_REG        0x0A
+#define OP_SPI_SET_PARAMS  0x0B
 #define OP_SPI_ATTACH      0x0D
+#define OP_CHANGE_BAUDRATE 0x0F
 #define OP_SPI_FLASH_MD5   0x13
 
 #define CHECKSUM_MAGIC     0xEF
@@ -31,7 +33,6 @@
 /* Static I/O scratch: one job at a time. */
 static uint8_t  s_pkt[16 + ESP_ROM_BLOCK];                 /* FLASH_DATA payload, kept for resends */
 static uint32_t s_pkt_chk;
-static uint8_t  s_frame[8 + 16 + ESP_ROM_BLOCK];           /* header + data                       */
 static uint8_t  s_slip[2 * (8 + 16 + ESP_ROM_BLOCK) + 2];  /* worst-case encoded                  */
 static uint8_t  s_resp[256];                               /* decoded reply                       */
 static uint32_t s_value;                                   /* the reply header's value word       */
@@ -50,16 +51,16 @@ static bool reached(uint32_t now, uint32_t deadline) { return (int32_t)(now - de
 static void send_cmd(esp_rom_job_t *j, uint8_t op, const uint8_t *data, uint16_t dlen,
                      uint32_t checksum, uint32_t timeout_ms)
 {
-    uint8_t *h = s_frame;
+    /* SLIP-encode the 8-byte header and the data straight into s_slip (no unencoded copy). */
+    uint8_t h[8];
     h[0] = 0x00; h[1] = op;
     h[2] = (uint8_t)dlen; h[3] = (uint8_t)(dlen >> 8);
     put_le32(h + 4, checksum);
-    if (dlen) memcpy(h + 8, data, dlen);
 
     uint8_t *w = s_slip;
     *w++ = SLIP_END;
     for (uint32_t i = 0; i < 8u + dlen; i++) {
-        uint8_t b = s_frame[i];
+        uint8_t b = (i < 8u) ? h[i] : data[i - 8u];
         if (b == SLIP_END)      { *w++ = SLIP_ESC; *w++ = SLIP_ESC_END; }
         else if (b == SLIP_ESC) { *w++ = SLIP_ESC; *w++ = SLIP_ESC_ESC; }
         else                    *w++ = b;
@@ -128,6 +129,7 @@ static int poll_reply(esp_rom_job_t *j)
 
 static void finish(esp_rom_job_t *j, int result)
 {
+    if (result < 0) j->failed_phase = j->phase;
     j->result = result;
     j->phase  = ESP_ROM_DONE;
     mbedtls_md5_free(&s_md5);
@@ -189,10 +191,42 @@ static void send_end(esp_rom_job_t *j, int result)
     send_cmd(j, OP_FLASH_END, e, sizeof(e), 0, 1000);
 }
 
+static void send_attach(esp_rom_job_t *j)
+{
+    /* SPI_ATTACH(0): default flash pins.  Non-fatal: the flash is usually attached already;
+       FLASH_BEGIN/DATA and the MD5 are the real gates. */
+    uint8_t a[8] = {0};
+    j->phase = ESP_ROM_ATTACH;
+    send_cmd(j, OP_SPI_ATTACH, a, sizeof(a), 0, 1000);
+}
+
+static void send_begin(esp_rom_job_t *j)
+{
+    /* The original ESP32's ROM takes 4 words.  Every later ROM sets
+       SPI_FLASH_SUPPORTS_ENCRYPTED_FLASH, so esptool appends a 5th (encrypted=0). */
+    uint8_t b[20];
+    uint16_t n = (j->chip_magic == ESP_MAGIC_ESP32) ? 16 : 20;
+    put_le32(b + 0, j->len);          /* erase size  */
+    put_le32(b + 4, j->blocks);       /* packets     */
+    put_le32(b + 8, ESP_ROM_BLOCK);   /* packet size */
+    put_le32(b + 12, j->offset);
+    put_le32(b + 16, 0);              /* not encrypted */
+    log_printf("[espflash] FLASH_BEGIN (%lu blocks, erasing)...\n", (unsigned long)j->blocks);
+    j->phase = ESP_ROM_BEGIN;
+    send_cmd(j, OP_FLASH_BEGIN, b, n, 0, ESP_ROM_BEGIN_TIMEOUT_MS);
+}
+
 void esp_rom_job_start(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset)
+{
+    esp_rom_job_start_ex(j, io, len, offset, NULL);
+}
+
+void esp_rom_job_start_ex(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset,
+                          const esp_rom_opts_t *opts)
 {
     memset(j, 0, sizeof(*j));
     j->io = io;
+    if (opts) j->opts = *opts;
     j->len = len;
     j->offset = offset;
     j->blocks = (len + ESP_ROM_BLOCK - 1) / ESP_ROM_BLOCK;
@@ -244,31 +278,66 @@ bool esp_rom_job_step(esp_rom_job_t *j)
 
     case ESP_ROM_MAGIC: {
         if (r == 0) j->chip_magic = s_value;
-        log_printf("[espflash] C3 ROM synced (magic 0x%08lx)\n", (unsigned long)j->chip_magic);
+        log_printf("[espflash] %s ROM synced (magic 0x%08lx)\n", esp_rom_chip_name(j->chip_magic),
+                   (unsigned long)j->chip_magic);
         if (j->sync_only) { finish(j, ESP_ROM_OK); break; }
-        /* SPI_ATTACH(0): default flash pins.  Non-fatal: the C3's flash is usually attached
-           already; FLASH_BEGIN/DATA and the MD5 are the real gates. */
-        uint8_t a[8] = {0};
-        j->phase = ESP_ROM_ATTACH;
-        send_cmd(j, OP_SPI_ATTACH, a, sizeof(a), 0, 1000);
+        if (r == 0 && j->chip_magic == ESP_MAGIC_ESP8266) {
+            log_printf("[espflash] ESP8266: not supported\n");
+            finish(j, ESP_ROM_ERR_CHIP);
+            break;
+        }
+        if (j->opts.baud && j->io->set_baud) {
+            /* CHANGE_BAUDRATE(new, 0): the second word is the old rate only for esptool's stub. */
+            uint8_t d[8]; put_le32(d, j->opts.baud); put_le32(d + 4, 0);
+            j->phase = ESP_ROM_BAUD;
+            send_cmd(j, OP_CHANGE_BAUDRATE, d, sizeof(d), 0, 1000);
+            break;
+        }
+        send_attach(j);
         break;
     }
 
-    case ESP_ROM_ATTACH: {
-        if (r != 0) log_printf("[espflash] SPI_ATTACH warning (continuing)\n");
-        /* 20 bytes: the C3 ROM sets SPI_FLASH_SUPPORTS_ENCRYPTED_FLASH, so esptool appends a
-           5th word (encrypted=0) for a ROM FLASH_BEGIN. */
-        uint8_t b[20];
-        put_le32(b + 0, j->len);          /* erase size  */
-        put_le32(b + 4, j->blocks);       /* packets     */
-        put_le32(b + 8, ESP_ROM_BLOCK);   /* packet size */
-        put_le32(b + 12, j->offset);
-        put_le32(b + 16, 0);              /* not encrypted */
-        log_printf("[espflash] FLASH_BEGIN (%lu blocks, erasing)...\n", (unsigned long)j->blocks);
-        j->phase = ESP_ROM_BEGIN;
-        send_cmd(j, OP_FLASH_BEGIN, b, sizeof(b), 0, ESP_ROM_BEGIN_TIMEOUT_MS);
+    case ESP_ROM_BAUD:
+        if (r == 0) {
+            /* The answer came at the old rate; the ROM switches after sending it.  If our UART
+               cannot follow, nothing more gets through: stop here, not 40 s later. */
+            if (j->io->set_baud(j->opts.baud) != 0) {
+                log_printf("[espflash] could not switch our UART to %lu baud\n",
+                           (unsigned long)j->opts.baud);
+                finish(j, ESP_ROM_ERR_BAUD);
+                break;
+            }
+            j->baud = j->opts.baud;
+            log_printf("[espflash] baud rate now %lu\n", (unsigned long)j->opts.baud);
+        } else {
+            log_printf("[espflash] CHANGE_BAUDRATE refused (rc %d): staying at the old rate\n", r);
+        }
+        send_attach(j);
         break;
-    }
+
+    case ESP_ROM_ATTACH:
+        if (r != 0) log_printf("[espflash] SPI_ATTACH warning (continuing)\n");
+        if (j->opts.flash_size) {
+            /* SPI_SET_PARAMS(id, total size, 64 KB block, 4 KB sector, 256 B page, status mask):
+               esptool sends it in ROM mode too, else the ROM refuses writes past its default. */
+            uint8_t p[24];
+            put_le32(p + 0, 0);
+            put_le32(p + 4, j->opts.flash_size);
+            put_le32(p + 8, 64u * 1024u);
+            put_le32(p + 12, 4096u);
+            put_le32(p + 16, 256u);
+            put_le32(p + 20, 0xFFFFu);
+            j->phase = ESP_ROM_PARAMS;
+            send_cmd(j, OP_SPI_SET_PARAMS, p, sizeof(p), 0, 1000);
+            break;
+        }
+        send_begin(j);
+        break;
+
+    case ESP_ROM_PARAMS:
+        if (r != 0) log_printf("[espflash] SPI_SET_PARAMS warning (rc %d, continuing)\n", r);
+        send_begin(j);
+        break;
 
     case ESP_ROM_BEGIN:
         if (r != 0) {
@@ -313,7 +382,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
             memcpy(j->got_md5, s_payload, 32);
             j->got_md5[32] = '\0';
             if (memcmp(j->got_md5, j->want_md5, 32) != 0) {
-                log_printf("[espflash] MD5 MISMATCH: the C3 does not hold the image\n");
+                log_printf("[espflash] MD5 MISMATCH: the chip does not hold the image\n");
                 log_printf("[espflash]   want %s\n", j->want_md5);
                 log_printf("[espflash]   got  %s\n", j->got_md5);
                 finish(j, ESP_ROM_ERR_MD5);
@@ -353,11 +422,47 @@ const char *esp_rom_result_str(int result)
     switch (result) {
     case ESP_ROM_OK:         return "verified";
     case ESP_ROM_UNVERIFIED: return "written, MD5 not read back";
-    case ESP_ROM_ERR_SYNC:   return "no answer from the C3 ROM loader";
+    case ESP_ROM_ERR_SYNC:   return "no answer from the ROM loader";
     case ESP_ROM_ERR_BEGIN:  return "FLASH_BEGIN failed";
     case ESP_ROM_ERR_READ:   return "reading the image failed";
     case ESP_ROM_ERR_DATA:   return "a block was not acknowledged";
     case ESP_ROM_ERR_MD5:    return "MD5 mismatch";
+    case ESP_ROM_ERR_CHIP:   return "chip not supported (ESP8266)";
+    case ESP_ROM_ERR_BAUD:   return "could not change the baud rate";
     default:                 return "bad arguments";
+    }
+}
+
+const char *esp_rom_chip_name(uint32_t magic)
+{
+    switch (magic) {
+    case ESP_MAGIC_ESP32:   return "ESP32";
+    case 0x000007C6u:       return "ESP32-S2";
+    case 0x00000009u:       return "ESP32-S3";
+    case 0x6921506Fu: case 0x1B31506Fu: case 0x4881606Fu: case 0x4361606Fu:
+                            return "ESP32-C3";
+    case 0x6F51306Fu: case 0x7C41A06Fu:
+                            return "ESP32-C2";
+    case 0x2CE0806Fu:       return "ESP32-C6";
+    case 0xD7B73E80u:       return "ESP32-H2";
+    case ESP_MAGIC_ESP8266: return "ESP8266";
+    default:                return "unknown";
+    }
+}
+
+const char *esp_rom_phase_str(esp_rom_phase_t phase)
+{
+    switch (phase) {
+    case ESP_ROM_IDLE:   return "idle";
+    case ESP_ROM_SYNC:   return "sync";
+    case ESP_ROM_MAGIC:  return "detect";
+    case ESP_ROM_BAUD:   return "baud";
+    case ESP_ROM_ATTACH: return "attach";
+    case ESP_ROM_PARAMS: return "params";
+    case ESP_ROM_BEGIN:  return "erase";
+    case ESP_ROM_DATA:   return "write";
+    case ESP_ROM_MD5:    return "verify";
+    case ESP_ROM_END:    return "end";
+    default:             return "done";
     }
 }

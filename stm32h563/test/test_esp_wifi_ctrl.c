@@ -226,6 +226,8 @@ static int s_flash_submits;
 bool hw_worker_submit_esp_flash(void) { s_flash_submits++; return true; }
 static bool s_have_image;                    /* the esp slot holds an image (auto-flash armed) */
 bool blob_store_present(blob_id_t id) { (void)id; return s_have_image; }   /* default: no image */
+static int s_set_missing = -1;   /* last c3_image_set_missing argument, -1 = never called */
+void c3_image_set_missing(bool missing) { s_set_missing = missing; }
 static bool s_c3_flashing;                   /* a background C3 flash owns EN/BOOT */
 bool esp_rom_flash_busy(void) { return s_c3_flashing; }
 
@@ -465,6 +467,20 @@ static void test_reload_during_c3_flash_waits(void) {
     CHECK(bring_up());
 }
 
+/* The C3 never starts and the pod keeps no copy of its image (3.10.x and later): nothing to
+   flash it from, so esp is reported missing for the next installer instead. */
+static void test_dead_c3_without_image_reports_missing(void) {
+    fresh();
+    s_have_image = false;
+    s_set_missing = -1;
+    int submits = s_flash_submits;
+    C.tx_ok = true; C.answer = true;         /* C.ready stays false: no boot event */
+    run_ms(60000);
+    CHECK(s_flash_submits == submits);       /* no copy to flash from */
+    CHECK(s_set_missing == 1);
+    fresh();
+}
+
 /* ---- Wi-Fi scan ---------------------------------------------------------------- */
 
 static void fake_networks(void) {
@@ -650,6 +666,7 @@ int main(void) {
     test_scan_waits_for_connect();
     test_scan_reload_fails_it();
     test_no_c3_module();
+    test_dead_c3_without_image_reports_missing();
     CHECK(s_flash_submits == 0);
     if (failures) { printf("FAIL test_esp_wifi_ctrl: %d failure(s)\n", failures); return 1; }
     printf("PASS test_esp_wifi_ctrl\n");

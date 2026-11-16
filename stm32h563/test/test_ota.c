@@ -680,6 +680,14 @@ static void test_blob_targets(void) {
           strcmp(ota_error(), "bad size") == 0, "an ESP image larger than its slot: %s", ota_error());
     ota_abort();
 
+    /* A board without the ESP32-C3 (digital v3r3 and later) takes no esp image at all. */
+    blob_store_set_esp_listed(false);
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_ESP, 0) != 0 && strstr(ota_error(), "no ESP32-C3"),
+          "an esp image was accepted on a board without the C3: %s", ota_error());
+    CHECK(ota_get_state() != OTA_RECEIVING, "a refused esp begin left a session receiving");
+    blob_store_set_esp_listed(true);
+    ota_abort();
+
     /* A blob on a 1 MB pod: no fw_info block needed. */
     mock_flash_size = 0x100000u;
     CHECK(ota_begin_target(N, hex, OTA_TARGET_GW1, 46) == 0, "begin: %s", ota_error());
@@ -715,6 +723,116 @@ static void test_blob_targets(void) {
     CHECK(ota_commit_blob_for_test() != 0, "a changed staging area was installed");
     CHECK(!blob_store_present(BLOB_GW0), "the slot is present after a failed install");
     CHECK(mock_installed[BLOB_GW0] == 0, "the installed hook ran after a failure");
+    ota_abort();
+}
+
+/* The ESP32-C3 updater (c3_update.c on the pod): records what it was handed. */
+static int      s_apply_calls;
+static int      s_apply_refuse;          /* nonzero: refuse like a busy updater */
+static uint32_t s_apply_size;
+int ota_apply_esp_staged(uint32_t size, uint32_t version, const uint8_t sha256[32],
+                         char *why, size_t cap) {
+    (void)version; (void)sha256;
+    s_apply_calls++;
+    if (s_apply_refuse) { snprintf(why, cap, "an ESP32-C3 flash is already running"); return -1; }
+    s_apply_size = size;
+    return 0;
+}
+
+/* esp images must be signed (security review M6): the test key's manifest (tools/fwsign.py, seed
+   bytes 0..31, target esp, version 7, release 3.10.7) over test_esp_written_into_the_c3's image,
+   fill_image(7000 bytes, seed 9). */
+static const uint8_t k_esp_sig[128] = {
+    0x42, 0x50, 0x53, 0x47, 0x01, 0x00, 0x03, 0x00, 0x58, 0x1b, 0x00, 0x00,
+    0x84, 0xc1, 0xaf, 0xb5, 0xe2, 0xee, 0xa3, 0x33, 0x01, 0x37, 0x4b, 0x8a,
+    0x33, 0x61, 0xf8, 0x78, 0x14, 0xe2, 0x8c, 0x9c, 0x2c, 0xf0, 0xa3, 0x90,
+    0xea, 0xd2, 0x99, 0xd3, 0xa3, 0xd9, 0x47, 0x50, 0x07, 0x00, 0x00, 0x00,
+    0x07, 0x0a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xed, 0x42, 0x42, 0xea,
+    0xd4, 0xac, 0x69, 0x48, 0x61, 0xcd, 0x01, 0x83, 0x3a, 0x0b, 0xb6, 0xe3,
+    0x36, 0x92, 0x6f, 0x9d, 0xcf, 0xc0, 0xef, 0x97, 0x57, 0xda, 0x65, 0xad,
+    0x79, 0x50, 0x98, 0x40, 0x24, 0x27, 0x79, 0x45, 0xb9, 0x5d, 0xea, 0x77,
+    0xaa, 0xdd, 0xc6, 0xea, 0xcb, 0xa6, 0x88, 0xb3, 0x72, 0x67, 0xd2, 0x35,
+    0xae, 0x19, 0x70, 0xb8, 0x18, 0x0e, 0xab, 0x3e, 0xc8, 0x26, 0x7f, 0xad,
+    0xd6, 0xee, 0x5a, 0x1f, 0xe5, 0x4a, 0x20, 0x0d,
+};
+
+static void stage_esp(const uint8_t *img, uint32_t n, const char *hex) {
+    ota_abort();
+    CHECK(ota_begin_signed(n, hex, OTA_TARGET_ESP, 7, k_esp_sig, sizeof(k_esp_sig)) == 0,
+          "esp begin: %s", ota_error());
+    for (uint32_t off = 0; off < n; off += 1024) {
+        uint32_t c = (n - off) < 1024 ? (n - off) : 1024;
+        ota_data(off, img + off, c);
+    }
+    CHECK(ota_end() == 0, "esp end: %s", ota_error());
+}
+
+/* The pod keeps no copy of the C3's image: an esp update is written into the C3 from the
+   staging area, and the session stays "applying" until that ends. */
+static void test_esp_written_into_the_c3(void) {
+    enum { N = 7000 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 9);
+    sha256_hex(img, N, hex);
+    mock_ota_psram_reset();
+    mock_w25q_reset();
+    blob_store_load();
+
+    stage_esp(img, N, hex);
+    s_apply_calls = 0;
+    CHECK(ota_commit_blob_for_test() == 0, "commit: %s", ota_error());
+    CHECK(ota_get_state() == OTA_APPLYING && strcmp(ota_state_str(), "applying") == 0,
+          "state after commit = %s", ota_state_str());
+    CHECK(s_apply_calls == 1 && s_apply_size == N, "the updater got %d call(s), %lu bytes",
+          s_apply_calls, (unsigned long)s_apply_size);
+    CHECK(!blob_store_present(BLOB_ESP) && mock_installed[BLOB_ESP] == 0, "the esp slot was written");
+
+    /* Nothing touches the session meanwhile: data, end, a new begin, an abort, the watchdog. */
+    CHECK(ota_data(0, img, 16) != 0 && ota_get_state() == OTA_APPLYING, "data changed the session");
+    CHECK(strstr(ota_error(), "ESP32-C3 is being flashed") != NULL, "error while applying = %s", ota_error());
+    CHECK(ota_end() != 0 && ota_get_state() == OTA_APPLYING, "end changed the session");
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_GW0, 47) != 0 && ota_get_state() == OTA_APPLYING &&
+          ota_target() == OTA_TARGET_ESP, "a begin replaced the session");
+    CHECK(ota_begin_owned(OTA_OWNER_CLOUD, N, hex, OTA_TARGET_FIRMWARE, 0, NULL, 0) != 0 &&
+          ota_get_state() == OTA_APPLYING, "the cloud took over an applying session");
+    ota_abort();
+    CHECK(ota_get_state() == OTA_APPLYING, "abort dropped an applying session");
+    for (uint32_t t = 0; t < 1200000u; t += 10000u) ota_watchdog(t);
+    CHECK(ota_get_state() == OTA_APPLYING, "the watchdog dropped an applying session");
+    ota_view_t v;
+    ota_view_for(OTA_OWNER_CLOUD, &v);
+    CHECK(v.state == OTA_APPLYING || v.state == OTA_ERROR, "cloud view state %d", (int)v.state);
+
+    ota_apply_finished(true, NULL);
+    CHECK(ota_get_state() == OTA_INSTALLED && ota_error()[0] == '\0', "after the write: %s / %s",
+          ota_state_str(), ota_error());
+    ota_apply_finished(false, "late");   /* only an applying session finishes */
+    CHECK(ota_get_state() == OTA_INSTALLED, "a late finish changed an installed session");
+    ota_abort();
+    CHECK(ota_get_state() == OTA_IDLE, "abort after install");
+
+    /* The write fails: the session ends in error with the reason. */
+    stage_esp(img, N, hex);
+    CHECK(ota_commit_blob_for_test() == 0, "commit 2");
+    ota_apply_finished(false, "ESP32-C3 flash failed: no SYNC");
+    CHECK(ota_get_state() == OTA_ERROR && strstr(ota_error(), "no SYNC"), "after a failed write: %s / %s",
+          ota_state_str(), ota_error());
+    ota_abort();
+
+    /* A busy updater refuses: error, nothing applying. */
+    stage_esp(img, N, hex);
+    s_apply_refuse = 1;
+    CHECK(ota_commit_blob_for_test() != 0 && ota_get_state() == OTA_ERROR &&
+          strstr(ota_error(), "already running"), "a refused start: %s / %s", ota_state_str(), ota_error());
+    s_apply_refuse = 0;
+    ota_abort();
+
+    /* The staging changed after verify (a capture ran in between): never handed to the C3. */
+    stage_esp(img, N, hex);
+    mock_psram[50] ^= 0x01;
+    s_apply_calls = 0;
+    CHECK(ota_commit_blob_for_test() != 0 && s_apply_calls == 0, "a changed staging area reached the C3");
     ota_abort();
 }
 
@@ -897,6 +1015,7 @@ int main(void) {
     test_watchdog_drops_uncommitted_verified_image();
     test_signed_begin();
     test_lan_signed_only_and_floor();
+    test_esp_written_into_the_c3();
     test_sig_decode();
     test_begin_owned_b64();
 
