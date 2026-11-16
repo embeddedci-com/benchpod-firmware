@@ -48,6 +48,8 @@
 #include "cloud_extras.h"
 #include "adc_cal.h"
 #include "blob_store.h"
+#include "c3_image.h"
+#include "w25q.h"
 #include "bp_log.h"
 
 #include <stdbool.h>
@@ -261,6 +263,7 @@ void boot_deferred_hw_init(void)
     psram_bus_handover();
     /* What the W25Q blob slots hold (blob_store.h): read once, while nothing else uses the bus. */
     (void)blob_store_init();
+    w25q_open(); c3_image_load(); w25q_close();   /* which image the ESP32-C3 runs (c3_image.h) */
     ice40_ident_load();     /* which image the iCE40's config flash holds (boot_policy.h) */
     cloud_extras_load();    /* company CA + proxy for the cloud link (cloud_extras.h) */
     /* Layered PSRAM datapath self-test; loads the embedded gateware when the iCE40 never

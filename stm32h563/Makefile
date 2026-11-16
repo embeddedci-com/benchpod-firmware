@@ -201,6 +201,8 @@ C_SOURCES := \
   src/i2c_txn.c \
   src/command_handler_transport.c \
   src/esp_rom_flash.c \
+  src/c3_image.c \
+  src/c3_update.c \
   src/esp_rom_job.c \
   src/esp_dut_flash.c \
   src/esp_part_table.c \

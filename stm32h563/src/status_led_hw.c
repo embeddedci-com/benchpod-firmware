@@ -56,7 +56,7 @@ void status_led_service(void) {
         .hw_ok       = !boot_guard_skip_hw() && ice40_is_configured() && signal_engine_psram_operable(),
         .power_fault = flt1 || flt2,
         .power_on    = on1 || on2,
-        .updating    = o == OTA_RECEIVING || o == OTA_VERIFIED,
+        .updating    = o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING,
         .busy        = heavy_or_claimed(),
 #if defined(BENCHPOD_EMI_TEST)
         .emi         = emi_test_led_state(),

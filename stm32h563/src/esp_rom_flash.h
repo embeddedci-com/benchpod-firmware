@@ -50,6 +50,14 @@ typedef void (*esp_flash_done_fn)(int result);
 #define ESP_FLASH_START_NO_MODULE -4  /* no ESP32-C3 on this board (digital v3r3) */
 int esp_rom_flash_start(esp_flash_done_fn done);
 
+/* The same background flash with the image an esp update staged in PSRAM (ota.c, `len` bytes,
+ * verified by the caller): how the pod updates the C3 now that it keeps no copy of its image
+ * (c3_update.c). ESP_FLASH_START_NO_IMAGE for len 0. */
+int esp_rom_flash_start_staged(uint32_t len, esp_flash_done_fn done);
+
+/* The NVS partition of the image staged in PSRAM (its partition table). Bus free. */
+bool esp_rom_flash_staged_nvs(uint32_t *off, uint32_t *size);
+
 /* Advance a background flash; cheap when none runs.  hw worker loop only. */
 void esp_rom_flash_poll(void);
 
@@ -59,8 +67,8 @@ bool esp_rom_flash_busy(void);
 /* Progress of the running flash: blocks acknowledged and the total.  false when none runs. */
 bool esp_rom_flash_progress(uint32_t *done, uint32_t *total);
 
-/* Erase the C3's NVS partition (found through the partition table of the esp-hosted image in
- * the W25Q slot) and verify by on-chip MD5 that it reads back blank.  That is where esp-hosted
+/* Erase the C3's NVS partition (where c3_image.h recorded it, else found through the partition
+ * table of a copy of the image older firmware left in the W25Q slot) and verify by on-chip MD5 that it reads back blank.  That is where esp-hosted
  * firmware left on the IDF default WIFI_STORAGE_FLASH (pod firmware up to 3.7.0) kept the SSID
  * and password; NVS itself only marks an entry erased, so nothing short of erasing the sectors
  * removes them.  The application, otadata and phy_init are untouched: the C3 recreates an

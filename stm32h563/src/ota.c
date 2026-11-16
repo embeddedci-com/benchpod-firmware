@@ -52,6 +52,7 @@ static uint32_t    s_activity_ms;          /* s_clock_ms at the session's last b
 static ota_owner_t s_ref_owner = OTA_OWNER_NONE;   /* last refusal shown only to this owner   */
 static char        s_ref_err[96];
 static uint32_t    s_ref_seq;              /* bumped per explicit refusal (ota_view_t.refusals) */
+static const char *s_apply_refusal;        /* set when a call came in while APPLYING            */
 
 static int hex_nibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -133,6 +134,11 @@ __attribute__((weak)) int ota_install_staged_config(ota_target_t t, uint32_t siz
 }
 
 static void set_err(const char *e) {
+    if (s_state == OTA_APPLYING) {   /* the C3 is being written: no call changes the session */
+        s_apply_refusal = OTA_BUSY_APPLYING;
+        printf("[ota] refused while the ESP32-C3 is flashed (%s)\n", e ? e : "");
+        return;
+    }
     strncpy(s_err, e ? e : "", sizeof(s_err) - 1);
     s_err[sizeof(s_err) - 1] = '\0';
     s_state = OTA_ERROR;
@@ -192,6 +198,7 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
 
 static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
                         const uint8_t *sig, size_t sig_len) {
+    if (s_state == OTA_APPLYING) { set_err("begin"); return -1; }   /* touches nothing */
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
     if (!target_known(target)) { set_err("bad target"); return -1; }
@@ -343,6 +350,7 @@ int ota_reverify_held(void) {
 }
 
 void ota_abort(void) {
+    if (s_state == OTA_APPLYING) { set_err("abort"); return; }   /* a C3 write cannot be undone */
     s_owner    = OTA_OWNER_NONE;
     s_orphan   = false;
     s_state    = OTA_IDLE;
@@ -399,7 +407,7 @@ void ota_watchdog(uint32_t now_ms) {
 
 uint32_t    ota_received(void)  { return s_received; }
 uint32_t    ota_size(void)      { return s_size; }
-const char *ota_error(void)     { return s_err; }
+const char *ota_error(void)     { return s_state == OTA_APPLYING && s_apply_refusal ? s_apply_refusal : s_err; }
 
 const char *ota_state_str(void) { return ota_state_name(s_state); }
 
@@ -410,13 +418,16 @@ const char *ota_state_name(ota_state_t st) {
         case OTA_VERIFIED:  return "verified";
         case OTA_ERROR:     return "error";
         case OTA_INSTALLED: return "installed";
+        case OTA_APPLYING:  return "applying";
         default:            return "unknown";
     }
 }
 
 /* ---- session owner (ota.h) ---------------------------------------------------------------- */
 
-static bool session_active(void) { return s_state == OTA_RECEIVING || s_state == OTA_VERIFIED; }
+static bool session_active(void) {
+    return s_state == OTA_RECEIVING || s_state == OTA_VERIFIED || s_state == OTA_APPLYING;
+}
 
 static bool is_lan(ota_owner_t who) { return who >= OTA_OWNER_LAN(0); }
 
@@ -516,6 +527,7 @@ void ota_refuse_for(ota_owner_t who, const char *why) { refuse(who, why, true); 
 
 int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                     uint32_t version, const uint8_t *sig, size_t sig_len) {
+    if (s_state == OTA_APPLYING) { set_err("begin"); return -1; }   /* not even an abandoned one */
     const char *busy = ota_busy_replace_for(who);
     if (busy) { ota_refuse_for(who, busy); return -1; }
     if (session_active() && s_owner != who && s_owner != OTA_OWNER_NONE)
@@ -579,7 +591,7 @@ void ota_view_for(ota_owner_t who, ota_view_t *out) {
     out->state = s_state;
     out->received = s_received;
     out->size = s_size;
-    out->error = s_err;
+    out->error = ota_error();
 }
 
 /* Blob data straight from the staging area; the bus is already held (w25q_open). */
@@ -588,9 +600,49 @@ static int staged_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
     return psram_read(OTA_PSRAM_BASE + off, buf, n);
 }
 
+/* No ESP32-C3 updater in this build (host tests that do not provide one). */
+__attribute__((weak)) int ota_apply_esp_staged(uint32_t size, uint32_t version, const uint8_t sha256[32],
+                                               char *why, size_t cap) {
+    (void)size; (void)version; (void)sha256;
+    snprintf(why, cap, "no ESP32-C3 updater in this build");
+    return -1;
+}
+
+void ota_apply_finished(bool ok, const char *why) {
+    if (s_state != OTA_APPLYING) return;
+    s_apply_refusal = NULL;
+    s_activity_ms = s_clock_ms;
+    if (ok) {
+        s_state = OTA_INSTALLED;
+        printf("[ota] installed esp: the ESP32-C3 runs the new image (%lu bytes)\n", (unsigned long)s_size);
+        return;
+    }
+    s_state = OTA_ERROR;   /* so set_err below records the reason */
+    set_err(why && why[0] ? why : "ESP32-C3 flash failed");
+}
+
 int ota_install_blob(void) {
     if (s_state != OTA_VERIFIED) { set_err("no verified image staged"); return -1; }
     if (s_target == OTA_TARGET_FIRMWARE) { set_err("not a blob"); return -1; }
+    if (s_target == OTA_TARGET_ESP) {
+        /* Not kept on the pod: written into the C3 straight from the staging area, block by
+           block, so the staging must still be what ota_end verified (a capture may have run in
+           between: the busy gate only holds them off from here on). */
+        int rc = staged_hash_check(false);
+        if (rc != 0) {
+            set_err(rc > 0 ? "staged image changed after verify (sha256 mismatch)" : "psram read failed");
+            return -1;
+        }
+        char why[64] = "";
+        if (ota_apply_esp_staged(s_size, s_version, s_expect, why, sizeof(why)) != 0) {
+            set_err(why[0] ? why : "ESP32-C3 flash could not start");
+            return -1;
+        }
+        s_apply_refusal = NULL;
+        s_state = OTA_APPLYING;
+        printf("[ota] esp: writing the staged image into the ESP32-C3 (%lu bytes)\n", (unsigned long)s_size);
+        return 0;
+    }
     if (s_target == OTA_TARGET_TLS) {
         char why[80] = "";
         if (ota_install_staged_config(s_target, s_size, why, sizeof(why)) != 0) {

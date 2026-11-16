@@ -14,6 +14,7 @@
 #include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
 #include "esp_dut_flash.h"
+#include "c3_update.h"
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
 #endif
@@ -419,6 +420,7 @@ static void worker_task(void *arg) {
             printf("[hw] running the deferred ESP32-C3 flash\n");
             start_esp_flash();
         }
+        c3_update_poll();         /* an esp update: start writing it into the C3 when due */
         esp_rom_flash_poll();     /* a C3 flash: one step, never a wait */
         esp_dut_flash_poll();     /* an ESP32 DUT flash (esp_flash): one step, never a wait */
 #if defined(BENCHPOD_WIFI_BRIDGE)
