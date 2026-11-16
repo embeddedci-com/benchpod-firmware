@@ -7,7 +7,9 @@
 // bytes and drains RX bytes over SPI (cmd_dispatch opcodes 0x70-0x74) and
 // bridges them to the console / a TCP client.
 //
-// Frame: 8 data bits, no parity, 1 stop bit (8N1).  The bit period in system
+// Frame: 8 data bits, then (v56) an optional even or odd parity bit, then 1 or 2 stop bits
+// (8N1 by default; Modbus RTU uses 8E1 or 8N2).  The receiver checks the parity bit and the
+// first stop bit only, as most UARTs do: a 2-stop-bit sender is read fine either way.  The bit period in system
 // clocks is supplied as `cfg_div` (the STM32 computes round(24 MHz / baud) so the
 // FPGA needs no divider).  RX uses mid-bit sampling: on the start edge it waits
 // half a bit to the middle of the start bit (re-checking it is still low to
@@ -84,7 +86,11 @@ module uart_fifo #(
 endmodule
 
 
-module uart_engine (
+module uart_engine #(
+    // v56: 0 drops the parity / 2-stop-bit logic (UART2, the emulation image's sensor UART,
+    // stays 8N1: its streams never need it, and the emulation image is the full one).
+    parameter PARITY = 1
+)(
     input  wire        clk,
     input  wire        rst,
 
@@ -94,6 +100,7 @@ module uart_engine (
     input  wire [3:0]  cfg_tx_ch,
     input  wire [23:0] cfg_div,      // bit period in system clocks
     input  wire        cfg_enable,
+    input  wire [2:0]  cfg_frame,    // v56: {stop2, odd, parity}; 0 = 8N1 (older firmware sends 0)
     input  wire        disable_stb,
 
     // latched channel assignment (top routes the bus + la_bank from these)
@@ -114,6 +121,7 @@ module uart_engine (
     output reg         rx_overflow,   // sticky; cleared by status read strobe
     input  wire        rx_ovf_clr,
     output reg         rx_frame_err,  // v52: sticky: a frame's stop bit read low; cleared with rx_overflow
+    output reg         rx_parity_err, // v56: sticky: a frame's parity bit was wrong (the byte is kept)
 
     // ---- UART bus (to/from la_bank) ----
     input  wire        rx_in,
@@ -128,6 +136,7 @@ module uart_engine (
     // SPI/protocol cfg_div field stays 24-bit (firmware unchanged).
     localparam DIV_W = 18;
     reg [DIV_W-1:0] div;
+    reg par_en, par_odd, stop2;       // v56 frame format, latched with div
     // The bit counters reload with `div` and expire at 1, not reload `div - 1` and expire
     // at 0: the same number of clocks per bit (div..1 == div-1..0), without the two 18-bit
     // subtractors.  Safe because div >= 2 (the firmware's range, see below).
@@ -143,6 +152,7 @@ module uart_engine (
     always @(posedge clk) begin
         if (rst) begin
             armed <= 1'b0; rx_ch <= 4'd0; tx_ch <= 4'd0; div <= 18'd208;
+            par_en <= 1'b0; par_odd <= 1'b0; stop2 <= 1'b0;
         end else begin
             if (cfg_stb) begin
                 rx_ch <= cfg_rx_ch;
@@ -152,6 +162,9 @@ module uart_engine (
                 // it here too.  Below 2 the bit timing would be wrong (the counters expire at 1),
                 // but nothing locks up.
                 div   <= cfg_div[DIV_W-1:0];
+                par_en  <= (PARITY != 0) & cfg_frame[0];
+                par_odd <= (PARITY != 0) & cfg_frame[1];
+                stop2   <= (PARITY != 0) & cfg_frame[2];
                 armed <= cfg_enable;
             end
             if (disable_stb) armed <= 1'b0;
@@ -174,13 +187,14 @@ module uart_engine (
     localparam TX_IDLE = 3'd0, TX_LOAD = 3'd1, TX_START = 3'd2, TX_DATA = 3'd3, TX_STOP = 3'd4;
     (* fsm_encoding = "none" *) reg [2:0]  tx_state;
     wire [DIV_W-1:0] tx_cnt;
-    reg [2:0]  tx_bit;
-    reg [7:0]  tx_sr;
+    reg [3:0]  tx_bit;
+    reg [8:0]  tx_sr;                 // v56: {parity, data}; the parity bit goes out as a 9th bit
+    reg        tx_s2;                 // v56: in the first of two stop bits
 
     // The bit timer in one logic cell per bit (lc_counter): it loads div on TX_LOAD
     // and at the end of the start and each data bit, and counts down otherwise.
     wire tx_exp  = (tx_cnt == 18'd1);
-    wire tx_bits = (tx_state == TX_START) || (tx_state == TX_DATA);
+    wire tx_bits = (tx_state == TX_START) || (tx_state == TX_DATA) || (tx_state == TX_STOP && tx_s2);
     lc_counter #(.W(DIV_W), .UP(0)) tx_timer (
         .clk(clk), .rst(rst || !armed),
         .load((tx_state == TX_LOAD) || (tx_bits && tx_exp)), .val(div),
@@ -193,8 +207,9 @@ module uart_engine (
         if (rst || !armed) begin
             tx_state <= TX_IDLE;
             tx_out   <= 1'b1;       // idle high
-            tx_bit   <= 3'd0;
-            tx_sr    <= 8'h00;
+            tx_bit   <= 4'd0;
+            tx_sr    <= 9'h000;
+            tx_s2    <= 1'b0;
         end else begin
             case (tx_state)
                 TX_IDLE: begin
@@ -204,7 +219,7 @@ module uart_engine (
                     if (!tx_fifo_empty) tx_state <= TX_LOAD;
                 end
                 TX_LOAD: begin
-                    tx_sr    <= tx_head;    // now-valid head
+                    tx_sr    <= {(^tx_head) ^ par_odd, tx_head};   // now-valid head + its parity bit
                     tx_pop   <= 1'b1;       // advance FIFO
                     tx_out   <= 1'b0;        // start bit
                     tx_state <= TX_START;
@@ -212,24 +227,30 @@ module uart_engine (
                 TX_START: begin
                     if (tx_exp) begin
                         tx_out   <= tx_sr[0];   // LSB first
-                        tx_bit   <= 3'd0;
+                        tx_bit   <= 4'd0;
                         tx_state <= TX_DATA;
                     end
                 end
                 TX_DATA: begin
                     if (tx_exp) begin
-                        if (tx_bit == 3'd7) begin
+                        // 8 data bits, or 9 with the parity bit (tx_bit 0..7 / 0..8)
+                        if (tx_bit[3] || (tx_bit[2:0] == 3'd7 && !par_en)) begin
                             tx_out   <= 1'b1;   // stop bit
+                            tx_s2    <= stop2;
                             tx_state <= TX_STOP;
                         end else begin
-                            tx_sr  <= {1'b0, tx_sr[7:1]};
+                            tx_sr  <= {1'b0, tx_sr[8:1]};
                             tx_out <= tx_sr[1];
-                            tx_bit <= tx_bit + 3'd1;
+                            tx_bit <= tx_bit + 4'd1;
                         end
                     end
                 end
                 TX_STOP: begin
-                    if (tx_exp) tx_state <= TX_IDLE;
+                    // two stop bits: the first one's expiry reloads the timer (tx_bits) for the second
+                    if (tx_exp) begin
+                        if (tx_s2) tx_s2 <= 1'b0;
+                        else       tx_state <= TX_IDLE;
+                    end
                 end
             endcase
         end
@@ -252,6 +273,9 @@ module uart_engine (
     wire [DIV_W-1:0] rx_cnt;
     reg [2:0]  rx_bit;
     reg        rx_brk;                // v52: in RX_STOP after a low stop bit, waiting for the line to rise
+    reg        rx_inpar;              // v56: RX_DATA is sampling the parity bit
+    reg        rx_p;                  // v56: running parity (starts at par_odd)
+    reg        rx_pbad;               // v56: this frame's parity bit was wrong
 
     // The bit timer in one logic cell per bit (lc_counter), always loaded with div.
     // The half bit to the middle of the start bit is div counted down in steps of 2
@@ -272,14 +296,17 @@ module uart_engine (
 
     always @(posedge clk) begin
         rx_push <= 1'b0;
-        if (rx_ovf_clr) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; end
+        if (rx_ovf_clr) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; rx_parity_err <= 1'b0; end
 
         if (rst || !armed) begin
             rx_state    <= RX_IDLE;
             rx_bit      <= 3'd0;
             rx_sr       <= 8'h00;
             rx_brk      <= 1'b0;
-            if (rst) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; end
+            rx_inpar    <= 1'b0;
+            rx_p        <= 1'b0;
+            rx_pbad     <= 1'b0;
+            if (rst) begin rx_overflow <= 1'b0; rx_frame_err <= 1'b0; rx_parity_err <= 1'b0; end
         end else begin
             case (rx_state)
                 RX_IDLE: begin
@@ -291,15 +318,26 @@ module uart_engine (
                     if (rx_exp_h) begin
                         if (rx_s1 == 1'b0) begin       // genuine start
                             rx_bit   <= 3'd0;          // timer reloads div (→ bit0)
+                            rx_inpar <= 1'b0;
+                            rx_p     <= par_odd;
+                            rx_pbad  <= 1'b0;
                             rx_state <= RX_DATA;
                         end else rx_state <= RX_IDLE;   // glitch
                     end
                 end
                 RX_DATA: begin
                     if (rx_exp) begin
-                        rx_sr  <= {rx_s1, rx_sr[7:1]};  // LSB first
-                        if (rx_bit == 3'd7) rx_state <= RX_STOP;
-                        else                rx_bit   <= rx_bit + 3'd1;
+                        if (rx_inpar) begin             // v56: the parity bit (timer reloaded for it)
+                            rx_pbad  <= rx_p ^ rx_s1;
+                            rx_state <= RX_STOP;
+                        end else begin
+                            rx_sr  <= {rx_s1, rx_sr[7:1]};  // LSB first
+                            rx_p   <= rx_p ^ rx_s1;
+                            if (rx_bit == 3'd7) begin
+                                if (par_en) rx_inpar <= 1'b1;
+                                else        rx_state <= RX_STOP;
+                            end else rx_bit <= rx_bit + 3'd1;
+                        end
                     end
                 end
                 RX_STOP: begin
@@ -313,6 +351,9 @@ module uart_engine (
                     end else if (rx_exp) begin
                         if (!rx_s1) begin rx_frame_err <= 1'b1; rx_brk <= 1'b1; end
                         else begin
+                            // v56: a parity error keeps the byte (a Modbus CRC rejects the frame
+                            // anyway) and latches the sticky flag
+                            if (rx_pbad) rx_parity_err <= 1'b1;
                             if (rx_fifo_full) rx_overflow <= 1'b1;
                             else rx_push <= 1'b1;
                             rx_state <= RX_IDLE;

@@ -3,6 +3,7 @@
  * the DUT, DUT bytes come back only as far as the send ring takes them, the guard-timed "+++"
  * escape (and what does not count as one), the suspension during a load_bin upload, the RX
  * pull-up hold and its restore, the re-arm after a gateware reconfiguration, and the teardown.
+ * The frame format (parity, stop_bits): parsed, refused on old gateware, kept across a re-arm.
  *
  * The soft UART, the pull-up expander, the send ring and the clock are fakes.
  */
@@ -43,7 +44,11 @@ static char   g_fifo[512];    /* DUT -> pod */
 static size_t g_nfifo;
 static int    g_reads, g_configs, g_status_rc;
 static bool   g_enabled;
-int fpga_uart_config(unsigned rx, unsigned tx, uint32_t baud, bool en) { (void)rx; (void)tx; (void)baud; g_enabled = en; g_configs++; return 0; }
+static uint8_t g_frame = 0xFF, g_gw = 56;
+int fpga_uart_config_frame(unsigned rx, unsigned tx, uint32_t baud, uint8_t frame, bool en) {
+    (void)rx; (void)tx; (void)baud; g_enabled = en; g_frame = frame; g_configs++; return 0;
+}
+uint8_t signal_engine_fpga_version(void) { return g_gw; }
 void fpga_uart_disable(void) { g_enabled = false; }
 int fpga_uart_write(const uint8_t *d, size_t n) { memcpy(g_dut_in + g_ndut_in, d, n); g_ndut_in += n; return 0; }
 void fpga_uart_tx_pump(void) {}
@@ -191,12 +196,55 @@ static void test_teardown_and_rearm(void) {
     g_status_rc = 0;
 }
 
+static void test_frame(void) {
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
+    CHECK(g_frame == 0, "default is not 8N1 (frame %u)", g_frame);
+    uart_proxy_conn_closed(5);
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"baud\":19200,\"parity\":\"even\"}");
+    CHECK(g_frame == UART_FRAME_PARITY && g_proto[5] == PROTO_UART, "8E1: frame %u reply %s", g_frame, g_reply);
+    /* a re-arm after a gateware swap keeps the frame format */
+    g_frame = 0xFF;
+    uart_proxy_on_gateware_reconfigured();
+    uart_rearm_poll();
+    CHECK(g_frame == UART_FRAME_PARITY, "re-arm lost the frame format (%u)", g_frame);
+    uart_proxy_conn_closed(5);
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"odd\",\"stop_bits\":2}");
+    CHECK(g_frame == (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2), "8O2: frame %u", g_frame);
+    uart_proxy_conn_closed(5);
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":\"2\"}");
+    CHECK(g_frame == UART_FRAME_STOP2, "8N2: frame %u", g_frame);
+    uart_proxy_conn_closed(5);
+    /* bad values are refused before anything is armed */
+    const char *bad[] = {
+        "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"mark\"}",
+        "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"E\"}",
+        "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"stop_bits\":3}",
+        "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"stop_bits\":1.5}",
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        int configs = g_configs;
+        start(5, bad[i]);
+        CHECK(strncmp(g_reply, "err:invalid uart frame", 22) == 0 && g_configs == configs && g_proto[5] == PROTO_JSON,
+              "bad[%zu] reply %s", i, g_reply);
+    }
+    /* gateware older than v56: 8N1 still works, anything else is refused with what to do */
+    g_gw = 55;
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
+    CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[5] == PROTO_JSON,
+          "old gateware reply %s", g_reply);
+    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":1}");
+    CHECK(g_frame == 0 && g_proto[5] == PROTO_UART, "8N1 refused on old gateware: %s", g_reply);
+    uart_proxy_conn_closed(5);
+    g_gw = 56;
+}
+
 int main(void) {
     test_start_and_forward();
     test_escape();
     test_no_escape();
     test_suspend_for_upload();
     test_teardown_and_rearm();
+    test_frame();
     if (fails) { printf("test_ch_uart: %d FAILED\n", fails); return 1; }
     printf("test_ch_uart: all passed\n");
     return 0;

@@ -46,6 +46,7 @@ typedef struct {
     bool          control_loop, loop_sources, loop_input_map, cotrig;
     bool          generate16;     /* generate's calibrated form: volts/uA at 16 bits (wave16.h) */
     bool          gpio_read, capture_trigger, spi_master;
+    bool          uart_frame;     /* uart_proxy_start parity / stop_bits (gateware v56+) */
     unsigned long la_max_rate_hz;   /* LA top rate: 48 MHz with the change capture (gw >= v50), else 12 */
     bool          sensors_digital; /* the emulation image (gateware v54+) is installed or running: I2C/SPI/UART sensors */
     bool          nrst_pin;

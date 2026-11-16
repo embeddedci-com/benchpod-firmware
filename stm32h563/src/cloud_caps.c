@@ -41,14 +41,14 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
             c->generate16 ? 16 : c->dac_bits);
     bp_emit(e, "\"la_max_rate_hz\":%lu,", c->la_max_rate_hz);
     bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
-               "\"nrst_pin\":%s,"
+               "\"nrst_pin\":%s,\"uart_frame\":%s,"
                "\"power_profile\":true,"
                "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"can_fd\":true,\"pod_current\":%s,"
                "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
                "\"sensors\":true,\"sensors_format\":1,\"sensors_digital\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
             tf(c->spi_master),   /* spi_stream: firmware, on the SPI master */
-            tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->analog), tf(c->pod_current),
+            tf(c->nrst_pin), tf(c->uart_frame), tf(c->analog), tf(c->analog), tf(c->analog), tf(c->pod_current),
             tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->sensors_digital));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
@@ -93,6 +93,7 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->gpio_read)       bp_emit_raw(e, ",\"gpio_read\"");
     if (c->capture_trigger) bp_emit_raw(e, ",\"capture_trigger\"");
     if (c->spi_master)      bp_emit_raw(e, ",\"spi_master\",\"spi_stream\"");   /* spi_stream: firmware */
+    if (c->uart_frame)      bp_emit_raw(e, ",\"uart_frame\"");   /* uart_proxy_start parity, stop_bits */
     if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
     if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
     bp_emit_raw(e, "]");

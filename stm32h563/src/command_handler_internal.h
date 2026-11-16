@@ -219,6 +219,7 @@ void   dap_conn_closed(int conn_id);
 
 /* UART transparent proxy (command_handler_uart.c). */
 void   handle_uart_proxy_start(int conn_id, const char *json);
+bool   uart_frame_parse(const char *json, uint8_t *frame);   /* parity / stop_bits -> UART_FRAME_* */
 /* The PROTO_UART receive path: forwards buf to the DUT and watches for the +++ escape. */
 size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
 void   uart_proxy_poll(void);                 /* DUT -> client drain and the escape's guard */

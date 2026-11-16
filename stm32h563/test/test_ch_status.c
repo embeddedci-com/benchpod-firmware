@@ -134,6 +134,7 @@ uint8_t signal_engine_fpga_version(void) { return 255; }
 uint8_t ice40_embedded_gw_version(void) { return 255; }
 bool fpga_dac_loop_tripped(void) { return true; }
 bool fpga_uart_rx_overflowed(void) { return true; }
+bool fpga_uart_rx_parity_error(void) { return false; }
 const char *psram_selftest_str(void) { return "inoperable (iCE40 pad open)"; }
 bool signal_engine_psram_operable(void) { return false; }
 unsigned sys_health_heap_free(void) { return 999999; }   /* 640 KB of RAM: six digits */

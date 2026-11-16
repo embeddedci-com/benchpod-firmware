@@ -1856,6 +1856,7 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->emulation       = ver >= EMULATION_MIN_GW &&
                            ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
+    out->uart_frame      = ver >= UART_FRAME_MIN_GW;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
@@ -3400,11 +3401,17 @@ int fpga_emu_uart2_status(uint16_t *rx_avail, uint8_t *flags) {
 static bool uart_armed_local = false;
 
 static void uart_tx_clear(void);
-static bool s_uart_rx_ovf;
+static bool s_uart_rx_ovf, s_uart_rx_par;
 int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable) {
+    return fpga_uart_config_frame(rx_ch, tx_ch, baud, 0, enable);
+}
+
+int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_t frame, bool enable) {
     if (enable && uart_armed_local) return -2;   /* already in use */
+    frame &= UART_FRAME_MASK;
+    if (frame && s_fpga_version < UART_FRAME_MIN_GW) return -3;
     uart_tx_clear();                             /* a new session starts with nothing queued */
-    if (enable) s_uart_rx_ovf = false;
+    if (enable) { s_uart_rx_ovf = false; s_uart_rx_par = false; }
 
     int rx = la_wire_index(rx_ch);
     int tx = la_wire_index(tx_ch);
@@ -3417,20 +3424,22 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
     if (div < 2)        div = 2;
     if (div > 0x3FFFFu) div = 0x3FFFFu;
 
-    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags] */
+    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the frame (v56) */
     uint8_t args[6] = {
         (uint8_t)rx, (uint8_t)tx,
         (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
-        (uint8_t)(enable ? 0x01 : 0x00),
+        (uint8_t)((enable ? 0x01 : 0x00) | frame),
     };
     spi_cmd_write(CMD_UART_CONFIG, args, sizeof(args));
     uart_armed_local = enable;
 
     float actual = (float)FPGA_HFOSC_HZ / (float)div;
     /* Integer baud — newlib-nano printf has no %f (the old %.0f printed nothing). */
-    printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) %s\n",
+    printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c %s\n",
            rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
-           (unsigned long)lroundf(actual), enable ? "armed" : "disabled");
+           (unsigned long)lroundf(actual),
+           !(frame & UART_FRAME_PARITY) ? 'N' : (frame & UART_FRAME_ODD) ? 'O' : 'E',
+           (frame & UART_FRAME_STOP2) ? '2' : '1', enable ? "armed" : "disabled");
     return 0;
 }
 
@@ -3503,13 +3512,19 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
        avail comes back 0xFFFF.  Reject it (return -1) instead of reporting 65535 "bytes
        available", which made fpga_uart_read flood 0xFF at the client and tear the proxy
        down.  Report nothing on a bad read so the caller treats it as "no data / error". */
-    uint16_t avail = (uint16_t)(b[0] | ((uint16_t)b[1] << 8));
+    /* byte 1: bit 0 = rx_avail bit 8, bit 1 = the sticky parity error (v56; 0 before). A bogus
+       0xFF read keeps its other high bits here, so the range check below still rejects it. */
+    uint16_t avail = (uint16_t)(b[0] | ((uint16_t)(b[1] & (uint8_t)~UART_STATUS1_PARITY_ERR) << 8));
     if (!fpga_uart_avail_ok(avail, &avail)) return -1;
     /* The read cleared the gateware's sticky RX overflow: latch it here, whoever asked (the
        TX pump and UART2's poll read this status too, and used to drop the flag). */
     if ((b[2] & UART_STATUS_RX_OVERFLOW) && uart_armed_local && !s_uart_rx_ovf) {
         s_uart_rx_ovf = true;
         printf("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
+    }
+    if ((b[1] & UART_STATUS1_PARITY_ERR) && uart_armed_local && !s_uart_rx_par) {
+        s_uart_rx_par = true;
+        printf("[uart] RX parity error: a frame's parity bit was wrong (check the DUT's frame format)\n");
     }
     if (rx_avail) *rx_avail = avail;
     if (flags)    *flags    = b[2];
@@ -3520,6 +3535,7 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
    gateware's sticky flag): latched here (s_uart_rx_ovf, declared above), logged once, and
    reported in `status`. */
 bool fpga_uart_rx_overflowed(void) { return s_uart_rx_ovf; }
+bool fpga_uart_rx_parity_error(void) { return s_uart_rx_par; }
 
 size_t fpga_uart_read(uint8_t *buf, size_t len) {
     if (!buf || len == 0) return 0;

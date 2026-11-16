@@ -1781,6 +1781,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
+| `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
 | `heap_free`, `heap_min`, `stack_min`, `stacks` | integer, object | Heap and per-task stack headroom in bytes. `stacks` is in the full form only. |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
@@ -1809,6 +1810,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
 | `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
 | `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
+| `uart_frame` | The running gateware takes `uart_proxy_start` `parity` and `stop_bits` (gateware v56+). |
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
@@ -2657,7 +2659,7 @@ cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0`
 
 ### `uart_proxy_start` — transparent UART bridge
 
-Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft **8N1 UART** on the chosen channels; the RP2350 forwards bytes both ways over SPI.
+Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+, for Modbus RTU for example); the MCU forwards bytes both ways over SPI.
 
 Like `dap_start`, this is **connection-scoped** and changes how the connection's bytes are interpreted:
 
@@ -2667,14 +2669,16 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 #### Request
 
 ```json
-{"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200}
+{"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200,"parity":"none","stop_bits":1}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `rx` | integer | yes | — | LA channel the FPGA samples (wire the DUT's TX here). |
 | `tx` | integer | yes | — | LA channel the FPGA drives (wire the DUT's RX here); distinct from `rx`. |
-| `baud` | integer | no | 115200 | Line rate; the firmware computes the FPGA bit-period divisor. 8N1, ≤115200 solid, higher best-effort. |
+| `baud` | integer | no | 115200 | Line rate; the firmware computes the FPGA bit-period divisor. ≤115200 solid, higher best-effort. |
+| `parity` | string | no | `"none"` | `"none"`, `"even"` or `"odd"`: a parity bit after the 8 data bits, sent and checked. A received frame with a wrong parity bit is still delivered, and `status` reports `uart_rx_parity_error: true` until the next session. Gateware v56+. |
+| `stop_bits` | integer | no | `1` | `1` or `2`. The pod sends this many; when receiving it checks the first one, as most UARTs do. Gateware v56+. |
 
 #### Response
 
@@ -2699,6 +2703,8 @@ There is **no inactivity timeout** — an idle serial console stays open.
 |---|---|
 | `rx`/`tx` field missing | `"missing rx"` / `"missing tx"` |
 | an LA channel is outside 1..14 or the two are equal | `"invalid uart args"` |
+| `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
+| parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
 | `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
