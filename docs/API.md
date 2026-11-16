@@ -4007,7 +4007,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `esp` (only on a board with the ESP32-C3; digital v3r3 and later have none and refuse an `esp` update with `"this BenchPod has no ESP32-C3: it takes no esp image"`) and `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in

@@ -38,11 +38,18 @@ uint32_t blob_slot_base(blob_id_t id)     { return id < BLOB_SLOT_COUNT ? k_slot
 uint32_t blob_slot_capacity(blob_id_t id) { return id < BLOB_SLOT_COUNT ? k_slots[id].size - BLOB_HDR_SIZE : 0u; }
 const char *blob_name(blob_id_t id)       { return id < BLOB_SLOT_COUNT ? k_slots[id].name : "?"; }
 
+/* A board without the ESP32-C3 (digital v3r3 and later) has no use for its image: the slot is
+   neither listed nor installable there (blob_store_set_esp_listed). */
+static bool s_esp_listed = true;
+
+void blob_store_set_esp_listed(bool listed) { s_esp_listed = listed; }
+
 bool blob_listed(blob_id_t id)
 {
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (id == BLOB_BRIDGE) return true;
 #endif
+    if (id == BLOB_ESP) return s_esp_listed;
     return id < BLOB_COUNT || id == BLOB_GW2;
 }
 

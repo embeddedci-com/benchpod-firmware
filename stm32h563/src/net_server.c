@@ -27,6 +27,7 @@
 #include "usb_netif.h"
 #include "usb_device.h"
 #include "esp_wifi_ctrl.h"
+#include "blob_store.h"
 #include "board_variant.h"   /* board_has_wifi_module */
 #include "esp_rom_flash.h"
 #include "conn_tx.h"
@@ -1110,6 +1111,7 @@ void net_init(void)
        provisioned, gated inside esp_wifi_ctrl. Digital v3r3 has no C3: its EN, BOOT
        and CS nets are left unconnected, so the pins stay as they are at reset. */
     esp_wifi_ctrl_set_module_present(board_has_wifi_module());
+    blob_store_set_esp_listed(board_has_wifi_module());   /* no C3: no esp blob to list or take */
     if (esp_wifi_ctrl_module_present()) esp_hosted_spi_init();
     netif_add(&s_wifi.netif, &zero, &zero, &zero, NULL, &esp_netif_init, &ethernet_input);
     /* netif_add() prepends, leaving Wi-Fi first in netif_list. Put eth back in

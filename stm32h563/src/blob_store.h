@@ -89,8 +89,11 @@ uint32_t    blob_slot_capacity(blob_id_t id);    /* data bytes the slot can hold
 const char *blob_name(blob_id_t id);             /* "gw0", "gw1", "gw2", "esp" */
 int         blob_from_name(const char *name);    /* blob_id_t of a listed blob, or -1 */
 /* The blobs a release carries and listings show: gw0, gw1, esp, gw2, plus bridge in
-   BENCHPOD_WIFI_BRIDGE builds. */
+   BENCHPOD_WIFI_BRIDGE builds. esp only on a board with the ESP32-C3. */
 bool        blob_listed(blob_id_t id);
+/* Whether this board has the ESP32-C3, so lists and accepts the esp blob (default true; set at
+   boot from board_has_wifi_module). */
+void        blob_store_set_esp_listed(bool listed);
 
 /* Read the headers into the cache. Bus held by the caller. Returns the number of slots present,
    or -1 when no usable W25Q answers (then every slot reads as empty). */

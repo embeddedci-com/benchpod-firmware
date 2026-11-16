@@ -195,6 +195,10 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
     if (!target_known(target)) { set_err("bad target"); return -1; }
+    if (target == OTA_TARGET_ESP && !blob_listed(BLOB_ESP)) {
+        set_err("this BenchPod has no ESP32-C3: it takes no esp image");
+        return -1;
+    }
     s_target  = target;
     s_version = version;
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }

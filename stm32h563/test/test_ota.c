@@ -677,6 +677,14 @@ static void test_blob_targets(void) {
           "a 3 MB ESP image was refused: %s", ota_error());
     ota_abort();
 
+    /* A board without the ESP32-C3 (digital v3r3 and later) takes no esp image at all. */
+    blob_store_set_esp_listed(false);
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_ESP, 0) != 0 && strstr(ota_error(), "no ESP32-C3"),
+          "an esp image was accepted on a board without the C3: %s", ota_error());
+    CHECK(ota_get_state() != OTA_RECEIVING, "a refused esp begin left a session receiving");
+    blob_store_set_esp_listed(true);
+    ota_abort();
+
     /* A blob on a 1 MB pod: no fw_info block needed. */
     mock_flash_size = 0x100000u;
     CHECK(ota_begin_target(N, hex, OTA_TARGET_GW1, 46) == 0, "begin: %s", ota_error());
