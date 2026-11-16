@@ -532,6 +532,26 @@ static void test_scan_unconfigured(void) {
     s_no_ssid = false;
 }
 
+/* Runs first, before any join told the MAC: a scan on a pod that never joined asks the C3 for its
+   MAC before ScanStart, so status can report wifi_mac for the network's admin. */
+static void test_scan_learns_mac(void) {
+    s_no_ssid = true;
+    fresh();
+    fake_networks();
+    C.tx_ok = true; C.answer = true;
+    uint8_t m[6] = {0};
+    CHECK(!esp_wifi_ctrl_mac(m));              /* not known before the C3 ran */
+    uint32_t id = esp_wifi_ctrl_scan_request();
+    const wifi_scan_list_t *l = NULL; const char *err = NULL;
+    CHECK(scan_wait(id, 5000, &l, &err) == ESP_WIFI_SCAN_DONE);
+    CHECK(sent_at(257) >= 0 && sent_at(257) < sent_at(286));   /* GetMac before the scan */
+    CHECK(esp_wifi_ctrl_mac(m) && m[0] == 0x02 && m[5] == 0x55);
+    CHECK(sent_at(282) < 0);                   /* still no Connect */
+    run_ms(100);
+    CHECK(!C.running);
+    s_no_ssid = false;
+}
+
 static void test_scan_unconfigured_c3_silent(void) {
     s_no_ssid = true;
     fresh();
@@ -647,6 +667,7 @@ static void test_no_c3_module(void) {
 int main(void) {
     esp_wifi_ctrl_restarts_boot(true);
     esp_wifi_ctrl_init();
+    test_scan_learns_mac();
     test_healthy_link_stays_up();
     test_rssi_timeouts_restart_c3();
     test_tx_full_counts_as_miss();

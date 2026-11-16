@@ -133,6 +133,14 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
             FIRMWARE_VERSION, BOARD_NAME, in->wstate, in->ip, in->rssi_field,
             in->wifi, cloud_client_state_str());
     if (brief) bp_emit_raw(e, "\"short_form\":true,");
+    /* The MACs for a managed network (cloud_caps.h): wifi_mac only on a pod with Wi-Fi, null
+       until known (a join or a Wi-Fi scan tells it). Full form only: the cloud has them from the
+       capabilities frame, and the short form keeps its margin. */
+    if (!brief) bp_emit(e, "\"eth_mac\":\"%s\",", c->eth_mac);
+    if (!brief && c->has_wifi) {
+        if (c->wifi_mac[0]) bp_emit(e, "\"wifi_mac\":\"%s\",", c->wifi_mac);
+        else                bp_emit_raw(e, "\"wifi_mac\":null,");
+    }
     /* C3 restarts since power-on (c3_restarts.h); the causes are in wifi_status. */
     if (esp_wifi_ctrl_module_present())
         bp_emit(e, "\"c3_restarts\":%lu,", (unsigned long)esp_wifi_ctrl_restarts()->total);

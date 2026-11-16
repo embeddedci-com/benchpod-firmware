@@ -74,6 +74,14 @@ typedef struct {
     bool          c3;             /* the board has the built-in ESP32-C3 (Wi-Fi): the two below */
     uint32_t      c3_restarts;    /* C3 restarts since power-on (c3_restarts.h) */
     const char   *c3_restart_last;/* the last one's cause name ("no_response", ...), NULL if none */
+    /* The MACs a network admin registers before giving the pod an address, "aa:bb:cc:dd:ee:ff".
+       eth_mac: the Ethernet port's ("" when unknown). wifi_mac: the address the pod uses on
+       Wi-Fi: the C3's station MAC once the C3 told it (a join or a scan since power-on), or the
+       Ethernet MAC through a Wi-Fi bridge, which joins with the pod's MAC. "" = not known yet.
+       has_wifi: the pod has Wi-Fi at all (a C3, or a bridge plugged in). */
+    char          eth_mac[18];
+    char          wifi_mac[18];
+    bool          has_wifi;
 } cloud_caps_t;
 
 /* Build the frame into out (cap >= CLOUD_CAPS_MAX + 1 recommended). Returns its length, or 0

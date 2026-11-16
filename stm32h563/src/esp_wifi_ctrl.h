@@ -29,6 +29,9 @@ void esp_wifi_ctrl_init(void);
 #define ESP_WIFI_NO_MODULE "no Wi-Fi module: this BenchPod has no built-in Wi-Fi"
 void esp_wifi_ctrl_set_module_present(bool present);
 bool esp_wifi_ctrl_module_present(void);
+/* The C3's Wi-Fi (station) MAC, the one the network sees: false until the C3 told it since power-on
+   (on a join or a scan) or without a module. */
+bool esp_wifi_ctrl_mac(uint8_t out[6]);
 
 /* Advance the connect state machine: brings the ESP32 up + runs the RPC sequence
    when configured, retries on failure/disconnect. No-op when unconfigured. */

@@ -86,6 +86,8 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->safe_mode = true; c->safe_reason = g_reason;
     c->reset_cause = "watchdog"; c->last_crash = g_crash;
     c->c3 = true; c->c3_restarts = 4294967295u;
+    strcpy(c->eth_mac, "02:0d:1a:80:f1:54"); strcpy(c->wifi_mac, "34:85:18:aa:bb:cc");
+    c->has_wifi = true;
 }
 
 const char *wifi_get_ip(void) { return "255.255.255.255"; }
@@ -221,6 +223,8 @@ static void test_lan_is_complete(void) {
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
         CHECK(has(keep[i]), "LAN status lacks %s", keep[i]);
     CHECK(!has("short_form") && !has("boot_health_cut"), "LAN status is the short form");
+    CHECK(strstr(g_tx, "\"eth_mac\":\"02:0d:1a:80:f1:54\",\"wifi_mac\":\"34:85:18:aa:bb:cc\",") != NULL,
+          "LAN status lacks the MACs");
     /* The crash text whole, escaped. */
     CHECK(strstr(g_tx, "\\\"x") != NULL, "LAN last_crash not escaped whole");
     g_crash[40] = saved_c; g_reason[0] = saved_r;
