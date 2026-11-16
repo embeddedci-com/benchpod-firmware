@@ -7,6 +7,7 @@
  * surface lands in later phases.
  */
 #include "console.h"
+#include "cloud_caps.h"     /* cloud_caps_wifi_mac: status wifimac */
 #include "console_moved.h"
 #include "usb_device.h"
 #include "usb_netif.h"
@@ -702,6 +703,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
            USB-serial devices: tooling just greps the output for "benchpod". */
         op(out, ctx, "  device : benchpod\r\n");
         op(out, ctx, "  mac    : %s\r\n", net_mac_str());
+        {
+            /* The MAC the pod uses on Wi-Fi, for a network that registers devices first. */
+            char wm[18];
+            if (cloud_caps_wifi_mac(wm))
+                op(out, ctx, "  wifimac: %s\r\n", wm[0] ? wm : "not known yet (wifi-scan or a join tells it)");
+        }
         op(out, ctx, "  ip     : %s\r\n", net_ip_str());
         {
             usb_net_stats_t us;

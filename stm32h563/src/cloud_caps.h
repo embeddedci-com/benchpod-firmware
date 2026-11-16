@@ -95,4 +95,8 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c);
    cloud client has it. */
 void cloud_caps_collect(cloud_caps_t *c);
 
+/* The pod's Wi-Fi MAC into out ("" while not known, see cloud_caps_t.wifi_mac); returns whether
+   the pod has Wi-Fi at all (firmware only, cloud_caps_hw.c). */
+bool cloud_caps_wifi_mac(char out[18]);
+
 #endif /* CLOUD_CAPS_H */
