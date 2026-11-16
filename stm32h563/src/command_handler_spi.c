@@ -421,7 +421,10 @@ void spi_capture_run(char *out, size_t cap) {
     int rc = fpga_spi_xfer(s_cap_tx, s_cap_rx, s_cap_n);
     fpga_spi_cs(false);
     if (rc != 0) { snprintf(out, cap, "{\"bus\":\"spi\",\"error\":\"transfer failed\"}"); return; }
-    int n = snprintf(out, cap, "{\"bus\":\"spi\",\"rx\":\"");
-    n += (int)b64url_encode(s_cap_rx, s_cap_n, out + n, cap - (size_t)n);
-    snprintf(out + n, cap - (size_t)n, "\"}");
+    bp_emit_t e;
+    bp_emit_init(&e, out, cap);
+    bp_emit_raw(&e, "{\"bus\":\"spi\",\"rx\":\"");
+    bp_emit_b64url(&e, s_cap_rx, s_cap_n);
+    bp_emit_raw(&e, "\"}");
+    if (!bp_emit_ok(&e)) snprintf(out, cap, "{\"bus\":\"spi\",\"error\":\"reply too long\"}");
 }

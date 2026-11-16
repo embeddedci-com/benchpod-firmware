@@ -6,8 +6,11 @@ Every asset gets a detached 128-byte manifest, `<asset>.sig`:
   off size field
     0    4 magic "BPSG"
     4    2 format (1)
-    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware), 7 gw2
-    7    1 flags (0)
+    6    1 target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge (the Wi-Fi bridge's firmware), 7 gw2,
+           8 bridge-id (a Wi-Fi bridge's identity certificate: the "image" is the bridge's 32-byte
+           Ed25519 identity public key; never an update, the pod and the bridge have no OTA target 8)
+    7    1 flags: bit 0 = floor release (firmware: installing it raises the pod's rollback floor
+           to its release, firmware 3.10.7+); other bits 0
     8    4 image size
    12   32 SHA-256 of the image
    44    4 asset version (firmware: packed major<<16|minor<<8|patch; gateware: its version)
@@ -21,8 +24,10 @@ All integers little-endian. A key file holds the 32-byte Ed25519 seed as 64 hex 
 
   fwsign.py keygen OUT                      new key (file mode 0600); prints the public key only
   fwsign.py pubkey KEY                      public key + key_id of a key file
-  fwsign.py sign --key KEY --target T --release X.Y.Z [--version N] IMAGE [-o OUT]
+  fwsign.py sign --key KEY --target T --release X.Y.Z [--version N] [--floor] IMAGE [-o OUT]
   fwsign.py sign-blobs --key KEY --release X.Y.Z blobs-manifest.json
+  fwsign.py sign-bridge-id --key KEY --id HEX64 --release X.Y.Z -o OUT   a bridge's identity certificate
+  fwsign.py verify-bridge-id --pub HEX|FILE [--pub ...] --id HEX64 CERT
   fwsign.py verify --pub HEX|FILE [--pub ...] [--target T] IMAGE [SIG]
   fwsign.py keys-header --pub FILE [--pub FILE ...] -o OUT.h
   fwsign.py vectors -o OUT.json [--c-header OUT.h]   deterministic test vectors for the C and Go checks
@@ -53,7 +58,7 @@ CONTEXT = b"benchpod-fw-sign:v1\x00"
 MANIFEST_LEN = 128
 SIGNED_LEN = 64
 # ota_target_t numbering in the firmware (4 ca and 5 tls are configuration, never signed).
-TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6, "gw2": 7}
+TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6, "gw2": 7, "bridge-id": 8}
 FW_INFO_OFFSET = 0x400
 FW_INFO_MAGIC = 0x57465042  # "BPFW"
 
@@ -115,17 +120,20 @@ def fw_info_of(image):
     return (layout, min_kb) if magic == FW_INFO_MAGIC else (0, 0)
 
 
-def build_body(image, target, version, release, kid):
+FLAG_FLOOR = 0x01
+
+
+def build_body(image, target, version, release, kid, flags=0):
     t = TARGETS[target]
     layout, min_kb = fw_info_of(image) if t == 0 else (0, 0)
-    body = MAGIC + struct.pack("<HBBI", FORMAT, t, 0, len(image)) + hashlib.sha256(image).digest()
+    body = MAGIC + struct.pack("<HBBI", FORMAT, t, flags, len(image)) + hashlib.sha256(image).digest()
     body += struct.pack("<IIHH", version, release, layout, min_kb) + kid
     assert len(body) == SIGNED_LEN
     return body
 
 
-def sign(priv, image, target, version, release):
-    body = build_body(image, target, version, release, key_id(raw_public(priv)))
+def sign(priv, image, target, version, release, flags=0):
+    body = build_body(image, target, version, release, key_id(raw_public(priv)), flags)
     return body + priv.sign(CONTEXT + body)
 
 
@@ -195,7 +203,9 @@ def cmd_sign(a):
     release = pack_version(a.release)
     # Firmware and the bridge's firmware carry their own version (the pod compares the bridge's).
     version = int(a.version, 0) if a.version is not None else (release if a.target in ("firmware", "bridge") else 0)
-    sig = sign(load_seed(a.key), image, a.target, version, release)
+    if a.floor and a.target != "firmware":
+        sys.exit("--floor is for the firmware target only")
+    sig = sign(load_seed(a.key), image, a.target, version, release, FLAG_FLOOR if a.floor else 0)
     out = a.out or a.image + ".sig"
     with open(out, "wb") as f:
         f.write(sig)
@@ -228,6 +238,34 @@ def cmd_verify(a):
         print("ok:", json.dumps(parse(sig)))
     else:
         sys.exit("signature check failed: " + result)
+
+
+def bridge_id_key(text):
+    """A bridge identity public key: exactly 64 hex digits (32 bytes)."""
+    text = text.strip().lower()
+    if len(text) != 64 or any(c not in "0123456789abcdef" for c in text):
+        sys.exit("--id must be the bridge's identity public key, 64 hex digits")
+    return bytes.fromhex(text)
+
+
+def cmd_sign_bridge_id(a):
+    """A certificate (wifi-bridge/components/bridge_core/include/bwp_id.h): the manifest format,
+    target bridge-id, over the bridge's identity public key. Size 32, SHA-256 of the key."""
+    pub = bridge_id_key(a.id)
+    sig = sign(load_seed(a.key), pub, "bridge-id", 0, pack_version(a.release))
+    with open(a.out, "wb") as f:
+        f.write(sig)
+    print("%s: bridge-id %s key_id=%s" % (a.out, a.id.strip().lower(), sig[56:64].hex()))
+    print("hex: " + sig.hex())
+
+
+def cmd_verify_bridge_id(a):
+    pub = bridge_id_key(a.id)
+    sig = open(a.cert, "rb").read()
+    result = verify(sig, pub, [load_pub(p) for p in a.pub], "bridge-id")
+    if result != "ok":
+        sys.exit("certificate check failed: " + result)
+    print("ok:", json.dumps(parse(sig)))
 
 
 def cmd_keys_header(a):
@@ -336,6 +374,8 @@ def main():
     s.add_argument("--target", required=True, choices=TARGETS)
     s.add_argument("--release", required=True, help="firmware release, X.Y.Z")
     s.add_argument("--version", help="asset version (default: the release for firmware and bridge, 0 else)")
+    s.add_argument("--floor", action="store_true",
+                   help="mark a firmware as a floor release: pods that install it refuse older signed firmware")
     s.add_argument("-o", "--out")
     s.add_argument("image")
     s.set_defaults(fn=cmd_sign)
@@ -344,6 +384,17 @@ def main():
     s.add_argument("--release", required=True)
     s.add_argument("manifest")
     s.set_defaults(fn=cmd_sign_blobs)
+    s = sub.add_parser("sign-bridge-id")
+    s.add_argument("--key", required=True)
+    s.add_argument("--id", required=True, help="the bridge's identity public key, 64 hex digits")
+    s.add_argument("--release", required=True, help="firmware release, X.Y.Z (recorded in the certificate)")
+    s.add_argument("-o", "--out", required=True)
+    s.set_defaults(fn=cmd_sign_bridge_id)
+    s = sub.add_parser("verify-bridge-id")
+    s.add_argument("--pub", action="append", required=True)
+    s.add_argument("--id", required=True)
+    s.add_argument("cert")
+    s.set_defaults(fn=cmd_verify_bridge_id)
     s = sub.add_parser("verify")
     s.add_argument("--pub", action="append", required=True)
     s.add_argument("--target", choices=TARGETS)

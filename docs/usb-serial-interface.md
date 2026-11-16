@@ -175,7 +175,7 @@ command prints `usage: ...` and changes nothing.
 | `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
 | `reboot` | System reset. |
 | `usb-reattach` | Replies `usb-reattach ok`, then drops off the USB bus for half a second and connects again, so the computer enumerates the console and the network adapter anew (the serial port closes). |
-| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). |
+| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). Refused under `sig-policy required` (firmware 3.10.7+): `dfu error <why>`. |
 | `test-bootloop [net\|hw] yes` | Development builds only. Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
 | `test-hang <net\|hw> yes` | Development builds only. Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
 | `test-ice40-hold yes` | Development builds only. Hold the iCE40 in reset, as an ESD hit that unconfigured it would leave it. When the pod is idle it pings the iCE40 every 30 s and reloads one that stopped answering from its config flash (no write) after 10 s, at most 6 times an hour, then parks the outputs; the device log says so. |
@@ -189,6 +189,8 @@ command prints `usage: ...` and changes nothing.
 | `identity` | `identity <short id> <public key base64url>`, or `identity unknown <why>`. |
 | `identity-wipe <short id\|unknown>` | Erase the device key and make a new one, the way back for a pod whose identity record the firmware will not replace. The argument must be the current short id (6 hex digits), or `unknown` when there is none; anything else prints `identity-wipe error confirm with the current id: identity-wipe <id>`. Replies `identity-wipe ok <new short id>`, then the pod logs in to the cloud again (the server needs a new registration). Only here: the JSON `identity_wipe` is refused on the LAN and the cloud. `benchpod identity wipe --connection usb` drives it. |
 | `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
+| `lan-ota [signed\|any]` | Show or set what Ethernet and Wi-Fi may install (firmware 3.10.7+, [API.md, Pod policies](API.md#pod-policies)): `signed` (default) takes only updates with a good signature, `any` follows the signature policy like before 3.10.7. Replies `lan-ota <signed\|any>` or `lan-ota error <why>`. |
+| `rollback-floor [clear]` | Show the rollback floor, the oldest release whose signed firmware the pod takes (firmware 3.10.7+), or lower it to none with `clear`. Replies `rollback-floor <x.y.z\|none>` or `rollback-floor error <why>`. |
 | `usb-network [on\|off]` | Show or set the [USB network adapter](#usb-network-adapter) setting (default `on`). Replies `usb-network <on\|off>` or `usb-network error <why>`. `off` re-enumerates the pod as its console only (the computer sees no network adapter); `on` brings the adapter back. Stored, separate from `lan-policy`; only the console and the USB link itself may change it. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
 | `lan-tls [https-only on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>"`, `lan-tls port 8443 https-only <on\|off> none <why>` without a certificate, or `lan-tls error <why>`. `https-only on` refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it); `regenerate` makes a new key and self-signed certificate. The console may always change both. |
@@ -217,7 +219,7 @@ command prints `usage: ...` and changes nothing.
 | `esp-mon [ms]` | Print the C3's UART output for `ms` milliseconds (default 5000, at most 20000). |
 | `flash-esp32-sync` | Put the C3 in its ROM download mode and sync (a wiring test). |
 | `flash-esp32` | Flash the ESP32-C3 Wi-Fi image from the copy older firmware kept in the W25Q `esp` slot (about 140 s; refused while the shared bus is busy). The pod keeps no copy since 3.10.x: without one this answers `flash-esp32 failed: no ESP32-C3 image in the W25Q`; install the image with `benchpod install-blobs --force --only esp` instead, which writes it straight into the C3. On digital v3r3, which has no ESP32-C3, this and `flash-esp32-sync`, `esp-reset-pulse` and `esp-mon` answer `<command>: no Wi-Fi module: this BenchPod has no built-in Wi-Fi` and touch no pins. |
-| `bridge [scan \| update \| reboot \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same or an older version); `reboot` restarts it; `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
+| `bridge [scan \| update \| reboot \| cert <1-4> <hex> \| factory-reset yes]` | The external Wi-Fi bridge box on the Ethernet port (see [Wi-Fi bridge](#wi-fi-bridge)): no argument shows it (MAC, firmware, pairing, its `identity:` key and whether it is `genuine:`, SSID, RSSI, frame counters, the bridge image the pod holds and the update status); `scan` lists the networks it sees; `update` updates its firmware now from blob slot `bridge` (even the same version; a bridge from 0.1.3 on refuses an older one); `reboot` restarts it; `cert` (firmware 3.10.7+) installs its identity certificate, 128 bytes as four quarters of 64 hex digits (parts 1 to 4, any order; the last one sends it: `certificate stored on the bridge ...`); `factory-reset yes` makes it forget its Wi-Fi and its pairing. |
 
 #### Wi-Fi bridge
 
@@ -243,6 +245,23 @@ Without built-in Wi-Fi configured, while a bridge sends its HELLO on the Etherne
 
 The pod pairs with the bridge on its own the first time it sees it. If `wifi-show` reports `the
 bridge is paired with another pod`, press PAIR on the bridge.
+
+**Genuine bridges only** (firmware 3.10.7+). Every bridge (firmware 0.1.3+) has its own identity
+key and, once provisioned, a certificate for it signed with our release key. When the pod pairs,
+the bridge shows the certificate and signs the pairing with its identity key; the pod checks both
+and only then sends it the Wi-Fi password (`wifi-set`) and stores it as its bridge. A bridge
+without a valid certificate (not genuine, or not provisioned yet, or older bridge firmware) still
+pairs, so `bridge`, `scan` and bridge updates work, but `wifi-set` is refused with `the Wi-Fi bridge
+has no identity certificate ...` or `the Wi-Fi bridge's identity check failed ...`. The pod pairs
+on its own with any bridge, whether it has an address on Ethernet or not: after PAIR on the
+bridge, with a replacement or after moving a bridge between pods, nothing is needed on the pod. While
+its genuine bridge is on the port, HELLOs from another bridge are ignored. A pod updated from
+older firmware checks the bridge it is already paired with by itself.
+
+Provisioning a bridge: `bridge` shows its `identity:` key (64 hex digits). Sign it (the release
+workflow "Sign bridge identity", or `tools/fwsign.py sign-bridge-id` with the developer key for a
+development pod) and install the 128-byte certificate with `bridge cert <1-4> <hex>`, a quarter
+(64 hex digits) at a time; `wifi-bridge/tools/bridge_cert.py install` does both steps.
 
 **Bridge firmware.** The pod keeps the bridge's firmware in W25Q blob slot `bridge` (installed
 like the other blobs, OTA target `bridge`; it must carry a good signed manifest whatever the
@@ -402,6 +421,13 @@ adapter (`benchpod flash-self` uses DFU; the web app's one-click install uses th
 
 The CDC serial port disappears at this point and the STM32 ROM DFU device
 (`0483:df11`) enumerates instead.
+
+Under the `required` signature policy (`sig-policy required`), firmware 3.10.7 and later refuse
+`dfu`: the ROM bootloader writes any image, so it would get around the signature check. The
+reply is one line starting `dfu error sig-policy is required`. Update with signed firmware
+over the network or the USB network adapter instead (`benchpod flash-self --network`), or
+loosen the policy on this console first (`sig-policy permissive`), which shows in `status`.
+Holding BOOT while tapping RESET still enters the ROM bootloader: that needs the pod in hand.
 
 ---
 

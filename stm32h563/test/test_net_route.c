@@ -97,8 +97,25 @@ static void test_owner_names_the_uplink(void)
     CHECK(net_route_owner(ifs, 2, 0) == -1);
 }
 
+/* Security review 2026-11 H2: a LAN host routed the USB link's address through the pod's
+   Ethernet IP and got USB-link (physical presence) rights. Packets for the USB /30 must arrive on
+   the USB interface. */
+static void test_usb_subnet_only_from_usb(void)
+{
+    uint32_t usb = IP(10, 237, 18, 1), mask30 = IP(255, 255, 255, 252);
+    CHECK(net_route_usb_ingress_drop(usb, false, usb, mask30));                     /* via eth: drop */
+    CHECK(net_route_usb_ingress_drop(IP(10, 237, 18, 3), false, usb, mask30));      /* its broadcast */
+    CHECK(!net_route_usb_ingress_drop(usb, true, usb, mask30));                     /* via USB: fine */
+    CHECK(!net_route_usb_ingress_drop(IP(192, 168, 1, 220), false, usb, mask30));   /* the eth IP */
+    CHECK(!net_route_usb_ingress_drop(IP(10, 237, 18, 5), false, usb, mask30));     /* next /30 */
+    CHECK(!net_route_usb_ingress_drop(IP(224, 0, 0, 251), false, usb, mask30));     /* mDNS */
+    CHECK(!net_route_usb_ingress_drop(usb, false, 0, 0));                           /* no address yet */
+    CHECK(net_route_usb_ingress_drop(usb, false, usb, 0));                          /* no mask: exact */
+}
+
 int main(void)
 {
+    test_usb_subnet_only_from_usb();
     test_reply_leaves_arrival_interface();
     test_unbound_source_prefers_eth();
     test_off_subnet_defers_to_default_route();

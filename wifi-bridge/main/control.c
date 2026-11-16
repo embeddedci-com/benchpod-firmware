@@ -10,6 +10,9 @@
 #include "bridge.h"
 #include "bridge_util.h"
 #include "bwp_crypto.h"
+#include "bwp_id.h"
+#include "fwsig.h"
+#include "monocypher-ed25519.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -36,6 +39,10 @@ static const uint8_t BCAST[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 static bwp_pairing_t s_pair;      // owned by the control task
 static volatile bool s_paired;    // copy for HELLO flags and the console
 static uint8_t s_pub[BWP_PUBKEY_LEN];  // our X25519 public key from the pairing (HELLO)
+static uint8_t s_id_sk[64];       // the identity key (Monocypher's 64-byte form), bwp_id.h
+static uint8_t s_id_pub[32];
+static uint8_t s_cert[128];
+static volatile bool s_has_cert;  // s_cert is a valid certificate for s_id_pub
 static bool s_sign;               // sign the response to the request being handled
 static uint32_t s_counter;        // its COUNTER
 
@@ -74,11 +81,33 @@ static void forget_pairing(void)
     pairing_forget(&s_pair);
     memset(s_pub, 0, sizeof(s_pub));
     s_paired = false;
+    // The Wi-Fi credentials belonged to the pod we were paired with: the next pod (whoever
+    // presses PAIR and plugs in) must not get onto that network (security review 2026-11, M9).
+    bridge_clear_wifi();
     // Let a different pod on the cable become "the pod" without unplugging it.
     portENTER_CRITICAL(&g_bridge.lock);
+    l2fwd_set_auth_learn(&g_bridge.fwd, false);
     l2fwd_link_down(&g_bridge.fwd);
     portEXIT_CRITICAL(&g_bridge.lock);
-    ESP_LOGW(TAG, "pairing forgotten: the next pod that sends PAIR is trusted");
+    ESP_LOGW(TAG, "pairing and Wi-Fi forgotten: the next pod that sends PAIR is trusted");
+}
+
+// A request proved who the pod is (valid AUTH, or the PAIR we accepted): it is the pod MAC.
+static void learn_pod(const uint8_t mac[6], bool force)
+{
+    bool back;
+    portENTER_CRITICAL(&g_bridge.lock);
+    l2_event_t ev = l2fwd_learn_pod(&g_bridge.fwd, mac, force, &back);
+    portEXIT_CRITICAL(&g_bridge.lock);
+    if (back) {
+        wifi_pod_back();
+    }
+    if (ev != L2_EV_NONE) {
+        char m[18];
+        bu_mac_str(mac, m);
+        ESP_LOGI(TAG, "pod MAC %s %s", ev == L2_EV_LEARNED ? "learned:" : "changed to", m);
+        wifi_pod_mac_changed();
+    }
 }
 
 static void secure_zero(void *p, size_t n)
@@ -104,14 +133,45 @@ static void send_status(const uint8_t dst[6], uint16_t seq)
     bwp_status_t s;
     uint8_t mac[6];
     bridge_status(&s);
+    if (!s_sign) {
+        // Unsigned (not paired, or the unsolicited STATUS): state and flags only, not which
+        // network we are on (security review 2026-11, M9).
+        memset(s.ssid, 0, sizeof(s.ssid));
+        memset(s.bssid, 0, sizeof(s.bssid));
+    }
     eth_get_mac(mac);
     send(bwp_build_status(s_out, sizeof(s_out), dst, mac, seq, &s));
+}
+
+void control_identity(uint8_t id_pub[32], bool *has_cert)
+{
+    memcpy(id_pub, s_id_pub, 32);
+    *has_cert = s_has_cert;
+}
+
+const char *control_set_id_cert(const uint8_t cert[128])
+{
+    static char why[48];
+    size_t n;
+    const uint8_t (*keys)[32] = ota_trusted_keys(&n);
+    fwsig_result_t r = fwsig_check_bridge_id(cert, s_id_pub, keys, n);
+    if (r != FWSIG_OK) {
+        snprintf(why, sizeof(why), "certificate: %s", r == FWSIG_IMAGE ? "for another bridge" : fwsig_result_str(r));
+        return why;
+    }
+    if (idcert_store(cert) != ESP_OK) {
+        return "certificate: could not store it";
+    }
+    memcpy(s_cert, cert, 128);
+    s_has_cert = true;
+    ESP_LOGI(TAG, "identity certificate stored");
+    return NULL;
 }
 
 static void send_hello(void)
 {
     bwp_hello_t h = {.fw_version = esp_app_get_description()->version, .hw_rev = CONFIG_BRIDGE_HW_REV,
-                     .state = wifi_state(), .flags = bridge_flags()};
+                     .state = wifi_state(), .flags = bridge_flags(), .id_pub = s_id_pub};
     memcpy(h.nonce, s_pair.nonce, BWP_NONCE_LEN);
     memcpy(h.bridge_pub, s_pub, BWP_PUBKEY_LEN);
     eth_get_mac(h.bridge_mac);
@@ -171,6 +231,9 @@ static void handle(uint8_t *buf, size_t len)
         return;
     }
     s_sign = authed;
+    if (authed) {
+        learn_pod(m.src, false);
+    }
     // A valid request from the pod proves a new image works end to end: keep it. Before any
     // OTA_BEGIN is handled, which would otherwise overwrite the rollback slot.
     ota_confirm();
@@ -196,6 +259,20 @@ static void handle(uint8_t *buf, size_t len)
         bwp_put_u8(&w, BWP_T_RESULT, r);
         if (r == BWP_OK) {
             bwp_put(&w, BWP_T_PUBKEY, pub, sizeof(pub));
+            // Who we are (bwp_id.h): the identity key, its certificate and the key's signature
+            // over this pairing, so the pod can tell a genuine bridge before it trusts the key.
+            uint8_t pod_nonce[BWP_POD_NONCE_LEN] = {0}, sig[BWP_ID_SIG_LEN];
+            const uint8_t *pn;
+            uint16_t pnl;
+            if (bwp_find(m.body, m.body_len, BWP_T_POD_NONCE, &pn, &pnl) && pnl == BWP_POD_NONCE_LEN) {
+                memcpy(pod_nonce, pn, BWP_POD_NONCE_LEN);
+            }
+            bwp_id_sign(s_id_sk, new_key, pub, s_pair.nonce, pod_nonce, sig);
+            bwp_put(&w, BWP_T_ID_PUB, s_id_pub, sizeof(s_id_pub));
+            if (s_has_cert) {
+                bwp_put(&w, BWP_T_ID_CERT, s_cert, sizeof(s_cert));
+            }
+            bwp_put(&w, BWP_T_ID_SIG, sig, sizeof(sig));
         } else if (msg) {
             bwp_put_str(&w, BWP_T_MESSAGE, msg);
         }
@@ -204,6 +281,10 @@ static void handle(uint8_t *buf, size_t len)
             pairing_set_key(&s_pair, key);
             memcpy(s_pub, pub, sizeof(s_pub));
             s_paired = true;
+            learn_pod(dst, true);  // the pod that paired is the pod, whoever spoke first
+            portENTER_CRITICAL(&g_bridge.lock);
+            l2fwd_set_auth_learn(&g_bridge.fwd, true);
+            portEXIT_CRITICAL(&g_bridge.lock);
             char m6[18];
             bu_mac_str(dst, m6);
             ESP_LOGI(TAG, "%s with pod %s", authed ? "pairing key rotated" : "paired", m6);
@@ -233,6 +314,17 @@ static void handle(uint8_t *buf, size_t len)
         }
         secure_zero(&sw, sizeof(sw));
         reply(&m, dst, r, msg);
+        return;
+    }
+    case BWP_SET_ID_CERT: {
+        const uint8_t *c;
+        uint16_t cl;
+        if (!bwp_find(m.body, m.body_len, BWP_T_ID_CERT, &c, &cl) || cl != BWP_ID_CERT_LEN) {
+            reply(&m, dst, BWP_E_BAD_REQUEST, "ID_CERT must be 128 bytes");
+            return;
+        }
+        msg = control_set_id_cert(c);
+        reply(&m, dst, msg ? BWP_E_BAD_REQUEST : BWP_OK, msg);
         return;
     }
     case BWP_CLEAR_WIFI:
@@ -341,10 +433,26 @@ void control_start(void)
 {
     uint8_t nonce[BWP_NONCE_LEN], key[BWP_KEY_LEN];
     esp_fill_random(nonce, sizeof(nonce));  // true random: Wi-Fi (RF) is already started
+    uint8_t seed[32];
+    if (idseed_load_or_create(seed)) {
+        crypto_ed25519_key_pair(s_id_sk, s_id_pub, seed);  // wipes seed
+        size_t nk;
+        const uint8_t (*keys)[32] = ota_trusted_keys(&nk);
+        s_has_cert = idcert_load(s_cert) && fwsig_check_bridge_id(s_cert, s_id_pub, keys, nk) == FWSIG_OK;
+    }
+    secure_zero(seed, sizeof(seed));
+    char hex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(hex + 2 * i, 3, "%02x", s_id_pub[i]);
+    }
+    ESP_LOGI(TAG, "identity %s, certificate %s", hex, s_has_cert ? "ok" : "none");
     bool have = pairkey_load(key, s_pub);
     pairing_init(&s_pair, nonce, have ? key : NULL);
     secure_zero(key, sizeof(key));
     s_paired = have;
+    portENTER_CRITICAL(&g_bridge.lock);
+    l2fwd_set_auth_learn(&g_bridge.fwd, have);  // paired: the pod MAC only from a signed request
+    portEXIT_CRITICAL(&g_bridge.lock);
     ESP_LOGI(TAG, "%s", have ? "paired with a pod" : "not paired: the first pod that sends PAIR is trusted");
     s_q = xQueueCreate(16, sizeof(item_t));
     xTaskCreate(control_task, "control", 6144, NULL, 6, NULL);

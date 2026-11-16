@@ -8,6 +8,7 @@
 #include "command_handler.h"   /* the pseudo-connection ids */
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
+#include "b64url.h"
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -313,5 +314,14 @@ void handle_ota_abort(int conn_id, const char *json);
 void handle_ota_selftest(int conn_id, const char *json);
 void handle_ota_commit(int conn_id, const char *json);
 void handle_blob_status(int conn_id, const char *json);
+
+/* Append base64url of n bytes to an emitter (bounds-tracked like bp_emit: too little room sets
+   e->ok false and appends nothing). */
+static inline void bp_emit_b64url(bp_emit_t *e, const uint8_t *p, size_t n) {
+    if (!e->ok || n == 0) return;
+    size_t w = b64url_encode(p, n, e->buf + e->len, e->cap - e->len);
+    if (w == 0) { e->ok = false; return; }
+    e->len += w;
+}
 
 #endif /* COMMAND_HANDLER_INTERNAL_H */

@@ -25,6 +25,8 @@
 #include "esp_rom_flash.h"
 #include "w25q.h"
 #include "wifi_bridge_ota.h"
+#include "pod_policy.h"
+#include "fw_sign.h"
 
 static wb_t s_wb;                  /* net task only */
 static struct netif *s_eth;
@@ -70,9 +72,46 @@ static int io_secret(const uint8_t mac[6], uint8_t secret[32], void *ctx)
     return r == 0 ? 0 : -1;
 }
 
+/* A certificate (bwp_id.h): our signed manifest format, target "bridge-id", over the SHA-256 of
+   the bridge's identity key, signed with a key this firmware trusts (fw_sign.h). */
+static bool io_check_cert(const uint8_t cert[BWP_ID_CERT_LEN], const uint8_t id_pub[BWP_ID_PUB_LEN], void *ctx)
+{
+    (void)ctx;
+    uint8_t digest[32];
+    bwp_id_cert_digest(id_pub, digest);
+    return fw_sign_check(cert, BWP_ID_CERT_LEN, BWP_ID_CERT_TARGET, BWP_ID_PUB_LEN, digest, NULL) == FW_SIG_OK;
+}
+
+static int io_random(uint8_t *buf, size_t n, void *ctx)
+{
+    (void)ctx;
+    return rng_fill(buf, n);
+}
+
+/* The last genuine bridge lives in the pod policy record (pod_policy.h), loaded at boot before this. */
+static bool io_load_pin(uint8_t mac[6], uint8_t pub[BWP_PUBKEY_LEN], void *ctx)
+{
+    (void)ctx;
+    return pod_policy_bridge_pin(mac, pub);
+}
+
+static void io_save_pin(const uint8_t mac[6], const uint8_t pub[BWP_PUBKEY_LEN], void *ctx)
+{
+    (void)ctx;
+    const char *why = pod_policy_set_bridge_pin(mac, pub);
+    if (why) {
+        log_printf("[bridge] could not store the verified bridge: %s\r\n", why);
+    } else {
+        log_printf("[bridge] genuine Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x verified and stored\r\n",
+                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }
+}
+
 void wifi_bridge_net_init(struct netif *eth)
 {
-    static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .ctx = NULL};
+    static const wb_io_t io = {.send = io_send, .derive_secret = io_secret, .check_cert = io_check_cert,
+                               .random = io_random, .load_pin = io_load_pin, .save_pin = io_save_pin,
+                               .ctx = NULL};
     s_eth = eth;
     wb_init(&s_wb, eth->hwaddr, &io);
     log_printf("[bridge] Wi-Fi bridge control channel on\r\n");
@@ -162,6 +201,25 @@ void wifi_bridge_get_info(wb_info_t *out)
     taskEXIT_CRITICAL();
 }
 
+typedef struct {
+    uint8_t id[BWP_ID_PUB_LEN];
+    bool have;
+} id_call_t;
+
+static void on_net_identity(void *arg)
+{
+    id_call_t *c = arg;
+    c->have = wb_identity(&s_wb, c->id);
+}
+
+bool wifi_bridge_identity(uint8_t id_pub[BWP_ID_PUB_LEN])
+{
+    id_call_t c = {.have = false};
+    if (!net_call_sync(on_net_identity, &c, 2000) || !c.have) return false;
+    memcpy(id_pub, c.id, BWP_ID_PUB_LEN);
+    return true;
+}
+
 /* ---- worker side: one request at a time, through net_call_sync */
 typedef struct {
     const char *ssid;            /* set: a sealed SET_WIFI instead of type/tlvs */
@@ -180,7 +238,9 @@ static void on_net_start(void *arg)
 {
     call_t *c = arg;
     c->rc = c->ssid ? wb_request_set_wifi(&s_wb, c->ssid, c->pass, c->seal_nonce, c->timeout_ms, HAL_GetTick())
-                    : wb_request(&s_wb, c->type, c->tlvs, c->len, c->timeout_ms, HAL_GetTick());
+                    : c->len > WB_REQ_MAX  /* borrowed: the caller's buffer must be static */
+                          ? wb_request_ext(&s_wb, c->type, c->tlvs, c->len, c->timeout_ms, HAL_GetTick())
+                          : wb_request(&s_wb, c->type, c->tlvs, c->len, c->timeout_ms, HAL_GetTick());
 }
 
 static void on_net_take(void *arg)

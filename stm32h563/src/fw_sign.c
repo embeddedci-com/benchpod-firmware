@@ -5,6 +5,7 @@
 #include "fw_sign_keys_gen.h"     /* generated from keys/release-N.pub by the Makefile */
 #include "monocypher-ed25519.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define CTX_LEN    (sizeof(FW_SIGN_CONTEXT))   /* includes the NUL separator */
@@ -30,9 +31,10 @@ fw_sig_result_t fw_sign_check_keys(const uint8_t *sig, size_t sig_len, uint8_t t
                                    fw_sig_manifest_t *out) {
     if (sig == NULL || sig_len == 0) return FW_SIG_NONE;
     /* signed targets: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge, 7 gw2 (4 ca and 5 tls are never
-       signed) */
+       signed), and 8, a Wi-Fi bridge's identity certificate (bwp_id.h; never an update: OTA has no
+       target 8, and a certificate checked as target 8 cannot pass for anything else) */
     if (sig_len != FW_SIGN_MANIFEST_LEN || memcmp(sig, "BPSG", 4) != 0 || rd16(sig + 4) != 1u ||
-        (sig[6] > 3u && sig[6] != 6u && sig[6] != 7u))
+        (sig[6] > 3u && sig[6] != 6u && sig[6] != 7u && sig[6] != 8u))
         return FW_SIG_FORMAT;
 
     fw_sig_manifest_t m;
@@ -91,8 +93,19 @@ const char *fw_sign_result_name(fw_sig_result_t r) {
     return "?";
 }
 
-/* Held here for the OTA check; pod_policy.c loads and persists it. */
+/* Held here for the OTA check; pod_policy.c loads and persists them. */
 static fw_sig_policy_t s_policy = FW_SIG_POLICY_AUDIT;
+static bool s_lan_unsigned;
+static uint32_t s_floor;
+bool fw_sign_lan_unsigned(void) { return s_lan_unsigned; }
+void fw_sign_set_lan_unsigned(bool on) { s_lan_unsigned = on; }
+uint32_t fw_sign_floor(void) { return s_floor; }
+void fw_sign_set_floor(uint32_t release) { s_floor = release; }
+
+const char *fw_sign_release_str(uint32_t r, char *buf, size_t cap) {
+    snprintf(buf, cap, "%u.%u.%u", (unsigned)(r >> 16), (unsigned)((r >> 8) & 0xFFu), (unsigned)(r & 0xFFu));
+    return buf;
+}
 fw_sig_policy_t fw_sign_policy(void) { return s_policy; }
 void fw_sign_set_policy(fw_sig_policy_t p) { s_policy = p; }
 

@@ -37,4 +37,12 @@ int net_route_pick(const net_route_if_t *ifs, int n, uint32_t src, uint32_t dest
    reports it as the "uplink" of its capabilities frame (eth or wifi). */
 int net_route_owner(const net_route_if_t *ifs, int n, uint32_t local);
 
+/* Strong-host rule for the USB network adapter's address (installed as LWIP_HOOK_IP4_INPUT).
+   lwIP accepts a packet for ANY of its addresses on ANY interface (weak host), so a LAN host that
+   routes the USB link's /30 through the pod's Ethernet or Wi-Fi address would otherwise reach the
+   API "on the USB link", which counts as physical presence (pod_policy.h). True = drop the packet:
+   it is addressed to the USB subnet (`usb_ip`/`usb_mask`, its broadcast included) but did not
+   arrive on the USB interface. usb_ip 0 (no address yet) never drops. */
+bool net_route_usb_ingress_drop(uint32_t dest, bool arrived_on_usb, uint32_t usb_ip, uint32_t usb_mask);
+
 #endif /* NET_ROUTE_H */

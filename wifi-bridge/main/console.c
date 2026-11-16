@@ -18,7 +18,7 @@
 #include "sdkconfig.h"
 
 #define UART      CONFIG_ESP_CONSOLE_UART_NUM
-#define CON_LINE_MAX  256
+#define CON_LINE_MAX  320   /* id-cert takes 256 hex digits */
 #define MAX_ARGS  4
 
 static char s_line[CON_LINE_MAX];
@@ -205,6 +205,8 @@ static void cmd_help(void)
            "reboot                      restart the bridge\n"
            "factory-reset               erase credentials and pairing, restart\n"
            "unpair                      forget the paired pod (same as the PAIR button)\n"
+           "identity                    the identity key (hex) and whether a certificate is stored\n"
+           "id-cert <hex>               store the identity certificate (256 hex digits)\n"
            "log on|off                  show or hide log lines\n"
            "echo on|off                 echo typed characters\n");
 #if CONFIG_BRIDGE_EMC_TEST
@@ -257,6 +259,26 @@ static void execute(char *line)
         fflush(stdout);
         vTaskDelay(pdMS_TO_TICKS(100));
         board_reboot();
+    } else if (strcmp(c, "identity") == 0) {
+        uint8_t id[32];
+        bool cert;
+        control_identity(id, &cert);
+        printf("identity ");
+        for (int i = 0; i < 32; i++) {
+            printf("%02x", id[i]);
+        }
+        printf(" certificate %s\n", cert ? "ok" : "none");
+        ok();
+    } else if (strcmp(c, "id-cert") == 0 && argc == 2) {
+        uint8_t cert[128];
+        bool good = strlen(argv[1]) == 256;
+        for (int i = 0; good && i < 128; i++) {
+            unsigned v;
+            good = sscanf(argv[1] + 2 * i, "%2x", &v) == 1;
+            cert[i] = (uint8_t)v;
+        }
+        const char *why = good ? control_set_id_cert(cert) : "256 hex digits";
+        why ? err("%s", why) : ok();
     } else if (strcmp(c, "unpair") == 0) {
         control_forget_pairing();
         ok();

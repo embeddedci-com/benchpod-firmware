@@ -273,6 +273,7 @@ int ota_commit(void) {
     /* A copy that survives a power cut, for the bootloader planned next. Before the bus grab
        below: it takes the bus itself (w25q_open). Never blocks the install. */
     (void)ota_store_fw_copy();
+    ota_floor_on_commit();   /* a signed image with the floor flag: no going back below it */
     /* Stop every gateware PSRAM master and drain to idle BEFORE grabbing the bus: the commit
        READS the staged image from PSRAM to write it into internal flash, so a live iCE40
        reader mid-burst contending on the shared bus could corrupt those reads and flash a bad

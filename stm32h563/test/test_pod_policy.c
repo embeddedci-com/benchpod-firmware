@@ -5,6 +5,7 @@
  */
 #include "pod_policy.h"
 #include "fw_sign.h"
+#include "config_store.h"
 #include "mocks/mock_flash.h"
 
 #include <setjmp.h>
@@ -38,6 +39,9 @@ static void boot_blank(void) {
     pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_USB);
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
+    pod_policy_set_lan_unsigned(false, POLICY_SRC_USB, false);
+    pod_policy_clear_floor(POLICY_SRC_USB);
+    pod_policy_set_bridge_pin(NULL, NULL);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
@@ -158,8 +162,79 @@ static void test_usb_net(void) {
           last_usb_net, "the console could not turn it back on");
 }
 
+/* Security review 2026-11 M10/L14: port 8443 has no client authentication, so neither a TLS nor
+   a plaintext LAN connection may change the LAN TLS identity or HTTPS-only (either way). */
+static void test_lan_tls_gate(void) {
+    boot_blank();
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, false) != NULL, "external LAN may change LAN TLS");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, true) == NULL, "USB link refused");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_USB, false) == NULL, "USB console refused");
+    CHECK(pod_policy_lan_tls_gate(POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL, "LAN turned HTTPS-only on");
+    CHECK(!pod_policy_https_only(), "a refused change changed it");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, true) == NULL && pod_policy_https_only(), "USB link");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL && pod_policy_https_only(),
+          "LAN turned HTTPS-only off");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_CLOUD, false) == NULL && !pod_policy_https_only(), "cloud");
+}
+
+/* Security review 2026-11 H3/M7: "LAN images any" loosens, so only the device turns it on; the
+   floor only goes up from an image and is cleared on the console; both survive a reboot. */
+static void test_lan_unsigned_and_floor(void) {
+    boot_blank();
+    CHECK(!pod_policy_lan_unsigned() && !fw_sign_lan_unsigned(), "default must be signed only");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, false) != NULL, "Ethernet/Wi-Fi turned it on");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_CLOUD, false) != NULL, "the cloud turned it on");
+    CHECK(!pod_policy_lan_unsigned(), "a refused change changed it");
+    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, true) == NULL && fw_sign_lan_unsigned(), "USB link");
+    pod_policy_load();
+    CHECK(pod_policy_lan_unsigned() && fw_sign_lan_unsigned(), "lost on reboot");
+    CHECK(pod_policy_set_lan_unsigned(false, POLICY_SRC_CLOUD, false) == NULL && !fw_sign_lan_unsigned(),
+          "the cloud could not tighten");
+
+    CHECK(pod_policy_rollback_floor() == 0 && fw_sign_floor() == 0, "default floor");
+    CHECK(pod_policy_raise_floor(0x030A07) == NULL && fw_sign_floor() == 0x030A07, "raise");
+    CHECK(pod_policy_raise_floor(0x030A05) == NULL && fw_sign_floor() == 0x030A07, "the floor went down");
+    pod_policy_load();
+    CHECK(pod_policy_rollback_floor() == 0x030A07 && fw_sign_floor() == 0x030A07, "floor lost on reboot");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN) != NULL,
+          "cleared from off the console");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_USB) == NULL && fw_sign_floor() == 0, "console clear");
+    CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
+}
+
+/* The stored genuine Wi-Fi bridge (H4) lives in a version 2 record; a version 1 copy stays the newest so
+   older firmware keeps loading the policies, and their save drops only the pin. */
+static void test_bridge_pin(void) {
+    boot_blank();
+    uint8_t mac[6] = {0x24, 0x0a, 0xc4, 1, 2, 3}, pub[32], m2[6], p2[32];
+    memset(pub, 0x77, sizeof(pub));
+    CHECK(!pod_policy_bridge_pin(m2, p2), "pinned by default");
+    pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB);
+    CHECK(pod_policy_set_bridge_pin(mac, pub) == NULL, "pin");
+    pod_policy_load();
+    CHECK(pod_policy_bridge_pin(m2, p2) && !memcmp(m2, mac, 6) && !memcmp(p2, pub, 32), "pin lost on reboot");
+    CHECK(pod_policy_lan() == POD_LAN_LOCKED, "policy lost next to the pin");
+    /* older firmware reads the version 1 record: it must be the newest and carry the policy */
+    static const ab_store_t v1 = { .tag = "old", .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+                                   .magic = POD_POLICY_RECORD_MAGIC, .version = 1 };
+    uint8_t rec[16];
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[5] == POD_LAN_LOCKED, "older firmware cannot load it");
+    /* ...and its own save (a policy change there) overwrites the version 2 record */
+    rec[5] = POD_LAN_OPEN;
+    CHECK(ab_store_save(&v1, rec, sizeof(rec)) == 0, "old save");
+    pod_policy_load();
+    CHECK(!pod_policy_bridge_pin(m2, p2) && pod_policy_lan() == POD_LAN_OPEN, "after an older firmware's save");
+    CHECK(pod_policy_set_bridge_pin(mac, pub) == NULL && pod_policy_set_bridge_pin(NULL, NULL) == NULL, "clear");
+    pod_policy_load();
+    CHECK(!pod_policy_bridge_pin(m2, p2), "clear not kept");
+}
+
 int main(void) {
     test_defaults();
+    test_bridge_pin();
+    test_lan_unsigned_and_floor();
+    test_lan_tls_gate();
     test_sig_ratchet();
     test_lan();
     test_persists();

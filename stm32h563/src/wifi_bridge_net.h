@@ -43,6 +43,7 @@ bool wifi_bridge_take_joined(void);
 int wifi_bridge_call(uint8_t type, const uint8_t *tlvs, size_t len, uint32_t timeout_ms, wb_reply_t *out,
                      const char **err);
 
+/* A body longer than WB_REQ_MAX (SET_ID_CERT) is borrowed, not copied: pass a static buffer. */
 /* The one reply buffer for wifi_bridge_call (scan results make it ~900 B): JSON commands and
    console lines both run on the hw worker, one at a time, so they share it. */
 extern wb_reply_t g_wifi_bridge_reply;
@@ -53,6 +54,9 @@ void wifi_bridge_get_info(wb_info_t *out);
 /* SET_WIFI with the passphrase sealed under the pairing key (never sent in the clear). Same
    contract as wifi_bridge_call; validates the SSID and passphrase first. */
 int wifi_bridge_set_wifi(const char *ssid, const char *pass, wb_reply_t *out, const char **err);
+
+/* hw worker only: the bridge's identity key from its HELLO (false: none, older bridge firmware). */
+bool wifi_bridge_identity(uint8_t id_pub[BWP_ID_PUB_LEN]);
 
 /* Bridge firmware updates (wifi_bridge_ota.c) on the hw worker: one step per call, from its loop. */
 void wifi_bridge_ota_poll(void);

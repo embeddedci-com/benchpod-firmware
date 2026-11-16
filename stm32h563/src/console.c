@@ -224,6 +224,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
         "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
         "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
+        "  lan-ota [signed|any]                       updates from Ethernet/Wi-Fi: signed only (default) or any\r\n"
+        "  rollback-floor [clear]                     the oldest signed firmware this pod takes\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
         "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate (port 8443)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
@@ -275,6 +277,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in, unless built-in\r\n"
         "Wi-Fi is configured: that wins, wifi-clear it to use the bridge):\r\n"
         "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
+        "  bridge cert <1-4> <hex>  install the bridge's identity certificate, a quarter (64 hex\r\n"
+        "                       digits) at a time; `bridge` shows its identity key\r\n"
         "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
 }
@@ -416,6 +420,14 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
    when one says HELLO on the Ethernet port, unless built-in Wi-Fi is configured (it wins,
    wifi_bridge_ignored); `bridge` shows it and runs scan / reboot / reset. */
 
+static int hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
 {
     if (rc != 0) {
@@ -445,6 +457,16 @@ static void bridge_show(console_out_t out, void *ctx)
     op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s%s%s, %s\r\n", i.mac[0], i.mac[1],
        i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev[0] ? " hw " : "", i.hw_rev,
        i.paired ? "paired" : "not paired");
+    uint8_t id[BWP_ID_PUB_LEN];
+    if (wifi_bridge_identity(id)) {
+        char hex[2 * BWP_ID_PUB_LEN + 1];
+        for (int k = 0; k < BWP_ID_PUB_LEN; k++) snprintf(hex + 2 * k, 3, "%02x", id[k]);
+        op(out, ctx, "  identity: %s\r\n", hex);
+    } else {
+        op(out, ctx, "  identity: none (bridge firmware before 0.1.3)\r\n");
+    }
+    op(out, ctx, "  genuine: %s%s\r\n", i.genuine ? "yes" : "no",
+       i.genuine ? "" : (i.flags & BWP_F_IDENTITY) ? " (certificate stored, not checked yet)" : " (no valid certificate)");
     if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
     uint32_t iv;
     if (wifi_bridge_image(&iv))
@@ -473,6 +495,34 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
     if (argc == 1) {
         if (!wifi_bridge_present()) op(out, ctx, "  no Wi-Fi bridge on the Ethernet port\r\n");
         else bridge_show(out, ctx);
+    } else if (!strcmp(argv[1], "cert") && argc == 4) {
+        /* The certificate is 128 bytes, more than a console line: four parts of 32 bytes (64 hex
+           digits), `bridge cert <1-4> <hex>`, sent to the bridge once all four are in. The buffer
+           comes from the heap on first use and stays (the request borrows it). */
+        static uint8_t *t;      /* ID_CERT TLV: 3 + 128 bytes */
+        static uint8_t parts;   /* bit per part received */
+        int part = atoi(argv[2]);
+        bool good = part >= 1 && part <= 4 && strlen(argv[3]) == 64;
+        if (good && !t) good = (t = pvPortMalloc(3 + BWP_ID_CERT_LEN)) != NULL;
+        for (unsigned k = 0; good && k < 32; k++) {
+            int hi = hexval(argv[3][2 * k]), lo = hexval(argv[3][2 * k + 1]);
+            good = hi >= 0 && lo >= 0;
+            t[3 + 32 * (part - 1) + k] = (uint8_t)(hi << 4 | lo);
+        }
+        if (!good) {
+            op(out, ctx, "  bridge cert: bridge cert <1-4> <64 hex digits>, the four quarters in any order\r\n");
+            return;
+        }
+        parts |= (uint8_t)(1u << (part - 1));
+        if (parts != 0x0F) {
+            op(out, ctx, "  bridge cert: part %d of 4 stored\r\n", part);
+            return;
+        }
+        parts = 0;
+        t[0] = BWP_T_ID_CERT, t[1] = 0, t[2] = BWP_ID_CERT_LEN;
+        rc = wifi_bridge_call(BWP_SET_ID_CERT, t, 3 + BWP_ID_CERT_LEN, 2000, &g_wifi_bridge_reply, &err);
+        if (!bridge_failed(out, ctx, "bridge cert", rc, err))
+            op(out, ctx, "  certificate stored on the bridge: the pod checks its identity again now\r\n");
     } else if (!strcmp(argv[1], "scan")) {
         rc = wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err);
         if (bridge_failed(out, ctx, "bridge scan", rc, err)) return;
@@ -493,7 +543,7 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
         if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err))
             op(out, ctx, "  the Wi-Fi bridge forgot its Wi-Fi and its pairing, and restarts\r\n");
     } else {
-        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n");
+        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge cert <1-4> <hex> | bridge factory-reset yes\r\n");
     }
 }
 #endif
@@ -1166,6 +1216,23 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         if (why) op(out, ctx, "sig-policy error %s\r\n", why);
         else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
                     (unsigned)fw_sign_key_count());
+    } else if (!strcmp(argv[0], "lan-ota")) {
+        /* Firmware 3.10.7+: what the external LAN may install (pod_policy.h). "any" is the
+           behavior before 3.10.7; only the device turns it on. */
+        const char *why = NULL;
+        if (argc >= 2) {
+            if (strcmp(argv[1], "signed") && strcmp(argv[1], "any")) why = "use signed or any";
+            else why = pod_policy_set_lan_unsigned(!strcmp(argv[1], "any"), POLICY_SRC_USB, false);
+        }
+        if (why) op(out, ctx, "lan-ota error %s\r\n", why);
+        else     op(out, ctx, "lan-ota %s\r\n", pod_policy_lan_unsigned() ? "any" : "signed");
+    } else if (!strcmp(argv[0], "rollback-floor")) {
+        const char *why = NULL;
+        if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB);
+        char fl[16];
+        uint32_t f = pod_policy_rollback_floor();
+        if (why) op(out, ctx, "rollback-floor error %s\r\n", why);
+        else     op(out, ctx, "rollback-floor %s\r\n", f ? fw_sign_release_str(f, fl, sizeof(fl)) : "none");
 #if !defined(BENCHPOD_RELEASE)
     } else if (!strcmp(argv[0], "ca-damage")) {
         /* Development builds: damage the company CA slot to try the built-in-roots fallback. */
@@ -1223,7 +1290,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
         const char *why = NULL;
         if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
-            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false, false);
+            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
         else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
             why = lan_tls_regenerate();
         else if (argc >= 2)
@@ -1457,6 +1524,13 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         else
             op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
                          "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
+    } else if (!strcmp(argv[0], "dfu") && pod_policy_sig() == FW_SIG_POLICY_REQUIRED) {
+        /* The ROM bootloader writes any image, signed or not: under "required" that would be the
+           way around the signature check (security review 2026-11, M11). Loosening the policy
+           first is possible from this console, but it is a visible, persisted change. */
+        out(ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
+                 "Update with signed firmware over the network or USB link (benchpod flash-self "
+                 "--network), or loosen it first (sig-policy permissive)\r\n");   /* > op()'s 160 B */
     } else if (!strcmp(argv[0], "dfu")) {
         op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
         HAL_Delay(50);          /* let the notice drain before USB re-enumerates */

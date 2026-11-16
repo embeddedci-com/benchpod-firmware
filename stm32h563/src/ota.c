@@ -31,6 +31,8 @@ static ota_target_t s_target = OTA_TARGET_FIRMWARE;
 static uint32_t    s_version;              /* gateware version of a blob   */
 static char        s_err[64];
 static fw_sig_result_t s_sig = FW_SIG_NONE;  /* last begin's signature check */
+static uint32_t    s_sig_release;          /* its manifest's release and flags (rollback floor) */
+static uint8_t     s_sig_flags;
 static char        s_sig_key[2 * FW_SIGN_KEY_ID_LEN + 1];
 static uint32_t    s_wd_seen;              /* s_received at the last watchdog mark */
 static uint32_t    s_wd_mark_ms;           /* caller clock at that mark            */
@@ -174,30 +176,80 @@ int ota_sig_decode(const char *b64, uint8_t out[FW_SIGN_MANIFEST_LEN]) {
     return (int)got;
 }
 
+/* The rollback floor only goes up when a signed image with FW_SIG_FLAG_FLOOR is committed.
+   pod_policy.c persists it; this default (host tests without pod_policy) keeps it in RAM. */
+__attribute__((weak)) const char *pod_policy_raise_floor(uint32_t release) {
+    if (release > fw_sign_floor()) fw_sign_set_floor(release);
+    return NULL;
+}
+
+/* Does the signature check let this image in? NULL = yes, else the refusal (63 chars at most:
+   it becomes the session's error). external_lan: the begin came over Ethernet or Wi-Fi, not
+   the USB network adapter, the console or the cloud. */
+static const char *signature_refusal(bool external_lan, char *e, size_t cap) {
+    const char *res = fw_sign_result_name(s_sig);
+    if (s_target == OTA_TARGET_BRIDGE || s_target == OTA_TARGET_ESP) {
+        /* The bridge refuses an update without a good manifest whatever our policy, so do not
+           store one. The C3 image sees the Wi-Fi password and every Wi-Fi frame: same rule
+           (security review 2026-11, M6). */
+        if (s_sig == FW_SIG_OK) return NULL;
+        snprintf(e, cap, "signature: %s (%s images must be signed)", res, ota_target_name(s_target));
+        return e;
+    }
+    if (!fw_sign_accept(s_sig, fw_sign_policy())) {
+        snprintf(e, cap, "signature: %s", res);
+        return e;
+    }
+    /* The LAN API has no client authentication: from Ethernet or Wi-Fi only a good signature,
+       whatever the policy, unless the user allowed more on the device (H3). */
+    if (external_lan && s_sig != FW_SIG_OK && !fw_sign_lan_unsigned()) {
+        snprintf(e, cap, "signature: %s (LAN needs a signed image; use USB)", res);
+        return e;
+    }
+    /* Rollback floor (M7): a signed firmware image older than the floor. Unsigned images carry
+       no trustworthy version; the policy above decides about them. */
+    if (s_sig == FW_SIG_OK && s_target == OTA_TARGET_FIRMWARE && s_sig_release < fw_sign_floor()) {
+        char a[16], b[16];
+        snprintf(e, cap, "rollback: %s is below this pod's floor %s",
+                 fw_sign_release_str(s_sig_release, a, sizeof(a)), fw_sign_release_str(fw_sign_floor(), b, sizeof(b)));
+        return e;
+    }
+    return NULL;
+}
+
 /* Check the manifest that came with the image and keep the result for the status replies.
    0 = the policy lets it in, -1 = refused (error set). */
-static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t expect[32]) {
+static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t expect[32], bool external_lan) {
     fw_sig_manifest_t m;
+    memset(&m, 0, sizeof(m));
     s_sig = fw_sign_check(sig, sig_len, (uint8_t)s_target, s_size, expect, &m);
+    s_sig_release = m.release;
+    s_sig_flags = m.flags;
     s_sig_key[0] = '\0';
     if (s_sig != FW_SIG_NONE && s_sig != FW_SIG_FORMAT)
         for (unsigned i = 0; i < FW_SIGN_KEY_ID_LEN; i++)
             snprintf(s_sig_key + 2 * i, 3, "%02x", m.key_id[i]);
-    printf("[ota] signature: %s%s%s (policy %s)\n", fw_sign_result_name(s_sig),
-           s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()));
-    /* The bridge refuses an update without a good manifest whatever our policy, so do not store one. */
-    if (s_target == OTA_TARGET_BRIDGE ? s_sig == FW_SIG_OK : fw_sign_accept(s_sig, fw_sign_policy())) {
+    printf("[ota] signature: %s%s%s (policy %s%s)\n", fw_sign_result_name(s_sig),
+           s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()),
+           external_lan ? ", from the LAN" : "");
+    char e[64];
+    const char *why = signature_refusal(external_lan, e, sizeof(e));
+    if (!why) {
         if (s_target == OTA_TARGET_BRIDGE) memcpy(s_sig_copy, sig, FW_SIGN_MANIFEST_LEN);
         return 0;
     }
-    char e[64];
-    snprintf(e, sizeof(e), "signature: %s", fw_sign_result_name(s_sig));
-    set_err(e);
+    set_err(why);
     return -1;
 }
 
+void ota_floor_on_commit(void) {
+    if (s_target != OTA_TARGET_FIRMWARE || s_sig != FW_SIG_OK || !(s_sig_flags & FW_SIG_FLAG_FLOOR)) return;
+    const char *why = pod_policy_raise_floor(s_sig_release);
+    if (why) printf("[ota] rollback floor not raised: %s\n", why);
+}
+
 static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
-                        const uint8_t *sig, size_t sig_len) {
+                        const uint8_t *sig, size_t sig_len, bool external_lan) {
     if (s_state == OTA_APPLYING) { set_err("begin"); return -1; }   /* touches nothing */
     s_sig = FW_SIG_NONE;
     s_sig_key[0] = '\0';
@@ -214,7 +266,7 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
     s_size = size;
     /* Signatures cover code (firmware, gateware, the C3 image); the company CA is configuration
        an admin installs, so it is neither checked nor refused by the signature policy. */
-    if (!target_is_config(target) && check_signature(sig, sig_len, expect) != 0) return -1;
+    if (!target_is_config(target) && check_signature(sig, sig_len, expect, external_lan) != 0) return -1;
     memcpy(s_expect, expect, 32);
     s_size     = size;
     s_received = 0;
@@ -527,6 +579,11 @@ void ota_refuse_for(ota_owner_t who, const char *why) { refuse(who, why, true); 
 
 int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                     uint32_t version, const uint8_t *sig, size_t sig_len) {
+    return ota_begin_owned_from(who, false, size, sha256_hex, target, version, sig, sig_len);
+}
+
+int ota_begin_owned_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
+                         ota_target_t target, uint32_t version, const uint8_t *sig, size_t sig_len) {
     if (s_state == OTA_APPLYING) { set_err("begin"); return -1; }   /* not even an abandoned one */
     const char *busy = ota_busy_replace_for(who);
     if (busy) { ota_refuse_for(who, busy); return -1; }
@@ -535,18 +592,23 @@ int ota_begin_owned(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_
     clear_refusal(who);
     s_owner  = who;          /* a refused begin below reports its error to this owner */
     s_orphan = false;
-    int rc = begin_signed(size, sha256_hex, target, version, sig, sig_len);
+    int rc = begin_signed(size, sha256_hex, target, version, sig, sig_len, external_lan);
     s_activity_ms = s_clock_ms;
     return rc;
 }
 
 int ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha256_hex, ota_target_t target,
                         uint32_t version, const char *sig_b64) {
+    return ota_begin_owned_b64_from(who, false, size, sha256_hex, target, version, sig_b64);
+}
+
+int ota_begin_owned_b64_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
+                             ota_target_t target, uint32_t version, const char *sig_b64) {
     uint8_t sig[FW_SIGN_MANIFEST_LEN];
     int sig_len = ota_sig_decode(sig_b64, sig);
     /* 1 byte of an undecodable manifest: fw_sign_check reports it as malformed */
-    return ota_begin_owned(who, size, sha256_hex, target, version, sig,
-                           sig_len < 0 ? 1u : (size_t)sig_len);
+    return ota_begin_owned_from(who, external_lan, size, sha256_hex, target, version, sig,
+                                sig_len < 0 ? 1u : (size_t)sig_len);
 }
 
 int ota_data_by(ota_owner_t who, uint32_t offset, const uint8_t *buf, uint32_t len) {

@@ -9,7 +9,9 @@
 #include "bridge_util.h"
 #include "bwp.h"
 #include "bwp_crypto.h"
+#include "bwp_id.h"
 #include "fwsig.h"
+#include "monocypher-ed25519.h"
 #include "hmac_sha256.h"
 #include "hmac_sha256.h"
 #include "l2fwd.h"
@@ -378,6 +380,65 @@ static void test_fwsig(void)
                       (uint32_t)vec_images[vec_cases[0].image].len, NULL) == FWSIG_UNKNOWN_KEY);
 }
 
+// Bridge identity (bwp_id.h): a certificate as tools/fwsign.py sign-bridge-id makes it, signed
+// with the vector key (seed 00..1f, vec_pub) or another one.
+static void make_id_cert(uint8_t seed0, uint8_t target, const uint8_t id_pub[32], uint8_t cert[128])
+{
+    uint8_t seed[32], sk[64], pub[32], h[64], msg[20 + 64];
+    for (int i = 0; i < 32; i++) {
+        seed[i] = (uint8_t)(seed0 + i);
+    }
+    crypto_ed25519_key_pair(sk, pub, seed);
+    memset(cert, 0, 128);
+    memcpy(cert, "BPSG", 4);
+    cert[4] = 1;
+    cert[6] = target;
+    cert[8] = 32;
+    bwp_id_cert_digest(id_pub, cert + 12);
+    crypto_sha512(h, pub, 32);
+    memcpy(cert + 56, h, 8);
+    memcpy(msg, "benchpod-fw-sign:v1", 20);  // with its NUL
+    memcpy(msg + 20, cert, 64);
+    crypto_ed25519_sign(cert + 64, sk, msg, sizeof(msg));
+}
+
+static void test_identity(void)
+{
+    uint8_t seed[32], sk[64], id[32], other_id[32], cert[128], sig[64];
+    memset(seed, 0x33, sizeof(seed));
+    crypto_ed25519_key_pair(sk, id, seed);
+    memset(other_id, 0x44, sizeof(other_id));
+    // certificate checks, as the bridge does before it stores one
+    make_id_cert(0, FWSIG_TARGET_BRIDGE_ID, id, cert);
+    CHECK(fwsig_check_bridge_id(cert, id, &vec_pub, 1) == FWSIG_OK);
+    CHECK(fwsig_check_bridge_id(cert, other_id, &vec_pub, 1) == FWSIG_IMAGE);   // another bridge's key
+    CHECK(fwsig_check_bridge_id(cert, id, &vec_pub, 0) == FWSIG_UNKNOWN_KEY);
+    make_id_cert(0, FWSIG_TARGET_BRIDGE, id, cert);                           // a firmware-style target
+    CHECK(fwsig_check_bridge_id(cert, id, &vec_pub, 1) == FWSIG_TARGET);
+    make_id_cert(32, FWSIG_TARGET_BRIDGE_ID, id, cert);                       // signed by an unknown key
+    CHECK(fwsig_check_bridge_id(cert, id, &vec_pub, 1) == FWSIG_UNKNOWN_KEY);
+    make_id_cert(0, FWSIG_TARGET_BRIDGE_ID, id, cert);
+    cert[100] ^= 1;
+    CHECK(fwsig_check_bridge_id(cert, id, &vec_pub, 1) == FWSIG_SIGNATURE);
+    // ...and a certificate never passes as an update manifest
+    make_id_cert(0, FWSIG_TARGET_BRIDGE_ID, id, cert);
+    CHECK(fwsig_check(cert, 128, &vec_pub, 1, FWSIG_TARGET_BRIDGE, 32, NULL) == FWSIG_TARGET);
+    // transcript signatures: every field counts
+    uint8_t pod_pub[32], br_pub[32], nonce[8], pn[16];
+    memset(pod_pub, 1, 32), memset(br_pub, 2, 32), memset(nonce, 3, 8), memset(pn, 4, 16);
+    bwp_id_sign(sk, pod_pub, br_pub, nonce, pn, sig);
+    CHECK(bwp_id_verify(id, sig, pod_pub, br_pub, nonce, pn));
+    CHECK(!bwp_id_verify(other_id, sig, pod_pub, br_pub, nonce, pn));
+    pod_pub[0] ^= 1;
+    CHECK(!bwp_id_verify(id, sig, pod_pub, br_pub, nonce, pn));
+    pod_pub[0] ^= 1, br_pub[31] ^= 1;
+    CHECK(!bwp_id_verify(id, sig, pod_pub, br_pub, nonce, pn));
+    br_pub[31] ^= 1, nonce[0] ^= 1;
+    CHECK(!bwp_id_verify(id, sig, pod_pub, br_pub, nonce, pn));
+    nonce[0] ^= 1, pn[15] ^= 1;   // a replayed answer to an older PAIR
+    CHECK(!bwp_id_verify(id, sig, pod_pub, br_pub, nonce, pn));
+}
+
 static void test_crypto(void)
 {
     // RFC 7748 section 6.1.
@@ -510,6 +571,55 @@ static void test_learning(void)
     CHECK(memcmp(s.pod_mac, OTHER, 6) == 0);
     frame(f, ROUTER, POD, 0x0800);
     CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC);
+}
+
+// Security review 2026-11, M9: once paired the pod MAC comes only from a signed request
+// (l2fwd_learn_pod), never from the source of an unauthenticated control frame.
+static void test_auth_learning(void)
+{
+    l2fwd_t s;
+    l2_event_t ev;
+    bool back;
+    uint8_t f[64];
+    l2fwd_init(&s, BRIDGE);
+    l2fwd_set_auth_learn(&s, true);
+    // A control frame from anyone reaches the control task, but teaches nothing.
+    frame(f, BCAST, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_NONE && !s.pod_known);
+    frame(f, ROUTER, OTHER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_NO_POD);
+    // The control task saw a valid AUTH from the pod.
+    CHECK(l2fwd_learn_pod(&s, POD, false, &back) == L2_EV_LEARNED && !back && memcmp(s.pod_mac, POD, 6) == 0);
+    frame(f, ROUTER, POD, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_FORWARD);
+    // Spoofing: an unauthenticated control frame after a link-down does not take over.
+    l2fwd_link_down(&s);
+    frame(f, BRIDGE, OTHER, BWP_ETHERTYPE);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_CONTROL && ev == L2_EV_NONE && s.relearn);
+    CHECK(memcmp(s.pod_mac, POD, 6) == 0);
+    frame(f, ROUTER, OTHER, 0x0800);
+    CHECK(l2fwd_from_eth(&s, f, 60, true, &ev) == L2_DROP && s.last_why == L2_WHY_OTHER_MAC);
+    // The same pod signs again: the relearn ends, no event.
+    CHECK(l2fwd_learn_pod(&s, POD, false, &back) == L2_EV_NONE && back && !s.relearn);
+    // Learned and no relearn pending: another signed source changes nothing without force...
+    CHECK(l2fwd_learn_pod(&s, OTHER, false, &back) == L2_EV_NONE && memcmp(s.pod_mac, POD, 6) == 0);
+    // ...a new pairing does.
+    CHECK(l2fwd_learn_pod(&s, OTHER, true, &back) == L2_EV_CHANGED && memcmp(s.pod_mac, OTHER, 6) == 0);
+}
+
+static void test_version_rollback(void)
+{
+    uint32_t v = 1;
+    CHECK(bu_version_pack("0.1.2", &v) && v == 0x000102);
+    CHECK(bu_version_pack("3.10.7", &v) && v == 0x030A07);
+    CHECK(bu_version_pack("0.1.2-emc", &v) && v == 0x000102);
+    CHECK(!bu_version_pack("0.1", &v) && !bu_version_pack("a.b.c", &v) && !bu_version_pack("0.1.2x", &v) &&
+          !bu_version_pack("0.256.0", &v) && !bu_version_pack("", &v) && !bu_version_pack(NULL, &v));
+    CHECK(bu_ota_is_downgrade(0x000101, "0.1.2"));
+    CHECK(!bu_ota_is_downgrade(0x000102, "0.1.2") && !bu_ota_is_downgrade(0x000103, "0.1.2"));
+    CHECK(!bu_ota_is_downgrade(0, "0.1.2"));          // a test image (EMC build)
+    CHECK(!bu_ota_is_downgrade(0x000101, "dev"));     // unknown running version
+    CHECK(bu_ota_is_downgrade(0x000101, "0.1.2-emc"));
 }
 
 static void test_forwarding(void)
@@ -936,8 +1046,11 @@ int main(int argc, char **argv)
     test_set_wifi();
     test_crypto();
     test_fwsig();
+    test_identity();
     test_passphrase_rules();
     test_learning();
+    test_auth_learning();
+    test_version_rollback();
     test_forwarding();
     test_control_frames();
     test_tokenize();

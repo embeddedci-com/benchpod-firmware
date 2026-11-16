@@ -12,6 +12,8 @@ the "pod" MAC, so the machine also gets its network through the bridge.
     sudo ./bridgectl.py -i eth0 set-wifi "lab net" "passphrase"
     sudo ./bridgectl.py -i eth0 clear-wifi | reboot | factory-reset
     sudo ./bridgectl.py -i eth0 ota build/benchpod-wifi-bridge.bin   # + .sig, which build.sh makes
+    sudo ./bridgectl.py -i eth0 identity         # the bridge's identity key and certificate state
+    sudo ./bridgectl.py -i eth0 set-cert bridge-id.sig   # install its identity certificate (paired)
 
 Pairing: an unpaired bridge pairs with the first device that sends PAIR. Both sides compute the
 key with X25519 (it is never sent); after that every request is signed (HMAC-SHA256) with it and
@@ -40,13 +42,14 @@ RESPONSE = 0x80
 
 HELLO, STATUS, SCAN, SET_WIFI, CLEAR_WIFI = 0x01, 0x02, 0x03, 0x04, 0x05
 OTA_BEGIN, OTA_DATA, OTA_END, REBOOT, FACTORY_RESET, OTA_ABORT = 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B
-PAIR = 0x0C
+PAIR, SET_ID_CERT = 0x0C, 0x0D
 
 T_RESULT, T_MODEL, T_FW_VERSION, T_HW_REV, T_STATE, T_BRIDGE_MAC, T_POD_MAC = 1, 2, 3, 4, 5, 6, 7
 T_SSID, T_PASSPHRASE, T_CHANNEL, T_RSSI, T_BSSID, T_AUTHMODE, T_AP = 8, 9, 10, 11, 12, 13, 14
 T_IMAGE_SIZE, T_OFFSET, T_DATA, T_UPTIME, T_REASON, T_COUNTERS, T_MESSAGE, T_FLAGS = 15, 16, 17, 18, 19, 20, 21, 22
 T_NONCE, T_PUBKEY, T_COUNTER, T_AUTH, T_ENC_PASSPHRASE, T_SIGNATURE = 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C
-F_PAIRED = 0x20
+T_POD_NONCE, T_ID_PUB, T_ID_CERT, T_ID_SIG = 0x1F, 0x20, 0x21, 0x22
+F_PAIRED, F_IDENTITY = 0x20, 0x40
 
 STATES = ["unconfigured", "wait-pod", "joining", "connected", "auth-failed", "no-ap"]
 RESULTS = ["ok", "bad-request", "unsupported", "busy", "storage", "ota-not-started", "ota-bad-offset",
@@ -230,7 +233,10 @@ def describe(msg):
         elif tag == T_REASON:
             lines.append(f"last-disconnect-reason: {v[0]}")
         elif tag == T_FLAGS:
-            lines.append(f"flags: 0x{v[0]:02x}" + (" (paired)" if v[0] & F_PAIRED else ""))
+            lines.append(f"flags: 0x{v[0]:02x}" + (" (paired)" if v[0] & F_PAIRED else "")
+                         + (" (certificate)" if v[0] & F_IDENTITY else ""))
+        elif tag == T_ID_PUB:
+            lines.append(f"identity: {v.hex()}")
         elif tag == T_COUNTERS:
             vals = struct.unpack(">7I", v)
             lines.append("counters: " + " ".join(f"{n}={x}" for n, x in zip(COUNTERS, vals)))
@@ -390,7 +396,7 @@ def main():
     ap.add_argument("-i", "--interface", required=True)
     ap.add_argument("--state", help="pairing state file (default ~/.config/benchpod-bridge/<bridge MAC>.json)")
     ap.add_argument("command", choices=["hello", "pair", "status", "scan", "set-wifi", "clear-wifi", "reboot",
-                                        "factory-reset", "ota"])
+                                        "factory-reset", "ota", "identity", "set-cert"])
     ap.add_argument("args", nargs="*")
     a = ap.parse_args()
     link = Link(a.interface)
@@ -408,7 +414,8 @@ def main():
         secret = secrets.token_bytes(32)
         pub = x25519_public(secret)
         # Unpaired: unsigned (trust on first use). Paired with us: signed, rotates the key.
-        msg = link.request(PAIR, tlv(T_PUBKEY, pub), sign=link.paired and link.state.key is not None)
+        msg = link.request(PAIR, tlv(T_PUBKEY, pub) + tlv(T_POD_NONCE, secrets.token_bytes(16)),
+                           sign=link.paired and link.state.key is not None)
         r, m = result_of(msg)
         if r:
             raise SystemExit(f"error: {RESULTS[r] if r < len(RESULTS) else r} {m}")
@@ -436,6 +443,21 @@ def main():
         check(link.request(REBOOT))
     elif a.command == "factory-reset":
         check(link.request(FACTORY_RESET))
+    elif a.command == "identity":
+        t = hello["tlvs"]
+        ident, flags = first(t, T_ID_PUB), first(t, T_FLAGS, b"\0")[0]
+        if not ident:
+            raise SystemExit("no identity in HELLO: bridge firmware before 0.1.3")
+        print(f"identity {ident.hex()} certificate {'ok' if flags & F_IDENTITY else 'none'}")
+    elif a.command == "set-cert":
+        if len(a.args) != 1:
+            raise SystemExit("set-cert <bridge-id.sig>  (128 bytes, from fwsign.py sign-bridge-id)")
+        cert = open(a.args[0], "rb").read()
+        if len(cert) != 128:
+            raise SystemExit("a certificate is 128 bytes")
+        if not link.state.key:
+            raise SystemExit("not paired with this bridge: run `pair` first")
+        check(link.request(SET_ID_CERT, tlv(T_ID_CERT, cert)))
     elif a.command == "ota":
         if len(a.args) not in (1, 2):
             raise SystemExit("ota <image.bin> [<image.bin.sig>]")

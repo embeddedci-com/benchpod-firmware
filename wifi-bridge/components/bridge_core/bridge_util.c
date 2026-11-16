@@ -138,3 +138,49 @@ bool bu_hello_due(bu_hello_timer_t *t, bool link_up, int64_t now_us, int64_t int
     t->next_us = now_us + interval_us;
     return true;
 }
+
+bool bu_version_pack(const char *text, uint32_t *out)
+{
+    uint32_t part[3] = {0, 0, 0};
+    int i = 0;
+    const char *p = text;
+    if (!p) {
+        return false;
+    }
+    for (;;) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+        uint32_t v = 0;
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10u + (uint32_t)(*p++ - '0');
+            if (v > 0xFFFFu) {
+                return false;
+            }
+        }
+        part[i++] = v;
+        if (i == 3) {
+            break;
+        }
+        if (*p++ != '.') {
+            return false;
+        }
+    }
+    if (*p != '\0' && *p != '-') {
+        return false;
+    }
+    if (part[1] > 0xFFu || part[2] > 0xFFu) {
+        return false;
+    }
+    *out = (part[0] << 16) | (part[1] << 8) | part[2];
+    return true;
+}
+
+bool bu_ota_is_downgrade(uint32_t image, const char *running)
+{
+    uint32_t have;
+    if (image == 0 || !bu_version_pack(running, &have)) {
+        return false;
+    }
+    return image < have;
+}

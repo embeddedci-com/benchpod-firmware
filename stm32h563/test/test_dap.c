@@ -200,6 +200,17 @@ static void test_swj_pins_nreset(void) {
     CHECK(mock_swd_ll_last_nreset);   /* asserted (driven low) */
 }
 
+/* Security review 2026-11 L20: DAP_SWJ_Sequence must carry all its data bytes. */
+static void test_swj_sequence_length_checked(void) {
+    setup();
+    uint8_t ok[] = { 0x12, 16, 0xFF, 0xFF };          /* 16 bits, 2 bytes */
+    CHECK(run(ok, sizeof(ok)) == 2 && resp[1] == 0x00);
+    uint8_t short_req[] = { 0x12, 51, 0xFF };          /* 51 bits need 7 bytes */
+    CHECK(run(short_req, sizeof(short_req)) == 2 && resp[1] == 0xFF);
+    uint8_t all[] = { 0x12, 0 };                       /* 0 = 256 bits, 32 bytes missing */
+    CHECK(run(all, sizeof(all)) == 2 && resp[1] == 0xFF);
+}
+
 static void test_unknown_command(void) {
     setup();
     uint8_t req[] = { 0x7E };
@@ -294,6 +305,7 @@ static void run_suite(void) {
     test_block_read_ap();
     test_block_write_ap();
     test_swj_pins_nreset();
+    test_swj_sequence_length_checked();
     test_unknown_command();
 }
 

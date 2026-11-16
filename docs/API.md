@@ -3902,7 +3902,7 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 
 ```json
 {"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
- "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"problem":null,"update":"idle",
+ "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"genuine":true,"problem":null,"update":"idle",
            "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
            "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
                        "eth_tx_err":0,"dropped":76}}}
@@ -3911,7 +3911,12 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 `state` is then the bridge's: `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or
 `no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
 "the bridge is paired with another pod: press PAIR on the bridge" means the user has to press PAIR
-on the bridge. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
+on the bridge. `genuine` (firmware 3.10.7+) is `true` once the bridge showed a valid identity
+certificate and signed the pairing with its identity key; `wifi_set` goes only to a genuine bridge,
+else it fails with the `problem` text (`the Wi-Fi bridge has no identity certificate ...` or `the
+Wi-Fi bridge's identity check failed ...`). The pod pairs again by itself after PAIR on the bridge
+or with a replacement bridge. See [USB serial interface, Wi-Fi bridge](usb-serial-interface.md#wi-fi-bridge)
+for provisioning a certificate. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
 `bridge.update` says what the pod's automatic bridge firmware update is doing (`"idle"`,
 `"updating 0.1.0 to 0.2.0: 45%"`, `"updated to 0.2.0"`, `"update to 0.2.0 failed: ..."`); the
 image comes from W25Q blob slot `bridge` (OTA target `bridge`, listed by `blob_status` in
@@ -3977,7 +3982,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 3.10.7 an update over Ethernet or Wi-Fi needs a good signature whatever the policy, and a signed firmware below the rollback floor is refused (same section). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4410,10 +4415,11 @@ See `docs/design/policy-commands.md` for the full rules.
 ```json
 {"cmd":"sig_policy"}
 {"cmd":"sig_policy","set":"required"}
+{"cmd":"sig_policy","lan_unsigned":false}
 ```
 
 ```json
-{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3}}
+{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3,"lan_unsigned":false,"rollback_floor":null}}
 ```
 
 `audit` (default) accepts every update and reports its signature check; `permissive` refuses a
@@ -4421,6 +4427,31 @@ bad signature; `required` refuses anything not signed by a key the firmware trus
 cloud the policy can only get stricter (`sig_policy: only the USB console can loosen the policy
 (now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
 value.
+
+**Updates from Ethernet and Wi-Fi need a signature** (firmware 3.10.7+). The LAN API has no
+client authentication, so whatever the policy, an update of the firmware, the gateware or the
+ESP32-C3 image that arrives over Ethernet or Wi-Fi must carry a good signature from a key the
+firmware trusts. Every published release is signed, so `benchpod flash-self --network` and the
+web app's install are not affected. An unsigned or developer-signed image (your own build) is
+refused with `signature: none (LAN needs a signed image; use USB)`: send it over the USB network
+adapter (`benchpod flash-self --network --connection usb`), the USB console or the cloud, where
+the policy above applies as before. `lan_unsigned` (`true`) brings back the behavior of firmware
+3.10.6 and earlier, where the LAN followed the policy too. Only the device may turn it on: the
+USB console (`lan-ota any`) or a connection over the USB network adapter. Ethernet and Wi-Fi get
+`lan_ota: change it on the device (the USB console, or over the USB link)`, the cloud may only turn
+it off. Stored; survives reboots and updates.
+
+**ESP32-C3 images are always signed** (firmware 3.10.7+), like the Wi-Fi bridge's firmware: the
+C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good signature gets
+`signature: none (esp images must be signed)` from every transport.
+
+**Rollback floor** (firmware 3.10.7+). `rollback_floor` is the oldest release (`"3.10.7"`, or
+`null` for none, the default) whose signed firmware the pod still takes: a signed firmware image
+older than that gets `rollback: <its release> is below this pod's floor <floor>`. The floor only
+goes up, when a signed release marked as a floor release (a flag in its signed manifest) is
+installed, so an older release with a known security problem cannot be put back later. No
+published release sets it yet. The USB console shows it with `rollback-floor` and lowers it to
+none with `rollback-floor clear`.
 
 ### `lan_policy` — what the external LAN may do
 
@@ -4506,10 +4537,12 @@ and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the uplo
 `ota_commit` (stored and used for new connections; the reply's `state` is `installed`). At most
 7.6 KB. `benchpod lan-tls set-cert --cert pod.pem --key pod.key` does all of it.
 
-**Who may change it.** Reading works from anywhere, and so does turning `https_only` on. Turning
-it off, `regenerate` and the upload need the USB console, the USB network adapter, the cloud, or a
-LAN connection over TLS. A plaintext LAN connection gets
-`lan_tls: change it over TLS (port 8443), over USB or from the cloud`. Reading is T0; the changes
+**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `regenerate`
+and the upload need the USB console, the USB network adapter (`--connection usb`) or the cloud.
+The external LAN (Ethernet, Wi-Fi) gets `lan_tls: change it from the cloud or over USB`, over
+plaintext and over TLS alike: port `8443` has no client authentication, so a TLS connection does
+not show who is on the other end. Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make all
+of these changes and let plaintext LAN turn `https_only` on. Reading is T0; the changes
 are T2 (so `locked` keeps them off the external LAN). mDNS: the `_benchpod._tcp` TXT record carries
 `tls=8443` and `https_only=0|1`.
 

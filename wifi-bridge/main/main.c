@@ -70,6 +70,12 @@ uint8_t bridge_flags(void)
     if (control_paired()) {
         f |= BWP_F_PAIRED;
     }
+    uint8_t id[32];
+    bool cert;
+    control_identity(id, &cert);
+    if (cert) {
+        f |= BWP_F_IDENTITY;
+    }
     if (bridge_pod_mac(mac)) {
         f |= BWP_F_POD_KNOWN;
     }

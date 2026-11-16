@@ -23,10 +23,13 @@
 
 #include "bwp.h"
 #include "bwp_crypto.h"
+#include "bwp_id.h"
 
 #define WB_HELLO_TIMEOUT_MS   6000u   /* bridge gone after three missed HELLOs */
 #define WB_STATUS_EVERY_MS    10000u  /* background STATUS while paired */
 #define WB_PAIR_RETRY_MS      5000u   /* auto-pair attempts at most this often */
+#define WB_VERIFY_RETRY_MS    30000u  /* identity check of an already paired bridge at most this often */
+#define WB_COUNTER_MAX        0x7FFFFFFFu  /* an unsigned REPLAY counter above this is not believed */
 #define WB_TRIES              3       /* sends per request (each re-signed with a new counter) */
 #define WB_MSG_MAX            64
 #define WB_SCAN_MAX           BWP_SCAN_MAX_APS
@@ -43,6 +46,15 @@ typedef struct {
     /* The pod's X25519 secret for a bridge: deterministic per pod and bridge MAC, so the pairing
        key can be recomputed after a reboot without storing it. 0 = ok. */
     int (*derive_secret)(const uint8_t bridge_mac[6], uint8_t secret[32], void *ctx);
+    /* Bridge identity (firmware 3.10.7+, bwp_id.h). check_cert: true when cert is a certificate
+       signed by a key this firmware trusts, for identity key id_pub. random: n fresh random bytes
+       (the PAIR nonce), 0 = ok. load_pin/save_pin: the last bridge whose identity was verified
+       (MAC and pairing public key), kept in the pod's flash so a reboot needs no new proof; any
+       of these may be NULL in tests (no certificate is then valid). */
+    bool (*check_cert)(const uint8_t cert[BWP_ID_CERT_LEN], const uint8_t id_pub[BWP_ID_PUB_LEN], void *ctx);
+    int (*random)(uint8_t *buf, size_t n, void *ctx);
+    bool (*load_pin)(uint8_t mac[6], uint8_t pub[BWP_PUBKEY_LEN], void *ctx);
+    void (*save_pin)(const uint8_t mac[6], const uint8_t pub[BWP_PUBKEY_LEN], void *ctx);
     void *ctx;
 } wb_io_t;
 
@@ -86,6 +98,8 @@ typedef struct {
     uint8_t emc;                 /* bwp_emc_t: the EMC test build's radio, 0: not an EMC build */
     uint32_t reboots;            /* boots of this bridge the pod saw (a new HELLO nonce), since it
                                     first saw it */
+    bool genuine;                /* its identity certificate and pairing signature checked out:
+                                    only then does wifi_set go to it (firmware 3.10.7+) */
 } wb_info_t;
 
 /* True when rssi and channel describe the current connection: HELLO and the unsolicited STATUS
@@ -109,7 +123,6 @@ typedef struct {
     bool have_nonce;
     bool nonce_known;            /* nonce holds one of this bridge's boots (kept over link drops) */
     uint8_t secret[32];          /* ours, for this bridge */
-    uint8_t pub[BWP_PUBKEY_LEN];
     bool have_secret;
     uint8_t bridge_pub[BWP_PUBKEY_LEN];
     uint8_t key[BWP_KEY_LEN];    /* the pairing key, from X25519(secret, bridge_pub) */
@@ -119,7 +132,13 @@ typedef struct {
     wb_info_t info;
     uint32_t status_at;          /* when info.have_status was refreshed */
     uint32_t next_status;
-    uint32_t next_pair;
+    uint32_t next_pair;          /* also the next identity check of an unverified paired bridge */
+
+    /* identity (firmware 3.10.7+) */
+    bool genuine;                /* verified for the key in use (PAIR proof, or the stored pin) */
+    bool pinned;                 /* the stored pin is this bridge and key: nothing to save */
+    bool have_id;
+    uint8_t id_pub[BWP_ID_PUB_LEN];  /* from HELLO, for display */
 
     /* the one request in flight */
     wb_req_state_t req_state;
@@ -161,6 +180,8 @@ const wb_reply_t *wb_request_reply(const wb_t *b);
 void wb_request_release(wb_t *b);
 
 void wb_get_info(const wb_t *b, uint32_t now, wb_info_t *out);
+/* The bridge's identity key from its HELLO (false: none seen, older bridge firmware). */
+bool wb_identity(const wb_t *b, uint8_t id_pub[BWP_ID_PUB_LEN]);
 const char *wb_state_str(uint8_t state);
 /* "power-on", "brownout", ... for wb_info_t.reset; "pod frames", "failing", ... for .emc. */
 const char *wb_reset_str(uint8_t reset);

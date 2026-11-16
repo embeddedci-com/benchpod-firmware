@@ -40,6 +40,12 @@ static sha256_ctx_t s_hash;        // of the bytes written so far
 // (build.sh generates fw_keys_gen.h from stm32h563/keys with tools/fwsign.py keys-header).
 static const uint8_t k_keys[FW_SIGN_KEY_COUNT][32] = FW_SIGN_KEYS_INIT;
 
+const uint8_t (*ota_trusted_keys(size_t *n))[32]
+{
+    *n = FW_SIGN_KEY_COUNT;
+    return k_keys;
+}
+
 void ota_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
@@ -80,7 +86,7 @@ void ota_poll(void)
 
 bwp_result_t ota_begin(uint32_t size, const uint8_t *sig, size_t sig_len, const char **msg)
 {
-    static char why[40];
+    static char why[48];   /* "older than " + a 32-byte version */
     bwp_result_t r = BWP_OK;
     *msg = NULL;
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -90,6 +96,13 @@ bwp_result_t ota_begin(uint32_t size, const uint8_t *sig, size_t sig_len, const 
     if (v != FWSIG_OK) {
         r = BWP_E_OTA_VERIFY;
         snprintf(why, sizeof(why), "signature: %s", sig ? fwsig_result_str(v) : "none");
+        *msg = why;
+        ESP_LOGW(TAG, "begin refused: %s", why);
+    } else if (bu_ota_is_downgrade(s_sig.version, esp_app_get_description()->version)) {
+        // Signed, but older than what runs: an old image with a known bug stays out (M7). The pod
+        // only ever offers newer images; going back needs the factory image or the serial pads.
+        r = BWP_E_OTA_WRONG_IMAGE;
+        snprintf(why, sizeof(why), "older than %s", esp_app_get_description()->version);
         *msg = why;
         ESP_LOGW(TAG, "begin refused: %s", why);
     } else if (!s_part) {

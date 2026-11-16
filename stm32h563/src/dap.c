@@ -476,7 +476,10 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
         case ID_DAP_SWJ_Sequence: {              /* req[1]=bit count (0 => 256) */
             uint32_t nbits = (req_len > 1) ? req[1] : 0;
             if (nbits == 0) nbits = 256;
-            if (req_len >= 2) swd_ll_seq_out(req + 2, nbits);
+            /* The request must carry all (nbits + 7) / 8 data bytes: never clock stale buffer
+               bytes onto SWDIO. */
+            if (req_len < 2 || req_len - 2 < (nbits + 7u) / 8u) { resp[1] = DAP_ERROR; return 2; }
+            swd_ll_seq_out(req + 2, nbits);
             resp[1] = DAP_OK;
             return 2;
         }

@@ -7,7 +7,7 @@ MONO := ../components/monocypher
 # The pod firmware's signing test vectors: the bridge must agree with the pod on every case.
 POD_VECTORS := ../../stm32h563/test/vectors
 SRCS := test_main.c $(CORE)/bwp.c $(CORE)/l2fwd.c $(CORE)/bridge_util.c $(CORE)/hmac_sha256.c $(CORE)/pairing.c \
-        $(CORE)/bwp_crypto.c $(CORE)/fwsig.c $(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c
+        $(CORE)/bwp_crypto.c $(CORE)/fwsig.c $(CORE)/bwp_id.c $(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c
 
 all: run
 

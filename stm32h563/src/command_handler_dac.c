@@ -385,6 +385,7 @@ void handle_load(int conn_id, const char *json) {
     if (offset == 0) {
         if (!heavy_try_claim(conn_id)) { send_error(conn_id, "busy"); return; }
         replay_len = 0;
+        replay_in_psram = false;   /* this trace is in RAM: a later replay must not play an older PSRAM one */
     } else if (heavy_owner_conn() != conn_id) {
         send_error(conn_id, "load not started");
         return;

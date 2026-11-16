@@ -468,7 +468,9 @@ OK
 
 Commands: `help`, `version`, `status`, `scan`, `set-wifi <ssid> [passphrase]` and `clear-wifi`
 (bench bring-up without a pod), `unpair` (same as the PAIR button), `reboot`, `factory-reset`,
-`log on|off`, `echo on|off`. The console is not subject to pairing: it is on the internal pads. There is
+`identity` (the identity key and whether a certificate is stored, 0.1.3+), `id-cert <256 hex
+digits>` (store the identity certificate, checked first; [docs/SECURITY.md](docs/SECURITY.md),
+Bridge identity), `log on|off`, `echo on|off`. The console is not subject to pairing: it is on the internal pads. There is
 no firmware update over the console: updates are network-only, and the pads plus esptool are the
 factory path.
 

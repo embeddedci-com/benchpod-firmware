@@ -24,6 +24,9 @@
 #define FW_SIGN_MANIFEST_LEN 128u
 #define FW_SIGN_KEY_ID_LEN   8u
 #define FW_SIGN_CONTEXT      "benchpod-fw-sign:v1"
+/* Manifest flags (byte 7, covered by the signature). */
+#define FW_SIG_FLAG_FLOOR    0x01u   /* firmware: installing it raises the pod's rollback floor to its
+                                        release (fw_sign_floor; firmware 3.10.7+) */
 
 typedef enum {
     FW_SIG_NONE = 0,       /* no manifest came with the image */
@@ -74,6 +77,17 @@ fw_sig_policy_t fw_sign_policy(void);
 /* Set by pod_policy (boot and the sig_policy command); nothing else should call it. */
 void fw_sign_set_policy(fw_sig_policy_t p);
 const char *fw_sign_policy_name(fw_sig_policy_t p);
+
+/* Images from the external LAN (Ethernet, Wi-Fi; not the USB network adapter) need a good
+   signature whatever the policy, unless lan_unsigned is set (firmware 3.10.7+, pod_policy.h). */
+bool fw_sign_lan_unsigned(void);
+void fw_sign_set_lan_unsigned(bool on);
+/* Rollback floor (packed release, major<<16|minor<<8|patch; 0 = none): a signed firmware image
+   whose manifest release is below it is refused (firmware 3.10.7+, pod_policy.h). */
+uint32_t fw_sign_floor(void);
+void fw_sign_set_floor(uint32_t release);
+/* "3.10.7" for a packed release (buf at least 16 bytes). */
+const char *fw_sign_release_str(uint32_t release, char *buf, size_t cap);
 
 /* Number of keys this build trusts (release keys, plus the dev key on a non-RELEASE build). */
 size_t fw_sign_key_count(void);

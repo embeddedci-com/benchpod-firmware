@@ -58,6 +58,15 @@ typedef struct {
 // True when a HELLO is due now (and schedules the next one). Never while the link is down.
 bool bu_hello_due(bu_hello_timer_t *t, bool link_up, int64_t now_us, int64_t interval_us);
 
+// "0.1.2" (an optional "-suffix" is ignored) -> 0x000102, as fwsign.py packs versions. False when
+// it is not X.Y.Z.
+bool bu_version_pack(const char *text, uint32_t *out);
+// Rollback protection (security review 2026-11, M7): true when a signed update of asset version
+// `image` would put a bridge running `running` on an older version. Version 0 is a test image
+// (EMC builds, sent only with `bridge update`): not refused here. An unparsable running version
+// refuses nothing.
+bool bu_ota_is_downgrade(uint32_t image, const char *running);
+
 // Formats a MAC as aa:bb:cc:dd:ee:ff (out: 18 bytes).
 void bu_mac_str(const uint8_t mac[6], char out[18]);
 

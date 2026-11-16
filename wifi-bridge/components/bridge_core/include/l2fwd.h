@@ -45,12 +45,23 @@ typedef struct {
     uint8_t pod_mac[6];
     bool pod_known;
     bool relearn;           // set on Ethernet link-down: the next control frame's source becomes the pod
+    // Paired (security review 2026-11, M9): the pod MAC is learned only from a request that
+    // carried a valid AUTH (l2fwd_learn_pod from the control task), never from a frame's source
+    // alone. Control frames reach the control task whatever their source, which refuses them
+    // unless they are signed.
+    bool auth_learn;
     l2_why_t last_why;      // reason for the last L2_DROP, for counters and tests
 } l2fwd_t;
 
 void l2fwd_init(l2fwd_t *s, const uint8_t bridge_mac[6]);
 // The cable was unplugged (or the pod rebooted): allow a different pod to take over.
 void l2fwd_link_down(l2fwd_t *s);
+// Paired or not: see l2fwd_t.auth_learn.
+void l2fwd_set_auth_learn(l2fwd_t *s, bool on);
+// The control task proved `mac` is the pod (a valid AUTH, or the PAIR it accepted): learn it if
+// none is known or a relearn is pending, or always with `force` (a new pairing). *back (may be
+// NULL) = a relearn was pending and is done now. Returns the event, as l2fwd_from_eth does.
+l2_event_t l2fwd_learn_pod(l2fwd_t *s, const uint8_t mac[6], bool force, bool *back);
 // Ethernet -> Wi-Fi. ev reports a learned or changed pod MAC (may be NULL).
 l2_action_t l2fwd_from_eth(l2fwd_t *s, const uint8_t *frame, size_t len, bool wifi_up, l2_event_t *ev);
 // Wi-Fi -> Ethernet.

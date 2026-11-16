@@ -309,73 +309,75 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     /* The whole frame is built here and sent as is: with the DMM parts it is up to about 650 B,
        past send_ok_str's 256 B. */
     char payload[832];
-    int n = snprintf(payload, sizeof(payload),
-                     "{\"status\":\"ok\",\"data\":{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
-                     "\"a_uv\":%ld,\"b_nv\":%ld,\"dac\":{",
-                     adc_cal_current_in_is_set() ? "true" : "false",
-                     (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv(),
-                     lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0));
-    for (int i = 0; i < ADC_CAL_DAC_PATHS && n < (int)sizeof(payload); i++) {
+    bp_emit_t e;
+    bp_emit_init(&e, payload, sizeof(payload));
+    bp_emit(&e,
+            "{\"status\":\"ok\",\"data\":{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
+            "\"a_uv\":%ld,\"b_nv\":%ld,\"dac\":{",
+            adc_cal_current_in_is_set() ? "true" : "false",
+            (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv(),
+            lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0));
+    for (int i = 0; i < ADC_CAL_DAC_PATHS; i++) {
         const char *sep = i ? "," : "";
         if (!adc_cal_dac_is_set(i)) {
-            n += snprintf(payload + n, sizeof(payload) - (size_t)n, "%s\"%s\":null", sep, path_name[i]);
+            bp_emit(&e, "%s\"%s\":null", sep, path_name[i]);
             continue;
         }
         dmm = true;
         cal_lin_t l = adc_cal_dac_line(i);
         long off_uv, gain_ppm;
         dac_line_vs_compiled(i, l, &off_uv, &gain_ppm);
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n,
-                      "%s\"%s\":{\"a_uv\":%ld,\"b_pv\":%ld,\"offset_uv\":%ld,\"gain_ppm\":%ld}", sep, path_name[i],
+        bp_emit(&e,
+                "%s\"%s\":{\"a_uv\":%ld,\"b_pv\":%ld,\"offset_uv\":%ld,\"gain_ppm\":%ld}", sep, path_name[i],
                       lround((double)l.a * 1e6), lround((double)l.b / 256.0 * 1e12), off_uv, gain_ppm);
     }
-    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "},\"adc_gain_ppm\":{");
-    for (int i = 0; i < ADC_CAL_SRCS && n < (int)sizeof(payload); i++) {
+    bp_emit(&e, "},\"adc_gain_ppm\":{");
+    for (int i = 0; i < ADC_CAL_SRCS; i++) {
         const char *sep = i ? "," : "";
         if (!adc_cal_gain_is_set(i)) {
-            n += snprintf(payload + n, sizeof(payload) - (size_t)n, "%s\"%s\":null", sep, adc_cal_src_name(i));
+            bp_emit(&e, "%s\"%s\":null", sep, adc_cal_src_name(i));
             continue;
         }
         dmm = true;
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, "%s\"%s\":%ld", sep, adc_cal_src_name(i),
+        bp_emit(&e, "%s\"%s\":%ld", sep, adc_cal_src_name(i),
                       lroundf((adc_cal_gain(i) - 1.0f) * 1e6f));
     }
-    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
+    bp_emit(&e, "}");
     /* The low range's gain (analog module v3r4), on pods that have it. */
-    if (adc_range_supported() && n < (int)sizeof(payload)) {
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"range\":\"%s\"", adc_range_name(range));
+    if (adc_range_supported()) {
+        bp_emit(&e, ",\"range\":\"%s\"", adc_range_name(range));
         if (adc_cal_low_gain_is_set()) {
             dmm = true;
-            n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_low_gain_ppm\":%ld",
+            bp_emit(&e, ",\"adc_low_gain_ppm\":%ld",
                           lroundf((adc_cal_low_gain() - 1.0f) * 1e6f));
         } else {
-            n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_low_gain_ppm\":null");
+            bp_emit(&e, ",\"adc_low_gain_ppm\":null");
         }
     }
-    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"dmm\":%s", dmm ? "true" : "false");
+    bp_emit(&e, ",\"dmm\":%s", dmm ? "true" : "false");
     /* Where the calibration in use was loaded from or last saved to: the analog module's EEPROM
        ("module", digital v3r3) or only the pod's flash ("pod"). */
-    if (n < (int)sizeof(payload))
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"stored\":\"%s\"", adc_cal_from_str(adc_cal_from()));
-    if (adc_cal_comp_is_set() && n < (int)sizeof(payload))
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_comp\":{\"hf_dc_e4\":%u,\"c_top_ff\":%u}",
+    bp_emit(&e, ",\"stored\":\"%s\"", adc_cal_from_str(adc_cal_from()));
+    if (adc_cal_comp_is_set())
+        bp_emit(&e, ",\"adc_comp\":{\"hf_dc_e4\":%u,\"c_top_ff\":%u}",
                       (unsigned)adc_cal_comp_hf_dc_e4(), (unsigned)adc_cal_comp_c_top_ff());
-    else if (n < (int)sizeof(payload))
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"adc_comp\":null");
-    if (adc_cal_current_in_is_set() && n < (int)sizeof(payload))   /* the raw zero the offset is derived from */
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"zero_count_mc\":%ld", (long)adc_cal_zero_count_mc());
-    if (rd && n < (int)sizeof(payload))
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"count\":%d,\"span\":%u,\"samples\":%u",
+    else
+        bp_emit(&e, ",\"adc_comp\":null");
+    if (adc_cal_current_in_is_set())   /* the raw zero the offset is derived from */
+        bp_emit(&e, ",\"zero_count_mc\":%ld", (long)adc_cal_zero_count_mc());
+    if (rd)
+        bp_emit(&e, ",\"count\":%d,\"span\":%u,\"samples\":%u",
                       adc_count_u16(rd->count), (unsigned)rd->span, (unsigned)ADC_CAL_SAMPLES);
-    if (gm && n < (int)sizeof(payload))
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n,
+    if (gm)
+        bp_emit(&e,
                       ",\"measured\":{\"v1_uv\":%ld,\"v2_uv\":%ld,\"r1_uv\":%ld,\"r2_uv\":%ld,\"residual_uv\":%ld}",
                       lroundf(gm->v[0] * 1e6f), lroundf(gm->v[1] * 1e6f), lroundf(gm->r[0] * 1e6f),
                       lroundf(gm->r[1] * 1e6f), lroundf(gm->residual_v * 1e6f));
-    if (n < (int)sizeof(payload)) n += snprintf(payload + n, sizeof(payload) - (size_t)n, "}}\n");
-    if (n >= (int)sizeof(payload)) { send_error(conn_id, "calibrate: reply too long"); return; }
+    bp_emit(&e, "}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "calibrate: reply too long"); return; }
+    size_t n = bp_emit_len(&e);
     printf("[cmd] -> ok  %s", payload);
-    if (at_send_data(conn_id, (const uint8_t *)payload, (size_t)n) != 0) at_close_connection(conn_id);
+    if (at_send_data(conn_id, (const uint8_t *)payload, n) != 0) at_close_connection(conn_id);
 }
 
 /* A whole number from the request, e.g. "uv1":-5025500. */
