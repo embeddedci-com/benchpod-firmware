@@ -83,3 +83,143 @@ sdk = "wait for the running flash, SPI or I2C session to finish (close it), then
 cli = "wait for the running flash, SPI or I2C command to finish, then try again"
 mcp = "wait for the running flash, spi or i2c call to finish (i2c_close for an open I2C session), then try again"
 web = "Wait for the running flash, SPI or I2C session to finish."
+
+[BP0006]
+name = "missing_argument"
+area = "protocol"
+since = "next"
+args = { arg = "str" }
+message = "The request is missing {arg}"
+cause = "A required value was not sent. The SDK, CLI and MCP always send it, so this usually means a hand-written protocol request or a tool older than the firmware."
+[BP0006.fix]
+sdk = "pass {arg}; if you did, update the SDK (pip install -U embeddedci)"
+cli = "pass {arg}; if you did, update the CLI"
+mcp = "pass {arg} in the call"
+web = "Reload the page; if it keeps happening, update the pod's firmware."
+
+[BP0007]
+name = "wiring_profile_not_found"
+area = "wiring"
+since = "next"
+args = { name = "str" }
+message = "The pod has no wiring profile named {name}"
+cause = "Wiring profiles live on the pod. This one was never saved there, was deleted, or was saved on another pod."
+[BP0007.fix]
+sdk = "list the pod's profiles with bp.wiring_profiles(), or save this one first with bp.save_wiring(profile, name=\"{name}\")"
+cli = "list the pod's profiles with `benchpod wiring list`, or save this one with `benchpod wiring save <file> --name {name}`"
+mcp = "call wiring to list the pod's profiles, or save_wiring(name=\"{name}\") to create it"
+web = "Pick a profile from the list in the wiring dialog, or create {name} there."
+
+[BP0008]
+name = "wiring_bad_name"
+area = "wiring"
+since = "next"
+args = { name = "str" }
+message = "{name} is not a valid wiring profile name"
+cause = "Profile names are 1 to 40 characters: lowercase letters, digits and dashes, not starting with a dash."
+[BP0008.fix]
+sdk = "use a name like \"nrf52840-dk\" or \"k66\""
+cli = "use a name like nrf52840-dk or k66"
+mcp = "use a lowercase name with letters, digits and dashes, like \"nrf52840-dk\""
+web = "Use lowercase letters, digits and dashes, like nrf52840-dk."
+
+[BP0009]
+name = "wiring_revision_conflict"
+area = "wiring"
+since = "next"
+args = { name = "str", rev = "int" }
+message = "The wiring profile {name} changed since it was loaded (it is now at revision {rev})"
+cause = "Someone saved {name} from another connection (the web app, another script or agent) after this one loaded it. Saving now would overwrite their change, so the pod refuses."
+[BP0009.fix]
+sdk = "load it again (bp.load_wiring(\"{name}\")), redo your change and save, or save under another name"
+cli = "show the current one with `benchpod wiring show {name}`, then save again, or save under another name"
+mcp = "call load_wiring(\"{name}\") to see the new version, tell the user what changed, then save again or under another name"
+web = "Reload the profile to see the other change, then save again."
+
+[BP0010]
+name = "wiring_store_full"
+area = "wiring"
+since = "next"
+args = { max = "int" }
+message = "The pod cannot hold another wiring profile (at most {max}, and 16 KB in all)"
+cause = "Wiring profiles live on the pod, in a fixed amount of storage."
+[BP0010.fix]
+sdk = "delete a profile you no longer use (bp.delete_wiring(\"name\")) or replace an existing one"
+cli = "delete a profile you no longer use with `benchpod wiring delete <name>`"
+mcp = "ask the user which profile to delete (delete_wiring), or save over an existing one"
+web = "Delete a profile you no longer use in the wiring dialog."
+
+[BP0011]
+name = "wiring_profile_too_large"
+area = "wiring"
+since = "next"
+args = { bytes = "int", max = "int" }
+message = "The wiring profile is {bytes} bytes; the pod takes at most {max}"
+cause = "One wiring profile fits in {max} bytes of JSON. Long signal descriptions or many signals add up."
+[BP0011.fix]
+sdk = "shorten the signal descriptions, or split the board into two profiles"
+cli = "shorten the signal descriptions, or split the board into two profiles"
+mcp = "shorten the signal descriptions, or split the wiring into two profiles"
+web = "Shorten the signal descriptions."
+
+[BP0012]
+name = "wiring_not_json_object"
+area = "wiring"
+since = "next"
+message = "The wiring profile is not one JSON object"
+cause = "The pod stores a profile as the JSON object the tools send. This one is cut off or not an object, which points at a damaged upload or a hand-written request."
+[BP0012.fix]
+sdk = "save it again; if it keeps failing, check the profile is valid (Wiring.from_dict)"
+cli = "save it again; check the file is valid JSON"
+mcp = "save it again with a valid profile object"
+web = "Save it again."
+
+[BP0013]
+name = "wiring_delete_default"
+area = "wiring"
+since = "next"
+args = { name = "str" }
+message = "{name} is the pod's default wiring profile and cannot be deleted"
+cause = "A connection that names no profile uses the default, so the pod always keeps one."
+[BP0013.fix]
+sdk = "make another profile the default first (bp.set_default_wiring(\"other\")), then delete {name}"
+cli = "make another profile the default first (`benchpod wiring default <other>`), then delete {name}"
+mcp = "call set_default_wiring with another profile first, then delete {name}"
+web = "Make another profile the default first."
+
+[BP0014]
+name = "wiring_upload_out_of_order"
+area = "wiring"
+since = "next"
+args = { expected = "int" }
+message = "The wiring profile upload skipped ahead (the pod expected offset {expected})"
+cause = "Profiles are sent to the pod in pieces, in order, starting at offset 0. A piece went missing or another upload started in between."
+[BP0014.fix]
+sdk = "save again"
+cli = "save again"
+mcp = "call save_wiring again"
+web = "Save again."
+
+[BP0015]
+name = "wiring_storage_failed"
+area = "wiring"
+since = "next"
+message = "The pod could not read or write its wiring profiles"
+cause = "The flash chip that holds the profiles did not answer or a write did not verify. Profiles saved before are kept: a write never replaces them until it has been read back."
+[BP0015.fix]
+sdk = "try again; if it keeps failing, power-cycle the pod and report it"
+cli = "try again; if it keeps failing, power-cycle the pod and report it"
+mcp = "tell the user the pod's profile storage failed; try once more, then suggest power-cycling the pod"
+web = "Try again. If it keeps failing, power-cycle the pod and contact support."
+
+[BP0016]
+name = "storage_busy"
+area = "wiring"
+since = "next"
+message = "The pod cannot save now: the DAC or a capture is using the bus the storage shares"
+cause = "The flash chip that holds the wiring profiles shares a bus with the DAC replay and the captures. Saving would stop a running waveform, so the pod refuses instead. Reading profiles always works."
+[BP0016.fix]
+sdk = "stop the DAC (bp.dac_stop()) or wait for the capture to finish, then save again"
+cli = "stop the DAC (`benchpod dac stop`) or wait for the capture, then save again"
+mcp = "call dac_stop (after checking with the user) or wait for the capture to finish, then save again"
+web = "Stop the generator or wait for the capture to finish, then save."

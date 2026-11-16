@@ -13,7 +13,9 @@
  *   0x190000  slot PROXY: the HTTP proxy for the cloud link (cloud_extras.h)        8 KB
  *   0x192000  free
  *   0x1A0000  slot GW2: gateware image 2 (sensor emulation, gateware v54+)  256 KB
- *   0x1E0000  free
+ *   0x1E0000  slots WIRING-A and WIRING-B: the pod's wiring profiles, two copies so a power
+ *             loss during a save keeps the previous ones (wiring_store.h)        2 x 32 KB
+ *   0x1F0000  free
  *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
@@ -54,6 +56,8 @@ typedef enum {
     BLOB_GW2,               /* gateware image 2: sensor emulation (v54+). A release blob like gw0/gw1,
                                listed by blob_listed, but numbered after the internal slots for the
                                same reason as BLOB_BRIDGE */
+    BLOB_WIRING_A,          /* internal: the wiring profiles, copy A (wiring_store.h) */
+    BLOB_WIRING_B,          /* internal: the wiring profiles, copy B (wiring_store.h) */
     BLOB_SLOT_COUNT
 } blob_id_t;
 

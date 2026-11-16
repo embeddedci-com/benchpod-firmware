@@ -11,6 +11,8 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "wiring_doc.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
 #include "bp_err.h"
@@ -65,8 +67,13 @@ void device_poll(void) {
     }
 }
 
+/* The wiring profile each rail was switched on with (target_power "profile"), "" = none named.
+   RAM only: a reboot turns the DUT off, and the next power-on names its profile again. */
+static char s_rail_profile[3][WIRING_NAME_MAX + 1];
+
 void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
+    char profile[WIRING_NAME_MAX + 1] = {0};
     char state_s[8]  = {0};
     char delay_s[12] = {0};
 
@@ -81,6 +88,11 @@ void handle_target_power(int conn_id, const char *json) {
 
     int      efuse    = atoi(efuse_s);
     bool     on       = (atoi(state_s) != 0);
+    int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
+    if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
+        bp_err_wiring_bad_name(conn_id, BP_ERR_TEXT("bad profile name"), profile);
+        return;
+    }
     uint32_t delay_ms = 0;
     if (json_get_value(json, "delay_ms", delay_s, sizeof(delay_s)))
         delay_ms = (uint32_t)strtoul(delay_s, NULL, 0);
@@ -91,6 +103,7 @@ void handle_target_power(int conn_id, const char *json) {
         send_error(conn_id, "invalid efuse");
         return;
     }
+    if (efuse >= 1 && efuse <= 2) strcpy(s_rail_profile[efuse], on ? profile : "");
 
     /* "enabled" echoes the requested state; with delay_ms > 0 it is the state
        the eFuse will reach once the delay elapses. */
@@ -109,14 +122,19 @@ void handle_target_status(int conn_id, const char *json) {
 
     /* Payload (~112 chars) + wrapper exceeds send_ok_str's 128-byte buffer,
        so build and send the response directly like handle_status. */
-    char resp[320];
+    /* "profile": the wiring profile the rail was switched on with (target_power "profile"),
+       null when it is off or none was named. */
+    char p1[WIRING_NAME_MAX + 3] = "null", p2[WIRING_NAME_MAX + 3] = "null";
+    if (e1.enabled && s_rail_profile[1][0]) snprintf(p1, sizeof(p1), "\"%s\"", s_rail_profile[1]);
+    if (e2.enabled && s_rail_profile[2][0]) snprintf(p2, sizeof(p2), "\"%s\"", s_rail_profile[2]);
+    char resp[432];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
-             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu},"
-             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu},"
+             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
+             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
              "\"status_supported\":%s}}\n",
-             e1.enabled, e1.fault, e1.valid, e1.flt_pin, (unsigned long)e1.reverse_blocks,
-             e2.enabled, e2.fault, e2.valid, e2.flt_pin, (unsigned long)e2.reverse_blocks,
+             e1.enabled, e1.fault, e1.valid, e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
+             e2.enabled, e2.fault, e2.valid, e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
              e1.status_supported ? "true" : "false");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);

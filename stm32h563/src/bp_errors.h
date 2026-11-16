@@ -25,6 +25,17 @@ typedef enum {
     BP_E_I2C_SESSION_OPEN = 3,
     BP_E_SPI_SESSION_OPEN = 4,
     BP_E_BUS_ENGINE_BUSY = 5,
+    BP_E_MISSING_ARGUMENT = 6,
+    BP_E_WIRING_PROFILE_NOT_FOUND = 7,
+    BP_E_WIRING_BAD_NAME = 8,
+    BP_E_WIRING_REVISION_CONFLICT = 9,
+    BP_E_WIRING_STORE_FULL = 10,
+    BP_E_WIRING_PROFILE_TOO_LARGE = 11,
+    BP_E_WIRING_NOT_JSON_OBJECT = 12,
+    BP_E_WIRING_DELETE_DEFAULT = 13,
+    BP_E_WIRING_UPLOAD_OUT_OF_ORDER = 14,
+    BP_E_WIRING_STORAGE_FAILED = 15,
+    BP_E_STORAGE_BUSY = 16,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -59,6 +70,58 @@ static inline void bp_err_spi_session_open(int conn_id, const char *text) {
 static inline void bp_err_bus_engine_busy(int conn_id, const char *text, const char *want) {
     const bp_err_arg_t a[] = { {"want", want, 0, 1} };
     bp_error_send(conn_id, BP_E_BUS_ENGINE_BUSY, text, a, 1);
+}
+/* BP0006: The request is missing {arg} */
+static inline void bp_err_missing_argument(int conn_id, const char *text, const char *arg) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1} };
+    bp_error_send(conn_id, BP_E_MISSING_ARGUMENT, text, a, 1);
+}
+/* BP0007: The pod has no wiring profile named {name} */
+static inline void bp_err_wiring_profile_not_found(int conn_id, const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    bp_error_send(conn_id, BP_E_WIRING_PROFILE_NOT_FOUND, text, a, 1);
+}
+/* BP0008: {name} is not a valid wiring profile name */
+static inline void bp_err_wiring_bad_name(int conn_id, const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    bp_error_send(conn_id, BP_E_WIRING_BAD_NAME, text, a, 1);
+}
+/* BP0009: The wiring profile {name} changed since it was loaded (it is now at revision {rev}) */
+static inline void bp_err_wiring_revision_conflict(int conn_id, const char *text, const char *name, int32_t rev) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1}, {"rev", 0, rev, 0} };
+    bp_error_send(conn_id, BP_E_WIRING_REVISION_CONFLICT, text, a, 2);
+}
+/* BP0010: The pod cannot hold another wiring profile (at most {max}, and 16 KB in all) */
+static inline void bp_err_wiring_store_full(int conn_id, const char *text, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_WIRING_STORE_FULL, text, a, 1);
+}
+/* BP0011: The wiring profile is {bytes} bytes; the pod takes at most {max} */
+static inline void bp_err_wiring_profile_too_large(int conn_id, const char *text, int32_t bytes, int32_t max) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_WIRING_PROFILE_TOO_LARGE, text, a, 2);
+}
+/* BP0012: The wiring profile is not one JSON object */
+static inline void bp_err_wiring_not_json_object(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_WIRING_NOT_JSON_OBJECT, text, 0, 0);
+}
+/* BP0013: {name} is the pod's default wiring profile and cannot be deleted */
+static inline void bp_err_wiring_delete_default(int conn_id, const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    bp_error_send(conn_id, BP_E_WIRING_DELETE_DEFAULT, text, a, 1);
+}
+/* BP0014: The wiring profile upload skipped ahead (the pod expected offset {expected}) */
+static inline void bp_err_wiring_upload_out_of_order(int conn_id, const char *text, int32_t expected) {
+    const bp_err_arg_t a[] = { {"expected", 0, expected, 0} };
+    bp_error_send(conn_id, BP_E_WIRING_UPLOAD_OUT_OF_ORDER, text, a, 1);
+}
+/* BP0015: The pod could not read or write its wiring profiles */
+static inline void bp_err_wiring_storage_failed(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_WIRING_STORAGE_FAILED, text, 0, 0);
+}
+/* BP0016: The pod cannot save now: the DAC or a capture is using the bus the storage shares */
+static inline void bp_err_storage_busy(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_STORAGE_BUSY, text, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

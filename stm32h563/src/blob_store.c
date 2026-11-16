@@ -23,6 +23,8 @@ static const struct {
     [BLOB_PROXY] = { "proxy", 0x190000u, 0x002000u },
     [BLOB_BRIDGE] = { "bridge", 0x700000u, 0x100000u },
     [BLOB_GW2] = { "gw2", 0x1A0000u, 0x040000u },
+    [BLOB_WIRING_A] = { "wiring-a", 0x1E0000u, 0x008000u },
+    [BLOB_WIRING_B] = { "wiring-b", 0x1E8000u, 0x008000u },
 };
 
 static blob_info_t s_info[BLOB_SLOT_COUNT];
