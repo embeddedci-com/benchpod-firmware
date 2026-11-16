@@ -1408,6 +1408,31 @@ about 0.5 s, leaves the outputs off and the range `normal`, and is refused while
    {"set_mv":3500,"normal_mv":3502,"low_mv":3497,"ok":true}],"pass":true,"range":"normal"}}
 ```
 
+**The ±12 V output in the low range** (firmware 3.10.7+). The ±12 V output reaches the ADC
+through the front SMA when the two are cabled together (the `calibrate` `adc` `ext` setup), and
+the low range reads only ±5.46 V. So while the ADC is in the low range, the ±12 V output stays
+within ±5 V:
+
+- `dac_out` on `12v` with more than 5 V either way is refused, as is any held level past it
+  (an analog sensor's value, SCPI). ±5 V itself is allowed.
+- A waveform, replay, raw code or control loop on the ±12 V output (`generate` on `12v` or with
+  `"route":false` while it is routed, `dac_set`, `load`, `load_bin`, `replay`, `measure`,
+  `dac_control_loop`) is refused: its samples are not checked one by one.
+- Switching to the low range (`adc_range`, or `range` on `analog_path` and `adc_read`) is refused
+  while the ±12 V output holds more than ±5 V, or after a waveform or loop played on it. Route
+  `off` or hold a level within ±5 V first.
+
+The other outputs are not affected (the 5 V output tops out at about 4.98 V), and neither is the
+normal range: there the ±12 V output keeps its full range. Calibration is not affected: the low
+range is calibrated through `cal1` (the 5 V output), and the `cal2` and `ext` steps run in the
+normal range.
+
+```json
+{"cmd":"adc_range","range":"low"}
+{"cmd":"dac_out","path":"12v","volts":6}
+→ {"status":"error","message":"refused: the ADC is in the low range (+-5.46 V full scale), and 6000 mV on the 12v output is past +-5000 mV. Switch the ADC to the normal range first: {\"cmd\":\"adc_range\",\"range\":\"normal\"}"}
+```
+
 `status.caps` contains `"adc_low_range"` on a board with the low range, and `status` (LAN and
 tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_range`.
 
