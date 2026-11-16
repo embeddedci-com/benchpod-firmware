@@ -222,6 +222,27 @@ jobs:
           done
           echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-gw2.bin.sig blob-esp.bin.sig blob-bridge.bin.sig" >> "$GITHUB_OUTPUT"
 
+      # Plain bridge factory set (no secure boot, no flash encryption): the bootloader, partition
+      # table and otadata of the RELEASE=1 build above, for flashing a bridge over its TC2030 pads
+      # with blob-bridge.bin in the factory slot (embeddedci-server scripts/ship-bridge). Nothing
+      # in it burns eFuses, and the pod's updates keep working: blob-bridge.bin is the app pods
+      # send. build/ is root's (the build container), readable.
+      - name: Wi-Fi bridge plain factory set
+        id: bridge_plain
+        working-directory: wifi-bridge
+        run: |
+          mkdir -p plain
+          cp build/bootloader/bootloader.bin build/partition_table/partition-table.bin build/ota_data_initial.bin plain/
+          for s in "Secure boot signature verification failed" "Enabling of Flash encryption failed"; do
+            if grep -q -a "$s" plain/bootloader.bin; then
+              echo "::error::the plain bootloader enables secure boot or flash encryption"
+              exit 1
+            fi
+          done
+          printf -- '--flash_mode dio --flash_freq 40m --flash_size 8MB\n0x1000 bootloader.bin\n0x10000 partition-table.bin\n0x17000 ota_data_initial.bin\n0x20000 blob-bridge.bin\n' > plain/flash_args
+          (cd plain && zip -q -X ../../stm32h563/build/benchpod-wifi-bridge-plain.zip bootloader.bin partition-table.bin ota_data_initial.bin flash_args)
+          echo "assets=benchpod-wifi-bridge-plain.zip" >> "$GITHUB_OUTPUT"
+
       # Production bridge (secure boot v2 + flash encryption): a factory bundle whose bootloader and
       # app are RSA-3072 signed with BRIDGE_SECURE_BOOT_KEY (wifi-bridge/docs/SECURITY.md, "Two keys,
       # one process"), plus the pod's manifest for the app. Skipped with a warning until the secret
@@ -265,7 +286,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-gw2.bin blob-esp.bin blob-bridge.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-gw2.bin blob-esp.bin blob-bridge.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_plain.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else
