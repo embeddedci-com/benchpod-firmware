@@ -33,7 +33,6 @@
 /* Static I/O scratch: one job at a time. */
 static uint8_t  s_pkt[16 + ESP_ROM_BLOCK];                 /* FLASH_DATA payload, kept for resends */
 static uint32_t s_pkt_chk;
-static uint8_t  s_frame[8 + 16 + ESP_ROM_BLOCK];           /* header + data                       */
 static uint8_t  s_slip[2 * (8 + 16 + ESP_ROM_BLOCK) + 2];  /* worst-case encoded                  */
 static uint8_t  s_resp[256];                               /* decoded reply                       */
 static uint32_t s_value;                                   /* the reply header's value word       */
@@ -52,16 +51,16 @@ static bool reached(uint32_t now, uint32_t deadline) { return (int32_t)(now - de
 static void send_cmd(esp_rom_job_t *j, uint8_t op, const uint8_t *data, uint16_t dlen,
                      uint32_t checksum, uint32_t timeout_ms)
 {
-    uint8_t *h = s_frame;
+    /* SLIP-encode the 8-byte header and the data straight into s_slip (no unencoded copy). */
+    uint8_t h[8];
     h[0] = 0x00; h[1] = op;
     h[2] = (uint8_t)dlen; h[3] = (uint8_t)(dlen >> 8);
     put_le32(h + 4, checksum);
-    if (dlen) memcpy(h + 8, data, dlen);
 
     uint8_t *w = s_slip;
     *w++ = SLIP_END;
     for (uint32_t i = 0; i < 8u + dlen; i++) {
-        uint8_t b = s_frame[i];
+        uint8_t b = (i < 8u) ? h[i] : data[i - 8u];
         if (b == SLIP_END)      { *w++ = SLIP_ESC; *w++ = SLIP_ESC_END; }
         else if (b == SLIP_ESC) { *w++ = SLIP_ESC; *w++ = SLIP_ESC_ESC; }
         else                    *w++ = b;

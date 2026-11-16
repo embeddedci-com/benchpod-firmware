@@ -69,7 +69,7 @@ static void release_pins(void)
 
 /* ---- esp_rom_io_t over the FPGA soft UART ---- */
 
-static uint8_t  s_rx[512];
+static uint8_t  s_rx[128];      /* drained every poll; the FPGA RX FIFO holds 256 */
 static uint16_t s_rx_n, s_rx_i;
 
 static int io_rx_byte(void)
