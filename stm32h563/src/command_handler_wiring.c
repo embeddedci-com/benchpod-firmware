@@ -144,18 +144,20 @@ void handle_wiring_get(int conn_id, const char *json) {
     vPortFree(resp);
 }
 
-/* One upload at a time, for the whole pod: a new offset-0 piece replaces an unfinished one. */
-static struct {
-    uint8_t *buf;
+/* One upload at a time, for the whole pod: a new offset-0 piece replaces an unfinished one. The
+   state and the profile being received live on the heap only while an upload runs (RAM is full). */
+typedef struct {
     char     name[WIRING_NAME_MAX + 1];
     uint32_t total, received;
     long     if_rev;           /* -1: no check */
     int      conn_id;
-} s_up;
+    uint8_t  buf[];            /* total bytes */
+} wiring_upload_t;
+static wiring_upload_t *s_upp;
 
 static void upload_drop(void) {
-    if (s_up.buf) vPortFree(s_up.buf);
-    memset(&s_up, 0, sizeof(s_up));
+    if (s_upp) vPortFree(s_upp);
+    s_upp = NULL;
 }
 
 static void put_piece(int conn_id, const char *json, const char *name, long offset, long total, char *b64,
@@ -191,34 +193,35 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
     }
     if (offset == 0) {
         upload_drop();
-        s_up.buf = pvPortMalloc((size_t)total);
-        if (!s_up.buf) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
-        strcpy(s_up.name, name);
-        s_up.total = (uint32_t)total;
-        s_up.conn_id = conn_id;
-        if (!get_long(json, "if_revision", &s_up.if_rev)) s_up.if_rev = -1;
-    } else if (!s_up.buf || strcmp(s_up.name, name) != 0 || s_up.total != (uint32_t)total ||
-               s_up.received != (uint32_t)offset) {
-        long expected = (s_up.buf && !strcmp(s_up.name, name)) ? (long)s_up.received : 0;
+        s_upp = pvPortMalloc(sizeof(*s_upp) + (size_t)total);
+        if (!s_upp) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
+        memset(s_upp, 0, sizeof(*s_upp));
+        strcpy(s_upp->name, name);
+        s_upp->total = (uint32_t)total;
+        s_upp->conn_id = conn_id;
+        if (!get_long(json, "if_revision", &s_upp->if_rev)) s_upp->if_rev = -1;
+    } else if (!s_upp || strcmp(s_upp->name, name) != 0 || s_upp->total != (uint32_t)total ||
+               s_upp->received != (uint32_t)offset) {
+        long expected = (s_upp && !strcmp(s_upp->name, name)) ? (long)s_upp->received : 0;
         upload_drop();
         bp_err_wiring_upload_out_of_order(conn_id, BP_ERR_TEXT("upload out of order: start again at offset 0"),
                                           (int32_t)expected);
         return;
     }
     size_t got = 0;
-    if (b64url_decode(b64, s_up.buf + s_up.received, s_up.total - s_up.received, &got) != 0 || got == 0 ||
+    if (b64url_decode(b64, s_upp->buf + s_upp->received, s_upp->total - s_upp->received, &got) != 0 || got == 0 ||
         got > WIRING_PIECE_MAX) {
         upload_drop();
         bp_err_missing_argument(conn_id, BP_ERR_TEXT("data_b64 is not base64url, or runs past total"), "data_b64");
         return;
     }
-    s_up.received += (uint32_t)got;
+    s_upp->received += (uint32_t)got;
     char resp[160];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    if (s_up.received < s_up.total) {
+    if (s_upp->received < s_upp->total) {
         bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"name\":\"%s\",\"received\":%lu,\"total\":%lu}}\n", name,
-                (unsigned long)s_up.received, (unsigned long)s_up.total);
+                (unsigned long)s_upp->received, (unsigned long)s_upp->total);
         send_line(conn_id, &e);
         return;
     }
@@ -226,15 +229,15 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
     const wiring_index_t *idx = wiring_store_index();
     int at = wiring_index_find(idx, name);
     long cur = at < 0 ? 0 : (long)idx->e[at].rev;
-    if (s_up.if_rev >= 0 && s_up.if_rev != cur) {
+    if (s_upp->if_rev >= 0 && s_upp->if_rev != cur) {
         upload_drop();
         bp_err_wiring_revision_conflict(conn_id, BP_ERR_TEXT("profile changed since it was loaded"), name,
                                         (int32_t)cur);
         return;
     }
     if (!storage_free(conn_id)) { upload_drop(); return; }
-    wiring_op_t op = { WIRING_OP_PUT, name, s_up.buf, (uint16_t)s_up.total };
-    bool ok = apply(conn_id, &op, s_up.total);
+    wiring_op_t op = { WIRING_OP_PUT, name, s_upp->buf, (uint16_t)s_upp->total };
+    bool ok = apply(conn_id, &op, s_upp->total);
     upload_drop();
     if (!ok) return;
     idx = wiring_store_index();

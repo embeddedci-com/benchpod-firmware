@@ -9,12 +9,15 @@
 #include "mbedtls/sha256.h"
 #include "w25q.h"
 
-static uint8_t       *s_doc;      /* heap, s_idx.doc_len bytes; NULL when empty */
-static wiring_index_t s_idx = { .def = WIRING_NO_DEFAULT };
+static uint8_t       *s_doc;      /* heap, s_idx->doc_len bytes; NULL when empty */
+/* The index lives on the heap too (about 900 bytes): RAM has no room for it in .bss. Until
+   wiring_store_load allocates it, s_empty stands in. */
+static const wiring_index_t s_empty = { .def = WIRING_NO_DEFAULT };   /* flash, not RAM */
+static wiring_index_t *s_idx;                                         /* NULL until loaded */
 static blob_id_t      s_cur = BLOB_WIRING_A;   /* the slot holding the newest copy */
 static uint32_t       s_seq;      /* its sequence number (0: no copy yet) */
 
-const wiring_index_t *wiring_store_index(void) { return &s_idx; }
+const wiring_index_t *wiring_store_index(void) { return s_idx ? s_idx : &s_empty; }
 const uint8_t        *wiring_store_doc(void)   { return s_doc; }
 
 /* Read a present slot's data into a fresh heap buffer and parse it. Bus held. */
@@ -42,7 +45,12 @@ static bool load_slot(blob_id_t id, uint8_t **out, wiring_index_t *idx) {
 }
 
 void wiring_store_load(void) {
-    (void)wiring_doc_parse(NULL, 0, &s_idx);   /* empty until a copy loads */
+    if (!s_idx) {
+        wiring_index_t *idx = pvPortMalloc(sizeof(*idx));
+        if (!idx) { printf("[wiring] out of memory: no wiring profiles\n"); return; }
+        s_idx = idx;
+    }
+    (void)wiring_doc_parse(NULL, 0, s_idx);   /* empty until a copy loads */
     if (w25q_open() != 0) { printf("[wiring] W25Q does not answer: no wiring profiles\n"); return; }
     const blob_id_t ids[2] = { BLOB_WIRING_A, BLOB_WIRING_B };
     int best = -1;
@@ -58,16 +66,16 @@ void wiring_store_load(void) {
         wiring_index_t idx;
         if (load_slot(ids[i], &buf, &idx)) {
             s_doc = buf;
-            s_idx = idx;
+            *s_idx = idx;
             s_cur = ids[i];
             s_seq = blob_store_info(ids[i])->version;
             break;
         }
     }
     w25q_close();
-    printf("[wiring] %u profile(s)%s%s\n", (unsigned)s_idx.count,
-           s_idx.def != WIRING_NO_DEFAULT ? ", default " : "",
-           s_idx.def != WIRING_NO_DEFAULT ? s_idx.e[s_idx.def].name : "");
+    printf("[wiring] %u profile(s)%s%s\n", (unsigned)s_idx->count,
+           s_idx->def != WIRING_NO_DEFAULT ? ", default " : "",
+           s_idx->def != WIRING_NO_DEFAULT ? s_idx->e[s_idx->def].name : "");
 }
 
 static int mem_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
@@ -76,13 +84,14 @@ static int mem_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
 }
 
 wiring_store_rc_t wiring_store_apply(const wiring_op_t *op, wiring_result_t *why) {
-    *why = wiring_doc_check(&s_idx, op);
+    if (!s_idx) return WIRING_STORE_IO;   /* never loaded (out of memory) */
+    *why = wiring_doc_check(s_idx, op);
     if (*why != WIRING_OK) return WIRING_STORE_REFUSED;
-    size_t need = wiring_doc_size_after(&s_idx, op);
+    size_t need = wiring_doc_size_after(s_idx, op);
     if (need > WIRING_DOC_MAX) { *why = WIRING_E_FULL; return WIRING_STORE_REFUSED; }
     uint8_t *out = pvPortMalloc(need);
     if (!out) return WIRING_STORE_IO;
-    size_t n = wiring_doc_build(s_doc, &s_idx, op, out, need);
+    size_t n = wiring_doc_build(s_doc, s_idx, op, out, need);
     wiring_index_t idx;
     if (n == 0 || !wiring_doc_parse(out, n, &idx)) { vPortFree(out); return WIRING_STORE_IO; }
     uint8_t sha[32];
@@ -99,7 +108,7 @@ wiring_store_rc_t wiring_store_apply(const wiring_op_t *op, wiring_result_t *why
     }
     if (s_doc) vPortFree(s_doc);
     s_doc = out;
-    s_idx = idx;
+    *s_idx = idx;
     s_cur = target;
     s_seq++;
     return WIRING_STORE_OK;

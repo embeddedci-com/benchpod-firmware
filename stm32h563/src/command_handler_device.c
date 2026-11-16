@@ -69,7 +69,7 @@ void device_poll(void) {
 
 /* The wiring profile each rail was switched on with (target_power "profile"), "" = none named.
    RAM only: a reboot turns the DUT off, and the next power-on names its profile again. */
-static char s_rail_profile[3][WIRING_NAME_MAX + 1];
+static char s_rail_profile[2][WIRING_NAME_MAX + 1];   /* [efuse - 1] */
 
 void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
@@ -103,7 +103,7 @@ void handle_target_power(int conn_id, const char *json) {
         send_error(conn_id, "invalid efuse");
         return;
     }
-    if (efuse >= 1 && efuse <= 2) strcpy(s_rail_profile[efuse], on ? profile : "");
+    if (efuse >= 1 && efuse <= 2) strcpy(s_rail_profile[efuse - 1], on ? profile : "");
 
     /* "enabled" echoes the requested state; with delay_ms > 0 it is the state
        the eFuse will reach once the delay elapses. */
@@ -125,8 +125,8 @@ void handle_target_status(int conn_id, const char *json) {
     /* "profile": the wiring profile the rail was switched on with (target_power "profile"),
        null when it is off or none was named. */
     char p1[WIRING_NAME_MAX + 3] = "null", p2[WIRING_NAME_MAX + 3] = "null";
-    if (e1.enabled && s_rail_profile[1][0]) snprintf(p1, sizeof(p1), "\"%s\"", s_rail_profile[1]);
-    if (e2.enabled && s_rail_profile[2][0]) snprintf(p2, sizeof(p2), "\"%s\"", s_rail_profile[2]);
+    if (e1.enabled && s_rail_profile[0][0]) snprintf(p1, sizeof(p1), "\"%s\"", s_rail_profile[0]);
+    if (e2.enabled && s_rail_profile[1][0]) snprintf(p2, sizeof(p2), "\"%s\"", s_rail_profile[1]);
     char resp[432];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
