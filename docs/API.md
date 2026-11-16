@@ -802,6 +802,10 @@ TCP connection (so it is the interface in use, not only the preferred one):
 | `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), `"wifi-bridge"` (the Ethernet port goes into a connected [Wi-Fi bridge](#wifi_set--wifi_clear) box), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
 | `uplink_rssi_dbm` | With `"wifi-bridge"` only: the bridge's Wi-Fi signal (dBm) when the link came up. |
 
+The frame also carries the pod's MACs (firmware after 3.10.7), `eth_mac` and `wifi_mac`, each only when
+known (as in [`status`](#status)), and not in the shortened form a frame takes when its boot-health texts
+are cut. The server stores them for the web's Settings tab and keeps the last ones it saw.
+
 ---
 
 ### `la_capture` — deep raw logic-analyzer capture
@@ -1741,6 +1745,8 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `short_form` | boolean | Present (`true`) only in the [short form](#short-form) (firmware 3.10.5+). |
+| `eth_mac` | string | The Ethernet port's MAC, `"aa:bb:cc:dd:ee:ff"`: fixed per pod (made from the MCU's unique ID), the same after every update. For a network that hands out addresses only to registered devices. Full form only (the server has it from the capabilities frame). Firmware after 3.10.7. |
+| `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware after 3.10.7. |
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. Full form only. |
