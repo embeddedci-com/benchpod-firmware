@@ -1305,13 +1305,17 @@ range the pod is in. From 3.9.5 the reply also says which:
 | `fullscale_mv` | That range's input full scale (±), from this pod's fit: about 32800 normal, 5460 low |
 | `overrange` | `true` when a sample of the burst sat on one of the ADC's rails (code 0x7FFF or 0x8000): the input is past `fullscale_mv` and `mv` is only a bound. Use the normal range |
 
+From firmware 3.10.7 the reply also has `uv`: the same reading in microvolts. `mv` is rounded to
+a whole millivolt, which hides most of what the low range resolves (about 167 µV per count, and the
+16-sample average goes below one count); use `uv` when you need it.
+
 ```json
 {"cmd":"adc_read","source":"ext"}
-→ {"status":"ok","data":{"source":"adc_ext","mv":11980,"count":63037,"span":4,"range":"normal",
+→ {"status":"ok","data":{"source":"adc_ext","mv":11980,"uv":11980214,"count":63037,"span":4,"range":"normal",
    "fullscale_mv":32856,"overrange":false}}
 
 {"cmd":"adc_read","source":"ext","range":"low"}       // ~167 uV per count instead of ~1 mV
-→ {"status":"ok","data":{"source":"adc_ext","mv":1203,"count":58322,"span":9,"range":"low",
+→ {"status":"ok","data":{"source":"adc_ext","mv":1203,"uv":1202736,"count":58322,"span":9,"range":"low",
    "fullscale_mv":5462,"overrange":false}}
 
 {"cmd":"adc_read","source":"cal1"}   // DAC still playing a waveform into the loopback
@@ -1331,7 +1335,7 @@ range the pod is in. From 3.9.5 the reply also says which:
 
 ```json
 {"cmd":"adc_read","source":"current_in"}
-→ {"status":"ok","data":{"source":"current_in","mv":3985,"count":61562,"span":6,"range":"normal",
+→ {"status":"ok","data":{"source":"current_in","mv":3985,"uv":3985402,"count":61562,"span":6,"range":"normal",
    "fullscale_mv":32856,"overrange":false,"offset_mv":10,"ua":16004}}
 ```
 
