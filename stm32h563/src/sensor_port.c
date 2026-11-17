@@ -3,6 +3,7 @@
  * the analog outputs the sensor manager drives.
  */
 #include "sensor_port.h"
+#include "command_handler.h"   /* la_voltage_from_profile */
 #include "signal_engine.h"
 #include "ice40_flash.h"
 #include "blob_store.h"
@@ -98,6 +99,6 @@ void sensor_port_analog_release(sm_out_t out) {
     dac_stop();
 }
 
-bool     sensor_port_la_voltage_set(void) { return la_vccio_get_mv() != LA_VCCIO_UNSET; }
+bool     sensor_port_la_voltage_set(void) { return la_voltage_from_profile(); }   /* from the profile when unset */
 uint16_t sensor_port_pull_mask(void) { return la_pull_mask_now(); }
 void     sensor_port_caps_changed(void) { cloud_client_request_caps_resend(); }

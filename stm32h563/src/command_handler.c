@@ -125,13 +125,14 @@ void send_error(int conn_id, const char *message) {
 }
 
 /* Every LA-bank operation (la / la_capture / dap_start / uart_proxy / i2c-sensor)
-   needs the LA I/O voltage chosen first — the TPS2116 mux is left "unset" at boot
-   so the host must explicitly pick 1.8 V or 3.3 V for the DUT.  Returns true when
-   a voltage is set; otherwise emits an error and returns false. */
+   needs the LA I/O voltage chosen first — the TPS2116 mux is left "unset" at boot.
+   When nothing set it, the first LA operation takes it from the wiring profile
+   (la_voltage_from_profile); a profile without la_mv still refuses.  Returns true
+   when a voltage is set; otherwise emits an error and returns false. */
 bool require_la_voltage(int conn_id) {
-    if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
+    if (!la_voltage_from_profile()) {
         bp_err_la_voltage_not_set(conn_id,
-            BP_ERR_TEXT("la voltage not set; set it with la_voltage (mv 1800 or 3300) first"));
+            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
         return false;
     }
     return true;

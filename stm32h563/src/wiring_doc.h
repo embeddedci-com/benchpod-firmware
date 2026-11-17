@@ -4,8 +4,9 @@
  * wiring_doc: the pod's wiring profiles as one document in the W25Q slot WIRING (wiring_store.h).
  * Pure: no I/O, host-tested (test/test_wiring_doc.c).
  *
- * The pod stores each profile as opaque JSON text with a name and a revision. It never parses a
- * profile: the hosts (SDK, CLI, MCP, server, apps) validate them. The pod only checks that the
+ * The pod stores each profile as opaque JSON text with a name and a revision. It does not validate a
+ * profile: the hosts (SDK, CLI, MCP, server, apps) do. The one key it reads is la_mv, the I/O voltage
+ * (wiring_doc_json_la_mv), so an LA operation can take it from the profile when none is set. The pod only checks that the
  * text is one JSON object (wiring_doc_json_object_ok), so a reply that carries it stays valid.
  *
  * Document layout (little-endian):
@@ -69,6 +70,11 @@ int  wiring_index_find(const wiring_index_t *idx, const char *name);   /* -1 = n
    brackets outside strings, terminated strings, valid escapes. Not a full validator: enough that
    splicing it into a reply cannot break the reply's JSON. */
 bool wiring_doc_json_object_ok(const uint8_t *text, size_t len);
+
+/* The profile's top-level "la_mv" (the board's I/O voltage) when it is 1800 or 3300, else 0 (absent,
+   null, another value, or a key of that name nested in another object). json need not be
+   NUL-terminated. */
+uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len);
 
 /* Check an op against idx without building anything. */
 wiring_result_t wiring_doc_check(const wiring_index_t *idx, const wiring_op_t *op);

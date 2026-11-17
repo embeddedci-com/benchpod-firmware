@@ -180,3 +180,47 @@ size_t wiring_doc_build(const uint8_t *old, const wiring_index_t *idx, const wir
     out[7] = 0;
     return p;
 }
+
+/* Skip a JSON string starting at json[i] == '"'; returns the index after the closing quote, or len. */
+static size_t skip_str(const uint8_t *json, size_t len, size_t i) {
+    for (i++; i < len; i++) {
+        if (json[i] == '\\') { i++; continue; }
+        if (json[i] == '"') return i + 1;
+    }
+    return len;
+}
+
+uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len) {
+    static const char key[] = "la_mv";
+    const size_t klen = sizeof(key) - 1u;
+    int depth = 0;
+    bool want_key = false;   /* at depth 1, the next string is a key */
+    for (size_t i = 0; i < len;) {
+        uint8_t c = json[i];
+        if (c == '"') {
+            size_t end = skip_str(json, len, i);
+            if (depth == 1 && want_key) {
+                want_key = false;
+                if (end - i == klen + 2u && memcmp(json + i + 1, key, klen) == 0) {
+                    size_t j = end;
+                    while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
+                    if (j >= len || json[j] != ':') return 0;
+                    j++;
+                    while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
+                    uint32_t v = 0;
+                    size_t digits = 0;
+                    while (j < len && json[j] >= '0' && json[j] <= '9' && digits < 6) { v = v * 10u + (uint32_t)(json[j] - '0'); j++; digits++; }
+                    if (digits == 0 || (j < len && (json[j] == '.' || json[j] == 'e' || json[j] == 'E' || (json[j] >= '0' && json[j] <= '9')))) return 0;
+                    return (v == 1800u || v == 3300u) ? (uint16_t)v : 0;
+                }
+            }
+            i = end;
+            continue;
+        }
+        if (c == '{' || c == '[') { depth++; want_key = (c == '{' && depth == 1); }
+        else if (c == '}' || c == ']') depth--;
+        else if (c == ',' && depth == 1) want_key = true;
+        i++;
+    }
+    return 0;
+}

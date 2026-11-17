@@ -151,7 +151,7 @@ void la_pins_on_gateware_reconfigured(void) {
 /* ---- SCPI entry points ------------------------------------------------------ */
 
 int command_handler_dig_output(unsigned la, int level) {
-    if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
+    if (!la_voltage_from_profile()) {
         log_printf("[scpi] DIG:OUTP refused: la voltage not set (la_voltage first)\n");
         return -2;
     }
@@ -171,7 +171,7 @@ int command_handler_dig_output(unsigned la, int level) {
 
 int command_handler_dig_step(unsigned la, uint32_t steps, uint32_t delay_us,
                              unsigned dir_la, int dir) {
-    if (la_vccio_get_mv() == LA_VCCIO_UNSET) {
+    if (!la_voltage_from_profile()) {
         log_printf("[scpi] DIG:STEP refused: la voltage not set (la_voltage first)\n");
         return -2;
     }

@@ -918,7 +918,7 @@ anything is armed.
 
 | Condition | Message |
 |---|---|
-| LA voltage not set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
+| LA voltage not set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | `samples` = 0 or too deep | `"samples out of range: 1 to <max>"`, with `" (a DAC waveform in the PSRAM holds the rest; dac_stop frees it)"` when a resident deep-DAC waveform is what limits it |
 | Another capture or upload is running | `"busy"` |
 | The capture did not arm | `"la capture failed"` |
@@ -2223,7 +2223,7 @@ The affected pins, in the same entry shape `la_pins` uses:
 
 | Condition | Message |
 |---|---|
-| the LA voltage has not been set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
+| the LA voltage has not been set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | neither `mode` nor `level` given, with a `la` | `"gpio needs a mode or a level"` |
 | `mode` not recognised | `"mode must be input, output, open_drain or off"` |
 | `level` not 0/1 | `"level must be 0 or 1"` |
@@ -2249,10 +2249,16 @@ pin. `DIGital:STEP` follows the step-train rules above.
 
 The LA bank I/O voltage (iCE40 `VCCIO_0` — the supply for **all** of LA1..LA14) is
 switched between **3.3 V** and **1.8 V** by an on-board TPS2116 power-mux (U8),
-driven by `PG3` (select) with status on `PG4`. At boot the selection is **unset**
-and the firmware **refuses every LA-bank operation** (`la`, `la_capture`,
-`dap_start`, `uart_proxy_start`, `sensor_start`) until the host picks a voltage —
-so the DUT's logic level is always an explicit choice.
+driven by `PG3` (select) with status on `PG4`. At boot the selection is **unset**.
+The first LA-bank operation (`la`, `la_capture`, `dap_start`, `uart_proxy_start`,
+`sensor_start`, SCPI `DIG:OUTP` / `DIG:STEP`) then takes it from the wiring profile:
+the `la_mv` of the profile a powered rail was switched on with (`target_power`
+`profile`), else of the pod's default (active) profile. So the DUT's logic level is
+still an explicit choice, made once in the profile instead of after every boot.
+Without a profile that sets `la_mv` (1800 or 3300) the operation is refused with
+`BP0001` (`la voltage not set`) until the host sets one, here or in the profile.
+Nothing is driven before an LA operation asks for it: the profile's voltage is not
+applied at boot.
 
 ```json
 {"cmd": "la_voltage", "mv": 3300}
@@ -2267,7 +2273,7 @@ so the DUT's logic level is always an explicit choice.
   v2 pod, where `st` is ambiguous (see below).
 
 A bare `{"cmd": "la_voltage"}` reports `{"mv": 0, …}` before any voltage is
-set. `status` also carries the current selection as `la_vccio_mv` (0 = unset).
+set (it does not take the profile's). `status` also carries the current selection as `la_vccio_mv` (0 = unset).
 
 > **1.8 V requires a v3 pod.** On v2 boards the TPS2116's `MODE` pin is tied to
 > GND, which puts the part in a mode with no manual 1.8 V selection at all: with
@@ -2295,7 +2301,7 @@ set. `status` also carries the current selection as `la_vccio_mv` (0 = unset).
 |---|---|
 | `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` |
 | `mv: 1800` on a v2 pod | `"1.8 V needs a v3 pod; this board is v2 (its TPS2116 has no 1.8 V setting)"` |
-| any LA op before a voltage is set | `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` |
+| any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |
 
 > **Not while pins are in use.** Switching the bank glitches every LA line and strands the
@@ -3160,7 +3166,7 @@ Errors include `"unknown sensor instance 'env'"`, `"env is running: sensor_stop 
 `"an I2C sensor needs pins sda and scl"`, `"address 0x76 is not one of this sensor's addresses"`,
 `"address 0x76 is used by sensor:env on this bus"`, `"all 4 I2C sensor slots are in use:
 sensor_stop one first"`, `"the sensor FIFO is used by sensor:imu (one FIFO sensor at a time)"`,
-`"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` and the pin conflicts.
+`"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` and the pin conflicts.
 
 ### `sensor_set` — change readings
 
@@ -4463,7 +4469,7 @@ All errors follow the format:
 | `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
 | `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
-| `"la voltage not set; set it with la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
+| `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
 | `"samples out of range"` | `samples` outside the command's range (see each command); firmware 3.10.0 and later add the range, `"samples out of range: 1 to <max>"` |

@@ -1140,7 +1140,7 @@ int sm_start(const char *inst, const sm_start_req_t *req, bp_emit_t *e, char *er
         s->out_max = ai.max;
     }
     if (is_digital(s) && !sensor_port_la_voltage_set()) {
-        seterr(err, cap, "la voltage not set; set it with la_voltage (mv 1800 or 3300) first");
+        seterr(err, cap, "la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first");
         return -1;
     }
     if (is_digital(s) && !pins_check((unsigned)slot, s, err, cap)) return -1;
