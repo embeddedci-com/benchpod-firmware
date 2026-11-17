@@ -2249,8 +2249,8 @@ pin. `DIGital:STEP` follows the step-train rules above.
 
 The LA bank I/O voltage (iCE40 `VCCIO_0` — the supply for **all** of LA1..LA14) is
 switched between **3.3 V** and **1.8 V** by an on-board TPS2116 power-mux (U8),
-driven by `PG3` (select) with status on `PG4`. At boot the selection is **unset**.
-The first LA-bank operation (`la`, `la_capture`, `dap_start`, `uart_proxy_start`,
+driven by `PG3` (select) with status on `PG4`. At boot the selection is **unset**. From
+firmware 3.10.10 the first LA-bank operation (`la`, `la_capture`, `dap_start`, `uart_proxy_start`,
 `sensor_start`, SCPI `DIG:OUTP` / `DIG:STEP`) then takes it from the wiring profile:
 the `la_mv` of the profile a powered rail was switched on with (`target_power`
 `profile`), else of the pod's default (active) profile. So the DUT's logic level is
