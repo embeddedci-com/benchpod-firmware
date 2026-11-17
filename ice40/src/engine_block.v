@@ -184,6 +184,8 @@ module engine_block #(
     wire [N-1:0] emu_on, emu_out, emu_oe;
     reg  [13:0] la_s1, la_s2;   // the LA levels through a 2-flop synchroniser (see the end of the file)
     wire        uart_cfg_stb, uart_cfg_enable, uart_disable_stb;
+    wire [2:0]  uart_cfg_frame;
+    wire        uart_rx_parity_err;
     wire [3:0]  uart_cfg_rx_ch, uart_cfg_tx_ch;  wire [23:0] uart_cfg_div;
     wire        uart_tx_we, uart_rx_re, uart_rx_ovf_clr;
     wire [7:0]  uart_tx_wdata, uart_rx_rdata;  wire [8:0] uart_rx_avail;
@@ -252,6 +254,7 @@ module engine_block #(
         .la_cap_start(la_cap_start), .la_cap_count(la_cap_count), .la_cap_divider(la_cap_divider),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch), .uart_cfg_tx_ch(uart_cfg_tx_ch),
         .uart_cfg_div(uart_cfg_div), .uart_cfg_enable(uart_cfg_enable), .uart_disable_stb(uart_disable_stb),
+        .uart_cfg_frame(uart_cfg_frame), .uart_rx_parity_err(uart_rx_parity_err),
         .uart_tx_we(uart_tx_we), .uart_tx_wdata(uart_tx_wdata),
         .uart_rx_re(uart_rx_re), .uart_rx_rdata(uart_rx_rdata), .uart_rx_ovf_clr(uart_rx_ovf_clr),
         .uart_rx_avail(uart_rx_avail), .uart_tx_full(uart_tx_full),
@@ -269,14 +272,15 @@ module engine_block #(
     // receiver's NMEA) while the proxy keeps the console; v54 RX too (a UART sensor's requests).
     // Its TX reaches a pin through the pin map (EMU_PINMAP code 7), not a la_bank column. ----
     wire [3:0] uart2_rx_ch;
-    uart_engine uart2_i (
+    uart_engine #(.PARITY(0)) uart2_i (
         .clk(clk), .rst(rst),
         .cfg_stb(uart2_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
-        .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .disable_stb(1'b0),
+        .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .cfg_frame(3'd0), .disable_stb(1'b0),
         .rx_ch(uart2_rx_ch), .tx_ch(), .armed(uart2_armed),
         .tx_we(uart2_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart2_tx_full), .tx_empty(uart2_tx_empty),
         .rx_re(uart2_rx_re), .rx_rdata(uart2_rx_rdata), .rx_avail(uart2_rx_avail),
         .rx_overflow(uart2_rx_overflow), .rx_ovf_clr(uart2_rx_ovf_clr), .rx_frame_err(uart2_rx_frame_err),
+        .rx_parity_err(),
         .rx_in(la_in[uart2_rx_ch]), .tx_out(uart2_tx_out)
     );
 `else
@@ -290,11 +294,13 @@ module engine_block #(
     uart_engine uart_i (
         .clk(clk), .rst(rst),
         .cfg_stb(uart_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
-        .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .disable_stb(uart_disable_stb),
+        .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .cfg_frame(uart_cfg_frame),
+        .disable_stb(uart_disable_stb),
         .rx_ch(uart_rx_ch), .tx_ch(uart_tx_ch), .armed(uart_armed),
         .tx_we(uart_tx_we), .tx_wdata(uart_tx_wdata), .tx_full(uart_tx_full), .tx_empty(uart_tx_empty),
         .rx_re(uart_rx_re), .rx_rdata(uart_rx_rdata), .rx_avail(uart_rx_avail),
         .rx_overflow(uart_rx_overflow), .rx_ovf_clr(uart_rx_ovf_clr), .rx_frame_err(uart_rx_frame_err),
+        .rx_parity_err(uart_rx_parity_err),
         .rx_in(uart_rx_in), .tx_out(uart_tx_out)
     );
 

@@ -309,6 +309,7 @@ typedef struct {
     bool gpio_read;       /* GPIO_GET: live LA pin levels (gpio read, la_pins levels) */
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
     bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
+    bool uart_frame;      /* UART_CONFIG parity + stop bits (uart_proxy_start parity, stop_bits) */
     bool emulation;       /* the sensor-emulation image (v54+) runs or is installed in slot gw2 */
 } signal_engine_caps_t;
 
@@ -763,11 +764,24 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART2_STATUS_ARMED      (1u << 6)
 #define UART_STATUS_RX_FRAME_ERR (1u << 7)  /* v52+: sticky, a stop bit read low (byte dropped) */
 
+/* UART frame format (gateware >= UART_FRAME_MIN_GW): UART_CONFIG flags bits 1..3.  0 = 8N1, the
+   only format before v56.  The receiver checks the parity bit and the first stop bit. */
+#define UART_FRAME_MIN_GW       56u
+#define UART_FRAME_PARITY       (1u << 1)   /* a parity bit after the 8 data bits */
+#define UART_FRAME_ODD          (1u << 2)   /* odd parity (with UART_FRAME_PARITY), else even */
+#define UART_FRAME_STOP2        (1u << 3)   /* two stop bits */
+#define UART_FRAME_MASK         (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2)
+/* CMD_UART_STATUS byte 1: bit 0 is rx_avail bit 8, bit 1 (v56) the sticky parity error. */
+#define UART_STATUS1_PARITY_ERR (1u << 1)
+
 /* Arm the soft UART on the given RX/TX LA channels at `baud` (the firmware
    computes the FPGA bit-period divisor).  enable=false configures without
    arming.  Returns 0 on success, -1 bad channel/baud, -2 a proxy is already
    active (single-owner). */
 int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable);
+/* fpga_uart_config with a frame format (UART_FRAME_* bits; 0 = 8N1).  -3: frame != 0 and the
+   running gateware is older than UART_FRAME_MIN_GW. */
+int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_t frame, bool enable);
 
 /* Disarm the UART and release the TX channel to high-Z. */
 void fpga_uart_disable(void);
@@ -789,6 +803,9 @@ size_t fpga_uart_read(uint8_t *buf, size_t len);
    the emulation image and has its own status (UART2_STATUS). */
 /* The RX FIFO overflowed during the current (or last) UART session: DUT bytes were lost. */
 bool fpga_uart_rx_overflowed(void);
+/* A frame of the current (or last) UART session arrived with a wrong parity bit (the gateware's
+   sticky flag, latched here; the byte itself was kept). */
+bool fpga_uart_rx_parity_error(void);
 /* Reprogram the iCE40 when its gateware is not the version this firmware was built with, or the
    running kind's W25Q slot holds another image than the one recorded as written (a new build of
    the same version: boot_policy_gateware_action), from that slot; no-op otherwise. With no record

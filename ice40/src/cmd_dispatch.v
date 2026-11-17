@@ -254,6 +254,7 @@ module cmd_dispatch #(
     output wire [3:0]        uart_cfg_tx_ch,
     output wire [23:0]       uart_cfg_div,
     output wire              uart_cfg_enable,
+    output wire [2:0]        uart_cfg_frame,      // v56: UART_CONFIG flags bits 3..1 {stop2, odd, parity}
     output reg               uart_disable_stb,
 
     // ---- UART proxy: TX FIFO write / RX FIFO read ----
@@ -269,6 +270,7 @@ module cmd_dispatch #(
     input  wire              uart_tx_empty,
     input  wire              uart_rx_overflow,
     input  wire              uart_rx_frame_err,   // v52: UART_STATUS flags bit7
+    input  wire              uart_rx_parity_err,  // v56: UART_STATUS byte 1 bit 1
     input  wire              uart_armed,
 
     // ---- UART2: a second UART (v48 TX; v54 RX too, emulation image; config payload = UART_CONFIG's) ----
@@ -521,6 +523,7 @@ module cmd_dispatch #(
     assign uart_cfg_tx_ch    = arg_buf[5][3:0];
     assign uart_cfg_div      = {arg_buf[8], arg_buf[7], arg_buf[6]};
     assign uart_cfg_enable   = rx_byte[0];
+    assign uart_cfg_frame    = rx_byte[3:1];
     // Streamed write data (LOAD_WAVE / SWD_FEED / I2C_LOAD_REGS / UART_WRITE) is rx_byte itself:
     // each sink (sample_buf, swd_engine, i2c_regfile, uart FIFO) takes it only under its 1-cycle
     // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
@@ -572,7 +575,7 @@ module cmd_dispatch #(
         input [1:0] rem;
         begin
             case (rem)
-                2'd3:    uart_status_next = {7'b0, uart_rx_avail[8]};   // byte 1
+                2'd3:    uart_status_next = {6'b0, uart_rx_parity_err, uart_rx_avail[8]};   // byte 1 (v56 bit 1)
                 default: uart_status_next = {uart_rx_frame_err, uart2_armed, uart2_tx_empty, uart2_tx_full, uart_armed, uart_rx_overflow,
                                              uart_tx_empty, uart_tx_full};   // byte 2 (rem 2)
             endcase
@@ -881,7 +884,8 @@ module cmd_dispatch #(
                             OP_UART_STATUS: begin
                                 arg_rem         <= UART_STATUS_LEN;
                                 tx_byte         <= uart_rx_avail[7:0];   // byte 0
-                                uart_rx_ovf_clr <= 1'b1;   // status read clears sticky overflow
+                                // v56: the sticky flags clear after the last byte (S_UART_STATUS), not
+                                // here: clearing here zeroed them before bytes 1 and 2 carried them out.
                                 state           <= S_UART_STATUS;
                             end
 
@@ -1122,6 +1126,7 @@ module cmd_dispatch #(
 `endif
                                 `CD_UART_CONFIG: begin
                                     // [rx_ch][tx_ch][div_lo][div_mid][div_hi(=rx_byte)][flags]
+                                    // flags: bit0 enable, v56 bit1 parity, bit2 odd, bit3 two stop bits
                                     // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
                                     uart_cfg_stb     <= 1'b1;
                                 end
@@ -1233,6 +1238,7 @@ module cmd_dispatch #(
                             tx_byte   <= uart_status_next(arg_rem[1:0]);
                             arg_rem   <= arg_rem   - 16'd1;
                         end else begin
+                            uart_rx_ovf_clr <= 1'b1;   // the block is out: clear the sticky flags it read
                             state <= S_DONE;
                         end
                     end

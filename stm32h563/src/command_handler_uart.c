@@ -40,6 +40,7 @@ static absolute_time_t uart_last_plus_at;        /* time of the most recent '+' 
 static uint8_t         uart_rx_buf[256];         /* DUT→client drain buffer */
 static uint8_t         uart_proxy_rx, uart_proxy_tx;   /* the session's pins and baud, kept so a */
 static uint32_t        uart_proxy_baud;                /* gateware reconfig can re-apply them    */
+static uint8_t         uart_proxy_frame;               /* UART_FRAME_* bits (0 = 8N1)            */
 static int             uart_rearm_conn = -1;           /* session to re-arm on the next poll     */
 /* True while the proxy is SUSPENDED for the duration of a load_bin upload: we stop touching the
    iCE40 for UART entirely (no per-poll SPI drain) so nothing competes with the upload's PSRAM
@@ -82,11 +83,32 @@ void uart_proxy_conn_closed(int conn_id) {
         uart_proxy_end(conn_id, false);
 }
 
+/* The optional frame format of uart_proxy_start: "parity" none|even|odd (default none) and
+   "stop_bits" 1|2 (default 1), as UART_FRAME_* bits.  False on any other value. */
+bool uart_frame_parse(const char *json, uint8_t *frame) {
+    char s[8] = {0};
+    uint8_t f = 0;
+    if (json_get_value(json, "parity", s, sizeof(s))) {
+        if (strcmp(s, "even") == 0)      f |= UART_FRAME_PARITY;
+        else if (strcmp(s, "odd") == 0)  f |= UART_FRAME_PARITY | UART_FRAME_ODD;
+        else if (strcmp(s, "none") != 0) return false;
+    }
+    memset(s, 0, sizeof(s));
+    if (json_get_value(json, "stop_bits", s, sizeof(s))) {
+        if (strcmp(s, "2") == 0)      f |= UART_FRAME_STOP2;
+        else if (strcmp(s, "1") != 0) return false;
+    }
+    *frame = f;
+    return true;
+}
+
 /* ---- UART transparent proxy ----
  * Bridge a DUT UART through two LA channels. Like dap_start, this is the one
  * command that changes how the connection's bytes are interpreted: after the
  * `"uart ready"` ack the same TCP connection carries raw UART bytes both ways.
- *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200}
+ *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200,
+ *    "parity":"none"|"even"|"odd","stop_bits":1|2}
+ * parity and stop_bits are optional (8N1); anything but 8N1 needs gateware v56.
  * Exit: close the socket (primary), or send  <≥1s idle> +++ <≥1s idle>  to
  * return to JSON on the same connection. */
 void handle_uart_proxy_start(int conn_id, const char *json) {
@@ -98,6 +120,15 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     unsigned tx = (unsigned)atoi(s);
     uint32_t baud = 115200;
     if (json_get_value(json, "baud", s, sizeof(s))) baud = (uint32_t)strtoul(s, NULL, 0);
+    uint8_t frame = 0;
+    if (!uart_frame_parse(json, &frame)) {
+        send_error(conn_id, "invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2");
+        return;
+    }
+    if (frame && signal_engine_fpga_version() < UART_FRAME_MIN_GW) {
+        send_error(conn_id, "uart parity and stop bits need gateware v56+: update the pod's firmware");
+        return;
+    }
 
     /* Claim both channels first: a proxy sharing a line with SWD or an emulated sensor used
        to lose it silently to la_bank.v's priority.  This also rejects RX/TX on an LA7/LA8
@@ -106,7 +137,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     if (!la_claim_or_error(conn_id, LA_FN_UART_RX, &rx_pin, 1, 0)) return;
     if (!la_claim_or_error(conn_id, LA_FN_UART_TX, &tx_pin, 1, 0)) return;
 
-    int rc = fpga_uart_config(rx, tx, baud, true);
+    int rc = fpga_uart_config_frame(rx, tx, baud, frame, true);
     if (rc == -2) { send_error(conn_id, "uart busy"); return; }
     if (rc != 0)  { send_error(conn_id, "invalid uart args"); return; }
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &rx_pin, 1);
@@ -148,6 +179,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     uart_proxy_rx     = (uint8_t)rx;
     uart_proxy_tx     = (uint8_t)tx;
     uart_proxy_baud   = baud;
+    uart_proxy_frame  = frame;
     uart_plus_count   = 0;
     uart_plus_pending = false;
     uart_last_rx_at   = get_absolute_time();
@@ -258,7 +290,7 @@ void uart_rearm_poll(void) {
     if (uart_proxy_conn != conn) return;              /* the session ended meanwhile */
     uint16_t rx_avail = 0;
     fpga_uart_disable();   /* the firmware still marks the old (gone) session armed: -2 otherwise */
-    if (fpga_uart_config(uart_proxy_rx, uart_proxy_tx, uart_proxy_baud, true) == 0 &&
+    if (fpga_uart_config_frame(uart_proxy_rx, uart_proxy_tx, uart_proxy_baud, uart_proxy_frame, true) == 0 &&
         fpga_uart_status(&rx_avail, NULL) == 0) {
         printf("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
                uart_proxy_rx, uart_proxy_tx);

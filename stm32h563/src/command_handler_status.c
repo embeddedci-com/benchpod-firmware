@@ -234,6 +234,9 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     bp_emit(e, "\"gateware\":%u,\"gateware_embedded\":%u,\"loop_tripped\":%s,\"uart_rx_overflow\":%s,",
             (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version(),
             fpga_dac_loop_tripped() ? "true" : "false", fpga_uart_rx_overflowed() ? "true" : "false");
+    /* A wrong parity bit in the current (or last) UART session (gateware v56+). Full form only:
+       the cloud's short form has no room left. */
+    if (!brief) bp_emit(e, "\"uart_rx_parity_error\":%s,", fpga_uart_rx_parity_error() ? "true" : "false");
     bp_emit(e, "\"psram\":\"%s\",\"psram_ok\":%s,\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,"
                 "\"reset\":\"%s\",\"last_crash\":",
             psram_selftest_str(), signal_engine_psram_operable() ? "true" : "false",
