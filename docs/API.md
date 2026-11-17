@@ -136,7 +136,7 @@ The `cmd` field is required. All other fields are command-specific and documente
 {"status":"error","code":"BP0002","args":{"cmd":"frobnicate"},"message":"<description>"}\n
 ```
 
-From the next firmware release, refusals carry a stable error code (`BP0001` and up) and the
+From firmware 3.10.8, refusals carry a stable error code (`BP0001` and up) and the
 values that go with it in `args` (left out when the code has none). Codes never change meaning and
 are never reused; each is on `https://embeddedci.com/docs/errors#<code>` with the cause and
 the fix, and [`errors/ERRORS.md`](../errors/ERRORS.md) lists them. Read `code` and `args`, not the
@@ -2492,7 +2492,7 @@ interval never misses a trip.
 
 ---
 
-From the next firmware release each eFuse object also has `"profile"`: the wiring profile named
+From firmware 3.10.8 each eFuse object also has `"profile"`: the wiring profile named
 when that rail was switched on (`target_power` `profile`), or `null` when it is off or none was
 named.
 
@@ -4096,7 +4096,7 @@ the C3 does not start and the pod has no copy to reinstall it from.
 
 The pod keeps its wiring profiles (which board signal is on which LA channel, the I/O voltage, the
 power rail) itself, so every connection sees the same ones: LAN, USB and the cloud, from any
-computer. Up to 16 named profiles of at most 4096 bytes of JSON each, 16 KB in all, and one of them
+computer (firmware 3.10.8 and later). Up to 16 named profiles of at most 4096 bytes of JSON each, 16 KB in all, and one of them
 is the default (the one a tool uses when it names none). Names are 1 to 40 characters: lowercase
 letters, digits and dashes, not starting with a dash. The SDK, CLI, MCP server and apps read and
 write them for you (`bp.load_wiring`, `bp.save_wiring`, `benchpod wiring`); this is the protocol
