@@ -12,6 +12,7 @@
 #include "command_handler.h"
 #include "command_handler_internal.h"
 #include "wiring_doc.h"
+#include "wiring_store.h"   /* la_voltage_from_profile reads the active profile's la_mv */
 #include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
@@ -112,6 +113,39 @@ void handle_target_power(int conn_id, const char *json) {
              "{\"efuse\":%d,\"enabled\":%d,\"delay_ms\":%u}",
              efuse, on ? 1 : 0, (unsigned)delay_ms);
     send_ok_str(conn_id, payload);
+}
+
+/* The I/O voltage from the wiring profile, when none is set yet (RAM only: unset after a boot, so
+   the hosts used to have to set it every time). The profile is the one a powered rail was switched
+   on with, else the pod's default (the active profile). Its la_mv is read from the copy in RAM, so
+   this never touches the bus. Hw worker (with every LA operation and every profile save). */
+bool la_voltage_from_profile(void) {
+    if (la_vccio_get_mv() != LA_VCCIO_UNSET) return true;
+    const wiring_index_t *idx = wiring_store_index();
+    const uint8_t *doc = wiring_store_doc();
+    if (!idx || !doc || idx->count == 0) return false;
+    int at = -1;
+    for (int ef = 1; ef <= 2 && at < 0; ef++) {
+        target_power_status_t st;
+        target_power_get_status(ef, &st);
+        if (st.enabled && s_rail_profile[ef - 1][0]) at = wiring_index_find(idx, s_rail_profile[ef - 1]);
+    }
+    if (at < 0 && idx->def != WIRING_NO_DEFAULT) at = idx->def;
+    if (at < 0) return false;
+    const wiring_entry_t *e = &idx->e[at];
+    uint16_t mv = wiring_doc_json_la_mv(doc + e->off, e->len);
+    if (!mv) return false;
+    char why[LA_PINS_ERR_MAX];
+    if (!la_pins_check_voltage_change(LA_VCCIO_UNSET, mv, why, sizeof(why))) {
+        printf("[la] I/O voltage from profile %s refused: %s\n", e->name, why);
+        return false;
+    }
+    if (la_vccio_set_mv(mv) != 0) {
+        printf("[la] I/O voltage %u mV from profile %s refused by the board\n", (unsigned)mv, e->name);
+        return false;
+    }
+    printf("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);
+    return true;
 }
 
 void handle_target_status(int conn_id, const char *json) {

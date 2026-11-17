@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -103,3 +104,8 @@ void command_handler_release_adc(int conn_id);
 int  command_handler_dig_output(unsigned la, int level);
 int  command_handler_dig_step(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_la, int dir);
 bool command_handler_step_busy(void);
+
+/* The LA I/O voltage is set, or was just set from the wiring profile's la_mv (the profile a powered
+   rail was switched on with, else the pod's default). False when neither: the caller refuses with
+   "la voltage not set". Hw worker. */
+bool la_voltage_from_profile(void);

@@ -128,7 +128,29 @@ static void test_corrupt_reads_empty(void) {
     CHECK(!wiring_doc_parse(copy, g_len + 1, &idx));   /* trailing byte */
 }
 
+static uint16_t la_mv_of(const char *s) { return wiring_doc_json_la_mv((const uint8_t *)s, strlen(s)); }
+
+static void test_la_mv(void) {
+    CHECK(la_mv_of("{\"version\":2,\"la_mv\":3300}") == 3300);
+    CHECK(la_mv_of("{ \"la_mv\" : 1800 , \"efuse\": 1}") == 1800);
+    CHECK(la_mv_of("{\"la_mv\":null}") == 0);
+    CHECK(la_mv_of("{\"la_mv\":5000}") == 0);
+    CHECK(la_mv_of("{\"la_mv\":3300.5}") == 0);
+    CHECK(la_mv_of("{\"la_mv\":33000}") == 0);
+    CHECK(la_mv_of("{\"efuse\":1}") == 0);
+    CHECK(la_mv_of("") == 0);
+    /* Only the top level counts: a signal or a dut_dirs key named la_mv is not the voltage. */
+    CHECK(la_mv_of("{\"dut_dirs\":{\"la_mv\":3300},\"signals\":[{\"name\":\"la_mv\",\"la_mv\":1800}]}") == 0);
+    CHECK(la_mv_of("{\"signals\":[{\"la\":9}],\"la_mv\":1800}") == 1800);
+    /* A string value that reads like the key, and escapes inside strings. */
+    CHECK(la_mv_of("{\"swd_target\":\"la_mv\",\"i2c_addr\":\"a\\\"b\",\"la_mv\":3300}") == 3300);
+    /* Not NUL-terminated: the length bounds it. */
+    const char *cut = "{\"la_mv\":3300}";
+    CHECK(wiring_doc_json_la_mv((const uint8_t *)cut, 10) == 0);
+}
+
 int main(void) {
+    test_la_mv();
     test_names();
     test_json_object();
     test_put_default_revisions();
