@@ -7,7 +7,7 @@ with three LAN TLS sessions open. Update the tables when a change moves a number
 
 ## Read the numbers on a pod
 
-- JSON `status`: `heap_free`, `heap_min` (lowest since boot), `stack_min`, `stacks` (free bytes per
+- JSON `diag` (firmware 3.10.9+; `status` up to 3.10.8): `heap_free`, `heap_min` (lowest since boot), `stack_min`, `stacks` (free bytes per
   task, lowest since boot), `lwip_mem_max` / `lwip_mem_size`, `pbuf_pool_max` / `pbuf_pool_size`.
 - Console `status`: the same as `stack`, `lwip` and `heap` lines.
 - Build: `arm-none-eabi-size -A build/bench_pod_stm32.elf`, and the largest symbols with

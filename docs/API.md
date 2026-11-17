@@ -185,6 +185,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 |---|---|---|---|---|
 | `ping` | T0 | Connectivity check | `"pong"` (string) | no |
 | `status` | T0 | Firmware, network, board and capability info | object | no |
+| `diag` | T0 | Heap, stack, network-stack and console diagnostics (firmware 3.10.9+) | object | no |
 | `generate` | T1 | Start a DAC waveform | `null` or object | no |
 | `capture` | T0 | ADC snapshot, up to 32768 samples | array of uint16 | yes |
 | `stream` | T0 | Same as `capture`, without a trigger | array of uint16 | yes |
@@ -1714,7 +1715,7 @@ counters and the capability list. No parameters.
  "usb":{"net":"on","setting":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
- "board_rev":"v3","board_rev_mv":1650,"nrst_pin":true,"flash_kb":2048,
+ "board_rev":"v3","nrst_pin":true,"flash_kb":2048,
  "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
  "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
  "psram":"ok","psram_ok":true,"reset":"power-on","last_crash":"","analog":true,
@@ -1734,15 +1735,18 @@ elsewhere:
 | `module` | the [`module`](#module--the-analog-module-and-its-eeprom) command |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, `adc_range`, `adc_range_fs_mv` | the [capabilities frame](#capabilities-frame--adc-calibration-fields) |
 | `sensors_format`, `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state` | the capabilities frame (the server keeps them as `cap.*`) |
-| `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped`, `board_rev_mv` | diagnostics: a LAN or USB `status` |
+| `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped`, `board_rev_mv` | [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; earlier, the full form) |
 
 It also cuts `last_crash` and `safe_reason` to 48 characters, writing any character JSON would
 escape as `?`, and adds `"boot_health_cut":true` when it cut one; the capabilities frame has both
 in full. Everything else, `caps` and `usb` included, is the same as the full form.
 
 LAN, USB and the cloud byte tunnels get the full form. A full form larger than the connection
-takes in one piece (about 2 KB, for example with a long crash report) comes as the short form
-too, instead of the error `status too large for this connection` that firmware up to 3.10.4 sent.
+takes in one piece (2047 bytes, for example with a long crash report) comes as the short form
+too, so a LAN client that reads the calibration or the feature flags from `status` checks
+`short_form` and reads them again (or warns) when it is set. Firmware 3.10.9 moved the
+diagnostics to [`diag`](#diag--heap-stack-and-network-diagnostics) so a running pod's full form
+stays a few hundred bytes under that limit; instead of the error `status too large for this connection` that firmware up to 3.10.4 sent.
 Firmware 3.10.4's full `status` could be larger than the cloud channel takes (with the USB network
 adapter up and a lease held), so connecting to it over the cloud failed with
 `status: reply too large for the cloud channel`.
@@ -1764,12 +1768,10 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware after 3.10.7. |
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
-| `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. Full form only. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
 | `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. |
-| `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). Diagnostic only. Full form only. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. The short form keeps only `cloud_ca` and `cloud_proxy`; the capabilities frame carries the others. |
@@ -1777,13 +1779,12 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
-| `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures` | integer | Network-stack and heap health counters. Full form only. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
 | `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
-| `heap_free`, `heap_min`, `stack_min`, `stacks` | integer, object | Heap and per-task stack headroom in bytes. `stacks` is in the full form only. |
+| `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
 | `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
 | `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
@@ -1814,6 +1815,35 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
+
+---
+
+### `diag` — heap, stack and network diagnostics
+
+Firmware 3.10.9+. The pod's health counters, which `status` carried in its full form up to 3.10.8.
+Older firmware answers `BP0002` (unknown command): read them from its `status` then.
+
+```json
+{"cmd":"diag"}
+```
+
+```json
+{"status":"ok","data":{"heap_free":128120,"heap_min":126280,"stack_min":400,
+ "lwip_mem_max":12288,"lwip_mem_size":65536,"pbuf_pool_max":1,"pbuf_pool_size":16,
+ "malloc_failures":0,"rx_dropped":0,"tx_dropped":0,"board_rev_mv":2728,
+ "stacks":{"usb":2792,"console":3680,"net":12048,"hw":6992,"IDLE":400}}}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `heap_free`, `heap_min` | integer | Free heap bytes now, and the lowest since boot. |
+| `stack_min` | integer | The lowest free stack bytes of any task since boot; `stacks` says which. |
+| `stacks` | object | Per task (every task, `IDLE` and the timer task included): the lowest free stack bytes since boot. |
+| `lwip_mem_max`, `lwip_mem_size` | integer | The network stack's heap: the most used since boot, and its size. |
+| `pbuf_pool_max`, `pbuf_pool_size` | integer | The packet buffer pool: the most used since boot, and its size. |
+| `malloc_failures` | integer | Allocations that failed since boot. |
+| `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
+| `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). |
 
 ---
 

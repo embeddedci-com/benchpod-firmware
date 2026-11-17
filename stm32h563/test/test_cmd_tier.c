@@ -32,6 +32,7 @@ static void expect(const char *cmd, const char *json, cmd_tier_t want) {
 
 static void test_spot_checks(void) {
     expect("status", NULL, CMD_TIER_T0);
+    expect("diag", NULL, CMD_TIER_T0);
     expect("capture", "{\"cmd\":\"capture\"}", CMD_TIER_T0);
     expect("generate", NULL, CMD_TIER_T1);
     expect("target_power", NULL, CMD_TIER_T1);
@@ -199,7 +200,7 @@ static void expect_set(unsigned flag, const char *what, const char *const *want,
         expect_set(flag, #flag, w_, sizeof(w_) / sizeof(w_[0])); } while (0)
 
 static void test_flags_match_the_old_lists(void) {
-    EXPECT_SET(CMD_F_NO_HW, "ping", "status", "cloud_set", "cloud_status", "cloud_clear",
+    EXPECT_SET(CMD_F_NO_HW, "ping", "status", "diag", "cloud_set", "cloud_status", "cloud_clear",
                "wifi_set", "wifi_status", "wifi_scan", "wifi_clear", "eth", "speedtest",
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",

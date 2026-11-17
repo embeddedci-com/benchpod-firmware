@@ -171,6 +171,16 @@ static bool has(const char *key) {
     return strstr(g_tx, k) != NULL;
 }
 
+/* What `diag` has and `status` no longer does. */
+static const char *k_diag[] = { "stacks", "lwip_mem_max", "lwip_mem_size", "pbuf_pool_max",
+                                "pbuf_pool_size", "malloc_failures", "rx_dropped", "tx_dropped",
+                                "board_rev_mv" };
+/* Bytes the "typical" full form here must leave under the TX ring's 2047 (test_lan_is_complete).
+   The stubs are wider than a real pod (six-digit heaps, the longest reset text, a long lease
+   holder, both MACs): this pod is 1998 bytes where benchpod-30a9f1 sends about 1760 on 3.10.9.
+   So 40 bytes here is about 280 on a real pod; a field that needs more must make room. */
+#define STATUS_FULL_MARGIN 40u
+
 /* ---- tests ------------------------------------------------------------------------------- */
 static void test_cloud_worst_case_fits(void) {
     g_usb_on = false;     /* off_reason present */
@@ -217,12 +227,20 @@ static void test_lan_is_complete(void) {
     g_ring = sizeof(g_tx) - 1;
     size_t n = run(0);
     printf("  LAN status, typical: %zu bytes\n", n);
+    if (getenv("DUMP")) printf("%s\n", g_tx);
     CHECK(g_sends == 1, "full form not sent at once (%d sends)", g_sends);
-    const char *keep[] = { "lan_tls", "stacks", "lwip_mem_max", "malloc_failures", "adc_cal_a_uv",
-                           "module", "caps", "usb", "lease", "rx_dropped",
-                           "board_rev_mv", "sensors_format", "ota_sig", "tunnel_max_tier" };
+    const char *keep[] = { "lan_tls", "adc_cal_a_uv", "module", "caps", "usb", "lease",
+                           "sensors_format", "ota_sig", "tunnel_max_tier", "heap_min", "stack_min" };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
         CHECK(has(keep[i]), "LAN status lacks %s", keep[i]);
+    /* The diagnostics are in `diag` (3.10.9), in neither form. */
+    for (size_t i = 0; i < sizeof(k_diag) / sizeof(k_diag[0]); i++)
+        CHECK(!has(k_diag[i]), "LAN status still has %s (it belongs in diag)", k_diag[i]);
+    /* Room to grow: a pod as it runs leaves STATUS_FULL_MARGIN bytes under what a connection's
+       TX ring takes whole, so a new field cannot quietly push LAN clients to the short form. */
+    printf("  LAN status, typical: margin %zu (want >= %u)\n", n < 2047u ? 2047u - n : 0, STATUS_FULL_MARGIN);
+    CHECK(n + STATUS_FULL_MARGIN <= 2047u, "LAN status %zu bytes leaves less than %u of 2047",
+          n, STATUS_FULL_MARGIN);
     CHECK(!has("short_form") && !has("boot_health_cut"), "LAN status is the short form");
     CHECK(strstr(g_tx, "\"eth_mac\":\"02:0d:1a:80:f1:54\",\"wifi_mac\":\"34:85:18:aa:bb:cc\",") != NULL,
           "LAN status lacks the MACs");
@@ -241,15 +259,30 @@ static void test_lan_falls_back_to_short_form(void) {
     size_t n = run(0);
     printf("  LAN status, worst case: short form %zu bytes\n", n);
     CHECK(has("short_form") && has("caps") && !has("lan_tls"), "worst case is not the short form");
-    /* A full form the ring does not take whole (2151 B > 2047): refused, then the short form. */
+    /* A full form the ring does not take whole (a ring with less room left): refused, then the
+       short form. */
     g_typical = true;
     char saved_r = g_reason[0];
     g_crash[40] = '\0'; g_reason[0] = '\0';
+    g_ring = 1700;
     run(0);
+    g_ring = 2047;
     CHECK(g_sends == 2, "expected the full form refused, then the short form (%d sends)", g_sends);
     CHECK(has("short_form") && g_err[0] == '\0', "no short form after the ring refused the full one");
     g_crash[40] = 'x'; g_reason[0] = saved_r;
     g_typical = false;
+}
+
+/* `diag` has every diagnostic, the stacks of every task, and fits its buffer at the worst case. */
+static void test_diag(void) {
+    g_ntx = 0; g_tx[0] = '\0'; g_err[0] = '\0'; g_sends = 0;
+    handle_diag(0, "{\"cmd\":\"diag\"}");
+    CHECK(g_err[0] == '\0', "diag: error %s", g_err);
+    printf("  diag, worst case: %zu bytes\n", g_ntx);
+    for (size_t i = 0; i < sizeof(k_diag) / sizeof(k_diag[0]); i++)
+        CHECK(has(k_diag[i]), "diag lacks %s", k_diag[i]);
+    CHECK(has("heap_free") && has("heap_min") && has("stack_min"), "diag lacks the heap");
+    CHECK(strstr(g_tx, "\"tasknamelong15c\":65535}}}") != NULL, "diag stacks cut: %.60s", g_tx + (g_ntx > 60 ? g_ntx - 60 : 0));
 }
 
 static void test_cloud_short_texts_not_marked(void) {
@@ -271,6 +304,7 @@ int main(void) {
     test_lan_is_complete();
     test_lan_falls_back_to_short_form();
     test_cloud_short_texts_not_marked();
+    test_diag();
     if (fails) { printf("test_ch_status: %d FAILED\n", fails); return 1; }
     printf("test_ch_status: all passed\n");
     return 0;
