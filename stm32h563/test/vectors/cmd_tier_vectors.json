@@ -4,6 +4,7 @@
   "table": {
     "ping": "T0",
     "status": "T0",
+    "diag": "T0",
     "cloud_status": "T0",
     "wifi_status": "T0",
     "wifi_scan": "T0",
@@ -117,6 +118,10 @@
     },
     {
       "line": "{\"cmd\":\"status\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"diag\"}",
       "tier": "T0"
     },
     {

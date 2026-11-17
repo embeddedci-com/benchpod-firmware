@@ -13,8 +13,9 @@
  *   adc_cal_*, adc_range*  the capabilities frame (server cap.*)
  *   sensors_format, ota_sig, sig_policy_cmd, lan_policy_cmd, tunnel_max_tier, lease_state
  *                          fixed feature flags, also in the capabilities frame (server cap.*)
- *   stacks{}, lwip_*, pbuf_pool_*, malloc_failures, rx_dropped, tx_dropped, board_rev_mv
- *                          diagnostics, full form only
+ *   (stacks{}, lwip_*, pbuf_pool_*, malloc_failures, rx_dropped, tx_dropped and board_rev_mv
+ *   are in neither form since 3.10.9: the `diag` command has them, which keeps the full form
+ *   well under the 2048 bytes a connection's TX ring takes whole; see handle_diag below.)
  *   emi_test               the `emi_log` command (EMC test build)
  * and cuts last_crash and safe_reason to STATUS_SHORT_TEXT_MAX characters ("boot_health_cut":true
  * when it did; the capabilities frame has them whole). test_ch_status.c builds the worst case of
@@ -170,10 +171,6 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
         bp_emit(e, "\"emi_test\":%s,", emi);
     }
 #endif
-    /* The console's dropped-byte counters: diagnostics, full form only. */
-    if (!brief)
-        bp_emit(e, "\"rx_dropped\":%lu,\"tx_dropped\":%lu,",
-                (unsigned long)console_rx_dropped(), (unsigned long)console_tx_dropped());
     bp_emit(e, "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_vccio_get_mv());
     /* The front-SMA fit captures are scaled with, this pod's offset included (adc_cal.h): the
@@ -186,7 +183,6 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     /* Board revision decides which of the rev3 features below actually exist,
        so clients read it once here rather than probing each command. */
     bp_emit(e, "\"board_rev\":\"%s\",", board_rev_str());
-    if (!brief) bp_emit(e, "\"board_rev_mv\":%d,", board_rev_strap_mv());   /* the strap voltage: full form only */
     bp_emit(e, "\"nrst_pin\":%s,", c->nrst_pin ? "true" : "false");
     /* Internal flash of this MCU: 2048 (ZIT6) or 1024 (ZGT6). Updaters check it before sending
        an image (flash_layout.h). */
@@ -220,17 +216,8 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
         bp_emit(e, "\"lease\":{\"held\":%s,\"holder\":\"%s\",\"left_s\":%lu},",
                 held ? "true" : "false", held ? lease_gate_holder() : "", (unsigned long)left);
     }
-    /* lwIP memory high-water marks (lwipopts.h), to size MEM_SIZE and the pbuf pool from data.
-       Diagnostics: full form only, like malloc_failures and stacks{}. */
-    if (!brief) bp_emit(e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
-            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
-            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
-    if (!brief) {
-        extern volatile uint32_t g_malloc_failures;   /* main.c: allocations that failed after boot */
-        bp_emit(e, "\"malloc_failures\":%lu,", (unsigned long)g_malloc_failures);
-    }
     bp_emit(e, "\"gateware\":%u,\"gateware_embedded\":%u,\"loop_tripped\":%s,\"uart_rx_overflow\":%s,",
             (unsigned)signal_engine_fpga_version(), (unsigned)ice40_embedded_gw_version(),
             fpga_dac_loop_tripped() ? "true" : "false", fpga_uart_rx_overflowed() ? "true" : "false");
@@ -243,19 +230,6 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
             sys_health_heap_free(), sys_health_heap_min_free(),
             sys_health_stack_min_free(), fault_last_reset_str());
     emit_text(e, fault_last_crash_str(), text_max, &text_cut);
-    /* Per-task stack headroom (minimum-ever free bytes), every task incl. IDLE and the timer
-       task, so stack_min says which task it is. Full form only. */
-    if (!brief) {
-        sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
-        int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
-        bp_emit_raw(e, ",\"stacks\":{");
-        for (int i = 0; i < n; i++) {
-            if (i) bp_emit_raw(e, ",");
-            bp_emit_jstr(e, t[i].name);
-            bp_emit(e, ":%u", t[i].stack_free);
-        }
-        bp_emit_raw(e, "}");
-    }
     /* Analog front end (board_variant.h): false on the digital-only board. */
     bp_emit(e, ",\"analog\":%s", c->analog ? "true" : "false");
     /* Digital v3r3 only (module_link.h): the analog module and the two rails it switches, short
@@ -303,4 +277,35 @@ void handle_status(int conn_id, const char *json) {
                  (unsigned)bp_emit_len(&e));
         send_error(conn_id, msg);
     }
+}
+
+/* `diag`: the diagnostics that used to make the full status form too big for a connection's TX
+   ring (3.10.9): per-task stack headroom (minimum-ever free bytes, every task incl. IDLE, so
+   stack_min says which task it is), the heap, the lwIP memory and pbuf pool high-water marks,
+   failed allocations, the console's dropped-byte counters and the revision-strap voltage. */
+void handle_diag(int conn_id, const char *json) {
+    (void)json;
+    char resp[768];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    extern volatile uint32_t g_malloc_failures;   /* main.c: allocations that failed after boot */
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,",
+            sys_health_heap_free(), sys_health_heap_min_free(), sys_health_stack_min_free());
+    bp_emit(&e, "\"lwip_mem_max\":%lu,\"lwip_mem_size\":%lu,\"pbuf_pool_max\":%u,\"pbuf_pool_size\":%u,",
+            (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
+            (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
+    bp_emit(&e, "\"malloc_failures\":%lu,\"rx_dropped\":%lu,\"tx_dropped\":%lu,\"board_rev_mv\":%d,",
+            (unsigned long)g_malloc_failures, (unsigned long)console_rx_dropped(),
+            (unsigned long)console_tx_dropped(), board_rev_strap_mv());
+    sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
+    int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
+    bp_emit_raw(&e, "\"stacks\":{");
+    for (int i = 0; i < n; i++) {
+        if (i) bp_emit_raw(&e, ",");
+        bp_emit_jstr(&e, t[i].name);
+        bp_emit(&e, ":%u", t[i].stack_free);
+    }
+    bp_emit_raw(&e, "}}}\n");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "diag too large"); return; }
+    at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e));
 }

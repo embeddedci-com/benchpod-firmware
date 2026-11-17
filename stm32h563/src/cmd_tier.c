@@ -22,6 +22,7 @@ static const cmd_desc_t k_tiers[] = {
     /* T0: read-only */
     { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_ping) },
     { { "status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_status) },
+    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_diag) },
     { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status) },
     { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status) },
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan) },
