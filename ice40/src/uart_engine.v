@@ -100,13 +100,15 @@ module uart_engine #(
     input  wire [3:0]  cfg_tx_ch,
     input  wire [23:0] cfg_div,      // bit period in system clocks
     input  wire        cfg_enable,
-    input  wire [2:0]  cfg_frame,    // v56: {stop2, odd, parity}; 0 = 8N1 (older firmware sends 0)
+    input  wire [3:0]  cfg_frame,    // v56: {stop2, odd, parity}; 0 = 8N1 (older firmware sends 0)
+                                     // v57: bit 3 half duplex (open-drain TX, RX masked while TX shifts)
     input  wire        disable_stb,
 
     // latched channel assignment (top routes the bus + la_bank from these)
     output reg  [3:0]  rx_ch,
     output reg  [3:0]  tx_ch,
     output reg         armed,
+    output reg         tx_od,        // v57: half duplex: la_bank drives TX open drain (low or released)
 
     // ---- TX FIFO write port (cmd_dispatch UART_WRITE) ----
     input  wire        tx_we,
@@ -142,17 +144,22 @@ module uart_engine #(
     // subtractors.  Safe because div >= 2 (the firmware's range, see below).
 
     // ---- RX 2-flop synchroniser ----
+    // v57 half duplex: RX and TX share one wire, so the receiver would read back every byte
+    // TX sends.  While TX shifts a frame (start .. last stop bit) the synchroniser input is
+    // forced idle (high), so the host sees only the other side's bytes.  TX releases the line
+    // for the stop bit, so the pull-up has a whole bit time to bring it high before RX listens.
     reg rx_s0, rx_s1;
+    wire rx_mask;
     always @(posedge clk) begin
         if (rst) begin rx_s0 <= 1'b1; rx_s1 <= 1'b1; end
-        else     begin rx_s0 <= rx_in; rx_s1 <= rx_s0; end
+        else     begin rx_s0 <= rx_in | rx_mask; rx_s1 <= rx_s0; end
     end
 
     // ---- config / arm ----
     always @(posedge clk) begin
         if (rst) begin
             armed <= 1'b0; rx_ch <= 4'd0; tx_ch <= 4'd0; div <= 18'd208;
-            par_en <= 1'b0; par_odd <= 1'b0; stop2 <= 1'b0;
+            par_en <= 1'b0; par_odd <= 1'b0; stop2 <= 1'b0; tx_od <= 1'b0;
         end else begin
             if (cfg_stb) begin
                 rx_ch <= cfg_rx_ch;
@@ -165,6 +172,7 @@ module uart_engine #(
                 par_en  <= (PARITY != 0) & cfg_frame[0];
                 par_odd <= (PARITY != 0) & cfg_frame[1];
                 stop2   <= (PARITY != 0) & cfg_frame[2];
+                tx_od   <= (PARITY != 0) & cfg_frame[3];
                 armed <= cfg_enable;
             end
             if (disable_stb) armed <= 1'b0;
@@ -190,6 +198,7 @@ module uart_engine #(
     reg [3:0]  tx_bit;
     reg [8:0]  tx_sr;                 // v56: {parity, data}; the parity bit goes out as a 9th bit
     reg        tx_s2;                 // v56: in the first of two stop bits
+    assign rx_mask = tx_od & (tx_state != TX_IDLE);
 
     // The bit timer in one logic cell per bit (lc_counter): it loads div on TX_LOAD
     // and at the end of the start and each data bit, and counts down otherwise.

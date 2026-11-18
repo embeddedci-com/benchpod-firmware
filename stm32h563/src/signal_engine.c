@@ -1857,6 +1857,7 @@ void signal_engine_caps(signal_engine_caps_t *out) {
                            ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
     out->uart_frame      = ver >= UART_FRAME_MIN_GW;
+    out->uart_half_duplex = ver >= UART_HALFDUPLEX_MIN_GW;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
@@ -3410,12 +3411,15 @@ int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_
     if (enable && uart_armed_local) return -2;   /* already in use */
     frame &= UART_FRAME_MASK;
     if (frame && s_fpga_version < UART_FRAME_MIN_GW) return -3;
+    if ((frame & UART_FRAME_HALFDUPLEX) && s_fpga_version < UART_HALFDUPLEX_MIN_GW) return -3;
     uart_tx_clear();                             /* a new session starts with nothing queued */
     if (enable) { s_uart_rx_ovf = false; s_uart_rx_par = false; }
 
     int rx = la_wire_index(rx_ch);
     int tx = la_wire_index(tx_ch);
-    if (rx < 0 || tx < 0 || rx == tx) return -1;
+    if (rx < 0 || tx < 0) return -1;
+    /* One wire in half duplex (open-drain TX, RX on the same pin); two otherwise. */
+    if ((rx == tx) != ((frame & UART_FRAME_HALFDUPLEX) != 0)) return -1;
     if (baud == 0) return -1;
 
     /* divisor = round(HFOSC / baud), clamped to what the gateware's bit counter holds: 2 ..
@@ -3424,7 +3428,8 @@ int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_
     if (div < 2)        div = 2;
     if (div > 0x3FFFFu) div = 0x3FFFFu;
 
-    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the frame (v56) */
+    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the frame (v56),
+       bit 4 half duplex (v57) */
     uint8_t args[6] = {
         (uint8_t)rx, (uint8_t)tx,
         (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
@@ -3435,11 +3440,12 @@ int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_
 
     float actual = (float)FPGA_HFOSC_HZ / (float)div;
     /* Integer baud — newlib-nano printf has no %f (the old %.0f printed nothing). */
-    printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c %s\n",
+    printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c%s %s\n",
            rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
            (unsigned long)lroundf(actual),
            !(frame & UART_FRAME_PARITY) ? 'N' : (frame & UART_FRAME_ODD) ? 'O' : 'E',
-           (frame & UART_FRAME_STOP2) ? '2' : '1', enable ? "armed" : "disabled");
+           (frame & UART_FRAME_STOP2) ? '2' : '1',
+           (frame & UART_FRAME_HALFDUPLEX) ? " half-duplex" : "", enable ? "armed" : "disabled");
     return 0;
 }
 

@@ -25,7 +25,7 @@ module tb_uart_engine;
     reg        cfg_stb = 1'b0;
     reg [23:0] cfg_div = 24'd16;   // small bit period for a fast sim
     reg        cfg_enable = 1'b0;
-    reg [2:0]  cfg_frame = 3'd0;     // {stop2, odd, parity}
+    reg [3:0]  cfg_frame = 4'd0;     // {half_duplex, stop2, odd, parity}
 
     // TX FIFO write
     reg        tx_we = 1'b0;
@@ -58,7 +58,7 @@ module tb_uart_engine;
 
     // ---- second receiver on the same wire (v56): its own frame format, for parity errors ----
     reg        cfg2_stb = 1'b0;
-    reg [2:0]  cfg2_frame = 3'd0;
+    reg [3:0]  cfg2_frame = 4'd0;
     reg        rx2_re = 1'b0, rx2_ovf_clr = 1'b0;
     wire [7:0] rx2_rdata;
     wire [8:0] rx2_avail;
@@ -77,6 +77,80 @@ module tb_uart_engine;
 
     integer errors = 0;
 
+    // ---- half duplex (v57): one wire, a pod engine (bit 3) and a peer UART ----
+    // The pod side drives open drain in la_bank (0 = low, 1 = released), the peer here is a
+    // plain engine; with a pull-up both are a wired AND of the two TX levels.
+    reg        hd_stb = 1'b0;
+    reg [23:0] hd_div = 24'd16;
+    reg [3:0]  hd_frame = 4'b1000;
+    reg        hd_we = 1'b0, pr_we = 1'b0, hd_re = 1'b0, pr_re = 1'b0;
+    reg [7:0]  hd_wdata = 8'h00, pr_wdata = 8'h00;
+    wire [7:0] hd_rdata, pr_rdata;
+    wire [8:0] hd_avail, pr_avail;
+    wire       hd_tx, pr_tx, hd_od, hd_txe;
+    wire       hd_line = hd_tx & pr_tx;
+    uart_engine hd (
+        .clk(clk), .rst(rst),
+        .cfg_stb(hd_stb), .cfg_rx_ch(4'd3), .cfg_tx_ch(4'd3),
+        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame(hd_frame), .disable_stb(1'b0),
+        .rx_ch(), .tx_ch(), .armed(), .tx_od(hd_od),
+        .tx_we(hd_we), .tx_wdata(hd_wdata), .tx_full(), .tx_empty(hd_txe),
+        .rx_re(hd_re), .rx_rdata(hd_rdata), .rx_avail(hd_avail),
+        .rx_overflow(), .rx_ovf_clr(1'b0), .rx_frame_err(), .rx_parity_err(),
+        .rx_in(hd_line), .tx_out(hd_tx)
+    );
+    uart_engine peer (
+        .clk(clk), .rst(rst),
+        .cfg_stb(hd_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(4'd1),
+        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame({1'b0, hd_frame[2:0]}), .disable_stb(1'b0),
+        .rx_ch(), .tx_ch(), .armed(), .tx_od(),
+        .tx_we(pr_we), .tx_wdata(pr_wdata), .tx_full(), .tx_empty(),
+        .rx_re(pr_re), .rx_rdata(pr_rdata), .rx_avail(pr_avail),
+        .rx_overflow(), .rx_ovf_clr(1'b0), .rx_frame_err(), .rx_parity_err(),
+        .rx_in(hd_line), .tx_out(pr_tx)
+    );
+
+    // One half-duplex exchange: the pod sends `a`, the peer must get it and the pod must not
+    // read it back; then the peer answers `b` on the same wire and the pod must get it.
+    task hd_exchange(input [23:0] div, input [3:0] frame, input [7:0] a, input [7:0] b,
+                     input [255:0] label);
+        reg [7:0] got; integer bits;
+        begin
+            @(posedge clk); hd_div = div; hd_frame = frame; hd_stb = 1'b1;
+            @(posedge clk); hd_stb = 1'b0;
+            repeat (4) @(posedge clk);
+            if (hd_od !== frame[3]) begin $display("FAIL: %0s tx_od %b", label, hd_od); errors = errors + 1; end
+            bits = 12 * div + 40;
+            @(posedge clk); hd_wdata = a; hd_we = 1'b1; @(posedge clk); hd_we = 1'b0;
+            repeat (bits) @(posedge clk);
+            if (pr_avail[7:0] !== 8'd1) begin
+                $display("FAIL: %0s peer got %0d bytes", label, pr_avail[7:0]); errors = errors + 1;
+            end else begin
+                got = pr_rdata; @(posedge clk); pr_re = 1'b1; @(posedge clk); pr_re = 1'b0; @(posedge clk);
+                if (got !== a) begin $display("FAIL: %0s peer got 0x%02x want 0x%02x", label, got, a); errors = errors + 1; end
+            end
+            if (frame[3] && hd_avail[7:0] !== 8'd0) begin
+                $display("FAIL: %0s the pod read back its own byte", label); errors = errors + 1;
+                while (hd_avail[7:0] != 0) begin @(posedge clk); hd_re = 1'b1; @(posedge clk); hd_re = 1'b0; @(posedge clk); end
+            end
+            if (!frame[3] && hd_avail[7:0] !== 8'd1) begin
+                $display("FAIL: %0s full duplex should echo (%0d)", label, hd_avail[7:0]); errors = errors + 1;
+            end
+            while (hd_avail[7:0] != 0) begin @(posedge clk); hd_re = 1'b1; @(posedge clk); hd_re = 1'b0; @(posedge clk); end
+            @(posedge clk); pr_wdata = b; pr_we = 1'b1; @(posedge clk); pr_we = 1'b0;
+            repeat (bits) @(posedge clk);
+            if (hd_avail[7:0] !== 8'd1) begin
+                $display("FAIL: %0s pod got %0d bytes from the peer", label, hd_avail[7:0]); errors = errors + 1;
+            end else begin
+                got = hd_rdata; @(posedge clk); hd_re = 1'b1; @(posedge clk); hd_re = 1'b0; @(posedge clk);
+                if (got !== b) begin $display("FAIL: %0s pod got 0x%02x want 0x%02x", label, got, b); errors = errors + 1; end
+                else $display("ok:   %0s", label);
+            end
+            while (pr_avail[7:0] != 0) begin @(posedge clk); pr_re = 1'b1; @(posedge clk); pr_re = 1'b0; @(posedge clk); end
+        end
+    endtask
+
+
     // ---- wire sampler (v56): the next frame's bits at mid-bit, start bit first ----
     // Waits for a falling edge on tx_out, then samples n bits (start, data LSB first, parity,
     // stops) div clocks apart, the first half a bit in.
@@ -93,7 +167,7 @@ module tb_uart_engine;
         end
     endtask
 
-    task set_frame(input [2:0] f);
+    task set_frame(input [3:0] f);
         begin
             @(posedge clk); cfg_frame = f; cfg_stb = 1'b1;
             @(posedge clk); cfg_stb = 1'b0;
@@ -316,6 +390,12 @@ module tb_uart_engine;
         if (rx_parity_err !== 1'b0) begin $display("FAIL: matching receiver flagged parity"); errors = errors + 1; end
         set_frame(3'b000);
         tick(20);
+
+        // ---- Test 1h (v57): half duplex on one wire, re-armed with other parameters ----
+        hd_exchange(24'd16, 4'b1000, 8'h3A, 8'hC5, "half duplex 8N1 div 16");
+        hd_exchange(24'd13, 4'b1011, 8'h00, 8'h81, "half duplex 8O1 div 13 (re-arm)");
+        hd_exchange(24'd16, 4'b0000, 8'h5A, 8'h42, "one wire, bit 3 off: echoes");
+        hd_exchange(24'd16, 4'b1000, 8'hFF, 8'h00, "half duplex again");
 
         // ---- Test 2: overflow flag when RX FIFO fills (257 bytes) ----
         // push 257 bytes through; FIFO depth is 256, so at least one is dropped.

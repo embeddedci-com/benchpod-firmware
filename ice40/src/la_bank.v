@@ -58,6 +58,7 @@ module la_bank #(
     input  wire              uart_active,       // UART proxy armed
     input  wire [3:0]        uart_tx_ch,
     input  wire              uart_tx_val,       // TX line level (idle high)
+    input  wire              uart_tx_od,        // v57: half duplex: drive low for 0, release for 1
 
     // ---- stepper override ----
     input  wire              step_active,
@@ -118,7 +119,8 @@ module la_bank #(
         input en; input [3:0] ch;
         onehot = (en && ch < N) ? ({{(N-1){1'b0}}, 1'b1} << ch) : {N{1'b0}};
     endfunction
-    // uart: push-pull TX (idle high).
+    // uart: push-pull TX (idle high), or (v57 half duplex) open drain: 0 drives low, 1 releases
+    // the line to the pull-up, so the DUT may drive the same wire between frames.
     wire [N-1:0] m_uart = onehot(uart_active, uart_tx_ch);
     wire [N-1:0] m_step = onehot(step_active, step_ch);
     wire [N-1:0] m_swdc = onehot(swd_active,  swd_clk_ch);
@@ -134,13 +136,13 @@ module la_bank #(
                             m_swds[c] ? swd_cs_val   :
                             m_step[c] ? step_val     :
                             emu_on[c] ? emu_out[c]   :
-                            m_uart[c] ? uart_tx_val  : s_out[c];
+                            m_uart[c] ? (uart_tx_val & ~uart_tx_od) : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
                             m_swdc[c] ? swd_clk_oe   :
                             m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
                             emu_on[c] ? emu_oe[c]    :
-                            m_uart[c] ? 1'b1         : s_oe[c];
+                            m_uart[c] ? (~uart_tx_val | ~uart_tx_od) : s_oe[c];
     end endgenerate
 
     // ---- bidirectional IO buffers ----

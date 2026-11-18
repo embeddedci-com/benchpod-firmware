@@ -4,6 +4,7 @@
  * escape (and what does not count as one), the suspension during a load_bin upload, the RX
  * pull-up hold and its restore, the re-arm after a gateware reconfiguration, and the teardown.
  * The frame format (parity, stop_bits): parsed, refused on old gateware, kept across a re-arm.
+ * Half duplex (one wire) and the boot-mode entry: the sequence and its order, and the refusals.
  *
  * The soft UART, the pull-up expander, the send ring and the clock are fakes.
  */
@@ -15,6 +16,7 @@
 #include "signal_engine.h"
 #include "i2c_bus.h"
 #include "pico/time.h"
+#include "bp_errors.h"
 
 static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL %s:%d: ", __func__, __LINE__); \
@@ -45,12 +47,43 @@ static size_t g_nfifo;
 static int    g_reads, g_configs, g_status_rc;
 static bool   g_enabled;
 static uint8_t g_frame = 0xFF, g_gw = 56;
+/* The entry sequence's steps, in order, as text ("lo4 rst1 s10 rst0 s10 cfg la4z s10 w2"). */
+static char g_seq[256];
+static void seq(const char *fmt, unsigned v) {
+    size_t n = strlen(g_seq);
+    snprintf(g_seq + n, sizeof(g_seq) - n, n ? " " : "");
+    n = strlen(g_seq);
+    snprintf(g_seq + n, sizeof(g_seq) - n, fmt, v);
+}
+static bool g_pullup[15];
+static bool g_pu_at_cfg;
 int fpga_uart_config_frame(unsigned rx, unsigned tx, uint32_t baud, uint8_t frame, bool en) {
-    (void)rx; (void)tx; (void)baud; g_enabled = en; g_frame = frame; g_configs++; return 0;
+    (void)tx; (void)baud; g_enabled = en; g_frame = frame; g_configs++;
+    g_pu_at_cfg = g_pullup[rx];
+    seq("cfg%u", rx);
+    return 0;
+}
+int fpga_la_set(unsigned ch, int mode) { seq(mode == 0 ? "lo%u" : mode == 2 ? "z%u" : "hi%u", ch); return 0; }
+static bool g_nrst_ok = true;
+bool nrst_ctrl_supported(void) { return g_nrst_ok; }
+void nrst_ctrl_assert(bool a) { seq("rst%u", a); }
+void sleep_ms(uint32_t ms) { seq("s%u", ms); }
+static char g_reply[256];
+static int g_err_code;
+static char g_err_arg[32];
+void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_t *args, size_t n) {
+    (void)c;
+    g_err_code = (int)code;
+    g_err_arg[0] = 0;
+    if (n) {
+        if (args[0].is_str) snprintf(g_err_arg, sizeof(g_err_arg), "%s", args[0].s);
+        else                snprintf(g_err_arg, sizeof(g_err_arg), "%ld", (long)args[0].i);
+    }
+    snprintf(g_reply, sizeof(g_reply), "err:%s", text ? text : "");
 }
 uint8_t signal_engine_fpga_version(void) { return g_gw; }
 void fpga_uart_disable(void) { g_enabled = false; }
-int fpga_uart_write(const uint8_t *d, size_t n) { memcpy(g_dut_in + g_ndut_in, d, n); g_ndut_in += n; return 0; }
+int fpga_uart_write(const uint8_t *d, size_t n) { memcpy(g_dut_in + g_ndut_in, d, n); g_ndut_in += n; seq("w%u", (unsigned)n); return 0; }
 void fpga_uart_tx_pump(void) {}
 int fpga_uart_status(uint16_t *avail, uint8_t *flags) { (void)flags; *avail = 0; return g_status_rc; }
 size_t fpga_uart_read(uint8_t *buf, size_t len) {
@@ -61,7 +94,6 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
     g_nfifo -= n;
     return n;
 }
-static bool g_pullup[15];
 int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
 bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
 bool la_pullups_available(void) { return true; }
@@ -74,7 +106,6 @@ bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t
     (void)c; (void)fn; (void)las; (void)n; (void)free_fns; return true;
 }
 bool require_la_voltage(int c) { (void)c; return true; }
-static char g_reply[256];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
 void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
 
@@ -82,6 +113,7 @@ void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_repl
 static void start(int conn, const char *json) {
     g_proto[conn] = PROTO_JSON;
     g_ntx = g_ndut_in = g_nfifo = 0; g_closed = g_nodelay = -1;
+    g_seq[0] = 0; g_err_code = 0;
     handle_uart_proxy_start(conn, json);
 }
 static void client(int conn, const char *s) { uart_proxy_receive(conn, (const uint8_t *)s, strlen(s)); }
@@ -238,6 +270,90 @@ static void test_frame(void) {
     g_gw = 56;
 }
 
+static void test_half_duplex(void) {
+    g_gw = 57;
+    memset(g_pullup, 0, sizeof(g_pullup));
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
+    CHECK(g_proto[3] == PROTO_UART && g_frame == UART_FRAME_HALFDUPLEX, "one wire: frame %u reply %s", g_frame, g_reply);
+    CHECK(g_pullup[3] && g_pu_at_cfg, "the line's pull-up is not on before the UART arms");
+    CHECK(g_ndut_in == 0 && strstr(g_seq, "rst") == NULL, "no entry asked, but: %s", g_seq);
+    uart_proxy_conn_closed(3);
+    CHECK(!g_pullup[3], "pull-up not restored");
+    /* with parity (RL78 protocol B is 8O1 on one wire) */
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true,\"parity\":\"odd\"}");
+    CHECK(g_frame == (UART_FRAME_HALFDUPLEX | UART_FRAME_PARITY | UART_FRAME_ODD), "8O1 one wire: frame %u", g_frame);
+    /* the re-arm after a gateware swap keeps it */
+    g_frame = 0;
+    uart_proxy_on_gateware_reconfigured();
+    uart_rearm_poll();
+    CHECK(g_frame & UART_FRAME_HALFDUPLEX, "re-arm lost half duplex (%u)", g_frame);
+    uart_proxy_conn_closed(3);
+    /* refusals, nothing armed */
+    int configs = g_configs;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"half_duplex\":true}");
+    CHECK(g_err_code == BP_E_UART_HALF_DUPLEX_TWO_PINS && strcmp(g_err_arg, "3") == 0, "two pins: %d %s", g_err_code, g_reply);
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3}");
+    CHECK(g_err_code == BP_E_UART_SAME_PIN, "same pin without half_duplex: %d %s", g_err_code, g_reply);
+    g_gw = 56;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
+    CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "half_duplex") == 0, "old gateware: %d %s", g_err_code, g_reply);
+    CHECK(g_configs == configs && g_proto[3] == PROTO_JSON, "a refusal armed the UART");
+    /* half_duplex false is the old two-pin UART */
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"half_duplex\":false}");
+    CHECK(g_frame == 0 && g_proto[3] == PROTO_UART, "half_duplex false: frame %u %s", g_frame, g_reply);
+    uart_proxy_conn_closed(3);
+}
+
+static void test_entry(void) {
+    g_gw = 57;
+    /* RL78-style: reset with TOOL0 low, TOOL0 low after the release, released, then 0x00 */
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":2,\"tx\":2,\"half_duplex\":true,"
+             "\"entry\":{\"reset_ms\":5,\"hold_ms\":3,\"idle_ms\":2,\"hex\":\"00\"}}");
+    CHECK(strcmp(g_seq, "lo2 rst1 s5 rst0 s3 cfg2 z2 s2 w1") == 0, "sequence %s", g_seq);
+    CHECK(g_pu_at_cfg, "pull-up off when TX was released");
+    CHECK(g_ndut_in == 1 && g_dut_in[0] == 0, "first byte not sent");
+    CHECK(strcmp(g_reply, "ok:\"uart ready\"") == 0 && g_proto[2] == PROTO_UART, "reply %s", g_reply);
+    uart_proxy_conn_closed(2);
+    /* defaults, several bytes, two pins, tx not held low */
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,"
+             "\"entry\":{\"tx_low\":false,\"hex\":\"3a0Fff\"}}");
+    CHECK(strcmp(g_seq, "rst1 s10 rst0 s10 cfg1 s10 w3") == 0, "sequence %s", g_seq);
+    CHECK(g_ndut_in == 3 && (uint8_t)g_dut_in[0] == 0x3A && (uint8_t)g_dut_in[1] == 0x0F && (uint8_t)g_dut_in[2] == 0xFF,
+          "bytes not sent as given");
+    uart_proxy_conn_closed(2);
+    /* an empty entry object runs the default sequence with no bytes */
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{}}");
+    CHECK(strcmp(g_seq, "lo2 rst1 s10 rst0 s10 cfg1 z2 s10") == 0, "sequence %s", g_seq);
+    uart_proxy_conn_closed(2);
+    /* refusals: nothing touched (no reset, no low, not armed) */
+    const struct { const char *json; int code; const char *arg; } bad[] = {
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"reset_ms\":1001}}", BP_E_UART_ENTRY_INVALID, "reset_ms" },
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"idle_ms\":-1}}",  BP_E_UART_ENTRY_INVALID, "idle_ms" },
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"hold_ms\":\"x\"}}", BP_E_UART_ENTRY_INVALID, "hold_ms" },
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"hex\":\"0\"}}",    BP_E_UART_ENTRY_INVALID, "hex" },
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"hex\":\"zz\"}}",   BP_E_UART_ENTRY_INVALID, "hex" },
+        { "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"hex\":"
+          "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20\"}}", BP_E_UART_ENTRY_INVALID, "hex" },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        int configs = g_configs;
+        start(2, bad[i].json);
+        CHECK(g_err_code == bad[i].code && strcmp(g_err_arg, bad[i].arg) == 0 && g_configs == configs && g_seq[0] == 0,
+              "bad[%zu]: code %d arg %s seq '%s' reply %s", i, g_err_code, g_err_arg, g_seq, g_reply);
+    }
+    /* 32 bytes is the limit, not more */
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{\"hex\":"
+             "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"}}");
+    CHECK(g_ndut_in == 32 && g_proto[2] == PROTO_UART, "32 bytes refused: %s", g_reply);
+    uart_proxy_conn_closed(2);
+    /* a pod without the reset pin */
+    g_nrst_ok = false;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{}}");
+    CHECK(g_err_code == BP_E_UART_ENTRY_NO_RESET_PIN && g_seq[0] == 0, "no reset pin: %d %s", g_err_code, g_seq);
+    g_nrst_ok = true;
+    g_gw = 56;
+}
+
 int main(void) {
     test_start_and_forward();
     test_escape();
@@ -245,6 +361,8 @@ int main(void) {
     test_suspend_for_upload();
     test_teardown_and_rearm();
     test_frame();
+    test_half_duplex();
+    test_entry();
     if (fails) { printf("test_ch_uart: %d FAILED\n", fails); return 1; }
     printf("test_ch_uart: all passed\n");
     return 0;

@@ -221,6 +221,16 @@ void   dap_conn_closed(int conn_id);
 /* UART transparent proxy (command_handler_uart.c). */
 void   handle_uart_proxy_start(int conn_id, const char *json);
 bool   uart_frame_parse(const char *json, uint8_t *frame);   /* parity / stop_bits -> UART_FRAME_* */
+/* uart_proxy_start's "entry" object: the boot-mode entry the pod runs before the ack. */
+#define UART_ENTRY_MS_MAX   1000
+#define UART_ENTRY_HEX_MAX  32
+typedef struct {
+    bool     on, tx_low;
+    uint16_t reset_ms, hold_ms, idle_ms;
+    uint8_t  nhex;
+    uint8_t  hex[UART_ENTRY_HEX_MAX];
+} uart_entry_t;
+bool   uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int *max);
 /* The PROTO_UART receive path: forwards buf to the DUT and watches for the +++ escape. */
 size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
 void   uart_proxy_poll(void);                 /* DUT -> client drain and the escape's guard */
