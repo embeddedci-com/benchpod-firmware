@@ -2065,7 +2065,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 |---|---|---|
 | `none` | default — "LA mode": high-Z, observed by captures | — |
 | `gpio` | [`gpio`](#gpio--use-la-pins-as-gpio) with mode `input` / `output` / `open_drain` | `gpio` mode `off` |
-| `uart_rx`, `uart_tx`, `uart_hd` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
+| `uart_rx`, `uart_tx`, `uart_hd`, `uart_de` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
@@ -2748,6 +2748,8 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 | `parity` | string | no | `"none"` | `"none"`, `"even"` or `"odd"`: a parity bit after the 8 data bits, sent and checked. A received frame with a wrong parity bit is still delivered, and `status` reports `uart_rx_parity_error: true` until the next session. Gateware v56+. |
 | `stop_bits` | integer | no | `1` | `1` or `2`. The pod sends this many; when receiving it checks the first one, as most UARTs do. Gateware v56+. |
 | `half_duplex` | boolean | no | `false` | A one-wire UART: `rx` and `tx` are the same LA channel. The pod only pulls the line low and lets the pull-up hold it high, so the device can answer on the same wire, and it does not read back its own bytes. Use LA1 to LA6 (the pod's pull-up is turned on for the session) or a pull-up on the board. Gateware v57+ (`uart_hd` in the [features table](#features-table)). |
+| `de` | integer | no | none | An RS-485 transceiver's DE (tied to /RE) on this LA channel. The pod drives it high from the moment it has a byte to send, before the start bit, to the end of the last stop bit, and low otherwise, so the transceiver listens whenever the pod is not sending. A pin of its own, not `rx` or `tx`. Gateware v58+ (`uart_de` in the [features table](#features-table)). |
+| `de_active_low` | boolean | no | `false` | Drive `de` low while sending, for a transceiver whose enable is active low. |
 | `entry` | object | no | none | A boot-mode entry the pod runs before the ack, timed on the pod so no network delay sits between the reset and the first byte. See [boot-mode entry](#boot-mode-entry). Needs the pod's reset pin (`nrst_pin` in `caps`). |
 
 #### Boot-mode entry
@@ -2801,6 +2803,8 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `half_duplex` on gateware older than v57 | code `BP0017` |
 | `entry` on a pod without the reset pin | code `BP0020` |
 | an `entry` time out of range, or `hex` not hex or longer than 32 bytes | code `BP0021` |
+| `de` is the `rx` or `tx` channel | code `BP0022` |
+| `de` on gateware older than v58 | code `BP0017` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
 | parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
@@ -2808,7 +2812,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
-`rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART) and released
+`rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
 when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX

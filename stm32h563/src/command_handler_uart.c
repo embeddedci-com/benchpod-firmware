@@ -44,6 +44,8 @@ static uint8_t         uart_rx_buf[256];         /* DUT→client drain buffer */
 static uint8_t         uart_proxy_rx, uart_proxy_tx;   /* the session's pins and baud, kept so a */
 static uint32_t        uart_proxy_baud;                /* gateware reconfig can re-apply them    */
 static uint8_t         uart_proxy_frame;               /* UART_FRAME_* bits (0 = 8N1)            */
+static uint8_t         uart_proxy_de;                  /* RS-485 DE channel, 0 = none (v58)      */
+static bool            uart_proxy_de_inv;              /* DE active low                          */
 static int             uart_rearm_conn = -1;           /* session to re-arm on the next poll     */
 /* True while the proxy is SUSPENDED for the duration of a load_bin upload: we stop touching the
    iCE40 for UART entirely (no per-poll SPI drain) so nothing competes with the upload's PSRAM
@@ -73,6 +75,7 @@ static void uart_proxy_end(int conn_id, bool restore_json) {
     la_pins_release_fn(LA_FN_UART_RX);
     la_pins_release_fn(LA_FN_UART_TX);
     la_pins_release_fn(LA_FN_UART_HD);
+    la_pins_release_fn(LA_FN_UART_DE);
     uart_proxy_conn   = -1;
     uart_plus_count   = 0;
     uart_plus_pending = false;
@@ -169,6 +172,9 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
  *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200,
  *    "parity":"none"|"even"|"odd","stop_bits":1|2,"half_duplex":false,"entry":{...}}
  * parity and stop_bits are optional (8N1); anything but 8N1 needs gateware v56.
+ * de (gateware v58): an LA channel the pod drives as an RS-485 transceiver's DE + /RE, high from
+ * before the first start bit of what it sends to the end of the last stop bit, low otherwise
+ * (de_active_low inverts it), so the transceiver listens whenever the pod is not sending.
  * half_duplex (gateware v57): one wire, rx == tx; TX only pulls the line low and the pull-up
  * holds it high, so the DUT can answer on the same pin, and the pod does not read back its own
  * bytes.  entry: the boot-mode entry run before the ack (uart_entry_parse; needs the reset pin).
@@ -220,6 +226,21 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         return;
     }
     const bool one_wire = (frame & UART_FRAME_HALFDUPLEX) != 0;
+    unsigned de = 0;
+    bool de_inv = false;
+    if (json_get_value(json, "de", s, sizeof(s))) {
+        de = (unsigned)atoi(s);
+        de_inv = bp_json_flag(json, "de_active_low");
+        if (signal_engine_fpga_version() < UART_DE_MIN_GW) {
+            bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart de needs gateware v58+: update the pod's firmware"),
+                                    "de", UART_DE_MIN_GW);
+            return;
+        }
+        if (de == rx || de == tx) {
+            bp_err_uart_de_pin(conn_id, BP_ERR_TEXT("uart de needs a pin of its own, not rx or tx"), (int32_t)de);
+            return;
+        }
+    }
 
     /* Claim both channels first: a proxy sharing a line with SWD or an emulated sensor used
        to lose it silently to la_bank.v's priority.  This also rejects RX/TX on an LA7/LA8
@@ -228,6 +249,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     /* One wire: the pin is claimed once, as UART TX (open drain, so a DUT output is fine). */
     if (!one_wire && !la_claim_or_error(conn_id, LA_FN_UART_RX, &rx_pin, 1, 0)) return;
     if (!la_claim_or_error(conn_id, one_wire ? LA_FN_UART_HD : LA_FN_UART_TX, &tx_pin, 1, 0)) return;
+    uint8_t de_pin = (uint8_t)de;
+    if (de && !la_claim_or_error(conn_id, LA_FN_UART_DE, &de_pin, 1, 0)) return;
 
     /* The pull-up first: a one-wire line floats from the moment TX releases it, and the entry
        sequence releases it before the ack.  See the RX pull-up note below. */
@@ -252,7 +275,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         sleep_ms(entry.hold_ms);
     }
 
-    int rc = fpga_uart_config_frame(rx, tx, baud, frame, true);
+    int rc = fpga_uart_config_de(rx, tx, de, de_inv, baud, frame, true);
     /* Arming takes the pin over from the static low (la_bank: uart above static); clear the
        static driver now so it cannot reappear when the UART disarms. */
     if (entry.on && entry.tx_low) (void)fpga_la_set(tx, 2);
@@ -267,6 +290,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &rx_pin, 1);
         la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, &tx_pin, 1);
     }
+    if (de)
+        la_pins_claim(LA_FN_UART_DE, LA_GPIO_NONE, 0, &de_pin, 1);
 
     /* Verify the iCE40 actually answers before committing to raw UART mode: a bogus
        status read (rx_avail out of range) means the FPGA isn't responding over SPI
@@ -279,6 +304,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         la_pins_release_fn(LA_FN_UART_RX);
         la_pins_release_fn(LA_FN_UART_TX);
         la_pins_release_fn(LA_FN_UART_HD);
+        la_pins_release_fn(LA_FN_UART_DE);
         send_error(conn_id, "uart proxy failed: FPGA not responding (check gateware)");
         return;
     }
@@ -305,6 +331,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     uart_proxy_tx     = (uint8_t)tx;
     uart_proxy_baud   = baud;
     uart_proxy_frame  = frame;
+    uart_proxy_de     = (uint8_t)de;
+    uart_proxy_de_inv = de_inv;
     uart_plus_count   = 0;
     uart_plus_pending = false;
     uart_last_rx_at   = get_absolute_time();
@@ -415,7 +443,8 @@ void uart_rearm_poll(void) {
     if (uart_proxy_conn != conn) return;              /* the session ended meanwhile */
     uint16_t rx_avail = 0;
     fpga_uart_disable();   /* the firmware still marks the old (gone) session armed: -2 otherwise */
-    if (fpga_uart_config_frame(uart_proxy_rx, uart_proxy_tx, uart_proxy_baud, uart_proxy_frame, true) == 0 &&
+    if (fpga_uart_config_de(uart_proxy_rx, uart_proxy_tx, uart_proxy_de, uart_proxy_de_inv, uart_proxy_baud,
+                            uart_proxy_frame, true) == 0 &&
         fpga_uart_status(&rx_avail, NULL) == 0) {
         printf("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
                uart_proxy_rx, uart_proxy_tx);

@@ -287,3 +287,16 @@ sdk = "pass {arg} between 0 and {max}"
 cli = "pass {arg} between 0 and {max}"
 mcp = "pass {arg} between 0 and {max}"
 web = "Set {arg} between 0 and {max}."
+
+[BP0022]
+name = "uart_de_pin"
+area = "uart"
+since = "next"
+args = { la = "int" }
+message = "The UART's DE pin LA{la} is also its rx or tx"
+cause = "DE switches an RS-485 transceiver between sending and listening, so it is a wire of its own, from an LA channel to the transceiver's DE and /RE pins."
+[BP0022.fix]
+sdk = "give de the LA channel wired to the transceiver's DE and /RE, not rx or tx"
+cli = "give --de the LA channel wired to the transceiver's DE and /RE, not rx or tx"
+mcp = "set de to the LA channel wired to the transceiver's DE and /RE, not rx or tx"
+web = "Pick the pin wired to the transceiver's DE and /RE, not the RX or TX pin."

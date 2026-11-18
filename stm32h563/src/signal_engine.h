@@ -776,6 +776,12 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
    while TX sends a frame, so the pod does not read back its own bytes.  For one-wire UARTs. */
 #define UART_HALFDUPLEX_MIN_GW  57u
 #define UART_FRAME_HALFDUPLEX   (1u << 4)
+/* RS-485 DE (gateware >= UART_DE_MIN_GW): flags bit 5 drives a transceiver's DE + /RE on the LA
+   channel in the rx_ch byte's high nibble, active from before the first start bit to the end of
+   the last stop bit; bit 6 makes it active low.  fpga_uart_config_de sets them. */
+#define UART_DE_MIN_GW          58u
+#define UART_FRAME_DE           (1u << 5)
+#define UART_FRAME_DE_INV       (1u << 6)
 #define UART_FRAME_MASK         (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2 | UART_FRAME_HALFDUPLEX)
 /* CMD_UART_STATUS byte 1: bit 0 is rx_avail bit 8, bit 1 (v56) the sticky parity error. */
 #define UART_STATUS1_PARITY_ERR (1u << 1)
@@ -789,6 +795,11 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
 /* fpga_uart_config with a frame format (UART_FRAME_* bits; 0 = 8N1).  -3: frame != 0 and the
    running gateware is older than UART_FRAME_MIN_GW. */
 int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_t frame, bool enable);
+/* fpga_uart_config_frame with an RS-485 DE pin: de_ch is an LA channel (1..14), 0 for none;
+   de_active_low inverts it.  -1 when de_ch is rx_ch or tx_ch, -3 on gateware older than
+   UART_DE_MIN_GW. */
+int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_active_low,
+                        uint32_t baud, uint8_t frame, bool enable);
 
 /* Disarm the UART and release the TX channel to high-Z. */
 void fpga_uart_disable(void);

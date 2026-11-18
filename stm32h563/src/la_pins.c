@@ -54,7 +54,7 @@ const char *la_fn_name(la_fn_t fn) {
         "i2c_sda", "i2c_scl", "step", "step_dir",
         "spi_sck", "spi_mosi", "spi_miso", "spi_cs",
         "sensor_tx", "sensor_rx", "sensor_drdy", "sensor_sck", "sensor_mosi", "sensor_miso", "sensor_cs",
-        "i2cm_sda", "i2cm_scl", "uart_hd",
+        "i2cm_sda", "i2cm_scl", "uart_hd", "uart_de",
     };
     return ((unsigned)fn < (unsigned)LA_FN__COUNT) ? names[fn] : "none";
 }
@@ -129,7 +129,8 @@ static const char *release_hint(la_fn_t fn, unsigned la, char *buf, size_t cap) 
     case LA_FN_GPIO:
         snprintf(buf, cap, "release it with {\"cmd\":\"gpio\",\"la\":%u,\"mode\":\"off\"}", la);
         return buf;
-    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_UART_HD: return "stop the uart proxy first";
+    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_UART_HD: case LA_FN_UART_DE:
+        return "stop the uart proxy first";
     case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: return "end the SWD session first";
     case LA_FN_I2C_SDA: case LA_FN_I2C_SCL:
     case LA_FN_SENSOR_TX: case LA_FN_SENSOR_RX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_SCK:
@@ -249,7 +250,7 @@ void     la_pins_set_dir(unsigned la, la_dir_t d) { if (la_ok(la)) s_dir[la] = (
 bool la_fn_drives(la_fn_t fn, la_gpio_mode_t mode) {
     switch (fn) {
     case LA_FN_GPIO: return mode == LA_GPIO_OUTPUT;
-    case LA_FN_UART_TX: case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: case LA_FN_STEP: case LA_FN_STEP_DIR:
+    case LA_FN_UART_TX: case LA_FN_UART_DE: case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: case LA_FN_STEP: case LA_FN_STEP_DIR:
     case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_CS:
     case LA_FN_SENSOR_TX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_MISO:
         return true;

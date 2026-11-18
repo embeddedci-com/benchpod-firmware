@@ -57,8 +57,12 @@ static void seq(const char *fmt, unsigned v) {
 }
 static bool g_pullup[15];
 static bool g_pu_at_cfg;
-int fpga_uart_config_frame(unsigned rx, unsigned tx, uint32_t baud, uint8_t frame, bool en) {
+static unsigned g_de;
+static bool g_de_inv;
+int fpga_uart_config_de(unsigned rx, unsigned tx, unsigned de, bool de_inv, uint32_t baud, uint8_t frame,
+                        bool en) {
     (void)tx; (void)baud; g_enabled = en; g_frame = frame; g_configs++;
+    g_de = de; g_de_inv = de_inv;
     g_pu_at_cfg = g_pullup[rx];
     seq("cfg%u", rx);
     return 0;
@@ -98,9 +102,11 @@ int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
 bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
 bool la_pullups_available(void) { return true; }
 la_pull_dir_t la_pull_dir(unsigned la) { return la <= 6 ? LA_PULL_UP : la <= 8 ? LA_PULL_DOWN : LA_PULL_NONE; }
-uint16_t la_pins_release_fn(la_fn_t fn) { (void)fn; return 0; }
+static int g_de_claimed = -1;
+uint16_t la_pins_release_fn(la_fn_t fn) { if (fn == LA_FN_UART_DE) g_de_claimed = -1; return 0; }
 void la_pins_claim(la_fn_t fn, la_gpio_mode_t mode, uint8_t level, const uint8_t *las, size_t n) {
-    (void)fn; (void)mode; (void)level; (void)las; (void)n;
+    (void)mode; (void)level; (void)n;
+    if (fn == LA_FN_UART_DE) g_de_claimed = las[0];
 }
 bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t free_fns) {
     (void)c; (void)fn; (void)las; (void)n; (void)free_fns; return true;
@@ -354,6 +360,39 @@ static void test_entry(void) {
     g_gw = 56;
 }
 
+static void test_de(void) {
+    g_gw = 58;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"baud\":19200,\"parity\":\"even\",\"de\":6}");
+    CHECK(g_proto[3] == PROTO_UART && g_de == 6 && !g_de_inv && g_frame == UART_FRAME_PARITY,
+          "de: %u inv %d frame %u reply %s", g_de, g_de_inv, g_frame, g_reply);
+    CHECK(g_de_claimed == 6, "DE pin not claimed (%d)", g_de_claimed);
+    /* a gateware swap re-arms with the same DE */
+    g_de = 0;
+    uart_proxy_on_gateware_reconfigured();
+    uart_rearm_poll();
+    CHECK(g_de == 6, "re-arm lost DE (%u)", g_de);
+    uart_proxy_conn_closed(3);
+    CHECK(g_de_claimed == -1, "DE pin not released");
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"de\":9,\"de_active_low\":true}");
+    CHECK(g_de == 9 && g_de_inv, "active low: de %u inv %d", g_de, g_de_inv);
+    uart_proxy_conn_closed(3);
+    /* without de: none */
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8}");
+    CHECK(g_de == 0 && g_de_claimed == -1, "de without asking (%u)", g_de);
+    uart_proxy_conn_closed(3);
+    /* refusals, nothing armed */
+    int configs = g_configs;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"de\":8}");
+    CHECK(g_err_code == BP_E_UART_DE_PIN && strcmp(g_err_arg, "8") == 0, "de on tx: %d %s", g_err_code, g_reply);
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"de\":7}");
+    CHECK(g_err_code == BP_E_UART_DE_PIN, "de on rx: %d", g_err_code);
+    g_gw = 57;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"de\":6}");
+    CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "de") == 0, "old gateware: %d %s", g_err_code, g_err_arg);
+    CHECK(g_configs == configs && g_proto[3] == PROTO_JSON, "a refusal armed the UART");
+    g_gw = 56;
+}
+
 int main(void) {
     test_start_and_forward();
     test_escape();
@@ -363,6 +402,7 @@ int main(void) {
     test_frame();
     test_half_duplex();
     test_entry();
+    test_de();
     if (fails) { printf("test_ch_uart: %d FAILED\n", fails); return 1; }
     printf("test_ch_uart: all passed\n");
     return 0;
