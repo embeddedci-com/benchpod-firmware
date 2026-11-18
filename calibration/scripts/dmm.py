@@ -197,6 +197,10 @@ class OwonXDM:
     POLL_S = {"S": 0.5, "M": 0.12, "F": 0.03}
     SETTLE_S = 1.5
     DRAIN_S = 0.25                   # how long to wait for a reply to a non-query command
+    # Through a USB-RS232 adapter on the meter's DB9 (not its own CH340 USB port) the meter only
+    # takes CRLF-terminated lines and drops a command that arrives while it is still busy with the
+    # previous one, so those ports get CRLF and a longer pause. DMM_RS232=1/0 overrides the guess.
+    RS232_DRAIN_S = 1.0
 
     def __init__(self, port=None, nplc=10, vrange=10, transport=None, timeout=2.0):
         if transport is None:
@@ -213,6 +217,9 @@ class OwonXDM:
                 raise DMMError(f"cannot open {port}: {e}") from None
         self.port = port
         self.t = transport
+        self.rs232 = self._is_rs232(port)
+        self.eol = "\r\n" if self.rs232 else "\n"
+        self.drain_s = self.RS232_DRAIN_S if self.rs232 else self.DRAIN_S
         self.timeout = timeout
         self.vrange = pick_range(vrange, self.RANGES, self.OVERRANGE)
         self.rate = self._rate_for(nplc)
@@ -263,8 +270,25 @@ class OwonXDM:
 
     # ---- transport -----------------------------------------------------------------------
 
+    @classmethod
+    def _is_rs232(cls, port):
+        """True when `port` is a USB serial adapter other than the meter's own CH340."""
+        env = os.environ.get("DMM_RS232")
+        if env is not None and env != "":
+            return env not in ("0", "no", "false")
+        if not port:
+            return False
+        try:
+            from serial.tools import list_ports
+            for p in list_ports.comports():
+                if p.device == port or p.device.replace("/tty.", "/cu.") == port.replace("/tty.", "/cu."):
+                    return p.vid is not None and p.vid not in cls.USB_VIDS
+        except Exception:
+            pass
+        return False
+
     def _send(self, s):
-        self.t.write((s + "\n").encode("ascii"))
+        self.t.write((s + getattr(self, "eol", "\n")).encode("ascii"))
         flush = getattr(self.t, "flush", None)
         if flush:
             flush()
@@ -280,7 +304,7 @@ class OwonXDM:
 
     def _drain(self, window=None):
         """Read and drop what the meter sends until it has been quiet for `window` seconds."""
-        window = self.DRAIN_S if window is None else window
+        window = getattr(self, "drain_s", self.DRAIN_S) if window is None else window
         while self._readline(timeout=window):
             pass
 
