@@ -92,10 +92,36 @@ int            la_pins_level(unsigned la);     /* commanded level of a gpio outp
 uint16_t       la_pins_mask_fn(la_fn_t fn);    /* pins that currently have this function */
 uint16_t       la_pins_owned_mask(void);       /* pins whose function is not none */
 
-/* Fixed board resistors: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, LA7/LA8 10k down,
-   LA9..LA14 none (ohms NULL). */
+/* ---- pull resistors ----
+   One table per board revision says which directions each channel's resistor can pull and its
+   value (la_pins.c, s_pulls_v3).  Today's boards: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up,
+   LA7/LA8 10k down, LA9..LA14 none.  A host asks for a direction ("pull":"up"|"down"|"off"); the
+   ohms are reported, never chosen.  The older "pullup":"on"|"off" engages the channel's default
+   direction (la_pull_dir). */
+#define LA_PULL_BIT(d) ((uint8_t)(1u << (unsigned)(d)))
+/* The channel's default direction (the one "pullup":"on" engages), LA_PULL_NONE without one. */
 la_pull_dir_t la_pull_dir(unsigned la);
+/* The resistor's value as text ("4.7k"), NULL on a channel without one. */
 const char   *la_pull_ohms(unsigned la);
+/* Can the channel's resistor pull in direction d (UP or DOWN)? */
+bool          la_pull_supports(unsigned la, la_pull_dir_t d);
+/* "up" / "down" / "off" (LA_PULL_NONE). */
+const char   *la_pull_dir_name(la_pull_dir_t d);
+/* "up" / "down" / "off" (also "none") -> d.  false when unknown. */
+bool          la_pull_dir_parse(const char *s, la_pull_dir_t *d);
+/* The supported directions as a JSON array: ["up"], ["down"], ["up","down"] or []. */
+void          la_pull_emit_dirs(bp_emit_t *e, unsigned la);
+
+/* A host's pull request on `la`: `pull` ("up"|"down"|"off", NULL when absent) wins over the
+   alias `pullup` ("on"|"off"|"1"|"0", NULL when absent).  On LA_PULL_REQ_OK *want is the
+   direction to engage (LA_PULL_NONE = off).  "off" is fine on a channel without a resistor. */
+typedef enum {
+    LA_PULL_REQ_OK = 0,
+    LA_PULL_REQ_BAD_VALUE,     /* pull is not up, down or off */
+    LA_PULL_REQ_NO_PULL,       /* the channel has no resistor (BP0023) */
+    LA_PULL_REQ_DIRECTION,     /* the resistor can't pull that way (BP0024) */
+} la_pull_req_t;
+la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want);
 
 /* What GPIO_SET should hold on the pin's static latch: 0 low, 1 high, 2 high-Z.  Only a gpio
    output / open_drain-low pin drives; everything else (none, gpio input, engine functions) is
@@ -135,8 +161,9 @@ bool        la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap);
 void        la_pins_set_target_powered(bool on);
 uint8_t     la_pins_warnings(unsigned la, uint16_t pull_mask);
 
-/* May the pull on `la` be engaged, given the pin's current function? */
-bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap);
+/* May the pull on `la` be engaged in direction `d`, given the pin's current function?  Only a
+   pull-down can conflict. */
+bool la_pins_check_pull_enable(unsigned la, la_pull_dir_t d, char *err, size_t cap);
 /* Are all pins gpio output / open_drain (so a level can be set)? */
 bool la_pins_check_level(const uint8_t *las, size_t n, char *err, size_t cap);
 /* May the LA bank switch from cur_mv to new_mv?  Refused while any pin is owned, unless the
@@ -193,7 +220,7 @@ bool la_step_parse_u32(const char *s, uint32_t *out);
 bool la_step_args_ok(uint32_t steps, uint32_t delay_us, char *err, size_t cap);
 
 /* ---- JSON ---- */
-/* {"la":1,"function":"none","gpio":null,"level":null,"pull":{"dir":"up","ohms":"4.7k","on":false}} */
+/* {"la":1,"function":"none","gpio":null,"level":null,"pull":{"dir":"up","ohms":"4.7k","on":false,"dirs":["up"]}} */
 void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask);
 /* [entry,...] for every pin in `mask`, ascending. */
 void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask);

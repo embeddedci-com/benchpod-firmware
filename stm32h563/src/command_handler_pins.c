@@ -11,6 +11,7 @@
 #include "la_pins.h"
 #include "signal_engine.h"
 #include "i2c_bus.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "bp_limits.h"
@@ -30,8 +31,8 @@
 
 uint16_t la_pull_mask_now(void) {
     uint16_t mask = 0;
-    for (uint8_t la = 1; la <= 8; la++)
-        if (pca9555_la_pullup_enabled(la)) mask |= (uint16_t)(1u << (la - 1u));
+    for (uint8_t la = 1; la <= LA_PINS_COUNT; la++)
+        if (la_pull_ohms(la) && pca9555_la_pullup_enabled(la)) mask |= (uint16_t)(1u << (la - 1u));
     return mask;
 }
 
@@ -302,9 +303,11 @@ void handle_la_dir(int conn_id, const char *json) {
  *
  *   {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
  *        → run a step pulse train on LA N (1..14); the FPGA runs it autonomously.
- *   {"cmd":"la","la":N,"pullup":"on"|"off"}  → switch LA N's pull-up (LA1..8).
- *   {"cmd":"la","la":N}                       → report LA N's pull-up state.
- *   {"cmd":"la"}                              → bitmask of enabled LA pull-ups.
+ *   {"cmd":"la","la":N,"pull":"up"|"down"|"off"} → switch LA N's pull resistor; a direction the
+ *        channel's resistor can't pull is refused (BP0024), a channel without one too (BP0023).
+ *   {"cmd":"la","la":N,"pullup":"on"|"off"}      → the older form: on = the channel's direction.
+ *   {"cmd":"la","la":N}                          → report LA N's pull state.
+ *   {"cmd":"la"}                                 → bitmask of engaged LA pulls.
  *
  * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
  * drive (the former gpio_set) is gone: a pull-up — or its absence, which leaves
@@ -372,50 +375,79 @@ void handle_la(int conn_id, const char *json) {
         return;
     }
 
-    /* --- pull-up set ("pullup":"on|off") or query for one pin (LA1..8) --- */
+    /* --- pull set ("pull":"up|down|off", alias "pullup":"on|off") or query for one channel --- */
     unsigned la = (unsigned)atoi(la_s);
-    if (la < 1 || la > 8) {
-        send_error(conn_id, "no pull-up on this la");   /* LA9-14 / out of range */
+    if (la < 1 || la > LA_PINS_COUNT) {
+        char m[48];
+        snprintf(m, sizeof(m), "LA%u is not a pin (use 1..%u)", la, (unsigned)LA_PINS_COUNT);
+        send_error(conn_id, m);
         return;
     }
 
-    char state_s[8] = {0};
-    if (json_get_value(json, "pullup", state_s, sizeof(state_s))) {
-        char c = state_s[0];
-        bool on = (c == 'o' || c == 'O') ? (state_s[1] == 'n' || state_s[1] == 'N')
-                                         : (atoi(state_s) != 0);
-        /* The other direction of the pull-compatibility rule: LA7/LA8's resistor pulls DOWN,
-           which an open-drain bus / an idle-high UART / SWDIO cannot live with.  Refuse before
-           touching the expander so the wire never briefly contradicts the function on it. */
+    char pull_s[8] = {0}, pullup_s[8] = {0};
+    bool has_pull = json_get_value(json, "pull", pull_s, sizeof(pull_s));
+    bool has_pullup = json_get_value(json, "pullup", pullup_s, sizeof(pullup_s));
+    if (has_pull || has_pullup) {
+        la_pull_dir_t want = LA_PULL_NONE;
+        switch (la_pull_request(la, has_pull ? pull_s : NULL, has_pullup ? pullup_s : NULL, &want)) {
+        case LA_PULL_REQ_OK: break;
+        case LA_PULL_REQ_BAD_VALUE:
+            send_error(conn_id, "pull must be up, down or off");
+            return;
+        case LA_PULL_REQ_NO_PULL: {
+            char m[64];
+            snprintf(m, sizeof(m), "LA%u has no pull resistor on this board", la);
+            bp_err_la_no_pull(conn_id, BP_ERR_TEXT(m), (int32_t)la);
+            return;
+        }
+        case LA_PULL_REQ_DIRECTION: {
+            const char *have = la_pull_dir_name(la_pull_dir(la));
+            char m[64];
+            snprintf(m, sizeof(m), "LA%u supports pull-%s only on this board", la, have);
+            bp_err_la_pull_direction(conn_id, BP_ERR_TEXT(m), (int32_t)la, la_pull_dir_name(want), have);
+            return;
+        }
+        }
+        /* The other direction of the pull-compatibility rule: a pull-DOWN under an open-drain
+           bus / an idle-high UART / SWDIO.  Refuse before touching the expander so the wire never
+           briefly contradicts the function on it. */
         char pull_err[LA_PINS_ERR_MAX];
-        if (on && !la_pins_check_pull_enable(la, pull_err, sizeof(pull_err))) {
+        if (!la_pins_check_pull_enable(la, want, pull_err, sizeof(pull_err))) {
             send_error(conn_id, pull_err);
             return;
         }
-        int rc = pca9555_set_la_pullup((uint8_t)la, on);
-        if (rc == LA_PULLUP_ERR_VOLTAGE) {
-            /* Not a failure to talk to the expander: the resistors are 3V3-referenced
-               and the bank is at 1.8 V, so engaging one would drive the DUT above its
-               own rail. Say which, so the host can switch the bank instead of retrying. */
-            send_error(conn_id, "pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V");
-            return;
-        }
-        if (rc != 0) {
-            send_error(conn_id, "pca9555 write failed");
-            return;
+        /* Today's boards: one switch per channel, which engages its one direction. */
+        if (la_pull_ohms(la)) {
+            int rc = pca9555_set_la_pullup((uint8_t)la, want != LA_PULL_NONE);
+            if (rc == LA_PULLUP_ERR_VOLTAGE) {
+                /* Not a failure to talk to the expander: the resistors are 3V3-referenced
+                   and the bank is at 1.8 V, so engaging one would drive the DUT above its
+                   own rail. Say which, so the host can switch the bank instead of retrying. */
+                send_error(conn_id, "pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V");
+                return;
+            }
+            if (rc != 0) {
+                send_error(conn_id, "pca9555 write failed");
+                return;
+            }
         }
     }
 
-    /* "pull" says which way the channel's fixed resistor goes: LA1-LA6 up,
-       LA7/LA8 down. Without it "ohms" is ambiguous, and a client that assumed
-       every biased channel pulls up would drive an open-drain bus the wrong way. */
-    char payload[128];
-    snprintf(payload, sizeof(payload),
-             "{\"la\":%u,\"pullup\":%d,\"ohms\":\"%s\",\"pull\":\"%s\",\"pullups_available\":%d}",
-             la, pca9555_la_pullup_enabled((uint8_t)la) ? 1 : 0,
-             pca9555_la_pullup_ohms((uint8_t)la),
-             pca9555_la_pull_is_down((uint8_t)la) ? "down" : "up",
-             la_pullups_available() ? 1 : 0);
+    /* "state" is what the channel does now (up / down / off) and "dirs" every way it can pull.
+       The older fields stay for older hosts: "pullup" 1 when engaged, "pull" the channel's default
+       direction ("none" without a resistor), "ohms" its value. */
+    bool on = pca9555_la_pullup_enabled((uint8_t)la);
+    la_pull_dir_t dflt = la_pull_dir(la);
+    bp_emit_t e;
+    char payload[200];
+    bp_emit_init(&e, payload, sizeof(payload));
+    bp_emit(&e, "{\"la\":%u,\"pullup\":%d,\"ohms\":\"%s\",\"pull\":\"%s\",\"state\":\"%s\",\"dirs\":",
+            la, on ? 1 : 0, la_pull_ohms(la) ? la_pull_ohms(la) : "",
+            dflt == LA_PULL_NONE ? "none" : la_pull_dir_name(dflt),
+            la_pull_dir_name(on ? dflt : LA_PULL_NONE));
+    la_pull_emit_dirs(&e, la);
+    bp_emit(&e, ",\"pullups_available\":%d}", la_pullups_available() ? 1 : 0);
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);
 }
 

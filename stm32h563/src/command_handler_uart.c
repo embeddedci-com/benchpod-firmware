@@ -255,7 +255,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     /* The pull-up first: a one-wire line floats from the moment TX releases it, and the entry
        sequence releases it before the ack.  See the RX pull-up note below. */
     uart_rx_pu_ch = -1;
-    if (la_pull_dir(rx) == LA_PULL_UP && la_pullups_available()) {
+    if (la_pull_supports(rx, LA_PULL_UP) && la_pullups_available()) {
         uart_rx_pu_ch   = (int)rx;
         uart_rx_pu_prev = pca9555_la_pullup_enabled((uint8_t)rx);
         if (pca9555_set_la_pullup((uint8_t)rx, true) != 0) {

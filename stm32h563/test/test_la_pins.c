@@ -56,6 +56,70 @@ static void test_defaults_and_names(void) {
     CHECK(la_pull_dir(9) == LA_PULL_NONE && la_pull_ohms(12) == NULL);
     CHECK_STR(la_pull_ohms(3), "2.2k");
     CHECK_STR(la_pull_ohms(7), "10k");
+    CHECK(la_pull_ohms(0) == NULL && la_pull_ohms(15) == NULL && la_pull_dir(15) == LA_PULL_NONE);
+}
+
+/* The pull table (one per board revision) and a host's pull request against it. */
+static void test_pull_table_and_requests(void) {
+    /* today's boards: LA1-LA6 pull up only, LA7/LA8 down only, LA9-LA14 have none */
+    for (unsigned la = 1; la <= 14; la++) {
+        bool up = la <= 6, down = la == 7 || la == 8;
+        CHECK(la_pull_supports(la, LA_PULL_UP) == up);
+        CHECK(la_pull_supports(la, LA_PULL_DOWN) == down);
+        CHECK(!la_pull_supports(la, LA_PULL_NONE));
+    }
+    CHECK_STR(la_pull_ohms(1), "4.7k");
+    CHECK_STR(la_pull_ohms(5), "10k");
+    CHECK_STR(la_pull_dir_name(LA_PULL_UP), "up");
+    CHECK_STR(la_pull_dir_name(LA_PULL_DOWN), "down");
+    CHECK_STR(la_pull_dir_name(LA_PULL_NONE), "off");
+
+    la_pull_dir_t d;
+    CHECK(la_pull_dir_parse("up", &d) && d == LA_PULL_UP);
+    CHECK(la_pull_dir_parse("down", &d) && d == LA_PULL_DOWN);
+    CHECK(la_pull_dir_parse("off", &d) && d == LA_PULL_NONE);
+    CHECK(la_pull_dir_parse("none", &d) && d == LA_PULL_NONE);
+    CHECK(!la_pull_dir_parse("on", &d) && !la_pull_dir_parse("", &d) && !la_pull_dir_parse(NULL, &d));
+
+    /* "pull": the direction asked for */
+    d = LA_PULL_DOWN;
+    CHECK(la_pull_request(1, "up", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
+    CHECK(la_pull_request(1, "off", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    CHECK(la_pull_request(7, "down", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
+    CHECK(la_pull_request(7, "up", NULL, &d) == LA_PULL_REQ_DIRECTION);
+    CHECK(la_pull_request(3, "down", NULL, &d) == LA_PULL_REQ_DIRECTION);
+    CHECK(la_pull_request(9, "up", NULL, &d) == LA_PULL_REQ_NO_PULL);
+    CHECK(la_pull_request(14, "down", NULL, &d) == LA_PULL_REQ_NO_PULL);
+    d = LA_PULL_UP;
+    CHECK(la_pull_request(9, "off", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);  /* nothing to do */
+    CHECK(la_pull_request(1, "sideways", NULL, &d) == LA_PULL_REQ_BAD_VALUE);
+    CHECK(la_pull_request(1, "on", NULL, &d) == LA_PULL_REQ_BAD_VALUE);   /* on/off is the alias' */
+
+    /* "pullup": the older alias, on = the channel's own direction */
+    CHECK(la_pull_request(2, NULL, "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
+    CHECK(la_pull_request(8, NULL, "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
+    CHECK(la_pull_request(8, NULL, "1", &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
+    CHECK(la_pull_request(8, NULL, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    CHECK(la_pull_request(8, NULL, "0", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    CHECK(la_pull_request(10, NULL, "on", &d) == LA_PULL_REQ_NO_PULL);
+    CHECK(la_pull_request(10, NULL, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    /* both given: "pull" wins */
+    CHECK(la_pull_request(7, "off", "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+
+    /* the supported directions as JSON */
+    char buf[32];
+    bp_emit_t e;
+    bp_emit_init(&e, buf, sizeof(buf)); la_pull_emit_dirs(&e, 1);  CHECK_STR(buf, "[\"up\"]");
+    bp_emit_init(&e, buf, sizeof(buf)); la_pull_emit_dirs(&e, 8);  CHECK_STR(buf, "[\"down\"]");
+    bp_emit_init(&e, buf, sizeof(buf)); la_pull_emit_dirs(&e, 11); CHECK_STR(buf, "[]");
+
+    /* a pull-up never conflicts; switching off never does */
+    char err[LA_PINS_ERR_MAX];
+    la_pins_reset();
+    la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 7 }, 1);
+    CHECK(la_pins_check_pull_enable(7, LA_PULL_NONE, err, sizeof(err)));
+    CHECK(!la_pins_check_pull_enable(7, LA_PULL_DOWN, err, sizeof(err)));
+    la_pins_reset();
 }
 
 static void test_claims_and_conflicts(void) {
@@ -126,7 +190,7 @@ static void test_pull_rules(void) {
     /* claiming onto an engaged pull-down: the conflicting functions */
     CHECK(!claim(LA_FN_UART_RX, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK_STR(err, "pull conflict: LA7 has its 10k pull-down engaged, which uart_rx can't work with "
-                   "(the line idles high); disable it with {\"cmd\":\"la\",\"la\":7,\"pullup\":\"off\"} "
+                   "(the line idles high); disable it with {\"cmd\":\"la\",\"la\":7,\"pull\":\"off\"} "
                    "or use another channel");
     CHECK(!claim(LA_FN_I2C_SCL, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which i2c_scl can't work with (an open-drain bus needs pull-ups)") != NULL);
@@ -154,16 +218,16 @@ static void test_pull_rules(void) {
     /* engaging a pull on an owned pin (the other direction) */
     la_pins_reset();
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 8 }, 1);
-    CHECK(!la_pins_check_pull_enable(8, err, sizeof(err)));
+    CHECK(!la_pins_check_pull_enable(8, la_pull_dir(8), err, sizeof(err)));
     CHECK_STR(err, "pull conflict: LA8 is used by uart_rx, which can't work with the 10k pull-down (the line idles high)");
-    CHECK(la_pins_check_pull_enable(7, err, sizeof(err)));   /* LA7 is free */
+    CHECK(la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));   /* LA7 is free */
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
-    CHECK(la_pins_check_pull_enable(3, err, sizeof(err)));   /* pull-up: fine */
+    CHECK(la_pins_check_pull_enable(3, la_pull_dir(3), err, sizeof(err)));   /* pull-up: fine */
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 7 }, 1);
-    CHECK(!la_pins_check_pull_enable(7, err, sizeof(err)));
+    CHECK(!la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));
     CHECK_STR(err, "pull conflict: LA7 is used by gpio open_drain, which can't work with the 10k pull-down (a released line would read low)");
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, (uint8_t[]){ 7 }, 1);
-    CHECK(la_pins_check_pull_enable(7, err, sizeof(err)));
+    CHECK(la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));
 }
 
 static void test_gpio_modes_and_levels(void) {
@@ -333,7 +397,7 @@ static void test_sensor_owner(void) {
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));
     la_pins_emit_entry(&e, 1, 0);
-    CHECK_STR(buf, "{\"la\":1,\"function\":\"i2c_sda\",\"owner\":\"sensor:env+1\",\"gpio\":null,\"level\":null,\"pull\":{\"dir\":\"up\",\"ohms\":\"4.7k\",\"on\":false}}");
+    CHECK_STR(buf, "{\"la\":1,\"function\":\"i2c_sda\",\"owner\":\"sensor:env+1\",\"gpio\":null,\"level\":null,\"pull\":{\"dir\":\"up\",\"ohms\":\"4.7k\",\"on\":false,\"dirs\":[\"up\"]}}");
     /* a pull-down under a UART sensor line is refused like under the proxy */
     CHECK(!claim(LA_FN_SENSOR_RX, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, PULL(7)));
     la_pins_release(1);
@@ -349,17 +413,17 @@ static void test_json_entries(void) {
 
     bp_emit_init(&e, buf, sizeof(buf));
     la_pins_emit_entry(&e, 1, 0);
-    CHECK_STR(buf, "{\"la\":1,\"function\":\"none\",\"gpio\":null,\"level\":null,\"pull\":{\"dir\":\"up\",\"ohms\":\"4.7k\",\"on\":false}}");
+    CHECK_STR(buf, "{\"la\":1,\"function\":\"none\",\"gpio\":null,\"level\":null,\"pull\":{\"dir\":\"up\",\"ohms\":\"4.7k\",\"on\":false,\"dirs\":[\"up\"]}}");
 
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 8 }, 1);
     bp_emit_init(&e, buf, sizeof(buf));
     la_pins_emit_entry(&e, 8, PULL(8));
-    CHECK_STR(buf, "{\"la\":8,\"function\":\"gpio\",\"gpio\":\"open_drain\",\"level\":1,\"pull\":{\"dir\":\"down\",\"ohms\":\"10k\",\"on\":true}}");
+    CHECK_STR(buf, "{\"la\":8,\"function\":\"gpio\",\"gpio\":\"open_drain\",\"level\":1,\"pull\":{\"dir\":\"down\",\"ohms\":\"10k\",\"on\":true,\"dirs\":[\"down\"]}}");
 
     la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, (uint8_t[]){ 12 }, 1);
     bp_emit_init(&e, buf, sizeof(buf));
     la_pins_emit_list(&e, PULL(8) | PULL(12), 0);
-    CHECK_STR(buf, "[{\"la\":8,\"function\":\"gpio\",\"gpio\":\"open_drain\",\"level\":1,\"pull\":{\"dir\":\"down\",\"ohms\":\"10k\",\"on\":false}},"
+    CHECK_STR(buf, "[{\"la\":8,\"function\":\"gpio\",\"gpio\":\"open_drain\",\"level\":1,\"pull\":{\"dir\":\"down\",\"ohms\":\"10k\",\"on\":false,\"dirs\":[\"down\"]}},"
                    "{\"la\":12,\"function\":\"swd_dio\",\"gpio\":null,\"level\":null,\"pull\":null}]");
 
     /* Worst case the la_pins / gpio read reply can reach: every pin a gpio open_drain with its
@@ -437,7 +501,7 @@ static void test_direction_and_warnings(void) {
     bp_emit_init(&e, buf, sizeof(buf));
     la_pins_set_level(3, 1);
     la_pins_emit_entry(&e, 3, PULL(3));
-    CHECK_STR(buf, "{\"la\":3,\"function\":\"gpio\",\"gpio\":\"output\",\"level\":1,\"pull\":{\"dir\":\"up\",\"ohms\":\"2.2k\",\"on\":true},\"dir\":\"dut_input\",\"warn\":1}");
+    CHECK_STR(buf, "{\"la\":3,\"function\":\"gpio\",\"gpio\":\"output\",\"level\":1,\"pull\":{\"dir\":\"up\",\"ohms\":\"2.2k\",\"on\":true,\"dirs\":[\"up\"]},\"dir\":\"dut_input\",\"warn\":1}");
     for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
 }
 
@@ -484,6 +548,7 @@ int main(void) {
     test_defaults_and_names();
     test_claims_and_conflicts();
     test_pull_rules();
+    test_pull_table_and_requests();
     test_gpio_modes_and_levels();
     test_step_plans();
     test_step_args();

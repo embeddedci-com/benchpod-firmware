@@ -214,7 +214,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay, 2 = sensor emulation) | object | no |
 | `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
 | `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
-| `la` | T1 | LA pin control: step pulse trains + pull-ups (LA1-8) | object | no |
+| `la` | T1 | LA pin control: step pulse trains + pull resistors (up/down/off) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
 | `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
@@ -1935,11 +1935,11 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 ### `la` — logic-analyzer pin control
 
 A single command for the LA bank. The action is inferred from the fields present:
-**step** (when `steps` is given), **pull-up set** (when `pullup` is given), **pull-up
-query** (a bare `la`), or **pull-up bitmask** (no `la`). It replaces the former
+**step** (when `steps` is given), **pull set** (when `pull`, or the older `pullup`, is
+given), **pull query** (a bare `la`), or **pull bitmask** (no `la`). It replaces the former
 `gpio_set` / `gpio_step` / `pullup` / `pullup_status` commands. There is no active-drive
-action — a pull-up, or its absence (which leaves the board's pull-down), sets a line's
-idle level instead.
+action here (that is [`gpio`](#gpio--drive-and-read-la-pins-as-gpio)); a pull resistor
+sets a line's idle level.
 
 #### Step a pulse train
 
@@ -1963,55 +1963,67 @@ Response:
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
 ```
 
-#### Switch (or query) an LA pin pull-up
+#### Switch (or query) an LA pin pull resistor
 
-Connects/disconnects a pull-up resistor on an LA pin. Each pin's pull-up is gated by an
-SN74LVC2G66 analog switch driven from a PCA9555 IO-expander line: **on** drives the ctrl
-line high (switch closed, resistor in circuit); **off** sets it high-Z (a PCB pull-down
-holds the switch open). Only **LA1–8** carry a bias network; the resistor and its
-direction are fixed per pin:
+Engages or releases the pull resistor on an LA channel, in a direction: `up`, `down` or
+`off`. The host names the direction only. The resistor value is reported, never chosen:
+on boards with more than one value per channel the firmware picks it from the pin's
+function. Which channels have a resistor, and which way each one can pull, depends on
+the board. The reply and [`la_pins`](#la_pins--report-every-la-pin) say it per channel
+(`dirs`). On today's boards each resistor pulls one way only:
 
-| LA pin | Network | | LA pin | Network |
+| LA pin | Resistor | | LA pin | Resistor |
 |---|---|---|---|---|
 | 1 | 4.7k pull-**up** | | 5 | 10k pull-**up** |
 | 2 | 4.7k pull-**up** | | 6 | 10k pull-**up** |
 | 3 | 2.2k pull-**up** | | 7 | 10k pull-**down** |
 | 4 | 2.2k pull-**up** | | 8 | 10k pull-**down** |
 
-**LA7 and LA8 pull DOWN, not up.** They are driven by the same `pullup` field and the
-same analog switch as LA1-LA6 — only the resistor's other end differs — so a client
-that assumes every biased channel pulls up will drive an open-drain bus the wrong way.
-The `pull` field in the response says which way each one goes. LA9-LA14 have no
-network at all.
+LA9-LA14 have none. Asking for a direction a channel can't pull is refused with
+[BP0024](../errors/ERRORS.md) ("LA7 supports pull-down only on this board"), and `up` or
+`down` on a channel without a resistor with [BP0023](../errors/ERRORS.md) ("LA9 has no
+pull resistor on this board"). `off` is always accepted, also on a channel without one.
 
-All of them default to **off (high-Z)** at boot.
+All of them default to **off** at boot.
 
 > **Only usable at a 3.3 V LA bank.** The resistors are referenced to **+3V3**, not to
 > the LA bank rail, so the firmware refuses to engage one while the bank is at 1.8 V
 > (see [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage)). Switching the bank
-> down to 1.8 V also releases any pull-up that is currently on. Turning one *off* is
+> down to 1.8 V also releases any pull that is currently on. Turning one *off* is
 > always allowed.
 
 ```json
-{"cmd": "la", "la": 3, "pullup": "on"}
+{"cmd": "la", "la": 3, "pull": "up"}
 ```
 
-- `la` (required for a per-pin op): LA pin `1`–`8`.
-- `pullup` (optional): `"on"`/`"off"` (or `1`/`0`). **Omit `pullup`** — a bare
-  `{"cmd":"la","la":N}` — to **query** the current state without changing it.
+- `la` (required for a per-pin op): LA pin `1`-`14`.
+- `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
+- `pullup` (optional, the older form, still accepted): `"on"`/`"off"` (or `1`/`0`). `on`
+  engages the channel's own direction (`up` on LA1-LA6, `down` on LA7/LA8). `pull` wins
+  when both are given.
+- **Omit both** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
+  changing it.
 
 Response:
 
 ```json
-{"status": "ok", "data": {"la": 3, "pullup": 1, "ohms": "2.2k", "pull": "up", "pullups_available": 1}}
+{"status": "ok", "data": {"la": 3, "pullup": 1, "ohms": "2.2k", "pull": "up", "state": "up", "dirs": ["up"], "pullups_available": 1}}
 ```
 
-`pullup` is `1` when the resistor is connected, `0` when high-Z. `pull` is `"up"` for
-LA1-LA6 and `"down"` for LA7/LA8, and does not change with state. `pullups_available`
-is `1` only while the LA bank is at 3.3 V — when it is `0`, every enable request on
-this pod is refused until the bank is switched back.
+| Field | Meaning |
+|---|---|
+| `state` | What the channel does now: `"up"`, `"down"` or `"off"`. |
+| `dirs` | Every direction the channel can pull: `["up"]`, `["down"]`, `["up","down"]`, or `[]` without a resistor. |
+| `ohms` | The resistor's value (`""` without one). |
+| `pull` | The channel's default direction, the one `pullup:"on"` engages (`"none"` without a resistor). |
+| `pullup` | `1` when the resistor is engaged (kept for older hosts; `state` says the same). |
+| `pullups_available` | `1` only while the LA bank is at 3.3 V: at `0` every `up`/`down` request is refused until the bank is switched back. |
 
-#### Read all pull-ups as a bitmask
+Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `state`
+and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
+(SDK, MCP, CLI, web) send `pull` to new firmware and `pullup` to older firmware.
+
+#### Read all pulls as a bitmask
 
 Send `la` with no channel:
 
@@ -2025,8 +2037,8 @@ Response:
 {"status": "ok", "data": {"la_pullup_mask": 5, "pullups_available": 1}}
 ```
 
-`la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull-up is on (here `0b00000101` =
-LA1 and LA3 enabled). `pullups_available` reports whether a pull-up can be engaged at
+`la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
+pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull-up can be engaged at
 the current bank voltage (`1` = bank at 3.3 V).
 
 #### Error cases
@@ -2041,8 +2053,11 @@ the current bank voltage (`1` = bank at 3.3 V).
 | step `la` invalid or out of range | `"invalid args"` |
 | `dir_la` invalid, or equal to `la` | `"invalid dir_la"` / `"dir_la must be a different pin than la"` |
 | the step or direction pin belongs to another function | `"pin conflict: LA<n> is in use by <function>; <how to release>"` |
-| pull-up `la` outside 1–8 (incl. LA9–12) | `"no pull-up on this la"` |
-| pull-up enable with the LA bank at 1.8 V | `"pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V"` |
+| `la` outside 1-14 | `"LA<n> is not a pin (use 1..14)"` |
+| `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
+| `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
+| a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
+| `up`/`down` with the LA bank at 1.8 V | `"pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V"` |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | I2C write to the PCA9555 failed | `"pca9555 write failed"` |
 
@@ -2129,12 +2144,12 @@ whose pull is engaged, and when engaging a pull on a pin that already has a func
 | `swd_dio` | ok | **conflict** — SWDIO is pulled up when released |
 
 ```
-pull conflict: LA7 has its 10k pull-down engaged, which uart_rx can't work with (the line idles high); disable it with {"cmd":"la","la":7,"pullup":"off"} or use another channel
+pull conflict: LA7 has its 10k pull-down engaged, which uart_rx can't work with (the line idles high); disable it with {"cmd":"la","la":7,"pull":"off"} or use another channel
 pull conflict: LA7 is used by i2c_sda, which can't work with the 10k pull-down (an open-drain bus needs pull-ups)
 ```
 
 The first form comes from a claim (`uart_proxy_start`, `dap_start`, `sensor_start`, `gpio`),
-the second from `{"cmd":"la","la":7,"pullup":"on"}` on a pin that is already in use.
+the second from `{"cmd":"la","la":7,"pull":"down"}` on a pin that is already in use.
 
 ---
 
@@ -2151,8 +2166,8 @@ Response:
 
 ```json
 {"status":"ok","data":{"pins":[
-  {"la":1,"function":"none","gpio":null,"level":null,"pull":{"dir":"up","ohms":"4.7k","on":false}},
-  {"la":2,"function":"gpio","gpio":"output","level":1,"pull":{"dir":"up","ohms":"4.7k","on":false}},
+  {"la":1,"function":"none","gpio":null,"level":null,"pull":{"dir":"up","ohms":"4.7k","on":false,"dirs":["up"]}},
+  {"la":2,"function":"gpio","gpio":"output","level":1,"pull":{"dir":"up","ohms":"4.7k","on":false,"dirs":["up"]}},
   {"la":9,"function":"uart_rx","gpio":null,"level":null,"pull":null}
 ],"levels":1234}}
 ```
@@ -2162,7 +2177,7 @@ Response:
 | `function` | one of `none`, `gpio`, `uart_rx`, `uart_tx`, `swd_clk`, `swd_dio`, `i2c_sda`, `i2c_scl`, `step`, `step_dir`, `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs`, the `sensor_*` functions, `i2cm_sda`, `i2cm_scl` |
 | `gpio` | `null`, or the gpio mode (`input` / `output` / `open_drain`) |
 | `level` | the **commanded** level of a gpio `output` / `open_drain` pin, else `null` |
-| `pull` | `null` on LA9–LA14; otherwise the fixed resistor and whether it is engaged |
+| `pull` | `null` on a channel without a resistor (LA9-LA14 today); otherwise `dir` (the way it pulls when on), `ohms`, `on` (engaged) and `dirs` (every direction it can pull, firmware with `la_pull_dir`) |
 | `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
 | `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
@@ -2247,7 +2262,7 @@ reading pin levels needs gateware v35 or newer (this pod runs v34)
 The affected pins, in the same entry shape `la_pins` uses:
 
 ```json
-{"status":"ok","data":{"pins":[{"la":5,"function":"gpio","gpio":"output","level":1,"pull":{"dir":"up","ohms":"10k","on":false}}]}}
+{"status":"ok","data":{"pins":[{"la":5,"function":"gpio","gpio":"output","level":1,"pull":{"dir":"up","ohms":"10k","on":false,"dirs":["up"]}}]}}
 ```
 
 #### Error cases
@@ -3008,14 +3023,14 @@ command and reply fits one cloud frame.
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
 | `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
-| `pullups` | `pod` (default): both pins must be LA1..LA6 with the pod's pull-up switched on (`{"cmd":"la","la":1,"pullup":"on"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
+| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
 Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
 
 Errors: `the I2C master needs gateware v55+: update the pod's firmware`, `I2C needs pull-ups: switch
-on LA1's with {"cmd":"la","la":1,"pullup":"on"}, or pass "pullups":"external"`, `LA7 has no pod
-pull-up (only LA1..LA6 do)...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
+on LA1's with {"cmd":"la","la":1,"pull":"up"}, or pass "pullups":"external"`, `LA7 has no pod
+pull-up on this board...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
 session first`, and the usual `pin conflict:` / `pull conflict:`.
 
 ### `i2c_stop` / `i2c_status`
@@ -4575,7 +4590,7 @@ on the prefix and show the rest to the user:
 | Prefix | Raised by | Details |
 |---|---|---|
 | `pin conflict: ` | any command claiming an LA pin (`gpio`, `uart_proxy_start`, `dap_start`, `sensor_start`, the `la` step train, SCPI `DIGital:*`) | [pin ownership](#la-pin-ownership) |
-| `pull conflict: ` | the same claims, and `{"cmd":"la",…,"pullup":"on"}` | [pull compatibility](#la-pin-ownership) |
+| `pull conflict: ` | the same claims, and `{"cmd":"la",…,"pull":"down"}` | [pull compatibility](#la-pin-ownership) |
 | `trigger timeout: ` | `capture`, `capture_dual`, `la_capture` with a `trigger` | [capture triggers](#capture-triggers) |
 
 ---
@@ -4604,8 +4619,8 @@ $ nc 192.168.1.220 8080
 {"cmd":"dac_stop"}
 {"status":"ok","data":null}
 
-{"cmd":"la","la":1,"pullup":"on"}
-{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k","pull":"up","pullups_available":1}}
+{"cmd":"la","la":1,"pull":"up"}
+{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k","pull":"up","state":"up","dirs":["up"],"pullups_available":1}}
 
 {"cmd":"la","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
