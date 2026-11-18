@@ -31,6 +31,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
         with:
+          # Authenticated release lookups, as in test.yml: the anonymous API limit (60 an hour) is
+          # shared per runner IP, and the sweep failed on it before running a seed.
+          github-token: ${{ github.token }}
           version: '2026-05-13'   # keep in step with test.yml
       - name: Synthesize
         run: make -C ice40 bench_pod_fpga_vbench_pod_${{ matrix.image }}.json
