@@ -1,0 +1,706 @@
+# BenchPod features: the one source of truth for which firmware and gateware have which feature.
+#
+# The pod no longer announces every feature. It announces `features_rev` (BP_FEATURES_REV, the
+# `revision` below, built in from this file), the running gateware, the running FPGA image and a
+# few hardware facts; every client (SDK, MCP, CLI, server, web) looks the rest up here. Copies of
+# features/features.json are bundled in each of them (their scripts/sync-feature-map.sh), so a
+# pod works without a network connection.
+#
+# A client decides for a pod like this:
+#   1. The pod sends features_rev: a feature is there when its `rev` <= features_rev, the running
+#      gateware >= `gateware`, the board matches (`board`, default any) and every `requires`
+#      fact holds.
+#   2. No features_rev but a status `caps` list (older firmware): the list, as before.
+#   3. Neither: the firmware version against `firmware` (the floor when it does not parse).
+#
+# Rules:
+# - A new feature gets a new entry with `rev` = `revision` + 1, and `revision` goes up with it, in
+#   the same pull request as the code. Two branches adding entries conflict on `revision`: merge
+#   one, then renumber the other.
+# - `firmware` is the first release with it, "next" until released. The release pull request
+#   (the version.h bump) runs `tools/gen_features.py --release <version>`.
+# - `gateware` is the lowest gateware version, checked against the RUNNING gateware; `gw_const`
+#   names the firmware constant it equals (CI checks it).
+# - Entries are never removed: one the firmware stopped having gets `status = "retired"`.
+# - The status `caps` list is frozen: every name in it is an entry's `legacy_caps` or a fact's,
+#   and no new name goes in (CI checks it). New features exist only here.
+# - `floor` is the oldest firmware on a shipped pod (v3r1 boards, from 2026-10-19). Entries older
+#   than that say the floor; `dated` says how the version was found: tag (the first release that
+#   announced it), floor, or code (no flag; from the code or the docs).
+# - Text is American English, no em-dashes, no chip part numbers (the docs show it).
+#
+# After an edit run `python3 tools/gen_features.py` (CI runs it with --check). It writes
+# features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
+
+schema = 1
+revision = 1
+floor = "3.9.2"
+docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
+
+# Facts the pod still announces, per pod or at runtime. `status` / `frame`: the field that has it
+# (a top-level status field, or the cloud capabilities frame); `hw`: a name in the status `hw`
+# list (the reply without `caps`); `legacy_caps`: its name in the old status `caps` list.
+[facts.analog]
+status = "analog"
+frame = "analog"
+legacy_caps = "analog"
+note = "The board has the analog front end. A missing field means true (firmware before 3.6.0)."
+
+[facts.nrst_pin]
+status = "nrst_pin"
+frame = "nrst_pin"
+legacy_caps = "nrst_pin"
+note = "The DUT reset pin (board rev3+)."
+
+[facts.emu_image]
+status = "sensors_digital"
+frame = "sensors_digital"
+note = "The sensor-emulation image is installed or running (gateware v54+)."
+
+[facts.fpga_image]
+status = "fpga_image"
+frame = "fpga_image"
+note = "The running FPGA image: loop, deep, emu or unknown. Required as fpga_image:<name>."
+
+[facts.wifi]
+hw = "wifi"
+frame = "wifi_scan"
+legacy_caps = "wifi_scan"
+note = "A built-in Wi-Fi (ESP32-C3) or a Wi-Fi bridge."
+
+[facts.usb_cc]
+hw = "usb_cc"
+legacy_caps = "usb_cc"
+note = "The USB-C CC monitor (board rev3+)."
+
+[facts.pod_current]
+hw = "pod_current"
+frame = "pod_current"
+legacy_caps = "pod_current"
+note = "The pod's own current monitor."
+
+[facts.adc_low_range]
+hw = "adc_low_range"
+frame = "adc_low_range"
+legacy_caps = "adc_low_range"
+note = "The ADC low range (analog module v3r4+)."
+
+[[releases]]
+firmware = "3.9.2"
+gateware = 48
+date = "2026-10-15"
+[[releases]]
+firmware = "3.9.3"
+gateware = 48
+date = "2026-10-19"
+[[releases]]
+firmware = "3.9.4"
+gateware = 48
+date = "2026-10-20"
+[[releases]]
+firmware = "3.9.5"
+gateware = 49
+date = "2026-10-31"
+[[releases]]
+firmware = "3.9.6"
+gateware = 51
+date = "2026-11-04"
+[[releases]]
+firmware = "3.10.0"
+gateware = 53
+date = "2026-11-08"
+[[releases]]
+firmware = "3.10.1"
+gateware = 53
+date = "2026-11-09"
+[[releases]]
+firmware = "3.10.3"
+gateware = 54
+date = "2026-11-13"
+[[releases]]
+firmware = "3.10.4"
+gateware = 55
+date = "2026-11-13"
+[[releases]]
+firmware = "3.10.5"
+gateware = 55
+date = "2026-11-14"
+[[releases]]
+firmware = "3.10.6"
+gateware = 55
+date = "2026-11-14"
+[[releases]]
+firmware = "3.10.7"
+gateware = 55
+date = "2026-11-16"
+[[releases]]
+firmware = "3.10.8"
+gateware = 56
+date = "2026-11-17"
+[[releases]]
+firmware = "3.10.10"
+gateware = 56
+date = "2026-11-17"
+
+[features.gpio]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "gpio"
+docs = "API.md#gpio"
+dated = "floor"
+
+[features.power]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "power"
+docs = "API.md#power"
+dated = "floor"
+
+[features.swd]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "swd"
+docs = "API.md#swd"
+dated = "floor"
+
+[features.uart]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "uart"
+docs = "API.md#uart_proxy_start"
+dated = "floor"
+
+[features.la]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "la"
+docs = "API.md#la_capture"
+dated = "floor"
+
+[features.analyzer]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "analyzer"
+legacy_frame = "analyzer"
+dated = "floor"
+
+[features.command]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "command"
+legacy_frame = "command"
+dated = "floor"
+
+[features.tunnel]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "tunnel"
+legacy_frame = "tunnel"
+dated = "floor"
+
+[features.ota]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "ota"
+legacy_frame = "ota"
+docs = "API.md#ota_begin"
+dated = "floor"
+
+[features.la_pins]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "la_pins"
+legacy_frame = "la_pins"
+docs = "API.md#la_pins"
+dated = "floor"
+
+[features.power_profile]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "power_profile"
+legacy_frame = "power_profile"
+docs = "API.md#power_profile"
+dated = "floor"
+
+[features.capture_b64]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "capture_b64"
+legacy_frame = "capture_b64"
+docs = "API.md#capture"
+dated = "floor"
+
+[features.blob_slots]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "blob_slots"
+dated = "floor"
+
+[features.can]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "can"
+legacy_frame = "can"
+docs = "API.md#can_config"
+dated = "floor"
+note = "Flag first in 3.5.1, below the floor."
+
+[features.ota_sig]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "ota_sig"
+dated = "floor"
+
+[features.sig_policy_cmd]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "sig_policy_cmd"
+dated = "floor"
+
+[features.ws_auth_v2]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "ws_auth_v2"
+dated = "floor"
+
+[features.lease_state]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "lease_state"
+dated = "floor"
+
+[features.cloud_ca]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "cloud_ca"
+dated = "floor"
+
+[features.cloud_proxy]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "cloud_proxy"
+dated = "floor"
+
+[features.lan_policy_cmd]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "lan_policy_cmd"
+dated = "floor"
+
+[features.tunnel_max_tier]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "tunnel_max_tier"
+dated = "floor"
+
+[features.usb_net]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "usb_net"
+docs = "API.md#usb_network"
+dated = "floor"
+
+[features.usb_net_setting]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "usb_net_setting"
+docs = "API.md#usb_network"
+dated = "floor"
+
+[features.lan_tls]
+rev = 1
+firmware = "3.9.3"
+legacy_caps = "lan_tls"
+legacy_frame = "lan_tls"
+docs = "API.md#lan_tls--the-lan-api-over-tls"
+dated = "tag"
+
+[features.wifi_scan]
+rev = 1
+firmware = "3.9.4"
+requires = ["wifi"]
+legacy_caps = "wifi_scan"
+legacy_frame = "wifi_scan"
+docs = "API.md#wifi_scan--the-networks-the-pods-wi-fi-sees"
+dated = "tag"
+note = "Needs a C3 or a Wi-Fi bridge: the pod keeps announcing has_wifi (frame wifi_scan:false today on digital v3r3)."
+
+[features.sensors]
+rev = 1
+firmware = "3.10.3"
+legacy_caps = "sensors"
+legacy_frame = "sensors"
+docs = "API.md#sensor_define"
+dated = "tag"
+note = "First in the 3.10.2 pre-release; pre-releases don't count."
+
+[features.sensors_format_1]
+rev = 1
+firmware = "3.10.3"
+legacy_frame = "sensors_format"
+dated = "tag"
+note = "First in the 3.10.2 pre-release; pre-releases don't count. frame sensors_format:1; a new format gets a new entry."
+
+[features.sensor_la_trigger]
+rev = 1
+firmware = "3.10.4"
+legacy_caps = "sensor_la_trigger"
+docs = "API.md#sensor_la"
+dated = "tag"
+
+[features.can_fd]
+rev = 1
+firmware = "3.10.3"
+legacy_caps = "can_fd"
+legacy_frame = "can_fd"
+docs = "API.md#can_config"
+dated = "tag"
+note = "First in the 3.10.2 pre-release; pre-releases don't count."
+
+[features.la_dir]
+rev = 1
+firmware = "3.10.4"
+docs = "API.md#la_dir"
+dated = "code"
+note = "No flag today; the MCP docs gate it on firmware 3.10.4+."
+
+[features.wiring_store]
+rev = 1
+firmware = "3.10.8"
+legacy_frame = "wiring_store"
+docs = "API.md#wiring_list"
+dated = "tag"
+note = "Frame only: dropped from status caps for size."
+
+[features.error_codes]
+rev = 1
+firmware = "3.10.8"
+legacy_frame = "error_codes"
+docs = "https://embeddedci.com/docs/errors"
+dated = "tag"
+note = "Frame only."
+
+[features.mac_fields]
+rev = 1
+firmware = "3.10.8"
+dated = "code"
+note = "status/frame eth_mac and wifi_mac (#153, merged before 3.10.8). Runtime values stay announced."
+
+[features.diag]
+rev = 1
+firmware = "3.10.10"
+docs = "API.md#diag--heap-stack-and-network-diagnostics"
+dated = "code"
+note = "Docs say 3.10.9+, but 3.10.9 was never tagged: version.h said 3.10.9 on main between #157 and #159. A dev build reporting 3.10.9 has it."
+
+[features.wiring_la_mv]
+rev = 1
+firmware = "3.10.10"
+dated = "code"
+note = "The first LA operation takes la_mv from the wiring profile (#158)."
+
+[features.gpio_read]
+rev = 1
+firmware = "3.9.2"
+gateware = 35
+gw_const = "GPIO_GET_MIN_GW"
+legacy_caps = "gpio_read"
+legacy_frame = "gpio_read"
+docs = "API.md#gpio_get"
+dated = "floor"
+
+[features.capture_trigger]
+rev = 1
+firmware = "3.9.2"
+gateware = 35
+gw_const = "CAPTURE_TRIGGER_MIN_GW"
+legacy_caps = "capture_trigger"
+legacy_frame = "capture_trigger"
+docs = "API.md#capture"
+dated = "floor"
+
+[features.spi_master]
+rev = 1
+firmware = "3.9.2"
+gateware = 45
+gw_const = "SPI_MASTER_MIN_GW"
+legacy_caps = "spi_master"
+legacy_frame = "spi_master"
+docs = "API.md#spi_xfer"
+dated = "floor"
+
+[features.spi_stream]
+rev = 1
+firmware = "3.9.2"
+gateware = 45
+gw_const = "SPI_MASTER_MIN_GW"
+legacy_caps = "spi_stream"
+legacy_frame = "spi_stream"
+docs = "API.md#spi_stream"
+dated = "floor"
+
+[features.la_rate_48mhz]
+rev = 1
+firmware = "3.9.6"
+gateware = 50
+gw_const = "LA_CHANGE_MIN_GW"
+legacy_frame = "la_max_rate_hz"
+docs = "API.md#la_capture--deep-raw-logic-analyzer-capture"
+dated = "tag"
+note = "la_max_rate_hz 48000000 on gw >= 50 (change capture), else 12000000. The key itself first appears in 3.9.6; before it, 12 MHz."
+
+[features.la_pretrigger]
+rev = 1
+firmware = "3.9.6"
+gateware = 50
+gw_const = "LA_CHANGE_MIN_GW"
+docs = "API.md#la_capture--deep-raw-logic-analyzer-capture"
+dated = "code"
+note = "la_capture pre-trigger samples, gateware v50+. Firmware min assumed = the first release embedding gw >= 50 (3.9.6, gw 51)."
+
+[features.i2c_master]
+rev = 1
+firmware = "3.10.4"
+gateware = 55
+gw_const = "I2C_MASTER_MIN_GW"
+docs = "API.md#i2c_start"
+dated = "code"
+note = "No flag today. I2C_MASTER_MIN_GW 55 first in the 3.10.4 tag."
+
+[features.spi_modes_1_2]
+rev = 1
+firmware = "3.10.4"
+gateware = 55
+gw_const = "SPI_MODES12_MIN_GW"
+docs = "API.md#spi_xfer"
+dated = "code"
+note = "No flag today."
+
+[features.uart_frame]
+rev = 1
+firmware = "3.10.8"
+gateware = 56
+gw_const = "UART_FRAME_MIN_GW"
+legacy_caps = "uart_frame"
+legacy_frame = "uart_frame"
+docs = "API.md#uart_proxy_start"
+dated = "tag"
+
+[features.uart_hd]
+rev = 1
+firmware = "next"
+gateware = 57
+gw_const = "UART_HALFDUPLEX_MIN_GW"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
+dated = "code"
+note = "uart_proxy_start half_duplex and entry (#161). Merged before the table, so revision 1; never in the caps list of a release."
+
+[features.sensors_digital]
+rev = 1
+firmware = "3.10.3"
+gateware = 54
+gw_const = "EMULATION_MIN_GW"
+requires = ["emu_image"]
+legacy_frame = "sensors_digital"
+docs = "API.md#sensor_start"
+dated = "tag"
+note = "First in the 3.10.2 pre-release; pre-releases don't count. Needs the emulation image installed or running (fact emu_image)."
+
+[features.scope]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "scope"
+legacy_frame = "scope"
+docs = "API.md#capture"
+dated = "floor"
+
+[features.dac]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "dac"
+legacy_frame = "dac"
+docs = "API.md#generate"
+dated = "floor"
+
+[features.dac_dc]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "dac_dc"
+legacy_frame = "dac_dc"
+docs = "API.md#dac_out"
+dated = "floor"
+
+[features.dac_replay]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "dac_replay"
+legacy_frame = "dac_replay"
+docs = "API.md#replay"
+dated = "floor"
+
+[features.signal_alias]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "signal"
+dated = "floor"
+note = "Old name of scope, analog board only from 3.9.2. Kept for old clients."
+
+[features.adc_cal_unwrap]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_frame = "adc_cal_unwrap"
+dated = "floor"
+
+[features.dac_deep_replay]
+rev = 1
+firmware = "3.9.2"
+gateware = 17
+gw_const = "DAC_DEEP_REPLAY_MIN_GW"
+board = "analog"
+requires = ["fpga_image:deep"]
+legacy_caps = "dac_deep_replay"
+legacy_frame = "dac_deep_replay"
+docs = "API.md#replay"
+dated = "floor"
+note = "Depends on the running image: stays a runtime fact (fpga_image)."
+
+[features.dac_control_loop]
+rev = 1
+firmware = "3.9.2"
+gateware = 23
+gw_const = "DAC_CONTROL_LOOP_MIN_GW"
+board = "analog"
+requires = ["fpga_image:loop"]
+legacy_caps = "dac_control_loop"
+legacy_frame = "dac_control_loop"
+docs = "API.md#dac_loop"
+dated = "floor"
+note = "Depends on the running image."
+
+[features.dac_cotrig]
+rev = 1
+firmware = "3.9.2"
+gateware = 27
+gw_const = "DAC_COTRIG_MIN_GW"
+board = "analog"
+legacy_caps = "dac_cotrig"
+legacy_frame = "dac_cotrig"
+dated = "floor"
+
+[features.dac_loop_sources]
+rev = 1
+firmware = "3.9.2"
+gateware = 29
+gw_const = "DAC_LOOP_SOURCE_MIN_GW"
+board = "analog"
+legacy_caps = "dac_loop_sources"
+legacy_frame = "dac_loop_sources"
+dated = "floor"
+
+[features.dac_loop_input_map]
+rev = 1
+firmware = "3.9.2"
+gateware = 30
+gw_const = "DAC_LOOP_INMAP_MIN_GW"
+board = "analog"
+legacy_caps = "dac_loop_input_map"
+legacy_frame = "dac_loop_input_map"
+dated = "floor"
+
+[features.dac_limits]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "dac_limits"
+legacy_frame = "dac_limits"
+docs = "API.md#dac_limits"
+dated = "floor"
+
+[features.calibrate]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "calibrate"
+legacy_frame = "calibrate"
+docs = "API.md#calibrate"
+dated = "floor"
+
+[features.current_out]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "current_out"
+legacy_frame = "current_out"
+docs = "API.md#current_out--hold-a-current-on-the-4-20-ma-output-j9"
+dated = "floor"
+note = "current_out_min_ua/max_ua are per-pod values and stay announced."
+
+[features.generate16]
+rev = 1
+firmware = "3.9.2"
+board = "analog"
+legacy_caps = "generate16"
+legacy_frame = "generate_bits"
+docs = "API.md#generate--dac-waveform-output"
+dated = "floor"
+note = "frame generate_bits 16 vs dac_bits."
+
+[features.cal_dmm]
+rev = 1
+firmware = "3.9.4"
+board = "analog"
+legacy_caps = "cal_dmm"
+legacy_frame = "cal_dmm"
+docs = "API.md#dmm-guided-calibration-firmware-394"
+dated = "tag"
+
+[features.adc_low_range]
+rev = 1
+firmware = "3.9.5"
+board = "analog"
+requires = ["adc_low_range"]
+legacy_caps = "adc_low_range"
+legacy_frame = "adc_low_range"
+docs = "API.md#adc_range--the-adc-input-range-analog-module-v3r4"
+dated = "tag"
+note = "Needs analog module v3r4+: the hardware fact stays announced."
+
+[features.gps]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "gps"
+legacy_frame = "gps"
+status = "retired"
+dated = "floor"
+note = "Listed 3.8.0-3.10.1, replaced by sensors in 3.10.2."
+
+[features.sensor_types]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "sensor_types"
+legacy_frame = "sensor_types"
+status = "retired"
+dated = "floor"
+note = "Listed 3.8.0-3.10.1, replaced by sensors."
+
+[features.i2c_sensor]
+rev = 1
+firmware = "3.9.2"
+legacy_caps = "i2c_sensor"
+status = "retired"
+dated = "floor"
+note = "Listed up to 3.10.1 (so on shipped pods 3.9.2-3.10.1), replaced by sensors."
+
+[features.serial]
+rev = 1
+firmware = "3.9.2"
+legacy_frame = "serial"
+status = "retired"
+dated = "floor"
+note = "Always false on STM32 pods: the frame sends serial:false. Kept for the server's old agent path."

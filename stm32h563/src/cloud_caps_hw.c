@@ -9,6 +9,7 @@
 #include "board_variant.h"
 #include "esp_wifi_ctrl.h"   /* esp_wifi_ctrl_module_present */
 #include "boot_guard.h"
+#include "bp_features.h"     /* BP_FEATURES_REV */
 #include "cal_data.h"        /* ADC_CAL_EXT: the front-SMA cal shipped in capabilities */
 #include "adc_cal.h"         /* adc_cal_fit: this pod's front-end offset */
 #include "i2c_bus.h"         /* adc_range_get: the ADC input range */
@@ -90,6 +91,9 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->uart_frame = caps.uart_frame;
     c->uart_half_duplex = caps.uart_half_duplex;
     c->sensors_digital = caps.emulation;
+    c->features_rev = BP_FEATURES_REV;
+    c->gateware_version = signal_engine_fpga_version();
+    c->fpga_image = cloud_caps_image_name(c->gateware_version, signal_engine_fpga_features());
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
     c->usb_cc = usb_cc_supported();
     c->pod_current = ina_pod_present();      /* the pod's own current monitor (0x41) */

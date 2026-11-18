@@ -43,6 +43,7 @@ static cloud_caps_t typical(void) {
         .safe_mode = false, .safe_reason = "", .reset_cause = "power-on", .last_crash = "none",
         .boot_id = 0x2a, .unclean_resets = 0,
         .eth_mac = "02:0d:1a:80:f1:54",
+        .features_rev = 1, .gateware_version = 56, .fpga_image = "loop",
     };
     return c;
 }
@@ -54,9 +55,10 @@ static void check_features(const char *f) {
         "adc_bits", "adc_cal_a_uv", "adc_cal_b_nv", "dac", "dac_replay", "dac_dc",
         "dac_deep_replay", "dac_replay_max_samples", "dac_control_loop", "dac_loop_sources",
         "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
-        "spi_stream", "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
+        "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
         "boot_id", "unclean_resets", "sensors", "sensors_format", "sensors_digital", "uplink", "wifi_scan", "la_max_rate_hz",
+        "features_rev", "gateware_version", "fpga_image",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -217,7 +219,7 @@ static void test_status_list(void) {
                       "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
-                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"uart_hd\",\"nrst_pin\","
+                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
     /* The digital board: cloud_caps_collect clears every analog feature, so the list names none,
@@ -231,7 +233,7 @@ static void test_status_list(void) {
     CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
                       "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
-                      "\"spi_master\",\"spi_stream\",\"uart_hd\"]") == 0);
+                      "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 
     /* Digital v3r3 has no ESP32-C3: no wifi_scan in the list, and false in the frame. */
@@ -249,8 +251,49 @@ static void test_status_list(void) {
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0 && strstr(f, "usb_cc") == NULL);
 }
 
+/* What a status with "caps":false gets instead of the list, and the image names. */
+static void test_status_facts(void) {
+    char buf[256];
+    bp_emit_t e;
+    cloud_caps_t c = typical();
+    c.usb_cc = true;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_facts(&e, &c);
+    CHECK(bp_emit_ok(&e));
+    CHECK(strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"loop\","
+                      "\"hw\":[\"wifi\",\"usb_cc\",\"pod_current\",\"adc_low_range\"]") == 0);
+    if (strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"loop\","
+                    "\"hw\":[\"wifi\",\"usb_cc\",\"pod_current\",\"adc_low_range\"]") != 0)
+        printf("  %s\n", buf);
+
+    /* Digital v3r3: no C3, no analog parts: an empty list, and no image known yet. */
+    c.no_wifi_scan = true;
+    c.usb_cc = c.pod_current = c.adc_low_range = false;
+    c.fpga_image = NULL;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_facts(&e, &c);
+    CHECK(strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"unknown\",\"hw\":[]") == 0);
+
+    CHECK(strcmp(cloud_caps_image_name(0, 0x07), "unknown") == 0);   /* no gateware read yet */
+    CHECK(strcmp(cloud_caps_image_name(56, 0x01), "loop") == 0);
+    CHECK(strcmp(cloud_caps_image_name(56, 0x02), "deep") == 0);
+    CHECK(strcmp(cloud_caps_image_name(56, 0x04), "emu") == 0);
+    CHECK(strcmp(cloud_caps_image_name(20, 0x00), "unknown") == 0);
+
+    /* The frame carries them too, and no longer the flags the server never read from it. */
+    static char f[CLOUD_CAPS_MAX + 1];
+    c = typical();
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
+    CHECK(strstr(f, "\"features_rev\":1,\"gateware_version\":56,\"fpga_image\":\"loop\",") != NULL);
+    static const char *gone[] = { "cal_dmm", "can_fd", "uart_frame", "spi_stream", "error_codes",
+                                  "cloud_ca", "cloud_proxy" };
+    for (size_t i = 0; i < sizeof(gone) / sizeof(gone[0]); i++)
+        if (strstr(f, gone[i])) { printf("  %s still in the frame\n", gone[i]); failures++; }
+}
+
 int main(void) {
     test_uplink();
+    test_status_facts();
     test_typical_frame();
     test_status_list();
     test_worst_case_fits();

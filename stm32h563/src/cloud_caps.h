@@ -49,6 +49,12 @@ typedef struct {
     bool          uart_frame;     /* uart_proxy_start parity / stop_bits (gateware v56+) */
     unsigned long la_max_rate_hz;   /* LA top rate: 48 MHz with the change capture (gw >= v50), else 12 */
     bool          sensors_digital; /* the emulation image (gateware v54+) is installed or running: I2C/SPI/UART sensors */
+    /* The table clients look features up in (features/features.toml): the revision this firmware
+       is built from (BP_FEATURES_REV), the running gateware and its image ("loop", "deep", "emu"
+       or "unknown"). */
+    unsigned      features_rev;
+    unsigned      gateware_version;
+    const char   *fpga_image;
     bool          nrst_pin;
     bool          uart_half_duplex; /* uart_proxy_start half_duplex (gateware v57+) */
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
@@ -90,8 +96,16 @@ typedef struct {
    when even the shortened form does not fit `cap`. */
 size_t cloud_caps_build(const cloud_caps_t *c, char *out, size_t cap);
 
-/* The `status` reply's ,"caps":[...] list from the same values. */
+/* The `status` reply's ,"caps":[...] list from the same values. FROZEN: no new names (clients
+   take new features from features/features.toml; tools/gen_features.py --check fails on one). */
 void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c);
+
+/* What a `status` with "caps":false gets instead of that list: ,"features_rev":N,
+   "fpga_image":"...","hw":[...], the hardware facts the table's `requires` names. */
+void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c);
+
+/* The running image's name from the gateware's feature bits (FPGA_FEATURE_*). */
+const char *cloud_caps_image_name(unsigned gateware_version, unsigned feature_bits);
 
 /* Fill *c from the drivers (firmware only, cloud_caps_hw.c). device_id is left NULL: only the
    cloud client has it. */

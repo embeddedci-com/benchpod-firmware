@@ -3,6 +3,7 @@
  */
 #include "cloud_caps.h"
 #include "bp_json.h"
+#include "signal_engine.h"   /* FPGA_FEATURE_* */
 
 #include <string.h>
 
@@ -16,11 +17,17 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
     bp_emit_jstr(e, c->firmware_version);
     bp_emit(e, ",\"ota\":true,\"flash_kb\":%lu,\"blob_slots\":true,"
                "\"ota_sig\":true,\"sig_policy\":\"%s\",\"sig_policy_cmd\":true,\"ws_auth_v2\":true,"
-               "\"lease_state\":true,\"cloud_ca\":true,\"cloud_proxy\":true,"
+               "\"lease_state\":true,"
                "\"lan_policy\":\"%s\",\"lan_policy_cmd\":true,\"tunnel_max_tier\":true,\"lan_tls\":true,"
-               "\"wiring_store\":true,\"error_codes\":true,"
+               "\"wiring_store\":true,"
                "\"wifi_scan\":%s,",
             c->flash_kb, c->sig_policy, c->lan_policy, c->no_wifi_scan ? "false" : "true");
+    /* The feature table's revision, the running gateware and its image: the server takes the
+       features from features/features.json with these (features.toml). The flags the server
+       never read from this frame (cal_dmm, can_fd, uart_frame, spi_stream, error_codes,
+       cloud_ca, cloud_proxy) left it for them; the rest go once every server reads the table. */
+    bp_emit(e, "\"features_rev\":%u,\"gateware_version\":%u,\"fpga_image\":\"%s\",",
+            c->features_rev, c->gateware_version, c->fpga_image ? c->fpga_image : "unknown");
     bp_emit(e, "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
                "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
                "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,",
@@ -40,15 +47,14 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
             tf(c->control_loop), tf(c->loop_sources), tf(c->loop_input_map), tf(c->cotrig),
             c->generate16 ? 16 : c->dac_bits);
     bp_emit(e, "\"la_max_rate_hz\":%lu,", c->la_max_rate_hz);
-    bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,\"spi_stream\":%s,"
-               "\"nrst_pin\":%s,\"uart_frame\":%s,"
+    bp_emit(e, "\"la_pins\":true,\"gpio_read\":%s,\"capture_trigger\":%s,\"spi_master\":%s,"
+               "\"nrst_pin\":%s,"
                "\"power_profile\":true,"
-               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"cal_dmm\":%s,\"can\":true,\"can_fd\":true,\"pod_current\":%s,"
+               "\"capture_b64\":true,\"dac_limits\":%s,\"calibrate\":%s,\"can\":true,\"pod_current\":%s,"
                "\"current_out\":%s,\"current_out_min_ua\":%ld,\"current_out_max_ua\":%ld,"
                "\"sensors\":true,\"sensors_format\":1,\"sensors_digital\":%s,",
             tf(c->gpio_read), tf(c->capture_trigger), tf(c->spi_master),
-            tf(c->spi_master),   /* spi_stream: firmware, on the SPI master */
-            tf(c->nrst_pin), tf(c->uart_frame), tf(c->analog), tf(c->analog), tf(c->analog), tf(c->pod_current),
+            tf(c->nrst_pin), tf(c->analog), tf(c->analog), tf(c->pod_current),
             tf(c->analog), c->current_out_min_ua, c->current_out_max_ua, tf(c->sensors_digital));
     bp_emit_raw(e, "\"board\":");
     bp_emit_jstr(e, c->board);
@@ -96,10 +102,29 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->uart_frame)      bp_emit_raw(e, ",\"uart_frame\"");   /* uart_proxy_start parity, stop_bits */
     /* uart_proxy_start half_duplex (gateware v57) and entry (firmware, with nrst_pin): one short
        name, as the status reply has little room left (test_ch_status). */
-    if (c->uart_half_duplex) bp_emit_raw(e, ",\"uart_hd\"");
     if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
     if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
     bp_emit_raw(e, "]");
+}
+
+void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c) {
+    bp_emit(e, ",\"features_rev\":%u,\"fpga_image\":\"%s\",\"hw\":[", c->features_rev,
+            c->fpga_image ? c->fpga_image : "unknown");
+    /* The facts the table's `requires` names (features.toml [facts], `hw`), in a fixed order. */
+    const char *sep = "";
+    if (!c->no_wifi_scan) { bp_emit(e, "%s\"wifi\"", sep); sep = ","; }
+    if (c->usb_cc)        { bp_emit(e, "%s\"usb_cc\"", sep); sep = ","; }
+    if (c->pod_current)   { bp_emit(e, "%s\"pod_current\"", sep); sep = ","; }
+    if (c->adc_low_range) { bp_emit(e, "%s\"adc_low_range\"", sep); sep = ","; }
+    bp_emit_raw(e, "]");
+}
+
+const char *cloud_caps_image_name(unsigned gateware_version, unsigned feature_bits) {
+    if (gateware_version == 0) return "unknown";
+    if (feature_bits & FPGA_FEATURE_EMULATION)   return "emu";
+    if (feature_bits & FPGA_FEATURE_CONTROL_LOOP) return "loop";
+    if (feature_bits & FPGA_FEATURE_DEEP_REPLAY)  return "deep";
+    return "unknown";
 }
 
 /* s cut to `max` characters, every character that JSON escapes (control characters up to six
