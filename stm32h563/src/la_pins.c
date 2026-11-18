@@ -167,13 +167,13 @@ la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup,
         bool on = (pullup[0] == 'o' || pullup[0] == 'O') ? (pullup[1] == 'n' || pullup[1] == 'N')
                                                          : (atoi(pullup) != 0);
         d = on ? la_pull_dir(la) : LA_PULL_NONE;
-        if (on && d == LA_PULL_NONE) return LA_PULL_REQ_NO_PULL;
+        if (on && d == LA_PULL_NONE) { *want = LA_PULL_UP; return LA_PULL_REQ_NO_PULL; }
     }
+    *want = d;   /* also on a refusal: the reply names what was asked for */
     if (d != LA_PULL_NONE) {
         if (!la_pull_hw(la))            return LA_PULL_REQ_NO_PULL;
         if (!la_pull_supports(la, d))   return LA_PULL_REQ_DIRECTION;
     }
-    *want = d;
     return LA_PULL_REQ_OK;
 }
 

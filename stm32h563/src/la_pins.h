@@ -113,8 +113,8 @@ bool          la_pull_dir_parse(const char *s, la_pull_dir_t *d);
 void          la_pull_emit_dirs(bp_emit_t *e, unsigned la);
 
 /* A host's pull request on `la`: `pull` ("up"|"down"|"off", NULL when absent) wins over the
-   alias `pullup` ("on"|"off"|"1"|"0", NULL when absent).  On LA_PULL_REQ_OK *want is the
-   direction to engage (LA_PULL_NONE = off).  "off" is fine on a channel without a resistor. */
+   alias `pullup` ("on"|"off"|"1"|"0", NULL when absent).  *want is the direction to engage
+   (LA_PULL_NONE = off), and on a refusal the one asked for.  "off" is fine on a channel without a resistor. */
 typedef enum {
     LA_PULL_REQ_OK = 0,
     LA_PULL_REQ_BAD_VALUE,     /* pull is not up, down or off */

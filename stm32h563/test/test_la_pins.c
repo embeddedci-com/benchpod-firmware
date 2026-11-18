@@ -86,8 +86,9 @@ static void test_pull_table_and_requests(void) {
     CHECK(la_pull_request(1, "up", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
     CHECK(la_pull_request(1, "off", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
     CHECK(la_pull_request(7, "down", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
-    CHECK(la_pull_request(7, "up", NULL, &d) == LA_PULL_REQ_DIRECTION);
-    CHECK(la_pull_request(3, "down", NULL, &d) == LA_PULL_REQ_DIRECTION);
+    d = LA_PULL_NONE;
+    CHECK(la_pull_request(7, "up", NULL, &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_UP);   /* BP0024 want */
+    CHECK(la_pull_request(3, "down", NULL, &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_DOWN);
     CHECK(la_pull_request(9, "up", NULL, &d) == LA_PULL_REQ_NO_PULL);
     CHECK(la_pull_request(14, "down", NULL, &d) == LA_PULL_REQ_NO_PULL);
     d = LA_PULL_UP;
