@@ -53,7 +53,7 @@ static int             uart_rearm_conn = -1;           /* session to re-arm on t
 static bool            uart_upload_suspended = false;
 /* RX-channel pull-up auto-hold: a DUT's TX pin floats before its firmware brings
    up the UART, and an un-held RX line decodes as a flood of 0x00 during boot. We
-   pull the RX channel high (LA1-8 only) for the session and restore it on exit. */
+   pull the RX channel high (LA1-6 only: LA7/8 pull down) for the session and restore it on exit. */
 static int             uart_rx_pu_ch   = -1;     /* RX LA channel we forced a pull-up on, or -1 */
 static bool            uart_rx_pu_prev = false;  /* its pull-up state before we forced it */
 
