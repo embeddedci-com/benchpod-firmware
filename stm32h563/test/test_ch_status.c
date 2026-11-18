@@ -156,15 +156,16 @@ bool module_link_board(void) { return g_module_board; }
 void module_emit_state(bp_emit_t *e, bool id) { (void)id; bp_emit_raw(e, "{\"module\":\"v3r4\"}"); }
 
 /* ---- helpers ----------------------------------------------------------------------------- */
-static size_t run(int conn) {
+static size_t run_req(int conn, const char *req) {
     g_ntx = 0; g_tx[0] = '\0'; g_err[0] = '\0'; g_sends = 0;
-    handle_status(conn, "{\"cmd\":\"status\"}");
+    handle_status(conn, req);
     CHECK(g_err[0] == '\0', "conn %d: error %s", conn, g_err);
     /* The reply proper, without the line ending (what cloud_reply_cap measures). */
     size_t n = g_ntx;
     while (n && (g_tx[n - 1] == '\n' || g_tx[n - 1] == '\r')) n--;
     return n;
 }
+static size_t run(int conn) { return run_req(conn, "{\"cmd\":\"status\"}"); }
 static bool has(const char *key) {
     char k[64];
     snprintf(k, sizeof(k), "\"%s\":", key);
@@ -294,6 +295,28 @@ static void test_cloud_short_texts_not_marked(void) {
     g_crash[10] = saved_c; g_reason[10] = saved_r;
 }
 
+/* {"cmd":"status","caps":false} (a client with the features table): no caps[] list, the
+   table's revision, the running image and the hardware facts instead; smaller in both forms.
+   A plain status, and "caps":true, keep the list for older clients. */
+static void test_status_without_caps_list(void) {
+    g_usb_on = true;
+    g_module_board = true;
+    size_t with_list = run(CH_CLOUD_CONN);
+    size_t n = run_req(CH_CLOUD_CONN, "{\"cmd\":\"status\",\"caps\":false}");
+    printf("  cloud status worst case without caps: %zu bytes (with: %zu)\n", n, with_list);
+    CHECK(!has("caps"), "caps:false still has the list");
+    CHECK(has("features_rev") && has("fpga_image") && has("hw") && has("gateware"),
+          "caps:false lacks the facts: %.200s", g_tx);
+    CHECK(n + 300 < with_list, "caps:false saves only %zu bytes", with_list - n);
+    CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
+    run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
+    CHECK(!has("caps") && has("features_rev") && !has("short_form"), "LAN caps:false: %.80s", g_tx);
+    run_req(0, "{\"cmd\":\"status\",\"caps\":true}");
+    CHECK(has("caps") && !has("features_rev"), "caps:true lost the list");
+    run_req(0, NULL);
+    CHECK(has("caps"), "a status without arguments lost the list");
+}
+
 int main(void) {
     lwip_stats.mem.max = 65535; lwip_stats.mem.avail = 65535;
     for (int i = 0; i < MEMP_MAX; i++) lwip_stats.memp[i] = &g_pbuf_stats;
@@ -305,6 +328,7 @@ int main(void) {
     test_lan_falls_back_to_short_form();
     test_cloud_short_texts_not_marked();
     test_diag();
+    test_status_without_caps_list();
     if (fails) { printf("test_ch_status: %d FAILED\n", fails); return 1; }
     printf("test_ch_status: all passed\n");
     return 0;

@@ -795,6 +795,11 @@ supports this; the cloud capabilities frame carries the same two flags as boolea
 
 ### Capabilities frame — ADC calibration fields
 
+From firmware after 3.10.10 the frame also carries `features_rev`, `gateware_version` (the
+running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
+[features table](#features-table). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
+`spi_stream`, `error_codes`, `cloud_ca` and `cloud_proxy`, which the server never read from it.
+
 When the pod connects to the cloud it advertises a `capabilities` frame. Alongside `adc_bits` / `adc_fullscale_mv` / `adc_channels` it ships the affine ADC front-end calibration as **integers** (newlib-nano's `printf` has no `%f`), which the server uses to scale raw capture counts to the true probe voltage instead of the naive count ÷ full-scale:
 
 | Field | Meaning |
@@ -1536,8 +1541,8 @@ when the firmware supports it, and the cloud capabilities frame has `"calibrate"
 
 With a bench DMM the pod can also take out what is left after the offset: its own DAC offset and
 gain per output path, and then the ADC gain per source. Every step is optional and saved on its
-own; a path or source without one keeps the built-in fit. `status.caps` contains `"cal_dmm"` and
-the capabilities frame has `"cal_dmm":true` when the firmware takes these forms.
+own; a path or source without one keeps the built-in fit. `status.caps` contains `"cal_dmm"` when
+the firmware takes these forms (the [features table](#features-table): `cal_dmm`).
 
 | Request | What it does |
 |---|---|
@@ -1699,13 +1704,17 @@ Same chunked format as `capture`: the first packet uses `"status":"ok"` (with `"
 ### `status` — firmware and connection info
 
 Returns the firmware version, network and cloud state, board and gateware details, health
-counters and the capability list. No parameters.
+counters and the capability list.
 
 #### Request
 
 ```json
-{"cmd":"status"}
+{"cmd":"status","caps":false}
 ```
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `caps` | boolean | no | `true` | `false`: leave the `caps` list out and send `features_rev`, `fpga_image` and `hw` instead (firmware after 3.10.10). A client with the [features table](#features-table) sends it. Older firmware ignores it and sends the list, so a client gets one of the two from any pod. |
 
 #### Response (abridged)
 
@@ -1790,9 +1799,15 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
-| `caps` | array of string | The capability list, below. |
+| `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
+| `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
+| `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
+| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`. |
 
 #### `caps` values
+
+The list is frozen: it keeps the names below for older clients and gets no new ones. A feature
+added after 3.10.10 is only in the [features table](#features-table).
 
 | Value | Meaning |
 |---|---|
@@ -1816,6 +1831,22 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
+
+#### Features table
+
+[`features/features.json`](../features/features.json) (generated from
+[`features/features.toml`](../features/features.toml)) says which firmware and gateware have which
+feature. A client keeps a copy, so a pod works without a network connection, and decides like this:
+
+1. The pod sends `features_rev` (`status` with `"caps":false`, or the cloud capabilities frame): a
+   feature is there when its `rev` is at most `features_rev`, the running `gateware` is at least
+   the entry's `gateware`, the board matches (`board`: `any`, `analog` or `digital`, from `analog`)
+   and every fact in `requires` holds (`hw`, `nrst_pin`, `sensors_digital`, or `fpga_image:<name>`).
+2. No `features_rev` but a `caps` list (firmware up to 3.10.10): the list.
+3. Neither: compare the firmware version with the entry's `firmware`.
+
+A pod with a higher `features_rev` than the client's table has features the client does not
+know yet: update the client.
 
 ---
 

@@ -124,7 +124,7 @@ static void status_read(status_in_t *in) {
 
 /* One form of the reply into e (the bounds-tracked emitter: last_crash is free-form text,
    escaped via bp_emit_jstr, so it can never break the JSON). */
-static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
+static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool caps_list) {
     const cloud_caps_t *c = &in->caps;
     const size_t text_max = brief ? STATUS_SHORT_TEXT_MAX : 0;
     bool text_cut = false;
@@ -242,15 +242,26 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     bp_emit(e, ",\"safe_mode\":%s,\"safe_reason\":", c->safe_mode ? "true" : "false");
     emit_text(e, c->safe_reason, text_max, &text_cut);
     if (text_cut) bp_emit_raw(e, ",\"boot_health_cut\":true");
-    /* caps[]: the pod's advertised feature set, and the only capability source a client on a
-       direct LAN/serial connection ever sees. The same values as the cloud `capabilities` frame
-       (cloud_caps.h), so the two cannot drift. */
-    cloud_caps_emit_list(e, c);
+    /* caps[]: the feature list older clients read (an SDK before the features table). Frozen,
+       and only for a request without "caps":false. A newer client sends that and gets the
+       table's revision, the running image and the hardware facts instead (cloud_caps.h); it
+       looks the features up in its copy of features/features.json. */
+    if (caps_list) cloud_caps_emit_list(e, c);
+    else           cloud_caps_emit_facts(e, c);
     bp_emit_raw(e, "}}\n");
 }
 
+/* {"cmd":"status","caps":false}: leave the caps[] list out (a client with the features table).
+   Firmware before this ignored the argument and sent the list, so a client gets one of the two
+   from any pod. */
+static bool status_wants_caps_list(const char *json) {
+    char v[8];
+    if (!json || !bp_json_get_top(json, "caps", v, sizeof(v))) return true;
+    return !(v[0] == 'f' || v[0] == '0');
+}
+
 void handle_status(int conn_id, const char *json) {
-    (void)json;
+    const bool caps_list = status_wants_caps_list(json);
     /* The full form's worst case is over 2 KB (test_ch_status.c); the hw task has ~7 KB of stack
        left. A connection's TX ring takes a reply only whole (conn_tx.c, 2048 B), so a full form
        it does not take goes out as the short form instead. */
@@ -261,13 +272,13 @@ void handle_status(int conn_id, const char *json) {
     /* The cloud command channel always gets the short form (see the top of this file). */
     if (conn_id != CH_CLOUD_CONN) {
         bp_emit_init(&e, resp, sizeof(resp));
-        status_emit(&e, &in, false);
+        status_emit(&e, &in, false, caps_list);
         if (bp_emit_ok(&e) && at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) == 0)
             return;
         /* conn_tx is all or nothing: nothing went out, so send the short form. */
     }
     bp_emit_init(&e, resp, sizeof(resp));
-    status_emit(&e, &in, true);
+    status_emit(&e, &in, true, caps_list);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "status too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         /* A reply the connection's TX ring cannot take whole says so instead of the connection
