@@ -36,6 +36,11 @@ typedef enum {
     BP_E_WIRING_UPLOAD_OUT_OF_ORDER = 14,
     BP_E_WIRING_STORAGE_FAILED = 15,
     BP_E_STORAGE_BUSY = 16,
+    BP_E_GATEWARE_TOO_OLD = 17,
+    BP_E_UART_SAME_PIN = 18,
+    BP_E_UART_HALF_DUPLEX_TWO_PINS = 19,
+    BP_E_UART_ENTRY_NO_RESET_PIN = 20,
+    BP_E_UART_ENTRY_INVALID = 21,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -122,6 +127,30 @@ static inline void bp_err_wiring_storage_failed(int conn_id, const char *text) {
 /* BP0016: The pod cannot save now: the DAC or a capture is using the bus the storage shares */
 static inline void bp_err_storage_busy(int conn_id, const char *text) {
     bp_error_send(conn_id, BP_E_STORAGE_BUSY, text, 0, 0);
+}
+/* BP0017: {feature} needs gateware v{min} or later */
+static inline void bp_err_gateware_too_old(int conn_id, const char *text, const char *feature, int32_t min) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"min", 0, min, 0} };
+    bp_error_send(conn_id, BP_E_GATEWARE_TOO_OLD, text, a, 2);
+}
+/* BP0018: UART rx and tx are both LA{la}; a one-wire UART needs half_duplex */
+static inline void bp_err_uart_same_pin(int conn_id, const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    bp_error_send(conn_id, BP_E_UART_SAME_PIN, text, a, 1);
+}
+/* BP0019: half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx} */
+static inline void bp_err_uart_half_duplex_two_pins(int conn_id, const char *text, int32_t rx, int32_t tx) {
+    const bp_err_arg_t a[] = { {"rx", 0, rx, 0}, {"tx", 0, tx, 0} };
+    bp_error_send(conn_id, BP_E_UART_HALF_DUPLEX_TWO_PINS, text, a, 2);
+}
+/* BP0020: The UART entry sequence needs the pod's reset pin, which this board does not have */
+static inline void bp_err_uart_entry_no_reset_pin(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_UART_ENTRY_NO_RESET_PIN, text, 0, 0);
+}
+/* BP0021: The UART entry option {arg} is out of range (0 to {max}) */
+static inline void bp_err_uart_entry_invalid(int conn_id, const char *text, const char *arg, int32_t max) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1}, {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_UART_ENTRY_INVALID, text, a, 2);
 }
 
 #endif /* BP_ERRORS_H */

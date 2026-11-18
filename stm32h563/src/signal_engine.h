@@ -310,6 +310,7 @@ typedef struct {
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
     bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
     bool uart_frame;      /* UART_CONFIG parity + stop bits (uart_proxy_start parity, stop_bits) */
+    bool uart_half_duplex;/* UART_CONFIG bit 4: one-wire open-drain UART (uart_proxy_start half_duplex) */
     bool emulation;       /* the sensor-emulation image (v54+) runs or is installed in slot gw2 */
 } signal_engine_caps_t;
 
@@ -770,13 +771,19 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART_FRAME_PARITY       (1u << 1)   /* a parity bit after the 8 data bits */
 #define UART_FRAME_ODD          (1u << 2)   /* odd parity (with UART_FRAME_PARITY), else even */
 #define UART_FRAME_STOP2        (1u << 3)   /* two stop bits */
-#define UART_FRAME_MASK         (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2)
+/* Half duplex (gateware >= UART_HALFDUPLEX_MIN_GW): flags bit 4.  TX goes open drain (0 drives the
+   line low, 1 releases it to the pull-up), RX may be the TX channel itself, and RX ignores the line
+   while TX sends a frame, so the pod does not read back its own bytes.  For one-wire UARTs. */
+#define UART_HALFDUPLEX_MIN_GW  57u
+#define UART_FRAME_HALFDUPLEX   (1u << 4)
+#define UART_FRAME_MASK         (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2 | UART_FRAME_HALFDUPLEX)
 /* CMD_UART_STATUS byte 1: bit 0 is rx_avail bit 8, bit 1 (v56) the sticky parity error. */
 #define UART_STATUS1_PARITY_ERR (1u << 1)
 
 /* Arm the soft UART on the given RX/TX LA channels at `baud` (the firmware
    computes the FPGA bit-period divisor).  enable=false configures without
-   arming.  Returns 0 on success, -1 bad channel/baud, -2 a proxy is already
+   arming.  Returns 0 on success, -1 bad channel/baud (rx == tx without
+   UART_FRAME_HALFDUPLEX, or rx != tx with it), -2 a proxy is already
    active (single-owner). */
 int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable);
 /* fpga_uart_config with a frame format (UART_FRAME_* bits; 0 = 8N1).  -3: frame != 0 and the

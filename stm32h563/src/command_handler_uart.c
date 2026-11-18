@@ -15,6 +15,9 @@
 #include "signal_engine.h"   /* fpga_uart_* */
 #include "i2c_bus.h"         /* pca9555_* LA pull-ups */
 #include "la_pins.h"
+#include "bp_errors.h"
+#include "nrst_ctrl.h"       /* the entry sequence's target reset */
+#include "pico_compat.h"     /* sleep_ms */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,8 +55,7 @@ static bool            uart_upload_suspended = false;
 static int             uart_rx_pu_ch   = -1;     /* RX LA channel we forced a pull-up on, or -1 */
 static bool            uart_rx_pu_prev = false;  /* its pull-up state before we forced it */
 
-static void uart_proxy_end(int conn_id, bool restore_json) {
-    fpga_uart_disable();
+static void uart_rx_pu_restore(void) {
     if (uart_rx_pu_ch >= 1) {                     /* restore the RX pull-up we forced on */
         /* A failed restore leaves the DUT's line biased by a resistor nobody asked for, which
            then shows up as an unexplained idle level on the next session — say so. */
@@ -63,8 +65,14 @@ static void uart_proxy_end(int conn_id, bool restore_json) {
                    uart_rx_pu_ch, uart_rx_pu_prev ? "on" : "off", rc);
         uart_rx_pu_ch = -1;
     }
+}
+
+static void uart_proxy_end(int conn_id, bool restore_json) {
+    fpga_uart_disable();
+    uart_rx_pu_restore();
     la_pins_release_fn(LA_FN_UART_RX);
     la_pins_release_fn(LA_FN_UART_TX);
+    la_pins_release_fn(LA_FN_UART_HD);
     uart_proxy_conn   = -1;
     uart_plus_count   = 0;
     uart_plus_pending = false;
@@ -102,13 +110,68 @@ bool uart_frame_parse(const char *json, uint8_t *frame) {
     return true;
 }
 
+/* The optional "half_duplex" flag of uart_proxy_start (gateware v57): one wire, TX open drain. */
+static bool uart_half_duplex_parse(const char *json) { return bp_json_flag(json, "half_duplex"); }
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* The optional "entry" object of uart_proxy_start: a boot-mode entry the pod times itself, so the
+   host's latency (LAN, USB or cloud) never sits between reset and the first byte.
+     "entry":{"reset_ms":10,"tx_low":true,"hold_ms":10,"idle_ms":10,"hex":"00"}
+   reset_ms  how long the target is held in reset (the pod's reset pin), default 10
+   tx_low    hold TX low across the reset release (a boot strap on the UART pin), default true
+   hold_ms   after the reset release: TX stays low this long (tx_low), else just a wait, default 10
+   idle_ms   after TX is released (the UART is armed, the line idles high): wait, default 10
+   hex       bytes to send right after idle_ms, at most UART_ENTRY_HEX_MAX, default none
+   False with *bad set to the argument's name (and *max its limit) when one is out of range. */
+bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int *max) {
+    char obj[192];
+    memset(en, 0, sizeof(*en));
+    if (!bp_json_object(json, "entry", obj, sizeof(obj))) return true;   /* none: en->on false */
+    en->on = true;
+    en->reset_ms = en->hold_ms = en->idle_ms = 10;
+    en->tx_low = true;
+    static const char *const keys[3] = {"reset_ms", "hold_ms", "idle_ms"};
+    uint16_t *vals[3] = {&en->reset_ms, &en->hold_ms, &en->idle_ms};
+    char v[72];
+    for (int i = 0; i < 3; i++) {
+        if (!bp_json_get(obj, keys[i], v, sizeof(v))) continue;
+        char *end = NULL;
+        long n = strtol(v, &end, 10);
+        if (end == v || *end || n < 0 || n > UART_ENTRY_MS_MAX) {
+            *bad = keys[i]; *max = UART_ENTRY_MS_MAX; return false;
+        }
+        *vals[i] = (uint16_t)n;
+    }
+    if (bp_json_get(obj, "tx_low", v, sizeof(v))) en->tx_low = bp_json_flag(obj, "tx_low");
+    if (bp_json_get(obj, "hex", v, sizeof(v))) {
+        size_t len = strlen(v);
+        if (len % 2 || len / 2 > UART_ENTRY_HEX_MAX) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
+        for (size_t i = 0; i < len / 2; i++) {
+            int hi = hexval(v[2 * i]), lo = hexval(v[2 * i + 1]);
+            if (hi < 0 || lo < 0) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
+            en->hex[i] = (uint8_t)(hi << 4 | lo);
+        }
+        en->nhex = (uint8_t)(len / 2);
+    }
+    return true;
+}
+
 /* ---- UART transparent proxy ----
  * Bridge a DUT UART through two LA channels. Like dap_start, this is the one
  * command that changes how the connection's bytes are interpreted: after the
  * `"uart ready"` ack the same TCP connection carries raw UART bytes both ways.
  *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200,
- *    "parity":"none"|"even"|"odd","stop_bits":1|2}
+ *    "parity":"none"|"even"|"odd","stop_bits":1|2,"half_duplex":false,"entry":{...}}
  * parity and stop_bits are optional (8N1); anything but 8N1 needs gateware v56.
+ * half_duplex (gateware v57): one wire, rx == tx; TX only pulls the line low and the pull-up
+ * holds it high, so the DUT can answer on the same pin, and the pod does not read back its own
+ * bytes.  entry: the boot-mode entry run before the ack (uart_entry_parse; needs the reset pin).
  * Exit: close the socket (primary), or send  <≥1s idle> +++ <≥1s idle>  to
  * return to JSON on the same connection. */
 void handle_uart_proxy_start(int conn_id, const char *json) {
@@ -129,19 +192,81 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         send_error(conn_id, "uart parity and stop bits need gateware v56+: update the pod's firmware");
         return;
     }
+    if (uart_half_duplex_parse(json)) {
+        if (signal_engine_fpga_version() < UART_HALFDUPLEX_MIN_GW) {
+            bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart half_duplex needs gateware v57+: update the pod's firmware"),
+                                    "half_duplex", UART_HALFDUPLEX_MIN_GW);
+            return;
+        }
+        if (rx != tx) {
+            bp_err_uart_half_duplex_two_pins(conn_id, BP_ERR_TEXT("half_duplex runs on one pin: give the same LA channel for rx and tx"),
+                                             (int32_t)rx, (int32_t)tx);
+            return;
+        }
+        frame |= UART_FRAME_HALFDUPLEX;
+    } else if (rx == tx) {
+        bp_err_uart_same_pin(conn_id, BP_ERR_TEXT("uart rx and tx are the same pin; set half_duplex for a one-wire UART"),
+                             (int32_t)rx);
+        return;
+    }
+    uart_entry_t entry;
+    const char *bad = NULL; int bad_max = 0;
+    if (!uart_entry_parse(json, &entry, &bad, &bad_max)) {
+        bp_err_uart_entry_invalid(conn_id, BP_ERR_TEXT("uart entry option out of range"), bad, bad_max);
+        return;
+    }
+    if (entry.on && !nrst_ctrl_supported()) {
+        bp_err_uart_entry_no_reset_pin(conn_id, BP_ERR_TEXT("uart entry needs the pod's reset pin (v3 boards)"));
+        return;
+    }
+    const bool one_wire = (frame & UART_FRAME_HALFDUPLEX) != 0;
 
     /* Claim both channels first: a proxy sharing a line with SWD or an emulated sensor used
        to lose it silently to la_bank.v's priority.  This also rejects RX/TX on an LA7/LA8
        whose 10k pull-DOWN is engaged — the UART idles high. */
     uint8_t rx_pin = (uint8_t)rx, tx_pin = (uint8_t)tx;
-    if (!la_claim_or_error(conn_id, LA_FN_UART_RX, &rx_pin, 1, 0)) return;
-    if (!la_claim_or_error(conn_id, LA_FN_UART_TX, &tx_pin, 1, 0)) return;
+    /* One wire: the pin is claimed once, as UART TX (open drain, so a DUT output is fine). */
+    if (!one_wire && !la_claim_or_error(conn_id, LA_FN_UART_RX, &rx_pin, 1, 0)) return;
+    if (!la_claim_or_error(conn_id, one_wire ? LA_FN_UART_HD : LA_FN_UART_TX, &tx_pin, 1, 0)) return;
+
+    /* The pull-up first: a one-wire line floats from the moment TX releases it, and the entry
+       sequence releases it before the ack.  See the RX pull-up note below. */
+    uart_rx_pu_ch = -1;
+    if (la_pull_dir(rx) == LA_PULL_UP && la_pullups_available()) {
+        uart_rx_pu_ch   = (int)rx;
+        uart_rx_pu_prev = pca9555_la_pullup_enabled((uint8_t)rx);
+        if (pca9555_set_la_pullup((uint8_t)rx, true) != 0) {
+            printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
+            uart_rx_pu_ch = -1;
+        }
+    }
+    if (one_wire && uart_rx_pu_ch < 0)
+        printf("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
+
+    /* Entry, part 1: TX held low (a static low under the UART's own driver) across the reset. */
+    if (entry.on) {
+        if (entry.tx_low) (void)fpga_la_set(tx, 0);
+        nrst_ctrl_assert(true);
+        sleep_ms(entry.reset_ms);
+        nrst_ctrl_assert(false);
+        sleep_ms(entry.hold_ms);
+    }
 
     int rc = fpga_uart_config_frame(rx, tx, baud, frame, true);
-    if (rc == -2) { send_error(conn_id, "uart busy"); return; }
-    if (rc != 0)  { send_error(conn_id, "invalid uart args"); return; }
-    la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &rx_pin, 1);
-    la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, &tx_pin, 1);
+    /* Arming takes the pin over from the static low (la_bank: uart above static); clear the
+       static driver now so it cannot reappear when the UART disarms. */
+    if (entry.on && entry.tx_low) (void)fpga_la_set(tx, 2);
+    if (rc != 0) {
+        uart_rx_pu_restore();
+        send_error(conn_id, rc == -2 ? "uart busy" : "invalid uart args");
+        return;
+    }
+    if (one_wire) {
+        la_pins_claim(LA_FN_UART_HD, LA_GPIO_NONE, 0, &tx_pin, 1);
+    } else {
+        la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &rx_pin, 1);
+        la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, &tx_pin, 1);
+    }
 
     /* Verify the iCE40 actually answers before committing to raw UART mode: a bogus
        status read (rx_avail out of range) means the FPGA isn't responding over SPI
@@ -150,26 +275,26 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     uint16_t rx_avail = 0;
     if (fpga_uart_status(&rx_avail, NULL) != 0) {
         fpga_uart_disable();
+        uart_rx_pu_restore();
         la_pins_release_fn(LA_FN_UART_RX);
         la_pins_release_fn(LA_FN_UART_TX);
+        la_pins_release_fn(LA_FN_UART_HD);
         send_error(conn_id, "uart proxy failed: FPGA not responding (check gateware)");
         return;
     }
+    /* RX pull-up (engaged above): a DUT's TX pin floats until its firmware configures the
+       UART, which the soft-UART otherwise decodes as a flood of 0x00 during boot. Restored in
+       uart_proxy_end.  LA1-LA6 only: LA7/LA8's resistor pulls DOWN, so engaging "the pull"
+       there held RX at the opposite of the idle level and guaranteed the 0x00 flood it was
+       meant to prevent. LA9-LA14 have no resistor at all, and at a 1.8 V bank the
+       3V3-referenced ones are off-limits: the proxy still runs, it just cannot hold RX high. */
 
-    /* Hold the RX line high for the session: a DUT's TX pin floats until its
-       firmware configures the UART, which the soft-UART otherwise decodes as a
-       flood of 0x00 during boot. Restored in uart_proxy_end.
-       LA1-LA6 only: LA7/LA8's resistor pulls DOWN, so engaging "the pull" there held RX at
-       the opposite of the idle level and guaranteed the 0x00 flood it was meant to prevent.
-       LA9-LA14 have no resistor at all, and at a 1.8 V bank the 3V3-referenced ones are
-       off-limits — the proxy still runs, it just cannot hold RX high. */
-    uart_rx_pu_ch = -1;
-    if (la_pull_dir(rx) == LA_PULL_UP && la_pullups_available()) {
-        uart_rx_pu_ch   = (int)rx;
-        uart_rx_pu_prev = pca9555_la_pullup_enabled((uint8_t)rx);
-        if (pca9555_set_la_pullup((uint8_t)rx, true) != 0) {
-            printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
-            uart_rx_pu_ch = -1;
+    /* Entry, part 2: the line idles high (released), then the first bytes, timed on the pod. */
+    if (entry.on) {
+        sleep_ms(entry.idle_ms);
+        if (entry.nhex) {
+            (void)fpga_uart_write(entry.hex, entry.nhex);
+            fpga_uart_tx_pump();
         }
     }
 

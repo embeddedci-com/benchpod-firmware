@@ -223,3 +223,67 @@ sdk = "stop the DAC (bp.dac_stop()) or wait for the capture to finish, then save
 cli = "stop the DAC (`benchpod dac stop`) or wait for the capture, then save again"
 mcp = "call dac_stop (after checking with the user) or wait for the capture to finish, then save again"
 web = "Stop the generator or wait for the capture to finish, then save."
+
+[BP0017]
+name = "gateware_too_old"
+area = "firmware"
+since = "next"
+args = { feature = "str", min = "int" }
+message = "{feature} needs gateware v{min} or later"
+cause = "The pod's FPGA image is older than the feature. Firmware updates bring the matching gateware with them."
+[BP0017.fix]
+sdk = "update the pod's firmware (`benchpod flash-self`, or the firmware update in the web app)"
+cli = "update the pod's firmware with `benchpod flash-self`"
+mcp = "tell the user the pod's firmware is too old for {feature}; they can update it with `benchpod flash-self` or in the web app"
+web = "Update the pod's firmware on its Settings tab."
+
+[BP0018]
+name = "uart_same_pin"
+area = "uart"
+since = "next"
+args = { la = "int" }
+message = "UART rx and tx are both LA{la}; a one-wire UART needs half_duplex"
+cause = "A normal UART drives its TX pin all the time, so it cannot share the pin with RX. In half duplex the pod only pulls the line low and lets the pull-up hold it high, so both sides can talk on one wire."
+[BP0018.fix]
+sdk = "pass half_duplex=True for a one-wire UART, or put rx and tx on two LA channels"
+cli = "add --half-duplex for a one-wire UART, or put rx and tx on two LA channels"
+mcp = "set half_duplex=true for a one-wire UART, or use two LA channels for rx and tx"
+web = "Turn on half duplex for a one-wire UART, or pick two different pins."
+
+[BP0019]
+name = "uart_half_duplex_two_pins"
+area = "uart"
+since = "next"
+args = { rx = "int", tx = "int" }
+message = "half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx}"
+cause = "In half duplex the pod sends and receives on the same wire, so rx and tx name the same LA channel."
+[BP0019.fix]
+sdk = "give the same LA channel for rx and tx, or leave half_duplex off"
+cli = "give the same LA channel for rx and tx, or leave --half-duplex off"
+mcp = "give the same LA channel for rx and tx, or set half_duplex=false"
+web = "Pick the same pin for RX and TX, or turn half duplex off."
+
+[BP0020]
+name = "uart_entry_no_reset_pin"
+area = "uart"
+since = "next"
+message = "The UART entry sequence needs the pod's reset pin, which this board does not have"
+cause = "The entry sequence holds the target in reset with the pod's own reset pin while it holds TX low. Pods before v3 have no reset pin."
+[BP0020.fix]
+sdk = "use a v3 pod, or open the UART without entry and reset the target yourself"
+cli = "use a v3 pod, or open the UART without --entry and reset the target yourself"
+mcp = "open the UART without entry; this pod cannot reset the target"
+web = "This pod cannot reset the target. Open the UART without the entry sequence."
+
+[BP0021]
+name = "uart_entry_invalid"
+area = "uart"
+since = "next"
+args = { arg = "str", max = "int" }
+message = "The UART entry option {arg} is out of range (0 to {max})"
+cause = "The entry sequence times are milliseconds, each up to a limit, and the first bytes are at most a few dozen hex bytes."
+[BP0021.fix]
+sdk = "pass {arg} between 0 and {max}"
+cli = "pass {arg} between 0 and {max}"
+mcp = "pass {arg} between 0 and {max}"
+web = "Set {arg} between 0 and {max}."

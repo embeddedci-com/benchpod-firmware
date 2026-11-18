@@ -22,3 +22,8 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0014 | `wiring_upload_out_of_order` | wiring | next | The wiring profile upload skipped ahead (the pod expected offset {expected}) |
 | BP0015 | `wiring_storage_failed` | wiring | next | The pod could not read or write its wiring profiles |
 | BP0016 | `storage_busy` | wiring | next | The pod cannot save now: the DAC or a capture is using the bus the storage shares |
+| BP0017 | `gateware_too_old` | firmware | next | {feature} needs gateware v{min} or later |
+| BP0018 | `uart_same_pin` | uart | next | UART rx and tx are both LA{la}; a one-wire UART needs half_duplex |
+| BP0019 | `uart_half_duplex_two_pins` | uart | next | half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx} |
+| BP0020 | `uart_entry_no_reset_pin` | uart | next | The UART entry sequence needs the pod's reset pin, which this board does not have |
+| BP0021 | `uart_entry_invalid` | uart | next | The UART entry option {arg} is out of range (0 to {max}) |

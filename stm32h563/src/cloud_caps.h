@@ -50,6 +50,7 @@ typedef struct {
     unsigned long la_max_rate_hz;   /* LA top rate: 48 MHz with the change capture (gw >= v50), else 12 */
     bool          sensors_digital; /* the emulation image (gateware v54+) is installed or running: I2C/SPI/UART sensors */
     bool          nrst_pin;
+    bool          uart_half_duplex; /* uart_proxy_start half_duplex (gateware v57+) */
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;
     /* No Wi-Fi to scan: no ESP32-C3 (digital v3r3) and no Wi-Fi bridge build. Drops wifi_scan. */
