@@ -59,6 +59,9 @@ module la_bank #(
     input  wire [3:0]        uart_tx_ch,
     input  wire              uart_tx_val,       // TX line level (idle high)
     input  wire              uart_tx_od,        // v57: half duplex: drive low for 0, release for 1
+    input  wire              uart_de_on,        // v58: the UART drives an RS-485 DE pin
+    input  wire [3:0]        uart_de_ch,
+    input  wire              uart_de_val,
 
     // ---- stepper override ----
     input  wire              step_active,
@@ -122,6 +125,8 @@ module la_bank #(
     // uart: push-pull TX (idle high), or (v57 half duplex) open drain: 0 drives low, 1 releases
     // the line to the pull-up, so the DUT may drive the same wire between frames.
     wire [N-1:0] m_uart = onehot(uart_active, uart_tx_ch);
+    // v58: the UART's DE pin, push-pull, just under its TX (the firmware never puts both on one pin)
+    wire [N-1:0] m_ude  = onehot(uart_de_on, uart_de_ch);
     wire [N-1:0] m_step = onehot(step_active, step_ch);
     wire [N-1:0] m_swdc = onehot(swd_active,  swd_clk_ch);
     wire [N-1:0] m_swdd = onehot(swd_active,  swd_dio_ch);
@@ -136,13 +141,15 @@ module la_bank #(
                             m_swds[c] ? swd_cs_val   :
                             m_step[c] ? step_val     :
                             emu_on[c] ? emu_out[c]   :
-                            m_uart[c] ? (uart_tx_val & ~uart_tx_od) : s_out[c];
+                            m_uart[c] ? (uart_tx_val & ~uart_tx_od) :
+                            m_ude[c]  ? uart_de_val  : s_out[c];
         assign eff_oe [c] = m_swdd[c] ? swd_dio_oe   :
                             m_swdc[c] ? swd_clk_oe   :
                             m_swds[c] ? 1'b1         :
                             m_step[c] ? 1'b1         :
                             emu_on[c] ? emu_oe[c]    :
-                            m_uart[c] ? (~uart_tx_val | ~uart_tx_od) : s_oe[c];
+                            m_uart[c] ? (~uart_tx_val | ~uart_tx_od) :
+                            m_ude[c]  ? 1'b1         : s_oe[c];
     end endgenerate
 
     // ---- bidirectional IO buffers ----

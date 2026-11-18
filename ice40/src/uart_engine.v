@@ -102,6 +102,8 @@ module uart_engine #(
     input  wire        cfg_enable,
     input  wire [3:0]  cfg_frame,    // v56: {stop2, odd, parity}; 0 = 8N1 (older firmware sends 0)
                                      // v57: bit 3 half duplex (open-drain TX, RX masked while TX shifts)
+    input  wire [1:0]  cfg_de,       // v58: {active low, enable}: drive an RS-485 transceiver's DE
+    input  wire [3:0]  cfg_de_ch,    // v58: the LA channel for DE
     input  wire        disable_stb,
 
     // latched channel assignment (top routes the bus + la_bank from these)
@@ -109,6 +111,12 @@ module uart_engine #(
     output reg  [3:0]  tx_ch,
     output reg         armed,
     output reg         tx_od,        // v57: half duplex: la_bank drives TX open drain (low or released)
+    // v58: DE of an RS-485 transceiver, driven by la_bank on de_ch while de_on: active from the
+    // moment a byte is queued (before its start bit) to the end of the last stop bit, so the
+    // transceiver's driver is on exactly while the pod transmits and its receiver otherwise.
+    output reg  [3:0]  de_ch,
+    output wire        de_on,
+    output wire        de_val,
 
     // ---- TX FIFO write port (cmd_dispatch UART_WRITE) ----
     input  wire        tx_we,
@@ -139,6 +147,7 @@ module uart_engine #(
     localparam DIV_W = 18;
     reg [DIV_W-1:0] div;
     reg par_en, par_odd, stop2;       // v56 frame format, latched with div
+    reg de_en, de_inv;                // v58 DE output, latched with div
     // The bit counters reload with `div` and expire at 1, not reload `div - 1` and expire
     // at 0: the same number of clocks per bit (div..1 == div-1..0), without the two 18-bit
     // subtractors.  Safe because div >= 2 (the firmware's range, see below).
@@ -160,6 +169,7 @@ module uart_engine #(
         if (rst) begin
             armed <= 1'b0; rx_ch <= 4'd0; tx_ch <= 4'd0; div <= 18'd208;
             par_en <= 1'b0; par_odd <= 1'b0; stop2 <= 1'b0; tx_od <= 1'b0;
+            de_en <= 1'b0; de_inv <= 1'b0; de_ch <= 4'd0;
         end else begin
             if (cfg_stb) begin
                 rx_ch <= cfg_rx_ch;
@@ -173,6 +183,9 @@ module uart_engine #(
                 par_odd <= (PARITY != 0) & cfg_frame[1];
                 stop2   <= (PARITY != 0) & cfg_frame[2];
                 tx_od   <= (PARITY != 0) & cfg_frame[3];
+                de_en   <= (PARITY != 0) & cfg_de[0];
+                de_inv  <= (PARITY != 0) & cfg_de[1];
+                de_ch   <= cfg_de_ch;
                 armed <= cfg_enable;
             end
             if (disable_stb) armed <= 1'b0;
@@ -199,6 +212,11 @@ module uart_engine #(
     reg [8:0]  tx_sr;                 // v56: {parity, data}; the parity bit goes out as a 9th bit
     reg        tx_s2;                 // v56: in the first of two stop bits
     assign rx_mask = tx_od & (tx_state != TX_IDLE);
+    // v58 DE: the transmitter has work (a byte queued or a frame shifting out). Between
+    // back-to-back bytes the FIFO is not empty, so DE does not drop for the one IDLE clock.
+    wire tx_busy = (tx_state != TX_IDLE) | ~tx_fifo_empty;
+    assign de_on  = armed & de_en;
+    assign de_val = tx_busy ^ de_inv;
 
     // The bit timer in one logic cell per bit (lc_counter): it loads div on TX_LOAD
     // and at the end of the start and each data bit, and counts down otherwise.
