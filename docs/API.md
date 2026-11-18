@@ -1812,6 +1812,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
 | `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
 | `uart_frame` | The running gateware takes `uart_proxy_start` `parity` and `stop_bits` (gateware v56+). |
+| `uart_hd` | `uart_proxy_start` takes `half_duplex` (gateware v57+) and `entry` (with `nrst_pin`). |
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
@@ -2034,7 +2035,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 |---|---|---|
 | `none` | default — "LA mode": high-Z, observed by captures | — |
 | `gpio` | [`gpio`](#gpio--use-la-pins-as-gpio) with mode `input` / `output` / `open_drain` | `gpio` mode `off` |
-| `uart_rx`, `uart_tx` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
+| `uart_rx`, `uart_tx`, `uart_hd` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
@@ -2705,16 +2706,42 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 #### Request
 
 ```json
-{"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200,"parity":"none","stop_bits":1}
+{"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200,"parity":"none","stop_bits":1,
+ "half_duplex":false,"entry":{"reset_ms":10,"tx_low":true,"hold_ms":10,"idle_ms":10,"hex":"00"}}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `rx` | integer | yes | — | LA channel the FPGA samples (wire the DUT's TX here). |
-| `tx` | integer | yes | — | LA channel the FPGA drives (wire the DUT's RX here); distinct from `rx`. |
+| `tx` | integer | yes | — | LA channel the FPGA drives (wire the DUT's RX here); distinct from `rx`, or the same channel with `half_duplex`. |
 | `baud` | integer | no | 115200 | Line rate; the firmware computes the FPGA bit-period divisor. ≤115200 solid, higher best-effort. |
 | `parity` | string | no | `"none"` | `"none"`, `"even"` or `"odd"`: a parity bit after the 8 data bits, sent and checked. A received frame with a wrong parity bit is still delivered, and `status` reports `uart_rx_parity_error: true` until the next session. Gateware v56+. |
 | `stop_bits` | integer | no | `1` | `1` or `2`. The pod sends this many; when receiving it checks the first one, as most UARTs do. Gateware v56+. |
+| `half_duplex` | boolean | no | `false` | A one-wire UART: `rx` and `tx` are the same LA channel. The pod only pulls the line low and lets the pull-up hold it high, so the device can answer on the same wire, and it does not read back its own bytes. Use LA1 to LA6 (the pod's pull-up is turned on for the session) or a pull-up on the board. Gateware v57+ (`uart_hd` in `caps`). |
+| `entry` | object | no | none | A boot-mode entry the pod runs before the ack, timed on the pod so no network delay sits between the reset and the first byte. See [boot-mode entry](#boot-mode-entry). Needs the pod's reset pin (`nrst_pin` in `caps`). |
+
+#### Boot-mode entry
+
+Some boot ROMs pick their mode from the level of the UART pin when the chip leaves reset, then
+expect a byte soon after. `entry` runs that sequence on the pod:
+
+1. With `tx_low`, drive TX low.
+2. Hold the target in reset (the pod's reset pin) for `reset_ms`, then release it.
+3. Wait `hold_ms` (TX still low with `tx_low`).
+4. Arm the UART: TX is released and the line idles high.
+5. Wait `idle_ms`, then send the `hex` bytes.
+6. Reply `"uart ready"`; the connection carries raw bytes from here.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `reset_ms` | integer | `10` | Reset hold, 0 to 1000 ms. |
+| `tx_low` | boolean | `true` | Hold TX low across the reset release. `false` leaves TX idle high (a plain reset followed by a timed write). |
+| `hold_ms` | integer | `10` | Time after the reset release before TX is released, 0 to 1000 ms. |
+| `idle_ms` | integer | `10` | Time from TX release to the first byte, 0 to 1000 ms. |
+| `hex` | string | none | Bytes sent right after `idle_ms`, as hex, at most 32 bytes. |
+
+`{"entry":{}}` runs the sequence with the defaults and sends nothing. The target's own timing
+requirements come from its datasheet; the pod's waits are in whole milliseconds.
 
 #### Response
 
@@ -2738,7 +2765,12 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | Condition | `message` |
 |---|---|
 | `rx`/`tx` field missing | `"missing rx"` / `"missing tx"` |
-| an LA channel is outside 1..14 or the two are equal | `"invalid uart args"` |
+| an LA channel is outside 1..14 | `"invalid uart args"` |
+| `rx` and `tx` are the same channel without `half_duplex` | code `BP0018` |
+| `half_duplex` with two different channels | code `BP0019` |
+| `half_duplex` on gateware older than v57 | code `BP0017` |
+| `entry` on a pod without the reset pin | code `BP0020` |
+| an `entry` time out of range, or `hex` not hex or longer than 32 bytes | code `BP0021` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
 | parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
@@ -2746,7 +2778,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
-`rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`) and released
+`rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART) and released
 when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
