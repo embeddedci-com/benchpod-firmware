@@ -142,6 +142,11 @@ firmware = "3.10.10"
 gateware = 56
 date = "2026-11-17"
 
+[[releases]]
+firmware = "3.10.11"
+gateware = 58
+date = "2026-11-18"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -488,7 +493,7 @@ dated = "tag"
 
 [features.uart_hd]
 rev = 1
-firmware = "next"
+firmware = "3.10.11"
 gateware = 57
 gw_const = "UART_HALFDUPLEX_MIN_GW"
 docs = "API.md#uart_proxy_start--transparent-uart-bridge"
@@ -707,7 +712,7 @@ note = "Always false on STM32 pods: the frame sends serial:false. Kept for the s
 
 [features.uart_de]
 rev = 2
-firmware = "next"
+firmware = "3.10.11"
 gateware = 58
 gw_const = "UART_DE_MIN_GW"
 docs = "API.md#uart_proxy_start--transparent-uart-bridge"
