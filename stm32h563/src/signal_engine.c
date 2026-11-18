@@ -3408,8 +3408,14 @@ int fpga_uart_config(unsigned rx_ch, unsigned tx_ch, uint32_t baud, bool enable)
 }
 
 int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_t frame, bool enable) {
+    return fpga_uart_config_de(rx_ch, tx_ch, 0, false, baud, frame, enable);
+}
+
+int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_active_low,
+                        uint32_t baud, uint8_t frame, bool enable) {
     if (enable && uart_armed_local) return -2;   /* already in use */
     frame &= UART_FRAME_MASK;
+    if (de_ch && s_fpga_version < UART_DE_MIN_GW) return -3;
     if (frame && s_fpga_version < UART_FRAME_MIN_GW) return -3;
     if ((frame & UART_FRAME_HALFDUPLEX) && s_fpga_version < UART_HALFDUPLEX_MIN_GW) return -3;
     uart_tx_clear();                             /* a new session starts with nothing queued */
@@ -3421,6 +3427,11 @@ int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_
     /* One wire in half duplex (open-drain TX, RX on the same pin); two otherwise. */
     if ((rx == tx) != ((frame & UART_FRAME_HALFDUPLEX) != 0)) return -1;
     if (baud == 0) return -1;
+    int de = -1;
+    if (de_ch) {
+        de = la_wire_index(de_ch);
+        if (de < 0 || de == rx || de == tx) return -1;
+    }
 
     /* divisor = round(HFOSC / baud), clamped to what the gateware's bit counter holds: 2 ..
        2^18-1 (~92 baud).  Gateware <= v39 clamped it the same way itself; v40 takes it as sent. */
@@ -3428,18 +3439,21 @@ int fpga_uart_config_frame(unsigned rx_ch, unsigned tx_ch, uint32_t baud, uint8_
     if (div < 2)        div = 2;
     if (div > 0x3FFFFu) div = 0x3FFFFu;
 
-    /* [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the frame (v56),
-       bit 4 half duplex (v57) */
+    /* [rx_ch | de_ch << 4][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the
+       frame (v56), bit 4 half duplex (v57), bit 5 DE on de_ch and bit 6 DE active low (v58) */
+    uint8_t de_flags = de >= 0 ? (uint8_t)(UART_FRAME_DE | (de_active_low ? UART_FRAME_DE_INV : 0u)) : 0u;
     uint8_t args[6] = {
-        (uint8_t)rx, (uint8_t)tx,
+        (uint8_t)(rx | ((de >= 0 ? de : 0) << 4)), (uint8_t)tx,
         (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
-        (uint8_t)((enable ? 0x01 : 0x00) | frame),
+        (uint8_t)((enable ? 0x01 : 0x00) | frame | de_flags),
     };
     spi_cmd_write(CMD_UART_CONFIG, args, sizeof(args));
     uart_armed_local = enable;
 
     float actual = (float)FPGA_HFOSC_HZ / (float)div;
     /* Integer baud — newlib-nano printf has no %f (the old %.0f printed nothing). */
+    if (de >= 0)
+        printf("[uart] RS-485 DE on LA%u, active %s\n", de_ch, de_active_low ? "low" : "high");
     printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c%s %s\n",
            rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
            (unsigned long)lroundf(actual),

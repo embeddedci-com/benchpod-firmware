@@ -41,6 +41,7 @@ typedef enum {
     BP_E_UART_HALF_DUPLEX_TWO_PINS = 19,
     BP_E_UART_ENTRY_NO_RESET_PIN = 20,
     BP_E_UART_ENTRY_INVALID = 21,
+    BP_E_UART_DE_PIN = 22,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -151,6 +152,11 @@ static inline void bp_err_uart_entry_no_reset_pin(int conn_id, const char *text)
 static inline void bp_err_uart_entry_invalid(int conn_id, const char *text, const char *arg, int32_t max) {
     const bp_err_arg_t a[] = { {"arg", arg, 0, 1}, {"max", 0, max, 0} };
     bp_error_send(conn_id, BP_E_UART_ENTRY_INVALID, text, a, 2);
+}
+/* BP0022: The UART's DE pin LA{la} is also its rx or tx */
+static inline void bp_err_uart_de_pin(int conn_id, const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    bp_error_send(conn_id, BP_E_UART_DE_PIN, text, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

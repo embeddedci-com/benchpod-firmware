@@ -83,6 +83,14 @@ module tb_top_la_mux;
             spi_byte(8'd24, junk); spi_byte(8'd0, junk); spi_byte(8'd0, junk); spi_byte(8'h01, junk); cs_hi;
         end
     endtask
+    // v58: the same with DE on de_ch (rx_ch byte high nibble, flags bit5 enable, bit6 active low)
+    task uart_config_de(input [3:0] rx_ch, input [3:0] tx_ch, input [3:0] de_ch, input inv);
+        begin
+            cs_lo; spi_byte(8'h70, junk); spi_byte({de_ch, rx_ch}, junk); spi_byte({4'h0, tx_ch}, junk);
+            spi_byte(8'd24, junk); spi_byte(8'd0, junk); spi_byte(8'd0, junk);
+            spi_byte({1'b0, inv, 1'b1, 5'h01}, junk); cs_hi;
+        end
+    endtask
     // v54: I2C target 0 at 0x76 on sda/scl, enabled; then the pin map makes the SDA pad an I2C line
     task i2c_config(input [3:0] sda_ch, input [3:0] scl_ch);
         begin
@@ -220,6 +228,21 @@ module tb_top_la_mux;
             $display("FAIL: uart on channel 15 drove oe %014b (only LA6's static high expected)", oe); errors = errors + 1; end
         cmd0(8'h71); gpio_set(5, 2'd2);
         $display("  [guard] UART TX on channel 15: no pad driven");
+
+        // v58: the UART's DE pin: driven (push-pull) at its idle level, under a static high,
+        // inverted when active low, released with the UART; a DE past the bank drives nothing
+        gpio_set(5, 2'd1);
+        uart_config_de(4'd7, 4'd8, 4'd5, 1'b0);
+        expect_pad("DE idle low over static", 5, 1'b0, 1'b1, (14'd1 << 8));
+        uart_config_de(4'd7, 4'd8, 4'd5, 1'b1);
+        expect_pad("DE active low: idle high", 5, 1'b1, 1'b1, (14'd1 << 8));
+        uart_config_de(4'd7, 4'd8, 4'd15, 1'b0);
+        expect_pad("DE on channel 15: static", 5, 1'b1, 1'b1, (14'd1 << 8));
+        uart_config_de(4'd7, 4'd8, 4'd5, 1'b0);
+        cmd0(8'h71);
+        expect_pad("UART off: static under DE", 5, 1'b1, 1'b1, 14'd0);
+        gpio_set(5, 2'd2);
+        $display("  [de] DE pad driven idle low / high, guard, released with the UART");
 
         if (errors == 0) $display("PASS tb_top_la_mux");
         else             $display("FAIL tb_top_la_mux: %0d error(s)", errors);

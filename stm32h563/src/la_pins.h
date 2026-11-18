@@ -48,6 +48,7 @@ typedef enum {
     LA_FN_I2CM_SDA,   /* i2c_start: the I2C master (the SWD engine's third job, gateware v55) */
     LA_FN_I2CM_SCL,
     LA_FN_UART_HD,    /* uart_proxy_start half_duplex: one wire, TX open drain + RX (gateware v57) */
+    LA_FN_UART_DE,    /* uart_proxy_start de: an RS-485 transceiver's DE + /RE (gateware v58) */
     LA_FN__COUNT
 } la_fn_t;
 

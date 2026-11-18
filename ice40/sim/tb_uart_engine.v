@@ -44,10 +44,17 @@ module tb_uart_engine;
     reg        glitch = 1'b0;      // 1 pulls the RX line low (start-bit / glitch tests)
     wire       uart_armed;
 
+    // v58 DE
+    reg  [1:0] cfg_de = 2'd0;          // {active low, enable}
+    wire [3:0] de_ch;
+    wire       de_on, de_val;
+
     uart_engine dut (
         .clk(clk), .rst(rst),
         .cfg_stb(cfg_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(4'd1),
         .cfg_div(cfg_div), .cfg_enable(cfg_enable), .cfg_frame(cfg_frame), .disable_stb(1'b0),
+        .cfg_de(cfg_de), .cfg_de_ch(4'd9),
+        .de_ch(de_ch), .de_on(de_on), .de_val(de_val),
         .rx_ch(), .tx_ch(), .armed(uart_armed), .rx_parity_err(rx_parity_err),
         .tx_we(tx_we), .tx_wdata(tx_wdata), .tx_full(tx_full), .tx_empty(tx_empty),
         .rx_re(rx_re), .rx_rdata(rx_rdata), .rx_avail(rx_avail),
@@ -66,7 +73,7 @@ module tb_uart_engine;
     uart_engine rx2 (
         .clk(clk), .rst(rst),
         .cfg_stb(cfg2_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(4'd1),
-        .cfg_div(24'd16), .cfg_enable(1'b1), .cfg_frame(cfg2_frame), .disable_stb(1'b0),
+        .cfg_div(24'd16), .cfg_enable(1'b1), .cfg_frame(cfg2_frame), .disable_stb(1'b0), .cfg_de(2'd0), .cfg_de_ch(4'd0),
         .rx_ch(), .tx_ch(), .armed(),
         .tx_we(1'b0), .tx_wdata(8'h00), .tx_full(), .tx_empty(),
         .rx_re(rx2_re), .rx_rdata(rx2_rdata), .rx_avail(rx2_avail),
@@ -76,6 +83,45 @@ module tb_uart_engine;
     );
 
     integer errors = 0;
+
+    // DE (v58): armed with `de` at bit period `div`, three back-to-back bytes (the last 0x00, so
+    // its stop bit starts on a clean rising edge). DE (de_val ^ inverted) must be inactive at idle,
+    // active before the first start bit, stay active without a gap until the frames end, and go
+    // inactive exactly one stop bit after the last rising edge of TX.
+    task de_check(input [1:0] de, input integer div);
+        integer t, t_rise, t_off, k;
+        reg inv, prev_tx;
+        begin
+            inv = de[1];
+            @(posedge clk); cfg_de = de; cfg_div = div; cfg_frame = 4'd0; cfg_enable = 1'b1; cfg_stb = 1'b1;
+            @(posedge clk); cfg_stb = 1'b0;
+            tick(4);
+            if (de_on !== 1'b1 || de_ch !== 4'd9) begin $display("FAIL: DE not on LA9 (on=%b ch=%0d)", de_on, de_ch); errors = errors + 1; end
+            if ((de_val ^ inv) !== 1'b0) begin $display("FAIL: DE active while idle (de=%b)", de); errors = errors + 1; end
+            push(8'h55); push(8'hAA); push(8'h00);
+            if (tx_out !== 1'b0 && (de_val ^ inv) !== 1'b1) begin
+                $display("FAIL: DE not active before the first start bit (de=%b)", de); errors = errors + 1;
+            end
+            t = 0; t_rise = -1; t_off = -1; prev_tx = tx_out;
+            for (k = 0; k < 40 * div && t_off < 0; k = k + 1) begin
+                @(posedge clk); t = t + 1;
+                if (tx_out === 1'b1 && prev_tx === 1'b0) t_rise = t;
+                prev_tx = tx_out;
+                if ((de_val ^ inv) !== 1'b1) t_off = t;
+            end
+            if (t_off < 0) begin $display("FAIL: DE never went inactive (de=%b)", de); errors = errors + 1; end
+            else if (t_off - t_rise < div - 1 || t_off - t_rise > div + 1) begin
+                $display("FAIL: DE inactive %0d clks after the last stop bit began, want %0d (de=%b)", t_off - t_rise, div, de);
+                errors = errors + 1;
+            end else if (rx_avail[7:0] !== 8'd3) begin
+                $display("FAIL: DE went inactive before all 3 frames were out (%0d received)", rx_avail[7:0]);
+                errors = errors + 1;
+            end else $display("ok:   DE de=%b div %0d: active over 3 frames, inactive %0d clks after the stop bit began", de, div, t_off - t_rise);
+            tick(5 * div);
+            if ((de_val ^ inv) !== 1'b0) begin $display("FAIL: DE active again after the frames (de=%b)", de); errors = errors + 1; end
+            while (rx_avail[7:0] != 0) begin @(posedge clk); rx_re = 1'b1; @(posedge clk); rx_re = 1'b0; @(posedge clk); end
+        end
+    endtask
 
     // ---- half duplex (v57): one wire, a pod engine (bit 3) and a peer UART ----
     // The pod side drives open drain in la_bank (0 = low, 1 = released), the peer here is a
@@ -92,7 +138,7 @@ module tb_uart_engine;
     uart_engine hd (
         .clk(clk), .rst(rst),
         .cfg_stb(hd_stb), .cfg_rx_ch(4'd3), .cfg_tx_ch(4'd3),
-        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame(hd_frame), .disable_stb(1'b0),
+        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame(hd_frame), .disable_stb(1'b0), .cfg_de(2'd0), .cfg_de_ch(4'd0),
         .rx_ch(), .tx_ch(), .armed(), .tx_od(hd_od),
         .tx_we(hd_we), .tx_wdata(hd_wdata), .tx_full(), .tx_empty(hd_txe),
         .rx_re(hd_re), .rx_rdata(hd_rdata), .rx_avail(hd_avail),
@@ -102,7 +148,7 @@ module tb_uart_engine;
     uart_engine peer (
         .clk(clk), .rst(rst),
         .cfg_stb(hd_stb), .cfg_rx_ch(4'd0), .cfg_tx_ch(4'd1),
-        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame({1'b0, hd_frame[2:0]}), .disable_stb(1'b0),
+        .cfg_div(hd_div), .cfg_enable(1'b1), .cfg_frame({1'b0, hd_frame[2:0]}), .disable_stb(1'b0), .cfg_de(2'd0), .cfg_de_ch(4'd0),
         .rx_ch(), .tx_ch(), .armed(), .tx_od(),
         .tx_we(pr_we), .tx_wdata(pr_wdata), .tx_full(), .tx_empty(),
         .rx_re(pr_re), .rx_rdata(pr_rdata), .rx_avail(pr_avail),
@@ -396,6 +442,16 @@ module tb_uart_engine;
         hd_exchange(24'd13, 4'b1011, 8'h00, 8'h81, "half duplex 8O1 div 13 (re-arm)");
         hd_exchange(24'd16, 4'b0000, 8'h5A, 8'h42, "one wire, bit 3 off: echoes");
         hd_exchange(24'd16, 4'b1000, 8'hFF, 8'h00, "half duplex again");
+
+        // ---- Test 1d (v58): DE follows the transmitter, then active low, then off on a re-arm ----
+        de_check(2'b01, 16);
+        de_check(2'b11, 13);
+        @(posedge clk); cfg_de = 2'b00; cfg_stb = 1'b1; @(posedge clk); cfg_stb = 1'b0;
+        tick(4);
+        if (de_on !== 1'b0) begin $display("FAIL: DE still on after a config without it"); errors = errors + 1; end
+        else $display("ok:   DE off after a re-arm without it");
+        cfg_div = 24'd16; @(posedge clk); cfg_stb = 1'b1; @(posedge clk); cfg_stb = 1'b0;
+        while (rx_avail[7:0] != 0) begin @(posedge clk); rx_re = 1'b1; @(posedge clk); rx_re = 1'b0; @(posedge clk); end
 
         // ---- Test 2: overflow flag when RX FIFO fills (257 bytes) ----
         // push 257 bytes through; FIFO depth is 256, so at least one is dropped.

@@ -33,7 +33,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 1
+revision = 2
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -704,3 +704,12 @@ legacy_frame = "serial"
 status = "retired"
 dated = "floor"
 note = "Always false on STM32 pods: the frame sends serial:false. Kept for the server's old agent path."
+
+[features.uart_de]
+rev = 2
+firmware = "next"
+gateware = 58
+gw_const = "UART_DE_MIN_GW"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
+dated = "code"
+note = "uart_proxy_start de and de_active_low: the pod drives an RS-485 transceiver's DE from its UART"

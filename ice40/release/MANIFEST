@@ -1,24 +1,24 @@
 # Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
-gateware_version=57
-source_sha256=7bbcc9f0845d09e45105ea271ff97c4ff3f6f50b9d809b5859fe82ad5d20d195
-built_from=cb248e2
+gateware_version=58
+source_sha256=d0394f6c9b9faba5ad1ca884e7fa4e7c588639ebf14c297628704db9847baa75
+built_from=e1e070a
 promoted=2026-11-18
 yosys=Yosys 0.65 (git sha1 aec814bdf3071f7e0fd0fbe43f7f711e99d01e24, clang++ 16.0.0 -fPIC -O3)
 nextpnr="nextpnr-ice40" -- Next Generation Place and Route (Version )
 nextpnr_revision=homebrew nextpnr-ice40 0.10 (sha256 f958aee03e46adaa)
 synth_flags=-abc9 -dsp -spram -top top
 pnr_flags=--up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained --pre-pack clocks.py --threads 1
-hw_verified=uart half duplex HW 2026-11-18 on benchpod-30a9f1, all three images (loop seed 11, deep seed 16, emu seed 27): one-wire LA3 vs NUCLEO USART1 HDSEL fixture, 8N1 + 8O1, entry tx_low/tx high/defaults, no self-echo, 29/29 checks per run, 4 runs on deep + 1 on each image
-loop.sha256=e81a78f1eef5c50aba68a26d2987d32f26b6de91b0567b2b31ea96f586da4457
+hw_verified=uart DE HW 2026-11-18 on benchpod-30a9f1, all three images (loop seed 11, deep seed 34, emu seed 27): RS-485 mock (process-node 0.3.2) with pod-driven DE on LA6, 9600 8N2 / 19200 8E1 / 115200 8N1, device answering at t3.5, 1 ms, 5 ms, 0 undriven / 0 collisions; deep replay 65536 samples on 3v3 to 0.01 V with a concurrent LA capture; process-node lifecycle, rl78, sensors_uart, drdy, analog_in, bus_master green
+loop.sha256=ed3b09165234809ae85b9aeef1d7851388e021b2294fb34aa9a035fd153d80ba
 loop.seed=11
 loop.defines=-DVERSION_V2
-loop.clk48_mhz=51.52
-deep.sha256=0e8fbbcb7a3ee74960aa21bb065fd561bd9e62c0a581056a7b863ef6cb45a258
-deep.seed=16
+loop.clk48_mhz=56.16
+deep.sha256=319933f8a3fab8dbe3f70a2dcf384b8a97e99c2fea1a9663e50fe4199b7e8b93
+deep.seed=34
 deep.defines=-DVERSION_V2 -DUSE_DEEP_REPLAY
-deep.clk48_mhz=51.57
-emu.sha256=745db1e3c1c0e3b07690750572d71416a98b9787b8977b2f1a69cfcdf7b9ca49
+deep.clk48_mhz=55.60
+emu.sha256=eb9da3f61c82a2c4e2b875d451d3837e0fd1721a976f26433a75b86c86bb36a2
 emu.seed=27
 emu.defines=-DVERSION_V2 -DUSE_EMULATION
-emu.clk48_mhz=55.24
+emu.clk48_mhz=59.32

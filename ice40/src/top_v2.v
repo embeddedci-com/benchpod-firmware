@@ -1236,7 +1236,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd57), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd58), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

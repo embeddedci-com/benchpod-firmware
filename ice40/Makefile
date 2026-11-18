@@ -561,7 +561,10 @@ SEED_LOOP_FALLBACK ?= 26 20 9 22 16 12 3
 # (13.32 local / 13.59 CI ns; clk48 54.27 / 53.74 MHz).  RE-VERIFY deep replay on hardware.
 # v56: seed 29 reaches clk -> clk48 15.52 ns in CI. Re-pinned SEED_DEEP 29 -> 16 (local clk48 56.95
 # MHz, 12.80 ns; CI 57.33 MHz, 13.81 ns).
-SEED_DEEP ?= 16
+# v58 (UART DE): seed 16 reaches clk -> clk48 15.18 ns locally (MAX_X48_NS 15). Swept 1..64
+# locally: 60/64 reach MIN_CLK48_MHZ. Re-pinned SEED_DEEP 16 -> 34 (clk48 55.60 MHz, clk -> clk48
+# 12.62 ns, the most margin). CI sweep rate-limited (setup-oss-cad-suite), not compared yet.
+SEED_DEEP ?= 34
 # Good in both toolchains, ordered by the lower of the two clk48 results (v51 sweeps; v48 before).  A timing
 # miss makes nextpnr error, so a failing seed here is only a wasted attempt; the list exists for
 # the same cross-toolchain reason as SEED_FALLBACK above.  v49: 14 dropped (fails locally), 13

@@ -255,6 +255,8 @@ module cmd_dispatch #(
     output wire [23:0]       uart_cfg_div,
     output wire              uart_cfg_enable,
     output wire [3:0]        uart_cfg_frame,      // v56: UART_CONFIG flags bits 3..1 {stop2, odd, parity}; v57 bit 4 half duplex
+    output wire [1:0]        uart_cfg_de,         // v58: flags bits 6..5 {DE active low, DE enable}
+    output wire [3:0]        uart_cfg_de_ch,      // v58: the rx_ch byte's high nibble
     output reg               uart_disable_stb,
 
     // ---- UART proxy: TX FIFO write / RX FIFO read ----
@@ -524,6 +526,8 @@ module cmd_dispatch #(
     assign uart_cfg_div      = {arg_buf[8], arg_buf[7], arg_buf[6]};
     assign uart_cfg_enable   = rx_byte[0];
     assign uart_cfg_frame    = rx_byte[4:1];
+    assign uart_cfg_de       = rx_byte[6:5];
+    assign uart_cfg_de_ch    = arg_buf[4][7:4];
     // Streamed write data (LOAD_WAVE / SWD_FEED / I2C_LOAD_REGS / UART_WRITE) is rx_byte itself:
     // each sink (sample_buf, swd_engine, i2c_regfile, uart FIFO) takes it only under its 1-cycle
     // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
