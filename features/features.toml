@@ -486,6 +486,15 @@ legacy_frame = "uart_frame"
 docs = "API.md#uart_proxy_start"
 dated = "tag"
 
+[features.uart_hd]
+rev = 1
+firmware = "next"
+gateware = 57
+gw_const = "UART_HALFDUPLEX_MIN_GW"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
+dated = "code"
+note = "uart_proxy_start half_duplex and entry (#161). Merged before the table, so revision 1; never in the caps list of a release."
+
 [features.sensors_digital]
 rev = 1
 firmware = "3.10.3"

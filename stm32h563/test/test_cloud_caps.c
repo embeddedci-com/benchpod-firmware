@@ -219,7 +219,7 @@ static void test_status_list(void) {
                       "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
                       "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
                       "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
-                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"uart_hd\",\"nrst_pin\","
+                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
                       "\"usb_cc\"]") == 0);
 
     /* The digital board: cloud_caps_collect clears every analog feature, so the list names none,
@@ -233,7 +233,7 @@ static void test_status_list(void) {
     CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
                       "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
                       "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
-                      "\"spi_master\",\"spi_stream\",\"uart_hd\"]") == 0);
+                      "\"spi_master\",\"spi_stream\"]") == 0);
     if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
 
     /* Digital v3r3 has no ESP32-C3: no wifi_scan in the list, and false in the frame. */

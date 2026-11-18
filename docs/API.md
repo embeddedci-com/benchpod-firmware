@@ -1827,7 +1827,6 @@ added after 3.10.10 is only in the [features table](#features-table).
 | `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
 | `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
 | `uart_frame` | The running gateware takes `uart_proxy_start` `parity` and `stop_bits` (gateware v56+). |
-| `uart_hd` | `uart_proxy_start` takes `half_duplex` (gateware v57+) and `entry` (with `nrst_pin`). |
 | `nrst_pin`, `usb_cc` | v3 board features. |
 
 The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
@@ -2748,7 +2747,7 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 | `baud` | integer | no | 115200 | Line rate; the firmware computes the FPGA bit-period divisor. ≤115200 solid, higher best-effort. |
 | `parity` | string | no | `"none"` | `"none"`, `"even"` or `"odd"`: a parity bit after the 8 data bits, sent and checked. A received frame with a wrong parity bit is still delivered, and `status` reports `uart_rx_parity_error: true` until the next session. Gateware v56+. |
 | `stop_bits` | integer | no | `1` | `1` or `2`. The pod sends this many; when receiving it checks the first one, as most UARTs do. Gateware v56+. |
-| `half_duplex` | boolean | no | `false` | A one-wire UART: `rx` and `tx` are the same LA channel. The pod only pulls the line low and lets the pull-up hold it high, so the device can answer on the same wire, and it does not read back its own bytes. Use LA1 to LA6 (the pod's pull-up is turned on for the session) or a pull-up on the board. Gateware v57+ (`uart_hd` in `caps`). |
+| `half_duplex` | boolean | no | `false` | A one-wire UART: `rx` and `tx` are the same LA channel. The pod only pulls the line low and lets the pull-up hold it high, so the device can answer on the same wire, and it does not read back its own bytes. Use LA1 to LA6 (the pod's pull-up is turned on for the session) or a pull-up on the board. Gateware v57+ (`uart_hd` in the [features table](#features-table)). |
 | `entry` | object | no | none | A boot-mode entry the pod runs before the ack, timed on the pod so no network delay sits between the reset and the first byte. See [boot-mode entry](#boot-mode-entry). Needs the pod's reset pin (`nrst_pin` in `caps`). |
 
 #### Boot-mode entry
