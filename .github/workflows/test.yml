@@ -101,7 +101,7 @@ jobs:
           echo "changed files:"; sed 's/^/  /' <<< "$changed"
           match() { if grep -Eq "$1" <<< "$changed"; then echo true; else echo false; fi; }
           ice40=$(match '^(ice40/|tools/(gen_protocol|ice40_release|test_ice40_release)\.py$|stm32h563/src/(cmd_opcodes|fpga_config)\.h$|\.github/workflows/test\.yml$)')
-          stm32=$(match '^(stm32h563/|errors/|tools/gen_errors\.py$|esp32-hosted-slave/|wifi-bridge/components/|\.gitmodules$|\.github/workflows/test\.yml$)')
+          stm32=$(match '^(stm32h563/|errors/|features/|tools/gen_(errors|features)\.py$|esp32-hosted-slave/|wifi-bridge/components/|\.gitmodules$|\.github/workflows/test\.yml$)')
           motor=$(match '^(motor-emulator/|\.github/workflows/test\.yml$)')
           bridge=$(match '^(wifi-bridge/|stm32h563/test/vectors/fwsign|stm32h563/keys/|tools/fwsign\.py$|\.github/workflows/test\.yml$)')
           echo "ice40=$ice40 stm32=$stm32 motor=$motor bridge=$bridge"
@@ -167,6 +167,8 @@ jobs:
         run: make -C stm32h563/test
       - name: Error codes (errors/catalog.toml) match the generated files
         run: python3 tools/gen_errors.py --check
+      - name: Features (features/features.toml) match the generated files and the firmware code
+        run: python3 tools/gen_features.py --check
 
   wifi-bridge-host:
     needs: changes
