@@ -512,16 +512,18 @@ static void clear_worst(void) {
 }
 
 /* The la_pins reply as handle_la_pins builds it, and the gpio read reply (handle_gpio). */
-static size_t emit_la_pins(char *buf, size_t cap) {
+static size_t emit_la_pins_of(char *buf, size_t cap, uint16_t only) {
     bp_emit_t e;
     bp_emit_init(&e, buf, cap);
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x3FFF, 0x3FFF);
+    la_pins_emit_list(&e, only, 0x3FFF);
     if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
     bp_emit_raw(&e, ",\"levels\":16383}}\n");
     CHECK(bp_emit_ok(&e));
     return bp_emit_len(&e);
 }
+
+static size_t emit_la_pins(char *buf, size_t cap) { return emit_la_pins_of(buf, cap, 0x3FFF); }
 
 static size_t emit_gpio_read(char *buf, size_t cap) {
     bp_emit_t e;
@@ -535,8 +537,10 @@ static size_t emit_gpio_read(char *buf, size_t cap) {
 
 /* Replies known to be over budget (reply_budget.h), with the size measured when listed. 0 = must
    keep the margin. The v3 and v3r4 tables differ only in the pull table, so v2 and v3r2 are v3.
-   Over budget today: the gpio case on v3r4 (4 bytes under the limit) and the sensor case on
-   every board (over the limit: "reply too large" over LAN and cloud). */
+   Over budget: the gpio case on v3r4 (3 bytes under the limit) and the sensor case on every
+   board (over the limit: "reply too large" over LAN and cloud). For those, a host reads la_pins
+   in parts with the subset query ("la":[1,...,7] then [8,...,14]); budget_la_pins checks that
+   each half keeps the margin. The gpio read has no subset: hosts use la_pins. */
 static const struct { int rev; worst_t w; const char *what; size_t la_pins, gpio; } s_known[] = {
     { BOARD_REV_V2,   WORST_GPIO,   "v2, every pin gpio",       0,    0    },
     { BOARD_REV_V3,   WORST_GPIO,   "v3, every pin gpio",       0,    0    },
@@ -556,15 +560,51 @@ static void budget_la_pins(void) {
         set_worst(s_known[i].w);
         size_t n = emit_la_pins(buf, sizeof(buf));
         snprintf(what, sizeof(what), "la_pins, %s", s_known[i].what);
-        if (s_known[i].la_pins) CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].la_pins));
+        if (s_known[i].la_pins) {
+            CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].la_pins));
+            printf("  reply budget: %-44s use the subset query (\"la\":[...]), checked below\n", what);
+        }
         else                    CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
         n = emit_gpio_read(buf, sizeof(buf));
         snprintf(what, sizeof(what), "gpio read, %s", s_known[i].what);
         if (s_known[i].gpio) CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].gpio));
         else                 CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
+        /* The subset query: every case, over budget or not, fits in two halves. */
+        static const uint16_t halves[2] = { 0x007F, 0x3F80 };
+        for (int h = 0; h < 2; h++) {
+            n = emit_la_pins_of(buf, sizeof(buf), halves[h]);
+            snprintf(what, sizeof(what), "la_pins LA%s, %s", h ? "8-14" : "1-7", s_known[i].what);
+            CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
+        }
         clear_worst();
     }
     board_caps_init(BOARD_REV_V3);
+}
+
+/* {"cmd":"la_pins"} with and without the pin subset. */
+static void test_query_mask(void) {
+    uint16_t m = 0;
+    char e2[LA_PINS_ERR_MAX];
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\"}", &m, e2, sizeof(e2)) && m == 0x3FFF);
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":null}", &m, e2, sizeof(e2)) && m == 0x3FFF);
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":\"all\"}", &m, e2, sizeof(e2)) && m == 0x3FFF);
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":3}", &m, e2, sizeof(e2)) && m == 0x0004);
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":[1, 14,2,1]}", &m, e2, sizeof(e2)) && m == 0x2003);
+    CHECK(la_pins_query_mask("{\"la\":[8],\"cmd\":\"la_pins\"}", &m, e2, sizeof(e2)) && m == 0x0080);
+    /* Stray fields never refuse a query (la_pins always ignored them). */
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"mode\":\"bogus\",\"level\":7}", &m, e2, sizeof(e2)) && m == 0x3FFF);
+    CHECK(la_pins_query_mask("{\"cmd\":\"la_pins\",\"mode\":\"bogus\",\"la\":[2]}", &m, e2, sizeof(e2)) && m == 0x0002);
+    CHECK(!la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":15}", &m, e2, sizeof(e2)));
+    CHECK(!la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":[]}", &m, e2, sizeof(e2)));
+    CHECK(!la_pins_query_mask("{\"cmd\":\"la_pins\",\"la\":\"some\"}", &m, e2, sizeof(e2)));
+    /* The full listing through the mask is the same bytes as before. */
+    la_pins_reset();
+    static char a[2048], b[2048];
+    bp_emit_t ea, eb;
+    bp_emit_init(&ea, a, sizeof(a)); la_pins_emit_list(&ea, 0x3FFFu, 0x00FF);
+    la_pins_query_mask("{\"cmd\":\"la_pins\"}", &m, e2, sizeof(e2));
+    bp_emit_init(&eb, b, sizeof(b)); la_pins_emit_list(&eb, m, 0x00FF);
+    CHECK_STR(a, b);
 }
 
 static void test_json_entries(void) {
@@ -699,6 +739,7 @@ int main(void) {
     test_voltage_refusal();
     test_pull_v3r4();
     test_sensor_owner();
+    test_query_mask();
     test_json_entries();
     test_trigger_parse();
     if (failures) { printf("test_la_pins: %d FAILURE(S)\n", failures); return 1; }

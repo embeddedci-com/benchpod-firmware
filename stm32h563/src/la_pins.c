@@ -549,6 +549,25 @@ bool la_gpio_req_parse(const char *json, la_gpio_req_t *req, char *err, size_t c
     return add_pin(req, n, err, cap);
 }
 
+bool la_pins_query_mask(const char *json, uint16_t *mask, char *err, size_t cap) {
+    *mask = 0x3FFFu;
+    const char *v = find_value(json, "la");
+    if (!v || strncmp(v, "null", 4) == 0) return true;
+    la_gpio_req_t req;
+    /* Only "la" is read: parse it alone, so a stray mode/level never refuses a query. */
+    char one[160];
+    const char *end = v;
+    if (*v == '[') { while (*end && *end != ']') end++; if (*end) end++; }
+    else if (*v == '"') { end++; while (*end && *end != '"') end++; if (*end) end++; }
+    else while (*end && *end != ',' && *end != '}' && *end != ' ') end++;
+    if ((size_t)(end - v) + 8u >= sizeof(one)) { snprintf(err, cap, "la list is too long"); return false; }
+    snprintf(one, sizeof(one), "{\"la\":%.*s}", (int)(end - v), v);
+    if (!la_gpio_req_parse(one, &req, err, cap)) return false;
+    if (!req.all) *mask = 0;
+    for (size_t i = 0; i < req.n; i++) *mask |= (uint16_t)(1u << (req.las[i] - 1u));
+    return true;
+}
+
 static uint16_t mask_of(const uint8_t *las, size_t n) {
     uint16_t m = 0;
     for (size_t i = 0; i < n; i++) if (la_ok(las[i])) m |= (uint16_t)(1u << (las[i] - 1u));
