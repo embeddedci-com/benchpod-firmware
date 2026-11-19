@@ -1362,7 +1362,7 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 `count` is always raw.
 
-**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes:
+**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes: The values for v3r5 in this table are calculated from the design and the part ratings; they are not measured on a board yet.
 
 | | Module up to v3r4 | Module v3r5 and later |
 |---|---|---|
