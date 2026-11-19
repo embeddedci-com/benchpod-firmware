@@ -294,6 +294,9 @@ DEFS := -DUSE_HAL_DRIVER -DSTM32H563xx -DHSE_VALUE=25000000 \
 # (non-TLS) cloud connection (cloud-hardening.md section 1). This must come before CFLAGS below
 # (`:=` expands DEFS there): appended further down, -DBENCHPOD_RELEASE=1 never reached the compiler.
 RELEASE ?= 0
+# The flash floor (tools/flash_left.sh): with FLASH_FLOOR_KB=N the link fails when less than N KB
+# of the code region is left; unset, below 24 KB only warns. CI sets it for the release build.
+FLASH_FLOOR_KB ?=
 ifeq ($(RELEASE),1)
 DEFS += -DBENCHPOD_RELEASE=1
 endif
@@ -557,6 +560,7 @@ $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 	@OBJDUMP=$(PREFIX)objdump sh tools/check_ramfunc_calls.sh $@ || { rm -f $@; exit 1; }
+	@READELF=$(PREFIX)readelf sh tools/flash_left.sh $@ $(LDSCRIPT) $(FLASH_FLOOR_KB) || { rm -f $@; exit 1; }
 
 $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 	$(HEX) $< $@
