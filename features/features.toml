@@ -147,6 +147,11 @@ firmware = "3.10.11"
 gateware = 58
 date = "2026-11-18"
 
+[[releases]]
+firmware = "3.10.12"
+gateware = 58
+date = "2026-11-18"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -721,7 +726,7 @@ note = "uart_proxy_start de and de_active_low: the pod drives an RS-485 transcei
 
 [features.la_pull_dir]
 rev = 3
-firmware = "next"
+firmware = "3.10.12"
 docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
 dated = "code"
 note = "la pull: up, down or off, with each channel's supported directions in the reply and in la_pins (dirs); refusals BP0023, BP0024. Older firmware takes pullup on/off only."
