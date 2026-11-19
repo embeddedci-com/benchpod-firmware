@@ -95,6 +95,7 @@ void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_
     snprintf(g_reply, sizeof(g_reply), "err:%s", text ? text : "");
 }
 uint8_t signal_engine_fpga_version(void) { return g_gw; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 void fpga_uart_disable(void) { g_enabled = false; }
 int fpga_uart_write(const uint8_t *d, size_t n) { memcpy(g_dut_in + g_ndut_in, d, n); g_ndut_in += n; seq("w%u", (unsigned)n); return 0; }
 void fpga_uart_tx_pump(void) {}
@@ -445,13 +446,16 @@ static void test_de(void) {
 }
 
 /* uart_cfg_parse: pure, every refusal and its precedence, the defaults. */
+/* The capabilities of gateware v`v` (uart_cfg_parse reads gw_caps fields). */
+static const gw_caps_t *gwv(uint8_t v) { static gw_caps_t g; g = gw_caps_for(v, 0); return &g; }
+
 static void test_cfg_parse(void) {
     uart_cfg_t c;
     uart_cfg_err_t e;
-    CHECK(uart_cfg_parse("{\"rx\":3,\"tx\":4}", 56, true, &c, &e) && c.rx == 3 && c.tx == 4 && c.baud == 115200 &&
+    CHECK(uart_cfg_parse("{\"rx\":3,\"tx\":4}", gwv(56), true, &c, &e) && c.rx == 3 && c.tx == 4 && c.baud == 115200 &&
           c.frame == 0 && c.de == 0 && !c.entry.on, "defaults");
     CHECK(uart_cfg_parse("{\"rx\":2,\"tx\":2,\"half_duplex\":true,\"parity\":\"odd\",\"baud\":\"0x2580\",\"de\":5,"
-                         "\"de_active_low\":true,\"entry\":{\"hex\":\"00\"}}", 58, true, &c, &e) &&
+                         "\"de_active_low\":true,\"entry\":{\"hex\":\"00\"}}", gwv(58), true, &c, &e) &&
           c.frame == (UART_FRAME_HALFDUPLEX | UART_FRAME_PARITY | UART_FRAME_ODD) && c.baud == 9600 &&
           c.de == 5 && c.de_inv && c.entry.on && c.entry.nhex == 1, "everything");
     const struct { const char *json; uint8_t gw; bool rst; uart_cfg_err_kind_t kind; } bad[] = {
@@ -472,9 +476,9 @@ static void test_cfg_parse(void) {
         { "{\"rx\":3,\"tx\":4,\"de\":4,\"entry\":{}}",              57, false, UART_CFG_ENTRY_NO_RESET_PIN },
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
-        CHECK(!uart_cfg_parse(bad[i].json, bad[i].gw, bad[i].rst, &c, &e) && e.kind == bad[i].kind,
+        CHECK(!uart_cfg_parse(bad[i].json, gwv(bad[i].gw), bad[i].rst, &c, &e) && e.kind == bad[i].kind,
               "bad[%zu]: kind %d, want %d", i, (int)e.kind, (int)bad[i].kind);
-    CHECK(!uart_cfg_parse("{\"rx\":3,\"tx\":4,\"entry\":{\"hex\":\"0\"}}", 58, true, &c, &e) &&
+    CHECK(!uart_cfg_parse("{\"rx\":3,\"tx\":4,\"entry\":{\"hex\":\"0\"}}", gwv(58), true, &c, &e) &&
           strcmp(e.bad, "hex") == 0 && e.max == UART_ENTRY_HEX_MAX, "entry: bad %s max %d", e.bad, e.max);
 }
 

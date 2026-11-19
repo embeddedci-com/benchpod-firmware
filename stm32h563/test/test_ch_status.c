@@ -32,6 +32,7 @@
 #include "pod_policy.h"
 #include "psram.h"
 #include "signal_engine.h"
+#include "la_io.h"
 #include "sys_health.h"
 #include "usb_cc.h"
 #include "usb_device.h"

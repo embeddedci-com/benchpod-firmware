@@ -6,6 +6,7 @@
 #include "bp_log.h"
 #include "command_handler.h"   /* la_voltage_from_profile */
 #include "signal_engine.h"
+#include "gw_caps.h"
 #include "ice40_flash.h"
 #include "blob_store.h"
 #include "i2c_bus.h"
@@ -33,7 +34,7 @@ size_t   sensor_port_heap_free(void) { return sys_health_heap_free(); }
 int sensor_port_image(void) { return signal_engine_image_kind(); }
 
 int sensor_port_load_emulation(char *err, size_t cap) {
-    if (signal_engine_fpga_version() < EMULATION_MIN_GW) {
+    if (!gw_caps()->emulation) {
         snprintf(err, cap, "I2C, SPI and UART sensors need gateware v54 or later (the pod runs v%u)",
                  (unsigned)signal_engine_fpga_version());
         return -1;

@@ -1,6 +1,7 @@
 /* board_rev.c — see board_rev.h.  PA3 strap: digital NC test, then ADC bucket, then (v3r4 band
    only) the PC3 strap. */
 #include "board_rev.h"
+#include "board_caps.h"
 #include "mcu_adc.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
@@ -35,7 +36,7 @@ static int read_rev2_mv(void)
     return mv;
 }
 
-void board_rev_init(void)
+static void detect(void)
 {
     BOARD_REV_CLK_EN();
 
@@ -101,8 +102,13 @@ void board_rev_init(void)
     log_printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\r\n");
 }
 
+void board_rev_init(void)
+{
+    detect();
+    board_caps_init(s_rev);   /* what this revision has: the one revision gate (board_caps.h) */
+}
+
 int  board_rev_get(void)      { return s_rev; }
-bool board_rev_is_v3(void)    { return s_rev >= BOARD_REV_V3; }
 int  board_rev_strap_mv(void) { return s_strap_mv; }
 int  board_rev2_strap_mv(void) { return s_rev2_mv; }
 

@@ -19,6 +19,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "bp_errors.h"
 #include "signal_engine.h"
 #include "i2c_txn.h"
@@ -104,9 +105,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
 
 void handle_i2c_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    if (signal_engine_fpga_version() < I2C_MASTER_MIN_GW) {
-        send_error(conn_id, "the I2C master needs gateware v55+: update the pod's firmware"); return;
-    }
+    if (!require_gw(conn_id, gw_caps()->i2c_master, "the I2C master needs gateware v55+: update the pod's firmware")) return;
     uint32_t sda, scl;
     if (!get_u32(json, "sda", &sda) || sda < 1 || sda > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid sda (LA 1..14)"); return; }
     if (!get_u32(json, "scl", &scl) || scl < 1 || scl > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid scl (LA 1..14)"); return; }

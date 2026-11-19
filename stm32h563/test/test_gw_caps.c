@@ -1,0 +1,90 @@
+/* test_gw_caps.c: gw_caps_for() (the gateware gates) and gw_caps() (refilled when the running
+   version or feature byte changes). */
+#include "gw_caps.h"
+#include "signal_engine.h"
+#include "la_rate.h"
+
+#include <stdio.h>
+
+static int checks, fails;
+#define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
+                                                   printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+/* fakes: the running gateware */
+static uint8_t g_ver, g_feat;
+uint8_t signal_engine_fpga_version(void) { return g_ver; }
+uint8_t signal_engine_fpga_features_cached(void) { return g_feat; }
+
+/* Every gate is exactly `version >= its *_MIN_GW`, for every version. */
+static void test_versions(void)
+{
+    for (unsigned v = 0; v <= 255; v++) {
+        const gw_caps_t c = gw_caps_for((uint8_t)v, 0);
+#define GATE(field, min) CHECK(c.field == (v >= (min)), "v%u " #field, v)
+        GATE(dac_deep_replay, DAC_DEEP_REPLAY_MIN_GW);
+        GATE(concurrent_psram, CONCURRENT_PSRAM_MIN_GW);
+        GATE(dac_capture_stop, DAC_CAPTURE_STOP_MIN_GW);
+        GATE(capture_bases, CAPTURE_BASES_MIN_GW);
+        GATE(dac_control_loop, DAC_CONTROL_LOOP_MIN_GW);
+        GATE(dac_cotrig, DAC_COTRIG_MIN_GW);
+        GATE(dac_loop_source, DAC_LOOP_SOURCE_MIN_GW);
+        GATE(dac_loop_inmap, DAC_LOOP_INMAP_MIN_GW);
+        GATE(exact_cap_divider, EXACT_CAP_DIVIDER_MIN_GW);
+        GATE(gpio_get, GPIO_GET_MIN_GW);
+        GATE(capture_trigger, CAPTURE_TRIGGER_MIN_GW);
+        GATE(capture_opcode_only, CAPTURE_OPCODE_ONLY_MIN_GW);
+        GATE(reload_wire, RELOAD_WIRE_MIN_GW);
+        GATE(spi_master, SPI_MASTER_MIN_GW);
+        GATE(swd_queue, SWD_QUEUE_MIN_GW);
+        GATE(dac_ctrl, DAC_CTRL_MIN_GW);
+        GATE(la_change, LA_CHANGE_MIN_GW);
+        GATE(spi_fast_link, SPI_FAST_LINK_MIN_GW);
+        GATE(dual_la_full_rate, DUAL_LA_FULL_RATE_MIN_GW);
+        GATE(emulation, EMULATION_MIN_GW);
+        GATE(spi_modes12, SPI_MODES12_MIN_GW);
+        GATE(i2c_master, I2C_MASTER_MIN_GW);
+        GATE(uart_frame, UART_FRAME_MIN_GW);
+        GATE(uart_half_duplex, UART_HALFDUPLEX_MIN_GW);
+        GATE(uart_de, UART_DE_MIN_GW);
+#undef GATE
+        CHECK(!c.img_control_loop && !c.img_deep_replay && !c.img_emulation, "v%u no image bits", v);
+    }
+    /* the released gateware numbers the docs quote */
+    CHECK(gw_caps_for(53, 0).dual_la_full_rate && !gw_caps_for(52, 0).dual_la_full_rate, "v53");
+    CHECK(gw_caps_for(58, 0).uart_de && !gw_caps_for(57, 0).uart_de, "v58");
+}
+
+static void test_images(void)
+{
+    for (unsigned f = 0; f < 8; f++) {
+        const gw_caps_t c = gw_caps_for(59, (uint8_t)f);
+        CHECK(c.img_control_loop == ((f & FPGA_FEATURE_CONTROL_LOOP) != 0), "features %u loop", f);
+        CHECK(c.img_deep_replay == ((f & FPGA_FEATURE_DEEP_REPLAY) != 0), "features %u deep", f);
+        CHECK(c.img_emulation == ((f & FPGA_FEATURE_EMULATION) != 0), "features %u emulation", f);
+    }
+}
+
+/* gw_caps() follows the running gateware: a new version or feature byte refills it. */
+static void test_running(void)
+{
+    g_ver = 0; g_feat = 0;
+    CHECK(!gw_caps()->dac_deep_replay && !gw_caps()->uart_de, "no gateware");
+    g_ver = 59;
+    CHECK(gw_caps()->uart_de && gw_caps()->dac_ctrl, "v59 after a version change");
+    g_ver = 45;
+    CHECK(gw_caps()->spi_master && !gw_caps()->i2c_master, "v45 after a downgrade");
+    g_feat = FPGA_FEATURE_DEEP_REPLAY;
+    CHECK(gw_caps()->img_deep_replay && !gw_caps()->img_control_loop, "an image swap");
+    g_ver = 255; g_feat = 255;
+    CHECK(gw_caps()->uart_de && gw_caps()->img_emulation, "v255, every feature bit");
+    CHECK(gw_caps() == gw_caps(), "one struct");
+}
+
+int main(void)
+{
+    test_versions();
+    test_images();
+    test_running();
+    printf("test_gw_caps: %d checks, %d failed\n", checks, fails);
+    return fails ? 1 : 0;
+}

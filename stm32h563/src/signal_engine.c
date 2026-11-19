@@ -27,9 +27,8 @@
 #include "xfer.h"
 #include "dma_wait.h"
 #include "board_caps.h"
-#include "vref_out.h"
-#include "la_pull.h"   /* la_pull_all_off: v2 pull-ups go to +3V3, not to the bank */
-#include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
+#include "gw_caps.h"
+#include "la_io.h"     /* la_vccio_init: the LA bank pins at init */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
 #include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
 
@@ -352,7 +351,7 @@ static uint32_t adc_capture_hz(void) {
    (cap_divider_wire) — and that wire value is still floored at 60, so the fastest
    real period there is 61. */
 static uint32_t adc_min_divider(void) {
-    return (s_fpga_version >= EXACT_CAP_DIVIDER_MIN_GW) ? ADC_CAP_MIN_DIVIDER
+    return (gw_caps()->exact_cap_divider) ? ADC_CAP_MIN_DIVIDER
                                                         : ADC_CAP_MIN_DIVIDER + 1u;
 }
 
@@ -694,7 +693,7 @@ uint32_t signal_engine_spi_set_prescaler(uint32_t div) {
        corrupts commands by design: those get /128 or /256 only.  v52+ (SPI_FAST_LINK_MIN_GW)
        also takes /64; /32 is out of reach for its synchroniser.  The next version read
        (fpga_ping, refresh) sets the rate back from the version. */
-    if (div == 64u && s_fpga_version < SPI_FAST_LINK_MIN_GW) return 0;
+    if (div == 64u && !gw_caps()->spi_fast_link) return 0;
     return spi_link_set_div(div);
 }
 
@@ -1113,7 +1112,7 @@ bool dac_quad_c_level(uint16_t *code) {
 /* DAC_CTRL (0x38, gateware >= DAC_CTRL_MIN_GW): [flags][ctrl][code(2)].  flags bit0 = ctrl is the
    control byte of every later DAC start, bit1 = send {ctrl, code} once.  -2 = older gateware. */
 static int fpga_dac_ctrl(uint8_t flags, uint8_t ctrl, uint16_t code) {
-    if (s_fpga_version < DAC_CTRL_MIN_GW) return -2;
+    if (!gw_caps()->dac_ctrl) return -2;
     uint8_t args[4] = { flags, ctrl, (uint8_t)(code & 0xFFu), (uint8_t)(code >> 8) };
     return spi_cmd_write(CMD_DAC_CTRL, args, sizeof(args));
 }
@@ -1193,7 +1192,7 @@ int dac_quad_channel(void) { return s_quad_ch; }
 
 void dac_quad_boot(void) {
     if (!dac_quad_present()) return;
-    if (s_fpga_version < DAC_CTRL_MIN_GW) {
+    if (!gw_caps()->dac_ctrl) {
         printf("[sig] WARNING: analog v3r2 needs gateware v%u+ (DAC_CTRL); v%u cannot drive the DAC8554\n",
                (unsigned)DAC_CTRL_MIN_GW, s_fpga_version);
         return;
@@ -1266,134 +1265,7 @@ int adc_probe_one(uint8_t *out_value) {
     return 0;
 }
 
-/* ---- LA I/O-bank voltage (TPS2116 mux on PG3, status on PG4) -------------- */
-
-static int s_la_vccio_mv = LA_VCCIO_UNSET;
-/* The DUT's I/O voltage: the bank, or LA_VCCIO_5V0 when pin 21 is on 5 V (digital v3r4). */
-static int s_la_io_mv = LA_VCCIO_UNSET;
-
-void la_vccio_init(void) {
-    /* GPIOG clock is enabled by signal_engine_init() below (same file). */
-    GPIO_InitTypeDef gp = {0};
-
-    /* PG4 = ST: TPS2116 open-drain status output (external pull-up R152 to 3V3);
-       read-only input. */
-    gp.Mode = GPIO_MODE_INPUT;
-    gp.Pull = GPIO_NOPULL;
-    gp.Pin  = LA_VCCIO_ST_PIN;
-    HAL_GPIO_Init(LA_VCCIO_ST_PORT, &gp);
-
-    /* PG3 = select (PR1): leave as a Hi-Z input at boot, so R151's 100 k pull-up
-       to +3V3 decides the power-on state.  On v3 that is VIN1 = +3.3 V, the safe
-       default for a 3.3 V DUT; on v2 (MODE grounded) PR1 high is the mux's
-       SHUTDOWN state and the bank rail is simply unpowered.  Either way the
-       software state stays UNSET, so LA-bank ops are refused until
-       la_vccio_set_mv() is called — the host must choose the DUT voltage
-       deliberately. */
-    gp.Mode = GPIO_MODE_INPUT;
-    gp.Pull = GPIO_NOPULL;
-    gp.Pin  = LA_VCCIO_SW_PIN;
-    HAL_GPIO_Init(LA_VCCIO_SW_PORT, &gp);
-
-    s_la_vccio_mv = LA_VCCIO_UNSET;
-    s_la_io_mv = LA_VCCIO_UNSET;
-}
-
-/* The LA clamps' settle (digital v3r4).  A task delay, not a busy wait: this runs on the hw worker,
-   the one task that touches the LA bank, pin 21 and the pulls (hw_worker.h), so no other command,
-   pull write or output change can run until it returns; the net and USB tasks do run.  A tick
-   delay can end up to one tick (1 ms) early, so it asks for one more.  Before the scheduler
-   starts, sleep_ms is a busy wait. */
-static void la_settle_clamps(void) { sleep_ms(LA_VCCIO_SETTLE_CLAMPS_MS + 1u); }
-
-/* 5 V I/O (digital v3r4, board_caps()->la_5v): the bank (and the FPGA) stays at 3.3 V, the LA
-   clamps keep 5 V off the FPGA pins, and pin 21, the rail every pull-up pulls to, goes to 5 V.
-   A pod high above 3.3 V comes only through a pull-up.  Order: the bank to 3.3 V first, then pin
-   21 to 5 V; back: pin 21 to the bank first, then the bank.  5 V is checked on the pin 21 sense:
-   if it did not come up the previous setting is restored and -3 returned. */
-static int la_io_set_5v(void) {
-    const int prev = s_la_io_mv;
-    if (prev == LA_VCCIO_5V0 && vref_out_measure_mv() >= VREF_5V_MIN_MV) return 0;   /* as it is */
-    int rc = la_vccio_set_mv(LA_VCCIO_3V3);   /* also waits for the clamps */
-    if (rc != 0) return rc;
-    (void)vref_out_set_source(VREF_SRC_5V);
-    la_settle_clamps();                        /* the sense filter (6.7 ms, calculated) and the pull-ups */
-    int mv = vref_out_measure_mv();
-    if (mv < VREF_5V_MIN_MV) {
-        LOG_W("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
-        (void)vref_out_set_source(VREF_SRC_BANK);
-        if (prev == LA_VCCIO_1V8 || prev == LA_VCCIO_3V3) (void)la_vccio_set_mv(prev);
-        else la_vccio_init();
-        return -3;
-    }
-    s_la_io_mv = LA_VCCIO_5V0;
-    return 0;
-}
-
-int la_vccio_set_mv(int mv) {
-    if (mv == LA_VCCIO_5V0 && board_caps()->la_5v) return la_io_set_5v();
-    if (mv != LA_VCCIO_1V8 && mv != LA_VCCIO_3V3) return -1;
-
-    /* 1.8 V is a rev3 feature.  On v2 the TPS2116's MODE pin is tied to GND, so
-       the part has no manual 1.8 V selection at all: MODE low + PR1 low passes
-       the HIGHER of the two inputs (always +3V3) and MODE low + PR1 high is
-       SHUTDOWN — the bank goes high-Z, not to 1.8 V.  The old firmware called
-       that state "1.8 V" and it never was; refuse it rather than silently
-       cutting the DUT's I/O rail. */
-    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) return -2;
-
-    /* On v3 the pulls go to LA_VCCIO or GND (LA1-6 up and LA7/8 down before digital v3r4,
-       every channel both ways on v3r4), so the engaged pulls simply follow the bank to 1.8 V
-       and stay on.  Only the v2 pull-ups
-       went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
-       rail; v2 is refused above, and this keeps the invariant if that ever changes. */
-    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pull_all_off();
-
-    /* Drive the select level BEFORE switching PG3 to a push-pull output, so the
-       pin never momentarily drives the wrong rail.
-       v3 (U8 MODE tied to +3V3 = manual mode, datasheet truth table):
-           PR1 high -> VIN1 = +3V3,  PR1 low -> VIN2 = +1V8.
-       v2 (MODE tied to GND): PR1 low passes the higher input (+3V3) and PR1
-       high is shutdown, so the only reachable level is +3V3 with PR1 LOW — the
-       polarity is genuinely inverted between the two boards. */
-    /* Leaving 5 V (digital v3r4): pin 21 back on the bank before the bank moves. */
-    if (vref_out_source() == VREF_SRC_5V) (void)vref_out_set_source(VREF_SRC_BANK);
-
-    GPIO_PinState sel;
-    if (board_rev_is_v3())
-        sel = (mv == LA_VCCIO_3V3) ? GPIO_PIN_SET : GPIO_PIN_RESET;
-    else
-        sel = GPIO_PIN_RESET;   /* v2: only +3V3 is reachable, and PR1 must be low */
-    HAL_GPIO_WritePin(LA_VCCIO_SW_PORT, LA_VCCIO_SW_PIN, sel);
-
-    GPIO_InitTypeDef gp = {0};
-    gp.Mode  = GPIO_MODE_OUTPUT_PP;
-    gp.Pull  = GPIO_NOPULL;
-    gp.Speed = GPIO_SPEED_FREQ_LOW;
-    gp.Pin   = LA_VCCIO_SW_PIN;
-    HAL_GPIO_Init(LA_VCCIO_SW_PORT, &gp);
-
-    s_la_vccio_mv = mv;
-    s_la_io_mv = mv;
-    /* Let the VCCIO rail settle before it is used.  With the LA clamps (digital v3r4) their
-       reference follows the bank through a filter: about 30 ms before the pod drives.  Older
-       boards keep the 2 ms busy wait they always had. */
-    if (board_caps()->la_clamps) la_settle_clamps();
-    else HAL_Delay(2);
-    return 0;
-}
-
-int la_vccio_get_mv(void) { return s_la_vccio_mv; }
-int la_io_get_mv(void) { return s_la_io_mv; }
-
-int la_vccio_status_pin(void) {
-    return (HAL_GPIO_ReadPin(LA_VCCIO_ST_PORT, LA_VCCIO_ST_PIN) == GPIO_PIN_SET) ? 1 : 0;
-}
-
-int la_vccio_readback_mv(void) {
-    if (!board_rev_is_v3()) return 0;   /* v2 ST is ambiguous (low = 1V8 OR shutdown) */
-    return la_vccio_status_pin() ? LA_VCCIO_3V3 : LA_VCCIO_1V8;
-}
+/* The LA I/O bank (its voltage, 5 V I/O, pin 21 and the clamps' settle) is la_io.c. */
 
 /* ---- Initialisation ------------------------------------------------------ */
 
@@ -1526,7 +1398,7 @@ void signal_engine_init(void) {
    Each is an idempotent opcode; nothing here touches PSRAM. */
 void signal_engine_fabric_to_idle(void) {
     spi_cmd_write(CMD_STOP_DAC, NULL, 0);          /* also leaves loop + PSRAM-replay mode */
-    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
+    if (gw_caps()->capture_opcode_only) {
         uint8_t zero[10] = {0};                    /* CAPTURE with both counts 0 = abort */
         spi_cmd_write(CMD_CAPTURE, zero, sizeof(zero));
     }
@@ -1541,7 +1413,7 @@ void signal_engine_fabric_to_idle(void) {
        I2C_DISABLE without the target byte, and a byte too many is harmless): every target off, the
        SPI target off, no emulated pin driver. */
     for (uint8_t t = 0; t < FPGA_EMU_I2C_TARGETS; t++) spi_cmd_write(CMD_I2C_DISABLE, &t, 1);
-    if (s_fpga_version >= EMULATION_MIN_GW) {
+    if (gw_caps()->emulation) {
         uint8_t spit_off[7] = { 0 };
         spi_cmd_write(CMD_SPIT_CONFIG, spit_off, sizeof(spit_off));
         uint8_t no_pins[7] = { 0 };
@@ -1726,7 +1598,7 @@ static uint32_t s_adc_cap_base = FPGA_PSRAM_ADC_BASE;
 /* Latch the runtime capture bases into the iCE40 (0x32) and mirror them for read-back.
  * Send BEFORE arming CAPTURE.  No-op (keeps the fixed map) on gateware < v22. */
 int fpga_set_capture_bases(uint32_t la_base, uint32_t adc_base) {
-    if (s_fpga_version >= CAPTURE_BASES_MIN_GW) {
+    if (gw_caps()->capture_bases) {
         uint8_t p[6] = { (uint8_t)la_base, (uint8_t)(la_base >> 8), (uint8_t)(la_base >> 16),
                          (uint8_t)adc_base, (uint8_t)(adc_base >> 8), (uint8_t)(adc_base >> 16) };
         if (spi_cmd_write(CMD_SET_CAPTURE_BASES, p, sizeof(p)) != 0) return -1;
@@ -1780,7 +1652,7 @@ uint32_t signal_engine_dac_resident_bytes(void) {
    LE — indexed in-fabric by adc>>5), then arm the loop.  See dac_loop.v / docs. */
 int dac_control_loop_start(const uint8_t *curve, size_t curve_len,
                            uint16_t k_q15, uint16_t vmin, uint16_t vmax, uint16_t tick_div) {
-    if (s_fpga_version < DAC_CONTROL_LOOP_MIN_GW) return -2;
+    if (!gw_caps()->dac_control_loop) return -2;
     /* The running IMAGE must actually carry the loop engine — the deep-replay image reports
        the same gateware version but ties the loop off, so arming there would "succeed" and
        drive nothing.  Gated here (not just in the command handler) so every caller — cloud
@@ -1813,7 +1685,7 @@ uint16_t fpga_dac_loop_probe(void) {
    internal sweep.  Same image gate as arming — on the deep-replay image the loop registers
    drive nothing, so a "source set" there would be a lie the caller could not detect. */
 int dac_loop_set_source(uint8_t src, uint16_t in_fixed, uint16_t sweep_step) {
-    if (s_fpga_version < DAC_LOOP_SOURCE_MIN_GW) return -2;
+    if (!gw_caps()->dac_loop_source) return -2;
     if (!signal_engine_has_control_loop()) return -3;
     uint8_t args[5] = {
         (uint8_t)(src & 0x03u),
@@ -1831,7 +1703,7 @@ int dac_loop_set_source(uint8_t src, uint16_t in_fixed, uint16_t sweep_step) {
    engineering units and never carry a copy of this board's ADC calibration. */
 int dac_loop_set_inmap(uint16_t in_zero, int16_t in_gain, uint16_t in_trip,
                        bool map_en, bool trip_en) {
-    if (s_fpga_version < DAC_LOOP_INMAP_MIN_GW) return -2;
+    if (!gw_caps()->dac_loop_inmap) return -2;
     if (!signal_engine_has_control_loop()) return -3;
     uint16_t g = (uint16_t)in_gain;
     uint8_t args[7] = {
@@ -1848,7 +1720,7 @@ int dac_loop_set_inmap(uint16_t in_zero, int16_t in_gain, uint16_t in_trip,
    loop parks its output at vmin and stays there until disarmed, so a caller that does not
    read this sees a loop that is "running" and holding a rail for no visible reason. */
 bool fpga_dac_loop_tripped(void) {
-    if (s_fpga_version < DAC_LOOP_INMAP_MIN_GW) return false;
+    if (!gw_caps()->dac_loop_inmap) return false;
     uint8_t st = 0;
     if (fpga_status_read(&st) != 0) return false;
     return (st & STATUS_LOOP_TRIPPED) != 0u;
@@ -1857,7 +1729,7 @@ bool fpga_dac_loop_tripped(void) {
 /* The input the loop's last tick used (DAC_LOOP_IN_PROBE).  Pre-v29 gateware has no such
    opcode (it would answer with whatever the default state leaves on MISO), so don't ask. */
 uint16_t fpga_dac_loop_input(void) {
-    if (s_fpga_version < DAC_LOOP_SOURCE_MIN_GW) return 0;
+    if (!gw_caps()->dac_loop_source) return 0;
     uint8_t b[2] = { 0, 0 };
     spi_cmd_read(CMD_DAC_LOOP_IN_PROBE, NULL, 0, b, 2);
     return (uint16_t)(b[0] | (b[1] << 8));
@@ -1879,7 +1751,7 @@ int signal_engine_image_kind(void) {
     if (f & FPGA_FEATURE_EMULATION)    return 2;
     if (f & FPGA_FEATURE_DEEP_REPLAY)  return 1;
     if (f & FPGA_FEATURE_CONTROL_LOOP) return 0;
-    return s_fpga_version >= CAPTURE_BASES_MIN_GW ? -1 : 0;
+    return gw_caps()->capture_bases ? -1 : 0;
 }
 
 const char *signal_engine_image_name(int kind) {
@@ -1892,8 +1764,10 @@ const char *signal_engine_image_name(int kind) {
 }
 
 /* Which optional block the running warmboot image carries (FPGA_FEATURES 0x18). */
+uint8_t signal_engine_fpga_features_cached(void) { return s_fpga_features; }
+
 uint8_t signal_engine_fpga_features(void) {
-    if (s_fpga_version >= CAPTURE_BASES_MIN_GW) {   /* >=v22 has the opcode */
+    if (gw_caps()->capture_bases) {   /* >=v22 has the opcode */
         uint8_t f = 0;
         if (spi_cmd_read(CMD_FPGA_FEATURES, NULL, 0, &f, 1) == 0) { s_fpga_features = f; return f; }
     }
@@ -1906,31 +1780,27 @@ uint8_t signal_engine_fpga_features(void) {
    See signal_engine_caps_t for why that used to be two divergent lists. */
 void signal_engine_caps(signal_engine_caps_t *out) {
     if (!out) return;
-    uint8_t ver   = signal_engine_fpga_version();
-    uint8_t feats = signal_engine_fpga_features();
+    /* The image bits from a live FPGA_FEATURES read: this is what the pod announces. */
+    const gw_caps_t g = gw_caps_for(signal_engine_fpga_version(), signal_engine_fpga_features());
 
     /* >=v23 carries per-image FEATURE bits (an image swap trades closed-loop for deep-replay),
        so advertise from the RUNNING image; older gateware is version-gated only. */
-    out->deep_replay = (ver >= DAC_CONTROL_LOOP_MIN_GW)
-                           ? ((feats & FPGA_FEATURE_DEEP_REPLAY) != 0)
-                           : (ver >= DAC_DEEP_REPLAY_MIN_GW);
-    out->control_loop = (ver >= DAC_CONTROL_LOOP_MIN_GW) &&
-                        ((feats & FPGA_FEATURE_CONTROL_LOOP) != 0);
+    out->deep_replay  = g.dac_control_loop ? g.img_deep_replay : g.dac_deep_replay;
+    out->control_loop = g.dac_control_loop && g.img_control_loop;
     /* Hardware co-triggered DAC start (>=v27): the iCE40 fires the DAC on the capture's t0, so
        DAC sample 0 is phase-locked to the capture instead of free-running. */
-    out->cotrig = ver >= DAC_COTRIG_MIN_GW;
+    out->cotrig = g.dac_cotrig;
     /* loop_sources / loop_input_map are gated on the GATEWARE GENERATION, not the running
        image: both images are built from the same tree, so >=v29 / >=v30 means this pod has
        them — and a flag that survives an image swap must not blink off for the seconds between
        the swap and the pod's re-announce.  Whether the loop RUNS stays gated on control_loop. */
-    out->loop_sources   = ver >= DAC_LOOP_SOURCE_MIN_GW;
-    out->loop_input_map = ver >= DAC_LOOP_INMAP_MIN_GW;
-    out->gpio_read       = ver >= GPIO_GET_MIN_GW;
-    out->capture_trigger = ver >= CAPTURE_TRIGGER_MIN_GW;
-    out->emulation       = ver >= EMULATION_MIN_GW &&
-                           ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
-    out->spi_master      = ver >= SPI_MASTER_MIN_GW;
-    out->uart_frame      = ver >= UART_FRAME_MIN_GW;
+    out->loop_sources    = g.dac_loop_source;
+    out->loop_input_map  = g.dac_loop_inmap;
+    out->gpio_read       = g.gpio_get;
+    out->capture_trigger = g.capture_trigger;
+    out->emulation       = g.emulation && (g.img_emulation || blob_store_present(BLOB_GW2));
+    out->spi_master      = g.spi_master;
+    out->uart_frame      = g.uart_frame;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
@@ -2032,7 +1902,7 @@ int fpga_warmboot(uint8_t image) {
 }
 
 void signal_engine_dac_psram_stage(uint32_t total_bytes) {
-    s_dac_ps_base = (s_fpga_version >= CONCURRENT_PSRAM_MIN_GW)
+    s_dac_ps_base = (gw_caps()->concurrent_psram)
                         ? FPGA_DAC_BASE_FOR(total_bytes)   /* top-anchored */
                         : FPGA_PSRAM_ADC_BASE;             /* legacy: overlay ADC region (0) */
 }
@@ -2080,7 +1950,7 @@ int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     if (fpga_start_dac_psram(signal_engine_dac_psram_base(), count, divider) != 0) return -1;
     /* Mark the top region occupied so a concurrent LA/ADC capture is capped below it
        (>=v18 only; older gateware serialises replay and capture). */
-    s_dac_ps_active = (s_fpga_version >= CONCURRENT_PSRAM_MIN_GW);
+    s_dac_ps_active = (gw_caps()->concurrent_psram);
 #if defined(BENCHPOD_EMI_TEST)
     s_dac_ps_playing = true;
 #endif
@@ -2165,7 +2035,7 @@ void fpga_set_dac_stop_after_us(uint32_t us) {
        unknown opcode, so skip it entirely (the feature is simply unavailable there).  On capable
        gateware ALWAYS send it — 0 disarms — so a stale threshold from a previous capture can't
        fire on this one.  cycles = us * 24 MHz clk; clamp to the 32-bit counter width. */
-    if (s_fpga_version < DAC_CAPTURE_STOP_MIN_GW) return;
+    if (!gw_caps()->dac_capture_stop) return;
     uint64_t cycles = (uint64_t)us * (FPGA_HFOSC_HZ / 1000000u);
     if (cycles > 0xFFFFFFFFu) cycles = 0xFFFFFFFFu;
     fpga_set_dac_stop_after((uint32_t)cycles);
@@ -2175,7 +2045,7 @@ bool fpga_dac_arm_on_capture(void) {
     /* Only >=v27 decodes CMD_DAC_ARM_ON_CAPTURE; on older gateware it's an unknown opcode, so
        report "can't co-trigger" and let the caller fall back to a plain sequential start.  0 args:
        the iCE40 sets dac_pend and defers the NEXT DAC start opcode to the next capture arm. */
-    if (s_fpga_version < DAC_COTRIG_MIN_GW) return false;
+    if (!gw_caps()->dac_cotrig) return false;
     spi_cmd_write(CMD_DAC_ARM_ON_CAPTURE, NULL, 0);
     s_cotrig_pending = true;
     return true;
@@ -2241,7 +2111,7 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     psram_write(s_adc_cap_base, (const uint8_t *)CAP_NOWRITE_SENTINEL, sizeof(CAP_NOWRITE_SENTINEL));
     psram_bus_release();
     psram_bus_handover();  /* hand the shared bus to the iCE40 (no hold may survive this) */
-    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
+    if (gw_caps()->capture_opcode_only)
         fpga_capture_cmd((uint32_t)samples, divider, 0u, 0u);   /* ADC only: LA count 0 */
     else {
         capture_regions_dirty((uint32_t)samples, 0u);
@@ -2293,7 +2163,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        it can stream the ADC samples into PSRAM. */
     if (fpga_load_wave((const uint8_t *)sample_buf16, period * 2u) != 0) return -1;
     psram_bus_handover();
-    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW) {
+    if (gw_caps()->capture_opcode_only) {
         /* v40: START_MEASURE is gone.  Stage the DAC start on the co-trigger, then arm an
            ADC-only capture: the DAC starts on the capture's t0, the cycle MEASURE used. */
         (void)fpga_dac_arm_on_capture();
@@ -2475,7 +2345,7 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
         (uint8_t)(wire & 0xFF),    (uint8_t)((wire >> 8) & 0xFF),
     };
     psram_bus_handover();  /* hand the shared bus to the iCE40 */
-    if (s_fpga_version >= CAPTURE_OPCODE_ONLY_MIN_GW)
+    if (gw_caps()->capture_opcode_only)
         fpga_capture_cmd(0u, 0u, (uint32_t)samples, divider);   /* LA only: ADC count 0 */
     else {
         capture_regions_dirty(0u, (uint32_t)samples);
@@ -2504,7 +2374,7 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
    `pre`, SET_TRIGGER already asked for a pre-trigger window (fpga_set_trigger_pre): the ring keeps
    up to LA_CHANGE_PRE_BYTES of it, which the gateware does not count, so they come off the limit. */
 int fpga_la_change_start(size_t samples, uint32_t k, bool pre) {
-    if (s_fpga_version < LA_CHANGE_MIN_GW || k == 0) return -1;
+    if (!gw_caps()->la_change || k == 0) return -1;
     uint32_t la_max = signal_engine_la_max_samples(false);
     if (samples == 0 || samples > la_max) return -1;
     uint64_t ticks = (uint64_t)samples * k;
@@ -2698,7 +2568,7 @@ int fpga_dual_capture_start(uint32_t adc_count, uint16_t adc_div,
    ADC base as the LA region's end.  The read-back scans the stream like la_capture's. */
 int fpga_dual_change_start(uint32_t adc_count, float adc_req_hz, size_t la_samples, uint32_t k,
                            float *adc_rate_hz) {
-    if (s_fpga_version < LA_CHANGE_MIN_GW || k == 0 || la_samples == 0) return -1;
+    if (!gw_caps()->la_change || k == 0 || la_samples == 0) return -1;
     if (adc_count > ADC_CAP_MAX_SAMPLES) return -1;
     uint32_t ad = adc_count ? adc_divider_from_rate_hz(adc_req_hz) : 2u;
     if (ad < 2u) ad = 2u;
@@ -2846,7 +2716,7 @@ void fpga_set_led(uint8_t mask) {
 /* ---- GPIO_GET + capture trigger (gateware >= v35) ------------------------ */
 
 int fpga_gpio_get(uint16_t *levels) {
-    if (s_fpga_version < GPIO_GET_MIN_GW) return -2;
+    if (!gw_caps()->gpio_get) return -2;
     uint8_t b[2] = {0};
     if (spi_cmd_read(CMD_GPIO_GET, NULL, 0, b, sizeof(b)) != 0) return -1;
     if (levels) *levels = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x3FFFu);
@@ -2857,8 +2727,8 @@ int fpga_set_trigger(unsigned la, uint8_t mode) { return fpga_set_trigger_pre(la
 
 /* SET_TRIGGER with flags bit0 = keep a pre-trigger window (change capture, gateware >= v50). */
 int fpga_set_trigger_pre(unsigned la, uint8_t mode, bool pre) {
-    if (s_fpga_version < CAPTURE_TRIGGER_MIN_GW) return -2;
-    if (pre && s_fpga_version < LA_CHANGE_MIN_GW) return -2;
+    if (!gw_caps()->capture_trigger) return -2;
+    if (pre && !gw_caps()->la_change) return -2;
     if (mode > 4u) return -1;
     int idx = 0;
     if (mode != 0u) {
@@ -2870,7 +2740,7 @@ int fpga_set_trigger_pre(unsigned la, uint8_t mode, bool pre) {
 }
 
 int fpga_trigger_status(uint8_t *status) {
-    if (s_fpga_version < CAPTURE_TRIGGER_MIN_GW) return -2;
+    if (!gw_caps()->capture_trigger) return -2;
     uint8_t b = 0;
     if (spi_cmd_read(CMD_TRIGGER_STATUS, NULL, 0, &b, 1) != 0) return -1;
     if (status) *status = b;
@@ -3056,7 +2926,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 #define SWDQ_IDLE_TIMEOUT_US  250000u   /* 512 bytes of writes at the slowest SWCLK: ~30 ms */
 
 int fpga_swdq_config(unsigned half, unsigned idle_cycles) {
-    if (!swd_armed_local || s_fpga_version < SWD_QUEUE_MIN_GW) return -1;
+    if (!swd_armed_local || !gw_caps()->swd_queue) return -1;
     if (half < 2u) half = 2u;
     if (half > 63u) half = 63u;
     if (idle_cycles > 31u) idle_cycles = 31u;
@@ -3128,7 +2998,7 @@ uint32_t fpga_spi_hz_for_half(unsigned half) {
 
 int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                  unsigned half, unsigned mode) {
-    if (s_fpga_version < SPI_MASTER_MIN_GW) return -3;
+    if (!gw_caps()->spi_master) return -3;
     if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
     int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
     for (int i = 0; i < 4; i++) {
@@ -3136,7 +3006,7 @@ int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
         for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
     }
     if (mode > 3) return -1;
-    if ((mode == 1 || mode == 2) && s_fpga_version < SPI_MODES12_MIN_GW) return -3;
+    if ((mode == 1 || mode == 2) && !gw_caps()->spi_modes12) return -3;
     if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
     if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
     /* [sck][mosi][miso][cs][half][flags: bit0 CPOL, bit1 invert SCK (v55: CPOL xor CPHA)] */
@@ -3233,7 +3103,7 @@ uint32_t fpga_i2c_hz_for_half(unsigned half) {
 }
 
 int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
-    if (s_fpga_version < I2C_MASTER_MIN_GW) return -3;
+    if (!gw_caps()->i2c_master) return -3;
     if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
     int ws = la_wire_index(sda), wc = la_wire_index(scl);
     if (ws < 0 || wc < 0 || ws == wc) return -1;
@@ -3489,9 +3359,9 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
                         uint32_t baud, uint8_t frame, bool enable) {
     if (enable && uart_armed_local) return -2;   /* already in use */
     frame &= UART_FRAME_MASK;
-    if (de_ch && s_fpga_version < UART_DE_MIN_GW) return -3;
-    if (frame && s_fpga_version < UART_FRAME_MIN_GW) return -3;
-    if ((frame & UART_FRAME_HALFDUPLEX) && s_fpga_version < UART_HALFDUPLEX_MIN_GW) return -3;
+    if (de_ch && !gw_caps()->uart_de) return -3;
+    if (frame && !gw_caps()->uart_frame) return -3;
+    if ((frame & UART_FRAME_HALFDUPLEX) && !gw_caps()->uart_half_duplex) return -3;
     uart_tx_clear();                             /* a new session starts with nothing queued */
     if (enable) {
         /* The gateware's RX FIFO keeps its bytes across disarm and arm (only its TX FIFO resets

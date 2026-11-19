@@ -6,7 +6,7 @@
 
 #include "i2c_bus.h"   /* analog_path_t */
 
-/* ---- Quad DAC8554 on the analog v3r2 board (board_rev.h BOARD_REV_V3R2) ----------------------
+/* ---- Quad DAC8554 on the analog v3r2 board (board_caps()->dac_quad) ----------------------
  *
  * v3r2 replaced the DAC8551 and its two TMUX1104 output muxes (and their TCA9554 at 0x24) with a
  * TI DAC8554: one channel per output, on the same three iCE40 pins, with the same 24-bit frame.
@@ -40,11 +40,12 @@
 void dac_quad_set_present(bool present);
 bool dac_quad_present(void);
 
-/* The one gate: the DAC8554 is assumed only on an analog board whose strap reads v3r2, or on the
+/* The one gate: the DAC8554 is assumed only on an analog board whose strap reads v3r2
+   (`board_quad` = board_caps()->dac_quad), or on the
    analog module of digital v3r3 (`module`, board_variant.h), which has the same DAC.  v2, v3, an
    unknown or unrecognised strap (which runs as v3) and the digital boards keep the DAC8551
    behaviour, byte for byte: no DAC_CTRL frame is ever sent to them. */
-bool dac_quad_for_board(int board_rev, bool has_analog, bool module);
+bool dac_quad_for_board(bool board_quad, bool has_analog, bool module);
 
 #define DAC_QUAD_A     0
 #define DAC_QUAD_B     1

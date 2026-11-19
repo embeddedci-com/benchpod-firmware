@@ -35,7 +35,7 @@ static const char *gate(const char *json, const cmd_gate_ctx_t *c) {
         memcpy(cmd, p, n);
     }
     memset(s_why, 0, sizeof(s_why));
-    return cmd_gate_check(cmd, json, cmd_tier(cmd, json), c, s_why, sizeof(s_why));
+    return cmd_gate_check(cmd_find(cmd), cmd, json, cmd_tier(cmd, json), c, s_why, sizeof(s_why));
 }
 
 static int starts(const char *s, const char *prefix) {

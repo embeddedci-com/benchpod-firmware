@@ -9,8 +9,9 @@
 typedef void (*console_out_t)(void *ctx, const char *s);
 
 /* Execute one command line, writing all output through `out`.  `line` is
-   modified in place (tokenised).  Transport-agnostic; runs on the hw worker task. */
-void console_exec(char *line, console_out_t out, void *ctx);
+   modified in place (tokenised).  Transport-agnostic; runs on the hw worker task, which is
+   why it takes no lock.  The commands are a table in console.c (k_console_cmds). */
+void console_exec_hw(char *line, console_out_t out, void *ctx);
 
 /* Local interactive console over the USB-CDC VCP / USART2.  console_poll() (net
    task's sibling console task) does line editing only and submits complete lines

@@ -123,6 +123,28 @@ static int caps_none(board_caps_t c)
     return !c.vref_out && !c.la_5v && !c.la_clamps && !c.pull_expanders && !c.usb_sel;
 }
 
+static int caps_v3(board_caps_t c) { return c.la_1v8 && c.nrst_pin && c.usb_cc; }
+static int caps_v2(board_caps_t c) { return !c.la_1v8 && !c.nrst_pin && !c.usb_cc; }
+
+/* The v3 gates were board_rev_is_v3() (rev >= BOARD_REV_V3); the quad DAC and the calibration
+   set compared the revision directly.  The same answers for every revision, known or not. */
+static void test_rev_gates(void)
+{
+    const board_caps_t z = *board_caps();
+    CHECK(caps_v2(z) && !z.dac_quad && z.cal_set == BOARD_CAL_V2, "before init: as v2");
+    static const int revs[] = { BOARD_REV_UNKNOWN, 1, BOARD_REV_V2, BOARD_REV_V3, BOARD_REV_V3R2,
+                                BOARD_REV_V3R4, 6, 99, -1 };
+    for (unsigned i = 0; i < sizeof(revs) / sizeof(revs[0]); i++) {
+        const int r = revs[i];
+        const board_caps_t c = board_caps_for_rev(r);
+        CHECK(r >= BOARD_REV_V3 ? caps_v3(c) : caps_v2(c), "rev %d v3 gates", r);
+        CHECK(c.dac_quad == (r == BOARD_REV_V3R2), "rev %d dac_quad", r);
+        const board_cal_set_t want = r == BOARD_REV_V3R2 ? BOARD_CAL_V3R2
+                                   : (r == BOARD_REV_V3 || r == BOARD_REV_V3R4) ? BOARD_CAL_V3 : BOARD_CAL_V2;
+        CHECK(c.cal_set == want, "rev %d cal_set %d, want %d", r, c.cal_set, want);
+    }
+}
+
 static void test_caps(void)
 {
     /* Before board_caps_init(): nothing new. */
@@ -146,6 +168,7 @@ static void test_init(void)
 
 int main(void)
 {
+    test_rev_gates();   /* first: it checks the state before board_caps_init() */
     test_caps();
     test_init();
     test_edges();

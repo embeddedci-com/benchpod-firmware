@@ -74,6 +74,7 @@ void nrst_ctrl_assert(bool asserted) { nrst_calls++; nrst_state = asserted; }
 /* ---- fake SWD queue (swd_ll_batch) --------------------------------------- */
 static uint8_t  gw_version = 44;
 uint8_t signal_engine_fpga_version(void) { return gw_version; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 static uint8_t  qbytes[4096];
 static size_t   qbytes_n;
 static int      q_runs, q_cfgs;

@@ -19,6 +19,7 @@
 #include "i2c_bus.h"   /* I2C_ADDR_TCA9554_LA */
 #include "la_pull.h"
 #include "signal_engine.h"
+#include "la_io.h"
 #include "pull_exp.h"
 #include "vref_out.h"
 #include "bp_errors.h"
@@ -55,6 +56,7 @@ uint64_t time_us_64(void) { return 0; }
 
 /* ---- fakes: the FPGA -------------------------------------------------------------------- */
 uint8_t signal_engine_fpga_version(void) { return 59; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 int  fpga_la_set(unsigned ch, int mode) { (void)ch; (void)mode; return 0; }
 int  fpga_la_step(unsigned ch, uint32_t steps, uint32_t delay_us) { (void)ch; (void)steps; (void)delay_us; return 0; }
 bool fpga_la_step_busy(void) { return false; }
@@ -62,7 +64,6 @@ int  fpga_gpio_get(uint16_t *levels) { *levels = 0; return 0; }
 
 /* ---- fakes: the board ------------------------------------------------------------------- */
 static int  g_rev = BOARD_REV_V3;
-bool board_rev_is_v3(void) { return g_rev != BOARD_REV_V2; }
 static int  g_vccio = LA_VCCIO_3V3, g_io = LA_VCCIO_3V3, g_set_rc;
 int  la_vccio_get_mv(void) { return g_vccio; }
 int  la_io_get_mv(void) { return g_io; }

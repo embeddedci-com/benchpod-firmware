@@ -7,20 +7,52 @@
 /* ============================================================================
  * board_caps — what this board has, decided once from the revision straps.
  *
- * The one revision gate for hardware that only some boards have.  Code for such hardware asks
- * board_caps() and never compares board_rev_get() itself, so adding a board revision is one
- * change here (board_caps_for_rev) instead of version checks spread over the firmware.
+ * The one revision gate.  Code for hardware that only some boards have asks board_caps() and
+ * never compares board_rev_get() itself, so adding a board revision is one change here
+ * (board_caps_for_rev) instead of version checks spread over the firmware.  Only board_rev.c,
+ * this file and the calibration-set selection in cal_data.c name a revision; `make test` fails
+ * on board_rev_get / board_rev_is_v3 / BOARD_REV_V* anywhere else in src/
+ * (test/check_board_rev_gates.py).
  *
- * Every field is false (zero) on the boards that existed before digital v3r4, and before
- * board_caps_init() runs, so an early caller or an unrecognised board gets exactly the behavior
- * the firmware had before v3r4.  board_rev.c already turns any doubt about the straps into
- * BOARD_REV_V3.
+ * Every field is false (zero) before board_caps_init() runs, which is how a v2 board ran
+ * (board_rev_is_v3() was false before board_rev_init() too), so an early caller gets the most
+ * conservative behavior.  board_rev.c already turns any doubt about the straps into
+ * BOARD_REV_V3, and board_rev_init() latches the capabilities itself.
  *
- * Older gates stay where they are (board_rev_is_v3() for the v3 features, board_variant.h for the
- * analog front end, module_link.h for the module link); this struct is for what is new.
+ * Not in here: whether the analog front end is fitted, and where (board_variant.h: decided
+ * later at boot, from I2C probes after the buses are up), and what the analog module is
+ * (module_link.h, from its link pins and EEPROM).  They are not a function of the revision.
  * ==========================================================================*/
 
+/* The calibration set a revision's analog section was fitted on (cal_data.h). */
+typedef enum {
+    BOARD_CAL_V2 = 0,   /* v2, and any revision this firmware does not know */
+    BOARD_CAL_V3,       /* v3, analog-v3r1, the digital boards (v3r4 included) */
+    BOARD_CAL_V3R2,     /* analog v3r2 (and the analog module, set by main.c) */
+} board_cal_set_t;
+
 typedef struct {
+    /* ---- v3 and later (every revision from the PA3 strap on) ---- */
+    /* The LA-bank mux runs in manual mode (MODE tied high): PR1 picks 3.3 V or 1.8 V, and its
+       status pin tells which.  False (v2, MODE grounded): only 3.3 V is reachable, with PR1 low,
+       and PR1 high shuts the bank down; the status pin is ambiguous; the pull-ups go to +3V3, so
+       a pull is refused unless the bank is at 3.3 V.  la_io.c, pull_tca9554.c. */
+    bool la_1v8;
+    /* PF4 NRST_CTRL, the dedicated open-drain DUT reset pin.  nrst_ctrl.c. */
+    bool nrst_pin;
+    /* The USB-C CC1/CC2 sense taps on the MCU's ADC.  usb_cc.c. */
+    bool usb_cc;
+
+    /* ---- analog v3r2 ---- */
+    /* The on-board analog section has the quad DAC (a channel per output) instead of the single
+       DAC and its output muxes.  Only meaningful when the analog front end is on the board
+       (dac_quad_for_board(); the analog module has the quad DAC on any revision). */
+    bool dac_quad;
+    /* The calibration set (cal_data_use()).  main.c switches to BOARD_CAL_V3R2 when the analog
+       front end is the module. */
+    board_cal_set_t cal_set;
+
+    /* ---- digital v3r4 ---- */
     /* J1 pin 21 is VREF_OUT: PG5 VREF_SEL (follow the bank / 5 V input), PG6 VREF_5V_EN (the 5 V
        switch) and the PA0 VREF_SENSE divider (one third of pin 21).  vref_out.h. */
     bool vref_out;
@@ -41,8 +73,8 @@ typedef struct {
 /* The capabilities of a revision (a BOARD_REV_* value).  Pure (host tests). */
 board_caps_t board_caps_for_rev(int rev);
 
-/* Latch the capabilities of a revision: board_caps_init(board_rev_get()), once, right after
-   board_rev_init(). */
+/* Latch the capabilities of a revision.  board_rev_init() calls it once it has the revision;
+   host tests call it directly. */
 void board_caps_init(int rev);
 
 /* The latched capabilities (all false before board_caps_init()). Never NULL. */

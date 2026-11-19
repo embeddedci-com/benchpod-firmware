@@ -2,7 +2,7 @@
  * cal_data.c — the calibration tables behind cal_data.h.  Pure: no HAL.
  */
 #include "cal_data.h"
-#include "board_rev.h"
+#include "board_caps.h"
 
 /* v2: measured 2026-07-02 through the internal cal path. */
 static const cal_set_t CAL_V2 = {
@@ -80,14 +80,13 @@ void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask) {
     s_dac = next;
 }
 
-void cal_data_select(int board_rev) {
-    /* Digital v3r4 is a v3 board (board_rev_is_v3()): the v3 set, as on the digital boards before
-       it.  Without this it fell through to the v2 set.  With an analog module, main.c picks the
-       module's set right after. */
-    s_active = (board_rev == BOARD_REV_V3R2) ? &CAL_V3R2
-             : (board_rev == BOARD_REV_V3 || board_rev == BOARD_REV_V3R4) ? &CAL_V3 : &CAL_V2;
+void cal_data_use(board_cal_set_t set) {
+    /* With an analog module, main.c picks the module's set (BOARD_CAL_V3R2) right after. */
+    s_active = (set == BOARD_CAL_V3R2) ? &CAL_V3R2 : (set == BOARD_CAL_V3) ? &CAL_V3 : &CAL_V2;
     s_dac = s_active->dac;   /* the compiled lines until adc_cal_load puts this pod's in */
 }
+
+void cal_data_select(int board_rev) { cal_data_use(board_caps_for_rev(board_rev).cal_set); }
 
 const cal_set_t *cal_data(void) {
     return s_active;

@@ -15,8 +15,8 @@
 #include "la_pull.h"
 #include "i2c_bus.h"         /* I2C_ADDR_TCA9554_LA */
 #include "tca9554.h"
-#include "signal_engine.h"   /* la_vccio_get_mv: a pull needs a selected bank voltage */
-#include "board_rev.h"       /* board_rev_is_v3: v2 pull-ups go to +3V3 */
+#include "la_io.h"           /* la_vccio_get_mv: a pull needs a selected bank voltage */
+#include "board_caps.h"      /* la_1v8: v2 pull-ups go to +3V3 */
 
 static const int8_t s_tca_pin[9] = { -1, 2, 3, 1, 0, 7, 6, 5, 4 };
 static uint8_t      s_on;   /* bit la-1: the switch is closed (what the host asked for) */
@@ -25,7 +25,7 @@ static bool tca_available(void)
 {
     int mv = la_vccio_get_mv();
     if (mv == LA_VCCIO_3V3) return true;
-    return mv == LA_VCCIO_1V8 && board_rev_is_v3();
+    return mv == LA_VCCIO_1V8 && board_caps()->la_1v8;
 }
 
 static int tca_set(unsigned la, la_pull_dir_t dir, pull_str_t str)

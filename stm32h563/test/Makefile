@@ -31,7 +31,7 @@ SENSORMGR_SRCS := test_sensor_mgr.c fake_fpga_emu.c $(SENSORDEF_CORE) ../src/sen
 SENSORDEF_FUZZ_SRCS := test_sensor_def_fuzz.c $(SENSORDEF_CORE)
 SANITIZE := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
-SWDLL_SRCS    := test_swd_ll.c ../src/swd_ll.c
+SWDLL_SRCS    := test_swd_ll.c ../src/gw_caps.c ../src/swd_ll.c
 NET_DHCP_SRCS := test_net_dhcp.c ../src/net_dhcp.c
 NET_ROUTE_SRCS := test_net_route.c ../src/net_route.c
 USB_DHCPD_SRCS := test_usb_dhcpd.c ../src/usb_dhcpd.c
@@ -79,6 +79,8 @@ BOOTGUARD_SRCS := test_boot_guard.c ../src/boot_guard.c ../src/boot_policy.c
 FLASHLAYOUT_SRCS := test_flash_layout.c
 BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c
 BOARDCAPS_SRCS := test_board_caps.c ../src/board_caps.c
+GWCAPS_SRCS := test_gw_caps.c ../src/gw_caps.c
+LAIO_SRCS := test_la_io.c ../src/la_io.c ../src/board_caps.c
 VREF_SRCS     := test_vref.c ../src/vref_logic.c ../src/bp_json.c
 PULLEXP_SRCS  := test_pull_exp.c ../src/pull_exp_logic.c
 # pull_exp.c is #included by its state test (shim_pull stands in for the HAL, I2C, pin 21, power).
@@ -87,13 +89,13 @@ MODEE_SRCS := test_module_eeprom.c ../src/module_eeprom.c
 BUSREC_SRCS   := test_bus_recovery.c
 CANTIM_SRCS   := test_can_timing.c ../src/can_timing.c ../src/can_ring.c
 CFGSTORE_SRCS := test_config_store.c ../src/config_store.c ../src/cloud_config.c mocks/mock_flash.c
-DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/dac_quad.c ../src/analog_path.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
-ANAPATH_SRCS := test_analog_path.c ../src/analog_path.c ../src/dac_quad.c ../src/dac_limits.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-DACQUAD_SRCS := test_dac_quad.c ../src/dac_quad.c ../src/analog_path.c ../src/dac_limits.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c
-DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c
-WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/current_out.c
+DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/dac_quad.c ../src/analog_path.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
+ANAPATH_SRCS := test_analog_path.c ../src/analog_path.c ../src/dac_quad.c ../src/dac_limits.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+DACQUAD_SRCS := test_dac_quad.c ../src/dac_quad.c ../src/analog_path.c ../src/dac_limits.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c ../src/board_caps.c
+DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c ../src/board_caps.c
+WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/board_caps.c ../src/current_out.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c ../src/log_level.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c
@@ -130,17 +132,17 @@ CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_js
 CH_INC := -Ishim_ch
 CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c ../src/lease_local.c
 CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
-CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c \
+CHUART_SRCS := test_ch_uart.c ../src/gw_caps.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c \
               ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c
-CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
-              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c \
+CHDAC_SRCS := test_ch_dac.c ../src/gw_caps.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
+              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c ../src/board_caps.c \
               ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c
-CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c \
+CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
-CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
+CHCAPTURE_SRCS := test_ch_capture.c ../src/gw_caps.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
                   ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/psram_alloc.c ../src/la_rate.c
 # The LA pull commands and the pull driver on every board revision (shim_pull: pull_exp.c's HAL).
-CHPINS_SRCS := test_ch_pins.c ../src/command_handler_pins.c ../src/la_pull.c ../src/pull_tca9554.c ../src/la_pins.c ../src/board_caps.c \
+CHPINS_SRCS := test_ch_pins.c ../src/gw_caps.c ../src/command_handler_pins.c ../src/la_pull.c ../src/pull_tca9554.c ../src/la_pins.c ../src/board_caps.c \
                ../src/bp_json.c ../src/pull_exp.c ../src/pull_exp_logic.c
 # status: the real handler with its inputs faked at their longest, the caps[] list from cloud_caps.c.
 CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/cloud_caps.c ../src/bp_json.c
@@ -366,6 +368,15 @@ build/test_board_caps: $(BOARDCAPS_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BOARDCAPS_SRCS) -lm -o $@
 
+build/test_gw_caps: $(GWCAPS_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(GWCAPS_SRCS) -lm -o $@
+
+# la_io.c with host stand-ins (shim_la_io/) for the HAL and the bank mux pins.
+build/test_la_io: $(LAIO_SRCS) $(wildcard shim_la_io/*.h)
+	@mkdir -p build
+	$(CC) $(CFLAGS) -Ishim_la_io $(LAIO_SRCS) -lm -o $@
+
 build/test_vref: $(VREF_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(VREF_SRCS) -lm -o $@
@@ -556,7 +567,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_log_level build/test_console_prompt build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -620,6 +631,8 @@ run: $(TESTS)
 	@./build/test_flash_layout
 	@./build/test_board_variant
 	@./build/test_board_caps
+	@./build/test_gw_caps
+	@./build/test_la_io
 	@./build/test_vref
 	@./build/test_pull_exp
 	@./build/test_pull_exp_state
@@ -687,12 +700,16 @@ endif
 	@$(MAKE) --no-print-directory docs-check
 
 # Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py), and
-# the console replies host tools parse must not change (check_console_contract.py).
+# the console replies host tools parse must not change (check_console_contract.py), and only
+# board_rev/board_caps read the board revision (check_board_rev_gates.py), and the command table's
+# hand-kept copies (tier vectors, the API.md index) match k_tiers (check_cmd_table.py).
 PYTHON ?= python3
 docs-check:
 	@$(PYTHON) ../tools/emi/test_emi_tools.py
 	@$(PYTHON) check_docs_coverage.py
 	@$(PYTHON) check_console_contract.py
+	@$(PYTHON) check_board_rev_gates.py
+	@$(PYTHON) check_cmd_table.py
 
 clean:
 	rm -rf build

@@ -3,7 +3,7 @@
 #include "board_caps.h"
 #include "board_pins.h"
 #include "mcu_adc.h"
-#include "signal_engine.h"   /* la_vccio_get_mv */
+#include "la_io.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"
 #include "bp_log.h"
 

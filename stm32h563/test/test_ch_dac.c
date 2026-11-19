@@ -95,6 +95,7 @@ int dac_set_constant(uint8_t v, uint32_t div) { (void)v; (void)div; return 0; }
 void dac_stop(void) {}
 bool fpga_dac_arm_on_capture(void) { return false; }
 uint8_t signal_engine_fpga_version(void) { return 47; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 bool signal_engine_has_control_loop(void) { return true; }
 int dac_control_loop_start(const uint8_t *c, size_t n, uint16_t k, uint16_t lo, uint16_t hi, uint16_t t) {
     (void)c; (void)n; (void)k; (void)lo; (void)hi; (void)t; return 0;
