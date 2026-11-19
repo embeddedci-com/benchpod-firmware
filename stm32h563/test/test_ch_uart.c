@@ -5,8 +5,11 @@
  * pull-up hold and its restore, the re-arm after a gateware reconfiguration, and the teardown.
  * The frame format (parity, stop_bits): parsed, refused on old gateware, kept across a re-arm.
  * Half duplex (one wire) and the boot-mode entry: the sequence and its order, and the refusals.
+ * uart_cfg_parse on its own (every refusal, in the order the replies come), and the pins: the
+ * session's from before the entry, freed on every way out, another user's left alone.
  *
- * The soft UART, the pull-up expander, the send ring and the clock are fakes.
+ * The soft UART, the pull backends (fake_pull.c), the send ring and the clock are fakes; the pin
+ * table and the pull layer are the real ones.
  */
 #include <stdio.h>
 #include <string.h>
@@ -61,6 +64,9 @@ static void seq(const char *fmt, unsigned v) {
 #define g_pullup_on(la) (fake_pull_dir[la] == LA_PULL_UP)
 static bool g_pu_at_cfg;
 static unsigned g_de;
+static int g_cfg_rc;           /* fpga_uart_config_de fails with it (-2 busy, -1 bad args) */
+static int g_tx_fn_at_reset = -1;   /* the TX pin's function when the entry asserted reset */
+static unsigned g_tx_pin;
 static bool g_de_inv;
 int fpga_uart_config_de(unsigned rx, unsigned tx, unsigned de, bool de_inv, uint32_t baud, uint8_t frame,
                         bool en) {
@@ -68,12 +74,12 @@ int fpga_uart_config_de(unsigned rx, unsigned tx, unsigned de, bool de_inv, uint
     g_de = de; g_de_inv = de_inv;
     g_pu_at_cfg = g_pullup_on(rx);
     seq("cfg%u", rx);
-    return 0;
+    return g_cfg_rc;
 }
 int fpga_la_set(unsigned ch, int mode) { seq(mode == 0 ? "lo%u" : mode == 2 ? "z%u" : "hi%u", ch); return 0; }
 static bool g_nrst_ok = true;
 bool nrst_ctrl_supported(void) { return g_nrst_ok; }
-void nrst_ctrl_assert(bool a) { seq("rst%u", a); }
+void nrst_ctrl_assert(bool a) { if (a) g_tx_fn_at_reset = (int)la_pins_fn(g_tx_pin); seq("rst%u", a); }
 void sleep_ms(uint32_t ms) { seq("s%u", ms); }
 static char g_reply[256];
 static int g_err_code;
@@ -107,9 +113,6 @@ static int de_claimed(void) {
     uint16_t m = la_pins_mask_fn(LA_FN_UART_DE);
     for (int la = 1; la <= 14; la++) if (m & (1u << (la - 1))) return la;
     return -1;
-}
-bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t free_fns) {
-    (void)c; (void)fn; (void)las; (void)n; (void)free_fns; return true;
 }
 bool require_la_voltage(int c) { (void)c; return true; }
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
@@ -235,23 +238,24 @@ static void test_teardown_and_rearm(void) {
 }
 
 static void test_frame(void) {
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
+    /* conn 4: the last TCP conn (5 is not one, and closing it would not end the session) */
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
     CHECK(g_frame == 0, "default is not 8N1 (frame %u)", g_frame);
-    uart_proxy_conn_closed(5);
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"baud\":19200,\"parity\":\"even\"}");
-    CHECK(g_frame == UART_FRAME_PARITY && g_proto[5] == PROTO_UART, "8E1: frame %u reply %s", g_frame, g_reply);
+    uart_proxy_conn_closed(4);
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"baud\":19200,\"parity\":\"even\"}");
+    CHECK(g_frame == UART_FRAME_PARITY && g_proto[4] == PROTO_UART, "8E1: frame %u reply %s", g_frame, g_reply);
     /* a re-arm after a gateware swap keeps the frame format */
     g_frame = 0xFF;
     uart_proxy_on_gateware_reconfigured();
     uart_rearm_poll();
     CHECK(g_frame == UART_FRAME_PARITY, "re-arm lost the frame format (%u)", g_frame);
-    uart_proxy_conn_closed(5);
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"odd\",\"stop_bits\":2}");
+    uart_proxy_conn_closed(4);
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"odd\",\"stop_bits\":2}");
     CHECK(g_frame == (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2), "8O2: frame %u", g_frame);
-    uart_proxy_conn_closed(5);
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":\"2\"}");
+    uart_proxy_conn_closed(4);
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":\"2\"}");
     CHECK(g_frame == UART_FRAME_STOP2, "8N2: frame %u", g_frame);
-    uart_proxy_conn_closed(5);
+    uart_proxy_conn_closed(4);
     /* bad values are refused before anything is armed */
     const char *bad[] = {
         "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"mark\"}",
@@ -261,20 +265,20 @@ static void test_frame(void) {
     };
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
         int configs = g_configs;
-        start(5, bad[i]);
-        CHECK(strncmp(g_reply, "err:invalid uart frame", 22) == 0 && g_configs == configs && g_proto[5] == PROTO_JSON,
+        start(4, bad[i]);
+        CHECK(strncmp(g_reply, "err:invalid uart frame", 22) == 0 && g_configs == configs && g_proto[4] == PROTO_JSON,
               "bad[%zu] reply %s", i, g_reply);
     }
     /* gateware older than v56: 8N1 still works, anything else is refused with what to do */
     g_gw = 55;
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
-    CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[5] == PROTO_JSON,
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
+    CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[4] == PROTO_JSON,
           "old gateware reply %s", g_reply);
     CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "parity and stop_bits") == 0,
           "old gateware code: %d %s", g_err_code, g_err_arg);
-    start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":1}");
-    CHECK(g_frame == 0 && g_proto[5] == PROTO_UART, "8N1 refused on old gateware: %s", g_reply);
-    uart_proxy_conn_closed(5);
+    start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":1}");
+    CHECK(g_frame == 0 && g_proto[4] == PROTO_UART, "8N1 refused on old gateware: %s", g_reply);
+    uart_proxy_conn_closed(4);
     g_gw = 56;
 }
 
@@ -331,13 +335,20 @@ static void test_v3r4_pulls(void) {
     CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_NONE,
           "v3r4 two-wire RX: pull %d strength %d, want up by function", (int)fake_pull_dir[3], fake_pull_str[3]);
     uart_proxy_conn_closed(3);
-    /* what the channel did before comes back: a 2.2k pull-down, say */
-    CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_2K2) == 0, "LA3 down");
+    /* what the channel did before comes back: a 2.2k pull-up the host set, say */
+    CHECK(la_pull_set(3, LA_PULL_UP, PULL_STR_2K2) == 0, "LA3 up 2.2k");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
-    CHECK(fake_pull_dir[3] == LA_PULL_UP, "v3r4: RX not held up over a pull-down (%d)", (int)fake_pull_dir[3]);
+    CHECK(fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_NONE,
+          "v3r4: RX not held by function (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
     uart_proxy_conn_closed(3);
-    CHECK(fake_pull_dir[3] == LA_PULL_DOWN && fake_pull_str[3] == PULL_STR_2K2,
-          "v3r4: the earlier pull-down not restored (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
+    CHECK(fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_2K2,
+          "v3r4: the earlier pull-up not restored (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
+    /* an engaged pull-down refuses RX on that pin (the line idles high), before anything moves */
+    CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_10K) == 0, "LA3 down");
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
+    CHECK(strncmp(g_reply, "err:pull conflict: LA3", 22) == 0 && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
+          "v3r4: RX over a pull-down: %s (seq '%s')", g_reply, g_seq);
+    CHECK(la_pins_fn(4) == LA_FN_NONE, "v3r4: the refused start claimed TX");
     la_pull_set(3, LA_PULL_NONE, PULL_STR_NONE);
     /* no pull can be engaged (pin 21 down, say): the proxy runs without the hold */
     fake_pull_available = false;
@@ -433,6 +444,87 @@ static void test_de(void) {
     g_gw = 56;
 }
 
+/* uart_cfg_parse: pure, every refusal and its precedence, the defaults. */
+static void test_cfg_parse(void) {
+    uart_cfg_t c;
+    uart_cfg_err_t e;
+    CHECK(uart_cfg_parse("{\"rx\":3,\"tx\":4}", 56, true, &c, &e) && c.rx == 3 && c.tx == 4 && c.baud == 115200 &&
+          c.frame == 0 && c.de == 0 && !c.entry.on, "defaults");
+    CHECK(uart_cfg_parse("{\"rx\":2,\"tx\":2,\"half_duplex\":true,\"parity\":\"odd\",\"baud\":\"0x2580\",\"de\":5,"
+                         "\"de_active_low\":true,\"entry\":{\"hex\":\"00\"}}", 58, true, &c, &e) &&
+          c.frame == (UART_FRAME_HALFDUPLEX | UART_FRAME_PARITY | UART_FRAME_ODD) && c.baud == 9600 &&
+          c.de == 5 && c.de_inv && c.entry.on && c.entry.nhex == 1, "everything");
+    const struct { const char *json; uint8_t gw; bool rst; uart_cfg_err_kind_t kind; } bad[] = {
+        { "{\"tx\":4}",                                             58, true,  UART_CFG_MISSING_RX },
+        { "{\"rx\":3}",                                             58, true,  UART_CFG_MISSING_TX },
+        { "{\"rx\":3,\"tx\":4,\"parity\":\"mark\"}",                58, true,  UART_CFG_BAD_FRAME },
+        { "{\"rx\":3,\"tx\":4,\"stop_bits\":2}",                    55, true,  UART_CFG_GW_FRAME },
+        { "{\"rx\":3,\"tx\":3,\"half_duplex\":true}",               56, true,  UART_CFG_GW_HALF_DUPLEX },
+        { "{\"rx\":3,\"tx\":4,\"half_duplex\":true}",               57, true,  UART_CFG_HALF_DUPLEX_TWO_PINS },
+        { "{\"rx\":3,\"tx\":3}",                                    58, true,  UART_CFG_SAME_PIN },
+        { "{\"rx\":3,\"tx\":4,\"entry\":{\"reset_ms\":5000}}",      58, true,  UART_CFG_ENTRY_INVALID },
+        { "{\"rx\":3,\"tx\":4,\"entry\":{}}",                       58, false, UART_CFG_ENTRY_NO_RESET_PIN },
+        { "{\"rx\":3,\"tx\":4,\"de\":5}",                           57, true,  UART_CFG_GW_DE },
+        { "{\"rx\":3,\"tx\":4,\"de\":4}",                           58, true,  UART_CFG_DE_PIN },
+        /* several problems: the first in the order the replies always came in */
+        { "{\"rx\":3,\"tx\":3,\"parity\":\"even\"}",                55, true,  UART_CFG_GW_FRAME },
+        { "{\"rx\":3,\"tx\":3,\"de\":3}",                           57, false, UART_CFG_SAME_PIN },
+        { "{\"rx\":3,\"tx\":4,\"de\":4,\"entry\":{}}",              57, false, UART_CFG_ENTRY_NO_RESET_PIN },
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++)
+        CHECK(!uart_cfg_parse(bad[i].json, bad[i].gw, bad[i].rst, &c, &e) && e.kind == bad[i].kind,
+              "bad[%zu]: kind %d, want %d", i, (int)e.kind, (int)bad[i].kind);
+    CHECK(!uart_cfg_parse("{\"rx\":3,\"tx\":4,\"entry\":{\"hex\":\"0\"}}", 58, true, &c, &e) &&
+          strcmp(e.bad, "hex") == 0 && e.max == UART_ENTRY_HEX_MAX, "entry: bad %s max %d", e.bad, e.max);
+}
+
+/* The pins are the session's from before the entry sequence, and every way out frees them. */
+static void test_claim_order(void) {
+    g_gw = 57;
+    g_tx_pin = 2;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{}}");
+    CHECK(g_tx_fn_at_reset == (int)LA_FN_UART_TX, "TX not claimed when the entry reset the target (%d)", g_tx_fn_at_reset);
+    uart_proxy_conn_closed(2);
+    CHECK(la_pins_fn(1) == LA_FN_NONE && la_pins_fn(2) == LA_FN_NONE, "close left a pin claimed");
+    /* the arm fails: pins and pull-up back, nothing disarmed that this start did not arm */
+    g_cfg_rc = -1;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"entry\":{}}");
+    CHECK(strcmp(g_reply, "err:invalid uart args") == 0 && g_proto[2] == PROTO_JSON, "bad args: %s", g_reply);
+    CHECK(strcmp(g_seq, "lo2 rst1 s10 rst0 s10 cfg1 z2") == 0, "bad args sequence %s", g_seq);
+    g_gw = 58;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"de\":6}");
+    CHECK(la_pins_fn(1) == LA_FN_NONE && la_pins_fn(2) == LA_FN_NONE && la_pins_fn(6) == LA_FN_NONE && !g_pullup_on(1),
+          "a failed arm left pins or the pull-up");
+    /* busy: another user's armed UART and its pins stay as they are */
+    uint8_t other[2] = { 9, 10 };
+    la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &other[0], 1);
+    la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, &other[1], 1);
+    g_cfg_rc = -2;
+    g_enabled = true;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
+    CHECK(strcmp(g_reply, "err:uart busy") == 0 && g_enabled, "busy: %s (enabled %d)", g_reply, g_enabled);
+    CHECK(la_pins_fn(9) == LA_FN_UART_RX && la_pins_fn(10) == LA_FN_UART_TX, "busy released the other user's pins");
+    CHECK(la_pins_fn(1) == LA_FN_NONE && la_pins_fn(2) == LA_FN_NONE, "busy left this start's pins claimed");
+    la_pins_release(9);
+    la_pins_release(10);
+    g_cfg_rc = 0;
+    g_enabled = false;
+    /* the FPGA does not answer: disarmed, pins and pull-up back */
+    g_status_rc = -1;
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
+    CHECK(strncmp(g_reply, "err:uart proxy failed", 21) == 0 && !g_enabled, "status: %s", g_reply);
+    CHECK(la_pins_fn(3) == LA_FN_NONE && !g_pullup_on(3), "a failed status left LA3 claimed or pulled");
+    g_status_rc = 0;
+    /* a pin conflict refuses before anything moves */
+    uint8_t p = 4;
+    la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 0, &p, 1);
+    start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
+    CHECK(strncmp(g_reply, "err:pin conflict: LA4 is in use by gpio", 39) == 0 && g_seq[0] == 0 &&
+          la_pins_fn(3) == LA_FN_NONE && !g_pullup_on(3), "conflict: %s seq '%s'", g_reply, g_seq);
+    la_pins_release(4);
+    g_gw = 56;
+}
+
 int main(void) {
     board_caps_init(BOARD_REV_V3);   /* LA1-6 pull up, LA7/8 down, LA9-14 none */
     la_pull_init();
@@ -446,6 +538,8 @@ int main(void) {
     test_v3r4_pulls();
     test_entry();
     test_de();
+    test_cfg_parse();
+    test_claim_order();
     if (fails) { printf("test_ch_uart: %d FAILED\n", fails); return 1; }
     printf("test_ch_uart: all passed\n");
     return 0;

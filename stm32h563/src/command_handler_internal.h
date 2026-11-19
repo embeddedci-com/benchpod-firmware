@@ -231,6 +231,51 @@ typedef struct {
     uint8_t  hex[UART_ENTRY_HEX_MAX];
 } uart_entry_t;
 bool   uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int *max);
+/* A uart_proxy_start request, parsed and checked (uart_cfg_parse). */
+typedef struct {
+    unsigned     rx, tx;      /* LA channels; rx == tx on one wire (half duplex) */
+    unsigned     de;          /* RS-485 DE channel, 0 = none (gateware v58) */
+    bool         de_inv;      /* DE active low */
+    uint32_t     baud;
+    uint8_t      frame;       /* UART_FRAME_* bits (0 = 8N1), UART_FRAME_HALFDUPLEX on one wire */
+    uart_entry_t entry;       /* the boot-mode entry (entry.on false: none) */
+} uart_cfg_t;
+/* Why uart_cfg_parse refused a request (uart_cfg_refuse sends the reply). */
+typedef enum {
+    UART_CFG_OK = 0,
+    UART_CFG_MISSING_RX, UART_CFG_MISSING_TX,
+    UART_CFG_BAD_FRAME,                       /* parity / stop_bits */
+    UART_CFG_GW_FRAME,                        /* anything but 8N1 on gateware < v56 */
+    UART_CFG_GW_HALF_DUPLEX,                  /* half_duplex on gateware < v57 */
+    UART_CFG_HALF_DUPLEX_TWO_PINS,            /* half_duplex with rx != tx */
+    UART_CFG_SAME_PIN,                        /* rx == tx without half_duplex */
+    UART_CFG_ENTRY_INVALID,                   /* an entry argument out of range (bad, max) */
+    UART_CFG_ENTRY_NO_RESET_PIN,              /* entry on a pod without the reset pin */
+    UART_CFG_GW_DE,                           /* de on gateware < v58 */
+    UART_CFG_DE_PIN,                          /* de on rx or tx */
+} uart_cfg_err_kind_t;
+typedef struct { uart_cfg_err_kind_t kind; const char *bad; int max; } uart_cfg_err_t;
+/* Parse and check {"cmd":"uart_proxy_start",...} against the gateware version `gw` and whether the
+   pod has the reset pin.  Pure (host tests).  The checks run in the order the replies always came
+   in, so a request with several problems gets the same refusal as before. */
+bool   uart_cfg_parse(const char *json, uint8_t gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err);
+void   uart_cfg_refuse(int conn_id, const uart_cfg_t *cfg, const uart_cfg_err_t *err);
+/* The LA pins one user of the soft UART holds (the proxy, esp_dut_flash), and its RX pull-up. */
+typedef struct {
+    uint8_t         rx, tx, de;   /* de 0 = none */
+    bool            one_wire;     /* tx is claimed as uart_hd, rx is the same pin */
+    bool            claimed;
+    la_pull_token_t rx_hold;      /* la_pull_hold on rx, put back by uart_pins_release */
+} uart_pins_t;
+/* Check every pin first (a `pin conflict:` / `pull conflict:` message in err, nothing claimed),
+   then claim them all into *p. */
+bool   uart_pins_claim(uart_pins_t *p, unsigned rx, unsigned tx, unsigned de, bool one_wire, char *err, size_t cap);
+/* Hold RX high (la_pull_hold; 2.2k on one wire, else by the pin's function).  Logs when a pull
+   that should engage does not.  After uart_pins_claim. */
+void   uart_pins_hold_rx(uart_pins_t *p);
+/* Put RX's pull back and release exactly the pins in *p (only where they still hold the UART
+   function).  Safe on a *p that holds nothing. */
+void   uart_pins_release(uart_pins_t *p);
 /* The PROTO_UART receive path: forwards buf to the DUT and watches for the +++ escape. */
 size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
 void   uart_proxy_poll(void);                 /* DUT -> client drain and the escape's guard */
