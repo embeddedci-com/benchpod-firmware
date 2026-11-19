@@ -66,6 +66,23 @@ static void test_defaults_and_names(void) {
     CHECK_STR(la_fn_name(LA_FN_I2CM_SCL), "i2cm_scl");
     CHECK_STR(la_fn_name(LA_FN_SPI_CS), "spi_cs");
     CHECK_STR(la_fn_name(LA_FN_SWD_DIO), "swd_dio");
+    CHECK_STR(la_fn_name(LA_FN_UART_HD), "uart_hd");
+    CHECK_STR(la_fn_name(LA_FN_UART_DE), "uart_de");
+    CHECK_STR(la_fn_name(LA_FN__COUNT), "none");
+    /* every function has a row of its own in the attribute table (la_pins.c s_fn) */
+    for (int a = 1; a < LA_FN__COUNT; a++) {
+        CHECK(strcmp(la_fn_name((la_fn_t)a), "none") != 0);
+        for (int b = 1; b < a; b++) CHECK(strcmp(la_fn_name((la_fn_t)a), la_fn_name((la_fn_t)b)) != 0);
+    }
+    /* who drives push-pull, unchanged by the table */
+    const la_fn_t drives[] = { LA_FN_UART_TX, LA_FN_UART_DE, LA_FN_SWD_CLK, LA_FN_SWD_DIO, LA_FN_STEP,
+                               LA_FN_STEP_DIR, LA_FN_SPI_SCK, LA_FN_SPI_MOSI, LA_FN_SPI_CS, LA_FN_SENSOR_TX,
+                               LA_FN_SENSOR_DRDY, LA_FN_SENSOR_MISO };
+    unsigned nd = 0;
+    for (int f = 0; f < LA_FN__COUNT; f++) if (f != LA_FN_GPIO && la_fn_drives((la_fn_t)f, LA_GPIO_NONE)) nd++;
+    CHECK(nd == sizeof(drives) / sizeof(drives[0]));
+    for (size_t i = 0; i < sizeof(drives) / sizeof(drives[0]); i++) CHECK(la_fn_drives(drives[i], LA_GPIO_NONE));
+    CHECK(la_fn_drives(LA_FN_GPIO, LA_GPIO_OUTPUT) && !la_fn_drives(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN));
     CHECK(la_pull_dir(1) == LA_PULL_UP && la_pull_dir(6) == LA_PULL_UP);
     CHECK(la_pull_dir(7) == LA_PULL_DOWN && la_pull_dir(8) == LA_PULL_DOWN);
     CHECK(la_pull_dir(9) == LA_PULL_NONE && la_pull_ohms(12) == NULL);

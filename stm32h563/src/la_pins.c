@@ -49,16 +49,53 @@ void la_pins_reset(void) {
     memset(s_pin, 0, sizeof(s_pin));
 }
 
-const char *la_fn_name(la_fn_t fn) {
-    static const char *const names[LA_FN__COUNT] = {
-        "none", "gpio", "uart_rx", "uart_tx", "swd_clk", "swd_dio",
-        "i2c_sda", "i2c_scl", "step", "step_dir",
-        "spi_sck", "spi_mosi", "spi_miso", "spi_cs",
-        "sensor_tx", "sensor_rx", "sensor_drdy", "sensor_sck", "sensor_mosi", "sensor_miso", "sensor_cs",
-        "i2cm_sda", "i2cm_scl", "uart_hd", "uart_de",
-    };
-    return ((unsigned)fn < (unsigned)LA_FN__COUNT) ? names[fn] : "none";
+/* ---- what each function does to its line ----
+   One row per function: its name, whether it drives the line push-pull (la_fn_drives), whether the
+   pod gives it the 2.2k pull (la_pull_strength_for), and why it can't share the line with an
+   engaged pull-DOWN (NULL = it can; pull-ups never conflict: every function here either drives
+   the line or wants it idling high).  gpio depends on its mode and is handled where it matters. */
+#define PD_IDLE_HIGH  "the line idles high"
+#define PD_OPEN_DRAIN "an open-drain bus needs pull-ups"
+#define PD_SWDIO      "SWDIO is pulled up when released"
+typedef struct {
+    const char *name;
+    bool        drives;
+    bool        pull_2k2;
+    const char *no_pull_down;
+} la_fn_attr_t;
+static const la_fn_attr_t s_fn[LA_FN__COUNT] = {
+    [LA_FN_NONE]        = { "none",        false, false, NULL },
+    [LA_FN_GPIO]        = { "gpio",        false, false, NULL },   /* by mode */
+    [LA_FN_UART_RX]     = { "uart_rx",     false, false, PD_IDLE_HIGH },
+    [LA_FN_UART_TX]     = { "uart_tx",     true,  false, PD_IDLE_HIGH },
+    [LA_FN_SWD_CLK]     = { "swd_clk",     true,  false, NULL },
+    [LA_FN_SWD_DIO]     = { "swd_dio",     true,  false, PD_SWDIO },
+    [LA_FN_I2C_SDA]     = { "i2c_sda",     false, true,  PD_OPEN_DRAIN },
+    [LA_FN_I2C_SCL]     = { "i2c_scl",     false, true,  PD_OPEN_DRAIN },
+    [LA_FN_STEP]        = { "step",        true,  false, NULL },
+    [LA_FN_STEP_DIR]    = { "step_dir",    true,  false, NULL },
+    [LA_FN_SPI_SCK]     = { "spi_sck",     true,  false, NULL },
+    [LA_FN_SPI_MOSI]    = { "spi_mosi",    true,  false, NULL },
+    [LA_FN_SPI_MISO]    = { "spi_miso",    false, false, NULL },
+    [LA_FN_SPI_CS]      = { "spi_cs",      true,  false, NULL },
+    [LA_FN_SENSOR_TX]   = { "sensor_tx",   true,  false, PD_IDLE_HIGH },
+    [LA_FN_SENSOR_RX]   = { "sensor_rx",   false, false, PD_IDLE_HIGH },
+    [LA_FN_SENSOR_DRDY] = { "sensor_drdy", true,  false, NULL },
+    [LA_FN_SENSOR_SCK]  = { "sensor_sck",  false, false, NULL },
+    [LA_FN_SENSOR_MOSI] = { "sensor_mosi", false, false, NULL },
+    [LA_FN_SENSOR_MISO] = { "sensor_miso", true,  false, NULL },
+    [LA_FN_SENSOR_CS]   = { "sensor_cs",   false, false, NULL },
+    [LA_FN_I2CM_SDA]    = { "i2cm_sda",    false, true,  PD_OPEN_DRAIN },
+    [LA_FN_I2CM_SCL]    = { "i2cm_scl",    false, true,  PD_OPEN_DRAIN },
+    [LA_FN_UART_HD]     = { "uart_hd",     false, true,  PD_IDLE_HIGH },   /* open drain + RX */
+    [LA_FN_UART_DE]     = { "uart_de",     true,  false, NULL },
+};
+
+static const la_fn_attr_t *fn_attr(la_fn_t fn) {
+    return ((unsigned)fn < (unsigned)LA_FN__COUNT && s_fn[fn].name) ? &s_fn[fn] : &s_fn[LA_FN_NONE];
 }
+
+const char *la_fn_name(la_fn_t fn) { return fn_attr(fn)->name; }
 
 const char *la_gpio_mode_name(la_gpio_mode_t m) {
     switch (m) {
@@ -110,12 +147,7 @@ pull_str_t la_pull_strength_for(unsigned la, int io_mv) {
     if (la < 1u || la > LA_PINS_COUNT) return PULL_STR_10K;
     la_fn_t fn = (la_fn_t)s_pin[la].fn;
     la_gpio_mode_t mode = la_pins_gpio(la);
-    switch (fn) {
-    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL:
-    case LA_FN_UART_HD:
-        return PULL_STR_2K2;
-    default: break;
-    }
+    if (fn_attr(fn)->pull_2k2) return PULL_STR_2K2;   /* I2C, the I2C master, one-wire UART */
     if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return PULL_STR_2K2;
     if (io_mv == 5000 && la_fn_drives(fn, mode)) return PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
     return PULL_STR_10K;
@@ -168,20 +200,10 @@ static void conflict_msg(unsigned la, char *err, size_t cap) {
                  la, la_fn_name(owner), release_hint(owner, la, hint, sizeof(hint)));
 }
 
-/* Why a function can't share its line with an engaged pull-DOWN (NULL = it can).  Pull-ups
-   never conflict: every function here either drives the line or wants it idling high. */
+/* Why a function can't share its line with an engaged pull-DOWN (NULL = it can). */
 static const char *pull_down_reason(la_fn_t fn, la_gpio_mode_t mode) {
-    switch (fn) {
-    case LA_FN_GPIO:
-        return (mode == LA_GPIO_OPEN_DRAIN) ? "a released line would read low" : NULL;
-    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_SENSOR_TX: case LA_FN_SENSOR_RX:
-    case LA_FN_UART_HD:
-        return "the line idles high";
-    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL:
-    case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL: return "an open-drain bus needs pull-ups";
-    case LA_FN_SWD_DIO: return "SWDIO is pulled up when released";
-    default: return NULL;   /* none, gpio input/output, swd_clk, step, step_dir, spi_* (driven) */
-    }
+    if (fn == LA_FN_GPIO) return (mode == LA_GPIO_OPEN_DRAIN) ? "a released line would read low" : NULL;
+    return fn_attr(fn)->no_pull_down;
 }
 
 /* "gpio open_drain" for a gpio pin (the mode is what conflicts), else the function name. */
@@ -255,14 +277,8 @@ la_dir_t la_pins_dir(unsigned la) { return la_ok(la) ? (la_dir_t)s_dir[la] : LA_
 void     la_pins_set_dir(unsigned la, la_dir_t d) { if (la_ok(la)) s_dir[la] = (uint8_t)d; }
 
 bool la_fn_drives(la_fn_t fn, la_gpio_mode_t mode) {
-    switch (fn) {
-    case LA_FN_GPIO: return mode == LA_GPIO_OUTPUT;
-    case LA_FN_UART_TX: case LA_FN_UART_DE: case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: case LA_FN_STEP: case LA_FN_STEP_DIR:
-    case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_CS:
-    case LA_FN_SENSOR_TX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_MISO:
-        return true;
-    default: return false;   /* none, inputs, open drain (I2C, i2cm), gpio input / open_drain */
-    }
+    if (fn == LA_FN_GPIO) return mode == LA_GPIO_OUTPUT;
+    return fn_attr(fn)->drives;   /* inputs and open drain (I2C, i2cm, uart_hd) do not */
 }
 
 bool la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap) {
