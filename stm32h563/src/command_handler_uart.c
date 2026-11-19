@@ -270,7 +270,13 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
             uart_rx_pu_prev_dir = (la_pull_dir_t)pull_exp_dir(rx);
             uart_rx_pu_prev_str = (int)pull_exp_str(rx);
         }
-        if (pca9555_set_la_pullup((uint8_t)rx, true) != 0) {
+        /* The pin is claimed only after the arm (below), so la_pull_engage cannot see it is a
+           one-wire line yet: ask for the 2.2k a half-duplex line gets (la_pull_strength_for)
+           instead of letting the unclaimed pin fall back to 10k. */
+        int rc = board_caps()->pull_expanders
+                 ? la_pull_engage((uint8_t)rx, LA_PULL_UP, one_wire ? LA_PULL_STR_2K2 : 0)
+                 : pca9555_set_la_pullup((uint8_t)rx, true);
+        if (rc != 0) {
             printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
             uart_rx_pu_ch = -1;
         }

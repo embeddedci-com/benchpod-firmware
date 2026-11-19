@@ -13,6 +13,8 @@
 
 #include "command_handler_internal.h"
 #include "pull_exp.h"
+#include "board_caps.h"
+#include "board_rev.h"
 #include "at_driver.h"
 #include "signal_engine.h"
 #include "i2c_bus.h"
@@ -102,8 +104,14 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
 int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
 bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
 bool la_pullups_available(void) { return true; }
-/* Digital v3r4 pull expanders: not on the board these tests model (board_caps all false). */
-int  la_pull_engage(uint8_t la, la_pull_dir_t d, int s) { (void)la; (void)d; (void)s; return -1; }
+/* Digital v3r4 pull expanders: used only after board_caps_init(BOARD_REV_V3R4) (test_v3r4_pulls);
+   the other tests model a board without them (board_caps all false). */
+static la_pull_dir_t g_x_dir[15];
+static int           g_x_str[15];
+int  la_pull_engage(uint8_t la, la_pull_dir_t d, int s) {
+    if (!board_caps()->pull_expanders) return -1;
+    g_x_dir[la] = d; g_x_str[la] = s; g_pullup[la] = d == LA_PULL_UP; return 0;
+}
 pull_exp_dir_t pull_exp_dir(unsigned la) { (void)la; return PULL_EXP_OFF; }
 pull_str_t pull_exp_str(unsigned la) { (void)la; return PULL_STR_NONE; }
 bool la_pull_supports(unsigned la, la_pull_dir_t d) { return d == LA_PULL_UP ? (la >= 1 && la <= 6) : d == LA_PULL_DOWN ? (la == 7 || la == 8) : false; }
@@ -315,6 +323,29 @@ static void test_half_duplex(void) {
     uart_proxy_conn_closed(3);
 }
 
+/* Digital v3r4: the RX pull goes through the expanders.  A one-wire line asks for the 2.2k a
+   half-duplex pin gets: it is engaged before the pin is claimed, so the default (0 = by the pin's
+   function) would see an unclaimed pin and pick 10k. */
+static void test_v3r4_pulls(void) {
+    g_gw = 58;
+    board_caps_init(BOARD_REV_V3R4);
+    memset(g_pullup, 0, sizeof(g_pullup));
+    memset(g_x_str, 0, sizeof(g_x_str));
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
+    CHECK(g_proto[3] == PROTO_UART, "v3r4 one wire: %s", g_reply);
+    CHECK(g_pu_at_cfg && g_x_dir[3] == LA_PULL_UP && g_x_str[3] == LA_PULL_STR_2K2,
+          "v3r4 one wire: pull %d strength %d, want up 2.2k before the arm", (int)g_x_dir[3], g_x_str[3]);
+    uart_proxy_conn_closed(3);
+    CHECK(g_x_dir[3] == LA_PULL_NONE && !g_pullup[3], "v3r4 one wire: pull not restored (%d)", (int)g_x_dir[3]);
+
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
+    CHECK(g_proto[3] == PROTO_UART && g_x_dir[3] == LA_PULL_UP && g_x_str[3] == 0,
+          "v3r4 two-wire RX: pull %d strength %d, want up by function", (int)g_x_dir[3], g_x_str[3]);
+    uart_proxy_conn_closed(3);
+    board_caps_init(BOARD_REV_V3);
+    g_gw = 56;
+}
+
 static void test_entry(void) {
     g_gw = 57;
     /* RL78-style: reset with TOOL0 low, TOOL0 low after the release, released, then 0x00 */
@@ -406,6 +437,7 @@ int main(void) {
     test_teardown_and_rearm();
     test_frame();
     test_half_duplex();
+    test_v3r4_pulls();
     test_entry();
     test_de();
     if (fails) { printf("test_ch_uart: %d FAILED\n", fails); return 1; }
