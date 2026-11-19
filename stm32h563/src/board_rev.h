@@ -22,7 +22,7 @@
  *   3. Only when step 2 reads the v3r4 band: the second strap on PC3 (ADC1_INP13), 10 k / 10 k on
  *      digital v3r4.  The first strap is at the top of its range there, so later revisions change
  *      this divider.  v3r4 needs BOTH straps: PA3 between 95.0 % and 99.5 % of VREF+ (v3 is
- *      90.9 %, v3r4 99.0 %, a pin stuck at the rail 100 %), AND PC3 between 40 % and 60 % of
+ *      90.9 %, v3r4 99.0 % from the resistor values, a pin stuck at the rail 100 %), AND PC3 between 40 % and 60 % of
  *      VREF+.  The split is a ratio, not a voltage: the ADC measures the strap against VREF+,
  *      which is the same +3V3 rail that feeds the divider, so the ratio needs neither the rail
  *      nor the VREFINT reading (a 3.13 V split in mV fails a v3r4 board on a 3.2 V rail read

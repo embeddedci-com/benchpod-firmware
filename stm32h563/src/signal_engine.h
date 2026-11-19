@@ -572,7 +572,8 @@ bool fpga_la_step_busy(void);
 #define LA_VCCIO_3V3   3300
 /* 5 V I/O, digital v3r4 only (board_caps()->la_5v): the bank at 3.3 V, pin 21 at 5 V. */
 #define LA_VCCIO_5V0   5000
-/* After a bank change on a board with the LA clamps (board_caps()->la_clamps). */
+/* After a bank change on a board with the LA clamps (board_caps()->la_clamps).  Calculated from the
+   clamp reference's filter; to be checked on the first board. */
 #define LA_VCCIO_SETTLE_CLAMPS_MS 30
 
 /* Configure PG3 (Hi-Z -> the hardware default for this revision) and PG4
