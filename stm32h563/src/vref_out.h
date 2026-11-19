@@ -22,7 +22,7 @@
  * Pin 21 is on whenever the pod is on.
  *
  * Everything here does nothing (and reports "not present") unless board_caps()->vref_out: on
- * every older board PG5, PG6 and PA0 are never touched.
+ * every older board PG5, PG6 and PF11 are never touched.
  *
  * Not thread-safe: hw worker and boot only (the MCU ADC is shared, mcu_adc.h).
  * ==========================================================================*/
@@ -61,7 +61,7 @@ void vref_emit_fields(bp_emit_t *e, vref_src_t src, int set_mv, int mv, vref_sta
 /* ---- hardware (no-ops unless board_caps()->vref_out) ---- */
 
 /* Pins to their safe state: 5 V switch off (PG6 low), PR1 released (PG5 input, R208 pulls it
-   high, pin 21 follows the bank), PA0 analog.  Call once at boot after board_caps_init(). */
+   high, pin 21 follows the bank), PF11 analog.  Call once at boot after board_caps_init(). */
 void vref_out_init(void);
 bool vref_out_present(void);
 

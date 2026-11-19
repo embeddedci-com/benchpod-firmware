@@ -10,14 +10,15 @@
 /* ============================================================================
  * pull_exp — the LA pull resistors of digital v3r4: two TCA6416A expanders on the main I2C bus.
  *
- *   U18 at 0x20 drives a 2.2k per channel, U54 at 0x21 a 10k per channel.  P00-P07 = LA1-LA8,
- *   P10-P15 = LA9-LA14, so LA n is bit n-1 of the 16-bit port pair.  P16, P17 stay inputs.
- *   A port driven high pulls the line up to J1 pin 21 (vref_out.h), driven low pulls it down,
- *   an input is off.  Per channel: 10k, 2.2k or both (about 1.8k), up or down.
+ *   Each channel has a 10k and a 2.2k, both on one expander: U54 at 0x21 serves LA1-LA7 and LA9
+ *   (all 16 ports), U18 at 0x20 serves LA8 and LA10-LA14 (P00-P13; P14-P17 stay inputs).  The
+ *   port of each resistor follows the PCB layout (pull_exp_map, from the digital v3r4 netlist,
+ *   la-pulls.kicad_sch).  A port driven high pulls the line up to J1 pin 21 (vref_out.h), driven
+ *   low pulls it down, an input is off.  Per channel: 10k, 2.2k or both (about 1.8k), up or down.
  *
  * Rules:
- *   - Both expanders of one channel always point the same way; a change turns the channel off on
- *     both first (configuration), then writes the levels, then turns it on (pull_exp_plan).
+ *   - Both resistors of one channel always point the same way; a change turns both off first
+ *     (configuration), then writes the levels, then turns them on (pull_exp_plan).
  *   - PULL_RST (PG7, a pull-down on the board) holds both in reset (every port an input, all
  *     pulls off) until pin 21 is up, and again whenever it goes down: U54's address pin follows
  *     pin 21, so with pin 21 down it answers at 0x20 together with U18, and the expanders' own
@@ -30,9 +31,15 @@
  *     Older boards keep the TCA9554 backend at 0x20 (pull_tca9554.c) and never see PG7 or 0x21.
  * ==========================================================================*/
 
-#define PULL_EXP_ADDR_2K2   0x20u   /* U18, ADDR = GND */
-#define PULL_EXP_ADDR_10K   0x21u   /* U54, ADDR = pin 21 */
+#define PULL_EXP_ADDR_U18   0x20u   /* U18, ADDR = GND */
+#define PULL_EXP_ADDR_U54   0x21u   /* U54, ADDR = pin 21 */
 #define PULL_EXP_CHANNELS   14u
+
+/* Where one channel's resistors are: the expander (PULL_EXP_U18 / PULL_EXP_U54) and the port bit
+   (0-7 = P00-P07, 8-15 = P10-P17) of its 10k and of its 2.2k. */
+enum { PULL_EXP_U18 = 0, PULL_EXP_U54 = 1 };
+typedef struct { uint8_t chip, bit10k, bit2k2; } pull_exp_pin_t;
+extern const pull_exp_pin_t pull_exp_map[PULL_EXP_CHANNELS + 1];   /* index LA 1..14 */
 
 /* TCA6416A command bytes: a write auto-increments to the pair's second register. */
 #define TCA6416_REG_OUTPUT0  0x02u
@@ -49,7 +56,7 @@ typedef struct { uint16_t out, cfg; } tca6416_regs_t;   /* cfg bit 1 = input (of
 /* The register values for a state: dir[la] / str[la], la 1..14 (index 0 unused).  suspend_up:
    leave every pull-up off (the pod switched the DUT's power off; pull-downs stay). */
 void pull_exp_regs(const uint8_t dir[PULL_EXP_CHANNELS + 1], const uint8_t str[PULL_EXP_CHANNELS + 1],
-                   bool suspend_up, tca6416_regs_t *r2k2, tca6416_regs_t *r10k);
+                   bool suspend_up, tca6416_regs_t *r18, tca6416_regs_t *r54);
 
 /* The registers right after reset or power-on: every port an input, outputs latched high. */
 tca6416_regs_t pull_exp_reset_regs(void);
@@ -59,14 +66,14 @@ typedef struct { uint8_t addr, reg; uint16_t val; } pull_exp_write_t;
 #define PULL_EXP_PLAN_MAX 6u
 
 /* The writes that take both expanders from `from` to `to` without any channel pulling two ways:
-   (1) configuration: every channel that changes goes off on both, (2) the output levels,
+   (1) configuration: both resistors of every channel that changes go off, (2) the output levels,
    (3) the final configuration.  Writes that change nothing are left out.  Returns the count. */
-size_t pull_exp_plan(tca6416_regs_t from2k2, tca6416_regs_t from10k,
-                     tca6416_regs_t to2k2, tca6416_regs_t to10k, pull_exp_write_t out[PULL_EXP_PLAN_MAX]);
+size_t pull_exp_plan(tca6416_regs_t from18, tca6416_regs_t from54,
+                     tca6416_regs_t to18, tca6416_regs_t to54, pull_exp_write_t out[PULL_EXP_PLAN_MAX]);
 
-/* What one channel does with these registers: its direction (PULL_EXP_OFF when neither engages
-   it, or when the two disagree) and strength. */
-pull_exp_dir_t pull_exp_channel(tca6416_regs_t r2k2, tca6416_regs_t r10k, unsigned la, pull_str_t *str);
+/* What one channel does with these registers: its direction (PULL_EXP_OFF when neither resistor
+   is engaged, or when the two disagree) and strength. */
+pull_exp_dir_t pull_exp_channel(tca6416_regs_t r18, tca6416_regs_t r54, unsigned la, pull_str_t *str);
 
 /* Why the pulls the host asked for are not all on the wire, or NULL when they are:
    "pin21_down" (pin 21 is down: both expanders held in reset, every pull off), "fault" (a write

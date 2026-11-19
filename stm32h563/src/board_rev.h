@@ -19,17 +19,17 @@
  *        2450..2849 mV  ~2.70 V (R164 2.2 k over R163 10 k) analog v3r2 (DAC8554 quad DAC)
  *        ~3.27 V (R164 1 k over R163 100 k): digital v3r4, told by its ratio to VREF+, step 3
  *      Anything else runs as v3 (today's behaviour for an unknown strap) with a warning.
- *   3. Only when step 2 reads the v3r4 band: the second strap on PC3 (ADC1_INP13), 10 k / 10 k on
+ *   3. Only when step 2 reads the v3r4 band: the second strap on PF12 (ADC1_INP6), 10 k / 10 k on
  *      digital v3r4.  The first strap is at the top of its range there, so later revisions change
  *      this divider.  v3r4 needs BOTH straps: PA3 between 95.0 % and 99.5 % of VREF+ (v3 is
- *      90.9 %, v3r4 99.0 % from the resistor values, a pin stuck at the rail 100 %), AND PC3 between 40 % and 60 % of
+ *      90.9 %, v3r4 99.0 % from the resistor values, a pin stuck at the rail 100 %), AND PF12 between 40 % and 60 % of
  *      VREF+.  The split is a ratio, not a voltage: the ADC measures the strap against VREF+,
  *      which is the same +3V3 rail that feeds the divider, so the ratio needs neither the rail
  *      nor the VREFINT reading (a 3.13 V split in mV fails a v3r4 board on a 3.2 V rail read
  *      2 % low; test_board_caps.c sweeps it).  Anything less certain runs as v3, exactly as before
  *      v3r4: on a v3r4 board that is safe (pin 21 follows the bank on its pull-up and pull-down
  *      resistors, the pull expanders stay in reset, old TCA9554 writes at 0x20 never reach the
- *      new expanders' direction registers).  PC3 is never read on any other board.
+ *      new expanders' direction registers).  PF12 is never read on any other board.
  *      Step 1 still reads v3r2 HIGH: with the ~40 k internal pull-down it sits near
  *      2.59 V, above VIH (0.7 VDD = 2.31 V).  Firmware from before v3r2 puts 2.70 V in
  *      its 2.6-3.4 V v3 window and runs the board as v3.
@@ -69,7 +69,7 @@
    ratio to VREF+ and the second strap agree. */
 #define BOARD_REV_V3R4_MIN_PERMILLE   950   /* PA3 / VREF+: v3 909, v3r4 990 */
 #define BOARD_REV_V3R4_MAX_PERMILLE   995   /* a pin stuck at the rail reads 1000 */
-#define BOARD_REV2_V3R4_MIN_PERMILLE  400   /* PC3 / VREF+: v3r4 500 */
+#define BOARD_REV2_V3R4_MIN_PERMILLE  400   /* PF12 / VREF+: v3r4 500 */
 #define BOARD_REV2_V3R4_MAX_PERMILLE  600
 
 /* Sample the strap, latch the revision and its capabilities (board_caps_init).  Requires mcu_adc_init() first (for
@@ -105,7 +105,7 @@ static inline bool board_rev_strap_says_v3r4(int mv, int vref_mv)
     return pm >= BOARD_REV_V3R4_MIN_PERMILLE && pm <= BOARD_REV_V3R4_MAX_PERMILLE;
 }
 
-/* The second strap (PC3) of a board whose first strap says v3r4: BOARD_REV_V3R4 inside its band,
+/* The second strap (PF12) of a board whose first strap says v3r4: BOARD_REV_V3R4 inside its band,
    else BOARD_REV_V3 (not recognised: run as before v3r4).  rev2_mv < 0 = not read.  Pure. */
 static inline int board_rev_from_rev2_mv(int rev2_mv, int vref_mv)
 {
@@ -114,7 +114,7 @@ static inline int board_rev_from_rev2_mv(int rev2_mv, int vref_mv)
            ? BOARD_REV_V3R4 : BOARD_REV_V3;
 }
 
-/* The whole decision after step 1 (host tests): PA3 in mV, VREF+ in mV, and PC3 in mV (-1 when
+/* The whole decision after step 1 (host tests): PA3 in mV, VREF+ in mV, and PF12 in mV (-1 when
    it was not read).  Pure. */
 static inline int board_rev_decide(int strap_mv, int vref_mv, int rev2_mv)
 {
@@ -131,7 +131,7 @@ int  board_rev_get(void);
    Reported in `status` so an unexpected board reads back diagnosably. */
 int  board_rev_strap_mv(void);
 
-/* The second strap (PC3) in millivolts, -1 when it was not read (every board before v3r4). */
+/* The second strap (PF12) in millivolts, -1 when it was not read (every board before v3r4). */
 int  board_rev2_strap_mv(void);
 
 /* "v2" / "v3" / "v3r2" / "v3r4" / "unknown" — for logs and JSON. */
