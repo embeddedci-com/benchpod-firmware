@@ -1342,8 +1342,9 @@ int la_vccio_set_mv(int mv) {
        cutting the DUT's I/O rail. */
     if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) return -2;
 
-    /* On v3 the LA1-6 pull-ups go to LA_VCCIO and the LA7/8 pull-downs to GND, so the
-       engaged pulls simply follow the bank to 1.8 V and stay on.  Only the v2 pull-ups
+    /* On v3 the pulls go to LA_VCCIO or GND (LA1-6 up and LA7/8 down before digital v3r4,
+       every channel both ways on v3r4), so the engaged pulls simply follow the bank to 1.8 V
+       and stay on.  Only the v2 pull-ups
        went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
        rail; v2 is refused above, and this keeps the invariant if that ever changes. */
     if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pullups_all_off();

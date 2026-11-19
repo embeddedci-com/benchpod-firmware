@@ -12,8 +12,9 @@
    internal pull-down still sits near 2.9 V, so the margin either side is >1 V. */
 #define STRAP_NC_LEVEL_IS_LOW   GPIO_PIN_RESET
 
-/* The bands are in board_rev.h (board_rev_decide): v3 2850..3400 mV, v3r2 2450..2849 mV, v3r4
-   3130..3400 mV with the ratio and the second strap. */
+/* The bands are in board_rev.h (board_rev_decide): v3 2850..3400 mV and v3r2 2450..2849 mV;
+   v3r4 is told by ratios to VREF+, not a mV band: PA3 at 95.0..99.5 % and the second strap
+   (PC3) at 40..60 %. */
 
 static int s_rev      = BOARD_REV_UNKNOWN;
 static int s_strap_mv = -1;

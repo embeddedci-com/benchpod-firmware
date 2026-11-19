@@ -170,7 +170,7 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
  * Bridge a DUT UART through two LA channels. Like dap_start, this is the one
  * command that changes how the connection's bytes are interpreted: after the
  * `"uart ready"` ack the same TCP connection carries raw UART bytes both ways.
- *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200,
+ *   {"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200,
  *    "parity":"none"|"even"|"odd","stop_bits":1|2,"half_duplex":false,"entry":{...}}
  * parity and stop_bits are optional (8N1); anything but 8N1 needs gateware v56.
  * de (gateware v58): an LA channel the pod drives as an RS-485 transceiver's DE + /RE, high from
