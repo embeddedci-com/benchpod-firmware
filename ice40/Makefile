@@ -115,8 +115,12 @@ NEXTPNR = nextpnr-ice40 $(NEXTPNR_FLAGS)
 #   48 MS/s LA sample pairs (la48_sampler -> la_change_capture's ra/rb), latched one clk48 period
 #   before clk rises, so a path gets about 20.8 ns plus clk's lag.  It must stay flop-to-flop:
 #   <= 6.2 ns before v50; 32.6 ns when the encoder's compares read the pair directly.
+# MIN_CLK_MHZ: the same margin gate for the 24 MHz `clk` domain, where nextpnr only fails below
+#   24.00 MHz.  The emulation image is bound by clk, not clk48 (v59 pins: loop 26.75, deep 27.72,
+#   emu 26.08 MHz).  Checked like MIN_CLK48_MHZ (warning; a failure with PNR_STRICT=1).
 PNR_STRICT    ?= 0
 MIN_CLK48_MHZ ?= 50
+MIN_CLK_MHZ   ?= 25.5
 MAX_X48_NS    ?= 15
 MAX_X24_NS    ?= 15
 
@@ -127,7 +131,7 @@ MAX_X24_NS    ?= 15
 # (not with PNR_STRICT=1).  See the SEED_FALLBACK comment for why a single pin is not
 # portable across toolchain builds.  A fallback build is loudly flagged: it is NOT the
 # placement that was verified on hardware.  The routed clk48 Fmax is then checked
-# against MIN_CLK48_MHZ.
+# against MIN_CLK48_MHZ and the clk Fmax against MIN_CLK_MHZ.
 define pnr
 	@set -e; \
 	log=$(2).pnr.log; \
@@ -147,8 +151,15 @@ define pnr
 	      bad="fallback seed $$s"; \
 	    fi; \
 	    f48=$$(grep "Max frequency for clock 'clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/'); \
+	    fclk=$$(grep -E "Max frequency for clock +'clk'" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/'); \
 	    x48=$$(grep -E "Max delay posedge clk +-> posedge clk48" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
 	    x24=$$(grep -E "Max delay posedge clk48[^ ]* +-> posedge clk +:" $$log | tail -n 1 | sed -E 's/.*: *([0-9.]+) ns.*/\1/'); \
+	    if [ -z "$$fclk" ]; then \
+	      rm -f $(2); \
+	      echo "ERROR: $(2): the nextpnr log ($$log) has no clk Max frequency line, so the"; \
+	      echo "       MIN_CLK_MHZ gate cannot run."; \
+	      exit 1; \
+	    fi; \
 	    if [ -z "$$x24" ]; then \
 	      rm -f $(2); \
 	      echo "ERROR: $(2): the nextpnr log ($$log) has no clk48 -> clk max delay line, so the"; \
@@ -167,6 +178,11 @@ define pnr
 	      echo "***          Static timing passes, but margin this thin has HW-regressed deep"; \
 	      echo "***          DAC replay before — re-sweep and re-pin the seed."; \
 	      bad="$${bad:+$$bad, }clk48 $$f48 MHz"; \
+	    fi; \
+	    if awk -v f="$$fclk" -v m="$(MIN_CLK_MHZ)" 'BEGIN { exit !(f < m) }'; then \
+	      echo "*** WARNING: $(2): clk closes at only $$fclk MHz (MIN_CLK_MHZ=$(MIN_CLK_MHZ))."; \
+	      echo "***          Static timing passes at 24 MHz, but the margin is thin; re-sweep the seed."; \
+	      bad="$${bad:+$$bad, }clk $$fclk MHz"; \
 	    fi; \
 	    echo "nextpnr: $(2): clk -> clk48 (untimed) max delay $$x48 ns (MAX_X48_NS=$(MAX_X48_NS))"; \
 	    if awk -v x="$$x48" -v m="$(MAX_X48_NS)" 'BEGIN { exit !(x > m) }'; then \
@@ -287,7 +303,7 @@ SEED_DEEP_FALLBACK ?= 5 20 23 1 8
 # Emulation image (USE_EMULATION): seed 27 since v54, hardware-verified with v59 on 2026-11-19
 # (clk48 53.26 MHz, clk 26.08 MHz, clk -> clk48 11.82 ns, clk48 -> clk 6.87 ns).  It is the
 # fullest image: 5151/5280 LC (97.6%), 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk
-# (24 MHz), not clk48.
+# (24 MHz, MIN_CLK_MHZ), not clk48.
 SEED_EMU ?= 27
 # The next seeds with clk >= 27.5 MHz in the v54 local sweep (a lower fill than today's).
 SEED_EMU_FALLBACK ?= 5 3 42 2 22 28 1 19
@@ -656,7 +672,7 @@ help:
 	@echo "Targets:"
 	@echo "  all          Build bitstream for BOARD (default; one image, the loop netlist)"
 	@echo "  images       Build the loop + deep images the firmware embeds (what pods run)"
-	@echo "               PNR_STRICT=1 fails on a fallback seed or clk48 < MIN_CLK48_MHZ (50)"
+	@echo "               PNR_STRICT=1 fails on a fallback seed, clk48 < MIN_CLK48_MHZ (50) or clk < MIN_CLK_MHZ (25.5)"
 	@echo "  promote      Copy a HARDWARE-TESTED images build to release/ (HW_VERIFIED=\"...\")"
 	@echo "               (refuses images older than the sources; records toolchain + flags)"
 	@echo "  check-release  Fail unless release/ still matches the gateware sources"
