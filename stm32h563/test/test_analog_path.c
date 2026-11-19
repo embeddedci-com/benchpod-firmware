@@ -164,6 +164,21 @@ static void test_auto_range(void) {
     /* current_out leaves the relays (current_in stays routed), so the range stays as it is. */
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_OUT, false, true, true, L, true, &a) == L && a, "current_out");
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, N, false, NULL) == L, "NULL auto_out");
+
+    /* Every module before v3r5 (249 ohm) gets exactly the rule of earlier firmware, on every path,
+       in both ranges, with or without K5: off and cal2 give normal, every other path leaves the
+       range, and nothing is ever marked as picked (cur_auto is never true on such a module). */
+    for (int p = 0; p < (int)ANALOG_PATH__COUNT; p++)
+    for (int k5 = 0; k5 < 2; k5++)
+    for (int cr = 0; cr < 2; cr++) {
+        analog_switches_t sw;
+        CHECK(analog_path_switches((analog_path_t)p, false, &sw) == 0, "path %d", p);
+        adc_range_t cur = cr ? L : N;
+        adc_range_t before = (sw.relays && !analog_path_keeps_low_range((analog_path_t)p)) ? N : cur;
+        a = true;
+        CHECK(analog_path_auto_range((analog_path_t)p, sw.relays, false, k5 != 0, cur, false, &a) == before && !a,
+              "249 ohm module, path %d, K5 %d, range %d: not what earlier firmware did", p, k5, cr);
+    }
 }
 
 int main(void) {
