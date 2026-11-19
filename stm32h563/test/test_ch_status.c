@@ -10,6 +10,7 @@
  * added to status fails this test instead of the cloud connect.
  */
 #include <stdio.h>
+#include "reply_budget.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -206,9 +207,7 @@ static void test_cloud_worst_case_fits(void) {
     size_t n = run(CH_CLOUD_CONN);
     if (getenv("DUMP")) printf("%s\n", g_tx);
     size_t limit = BP_CLOUD_REPLY_MAX - 1u;   /* cloud_reply_cap: the NUL takes one byte */
-    printf("  cloud status worst case: %zu bytes, limit %zu, margin %zu (want >= %u)\n",
-           n, limit, n < limit ? limit - n : 0, STATUS_SHORT_MARGIN);
-    CHECK(n + STATUS_SHORT_MARGIN <= limit, "cloud status %zu bytes leaves less than %u of %zu",
+    CHECK(reply_budget_ok("status, cloud, worst case", n, limit, STATUS_SHORT_MARGIN), "cloud status %zu bytes leaves less than %u of %zu",
           n, STATUS_SHORT_MARGIN, limit);
     CHECK(strncmp(g_tx, "{\"status\":\"ok\",\"data\":{", 23) == 0, "start: %.40s", g_tx);
     CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
@@ -256,8 +255,7 @@ static void test_lan_is_complete(void) {
         CHECK(!has(k_diag[i]), "LAN status still has %s (it belongs in diag)", k_diag[i]);
     /* Room to grow: a pod as it runs leaves STATUS_FULL_MARGIN bytes under what a connection's
        TX ring takes whole, so a new field cannot quietly push LAN clients to the short form. */
-    printf("  LAN status, typical: margin %zu (want >= %u)\n", n < 2047u ? 2047u - n : 0, STATUS_FULL_MARGIN);
-    CHECK(n + STATUS_FULL_MARGIN <= 2047u, "LAN status %zu bytes leaves less than %u of 2047",
+    CHECK(reply_budget_ok("status, LAN, typical", n, 2047u, STATUS_FULL_MARGIN), "LAN status %zu bytes leaves less than %u of 2047",
           n, STATUS_FULL_MARGIN);
     CHECK(!has("short_form") && !has("boot_health_cut"), "LAN status is the short form");
     CHECK(strstr(g_tx, "\"eth_mac\":\"02:0d:1a:80:f1:54\",\"wifi_mac\":\"34:85:18:aa:bb:cc\",") != NULL,
@@ -345,9 +343,7 @@ static void test_local_lease(void) {
     g_typical = true;
     g_cloud_lease = false;
     size_t n = run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
-    printf("  LAN status caps:false with the local lease: %zu bytes (margin %zu)\n", n,
-           n < 2047u ? 2047u - n : 0);
-    CHECK(n + STATUS_FULL_MARGIN <= 2047u, "%zu bytes leaves less than %u of 2047", n, STATUS_FULL_MARGIN);
+    CHECK(reply_budget_ok("status, LAN, caps:false with the local lease", n, 2047u, STATUS_FULL_MARGIN), "%zu bytes leaves less than %u of 2047", n, STATUS_FULL_MARGIN);
     CHECK(has("local_lease") && !has("short_form"), "no local_lease in the full form: %.80s", g_tx);
     CHECK(strstr(g_tx, "\"local_lease\":{\"held\":true,\"holder\":\"hhhh") &&
           strstr(g_tx, "pppp\",\"left_s\":1800,\"mine\":true}"), "local_lease shape");

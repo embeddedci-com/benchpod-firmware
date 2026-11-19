@@ -203,19 +203,23 @@ static void note_target_power(void) {
     la_pins_set_target_powered(a || b);
 }
 
-/* {"cmd":"la_pins"} -> {"pins":[12 entries],"levels":M|null} */
+/* {"cmd":"la_pins"} -> {"pins":[14 entries],"levels":M|null}
+   {"cmd":"la_pins","la":N|[N,...]} -> the same, with only those pins' entries (a listing too large
+   for the cloud reply is read in parts; without "la" the reply is as it always was). */
 void handle_la_pins(int conn_id, const char *json) {
-    (void)json;
+    uint16_t only = 0x3FFFu;
+    char qerr[LA_PINS_ERR_MAX];
+    if (!la_pins_query_mask(json, &only, qerr, sizeof(qerr))) { send_error(conn_id, qerr); return; }
     note_target_power();
     uint16_t pulls  = la_pull_mask_now();
     uint16_t levels = 0;
     bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;
 
-    char resp[BP_CLOUD_REPLY_MAX];   /* worst case 1135 B (test_la_pins.c) */
+    char resp[BP_CLOUD_REPLY_MAX];   /* worst cases: test_la_pins.c, budget_la_pins */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x3FFFu, pulls);
+    la_pins_emit_list(&e, only, pulls);
     /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
     if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
     if (have) bp_emit(&e, ",\"levels\":%u}}\n", (unsigned)levels);

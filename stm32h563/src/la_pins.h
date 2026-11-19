@@ -205,6 +205,10 @@ typedef struct {
 /* Parse {"cmd":"gpio","la":N|[N,...]|"all","mode":...,"level":0|1}.  "la" may be absent only
    for a read (no mode, no level).  A JSON null counts as absent. */
 bool la_gpio_req_parse(const char *json, la_gpio_req_t *req, char *err, size_t cap);
+/* The pins a `la_pins` query lists, bit la-1: {"cmd":"la_pins"} (or "la":null / "all") is every
+   pin, as before; "la":N or [N,...] only those, so a large listing can be read in parts.  Other
+   fields are ignored, as la_pins always did.  false = a bad "la" (err says why). */
+bool la_pins_query_mask(const char *json, uint16_t *mask, char *err, size_t cap);
 /* Validate the WHOLE mode/level request, then commit it (on any error nothing changes).
    *changed = pins whose GPIO_SET drive must be re-sent (see la_pins_drive); *affected = pins
    to report back.  A read request (no mode, no level) is not handled here. */

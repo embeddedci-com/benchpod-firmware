@@ -2253,7 +2253,13 @@ levels when the gateware can read them back.
 
 ```json
 {"cmd":"la_pins"}
+{"cmd":"la_pins","la":[1,2,3,4,5,6,7]}
 ```
+
+`la` (optional, firmware after 3.10.12): a pin or a list of pins. The reply then lists only
+those pins' entries, in pin order; everything else is the same. Without `la` (or with `"all"`)
+the reply lists all 14, as before. Older firmware ignores `la` and lists all 14, so a host that
+asks for a subset keeps only the entries it asked for.
 
 Response:
 
@@ -2275,8 +2281,11 @@ Response:
 | `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
 
-The reply always lists all 14 entries and is about 1.3 kB (at most 1.6 kB with `dir` and `warn`). It fits the cloud command channel, but
-it is the largest single-reply command the pod has.
+The full reply is about 1.3 kB, and it is the largest single-reply command the pod has. With a
+`dir` and a `warn` on every pin it can reach about 1.8 kB, and with an emulated sensor instance
+with a long name on every pin about 2.4 kB. That is more than one cloud command reply holds
+(1791 bytes), and the pod answers `"reply too large"`. Read the list in two parts then:
+`"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
 drive a DUT line.

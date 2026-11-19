@@ -49,8 +49,8 @@
 
 /* A single-reply command's captured reply (command_handler cloud_cap_buf) and the
    matching reply[] the cloud client grafts into the response envelope.  1536, not 1024: the
-   14-entry `la_pins` / `gpio` read reply reaches ~1324 B in its worst case (test_la_pins.c;
-   the 12-entry reply was 1135 B). 1792, not 1536: firmware 3.9.0's `status` (usb{} and the
+   14-entry `la_pins` / `gpio` read reply reached ~1324 B in its worst case then (test_la_pins.c
+   keeps the current worst cases, test/reply_budget.h; the 12-entry reply was 1135 B). 1792, not 1536: firmware 3.9.0's `status` (usb{} and the
    usb task's stack line) measured 1628 B with a crash report in it and failed over the cloud;
    status on the cloud channel is a short form (command_handler_status.c) whose worst case
    test_ch_status.c keeps STATUS_SHORT_MARGIN under this. */
