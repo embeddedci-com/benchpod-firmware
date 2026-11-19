@@ -2109,6 +2109,13 @@ The pod picks the strength from the pin's function unless the host names one:
 - When the pod switches the DUT's power off (`target_power`), the pull-ups stay off until a
   rail is switched on again or the host sets a pull, so pin 21 does not feed an unpowered DUT.
   Pull-downs stay. A DUT that the pod never powers keeps its pulls.
+- While the pod holds a pull off (the two cases above), the replies say what is on the wire
+  (firmware after 3.10.12). `pullup` and `state` are what the channel does now, and the reply
+  adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
+  write failed; the pulls come back with the next change). `pull`, `ohms` and `strength` stay
+  the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
+  `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
+  replies have no `held`.
 - As on the other v3 boards, the pulls stay on when the bank switches; on v3r4 that includes
   switching to and from 5 V (pin 21 moves with it).
 
@@ -2129,6 +2136,15 @@ Response:
 `la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
 pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
 the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
+
+On digital v3r4 (firmware after 3.10.12), while the pod holds pulls off, the mask is what is on
+the wire and the reply adds `held` (the reason, as in [the pull resistors on digital
+v3r4](#pull-resistors-on-digital-v3r4)) and `asked_mask`, the pulls the host set, which the pod
+puts back:
+
+```json
+{"status": "ok", "data": {"la_pullup_mask": 0, "pullups_available": 0, "held": "pin21_down", "asked_mask": 5}}
+```
 
 #### Error cases
 

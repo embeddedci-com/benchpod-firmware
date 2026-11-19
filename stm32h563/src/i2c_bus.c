@@ -420,6 +420,12 @@ bool pca9555_la_pullup_enabled(uint8_t la_pin)
     return (s_la_pu_shadow >> (la_pin - 1)) & 1u;
 }
 
+bool la_pull_live(uint8_t la_pin)
+{
+    if (board_caps()->pull_expanders) return pull_exp_live_dir(la_pin, NULL) != PULL_EXP_OFF;
+    return pca9555_la_pullup_enabled(la_pin);
+}
+
 /* Which way each channel pulls and its value: la_pins.c (la_pull_dir, la_pull_ohms), one table
    per board revision.  This file only knows which expander pin switches which channel. */
 

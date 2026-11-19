@@ -151,3 +151,23 @@ void pull_exp_poll(void)
 }
 
 bool pull_exp_ups_suspended(void) { return s_present && s_suspend_up; }
+
+pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)
+{
+    if (str) *str = PULL_STR_NONE;
+    if (!s_present || !s_live) return PULL_EXP_OFF;
+    return pull_exp_channel(s_hw2k2, s_hw10k, la, str);
+}
+
+const char *pull_exp_held(void)
+{
+    if (!s_present) return NULL;
+    bool any_up = false, any = false;
+    for (unsigned la = 1; la <= PULL_EXP_CHANNELS; la++) {
+        if (s_dir[la] == PULL_EXP_UP) any_up = true;
+        if (s_dir[la] != PULL_EXP_OFF) any = true;
+    }
+    /* Held in reset with nothing asked for: nothing is missing from the wire. */
+    if (!any) return NULL;
+    return pull_exp_hold_name(s_live, vref_out_rail_up(), s_suspend_up, any_up);
+}

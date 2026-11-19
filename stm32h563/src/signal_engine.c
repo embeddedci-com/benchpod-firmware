@@ -1299,6 +1299,13 @@ void la_vccio_init(void) {
     s_la_io_mv = LA_VCCIO_UNSET;
 }
 
+/* The LA clamps' settle (digital v3r4).  A task delay, not a busy wait: this runs on the hw worker,
+   the one task that touches the LA bank, pin 21 and the pulls (hw_worker.h), so no other command,
+   pull write or output change can run until it returns; the net and USB tasks do run.  A tick
+   delay can end up to one tick (1 ms) early, so it asks for one more.  Before the scheduler
+   starts, sleep_ms is a busy wait. */
+static void la_settle_clamps(void) { sleep_ms(LA_VCCIO_SETTLE_CLAMPS_MS + 1u); }
+
 /* 5 V I/O (digital v3r4, board_caps()->la_5v): the bank (and the FPGA) stays at 3.3 V, the LA
    clamps keep 5 V off the FPGA pins, and pin 21, the rail every pull-up pulls to, goes to 5 V.
    A pod high above 3.3 V comes only through a pull-up.  Order: the bank to 3.3 V first, then pin
@@ -1310,7 +1317,7 @@ static int la_io_set_5v(void) {
     int rc = la_vccio_set_mv(LA_VCCIO_3V3);   /* also waits for the clamps */
     if (rc != 0) return rc;
     (void)vref_out_set_source(VREF_SRC_5V);
-    HAL_Delay(LA_VCCIO_SETTLE_CLAMPS_MS);      /* the sense filter (6.7 ms) and the pull-ups */
+    la_settle_clamps();                        /* the sense filter (6.7 ms) and the pull-ups */
     int mv = vref_out_measure_mv();
     if (mv < VREF_5V_MIN_MV) {
         printf("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
@@ -1368,8 +1375,10 @@ int la_vccio_set_mv(int mv) {
     s_la_vccio_mv = mv;
     s_la_io_mv = mv;
     /* Let the VCCIO rail settle before it is used.  With the LA clamps (digital v3r4) their
-       reference follows the bank through a filter: about 30 ms before the pod drives. */
-    HAL_Delay(board_caps()->la_clamps ? LA_VCCIO_SETTLE_CLAMPS_MS : 2);
+       reference follows the bank through a filter: about 30 ms before the pod drives.  Older
+       boards keep the 2 ms busy wait they always had. */
+    if (board_caps()->la_clamps) la_settle_clamps();
+    else HAL_Delay(2);
     return 0;
 }
 

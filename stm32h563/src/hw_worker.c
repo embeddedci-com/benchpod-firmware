@@ -458,11 +458,18 @@ static void worker_task(void *arg) {
     }
 }
 
+static TaskHandle_t s_task;   /* the worker, for hw_worker_is_current */
+
+bool hw_worker_is_current(void) {
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) return true;   /* boot: one thread */
+    return s_task == NULL || xTaskGetCurrentTaskHandle() == s_task;
+}
+
 void hw_worker_init(void) {
     s_q = xQueueCreate(HW_WORK_QUEUE_DEPTH, sizeof(cmd_work_t));
     if (!s_q) { printf("[hw] worker queue alloc failed\n"); return; }
     if (xTaskCreate(worker_task, "hw", 3072, NULL,
-                    tskIDLE_PRIORITY + 1, NULL) != pdPASS) {
+                    tskIDLE_PRIORITY + 1, &s_task) != pdPASS) {
         printf("[hw] worker task create failed\n");
         return;
     }

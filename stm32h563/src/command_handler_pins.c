@@ -39,6 +39,17 @@ uint16_t la_pull_mask_now(void) {
     return mask;
 }
 
+/* The pulls on the wire now, for the listings' "on" and warnings.  la_pull_mask_now on every board
+   but digital v3r4, where a pull is off while pin 21 is down or pull-ups are suspended.  Claims and
+   conflict checks keep la_pull_mask_now: the pod puts those pulls back by itself. */
+uint16_t la_pull_mask_live(void) {
+    if (!board_caps()->pull_expanders) return la_pull_mask_now();
+    uint16_t mask = 0;
+    for (uint8_t la = 1; la <= LA_PINS_COUNT; la++)
+        if (la_pull_live(la)) mask |= (uint16_t)(1u << (la - 1u));
+    return mask;
+}
+
 void la_pins_drive_mask(uint16_t mask) {
     for (unsigned la = 1; la <= LA_PINS_COUNT; la++)
         if (mask & (1u << (la - 1u))) (void)fpga_la_set(la, la_pins_drive(la));
@@ -207,7 +218,7 @@ static void note_target_power(void) {
 void handle_la_pins(int conn_id, const char *json) {
     (void)json;
     note_target_power();
-    uint16_t pulls  = la_pull_mask_now();
+    uint16_t pulls  = la_pull_mask_live();
     uint16_t levels = 0;
     bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;
 
@@ -248,7 +259,7 @@ void handle_gpio(int conn_id, const char *json) {
         uint16_t levels = 0;
         if (fpga_gpio_get(&levels) != 0) { send_error(conn_id, "pin level read failed (SPI)"); return; }
         bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"levels\":%u,\"pins\":", (unsigned)levels);
-        la_pins_emit_list(&e, 0x3FFFu, la_pull_mask_now());
+        la_pins_emit_list(&e, 0x3FFFu, la_pull_mask_live());
         bp_emit_raw(&e, "}}\n");
         send_emitted(conn_id, &e);
         return;
@@ -262,7 +273,7 @@ void handle_gpio(int conn_id, const char *json) {
     }
     la_pins_drive_mask(changed);
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, affected, pulls);
+    la_pins_emit_list(&e, affected, la_pull_mask_live());
     bp_emit_raw(&e, "}}\n");
     send_emitted(conn_id, &e);
 }
@@ -297,7 +308,7 @@ void handle_la_dir(int conn_id, const char *json) {
         for (size_t i = 0; i < n; i++) { la_pins_set_dir(las[i], d); affected |= (uint16_t)(1u << (las[i] - 1u)); }
     }
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, affected, la_pull_mask_now());
+    la_pins_emit_list(&e, affected, la_pull_mask_live());
     bp_emit_raw(&e, "}}\n");
     send_emitted(conn_id, &e);
 }
@@ -367,15 +378,24 @@ void handle_la(int conn_id, const char *json) {
     /* --- no "la" field: report the pull-up bitmask, bit (la-1)=LA<la> --- */
     char la_s[8] = {0};
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
-        unsigned mask = 0;
+        unsigned mask = 0, asked = 0;
         for (unsigned la = 1; la <= LA_PINS_COUNT; la++) {   /* 9..14: v3r4 only (false elsewhere) */
-            if (pca9555_la_pullup_enabled((uint8_t)la)) mask |= (1u << (la - 1));
+            if (la_pull_live((uint8_t)la)) mask |= (1u << (la - 1));
+            if (pca9555_la_pullup_enabled((uint8_t)la)) asked |= (1u << (la - 1));
         }
         /* pullups_available says whether a pull CAN be engaged right now (a bank voltage is
-           set; on v2 boards it must be 3.3 V); the mask is always the truth about what is engaged. */
-        char payload[64];
-        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
-                 mask, la_pullups_available() ? 1 : 0);
+           set; on v2 boards it must be 3.3 V); the mask is always the truth about what is engaged.
+           Digital v3r4, while the pod holds pulls off: why, and the mask the host asked for (put
+           back by the pod).  Never on other boards, where the two masks are the same. */
+        const char *held = board_caps()->pull_expanders ? pull_exp_held() : NULL;
+        char payload[112];
+        if (held)
+            snprintf(payload, sizeof(payload),
+                     "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
+                     mask, la_pullups_available() ? 1 : 0, held, asked);
+        else
+            snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
+                     mask, la_pullups_available() ? 1 : 0);
         send_ok_str(conn_id, payload);
         return;
     }
@@ -469,7 +489,11 @@ void handle_la(int conn_id, const char *json) {
     /* "state" is what the channel does now (up / down / off) and "dirs" every way it can pull.
        The older fields stay for older hosts: "pullup" 1 when engaged, "pull" the channel's default
        direction ("none" without a resistor), "ohms" its value. */
-    bool on = pca9555_la_pullup_enabled((uint8_t)la);
+    /* on: what the channel does now.  Digital v3r4 may hold a pull the host asked for off (pin 21
+       down, pull-ups suspended); "held" then says why, and strength/ohms/pull stay the setting
+       the pod puts back.  Elsewhere live and asked are the same. */
+    bool asked_on = pca9555_la_pullup_enabled((uint8_t)la);
+    bool on = la_pull_live((uint8_t)la);
     la_pull_dir_t dflt = la_pull_dir(la);
     bp_emit_t e;
     char payload[200];
@@ -483,6 +507,10 @@ void handle_la(int conn_id, const char *json) {
     if (board_caps()->pull_expanders)
         bp_emit(&e, ",\"strength\":\"%s\",\"strengths\":[\"10k\",\"2.2k\",\"both\"]",
                 pull_str_name(pull_exp_str(la)));
+    if (board_caps()->pull_expanders && asked_on && !on) {
+        const char *held = pull_exp_held();
+        bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
+    }
     bp_emit(&e, ",\"pullups_available\":%d}", la_pullups_available() ? 1 : 0);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);

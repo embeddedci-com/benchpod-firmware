@@ -125,9 +125,35 @@ static void test_names(void)
     CHECK(!strcmp(pull_str_name(PULL_STR_2K2), "2.2k") && !strcmp(pull_str_name(PULL_STR_NONE), "none"), "names");
 }
 
+/* Why asked-for pulls are off the wire (the `la` replies' "held"). */
+static void test_hold_names(void)
+{
+    #define EQ(a, b) ((a) == NULL ? (b) == NULL : (b) != NULL && strcmp((a), (b)) == 0)
+    CHECK(EQ(pull_exp_hold_name(true,  true,  false, true),  NULL), "live, not suspended");
+    CHECK(EQ(pull_exp_hold_name(true,  true,  true,  false), NULL), "suspended, only downs asked");
+    CHECK(EQ(pull_exp_hold_name(true,  true,  true,  true),  "dut_off"), "suspended pull-up");
+    CHECK(EQ(pull_exp_hold_name(false, false, false, false), "pin21_down"), "pin 21 down");
+    CHECK(EQ(pull_exp_hold_name(false, false, true,  true),  "pin21_down"), "pin 21 down wins");
+    CHECK(EQ(pull_exp_hold_name(false, true,  false, true),  "fault"), "held after a failed write");
+    /* What the chips hold after reset: every channel off, whatever was asked. */
+    tca6416_regs_t r = pull_exp_reset_regs();
+    for (unsigned la = 1; la <= PULL_EXP_CHANNELS; la++)
+        CHECK(pull_exp_channel(r, r, la, NULL) == PULL_EXP_OFF, "LA%u off in reset", la);
+    /* Suspended: a pull-up asked for is not engaged, a pull-down is. */
+    uint8_t dir[PULL_EXP_CHANNELS + 1] = {0}, str[PULL_EXP_CHANNELS + 1] = {0};
+    dir[2] = PULL_EXP_UP;   str[2] = PULL_STR_10K;
+    dir[3] = PULL_EXP_DOWN; str[3] = PULL_STR_2K2;
+    tca6416_regs_t a, b;
+    pull_exp_regs(dir, str, true, &a, &b);
+    CHECK(pull_exp_channel(a, b, 2, NULL) == PULL_EXP_OFF, "suspended up is off");
+    CHECK(pull_exp_channel(a, b, 3, NULL) == PULL_EXP_DOWN, "down stays");
+    #undef EQ
+}
+
 int main(void)
 {
     test_map();
+    test_hold_names();
     test_plan_random();
     test_names();
     printf("test_pull_exp: %d checks, %s\n", checks, fails ? "FAILED" : "all passed");

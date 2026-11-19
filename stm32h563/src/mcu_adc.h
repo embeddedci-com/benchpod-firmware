@@ -21,8 +21,9 @@
  * rather than assuming 3300 mV, because the USB-C CC thresholds are only a few
  * hundred millivolts apart.
  *
- * Not thread-safe: ADC1 has one regular sequencer and callers share it.  All
- * current callers run from the hw worker / boot path, one at a time.
+ * Not thread-safe: ADC1 has one regular sequencer and callers share it.  Every
+ * caller runs on the hw worker or at boot, one at a time, and mcu_adc_read_mv_avg
+ * refuses (-1, logged once) a call from any other task instead of racing it.
  * ==========================================================================*/
 
 /* Configure ADC1 (12-bit, single conversion), run the hardware calibration and

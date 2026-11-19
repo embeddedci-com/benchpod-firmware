@@ -36,6 +36,10 @@
    starts, after command_handler / signal_engine are initialised. */
 void hw_worker_init(void);
 
+/* True on the worker task, and before the scheduler starts (boot runs on one thread).  For
+   code that is safe only there, such as the MCU ADC (mcu_adc.h). */
+bool hw_worker_is_current(void);
+
 /* Inbound command bytes for a real TCP conn or a cloud tunnel pseudo-conn.
    Non-blocking (net-task safe): returns false if the queue is full so the caller
    can apply transport backpressure (e.g. return ERR_MEM to lwIP). */
