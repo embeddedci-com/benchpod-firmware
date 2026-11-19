@@ -17,6 +17,9 @@
 # - A new feature gets a new entry with `rev` = `revision` + 1, and `revision` goes up with it, in
 #   the same pull request as the code. Two branches adding entries conflict on `revision`: merge
 #   one, then renumber the other.
+# - Features that shipped in the same table bump can share a rev (la_pull_1v8 and log_level are
+#   both rev 4). A shipped rev never changes: clients key on it. So a rev is one bump of
+#   `revision`, not one feature: every rev from 1 to `revision` has at least one entry (CI checks).
 # - `firmware` is the first release with it, "next" until released. The release pull request
 #   (the version.h bump) runs `tools/gen_features.py --release <version>`.
 # - `gateware` is the lowest gateware version, checked against the RUNNING gateware; `gw_const`

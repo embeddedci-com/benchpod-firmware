@@ -141,6 +141,10 @@ def validate(t):
             errs.append(f"{where}: the status caps list is frozen: a new feature has no legacy_caps")
     if revs and max(revs) != t["revision"]:
         errs.append(f"revision {t['revision']} is not the highest rev ({max(revs)})")
+    # Several entries may share a rev (they shipped in one table bump), but no bump is skipped.
+    missing = sorted(set(range(1, t["revision"] + 1)) - set(revs))
+    if missing:
+        errs.append(f"no entry has rev {missing}: every bump of revision adds at least one entry")
     seen = set()
     for r in t["releases"]:
         v = r.get("firmware", "")
