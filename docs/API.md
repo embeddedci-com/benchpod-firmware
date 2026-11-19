@@ -2979,7 +2979,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"` — the UART idles high |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"`: the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
