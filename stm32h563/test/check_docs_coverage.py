@@ -7,6 +7,11 @@ Three surfaces, each read from the code:
   SCPI commands    src/scpi_server.c (.pattern)     -> docs/API.md's SCPI reference
   Console commands src/console.c (argv[0] / cmd)    -> docs/usb-serial-interface.md
 
+It also fails on a stale unreleased-version note: the docs say "firmware after X.Y.Z" for a
+feature that is not released yet (X.Y.Z is the last release, FIRMWARE_VERSION in src/version.h).
+Once FIRMWARE_VERSION is past X.Y.Z, that feature shipped: the release pull request replaces the
+note with the version (for example "firmware 3.10.13+").
+
 A command that is internal on purpose goes in the matching *_UNDOCUMENTED set below, with a
 reason. Run from anywhere: `python3 stm32h563/test/check_docs_coverage.py`. Exits 1 on a gap.
 """
@@ -61,10 +66,39 @@ def console_verbs():
     return sorted(verbs)
 
 
+def vtuple(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def stale_version_notes():
+    """Every "firmware after X.Y.Z" in docs/ (not the dated test reports) whose X.Y.Z is older
+    than FIRMWARE_VERSION, and every "after 3.10.x" with no real version."""
+    m = re.search(r'#define\s+FIRMWARE_VERSION\s+"(\d+\.\d+\.\d+)"', read(SRC, "version.h"))
+    if not m:
+        return ["no FIRMWARE_VERSION in stm32h563/src/version.h"]
+    current = vtuple(m.group(1))
+    out = []
+    for dirpath, dirnames, filenames in os.walk(DOCS):
+        dirnames[:] = [d for d in dirnames if d != "test-reports"]
+        for name in sorted(filenames):
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(dirpath, name)
+            rel = os.path.relpath(path, ROOT)
+            for n, line in enumerate(read(path).splitlines(), 1):
+                for v in re.findall(r"\bfirmware after (\d+\.\d+\.\d+)\b", line, re.I):
+                    if vtuple(v) < current:
+                        out.append(f"{rel}:{n}: \"firmware after {v}\", but {m.group(1)} is released: "
+                                   f"say the first version that has it (\"firmware X.Y.Z+\")")
+                for v in re.findall(r"\bafter (\d+\.\d+\.x)\b", line, re.I):
+                    out.append(f"{rel}:{n}: \"after {v}\" is not a version")
+    return out
+
+
 def main():
     api = read(DOCS, "API.md")
     usb = read(DOCS, "usb-serial-interface.md")
-    failures = []
+    failures = stale_version_notes()
 
     # JSON: a row "| `verb` |" in the Commands index table.
     index = section(api, "\n## Commands\n", "\n### ")
