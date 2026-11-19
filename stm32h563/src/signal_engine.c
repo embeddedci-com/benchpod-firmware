@@ -3447,7 +3447,22 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
     if (frame && s_fpga_version < UART_FRAME_MIN_GW) return -3;
     if ((frame & UART_FRAME_HALFDUPLEX) && s_fpga_version < UART_HALFDUPLEX_MIN_GW) return -3;
     uart_tx_clear();                             /* a new session starts with nothing queued */
-    if (enable) { s_uart_rx_ovf = false; s_uart_rx_par = false; }
+    if (enable) {
+        /* The gateware's RX FIFO keeps its bytes across disarm and arm (only its TX FIFO resets
+           with the engine): what the last session received and never read came out as the first
+           bytes of this one, on another pin and at another baud rate.  Empty it while the engine
+           is still off, so nothing new can land in between.  The status read inside also clears
+           the gateware's sticky overflow and parity flags of the old session. */
+        uint8_t stale[64];
+        uint32_t dropped = 0;
+        for (unsigned pass = 0; pass < 16; pass++) {
+            size_t n = fpga_uart_read(stale, sizeof(stale));
+            if (n == 0) break;
+            dropped += (uint32_t)n;
+        }
+        if (dropped) printf("[uart] %lu unread RX bytes of the last session discarded\n", (unsigned long)dropped);
+        s_uart_rx_ovf = false; s_uart_rx_par = false;
+    }
 
     int rx = la_wire_index(rx_ch);
     int tx = la_wire_index(tx_ch);
