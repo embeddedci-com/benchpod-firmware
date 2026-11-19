@@ -72,7 +72,10 @@ const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *jso
     /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
     if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_tier_light_of(d, json) &&
         !cmd_has(d, CMD_F_LEASE)) {   /* lease_acquire answers busy with the holder */
-        snprintf(why, why_cap, CMD_GATE_CLOUD_LEASE_TEXT " (%s, %lu s left)",
+        /* The format is spelled out, not built from CMD_GATE_CLOUD_LEASE_TEXT: host tools
+           (benchpod-cli internal/fwrefusals) look for this exact text in the source. The
+           _Static_assert below keeps the two in step. */
+        snprintf(why, why_cap, "busy: a cloud job holds this pod (%s, %lu s left)",
                  ctx->lease_holder && ctx->lease_holder[0] ? ctx->lease_holder : "cloud",
                  (unsigned long)ctx->lease_left_s);
         return why;
@@ -105,3 +108,9 @@ const char *cmd_gate_device_row(const cmd_desc_t *d, const char *json, bool skip
     }
     return NULL;
 }
+
+/* The pinned cloud-lease format above starts with the text dispatch_line keys on. */
+_Static_assert(sizeof("busy: a cloud job holds this pod (%s, %lu s left)") > sizeof(CMD_GATE_CLOUD_LEASE_TEXT) &&
+               __builtin_memcmp("busy: a cloud job holds this pod", CMD_GATE_CLOUD_LEASE_TEXT,
+                                sizeof(CMD_GATE_CLOUD_LEASE_TEXT) - 1) == 0,
+               "cmd_gate.c: the cloud-lease format must start with CMD_GATE_CLOUD_LEASE_TEXT");

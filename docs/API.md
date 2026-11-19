@@ -1936,9 +1936,8 @@ A client:
    command on as it is). Older firmware ignores them. They count toward the line limit (1279 bytes).
 2. Reads `api` and `min_client_api` from `status` (`"caps":false`) or the capabilities frame.
    No `api` (firmware up to 3.10.13): treat it as level 1.
-3. Refuses to go on when `min_client_api` is above its own level, and says to update the client.
-   When `api` is above its own level, warns that a newer client exists: replies it reads may have
-   changed.
+3. Stops, and says to update the client, when `api` is above its own level (the firmware has a
+   change this client would misread) or `min_client_api` is above it (the pod refuses it).
 4. Shows a `BP0030` refusal as it is: a client from before this level shows the `message` text,
    which says what to do.
 
