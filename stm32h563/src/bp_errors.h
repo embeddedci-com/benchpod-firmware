@@ -42,6 +42,8 @@ typedef enum {
     BP_E_UART_ENTRY_NO_RESET_PIN = 20,
     BP_E_UART_ENTRY_INVALID = 21,
     BP_E_UART_DE_PIN = 22,
+    BP_E_LA_NO_PULL = 23,
+    BP_E_LA_PULL_DIRECTION = 24,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -157,6 +159,16 @@ static inline void bp_err_uart_entry_invalid(int conn_id, const char *text, cons
 static inline void bp_err_uart_de_pin(int conn_id, const char *text, int32_t la) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0} };
     bp_error_send(conn_id, BP_E_UART_DE_PIN, text, a, 1);
+}
+/* BP0023: LA{la} has no pull resistor on this board */
+static inline void bp_err_la_no_pull(int conn_id, const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    bp_error_send(conn_id, BP_E_LA_NO_PULL, text, a, 1);
+}
+/* BP0024: LA{la} supports pull-{have} only on this board */
+static inline void bp_err_la_pull_direction(int conn_id, const char *text, int32_t la, const char *want, const char *have) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PULL_DIRECTION, text, a, 3);
 }
 
 #endif /* BP_ERRORS_H */

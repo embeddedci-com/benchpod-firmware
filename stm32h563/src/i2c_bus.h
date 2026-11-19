@@ -176,14 +176,9 @@ bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr);
 #define LA_PULLUP_ERR_VOLTAGE  (-2)
 int  pca9555_set_la_pullup(uint8_t la_pin, bool enable);   /* la_pin 1..8 */
 bool pca9555_la_pullup_enabled(uint8_t la_pin);
-/* Fixed resistance on LA<n>, e.g. "4.7k"; "" for a channel with no network.
-   The value alone does not say which way it pulls — ask pca9555_la_pull_is_down. */
-const char *pca9555_la_pullup_ohms(uint8_t la_pin);
-/* True for the channels whose resistor pulls DOWN rather than up (LA7/LA8).
-   Everything here is named "pullup" for historical reasons; LA1-LA6 pull up
-   with 4.7k (LA1/2), 2.2k (LA3/4) and 10k (LA5/6), while LA7/LA8 pull DOWN
-   with 10k.  Enabling any of them closes the same kind of analog switch. */
-bool pca9555_la_pull_is_down(uint8_t la_pin);
+/* Everything here is named "pullup" for historical reasons: enabling closes the channel's
+   switch, whichever way its resistor pulls.  The direction and value of each channel are in
+   la_pins.h (la_pull_dir, la_pull_ohms, la_pull_supports). */
 /* True when the LA bank voltage currently allows a pull-up to be engaged (3.3 V). */
 bool la_pullups_available(void);
 /* Force every LA pull-up off (used when the bank drops to 1.8 V). */

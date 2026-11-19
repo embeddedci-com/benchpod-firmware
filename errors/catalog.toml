@@ -300,3 +300,29 @@ sdk = "give de the LA channel wired to the transceiver's DE and /RE, not rx or t
 cli = "give --de the LA channel wired to the transceiver's DE and /RE, not rx or tx"
 mcp = "set de to the LA channel wired to the transceiver's DE and /RE, not rx or tx"
 web = "Pick the pin wired to the transceiver's DE and /RE, not the RX or TX pin."
+
+[BP0023]
+name = "la_no_pull"
+area = "io"
+since = "next"
+args = { la = "int" }
+message = "LA{la} has no pull resistor on this board"
+cause = "Only some LA channels have a pull resistor the pod can switch, and which ones depends on the board. la_pins lists each channel's pull and the directions it supports."
+[BP0023.fix]
+sdk = "pick a channel with a pull resistor (bp.la_pins() shows them), or add one on the board"
+cli = "pick a channel with a pull resistor (`benchpod la pins` shows them), or add one on the board"
+mcp = "pick a channel with a pull resistor (la_pins or pull_status shows them), or add one on the board"
+web = "This pin has no pull resistor. Pick a pin that has one, or add one on the board."
+
+[BP0024]
+name = "la_pull_direction"
+area = "io"
+since = "next"
+args = { la = "int", want = "str", have = "str" }
+message = "LA{la} supports pull-{have} only on this board"
+cause = "The pull resistor on LA{la} is wired one way on this board, so it cannot pull {want}. Which way each channel pulls depends on the board; la_pins lists it."
+[BP0024.fix]
+sdk = "use bp.set_pull({la}, \"{have}\"), or pick a channel that pulls {want} (bp.la_pins() shows them)"
+cli = "use `benchpod la pull {la} {have}`, or pick a channel that pulls {want} (`benchpod la pins` shows them)"
+mcp = "call set_pull(las=[{la}], pull=\"{have}\"), or pick a channel that pulls {want} (pull_status shows them)"
+web = "LA{la} can only pull {have} on this board. Pick a pin that pulls {want}."

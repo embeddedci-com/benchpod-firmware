@@ -8,7 +8,7 @@
  *
  * i2c_start claims the two pins (la_pins: i2cm_sda / i2cm_scl) and arms the SWD engine as an
  * open-drain I2C master, so SWD, SPI and I2C sessions exclude each other.  The bus needs pull-ups:
- * with "pullups":"pod" (the default) both pins must be LA1..LA6 with the pod's pull-up switched on
+ * with "pullups":"pod" (the default) both pins need a pod pull-up (LA1..LA6 today) switched on
  * (they go to 3.3 V, so the LA bank must be at 3.3 V); "pullups":"external" says the board has its
  * own.  The pod never switches a pull-up by itself: the error names the command that does.
  *
@@ -78,10 +78,11 @@ static bool has_key(const char *json, const char *key) {
 /* The pod's own pull-up on `la`, or why it can't serve the bus. */
 static bool pod_pullup_or_error(int conn_id, unsigned la) {
     char msg[200];
-    if (la_pull_dir(la) != LA_PULL_UP) {
-        snprintf(msg, sizeof(msg), "LA%u has no pod pull-up (only LA1..LA6 do): use LA1..LA6, or pass "
-                 "\"pullups\":\"external\" if the board has its own", la);
-        send_error(conn_id, msg); return false;
+    if (!la_pull_supports(la, LA_PULL_UP)) {
+        snprintf(msg, sizeof(msg), "LA%u has no pod pull-up on this board: use a channel with one "
+                 "(la_pins lists them), or pass \"pullups\":\"external\" if the board has its own", la);
+        send_error(conn_id, msg);
+        return false;
     }
     if (!la_pullups_available()) {
         send_error(conn_id, "the pod's pull-ups go to 3.3 V and are off with the LA bank at 1.8 V: pass "
@@ -90,7 +91,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
     }
     if (!pca9555_la_pullup_enabled((uint8_t)la)) {
         snprintf(msg, sizeof(msg), "I2C needs pull-ups: switch on LA%u's with {\"cmd\":\"la\",\"la\":%u,"
-                 "\"pullup\":\"on\"}, or pass \"pullups\":\"external\"", la, la);
+                 "\"pull\":\"up\"}, or pass \"pullups\":\"external\"", la, la);
         send_error(conn_id, msg); return false;
     }
     return true;

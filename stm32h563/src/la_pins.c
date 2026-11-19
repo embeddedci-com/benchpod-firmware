@@ -103,15 +103,78 @@ uint16_t la_pins_owned_mask(void) {
     return (uint16_t)(~la_pins_mask_fn(LA_FN_NONE) & 0x3FFFu);
 }
 
+/* ---- pull resistors: one table per board revision ----
+   dirs: the directions the resistor can pull (LA_PULL_BIT); dflt: the one "pullup":"on" engages.
+   A board revision with other resistors gets a table of its own, picked in la_pull_hw(). */
+typedef struct { uint8_t dirs; uint8_t dflt; const char *ohms; } la_pull_hw_t;
+
+static const la_pull_hw_t s_pulls_v3[LA_PINS_COUNT + 1] = {
+    [1] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
+    [2] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
+    [3] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
+    [4] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
+    [5] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
+    [6] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
+    [7] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
+    [8] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
+    /* LA9..LA14: no resistor */
+};
+
+static const la_pull_hw_t *la_pull_hw(unsigned la) {
+    if (la < 1u || la > LA_PINS_COUNT) return NULL;
+    const la_pull_hw_t *p = &s_pulls_v3[la];
+    return p->dirs ? p : NULL;
+}
+
 la_pull_dir_t la_pull_dir(unsigned la) {
-    if (la >= 1u && la <= 6u) return LA_PULL_UP;
-    if (la == 7u || la == 8u) return LA_PULL_DOWN;
-    return LA_PULL_NONE;
+    const la_pull_hw_t *p = la_pull_hw(la);
+    return p ? (la_pull_dir_t)p->dflt : LA_PULL_NONE;
 }
 
 const char *la_pull_ohms(unsigned la) {
-    static const char *const ohms[9] = { NULL, "4.7k", "4.7k", "2.2k", "2.2k", "10k", "10k", "10k", "10k" };
-    return (la >= 1u && la <= 8u) ? ohms[la] : NULL;
+    const la_pull_hw_t *p = la_pull_hw(la);
+    return p ? p->ohms : NULL;
+}
+
+bool la_pull_supports(unsigned la, la_pull_dir_t d) {
+    const la_pull_hw_t *p = la_pull_hw(la);
+    return p && d != LA_PULL_NONE && (p->dirs & LA_PULL_BIT(d));
+}
+
+const char *la_pull_dir_name(la_pull_dir_t d) {
+    return d == LA_PULL_UP ? "up" : d == LA_PULL_DOWN ? "down" : "off";
+}
+
+bool la_pull_dir_parse(const char *s, la_pull_dir_t *d) {
+    if (!s) return false;
+    if (!strcmp(s, "up"))   { *d = LA_PULL_UP;   return true; }
+    if (!strcmp(s, "down")) { *d = LA_PULL_DOWN; return true; }
+    if (!strcmp(s, "off") || !strcmp(s, "none")) { *d = LA_PULL_NONE; return true; }
+    return false;
+}
+
+void la_pull_emit_dirs(bp_emit_t *e, unsigned la) {
+    bool up = la_pull_supports(la, LA_PULL_UP), down = la_pull_supports(la, LA_PULL_DOWN);
+    bp_emit(e, "[%s%s%s]", up ? "\"up\"" : "", up && down ? "," : "", down ? "\"down\"" : "");
+}
+
+la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want) {
+    la_pull_dir_t d = LA_PULL_NONE;
+    if (pull) {
+        if (!la_pull_dir_parse(pull, &d)) return LA_PULL_REQ_BAD_VALUE;
+    } else if (pullup) {
+        /* the alias: "on" / "1" engage the default direction */
+        bool on = (pullup[0] == 'o' || pullup[0] == 'O') ? (pullup[1] == 'n' || pullup[1] == 'N')
+                                                         : (atoi(pullup) != 0);
+        d = on ? la_pull_dir(la) : LA_PULL_NONE;
+        if (on && d == LA_PULL_NONE) { *want = LA_PULL_UP; return LA_PULL_REQ_NO_PULL; }
+    }
+    *want = d;   /* also on a refusal: the reply names what was asked for */
+    if (d != LA_PULL_NONE) {
+        if (!la_pull_hw(la))            return LA_PULL_REQ_NO_PULL;
+        if (!la_pull_supports(la, d))   return LA_PULL_REQ_DIRECTION;
+    }
+    return LA_PULL_REQ_OK;
 }
 
 int la_pins_drive(unsigned la) {
@@ -220,7 +283,7 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
         char name[24];
         snprintf(err, cap,
                  "pull conflict: LA%u has its %s pull-down engaged, which %s can't work with (%s); "
-                 "disable it with {\"cmd\":\"la\",\"la\":%u,\"pullup\":\"off\"} or use another channel",
+                 "disable it with {\"cmd\":\"la\",\"la\":%u,\"pull\":\"off\"} or use another channel",
                  la, la_pull_ohms(la), fn_display(fn, mode, name, sizeof(name)), reason, la);
         return false;
     }
@@ -285,8 +348,8 @@ uint8_t la_pins_warnings(unsigned la, uint16_t pull_mask) {
     return w;
 }
 
-bool la_pins_check_pull_enable(unsigned la, char *err, size_t cap) {
-    if (!la_ok(la) || la_pull_dir(la) != LA_PULL_DOWN) return true;
+bool la_pins_check_pull_enable(unsigned la, la_pull_dir_t d, char *err, size_t cap) {
+    if (!la_ok(la) || d != LA_PULL_DOWN) return true;
     la_fn_t fn = (la_fn_t)s_pin[la].fn;
     la_gpio_mode_t mode = la_pins_gpio(la);
     const char *reason = pull_down_reason(fn, mode);
@@ -546,12 +609,16 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     if (level >= 0) bp_emit(e, ",\"level\":%d,\"pull\":", level);
     else            bp_emit_raw(e, ",\"level\":null,\"pull\":");
     const char *ohms = la_pull_ohms(la);
-    if (ohms)
-        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s}",
-                la_pull_dir(la) == LA_PULL_DOWN ? "down" : "up", ohms,
+    if (ohms) {
+        /* dir: the way it pulls when on; dirs: every way it can pull (pull "up"/"down"/"off") */
+        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s,\"dirs\":",
+                la_pull_dir_name(la_pull_dir(la)), ohms,
                 (pull_mask & (1u << (la - 1u))) ? "true" : "false");
-    else
+        la_pull_emit_dirs(e, la);
+        bp_emit_raw(e, "}");
+    } else {
         bp_emit_raw(e, "null");
+    }
     if (s_dir[la] != LA_DIR_UNKNOWN) bp_emit(e, ",\"dir\":\"%s\"", la_dir_name((la_dir_t)s_dir[la]));
     uint8_t w = la_pins_warnings(la, pull_mask);
     if (w) bp_emit(e, ",\"warn\":%u", (unsigned)w);

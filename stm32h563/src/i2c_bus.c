@@ -381,22 +381,8 @@ bool pca9555_la_pullup_enabled(uint8_t la_pin)
     return (s_la_pu_shadow >> (la_pin - 1)) & 1u;
 }
 
-/* Fixed bias resistor per LA channel, indexed by LA number (CTRL1..CTRL8 map
-   one-for-one onto LA1..LA8). LA1-LA6 pull UP to +3V3; LA7/LA8 pull DOWN. */
-static const char *const s_la_pull_ohms[9] = {
-    "", "4.7k", "4.7k", "2.2k", "2.2k", "10k", "10k", "10k", "10k",
-};
-
-const char *pca9555_la_pullup_ohms(uint8_t la_pin)
-{
-    if (la_pin < 1 || la_pin > 8) return "";
-    return s_la_pull_ohms[la_pin];
-}
-
-bool pca9555_la_pull_is_down(uint8_t la_pin)
-{
-    return la_pin == 7 || la_pin == 8;
-}
+/* Which way each channel pulls and its value: la_pins.c (la_pull_dir, la_pull_ohms), one table
+   per board revision.  This file only knows which expander pin switches which channel. */
 
 /* ---- Analog path switching: U55 @ 0x24 (DAC mux) + U58 @ 0x26 (cal) -------
    Register map (TCA9554): 0x01 output, 0x03 config (1=input, 0=output).

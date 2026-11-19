@@ -28,3 +28,5 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0020 | `uart_entry_no_reset_pin` | uart | next | The UART entry sequence needs the pod's reset pin, which this board does not have |
 | BP0021 | `uart_entry_invalid` | uart | next | The UART entry option {arg} is out of range (0 to {max}) |
 | BP0022 | `uart_de_pin` | uart | next | The UART's DE pin LA{la} is also its rx or tx |
+| BP0023 | `la_no_pull` | io | next | LA{la} has no pull resistor on this board |
+| BP0024 | `la_pull_direction` | io | next | LA{la} supports pull-{have} only on this board |

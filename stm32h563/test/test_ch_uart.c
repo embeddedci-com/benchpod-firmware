@@ -101,7 +101,7 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
 int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
 bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
 bool la_pullups_available(void) { return true; }
-la_pull_dir_t la_pull_dir(unsigned la) { return la <= 6 ? LA_PULL_UP : la <= 8 ? LA_PULL_DOWN : LA_PULL_NONE; }
+bool la_pull_supports(unsigned la, la_pull_dir_t d) { return d == LA_PULL_UP ? (la >= 1 && la <= 6) : d == LA_PULL_DOWN ? (la == 7 || la == 8) : false; }
 static int g_de_claimed = -1;
 uint16_t la_pins_release_fn(la_fn_t fn) { if (fn == LA_FN_UART_DE) g_de_claimed = -1; return 0; }
 void la_pins_claim(la_fn_t fn, la_gpio_mode_t mode, uint8_t level, const uint8_t *las, size_t n) {
