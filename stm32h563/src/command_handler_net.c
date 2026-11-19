@@ -514,9 +514,9 @@ void wifi_scan_poll(void) {
     esp_wifi_scan_state_t st = esp_wifi_ctrl_scan_result(s_console_scan, &l, &err);
     if (st == ESP_WIFI_SCAN_RUNNING) return;
     s_console_scan = 0;
-    console_io_write((const uint8_t *)"\r\n", 2);   /* off the prompt line */
+    /* After the prompt: the console starts the list on its own line and ends it with the prompt
+       again (console_prompt.h). */
     wifi_scan_print(l, st == ESP_WIFI_SCAN_DONE ? NULL : err ? err : "the scan was lost");
-    console_io_write((const uint8_t *)"> ", 2);
 }
 
 /* {"cmd":"eth","action":"stop"|"start"|"restart"} — manually control the wired

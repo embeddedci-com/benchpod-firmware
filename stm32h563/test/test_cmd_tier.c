@@ -68,6 +68,9 @@ static void test_mixed_verbs(void) {
     expect("lan_policy", "{\"cmd\":\"lan_policy\",\"set\":\"off\"}", CMD_TIER_T2);
     expect("usb_network", "{\"cmd\":\"usb_network\"}", CMD_TIER_T0);
     expect("usb_network", "{\"cmd\":\"usb_network\",\"set\":\"off\"}", CMD_TIER_T2);
+    /* the console log level: read and set are T0 (it only changes what the console prints) */
+    expect("log_level", "{\"cmd\":\"log_level\"}", CMD_TIER_T0);
+    expect("log_level", "{\"cmd\":\"log_level\",\"set\":\"debug\"}", CMD_TIER_T0);
     expect("module", "{\"cmd\":\"module\"}", CMD_TIER_T0);
     expect("module", "{\"cmd\":\"module\",\"eeprom\":\"read\",\"addr\":0,\"len\":32}", CMD_TIER_T0);
     expect("module", "{\"cmd\":\"module\",\"eeprom\":\"cal_commit\",\"len\":64}", CMD_TIER_T2);
@@ -205,7 +208,7 @@ static void test_flags_match_the_old_lists(void) {
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
                "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-               "can_disable", "module", "wiring_list", "wiring_get");
+               "can_disable", "module", "wiring_list", "wiring_get", "log_level");
     EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "stream", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
                "current_out", "adc_read", "adc_range", "calibrate", "dac_control_loop", "dac_loop_probe",

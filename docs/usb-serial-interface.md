@@ -131,16 +131,27 @@ worker task, prints the output, then prints the prompt `"> "`.
 - **Prompt delimiter:** after each command the device prints `"> "`. Read until
   the next prompt to capture a command's full output.
 - **Interleaved logs:** boot messages and asynchronous events (`[wifi] ...`,
-  `[cloud] ...`, `[cmd] ...` traces of LAN and cloud commands) are printed on the
-  same channel and may appear between or during command output. Parse by
-  scanning for the documented reply lines rather than assuming the response is
-  contiguous.
+  `[cloud] ...`) are printed on the same channel and may appear during command
+  output. Parse by scanning for the documented reply lines rather than assuming
+  the response is contiguous. How much the pod prints is its [log level](#log-levels).
+- **Output after the prompt** (firmware newer than 3.10.12): a log line or a late
+  reply (`wifi-scan`'s list, `flash-esp32`'s result) that arrives while the console
+  waits at the prompt starts on a line of its own and is followed by the prompt
+  again, like a shell. A bare prompt is overwritten (`"\r"` then the line); a
+  prompt with typed text is left as it is (`"\r\n"`) and the prompt and the typed
+  text are printed again after the line. So the console always ends with `"> "`
+  (plus what was typed) when it is idle. Older firmware printed such lines after
+  the prompt without one.
+- **First prompt** (firmware newer than 3.10.12): the pod prints
+  `console ready — type 'help'` and the first prompt once the iCE40/PSRAM
+  bring-up has finished (a few seconds after power-on), so the boot lines come
+  before it. A line typed earlier waits and runs then.
 - **Busy worker:** if the worker's queue is full the console prints
   `busy — try again` and drops the line.
 - **Quoting:** only `wifi-set` understands double quotes (an SSID or password
   with spaces). Every other command splits on whitespace.
 - **Machine-readable replies:** the commands an installer drives
-  (`identity*`, `sig-policy`, `lan-policy`, `lan-tls`, `ca*`, `proxy*`, `blobs`) start their reply with the command name and then `ok`, `error <why>`
+  (`identity*`, `sig-policy`, `lan-policy`, `lan-tls`, `log`, `ca*`, `proxy*`, `blobs`) start their reply with the command name and then `ok`, `error <why>`
   or the value, with no leading spaces. The other commands print indented,
   human-readable lines.
 - **Shared hardware:** the commands that capture into the PSRAM or drive the
@@ -155,7 +166,7 @@ These console replies are read by host tools (the `benchpod` CLI, the `embeddedc
 server, the web app's setup wizard over WebSerial), including older releases still in use, so
 their formats do not change: `status` (`device : benchpod`, the `ip`, `usb` and `board` lines),
 `ping` (`PING ok`), `identity`, `identity-wipe ok`, `sig-policy`, `lan-policy`, `ca`/`ca none`,
-`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, `usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
+`proxy`/`proxy none`, `wifi-show` (`ssid:`, `state:`, `ip:`), `blobs`, `log`, `usb-reattach ok` and `dfu`. A new field is added as a new line or at the end of a line; an
 existing one keeps its place. `stm32h563/test/check_console_contract.py` (run with the host tests)
 fails when one of these format strings changes.
 
@@ -193,6 +204,7 @@ command prints `usage: ...` and changes nothing.
 | `rollback-floor [clear]` | Show the rollback floor, the oldest release whose signed firmware the pod takes (firmware 3.10.7+), or lower it to none with `clear`. Replies `rollback-floor <x.y.z\|none>` or `rollback-floor error <why>`. |
 | `usb-network [on\|off]` | Show or set the [USB network adapter](#usb-network-adapter) setting (default `on`). Replies `usb-network <on\|off>` or `usb-network error <why>`. `off` re-enumerates the pod as its console only (the computer sees no network adapter); `on` brings the adapter back. Stored, separate from `lan-policy`; only the console and the USB link itself may change it. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
+| `log [error\|warn\|info\|debug]` | Show or set the console [log level](#log-levels) (firmware newer than 3.10.12; default `info`). Replies `log <level>` or `log error <why>`. Stored: it survives a reboot and a firmware update. The JSON [`log_level`](API.md#log_level--the-console-log-level) command reads and sets the same setting. |
 | `lan-tls [https-only on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>"`, `lan-tls port 8443 https-only <on\|off> none <why>` without a certificate, or `lan-tls error <why>`. `https-only on` refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it); `regenerate` makes a new key and self-signed certificate. The console may always change both. |
 | `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Installing one needs the network: JSON `ota_begin` with target `ca` over the USB network adapter, the cloud or (firmware before 3.9.0) the console's `upload-begin ca`; `benchpod cloud ca set` does it. `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
 | `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
@@ -322,6 +334,27 @@ The console does **not** get the safe-mode refusals of the JSON API: in safe mod
 it is how you test the iCE40 and PSRAM (`psram-selftest`, `psram-test`,
 `flash-ice40`) before you power-cycle.
 
+### Log levels
+
+Firmware newer than 3.10.12. Every background line on the console has a level, and the pod
+prints the lines at or above its log level (`log`, or JSON `log_level`; default `info`):
+
+| Level | What it prints |
+|---|---|
+| error | Faults only: a crash report, a failed iCE40, PSRAM, storage or identity check, out of memory. These always print, at every level. |
+| warn | Also: something failed but the pod carries on, such as the first failure of a reconnect loop. |
+| info | Also: boot lines and state changes (link up or down, an address, cloud connected or lost). The default. |
+| debug | Also: detail for debugging. The `[cmd] <- "verb"` / `[cmd] -> ok ...` trace of every LAN, USB network and cloud command, each step and retry of the cloud, Wi-Fi and DHCP reconnect loops, cloud lease renewals, Wi-Fi signal (RSSI) misses, USB network link flaps, Ethernet error counters, capture and DAC progress lines. |
+
+Retry loops are rate limited at every level: the first failure prints (for example
+`[cloud] cannot connect: challenge connect failed`), then at most one line a minute
+(`...: still failing (12 times)`), then one line when it works again (`[cloud] connected to
+... (after 12 failed attempts)`). An unreachable cloud or a network without DHCP no longer
+prints a burst of lines every 20-30 seconds. `[esp] SPI xfer error` is latched the same way.
+
+Console command replies are not log lines: they print whatever the level. Firmware 3.10.12
+and older has no levels and prints everything listed under `debug`.
+
 ### Moved to the JSON API
 
 Firmware 3.9.0 removed these console commands; their JSON equivalents work over the
@@ -341,7 +374,8 @@ to the network API (JSON ota_begin sig) ...`.
 
 The commands that stay keep their names and reply formats, so older CLIs and SDKs keep
 working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,
-`lan-policy`, the Wi-Fi, CA and proxy commands, `blobs`.
+`lan-policy`, the Wi-Fi, CA and proxy commands, `blobs`. `log` (firmware newer than 3.10.12) is
+on the console and in the JSON API (`log_level`).
 
 | Removed console command | JSON command |
 |---|---|

@@ -70,6 +70,7 @@ static SPI_HandleTypeDef hspi_ice;
 #include "fpga_config.h"               /* FPGA_HFOSC_HZ — single source: tools/gen_protocol.py */
 #include "la_rate.h"                    /* la_psram_plan — deep-LA rate/divider (host-tested) */
 #include "dac_rearm.h"                  /* stop-before-rearm sequencing (host-tested) */
+#include "bp_log.h"
 
 /* ---- SPI1 DMA transfer backend ------------------------------------------
    Big capture read-backs (fpga_read_capture, up to SIGNAL_BUF_SIZE) and waveform
@@ -288,7 +289,7 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
         /* Integer units — newlib-nano printf has no %f. Waveform freq can be sub-Hz
            here (low freq -> long period), so report it in milli-Hz; the rate is
            always large, so integer S/s. */
-        printf("[sig] WARN: %lu mHz needs %lu samples/period at %lu S/s — exceeds "
+        LOG_W("[sig] WARN: %lu mHz needs %lu samples/period at %lu S/s — exceeds "
                "%u-sample waveform buffer; clamping (actual freq will be higher)\n",
                (unsigned long)lroundf(freq * 1000.0f), (unsigned long)period,
                (unsigned long)lroundf(eff_rate), SIGNAL_MAX_SAMPLES);
@@ -318,7 +319,7 @@ uint32_t signal_engine_dac_replay_rate_hz(void) { return s_dac_replay_rate_hz; }
 static uint32_t dac_replay_divider(float sample_rate_hz, bool from_psram) {
     dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram);
     if (p.clamped)
-        printf("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
+        LOG_W("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
                (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
                p.clamped == 1 ? "maximum" : "minimum", (unsigned long)p.rate_hz);
     s_dac_replay_rate_hz = p.rate_hz;
@@ -412,12 +413,12 @@ static void format_bin8(char *out10, uint8_t v) {
 static void log_dac_samples(uint32_t total) {
     uint32_t n = (total < DAC_DUMP_SAMPLES) ? total : DAC_DUMP_SAMPLES;
     if (n == 0) return;
-    printf("[sig] first %lu of %lu DAC samples loaded to FPGA (D7..D0):\n",
+    LOG_D("[sig] first %lu of %lu DAC samples loaded to FPGA (D7..D0):\n",
            (unsigned long)n, (unsigned long)total);
     char bin[16];
     for (uint32_t i = 0; i < n; i++) {
         format_bin8(bin, sample_buf[i]);
-        printf("[sig]   [%2lu] %s  (0x%02x = %3u)\n",
+        LOG_D("[sig]   [%2lu] %s  (0x%02x = %3u)\n",
                (unsigned long)i, bin, sample_buf[i], sample_buf[i]);
     }
 }
@@ -497,7 +498,7 @@ static const dac_rearm_ops_t s_rearm_ops = {
 };
 static int dac_quiesce(bool force) {
     int rc = dac_rearm_quiesce(&s_rearm_ops, force, s_cotrig_pending);
-    if (rc != 0) printf("[sig] ERROR: DAC still running after STOP_DAC (STATUS DAC_RUN stuck)\n");
+    if (rc != 0) LOG_E("[sig] ERROR: DAC still running after STOP_DAC (STATUS DAC_RUN stuck)\n");
     return rc;
 }
 
@@ -667,14 +668,14 @@ static bool cap_overflowed(uint8_t st, const char *what) {
        and tell the user the real fix instead of "lower the rate".  Every boot reloads the
        iCE40 now (psram_boot_selftest_with_recovery), so a reboot is that fix. */
     if ((st & 0x80) != 0) {
-        printf("[sig] ERROR: %s failed — iCE40 NOT RESPONDING (STATUS=0x%02x): the FPGA "
+        LOG_E("[sig] ERROR: %s failed — iCE40 NOT RESPONDING (STATUS=0x%02x): the FPGA "
                "is unconfigured/wedged, not overflowing.  Reboot the pod (it reloads the "
                "iCE40 at boot); if that does not help, `flash-ice40` on the console.\n", what, st);
         return true;
     }
     if (st & STATUS_CAP_OVF) {
         s_cap_overflowed = true;
-        printf("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
+        LOG_E("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
                "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
                "truncated/corrupt. Lower the rate.\n", what);
         return true;
@@ -1139,11 +1140,11 @@ static int dac_quad_hold(uint16_t code) {
     if (dac_quiesce(false) != 0) return -1;
     dac_timed = false;
     if (s_quad_ch == DAC_QUAD_NONE) {
-        printf("[sig] DAC level 0x%04x not applied: no output selected (analog path off)\n", code);
+        LOG_D("[sig] DAC level 0x%04x not applied: no output selected (analog path off)\n", code);
         return 0;
     }
     int rc = dac_quad_write(s_quad_ch, code);
-    printf("[sig] DAC channel %s held at 0x%04x (%u)\n", dac_quad_name(s_quad_ch), code, code);
+    LOG_D("[sig] DAC channel %s held at 0x%04x (%u)\n", dac_quad_name(s_quad_ch), code, code);
     return rc;
 }
 
@@ -1211,7 +1212,7 @@ int dac_set_constant(uint8_t value, uint32_t divider) {
     dac_timed = false;
     float dac_clk_hz = (float)DAC_CLK_HZ / (float)divider;
     /* Integer Hz — newlib-nano printf has no %f (the old %.0f printed nothing). */
-    printf("[sig] DAC held at 0x%02x (%u), DAC_CLK=%lu Hz (divider=%lu)\n",
+    LOG_D("[sig] DAC held at 0x%02x (%u), DAC_CLK=%lu Hz (divider=%lu)\n",
            value, value, (unsigned long)lroundf(dac_clk_hz), (unsigned long)divider);
     return 0;
 }
@@ -1225,7 +1226,7 @@ int dac_set_constant16(uint16_t code, uint32_t divider) {
     if (fpga_load_wave(one16, 2) != 0) return -1;
     if (fpga_start_dac(1, divider) != 0) return -1;
     dac_timed = false;
-    printf("[sig] DAC held at 0x%04x (%u), divider=%lu\n", code, code, (unsigned long)divider);
+    LOG_D("[sig] DAC held at 0x%04x (%u), divider=%lu\n", code, code, (unsigned long)divider);
     return 0;
 }
 
@@ -1487,7 +1488,7 @@ void signal_engine_fabric_to_idle(void) {
         spi_cmd_write(CMD_GPIO_SET, args, sizeof(args));
     }
     s_cotrig_pending = s_cotrig_in_capture = false;
-    printf("[sig] fabric set idle (DAC, capture, engines, LA pins)\n");
+    LOG_D("[sig] fabric set idle (DAC, capture, engines, LA pins)\n");
 }
 
 /* ---- Poll (main loop) ---------------------------------------------------- */
@@ -1499,7 +1500,7 @@ void signal_engine_poll(void) {
     if (dac_timed && time_reached(dac_stop_at)) {
         dac_timed = false;
         fpga_stop_dac();
-        printf("[sig] DAC stopped (duration expired)\n");
+        LOG_D("[sig] DAC stopped (duration expired)\n");
     }
 }
 
@@ -1515,7 +1516,7 @@ static void log_dac_start(const char *shape, float freq, uint8_t amplitude,
     float actual_freq = (n_samples > 0) ? eff_rate / (float)n_samples : 0.0f;
     /* Integer units — newlib-nano printf has no %f. Waveform freq can be sub-Hz,
        so milli-Hz; the sample rate is always large, so integer S/s. */
-    printf("[sig] DAC %s  freq=%lu mHz (actual ~%lu mHz)  amp=%u  offset=%u  %s "
+    LOG_D("[sig] DAC %s  freq=%lu mHz (actual ~%lu mHz)  amp=%u  offset=%u  %s "
            "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
            shape, (unsigned long)lroundf(freq * 1000.0f),
            (unsigned long)lroundf(actual_freq * 1000.0f), amplitude, offset,
@@ -1531,7 +1532,7 @@ static int dac_generate_common(const char *shape,
     if (freq <= 0.0f || amplitude == 0) {
         /* Integer milli-Hz — newlib-nano printf has no %f. Signed: freq is <= 0
            here (that's why it's invalid). */
-        printf("[sig] ERROR: %s invalid params (freq=%ld mHz amp=%u)\n",
+        LOG_W("[sig] ERROR: %s invalid params (freq=%ld mHz amp=%u)\n",
                shape, (long)lroundf(freq * 1000.0f), amplitude);
         return -1;
     }
@@ -1582,7 +1583,7 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
 int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz) {
     if (freq <= 0.0f || !(fabs(amp) >= 0.5)) {
-        printf("[sig] ERROR: generate16 invalid params (freq=%ld mHz amp=%ld)\n",
+        LOG_W("[sig] ERROR: generate16 invalid params (freq=%ld mHz amp=%ld)\n",
                (long)lroundf(freq * 1000.0f), (long)lround(amp));
         return -1;
     }
@@ -1600,7 +1601,7 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
 #endif
 
     float eff_rate = dac_effective_rate_hz(divider);
-    printf("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
+    LOG_D("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
            "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
            shape == WAVE16_SQUARE ? "square" : shape == WAVE16_SAWTOOTH ? "sawtooth" : "sine",
            (unsigned long)lroundf(freq * 1000.0f), (long)lround(amp), (long)lround(mid),
@@ -1619,7 +1620,7 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
                                 float sample_rate_hz) {
     if (!data || len == 0 || len > SIGNAL_BUF_SIZE) {
-        printf("[sig] ERROR: arbitrary invalid params (len=%u)\n", (unsigned)len);
+        LOG_W("[sig] ERROR: arbitrary invalid params (len=%u)\n", (unsigned)len);
         return -1;
     }
     /* loop=true is the normal mode for the FPGA sequencer; loop=false would
@@ -1629,7 +1630,7 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
 
     uint32_t divider = dac_replay_divider(sample_rate_hz, false);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
-    printf("[sig] DAC arbitrary  len=%u  loop=%s  %lu S/s (divider=%lu)\n",
+    LOG_D("[sig] DAC arbitrary  len=%u  loop=%s  %lu S/s (divider=%lu)\n",
            (unsigned)len, loop ? "yes" : "no",
            (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
 
@@ -1999,13 +2000,13 @@ uint32_t signal_engine_adc_max_samples(void) {
    Requires gateware >= v17 (CMD_START_DAC_PSRAM). */
 int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     if (count == 0 || count > FPGA_DAC_REPLAY_MAX_SAMPLES) {
-        printf("[sig] ERROR: psram replay count=%lu out of range (max %lu)\n",
+        LOG_W("[sig] ERROR: psram replay count=%lu out of range (max %lu)\n",
                (unsigned long)count, (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES);
         return -1;
     }
     uint32_t divider = dac_replay_divider(sample_rate_hz, true);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
-    printf("[sig] DAC psram replay  count=%lu  %lu S/s (divider=%lu)\n",
+    LOG_D("[sig] DAC psram replay  count=%lu  %lu S/s (divider=%lu)\n",
            (unsigned long)count, (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
     /* START_DAC_PSRAM on top of a running (or co-trigger staged) replay keeps the reader's
        address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
@@ -2092,7 +2093,7 @@ void dac_stop(void) {
        the full depth (no-op if no deep replay was resident). */
     signal_engine_dac_psram_release();
     fpga_stop_dac();
-    printf("[sig] DAC stopped\n");
+    LOG_D("[sig] DAC stopped\n");
 }
 
 void fpga_set_dac_stop_after_us(uint32_t us) {
@@ -2186,7 +2187,7 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     cap_deadline_for(samples, divider);
     float actual = (float)adc_capture_hz() / (float)divider;
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
-    printf("[sig] PSRAM capture armed (%u samples, divider=%lu, %lu S/s)\n",
+    LOG_D("[sig] PSRAM capture armed (%u samples, divider=%lu, %lu S/s)\n",
            (unsigned)samples, (unsigned long)divider, (unsigned long)lroundf(actual));
     return 0;
 }
@@ -2218,7 +2219,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
                            ? (two_cap - DAC_SEQ_OVERHEAD_CLK) : DAC_MIN_DIVIDER;
 
     if (fill_wave16(waveform, period, amplitude, offset) != 0) {
-        printf("[sig] ERROR: measure unknown waveform \"%s\"\n", waveform);
+        LOG_W("[sig] ERROR: measure unknown waveform \"%s\"\n", waveform);
         return -1;
     }
     log_dac_samples(period);
@@ -2247,7 +2248,7 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
     /* Integer units — newlib-nano printf has no %f (the old %f fields printed
        nothing). Rate is always large (integer S/s); the played fundamental can be
        sub-Hz (milli-Hz). */
-    printf("[sig] measure(v2): %s period=%lu samples=%u dac_div=%lu cap_div=%lu "
+    LOG_D("[sig] measure(v2): %s period=%lu samples=%u dac_div=%lu cap_div=%lu "
            "(fs=%lu S/s, f=%lu mHz)\n",
            waveform, (unsigned long)period, (unsigned)samples,
            (unsigned long)dac_div, (unsigned long)cap_div,
@@ -2279,7 +2280,7 @@ static int psram_read_settled(uint32_t addr, uint8_t *buf, uint32_t len) {
         }
         s_rd_last_rc = rc;
         if (s_rd_retried + s_rd_failed < 8u)
-            printf("[sig] PSRAM read-back attempt %d failed (rc %d), retrying\n", attempt + 1, rc);
+            LOG_W("[sig] PSRAM read-back attempt %d failed (rc %d), retrying\n", attempt + 1, rc);
     }
     s_rd_failed++;
     return -1;
@@ -2313,7 +2314,7 @@ int adc_capture_psram_poll(uint16_t *out16, size_t samples) {
         if (samples >= 4 &&
             out16[0] == CAP_NOWRITE_SENTINEL[0] && out16[1] == CAP_NOWRITE_SENTINEL[1] &&
             out16[2] == CAP_NOWRITE_SENTINEL[2] && out16[3] == CAP_NOWRITE_SENTINEL[3]) {
-            printf("[sig] ERROR: iCE40 did NOT write the capture to PSRAM (sentinel "
+            LOG_E("[sig] ERROR: iCE40 did NOT write the capture to PSRAM (sentinel "
                    "survived) — capture datapath/timing fault in the iCE40, NOT the "
                    "analog ADC. Run cap-selftest.\n");
             return -1;
@@ -2335,7 +2336,7 @@ int adc_capture_psram(uint16_t *out16, size_t samples, float sample_rate_hz) {
     for (;;) {
         int r = adc_capture_psram_poll(out16, samples);
         if (r == 1) {
-            printf("[sig] PSRAM capture complete (%u samples)\n", (unsigned)samples);
+            LOG_D("[sig] PSRAM capture complete (%u samples)\n", (unsigned)samples);
             return 0;
         }
         if (r < 0) return -1;
@@ -2380,7 +2381,7 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
        unified ADC+LA path caps LA to the ADC region separately. */
     uint32_t la_max = signal_engine_la_max_samples(false);
     if (samples == 0 || samples > la_max) {
-        printf("[la] ERROR: LA samples=%u out of range (max %lu with %lu DAC bytes resident)\n",
+        LOG_W("[la] ERROR: LA samples=%u out of range (max %lu with %lu DAC bytes resident)\n",
                (unsigned)samples, (unsigned long)la_max,
                (unsigned long)(s_dac_ps_active ? (FPGA_PSRAM_TOTAL - s_dac_ps_base) : 0u));
         return -1;
@@ -2393,12 +2394,12 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
        samples -> 3).  The caller reports it so the host labels the timebase correctly. */
     if (actual_hz) *actual_hz = (float)adc_capture_hz() / (float)divider;
     if (plan.capped)
-        printf("[la] PSRAM LA rate capped to %lu kS/s so %u samples fit the %u-byte "
+        LOG_D("[la] PSRAM LA rate capped to %lu kS/s so %u samples fit the %u-byte "
                "burst buffer (no dropped samples)\n",
                (unsigned long)(plan.rate_hz / 1000u), (unsigned)samples,
                (unsigned)LA_RING_BYTES);
     if (plan.floored)
-        printf("[la] PSRAM LA rate clamped to the 12 MS/s sampler ceiling (divider=%lu)\n",
+        LOG_D("[la] PSRAM LA rate clamped to the 12 MS/s sampler ceiling (divider=%lu)\n",
                (unsigned long)divider);
 
     /* LA_CAPTURE [count_lo][count_mid][count_hi][div_lo][div_hi]; the count is 24-bit
@@ -2425,7 +2426,7 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
     /* integer kSPS (newlib-nano printf has no %f) */
     uint32_t ksps = (uint32_t)(((uint64_t)cap_hz / divider) / 1000u);
-    printf("[la] PSRAM capture armed (%u samples, divider=%lu, %lu.%03lu MS/s, ~%lu ms window)\n",
+    LOG_D("[la] PSRAM capture armed (%u samples, divider=%lu, %lu.%03lu MS/s, ~%lu ms window)\n",
            (unsigned)samples, (unsigned long)divider,
            (unsigned long)(ksps / 1000u), (unsigned long)(ksps % 1000u),
            (unsigned long)window_ms);
@@ -2471,7 +2472,7 @@ int fpga_la_change_start(size_t samples, uint32_t k, bool pre) {
     cotrig_consume();
     uint64_t window_ms = ticks / 48000u;
     psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
-    printf("[la] change capture armed (%u samples at 48/%lu MS/s, %lu x 256 ticks, ~%lu ms%s)\n",
+    LOG_D("[la] change capture armed (%u samples at 48/%lu MS/s, %lu x 256 ticks, ~%lu ms%s)\n",
            (unsigned)samples, (unsigned long)k, (unsigned long)units, (unsigned long)window_ms,
            pre ? ", pre-trigger" : "");
     return 0;
@@ -2726,7 +2727,7 @@ int measure_psram(uint16_t *out16, const char *waveform, float freq,
         int r = adc_capture_psram_poll(out16, samples);
         if (r == 1) {
             fpga_stop_dac();
-            printf("[sig] measure(v2) complete (%u samples)\n", (unsigned)samples);
+            LOG_D("[sig] measure(v2) complete (%u samples)\n", (unsigned)samples);
             return 0;
         }
         if (r < 0) { fpga_stop_dac(); return -1; }
@@ -2766,7 +2767,7 @@ int fpga_la_set(unsigned channel, int mode) {
     uint8_t args[2] = { (uint8_t)idx, (uint8_t)mode };
     spi_cmd_write(CMD_GPIO_SET, args, sizeof(args));
     static const char *names[3] = { "low", "high", "high-Z" };
-    printf("[la] LA%u -> %s\n", channel, names[mode]);
+    LOG_D("[la] LA%u -> %s\n", channel, names[mode]);
     return 0;
 }
 
@@ -2835,7 +2836,7 @@ void fpga_capture_abort(void) {
         }
         sleep_ms(1);
     }
-    printf("[sig] capture aborted\n");
+    LOG_D("[sig] capture aborted\n");
 }
 
 bool fpga_la_step_busy(void) {
@@ -2861,7 +2862,7 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
         (uint8_t)(dwire & 0xFF),    (uint8_t)((dwire >> 8) & 0xFF),
     };
     spi_cmd_write(CMD_GPIO_STEP, args, sizeof(args));
-    printf("[la] LA%u step x%lu started (delay %luus)\n",
+    LOG_D("[la] LA%u step x%lu started (delay %luus)\n",
            channel, (unsigned long)steps, (unsigned long)delay_us);
     return 0;
 }
@@ -2883,7 +2884,7 @@ int fpga_swd_arm(unsigned swclk, unsigned swdio) {
     swd_armed_local = true;
     swd_deadline    = make_timeout_time_ms(SWD_INACTIVITY_MS);
     swd_next_check  = get_absolute_time();
-    printf("[swd] armed  SWCLK=LA%u SWDIO=LA%u nRESET=%s\n",
+    LOG_D("[swd] armed  SWCLK=LA%u SWDIO=LA%u nRESET=%s\n",
            swclk, swdio, nrst_ctrl_supported() ? "PF4 (J1 pin 22)" : "unavailable");
     return 0;
 }
@@ -2892,7 +2893,7 @@ void fpga_swd_disarm(void) {
     if (!swd_armed_local) return;
     spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
     swd_armed_local = false;
-    printf("[swd] disarmed\n");
+    LOG_D("[swd] disarmed\n");
 }
 
 bool fpga_swd_armed(void) { return swd_armed_local; }
@@ -2900,7 +2901,7 @@ bool fpga_swd_armed(void) { return swd_armed_local; }
 void fpga_swd_poll(void) {
     if (!swd_armed_local) return;
     if (time_reached(swd_deadline)) {
-        printf("[swd] inactivity timeout — disarming\n");
+        LOG_D("[swd] inactivity timeout — disarming\n");
         fpga_swd_disarm();
     }
 }
@@ -3080,7 +3081,7 @@ int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                         (uint8_t)half, (uint8_t)(cpol | ((cpol ^ cpha) << 1)) };
     spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
     spi_armed_local = true;
-    printf("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",
+    LOG_D("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",
            sck, mosi, miso, cs, (unsigned long)fpga_spi_hz_for_half(half), mode);
     return 0;
 }
@@ -3089,7 +3090,7 @@ void fpga_spi_disarm(void) {
     if (!spi_armed_local) return;
     spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
     spi_armed_local = false;
-    printf("[spi] disarmed\n");
+    LOG_D("[spi] disarmed\n");
 }
 
 bool fpga_spi_armed(void) { return spi_armed_local; }
@@ -3178,7 +3179,7 @@ int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
     uint8_t args[6] = { (uint8_t)wc, (uint8_t)ws, (uint8_t)ws, (uint8_t)wc, (uint8_t)half, 0x04u };
     spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
     i2c_armed_local = true;
-    printf("[i2c] armed  SDA=LA%u SCL=LA%u %lu Hz\n", sda, scl, (unsigned long)fpga_i2c_hz_for_half(half));
+    LOG_D("[i2c] armed  SDA=LA%u SCL=LA%u %lu Hz\n", sda, scl, (unsigned long)fpga_i2c_hz_for_half(half));
     return 0;
 }
 
@@ -3186,7 +3187,7 @@ void fpga_i2c_disarm(void) {
     if (!i2c_armed_local) return;
     spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
     i2c_armed_local = false;
-    printf("[i2c] disarmed\n");
+    LOG_D("[i2c] disarmed\n");
 }
 
 bool fpga_i2c_armed(void) { return i2c_armed_local; }
@@ -3462,8 +3463,8 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
     float actual = (float)FPGA_HFOSC_HZ / (float)div;
     /* Integer baud — newlib-nano printf has no %f (the old %.0f printed nothing). */
     if (de >= 0)
-        printf("[uart] RS-485 DE on LA%u, active %s\n", de_ch, de_active_low ? "low" : "high");
-    printf("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c%s %s\n",
+        LOG_D("[uart] RS-485 DE on LA%u, active %s\n", de_ch, de_active_low ? "low" : "high");
+    LOG_D("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c%s %s\n",
            rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
            (unsigned long)lroundf(actual),
            !(frame & UART_FRAME_PARITY) ? 'N' : (frame & UART_FRAME_ODD) ? 'O' : 'E',
@@ -3484,7 +3485,7 @@ static uint8_t  s_utx[UART_TX_RING];
 static uint32_t s_utx_head, s_utx_count, s_utx_dropped;
 
 static void uart_tx_clear(void) {
-    if (s_utx_dropped) printf("[uart] %lu TX bytes dropped (client wrote faster than the baud rate)\n",
+    if (s_utx_dropped) LOG_W("[uart] %lu TX bytes dropped (client wrote faster than the baud rate)\n",
                               (unsigned long)s_utx_dropped);
     s_utx_head = s_utx_count = s_utx_dropped = 0;
 }
@@ -3493,7 +3494,7 @@ void fpga_uart_disable(void) {
     spi_cmd_write(CMD_UART_DISABLE, NULL, 0);
     uart_armed_local = false;
     uart_tx_clear();
-    printf("[uart] disabled\n");
+    LOG_D("[uart] disabled\n");
 }
 
 static void uart_fifo_write(const uint8_t *data, size_t len) {
@@ -3549,11 +3550,11 @@ int fpga_uart_status(uint16_t *rx_avail, uint8_t *flags) {
        TX pump and UART2's poll read this status too, and used to drop the flag). */
     if ((b[2] & UART_STATUS_RX_OVERFLOW) && uart_armed_local && !s_uart_rx_ovf) {
         s_uart_rx_ovf = true;
-        printf("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
+        LOG_W("[uart] RX overflow: the DUT sent faster than the proxy drained it; bytes were lost\n");
     }
     if ((b[1] & UART_STATUS1_PARITY_ERR) && uart_armed_local && !s_uart_rx_par) {
         s_uart_rx_par = true;
-        printf("[uart] RX parity error: a frame's parity bit was wrong (check the DUT's frame format)\n");
+        LOG_W("[uart] RX parity error: a frame's parity bit was wrong (check the DUT's frame format)\n");
     }
     if (rx_avail) *rx_avail = avail;
     if (flags)    *flags    = b[2];

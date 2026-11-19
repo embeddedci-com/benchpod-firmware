@@ -33,7 +33,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 3
+revision = 4
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -730,3 +730,10 @@ firmware = "3.10.12"
 docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
 dated = "code"
 note = "la pull: up, down or off, with each channel's supported directions in the reply and in la_pins (dirs); refusals BP0023, BP0024. Older firmware takes pullup on/off only."
+
+[features.log_level]
+rev = 4
+firmware = "next"
+docs = "usb-serial-interface.md#log-levels"
+dated = "code"
+note = "Console log levels (error, warn, info, debug; default info, stored): console log and JSON log_level. Retry loops rate limited; the console reprints its prompt after background output and prints the first prompt after the boot bring-up."

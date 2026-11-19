@@ -99,6 +99,8 @@ C_SOURCES := \
   src/can_ring.c \
   src/console_io.c \
   src/bp_log.c \
+  src/log_level.c \
+  src/console_prompt.c \
   src/console.c \
   src/usb_desc.c \
   src/usb_netif.c \

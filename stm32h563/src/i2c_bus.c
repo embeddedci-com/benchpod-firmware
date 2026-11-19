@@ -156,10 +156,10 @@ static void i2c_clear_log(i2c_ctx_t *b)
     b->clear_log_pending = false;
     int rc = b->clear_last_rc;
     if (rc >= 0) {
-        log_printf("[i2c] %s bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
+        LOG_D("[i2c] %s bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
                b->name, (unsigned long)b->clear_count, rc);
     } else {
-        log_printf("[i2c] %s bus clear #%lu FAILED: %s still held low\n",
+        LOG_W("[i2c] %s bus clear #%lu FAILED: %s still held low\n",
                b->name, (unsigned long)b->clear_count,
                rc == I2C_BUSCLEAR_SCL_STUCK ? "SCL" : "SDA");
     }

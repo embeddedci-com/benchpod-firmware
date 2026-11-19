@@ -44,6 +44,7 @@
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
 #endif
+#include "bp_log.h"
 
 /* JSON parsing/emitting is shared (see bp_json.h).  These thin aliases keep the
    handler bodies below reading the way they did before the parser was unified. */
@@ -71,7 +72,7 @@ void send_ok_str(int conn_id, const char *payload_json) {
        otherwise flood the console with identical ok lines (the "<-" side is
        already suppressed via cmd_is_noisy_poll). */
     if (strcmp(payload_json, "\"pong\"") != 0)
-        printf("[cmd] -> ok  data=%s\n", payload_json);
+        LOG_D("[cmd] -> ok  data=%s\n", payload_json);
     if (!bp_emit_ok(&e)) {
         /* Payload didn't fit the fixed reply buffer — send a structured error
            rather than a truncated (malformed) ok.  Handlers whose payload can be
@@ -98,7 +99,7 @@ void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_er
                    size_t n) {
     char resp[CH_ERR_RESP_MAX];
     size_t len = bp_error_format(resp, sizeof(resp), code, text, args, n);
-    printf("[cmd] -> error BP%04u: %s\n", (unsigned)code, text ? text : "");
+    LOG_D("[cmd] -> error BP%04u: %s\n", (unsigned)code, text ? text : "");
     if (len == 0) return;   /* cannot happen with CH_ERR_RESP_MAX; the format keeps the code */
     if (at_send_data(conn_id, (const uint8_t *)resp, len) != 0) {
         at_close_connection(conn_id);
@@ -118,7 +119,7 @@ void send_error(int conn_id, const char *message) {
         bp_emit_init(&e, resp, sizeof(resp));
         bp_emit_raw(&e, "{\"status\":\"error\",\"message\":\"error message too long\"}\n");
     }
-    printf("[cmd] -> error: %s\n", message);
+    LOG_D("[cmd] -> error: %s\n", message);
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);
     }
@@ -343,7 +344,7 @@ void dispatch_line(int conn_id, const char *buf) {
     /* High-frequency polled reads (the web UI refreshes them on a timer) would flood the serial
        console with identical lines, so they are not traced. */
     if (!cmd_has(d, CMD_F_NOISY) && conn_id != CH_EMI_CONN)   /* the EMI loop prints its own */
-        printf("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
+        LOG_D("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
 
     /* Tier, lease, tunnel, safe-mode and board gates (cmd_gate.h, host-tested). */
     {

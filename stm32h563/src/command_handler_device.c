@@ -49,6 +49,7 @@
 #include <string.h>
 
 #include "pico/time.h"
+#include "bp_log.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -144,7 +145,7 @@ bool la_voltage_from_profile(void) {
         printf("[la] I/O voltage %u mV from profile %s refused by the board\n", (unsigned)mv, e->name);
         return false;
     }
-    printf("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);
+    LOG_D("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);
     return true;
 }
 

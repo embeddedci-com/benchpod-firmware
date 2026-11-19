@@ -244,7 +244,7 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     s.last_mv    = mv;
     s.i2c_errors = 0;
     pp_stats_init(&s.st);
-    log_printf("[power] profile started: efuse %d, %s, %u Hz (ADC config 0x%04X, %u us), max %u ms, keep %u\n",
+    LOG_D("[power] profile started: efuse %d, %s, %u Hz (ADC config 0x%04X, %u us), max %u ms, keep %u\n",
            efuse, ina_chip_name(chip), (unsigned)cfg.rate_hz, cfg.adc_config, (unsigned)cfg.period_us,
            (unsigned)max_duration_ms, (unsigned)keep_samples);
     return 0;
@@ -257,7 +257,7 @@ static void finish(bool truncated) {
     if (ina238_restore_adc_config(s.addr) != 0)
         log_printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
     pp_decim_finish(&s.dec);
-    log_printf("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
+    LOG_D("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
            (unsigned)s.st.n, (unsigned)((s.t_stop - s.t_start) / 1000u));
 }
 

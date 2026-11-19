@@ -64,6 +64,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "sig_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_sig_policy) },
     { { "lan_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_policy) },
     { { "usb_network", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_usb_network) },
+    /* read and set T0: it only changes what the pod prints on its own console */
+    { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level) },
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_module) },
     { { "cloud_ca", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_ca) },
     { { "cloud_proxy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_proxy) },
