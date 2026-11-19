@@ -1975,7 +1975,8 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 - **`LA_VCCIO` (pin 21):** the same rail that feeds the LA bank buffers, so a DUT
   can be referenced to it. Select it with
   [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage) *before* connecting a
-  DUT — on a v3 pod it comes up at 3.3 V.
+  DUT — on a v3 pod it comes up at 3.3 V. On digital v3r4 pin 21 is also the pull-up rail, the
+  pod measures it, and it goes to 5 V in [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io).
 
 ---
 
@@ -2078,7 +2079,7 @@ Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware aft
 designed, not built yet) has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
 expander that can pull up or down. So every channel pulls `up` or `down`, with 10k, 2.2k
 or both (about 1.8k). The pull-ups go to J1 pin 21, which follows the I/O voltage (1.8 V,
-3.3 V, or 5 V in [5 V mode](#5-v-and-pin-21-digital-board-v3r4)), so they work at every
+3.3 V, or 5 V in [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)), so they work at every
 voltage.
 
 The pod picks the strength from the pin's function unless the host names one:
@@ -2417,15 +2418,14 @@ set (it does not take the profile's). `status` also carries the current selectio
 #### 5 V and pin 21 (digital board v3r4)
 
 On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware after 3.10.12) `mv` also
-takes **`5000`**. No v3r4 board is built yet: the voltages and times in this section come from
-the design and the part datasheets, not from measurements. The LA lines are designed to be 5 V
-tolerant there: the bank (and the FPGA) stays at 3.3 V, and J1 pin 21, the rail every pull-up
-pulls to, goes to 5 V from the pod's USB supply. The inputs are designed to read 5 V signals at
-full speed (not measured yet). A pod output only reaches 5 V through its pull-up, so for
-outputs into 5 V CMOS-level inputs the channel's pull-up must be on. The pod checks pin 21 after
-switching and refuses with `BP0028` when 5 V did not come up (below 4.3 V), back on the previous
-voltage. `la_mv: 5000` in a wiring profile works the same way. On every other board `5000` is
-refused as before (`"la voltage must be 1800 or 3300 (mv)"`).
+takes **`5000`**: 5 V I/O. In short, the bank stays at 3.3 V, J1 pin 21 (the pull-up rail) goes
+to 5 V, and outputs reach 5 V through their pull-up. What it means for your wiring is on the
+[5 V page](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io). This section is the protocol. No v3r4 board is built yet, so its numbers come
+from the design and the datasheets.
+
+The pod checks pin 21 after switching. Below 4.3 V it goes back to the previous voltage and
+refuses with `BP0028`. `la_mv: 5000` in a wiring profile works the same way. Every other board
+refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 
 ```json
 {"cmd": "la_voltage", "mv": 5000}
