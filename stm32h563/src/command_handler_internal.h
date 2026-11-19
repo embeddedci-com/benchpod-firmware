@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "command_handler.h"   /* the pseudo-connection ids */
+#include "cmd_table.h"         /* cmd_desc_t */
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
 #include "b64url.h"
@@ -363,7 +364,7 @@ void handle_lease_acquire(int conn_id, const char *json);
 void handle_lease_renew(int conn_id, const char *json);
 void handle_lease_release(int conn_id, const char *json);
 /* dispatch_line, every command: true = may run; false = refused (busy, or lease lost), reply sent. */
-bool command_handler_lease_gate(int conn_id, const char *cmd, const char *json);
+bool command_handler_lease_gate(int conn_id, const cmd_desc_t *d, const char *json);
 
 /* OTA subsystem handlers (command_handler_ota.c). */
 /* Policy commands (command_handler_policy.c). */

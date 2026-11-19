@@ -167,8 +167,8 @@ static void test_shared_vectors(void) {
     free(v);
 }
 
-/* Each verb once, a real tier, and the flags in their places: HEAVY and MIXED describe T0 rows
-   (a heavy read, the read form of a mixed verb). */
+/* Each verb once, a real tier, and the flags in their places: HEAVY and a write test describe T0
+   rows (a heavy read, the read form of a mixed verb). */
 static void test_table_shape(void) {
     size_t rows = 0;
     const cmd_desc_t *t = cmd_table_rows(&rows);
@@ -178,8 +178,8 @@ static void test_table_shape(void) {
         CHECK(t[i].key.tier <= CMD_TIER_T3, "%s: tier %u", t[i].key.name, t[i].key.tier);
         CHECK(strlen(t[i].key.name) < 32, "%s: longer than dispatch_line's cmd[32]", t[i].key.name);
         CHECK(cmd_find(t[i].key.name) == &t[i], "%s is in the table twice", t[i].key.name);
-        if (t[i].flags & (CMD_F_HEAVY | CMD_F_MIXED))
-            CHECK(t[i].key.tier == CMD_TIER_T0, "%s: HEAVY/MIXED on a %s row", t[i].key.name,
+        if ((t[i].flags & CMD_F_HEAVY) || t[i].writes)
+            CHECK(t[i].key.tier == CMD_TIER_T0, "%s: HEAVY/mixed on a %s row", t[i].key.name,
                   cmd_tier_name((cmd_tier_t)t[i].key.tier));
     }
     CHECK(cmd_find(NULL) == NULL && cmd_find("") == NULL && cmd_find("no_such_cmd") == NULL, "unknown");
@@ -221,8 +221,18 @@ static void test_flags_match_the_old_lists(void) {
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
     EXPECT_SET(CMD_F_LEASE, "lease_acquire", "lease_renew", "lease_release");
-    EXPECT_SET(CMD_F_MIXED, "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy", "usb_network",
-               "cloud_ca", "cloud_proxy", "lan_tls", "module");
+    EXPECT_SET(CMD_F_ADC_SAMPLES, "capture_dual");
+    /* the mixed verbs: the rows with a write test */
+    static const char *const mixed[] = { "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy",
+                                         "usb_network", "cloud_ca", "cloud_proxy", "lan_tls", "module" };
+    size_t rows = 0;
+    const cmd_desc_t *t = cmd_table_rows(&rows);
+    for (size_t i = 0; i < rows; i++) {
+        int listed = 0;
+        for (size_t k = 0; k < sizeof(mixed) / sizeof(mixed[0]); k++) listed |= strcmp(t[i].key.name, mixed[k]) == 0;
+        CHECK(!!t[i].writes == listed, "mixed: %s is %s", t[i].key.name,
+              listed ? "missing its write test" : "mixed but was not in the list");
+    }
 }
 
 int main(void) {

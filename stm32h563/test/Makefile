@@ -701,13 +701,15 @@ endif
 
 # Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py), and
 # the console replies host tools parse must not change (check_console_contract.py), and only
-# board_rev/board_caps read the board revision (check_board_rev_gates.py).
+# board_rev/board_caps read the board revision (check_board_rev_gates.py), and the command table's
+# hand-kept copies (tier vectors, the API.md index) match k_tiers (check_cmd_table.py).
 PYTHON ?= python3
 docs-check:
 	@$(PYTHON) ../tools/emi/test_emi_tools.py
 	@$(PYTHON) check_docs_coverage.py
 	@$(PYTHON) check_console_contract.py
 	@$(PYTHON) check_board_rev_gates.py
+	@$(PYTHON) check_cmd_table.py
 
 clean:
 	rm -rf build

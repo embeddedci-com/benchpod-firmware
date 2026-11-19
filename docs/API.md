@@ -294,7 +294,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
 | `wiring_put` | T1 | Store a wiring profile, up to 600 bytes a call | object | no |
 | `wiring_delete` | T1 | Delete a stored wiring profile | object | no |
-| `wiring_default` | T0/T1 | Read or set the default wiring profile | object | no |
+| `wiring_default` | T1 | Read or set the default wiring profile | object | no |
 | `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
