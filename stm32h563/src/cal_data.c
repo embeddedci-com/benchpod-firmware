@@ -81,8 +81,11 @@ void cal_data_set_pod_dac(const cal_lin_t pod[3], uint8_t mask) {
 }
 
 void cal_data_select(int board_rev) {
+    /* Digital v3r4 is a v3 board (board_rev_is_v3()): the v3 set, as on the digital boards before
+       it.  Without this it fell through to the v2 set.  With an analog module, main.c picks the
+       module's set right after. */
     s_active = (board_rev == BOARD_REV_V3R2) ? &CAL_V3R2
-             : (board_rev == BOARD_REV_V3)   ? &CAL_V3 : &CAL_V2;
+             : (board_rev == BOARD_REV_V3 || board_rev == BOARD_REV_V3R4) ? &CAL_V3 : &CAL_V2;
     s_dac = s_active->dac;   /* the compiled lines until adc_cal_load puts this pod's in */
 }
 
