@@ -750,4 +750,4 @@ rev = 5
 firmware = "next"
 docs = "API.md#pod-lease"
 dated = "code"
-note = "lease_acquire, lease_renew, lease_release: one lease in the pod's RAM on every transport; other connections get busy (BP0025) for driving commands, status has local_lease (with \"caps\":false), lease.local frames go to the server, lease.break ends it (BP0026)."
+note = "lease_acquire, lease_renew, lease_release: one lease in the pod's RAM on every transport; other connections get busy (BP0025) for driving commands, status has local_lease (with \"caps\":false), lease.local frames go to the server, lease.break ends it (BP0026); any command may carry \"lease\":\"<id>\" to run as the owner."

@@ -346,7 +346,7 @@ area = "lease"
 since = "next"
 args = { by = "str" }
 message = "The pod's lease was stopped by {by}"
-cause = "This connection owned the pod's lease, and {by} stopped it from the web app or the cloud. The command was not run. The pod reports this once; the next command runs without a lease."
+cause = "This connection or this lease id owned the pod's lease, and {by} stopped it from the web app or the cloud. The command was not run. A connection that owned it hears this once. A command, lease_acquire or lease_renew that carries the stopped lease's id keeps getting it for 30 minutes, so a run that was stopped does not take the pod back; a new id gets a new lease."
 [BP0026.fix]
 sdk = "the run was stopped on purpose: end it, or take a new lease (lease_acquire) if it should go on"
 cli = "the run was stopped on purpose by {by}: start it again when the pod is free"
@@ -359,7 +359,7 @@ area = "lease"
 since = "next"
 args = { id = "str" }
 message = "The pod holds no lease with id {id}"
-cause = "lease_renew found no lease: it ran out (it was not renewed before its deadline), it was released or stopped, or the pod restarted, which clears it."
+cause = "lease_renew found no lease: it ran out (it was not renewed before its deadline), it was released, or the pod restarted, which clears it. A lease that was stopped answers BP0026 instead."
 [BP0027.fix]
 sdk = "take the lease again with lease_acquire; renew it well before its ttl_s runs out"
 cli = "start the command again; it takes a new lease"

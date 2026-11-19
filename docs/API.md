@@ -312,8 +312,8 @@ that applies answers with its message and the command does not run.
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
-| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
-| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it | `BP0026`: `lease lost: stopped by <name>` (once) |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
+| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026`: `lease lost: stopped by <name>` |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
@@ -4873,6 +4873,19 @@ commands that do not use the capture hardware, see [Gates](#gates-that-apply-to-
 anything else is refused with `BP0025`, and SCPI setters get -200. A connection that closes is no
 longer an owner; the lease itself stays until it is released, runs out or is stopped.
 
+**The `lease` field on any command.** A client that opens a connection per command proves
+ownership on each command instead of joining first: any JSON command may carry
+`"lease":"<id>"`.
+
+```json
+{"cmd":"la_dir","lease":"L-6f1c..."}
+```
+
+With the held id, the command runs as the owner's (and its connection becomes an owner). Another
+id, or an id while nothing is held, counts as no id: refused with `BP0025` while a lease is held,
+run as usual when the pod is free. A command never moves the deadline; only `lease_acquire`
+with the held id and `lease_renew` do. Commands without the field work as before.
+
 The `lease_*` commands always reach the pod's lease, whoever holds it, so a busy pod answers
 with its holder.
 
@@ -4913,8 +4926,8 @@ A missing or malformed `id` is `BP0006` (`args.arg` `id`).
 
 Pushes the deadline of the held lease with this id to `ttl_s` (10 to 1800, default 120) from now
 and answers like `lease_acquire`. It does not make the connection an owner. Another id while held:
-`BP0025`. Nothing held (it ran out, was released or stopped, or the pod restarted): `BP0027`
-(`args.id`). Renew well before the deadline: a client that crashed loses the lease when it runs out.
+`BP0025`. Nothing held (it ran out, was released, or the pod restarted): `BP0027`
+(`args.id`). A stopped lease's id: `BP0026` (see below). Renew well before the deadline: a client that crashed loses the lease when it runs out.
 
 ### `lease_release`
 
@@ -4933,6 +4946,12 @@ Each connection that owned it then gets, for its next command only, instead of r
 ```json
 {"status":"error","code":"BP0026","args":{"by":"<name>"},"message":"lease lost: stopped by <name>"}
 ```
+
+A stopped lease stays stopped: for 30 minutes after the stop, `lease_acquire`, `lease_renew` and
+any command whose `lease` field carries its id get the same `BP0026` (a light read too), instead
+of a new lease or `BP0027`. The pod remembers the last stopped id only. Other ids, and commands
+without one, see a free pod. A lease that ran out without being stopped is not remembered: the
+same id may be acquired again.
 
 ### In `status` and on the cloud link
 
