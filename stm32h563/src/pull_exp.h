@@ -69,6 +69,12 @@ size_t pull_exp_plan(tca6416_regs_t from2k2, tca6416_regs_t from10k,
    it, or when the two disagree) and strength. */
 pull_exp_dir_t pull_exp_channel(tca6416_regs_t r2k2, tca6416_regs_t r10k, unsigned la, pull_str_t *str);
 
+/* Why the pulls the host asked for are not all on the wire, or NULL when they are:
+   "pin21_down" (pin 21 is down: both expanders held in reset, every pull off), "fault" (a write
+   failed: held in reset until the next pull turned on, pull_exp_recover), "dut_off" (pull-ups suspended after the pod
+   switched the DUT off; only when a pull-up is asked for).  live: out of reset and written. */
+const char *pull_exp_hold_name(bool live, bool rail_up, bool suspend_up, bool any_up_asked);
+
 /* "10k", "2.2k", "1.8k" (both), or NULL. */
 const char *pull_str_ohms(pull_str_t s);
 /* "10k" / "2.2k" / "both" -> strength; false otherwise. */
@@ -98,5 +104,14 @@ pull_exp_dir_t pull_exp_dir(unsigned la);
 pull_str_t     pull_exp_str(unsigned la);
 /* Both expanders are out of reset and written. */
 bool pull_exp_live(void);
+/* pull_exp_live, and after a failed write ("fault": pin 21 up, both held in reset) first try once
+   more to bring them out of reset and rewrite every asked-for pull.  false while pin 21 is down
+   (they come back by themselves when it returns) or when the retry fails too. */
+bool pull_exp_recover(void);
+/* What one channel really does now, from what the chips hold: PULL_EXP_OFF while held in reset or
+   suspended.  *str (may be NULL) the strength engaged. */
+pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str);
+/* pull_exp_hold_name for the state now (NULL when everything asked for is on the wire). */
+const char *pull_exp_held(void);
 
 #endif /* PULL_EXP_H */

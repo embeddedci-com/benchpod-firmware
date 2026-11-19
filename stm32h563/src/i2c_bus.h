@@ -178,6 +178,10 @@ bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr);
 #define LA_PULLUP_ERR_VOLTAGE  (-2)
 int  pca9555_set_la_pullup(uint8_t la_pin, bool enable);   /* la_pin 1..8 */
 bool pca9555_la_pullup_enabled(uint8_t la_pin);
+/* The pull is on the wire now.  The same as pca9555_la_pullup_enabled on every board but digital
+   v3r4, where a pull the host asked for is off while pin 21 is down or pull-ups are suspended
+   (pull_exp.h). */
+bool la_pull_live(uint8_t la_pin);
 /* Everything here is named "pullup" for historical reasons: enabling closes the channel's
    switch, whichever way its resistor pulls.  The direction and value of each channel are in
    la_pins.h (la_pull_dir, la_pull_ohms, la_pull_supports). */

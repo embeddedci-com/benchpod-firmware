@@ -17,6 +17,7 @@
 #include "board_caps.h"
 #include "la_pins.h"         /* la_pull_strength_for, la_pins_note_pull */
 #include "pull_exp.h"        /* digital v3r4: the TCA6416A pull expanders */
+#include "vref_out.h"        /* vref_out_rail_up: a held pull with pin 21 up is a failed write */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
 #include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
 #include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
@@ -366,7 +367,8 @@ int la_pull_engage(uint8_t la, la_pull_dir_t dir, int str)
     if (la < 1 || la > LA_PINS_COUNT) return -1;
     if (dir != LA_PULL_NONE) {
         if (la_vccio_get_mv() == LA_VCCIO_UNSET) return LA_PULLUP_ERR_VOLTAGE;
-        if (!pull_exp_live()) return LA_PULLUP_ERR_RAIL;
+        /* After a failed write (pin 21 up), this request tries the expanders again. */
+        if (!pull_exp_recover()) return vref_out_rail_up() ? -1 : LA_PULLUP_ERR_RAIL;
         if (str <= 0) str = la_pull_strength_for(la, la_io_get_mv());
     }
     pull_exp_dir_t d = dir == LA_PULL_UP ? PULL_EXP_UP : dir == LA_PULL_DOWN ? PULL_EXP_DOWN : PULL_EXP_OFF;
@@ -418,6 +420,12 @@ bool pca9555_la_pullup_enabled(uint8_t la_pin)
     if (board_caps()->pull_expanders) return pull_exp_dir(la_pin) != PULL_EXP_OFF;
     if (la_pin < 1 || la_pin > 8) return false;
     return (s_la_pu_shadow >> (la_pin - 1)) & 1u;
+}
+
+bool la_pull_live(uint8_t la_pin)
+{
+    if (board_caps()->pull_expanders) return pull_exp_live_dir(la_pin, NULL) != PULL_EXP_OFF;
+    return pca9555_la_pullup_enabled(la_pin);
 }
 
 /* Which way each channel pulls and its value: la_pins.c (la_pull_dir, la_pull_ohms), one table

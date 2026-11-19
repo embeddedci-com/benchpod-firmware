@@ -11,6 +11,7 @@
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 #include "bp_log.h"
+#include "hw_worker.h"   /* hw_worker_is_current: the one task allowed to read */
 
 #include <stdio.h>
 
@@ -111,6 +112,13 @@ int mcu_adc_vref_mv(void) { return s_vref_mv; }
 int mcu_adc_read_mv_avg(uint32_t channel, unsigned n, int *out_mv)
 {
     if (!s_ready || out_mv == NULL) return -1;
+    /* One owner: ADC1's sequencer is shared and not locked (mcu_adc.h).  A read from another
+       task would race the worker's, so it fails cleanly instead. */
+    if (!hw_worker_is_current()) {
+        static bool s_said;
+        if (!s_said) { s_said = true; log_printf("[adc] MCU ADC read off the hw worker refused\r\n"); }
+        return -1;
+    }
     if (n < 1)  n = 1;
     if (n > 64) n = 64;
 

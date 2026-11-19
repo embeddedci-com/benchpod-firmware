@@ -102,6 +102,17 @@ void pull_exp_init(void)
 bool pull_exp_present(void) { return s_present; }
 bool pull_exp_live(void)    { return s_present && s_live; }
 
+bool pull_exp_recover(void)
+{
+    if (!s_present) return false;
+    if (s_live) return true;
+    /* Pin 21 down: on_rail brings them back when it returns. */
+    if (!vref_out_rail_up()) return false;
+    /* A write failed (apply): out of reset and rewrite every asked-for pull, once per call. */
+    log_printf("[pull] retrying the expanders after a failed write\r\n");
+    return go_live() == 0;
+}
+
 int pull_exp_set(unsigned la, pull_exp_dir_t dir, pull_str_t str)
 {
     if (!s_present || la < 1u || la > PULL_EXP_CHANNELS) return -1;
@@ -151,3 +162,23 @@ void pull_exp_poll(void)
 }
 
 bool pull_exp_ups_suspended(void) { return s_present && s_suspend_up; }
+
+pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)
+{
+    if (str) *str = PULL_STR_NONE;
+    if (!s_present || !s_live) return PULL_EXP_OFF;
+    return pull_exp_channel(s_hw2k2, s_hw10k, la, str);
+}
+
+const char *pull_exp_held(void)
+{
+    if (!s_present) return NULL;
+    bool any_up = false, any = false;
+    for (unsigned la = 1; la <= PULL_EXP_CHANNELS; la++) {
+        if (s_dir[la] == PULL_EXP_UP) any_up = true;
+        if (s_dir[la] != PULL_EXP_OFF) any = true;
+    }
+    /* Held in reset with nothing asked for: nothing is missing from the wire. */
+    if (!any) return NULL;
+    return pull_exp_hold_name(s_live, vref_out_rail_up(), s_suspend_up, any_up);
+}

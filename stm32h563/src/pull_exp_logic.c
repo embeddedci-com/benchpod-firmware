@@ -63,6 +63,13 @@ pull_exp_dir_t pull_exp_channel(tca6416_regs_t r2, tca6416_regs_t r10, unsigned 
     return (on2 ? up2 : up10) ? PULL_EXP_UP : PULL_EXP_DOWN;
 }
 
+const char *pull_exp_hold_name(bool live, bool rail_up, bool suspend_up, bool any_up_asked)
+{
+    if (!live) return rail_up ? "fault" : "pin21_down";
+    if (suspend_up && any_up_asked) return "dut_off";
+    return NULL;
+}
+
 const char *pull_str_ohms(pull_str_t s)
 {
     switch (s) {
