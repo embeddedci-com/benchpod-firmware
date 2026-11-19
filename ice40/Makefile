@@ -342,11 +342,13 @@ images: $(OUT)_loop.bin $(OUT)_deep.bin $(OUT)_emu.bin
 
 # Sweep PnR seeds for one image on its current netlist: make seed-sweep IMAGE=deep [SWEEP="1 32"].
 # Pin the seed with the best clk48 margin that is also good in CI's toolchain (the
-# ice40-seed-sweep workflow runs this same script there).
+# ice40-seed-sweep workflow runs this same script there).  The sweep classifies each seed with
+# the same gates as the pnr macro (MIN_CLK48_MHZ, MIN_CLK_MHZ, MAX_X48_NS, MAX_X24_NS).
 IMAGE ?= loop
 SWEEP ?= 1 24
 seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
-	sh synth/seed_sweep.sh $(OUT)_$(IMAGE).json $(SWEEP)
+	MIN_CLK48_MHZ=$(MIN_CLK48_MHZ) MIN_CLK_MHZ=$(MIN_CLK_MHZ) MAX_X48_NS=$(MAX_X48_NS) MAX_X24_NS=$(MAX_X24_NS) \
+	  sh synth/seed_sweep.sh $(OUT)_$(IMAGE).json $(SWEEP)
 
 # ---- hardware-verified images for firmware releases (tools/ice40_release.py) ----
 # The release job ships ice40/release/, NOT a fresh CI build: CI's toolchain places the same
