@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "fw_sign.h"
+#include "log_level.h"
 
 #define POD_POLICY_SLOT_A_OFFSET  0x1E6000u   /* bank2 sector 115 */
 #define POD_POLICY_SLOT_B_OFFSET  0x1E4000u   /* bank2 sector 114 */
@@ -103,6 +104,11 @@ const char *pod_policy_clear_floor(policy_src_t src);
    clear it). */
 bool pod_policy_bridge_pin(uint8_t mac[6], uint8_t pub[32]);
 const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub);
+
+/* The console log level (log_level.h), stored in the policy record so it survives a reboot and a
+   firmware update (older firmware keeps the byte as it is). Any source may change it: it only
+   changes what the pod prints on its console. pod_policy_load applies the stored one. NULL = done. */
+const char *pod_policy_set_log_level(bp_log_level_t lv);
 
 /* "audit"/"permissive"/"required" -> value, -1 if unknown. */
 int pod_policy_sig_from_name(const char *name);

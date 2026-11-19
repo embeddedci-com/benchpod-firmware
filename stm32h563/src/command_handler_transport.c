@@ -14,6 +14,7 @@
 #include "command_handler_internal.h"
 #include "bp_limits.h"      /* BP_CLOUD_CMD_IN_MAX */
 #include "scpi_server.h"
+#include "lease_local.h"
 #include "cmd_gate.h"       /* cmd_gate_scpi_line_writes */
 #include "lease_gate.h"
 #include "stm32h5xx_hal.h"  /* HAL_GetTick */
@@ -62,12 +63,15 @@ void transport_conn_closed(int conn_id) {
     proto[conn_id] = PROTO_UNKNOWN;
 }
 
-/* A LAN SCPI line with any non-query part, while a cloud job holds the pod (lease_gate.h). */
+/* A LAN SCPI line with any non-query part, while a cloud job holds the pod (lease_gate.h), or
+   from a connection that does not own the pod's own lease (lease_local.h). */
 static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
-    if (command_handler_policy_src(conn_id) != POLICY_SRC_LAN || !lease_gate_active(HAL_GetTick(), NULL))
-        return false;
-    if (!cmd_gate_scpi_line_writes(line)) return false;
-    printf("[cmd] SCPI \"%s\" refused: a cloud job holds the pod\n", line);
+    const uint32_t now = HAL_GetTick();
+    const bool cloud = command_handler_policy_src(conn_id) == POLICY_SRC_LAN && lease_gate_active(now, NULL);
+    lease_local_view_t v;
+    const bool local = lease_local_get(conn_id, now, &v) && !v.mine;
+    if (!(cloud || local) || !cmd_gate_scpi_line_writes(line)) return false;
+    printf("[cmd] SCPI \"%s\" refused: %s holds the pod\n", line, cloud ? "a cloud job" : v.holder);
     return true;
 }
 

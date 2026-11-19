@@ -40,6 +40,7 @@
     "sig_policy": "T0",
     "lan_policy": "T0",
     "usb_network": "T0",
+    "log_level": "T0",
     "module": "T0",
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
@@ -79,6 +80,9 @@
     "spi_flash": "T1",
     "esp_flash": "T1",
     "la_dir": "T1",
+    "lease_acquire": "T1",
+    "lease_renew": "T1",
+    "lease_release": "T1",
     "i2c_start": "T1",
     "i2c_stop": "T1",
     "i2c_xfer": "T1",
@@ -181,6 +185,18 @@
       "tier": "T1"
     },
     {
+      "line": "{\"cmd\":\"lease_acquire\",\"id\":\"L-1\",\"holder\":\"ci\",\"ttl_s\":300}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"lease_renew\",\"id\":\"L-1\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"lease_release\",\"id\":\"L-1\"}",
+      "tier": "T1"
+    },
+    {
       "line": "{\"cmd\":\"sensor_status\"}",
       "tier": "T0"
     },
@@ -263,6 +279,14 @@
     },
     {
       "line": "{\"cmd\":\"usb_network\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"log_level\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"log_level\",\"set\":\"debug\"}",
       "tier": "T0"
     },
     {

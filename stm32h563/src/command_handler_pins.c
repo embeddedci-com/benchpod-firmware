@@ -368,8 +368,8 @@ void handle_la(int conn_id, const char *json) {
         for (unsigned la = 1; la <= 8; la++) {
             if (pca9555_la_pullup_enabled((uint8_t)la)) mask |= (1u << (la - 1));
         }
-        /* pullups_available says whether a pull-up CAN be engaged right now (bank at
-           3.3 V); the mask is always the truth about what is engaged. */
+        /* pullups_available says whether a pull CAN be engaged right now (a bank voltage is
+           set; on v2 boards it must be 3.3 V); the mask is always the truth about what is engaged. */
         char payload[64];
         snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
                  mask, la_pullups_available() ? 1 : 0);
@@ -422,10 +422,11 @@ void handle_la(int conn_id, const char *json) {
         if (la_pull_ohms(la)) {
             int rc = pca9555_set_la_pullup((uint8_t)la, want != LA_PULL_NONE);
             if (rc == LA_PULLUP_ERR_VOLTAGE) {
-                /* Not a failure to talk to the expander: the resistors are 3V3-referenced
-                   and the bank is at 1.8 V, so engaging one would drive the DUT above its
-                   own rail. Say which, so the host can switch the bank instead of retrying. */
-                send_error(conn_id, "pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V");
+                /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and
+                   the bank is not at 3.3 V, so engaging one would drive the DUT above its own
+                   rail. Say which, so the host can switch the bank instead of retrying. (v3
+                   pulls go to the bank rail and work at 1.8 V.) */
+                send_error(conn_id, "this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
                 return;
             }
             if (rc != 0) {
@@ -461,7 +462,7 @@ void handle_la_voltage(int conn_id, const char *json) {
     char mv_s[8] = {0};
     if (json_get_value(json, "mv", mv_s, sizeof(mv_s))) {
         /* Switching the bank under a running UART proxy / SWD session / sensor emulation
-           glitches every LA line and strands the 3V3-referenced pulls; refuse and name the
+           glitches every LA line; refuse and name the
            pins instead.  Re-setting the CURRENT voltage stays a no-op and is allowed. */
         char why[LA_PINS_ERR_MAX];
         if (!la_pins_check_voltage_change(la_io_get_mv(), atoi(mv_s), why, sizeof(why))) {

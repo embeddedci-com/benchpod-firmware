@@ -391,9 +391,9 @@ static void on_serial_frame(const esp_hosted_rx_t *rx) {
             }
             if (have_drssi) {
                 s_rssi = drssi; s_have_rssi = true;   /* freshest signal reading */
-                log_printf("[wifi] disconnected (reason %d, rssi %d dBm)\n", reason, drssi);
+                LOG_D("[wifi] disconnected (reason %d, rssi %d dBm)\n", reason, drssi);
             } else {
-                log_printf("[wifi] disconnected (reason %d)\n", reason);
+                LOG_D("[wifi] disconnected (reason %d)\n", reason);
             }
         }
         return;
@@ -472,8 +472,8 @@ static bool send_req(uint32_t req_id, uint32_t resp_id,
 /* Answer the running request (err NULL: s_scan_list is the answer).  State is the caller's. */
 static void scan_publish(const char *err) {
     s_scan_err = err;
-    if (err) log_printf("[wifi] scan failed: %s\n", err);
-    else     log_printf("[wifi] scan: %u networks (%u access points)\n",
+    if (err) LOG_D("[wifi] scan failed: %s\n", err);
+    else     LOG_D("[wifi] scan: %u networks (%u access points)\n",
                         (unsigned)s_scan_list.n, (unsigned)s_scan_list.seen);
     __sync_synchronize();               /* the list and the error before the id that publishes them */
     s_scan_done_id = s_scan_run_id;
@@ -580,6 +580,10 @@ esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_lis
     return ESP_WIFI_SCAN_DONE;
 }
 
+/* Join failures since the last association (log_level.h): the first is a warning, then one
+   "still failing" line a minute, not 5-6 lines every backoff. */
+static log_repeat_t s_join_rep;
+
 /* Every backoff ends in a full restart of the C3 from reset (WC_BACKOFF), so it is counted
    here, with its cause (c3_restarts.h). */
 static void to_backoff(c3_restart_cause_t cause, const char *why) {
@@ -589,8 +593,9 @@ static void to_backoff(c3_restart_cause_t cause, const char *why) {
         if (only) return;               /* nothing to back off from: the C3 is off again */
     }
     c3_restarts_note(&s_restarts, cause, why, (uint32_t)(time_us_64() / 1000000u));
-    log_printf("[wifi] %s — backoff (C3 restart %lu since power-on)\n", why,
-               (unsigned long)s_restarts.total);
+    LOG_D("[wifi] %s — backoff (C3 restart %lu since power-on)\n", why,
+          (unsigned long)s_restarts.total);
+    log_repeat_failf(&s_join_rep, BP_LOG_WARN, "[wifi] not connected (%s), retrying", why);
     s_await_resp = 0;
     s_state = WC_BACKOFF;
     s_deadline = make_timeout_time_ms(RETRY_BACKOFF_MS);
@@ -606,7 +611,7 @@ static void slave_lost(c3_restart_cause_t cause, const char *why) {
     esp_hosted_spi_stop();
     s_rssi_misses = 0;
     s_evt_connected = s_evt_disconnected = false;
-    log_printf("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
+    LOG_D("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
            why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
     to_backoff(cause, why);
 }
@@ -618,7 +623,7 @@ static bool rssi_missed(const char *what) {
     s_rssi_deadline = make_timeout_time_ms(RSSI_PERIOD_MS);
     s_state = WC_UP;
     if (++s_rssi_misses < RSSI_MAX_MISSES) {
-        log_printf("[wifi] RSSI %s (%u/%u)\n", what, (unsigned)s_rssi_misses, (unsigned)RSSI_MAX_MISSES);
+        LOG_D("[wifi] RSSI %s (%u/%u)\n", what, (unsigned)s_rssi_misses, (unsigned)RSSI_MAX_MISSES);
         return false;
     }
     s_lost_rssi++;
@@ -834,10 +839,10 @@ void esp_wifi_ctrl_poll(void) {
         if (s_resp_ready) {
             if (s_have_mac) {
                 esp_netif_set_hwaddr(s_mac);
-                log_printf("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
-                       s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
+                LOG_D("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                      s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
             } else {
-                log_printf("[wifi] GetMac: no MAC in resp — netif keeps provisional MAC (DHCP will fail)\n");
+                LOG_W("[wifi] GetMac: no MAC in resp — netif keeps provisional MAC (DHCP will fail)\n");
             }
             s_await_resp = 0;
             s_deadline = make_timeout_time_ms(15000);   /* assoc can take a few s */
@@ -848,7 +853,7 @@ void esp_wifi_ctrl_poll(void) {
     case WC_SCAN_MAC:
         if (s_resp_ready || time_reached(s_deadline)) {
             if (s_have_mac)
-                log_printf("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                LOG_D("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
                        s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
             scan_send_start();          /* no MAC: the scan runs anyway */
         }
@@ -858,7 +863,12 @@ void esp_wifi_ctrl_poll(void) {
         if (s_evt_connected) {
             s_evt_connected = false;
             esp_netif_set_link_up(true);     /* lwIP restarts DHCP on link-up */
-            log_printf("[wifi] associated — link up\n");
+            {
+                uint32_t failed = log_repeat_ok(&s_join_rep);
+                if (failed) LOG_I("[wifi] associated — link up (after %lu failed attempt%s)\n",
+                                  (unsigned long)failed, failed == 1 ? "" : "s");
+                else        LOG_I("[wifi] associated — link up\n");
+            }
             s_rssi_deadline = make_timeout_time_ms(1000);   /* first RSSI read soon */
             s_rssi_misses = 0;
             s_state = WC_UP;

@@ -35,7 +35,8 @@ const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
         return why;
     }
     /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
-    if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_tier_light(cmd, json)) {
+    if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_tier_light(cmd, json) &&
+        !cmd_has(cmd_find(cmd), CMD_F_LEASE)) {   /* lease_acquire answers busy with the holder */
         snprintf(why, why_cap, "busy: a cloud job holds this pod (%s, %lu s left)",
                  ctx->lease_holder && ctx->lease_holder[0] ? ctx->lease_holder : "cloud",
                  (unsigned long)ctx->lease_left_s);

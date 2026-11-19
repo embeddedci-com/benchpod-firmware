@@ -12,7 +12,8 @@
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 #include "pico_compat.h"
-#include "signal_engine.h"   /* la_vccio_get_mv — the pull-ups are 3V3-referenced */
+#include "signal_engine.h"   /* la_vccio_get_mv: a pull needs a selected bank voltage */
+#include "board_rev.h"       /* board_rev_is_v3: v2 pull-ups go to +3V3 */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
 #include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
 #include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
@@ -156,10 +157,10 @@ static void i2c_clear_log(i2c_ctx_t *b)
     b->clear_log_pending = false;
     int rc = b->clear_last_rc;
     if (rc >= 0) {
-        log_printf("[i2c] %s bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
+        LOG_D("[i2c] %s bus clear #%lu: SDA free, %d SCL pulse(s) + STOP\n",
                b->name, (unsigned long)b->clear_count, rc);
     } else {
-        log_printf("[i2c] %s bus clear #%lu FAILED: %s still held low\n",
+        LOG_W("[i2c] %s bus clear #%lu FAILED: %s still held low\n",
                b->name, (unsigned long)b->clear_count,
                rc == I2C_BUSCLEAR_SCL_STUCK ? "SCL" : "SDA");
     }
@@ -343,15 +344,19 @@ bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); 
    CTRL5=P7, CTRL6=P6, CTRL7=P5, CTRL8=P4).  Enabling drives the ctrl line high,
    closing the analog switch that connects the pull-up resistor.
 
-   The resistors hang off +3V3, not off the LA bank rail, so they are usable ONLY
-   while the bank is at 3.3 V (see i2c_bus.h).  la_pullups_available() is the one
-   place that decides this; everything else asks it. */
+   On v3 boards the LA1-6 pull-ups go to LA_VCCIO (the bank rail) and the LA7/8
+   pull-downs to GND, so every pull works at 1.8 V and at 3.3 V.  On v2 the
+   pull-ups went to +3V3; v2 cannot run the bank at 1.8 V at all, but the gate
+   stays for it (see i2c_bus.h).  la_pullups_available() is the one place that
+   decides this; everything else asks it. */
 static const int8_t s_la_tca_pin[9] = { -1, 2, 3, 1, 0, 7, 6, 5, 4 };
 static uint8_t s_la_pu_shadow;
 
 bool la_pullups_available(void)
 {
-    return la_vccio_get_mv() == LA_VCCIO_3V3;
+    int mv = la_vccio_get_mv();
+    if (mv == LA_VCCIO_3V3) return true;
+    return mv == LA_VCCIO_1V8 && board_rev_is_v3();
 }
 
 void la_pullups_all_off(void)
@@ -364,8 +369,8 @@ void la_pullups_all_off(void)
 int pca9555_set_la_pullup(uint8_t la_pin, bool enable)
 {
     if (la_pin < 1 || la_pin > 8) return -1;
-    /* Turning a pull-up OFF is always safe (and is how we get back to a legal
-       state); only closing the switch onto the 3V3 resistor is gated. */
+    /* Turning a pull OFF is always safe; only closing the switch is gated (no bank
+       voltage selected, or a v2 board's +3V3 pull-ups with the bank at 1.8 V). */
     if (enable && !la_pullups_available()) return LA_PULLUP_ERR_VOLTAGE;
     uint8_t pin = (uint8_t)s_la_tca_pin[la_pin];
     if (tca9554_set_dir(I2C_ADDR_TCA9554_LA, pin, true) != 0) return -1;

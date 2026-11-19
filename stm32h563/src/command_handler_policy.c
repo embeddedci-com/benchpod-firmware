@@ -76,6 +76,24 @@ void handle_lan_policy(int conn_id, const char *json) {
     send_ok_str(conn_id, data);
 }
 
+/* {"cmd":"log_level"[,"set":"error|warn|info|debug"]} -> {"level":"info"}: the console log level
+   (log_level.h), stored with the pod policy. Any connection may read or change it. */
+void handle_log_level(int conn_id, const char *json) {
+    char v[12] = {0};
+    if (bp_json_get(json, "set", v, sizeof(v))) {
+        int lv = log_level_from_name(v);
+        if (lv < 0) {
+            send_error(conn_id, "log_level: set must be error, warn, info or debug");
+            return;
+        }
+        const char *why = pod_policy_set_log_level((bp_log_level_t)lv);
+        if (why) { send_error(conn_id, why); return; }
+    }
+    char data[40];
+    snprintf(data, sizeof(data), "{\"level\":\"%s\"}", log_level_name(log_level()));
+    send_ok_str(conn_id, data);
+}
+
 /* {"cmd":"usb_network"[,"set":"on|off"]}: the USB network adapter setting (pod_policy.h). Only
    the device may change it: over the USB link itself here (the console has usb-network). */
 void handle_usb_network(int conn_id, const char *json) {

@@ -26,6 +26,7 @@
 #include "ice40_flash.h"
 #include "lan_tls.h"
 #include "lease_gate.h"
+#include "lease_local.h"
 #include "module_link.h"
 #include "pod_policy.h"
 #include "psram.h"
@@ -128,8 +129,21 @@ void lan_tls_get_info(lan_tls_info_t *o) {
 }
 bool pod_policy_https_only(void) { return true; }
 static char g_holder[LEASE_GATE_HOLDER_MAX];
-bool lease_gate_active(uint32_t now, uint32_t *left) { (void)now; *left = g_typical ? 600 : 4294967295u; return true; }
+static bool g_cloud_lease = true;
+bool lease_gate_active(uint32_t now, uint32_t *left) {
+    (void)now; *left = g_cloud_lease ? (g_typical ? 600 : 4294967295u) : 0; return g_cloud_lease;
+}
 const char *lease_gate_holder(void) { return g_typical ? "web ward" : g_holder; }
+/* The pod's own lease: held with the longest labels when the cloud lease is not (test_local_lease). */
+bool lease_local_get(int conn, uint32_t now, lease_local_view_t *v) {
+    (void)conn; (void)now;
+    memset(v, 0, sizeof(*v));
+    if (g_cloud_lease) return false;   /* never both: lease_acquire refuses then */
+    v->held = true; v->mine = true; v->left_s = 1800;
+    memset(v->holder, 'h', LEASE_LOCAL_HOLDER_MAX - 1);
+    memset(v->purpose, 'p', LEASE_LOCAL_PURPOSE_MAX - 1);
+    return true;
+}
 struct stats_ lwip_stats;
 static struct stats_mem g_pbuf_stats = { .max = 65535, .avail = 65535 };
 volatile uint32_t g_malloc_failures;
@@ -208,7 +222,7 @@ static void test_cloud_worst_case_fits(void) {
         CHECK(has(keep[i]), "cloud status lacks %s", keep[i]);
     /* And what moved is not. */
     const char *drop[] = { "lan_tls", "stacks", "lwip_mem_max", "pbuf_pool_max", "malloc_failures",
-                           "adc_cal_a_uv", "module", "lease",
+                           "adc_cal_a_uv", "module", "lease", "local_lease",
                            "rx_dropped", "board_rev_mv", "sensors_format", "ota_sig",
                            "sig_policy_cmd", "lan_policy_cmd", "tunnel_max_tier", "lease_state" };
     for (size_t i = 0; i < sizeof(drop) / sizeof(drop[0]); i++)
@@ -320,6 +334,35 @@ static void test_status_without_caps_list(void) {
     CHECK(has("caps"), "a status without arguments lost the list");
 }
 
+/* The pod's own lease, longest labels, on a pod as it runs: a client with the features table
+   ("caps":false) gets local_lease in the full form; the caps-list form and the cloud's short form
+   leave it out. */
+static void test_local_lease(void) {
+    g_usb_on = true;
+    g_module_board = true;
+    char saved_c = g_crash[40], saved_r = g_reason[0];
+    g_crash[40] = '\0'; g_reason[0] = '\0';
+    g_typical = true;
+    g_cloud_lease = false;
+    size_t n = run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
+    printf("  LAN status caps:false with the local lease: %zu bytes (margin %zu)\n", n,
+           n < 2047u ? 2047u - n : 0);
+    CHECK(n + STATUS_FULL_MARGIN <= 2047u, "%zu bytes leaves less than %u of 2047", n, STATUS_FULL_MARGIN);
+    CHECK(has("local_lease") && !has("short_form"), "no local_lease in the full form: %.80s", g_tx);
+    CHECK(strstr(g_tx, "\"local_lease\":{\"held\":true,\"holder\":\"hhhh") &&
+          strstr(g_tx, "pppp\",\"left_s\":1800,\"mine\":true}"), "local_lease shape");
+    run(0);
+    CHECK(!has("local_lease"), "a caps-list status has local_lease");
+    run_req(CH_CLOUD_CONN, "{\"cmd\":\"status\",\"caps\":false}");
+    CHECK(!has("local_lease"), "the cloud's short form has local_lease");
+    g_cloud_lease = true;
+    n = run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
+    printf("  LAN status caps:false, cloud lease: %zu bytes\n", n);
+    CHECK(strstr(g_tx, "\"local_lease\":{\"held\":false}") != NULL, "free local_lease shape");
+    g_crash[40] = saved_c; g_reason[0] = saved_r;
+    g_typical = false;
+}
+
 int main(void) {
     lwip_stats.mem.max = 65535; lwip_stats.mem.avail = 65535;
     for (int i = 0; i < MEMP_MAX; i++) lwip_stats.memp[i] = &g_pbuf_stats;
@@ -332,6 +375,7 @@ int main(void) {
     test_cloud_short_texts_not_marked();
     test_diag();
     test_status_without_caps_list();
+    test_local_lease();
     if (fails) { printf("test_ch_status: %d FAILED\n", fails); return 1; }
     printf("test_ch_status: all passed\n");
     return 0;

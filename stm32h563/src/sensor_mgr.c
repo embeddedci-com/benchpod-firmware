@@ -17,6 +17,7 @@
 #include "sensor_port.h"
 #include "fpga_emu.h"
 #include "la_pins.h"
+#include "bp_log.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -756,7 +757,7 @@ static void inst_halt(unsigned i, bool touch_hw) {
     s->out_set = false;
     pins_release(i, s);
     if (touch_hw && is_digital(s)) pinmap_update();
-    printf("[sensor] %s stopped\n", s->name);
+    LOG_D("[sensor] %s stopped\n", s->name);
 }
 
 /* The stimulus refers to instances by slot: drop it when one of them goes. */
@@ -952,7 +953,7 @@ int sm_define_chunk(const char *inst, uint32_t offset, uint32_t total, const uin
     s->in = in;
     s->last_at = -1;
     s_slot[slot] = s;
-    printf("[sensor] defined %s (%s, %lu program bytes)\n", inst, kind_name(kind), (unsigned long)plen);
+    LOG_D("[sensor] defined %s (%s, %lu program bytes)\n", inst, kind_name(kind), (unsigned long)plen);
     return 1;
 }
 
@@ -1197,7 +1198,7 @@ int sm_start(const char *inst, const sm_start_req_t *req, bp_emit_t *e, char *er
     if (is_digital(s)) pins_claim((unsigned)slot, s);
     s->running = true;
     if (is_digital(s)) pinmap_update();
-    printf("[sensor] %s started (%s)\n", s->name, kind_name(s->kind));
+    LOG_D("[sensor] %s started (%s)\n", s->name, kind_name(s->kind));
 
     char st[12];
     slot_text(s, st, sizeof(st));
