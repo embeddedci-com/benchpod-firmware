@@ -19,6 +19,7 @@
 #include "i2c_bus.h"   /* I2C_ADDR_TCA9554_LA */
 #include "la_pull.h"
 #include "signal_engine.h"
+#include "la_io.h"
 #include "pull_exp.h"
 #include "vref_out.h"
 #include "bp_errors.h"

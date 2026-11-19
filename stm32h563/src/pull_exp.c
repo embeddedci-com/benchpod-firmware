@@ -9,7 +9,7 @@
 #include "bp_log.h"
 #include "la_pull.h"
 #include "la_pins.h"         /* la_pull_strength_for */
-#include "signal_engine.h"   /* la_vccio_get_mv, la_io_get_mv */
+#include "la_io.h"           /* la_vccio_get_mv, la_io_get_mv */
 
 static bool           s_present;
 static bool           s_live;                      /* out of reset and written */

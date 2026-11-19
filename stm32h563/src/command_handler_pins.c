@@ -11,6 +11,7 @@
 #include "gw_caps.h"
 #include "la_pins.h"
 #include "signal_engine.h"
+#include "la_io.h"
 #include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"

@@ -69,6 +69,7 @@ C_SOURCES := \
   src/stm32h5xx_it.c \
   src/stm32h5xx_hal_timebase_tim.c \
   src/signal_engine.c \
+  src/la_io.c \
   src/gw_caps.c \
   src/la_rate.c \
   src/la_pins.c \

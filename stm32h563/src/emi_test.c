@@ -7,6 +7,7 @@
 #include "cal_data.h"                   /* dac_code16_for_volts */
 #include "dac_quad.h"
 #include "signal_engine.h"              /* dac_quad_write */
+#include "la_io.h"
 #include "status_led.h"                 /* status_led_emi_t */
 #include "board_variant.h"              /* board_has_analog */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */

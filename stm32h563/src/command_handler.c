@@ -14,7 +14,8 @@
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "at_driver.h"
-#include "signal_engine.h"   /* la_vccio_get_mv */
+#include "signal_engine.h"
+#include "la_io.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "sensor_mgr.h"   /* the emulated sensors: poll, reconfiguration, DAC conflicts */
 #include "scpi_server.h"

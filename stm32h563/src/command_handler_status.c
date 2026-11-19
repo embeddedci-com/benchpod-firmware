@@ -29,6 +29,7 @@
 #include "bp_json.h"
 #include "console.h"     /* console_rx_dropped / console_tx_dropped */
 #include "signal_engine.h"
+#include "la_io.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "wifi_manager.h"
 #include "cloud_client.h"

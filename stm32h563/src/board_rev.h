@@ -37,7 +37,7 @@
  * The revision decides three things that are NOT compatible between v2 and v3:
  *   - the TPS2116 LA-bank mux polarity, and whether 1.8 V is reachable at all
  *     (on v2, MODE is grounded, so the "1.8 V" setting shuts the mux down —
- *     see signal_engine.c la_vccio_set_mv);
+ *     see la_io.c la_vccio_set_mv);
  *   - whether the dedicated NRST-control pin exists (nrst_ctrl.c);
  *   - whether USB-C CC monitoring exists (usb_cc.c).
  *
