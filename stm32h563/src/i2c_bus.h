@@ -179,9 +179,10 @@ bool pca9555_la_pullup_enabled(uint8_t la_pin);
 /* Everything here is named "pullup" for historical reasons: enabling closes the channel's
    switch, whichever way its resistor pulls.  The direction and value of each channel are in
    la_pins.h (la_pull_dir, la_pull_ohms, la_pull_supports). */
-/* True when the LA bank voltage currently allows a pull-up to be engaged (3.3 V). */
+/* True when a pull can be engaged right now: a bank voltage is selected and, on v2,
+   it is 3.3 V.  On v3 the pull-ups go to the bank rail, so 1.8 V is fine too. */
 bool la_pullups_available(void);
-/* Force every LA pull-up off (used when the bank drops to 1.8 V). */
+/* Force every LA pull off (v2 only, when the bank would drop to 1.8 V). */
 void la_pullups_all_off(void);
 
 /* ---- Analog path switching (v2) -----------------------------------------

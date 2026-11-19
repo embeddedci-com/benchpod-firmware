@@ -1987,11 +1987,13 @@ pull resistor on this board"). `off` is always accepted, also on a channel witho
 
 All of them default to **off** at boot.
 
-> **Only usable at a 3.3 V LA bank.** The resistors are referenced to **+3V3**, not to
-> the LA bank rail, so the firmware refuses to engage one while the bank is at 1.8 V
-> (see [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage)). Switching the bank
-> down to 1.8 V also releases any pull that is currently on. Turning one *off* is
-> always allowed.
+> **Works at 1.8 V and 3.3 V.** The pull-ups go to the LA bank rail and the pull-downs to
+> ground, so a pull-up holds the line at the bank voltage (1.8 V or 3.3 V, see
+> [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage)) and engaged pulls stay on when
+> the bank switches. A bank voltage must be set first. Firmware before the `la_pull_1v8`
+> feature allowed pulls only at a 3.3 V bank and released them when the bank switched to
+> 1.8 V. (Pre-production v2 boards had their pull-ups on 3.3 V; they still need a 3.3 V bank.)
+> Turning one *off* is always allowed.
 
 ```json
 {"cmd": "la", "la": 3, "pull": "up"}
@@ -2018,7 +2020,7 @@ Response:
 | `ohms` | The resistor's value (`""` without one). |
 | `pull` | The channel's default direction, the one `pullup:"on"` engages (`"none"` without a resistor). |
 | `pullup` | `1` when the resistor is engaged (kept for older hosts; `state` says the same). |
-| `pullups_available` | `1` only while the LA bank is at 3.3 V: at `0` every `up`/`down` request is refused until the bank is switched back. |
+| `pullups_available` | `1` when a pull can be engaged now (a bank voltage is set): at `0` every `up`/`down` request is refused. |
 
 Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `state`
 and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
@@ -2039,8 +2041,8 @@ Response:
 ```
 
 `la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
-pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull-up can be engaged at
-the current bank voltage (`1` = bank at 3.3 V).
+pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
+the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
 #### Error cases
 
@@ -2058,7 +2060,7 @@ the current bank voltage (`1` = bank at 3.3 V).
 | `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
 | `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
-| `up`/`down` with the LA bank at 1.8 V | `"pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V"` |
+| `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | I2C write to the PCA9555 failed | `"pca9555 write failed"` |
 
@@ -2333,14 +2335,11 @@ set (it does not take the profile's). `status` also carries the current selectio
 > `3300` works on both. The boot default is also different: on v3 the mux comes up
 > at **3.3 V**, on v2 it comes up **unpowered**.
 
-> **v2.0.0 hardware limitation — now enforced in firmware.** The LA1–8 pull-ups (and
-> the board pull-downs that hold their switches open) are referenced to **3V3**, not to
-> the bank rail, so at 1.8 V a closed pull-up drives the DUT line ~1.5 V above its own
-> rail. The firmware therefore **refuses to enable a pull-up while the bank is at
-> 1.8 V**, and `la_voltage` with `mv: 1800` **releases any pull-up that is on** before
-> switching the rail. `uart_proxy_start`'s automatic RX hold is skipped for the same
-> reason at 1.8 V (a floating DUT TX may decode as `0x00` until the DUT drives it).
-> Switch the bank to 3.3 V if you need a pull-up. (Hardware fix pending in v2.0.1.)
+> **Pulls at 1.8 V.** On v3 boards the LA1-LA6 pull-ups go to the bank rail and the LA7/LA8
+> pull-downs to ground, so pulls work at both voltages and engaged pulls stay on when the bank
+> switches (firmware with the `la_pull_1v8` feature; older firmware refused pulls at 1.8 V and
+> released them on the switch to 1.8 V). The pre-production v2 boards had their pull-ups on 3.3 V
+> and cannot run the bank at 1.8 V anyway.
 
 #### Error cases
 
@@ -2351,8 +2350,7 @@ set (it does not take the profile's). `status` also carries the current selectio
 | any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |
 
-> **Not while pins are in use.** Switching the bank glitches every LA line and strands the
-> 3V3-referenced pulls, so a change is refused while any pin is owned by a function other than
+> **Not while pins are in use.** Switching the bank glitches every LA line, so a change is refused while any pin is owned by a function other than
 > `none` (see [pin ownership](#la-pin-ownership)); the message names each pin and its function.
 > Re-setting the voltage that is already selected is always allowed. The console `la_voltage`
 > command applies the same rule.
@@ -2833,9 +2831,9 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
 > pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
-> happens on **LA1–LA6**, whose resistors pull **up**: LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. It is also
-> skipped at a 1.8 V bank, where the 3V3-referenced pulls are unavailable. The previous state
+> happens on **LA1–LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
+> firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
+> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
@@ -3024,7 +3022,7 @@ command and reply fits one cloud frame.
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
 | `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
-| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
+| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
 Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.

@@ -313,8 +313,9 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
        UART, which the soft-UART otherwise decodes as a flood of 0x00 during boot. Restored in
        uart_proxy_end.  LA1-LA6 only: LA7/LA8's resistor pulls DOWN, so engaging "the pull"
        there held RX at the opposite of the idle level and guaranteed the 0x00 flood it was
-       meant to prevent. LA9-LA14 have no resistor at all, and at a 1.8 V bank the
-       3V3-referenced ones are off-limits: the proxy still runs, it just cannot hold RX high. */
+       meant to prevent. LA9-LA14 have no resistor at all: the proxy still runs, it just cannot
+       hold RX high. On v3 the pull-ups go to the bank rail, so this works at 1.8 V too (on v2
+       they went to +3V3 and la_pullups_available() keeps them off below 3.3 V). */
 
     /* Entry, part 2: the line idles high (released), then the first bytes, timed on the pod. */
     if (entry.on) {

@@ -26,7 +26,7 @@
 #include "ice40_flash.h"
 #include "xfer.h"
 #include "dma_wait.h"
-#include "i2c_bus.h"   /* la_pullups_all_off — 3V3-referenced pull-ups vs the 1V8 bank */
+#include "i2c_bus.h"   /* la_pullups_all_off: v2 pull-ups go to +3V3, not to the bank */
 #include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
 #include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
@@ -1305,12 +1305,11 @@ int la_vccio_set_mv(int mv) {
        cutting the DUT's I/O rail. */
     if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) return -2;
 
-    /* The LA1-8 pull-up resistors are tied to +3V3, not to the bank rail, so any
-       that are engaged must be released BEFORE the bank drops to 1.8 V — leaving
-       one closed would hold the DUT line ~1.5 V above its own rail.  Doing it
-       here (rather than trusting the host to remember) means the invariant holds
-       for every path that switches the bank, including a mid-session change. */
-    if (mv == LA_VCCIO_1V8) la_pullups_all_off();
+    /* On v3 the LA1-6 pull-ups go to LA_VCCIO and the LA7/8 pull-downs to GND, so the
+       engaged pulls simply follow the bank to 1.8 V and stay on.  Only the v2 pull-ups
+       went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
+       rail; v2 is refused above, and this keeps the invariant if that ever changes. */
+    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pullups_all_off();
 
     /* Drive the select level BEFORE switching PG3 to a push-pull output, so the
        pin never momentarily drives the wrong rail.

@@ -731,6 +731,13 @@ docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
 dated = "code"
 note = "la pull: up, down or off, with each channel's supported directions in the reply and in la_pins (dirs); refusals BP0023, BP0024. Older firmware takes pullup on/off only."
 
+[features.la_pull_1v8]
+rev = 4
+firmware = "next"
+docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
+dated = "code"
+note = "Pull resistors work with the LA bank at 1.8 V on v3 boards (the pull-ups go to the bank rail) and stay on when the bank switches. Older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V."
+
 [features.log_level]
 rev = 4
 firmware = "next"
