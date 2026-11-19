@@ -196,7 +196,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         return;
     }
     if (frame && signal_engine_fpga_version() < UART_FRAME_MIN_GW) {
-        send_error(conn_id, "uart parity and stop bits need gateware v56+: update the pod's firmware");
+        bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart parity and stop bits need gateware v56+: update the pod's firmware"),
+                                "parity and stop_bits", UART_FRAME_MIN_GW);
         return;
     }
     if (uart_half_duplex_parse(json)) {

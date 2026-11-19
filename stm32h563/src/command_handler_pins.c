@@ -464,7 +464,8 @@ void handle_la(int conn_id, const char *json) {
                 return;
             }
             if (rc == LA_PULLUP_ERR_VOLTAGE) {
-                send_error(conn_id, "la voltage not set; set la_mv in the active wiring profile, or call la_voltage first");
+                bp_err_la_voltage_not_set(conn_id,
+                    BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
                 return;
             }
             if (rc != 0) {
