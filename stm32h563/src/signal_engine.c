@@ -595,11 +595,20 @@ static uint32_t spi_link_set_div(uint32_t div) {
     return 250000000u / div;   /* SPI1 kernel = PLL1Q = 250 MHz */
 }
 
+/* The rate last printed. Every version refresh (console `status` included) drops the link to
+   /128 to ping and then raises it again, so print only when the settled rate changes: an
+   unsolicited line on every `status` landed after the console prompt and broke clients that
+   wait for the prompt to end the reply. */
+static uint32_t s_spi_div_reported = 0u;
+
 static void spi_link_for_version(uint8_t version) {
     uint32_t div = (version >= SPI_FAST_LINK_MIN_GW) ? 64u : 128u;
-    if (div != s_spi_div && spi_link_set_div(div))
+    if (div != s_spi_div && !spi_link_set_div(div)) return;
+    if (div != s_spi_div_reported) {
+        s_spi_div_reported = div;
         printf("[sig] SPI1 link at %lu Hz (/%lu) for gateware %u\n",
                (unsigned long)(250000000u / div), (unsigned long)div, version);
+    }
 }
 
 int fpga_ping(int attempts, uint8_t *out_version) {
