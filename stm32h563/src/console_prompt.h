@@ -32,6 +32,8 @@ typedef void (*console_sink_t)(const char *s, size_t n);
 typedef struct {
     bool   shown;      /* the prompt is up: the console waits for a line */
     bool   mid;        /* background output started after the prompt and has not ended a line */
+    bool   hold;       /* a multi-line late reply is being written: no prompt between its lines */
+    bool   bol;        /* the last byte written ended a line */
     size_t len;
     char   line[CONSOLE_LINE_MAX];
 } console_prompt_t;
@@ -40,6 +42,10 @@ typedef struct {
 void console_prompt_show(console_prompt_t *p, console_sink_t sink);
 /* Output while the prompt is down goes out as it is; while it is up, as described above. */
 void console_prompt_out(console_prompt_t *p, console_sink_t sink, const char *s, size_t n);
+
+/* A late reply of several lines (wifi-scan's list): hold the prompt while it is written, so it
+   comes back once after the last line instead of after each one. */
+void console_prompt_hold(console_prompt_t *p, console_sink_t sink, bool on);
 
 /* Line editing (the console task). A printable character: kept and echoed. */
 void console_prompt_char(console_prompt_t *p, console_sink_t sink, char c);

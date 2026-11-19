@@ -158,6 +158,13 @@ void console_io_prompt(void)
     io_unlock();
 }
 
+void console_io_hold_prompt(bool on)
+{
+    io_lock();
+    console_prompt_hold(&s_prompt, sink_raw_tracked, on);
+    io_unlock();
+}
+
 void console_io_edit_char(char c)
 {
     io_lock();

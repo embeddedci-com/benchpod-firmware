@@ -103,6 +103,33 @@ static void test_async_reply_lines(void) {
     CHECK_OUT("> \rscan -50 1 wpa2 Lab\r\n> \rscan done 1\r\n> ");
 }
 
+static void test_held_reply(void) {
+    /* A held multi-line reply: one prompt after its last line; typing meanwhile is kept. */
+    console_prompt_t p = {0};
+    clear();
+    console_prompt_show(&p, sink);
+    console_prompt_hold(&p, sink, true);
+    out(&p, "scan -50 1 wpa2 Lab\r\n");
+    type(&p, "st");
+    out(&p, "scan done 1\r\n");
+    console_prompt_hold(&p, sink, false);
+    CHECK_OUT("> \rscan -50 1 wpa2 Lab\r\nscan done 1\r\n> st");
+    /* Released after a cut line: the prompt goes on a line of its own. */
+    clear();
+    console_prompt_hold(&p, sink, true);
+    out(&p, "partial");
+    console_prompt_hold(&p, sink, false);
+    CHECK_OUT("\r\npartial\r\n> st");
+    /* Held while the prompt is down (the command's own reply): nothing extra. */
+    char line[CONSOLE_LINE_MAX];
+    console_prompt_enter(&p, sink, line, sizeof(line));
+    clear();
+    console_prompt_hold(&p, sink, true);
+    out(&p, "scan done 0\r\n");
+    console_prompt_hold(&p, sink, false);
+    CHECK_OUT("scan done 0\r\n");
+}
+
 static void test_editing(void) {
     console_prompt_t p = {0};
     clear();
@@ -135,6 +162,7 @@ int main(void) {
     test_log_in_pieces();
     test_enter_mid_log();
     test_async_reply_lines();
+    test_held_reply();
     test_editing();
     test_empty_write();
     if (failures) { printf("FAIL test_console_prompt: %d failure(s)\n", failures); return 1; }

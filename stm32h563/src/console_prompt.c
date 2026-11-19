@@ -15,12 +15,14 @@ static void reprint(console_prompt_t *p, console_sink_t sink) {
 void console_prompt_show(console_prompt_t *p, console_sink_t sink) {
     p->len = 0;
     p->mid = false;
+    p->bol = false;
     p->shown = true;
     put(sink, CONSOLE_PROMPT);
 }
 
 void console_prompt_out(console_prompt_t *p, console_sink_t sink, const char *s, size_t n) {
     if (n == 0) return;
+    p->bol = s[n - 1] == '\n';
     if (!p->shown) { sink(s, n); return; }
     if (!p->mid) {
         /* The cursor is after the prompt (and any typed text): start the output on its own line. */
@@ -28,10 +30,19 @@ void console_prompt_out(console_prompt_t *p, console_sink_t sink, const char *s,
         p->mid = true;
     }
     sink(s, n);
-    if (s[n - 1] == '\n') {
+    if (p->bol && !p->hold) {
         p->mid = false;
         reprint(p, sink);
     }
+}
+
+void console_prompt_hold(console_prompt_t *p, console_sink_t sink, bool on) {
+    p->hold = on;
+    if (on || !p->shown || !p->mid) return;
+    if (!p->bol) put(sink, "\r\n");
+    p->bol = true;
+    p->mid = false;
+    reprint(p, sink);
 }
 
 void console_prompt_char(console_prompt_t *p, console_sink_t sink, char c) {

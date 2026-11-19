@@ -13,6 +13,11 @@ void *pvPortMalloc(size_t size);
 void  vPortFree(void *p);
 uint32_t HAL_GetTick(void);
 
+/* boot_guard.c has the real one; the host tests link without it. */
+__attribute__((weak)) bool boot_hw_ready(void) { return false; }
+
+bp_log_level_t log_boot_level(void) { return boot_hw_ready() ? BP_LOG_DEBUG : BP_LOG_INFO; }
+
 /* Format and write one message, ungated. */
 static int write_v(const char *fmt, va_list ap) {
     char buf[LOG_STACK_BUF];

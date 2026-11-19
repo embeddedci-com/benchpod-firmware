@@ -472,8 +472,8 @@ static bool send_req(uint32_t req_id, uint32_t resp_id,
 /* Answer the running request (err NULL: s_scan_list is the answer).  State is the caller's. */
 static void scan_publish(const char *err) {
     s_scan_err = err;
-    if (err) log_printf("[wifi] scan failed: %s\n", err);
-    else     log_printf("[wifi] scan: %u networks (%u access points)\n",
+    if (err) LOG_D("[wifi] scan failed: %s\n", err);
+    else     LOG_D("[wifi] scan: %u networks (%u access points)\n",
                         (unsigned)s_scan_list.n, (unsigned)s_scan_list.seen);
     __sync_synchronize();               /* the list and the error before the id that publishes them */
     s_scan_done_id = s_scan_run_id;

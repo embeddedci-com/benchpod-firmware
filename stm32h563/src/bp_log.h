@@ -38,7 +38,11 @@
 #define log_lprintf(lv, ...) ((void)(lv), printf(__VA_ARGS__))
 #define log_repeat_failf(r, lv, ...) ((void)(r), (void)(lv), printf(__VA_ARGS__))
 #define log_repeat_okf(r, lv, ...)   ((void)(r), (void)(lv), 0)
+#define log_boot_level() BP_LOG_INFO
 #else
+/* Bring-up progress lines (iCE40 reflash, PSRAM init, FPGA ping): info while the pod boots, debug
+   once boot_hw_ready() (a gateware image swap or an OTA reflash runs them again at runtime). */
+bp_log_level_t log_boot_level(void);
 int log_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int log_vprintf(const char *fmt, va_list ap);
 int log_reply(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -59,5 +63,6 @@ uint32_t log_repeat_okf(log_repeat_t *r, bp_log_level_t lv, const char *fmt, ...
 #define LOG_I(...)     log_lprintf(BP_LOG_INFO, __VA_ARGS__)
 #define LOG_D(...)     log_lprintf(BP_LOG_DEBUG, __VA_ARGS__)
 #define LOG_REPLY(...) log_reply(__VA_ARGS__)
+#define LOG_BOOT(...)  log_lprintf(log_boot_level(), __VA_ARGS__)
 
 #endif /* BP_LOG_H */

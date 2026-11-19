@@ -23,6 +23,8 @@ void console_io_write_text(const char *ptr, size_t len);
    prints "> " and puts the prompt up; background output written while it is up starts on its own
    line and ends with the prompt and the typed text printed again. */
 void   console_io_prompt(void);
+/* A late reply of several lines: true before its first line, false after its last (one prompt). */
+void   console_io_hold_prompt(bool on);
 void   console_io_edit_char(char c);
 void   console_io_edit_backspace(void);
 /* Enter: ends the line, takes the prompt down, copies the typed line to out.  Its length. */

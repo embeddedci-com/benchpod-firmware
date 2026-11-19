@@ -98,6 +98,8 @@ esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_lis
 }
 static char g_console[2048];
 static size_t g_nconsole;
+static int g_holds;   /* console_io_hold_prompt(true) +1, (false) -1 */
+void console_io_hold_prompt(bool on) { g_holds += on ? 1 : -1; }
 void console_io_write(const uint8_t *b, size_t n) {
     if (n > sizeof(g_console) - 1 - g_nconsole) n = sizeof(g_console) - 1 - g_nconsole;
     memcpy(g_console + g_nconsole, b, n); g_nconsole += n; g_console[g_nconsole] = '\0';
@@ -311,6 +313,7 @@ static void test_wifi_scan(void) {
     g_scan_state = ESP_WIFI_SCAN_DONE;
     wifi_scan_poll();
     CHECK(strcmp(g_console, "scan -50 6 wpa2/wpa3 my lab\r\nscan done 1\r\n") == 0, "%s", g_console);
+    CHECK(g_holds == 0, "the prompt hold was not released (%d)", g_holds);
     g_nconsole = 0; g_console[0] = '\0';
     wifi_scan_poll();
     CHECK(g_nconsole == 0, "printed twice: %s", g_console);

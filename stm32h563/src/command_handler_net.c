@@ -483,6 +483,7 @@ static void wifi_scan_print(const wifi_scan_list_t *l, const char *err) {
         console_io_write((const uint8_t *)line, strlen(line));
         return;
     }
+    console_io_hold_prompt(true);   /* one prompt after the list, not one per network */
     for (unsigned k = 0; k < l->n; k++) {
         snprintf(line, sizeof(line), "scan %d %u %s %s\r\n", l->ap[k].rssi, l->ap[k].channel,
                  wifi_scan_auth_str(l->ap[k].authmode), l->ap[k].ssid);
@@ -490,6 +491,7 @@ static void wifi_scan_print(const wifi_scan_list_t *l, const char *err) {
     }
     snprintf(line, sizeof(line), "scan done %u\r\n", (unsigned)l->n);
     console_io_write((const uint8_t *)line, strlen(line));
+    console_io_hold_prompt(false);
 }
 
 static uint32_t s_console_scan;   /* the console's built-in scan, printed when it ends */

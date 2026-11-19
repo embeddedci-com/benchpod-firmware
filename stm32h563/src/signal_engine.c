@@ -621,7 +621,7 @@ int fpga_ping(int attempts, uint8_t *out_version) {
         if (reply == PING_REPLY_MAGIC) {
             uint8_t version = 0;
             spi_cmd_read(CMD_VERSION, NULL, 0, &version, 1);
-            printf("[sig] FPGA OK on attempt %d/%d, gateware version %u\n",
+            LOG_BOOT("[sig] FPGA OK on attempt %d/%d, gateware version %u\n",
                    i, attempts, version);
             spi_link_for_version(version);
             if (out_version) *out_version = version;
@@ -785,24 +785,41 @@ static int capture_selftest_one(int mode, int n, uint16_t *buf) {
    24 MHz domain now — writer + PSRAM + read-back; there is no CDC any more) and
    verify it comes back clean.  Returns 0 = PASS, -1 = FAIL (first bad index in
    *bad_idx).  A FAIL is always the iCE40 capture path, never the analog ADC. */
+/* The level of the self-test's lines: error (they always print: the console cap-selftest and the
+   JSON test commands show them as their result), debug while an image swap runs it. */
+static bp_log_level_t s_selftest_lv = BP_LOG_ERROR;
+static int capture_selftest_print(int n, int *bad_idx);
+
 int signal_engine_capture_selftest(int n, int *bad_idx) {
+    return signal_engine_capture_selftest_at(BP_LOG_ERROR, n, bad_idx);
+}
+
+int signal_engine_capture_selftest_at(bp_log_level_t lv, int n, int *bad_idx) {
+    bp_log_level_t prev = s_selftest_lv;
+    s_selftest_lv = lv;
+    int rc = capture_selftest_print(n, bad_idx);
+    s_selftest_lv = prev;
+    return rc;
+}
+
+static int capture_selftest_print(int n, int *bad_idx) {
     static uint16_t buf[256];
     if (n < 4)   n = 4;
     if (n > 256) n = 256;
     if (bad_idx) *bad_idx = -1;
 
     int bad = capture_selftest_one(1, n, buf);
-    printf("[cap-selftest] %d samples  first8: ", n);
-    for (int i = 0; i < 8 && i < n; i++) printf("0x%04x ", buf[i]);
+    log_lprintf(s_selftest_lv, "[cap-selftest] %d samples  first8: ", n);
+    for (int i = 0; i < 8 && i < n; i++) log_lprintf(s_selftest_lv, "0x%04x ", buf[i]);
     if (bad == -1) {
-        printf("\n[cap-selftest]   => PASS: ADC->PSRAM capture path is HEALTHY.\n");
+        log_lprintf(s_selftest_lv, "\n[cap-selftest]   => PASS: ADC->PSRAM capture path is HEALTHY.\n");
         return 0;
     }
     if (bad == -2) {
-        printf("\n[cap-selftest]   => FAIL: capture transport error (SPI/PSRAM).\n");
+        log_lprintf(s_selftest_lv, "\n[cap-selftest]   => FAIL: capture transport error (SPI/PSRAM).\n");
         return -1;
     }
-    printf("\n[cap-selftest]   => FAIL at sample %d (step 0x%04x, want 0x0101): iCE40 "
+    log_lprintf(s_selftest_lv, "\n[cap-selftest]   => FAIL at sample %d (step 0x%04x, want 0x0101): iCE40 "
            "capture path is corrupting KNOWN data — NOT the analog ADC.\n",
            bad, (uint16_t)(buf[bad] - buf[bad - 1]));
     if (bad_idx) *bad_idx = bad;
@@ -1040,7 +1057,8 @@ void psram_boot_selftest(void) {
     }
     printf("[psram-selftest] 1) STM32<->PSRAM        : PASS\n");
     int bad = -1;
-    if (signal_engine_capture_selftest(16, &bad) == 0) {
+    /* At boot its lines are info; run again later (psram-selftest), the lines below report it. */
+    if (signal_engine_capture_selftest_at(log_boot_level(), 16, &bad) == 0) {
         printf("[psram-selftest] 2) iCE40->PSRAM write   : PASS\n"
                "[psram-selftest] === PASS: full PSRAM capture datapath OK ===\n");
         s_psram_selftest_rc = PSRAM_ST_OK;
@@ -1950,8 +1968,9 @@ int fpga_warmboot(uint8_t image) {
        ice40_reflash_image (signal_engine/command_handler_on_gateware_reconfigured); a
        sentinel-survives failure is a stale-mirror bug first, silicon last. */
     int bad = -1;
-    if (signal_engine_capture_selftest(16, &bad) == 0) {
-        printf("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
+    /* debug: the swap reports the outcome itself, below */
+    if (signal_engine_capture_selftest_at(BP_LOG_DEBUG, 16, &bad) == 0) {
+        LOG_I("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
                image, s_fpga_version, s_fpga_features);
         return 0;
     }

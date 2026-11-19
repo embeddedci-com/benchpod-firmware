@@ -1,5 +1,6 @@
 #pragma once
 
+#include "log_level.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -449,6 +450,8 @@ void     signal_engine_adc_spi_diag(int n);
    distinguishing an iCE40 capture/timing fault from an actual ADC problem. */
 int      signal_engine_capture_test_mode(int mode);   /* 0=ADC 1=ramp@24MHz 2=ramp@48MHz */
 int      signal_engine_capture_selftest(int n, int *bad_idx);
+/* The same with its console lines at lv (debug when the caller reports the outcome itself). */
+int      signal_engine_capture_selftest_at(bp_log_level_t lv, int n, int *bad_idx);
 
 /* Layered PSRAM datapath self-test: STM32<->PSRAM, iCE40->PSRAM write, and (if that
    fails) whether the iCE40 even reaches the /CE net.  Run at boot + console. */

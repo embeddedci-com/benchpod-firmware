@@ -426,7 +426,7 @@ void handle_psram_ping(int conn_id, const char *json) {
     if (n > 256) n = 256;
     if (!heavy_begin(conn_id)) return;
     int bad = -1;
-    int rc = signal_engine_capture_selftest(n, &bad);
+    int rc = signal_engine_capture_selftest_at(BP_LOG_DEBUG, n, &bad);   /* the reply has the result */
     heavy_release(conn_id);
     char payload[64];
     snprintf(payload, sizeof(payload), "{\"pass\":%s,\"count\":%d,\"first_bad\":%d}",

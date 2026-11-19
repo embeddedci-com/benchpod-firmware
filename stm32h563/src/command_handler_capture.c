@@ -915,7 +915,7 @@ static void sensla_done(void) {
     int cid = sensla.conn_id;
     sensla.reading = false;
     fpga_la_psram_release();
-    printf("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
+    LOG_D("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
            (unsigned)(sensla.bytes * 4u), sensla.sda_bit + 1u, sensla.scl_bit + 1u,
            sensla.k ? ", from the START" : "");
     bulk_begin(cid, sensla.bytes, false);   /* paced send; frees the gate when done */
