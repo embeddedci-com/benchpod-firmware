@@ -61,8 +61,8 @@ typedef struct {
 #define ADC_LOW_RANGE_RATIO_NOMINAL (82.5f / 992.5f / 0.5f)
 float cal_adc_low_ratio(void);
 
-/* Pick the set for a board revision (BOARD_REV_V3 -> rev3, BOARD_REV_V3R2 -> v3r2, anything
-   else -> v2).  Call once at boot, right after board_rev_init() and before anything converts a
+/* Pick the set for a board revision (BOARD_REV_V3 and BOARD_REV_V3R4 -> rev3, BOARD_REV_V3R2 -> v3r2,
+   anything else -> v2).  Call once at boot, right after board_rev_init() and before anything converts a
    voltage.  Until then the v2 set is active. */
 void cal_data_select(int board_rev);
 

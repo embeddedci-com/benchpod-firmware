@@ -324,6 +324,8 @@ void handle_diag(int conn_id, const char *json) {
     bp_emit(&e, "\"malloc_failures\":%lu,\"rx_dropped\":%lu,\"tx_dropped\":%lu,\"board_rev_mv\":%d,",
             (unsigned long)g_malloc_failures, (unsigned long)console_rx_dropped(),
             (unsigned long)console_tx_dropped(), board_rev_strap_mv());
+    /* The second strap: digital v3r4 and later only, so older boards report what they did. */
+    if (board_rev2_strap_mv() >= 0) bp_emit(&e, "\"board_rev2_mv\":%d,", board_rev2_strap_mv());
     sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
     int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
     bp_emit_raw(&e, "\"stacks\":{");

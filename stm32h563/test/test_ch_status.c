@@ -120,6 +120,8 @@ uint32_t console_tx_dropped(void) { return g_typical ? 0 : 4294967295u; }
 int la_vccio_get_mv(void) { return 3300; }
 const char *board_rev_str(void) { return "analog-v3r4"; }
 int board_rev_strap_mv(void) { return 3300; }
+/* The second strap: absent on every board but digital v3r4; the worst case carries it. */
+int board_rev2_strap_mv(void) { return g_typical ? -1 : 2147483647; }
 size_t fw_sign_key_count(void) { return 4; }
 void lan_tls_get_info(lan_tls_info_t *o) {
     memset(o, 0, sizeof(*o)); o->ready = true; memset(o->sha256, 'a', 64);

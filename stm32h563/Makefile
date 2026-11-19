@@ -77,6 +77,7 @@ C_SOURCES := \
   src/adc_scale.c \
   src/mcu_adc.c \
   src/board_rev.c \
+  src/board_caps.c \
   src/board_variant.c \
   src/module_link.c \
   src/module_eeprom.c \
