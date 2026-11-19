@@ -2,16 +2,18 @@
 // control byte (`ctrl`) and the one-shot static frame (`wr_req` / `wr_frame`).
 //
 // Same pin monitor and DAC8551/DAC8554 timing checks as tb_dac8551 (t5/t6, t7, t8 >= 3 clk,
-// t9 >= 6 clk), applied to EVERY frame, static ones included.  Cases:
+// t9 >= 7 clk = 146 ns, DAC8554 >= 130 ns), applied to EVERY frame, static ones included.  Cases:
 //   1. BRAM stream with ctrl 0x12 (DAC8554 channel B): frames {12, sample} in loop order.
 //   2. A static frame while a BRAM stream runs: it takes one sample slot, the stream skips no
-//      sample (the frames around it stay in loop order), and every gap is still max(div,3)+51.
+//      sample (the frames around it stay in loop order), and every gap is still max(div,4)+51.
 //   3. The same in psram_mode (stream source 0xA5A5, ctrl 0x14 = channel C).
 //   4. A static frame while the engine is idle (after STOP): exactly one frame, `running` stays
 //      0, SYNC ends high.  Then a second one: one more frame.
 //   5. A static frame requested on the same cycle as a start: it goes out in the first slot,
 //      then the stream from sample 0.
 //   6. Back-to-back with the minimum divider: a static frame mid-stream at div 0.
+//   7. Two static frames back to back on an engine at divider 0 (the reset value top_v2 holds
+//      until the first start): the second waits for the divider floor, so t9 >= 7 clk (v59).
 //
 // Run:  make dac8554test
 `timescale 1ns/1ps
@@ -76,8 +78,8 @@ module tb_dac8554;
             c_sync_rise = cyc;
         end
         if (!sync && ps) begin
-            if (c_fall24 >= 0 && cyc - c_fall24 < 6) begin
-                $display("FAIL t9: SYNC fell %0d clk after the 24th SCLK fall (want >= 6)", cyc - c_fall24);
+            if (c_fall24 >= 0 && cyc - c_fall24 < 7) begin
+                $display("FAIL t9: SYNC fell %0d clk after the 24th SCLK fall (want >= 7)", cyc - c_fall24);
                 errors = errors + 1;
             end
             if (c_sync_rise >= 0 && cyc - c_sync_rise < 3) begin
@@ -143,7 +145,7 @@ module tb_dac8554;
                 $display("FAIL div=%0d psram=%0d: %0d static frames, want 1", div, psm, n - s);
                 errors = errors + 1;
             end
-            want_gap = ((div < 3) ? 3 : div) + 51;
+            want_gap = ((div < 4) ? 4 : div) + 51;
             for (k = 2; k < n; k = k + 1)
                 if (gaps[k] != want_gap) begin
                     $display("FAIL div=%0d psram=%0d: frame %0d came %0d clk after the previous, want %0d",
@@ -202,8 +204,21 @@ module tb_dac8554;
             errors = errors + 1;
         end
 
+        // 7. two static frames back to back at divider 0: the second is requested mid-frame,
+        //    so it waits only for the floor.  Sample gap max(0, 4) + 51, t9 checked by the monitor.
+        nfr = 0; divider = 16'd0; c_sync_fall = -1;
+        send_static(24'h16AAAA);
+        repeat (20) @(posedge clk);
+        send_static(24'h125555);
+        repeat (160) @(posedge clk);
+        if (nfr != 2 || frames[0] !== 24'h16AAAA || frames[1] !== 24'h125555 || gaps[1] != 4 + 51) begin
+            $display("FAIL static x2 at div 0: %0d frame(s) %06h %06h, gap %0d clk (want 2, 16aaaa 125555, 55)",
+                     nfr, frames[0], frames[1], gaps[1]);
+            errors = errors + 1;
+        end
+
         if (errors == 0)
-            $display("PASS tb_dac8554: stream ctrl byte; static frame mid-stream (BRAM/stream, div 0/4/8) takes one slot with no skipped sample and t5-t9 on every frame; idle and pre-start static frames");
+            $display("PASS tb_dac8554: stream ctrl byte; static frame mid-stream (BRAM/stream, div 0/4/8) takes one slot with no skipped sample and t5-t9 on every frame; idle, pre-start and back-to-back static frames");
         else
             $display("FAIL tb_dac8554: %0d error(s)", errors);
         $finish;

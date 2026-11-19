@@ -91,7 +91,7 @@ clock network do not change.
   reading by up to about 0.26 % of the amplitude, on the corrected sample only. If that matters,
   the gateware can flag corrected samples (one bit in the capture header or a sideband count) so
   the host can interpolate them.
-- The DAC (on `clk48`, period = max(divider, 3) + 51 clocks) and the LA sampler can get the same
+- The DAC (on `clk48`, period = max(divider, 4) + 51 clocks) and the LA sampler can get the same
   accumulator if they must be locked as well; the ADC is the first need.
 
 ### Firmware, SDK, MCP, web
