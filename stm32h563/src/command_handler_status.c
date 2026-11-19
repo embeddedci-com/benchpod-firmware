@@ -175,7 +175,9 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
     }
 #endif
     bp_emit(e, "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
-            ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_vccio_get_mv());
+            ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_io_get_mv());
+    /* la_vccio_mv is the DUT's I/O voltage: 5000 in the 5 V mode of digital v3r4.  Pin 21 itself
+       is in the la_voltage reply (the status reply has no room for it; the hw fact vref_out). */
     /* The front-SMA fit captures are scaled with, this pod's offset included (adc_cal.h): the
        same values the cloud capabilities carry, so a LAN client scales like the server does.
        Full form only: cloud clients get the fit from the capabilities frame. */

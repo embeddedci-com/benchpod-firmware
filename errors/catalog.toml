@@ -365,3 +365,16 @@ sdk = "take the lease again with lease_acquire; renew it well before its ttl_s r
 cli = "start the command again; it takes a new lease"
 mcp = "take the lease again with lease_acquire, then renew it before its ttl_s runs out"
 web = "The session's lease ran out. Start it again."
+
+[BP0028]
+name = "vref_5v_missing"
+area = "io"
+since = "next"
+args = { mv = "int" }
+message = "5 V did not come up on pin 21 ({mv} mV)"
+cause = "In 5 V mode the pod switches pin 21, the rail every pull-up pulls to, to its USB supply. The pod measures pin 21 and found it below 4.3 V, so it went back to the previous I/O voltage. A weak USB supply, a hub without power, or a load on pin 21 causes it."
+[BP0028.fix]
+sdk = "power the pod from a USB port or supply that gives 5 V, check what is wired to pin 21, then set 5 V again"
+cli = "power the pod from a USB port or supply that gives 5 V, check what is wired to pin 21, then run `benchpod la voltage 5.0` again"
+mcp = "ask the user to power the pod from a USB port or supply that gives 5 V and to check pin 21, then call set_la_voltage(5.0) again"
+web = "Pin 21 did not reach 5 V. Power the pod from a USB port that gives 5 V and check what is wired to pin 21."

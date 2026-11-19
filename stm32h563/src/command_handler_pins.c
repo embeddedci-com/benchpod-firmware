@@ -18,6 +18,8 @@
 #include "pico/time.h"
 #include "bp_log.h"
 #include "target_power.h"
+#include "board_caps.h"
+#include "vref_out.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -463,24 +465,41 @@ void handle_la_voltage(int conn_id, const char *json) {
            glitches every LA line; refuse and name the
            pins instead.  Re-setting the CURRENT voltage stays a no-op and is allowed. */
         char why[LA_PINS_ERR_MAX];
-        if (!la_pins_check_voltage_change(la_vccio_get_mv(), atoi(mv_s), why, sizeof(why))) {
+        if (!la_pins_check_voltage_change(la_io_get_mv(), atoi(mv_s), why, sizeof(why))) {
             send_error(conn_id, why);
             return;
         }
         int rc = la_vccio_set_mv(atoi(mv_s));
+        if (rc == -3) {
+            char m[96];
+            snprintf(m, sizeof(m), "5 V did not come up on pin 21 (%d mV); check the USB supply",
+                     vref_out_last_mv());
+            bp_err_vref_5v_missing(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+            return;
+        }
         if (rc == -2) {
             send_error(conn_id, "1.8 V needs a v3 pod; this board is v2 "
                                 "(its TPS2116 has no 1.8 V setting)");
             return;
         }
         if (rc != 0) {
-            send_error(conn_id, "la voltage must be 1800 or 3300 (mv)");
+            send_error(conn_id, board_caps()->la_5v ? "la voltage must be 1800, 3300 or 5000 (mv)"
+                                                    : "la voltage must be 1800 or 3300 (mv)");
             return;
         }
     }
-    char payload[80];
-    snprintf(payload, sizeof(payload),
-             "{\"mv\":%d,\"st\":%d,\"readback_mv\":%d}",
-             la_vccio_get_mv(), la_vccio_status_pin(), la_vccio_readback_mv());
+    /* "mv" is the DUT's I/O voltage (5000 in 5 V mode).  Digital v3r4 adds pin 21 (vref_out_emit). */
+    char payload[200];
+    bp_emit_t e;
+    bp_emit_init(&e, payload, sizeof(payload));
+    bp_emit(&e, "{\"mv\":%d,\"st\":%d,\"readback_mv\":%d",
+            la_io_get_mv(), la_vccio_status_pin(), la_vccio_readback_mv());
+    if (vref_out_present()) {
+        (void)vref_out_measure_mv();
+        bp_emit_raw(&e, ",");
+        vref_out_emit(&e);
+    }
+    bp_emit_raw(&e, "}");
+    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);
 }

@@ -570,6 +570,10 @@ bool fpga_la_step_busy(void);
 #define LA_VCCIO_UNSET 0
 #define LA_VCCIO_1V8   1800
 #define LA_VCCIO_3V3   3300
+/* 5 V I/O, digital v3r4 only (board_caps()->la_5v): the bank at 3.3 V, pin 21 at 5 V. */
+#define LA_VCCIO_5V0   5000
+/* After a bank change on a board with the LA clamps (board_caps()->la_clamps). */
+#define LA_VCCIO_SETTLE_CLAMPS_MS 30
 
 /* Configure PG3 (Hi-Z -> the hardware default for this revision) and PG4
    (input); software state = unset. */
@@ -577,8 +581,13 @@ void la_vccio_init(void);
 /* Select the LA bank voltage; mv must be LA_VCCIO_1V8 or LA_VCCIO_3V3.
    Drives PG3 with the revision's polarity and settles the rail.
    Returns 0 on success, -1 on an invalid millivolt value, -2 for 1800 on a v2
-   board (the mux cannot produce 1.8 V there — see above). */
+   board (the mux cannot produce 1.8 V there — see above).  Digital v3r4 also takes
+   LA_VCCIO_5V0 (-3: 5 V did not come up on pin 21; the previous setting is restored);
+   every other board refuses 5000 with -1, as before. */
 int  la_vccio_set_mv(int mv);
+/* The DUT's I/O voltage: la_vccio_get_mv(), or LA_VCCIO_5V0 in 5 V mode.  The bank itself (what
+   the FPGA and the pull gates see) is la_vccio_get_mv(). */
+int  la_io_get_mv(void);
 /* Current selection: LA_VCCIO_UNSET (not chosen yet), LA_VCCIO_1V8, or LA_VCCIO_3V3. */
 int  la_vccio_get_mv(void);
 /* Raw TPS2116 status pin (PG4/ST) level: 0 or 1. */

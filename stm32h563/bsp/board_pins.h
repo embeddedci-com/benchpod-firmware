@@ -230,6 +230,28 @@
 #define BOARD_REV2_V3R4_NOMINAL_MV   1650
 
 /* ---------------------------------------------------------------------------
+ * J1 pin 21 VREF_OUT (digital v3r4 only: board_caps()->vref_out)
+ *   U67 (TPS2116, manual mode) feeds pin 21 and the pull expanders' VCCP from VIN1 = LA_VCCIO
+ *   (the bank, 1.8 or 3.3 V) or VIN2 = VREF_5V (U68 SY6280 switch from +5V).
+ *   PG5 VREF_SEL  -> U67 PR1, R208 100 k to +3V3: high or released = VIN1 (follow the bank),
+ *                    low = VIN2 (5 V).  [MCU pin 90]
+ *   PG6 VREF_5V_EN -> U68 EN, R209 100 k to GND: high = 5 V switch on.  [MCU pin 91]
+ *   PA0 VREF_SENSE <- R224 200 k from pin 21 / R225 100 k to GND, C289 100 n: one third of
+ *                    pin 21, a 6.7 ms filter.  ADC12_INP0 (CubeMX pin table, pin 34).
+ *   Never select VIN2 while the 5 V switch is off: pin 21 (and every pull-up) would drop to 0 V.
+ *   On every older board these three pins are something else and are never touched.
+ * ------------------------------------------------------------------------- */
+#define VREF_SEL_PORT                GPIOG
+#define VREF_SEL_PIN                 GPIO_PIN_5
+#define VREF_5V_EN_PORT              GPIOG
+#define VREF_5V_EN_PIN               GPIO_PIN_6
+#define VREF_SENSE_PORT              GPIOA
+#define VREF_SENSE_PIN               GPIO_PIN_0
+#define VREF_SENSE_ADC_CH            ADC_CHANNEL_0
+/* R224 + R225 over R225. */
+#define VREF_SENSE_MUL               3
+
+/* ---------------------------------------------------------------------------
  * USB-C CC monitoring (rev3+)   [/CC_SENSE1 PC0, /CC_SENSE2 PC2]
  *   The pod is a USB-C sink: R76/R75 are the 5.1 k Rd pull-downs on USBC1's
  *   CC1/CC2.  Each CC line is tapped into an ADC pin through 10 k (R178/R179)

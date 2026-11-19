@@ -33,7 +33,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 5
+revision = 6
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -84,6 +84,10 @@ hw = "adc_low_range"
 frame = "adc_low_range"
 legacy_caps = "adc_low_range"
 note = "The ADC low range (analog module v3r4+)."
+
+[facts.vref_out]
+hw = "vref_out"
+note = "J1 pin 21 is switched and measured, and 5 V I/O exists (digital board v3r4+). Older boards never announce it."
 
 [[releases]]
 firmware = "3.9.2"
@@ -751,3 +755,11 @@ firmware = "next"
 docs = "API.md#pod-lease"
 dated = "code"
 note = "lease_acquire, lease_renew, lease_release: one lease in the pod's RAM on every transport; other connections get busy (BP0025) for driving commands, status has local_lease (with \"caps\":false), lease.local frames go to the server, lease.break ends it (BP0026); any command may carry \"lease\":\"<id>\" to run as the owner."
+
+[features.la_5v]
+rev = 6
+firmware = "next"
+requires = ["vref_out"]
+docs = "API.md#la_voltage--select-the-la-io-bank-voltage"
+dated = "code"
+note = "la_voltage takes 5000: the bank stays at 3.3 V and pin 21, the pull-up rail, goes to 5 V; the reply has vref_out (pin 21's source, setting, measured voltage and state). Refusal BP0028 when 5 V does not come up."

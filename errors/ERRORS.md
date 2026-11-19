@@ -33,3 +33,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0025 | `lease_busy` | lease | next | {holder} holds this pod ({purpose}, {left_s} s left) |
 | BP0026 | `lease_lost` | lease | next | The pod's lease was stopped by {by} |
 | BP0027 | `lease_not_held` | lease | next | The pod holds no lease with id {id} |
+| BP0028 | `vref_5v_missing` | io | next | 5 V did not come up on pin 21 ({mv} mV) |

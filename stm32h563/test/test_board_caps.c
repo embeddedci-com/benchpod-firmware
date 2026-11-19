@@ -136,17 +136,13 @@ static void test_caps(void)
           c.la_series_ohms == 100, "v3r4 caps");
 }
 
-/* board_caps_init() reads the latched revision. */
-static int s_rev = BOARD_REV_V3;
-int board_rev_get(void) { return s_rev; }
-
 static void test_init(void)
 {
-    s_rev = BOARD_REV_V3; board_caps_init();
+    board_caps_init(BOARD_REV_V3);
     CHECK(caps_none(*board_caps()), "v3 after init");
-    s_rev = BOARD_REV_V3R4; board_caps_init();
+    board_caps_init(BOARD_REV_V3R4);
     CHECK(board_caps()->pull_expanders, "v3r4 after init");
-    s_rev = BOARD_REV_V3R2; board_caps_init();
+    board_caps_init(BOARD_REV_V3R2);
     CHECK(caps_none(*board_caps()), "v3r2 after init");
 }
 

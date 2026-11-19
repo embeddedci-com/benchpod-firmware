@@ -116,6 +116,7 @@ void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->usb_cc)        { bp_emit(e, "%s\"usb_cc\"", sep); sep = ","; }
     if (c->pod_current)   { bp_emit(e, "%s\"pod_current\"", sep); sep = ","; }
     if (c->adc_low_range) { bp_emit(e, "%s\"adc_low_range\"", sep); sep = ","; }
+    if (c->vref_out)      { bp_emit(e, "%s\"vref_out\"", sep); sep = ","; }
     bp_emit_raw(e, "]");
 }
 

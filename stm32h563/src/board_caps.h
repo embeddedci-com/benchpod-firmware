@@ -41,8 +41,9 @@ typedef struct {
 /* The capabilities of a revision (a BOARD_REV_* value).  Pure (host tests). */
 board_caps_t board_caps_for_rev(int rev);
 
-/* Latch the capabilities from board_rev_get().  Call once, right after board_rev_init(). */
-void board_caps_init(void);
+/* Latch the capabilities of a revision: board_caps_init(board_rev_get()), once, right after
+   board_rev_init(). */
+void board_caps_init(int rev);
 
 /* The latched capabilities (all false before board_caps_init()). Never NULL. */
 const board_caps_t *board_caps(void);
