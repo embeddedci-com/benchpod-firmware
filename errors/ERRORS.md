@@ -30,3 +30,6 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0022 | `uart_de_pin` | uart | next | The UART's DE pin LA{la} is also its rx or tx |
 | BP0023 | `la_no_pull` | io | next | LA{la} has no pull resistor on this board |
 | BP0024 | `la_pull_direction` | io | next | LA{la} supports pull-{have} only on this board |
+| BP0025 | `lease_busy` | lease | next | {holder} holds this pod ({purpose}, {left_s} s left) |
+| BP0026 | `lease_lost` | lease | next | The pod's lease was stopped by {by} |
+| BP0027 | `lease_not_held` | lease | next | The pod holds no lease with id {id} |
