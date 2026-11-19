@@ -186,6 +186,11 @@ bool module_adc_low_range(void)
     return s_link && s_present && module_ee_has_low_range(s_id_rc, &s_id);
 }
 
+bool module_current_in_100r(void)
+{
+    return s_link && s_present && module_ee_has_100r_shunt(s_id_rc, &s_id);
+}
+
 int module_id(module_id_t *id)
 {
     if (id) *id = s_id;

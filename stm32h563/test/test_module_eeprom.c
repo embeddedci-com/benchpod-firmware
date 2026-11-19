@@ -120,6 +120,30 @@ int main(void)
         CHECK(!module_ee_has_low_range(MOD_EE_OK, &m), "not an analog module");
     }
 
+    /* The 100 ohm sense resistor on the 4-20 mA input from analog module 3.5 on; everything else,
+       and an unreadable header, is the 249 ohm of the boards before it. */
+    {
+        static const struct { uint8_t major, minor; bool r100; } revs[] = {
+            { 3, 3, false }, { 3, 4, false }, { 3, 5, true }, { 3, 6, true }, { 2, 9, false }, { 4, 0, true },
+            { 0, 0, false },
+        };
+        module_id_t m = { 0 };
+        m.type = MOD_TYPE_ANALOG;
+        for (unsigned i = 0; i < sizeof(revs) / sizeof(revs[0]); i++) {
+            m.rev_major = revs[i].major; m.rev_minor = revs[i].minor;
+            CHECK(module_ee_has_100r_shunt(MOD_EE_OK, &m) == revs[i].r100, "100 ohm at rev %u.%u",
+                  revs[i].major, revs[i].minor);
+            CHECK(!revs[i].r100 || module_ee_has_low_range(MOD_EE_OK, &m), "100 ohm without the low range at %u.%u",
+                  revs[i].major, revs[i].minor);
+        }
+        m.rev_major = 3; m.rev_minor = 5;
+        CHECK(!module_ee_has_100r_shunt(MOD_EE_BLANK, &m), "blank EEPROM: 249 ohm");
+        CHECK(!module_ee_has_100r_shunt(MOD_EE_BAD_CRC, &m), "bad CRC: 249 ohm");
+        CHECK(!module_ee_has_100r_shunt(MOD_EE_OK, NULL), "no header");
+        m.type = 7;
+        CHECK(!module_ee_has_100r_shunt(MOD_EE_OK, &m), "not an analog module");
+    }
+
     if (fails) { printf("test_module_eeprom: %d failure(s)\n", fails); return 1; }
     printf("test_module_eeprom: all passed\n");
     return 0;

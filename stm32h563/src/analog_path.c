@@ -51,6 +51,25 @@ bool analog_path_keeps_low_range(analog_path_t path)
     return (unsigned)path < ANALOG_PATH__COUNT && path != ANALOG_PATH_OFF && path != ANALOG_PATH_CAL2;
 }
 
+adc_range_t analog_path_auto_range(analog_path_t path, bool relays, bool shunt_100r, bool low_hw,
+                                   adc_range_t cur, bool cur_auto, bool *auto_out)
+{
+    bool a = false;
+    adc_range_t r = cur;
+    if (!relays) {
+        a = cur_auto;
+    } else if (!analog_path_keeps_low_range(path)) {
+        r = ADC_RANGE_NORMAL;
+    } else if (path == ANALOG_PATH_CURRENT_IN) {
+        if (cur == ADC_RANGE_LOW) a = cur_auto;                 /* already low: as it came */
+        else if (shunt_100r && low_hw) { r = ADC_RANGE_LOW; a = true; }
+    } else if (cur_auto && cur == ADC_RANGE_LOW) {
+        r = ADC_RANGE_NORMAL;                                   /* current_in's own choice ends */
+    }
+    if (auto_out) *auto_out = a;
+    return r;
+}
+
 static const char *const s_range_name[ADC_RANGE__COUNT] = { "normal", "low" };
 
 const char *adc_range_name(adc_range_t r) { return (unsigned)r < ADC_RANGE__COUNT ? s_range_name[r] : ""; }

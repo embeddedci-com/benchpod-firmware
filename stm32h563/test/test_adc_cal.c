@@ -86,11 +86,32 @@ static void test_store_apply_persist(void) {
     CHECK(adc_cal_load() == -1 && !adc_cal_current_in_is_set(), "a cleared calibration came back");
 }
 
-/* adc_read reports the loop current too: volts across the 249 ohm sense resistor, in uA. */
+/* adc_read reports the loop current too: volts across the sense resistor, in uA. */
 static void test_loop_current(void) {
-    CHECK(current_in_ua(0.996f) == 4000, "4 mA: %ld uA", current_in_ua(0.996f));
-    CHECK(current_in_ua(4.980f) == 20000, "20 mA: %ld uA", current_in_ua(4.980f));
-    CHECK(current_in_ua(0.0f) == 0 && current_in_ua(-0.001f) == -4, "zero and below: %ld uA", current_in_ua(-0.001f));
+    /* Modules up to v3r4: 249 ohm, exactly as before (either range). */
+    uint32_t r249 = current_in_sense_mohm(false, false);
+    CHECK(r249 == 249000 && current_in_sense_mohm(false, true) == 249000, "249 ohm: %lu mohm", (unsigned long)r249);
+    CHECK(current_in_ua(0.996f, r249) == 4000, "4 mA: %ld uA", current_in_ua(0.996f, r249));
+    CHECK(current_in_ua(4.980f, r249) == 20000, "20 mA: %ld uA", current_in_ua(4.980f, r249));
+    CHECK(current_in_ua(0.0f, r249) == 0 && current_in_ua(-0.001f, r249) == -4, "zero and below: %ld uA",
+          current_in_ua(-0.001f, r249));
+    for (int i = -2000; i <= 6000; i += 7) {   /* bit-exact with the 3.10 expression */
+        float v = (float)i / 1000.0f;
+        CHECK(current_in_ua(v, r249) == lroundf(v * 1000000.0f / 249.0f), "%.3f V differs from before", v);
+    }
+
+    /* Module v3r5: 100 ohm in parallel with the ADC divider (992.5k normal, 1.82M low). */
+    uint32_t rn = current_in_sense_mohm(true, false), rl = current_in_sense_mohm(true, true);
+    CHECK(rn == 99990 && rl == 99995, "100 ohm: normal %lu, low %lu mohm", (unsigned long)rn, (unsigned long)rl);
+    CHECK(current_in_ua(0.4f, rl) == 4000 && current_in_ua(2.0f, rl) == 20001, "4 / 20 mA low: %ld %ld",
+          current_in_ua(0.4f, rl), current_in_ua(2.0f, rl));
+    CHECK(current_in_ua(2.0f, rn) == 20002, "20 mA normal: %ld", current_in_ua(2.0f, rn));
+    /* The limiter stops the loop at 28.5 to 31.5 mA: 2.85 to 3.15 V, well inside the low range. */
+    CHECK(current_in_ua(3.15f, rl) == 31502 && 3.15f < 5.46f, "31.5 mA: %ld", current_in_ua(3.15f, rl));
+    /* One count of the low range (about 166.7 uV) is about 1.67 uA; the normal range about 10 uA. */
+    CHECK(current_in_ua(0.0001667f * 1000.0f, rl) == 1667, "1000 low counts: %ld uA", current_in_ua(0.1667f, rl));
+    CHECK(current_in_ua(0.0f, rl) == 0 && current_in_ua(-0.001f, rl) == -10, "zero and below: %ld uA",
+          current_in_ua(-0.001f, rl));
 }
 
 /* The 0 V point sits on the 16-bit wrap. An average that straddles it must still land

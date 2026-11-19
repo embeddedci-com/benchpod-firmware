@@ -81,6 +81,15 @@ const char *module_ee_type_str(uint8_t type);
    header (MOD_EE_OK) says so: a blank or unreadable EEPROM never drives P5. */
 bool module_ee_has_low_range(int rc, const module_id_t *id);
 
+/* The first analog module revision with the 100 ohm sense resistor on the 4-20 mA input (R81, J8,
+   behind a 30 mA limiter).  Revisions before it have 249 ohm. */
+#define MOD_SHUNT100_REV_MAJOR 3u
+#define MOD_SHUNT100_REV_MINOR 5u
+
+/* The module's `current_in` sense resistor is 100 ohm: an analog module of revision 3.5 or later.
+   A blank, unreadable or missing header is the older 249 ohm (what every board before it has). */
+bool module_ee_has_100r_shunt(int rc, const module_id_t *id);
+
 /* Bytes of a write at `addr` that fit before the next page boundary (a 24C32 page write wraps
    inside its page), capped at `len`. */
 size_t module_ee_chunk(uint16_t addr, size_t len);
