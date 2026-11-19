@@ -296,179 +296,75 @@ void handle_la_dir(int conn_id, const char *json) {
 
 /* ---- `la`, `la_voltage` and the emulated I2C sensor ---------------------- */
 
-/* Unified logic-analyzer-pin command. The action is inferred from the fields:
- *
- *   {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
- *        → run a step pulse train on LA N (1..14); the FPGA runs it autonomously.
- *   {"cmd":"la","la":N,"pull":"up"|"down"|"off"} → switch LA N's pull resistor; a direction the
- *        channel's resistor can't pull is refused (BP0024), a channel without one too (BP0023).
- *   {"cmd":"la","la":N,"pullup":"on"|"off"}      → the older form: on = the channel's direction.
- *   {"cmd":"la","la":N}                          → report LA N's pull state.
- *   {"cmd":"la"}                                 → bitmask of engaged LA pulls.
- *
- * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
- * drive (the former gpio_set) is gone: a pull-up — or its absence, which leaves
- * the board's pull-down — sets a line's idle level instead. */
-void handle_la(int conn_id, const char *json) {
-    if (!require_la_voltage(conn_id)) return;
-    char steps_s[12] = {0};
-
-    /* --- step pulse train: distinguished by the "steps" field --- */
-    if (json_get_value(json, "steps", steps_s, sizeof(steps_s))) {
-        char la_s[8] = {0}, delay_s[12] = {0}, dir_la_s[8] = {0}, dir_s[8] = {0};
-        if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
-            send_error(conn_id, "missing la");
-            return;
-        }
-        if (!json_get_value(json, "delay_us", delay_s, sizeof(delay_s))) {
-            send_error(conn_id, "missing delay_us");
-            return;
-        }
-        unsigned la = (unsigned)atoi(la_s);
-        uint32_t steps = 0, delay_us = 0;
-        if (!la_step_parse_u32(steps_s, &steps))    { send_error(conn_id, "invalid steps");    return; }
-        if (!la_step_parse_u32(delay_s, &delay_us)) { send_error(conn_id, "invalid delay_us"); return; }
-
-        /* Optional direction channel — driven before stepping (stepper dir). */
-        unsigned dir_la = 0;
-        bool     dir    = false;
-        if (json_get_value(json, "dir_la", dir_la_s, sizeof(dir_la_s))) {
-            dir_la = (unsigned)atoi(dir_la_s);
-            if (json_get_value(json, "direction", dir_s, sizeof(dir_s)))
-                dir = (atoi(dir_s) != 0);
-        }
-
-        /* Ownership: a free step/dir pin is CLAIMED for the train (and released when the
-           fabric reports STEP_BUSY low again, from command_handler_poll); a gpio output is
-           pulsed in place; anything else is a `pin conflict:`.  la_step_begin drives the
-           direction pin and starts the train. */
-        char err[LA_PINS_ERR_MAX];
-        int rc = la_step_begin(la, steps, delay_us, dir_la, dir, err, sizeof(err));
-        if (rc != 0) { send_error(conn_id, err); return; }
-
-        /* Non-blocking: the FPGA runs the train autonomously, so we report that
-           it has started rather than waiting for completion. */
-        char payload[80];
-        snprintf(payload, sizeof(payload),
-                 "{\"la\":%u,\"steps\":%lu,\"delay_us\":%lu,\"status\":\"started\"}",
-                 la, (unsigned long)steps, (unsigned long)delay_us);
-        send_ok_str(conn_id, payload);
-        return;
-    }
-
-    /* --- no "la" field: report the pull-up bitmask, bit (la-1)=LA<la> --- */
-    char la_s[8] = {0};
+/* {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
+   A step pulse train on LA N (1..14); the FPGA runs it autonomously. */
+static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
+    char la_s[8] = {0}, delay_s[12] = {0}, dir_la_s[8] = {0}, dir_s[8] = {0};
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
-        unsigned mask = 0, asked = 0;
-        for (unsigned la = 1; la <= LA_PINS_COUNT; la++) {   /* 9..14: v3r4 only (false elsewhere) */
-            if (la_pull_live(la)) mask |= (1u << (la - 1));
-            if (la_pull_asked(la) != LA_PULL_NONE) asked |= (1u << (la - 1));
-        }
-        /* pullups_available says whether a pull CAN be engaged right now (a bank voltage is
-           set; on v2 boards it must be 3.3 V); the mask is always the truth about what is engaged.
-           Digital v3r4, while the pod holds pulls off: why, and the mask the host asked for (put
-           back by the pod).  Never on other boards, where the two masks are the same. */
-        const char *held = la_pull_held();
-        char payload[112];
-        if (held)
-            snprintf(payload, sizeof(payload),
-                     "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
-                     mask, la_pull_available() ? 1 : 0, held, asked);
-        else
-            snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
-                     mask, la_pull_available() ? 1 : 0);
-        send_ok_str(conn_id, payload);
+        send_error(conn_id, "missing la");
         return;
     }
-
-    /* --- pull set ("pull":"up|down|off", alias "pullup":"on|off") or query for one channel --- */
+    if (!json_get_value(json, "delay_us", delay_s, sizeof(delay_s))) {
+        send_error(conn_id, "missing delay_us");
+        return;
+    }
     unsigned la = (unsigned)atoi(la_s);
-    if (la < 1 || la > LA_PINS_COUNT) {
-        char m[48];
-        snprintf(m, sizeof(m), "LA%u is not a pin (use 1..%u)", la, (unsigned)LA_PINS_COUNT);
-        send_error(conn_id, m);
-        return;
+    uint32_t steps = 0, delay_us = 0;
+    if (!la_step_parse_u32(steps_s, &steps))    { send_error(conn_id, "invalid steps");    return; }
+    if (!la_step_parse_u32(delay_s, &delay_us)) { send_error(conn_id, "invalid delay_us"); return; }
+
+    /* Optional direction channel, driven before stepping (stepper dir). */
+    unsigned dir_la = 0;
+    bool     dir    = false;
+    if (json_get_value(json, "dir_la", dir_la_s, sizeof(dir_la_s))) {
+        dir_la = (unsigned)atoi(dir_la_s);
+        if (json_get_value(json, "direction", dir_s, sizeof(dir_s)))
+            dir = (atoi(dir_s) != 0);
     }
 
-    char pull_s[8] = {0}, pullup_s[8] = {0};
-    bool has_pull = json_get_value(json, "pull", pull_s, sizeof(pull_s));
-    bool has_pullup = json_get_value(json, "pullup", pullup_s, sizeof(pullup_s));
-    if (has_pull || has_pullup) {
-        la_pull_dir_t want = LA_PULL_NONE;
-        switch (la_pull_request(la, has_pull ? pull_s : NULL, has_pullup ? pullup_s : NULL, &want)) {
-        case LA_PULL_REQ_OK: break;
-        case LA_PULL_REQ_BAD_VALUE:
-            send_error(conn_id, "pull must be up, down or off");
-            return;
-        case LA_PULL_REQ_NO_PULL: {
-            char m[64];
-            snprintf(m, sizeof(m), "LA%u has no pull resistor on this board", la);
-            bp_err_la_no_pull(conn_id, BP_ERR_TEXT(m), (int32_t)la);
-            return;
-        }
-        case LA_PULL_REQ_DIRECTION: {
-            const char *have = la_pull_dir_name(la_pull_dir(la));
-            char m[64];
-            snprintf(m, sizeof(m), "LA%u supports pull-%s only on this board", la, have);
-            bp_err_la_pull_direction(conn_id, BP_ERR_TEXT(m), (int32_t)la, la_pull_dir_name(want), have);
-            return;
-        }
-        }
-        /* The other direction of the pull-compatibility rule: a pull-DOWN under an open-drain
-           bus / an idle-high UART / SWDIO.  Refuse before touching the expander so the wire never
-           briefly contradicts the function on it. */
-        char pull_err[LA_PINS_ERR_MAX];
-        if (!la_pins_check_pull_enable(la, want, pull_err, sizeof(pull_err))) {
-            send_error(conn_id, pull_err);
-            return;
-        }
-        /* Digital v3r4: direction and strength per channel ("strength":"10k"|"2.2k"|"both";
-           without it the pod picks from the pin's function).  A fixed resistor (the older boards)
-           ignores "strength", like older firmware does. */
-        la_pull_caps_t caps = la_pull_caps(la);
-        pull_str_t str = PULL_STR_NONE;
-        if (caps.strengths) {
-            char str_s[8] = {0};
-            if (json_get_value(json, "strength", str_s, sizeof(str_s)) &&
-                (!pull_str_parse(str_s, &str) || !(caps.strengths & LA_PULL_STR_BIT(str)))) {
-                send_error(conn_id, "strength must be 10k, 2.2k or both");
-                return;
-            }
-        }
-        /* "off" on a channel without a resistor: nothing to switch. */
-        int rc = caps.dirs ? la_pull_set(la, want, str) : 0;
-        if (rc == LA_PULL_ERR_RAIL) {
-            char m[96];
-            snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
-                     vref_out_last_mv());
-            bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
-            return;
-        }
-        if (rc == LA_PULL_ERR_VOLTAGE) {
-            bp_err_la_voltage_not_set(conn_id,
-                BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
-            return;
-        }
-        if (rc == LA_PULL_ERR_BANK) {
-            /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and the bank
-               is not at 3.3 V, so engaging one would drive the DUT above its own rail.  Say which,
-               so the host can switch the bank instead of retrying.  (v3 pulls go to the bank rail
-               and work at 1.8 V.) */
-            send_error(conn_id, "this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
-            return;
-        }
-        if (rc != 0) {
-            send_error(conn_id, "pull expander write failed");
-            return;
-        }
-    }
+    /* Ownership: a free step/dir pin is CLAIMED for the train (and released when the
+       fabric reports STEP_BUSY low again, from command_handler_poll); a gpio output is
+       pulsed in place; anything else is a `pin conflict:`.  la_step_begin drives the
+       direction pin and starts the train. */
+    char err[LA_PINS_ERR_MAX];
+    int rc = la_step_begin(la, steps, delay_us, dir_la, dir, err, sizeof(err));
+    if (rc != 0) { send_error(conn_id, err); return; }
 
-    /* "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
-       pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups
-       suspended); "held" then says why, and strength/ohms/pull stay the setting the pod puts
-       back. Elsewhere live and asked are the same. The older fields stay for older hosts:
-       "pullup" 1 when engaged, "pull" the channel's default direction ("none" without a
-       resistor), "ohms" its value. */
+    /* Non-blocking: the FPGA runs the train autonomously, so we report that
+       it has started rather than waiting for completion. */
+    char payload[80];
+    snprintf(payload, sizeof(payload),
+             "{\"la\":%u,\"steps\":%lu,\"delay_us\":%lu,\"status\":\"started\"}",
+             la, (unsigned long)steps, (unsigned long)delay_us);
+    send_ok_str(conn_id, payload);
+}
+
+/* {"cmd":"la"} -> the pull bitmask, bit (la-1) = LA<la>.
+   pullups_available says whether a pull CAN be engaged right now (a bank voltage is set; on v2
+   boards it must be 3.3 V); la_pullup_mask is always the truth about what is on the wire.  While
+   the pod holds pulls off (digital v3r4): why, and the mask the host asked for (put back by the
+   pod).  Never on other boards, where the two masks are the same. */
+static void handle_la_pull_mask(int conn_id) {
+    unsigned mask = la_pull_mask_live(), asked = la_pull_mask_now();
+    const char *held = la_pull_held();
+    char payload[112];
+    if (held)
+        snprintf(payload, sizeof(payload),
+                 "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
+                 mask, la_pull_available() ? 1 : 0, held, asked);
+    else
+        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
+                 mask, la_pull_available() ? 1 : 0);
+    send_ok_str(conn_id, payload);
+}
+
+/* {"cmd":"la","la":N} -> LA N's pull state (also the reply of a pull set).
+   "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
+   pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
+   "held" then says why, and strength/ohms/pull stay the setting the pod puts back. Elsewhere live
+   and asked are the same. The older fields stay for older hosts: "pullup" 1 when engaged, "pull"
+   the channel's default direction ("none" without a resistor), "ohms" its value. */
+static void handle_la_pull_query(int conn_id, unsigned la) {
     la_pull_caps_t caps = la_pull_caps(la);
     bool asked_on = la_pull_asked(la) != LA_PULL_NONE;
     bool on = la_pull_live(la);
@@ -496,6 +392,114 @@ void handle_la(int conn_id, const char *json) {
     bp_emit(&e, ",\"pullups_available\":%d}", la_pull_available() ? 1 : 0);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);
+}
+
+/* {"cmd":"la","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
+   {"cmd":"la","la":N,"pullup":"on"|"off"}   (the older form: on = the channel's direction)
+   Switch LA N's pull resistor; a direction the channel's resistor can't pull is refused (BP0024),
+   a channel without one too (BP0023).  false = refused (the error was sent). */
+static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
+                               const char *pull_s, const char *pullup_s) {
+    la_pull_dir_t want = LA_PULL_NONE;
+    switch (la_pull_request(la, pull_s, pullup_s, &want)) {
+    case LA_PULL_REQ_OK: break;
+    case LA_PULL_REQ_BAD_VALUE:
+        send_error(conn_id, "pull must be up, down or off");
+        return false;
+    case LA_PULL_REQ_NO_PULL: {
+        char m[64];
+        snprintf(m, sizeof(m), "LA%u has no pull resistor on this board", la);
+        bp_err_la_no_pull(conn_id, BP_ERR_TEXT(m), (int32_t)la);
+        return false;
+    }
+    case LA_PULL_REQ_DIRECTION: {
+        const char *have = la_pull_dir_name(la_pull_dir(la));
+        char m[64];
+        snprintf(m, sizeof(m), "LA%u supports pull-%s only on this board", la, have);
+        bp_err_la_pull_direction(conn_id, BP_ERR_TEXT(m), (int32_t)la, la_pull_dir_name(want), have);
+        return false;
+    }
+    }
+    /* The other direction of the pull-compatibility rule: a pull-DOWN under an open-drain
+       bus / an idle-high UART / SWDIO.  Refuse before touching the expander so the wire never
+       briefly contradicts the function on it. */
+    char pull_err[LA_PINS_ERR_MAX];
+    if (!la_pins_check_pull_enable(la, want, pull_err, sizeof(pull_err))) {
+        send_error(conn_id, pull_err);
+        return false;
+    }
+    /* Digital v3r4: direction and strength per channel (without "strength" the pod picks from
+       the pin's function).  A fixed resistor (the older boards) ignores "strength", like older
+       firmware does. */
+    la_pull_caps_t caps = la_pull_caps(la);
+    pull_str_t str = PULL_STR_NONE;
+    if (caps.strengths) {
+        char str_s[8] = {0};
+        if (json_get_value(json, "strength", str_s, sizeof(str_s)) &&
+            (!pull_str_parse(str_s, &str) || !(caps.strengths & LA_PULL_STR_BIT(str)))) {
+            send_error(conn_id, "strength must be 10k, 2.2k or both");
+            return false;
+        }
+    }
+    /* "off" on a channel without a resistor: nothing to switch. */
+    int rc = caps.dirs ? la_pull_set(la, want, str) : 0;
+    switch (rc) {
+    case 0:
+        return true;
+    case LA_PULL_ERR_RAIL: {
+        char m[96];
+        snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
+                 vref_out_last_mv());
+        bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+        return false;
+    }
+    case LA_PULL_ERR_VOLTAGE:
+        bp_err_la_voltage_not_set(conn_id,
+            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+        return false;
+    case LA_PULL_ERR_BANK:
+        /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and the bank
+           is not at 3.3 V, so engaging one would drive the DUT above its own rail.  Say which,
+           so the host can switch the bank instead of retrying.  (v3 pulls go to the bank rail
+           and work at 1.8 V.) */
+        send_error(conn_id, "this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
+        return false;
+    default:
+        send_error(conn_id, "pull expander write failed");
+        return false;
+    }
+}
+
+/* The `la` verb: three commands, told apart by their fields.
+ *   "steps"               a step train (handle_la_step)
+ *   no "la"               the pull bitmask (handle_la_pull_mask)
+ *   "la" with "pull" or "pullup"   switch the pull, then report it (handle_la_pull_set)
+ *   "la" alone            report the pull (handle_la_pull_query)
+ *
+ * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
+ * drive (the former gpio_set) is gone: a pull-up (or its absence, which leaves
+ * the board's pull-down) sets a line's idle level instead. */
+void handle_la(int conn_id, const char *json) {
+    if (!require_la_voltage(conn_id)) return;
+    char steps_s[12] = {0};
+    if (json_get_value(json, "steps", steps_s, sizeof(steps_s))) { handle_la_step(conn_id, json, steps_s); return; }
+
+    char la_s[8] = {0};
+    if (!json_get_value(json, "la", la_s, sizeof(la_s))) { handle_la_pull_mask(conn_id); return; }
+    unsigned la = (unsigned)atoi(la_s);
+    if (la < 1 || la > LA_PINS_COUNT) {
+        char m[48];
+        snprintf(m, sizeof(m), "LA%u is not a pin (use 1..%u)", la, (unsigned)LA_PINS_COUNT);
+        send_error(conn_id, m);
+        return;
+    }
+    char pull_s[8] = {0}, pullup_s[8] = {0};
+    bool has_pull = json_get_value(json, "pull", pull_s, sizeof(pull_s));
+    bool has_pullup = json_get_value(json, "pullup", pullup_s, sizeof(pullup_s));
+    if ((has_pull || has_pullup) &&
+        !handle_la_pull_set(conn_id, json, la, has_pull ? pull_s : NULL, has_pullup ? pullup_s : NULL))
+        return;
+    handle_la_pull_query(conn_id, la);
 }
 
 /* Set (or query) the LA I/O-bank voltage via the TPS2116 mux.

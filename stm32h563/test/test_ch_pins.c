@@ -302,6 +302,22 @@ static void test_v3r4(void) {
           "\"strength\":\"none\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":1}");
 }
 
+/* ---- the step train behind the same verb ---------------------------------------------- */
+static void test_step(void) {
+    printf("  step\n");
+    board(BOARD_REV_V3);
+    la("{\"cmd\":\"la\",\"la\":3,\"steps\":10,\"delay_us\":100}");
+    REPLY("ok:{\"la\":3,\"steps\":10,\"delay_us\":100,\"status\":\"started\"}");
+    CHECK(la_pins_fn(3) == LA_FN_STEP, "the step pin is claimed");
+    la_pins_on_gateware_reconfigured();   /* drops the train's claims */
+    la("{\"cmd\":\"la\",\"la\":3,\"steps\":10}");
+    REPLY("err:missing delay_us");
+    la("{\"cmd\":\"la\",\"steps\":10,\"delay_us\":100}");
+    REPLY("err:missing la");
+    la("{\"cmd\":\"la\",\"la\":3,\"steps\":\"1e5\",\"delay_us\":100}");
+    REPLY("err:invalid steps");
+}
+
 /* ---- la_voltage ------------------------------------------------------------------------ */
 static void test_la_voltage(void) {
     printf("  la_voltage\n");
@@ -343,6 +359,7 @@ int main(void) {
     test_tca9554_board(BOARD_REV_V2, "v2");
     test_tca9554_board(BOARD_REV_V3, "v3");
     test_tca9554_board(BOARD_REV_V3R2, "v3r2");
+    test_step();
     test_la_voltage();
     test_v3r4();   /* last: pull_exp_init latches the expanders for the rest of the run */
     printf("test_ch_pins: %d checks, %d failed\n", checks, fails);
