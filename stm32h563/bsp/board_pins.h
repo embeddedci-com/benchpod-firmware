@@ -215,17 +215,18 @@
 #define BOARD_REV_V3R4_NOMINAL_MV    3267
 
 /* ---------------------------------------------------------------------------
- * Second revision strap (digital v3r4+)   [/BOARD_REV2, PC3, MCU pin 29]
+ * Second revision strap (digital v3r4+)   [/BOARD_REV2, PF12, MCU pin 50]
  *   R226 10 k to +3V3 over R227 10 k to GND: 1.65 V on digital v3r4. The first
  *   strap (PA3) sits at the top of its range on v3r4, so later revisions change
  *   this divider instead. Read only when PA3 says v3r4 or later: on every older
- *   board PC3 is something else and is never touched. See board_rev.c.
- *   PC3 = ADC12_INP13 (STM32CubeMX pin table for STM32H563ZITx, pin 29).
+ *   board PF12 is something else (ESP32_BOOT on v3r2 and older) and is never
+ *   touched. See board_rev.c.
+ *   PF12 = ADC1_INP6 (datasheet pin table, pin 50).
  * ------------------------------------------------------------------------- */
-#define BOARD_REV2_PORT              GPIOC
-#define BOARD_REV2_PIN               GPIO_PIN_3
-#define BOARD_REV2_CLK_EN()          __HAL_RCC_GPIOC_CLK_ENABLE()
-#define BOARD_REV2_ADC_CH            ADC_CHANNEL_13
+#define BOARD_REV2_PORT              GPIOF
+#define BOARD_REV2_PIN               GPIO_PIN_12
+#define BOARD_REV2_CLK_EN()          __HAL_RCC_GPIOF_CLK_ENABLE()
+#define BOARD_REV2_ADC_CH            ADC_CHANNEL_6
 /* Digital v3r4: 10k/10k, half the rail. */
 #define BOARD_REV2_V3R4_NOMINAL_MV   1650
 
@@ -236,8 +237,10 @@
  *   PG5 VREF_SEL  -> U67 PR1, R208 100 k to +3V3: high or released = VIN1 (follow the bank),
  *                    low = VIN2 (5 V).  [MCU pin 90]
  *   PG6 VREF_5V_EN -> U68 EN, R209 100 k to GND: high = 5 V switch on.  [MCU pin 91]
- *   PA0 VREF_SENSE <- R224 200 k from pin 21 / R225 100 k to GND, C289 100 n: one third of
- *                    pin 21, a 6.7 ms filter.  ADC12_INP0 (CubeMX pin table, pin 34).
+ *   PF11 VREF_SENSE <- R224 200 k from pin 21 / R225 100 k to GND, C289 100 n: one third of
+ *                    pin 21, a 6.7 ms filter.  ADC1_INP2 (datasheet pin table, pin 49).  PF11 was
+ *                    ESP32_EN on boards with the C3 (v3r2 and older); v3r3+ has no C3, and every
+ *                    C3 user of the pin is gated on esp_wifi_ctrl_module_present().
  *   Never select VIN2 while the 5 V switch is off: pin 21 (and every pull-up) would drop to 0 V.
  *   On every older board these three pins are something else and are never touched.
  * ------------------------------------------------------------------------- */
@@ -245,9 +248,9 @@
 #define VREF_SEL_PIN                 GPIO_PIN_5
 #define VREF_5V_EN_PORT              GPIOG
 #define VREF_5V_EN_PIN               GPIO_PIN_6
-#define VREF_SENSE_PORT              GPIOA
-#define VREF_SENSE_PIN               GPIO_PIN_0
-#define VREF_SENSE_ADC_CH            ADC_CHANNEL_0
+#define VREF_SENSE_PORT              GPIOF
+#define VREF_SENSE_PIN               GPIO_PIN_11
+#define VREF_SENSE_ADC_CH            ADC_CHANNEL_2
 /* R224 + R225 over R225. */
 #define VREF_SENSE_MUL               3
 

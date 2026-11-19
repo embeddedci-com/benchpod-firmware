@@ -1,5 +1,5 @@
 /* Host unit test for the digital v3r4 pull expanders (pull_exp_logic.c): the register map, the
- * write plan (no channel ever pulls two ways, at any step), suspended pull-ups, and the names. */
+ * netlist pin map, the write plan (no channel ever pulls two ways, at any step), suspended pull-ups, and the names. */
 #include "pull_exp.h"
 
 #include <stdio.h>
@@ -10,24 +10,53 @@ static int fails = 0, checks = 0;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { \
         printf("FAIL: "); printf(__VA_ARGS__); printf("\n"); fails++; } } while (0)
 
+/* The digital v3r4 netlist (la-pulls.kicad_sch): channel -> { expander, 10k port, 2.2k port }.
+   Written out as port names so a typo in the table does not hide in the same arithmetic. */
+static void test_netlist_map(void)
+{
+    static const struct { unsigned la; int chip; const char *p10k, *p2k2; } nl[] = {
+        { 1, PULL_EXP_U54, "P16", "P10" }, { 2, PULL_EXP_U54, "P17", "P15" },
+        { 3, PULL_EXP_U54, "P02", "P01" }, { 4, PULL_EXP_U54, "P06", "P05" },
+        { 5, PULL_EXP_U54, "P14", "P11" }, { 6, PULL_EXP_U54, "P07", "P04" },
+        { 7, PULL_EXP_U54, "P03", "P00" }, { 8, PULL_EXP_U18, "P12", "P13" },
+        { 9, PULL_EXP_U54, "P12", "P13" }, { 10, PULL_EXP_U18, "P10", "P11" },
+        { 11, PULL_EXP_U18, "P06", "P07" }, { 12, PULL_EXP_U18, "P04", "P05" },
+        { 13, PULL_EXP_U18, "P00", "P02" }, { 14, PULL_EXP_U18, "P01", "P03" },
+    };
+    #define PORTBIT(s) (((s)[1] - '0') * 8 + ((s)[2] - '0'))
+    uint16_t used[2] = { 0, 0 };
+    for (size_t i = 0; i < sizeof nl / sizeof nl[0]; i++) {
+        const pull_exp_pin_t *m = &pull_exp_map[nl[i].la];
+        CHECK(m->chip == nl[i].chip, "LA%u expander", nl[i].la);
+        CHECK(m->bit10k == PORTBIT(nl[i].p10k), "LA%u 10k on %s", nl[i].la, nl[i].p10k);
+        CHECK(m->bit2k2 == PORTBIT(nl[i].p2k2), "LA%u 2.2k on %s", nl[i].la, nl[i].p2k2);
+        uint16_t bits = (uint16_t)((1u << m->bit10k) | (1u << m->bit2k2));
+        CHECK((used[m->chip] & bits) == 0 && m->bit10k != m->bit2k2, "LA%u shares a port", nl[i].la);
+        used[m->chip] |= bits;
+    }
+    CHECK(used[PULL_EXP_U54] == 0xFFFF, "U54 uses every port (%04x)", used[PULL_EXP_U54]);
+    CHECK(used[PULL_EXP_U18] == 0x0FFF, "U18 uses P00-P13 (%04x)", used[PULL_EXP_U18]);
+    #undef PORTBIT
+}
+
 static void test_map(void)
 {
     uint8_t dir[15] = {0}, str[15] = {0};
-    tca6416_regs_t a, b;
+    tca6416_regs_t a, b;   /* a = U18, b = U54 */
     pull_exp_regs(dir, str, false, &a, &b);
     CHECK(a.cfg == 0xFFFF && b.cfg == 0xFFFF && a.out == 0xFFFF && b.out == 0xFFFF, "all off = reset");
 
-    dir[1] = PULL_EXP_UP;    str[1] = PULL_STR_2K2;    /* LA1 = P00 of U18 */
-    dir[8] = PULL_EXP_DOWN;  str[8] = PULL_STR_10K;    /* LA8 = P07 of U54 */
-    dir[9] = PULL_EXP_UP;    str[9] = PULL_STR_BOTH;   /* LA9 = P10 of both */
-    dir[14] = PULL_EXP_DOWN; str[14] = PULL_STR_BOTH;  /* LA14 = P15 of both */
+    dir[1] = PULL_EXP_UP;    str[1] = PULL_STR_2K2;    /* LA1 2.2k = U54 P10 */
+    dir[8] = PULL_EXP_DOWN;  str[8] = PULL_STR_10K;    /* LA8 10k = U18 P12 */
+    dir[9] = PULL_EXP_UP;    str[9] = PULL_STR_BOTH;   /* LA9 = U54 P12 + P13 */
+    dir[14] = PULL_EXP_DOWN; str[14] = PULL_STR_BOTH;  /* LA14 = U18 P01 + P03 */
     pull_exp_regs(dir, str, false, &a, &b);
-    CHECK(a.cfg == (uint16_t)~(0x0001 | 0x0100 | 0x2000), "U18 cfg %04x", a.cfg);
-    CHECK(b.cfg == (uint16_t)~(0x0080 | 0x0100 | 0x2000), "U54 cfg %04x", b.cfg);
-    CHECK(a.out == (uint16_t)~0x2000, "U18 out %04x", a.out);
-    CHECK(b.out == (uint16_t)~(0x0080 | 0x2000), "U54 out %04x", b.out);
-    /* P16, P17 (bits 14, 15) are never outputs */
-    CHECK((a.cfg & 0xC000) == 0xC000 && (b.cfg & 0xC000) == 0xC000, "P16/P17 stay inputs");
+    CHECK(a.cfg == (uint16_t)~(0x0400 | 0x0002 | 0x0008), "U18 cfg %04x", a.cfg);
+    CHECK(b.cfg == (uint16_t)~(0x0100 | 0x0400 | 0x0800), "U54 cfg %04x", b.cfg);
+    CHECK(a.out == (uint16_t)~(0x0400 | 0x0002 | 0x0008), "U18 out %04x", a.out);
+    CHECK(b.out == 0xFFFF, "U54 out %04x", b.out);
+    /* U18 P14-P17 (bits 12-15) are never outputs */
+    CHECK((a.cfg & 0xF000) == 0xF000, "U18 P14-P17 stay inputs");
 
     pull_str_t s;
     CHECK(pull_exp_channel(a, b, 1, &s) == PULL_EXP_UP && s == PULL_STR_2K2, "LA1 read back");
@@ -42,6 +71,19 @@ static void test_map(void)
           "suspended ups off");
     CHECK(pull_exp_channel(a, b, 8, NULL) == PULL_EXP_DOWN && pull_exp_channel(a, b, 14, NULL) == PULL_EXP_DOWN,
           "suspended: downs stay");
+
+    /* Every channel and strength reads back as written, and touches only its own two ports. */
+    for (unsigned la = 1; la <= 14; la++)
+        for (unsigned st = 1; st <= 3; st++)
+            for (unsigned d = 1; d <= 2; d++) {
+                uint8_t dd[15] = {0}, ss[15] = {0};
+                dd[la] = (uint8_t)d; ss[la] = (uint8_t)st;
+                pull_exp_regs(dd, ss, false, &a, &b);
+                CHECK(pull_exp_channel(a, b, la, &s) == (pull_exp_dir_t)d && s == (pull_str_t)st,
+                      "LA%u str %u dir %u read back", la, st, d);
+                for (unsigned o = 1; o <= 14; o++)
+                    if (o != la) CHECK(pull_exp_channel(a, b, o, NULL) == PULL_EXP_OFF, "LA%u leaks to LA%u", la, o);
+            }
 }
 
 /* Apply a plan one write at a time; after each, no channel may be engaged on both expanders in
@@ -54,16 +96,18 @@ static void apply_checked(tca6416_regs_t *a, tca6416_regs_t *b, tca6416_regs_t t
     size_t n = pull_exp_plan(*a, *b, ta, tb, w);
     CHECK(n <= PULL_EXP_PLAN_MAX, "plan size");
     for (size_t i = 0; i < n; i++) {
-        tca6416_regs_t *r = w[i].addr == PULL_EXP_ADDR_2K2 ? a : w[i].addr == PULL_EXP_ADDR_10K ? b : NULL;
+        tca6416_regs_t *r = w[i].addr == PULL_EXP_ADDR_U18 ? a : w[i].addr == PULL_EXP_ADDR_U54 ? b : NULL;
         CHECK(r != NULL, "address %02x", w[i].addr);
         CHECK(w[i].reg == TCA6416_REG_OUTPUT0 || w[i].reg == TCA6416_REG_CONFIG0, "register %02x", w[i].reg);
         if (!r) return;
         if (w[i].reg == TCA6416_REG_OUTPUT0) r->out = w[i].val; else r->cfg = w[i].val;
         for (unsigned la = 1; la <= 14; la++) {
-            uint16_t bit = (uint16_t)(1u << (la - 1));
-            bool on_a = !(a->cfg & bit), on_b = !(b->cfg & bit);
-            if (on_a && on_b)
-                CHECK(((a->out ^ b->out) & bit) == 0, "round %d step %zu: LA%u pulls two ways", round, i, la);
+            const pull_exp_pin_t *m = &pull_exp_map[la];
+            const tca6416_regs_t *c = m->chip == PULL_EXP_U18 ? a : b;
+            uint16_t b10 = (uint16_t)(1u << m->bit10k), b2 = (uint16_t)(1u << m->bit2k2);
+            if (!(c->cfg & b10) && !(c->cfg & b2))
+                CHECK(((c->out >> m->bit10k) & 1u) == ((c->out >> m->bit2k2) & 1u),
+                      "round %d step %zu: LA%u pulls two ways", round, i, la);
             pull_str_t s_now, s_old, s_new;
             pull_exp_dir_t now = pull_exp_channel(*a, *b, la, &s_now);
             pull_exp_dir_t old = pull_exp_channel(fa, fb, la, &s_old);
@@ -109,8 +153,10 @@ static void test_plan_random(void)
     pull_exp_regs(dir, str, false, &ta, &tb);
     pull_exp_write_t w[PULL_EXP_PLAN_MAX];
     size_t n = pull_exp_plan(a, b, ta, tb, w);
-    CHECK(n == 6 && w[0].reg == TCA6416_REG_CONFIG0 && w[1].reg == TCA6416_REG_CONFIG0 &&
-          w[2].reg == TCA6416_REG_OUTPUT0 && w[3].reg == TCA6416_REG_OUTPUT0, "flip: off, levels, on (%zu)", n);
+    /* LA5's two resistors are both on U54: three writes there, nothing on U18. */
+    CHECK(n == 3 && w[0].reg == TCA6416_REG_CONFIG0 && w[1].reg == TCA6416_REG_OUTPUT0 &&
+          w[2].reg == TCA6416_REG_CONFIG0 && w[0].addr == PULL_EXP_ADDR_U54 &&
+          w[1].addr == PULL_EXP_ADDR_U54 && w[2].addr == PULL_EXP_ADDR_U54, "flip: off, levels, on (%zu)", n);
     apply_checked(&a, &b, ta, tb, -2);
 }
 
@@ -152,6 +198,7 @@ static void test_hold_names(void)
 
 int main(void)
 {
+    test_netlist_map();
     test_map();
     test_hold_names();
     test_plan_random();

@@ -43,7 +43,7 @@ static void sw_5v(bool on)
 void vref_out_init(void)
 {
     if (!board_caps()->vref_out) return;
-    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOF_CLK_ENABLE();
     __HAL_RCC_GPIOG_CLK_ENABLE();
     /* The 5 V switch off first (R209 already holds it off), then pin 21 on the bank. */
     sw_5v(false);

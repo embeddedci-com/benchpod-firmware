@@ -15,7 +15,7 @@ static bool           s_present;
 static bool           s_live;                      /* out of reset and written */
 static uint8_t        s_dir[PULL_EXP_CHANNELS + 1]; /* what the host asked for */
 static uint8_t        s_str[PULL_EXP_CHANNELS + 1];
-static tca6416_regs_t s_hw2k2, s_hw10k;            /* what the chips hold now */
+static tca6416_regs_t s_hw18, s_hw54;            /* what the chips hold now */
 static bool           s_suspend_up;                /* the pod switched the DUT off */
 static bool           s_rail_was_on;               /* a target rail was on at the last poll */
 
@@ -35,16 +35,16 @@ static void hold(void)
 {
     rst(false);
     s_live = false;
-    s_hw2k2 = s_hw10k = pull_exp_reset_regs();
+    s_hw18 = s_hw54 = pull_exp_reset_regs();
 }
 
 /* Bring the chips to the asked-for state, from what they hold now. */
 static int apply(void)
 {
-    tca6416_regs_t t2, t10;
-    pull_exp_regs(s_dir, s_str, s_suspend_up, &t2, &t10);
+    tca6416_regs_t t18, t54;
+    pull_exp_regs(s_dir, s_str, s_suspend_up, &t18, &t54);
     pull_exp_write_t w[PULL_EXP_PLAN_MAX];
-    size_t n = pull_exp_plan(s_hw2k2, s_hw10k, t2, t10, w);
+    size_t n = pull_exp_plan(s_hw18, s_hw54, t18, t54, w);
     for (size_t i = 0; i < n; i++) {
         if (write_pair(w[i].addr, w[i].reg, w[i].val) != 0) {
             /* Unknown state: back to reset (all off) and rewrite on the next change. */
@@ -52,7 +52,7 @@ static int apply(void)
             hold();
             return -1;
         }
-        tca6416_regs_t *r = w[i].addr == PULL_EXP_ADDR_2K2 ? &s_hw2k2 : &s_hw10k;
+        tca6416_regs_t *r = w[i].addr == PULL_EXP_ADDR_U18 ? &s_hw18 : &s_hw54;
         if (w[i].reg == TCA6416_REG_OUTPUT0) r->out = w[i].val;
         else                                 r->cfg = w[i].val;
     }
@@ -62,7 +62,7 @@ static int apply(void)
 /* Out of reset and rewrite both (pin 21 is up). */
 static int go_live(void)
 {
-    s_hw2k2 = s_hw10k = pull_exp_reset_regs();   /* what reset left */
+    s_hw18 = s_hw54 = pull_exp_reset_regs();   /* what reset left */
     rst(true);
     HAL_Delay(1);                                /* tRESET is 600 ns (datasheet) */
     s_live = true;
@@ -167,7 +167,7 @@ pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)
 {
     if (str) *str = PULL_STR_NONE;
     if (!s_present || !s_live) return PULL_EXP_OFF;
-    return pull_exp_channel(s_hw2k2, s_hw10k, la, str);
+    return pull_exp_channel(s_hw18, s_hw54, la, str);
 }
 
 const char *pull_exp_held(void)

@@ -54,15 +54,16 @@ typedef struct {
 
     /* ---- digital v3r4 ---- */
     /* J1 pin 21 is VREF_OUT: PG5 VREF_SEL (follow the bank / 5 V input), PG6 VREF_5V_EN (the 5 V
-       switch) and the PA0 VREF_SENSE divider (one third of pin 21).  vref_out.h. */
+       switch) and the PF11 VREF_SENSE divider (one third of pin 21).  vref_out.h. */
     bool vref_out;
     /* 5 V I/O: the bank stays at 3.3 V and pin 21 (the pull-up rail) goes to 5 V. */
     bool la_5v;
     /* LSF0108 clamps on the LA lines and NRST: wait for their reference after a bank change. */
     bool la_clamps;
-    /* Two TCA6416A pull expanders on I2C0 (0x20 2.2k, 0x21 10k), reset on PG7 PULL_RST: every
-       channel pulls up or down with 10k, 2.2k or both.  False: the TCA9554 at 0x20.  Read by
-       la_pull_init() (it picks the pull backend, la_pull.h) and pull_exp_init(). */
+    /* Two TCA6416A pull expanders on I2C0 (U54 0x21: LA1-LA7, LA9; U18 0x20: LA8, LA10-LA14;
+       a 10k and a 2.2k per channel), reset on PG7 PULL_RST: every channel pulls up or down with
+       10k, 2.2k or both.  False: the TCA9554 at 0x20.  Read by la_pull_init() (it picks the pull
+       backend, la_pull.h) and pull_exp_init(). */
     bool pull_expanders;
     /* PC9 USB_SEL: the USB switch between USB-C and the USB-A host port (low = USB-C, the
        board's default on its pull-down).  Nothing drives it yet: kept for the planned USB

@@ -1,5 +1,5 @@
 /* board_rev.c — see board_rev.h.  PA3 strap: digital NC test, then ADC bucket, then (v3r4 band
-   only) the PC3 strap. */
+   only) the PF12 strap. */
 #include "board_rev.h"
 #include "board_caps.h"
 #include "mcu_adc.h"
@@ -19,10 +19,10 @@
 
 static int s_rev      = BOARD_REV_UNKNOWN;
 static int s_strap_mv = -1;
-static int s_rev2_mv  = -1;   /* PC3, read only when PA3 says v3r4 */
+static int s_rev2_mv  = -1;   /* PF12, read only when PA3 says v3r4 */
 
-/* The second strap (digital v3r4+).  Only called when PA3 already reads the v3r4 band, so PC3
-   is never touched on an older board.  PC3 is in analog mode from reset; set it again in case. */
+/* The second strap (digital v3r4+).  Only called when PA3 already reads the v3r4 band, so PF12
+   is never touched on an older board.  PF12 is in analog mode from reset; set it again in case. */
 static int read_rev2_mv(void)
 {
     BOARD_REV2_CLK_EN();
