@@ -9,6 +9,7 @@
 #include "console.h"
 #include "cloud_caps.h"     /* cloud_caps_wifi_mac: status wifimac */
 #include "console_moved.h"
+#include "bp_json.h"         /* bp_hex_nibble */
 #include "usb_device.h"
 #include "usb_netif.h"
 #include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
@@ -422,14 +423,6 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
    when one says HELLO on the Ethernet port, unless built-in Wi-Fi is configured (it wins,
    wifi_bridge_ignored); `bridge` shows it and runs scan / reboot / reset. */
 
-static int hexval(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
 {
     if (rc != 0) {
@@ -507,7 +500,7 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
         bool good = part >= 1 && part <= 4 && strlen(argv[3]) == 64;
         if (good && !t) good = (t = pvPortMalloc(3 + BWP_ID_CERT_LEN)) != NULL;
         for (unsigned k = 0; good && k < 32; k++) {
-            int hi = hexval(argv[3][2 * k]), lo = hexval(argv[3][2 * k + 1]);
+            int hi = bp_hex_nibble(argv[3][2 * k]), lo = bp_hex_nibble(argv[3][2 * k + 1]);
             good = hi >= 0 && lo >= 0;
             t[3 + 32 * (part - 1) + k] = (uint8_t)(hi << 4 | lo);
         }

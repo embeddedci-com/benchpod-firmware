@@ -124,13 +124,6 @@ bool uart_frame_parse(const char *json, uint8_t *frame) {
 /* The optional "half_duplex" flag of uart_proxy_start (gateware v57): one wire, TX open drain. */
 static bool uart_half_duplex_parse(const char *json) { return bp_json_flag(json, "half_duplex"); }
 
-static int hexval(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 /* The optional "entry" object of uart_proxy_start: a boot-mode entry the pod times itself, so the
    host's latency (LAN, USB or cloud) never sits between reset and the first byte.
      "entry":{"reset_ms":10,"tx_low":true,"hold_ms":10,"idle_ms":10,"hex":"00"}
@@ -164,7 +157,7 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
         size_t len = strlen(v);
         if (len % 2 || len / 2 > UART_ENTRY_HEX_MAX) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
         for (size_t i = 0; i < len / 2; i++) {
-            int hi = hexval(v[2 * i]), lo = hexval(v[2 * i + 1]);
+            int hi = bp_hex_nibble(v[2 * i]), lo = bp_hex_nibble(v[2 * i + 1]);
             if (hi < 0 || lo < 0) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
             en->hex[i] = (uint8_t)(hi << 4 | lo);
         }
