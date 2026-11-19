@@ -64,6 +64,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "sig_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_sig_policy) },
     { { "lan_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_policy) },
     { { "usb_network", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_usb_network) },
+    /* read and set T0: it only changes what the pod prints on its own console */
+    { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level) },
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_module) },
     { { "cloud_ca", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_ca) },
     { { "cloud_proxy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_proxy) },
@@ -104,6 +106,9 @@ static const cmd_desc_t k_tiers[] = {
     { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash) },
     { { "esp_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_esp_flash) },
     { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir) },
+    { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire) },
+    { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew) },
+    { { "lease_release", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_release) },
     { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start) },
     { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop) },
     { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer) },

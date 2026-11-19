@@ -34,6 +34,9 @@
 #define ESP_SPI_XFER_TIMEOUT_MS     50
 #define TX_SLOTS                    6      /* pending outbound frames            */
 
+/* SPI transfer errors since the last good transfer (latched, see esp_xfer_once). */
+static log_repeat_t s_xfer_rep;
+
 static SPI_HandleTypeDef hspi_esp;
 
 /* ---- SPI4 DMA transfer backend ------------------------------------------
@@ -154,7 +157,7 @@ int esp_hosted_spi_init(void) {
     hspi_esp.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
     hspi_esp.Init.NSSPMode          = SPI_NSS_PULSE_DISABLE;
     if (HAL_SPI_Init(&hspi_esp) != HAL_OK) {
-        log_printf("[esp] SPI4 init failed\n");
+        LOG_E("[esp] SPI4 init failed\n");
         return -1;
     }
 
@@ -169,7 +172,7 @@ int esp_hosted_spi_init(void) {
         HAL_NVIC_SetPriority(SPI4_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
         HAL_NVIC_EnableIRQ(SPI4_IRQn);
         s_esp_dma_ok = true;
-        log_printf("[esp] SPI4 DMA enabled (GPDMA1 ch2=rx ch3=tx)\n");
+        LOG_D("[esp] SPI4 DMA enabled (GPDMA1 ch2=rx ch3=tx)\n");
     } else {
         log_printf("[esp] SPI4 DMA init failed — using blocking transfers\n");
     }
@@ -177,7 +180,7 @@ int esp_hosted_spi_init(void) {
 
     s_running = false; s_ready = false;
     s_tx_head = s_tx_tail = 0;
-    log_printf("[esp] SPI4 transport configured (ESP32-C3 held in reset)\n");
+    LOG_D("[esp] SPI4 transport configured (ESP32-C3 held in reset)\n");
     return 0;
 }
 
@@ -192,7 +195,7 @@ void esp_hosted_spi_start(void) {
     s_slave_reset = false; s_boot_events = 0;
     s_tx_head = s_tx_tail = 0;
     memset(&s_pump_stats, 0, sizeof(s_pump_stats));
-    log_printf("[esp] ESP32-C3 reset released — awaiting boot event\n");
+    LOG_D("[esp] ESP32-C3 reset released — awaiting boot event\n");
 }
 
 void esp_hosted_spi_stop(void) {
@@ -249,11 +252,11 @@ static void handle_rx_frame(const esp_hosted_rx_t *rx) {
             rx->payload_len >= 1 && rx->payload[0] == ESP_HOSTED_EVENT_INIT) {
             s_boot_events++;
             if (!s_ready) {
-                log_printf("[esp] slave boot event — link up\n");
+                LOG_D("[esp] slave boot event — link up\n");
             } else {
                 /* Already up: the slave rebooted underneath us.  Its Wi-Fi state is gone,
                    so everything we think we know about the association is stale. */
-                log_printf("[esp] slave boot event while up (#%lu since start) — slave reset\n",
+                LOG_W("[esp] slave boot event while up (#%lu since start) — slave reset\n",
                        (unsigned long)s_boot_events);
                 s_slave_reset = true;
             }
@@ -307,9 +310,11 @@ static int esp_do_xact(void *ctx) {
     int st = xfer_txrx(&s_esp_xfer, s_xfer_tx, s_xfer_rx, ESP_HOSTED_SPI_BUF_SIZE);
     HAL_GPIO_WritePin(ESP_CS_PORT, ESP_CS_PIN, GPIO_PIN_SET);
     if (st != XFER_OK) {
-        log_printf("[esp] SPI xfer error %d\n", st);
+        /* Latched (log_level.h): the first error, then one line a minute while they go on. */
+        log_repeat_failf(&s_xfer_rep, BP_LOG_WARN, "[esp] SPI xfer error %d", st);
         return -1;   /* leave the TX frame queued for retry */
     }
+    if (s_xfer_rep.fails) log_repeat_okf(&s_xfer_rep, BP_LOG_INFO, "[esp] SPI transfers work again");
 
     if (have_tx) s_tx_tail = (uint8_t)((s_tx_tail + 1) % TX_SLOTS);
 

@@ -18,6 +18,8 @@ void console_exec(char *line, console_out_t out, void *ctx);
 void console_init(void);
 void console_poll(void);        /* non-blocking; call in a loop (console task)   */
 void console_run_line(const char *line);  /* execute one line (hw worker task)   */
+/* The iCE40/PSRAM bring-up has ended (hw worker): print "console ready" and the first prompt. */
+void console_boot_done(void);
 
 /* Count of console RX bytes dropped because the ring was full (status report). */
 uint32_t console_rx_dropped(void);

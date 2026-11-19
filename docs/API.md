@@ -218,6 +218,9 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
 | `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
+| `lease_acquire` | T1 | Take the [pod lease](#pod-lease), or join the one held with the same id | object | no |
+| `lease_renew` | T1 | Push the deadline of the [pod lease](#pod-lease) | object | no |
+| `lease_release` | T1 | Free the [pod lease](#pod-lease) | object | no |
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
@@ -277,6 +280,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
+| `log_level` | T0 | Read or set the console log level | object | no |
 | `lan_tls` | T0/T2 | The LAN API's TLS certificate (port 8443) and the HTTPS-only setting | object | no |
 | `ota_begin` | T3 | Start a firmware or blob update | object | no |
 | `ota_data` | T3 | Send one base64url chunk of the image | object | no |
@@ -304,10 +308,12 @@ that applies answers with its message and the command does not run.
 | Gate | Applies to | Message |
 |---|---|---|
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
+| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026`: `lease lost: stopped by <name>` |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
@@ -1741,6 +1747,7 @@ elsewhere:
 |---|---|
 | `lan_tls` | the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command |
 | `lease` | the server, which owns the cloud lease |
+| `local_lease` | the server, from the pod's `lease.local` frames (see [Pod lease](#pod-lease)) |
 | `module` | the [`module`](#module--the-analog-module-and-its-eeprom) command |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, `adc_range`, `adc_range_fs_mv` | the [capabilities frame](#capabilities-frame--adc-calibration-fields) |
 | `sensors_format`, `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state` | the capabilities frame (the server keeps them as `cap.*`) |
@@ -1788,6 +1795,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
+| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only, and only with `"caps":false` (a client with the features table, feature `lease`). |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
@@ -1987,11 +1995,13 @@ pull resistor on this board"). `off` is always accepted, also on a channel witho
 
 All of them default to **off** at boot.
 
-> **Only usable at a 3.3 V LA bank.** The resistors are referenced to **+3V3**, not to
-> the LA bank rail, so the firmware refuses to engage one while the bank is at 1.8 V
-> (see [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage)). Switching the bank
-> down to 1.8 V also releases any pull that is currently on. Turning one *off* is
-> always allowed.
+> **Works at 1.8 V and 3.3 V.** The pull-ups go to the LA bank rail and the pull-downs to
+> ground, so a pull-up holds the line at the bank voltage (1.8 V or 3.3 V, see
+> [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage)) and engaged pulls stay on when
+> the bank switches. A bank voltage must be set first. Firmware before the `la_pull_1v8`
+> feature allowed pulls only at a 3.3 V bank and released them when the bank switched to
+> 1.8 V. (Pre-production v2 boards had their pull-ups on 3.3 V; they still need a 3.3 V bank.)
+> Turning one *off* is always allowed.
 
 ```json
 {"cmd": "la", "la": 3, "pull": "up"}
@@ -2018,7 +2028,7 @@ Response:
 | `ohms` | The resistor's value (`""` without one). |
 | `pull` | The channel's default direction, the one `pullup:"on"` engages (`"none"` without a resistor). |
 | `pullup` | `1` when the resistor is engaged (kept for older hosts; `state` says the same). |
-| `pullups_available` | `1` only while the LA bank is at 3.3 V: at `0` every `up`/`down` request is refused until the bank is switched back. |
+| `pullups_available` | `1` when a pull can be engaged now (a bank voltage is set): at `0` every `up`/`down` request is refused. |
 
 Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `state`
 and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
@@ -2039,8 +2049,8 @@ Response:
 ```
 
 `la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
-pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull-up can be engaged at
-the current bank voltage (`1` = bank at 3.3 V).
+pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
+the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
 #### Error cases
 
@@ -2058,7 +2068,7 @@ the current bank voltage (`1` = bank at 3.3 V).
 | `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
 | `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
-| `up`/`down` with the LA bank at 1.8 V | `"pull-ups are 3V3-referenced; not available with the LA bank at 1.8 V"` |
+| `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | I2C write to the PCA9555 failed | `"pca9555 write failed"` |
 
@@ -2333,14 +2343,11 @@ set (it does not take the profile's). `status` also carries the current selectio
 > `3300` works on both. The boot default is also different: on v3 the mux comes up
 > at **3.3 V**, on v2 it comes up **unpowered**.
 
-> **v2.0.0 hardware limitation — now enforced in firmware.** The LA1–8 pull-ups (and
-> the board pull-downs that hold their switches open) are referenced to **3V3**, not to
-> the bank rail, so at 1.8 V a closed pull-up drives the DUT line ~1.5 V above its own
-> rail. The firmware therefore **refuses to enable a pull-up while the bank is at
-> 1.8 V**, and `la_voltage` with `mv: 1800` **releases any pull-up that is on** before
-> switching the rail. `uart_proxy_start`'s automatic RX hold is skipped for the same
-> reason at 1.8 V (a floating DUT TX may decode as `0x00` until the DUT drives it).
-> Switch the bank to 3.3 V if you need a pull-up. (Hardware fix pending in v2.0.1.)
+> **Pulls at 1.8 V.** On v3 boards the LA1-LA6 pull-ups go to the bank rail and the LA7/LA8
+> pull-downs to ground, so pulls work at both voltages and engaged pulls stay on when the bank
+> switches (firmware with the `la_pull_1v8` feature; older firmware refused pulls at 1.8 V and
+> released them on the switch to 1.8 V). The pre-production v2 boards had their pull-ups on 3.3 V
+> and cannot run the bank at 1.8 V anyway.
 
 #### Error cases
 
@@ -2351,8 +2358,7 @@ set (it does not take the profile's). `status` also carries the current selectio
 | any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |
 
-> **Not while pins are in use.** Switching the bank glitches every LA line and strands the
-> 3V3-referenced pulls, so a change is refused while any pin is owned by a function other than
+> **Not while pins are in use.** Switching the bank glitches every LA line, so a change is refused while any pin is owned by a function other than
 > `none` (see [pin ownership](#la-pin-ownership)); the message names each pin and its function.
 > Re-setting the voltage that is already selected is always allowed. The console `la_voltage`
 > command applies the same rule.
@@ -2833,9 +2839,9 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
 > pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
-> happens on **LA1–LA6**, whose resistors pull **up**: LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. It is also
-> skipped at a 1.8 V bank, where the 3V3-referenced pulls are unavailable. The previous state
+> happens on **LA1–LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
+> firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
+> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
@@ -3024,7 +3030,7 @@ command and reply fits one cloud frame.
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
 | `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
-| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to 3.3 V, so the LA bank must be at 3.3 V. `external`: the board has its own pull-ups |
+| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
 Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
@@ -4727,6 +4733,27 @@ get `usb_network: change it on the device (the USB console, or over the USB link
 everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
 credentials also turn the adapter off (status `usb.off_reason`).
 
+### `log_level` — the console log level
+
+Firmware newer than 3.10.12 (feature `log_level`).
+
+```json
+{"cmd":"log_level"}
+{"cmd":"log_level","set":"debug"}
+```
+
+```json
+{"status":"ok","data":{"level":"debug"}}
+```
+
+How much the pod prints on its USB console (and its USART2 pins): `error`, `warn`, `info` (the
+default) or `debug`. The levels and what each prints are in [Log
+levels](usb-serial-interface.md#log-levels); `debug` adds the per-command trace (`[cmd] <- ...`,
+`[cmd] -> ok ...`) and the retry detail of the cloud, Wi-Fi and DHCP loops. Errors always print.
+The setting is stored on the pod (it survives a reboot and a firmware update) and is the same one
+as the console's `log` command. It changes only console output, so every connection may read and
+set it (T0). Another value gets `log_level: set must be error, warn, info or debug`.
+
 ### `lan_tls` — the LAN API over TLS
 
 Firmware 3.9.3+. See `docs/design/lan-tls.md`.
@@ -4831,6 +4858,121 @@ only light reads (`status`, `ping`, the `*_status` reads, policy reads); everyth
 `busy: a cloud job holds this pod (<holder>, <N> s left)`, and SCPI setters get -200. The pod ends
 the lease itself at the announced expiry or when the cloud link drops. `status` shows
 `"lease":{"held":...,"holder":"...","left_s":...}`.
+
+<a id="pod-lease"></a>
+## Pod lease
+
+A client takes the pod for a while (a CI run, an SDK session) with `lease_acquire`, on any
+transport: LAN, the USB network adapter, the USB console or the cloud. The pod keeps one lease in
+RAM: an id, a holder label, a purpose and a deadline. A restart clears it. Feature `lease` in the
+[features table](#features-table).
+
+While the lease is held, only its **owners** drive the pod. An owner is a connection that sent
+`lease_acquire` with the held id; other processes of the same run join by sending `lease_acquire`
+with the same id. Every other connection, on any transport, gets light reads only (the T0
+commands that do not use the capture hardware, see [Gates](#gates-that-apply-to-every-command));
+anything else is refused with `BP0025`, and SCPI setters get -200. A connection that closes is no
+longer an owner; the lease itself stays until it is released, runs out or is stopped.
+
+**The `lease` field on any command.** A client that opens a connection per command proves
+ownership on each command instead of joining first: any JSON command may carry
+`"lease":"<id>"`.
+
+```json
+{"cmd":"la_dir","lease":"L-6f1c..."}
+```
+
+With the held id, the command runs as the owner's (and its connection becomes an owner). Another
+id, or an id while nothing is held, counts as no id: refused with `BP0025` while a lease is held,
+run as usual when the pod is free. A command never moves the deadline; only `lease_acquire`
+with the held id and `lease_renew` do. Commands without the field work as before. The check runs
+before the command starts, so the commands that switch the connection to raw bytes or chunks
+(`dap_start`, `uart_proxy_start`, `load_bin`, the captures) take it on their start line; the bytes
+that follow belong to that session. `status` with the held id reports `local_lease.mine: true`.
+
+The `lease_*` commands always reach the pod's lease, whoever holds it, so a busy pod answers
+with its holder.
+
+### `lease_acquire`
+
+```json
+{"cmd":"lease_acquire","id":"L-6f1c...","holder":"benchpod ci: ward","purpose":"process-node-hil","ttl_s":300}
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | 1 to 64 printable characters, no spaces, quotes or backslashes. The token that makes a connection an owner: keep it to the processes of the run. |
+| `holder` | string | no | Who holds it, as people should see it (40 characters; quotes and backslashes become `?`). Default `unnamed`. |
+| `purpose` | string | no | What it is for (64 characters). |
+| `ttl_s` | integer | no | Seconds until it runs out, 10 to 1800 (clamped). Default 120. |
+
+Free, or held with the same id: the pod takes it (or pushes its deadline) and this connection
+becomes an owner. The holder and purpose stay those of the first `lease_acquire`.
+
+```json
+{"status":"ok","data":{"lease":{"id":"L-6f1c...","holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":300,"source":"local"}}}
+```
+
+Held with another id, or a cloud job holds the pod (the server's lease, `status` `lease`; then
+`purpose` is `cloud`):
+
+```json
+{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245},"message":"busy: benchpod ci: ward holds this pod (process-node-hil, 245 s left)"}
+```
+
+A missing or malformed `id` is `BP0006` (`args.arg` `id`).
+
+### `lease_renew`
+
+```json
+{"cmd":"lease_renew","id":"L-6f1c...","ttl_s":300}
+```
+
+Pushes the deadline of the held lease with this id to `ttl_s` (10 to 1800, default 120) from now
+and answers like `lease_acquire`. It does not make the connection an owner. Another id while held:
+`BP0025`. Nothing held (it ran out, was released, or the pod restarted): `BP0027`
+(`args.id`). A stopped lease's id: `BP0026` (see below). Renew well before the deadline: a client that crashed loses the lease when it runs out.
+
+### `lease_release`
+
+```json
+{"cmd":"lease_release","id":"L-6f1c..."}
+```
+
+Frees the held lease with this id at once: `{"status":"ok","data":{"released":true}}`. Nothing
+held: `{"status":"ok","data":{"released":false}}`. Another id while held: `BP0025`.
+
+### Stopped from the web app or the cloud
+
+The server can stop the lease (frame `{"type":"lease.break","by":"<name>"}` on the cloud link).
+Each connection that owned it then gets, for its next command only, instead of running it:
+
+```json
+{"status":"error","code":"BP0026","args":{"by":"<name>"},"message":"lease lost: stopped by <name>"}
+```
+
+A stopped lease stays stopped: for 30 minutes after the stop, `lease_acquire`, `lease_renew` and
+any command whose `lease` field carries its id get the same `BP0026` (a light read too), instead
+of a new lease or `BP0027`. The pod remembers the last stopped id only. Other ids, and commands
+without one, see a free pod. A lease that ran out without being stopped is not remembered: the
+same id may be acquired again.
+
+### In `status` and on the cloud link
+
+`status` with `"caps":false` has `"local_lease":{"held":true,"holder":"...","purpose":"...","left_s":N,"mine":true}`
+(`mine`: this connection owns it), or `"local_lease":{"held":false}`. It never shows the id.
+
+While the cloud link is up, the pod tells the server about its lease on every change, when the
+link comes up, and every 30 s while it is held:
+
+```json
+{"type":"lease.local","held":true,"holder":"benchpod ci: ward","purpose":"process-node-hil","expires_in_s":245}
+{"type":"lease.local","held":false}
+```
+
+The cloud command channel is one connection for every cloud request, so a `lease_acquire` sent
+there makes that channel an owner until the lease ends; the cloud byte tunnels are separate
+connections, each an owner only while it is open.
 
 ---
 

@@ -98,6 +98,8 @@ esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_lis
 }
 static char g_console[2048];
 static size_t g_nconsole;
+static int g_holds;   /* console_io_hold_prompt(true) +1, (false) -1 */
+void console_io_hold_prompt(bool on) { g_holds += on ? 1 : -1; }
 void console_io_write(const uint8_t *b, size_t n) {
     if (n > sizeof(g_console) - 1 - g_nconsole) n = sizeof(g_console) - 1 - g_nconsole;
     memcpy(g_console + g_nconsole, b, n); g_nconsole += n; g_console[g_nconsole] = '\0';
@@ -296,7 +298,8 @@ static void test_wifi_scan(void) {
     handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":99}");
     CHECK(strncmp(g_reply, "err:wifi_scan: no scan with that id", 35) == 0, "%s", g_reply);
 
-    /* The console's scan prints when it ends, then a new prompt; nothing while it runs. */
+    /* The console's scan prints when it ends (the console layer, console_prompt.c, puts it on its
+       own line after the prompt and prints the prompt again); nothing while it runs. */
     g_scan_err = NULL;
     g_scan_state = ESP_WIFI_SCAN_RUNNING;
     g_nconsole = 0; g_console[0] = '\0';
@@ -309,7 +312,8 @@ static void test_wifi_scan(void) {
     wifi_scan_list_add(&g_scan_list, "my lab", 6, -50, 6, 7);
     g_scan_state = ESP_WIFI_SCAN_DONE;
     wifi_scan_poll();
-    CHECK(strcmp(g_console, "\r\nscan -50 6 wpa2/wpa3 my lab\r\nscan done 1\r\n> ") == 0, "%s", g_console);
+    CHECK(strcmp(g_console, "scan -50 6 wpa2/wpa3 my lab\r\nscan done 1\r\n") == 0, "%s", g_console);
+    CHECK(g_holds == 0, "the prompt hold was not released (%d)", g_holds);
     g_nconsole = 0; g_console[0] = '\0';
     wifi_scan_poll();
     CHECK(g_nconsole == 0, "printed twice: %s", g_console);

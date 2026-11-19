@@ -100,6 +100,8 @@ C_SOURCES := \
   src/can_ring.c \
   src/console_io.c \
   src/bp_log.c \
+  src/log_level.c \
+  src/console_prompt.c \
   src/console.c \
   src/usb_desc.c \
   src/usb_netif.c \
@@ -184,12 +186,14 @@ C_SOURCES := \
   src/cmd_gate.c \
   src/pod_policy.c \
   src/lease_gate.c \
+  src/lease_local.c \
   src/net_reload.c \
   src/cloud_extras.c \
   src/lan_tls.c \
   src/lan_tls_pem.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
+  src/command_handler_lease.c \
   src/rng.c \
   src/psram.c \
   src/ice40_flash.c \

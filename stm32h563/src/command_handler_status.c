@@ -9,6 +9,7 @@
  * full form whole (conn_tx.c). It leaves out what a client gets elsewhere:
  *   lan_tls{}              the `lan_tls` command
  *   lease{}                the server, which owns the cloud lease
+ *   local_lease{}          the lease.local frames (cloud_client.c)
  *   module{}               the `module` command (digital v3r3)
  *   adc_cal_*, adc_range*  the capabilities frame (server cap.*)
  *   sensors_format, ota_sig, sig_policy_cmd, lan_policy_cmd, tunnel_max_tier, lease_state
@@ -50,6 +51,7 @@
 #include "fw_sign.h"
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "lease_gate.h"
+#include "lease_local.h"
 #include "module_link.h"   /* digital v3r3: the module object */
 #include "psram.h"       /* psram_selftest_str */
 #include "pod_policy.h"
@@ -86,6 +88,7 @@ typedef struct {
     char         wifi_buf[32];
 #endif
     cloud_caps_t caps;
+    lease_local_view_t local_lease;   /* the pod's own lease as the asking connection sees it */
 } status_in_t;
 
 static void status_read(status_in_t *in) {
@@ -215,6 +218,18 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
         bool held = lease_gate_active(HAL_GetTick(), &left);
         bp_emit(e, "\"lease\":{\"held\":%s,\"holder\":\"%s\",\"left_s\":%lu},",
                 held ? "true" : "false", held ? lease_gate_holder() : "", (unsigned long)left);
+        /* The pod's own lease (lease_local.h). Never its id: the id is what makes a connection
+           an owner. The cloud learns it from the lease.local frames: full form only. Only for
+           clients that read the features table ("caps":false, which is where `lease` is): an
+           older client would not look at it, and its caps list leaves no room. */
+        const lease_local_view_t *ll = &in->local_lease;
+        if (caps_list) {
+        } else if (!ll->held)
+            bp_emit_raw(e, "\"local_lease\":{\"held\":false},");
+        else
+            bp_emit(e, "\"local_lease\":{\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
+                        "\"left_s\":%lu,\"mine\":%s},",
+                    ll->holder, ll->purpose, (unsigned long)ll->left_s, ll->mine ? "true" : "false");
     }
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
@@ -268,6 +283,7 @@ void handle_status(int conn_id, const char *json) {
     char resp[2304];
     status_in_t in;
     status_read(&in);
+    lease_local_get(conn_id, HAL_GetTick(), &in.local_lease);
     bp_emit_t e;
     /* The cloud command channel always gets the short form (see the top of this file). */
     if (conn_id != CH_CLOUD_CONN) {

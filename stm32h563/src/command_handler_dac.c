@@ -34,6 +34,7 @@
 
 #include "pico/time.h"
 #include "sensor_mgr.h"     /* sm_on_dac_stop; the image hints name sensor_stop on the emulation image */
+#include "bp_log.h"
 
 /* The error for a feature the running gateware image lacks: which image has it, and on the
    emulation image (sensors running) that the sensors come first. */
@@ -443,7 +444,7 @@ static void dac_psram_verify_log(uint32_t base, uint32_t total_bytes) {
         uint32_t idx = (uint32_t)((uint64_t)k * (nsamp - 1u) / (probes > 1 ? probes - 1 : 1));
         uint8_t two[2];
         if (psram_read(base + idx * 2u, two, 2) != 0) {
-            printf("[dac] PSRAM verify read failed\n");
+            LOG_W("[dac] PSRAM verify read failed\n");
             return;
         }
         uint16_t v = (uint16_t)(two[0] | (two[1] << 8));
@@ -451,7 +452,7 @@ static void dac_psram_verify_log(uint32_t base, uint32_t total_bytes) {
         if (v < smin) smin = v;
         if (v > smax) smax = v;
     }
-    printf("[dac] staged %u samples in PSRAM @0x%06lX  first=0x%04X min=0x%04X max=0x%04X  %s\n",
+    LOG_D("[dac] staged %u samples in PSRAM @0x%06lX  first=0x%04X min=0x%04X max=0x%04X  %s\n",
            (unsigned)nsamp, (unsigned long)base, first, smin, smax,
            (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)");
 }
@@ -598,7 +599,7 @@ void handle_replay(int conn_id, const char *json) {
     const char *co = cotrig ? " [co-trigger: waiting for capture t0]" : "";
     unsigned long rate = (unsigned long)signal_engine_dac_replay_rate_hz();
     if (replay_in_psram) {
-        printf("[dac] replay armed (deep/PSRAM): %u samples @ %lu S/s%s\n",
+        LOG_D("[dac] replay armed (deep/PSRAM): %u samples @ %lu S/s%s\n",
                (unsigned)samples, rate, co);
     } else {
         uint16_t first = adc_buf16[0], smin = 0xFFFF, smax = 0;
@@ -607,7 +608,7 @@ void handle_replay(int conn_id, const char *json) {
             if (v < smin) smin = v;
             if (v > smax) smax = v;
         }
-        printf("[dac] replay armed: %u samples @ %lu S/s  first=0x%04X min=0x%04X max=0x%04X  %s%s\n",
+        LOG_D("[dac] replay armed: %u samples @ %lu S/s  first=0x%04X min=0x%04X max=0x%04X  %s%s\n",
                (unsigned)samples, rate, first, smin, smax,
                (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)", co);
     }

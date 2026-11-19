@@ -42,6 +42,7 @@ static void boot_blank(void) {
     pod_policy_set_lan_unsigned(false, POLICY_SRC_USB, false);
     pod_policy_clear_floor(POLICY_SRC_USB);
     pod_policy_set_bridge_pin(NULL, NULL);
+    pod_policy_set_log_level(BP_LOG_INFO);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
@@ -230,7 +231,34 @@ static void test_bridge_pin(void) {
     CHECK(!pod_policy_bridge_pin(m2, p2), "clear not kept");
 }
 
+/* The console log level: default info, any value persists across a reboot, the other policies
+   are untouched, an unknown value is refused. */
+static void test_log_level(void) {
+    boot_blank();
+    CHECK(log_level() == BP_LOG_INFO, "no record: log level %d", log_level());
+    CHECK(pod_policy_set_log_level(BP_LOG_DEBUG) == NULL, "debug refused");
+    CHECK(log_level() == BP_LOG_DEBUG, "debug not applied");
+    log_set_level(BP_LOG_ERROR);   /* the RAM copy only: the reboot reads the record */
+    pod_policy_load();
+    CHECK(log_level() == BP_LOG_DEBUG, "debug lost on reboot: %d", log_level());
+    CHECK(pod_policy_set_log_level(BP_LOG_WARN) == NULL && log_level() == BP_LOG_WARN, "warn");
+    pod_policy_load();
+    CHECK(log_level() == BP_LOG_WARN, "warn lost on reboot");
+    CHECK(pod_policy_lan() == POD_LAN_OPEN && pod_policy_usb_net(), "another policy moved");
+    CHECK(pod_policy_set_log_level((bp_log_level_t)7) != NULL, "an unknown level was taken");
+    CHECK(pod_policy_set_log_level(BP_LOG_INFO) == NULL, "info refused");
+    pod_policy_load();
+    CHECK(log_level() == BP_LOG_INFO, "info lost on reboot");
+    /* A policy change keeps the level. */
+    CHECK(pod_policy_set_log_level(BP_LOG_DEBUG) == NULL, "debug refused");
+    CHECK(pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB) == NULL, "lan");
+    pod_policy_load();
+    CHECK(log_level() == BP_LOG_DEBUG && pod_policy_lan() == POD_LAN_LOCKED, "level or LAN lost");
+    boot_blank();
+}
+
 int main(void) {
+    test_log_level();
     test_defaults();
     test_bridge_pin();
     test_lan_unsigned_and_floor();

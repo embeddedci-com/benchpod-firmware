@@ -29,6 +29,8 @@ void console_io_write_text(const char *ptr, size_t len) {
     s_out[s_out_len] = '\0';
     s_writes++;
 }
+static uint32_t s_now;
+uint32_t HAL_GetTick(void) { return s_now; }
 void *pvPortMalloc(size_t size) { s_allocs++; return s_alloc_fails ? NULL : malloc(size); }
 void  vPortFree(void *p) { s_frees++; free(p); }
 
@@ -84,7 +86,57 @@ static void test_exact_fit_stays_on_stack(void) {
     CHECK(s_out_len == LOG_STACK_BUF);
 }
 
+/* The level gate: info (default) hides debug, error always prints, LOG_REPLY always prints. */
+static void test_level_gate(void) {
+    log_set_level(BP_LOG_INFO);
+    reset();
+    LOG_D("[cmd] <- \"ping\"\n");
+    CHECK(s_out_len == 0 && s_writes == 0);
+    LOG_I("[cloud] connected\n");
+    LOG_W("[wifi] not connected\n");
+    CHECK(strcmp(s_out, "[cloud] connected\n[wifi] not connected\n") == 0);
+    log_set_level(BP_LOG_ERROR);
+    reset();
+    log_printf("[net] eth DHCP: ip=1.2.3.4\n");
+    LOG_W("[wifi] x\n");
+    LOG_E("[psram] self-test FAILED\n");
+    LOG_REPLY("flash-esp32: failed\n");
+    CHECK(strcmp(s_out, "[psram] self-test FAILED\nflash-esp32: failed\n") == 0);
+    log_set_level(BP_LOG_DEBUG);
+    reset();
+    LOG_D("[cmd] -> ok\n");
+    CHECK(strcmp(s_out, "[cmd] -> ok\n") == 0);
+    log_set_level(BP_LOG_INFO);
+}
+
+/* The repeat helpers: first failure, quiet, "still failing" a minute later, recovery once. */
+static void test_repeat_helpers(void) {
+    log_set_level(BP_LOG_INFO);
+    log_repeat_t r = {0};
+    reset();
+    s_now = 1000;
+    log_repeat_failf(&r, BP_LOG_WARN, "[cloud] cannot connect: %s", "dns failed");
+    CHECK(strcmp(s_out, "[cloud] cannot connect: dns failed\n") == 0);
+    reset();
+    for (int i = 0; i < 5; i++) { s_now += 10000; log_repeat_failf(&r, BP_LOG_WARN, "[cloud] cannot connect: %s", "x"); }
+    CHECK(s_out_len == 0);                         /* 51 s after the first: quiet */
+    s_now += 10000;
+    log_repeat_failf(&r, BP_LOG_WARN, "[cloud] cannot connect: %s", "tcp refused");
+    CHECK(strcmp(s_out, "[cloud] cannot connect: tcp refused: still failing (7 times)\n") == 0);
+    reset();
+    CHECK(log_repeat_okf(&r, BP_LOG_INFO, "[cloud] connected") == 7);
+    CHECK(strcmp(s_out, "[cloud] connected (after 7 failures)\n") == 0);
+    reset();
+    CHECK(log_repeat_okf(&r, BP_LOG_INFO, "[cloud] connected") == 0);
+    CHECK(s_out_len == 0);                         /* no failures: no recovery line */
+    /* A debug-level loop at info: counted, never printed. */
+    log_repeat_failf(&r, BP_LOG_DEBUG, "[x] y");
+    CHECK(s_out_len == 0 && r.fails == 1);
+}
+
 int main(void) {
+    test_level_gate();
+    test_repeat_helpers();
     test_short_message_one_write();
     test_long_message_from_heap();
     test_alloc_failure_cuts_visibly();

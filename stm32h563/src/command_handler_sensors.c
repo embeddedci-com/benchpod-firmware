@@ -10,6 +10,7 @@
 #include "sensor_cmd.h"
 #include "sensor_mgr.h"
 #include "sensor_port.h"
+#include "bp_log.h"
 
 #include <stdio.h>
 
@@ -25,7 +26,7 @@ void handle_sensor(int conn_id, const char *json) {
     if (sensor_cmd(verb, json, &e, err, sizeof(err)) != 0) send_error(conn_id, err);
     else if (!bp_emit_ok(&e)) send_error(conn_id, "reply too large");
     else {
-        printf("[cmd] -> ok  %s (%u bytes)\n", verb, (unsigned)bp_emit_len(&e));
+        LOG_D("[cmd] -> ok  %s (%u bytes)\n", verb, (unsigned)bp_emit_len(&e));
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
     }
     sensor_port_free(resp);
