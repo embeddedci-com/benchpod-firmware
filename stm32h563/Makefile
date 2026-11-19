@@ -192,6 +192,7 @@ C_SOURCES := \
   src/lease_gate.c \
   src/lease_local.c \
   src/net_reload.c \
+  src/cloud_ca.c \
   src/cloud_extras.c \
   src/lan_tls.c \
   src/lan_tls_pem.c \

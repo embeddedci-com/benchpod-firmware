@@ -153,7 +153,7 @@ C3IMG_SRCS := test_c3_image.c ../src/c3_image.c ../src/blob_store.c mocks/mock_w
 # The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
 # (default config), built once into an archive.
 LANTLSPEM_SRCS := test_lan_tls_pem.c ../src/lan_tls_pem.c
-CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/blob_store.c mocks/mock_w25q.c
+CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/cloud_ca.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 # The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
 ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
