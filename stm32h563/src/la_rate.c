@@ -71,7 +71,7 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version)
 
 uint32_t dac_sample_clocks(uint32_t divider, bool from_psram)
 {
-    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;   /* the gateware floors it too */
+    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;   /* gateware v59+ floors it at 4 too */
     return divider + DAC_SEQ_OVERHEAD_CLK + (from_psram ? DAC_PSRAM_EXTRA_CLK : 0u);
 }
 

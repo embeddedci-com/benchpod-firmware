@@ -79,7 +79,8 @@ uint16_t cap_divider_wire(uint32_t period, uint8_t gw_version);
  * sampler's 2-clock minimum).  Older: cap_divider_wire(). */
 uint16_t la_divider_wire(uint32_t period, uint8_t gw_version);
 /* DAC inter-sample divider (the firmware's DAC_SEQ_OVERHEAD_CLK model) -> wire.  v40+:
- * divider - 1 (0 stays 0; the gateware still floors the reload at 2, a DAC8551 t9 limit). */
+ * divider - 1 (0 stays 0; the gateware still floors the reload, at 3 from v59 for the DAC8554's
+ * t9, at 2 on v40-v58). */
 uint16_t dac_divider_wire(uint32_t divider, uint8_t gw_version);
 /* GPIO_STEP half-phase in us (>= 1) -> wire.  v40+: delay - 1. */
 uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
@@ -102,8 +103,8 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
 
 /* Smallest DAC divider firmware sends.  The next frame's SYNC falls divider+3 clocks after the
  * previous frame's 24th SCLK falling edge (t9).  The DAC8551 needs >= 100 ns there and the
- * DAC8554 (analog v3r2 and later) >= 130 ns (SLAS431B, both IOVDD ranges).  Gateware v34+ floors
- * the divider at 3 (6 clk = 125 ns), enough for the DAC8551 only, so the firmware floors it at 4:
+ * DAC8554 (analog v3r2 and later) >= 130 ns (SLAS431B, both IOVDD ranges).  Gateware v34-v58 floors
+ * the divider at 3 (6 clk = 125 ns), enough for the DAC8551 only, v59+ at 4; the firmware floors it at 4:
  * 7 x 20.8 = 146 ns on every board and every gateware, for ~2% of the peak update rate
  * (48 MHz/55 ~= 873 kS/s, was 48 MHz/54 ~= 889 kS/s). */
 #define DAC_MIN_DIVIDER 4u

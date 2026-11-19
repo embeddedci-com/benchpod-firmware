@@ -1,15 +1,16 @@
-// tb_dac8551.v — self-checking testbench for dac8551_engine: frame CONTENT and the DAC8551
-// serial TIMING on the pins.
+// tb_dac8551.v — self-checking testbench for dac8551_engine: frame CONTENT and the serial TIMING
+// on the pins (DAC8554 limits from v59, which also cover the DAC8551).
 //
 // Content: a 2-sample BRAM waveform (0x1234, 0x5678) must come out as 24-bit frames
 // {0x00, sample}, MSB first, in loop order; in psram_mode the streamed bytes (0xA5) must.
-// Timing (datasheet SLAS429E 6.6 — see the dac8551_engine header), checked in clk cycles on
+// Timing (DAC8554 SLAS431B, IOVDD 2.7-3.6 V column — see the dac8551_engine header), checked in clk cycles on
 // every frame, for dividers 0,1,2,3,4,8 (BRAM) and 2,8 (stream):
 //   t5/t6  DIN must not change on the clk edge that makes SCLK fall inside a frame
 //   t7     SYNC must not rise on the edge of the 24th SCLK fall
 //   t8     SYNC high >= 3 clk between frames
-//   t9     24th SCLK fall -> next SYNC fall >= 6 clk (125 ns at 48 MHz; datasheet >= 100 ns)
-//   rate   one sample = max(divider, 3) + 51 clk (firmware DAC_SEQ_OVERHEAD_CLK = 51)
+//   t9     24th SCLK fall -> next SYNC fall >= 7 clk (146 ns at 48 MHz; DAC8554 >= 130 ns,
+//          DAC8551 >= 100 ns)
+//   rate   one sample = max(divider, 4) + 51 clk (firmware DAC_SEQ_OVERHEAD_CLK = 51)
 // The pins are registered on posedge clk, so the monitor samples them on posedge clk and
 // compares with the previous sample: an edge "at cycle k" is a change between samples k-1 and
 // k.  That is race-free, and two pins changing on the SAME clk edge land in the same sample —
@@ -73,8 +74,8 @@ module tb_dac8551;
             c_sync_rise = cyc;
         end
         if (!sync && ps) begin                 // SYNC fell: a frame starts
-            if (c_fall24 >= 0 && cyc - c_fall24 < 6) begin
-                $display("FAIL t9: SYNC fell %0d clk after the 24th SCLK fall (want >= 6)", cyc - c_fall24);
+            if (c_fall24 >= 0 && cyc - c_fall24 < 7) begin
+                $display("FAIL t9: SYNC fell %0d clk after the 24th SCLK fall (want >= 7)", cyc - c_fall24);
                 errors = errors + 1;
             end
             if (c_sync_rise >= 0 && cyc - c_sync_rise < 3) begin
@@ -93,8 +94,8 @@ module tb_dac8551;
         integer k, want_gap;
         reg [23:0] want;
         begin
-            // v40 wire: the reload, div - 1 (div 0 sends 0).  Reloads 0 and 1 (div 0..2) exercise
-            // the gateware's own DIV_MIN floor, which must still give max(div,3).
+            // v40 wire: the reload, div - 1 (div 0 sends 0).  Reloads 0..2 (div 0..3) exercise
+            // the gateware's own DIV_MIN floor, which must give max(div,4) (v59; 3 before).
             divider = (div > 0) ? div - 16'd1 : 16'd0; psram_mode = psm; nfr = 0;
             @(negedge clk) start = 1; @(negedge clk) start = 0;
             wait (nfr >= 6);
@@ -107,10 +108,10 @@ module tb_dac8551;
                     errors = errors + 1;
                 end
             end
-            want_gap = ((div < 3) ? 3 : div) + 51;
+            want_gap = ((div < 4) ? 4 : div) + 51;
             for (k = 2; k < 6; k = k + 1)
                 if (gaps[k] != want_gap) begin
-                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d clk, want max(div,3)+51 = %0d",
+                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d clk, want max(div,4)+51 = %0d",
                              div, psm, k, gaps[k], want_gap);
                     errors = errors + 1;
                 end
@@ -123,7 +124,7 @@ module tb_dac8551;
         run_case(4, 0); run_case(0, 0); run_case(1, 0); run_case(2, 0); run_case(3, 0); run_case(8, 0);
         run_case(2, 1); run_case(8, 1);
         if (errors == 0)
-            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t5-t9 on the pins and max(div,3)+51 clk/sample for div 0,1,2,3,4,8");
+            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t5-t9 on the pins and max(div,4)+51 clk/sample for div 0,1,2,3,4,8");
         else
             $display("FAIL tb_dac8551: %0d error(s)", errors);
         $finish;

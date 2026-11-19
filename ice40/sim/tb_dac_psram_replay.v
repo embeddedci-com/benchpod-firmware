@@ -108,7 +108,7 @@ module tb_dac_psram_replay;
         end
     end
 
-    // Sample period in psram_mode with the real reader: max(divider, 3) + 52 clk48, one more than
+    // Sample period in psram_mode with the real reader: max(divider, 4) + 52 clk48, one more than
     // the BRAM path's + 51 (tb_dac8551), because the reader's FWFT head refills one clk48 after
     // each pop, so S_PHI waits a cycle for the high byte.  The wire divider here is the v40
     // reload 8, i.e. divider 9.  Firmware's deep-replay divider math depends on this.

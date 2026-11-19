@@ -13,14 +13,18 @@
 // the DAC8551's 30 MHz max); the control-plane inputs cross a CDC in top_v2 and the
 // waveform BRAM read port shares this clock.
 //
-// SERIAL TIMING vs the DAC8551 datasheet (SLAS429E 6.6, the VDD 3.6-5.5 V column — the 24 MHz
-// SCLK already requires it: SCLK max is 20 MHz below 3.6 V), at clk = 48 MHz (20.8 ns):
-//   t1 SCLK period 2 clk = 41.7 ns (>= 33)       t2/t3 SCLK high/low 1 clk = 20.8 ns (>= 13)
+// SERIAL TIMING (v59) vs the DAC8554 datasheet (SLAS431B, the IOVDD 2.7-3.6 V column: analog v3r2
+// and later run IOVDD at 3.3 V), which is stricter than the DAC8551 (SLAS429E, VDD 3.6-5.5 V) on
+// every line, so the one timing serves both boards.  At clk = 48 MHz (20.83 ns):
+//   t1 SCLK period 2 clk = 41.7 ns (>= 40)       t2/t3 SCLK high/low 1 clk = 20.8 ns (>= 20)
 //   t4 SYNC fall -> SCLK rise 1 clk (>= 0)        t5/t6 DIN changes on SCLK RISES only, so setup
 //                                                 and hold at each fall are 1 clk (>= 5 / 4.5)
 //   t7 24th SCLK fall -> SYNC rise 1 clk (>= 0)   (v34; it used to be the SAME edge)
-//   t8 SYNC high >= DIV_MIN+2 clk = 104 ns (>= 33)
-//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3 clk = 125 ns (>= 100)   (v34 divider floor)
+//   t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
+//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3 clk = 146 ns (>= 130)   (v59 divider floor 4)
+// t2/t3 have only 0.83 ns of slack at 24 MHz SCLK: in spec, but board and output-buffer duty
+// error comes out of it.  Every frame gap, static frames on an idle engine included, goes through
+// the divider floor below, so t8/t9 hold whatever divider the firmware last sent.
 // One sample takes max(divider, DIV_MIN) + 51 clk — the firmware's DAC_SEQ_OVERHEAD_CLK model.
 // tb_dac8551 checks all of these on the pins, cycle-exactly.
 //
@@ -86,19 +90,21 @@ module dac8551_engine #(
     // incrementally so the S_IDLE state transition reads ONE bit instead of a 16-bit
     // equality — that wide compare was the clk48 critical path (div_cnt -> next state).
     reg              dz;
-    // Divider floor (v34): the inter-sample gap is max(divider, DIV_MIN) clk, so the next SYNC
-    // fall lands >= DIV_MIN + 3 clk after the 24th SCLK fall.  DAC8551 t9 needs >= 100 ns;
-    // divider 2 gave exactly 5 x 20.8 = 104 ns and 0/1 gave less.  DIV_MIN = 3 -> 125 ns.
-    localparam [15:0] DIV_MIN        = 16'd3;
+    // Divider floor: the inter-sample gap is max(divider, DIV_MIN) clk, so the next SYNC fall
+    // lands >= DIV_MIN + 3 clk after the 24th SCLK fall (t9).  v34 set DIV_MIN = 3 (125 ns) for
+    // the DAC8551's 100 ns; v59 raises it to 4 (7 x 20.8 = 146 ns) for the DAC8554's 130 ns.  The
+    // firmware has sent a divider of at least 4 since 3.10.10, but static frames (wr_req) on an
+    // engine that was never started still used the reset divider 0, i.e. this floor.
+    localparam [15:0] DIV_MIN        = 16'd4;
     // v40: the firmware sends divider - 1 (the reload), so the 16-bit compare and subtract that
     // sat in this clk48 cone are gone.  The DIV_MIN floor stays in gateware because it is a
-    // DATASHEET timing guarantee (t9): a reload below DIV_MIN-1 = 2 is raised to 2 with a 14-bit
-    // OR instead of a magnitude compare.
+    // DATASHEET timing guarantee (t9): a reload below DIV_MIN-1 is raised to it with a 14-bit
+    // OR instead of a magnitude compare.  v59: a reload below DIV_MIN-1 = 3 is raised to 3.
     wire             div_nz          = |divider[15:2];      // reload >= 4, or ...
     wire [15:0]      div_reload      = {divider[15:2],
-                                        divider[1] | ~div_nz,                 // 0..3 -> 2 or 3
-                                        divider[0] & (div_nz | divider[1])};
-    wire             div_reload_zero = 1'b0;                  // reload >= DIV_MIN-1 >= 2
+                                        divider[1] | ~div_nz,                 // 0..3 -> 3
+                                        divider[0] | ~div_nz};
+    wire             div_reload_zero = 1'b0;                  // reload >= DIV_MIN-1 >= 3
     reg [ADDR_W:0]   sidx;        // 16-bit-sample index (also the BRAM address)
     reg [ADDR_W:0]   sleft;       // samples left in this loop (= period_samples - sidx);
                                   // down-counter terminal, replaces the per-sample

@@ -799,6 +799,12 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels, version 53) ----
+    // GATEWARE_VERSION 59 = v58 + the DAC FRAME GAP for the DAC8554 (dac8551_engine.v): the divider
+    // floor goes from 3 to 4, so the next SYNC fall is >= 7 clk48 = 146 ns after the 24th SCLK fall
+    // (t9 >= 130 ns; 3 gave 125 ns, enough only for the DAC8551).  The firmware has floored its
+    // divider at 4 since 3.10.10, so stream rates do not change; static DAC_CTRL frames on an
+    // engine that was never started used the reset divider 0 and still got 125 ns.  All three
+    // images.  tb_dac8551, tb_dac8554.
     // GATEWARE_VERSION 56 = v55 + PARITY AND STOP BITS on the UART proxy (uart_engine.v): UART_CONFIG
     // flags bit 1 parity on, bit 2 odd, bit 3 two stop bits (0 = 8N1, what older firmware sends);
     // UART_STATUS byte 1 bit 1 = sticky parity error (the byte is kept).  UART2 stays 8N1.
@@ -1236,7 +1242,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd58), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd59), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
