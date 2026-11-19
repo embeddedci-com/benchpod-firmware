@@ -11,6 +11,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "wiring_doc.h"
 #include "wiring_store.h"   /* la_voltage_from_profile reads the active profile's la_mv */
 #include "bp_errors.h"
@@ -361,9 +362,7 @@ void handle_fpga_image(int conn_id, const char *json) {
     else if (!strcmp(s, "1") || !strcmp(s, "deep")) img = 1;
     else if (!strcmp(s, "2") || !strcmp(s, "emulation")) img = 2;
     if (img < 0) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
-    if (img == 2 && signal_engine_fpga_version() < EMULATION_MIN_GW) {
-        send_error(conn_id, "the emulation image needs gateware v54 or later"); return;
-    }
+    if (img == 2 && !require_gw(conn_id, gw_caps()->emulation, "the emulation image needs gateware v54 or later")) return;
     if (img != 2) {
         char names[96];
         if (sensor_mgr_digital_names(names, sizeof(names))) {

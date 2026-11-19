@@ -107,6 +107,9 @@ const char *ice40_boot_note(void);
    fpga_ping() and signal_engine_refresh_version() always talk at /128 first, then pick the rate
    from the version they read. */
 #define SPI_FAST_LINK_MIN_GW  52u
+/* Gateware from which a capture with ADC samples runs the LA at the full 12 MS/s (8 MS/s
+   before: the PSRAM writer starved the ADC FIFO; command_handler_capture.c). */
+#define DUAL_LA_FULL_RATE_MIN_GW  53u
 
 /* Minimum gateware version that supports streaming DAC replay from PSRAM. */
 #define DAC_DEEP_REPLAY_MIN_GW  17u
@@ -178,6 +181,8 @@ uint16_t fpga_dac_loop_input(void);
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
 #define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
 uint8_t  signal_engine_fpga_features(void);
+/* The last FPGA_FEATURES reading, without an SPI read (gw_caps.h). */
+uint8_t  signal_engine_fpga_features_cached(void);
 /* The running image: 0 loop, 1 deep replay, 2 sensor emulation, -1 unknown. Reads FPGA_FEATURES
    over SPI (hw worker). */
 int      signal_engine_image_kind(void);

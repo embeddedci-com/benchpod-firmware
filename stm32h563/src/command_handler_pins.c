@@ -8,6 +8,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "la_pins.h"
 #include "signal_engine.h"
 #include "bp_errors.h"
@@ -206,7 +207,7 @@ void handle_la_pins(int conn_id, const char *json) {
     note_target_power();
     uint16_t pulls  = la_pull_mask_live();
     uint16_t levels = 0;
-    bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;
+    bool     have   = gw_caps()->gpio_get && fpga_gpio_get(&levels) == 0;
 
     char resp[BP_CLOUD_REPLY_MAX];   /* worst cases: test_la_pins.c, budget_la_pins */
     bp_emit_t e;
@@ -231,7 +232,7 @@ void handle_gpio(int conn_id, const char *json) {
 
     if (!req.has_mode && !req.has_level) {
         uint8_t ver = signal_engine_fpga_version();
-        if (ver < GPIO_GET_MIN_GW) {
+        if (!gw_caps()->gpio_get) {
             snprintf(err, sizeof(err), "reading pin levels needs gateware v%u or newer (this pod runs v%u)",
                      (unsigned)GPIO_GET_MIN_GW, (unsigned)ver);
             send_error(conn_id, err);

@@ -12,6 +12,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "bp_err.h"
@@ -300,7 +301,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
     char err[LA_PINS_ERR_MAX];
     trig_reply.present = false;
     uint8_t ver = signal_engine_fpga_version();
-    if (ver < CAPTURE_TRIGGER_MIN_GW) {
+    if (!gw_caps()->capture_trigger) {
         snprintf(err, sizeof(err),
                  "capture triggers need gateware v%u or newer (this pod runs v%u)",
                  (unsigned)CAPTURE_TRIGGER_MIN_GW, (unsigned)ver);
@@ -311,7 +312,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
         send_error(conn_id, "trigger pre_samples is only for la_capture");
         return false;
     }
-    if (out->pre_samples && ver < LA_CHANGE_MIN_GW) {
+    if (out->pre_samples && !gw_caps()->la_change) {
         snprintf(err, sizeof(err), "trigger pre_samples needs gateware v%u or newer (this pod runs v%u)",
                  (unsigned)LA_CHANGE_MIN_GW, (unsigned)ver);
         send_error(conn_id, err);
@@ -758,13 +759,12 @@ static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
 
 #define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture on gateware
                                        before v53 (24 MHz / 3): the PSRAM writer starved the ADC FIFO
-                                       at 12 MS/s, at every depth and ADC rate (fixed in v53) */
-#define DUAL_LA_FULL_RATE_MIN_GW 53u
+                                       at 12 MS/s, at every depth and ADC rate (fixed in v53:
+                                       gw_caps()->dual_la_full_rate) */
 
 /* The fastest raw LA a capture runs: 12 MS/s, or 8 MS/s with ADC samples on gateware before v53. */
 static float la_raw_ceiling(bool with_adc) {
-    return (with_adc && signal_engine_fpga_version() < DUAL_LA_FULL_RATE_MIN_GW) ? DUAL_LA_RAW_MAX_HZ
-                                                                                 : LA_RAW_MAX_HZ;
+    return (with_adc && !gw_caps()->dual_la_full_rate) ? DUAL_LA_RAW_MAX_HZ : LA_RAW_MAX_HZ;
 }
 
 /* "3.4" for 3428571 Hz (newlib-nano's printf has no %f). */
@@ -1384,7 +1384,7 @@ void handle_capture_dual(int conn_id, const char *json) {
        the combined sustained rate would overrun the bus (docs/tri-capture-unified-psram.md).
        On older gateware fall back to the static per-stream region caps. */
     uint32_t adc_base = FPGA_PSRAM_ADC_BASE;   /* legacy fixed map default */
-    if (signal_engine_fpga_version() >= CAPTURE_BASES_MIN_GW) {
+    if (gw_caps()->capture_bases) {
         psram_request_t req = {
             .la_samples  = (uint32_t)la_n,  .adc_samples = (uint32_t)adc_n,
             .dac_bytes   = signal_engine_dac_resident_bytes(),
@@ -1422,7 +1422,7 @@ void handle_capture_dual(int conn_id, const char *json) {
     s[0] = 0;
     uint32_t stop_us = 0;
     if (json_get_value(json, "stop_dac_after_us", s, sizeof(s)) && s[0]) stop_us = (uint32_t)strtoul(s, NULL, 10);
-    bool stop_dac_armed = stop_us > 0 && signal_engine_fpga_version() >= DAC_CAPTURE_STOP_MIN_GW;
+    bool stop_dac_armed = stop_us > 0 && gw_caps()->dac_capture_stop;
     la_trigger_t trig;
     if (!capture_trigger_begin(conn_id, json, &trig, false)) return;
     if (!heavy_begin(conn_id)) { capture_trigger_cancel(&trig); return; }
@@ -1430,7 +1430,7 @@ void handle_capture_dual(int conn_id, const char *json) {
     fpga_set_dac_stop_after_us(stop_us);   /* arm or (0) disarm; no-op on gw < v21 */
     float adc_actual = 0.0f, la_actual = 0.0f;
     int armed;
-    if (chg_k && signal_engine_fpga_version() >= CAPTURE_BASES_MIN_GW) {
+    if (chg_k && gw_caps()->capture_bases) {
         armed = fpga_dual_change_start((uint32_t)adc_n, adc_hz, la_n, chg_k, &adc_actual);
         la_actual = 48e6f / (float)chg_k;
     } else {
@@ -1798,7 +1798,7 @@ void handle_la_capture(int conn_id, const char *json) {
     uint32_t stop_us = 0;
     if (json_get_value(json, "stop_dac_after_us", stop_s, sizeof(stop_s)) && stop_s[0])
         stop_us = (uint32_t)strtoul(stop_s, NULL, 10);
-    bool stop_dac_armed = stop_us > 0 && signal_engine_fpga_version() >= DAC_CAPTURE_STOP_MIN_GW;
+    bool stop_dac_armed = stop_us > 0 && gw_caps()->dac_capture_stop;
     la_trigger_t trig;
     if (!bus_send_prepare(conn_id, json)) return;
     if (!capture_trigger_begin(conn_id, json, &trig, true)) { bus_send_cancel(); return; }

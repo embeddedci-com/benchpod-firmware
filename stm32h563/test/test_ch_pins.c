@@ -55,6 +55,7 @@ uint64_t time_us_64(void) { return 0; }
 
 /* ---- fakes: the FPGA -------------------------------------------------------------------- */
 uint8_t signal_engine_fpga_version(void) { return 59; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 int  fpga_la_set(unsigned ch, int mode) { (void)ch; (void)mode; return 0; }
 int  fpga_la_step(unsigned ch, uint32_t steps, uint32_t delay_us) { (void)ch; (void)steps; (void)delay_us; return 0; }
 bool fpga_la_step_busy(void) { return false; }

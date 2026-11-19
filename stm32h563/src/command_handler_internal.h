@@ -9,6 +9,7 @@
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
 #include "b64url.h"
+#include "gw_caps.h"   /* gw_caps_t, require_gw */
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -74,6 +75,13 @@ static inline bool conn_has_socket(int conn_id) {
 /* Reply helpers (defined in command_handler.c). */
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
+
+/* A gateware gate (a gw_caps() field): true when the running gateware has it, else `text` goes
+   back as a plain error and the handler returns. */
+static inline bool require_gw(int conn_id, bool have, const char *text) {
+    if (!have) send_error(conn_id, text);
+    return have;
+}
 
 /* True while a capture/measure/LA/DAC op owns the shared PSRAM bus — an OTA (which
    also stages into PSRAM) must refuse while it is set. Defined in command_handler.c. */
@@ -258,7 +266,7 @@ typedef struct { uart_cfg_err_kind_t kind; const char *bad; int max; } uart_cfg_
 /* Parse and check {"cmd":"uart_proxy_start",...} against the gateware version `gw` and whether the
    pod has the reset pin.  Pure (host tests).  The checks run in the order the replies always came
    in, so a request with several problems gets the same refusal as before. */
-bool   uart_cfg_parse(const char *json, uint8_t gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err);
+bool   uart_cfg_parse(const char *json, const gw_caps_t *gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err);
 void   uart_cfg_refuse(int conn_id, const uart_cfg_t *cfg, const uart_cfg_err_t *err);
 /* The LA pins one user of the soft UART holds (the proxy, esp_dut_flash), and its RX pull-up. */
 typedef struct {

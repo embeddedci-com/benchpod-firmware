@@ -15,6 +15,7 @@
 #include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
 #include "console_io.h"
 #include "signal_engine.h"
+#include "gw_caps.h"
 #include "board_info.h"       /* board caps (ADC/DAC bits, channels) for `status` */
 #include "fpga_config.h"      /* FPGA_DAC_REPLAY_MAX_SAMPLES for `status` */
 #include "version.h"          /* FIRMWARE_VERSION for `status` */
@@ -716,7 +717,7 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
            top-level line) so a `key : value` parser of this output isn't tripped up. */
         bool     fpga_ok = signal_engine_refresh_version();
         uint8_t  gw      = signal_engine_fpga_version();
-        bool     deep    = gw >= DAC_DEEP_REPLAY_MIN_GW;
+        bool     deep    = gw_caps()->dac_deep_replay;
         uint8_t  streg   = 0;
         bool     streg_ok = (fpga_status_read(&streg) == 0);
         op(out, ctx, "  board  : %s  fw v%s  rev %s  nrst_pin=%s  usb_cc=%s\r\n",

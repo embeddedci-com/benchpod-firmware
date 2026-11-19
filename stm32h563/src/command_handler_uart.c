@@ -224,7 +224,7 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
     return true;
 }
 
-bool uart_cfg_parse(const char *json, uint8_t gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err) {
+bool uart_cfg_parse(const char *json, const gw_caps_t *gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err) {
     char s[12] = {0};
     memset(cfg, 0, sizeof(*cfg));
     memset(err, 0, sizeof(*err));
@@ -235,9 +235,9 @@ bool uart_cfg_parse(const char *json, uint8_t gw, bool has_reset_pin, uart_cfg_t
     cfg->baud = 115200;
     if (json_get_value(json, "baud", s, sizeof(s))) cfg->baud = (uint32_t)strtoul(s, NULL, 0);
     if (!uart_frame_parse(json, &cfg->frame))             { err->kind = UART_CFG_BAD_FRAME; return false; }
-    if (cfg->frame && gw < UART_FRAME_MIN_GW)             { err->kind = UART_CFG_GW_FRAME;  return false; }
+    if (cfg->frame && !gw->uart_frame)                    { err->kind = UART_CFG_GW_FRAME;  return false; }
     if (uart_half_duplex_parse(json)) {
-        if (gw < UART_HALFDUPLEX_MIN_GW)                  { err->kind = UART_CFG_GW_HALF_DUPLEX; return false; }
+        if (!gw->uart_half_duplex)                        { err->kind = UART_CFG_GW_HALF_DUPLEX; return false; }
         if (cfg->rx != cfg->tx)                           { err->kind = UART_CFG_HALF_DUPLEX_TWO_PINS; return false; }
         cfg->frame |= UART_FRAME_HALFDUPLEX;
     } else if (cfg->rx == cfg->tx)                        { err->kind = UART_CFG_SAME_PIN; return false; }
@@ -246,7 +246,7 @@ bool uart_cfg_parse(const char *json, uint8_t gw, bool has_reset_pin, uart_cfg_t
     if (json_get_value(json, "de", s, sizeof(s))) {
         cfg->de = (unsigned)atoi(s);
         cfg->de_inv = bp_json_flag(json, "de_active_low");
-        if (gw < UART_DE_MIN_GW)                          { err->kind = UART_CFG_GW_DE; return false; }
+        if (!gw->uart_de)                                 { err->kind = UART_CFG_GW_DE; return false; }
         if (cfg->de == cfg->rx || cfg->de == cfg->tx)     { err->kind = UART_CFG_DE_PIN; return false; }
     }
     return true;
@@ -342,7 +342,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     uart_cfg_t cfg;
     uart_cfg_err_t err;
-    if (!uart_cfg_parse(json, signal_engine_fpga_version(), nrst_ctrl_supported(), &cfg, &err)) {
+    if (!uart_cfg_parse(json, gw_caps(), nrst_ctrl_supported(), &cfg, &err)) {
         uart_cfg_refuse(conn_id, &cfg, &err);
         return;
     }
