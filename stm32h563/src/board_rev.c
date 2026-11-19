@@ -1,6 +1,7 @@
 /* board_rev.c — see board_rev.h.  PA3 strap: digital NC test, then ADC bucket, then (v3r4 band
    only) the PC3 strap. */
 #include "board_rev.h"
+#include "board_caps.h"
 #include "mcu_adc.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
@@ -12,8 +13,9 @@
    internal pull-down still sits near 2.9 V, so the margin either side is >1 V. */
 #define STRAP_NC_LEVEL_IS_LOW   GPIO_PIN_RESET
 
-/* The bands are in board_rev.h (board_rev_decide): v3 2850..3400 mV, v3r2 2450..2849 mV, v3r4
-   3130..3400 mV with the ratio and the second strap. */
+/* The bands are in board_rev.h (board_rev_decide): v3 2850..3400 mV and v3r2 2450..2849 mV;
+   v3r4 is told by ratios to VREF+, not a mV band: PA3 at 95.0..99.5 % and the second strap
+   (PC3) at 40..60 %. */
 
 static int s_rev      = BOARD_REV_UNKNOWN;
 static int s_strap_mv = -1;
@@ -34,7 +36,7 @@ static int read_rev2_mv(void)
     return mv;
 }
 
-void board_rev_init(void)
+static void detect(void)
 {
     BOARD_REV_CLK_EN();
 
@@ -74,8 +76,8 @@ void board_rev_init(void)
             s_rev2_mv = read_rev2_mv();
             s_rev = board_rev_decide(mv, vref, s_rev2_mv);
             if (s_rev != BOARD_REV_V3R4) {
-                log_printf("[board] WARNING: strap %d mV says v3r4 but the second strap reads %d mV "
-                       "(expected ~%d mV); running as v3\r\n", mv, s_rev2_mv, BOARD_REV2_V3R4_NOMINAL_MV);
+                LOG_W("[board] strap %d mV says v3r4 but the second strap reads %d mV "
+                      "(expected ~%d mV); running as v3\n", mv, s_rev2_mv, BOARD_REV2_V3R4_NOMINAL_MV);
                 return;
             }
             log_printf("[board] revision %s (straps %d / %d mV, VREF+ %d mV)\r\n",
@@ -86,9 +88,9 @@ void board_rev_init(void)
         if (!board_rev_strap_known(mv)) {
             /* Driven, but not a ratio we know.  It is certainly not a v2 board, so run as v3
                (not v3r2: that would send DAC8554 frames to a DAC8551) and make it loud. */
-            log_printf("[board] WARNING: unrecognised revision strap %d mV "
-                   "(expected ~%d mV for v3, ~%d for v3r2, ~%d for v3r4); running as v3\r\n",
-                   mv, BOARD_REV_V3_NOMINAL_MV, BOARD_REV_V3R2_NOMINAL_MV, BOARD_REV_V3R4_NOMINAL_MV);
+            LOG_W("[board] unrecognized revision strap %d mV "
+                  "(expected ~%d mV for v3, ~%d for v3r2, ~%d for v3r4); running as v3\n",
+                  mv, BOARD_REV_V3_NOMINAL_MV, BOARD_REV_V3R2_NOMINAL_MV, BOARD_REV_V3R4_NOMINAL_MV);
             return;
         }
         log_printf("[board] revision %s (strap %d mV, VREF+ %d mV)\r\n",
@@ -100,8 +102,13 @@ void board_rev_init(void)
     log_printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\r\n");
 }
 
+void board_rev_init(void)
+{
+    detect();
+    board_caps_init(s_rev);   /* what this revision has: the one revision gate (board_caps.h) */
+}
+
 int  board_rev_get(void)      { return s_rev; }
-bool board_rev_is_v3(void)    { return s_rev >= BOARD_REV_V3; }
 int  board_rev_strap_mv(void) { return s_strap_mv; }
 int  board_rev2_strap_mv(void) { return s_rev2_mv; }
 

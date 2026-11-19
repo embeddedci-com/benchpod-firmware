@@ -11,6 +11,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "signal_engine.h"
@@ -766,9 +767,7 @@ void handle_dac_control_loop(int conn_id, const char *json) {
 }
 
 static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb) {
-    if (signal_engine_fpga_version() < DAC_CONTROL_LOOP_MIN_GW) {
-        send_error(conn_id, "control loop needs gateware v23+"); return;
-    }
+    if (!require_gw(conn_id, gw_caps()->dac_control_loop, "control loop needs gateware v23+")) return;
     char s[16] = {0};
     dac_loop_params_t p = { .k_q15 = 8192, .vmin = 0, .vmax = 0xFFFF, .tick_div = 64,
                             .src = DAC_LOOP_SRC_ADC, .in_fixed = 0, .sweep_step = 0 };
@@ -785,9 +784,8 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
         /* An OPEN-loop source on gateware that cannot honour it would silently run the CLOSED
            loop instead — the caller would meter a value the ADC produced and believe it came
            from the point they asked for.  Refuse rather than substitute. */
-        if (p.src != DAC_LOOP_SRC_ADC && signal_engine_fpga_version() < DAC_LOOP_SOURCE_MIN_GW) {
-            send_error(conn_id, "loop input sources need gateware v29+"); return;
-        }
+        if (p.src != DAC_LOOP_SRC_ADC &&
+            !require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
     }
     /* Clamp what has a safe reading (k, tick_div) and REFUSE what would silently do something
        else: an inverted output window (the gateware clamps against vmin first, so vmin>vmax
@@ -817,9 +815,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
     dac_loop_inmap_t map = {0};
     bool have_map = false;
     if (!parse_loop_input_map(conn_id, json, &map, &have_map)) return;
-    if (have_map && signal_engine_fpga_version() < DAC_LOOP_INMAP_MIN_GW) {
-        send_error(conn_id, "loop input map needs gateware v30+"); return;
-    }
+    if (have_map && !require_gw(conn_id, gw_caps()->dac_loop_inmap, "loop input map needs gateware v30+")) return;
     /* A mapped SWEEP would be misleading rather than wrong: the sweep accumulator walks the
        whole 16-bit count space, but a mapped window is a few percent of it, so the output
        would track the curve for ~3% of each pass and sit saturated at one end or the other
@@ -849,7 +845,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
        open-loop run must never start by reading the ADC, however briefly.  Skipped entirely on
        pre-v29 gateware asked for the (default) ADC source, which is the old behaviour. */
     int rc = 0;
-    if (signal_engine_fpga_version() >= DAC_LOOP_SOURCE_MIN_GW)
+    if (gw_caps()->dac_loop_source)
         rc = dac_loop_set_source(p.src, p.in_fixed, p.sweep_step);
     /* Program the map before arming too: the first tick must already index through it, or
        the loop opens by driving whatever the raw count happened to point at.
@@ -857,7 +853,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
        registers of the previous arm until a reconfiguration, so until 3.4.0 an unmapped arm
        after a mapped one silently indexed the curve through the old map (measured: fixed
        input 0 landed on curve entry 62 instead of 0). */
-    if (rc == 0 && signal_engine_fpga_version() >= DAC_LOOP_INMAP_MIN_GW)
+    if (rc == 0 && gw_caps()->dac_loop_inmap)
         rc = have_map ? dac_loop_set_inmap(map.in_zero, map.in_gain, map.in_trip, true, map.trip_en)
                       : dac_loop_set_inmap(0, 0, 0, false, false);
     if (rc == 0) rc = dac_control_loop_start(lut, lut_len, p.k_q15, p.vmin, p.vmax, p.tick_div);
@@ -896,11 +892,9 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
    again — each step is one small command, and the curve stays exactly as it was so the two
    readings are comparable.  Omitted fields keep their current value.  Gateware >= v29. */
 void handle_dac_loop_input(int conn_id, const char *json) {
-    if (signal_engine_fpga_version() < DAC_LOOP_SOURCE_MIN_GW) {
-        /* Cheap pre-check on the cached version; the authoritative image gate lives in
-           dac_loop_set_source (a live SPI read, so it runs under the heavy lock). */
-        send_error(conn_id, "loop input sources need gateware v29+"); return;
-    }
+    /* Cheap pre-check on the cached version; the authoritative image gate lives in
+       dac_loop_set_source (a live SPI read, so it runs under the heavy lock). */
+    if (!require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
     char s[16] = {0};
     /* Defaults come from what was last SET, so {"input":N} alone is a pure input step. */
     uint8_t  src  = s_loop_src;
@@ -964,7 +958,7 @@ void handle_dac_loop_probe(int conn_id, const char *json) {
     }
     uint16_t i_adc = 0, v = fpga_dac_loop_probe();
     signal_engine_adc_spi(&i_adc);
-    bool     has_src = (signal_engine_fpga_version() >= DAC_LOOP_SOURCE_MIN_GW);
+    bool     has_src = gw_caps()->dac_loop_source;
     uint16_t in      = has_src ? fpga_dac_loop_input() : i_adc;
     /* The over-range trip is latched: the output sits at vmin until disarmed.  Without this a
        tripped loop looks like one holding a rail for no reason. */

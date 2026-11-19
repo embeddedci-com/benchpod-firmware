@@ -14,7 +14,8 @@
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "at_driver.h"
-#include "signal_engine.h"   /* la_vccio_get_mv */
+#include "signal_engine.h"
+#include "la_io.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "sensor_mgr.h"   /* the emulated sensors: poll, reconfiguration, DAC conflicts */
 #include "scpi_server.h"
@@ -334,16 +335,10 @@ const char *command_handler_device_gate(const char *verb, const char *json) {
     return cmd_gate_device(verb, json, boot_guard_skip_hw(), board_has_analog());
 }
 
-void dispatch_line(int conn_id, const char *buf) {
-    char cmd[32] = {0};
-    if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
-        send_error(conn_id, "missing cmd");
-        return;
-    }
-
-    /* The command table (cmd_table.h): tier, gate flags and handler. NULL = unknown verb, which
-       still goes through the gates (as T3) before it is refused. */
-    const cmd_desc_t *d = cmd_find(cmd);
+/* One command, its row `d` already looked up (cmd_table.h: tier, gate flags and handler; NULL =
+   unknown verb, which still goes through the gates as T3 before it is refused).  Every gate
+   below reads that row: the verb is looked up once per command. */
+static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, const char *buf) {
     const cmd_tier_t tier = cmd_tier_of(d, buf);
     /* High-frequency polled reads (the web UI refreshes them on a timer) would flood the serial
        console with identical lines, so they are not traced. */
@@ -367,11 +362,17 @@ void dispatch_line(int conn_id, const char *buf) {
         if (conn_id >= CH_CLOUD_TUNNEL_CONN && conn_id <= CH_CLOUD_TUNNEL_CONN_LAST)
             g.tunnel_max_tier = s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN];
         char why[112];
-        const char *refused = cmd_gate_check(cmd, buf, tier, &g, why, sizeof(why));
+        const char *refused = cmd_gate_check(d, cmd, buf, tier, &g, why, sizeof(why));
+        if (refused && strncmp(refused, CMD_GATE_CLOUD_LEASE_TEXT, strlen(CMD_GATE_CLOUD_LEASE_TEXT)) == 0) {
+            bp_err_lease_busy(conn_id, BP_ERR_TEXT(refused), CMD_GATE_CLOUD_LEASE_HOLDER,
+                              g.lease_holder && g.lease_holder[0] ? g.lease_holder : "cloud",
+                              (int32_t)g.lease_left_s);
+            return;
+        }
         if (refused) { send_error(conn_id, refused); return; }
     }
     /* The pod's own lease (lease_local.h): on every transport, only its owners drive the pod. */
-    if (!command_handler_lease_gate(conn_id, cmd, buf)) return;
+    if (!command_handler_lease_gate(conn_id, d, buf)) return;
 
     /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud
        tunnel, cloud command channel). No-op on a pod without limits. */
@@ -393,9 +394,18 @@ void dispatch_line(int conn_id, const char *buf) {
     }
 
     /* The status LED flashes for a command that drives the pod, not for the polled reads. */
-    status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light(cmd, buf));
+    status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light_of(d, buf));
     if (d && d->fn) d->fn(conn_id, buf);
     else bp_err_unknown_command(conn_id, BP_ERR_TEXT("unknown cmd"), cmd);
+}
+
+void dispatch_line(int conn_id, const char *buf) {
+    char cmd[32] = {0};
+    if (!json_get_value(buf, "cmd", cmd, sizeof(cmd))) {
+        send_error(conn_id, "missing cmd");
+        return;
+    }
+    dispatch_row(conn_id, cmd, cmd_find(cmd), buf);
 }
 
 size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_t out_cap) {
@@ -406,7 +416,8 @@ size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_
     }
     /* Commands that stream chunks or switch the connection into a raw protocol (SWD/UART)
        cannot be carried over the single-reply cloud channel. */
-    if (cmd_has(cmd_find(cmd), CMD_F_STREAM)) {
+    const cmd_desc_t *d = cmd_find(cmd);
+    if (cmd_has(d, CMD_F_STREAM)) {
         int n = snprintf(out, out_cap,
                          "{\"status\":\"error\",\"message\":\"command not supported over cloud channel\"}");
         return (n > 0 && (size_t)n < out_cap) ? (size_t)n : 0;
@@ -415,7 +426,7 @@ size_t command_handler_dispatch_cloud(const char *command_json, char *out, size_
     /* Dispatch through the normal handlers; the reply is captured (see
        command_handler_cloud_capture_append) rather than sent to the TCP server. */
     cloud_reply_cap_begin();
-    dispatch_line(CH_CLOUD_CONN, command_json);
+    dispatch_row(CH_CLOUD_CONN, cmd, d, command_json);
     return cloud_reply_cap_end(out, out_cap);
 }
 

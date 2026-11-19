@@ -100,8 +100,6 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->capture_trigger) bp_emit_raw(e, ",\"capture_trigger\"");
     if (c->spi_master)      bp_emit_raw(e, ",\"spi_master\",\"spi_stream\"");   /* spi_stream: firmware */
     if (c->uart_frame)      bp_emit_raw(e, ",\"uart_frame\"");   /* uart_proxy_start parity, stop_bits */
-    /* uart_proxy_start half_duplex (gateware v57) and entry (firmware, with nrst_pin): one short
-       name, as the status reply has little room left (test_ch_status). */
     if (c->nrst_pin)        bp_emit_raw(e, ",\"nrst_pin\"");
     if (c->usb_cc)          bp_emit_raw(e, ",\"usb_cc\"");
     bp_emit_raw(e, "]");

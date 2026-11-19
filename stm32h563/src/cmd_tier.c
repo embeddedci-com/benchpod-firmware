@@ -16,132 +16,173 @@
 #define CMD_FN(fn) fn
 #endif
 
-/* One row per JSON verb: { { verb, tier }, CMD_F_* flags, handler }. A verb missing here is
-   "unknown cmd" and counts as T3. */
+/* The write forms of the mixed verbs (the handlers' own tests), one per row below. */
+static int writes_dac_limits(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "path", v, sizeof(v)) ||
+           (bp_json_get(json, "enabled", v, sizeof(v)) && strcmp(v, "false") == 0);
+}
+/* run, store or clear; a bare one (or clear:false) reads */
+static int writes_calibrate(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "source", v, sizeof(v)) || bp_json_get(json, "dac", v, sizeof(v)) ||
+           bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
+           (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
+}
+/* sig_policy, lan_policy, usb_network */
+static int writes_set(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "set", v, sizeof(v));
+}
+/* cloud_ca, cloud_proxy */
+static int writes_set_or_clear(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "set", v, sizeof(v)) ||
+           (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0);
+}
+static int writes_lan_tls(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "https_only", v, sizeof(v)) ||
+           (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
+}
+/* an EEPROM write (ID or calibration); a read is T0 */
+static int writes_module(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "eeprom", v, sizeof(v)) && strcmp(v, "read") != 0;
+}
+/* only "stats" and "refclk" read */
+static int writes_eth(const char *json) {
+    char v[16] = {0};
+    bp_json_get(json, "action", v, sizeof(v));
+    return strcmp(v, "stats") != 0 && strcmp(v, "refclk") != 0;
+}
+
+/* One row per JSON verb: { { verb, tier }, CMD_F_* flags, handler, write test }. A verb missing
+   here is "unknown cmd" and counts as T3.  The write test is NULL except on the mixed verbs. */
 static const cmd_desc_t k_tiers[] = {
     /* T0: read-only */
-    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_ping) },
-    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_status) },
-    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_diag) },
-    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status) },
-    { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status) },
-    { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan) },
-    { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins) },
-    { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc) },
-    { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status) },
-    { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status) },
-    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_public) },
-    { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop) },
-    { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe) },   /* always refused off the USB console: it changes nothing */
-    { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status) },
-    { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status) },
-    { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor) },
-    { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status) },
-    { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status) },
-    { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status) },
-    { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list) },
-    { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get) },
+    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_ping), NULL },
+    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_status), NULL },
+    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_diag), NULL },
+    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status), NULL },
+    { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status), NULL },
+    { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
+    { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },
+    { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc), NULL },
+    { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
+    { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
+    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_public), NULL },
+    { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop), NULL },
+    { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* always refused off the USB console: it changes nothing */
+    { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status), NULL },
+    { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status), NULL },
+    { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status), NULL },
+    { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status), NULL },
+    { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status), NULL },
+    { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
+    { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)
     /* EMI test build only (emi_test.h): read the run log out of the W25Q */
-    { { "emi_log", CMD_TIER_T0 }, 0, CMD_FN(handle_emi_log) },
+    { { "emi_log", CMD_TIER_T0 }, 0, CMD_FN(handle_emi_log), NULL },
 #endif
-    { { "dac_loop_probe", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_probe) },
+    { { "dac_loop_probe", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_probe), NULL },
     /* T0, observational: they read the DUT */
-    { { "capture", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture) },
-    { { "capture_dual", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_dual) },
-    { { "capture_read", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_read) },
-    { { "stream", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_stream) },
-    { { "la_capture", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_la_capture) },
-    { { "sensor_regs", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_sensor) },
-    { { "sensor_la", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_sensor_la) },
-    { { "can_read", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_HEAVY, CMD_FN(handle_can_read) },
-    { { "psram_ping", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_psram_ping) },
-    { { "test", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_test) },
-    /* mixed: read form T0, write form T2 (see mixed_write) */
-    { { "dac_limits", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANALOG | CMD_F_MIXED, CMD_FN(handle_dac_limits) },
-    { { "calibrate", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_MIXED, CMD_FN(handle_calibrate) },
-    { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_eth) },
-    { { "sig_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_sig_policy) },
-    { { "lan_policy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_policy) },
-    { { "usb_network", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_usb_network) },
+    { { "capture", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture), NULL },
+    { { "capture_dual", CMD_TIER_T0 }, CMD_F_ADC_SAMPLES | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_dual), NULL },
+    { { "capture_read", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_read), NULL },
+    { { "stream", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_stream), NULL },
+    { { "la_capture", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_la_capture), NULL },
+    { { "sensor_regs", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_sensor), NULL },
+    { { "sensor_la", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_sensor_la), NULL },
+    { { "can_read", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_HEAVY, CMD_FN(handle_can_read), NULL },
+    { { "psram_ping", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_psram_ping), NULL },
+    { { "test", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_test), NULL },
+    /* mixed: read form T0, write form T2 (the writes_* test) */
+    { { "dac_limits", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANALOG, CMD_FN(handle_dac_limits), writes_dac_limits },
+    { { "calibrate", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_calibrate), writes_calibrate },
+    { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_eth), writes_eth },
+    { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_set },
+    { { "lan_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_policy), writes_set },
+    { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_set },
     /* read and set T0: it only changes what the pod prints on its own console */
-    { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level) },
-    { { "module", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_MIXED, CMD_FN(handle_module) },
-    { { "cloud_ca", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_ca) },
-    { { "cloud_proxy", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_cloud_proxy) },
-    { { "lan_tls", CMD_TIER_T0 }, CMD_F_MIXED, CMD_FN(handle_lan_tls) },
+    { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level), NULL },
+    { { "module", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_module), writes_module },
+    { { "cloud_ca", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_ca), writes_set_or_clear },
+    { { "cloud_proxy", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_proxy), writes_set_or_clear },
+    { { "lan_tls", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_tls), writes_lan_tls },
     /* T1: instrument control */
-    { { "generate", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_generate) },
-    { { "measure", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_measure) },
-    { { "load", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_load) },
-    { { "load_bin", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_load_bin) },
-    { { "replay", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_replay) },
-    { { "dac_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_dac_stop) },
-    { { "dac_set", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_set) },
-    { { "dac_mux", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_mux) },
-    { { "cal_switch", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_cal_switch) },
-    { { "analog_path", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_analog_path) },
-    { { "dac_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_out) },
-    { { "current_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_current_out) },
-    { { "adc_read", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_read) },
-    { { "adc_range", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_range) },
-    { { "dac_control_loop", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_control_loop) },
-    { { "dac_loop_input", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_input) },
-    { { "la", CMD_TIER_T1 }, 0, CMD_FN(handle_la) },
-    { { "gpio", CMD_TIER_T1 }, 0, CMD_FN(handle_gpio) },
-    { { "la_voltage", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_la_voltage) },
-    { { "nrst", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_nrst) },
-    { { "target_power", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_target_power) },
-    { { "wiring_put", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_put) },
-    { { "wiring_delete", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_delete) },
-    { { "wiring_default", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_default) },
-    { { "module_power", CMD_TIER_T1 }, 0, CMD_FN(handle_module_power) },
-    { { "power_profile", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_power_profile) },
-    { { "dap_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_dap_start) },
-    { { "uart_proxy_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_uart_proxy_start) },
-    { { "spi_start", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_start) },
-    { { "spi_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stop) },
-    { { "spi_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_xfer) },
-    { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream) },
-    { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash) },
-    { { "esp_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_esp_flash) },
-    { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir) },
-    { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire) },
-    { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew) },
-    { { "lease_release", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_release) },
-    { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start) },
-    { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop) },
-    { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer) },
-    { { "i2c_scan", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_scan) },
-    { { "sensor_define", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_set", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_stimulus", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_stimulus_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_stimulus_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_fault", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_fault_clear", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "sensor_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor) },
-    { { "can_config", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_config) },
-    { { "can_write", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_write) },
-    { { "can_term", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_term) },
-    { { "can_respond", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_respond) },
-    { { "can_disable", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_disable) },
-    { { "speedtest", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_STREAM, CMD_FN(handle_speedtest) },
-    { { "fpga_image", CMD_TIER_T1 }, 0, CMD_FN(handle_fpga_image) },
-    { { "psram_recover", CMD_TIER_T1 }, 0, CMD_FN(handle_psram_recover) },
+    { { "generate", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_generate), NULL },
+    { { "measure", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_measure), NULL },
+    { { "load", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_load), NULL },
+    { { "load_bin", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_load_bin), NULL },
+    { { "replay", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_replay), NULL },
+    { { "dac_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_dac_stop), NULL },
+    { { "dac_set", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_set), NULL },
+    { { "dac_mux", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_mux), NULL },
+    { { "cal_switch", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_cal_switch), NULL },
+    { { "analog_path", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_analog_path), NULL },
+    { { "dac_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_out), NULL },
+    { { "current_out", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_current_out), NULL },
+    { { "adc_read", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_read), NULL },
+    { { "adc_range", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_range), NULL },
+    { { "dac_control_loop", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_control_loop), NULL },
+    { { "dac_loop_input", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_input), NULL },
+    { { "la", CMD_TIER_T1 }, 0, CMD_FN(handle_la), NULL },
+    { { "gpio", CMD_TIER_T1 }, 0, CMD_FN(handle_gpio), NULL },
+    { { "la_voltage", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_la_voltage), NULL },
+    { { "nrst", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_nrst), NULL },
+    { { "target_power", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_target_power), NULL },
+    { { "wiring_put", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_put), NULL },
+    { { "wiring_delete", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_delete), NULL },
+    { { "wiring_default", CMD_TIER_T1 }, 0, CMD_FN(handle_wiring_default), NULL },
+    { { "module_power", CMD_TIER_T1 }, 0, CMD_FN(handle_module_power), NULL },
+    { { "power_profile", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_power_profile), NULL },
+    { { "dap_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_dap_start), NULL },
+    { { "uart_proxy_start", CMD_TIER_T1 }, CMD_F_STREAM, CMD_FN(handle_uart_proxy_start), NULL },
+    { { "spi_start", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_start), NULL },
+    { { "spi_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stop), NULL },
+    { { "spi_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_xfer), NULL },
+    { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream), NULL },
+    { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash), NULL },
+    { { "esp_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_esp_flash), NULL },
+    { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir), NULL },
+    { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire), NULL },
+    { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew), NULL },
+    { { "lease_release", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_release), NULL },
+    { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start), NULL },
+    { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop), NULL },
+    { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer), NULL },
+    { { "i2c_scan", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_scan), NULL },
+    { { "sensor_define", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_set", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_stimulus", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_stimulus_start", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_stimulus_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_fault", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_fault_clear", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "sensor_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
+    { { "can_config", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_config), NULL },
+    { { "can_write", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_write), NULL },
+    { { "can_term", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_term), NULL },
+    { { "can_respond", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_respond), NULL },
+    { { "can_disable", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_disable), NULL },
+    { { "speedtest", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_STREAM, CMD_FN(handle_speedtest), NULL },
+    { { "fpga_image", CMD_TIER_T1 }, 0, CMD_FN(handle_fpga_image), NULL },
+    { { "psram_recover", CMD_TIER_T1 }, 0, CMD_FN(handle_psram_recover), NULL },
     /* T2: persisted config */
-    { { "cloud_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_set) },
-    { { "cloud_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_clear) },
-    { { "wifi_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_set) },
-    { { "wifi_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_clear) },
+    { { "cloud_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_set), NULL },
+    { { "cloud_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_clear), NULL },
+    { { "wifi_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_set), NULL },
+    { { "wifi_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_clear), NULL },
     /* T3: firmware */
-    { { "ota_begin", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_begin) },
-    { { "ota_data", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_data) },
-    { { "ota_end", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_end) },
-    { { "ota_commit", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_commit) },
-    { { "ota_abort", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_abort) },
-    { { "ota_selftest", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_selftest) },
+    { { "ota_begin", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_begin), NULL },
+    { { "ota_data", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_data), NULL },
+    { { "ota_end", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_end), NULL },
+    { { "ota_commit", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_commit), NULL },
+    { { "ota_abort", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_abort), NULL },
+    { { "ota_selftest", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_selftest), NULL },
 };
 
 const cmd_desc_t *cmd_find(const char *cmd) {
@@ -156,48 +197,20 @@ const cmd_desc_t *cmd_table_rows(size_t *count) {
     return k_tiers;
 }
 
-/* The write forms of the mixed verbs (the handlers' own tests). */
-static int mixed_write(const char *cmd, const char *json) {
-    char v[16] = {0};
-    if (!json) return 0;
-    if (strcmp(cmd, "dac_limits") == 0)
-        return bp_json_get(json, "path", v, sizeof(v)) ||
-               (bp_json_get(json, "enabled", v, sizeof(v)) && strcmp(v, "false") == 0);
-    if (strcmp(cmd, "calibrate") == 0)   /* run, store or clear; a bare one (or clear:false) reads */
-        return bp_json_get(json, "source", v, sizeof(v)) || bp_json_get(json, "dac", v, sizeof(v)) ||
-               bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
-               (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
-    if (strcmp(cmd, "sig_policy") == 0 || strcmp(cmd, "lan_policy") == 0 || strcmp(cmd, "usb_network") == 0)
-        return bp_json_get(json, "set", v, sizeof(v));
-    if (strcmp(cmd, "cloud_ca") == 0 || strcmp(cmd, "cloud_proxy") == 0)
-        return bp_json_get(json, "set", v, sizeof(v)) ||
-               (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "true") == 0);
-    if (strcmp(cmd, "lan_tls") == 0)
-        return bp_json_get(json, "https_only", v, sizeof(v)) ||
-               (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
-    if (strcmp(cmd, "module") == 0)   /* an EEPROM write (ID or calibration); a read is T0 */
-        return bp_json_get(json, "eeprom", v, sizeof(v)) && strcmp(v, "read") != 0;
-    if (strcmp(cmd, "eth") == 0) {
-        bp_json_get(json, "action", v, sizeof(v));
-        return strcmp(v, "stats") != 0 && strcmp(v, "refclk") != 0;
-    }
-    return 0;
-}
-
 cmd_tier_t cmd_tier_of(const cmd_desc_t *d, const char *json) {
     if (!d) return CMD_TIER_T3;
-    return (d->flags & CMD_F_MIXED) && mixed_write(d->key.name, json) ? CMD_TIER_T2
-                                                                        : (cmd_tier_t)d->key.tier;
+    return d->writes && json && d->writes(json) ? CMD_TIER_T2 : (cmd_tier_t)d->key.tier;
 }
 
 cmd_tier_t cmd_tier(const char *cmd, const char *json) { return cmd_tier_of(cmd_find(cmd), json); }
 
 int cmd_tier_known(const char *cmd) { return cmd_find(cmd) != NULL; }
 
-int cmd_tier_light(const char *cmd, const char *json) {
-    const cmd_desc_t *d = cmd_find(cmd);
+int cmd_tier_light_of(const cmd_desc_t *d, const char *json) {
     return d && !(d->flags & CMD_F_HEAVY) && cmd_tier_of(d, json) == CMD_TIER_T0;
 }
+
+int cmd_tier_light(const char *cmd, const char *json) { return cmd_tier_light_of(cmd_find(cmd), json); }
 
 const char *cmd_tier_name(cmd_tier_t t) {
     static const char *const names[] = { "T0", "T1", "T2", "T3" };

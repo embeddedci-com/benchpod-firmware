@@ -18,12 +18,11 @@
  * Commands and replies fit one cloud frame.  Runs on the hw worker task.
  */
 #include "command_handler.h"
-#include "board_caps.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "bp_errors.h"
 #include "signal_engine.h"
 #include "i2c_txn.h"
-#include "i2c_bus.h"
 #include "la_pins.h"
 #include "b64url.h"
 #include "bp_json.h"
@@ -85,8 +84,8 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
         send_error(conn_id, msg);
         return false;
     }
-    if (!la_pullups_available()) {
-        if (board_caps()->pull_expanders)   /* v3r4: pin 21 is down (they work at every voltage) */
+    if (!la_pull_available()) {
+        if (la_pull_rail_is_pin21())   /* v3r4: pin 21 is down (they work at every voltage) */
             send_error(conn_id, "the pod's pull-ups are off: J1 pin 21 is down (la_voltage shows it); "
                        "check pin 21, or pass \"pullups\":\"external\"");
         else
@@ -94,7 +93,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
                        "\"pullups\":\"external\" with pull-ups to the board's own rail");
         return false;
     }
-    if (!pca9555_la_pullup_enabled((uint8_t)la)) {
+    if (la_pull_asked(la) == LA_PULL_NONE) {
         snprintf(msg, sizeof(msg), "I2C needs pull-ups: switch on LA%u's with {\"cmd\":\"la\",\"la\":%u,"
                  "\"pull\":\"up\"}, or pass \"pullups\":\"external\"", la, la);
         send_error(conn_id, msg); return false;
@@ -106,9 +105,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
 
 void handle_i2c_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    if (signal_engine_fpga_version() < I2C_MASTER_MIN_GW) {
-        send_error(conn_id, "the I2C master needs gateware v55+: update the pod's firmware"); return;
-    }
+    if (!require_gw(conn_id, gw_caps()->i2c_master, "the I2C master needs gateware v55+: update the pod's firmware")) return;
     uint32_t sda, scl;
     if (!get_u32(json, "sda", &sda) || sda < 1 || sda > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid sda (LA 1..14)"); return; }
     if (!get_u32(json, "scl", &scl) || scl < 1 || scl > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid scl (LA 1..14)"); return; }

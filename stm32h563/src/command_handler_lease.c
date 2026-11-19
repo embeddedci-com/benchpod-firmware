@@ -9,6 +9,7 @@
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "bp_errors.h"
+#include "bp_log.h"
 #include "bp_json.h"
 #include "cmd_table.h"
 #include "lease_gate.h"
@@ -44,7 +45,7 @@ static void send_lease(int conn_id, const lease_local_view_t *v) {
                 "\"purpose\":\"%s\",\"left_s\":%lu,\"source\":\"local\"}}}\n",
             v->id, v->holder, v->purpose, (unsigned long)v->left_s);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "lease reply too large"); return; }
-    printf("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
+    LOG_D("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
@@ -125,8 +126,7 @@ void handle_lease_release(int conn_id, const char *json) {
     send_ok_str(conn_id, was_held ? "{\"released\":true}" : "{\"released\":false}");
 }
 
-bool command_handler_lease_gate(int conn_id, const char *cmd, const char *json) {
-    const cmd_desc_t *d = cmd_find(cmd);
+bool command_handler_lease_gate(int conn_id, const cmd_desc_t *d, const char *json) {
     lease_local_view_t v;
     char by[LEASE_LOCAL_HOLDER_MAX];
     /* "lease":"<id>" on any command: a client with a connection per command proves ownership
@@ -134,7 +134,7 @@ bool command_handler_lease_gate(int conn_id, const char *cmd, const char *json) 
     char lid[LEASE_LOCAL_ID_MAX + 1] = {0};
     if (json && bp_json_get_top(json, "lease", lid, sizeof(lid)) && strlen(lid) >= LEASE_LOCAL_ID_MAX)
         lid[0] = '\0';
-    switch (lease_local_check(conn_id, cmd_has(d, CMD_F_LEASE) != 0, cmd_tier_light(cmd, json) != 0,
+    switch (lease_local_check(conn_id, cmd_has(d, CMD_F_LEASE) != 0, cmd_tier_light_of(d, json) != 0,
                               lid, HAL_GetTick(), &v, by, sizeof(by))) {
         case LEASE_LOCAL_REFUSE_LOST:
             send_lost(conn_id, by);

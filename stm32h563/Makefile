@@ -69,6 +69,8 @@ C_SOURCES := \
   src/stm32h5xx_it.c \
   src/stm32h5xx_hal_timebase_tim.c \
   src/signal_engine.c \
+  src/la_io.c \
+  src/gw_caps.c \
   src/la_rate.c \
   src/la_pins.c \
   src/power_profile.c \
@@ -96,6 +98,8 @@ C_SOURCES := \
   src/dap.c \
   src/swd_ll.c \
   src/i2c_bus.c \
+  src/la_pull.c \
+  src/pull_tca9554.c \
   src/ina238.c \
   src/tca9554.c \
   src/target_power.c \
@@ -192,6 +196,7 @@ C_SOURCES := \
   src/lease_gate.c \
   src/lease_local.c \
   src/net_reload.c \
+  src/cloud_ca.c \
   src/cloud_extras.c \
   src/lan_tls.c \
   src/lan_tls_pem.c \
@@ -293,6 +298,9 @@ DEFS := -DUSE_HAL_DRIVER -DSTM32H563xx -DHSE_VALUE=25000000 \
 # (non-TLS) cloud connection (cloud-hardening.md section 1). This must come before CFLAGS below
 # (`:=` expands DEFS there): appended further down, -DBENCHPOD_RELEASE=1 never reached the compiler.
 RELEASE ?= 0
+# The flash floor (tools/flash_left.sh): with FLASH_FLOOR_KB=N the link fails when less than N KB
+# of the code region is left; unset, below 24 KB only warns. CI sets it for the release build.
+FLASH_FLOOR_KB ?=
 ifeq ($(RELEASE),1)
 DEFS += -DBENCHPOD_RELEASE=1
 endif
@@ -522,6 +530,11 @@ $(addprefix $(BUILD_DIR)/,$(notdir $(SENSOR_DEF_SRCS:.c=.o))): CFLAGS += -ffp-co
 $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
                                                -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
 
+# libscpi's SCPI_ErrorTranslate is one switch over error codes 0..-800 (121 cases); GCC's
+# switch conversion turns it into an 801-entry pointer table (CSWTCH, 3.2 KB). A compare tree
+# at -Os is plenty for an error lookup: the file's code and tables go from 3.6 KB to 2.1 KB.
+$(BUILD_DIR)/error.o: CFLAGS += -Os -fno-tree-switch-conversion
+
 # The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
 $(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py
 	@mkdir -p $(dir $@)
@@ -556,6 +569,7 @@ $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
 	$(SZ) $@
 	@OBJDUMP=$(PREFIX)objdump sh tools/check_ramfunc_calls.sh $@ || { rm -f $@; exit 1; }
+	@READELF=$(PREFIX)readelf sh tools/flash_left.sh $@ $(LDSCRIPT) $(FLASH_FLOOR_KB) || { rm -f $@; exit 1; }
 
 $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 	$(HEX) $< $@

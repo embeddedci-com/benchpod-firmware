@@ -37,13 +37,13 @@
  * The revision decides three things that are NOT compatible between v2 and v3:
  *   - the TPS2116 LA-bank mux polarity, and whether 1.8 V is reachable at all
  *     (on v2, MODE is grounded, so the "1.8 V" setting shuts the mux down —
- *     see signal_engine.c la_vccio_set_mv);
+ *     see la_io.c la_vccio_set_mv);
  *   - whether the dedicated NRST-control pin exists (nrst_ctrl.c);
  *   - whether USB-C CC monitoring exists (usb_cc.c).
  *
- * Features that only digital v3r4 has (pin 21 control, 5 V mode, the pull expanders) are NOT
- * gated on the revision here: they read board_caps.h, the one place that maps a revision to
- * what the board has.
+ * None of that is gated on the revision outside this file: board_rev_init() latches
+ * board_caps.h, the one place that maps a revision to what the board has, and every feature
+ * reads its field there.
  *
  * Sampled once at boot; every accessor is a plain RAM read afterwards, so they
  * are safe to call from any task.
@@ -54,11 +54,11 @@
 #define BOARD_REV_V3      3
 /* Analog board v3r2: the DAC8551 and its two TMUX1104 output muxes (and their
    TCA9554 at 0x24) are replaced by a DAC8554 quad DAC, one channel per output
-   (dac_quad.h).  Everything else is v3, so board_rev_is_v3() is true on it. */
+   (dac_quad.h).  Everything else is v3, so it has every v3 capability (board_caps.h). */
 #define BOARD_REV_V3R2    4
 /* Digital v3r4: J1 pin 21 is VREF_OUT (switched, sensed), 5 V I/O, two pull expanders with a
-   direction and a strength per channel (board_caps.h has the list).  board_rev_is_v3() is true on
-   it, and everything that is v3 on a digital board stays as it is. */
+   direction and a strength per channel (board_caps.h has the list).  It has every v3
+   capability, and everything that is v3 on a digital board stays as it is. */
 #define BOARD_REV_V3R4    5
 
 /* The strap voltage bands (mV), host-tested through board_rev_from_strap_mv(). */
@@ -72,7 +72,7 @@
 #define BOARD_REV2_V3R4_MIN_PERMILLE  400   /* PC3 / VREF+: v3r4 500 */
 #define BOARD_REV2_V3R4_MAX_PERMILLE  600
 
-/* Sample the strap and latch the revision.  Requires mcu_adc_init() first (for
+/* Sample the strap, latch the revision and its capabilities (board_caps_init).  Requires mcu_adc_init() first (for
    the voltage bucket); without it detection still distinguishes v2 from
    "something newer" using the digital test alone. */
 void board_rev_init(void);
@@ -124,11 +124,8 @@ static inline int board_rev_decide(int strap_mv, int vref_mv, int rev2_mv)
 }
 
 /* BOARD_REV_V2, BOARD_REV_V3, BOARD_REV_V3R2, BOARD_REV_V3R4, or BOARD_REV_UNKNOWN before
-   board_rev_init(). */
+   board_rev_init().  For board_caps and reports only: features ask board_caps(). */
 int  board_rev_get(void);
-
-/* True on rev3 and later (v3r2 included) — the gate for every rev3-only feature. */
-bool board_rev_is_v3(void);
 
 /* Strap voltage in millivolts as measured at boot (-1 if the ADC was not up).
    Reported in `status` so an unexpected board reads back diagnosably. */

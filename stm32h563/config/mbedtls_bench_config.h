@@ -37,6 +37,9 @@ void  bench_mbedtls_free(void *p);
 #define MBEDTLS_NO_PLATFORM_ENTROPY          /* no /dev/urandom — use the hardware source */
 #define MBEDTLS_ENTROPY_HARDWARE_ALT         /* we provide mbedtls_hardware_poll() */
 #define MBEDTLS_AES_ROM_TABLES               /* keep AES tables in flash, not RAM */
+/* One forward and one reverse table instead of four each (rotated at run time): 6 KB less
+   flash, same results, a little slower per block (AES runs only on TLS records here). */
+#define MBEDTLS_AES_FEWER_TABLES
 
 /* A time source is needed only so the vendored (2.x-era) LwIP altcp_tls glue can
    reference mbedtls_ssl_session.start; we have no RTC, so back it with the
@@ -120,6 +123,9 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_PEM_PARSE_C
 #define MBEDTLS_X509_USE_C
 #define MBEDTLS_X509_CRT_PARSE_C
+/* No human-readable certificate dumps (mbedtls_x509_crt_info and the OID descriptions):
+   nothing calls them; mbedtls_x509_dn_gets (the subjects in cloud_ca and lan_tls) stays. */
+#define MBEDTLS_X509_REMOVE_INFO
 
 /* ---- LAN TLS server certificate (lan_tls.c): generate a key, write a self-signed cert ---- */
 #define MBEDTLS_PK_WRITE_C

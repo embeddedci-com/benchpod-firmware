@@ -3,7 +3,7 @@
 #include "board_caps.h"
 #include "board_pins.h"
 #include "mcu_adc.h"
-#include "signal_engine.h"   /* la_vccio_get_mv */
+#include "la_io.h"   /* la_vccio_get_mv */
 #include "stm32h5xx_hal.h"
 #include "bp_log.h"
 
@@ -105,9 +105,9 @@ void vref_out_poll(uint32_t now_ms)
     if (s_state != was) {
         int set = vref_setpoint_mv(s_src, la_vccio_get_mv());
         if (s_state == VREF_HIGH)
-            log_printf("[vref] WARNING: pin 21 at %d mV, above its %d mV setting: a DUT signal above "
-                       "the I/O voltage lifts it through the pulls; select 5 V or remove the signal\r\n",
-                       s_mv, set);
+            LOG_W("[vref] pin 21 at %d mV, above its %d mV setting: a DUT signal above "
+                  "the I/O voltage lifts it through the pulls; select 5 V or remove the signal\n",
+                  s_mv, set);
         else
             log_printf("[vref] pin 21 %s: %d mV (setting %d mV, %s)\r\n",
                        vref_state_name(s_state), s_mv, set, vref_src_name(s_src));

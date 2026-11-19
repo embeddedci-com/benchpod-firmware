@@ -6,9 +6,11 @@
 #include <stdint.h>
 
 #include "command_handler.h"   /* the pseudo-connection ids */
+#include "cmd_table.h"         /* cmd_desc_t */
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
 #include "b64url.h"
+#include "gw_caps.h"   /* gw_caps_t, require_gw */
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -74,6 +76,13 @@ static inline bool conn_has_socket(int conn_id) {
 /* Reply helpers (defined in command_handler.c). */
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
+
+/* A gateware gate (a gw_caps() field): true when the running gateware has it, else `text` goes
+   back as a plain error and the handler returns. */
+static inline bool require_gw(int conn_id, bool have, const char *text) {
+    if (!have) send_error(conn_id, text);
+    return have;
+}
 
 /* True while a capture/measure/LA/DAC op owns the shared PSRAM bus — an OTA (which
    also stages into PSRAM) must refuse while it is set. Defined in command_handler.c. */
@@ -231,6 +240,51 @@ typedef struct {
     uint8_t  hex[UART_ENTRY_HEX_MAX];
 } uart_entry_t;
 bool   uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int *max);
+/* A uart_proxy_start request, parsed and checked (uart_cfg_parse). */
+typedef struct {
+    unsigned     rx, tx;      /* LA channels; rx == tx on one wire (half duplex) */
+    unsigned     de;          /* RS-485 DE channel, 0 = none (gateware v58) */
+    bool         de_inv;      /* DE active low */
+    uint32_t     baud;
+    uint8_t      frame;       /* UART_FRAME_* bits (0 = 8N1), UART_FRAME_HALFDUPLEX on one wire */
+    uart_entry_t entry;       /* the boot-mode entry (entry.on false: none) */
+} uart_cfg_t;
+/* Why uart_cfg_parse refused a request (uart_cfg_refuse sends the reply). */
+typedef enum {
+    UART_CFG_OK = 0,
+    UART_CFG_MISSING_RX, UART_CFG_MISSING_TX,
+    UART_CFG_BAD_FRAME,                       /* parity / stop_bits */
+    UART_CFG_GW_FRAME,                        /* anything but 8N1 on gateware < v56 */
+    UART_CFG_GW_HALF_DUPLEX,                  /* half_duplex on gateware < v57 */
+    UART_CFG_HALF_DUPLEX_TWO_PINS,            /* half_duplex with rx != tx */
+    UART_CFG_SAME_PIN,                        /* rx == tx without half_duplex */
+    UART_CFG_ENTRY_INVALID,                   /* an entry argument out of range (bad, max) */
+    UART_CFG_ENTRY_NO_RESET_PIN,              /* entry on a pod without the reset pin */
+    UART_CFG_GW_DE,                           /* de on gateware < v58 */
+    UART_CFG_DE_PIN,                          /* de on rx or tx */
+} uart_cfg_err_kind_t;
+typedef struct { uart_cfg_err_kind_t kind; const char *bad; int max; } uart_cfg_err_t;
+/* Parse and check {"cmd":"uart_proxy_start",...} against the gateware version `gw` and whether the
+   pod has the reset pin.  Pure (host tests).  The checks run in the order the replies always came
+   in, so a request with several problems gets the same refusal as before. */
+bool   uart_cfg_parse(const char *json, const gw_caps_t *gw, bool has_reset_pin, uart_cfg_t *cfg, uart_cfg_err_t *err);
+void   uart_cfg_refuse(int conn_id, const uart_cfg_t *cfg, const uart_cfg_err_t *err);
+/* The LA pins one user of the soft UART holds (the proxy, esp_dut_flash), and its RX pull-up. */
+typedef struct {
+    uint8_t         rx, tx, de;   /* de 0 = none */
+    bool            one_wire;     /* tx is claimed as uart_hd, rx is the same pin */
+    bool            claimed;
+    la_pull_token_t rx_hold;      /* la_pull_hold on rx, put back by uart_pins_release */
+} uart_pins_t;
+/* Check every pin first (a `pin conflict:` / `pull conflict:` message in err, nothing claimed),
+   then claim them all into *p. */
+bool   uart_pins_claim(uart_pins_t *p, unsigned rx, unsigned tx, unsigned de, bool one_wire, char *err, size_t cap);
+/* Hold RX high (la_pull_hold; 2.2k on one wire, else by the pin's function).  Logs when a pull
+   that should engage does not.  After uart_pins_claim. */
+void   uart_pins_hold_rx(uart_pins_t *p);
+/* Put RX's pull back and release exactly the pins in *p (only where they still hold the UART
+   function).  Safe on a *p that holds nothing. */
+void   uart_pins_release(uart_pins_t *p);
 /* The PROTO_UART receive path: forwards buf to the DUT and watches for the +++ escape. */
 size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len);
 void   uart_proxy_poll(void);                 /* DUT -> client drain and the escape's guard */
@@ -239,8 +293,7 @@ void   uart_proxy_on_gateware_reconfigured(void);
 void   uart_proxy_conn_closed(int conn_id);
 
 /* LA pin ownership glue + the LA pin and I2C-sensor handlers (command_handler_pins.c). */
-uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
-uint16_t la_pull_mask_live(void);             /* the pulls on the wire now (differs on digital v3r4 only) */
+/* The pull masks, la_pull_mask_now / la_pull_mask_live: la_pull.h (through la_pins.h). */
 void     la_pins_drive_mask(uint16_t mask);   /* GPIO_SET each pin in mask to its table state */
 /* May `fn` claim las[0..n)?  Pins owned by a function in free_fns count as free.  false = the
    pin/pull conflict error was sent.  Commit with la_pins_claim once the FPGA side succeeded. */
@@ -311,7 +364,7 @@ void handle_lease_acquire(int conn_id, const char *json);
 void handle_lease_renew(int conn_id, const char *json);
 void handle_lease_release(int conn_id, const char *json);
 /* dispatch_line, every command: true = may run; false = refused (busy, or lease lost), reply sent. */
-bool command_handler_lease_gate(int conn_id, const char *cmd, const char *json);
+bool command_handler_lease_gate(int conn_id, const cmd_desc_t *d, const char *json);
 
 /* OTA subsystem handlers (command_handler_ota.c). */
 /* Policy commands (command_handler_policy.c). */

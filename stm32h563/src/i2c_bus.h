@@ -5,7 +5,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "la_pins.h"   /* la_pull_dir_t */
 
 /* ============================================================================
  * I2C0 power/IO bus — STM32 I2C1 on PB8 (SCL) / PB9 (SDA), 100 kHz.
@@ -15,7 +14,7 @@
  *   0x44  INA238  — EXTERNAL power-connector current (30 mΩ shunt, 20 mΩ on INA226 boards) [U33]
  *   0x41  INA226  — the pod's own 5 V current (30 mΩ shunt after the input eFuse, the DUT's
  *                   internal rail bypasses it); only on boards that have it          [U35]
- *   0x20  TCA9554 — logic-analyzer pull-up control (CTRL1..8)        [U54]
+ *   0x20  TCA9554 — logic-analyzer pull-up control (CTRL1..8)        [U54] (pull_tca9554.c)
  *   0x22  TCA9554 — eFuse control + INA ALERT (EN/V/FLT)            [U56]
  *   0x24  TCA9554 — DAC v2 analog mux                                [U55]
  *   0x26  TCA9554 — analog/cal switching                             [U58]
@@ -162,41 +161,8 @@ int  i2c_bus_write_read_on(i2c_bus_id_t bus, uint8_t addr, const uint8_t *wbuf, 
                            uint8_t *rbuf, size_t rlen);
 bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr);
 
-/* ---- LA pull-up control (LA1..8) via TCA9554 @ 0x20 (CTRL1..8) ----------
-   Compatibility names for the ported command_handler.c (PCA9555 on RP2350).
-
-   HARDWARE LIMIT (v2.0.0): the LA1-8 pull-up resistors — and the board pull-downs
-   that hold the analog switches open — are referenced to +3V3, NOT to the LA bank
-   rail.  With the bank at 1.8 V a closed pull-up drives the DUT line ~1.5 V above
-   its own rail, back-feeding the DUT and the iCE40's 1.8 V bank.  So the pull-ups
-   are only ever engaged while the bank is at 3.3 V: enabling one at 1.8 V is
-   REFUSED (LA_PULLUP_ERR_VOLTAGE) and la_vccio_set_mv(1800) drops any that are
-   already on (la_pullups_all_off).  Disabling is always allowed. */
-
-/* pca9555_set_la_pullup: 0 = ok, LA_PULLUP_ERR_VOLTAGE = refused because the LA
-   bank is not at 3.3 V, -1 = bad pin or I2C failure. */
-#define LA_PULLUP_ERR_VOLTAGE  (-2)
-int  pca9555_set_la_pullup(uint8_t la_pin, bool enable);   /* la_pin 1..8 */
-bool pca9555_la_pullup_enabled(uint8_t la_pin);
-/* The pull is on the wire now.  The same as pca9555_la_pullup_enabled on every board but digital
-   v3r4, where a pull the host asked for is off while pin 21 is down or pull-ups are suspended
-   (pull_exp.h). */
-bool la_pull_live(uint8_t la_pin);
-/* Everything here is named "pullup" for historical reasons: enabling closes the channel's
-   switch, whichever way its resistor pulls.  The direction and value of each channel are in
-   la_pins.h (la_pull_dir, la_pull_ohms, la_pull_supports). */
-/* Digital v3r4 only: engage `la` (1..14) in direction `dir` (la_pins.h la_pull_dir_t, passed as
-   int-compatible enum) with strength `str` (pull_exp.h pull_str_t; 0 = from the pin's function,
-   la_pull_strength_for).  0, LA_PULLUP_ERR_VOLTAGE (no I/O voltage set yet), LA_PULLUP_ERR_RAIL
-   (pin 21 is down: the expanders are held in reset), -1 (another board, bad pin, I2C failure). */
-#define LA_PULLUP_ERR_RAIL     (-3)
-int  la_pull_engage(uint8_t la, la_pull_dir_t dir, int str);
-/* True when a pull can be engaged right now: a bank voltage is selected and, on v2,
-   it is 3.3 V.  On v3 the pull-ups go to the bank rail, so 1.8 V is fine too.
-   Digital v3r4: any voltage set, and J1 pin 21 up. */
-bool la_pullups_available(void);
-/* Force every LA pull off (v2 only, when the bank would drop to 1.8 V). */
-void la_pullups_all_off(void);
+/* The LA pull resistors (the TCA9554 at 0x20 on the boards before digital v3r4) are in
+   la_pull.h. */
 
 /* ---- Analog path switching (v2) -----------------------------------------
  * Two TCA9554 expanders route the DAC and switch the ADC input:

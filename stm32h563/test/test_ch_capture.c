@@ -138,6 +138,7 @@ int fpga_trigger_status(uint8_t *st) { *st = (uint8_t)g_trig_status; return 0; }
 void psram_bus_acquire(void) { g_bus = true; }
 int sm_i2c_pins(const char *inst, unsigned *sda, unsigned *scl, char *err, size_t cap) { (void)inst; (void)err; (void)cap; *sda = 1; *scl = 2; return 0; }
 uint8_t  signal_engine_fpga_version(void) { return g_gw; }
+uint8_t signal_engine_fpga_features_cached(void) { return 0; }
 uint32_t signal_engine_adc_cap_base(void) { return 0x400000u; }
 uint32_t signal_engine_la_cap_base(void) { return 0; }
 uint32_t signal_engine_dac_resident_bytes(void) { return 0; }

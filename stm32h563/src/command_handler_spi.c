@@ -29,6 +29,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "gw_caps.h"
 #include "bp_errors.h"
 #include "signal_engine.h"
 #include "spi_flash.h"
@@ -118,9 +119,7 @@ static bool session_or_error(int conn_id) {
 
 void handle_spi_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    if (signal_engine_fpga_version() < SPI_MASTER_MIN_GW) {
-        send_error(conn_id, "SPI master needs gateware v45+"); return;
-    }
+    if (!require_gw(conn_id, gw_caps()->spi_master, "SPI master needs gateware v45+")) return;
     static const char *const keys[4] = { "sck", "mosi", "miso", "cs" };
     uint32_t v[4];
     for (unsigned i = 0; i < 4; i++) {
@@ -140,9 +139,8 @@ void handle_spi_start(int conn_id, const char *json) {
     if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || mode > 3)) {
         send_error(conn_id, "mode must be 0, 1, 2 or 3"); return;
     }
-    if ((mode == 1 || mode == 2) && signal_engine_fpga_version() < SPI_MODES12_MIN_GW) {
-        send_error(conn_id, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware"); return;
-    }
+    if ((mode == 1 || mode == 2) &&
+        !require_gw(conn_id, gw_caps()->spi_modes12, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware")) return;
     if (fpga_spi_armed()) { bp_err_spi_session_open(conn_id, BP_ERR_TEXT("spi busy: send spi_stop first")); return; }
 
     uint8_t pins[4];

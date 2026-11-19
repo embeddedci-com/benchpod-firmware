@@ -24,7 +24,7 @@
 #include "board_rev.h"
 #include "board_caps.h"
 #include "vref_out.h"
-#include "pull_exp.h"
+#include "la_pull.h"
 #include "cal_data.h"
 #include "usb_cc.h"
 #include "nrst_ctrl.h"
@@ -169,9 +169,8 @@ int main(void)
        touches those must already know the answer.  Cheap — one GPIO test and a
        few ADC conversions on the MCU's own ADC1. */
     (void)mcu_adc_init();   /* MCU ADC1: revision strap + USB-C CC sense */
-    board_rev_init();       /* latches v2/v3 from the PA3 strap             */
-    board_caps_init(board_rev_get());   /* what this revision has: the one gate for v3r4 hardware */
-    cal_data_select(board_rev_get());   /* DAC/ADC fits for this revision (cal_data.h) */
+    board_rev_init();       /* latches the revision and its board_caps() from the straps */
+    cal_data_use(board_caps()->cal_set);   /* DAC/ADC fits for this revision (cal_data.h) */
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */
     vref_out_init();        /* J1 pin 21 on the bank, 5 V off (digital v3r4 only) */
@@ -185,16 +184,16 @@ int main(void)
        each EN / U53 IN net.) */
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
-    pull_exp_init();        /* digital v3r4: pull expanders out of reset once pin 21 is up */
+    la_pull_init();         /* the LA pull backend; digital v3r4: expanders out of reset once pin 21 is up */
     efuse_flt_init();       /* FLT: a real fault, or reverse-current blocking */
     (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
     module_link_init();     /* digital v3r3: the analog module's link, I2C2 and its EEPROM */
     board_variant_init();   /* analog board, analog module or digital-only (board_variant.h) */
     /* Analog v3r2 and the analog module: a DAC8554 channel per output instead of the U55 muxes
        (dac_quad.h).  The module runs on the v3r2 calibration set until it carries its own. */
-    dac_quad_set_present(dac_quad_for_board(board_rev_get(), board_has_analog(),
+    dac_quad_set_present(dac_quad_for_board(board_caps()->dac_quad, board_has_analog(),
                                             board_analog_is_module()));
-    if (board_analog_is_module()) cal_data_select(BOARD_REV_V3R2);
+    if (board_analog_is_module()) cal_data_use(BOARD_CAL_V3R2);
     if (board_has_analog())
         analog_switch_init(); /* U55 DAC mux + U58 cal switching, all off */
     dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */

@@ -56,7 +56,6 @@ typedef struct {
     unsigned      gateware_version;
     const char   *fpga_image;
     bool          nrst_pin;
-    bool          uart_half_duplex; /* uart_proxy_start half_duplex (gateware v57+) */
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;
     /* J1 pin 21 is switched and sensed, and 5 V I/O exists (digital v3r4, board_caps.h): the hw

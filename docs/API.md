@@ -294,7 +294,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
 | `wiring_put` | T1 | Store a wiring profile, up to 600 bytes a call | object | no |
 | `wiring_delete` | T1 | Delete a stored wiring profile | object | no |
-| `wiring_default` | T0/T1 | Read or set the default wiring profile | object | no |
+| `wiring_default` | T1 | Read or set the default wiring profile | object | no |
 | `emi_log` | T0 | EMI test build only: read the run log out of the W25Q | object | no |
 
 Commands not in this table answer `"unknown cmd"`.
@@ -308,7 +308,7 @@ that applies answers with its message and the command does not run.
 | Gate | Applies to | Message |
 |---|---|---|
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025`: `busy: a cloud job holds this pod (<holder>, <N> s left)` (the code with firmware after 3.10.13; the text is unchanged) |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
@@ -2168,7 +2168,7 @@ puts back:
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
-| `up`/`down` before an I/O voltage is set (digital v3r4) | `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
+| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
 | the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
@@ -2976,7 +2976,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `de` is the `rx` or `tx` channel | code `BP0022` |
 | `de` on gateware older than v58 | code `BP0017` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
-| parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
+| parity or two stop bits on gateware older than v56 | code `BP0017` (the text is unchanged: `"uart parity and stop bits need gateware v56+: update the pod's firmware"`) |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
 | `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"`: the UART idles high |
@@ -2990,7 +2990,8 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 > v3r4 this works on every channel (a 10k pull-up to J1 pin 21). On older boards it only
 > happens on **LA1-LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
 > firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9-LA14 have no resistor. The previous state
+> would guarantee the very flood it prevents) and LA9-LA14 have no resistor. On the digital
+> v3r4 board every channel pulls up (10k, 2.2k on a one-wire line). The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
@@ -3140,8 +3141,11 @@ Sequence: boot pin low, EN low 100 ms, EN released, 50 ms, SYNC (retried); the b
 released once the ROM answers. Then CHANGE_BAUDRATE, SPI_ATTACH, SPI_SET_PARAMS, FLASH_BEGIN
 (the ROM erases the region, seconds for a large image), the data in 1 KB blocks, the chip's MD5
 of the region, FLASH_END. With `run` the pod pulses EN with the boot pin released. Every pin is
-released at the end, whatever the result. Write each region of a multi-file image (bootloader,
-partition table, application) with its own `start`, `run` only on the last.
+released at the end, whatever the result. With firmware after 3.10.13 the pod also holds `rx`
+high with its pull-up for the run, where the channel has one (as the UART proxy does, see
+[RX pull hold](#uart_proxy_start--transparent-uart-bridge)), and puts back what the channel did
+before at the end. Write each region of a multi-file image (bootloader, partition table,
+application) with its own `start`, `run` only on the last.
 
 `start` and `sync` reply `{"started":true,"op":"start"}`. `status` (and `abort`) reply:
 

@@ -49,16 +49,53 @@ void la_pins_reset(void) {
     memset(s_pin, 0, sizeof(s_pin));
 }
 
-const char *la_fn_name(la_fn_t fn) {
-    static const char *const names[LA_FN__COUNT] = {
-        "none", "gpio", "uart_rx", "uart_tx", "swd_clk", "swd_dio",
-        "i2c_sda", "i2c_scl", "step", "step_dir",
-        "spi_sck", "spi_mosi", "spi_miso", "spi_cs",
-        "sensor_tx", "sensor_rx", "sensor_drdy", "sensor_sck", "sensor_mosi", "sensor_miso", "sensor_cs",
-        "i2cm_sda", "i2cm_scl", "uart_hd", "uart_de",
-    };
-    return ((unsigned)fn < (unsigned)LA_FN__COUNT) ? names[fn] : "none";
+/* ---- what each function does to its line ----
+   One row per function: its name, whether it drives the line push-pull (la_fn_drives), whether the
+   pod gives it the 2.2k pull (la_pull_strength_for), and why it can't share the line with an
+   engaged pull-DOWN (NULL = it can; pull-ups never conflict: every function here either drives
+   the line or wants it idling high).  gpio depends on its mode and is handled where it matters. */
+#define PD_IDLE_HIGH  "the line idles high"
+#define PD_OPEN_DRAIN "an open-drain bus needs pull-ups"
+#define PD_SWDIO      "SWDIO is pulled up when released"
+typedef struct {
+    const char *name;
+    bool        drives;
+    bool        pull_2k2;
+    const char *no_pull_down;
+} la_fn_attr_t;
+static const la_fn_attr_t s_fn[LA_FN__COUNT] = {
+    [LA_FN_NONE]        = { "none",        false, false, NULL },
+    [LA_FN_GPIO]        = { "gpio",        false, false, NULL },   /* by mode */
+    [LA_FN_UART_RX]     = { "uart_rx",     false, false, PD_IDLE_HIGH },
+    [LA_FN_UART_TX]     = { "uart_tx",     true,  false, PD_IDLE_HIGH },
+    [LA_FN_SWD_CLK]     = { "swd_clk",     true,  false, NULL },
+    [LA_FN_SWD_DIO]     = { "swd_dio",     true,  false, PD_SWDIO },
+    [LA_FN_I2C_SDA]     = { "i2c_sda",     false, true,  PD_OPEN_DRAIN },
+    [LA_FN_I2C_SCL]     = { "i2c_scl",     false, true,  PD_OPEN_DRAIN },
+    [LA_FN_STEP]        = { "step",        true,  false, NULL },
+    [LA_FN_STEP_DIR]    = { "step_dir",    true,  false, NULL },
+    [LA_FN_SPI_SCK]     = { "spi_sck",     true,  false, NULL },
+    [LA_FN_SPI_MOSI]    = { "spi_mosi",    true,  false, NULL },
+    [LA_FN_SPI_MISO]    = { "spi_miso",    false, false, NULL },
+    [LA_FN_SPI_CS]      = { "spi_cs",      true,  false, NULL },
+    [LA_FN_SENSOR_TX]   = { "sensor_tx",   true,  false, PD_IDLE_HIGH },
+    [LA_FN_SENSOR_RX]   = { "sensor_rx",   false, false, PD_IDLE_HIGH },
+    [LA_FN_SENSOR_DRDY] = { "sensor_drdy", true,  false, NULL },
+    [LA_FN_SENSOR_SCK]  = { "sensor_sck",  false, false, NULL },
+    [LA_FN_SENSOR_MOSI] = { "sensor_mosi", false, false, NULL },
+    [LA_FN_SENSOR_MISO] = { "sensor_miso", true,  false, NULL },
+    [LA_FN_SENSOR_CS]   = { "sensor_cs",   false, false, NULL },
+    [LA_FN_I2CM_SDA]    = { "i2cm_sda",    false, true,  PD_OPEN_DRAIN },
+    [LA_FN_I2CM_SCL]    = { "i2cm_scl",    false, true,  PD_OPEN_DRAIN },
+    [LA_FN_UART_HD]     = { "uart_hd",     false, true,  PD_IDLE_HIGH },   /* open drain + RX */
+    [LA_FN_UART_DE]     = { "uart_de",     true,  false, NULL },
+};
+
+static const la_fn_attr_t *fn_attr(la_fn_t fn) {
+    return ((unsigned)fn < (unsigned)LA_FN__COUNT && s_fn[fn].name) ? &s_fn[fn] : &s_fn[LA_FN_NONE];
 }
+
+const char *la_fn_name(la_fn_t fn) { return fn_attr(fn)->name; }
 
 const char *la_gpio_mode_name(la_gpio_mode_t m) {
     switch (m) {
@@ -104,116 +141,16 @@ uint16_t la_pins_owned_mask(void) {
     return (uint16_t)(~la_pins_mask_fn(LA_FN_NONE) & 0x3FFFu);
 }
 
-/* ---- pull resistors: one table per board revision ----
-   dirs: the directions the resistor can pull (LA_PULL_BIT); dflt: the one "pullup":"on" engages.
-   A board revision with other resistors gets a table of its own, picked in la_pull_hw(). */
-typedef struct { uint8_t dirs; uint8_t dflt; const char *ohms; } la_pull_hw_t;
+/* ---- pull strength by function (the pull tables are in la_pull.c) ---- */
 
-static const la_pull_hw_t s_pulls_v3[LA_PINS_COUNT + 1] = {
-    [1] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
-    [2] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
-    [3] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
-    [4] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
-    [5] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
-    [6] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
-    [7] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
-    [8] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
-    /* LA9..LA14: no resistor */
-};
-
-/* Digital v3r4: two expanders, every channel up or down with 10k, 2.2k or both (pull_exp.h).
-   "pullup":"on" engages up, and the ohms shown while off are the 10k default. */
-#define V3R4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, "10k" }
-static const la_pull_hw_t s_pulls_v3r4[LA_PINS_COUNT + 1] = {
-    [1] = V3R4_PULL, [2] = V3R4_PULL, [3] = V3R4_PULL, [4] = V3R4_PULL, [5] = V3R4_PULL,
-    [6] = V3R4_PULL, [7] = V3R4_PULL, [8] = V3R4_PULL, [9] = V3R4_PULL, [10] = V3R4_PULL,
-    [11] = V3R4_PULL, [12] = V3R4_PULL, [13] = V3R4_PULL, [14] = V3R4_PULL,
-};
-
-/* What the v3r4 pull driver engaged on each channel (la_pins_note_pull). */
-static uint8_t     s_pull_now[LA_PINS_COUNT + 1];
-static const char *s_pull_now_ohms[LA_PINS_COUNT + 1];
-
-static const la_pull_hw_t *la_pull_hw(unsigned la) {
-    if (la < 1u || la > LA_PINS_COUNT) return NULL;
-    const la_pull_hw_t *p = board_caps()->pull_expanders ? &s_pulls_v3r4[la] : &s_pulls_v3[la];
-    return p->dirs ? p : NULL;
-}
-
-void la_pins_note_pull(unsigned la, la_pull_dir_t dir, const char *ohms) {
-    if (la < 1u || la > LA_PINS_COUNT) return;
-    s_pull_now[la] = (uint8_t)dir;
-    s_pull_now_ohms[la] = dir == LA_PULL_NONE ? NULL : ohms;
-}
-
-la_pull_dir_t la_pull_dir(unsigned la) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    if (!p) return LA_PULL_NONE;
-    if (board_caps()->pull_expanders && s_pull_now[la] != LA_PULL_NONE) return (la_pull_dir_t)s_pull_now[la];
-    return (la_pull_dir_t)p->dflt;
-}
-
-const char *la_pull_ohms(unsigned la) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    if (!p) return NULL;
-    if (board_caps()->pull_expanders && s_pull_now_ohms[la]) return s_pull_now_ohms[la];
-    return p->ohms;
-}
-
-int la_pull_strength_for(unsigned la, int io_mv) {
-    if (la < 1u || la > LA_PINS_COUNT) return LA_PULL_STR_10K;
+pull_str_t la_pull_strength_for(unsigned la, int io_mv) {
+    if (la < 1u || la > LA_PINS_COUNT) return PULL_STR_10K;
     la_fn_t fn = (la_fn_t)s_pin[la].fn;
     la_gpio_mode_t mode = la_pins_gpio(la);
-    switch (fn) {
-    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL:
-    case LA_FN_UART_HD:
-        return LA_PULL_STR_2K2;
-    default: break;
-    }
-    if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return LA_PULL_STR_2K2;
-    if (io_mv == 5000 && la_fn_drives(fn, mode)) return LA_PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
-    return LA_PULL_STR_10K;
-}
-
-bool la_pull_supports(unsigned la, la_pull_dir_t d) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    return p && d != LA_PULL_NONE && (p->dirs & LA_PULL_BIT(d));
-}
-
-const char *la_pull_dir_name(la_pull_dir_t d) {
-    return d == LA_PULL_UP ? "up" : d == LA_PULL_DOWN ? "down" : "off";
-}
-
-bool la_pull_dir_parse(const char *s, la_pull_dir_t *d) {
-    if (!s) return false;
-    if (!strcmp(s, "up"))   { *d = LA_PULL_UP;   return true; }
-    if (!strcmp(s, "down")) { *d = LA_PULL_DOWN; return true; }
-    if (!strcmp(s, "off") || !strcmp(s, "none")) { *d = LA_PULL_NONE; return true; }
-    return false;
-}
-
-void la_pull_emit_dirs(bp_emit_t *e, unsigned la) {
-    bool up = la_pull_supports(la, LA_PULL_UP), down = la_pull_supports(la, LA_PULL_DOWN);
-    bp_emit(e, "[%s%s%s]", up ? "\"up\"" : "", up && down ? "," : "", down ? "\"down\"" : "");
-}
-
-la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want) {
-    la_pull_dir_t d = LA_PULL_NONE;
-    if (pull) {
-        if (!la_pull_dir_parse(pull, &d)) return LA_PULL_REQ_BAD_VALUE;
-    } else if (pullup) {
-        /* the alias: "on" / "1" engage the default direction */
-        bool on = (pullup[0] == 'o' || pullup[0] == 'O') ? (pullup[1] == 'n' || pullup[1] == 'N')
-                                                         : (atoi(pullup) != 0);
-        d = on ? la_pull_dir(la) : LA_PULL_NONE;
-        if (on && d == LA_PULL_NONE) { *want = LA_PULL_UP; return LA_PULL_REQ_NO_PULL; }
-    }
-    *want = d;   /* also on a refusal: the reply names what was asked for */
-    if (d != LA_PULL_NONE) {
-        if (!la_pull_hw(la))            return LA_PULL_REQ_NO_PULL;
-        if (!la_pull_supports(la, d))   return LA_PULL_REQ_DIRECTION;
-    }
-    return LA_PULL_REQ_OK;
+    if (fn_attr(fn)->pull_2k2) return PULL_STR_2K2;   /* I2C, the I2C master, one-wire UART */
+    if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return PULL_STR_2K2;
+    if (io_mv == 5000 && la_fn_drives(fn, mode)) return PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
+    return PULL_STR_10K;
 }
 
 int la_pins_drive(unsigned la) {
@@ -263,20 +200,10 @@ static void conflict_msg(unsigned la, char *err, size_t cap) {
                  la, la_fn_name(owner), release_hint(owner, la, hint, sizeof(hint)));
 }
 
-/* Why a function can't share its line with an engaged pull-DOWN (NULL = it can).  Pull-ups
-   never conflict: every function here either drives the line or wants it idling high. */
+/* Why a function can't share its line with an engaged pull-DOWN (NULL = it can). */
 static const char *pull_down_reason(la_fn_t fn, la_gpio_mode_t mode) {
-    switch (fn) {
-    case LA_FN_GPIO:
-        return (mode == LA_GPIO_OPEN_DRAIN) ? "a released line would read low" : NULL;
-    case LA_FN_UART_RX: case LA_FN_UART_TX: case LA_FN_SENSOR_TX: case LA_FN_SENSOR_RX:
-    case LA_FN_UART_HD:
-        return "the line idles high";
-    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL:
-    case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL: return "an open-drain bus needs pull-ups";
-    case LA_FN_SWD_DIO: return "SWDIO is pulled up when released";
-    default: return NULL;   /* none, gpio input/output, swd_clk, step, step_dir, spi_* (driven) */
-    }
+    if (fn == LA_FN_GPIO) return (mode == LA_GPIO_OPEN_DRAIN) ? "a released line would read low" : NULL;
+    return fn_attr(fn)->no_pull_down;
 }
 
 /* "gpio open_drain" for a gpio pin (the mode is what conflicts), else the function name. */
@@ -350,14 +277,8 @@ la_dir_t la_pins_dir(unsigned la) { return la_ok(la) ? (la_dir_t)s_dir[la] : LA_
 void     la_pins_set_dir(unsigned la, la_dir_t d) { if (la_ok(la)) s_dir[la] = (uint8_t)d; }
 
 bool la_fn_drives(la_fn_t fn, la_gpio_mode_t mode) {
-    switch (fn) {
-    case LA_FN_GPIO: return mode == LA_GPIO_OUTPUT;
-    case LA_FN_UART_TX: case LA_FN_UART_DE: case LA_FN_SWD_CLK: case LA_FN_SWD_DIO: case LA_FN_STEP: case LA_FN_STEP_DIR:
-    case LA_FN_SPI_SCK: case LA_FN_SPI_MOSI: case LA_FN_SPI_CS:
-    case LA_FN_SENSOR_TX: case LA_FN_SENSOR_DRDY: case LA_FN_SENSOR_MISO:
-        return true;
-    default: return false;   /* none, inputs, open drain (I2C, i2cm), gpio input / open_drain */
-    }
+    if (fn == LA_FN_GPIO) return mode == LA_GPIO_OUTPUT;
+    return fn_attr(fn)->drives;   /* inputs and open drain (I2C, i2cm, uart_hd) do not */
 }
 
 bool la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap) {
@@ -678,7 +599,7 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
         bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s",
                 la_pull_dir_name(la_pull_dir(la)), ohms,
                 (pull_mask & (1u << (la - 1u))) ? "true" : "false");
-        if (!board_caps()->pull_expanders) {
+        if (!la_pull_both_ways()) {
             bp_emit_raw(e, ",\"dirs\":");
             la_pull_emit_dirs(e, la);
         }
@@ -702,6 +623,15 @@ void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask) {
         first = false;
     }
     bp_emit_raw(e, "]");
+}
+
+void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool have_levels, uint16_t levels) {
+    bp_emit_raw(e, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(e, only, pull_mask);
+    /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
+    if (la_pull_both_ways()) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
+    if (have_levels) bp_emit(e, ",\"levels\":%u}}\n", (unsigned)levels);
+    else             bp_emit_raw(e, ",\"levels\":null}}\n");
 }
 
 /* ---- capture trigger ---- */

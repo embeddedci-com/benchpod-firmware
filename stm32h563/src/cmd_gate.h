@@ -21,6 +21,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cmd_table.h"   /* cmd_desc_t */
 #include "cmd_tier.h"
 #include "pod_policy.h"
 
@@ -38,15 +39,24 @@ typedef struct {
     bool             has_analog;       /* board_has_analog() */
 } cmd_gate_ctx_t;
 
-/* NULL = `cmd` (with its full JSON line `json`, already classified as `tier`) may run; else the
-   refusal to send, either a constant or written into why[why_cap]. */
-const char *cmd_gate_check(const char *cmd, const char *json, cmd_tier_t tier,
+/* The start of the one refusal for a cloud job holding the pod. dispatch_line sends that one as
+   lease_busy (BP0025) with holder "a cloud job" and the cloud holder as its purpose; hosts that
+   predate the codes read the text ("busy: ..."), so it stays as it was. */
+#define CMD_GATE_CLOUD_LEASE_HOLDER "a cloud job"
+#define CMD_GATE_CLOUD_LEASE_TEXT   "busy: " CMD_GATE_CLOUD_LEASE_HOLDER " holds this pod"
+
+/* NULL = `cmd` (its row `d` from cmd_find, NULL for an unknown verb, with its full JSON line
+   `json`, already classified as `tier`) may run; else the refusal to send, either a constant or
+   written into why[why_cap].  `cmd` is only the name the refusals quote. */
+const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap);
 
 /* Checks 4 and 5 alone (safe mode, the digital-only board), for the transports that have no
    tier, lease or tunnel of their own: SCPI asks with the JSON verb its command stands for
    (command_handler_device_gate). NULL = may run, else the refusal (a constant). */
 const char *cmd_gate_device(const char *cmd, const char *json, bool skip_hw, bool has_analog);
+/* The same for a row already looked up (NULL = unknown verb). */
+const char *cmd_gate_device_row(const cmd_desc_t *d, const char *json, bool skip_hw, bool has_analog);
 
 /* Commands that run with the iCE40/PSRAM off (safe mode). */
 bool cmd_gate_ok_without_hw(const char *cmd);

@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "la_pull.h"   /* pull_str_t; this is its digital v3r4 backend */
+
 /* ============================================================================
  * pull_exp — the LA pull resistors of digital v3r4: two TCA6416A expanders on the main I2C bus.
  *
@@ -24,8 +26,8 @@
  *   - Pull-ups are suspended while the pod has switched the DUT's power off (a rail went from on
  *     to off), so pin 21 does not feed an unpowered DUT through them; they come back when a rail
  *     turns on, or when the host sets a pull.  A DUT the pod never powers is not affected.
- *   - Only on board_caps()->pull_expanders.  Older boards keep the TCA9554 driver at 0x20
- *     (i2c_bus.c) and never see PG7 or 0x21.
+ *   - Only on board_caps()->pull_expanders (la_pull_init picks this backend, la_pull_backend_exp).
+ *     Older boards keep the TCA9554 backend at 0x20 (pull_tca9554.c) and never see PG7 or 0x21.
  * ==========================================================================*/
 
 #define PULL_EXP_ADDR_2K2   0x20u   /* U18, ADDR = GND */
@@ -33,14 +35,11 @@
 #define PULL_EXP_CHANNELS   14u
 
 /* TCA6416A command bytes: a write auto-increments to the pair's second register. */
-#define TCA6416_REG_INPUT0   0x00u
 #define TCA6416_REG_OUTPUT0  0x02u
-#define TCA6416_REG_POL0     0x04u
 #define TCA6416_REG_CONFIG0  0x06u
 
-/* Strength: which resistors a channel engages. */
-typedef enum { PULL_STR_NONE = 0, PULL_STR_10K = 1, PULL_STR_2K2 = 2, PULL_STR_BOTH = 3 } pull_str_t;
-/* Direction: same values as la_pull_dir_t (la_pins.h). */
+/* Strength (pull_str_t) and its names: la_pull.h. */
+/* Direction: same values as la_pull_dir_t (la_pull.h). */
 typedef enum { PULL_EXP_OFF = 0, PULL_EXP_UP = 1, PULL_EXP_DOWN = 2 } pull_exp_dir_t;
 
 typedef struct { uint16_t out, cfg; } tca6416_regs_t;   /* cfg bit 1 = input (off) */
@@ -75,16 +74,12 @@ pull_exp_dir_t pull_exp_channel(tca6416_regs_t r2k2, tca6416_regs_t r10k, unsign
    switched the DUT off; only when a pull-up is asked for).  live: out of reset and written. */
 const char *pull_exp_hold_name(bool live, bool rail_up, bool suspend_up, bool any_up_asked);
 
-/* "10k", "2.2k", "1.8k" (both), or NULL. */
-const char *pull_str_ohms(pull_str_t s);
-/* "10k" / "2.2k" / "both" -> strength; false otherwise. */
-bool        pull_str_parse(const char *s, pull_str_t *out);
-const char *pull_str_name(pull_str_t s);   /* "10k", "2.2k", "both", "none" */
-
 /* ---- hardware (no-ops unless board_caps()->pull_expanders) ---- */
 
 /* PG7 low (both in reset), then released once pin 21 is up.  After vref_out_init(). */
 void pull_exp_init(void);
+/* The board has the expanders (board_caps()->pull_expanders, latched by pull_exp_init()).
+   Test hook: only the host tests call it (test_pull_exp_state.c). */
 bool pull_exp_present(void);
 
 /* Set one channel.  0, -1 (not present, bad channel, I2C failure), PULL_EXP_ERR_RAIL (pin 21 is
@@ -96,8 +91,6 @@ void pull_exp_all_off(void);
 
 /* Follow the pod's target power (hw worker loop; RAM reads only). */
 void pull_exp_poll(void);
-/* Pull-ups are suspended (the pod switched the DUT off). */
-bool pull_exp_ups_suspended(void);
 
 /* The state the host asked for (also while held in reset or suspended). */
 pull_exp_dir_t pull_exp_dir(unsigned la);

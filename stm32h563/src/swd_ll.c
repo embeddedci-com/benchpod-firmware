@@ -2,6 +2,7 @@
 
 #include "swd_ll.h"
 #include "signal_engine.h"   /* fpga_swd_feed() */
+#include "gw_caps.h"
 #include "nrst_ctrl.h"       /* the dedicated /NRST_CONTROL pin (rev3+) */
 #include "fpga_config.h"     /* FPGA_HFOSC_HZ */
 
@@ -129,7 +130,7 @@ void swd_ll_set_clock(uint32_t hz) {
 }
 
 bool swd_ll_batch_supported(void) {
-    return signal_engine_fpga_version() >= SWD_QUEUE_MIN_GW && s_turnaround == 1 && !s_data_phase;
+    return gw_caps()->swd_queue && s_turnaround == 1 && !s_data_phase;
 }
 
 /* The 8-bit SWD request packet: start, APnDP, RnW, A2, A3, parity, stop, park (LSB first). */

@@ -29,6 +29,7 @@
 #include "bp_json.h"
 #include "console.h"     /* console_rx_dropped / console_tx_dropped */
 #include "signal_engine.h"
+#include "la_io.h"
 #include "stm32h5xx_hal.h"   /* HAL_GetTick */
 #include "wifi_manager.h"
 #include "cloud_client.h"
@@ -225,13 +226,14 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
            clients that read the features table ("caps":false, which is where `lease` is): an
            older client would not look at it, and its caps list leaves no room. */
         const lease_local_view_t *ll = &in->local_lease;
-        if (caps_list) {
-        } else if (!ll->held)
-            bp_emit_raw(e, "\"local_lease\":{\"held\":false},");
-        else
-            bp_emit(e, "\"local_lease\":{\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
-                        "\"left_s\":%lu,\"mine\":%s},",
-                    ll->holder, ll->purpose, (unsigned long)ll->left_s, ll->mine ? "true" : "false");
+        if (!caps_list) {
+            if (!ll->held)
+                bp_emit_raw(e, "\"local_lease\":{\"held\":false},");
+            else
+                bp_emit(e, "\"local_lease\":{\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
+                            "\"left_s\":%lu,\"mine\":%s},",
+                        ll->holder, ll->purpose, (unsigned long)ll->left_s, ll->mine ? "true" : "false");
+        }
     }
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */

@@ -4,11 +4,12 @@
 /*
  * cmd_table — the one table of JSON commands (defined in cmd_tier.c).
  *
- * Each row holds a verb, its tier (cmd_tier.h), what the gates need to know about it and its
- * handler. dispatch_line() looks the verb up here and calls the handler; the tier gate
- * (cmd_tier), the lease gate (cmd_tier_light), the safe-mode and digital-board gates (cmd_gate),
- * the cloud command channel (no streaming verbs) and the console trace (no noisy polls) all read
- * the same row, so a new command is one line here and nothing else.
+ * Each row holds a verb, its tier (cmd_tier.h), what the gates need to know about it, its
+ * handler and, for a verb whose tier depends on its arguments, the test for its write form.
+ * dispatch_line() looks the verb up here once and hands the row on: the tier gate
+ * (cmd_tier_of), the lease gates (cmd_tier_light_of), the safe-mode and digital-board gates
+ * (cmd_gate), the cloud command channel (no streaming verbs) and the console trace (no noisy
+ * polls) all read the same row, so a new command is one line here and nothing else.
  *
  * Host tests compile cmd_tier.c with CMD_TABLE_NO_HANDLERS: the rows then carry no handler, so
  * the table links without command_handler.c.
@@ -20,6 +21,9 @@
 #include "cmd_tier.h"
 
 typedef void (*cmd_fn_t)(int conn_id, const char *json);
+/* A mixed verb's write form (cmd_tier.h): nonzero when `json` (never NULL) asks to change
+   something, which makes the command T2.  The row's tier is the read form's. */
+typedef int (*cmd_writes_fn_t)(const char *json);
 
 enum {
     /* Runs with the iCE40/PSRAM off (boot_guard safe mode): network config, status, target
@@ -27,7 +31,7 @@ enum {
        hardware; leaving the flag out is the safe default. */
     CMD_F_NO_HW  = 1u << 0,
     /* Needs the analog front end (DAC, ADC, relays, the 4-20 mA terminals): refused on the
-       digital-only board. capture_dual is special-cased by cmd_gate (an LA-only capture is fine). */
+       digital-only board. */
     CMD_F_ANALOG = 1u << 1,
     /* Streams chunks or switches the connection into a raw protocol (SWD, UART, upload): cannot be
        carried over the single-reply cloud command channel. */
@@ -37,8 +41,9 @@ enum {
     CMD_F_HEAVY  = 1u << 3,
     /* Polled on a timer by the web UI: not traced on the serial console. */
     CMD_F_NOISY  = 1u << 4,
-    /* The tier depends on the arguments (cmd_tier.h): the row's tier is the read form's. */
-    CMD_F_MIXED  = 1u << 5,
+    /* Needs the analog front end only when it asks for ADC samples ("adc_samples" > 0):
+       capture_dual, whose LA-only form runs on the digital-only board. */
+    CMD_F_ADC_SAMPLES = 1u << 5,
     /* lease_acquire / lease_renew / lease_release (lease_local.h): always reach their handler, so a
        busy lease answers with its holder instead of a gate refusal. */
     CMD_F_LEASE  = 1u << 6,
@@ -54,6 +59,7 @@ typedef struct {
     } key;
     uint8_t  flags;         /* CMD_F_* */
     cmd_fn_t fn;            /* NULL under CMD_TABLE_NO_HANDLERS */
+    cmd_writes_fn_t writes; /* NULL: the tier does not depend on the arguments */
 } cmd_desc_t;
 
 /* The row for `name`, NULL for an unknown verb. */
@@ -63,6 +69,8 @@ const cmd_desc_t *cmd_table_rows(size_t *count);
 
 /* The tier of row `d` (NULL = unknown verb, T3) with its full JSON line `json`. */
 cmd_tier_t cmd_tier_of(const cmd_desc_t *d, const char *json);
+/* cmd_tier_light() for row `d` (NULL = unknown verb: not light). */
+int cmd_tier_light_of(const cmd_desc_t *d, const char *json);
 
 static inline int cmd_has(const cmd_desc_t *d, unsigned flag) { return d && (d->flags & flag); }
 

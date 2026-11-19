@@ -35,7 +35,7 @@ static const char *gate(const char *json, const cmd_gate_ctx_t *c) {
         memcpy(cmd, p, n);
     }
     memset(s_why, 0, sizeof(s_why));
-    return cmd_gate_check(cmd, json, cmd_tier(cmd, json), c, s_why, sizeof(s_why));
+    return cmd_gate_check(cmd_find(cmd), cmd, json, cmd_tier(cmd, json), c, s_why, sizeof(s_why));
 }
 
 static int starts(const char *s, const char *prefix) {
@@ -98,6 +98,8 @@ static void test_lease(void) {
     CHECK(gate("{\"cmd\":\"status\"}", &c) == NULL, "light read refused: %s", s_why);
     const char *r = gate("{\"cmd\":\"generate\"}", &c);
     CHECK(r && strcmp(r, "busy: a cloud job holds this pod (CI: org/repo, 42 s left)") == 0, "T1: %s", r);
+    /* dispatch_line sends this one refusal as lease_busy (BP0025) by its start */
+    CHECK(starts(r, CMD_GATE_CLOUD_LEASE_TEXT), "cloud lease prefix: %s", r);
     /* a T0 read that takes the capture hardware is not light */
     CHECK(starts(gate("{\"cmd\":\"capture\",\"samples\":10}", &c), "busy:"), "capture: %s", s_why);
     /* no holder label: "cloud" */

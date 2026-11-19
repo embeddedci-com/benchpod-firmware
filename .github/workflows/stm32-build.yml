@@ -146,7 +146,8 @@ jobs:
       - name: Build STM32 firmware (RELEASE=1)
         run: |
           set -o pipefail
-          make -C stm32h563 -j"$(nproc)" RELEASE=1 2>&1 | tee build.log
+          # FLASH_FLOOR_KB: the link fails with less than 24 KB of the code region left.
+          make -C stm32h563 -j"$(nproc)" RELEASE=1 FLASH_FLOOR_KB=24 2>&1 | tee build.log
 
       - name: No compiler warnings
         run: |

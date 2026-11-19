@@ -71,6 +71,9 @@ int bp_json_byte_array(const char *json, const char *key,
    type names next to base64 data. Returns false (out = "") when absent or cut short. */
 bool bp_json_scan_str(const char *buf, size_t n, const char *key, char *out, size_t cap);
 
+/* One hex digit (0-9, a-f, A-F) -> 0..15; -1 for anything else. */
+int bp_hex_nibble(char c);
+
 /* ---- emitter -------------------------------------------------------------- */
 
 /* Bounds-tracked builder.  Never overruns buf; sets ok=false the first time an

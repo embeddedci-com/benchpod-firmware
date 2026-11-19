@@ -2,8 +2,8 @@
  * cal_data.h — baked-in calibration, one set per board revision.  Linear: value = a + b*x.
  *
  * Each set was measured on ONE board of that revision against an HP 34401A, and every pod of
- * the revision uses it.  cal_data_select() picks the set at boot from the revision strap
- * (board_rev.h); DAC_CAL / ADC_CAL_* below then read the selected set, so callers do not care
+ * the revision uses it.  cal_data_use() picks the set at boot from the revision strap
+ * (board_caps()->cal_set); DAC_CAL / ADC_CAL_* below then read the selected set, so callers do not care
  * which revision they run on.
  *
  * Source of truth / re-runnable: benchpod-firmware/calibration/ ({dac_cal,adc_cal}.json for v2,
@@ -13,6 +13,8 @@
 #define CAL_DATA_H
 
 #include <stdint.h>
+
+#include "board_caps.h"   /* board_cal_set_t */
 
 typedef struct { float a, b; } cal_lin_t;
 
@@ -61,9 +63,13 @@ typedef struct {
 #define ADC_LOW_RANGE_RATIO_NOMINAL (82.5f / 992.5f / 0.5f)
 float cal_adc_low_ratio(void);
 
-/* Pick the set for a board revision (BOARD_REV_V3 and BOARD_REV_V3R4 -> rev3, BOARD_REV_V3R2 -> v3r2,
-   anything else -> v2).  Call once at boot, right after board_rev_init() and before anything converts a
-   voltage.  Until then the v2 set is active. */
+/* Use a calibration set (board_caps()->cal_set).  Call once at boot, right after board_rev_init()
+   and before anything converts a voltage.  Until then the v2 set is active. */
+void cal_data_use(board_cal_set_t set);
+
+/* The set of a board revision: cal_data_use(board_caps_for_rev(board_rev).cal_set), where the
+   revision-to-set mapping lives (v3 and v3r4 -> rev3, v3r2 -> v3r2, anything else -> v2).  For host
+   tests. */
 void cal_data_select(int board_rev);
 
 /* The active set.  A plain RAM read, safe from any task. */

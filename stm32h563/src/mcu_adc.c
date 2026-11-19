@@ -99,8 +99,7 @@ int mcu_adc_init(void)
     if (convert_raw(ADC_CHANNEL_VREFINT, &raw) == 0 && raw != 0) {
         s_vref_mv = (int)__LL_ADC_CALC_VREFANALOG_VOLTAGE(raw, LL_ADC_RESOLUTION_12B);
     } else {
-        log_printf("[adc] VREFINT read failed; assuming VREF+ = %d mV\r\n",
-               MCU_ADC_VREF_NOMINAL_MV);
+        LOG_W("[adc] VREFINT read failed; assuming VREF+ = %d mV\n", MCU_ADC_VREF_NOMINAL_MV);
     }
     return 0;
 }
@@ -116,7 +115,7 @@ int mcu_adc_read_mv_avg(uint32_t channel, unsigned n, int *out_mv)
        task would race the worker's, so it fails cleanly instead. */
     if (!hw_worker_is_current()) {
         static bool s_said;
-        if (!s_said) { s_said = true; log_printf("[adc] MCU ADC read off the hw worker refused\r\n"); }
+        if (!s_said) { s_said = true; LOG_E("[adc] MCU ADC read off the hw worker refused\n"); }
         return -1;
     }
     if (n < 1)  n = 1;
