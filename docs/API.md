@@ -2034,6 +2034,46 @@ Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `
 and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
 (SDK, MCP, CLI, web) send `pull` to new firmware and `pullup` to older firmware.
 
+#### Pull resistors on digital v3r4
+
+Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware after 3.10.12)
+has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
+expander that can pull up or down. So every channel pulls `up` or `down`, with 10k, 2.2k
+or both (about 1.8k). The pull-ups go to J1 pin 21, which follows the I/O voltage (1.8 V,
+3.3 V, or 5 V in [5 V mode](#5-v-and-pin-21-digital-board-v3r4)), so they work at every
+voltage.
+
+The pod picks the strength from the pin's function unless the host names one:
+
+| Pin function | Strength |
+|---|---|
+| I2C (emulated sensor or I2C master), one-wire UART, gpio `open_drain` | 2.2k |
+| Pod outputs (gpio output, UART TX, SPI, SWD) in 5 V mode: the pull-up lifts the line from 3.3 V to 5 V | 2.2k |
+| Everything else (UART RX hold, straps, idle levels, RS-485 DE bias) | 10k |
+
+```json
+{"cmd": "la", "la": 9, "pull": "down", "strength": "both"}
+{"status": "ok", "data": {"la": 9, "pullup": 1, "ohms": "1.8k", "pull": "down", "state": "down",
+  "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": 1}}
+```
+
+- `strength` (optional, digital v3r4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
+  from the table above. Other boards ignore it, as older firmware does.
+- The reply adds `strength` (`"none"` when off) and `strengths`. `ohms` is the value engaged
+  (10k while off). `pull` is the direction engaged, `up` while off (what `pullup:"on"` engages).
+- [`la_pins`](#la_pins--report-every-la-pin) entries leave `dirs` out on this board (every
+  channel pulls both ways; the reply says it once as `"pull_dirs":["up","down"]`), so the
+  14-channel list fits the cloud reply.
+- `pullups_available` is `1` once an I/O voltage is set and pin 21 is up.
+- When pin 21 goes down (shorted, overloaded, or held down) the pod holds both expanders in
+  reset (every pull off) and refuses `up`/`down` with `BP0029`. When pin 21 is back it
+  writes every pull back as the host left it.
+- When the pod switches the DUT's power off (`target_power`), the pull-ups stay off until a
+  rail is switched on again or the host sets a pull, so pin 21 does not feed an unpowered DUT.
+  Pull-downs stay. A DUT that the pod never powers keeps its pulls.
+- As on the other v3 boards, the pulls stay on when the bank switches; on v3r4 that includes
+  switching to and from 5 V (pin 21 moves with it).
+
 #### Read all pulls as a bitmask
 
 Send `la` with no channel:
@@ -2071,6 +2111,10 @@ the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | I2C write to the PCA9555 failed | `"pca9555 write failed"` |
+| `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
+| `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
+| `up`/`down` before an I/O voltage is set (digital v3r4) | `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
+| I2C write to a pull expander failed (digital v3r4) | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
 for the duration of the train (function `step` / `step_dir`) and released when the gateware

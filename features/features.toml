@@ -33,7 +33,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 6
+revision = 7
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -763,3 +763,11 @@ requires = ["vref_out"]
 docs = "API.md#la_voltage--select-the-la-io-bank-voltage"
 dated = "code"
 note = "la_voltage takes 5000: the bank stays at 3.3 V and pin 21, the pull-up rail, goes to 5 V; the reply has vref_out (pin 21's source, setting, measured voltage and state). Refusal BP0028 when 5 V does not come up."
+
+[features.la_pull_strength]
+rev = 7
+firmware = "next"
+requires = ["vref_out"]
+docs = "API.md#pull-resistors-on-digital-v3r4"
+dated = "code"
+note = "Every channel pulls up or down with 10k, 2.2k or both; la pull takes strength (the pod picks from the pin's function without it) and replies strength and strengths; la_pins says pull_dirs once. Refusal BP0029 while pin 21 is down."

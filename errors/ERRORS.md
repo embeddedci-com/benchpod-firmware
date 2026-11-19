@@ -34,3 +34,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0026 | `lease_lost` | lease | next | The pod's lease was stopped by {by} |
 | BP0027 | `lease_not_held` | lease | next | The pod holds no lease with id {id} |
 | BP0028 | `vref_5v_missing` | io | next | 5 V did not come up on pin 21 ({mv} mV) |
+| BP0029 | `pull_rail_down` | io | next | pin 21 is down ({mv} mV): the pull resistors are off until it is back |

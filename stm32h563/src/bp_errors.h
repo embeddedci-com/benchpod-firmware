@@ -48,6 +48,7 @@ typedef enum {
     BP_E_LEASE_LOST = 26,
     BP_E_LEASE_NOT_HELD = 27,
     BP_E_VREF_5V_MISSING = 28,
+    BP_E_PULL_RAIL_DOWN = 29,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -193,6 +194,11 @@ static inline void bp_err_lease_not_held(int conn_id, const char *text, const ch
 static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_VREF_5V_MISSING, text, a, 1);
+}
+/* BP0029: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
+static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, text, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

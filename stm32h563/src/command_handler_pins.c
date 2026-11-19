@@ -20,6 +20,7 @@
 #include "target_power.h"
 #include "board_caps.h"
 #include "vref_out.h"
+#include "pull_exp.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -215,6 +216,8 @@ void handle_la_pins(int conn_id, const char *json) {
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
     la_pins_emit_list(&e, 0x3FFFu, pulls);
+    /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
+    if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
     if (have) bp_emit(&e, ",\"levels\":%u}}\n", (unsigned)levels);
     else      bp_emit_raw(&e, ",\"levels\":null}}\n");
     send_emitted(conn_id, &e);
@@ -365,7 +368,7 @@ void handle_la(int conn_id, const char *json) {
     char la_s[8] = {0};
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
         unsigned mask = 0;
-        for (unsigned la = 1; la <= 8; la++) {
+        for (unsigned la = 1; la <= LA_PINS_COUNT; la++) {   /* 9..14: v3r4 only (false elsewhere) */
             if (pca9555_la_pullup_enabled((uint8_t)la)) mask |= (1u << (la - 1));
         }
         /* pullups_available says whether a pull CAN be engaged right now (a bank voltage is
@@ -418,6 +421,33 @@ void handle_la(int conn_id, const char *json) {
             send_error(conn_id, pull_err);
             return;
         }
+        /* Digital v3r4: direction and strength per channel ("strength":"10k"|"2.2k"|"both";
+           without it the pod picks from the pin's function).  Older boards ignore "strength",
+           like older firmware does. */
+        if (board_caps()->pull_expanders) {
+            char str_s[8] = {0};
+            pull_str_t str = PULL_STR_NONE;
+            if (json_get_value(json, "strength", str_s, sizeof(str_s)) && !pull_str_parse(str_s, &str)) {
+                send_error(conn_id, "strength must be 10k, 2.2k or both");
+                return;
+            }
+            int rc = la_pull_engage((uint8_t)la, want, (int)str);
+            if (rc == LA_PULLUP_ERR_RAIL) {
+                char m[96];
+                snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
+                         vref_out_last_mv());
+                bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+                return;
+            }
+            if (rc == LA_PULLUP_ERR_VOLTAGE) {
+                send_error(conn_id, "la voltage not set; set la_mv in the active wiring profile, or call la_voltage first");
+                return;
+            }
+            if (rc != 0) {
+                send_error(conn_id, "pull expander write failed");
+                return;
+            }
+        } else
         /* Today's boards: one switch per channel, which engages its one direction. */
         if (la_pull_ohms(la)) {
             int rc = pca9555_set_la_pullup((uint8_t)la, want != LA_PULL_NONE);
@@ -449,6 +479,10 @@ void handle_la(int conn_id, const char *json) {
             dflt == LA_PULL_NONE ? "none" : la_pull_dir_name(dflt),
             la_pull_dir_name(on ? dflt : LA_PULL_NONE));
     la_pull_emit_dirs(&e, la);
+    /* v3r4: the strength engaged ("none" when off) and every strength the channel has. */
+    if (board_caps()->pull_expanders)
+        bp_emit(&e, ",\"strength\":\"%s\",\"strengths\":[\"10k\",\"2.2k\",\"both\"]",
+                pull_str_name(pull_exp_str(la)));
     bp_emit(&e, ",\"pullups_available\":%d}", la_pullups_available() ? 1 : 0);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);

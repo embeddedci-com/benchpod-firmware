@@ -73,6 +73,7 @@ void command_handler_poll(void) {}
 void signal_engine_poll(void) {}
 void target_power_poll(void) {}
 void vref_out_poll(uint32_t now_ms) { (void)now_ms; }
+void pull_exp_poll(void) {}
 void watchdog_heartbeat(int task, const char *name) { (void)task; (void)name; }
 void watchdog_test_hang_point(int task) { (void)task; }
 void boot_deferred_hw_init(void) {}

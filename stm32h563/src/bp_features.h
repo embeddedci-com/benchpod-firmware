@@ -5,6 +5,6 @@
 /* The revision of features/features.toml this firmware is built from. The pod announces it as
    features_rev (status, cloud capabilities frame); clients take every feature with rev <= it from
    their copy of features/features.json instead of a list the pod sends. */
-#define BP_FEATURES_REV 6u
+#define BP_FEATURES_REV 7u
 
 #endif /* BP_FEATURES_H */

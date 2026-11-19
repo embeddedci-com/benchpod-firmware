@@ -80,6 +80,8 @@ C_SOURCES := \
   src/board_caps.c \
   src/vref_logic.c \
   src/vref_out.c \
+  src/pull_exp_logic.c \
+  src/pull_exp.c \
   src/board_variant.c \
   src/module_link.c \
   src/module_eeprom.c \

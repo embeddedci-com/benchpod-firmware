@@ -18,6 +18,7 @@
  * Commands and replies fit one cloud frame.  Runs on the hw worker task.
  */
 #include "command_handler.h"
+#include "board_caps.h"
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "signal_engine.h"
@@ -85,8 +86,12 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
         return false;
     }
     if (!la_pullups_available()) {
-        send_error(conn_id, "this board's pull-ups go to 3.3 V and the LA bank is not at 3.3 V: pass "
-                   "\"pullups\":\"external\" with pull-ups to the board's own rail");
+        if (board_caps()->pull_expanders)   /* v3r4: pin 21 is down (they work at every voltage) */
+            send_error(conn_id, "the pod's pull-ups are off: J1 pin 21 is down (la_voltage shows it); "
+                       "check pin 21, or pass \"pullups\":\"external\"");
+        else
+            send_error(conn_id, "this board's pull-ups go to 3.3 V and the LA bank is not at 3.3 V: pass "
+                       "\"pullups\":\"external\" with pull-ups to the board's own rail");
         return false;
     }
     if (!pca9555_la_pullup_enabled((uint8_t)la)) {

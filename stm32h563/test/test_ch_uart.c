@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "command_handler_internal.h"
+#include "pull_exp.h"
 #include "at_driver.h"
 #include "signal_engine.h"
 #include "i2c_bus.h"
@@ -101,6 +102,10 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
 int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
 bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
 bool la_pullups_available(void) { return true; }
+/* Digital v3r4 pull expanders: not on the board these tests model (board_caps all false). */
+int  la_pull_engage(uint8_t la, la_pull_dir_t d, int s) { (void)la; (void)d; (void)s; return -1; }
+pull_exp_dir_t pull_exp_dir(unsigned la) { (void)la; return PULL_EXP_OFF; }
+pull_str_t pull_exp_str(unsigned la) { (void)la; return PULL_STR_NONE; }
 bool la_pull_supports(unsigned la, la_pull_dir_t d) { return d == LA_PULL_UP ? (la >= 1 && la <= 6) : d == LA_PULL_DOWN ? (la == 7 || la == 8) : false; }
 static int g_de_claimed = -1;
 uint16_t la_pins_release_fn(la_fn_t fn) { if (fn == LA_FN_UART_DE) g_de_claimed = -1; return 0; }

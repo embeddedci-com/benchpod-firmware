@@ -31,6 +31,7 @@
 #include "queue.h"
 #include "bp_log.h"
 #include "vref_out.h"
+#include "pull_exp.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -444,6 +445,7 @@ static void worker_task(void *arg) {
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
         vref_out_poll(HAL_GetTick()); /* J1 pin 21 sense (digital v3r4 only)            */
+        pull_exp_poll();          /* pull-ups follow the pod's target power (v3r4 only) */
         status_led_service();     /* the RGB status LED follows the pod's state         */
 #if !defined(BENCHPOD_EMI_TEST)
         ice40_idle_check(HAL_GetTick());   /* an iCE40 that stopped answering (recovery.h) */
