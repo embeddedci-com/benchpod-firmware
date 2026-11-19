@@ -20,7 +20,11 @@ static char     s_broken_id[LEASE_LOCAL_ID_MAX];
 static char     s_lost_by[LEASE_LOCAL_HOLDER_MAX];
 static uint32_t s_broken_until_ms;
 
-static volatile uint32_t s_seq;   /* odd while the writer changes the fields above */
+/* A seqlock: odd while the writer (the hw worker) changes the fields above; a reader (the net
+   task, lease_local_snapshot) retries when it changed under it. It relies on a single core: the
+   reader can only run while the writer is preempted, so LL_FENCE (a compiler fence, no memory
+   barrier) is enough to order the stores. A second core would need real barriers. */
+static volatile uint32_t s_seq;
 static volatile uint32_t s_gen;
 
 /* lease.break from the net task, applied by the writer. */
@@ -107,8 +111,13 @@ static void settle(uint32_t now_ms) {
         }
     }
     if (s_held && !live(now_ms)) { wr_begin(); clear_locked(); wr_end(); }
-    /* Forget a broken id after its time, so a stale deadline cannot read as live 2^31 ms on. */
-    if (s_broken_id[0] && (int32_t)(s_broken_until_ms - now_ms) <= 0) s_broken_id[0] = '\0';
+    /* Forget a broken id after its time, so a stale deadline cannot read as live 2^31 ms on.
+       Inside the write section like every other store to the fields the seqlock covers. */
+    if (s_broken_id[0] && (int32_t)(s_broken_until_ms - now_ms) <= 0) {
+        wr_begin();
+        s_broken_id[0] = '\0';
+        wr_end();
+    }
 }
 
 const char *lease_local_broken_by(void) { return s_lost_by; }
