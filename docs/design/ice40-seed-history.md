@@ -51,7 +51,7 @@ FF+mux logic, and halving them reclaimed the LC AND the routing.  Now 4619 LC (B
 4622 baseline) and it places on seed 9 (the v17 pin) at clk ~32 MHz (PASS @24).  --threads 1
 keeps PnR reproducible.  If a future change tightens placement, re-sweep `--seed N`.
 v19 LC-REDUCTION PASS (ADC deep-ring dropped, dead code purged): util drops to 4414 LC (83%).
-clk48 IS a timed domain here (the DAC8551 sequencer + psram_dual_writer serializer run on it),
+clk48 IS a timed domain here (the single-channel DAC sequencer + psram_dual_writer serializer run on it),
 and closing it @48 MHz under clocks.py is seed-fragile: a fresh 1..12 sweep on this netlist
 passed clk48@48 only on seeds 6 (49.1), 10 (48.5) and 12 (50.4) — seed 9 now closes clk48 at
 only 47.55 (FAIL @48), so re-pinned to SEED 12 (best clk48 margin; clk ~34.6 MHz PASS @24).
@@ -186,7 +186,7 @@ differently: 3893 LC): seed 26 still closes (clk48 55.05, clk 29.73, clk -> clk4
 v48 (UART2, the TX-only second UART; 4066 LC, 77%): swept 1..64 in both toolchains: 48/64 local,
 55/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 26 -> 17, the best in both (clk48 54.84 local /
 55.98 CI, clk -> clk48 10.73 / 9.84 ns).
-v49 (DAC8554: OP_DAC_CTRL stream control byte + one-shot static frame; 4133 LC, 78%): seed 17
+v49 (quad DAC: OP_DAC_CTRL stream control byte + one-shot static frame; 4133 LC, 78%): seed 17
 first fell to clk48 43.55 MHz, bound by an OR of three flags in the DAC engine's enable; with that
 back to one flop (run_i) and wave_addr out of the FSM's priority chain it closes at 52.48.
 Swept 1..64 locally: 44/64 reach MIN_CLK48_MHZ.  Pinned SEED_LOOP 17 -> 57 (clk48 55.31, clk
@@ -308,7 +308,7 @@ v47 + cell_gearbox48 (ARCH-GW-1, no logic change, see SEED_LOOP; 3610 LC): seed 
 v48 (UART2; 3780 LC, 71%): seed 57 FAILED clk48 (45.50 MHz).  Swept 1..64 in both toolchains:
 60/64 local, 64/64 CI reach MIN_CLK48_MHZ.  Pinned SEED_DEEP 57 -> 13 (clk48 59.54 local /
 59.26 CI, clk -> clk48 12.79 / 13.91 ns).  RE-VERIFY deep replay on hardware.
-v49 (DAC8554; 3842 LC, 73%): seed 13 still closes clk48 (57.33) but its clk -> clk48 paths
+v49 (quad DAC; 3842 LC, 73%): seed 13 still closes clk48 (57.33) but its clk -> clk48 paths
 take 15.39 ns (MAX_X48_NS=15; the reader's gearbox, untouched).  Swept 1..64 locally: 55/64
 reach MIN_CLK48_MHZ, 38 of them within MAX_X48_NS.  Pinned SEED_DEEP 13 -> 48 (clk48 59.54, clk
 32.30, clk -> clk48 12.80 ns).  CI sweep not run yet.  RE-VERIFY deep replay on hardware.
