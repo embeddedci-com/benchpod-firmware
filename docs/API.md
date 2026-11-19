@@ -1359,7 +1359,7 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 - `ua`: the loop current in µA. The pod reads the voltage across its sense resistor, so
   `ua = uv × 1000 / sense_mohm`. On analog modules up to v3r4 that is 249 Ω: 4 mA is 996 mV
   and 20 mA is 4980 mV. From analog module v3r5 it is 100 Ω: 4 mA is 400 mV and 20 mA is 2 V.
-- `sense_mohm` (firmware 3.10.13+): the resistance `ua` was computed with, in milliohms.
+- `sense_mohm` (firmware after 3.10.12): the resistance `ua` was computed with, in milliohms.
   249000 up to module v3r4. From v3r5 it is 100 Ω in parallel with the ADC input divider, whose
   current also comes from the loop: 99990 in the normal range, 99995 in the low range.
 - `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
@@ -1368,7 +1368,7 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 `count` is always raw.
 
-**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes: The values for v3r5 in this table are calculated from the design and the part ratings; they are not measured on a board yet.
+**From analog module v3r5** (firmware after 3.10.12) the 4-20 mA input changes. No v3r5 module is built yet: the v3r5 values in this table and the next paragraph are calculated from the design and the part datasheets, not measured.
 
 | | Module up to v3r4 | Module v3r5 and later |
 |---|---|---|
@@ -1380,10 +1380,10 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 | Resolution | about 4 µA per count (`normal`) | about 1.7 µA per count (`low`), about 10 µA (`normal`) |
 | Measurable current | 0 to about 21 mA (`low`), more in `normal` | 0 to the limiter's 28.5 to 31.5 mA |
 
-The limiter holds the loop at 28.5 to 31.5 mA (30 mA nominal, it differs per part), so a
-supply wired straight to J8 cannot overload the resistor. A reading near 30 mA that does not
-follow the loop is the limiter, not the transmitter. The diode blocks a reversed loop: it reads
-0. The ADC reads at the resistor, after the diode and the limiter, so their drop does not enter
+The limiter's datasheet range is 28.5 to 31.5 mA (30 mA nominal, it differs per part), so by
+design a supply wired straight to J8 cannot overload the resistor. A reading near 30 mA that does
+not follow the loop is the limiter, not the transmitter. The diode blocks a reversed loop, so it
+should read 0. The ADC reads at the resistor, after the diode and the limiter, so their drop does not enter
 the reading.
 
 On a v3r5 module, routing `current_in` without a `range` (here, in `analog_path` and in a
@@ -1556,7 +1556,7 @@ reference.
 | `offset_mv` | The offset in mV, rounded. `adc_read` reports the same value |
 | `offset_uv` | The offset in µV, as stored |
 | `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
-| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware 3.10.13+) |
+| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware after 3.10.12) |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
@@ -1975,7 +1975,8 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 - **`LA_VCCIO` (pin 21):** the same rail that feeds the LA bank buffers, so a DUT
   can be referenced to it. Select it with
   [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage) *before* connecting a
-  DUT — on a v3 pod it comes up at 3.3 V.
+  DUT — on a v3 pod it comes up at 3.3 V. On digital v3r4 pin 21 is also the pull-up rail, the
+  pod measures it, and it goes to 5 V in [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io).
 
 ---
 
@@ -2074,11 +2075,11 @@ and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The 
 
 #### Pull resistors on digital v3r4
 
-Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware after 3.10.12)
-has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
+Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware after 3.10.12;
+designed, not built yet) has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
 expander that can pull up or down. So every channel pulls `up` or `down`, with 10k, 2.2k
 or both (about 1.8k). The pull-ups go to J1 pin 21, which follows the I/O voltage (1.8 V,
-3.3 V, or 5 V in [5 V mode](#5-v-and-pin-21-digital-board-v3r4)), so they work at every
+3.3 V, or 5 V in [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)), so they work at every
 voltage.
 
 The pod picks the strength from the pin's function unless the host names one:
@@ -2442,13 +2443,14 @@ set (it does not take the profile's). `status` also carries the current selectio
 #### 5 V and pin 21 (digital board v3r4)
 
 On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware after 3.10.12) `mv` also
-takes **`5000`**. The LA lines are 5 V tolerant there: the bank (and the FPGA) stays at 3.3 V,
-and J1 pin 21, the rail every pull-up pulls to, goes to 5 V from the pod's USB supply. The pod
-reads any 5 V signal at full speed. A pod output only reaches 5 V through its pull-up, so for
-outputs into 5 V CMOS-level inputs the channel's pull-up must be on. The pod checks pin 21 after
-switching and refuses with `BP0028` when 5 V did not come up (below 4.3 V), back on the previous
-voltage. `la_mv: 5000` in a wiring profile works the same way. On every other board `5000` is
-refused as before (`"la voltage must be 1800 or 3300 (mv)"`).
+takes **`5000`**: 5 V I/O. In short, the bank stays at 3.3 V, J1 pin 21 (the pull-up rail) goes
+to 5 V, and outputs reach 5 V through their pull-up. What it means for your wiring is on the
+[5 V page](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io). This section is the protocol. No v3r4 board is built yet, so its numbers come
+from the design and the datasheets.
+
+The pod checks pin 21 after switching. Below 4.3 V it goes back to the previous voltage and
+refuses with `BP0028`. `la_mv: 5000` in a wiring profile works the same way. Every other board
+refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 
 ```json
 {"cmd": "la_voltage", "mv": 5000}
@@ -2469,7 +2471,8 @@ refused as before (`"la voltage must be 1800 or 3300 (mv)"`).
   - `short`: under half its setting: pin 21 is shorted or held down. The pull resistors are
     off until it comes back.
   - `unknown`: no reading yet.
-- After any bank change the pod waits 30 ms (the LA clamps' reference) before it drives.
+- After any bank change the pod waits 30 ms before it drives: the LA clamps' reference follows
+  the bank through a filter. The 30 ms is calculated from that filter, to be checked on a board.
 
 > **1.8 V requires a v3 pod.** On v2 boards the TPS2116's `MODE` pin is tied to
 > GND, which puts the part in a mode with no manual 1.8 V selection at all: with
@@ -4875,7 +4878,7 @@ credentials also turn the adapter off (status `usb.off_reason`).
 
 ### `log_level` — the console log level
 
-Firmware newer than 3.10.12 (feature `log_level`).
+Firmware after 3.10.12 (feature `log_level`).
 
 ```json
 {"cmd":"log_level"}

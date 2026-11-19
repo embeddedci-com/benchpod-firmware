@@ -55,7 +55,7 @@ static int go_live(void)
 {
     s_hw2k2 = s_hw10k = pull_exp_reset_regs();   /* what reset left */
     rst(true);
-    HAL_Delay(1);                                /* tRESET is 600 ns */
+    HAL_Delay(1);                                /* tRESET is 600 ns (datasheet) */
     s_live = true;
     int rc = apply();
     if (rc == 0) log_printf("[pull] expanders out of reset (pin 21 %d mV)\r\n", vref_out_last_mv());

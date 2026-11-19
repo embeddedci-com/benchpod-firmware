@@ -64,7 +64,7 @@ int vref_out_set_source(vref_src_t src)
     if (src == s_src) return 0;
     if (src == VREF_SRC_5V) {
         sw_5v(true);
-        HAL_Delay(3);        /* the switch's soft start, before U67 is pointed at it */
+        HAL_Delay(3);        /* the switch's soft start (datasheet, not measured), before U67 is pointed at it */
         sel_5v();
     } else {
         sel_bank();

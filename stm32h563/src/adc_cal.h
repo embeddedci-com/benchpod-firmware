@@ -78,8 +78,9 @@
 /* R81, the sense resistor from J8 pin 1 to pod GND: `current_in` reads the voltage across it.
  *
  * Up to analog module v3r4 it is 249 ohm, straight on J8.  From v3r5 it is 100 ohm 0.1 %, behind a
- * series diode (D23) and a 30 mA current limiter (U62, 28.5 to 31.5 mA), so the loop sees about
- * 4.3 V at 20 mA instead of the 7.2 V the limiter would cost with 249 ohm.  The ADC taps the top of
+ * series diode (D23) and a 30 mA current limiter (U62, 28.5 to 31.5 mA in its datasheet), so the
+ * loop sees about 4.3 V at 20 mA instead of the 7.2 V the limiter would cost with 249 ohm (both
+ * calculated; no v3r5 module is measured yet).  The ADC taps the top of
  * R81 (after the limiter), so the drop across D23 and U62 does not enter the reading.
  *
  * K3 puts that node into the same 910k divider as the BNC input, and the divider's current comes
