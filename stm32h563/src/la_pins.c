@@ -704,6 +704,15 @@ void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask) {
     bp_emit_raw(e, "]");
 }
 
+void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool have_levels, uint16_t levels) {
+    bp_emit_raw(e, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(e, only, pull_mask);
+    /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
+    if (board_caps()->pull_expanders) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
+    if (have_levels) bp_emit(e, ",\"levels\":%u}}\n", (unsigned)levels);
+    else             bp_emit_raw(e, ",\"levels\":null}}\n");
+}
+
 /* ---- capture trigger ---- */
 
 const char *la_edge_name(la_edge_t edge) {

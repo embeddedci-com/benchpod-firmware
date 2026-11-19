@@ -511,14 +511,11 @@ static void clear_worst(void) {
     la_pins_reset();
 }
 
-/* The la_pins reply as handle_la_pins builds it, and the gpio read reply (handle_gpio). */
+/* The la_pins reply (la_pins_emit_reply, what handle_la_pins sends), and the gpio read reply (handle_gpio). */
 static size_t emit_la_pins_of(char *buf, size_t cap, uint16_t only) {
     bp_emit_t e;
     bp_emit_init(&e, buf, cap);
-    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, only, 0x3FFF);
-    if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
-    bp_emit_raw(&e, ",\"levels\":16383}}\n");
+    la_pins_emit_reply(&e, only, 0x3FFF, true, 0x3FFF);   /* the reply handle_la_pins sends */
     CHECK(bp_emit_ok(&e));
     return bp_emit_len(&e);
 }

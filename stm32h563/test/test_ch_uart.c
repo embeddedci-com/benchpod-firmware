@@ -114,12 +114,12 @@ int  la_pull_engage(uint8_t la, la_pull_dir_t d, int s) {
 }
 pull_exp_dir_t pull_exp_dir(unsigned la) { (void)la; return PULL_EXP_OFF; }
 pull_str_t pull_exp_str(unsigned la) { (void)la; return PULL_STR_NONE; }
-bool la_pull_supports(unsigned la, la_pull_dir_t d) { return d == LA_PULL_UP ? (la >= 1 && la <= 6) : d == LA_PULL_DOWN ? (la == 7 || la == 8) : false; }
-static int g_de_claimed = -1;
-uint16_t la_pins_release_fn(la_fn_t fn) { if (fn == LA_FN_UART_DE) g_de_claimed = -1; return 0; }
-void la_pins_claim(la_fn_t fn, la_gpio_mode_t mode, uint8_t level, const uint8_t *las, size_t n) {
-    (void)mode; (void)level; (void)n;
-    if (fn == LA_FN_UART_DE) g_de_claimed = las[0];
+/* The pin table and the pull table are the real ones (la_pins.c): la_pull_supports says which
+   channels pull up on the board under test. */
+static int de_claimed(void) {
+    uint16_t m = la_pins_mask_fn(LA_FN_UART_DE);
+    for (int la = 1; la <= 14; la++) if (m & (1u << (la - 1))) return la;
+    return -1;
 }
 bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t free_fns) {
     (void)c; (void)fn; (void)las; (void)n; (void)free_fns; return true;
@@ -403,20 +403,20 @@ static void test_de(void) {
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"baud\":19200,\"parity\":\"even\",\"de\":6}");
     CHECK(g_proto[3] == PROTO_UART && g_de == 6 && !g_de_inv && g_frame == UART_FRAME_PARITY,
           "de: %u inv %d frame %u reply %s", g_de, g_de_inv, g_frame, g_reply);
-    CHECK(g_de_claimed == 6, "DE pin not claimed (%d)", g_de_claimed);
+    CHECK(de_claimed() == 6, "DE pin not claimed (%d)", de_claimed());
     /* a gateware swap re-arms with the same DE */
     g_de = 0;
     uart_proxy_on_gateware_reconfigured();
     uart_rearm_poll();
     CHECK(g_de == 6, "re-arm lost DE (%u)", g_de);
     uart_proxy_conn_closed(3);
-    CHECK(g_de_claimed == -1, "DE pin not released");
+    CHECK(de_claimed() == -1, "DE pin not released");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8,\"de\":9,\"de_active_low\":true}");
     CHECK(g_de == 9 && g_de_inv, "active low: de %u inv %d", g_de, g_de_inv);
     uart_proxy_conn_closed(3);
     /* without de: none */
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":7,\"tx\":8}");
-    CHECK(g_de == 0 && g_de_claimed == -1, "de without asking (%u)", g_de);
+    CHECK(g_de == 0 && de_claimed() == -1, "de without asking (%u)", g_de);
     uart_proxy_conn_closed(3);
     /* refusals, nothing armed */
     int configs = g_configs;

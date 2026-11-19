@@ -243,6 +243,10 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask);
 /* [entry,...] for every pin in `mask`, ascending. */
 void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask);
 
+/* The whole `la_pins` reply: {"status":"ok","data":{"pins":[...],("pull_dirs":[...],)"levels":M|null}}
+   and its newline.  handle_la_pins sends it; test_la_pins.c measures its worst case. */
+void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool have_levels, uint16_t levels);
+
 /* ---- capture trigger ("trigger":{"la":N,"edge":...}, "trigger_timeout_ms":N) ---- */
 typedef enum {
     LA_EDGE_RISING  = 1,   /* values are the gateware SET_TRIGGER mode byte */

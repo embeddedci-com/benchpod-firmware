@@ -197,7 +197,11 @@ static const char *k_diag[] = { "stacks", "lwip_mem_max", "lwip_mem_size", "pbuf
 /* Bytes the "typical" full form here must leave under the TX ring's 2047 (test_lan_is_complete).
    The stubs are wider than a real pod (six-digit heaps, the longest reset text, a long lease
    holder, both MACs): this pod is 1998 bytes where benchpod-30a9f1 sends about 1760 on 3.10.9.
-   So 40 bytes here is about 280 on a real pod; a field that needs more must make room. */
+   So 40 bytes here is about 280 on a real pod; a field that needs more must make room.
+   Why not REPLY_BUDGET_MARGIN (64, reply_budget.h): that margin is for replies measured at their
+   real worst case, and these stubs already sit about 240 bytes above any real pod, so the shared
+   margin would ask for room no pod needs (48 bytes are free here today).  The cloud form, which is
+   measured at its worst case, keeps STATUS_SHORT_MARGIN (more than the shared one). */
 #define STATUS_FULL_MARGIN 40u
 
 /* ---- tests ------------------------------------------------------------------------------- */

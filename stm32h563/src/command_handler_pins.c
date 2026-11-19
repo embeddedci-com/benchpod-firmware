@@ -229,12 +229,7 @@ void handle_la_pins(int conn_id, const char *json) {
     char resp[BP_CLOUD_REPLY_MAX];   /* worst cases: test_la_pins.c, budget_la_pins */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, only, pulls);
-    /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
-    if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
-    if (have) bp_emit(&e, ",\"levels\":%u}}\n", (unsigned)levels);
-    else      bp_emit_raw(&e, ",\"levels\":null}}\n");
+    la_pins_emit_reply(&e, only, pulls, have, levels);
     send_emitted(conn_id, &e);
 }
 
