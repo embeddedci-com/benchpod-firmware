@@ -2112,7 +2112,7 @@ The pod picks the strength from the pin's function unless the host names one:
 - While the pod holds a pull off (the two cases above), the replies say what is on the wire
   (firmware after 3.10.12). `pullup` and `state` are what the channel does now, and the reply
   adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
-  write failed; the pulls come back with the next change). `pull`, `ohms` and `strength` stay
+  write failed; the next pull the host turns on with `la` tries again and puts them all back). `pull`, `ohms` and `strength` stay
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
   `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
   replies have no `held`.

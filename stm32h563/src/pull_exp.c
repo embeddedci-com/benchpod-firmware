@@ -102,6 +102,17 @@ void pull_exp_init(void)
 bool pull_exp_present(void) { return s_present; }
 bool pull_exp_live(void)    { return s_present && s_live; }
 
+bool pull_exp_recover(void)
+{
+    if (!s_present) return false;
+    if (s_live) return true;
+    /* Pin 21 down: on_rail brings them back when it returns. */
+    if (!vref_out_rail_up()) return false;
+    /* A write failed (apply): out of reset and rewrite every asked-for pull, once per call. */
+    log_printf("[pull] retrying the expanders after a failed write\r\n");
+    return go_live() == 0;
+}
+
 int pull_exp_set(unsigned la, pull_exp_dir_t dir, pull_str_t str)
 {
     if (!s_present || la < 1u || la > PULL_EXP_CHANNELS) return -1;
