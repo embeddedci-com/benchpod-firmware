@@ -206,6 +206,13 @@ static void test_revision_selects_the_fits(void) {
     cal_lin_t fit = adc_cal_current_in_fit();
     CHECK(fit.a == ADC_CAL_CAL1.a && fit.b == ADC_CAL_CAL1.b, "current_in must follow the selected cal1 fit");
 
+    /* Digital v3r4 (BOARD_REV_V3R4 = 5) is a v3 board: the same set as rev3, never v2. */
+    cal_lin_t v3_cal1 = ADC_CAL_CAL1, v3_dac5 = DAC_CAL[1];
+    cal_data_select(5);
+    CHECK(ADC_CAL_CAL1.a == v3_cal1.a && ADC_CAL_CAL1.b == v3_cal1.b && DAC_CAL[1].b == v3_dac5.b,
+          "digital v3r4 did not get the rev3 fits");
+    cal_data_select(3);
+
     cal_data_select(2);
     CHECK(ADC_CAL_CAL1.a == v2_cal1.a && DAC_CAL[1].b == v2_dac5.b, "v2 did not get its fits back");
     cal_data_select(0);
