@@ -29,7 +29,6 @@
 #include "board_caps.h"
 #include "vref_out.h"
 #include "la_pull.h"   /* la_pull_all_off: v2 pull-ups go to +3V3, not to the bank */
-#include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
 #include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
 
@@ -1340,14 +1339,14 @@ int la_vccio_set_mv(int mv) {
        SHUTDOWN — the bank goes high-Z, not to 1.8 V.  The old firmware called
        that state "1.8 V" and it never was; refuse it rather than silently
        cutting the DUT's I/O rail. */
-    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) return -2;
+    if (mv == LA_VCCIO_1V8 && !board_caps()->la_1v8) return -2;
 
     /* On v3 the pulls go to LA_VCCIO or GND (LA1-6 up and LA7/8 down before digital v3r4,
        every channel both ways on v3r4), so the engaged pulls simply follow the bank to 1.8 V
        and stay on.  Only the v2 pull-ups
        went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
        rail; v2 is refused above, and this keeps the invariant if that ever changes. */
-    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pull_all_off();
+    if (mv == LA_VCCIO_1V8 && !board_caps()->la_1v8) la_pull_all_off();
 
     /* Drive the select level BEFORE switching PG3 to a push-pull output, so the
        pin never momentarily drives the wrong rail.
@@ -1360,7 +1359,7 @@ int la_vccio_set_mv(int mv) {
     if (vref_out_source() == VREF_SRC_5V) (void)vref_out_set_source(VREF_SRC_BANK);
 
     GPIO_PinState sel;
-    if (board_rev_is_v3())
+    if (board_caps()->la_1v8)
         sel = (mv == LA_VCCIO_3V3) ? GPIO_PIN_SET : GPIO_PIN_RESET;
     else
         sel = GPIO_PIN_RESET;   /* v2: only +3V3 is reachable, and PR1 must be low */
@@ -1391,7 +1390,7 @@ int la_vccio_status_pin(void) {
 }
 
 int la_vccio_readback_mv(void) {
-    if (!board_rev_is_v3()) return 0;   /* v2 ST is ambiguous (low = 1V8 OR shutdown) */
+    if (!board_caps()->la_1v8) return 0;   /* v2 ST is ambiguous (low = 1V8 OR shutdown) */
     return la_vccio_status_pin() ? LA_VCCIO_3V3 : LA_VCCIO_1V8;
 }
 

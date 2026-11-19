@@ -62,7 +62,6 @@ int  fpga_gpio_get(uint16_t *levels) { *levels = 0; return 0; }
 
 /* ---- fakes: the board ------------------------------------------------------------------- */
 static int  g_rev = BOARD_REV_V3;
-bool board_rev_is_v3(void) { return g_rev != BOARD_REV_V2; }
 static int  g_vccio = LA_VCCIO_3V3, g_io = LA_VCCIO_3V3, g_set_rc;
 int  la_vccio_get_mv(void) { return g_vccio; }
 int  la_io_get_mv(void) { return g_io; }

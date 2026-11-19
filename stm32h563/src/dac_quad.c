@@ -2,7 +2,6 @@
 #include "dac_quad.h"
 #include "cal_data.h"     /* dac_code16_for_volts */
 #include "dac_limits.h"   /* the park level of the limited output */
-#include "board_rev.h"    /* BOARD_REV_V3R2 */
 #include "bp_json.h"
 
 #include <math.h>
@@ -15,9 +14,9 @@ static bool s_present;
 void dac_quad_set_present(bool present) { s_present = present; }
 bool dac_quad_present(void)              { return s_present; }
 
-bool dac_quad_for_board(int board_rev, bool has_analog, bool module)
+bool dac_quad_for_board(bool board_quad, bool has_analog, bool module)
 {
-    return has_analog && (module || board_rev == BOARD_REV_V3R2);
+    return has_analog && (module || board_quad);
 }
 
 uint8_t dac_quad_ctrl(int ch)

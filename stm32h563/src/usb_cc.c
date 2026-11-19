@@ -1,7 +1,7 @@
 /* usb_cc.c — see usb_cc.h.  Two averaged ADC reads plus a threshold table. */
 #include "usb_cc.h"
 #include "mcu_adc.h"
-#include "board_rev.h"
+#include "board_caps.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 
@@ -17,14 +17,14 @@
 
 void usb_cc_init(void)
 {
-    if (!board_rev_is_v3()) return;
+    if (!board_caps()->usb_cc) return;
     /* mcu_adc_init() already put PC0/PC2 in analog mode; nothing else to do.
        Kept as an explicit entry point so main()'s boot sequence reads in the
        same order as the hardware it brings up. */
     USB_CC_CLK_EN();
 }
 
-bool usb_cc_supported(void) { return board_rev_is_v3(); }
+bool usb_cc_supported(void) { return board_caps()->usb_cc; }
 
 static void classify(int mv, int *ma, const char **name)
 {

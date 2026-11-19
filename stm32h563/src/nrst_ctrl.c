@@ -1,6 +1,6 @@
 /* nrst_ctrl.c — see nrst_ctrl.h.  Open-drain PF4, pulled low or left Hi-Z. */
 #include "nrst_ctrl.h"
-#include "board_rev.h"
+#include "board_caps.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 #include "pico_compat.h"   /* sleep_ms — yields to FreeRTOS once it is running */
@@ -13,7 +13,7 @@ static bool s_asserted;
 
 void nrst_ctrl_init(void)
 {
-    if (!board_rev_is_v3()) return;
+    if (!board_caps()->nrst_pin) return;
 
     NRST_CTRL_CLK_EN();
 

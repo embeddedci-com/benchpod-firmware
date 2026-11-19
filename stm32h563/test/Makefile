@@ -87,13 +87,13 @@ MODEE_SRCS := test_module_eeprom.c ../src/module_eeprom.c
 BUSREC_SRCS   := test_bus_recovery.c
 CANTIM_SRCS   := test_can_timing.c ../src/can_timing.c ../src/can_ring.c
 CFGSTORE_SRCS := test_config_store.c ../src/config_store.c ../src/cloud_config.c mocks/mock_flash.c
-DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/dac_quad.c ../src/analog_path.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
-ANAPATH_SRCS := test_analog_path.c ../src/analog_path.c ../src/dac_quad.c ../src/dac_limits.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-DACQUAD_SRCS := test_dac_quad.c ../src/dac_quad.c ../src/analog_path.c ../src/dac_limits.c ../src/cal_data.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
-CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c
-DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c
-WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/current_out.c
+DACLIM_SRCS   := test_dac_limits.c ../src/dac_limits.c ../src/dac_quad.c ../src/analog_path.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+ADCCAL_SRCS  := test_adc_cal.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c ../src/config_store.c mocks/mock_flash.c
+ANAPATH_SRCS := test_analog_path.c ../src/analog_path.c ../src/dac_quad.c ../src/dac_limits.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+DACQUAD_SRCS := test_dac_quad.c ../src/dac_quad.c ../src/analog_path.c ../src/dac_limits.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
+CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c ../src/board_caps.c
+DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c ../src/board_caps.c
+WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/board_caps.c ../src/current_out.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c ../src/log_level.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c
@@ -133,9 +133,9 @@ CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
 CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c \
               ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c
 CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
-              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c \
+              ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c ../src/board_caps.c \
               ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c
-CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c \
+CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
                   ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/psram_alloc.c ../src/la_rate.c
@@ -687,12 +687,14 @@ endif
 	@$(MAKE) --no-print-directory docs-check
 
 # Every JSON verb, SCPI command and console command must be in docs/ (check_docs_coverage.py), and
-# the console replies host tools parse must not change (check_console_contract.py).
+# the console replies host tools parse must not change (check_console_contract.py), and only
+# board_rev/board_caps read the board revision (check_board_rev_gates.py).
 PYTHON ?= python3
 docs-check:
 	@$(PYTHON) ../tools/emi/test_emi_tools.py
 	@$(PYTHON) check_docs_coverage.py
 	@$(PYTHON) check_console_contract.py
+	@$(PYTHON) check_board_rev_gates.py
 
 clean:
 	rm -rf build
