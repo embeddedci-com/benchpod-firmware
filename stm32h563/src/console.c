@@ -1,7 +1,7 @@
 /*
  * console.c — bench-pod STM32 bring-up console.
  *
- * console_exec() runs one command line and writes results through an output
+ * console_exec_hw() runs one command line and writes results through an output
  * sink, so the same command set serves both the local USB/USART console and the
  * TCP command server (net_server.c).  The full RP2350 command_handler/SCPI/JSON
  * surface lands in later phases.
@@ -634,7 +634,1145 @@ static bool console_needs_heavy_gate(const char *verb)
     return false;
 }
 
-static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
+/* Not a console command: a moved one (console_moved.h), else unknown. */
+static void con_fallback(const char *verb, console_out_t out, void *ctx)
+{
+    if (console_moved_to(verb)) {
+        /* An older benchpod CLI / embeddedci SDK: say what to update, not "unknown command". */
+        static char moved[224];
+        console_moved_line(verb, moved, sizeof(moved));
+        out(ctx, moved);
+        out(ctx, "\r\n");
+    } else {
+        op(out, ctx, "  unknown command '%s' (try 'help')\r\n", verb);
+    }
+}
+
+static void con_help(int argc, char **argv, console_out_t out, void *ctx)
+{
+    cmd_help(out, ctx);
+}
+
+static void con_ping(int argc, char **argv, console_out_t out, void *ctx)
+{
+    uint8_t ver = 0;
+    if (fpga_ping(2, &ver) == 0) op(out, ctx, "  PING ok  version=0x%02x\r\n", ver);
+    else                         op(out, ctx, "  PING failed\r\n");
+}
+
+static void con_status(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Stable identifier so a host can tell a real bench pod apart from other
+       USB-serial devices: tooling just greps the output for "benchpod". */
+    op(out, ctx, "  device : benchpod\r\n");
+    op(out, ctx, "  mac    : %s\r\n", net_mac_str());
+    {
+        /* The MAC the pod uses on Wi-Fi, for a network that registers devices first. */
+        char wm[18];
+        if (cloud_caps_wifi_mac(wm))
+            op(out, ctx, "  wifimac: %s\r\n", wm[0] ? wm : "not known yet (wifi-scan or a join tells it)");
+    }
+    op(out, ctx, "  ip     : %s\r\n", net_ip_str());
+    {
+        usb_net_stats_t us;
+        usb_net_stats(&us);
+        op(out, ctx, "  usb    : net %s pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
+           usb_net_on() ? "on" : !usb_net_setting_on() ? "off (setting)" : "off (Wi-Fi configured)",
+           usb_netif_pod_ip(), usb_netif_host_ip(), usb_net_link_up() ? "up" : "down",
+           (unsigned long)us.rx_frames, (unsigned long)us.rx_drops,
+           (unsigned long)us.tx_frames, (unsigned long)us.tx_full);
+    }
+    op(out, ctx, "  dma    : spi1=%s spi4=%s\r\n",
+       signal_engine_dma_active() ? "on" : "off",
+       esp_hosted_spi_dma_active() ? "on" : "off");
+    /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
+       iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
+    op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
+    {
+        uint32_t rd_retried = 0, rd_failed = 0; int rd_rc = 0;
+        signal_engine_psram_read_stats(&rd_retried, &rd_failed, &rd_rc);
+        op(out, ctx, "  psram rd : %lu read-backs retried, %lu failed (last rc %d)\r\n",
+           (unsigned long)rd_retried, (unsigned long)rd_failed, rd_rc);
+    }
+    op(out, ctx, "  ice40boot : %s\r\n", ice40_boot_note());
+    /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
+    op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
+       (unsigned long)psram_bus_violations());
+    /* Capabilities — the full set advertised to the cloud (cl_send_capabilities),
+       surfaced here so they're visible from the serial console without decoding the
+       cloud handshake. The gateware version is LIVE-read (not the boot snapshot) so a
+       runtime flash-ice40 is reflected, and shows UNREACHABLE when the FPGA is mute.
+       The FPGA STATUS register is folded into the fpga line (not a bare "STATUS=0x.."
+       top-level line) so a `key : value` parser of this output isn't tripped up. */
+    bool     fpga_ok = signal_engine_refresh_version();
+    uint8_t  gw      = signal_engine_fpga_version();
+    bool     deep    = gw_caps()->dac_deep_replay;
+    uint8_t  streg   = 0;
+    bool     streg_ok = (fpga_status_read(&streg) == 0);
+    op(out, ctx, "  board  : %s  fw v%s  rev %s  nrst_pin=%s  usb_cc=%s\r\n",
+       BOARD_NAME, FIRMWARE_VERSION, board_rev_str(),
+       nrst_ctrl_supported() ? "yes" : "no",
+       usb_cc_supported() ? "yes" : "no");
+    if (streg_ok)
+        op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=0x%02x\r\n",
+           gw, fpga_ok ? "reachable" : "UNREACHABLE", streg);
+    else
+        op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=read-failed\r\n",
+           gw, fpga_ok ? "reachable" : "UNREACHABLE");
+    if (ice40_embedded_gw_version() != 0 && gw != ice40_embedded_gw_version())
+        op(out, ctx, "  gw     : firmware built for v%u, running v%u (updated at the next boot, or run flash-ice40)\r\n",
+           ice40_embedded_gw_version(), gw);
+    /* Separate keys ("hint", "safe", "clock", "gw"), so a host parsing "fpga : gateware vN"
+       keeps working. */
+    if (!fpga_ok && boot_hw_ready() && !ice40_is_configured())
+        op(out, ctx, "  hint   : the iCE40 never configured (blank config flash?): run flash-ice40\r\n");
+    if (boot_guard_report()[0] != '\0')
+        op(out, ctx, "  safe   : %s\r\n", boot_guard_report());
+    if (clock_on_hsi())
+        op(out, ctx, "  clock  : the 25 MHz crystal did not start; running from the internal HSI\r\n");
+    /* The digital board has the gateware's ADC/DAC engines but nothing behind them
+       (board_variant.h), so it names no ADC or DAC, like its status (analog:false). */
+    if (!board_has_analog()) {
+        op(out, ctx, "  analog : none (digital board: no ADC, DAC or 4-20 mA)\r\n");
+    } else {
+        op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
+           ADC_BITS, ADC_CHANNELS, ADC_FULLSCALE_MV);
+        op(out, ctx, "  dac    : ac=%s replay=%s dc=%s  gen %d-bit / replay %d-bit x%d, %d mV FS\r\n",
+           DAC_AC ? "yes" : "no", DAC_REPLAY ? "yes" : "no", DAC_DC ? "yes" : "no",
+           DAC_BITS, DAC_REPLAY_BITS, DAC_CHANNELS, DAC_FULLSCALE_MV);
+        op(out, ctx, "  replay : deep=%s (needs v%u), max %lu samples (%s)\r\n",
+           deep ? "yes" : "no", DAC_DEEP_REPLAY_MIN_GW,
+           (unsigned long)(deep ? FPGA_DAC_REPLAY_MAX_SAMPLES : SIGNAL_MAX_SAMPLES),
+           deep ? "PSRAM" : "BRAM");
+    }
+    /* Cloud registration, so `benchpod discover` can report whether this pod is already
+       claimed WITHOUT the pod being on the network — the TCP/JSON `cloud_status` command
+       can only answer once there is a network to answer over, and a pod fresh out of its
+       box has none. A pre-registered pod that someone was sent is the case that matters:
+       over USB alone, this line is the whole answer. Read straight from the provisioned
+       config, so nothing here depends on the link being up. */
+    {
+        cloud_config_t ccfg;
+        if (cloud_config_load(&ccfg) == 0 && ccfg.enabled) {
+            char last_error[80];
+            cloud_client_last_error(last_error, sizeof(last_error));
+            op(out, ctx, "  cloud  : registered  state=%s  device_id=%s%s%s\r\n",
+               cloud_client_state_str(), ccfg.device_id,
+               last_error[0] ? "  last_error=" : "", last_error);
+        } else {
+            op(out, ctx, "  cloud  : not registered\r\n");
+        }
+    }
+    op(out, ctx, "  reset  : %s\r\n", fault_last_reset_str());
+    op(out, ctx, "  crash  : %s\r\n", fault_last_crash_str());
+    op(out, ctx, "  boot   : id %08lx  unclean resets not yet reported %lu\r\n",
+       (unsigned long)fault_boot_id(), (unsigned long)fault_unclean_resets());
+    if (esp_wifi_ctrl_module_present()) {
+        const c3_restarts_t *r = esp_wifi_ctrl_restarts();
+        op(out, ctx, "  c3     : %lu restarts since power-on%s%s\r\n", (unsigned long)r->total,
+           r->total ? ", last: " : "", r->total ? r->last_reason : "");
+    }
+    {
+        sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
+        int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
+        for (int i = 0; i < n; i++)
+            op(out, ctx, "  stack  : %-7s %u B free (min)\r\n", t[i].name, t[i].stack_free);
+    }
+    op(out, ctx, "  flash  : %lu KB%s\r\n", (unsigned long)(flash_layout_size() / 1024u),
+       flash_compat_refused() ? ", RECORD WRITES REFUSED (outside the record area: a firmware bug)" : "");
+    op(out, ctx, "  lwip   : mem max %lu of %lu B, pbuf pool max %u of %u\r\n",
+       (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
+       (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
+    op(out, ctx, "  heap   : %u B free, %u B min\r\n",
+       sys_health_heap_free(), sys_health_heap_min_free());
+}
+
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
+static void con_spi_clk(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc < 2) { con_fallback(argv[0], out, ctx); return; }   /* needs an argument */
+    uint32_t div = (uint32_t)atoi(argv[1]);
+    uint32_t hz = signal_engine_spi_set_prescaler(div);
+    if (hz) op(out, ctx, "  SPI1 SCK = %lu Hz (/%lu)\r\n", (unsigned long)hz, (unsigned long)div);
+    else    op(out, ctx, "  bad divisor (128 or 256; 64 needs gateware >= 52; /32 and faster exceed the iCE40's SCK sampling)\r\n");
+}
+
+static void con_spi_diag(int argc, char **argv, console_out_t out, void *ctx)
+{
+    int n = (argc >= 2) ? atoi(argv[1]) : 50;
+    signal_engine_spi_diag(n);
+    op(out, ctx, "  (spi-diag printed on the device log)\r\n");
+}
+
+static void con_adc_spi(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Read the live ADC sample DIRECTLY over SPI (CMD_ADC_PROBE), skipping
+       PSRAM + the 24->48 CDC — isolates 0x5555 to engine/silicon vs path. */
+    int n = (argc >= 2) ? atoi(argv[1]) : 16;
+    signal_engine_adc_spi_diag(n);
+    op(out, ctx, "  (adc-spi printed on the device log)\r\n");
+}
+#endif
+
+#if defined(BENCHPOD_EMI_TEST)
+static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* The EMC test build's activity loop (emi_test.h). */
+    const char *sub = argc >= 2 ? argv[1] : "status";
+    int mode = argc >= 3 ? emi_test_dac_from_name(argv[2]) : -1;
+    int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
+    if (!strcmp(sub, "start"))                     emi_test_start();
+    else if (!strcmp(sub, "stop"))                 emi_test_stop();
+    else if (!strcmp(sub, "dac") && mode >= 0) {
+        if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
+            op(out, ctx, "  emi dac: %s\r\n", board_has_analog()
+                ? "all needs the quad DAC (analog v3r2 or the v4 analog module)"
+                : "this board has no DAC (digital-only board)");
+            return;
+        }
+    }
+    else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
+        emi_test_set_uart(la);
+    else if (!strcmp(sub, "net") && argc >= 3 && ((argv[2][0] >= '0' && argv[2][0] <= '9') || !strcmp(argv[2], "off"))) {
+        if (!emi_test_set_net_rate(strcmp(argv[2], "off") ? (unsigned)atoi(argv[2]) : 0u)) {
+            op(out, ctx, "  emi net: at most %u Mbit/s\r\n", EMI_NET_MAX_MBIT);
+            return;
+        }
+    }
+    else if (!strcmp(sub, "log")) {
+        /* The run log (emi_log.h): its state here, the records on the device log. */
+        char info[320];
+        emi_test_log_describe(info, sizeof(info));
+        op(out, ctx, "  %.150s\r\n", info);
+        if (strlen(info) > 150) op(out, ctx, "  %s\r\n", info + 150);
+#if defined(EMI_LOG_TEST_SECTORS)
+        if (argc >= 4 && !strcmp(argv[2], "fill")) {   /* a small-ring test build only */
+            emi_test_log_fill((uint32_t)atol(argv[3]));
+            return;
+        }
+#endif
+        const bool all = argc >= 3 && !strcmp(argv[2], "all");
+        const long n = argc >= 3 && !all ? atol(argv[2]) : 20;
+        if (!all && n <= 0) { op(out, ctx, "usage: emi log [n|all]\r\n"); return; }
+        if (emi_test_log_print(all ? 0u : (uint32_t)n))
+            op(out, ctx, "  (records printed on the device log)\r\n");
+        return;
+    }
+    else if (!strcmp(sub, "fault")) {
+        /* Test the recovery ladder (recovery.h) with a failure made on purpose. */
+        const char *f = argc >= 3 ? argv[2] : "";
+        if (!emi_test_fault(f)) { op(out, ctx, "usage: emi fault ice40|ice40-stuck|off\r\n"); return; }
+        op(out, ctx, "  emi fault %s\r\n", f);
+        return;
+    }
+    else if (strcmp(sub, "status")) {
+        op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
+                     " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]"
+                     " | emi fault ice40|ice40-stuck|off\r\n");
+        return;
+    }
+    char line[256];
+    emi_test_describe(line, sizeof(line));
+    op(out, ctx, "  %s\r\n", line);
+}
+#endif
+
+static void con_led(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it
+       goes back to showing the pod's state (status_led.h). */
+    static const struct { const char *name; uint8_t mask; } colours[] = {
+        {"off", STATUS_LED_OFF}, {"red", STATUS_LED_RED}, {"green", STATUS_LED_GREEN},
+        {"blue", STATUS_LED_BLUE}, {"cyan", STATUS_LED_CYAN}, {"magenta", STATUS_LED_MAGENTA},
+        {"yellow", STATUS_LED_RED | STATUS_LED_GREEN},
+        {"white", STATUS_LED_RED | STATUS_LED_GREEN | STATUS_LED_BLUE},
+    };
+    int mask = -1;
+    if (argc >= 2) {
+        for (size_t i = 0; i < sizeof(colours) / sizeof(colours[0]); i++)
+            if (!strcmp(argv[1], colours[i].name)) mask = colours[i].mask;
+        if (mask < 0 && argv[1][0] >= '0' && argv[1][0] <= '7' && argv[1][1] == '\0')
+            mask = argv[1][0] - '0';
+    }
+    if (mask < 0) {
+        op(out, ctx, "usage: led red|green|blue|cyan|magenta|yellow|white|off|<0-7>\r\n");
+    } else {
+        status_led_override((uint8_t)mask, 5000u);
+        op(out, ctx, "led %u for 5 s\r\n", (unsigned)mask);
+    }
+}
+
+static void con_psram_selftest(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Layered PSRAM datapath test: STM32<->PSRAM, iCE40->PSRAM write, and (if
+       that fails) whether the iCE40 even reaches the /CE net.  Same test run
+       once at boot. */
+    psram_boot_selftest();
+    op(out, ctx, "  (psram-selftest printed on the device log)\r\n");
+}
+
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
+static void con_cap_selftest(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* End-to-end ADC->PSRAM path test: iCE40 streams a known ramp through the
+       real capture datapath (CDC+writer+PSRAM+readback).  PASS => the path is
+       healthy; FAIL => iCE40 capture/CDC timing error, NOT the analog ADC. */
+    int n = (argc >= 2) ? atoi(argv[1]) : 64;
+    int bad = -1;
+    int rc = signal_engine_capture_selftest(n, &bad);
+    op(out, ctx, "  cap-selftest: %s (see device log)\r\n",
+       rc == 0 ? "PASS — ADC->PSRAM path OK" : "FAIL — iCE40 capture/CDC timing error");
+}
+
+static void con_i2c_scan(int argc, char **argv, console_out_t out, void *ctx)
+{
+    i2c_bus_status();   /* prints to the local console log */
+    op(out, ctx, "  (scan printed on the device log)\r\n");
+}
+
+static void con_ina(int argc, char **argv, console_out_t out, void *ctx)
+{
+    cmd_ina(out, ctx);
+}
+#endif
+
+static void con_usb_reattach(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* macOS ignores a new network interface while the screen is locked; this makes
+       the host see the device again without unplugging it. */
+    op(out, ctx, "usb-reattach ok\r\n");
+    usb_reattach_request();
+}
+
+static void con_uid(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* uid: the 96-bit unique ID.  Words only: a byte read of this area is a precise bus
+       fault on the H5 (proven on the v3, bfar=0x08fff800; see board_uid.h). */
+    uint32_t w[3];
+    board_uid_words(w);
+    op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
+       (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
+}
+
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
+static void con_test_bootloop(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Prove the safe-mode safeguard: the next two boots crash in the net task (net) or the
+       iCE40/PSRAM bring-up (hw), the third comes up in safe mode with only that part off.
+       A power cycle then returns to normal.  `test-bootloop yes` is the net test. */
+    const char *target = argc >= 3 ? argv[1] : "net";
+    const char *confirm = argc >= 3 ? argv[2] : (argc >= 2 ? argv[1] : "");
+    uint32_t sub = !strcmp(target, "net") ? BOOT_SUB_NET
+                 : !strcmp(target, "hw")  ? BOOT_SUB_HW : 0;
+    if (!sub || strcmp(confirm, "yes")) {
+        op(out, ctx, "  test-bootloop net yes : crash the next 2 boots in the net task; the 3rd comes up in safe mode, network off\r\n");
+        op(out, ctx, "  test-bootloop hw yes  : same, in the iCE40/PSRAM bring-up; the 3rd has iCE40/PSRAM off\r\n");
+    } else {
+        boot_guard_arm_test_loop(BOOT_GUARD_SAFE_AFTER, sub);
+        op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
+        vTaskDelay(pdMS_TO_TICKS(200));
+        NVIC_SystemReset();
+    }
+}
+
+static void con_ice40_erase(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Make this pod a new board again, to prove the blank-board gateware load: erase the
+       start of the iCE40 config flash (its image begins at 0) and hold the iCE40 in reset,
+       so the next boot finds it unconfigured. "gw0" also empties that slot, like a pod
+       whose blobs arrive after its firmware. */
+    const bool gw0 = argc >= 3 && !strcmp(argv[1], "gw0");
+    if (argc < 2 || strcmp(argv[argc - 1], "yes") || (argc >= 3 && !gw0)) {
+        op(out, ctx, "  ice40-erase [gw0] yes : blank the iCE40 config flash (and slot gw0); then reboot\r\n");
+    } else if (w25q_session_open() != 0) {
+        op(out, ctx, "  ice40-erase: the W25Q flash does not answer\r\n");
+    } else {
+        int rc = w25q_erase_block(0);
+        if (rc == 0 && gw0) rc = blob_store_clear(BLOB_GW0);
+        w25q_session_close();
+        ice40_hold_off_bus();
+        op(out, ctx, rc == 0 ? "  iCE40 config flash erased%s, iCE40 held in reset: reboot to test the blank-board path\r\n"
+                             : "  ice40-erase failed%s (see device log)\r\n",
+           gw0 ? " (and slot gw0)" : "");
+    }
+}
+
+static void con_test_crash(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Prove the crash report: a real fault (UsageFault/HardFault) in the console task. */
+    if (argc < 2 || strcmp(argv[1], "yes")) {
+        op(out, ctx, "  test-crash yes : fault on purpose; the next boot reports it as the last crash\r\n");
+    } else {
+        op(out, ctx, "  crashing now\r\n");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        __builtin_trap();
+    }
+}
+
+static void con_test_hang(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Prove the watchdog report: the named task spins, the IWDG early warning records it
+       (~30 s), the pod resets, and the next boot reports the stall as its last crash. */
+    int task = argc >= 2 && !strcmp(argv[1], "net") ? WD_TASK_NET
+             : argc >= 2 && !strcmp(argv[1], "hw")  ? WD_TASK_WORKER : -1;
+    if (task < 0 || argc < 3 || strcmp(argv[2], "yes")) {
+        op(out, ctx, "  test-hang net yes : hang the net task; the watchdog resets the pod in ~30 s\r\n");
+        op(out, ctx, "  test-hang hw yes  : hang the hw worker; the watchdog resets the pod in ~90 s\r\n");
+    } else {
+        watchdog_test_hang(task);
+        op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
+    }
+}
+
+static void con_test_ice40_hold(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Prove the idle iCE40 check (hw_worker.c, recovery.h): hold the iCE40 in reset as an ESD
+       hit that unconfigured it would leave it; the pod reloads it from its flash by itself. */
+    if (argc < 2 || strcmp(argv[1], "yes")) {
+        op(out, ctx, "  test-ice40-hold yes : hold the iCE40 in reset; the idle check reloads it (~10 s)\r\n");
+    } else {
+        ice40_hold_off_bus();
+        op(out, ctx, "  the iCE40 is held in reset\r\n");
+    }
+}
+
+static void con_expdump(int argc, char **argv, console_out_t out, void *ctx)
+{
+    analog_switch_dump();
+}
+
+static void con_adcraw(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* adcraw — single raw ADC probe byte (debug). */
+    uint8_t val = 0;
+    if (adc_probe_one(&val) == 0) op(out, ctx, "  ADC=%u (0x%02x)\r\n", val, val);
+    else                          op(out, ctx, "  adc-probe failed\r\n");
+}
+
+static void con_psram(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Diagnostic path: reports bus/CS/arbitration state and re-probes the ID
+       with the iCE40 held off the shared bus (see psram_diag). */
+    if (psram_diag() == 0) op(out, ctx, "  PSRAM ID ok with iCE40 in reset (arbitration is the issue)\r\n");
+    else                   op(out, ctx, "  PSRAM ID failed even with iCE40 in reset (see device log)\r\n");
+}
+
+static void con_psram_bench(int argc, char **argv, console_out_t out, void *ctx)
+{
+    uint32_t kb = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 256;
+    psram_bench(kb);
+    op(out, ctx, "  (psram-bench printed on the device log)\r\n");
+}
+
+static void con_psram_clk(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc < 2) { con_fallback(argv[0], out, ctx); return; }   /* needs an argument */
+    uint32_t p = (uint32_t)atoi(argv[1]);
+    uint32_t hz = psram_set_prescaler(p);
+    if (hz) op(out, ctx, "  OCTOSPI SCLK = %lu Hz (presc %lu)\r\n", (unsigned long)hz, (unsigned long)p);
+    else    op(out, ctx, "  psram-clk failed\r\n");
+}
+
+static void con_psram_chunk(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc < 2) { con_fallback(argv[0], out, ctx); return; }   /* needs an argument */
+    uint32_t n = psram_set_chunk((uint32_t)atoi(argv[1]));
+    op(out, ctx, "  PSRAM tCEM chunk = %lu bytes\r\n", (unsigned long)n);
+}
+#endif
+
+static void con_psram_test(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (psram_init() == 0 && psram_test() == 0) op(out, ctx, "  PSRAM ok\r\n");
+    else                                        op(out, ctx, "  PSRAM failed (see device log)\r\n");
+}
+
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
+static void con_psram_addrtest(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* STM32-standalone full-8MB address integrity test: write an ADDRESS-TAGGED
+       256-B block at points spanning the whole device, then read them ALL back and
+       verify.  Catches address aliasing (a dropped high address bit would have one
+       write clobber another -> tag mismatch) and per-address read HAL failures.
+       This isolates the STM32/XSPI/chip path from the iCE40 write path. */
+    static const uint32_t A[] = {
+        0x000000u, 0x010000u, 0x080000u, 0x100000u, 0x200000u,
+        0x300000u, 0x400000u, 0x600000u, 0x7FFF00u
+    };
+    const int NADDR = (int)(sizeof(A) / sizeof(A[0]));
+    uint8_t *b = adc_pool_scratch();   /* 256 B; gated, so the pool is ours */
+    int errs = 0;
+    psram_bus_acquire();
+    for (int a = 0; a < NADDR; a++) {                 /* phase 1: write tagged blocks */
+        for (int i = 0; i < 256; i++) b[i] = (uint8_t)((A[a] >> 12) + (uint32_t)i * 7u + 0x5Au);
+        if (psram_write(A[a], b, 256) != 0) { op(out, ctx, "  write @%06x HAL-FAIL\r\n", (unsigned)A[a]); errs++; }
+    }
+    for (int a = 0; a < NADDR; a++) {                 /* phase 2: read back + verify */
+        for (int i = 0; i < 256; i++) b[i] = 0;
+        if (psram_read(A[a], b, 256) != 0) { op(out, ctx, "  read  @%06x HAL-FAIL\r\n", (unsigned)A[a]); errs++; continue; }
+        int bad = -1;
+        for (int i = 0; i < 256; i++)
+            if (b[i] != (uint8_t)((A[a] >> 12) + (uint32_t)i * 7u + 0x5Au)) { bad = i; break; }
+        if (bad < 0) op(out, ctx, "  @%06x OK\r\n", (unsigned)A[a]);
+        else { op(out, ctx, "  @%06x MISMATCH i=%d got=%02x\r\n", (unsigned)A[a], bad, b[bad]); errs++; }
+    }
+    psram_bus_release();
+    op(out, ctx, "  psram-addrtest: %s (%d error(s) across %d addrs to 8MB)\r\n",
+       errs ? "FAIL" : "PASS", errs, NADDR);
+}
+
+static void con_capture_psram(int argc, char **argv, console_out_t out, void *ctx)
+{
+    unsigned n = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 16u;
+    if (n > 64) n = 64;
+    uint16_t s[64];
+    if (adc_capture_psram(s, n, 0.0f) == 0) {
+        op(out, ctx, "  %u samples:", n);
+        for (unsigned i = 0; i < n; i++) op(out, ctx, " %u", s[i]);
+        op(out, ctx, "\r\n");
+    } else {
+        op(out, ctx, "  capture-psram failed (v2 gateware? see log)\r\n");
+    }
+}
+
+static void con_dualcap(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Unified simultaneous ADC + raw-LA capture (one trigger).  `dualcap [an]
+       [ln]` captures `an` ADC + `ln` LA samples into their two PSRAM regions and
+       prints the first few of each.  ADC slow (div 240 = 100 kS/s), LA fast
+       (div 24 = 1 MS/s) to exercise the independent-rate datapath. */
+    unsigned an = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 64u;
+    unsigned ln = (argc >= 3) ? (unsigned)strtoul(argv[2], NULL, 0) : 64u;
+    if (an > 256) an = 256;
+    if (ln > 256) ln = 256;
+    uint16_t *adcb = (uint16_t *)adc_pool_scratch();   /* gated: the pool's scratch, 256 each */
+    uint16_t *lab  = adcb + 256;
+    int rc = fpga_dual_capture(an ? adcb : NULL, (uint16_t)an, 240,
+                               ln ? lab : NULL, (uint16_t)ln, 24);
+    if (rc != 0) {
+        op(out, ctx, "  dualcap failed (v2 gateware? see log)\r\n");
+    } else {
+        op(out, ctx, "  dualcap: ADC=%u @100kS/s  LA=%u @1MS/s  (one trigger)\r\n", an, ln);
+        if (an) op(out, ctx, "    ADC[0..3]: %5u %5u %5u %5u\r\n",
+                   adcb[0], adcb[1], adcb[2], adcb[3]);
+        if (ln) op(out, ctx, "    LA [0..3]: 0x%03x 0x%03x 0x%03x 0x%03x\r\n",
+                   lab[0] & 0xFFFu, lab[1] & 0xFFFu, lab[2] & 0xFFFu, lab[3] & 0xFFFu);
+    }
+}
+
+static void con_lastress(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Deep-LA capture + drain stress test.  Captures `n` LA samples (up to the
+       full 8 MB PSRAM = LA_PSRAM_MAX_SAMPLES) at the MAX rate and checks: no ring
+       overflow (STATUS bit5, the 48 MHz DDR-drain acid test), AND that the
+       read-back works at BOTH the start AND a HIGH offset near the end — which is
+       the acid test for the 8 MB addressing (a deep capture writes far past the
+       old 1 MB DEVSIZE wall). */
+    unsigned n = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 65535u;
+    if (n < 1u) n = 1u;
+    if (n > LA_PSRAM_MAX_SAMPLES) n = LA_PSRAM_MAX_SAMPLES;
+    static uint16_t lo[4], hi[4];
+    if (fpga_la_capture_psram_start((size_t)n, 0.0f /*max rate*/, NULL) != 0) {
+        op(out, ctx, "  lastress: arm failed (v2 gateware / LA voltage? see log)\r\n");
+    } else {
+        int r = 0; uint32_t spin = 0;
+        while ((r = fpga_la_capture_psram_wait()) == 0 && spin < 200000000u) spin++;
+        if (r == 1) {
+            uint32_t hi_off = (n >= 4u) ? (uint32_t)(n - 4u) * 2u : 0u; /* byte offset of last 4 samples */
+            int rr = fpga_la_psram_read(0, (uint8_t *)lo, sizeof(lo));
+            rr |= fpga_la_psram_read(hi_off, (uint8_t *)hi, sizeof(hi));
+            fpga_la_psram_release();
+            if (rr == 0)
+                op(out, ctx, "  lastress: %u LA samples @max rate => PASS (no overflow; "
+                             "read-back OK to 0x%06lx); LA[0..3]=0x%03x.. LA[hi]=0x%03x..\r\n",
+                   n, (unsigned long)(0x010000u + hi_off), lo[0] & 0xFFFu, hi[0] & 0xFFFu);
+            else
+                op(out, ctx, "  lastress: %u LA samples => FAIL (read-back HAL error at high "
+                             "offset 0x%06lx)\r\n", n, (unsigned long)(0x010000u + hi_off));
+        } else {
+            op(out, ctx, "  lastress: %u LA samples @max rate => FAIL "
+                         "(overflow/timeout; STATUS bit5 — see log)\r\n", n);
+        }
+    }
+}
+
+static void con_flash_id(int argc, char **argv, console_out_t out, void *ctx)
+{
+    uint8_t id[3] = {0};
+    if (ice40_flash_read_id(id) == 0)
+        op(out, ctx, "  iCE40 flash JEDEC ID: %02x %02x %02x (W25Q64 = ef 40 17)\r\n",
+           id[0], id[1], id[2]);
+    else
+        op(out, ctx, "  flash-id failed (see device log)\r\n");
+}
+#endif
+
+static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (!blob_store_present(BLOB_GW0)) {
+        op(out, ctx, "  no gateware image 0 in the W25Q (install blob gw0 first)\r\n");
+    } else {
+        /* Quiesce first: ice40_flash_program grabs the shared bus (psram_bus_acquire); a
+           live DAC replay/reader mid-burst would wedge the PSRAM the same way the runtime
+           image swap does. */
+        signal_engine_quiesce_psram_masters();
+        /* Through ice40_reflash_image like every other reconfig: it puts the PSRAM in SPI
+           for the config read, re-inits and hands the bus back, and re-syncs the firmware's
+           mirrors of the fabric's registers.  Calling ice40_flash_program directly skipped
+           all of that (stale capture bases = the "sentinel survived" false wedge). */
+        if (ice40_reflash_image(0) == 0) {
+            /* Re-read the gateware version so status/capabilities reflect the just-
+               flashed bitstream instead of the boot-time value. */
+            bool ok = signal_engine_refresh_version();
+            cloud_client_request_caps_resend();   /* the running image may have changed */
+            op(out, ctx, "  iCE40 reflashed + reconfigured (%u bytes), gateware v%u%s\r\n",
+               (unsigned)blob_store_info(BLOB_GW0)->len, signal_engine_fpga_version(),
+               ok ? "" : " (FPGA unreachable — check gateware)");
+        } else {
+            op(out, ctx, "  flash-ice40 failed (see device log)\r\n");
+        }
+    }
+}
+
+static void con_sig_policy(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* The USB console may set any value: it is the way back from "required" (pod_policy.h). */
+    const char *why = NULL;
+    if (argc >= 2) {
+        int p = pod_policy_sig_from_name(argv[1]);
+        why = p < 0 ? "use audit, permissive or required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
+    }
+    if (why) op(out, ctx, "sig-policy error %s\r\n", why);
+    else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
+                (unsigned)fw_sign_key_count());
+}
+
+static void con_lan_ota(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Firmware 3.10.7+: what the external LAN may install (pod_policy.h). "any" is the
+       behavior before 3.10.7; only the device turns it on. */
+    const char *why = NULL;
+    if (argc >= 2) {
+        if (strcmp(argv[1], "signed") && strcmp(argv[1], "any")) why = "use signed or any";
+        else why = pod_policy_set_lan_unsigned(!strcmp(argv[1], "any"), POLICY_SRC_USB, false);
+    }
+    if (why) op(out, ctx, "lan-ota error %s\r\n", why);
+    else     op(out, ctx, "lan-ota %s\r\n", pod_policy_lan_unsigned() ? "any" : "signed");
+}
+
+static void con_rollback_floor(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB);
+    char fl[16];
+    uint32_t f = pod_policy_rollback_floor();
+    if (why) op(out, ctx, "rollback-floor error %s\r\n", why);
+    else     op(out, ctx, "rollback-floor %s\r\n", f ? fw_sign_release_str(f, fl, sizeof(fl)) : "none");
+}
+
+#if !defined(BENCHPOD_RELEASE)
+static void con_ca_damage(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Development builds: damage the company CA slot to try the built-in-roots fallback. */
+    const char *why = cloud_extras_ca_damage();
+    if (why) op(out, ctx, "ca-damage error %s\r\n", why);
+    else     op(out, ctx, "ca-damage ok (ca error %s)\r\n",
+                cloud_extras_ca_error() ? cloud_extras_ca_error() : "none");
+}
+#endif
+
+static void con_usb_network(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* The USB network adapter on or off (pod_policy.h): off, the pod re-enumerates as its
+       console only. The console is the way back on. */
+    const char *why = NULL;
+    if (argc >= 2) {
+        if (!strcmp(argv[1], "on") || !strcmp(argv[1], "off"))
+            why = pod_policy_set_usb_net(!strcmp(argv[1], "on"), POLICY_SRC_USB, false);
+        else
+            why = "use on or off";
+    }
+    if (why) op(out, ctx, "usb-network error %s\r\n", why);
+    else     op(out, ctx, "usb-network %s\r\n", pod_policy_usb_net() ? "on" : "off");
+}
+
+static void con_lan_tls(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
+    const char *why = NULL;
+    if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
+        why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
+    else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
+        why = lan_tls_regenerate();
+    else if (argc >= 2)
+        why = "use https-only on|off or regenerate";
+    static lan_tls_info_t in;   /* console task only */
+    lan_tls_get_info(&in);
+    if (why)            op(out, ctx, "lan-tls error %s\r\n", why);
+    else if (!in.ready) op(out, ctx, "lan-tls port %d https-only %s none %s\r\n", LAN_TLS_PORT,
+                           pod_policy_https_only() ? "on" : "off", in.error);
+    else                op(out, ctx, "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\"\r\n", LAN_TLS_PORT,
+                           pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key, in.subject);
+}
+
+static void con_log(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    if (argc >= 2) {
+        int lv = log_level_from_name(argv[1]);
+        why = lv < 0 ? "use error, warn, info or debug" : pod_policy_set_log_level((bp_log_level_t)lv);
+    }
+    if (why) op(out, ctx, "log error %s\r\n", why);
+    else     op(out, ctx, "log %s\r\n", log_level_name(log_level()));
+}
+
+static void con_lan_policy(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    if (argc >= 2) {
+        int p = pod_policy_lan_from_name(argv[1]);
+        why = p < 0 ? "use open, locked or off" : pod_policy_set_lan((pod_lan_policy_t)p, POLICY_SRC_USB);
+    }
+    if (why) op(out, ctx, "lan-policy error %s\r\n", why);
+    else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
+}
+
+static void con_blobs(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* One line per W25Q slot: name, state against this firmware, what it holds. */
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+        if (!blob_listed((blob_id_t)i)) continue;
+        const blob_info_t *in = blob_report_info((blob_id_t)i);   /* esp: what the C3 runs */
+        char hex[65] = "-";
+        if (in->present)
+            for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
+        op(out, ctx, "blob %s %s %lu %lu %s\r\n", blob_name((blob_id_t)i),
+           blob_state_str(blob_report_state((blob_id_t)i)), (unsigned long)in->len,
+           (unsigned long)in->version, hex);
+    }
+    /* The firmware copy the last install left in the W25Q (for the bootloader planned next).
+       Not a "blob" line: installers parse those and must not see an internal slot. */
+    const blob_info_t *fw = blob_store_info(BLOB_FW);
+    if (fw && fw->present)
+        op(out, ctx, "fw-copy %lu bytes, sha256 %02x%02x%02x%02x...\r\n", (unsigned long)fw->len,
+           fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
+    else
+        op(out, ctx, "fw-copy none\r\n");
+}
+
+static void con_wifi_set(int argc, char **argv, console_out_t out, void *ctx)
+{
+    op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
+}
+
+static void con_wifi_show(int argc, char **argv, console_out_t out, void *ctx)
+{
+    cmd_wifi_show(out, ctx);
+}
+
+static void con_wifi_static(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc >= 4) net_wifi_static(argv[1], argv[2], argv[3]);
+    else op(out, ctx, "  usage: wifi-static <ip> <netmask> <gateway>  (e.g. 172.20.10.9 255.255.255.240 172.20.10.1)\r\n");
+}
+
+static void con_eth(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* Manually bring the wired interface down/up (PHY reset + DHCP re-acquire)
+       for debugging a stuck link without a power cycle. */
+    if      (argc >= 2 && !strcmp(argv[1], "stop"))    { net_eth_stop();    op(out, ctx, "  eth: stop requested\r\n"); }
+    else if (argc >= 2 && !strcmp(argv[1], "start"))   { net_eth_start();   op(out, ctx, "  eth: start requested (PHY reset + DHCP)\r\n"); }
+    else if (argc >= 2 && !strcmp(argv[1], "restart")) { net_eth_restart(); op(out, ctx, "  eth: restart requested (PHY reset + DHCP)\r\n"); }
+    else if (argc >= 2 && !strcmp(argv[1], "stats")) {
+        static eth_diag_t d;      /* static: the console stack has ~1.3 KB of headroom */
+        static char line[384];
+        net_eth_diag(&d);
+        eth_diag_format(&d, line, sizeof(line));
+        op(out, ctx, "  eth: ");
+        out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
+        op(out, ctx, "\r\n");
+    }
+#if !defined(BENCHPOD_RELEASE)   /* development builds only: wired-link diagnostics (JSON eth has them) */
+    else if (argc >= 2 && !strcmp(argv[1], "refclk")) {
+        uint32_t seq = net_eth_refclk_seq(), hz = 0;
+        net_eth_refclk_measure();
+        /* The net task runs it (~200 ms of gate plus a PHY restart); wait, don't guess. */
+        for (int i = 0; i < 40 && !net_eth_refclk_result(seq, &hz); i++)
+            vTaskDelay(pdMS_TO_TICKS(100));
+        if (hz == 0) {
+            op(out, ctx, "  eth refclk: no clock on PA1 — the PHY is not driving RMII\r\n");
+        } else {
+            long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
+            op(out, ctx, "  eth refclk: %lu Hz, %+ld ppm vs 50 MHz%s\r\n",
+               (unsigned long)hz, ppm,
+               clock_on_hsi() ? " (UNRELIABLE: the MCU crystal did not start, so the"
+                                " reference this is measured against is the internal HSI)" : "");
+            op(out, ctx, "  (100BASE-TX needs +/-50 ppm, 10BASE-T tolerates far more."
+                         " This compares the PHY clock with the MCU crystal, so read it"
+                         " next to a known-good pod.)\r\n");
+        }
+    }
+    else if (argc >= 3 && !strcmp(argv[1], "loopback")) {
+        int mbit = atoi(argv[2]);
+        uint32_t n = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 200u;
+        if (mbit != 10 && mbit != 100) {
+            op(out, ctx, "  usage: eth loopback <10|100> [n]\r\n");
+        } else {
+            if (n == 0) n = 1;
+            if (n > 1000) n = 1000;
+            uint32_t seq = net_eth_loopback_seq();
+            static eth_loopback_result_t r;   /* static: console stack headroom */
+            net_eth_loopback(mbit, n);
+            bool done = false;
+            for (int i = 0; i < 150 && !(done = net_eth_loopback_result(seq, &r)); i++)
+                vTaskDelay(pdMS_TO_TICKS(100));
+            if (!done) {
+                op(out, ctx, "  eth loopback: no result (timed out)\r\n");
+            } else {
+                op(out, ctx, "  eth loopback %dM: sent %lu, came back %lu, intact %lu, corrupt %lu,"
+                             " crc %lu, align %lu, tx fail %lu\r\n",
+                   r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
+                   (unsigned long)r.intact, (unsigned long)r.corrupt,
+                   (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
+                op(out, ctx, "  %s\r\n",
+                   r.intact == r.sent
+                     ? "all frames intact: the RMII lines and the PHY's digital side are fine at this speed"
+                     : "frames lost or damaged without ever reaching the jack: suspect the RMII lines"
+                       " (TXD0/TXD1/TX_EN, RXD, CRS_DV) or the PHY's digital side");
+            }
+        }
+    }
+    else if (argc >= 3 && !strcmp(argv[1], "speed")) {
+        int full = (argc >= 4 && !strcmp(argv[3], "full"));
+        if (!strcmp(argv[2], "auto")) {
+            net_eth_force_speed(0, 0);
+            op(out, ctx, "  eth: autonegotiation restored (re-acquiring link + DHCP)\r\n");
+        } else if (!strcmp(argv[2], "10") || !strcmp(argv[2], "100")) {
+            int mbit = atoi(argv[2]);
+            net_eth_force_speed(mbit, full);
+            op(out, ctx, "  eth: forcing %d M %s (re-acquiring link + DHCP)\r\n",
+               mbit, full ? "full" : "half");
+            if (full)
+                op(out, ctx, "  note: a switch port that autonegotiates parallel-detects HALF,"
+                             " so forced full is a duplex mismatch\r\n");
+        } else {
+            op(out, ctx, "  usage: eth speed <auto|10|100> [full]\r\n");
+        }
+    }
+#endif
+    else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
+}
+
+static void con_identity(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* "identity <short id> <public key>", or "identity unknown <why>" (device_identity.h). */
+    char id[DEVICE_ID_SHORT_LEN + 1];
+    device_identity_short_id(id);
+    uint8_t pub[DEVICE_ID_PUBLIC_LEN];
+    if (id[0] && device_identity_get_public(pub) == 0) {
+        char b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
+        b64url_encode(pub, sizeof(pub), b64, sizeof(b64));
+        op(out, ctx, "identity %s %s\r\n", id, b64);
+    } else {
+        op(out, ctx, "identity unknown %s\r\n", device_identity_problem());
+    }
+}
+
+static void con_identity_wipe(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* The way back for a pod whose identity record the firmware will not replace: erase it and
+       make a new key. USB console only (this console is physical presence); the token must be
+       the current short id, or "unknown" when there is none. */
+    const char *why = device_identity_wipe(argc >= 2 ? argv[1] : NULL);
+    if (why) {
+        op(out, ctx, "identity-wipe error %s\r\n", why);
+    } else {
+        char id[DEVICE_ID_SHORT_LEN + 1];
+        device_identity_short_id(id);
+        op(out, ctx, "identity-wipe ok %s\r\n", id);
+        net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
+    }
+}
+
+#if defined(BENCHPOD_WIFI_BRIDGE)
+static void con_bridge(int argc, char **argv, console_out_t out, void *ctx)
+{
+    cmd_bridge(argc, argv, out, ctx);
+}
+#endif
+
+static void con_wifi_scan(int argc, char **argv, console_out_t out, void *ctx)
+{
+    /* For a Wi-Fi picker (the CLI): "scan <rssi> <channel> <auth> <ssid>" per network,
+       strongest first, then "scan done <n>"; or "wifi-scan error <why>". Through a Wi-Fi
+       bridge when one is plugged in, else the built-in Wi-Fi, whose list follows the prompt
+       when the scan ends (the worker does not wait for it). */
+    wifi_scan_console();
+}
+
+static void con_selftest(int argc, char **argv, console_out_t out, void *ctx)
+{
+    cmd_selftest(out, ctx);
+}
+
+static void con_reboot(int argc, char **argv, console_out_t out, void *ctx)
+{
+    op(out, ctx, "  rebooting...\r\n");
+    HAL_Delay(50);
+    boot_guard_planned_reset(true);
+    NVIC_SystemReset();
+}
+
+/* ca / ca-clear (the console's cloud-ca / cloud-ca-clear) */
+static void con_ca(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (!strcmp(argv[0], "ca-clear")) {
+        const char *why = bus_busy_reason();   /* the W25Q write takes the shared bus */
+        if (!why) why = cloud_extras_ca_clear();
+        if (why) op(out, ctx, "ca-clear error %s\r\n", why);
+        else     op(out, ctx, "ca-clear ok\r\n");
+    } else {
+        /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
+        console_line_t cl = { out, ctx };
+        int n = cloud_extras_ca_each(console_ca_cert, &cl);
+        if (n == 0) op(out, ctx, "ca none\r\n");
+        if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
+    }
+}
+
+/* proxy / proxy-set / proxy-clear (the console's cloud-proxy*) */
+static void con_proxy(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    /* proxy-set/-clear write the W25Q, which takes the shared bus; plain `proxy` only reads */
+    const char *busy = strcmp(argv[0], "proxy") ? bus_busy_reason() : NULL;
+    if (busy)
+        why = busy;
+    else if (!strcmp(argv[0], "proxy-set"))
+        why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
+                       : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
+    else if (!strcmp(argv[0], "proxy-clear"))
+        why = cloud_extras_proxy_set(NULL, NULL, NULL);
+    if (why) {
+        op(out, ctx, "proxy error %s\r\n", why);
+    } else {
+        cloud_proxy_t p;
+        cloud_extras_proxy_get(&p);
+        if (p.host[0]) op(out, ctx, "proxy %s:%u %s\r\n", p.host, (unsigned)p.port, p.user[0] ? "auth" : "noauth");
+        else           op(out, ctx, "proxy none\r\n");
+        memset(&p, 0, sizeof(p));
+    }
+}
+
+/* The ESP32-C3 commands' common refusals: no C3 on this board, or a flash of it is running.
+   True = refused (the reply is sent). */
+static bool esp_refused(const char *verb, console_out_t out, void *ctx)
+{
+    if (!esp_wifi_ctrl_module_present()) {
+        op(out, ctx, "  %s: " ESP_WIFI_NO_MODULE "\r\n", verb);
+        return true;
+    }
+    if (esp_rom_flash_busy()) {
+        uint32_t done = 0, total = 0;
+        (void)esp_rom_flash_progress(&done, &total);
+        op(out, ctx, "  %s refused: the ESP32-C3 is being flashed (block %lu/%lu); wait for the "
+                     "\"[espflash] done\" line\r\n", verb, (unsigned long)done, (unsigned long)total);
+        return true;
+    }
+    return false;
+}
+
+static void con_flash_esp32_sync(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (esp_refused(argv[0], out, ctx)) return;
+    net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
+    uint32_t magic = 0;
+    if (esp_rom_flash_sync(&magic) == 0)
+        op(out, ctx, "  C3 ROM synced (chip magic 0x%08lx)\r\n", (unsigned long)magic);
+    else
+        op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
+    net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
+}
+
+static void con_flash_esp32(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (esp_refused(argv[0], out, ctx)) return;
+    if (bus_busy_reason()) {
+        /* ~140 s on the shared bus: not under a capture, upload or update */
+        op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
+        return;
+    }
+    /* Runs in the background (~2 min): the console and the API keep answering, and the log
+       carries the progress and the result (flash_esp32_done). */
+    net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
+    int rc = esp_rom_flash_start(flash_esp32_done);
+    if (rc == 0) {
+        op(out, ctx, "  flashing the ESP32-C3 in the background (%u bytes, about 2 minutes);\r\n"
+                     "  the log shows the progress and ends with \"flash-esp32: ...\"\r\n",
+           (unsigned)blob_store_info(BLOB_ESP)->len);
+    } else {
+        op(out, ctx, "  flash-esp32 failed: %s\r\n",
+           rc == ESP_FLASH_START_NO_IMAGE ? "no ESP32-C3 image in the W25Q (install blob esp first)"
+           : rc == ESP_FLASH_START_BAD_SLOT ? "the esp slot does not match its checksum"
+           : "a flash is already running");
+        net_wifi_hold_for_flash(false);
+    }
+}
+
+static void con_esp_reset_pulse(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (esp_refused(argv[0], out, ctx)) return;
+    /* Diagnostic: reset the ESP32-C3 behind the Wi-Fi control's back (EN low 50 ms), which
+       is what a C3 crash or brown-out looks like from here.  The control must notice (the
+       C3's new boot event, or its RSSI answers stopping), drop the link and rejoin; see
+       wifi_status c3_lost_reboot / c3_lost_noresp. */
+    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
+    sleep_ms(50);
+    HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_SET);
+    op(out, ctx, "  C3 reset pulsed (50 ms); watch wifi-show\r\n");
+}
+
+static void con_esp_mon(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (esp_refused(argv[0], out, ctx)) return;
+    uint32_t ms = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 5000;
+    if (ms > 20000) ms = 20000;
+    esp_uart_monitor(ms);
+}
+
+static void con_wifi_clear(int argc, char **argv, console_out_t out, void *ctx)
+{
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) {
+        const char *err = NULL;
+        int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
+        if (!bridge_failed(out, ctx, "wifi-clear", rc, err))
+            op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
+        return;
+    }
+#endif
+    /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
+    config_clear();
+    net_wifi_reload();          /* drop Wi-Fi now, whatever happens to the C3 */
+    const char *why = esp_wifi_ctrl_module_present() ? wifi_clear_c3_now() : NULL;
+    if (!esp_wifi_ctrl_module_present())   /* digital v3r3: no C3, no second copy */
+        op(out, ctx, "  Wi-Fi credentials cleared (pod flash; this BenchPod has no ESP32-C3)\r\n");
+    else if (!why)
+        op(out, ctx, "  Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)\r\n");
+    else
+        op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
+                     "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
+}
+
+static void con_dfu(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (pod_policy_sig() == FW_SIG_POLICY_REQUIRED) {
+        /* The ROM bootloader writes any image, signed or not: under "required" that would be the
+           way around the signature check (security review 2026-11, M11). Loosening the policy
+           first is possible from this console, but it is a visible, persisted change. */
+        out(ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
+                 "Update with signed firmware over the network or USB link (benchpod flash-self "
+                 "--network), or loosen it first (sig-policy permissive)\r\n");   /* > op()'s 160 B */
+        return;
+    }
+    op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
+    HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
+    boot_guard_planned_reset(true);
+    dfu_boot_request();     /* arms the flag + system reset; never returns */
+}
+
+/* One row per console command (check_docs_coverage.py reads the names from here).  A name that is
+   not here goes to con_fallback: a command that moved to the JSON API, else "unknown command".
+   Development-only commands are not in a release build's table at all.  `help` is its own text:
+   it groups several commands per line, which a per-row help string would not reproduce. */
+typedef void (*console_fn_t)(int argc, char **argv, console_out_t out, void *ctx);
+typedef struct {
+    const char  *name;
+    console_fn_t fn;
+} console_cmd_t;
+
+static const console_cmd_t k_console_cmds[] = {
+    { "help", con_help },
+    { "ping", con_ping },
+    { "status", con_status },
+#if !defined(BENCHPOD_RELEASE)
+    { "spi-clk", con_spi_clk },
+    { "spi-diag", con_spi_diag },
+    { "adc-spi", con_adc_spi },
+#endif
+#if defined(BENCHPOD_EMI_TEST)
+    { "emi", con_emi },
+#endif
+    { "led", con_led },
+    { "psram-selftest", con_psram_selftest },
+#if !defined(BENCHPOD_RELEASE)
+    { "cap-selftest", con_cap_selftest },
+    { "i2c-scan", con_i2c_scan },
+    { "ina", con_ina },
+#endif
+    { "usb-reattach", con_usb_reattach },
+    { "uid", con_uid },
+#if !defined(BENCHPOD_RELEASE)
+    { "test-bootloop", con_test_bootloop },
+    { "ice40-erase", con_ice40_erase },
+    { "test-crash", con_test_crash },
+    { "test-hang", con_test_hang },
+    { "test-ice40-hold", con_test_ice40_hold },
+    { "expdump", con_expdump },
+    { "adcraw", con_adcraw },
+    { "psram", con_psram },
+    { "psram-bench", con_psram_bench },
+    { "psram-clk", con_psram_clk },
+    { "psram-chunk", con_psram_chunk },
+#endif
+    { "psram-test", con_psram_test },
+#if !defined(BENCHPOD_RELEASE)
+    { "psram-addrtest", con_psram_addrtest },
+    { "capture-psram", con_capture_psram },
+    { "dualcap", con_dualcap },
+    { "lastress", con_lastress },
+    { "flash-id", con_flash_id },
+#endif
+    { "flash-ice40", con_flash_ice40 },
+    { "sig-policy", con_sig_policy },
+    { "lan-ota", con_lan_ota },
+    { "rollback-floor", con_rollback_floor },
+#if !defined(BENCHPOD_RELEASE)
+    { "ca-damage", con_ca_damage },
+#endif
+    { "ca", con_ca },
+    { "ca-clear", con_ca },
+    { "proxy", con_proxy },
+    { "proxy-set", con_proxy },
+    { "proxy-clear", con_proxy },
+    { "usb-network", con_usb_network },
+    { "lan-tls", con_lan_tls },
+    { "log", con_log },
+    { "lan-policy", con_lan_policy },
+    { "blobs", con_blobs },
+    { "flash-esp32-sync", con_flash_esp32_sync },
+    { "flash-esp32", con_flash_esp32 },
+    { "wifi-set", con_wifi_set },
+    { "esp-reset-pulse", con_esp_reset_pulse },
+    { "esp-mon", con_esp_mon },
+    { "wifi-show", con_wifi_show },
+    { "wifi-static", con_wifi_static },
+    { "eth", con_eth },
+    { "identity", con_identity },
+    { "identity-wipe", con_identity_wipe },
+    { "wifi-clear", con_wifi_clear },
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    { "bridge", con_bridge },
+#endif
+    { "wifi-scan", con_wifi_scan },
+    { "dfu", con_dfu },
+    { "selftest", con_selftest },
+    { "reboot", con_reboot },
+};
+
+/* Runs on the hw worker (hw_worker_submit_console), the one task that drives the instrument
+   hardware, so it takes no lock of its own: the worker runs one job at a time. */
+void console_exec_hw(char *cmd, console_out_t out, void *ctx)
 {
     /* wifi-set needs quote-aware parsing (SSID/password may contain spaces), so
        intercept it before the whitespace tokenizer mangles the line. */
@@ -666,887 +1804,12 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
         return;
     }
 
-    if (!strcmp(argv[0], "help")) {
-        cmd_help(out, ctx);
-    } else if (!strcmp(argv[0], "ping")) {
-        uint8_t ver = 0;
-        if (fpga_ping(2, &ver) == 0) op(out, ctx, "  PING ok  version=0x%02x\r\n", ver);
-        else                         op(out, ctx, "  PING failed\r\n");
-    } else if (!strcmp(argv[0], "status")) {
-        /* Stable identifier so a host can tell a real bench pod apart from other
-           USB-serial devices: tooling just greps the output for "benchpod". */
-        op(out, ctx, "  device : benchpod\r\n");
-        op(out, ctx, "  mac    : %s\r\n", net_mac_str());
-        {
-            /* The MAC the pod uses on Wi-Fi, for a network that registers devices first. */
-            char wm[18];
-            if (cloud_caps_wifi_mac(wm))
-                op(out, ctx, "  wifimac: %s\r\n", wm[0] ? wm : "not known yet (wifi-scan or a join tells it)");
-        }
-        op(out, ctx, "  ip     : %s\r\n", net_ip_str());
-        {
-            usb_net_stats_t us;
-            usb_net_stats(&us);
-            op(out, ctx, "  usb    : net %s pod %s host %s link %s rx %lu (drop %lu) tx %lu (full %lu)\r\n",
-               usb_net_on() ? "on" : !usb_net_setting_on() ? "off (setting)" : "off (Wi-Fi configured)",
-               usb_netif_pod_ip(), usb_netif_host_ip(), usb_net_link_up() ? "up" : "down",
-               (unsigned long)us.rx_frames, (unsigned long)us.rx_drops,
-               (unsigned long)us.tx_frames, (unsigned long)us.tx_full);
-        }
-        op(out, ctx, "  dma    : spi1=%s spi4=%s\r\n",
-           signal_engine_dma_active() ? "on" : "off",
-           esp_hosted_spi_dma_active() ? "on" : "off");
-        /* PSRAM datapath health from the boot self-test (STM32<->PSRAM, iCE40 write,
-           iCE40 /CE-net reach).  Re-run on demand with 'psram-selftest'. */
-        op(out, ctx, "  psram  : %s\r\n", psram_selftest_str());
-        {
-            uint32_t rd_retried = 0, rd_failed = 0; int rd_rc = 0;
-            signal_engine_psram_read_stats(&rd_retried, &rd_failed, &rd_rc);
-            op(out, ctx, "  psram rd : %lu read-backs retried, %lu failed (last rc %d)\r\n",
-               (unsigned long)rd_retried, (unsigned long)rd_failed, rd_rc);
-        }
-        op(out, ctx, "  ice40boot : %s\r\n", ice40_boot_note());
-        /* Shared-bus ownership (psram.h): a non-zero count is a firmware bug worth reporting. */
-        op(out, ctx, "  psbus  : depth %u, violations %lu\r\n", psram_bus_depth(),
-           (unsigned long)psram_bus_violations());
-        /* Capabilities — the full set advertised to the cloud (cl_send_capabilities),
-           surfaced here so they're visible from the serial console without decoding the
-           cloud handshake. The gateware version is LIVE-read (not the boot snapshot) so a
-           runtime flash-ice40 is reflected, and shows UNREACHABLE when the FPGA is mute.
-           The FPGA STATUS register is folded into the fpga line (not a bare "STATUS=0x.."
-           top-level line) so a `key : value` parser of this output isn't tripped up. */
-        bool     fpga_ok = signal_engine_refresh_version();
-        uint8_t  gw      = signal_engine_fpga_version();
-        bool     deep    = gw_caps()->dac_deep_replay;
-        uint8_t  streg   = 0;
-        bool     streg_ok = (fpga_status_read(&streg) == 0);
-        op(out, ctx, "  board  : %s  fw v%s  rev %s  nrst_pin=%s  usb_cc=%s\r\n",
-           BOARD_NAME, FIRMWARE_VERSION, board_rev_str(),
-           nrst_ctrl_supported() ? "yes" : "no",
-           usb_cc_supported() ? "yes" : "no");
-        if (streg_ok)
-            op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=0x%02x\r\n",
-               gw, fpga_ok ? "reachable" : "UNREACHABLE", streg);
-        else
-            op(out, ctx, "  fpga   : gateware v%u (%s)  status_reg=read-failed\r\n",
-               gw, fpga_ok ? "reachable" : "UNREACHABLE");
-        if (ice40_embedded_gw_version() != 0 && gw != ice40_embedded_gw_version())
-            op(out, ctx, "  gw     : firmware built for v%u, running v%u (updated at the next boot, or run flash-ice40)\r\n",
-               ice40_embedded_gw_version(), gw);
-        /* Separate keys ("hint", "safe", "clock", "gw"), so a host parsing "fpga : gateware vN"
-           keeps working. */
-        if (!fpga_ok && boot_hw_ready() && !ice40_is_configured())
-            op(out, ctx, "  hint   : the iCE40 never configured (blank config flash?): run flash-ice40\r\n");
-        if (boot_guard_report()[0] != '\0')
-            op(out, ctx, "  safe   : %s\r\n", boot_guard_report());
-        if (clock_on_hsi())
-            op(out, ctx, "  clock  : the 25 MHz crystal did not start; running from the internal HSI\r\n");
-        /* The digital board has the gateware's ADC/DAC engines but nothing behind them
-           (board_variant.h), so it names no ADC or DAC, like its status (analog:false). */
-        if (!board_has_analog()) {
-            op(out, ctx, "  analog : none (digital board: no ADC, DAC or 4-20 mA)\r\n");
-        } else {
-            op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
-               ADC_BITS, ADC_CHANNELS, ADC_FULLSCALE_MV);
-            op(out, ctx, "  dac    : ac=%s replay=%s dc=%s  gen %d-bit / replay %d-bit x%d, %d mV FS\r\n",
-               DAC_AC ? "yes" : "no", DAC_REPLAY ? "yes" : "no", DAC_DC ? "yes" : "no",
-               DAC_BITS, DAC_REPLAY_BITS, DAC_CHANNELS, DAC_FULLSCALE_MV);
-            op(out, ctx, "  replay : deep=%s (needs v%u), max %lu samples (%s)\r\n",
-               deep ? "yes" : "no", DAC_DEEP_REPLAY_MIN_GW,
-               (unsigned long)(deep ? FPGA_DAC_REPLAY_MAX_SAMPLES : SIGNAL_MAX_SAMPLES),
-               deep ? "PSRAM" : "BRAM");
-        }
-        /* Cloud registration, so `benchpod discover` can report whether this pod is already
-           claimed WITHOUT the pod being on the network — the TCP/JSON `cloud_status` command
-           can only answer once there is a network to answer over, and a pod fresh out of its
-           box has none. A pre-registered pod that someone was sent is the case that matters:
-           over USB alone, this line is the whole answer. Read straight from the provisioned
-           config, so nothing here depends on the link being up. */
-        {
-            cloud_config_t ccfg;
-            if (cloud_config_load(&ccfg) == 0 && ccfg.enabled) {
-                char last_error[80];
-                cloud_client_last_error(last_error, sizeof(last_error));
-                op(out, ctx, "  cloud  : registered  state=%s  device_id=%s%s%s\r\n",
-                   cloud_client_state_str(), ccfg.device_id,
-                   last_error[0] ? "  last_error=" : "", last_error);
-            } else {
-                op(out, ctx, "  cloud  : not registered\r\n");
-            }
-        }
-        op(out, ctx, "  reset  : %s\r\n", fault_last_reset_str());
-        op(out, ctx, "  crash  : %s\r\n", fault_last_crash_str());
-        op(out, ctx, "  boot   : id %08lx  unclean resets not yet reported %lu\r\n",
-           (unsigned long)fault_boot_id(), (unsigned long)fault_unclean_resets());
-        if (esp_wifi_ctrl_module_present()) {
-            const c3_restarts_t *r = esp_wifi_ctrl_restarts();
-            op(out, ctx, "  c3     : %lu restarts since power-on%s%s\r\n", (unsigned long)r->total,
-               r->total ? ", last: " : "", r->total ? r->last_reason : "");
-        }
-        {
-            sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
-            int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);
-            for (int i = 0; i < n; i++)
-                op(out, ctx, "  stack  : %-7s %u B free (min)\r\n", t[i].name, t[i].stack_free);
-        }
-        op(out, ctx, "  flash  : %lu KB%s\r\n", (unsigned long)(flash_layout_size() / 1024u),
-           flash_compat_refused() ? ", RECORD WRITES REFUSED (outside the record area: a firmware bug)" : "");
-        op(out, ctx, "  lwip   : mem max %lu of %lu B, pbuf pool max %u of %u\r\n",
-           (unsigned long)lwip_stats.mem.max, (unsigned long)lwip_stats.mem.avail,
-           (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->max, (unsigned)lwip_stats.memp[MEMP_PBUF_POOL]->avail);
-        op(out, ctx, "  heap   : %u B free, %u B min\r\n",
-           sys_health_heap_free(), sys_health_heap_min_free());
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "spi-clk") && argc >= 2) {
-        uint32_t div = (uint32_t)atoi(argv[1]);
-        uint32_t hz = signal_engine_spi_set_prescaler(div);
-        if (hz) op(out, ctx, "  SPI1 SCK = %lu Hz (/%lu)\r\n", (unsigned long)hz, (unsigned long)div);
-        else    op(out, ctx, "  bad divisor (128 or 256; 64 needs gateware >= 52; /32 and faster exceed the iCE40's SCK sampling)\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "spi-diag")) {
-        int n = (argc >= 2) ? atoi(argv[1]) : 50;
-        signal_engine_spi_diag(n);
-        op(out, ctx, "  (spi-diag printed on the device log)\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "adc-spi")) {
-        /* Read the live ADC sample DIRECTLY over SPI (CMD_ADC_PROBE), skipping
-           PSRAM + the 24->48 CDC — isolates 0x5555 to engine/silicon vs path. */
-        int n = (argc >= 2) ? atoi(argv[1]) : 16;
-        signal_engine_adc_spi_diag(n);
-        op(out, ctx, "  (adc-spi printed on the device log)\r\n");
-#endif
-#if defined(BENCHPOD_EMI_TEST)
-    } else if (!strcmp(argv[0], "emi")) {
-        /* The EMC test build's activity loop (emi_test.h). */
-        const char *sub = argc >= 2 ? argv[1] : "status";
-        int mode = argc >= 3 ? emi_test_dac_from_name(argv[2]) : -1;
-        int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
-        if (!strcmp(sub, "start"))                     emi_test_start();
-        else if (!strcmp(sub, "stop"))                 emi_test_stop();
-        else if (!strcmp(sub, "dac") && mode >= 0) {
-            if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
-                op(out, ctx, "  emi dac: %s\r\n", board_has_analog()
-                    ? "all needs the quad DAC (analog v3r2 or the v4 analog module)"
-                    : "this board has no DAC (digital-only board)");
-                return;
-            }
-        }
-        else if (!strcmp(sub, "uart") && la >= 0 && la <= 14 && (la > 0 || !strcmp(argv[2], "off")))
-            emi_test_set_uart(la);
-        else if (!strcmp(sub, "net") && argc >= 3 && ((argv[2][0] >= '0' && argv[2][0] <= '9') || !strcmp(argv[2], "off"))) {
-            if (!emi_test_set_net_rate(strcmp(argv[2], "off") ? (unsigned)atoi(argv[2]) : 0u)) {
-                op(out, ctx, "  emi net: at most %u Mbit/s\r\n", EMI_NET_MAX_MBIT);
-                return;
-            }
-        }
-        else if (!strcmp(sub, "log")) {
-            /* The run log (emi_log.h): its state here, the records on the device log. */
-            char info[320];
-            emi_test_log_describe(info, sizeof(info));
-            op(out, ctx, "  %.150s\r\n", info);
-            if (strlen(info) > 150) op(out, ctx, "  %s\r\n", info + 150);
-#if defined(EMI_LOG_TEST_SECTORS)
-            if (argc >= 4 && !strcmp(argv[2], "fill")) {   /* a small-ring test build only */
-                emi_test_log_fill((uint32_t)atol(argv[3]));
-                return;
-            }
-#endif
-            const bool all = argc >= 3 && !strcmp(argv[2], "all");
-            const long n = argc >= 3 && !all ? atol(argv[2]) : 20;
-            if (!all && n <= 0) { op(out, ctx, "usage: emi log [n|all]\r\n"); return; }
-            if (emi_test_log_print(all ? 0u : (uint32_t)n))
-                op(out, ctx, "  (records printed on the device log)\r\n");
-            return;
-        }
-        else if (!strcmp(sub, "fault")) {
-            /* Test the recovery ladder (recovery.h) with a failure made on purpose. */
-            const char *f = argc >= 3 ? argv[2] : "";
-            if (!emi_test_fault(f)) { op(out, ctx, "usage: emi fault ice40|ice40-stuck|off\r\n"); return; }
-            op(out, ctx, "  emi fault %s\r\n", f);
-            return;
-        }
-        else if (strcmp(sub, "status")) {
-            op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                         " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]"
-                         " | emi fault ice40|ice40-stuck|off\r\n");
-            return;
-        }
-        char line[256];
-        emi_test_describe(line, sizeof(line));
-        op(out, ctx, "  %s\r\n", line);
-#endif
-    } else if (!strcmp(argv[0], "led")) {
-        /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it
-           goes back to showing the pod's state (status_led.h). */
-        static const struct { const char *name; uint8_t mask; } colours[] = {
-            {"off", STATUS_LED_OFF}, {"red", STATUS_LED_RED}, {"green", STATUS_LED_GREEN},
-            {"blue", STATUS_LED_BLUE}, {"cyan", STATUS_LED_CYAN}, {"magenta", STATUS_LED_MAGENTA},
-            {"yellow", STATUS_LED_RED | STATUS_LED_GREEN},
-            {"white", STATUS_LED_RED | STATUS_LED_GREEN | STATUS_LED_BLUE},
-        };
-        int mask = -1;
-        if (argc >= 2) {
-            for (size_t i = 0; i < sizeof(colours) / sizeof(colours[0]); i++)
-                if (!strcmp(argv[1], colours[i].name)) mask = colours[i].mask;
-            if (mask < 0 && argv[1][0] >= '0' && argv[1][0] <= '7' && argv[1][1] == '\0')
-                mask = argv[1][0] - '0';
-        }
-        if (mask < 0) {
-            op(out, ctx, "usage: led red|green|blue|cyan|magenta|yellow|white|off|<0-7>\r\n");
-        } else {
-            status_led_override((uint8_t)mask, 5000u);
-            op(out, ctx, "led %u for 5 s\r\n", (unsigned)mask);
-        }
-    } else if (!strcmp(argv[0], "psram-selftest")) {
-        /* Layered PSRAM datapath test: STM32<->PSRAM, iCE40->PSRAM write, and (if
-           that fails) whether the iCE40 even reaches the /CE net.  Same test run
-           once at boot. */
-        psram_boot_selftest();
-        op(out, ctx, "  (psram-selftest printed on the device log)\r\n");
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "cap-selftest")) {
-        /* End-to-end ADC->PSRAM path test: iCE40 streams a known ramp through the
-           real capture datapath (CDC+writer+PSRAM+readback).  PASS => the path is
-           healthy; FAIL => iCE40 capture/CDC timing error, NOT the analog ADC. */
-        int n = (argc >= 2) ? atoi(argv[1]) : 64;
-        int bad = -1;
-        int rc = signal_engine_capture_selftest(n, &bad);
-        op(out, ctx, "  cap-selftest: %s (see device log)\r\n",
-           rc == 0 ? "PASS — ADC->PSRAM path OK" : "FAIL — iCE40 capture/CDC timing error");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "i2c-scan")) {
-        i2c_bus_status();   /* prints to the local console log */
-        op(out, ctx, "  (scan printed on the device log)\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "ina")) {
-        cmd_ina(out, ctx);
-#endif
-    } else if (!strcmp(argv[0], "usb-reattach")) {
-        /* macOS ignores a new network interface while the screen is locked; this makes
-           the host see the device again without unplugging it. */
-        op(out, ctx, "usb-reattach ok\r\n");
-        usb_reattach_request();
-    } else if (!strcmp(argv[0], "uid")) {
-        /* uid: the 96-bit unique ID.  Words only: a byte read of this area is a precise bus
-           fault on the H5 (proven on the v3, bfar=0x08fff800; see board_uid.h). */
-        uint32_t w[3];
-        board_uid_words(w);
-        op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
-           (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "test-bootloop")) {
-        /* Prove the safe-mode safeguard: the next two boots crash in the net task (net) or the
-           iCE40/PSRAM bring-up (hw), the third comes up in safe mode with only that part off.
-           A power cycle then returns to normal.  `test-bootloop yes` is the net test. */
-        const char *target = argc >= 3 ? argv[1] : "net";
-        const char *confirm = argc >= 3 ? argv[2] : (argc >= 2 ? argv[1] : "");
-        uint32_t sub = !strcmp(target, "net") ? BOOT_SUB_NET
-                     : !strcmp(target, "hw")  ? BOOT_SUB_HW : 0;
-        if (!sub || strcmp(confirm, "yes")) {
-            op(out, ctx, "  test-bootloop net yes : crash the next 2 boots in the net task; the 3rd comes up in safe mode, network off\r\n");
-            op(out, ctx, "  test-bootloop hw yes  : same, in the iCE40/PSRAM bring-up; the 3rd has iCE40/PSRAM off\r\n");
-        } else {
-            boot_guard_arm_test_loop(BOOT_GUARD_SAFE_AFTER, sub);
-            op(out, ctx, "  armed: resetting now. Expect ~1 minute, then `status` shows safe mode\r\n");
-            vTaskDelay(pdMS_TO_TICKS(200));
-            NVIC_SystemReset();
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "ice40-erase")) {
-        /* Make this pod a new board again, to prove the blank-board gateware load: erase the
-           start of the iCE40 config flash (its image begins at 0) and hold the iCE40 in reset,
-           so the next boot finds it unconfigured. "gw0" also empties that slot, like a pod
-           whose blobs arrive after its firmware. */
-        const bool gw0 = argc >= 3 && !strcmp(argv[1], "gw0");
-        if (argc < 2 || strcmp(argv[argc - 1], "yes") || (argc >= 3 && !gw0)) {
-            op(out, ctx, "  ice40-erase [gw0] yes : blank the iCE40 config flash (and slot gw0); then reboot\r\n");
-        } else if (w25q_session_open() != 0) {
-            op(out, ctx, "  ice40-erase: the W25Q flash does not answer\r\n");
-        } else {
-            int rc = w25q_erase_block(0);
-            if (rc == 0 && gw0) rc = blob_store_clear(BLOB_GW0);
-            w25q_session_close();
-            ice40_hold_off_bus();
-            op(out, ctx, rc == 0 ? "  iCE40 config flash erased%s, iCE40 held in reset: reboot to test the blank-board path\r\n"
-                                 : "  ice40-erase failed%s (see device log)\r\n",
-               gw0 ? " (and slot gw0)" : "");
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "test-crash")) {
-        /* Prove the crash report: a real fault (UsageFault/HardFault) in the console task. */
-        if (argc < 2 || strcmp(argv[1], "yes")) {
-            op(out, ctx, "  test-crash yes : fault on purpose; the next boot reports it as the last crash\r\n");
-        } else {
-            op(out, ctx, "  crashing now\r\n");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            __builtin_trap();
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "test-hang")) {
-        /* Prove the watchdog report: the named task spins, the IWDG early warning records it
-           (~30 s), the pod resets, and the next boot reports the stall as its last crash. */
-        int task = argc >= 2 && !strcmp(argv[1], "net") ? WD_TASK_NET
-                 : argc >= 2 && !strcmp(argv[1], "hw")  ? WD_TASK_WORKER : -1;
-        if (task < 0 || argc < 3 || strcmp(argv[2], "yes")) {
-            op(out, ctx, "  test-hang net yes : hang the net task; the watchdog resets the pod in ~30 s\r\n");
-            op(out, ctx, "  test-hang hw yes  : hang the hw worker; the watchdog resets the pod in ~90 s\r\n");
-        } else {
-            watchdog_test_hang(task);
-            op(out, ctx, "  armed: the %s task hangs now\r\n", argv[1]);
-        }
-    } else if (!strcmp(argv[0], "test-ice40-hold")) {
-        /* Prove the idle iCE40 check (hw_worker.c, recovery.h): hold the iCE40 in reset as an ESD
-           hit that unconfigured it would leave it; the pod reloads it from its flash by itself. */
-        if (argc < 2 || strcmp(argv[1], "yes")) {
-            op(out, ctx, "  test-ice40-hold yes : hold the iCE40 in reset; the idle check reloads it (~10 s)\r\n");
-        } else {
-            ice40_hold_off_bus();
-            op(out, ctx, "  the iCE40 is held in reset\r\n");
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "expdump")) {
-        analog_switch_dump();
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "adcraw")) {
-        /* adcraw — single raw ADC probe byte (debug). */
-        uint8_t val = 0;
-        if (adc_probe_one(&val) == 0) op(out, ctx, "  ADC=%u (0x%02x)\r\n", val, val);
-        else                          op(out, ctx, "  adc-probe failed\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "psram")) {
-        /* Diagnostic path: reports bus/CS/arbitration state and re-probes the ID
-           with the iCE40 held off the shared bus (see psram_diag). */
-        if (psram_diag() == 0) op(out, ctx, "  PSRAM ID ok with iCE40 in reset (arbitration is the issue)\r\n");
-        else                   op(out, ctx, "  PSRAM ID failed even with iCE40 in reset (see device log)\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "psram-bench")) {
-        uint32_t kb = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 256;
-        psram_bench(kb);
-        op(out, ctx, "  (psram-bench printed on the device log)\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "psram-clk") && argc >= 2) {
-        uint32_t p = (uint32_t)atoi(argv[1]);
-        uint32_t hz = psram_set_prescaler(p);
-        if (hz) op(out, ctx, "  OCTOSPI SCLK = %lu Hz (presc %lu)\r\n", (unsigned long)hz, (unsigned long)p);
-        else    op(out, ctx, "  psram-clk failed\r\n");
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "psram-chunk") && argc >= 2) {
-        uint32_t n = psram_set_chunk((uint32_t)atoi(argv[1]));
-        op(out, ctx, "  PSRAM tCEM chunk = %lu bytes\r\n", (unsigned long)n);
-#endif
-    } else if (!strcmp(argv[0], "psram-test")) {
-        if (psram_init() == 0 && psram_test() == 0) op(out, ctx, "  PSRAM ok\r\n");
-        else                                        op(out, ctx, "  PSRAM failed (see device log)\r\n");
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "psram-addrtest")) {
-        /* STM32-standalone full-8MB address integrity test: write an ADDRESS-TAGGED
-           256-B block at points spanning the whole device, then read them ALL back and
-           verify.  Catches address aliasing (a dropped high address bit would have one
-           write clobber another -> tag mismatch) and per-address read HAL failures.
-           This isolates the STM32/XSPI/chip path from the iCE40 write path. */
-        static const uint32_t A[] = {
-            0x000000u, 0x010000u, 0x080000u, 0x100000u, 0x200000u,
-            0x300000u, 0x400000u, 0x600000u, 0x7FFF00u
-        };
-        const int NADDR = (int)(sizeof(A) / sizeof(A[0]));
-        uint8_t *b = adc_pool_scratch();   /* 256 B; gated, so the pool is ours */
-        int errs = 0;
-        psram_bus_acquire();
-        for (int a = 0; a < NADDR; a++) {                 /* phase 1: write tagged blocks */
-            for (int i = 0; i < 256; i++) b[i] = (uint8_t)((A[a] >> 12) + (uint32_t)i * 7u + 0x5Au);
-            if (psram_write(A[a], b, 256) != 0) { op(out, ctx, "  write @%06x HAL-FAIL\r\n", (unsigned)A[a]); errs++; }
-        }
-        for (int a = 0; a < NADDR; a++) {                 /* phase 2: read back + verify */
-            for (int i = 0; i < 256; i++) b[i] = 0;
-            if (psram_read(A[a], b, 256) != 0) { op(out, ctx, "  read  @%06x HAL-FAIL\r\n", (unsigned)A[a]); errs++; continue; }
-            int bad = -1;
-            for (int i = 0; i < 256; i++)
-                if (b[i] != (uint8_t)((A[a] >> 12) + (uint32_t)i * 7u + 0x5Au)) { bad = i; break; }
-            if (bad < 0) op(out, ctx, "  @%06x OK\r\n", (unsigned)A[a]);
-            else { op(out, ctx, "  @%06x MISMATCH i=%d got=%02x\r\n", (unsigned)A[a], bad, b[bad]); errs++; }
-        }
-        psram_bus_release();
-        op(out, ctx, "  psram-addrtest: %s (%d error(s) across %d addrs to 8MB)\r\n",
-           errs ? "FAIL" : "PASS", errs, NADDR);
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "capture-psram")) {
-        unsigned n = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 16u;
-        if (n > 64) n = 64;
-        uint16_t s[64];
-        if (adc_capture_psram(s, n, 0.0f) == 0) {
-            op(out, ctx, "  %u samples:", n);
-            for (unsigned i = 0; i < n; i++) op(out, ctx, " %u", s[i]);
-            op(out, ctx, "\r\n");
-        } else {
-            op(out, ctx, "  capture-psram failed (v2 gateware? see log)\r\n");
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "dualcap")) {
-        /* Unified simultaneous ADC + raw-LA capture (one trigger).  `dualcap [an]
-           [ln]` captures `an` ADC + `ln` LA samples into their two PSRAM regions and
-           prints the first few of each.  ADC slow (div 240 = 100 kS/s), LA fast
-           (div 24 = 1 MS/s) to exercise the independent-rate datapath. */
-        unsigned an = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 64u;
-        unsigned ln = (argc >= 3) ? (unsigned)strtoul(argv[2], NULL, 0) : 64u;
-        if (an > 256) an = 256;
-        if (ln > 256) ln = 256;
-        uint16_t *adcb = (uint16_t *)adc_pool_scratch();   /* gated: the pool's scratch, 256 each */
-        uint16_t *lab  = adcb + 256;
-        int rc = fpga_dual_capture(an ? adcb : NULL, (uint16_t)an, 240,
-                                   ln ? lab : NULL, (uint16_t)ln, 24);
-        if (rc != 0) {
-            op(out, ctx, "  dualcap failed (v2 gateware? see log)\r\n");
-        } else {
-            op(out, ctx, "  dualcap: ADC=%u @100kS/s  LA=%u @1MS/s  (one trigger)\r\n", an, ln);
-            if (an) op(out, ctx, "    ADC[0..3]: %5u %5u %5u %5u\r\n",
-                       adcb[0], adcb[1], adcb[2], adcb[3]);
-            if (ln) op(out, ctx, "    LA [0..3]: 0x%03x 0x%03x 0x%03x 0x%03x\r\n",
-                       lab[0] & 0xFFFu, lab[1] & 0xFFFu, lab[2] & 0xFFFu, lab[3] & 0xFFFu);
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "lastress")) {
-        /* Deep-LA capture + drain stress test.  Captures `n` LA samples (up to the
-           full 8 MB PSRAM = LA_PSRAM_MAX_SAMPLES) at the MAX rate and checks: no ring
-           overflow (STATUS bit5, the 48 MHz DDR-drain acid test), AND that the
-           read-back works at BOTH the start AND a HIGH offset near the end — which is
-           the acid test for the 8 MB addressing (a deep capture writes far past the
-           old 1 MB DEVSIZE wall). */
-        unsigned n = (argc >= 2) ? (unsigned)strtoul(argv[1], NULL, 0) : 65535u;
-        if (n < 1u) n = 1u;
-        if (n > LA_PSRAM_MAX_SAMPLES) n = LA_PSRAM_MAX_SAMPLES;
-        static uint16_t lo[4], hi[4];
-        if (fpga_la_capture_psram_start((size_t)n, 0.0f /*max rate*/, NULL) != 0) {
-            op(out, ctx, "  lastress: arm failed (v2 gateware / LA voltage? see log)\r\n");
-        } else {
-            int r = 0; uint32_t spin = 0;
-            while ((r = fpga_la_capture_psram_wait()) == 0 && spin < 200000000u) spin++;
-            if (r == 1) {
-                uint32_t hi_off = (n >= 4u) ? (uint32_t)(n - 4u) * 2u : 0u; /* byte offset of last 4 samples */
-                int rr = fpga_la_psram_read(0, (uint8_t *)lo, sizeof(lo));
-                rr |= fpga_la_psram_read(hi_off, (uint8_t *)hi, sizeof(hi));
-                fpga_la_psram_release();
-                if (rr == 0)
-                    op(out, ctx, "  lastress: %u LA samples @max rate => PASS (no overflow; "
-                                 "read-back OK to 0x%06lx); LA[0..3]=0x%03x.. LA[hi]=0x%03x..\r\n",
-                       n, (unsigned long)(0x010000u + hi_off), lo[0] & 0xFFFu, hi[0] & 0xFFFu);
-                else
-                    op(out, ctx, "  lastress: %u LA samples => FAIL (read-back HAL error at high "
-                                 "offset 0x%06lx)\r\n", n, (unsigned long)(0x010000u + hi_off));
-            } else {
-                op(out, ctx, "  lastress: %u LA samples @max rate => FAIL "
-                             "(overflow/timeout; STATUS bit5 — see log)\r\n", n);
-            }
-        }
-#endif
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
-    } else if (!strcmp(argv[0], "flash-id")) {
-        uint8_t id[3] = {0};
-        if (ice40_flash_read_id(id) == 0)
-            op(out, ctx, "  iCE40 flash JEDEC ID: %02x %02x %02x (W25Q64 = ef 40 17)\r\n",
-               id[0], id[1], id[2]);
-        else
-            op(out, ctx, "  flash-id failed (see device log)\r\n");
-#endif
-    } else if (!strcmp(argv[0], "flash-ice40")) {
-        if (!blob_store_present(BLOB_GW0)) {
-            op(out, ctx, "  no gateware image 0 in the W25Q (install blob gw0 first)\r\n");
-        } else {
-            /* Quiesce first: ice40_flash_program grabs the shared bus (psram_bus_acquire); a
-               live DAC replay/reader mid-burst would wedge the PSRAM the same way the runtime
-               image swap does. */
-            signal_engine_quiesce_psram_masters();
-            /* Through ice40_reflash_image like every other reconfig: it puts the PSRAM in SPI
-               for the config read, re-inits and hands the bus back, and re-syncs the firmware's
-               mirrors of the fabric's registers.  Calling ice40_flash_program directly skipped
-               all of that (stale capture bases = the "sentinel survived" false wedge). */
-            if (ice40_reflash_image(0) == 0) {
-                /* Re-read the gateware version so status/capabilities reflect the just-
-                   flashed bitstream instead of the boot-time value. */
-                bool ok = signal_engine_refresh_version();
-                cloud_client_request_caps_resend();   /* the running image may have changed */
-                op(out, ctx, "  iCE40 reflashed + reconfigured (%u bytes), gateware v%u%s\r\n",
-                   (unsigned)blob_store_info(BLOB_GW0)->len, signal_engine_fpga_version(),
-                   ok ? "" : " (FPGA unreachable — check gateware)");
-            } else {
-                op(out, ctx, "  flash-ice40 failed (see device log)\r\n");
-            }
-        }
-    } else if (!strcmp(argv[0], "sig-policy")) {
-        /* The USB console may set any value: it is the way back from "required" (pod_policy.h). */
-        const char *why = NULL;
-        if (argc >= 2) {
-            int p = pod_policy_sig_from_name(argv[1]);
-            why = p < 0 ? "use audit, permissive or required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
-        }
-        if (why) op(out, ctx, "sig-policy error %s\r\n", why);
-        else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
-                    (unsigned)fw_sign_key_count());
-    } else if (!strcmp(argv[0], "lan-ota")) {
-        /* Firmware 3.10.7+: what the external LAN may install (pod_policy.h). "any" is the
-           behavior before 3.10.7; only the device turns it on. */
-        const char *why = NULL;
-        if (argc >= 2) {
-            if (strcmp(argv[1], "signed") && strcmp(argv[1], "any")) why = "use signed or any";
-            else why = pod_policy_set_lan_unsigned(!strcmp(argv[1], "any"), POLICY_SRC_USB, false);
-        }
-        if (why) op(out, ctx, "lan-ota error %s\r\n", why);
-        else     op(out, ctx, "lan-ota %s\r\n", pod_policy_lan_unsigned() ? "any" : "signed");
-    } else if (!strcmp(argv[0], "rollback-floor")) {
-        const char *why = NULL;
-        if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB);
-        char fl[16];
-        uint32_t f = pod_policy_rollback_floor();
-        if (why) op(out, ctx, "rollback-floor error %s\r\n", why);
-        else     op(out, ctx, "rollback-floor %s\r\n", f ? fw_sign_release_str(f, fl, sizeof(fl)) : "none");
-#if !defined(BENCHPOD_RELEASE)
-    } else if (!strcmp(argv[0], "ca-damage")) {
-        /* Development builds: damage the company CA slot to try the built-in-roots fallback. */
-        const char *why = cloud_extras_ca_damage();
-        if (why) op(out, ctx, "ca-damage error %s\r\n", why);
-        else     op(out, ctx, "ca-damage ok (ca error %s)\r\n",
-                    cloud_extras_ca_error() ? cloud_extras_ca_error() : "none");
-#endif
-    } else if (!strcmp(argv[0], "ca") || !strcmp(argv[0], "ca-clear")) {
-        if (!strcmp(argv[0], "ca-clear")) {
-            const char *why = bus_busy_reason();   /* the W25Q write takes the shared bus */
-            if (!why) why = cloud_extras_ca_clear();
-            if (why) op(out, ctx, "ca-clear error %s\r\n", why);
-            else     op(out, ctx, "ca-clear ok\r\n");
-        } else {
-            /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
-            console_line_t cl = { out, ctx };
-            int n = cloud_extras_ca_each(console_ca_cert, &cl);
-            if (n == 0) op(out, ctx, "ca none\r\n");
-            if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
-        }
-    } else if (!strcmp(argv[0], "proxy") || !strcmp(argv[0], "proxy-set") || !strcmp(argv[0], "proxy-clear")) {
-        const char *why = NULL;
-        /* proxy-set/-clear write the W25Q, which takes the shared bus; plain `proxy` only reads */
-        const char *busy = strcmp(argv[0], "proxy") ? bus_busy_reason() : NULL;
-        if (busy)
-            why = busy;
-        else if (!strcmp(argv[0], "proxy-set"))
-            why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
-                           : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
-        else if (!strcmp(argv[0], "proxy-clear"))
-            why = cloud_extras_proxy_set(NULL, NULL, NULL);
-        if (why) {
-            op(out, ctx, "proxy error %s\r\n", why);
-        } else {
-            cloud_proxy_t p;
-            cloud_extras_proxy_get(&p);
-            if (p.host[0]) op(out, ctx, "proxy %s:%u %s\r\n", p.host, (unsigned)p.port, p.user[0] ? "auth" : "noauth");
-            else           op(out, ctx, "proxy none\r\n");
-            memset(&p, 0, sizeof(p));
-        }
-    } else if (!strcmp(argv[0], "usb-network")) {
-        /* The USB network adapter on or off (pod_policy.h): off, the pod re-enumerates as its
-           console only. The console is the way back on. */
-        const char *why = NULL;
-        if (argc >= 2) {
-            if (!strcmp(argv[1], "on") || !strcmp(argv[1], "off"))
-                why = pod_policy_set_usb_net(!strcmp(argv[1], "on"), POLICY_SRC_USB, false);
-            else
-                why = "use on or off";
-        }
-        if (why) op(out, ctx, "usb-network error %s\r\n", why);
-        else     op(out, ctx, "usb-network %s\r\n", pod_policy_usb_net() ? "on" : "off");
-    } else if (!strcmp(argv[0], "lan-tls")) {
-        /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
-        const char *why = NULL;
-        if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
-            why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
-        else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
-            why = lan_tls_regenerate();
-        else if (argc >= 2)
-            why = "use https-only on|off or regenerate";
-        static lan_tls_info_t in;   /* console task only */
-        lan_tls_get_info(&in);
-        if (why)            op(out, ctx, "lan-tls error %s\r\n", why);
-        else if (!in.ready) op(out, ctx, "lan-tls port %d https-only %s none %s\r\n", LAN_TLS_PORT,
-                               pod_policy_https_only() ? "on" : "off", in.error);
-        else                op(out, ctx, "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\"\r\n", LAN_TLS_PORT,
-                               pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key, in.subject);
-    } else if (!strcmp(argv[0], "log")) {
-        const char *why = NULL;
-        if (argc >= 2) {
-            int lv = log_level_from_name(argv[1]);
-            why = lv < 0 ? "use error, warn, info or debug" : pod_policy_set_log_level((bp_log_level_t)lv);
-        }
-        if (why) op(out, ctx, "log error %s\r\n", why);
-        else     op(out, ctx, "log %s\r\n", log_level_name(log_level()));
-    } else if (!strcmp(argv[0], "lan-policy")) {
-        const char *why = NULL;
-        if (argc >= 2) {
-            int p = pod_policy_lan_from_name(argv[1]);
-            why = p < 0 ? "use open, locked or off" : pod_policy_set_lan((pod_lan_policy_t)p, POLICY_SRC_USB);
-        }
-        if (why) op(out, ctx, "lan-policy error %s\r\n", why);
-        else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
-    } else if (!strcmp(argv[0], "blobs")) {
-        /* One line per W25Q slot: name, state against this firmware, what it holds. */
-        for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
-            if (!blob_listed((blob_id_t)i)) continue;
-            const blob_info_t *in = blob_report_info((blob_id_t)i);   /* esp: what the C3 runs */
-            char hex[65] = "-";
-            if (in->present)
-                for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
-            op(out, ctx, "blob %s %s %lu %lu %s\r\n", blob_name((blob_id_t)i),
-               blob_state_str(blob_report_state((blob_id_t)i)), (unsigned long)in->len,
-               (unsigned long)in->version, hex);
-        }
-        /* The firmware copy the last install left in the W25Q (for the bootloader planned next).
-           Not a "blob" line: installers parse those and must not see an internal slot. */
-        const blob_info_t *fw = blob_store_info(BLOB_FW);
-        if (fw && fw->present)
-            op(out, ctx, "fw-copy %lu bytes, sha256 %02x%02x%02x%02x...\r\n", (unsigned long)fw->len,
-               fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
-        else
-            op(out, ctx, "fw-copy none\r\n");
-    } else if (!esp_wifi_ctrl_module_present() &&
-               (!strcmp(argv[0], "flash-esp32-sync") || !strcmp(argv[0], "flash-esp32") ||
-                !strcmp(argv[0], "esp-reset-pulse") || !strcmp(argv[0], "esp-mon"))) {
-        op(out, ctx, "  %s: " ESP_WIFI_NO_MODULE "\r\n", argv[0]);
-    } else if (esp_rom_flash_busy() &&
-               (!strcmp(argv[0], "flash-esp32-sync") || !strcmp(argv[0], "flash-esp32") ||
-                !strcmp(argv[0], "esp-reset-pulse") || !strcmp(argv[0], "esp-mon"))) {
-        uint32_t done = 0, total = 0;
-        (void)esp_rom_flash_progress(&done, &total);
-        op(out, ctx, "  %s refused: the ESP32-C3 is being flashed (block %lu/%lu); wait for the "
-                     "\"[espflash] done\" line\r\n", argv[0], (unsigned long)done, (unsigned long)total);
-    } else if (!strcmp(argv[0], "flash-esp32-sync")) {
-        net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        uint32_t magic = 0;
-        if (esp_rom_flash_sync(&magic) == 0)
-            op(out, ctx, "  C3 ROM synced (chip magic 0x%08lx)\r\n", (unsigned long)magic);
-        else
-            op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
-        net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
-    } else if (!strcmp(argv[0], "flash-esp32") && bus_busy_reason()) {
-        /* ~140 s on the shared bus: not under a capture, upload or update */
-        op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
-    } else if (!strcmp(argv[0], "flash-esp32")) {
-        /* Runs in the background (~2 min): the console and the API keep answering, and the log
-           carries the progress and the result (flash_esp32_done). */
-        net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
-        int rc = esp_rom_flash_start(flash_esp32_done);
-        if (rc == 0) {
-            op(out, ctx, "  flashing the ESP32-C3 in the background (%u bytes, about 2 minutes);\r\n"
-                         "  the log shows the progress and ends with \"flash-esp32: ...\"\r\n",
-               (unsigned)blob_store_info(BLOB_ESP)->len);
-        } else {
-            op(out, ctx, "  flash-esp32 failed: %s\r\n",
-               rc == ESP_FLASH_START_NO_IMAGE ? "no ESP32-C3 image in the W25Q (install blob esp first)"
-               : rc == ESP_FLASH_START_BAD_SLOT ? "the esp slot does not match its checksum"
-               : "a flash is already running");
-            net_wifi_hold_for_flash(false);
-        }
-    } else if (!strcmp(argv[0], "wifi-set")) {
-        op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
-    } else if (!strcmp(argv[0], "esp-reset-pulse")) {
-        /* Diagnostic: reset the ESP32-C3 behind the Wi-Fi control's back (EN low 50 ms), which
-           is what a C3 crash or brown-out looks like from here.  The control must notice (the
-           C3's new boot event, or its RSSI answers stopping), drop the link and rejoin; see
-           wifi_status c3_lost_reboot / c3_lost_noresp. */
-        HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
-        sleep_ms(50);
-        HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_SET);
-        op(out, ctx, "  C3 reset pulsed (50 ms); watch wifi-show\r\n");
-    } else if (!strcmp(argv[0], "esp-mon")) {
-        uint32_t ms = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 5000;
-        if (ms > 20000) ms = 20000;
-        esp_uart_monitor(ms);
-    } else if (!strcmp(argv[0], "wifi-show")) {
-        cmd_wifi_show(out, ctx);
-    } else if (!strcmp(argv[0], "wifi-static")) {
-        if (argc >= 4) net_wifi_static(argv[1], argv[2], argv[3]);
-        else op(out, ctx, "  usage: wifi-static <ip> <netmask> <gateway>  (e.g. 172.20.10.9 255.255.255.240 172.20.10.1)\r\n");
-    } else if (!strcmp(argv[0], "eth")) {
-        /* Manually bring the wired interface down/up (PHY reset + DHCP re-acquire)
-           for debugging a stuck link without a power cycle. */
-        if      (argc >= 2 && !strcmp(argv[1], "stop"))    { net_eth_stop();    op(out, ctx, "  eth: stop requested\r\n"); }
-        else if (argc >= 2 && !strcmp(argv[1], "start"))   { net_eth_start();   op(out, ctx, "  eth: start requested (PHY reset + DHCP)\r\n"); }
-        else if (argc >= 2 && !strcmp(argv[1], "restart")) { net_eth_restart(); op(out, ctx, "  eth: restart requested (PHY reset + DHCP)\r\n"); }
-        else if (argc >= 2 && !strcmp(argv[1], "stats")) {
-            static eth_diag_t d;      /* static: the console stack has ~1.3 KB of headroom */
-            static char line[384];
-            net_eth_diag(&d);
-            eth_diag_format(&d, line, sizeof(line));
-            op(out, ctx, "  eth: ");
-            out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
-            op(out, ctx, "\r\n");
-        }
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: wired-link diagnostics (JSON eth has them) */
-        else if (argc >= 2 && !strcmp(argv[1], "refclk")) {
-            uint32_t seq = net_eth_refclk_seq(), hz = 0;
-            net_eth_refclk_measure();
-            /* The net task runs it (~200 ms of gate plus a PHY restart); wait, don't guess. */
-            for (int i = 0; i < 40 && !net_eth_refclk_result(seq, &hz); i++)
-                vTaskDelay(pdMS_TO_TICKS(100));
-            if (hz == 0) {
-                op(out, ctx, "  eth refclk: no clock on PA1 — the PHY is not driving RMII\r\n");
-            } else {
-                long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
-                op(out, ctx, "  eth refclk: %lu Hz, %+ld ppm vs 50 MHz%s\r\n",
-                   (unsigned long)hz, ppm,
-                   clock_on_hsi() ? " (UNRELIABLE: the MCU crystal did not start, so the"
-                                    " reference this is measured against is the internal HSI)" : "");
-                op(out, ctx, "  (100BASE-TX needs +/-50 ppm, 10BASE-T tolerates far more."
-                             " This compares the PHY clock with the MCU crystal, so read it"
-                             " next to a known-good pod.)\r\n");
-            }
-        }
-        else if (argc >= 3 && !strcmp(argv[1], "loopback")) {
-            int mbit = atoi(argv[2]);
-            uint32_t n = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 200u;
-            if (mbit != 10 && mbit != 100) {
-                op(out, ctx, "  usage: eth loopback <10|100> [n]\r\n");
-            } else {
-                if (n == 0) n = 1;
-                if (n > 1000) n = 1000;
-                uint32_t seq = net_eth_loopback_seq();
-                static eth_loopback_result_t r;   /* static: console stack headroom */
-                net_eth_loopback(mbit, n);
-                bool done = false;
-                for (int i = 0; i < 150 && !(done = net_eth_loopback_result(seq, &r)); i++)
-                    vTaskDelay(pdMS_TO_TICKS(100));
-                if (!done) {
-                    op(out, ctx, "  eth loopback: no result (timed out)\r\n");
-                } else {
-                    op(out, ctx, "  eth loopback %dM: sent %lu, came back %lu, intact %lu, corrupt %lu,"
-                                 " crc %lu, align %lu, tx fail %lu\r\n",
-                       r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
-                       (unsigned long)r.intact, (unsigned long)r.corrupt,
-                       (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
-                    op(out, ctx, "  %s\r\n",
-                       r.intact == r.sent
-                         ? "all frames intact: the RMII lines and the PHY's digital side are fine at this speed"
-                         : "frames lost or damaged without ever reaching the jack: suspect the RMII lines"
-                           " (TXD0/TXD1/TX_EN, RXD, CRS_DV) or the PHY's digital side");
-                }
-            }
-        }
-        else if (argc >= 3 && !strcmp(argv[1], "speed")) {
-            int full = (argc >= 4 && !strcmp(argv[3], "full"));
-            if (!strcmp(argv[2], "auto")) {
-                net_eth_force_speed(0, 0);
-                op(out, ctx, "  eth: autonegotiation restored (re-acquiring link + DHCP)\r\n");
-            } else if (!strcmp(argv[2], "10") || !strcmp(argv[2], "100")) {
-                int mbit = atoi(argv[2]);
-                net_eth_force_speed(mbit, full);
-                op(out, ctx, "  eth: forcing %d M %s (re-acquiring link + DHCP)\r\n",
-                   mbit, full ? "full" : "half");
-                if (full)
-                    op(out, ctx, "  note: a switch port that autonegotiates parallel-detects HALF,"
-                                 " so forced full is a duplex mismatch\r\n");
-            } else {
-                op(out, ctx, "  usage: eth speed <auto|10|100> [full]\r\n");
-            }
-        }
-#endif
-        else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
-    } else if (!strcmp(argv[0], "identity")) {
-        /* "identity <short id> <public key>", or "identity unknown <why>" (device_identity.h). */
-        char id[DEVICE_ID_SHORT_LEN + 1];
-        device_identity_short_id(id);
-        uint8_t pub[DEVICE_ID_PUBLIC_LEN];
-        if (id[0] && device_identity_get_public(pub) == 0) {
-            char b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
-            b64url_encode(pub, sizeof(pub), b64, sizeof(b64));
-            op(out, ctx, "identity %s %s\r\n", id, b64);
-        } else {
-            op(out, ctx, "identity unknown %s\r\n", device_identity_problem());
-        }
-    } else if (!strcmp(argv[0], "identity-wipe")) {
-        /* The way back for a pod whose identity record the firmware will not replace: erase it and
-           make a new key. USB console only (this console is physical presence); the token must be
-           the current short id, or "unknown" when there is none. */
-        const char *why = device_identity_wipe(argc >= 2 ? argv[1] : NULL);
-        if (why) {
-            op(out, ctx, "identity-wipe error %s\r\n", why);
-        } else {
-            char id[DEVICE_ID_SHORT_LEN + 1];
-            device_identity_short_id(id);
-            op(out, ctx, "identity-wipe ok %s\r\n", id);
-            net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
-        }
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    } else if (!strcmp(argv[0], "wifi-clear") && wifi_bridge_in_use()) {
-        const char *err = NULL;
-        int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "wifi-clear", rc, err))
-            op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
-    } else if (!strcmp(argv[0], "bridge")) {
-        cmd_bridge(argc, argv, out, ctx);
-#endif
-    } else if (!strcmp(argv[0], "wifi-scan")) {
-        /* For a Wi-Fi picker (the CLI): "scan <rssi> <channel> <auth> <ssid>" per network,
-           strongest first, then "scan done <n>"; or "wifi-scan error <why>". Through a Wi-Fi
-           bridge when one is plugged in, else the built-in Wi-Fi, whose list follows the prompt
-           when the scan ends (the worker does not wait for it). */
-        wifi_scan_console();
-    } else if (!strcmp(argv[0], "wifi-clear")) {
-        /* Drops Wi-Fi and wipes both copies: config_store, then the ESP32-C3's NVS (~3 s). */
-        config_clear();
-        net_wifi_reload();          /* drop Wi-Fi now, whatever happens to the C3 */
-        const char *why = esp_wifi_ctrl_module_present() ? wifi_clear_c3_now() : NULL;
-        if (!esp_wifi_ctrl_module_present())   /* digital v3r3: no C3, no second copy */
-            op(out, ctx, "  Wi-Fi credentials cleared (pod flash; this BenchPod has no ESP32-C3)\r\n");
-        else if (!why)
-            op(out, ctx, "  Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)\r\n");
-        else
-            op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
-                         "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
-    } else if (!strcmp(argv[0], "dfu") && pod_policy_sig() == FW_SIG_POLICY_REQUIRED) {
-        /* The ROM bootloader writes any image, signed or not: under "required" that would be the
-           way around the signature check (security review 2026-11, M11). Loosening the policy
-           first is possible from this console, but it is a visible, persisted change. */
-        out(ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
-                 "Update with signed firmware over the network or USB link (benchpod flash-self "
-                 "--network), or loosen it first (sig-policy permissive)\r\n");   /* > op()'s 160 B */
-    } else if (!strcmp(argv[0], "dfu")) {
-        op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
-        HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
-        boot_guard_planned_reset(true);
-        dfu_boot_request();     /* arms the flag + system reset; never returns */
-    } else if (!strcmp(argv[0], "selftest")) {
-        cmd_selftest(out, ctx);
-    } else if (!strcmp(argv[0], "reboot")) {
-        op(out, ctx, "  rebooting...\r\n");
-        HAL_Delay(50);
-        boot_guard_planned_reset(true);
-        NVIC_SystemReset();
-    } else if (console_moved_to(argv[0])) {
-        /* An older benchpod CLI / embeddedci SDK: say what to update, not "unknown command". */
-        static char moved[224];
-        console_moved_line(argv[0], moved, sizeof(moved));
-        out(ctx, moved);
-        out(ctx, "\r\n");
-    } else {
-        op(out, ctx, "  unknown command '%s' (try 'help')\r\n", argv[0]);
-    }
+    const console_cmd_t *c = NULL;
+    for (size_t i = 0; i < sizeof(k_console_cmds) / sizeof(k_console_cmds[0]) && !c; i++)
+        if (!strcmp(argv[0], k_console_cmds[i].name)) c = &k_console_cmds[i];
+    if (c) c->fn(argc, argv, out, ctx);
+    else   con_fallback(argv[0], out, ctx);
     if (gated) command_handler_release_adc(CH_CONSOLE_TEXT_OWNER);
-}
-
-void console_exec(char *cmd, console_out_t out, void *ctx)
-{
-    console_exec_locked(cmd, out, ctx);
 }
 
 /* ---- local interactive console ----------------------------------------- */
@@ -1568,7 +1831,7 @@ void console_run_line(const char *line_in)
     char buf[CONSOLE_LINE_MAX];
     strncpy(buf, line_in, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
-    console_exec(buf, local_out, NULL);
+    console_exec_hw(buf, local_out, NULL);
     console_io_prompt();
 }
 

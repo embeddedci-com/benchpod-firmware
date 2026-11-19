@@ -5,7 +5,7 @@ Three surfaces, each read from the code:
 
   JSON verbs       src/cmd_tier.c (k_tiers)         -> a row in docs/API.md's Commands index
   SCPI commands    src/scpi_server.c (.pattern)     -> docs/API.md's SCPI reference
-  Console commands src/console.c (argv[0] / cmd)    -> docs/usb-serial-interface.md
+  Console commands src/console.c (k_console_cmds)  -> docs/usb-serial-interface.md
 
 A command that is internal on purpose goes in the matching *_UNDOCUMENTED set below, with a
 reason. Run from anywhere: `python3 stm32h563/test/check_docs_coverage.py`. Exits 1 on a gap.
@@ -53,7 +53,8 @@ def scpi_patterns():
 
 def console_verbs():
     src = read(SRC, "console.c")
-    verbs = set(re.findall(r'strcmp\(argv\[0\],\s*"([a-z0-9-]+)"\)', src))
+    # The command table: { "verb", con_fn }, rows of k_console_cmds.
+    verbs = set(re.findall(r'\{\s*"([a-z0-9-]+)"\s*,\s*con_\w+\s*\}', src))
     verbs |= set(re.findall(r'strncmp\((?:cmd|line),\s*"([a-z0-9-]+) ?"', src))
     # Alias tables ({ "new-name", "old-name" }) dispatch through argv[0] rewriting.
     for block in re.findall(r'aliases\[\]\[2\]\s*=\s*\{(.*?)\};', src, re.S):
