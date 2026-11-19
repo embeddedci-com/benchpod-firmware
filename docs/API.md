@@ -2984,7 +2984,8 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 > pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
 > happens on **LA1–LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
 > firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. The previous state
+> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. On the digital
+> v3r4 board every channel pulls up (10k, 2.2k on a one-wire line). The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
@@ -3134,8 +3135,11 @@ Sequence: boot pin low, EN low 100 ms, EN released, 50 ms, SYNC (retried); the b
 released once the ROM answers. Then CHANGE_BAUDRATE, SPI_ATTACH, SPI_SET_PARAMS, FLASH_BEGIN
 (the ROM erases the region, seconds for a large image), the data in 1 KB blocks, the chip's MD5
 of the region, FLASH_END. With `run` the pod pulses EN with the boot pin released. Every pin is
-released at the end, whatever the result. Write each region of a multi-file image (bootloader,
-partition table, application) with its own `start`, `run` only on the last.
+released at the end, whatever the result. With firmware after 3.10.13 the pod also holds `rx`
+high with its pull-up for the run, where the channel has one (as the UART proxy does, see
+[RX pull hold](#uart_proxy_start--transparent-uart-bridge)), and puts back what the channel did
+before at the end. Write each region of a multi-file image (bootloader, partition table,
+application) with its own `start`, `run` only on the last.
 
 `start` and `sync` reply `{"started":true,"op":"start"}`. `status` (and `abort`) reply:
 
