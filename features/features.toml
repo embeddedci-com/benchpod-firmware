@@ -32,11 +32,28 @@
 #   announced it), floor, or code (no flag; from the code or the docs).
 # - Text is American English, no em-dashes, no chip part numbers (the docs show it).
 #
+# Client compatibility (`api`, `min_client_api`): separate from the features above.
+# - `api` is the client API level: an integer the pod announces as "api" wherever it announces
+#   features_rev. It goes up by one ONLY for a change that a client built for an older api would
+#   misread: a reply changes shape, a field changes meaning or units, or the firmware's free text
+#   is replaced so clients that match on it break. A new command, field or feature is additive:
+#   that is a new feature entry and `revision`, not `api`. Bump `api` in the same pull request as
+#   the change, and say in that pull request what an older client gets wrong.
+# - Clients send "client_api":<the api they were built for> on every JSON command. The pod refuses
+#   a command whose client_api (a client that sends none counts as 0) is below `min_client_api`
+#   with BP0030 client_too_old; status, diag, ping and lease_release always run, so the client can
+#   still find out and report it.
+# - `min_client_api` is raised only on purpose, in a release pull request: it refuses every client
+#   below it, every client that sends nothing included. Never raise it as a side effect of a bump.
+# - `min_client_api` <= `api` (CI checks it).
+#
 # After an edit run `python3 tools/gen_features.py` (CI runs it with --check). It writes
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 7
+revision = 8
+api = 1
+min_client_api = 0
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -779,3 +796,9 @@ requires = ["vref_out"]
 docs = "API.md#pull-resistors-on-digital-v3r4"
 dated = "code"
 note = "Every channel pulls up or down with 10k, 2.2k or both; la pull takes strength (the pod picks from the pin's function without it) and replies strength and strengths; la_pins says pull_dirs once. Refusal BP0029 while pin 21 is down."
+
+[features.client_api]
+rev = 8
+firmware = "next"
+dated = "code"
+note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except status, diag, ping and lease_release. Commands may also carry \"client\":\"<name> <version>\" for that message."
