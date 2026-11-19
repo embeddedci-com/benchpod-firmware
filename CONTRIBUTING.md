@@ -32,7 +32,8 @@ Thanks for helping out. Issues and pull requests are welcome.
 Maintainers release by pushing a `stm32-vX.Y.Z` tag that matches `stm32h563/src/version.h`.
 The release pull request (the `version.h` bump) also runs
 `python3 tools/gen_features.py --release X.Y.Z`, which dates the table's `"next"` entries; the
-release workflow fails without it.
+release workflow fails without it. It also runs `python3 tools/gen_errors.py --release X.Y.Z`,
+which stamps the error codes' `since = "next"` with the version.
 `tools/release_notes.py` drafts the notes from the merged pull requests.
 
 ## Security

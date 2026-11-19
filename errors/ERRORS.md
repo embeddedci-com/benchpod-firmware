@@ -6,32 +6,32 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 
 | Code | Name | Area | Since | Message |
 |---|---|---|---|---|
-| BP0001 | `la_voltage_not_set` | io | next | The I/O voltage is not set |
-| BP0002 | `unknown_command` | protocol | next | The pod does not know the command {cmd} |
-| BP0003 | `i2c_session_open` | i2c | next | An I2C session is already open |
-| BP0004 | `spi_session_open` | spi | next | An SPI session is already open |
-| BP0005 | `bus_engine_busy` | spi | next | The engine that runs SWD, SPI and I2C is in use, so {want} cannot start |
-| BP0006 | `missing_argument` | protocol | next | The request is missing {arg} |
-| BP0007 | `wiring_profile_not_found` | wiring | next | The pod has no wiring profile named {name} |
-| BP0008 | `wiring_bad_name` | wiring | next | {name} is not a valid wiring profile name |
-| BP0009 | `wiring_revision_conflict` | wiring | next | The wiring profile {name} changed since it was loaded (it is now at revision {rev}) |
-| BP0010 | `wiring_store_full` | wiring | next | The pod cannot hold another wiring profile (at most {max}, and 16 KB in all) |
-| BP0011 | `wiring_profile_too_large` | wiring | next | The wiring profile is {bytes} bytes; the pod takes at most {max} |
-| BP0012 | `wiring_not_json_object` | wiring | next | The wiring profile is not one JSON object |
-| BP0013 | `wiring_delete_default` | wiring | next | {name} is the pod's default wiring profile and cannot be deleted |
-| BP0014 | `wiring_upload_out_of_order` | wiring | next | The wiring profile upload skipped ahead (the pod expected offset {expected}) |
-| BP0015 | `wiring_storage_failed` | wiring | next | The pod could not read or write its wiring profiles |
-| BP0016 | `storage_busy` | wiring | next | The pod cannot save now: the DAC or a capture is using the bus the storage shares |
-| BP0017 | `gateware_too_old` | firmware | next | {feature} needs gateware v{min} or later |
-| BP0018 | `uart_same_pin` | uart | next | UART rx and tx are both LA{la}; a one-wire UART needs half_duplex |
-| BP0019 | `uart_half_duplex_two_pins` | uart | next | half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx} |
-| BP0020 | `uart_entry_no_reset_pin` | uart | next | The UART entry sequence needs the pod's reset pin, which this board does not have |
-| BP0021 | `uart_entry_invalid` | uart | next | The UART entry option {arg} is out of range (0 to {max}) |
-| BP0022 | `uart_de_pin` | uart | next | The UART's DE pin LA{la} is also its rx or tx |
-| BP0023 | `la_no_pull` | io | next | LA{la} has no pull resistor on this board |
-| BP0024 | `la_pull_direction` | io | next | LA{la} supports pull-{have} only on this board |
-| BP0025 | `lease_busy` | lease | next | {holder} holds this pod ({purpose}, {left_s} s left) |
-| BP0026 | `lease_lost` | lease | next | The pod's lease was stopped by {by} |
-| BP0027 | `lease_not_held` | lease | next | The pod holds no lease with id {id} |
-| BP0028 | `vref_5v_missing` | io | next | 5 V did not come up on pin 21 ({mv} mV) |
-| BP0029 | `pull_rail_down` | io | next | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
+| BP0001 | `la_voltage_not_set` | io | 3.10.8 | The I/O voltage is not set |
+| BP0002 | `unknown_command` | protocol | 3.10.8 | The pod does not know the command {cmd} |
+| BP0003 | `i2c_session_open` | i2c | 3.10.8 | An I2C session is already open |
+| BP0004 | `spi_session_open` | spi | 3.10.8 | An SPI session is already open |
+| BP0005 | `bus_engine_busy` | spi | 3.10.8 | The engine that runs SWD, SPI and I2C is in use, so {want} cannot start |
+| BP0006 | `missing_argument` | protocol | 3.10.8 | The request is missing {arg} |
+| BP0007 | `wiring_profile_not_found` | wiring | 3.10.8 | The pod has no wiring profile named {name} |
+| BP0008 | `wiring_bad_name` | wiring | 3.10.8 | {name} is not a valid wiring profile name |
+| BP0009 | `wiring_revision_conflict` | wiring | 3.10.8 | The wiring profile {name} changed since it was loaded (it is now at revision {rev}) |
+| BP0010 | `wiring_store_full` | wiring | 3.10.8 | The pod cannot hold another wiring profile (at most {max}, and 16 KB in all) |
+| BP0011 | `wiring_profile_too_large` | wiring | 3.10.8 | The wiring profile is {bytes} bytes; the pod takes at most {max} |
+| BP0012 | `wiring_not_json_object` | wiring | 3.10.8 | The wiring profile is not one JSON object |
+| BP0013 | `wiring_delete_default` | wiring | 3.10.8 | {name} is the pod's default wiring profile and cannot be deleted |
+| BP0014 | `wiring_upload_out_of_order` | wiring | 3.10.8 | The wiring profile upload skipped ahead (the pod expected offset {expected}) |
+| BP0015 | `wiring_storage_failed` | wiring | 3.10.8 | The pod could not read or write its wiring profiles |
+| BP0016 | `storage_busy` | wiring | 3.10.8 | The pod cannot save now: the DAC or a capture is using the bus the storage shares |
+| BP0017 | `gateware_too_old` | firmware | 3.10.11 | {feature} needs gateware v{min} or later |
+| BP0018 | `uart_same_pin` | uart | 3.10.11 | UART rx and tx are both LA{la}; a one-wire UART needs half_duplex |
+| BP0019 | `uart_half_duplex_two_pins` | uart | 3.10.11 | half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx} |
+| BP0020 | `uart_entry_no_reset_pin` | uart | 3.10.11 | The UART entry sequence needs the pod's reset pin, which this board does not have |
+| BP0021 | `uart_entry_invalid` | uart | 3.10.11 | The UART entry option {arg} is out of range (0 to {max}) |
+| BP0022 | `uart_de_pin` | uart | 3.10.11 | The UART's DE pin LA{la} is also its rx or tx |
+| BP0023 | `la_no_pull` | io | 3.10.12 | LA{la} has no pull resistor on this board |
+| BP0024 | `la_pull_direction` | io | 3.10.12 | LA{la} supports pull-{have} only on this board |
+| BP0025 | `lease_busy` | lease | 3.10.13 | {holder} holds this pod ({purpose}, {left_s} s left) |
+| BP0026 | `lease_lost` | lease | 3.10.13 | The pod's lease was stopped by {by} |
+| BP0027 | `lease_not_held` | lease | 3.10.13 | The pod holds no lease with id {id} |
+| BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on pin 21 ({mv} mV) |
+| BP0029 | `pull_rail_down` | io | 3.10.13 | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
