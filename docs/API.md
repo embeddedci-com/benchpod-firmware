@@ -801,7 +801,7 @@ supports this; the cloud capabilities frame carries the same two flags as boolea
 
 ### Capabilities frame — ADC calibration fields
 
-From firmware after 3.10.10 the frame also carries `features_rev`, `gateware_version` (the
+From firmware 3.10.11 the frame also carries `features_rev`, `gateware_version` (the
 running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
 [features table](#features-table). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
 `spi_stream`, `error_codes`, `cloud_ca` and `cloud_proxy`, which the server never read from it.
@@ -829,7 +829,7 @@ TCP connection (so it is the interface in use, not only the preferred one):
 | `uplink` | `"eth"`, `"wifi"`, `"usb"` (through `benchpod usb-bridge`, firmware 3.9.0+), `"wifi-bridge"` (the Ethernet port goes into a connected [Wi-Fi bridge](#wifi_set--wifi_clear) box), or `"unknown"`. Older firmware leaves the field out. The server stores it with each connection-history entry. |
 | `uplink_rssi_dbm` | With `"wifi-bridge"` only: the bridge's Wi-Fi signal (dBm) when the link came up. |
 
-The frame also carries the pod's MACs (firmware after 3.10.7), `eth_mac` and `wifi_mac`, each only when
+The frame also carries the pod's MACs (firmware 3.10.8+), `eth_mac` and `wifi_mac`, each only when
 known (as in [`status`](#status)), and not in the shortened form a frame takes when its boot-health texts
 are cut. The server stores them for the web's Settings tab and keeps the last ones it saw.
 
@@ -1359,7 +1359,7 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 - `ua`: the loop current in µA. The pod reads the voltage across its sense resistor, so
   `ua = uv × 1000 / sense_mohm`. On analog modules up to v3r4 that is 249 Ω: 4 mA is 996 mV
   and 20 mA is 4980 mV. From analog module v3r5 it is 100 Ω: 4 mA is 400 mV and 20 mA is 2 V.
-- `sense_mohm` (firmware after 3.10.12): the resistance `ua` was computed with, in milliohms.
+- `sense_mohm` (firmware 3.10.13+): the resistance `ua` was computed with, in milliohms.
   249000 up to module v3r4. From v3r5 it is 100 Ω in parallel with the ADC input divider, whose
   current also comes from the loop: 99990 in the normal range, 99995 in the low range.
 - `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
@@ -1368,7 +1368,7 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 `count` is always raw.
 
-**From analog module v3r5** (firmware after 3.10.12) the 4-20 mA input changes. No v3r5 module is built yet: the v3r5 values in this table and the next paragraph are calculated from the design and the part datasheets, not measured.
+**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes. No v3r5 module is built yet: the v3r5 values in this table and the next paragraph are calculated from the design and the part datasheets, not measured.
 
 | | Module up to v3r4 | Module v3r5 and later |
 |---|---|---|
@@ -1556,7 +1556,7 @@ reference.
 | `offset_mv` | The offset in mV, rounded. `adc_read` reports the same value |
 | `offset_uv` | The offset in µV, as stored |
 | `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
-| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware after 3.10.12) |
+| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware 3.10.13+) |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
@@ -1758,7 +1758,7 @@ counters and the capability list.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `caps` | boolean | no | `true` | `false`: leave the `caps` list out and send `features_rev`, `fpga_image` and `hw` instead (firmware after 3.10.10). A client with the [features table](#features-table) sends it. Older firmware ignores it and sends the list, so a client gets one of the two from any pod. |
+| `caps` | boolean | no | `true` | `false`: leave the `caps` list out and send `features_rev`, `fpga_image` and `hw` instead (firmware 3.10.11+). A client with the [features table](#features-table) sends it. Older firmware ignores it and sends the list, so a client gets one of the two from any pod. |
 
 #### Response (abridged)
 
@@ -1818,14 +1818,14 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `short_form` | boolean | Present (`true`) only in the [short form](#short-form) (firmware 3.10.5+). |
-| `eth_mac` | string | The Ethernet port's MAC, `"aa:bb:cc:dd:ee:ff"`: fixed per pod (made from the MCU's unique ID), the same after every update. For a network that hands out addresses only to registered devices. Full form only (the server has it from the capabilities frame). Firmware after 3.10.7. |
-| `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware after 3.10.7. |
+| `eth_mac` | string | The Ethernet port's MAC, `"aa:bb:cc:dd:ee:ff"`: fixed per pod (made from the MCU's unique ID), the same after every update. For a network that hands out addresses only to registered devices. Full form only (the server has it from the capabilities frame). Firmware 3.10.8+. |
+| `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware 3.10.8+. |
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v3r4 (the bank is then at 3.3 V). |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
-| `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware after 3.10.12), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
+| `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware 3.10.13+), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. The short form keeps only `cloud_ca` and `cloud_proxy`; the capabilities frame carries the others. |
@@ -1848,7 +1848,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
 | `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
 | `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware after 3.10.12). |
+| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
 #### `caps` values
 
@@ -1921,7 +1921,7 @@ Older firmware answers `BP0002` (unknown command): read them from its `status` t
 | `malloc_failures` | integer | Allocations that failed since boot. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). |
-| `board_rev2_mv` | integer | The second revision strap in millivolts. Only on boards whose first strap reads the digital v3r4 band (firmware after 3.10.12); absent on every older board. |
+| `board_rev2_mv` | integer | The second revision strap in millivolts. Only on boards whose first strap reads the digital v3r4 band (firmware 3.10.13+); absent on every older board. |
 
 ---
 
@@ -2018,7 +2018,8 @@ Engages or releases the pull resistor on an LA channel, in a direction: `up`, `d
 on boards with more than one value per channel the firmware picks it from the pin's
 function. Which channels have a resistor, and which way each one can pull, depends on
 the board. The reply and [`la_pins`](#la_pins--report-every-la-pin) say it per channel
-(`dirs`). On today's boards each resistor pulls one way only:
+(`dirs`). On boards before digital v3r4 each resistor pulls one way only (digital v3r4 pulls
+both ways on every channel, see [below](#pull-resistors-on-digital-v3r4)):
 
 | LA pin | Resistor | | LA pin | Resistor |
 |---|---|---|---|---|
@@ -2049,8 +2050,8 @@ All of them default to **off** at boot.
 - `la` (required for a per-pin op): LA pin `1`-`14`.
 - `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
 - `pullup` (optional, the older form, still accepted): `"on"`/`"off"` (or `1`/`0`). `on`
-  engages the channel's own direction (`up` on LA1-LA6, `down` on LA7/LA8). `pull` wins
-  when both are given.
+  engages the channel's own direction: on boards before digital v3r4 `up` on LA1-LA6 and
+  `down` on LA7/LA8; on digital v3r4 `up` on every channel. `pull` wins when both are given.
 - **Omit both** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
   changing it.
 
@@ -2075,7 +2076,7 @@ and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The 
 
 #### Pull resistors on digital v3r4
 
-Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware after 3.10.12;
+Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware 3.10.13+;
 designed, not built yet) has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
 expander that can pull up or down. So every channel pulls `up` or `down`, with 10k, 2.2k
 or both (about 1.8k). The pull-ups go to J1 pin 21, which follows the I/O voltage (1.8 V,
@@ -2111,7 +2112,7 @@ The pod picks the strength from the pin's function unless the host names one:
   rail is switched on again or the host sets a pull, so pin 21 does not feed an unpowered DUT.
   Pull-downs stay. A DUT that the pod never powers keeps its pulls.
 - While the pod holds a pull off (the two cases above), the replies say what is on the wire
-  (firmware after 3.10.12). `pullup` and `state` are what the channel does now, and the reply
+  (firmware 3.10.13+). `pullup` and `state` are what the channel does now, and the reply
   adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
   write failed; the next pull the host turns on with `la` tries again and puts them all back). `pull`, `ohms` and `strength` stay
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
@@ -2138,7 +2139,7 @@ Response:
 pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
 the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
-On digital v3r4 (firmware after 3.10.12), while the pod holds pulls off, the mask is what is on
+On digital v3r4 (firmware 3.10.13+), while the pod holds pulls off, the mask is what is on
 the wire and the reply adds `held` (the reason, as in [the pull resistors on digital
 v3r4](#pull-resistors-on-digital-v3r4)) and `asked_mask`, the pulls the host set, which the pod
 puts back:
@@ -2165,11 +2166,10 @@ puts back:
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
-| I2C write to the pull expander failed | `"pull expander write failed"` |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
 | `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
-| I2C write to a pull expander failed (digital v3r4) | `"pull expander write failed"` |
+| the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
 for the duration of the train (function `step` / `step_dir`) and released when the gateware
@@ -2241,11 +2241,14 @@ LA<n> is not a gpio output (function <function>[, gpio <mode>]); configure it wi
 
 #### Pull compatibility
 
-The fixed bias resistors (LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, **LA7/LA8 10k
-down**, LA9–LA14 none) are checked in **both** directions — when claiming a function on a pin
-whose pull is engaged, and when engaging a pull on a pin that already has a function.
+Engaged pulls are checked against pin functions in **both** directions: when claiming a function
+on a pin whose pull is engaged, and when engaging a pull on a pin that already has a function.
+On boards before digital v3r4 the resistors are fixed (LA1/LA2 4.7k up, LA3/LA4 2.2k up,
+LA5/LA6 10k up, **LA7/LA8 10k down**, LA9-LA14 none), so only LA7/LA8 can have a pull-down
+engaged. On digital v3r4 every channel can pull down, and the table applies to any channel
+with its pull-down engaged.
 
-| Function | Pull-up engaged | Pull-down engaged (LA7/LA8) |
+| Function | Pull-up engaged | Pull-down engaged |
 |---|---|---|
 | `none`, gpio `input`, gpio `output`, `swd_clk`, `step`, `step_dir`, `spi_*` | ok | ok |
 | gpio `open_drain` | ok | **conflict** — a released line would read low |
@@ -2273,7 +2276,7 @@ levels when the gateware can read them back.
 {"cmd":"la_pins","la":[1,2,3,4,5,6,7]}
 ```
 
-`la` (optional, firmware after 3.10.12): a pin or a list of pins. The reply then lists only
+`la` (optional, firmware 3.10.13+): a pin or a list of pins. The reply then lists only
 those pins' entries, in pin order; everything else is the same. Without `la` (or with `"all"`)
 the reply lists all 14, as before. Older firmware ignores `la` and lists all 14, so a host that
 asks for a subset keeps only the entries it asked for.
@@ -2442,7 +2445,7 @@ set (it does not take the profile's). `status` also carries the current selectio
 
 #### 5 V and pin 21 (digital board v3r4)
 
-On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware after 3.10.12) `mv` also
+On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware 3.10.13+) `mv` also
 takes **`5000`**: 5 V I/O. In short, the bank stays at 3.3 V, J1 pin 21 (the pull-up rail) goes
 to 5 V, and outputs reach 5 V through their pull-up. What it means for your wiring is on the
 [5 V page](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io). This section is the protocol. No v3r4 board is built yet, so its numbers come
@@ -2485,11 +2488,13 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 > `3300` works on both. The boot default is also different: on v3 the mux comes up
 > at **3.3 V**, on v2 it comes up **unpowered**.
 
-> **Pulls at 1.8 V.** On v3 boards the LA1-LA6 pull-ups go to the bank rail and the LA7/LA8
-> pull-downs to ground, so pulls work at both voltages and engaged pulls stay on when the bank
-> switches (firmware with the `la_pull_1v8` feature; older firmware refused pulls at 1.8 V and
-> released them on the switch to 1.8 V). The pre-production v2 boards had their pull-ups on 3.3 V
-> and cannot run the bank at 1.8 V anyway.
+> **Pulls at 1.8 V.** On v3 boards before digital v3r4 the LA1-LA6 pull-ups go to the bank rail
+> and the LA7/LA8 pull-downs to ground; on digital v3r4 every channel pulls both ways and the
+> pull-ups go to J1 pin 21, which follows the I/O voltage (see
+> [Pull resistors on digital v3r4](#pull-resistors-on-digital-v3r4)). So pulls work at every
+> I/O voltage and engaged pulls stay on when the bank switches (firmware with the `la_pull_1v8`
+> feature; older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V). The
+> pre-production v2 boards had their pull-ups on 3.3 V and cannot run the bank at 1.8 V anyway.
 
 #### Error cases
 
@@ -2891,7 +2896,7 @@ cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0`
 
 ### `uart_proxy_start` — transparent UART bridge
 
-Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins are 1.8/3.3 V only: a 5 V UART needs a level shifter, and an RS-485 bus (Modbus RTU) an external RS-485 transceiver, between the pod and the device; the MCU forwards bytes both ways over SPI.
+Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins run at the I/O voltage: 1.8 V or 3.3 V, and on digital v3r4 also 5 V (feature `la_5v`, see [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)). On older boards a 5 V UART needs a level shifter between the pod and the device. An RS-485 bus (Modbus RTU) needs an external RS-485 transceiver between the pod and the bus. The MCU forwards bytes both ways over SPI.
 
 Like `dap_start`, this is **connection-scoped** and changes how the connection's bytes are interpreted:
 
@@ -2974,17 +2979,18 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | parity or two stop bits on gateware older than v56 | code `BP0017` (the text is unchanged: `"uart parity and stop bits need gateware v56+: update the pod's firmware"`) |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"`: the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
 when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
-> pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
-> happens on **LA1–LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
+> pin does not decode as a flood of `0x00` before its firmware brings the UART up. On digital
+> v3r4 this works on every channel (a 10k pull-up to J1 pin 21). On older boards it only
+> happens on **LA1-LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
 > firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. On the digital
+> would guarantee the very flood it prevents) and LA9-LA14 have no resistor. On the digital
 > v3r4 board every channel pulls up (10k, 2.2k on a one-wire line). The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
@@ -4882,7 +4888,7 @@ credentials also turn the adapter off (status `usb.off_reason`).
 
 ### `log_level` — the console log level
 
-Firmware after 3.10.12 (feature `log_level`).
+Firmware 3.10.13+ (feature `log_level`).
 
 ```json
 {"cmd":"log_level"}

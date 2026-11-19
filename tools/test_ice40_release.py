@@ -106,6 +106,33 @@ class Ice40ReleaseTest(unittest.TestCase):
         notes = rel.flag_notes(rel.read_manifest(), self.args())
         self.assertIn("the MANIFEST predates recording synth_flags", notes)
 
+    def test_promote_records_the_crossing_delays(self):
+        log = rel.pnr_log("deep")
+        log.write_text("Info: Max frequency for clock 'clk48$SB_IO_IN_$glb_clk': 50.00 MHz (PASS at 48.00 MHz)\n"
+                       "Info: Max delay posedge clk                     -> posedge clk48$SB_IO_IN_$glb_clk: 15.10 ns\n"
+                       "Info: Max delay posedge clk48$SB_IO_IN_$glb_clk -> posedge clk                    : 5.00 ns\n"
+                       "Info: Max frequency for clock 'clk48$SB_IO_IN_$glb_clk': 59.54 MHz (PASS at 48.00 MHz)\n"
+                       "Info: Max delay posedge clk                     -> posedge clk48$SB_IO_IN_$glb_clk: 14.53 ns\n"
+                       "Info: Max delay posedge clk48$SB_IO_IN_$glb_clk -> posedge clk                    : 4.39 ns\n")
+        os.utime(log, (time.time() - 50, time.time() - 50))
+        self.promote()
+        m = rel.read_manifest()
+        self.assertEqual((m["deep.clk48_mhz"], m["deep.x48_ns"], m["deep.x24_ns"]), ("59.54", "14.53", "4.39"))
+        self.assertEqual(m["loop.x48_ns"], "unknown")
+        lines = rel.timing_lines(m)
+        self.assertIn("deep: seed 57, clk48 59.54 MHz, clk -> clk48 14.53 ns, clk48 -> clk 4.39 ns", lines)
+        self.assertIn("loop: seed 26, clk48 not recorded, clk -> clk48 not recorded, clk48 -> clk not recorded", lines)
+
+    def test_check_prints_timing_of_a_manifest_without_crossings(self):
+        self.promote()
+        kept = [ln for ln in rel.MANIFEST.read_text().splitlines() if "_ns=" not in ln]
+        rel.MANIFEST.write_text("\n".join(kept) + "\n")
+        self.assertEqual(rel.check(), [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rel.cmd_check(self.args())
+        self.assertIn("emu: seed 27, clk48 not recorded, clk -> clk48 not recorded", out.getvalue())
+
     def test_nextpnr_revision_falls_back_to_the_homebrew_version(self):
         bindir = pathlib.Path(self.tmp.name) / "Cellar" / "nextpnr-ice40" / "0.10" / "bin"
         bindir.mkdir(parents=True)

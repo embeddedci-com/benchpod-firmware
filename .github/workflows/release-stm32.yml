@@ -4,10 +4,10 @@
 #
 # Trigger: push a tag like `stm32-v0.0.6` (the `stm32-` prefix is stripped for
 # the release tag, e.g. → `v0.0.6`), or run it manually with an explicit tag
-# via workflow_dispatch. The build embeds the HARDWARE-VERIFIED iCE40 images committed in
-# ice40/release/ (not a build from this job: CI's toolchain places the same sources
-# differently, v40 loop clk48 56.95 MHz locally vs 48.84 MHz here), so the published firmware
-# can self-reflash the FPGA with exactly the gateware that passed on a bench.
+# via workflow_dispatch. The release ships the HARDWARE-VERIFIED iCE40 images committed in
+# ice40/release/ as config-flash blobs next to the firmware (not a build from this job: CI's
+# toolchain places the same sources differently, v40 loop clk48 56.95 MHz locally vs 48.84 MHz
+# here), so a pod can reflash its FPGA with exactly the gateware that passed on a bench.
 #
 # Publishes using the default GITHUB_TOKEN (contents: write below) — no
 # separate PAT needed since source and release target are the same repo.

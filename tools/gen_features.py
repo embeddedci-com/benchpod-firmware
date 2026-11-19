@@ -17,6 +17,8 @@ Checks (also with --check):
   - each entry's gateware equals the firmware constant its gw_const names (stm32h563/src/*.h)
   - the status caps list is frozen: every name cloud_caps_emit_list writes is an entry's or a
     fact's legacy_caps, and only revision-1 entries (the list as it was) have one
+  - every `docs` link that is not a full URL names a file under docs/ that exists, and its
+    #anchor is a heading there (GitHub's slug rules) or an <a id="..."> in it
 """
 import datetime
 import hashlib
@@ -139,6 +141,10 @@ def validate(t):
             errs.append(f"{where}: the status caps list is frozen: a new feature has no legacy_caps")
     if revs and max(revs) != t["revision"]:
         errs.append(f"revision {t['revision']} is not the highest rev ({max(revs)})")
+    # Several entries may share a rev (they shipped in one table bump), but no bump is skipped.
+    missing = sorted(set(range(1, t["revision"] + 1)) - set(revs))
+    if missing:
+        errs.append(f"no entry has rev {missing}: every bump of revision adds at least one entry")
     seen = set()
     for r in t["releases"]:
         v = r.get("firmware", "")
@@ -152,8 +158,56 @@ def validate(t):
     return errs
 
 
+DOCS = os.path.join(REPO, "docs")
+
+
+def gh_slug(text):
+    """GitHub's heading anchor: lower case, punctuation dropped (except - and _), spaces to -."""
+    return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
+
+
+def doc_anchors(path):
+    """Every anchor a markdown file has: its headings' slugs (a repeated slug gets -1, -2, ...)
+    outside fenced code blocks, and its <a id="..."> / <a name="..."> anchors."""
+    anchors, seen, fence = set(), {}, False
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.lstrip().startswith("```"):
+                fence = not fence
+                continue
+            if fence:
+                continue
+            m = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+            if m:
+                slug = gh_slug(m.group(1))
+                n = seen.get(slug, 0)
+                seen[slug] = n + 1
+                anchors.add(slug if n == 0 else f"{slug}-{n}")
+            anchors.update(re.findall(r'<a\s+(?:id|name)="([^"]+)"', line))
+    return anchors
+
+
+def check_docs(t):
+    errs, cache = [], {}
+    for name, e in t["features"].items():
+        link = e.get("docs")
+        if not link or re.match(r"^https?://", link):
+            continue
+        rel, _, anchor = link.partition("#")
+        path = os.path.normpath(os.path.join(DOCS, rel))
+        if not path.startswith(DOCS + os.sep) or not os.path.isfile(path):
+            errs.append(f"feature {name}: docs {link}: no file docs/{rel}")
+            continue
+        if anchor:
+            if path not in cache:
+                cache[path] = doc_anchors(path)
+            if anchor not in cache[path]:
+                errs.append(f"feature {name}: docs {link}: docs/{rel} has no heading or <a id> for #{anchor}")
+    return errs
+
+
 def check_code(t):
-    errs = []
+    errs = check_docs(t)
     consts = fw_constants()
     for name, e in t["features"].items():
         c = e.get("gw_const")

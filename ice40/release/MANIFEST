@@ -1,4 +1,4 @@
-# Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).
+# Hardware-verified iCE40 images that firmware releases install as config-flash blobs (tools/ice40_release.py).
 # Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.
 gateware_version=59
 source_sha256=713785789c6c9d2a6db42b60c4b4d9a9235406161e3ce2996e9e9561d7a4d880
