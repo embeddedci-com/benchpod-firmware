@@ -29,7 +29,8 @@ typedef struct {
     /* LSF0108 clamps on the LA lines and NRST: wait for their reference after a bank change. */
     bool la_clamps;
     /* Two TCA6416A pull expanders on I2C0 (0x20 2.2k, 0x21 10k), reset on PG7 PULL_RST: every
-       channel pulls up or down with 10k, 2.2k or both.  False: the TCA9554 driver at 0x20. */
+       channel pulls up or down with 10k, 2.2k or both.  False: the TCA9554 at 0x20.  Read by
+       la_pull_init() (it picks the pull backend, la_pull.h) and pull_exp_init(). */
     bool pull_expanders;
     /* PC9 USB_SEL: the USB switch between USB-C and the USB-A host port (low = USB-C, the
        board's default on its pull-down).  Nothing drives it yet: kept for the planned USB

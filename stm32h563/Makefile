@@ -96,6 +96,8 @@ C_SOURCES := \
   src/dap.c \
   src/swd_ll.c \
   src/i2c_bus.c \
+  src/la_pull.c \
+  src/pull_tca9554.c \
   src/ina238.c \
   src/tca9554.c \
   src/target_power.c \

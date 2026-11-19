@@ -7,7 +7,7 @@
  */
 #include "esp_dut_flash.h"
 #include "esp_rom_job.h"
-#include "command_handler_internal.h"   /* la_pull_mask_now, command_handler_psram_stage */
+#include "command_handler_internal.h"   /* uart_pins_*, command_handler_psram_stage */
 #include "signal_engine.h"              /* fpga_uart_*, fpga_la_set, quiesce */
 #include "la_pins.h"
 #include "nrst_ctrl.h"
@@ -38,6 +38,7 @@ static struct {
 
 static esp_rom_job_t s_job;
 static esp_rom_io_t  s_io;
+static uart_pins_t   s_uart_pins;   /* RX / TX and RX's pull-up, the same helpers as the UART proxy */
 
 /* ---- pins ---- */
 
@@ -56,8 +57,7 @@ static void en_set(bool low)
 static void release_pins(void)
 {
     fpga_uart_disable();
-    la_pins_release_fn(LA_FN_UART_RX);
-    la_pins_release_fn(LA_FN_UART_TX);
+    uart_pins_release(&s_uart_pins);
     uint8_t gp[2] = { s.p.boot, s.p.en };
     for (int i = 0; i < 2; i++) {
         if (gp[i] == 0) continue;
@@ -142,19 +142,24 @@ int esp_dut_flash_start(const esp_dut_params_t *p, char *err, uint32_t cap)
         snprintf(err, cap, "rx, tx, boot and en must be different pins"); return -1;
     }
 
-    /* Claim everything first; nothing changes on a refusal. */
-    uint16_t pulls = la_pull_mask_now();
-    uint8_t rx = p->rx, tx = p->tx;
+    /* Claim everything before anything moves; on a refusal nothing stays claimed.  The UART pins
+       go through the proxy's helpers (uart_pins_claim): the same checks, and RX held high while
+       the ROM's TX is not driven yet (before EN is released), like the proxy does. */
     uint8_t gp[2] = { p->boot, p->en };
     size_t ngp = (p->en == ESP_DUT_EN_NRST) ? 1 : 2;
-    if (!la_pins_check_claim(LA_FN_UART_RX, LA_GPIO_NONE, &rx, 1, 0, pulls, err, cap)) return -1;
-    if (!la_pins_check_claim(LA_FN_UART_TX, LA_GPIO_NONE, &tx, 1, 0, pulls, err, cap)) return -1;
-    if (!la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, gp, ngp, 0, pulls, err, cap)) return -1;
-    int rc = fpga_uart_config(rx, tx, START_BAUD, true);
-    if (rc == -2) { snprintf(err, cap, "uart busy: stop the uart proxy first"); return -1; }
-    if (rc != 0)  { snprintf(err, cap, "invalid uart pins"); return -1; }
-    la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &rx, 1);
-    la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, &tx, 1);
+    if (!uart_pins_claim(&s_uart_pins, p->rx, p->tx, 0, false, err, cap)) return -1;
+    if (!la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, gp, ngp, 0, la_pull_mask_now(), err, cap)) {
+        uart_pins_release(&s_uart_pins);
+        return -1;
+    }
+    int rc = fpga_uart_config(p->rx, p->tx, START_BAUD, true);
+    if (rc != 0) {
+        uart_pins_release(&s_uart_pins);
+        if (rc == -2) snprintf(err, cap, "uart busy: stop the uart proxy first");
+        else          snprintf(err, cap, "invalid uart pins");
+        return -1;
+    }
+    uart_pins_hold_rx(&s_uart_pins);   /* before EN goes low (below) and is released (the poll) */
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, gp, ngp);   /* claimed released (high) */
 
     if (p->len > 0) signal_engine_quiesce_psram_masters();   /* no DAC replay on the bus */

@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "board_caps.h"
+#include "la_pull.h"
 #include "board_rev.h"
 #include "stm32h5xx_hal.h"   /* shim_pull */
 
@@ -51,6 +52,11 @@ int target_power_get_cached(int efuse, bool *enabled, bool *fault) {
     if (fault) *fault = false;
     return 0;
 }
+
+/* The la_pull backend at the end of pull_exp.c (test_ch_pins.c drives it through the commands). */
+int la_vccio_get_mv(void) { return 3300; }
+int la_io_get_mv(void) { return 3300; }
+pull_str_t la_pull_strength_for(unsigned la, int io_mv) { (void)la; (void)io_mv; return PULL_STR_10K; }
 
 #include "../src/pull_exp.c"
 
@@ -116,7 +122,7 @@ static void test_states(void) {
     CHECK(pull_exp_dir(4) == PULL_EXP_OFF && pull_exp_dir(2) == PULL_EXP_UP, "the failed request is undone, the rest kept");
     CHECK(pull_exp_live_dir(2, NULL) == PULL_EXP_OFF, "LA2 off on the wire");
     CHECK(held_is("fault"), "held: fault, got %s", pull_exp_held() ? pull_exp_held() : "NULL");
-    /* The next pull turned on tries again (la_pull_engage calls pull_exp_recover). Still failing: */
+    /* The next pull turned on tries again (the la_pull backend calls pull_exp_recover). Still failing: */
     CHECK(!pull_exp_recover() && held_is("fault"), "a retry that fails stays held");
     /* The bus answers again: the retry rewrites every asked-for pull. */
     s_fail_after = -1;

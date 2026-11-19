@@ -7,6 +7,9 @@
 #include "target_power.h"
 #include "stm32h5xx_hal.h"
 #include "bp_log.h"
+#include "la_pull.h"
+#include "la_pins.h"         /* la_pull_strength_for */
+#include "signal_engine.h"   /* la_vccio_get_mv, la_io_get_mv */
 
 static bool           s_present;
 static bool           s_live;                      /* out of reset and written */
@@ -179,3 +182,47 @@ const char *pull_exp_held(void)
     if (!any) return NULL;
     return pull_exp_hold_name(s_live, vref_out_rail_up(), s_suspend_up, any_up);
 }
+
+/* ---- the la_pull backend (la_pull.h) ----
+   The pulls go to J1 pin 21, which follows the bank (or 5 V), so on v3r4 they work at every I/O
+   voltage, but only while pin 21 is up. */
+
+static int be_set(unsigned la, la_pull_dir_t dir, pull_str_t str)
+{
+    if (dir != LA_PULL_NONE) {
+        if (la_vccio_get_mv() == LA_VCCIO_UNSET) return LA_PULL_ERR_VOLTAGE;
+        /* After a failed write (pin 21 up), this request tries the expanders again. */
+        if (!pull_exp_recover()) return vref_out_rail_up() ? LA_PULL_ERR_IO : LA_PULL_ERR_RAIL;
+        if (str == PULL_STR_NONE) str = la_pull_strength_for(la, la_io_get_mv());
+    }
+    pull_exp_dir_t d = dir == LA_PULL_UP ? PULL_EXP_UP : dir == LA_PULL_DOWN ? PULL_EXP_DOWN : PULL_EXP_OFF;
+    int rc = pull_exp_set(la, d, str);
+    if (rc == PULL_EXP_ERR_RAIL) return LA_PULL_ERR_RAIL;
+    return rc != 0 ? LA_PULL_ERR_IO : 0;
+}
+
+static la_pull_dir_t be_dir(pull_exp_dir_t d)
+{
+    return d == PULL_EXP_UP ? LA_PULL_UP : d == PULL_EXP_DOWN ? LA_PULL_DOWN : LA_PULL_NONE;
+}
+
+static la_pull_dir_t be_asked(unsigned la, pull_str_t *str)
+{
+    *str = pull_exp_str(la);
+    return be_dir(pull_exp_dir(la));
+}
+
+static bool be_live(unsigned la) { return pull_exp_live_dir(la, NULL) != PULL_EXP_OFF; }
+static bool be_available(void)   { return la_vccio_get_mv() != LA_VCCIO_UNSET && pull_exp_live(); }
+
+const la_pull_backend_t la_pull_backend_exp = {
+    .rail_pin21 = true,
+    .init       = pull_exp_init,
+    .poll       = pull_exp_poll,
+    .set        = be_set,
+    .asked      = be_asked,
+    .live       = be_live,
+    .available  = be_available,
+    .all_off    = pull_exp_all_off,
+    .held       = pull_exp_held,
+};
