@@ -2018,7 +2018,8 @@ Engages or releases the pull resistor on an LA channel, in a direction: `up`, `d
 on boards with more than one value per channel the firmware picks it from the pin's
 function. Which channels have a resistor, and which way each one can pull, depends on
 the board. The reply and [`la_pins`](#la_pins--report-every-la-pin) say it per channel
-(`dirs`). On today's boards each resistor pulls one way only:
+(`dirs`). On boards before digital v3r4 each resistor pulls one way only (digital v3r4 pulls
+both ways on every channel, see [below](#pull-resistors-on-digital-v3r4)):
 
 | LA pin | Resistor | | LA pin | Resistor |
 |---|---|---|---|---|
@@ -2049,8 +2050,8 @@ All of them default to **off** at boot.
 - `la` (required for a per-pin op): LA pin `1`-`14`.
 - `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
 - `pullup` (optional, the older form, still accepted): `"on"`/`"off"` (or `1`/`0`). `on`
-  engages the channel's own direction (`up` on LA1-LA6, `down` on LA7/LA8). `pull` wins
-  when both are given.
+  engages the channel's own direction: on boards before digital v3r4 `up` on LA1-LA6 and
+  `down` on LA7/LA8; on digital v3r4 `up` on every channel. `pull` wins when both are given.
 - **Omit both** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
   changing it.
 
@@ -2165,11 +2166,10 @@ puts back:
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
-| I2C write to the PCA9555 failed | `"pca9555 write failed"` |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
 | `up`/`down` before an I/O voltage is set (digital v3r4) | `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
-| I2C write to a pull expander failed (digital v3r4) | `"pull expander write failed"` |
+| the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
 for the duration of the train (function `step` / `step_dir`) and released when the gateware
@@ -2241,11 +2241,14 @@ LA<n> is not a gpio output (function <function>[, gpio <mode>]); configure it wi
 
 #### Pull compatibility
 
-The fixed bias resistors (LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, **LA7/LA8 10k
-down**, LA9–LA14 none) are checked in **both** directions — when claiming a function on a pin
-whose pull is engaged, and when engaging a pull on a pin that already has a function.
+Engaged pulls are checked against pin functions in **both** directions: when claiming a function
+on a pin whose pull is engaged, and when engaging a pull on a pin that already has a function.
+On boards before digital v3r4 the resistors are fixed (LA1/LA2 4.7k up, LA3/LA4 2.2k up,
+LA5/LA6 10k up, **LA7/LA8 10k down**, LA9-LA14 none), so only LA7/LA8 can have a pull-down
+engaged. On digital v3r4 every channel can pull down, and the table applies to any channel
+with its pull-down engaged.
 
-| Function | Pull-up engaged | Pull-down engaged (LA7/LA8) |
+| Function | Pull-up engaged | Pull-down engaged |
 |---|---|---|
 | `none`, gpio `input`, gpio `output`, `swd_clk`, `step`, `step_dir`, `spi_*` | ok | ok |
 | gpio `open_drain` | ok | **conflict** — a released line would read low |
@@ -2485,11 +2488,13 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 > `3300` works on both. The boot default is also different: on v3 the mux comes up
 > at **3.3 V**, on v2 it comes up **unpowered**.
 
-> **Pulls at 1.8 V.** On v3 boards the LA1-LA6 pull-ups go to the bank rail and the LA7/LA8
-> pull-downs to ground, so pulls work at both voltages and engaged pulls stay on when the bank
-> switches (firmware with the `la_pull_1v8` feature; older firmware refused pulls at 1.8 V and
-> released them on the switch to 1.8 V). The pre-production v2 boards had their pull-ups on 3.3 V
-> and cannot run the bank at 1.8 V anyway.
+> **Pulls at 1.8 V.** On v3 boards before digital v3r4 the LA1-LA6 pull-ups go to the bank rail
+> and the LA7/LA8 pull-downs to ground; on digital v3r4 every channel pulls both ways and the
+> pull-ups go to J1 pin 21, which follows the I/O voltage (see
+> [Pull resistors on digital v3r4](#pull-resistors-on-digital-v3r4)). So pulls work at every
+> I/O voltage and engaged pulls stay on when the bank switches (firmware with the `la_pull_1v8`
+> feature; older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V). The
+> pre-production v2 boards had their pull-ups on 3.3 V and cannot run the bank at 1.8 V anyway.
 
 #### Error cases
 
@@ -2891,7 +2896,7 @@ cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0`
 
 ### `uart_proxy_start` — transparent UART bridge
 
-Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins are 1.8/3.3 V only: a 5 V UART needs a level shifter, and an RS-485 bus (Modbus RTU) an external RS-485 transceiver, between the pod and the device; the MCU forwards bytes both ways over SPI.
+Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins run at the I/O voltage: 1.8 V or 3.3 V, and on digital v3r4 also 5 V (feature `la_5v`, see [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)). On older boards a 5 V UART needs a level shifter between the pod and the device. An RS-485 bus (Modbus RTU) needs an external RS-485 transceiver between the pod and the bus. The MCU forwards bytes both ways over SPI.
 
 Like `dap_start`, this is **connection-scoped** and changes how the connection's bytes are interpreted:
 
@@ -2974,17 +2979,18 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"` — the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
 when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
-> pin does not decode as a flood of `0x00` before its firmware brings the UART up. This only
-> happens on **LA1–LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
+> pin does not decode as a flood of `0x00` before its firmware brings the UART up. On digital
+> v3r4 this works on every channel (a 10k pull-up to J1 pin 21). On older boards it only
+> happens on **LA1-LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
 > firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
-> would guarantee the very flood it prevents) and LA9–LA14 have no resistor. The previous state
+> would guarantee the very flood it prevents) and LA9-LA14 have no resistor. The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
