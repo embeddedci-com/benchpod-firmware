@@ -92,6 +92,8 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->uart_frame = caps.uart_frame;
     c->sensors_digital = caps.emulation;
     c->features_rev = BP_FEATURES_REV;
+    c->api = BP_API;
+    c->min_client_api = BP_MIN_CLIENT_API;
     c->gateware_version = signal_engine_fpga_version();
     c->fpga_image = cloud_caps_image_name(c->gateware_version, signal_engine_fpga_features());
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */

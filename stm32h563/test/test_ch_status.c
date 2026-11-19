@@ -91,6 +91,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->c3 = true; c->c3_restarts = 4294967295u;
     strcpy(c->eth_mac, "02:0d:1a:80:f1:54"); strcpy(c->wifi_mac, "34:85:18:aa:bb:cc");
     c->has_wifi = true;
+    c->features_rev = 8; c->api = 1; c->min_client_api = 0;
 }
 
 const char *wifi_get_ip(void) { return "255.255.255.255"; }
@@ -325,14 +326,23 @@ static void test_status_without_caps_list(void) {
     size_t n = run_req(CH_CLOUD_CONN, "{\"cmd\":\"status\",\"caps\":false}");
     printf("  cloud status worst case without caps: %zu bytes (with: %zu)\n", n, with_list);
     CHECK(!has("caps"), "caps:false still has the list");
-    CHECK(has("features_rev") && has("fpga_image") && has("hw") && has("gateware"),
+    CHECK(has("features_rev") && has("api") && has("min_client_api") && has("fpga_image") &&
+          has("hw") && has("gateware"),
           "caps:false lacks the facts: %.200s", g_tx);
     CHECK(n + 300 < with_list, "caps:false saves only %zu bytes", with_list - n);
     CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
+    /* The LAN gets the full form on a pod as it runs (the stubs' worst-case texts fall back to
+       the short form, which has the facts too: test_lan_falls_back_to_short_form). */
+    char saved_c = g_crash[40], saved_r = g_reason[0];
+    g_crash[40] = '\0'; g_reason[0] = '\0';
+    g_typical = true;
     run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
-    CHECK(!has("caps") && has("features_rev") && !has("short_form"), "LAN caps:false: %.80s", g_tx);
+    CHECK(!has("caps") && has("features_rev") && has("api") && has("min_client_api") &&
+          !has("short_form"), "LAN caps:false: %.80s", g_tx);
+    g_crash[40] = saved_c; g_reason[0] = saved_r;
+    g_typical = false;
     run_req(0, "{\"cmd\":\"status\",\"caps\":true}");
-    CHECK(has("caps") && !has("features_rev"), "caps:true lost the list");
+    CHECK(has("caps") && !has("features_rev") && !has("api"), "caps:true lost the list");
     run_req(0, NULL);
     CHECK(has("caps"), "a status without arguments lost the list");
 }

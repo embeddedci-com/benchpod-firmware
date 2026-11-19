@@ -43,7 +43,7 @@ static cloud_caps_t typical(void) {
         .safe_mode = false, .safe_reason = "", .reset_cause = "power-on", .last_crash = "none",
         .boot_id = 0x2a, .unclean_resets = 0,
         .eth_mac = "02:0d:1a:80:f1:54",
-        .features_rev = 1, .gateware_version = 56, .fpga_image = "loop",
+        .features_rev = 1, .api = 1, .min_client_api = 0, .gateware_version = 56, .fpga_image = "loop",
     };
     return c;
 }
@@ -58,7 +58,7 @@ static void check_features(const char *f) {
         "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
         "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
         "boot_id", "unclean_resets", "sensors", "sensors_format", "sensors_digital", "uplink", "wifi_scan", "la_max_rate_hz",
-        "features_rev", "gateware_version", "fpga_image",
+        "features_rev", "api", "min_client_api", "gateware_version", "fpga_image",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -116,6 +116,7 @@ static void test_worst_case_fits(void) {
     c.reset_cause = "independent-watchdog";
     c.boot_id = 0xFFFFFFFFu;
     c.unclean_resets = 0xFFFFFFFFu;
+    c.api = c.min_client_api = UINT_MAX;   /* the client API level at its longest */
     c.c3 = true;                      /* the C3 counts at their longest */
     c.c3_restarts = 0xFFFFFFFFu;
     c.c3_restart_last = "no_response";
@@ -260,9 +261,9 @@ static void test_status_facts(void) {
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_facts(&e, &c);
     CHECK(bp_emit_ok(&e));
-    CHECK(strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"loop\","
+    CHECK(strcmp(buf, ",\"features_rev\":1,\"api\":1,\"min_client_api\":0,\"fpga_image\":\"loop\","
                       "\"hw\":[\"wifi\",\"usb_cc\",\"pod_current\",\"adc_low_range\"]") == 0);
-    if (strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"loop\","
+    if (strcmp(buf, ",\"features_rev\":1,\"api\":1,\"min_client_api\":0,\"fpga_image\":\"loop\","
                     "\"hw\":[\"wifi\",\"usb_cc\",\"pod_current\",\"adc_low_range\"]") != 0)
         printf("  %s\n", buf);
 
@@ -272,7 +273,7 @@ static void test_status_facts(void) {
     c.fpga_image = NULL;
     bp_emit_init(&e, buf, sizeof(buf));
     cloud_caps_emit_facts(&e, &c);
-    CHECK(strcmp(buf, ",\"features_rev\":1,\"fpga_image\":\"unknown\",\"hw\":[]") == 0);
+    CHECK(strcmp(buf, ",\"features_rev\":1,\"api\":1,\"min_client_api\":0,\"fpga_image\":\"unknown\",\"hw\":[]") == 0);
 
     CHECK(strcmp(cloud_caps_image_name(0, 0x07), "unknown") == 0);   /* no gateware read yet */
     CHECK(strcmp(cloud_caps_image_name(56, 0x01), "loop") == 0);
@@ -284,7 +285,7 @@ static void test_status_facts(void) {
     static char f[CLOUD_CAPS_MAX + 1];
     c = typical();
     CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
-    CHECK(strstr(f, "\"features_rev\":1,\"gateware_version\":56,\"fpga_image\":\"loop\",") != NULL);
+    CHECK(strstr(f, "\"features_rev\":1,\"api\":1,\"min_client_api\":0,\"gateware_version\":56,\"fpga_image\":\"loop\",") != NULL);
     static const char *gone[] = { "cal_dmm", "can_fd", "uart_frame", "spi_stream", "error_codes",
                                   "cloud_ca", "cloud_proxy" };
     for (size_t i = 0; i < sizeof(gone) / sizeof(gone[0]); i++)
