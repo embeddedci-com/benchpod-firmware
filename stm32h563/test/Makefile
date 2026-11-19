@@ -145,7 +145,7 @@ CHSTATUS_DEFS := -DBENCHPOD_WIFI_BRIDGE=1 -I../../wifi-bridge/components/bridge_
 CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
               ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
-OTA_SRCS := test_ota.c ../src/ota.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
+OTA_SRCS := test_ota.c ../src/ota.c ../src/bp_json.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)
 BLOB_SRCS := test_blob_store.c ../src/blob_store.c mocks/mock_w25q.c $(MBEDTLS_SHA256)
 # Which image the ESP32-C3 runs (src/c3_image.c), over the same W25Q model.
@@ -153,7 +153,7 @@ C3IMG_SRCS := test_c3_image.c ../src/c3_image.c ../src/blob_store.c mocks/mock_w
 # The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
 # (default config), built once into an archive.
 LANTLSPEM_SRCS := test_lan_tls_pem.c ../src/lan_tls_pem.c
-CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/blob_store.c mocks/mock_w25q.c
+CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/cloud_ca.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 # The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
 ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c

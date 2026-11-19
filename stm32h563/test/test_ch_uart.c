@@ -283,6 +283,8 @@ static void test_frame(void) {
     start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
     CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[5] == PROTO_JSON,
           "old gateware reply %s", g_reply);
+    CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "parity and stop_bits") == 0,
+          "old gateware code: %d %s", g_err_code, g_err_arg);
     start(5, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"none\",\"stop_bits\":1}");
     CHECK(g_frame == 0 && g_proto[5] == PROTO_UART, "8N1 refused on old gateware: %s", g_reply);
     uart_proxy_conn_closed(5);

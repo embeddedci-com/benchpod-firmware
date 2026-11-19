@@ -308,7 +308,7 @@ that applies answers with its message and the command does not run.
 | Gate | Applies to | Message |
 |---|---|---|
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025`: `busy: a cloud job holds this pod (<holder>, <N> s left)` (the code with firmware after 3.10.13; the text is unchanged) |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
@@ -2165,10 +2165,10 @@ puts back:
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
-| I2C write to the PCA9555 failed | `"pca9555 write failed"` |
+| I2C write to the pull expander failed | `"pull expander write failed"` |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
-| `up`/`down` before an I/O voltage is set (digital v3r4) | `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
+| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
 | I2C write to a pull expander failed (digital v3r4) | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
@@ -2971,7 +2971,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `de` is the `rx` or `tx` channel | code `BP0022` |
 | `de` on gateware older than v58 | code `BP0017` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
-| parity or two stop bits on gateware older than v56 | `"uart parity and stop bits need gateware v56+: update the pod's firmware"` |
+| parity or two stop bits on gateware older than v56 | code `BP0017` (the text is unchanged: `"uart parity and stop bits need gateware v56+: update the pod's firmware"`) |
 | a UART proxy is already active (console or another connection) | `"uart busy"` |
 | `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
 | `rx`/`tx` on LA7 or LA8 with its 10k pull-**down** engaged | `"pull conflict: …"` — the UART idles high |

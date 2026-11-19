@@ -36,7 +36,7 @@ static cloud_caps_t typical(void) {
         .control_loop = true, .loop_sources = true, .loop_input_map = true, .cotrig = true,
         .generate16 = true,
         .gpio_read = true, .capture_trigger = true, .spi_master = true, .la_max_rate_hz = 48000000ul,
-        .nrst_pin = true, .pod_current = true, .uart_half_duplex = true,
+        .nrst_pin = true, .pod_current = true,
         .current_out_min_ua = 0, .current_out_max_ua = 24000,
         .board = "stm32h563",
         .uplink = "eth",

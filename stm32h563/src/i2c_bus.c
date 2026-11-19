@@ -348,8 +348,9 @@ bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); 
    CTRL5=P7, CTRL6=P6, CTRL7=P5, CTRL8=P4).  Enabling drives the ctrl line high,
    closing the analog switch that connects the pull-up resistor.
 
-   On v3 boards the LA1-6 pull-ups go to LA_VCCIO (the bank rail) and the LA7/8
-   pull-downs to GND, so every pull works at 1.8 V and at 3.3 V.  On v2 the
+   On v3 boards before digital v3r4 the LA1-6 pull-ups go to LA_VCCIO (the bank rail) and
+   the LA7/8 pull-downs to GND, so every pull works at 1.8 V and at 3.3 V.  Digital v3r4 has
+   pull expanders instead (pull_exp.h): every channel pulls up or down.  On v2 the
    pull-ups went to +3V3; v2 cannot run the bank at 1.8 V at all, but the gate
    stays for it (see i2c_bus.h).  la_pullups_available() is the one place that
    decides this; everything else asks it. */

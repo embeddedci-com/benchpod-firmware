@@ -27,6 +27,14 @@ static int write_pair(uint8_t addr, uint8_t reg, uint16_t val)
     return i2c_bus_write(addr, b, sizeof(b));
 }
 
+/* Both chips in reset (every channel off); what they hold is the reset state. */
+static void hold(void)
+{
+    rst(false);
+    s_live = false;
+    s_hw2k2 = s_hw10k = pull_exp_reset_regs();
+}
+
 /* Bring the chips to the asked-for state, from what they hold now. */
 static int apply(void)
 {
@@ -37,10 +45,8 @@ static int apply(void)
     for (size_t i = 0; i < n; i++) {
         if (write_pair(w[i].addr, w[i].reg, w[i].val) != 0) {
             /* Unknown state: back to reset (all off) and rewrite on the next change. */
-            log_printf("[pull] expander 0x%02x write failed; holding both in reset\r\n", w[i].addr);
-            rst(false);
-            s_live = false;
-            s_hw2k2 = s_hw10k = pull_exp_reset_regs();
+            LOG_E("[pull] expander 0x%02x write failed; holding both in reset\n", w[i].addr);
+            hold();
             return -1;
         }
         tca6416_regs_t *r = w[i].addr == PULL_EXP_ADDR_2K2 ? &s_hw2k2 : &s_hw10k;
@@ -60,13 +66,6 @@ static int go_live(void)
     int rc = apply();
     if (rc == 0) log_printf("[pull] expanders out of reset (pin 21 %d mV)\r\n", vref_out_last_mv());
     return rc;
-}
-
-static void hold(void)
-{
-    rst(false);
-    s_live = false;
-    s_hw2k2 = s_hw10k = pull_exp_reset_regs();
 }
 
 /* vref_out's rail-up decision changed. */
@@ -160,8 +159,6 @@ void pull_exp_poll(void)
     if (s_live) (void)apply();
     log_printf("[pull] target power %s: pull-ups %s\r\n", on ? "on" : "off", suspend ? "suspended" : "back on");
 }
-
-bool pull_exp_ups_suspended(void) { return s_present && s_suspend_up; }
 
 pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)
 {

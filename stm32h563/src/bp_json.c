@@ -177,6 +177,13 @@ bool bp_json_get_top(const char *json, const char *key, char *out, size_t out_le
     return json_get_at(json, key, out, out_len, true);
 }
 
+int bp_hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 bool bp_json_flag(const char *json, const char *key) {
     char s[8] = {0};
     if (!bp_json_get(json, key, s, sizeof(s))) return false;

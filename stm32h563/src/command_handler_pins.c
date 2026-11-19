@@ -464,7 +464,8 @@ void handle_la(int conn_id, const char *json) {
                 return;
             }
             if (rc == LA_PULLUP_ERR_VOLTAGE) {
-                send_error(conn_id, "la voltage not set; set la_mv in the active wiring profile, or call la_voltage first");
+                bp_err_la_voltage_not_set(conn_id,
+                    BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
                 return;
             }
             if (rc != 0) {
@@ -484,18 +485,18 @@ void handle_la(int conn_id, const char *json) {
                 return;
             }
             if (rc != 0) {
-                send_error(conn_id, "pca9555 write failed");
+                send_error(conn_id, "pull expander write failed");
                 return;
             }
         }
     }
 
-    /* "state" is what the channel does now (up / down / off) and "dirs" every way it can pull.
-       The older fields stay for older hosts: "pullup" 1 when engaged, "pull" the channel's default
-       direction ("none" without a resistor), "ohms" its value. */
-    /* on: what the channel does now.  Digital v3r4 may hold a pull the host asked for off (pin 21
-       down, pull-ups suspended); "held" then says why, and strength/ohms/pull stay the setting
-       the pod puts back.  Elsewhere live and asked are the same. */
+    /* "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
+       pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups
+       suspended); "held" then says why, and strength/ohms/pull stay the setting the pod puts
+       back. Elsewhere live and asked are the same. The older fields stay for older hosts:
+       "pullup" 1 when engaged, "pull" the channel's default direction ("none" without a
+       resistor), "ohms" its value. */
     bool asked_on = pca9555_la_pullup_enabled((uint8_t)la);
     bool on = la_pull_live((uint8_t)la);
     la_pull_dir_t dflt = la_pull_dir(la);

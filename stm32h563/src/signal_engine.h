@@ -311,7 +311,6 @@ typedef struct {
     bool capture_trigger; /* SET_TRIGGER / TRIGGER_STATUS: triggered captures */
     bool spi_master;      /* SPI_ARM: SPI master on LA pins (spi_start / spi_xfer / spi_flash) */
     bool uart_frame;      /* UART_CONFIG parity + stop bits (uart_proxy_start parity, stop_bits) */
-    bool uart_half_duplex;/* UART_CONFIG bit 4: one-wire open-drain UART (uart_proxy_start half_duplex) */
     bool emulation;       /* the sensor-emulation image (v54+) runs or is installed in slot gw2 */
 } signal_engine_caps_t;
 

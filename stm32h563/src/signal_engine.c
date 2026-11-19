@@ -1320,7 +1320,7 @@ static int la_io_set_5v(void) {
     la_settle_clamps();                        /* the sense filter (6.7 ms, calculated) and the pull-ups */
     int mv = vref_out_measure_mv();
     if (mv < VREF_5V_MIN_MV) {
-        printf("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
+        LOG_W("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
         (void)vref_out_set_source(VREF_SRC_BANK);
         if (prev == LA_VCCIO_1V8 || prev == LA_VCCIO_3V3) (void)la_vccio_set_mv(prev);
         else la_vccio_init();
@@ -1342,8 +1342,9 @@ int la_vccio_set_mv(int mv) {
        cutting the DUT's I/O rail. */
     if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) return -2;
 
-    /* On v3 the LA1-6 pull-ups go to LA_VCCIO and the LA7/8 pull-downs to GND, so the
-       engaged pulls simply follow the bank to 1.8 V and stay on.  Only the v2 pull-ups
+    /* On v3 the pulls go to LA_VCCIO or GND (LA1-6 up and LA7/8 down before digital v3r4,
+       every channel both ways on v3r4), so the engaged pulls simply follow the bank to 1.8 V
+       and stay on.  Only the v2 pull-ups
        went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
        rail; v2 is refused above, and this keeps the invariant if that ever changes. */
     if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pullups_all_off();
@@ -1930,7 +1931,6 @@ void signal_engine_caps(signal_engine_caps_t *out) {
                            ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
     out->uart_frame      = ver >= UART_FRAME_MIN_GW;
-    out->uart_half_duplex = ver >= UART_HALFDUPLEX_MIN_GW;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
@@ -3506,7 +3506,7 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
             if (n == 0) break;
             dropped += (uint32_t)n;
         }
-        if (dropped) printf("[uart] %lu unread RX bytes of the last session discarded\n", (unsigned long)dropped);
+        if (dropped) LOG_D("[uart] %lu unread RX bytes of the last session discarded\n", (unsigned long)dropped);
         s_uart_rx_ovf = false; s_uart_rx_par = false;
     }
 

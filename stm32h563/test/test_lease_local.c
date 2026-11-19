@@ -275,6 +275,12 @@ static void test_broken_stays_broken(void) {
     /* 30 min after the break the id is forgotten and may be granted again */
     CHECK(lease_local_acquire(B, "L-b", "ci", "hil", 60, 1000 + 1800000 - 1, &v) == LEASE_LOCAL_LOST,
           "forgotten too early");
+    /* Forgetting it is a writer change inside the seqlock, not a lease change: the snapshot
+       still reads, and the generation does not move. */
+    uint32_t g = lease_local_generation(), sg = 0;
+    CHECK(gate_id(B, "status", NULL, 1000 + 1800000, &v) == LEASE_LOCAL_PASS, "free pod");
+    CHECK(lease_local_snapshot(1000 + 1800000, &v, &sg) && !v.held && sg == g &&
+          lease_local_generation() == g, "snapshot after the broken id is forgotten");
     CHECK(lease_local_acquire(B, "L-b", "ci", "hil", 60, 1000 + 1800000, &v) == LEASE_LOCAL_OK,
           "not forgotten after 30 min");
     /* one slot: a second break replaces the first */

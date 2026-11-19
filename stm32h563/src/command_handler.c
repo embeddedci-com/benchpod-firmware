@@ -368,6 +368,12 @@ void dispatch_line(int conn_id, const char *buf) {
             g.tunnel_max_tier = s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN];
         char why[112];
         const char *refused = cmd_gate_check(cmd, buf, tier, &g, why, sizeof(why));
+        if (refused && strncmp(refused, CMD_GATE_CLOUD_LEASE_TEXT, strlen(CMD_GATE_CLOUD_LEASE_TEXT)) == 0) {
+            bp_err_lease_busy(conn_id, BP_ERR_TEXT(refused), CMD_GATE_CLOUD_LEASE_HOLDER,
+                              g.lease_holder && g.lease_holder[0] ? g.lease_holder : "cloud",
+                              (int32_t)g.lease_left_s);
+            return;
+        }
         if (refused) { send_error(conn_id, refused); return; }
     }
     /* The pod's own lease (lease_local.h): on every transport, only its owners drive the pod. */

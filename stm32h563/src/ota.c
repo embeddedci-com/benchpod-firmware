@@ -3,6 +3,7 @@
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
 #include "flash_layout.h"
 #include "fw_info.h"
+#include "bp_json.h"          /* bp_hex_nibble */
 #include "blob_store.h"
 #include "w25q.h"
 #include "fw_sign.h"
@@ -56,18 +57,11 @@ static char        s_ref_err[96];
 static uint32_t    s_ref_seq;              /* bumped per explicit refusal (ota_view_t.refusals) */
 static const char *s_apply_refusal;        /* set when a call came in while APPLYING            */
 
-static int hex_nibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 static int parse_sha256_hex(const char *hex, uint8_t out[32]) {
     if (!hex) return -1;
     for (int i = 0; i < 32; i++) {
-        int hi = hex_nibble(hex[i * 2]);
-        int lo = hex_nibble(hex[i * 2 + 1]);
+        int hi = bp_hex_nibble(hex[i * 2]);
+        int lo = bp_hex_nibble(hex[i * 2 + 1]);
         if (hi < 0 || lo < 0) return -1;
         out[i] = (uint8_t)((hi << 4) | lo);
     }

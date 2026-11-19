@@ -71,7 +71,7 @@ static void uart_rx_pu_restore(void) {
                  ? la_pull_engage((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev_dir, uart_rx_pu_prev_str)
                  : pca9555_set_la_pullup((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev);
         if (rc != 0)
-            printf("[uart] WARNING: could not restore LA%d's pull-up to %s (rc %d)\n",
+            LOG_W("[uart] could not restore LA%d's pull-up to %s (rc %d)\n",
                    uart_rx_pu_ch, uart_rx_pu_prev ? "on" : "off", rc);
         uart_rx_pu_ch = -1;
     }
@@ -124,13 +124,6 @@ bool uart_frame_parse(const char *json, uint8_t *frame) {
 /* The optional "half_duplex" flag of uart_proxy_start (gateware v57): one wire, TX open drain. */
 static bool uart_half_duplex_parse(const char *json) { return bp_json_flag(json, "half_duplex"); }
 
-static int hexval(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 /* The optional "entry" object of uart_proxy_start: a boot-mode entry the pod times itself, so the
    host's latency (LAN, USB or cloud) never sits between reset and the first byte.
      "entry":{"reset_ms":10,"tx_low":true,"hold_ms":10,"idle_ms":10,"hex":"00"}
@@ -164,7 +157,7 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
         size_t len = strlen(v);
         if (len % 2 || len / 2 > UART_ENTRY_HEX_MAX) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
         for (size_t i = 0; i < len / 2; i++) {
-            int hi = hexval(v[2 * i]), lo = hexval(v[2 * i + 1]);
+            int hi = bp_hex_nibble(v[2 * i]), lo = bp_hex_nibble(v[2 * i + 1]);
             if (hi < 0 || lo < 0) { *bad = "hex"; *max = UART_ENTRY_HEX_MAX; return false; }
             en->hex[i] = (uint8_t)(hi << 4 | lo);
         }
@@ -177,7 +170,7 @@ bool uart_entry_parse(const char *json, uart_entry_t *en, const char **bad, int 
  * Bridge a DUT UART through two LA channels. Like dap_start, this is the one
  * command that changes how the connection's bytes are interpreted: after the
  * `"uart ready"` ack the same TCP connection carries raw UART bytes both ways.
- *   {"cmd":"uart_proxy_start","rx":<1-12>,"tx":<1-12>,"baud":115200,
+ *   {"cmd":"uart_proxy_start","rx":<1-14>,"tx":<1-14>,"baud":115200,
  *    "parity":"none"|"even"|"odd","stop_bits":1|2,"half_duplex":false,"entry":{...}}
  * parity and stop_bits are optional (8N1); anything but 8N1 needs gateware v56.
  * de (gateware v58): an LA channel the pod drives as an RS-485 transceiver's DE + /RE, high from
@@ -203,7 +196,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
         return;
     }
     if (frame && signal_engine_fpga_version() < UART_FRAME_MIN_GW) {
-        send_error(conn_id, "uart parity and stop bits need gateware v56+: update the pod's firmware");
+        bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart parity and stop bits need gateware v56+: update the pod's firmware"),
+                                "parity and stop_bits", UART_FRAME_MIN_GW);
         return;
     }
     if (uart_half_duplex_parse(json)) {
@@ -277,12 +271,12 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
                  ? la_pull_engage((uint8_t)rx, LA_PULL_UP, one_wire ? LA_PULL_STR_2K2 : 0)
                  : pca9555_set_la_pullup((uint8_t)rx, true);
         if (rc != 0) {
-            printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
+            LOG_W("[uart] could not engage LA%u's pull-up to hold RX high\n", rx);
             uart_rx_pu_ch = -1;
         }
     }
     if (one_wire && uart_rx_pu_ch < 0)
-        printf("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
+        LOG_W("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
 
     /* Entry, part 1: TX held low (a static low under the UART's own driver) across the reset. */
     if (entry.on) {
@@ -465,11 +459,11 @@ void uart_rearm_poll(void) {
     if (fpga_uart_config_de(uart_proxy_rx, uart_proxy_tx, uart_proxy_de, uart_proxy_de_inv, uart_proxy_baud,
                             uart_proxy_frame, true) == 0 &&
         fpga_uart_status(&rx_avail, NULL) == 0) {
-        printf("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
+        LOG_I("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
                uart_proxy_rx, uart_proxy_tx);
         return;
     }
-    printf("[uart] gateware reconfigured: could not re-arm the UART session, closing it\n");
+    LOG_W("[uart] gateware reconfigured: could not re-arm the UART session, closing it\n");
     uart_proxy_end(conn, false);
     at_close_connection(conn);
 }

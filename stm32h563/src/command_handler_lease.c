@@ -9,6 +9,7 @@
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "bp_errors.h"
+#include "bp_log.h"
 #include "bp_json.h"
 #include "cmd_table.h"
 #include "lease_gate.h"
@@ -44,7 +45,7 @@ static void send_lease(int conn_id, const lease_local_view_t *v) {
                 "\"purpose\":\"%s\",\"left_s\":%lu,\"source\":\"local\"}}}\n",
             v->id, v->holder, v->purpose, (unsigned long)v->left_s);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "lease reply too large"); return; }
-    printf("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
+    LOG_D("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 

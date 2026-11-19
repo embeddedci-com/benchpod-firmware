@@ -15,6 +15,7 @@
 #include "bp_limits.h"      /* BP_CLOUD_CMD_IN_MAX */
 #include "scpi_server.h"
 #include "lease_local.h"
+#include "bp_log.h"
 #include "cmd_gate.h"       /* cmd_gate_scpi_line_writes */
 #include "lease_gate.h"
 #include "stm32h5xx_hal.h"  /* HAL_GetTick */
@@ -71,7 +72,7 @@ static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
     lease_local_view_t v;
     const bool local = lease_local_get(conn_id, now, &v) && !v.mine;
     if (!(cloud || local) || !cmd_gate_scpi_line_writes(line)) return false;
-    printf("[cmd] SCPI \"%s\" refused: %s holds the pod\n", line, cloud ? "a cloud job" : v.holder);
+    LOG_D("[cmd] SCPI \"%s\" refused: %s holds the pod\n", line, cloud ? "a cloud job" : v.holder);
     return true;
 }
 

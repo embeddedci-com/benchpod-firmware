@@ -9,6 +9,7 @@
 #include "console.h"
 #include "cloud_caps.h"     /* cloud_caps_wifi_mac: status wifimac */
 #include "console_moved.h"
+#include "bp_json.h"         /* bp_hex_nibble */
 #include "usb_device.h"
 #include "usb_netif.h"
 #include "adc_pool.h"   /* gated diagnostics use the shared pool's scratch */
@@ -214,42 +215,21 @@ static void cmd_help(console_out_t out, void *ctx)
        The console keeps what needs physical presence or works without the network; everything
        else is the JSON API (docs/API.md), on the USB network adapter too. */
     out(ctx,
-        "commands (the rest is the JSON API on :8080, also over the USB network):\r\n"
-        "  help                 this list\r\n"
-        "  status               pod report: network, USB, PSRAM, gateware, safe mode, health\r\n"
-        "  ping                 SPI ping the iCE40 (expect 0xA5 + version)\r\n"
-        "  uid                  the chip's unique ID\r\n"
-        "  selftest             silicon health check (clocks/timer/sram/rng)\r\n"
-        "  reboot               system reset\r\n"
-        "  dfu                  reboot into the USB DFU bootloader to reflash firmware\r\n"
-        "  usb-reattach         re-enumerate on USB (console + network adapter)\r\n"
-        "  identity | identity-wipe <id|unknown>      show the device key; erase it and make a new one\r\n"
-        "  sig-policy [audit|permissive|required]    what OTA accepts (USB may loosen it)\r\n"
-        "  lan-ota [signed|any]                       updates from Ethernet/Wi-Fi: signed only (default) or any\r\n"
-        "  rollback-floor [clear]                     the oldest signed firmware this pod takes\r\n"
-        "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
-        "  log [error|warn|info|debug]                console log level (stored; default info)\r\n"
-        "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate (port 8443)\r\n"
-        "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
-        "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
-        "                       (ca, ca-clear, proxy, proxy-set, proxy-clear still work)\r\n");
+        "commands (the rest is the JSON API on :8080, also over the USB network;\r\n"
+        "every command and its replies: docs/usb-serial-interface.md):\r\n"
+        "  help | status | ping | uid | selftest | reboot | dfu | usb-reattach\r\n"
+        "  identity | identity-wipe <id|unknown>      device key\r\n"
+        "  sig-policy [audit|permissive|required]    what OTA accepts\r\n"
+        "  lan-ota [signed|any] | rollback-floor [clear] | lan-policy [open|locked|off]\r\n"
+        "  usb-network [on|off]                       the USB network adapter\r\n"
+        "  log [error|warn|info|debug]                console log level\r\n"
+        "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate\r\n"
+        "  cloud-ca | cloud-ca-clear | cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear\r\n");
     out(ctx,
-        "  eth <stop|start|restart|stats>  the wired link: down/up (PHY reset + DHCP), counters\r\n"
-        "  wifi-set \"<ssid>\" \"<pass>\"  save Wi-Fi credentials + (re)connect the C3 (USB networking off)\r\n"
-        "  wifi-show            show stored SSID, Wi-Fi state, IP\r\n"
-        "  wifi-scan            networks the pod's Wi-Fi sees: scan <rssi> <channel> <auth> <ssid>, scan done <n>\r\n"
-        "  wifi-clear           erase stored Wi-Fi credentials (pod + ESP32-C3; USB networking on)\r\n"
-        "  wifi-static <ip> <mask> <gw>  static Wi-Fi address (diagnostic)\r\n"
-        "  esp-reset-pulse      diagnostic: reset the C3 unannounced (Wi-Fi must recover)\r\n"
-        "  esp-mon [ms]         print the C3's UART output\r\n"
-        "  flash-esp32-sync     C3: strap download mode + SYNC (wiring test)\r\n"
-        "  flash-esp32          C3: flash the esp-hosted image from the W25Q (background, ~2 min)\r\n"
-        "  flash-ice40          reflash the iCE40 with gateware image 0 from the W25Q\r\n"
-        "  psram-selftest       layered STM32/iCE40->PSRAM + /CE-net reach test (boot test)\r\n"
-        "  led <colour|mask>    show red, green, blue, cyan, magenta, yellow, white, off or a 0-7 mask for 5 s\r\n"
-        "  psram-test           bring up + pattern-test the XSPI PSRAM\r\n"
-        "  blobs                what the W25Q blob slots (gw0, gw1, esp) hold\r\n"
-        "  (firmware and blob uploads: the JSON API, also over the USB network; recovery: dfu)\r\n");
+        "  eth <stop|start|restart|stats>             the wired link\r\n"
+        "  wifi-set \"<ssid>\" \"<pass>\" | wifi-show | wifi-scan | wifi-clear | wifi-static <ip> <mask> <gw>\r\n"
+        "  esp-reset-pulse | esp-mon [ms] | flash-esp32-sync | flash-esp32   the ESP32-C3\r\n"
+        "  flash-ice40 | psram-selftest | psram-test | blobs | led <color|mask>\r\n");
 #if !defined(BENCHPOD_RELEASE)
     out(ctx,
         "development build only:\r\n"
@@ -422,14 +402,6 @@ static const char *parse_quoted(const char *p, char *out, size_t n)
    when one says HELLO on the Ethernet port, unless built-in Wi-Fi is configured (it wins,
    wifi_bridge_ignored); `bridge` shows it and runs scan / reboot / reset. */
 
-static int hexval(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
 {
     if (rc != 0) {
@@ -507,7 +479,7 @@ static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
         bool good = part >= 1 && part <= 4 && strlen(argv[3]) == 64;
         if (good && !t) good = (t = pvPortMalloc(3 + BWP_ID_CERT_LEN)) != NULL;
         for (unsigned k = 0; good && k < 32; k++) {
-            int hi = hexval(argv[3][2 * k]), lo = hexval(argv[3][2 * k + 1]);
+            int hi = bp_hex_nibble(argv[3][2 * k]), lo = bp_hex_nibble(argv[3][2 * k + 1]);
             good = hi >= 0 && lo >= 0;
             t[3 + 32 * (part - 1) + k] = (uint8_t)(hi << 4 | lo);
         }

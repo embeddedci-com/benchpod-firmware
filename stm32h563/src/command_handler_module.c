@@ -57,21 +57,13 @@ static bool num_field(const char *json, const char *key, long *out)
     return *end == '\0';
 }
 
-static int hex_nibble(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
 /* Hex string -> bytes; -1 on odd length, a bad digit or more than cap bytes. */
 static int hex_decode(const char *s, uint8_t *out, size_t cap)
 {
     size_t n = strlen(s);
     if (n % 2u || n / 2u > cap) return -1;
     for (size_t i = 0; i < n / 2u; i++) {
-        int hi = hex_nibble(s[2 * i]), lo = hex_nibble(s[2 * i + 1]);
+        int hi = bp_hex_nibble(s[2 * i]), lo = bp_hex_nibble(s[2 * i + 1]);
         if (hi < 0 || lo < 0) return -1;
         out[i] = (uint8_t)(hi << 4 | lo);
     }

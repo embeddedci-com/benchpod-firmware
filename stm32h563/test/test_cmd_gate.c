@@ -98,6 +98,8 @@ static void test_lease(void) {
     CHECK(gate("{\"cmd\":\"status\"}", &c) == NULL, "light read refused: %s", s_why);
     const char *r = gate("{\"cmd\":\"generate\"}", &c);
     CHECK(r && strcmp(r, "busy: a cloud job holds this pod (CI: org/repo, 42 s left)") == 0, "T1: %s", r);
+    /* dispatch_line sends this one refusal as lease_busy (BP0025) by its start */
+    CHECK(starts(r, CMD_GATE_CLOUD_LEASE_TEXT), "cloud lease prefix: %s", r);
     /* a T0 read that takes the capture hardware is not light */
     CHECK(starts(gate("{\"cmd\":\"capture\",\"samples\":10}", &c), "busy:"), "capture: %s", s_why);
     /* no holder label: "cloud" */
