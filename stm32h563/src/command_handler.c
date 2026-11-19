@@ -29,6 +29,7 @@
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
 #include "lease_gate.h"
+#include "lease_local.h"
 #include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
@@ -240,6 +241,9 @@ void command_handler_poll(void) {
     /* ---- deferred reboot for `psram_recover`: fire once the ack has had time to flush ---- */
     device_poll();
 
+    /* The pod's own lease: its deadline, and a lease.break posted by the cloud link. */
+    lease_local_expire(HAL_GetTick());
+
     /* ---- DAC uploads: give back a gate nobody replayed, abort a stalled load_bin ---- */
     dac_poll();
 
@@ -366,6 +370,8 @@ void dispatch_line(int conn_id, const char *buf) {
         const char *refused = cmd_gate_check(cmd, buf, tier, &g, why, sizeof(why));
         if (refused) { send_error(conn_id, refused); return; }
     }
+    /* The pod's own lease (lease_local.h): on every transport, only its owners drive the pod. */
+    if (!command_handler_lease_gate(conn_id, cmd, buf)) return;
 
     /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud
        tunnel, cloud command channel). No-op on a pod without limits. */
@@ -438,6 +444,9 @@ void command_handler_conn_closed(int conn_id) {
     transport_conn_closed(conn_id);
 
     scpi_conn_closed(conn_id);
+
+    /* An owner's connection is gone: it no longer owns the pod's lease (the lease stays). */
+    lease_local_conn_closed(conn_id);
 }
 
 /* Reset one cloud-tunnel pseudo-connection between tunnels (tunnel.open / tunnel.close). Reuses the

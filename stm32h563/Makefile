@@ -185,12 +185,14 @@ C_SOURCES := \
   src/cmd_gate.c \
   src/pod_policy.c \
   src/lease_gate.c \
+  src/lease_local.c \
   src/net_reload.c \
   src/cloud_extras.c \
   src/lan_tls.c \
   src/lan_tls_pem.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
+  src/command_handler_lease.c \
   src/rng.c \
   src/psram.c \
   src/ice40_flash.c \

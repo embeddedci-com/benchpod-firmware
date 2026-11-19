@@ -123,7 +123,7 @@ CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_js
 # The command_handler modules, each on its own with the modules around it faked in the test
 # (shim_ch: the HAL tick/reset they call).
 CH_INC := -Ishim_ch
-CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c
+CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c ../src/lease_local.c
 CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
 CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c
 CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
