@@ -5,17 +5,22 @@ A release must embed the gateware images that were tested on hardware, not a fre
 the CI toolchain (OSS CAD Suite, Linux) places the design differently from a local build, so
 the same sources give a different bitstream with different clk48 margin (v40: loop 56.95 MHz
 locally, 48.84 MHz in CI).  So the tested images are committed in ice40/release/ with a
-MANIFEST, and the release job embeds those.
+MANIFEST, and the release job ships those.  The firmware does not embed them: the pod keeps
+them in config-flash blob slots, and the STM32 build puts them in its blob directory
+(stm32h563/Makefile).
 
   promote  copy the current ice40 build (make -C ice40 images) into ice40/release/ and write the
            MANIFEST.  Run it AFTER that exact build passed on hardware; --hw-verified says how.
            Refuses an image older than any gateware source (a build from before the last edit).
            The MANIFEST records the toolchain (yosys, the nextpnr revision) and the synthesis and
-           place-and-route flags the Makefile passes in, so a promoted image can be rebuilt.
+           place-and-route flags the Makefile passes in, so a promoted image can be rebuilt, and
+           each image's clk48 Fmax and untimed clk <-> clk48 crossing delays from its nextpnr log.
   check    fail unless ice40/release/ is complete, untampered (sha256) and still matches the
            gateware sources (a source hash + GATEWARE_VERSION).  A gateware change without a
-           new promote fails here: build, test on hardware, promote.
-  install  check, then put the promoted images where the STM32 build embeds them
+           new promote fails here: build, test on hardware, promote.  Prints each image's
+           recorded timing (a MANIFEST from before the crossing delays were recorded shows them
+           as not recorded).
+  install  check, then put the promoted images where the STM32 build picks them up
            (ice40/bench_pod_fpga_vbench_pod_{loop,deep,emu}.bin + .gwversion).
 
 Three images: loop (closed-loop DAC), deep (deep DAC replay) and, from gateware v54, emu (the
@@ -129,12 +134,28 @@ def nextpnr_revision(exe="nextpnr-ice40"):
     return rev
 
 
-def clk48_fmax(kind):
-    log = ICE40 / f"bench_pod_fpga_vbench_pod_{kind}.asc.pnr.log"
+def pnr_log(kind):
+    return ICE40 / f"bench_pod_fpga_vbench_pod_{kind}.asc.pnr.log"
+
+
+def last_match(kind, pattern):
+    """The last value pattern finds in the image's nextpnr log (the post-route figure), else "unknown"."""
+    log = pnr_log(kind)
     if not log.exists():
         return "unknown"
-    found = re.findall(r"Max frequency for clock 'clk48[^:]*: *([0-9.]+) MHz", log.read_text())
+    found = re.findall(pattern, log.read_text())
     return found[-1] if found else "unknown"
+
+
+def clk48_fmax(kind):
+    return last_match(kind, r"Max frequency for clock 'clk48[^:]*: *([0-9.]+) MHz")
+
+
+def crossings(kind):
+    """The untimed crossings' max delays (ns), read like the Makefile's pnr macro reads them:
+    x48 = clk -> clk48 (MAX_X48_NS), x24 = clk48 -> clk (MAX_X24_NS)."""
+    return (last_match(kind, r"Max delay posedge clk +-> posedge clk48[^:]*: *([0-9.]+) ns"),
+            last_match(kind, r"Max delay posedge clk48[^ ]* +-> posedge clk +: *([0-9.]+) ns"))
 
 
 def git_commit():
@@ -168,7 +189,7 @@ def cmd_promote(args):
                      f"test that build on hardware, then promote")
     REL.mkdir(exist_ok=True)
     lines = [
-        "# Hardware-verified iCE40 images embedded by firmware releases (tools/ice40_release.py).",
+        "# Hardware-verified iCE40 images that firmware releases install as config-flash blobs (tools/ice40_release.py).",
         "# Written by `make -C ice40 promote`; checked by `make -C ice40 check-release`.",
         f"gateware_version={gw}",
         f"source_sha256={source_hash()}",
@@ -186,9 +207,11 @@ def cmd_promote(args):
         shutil.copyfile(image_path(kind), dst)
         seed = getattr(args, f"seed_{kind}", "unknown")
         defines = getattr(args, f"defines_{kind}", "")
+        x48, x24 = crossings(kind)
         lines += [f"{kind}.sha256={sha256(dst)}", f"{kind}.seed={seed}",
                   f"{kind}.defines={defines.strip() or 'unknown'}",
-                  f"{kind}.clk48_mhz={clk48_fmax(kind)}"]
+                  f"{kind}.clk48_mhz={clk48_fmax(kind)}",
+                  f"{kind}.x48_ns={x48}", f"{kind}.x24_ns={x24}"]
     MANIFEST.write_text("\n".join(lines) + "\n")
     print(f"promoted gateware v{gw} to {REL.relative_to(ROOT)}/ (commit it with the sources)")
 
@@ -226,8 +249,23 @@ def cmd_check(args):
     m = read_manifest()
     print(f"ice40_release: gateware v{m['gateware_version']} images match the sources "
           f"(hardware: {m['hw_verified']})")
+    for line in timing_lines(m):
+        print(f"ice40_release: {line}")
     for note in flag_notes(m, args):
         print(f"ice40_release: note: {note}")
+
+
+def timing_lines(m):
+    """One line per image with the timing its MANIFEST records.  The crossing delays (x48_ns,
+    x24_ns) are optional: MANIFESTs promoted before they were recorded do not have them."""
+    out = []
+    for kind in IMAGES:
+        def val(key, unit):
+            v = m.get(f"{kind}.{key}")
+            return f"{v} {unit}" if v and v != "unknown" else "not recorded"
+        out.append(f"{kind}: seed {m.get(f'{kind}.seed', 'unknown')}, clk48 {val('clk48_mhz', 'MHz')}, "
+                   f"clk -> clk48 {val('x48_ns', 'ns')}, clk48 -> clk {val('x24_ns', 'ns')}")
+    return out
 
 
 def flag_notes(m, args):
