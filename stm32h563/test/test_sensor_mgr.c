@@ -590,7 +590,8 @@ static void test_reply_sizes(void) {
     }
     CHECK(pages > 1 && pages < 10, "paged in %u replies", pages);
     printf("  largest reply in this suite: %zu bytes (cap %u)\n", g_max_reply, BP_CLOUD_REPLY_MAX);
-    /* la_pins with sensor owners stays under the cap: names are at most 16 characters */
+    /* la_pins with these owners (4 instances on two pins) stays under the cap. With a 16-character
+       instance on every pin it does not: test_la_pins.c lists that case (reply_budget.h). */
     char buf[2400];
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));

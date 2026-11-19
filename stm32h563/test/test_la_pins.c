@@ -10,6 +10,15 @@
 #include "board_caps.h"
 #include "board_rev.h"
 #include "bp_limits.h"   /* BP_CLOUD_REPLY_MAX: the la_pins reply must fit the cloud channel */
+#include "reply_budget.h"
+
+/* Sizes (with the newline) of the replies listed as over budget in budget_la_pins, when listed. */
+#define KNOWN_V3R4_GPIO_LA_PINS   1788
+#define KNOWN_V3R4_GPIO_GPIO      1762
+#define KNOWN_V3_SENSOR_LA_PINS   2288
+#define KNOWN_V3_SENSOR_GPIO      2288
+#define KNOWN_V3R4_SENSOR_LA_PINS 2418
+#define KNOWN_V3R4_SENSOR_GPIO    2392
 
 #include <stdio.h>
 #include <string.h>
@@ -468,6 +477,96 @@ static void test_sensor_owner(void) {
     la_pins_reset();
 }
 
+/* ---- reply budgets (reply_budget.h) ---- */
+
+static const char *long_namer(unsigned slot) { (void)slot; return "abcdefghijklmnop"; }   /* SM_NAME_MAX */
+
+typedef enum { WORST_GPIO, WORST_SENSOR } worst_t;
+
+/* Every channel at its longest entry: a gpio open_drain (WORST_GPIO), or a pin of an emulated
+   sensor with a 16-character instance name (WORST_SENSOR; 4 I2C instances with data-ready, the SPI
+   and the UART instance own more than 14 pins). Pull on, the longest ohms and direction name,
+   both warnings. */
+static void set_worst(worst_t w) {
+    la_pins_reset();
+    la_pins_set_owner_namer(w == WORST_SENSOR ? long_namer : NULL);
+    for (unsigned la = 1; la <= 14; la++) {
+        uint8_t pin = (uint8_t)la;
+        if (w == WORST_GPIO) la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, &pin, 1);
+        else { la_pins_claim(LA_FN_SENSOR_MISO, LA_GPIO_NONE, 0, &pin, 1); la_pins_set_owner(la, 0x01); }
+        la_pins_set_dir(la, LA_DIR_DUT_OUTPUT);
+        if (board_caps()->pull_expanders) la_pins_note_pull(la, LA_PULL_DOWN, "1.8k");
+    }
+    la_pins_set_target_powered(false);
+}
+
+static void clear_worst(void) {
+    for (unsigned la = 1; la <= 14; la++) {
+        la_pins_set_dir(la, LA_DIR_UNKNOWN);
+        la_pins_set_owner(la, 0);
+        la_pins_note_pull(la, LA_PULL_NONE, NULL);
+    }
+    la_pins_set_owner_namer(NULL);
+    la_pins_set_target_powered(true);
+    la_pins_reset();
+}
+
+/* The la_pins reply as handle_la_pins builds it, and the gpio read reply (handle_gpio). */
+static size_t emit_la_pins(char *buf, size_t cap) {
+    bp_emit_t e;
+    bp_emit_init(&e, buf, cap);
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(&e, 0x3FFF, 0x3FFF);
+    if (board_caps()->pull_expanders) bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"]");
+    bp_emit_raw(&e, ",\"levels\":16383}}\n");
+    CHECK(bp_emit_ok(&e));
+    return bp_emit_len(&e);
+}
+
+static size_t emit_gpio_read(char *buf, size_t cap) {
+    bp_emit_t e;
+    bp_emit_init(&e, buf, cap);
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"levels\":16383,\"pins\":");
+    la_pins_emit_list(&e, 0x3FFF, 0x3FFF);
+    bp_emit_raw(&e, "}}\n");
+    CHECK(bp_emit_ok(&e));
+    return bp_emit_len(&e);
+}
+
+/* Replies known to be over budget (reply_budget.h), with the size measured when listed. 0 = must
+   keep the margin. The v3 and v3r4 tables differ only in the pull table, so v2 and v3r2 are v3.
+   Over budget today: the gpio case on v3r4 (4 bytes under the limit) and the sensor case on
+   every board (over the limit: "reply too large" over LAN and cloud). */
+static const struct { int rev; worst_t w; const char *what; size_t la_pins, gpio; } s_known[] = {
+    { BOARD_REV_V2,   WORST_GPIO,   "v2, every pin gpio",       0,    0    },
+    { BOARD_REV_V3,   WORST_GPIO,   "v3, every pin gpio",       0,    0    },
+    { BOARD_REV_V3R2, WORST_GPIO,   "v3r2, every pin gpio",     0,    0    },
+    { BOARD_REV_V3R4, WORST_GPIO,   "v3r4, every pin gpio",     KNOWN_V3R4_GPIO_LA_PINS, KNOWN_V3R4_GPIO_GPIO },
+    { BOARD_REV_V2,   WORST_SENSOR, "v2, every pin a sensor",   KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3,   WORST_SENSOR, "v3, every pin a sensor",   KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3R2, WORST_SENSOR, "v3r2, every pin a sensor", KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3R4, WORST_SENSOR, "v3r4, every pin a sensor", KNOWN_V3R4_SENSOR_LA_PINS, KNOWN_V3R4_SENSOR_GPIO },
+};
+
+static void budget_la_pins(void) {
+    static char buf[4096];
+    char what[64];
+    for (size_t i = 0; i < sizeof(s_known) / sizeof(s_known[0]); i++) {
+        board_caps_init(s_known[i].rev);
+        set_worst(s_known[i].w);
+        size_t n = emit_la_pins(buf, sizeof(buf));
+        snprintf(what, sizeof(what), "la_pins, %s", s_known[i].what);
+        if (s_known[i].la_pins) CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].la_pins));
+        else                    CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
+        n = emit_gpio_read(buf, sizeof(buf));
+        snprintf(what, sizeof(what), "gpio read, %s", s_known[i].what);
+        if (s_known[i].gpio) CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].gpio));
+        else                 CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
+        clear_worst();
+    }
+    board_caps_init(BOARD_REV_V3);
+}
+
 static void test_json_entries(void) {
     la_pins_reset();
     char buf[2048];
@@ -488,37 +587,7 @@ static void test_json_entries(void) {
     CHECK_STR(buf, "[{\"la\":8,\"function\":\"gpio\",\"gpio\":\"open_drain\",\"level\":1,\"pull\":{\"dir\":\"down\",\"ohms\":\"10k\",\"on\":false,\"dirs\":[\"down\"]}},"
                    "{\"la\":12,\"function\":\"swd_dio\",\"gpio\":null,\"level\":null,\"pull\":null}]");
 
-    /* Worst case the la_pins / gpio read reply can reach: every pin a gpio open_drain with its
-       pull on (the longest entry), plus the envelope.  It must fit the cloud reply capture. */
-    la_pins_reset();
-    for (unsigned la = 1; la <= 14; la++) {
-        la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ (uint8_t)la }, 1);
-        la_pins_set_dir(la, LA_DIR_DUT_OUTPUT);                  /* the longest direction name */
-    }
-    la_pins_set_target_powered(false);                           /* every pulled-up pin warns */
-    bp_emit_init(&e, buf, sizeof(buf));
-    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x3FFF, 0x00FF);
-    bp_emit_raw(&e, ",\"levels\":16383}}\n");
-    CHECK(bp_emit_ok(&e));
-    printf("  la_pins worst-case reply: %u bytes (cloud reply cap %u)\n",
-           (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
-    CHECK(bp_emit_len(&e) < BP_CLOUD_REPLY_MAX);
-    /* Digital v3r4: every channel has a pull, both directions, and the longest ohms. */
-    board_caps_init(BOARD_REV_V3R4);
-    for (unsigned la = 1; la <= 14; la++) la_pins_note_pull(la, LA_PULL_DOWN, "1.8k");
-    bp_emit_init(&e, buf, sizeof(buf));
-    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(&e, 0x3FFF, 0x3FFF);
-    bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"],\"levels\":16383}}\n");
-    CHECK(bp_emit_ok(&e));
-    printf("  la_pins worst-case reply on digital v3r4: %u bytes (cloud reply cap %u)\n",
-           (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
-    CHECK(bp_emit_len(&e) < BP_CLOUD_REPLY_MAX);
-    for (unsigned la = 1; la <= 14; la++) la_pins_note_pull(la, LA_PULL_NONE, NULL);
-    board_caps_init(BOARD_REV_V3);
-    la_pins_set_target_powered(true);
-    for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
+    budget_la_pins();
 }
 
 static void test_direction_and_warnings(void) {

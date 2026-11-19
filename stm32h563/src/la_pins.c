@@ -632,7 +632,8 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     bp_emit(e, "{\"la\":%u,\"function\":\"%s\",", la, la_fn_name(la_pins_fn(la)));
     /* An emulated sensor's pin names its instance: "owner":"sensor:env". A shared I2C line names
        the first and counts the others ("sensor:env+2"; sensor_status lists every instance's
-       pins), which keeps the whole la_pins reply inside the cloud reply cap. */
+       pins), so a shared bus costs one name. Long names on many pins still outgrow the cloud reply
+       cap: test_la_pins.c measures it (reply budget). */
     if (s_pin[la].owner && s_namer) {
         const char *first = NULL;
         unsigned more = 0;

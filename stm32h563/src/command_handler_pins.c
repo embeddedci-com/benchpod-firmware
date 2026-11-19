@@ -211,7 +211,7 @@ void handle_la_pins(int conn_id, const char *json) {
     uint16_t levels = 0;
     bool     have   = signal_engine_fpga_version() >= GPIO_GET_MIN_GW && fpga_gpio_get(&levels) == 0;
 
-    char resp[BP_CLOUD_REPLY_MAX];   /* worst case 1135 B (test_la_pins.c) */
+    char resp[BP_CLOUD_REPLY_MAX];   /* worst cases: test_la_pins.c, budget_la_pins */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
