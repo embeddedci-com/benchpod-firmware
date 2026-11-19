@@ -67,10 +67,11 @@ jobs:
       - name: Hardware-verified iCE40 images match the gateware sources
         run: make -C ice40 check-release
 
-      - name: Features table is released (no "next" entries, a row for this version)
+      - name: Features table and error catalog are released (no "next" entries)
         run: |
           SRC="$(sed -n 's/^#define FIRMWARE_VERSION "\(.*\)"/\1/p' stm32h563/src/version.h)"
           python3 tools/gen_features.py --check-release "$SRC"
+          python3 tools/gen_errors.py --check-release "$SRC"
 
   tests:
     uses: ./.github/workflows/test.yml

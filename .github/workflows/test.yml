@@ -163,6 +163,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          fetch-depth: 0   # the tags: gen_errors.py --check refuses "next" on a code a release tag has
       - name: Run STM32H563 host unit tests
         run: make -C stm32h563/test
       - name: Error codes (errors/catalog.toml) match the generated files
