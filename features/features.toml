@@ -165,35 +165,35 @@ date = "2026-11-19"
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "gpio"
-docs = "API.md#gpio"
+docs = "API.md#gpio--use-la-pins-as-gpio"
 dated = "floor"
 
 [features.power]
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "power"
-docs = "API.md#power"
+docs = "API.md#target_power--enabledisable-a-target-power-efuse"
 dated = "floor"
 
 [features.swd]
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "swd"
-docs = "API.md#swd"
+docs = "dap-over-tunnel.md"
 dated = "floor"
 
 [features.uart]
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "uart"
-docs = "API.md#uart_proxy_start"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
 dated = "floor"
 
 [features.la]
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "la"
-docs = "API.md#la_capture"
+docs = "API.md#la_capture--deep-raw-logic-analyzer-capture"
 dated = "floor"
 
 [features.analyzer]
@@ -222,7 +222,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "ota"
 legacy_frame = "ota"
-docs = "API.md#ota_begin"
+docs = "API.md#firmware-and-blob-updates-ota"
 dated = "floor"
 
 [features.la_pins]
@@ -230,7 +230,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "la_pins"
 legacy_frame = "la_pins"
-docs = "API.md#la_pins"
+docs = "API.md#la_pins--report-every-la-pin"
 dated = "floor"
 
 [features.power_profile]
@@ -238,7 +238,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "power_profile"
 legacy_frame = "power_profile"
-docs = "API.md#power_profile"
+docs = "API.md#power_profile--record-a-rail-current-profile"
 dated = "floor"
 
 [features.capture_b64]
@@ -246,7 +246,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "capture_b64"
 legacy_frame = "capture_b64"
-docs = "API.md#capture"
+docs = "API.md#base64-samples-encb64"
 dated = "floor"
 
 [features.blob_slots]
@@ -260,7 +260,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "can"
 legacy_frame = "can"
-docs = "API.md#can_config"
+docs = "API.md#can_config--bring-can-up"
 dated = "floor"
 note = "Flag first in 3.5.1, below the floor."
 
@@ -316,14 +316,14 @@ dated = "floor"
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "usb_net"
-docs = "API.md#usb_network"
+docs = "API.md#usb_network--the-usb-network-adapter-on-or-off"
 dated = "floor"
 
 [features.usb_net_setting]
 rev = 1
 firmware = "3.9.2"
 legacy_caps = "usb_net_setting"
-docs = "API.md#usb_network"
+docs = "API.md#usb_network--the-usb-network-adapter-on-or-off"
 dated = "floor"
 
 [features.lan_tls]
@@ -349,7 +349,7 @@ rev = 1
 firmware = "3.10.3"
 legacy_caps = "sensors"
 legacy_frame = "sensors"
-docs = "API.md#sensor_define"
+docs = "API.md#emulated-sensors"
 dated = "tag"
 note = "First in the 3.10.2 pre-release; pre-releases don't count."
 
@@ -364,7 +364,7 @@ note = "First in the 3.10.2 pre-release; pre-releases don't count. frame sensors
 rev = 1
 firmware = "3.10.4"
 legacy_caps = "sensor_la_trigger"
-docs = "API.md#sensor_la"
+docs = "API.md#sensor_la--raw-i2c-bus-capture"
 dated = "tag"
 
 [features.can_fd]
@@ -372,14 +372,14 @@ rev = 1
 firmware = "3.10.3"
 legacy_caps = "can_fd"
 legacy_frame = "can_fd"
-docs = "API.md#can_config"
+docs = "API.md#can_config--bring-can-up"
 dated = "tag"
 note = "First in the 3.10.2 pre-release; pre-releases don't count."
 
 [features.la_dir]
 rev = 1
 firmware = "3.10.4"
-docs = "API.md#la_dir"
+docs = "API.md#la_dir--which-way-each-pins-dut-signal-goes"
 dated = "code"
 note = "No flag today; the MCP docs gate it on firmware 3.10.4+."
 
@@ -387,7 +387,7 @@ note = "No flag today; the MCP docs gate it on firmware 3.10.4+."
 rev = 1
 firmware = "3.10.8"
 legacy_frame = "wiring_store"
-docs = "API.md#wiring_list"
+docs = "API.md#wiring-profiles-wiring_list-wiring_get-wiring_put-wiring_delete-wiring_default"
 dated = "tag"
 note = "Frame only: dropped from status caps for size."
 
@@ -425,7 +425,7 @@ gateware = 35
 gw_const = "GPIO_GET_MIN_GW"
 legacy_caps = "gpio_read"
 legacy_frame = "gpio_read"
-docs = "API.md#gpio_get"
+docs = "API.md#3-read-the-live-levels"
 dated = "floor"
 
 [features.capture_trigger]
@@ -435,7 +435,7 @@ gateware = 35
 gw_const = "CAPTURE_TRIGGER_MIN_GW"
 legacy_caps = "capture_trigger"
 legacy_frame = "capture_trigger"
-docs = "API.md#capture"
+docs = "API.md#capture-triggers"
 dated = "floor"
 
 [features.spi_master]
@@ -445,7 +445,7 @@ gateware = 45
 gw_const = "SPI_MASTER_MIN_GW"
 legacy_caps = "spi_master"
 legacy_frame = "spi_master"
-docs = "API.md#spi_xfer"
+docs = "API.md#spi-master-flash-an-spi-device"
 dated = "floor"
 
 [features.spi_stream]
@@ -455,7 +455,7 @@ gateware = 45
 gw_const = "SPI_MASTER_MIN_GW"
 legacy_caps = "spi_stream"
 legacy_frame = "spi_stream"
-docs = "API.md#spi_stream"
+docs = "API.md#spi_stream--send-a-staged-upload-in-one-cs-frame"
 dated = "floor"
 
 [features.la_rate_48mhz]
@@ -482,7 +482,7 @@ rev = 1
 firmware = "3.10.4"
 gateware = 55
 gw_const = "I2C_MASTER_MIN_GW"
-docs = "API.md#i2c_start"
+docs = "API.md#i2c-master"
 dated = "code"
 note = "No flag today. I2C_MASTER_MIN_GW 55 first in the 3.10.4 tag."
 
@@ -491,7 +491,7 @@ rev = 1
 firmware = "3.10.4"
 gateware = 55
 gw_const = "SPI_MODES12_MIN_GW"
-docs = "API.md#spi_xfer"
+docs = "API.md#spi_xfer--raw-full-duplex-transfer"
 dated = "code"
 note = "No flag today."
 
@@ -502,7 +502,7 @@ gateware = 56
 gw_const = "UART_FRAME_MIN_GW"
 legacy_caps = "uart_frame"
 legacy_frame = "uart_frame"
-docs = "API.md#uart_proxy_start"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
 dated = "tag"
 
 [features.uart_hd]
@@ -521,7 +521,7 @@ gateware = 54
 gw_const = "EMULATION_MIN_GW"
 requires = ["emu_image"]
 legacy_frame = "sensors_digital"
-docs = "API.md#sensor_start"
+docs = "API.md#sensor_start--start-an-instance"
 dated = "tag"
 note = "First in the 3.10.2 pre-release; pre-releases don't count. Needs the emulation image installed or running (fact emu_image)."
 
@@ -531,7 +531,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "scope"
 legacy_frame = "scope"
-docs = "API.md#capture"
+docs = "API.md#capture--adc-snapshot"
 dated = "floor"
 
 [features.dac]
@@ -540,7 +540,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "dac"
 legacy_frame = "dac"
-docs = "API.md#generate"
+docs = "API.md#generate--dac-waveform-output"
 dated = "floor"
 
 [features.dac_dc]
@@ -549,7 +549,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "dac_dc"
 legacy_frame = "dac_dc"
-docs = "API.md#dac_out"
+docs = "API.md#dac_out--route-an-output-path-and-set-a-calibrated-voltage"
 dated = "floor"
 
 [features.dac_replay]
@@ -558,7 +558,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "dac_replay"
 legacy_frame = "dac_replay"
-docs = "API.md#replay"
+docs = "API.md#replay--play-a-recorded-trace-out-the-dac"
 dated = "floor"
 
 [features.signal_alias]
@@ -585,7 +585,7 @@ board = "analog"
 requires = ["fpga_image:deep"]
 legacy_caps = "dac_deep_replay"
 legacy_frame = "dac_deep_replay"
-docs = "API.md#replay"
+docs = "API.md#replay--play-a-recorded-trace-out-the-dac"
 dated = "floor"
 note = "Depends on the running image: stays a runtime fact (fpga_image)."
 
@@ -598,7 +598,7 @@ board = "analog"
 requires = ["fpga_image:loop"]
 legacy_caps = "dac_control_loop"
 legacy_frame = "dac_control_loop"
-docs = "API.md#dac_loop"
+docs = "API.md#dac_control_loop--arm-the-closed-loop-dac"
 dated = "floor"
 note = "Depends on the running image."
 
@@ -638,7 +638,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "dac_limits"
 legacy_frame = "dac_limits"
-docs = "API.md#dac_limits"
+docs = "API.md#dac_limits--dac-output-limits-for-an-external-output-stage"
 dated = "floor"
 
 [features.calibrate]
@@ -647,7 +647,7 @@ firmware = "3.9.2"
 board = "analog"
 legacy_caps = "calibrate"
 legacy_frame = "calibrate"
-docs = "API.md#calibrate"
+docs = "API.md#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8"
 dated = "floor"
 
 [features.current_out]
