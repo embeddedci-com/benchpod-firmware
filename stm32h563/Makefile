@@ -526,6 +526,11 @@ $(addprefix $(BUILD_DIR)/,$(notdir $(SENSOR_DEF_SRCS:.c=.o))): CFLAGS += -ffp-co
 $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
                                                -DMBEDTLS_SSL_MAX_CONTENT_LEN=16384
 
+# libscpi's SCPI_ErrorTranslate is one switch over error codes 0..-800 (121 cases); GCC's
+# switch conversion turns it into an 801-entry pointer table (CSWTCH, 3.2 KB). A compare tree
+# at -Os is plenty for an error lookup: the file's code and tables go from 3.6 KB to 2.1 KB.
+$(BUILD_DIR)/error.o: CFLAGS += -Os -fno-tree-switch-conversion
+
 # The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
 $(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py
 	@mkdir -p $(dir $@)
