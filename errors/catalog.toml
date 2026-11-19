@@ -326,3 +326,16 @@ sdk = "use bp.set_pull({la}, \"{have}\"), or pick a channel that pulls {want} (b
 cli = "use `benchpod la pull {la} {have}`, or pick a channel that pulls {want} (`benchpod la pins` shows them)"
 mcp = "call set_pull(las=[{la}], pull=\"{have}\"), or pick a channel that pulls {want} (pull_status shows them)"
 web = "LA{la} can only pull {have} on this board. Pick a pin that pulls {want}."
+
+[BP0025]
+name = "vref_5v_missing"
+area = "io"
+since = "next"
+args = { mv = "int" }
+message = "5 V did not come up on pin 21 ({mv} mV)"
+cause = "In 5 V mode the pod switches pin 21, the rail every pull-up pulls to, to its USB supply. The pod measures pin 21 and found it below 4.3 V, so it went back to the previous I/O voltage. A weak USB supply, a hub without power, or a load on pin 21 causes it."
+[BP0025.fix]
+sdk = "power the pod from a USB port or supply that gives 5 V, check what is wired to pin 21, then set 5 V again"
+cli = "power the pod from a USB port or supply that gives 5 V, check what is wired to pin 21, then run `benchpod la voltage 5.0` again"
+mcp = "ask the user to power the pod from a USB port or supply that gives 5 V and to check pin 21, then call set_la_voltage(5.0) again"
+web = "Pin 21 did not reach 5 V. Power the pod from a USB port that gives 5 V and check what is wired to pin 21."

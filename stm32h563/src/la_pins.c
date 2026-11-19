@@ -3,6 +3,7 @@
  * See la_pins.h.  Pure C (no HAL), host-tested in test/test_la_pins.c.
  */
 #include "la_pins.h"
+#include "board_caps.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -382,7 +383,10 @@ bool la_pins_check_level(const uint8_t *las, size_t n, char *err, size_t cap) {
 
 bool la_pins_check_voltage_change(int cur_mv, int new_mv, char *err, size_t cap) {
     if (new_mv == cur_mv) return true;
-    if (new_mv != 1800 && new_mv != 3300) return true;   /* the caller's own validation says why */
+    /* 5000 is a voltage only where the board has 5 V I/O (board_caps.h); elsewhere the caller's
+       own validation refuses it, as before. */
+    bool valid = new_mv == 1800 || new_mv == 3300 || (new_mv == 5000 && board_caps()->la_5v);
+    if (!valid) return true;   /* the caller's own validation says why */
     uint16_t owned = la_pins_owned_mask();
     if (!owned) return true;
     size_t pos = (size_t)snprintf(err, cap, "la voltage can't change while pins are in use: ");

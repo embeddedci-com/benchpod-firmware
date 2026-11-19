@@ -1778,7 +1778,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
-| `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
+| `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v3r4 (the bank is then at 3.3 V). |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
 | `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware after 3.10.12), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
@@ -1802,7 +1802,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
 | `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
 | `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`. |
+| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware after 3.10.12). |
 
 #### `caps` values
 
@@ -2322,6 +2322,38 @@ applied at boot.
 A bare `{"cmd": "la_voltage"}` reports `{"mv": 0, …}` before any voltage is
 set (it does not take the profile's). `status` also carries the current selection as `la_vccio_mv` (0 = unset).
 
+#### 5 V and pin 21 (digital board v3r4)
+
+On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware after 3.10.12) `mv` also
+takes **`5000`**. The LA lines are 5 V tolerant there: the bank (and the FPGA) stays at 3.3 V,
+and J1 pin 21, the rail every pull-up pulls to, goes to 5 V from the pod's USB supply. The pod
+reads any 5 V signal at full speed. A pod output only reaches 5 V through its pull-up, so for
+outputs into 5 V CMOS-level inputs the channel's pull-up must be on. The pod checks pin 21 after
+switching and refuses with `BP0025` when 5 V did not come up (below 4.3 V), back on the previous
+voltage. `la_mv: 5000` in a wiring profile works the same way. On every other board `5000` is
+refused as before (`"la voltage must be 1800 or 3300 (mv)"`).
+
+```json
+{"cmd": "la_voltage", "mv": 5000}
+{"status": "ok", "data": {"mv": 5000, "st": 1, "readback_mv": 3300,
+  "vref_out": {"source": "5v", "set_mv": 5000, "mv": 4920, "state": "ok", "up": true}}}
+```
+
+- `mv`: the DUT's I/O voltage (`5000` in 5 V mode); `readback_mv` stays the bank (3300).
+  `status.la_vccio_mv` reports the same `mv`.
+- `vref_out` (digital v3r4 only): pin 21. `source` `bank` (follows the bank, 1.8 or 3.3 V, also
+  at power-up) or `5v`; `set_mv` what it should be; `mv` what the pod measures (`-1` without a
+  reading); `up` pin 21 is high enough for the pull resistors to work. `state`:
+  - `ok`: within the band of its setting (5 V mode: 4.3 to 5.3 V).
+  - `high`: more than 0.2 V above its setting. A DUT signal above the I/O voltage lifts pin 21
+    through the pull resistors (5 V signals with the pod set to 1.8 or 3.3 V). Select 5 V, or
+    remove the signal.
+  - `low`: more than 0.3 V below its setting: something on pin 21 draws too much current.
+  - `short`: under half its setting: pin 21 is shorted or held down. The pull resistors are
+    off until it comes back.
+  - `unknown`: no reading yet.
+- After any bank change the pod waits 30 ms (the LA clamps' reference) before it drives.
+
 > **1.8 V requires a v3 pod.** On v2 boards the TPS2116's `MODE` pin is tied to
 > GND, which puts the part in a mode with no manual 1.8 V selection at all: with
 > the select line low it passes the *higher* of its two inputs (always 3.3 V), and
@@ -2346,7 +2378,8 @@ set (it does not take the profile's). `status` also carries the current selectio
 
 | Condition | Message |
 |---|---|
-| `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` |
+| `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` (digital v3r4: `"la voltage must be 1800, 3300 or 5000 (mv)"`) |
+| `mv: 5000` and pin 21 stayed below 4.3 V (digital v3r4) | `BP0025`: `"5 V did not come up on pin 21 (4120 mV); check the USB supply"` |
 | `mv: 1800` on a v2 pod | `"1.8 V needs a v3 pod; this board is v2 (its TPS2116 has no 1.8 V setting)"` |
 | any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
 | a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |

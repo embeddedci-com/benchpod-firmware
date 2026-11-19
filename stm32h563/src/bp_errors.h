@@ -44,6 +44,7 @@ typedef enum {
     BP_E_UART_DE_PIN = 22,
     BP_E_LA_NO_PULL = 23,
     BP_E_LA_PULL_DIRECTION = 24,
+    BP_E_VREF_5V_MISSING = 25,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -169,6 +170,11 @@ static inline void bp_err_la_no_pull(int conn_id, const char *text, int32_t la) 
 static inline void bp_err_la_pull_direction(int conn_id, const char *text, int32_t la, const char *want, const char *have) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
     bp_error_send(conn_id, BP_E_LA_PULL_DIRECTION, text, a, 3);
+}
+/* BP0025: 5 V did not come up on pin 21 ({mv} mV) */
+static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    bp_error_send(conn_id, BP_E_VREF_5V_MISSING, text, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

@@ -23,6 +23,7 @@
 #include "mcu_adc.h"
 #include "board_rev.h"
 #include "board_caps.h"
+#include "vref_out.h"
 #include "cal_data.h"
 #include "usb_cc.h"
 #include "nrst_ctrl.h"
@@ -168,10 +169,11 @@ int main(void)
        few ADC conversions on the MCU's own ADC1. */
     (void)mcu_adc_init();   /* MCU ADC1: revision strap + USB-C CC sense */
     board_rev_init();       /* latches v2/v3 from the PA3 strap             */
-    board_caps_init();      /* what this revision has: the one gate for v3r4 hardware */
+    board_caps_init(board_rev_get());   /* what this revision has: the one gate for v3r4 hardware */
     cal_data_select(board_rev_get());   /* DAC/ADC fits for this revision (cal_data.h) */
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */
+    vref_out_init();        /* J1 pin 21 on the bank, 5 V off (digital v3r4 only) */
     /* Bring the I2C bus + expander outputs up FIRST, before the slower SPI/XSPI
        init, so every TCA9554 output is driven to its safe (OFF) state as early as
        possible.  Both expanders power up with pins high-Z and output latch 0xFF,

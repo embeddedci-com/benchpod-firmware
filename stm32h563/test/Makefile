@@ -27,7 +27,7 @@ SENSORDEF_SRCS := test_sensor_def.c $(SENSORDEF_CORE) ref/sensor_bmp280.c ref/se
                   ref/sensor_mpu6050.c ref/gps_nmea.c
 # The sensor manager and its commands end to end against a fake emulation gateware.
 SENSORMGR_SRCS := test_sensor_mgr.c fake_fpga_emu.c $(SENSORDEF_CORE) ../src/sensor_mgr.c ../src/sensor_cmd.c \
-                  ../src/la_pins.c ../src/bp_json.c
+                  ../src/la_pins.c ../src/board_caps.c ../src/bp_json.c
 SENSORDEF_FUZZ_SRCS := test_sensor_def_fuzz.c $(SENSORDEF_CORE)
 SANITIZE := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
@@ -63,7 +63,7 @@ ESPPUMP_SRCS  := test_esp_pump.c ../src/esp_hosted_pump.c
 SPIFLASH_SRCS := test_spi_flash.c ../src/spi_flash.c
 SPISTREAM_SRCS := test_spi_stream.c ../src/spi_stream.c
 I2CTXN_SRCS   := test_i2c_txn.c ../src/i2c_txn.c
-LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/bp_json.c
+LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/board_caps.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 # Wi-Fi bridge client, tested against the bridge firmware's own codec and pairing logic.
 BRIDGE_CORE := ../../wifi-bridge/components/bridge_core
@@ -79,6 +79,7 @@ BOOTGUARD_SRCS := test_boot_guard.c ../src/boot_guard.c ../src/boot_policy.c
 FLASHLAYOUT_SRCS := test_flash_layout.c
 BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c
 BOARDCAPS_SRCS := test_board_caps.c ../src/board_caps.c
+VREF_SRCS     := test_vref.c ../src/vref_logic.c ../src/bp_json.c
 MODEE_SRCS := test_module_eeprom.c ../src/module_eeprom.c
 BUSREC_SRCS   := test_bus_recovery.c
 CANTIM_SRCS   := test_can_timing.c ../src/can_timing.c ../src/can_ring.c
@@ -132,7 +133,7 @@ CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src
 CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
-                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/psram_alloc.c ../src/la_rate.c
+                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/board_caps.c ../src/psram_alloc.c ../src/la_rate.c
 # status: the real handler with its inputs faked at their longest, the caps[] list from cloud_caps.c.
 CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/cloud_caps.c ../src/bp_json.c
 CHSTATUS_DEFS := -DBENCHPOD_WIFI_BRIDGE=1 -I../../wifi-bridge/components/bridge_core/include \
@@ -349,6 +350,10 @@ build/test_board_caps: $(BOARDCAPS_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BOARDCAPS_SRCS) -lm -o $@
 
+build/test_vref: $(VREF_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(VREF_SRCS) -lm -o $@
+
 build/test_module_eeprom: $(MODEE_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MODEE_SRCS) -lm -o $@
@@ -519,7 +524,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_console_moved build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_vref build/test_module_eeprom build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_net_reload build/test_altcp_bp_proxy build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -581,6 +586,7 @@ run: $(TESTS)
 	@./build/test_flash_layout
 	@./build/test_board_variant
 	@./build/test_board_caps
+	@./build/test_vref
 	@./build/test_module_eeprom
 	@./build/test_fw_sign
 	@./build/test_adc_pool

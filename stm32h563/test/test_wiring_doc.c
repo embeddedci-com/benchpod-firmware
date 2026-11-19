@@ -134,9 +134,10 @@ static void test_la_mv(void) {
     CHECK(la_mv_of("{\"version\":2,\"la_mv\":3300}") == 3300);
     CHECK(la_mv_of("{ \"la_mv\" : 1800 , \"efuse\": 1}") == 1800);
     CHECK(la_mv_of("{\"la_mv\":null}") == 0);
-    CHECK(la_mv_of("{\"la_mv\":5000}") == 0);
     CHECK(la_mv_of("{\"la_mv\":3300.5}") == 0);
     CHECK(la_mv_of("{\"la_mv\":33000}") == 0);
+    CHECK(la_mv_of("{\"la_mv\":5000}") == 5000);   /* 5 V I/O (digital v3r4) */
+    CHECK(la_mv_of("{\"la_mv\":2500}") == 0);
     CHECK(la_mv_of("{\"efuse\":1}") == 0);
     CHECK(la_mv_of("") == 0);
     /* Only the top level counts: a signal or a dut_dirs key named la_mv is not the voltage. */

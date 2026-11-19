@@ -4,6 +4,7 @@
  * separately and could drift).
  */
 #include "cloud_caps.h"
+#include "vref_out.h"
 
 #include "board_info.h"
 #include "board_variant.h"
@@ -97,6 +98,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->nrst_pin = nrst_ctrl_supported();     /* the DUT reset pin (rev3+): hold reset for SPI/SWD */
     c->usb_cc = usb_cc_supported();
     c->pod_current = ina_pod_present();      /* the pod's own current monitor (0x41) */
+    c->vref_out = vref_out_present();        /* pin 21 switched + sensed, 5 V I/O (digital v3r4) */
     /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes with the
        pod's own numbers (current_out.h). */
     c->current_out_min_ua = current_out_min_ua();

@@ -30,3 +30,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0022 | `uart_de_pin` | uart | next | The UART's DE pin LA{la} is also its rx or tx |
 | BP0023 | `la_no_pull` | io | next | LA{la} has no pull resistor on this board |
 | BP0024 | `la_pull_direction` | io | next | LA{la} supports pull-{have} only on this board |
+| BP0025 | `vref_5v_missing` | io | next | 5 V did not come up on pin 21 ({mv} mV) |

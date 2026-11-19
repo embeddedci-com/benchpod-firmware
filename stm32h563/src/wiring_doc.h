@@ -71,7 +71,8 @@ int  wiring_index_find(const wiring_index_t *idx, const char *name);   /* -1 = n
    splicing it into a reply cannot break the reply's JSON. */
 bool wiring_doc_json_object_ok(const uint8_t *text, size_t len);
 
-/* The profile's top-level "la_mv" (the board's I/O voltage) when it is 1800 or 3300, else 0 (absent,
+/* The profile's top-level "la_mv" (the board's I/O voltage) when it is 1800, 3300 or 5000 (5 V I/O,
+   digital v3r4; the caller drops it on other boards), else 0 (absent,
    null, another value, or a key of that name nested in another object). json need not be
    NUL-terminated. */
 uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len);

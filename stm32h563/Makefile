@@ -78,6 +78,8 @@ C_SOURCES := \
   src/mcu_adc.c \
   src/board_rev.c \
   src/board_caps.c \
+  src/vref_logic.c \
+  src/vref_out.c \
   src/board_variant.c \
   src/module_link.c \
   src/module_eeprom.c \

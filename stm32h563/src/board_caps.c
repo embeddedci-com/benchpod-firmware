@@ -18,6 +18,6 @@ board_caps_t board_caps_for_rev(int rev)
     return c;
 }
 
-void board_caps_init(void) { s_caps = board_caps_for_rev(board_rev_get()); }
+void board_caps_init(int rev) { s_caps = board_caps_for_rev(rev); }
 
 const board_caps_t *board_caps(void) { return &s_caps; }

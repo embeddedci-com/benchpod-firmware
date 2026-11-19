@@ -22,6 +22,7 @@
 #include "boot_guard.h"       /* boot_guard_planned_reset before the psram_recover reboot */
 #include "wifi_manager.h"
 #include "target_power.h"
+#include "board_caps.h"
 #include "device_identity.h"
 #include "i2c_bus.h"
 #include "ina238.h"
@@ -134,6 +135,8 @@ bool la_voltage_from_profile(void) {
     if (at < 0) return false;
     const wiring_entry_t *e = &idx->e[at];
     uint16_t mv = wiring_doc_json_la_mv(doc + e->off, e->len);
+    /* A 5 V profile on a board without 5 V I/O counts as no voltage, as before 5 V existed. */
+    if (mv == LA_VCCIO_5V0 && !board_caps()->la_5v) mv = 0;
     if (!mv) return false;
     char why[LA_PINS_ERR_MAX];
     if (!la_pins_check_voltage_change(LA_VCCIO_UNSET, mv, why, sizeof(why))) {

@@ -7,6 +7,8 @@
  * docs/API.md with it.
  */
 #include "la_pins.h"
+#include "board_caps.h"
+#include "board_rev.h"
 #include "bp_limits.h"   /* BP_CLOUD_REPLY_MAX: the la_pins reply must fit the cloud channel */
 
 #include <stdio.h>
@@ -368,6 +370,12 @@ static void test_voltage_refusal(void) {
     CHECK_STR(err, "la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first");
     CHECK(la_pins_check_voltage_change(3300, 3300, err, sizeof(err)));   /* re-set is allowed */
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* invalid: caller's error */
+    /* Digital v3r4 (5 V I/O): 5000 is a voltage there, so it is a change like any other. */
+    board_caps_init(BOARD_REV_V3R4);
+    CHECK(!la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));
+    CHECK(la_pins_check_voltage_change(5000, 5000, err, sizeof(err)));   /* re-set is allowed */
+    board_caps_init(BOARD_REV_V3);
+    CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* older boards: as before */
 
     /* all 14 owned: the message still fits the module's buffer */
     const la_fn_t fns[14] = { LA_FN_STEP_DIR, LA_FN_STEP_DIR, LA_FN_I2C_SDA, LA_FN_I2C_SCL,

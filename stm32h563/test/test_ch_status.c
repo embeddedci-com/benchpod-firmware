@@ -80,7 +80,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->dac_ac = c->dac_replay = c->dac_dc = c->deep_replay = true;
     c->control_loop = c->loop_sources = c->loop_input_map = c->cotrig = c->generate16 = true;
     c->gpio_read = c->capture_trigger = c->spi_master = true;
-    c->sensors_digital = c->nrst_pin = c->usb_cc = c->pod_current = true;
+    c->sensors_digital = c->nrst_pin = c->usb_cc = c->pod_current = c->vref_out = true;
     c->no_wifi_scan = false;
     c->board = "stm32h563";
     c->safe_mode = true; c->safe_reason = g_reason;
@@ -117,6 +117,7 @@ int usb_cc_read(usb_cc_t *o) {
 uint32_t console_rx_dropped(void) { return g_typical ? 0 : 4294967295u; }
 uint32_t console_tx_dropped(void) { return g_typical ? 0 : 4294967295u; }
 int la_vccio_get_mv(void) { return 3300; }
+int la_io_get_mv(void) { return 3300; }
 const char *board_rev_str(void) { return "analog-v3r4"; }
 int board_rev_strap_mv(void) { return 3300; }
 /* The second strap: absent on every board but digital v3r4; the worst case carries it. */

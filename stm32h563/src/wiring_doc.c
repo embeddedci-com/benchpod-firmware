@@ -211,7 +211,8 @@ uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len) {
                     size_t digits = 0;
                     while (j < len && json[j] >= '0' && json[j] <= '9' && digits < 6) { v = v * 10u + (uint32_t)(json[j] - '0'); j++; digits++; }
                     if (digits == 0 || (j < len && (json[j] == '.' || json[j] == 'e' || json[j] == 'E' || (json[j] >= '0' && json[j] <= '9')))) return 0;
-                    return (v == 1800u || v == 3300u) ? (uint16_t)v : 0;
+                    /* 5000: 5 V I/O, which only digital v3r4 takes (la_voltage_from_profile). */
+                    return (v == 1800u || v == 3300u || v == 5000u) ? (uint16_t)v : 0;
                 }
             }
             i = end;
