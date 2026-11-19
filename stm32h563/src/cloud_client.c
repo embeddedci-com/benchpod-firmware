@@ -18,6 +18,7 @@
 #include "ota.h"
 #include "pod_policy.h"
 #include "lease_gate.h"
+#include "lease_local.h"
 #include "cloud_extras.h"
 #include "cloud_caps.h"
 #include "altcp_bp_proxy.h"
@@ -950,6 +951,46 @@ static void cl_handle_lease_state(const char *json) {
     LOG_D("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
 }
 
+/* lease.break {by}: someone stopped the pod's own lease from the web app or the cloud
+   (lease_local.h). The hw worker ends it; each owner's next command fails once with "lease lost". */
+static void cl_handle_lease_break(const char *json) {
+    char by[LEASE_LOCAL_HOLDER_MAX] = {0};
+    cl_json_str(json, "by", by, sizeof(by));
+    lease_local_break(by);
+    printf("[cloud] local lease stopped by %s\n", by[0] ? by : "the server");
+}
+
+/* lease.local: the pod's own lease, upstream, on every change and every LL_REPORT_MS while held,
+   so the server shows it and refuses web and cloud acquires against it. A new link sends the
+   current state first (s_ll_force). */
+#define LL_REPORT_MS 30000u
+static bool           s_ll_force = true;
+static bool           s_ll_sent_held;
+static uint32_t       s_ll_sent_gen;
+static absolute_time_t s_ll_next;
+
+static void cl_lease_local_poll(void) {
+    lease_local_view_t v;
+    uint32_t gen = 0;
+    if (!lease_local_snapshot(HAL_GetTick(), &v, &gen)) return;   /* mid-update: next poll */
+    const bool changed = s_ll_force || gen != s_ll_sent_gen || v.held != s_ll_sent_held;
+    if (!changed && !(v.held && time_reached(s_ll_next))) return;
+    char f[224];
+    bp_emit_t e;
+    bp_emit_init(&e, f, sizeof(f));
+    if (v.held)   /* labels are printable ASCII without quotes or backslashes (lease_local.c) */
+        bp_emit(&e, "{\"type\":\"lease.local\",\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
+                    "\"expires_in_s\":%lu}", v.holder, v.purpose, (unsigned long)v.left_s);
+    else
+        bp_emit_raw(&e, "{\"type\":\"lease.local\",\"held\":false}");
+    /* Only a frame that went out counts: a full send buffer retries at the next poll. */
+    if (!bp_emit_ok(&e) || !cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e))) return;
+    s_ll_force = false;
+    s_ll_sent_gen = gen;
+    s_ll_sent_held = v.held;
+    s_ll_next = make_timeout_time_ms(LL_REPORT_MS);
+}
+
 /* End a tunnel because its byte stream can no longer be trusted (a frame was lost or garbled):
    tell the client why on the stream itself, close it towards the server with the reason, and
    reset the virtual connection so a half-done raw transfer (load_bin, spi_stream) ends at once
@@ -1182,6 +1223,8 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
         return cl_handle_tunnel_data(msg);   /* false => worker busy, retry this frame next poll */
     } else if (strcmp(type, "lease.state") == 0) {
         cl_handle_lease_state(msg);
+    } else if (strcmp(type, "lease.break") == 0) {
+        cl_handle_lease_break(msg);
     } else if (strcmp(type, "tunnel.open") == 0) {
         cl_handle_tunnel_open(msg);
     } else if (strcmp(type, "tunnel.close") == 0) {
@@ -1600,6 +1643,7 @@ void cloud_client_poll(void) {
                 s_last_rx = get_absolute_time();
                 s_next_ping = make_timeout_time_ms(PING_INTERVAL_MS);
                 cl_set_state(CL_CONNECTED);
+                s_ll_force = true;   /* tell the new link about the pod's own lease */
                 cl_set_error("%s", "");
                 {
                     uint32_t failed = log_repeat_ok(&s_conn_rep);
@@ -1682,6 +1726,7 @@ void cloud_client_poll(void) {
         if (s_resend_caps && cl_send_capabilities()) s_resend_caps = false;
         /* Report OTA staging progress/state transitions to the server. */
         cl_ota_status_poll();
+        cl_lease_local_poll();
         return;
 
     case CL_BACKOFF:

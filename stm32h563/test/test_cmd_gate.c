@@ -105,6 +105,9 @@ static void test_lease(void) {
     CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "(cloud, 42 s left)") != NULL, "label: %s", s_why);
     c.lease_holder = NULL;
     CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "(cloud, 42 s left)") != NULL, "NULL label: %s", s_why);
+    /* the lease verbs reach their handler, which answers busy with the cloud holder */
+    CHECK(gate("{\"cmd\":\"lease_acquire\",\"id\":\"L-1\"}", &c) == NULL, "lease_acquire: %s", s_why);
+    CHECK(gate("{\"cmd\":\"lease_release\",\"id\":\"L-1\"}", &c) == NULL, "lease_release: %s", s_why);
     /* the lease does not touch USB or the cloud */
     cmd_gate_ctx_t u = open_ctx(POLICY_SRC_USB);
     u.lease_active = true;

@@ -218,6 +218,9 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
 | `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
+| `lease_acquire` | T1 | Take the [pod lease](#pod-lease), or join the one held with the same id | object | no |
+| `lease_renew` | T1 | Push the deadline of the [pod lease](#pod-lease) | object | no |
+| `lease_release` | T1 | Free the [pod lease](#pod-lease) | object | no |
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
@@ -305,10 +308,12 @@ that applies answers with its message and the command does not run.
 | Gate | Applies to | Message |
 |---|---|---|
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `busy: a cloud job holds this pod (<holder>, <N> s left)` |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
+| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026`: `lease lost: stopped by <name>` |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
@@ -1742,6 +1747,7 @@ elsewhere:
 |---|---|
 | `lan_tls` | the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command |
 | `lease` | the server, which owns the cloud lease |
+| `local_lease` | the server, from the pod's `lease.local` frames (see [Pod lease](#pod-lease)) |
 | `module` | the [`module`](#module--the-analog-module-and-its-eeprom) command |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, `adc_range`, `adc_range_fs_mv` | the [capabilities frame](#capabilities-frame--adc-calibration-fields) |
 | `sensors_format`, `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state` | the capabilities frame (the server keeps them as `cap.*`) |
@@ -1789,6 +1795,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
+| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only, and only with `"caps":false` (a client with the features table, feature `lease`). |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
@@ -4850,6 +4857,121 @@ only light reads (`status`, `ping`, the `*_status` reads, policy reads); everyth
 `busy: a cloud job holds this pod (<holder>, <N> s left)`, and SCPI setters get -200. The pod ends
 the lease itself at the announced expiry or when the cloud link drops. `status` shows
 `"lease":{"held":...,"holder":"...","left_s":...}`.
+
+<a id="pod-lease"></a>
+## Pod lease
+
+A client takes the pod for a while (a CI run, an SDK session) with `lease_acquire`, on any
+transport: LAN, the USB network adapter, the USB console or the cloud. The pod keeps one lease in
+RAM: an id, a holder label, a purpose and a deadline. A restart clears it. Feature `lease` in the
+[features table](#features-table).
+
+While the lease is held, only its **owners** drive the pod. An owner is a connection that sent
+`lease_acquire` with the held id; other processes of the same run join by sending `lease_acquire`
+with the same id. Every other connection, on any transport, gets light reads only (the T0
+commands that do not use the capture hardware, see [Gates](#gates-that-apply-to-every-command));
+anything else is refused with `BP0025`, and SCPI setters get -200. A connection that closes is no
+longer an owner; the lease itself stays until it is released, runs out or is stopped.
+
+**The `lease` field on any command.** A client that opens a connection per command proves
+ownership on each command instead of joining first: any JSON command may carry
+`"lease":"<id>"`.
+
+```json
+{"cmd":"la_dir","lease":"L-6f1c..."}
+```
+
+With the held id, the command runs as the owner's (and its connection becomes an owner). Another
+id, or an id while nothing is held, counts as no id: refused with `BP0025` while a lease is held,
+run as usual when the pod is free. A command never moves the deadline; only `lease_acquire`
+with the held id and `lease_renew` do. Commands without the field work as before. The check runs
+before the command starts, so the commands that switch the connection to raw bytes or chunks
+(`dap_start`, `uart_proxy_start`, `load_bin`, the captures) take it on their start line; the bytes
+that follow belong to that session. `status` with the held id reports `local_lease.mine: true`.
+
+The `lease_*` commands always reach the pod's lease, whoever holds it, so a busy pod answers
+with its holder.
+
+### `lease_acquire`
+
+```json
+{"cmd":"lease_acquire","id":"L-6f1c...","holder":"benchpod ci: ward","purpose":"process-node-hil","ttl_s":300}
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | 1 to 64 printable characters, no spaces, quotes or backslashes. The token that makes a connection an owner: keep it to the processes of the run. |
+| `holder` | string | no | Who holds it, as people should see it (40 characters; quotes and backslashes become `?`). Default `unnamed`. |
+| `purpose` | string | no | What it is for (64 characters). |
+| `ttl_s` | integer | no | Seconds until it runs out, 10 to 1800 (clamped). Default 120. |
+
+Free, or held with the same id: the pod takes it (or pushes its deadline) and this connection
+becomes an owner. The holder and purpose stay those of the first `lease_acquire`.
+
+```json
+{"status":"ok","data":{"lease":{"id":"L-6f1c...","holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":300,"source":"local"}}}
+```
+
+Held with another id, or a cloud job holds the pod (the server's lease, `status` `lease`; then
+`purpose` is `cloud`):
+
+```json
+{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245},"message":"busy: benchpod ci: ward holds this pod (process-node-hil, 245 s left)"}
+```
+
+A missing or malformed `id` is `BP0006` (`args.arg` `id`).
+
+### `lease_renew`
+
+```json
+{"cmd":"lease_renew","id":"L-6f1c...","ttl_s":300}
+```
+
+Pushes the deadline of the held lease with this id to `ttl_s` (10 to 1800, default 120) from now
+and answers like `lease_acquire`. It does not make the connection an owner. Another id while held:
+`BP0025`. Nothing held (it ran out, was released, or the pod restarted): `BP0027`
+(`args.id`). A stopped lease's id: `BP0026` (see below). Renew well before the deadline: a client that crashed loses the lease when it runs out.
+
+### `lease_release`
+
+```json
+{"cmd":"lease_release","id":"L-6f1c..."}
+```
+
+Frees the held lease with this id at once: `{"status":"ok","data":{"released":true}}`. Nothing
+held: `{"status":"ok","data":{"released":false}}`. Another id while held: `BP0025`.
+
+### Stopped from the web app or the cloud
+
+The server can stop the lease (frame `{"type":"lease.break","by":"<name>"}` on the cloud link).
+Each connection that owned it then gets, for its next command only, instead of running it:
+
+```json
+{"status":"error","code":"BP0026","args":{"by":"<name>"},"message":"lease lost: stopped by <name>"}
+```
+
+A stopped lease stays stopped: for 30 minutes after the stop, `lease_acquire`, `lease_renew` and
+any command whose `lease` field carries its id get the same `BP0026` (a light read too), instead
+of a new lease or `BP0027`. The pod remembers the last stopped id only. Other ids, and commands
+without one, see a free pod. A lease that ran out without being stopped is not remembered: the
+same id may be acquired again.
+
+### In `status` and on the cloud link
+
+`status` with `"caps":false` has `"local_lease":{"held":true,"holder":"...","purpose":"...","left_s":N,"mine":true}`
+(`mine`: this connection owns it), or `"local_lease":{"held":false}`. It never shows the id.
+
+While the cloud link is up, the pod tells the server about its lease on every change, when the
+link comes up, and every 30 s while it is held:
+
+```json
+{"type":"lease.local","held":true,"holder":"benchpod ci: ward","purpose":"process-node-hil","expires_in_s":245}
+{"type":"lease.local","held":false}
+```
+
+The cloud command channel is one connection for every cloud request, so a `lease_acquire` sent
+there makes that channel an owner until the lease ends; the cloud byte tunnels are separate
+connections, each an owner only while it is open.
 
 ---
 
