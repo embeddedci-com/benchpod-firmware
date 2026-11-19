@@ -1320,7 +1320,7 @@ static int la_io_set_5v(void) {
     la_settle_clamps();                        /* the sense filter (6.7 ms, calculated) and the pull-ups */
     int mv = vref_out_measure_mv();
     if (mv < VREF_5V_MIN_MV) {
-        printf("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
+        LOG_W("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
         (void)vref_out_set_source(VREF_SRC_BANK);
         if (prev == LA_VCCIO_1V8 || prev == LA_VCCIO_3V3) (void)la_vccio_set_mv(prev);
         else la_vccio_init();
@@ -3505,7 +3505,7 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
             if (n == 0) break;
             dropped += (uint32_t)n;
         }
-        if (dropped) printf("[uart] %lu unread RX bytes of the last session discarded\n", (unsigned long)dropped);
+        if (dropped) LOG_D("[uart] %lu unread RX bytes of the last session discarded\n", (unsigned long)dropped);
         s_uart_rx_ovf = false; s_uart_rx_par = false;
     }
 

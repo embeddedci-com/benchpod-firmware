@@ -71,7 +71,7 @@ static void uart_rx_pu_restore(void) {
                  ? la_pull_engage((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev_dir, uart_rx_pu_prev_str)
                  : pca9555_set_la_pullup((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev);
         if (rc != 0)
-            printf("[uart] WARNING: could not restore LA%d's pull-up to %s (rc %d)\n",
+            LOG_W("[uart] could not restore LA%d's pull-up to %s (rc %d)\n",
                    uart_rx_pu_ch, uart_rx_pu_prev ? "on" : "off", rc);
         uart_rx_pu_ch = -1;
     }
@@ -270,12 +270,12 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
                  ? la_pull_engage((uint8_t)rx, LA_PULL_UP, one_wire ? LA_PULL_STR_2K2 : 0)
                  : pca9555_set_la_pullup((uint8_t)rx, true);
         if (rc != 0) {
-            printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
+            LOG_W("[uart] could not engage LA%u's pull-up to hold RX high\n", rx);
             uart_rx_pu_ch = -1;
         }
     }
     if (one_wire && uart_rx_pu_ch < 0)
-        printf("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
+        LOG_W("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
 
     /* Entry, part 1: TX held low (a static low under the UART's own driver) across the reset. */
     if (entry.on) {
@@ -458,11 +458,11 @@ void uart_rearm_poll(void) {
     if (fpga_uart_config_de(uart_proxy_rx, uart_proxy_tx, uart_proxy_de, uart_proxy_de_inv, uart_proxy_baud,
                             uart_proxy_frame, true) == 0 &&
         fpga_uart_status(&rx_avail, NULL) == 0) {
-        printf("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
+        LOG_I("[uart] gateware reconfigured: UART session on LA%u/LA%u re-armed\n",
                uart_proxy_rx, uart_proxy_tx);
         return;
     }
-    printf("[uart] gateware reconfigured: could not re-arm the UART session, closing it\n");
+    LOG_W("[uart] gateware reconfigured: could not re-arm the UART session, closing it\n");
     uart_proxy_end(conn, false);
     at_close_connection(conn);
 }

@@ -74,8 +74,8 @@ void board_rev_init(void)
             s_rev2_mv = read_rev2_mv();
             s_rev = board_rev_decide(mv, vref, s_rev2_mv);
             if (s_rev != BOARD_REV_V3R4) {
-                log_printf("[board] WARNING: strap %d mV says v3r4 but the second strap reads %d mV "
-                       "(expected ~%d mV); running as v3\r\n", mv, s_rev2_mv, BOARD_REV2_V3R4_NOMINAL_MV);
+                LOG_W("[board] strap %d mV says v3r4 but the second strap reads %d mV "
+                      "(expected ~%d mV); running as v3\n", mv, s_rev2_mv, BOARD_REV2_V3R4_NOMINAL_MV);
                 return;
             }
             log_printf("[board] revision %s (straps %d / %d mV, VREF+ %d mV)\r\n",
@@ -86,9 +86,9 @@ void board_rev_init(void)
         if (!board_rev_strap_known(mv)) {
             /* Driven, but not a ratio we know.  It is certainly not a v2 board, so run as v3
                (not v3r2: that would send DAC8554 frames to a DAC8551) and make it loud. */
-            log_printf("[board] WARNING: unrecognised revision strap %d mV "
-                   "(expected ~%d mV for v3, ~%d for v3r2, ~%d for v3r4); running as v3\r\n",
-                   mv, BOARD_REV_V3_NOMINAL_MV, BOARD_REV_V3R2_NOMINAL_MV, BOARD_REV_V3R4_NOMINAL_MV);
+            LOG_W("[board] unrecognized revision strap %d mV "
+                  "(expected ~%d mV for v3, ~%d for v3r2, ~%d for v3r4); running as v3\n",
+                  mv, BOARD_REV_V3_NOMINAL_MV, BOARD_REV_V3R2_NOMINAL_MV, BOARD_REV_V3R4_NOMINAL_MV);
             return;
         }
         log_printf("[board] revision %s (strap %d mV, VREF+ %d mV)\r\n",

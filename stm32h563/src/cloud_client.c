@@ -957,7 +957,7 @@ static void cl_handle_lease_break(const char *json) {
     char by[LEASE_LOCAL_HOLDER_MAX] = {0};
     cl_json_str(json, "by", by, sizeof(by));
     lease_local_break(by);
-    printf("[cloud] local lease stopped by %s\n", by[0] ? by : "the server");
+    LOG_I("[cloud] local lease stopped by %s\n", by[0] ? by : "the server");
 }
 
 /* lease.local: the pod's own lease, upstream, on every change and every LL_REPORT_MS while held,

@@ -45,7 +45,7 @@ static int apply(void)
     for (size_t i = 0; i < n; i++) {
         if (write_pair(w[i].addr, w[i].reg, w[i].val) != 0) {
             /* Unknown state: back to reset (all off) and rewrite on the next change. */
-            log_printf("[pull] expander 0x%02x write failed; holding both in reset\r\n", w[i].addr);
+            LOG_E("[pull] expander 0x%02x write failed; holding both in reset\n", w[i].addr);
             hold();
             return -1;
         }
