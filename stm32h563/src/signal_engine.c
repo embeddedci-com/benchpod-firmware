@@ -1317,7 +1317,7 @@ static int la_io_set_5v(void) {
     int rc = la_vccio_set_mv(LA_VCCIO_3V3);   /* also waits for the clamps */
     if (rc != 0) return rc;
     (void)vref_out_set_source(VREF_SRC_5V);
-    la_settle_clamps();                        /* the sense filter (6.7 ms) and the pull-ups */
+    la_settle_clamps();                        /* the sense filter (6.7 ms, calculated) and the pull-ups */
     int mv = vref_out_measure_mv();
     if (mv < VREF_5V_MIN_MV) {
         printf("[la] 5 V did not come up on pin 21 (%d mV); back to %d mV\n", mv, prev);
