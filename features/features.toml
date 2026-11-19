@@ -800,5 +800,6 @@ note = "Every channel pulls up or down with 10k, 2.2k or both; la pull takes str
 [features.client_api]
 rev = 8
 firmware = "next"
+docs = "API.md#client-compatibility"
 dated = "code"
 note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except status, diag, ping and lease_release. Commands may also carry \"client\":\"<name> <version>\" for that message."
