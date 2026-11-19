@@ -15,7 +15,8 @@
 #include "dac_limits.h"
 #include "cloud_client.h"
 #include "sys_health.h"
-#include "command_handler_internal.h"   /* la_pull_mask_now */
+#include "command_handler_internal.h"
+#include "la_pull.h"                    /* la_pull_mask_now */
 #include "pico/time.h"
 
 #include <math.h>

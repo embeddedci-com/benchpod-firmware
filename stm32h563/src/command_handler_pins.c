@@ -10,7 +10,6 @@
 #include "command_handler_internal.h"
 #include "la_pins.h"
 #include "signal_engine.h"
-#include "i2c_bus.h"
 #include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
@@ -20,7 +19,6 @@
 #include "target_power.h"
 #include "board_caps.h"
 #include "vref_out.h"
-#include "pull_exp.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -32,23 +30,7 @@
 
 /* ---- glue ---------------------------------------------------------------- */
 
-uint16_t la_pull_mask_now(void) {
-    uint16_t mask = 0;
-    for (uint8_t la = 1; la <= LA_PINS_COUNT; la++)
-        if (la_pull_ohms(la) && pca9555_la_pullup_enabled(la)) mask |= (uint16_t)(1u << (la - 1u));
-    return mask;
-}
-
-/* The pulls on the wire now, for the listings' "on" and warnings.  la_pull_mask_now on every board
-   but digital v3r4, where a pull is off while pin 21 is down or pull-ups are suspended.  Claims and
-   conflict checks keep la_pull_mask_now: the pod puts those pulls back by itself. */
-uint16_t la_pull_mask_live(void) {
-    if (!board_caps()->pull_expanders) return la_pull_mask_now();
-    uint16_t mask = 0;
-    for (uint8_t la = 1; la <= LA_PINS_COUNT; la++)
-        if (la_pull_live(la)) mask |= (uint16_t)(1u << (la - 1u));
-    return mask;
-}
+/* The pull masks (la_pull_mask_now, la_pull_mask_live) are in la_pull.c. */
 
 void la_pins_drive_mask(uint16_t mask) {
     for (unsigned la = 1; la <= LA_PINS_COUNT; la++)
@@ -379,22 +361,22 @@ void handle_la(int conn_id, const char *json) {
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) {
         unsigned mask = 0, asked = 0;
         for (unsigned la = 1; la <= LA_PINS_COUNT; la++) {   /* 9..14: v3r4 only (false elsewhere) */
-            if (la_pull_live((uint8_t)la)) mask |= (1u << (la - 1));
-            if (pca9555_la_pullup_enabled((uint8_t)la)) asked |= (1u << (la - 1));
+            if (la_pull_live(la)) mask |= (1u << (la - 1));
+            if (la_pull_asked(la) != LA_PULL_NONE) asked |= (1u << (la - 1));
         }
         /* pullups_available says whether a pull CAN be engaged right now (a bank voltage is
            set; on v2 boards it must be 3.3 V); the mask is always the truth about what is engaged.
            Digital v3r4, while the pod holds pulls off: why, and the mask the host asked for (put
            back by the pod).  Never on other boards, where the two masks are the same. */
-        const char *held = board_caps()->pull_expanders ? pull_exp_held() : NULL;
+        const char *held = la_pull_held();
         char payload[112];
         if (held)
             snprintf(payload, sizeof(payload),
                      "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
-                     mask, la_pullups_available() ? 1 : 0, held, asked);
+                     mask, la_pull_available() ? 1 : 0, held, asked);
         else
             snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
-                     mask, la_pullups_available() ? 1 : 0);
+                     mask, la_pull_available() ? 1 : 0);
         send_ok_str(conn_id, payload);
         return;
     }
@@ -441,48 +423,43 @@ void handle_la(int conn_id, const char *json) {
             return;
         }
         /* Digital v3r4: direction and strength per channel ("strength":"10k"|"2.2k"|"both";
-           without it the pod picks from the pin's function).  Older boards ignore "strength",
-           like older firmware does. */
-        if (board_caps()->pull_expanders) {
+           without it the pod picks from the pin's function).  A fixed resistor (the older boards)
+           ignores "strength", like older firmware does. */
+        la_pull_caps_t caps = la_pull_caps(la);
+        pull_str_t str = PULL_STR_NONE;
+        if (caps.strengths) {
             char str_s[8] = {0};
-            pull_str_t str = PULL_STR_NONE;
-            if (json_get_value(json, "strength", str_s, sizeof(str_s)) && !pull_str_parse(str_s, &str)) {
+            if (json_get_value(json, "strength", str_s, sizeof(str_s)) &&
+                (!pull_str_parse(str_s, &str) || !(caps.strengths & LA_PULL_STR_BIT(str)))) {
                 send_error(conn_id, "strength must be 10k, 2.2k or both");
                 return;
             }
-            int rc = la_pull_engage((uint8_t)la, want, (int)str);
-            if (rc == LA_PULLUP_ERR_RAIL) {
-                char m[96];
-                snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
-                         vref_out_last_mv());
-                bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
-                return;
-            }
-            if (rc == LA_PULLUP_ERR_VOLTAGE) {
-                bp_err_la_voltage_not_set(conn_id,
-                    BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
-                return;
-            }
-            if (rc != 0) {
-                send_error(conn_id, "pull expander write failed");
-                return;
-            }
-        } else
-        /* Today's boards: one switch per channel, which engages its one direction. */
-        if (la_pull_ohms(la)) {
-            int rc = pca9555_set_la_pullup((uint8_t)la, want != LA_PULL_NONE);
-            if (rc == LA_PULLUP_ERR_VOLTAGE) {
-                /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and
-                   the bank is not at 3.3 V, so engaging one would drive the DUT above its own
-                   rail. Say which, so the host can switch the bank instead of retrying. (v3
-                   pulls go to the bank rail and work at 1.8 V.) */
-                send_error(conn_id, "this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
-                return;
-            }
-            if (rc != 0) {
-                send_error(conn_id, "pull expander write failed");
-                return;
-            }
+        }
+        /* "off" on a channel without a resistor: nothing to switch. */
+        int rc = caps.dirs ? la_pull_set(la, want, str) : 0;
+        if (rc == LA_PULL_ERR_RAIL) {
+            char m[96];
+            snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
+                     vref_out_last_mv());
+            bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+            return;
+        }
+        if (rc == LA_PULL_ERR_VOLTAGE) {
+            bp_err_la_voltage_not_set(conn_id,
+                BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+            return;
+        }
+        if (rc == LA_PULL_ERR_BANK) {
+            /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and the bank
+               is not at 3.3 V, so engaging one would drive the DUT above its own rail.  Say which,
+               so the host can switch the bank instead of retrying.  (v3 pulls go to the bank rail
+               and work at 1.8 V.) */
+            send_error(conn_id, "this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
+            return;
+        }
+        if (rc != 0) {
+            send_error(conn_id, "pull expander write failed");
+            return;
         }
     }
 
@@ -492,8 +469,9 @@ void handle_la(int conn_id, const char *json) {
        back. Elsewhere live and asked are the same. The older fields stay for older hosts:
        "pullup" 1 when engaged, "pull" the channel's default direction ("none" without a
        resistor), "ohms" its value. */
-    bool asked_on = pca9555_la_pullup_enabled((uint8_t)la);
-    bool on = la_pull_live((uint8_t)la);
+    la_pull_caps_t caps = la_pull_caps(la);
+    bool asked_on = la_pull_asked(la) != LA_PULL_NONE;
+    bool on = la_pull_live(la);
     la_pull_dir_t dflt = la_pull_dir(la);
     bp_emit_t e;
     char payload[200];
@@ -504,14 +482,18 @@ void handle_la(int conn_id, const char *json) {
             la_pull_dir_name(on ? dflt : LA_PULL_NONE));
     la_pull_emit_dirs(&e, la);
     /* v3r4: the strength engaged ("none" when off) and every strength the channel has. */
-    if (board_caps()->pull_expanders)
-        bp_emit(&e, ",\"strength\":\"%s\",\"strengths\":[\"10k\",\"2.2k\",\"both\"]",
-                pull_str_name(pull_exp_str(la)));
-    if (board_caps()->pull_expanders && asked_on && !on) {
-        const char *held = pull_exp_held();
+    if (caps.strengths) {
+        bp_emit(&e, ",\"strength\":\"%s\",\"strengths\":[", pull_str_name(la_pull_asked_str(la)));
+        const char *sep = "";
+        for (int st = PULL_STR_10K; st <= PULL_STR_BOTH; st++)
+            if (caps.strengths & LA_PULL_STR_BIT(st)) { bp_emit(&e, "%s\"%s\"", sep, pull_str_name((pull_str_t)st)); sep = ","; }
+        bp_emit_raw(&e, "]");
+    }
+    if (asked_on && !on) {   /* digital v3r4 only: elsewhere asked and live are the same */
+        const char *held = la_pull_held();
         bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
     }
-    bp_emit(&e, ",\"pullups_available\":%d}", la_pullups_available() ? 1 : 0);
+    bp_emit(&e, ",\"pullups_available\":%d}", la_pull_available() ? 1 : 0);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
     send_ok_str(conn_id, payload);
 }

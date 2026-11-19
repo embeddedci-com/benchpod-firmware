@@ -27,7 +27,7 @@ SENSORDEF_SRCS := test_sensor_def.c $(SENSORDEF_CORE) ref/sensor_bmp280.c ref/se
                   ref/sensor_mpu6050.c ref/gps_nmea.c
 # The sensor manager and its commands end to end against a fake emulation gateware.
 SENSORMGR_SRCS := test_sensor_mgr.c fake_fpga_emu.c $(SENSORDEF_CORE) ../src/sensor_mgr.c ../src/sensor_cmd.c \
-                  ../src/la_pins.c ../src/board_caps.c ../src/bp_json.c
+                  ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/bp_json.c
 SENSORDEF_FUZZ_SRCS := test_sensor_def_fuzz.c $(SENSORDEF_CORE)
 SANITIZE := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
 DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
@@ -63,7 +63,7 @@ ESPPUMP_SRCS  := test_esp_pump.c ../src/esp_hosted_pump.c
 SPIFLASH_SRCS := test_spi_flash.c ../src/spi_flash.c
 SPISTREAM_SRCS := test_spi_stream.c ../src/spi_stream.c
 I2CTXN_SRCS   := test_i2c_txn.c ../src/i2c_txn.c
-LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/board_caps.c ../src/bp_json.c
+LAPINS_SRCS   := test_la_pins.c ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/bp_json.c
 ETHDIAG_SRCS  := test_eth_diag.c ../src/eth_diag.c
 # Wi-Fi bridge client, tested against the bridge firmware's own codec and pairing logic.
 BRIDGE_CORE := ../../wifi-bridge/components/bridge_core
@@ -130,16 +130,17 @@ CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_js
 CH_INC := -Ishim_ch
 CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c ../src/lease_local.c
 CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
-CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c
+CHUART_SRCS := test_ch_uart.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c \
+              ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c
 CHDAC_SRCS := test_ch_dac.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
               ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c \
               ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c
 CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
-                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/board_caps.c ../src/psram_alloc.c ../src/la_rate.c
+                  ../src/adc_pool.c ../src/psram_regions.c ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/psram_alloc.c ../src/la_rate.c
 # The LA pull commands and the pull driver on every board revision (shim_pull: pull_exp.c's HAL).
-CHPINS_SRCS := test_ch_pins.c ../src/command_handler_pins.c ../src/la_pull.c ../src/la_pins.c ../src/board_caps.c \
+CHPINS_SRCS := test_ch_pins.c ../src/command_handler_pins.c ../src/la_pull.c ../src/pull_tca9554.c ../src/la_pins.c ../src/board_caps.c \
                ../src/bp_json.c ../src/pull_exp.c ../src/pull_exp_logic.c
 # status: the real handler with its inputs faked at their longest, the caps[] list from cloud_caps.c.
 CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/cloud_caps.c ../src/bp_json.c

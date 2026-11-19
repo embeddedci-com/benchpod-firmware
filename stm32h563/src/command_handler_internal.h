@@ -239,8 +239,7 @@ void   uart_proxy_on_gateware_reconfigured(void);
 void   uart_proxy_conn_closed(int conn_id);
 
 /* LA pin ownership glue + the LA pin and I2C-sensor handlers (command_handler_pins.c). */
-uint16_t la_pull_mask_now(void);              /* engaged LA pulls, bit la-1 */
-uint16_t la_pull_mask_live(void);             /* the pulls on the wire now (differs on digital v3r4 only) */
+/* The pull masks, la_pull_mask_now / la_pull_mask_live: la_pull.h (through la_pins.h). */
 void     la_pins_drive_mask(uint16_t mask);   /* GPIO_SET each pin in mask to its table state */
 /* May `fn` claim las[0..n)?  Pins owned by a function in free_fns count as free.  false = the
    pin/pull conflict error was sent.  Commit with la_pins_claim once the FPGA side succeeded. */

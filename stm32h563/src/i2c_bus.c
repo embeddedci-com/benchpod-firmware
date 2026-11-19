@@ -12,12 +12,7 @@
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
 #include "pico_compat.h"
-#include "signal_engine.h"   /* la_vccio_get_mv: a pull needs a selected bank voltage */
-#include "board_rev.h"       /* board_rev_is_v3: v2 pull-ups go to +3V3 */
-#include "board_caps.h"
-#include "la_pins.h"         /* la_pull_strength_for, la_pins_note_pull */
-#include "pull_exp.h"        /* digital v3r4: the TCA6416A pull expanders */
-#include "vref_out.h"        /* vref_out_rail_up: a held pull with pin 21 up is a failed write */
+#include "signal_engine.h"   /* dac_quad_c_level, dac_quad_route */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
 #include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
 #include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
@@ -343,7 +338,8 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
 
 bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); }
 
-/* The LA pull resistors (TCA9554 at 0x20 and the digital v3r4 expanders) are in la_pull.c. */
+/* The LA pull resistors (TCA9554 at 0x20 and the digital v3r4 expanders): la_pull.c and its
+   backends, pull_tca9554.c and pull_exp.c. */
 
 /* ---- Analog path switching: U55 @ 0x24 (DAC mux) + U58 @ 0x26 (cal) -------
    Register map (TCA9554): 0x01 output, 0x03 config (1=input, 0=output).

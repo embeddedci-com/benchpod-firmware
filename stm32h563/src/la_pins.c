@@ -104,116 +104,21 @@ uint16_t la_pins_owned_mask(void) {
     return (uint16_t)(~la_pins_mask_fn(LA_FN_NONE) & 0x3FFFu);
 }
 
-/* ---- pull resistors: one table per board revision ----
-   dirs: the directions the resistor can pull (LA_PULL_BIT); dflt: the one "pullup":"on" engages.
-   A board revision with other resistors gets a table of its own, picked in la_pull_hw(). */
-typedef struct { uint8_t dirs; uint8_t dflt; const char *ohms; } la_pull_hw_t;
+/* ---- pull strength by function (the pull tables are in la_pull.c) ---- */
 
-static const la_pull_hw_t s_pulls_v3[LA_PINS_COUNT + 1] = {
-    [1] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
-    [2] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "4.7k" },
-    [3] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
-    [4] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "2.2k" },
-    [5] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
-    [6] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   "10k"  },
-    [7] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
-    [8] = { LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_DOWN, "10k"  },
-    /* LA9..LA14: no resistor */
-};
-
-/* Digital v3r4: two expanders, every channel up or down with 10k, 2.2k or both (pull_exp.h).
-   "pullup":"on" engages up, and the ohms shown while off are the 10k default. */
-#define V3R4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, "10k" }
-static const la_pull_hw_t s_pulls_v3r4[LA_PINS_COUNT + 1] = {
-    [1] = V3R4_PULL, [2] = V3R4_PULL, [3] = V3R4_PULL, [4] = V3R4_PULL, [5] = V3R4_PULL,
-    [6] = V3R4_PULL, [7] = V3R4_PULL, [8] = V3R4_PULL, [9] = V3R4_PULL, [10] = V3R4_PULL,
-    [11] = V3R4_PULL, [12] = V3R4_PULL, [13] = V3R4_PULL, [14] = V3R4_PULL,
-};
-
-/* What the v3r4 pull driver engaged on each channel (la_pins_note_pull). */
-static uint8_t     s_pull_now[LA_PINS_COUNT + 1];
-static const char *s_pull_now_ohms[LA_PINS_COUNT + 1];
-
-static const la_pull_hw_t *la_pull_hw(unsigned la) {
-    if (la < 1u || la > LA_PINS_COUNT) return NULL;
-    const la_pull_hw_t *p = board_caps()->pull_expanders ? &s_pulls_v3r4[la] : &s_pulls_v3[la];
-    return p->dirs ? p : NULL;
-}
-
-void la_pins_note_pull(unsigned la, la_pull_dir_t dir, const char *ohms) {
-    if (la < 1u || la > LA_PINS_COUNT) return;
-    s_pull_now[la] = (uint8_t)dir;
-    s_pull_now_ohms[la] = dir == LA_PULL_NONE ? NULL : ohms;
-}
-
-la_pull_dir_t la_pull_dir(unsigned la) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    if (!p) return LA_PULL_NONE;
-    if (board_caps()->pull_expanders && s_pull_now[la] != LA_PULL_NONE) return (la_pull_dir_t)s_pull_now[la];
-    return (la_pull_dir_t)p->dflt;
-}
-
-const char *la_pull_ohms(unsigned la) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    if (!p) return NULL;
-    if (board_caps()->pull_expanders && s_pull_now_ohms[la]) return s_pull_now_ohms[la];
-    return p->ohms;
-}
-
-int la_pull_strength_for(unsigned la, int io_mv) {
-    if (la < 1u || la > LA_PINS_COUNT) return LA_PULL_STR_10K;
+pull_str_t la_pull_strength_for(unsigned la, int io_mv) {
+    if (la < 1u || la > LA_PINS_COUNT) return PULL_STR_10K;
     la_fn_t fn = (la_fn_t)s_pin[la].fn;
     la_gpio_mode_t mode = la_pins_gpio(la);
     switch (fn) {
     case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL:
     case LA_FN_UART_HD:
-        return LA_PULL_STR_2K2;
+        return PULL_STR_2K2;
     default: break;
     }
-    if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return LA_PULL_STR_2K2;
-    if (io_mv == 5000 && la_fn_drives(fn, mode)) return LA_PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
-    return LA_PULL_STR_10K;
-}
-
-bool la_pull_supports(unsigned la, la_pull_dir_t d) {
-    const la_pull_hw_t *p = la_pull_hw(la);
-    return p && d != LA_PULL_NONE && (p->dirs & LA_PULL_BIT(d));
-}
-
-const char *la_pull_dir_name(la_pull_dir_t d) {
-    return d == LA_PULL_UP ? "up" : d == LA_PULL_DOWN ? "down" : "off";
-}
-
-bool la_pull_dir_parse(const char *s, la_pull_dir_t *d) {
-    if (!s) return false;
-    if (!strcmp(s, "up"))   { *d = LA_PULL_UP;   return true; }
-    if (!strcmp(s, "down")) { *d = LA_PULL_DOWN; return true; }
-    if (!strcmp(s, "off") || !strcmp(s, "none")) { *d = LA_PULL_NONE; return true; }
-    return false;
-}
-
-void la_pull_emit_dirs(bp_emit_t *e, unsigned la) {
-    bool up = la_pull_supports(la, LA_PULL_UP), down = la_pull_supports(la, LA_PULL_DOWN);
-    bp_emit(e, "[%s%s%s]", up ? "\"up\"" : "", up && down ? "," : "", down ? "\"down\"" : "");
-}
-
-la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want) {
-    la_pull_dir_t d = LA_PULL_NONE;
-    if (pull) {
-        if (!la_pull_dir_parse(pull, &d)) return LA_PULL_REQ_BAD_VALUE;
-    } else if (pullup) {
-        /* the alias: "on" / "1" engage the default direction */
-        bool on = (pullup[0] == 'o' || pullup[0] == 'O') ? (pullup[1] == 'n' || pullup[1] == 'N')
-                                                         : (atoi(pullup) != 0);
-        d = on ? la_pull_dir(la) : LA_PULL_NONE;
-        if (on && d == LA_PULL_NONE) { *want = LA_PULL_UP; return LA_PULL_REQ_NO_PULL; }
-    }
-    *want = d;   /* also on a refusal: the reply names what was asked for */
-    if (d != LA_PULL_NONE) {
-        if (!la_pull_hw(la))            return LA_PULL_REQ_NO_PULL;
-        if (!la_pull_supports(la, d))   return LA_PULL_REQ_DIRECTION;
-    }
-    return LA_PULL_REQ_OK;
+    if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return PULL_STR_2K2;
+    if (io_mv == 5000 && la_fn_drives(fn, mode)) return PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
+    return PULL_STR_10K;
 }
 
 int la_pins_drive(unsigned la) {
@@ -678,7 +583,7 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
         bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s",
                 la_pull_dir_name(la_pull_dir(la)), ohms,
                 (pull_mask & (1u << (la - 1u))) ? "true" : "false");
-        if (!board_caps()->pull_expanders) {
+        if (!la_pull_both_ways()) {
             bp_emit_raw(e, ",\"dirs\":");
             la_pull_emit_dirs(e, la);
         }
@@ -708,7 +613,7 @@ void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool ha
     bp_emit_raw(e, "{\"status\":\"ok\",\"data\":{\"pins\":");
     la_pins_emit_list(e, only, pull_mask);
     /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
-    if (board_caps()->pull_expanders) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
+    if (la_pull_both_ways()) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
     if (have_levels) bp_emit(e, ",\"levels\":%u}}\n", (unsigned)levels);
     else             bp_emit_raw(e, ",\"levels\":null}}\n");
 }

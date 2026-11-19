@@ -9,13 +9,11 @@
  * Runs on the hw worker task, like the rest of command_handler.
  */
 #include "command_handler.h"
-#include "board_caps.h"
-#include "pull_exp.h"
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "signal_engine.h"   /* fpga_uart_* */
-#include "i2c_bus.h"         /* pca9555_* LA pull-ups */
+#include "la_pull.h"         /* the RX pull-up hold */
 #include "la_pins.h"
 #include "bp_errors.h"
 #include "nrst_ctrl.h"       /* the entry sequence's target reset */
@@ -56,25 +54,18 @@ static int             uart_rearm_conn = -1;           /* session to re-arm on t
 static bool            uart_upload_suspended = false;
 /* RX-channel pull-up auto-hold: a DUT's TX pin floats before its firmware brings
    up the UART, and an un-held RX line decodes as a flood of 0x00 during boot. We
-   pull the RX channel high (LA1-6 only: LA7/8 pull down) for the session and restore it on exit. */
-static int             uart_rx_pu_ch   = -1;     /* RX LA channel we forced a pull-up on, or -1 */
-static bool            uart_rx_pu_prev = false;  /* its pull-up state before we forced it */
-/* Digital v3r4: the channel's direction and strength before (it may have pulled down). */
-static la_pull_dir_t   uart_rx_pu_prev_dir = LA_PULL_NONE;
-static int             uart_rx_pu_prev_str = 0;
+   pull the RX channel high for the session and restore it on exit (la_pull_hold). */
+static la_pull_token_t uart_rx_hold;
 
 static void uart_rx_pu_restore(void) {
-    if (uart_rx_pu_ch >= 1) {                     /* restore the RX pull-up we forced on */
-        /* A failed restore leaves the DUT's line biased by a resistor nobody asked for, which
-           then shows up as an unexplained idle level on the next session — say so. */
-        int rc = board_caps()->pull_expanders
-                 ? la_pull_engage((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev_dir, uart_rx_pu_prev_str)
-                 : pca9555_set_la_pullup((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev);
-        if (rc != 0)
-            LOG_W("[uart] could not restore LA%d's pull-up to %s (rc %d)\n",
-                   uart_rx_pu_ch, uart_rx_pu_prev ? "on" : "off", rc);
-        uart_rx_pu_ch = -1;
-    }
+    if (!la_pull_token_held(&uart_rx_hold)) return;
+    /* A failed restore leaves the DUT's line biased by a resistor nobody asked for, which
+       then shows up as an unexplained idle level on the next session — say so. */
+    la_pull_token_t t = uart_rx_hold;
+    int rc = la_pull_release(&uart_rx_hold);
+    if (rc != 0)
+        LOG_W("[uart] could not restore LA%d's pull-up to %s (rc %d)\n",
+               (int)t.la, t.dir != LA_PULL_NONE ? "on" : "off", rc);
 }
 
 static void uart_proxy_end(int conn_id, bool restore_json) {
@@ -256,26 +247,13 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
 
     /* The pull-up first: a one-wire line floats from the moment TX releases it, and the entry
        sequence releases it before the ack.  See the RX pull-up note below. */
-    uart_rx_pu_ch = -1;
-    if (la_pull_supports(rx, LA_PULL_UP) && la_pullups_available()) {
-        uart_rx_pu_ch   = (int)rx;
-        uart_rx_pu_prev = pca9555_la_pullup_enabled((uint8_t)rx);
-        if (board_caps()->pull_expanders) {
-            uart_rx_pu_prev_dir = (la_pull_dir_t)pull_exp_dir(rx);
-            uart_rx_pu_prev_str = (int)pull_exp_str(rx);
-        }
-        /* The pin is claimed only after the arm (below), so la_pull_engage cannot see it is a
-           one-wire line yet: ask for the 2.2k a half-duplex line gets (la_pull_strength_for)
-           instead of letting the unclaimed pin fall back to 10k. */
-        int rc = board_caps()->pull_expanders
-                 ? la_pull_engage((uint8_t)rx, LA_PULL_UP, one_wire ? LA_PULL_STR_2K2 : 0)
-                 : pca9555_set_la_pullup((uint8_t)rx, true);
-        if (rc != 0) {
-            LOG_W("[uart] could not engage LA%u's pull-up to hold RX high\n", rx);
-            uart_rx_pu_ch = -1;
-        }
-    }
-    if (one_wire && uart_rx_pu_ch < 0)
+    /* The pin is claimed only after the arm (below), so the pull layer cannot see it is a
+       one-wire line yet: ask for the 2.2k a half-duplex line gets (la_pull_strength_for)
+       instead of letting the unclaimed pin fall back to 10k. */
+    int prc = la_pull_hold(rx, LA_PULL_UP, one_wire ? PULL_STR_2K2 : PULL_STR_NONE, &uart_rx_hold);
+    if (prc != 0 && prc != LA_PULL_ERR_NOT_HERE)
+        LOG_W("[uart] could not engage LA%u's pull-up to hold RX high\n", rx);
+    if (one_wire && !la_pull_token_held(&uart_rx_hold))
         LOG_W("[uart] half duplex on LA%u without the pod's pull-up: the board must pull the line up\n", rx);
 
     /* Entry, part 1: TX held low (a static low under the UART's own driver) across the reset. */
@@ -326,7 +304,7 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
        there held RX at the opposite of the idle level and guaranteed the 0x00 flood it was
        meant to prevent. LA9-LA14 have no resistor at all: the proxy still runs, it just cannot
        hold RX high. On v3 the pull-ups go to the bank rail, so this works at 1.8 V too (on v2
-       they went to +3V3 and la_pullups_available() keeps them off below 3.3 V). */
+       they went to +3V3 and la_pull_available() keeps them off below 3.3 V). */
 
     /* Entry, part 2: the line idles high (released), then the first bytes, timed on the pod. */
     if (entry.on) {

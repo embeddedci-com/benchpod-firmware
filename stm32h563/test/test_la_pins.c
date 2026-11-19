@@ -7,6 +7,7 @@
  * docs/API.md with it.
  */
 #include "la_pins.h"
+#include "fake_pull.h"
 #include "board_caps.h"
 #include "board_rev.h"
 #include "bp_limits.h"   /* BP_CLOUD_REPLY_MAX: the la_pins reply must fit the cloud channel */
@@ -22,6 +23,9 @@
 
 #include <stdio.h>
 #include <string.h>
+
+/* A board revision: its capabilities and its pull backend (fake_pull.c stands in for the chips). */
+static void board(int rev) { board_caps_init(rev); la_pull_init(); fake_pull_reset(); }
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -380,10 +384,10 @@ static void test_voltage_refusal(void) {
     CHECK(la_pins_check_voltage_change(3300, 3300, err, sizeof(err)));   /* re-set is allowed */
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* invalid: caller's error */
     /* Digital v3r4 (5 V I/O): 5000 is a voltage there, so it is a change like any other. */
-    board_caps_init(BOARD_REV_V3R4);
+    board(BOARD_REV_V3R4);
     CHECK(!la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));
     CHECK(la_pins_check_voltage_change(5000, 5000, err, sizeof(err)));   /* re-set is allowed */
-    board_caps_init(BOARD_REV_V3);
+    board(BOARD_REV_V3);
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* older boards: as before */
 
     /* all 14 owned: the message still fits the module's buffer */
@@ -402,25 +406,25 @@ static void test_voltage_refusal(void) {
    engaged direction and ohms are what the driver noted.  Older boards keep their table. */
 static void test_pull_v3r4(void) {
     la_pins_reset();
-    board_caps_init(BOARD_REV_V3);
+    board(BOARD_REV_V3);
     CHECK(la_pull_supports(1, LA_PULL_UP) && !la_pull_supports(1, LA_PULL_DOWN));
     CHECK(la_pull_ohms(9) == NULL);
     CHECK_STR(la_pull_ohms(1), "4.7k");
-    la_pins_note_pull(1, LA_PULL_DOWN, "2.2k");   /* ignored on older boards */
+    la_pull_set(1, LA_PULL_UP, PULL_STR_2K2);   /* a fixed resistor: the strength is ignored */
     CHECK(la_pull_dir(1) == LA_PULL_UP);
     CHECK_STR(la_pull_ohms(1), "4.7k");
-    la_pins_note_pull(1, LA_PULL_NONE, NULL);
+    la_pull_set(1, LA_PULL_NONE, PULL_STR_NONE);
 
-    board_caps_init(BOARD_REV_V3R4);
+    board(BOARD_REV_V3R4);
     for (unsigned la = 1; la <= 14; la++) {
         CHECK(la_pull_supports(la, LA_PULL_UP) && la_pull_supports(la, LA_PULL_DOWN));
         CHECK(la_pull_dir(la) == LA_PULL_UP);
         CHECK_STR(la_pull_ohms(la), "10k");
     }
-    la_pins_note_pull(7, LA_PULL_DOWN, "1.8k");
+    la_pull_set(7, LA_PULL_DOWN, PULL_STR_BOTH);
     CHECK(la_pull_dir(7) == LA_PULL_DOWN);
     CHECK_STR(la_pull_ohms(7), "1.8k");
-    la_pins_note_pull(7, LA_PULL_NONE, NULL);
+    la_pull_set(7, LA_PULL_NONE, PULL_STR_NONE);
     CHECK(la_pull_dir(7) == LA_PULL_UP);
     CHECK_STR(la_pull_ohms(7), "10k");
     /* up/down/off requests: every direction is fine on every channel */
@@ -429,7 +433,7 @@ static void test_pull_v3r4(void) {
     CHECK(la_pull_request(3, NULL, "on", &want) == LA_PULL_REQ_OK && want == LA_PULL_UP);
 
     /* strength from the function */
-    CHECK(la_pull_strength_for(1, 3300) == LA_PULL_STR_10K);                 /* nothing on it */
+    CHECK(la_pull_strength_for(1, 3300) == PULL_STR_10K);                 /* nothing on it */
     la_pins_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 1 }, 1);
     la_pins_claim(LA_FN_I2CM_SCL, LA_GPIO_NONE, 0, (uint8_t[]){ 2 }, 1);
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
@@ -437,17 +441,17 @@ static void test_pull_v3r4(void) {
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 5 }, 1);
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, (uint8_t[]){ 6 }, 1);
     la_pins_claim(LA_FN_UART_HD, LA_GPIO_NONE, 0, (uint8_t[]){ 8 }, 1);
-    CHECK(la_pull_strength_for(1, 3300) == LA_PULL_STR_2K2);    /* I2C */
-    CHECK(la_pull_strength_for(2, 1800) == LA_PULL_STR_2K2);    /* I2C master */
-    CHECK(la_pull_strength_for(3, 5000) == LA_PULL_STR_10K);    /* UART RX hold, also at 5 V */
-    CHECK(la_pull_strength_for(4, 3300) == LA_PULL_STR_10K);    /* an output at 3.3 V */
-    CHECK(la_pull_strength_for(4, 5000) == LA_PULL_STR_2K2);    /* an output at 5 V: the lift */
-    CHECK(la_pull_strength_for(5, 3300) == LA_PULL_STR_2K2);    /* open drain */
-    CHECK(la_pull_strength_for(6, 5000) == LA_PULL_STR_2K2);    /* gpio output at 5 V */
-    CHECK(la_pull_strength_for(6, 3300) == LA_PULL_STR_10K);
-    CHECK(la_pull_strength_for(8, 3300) == LA_PULL_STR_2K2);    /* one-wire UART */
-    CHECK(la_pull_strength_for(0, 3300) == LA_PULL_STR_10K && la_pull_strength_for(15, 3300) == LA_PULL_STR_10K);
-    board_caps_init(BOARD_REV_V3);
+    CHECK(la_pull_strength_for(1, 3300) == PULL_STR_2K2);    /* I2C */
+    CHECK(la_pull_strength_for(2, 1800) == PULL_STR_2K2);    /* I2C master */
+    CHECK(la_pull_strength_for(3, 5000) == PULL_STR_10K);    /* UART RX hold, also at 5 V */
+    CHECK(la_pull_strength_for(4, 3300) == PULL_STR_10K);    /* an output at 3.3 V */
+    CHECK(la_pull_strength_for(4, 5000) == PULL_STR_2K2);    /* an output at 5 V: the lift */
+    CHECK(la_pull_strength_for(5, 3300) == PULL_STR_2K2);    /* open drain */
+    CHECK(la_pull_strength_for(6, 5000) == PULL_STR_2K2);    /* gpio output at 5 V */
+    CHECK(la_pull_strength_for(6, 3300) == PULL_STR_10K);
+    CHECK(la_pull_strength_for(8, 3300) == PULL_STR_2K2);    /* one-wire UART */
+    CHECK(la_pull_strength_for(0, 3300) == PULL_STR_10K && la_pull_strength_for(15, 3300) == PULL_STR_10K);
+    board(BOARD_REV_V3);
     la_pins_reset();
 }
 
@@ -495,7 +499,7 @@ static void set_worst(worst_t w) {
         if (w == WORST_GPIO) la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, &pin, 1);
         else { la_pins_claim(LA_FN_SENSOR_MISO, LA_GPIO_NONE, 0, &pin, 1); la_pins_set_owner(la, 0x01); }
         la_pins_set_dir(la, LA_DIR_DUT_OUTPUT);
-        if (board_caps()->pull_expanders) la_pins_note_pull(la, LA_PULL_DOWN, "1.8k");
+        if (la_pull_both_ways()) la_pull_set(la, LA_PULL_DOWN, PULL_STR_BOTH);
     }
     la_pins_set_target_powered(false);
 }
@@ -504,7 +508,7 @@ static void clear_worst(void) {
     for (unsigned la = 1; la <= 14; la++) {
         la_pins_set_dir(la, LA_DIR_UNKNOWN);
         la_pins_set_owner(la, 0);
-        la_pins_note_pull(la, LA_PULL_NONE, NULL);
+        la_pull_set(la, LA_PULL_NONE, PULL_STR_NONE);
     }
     la_pins_set_owner_namer(NULL);
     la_pins_set_target_powered(true);
@@ -553,7 +557,7 @@ static void budget_la_pins(void) {
     static char buf[4096];
     char what[64];
     for (size_t i = 0; i < sizeof(s_known) / sizeof(s_known[0]); i++) {
-        board_caps_init(s_known[i].rev);
+        board(s_known[i].rev);
         set_worst(s_known[i].w);
         size_t n = emit_la_pins(buf, sizeof(buf));
         snprintf(what, sizeof(what), "la_pins, %s", s_known[i].what);
@@ -575,7 +579,7 @@ static void budget_la_pins(void) {
         }
         clear_worst();
     }
-    board_caps_init(BOARD_REV_V3);
+    board(BOARD_REV_V3);
 }
 
 /* {"cmd":"la_pins"} with and without the pin subset. */

@@ -12,12 +12,11 @@
 #include <string.h>
 
 #include "command_handler_internal.h"
-#include "pull_exp.h"
 #include "board_caps.h"
 #include "board_rev.h"
 #include "at_driver.h"
 #include "signal_engine.h"
-#include "i2c_bus.h"
+#include "fake_pull.h"
 #include "pico/time.h"
 #include "bp_errors.h"
 
@@ -58,7 +57,8 @@ static void seq(const char *fmt, unsigned v) {
     n = strlen(g_seq);
     snprintf(g_seq + n, sizeof(g_seq) - n, fmt, v);
 }
-static bool g_pullup[15];
+/* The pull layer is the real one (la_pull.c) over RAM backends (fake_pull.c). */
+#define g_pullup_on(la) (fake_pull_dir[la] == LA_PULL_UP)
 static bool g_pu_at_cfg;
 static unsigned g_de;
 static bool g_de_inv;
@@ -66,7 +66,7 @@ int fpga_uart_config_de(unsigned rx, unsigned tx, unsigned de, bool de_inv, uint
                         bool en) {
     (void)tx; (void)baud; g_enabled = en; g_frame = frame; g_configs++;
     g_de = de; g_de_inv = de_inv;
-    g_pu_at_cfg = g_pullup[rx];
+    g_pu_at_cfg = g_pullup_on(rx);
     seq("cfg%u", rx);
     return 0;
 }
@@ -101,19 +101,6 @@ size_t fpga_uart_read(uint8_t *buf, size_t len) {
     g_nfifo -= n;
     return n;
 }
-int  pca9555_set_la_pullup(uint8_t la, bool en) { g_pullup[la] = en; return 0; }
-bool pca9555_la_pullup_enabled(uint8_t la) { return g_pullup[la]; }
-bool la_pullups_available(void) { return true; }
-/* Digital v3r4 pull expanders: used only after board_caps_init(BOARD_REV_V3R4) (test_v3r4_pulls);
-   the other tests model a board without them (board_caps all false). */
-static la_pull_dir_t g_x_dir[15];
-static int           g_x_str[15];
-int  la_pull_engage(uint8_t la, la_pull_dir_t d, int s) {
-    if (!board_caps()->pull_expanders) return -1;
-    g_x_dir[la] = d; g_x_str[la] = s; g_pullup[la] = d == LA_PULL_UP; return 0;
-}
-pull_exp_dir_t pull_exp_dir(unsigned la) { (void)la; return PULL_EXP_OFF; }
-pull_str_t pull_exp_str(unsigned la) { (void)la; return PULL_STR_NONE; }
 /* The pin table and the pull table are the real ones (la_pins.c): la_pull_supports says which
    channels pull up on the board under test. */
 static int de_claimed(void) {
@@ -143,7 +130,7 @@ static void test_start_and_forward(void) {
     start(0, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"baud\":9600}");
     CHECK(strcmp(g_reply, "ok:\"uart ready\"") == 0, "reply %s", g_reply);
     CHECK(g_proto[0] == PROTO_UART && g_enabled && g_nodelay == 1, "not in UART mode");
-    CHECK(g_pullup[3], "RX (LA3, pulls up) not held high");
+    CHECK(g_pullup_on(3), "RX (LA3, pulls up) not held high");
     client(0, "hello\n");
     CHECK(g_ndut_in == 6 && memcmp(g_dut_in, "hello\n", 6) == 0, "client bytes not forwarded");
     dut("world");
@@ -171,7 +158,7 @@ static void test_escape(void) {
     advance_ms(2);
     uart_proxy_poll();
     CHECK(g_proto[0] == PROTO_UNKNOWN && !g_enabled && g_nodelay == 0, "escape did not return to JSON");
-    CHECK(!g_pullup[3], "RX pull-up not restored");
+    CHECK(!g_pullup_on(3), "RX pull-up not restored");
     CHECK(g_ndut_in >= 3 && memcmp(g_dut_in + g_ndut_in - 3, "+++", 3) == 0, "+++ is forwarded too");
 }
 
@@ -232,9 +219,9 @@ static void test_teardown_and_rearm(void) {
     g_status_rc = 0;
     /* socket close ends the proxy and restores the pull-up */
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":5,\"tx\":6}");
-    CHECK(g_pullup[5], "RX LA5 not held");
+    CHECK(g_pullup_on(5), "RX LA5 not held");
     uart_proxy_conn_closed(3);
-    CHECK(!g_enabled && !g_pullup[5], "close did not end the proxy");
+    CHECK(!g_enabled && !g_pullup_on(5), "close did not end the proxy");
     /* a re-arm queued for a session that ended meanwhile does nothing */
     configs = g_configs;
     uart_proxy_on_gateware_reconfigured();
@@ -293,13 +280,13 @@ static void test_frame(void) {
 
 static void test_half_duplex(void) {
     g_gw = 57;
-    memset(g_pullup, 0, sizeof(g_pullup));
+    fake_pull_reset();
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
     CHECK(g_proto[3] == PROTO_UART && g_frame == UART_FRAME_HALFDUPLEX, "one wire: frame %u reply %s", g_frame, g_reply);
-    CHECK(g_pullup[3] && g_pu_at_cfg, "the line's pull-up is not on before the UART arms");
+    CHECK(g_pullup_on(3) && g_pu_at_cfg, "the line's pull-up is not on before the UART arms");
     CHECK(g_ndut_in == 0 && strstr(g_seq, "rst") == NULL, "no entry asked, but: %s", g_seq);
     uart_proxy_conn_closed(3);
-    CHECK(!g_pullup[3], "pull-up not restored");
+    CHECK(!g_pullup_on(3), "pull-up not restored");
     /* with parity (RL78 protocol B is 8O1 on one wire) */
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true,\"parity\":\"odd\"}");
     CHECK(g_frame == (UART_FRAME_HALFDUPLEX | UART_FRAME_PARITY | UART_FRAME_ODD), "8O1 one wire: frame %u", g_frame);
@@ -331,20 +318,35 @@ static void test_half_duplex(void) {
 static void test_v3r4_pulls(void) {
     g_gw = 58;
     board_caps_init(BOARD_REV_V3R4);
-    memset(g_pullup, 0, sizeof(g_pullup));
-    memset(g_x_str, 0, sizeof(g_x_str));
-    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
+    la_pull_init();
+    fake_pull_reset();
+        start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
     CHECK(g_proto[3] == PROTO_UART, "v3r4 one wire: %s", g_reply);
-    CHECK(g_pu_at_cfg && g_x_dir[3] == LA_PULL_UP && g_x_str[3] == LA_PULL_STR_2K2,
-          "v3r4 one wire: pull %d strength %d, want up 2.2k before the arm", (int)g_x_dir[3], g_x_str[3]);
+    CHECK(g_pu_at_cfg && fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_2K2,
+          "v3r4 one wire: pull %d strength %d, want up 2.2k before the arm", (int)fake_pull_dir[3], fake_pull_str[3]);
     uart_proxy_conn_closed(3);
-    CHECK(g_x_dir[3] == LA_PULL_NONE && !g_pullup[3], "v3r4 one wire: pull not restored (%d)", (int)g_x_dir[3]);
+    CHECK(fake_pull_dir[3] == LA_PULL_NONE && !g_pullup_on(3), "v3r4 one wire: pull not restored (%d)", (int)fake_pull_dir[3]);
 
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
-    CHECK(g_proto[3] == PROTO_UART && g_x_dir[3] == LA_PULL_UP && g_x_str[3] == 0,
-          "v3r4 two-wire RX: pull %d strength %d, want up by function", (int)g_x_dir[3], g_x_str[3]);
+    CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_NONE,
+          "v3r4 two-wire RX: pull %d strength %d, want up by function", (int)fake_pull_dir[3], fake_pull_str[3]);
     uart_proxy_conn_closed(3);
+    /* what the channel did before comes back: a 2.2k pull-down, say */
+    CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_2K2) == 0, "LA3 down");
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
+    CHECK(fake_pull_dir[3] == LA_PULL_UP, "v3r4: RX not held up over a pull-down (%d)", (int)fake_pull_dir[3]);
+    uart_proxy_conn_closed(3);
+    CHECK(fake_pull_dir[3] == LA_PULL_DOWN && fake_pull_str[3] == PULL_STR_2K2,
+          "v3r4: the earlier pull-down not restored (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
+    la_pull_set(3, LA_PULL_NONE, PULL_STR_NONE);
+    /* no pull can be engaged (pin 21 down, say): the proxy runs without the hold */
+    fake_pull_available = false;
+    start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
+    CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_NONE, "v3r4: hold without pulls: %s", g_reply);
+    uart_proxy_conn_closed(3);
+    fake_pull_available = true;
     board_caps_init(BOARD_REV_V3);
+    la_pull_init();
     g_gw = 56;
 }
 
@@ -432,6 +434,8 @@ static void test_de(void) {
 }
 
 int main(void) {
+    board_caps_init(BOARD_REV_V3);   /* LA1-6 pull up, LA7/8 down, LA9-14 none */
+    la_pull_init();
     test_start_and_forward();
     test_escape();
     test_no_escape();

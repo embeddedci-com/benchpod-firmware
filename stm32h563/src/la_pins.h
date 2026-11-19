@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "bp_json.h"
+#include "la_pull.h"   /* la_pull_dir_t and the pull tables, la_pull_dir / la_pull_ohms */
 
 #define LA_PINS_COUNT 14u
 
@@ -72,8 +73,6 @@ typedef enum {
     LA_GPIO_OPEN_DRAIN,   /* level 0 drives low, level 1 releases to high-Z */
 } la_gpio_mode_t;
 
-typedef enum { LA_PULL_NONE = 0, LA_PULL_UP, LA_PULL_DOWN } la_pull_dir_t;
-
 /* Every message this module builds fits in this many bytes (NUL included).  320, not 256: the
    voltage-change refusal listing all 14 pins by function name reaches 286 B (test_la_pins.c). */
 #define LA_PINS_ERR_MAX 320u
@@ -93,49 +92,14 @@ uint16_t       la_pins_mask_fn(la_fn_t fn);    /* pins that currently have this 
 uint16_t       la_pins_owned_mask(void);       /* pins whose function is not none */
 
 /* ---- pull resistors ----
-   One table per board revision says which directions each channel's resistor can pull and its
-   value (la_pins.c, s_pulls_v3).  Today's boards: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up,
-   LA7/LA8 10k down, LA9..LA14 none.  A host asks for a direction ("pull":"up"|"down"|"off"); the
-   ohms are reported, never chosen.  The older "pullup":"on"|"off" engages the channel's default
-   direction (la_pull_dir). */
-#define LA_PULL_BIT(d) ((uint8_t)(1u << (unsigned)(d)))
-/* Digital v3r4 (board_caps()->pull_expanders): every channel pulls up or down, with 10k, 2.2k or
-   both (pull_exp.h); la_pull_dir and la_pull_ohms report what is engaged (when it is) and the
-   defaults otherwise (up, 10k).  The pull driver tells la_pins what it engaged: */
-void          la_pins_note_pull(unsigned la, la_pull_dir_t dir, const char *ohms);
+   What each channel's resistor can do, what is engaged and the requests are in la_pull.h; the pin
+   table only adds which strength a pin's function wants. */
 
 /* The strength the pod picks for a channel from its function (5v-support 12.4): 2.2k for I2C,
    one-wire UART and open-drain gpio, and for pod outputs in 5 V mode (the pull-up lifts them from
    3.3 V); 10k otherwise (UART RX hold, straps, idle levels, DE bias).  io_mv is the I/O voltage
-   (la_io_get_mv).  Values are pull_str_t (pull_exp.h): 1 = 10k, 2 = 2.2k. */
-#define LA_PULL_STR_10K 1
-#define LA_PULL_STR_2K2 2
-int           la_pull_strength_for(unsigned la, int io_mv);
-
-/* The channel's default direction (the one "pullup":"on" engages), LA_PULL_NONE without one.
-   On digital v3r4 the direction engaged now, when one is. */
-la_pull_dir_t la_pull_dir(unsigned la);
-/* The resistor's value as text ("4.7k"), NULL on a channel without one. */
-const char   *la_pull_ohms(unsigned la);
-/* Can the channel's resistor pull in direction d (UP or DOWN)? */
-bool          la_pull_supports(unsigned la, la_pull_dir_t d);
-/* "up" / "down" / "off" (LA_PULL_NONE). */
-const char   *la_pull_dir_name(la_pull_dir_t d);
-/* "up" / "down" / "off" (also "none") -> d.  false when unknown. */
-bool          la_pull_dir_parse(const char *s, la_pull_dir_t *d);
-/* The supported directions as a JSON array: ["up"], ["down"], ["up","down"] or []. */
-void          la_pull_emit_dirs(bp_emit_t *e, unsigned la);
-
-/* A host's pull request on `la`: `pull` ("up"|"down"|"off", NULL when absent) wins over the
-   alias `pullup` ("on"|"off"|"1"|"0", NULL when absent).  *want is the direction to engage
-   (LA_PULL_NONE = off), and on a refusal the one asked for.  "off" is fine on a channel without a resistor. */
-typedef enum {
-    LA_PULL_REQ_OK = 0,
-    LA_PULL_REQ_BAD_VALUE,     /* pull is not up, down or off */
-    LA_PULL_REQ_NO_PULL,       /* the channel has no resistor (BP0023) */
-    LA_PULL_REQ_DIRECTION,     /* the resistor can't pull that way (BP0024) */
-} la_pull_req_t;
-la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want);
+   (la_io_get_mv). */
+pull_str_t    la_pull_strength_for(unsigned la, int io_mv);
 
 /* What GPIO_SET should hold on the pin's static latch: 0 low, 1 high, 2 high-Z.  Only a gpio
    output / open_drain-low pin drives; everything else (none, gpio input, engine functions) is

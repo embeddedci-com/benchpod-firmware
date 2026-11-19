@@ -28,7 +28,7 @@
 #include "dma_wait.h"
 #include "board_caps.h"
 #include "vref_out.h"
-#include "i2c_bus.h"   /* la_pullups_all_off: v2 pull-ups go to +3V3, not to the bank */
+#include "la_pull.h"   /* la_pull_all_off: v2 pull-ups go to +3V3, not to the bank */
 #include "board_rev.h"  /* v2 vs v3 — the TPS2116 mux polarity differs */
 #include "nrst_ctrl.h"  /* nRESET is a dedicated pin on v3, not an LA channel */
 #include "dac_quad.h"   /* analog v3r2: the DAC8554 channel the DAC streams to */
@@ -1347,7 +1347,7 @@ int la_vccio_set_mv(int mv) {
        and stay on.  Only the v2 pull-ups
        went to +3V3, where a closed one would hold the DUT line ~1.5 V above its own
        rail; v2 is refused above, and this keeps the invariant if that ever changes. */
-    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pullups_all_off();
+    if (mv == LA_VCCIO_1V8 && !board_rev_is_v3()) la_pull_all_off();
 
     /* Drive the select level BEFORE switching PG3 to a push-pull output, so the
        pin never momentarily drives the wrong rail.
