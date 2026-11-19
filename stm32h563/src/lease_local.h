@@ -113,8 +113,9 @@ const char *lease_local_broken_by(void);
    The owners at that moment get one LEASE_LOCAL_REFUSE_LOST each. */
 void lease_local_break(const char *by);
 
-/* For the upstream report (any task): a counter that moves on every change of held, id, holder
-   or purpose (acquire of a free lease, release, expiry, break). */
+/* A counter that moves on every change of held, id, holder or purpose (acquire of a free lease,
+   release, expiry, break). Test hook: only the host tests call it (test_lease_local.c); the
+   upstream report gets the generation from lease_local_snapshot(). */
 uint32_t lease_local_generation(void);
 /* A consistent copy of the lease for the net task. false = the writer was mid-update: try again at
    the next poll. On true, *gen is the generation the copy belongs to. */

@@ -90,7 +90,6 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->la_max_rate_hz = signal_engine_la_change_divisor(48e6f) ? 48000000ul : 12000000ul;
     c->spi_master = caps.spi_master;
     c->uart_frame = caps.uart_frame;
-    c->uart_half_duplex = caps.uart_half_duplex;
     c->sensors_digital = caps.emulation;
     c->features_rev = BP_FEATURES_REV;
     c->gateware_version = signal_engine_fpga_version();

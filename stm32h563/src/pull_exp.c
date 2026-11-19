@@ -161,8 +161,6 @@ void pull_exp_poll(void)
     log_printf("[pull] target power %s: pull-ups %s\r\n", on ? "on" : "off", suspend ? "suspended" : "back on");
 }
 
-bool pull_exp_ups_suspended(void) { return s_present && s_suspend_up; }
-
 pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)
 {
     if (str) *str = PULL_STR_NONE;

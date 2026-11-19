@@ -1930,7 +1930,6 @@ void signal_engine_caps(signal_engine_caps_t *out) {
                            ((feats & FPGA_FEATURE_EMULATION) || blob_store_present(BLOB_GW2));
     out->spi_master      = ver >= SPI_MASTER_MIN_GW;
     out->uart_frame      = ver >= UART_FRAME_MIN_GW;
-    out->uart_half_duplex = ver >= UART_HALFDUPLEX_MIN_GW;
 }
 
 /* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).

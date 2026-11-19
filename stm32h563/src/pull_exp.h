@@ -33,9 +33,7 @@
 #define PULL_EXP_CHANNELS   14u
 
 /* TCA6416A command bytes: a write auto-increments to the pair's second register. */
-#define TCA6416_REG_INPUT0   0x00u
 #define TCA6416_REG_OUTPUT0  0x02u
-#define TCA6416_REG_POL0     0x04u
 #define TCA6416_REG_CONFIG0  0x06u
 
 /* Strength: which resistors a channel engages. */
@@ -85,6 +83,8 @@ const char *pull_str_name(pull_str_t s);   /* "10k", "2.2k", "both", "none" */
 
 /* PG7 low (both in reset), then released once pin 21 is up.  After vref_out_init(). */
 void pull_exp_init(void);
+/* The board has the expanders (board_caps()->pull_expanders, latched by pull_exp_init()).
+   Test hook: only the host tests call it (test_pull_exp_state.c). */
 bool pull_exp_present(void);
 
 /* Set one channel.  0, -1 (not present, bad channel, I2C failure), PULL_EXP_ERR_RAIL (pin 21 is
@@ -96,8 +96,6 @@ void pull_exp_all_off(void);
 
 /* Follow the pod's target power (hw worker loop; RAM reads only). */
 void pull_exp_poll(void);
-/* Pull-ups are suspended (the pod switched the DUT off). */
-bool pull_exp_ups_suspended(void);
 
 /* The state the host asked for (also while held in reset or suspended). */
 pull_exp_dir_t pull_exp_dir(unsigned la);

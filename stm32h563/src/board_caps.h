@@ -32,10 +32,9 @@ typedef struct {
        channel pulls up or down with 10k, 2.2k or both.  False: the TCA9554 driver at 0x20. */
     bool pull_expanders;
     /* PC9 USB_SEL: the USB switch between USB-C and the USB-A host port (low = USB-C, the
-       board's default on its pull-down).  Nothing drives it yet. */
+       board's default on its pull-down).  Nothing drives it yet: kept for the planned USB
+       host support, which switches it on demand only. */
     bool usb_sel;
-    /* The LA series resistors, in ohms (100 on v3r4, 330 before). */
-    uint16_t la_series_ohms;
 } board_caps_t;
 
 /* The capabilities of a revision (a BOARD_REV_* value).  Pure (host tests). */
