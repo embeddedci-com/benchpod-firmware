@@ -1780,7 +1780,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA bank voltage, `0` while unset. |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
-| `board_rev` | string | PCB revision, detected at boot from the `PA3` strap: `"v2"`, `"v3"`, or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. |
+| `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware after 3.10.12), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. The short form keeps only `cloud_ca` and `cloud_proxy`; the capabilities frame carries the others. |
@@ -1875,6 +1875,7 @@ Older firmware answers `BP0002` (unknown command): read them from its `status` t
 | `malloc_failures` | integer | Allocations that failed since boot. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). |
+| `board_rev2_mv` | integer | The second revision strap in millivolts. Only on boards whose first strap reads the digital v3r4 band (firmware after 3.10.12); absent on every older board. |
 
 ---
 
