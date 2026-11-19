@@ -19,7 +19,7 @@ static lease_local_gate_t gate(int conn, const char *cmd, const char *json, uint
     lease_local_view_t v;
     char by[48];
     return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_tier_light(cmd, json) != 0,
-                             now, &v, by, sizeof(by));
+                             NULL, now, &v, by, sizeof(by));
 }
 
 static void test_acquire_refresh_join(void) {
@@ -171,25 +171,25 @@ static void test_break(void) {
     uint32_t g = lease_local_generation();
     lease_local_break("ward (web)");
     /* the posted break lands on the writer's next call */
-    CHECK(lease_local_check(C, false, false, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
+    CHECK(lease_local_check(C, false, false, NULL, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
           "a non-owner just runs after the break");
     CHECK(lease_local_generation() != g, "break did not move the generation");
     CHECK(!v.held, "still held after the break");
-    CHECK(lease_local_check(A, false, true, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_REFUSE_LOST &&
+    CHECK(lease_local_check(A, false, true, NULL, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_REFUSE_LOST &&
           !strcmp(by, "ward (web)"), "A told once: %s", by);
-    CHECK(lease_local_check(A, false, false, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
+    CHECK(lease_local_check(A, false, false, NULL, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
           "A told twice");
     /* B closes before its next command: nothing pending for the next client on the slot */
     lease_local_conn_closed(B);
-    CHECK(lease_local_check(B, false, false, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
+    CHECK(lease_local_check(B, false, false, NULL, 1000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS,
           "a closed owner's lost flag reached the next client");
     /* a break with nothing held does nothing */
     lease_local_break("nobody");
-    CHECK(lease_local_check(A, false, false, 2000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS, "no-op");
+    CHECK(lease_local_check(A, false, false, NULL, 2000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS, "no-op");
     /* an empty name */
     lease_local_acquire(A, "L-k2", "ci", "hil", 300, 3000, &v);
     lease_local_break("");
-    CHECK(lease_local_check(A, false, false, 3000, &v, by, sizeof(by)) == LEASE_LOCAL_REFUSE_LOST &&
+    CHECK(lease_local_check(A, false, false, NULL, 3000, &v, by, sizeof(by)) == LEASE_LOCAL_REFUSE_LOST &&
           !strcmp(by, "the server"), "default name: %s", by);
 }
 
@@ -205,6 +205,77 @@ static void test_snapshot(void) {
     CHECK(lease_local_snapshot(60000, &v, &gen) && !v.held, "expired snapshot");
 }
 
+/* "lease":"<id>" on a command: a connection per command proves ownership per command. */
+static lease_local_gate_t gate_id(int conn, const char *cmd, const char *id, uint32_t now,
+                                  lease_local_view_t *v) {
+    char json[96], by[48];
+    snprintf(json, sizeof(json), "{\"cmd\":\"%s\"}", cmd);
+    return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_tier_light(cmd, json) != 0,
+                             id, now, v, by, sizeof(by));
+}
+
+static void test_per_command_id(void) {
+    lease_local_reset();
+    lease_local_view_t v;
+    lease_local_acquire(A, "L-p", "ci", "hil", 60, 0, &v);
+    /* a fresh connection with the held id: allowed, and that connection is now an owner */
+    CHECK(gate_id(B, "dac_set", "L-p", 1000, &v) == LEASE_LOCAL_PASS && v.mine, "held id allowed");
+    CHECK(v.left_s == 59, "a command moved the deadline: %u", v.left_s);
+    CHECK(gate_id(B, "dac_set", NULL, 2000, &v) == LEASE_LOCAL_PASS, "the connection stays an owner");
+    lease_local_conn_closed(B);
+    /* another id, or none, on a non-owner connection: refused while held */
+    CHECK(gate_id(B, "dac_set", "L-other", 3000, &v) == LEASE_LOCAL_REFUSE_BUSY, "other id refused");
+    CHECK(gate_id(B, "dac_set", "", 3000, &v) == LEASE_LOCAL_REFUSE_BUSY, "empty id refused");
+    CHECK(gate_id(B, "dac_set", NULL, 3000, &v) == LEASE_LOCAL_REFUSE_BUSY, "no id refused");
+    CHECK(gate_id(B, "status", "L-other", 3000, &v) == LEASE_LOCAL_PASS, "light read with other id");
+    CHECK(gate_id(C, "gpio_write", "L-p", 3000, &v) == LEASE_LOCAL_PASS, "tunnel with the id");
+    /* many commands with the id never move the deadline */
+    for (uint32_t t = 4000; t < 50000; t += 5000) gate_id(B, "dac_set", "L-p", t, &v);
+    lease_local_get(A, 50000, &v);
+    CHECK(v.left_s == 10, "deadline moved by commands: %u", v.left_s);
+    /* after expiry an id on a command is just a command on a free pod */
+    CHECK(gate_id(B, "dac_set", "L-p", 61000, &v) == LEASE_LOCAL_PASS && !v.held, "free pod");
+    CHECK(gate_id(B, "dac_set", "L-x", 61000, &v) == LEASE_LOCAL_PASS, "free pod, any id");
+    /* expiry is not a break: renew says not held, a new acquire with the same id grants */
+    CHECK(lease_local_renew(A, "L-p", 60, 61000, &v) == LEASE_LOCAL_NOT_HELD, "renew after expiry");
+    CHECK(lease_local_acquire(A, "L-p", "ci", "hil", 60, 62000, &v) == LEASE_LOCAL_OK, "re-acquire");
+}
+
+static void test_broken_stays_broken(void) {
+    lease_local_reset();
+    lease_local_view_t v;
+    char by[48];
+    lease_local_acquire(A, "L-b", "ci", "hil", 60, 0, &v);
+    lease_local_break("ward (web)");
+    /* a fresh connection carrying the broken id: lost, every time, and nothing is granted */
+    CHECK(gate_id(B, "dac_set", "L-b", 1000, &v) == LEASE_LOCAL_REFUSE_LOST, "id refused as lost");
+    CHECK(gate_id(B, "status", "L-b", 1000, &v) == LEASE_LOCAL_REFUSE_LOST, "even a light read");
+    CHECK(gate_id(B, "dac_set", "L-b", 2000, &v) == LEASE_LOCAL_REFUSE_LOST, "again");
+    CHECK(lease_local_acquire(B, "L-b", "ci", "hil", 60, 3000, &v) == LEASE_LOCAL_LOST && !v.held,
+          "re-acquire of a broken id granted");
+    CHECK(!strcmp(lease_local_broken_by(), "ward (web)"), "by %s", lease_local_broken_by());
+    CHECK(lease_local_renew(B, "L-b", 60, 3000, &v) == LEASE_LOCAL_LOST, "renew of a broken id");
+    CHECK(lease_local_release(B, "L-b", 3000, &v) == LEASE_LOCAL_OK, "release of a broken id is ok");
+    /* A, the owner connection, is told once; without the id it then runs on the free pod */
+    CHECK(lease_local_check(A, false, false, NULL, 3000, &v, by, sizeof(by)) == LEASE_LOCAL_REFUSE_LOST,
+          "owner told");
+    CHECK(lease_local_check(A, false, false, NULL, 3000, &v, by, sizeof(by)) == LEASE_LOCAL_PASS, "once");
+    /* other ids work: the pod is free */
+    CHECK(gate_id(B, "dac_set", NULL, 4000, &v) == LEASE_LOCAL_PASS, "free for others");
+    CHECK(lease_local_acquire(C, "L-new", "web", "", 60, 4000, &v) == LEASE_LOCAL_OK, "new id granted");
+    CHECK(gate_id(B, "dac_set", "L-b", 5000, &v) == LEASE_LOCAL_REFUSE_LOST, "still lost under a new lease");
+    lease_local_release(C, "L-new", 6000, &v);
+    /* 30 min after the break the id is forgotten and may be granted again */
+    CHECK(lease_local_acquire(B, "L-b", "ci", "hil", 60, 1000 + 1800000 - 1, &v) == LEASE_LOCAL_LOST,
+          "forgotten too early");
+    CHECK(lease_local_acquire(B, "L-b", "ci", "hil", 60, 1000 + 1800000, &v) == LEASE_LOCAL_OK,
+          "not forgotten after 30 min");
+    /* one slot: a second break replaces the first */
+    lease_local_break("admin");
+    CHECK(gate_id(A, "dac_set", "L-b", 1801000 + 1000, &v) == LEASE_LOCAL_REFUSE_LOST, "second break");
+    CHECK(!strcmp(lease_local_broken_by(), "admin"), "by %s", lease_local_broken_by());
+}
+
 int main(void) {
     test_acquire_refresh_join();
     test_busy_for_other_id();
@@ -214,6 +285,8 @@ int main(void) {
     test_light_allowed();
     test_break();
     test_snapshot();
+    test_per_command_id();
+    test_broken_stays_broken();
     if (failures) { printf("test_lease_local: %d FAILED\n", failures); return 1; }
     printf("test_lease_local: all passed\n");
     return 0;

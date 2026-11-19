@@ -17,6 +17,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void send_busy(int conn_id, const char *holder, const char *purpose, uint32_t left_s) {
     char text[160];
@@ -63,6 +64,12 @@ static bool get_id(int conn_id, const char *json, char *id, size_t cap) {
     return true;
 }
 
+static void send_lost(int conn_id, const char *by) {
+    char text[80];
+    snprintf(text, sizeof(text), "lease lost: stopped by %s", by);
+    bp_err_lease_lost(conn_id, BP_ERR_TEXT(text), by);
+}
+
 static void bad_id(int conn_id) {
     bp_err_missing_argument(conn_id,
         BP_ERR_TEXT("lease: id must be 1-64 printable characters, no spaces, quotes or backslashes"),
@@ -88,6 +95,7 @@ void handle_lease_acquire(int conn_id, const char *json) {
     switch (lease_local_acquire(conn_id, id, holder, purpose, get_ttl(json), now, &v)) {
         case LEASE_LOCAL_OK:     send_lease(conn_id, &v); break;
         case LEASE_LOCAL_BUSY:   send_busy_view(conn_id, &v); break;
+        case LEASE_LOCAL_LOST:   send_lost(conn_id, lease_local_broken_by()); break;
         default:                 bad_id(conn_id); break;
     }
 }
@@ -99,8 +107,9 @@ void handle_lease_renew(int conn_id, const char *json) {
     switch (lease_local_renew(conn_id, id, get_ttl(json), HAL_GetTick(), &v)) {
         case LEASE_LOCAL_OK:       send_lease(conn_id, &v); break;
         case LEASE_LOCAL_BUSY:     send_busy_view(conn_id, &v); break;
+        case LEASE_LOCAL_LOST:     send_lost(conn_id, lease_local_broken_by()); break;
         case LEASE_LOCAL_NOT_HELD:
-            bp_err_lease_not_held(conn_id, BP_ERR_TEXT("lease: no lease with this id is held (it ran out, was released or stopped, or the pod restarted)"), id);
+            bp_err_lease_not_held(conn_id, BP_ERR_TEXT("lease: no lease with this id is held (it ran out, was released, or the pod restarted)"), id);
             break;
         default:                   bad_id(conn_id); break;
     }
@@ -120,14 +129,16 @@ bool command_handler_lease_gate(int conn_id, const char *cmd, const char *json) 
     const cmd_desc_t *d = cmd_find(cmd);
     lease_local_view_t v;
     char by[LEASE_LOCAL_HOLDER_MAX];
+    /* "lease":"<id>" on any command: a client with a connection per command proves ownership
+       per command (lease_local.h). A longer value cannot be the held id: keep it unmatched. */
+    char lid[LEASE_LOCAL_ID_MAX + 1] = {0};
+    if (json && bp_json_get_top(json, "lease", lid, sizeof(lid)) && strlen(lid) >= LEASE_LOCAL_ID_MAX)
+        lid[0] = '\0';
     switch (lease_local_check(conn_id, cmd_has(d, CMD_F_LEASE) != 0, cmd_tier_light(cmd, json) != 0,
-                              HAL_GetTick(), &v, by, sizeof(by))) {
-        case LEASE_LOCAL_REFUSE_LOST: {
-            char text[80];
-            snprintf(text, sizeof(text), "lease lost: stopped by %s", by);
-            bp_err_lease_lost(conn_id, BP_ERR_TEXT(text), by);
+                              lid, HAL_GetTick(), &v, by, sizeof(by))) {
+        case LEASE_LOCAL_REFUSE_LOST:
+            send_lost(conn_id, by);
             return false;
-        }
         case LEASE_LOCAL_REFUSE_BUSY:
             send_busy_view(conn_id, &v);
             return false;
