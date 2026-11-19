@@ -389,6 +389,59 @@ static void test_voltage_refusal(void) {
     CHECK(len > 17 && strcmp(err + len - 17, "; stop them first") == 0);
 }
 
+/* Digital v3r4: every channel pulls up or down; the strength follows the pin's function; the
+   engaged direction and ohms are what the driver noted.  Older boards keep their table. */
+static void test_pull_v3r4(void) {
+    la_pins_reset();
+    board_caps_init(BOARD_REV_V3);
+    CHECK(la_pull_supports(1, LA_PULL_UP) && !la_pull_supports(1, LA_PULL_DOWN));
+    CHECK(la_pull_ohms(9) == NULL);
+    CHECK_STR(la_pull_ohms(1), "4.7k");
+    la_pins_note_pull(1, LA_PULL_DOWN, "2.2k");   /* ignored on older boards */
+    CHECK(la_pull_dir(1) == LA_PULL_UP);
+    CHECK_STR(la_pull_ohms(1), "4.7k");
+    la_pins_note_pull(1, LA_PULL_NONE, NULL);
+
+    board_caps_init(BOARD_REV_V3R4);
+    for (unsigned la = 1; la <= 14; la++) {
+        CHECK(la_pull_supports(la, LA_PULL_UP) && la_pull_supports(la, LA_PULL_DOWN));
+        CHECK(la_pull_dir(la) == LA_PULL_UP);
+        CHECK_STR(la_pull_ohms(la), "10k");
+    }
+    la_pins_note_pull(7, LA_PULL_DOWN, "1.8k");
+    CHECK(la_pull_dir(7) == LA_PULL_DOWN);
+    CHECK_STR(la_pull_ohms(7), "1.8k");
+    la_pins_note_pull(7, LA_PULL_NONE, NULL);
+    CHECK(la_pull_dir(7) == LA_PULL_UP);
+    CHECK_STR(la_pull_ohms(7), "10k");
+    /* up/down/off requests: every direction is fine on every channel */
+    la_pull_dir_t want;
+    CHECK(la_pull_request(12, "down", NULL, &want) == LA_PULL_REQ_OK && want == LA_PULL_DOWN);
+    CHECK(la_pull_request(3, NULL, "on", &want) == LA_PULL_REQ_OK && want == LA_PULL_UP);
+
+    /* strength from the function */
+    CHECK(la_pull_strength_for(1, 3300) == LA_PULL_STR_10K);                 /* nothing on it */
+    la_pins_claim(LA_FN_I2C_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 1 }, 1);
+    la_pins_claim(LA_FN_I2CM_SCL, LA_GPIO_NONE, 0, (uint8_t[]){ 2 }, 1);
+    la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
+    la_pins_claim(LA_FN_SPI_SCK, LA_GPIO_NONE, 0, (uint8_t[]){ 4 }, 1);
+    la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 5 }, 1);
+    la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, (uint8_t[]){ 6 }, 1);
+    la_pins_claim(LA_FN_UART_HD, LA_GPIO_NONE, 0, (uint8_t[]){ 8 }, 1);
+    CHECK(la_pull_strength_for(1, 3300) == LA_PULL_STR_2K2);    /* I2C */
+    CHECK(la_pull_strength_for(2, 1800) == LA_PULL_STR_2K2);    /* I2C master */
+    CHECK(la_pull_strength_for(3, 5000) == LA_PULL_STR_10K);    /* UART RX hold, also at 5 V */
+    CHECK(la_pull_strength_for(4, 3300) == LA_PULL_STR_10K);    /* an output at 3.3 V */
+    CHECK(la_pull_strength_for(4, 5000) == LA_PULL_STR_2K2);    /* an output at 5 V: the lift */
+    CHECK(la_pull_strength_for(5, 3300) == LA_PULL_STR_2K2);    /* open drain */
+    CHECK(la_pull_strength_for(6, 5000) == LA_PULL_STR_2K2);    /* gpio output at 5 V */
+    CHECK(la_pull_strength_for(6, 3300) == LA_PULL_STR_10K);
+    CHECK(la_pull_strength_for(8, 3300) == LA_PULL_STR_2K2);    /* one-wire UART */
+    CHECK(la_pull_strength_for(0, 3300) == LA_PULL_STR_10K && la_pull_strength_for(15, 3300) == LA_PULL_STR_10K);
+    board_caps_init(BOARD_REV_V3);
+    la_pins_reset();
+}
+
 static const char *test_namer(unsigned slot) { return slot == 0 ? "env" : slot == 1 ? "imu" : NULL; }
 
 /* Emulated sensors own their pins by instance: the conflict names the instance and the stop. */
@@ -451,6 +504,19 @@ static void test_json_entries(void) {
     printf("  la_pins worst-case reply: %u bytes (cloud reply cap %u)\n",
            (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
     CHECK(bp_emit_len(&e) < BP_CLOUD_REPLY_MAX);
+    /* Digital v3r4: every channel has a pull, both directions, and the longest ohms. */
+    board_caps_init(BOARD_REV_V3R4);
+    for (unsigned la = 1; la <= 14; la++) la_pins_note_pull(la, LA_PULL_DOWN, "1.8k");
+    bp_emit_init(&e, buf, sizeof(buf));
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(&e, 0x3FFF, 0x3FFF);
+    bp_emit_raw(&e, ",\"pull_dirs\":[\"up\",\"down\"],\"levels\":16383}}\n");
+    CHECK(bp_emit_ok(&e));
+    printf("  la_pins worst-case reply on digital v3r4: %u bytes (cloud reply cap %u)\n",
+           (unsigned)bp_emit_len(&e), (unsigned)BP_CLOUD_REPLY_MAX);
+    CHECK(bp_emit_len(&e) < BP_CLOUD_REPLY_MAX);
+    for (unsigned la = 1; la <= 14; la++) la_pins_note_pull(la, LA_PULL_NONE, NULL);
+    board_caps_init(BOARD_REV_V3);
     la_pins_set_target_powered(true);
     for (unsigned la = 1; la <= 14; la++) la_pins_set_dir(la, LA_DIR_UNKNOWN);
 }
@@ -562,6 +628,7 @@ int main(void) {
     test_step_plans();
     test_step_args();
     test_voltage_refusal();
+    test_pull_v3r4();
     test_sensor_owner();
     test_json_entries();
     test_trigger_parse();

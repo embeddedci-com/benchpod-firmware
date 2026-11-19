@@ -24,6 +24,7 @@
 #include "board_rev.h"
 #include "board_caps.h"
 #include "vref_out.h"
+#include "pull_exp.h"
 #include "cal_data.h"
 #include "usb_cc.h"
 #include "nrst_ctrl.h"
@@ -184,6 +185,7 @@ int main(void)
        each EN / U53 IN net.) */
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
+    pull_exp_init();        /* digital v3r4: pull expanders out of reset once pin 21 is up */
     efuse_flt_init();       /* FLT: a real fault, or reverse-current blocking */
     (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
     module_link_init();     /* digital v3r3: the analog module's link, I2C2 and its EEPROM */

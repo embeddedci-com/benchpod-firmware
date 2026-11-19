@@ -99,7 +99,21 @@ uint16_t       la_pins_owned_mask(void);       /* pins whose function is not non
    ohms are reported, never chosen.  The older "pullup":"on"|"off" engages the channel's default
    direction (la_pull_dir). */
 #define LA_PULL_BIT(d) ((uint8_t)(1u << (unsigned)(d)))
-/* The channel's default direction (the one "pullup":"on" engages), LA_PULL_NONE without one. */
+/* Digital v3r4 (board_caps()->pull_expanders): every channel pulls up or down, with 10k, 2.2k or
+   both (pull_exp.h); la_pull_dir and la_pull_ohms report what is engaged (when it is) and the
+   defaults otherwise (up, 10k).  The pull driver tells la_pins what it engaged: */
+void          la_pins_note_pull(unsigned la, la_pull_dir_t dir, const char *ohms);
+
+/* The strength the pod picks for a channel from its function (5v-support 12.4): 2.2k for I2C,
+   one-wire UART and open-drain gpio, and for pod outputs in 5 V mode (the pull-up lifts them from
+   3.3 V); 10k otherwise (UART RX hold, straps, idle levels, DE bias).  io_mv is the I/O voltage
+   (la_io_get_mv).  Values are pull_str_t (pull_exp.h): 1 = 10k, 2 = 2.2k. */
+#define LA_PULL_STR_10K 1
+#define LA_PULL_STR_2K2 2
+int           la_pull_strength_for(unsigned la, int io_mv);
+
+/* The channel's default direction (the one "pullup":"on" engages), LA_PULL_NONE without one.
+   On digital v3r4 the direction engaged now, when one is. */
 la_pull_dir_t la_pull_dir(unsigned la);
 /* The resistor's value as text ("4.7k"), NULL on a channel without one. */
 const char   *la_pull_ohms(unsigned la);

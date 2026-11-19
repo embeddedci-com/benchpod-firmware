@@ -121,20 +121,58 @@ static const la_pull_hw_t s_pulls_v3[LA_PINS_COUNT + 1] = {
     /* LA9..LA14: no resistor */
 };
 
+/* Digital v3r4: two expanders, every channel up or down with 10k, 2.2k or both (pull_exp.h).
+   "pullup":"on" engages up, and the ohms shown while off are the 10k default. */
+#define V3R4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, "10k" }
+static const la_pull_hw_t s_pulls_v3r4[LA_PINS_COUNT + 1] = {
+    [1] = V3R4_PULL, [2] = V3R4_PULL, [3] = V3R4_PULL, [4] = V3R4_PULL, [5] = V3R4_PULL,
+    [6] = V3R4_PULL, [7] = V3R4_PULL, [8] = V3R4_PULL, [9] = V3R4_PULL, [10] = V3R4_PULL,
+    [11] = V3R4_PULL, [12] = V3R4_PULL, [13] = V3R4_PULL, [14] = V3R4_PULL,
+};
+
+/* What the v3r4 pull driver engaged on each channel (la_pins_note_pull). */
+static uint8_t     s_pull_now[LA_PINS_COUNT + 1];
+static const char *s_pull_now_ohms[LA_PINS_COUNT + 1];
+
 static const la_pull_hw_t *la_pull_hw(unsigned la) {
     if (la < 1u || la > LA_PINS_COUNT) return NULL;
-    const la_pull_hw_t *p = &s_pulls_v3[la];
+    const la_pull_hw_t *p = board_caps()->pull_expanders ? &s_pulls_v3r4[la] : &s_pulls_v3[la];
     return p->dirs ? p : NULL;
+}
+
+void la_pins_note_pull(unsigned la, la_pull_dir_t dir, const char *ohms) {
+    if (la < 1u || la > LA_PINS_COUNT) return;
+    s_pull_now[la] = (uint8_t)dir;
+    s_pull_now_ohms[la] = dir == LA_PULL_NONE ? NULL : ohms;
 }
 
 la_pull_dir_t la_pull_dir(unsigned la) {
     const la_pull_hw_t *p = la_pull_hw(la);
-    return p ? (la_pull_dir_t)p->dflt : LA_PULL_NONE;
+    if (!p) return LA_PULL_NONE;
+    if (board_caps()->pull_expanders && s_pull_now[la] != LA_PULL_NONE) return (la_pull_dir_t)s_pull_now[la];
+    return (la_pull_dir_t)p->dflt;
 }
 
 const char *la_pull_ohms(unsigned la) {
     const la_pull_hw_t *p = la_pull_hw(la);
-    return p ? p->ohms : NULL;
+    if (!p) return NULL;
+    if (board_caps()->pull_expanders && s_pull_now_ohms[la]) return s_pull_now_ohms[la];
+    return p->ohms;
+}
+
+int la_pull_strength_for(unsigned la, int io_mv) {
+    if (la < 1u || la > LA_PINS_COUNT) return LA_PULL_STR_10K;
+    la_fn_t fn = (la_fn_t)s_pin[la].fn;
+    la_gpio_mode_t mode = la_pins_gpio(la);
+    switch (fn) {
+    case LA_FN_I2C_SDA: case LA_FN_I2C_SCL: case LA_FN_I2CM_SDA: case LA_FN_I2CM_SCL:
+    case LA_FN_UART_HD:
+        return LA_PULL_STR_2K2;
+    default: break;
+    }
+    if (fn == LA_FN_GPIO && mode == LA_GPIO_OPEN_DRAIN) return LA_PULL_STR_2K2;
+    if (io_mv == 5000 && la_fn_drives(fn, mode)) return LA_PULL_STR_2K2;   /* lift a 3.3 V high to 5 V */
+    return LA_PULL_STR_10K;
 }
 
 bool la_pull_supports(unsigned la, la_pull_dir_t d) {
@@ -614,11 +652,16 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     else            bp_emit_raw(e, ",\"level\":null,\"pull\":");
     const char *ohms = la_pull_ohms(la);
     if (ohms) {
-        /* dir: the way it pulls when on; dirs: every way it can pull (pull "up"/"down"/"off") */
-        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s,\"dirs\":",
+        /* dir: the way it pulls when on; dirs: every way it can pull (pull "up"/"down"/"off").
+           Digital v3r4 leaves dirs out: every channel pulls both ways there, said once in the
+           la_pins reply (pull_dirs), as 14 copies would not fit the cloud reply. */
+        bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s",
                 la_pull_dir_name(la_pull_dir(la)), ohms,
                 (pull_mask & (1u << (la - 1u))) ? "true" : "false");
-        la_pull_emit_dirs(e, la);
+        if (!board_caps()->pull_expanders) {
+            bp_emit_raw(e, ",\"dirs\":");
+            la_pull_emit_dirs(e, la);
+        }
         bp_emit_raw(e, "}");
     } else {
         bp_emit_raw(e, "null");

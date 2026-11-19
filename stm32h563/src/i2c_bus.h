@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "la_pins.h"   /* la_pull_dir_t */
+
 /* ============================================================================
  * I2C0 power/IO bus — STM32 I2C1 on PB8 (SCL) / PB9 (SDA), 100 kHz.
  *
@@ -179,7 +181,14 @@ bool pca9555_la_pullup_enabled(uint8_t la_pin);
 /* Everything here is named "pullup" for historical reasons: enabling closes the channel's
    switch, whichever way its resistor pulls.  The direction and value of each channel are in
    la_pins.h (la_pull_dir, la_pull_ohms, la_pull_supports). */
-/* True when the LA bank voltage currently allows a pull-up to be engaged (3.3 V). */
+/* Digital v3r4 only: engage `la` (1..14) in direction `dir` (la_pins.h la_pull_dir_t, passed as
+   int-compatible enum) with strength `str` (pull_exp.h pull_str_t; 0 = from the pin's function,
+   la_pull_strength_for).  0, LA_PULLUP_ERR_VOLTAGE (no I/O voltage set yet), LA_PULLUP_ERR_RAIL
+   (pin 21 is down: the expanders are held in reset), -1 (another board, bad pin, I2C failure). */
+#define LA_PULLUP_ERR_RAIL     (-3)
+int  la_pull_engage(uint8_t la, la_pull_dir_t dir, int str);
+/* True when the LA bank voltage currently allows a pull-up to be engaged (3.3 V; digital v3r4:
+   any voltage set, and pin 21 up). */
 bool la_pullups_available(void);
 /* Force every LA pull-up off (used when the bank drops to 1.8 V). */
 void la_pullups_all_off(void);

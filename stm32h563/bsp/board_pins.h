@@ -252,6 +252,19 @@
 #define VREF_SENSE_MUL               3
 
 /* ---------------------------------------------------------------------------
+ * LA pull expanders' reset (digital v3r4 only: board_caps()->pull_expanders)
+ *   PG7 PULL_RST -> U18 and U54 /RESET, R64 10 k to GND: both TCA6416A held in reset (every
+ *   port an input, every pull off) until firmware drives it high.  pull_exp.c.  [MCU pin 92]
+ * USB switch (digital v3r4 only: board_caps()->usb_sel)
+ *   PC9 USB_SEL -> U64 S, R202 10 k to GND: low = USB-C (the default), high = the USB-A host
+ *   port.  Nothing drives it yet (the USB host work).  [MCU pin 99]
+ * ------------------------------------------------------------------------- */
+#define PULL_RST_PORT                GPIOG
+#define PULL_RST_PIN                 GPIO_PIN_7
+#define USB_SEL_PORT                 GPIOC
+#define USB_SEL_PIN                  GPIO_PIN_9
+
+/* ---------------------------------------------------------------------------
  * USB-C CC monitoring (rev3+)   [/CC_SENSE1 PC0, /CC_SENSE2 PC2]
  *   The pod is a USB-C sink: R76/R75 are the 5.1 k Rd pull-downs on USBC1's
  *   CC1/CC2.  Each CC line is tapped into an ADC pin through 10 k (R178/R179)

@@ -13,6 +13,9 @@
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "signal_engine.h"   /* la_vccio_get_mv — the pull-ups are 3V3-referenced */
+#include "board_caps.h"
+#include "la_pins.h"         /* la_pull_strength_for, la_pins_note_pull */
+#include "pull_exp.h"        /* digital v3r4: the TCA6416A pull expanders */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
 #include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
 #include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
@@ -349,13 +352,41 @@ bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); 
 static const int8_t s_la_tca_pin[9] = { -1, 2, 3, 1, 0, 7, 6, 5, 4 };
 static uint8_t s_la_pu_shadow;
 
+/* ---- digital v3r4: the two TCA6416A expanders (pull_exp.h) ----
+   Each entry point below checks board_caps()->pull_expanders first and, on every other board,
+   runs the TCA9554 code exactly as before.  The pulls go to J1 pin 21, which follows the bank
+   (or 5 V), so on v3r4 they work at every I/O voltage, but only while pin 21 is up. */
+
+int la_pull_engage(uint8_t la, la_pull_dir_t dir, int str)
+{
+    if (!board_caps()->pull_expanders) return -1;
+    if (la < 1 || la > LA_PINS_COUNT) return -1;
+    if (dir != LA_PULL_NONE) {
+        if (la_vccio_get_mv() == LA_VCCIO_UNSET) return LA_PULLUP_ERR_VOLTAGE;
+        if (!pull_exp_live()) return LA_PULLUP_ERR_RAIL;
+        if (str <= 0) str = la_pull_strength_for(la, la_io_get_mv());
+    }
+    pull_exp_dir_t d = dir == LA_PULL_UP ? PULL_EXP_UP : dir == LA_PULL_DOWN ? PULL_EXP_DOWN : PULL_EXP_OFF;
+    int rc = pull_exp_set(la, d, (pull_str_t)str);
+    if (rc == PULL_EXP_ERR_RAIL) return LA_PULLUP_ERR_RAIL;
+    if (rc != 0) return -1;
+    la_pins_note_pull(la, dir, pull_str_ohms(pull_exp_str(la)));
+    return 0;
+}
+
 bool la_pullups_available(void)
 {
+    if (board_caps()->pull_expanders) return la_vccio_get_mv() != LA_VCCIO_UNSET && pull_exp_live();
     return la_vccio_get_mv() == LA_VCCIO_3V3;
 }
 
 void la_pullups_all_off(void)
 {
+    if (board_caps()->pull_expanders) {
+        pull_exp_all_off();
+        for (unsigned la = 1; la <= LA_PINS_COUNT; la++) la_pins_note_pull(la, LA_PULL_NONE, NULL);
+        return;
+    }
     for (uint8_t la = 1; la <= 8; la++) {
         if ((s_la_pu_shadow >> (la - 1)) & 1u) (void)pca9555_set_la_pullup(la, false);
     }
@@ -363,6 +394,8 @@ void la_pullups_all_off(void)
 
 int pca9555_set_la_pullup(uint8_t la_pin, bool enable)
 {
+    /* v3r4: "on" pulls up, with the strength the pin's function asks for. */
+    if (board_caps()->pull_expanders) return la_pull_engage(la_pin, enable ? LA_PULL_UP : LA_PULL_NONE, 0);
     if (la_pin < 1 || la_pin > 8) return -1;
     /* Turning a pull-up OFF is always safe (and is how we get back to a legal
        state); only closing the switch onto the 3V3 resistor is gated. */
@@ -377,6 +410,7 @@ int pca9555_set_la_pullup(uint8_t la_pin, bool enable)
 
 bool pca9555_la_pullup_enabled(uint8_t la_pin)
 {
+    if (board_caps()->pull_expanders) return pull_exp_dir(la_pin) != PULL_EXP_OFF;
     if (la_pin < 1 || la_pin > 8) return false;
     return (s_la_pu_shadow >> (la_pin - 1)) & 1u;
 }

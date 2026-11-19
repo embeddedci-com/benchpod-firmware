@@ -1321,7 +1321,7 @@ int la_vccio_set_mv(int mv) {
        one closed would hold the DUT line ~1.5 V above its own rail.  Doing it
        here (rather than trusting the host to remember) means the invariant holds
        for every path that switches the bank, including a mid-session change. */
-    if (mv == LA_VCCIO_1V8) la_pullups_all_off();
+    if (mv == LA_VCCIO_1V8 && !board_caps()->pull_expanders) la_pullups_all_off();   /* v3r4: pin 21 follows */
 
     /* Drive the select level BEFORE switching PG3 to a push-pull output, so the
        pin never momentarily drives the wrong rail.

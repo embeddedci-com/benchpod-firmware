@@ -9,6 +9,8 @@
  * Runs on the hw worker task, like the rest of command_handler.
  */
 #include "command_handler.h"
+#include "board_caps.h"
+#include "pull_exp.h"
 #include "command_handler_internal.h"
 #include "at_driver.h"
 #include "bp_json.h"
@@ -56,12 +58,17 @@ static bool            uart_upload_suspended = false;
    pull the RX channel high (LA1-6 only: LA7/8 pull down) for the session and restore it on exit. */
 static int             uart_rx_pu_ch   = -1;     /* RX LA channel we forced a pull-up on, or -1 */
 static bool            uart_rx_pu_prev = false;  /* its pull-up state before we forced it */
+/* Digital v3r4: the channel's direction and strength before (it may have pulled down). */
+static la_pull_dir_t   uart_rx_pu_prev_dir = LA_PULL_NONE;
+static int             uart_rx_pu_prev_str = 0;
 
 static void uart_rx_pu_restore(void) {
     if (uart_rx_pu_ch >= 1) {                     /* restore the RX pull-up we forced on */
         /* A failed restore leaves the DUT's line biased by a resistor nobody asked for, which
            then shows up as an unexplained idle level on the next session — say so. */
-        int rc = pca9555_set_la_pullup((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev);
+        int rc = board_caps()->pull_expanders
+                 ? la_pull_engage((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev_dir, uart_rx_pu_prev_str)
+                 : pca9555_set_la_pullup((uint8_t)uart_rx_pu_ch, uart_rx_pu_prev);
         if (rc != 0)
             printf("[uart] WARNING: could not restore LA%d's pull-up to %s (rc %d)\n",
                    uart_rx_pu_ch, uart_rx_pu_prev ? "on" : "off", rc);
@@ -258,6 +265,10 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     if (la_pull_supports(rx, LA_PULL_UP) && la_pullups_available()) {
         uart_rx_pu_ch   = (int)rx;
         uart_rx_pu_prev = pca9555_la_pullup_enabled((uint8_t)rx);
+        if (board_caps()->pull_expanders) {
+            uart_rx_pu_prev_dir = (la_pull_dir_t)pull_exp_dir(rx);
+            uart_rx_pu_prev_str = (int)pull_exp_str(rx);
+        }
         if (pca9555_set_la_pullup((uint8_t)rx, true) != 0) {
             printf("[uart] WARNING: could not engage LA%u's pull-up to hold RX high\n", rx);
             uart_rx_pu_ch = -1;

@@ -45,6 +45,7 @@ typedef enum {
     BP_E_LA_NO_PULL = 23,
     BP_E_LA_PULL_DIRECTION = 24,
     BP_E_VREF_5V_MISSING = 25,
+    BP_E_PULL_RAIL_DOWN = 26,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -175,6 +176,11 @@ static inline void bp_err_la_pull_direction(int conn_id, const char *text, int32
 static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_VREF_5V_MISSING, text, a, 1);
+}
+/* BP0026: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
+static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, text, a, 1);
 }
 
 #endif /* BP_ERRORS_H */
