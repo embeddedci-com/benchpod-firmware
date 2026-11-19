@@ -4884,7 +4884,10 @@ ownership on each command instead of joining first: any JSON command may carry
 With the held id, the command runs as the owner's (and its connection becomes an owner). Another
 id, or an id while nothing is held, counts as no id: refused with `BP0025` while a lease is held,
 run as usual when the pod is free. A command never moves the deadline; only `lease_acquire`
-with the held id and `lease_renew` do. Commands without the field work as before.
+with the held id and `lease_renew` do. Commands without the field work as before. The check runs
+before the command starts, so the commands that switch the connection to raw bytes or chunks
+(`dap_start`, `uart_proxy_start`, `load_bin`, the captures) take it on their start line; the bytes
+that follow belong to that session. `status` with the held id reports `local_lease.mine: true`.
 
 The `lease_*` commands always reach the pod's lease, whoever holds it, so a busy pod answers
 with its holder.

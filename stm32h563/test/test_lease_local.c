@@ -221,6 +221,13 @@ static void test_per_command_id(void) {
     /* a fresh connection with the held id: allowed, and that connection is now an owner */
     CHECK(gate_id(B, "dac_set", "L-p", 1000, &v) == LEASE_LOCAL_PASS && v.mine, "held id allowed");
     CHECK(v.left_s == 59, "a command moved the deadline: %u", v.left_s);
+    /* status on a fresh connection with the id reports mine (the gate runs before the handler) */
+    lease_local_view_t sv;
+    CHECK(gate_id(5, "status", "L-p", 1000, &sv) == LEASE_LOCAL_PASS && lease_local_get(5, 1000, &sv) &&
+          sv.mine, "status with the id: not mine");
+    lease_local_conn_closed(5);
+    CHECK(gate_id(5, "status", NULL, 1000, &sv) == LEASE_LOCAL_PASS && lease_local_get(5, 1000, &sv) &&
+          !sv.mine, "status without the id: mine");
     CHECK(gate_id(B, "dac_set", NULL, 2000, &v) == LEASE_LOCAL_PASS, "the connection stays an owner");
     lease_local_conn_closed(B);
     /* another id, or none, on a non-owner connection: refused while held */
