@@ -25,6 +25,7 @@
 #include "psram_regions.h"
 #include "boot_guard.h"  /* safe mode: the iCE40/PSRAM-off command gate */
 #include "cmd_gate.h"    /* the checks before a command reaches its handler (host-tested) */
+#include "bp_features.h" /* BP_API, BP_MIN_CLIENT_API: the client API check */
 #include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
@@ -344,6 +345,22 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
        console with identical lines, so they are not traced. */
     if (!cmd_has(d, CMD_F_NOISY) && conn_id != CH_EMI_CONN)   /* the EMI loop prints its own */
         LOG_D("[cmd] <- \"%s\" (id=%d, %s)\n", cmd, conn_id, cmd_tier_name(tier));
+
+    /* A client older than this firmware takes (features.toml min_client_api): refused first, on
+       every JSON transport (LAN, USB, cloud command channel, cloud tunnels), so it hears this
+       before any other refusal. The EMC test build's own loop is not a client. */
+    if (conn_id != CH_EMI_CONN) {
+        int32_t sent = 0;
+        if (!cmd_gate_client_api(d, buf, BP_MIN_CLIENT_API, &sent)) {
+            char why[CMD_GATE_CLIENT_MAX + 128];
+            (void)why;   /* BP_ERRORS_NO_TEXT drops the text */
+            bp_err_client_too_old(conn_id,
+                                  BP_ERR_TEXT(cmd_gate_client_api_text(buf, sent, BP_MIN_CLIENT_API,
+                                                                       why, sizeof(why))),
+                                  sent, (int32_t)BP_MIN_CLIENT_API, (int32_t)BP_API);
+            return;
+        }
+    }
 
     /* Tier, lease, tunnel, safe-mode and board gates (cmd_gate.h, host-tested). */
     {

@@ -6,6 +6,11 @@
  */
 #include "cmd_gate.h"
 
+/* A test build with the minimum raised, as a release would set it in features.toml. */
+#define BP_MIN_CLIENT_API_OVERRIDE 2u
+#include "bp_features.h"
+
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -241,6 +246,89 @@ static void test_scpi_line_writes(void) {
     CHECK(cmd_gate_scpi_line_writes("*IDN?;"), "trailing empty part");
 }
 
+/* The client API check (features.toml min_client_api, BP0030 client_too_old). */
+static int client_ok(const char *json, uint32_t min_api, int32_t *sent) {
+    char cmd[32] = {0};
+    const char *p = strstr(json, "\"cmd\":\"");
+    if (p) {
+        p += 7;
+        size_t n = strcspn(p, "\"");
+        if (n >= sizeof(cmd)) n = sizeof(cmd) - 1;
+        memcpy(cmd, p, n);
+    }
+    return cmd_gate_client_api(cmd_find(cmd), json, min_api, sent);
+}
+
+static void test_client_api(void) {
+    int32_t sent = -1;
+    CHECK(BP_MIN_CLIENT_API == 2u, "the override did not take: %u", (unsigned)BP_MIN_CLIENT_API);
+
+    /* min_client_api 0 (today): nothing is refused, a client that sends nothing included. */
+    CHECK(client_ok("{\"cmd\":\"generate\",\"wave\":\"sine\"}", 0, &sent) && sent == 0, "min 0 refused");
+    CHECK(client_ok("{\"cmd\":\"no_such_verb\"}", 0, &sent), "min 0 refused an unknown verb");
+
+    /* Raised: below it is refused, at or above it runs. */
+    const uint32_t min = BP_MIN_CLIENT_API;
+    CHECK(!client_ok("{\"cmd\":\"generate\",\"wave\":\"sine\"}", min, &sent) && sent == 0, "no client_api ran");
+    CHECK(!client_ok("{\"cmd\":\"generate\",\"client_api\":1}", min, &sent) && sent == 1, "client_api 1 ran (sent %d)", (int)sent);
+    CHECK(client_ok("{\"cmd\":\"generate\",\"client_api\":2}", min, &sent) && sent == 2, "client_api 2 refused");
+    CHECK(client_ok("{\"client_api\":7,\"cmd\":\"uart_open\"}", min, &sent) && sent == 7, "client_api 7 refused");
+    CHECK(!client_ok("{\"cmd\":\"no_such_verb\",\"client_api\":1}", min, &sent), "an unknown verb ran");
+    /* Not a number, negative, or only nested (a carried profile or definition): 0. */
+    CHECK(!client_ok("{\"cmd\":\"generate\",\"client_api\":\"abc\"}", min, &sent) && sent == 0, "text counted");
+    CHECK(!client_ok("{\"cmd\":\"generate\",\"client_api\":-3}", min, &sent) && sent == 0, "negative counted");
+    CHECK(!client_ok("{\"cmd\":\"generate\",\"client_api\":2x}", min, &sent) && sent == 0, "2x counted");
+    CHECK(!client_ok("{\"cmd\":\"wiring_put\",\"profile\":{\"client_api\":9}}", min, &sent) && sent == 0,
+          "a nested client_api counted (sent %d)", (int)sent);
+    CHECK(client_ok("{\"cmd\":\"generate\",\"client_api\":99999999999}", min, &sent) && sent == INT32_MAX,
+          "a huge client_api: sent %d", (int)sent);
+
+    /* What a client needs to find out and say so, and to let go of the pod: always. */
+    static const char *const any[] = { "status", "diag", "ping", "lease_release" };
+    for (size_t i = 0; i < sizeof(any) / sizeof(any[0]); i++) {
+        char line[64];
+        snprintf(line, sizeof(line), "{\"cmd\":\"%s\"}", any[i]);
+        CHECK(client_ok(line, min, &sent), "%s refused for an old client", any[i]);
+        CHECK(client_ok(line, UINT32_MAX, &sent), "%s refused at the highest minimum", any[i]);
+    }
+    /* And nothing else: the list stays short. */
+    size_t n = 0, flagged = 0;
+    const cmd_desc_t *rows = cmd_table_rows(&n);
+    for (size_t i = 0; i < n; i++) {
+        if (!cmd_has(&rows[i], CMD_F_ANY_CLIENT)) continue;
+        flagged++;
+        int known = 0;
+        for (size_t j = 0; j < sizeof(any) / sizeof(any[0]); j++)
+            known |= strcmp(rows[i].key.name, any[j]) == 0;
+        CHECK(known, "%s runs for any client: add it to the docs and this list", rows[i].key.name);
+    }
+    CHECK(flagged == sizeof(any) / sizeof(any[0]), "%zu rows run for any client", flagged);
+    CHECK(!client_ok("{\"cmd\":\"lease_acquire\",\"ttl_s\":60}", min, &sent), "lease_acquire ran");
+
+    /* The text an old client shows as it is. */
+    char why[CMD_GATE_CLIENT_MAX + 128];
+    cmd_gate_client_api_text("{\"cmd\":\"generate\"}", 0, 2, why, sizeof(why));
+    CHECK(strcmp(why, "update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer "
+                      "(this client sent 0)") == 0, "text: %s", why);
+    cmd_gate_client_api_text("{\"cmd\":\"generate\",\"client_api\":1,\"client\":\"sdk 3.0.6\"}", 1, 2, why, sizeof(why));
+    CHECK(strcmp(why, "update the BenchPod SDK, MCP or CLI (sdk 3.0.6): this firmware needs client API 2 "
+                      "or newer (this client sent 1)") == 0, "text with client: %s", why);
+    /* A name too long, with a control character, or only nested is left out. */
+    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"123456789012345678901234567890123\"}", 1, 2, why, sizeof(why));
+    CHECK(strstr(why, "CLI: this") != NULL, "a 33-character client kept: %s", why);
+    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"12345678901234567890123456789012\"}", 1, 2, why, sizeof(why));
+    CHECK(strstr(why, "(12345678901234567890123456789012)") != NULL, "a 32-character client dropped: %s", why);
+    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"a\\nb\"}", 1, 2, why, sizeof(why));
+    CHECK(strstr(why, "CLI: this") != NULL, "a control character kept: %s", why);
+    cmd_gate_client_api_text("{\"cmd\":\"x\",\"p\":{\"client\":\"evil\"}}", 1, 2, why, sizeof(why));
+    CHECK(strstr(why, "evil") == NULL, "a nested client used: %s", why);
+    /* The longest one fits the buffer dispatch_line gives it. */
+    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"12345678901234567890123456789012\"}",
+                             INT32_MAX, UINT32_MAX, why, sizeof(why));
+    CHECK(strlen(why) + 1 < sizeof(why) && strstr(why, "(this client sent 2147483647)") != NULL,
+          "longest text cut: %s", why);
+}
+
 int main(void) {
     test_open_pod_passes();
     test_locked_lan();
@@ -251,6 +339,7 @@ int main(void) {
     test_digital_board();
     test_lists_name_real_verbs();
     test_scpi_line_writes();
+    test_client_api();
     if (failures) { printf("test_cmd_gate: %d FAILED\n", failures); return 1; }
     printf("test_cmd_gate: all passed\n");
     return 0;

@@ -47,6 +47,9 @@ enum {
     /* lease_acquire / lease_renew / lease_release (lease_local.h): always reach their handler, so a
        busy lease answers with its holder instead of a gate refusal. */
     CMD_F_LEASE  = 1u << 6,
+    /* Runs for a client below min_client_api (cmd_gate_client_api): what a client needs to find
+       out that it is too old and to say so, and to let go of the pod. Keep the list short. */
+    CMD_F_ANY_CLIENT = 1u << 7,
 };
 
 /* The {name, tier} pair is what embeddedci-server mirrors (testdata/shared/cmd_tier_vectors.json)
