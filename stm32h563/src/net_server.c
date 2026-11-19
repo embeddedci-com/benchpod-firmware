@@ -84,12 +84,15 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 /* TLS sessions at once. The SDK opens a connection per command and keeps one for a UART session or
    a capture, so "UART console + capture + one command" needs three. Each session holds 22,000 B
    of FreeRTOS heap once open (measured on 3.9.7: 155 KB free idle, 133 KB with one, 111 KB with
-   two; 16 KB IN record buffer, 4 KB OUT, context). A client is refused when it would take the
-   heap below the floor (room the cloud link needs to reconnect): free heap under FLOOR + SESSION.
-   Plaintext slots are not affected. */
+   two; 16 KB IN record buffer, 4 KB OUT, context). A client is refused when it takes the heap
+   below the floor (room the cloud link needs to reconnect). srv_accept runs after the TLS layer
+   has set the new connection up (altcp_mbedtls_lower_accept -> altcp_mbedtls_setup ->
+   mbedtls_ssl_setup), so its 22,000 B are already gone from the free heap there: the check is
+   free heap under FLOOR + HANDSHAKE, not FLOOR + a whole session again (which refused the third
+   connection with 95 KB free; 3.10.11, UART console + emulated sensor + capture + one command). */
 #define LAN_TLS_MAX_SESSIONS   3
 #define LAN_TLS_HEAP_FLOOR     (48u * 1024u)
-#define LAN_TLS_SESSION_HEAP   (24u * 1024u)   /* 22,000 B measured, plus handshake slack */
+#define LAN_TLS_HANDSHAKE_HEAP (2u * 1024u)    /* what the handshake takes beyond the open session */
 
 static struct altcp_pcb *conn_pcb[NET_MAX_CONN];
 /* The TLS configuration a connection holds (lan_tls_ref), NULL for plaintext. */
@@ -494,7 +497,7 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     if (!usb && !s_lan_up) { altcp_abort(newpcb); return ERR_ABRT; }
     if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
     if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS ||
-                xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_SESSION_HEAP)) {
+                xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_HANDSHAKE_HEAP)) {
         log_printf("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
                    (unsigned)xPortGetFreeHeapSize());
         altcp_abort(newpcb);
