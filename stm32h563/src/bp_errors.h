@@ -44,8 +44,11 @@ typedef enum {
     BP_E_UART_DE_PIN = 22,
     BP_E_LA_NO_PULL = 23,
     BP_E_LA_PULL_DIRECTION = 24,
-    BP_E_VREF_5V_MISSING = 25,
-    BP_E_PULL_RAIL_DOWN = 26,
+    BP_E_LEASE_BUSY = 25,
+    BP_E_LEASE_LOST = 26,
+    BP_E_LEASE_NOT_HELD = 27,
+    BP_E_VREF_5V_MISSING = 28,
+    BP_E_PULL_RAIL_DOWN = 29,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -172,12 +175,27 @@ static inline void bp_err_la_pull_direction(int conn_id, const char *text, int32
     const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
     bp_error_send(conn_id, BP_E_LA_PULL_DIRECTION, text, a, 3);
 }
-/* BP0025: 5 V did not come up on pin 21 ({mv} mV) */
+/* BP0025: {holder} holds this pod ({purpose}, {left_s} s left) */
+static inline void bp_err_lease_busy(int conn_id, const char *text, const char *holder, const char *purpose, int32_t left_s) {
+    const bp_err_arg_t a[] = { {"holder", holder, 0, 1}, {"purpose", purpose, 0, 1}, {"left_s", 0, left_s, 0} };
+    bp_error_send(conn_id, BP_E_LEASE_BUSY, text, a, 3);
+}
+/* BP0026: The pod's lease was stopped by {by} */
+static inline void bp_err_lease_lost(int conn_id, const char *text, const char *by) {
+    const bp_err_arg_t a[] = { {"by", by, 0, 1} };
+    bp_error_send(conn_id, BP_E_LEASE_LOST, text, a, 1);
+}
+/* BP0027: The pod holds no lease with id {id} */
+static inline void bp_err_lease_not_held(int conn_id, const char *text, const char *id) {
+    const bp_err_arg_t a[] = { {"id", id, 0, 1} };
+    bp_error_send(conn_id, BP_E_LEASE_NOT_HELD, text, a, 1);
+}
+/* BP0028: 5 V did not come up on pin 21 ({mv} mV) */
 static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_VREF_5V_MISSING, text, a, 1);
 }
-/* BP0026: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
+/* BP0029: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
 static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, text, a, 1);

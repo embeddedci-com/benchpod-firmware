@@ -32,6 +32,7 @@
 #include "psram_regions.h"   /* an STM32 write may land on the last capture */
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bp_log.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -389,7 +390,7 @@ int psram_init(void)
         printf("[psram] OCTOSPI init failed\n");
         return -1;
     }
-    printf("[psram] SCLK %lu kHz (HCLK %lu kHz / %lu) [0x9F/0x03 max 33 MHz]\n",
+    LOG_BOOT("[psram] SCLK %lu kHz (HCLK %lu kHz / %lu) [0x9F/0x03 max 33 MHz]\n",
            (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000),
            (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000),
            (unsigned long)(hxspi.Init.ClockPrescaler + 1));
@@ -417,7 +418,7 @@ int psram_init(void)
         printf("[psram] ID read failed\n");
         return -1;
     }
-    printf("[psram] ID: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+    LOG_BOOT("[psram] ID: %02x %02x %02x %02x %02x %02x %02x %02x\n",
            id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
     if (id[0] != 0x0D || id[1] != 0x5D) {
         printf("[psram] unexpected ID (want MFID 0x0D / KGD 0x5D) — check CS/bus/power\n");
@@ -439,7 +440,7 @@ int psram_init(void)
             HAL_NVIC_SetPriority(OCTOSPI1_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
             HAL_NVIC_EnableIRQ(OCTOSPI1_IRQn);
             s_psram_dma_ok = true;
-            printf("[psram] read DMA enabled (GPDMA1 ch4)\n");
+            LOG_BOOT("[psram] read DMA enabled (GPDMA1 ch4)\n");
         } else {
             printf("[psram] read DMA init failed — using blocking reads\n");
         }
@@ -454,7 +455,7 @@ int psram_init(void)
         printf("[psram] WARN: op-clock re-init failed, staying at init clock\n");
     }
 
-    printf("[psram] APS6404L up (QPI, GPIO-CS indirect, %lu MB, SCLK %lu MHz, "
+    LOG_BOOT("[psram] APS6404L up (QPI, GPIO-CS indirect, %lu MB, SCLK %lu MHz, "
            "read %luB DMA%s)\n",
            (unsigned long)(PSRAM_SIZE >> 20),
            (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000000u),

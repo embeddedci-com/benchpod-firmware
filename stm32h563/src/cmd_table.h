@@ -39,6 +39,9 @@ enum {
     CMD_F_NOISY  = 1u << 4,
     /* The tier depends on the arguments (cmd_tier.h): the row's tier is the read form's. */
     CMD_F_MIXED  = 1u << 5,
+    /* lease_acquire / lease_renew / lease_release (lease_local.h): always reach their handler, so a
+       busy lease answers with its holder instead of a gate refusal. */
+    CMD_F_LEASE  = 1u << 6,
 };
 
 /* The {name, tier} pair is what embeddedci-server mirrors (testdata/shared/cmd_tier_vectors.json)

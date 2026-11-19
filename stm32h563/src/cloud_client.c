@@ -18,6 +18,7 @@
 #include "ota.h"
 #include "pod_policy.h"
 #include "lease_gate.h"
+#include "lease_local.h"
 #include "cloud_extras.h"
 #include "cloud_caps.h"
 #include "altcp_bp_proxy.h"
@@ -53,6 +54,7 @@
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
 #endif
+#include "bp_log.h"
 
 /* Ping often and time out fast so a WEDGED server->pod direction self-heals quickly.  The failure
    mode (a single Cloudflare-proxied WS shared by a bulk DAC upload + a UART flood) stalls
@@ -294,7 +296,7 @@ static void cl_set_state(cl_state_t st) {
     s_state = st;
     s_state_t0 = now;
     /* e.g. "[cloud] state -> connected [CONNECTED]  CHAL_CONNECT took 1832 ms, +4210 ms total" */
-    printf("[cloud] state -> %s [%s]  %s took %lu ms, +%lu ms total\n",
+    LOG_D("[cloud] state -> %s [%s]  %s took %lu ms, +%lu ms total\n",
            cloud_client_state_str(), cl_state_dbg_name(st),
            cl_state_dbg_name(prev), (unsigned long)in_prev_ms,
            (unsigned long)total_ms);
@@ -358,8 +360,16 @@ uint32_t cloud_client_drops(const char **last_reason)
     return s_drops;
 }
 
+/* Failed connect attempts since the last connection (log_level.h): the first one is a warning,
+   then one "still failing" line a minute, not a burst of lines every backoff. */
+static log_repeat_t s_conn_rep;
+
 static void cl_backoff(const char *reason) {
-    printf("[cloud] backoff: %s\n", reason);
+    LOG_D("[cloud] backoff: %s\n", reason);
+    if (s_state == CL_CONNECTED)
+        LOG_I("[cloud] connection lost: %s\n", reason ? reason : "");
+    else
+        log_repeat_failf(&s_conn_rep, BP_LOG_WARN, "[cloud] cannot connect: %s", reason ? reason : "");
     if (s_state == CL_CONNECTED) {
         snprintf(s_drop_reason, sizeof(s_drop_reason), "%s", reason ? reason : "");
         s_drops++;
@@ -401,7 +411,7 @@ static void cl_log_tls_window(const char *when) {
     struct altcp_pcb *inner = s_pcb->inner_conn;
     struct tcp_pcb *tp = inner ? (struct tcp_pcb *)inner->state : NULL;
     unsigned rx = (st && st->rx) ? st->rx->tot_len : 0, rxapp = (st && st->rx_app) ? st->rx_app->tot_len : 0;
-    printf("[cloud/tls] %s: rcv_wnd=%u rcv_ann_wnd=%u refused=%u unrecved=%d bio_read=%d bio_appl=%d loaned=%d debt=%d rx=%u rx_app=%u ssl_avail=%u\n",
+    LOG_D("[cloud/tls] %s: rcv_wnd=%u rcv_ann_wnd=%u refused=%u unrecved=%d bio_read=%d bio_appl=%d loaned=%d debt=%d rx=%u rx_app=%u ssl_avail=%u\n",
            when, tp ? (unsigned)tp->rcv_wnd : 0, tp ? (unsigned)tp->rcv_ann_wnd : 0,
            (tp && tp->refused_data) ? (unsigned)tp->refused_data->tot_len : 0,
            st ? st->rx_passed_unrecved : -1, st ? st->bio_bytes_read : -1, st ? st->bio_bytes_appl : -1,
@@ -412,7 +422,7 @@ static void cl_log_tls_window(const char *when) {
 void cloud_client_log_link_state(const char *when) {
     long ms_since_rx = (long)(absolute_time_diff_us(s_last_rx, get_absolute_time()) / 1000);
     unsigned sndbuf = (s_pcb && s_state == CL_CONNECTED) ? (unsigned)altcp_sndbuf(s_pcb) : 0;
-    printf("[cloud/diag] %s: state=%d ms_since_rx=%ld rx_acc=%u/%u rx_peak=%u overflow=%d sndbuf=%u "
+    LOG_D("[cloud/diag] %s: state=%d ms_since_rx=%ld rx_acc=%u/%u rx_peak=%u overflow=%d sndbuf=%u "
            "ota_seen=%lu ota_submitted=%lu ota_requeued=%lu\n",
            when ? when : "?", (int)s_state, ms_since_rx,
            (unsigned)s_rx_len, (unsigned)sizeof(s_rx), (unsigned)s_rx_len_peak,
@@ -444,7 +454,7 @@ static void cl_dns_backoff(const char *what) {
 static err_t cl_connected_cb(void *arg, struct altcp_pcb *conn, err_t err) {
     (void)arg; (void)conn;
     if (err != ERR_OK) {
-        printf("[cloud] connect-cb err=%d\n", (int)err);
+        LOG_D("[cloud] connect-cb err=%d\n", (int)err);
         cl_set_error("tcp connect failed (err %d)", (int)err);
         s_link = LINK_FAILED;
         return ERR_OK;
@@ -479,7 +489,7 @@ static err_t cl_recv_cb(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t
 
 static void cl_err_cb(void *arg, err_t err) {
     (void)arg;
-    printf("[cloud] err-cb err=%d\n", (int)err);   /* diag: -13 ERR_ABRT, -14 ERR_RST, -3 ERR_TIMEOUT ... */
+    LOG_D("[cloud] err-cb err=%d\n", (int)err);   /* diag: -13 ERR_ABRT, -14 ERR_RST, -3 ERR_TIMEOUT ... */
     /* altcp_tls reports a failed handshake as ERR_CLSD; its pcb is still valid here. */
     if (err == ERR_CLSD) s_tcp_up = true;
     if (s_link == LINK_CONNECTING) {
@@ -536,7 +546,7 @@ static bool cl_open(bool tls, uint16_t port) {
             size_t ca_len = 0;
             char *ca = NULL;
             if (cloud_extras_ca_pem(&ca, &ca_len) != 0) {
-                printf("[cloud] out of memory for the company CA: retrying later\n");
+                LOG_E("[cloud] out of memory for the company CA: retrying later\n");
                 cl_set_error("out of memory for the company CA");
                 altcp_abort(base);
                 return false;
@@ -548,7 +558,7 @@ static bool cl_open(bool tls, uint16_t port) {
                 if (ca && cloud_extras_ca_tls_refused())
                     cl_set_error("company CA unusable: using the built-in roots");
                 else {
-                    printf("[cloud] altcp_tls config create failed (out of memory?)\n");
+                    LOG_E("[cloud] altcp_tls config create failed (out of memory?)\n");
                     cl_set_error("tls config create failed (out of memory?)");
                 }
                 altcp_abort(base);
@@ -556,7 +566,7 @@ static bool cl_open(bool tls, uint16_t port) {
             }
         }
         pcb = altcp_tls_wrap(s_tls_conf, base);
-        if (!pcb) { printf("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }
+        if (!pcb) { LOG_E("[cloud] altcp_tls_wrap failed (out of mem?)\n"); altcp_abort(base); return false; }
         mbedtls_ssl_context *ssl = (mbedtls_ssl_context *)altcp_tls_context(pcb);
         if (ssl) mbedtls_ssl_set_hostname(ssl, s_cfg.host);   /* SNI + CN/SAN check host */
     } else {
@@ -575,12 +585,12 @@ static bool cl_open(bool tls, uint16_t port) {
 
     {
         char ipbuf[16];
-        printf("[cloud] connecting to %s:%u (%s)\n", ipaddr_ntoa_r(&s_ip, ipbuf, sizeof ipbuf),
+        LOG_D("[cloud] connecting to %s:%u (%s)\n", ipaddr_ntoa_r(&s_ip, ipbuf, sizeof ipbuf),
                (unsigned)port, tls ? "tls" : "plain");
     }
     err_t ce = altcp_connect(pcb, &s_ip, port, cl_connected_cb);
     if (ce != ERR_OK) {
-        printf("[cloud] altcp_connect immediate err=%d\n", (int)ce);
+        LOG_D("[cloud] altcp_connect immediate err=%d\n", (int)ce);
         cl_drop_link();
         return false;
     }
@@ -624,7 +634,7 @@ static bool cl_tls_verified(void) {
     if (!ssl) return false;
     uint32_t flags = mbedtls_ssl_get_verify_result(ssl);
     if (flags != 0) {
-        printf("[cloud] TLS cert verify failed: flags=0x%08lx\n", (unsigned long)flags);
+        LOG_D("[cloud] TLS cert verify failed: flags=0x%08lx\n", (unsigned long)flags);
         cl_set_error("tls certificate not trusted (flags 0x%lx)", (unsigned long)flags);
         return false;
     }
@@ -722,7 +732,7 @@ static bool cl_ws_send(uint8_t opcode, const char *payload, size_t len) {
     memcpy(mask, &r, 4);
     static uint8_t frame[BP_WS_FRAME_MAX];
     size_t n = ws_build_frame(opcode, (const uint8_t *)payload, len, mask, frame, sizeof(frame));
-    if (n == 0) { printf("[cloud] frame too big (%u B)\n", (unsigned)len); return false; }
+    if (n == 0) { LOG_W("[cloud] frame too big (%u B)\n", (unsigned)len); return false; }
     return cl_tcp_send(frame, n) == 0;
 }
 
@@ -755,7 +765,7 @@ static bool cl_send_capabilities(void) {
     if (n == 0) {
         /* Cannot happen (test_cloud_caps.c builds the worst case); keep the link rather than
            reconnect over it. */
-        printf("[cloud] capabilities frame does not fit %u bytes: not sent\n", (unsigned)CLOUD_CAPS_MAX);
+        LOG_W("[cloud] capabilities frame does not fit %u bytes: not sent\n", (unsigned)CLOUD_CAPS_MAX);
         return true;
     }
     if (!cl_ws_send(WS_OP_TEXT, f, n)) return false;
@@ -890,7 +900,7 @@ void cloud_client_send_command_response(const char *request_id,
        is mid-handshake landed in the HTTP upgrade exchange (or tripped a backoff); the server
        re-issues the command after reconnecting anyway, so drop it. */
     if (s_state != CL_CONNECTED) {
-        printf("[cloud] dropping the reply to %s: link not connected (%s)\n",
+        LOG_W("[cloud] dropping the reply to %s: link not connected (%s)\n",
                request_id, cloud_client_state_str());
         return;
     }
@@ -938,7 +948,47 @@ static void cl_handle_lease_state(const char *json) {
     cl_json_str(json, "expires_in_s", exp, sizeof(exp));
     bool on = strcmp(held, "true") == 0;
     lease_gate_update(on, holder, (uint32_t)strtoul(exp, NULL, 10), HAL_GetTick());
-    printf("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
+    LOG_D("[cloud] lease %s%s\n", on ? "held by " : "released", on ? lease_gate_holder() : "");
+}
+
+/* lease.break {by}: someone stopped the pod's own lease from the web app or the cloud
+   (lease_local.h). The hw worker ends it; each owner's next command fails once with "lease lost". */
+static void cl_handle_lease_break(const char *json) {
+    char by[LEASE_LOCAL_HOLDER_MAX] = {0};
+    cl_json_str(json, "by", by, sizeof(by));
+    lease_local_break(by);
+    printf("[cloud] local lease stopped by %s\n", by[0] ? by : "the server");
+}
+
+/* lease.local: the pod's own lease, upstream, on every change and every LL_REPORT_MS while held,
+   so the server shows it and refuses web and cloud acquires against it. A new link sends the
+   current state first (s_ll_force). */
+#define LL_REPORT_MS 30000u
+static bool           s_ll_force = true;
+static bool           s_ll_sent_held;
+static uint32_t       s_ll_sent_gen;
+static absolute_time_t s_ll_next;
+
+static void cl_lease_local_poll(void) {
+    lease_local_view_t v;
+    uint32_t gen = 0;
+    if (!lease_local_snapshot(HAL_GetTick(), &v, &gen)) return;   /* mid-update: next poll */
+    const bool changed = s_ll_force || gen != s_ll_sent_gen || v.held != s_ll_sent_held;
+    if (!changed && !(v.held && time_reached(s_ll_next))) return;
+    char f[224];
+    bp_emit_t e;
+    bp_emit_init(&e, f, sizeof(f));
+    if (v.held)   /* labels are printable ASCII without quotes or backslashes (lease_local.c) */
+        bp_emit(&e, "{\"type\":\"lease.local\",\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
+                    "\"expires_in_s\":%lu}", v.holder, v.purpose, (unsigned long)v.left_s);
+    else
+        bp_emit_raw(&e, "{\"type\":\"lease.local\",\"held\":false}");
+    /* Only a frame that went out counts: a full send buffer retries at the next poll. */
+    if (!bp_emit_ok(&e) || !cl_ws_send(WS_OP_TEXT, f, bp_emit_len(&e))) return;
+    s_ll_force = false;
+    s_ll_sent_gen = gen;
+    s_ll_sent_held = v.held;
+    s_ll_next = make_timeout_time_ms(LL_REPORT_MS);
 }
 
 /* End a tunnel because its byte stream can no longer be trusted (a frame was lost or garbled):
@@ -948,7 +998,7 @@ static void cl_handle_lease_state(const char *json) {
 static void cl_tunnel_fail(int slot, const char *reason) {
     char id[BP_TUNNEL_ID_MAX];
     memcpy(id, s_tunnels[slot], sizeof(id));
-    printf("[cloud] tunnel %s reset: %s\n", id, reason);
+    LOG_W("[cloud] tunnel %s reset: %s\n", id, reason);
     char line[192];
     bp_emit_t e;
     bp_emit_init(&e, line, sizeof(line));
@@ -1145,7 +1195,7 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
            read from the whole frame: Go marshals keys in sorted order, so in a tunnel.data frame
            "tunnel_id" and "type" come AFTER the base64 data. */
         bp_json_scan_str((const char *)payload, len, "type", type, sizeof(type));
-        printf("[cloud] dropping a %u-byte %s frame (limit %u)\n", (unsigned)len,
+        LOG_W("[cloud] dropping a %u-byte %s frame (limit %u)\n", (unsigned)len,
                type[0] ? type : "untyped", (unsigned)(sizeof(msg) - 1));
         if (strcmp(type, "command.request") == 0) {
             char rid[64] = {0};
@@ -1173,6 +1223,8 @@ static bool cl_handle_text_frame(const uint8_t *payload, size_t len) {
         return cl_handle_tunnel_data(msg);   /* false => worker busy, retry this frame next poll */
     } else if (strcmp(type, "lease.state") == 0) {
         cl_handle_lease_state(msg);
+    } else if (strcmp(type, "lease.break") == 0) {
+        cl_handle_lease_break(msg);
     } else if (strcmp(type, "tunnel.open") == 0) {
         cl_handle_tunnel_open(msg);
     } else if (strcmp(type, "tunnel.close") == 0) {
@@ -1344,7 +1396,7 @@ static bool cl_sign_nonce(void) {
     uint8_t sig[DEVICE_ID_SIG_LEN];
     absolute_time_t t0 = get_absolute_time();
     if (device_identity_sign_ctx(DEVICE_ID_CTX_WS_AUTH_V2, payload, hlen + 1 + nlen, sig) != 0) return false;
-    printf("[cloud] nonce sign (ed25519) took %lu ms\n",
+    LOG_D("[cloud] nonce sign (ed25519) took %lu ms\n",
            (unsigned long)(absolute_time_diff_us(t0, get_absolute_time()) / 1000));
     b64url_encode(sig, sizeof(sig), s_sig, sizeof(s_sig));
     return true;
@@ -1369,7 +1421,7 @@ void cloud_client_init(void) {
     /* A plain config stored by older or dev firmware is not used by a release build (see
        handle_cloud_set): connecting without TLS would let anyone on the path stand in. */
     if (loaded && !s_cfg.tls && s_cfg.enabled) {
-        printf("[cloud] stored config is plain ws: release firmware connects over TLS only\n");
+        LOG_W("[cloud] stored config is plain ws: release firmware connects over TLS only\n");
         cl_set_error("plain (non-TLS) cloud config refused by release firmware; run cloud_set with tls");
         loaded = false;
     }
@@ -1377,7 +1429,7 @@ void cloud_client_init(void) {
     if (loaded && s_cfg.enabled && s_cfg.host[0] && s_cfg.device_id[0]) {
         s_have_cfg = true;
         cl_set_state(CL_WAIT_WIFI);
-        printf("[cloud] configured: %s:%u tls=%d device=%s\n",
+        LOG_I("[cloud] configured: %s:%u tls=%d device=%s\n",
                s_cfg.host, s_cfg.port, s_cfg.tls, s_cfg.device_id);
     } else {
         s_have_cfg = false;
@@ -1568,7 +1620,7 @@ void cloud_client_poll(void) {
                     bool auth_refused = (code == 401 || code == 403);
                     if (auth_refused && !s_auth_v1) {
                         s_auth_v1 = true;
-                        printf("[cloud] login v2 refused (HTTP %d): next attempt signs v1\n", code);
+                        LOG_W("[cloud] login v2 refused (HTTP %d): next attempt signs v1\n", code);
                     } else if (auth_refused) {
                         s_auth_v1 = false;   /* v1 refused too: back to v2 */
                     }
@@ -1591,8 +1643,16 @@ void cloud_client_poll(void) {
                 s_last_rx = get_absolute_time();
                 s_next_ping = make_timeout_time_ms(PING_INTERVAL_MS);
                 cl_set_state(CL_CONNECTED);
+                s_ll_force = true;   /* tell the new link about the pod's own lease */
                 cl_set_error("%s", "");
-                printf("[cloud] connected to %s as device %s\n", s_cfg.host, s_cfg.device_id);
+                {
+                    uint32_t failed = log_repeat_ok(&s_conn_rep);
+                    if (failed)
+                        LOG_I("[cloud] connected to %s as device %s (after %lu failed attempt%s)\n", s_cfg.host,
+                              s_cfg.device_id, (unsigned long)failed, failed == 1 ? "" : "s");
+                    else
+                        LOG_I("[cloud] connected to %s as device %s\n", s_cfg.host, s_cfg.device_id);
+                }
                 if (!cl_send_capabilities()) { cl_backoff("capabilities send failed"); return; }
                 /* Announce the current eFuse state up front so the server's cached
                    target-power status reflects the just-booted (default-disabled) reality. */
@@ -1666,6 +1726,7 @@ void cloud_client_poll(void) {
         if (s_resend_caps && cl_send_capabilities()) s_resend_caps = false;
         /* Report OTA staging progress/state transitions to the server. */
         cl_ota_status_poll();
+        cl_lease_local_poll();
         return;
 
     case CL_BACKOFF:

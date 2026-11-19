@@ -29,6 +29,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "bp_log.h"
 #include "vref_out.h"
 #include "pull_exp.h"
 
@@ -376,7 +377,7 @@ static void ice40_idle_check(uint32_t now) {
         s_ping_fail_since = 0;
     } else if (s_ice_seen_alive && !s_ping_fail_since) {
         s_ping_fail_since = now ? now : 1u;
-        printf("[hw] the iCE40 stopped answering\n");
+        LOG_E("[hw] the iCE40 stopped answering\n");
     }
     uint32_t no_resets = RECOVERY_RESETS_MAX;   /* the idle check never resets the STM32 */
     const uint32_t fail_ms = s_ping_fail_since ? now - s_ping_fail_since : 0u;
@@ -404,6 +405,7 @@ static void worker_task(void *arg) {
     /* iCE40 / PSRAM bring-up happens here, after USB and the scheduler are up, so however it
        goes the USB console is already there.  Commands queue until it is done. */
     boot_deferred_hw_init();
+    console_boot_done();          /* the first prompt, after the bring-up's boot lines */
     status_led_boot_finished();   /* boot OK blinks green, a failed bring-up shows red */
     for (;;) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
@@ -433,7 +435,7 @@ static void worker_task(void *arg) {
             static uint32_t seen;
             uint32_t n = g_malloc_failures;
             if (n != seen) {
-                printf("[heap] %lu allocation failure(s) so far (free %u, min %u)\n",
+                LOG_E("[heap] %lu allocation failure(s) so far (free %u, min %u)\n",
                        (unsigned long)n, (unsigned)xPortGetFreeHeapSize(),
                        (unsigned)xPortGetMinimumEverFreeHeapSize());
                 seen = n;

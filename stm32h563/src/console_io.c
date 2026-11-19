@@ -2,6 +2,7 @@
  * console_io.c — USART2 + USB-CDC byte multiplexer and printf retarget.
  */
 #include "console_io.h"
+#include "console_prompt.h"
 #include "usb_device.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
@@ -97,34 +98,93 @@ static void console_io_write_unlocked(const uint8_t *buf, size_t len)
     cdc_if_write(buf, (uint16_t)len);
 }
 
-void console_io_write(const uint8_t *buf, size_t len)
+/* The prompt and the line editor (console_prompt.h): every write goes through it, under the
+   console lock, so background output never lands after a bare prompt or inside a typed line. */
+static console_prompt_t s_prompt;
+
+static void sink_raw(const char *s, size_t n)
 {
-    io_lock();
-    console_io_write_unlocked(buf, len);
-    io_unlock();
+    console_io_write_unlocked((const uint8_t *)s, n);
 }
 
 /* ONLCR: emit a CR before any bare LF, so device-log lines that end in "\n" (not "\r\n") don't
    stair-step across the terminal (each line starting at the column where the previous one
    ended).  Runs of non-LF bytes go out in one write; a lone "\n" becomes "\r\n"; an existing
-   "\r\n" is untouched.  The whole message is written under one lock, so another task's output
-   can't land inside it, and `last` (the previous byte, across calls) is only touched under it. */
-void console_io_write_text(const char *ptr, size_t len)
+   "\r\n" is untouched.  `last` (the previous byte, across calls) is only touched under the
+   console lock. */
+static uint8_t s_last;
+
+static void sink_text(const char *ptr, size_t len)
 {
-    static uint8_t last = 0;
     static const uint8_t crlf[2] = { '\r', '\n' };
-    io_lock();
     size_t start = 0;
     for (size_t i = 0; i < len; i++) {
-        if (ptr[i] == '\n' && last != '\r') {
+        if (ptr[i] == '\n' && s_last != '\r') {
             if (i > start) console_io_write_unlocked((const uint8_t *)(ptr + start), i - start);
             console_io_write_unlocked(crlf, 2);
             start = i + 1;
         }
-        last = (uint8_t)ptr[i];
+        s_last = (uint8_t)ptr[i];
     }
     if (len > start) console_io_write_unlocked((const uint8_t *)(ptr + start), len - start);
+}
+
+/* Raw bytes for the sinks that track the previous byte (sink_text) too. */
+static void sink_raw_tracked(const char *s, size_t n)
+{
+    if (n) s_last = (uint8_t)s[n - 1];
+    sink_raw(s, n);
+}
+
+void console_io_write(const uint8_t *buf, size_t len)
+{
+    io_lock();
+    console_prompt_out(&s_prompt, sink_raw_tracked, (const char *)buf, len);
     io_unlock();
+}
+
+/* The whole message is written under one lock, so another task's output can't land inside it. */
+void console_io_write_text(const char *ptr, size_t len)
+{
+    io_lock();
+    console_prompt_out(&s_prompt, sink_text, ptr, len);
+    io_unlock();
+}
+
+void console_io_prompt(void)
+{
+    io_lock();
+    console_prompt_show(&s_prompt, sink_raw_tracked);
+    io_unlock();
+}
+
+void console_io_hold_prompt(bool on)
+{
+    io_lock();
+    console_prompt_hold(&s_prompt, sink_raw_tracked, on);
+    io_unlock();
+}
+
+void console_io_edit_char(char c)
+{
+    io_lock();
+    console_prompt_char(&s_prompt, sink_raw_tracked, c);
+    io_unlock();
+}
+
+void console_io_edit_backspace(void)
+{
+    io_lock();
+    console_prompt_backspace(&s_prompt, sink_raw_tracked);
+    io_unlock();
+}
+
+size_t console_io_edit_enter(char *out, size_t cap)
+{
+    io_lock();
+    size_t n = console_prompt_enter(&s_prompt, sink_raw_tracked, out, cap);
+    io_unlock();
+    return n;
 }
 
 void console_io_rx_push(uint8_t byte)

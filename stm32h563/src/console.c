@@ -194,7 +194,7 @@ int ice40_boot_image_intact(void)
     return known ? 0 : -1;
 }
 
-#define CONSOLE_LINE_MAX 128
+#include "console_prompt.h"   /* CONSOLE_LINE_MAX */
 
 /* Formatted output to a sink. */
 static void op(console_out_t out, void *ctx, const char *fmt, ...)
@@ -228,6 +228,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  lan-ota [signed|any]                       updates from Ethernet/Wi-Fi: signed only (default) or any\r\n"
         "  rollback-floor [clear]                     the oldest signed firmware this pod takes\r\n"
         "  lan-policy [open|locked|off]               what the external LAN may do (USB stays on)\r\n"
+        "  log [error|warn|info|debug]                console log level (stored; default info)\r\n"
         "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate (port 8443)\r\n"
         "  cloud-ca | cloud-ca-clear                  company CA (install it over the network: benchpod cloud ca set)\r\n"
         "  cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear   HTTP proxy for the cloud link\r\n"
@@ -629,9 +630,9 @@ static void cmd_wifi_show(console_out_t out, void *ctx)
 static void flash_esp32_done(int result)
 {
     if (result >= 0)
-        log_printf("flash-esp32: ESP32-C3 flashed + booted (%s)\n", esp_rom_result_str(result));
+        LOG_REPLY("flash-esp32: ESP32-C3 flashed + booted (%s)\n", esp_rom_result_str(result));
     else
-        log_printf("flash-esp32: failed, %s (C3 left in reset; see log)\n", esp_rom_result_str(result));
+        LOG_REPLY("flash-esp32: failed, %s (C3 left in reset; see log)\n", esp_rom_result_str(result));
     net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
 }
 
@@ -1309,6 +1310,14 @@ static void console_exec_locked(char *cmd, console_out_t out, void *ctx)
                                pod_policy_https_only() ? "on" : "off", in.error);
         else                op(out, ctx, "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\"\r\n", LAN_TLS_PORT,
                                pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key, in.subject);
+    } else if (!strcmp(argv[0], "log")) {
+        const char *why = NULL;
+        if (argc >= 2) {
+            int lv = log_level_from_name(argv[1]);
+            why = lv < 0 ? "use error, warn, info or debug" : pod_policy_set_log_level((bp_log_level_t)lv);
+        }
+        if (why) op(out, ctx, "log error %s\r\n", why);
+        else     op(out, ctx, "log %s\r\n", log_level_name(log_level()));
     } else if (!strcmp(argv[0], "lan-policy")) {
         const char *why = NULL;
         if (argc >= 2) {
@@ -1569,8 +1578,8 @@ void console_exec(char *cmd, console_out_t out, void *ctx)
 
 /* ---- local interactive console ----------------------------------------- */
 
-static char line[CONSOLE_LINE_MAX];
-static size_t line_len;
+/* The prompt and the typed line live in console_io (console_prompt.h), under the console lock,
+   so background log lines never land after a bare prompt or inside a typed line. */
 
 static void local_out(void *ctx, const char *s)
 {
@@ -1587,13 +1596,23 @@ void console_run_line(const char *line_in)
     strncpy(buf, line_in, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     console_exec(buf, local_out, NULL);
-    printf("> ");
+    console_io_prompt();
 }
+
+static volatile bool s_console_ready;
 
 void console_init(void)
 {
-    line_len = 0;
-    printf("\r\nconsole ready — type 'help'\r\n> ");
+    /* Nothing yet: the first prompt waits for the iCE40/PSRAM bring-up (console_boot_done), so
+       the boot lines come before it, not after. Input typed meanwhile waits in the RX ring. */
+}
+
+void console_boot_done(void)
+{
+    if (s_console_ready) return;
+    log_reply("\r\nconsole ready — type 'help'\r\n");
+    console_io_prompt();
+    s_console_ready = true;
 }
 
 void console_poll(void)
@@ -1602,31 +1621,35 @@ void console_poll(void)
        drains.  Swallowing the LF of a CR-LF stops the prompt firing twice (the
        "> on its own line" artifact with terminals that send CR-LF). */
     static int last_was_cr = 0;
+    /* Before the bring-up ends the prompt is not up; also give up waiting after 30 s, so a
+       bring-up that hangs (until the watchdog) never leaves the console deaf. */
+    if (!s_console_ready) {
+        if (HAL_GetTick() < 30000u) return;
+        console_boot_done();
+    }
     int c;
     while ((c = console_io_getc()) >= 0) {
         if (c == '\n' && last_was_cr) { last_was_cr = 0; continue; }  /* LF of a CR-LF */
         if (c == '\r' || c == '\n') {
             last_was_cr = (c == '\r');
-            printf("\r\n");
-            line[line_len] = '\0';
-            if (line_len > 0) {
+            char line[CONSOLE_LINE_MAX];
+            size_t n = console_io_edit_enter(line, sizeof(line));
+            if (n > 0) {
                 /* Execute on the hw worker (it owns the instrument hardware); the
                    worker reprints the prompt after the command output. */
                 if (!hw_worker_submit_console(line)) {
-                    printf("busy — try again\r\n> ");   /* worker queue full */
+                    console_io_write((const uint8_t *)"busy — try again\r\n", strlen("busy — try again\r\n"));   /* worker queue full */
+                    console_io_prompt();
                 }
             } else {
-                printf("> ");
+                console_io_prompt();
             }
-            line_len = 0;
         } else if (c == 0x08 || c == 0x7F) {
             last_was_cr = 0;
-            if (line_len > 0) { line_len--; printf("\b \b"); }
-        } else if (c >= 0x20 && c < 0x7F && line_len < CONSOLE_LINE_MAX - 1) {
+            console_io_edit_backspace();
+        } else if (c >= 0x20 && c < 0x7F) {
             last_was_cr = 0;
-            uint8_t ch = (uint8_t)c;
-            line[line_len++] = (char)ch;
-            console_io_write(&ch, 1);
+            console_io_edit_char((char)c);
         }
     }
 }

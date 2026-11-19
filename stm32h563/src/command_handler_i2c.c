@@ -9,7 +9,7 @@
  * i2c_start claims the two pins (la_pins: i2cm_sda / i2cm_scl) and arms the SWD engine as an
  * open-drain I2C master, so SWD, SPI and I2C sessions exclude each other.  The bus needs pull-ups:
  * with "pullups":"pod" (the default) both pins need a pod pull-up (LA1..LA6 today) switched on
- * (they go to 3.3 V, so the LA bank must be at 3.3 V); "pullups":"external" says the board has its
+ * (they go to the LA bank rail, so they work at 1.8 V and 3.3 V); "pullups":"external" says the board has its
  * own.  The pod never switches a pull-up by itself: the error names the command that does.
  *
  * i2c_xfer writes `write` (0..128 bytes) and then, after a repeated START, reads `read` (0..248)
@@ -90,8 +90,8 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
             send_error(conn_id, "the pod's pull-ups are off: J1 pin 21 is down (la_voltage shows it); "
                        "check pin 21, or pass \"pullups\":\"external\"");
         else
-            send_error(conn_id, "the pod's pull-ups go to 3.3 V and are off with the LA bank at 1.8 V: pass "
-                       "\"pullups\":\"external\" with pull-ups to the board's 1.8 V");
+            send_error(conn_id, "this board's pull-ups go to 3.3 V and the LA bank is not at 3.3 V: pass "
+                       "\"pullups\":\"external\" with pull-ups to the board's own rail");
         return false;
     }
     if (!pca9555_la_pullup_enabled((uint8_t)la)) {

@@ -50,6 +50,7 @@
 #include <string.h>
 
 #include "pico/time.h"
+#include "bp_log.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -147,7 +148,7 @@ bool la_voltage_from_profile(void) {
         printf("[la] I/O voltage %u mV from profile %s refused by the board\n", (unsigned)mv, e->name);
         return false;
     }
-    printf("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);
+    LOG_D("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);
     return true;
 }
 
@@ -428,7 +429,7 @@ void handle_psram_ping(int conn_id, const char *json) {
     if (n > 256) n = 256;
     if (!heavy_begin(conn_id)) return;
     int bad = -1;
-    int rc = signal_engine_capture_selftest(n, &bad);
+    int rc = signal_engine_capture_selftest_at(BP_LOG_DEBUG, n, &bad);   /* the reply has the result */
     heavy_release(conn_id);
     char payload[64];
     snprintf(payload, sizeof(payload), "{\"pass\":%s,\"count\":%d,\"first_bad\":%d}",

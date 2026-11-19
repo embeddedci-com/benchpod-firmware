@@ -10,6 +10,7 @@
 
 #include "hardware/flash.h"
 #include "hardware/sync.h"
+#include "bp_log.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -125,7 +126,7 @@ static int write_record(const ab_store_t *s, int target, uint32_t seq, const voi
     h.crc     = ab_crc32(ab_crc32(ab_crc32(0, &h.seq, 4), &h.ver_len, 4), data, len);
 
     uint32_t off = s->slot_off[target];
-    printf("[%s] writing slot %c (0x%06lx) seq %lu, %u B\n", s->tag, 'A' + target,
+    LOG_D("[%s] writing slot %c (0x%06lx) seq %lu, %u B\n", s->tag, 'A' + target,
            (unsigned long)off, (unsigned long)seq, (unsigned)len);
 
     /* Interrupts off, as before: bank-2 erase/program while bank 1 keeps running. */
@@ -150,7 +151,7 @@ static int write_record(const ab_store_t *s, int target, uint32_t seq, const voi
     ab_hdr_t rh;
     if (!slot_read(s, target, &rh, NULL, 0) || rh.seq != seq || rh.crc != h.crc ||
         !slot_payload_equals(s, target, data, len)) {
-        printf("[%s] ERROR: write verification failed\n", s->tag);
+        LOG_E("[%s] ERROR: write verification failed\n", s->tag);
         return -1;
     }
     return 0;
@@ -228,13 +229,13 @@ int ab_store_save(const ab_store_t *s, const void *data, size_t len)
     int n = scan(s, v, h);
     if (n >= 0 && hdr_ver(&h[n]) == s->version && hdr_len(&h[n]) == len &&
         slot_payload_equals(s, n, data, len)) {
-        printf("[%s] unchanged, not rewritten\n", s->tag);
+        LOG_D("[%s] unchanged, not rewritten\n", s->tag);
         return 0;
     }
     int target = (n < 0) ? 0 : 1 - n;
     uint32_t seq = (n < 0) ? 1u : h[n].seq + 1u;
     if (write_record(s, target, seq, data, len) != 0) return -1;
-    printf("[%s] saved OK\n", s->tag);
+    LOG_D("[%s] saved OK\n", s->tag);
     return 0;
 }
 

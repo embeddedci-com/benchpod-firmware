@@ -26,6 +26,7 @@
 #include <string.h>
 
 #include "pico/time.h"   /* absolute_time_t, get_absolute_time, *_diff_us (UART escape guard timing) */
+#include "bp_log.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -323,8 +324,9 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
        UART, which the soft-UART otherwise decodes as a flood of 0x00 during boot. Restored in
        uart_proxy_end.  LA1-LA6 only: LA7/LA8's resistor pulls DOWN, so engaging "the pull"
        there held RX at the opposite of the idle level and guaranteed the 0x00 flood it was
-       meant to prevent. LA9-LA14 have no resistor at all, and at a 1.8 V bank the
-       3V3-referenced ones are off-limits: the proxy still runs, it just cannot hold RX high. */
+       meant to prevent. LA9-LA14 have no resistor at all: the proxy still runs, it just cannot
+       hold RX high. On v3 the pull-ups go to the bank rail, so this works at 1.8 V too (on v2
+       they went to +3V3 and la_pullups_available() keeps them off below 3.3 V). */
 
     /* Entry, part 2: the line idles high (released), then the first bytes, timed on the pod. */
     if (entry.on) {
@@ -399,7 +401,7 @@ void uart_proxy_poll(void) {
                DUT output during the transfer is dropped either way (it was already being discarded);
                we just stop paying for it.  The FIFO is left to fill and flushed once on resume. */
             if (!uart_upload_suspended)
-                printf("[uart] proxy suspended (conn %d) for load_bin upload on conn %d\n",
+                LOG_D("[uart] proxy suspended (conn %d) for load_bin upload on conn %d\n",
                        uart_proxy_conn, load_bin_owner());
             uart_upload_suspended = true;
         } else {
@@ -428,7 +430,7 @@ void uart_proxy_poll(void) {
             if (uart_proxy_conn >= 0 && uart_plus_pending &&
                 absolute_time_diff_us(uart_last_plus_at, get_absolute_time())
                     >= (int64_t)UART_ESC_GUARD_MS * 1000) {
-                printf("[uart] +++ escape — returning conn %d to JSON\n", uart_proxy_conn);
+                LOG_D("[uart] +++ escape — returning conn %d to JSON\n", uart_proxy_conn);
                 uart_proxy_end(uart_proxy_conn, true);
             }
         }

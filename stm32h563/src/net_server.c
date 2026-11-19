@@ -127,6 +127,7 @@ typedef struct {
     net_dhcp_t       dhcp;          /* pure acquire/retry state machine (net_dhcp.c) */
     uint32_t         dhcp_timer;
     uint8_t          dhcp_fails;    /* consecutive DISCOVER re-kicks with no lease */
+    log_repeat_t     dhcp_rep;      /* "no lease" lines: the first, then one a minute (log_level.h) */
     char             ip[16];
     bool             is_eth;        /* wired vs Wi-Fi (log tag / route priority) */
 } net_if_t;
@@ -168,7 +169,7 @@ static void eth_diag_print(void)
 {
     char line[384];
     eth_diag_format(&s_eth_diag, line, sizeof(line));
-    log_printf("[net] eth diag: %s\r\n", line);
+    LOG_D("[net] eth diag: %s\r\n", line);
 }
 
 static void eth_diag_poll(struct netif *netif, uint32_t now)
@@ -187,12 +188,12 @@ static void eth_diag_poll(struct netif *netif, uint32_t now)
         now - s_eth_err_log_ms >= ETH_DIAG_LOG_GAP_MS) {
         s_eth_err_log_ms = now;
         s_eth_diag_logged = s_eth_diag;
-        log_printf("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
+        LOG_D("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
                eth_diag_phy_mode(s_eth_diag.physcsr), eth_diag_mac_mode(s_eth_diag.maccr));
     }
     if (was_stuck && s_eth_diag.rx_alloc_stuck && !s_eth_pool_stall_logged) {
         s_eth_pool_stall_logged = true;
-        log_printf("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
+        LOG_W("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
                (unsigned)ETH_DIAG_PERIOD_MS);
     } else if (!s_eth_diag.rx_alloc_stuck) {
         s_eth_pool_stall_logged = false;
@@ -436,7 +437,7 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
                        upload exactly like the pre-all-or-nothing bug. Abort the
                        connection instead: the client sees a reset and can retry
                        cleanly rather than receiving a corrupt trace. */
-                    log_printf("[net] conn %d: worker wedged mid-pbuf after %u/%u bytes — "
+                    LOG_W("[net] conn %d: worker wedged mid-pbuf after %u/%u bytes — "
                            "aborting to avoid silent truncation\n",
                            id, (unsigned)off, (unsigned)p->tot_len);
                     hw_worker_unreserve(reserved);
@@ -498,7 +499,7 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
     if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS ||
                 xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_HANDSHAKE_HEAP)) {
-        log_printf("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
+        LOG_W("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
                    (unsigned)xPortGetFreeHeapSize());
         altcp_abort(newpcb);
         return ERR_ABRT;
@@ -730,7 +731,7 @@ static void dhcp_process(net_if_t *i)
         ip_addr_set_zero_ip4(&netif->netmask);
         ip_addr_set_zero_ip4(&netif->gw);
         dhcp_start(netif);
-        log_printf("[net] %s DHCP: requesting address...\r\n", tag);
+        LOG_D("[net] %s DHCP: requesting address...\r\n", tag);
         break;
     case NET_DHCP_DO_REKICK:
         /* No static fallback: keep retrying forever so a slow/awkward home router
@@ -761,20 +762,23 @@ static void dhcp_process(net_if_t *i)
             i->dhcp.state = NET_DHCP_OFF;   /* re-DISCOVER once the link is back up */
             i->dhcp.wait_ticks = 0;
             ethernetif_phy_restart(netif);
-            log_printf("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
+            log_repeat_failf(&i->dhcp_rep, BP_LOG_WARN, "[net] %s DHCP: no lease yet", tag);
+            LOG_D("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
                    tag, DHCP_ESCALATE_REKICKS);
             eth_diag_print();   /* the state that led to the reset */
             break;
         }
         dhcp_start(netif);
-        log_printf("[net] %s DHCP: still no lease, re-probing%s...\r\n", tag,
+        log_repeat_failf(&i->dhcp_rep, BP_LOG_WARN, "[net] %s DHCP: no lease yet", tag);
+        LOG_D("[net] %s DHCP: still no lease, re-probing%s...\r\n", tag,
                    rx_moved ? " (frames arrive: the link works, no PHY reset)" : "");
-        if (i->is_eth) eth_diag_print();
+        if (i->is_eth && log_on(BP_LOG_DEBUG)) eth_diag_print();
         break;
     case NET_DHCP_DO_BOUND:
         i->dhcp_fails = 0;
         strncpy(i->ip, ip4addr_ntoa(netif_ip4_addr(netif)), sizeof(i->ip) - 1);
         mdns_resp_announce(netif);   /* broadcast the now-valid A record */
+        (void)log_repeat_ok(&i->dhcp_rep);
         log_printf("[net] %s DHCP: ip=%s\r\n", tag, i->ip);
         break;
     case NET_DHCP_DO_IPCHANGE:
@@ -855,7 +859,7 @@ int net_ip4_input_hook(struct pbuf *p, struct netif *inp)
                                    ip4_addr_get_u32(netif_ip4_netmask(&s_usb_netif)))) {
         static uint32_t s_dropped;
         if ((s_dropped++ & 0xFFu) == 0)
-            log_printf("[net] dropped a packet for the USB link that arrived on %c%c (%lu so far)\r\n",
+            LOG_D("[net] dropped a packet for the USB link that arrived on %c%c (%lu so far)\r\n",
                        inp ? inp->name[0] : '?', inp ? inp->name[1] : '?', (unsigned long)s_dropped);
         pbuf_free(p);
         return 1;
@@ -896,7 +900,7 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_force_speed(&s_eth.netif, s_eth_force_mbit, s_eth_force_full) != 0) {
-            log_printf("[net] eth: forcing the link mode failed (MDIO write)\r\n");
+            LOG_W("[net] eth: forcing the link mode failed (MDIO write)\r\n");
             break;
         }
         if (s_eth_force_mbit == 0) {
@@ -929,7 +933,7 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_loopback_test(&s_eth.netif, s_eth_lb_mbit, s_eth_lb_n, &r) != 0)
-            log_printf("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
+            LOG_W("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
         else
             log_printf("[net] eth loopback %dM: sent %lu, back %lu, intact %lu, corrupt %lu, "
                    "crc %lu, align %lu, tx fail %lu\r\n",
@@ -1204,7 +1208,7 @@ void net_poll(void)
         usb_netif_poll(&s_usb_netif);    /* USB CDC-NCM frames, link, DHCP server */
         bool is_up = netif_is_link_up(&s_usb_netif);
         if (was_up != is_up) {
-            log_printf("[net] usb link %s\r\n", is_up ? "up" : "down");
+            LOG_D("[net] usb link %s\r\n", is_up ? "up" : "down");
             if (is_up) mdns_resp_announce(&s_usb_netif);
         }
     }
@@ -1300,7 +1304,7 @@ bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
             if (pending) s_net_call = NULL;   /* not started: withdraw it */
             taskEXIT_CRITICAL();
             if (pending) {
-                log_printf("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
+                LOG_W("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
                        (unsigned long)timeout_ms);
                 return false;
             }
