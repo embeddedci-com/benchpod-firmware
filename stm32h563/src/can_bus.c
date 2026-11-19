@@ -213,7 +213,7 @@ void can_disable(void)
     s_fd = s_brs = false;
     s_data_bitrate = 0;
     can_ring_reset(&s_ring);
-    log_printf("[can] disabled\n");
+    LOG_D("[can] disabled\n");
 }
 
 /* PLL2 for the CAN FD kernel clock: HSE 25 MHz / 5 = 5 MHz, x80 = 400 MHz VCO,
@@ -349,12 +349,12 @@ int can_configure(uint32_t bitrate, uint32_t data_bitrate, can_mode_t mode, bool
     s_rx_overflow = 0;
     can_set_term(term);
 
-    log_printf("[can] up: %lu bit/s mode=%s presc=%lu seg1=%lu seg2=%lu sjw=%lu sp=%lu term=%d\n",
+    LOG_D("[can] up: %lu bit/s mode=%s presc=%lu seg1=%lu seg2=%lu sjw=%lu sp=%lu term=%d\n",
            (unsigned long)bitrate, can_mode_name(mode),
            (unsigned long)nt.presc, (unsigned long)nt.seg1, (unsigned long)nt.seg2,
            (unsigned long)nt.sjw, (unsigned long)can_timing_sample_permille(&nt), term ? 1 : 0);
     if (fd) {
-        log_printf("[can] fd: data %lu bit/s brs=%d presc=%lu seg1=%lu seg2=%lu sjw=%lu sp=%lu tdco=%lu\n",
+        LOG_D("[can] fd: data %lu bit/s brs=%d presc=%lu seg1=%lu seg2=%lu sjw=%lu sp=%lu tdco=%lu\n",
                (unsigned long)data_bitrate, brs ? 1 : 0,
                (unsigned long)dt.presc, (unsigned long)dt.seg1, (unsigned long)dt.seg2,
                (unsigned long)dt.sjw, (unsigned long)can_timing_sample_permille(&dt),

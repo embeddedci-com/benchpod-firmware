@@ -22,6 +22,7 @@
 #include "dac_limits.h"    /* dac_limits_path_index: "3v3"/"5v"/"12v" */
 #include "dac_quad.h"      /* analog v3r2: a DAC8554 channel per output */
 #include "at_driver.h"     /* at_send_data: calibrate sends its own (large) reply */
+#include "bp_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -382,7 +383,7 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     bp_emit(&e, "}}\n");
     if (!bp_emit_ok(&e)) { send_error(conn_id, "calibrate: reply too long"); return; }
     size_t n = bp_emit_len(&e);
-    printf("[cmd] -> ok  %s", payload);
+    LOG_D("[cmd] -> ok  %s", payload);
     if (at_send_data(conn_id, (const uint8_t *)payload, n) != 0) at_close_connection(conn_id);
 }
 

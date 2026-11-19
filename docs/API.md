@@ -277,6 +277,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
+| `log_level` | T0 | Read or set the console log level | object | no |
 | `lan_tls` | T0/T2 | The LAN API's TLS certificate (port 8443) and the HTTPS-only setting | object | no |
 | `ota_begin` | T3 | Start a firmware or blob update | object | no |
 | `ota_data` | T3 | Send one base64url chunk of the image | object | no |
@@ -4723,6 +4724,27 @@ on) or a connection over the USB link itself (which can turn it off). Ethernet, 
 get `usb_network: change it on the device (the USB console, or over the USB link)`; reading works
 everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
 credentials also turn the adapter off (status `usb.off_reason`).
+
+### `log_level` — the console log level
+
+Firmware newer than 3.10.12 (feature `log_level`).
+
+```json
+{"cmd":"log_level"}
+{"cmd":"log_level","set":"debug"}
+```
+
+```json
+{"status":"ok","data":{"level":"debug"}}
+```
+
+How much the pod prints on its USB console (and its USART2 pins): `error`, `warn`, `info` (the
+default) or `debug`. The levels and what each prints are in [Log
+levels](usb-serial-interface.md#log-levels); `debug` adds the per-command trace (`[cmd] <- ...`,
+`[cmd] -> ok ...`) and the retry detail of the cloud, Wi-Fi and DHCP loops. Errors always print.
+The setting is stored on the pod (it survives a reboot and a firmware update) and is the same one
+as the console's `log` command. It changes only console output, so every connection may read and
+set it (T0). Another value gets `log_level: set must be error, warn, info or debug`.
 
 ### `lan_tls` — the LAN API over TLS
 

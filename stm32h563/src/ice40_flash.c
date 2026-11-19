@@ -14,6 +14,7 @@
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "stm32h5xx_hal.h"
+#include "bp_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -109,7 +110,7 @@ static int release_and_wait_cdone(void)
             }
         }
     }
-    printf("[ice40] reconfigured OK (CDONE high)\n");
+    LOG_BOOT("[ice40] reconfigured OK (CDONE high)\n");
     return 0;
 }
 
@@ -181,7 +182,7 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
         printf("[ice40] flash not responding (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
         goto fail;
     }
-    printf("[ice40] flash ID %02x %02x %02x, programming %u bytes\n",
+    LOG_BOOT("[ice40] flash ID %02x %02x %02x, programming %u bytes\n",
            id[0], id[1], id[2], (unsigned)len);
 
     /* The record names the image about to be replaced: drop it first, so a write that fails or is
@@ -214,7 +215,7 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
             goto fail;
         }
     }
-    printf("[ice40] verify OK (%u bytes)\n", (unsigned)len);
+    LOG_BOOT("[ice40] verify OK (%u bytes)\n", (unsigned)len);
     if (ident) (void)ident_write(ident);   /* a failed record only costs a compare at next boot */
 
     return release_and_wait_cdone();

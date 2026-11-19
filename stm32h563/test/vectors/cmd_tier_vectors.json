@@ -40,6 +40,7 @@
     "sig_policy": "T0",
     "lan_policy": "T0",
     "usb_network": "T0",
+    "log_level": "T0",
     "module": "T0",
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
@@ -263,6 +264,14 @@
     },
     {
       "line": "{\"cmd\":\"usb_network\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"log_level\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"log_level\",\"set\":\"debug\"}",
       "tier": "T0"
     },
     {

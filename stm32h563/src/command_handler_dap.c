@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "pico/time.h"
+#include "bp_log.h"
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -72,7 +73,7 @@ static struct {
 static void dap_stats_report(void) {
     if (s_dap_stats.packets == 0) return;
     uint64_t total_us = (uint64_t)absolute_time_diff_us(s_dap_stats.start, get_absolute_time());
-    printf("[dap] session: %lu packets, %lu bytes, %lu ms executing of %lu ms (%lu%%)\n",
+    LOG_D("[dap] session: %lu packets, %lu bytes, %lu ms executing of %lu ms (%lu%%)\n",
            (unsigned long)s_dap_stats.packets, (unsigned long)s_dap_stats.bytes,
            (unsigned long)(s_dap_stats.busy_us / 1000u), (unsigned long)(total_us / 1000u),
            (unsigned long)(total_us ? s_dap_stats.busy_us * 100u / total_us : 0u));
@@ -196,8 +197,8 @@ void handle_dap_start(int conn_id, const char *json) {
         dap_configure(size, count);
         if (json_get_value(json, "wait_ms", v, sizeof(v)) && atoi(v) > 0) {
             int ms = dap_wait_for_target((uint32_t)atoi(v));
-            if (ms >= 0) printf("[dap] target answered after %d ms\n", ms);
-            else         printf("[dap] no target answer within %s ms; starting anyway\n", v);
+            if (ms >= 0) LOG_D("[dap] target answered after %d ms\n", ms);
+            else         LOG_D("[dap] no target answer within %s ms; starting anyway\n", v);
         }
     }
     dap_rx_have = 0;

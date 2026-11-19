@@ -3,6 +3,7 @@
  * the analog outputs the sensor manager drives.
  */
 #include "sensor_port.h"
+#include "bp_log.h"
 #include "command_handler.h"   /* la_voltage_from_profile */
 #include "signal_engine.h"
 #include "ice40_flash.h"
@@ -41,7 +42,7 @@ int sensor_port_load_emulation(char *err, size_t cap) {
         return -1;
     }
     if (bus_busy_reason()) { snprintf(err, cap, "%s", bus_busy_reason()); return -1; }
-    printf("[sensor] loading the emulation image\n");
+    LOG_D("[sensor] loading the emulation image\n");
     int rc = fpga_warmboot(2);
     if (rc != 0) {
         snprintf(err, cap, "loading the emulation image failed (%d); the pod is back on the loop image", rc);

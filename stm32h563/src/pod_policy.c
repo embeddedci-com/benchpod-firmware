@@ -17,7 +17,9 @@ typedef struct {
     /* Firmware 3.10.7+, in what were reserved bytes (zero in older records; older firmware keeps
        them as they are when it saves): */
     uint8_t  lan_unsigned;    /* 1: the external LAN may install images without a good signature */
-    uint8_t  reserved[3];
+    /* After 3.10.12, in the next reserved byte: */
+    uint8_t  log_level;       /* console log level (log_level.h stored form): 0 = default (info) */
+    uint8_t  reserved[2];
     uint32_t rollback_floor;  /* packed release a signed firmware image must not be below; 0 none */
 } pod_policy_rec_t;
 _Static_assert(sizeof(pod_policy_rec_t) == 16, "the policy record keeps its size (older firmware loads it)");
@@ -93,12 +95,15 @@ void pod_policy_load(void) {
     fw_sign_set_policy((fw_sig_policy_t)s_rec.sig);
     fw_sign_set_lan_unsigned(s_rec.lan_unsigned != 0);
     fw_sign_set_floor(s_rec.rollback_floor);
+    log_set_level(log_level_from_stored(s_rec.log_level));
     char fl[16];
-    log_printf("[policy] signatures %s, LAN %s, USB network %s, HTTPS-only %s, LAN images %s, floor %s\n",
+    log_printf("[policy] signatures %s, LAN %s, USB network %s, HTTPS-only %s, LAN images %s, floor %s, log %s\n",
            fw_sign_policy_name((fw_sig_policy_t)s_rec.sig), pod_policy_lan_name((pod_lan_policy_t)s_rec.lan),
            s_rec.usb_net_off ? "off" : "on", s_rec.https_only ? "on" : "off",
-           s_rec.lan_unsigned ? "any" : "signed", s_rec.rollback_floor ? fw_sign_release_str(s_rec.rollback_floor, fl, sizeof(fl)) : "none");
+           s_rec.lan_unsigned ? "any" : "signed", s_rec.rollback_floor ? fw_sign_release_str(s_rec.rollback_floor, fl, sizeof(fl)) : "none",
+           log_level_name(log_level()));
 }
+
 
 fw_sig_policy_t  pod_policy_sig(void) { return (fw_sig_policy_t)s_rec.sig; }
 pod_lan_policy_t pod_policy_lan(void) { return (pod_lan_policy_t)s_rec.lan; }
@@ -292,4 +297,19 @@ const char *pod_policy_lan_name(pod_lan_policy_t p) {
     case POD_LAN_OFF:    return "off";
     }
     return "?";
+}
+
+const char *pod_policy_set_log_level(bp_log_level_t lv) {
+    if ((unsigned)lv > BP_LOG_DEBUG) return "log_level: set must be error, warn, info or debug";
+    uint8_t v = log_level_to_stored(lv);
+    if (v == s_rec.log_level || (s_rec.log_level == 0 && lv == BP_LOG_DEFAULT)) {
+        log_set_level(lv);
+        return NULL;
+    }
+    pod_policy_rec_t r = s_rec;
+    r.log_level = v;
+    const char *why = save(&r);
+    if (why) return why;
+    log_set_level(lv);
+    return NULL;
 }

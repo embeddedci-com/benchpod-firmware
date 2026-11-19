@@ -33,6 +33,7 @@
 #include <math.h>
 
 #include "pico/time.h"
+#include "bp_log.h"
 
 #define CHUNK_SAMPLES    256
 
@@ -490,7 +491,7 @@ static bool bulk_pump_changes(int conn, size_t avail) {
             uint32_t n = left < 255u ? left : 255u;         /* 85 events in psram_chunk */
             n -= n % 3u;
             if (fpga_la_psram_read(bulk.chg_off, psram_chunk, n) != 0) {
-                printf("[cmd] PSRAM read-back failed at byte %lu\n", (unsigned long)bulk.chg_off);
+                LOG_W("[cmd] PSRAM read-back failed at byte %lu\n", (unsigned long)bulk.chg_off);
                 bulk.active = false;
                 fpga_capture_psram_release();
                 send_error(conn, "capture read-back failed");
@@ -558,7 +559,7 @@ static void bulk_pump(void) {
         size_t avail = at_send_avail(conn);
         if (avail < 96) {
             if (HAL_GetTick() - bulk.progress_ms > BULK_STALL_MS) {
-                printf("[cmd] bulk send stalled %lu ms on conn %d at %lu/%lu: ending it\n",
+                LOG_W("[cmd] bulk send stalled %lu ms on conn %d at %lu/%lu: ending it\n",
                        (unsigned long)BULK_STALL_MS, conn,
                        (unsigned long)bulk.sent, (unsigned long)bulk.total);
                 bulk.active = false;
@@ -735,7 +736,7 @@ static void bulk_pump(void) {
         bulk.sent += this_chunk;
     }
 
-    printf("[cmd] read-back complete: %u %s sent over websocket\n",
+    LOG_D("[cmd] read-back complete: %u %s sent over websocket\n",
            (unsigned)bulk.total, bulk.is16 ? "samples" : "bytes");
     bulk.active = false;                  /* all chunks queued */
     if (bulk.from_psram) fpga_capture_psram_release();
@@ -877,11 +878,11 @@ static void chgscan_step(void) {
         uint64_t have = chgscan.t / k + 1u;                  /* samples up to the last event */
         if (have < total) total = (size_t)have;
         trunc = chgscan.cause == 1u ? 1u : 2u;
-        printf("[cmd] la_capture: stopped early (%s): returning %u of %u samples\n",
+        LOG_W("[cmd] la_capture: stopped early (%s): returning %u of %u samples\n",
                trunc == 1u ? "too busy" : "memory full", (unsigned)total, (unsigned)chgscan.samples);
     }
     chgscan.active = false;
-    printf("[cmd] la_capture: change capture ready (%u samples%s), streaming...\n",
+    LOG_D("[cmd] la_capture: change capture ready (%u samples%s), streaming...\n",
            (unsigned)total, pre ? " incl. pre-trigger" : "");
     bulk_begin_la_changes(chgscan.conn_id, chgscan.adc_n, total, k, chgscan.off, base, pre, trunc);
     bulk.la_rate_hz  = chgscan.la_hz;
@@ -914,7 +915,7 @@ static void sensla_done(void) {
     int cid = sensla.conn_id;
     sensla.reading = false;
     fpga_la_psram_release();
-    printf("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
+    LOG_D("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
            (unsigned)(sensla.bytes * 4u), sensla.sda_bit + 1u, sensla.scl_bit + 1u,
            sensla.k ? ", from the START" : "");
     bulk_begin(cid, sensla.bytes, false);   /* paced send; frees the gate when done */
@@ -1100,7 +1101,7 @@ void capture_poll(void) {
                 last_cap.adc_rate_hz = 0;
                 last_cap.la_rate_hz  = la_hz;
                 psram_regions_track(signal_engine_la_cap_base(), (uint32_t)(samples * 2u), 0, 0);
-                printf("[cmd] la_capture: PSRAM data ready (%u samples), streaming back over websocket...\n",
+                LOG_D("[cmd] la_capture: PSRAM data ready (%u samples), streaming back over websocket...\n",
                        (unsigned)samples);
                 bulk_begin_capture16(cid, 0, samples);
                 /* the ACHIEVED rate, not the request: without it the host labelled the trace
@@ -1189,7 +1190,7 @@ void capture_poll(void) {
                 /* Data is safely in PSRAM now — the capture itself succeeded; all that's
                    left is streaming it back.  Log it so a stall during read-back is
                    distinguishable from a capture failure. */
-                printf("[cmd] capture_dual: PSRAM data ready (ADC=%u + LA=%u samples), streaming back over websocket...\n",
+                LOG_D("[cmd] capture_dual: PSRAM data ready (ADC=%u + LA=%u samples), streaming back over websocket...\n",
                        (unsigned)adc_n, (unsigned)la_n);
                 /* Remember this capture so a stalled read-back can RESUME from PSRAM
                    (capture_read) instead of re-triggering — the data stays in PSRAM until
@@ -1444,7 +1445,7 @@ void handle_capture_dual(int conn_id, const char *json) {
         return;
     }
     if (la_capped)
-        printf("[cmd] capture_dual: no LA rate given: %lu kS/s, the fastest that fits %u samples\n",
+        LOG_D("[cmd] capture_dual: no LA rate given: %lu kS/s, the fastest that fits %u samples\n",
                (unsigned long)lroundf(la_actual / 1000.0f), (unsigned)la_n);
     capture_trigger_armed(conn_id, &trig);
     last_cap.valid = false;   /* the new capture is overwriting the PSRAM regions */
@@ -1460,7 +1461,7 @@ void handle_capture_dual(int conn_id, const char *json) {
     /* Log the ACHIEVED rate as integer kHz — newlib-nano's printf has no %f, so the
        old "@%.3fMS/s" silently printed nothing (the frequency vanished from the
        console). Integer kHz via %lu prints correctly. */
-    printf("[cmd] capture_dual: ADC=%u @%lukHz + LA=%u @%lukHz (one trigger)\n",
+    LOG_D("[cmd] capture_dual: ADC=%u @%lukHz + LA=%u @%lukHz (one trigger)\n",
            (unsigned)adc_n, (unsigned long)lroundf(adc_actual / 1000.0f),
            (unsigned)la_n,  (unsigned long)lroundf(la_actual  / 1000.0f));
 }
@@ -1502,7 +1503,7 @@ void handle_capture_read(int conn_id, const char *json) {
     psram_bus_acquire();                              /* hold the bus for the read-back */
     bulk_begin_capture16_resume(conn_id, offset);
     bulk.b64 = wants_b64(json);
-    printf("[cmd] capture_read: resuming from %u/%u samples over websocket...\n",
+    LOG_D("[cmd] capture_read: resuming from %u/%u samples over websocket...\n",
            (unsigned)offset, (unsigned)total);
 }
 
@@ -1599,7 +1600,7 @@ void handle_test(int conn_id, const char *json) {
         return;
     }
 
-    printf("[cmd] test pattern=%s samples=%u (FPGA not touched)\n",
+    LOG_D("[cmd] test pattern=%s samples=%u (FPGA not touched)\n",
            pattern, (unsigned)samples);
 
     bulk_begin(conn_id, samples, true);   /* paced send; frees the gate when done */
@@ -1643,7 +1644,7 @@ void handle_measure(int conn_id, const char *json) {
     }
 
     /* Integer Hz — newlib-nano printf has no %f (the old %.1f printed nothing). */
-    printf("[cmd] measure waveform=%s freq=%luHz amp=%u off=%u samples=%u\n",
+    LOG_D("[cmd] measure waveform=%s freq=%luHz amp=%u off=%u samples=%u\n",
            waveform, (unsigned long)lroundf(freq), amplitude, offset, (unsigned)samples);
 
     if (!heavy_begin(conn_id)) return;

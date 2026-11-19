@@ -25,6 +25,7 @@ PINNED = [
     ("identity-wipe", r'"identity-wipe ok %s\r\n"'),
     ("sig-policy", r'"sig-policy %s %u\r\n"'),
     ("lan-policy", r'"lan-policy %s\r\n"'),
+    ("log (console log level)", r'"log %s\r\n"'),
     ("cloud CA list", r'"ca %s %.64s\r\n"'),
     ("cloud CA none", r'"ca none\r\n"'),
     ("cloud proxy", r'"proxy %s:%u %s\r\n"'),
