@@ -402,6 +402,8 @@ static uint8_t s_u58_out;       /* ANASW  shadow */
 static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
 static bool    s_low_hw;        /* analog module v3r4: K5 on U58 P5 (latched in analog_switch_init) */
 static bool    s_low;           /* K5 energised: the ADC low range */
+static bool    s_shunt_100r;    /* analog module v3r5: R81 is 100 ohm (latched in analog_switch_init) */
+static bool    s_low_auto;      /* the low range was picked by a current_in route (analog_path_auto_range) */
 static analog_path_t s_path = ANALOG_PATH_OFF;   /* the last path that moved the relays */
 /* Where U55/U58 sit: the main bus on the one-piece analog boards, the module bus (I2C2) when the
    analog section is a plug-in module (module_link.h).  Set once at boot, before
@@ -451,7 +453,9 @@ void analog_switch_init(void)
        other board it may be unconnected or something else, so it stays an input. */
     if (s_low) cloud_client_request_caps_resend();   /* module power cycled in the low range */
     s_low = false;
+    s_low_auto = false;
     s_low_hw = module_adc_low_range();
+    s_shunt_100r = module_current_in_100r();
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, 0x00);
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
 }
@@ -555,15 +559,31 @@ static bool low_range_shadow(bool low)
     return true;
 }
 
-int analog_path_set(analog_path_t path)
+static int path_set(analog_path_t path, bool ranged)
 {
     analog_switches_t sw;
     bool quad = dac_quad_present();
     if (analog_path_switches(path, quad, &sw) != 0) return -1;
     int r = 0;
     /* off and cal2 put the range back to normal; calsw_set below writes K5 with the relays.
-       current_out does not move the relays: K5 has nothing to change there. */
-    bool k5_moved = !analog_path_keeps_low_range(path) && low_range_shadow(false);
+       current_out does not move the relays: K5 has nothing to change there.  On module v3r5
+       current_in takes the low range by itself and the next relay path gives it back
+       (analog_path_auto_range); with `ranged` the caller sets the range next, so only off and
+       cal2 act here. */
+    bool now_auto = false;
+    adc_range_t want = ranged ? (analog_path_keeps_low_range(path) ? adc_range_get() : ADC_RANGE_NORMAL)
+                     : analog_path_auto_range(path, sw.relays, s_shunt_100r, s_low_hw, adc_range_get(),
+                                              s_low_auto, &now_auto);
+    if (want == ADC_RANGE_LOW && !s_low) {
+        /* As adc_range_set: not while the +-12 V output holds more than +-5 V (dac_quad.h).  A
+           refused default stays in the normal range: the reading is only coarser. */
+        uint16_t c = 0;
+        bool known = dac_quad_c_level(&c);
+        if (dac_quad_low_check_enter(known, c)) { want = ADC_RANGE_NORMAL; now_auto = false; }
+    }
+    if (ranged) now_auto = false;
+    bool k5_moved = low_range_shadow(want == ADC_RANGE_LOW);
+    s_low_auto = now_auto;
     if (quad) r |= dac_quad_route(path);
     if (sw.mux) {
         r |= dacmux_set_ctrl1(sw.ctrl1_en, sw.ctrl1_sel);
@@ -576,7 +596,12 @@ int analog_path_set(analog_path_t path)
     return r;
 }
 
+int analog_path_set(analog_path_t path) { return path_set(path, false); }
+int analog_path_set_ranged(analog_path_t path) { return path_set(path, true); }
+
 bool adc_range_supported(void) { return s_low_hw; }
+
+bool current_in_shunt_100r(void) { return s_shunt_100r; }
 
 adc_range_t adc_range_get(void) { return s_low ? ADC_RANGE_LOW : ADC_RANGE_NORMAL; }
 
@@ -592,6 +617,7 @@ int adc_range_set(adc_range_t r)
         bool known = dac_quad_c_level(&c);
         if (dac_quad_low_check_enter(known, c)) return -4;
     }
+    s_low_auto = false;                                 /* the caller's choice from now on */
     if (!low_range_shadow(low)) return 0;
     (void)ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
     int rc = ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, s_u58_out);

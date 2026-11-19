@@ -10,6 +10,7 @@
  * on the mock flash.
  */
 #include <math.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -49,14 +50,28 @@ int dacmux_read(uint8_t *r) { *r = 0; return 0; }
 int calsw_set(bool a, bool b, bool c, bool d) { (void)a; (void)b; (void)c; (void)d; return 0; }
 int calsw_read(uint8_t *r) { *r = 0; return 0; }
 /* The range (i2c_bus.c): K5 when g_low_hw, put back to normal by off and cal2. */
-static bool g_low_hw;
+static bool g_low_hw, g_shunt_100r, g_low_auto;
 static adc_range_t g_range;
 static analog_path_t g_path;
-int analog_path_set(analog_path_t p) {
+bool current_in_shunt_100r(void) { return g_shunt_100r; }
+/* As i2c_bus.c: off and cal2 put the range back; on a 100 ohm module current_in picks the low
+   range and the next relay path gives it back (the rule itself is test_analog_path's). */
+static int path_set(analog_path_t p, bool ranged) {
     g_path = p;
-    if (p == ANALOG_PATH_OFF || p == ANALOG_PATH_CAL2) g_range = ADC_RANGE_NORMAL;
+    bool relays = p != ANALOG_PATH_CURRENT_OUT;
+    if (ranged) {
+        if (p == ANALOG_PATH_OFF || p == ANALOG_PATH_CAL2) g_range = ADC_RANGE_NORMAL;
+        g_low_auto = false;
+    } else if (relays) {
+        if (p == ANALOG_PATH_OFF || p == ANALOG_PATH_CAL2) { g_range = ADC_RANGE_NORMAL; g_low_auto = false; }
+        else if (p == ANALOG_PATH_CURRENT_IN) {
+            if (g_range == ADC_RANGE_NORMAL && g_shunt_100r && g_low_hw) { g_range = ADC_RANGE_LOW; g_low_auto = true; }
+        } else if (g_low_auto) { g_range = ADC_RANGE_NORMAL; g_low_auto = false; }
+    }
     return 0;
 }
+int analog_path_set(analog_path_t p) { return path_set(p, false); }
+int analog_path_set_ranged(analog_path_t p) { return path_set(p, true); }
 int analog_path_from_name(const char *n, analog_path_t *p) {
     static const char *const names[] = { "off", "dac_3v3", "dac_5v", "dac_12v", "ext", "cal1", "cal2", "current_in" };
     for (int i = 0; i < 8; i++) if (strcmp(n, names[i]) == 0) { *p = (analog_path_t)i; return 0; }
@@ -79,6 +94,7 @@ int adc_range_set(adc_range_t r) {
     if (r == ADC_RANGE_LOW && !g_low_hw) return -1;
     if (r == ADC_RANGE_LOW && g_path == ANALOG_PATH_CAL2) return -2;
     g_range = r;
+    g_low_auto = false;
     return 0;
 }
 static adc_range_test_pt_t g_test[ADC_RANGE_TEST_POINTS];
@@ -273,7 +289,70 @@ static void test_adc_range_and_read(void) {
     g_adc_count = 65522;
 }
 
+static long field(const char *key) {
+    char k[32];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const char *s = strstr(g_reply, k);
+    return s ? strtol(s + strlen(k), NULL, 10) : -999999999L;
+}
+
+/* The 4-20 mA input by module revision: 249 ohm in the range in use up to v3r4, 100 ohm and the
+   low range by default from v3r5. */
+static void test_current_in_by_revision(void) {
+    mock_flash_reset();
+    cal_data_select(3);
+    adc_cal_load();
+    g_low_hw = true;
+    g_range = ADC_RANGE_NORMAL;
+    g_adc_count = 65538 - 4000;   /* a few hundred mV in either range */
+
+    /* v3r4: as before. */
+    g_shunt_100r = false;
+    handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\"}");
+    CHECK(strstr(g_reply, "\"range\":\"normal\"") && field("sense_mohm") == 249000 && g_range == ADC_RANGE_NORMAL,
+          "v3r4 read: %s", g_reply);
+    CHECK(field("ua") == lroundf((float)field("uv") / 1e6f * 1000000.0f / 249.0f) ||
+          labs(field("ua") - field("uv") / 249) <= 1, "v3r4 ua: %s", g_reply);
+    handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
+    CHECK(field("sense_mohm") == 249000, "v3r4 calibration: %s", g_reply);
+
+    /* v3r5: the low range by itself, 100 ohm || 1.82M. */
+    g_shunt_100r = true;
+    handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\"}");
+    CHECK(strstr(g_reply, "\"range\":\"low\"") && field("sense_mohm") == 99995 && strstr(g_reply, "\"fullscale_mv\":54"),
+          "v3r5 read: %s", g_reply);
+    CHECK(labs(field("ua") - lround(field("uv") * 1000.0 / 99995.0)) <= 1, "v3r5 ua: %s", g_reply);
+    handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
+    CHECK(field("sense_mohm") == 99995 && strstr(g_reply, "\"range\":\"low\""), "v3r5 calibration in the low range: %s", g_reply);
+    /* The next source gets the normal range back: the +-12 V output stays free. */
+    handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"ext\"}");
+    CHECK(strstr(g_reply, "\"range\":\"normal\"") && g_range == ADC_RANGE_NORMAL, "ext after current_in: %s", g_reply);
+    /* Asked for: the normal range on current_in, 100 ohm || 992.5k, and it stays. */
+    handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\",\"range\":\"normal\"}");
+    CHECK(strstr(g_reply, "\"range\":\"normal\"") && field("sense_mohm") == 99990, "v3r5 normal: %s", g_reply);
+    /* A low range the user chose stays when another source is routed. */
+    handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"current_in\",\"range\":\"low\"}");
+    handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"ext\"}");
+    CHECK(strstr(g_reply, "\"range\":\"low\""), "the user's low range: %s", g_reply);
+    /* analog_path current_in (what a capture routes with) picks it too, the next path gives it back. */
+    handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
+    handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"current_in\"}");
+    CHECK(strstr(g_reply, "\"range\":\"low\""), "analog_path current_in: %s", g_reply);
+    handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"dac_12v\"}");
+    CHECK(strstr(g_reply, "\"range\":\"normal\""), "dac_12v after: %s", g_reply);
+
+    /* A module without K5 never switches. */
+    g_low_hw = false;
+    handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\"}");
+    CHECK(strstr(g_reply, "\"range\":\"normal\""), "no K5: %s", g_reply);
+
+    g_shunt_100r = false;
+    g_range = ADC_RANGE_NORMAL;
+    g_adc_count = 65522;
+}
+
 int main(void) {
+    test_current_in_by_revision();
     test_reply_with_every_part();
     test_low_range_calibrate();
     test_adc_range_and_read();

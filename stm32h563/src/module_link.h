@@ -68,6 +68,10 @@ bool module_cal_valid(void);
    3.4 at runtime gets the low range after the next restart. */
 bool module_adc_low_range(void);
 
+/* The module's 4-20 mA input has the 100 ohm sense resistor (module_ee_has_100r_shunt on the
+   header read at boot).  False (249 ohm) off digital v3r3 and without a module. */
+bool module_current_in_100r(void);
+
 /* Write the ID fields (type, revision, serial), keeping the calibration fields. 0 / -1. */
 int  module_id_write(uint8_t type, uint8_t rev_major, uint8_t rev_minor, const char *serial);
 /* Record `len` bytes at MOD_EE_CAL_ADDR as the calibration blob: reads them back, stores their

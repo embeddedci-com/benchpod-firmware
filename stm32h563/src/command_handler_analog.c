@@ -130,7 +130,7 @@ void handle_analog_path(int conn_id, const char *json) {
     adc_range_t r = ADC_RANGE_NORMAL;
     bool want = false;
     if (!range_arg(conn_id, json, p, &r, &want)) return;
-    if (analog_path_set(p) != 0) { send_error(conn_id, "analog_path failed"); return; }
+    if ((want ? analog_path_set_ranged(p) : analog_path_set(p)) != 0) { send_error(conn_id, "analog_path failed"); return; }
     if (want && !range_apply(conn_id, r)) return;
     uint8_t u55 = 0, u58 = 0; dacmux_read(&u55); calsw_read(&u58);
     char payload[96];
@@ -217,8 +217,10 @@ void handle_current_out(int conn_id, const char *json) {
 /* adc_read — route an ADC source AND return a CALIBRATED reading in mV.
    {"cmd":"adc_read","source":"ext"} → {"source","mv","uv","count","span"}.  `current_in` also
    returns "offset_mv", this pod's calibration offset that was taken out of `mv`
-   (adc_cal.h; 0 when the pod was never calibrated), and "ua", the loop current in
-   microamps (mv across the 249 ohm sense resistor).  `count` stays raw.  A short
+   (adc_cal.h; 0 when the pod was never calibrated), "ua", the loop current in
+   microamps, and "sense_mohm", the resistance `ua` was computed with (249 ohm up to
+   analog module v3r4; from v3r5 100 ohm in parallel with the ADC divider, current_in_sense_mohm).
+   On v3r5 current_in reads in the low range unless "range" says otherwise.  `count` stays raw.  A short
    16-sample burst, averaged ON THE 16-BIT CIRCLE and then unwrapped — see
    adc_scale.h.  Averaging the RAW counts first (what this did until 2026-07-29)
    returns a plausible-looking number that is wrong by tens of volts whenever the
@@ -241,7 +243,10 @@ void handle_adc_read(int conn_id, const char *json) {
     bool want = false;
     if (!range_arg(conn_id, json, p, &want_r, &want)) return;
     if (!heavy_begin(conn_id)) return;
-    if (analog_path_set(p) != 0) { heavy_release(conn_id); send_error(conn_id, "route failed"); return; }
+    /* Without "range", current_in on analog module v3r5 reads in the low range (analog_path_set). */
+    if ((want ? analog_path_set_ranged(p) : analog_path_set(p)) != 0) {
+        heavy_release(conn_id); send_error(conn_id, "route failed"); return;
+    }
     if (want && !range_apply(conn_id, want_r)) { heavy_release(conn_id); return; }
     sleep_ms(20);    /* let the G6K relays (~4ms) + front-end RC settle (yields to FreeRTOS) */
     uint16_t s16[16] = {0};
@@ -284,8 +289,13 @@ void handle_adc_read(int conn_id, const char *json) {
     if (p == ANALOG_PATH_CURRENT_IN && n > 0 && n < (int)sizeof(payload))
         /* Say which per-pod offset was taken out of `mv` (every source gets it), and give the
            loop current the voltage stands for, so no client needs to know the sense resistor. */
-        n += snprintf(payload + n, sizeof(payload) - (size_t)n, ",\"offset_mv\":%ld,\"ua\":%ld",
-                      (long)adc_cal_current_in_offset_mv(), current_in_ua(rd.volts));
+        {
+            uint32_t mohm = current_in_sense_mohm(current_in_shunt_100r(), range == ADC_RANGE_LOW);
+            n += snprintf(payload + n, sizeof(payload) - (size_t)n,
+                          ",\"offset_mv\":%ld,\"ua\":%ld,\"sense_mohm\":%lu",
+                          (long)adc_cal_current_in_offset_mv(), current_in_ua(rd.volts, mohm),
+                          (unsigned long)mohm);
+        }
     if (n > 0 && n < (int)sizeof(payload)) snprintf(payload + n, sizeof(payload) - (size_t)n, "}");
     send_ok_str(conn_id, payload);
 }
@@ -319,10 +329,11 @@ static void calibrate_reply(int conn_id, const adc_reading_t *rd, const adc_cal_
     bp_emit_init(&e, payload, sizeof(payload));
     bp_emit(&e,
             "{\"status\":\"ok\",\"data\":{\"source\":\"current_in\",\"calibrated\":%s,\"offset_mv\":%ld,\"offset_uv\":%ld,"
-            "\"a_uv\":%ld,\"b_nv\":%ld,\"dac\":{",
+            "\"a_uv\":%ld,\"b_nv\":%ld,\"sense_mohm\":%lu,\"dac\":{",
             adc_cal_current_in_is_set() ? "true" : "false",
             (long)adc_cal_current_in_offset_mv(), (long)adc_cal_current_in_offset_uv(),
-            lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0));
+            lround((double)fit.a * 1000000.0), lround((double)fit.b * 1000000000.0),
+            (unsigned long)current_in_sense_mohm(current_in_shunt_100r(), range == ADC_RANGE_LOW));
     for (int i = 0; i < ADC_CAL_DAC_PATHS; i++) {
         const char *sep = i ? "," : "";
         if (!adc_cal_dac_is_set(i)) {

@@ -1163,7 +1163,7 @@ encoding and can't wire a path two different ways.
 | `adc_ext` (`ext`, `sma`) | ADC ← front-panel input SMA | ~1 MΩ high-Z, ÷12 (low range: 1.82 MΩ, ÷2) |
 | `cal1` | Internal 5 V DAC → ADC loopback | 5 V path |
 | `cal2` | Internal ±12 V differential DAC → ADC loopback | ±12 V path |
-| `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground) | J8 |
+| `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground; 100 Ω behind a 30 mA limiter from analog module v3r5, which also takes the low range by default, see [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading)) | J8 |
 | `current_out` | DAC → 4-20 mA output terminal (J9) only: the DAC voltage outputs are switched off, the ADC relays stay as they are | unchanged |
 
 The DAC output paths also open all ADC relays (the ADC returns to the external
@@ -1280,7 +1280,7 @@ regulated, so nothing else in the loop may connect to pod ground.
 - Use a supply whose output is isolated from pod ground and from earth. The pod's own 5 V and
   0-20 V outputs cannot power the loop.
 - Do not connect supply minus, or the low side of the receiver, to pod ground.
-- J9 cannot be wired to the pod's own measurement terminal J8, because J8 is 249 Ω to pod ground.
+- J9 cannot be wired to the pod's own measurement terminal J8, because J8 is a resistor to pod ground (249 Ω, or 100 Ω from analog module v3r5).
 - A target whose loop input is referenced to a ground it shares with the pod (through SWD or
   UART wiring) cannot be driven either. Use an isolated loop input on the target.
 - If the loop does touch pod ground, the current bypasses the sense resistor, is no longer
@@ -1350,18 +1350,52 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 `current_in` is the 4-20 mA measurement terminal (J8). Its reply has two more fields:
 
-- `ua`: the loop current in µA. The pod reads the voltage across a 249 Ω resistor, so
-  `ua = mv × 1000 / 249`. 4 mA is 996 mV and 20 mA is 4980 mV.
+- `ua`: the loop current in µA. The pod reads the voltage across its sense resistor, so
+  `ua = uv × 1000 / sense_mohm`. On analog modules up to v3r4 that is 249 Ω: 4 mA is 996 mV
+  and 20 mA is 4980 mV. From analog module v3r5 it is 100 Ω: 4 mA is 400 mV and 20 mA is 2 V.
+- `sense_mohm` (firmware 3.10.13+): the resistance `ua` was computed with, in milliohms.
+  249000 up to module v3r4. From v3r5 it is 100 Ω in parallel with the ADC input divider, whose
+  current also comes from the loop: 99990 in the normal range, 99995 in the low range.
 - `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
   (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)). It is 0 on a pod that was
   never calibrated.
 
 `count` is always raw.
 
+**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes:
+
+| | Module up to v3r4 | Module v3r5 and later |
+|---|---|---|
+| Sense resistor | 249 Ω | 100 Ω, 0.1 % |
+| Protection | none in series | series diode and a 30 mA current limiter |
+| Voltage the pod takes from the loop at 20 mA | about 5 V | about 4.3 V |
+| Sense voltage at 4 / 20 mA | 0.996 / 4.98 V | 0.4 / 2.0 V |
+| Range `current_in` reads in by default | the range in use (`normal` unless set) | `low` |
+| Resolution | about 4 µA per count (`normal`) | about 1.7 µA per count (`low`), about 10 µA (`normal`) |
+| Measurable current | 0 to about 21 mA (`low`), more in `normal` | 0 to the limiter's 28.5 to 31.5 mA |
+
+The limiter holds the loop at 28.5 to 31.5 mA (30 mA nominal, it differs per part), so a
+supply wired straight to J8 cannot overload the resistor. A reading near 30 mA that does not
+follow the loop is the limiter, not the transmitter. The diode blocks a reversed loop: it reads
+0. The ADC reads at the resistor, after the diode and the limiter, so their drop does not enter
+the reading.
+
+On a v3r5 module, routing `current_in` without a `range` (here, in `analog_path` and in a
+capture) switches the ADC to the [low range](#adc_range--the-adc-input-range-analog-module-v3r4)
+by itself: 31.5 mA is 3.15 V, well inside its ±5.46 V. The next path that moves the relays (any
+source or output but `current_out`) puts the range back to normal, so the ±12 V output is not
+held to ±5 V afterwards. Ask for `"range":"normal"` to read `current_in` in the normal range, or
+`"range":"low"` to keep the low range after it. The module revision comes from the module's
+ID EEPROM (see [`module`](#module--the-analog-module-and-its-eeprom)), read at boot.
+
 ```json
 {"cmd":"adc_read","source":"current_in"}
 → {"status":"ok","data":{"source":"current_in","mv":3985,"uv":3985402,"count":61562,"span":6,"range":"normal",
-   "fullscale_mv":32856,"overrange":false,"offset_mv":10,"ua":16004}}
+   "fullscale_mv":32856,"overrange":false,"offset_mv":10,"ua":16004,"sense_mohm":249000}}
+
+{"cmd":"adc_read","source":"current_in"}   // analog module v3r5: the low range by default
+→ {"status":"ok","data":{"source":"current_in","mv":1600,"uv":1600212,"count":55938,"span":5,"range":"low",
+   "fullscale_mv":5462,"overrange":false,"offset_mv":10,"ua":16003,"sense_mohm":99995}}
 ```
 
 Firmware up to 3.3.0 used a different name for this source. That name is no longer accepted.
@@ -1381,7 +1415,8 @@ The low range gives about 6x the resolution on signals up to ±5 V. **Use 1x lea
 1.82 MΩ input does not match a 10x scope probe, which expects 1 MΩ.
 
 The divider is in front of every ADC source, so the range applies to `ext`, `cal1` and
-`current_in` (4-20 mA is 0.996 to 4.98 V, inside the low range). `cal2` (±12 V) has no low range.
+`current_in` (4-20 mA is 0.996 to 4.98 V, inside the low range; 0.4 to 2 V from module v3r5, which
+reads `current_in` in the low range by default). `cal2` (±12 V) has no low range.
 The range stays until it is changed, `analog_path` `off` or `cal2` is routed, or the pod restarts;
 each of those puts it back to `normal`. Older boards (and modules before v3r4, whose EEPROM says a
 revision below 3.4) have no K5: the range is always `normal` there and `low` is refused. The pod
@@ -1469,7 +1504,9 @@ tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_
 
 `current_in` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
 pin 2 is ground. The pod reads the voltage across that resistor, so 4 mA is 996 mV and
-20 mA is 4980 mV.
+20 mA is 4980 mV. From analog module v3r5 the resistor is 100 Ω behind a series diode and a
+30 mA current limiter: 4 mA is 400 mV and 20 mA is 2 V (see [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading)). The
+calibration is the same on both: the offset is measured with J8 open, at 0 V.
 
 Every ADC source is scaled with a fit, `volts = a + b × count`. The fits are built into
 the firmware and are the same on every pod. Each pod still has its own offset, from part
@@ -1513,6 +1550,7 @@ reference.
 | `offset_mv` | The offset in mV, rounded. `adc_read` reports the same value |
 | `offset_uv` | The offset in µV, as stored |
 | `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
+| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware 3.10.13+) |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
@@ -2633,7 +2671,7 @@ inrush at power-on, sleep-current floors, the energy of one duty cycle.
 The eFuses auto-retry after ~110 ms and blank faults for ~2.8 ms, so **a fast trip (< 1 ms)
 will not appear in a ~1 kHz profile** — `stats.fault` is the reliable indicator that one
 happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current_in` input is a
-249 Ω 4–20 mA terminal, *not* the DUT supply — do not use it for this.)
+4–20 mA terminal, 249 Ω or 100 Ω from analog module v3r5, *not* the DUT supply — do not use it for this.)
 
 #### Start
 
