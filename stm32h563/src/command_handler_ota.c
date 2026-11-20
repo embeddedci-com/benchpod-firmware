@@ -89,7 +89,7 @@ void handle_ota_begin(int conn_id, const char *json) {
     json_get_value(json, "version", ver_s, sizeof(ver_s));
     json_get_value(json, "sig", sig_s, sizeof(sig_s));
     int target = ota_target_from_name(target_s);
-    if (target < 0) { send_error(conn_id, "unknown target"); return; }
+    if (target < 0) { bp_err_ota_unknown_target(conn_id, target_s); return; }
     /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
     if (target == OTA_TARGET_CA) {
         const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id),

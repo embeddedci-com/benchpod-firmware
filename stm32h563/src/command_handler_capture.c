@@ -298,14 +298,9 @@ static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *o
 
 /* Gate a parsed (or built) trigger on the gateware version and program SET_TRIGGER. */
 static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool allow_pre) {
-    char err[LA_PINS_ERR_MAX];
     trig_reply.present = false;
-    uint8_t ver = signal_engine_fpga_version();
     if (!gw_caps()->capture_trigger) {
-        snprintf(err, sizeof(err),
-                 "capture triggers need gateware v%u or newer (this pod runs v%u)",
-                 (unsigned)CAPTURE_TRIGGER_MIN_GW, (unsigned)ver);
-        send_error(conn_id, err);
+        bp_err_gateware_too_old(conn_id, "capture triggers", CAPTURE_TRIGGER_MIN_GW);
         return false;
     }
     if (out->pre_samples && !allow_pre) {
@@ -313,9 +308,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
         return false;
     }
     if (out->pre_samples && !gw_caps()->la_change) {
-        snprintf(err, sizeof(err), "trigger pre_samples needs gateware v%u or newer (this pod runs v%u)",
-                 (unsigned)LA_CHANGE_MIN_GW, (unsigned)ver);
-        send_error(conn_id, err);
+        bp_err_gateware_too_old(conn_id, "trigger pre_samples", LA_CHANGE_MIN_GW);
         return false;
     }
     if (fpga_set_trigger_pre(out->la, (uint8_t)out->edge, out->pre_samples != 0u) != 0) {
@@ -1723,9 +1716,7 @@ void handle_sensor_la(int conn_id, const char *json) {
         /* the pre-trigger needs the change capture (gateware >= v50; the emulation image is v54) */
         k = la_change_divisor_pre(sr_hz, signal_engine_fpga_version());
         if (!k) {
-            snprintf(err, sizeof(err), "sensor_la trigger \"start\" needs gateware v%u or newer (this pod runs v%u); "
-                     "send \"trigger\":\"none\"", (unsigned)LA_CHANGE_MIN_GW, (unsigned)signal_engine_fpga_version());
-            send_error(conn_id, err);
+            bp_err_gateware_too_old(conn_id, "sensor_la trigger \"start\"", LA_CHANGE_MIN_GW);
             return;
         }
         pre = (uint32_t)(total / 8u);

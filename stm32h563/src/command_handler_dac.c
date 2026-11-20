@@ -41,16 +41,10 @@
 /* The error for a feature the running gateware image lacks: which image has it, and on the
    emulation image (sensors running) that the sensors come first. */
 static const char *image_hint(const char *what, int image) {
-    static char msg[224];
+    static char msg[160];
     const char *name = image == 1 ? "deep" : "loop";
-    if (signal_engine_image_kind() == 2)
-        snprintf(msg, sizeof(msg), "%s is not in the emulation image, which the emulated sensors use: "
-                 "{\"cmd\":\"sensor_stop\",\"all\":true} then {\"cmd\":\"fpga_image\",\"image\":\"%s\"}",
-                 what, name);
-    else
-        snprintf(msg, sizeof(msg), "%s not in the running gateware image (switch with "
-                 "{\"cmd\":\"fpga_image\",\"image\":%d})", what, image);
-    return msg;
+    if (signal_engine_image_kind() == 2) return bp_note_fpga_image_sensors_first(msg, sizeof(msg), what, name);
+    return bp_note_fpga_image_required(msg, sizeof(msg), what, name);
 }
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
@@ -768,7 +762,7 @@ void handle_dac_control_loop(int conn_id, const char *json) {
 }
 
 static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb) {
-    if (!require_gw(conn_id, gw_caps()->dac_control_loop, "control loop needs gateware v23+")) return;
+    if (!require_gw(conn_id, gw_caps()->dac_control_loop, "the control loop", DAC_CONTROL_LOOP_MIN_GW)) return;
     char s[16] = {0};
     dac_loop_params_t p = { .k_q15 = 8192, .vmin = 0, .vmax = 0xFFFF, .tick_div = 64,
                             .src = DAC_LOOP_SRC_ADC, .in_fixed = 0, .sweep_step = 0 };
@@ -786,7 +780,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
            loop instead — the caller would meter a value the ADC produced and believe it came
            from the point they asked for.  Refuse rather than substitute. */
         if (p.src != DAC_LOOP_SRC_ADC &&
-            !require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
+            !require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources", DAC_LOOP_SOURCE_MIN_GW)) return;
     }
     /* Clamp what has a safe reading (k, tick_div) and REFUSE what would silently do something
        else: an inverted output window (the gateware clamps against vmin first, so vmin>vmax
@@ -816,7 +810,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
     dac_loop_inmap_t map = {0};
     bool have_map = false;
     if (!parse_loop_input_map(conn_id, json, &map, &have_map)) return;
-    if (have_map && !require_gw(conn_id, gw_caps()->dac_loop_inmap, "loop input map needs gateware v30+")) return;
+    if (have_map && !require_gw(conn_id, gw_caps()->dac_loop_inmap, "the loop input map", DAC_LOOP_INMAP_MIN_GW)) return;
     /* A mapped SWEEP would be misleading rather than wrong: the sweep accumulator walks the
        whole 16-bit count space, but a mapped window is a few percent of it, so the output
        would track the curve for ~3% of each pass and sit saturated at one end or the other
@@ -825,9 +819,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
        So refuse the combination and name the alternative, rather than emit a sawtooth that
        looks like a broken curve. */
     if (have_map && p.src == DAC_LOOP_SRC_SWEEP) {
-        send_error(conn_id, "sweep cannot be combined with an input map on this gateware: the "
-                            "sweep spans the raw count range, not the mapped window. Step the "
-                            "input with {\"cmd\":\"dac_loop_input\"} instead");
+        bp_err_loop_sweep_with_map(conn_id);
         return;
     }
 
@@ -859,7 +851,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
                       : dac_loop_set_inmap(0, 0, 0, false, false);
     if (rc == 0) rc = dac_control_loop_start(lut, lut_len, p.k_q15, p.vmin, p.vmax, p.tick_div);
     heavy_release(conn_id);
-    if (rc == -2) { send_error(conn_id, "control loop needs gateware v23+"); return; }
+    if (rc == -2) { bp_err_gateware_too_old(conn_id, "the control loop", DAC_CONTROL_LOOP_MIN_GW); return; }
     if (rc == -3) {
         /* Right image family, wrong image: the deep-replay bitstream has no loop engine, and
            both images report the same version — so this is the ONLY thing that catches it. */
@@ -895,7 +887,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
 void handle_dac_loop_input(int conn_id, const char *json) {
     /* Cheap pre-check on the cached version; the authoritative image gate lives in
        dac_loop_set_source (a live SPI read, so it runs under the heavy lock). */
-    if (!require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
+    if (!require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources", DAC_LOOP_SOURCE_MIN_GW)) return;
     char s[16] = {0};
     /* Defaults come from what was last SET, so {"input":N} alone is a pure input step. */
     uint8_t  src  = s_loop_src;
@@ -919,7 +911,7 @@ void handle_dac_loop_input(int conn_id, const char *json) {
     int rc = dac_loop_set_source(src, in, step);
     uint16_t v = (rc == 0) ? fpga_dac_loop_probe() : 0;
     heavy_release(conn_id);
-    if (rc == -2) { send_error(conn_id, "loop input sources need gateware v29+"); return; }
+    if (rc == -2) { bp_err_gateware_too_old(conn_id, "loop input sources", DAC_LOOP_SOURCE_MIN_GW); return; }
     if (rc == -3) {
         send_error(conn_id, image_hint("control loop", 0));
         return;

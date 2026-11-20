@@ -235,11 +235,8 @@ void handle_gpio(int conn_id, const char *json) {
     note_target_power();
 
     if (!req.has_mode && !req.has_level) {
-        uint8_t ver = signal_engine_fpga_version();
         if (!gw_caps()->gpio_get) {
-            snprintf(err, sizeof(err), "reading pin levels needs gateware v%u or newer (this pod runs v%u)",
-                     (unsigned)GPIO_GET_MIN_GW, (unsigned)ver);
-            send_error(conn_id, err);
+            bp_err_gateware_too_old(conn_id, "reading pin levels", GPIO_GET_MIN_GW);
             return;
         }
         uint16_t levels = 0;

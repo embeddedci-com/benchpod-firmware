@@ -90,7 +90,7 @@ static void reply_state(int conn_id)
 void handle_module(int conn_id, const char *json)
 {
     if (!module_link_board()) {
-        send_error(conn_id, "module: this BenchPod has no module link (digital v3r3 only)");
+        bp_err_no_module_link(conn_id, "module");
         return;
     }
     char op[16] = {0};
@@ -193,7 +193,7 @@ void handle_module(int conn_id, const char *json)
 void handle_module_power(int conn_id, const char *json)
 {
     if (!module_link_board()) {
-        send_error(conn_id, "module_power: this BenchPod has no module link (digital v3r3 only)");
+        bp_err_no_module_link(conn_id, "module_power");
         return;
     }
     char v[8] = {0};

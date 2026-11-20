@@ -362,14 +362,11 @@ void handle_fpga_image(int conn_id, const char *json) {
     else if (!strcmp(s, "1") || !strcmp(s, "deep")) img = 1;
     else if (!strcmp(s, "2") || !strcmp(s, "emulation")) img = 2;
     if (img < 0) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
-    if (img == 2 && !require_gw(conn_id, gw_caps()->emulation, "the emulation image needs gateware v54 or later")) return;
+    if (img == 2 && !require_gw(conn_id, gw_caps()->emulation, "the emulation image", EMULATION_MIN_GW)) return;
     if (img != 2) {
         char names[96];
         if (sensor_mgr_digital_names(names, sizeof(names))) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "image switch refused: the emulated sensors %s need the "
-                     "emulation image; stop them first ({\"cmd\":\"sensor_stop\",\"all\":true})", names);
-            send_error(conn_id, msg);
+            bp_err_image_switch_sensors_running(conn_id, names);
             return;
         }
     }

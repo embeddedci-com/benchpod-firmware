@@ -10,7 +10,8 @@
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
 #include "b64url.h"
-#include "gw_caps.h"   /* gw_caps_t, require_gw */
+#include "gw_caps.h"
+#include "bp_errors.h"  /* require_gw refuses with BP0017 */   /* gw_caps_t, require_gw */
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -77,10 +78,10 @@ static inline bool conn_has_socket(int conn_id) {
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
 
-/* A gateware gate (a gw_caps() field): true when the running gateware has it, else `text` goes
-   back as a plain error and the handler returns. */
-static inline bool require_gw(int conn_id, bool have, const char *text) {
-    if (!have) send_error(conn_id, text);
+/* A gateware gate (a gw_caps() field): true when the running gateware has it, else the handler
+   refuses with gateware_too_old (BP0017: feature needs gateware v`min`) and returns. */
+static inline bool require_gw(int conn_id, bool have, const char *feature, int min) {
+    if (!have) bp_err_gateware_too_old(conn_id, feature, (int32_t)min);
     return have;
 }
 

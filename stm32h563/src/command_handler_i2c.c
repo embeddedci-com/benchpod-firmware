@@ -21,6 +21,7 @@
 #include "command_handler_internal.h"
 #include "gw_caps.h"
 #include "bp_errors.h"
+#include "vref_out.h"     /* pin 21 for BP0029 */
 #include "signal_engine.h"
 #include "i2c_txn.h"
 #include "la_pins.h"
@@ -86,17 +87,14 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
     }
     if (!la_pull_available()) {
         if (la_pull_rail_is_pin21())   /* v3r4: pin 21 is down (they work at every voltage) */
-            send_error(conn_id, "the pod's pull-ups are off: J1 pin 21 is down (la_voltage shows it); "
-                       "check pin 21, or pass \"pullups\":\"external\"");
+            bp_err_pull_rail_down(conn_id, (int32_t)vref_out_last_mv());
         else
             send_error(conn_id, "this board's pull-ups go to 3.3 V and the LA bank is not at 3.3 V: pass "
                        "\"pullups\":\"external\" with pull-ups to the board's own rail");
         return false;
     }
     if (la_pull_asked(la) == LA_PULL_NONE) {
-        snprintf(msg, sizeof(msg), "I2C needs pull-ups: switch on LA%u's with {\"cmd\":\"la\",\"la\":%u,"
-                 "\"pull\":\"up\"}, or pass \"pullups\":\"external\"", la, la);
-        send_error(conn_id, msg); return false;
+        bp_err_i2c_needs_pullups(conn_id, (int32_t)la); return false;
     }
     return true;
 }
@@ -105,7 +103,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
 
 void handle_i2c_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    if (!require_gw(conn_id, gw_caps()->i2c_master, "the I2C master needs gateware v55+: update the pod's firmware")) return;
+    if (!require_gw(conn_id, gw_caps()->i2c_master, "the I2C master", I2C_MASTER_MIN_GW)) return;
     uint32_t sda, scl;
     if (!get_u32(json, "sda", &sda) || sda < 1 || sda > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid sda (LA 1..14)"); return; }
     if (!get_u32(json, "scl", &scl) || scl < 1 || scl > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid scl (LA 1..14)"); return; }
@@ -168,7 +166,7 @@ void handle_i2c_status(int conn_id, const char *json) {
 
 static bool session_or_error(int conn_id) {
     if (fpga_i2c_armed()) return true;
-    send_error(conn_id, "no I2C session: send i2c_start first");
+    bp_err_i2c_session_not_open(conn_id);
     return false;
 }
 
@@ -177,7 +175,7 @@ static bool run_or_error(int conn_id, const i2c_txn_t *t, uint8_t *reply) {
     uint32_t budget = i2c_txn_us(t, s_half) * 2u + I2C_STRETCH_BUDGET_MS * 1000u;
     bool arb = false;
     int rc = fpga_i2c_run(t->tok, t->ntok, reply, t->nreply, budget, &arb);
-    if (rc == -3) { i2c_session_end(); send_error(conn_id, "the I2C engine was reset: i2c_start again"); return false; }
+    if (rc == -3) { i2c_session_end(); bp_err_i2c_engine_reset(conn_id); return false; }
     if (rc == -2) {
         fpga_i2c_recover(s_sda, s_scl, s_half);
         char msg[160];
@@ -260,7 +258,7 @@ void handle_i2c_scan(int conn_id, const char *json) {
    SDA catches its START.  Smaller than i2c_xfer so the result rides the capture's last frame. */
 
 int i2c_capture_prepare(const char *obj, char *err, size_t cap) {
-    if (!fpga_i2c_armed()) { snprintf(err, cap, "send: no I2C session: send i2c_start first"); return -1; }
+    if (!fpga_i2c_armed()) { bp_note_i2c_session_not_open(err, cap); return -1; }
     uint32_t addr, nr = 0;
     if (!get_u32(obj, "addr", &addr) || addr > 0x7Fu) { snprintf(err, cap, "send: addr must be 0..127"); return -1; }
     if (has_key(obj, "read") && (!get_u32(obj, "read", &nr) || nr > BUS_SEND_MAX)) {

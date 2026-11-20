@@ -652,7 +652,7 @@ static void test_sensor_la_immediate_and_errors(void) {
     CHECK(strcmp(g_err, "timeout_ms must be 1..600000") == 0, "bad timeout text: %s", g_err);
     clear_tx(); g_gw = 49;
     handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\"}");
-    CHECK(strstr(g_err, "needs gateware v50") && strstr(g_err, "\"none\"") && !capture_busy(), "gw 49: %s", g_err);
+    CHECK(g_code == BP_E_GATEWARE_TOO_OLD && strstr(g_err, "50") && !capture_busy(), "gw 49: %s", g_err);
     g_gw = 47; g_wait_rc = 0; g_rate_hz = 0;
 }
 

@@ -17,10 +17,17 @@
 #include "la_pins.h"
 #include "sensor_cmd.h"
 #include "sensor_mgr.h"
+#include "bp_errors.h"
 
 static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL %s:%d: ", __func__, __LINE__); \
         printf(__VA_ARGS__); printf("\n"); fails++; } } while (0)
+
+/* The code a refusal text was noted with (what send_error sends), 0 for a plain one. */
+static int code_of(const char *text) {
+    bp_errcode_t c = BP_E_NONE;
+    return text && bp_err_noted(text, &c, NULL) ? (int)c : 0;
+}
 
 static char g_reply[BP_CLOUD_REPLY_MAX];
 static char g_err[SM_ERR_MAX];
@@ -142,7 +149,7 @@ static void test_define(void) {
     /* an invalid definition names the place */
     if (p) memcpy(p, "temperature_x", 13);
     CHECK(!define_text("bad", bad, strlen(bad)) && strncmp(g_err, "invalid definition: ", 20) == 0, "invalid: %s", g_err);
-    CHECK(!run("{\"cmd\":\"sensor_status\",\"instance\":\"bad\"}") && strcmp(g_err, "unknown sensor instance 'bad'") == 0, "%s", g_err);
+    CHECK(!run("{\"cmd\":\"sensor_status\",\"instance\":\"bad\"}") && code_of(g_err) == BP_E_SENSOR_INSTANCE_UNKNOWN, "%s", g_err);
     CHECK(!run("{\"cmd\":\"sensor_define\",\"instance\":\"Env!\",\"offset\":0,\"total\":4,\"data_b64\":\"e30=\"}"), "bad name");
     CHECK(!run("{\"cmd\":\"sensor_define\",\"instance\":\"env\",\"offset\":0,\"total\":40000,\"data_b64\":\"e30=\"}"), "too big");
     free(bad);
@@ -179,7 +186,7 @@ static void test_bme280_mpu(void) {
     CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"env3\",\"pins\":{\"sda\":1,\"scl\":3}}") &&
           strcmp(g_err, "LA1 is in use by sensor:env (i2c_scl)") == 0, "%s", g_err);
     CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"nope\",\"pins\":{\"sda\":5,\"scl\":6}}") &&
-          strcmp(g_err, "unknown sensor instance 'nope'") == 0, "%s", g_err);
+          code_of(g_err) == BP_E_SENSOR_INSTANCE_UNKNOWN, "%s", g_err);
 
     /* BME280: the DUT starts a forced conversion, the busy bit shows, then data */
     uint8_t v = 0x25;
@@ -542,7 +549,7 @@ static void test_analog(void) {
     run("{\"cmd\":\"sensor_set\",\"instance\":\"ntc\",\"values\":{\"temperature_c\":100}}");
     poll_ms(1);
     CHECK(g_fpga.analog_value > 2.9, "hotter: %g", g_fpga.analog_value);
-    CHECK(sensor_mgr_command_conflict("generate") && strstr(sensor_mgr_command_conflict("generate"), "sensor:ntc"), "generate refused");
+    CHECK(sensor_mgr_command_conflict("generate") && code_of(sensor_mgr_command_conflict("generate")) == BP_E_OUTPUT_USED_BY_SENSOR, "generate refused");
     CHECK(sensor_mgr_command_conflict("status") == NULL, "status fine");
     /* the current output on a board where it shares the DAC */
     CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"pt\",\"pins\":{\"output\":\"current\"}}"), "pt: %s", g_err);

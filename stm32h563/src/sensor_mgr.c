@@ -14,6 +14,7 @@
  * than 32 writes between two polls lose entries: the image is read back whole and rebuilt.
  * ========================================================================== */
 #include "sensor_mgr.h"
+#include "bp_errors.h"
 #include "sensor_port.h"
 #include "fpga_emu.h"
 #include "la_pins.h"
@@ -1057,7 +1058,7 @@ static bool dac_used_by_us(void) {
 int sm_start(const char *inst, const sm_start_req_t *req, bp_emit_t *e, char *err, size_t cap) {
     la_pins_set_owner_namer(sm_slot_name);
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     sm_inst_t *s = s_slot[slot];
     if (s->running) { seterr(err, cap, "%s is running: sensor_stop it first", s->name); return -1; }
     sm_pins_t pins = req->pins;
@@ -1220,7 +1221,7 @@ int sm_stop(const char *inst, char *err, size_t cap) {
         return 0;
     }
     int slot = find_slot(inst);
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst); return -1; }
     stim_forget_slot((unsigned)slot);
     inst_halt((unsigned)slot, true);
     inst_free((unsigned)slot);
@@ -1229,7 +1230,7 @@ int sm_stop(const char *inst, char *err, size_t cap) {
 
 int sm_set(const char *inst, unsigned n, const char *const keys[], const double vals[], char *err, size_t cap) {
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     if (n == 0) { seterr(err, cap, "values: give at least one param"); return -1; }
     return apply_values(s_slot[slot], n, keys, vals, err, cap);
 }
@@ -1279,14 +1280,14 @@ static void fault_remove(sm_inst_t *s, unsigned k) {
 
 int sm_fault(const char *inst, const sd_fault_t *f, char *err, size_t cap) {
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     if (!s_slot[slot]->running) { seterr(err, cap, "%s is not running: sensor_start it first", inst); return -1; }
     return fault_add(s_slot[slot], f, false, 0, err, cap);
 }
 
 int sm_fault_clear(const char *inst, char *err, size_t cap) {
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     sm_inst_t *s = s_slot[slot];
     for (unsigned k = 0; k < SM_FAULTS; k++) s->faults[k].on = false;
     sd_clear_faults(s->in);
@@ -1551,7 +1552,7 @@ void sm_poll(void) {
 
 int sm_regs(const char *inst, unsigned start, unsigned len, uint8_t *out, char *err, size_t cap) {
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     sm_inst_t *s = s_slot[slot];
     if (!is_regs(s)) { seterr(err, cap, "%s is not an I2C or SPI sensor", s->name); return -1; }
     if (!s->running) { seterr(err, cap, "%s is not running", s->name); return -1; }
@@ -1562,7 +1563,7 @@ int sm_regs(const char *inst, unsigned start, unsigned len, uint8_t *out, char *
 
 int sm_i2c_pins(const char *inst, unsigned *sda, unsigned *scl, char *err, size_t cap) {
     int slot = inst ? find_slot(inst) : -1;
-    if (slot < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst ? inst : ""); return -1; }
+    if (slot < 0) { bp_note_sensor_instance_unknown(err, cap, inst ? inst : ""); return -1; }
     sm_inst_t *s = s_slot[slot];
     if (s->kind != SD_KIND_I2C) { seterr(err, cap, "sensor_la captures I2C sensors only; use la_capture for the pins of %s", s->name); return -1; }
     if (!s->running) { seterr(err, cap, "%s is not running", s->name); return -1; }
@@ -1656,7 +1657,7 @@ int sm_status(const char *inst, unsigned first, bp_emit_t *e, char *err, size_t 
     int only = -1;
     if (inst) {
         only = find_slot(inst);
-        if (only < 0) { seterr(err, cap, "unknown sensor instance '%s'", inst); return -1; }
+        if (only < 0) { bp_note_sensor_instance_unknown(err, cap, inst); return -1; }
     }
     unsigned listed = 0, idx = 0;
     int next = -1;
@@ -1710,10 +1711,8 @@ const char *sensor_mgr_command_conflict(const char *verb) {
         bool hit = cur ? (s->out == SM_OUT_CURRENT || sensor_port_current_shares_dac())
                        : (s->out == SM_OUT_DAC || sensor_port_current_shares_dac());
         if (hit) {
-            snprintf(msg, sizeof(msg), "the %s output is played by sensor:%s; stop it first "
-                     "({\"cmd\":\"sensor_stop\",\"instance\":\"%s\"})",
-                     s->out == SM_OUT_CURRENT ? "current" : "dac", s->name, s->name);
-            return msg;
+            return bp_note_output_used_by_sensor(msg, sizeof(msg), s->out == SM_OUT_CURRENT ? "current" : "dac",
+                                                 s->name);
         }
     }
     return NULL;
