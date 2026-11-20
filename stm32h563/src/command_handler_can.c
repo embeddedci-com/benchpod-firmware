@@ -143,7 +143,7 @@ static size_t can_frame_json(char *out, size_t cap, const can_frame_t *f, bool f
     for (int b = 0; b < f->dlc && off < cap; b++)
         off += (size_t)snprintf(out + off, cap - off, "%s%u", b ? "," : "", f->data[b]);
     if (off < cap)
-        off += (size_t)snprintf(out + off, cap - off, "],\"ts\":%lu}", (unsigned long)f->ts);
+        off += (size_t)snprintf(out + off, cap - off, "],\"ts_ms\":%lu}", (unsigned long)f->ts);   /* ts up to 3.10.13 */
     return (off < cap) ? off : cap - 1u;
 }
 

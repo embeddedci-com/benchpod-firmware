@@ -3923,7 +3923,8 @@ FD has no remote frames)"`.
 {"cmd":"can_read","max":8}
 ```
 
-`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"fd":false,"brs":false,"dlc":3,"data":[1,2,3],"ts":12345}],"overflow":0,"pending":0}`.
+`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"fd":false,"brs":false,"dlc":3,"data":[1,2,3],"ts_ms":12345}],"overflow":0,"pending":0}`.
+`ts_ms` is when the frame arrived, in milliseconds since boot (`ts` up to firmware 3.10.13).
 `fd` and `brs` say whether the frame was a CAN FD frame and switched bit rate, `dlc` is the number
 of data bytes. `overflow` counts frames dropped because the receive queue was full, `pending` the
 frames still queued. A reply holds at most about five 64-byte FD frames (to fit a cloud reply), so
