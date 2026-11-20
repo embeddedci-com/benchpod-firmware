@@ -326,7 +326,7 @@ cause = "The pull resistor on LA{la} is wired one way on this board, so it canno
 [BP0024.fix]
 sdk = "use bp.set_pull({la}, \"{have}\"), or pick a channel that pulls {want} (bp.la_pins() shows them)"
 cli = "use `benchpod la pull {la} {have}`, or pick a channel that pulls {want} (`benchpod la pins` shows them)"
-mcp = "call set_pull(las=[{la}], pull=\"{have}\"), or pick a channel that pulls {want} (pull_status shows them)"
+mcp = "call set_pull(la=[{la}], pull=\"{have}\"), or pick a channel that pulls {want} (pull_status shows them)"
 web = "LA{la} can only pull {have} on this board. Pick a pin that pulls {want}."
 
 [BP0025]
@@ -435,7 +435,7 @@ is on."""
 [BP0032.fix]
 sdk = "switch the pull-down off with bp.set_pull({la}, \"off\"), or use another channel"
 cli = "switch the pull-down off with `benchpod la pull {la} off`, or use another channel"
-mcp = "call set_pull(las=[{la}], pull=\"off\"), or use another channel"
+mcp = "call set_pull(la=[{la}], pull=\"off\"), or use another channel"
 web = "Switch off LA{la}'s pull-down in the Pins pane, or pick another pin."
 
 [BP0033]
@@ -813,7 +813,7 @@ cause = "I2C lines are open drain: something must pull them high. The pod can do
 [BP0061.fix]
 sdk = "switch the pull-up on (bp.enable_pullup({la})), or pass pullups=\"external\" when the board has its own"
 cli = "pull LA{la} up with `benchpod la pull {la} up`, or pass --pullups external when the board has its own"
-mcp = "call set_pull(las=[{la}], pull=\"up\"), or pass pullups=\"external\" when the board has its own"
+mcp = "call set_pull(la=[{la}], pull=\"up\"), or pass pullups=\"external\" when the board has its own"
 web = "Switch on LA{la}'s pull-up, or say the board has its own."
 
 [BP0062]
