@@ -232,7 +232,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
-| `usb_host` | T0/T2 | USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `on`: T2) | object | no |
+| `usb_host` | T0/T2 | Development builds only. USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `on`: T2) | object | no |
 | `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
@@ -2614,7 +2614,8 @@ power-on-reset behaviour, or recovering a target that wedged itself.
 
 ### `usb_host` — USB host mode
 
-**Preview.** The pod's USB port becomes a full-speed USB host for the board under test, for a
+**Development builds only** (`make USB_HOST=1`, not in releases yet: other firmware answers
+`usb_host` as an unknown command). The pod's USB port becomes a full-speed USB host for the board under test, for a
 limited time, and reports the device that enumerates on it: IDs, strings, speed, how long
 enumeration took, the configuration and its interfaces. No class drivers yet (USB serial,
 flashing over USB and class access come later).

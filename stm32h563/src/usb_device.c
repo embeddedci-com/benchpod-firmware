@@ -13,7 +13,7 @@
  * a barrier, except the console ring, whose producers are serialized by a critical
  * section (an ISR may log).
  *
- * USB host mode (usb_host.h) borrows the same port: the usb task tears the device stack
+ * USB host mode (usb_host.h, USB_HOST=1 builds only) borrows the same port: the usb task tears the device stack
  * down, moves the USB clock onto the crystal, and runs TinyUSB's host stack until the host
  * request ends, then brings the device back (role_to_host / role_to_device below). While it
  * hosts, nothing outside the usb task may touch the device stack: s_role_host gates the two
@@ -24,8 +24,10 @@
  */
 #include "pod_policy.h"
 #include "usb_device.h"
+#if defined(BENCHPOD_USB_HOST)
 #include "usb_host.h"
 #include "board_caps.h"
+#endif
 #include "console_io.h"
 #include "board_uid.h"
 
@@ -86,6 +88,7 @@ static void usb_hw_init(void)
     HAL_NVIC_SetPriority(USB_DRD_FS_IRQn, 6, 0);
 }
 
+#if defined(BENCHPOD_USB_HOST)
 /* USB kernel clock for host mode: PLL3Q = 48 MHz from the 25 MHz crystal (25 / 5 x 96 / 10).
    A host times the bus itself, so it needs the crystal's accuracy (full speed: 0.25 %); HSI48
    is only good enough as a device, where the CRS trims it to the host's SOF. Nothing else
@@ -134,6 +137,7 @@ static void usb_sel_set(bool usb_a)
     gpio.Mode  = usb_a ? GPIO_MODE_OUTPUT_PP : GPIO_MODE_INPUT;
     HAL_GPIO_Init(GPIOC, &gpio);
 }
+#endif /* BENCHPOD_USB_HOST */
 
 /* Device or host: TinyUSB dispatches on the role the port was started in. */
 void USB_DRD_FS_IRQHandler(void)
@@ -434,6 +438,7 @@ static void usb_reattach(void)
 }
 
 /* ---- host mode (usb_host.h) ---- */
+#if defined(BENCHPOD_USB_HOST)
 static usb_host_port_t s_host_port;   /* the role the usb task runs: NONE = device */
 
 static void device_start(void)
@@ -490,11 +495,13 @@ static void role_to_host(usb_host_port_t port)
     s_host_port = port;
     usb_host_role_changed(port);
 }
+#endif /* BENCHPOD_USB_HOST */
 
 static void usb_task(void *arg)
 {
     (void)arg;
     for (;;) {
+#if defined(BENCHPOD_USB_HOST)
         usb_host_port_t want = usb_host_wanted();
         if (want != s_host_port) {
             if (s_host_port != USB_HOST_PORT_NONE) role_to_device();
@@ -504,6 +511,7 @@ static void usb_task(void *arg)
             tuh_task_ext(1, false);
             continue;
         }
+#endif
         if (s_reattach_at && (int32_t)(HAL_GetTick() - s_reattach_at) >= 0) {
             s_reattach_at = 0;
             s_net_setting = s_net_setting_next;

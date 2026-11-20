@@ -37,9 +37,10 @@
 #define CFG_TUD_NCM_IN_NTB_N         2
 
 
-/* Host: one device straight on the port, no hub, no class drivers yet (the pod reads the
+/* Host (USB_HOST=1 builds only): one device straight on the port, no hub, no class drivers yet (the pod reads the
    descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
    one still enumerates, only the interface list in usb_host is cut. */
+#if defined(BENCHPOD_USB_HOST)
 #define BOARD_TUH_RHPORT         0
 #define CFG_TUH_ENABLED          1
 #define CFG_TUH_MAX_SPEED        OPT_MODE_FULL_SPEED
@@ -47,5 +48,6 @@
 #define CFG_TUH_DEVICE_MAX       1
 #define CFG_TUH_HUB              0
 #define CFG_TUH_ENDPOINT_MAX     4
+#endif
 
 #endif /* TUSB_CONFIG_H */

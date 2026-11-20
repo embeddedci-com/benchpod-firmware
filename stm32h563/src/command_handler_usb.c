@@ -13,6 +13,9 @@
  * (the USB-C adapter rig). Starting again on the same port renews the timeout (default 60 s,
  * at most 3600 s); when it runs out the pod goes back to being a USB device by itself. The
  * switch happens on the usb task right after this reply; poll to see "host" and the device.
+ *
+ * Only in USB_HOST=1 builds (development, not hardware-tested yet). Elsewhere the verb answers
+ * like an unknown command, so clients see the same reply as from firmware without it.
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
@@ -20,6 +23,7 @@
 #include "bp_json.h"
 #include "bp_errors.h"
 #include "bp_limits.h"
+#if defined(BENCHPOD_USB_HOST)
 #include "usb_host.h"
 
 #include "FreeRTOS.h"
@@ -110,3 +114,12 @@ void handle_usb_host(int conn_id, const char *json)
         return;
     }
 }
+#else /* !BENCHPOD_USB_HOST */
+
+void handle_usb_host(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, BP_ERR_TEXT("unknown cmd"), "usb_host");
+}
+
+#endif /* BENCHPOD_USB_HOST */
