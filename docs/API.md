@@ -343,6 +343,7 @@ that applies answers with its code (or, for safe mode, its message) and the comm
 | Digital-only board | the analog commands (`generate`, `capture`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
 | [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
 | [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026` (`lease_lost`, args `by`) |
+| [DAC pinout](#dac-pinout-on-the-flat-cable) mismatch | the commands that drive the DAC (`generate`, `measure`, `replay`, `dac_set`, `dac_out`, `dac_control_loop`, `current_out` with `ua`, `calibrate` with `dac` or `adc`, `adc_range` with `test`) on a digital board and an analog module with different flat-cable pinouts | `BP0080` (`dac_pinout_mismatch`, args `cmd`, `digital`, `module`) |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
@@ -1813,7 +1814,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
 | `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
-| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
+| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power`, `dac_pinout_ok` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
 | `features_rev` | integer | The revision of the [features table](#features-table) this firmware is built from. |
@@ -4048,6 +4049,30 @@ devices sit on their own bus (the STM32's I2C2). Firmware 3.9.5 and later:
 
 The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards are not affected.
 
+<a id="dac-pinout-on-the-flat-cable"></a>
+### DAC pinout on the flat cable
+
+The DAC's clock and data lines cross the flat cable. Digital v3r4 and analog module 3.5 swapped
+them, so the clock sits next to a ground pin:
+
+| Pin | Digital v3r3, analog module 3.4 and earlier | Digital v3r4+, analog module 3.5+ |
+|---|---|---|
+| 7 | DAC data | DAC clock |
+| 8 | DAC clock | DAC data |
+
+A digital board and a module from different sides of that change do not work together: the DAC
+would get scrambled data. Nothing is damaged (both lines come from the digital board), and from
+the next firmware release on the pod refuses every command that drives the DAC with `BP0080` and
+sends the DAC nothing at all. Everything else (ADC, LA, relays, I2C) keeps working.
+`status.module.dac_pinout_ok` is `false` on such a pair. The module's revision comes from its
+EEPROM header: a module that was never programmed (`eeprom` `"blank"`), or whose header does not
+read, counts as an older module.
+
+The commands refused: `generate`, `measure`, `replay`, `dac_set`, `dac_out`,
+`dac_control_loop`, `current_out` with `ua`, `calibrate` with `dac` or `adc`, and `adc_range`
+with `test`. Anything else that would reach the DAC (an analog sensor, for example) fails as well,
+because the firmware blocks the DAC frames themselves.
+
 <a id="module--the-analog-module-and-its-eeprom"></a>
 ### `module`: the analog module and its EEPROM
 
@@ -4057,7 +4082,7 @@ The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards a
 
 ```json
 {"status":"ok","data":{"present":true,"analog":true,"power":true,"bridge_power":true,
- "eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
+ "dac_pinout_ok":true,"eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
 ```
 
 | Field | Type | Meaning |
@@ -4065,12 +4090,13 @@ The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards a
 | `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
 | `analog` | boolean | The module was found at boot and is the pod's analog front end. |
 | `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
+| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Next firmware release. |
 | `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
 | `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
 | `layout` | integer | The header's layout version (1). |
 | `cal_len`, `cal_ok` | integer, boolean | The stored calibration blob's length in bytes (0 = none), and whether its CRC matched when it was last read. |
 
-`status.module` has the first five fields only.
+`status.module` has the first six fields only.
 
 The EEPROM forms need a module plugged in with its power on. Reads are T0, writes T2 (they persist
 settings on the module):
@@ -4872,6 +4898,7 @@ The ones the commands above name:
 | `BP0070` | `capture_dual_too_deep` | `la_max`, `adc_max`, `la_capture_max` | `capture_dual` asking for more than a stream's region |
 | `BP0071` | `capture_overflowed` | `la_ksps`, `adc_ksps` | a capture whose streams the PSRAM could not keep up with |
 | `BP0072`, `BP0073` | `psram_too_small`, `psram_bandwidth` | | `capture_dual` whose regions do not fit the PSRAM, or whose rates overrun its bus |
+| `BP0080` | `dac_pinout_mismatch` | `cmd`, `digital`, `module` | a command that drives the DAC on a digital board and an analog module with different [flat-cable pinouts](#dac-pinout-on-the-flat-cable) |
 
 Refusals without a code keep `{"status":"error","message":...}`; the common ones:
 

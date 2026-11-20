@@ -34,6 +34,8 @@
 #include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
+#include "dac_link.h"       /* BP0080: the flat cable's DAC pinout */
+#include "module_link.h"
 #include "dac_quad.h"      /* the ADC low range keeps the +-12 V output within +-5 V */
 #include "i2c_bus.h"       /* adc_range_get */
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
@@ -384,6 +386,15 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     }
     /* The pod's own lease (lease_local.h): on every transport, only its owners drive the pod. */
     if (!command_handler_lease_gate(conn_id, d, buf)) return;
+
+    /* A digital board and an analog module that disagree on the flat cable's DAC pins
+       (dac_link.h): nothing drives the DAC. signal_engine blocks the frames too. */
+    if (dac_link_command_drives_dac(cmd, buf) && module_dac_pinout_mismatch()) {
+        char mod[20];
+        module_dac_pinout_module(mod, sizeof(mod));
+        bp_err_dac_pinout_mismatch(conn_id, cmd, module_dac_pinout_digital(), mod);
+        return;
+    }
 
     /* DAC output limits (dac_limits.h): one check here covers every transport (LAN, cloud
        tunnel, cloud command channel). No-op on a pod without limits. */

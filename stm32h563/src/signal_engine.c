@@ -158,6 +158,11 @@ static inline bool busy_read(void)
 /* ---- SPI command opcodes (single source: tools/gen_protocol.py) ---- */
 #include "cmd_opcodes.h"
 #include "blob_store.h"
+#include "dac_link.h"      /* the flat cable's DAC pinout: no DAC frames on a mismatched pair */
+#include "module_link.h"
+
+/* spi_cmd_write refused a DAC command: the boards disagree on the DAC pinout (dac_link.h). */
+#define SE_ERR_DAC_PINOUT (-20)
 
 #define PING_REPLY_MAGIC   0xA5
 
@@ -195,6 +200,10 @@ static inline void cs_deselect(void) { HAL_GPIO_WritePin(ICE_SPI_CS_PORT, ICE_SP
 /* Write CMD + optional args in a single CS-asserted burst.  Returns 0 on
    success, <0 if a transfer failed (CS is always released). */
 static int spi_cmd_write(uint8_t cmd, const void *args, size_t args_len) {
+    /* The last line of defense for a digital board and module that disagree on the flat cable's
+       DAC pins (dac_link.h): no frame reaches the DAC, whichever path asked.  The commands are
+       refused with BP0080 before they get here. */
+    if (dac_link_opcode_drives_dac(cmd) && module_dac_pinout_mismatch()) return SE_ERR_DAC_PINOUT;
     cs_select();
     int rc = spi_write_blocking(SPI_PORT, &cmd, 1);
     if (rc == 0 && args && args_len) {

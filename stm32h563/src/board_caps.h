@@ -69,6 +69,9 @@ typedef struct {
        board's default on its pull-down).  Nothing drives it yet: kept for the planned USB
        host support, which switches it on demand only. */
     bool usb_sel;
+    /* The DAC clock is on the module flat cable's pin 7 and its data on pin 8 (dac_link.h); older
+       digital boards have them the other way round.  Only matters on a two-board pod. */
+    bool cn1_dac_swap;
 } board_caps_t;
 
 /* The capabilities of a revision (a BOARD_REV_* value).  Pure (host tests). */

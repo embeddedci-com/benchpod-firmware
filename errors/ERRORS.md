@@ -85,3 +85,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0077 | `usb_host_port_unavailable` | usb | next | This pod has no USB host port {port} |
 | BP0078 | `usb_host_no_crystal` | usb | next | USB host mode needs the pod's crystal clock, which is not running |
 | BP0079 | `usb_host_other_port` | usb | next | USB host mode is already running on {port} |
+| BP0080 | `dac_pinout_mismatch` | analog | next | {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts |

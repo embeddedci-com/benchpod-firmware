@@ -97,9 +97,10 @@ typedef enum {
     BP_E_USB_HOST_PORT_UNAVAILABLE = 77,
     BP_E_USB_HOST_NO_CRYSTAL = 78,
     BP_E_USB_HOST_OTHER_PORT = 79,
+    BP_E_DAC_PINOUT_MISMATCH = 80,
 } bp_errcode_t;
 
-#define BP_E_LAST 79
+#define BP_E_LAST 80
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1075,6 +1076,19 @@ static inline const char *bp_note_usb_host_other_port(char *buf, size_t cap, con
 static inline const char *bp_tag_usb_host_other_port(const char *text, const char *port) {
     const bp_err_arg_t a[] = { {"port", port, 0, 1} };
     return bp_err_tag(text, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+/* BP0080: {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts */
+static inline void bp_err_dac_pinout_mismatch(int conn_id, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    bp_error_send(conn_id, BP_E_DAC_PINOUT_MISMATCH, a, 3);
+}
+static inline const char *bp_note_dac_pinout_mismatch(char *buf, size_t cap, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_DAC_PINOUT_MISMATCH, a, 3);
+}
+static inline const char *bp_tag_dac_pinout_mismatch(const char *text, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    return bp_err_tag(text, BP_E_DAC_PINOUT_MISMATCH, a, 3);
 }
 
 #endif /* BP_ERRORS_H */
