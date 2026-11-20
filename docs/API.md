@@ -2285,12 +2285,17 @@ levels when the gateware can read them back.
 ```json
 {"cmd":"la_pins"}
 {"cmd":"la_pins","la":[1,2,3,4,5,6,7]}
+{"cmd":"la_pins","from":10}
 ```
 
 `la` (optional, firmware 3.10.13+): a pin or a list of pins. The reply then lists only
 those pins' entries, in pin order; everything else is the same. Without `la` (or with `"all"`)
 the reply lists all 14, as before. Older firmware ignores `la` and lists all 14, so a host that
 asks for a subset keeps only the entries it asked for.
+
+`from` (optional, firmware after 4.0.0, feature `la_pins_paged`): the first pin to list, 1 to 14,
+normally the `next` of the previous reply. It combines with `la` (the pins of `la` from `from`
+on). Older firmware ignores it and starts at LA1.
 
 Response:
 
@@ -2311,12 +2316,26 @@ Response:
 | `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
 | `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
+| `pull_dirs` | digital v3r4 only: `["up","down"]`, every channel's pull directions (the entries leave `dirs` out) |
+| `next` | only when the reply could not carry every pin asked for (firmware after 4.0.0): the first pin it left out. Ask again with `"from":<next>` (and the same `la`, if any) for the rest |
 
-The full reply is about 1.3 kB, and it is the largest single-reply command the pod has. With a
-`dir` and a `warn` on every pin it can reach about 1.8 kB, and with an emulated sensor instance
-with a long name on every pin about 2.4 kB. That is more than one cloud command reply holds
-(1791 bytes), and the pod answers `BP0053` (`reply_too_large`; `BP0054` over the cloud). Read the list in two parts then:
-`"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
+The full reply is about 1.3 kB. With a `dir` and a `warn` on every pin it can reach about
+1.8 kB, and with an emulated sensor instance with a long name on every pin about 2.4 kB: more
+than one cloud command reply holds (1791 bytes). Firmware after 4.0.0 never refuses the listing
+for its size: each reply carries the pins that fit in 1727 bytes (one cloud reply less 64 bytes)
+and says `next`. A host reads the whole list like this:
+
+```json
+{"cmd":"la_pins"}
+{"status":"ok","data":{"pins":[{"la":1,...},...,{"la":9,...}],"next":10,"levels":1234}}
+{"cmd":"la_pins","from":10}
+{"status":"ok","data":{"pins":[{"la":10,...},...,{"la":14,...}],"levels":1234}}
+```
+
+A reply without `next` is the last one. `levels` is read again for every reply. A reply that fits
+whole is the same as before (no `next`), so most listings stay one round trip. Older firmware
+answers `BP0053` (`reply_too_large`; `BP0054` over the cloud) instead; read it in two parts
+there: `"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
 drive a DUT line.
