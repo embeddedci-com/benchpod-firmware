@@ -54,9 +54,12 @@ persistence area has no free sector, and the list belongs with the certificate i
 32 computers fit next to the generated certificate; a large user certificate leaves fewer (8 with a
 7.6 KB bundle). Regenerating or replacing the certificate keeps the list.
 
-Version 1 records (firmware 4.0.0 and older) are read once; the next change writes version 2.
-Firmware 4.0.0 does not read version 2: rolled back, it generates a new certificate, and the pod
-forgets its paired computers. Updating again starts with an empty list.
+Every save writes the version 2 record and then a version 1 copy (the same key and certificate,
+no computers) as the newest record. Firmware 4.0.0 reads only the newest record, and only version 1,
+so a pod rolled back to it keeps its certificate and clients' pins stay valid; it forgets the paired
+computers. Whatever older firmware saves lands in the older slot, which holds the version 2 record,
+so after that this firmware starts from the version 1 record with an empty list. A pod updated from
+4.0.0 starts from its version 1 record too; the first change writes the pair.
 
 The list is in RAM on the FreeRTOS heap (1.8 KB) and changed only on the net task; other tasks read
 it inside a critical section.

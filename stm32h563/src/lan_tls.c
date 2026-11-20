@@ -41,10 +41,12 @@ typedef struct {
 } rec_hdr_t;              /* followed by the key PEM, the certificate PEM, then (version 2) the
                              paired computers */
 
-/* Version 2 (firmware 4.0.1+) adds the paired computers (lan_clients.h). Every save writes it.
-   Version 1 is only read, once, when a pod updated from older firmware has no version 2 record
-   yet. Firmware 4.0.0 does not read version 2: rolled back, it generates a new certificate and
-   the pod forgets its paired computers. */
+/* Version 2 (firmware 4.0.1+) adds the paired computers (lan_clients.h). Every save writes it and
+   then a version 1 copy (the same key and certificate, no computers) as the newest record, so
+   firmware 4.0.0, which reads only the newest record and only version 1, keeps the pod's
+   certificate after a rollback; it forgets the paired computers. Whatever older firmware saves
+   goes into the older slot, which holds the version 2 record: from then on there is none, and
+   this firmware starts from the version 1 record with no paired computers. */
 static const ab_store_t k_store = {
     .tag = "tls",
     .slot_off = { LAN_TLS_SLOT_A_OFFSET, LAN_TLS_SLOT_B_OFFSET },
@@ -253,6 +255,30 @@ static const char *rec_parse(const uint8_t *rec, size_t n, bool v2, rec_view_t *
     return NULL;
 }
 
+/* Store rec (a version 2 record of n bytes): version 2, then the version 1 copy (net task). rec's
+   header is changed for the copy and put back. 0 = saved. */
+static int rec_save(uint8_t *rec, size_t n)
+{
+    if (ab_store_save(&k_store, rec, n) != 0) return -1;
+    rec_hdr_t h, h1;
+    memcpy(&h, rec, sizeof(h));
+    h1 = h;
+    h1.clients_len = 0;
+    memcpy(rec, &h1, sizeof(h1));
+    int rc = ab_store_save(&k_store_v1, rec, sizeof(h) + (size_t)h.key_len + h.cert_len);
+    memcpy(rec, &h, sizeof(h));
+    if (rc != 0) log_printf("[tls] could not write the copy for older firmware\n");
+    return 0;   /* the version 2 record is what this firmware needs */
+}
+
+/* Load the stored record into rec: version 2 when there is one, else version 1 (*v2 false). */
+static int rec_load(uint8_t *rec, size_t *n, bool *v2)
+{
+    if (ab_store_load_var_version(&k_store, 2, rec, LAN_TLS_RECORD_MAX, n, NULL) == 0) { *v2 = true; return 0; }
+    *v2 = false;
+    return ab_store_load_var(&k_store_v1, rec, LAN_TLS_RECORD_MAX, n);
+}
+
 /* Replace the paired computers in RAM (net task). */
 static void clients_set(const lan_clients_t *cl)
 {
@@ -400,7 +426,7 @@ static const char *regenerate_here(void)
     const char *why = NULL;
     size_t n = generate(rec);   /* keeps the paired computers (s_clients) */
     if (!n) why = "could not generate a key and certificate";
-    else if (ab_store_save(&k_store, rec, n) != 0) why = "could not save the certificate";
+    else if (rec_save(rec, n) != 0) why = "could not save the certificate";
     else why = apply_record(rec, n, true);
     rec_free(rec);
     return why;
@@ -418,13 +444,12 @@ void lan_tls_init(void)
         lan_clients_init(s_clients, LAN_CLIENTS_MAX);
     }
     uint8_t *rec = rec_alloc();
+    bool v2 = false;
     if (!rec) why = "out of memory";
-    else if (ab_store_load_var(&k_store, rec, LAN_TLS_RECORD_MAX, &n) == 0) {
-        why = apply_record(rec, n, true);
-        if (why) log_printf("[tls] the stored certificate is not usable (%s)\n", why);
-    } else if (ab_store_load_var(&k_store_v1, rec, LAN_TLS_RECORD_MAX, &n) == 0) {
-        /* From firmware 4.0.0 or older: no paired computers yet. The next save writes version 2. */
-        why = apply_record(rec, n, false);
+    else if (rec_load(rec, &n, &v2) == 0) {
+        /* Version 1 alone: from firmware 4.0.0 or older, no paired computers yet. The next save
+           writes version 2. */
+        why = apply_record(rec, n, v2);
         if (why) log_printf("[tls] the stored certificate is not usable (%s)\n", why);
     }
     rec_free(rec);
@@ -497,7 +522,7 @@ static void install_job(void *arg)
             j->why = "the certificate leaves too little room for the paired computers: remove some first";
         else if (!(n = rec_build(rec, ORIGIN_USER, key, kl, crt, cl, s_clients)))
             j->why = "the key and certificates are too large";
-        if (!j->why && ab_store_save(&k_store, rec, n) != 0) j->why = "could not save the certificate";
+        if (!j->why && rec_save(rec, n) != 0) j->why = "could not save the certificate";
         else if (!j->why) j->why = apply_record(rec, n, true);
         if (!j->why) log_printf("[tls] installed a user certificate\n");
     }
@@ -618,10 +643,7 @@ static void clients_job(void *arg)
     bool v2 = true;
     rec_view_t v;
     if (!rec || !cl) { j->why = "out of memory"; goto out; }
-    if (ab_store_load_var(&k_store, rec, LAN_TLS_RECORD_MAX, &n) != 0) {
-        v2 = false;
-        if (ab_store_load_var(&k_store_v1, rec, LAN_TLS_RECORD_MAX, &n) != 0) { j->why = "the pod has no TLS certificate"; goto out; }
-    }
+    if (rec_load(rec, &n, &v2) != 0) { j->why = "the pod has no TLS certificate"; goto out; }
     if ((j->why = rec_parse(rec, n, v2, &v)) != NULL) goto out;
     clients_copy(cl);
     cl->cap = clients_cap(v.h.key_len, v.h.cert_len);
@@ -643,7 +665,7 @@ static void clients_job(void *arg)
         if (!out_rec) { j->why = "out of memory"; goto out; }
         size_t m = rec_build(out_rec, v.h.origin, v.key, v.h.key_len, v.cert, v.h.cert_len, cl);
         if (!m) j->why = "the paired computers do not fit";
-        else if (ab_store_save(&k_store, out_rec, m) != 0) j->why = "could not save the paired computers";
+        else if (rec_save(out_rec, m) != 0) j->why = "could not save the paired computers";
         else clients_set(cl);   /* the certificate is the same: the listener keeps its configuration */
         rec_free(out_rec);
         if (!j->why)

@@ -222,6 +222,23 @@ int ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_ou
     return 0;
 }
 
+int ab_store_load_var_version(const ab_store_t *s, uint16_t version, void *out, size_t cap, size_t *len_out,
+                              uint32_t *behind)
+{
+    bool v[2]; ab_hdr_t h[2];
+    int n = scan(s, v, h);
+    if (n < 0 || hdr_len(&h[n]) == 0) return -1;            /* none, or a tombstone */
+    int best = -1;
+    for (int i = 0; i < 2; i++) {
+        if (!v[i] || hdr_ver(&h[i]) != version || hdr_len(&h[i]) == 0 || hdr_len(&h[i]) > cap) continue;
+        if (best < 0 || i == n) best = i;                    /* the newest wins a tie of versions */
+    }
+    if (best < 0 || !slot_read(s, best, &h[best], out, cap)) return -1;
+    if (len_out) *len_out = hdr_len(&h[best]);
+    if (behind) *behind = h[n].seq - h[best].seq;
+    return 0;
+}
+
 int ab_store_save(const ab_store_t *s, const void *data, size_t len)
 {
     if (!data || len == 0 || len > store_max(s)) return -1;

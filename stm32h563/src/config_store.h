@@ -93,6 +93,13 @@ int  ab_store_load_version(const ab_store_t *s, uint16_t version, void *out, siz
    another version, or longer than cap). For stores with max_len set. */
 int  ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_out);
 
+/* ab_store_load_var for a store that keeps two versions side by side (a large new record and an
+   old-format copy for older firmware: lan_tls.h): the record of `version` in either slot, up to cap
+   bytes; *behind is how many saves older it is than the newest record. -1 = none of that version,
+   or the newest record is a tombstone. */
+int  ab_store_load_var_version(const ab_store_t *s, uint16_t version, void *out, size_t cap, size_t *len_out,
+                               uint32_t *behind);
+
 /* Write data as the newest record (no-op if identical to the newest). 0 on success. */
 int  ab_store_save(const ab_store_t *s, const void *data, size_t len);
 

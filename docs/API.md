@@ -5161,8 +5161,8 @@ client that sends a certificate holds its key.
 
 Changes come over the USB link or from the cloud (the console has `lan-clients remove` and
 `lan-clients clear`), never from Ethernet or Wi-Fi, paired or not: `BP0041`. The list is stored with
-the TLS certificate, so regenerating or replacing the certificate keeps it. Firmware 4.0.0 does not
-read that record: rolled back to it, the pod makes a new certificate and forgets the list.
+the TLS certificate, so regenerating or replacing the certificate keeps it. Rolled back to firmware
+4.0.0, the pod keeps its certificate (clients' pins stay valid) and forgets the list.
 
 ### `lan_tls` — the LAN API over TLS
 
