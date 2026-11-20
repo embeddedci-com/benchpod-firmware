@@ -467,6 +467,20 @@ bool la_pins_query_mask(const char *json, uint16_t *mask, char *err, size_t cap)
     return true;
 }
 
+bool la_pins_query_from(const char *json, unsigned *from, char *err, size_t cap) {
+    *from = 1;
+    const char *v = find_value(json, "from");
+    if (!v || strncmp(v, "null", 4) == 0) return true;
+    char *end = NULL;
+    long n = (*v >= '0' && *v <= '9') ? strtol(v, &end, 10) : 0;
+    if (!end || n < 1 || n > (long)LA_PINS_COUNT || (*end && *end != ',' && *end != '}' && *end != ' ')) {
+        snprintf(err, cap, "from must be a pin 1..14 (the next of the previous reply)");
+        return false;
+    }
+    *from = (unsigned)n;
+    return true;
+}
+
 static uint16_t mask_of(const uint8_t *las, size_t n) {
     uint16_t m = 0;
     for (size_t i = 0; i < n; i++) if (la_ok(las[i])) m |= (uint16_t)(1u << (las[i] - 1u));
@@ -603,13 +617,44 @@ void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask) {
     bp_emit_raw(e, "]");
 }
 
-void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool have_levels, uint16_t levels) {
-    bp_emit_raw(e, "{\"status\":\"ok\",\"data\":{\"pins\":");
-    la_pins_emit_list(e, only, pull_mask);
+/* The bytes after the last entry: ] (,"pull_dirs":[...]) (,"next":N) ,"levels":M|null}} and the
+   newline.  A cut reply may say up to "next":14. */
+static size_t reply_tail_len(bool cut, bool have_levels, uint16_t levels) {
+    size_t n = 1u + (la_pull_both_ways() ? 26u : 0u) + (cut ? 10u : 0u);
+    if (!have_levels) return n + 17u;
+    return n + 13u + (levels >= 10000u ? 5u : levels >= 1000u ? 4u : levels >= 100u ? 3u : levels >= 10u ? 2u : 1u);
+}
+
+unsigned la_pins_emit_reply(bp_emit_t *e, uint16_t only, unsigned from, uint16_t pull_mask,
+                            bool have_levels, uint16_t levels) {
+    const size_t start = bp_emit_len(e);
+    unsigned next = 0;
+    bool first = true;
+    if (from < 1u) from = 1u;
+    bp_emit_raw(e, "{\"status\":\"ok\",\"data\":{\"pins\":[");
+    for (unsigned la = from; la <= LA_PINS_COUNT; la++) {
+        if (!(only & (1u << (la - 1u)))) continue;
+        const size_t before = bp_emit_len(e);
+        if (!first) bp_emit_raw(e, ",");
+        la_pins_emit_entry(e, la, pull_mask);
+        /* The last pin needs room for the tail; any other one for the tail with a "next" too,
+           in case the pin after it does not fit.  One that does not fit is taken back. */
+        const bool last = (only & (uint16_t)~((2u << (la - 1u)) - 1u)) == 0;
+        const size_t need = bp_emit_len(e) - start + reply_tail_len(!last, have_levels, levels);
+        if ((!bp_emit_ok(e) || need > LA_PINS_PAGE_MAX) && !first) {
+            bp_emit_rewind(e, before);
+            next = la;
+            break;
+        }
+        first = false;
+    }
+    bp_emit_raw(e, "]");
     /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
     if (la_pull_both_ways()) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
+    if (next) bp_emit(e, ",\"next\":%u", next);
     if (have_levels) bp_emit(e, ",\"levels\":%u}}\n", (unsigned)levels);
     else             bp_emit_raw(e, ",\"levels\":null}}\n");
+    return next;
 }
 
 /* ---- capture trigger ---- */

@@ -30,7 +30,7 @@ static int checks, fails;
         printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* ---- fakes: the reply path ------------------------------------------------------------- */
-static char g_reply[512];
+static char g_reply[2048];
 static int  g_code;          /* the BP error code of the last coded refusal, 0 = none */
 static char g_arg0[32];
 void send_ok_str(int c, const char *p) { (void)c; g_code = 0; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
@@ -361,8 +361,27 @@ static void test_la_voltage(void) {
     g_vccio = g_io = LA_VCCIO_3V3;
 }
 
+/* la_pins through the handler: "from" continues a listing, a bad one is refused. */
+static void test_la_pins_from(void) {
+    board(BOARD_REV_V3);
+    g_reply[0] = 0;
+    handle_la_pins(0, "{\"cmd\":\"la_pins\"}");
+    CHECK(strstr(g_reply, "{\"la\":1,") && strstr(g_reply, "{\"la\":14,") && !strstr(g_reply, "\"next\""),
+          "la_pins: all 14, no next: %s", g_reply);
+    g_reply[0] = 0;
+    handle_la_pins(0, "{\"cmd\":\"la_pins\",\"from\":13}");
+    CHECK(!strstr(g_reply, "{\"la\":12,") && strstr(g_reply, "{\"la\":13,") && strstr(g_reply, "{\"la\":14,"),
+          "la_pins from 13: %s", g_reply);
+    g_reply[0] = 0;
+    handle_la_pins(0, "{\"cmd\":\"la_pins\",\"la\":[2,9],\"from\":3}");
+    CHECK(!strstr(g_reply, "{\"la\":2,") && strstr(g_reply, "{\"la\":9,"), "la_pins la+from: %s", g_reply);
+    handle_la_pins(0, "{\"cmd\":\"la_pins\",\"from\":15}");
+    REPLY("err:from must be a pin 1..14 (the next of the previous reply)");
+}
+
 int main(void) {
     printf("test_ch_pins\n");
+    test_la_pins_from();
     test_tca9554_board(BOARD_REV_V2, "v2");
     test_tca9554_board(BOARD_REV_V3, "v3");
     test_tca9554_board(BOARD_REV_V3R2, "v3r2");

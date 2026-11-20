@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "bp_json.h"
+#include "bp_limits.h"   /* BP_CLOUD_REPLY_MAX: LA_PINS_PAGE_MAX */
 #include "la_pull.h"   /* la_pull_dir_t and the pull tables, la_pull_dir / la_pull_ohms */
 
 #define LA_PINS_COUNT 14u
@@ -173,6 +174,9 @@ bool la_gpio_req_parse(const char *json, la_gpio_req_t *req, char *err, size_t c
    pin, as before; "la":N or [N,...] only those, so a large listing can be read in parts.  Other
    fields are ignored, as la_pins always did.  false = a bad "la" (err says why). */
 bool la_pins_query_mask(const char *json, uint16_t *mask, char *err, size_t cap);
+/* The first pin a `la_pins` query lists: "from":N (1..14, firmware after 4.0.0) continues a
+   listing at the `next` an earlier reply gave; 1 without it.  false = a bad "from". */
+bool la_pins_query_from(const char *json, unsigned *from, char *err, size_t cap);
 /* Validate the WHOLE mode/level request, then commit it (on any error nothing changes).
    *changed = pins whose GPIO_SET drive must be re-sent (see la_pins_drive); *affected = pins
    to report back.  A read request (no mode, no level) is not handled here. */
@@ -207,9 +211,18 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask);
 /* [entry,...] for every pin in `mask`, ascending. */
 void la_pins_emit_list(bp_emit_t *e, uint16_t mask, uint16_t pull_mask);
 
-/* The whole `la_pins` reply: {"status":"ok","data":{"pins":[...],("pull_dirs":[...],)"levels":M|null}}
-   and its newline.  handle_la_pins sends it; test_la_pins.c measures its worst case. */
-void la_pins_emit_reply(bp_emit_t *e, uint16_t only, uint16_t pull_mask, bool have_levels, uint16_t levels);
+/* The longest `la_pins` reply, with its newline: one cloud command reply (BP_CLOUD_REPLY_MAX with
+   the NUL) less 64 bytes kept free, as every fixed-size reply keeps (test/reply_budget.h). */
+#define LA_PINS_PAGE_MAX (BP_CLOUD_REPLY_MAX - 1u - 64u)
+
+/* The `la_pins` reply: {"status":"ok","data":{"pins":[...],("pull_dirs":[...],)("next":N,)
+   "levels":M|null}} and its newline, for the pins in `only` from pin `from` on.  It carries as
+   many entries as fit in LA_PINS_PAGE_MAX bytes (always at least one); when some are left it says
+   "next", the first pin not sent, which a query continues with "from".  Returns that pin, or 0
+   when the reply lists the rest.  A reply that fits whole is the same bytes as before paging.
+   handle_la_pins sends it; test_la_pins.c checks every page of the worst cases. */
+unsigned la_pins_emit_reply(bp_emit_t *e, uint16_t only, unsigned from, uint16_t pull_mask,
+                            bool have_levels, uint16_t levels);
 
 /* ---- capture trigger ("trigger":{"la":N,"edge":...}, "trigger_timeout_ms":N) ---- */
 typedef enum {
