@@ -822,3 +822,10 @@ firmware = "next"
 docs = "API.md#lan_tls--the-lan-api-over-tls"
 dated = "code"
 note = "HTTPS-only is on by default (plaintext JSON on 8080 only on the USB network adapter; lan_tls https_only false turns the LAN back on) and SCPI is off by default: lan_tls takes and replies scpi, status lan_tls has scpi, console lan-tls scpi on|off, both changed only over USB or from the cloud. A plaintext LAN JSON line under HTTPS-only gets BP0075. The mDNS TXT carries api."
+
+[features.sig_always_required]
+rev = 9
+firmware = "next"
+docs = "API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts"
+dated = "code"
+note = "The signature policy is always required on every OTA path (LAN, USB network adapter, cloud) and cannot be loosened: sig_policy set audit or permissive, and lan_unsigned true, get BP0074; the reply has no lan_unsigned; the console has no lan-ota and always allows dfu. Clients hide any loosening control."

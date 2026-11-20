@@ -4,7 +4,7 @@
   "revision": 9,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "a8a9cd3d5e8fb7191a5ccc456e783df5d655b91ac50daaa90aed2eec29e08780",
+  "table_sha256": "69da4e32d3a3bfcbfb46d4e3152db15d79ba03afa03173d0a6469c2b59171809",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -710,6 +710,12 @@
       "firmware": "next",
       "board": "any",
       "docs": "API.md#lan_tls--the-lan-api-over-tls"
+    },
+    "sig_always_required": {
+      "rev": 9,
+      "firmware": "next",
+      "board": "any",
+      "docs": "API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts"
     }
   }
 }
