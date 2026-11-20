@@ -43,3 +43,32 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0035 | `la_driven_pin` | io | next | LA{la} is driven by {function}, so it cannot be marked as a DUT output |
 | BP0036 | `la_not_gpio_output` | io | next | LA{la} is not a GPIO output (it is {function}) |
 | BP0037 | `la_voltage_pins_in_use` | io | next | The I/O voltage cannot change while pins are in use: {pins} |
+| BP0038 | `trigger_timeout` | capture | next | No {edge} edge on LA{la} within {timeout_ms} ms |
+| BP0039 | `sensor_trigger_timeout` | capture | next | No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus |
+| BP0040 | `lan_locked` | policy | next | The pod's LAN is locked: {cmd} needs the cloud or USB |
+| BP0041 | `policy_not_from_lan` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or the USB console |
+| BP0042 | `setting_cloud_or_usb` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or over USB |
+| BP0043 | `setting_device_only` | policy | next | {setting} can only be changed on the device: the USB console, or over the USB link |
+| BP0044 | `policy_loosen_usb_only` | policy | next | Only the USB console can loosen {setting} (now {now}) |
+| BP0045 | `role_required` | policy | next | {cmd} needs an organization owner or admin |
+| BP0046 | `no_analog_front_end` | board | next | This BenchPod has no analog front end, so it cannot run {cmd} |
+| BP0047 | `pod_busy` | busy | next | The pod is running another long command (a capture, measurement, upload or update) |
+| BP0048 | `storage_bus_busy` | busy | next | The pod's storage bus is in use: {what} |
+| BP0049 | `uart_session_open` | uart | next | A UART session is already open |
+| BP0050 | `swd_session_open` | flash | next | An SWD session is already running |
+| BP0051 | `update_in_progress` | update | next | A {target} update from {holder} is in progress |
+| BP0052 | `cloud_command_busy` | busy | next | The pod is still running the previous cloud command |
+| BP0053 | `reply_too_large` | protocol | next | The reply did not fit the pod's reply buffer |
+| BP0054 | `cloud_reply_too_large` | protocol | next | The reply is too large for the cloud channel ({bytes} bytes, limit {limit}) |
+| BP0055 | `sensor_instance_unknown` | sensors | next | The pod has no emulated sensor {instance} |
+| BP0056 | `no_module_link` | board | next | This BenchPod has no module link, so it cannot run {cmd} |
+| BP0057 | `image_switch_sensors_running` | sensors | next | The emulated sensors {sensors} need the emulation image; stop them before switching |
+| BP0058 | `fpga_image_required` | firmware | next | {feature} is not in the running gateware image; it needs the {image} image |
+| BP0059 | `fpga_image_sensors_first` | sensors | next | {feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image |
+| BP0060 | `ota_unknown_target` | update | next | {target} is not an update target this firmware knows |
+| BP0061 | `i2c_needs_pullups` | i2c | next | I2C needs pull-ups: LA{la} has none switched on |
+| BP0062 | `i2c_session_not_open` | i2c | next | No I2C session is open |
+| BP0063 | `i2c_engine_reset` | i2c | next | The I2C engine was reset, which ended the session |
+| BP0064 | `loop_sweep_with_map` | dac | next | The sweep input cannot be combined with an input map on this gateware |
+| BP0065 | `output_used_by_sensor` | sensors | next | The {output} output is played by the emulated sensor {instance} |
+| BP0066 | `step_busy` | io | next | A step pulse train is running |

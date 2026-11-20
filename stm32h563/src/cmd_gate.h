@@ -42,11 +42,9 @@ typedef struct {
     bool             has_analog;       /* board_has_analog() */
 } cmd_gate_ctx_t;
 
-/* The start of the one refusal for a cloud job holding the pod. dispatch_line sends that one as
-   lease_busy (BP0025) with holder "a cloud job" and the cloud holder as its purpose; hosts that
-   predate the codes read the text ("busy: ..."), so it stays as it was. */
+/* A cloud job holding the pod is refused as lease_busy (BP0025) with this holder and the cloud
+   holder as its purpose. */
 #define CMD_GATE_CLOUD_LEASE_HOLDER "a cloud job"
-#define CMD_GATE_CLOUD_LEASE_TEXT   "busy: " CMD_GATE_CLOUD_LEASE_HOLDER " holds this pod"
 
 /* NULL = `cmd` (its row `d` from cmd_find, NULL for an unknown verb, with its full JSON line
    `json`, already classified as `tier`) may run; else the refusal to send, either a constant or

@@ -12,6 +12,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
@@ -246,7 +247,7 @@ static struct {
     absolute_time_t deadline;     /* trigger_timeout_ms after the arm */
     absolute_time_t next_check;   /* TRIGGER_STATUS is an SPI read: don't do it every pass */
     bool            fired;
-    char            msg[160];     /* a caller's own timeout message (sensor_la); "" = the generic one */
+    char            sensor[40];   /* sensor_la: the instance whose SDA it waits on (BP0039); "" = BP0038 */
 } trigwait;
 #define TRIGWAIT_POLL_US  5000
 
@@ -328,7 +329,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
 /* The capture armed: start the timeout budget on top of its own completion deadline. */
 static void capture_trigger_armed(int conn_id, const la_trigger_t *t) {
     if (!t->present) return;
-    trigwait.msg[0]     = '\0';   /* the generic `trigger timeout:` message unless the caller sets one */
+    trigwait.sensor[0]  = '\0';   /* the generic trigger timeout (BP0038) unless the caller names a sensor */
     trigwait.active     = true;
     trigwait.conn_id    = conn_id;
     trigwait.t          = *t;
@@ -1027,8 +1028,11 @@ void capture_poll(void) {
         if (!trigwait.fired && time_reached(trigwait.deadline)) {
             int  conn = trigwait.conn_id;
             char msg[LA_PINS_ERR_MAX];
-            if (trigwait.msg[0]) snprintf(msg, sizeof(msg), "%s", trigwait.msg);
-            else                 la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
+            if (trigwait.sensor[0])
+                bp_note_sensor_trigger_timeout(msg, sizeof(msg), (int32_t)trigwait.t.la, trigwait.sensor,
+                                               (int32_t)trigwait.t.timeout_ms);
+            else
+                la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
             fpga_capture_abort();              /* also turns SET_TRIGGER off */
             trigwait.active = false;
             if (v2cap.active   && v2cap.conn_id   == conn) v2cap.active   = false;
@@ -1748,8 +1752,7 @@ void handle_sensor_la(int conn_id, const char *json) {
     }
     capture_trigger_armed(conn_id, &trig);
     if (trig.present)
-        snprintf(trigwait.msg, sizeof(trigwait.msg), "trigger timeout: no falling edge on LA%u (SDA of %s) within %lu ms; "
-                 "the DUT did not use the I2C bus", sda, inst, (unsigned long)timeout_ms);
+        snprintf(trigwait.sensor, sizeof(trigwait.sensor), "%s", inst);
     last_cap.valid = false;   /* this capture overwrites the LA PSRAM region */
     memset(&sensla, 0, sizeof(sensla));
     sensla.active  = true;

@@ -743,7 +743,8 @@ static void test_trigger_parse(void) {
     CHECK(la_trigger_parse("{\"trigger\":{\"la\":9,\"edge\":\"rising\"}}", &t, err, sizeof(err)));
     char msg[96];
     la_trigger_timeout_msg(&t, msg, sizeof(msg));
-    CHECK_STR(msg, "trigger timeout: no rising edge on LA9 within 10000 ms");
+    CHECK_STR(msg, "No rising edge on LA9 within 10000 ms");
+    CHECK(noted(msg) == BP_E_TRIGGER_TIMEOUT);
     char buf[96];
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));

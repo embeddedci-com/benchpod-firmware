@@ -7,12 +7,23 @@
 #include "fw_sign.h"
 #include "config_store.h"
 #include "mocks/mock_flash.h"
+#include "bp_errors.h"
 
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 
 static int failures;
+
+/* The code a refusal was noted with (what send_error sends), and its first string arg. */
+static const char *g_arg0;
+static int code_of(const char *why) {
+    bp_errcode_t c = BP_E_NONE;
+    size_t n = 0;
+    const bp_err_arg_t *a = why ? bp_err_noted(why, &c, &n) : NULL;
+    g_arg0 = a && n && a[0].is_str ? a[0].s : "";
+    return a ? (int)c : 0;
+}
 
 #define CHECK(cond, ...)                                        \
     do {                                                        \
@@ -65,7 +76,7 @@ static void test_sig_ratchet(void) {
     CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_CLOUD) == NULL, "cloud could not tighten again");
     CHECK(fw_sign_policy() == FW_SIG_POLICY_REQUIRED, "fw_sign did not follow");
     const char *why = pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_CLOUD);
-    CHECK(why && strstr(why, "only the USB console") && strstr(why, "now required"), "cloud loosened: %s",
+    CHECK(code_of(why) == BP_E_POLICY_LOOSEN_USB_ONLY && !strcmp(g_arg0, "sig_policy"), "cloud loosened: %s",
           why ? why : "(null)");
     CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED, "cloud loosening changed it");
     CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_CLOUD) == NULL, "same value from cloud refused");
@@ -122,7 +133,7 @@ static void test_cloud_link_gate(void) {
     boot_blank();
     CHECK(pod_policy_lan() == POD_LAN_OPEN, "precondition: LAN open");
     const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN, false);
-    CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or over USB"),
+    CHECK(code_of(why) == BP_E_SETTING_CLOUD_OR_USB && !strcmp(g_arg0, "cloud_proxy"),
           "LAN gate: %s", why ? why : "(null)");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB, false) == NULL, "USB refused");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
@@ -148,7 +159,8 @@ static void test_usb_net(void) {
     boot_blank();
     CHECK(pod_policy_usb_net(), "default must be on");
     const char *why = pod_policy_set_usb_net(false, POLICY_SRC_CLOUD, false);
-    CHECK(why && strstr(why, "on the device"), "cloud allowed: %s", why ? why : "(null)");
+    CHECK(code_of(why) == BP_E_SETTING_DEVICE_ONLY && !strcmp(g_arg0, "usb_network"), "cloud allowed: %s",
+          why ? why : "(null)");
     why = pod_policy_set_usb_net(false, POLICY_SRC_LAN, false);
     CHECK(why != NULL, "Ethernet/Wi-Fi allowed");
     CHECK(pod_policy_usb_net() && usb_net_changes == 0, "a refused change changed it");

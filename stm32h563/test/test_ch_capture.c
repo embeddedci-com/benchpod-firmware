@@ -9,6 +9,7 @@
  * The capture engine, PSRAM, the heavy gate, the send ring and the clocks are fakes; replies are
  * parsed back into samples and compared with what the fake engine captured.
  */
+#include "bp_errors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,18 @@ static void advance_ms(uint32_t ms) { g_now_us += (uint64_t)ms * 1000u; g_tick +
 
 static int g_owner = -1;
 static char g_err[256];
-void send_error(int c, const char *m) { (void)c; snprintf(g_err, sizeof(g_err), "%s", m); }
+static int g_code;   /* the code of the last refusal (bp_err_noted / bp_error_send), 0 = none */
+void send_error(int c, const char *m) {
+    (void)c;
+    bp_errcode_t code = BP_E_NONE;
+    g_code = bp_err_noted(m, &code, NULL) ? (int)code : 0;
+    snprintf(g_err, sizeof(g_err), "%s", m);
+}
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;
+    g_code = (int)code;
+    bp_err_render(g_err, sizeof(g_err), code, args, n);
+}
 bool heavy_begin(int c) { if (g_owner != -1 && g_owner != c) { send_error(c, "busy"); return false; } g_owner = c; return true; }
 void heavy_release(int c) { if (g_owner == c) g_owner = -1; }
 static float g_rate_hz;   /* the request's sample rate (0 = the device default) */
@@ -341,7 +353,7 @@ static void test_trigger_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(600);
     capture_poll();
-    CHECK(strncmp(g_err, "trigger timeout:", 16) == 0, "error: %s", g_err);
+    CHECK(g_code == BP_E_TRIGGER_TIMEOUT, "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out capture not aborted");
 }
 
@@ -602,7 +614,8 @@ static void test_sensor_la_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(200);
     capture_poll();
-    CHECK(strcmp(g_err, "trigger timeout: no falling edge on LA1 (SDA of env) within 500 ms; the DUT did not use the I2C bus") == 0, "error: %s", g_err);
+    CHECK(g_code == BP_E_SENSOR_TRIGGER_TIMEOUT && strstr(g_err, "LA1") && strstr(g_err, "env") &&
+          strstr(g_err, "500"), "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out sensor_la not aborted");
     /* the default timeout is 2 s */
     clear_tx();

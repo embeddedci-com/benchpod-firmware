@@ -2,6 +2,7 @@
  * pod_policy.c — persisted signature and LAN policies (see pod_policy.h).
  */
 #include "pod_policy.h"
+#include "bp_errors.h"   /* the LAN/cloud refusals are catalog codes (bp_note_*) */
 #include "config_store.h"
 #include "bp_log.h"
 
@@ -68,7 +69,7 @@ static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SI
 
 /* The one buffer for a formatted refusal: callers (the hw worker, one command at a time) send it
    before asking again. */
-static char s_why[80];   /* the longest, sig_policy loosen, is 72 */
+static char s_why[112];   /* the longest, a catalog message with a setting name, is about 90 */
 
 __attribute__((weak)) void pod_policy_on_lan_change(pod_lan_policy_t now) { (void)now; }
 __attribute__((weak)) void pod_policy_on_usb_net_change(bool on) { (void)on; }
@@ -151,12 +152,10 @@ const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub) {
 
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
     if ((unsigned)p > FW_SIG_POLICY_REQUIRED) return "sig_policy: unknown policy";
-    if (src == POLICY_SRC_LAN) return "sig_policy: change it from the cloud or the USB console";
+    if (src == POLICY_SRC_LAN) return bp_note_policy_not_from_lan(s_why, sizeof(s_why), "sig_policy");
     if (src == POLICY_SRC_CLOUD && p < pod_policy_sig()) {
-        char *why = s_why;
-        snprintf(why, sizeof(s_why), "sig_policy: only the USB console can loosen the policy (now %s)",
-                 fw_sign_policy_name(pod_policy_sig()));
-        return why;
+        return bp_note_policy_loosen_usb_only(s_why, sizeof(s_why), "sig_policy",
+                                              fw_sign_policy_name(pod_policy_sig()));
     }
     if (p == pod_policy_sig()) return NULL;
     pod_policy_rec_t r = s_rec;
@@ -171,7 +170,7 @@ const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
 
 const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
     if ((unsigned)p > POD_LAN_OFF) return "lan_policy: unknown policy";
-    if (src == POLICY_SRC_LAN) return "lan_policy: change it from the cloud or the USB console";
+    if (src == POLICY_SRC_LAN) return bp_note_policy_not_from_lan(s_why, sizeof(s_why), "lan_policy");
     if (p == pod_policy_lan()) return NULL;
     pod_policy_rec_t r = s_rec;
     r.lan = (uint8_t)p;
@@ -187,7 +186,7 @@ bool pod_policy_usb_net(void) { return s_rec.usb_net_off == 0; }
 
 const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link) {
     if (src == POLICY_SRC_CLOUD || (src == POLICY_SRC_LAN && !usb_link))
-        return "usb_network: change it on the device (the USB console, or over the USB link)";
+        return bp_note_setting_device_only(s_why, sizeof(s_why), "usb_network");
     if (on == pod_policy_usb_net()) return NULL;
     pod_policy_rec_t r = s_rec;
     r.usb_net_off = on ? 0 : 1;
@@ -205,7 +204,7 @@ const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link) {
     /* Not "or over TLS": port 8443 has no client authentication, so a TLS connection proves
        nothing about who is on the other end (security review 2026-11, M10). */
     if (src != POLICY_SRC_LAN || usb_link) return NULL;
-    return "lan_tls: change it from the cloud or over USB";
+    return bp_note_setting_cloud_or_usb(s_why, sizeof(s_why), "lan_tls");
 }
 
 const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link) {
@@ -228,7 +227,7 @@ bool pod_policy_lan_unsigned(void) { return s_rec.lan_unsigned != 0; }
 const char *pod_policy_set_lan_unsigned(bool on, policy_src_t src, bool usb_link) {
     /* Loosening needs physical presence; the cloud may only tighten (like sig_policy). */
     if (src == POLICY_SRC_LAN && !usb_link)
-        return "lan_ota: change it on the device (the USB console, or over the USB link)";
+        return bp_note_setting_device_only(s_why, sizeof(s_why), "lan_ota");
     if (on && src == POLICY_SRC_CLOUD)
         return "lan_ota: only the USB console or the USB link can allow unsigned LAN updates";
     if (on == pod_policy_lan_unsigned()) return NULL;
@@ -270,8 +269,7 @@ const char *pod_policy_clear_floor(policy_src_t src) {
 
 const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool usb_link) {
     if (src != POLICY_SRC_LAN || usb_link) return NULL;
-    snprintf(s_why, sizeof(s_why), "%s: change it from the cloud or over USB", verb);
-    return s_why;
+    return bp_note_setting_cloud_or_usb(s_why, sizeof(s_why), verb);
 }
 
 int pod_policy_sig_from_name(const char *name) {

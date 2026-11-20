@@ -52,7 +52,7 @@ WIRING_DOC_SRCS := test_wiring_doc.c ../src/wiring_doc.c
 CONNTX_SRCS   := test_conn_tx.c ../src/conn_tx.c
 CLOUDRX_SRCS  := test_cloud_rx.c ../src/cloud_rx.c
 CLOUDCAPS_SRCS := test_cloud_caps.c ../src/cloud_caps.c ../src/bp_json.c
-CLOUDREPLY_SRCS := test_cloud_reply_cap.c ../src/cloud_reply_cap.c
+CLOUDREPLY_SRCS := test_cloud_reply_cap.c ../src/cloud_reply_cap.c ../src/bp_errors.c ../src/bp_json.c
 DEVID_SRCS     = test_device_identity.c ../src/device_identity.c ../src/b64url.c mocks/mock_flash.c $(MONOCYPHER)
 WSFRAME_SRCS  := test_ws_frame.c ../src/ws_frame.c ../src/bp_json.c
 UARTSTAT_SRCS := test_uart_status.c
@@ -106,7 +106,7 @@ ESPPART_SRCS  := test_esp_part_table.c ../src/esp_part_table.c
 # SCPI reply pacing: scpi_server.c on the real libscpi, instrument + conn ring faked.
 SCPI_LIB      := ../lib/scpi-parser/libscpi
 SCPI_SRCS     := test_scpi_paced.c ../src/scpi_server.c ../src/b64url.c \
-                 ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c ../src/adc_pool.c \
+                 ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c ../src/bp_errors.c ../src/adc_pool.c \
                  $(addprefix $(SCPI_LIB)/src/,error.c expression.c fifo.c ieee488.c \
                    lexer.c minimal.c parser.c units.c utils.c)
 
@@ -120,23 +120,23 @@ MBEDTLS_SHA256 := $(MBEDTLS)/library/sha256.c $(MBEDTLS)/library/platform_util.c
 # test vectors' key (vectors/, made by tools/fwsign.py vectors).
 MONOCYPHER := ../lib/monocypher/src/monocypher.c ../lib/monocypher/src/optional/monocypher-ed25519.c
 MONO_INC   := -I../lib/monocypher/src -I../lib/monocypher/src/optional
-PODPOL_SRCS := test_pod_policy.c ../src/pod_policy.c ../src/log_level.c ../src/fw_sign.c ../src/config_store.c mocks/mock_flash.c $(MONOCYPHER)
+PODPOL_SRCS := test_pod_policy.c ../src/pod_policy.c ../src/log_level.c ../src/fw_sign.c ../src/config_store.c mocks/mock_flash.c $(MONOCYPHER) ../src/bp_errors.c ../src/bp_json.c
 NETRELOAD_SRCS := test_net_reload.c ../src/net_reload.c
 LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_json.c
 LEASELOCAL_SRCS := test_lease_local.c ../src/lease_local.c ../src/cmd_tier.c ../src/bp_json.c
 ADCPOOL_SRCS := test_adc_pool.c ../src/adc_pool.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
-CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c
+CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c ../src/bp_errors.c
 # The command_handler modules, each on its own with the modules around it faked in the test
 # (shim_ch: the HAL tick/reset they call).
 CH_INC := -Ishim_ch
 CHTRANSPORT_SRCS := test_ch_transport.c ../src/command_handler_transport.c ../src/lease_local.c
-CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c
+CHDAP_SRCS := test_ch_dap.c ../src/command_handler_dap.c ../src/bp_json.c ../src/bp_errors.c
 CHUART_SRCS := test_ch_uart.c ../src/gw_caps.c ../src/command_handler_uart.c ../src/bp_json.c ../src/board_caps.c ../src/la_pins.c \
               ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/bp_errors.c
 CHDAC_SRCS := test_ch_dac.c ../src/gw_caps.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
               ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c ../src/board_caps.c \
-              ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c
+              ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c ../src/bp_errors.c
 CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/gw_caps.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
@@ -149,7 +149,7 @@ CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/cloud_c
 CHSTATUS_DEFS := -DBENCHPOD_WIFI_BRIDGE=1 -I../../wifi-bridge/components/bridge_core/include \
                  -DLWIP_STATS=1 -DMEM_STATS=1 -DMEMP_STATS=1
 CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
-              ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c
+              ../src/cloud_config.c ../src/eth_diag.c mocks/mock_flash.c ../src/bp_errors.c
 FWSIGN_SRCS := test_fw_sign.c ../src/fw_sign.c $(MONOCYPHER)
 OTA_SRCS := test_ota.c ../src/ota.c ../src/bp_json.c ../src/fw_info.c ../src/fw_sign.c ../src/b64url.c ../src/blob_store.c ../src/psram_regions.c mocks/mock_ota_psram.c mocks/mock_w25q.c $(MBEDTLS_SHA256) $(MONOCYPHER)
 HAVE_MBEDTLS := $(wildcard $(MBEDTLS)/library/sha256.c)

@@ -186,16 +186,16 @@ static uint32_t text_hash(const char *s, size_t *len) {
     return h;
 }
 
-const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
-                        size_t n) {
-    if (!buf || !cap) return buf;
-    bp_err_render(buf, cap, code, args, n);
+static void remember(const char *text, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     size_t len;
-    uint32_t h = text_hash(buf, &len);
-    for (unsigned i = 0; i < NOTES; i++)   /* the same text again (a predicate asked twice) */
-        if (s_note[i].code == (uint16_t)code && s_note[i].hash == h && s_note[i].len == len) return buf;
-    note_t *t = &s_note[s_next];
-    s_next = (s_next + 1u) % NOTES;
+    uint32_t h = text_hash(text, &len);
+    note_t *t = NULL;
+    for (unsigned i = 0; i < NOTES && !t; i++)   /* the same text again: refresh its args */
+        if (s_note[i].hash == h && s_note[i].len == len) t = &s_note[i];
+    if (!t) {
+        t = &s_note[s_next];
+        s_next = (s_next + 1u) % NOTES;
+    }
     memset(t, 0, sizeof(*t));
     t->hash = h;
     t->len  = (uint16_t)len;
@@ -214,7 +214,19 @@ const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_a
         used += l + 1u;
     }
     t->n = (uint8_t)(n < BP_ERR_ARGS_MAX ? n : BP_ERR_ARGS_MAX);
+}
+
+const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
+                        size_t n) {
+    if (!buf || !cap) return buf;
+    bp_err_render(buf, cap, code, args, n);
+    remember(buf, code, args, n);
     return buf;
+}
+
+const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    if (text) remember(text, code, args, n);
+    return text;
 }
 
 const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n) {

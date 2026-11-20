@@ -665,8 +665,7 @@ bool la_trigger_parse(const char *json, la_trigger_t *out, char *err, size_t cap
 }
 
 void la_trigger_timeout_msg(const la_trigger_t *t, char *buf, size_t cap) {
-    snprintf(buf, cap, "trigger timeout: no %s edge on LA%u within %lu ms",
-             la_edge_name(t->edge), (unsigned)t->la, (unsigned long)t->timeout_ms);
+    bp_note_trigger_timeout(buf, cap, (int32_t)t->la, la_edge_name(t->edge), (int32_t)t->timeout_ms);
 }
 
 void la_trigger_emit(bp_emit_t *e, const la_trigger_t *t, bool fired) {

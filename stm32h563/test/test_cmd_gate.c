@@ -9,6 +9,7 @@
 /* A test build with the minimum raised, as a release would set it in features.toml. */
 #define BP_MIN_CLIENT_API_OVERRIDE 2u
 #include "bp_features.h"
+#include "bp_errors.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +44,20 @@ static const char *gate(const char *json, const cmd_gate_ctx_t *c) {
     return cmd_gate_check(cmd_find(cmd), cmd, json, cmd_tier(cmd, json), c, s_why, sizeof(s_why));
 }
 
+/* r was noted with code (bp_err_noted, what send_error sends) and its first arg is arg0. */
+static const bp_err_arg_t *g_args;
+static bool coded(const char *r, bp_errcode_t want, const char *arg0) {
+    bp_errcode_t code = BP_E_NONE;
+    size_t n = 0;
+    g_args = r ? bp_err_noted(r, &code, &n) : NULL;
+    return g_args && code == want && n > 0 && g_args[0].is_str && strcmp(g_args[0].s, arg0) == 0;
+}
+static bool code_is(const char *r, bp_errcode_t want) {
+    bp_errcode_t code = BP_E_NONE;
+    return r && bp_err_noted(r, &code, NULL) && code == want;
+}
+static const char *arg_s(size_t i) { return g_args && g_args[i].is_str ? g_args[i].s : NULL; }
+
 static int starts(const char *s, const char *prefix) {
     return s && strncmp(s, prefix, strlen(prefix)) == 0;
 }
@@ -67,18 +82,18 @@ static void test_locked_lan(void) {
     CHECK(gate("{\"cmd\":\"ping\"}", &c) == NULL, "T0 refused");
     CHECK(gate("{\"cmd\":\"generate\"}", &c) == NULL, "T1 refused");
     const char *r = gate("{\"cmd\":\"cloud_set\",\"host\":\"x\"}", &c);
-    CHECK(r && strcmp(r, "locked: cloud_set needs the cloud or USB") == 0, "T2: %s", r);
-    CHECK(starts(gate("{\"cmd\":\"ota_begin\"}", &c), "locked: ota_begin"), "T3: %s", s_why);
+    CHECK(coded(r, BP_E_LAN_LOCKED, "cloud_set"), "T2: %s", r);
+    CHECK(coded(gate("{\"cmd\":\"ota_begin\"}", &c), BP_E_LAN_LOCKED, "ota_begin"), "T3: %s", s_why);
     /* an unknown verb is T3, so it is locked too (not "unknown cmd" first) */
-    CHECK(starts(gate("{\"cmd\":\"no_such_verb\"}", &c), "locked:"), "unknown verb: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"no_such_verb\"}", &c), BP_E_LAN_LOCKED), "unknown verb: %s", s_why);
     /* argument-dependent tiers: a dac_limits read is fine, a write is T2 */
     CHECK(gate("{\"cmd\":\"dac_limits\"}", &c) == NULL, "dac_limits read refused: %s", s_why);
-    CHECK(starts(gate("{\"cmd\":\"dac_limits\",\"path\":\"dac\",\"max_mv\":100}", &c), "locked:"),
+    CHECK(code_is(gate("{\"cmd\":\"dac_limits\",\"path\":\"dac\",\"max_mv\":100}", &c), BP_E_LAN_LOCKED),
           "dac_limits write: %s", s_why);
     /* "off" refuses the same set (a LAN command can only arrive while the listener is down
        mid-switch, but the gate must not treat it as open) */
     c.lan_policy = POD_LAN_OFF;
-    CHECK(starts(gate("{\"cmd\":\"cloud_set\"}", &c), "locked:"), "off: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"cloud_set\"}", &c), BP_E_LAN_LOCKED), "off: %s", s_why);
     /* the lock is for the LAN only */
     cmd_gate_ctx_t u = open_ctx(POLICY_SRC_USB);
     u.lan_policy = POD_LAN_LOCKED;
@@ -102,11 +117,12 @@ static void test_lease(void) {
     c.lease_holder = "CI: org/repo";
     CHECK(gate("{\"cmd\":\"status\"}", &c) == NULL, "light read refused: %s", s_why);
     const char *r = gate("{\"cmd\":\"generate\"}", &c);
-    CHECK(r && strcmp(r, "busy: a cloud job holds this pod (CI: org/repo, 42 s left)") == 0, "T1: %s", r);
+    CHECK(coded(r, BP_E_LEASE_BUSY, CMD_GATE_CLOUD_LEASE_HOLDER), "T1: %s", r);
+    CHECK(arg_s(1) && strcmp(arg_s(1), "CI: org/repo") == 0, "lease purpose: %s", arg_s(1));
     /* dispatch_line sends this one refusal as lease_busy (BP0025) by its start */
-    CHECK(starts(r, CMD_GATE_CLOUD_LEASE_TEXT), "cloud lease prefix: %s", r);
+    CHECK(coded(r, BP_E_LEASE_BUSY, CMD_GATE_CLOUD_LEASE_HOLDER), "cloud lease: %s", r);
     /* a T0 read that takes the capture hardware is not light */
-    CHECK(starts(gate("{\"cmd\":\"capture\",\"samples\":10}", &c), "busy:"), "capture: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"capture\",\"samples\":10}", &c), BP_E_LEASE_BUSY), "capture: %s", s_why);
     /* no holder label: "cloud" */
     c.lease_holder = "";
     CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "(cloud, 42 s left)") != NULL, "label: %s", s_why);
@@ -124,7 +140,7 @@ static void test_lease(void) {
     CHECK(gate("{\"cmd\":\"generate\"}", &cl) == NULL, "cloud blocked by the lease");
     /* order: on a locked LAN a T2 command says "locked", not "busy" */
     c.lan_policy = POD_LAN_LOCKED;
-    CHECK(starts(gate("{\"cmd\":\"cloud_set\"}", &c), "locked:"), "order: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"cloud_set\"}", &c), BP_E_LAN_LOCKED), "order: %s", s_why);
 }
 
 static void test_tunnel_max_tier(void) {
@@ -132,10 +148,10 @@ static void test_tunnel_max_tier(void) {
     c.tunnel_max_tier = 1;                        /* an org member: T0 + T1 */
     CHECK(gate("{\"cmd\":\"generate\"}", &c) == NULL, "T1 refused");
     const char *r = gate("{\"cmd\":\"cloud_proxy\",\"set\":\"x\"}", &c);
-    CHECK(r && strcmp(r, "forbidden: cloud_proxy needs an organization owner or admin") == 0, "T2: %s", r);
-    CHECK(starts(gate("{\"cmd\":\"ota_begin\"}", &c), "forbidden:"), "T3: %s", s_why);
+    CHECK(coded(r, BP_E_ROLE_REQUIRED, "cloud_proxy"), "T2: %s", r);
+    CHECK(code_is(gate("{\"cmd\":\"ota_begin\"}", &c), BP_E_ROLE_REQUIRED), "T3: %s", s_why);
     c.tunnel_max_tier = 0;
-    CHECK(starts(gate("{\"cmd\":\"generate\"}", &c), "forbidden:"), "T1 at max 0: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"generate\"}", &c), BP_E_ROLE_REQUIRED), "T1 at max 0: %s", s_why);
     CHECK(gate("{\"cmd\":\"status\"}", &c) == NULL, "T0 at max 0: %s", s_why);
     c.tunnel_max_tier = 3;
     CHECK(gate("{\"cmd\":\"ota_begin\"}", &c) == NULL, "T3 at max 3: %s", s_why);
@@ -163,7 +179,7 @@ static void test_safe_mode(void) {
     t.skip_hw = true;
     t.tunnel_max_tier = 0;
     CHECK(starts(gate("{\"cmd\":\"la_capture\",\"samples\":1}", &t), "safe mode:"), "T0 la_capture: %s", s_why);
-    CHECK(starts(gate("{\"cmd\":\"generate\"}", &t), "forbidden:"), "order: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"generate\"}", &t), BP_E_ROLE_REQUIRED), "order: %s", s_why);
 }
 
 static void test_digital_board(void) {
@@ -176,6 +192,7 @@ static void test_digital_board(void) {
         snprintf(line, sizeof(line), "{\"cmd\":\"%s\"}", analog[i]);
         const char *r = gate(line, &c);
         CHECK(starts(r, "this BenchPod has no analog front end (digital board)"), "%s: %s", analog[i], r);
+        CHECK(coded(r, BP_E_NO_ANALOG_FRONT_END, analog[i]), "%s: BP0046", analog[i]);
     }
     CHECK(gate("{\"cmd\":\"dac_stop\"}", &c) == NULL, "dac_stop refused (cleanup must work)");
     CHECK(gate("{\"cmd\":\"la_capture\"}", &c) == NULL, "LA refused on the digital board");

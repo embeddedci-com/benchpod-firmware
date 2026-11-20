@@ -121,7 +121,8 @@ def gen_h(cat):
            "   hosts always say the same thing. Code that only builds a message for its caller to",
            "   send (la_pins.c, pod_policy.c, ...) uses bp_note_<name>(buf, cap, args...): it writes",
            "   the same text into buf and notes the code, and send_error() of that text sends it with",
-           "   its code (bp_err_noted). Built with -DBP_ERRORS_NO_TEXT the templates drop out of the",
+           "   its code (bp_err_noted). A text a person also reads (the USB console, SCPI) keeps its",
+           "   own words and gets the code with bp_tag_<name>(text, args...). Built with -DBP_ERRORS_NO_TEXT the templates drop out of the",
            "   binary and the message is the compact fallback (\"BP0002 cmd=foo\"). The hosts render",
            "   the message, the fix and the docs link from errors/errors.json. */", "",
            "#include <stdbool.h>", "#include <stddef.h>", "#include <stdint.h>", "",
@@ -148,7 +149,11 @@ def gen_h(cat):
             "/* bp_err_render into buf, and note the code and args for that text; returns buf. */",
             "const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
             "                        size_t n);",
-            "/* The code and args a recent bp_err_note gave exactly this text (it may have been copied),",
+            "/* Note the code and args for a text the module wrote itself (a person reads it on the",
+            "   USB console or SCPI, and send_error() sends it with the code); returns text. */",
+            "const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args,",
+            "                       size_t n);",
+            "/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may have been copied),",
             "   NULL when none did. The args stay valid until the next bp_err_note. */",
             "const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n);",
             "/* Formats and sends it on a connection (command_handler.c). */",
@@ -180,6 +185,11 @@ def gen_h(cat):
         if decl:
             out.append(decl)
         out.append(f"    return bp_err_note(buf, cap, {c_ident(e['name'])}, {av}, {n});")
+        out.append("}")
+        out.append(f"static inline const char *bp_tag_{e['name']}(const char *text{params}) {{")
+        if decl:
+            out.append(decl)
+        out.append(f"    return bp_err_tag(text, {c_ident(e['name'])}, {av}, {n});")
         out.append("}")
     out += ["", "#endif /* BP_ERRORS_H */", ""]
     return "\n".join(out)
