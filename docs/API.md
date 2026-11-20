@@ -164,20 +164,22 @@ message, or the code when there is none, with `"code"` and `"args"` beside it.
 Commands that return sample arrays (`capture`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
-{"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
-{"status":"chunk", "data":[33501,33790,34012,...], "more":true}\n
-{"status":"chunk", "data":[34190,34322,34410,...], "more":false}\n
+{"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
+{"status":"chunk", "b64":"NBL_f...", "more":true}\n
+{"status":"chunk", "b64":"QBQ0Fz...", "more":false}\n
 ```
 
 ADC samples are 16-bit counts (`"bits":16`); see [ADC sample values](#adc-sample-values). A client must read until it receives a packet with `"more":false` to know the transfer is complete. If the client stops reading for a few seconds the pod ends the transfer and closes the connection.
 
-#### Base64 samples (`"enc":"b64"`)
+#### Base64 samples (the default)
 
-Add `"enc":"b64"` to `capture`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. The [features table](#features-table) has `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
+The 16-bit samples of `capture`, `measure`, `test`, `capture_dual` and `capture_read` come as `"b64"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6 as decimal, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). `capture_dual`'s LA region still comes as `la_edges`. Firmware 4.0.0 made it the default; up to 3.10.13 a request had to say `"enc":"b64"`, which still works.
+
+Add `"enc":"dec"` for the decimal `"data"` array instead (what firmware up to 3.10.13 sent by default):
 
 ```json
-{"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
-{"status":"chunk", "b64":"NBL_f...", "more":false}\n
+{"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
+{"status":"chunk", "data":[33501,33790,34012,...], "more":false}\n
 ```
 
 ---
@@ -483,7 +485,7 @@ Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into P
 | `samples` | integer | no | `256` | `32768` |
 | `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
-| `enc` | string | no | decimal | `"b64"`, see [Base64 samples](#base64-samples-encb64) |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data`, see [Base64 samples](#base64-samples-the-default) |
 
 For more than 32768 samples use `capture_dual` with `la_samples` 0 (millions of samples, read back from PSRAM).
 
@@ -560,7 +562,7 @@ When the capture finishes the firmware stops the DAC before it returns the data.
 | `offset` | integer 0–255 | no | `128` | DAC DC offset |
 | `samples` | integer | no | `256` | Number of ADC samples to capture, and the waveform period (max `2048`) |
 | `sample_rate_mhz` | number (MHz) | no | auto | Sample-clock rate. Omit it and the rate is `freq × samples`, so one period spans the capture. |
-| `enc` | string | no | decimal | `"b64"` |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 #### Response
 
@@ -632,7 +634,7 @@ The capture stays in PSRAM after the reply: if the read-back stalls, resume it w
 | `la_rate_mhz` | number (MHz) | no | max | LA sample clock. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0, so the window shows it switch off. `0` leaves it running. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
-| `enc` | string | no | decimal | `"b64"` for the ADC region |
+| `enc` | string | no | `"b64"` | `"dec"` for the ADC region as decimal `data` |
 
 `adc_samples` and `la_samples` must not both be `0`. On gateware v22 and newer the firmware packs
 the LA region, the ADC region and any resident deep-replay waveform into the 8 MB and refuses up
@@ -702,7 +704,7 @@ of capturing again. The reply has the same chunked format as `capture_dual`, sta
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `offset` | integer | no | `0` | Global sample index to resume from (`0` .. `adc_samples + la_samples`). |
-| `enc` | string | no | decimal | `"b64"` |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 An `offset` equal to the total sends one empty final packet (`{"status":"ok","data":[],"more":false}`).
 
@@ -1686,7 +1688,7 @@ Builds a known 16-bit pattern in the STM32 (the FPGA, ADC and analog front end a
 | `pattern` | string | no | `sine` (or `const` if `value` is given) | `"sine"`, `"counter"`, `"ramp"`, or `"const"` |
 | `value` | integer 0-65535 | no | `65535` (used only for `const`) | Constant sample value |
 | `samples` | integer | no | `256` | 1 to `4096` |
-| `enc` | string | no | decimal | `"b64"` |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 #### Patterns
 

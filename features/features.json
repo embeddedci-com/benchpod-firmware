@@ -4,7 +4,7 @@
   "revision": 8,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "d8bdc99f9c24ca9dd5e6d8be45fbfd85ab9f61d5d9cb874217e25b669d0f6d71",
+  "table_sha256": "26784b714499b781eb684fe286f175281ee192bd164006a8e8bc6d43ca412d4d",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -223,7 +223,7 @@
       "board": "any",
       "legacy_caps": "capture_b64",
       "legacy_frame": "capture_b64",
-      "docs": "API.md#base64-samples-encb64"
+      "docs": "API.md#base64-samples-the-default"
     },
     "blob_slots": {
       "rev": 1,

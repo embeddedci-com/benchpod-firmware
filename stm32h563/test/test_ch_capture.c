@@ -217,7 +217,7 @@ static char first[256];
 static void test_test_pattern_decimal_paced(void) {
     clear_tx();
     g_avail = 400;   /* forces many small chunks */
-    handle_test(0, "{\"cmd\":\"test\",\"pattern\":\"counter\",\"samples\":300}");
+    handle_test(0, "{\"cmd\":\"test\",\"pattern\":\"counter\",\"samples\":300,\"enc\":\"dec\"}");
     CHECK(capture_busy() && g_owner == 0, "test did not start a bulk send");
     pump_all();
     int frames = parse(d, &nd, l, &nl, &more, first, sizeof(first));
@@ -249,7 +249,7 @@ static void test_capture_dual(void) {
     for (size_t i = 0; i < 2000; i++) g_la[i] = (uint16_t)((i / 300) & 0xFFF);   /* edges every 300 */
     clear_tx();
     g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"enc\":\"dec\"}");
     CHECK(capture_busy() && g_owner == 1, "capture_dual did not arm");
     capture_poll();
     CHECK(g_ntx == 0, "replied before the capture completed");
@@ -270,12 +270,12 @@ static void test_capture_dual(void) {
 
     /* resume from the middle of the LA region */
     clear_tx();
-    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":1500}");
+    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":1500,\"enc\":\"dec\"}");
     pump_all();
     CHECK(strncmp(g_tx, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[[500,", 44) == 0, "resume frame: %.60s", g_tx);
     CHECK(strstr(g_tx, "\"la_upto\":2000,\"more\":false}") != NULL, "resume did not reach the end");
     clear_tx();
-    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3000}");
+    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3000,\"enc\":\"dec\"}");
     CHECK(strcmp(g_tx, "{\"status\":\"ok\",\"data\":[],\"more\":false}\n") == 0 && g_owner == -1, "resume at the end: %s", g_tx);
     handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3001}");
     CHECK(strcmp(g_err, "offset out of range") == 0, "%s", g_err);

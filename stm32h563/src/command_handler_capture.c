@@ -70,7 +70,7 @@ static struct {
     int    conn_id;
     size_t samples;
     bool   stop_dac;   /* measure: stop the DAC sequencer once captured */
-    bool   b64;        /* reply dense samples as base64 ("enc":"b64", see bulk.b64) */
+    bool   b64;        /* reply dense samples as base64 (the default, see bulk.b64) */
 } v2cap;
 
 /* ---- v2 async deep LA→PSRAM capture ----
@@ -145,7 +145,7 @@ static struct {
     float  adc_rate_hz;   /* ACHIEVED rates (24MHz/divider), not the requested ones — */
     float  la_rate_hz;    /* the server needs these for a correct, aligned timebase.   */
     bool   stop_dac;      /* HW-cut a concurrently-running DAC during this capture; free it after */
-    bool   b64;           /* reply the ADC region as base64 ("enc":"b64", see bulk.b64) */
+    bool   b64;           /* reply the ADC region as base64 (the default, see bulk.b64) */
     uint32_t chg_k;       /* > 0: the LA is a change capture (gw >= v50, LA above 12 MS/s) */
 } dualcap;
 
@@ -217,17 +217,17 @@ static struct {
    long ends the send. */
 #define BULK_STALL_MS 30000u
 
-/* ---- compact dense read-back ("enc":"b64", advertised as caps[] "capture_b64") ----
+/* ---- compact dense read-back (base64, the default from firmware 4.0.0) ----
    Decimal JSON costs up to 6 B per 16-bit sample ("65535,") plus a snprintf per sample, and
    that text, not the capture, was the read-back bottleneck (2M ADC samples = ~12 MB).  Base64url
    (unpadded, RFC 4648 §5) of the raw little-endian words is 8/3 B per sample, a fixed cost, and
    stays inside the same newline-delimited JSON chunk, so the LAN socket, the USB console and the
-   cloud tunnel all carry it unchanged.  It is OPT-IN per request: a client that does not send
-   "enc":"b64" (older SDKs, the server) keeps getting "data":[...].  Only the dense region
+   cloud tunnel all carry it unchanged.  Every reply uses it unless the request says "enc":"dec"
+   (the decimal "data":[...] that was the default up to 3.10.13).  Only the dense region
    changes; LA run-length frames ("la_edges") are already compact and stay as they are. */
 static bool wants_b64(const char *json) {
     char enc[8] = {0};
-    return json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "b64") == 0;
+    return !(json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "dec") == 0);
 }
 /* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_rate_hz":NNNNNNNNNN,
    "la_rate_hz":NNNNNNNNNN,"b64":" is 91 B. */
@@ -378,7 +378,7 @@ static void bulk_begin(int conn_id, size_t total, bool is16) {
     bulk.adc_samples = 0;
     bulk.adc_rate_hz = 0;   /* default: omit; a rate-aware caller sets these after */
     bulk.la_rate_hz  = 0;
-    bulk.b64         = false;   /* default: decimal; an "enc":"b64" caller sets it after */
+    bulk.b64         = false;   /* the caller sets it after (wants_b64: base64 unless "enc":"dec") */
     bulk.chg         = false;
     bulk_take_trigger();
 }
