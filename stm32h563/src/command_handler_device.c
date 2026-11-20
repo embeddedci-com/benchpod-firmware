@@ -17,7 +17,6 @@
 #include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
-#include "bp_err.h"
 #include "signal_engine.h"
 #include "la_io.h"
 #include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */

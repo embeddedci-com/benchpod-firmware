@@ -5,6 +5,7 @@
  * their refusals, and the eth argument checks), wifi_clear's deferred ESP32-C3 NVS erase, and
  * wifi_scan's start-then-read replies and the console's deferred print.
  */
+#include "bp_errors.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -47,7 +48,14 @@ void cloud_send_json_line(int c, const char *json) {
 }
 static char g_reply[512];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+static int g_ecode;   /* the code of the last coded refusal, 0 = a plain one */
+void send_error(int c, const char *m) { (void)c; g_ecode = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;   /* "err:" and the code's catalog message, like a plain refusal reads here */
+    g_ecode = (int)code;
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
+}
 
 static int g_cloud_reloads, g_wifi_reloads, g_eth;
 void net_cloud_reload_after_reply(void) { g_cloud_reloads++; }

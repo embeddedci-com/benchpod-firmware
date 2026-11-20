@@ -6,6 +6,7 @@
  * state machine the hw worker steps.  Runs on the hw worker only (like command_handler).
  */
 #include "esp_dut_flash.h"
+#include "bp_errors.h"
 #include "esp_rom_job.h"
 #include "command_handler_internal.h"   /* uart_pins_*, command_handler_psram_stage */
 #include "signal_engine.h"              /* fpga_uart_*, fpga_la_set, quiesce */
@@ -155,7 +156,7 @@ int esp_dut_flash_start(const esp_dut_params_t *p, char *err, uint32_t cap)
     int rc = fpga_uart_config(p->rx, p->tx, START_BAUD, true);
     if (rc != 0) {
         uart_pins_release(&s_uart_pins);
-        if (rc == -2) snprintf(err, cap, "uart busy: stop the uart proxy first");
+        if (rc == -2) bp_note_uart_session_open(err, cap);
         else          snprintf(err, cap, "invalid uart pins");
         return -1;
     }

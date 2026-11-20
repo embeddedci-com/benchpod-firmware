@@ -1,4 +1,5 @@
 #include "cloud_client.h"
+#include "bp_errors.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
 #include "device_identity.h"
@@ -888,7 +889,9 @@ static void cl_handle_command_request(const char *json) {
     if (!hw_worker_submit_cloud(request_id, command)) {
         /* A previous cloud command is still in flight, or the queue is full. The
            server will retry; report busy so it doesn't wait the full timeout. */
-        cl_send_command_error(request_id, "device busy");
+        char code[8];
+        snprintf(code, sizeof(code), "BP%04u", (unsigned)BP_E_CLOUD_COMMAND_BUSY);
+        cl_send_command_error_code(request_id, "device busy", code, NULL);
     }
 }
 
@@ -931,7 +934,12 @@ void cloud_client_send_command_response(const char *request_id,
     if (!bp_emit_ok(&e)) {
         /* An error the caller can read, not a reconnect (bp_limits.h sizes the frame for the
            largest captured reply, so this needs an unusually long request id). */
-        cl_send_command_error(request_id, "reply too large for the cloud channel");
+        char args[48];   /* cloud_reply_too_large: what the frame needed, and what it holds */
+        snprintf(args, sizeof(args), "{\"bytes\":%u,\"limit\":%u}",
+                 (unsigned)(strlen(tail) + strlen(request_id) + 96u), (unsigned)sizeof(frame));
+        char code[8];
+        snprintf(code, sizeof(code), "BP%04u", (unsigned)BP_E_CLOUD_REPLY_TOO_LARGE);
+        cl_send_command_error_code(request_id, "reply too large for the cloud channel", code, args);
         return;
     }
     cl_send_reply_frame(frame, bp_emit_len(&e));

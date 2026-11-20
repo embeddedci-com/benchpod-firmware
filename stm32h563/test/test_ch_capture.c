@@ -48,7 +48,7 @@ void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n)
     g_code = (int)code;
     bp_err_render(g_err, sizeof(g_err), code, args, n);
 }
-bool heavy_begin(int c) { if (g_owner != -1 && g_owner != c) { send_error(c, "busy"); return false; } g_owner = c; return true; }
+bool heavy_begin(int c) { if (g_owner != -1 && g_owner != c) { bp_err_pod_busy(c); return false; } g_owner = c; return true; }
 void heavy_release(int c) { if (g_owner == c) g_owner = -1; }
 static float g_rate_hz;   /* the request's sample rate (0 = the device default) */
 float parse_sample_rate_hz(const char *json) { (void)json; return g_rate_hz; }

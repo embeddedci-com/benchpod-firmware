@@ -16,7 +16,6 @@
 #include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
-#include "bp_err.h"
 #include "signal_engine.h"
 #include "la_rate.h"
 #include "stm32h5xx_hal.h"  /* HAL_GetTick: bulk stall timer */

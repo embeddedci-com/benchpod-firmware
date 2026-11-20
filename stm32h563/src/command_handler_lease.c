@@ -39,7 +39,7 @@ static void send_lease(int conn_id, const lease_local_view_t *v) {
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"lease\":{\"id\":\"%s\",\"holder\":\"%s\","
                 "\"purpose\":\"%s\",\"left_s\":%lu,\"source\":\"local\"}}}\n",
             v->id, v->holder, v->purpose, (unsigned long)v->left_s);
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "lease reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     LOG_D("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }

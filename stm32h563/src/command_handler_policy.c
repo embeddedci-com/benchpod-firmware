@@ -5,6 +5,7 @@
 #include "net_server.h"   /* net_conn_on_usb: the USB link may set the CA and proxy */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "pod_policy.h"
 #include "fw_sign.h"
@@ -160,7 +161,7 @@ void handle_lan_tls(int conn_id, const char *json) {
         bp_emit_jstr(&e, in.error[0] ? in.error : "no certificate");
     }
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "lan_tls: reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
@@ -218,7 +219,7 @@ void handle_cloud_ca(int conn_id, const char *json) {
     const char *err = cloud_extras_ca_error();
     if (err) { bp_emit_raw(&e, ",\"error\":"); bp_emit_jstr(&e, err); }
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "cloud_ca: reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 

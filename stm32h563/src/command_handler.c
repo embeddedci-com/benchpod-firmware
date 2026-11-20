@@ -26,7 +26,6 @@
 #include "boot_guard.h"  /* safe mode: the iCE40/PSRAM-off command gate */
 #include "cmd_gate.h"    /* the checks before a command reaches its handler (host-tested) */
 #include "bp_features.h" /* BP_API, BP_MIN_CLIENT_API: the client API check */
-#include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
@@ -80,7 +79,7 @@ void send_ok_str(int conn_id, const char *payload_json) {
         /* Payload didn't fit the fixed reply buffer — send a structured error
            rather than a truncated (malformed) ok.  Handlers whose payload can be
            large build+send their reply directly instead of via send_ok_str. */
-        send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE));
+        bp_err_reply_too_large(conn_id);
         return;
     }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
@@ -186,7 +185,7 @@ int heavy_owner_conn(void) { return heavy_owner; }
    return true.  On false it has already sent the error. */
 bool heavy_begin(int conn_id) {
     if (heavy_in_flight() || !heavy_try_claim(conn_id)) {
-        send_error(conn_id, bp_err_str(BP_ERR_BUSY));
+        bp_err_pod_busy(conn_id);
         return false;
     }
     return true;
@@ -221,17 +220,23 @@ bool heavy_or_claimed(void) {
 }
 
 const char *bus_busy_reason(void) {
+    /* The console shows these to a person, so they keep their words; JSON sends BP0048 with
+       what is using the bus. */
     if (esp_rom_flash_busy())
-        return "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
+                                       "when it ends", "the Wi-Fi chip is being flashed");
     if (esp_dut_flash_busy())
-        return "busy: an ESP32 target is being flashed (esp_flash); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
+                                       "it ends", "a target is being flashed (esp_flash)");
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_ota_busy())
-        return "busy: the Wi-Fi bridge is being updated (about a minute); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: the Wi-Fi bridge is being updated (about a minute); try again "
+                                       "when it ends", "the Wi-Fi bridge is being updated");
 #endif
-    return heavy_or_claimed() ? "busy: a capture, upload or update is using the PSRAM bus; "
-                                "try again when it ends"
-                              : NULL;
+    return heavy_or_claimed()
+        ? bp_tag_storage_bus_busy("busy: a capture, upload or update is using the PSRAM bus; try again "
+                                  "when it ends", "a capture, upload or update is running")
+        : NULL;
 }
 
 /* Emit one raw newline-delimited JSON line back over the (tunnel) conn. */

@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "bp_errors.h"
 #include "psram.h"
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
 #include "flash_layout.h"
@@ -530,7 +531,8 @@ static const char *busy_msg(void) {
     char who[32];   /* "LAN connection " + an int */
     snprintf(msg, sizeof(msg), "busy: %s update from %s is in progress",
              ota_target_name(s_target), holder_name(who, sizeof(who)));
-    return msg;
+    /* The console shows the text; JSON sends BP0051 with the target and the holder. */
+    return bp_tag_update_in_progress(msg, ota_target_name(s_target), who);
 }
 
 const char *ota_busy_for(ota_owner_t who) {

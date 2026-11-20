@@ -11,9 +11,9 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
-#include "bp_err.h"
 #include "cloud_config.h"
 #include "cloud_client.h"
 #include "net_server.h"     /* net_eth_*, net_*_reload_after_reply */
@@ -546,7 +546,7 @@ void handle_eth(int conn_id, const char *buf) {
         bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":");
         bp_emit_raw(&e, data);
         bp_emit_raw(&e, "}\n");
-        if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
+        if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
         return;
     }
@@ -689,6 +689,6 @@ void handle_wifi_status(int conn_id, const char *json) {
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
              (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot,
              restarts, c3_nvs_str());
-    if (rn < 0 || (size_t)rn >= sizeof(resp)) { send_error(conn_id, "wifi_status: reply too large"); return; }
+    if (rn < 0 || (size_t)rn >= sizeof(resp)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
 }

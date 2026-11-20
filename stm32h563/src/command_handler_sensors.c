@@ -4,6 +4,7 @@
  * sensor_la (a stream) is in command_handler_capture.c.
  */
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "bp_limits.h"
@@ -24,7 +25,7 @@ void handle_sensor(int conn_id, const char *json) {
     bp_emit_t e;
     bp_emit_init(&e, resp, BP_CLOUD_REPLY_MAX);
     if (sensor_cmd(verb, json, &e, err, sizeof(err)) != 0) send_error(conn_id, err);
-    else if (!bp_emit_ok(&e)) send_error(conn_id, "reply too large");
+    else if (!bp_emit_ok(&e)) bp_err_reply_too_large(conn_id);
     else {
         LOG_D("[cmd] -> ok  %s (%u bytes)\n", verb, (unsigned)bp_emit_len(&e));
         if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);

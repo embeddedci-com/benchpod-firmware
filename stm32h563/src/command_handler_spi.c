@@ -89,7 +89,7 @@ static const spi_flash_io_t k_io = { NULL, io_cs, io_xfer, io_sleep, io_now, SPI
 /* ---- replies ---- */
 
 static void send_built(int conn_id, bp_emit_t *e) {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }
@@ -368,7 +368,7 @@ void handle_spi_stream(int conn_id, const char *json) {
     }
     if (len > staged) { send_error(conn_id, "len is more than the staged upload"); return; }
     if (len == 0 && head_len == 0) { send_error(conn_id, "nothing to send"); return; }
-    if (!command_handler_acquire_adc(conn_id)) { send_error(conn_id, "busy"); return; }
+    if (!command_handler_acquire_adc(conn_id)) { bp_err_pod_busy(conn_id); return; }
 
     stream_ctx_t ctx = { base };
     spi_stream_io_t io = { &ctx, io_cs, st_xfer, st_read, st_progress, SPI_XFER_MAX };

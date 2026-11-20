@@ -2,6 +2,7 @@
  * cloud_reply_cap.c: see cloud_reply_cap.h. Hw worker task only (one cloud command at a time).
  */
 #include "cloud_reply_cap.h"
+#include "bp_errors.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -44,11 +45,12 @@ size_t cloud_reply_cap_end(char *out, size_t out_cap) {
     if (s_len > want) { s_len = want; s_buf[s_len] = '\0'; }
     size_t limit = (out_cap < sizeof(s_buf) ? out_cap : sizeof(s_buf)) - 1u;
     if (want > s_len || s_len > limit) {
-        char msg[96];
-        snprintf(msg, sizeof(msg), "reply too large for the cloud channel (%u bytes, limit %u)",
-                 (unsigned)want, (unsigned)limit);
-        printf("[cloud] %s\n", msg);
-        return err_reply(out, out_cap, msg);
+        printf("[cloud] reply too large for the cloud channel (%u bytes, limit %u)\n",
+               (unsigned)want, (unsigned)limit);
+        const bp_err_arg_t args[] = { {"bytes", 0, (int32_t)want, 0}, {"limit", 0, (int32_t)limit, 0} };
+        size_t n = bp_error_format(out, out_cap, BP_E_CLOUD_REPLY_TOO_LARGE, args, 2);
+        if (n && out[n - 1] == '\n') out[--n] = '\0';   /* the reply proper, without its line end */
+        return n;
     }
     if (s_len == 0) return err_reply(out, out_cap, "no reply");
     memcpy(out, s_buf, s_len);

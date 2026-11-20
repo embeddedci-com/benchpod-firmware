@@ -230,7 +230,7 @@ void handle_i2c_xfer(int conn_id, const char *json) {
         bp_emit_raw(&e, "\"");
     }
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e.buf, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 

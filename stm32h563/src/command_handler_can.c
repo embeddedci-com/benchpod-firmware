@@ -12,7 +12,6 @@
 #include "can_bus.h"
 #include "can_timing.h"
 #include "bp_json.h"
-#include "bp_err.h"
 
 #include <string.h>
 #include <stdlib.h>

@@ -4,6 +4,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "board_variant.h"
@@ -18,7 +19,7 @@
 
 static void send_emitted(int conn_id, bp_emit_t *e)
 {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "module: reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }

@@ -513,7 +513,7 @@ static void test_claim_order(void) {
     g_cfg_rc = -2;
     g_enabled = true;
     start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
-    CHECK(strcmp(g_reply, "err:uart busy") == 0 && g_enabled, "busy: %s (enabled %d)", g_reply, g_enabled);
+    CHECK(g_err_code == BP_E_UART_SESSION_OPEN && g_enabled, "busy: %s (enabled %d)", g_reply, g_enabled);
     CHECK(la_pins_fn(9) == LA_FN_UART_RX && la_pins_fn(10) == LA_FN_UART_TX, "busy released the other user's pins");
     CHECK(la_pins_fn(1) == LA_FN_NONE && la_pins_fn(2) == LA_FN_NONE, "busy left this start's pins claimed");
     la_pins_release(9);

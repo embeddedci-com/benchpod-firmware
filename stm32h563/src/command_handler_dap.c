@@ -9,6 +9,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "signal_engine.h"   /* fpga_swd_*, fpga_spi_armed */
@@ -179,10 +180,10 @@ void handle_dap_start(int conn_id, const char *json) {
 
     int rc = fpga_swd_arm(swclk, swdio);
     if (rc == -2 && fpga_spi_armed()) {
-        send_error(conn_id, "swd busy: an SPI session is using the engine ({\"cmd\":\"spi_stop\"})");
+        bp_err_bus_engine_busy(conn_id, "swd");
         return;
     }
-    if (rc == -2) { send_error(conn_id, "swd busy"); return; }
+    if (rc == -2) { bp_err_swd_session_open(conn_id); return; }
     if (rc != 0)  { send_error(conn_id, "invalid swd la channel"); return; }
     la_pins_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, 0, &clk_pin, 1);
     la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, &dio_pin, 1);

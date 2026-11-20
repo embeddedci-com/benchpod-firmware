@@ -347,7 +347,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     if (rc != 0) {
         /* Not armed: nothing to disarm (-2 is another user's armed UART, left alone). */
         uart_session_close();
-        send_error(conn_id, rc == -2 ? "uart busy" : "invalid uart args");
+        if (rc == -2) bp_err_uart_session_open(conn_id);
+        else          send_error(conn_id, "invalid uart args");
         return;
     }
     /* Verify the iCE40 actually answers before committing to raw UART mode: a bogus

@@ -11,6 +11,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
@@ -379,13 +380,13 @@ void handle_load(int conn_id, const char *json) {
 
     /* Don't disturb the shared sample buffer while an async capture or a paced
        send is still using it. */
-    if (heavy_in_flight()) { send_error(conn_id, "busy"); return; }
+    if (heavy_in_flight()) { bp_err_pod_busy(conn_id); return; }
 
     /* offset 0 begins a fresh upload and claims the shared buffer; later
        chunks must come from the same connection that still holds it (custom
        same-owner continuation, so this handler doesn't use heavy_begin). */
     if (offset == 0) {
-        if (!heavy_try_claim(conn_id)) { send_error(conn_id, "busy"); return; }
+        if (!heavy_try_claim(conn_id)) { bp_err_pod_busy(conn_id); return; }
         replay_len = 0;
         replay_in_psram = false;   /* this trace is in RAM: a later replay must not play an older PSRAM one */
     } else if (heavy_owner_conn() != conn_id) {

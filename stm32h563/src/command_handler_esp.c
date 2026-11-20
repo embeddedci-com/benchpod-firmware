@@ -19,6 +19,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "esp_dut_flash.h"
 #include "esp_rom_job.h"
 #include "la_pins.h"
@@ -70,7 +71,7 @@ static void reply_status(int conn_id) {
         (unsigned long)st.done, (unsigned long)st.total, st.chip, (unsigned long)st.magic,
         (unsigned long)st.offset, (unsigned long)st.len, (unsigned long)st.baud,
         (unsigned long)st.resends, (unsigned long)st.ms, st.md5);
-    if (n < 0 || (size_t)n >= sizeof(p)) { send_error(conn_id, "reply too large"); return; }
+    if (n < 0 || (size_t)n >= sizeof(p)) { bp_err_reply_too_large(conn_id); return; }
     snprintf(p + n, sizeof(p) - (size_t)n, res ? "\"%s\"}" : "null}", res ? res : "");
     send_ok_str(conn_id, p);
 }
@@ -114,7 +115,7 @@ void handle_esp_flash(int conn_id, const char *json) {
         if ((uint64_t)p.offset + p.len > p.flash_size) { send_error(conn_id, "offset + len is past flash_size"); return; }
         if (has_key(json, "run")) p.run = bp_json_flag(json, "run");
         /* The PSRAM bus: free, or held by this connection's own upload (load_bin's hold). */
-        if (!command_handler_acquire_adc(conn_id)) { send_error(conn_id, "busy"); return; }
+        if (!command_handler_acquire_adc(conn_id)) { bp_err_pod_busy(conn_id); return; }
         command_handler_release_adc(conn_id);
     }
 

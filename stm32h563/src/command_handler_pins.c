@@ -49,7 +49,7 @@ bool la_claim_or_error(int conn_id, la_fn_t fn, const uint8_t *las, size_t n, ui
 
 /* Send a reply built with the emitter, or a structured error if it did not fit. */
 static void send_emitted(int conn_id, bp_emit_t *e) {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }
@@ -100,7 +100,7 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
         return bp_err_noted(err, &code, NULL) && code == BP_E_LA_PIN_IN_USE ? -3 : -1;
     }
     if (!la_step_args_ok(steps, delay_us, err, cap)) return -1;
-    if (s_step.active || fpga_la_step_busy()) { snprintf(err, cap, "busy"); return -2; }
+    if (s_step.active || fpga_la_step_busy()) { bp_note_step_busy(err, cap); return -2; }
 
     /* Direction first, so the first pulse already sees it. */
     int prev_level = -1;
@@ -121,7 +121,8 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
                 (void)fpga_la_set(dir_la, la_pins_drive(dir_la));
             }
         }
-        snprintf(err, cap, rc == -2 ? "busy" : "invalid args");
+        if (rc == -2) bp_note_step_busy(err, cap);
+        else          snprintf(err, cap, "invalid args");
         return rc == -2 ? -2 : -1;
     }
     uint8_t p = (uint8_t)la, d = (uint8_t)dir_la;
@@ -394,7 +395,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
         bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
     }
     bp_emit(&e, ",\"pullups_available\":%d}", la_pull_available() ? 1 : 0);
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     send_ok_str(conn_id, payload);
 }
 
@@ -539,6 +540,6 @@ void handle_la_voltage(int conn_id, const char *json) {
         vref_out_emit(&e);
     }
     bp_emit_raw(&e, "}");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     send_ok_str(conn_id, payload);
 }
