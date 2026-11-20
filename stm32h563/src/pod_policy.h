@@ -4,15 +4,16 @@
 /*
  * pod_policy — the pod's persisted security policies (docs/design/policy-commands.md):
  *
- *   signature policy  audit < permissive < required   (fw_sign.h; what OTA accepts)
+ *   signature policy  required, always (firmware 4.0.0; fw_sign.h: what OTA accepts)
  *   LAN policy        open | locked | off            (what the LAN TCP API may do)
  *
  * Both live in one power-loss-safe record (config_store.h A/B slots at 0x1E4000/0x1E6000).
- * No record = audit + open, which is what a pod did before this existed.
+ * No record = required + open. Firmware 4.0.0 reads the signature policy as "required" whatever
+ * the record says (older firmware defaulted to audit) and refuses every other value.
  *
- * Who may change what is decided here, from where the request came:
+ * Who may change the LAN policy is decided here, from where the request came:
  *   USB console  anything (physical presence: the way back)
- *   cloud        the LAN policy freely; the signature policy only to a stricter value
+ *   cloud        anything
  *   LAN TCP      nothing
  * A refused change returns the reason and changes nothing.
  */
@@ -44,7 +45,8 @@ void pod_policy_load(void);
 fw_sig_policy_t  pod_policy_sig(void);
 pod_lan_policy_t pod_policy_lan(void);
 
-/* Change a policy. NULL = done (and persisted), else why not (nothing changed). */
+/* Change a policy. NULL = done (and persisted), else why not (nothing changed). The signature
+   policy takes only FW_SIG_POLICY_REQUIRED, from any source (BP0074 for the others). */
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src);
 const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src);
 
@@ -67,14 +69,16 @@ const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link);
 /* Called after the USB network setting changed (usb_device re-enumerates). Weak no-op. */
 void pod_policy_on_usb_net_change(bool on);
 
-/* HTTPS-only (lan_tls.h, docs/design/lan-tls.md), default off. On, the external LAN (Ethernet,
-   Wi-Fi) gets no plaintext :8080 connections, only TLS on :8443; the USB network adapter keeps
-   plaintext. Turning it on or off, like replacing or regenerating the TLS certificate
-   (pod_policy_lan_tls_gate), needs the USB console, the USB link or the cloud. Never the external
-   LAN, over TLS or not: port 8443 has no client authentication, so a LAN host could otherwise
-   swap the certificate or turn HTTPS-only off (and on: that cuts off every plaintext client).
-   Before 3.10.7 a LAN connection over TLS could do all of this, and plaintext LAN could turn
-   HTTPS-only on. */
+/* HTTPS-only (lan_tls.h, docs/design/lan-tls.md), default ON from firmware 4.0.0 (off before):
+   the external LAN (Ethernet, Wi-Fi) gets no plaintext :8080 JSON connections, only TLS on
+   :8443; the USB network adapter keeps plaintext :8080 (a point-to-point link that never crosses
+   a network). Turning it off (plaintext on again) or on, like replacing or regenerating the TLS
+   certificate (pod_policy_lan_tls_gate), needs the USB console, the USB link or the cloud, as
+   the LAN policy does; never the external LAN, over TLS or not: port 8443 has no client
+   authentication, so a LAN host could otherwise swap the certificate or open plaintext. Before
+   3.10.7 a LAN connection over TLS could do all of this, and plaintext LAN could turn
+   HTTPS-only on. Stored as lan_plain (1 = plaintext on) since 4.0.0, so an older record (where
+   both bytes are 0) means HTTPS-only. */
 bool pod_policy_https_only(void);
 const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link);
 /* NULL = this source may change the LAN TLS identity or HTTPS-only, else the refusal. */
@@ -82,21 +86,22 @@ const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link);
 /* Called after HTTPS-only changed (net_server closes plaintext LAN connections). Weak no-op. */
 void pod_policy_on_https_only_change(bool on);
 
-/* Firmware images from the external LAN (firmware 3.10.7+, security review 2026-11 H3): by
-   default an OTA from Ethernet or Wi-Fi needs a good signature (FW_SIG_OK) whatever the
-   signature policy, because the LAN API has no client authentication. The USB console, the USB
-   network adapter and the cloud keep the signature policy as it is (audit: anything). lan_unsigned
-   on lets the external LAN install unsigned or developer-signed images again (the behavior before
-   3.10.7). Turning it on needs the USB console or the USB link; the cloud may only turn it off. */
-bool pod_policy_lan_unsigned(void);
-const char *pod_policy_set_lan_unsigned(bool on, policy_src_t src, bool usb_link);
+/* SCPI (firmware 4.0.0), default off. On, SCPI lines (anything not starting with '{') answer on
+   the pod's TCP connections: plaintext :8080 (from the external LAN too, even with HTTPS-only on,
+   where that port then answers SCPI only), the USB link and TLS :8443. Off, such a connection
+   gets one line saying so and is closed, and mDNS has no _scpi-raw. The cloud byte tunnels are
+   not affected. The same gate as HTTPS-only (pod_policy_lan_tls_gate). */
+bool pod_policy_scpi(void);
+const char *pod_policy_set_scpi(bool on, policy_src_t src, bool usb_link);
+/* Called after the SCPI setting changed (net_server: listener rules and mDNS). Weak no-op. */
+void pod_policy_on_scpi_change(bool on);
 
 /* Rollback floor (firmware 3.10.7+, M7): a signed firmware image whose manifest release is below
    it is refused. 0 = none, the default. It only goes up, when a signed firmware image carrying
    FW_SIG_FLAG_FLOOR is committed (ota.c); clearing it needs the USB console. */
 uint32_t pod_policy_rollback_floor(void);
 const char *pod_policy_raise_floor(uint32_t release);
-const char *pod_policy_clear_floor(policy_src_t src);
+const char *pod_policy_clear_floor(policy_src_t src, bool usb_link);
 
 /* The last genuine Wi-Fi bridge (firmware 3.10.7+, wifi_bridge.h): its MAC and the public key of
    the pairing whose identity proof checked out, kept in a version 2 policy record next to the

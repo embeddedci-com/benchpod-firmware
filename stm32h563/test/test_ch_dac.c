@@ -8,6 +8,7 @@
  * The DAC engine, PSRAM, the heavy gate and the clock are fakes.
  */
 #include <math.h>
+#include "bp_errors.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -45,8 +46,15 @@ void heavy_release(int c) { if (g_owner == c) g_owner = -1; }
 int  heavy_owner_conn(void) { return g_owner; }
 static char g_reply[512];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
-bool heavy_begin(int c) { if (!heavy_try_claim(c)) { send_error(c, "busy"); return false; } return true; }
+static int g_ecode;   /* the code of the last coded refusal, 0 = a plain one */
+void send_error(int c, const char *m) { (void)c; g_ecode = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;   /* "err:" and the code's catalog message, like a plain refusal reads here */
+    g_ecode = (int)code;
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
+}
+bool heavy_begin(int c) { if (!heavy_try_claim(c)) { bp_err_pod_busy(c); return false; } return true; }
 float parse_sample_rate_hz(const char *json) { (void)json; return 0.0f; }
 static char g_lines[512];
 void cloud_send_json_line(int c, const char *json) { (void)c; strcat(g_lines, json); strcat(g_lines, "\n"); }
@@ -132,7 +140,7 @@ static void test_load_bin_refusals(void) {
     CHECK(strcmp(g_reply, "err:total out of range") == 0, "%s", g_reply);
     g_owner = 3;
     arm(0, "{\"cmd\":\"load_bin\",\"total\":4}");
-    CHECK(strcmp(g_reply, "err:busy") == 0 && g_proto[0] == PROTO_JSON, "%s", g_reply);
+    CHECK(g_ecode == BP_E_POD_BUSY && g_proto[0] == PROTO_JSON, "%s", g_reply);
     g_owner = -1;
 }
 
@@ -234,7 +242,7 @@ static void test_load(void) {
     handle_load(0, "{\"cmd\":\"load\",\"offset\":0,\"data\":\"AQIDBA\"}");
     CHECK(strcmp(g_reply, "ok:{\"offset\":0,\"len\":4,\"total\":2}") == 0 && g_owner == 0, "%s", g_reply);
     handle_load(1, "{\"cmd\":\"load\",\"offset\":0,\"data\":\"AQIDBA\"}");
-    CHECK(strcmp(g_reply, "err:busy") == 0, "another conn took a held upload: %s", g_reply);
+    CHECK(g_ecode == BP_E_POD_BUSY, "another conn took a held upload: %s", g_reply);
     handle_load(0, "{\"cmd\":\"load\",\"offset\":4,\"data\":\"BQYHCA\"}");
     CHECK(strcmp(g_reply, "ok:{\"offset\":4,\"len\":4,\"total\":4}") == 0, "%s", g_reply);
     handle_replay(0, "{\"cmd\":\"replay\"}");
@@ -281,16 +289,16 @@ static void test_teardown(void) {
     heavy_release(0);
 }
 
-/* The calibrated generate: volts or uA, routed, 16-bit; the 0..255 form is left alone. */
+/* generate: volts or uA, routed, 16-bit; the old 0..255 form is refused. */
 static void test_generate16(void) {
     g_gen16_calls = 0; g_route = -1;
-    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"path\":\"3v3\",\"amplitude_v\":1.48,\"offset_v\":1.65}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0, "volts reply %s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,\"path\":\"3v3\",\"amplitude_v\":1.48,\"offset_v\":1.65}");
+    CHECK(strcmp(g_reply, "ok:null") == 0, "volts reply %s", g_reply);
     CHECK(g_gen16_calls == 1 && g_route == ANALOG_PATH_DAC_3V3 && g_gen_shape == WAVE16_SINE, "volts routed + played");
     CHECK(fabs(g_gen_mid - (double)dac_code16_for_volts(0, 1.65f)) <= 1.0, "mid %.1f", g_gen_mid);
 
-    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"square\",\"freq\":10,\"amplitude_ua\":4000,\"offset_ua\":12000,\"on_capture\":true}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16,\"cotrig\":false}") == 0, "uA reply %s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"square\",\"freq_hz\":10,\"amplitude_ua\":4000,\"offset_ua\":12000,\"on_capture\":true}");
+    CHECK(strcmp(g_reply, "ok:{\"cotrig\":false}") == 0, "uA reply %s", g_reply);
     CHECK(g_route == ANALOG_PATH_CURRENT_OUT && g_gen_shape == WAVE16_SQUARE, "uA routes the 4-20 mA output");
 
     g_gen16_calls = 0; g_route = -1;
@@ -307,12 +315,12 @@ static void test_generate16(void) {
     /* route:false leaves the analog switching alone (a cal1 loopback). */
     g_route = -1;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"5v\",\"amplitude_v\":0.1,\"offset_v\":2.5,\"route\":false}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0 && g_route == -1, "route:false %s route %d", g_reply, g_route);
+    CHECK(strcmp(g_reply, "ok:null") == 0 && g_route == -1, "route:false %s route %d", g_reply, g_route);
 
-    /* The 8-bit form does not touch the 16-bit path. */
+    /* The 8-bit form (firmware up to 3.10.13) is gone. */
     g_gen16_calls = 0;
-    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"amplitude\":100,\"offset\":128}");
-    CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 0, "8-bit form unchanged: %s", g_reply);
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,\"amplitude\":100,\"offset\":128}");
+    CHECK(strncmp(g_reply, "err:amplitude_v", 15) == 0 && g_gen16_calls == 0, "8-bit form refused: %s", g_reply);
 }
 
 int main(void) {

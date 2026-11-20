@@ -3,20 +3,18 @@
 #define BP_ERRORS_H
 
 /* Stable error codes (errors/catalog.toml). A handler refuses with bp_err_<name>(conn_id,
-   BP_ERR_TEXT("..."), args...): the reply carries the code and the args, and the text when
-   the build keeps it. Built with -DBP_ERRORS_NO_TEXT, BP_ERR_TEXT() is NULL, the strings
-   drop out of the binary, and the reply's message is the compact fallback
-   ("BP0002 cmd=foo") that bp_error_format builds from the code and args. The hosts
-   render the message, the fix and the docs link from errors/errors.json. */
+   args...): the reply is {"status":"error","code":"BP0002","args":{...}}, with no
+   message: the hosts render the message, the fix and the docs link from errors/errors.json,
+   so the firmware holds no per-error text. Code that only builds a refusal for its caller
+   to send (pod_policy.c, sensor_mgr.c, ...) uses bp_note_<name>(buf, cap, args...): it
+   writes the short form ("BP0055 instance=env") into buf and notes the code, and
+   send_error() of that text sends it with its code (bp_err_noted). A text a person also
+   reads (the USB console, SCPI) keeps its own words and gets the code with
+   bp_tag_<name>(text, args...). */
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-#ifdef BP_ERRORS_NO_TEXT
-#define BP_ERR_TEXT(s) ((const char *)0)
-#else
-#define BP_ERR_TEXT(s) (s)
-#endif
 
 typedef enum {
     BP_E_NONE = 0,
@@ -50,189 +48,1047 @@ typedef enum {
     BP_E_VREF_5V_MISSING = 28,
     BP_E_PULL_RAIL_DOWN = 29,
     BP_E_CLIENT_TOO_OLD = 30,
-    BP_E_USB_HOST_OVER_USB = 31,
-    BP_E_USB_HOST_PORT_UNAVAILABLE = 32,
-    BP_E_USB_HOST_NO_CRYSTAL = 33,
-    BP_E_USB_HOST_OTHER_PORT = 34,
-    BP_E_DAC_PINOUT_MISMATCH = 35,
+    BP_E_LA_PIN_IN_USE = 31,
+    BP_E_LA_PULL_DOWN_ENGAGED = 32,
+    BP_E_LA_PULL_DOWN_CONFLICT = 33,
+    BP_E_LA_DUT_OUTPUT = 34,
+    BP_E_LA_DRIVEN_PIN = 35,
+    BP_E_LA_NOT_GPIO_OUTPUT = 36,
+    BP_E_LA_VOLTAGE_PINS_IN_USE = 37,
+    BP_E_TRIGGER_TIMEOUT = 38,
+    BP_E_SENSOR_TRIGGER_TIMEOUT = 39,
+    BP_E_LAN_LOCKED = 40,
+    BP_E_POLICY_NOT_FROM_LAN = 41,
+    BP_E_SETTING_CLOUD_OR_USB = 42,
+    BP_E_SETTING_DEVICE_ONLY = 43,
+    BP_E_POLICY_LOOSEN_USB_ONLY = 44,   /* retired */
+    BP_E_ROLE_REQUIRED = 45,
+    BP_E_NO_ANALOG_FRONT_END = 46,
+    BP_E_POD_BUSY = 47,
+    BP_E_STORAGE_BUS_BUSY = 48,
+    BP_E_UART_SESSION_OPEN = 49,
+    BP_E_SWD_SESSION_OPEN = 50,
+    BP_E_UPDATE_IN_PROGRESS = 51,
+    BP_E_CLOUD_COMMAND_BUSY = 52,
+    BP_E_REPLY_TOO_LARGE = 53,
+    BP_E_CLOUD_REPLY_TOO_LARGE = 54,
+    BP_E_SENSOR_INSTANCE_UNKNOWN = 55,
+    BP_E_NO_MODULE_LINK = 56,
+    BP_E_IMAGE_SWITCH_SENSORS_RUNNING = 57,
+    BP_E_FPGA_IMAGE_REQUIRED = 58,
+    BP_E_FPGA_IMAGE_SENSORS_FIRST = 59,
+    BP_E_OTA_UNKNOWN_TARGET = 60,
+    BP_E_I2C_NEEDS_PULLUPS = 61,
+    BP_E_I2C_SESSION_NOT_OPEN = 62,
+    BP_E_I2C_ENGINE_RESET = 63,
+    BP_E_LOOP_SWEEP_WITH_MAP = 64,
+    BP_E_OUTPUT_USED_BY_SENSOR = 65,
+    BP_E_STEP_BUSY = 66,
+    BP_E_SAMPLES_OUT_OF_RANGE = 67,
+    BP_E_LA_RATE_ABOVE_CEILING = 68,
+    BP_E_LA_RATE_TOO_DEEP = 69,
+    BP_E_CAPTURE_DUAL_TOO_DEEP = 70,
+    BP_E_CAPTURE_OVERFLOWED = 71,
+    BP_E_PSRAM_TOO_SMALL = 72,
+    BP_E_PSRAM_BANDWIDTH = 73,
+    BP_E_SIGNATURES_ALWAYS_REQUIRED = 74,
+    BP_E_LAN_PLAINTEXT_OFF = 75,
+    BP_E_USB_HOST_OVER_USB = 76,
+    BP_E_USB_HOST_PORT_UNAVAILABLE = 77,
+    BP_E_USB_HOST_NO_CRYSTAL = 78,
+    BP_E_USB_HOST_OTHER_PORT = 79,
+    BP_E_DAC_PINOUT_MISMATCH = 80,
 } bp_errcode_t;
+
+#define BP_E_LAST 80
+#define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
 typedef struct { const char *key; const char *s; int32_t i; uint8_t is_str; } bp_err_arg_t;
 
-/* The reply line ({"status":"error","code":"BP0002","args":{...},"message":...}\n)
+/* The reply line ({"status":"error","code":"BP0002","args":{...}}\n)
    into buf; returns its length, 0 when it does not fit (bp_errors.c). */
-size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const char *text,
-                       const bp_err_arg_t *args, size_t n);
+size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
+                       size_t n);
+/* The short form ("BP0002 cmd=foo") into out, cut to fit; returns its length. */
+size_t bp_err_render(char *out, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
+                     size_t n);
+/* bp_err_render into buf, and note the code and args for that text; returns buf. */
+const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
+                        size_t n);
+/* Note the code and args for a text the module wrote itself (a person reads it on the
+   USB console or SCPI, and send_error() sends it with the code); returns text. */
+const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args,
+                       size_t n);
+/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may
+   have been copied), NULL when none did. The args stay valid until the next note. */
+const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n);
 /* Formats and sends it on a connection (command_handler.c). */
-void bp_error_send(int conn_id, bp_errcode_t code, const char *text,
-                   const bp_err_arg_t *args, size_t n);
+void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n);
 
 /* BP0001: The I/O voltage is not set */
-static inline void bp_err_la_voltage_not_set(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_LA_VOLTAGE_NOT_SET, text, 0, 0);
+static inline void bp_err_la_voltage_not_set(int conn_id) {
+    bp_error_send(conn_id, BP_E_LA_VOLTAGE_NOT_SET, 0, 0);
+}
+static inline const char *bp_note_la_voltage_not_set(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_LA_VOLTAGE_NOT_SET, 0, 0);
+}
+static inline const char *bp_tag_la_voltage_not_set(const char *text) {
+    return bp_err_tag(text, BP_E_LA_VOLTAGE_NOT_SET, 0, 0);
 }
 /* BP0002: The pod does not know the command {cmd} */
-static inline void bp_err_unknown_command(int conn_id, const char *text, const char *cmd) {
+static inline void bp_err_unknown_command(int conn_id, const char *cmd) {
     const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
-    bp_error_send(conn_id, BP_E_UNKNOWN_COMMAND, text, a, 1);
+    bp_error_send(conn_id, BP_E_UNKNOWN_COMMAND, a, 1);
+}
+static inline const char *bp_note_unknown_command(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_UNKNOWN_COMMAND, a, 1);
+}
+static inline const char *bp_tag_unknown_command(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_UNKNOWN_COMMAND, a, 1);
 }
 /* BP0003: An I2C session is already open */
-static inline void bp_err_i2c_session_open(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_I2C_SESSION_OPEN, text, 0, 0);
+static inline void bp_err_i2c_session_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_I2C_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_note_i2c_session_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_I2C_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_tag_i2c_session_open(const char *text) {
+    return bp_err_tag(text, BP_E_I2C_SESSION_OPEN, 0, 0);
 }
 /* BP0004: An SPI session is already open */
-static inline void bp_err_spi_session_open(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_SPI_SESSION_OPEN, text, 0, 0);
+static inline void bp_err_spi_session_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_SPI_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_note_spi_session_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_SPI_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_tag_spi_session_open(const char *text) {
+    return bp_err_tag(text, BP_E_SPI_SESSION_OPEN, 0, 0);
 }
 /* BP0005: The engine that runs SWD, SPI and I2C is in use, so {want} cannot start */
-static inline void bp_err_bus_engine_busy(int conn_id, const char *text, const char *want) {
+static inline void bp_err_bus_engine_busy(int conn_id, const char *want) {
     const bp_err_arg_t a[] = { {"want", want, 0, 1} };
-    bp_error_send(conn_id, BP_E_BUS_ENGINE_BUSY, text, a, 1);
+    bp_error_send(conn_id, BP_E_BUS_ENGINE_BUSY, a, 1);
+}
+static inline const char *bp_note_bus_engine_busy(char *buf, size_t cap, const char *want) {
+    const bp_err_arg_t a[] = { {"want", want, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_BUS_ENGINE_BUSY, a, 1);
+}
+static inline const char *bp_tag_bus_engine_busy(const char *text, const char *want) {
+    const bp_err_arg_t a[] = { {"want", want, 0, 1} };
+    return bp_err_tag(text, BP_E_BUS_ENGINE_BUSY, a, 1);
 }
 /* BP0006: The request is missing {arg} */
-static inline void bp_err_missing_argument(int conn_id, const char *text, const char *arg) {
+static inline void bp_err_missing_argument(int conn_id, const char *arg) {
     const bp_err_arg_t a[] = { {"arg", arg, 0, 1} };
-    bp_error_send(conn_id, BP_E_MISSING_ARGUMENT, text, a, 1);
+    bp_error_send(conn_id, BP_E_MISSING_ARGUMENT, a, 1);
+}
+static inline const char *bp_note_missing_argument(char *buf, size_t cap, const char *arg) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_MISSING_ARGUMENT, a, 1);
+}
+static inline const char *bp_tag_missing_argument(const char *text, const char *arg) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1} };
+    return bp_err_tag(text, BP_E_MISSING_ARGUMENT, a, 1);
 }
 /* BP0007: The pod has no wiring profile named {name} */
-static inline void bp_err_wiring_profile_not_found(int conn_id, const char *text, const char *name) {
+static inline void bp_err_wiring_profile_not_found(int conn_id, const char *name) {
     const bp_err_arg_t a[] = { {"name", name, 0, 1} };
-    bp_error_send(conn_id, BP_E_WIRING_PROFILE_NOT_FOUND, text, a, 1);
+    bp_error_send(conn_id, BP_E_WIRING_PROFILE_NOT_FOUND, a, 1);
+}
+static inline const char *bp_note_wiring_profile_not_found(char *buf, size_t cap, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_WIRING_PROFILE_NOT_FOUND, a, 1);
+}
+static inline const char *bp_tag_wiring_profile_not_found(const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_tag(text, BP_E_WIRING_PROFILE_NOT_FOUND, a, 1);
 }
 /* BP0008: {name} is not a valid wiring profile name */
-static inline void bp_err_wiring_bad_name(int conn_id, const char *text, const char *name) {
+static inline void bp_err_wiring_bad_name(int conn_id, const char *name) {
     const bp_err_arg_t a[] = { {"name", name, 0, 1} };
-    bp_error_send(conn_id, BP_E_WIRING_BAD_NAME, text, a, 1);
+    bp_error_send(conn_id, BP_E_WIRING_BAD_NAME, a, 1);
+}
+static inline const char *bp_note_wiring_bad_name(char *buf, size_t cap, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_WIRING_BAD_NAME, a, 1);
+}
+static inline const char *bp_tag_wiring_bad_name(const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_tag(text, BP_E_WIRING_BAD_NAME, a, 1);
 }
 /* BP0009: The wiring profile {name} changed since it was loaded (it is now at revision {rev}) */
-static inline void bp_err_wiring_revision_conflict(int conn_id, const char *text, const char *name, int32_t rev) {
+static inline void bp_err_wiring_revision_conflict(int conn_id, const char *name, int32_t rev) {
     const bp_err_arg_t a[] = { {"name", name, 0, 1}, {"rev", 0, rev, 0} };
-    bp_error_send(conn_id, BP_E_WIRING_REVISION_CONFLICT, text, a, 2);
+    bp_error_send(conn_id, BP_E_WIRING_REVISION_CONFLICT, a, 2);
+}
+static inline const char *bp_note_wiring_revision_conflict(char *buf, size_t cap, const char *name, int32_t rev) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1}, {"rev", 0, rev, 0} };
+    return bp_err_note(buf, cap, BP_E_WIRING_REVISION_CONFLICT, a, 2);
+}
+static inline const char *bp_tag_wiring_revision_conflict(const char *text, const char *name, int32_t rev) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1}, {"rev", 0, rev, 0} };
+    return bp_err_tag(text, BP_E_WIRING_REVISION_CONFLICT, a, 2);
 }
 /* BP0010: The pod cannot hold another wiring profile (at most {max}, and 16 KB in all) */
-static inline void bp_err_wiring_store_full(int conn_id, const char *text, int32_t max) {
+static inline void bp_err_wiring_store_full(int conn_id, int32_t max) {
     const bp_err_arg_t a[] = { {"max", 0, max, 0} };
-    bp_error_send(conn_id, BP_E_WIRING_STORE_FULL, text, a, 1);
+    bp_error_send(conn_id, BP_E_WIRING_STORE_FULL, a, 1);
+}
+static inline const char *bp_note_wiring_store_full(char *buf, size_t cap, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_WIRING_STORE_FULL, a, 1);
+}
+static inline const char *bp_tag_wiring_store_full(const char *text, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_WIRING_STORE_FULL, a, 1);
 }
 /* BP0011: The wiring profile is {bytes} bytes; the pod takes at most {max} */
-static inline void bp_err_wiring_profile_too_large(int conn_id, const char *text, int32_t bytes, int32_t max) {
+static inline void bp_err_wiring_profile_too_large(int conn_id, int32_t bytes, int32_t max) {
     const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"max", 0, max, 0} };
-    bp_error_send(conn_id, BP_E_WIRING_PROFILE_TOO_LARGE, text, a, 2);
+    bp_error_send(conn_id, BP_E_WIRING_PROFILE_TOO_LARGE, a, 2);
+}
+static inline const char *bp_note_wiring_profile_too_large(char *buf, size_t cap, int32_t bytes, int32_t max) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_WIRING_PROFILE_TOO_LARGE, a, 2);
+}
+static inline const char *bp_tag_wiring_profile_too_large(const char *text, int32_t bytes, int32_t max) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_WIRING_PROFILE_TOO_LARGE, a, 2);
 }
 /* BP0012: The wiring profile is not one JSON object */
-static inline void bp_err_wiring_not_json_object(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_WIRING_NOT_JSON_OBJECT, text, 0, 0);
+static inline void bp_err_wiring_not_json_object(int conn_id) {
+    bp_error_send(conn_id, BP_E_WIRING_NOT_JSON_OBJECT, 0, 0);
+}
+static inline const char *bp_note_wiring_not_json_object(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_WIRING_NOT_JSON_OBJECT, 0, 0);
+}
+static inline const char *bp_tag_wiring_not_json_object(const char *text) {
+    return bp_err_tag(text, BP_E_WIRING_NOT_JSON_OBJECT, 0, 0);
 }
 /* BP0013: {name} is the pod's default wiring profile and cannot be deleted */
-static inline void bp_err_wiring_delete_default(int conn_id, const char *text, const char *name) {
+static inline void bp_err_wiring_delete_default(int conn_id, const char *name) {
     const bp_err_arg_t a[] = { {"name", name, 0, 1} };
-    bp_error_send(conn_id, BP_E_WIRING_DELETE_DEFAULT, text, a, 1);
+    bp_error_send(conn_id, BP_E_WIRING_DELETE_DEFAULT, a, 1);
+}
+static inline const char *bp_note_wiring_delete_default(char *buf, size_t cap, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_WIRING_DELETE_DEFAULT, a, 1);
+}
+static inline const char *bp_tag_wiring_delete_default(const char *text, const char *name) {
+    const bp_err_arg_t a[] = { {"name", name, 0, 1} };
+    return bp_err_tag(text, BP_E_WIRING_DELETE_DEFAULT, a, 1);
 }
 /* BP0014: The wiring profile upload skipped ahead (the pod expected offset {expected}) */
-static inline void bp_err_wiring_upload_out_of_order(int conn_id, const char *text, int32_t expected) {
+static inline void bp_err_wiring_upload_out_of_order(int conn_id, int32_t expected) {
     const bp_err_arg_t a[] = { {"expected", 0, expected, 0} };
-    bp_error_send(conn_id, BP_E_WIRING_UPLOAD_OUT_OF_ORDER, text, a, 1);
+    bp_error_send(conn_id, BP_E_WIRING_UPLOAD_OUT_OF_ORDER, a, 1);
+}
+static inline const char *bp_note_wiring_upload_out_of_order(char *buf, size_t cap, int32_t expected) {
+    const bp_err_arg_t a[] = { {"expected", 0, expected, 0} };
+    return bp_err_note(buf, cap, BP_E_WIRING_UPLOAD_OUT_OF_ORDER, a, 1);
+}
+static inline const char *bp_tag_wiring_upload_out_of_order(const char *text, int32_t expected) {
+    const bp_err_arg_t a[] = { {"expected", 0, expected, 0} };
+    return bp_err_tag(text, BP_E_WIRING_UPLOAD_OUT_OF_ORDER, a, 1);
 }
 /* BP0015: The pod could not read or write its wiring profiles */
-static inline void bp_err_wiring_storage_failed(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_WIRING_STORAGE_FAILED, text, 0, 0);
+static inline void bp_err_wiring_storage_failed(int conn_id) {
+    bp_error_send(conn_id, BP_E_WIRING_STORAGE_FAILED, 0, 0);
+}
+static inline const char *bp_note_wiring_storage_failed(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_WIRING_STORAGE_FAILED, 0, 0);
+}
+static inline const char *bp_tag_wiring_storage_failed(const char *text) {
+    return bp_err_tag(text, BP_E_WIRING_STORAGE_FAILED, 0, 0);
 }
 /* BP0016: The pod cannot save now: the DAC or a capture is using the bus the storage shares */
-static inline void bp_err_storage_busy(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_STORAGE_BUSY, text, 0, 0);
+static inline void bp_err_storage_busy(int conn_id) {
+    bp_error_send(conn_id, BP_E_STORAGE_BUSY, 0, 0);
+}
+static inline const char *bp_note_storage_busy(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_STORAGE_BUSY, 0, 0);
+}
+static inline const char *bp_tag_storage_busy(const char *text) {
+    return bp_err_tag(text, BP_E_STORAGE_BUSY, 0, 0);
 }
 /* BP0017: {feature} needs gateware v{min} or later */
-static inline void bp_err_gateware_too_old(int conn_id, const char *text, const char *feature, int32_t min) {
+static inline void bp_err_gateware_too_old(int conn_id, const char *feature, int32_t min) {
     const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"min", 0, min, 0} };
-    bp_error_send(conn_id, BP_E_GATEWARE_TOO_OLD, text, a, 2);
+    bp_error_send(conn_id, BP_E_GATEWARE_TOO_OLD, a, 2);
+}
+static inline const char *bp_note_gateware_too_old(char *buf, size_t cap, const char *feature, int32_t min) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"min", 0, min, 0} };
+    return bp_err_note(buf, cap, BP_E_GATEWARE_TOO_OLD, a, 2);
+}
+static inline const char *bp_tag_gateware_too_old(const char *text, const char *feature, int32_t min) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"min", 0, min, 0} };
+    return bp_err_tag(text, BP_E_GATEWARE_TOO_OLD, a, 2);
 }
 /* BP0018: UART rx and tx are both LA{la}; a one-wire UART needs half_duplex */
-static inline void bp_err_uart_same_pin(int conn_id, const char *text, int32_t la) {
+static inline void bp_err_uart_same_pin(int conn_id, int32_t la) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0} };
-    bp_error_send(conn_id, BP_E_UART_SAME_PIN, text, a, 1);
+    bp_error_send(conn_id, BP_E_UART_SAME_PIN, a, 1);
+}
+static inline const char *bp_note_uart_same_pin(char *buf, size_t cap, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_note(buf, cap, BP_E_UART_SAME_PIN, a, 1);
+}
+static inline const char *bp_tag_uart_same_pin(const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_tag(text, BP_E_UART_SAME_PIN, a, 1);
 }
 /* BP0019: half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx} */
-static inline void bp_err_uart_half_duplex_two_pins(int conn_id, const char *text, int32_t rx, int32_t tx) {
+static inline void bp_err_uart_half_duplex_two_pins(int conn_id, int32_t rx, int32_t tx) {
     const bp_err_arg_t a[] = { {"rx", 0, rx, 0}, {"tx", 0, tx, 0} };
-    bp_error_send(conn_id, BP_E_UART_HALF_DUPLEX_TWO_PINS, text, a, 2);
+    bp_error_send(conn_id, BP_E_UART_HALF_DUPLEX_TWO_PINS, a, 2);
+}
+static inline const char *bp_note_uart_half_duplex_two_pins(char *buf, size_t cap, int32_t rx, int32_t tx) {
+    const bp_err_arg_t a[] = { {"rx", 0, rx, 0}, {"tx", 0, tx, 0} };
+    return bp_err_note(buf, cap, BP_E_UART_HALF_DUPLEX_TWO_PINS, a, 2);
+}
+static inline const char *bp_tag_uart_half_duplex_two_pins(const char *text, int32_t rx, int32_t tx) {
+    const bp_err_arg_t a[] = { {"rx", 0, rx, 0}, {"tx", 0, tx, 0} };
+    return bp_err_tag(text, BP_E_UART_HALF_DUPLEX_TWO_PINS, a, 2);
 }
 /* BP0020: The UART entry sequence needs the pod's reset pin, which this board does not have */
-static inline void bp_err_uart_entry_no_reset_pin(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_UART_ENTRY_NO_RESET_PIN, text, 0, 0);
+static inline void bp_err_uart_entry_no_reset_pin(int conn_id) {
+    bp_error_send(conn_id, BP_E_UART_ENTRY_NO_RESET_PIN, 0, 0);
+}
+static inline const char *bp_note_uart_entry_no_reset_pin(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_UART_ENTRY_NO_RESET_PIN, 0, 0);
+}
+static inline const char *bp_tag_uart_entry_no_reset_pin(const char *text) {
+    return bp_err_tag(text, BP_E_UART_ENTRY_NO_RESET_PIN, 0, 0);
 }
 /* BP0021: The UART entry option {arg} is out of range (0 to {max}) */
-static inline void bp_err_uart_entry_invalid(int conn_id, const char *text, const char *arg, int32_t max) {
+static inline void bp_err_uart_entry_invalid(int conn_id, const char *arg, int32_t max) {
     const bp_err_arg_t a[] = { {"arg", arg, 0, 1}, {"max", 0, max, 0} };
-    bp_error_send(conn_id, BP_E_UART_ENTRY_INVALID, text, a, 2);
+    bp_error_send(conn_id, BP_E_UART_ENTRY_INVALID, a, 2);
+}
+static inline const char *bp_note_uart_entry_invalid(char *buf, size_t cap, const char *arg, int32_t max) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1}, {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_UART_ENTRY_INVALID, a, 2);
+}
+static inline const char *bp_tag_uart_entry_invalid(const char *text, const char *arg, int32_t max) {
+    const bp_err_arg_t a[] = { {"arg", arg, 0, 1}, {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_UART_ENTRY_INVALID, a, 2);
 }
 /* BP0022: The UART's DE pin LA{la} is also its rx or tx */
-static inline void bp_err_uart_de_pin(int conn_id, const char *text, int32_t la) {
+static inline void bp_err_uart_de_pin(int conn_id, int32_t la) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0} };
-    bp_error_send(conn_id, BP_E_UART_DE_PIN, text, a, 1);
+    bp_error_send(conn_id, BP_E_UART_DE_PIN, a, 1);
+}
+static inline const char *bp_note_uart_de_pin(char *buf, size_t cap, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_note(buf, cap, BP_E_UART_DE_PIN, a, 1);
+}
+static inline const char *bp_tag_uart_de_pin(const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_tag(text, BP_E_UART_DE_PIN, a, 1);
 }
 /* BP0023: LA{la} has no pull resistor on this board */
-static inline void bp_err_la_no_pull(int conn_id, const char *text, int32_t la) {
+static inline void bp_err_la_no_pull(int conn_id, int32_t la) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0} };
-    bp_error_send(conn_id, BP_E_LA_NO_PULL, text, a, 1);
+    bp_error_send(conn_id, BP_E_LA_NO_PULL, a, 1);
+}
+static inline const char *bp_note_la_no_pull(char *buf, size_t cap, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_note(buf, cap, BP_E_LA_NO_PULL, a, 1);
+}
+static inline const char *bp_tag_la_no_pull(const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_tag(text, BP_E_LA_NO_PULL, a, 1);
 }
 /* BP0024: LA{la} supports pull-{have} only on this board */
-static inline void bp_err_la_pull_direction(int conn_id, const char *text, int32_t la, const char *want, const char *have) {
+static inline void bp_err_la_pull_direction(int conn_id, int32_t la, const char *want, const char *have) {
     const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
-    bp_error_send(conn_id, BP_E_LA_PULL_DIRECTION, text, a, 3);
+    bp_error_send(conn_id, BP_E_LA_PULL_DIRECTION, a, 3);
+}
+static inline const char *bp_note_la_pull_direction(char *buf, size_t cap, int32_t la, const char *want, const char *have) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PULL_DIRECTION, a, 3);
+}
+static inline const char *bp_tag_la_pull_direction(const char *text, int32_t la, const char *want, const char *have) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"want", want, 0, 1}, {"have", have, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_PULL_DIRECTION, a, 3);
 }
 /* BP0025: {holder} holds this pod ({purpose}, {left_s} s left) */
-static inline void bp_err_lease_busy(int conn_id, const char *text, const char *holder, const char *purpose, int32_t left_s) {
+static inline void bp_err_lease_busy(int conn_id, const char *holder, const char *purpose, int32_t left_s) {
     const bp_err_arg_t a[] = { {"holder", holder, 0, 1}, {"purpose", purpose, 0, 1}, {"left_s", 0, left_s, 0} };
-    bp_error_send(conn_id, BP_E_LEASE_BUSY, text, a, 3);
+    bp_error_send(conn_id, BP_E_LEASE_BUSY, a, 3);
+}
+static inline const char *bp_note_lease_busy(char *buf, size_t cap, const char *holder, const char *purpose, int32_t left_s) {
+    const bp_err_arg_t a[] = { {"holder", holder, 0, 1}, {"purpose", purpose, 0, 1}, {"left_s", 0, left_s, 0} };
+    return bp_err_note(buf, cap, BP_E_LEASE_BUSY, a, 3);
+}
+static inline const char *bp_tag_lease_busy(const char *text, const char *holder, const char *purpose, int32_t left_s) {
+    const bp_err_arg_t a[] = { {"holder", holder, 0, 1}, {"purpose", purpose, 0, 1}, {"left_s", 0, left_s, 0} };
+    return bp_err_tag(text, BP_E_LEASE_BUSY, a, 3);
 }
 /* BP0026: The pod's lease was stopped by {by} */
-static inline void bp_err_lease_lost(int conn_id, const char *text, const char *by) {
+static inline void bp_err_lease_lost(int conn_id, const char *by) {
     const bp_err_arg_t a[] = { {"by", by, 0, 1} };
-    bp_error_send(conn_id, BP_E_LEASE_LOST, text, a, 1);
+    bp_error_send(conn_id, BP_E_LEASE_LOST, a, 1);
+}
+static inline const char *bp_note_lease_lost(char *buf, size_t cap, const char *by) {
+    const bp_err_arg_t a[] = { {"by", by, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LEASE_LOST, a, 1);
+}
+static inline const char *bp_tag_lease_lost(const char *text, const char *by) {
+    const bp_err_arg_t a[] = { {"by", by, 0, 1} };
+    return bp_err_tag(text, BP_E_LEASE_LOST, a, 1);
 }
 /* BP0027: The pod holds no lease with id {id} */
-static inline void bp_err_lease_not_held(int conn_id, const char *text, const char *id) {
+static inline void bp_err_lease_not_held(int conn_id, const char *id) {
     const bp_err_arg_t a[] = { {"id", id, 0, 1} };
-    bp_error_send(conn_id, BP_E_LEASE_NOT_HELD, text, a, 1);
+    bp_error_send(conn_id, BP_E_LEASE_NOT_HELD, a, 1);
+}
+static inline const char *bp_note_lease_not_held(char *buf, size_t cap, const char *id) {
+    const bp_err_arg_t a[] = { {"id", id, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LEASE_NOT_HELD, a, 1);
+}
+static inline const char *bp_tag_lease_not_held(const char *text, const char *id) {
+    const bp_err_arg_t a[] = { {"id", id, 0, 1} };
+    return bp_err_tag(text, BP_E_LEASE_NOT_HELD, a, 1);
 }
 /* BP0028: 5 V did not come up on pin 21 ({mv} mV) */
-static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t mv) {
+static inline void bp_err_vref_5v_missing(int conn_id, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
-    bp_error_send(conn_id, BP_E_VREF_5V_MISSING, text, a, 1);
+    bp_error_send(conn_id, BP_E_VREF_5V_MISSING, a, 1);
+}
+static inline const char *bp_note_vref_5v_missing(char *buf, size_t cap, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    return bp_err_note(buf, cap, BP_E_VREF_5V_MISSING, a, 1);
+}
+static inline const char *bp_tag_vref_5v_missing(const char *text, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    return bp_err_tag(text, BP_E_VREF_5V_MISSING, a, 1);
 }
 /* BP0029: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
-static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t mv) {
+static inline void bp_err_pull_rail_down(int conn_id, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
-    bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, text, a, 1);
+    bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, a, 1);
 }
-/* BP0030: This client is too old for the pod's firmware: it needs client API {min_client_api} or newer (this client sent {client_api}) */
-static inline void bp_err_client_too_old(int conn_id, const char *text, int32_t client_api, int32_t min_client_api, int32_t api) {
+static inline const char *bp_note_pull_rail_down(char *buf, size_t cap, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    return bp_err_note(buf, cap, BP_E_PULL_RAIL_DOWN, a, 1);
+}
+static inline const char *bp_tag_pull_rail_down(const char *text, int32_t mv) {
+    const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
+    return bp_err_tag(text, BP_E_PULL_RAIL_DOWN, a, 1);
+}
+/* BP0030: Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) */
+static inline void bp_err_client_too_old(int conn_id, int32_t client_api, int32_t min_client_api, int32_t api) {
     const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
-    bp_error_send(conn_id, BP_E_CLIENT_TOO_OLD, text, a, 3);
+    bp_error_send(conn_id, BP_E_CLIENT_TOO_OLD, a, 3);
 }
-/* BP0031: USB host mode cannot start over the pod's own USB link */
-static inline void bp_err_usb_host_over_usb(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_USB_HOST_OVER_USB, text, 0, 0);
+static inline const char *bp_note_client_too_old(char *buf, size_t cap, int32_t client_api, int32_t min_client_api, int32_t api) {
+    const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
+    return bp_err_note(buf, cap, BP_E_CLIENT_TOO_OLD, a, 3);
 }
-/* BP0032: This pod has no USB host port {port} */
-static inline void bp_err_usb_host_port_unavailable(int conn_id, const char *text, const char *port) {
+static inline const char *bp_tag_client_too_old(const char *text, int32_t client_api, int32_t min_client_api, int32_t api) {
+    const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
+    return bp_err_tag(text, BP_E_CLIENT_TOO_OLD, a, 3);
+}
+/* BP0031: LA{la} is in use by {owner} */
+static inline void bp_err_la_pin_in_use(int conn_id, int32_t la, const char *owner, const char *function, const char *instance) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"owner", owner, 0, 1}, {"function", function, 0, 1}, {"instance", instance, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PIN_IN_USE, a, 4);
+}
+static inline const char *bp_note_la_pin_in_use(char *buf, size_t cap, int32_t la, const char *owner, const char *function, const char *instance) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"owner", owner, 0, 1}, {"function", function, 0, 1}, {"instance", instance, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PIN_IN_USE, a, 4);
+}
+static inline const char *bp_tag_la_pin_in_use(const char *text, int32_t la, const char *owner, const char *function, const char *instance) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"owner", owner, 0, 1}, {"function", function, 0, 1}, {"instance", instance, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_PIN_IN_USE, a, 4);
+}
+/* BP0032: LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) */
+static inline void bp_err_la_pull_down_engaged(int conn_id, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PULL_DOWN_ENGAGED, a, 4);
+}
+static inline const char *bp_note_la_pull_down_engaged(char *buf, size_t cap, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PULL_DOWN_ENGAGED, a, 4);
+}
+static inline const char *bp_tag_la_pull_down_engaged(const char *text, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_PULL_DOWN_ENGAGED, a, 4);
+}
+/* BP0033: LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason}) */
+static inline void bp_err_la_pull_down_conflict(int conn_id, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PULL_DOWN_CONFLICT, a, 4);
+}
+static inline const char *bp_note_la_pull_down_conflict(char *buf, size_t cap, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PULL_DOWN_CONFLICT, a, 4);
+}
+static inline const char *bp_tag_la_pull_down_conflict(const char *text, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_PULL_DOWN_CONFLICT, a, 4);
+}
+/* BP0034: LA{la} is wired to a DUT output, and {function} would drive against it */
+static inline void bp_err_la_dut_output(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_DUT_OUTPUT, a, 2);
+}
+static inline const char *bp_note_la_dut_output(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_DUT_OUTPUT, a, 2);
+}
+static inline const char *bp_tag_la_dut_output(const char *text, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_DUT_OUTPUT, a, 2);
+}
+/* BP0035: LA{la} is driven by {function}, so it cannot be marked as a DUT output */
+static inline void bp_err_la_driven_pin(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_DRIVEN_PIN, a, 2);
+}
+static inline const char *bp_note_la_driven_pin(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_DRIVEN_PIN, a, 2);
+}
+static inline const char *bp_tag_la_driven_pin(const char *text, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_DRIVEN_PIN, a, 2);
+}
+/* BP0036: LA{la} is not a GPIO output (it is {function}) */
+static inline void bp_err_la_not_gpio_output(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_NOT_GPIO_OUTPUT, a, 2);
+}
+static inline const char *bp_note_la_not_gpio_output(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_NOT_GPIO_OUTPUT, a, 2);
+}
+static inline const char *bp_tag_la_not_gpio_output(const char *text, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_NOT_GPIO_OUTPUT, a, 2);
+}
+/* BP0037: The I/O voltage cannot change while pins are in use: {pins} */
+static inline void bp_err_la_voltage_pins_in_use(int conn_id, const char *pins) {
+    const bp_err_arg_t a[] = { {"pins", pins, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_VOLTAGE_PINS_IN_USE, a, 1);
+}
+static inline const char *bp_note_la_voltage_pins_in_use(char *buf, size_t cap, const char *pins) {
+    const bp_err_arg_t a[] = { {"pins", pins, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_VOLTAGE_PINS_IN_USE, a, 1);
+}
+static inline const char *bp_tag_la_voltage_pins_in_use(const char *text, const char *pins) {
+    const bp_err_arg_t a[] = { {"pins", pins, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_VOLTAGE_PINS_IN_USE, a, 1);
+}
+/* BP0038: No {edge} edge on LA{la} within {timeout_ms} ms */
+static inline void bp_err_trigger_timeout(int conn_id, int32_t la, const char *edge, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"edge", edge, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    bp_error_send(conn_id, BP_E_TRIGGER_TIMEOUT, a, 3);
+}
+static inline const char *bp_note_trigger_timeout(char *buf, size_t cap, int32_t la, const char *edge, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"edge", edge, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    return bp_err_note(buf, cap, BP_E_TRIGGER_TIMEOUT, a, 3);
+}
+static inline const char *bp_tag_trigger_timeout(const char *text, int32_t la, const char *edge, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"edge", edge, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    return bp_err_tag(text, BP_E_TRIGGER_TIMEOUT, a, 3);
+}
+/* BP0039: No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus */
+static inline void bp_err_sensor_trigger_timeout(int conn_id, int32_t la, const char *instance, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"instance", instance, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    bp_error_send(conn_id, BP_E_SENSOR_TRIGGER_TIMEOUT, a, 3);
+}
+static inline const char *bp_note_sensor_trigger_timeout(char *buf, size_t cap, int32_t la, const char *instance, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"instance", instance, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    return bp_err_note(buf, cap, BP_E_SENSOR_TRIGGER_TIMEOUT, a, 3);
+}
+static inline const char *bp_tag_sensor_trigger_timeout(const char *text, int32_t la, const char *instance, int32_t timeout_ms) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"instance", instance, 0, 1}, {"timeout_ms", 0, timeout_ms, 0} };
+    return bp_err_tag(text, BP_E_SENSOR_TRIGGER_TIMEOUT, a, 3);
+}
+/* BP0040: The pod's LAN is locked: {cmd} needs the cloud or USB */
+static inline void bp_err_lan_locked(int conn_id, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    bp_error_send(conn_id, BP_E_LAN_LOCKED, a, 1);
+}
+static inline const char *bp_note_lan_locked(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LAN_LOCKED, a, 1);
+}
+static inline const char *bp_tag_lan_locked(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_LAN_LOCKED, a, 1);
+}
+/* BP0041: {setting} cannot be changed over the LAN: change it from the cloud or the USB console */
+static inline void bp_err_policy_not_from_lan(int conn_id, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    bp_error_send(conn_id, BP_E_POLICY_NOT_FROM_LAN, a, 1);
+}
+static inline const char *bp_note_policy_not_from_lan(char *buf, size_t cap, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_POLICY_NOT_FROM_LAN, a, 1);
+}
+static inline const char *bp_tag_policy_not_from_lan(const char *text, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_tag(text, BP_E_POLICY_NOT_FROM_LAN, a, 1);
+}
+/* BP0042: {setting} cannot be changed over the LAN: change it from the cloud or over USB */
+static inline void bp_err_setting_cloud_or_usb(int conn_id, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    bp_error_send(conn_id, BP_E_SETTING_CLOUD_OR_USB, a, 1);
+}
+static inline const char *bp_note_setting_cloud_or_usb(char *buf, size_t cap, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_SETTING_CLOUD_OR_USB, a, 1);
+}
+static inline const char *bp_tag_setting_cloud_or_usb(const char *text, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_tag(text, BP_E_SETTING_CLOUD_OR_USB, a, 1);
+}
+/* BP0043: {setting} can only be changed on the device: the USB console, or over the USB link */
+static inline void bp_err_setting_device_only(int conn_id, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    bp_error_send(conn_id, BP_E_SETTING_DEVICE_ONLY, a, 1);
+}
+static inline const char *bp_note_setting_device_only(char *buf, size_t cap, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_SETTING_DEVICE_ONLY, a, 1);
+}
+static inline const char *bp_tag_setting_device_only(const char *text, const char *setting) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
+    return bp_err_tag(text, BP_E_SETTING_DEVICE_ONLY, a, 1);
+}
+/* BP0045: {cmd} needs an organization owner or admin */
+static inline void bp_err_role_required(int conn_id, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    bp_error_send(conn_id, BP_E_ROLE_REQUIRED, a, 1);
+}
+static inline const char *bp_note_role_required(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_ROLE_REQUIRED, a, 1);
+}
+static inline const char *bp_tag_role_required(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_ROLE_REQUIRED, a, 1);
+}
+/* BP0046: This BenchPod has no analog front end, so it cannot run {cmd} */
+static inline void bp_err_no_analog_front_end(int conn_id, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    bp_error_send(conn_id, BP_E_NO_ANALOG_FRONT_END, a, 1);
+}
+static inline const char *bp_note_no_analog_front_end(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_NO_ANALOG_FRONT_END, a, 1);
+}
+static inline const char *bp_tag_no_analog_front_end(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_NO_ANALOG_FRONT_END, a, 1);
+}
+/* BP0047: The pod is running another long command (a capture, measurement, upload or update) */
+static inline void bp_err_pod_busy(int conn_id) {
+    bp_error_send(conn_id, BP_E_POD_BUSY, 0, 0);
+}
+static inline const char *bp_note_pod_busy(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_POD_BUSY, 0, 0);
+}
+static inline const char *bp_tag_pod_busy(const char *text) {
+    return bp_err_tag(text, BP_E_POD_BUSY, 0, 0);
+}
+/* BP0048: The pod's storage bus is in use: {what} */
+static inline void bp_err_storage_bus_busy(int conn_id, const char *what) {
+    const bp_err_arg_t a[] = { {"what", what, 0, 1} };
+    bp_error_send(conn_id, BP_E_STORAGE_BUS_BUSY, a, 1);
+}
+static inline const char *bp_note_storage_bus_busy(char *buf, size_t cap, const char *what) {
+    const bp_err_arg_t a[] = { {"what", what, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_STORAGE_BUS_BUSY, a, 1);
+}
+static inline const char *bp_tag_storage_bus_busy(const char *text, const char *what) {
+    const bp_err_arg_t a[] = { {"what", what, 0, 1} };
+    return bp_err_tag(text, BP_E_STORAGE_BUS_BUSY, a, 1);
+}
+/* BP0049: A UART session is already open */
+static inline void bp_err_uart_session_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_UART_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_note_uart_session_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_UART_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_tag_uart_session_open(const char *text) {
+    return bp_err_tag(text, BP_E_UART_SESSION_OPEN, 0, 0);
+}
+/* BP0050: An SWD session is already running */
+static inline void bp_err_swd_session_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_SWD_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_note_swd_session_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_SWD_SESSION_OPEN, 0, 0);
+}
+static inline const char *bp_tag_swd_session_open(const char *text) {
+    return bp_err_tag(text, BP_E_SWD_SESSION_OPEN, 0, 0);
+}
+/* BP0051: A {target} update from {holder} is in progress */
+static inline void bp_err_update_in_progress(int conn_id, const char *target, const char *holder) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1}, {"holder", holder, 0, 1} };
+    bp_error_send(conn_id, BP_E_UPDATE_IN_PROGRESS, a, 2);
+}
+static inline const char *bp_note_update_in_progress(char *buf, size_t cap, const char *target, const char *holder) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1}, {"holder", holder, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_UPDATE_IN_PROGRESS, a, 2);
+}
+static inline const char *bp_tag_update_in_progress(const char *text, const char *target, const char *holder) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1}, {"holder", holder, 0, 1} };
+    return bp_err_tag(text, BP_E_UPDATE_IN_PROGRESS, a, 2);
+}
+/* BP0052: The pod is still running the previous cloud command */
+static inline void bp_err_cloud_command_busy(int conn_id) {
+    bp_error_send(conn_id, BP_E_CLOUD_COMMAND_BUSY, 0, 0);
+}
+static inline const char *bp_note_cloud_command_busy(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_CLOUD_COMMAND_BUSY, 0, 0);
+}
+static inline const char *bp_tag_cloud_command_busy(const char *text) {
+    return bp_err_tag(text, BP_E_CLOUD_COMMAND_BUSY, 0, 0);
+}
+/* BP0053: The reply did not fit the pod's reply buffer */
+static inline void bp_err_reply_too_large(int conn_id) {
+    bp_error_send(conn_id, BP_E_REPLY_TOO_LARGE, 0, 0);
+}
+static inline const char *bp_note_reply_too_large(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_REPLY_TOO_LARGE, 0, 0);
+}
+static inline const char *bp_tag_reply_too_large(const char *text) {
+    return bp_err_tag(text, BP_E_REPLY_TOO_LARGE, 0, 0);
+}
+/* BP0054: The reply is too large for the cloud channel ({bytes} bytes, limit {limit}) */
+static inline void bp_err_cloud_reply_too_large(int conn_id, int32_t bytes, int32_t limit) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"limit", 0, limit, 0} };
+    bp_error_send(conn_id, BP_E_CLOUD_REPLY_TOO_LARGE, a, 2);
+}
+static inline const char *bp_note_cloud_reply_too_large(char *buf, size_t cap, int32_t bytes, int32_t limit) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"limit", 0, limit, 0} };
+    return bp_err_note(buf, cap, BP_E_CLOUD_REPLY_TOO_LARGE, a, 2);
+}
+static inline const char *bp_tag_cloud_reply_too_large(const char *text, int32_t bytes, int32_t limit) {
+    const bp_err_arg_t a[] = { {"bytes", 0, bytes, 0}, {"limit", 0, limit, 0} };
+    return bp_err_tag(text, BP_E_CLOUD_REPLY_TOO_LARGE, a, 2);
+}
+/* BP0055: The pod has no emulated sensor {instance} */
+static inline void bp_err_sensor_instance_unknown(int conn_id, const char *instance) {
+    const bp_err_arg_t a[] = { {"instance", instance, 0, 1} };
+    bp_error_send(conn_id, BP_E_SENSOR_INSTANCE_UNKNOWN, a, 1);
+}
+static inline const char *bp_note_sensor_instance_unknown(char *buf, size_t cap, const char *instance) {
+    const bp_err_arg_t a[] = { {"instance", instance, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_SENSOR_INSTANCE_UNKNOWN, a, 1);
+}
+static inline const char *bp_tag_sensor_instance_unknown(const char *text, const char *instance) {
+    const bp_err_arg_t a[] = { {"instance", instance, 0, 1} };
+    return bp_err_tag(text, BP_E_SENSOR_INSTANCE_UNKNOWN, a, 1);
+}
+/* BP0056: This BenchPod has no module link, so it cannot run {cmd} */
+static inline void bp_err_no_module_link(int conn_id, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    bp_error_send(conn_id, BP_E_NO_MODULE_LINK, a, 1);
+}
+static inline const char *bp_note_no_module_link(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_NO_MODULE_LINK, a, 1);
+}
+static inline const char *bp_tag_no_module_link(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_NO_MODULE_LINK, a, 1);
+}
+/* BP0057: The emulated sensors {sensors} need the emulation image; stop them before switching */
+static inline void bp_err_image_switch_sensors_running(int conn_id, const char *sensors) {
+    const bp_err_arg_t a[] = { {"sensors", sensors, 0, 1} };
+    bp_error_send(conn_id, BP_E_IMAGE_SWITCH_SENSORS_RUNNING, a, 1);
+}
+static inline const char *bp_note_image_switch_sensors_running(char *buf, size_t cap, const char *sensors) {
+    const bp_err_arg_t a[] = { {"sensors", sensors, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_IMAGE_SWITCH_SENSORS_RUNNING, a, 1);
+}
+static inline const char *bp_tag_image_switch_sensors_running(const char *text, const char *sensors) {
+    const bp_err_arg_t a[] = { {"sensors", sensors, 0, 1} };
+    return bp_err_tag(text, BP_E_IMAGE_SWITCH_SENSORS_RUNNING, a, 1);
+}
+/* BP0058: {feature} is not in the running gateware image; it needs the {image} image */
+static inline void bp_err_fpga_image_required(int conn_id, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    bp_error_send(conn_id, BP_E_FPGA_IMAGE_REQUIRED, a, 2);
+}
+static inline const char *bp_note_fpga_image_required(char *buf, size_t cap, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_FPGA_IMAGE_REQUIRED, a, 2);
+}
+static inline const char *bp_tag_fpga_image_required(const char *text, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    return bp_err_tag(text, BP_E_FPGA_IMAGE_REQUIRED, a, 2);
+}
+/* BP0059: {feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image */
+static inline void bp_err_fpga_image_sensors_first(int conn_id, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    bp_error_send(conn_id, BP_E_FPGA_IMAGE_SENSORS_FIRST, a, 2);
+}
+static inline const char *bp_note_fpga_image_sensors_first(char *buf, size_t cap, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_FPGA_IMAGE_SENSORS_FIRST, a, 2);
+}
+static inline const char *bp_tag_fpga_image_sensors_first(const char *text, const char *feature, const char *image) {
+    const bp_err_arg_t a[] = { {"feature", feature, 0, 1}, {"image", image, 0, 1} };
+    return bp_err_tag(text, BP_E_FPGA_IMAGE_SENSORS_FIRST, a, 2);
+}
+/* BP0060: {target} is not an update target this firmware knows */
+static inline void bp_err_ota_unknown_target(int conn_id, const char *target) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1} };
+    bp_error_send(conn_id, BP_E_OTA_UNKNOWN_TARGET, a, 1);
+}
+static inline const char *bp_note_ota_unknown_target(char *buf, size_t cap, const char *target) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_OTA_UNKNOWN_TARGET, a, 1);
+}
+static inline const char *bp_tag_ota_unknown_target(const char *text, const char *target) {
+    const bp_err_arg_t a[] = { {"target", target, 0, 1} };
+    return bp_err_tag(text, BP_E_OTA_UNKNOWN_TARGET, a, 1);
+}
+/* BP0061: I2C needs pull-ups: LA{la} has none switched on */
+static inline void bp_err_i2c_needs_pullups(int conn_id, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    bp_error_send(conn_id, BP_E_I2C_NEEDS_PULLUPS, a, 1);
+}
+static inline const char *bp_note_i2c_needs_pullups(char *buf, size_t cap, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_note(buf, cap, BP_E_I2C_NEEDS_PULLUPS, a, 1);
+}
+static inline const char *bp_tag_i2c_needs_pullups(const char *text, int32_t la) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0} };
+    return bp_err_tag(text, BP_E_I2C_NEEDS_PULLUPS, a, 1);
+}
+/* BP0062: No I2C session is open */
+static inline void bp_err_i2c_session_not_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_I2C_SESSION_NOT_OPEN, 0, 0);
+}
+static inline const char *bp_note_i2c_session_not_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_I2C_SESSION_NOT_OPEN, 0, 0);
+}
+static inline const char *bp_tag_i2c_session_not_open(const char *text) {
+    return bp_err_tag(text, BP_E_I2C_SESSION_NOT_OPEN, 0, 0);
+}
+/* BP0063: The I2C engine was reset, which ended the session */
+static inline void bp_err_i2c_engine_reset(int conn_id) {
+    bp_error_send(conn_id, BP_E_I2C_ENGINE_RESET, 0, 0);
+}
+static inline const char *bp_note_i2c_engine_reset(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_I2C_ENGINE_RESET, 0, 0);
+}
+static inline const char *bp_tag_i2c_engine_reset(const char *text) {
+    return bp_err_tag(text, BP_E_I2C_ENGINE_RESET, 0, 0);
+}
+/* BP0064: The sweep input cannot be combined with an input map on this gateware */
+static inline void bp_err_loop_sweep_with_map(int conn_id) {
+    bp_error_send(conn_id, BP_E_LOOP_SWEEP_WITH_MAP, 0, 0);
+}
+static inline const char *bp_note_loop_sweep_with_map(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_LOOP_SWEEP_WITH_MAP, 0, 0);
+}
+static inline const char *bp_tag_loop_sweep_with_map(const char *text) {
+    return bp_err_tag(text, BP_E_LOOP_SWEEP_WITH_MAP, 0, 0);
+}
+/* BP0065: The {output} output is played by the emulated sensor {instance} */
+static inline void bp_err_output_used_by_sensor(int conn_id, const char *output, const char *instance) {
+    const bp_err_arg_t a[] = { {"output", output, 0, 1}, {"instance", instance, 0, 1} };
+    bp_error_send(conn_id, BP_E_OUTPUT_USED_BY_SENSOR, a, 2);
+}
+static inline const char *bp_note_output_used_by_sensor(char *buf, size_t cap, const char *output, const char *instance) {
+    const bp_err_arg_t a[] = { {"output", output, 0, 1}, {"instance", instance, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_OUTPUT_USED_BY_SENSOR, a, 2);
+}
+static inline const char *bp_tag_output_used_by_sensor(const char *text, const char *output, const char *instance) {
+    const bp_err_arg_t a[] = { {"output", output, 0, 1}, {"instance", instance, 0, 1} };
+    return bp_err_tag(text, BP_E_OUTPUT_USED_BY_SENSOR, a, 2);
+}
+/* BP0066: A step pulse train is running */
+static inline void bp_err_step_busy(int conn_id) {
+    bp_error_send(conn_id, BP_E_STEP_BUSY, 0, 0);
+}
+static inline const char *bp_note_step_busy(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_STEP_BUSY, 0, 0);
+}
+static inline const char *bp_tag_step_busy(const char *text) {
+    return bp_err_tag(text, BP_E_STEP_BUSY, 0, 0);
+}
+/* BP0067: samples must be 1 to {max} for this capture */
+static inline void bp_err_samples_out_of_range(int conn_id, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+static inline const char *bp_note_samples_out_of_range(char *buf, size_t cap, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+static inline const char *bp_tag_samples_out_of_range(const char *text, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+/* BP0068: LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples */
+static inline void bp_err_la_rate_above_ceiling(int conn_id, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    bp_error_send(conn_id, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+static inline const char *bp_note_la_rate_above_ceiling(char *buf, size_t cap, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    return bp_err_note(buf, cap, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+static inline const char *bp_tag_la_rate_above_ceiling(const char *text, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    return bp_err_tag(text, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+/* BP0069: LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples */
+static inline void bp_err_la_rate_too_deep(int conn_id, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+static inline const char *bp_note_la_rate_too_deep(char *buf, size_t cap, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+static inline const char *bp_tag_la_rate_too_deep(const char *text, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+/* BP0070: capture_dual takes at most {la_max} LA and {adc_max} ADC samples */
+static inline void bp_err_capture_dual_too_deep(int conn_id, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    bp_error_send(conn_id, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+static inline const char *bp_note_capture_dual_too_deep(char *buf, size_t cap, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    return bp_err_note(buf, cap, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+static inline const char *bp_tag_capture_dual_too_deep(const char *text, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    return bp_err_tag(text, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+/* BP0071: The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s */
+static inline void bp_err_capture_overflowed(int conn_id, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    bp_error_send(conn_id, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+static inline const char *bp_note_capture_overflowed(char *buf, size_t cap, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    return bp_err_note(buf, cap, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+static inline const char *bp_tag_capture_overflowed(const char *text, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    return bp_err_tag(text, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+/* BP0072: The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM */
+static inline void bp_err_psram_too_small(int conn_id) {
+    bp_error_send(conn_id, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+static inline const char *bp_note_psram_too_small(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+static inline const char *bp_tag_psram_too_small(const char *text) {
+    return bp_err_tag(text, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+/* BP0073: The combined sample rate is more than the PSRAM bus can take */
+static inline void bp_err_psram_bandwidth(int conn_id) {
+    bp_error_send(conn_id, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+static inline const char *bp_note_psram_bandwidth(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+static inline const char *bp_tag_psram_bandwidth(const char *text) {
+    return bp_err_tag(text, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+/* BP0074: {setting} cannot be set to {want}: this firmware installs only signed images */
+static inline void bp_err_signatures_always_required(int conn_id, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    bp_error_send(conn_id, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+static inline const char *bp_note_signatures_always_required(char *buf, size_t cap, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+static inline const char *bp_tag_signatures_always_required(const char *text, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    return bp_err_tag(text, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+/* BP0075: The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off */
+static inline void bp_err_lan_plaintext_off(int conn_id) {
+    bp_error_send(conn_id, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+static inline const char *bp_note_lan_plaintext_off(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+static inline const char *bp_tag_lan_plaintext_off(const char *text) {
+    return bp_err_tag(text, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+/* BP0076: USB host mode cannot start over the pod's own USB link */
+static inline void bp_err_usb_host_over_usb(int conn_id) {
+    bp_error_send(conn_id, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+static inline const char *bp_note_usb_host_over_usb(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+static inline const char *bp_tag_usb_host_over_usb(const char *text) {
+    return bp_err_tag(text, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+/* BP0077: This pod has no USB host port {port} */
+static inline void bp_err_usb_host_port_unavailable(int conn_id, const char *port) {
     const bp_err_arg_t a[] = { {"port", port, 0, 1} };
-    bp_error_send(conn_id, BP_E_USB_HOST_PORT_UNAVAILABLE, text, a, 1);
+    bp_error_send(conn_id, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
 }
-/* BP0033: USB host mode needs the pod's crystal clock, which is not running */
-static inline void bp_err_usb_host_no_crystal(int conn_id, const char *text) {
-    bp_error_send(conn_id, BP_E_USB_HOST_NO_CRYSTAL, text, 0, 0);
-}
-/* BP0034: USB host mode is already running on {port} */
-static inline void bp_err_usb_host_other_port(int conn_id, const char *text, const char *port) {
+static inline const char *bp_note_usb_host_port_unavailable(char *buf, size_t cap, const char *port) {
     const bp_err_arg_t a[] = { {"port", port, 0, 1} };
-    bp_error_send(conn_id, BP_E_USB_HOST_OTHER_PORT, text, a, 1);
+    return bp_err_note(buf, cap, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
 }
-/* BP0035: The DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts */
-static inline void bp_err_dac_pinout_mismatch(int conn_id, const char *text, const char *digital, const char *module) {
-    const bp_err_arg_t a[] = { {"digital", digital, 0, 1}, {"module", module, 0, 1} };
-    bp_error_send(conn_id, BP_E_DAC_PINOUT_MISMATCH, text, a, 2);
+static inline const char *bp_tag_usb_host_port_unavailable(const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
+}
+/* BP0078: USB host mode needs the pod's crystal clock, which is not running */
+static inline void bp_err_usb_host_no_crystal(int conn_id) {
+    bp_error_send(conn_id, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+static inline const char *bp_note_usb_host_no_crystal(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+static inline const char *bp_tag_usb_host_no_crystal(const char *text) {
+    return bp_err_tag(text, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+/* BP0079: USB host mode is already running on {port} */
+static inline void bp_err_usb_host_other_port(int conn_id, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+static inline const char *bp_note_usb_host_other_port(char *buf, size_t cap, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+static inline const char *bp_tag_usb_host_other_port(const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+/* BP0080: {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts */
+static inline void bp_err_dac_pinout_mismatch(int conn_id, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    bp_error_send(conn_id, BP_E_DAC_PINOUT_MISMATCH, a, 3);
+}
+static inline const char *bp_note_dac_pinout_mismatch(char *buf, size_t cap, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_DAC_PINOUT_MISMATCH, a, 3);
+}
+static inline const char *bp_tag_dac_pinout_mismatch(const char *text, const char *cmd, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    return bp_err_tag(text, BP_E_DAC_PINOUT_MISMATCH, a, 3);
 }
 
 #endif /* BP_ERRORS_H */

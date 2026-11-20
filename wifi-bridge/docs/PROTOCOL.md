@@ -370,7 +370,7 @@ out through `netif->linkoutput`). What it does:
   signs every request, verifies every signed answer, retries three times with a new COUNTER,
   and resyncs after either side reboots.
 - Polls STATUS every 10 s (which also confirms a bridge firmware update on trial).
-- `wifi_set` / `wifi_clear` / `wifi_status` (JSON) and `wifi-set` / `wifi-clear` / `wifi-show`
+- `wifi_set` / `wifi_clear` / `wifi_status` (JSON) and `wifi-set` / `wifi-show` / `net-reset`
   (USB console) go to the bridge while one is present and no built-in Wi-Fi is configured;
   built-in Wi-Fi wins, and the pod then takes no address over Ethernet while a bridge is present
   (`wifi_bridge_ignored`; pairing and updates carry on); `wifi-scan` lists networks for a picker;

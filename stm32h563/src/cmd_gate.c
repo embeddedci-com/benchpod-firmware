@@ -1,6 +1,7 @@
 #include "cmd_gate.h"
 #include "cmd_table.h"
 #include "bp_json.h"
+#include "bp_errors.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,46 +44,23 @@ bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api
     return (uint32_t)n >= min_api;
 }
 
-const char *cmd_gate_client_api_text(const char *json, int32_t sent, uint32_t min_api,
-                                     char *why, size_t why_cap) {
-    /* One byte more than allowed, so a longer name shows as too long and is left out. */
-    char client[CMD_GATE_CLIENT_MAX + 2] = {0};
-    if (!json || !bp_json_get_top(json, "client", client, sizeof(client)) ||
-        strlen(client) > CMD_GATE_CLIENT_MAX)
-        client[0] = '\0';
-    for (const char *p = client; *p; p++)
-        if (*p < 0x20 || *p > 0x7e) { client[0] = '\0'; break; }
-    snprintf(why, why_cap,
-             "update the BenchPod SDK, MCP or CLI%s%s%s: this firmware needs client API %lu or newer "
-             "(this client sent %ld)",
-             client[0] ? " (" : "", client, client[0] ? ")" : "",
-             (unsigned long)min_api, (long)sent);
-    return why;
-}
-
 const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap) {
     /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and
        USB, and a cloud tunnel never goes above what the server allowed its user. */
     if (tier >= CMD_TIER_T2 && ctx->src == POLICY_SRC_LAN && !ctx->usb_link &&
         ctx->lan_policy != POD_LAN_OPEN) {
-        snprintf(why, why_cap, "locked: %s needs the cloud or USB", cmd);
-        return why;
+        return bp_note_lan_locked(why, why_cap, cmd);
     }
     /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
     if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_tier_light_of(d, json) &&
         !cmd_has(d, CMD_F_LEASE)) {   /* lease_acquire answers busy with the holder */
-        /* The format is spelled out, not built from CMD_GATE_CLOUD_LEASE_TEXT: host tools
-           (benchpod-cli internal/fwrefusals) look for this exact text in the source. The
-           _Static_assert below keeps the two in step. */
-        snprintf(why, why_cap, "busy: a cloud job holds this pod (%s, %lu s left)",
-                 ctx->lease_holder && ctx->lease_holder[0] ? ctx->lease_holder : "cloud",
-                 (unsigned long)ctx->lease_left_s);
-        return why;
+        return bp_note_lease_busy(why, why_cap, CMD_GATE_CLOUD_LEASE_HOLDER,
+                                  ctx->lease_holder && ctx->lease_holder[0] ? ctx->lease_holder : "cloud",
+                                  (int32_t)ctx->lease_left_s);
     }
     if (ctx->tunnel_max_tier >= 0 && (int)tier > ctx->tunnel_max_tier) {
-        snprintf(why, why_cap, "forbidden: %s needs an organization owner or admin", cmd);
-        return why;
+        return bp_note_role_required(why, why_cap, cmd);
     }
 
     return cmd_gate_device_row(d, json, ctx->skip_hw, ctx->has_analog);
@@ -102,15 +80,12 @@ const char *cmd_gate_device_row(const cmd_desc_t *d, const char *json, bool skip
             char n[16] = {0};
             adc_capture = json && bp_json_get(json, "adc_samples", n, sizeof(n)) && atoi(n) > 0;
         }
-        if (adc_capture || cmd_has(d, CMD_F_ANALOG))
-            return "this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. "
-                   "Restart the pod after fitting an analog add-on";
+        if (adc_capture || cmd_has(d, CMD_F_ANALOG)) {
+            /* SCPI shows this text to a person, so it keeps its words; JSON sends BP0046. */
+            static const char k_no_analog[] = "this BenchPod has no analog front end (digital board): "
+                "no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on";
+            return bp_tag_no_analog_front_end(k_no_analog, d ? d->key.name : "");
+        }
     }
     return NULL;
 }
-
-/* The pinned cloud-lease format above starts with the text dispatch_line keys on. */
-_Static_assert(sizeof("busy: a cloud job holds this pod (%s, %lu s left)") > sizeof(CMD_GATE_CLOUD_LEASE_TEXT) &&
-               __builtin_memcmp("busy: a cloud job holds this pod", CMD_GATE_CLOUD_LEASE_TEXT,
-                                sizeof(CMD_GATE_CLOUD_LEASE_TEXT) - 1) == 0,
-               "cmd_gate.c: the cloud-lease format must start with CMD_GATE_CLOUD_LEASE_TEXT");

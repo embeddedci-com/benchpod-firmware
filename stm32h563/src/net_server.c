@@ -48,6 +48,7 @@
 #include "lwip/altcp_tls.h"
 #include "altcp_tls_bp/altcp_tls_bp.h"
 #include "lan_tls.h"
+#include "bp_features.h"   /* BP_API: the mDNS TXT api= */
 #include "lwip/timeouts.h"
 
 #include "lwip/dhcp.h"
@@ -99,6 +100,8 @@ static struct altcp_pcb *conn_pcb[NET_MAX_CONN];
 static struct altcp_tls_config *s_conn_tls[NET_MAX_CONN];
 static bool s_conn_refused[NET_MAX_CONN];   /* srv_recv refused data (TLS: kick when room) */
 static volatile int8_t s_https_req = -1;    /* -1 none, else the new HTTPS-only setting */
+static bool s_scpi;                         /* the net task's copy (pod_policy_scpi) */
+static volatile int8_t s_scpi_req = -1;     /* -1 none, else the new SCPI setting */
 static bool s_https_only;                   /* the net task's copy (pod_policy_https_only) */
 
 /* ---- worker -> net requests (the worker task can't touch lwIP) ------------
@@ -496,7 +499,9 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
        (lwIP alone is weak host: any address on any interface). */
     bool usb = ip4_addr_eq(ip_2_ip4(altcp_get_ip(newpcb, 1)), netif_ip4_addr(&s_usb_netif));
     if (!usb && !s_lan_up) { altcp_abort(newpcb); return ERR_ABRT; }
-    if (!tls && !usb && s_https_only) { altcp_abort(newpcb); return ERR_ABRT; }
+    /* HTTPS-only (the default from 4.0.0): plaintext :8080 from the external LAN only for SCPI,
+       when that is on (command_handler_transport refuses JSON there). */
+    if (!tls && !usb && s_https_only && !s_scpi) { altcp_abort(newpcb); return ERR_ABRT; }
     if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS ||
                 xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_HANDSHAKE_HEAP)) {
         LOG_W("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
@@ -1034,6 +1039,9 @@ static void mdns_txt(struct mdns_service *svc, void *arg)
     }
     n = snprintf(kv, sizeof(kv), "https_only=%d", s_https_only ? 1 : 0);
     mdns_resp_add_service_txtitem(svc, kv, n);
+    /* The client API level (features.toml api), so a client can tell before it connects. */
+    n = snprintf(kv, sizeof(kv), "api=%u", (unsigned)BP_API);
+    mdns_resp_add_service_txtitem(svc, kv, n);
 }
 
 static void mdns_register(struct netif *netif)
@@ -1042,10 +1050,11 @@ static void mdns_register(struct netif *netif)
     if (mdns_resp_add_netif(netif, s_mdns_host) != ERR_OK) return;
     mdns_resp_add_service(netif, s_mdns_inst, "_benchpod", DNSSD_PROTO_TCP,
                           TCP_SERVER_PORT, mdns_txt, NULL);
-    /* The same :8080 socket speaks SCPI: VISA / LXI discovery finds the pod as a raw socket
-       instrument (TCPIP::<host>::8080::SOCKET). */
-    mdns_resp_add_service(netif, s_mdns_inst, "_scpi-raw", DNSSD_PROTO_TCP,
-                          TCP_SERVER_PORT, NULL, NULL);
+    /* With SCPI on (pod_policy.h), the same :8080 socket speaks SCPI: VISA / LXI discovery finds
+       the pod as a raw socket instrument (TCPIP::<host>::8080::SOCKET). */
+    if (s_scpi)
+        mdns_resp_add_service(netif, s_mdns_inst, "_scpi-raw", DNSSD_PROTO_TCP,
+                              TCP_SERVER_PORT, NULL, NULL);
 }
 
 /* LAN policy "off" (pod_policy.h): the external LAN (Ethernet, Wi-Fi) gets no :8080 connections
@@ -1085,6 +1094,7 @@ int net_tls_sessions(void) { return tls_sessions(); }
 
 void pod_policy_on_lan_change(pod_lan_policy_t now) { s_lan_req = (now == POD_LAN_OFF) ? 0 : 1; }
 void pod_policy_on_https_only_change(bool on) { s_https_req = on ? 1 : 0; }
+void pod_policy_on_scpi_change(bool on) { s_scpi_req = on ? 1 : 0; }
 
 /* HTTPS-only (pod_policy.h): plaintext :8080 connections from the external LAN close and new
    ones are refused (srv_accept). The USB link keeps plaintext. Net task. */
@@ -1102,6 +1112,30 @@ static void https_only_apply(bool on)
     }
     log_printf("[net] HTTPS-only %s: plaintext :%d %s\r\n", on ? "on" : "off", TCP_SERVER_PORT,
                on ? "answers on USB only" : "open again");
+}
+
+/* SCPI on or off (pod_policy.h): the _scpi-raw service comes and goes (registered again on every
+   interface), and with HTTPS-only on the plaintext LAN connections close (they were SCPI's). The
+   worker refuses SCPI lines while it is off (command_handler_transport.c). Net task. */
+static void scpi_apply(bool on)
+{
+    if (on == s_scpi) return;
+    s_scpi = on;
+    if (!on && s_https_only)
+        for (int id = 0; id < NET_MAX_CONN; id++)
+            if (conn_pcb[id] && !s_conn_usb[id] && !s_conn_tls[id]) s_close_req[id] = 1;
+    mdns_resp_remove_netif(&s_usb_netif);
+    mdns_register(&s_usb_netif);
+    if (netif_is_link_up(&s_usb_netif)) mdns_resp_announce(&s_usb_netif);
+    if (s_lan_up) {
+        mdns_resp_remove_netif(&s_eth.netif);
+        mdns_resp_remove_netif(&s_wifi.netif);
+        mdns_register(&s_eth.netif);
+        mdns_register(&s_wifi.netif);
+        if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
+        if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
+    }
+    log_printf("[net] SCPI %s\r\n", on ? "on" : "off");
 }
 
 /* ---- public API -------------------------------------------------------- */
@@ -1172,14 +1206,15 @@ void net_init(void)
        LAN unless the LAN policy is "off" (pod_policy.h). The TLS certificate first (generated on
        the first boot of firmware with LAN TLS). */
     s_https_only = pod_policy_https_only();
+    s_scpi = pod_policy_scpi();
     lan_tls_init();
     server_start();
     mdns_register(&s_usb_netif);
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
-    log_printf("[net] LwIP up — eth(RMII/LAN8742)%s, TCP server on :%d, TLS on :%d%s\r\n",
+    log_printf("[net] LwIP up — eth(RMII/LAN8742)%s, TCP server on :%d, TLS on :%d%s%s\r\n",
            esp_wifi_ctrl_module_present() ? " + wifi(ESP32-C3)" : "",
-           TCP_SERVER_PORT, LAN_TLS_PORT, s_https_only ? " (HTTPS-only)" : "");
+           TCP_SERVER_PORT, LAN_TLS_PORT, s_https_only ? " (HTTPS-only)" : "", s_scpi ? ", SCPI on" : "");
 }
 
 /* Carry out a reload a settings command requested (net_reload.h): after its reply has left the
@@ -1228,6 +1263,7 @@ void net_poll(void)
 #endif
     if (s_lan_req >= 0) { int8_t r = s_lan_req; s_lan_req = -1; lan_access(r == 1); }
     if (s_https_req >= 0) { int8_t r = s_https_req; s_https_req = -1; https_only_apply(r == 1); }
+    if (s_scpi_req >= 0)  { int8_t r = s_scpi_req;  s_scpi_req = -1;  scpi_apply(r == 1); }
     if (s_tls_listen_gen != lan_tls_generation()) tls_listener_sync();   /* new certificate */
     lan_tls_collect();
     net_apply_worker_requests();     /* worker-requested close / Nagle toggles  */

@@ -15,7 +15,7 @@
  * The gateware is the same for both: only the cable pins moved, on both boards.  A pair that
  * mixes the two clocks DAC frames on the data line, so the DAC latches garbage and its outputs
  * can jump anywhere.  Both lines are outputs of the digital board, so nothing is damaged; the
- * firmware refuses the DAC on such a pair (BP0035) and sends no DAC traffic at all.
+ * firmware refuses the DAC on such a pair (BP0080) and sends no DAC traffic at all.
  *
  * The module's revision is the one in its EEPROM header (module_eeprom.h); a blank, unreadable
  * or bad header counts as an older module.  Only two-board pods with a module present are

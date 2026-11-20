@@ -128,7 +128,7 @@ static void status_read(status_in_t *in) {
 
 /* One form of the reply into e (the bounds-tracked emitter: last_crash is free-form text,
    escaped via bp_emit_jstr, so it can never break the JSON). */
-static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool caps_list) {
+static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     const cloud_caps_t *c = &in->caps;
     const size_t text_max = brief ? STATUS_SHORT_TEXT_MAX : 0;
     bool text_cut = false;
@@ -155,9 +155,10 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
     {
         usb_cc_t cc;
         bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
-        /* setting: the stored USB network setting; off_reason when net is off. */
-        bp_emit(e, "\"usb\":{\"net\":\"%s\",\"setting\":\"%s\",",
-                usb_net_on() ? "on" : "off", usb_net_setting_on() ? "on" : "off");
+        /* net: the adapter is up; enabled: the stored USB network setting (firmware up to 3.10.13:
+           "net" and "setting" as "on"/"off"); off_reason when net is off. */
+        bp_emit(e, "\"usb\":{\"net\":%s,\"enabled\":%s,",
+                usb_net_on() ? "true" : "false", usb_net_setting_on() ? "true" : "false");
         if (!usb_net_on())
             bp_emit(e, "\"off_reason\":\"%s\",", usb_net_setting_on() ? "wifi" : "setting");
         bp_emit(e, "\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",
@@ -196,23 +197,19 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
     /* Emulated sensors: the definition format the pod takes, and whether I2C/SPI/UART sensors work
        (the emulation image is installed or running). Clients tell from these that the pod may be on
        the emulation image, which has neither the loop's nor the deep image's feature. */
-    /* The fixed feature flags below that the capabilities frame also carries (the server keeps
-       them as cap.*) are in the full form only; the short form keeps the values. */
-    if (!brief) bp_emit_raw(e, "\"sensors_format\":1,");
+    /* The features themselves are in the table (features_rev below): no flags here. */
     bp_emit(e, "\"sensors_digital\":%s,", c->sensors_digital ? "true" : "false");
-    /* Signed updates (fw_sign.h): ota_begin takes "sig"; the policy is "audit" (report only). */
-    if (!brief)
-        bp_emit_raw(e, "\"ota_sig\":true,\"sig_policy_cmd\":true,\"lan_policy_cmd\":true,"
-                        "\"tunnel_max_tier\":true,\"lease_state\":true,");
-    bp_emit(e, "\"sig_policy\":\"%s\",\"sig_keys\":%u,\"lan_policy\":\"%s\",\"cloud_ca\":true,\"cloud_proxy\":true,",
+    /* Signed updates (fw_sign.h): the policy, and how many keys the firmware trusts. */
+    bp_emit(e, "\"sig_policy\":\"%s\",\"sig_keys\":%u,\"lan_policy\":\"%s\",",
             c->sig_policy, (unsigned)fw_sign_key_count(), c->lan_policy);
     if (!brief) {
         /* The LAN API over TLS (lan_tls.h): clients pin this certificate's sha256. Full form only:
            the `lan_tls` command has it. */
         lan_tls_info_t tls;
         lan_tls_get_info(&tls);
-        bp_emit(e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
-                pod_policy_https_only() ? "true" : "false", tls.ready ? tls.sha256 : "");
+        bp_emit(e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"scpi\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
+                pod_policy_https_only() ? "true" : "false", pod_policy_scpi() ? "true" : "false",
+                tls.ready ? tls.sha256 : "");
     }
     /* The pod's copy of the cloud lease (lease_gate.h). The server owns the lease, so a cloud
        client has it already: full form only. */
@@ -222,18 +219,14 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
         bp_emit(e, "\"lease\":{\"held\":%s,\"holder\":\"%s\",\"left_s\":%lu},",
                 held ? "true" : "false", held ? lease_gate_holder() : "", (unsigned long)left);
         /* The pod's own lease (lease_local.h). Never its id: the id is what makes a connection
-           an owner. The cloud learns it from the lease.local frames: full form only. Only for
-           clients that read the features table ("caps":false, which is where `lease` is): an
-           older client would not look at it, and its caps list leaves no room. */
+           an owner. The cloud learns it from the lease.local frames: full form only. */
         const lease_local_view_t *ll = &in->local_lease;
-        if (!caps_list) {
-            if (!ll->held)
-                bp_emit_raw(e, "\"local_lease\":{\"held\":false},");
-            else
-                bp_emit(e, "\"local_lease\":{\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
-                            "\"left_s\":%lu,\"mine\":%s},",
-                        ll->holder, ll->purpose, (unsigned long)ll->left_s, ll->mine ? "true" : "false");
-        }
+        if (!ll->held)
+            bp_emit_raw(e, "\"local_lease\":{\"held\":false},");
+        else
+            bp_emit(e, "\"local_lease\":{\"held\":true,\"holder\":\"%s\",\"purpose\":\"%s\","
+                        "\"left_s\":%lu,\"mine\":%s},",
+                    ll->holder, ll->purpose, (unsigned long)ll->left_s, ll->mine ? "true" : "false");
     }
     /* The gateware running in the iCE40 and the one this firmware embeds (0 = unknown). They
        differ after a firmware update until the boot-time gateware update has run. */
@@ -261,26 +254,15 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief, bool ca
     bp_emit(e, ",\"safe_mode\":%s,\"safe_reason\":", c->safe_mode ? "true" : "false");
     emit_text(e, c->safe_reason, text_max, &text_cut);
     if (text_cut) bp_emit_raw(e, ",\"boot_health_cut\":true");
-    /* caps[]: the feature list older clients read (an SDK before the features table). Frozen,
-       and only for a request without "caps":false. A newer client sends that and gets the
-       table's revision, the running image and the hardware facts instead (cloud_caps.h); it
-       looks the features up in its copy of features/features.json. */
-    if (caps_list) cloud_caps_emit_list(e, c);
-    else           cloud_caps_emit_facts(e, c);
+    /* The table's revision, the running image and the hardware facts (cloud_caps.h): a client
+       looks the features up in its copy of features/features.json. Firmware 4.0.0 dropped the
+       caps[] list older clients read; "caps" in the request is ignored. */
+    cloud_caps_emit_facts(e, c);
     bp_emit_raw(e, "}}\n");
 }
 
-/* {"cmd":"status","caps":false}: leave the caps[] list out (a client with the features table).
-   Firmware before this ignored the argument and sent the list, so a client gets one of the two
-   from any pod. */
-static bool status_wants_caps_list(const char *json) {
-    char v[8];
-    if (!json || !bp_json_get_top(json, "caps", v, sizeof(v))) return true;
-    return !(v[0] == 'f' || v[0] == '0');
-}
-
 void handle_status(int conn_id, const char *json) {
-    const bool caps_list = status_wants_caps_list(json);
+    (void)json;
     /* The full form's worst case is over 2 KB (test_ch_status.c); the hw task has ~7 KB of stack
        left. A connection's TX ring takes a reply only whole (conn_tx.c, 2048 B), so a full form
        it does not take goes out as the short form instead. */
@@ -292,13 +274,13 @@ void handle_status(int conn_id, const char *json) {
     /* The cloud command channel always gets the short form (see the top of this file). */
     if (conn_id != CH_CLOUD_CONN) {
         bp_emit_init(&e, resp, sizeof(resp));
-        status_emit(&e, &in, false, caps_list);
+        status_emit(&e, &in, false);
         if (bp_emit_ok(&e) && at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) == 0)
             return;
         /* conn_tx is all or nothing: nothing went out, so send the short form. */
     }
     bp_emit_init(&e, resp, sizeof(resp));
-    status_emit(&e, &in, true, caps_list);
+    status_emit(&e, &in, true);
     if (!bp_emit_ok(&e)) { send_error(conn_id, "status too large"); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         /* A reply the connection's TX ring cannot take whole says so instead of the connection

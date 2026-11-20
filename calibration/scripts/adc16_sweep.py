@@ -48,7 +48,7 @@ def main():
     rows = []
     for i in range(args.steps):
         volts = lo + (hi - lo) * i / (args.steps - 1)
-        r = pod.command({"cmd": "dac_out", "path": path, "volts": round(volts, 6)})
+        r = pod.command({"cmd": "dac_out", "path": path, "v": round(volts, 6)})
         time.sleep(args.settle)
         v = dmm.read_dc(samples=2) if dmm else None   # output SMA, before the loopback cuts it off
         pod.command({"cmd": "analog_path", "path": args.source, "range": args.range})

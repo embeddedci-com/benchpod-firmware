@@ -3,7 +3,7 @@
  *
  * A record with another magic or version used to be taken as "no identity" and a new key was
  * generated over it, silently orphaning the pod's cloud registration. Only an erased sector may
- * get a new key; anything else is left alone. The USB console's identity-wipe is the way back:
+ * get a new key; anything else is left alone. identity_wipe (the USB link) is the way back:
  * it needs the current short id (or "unknown") as confirmation, then erases the sector and makes a
  * new key. device_identity.c runs here on the flash model with the real Ed25519 code.
  */
@@ -93,7 +93,7 @@ static void test_foreign_record_recovery(void) {
     CHECK(device_identity_get_public(pub) != 0);
 
     const char *why = device_identity_wipe("abcdef");
-    CHECK(why && strstr(why, "identity-wipe unknown") != NULL);
+    CHECK(why && strstr(why, "current id: unknown") != NULL);
     back = stored();
     CHECK(memcmp(&back, &r, sizeof(r)) == 0);
 

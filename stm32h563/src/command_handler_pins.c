@@ -49,7 +49,7 @@ bool la_claim_or_error(int conn_id, la_fn_t fn, const uint8_t *las, size_t n, ui
 
 /* Send a reply built with the emitter, or a structured error if it did not fit. */
 static void send_emitted(int conn_id, bp_emit_t *e) {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }
@@ -95,10 +95,12 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
         step_finish();   /* a train that already ended but has not been polled yet */
 
     la_step_plan_t plan;
-    if (!la_pins_plan_step(la, dir_la, &plan, err, cap))
-        return strncmp(err, "pin conflict:", 13) == 0 ? -3 : -1;
+    if (!la_pins_plan_step(la, dir_la, &plan, err, cap)) {
+        bp_errcode_t code = BP_E_NONE;
+        return bp_err_noted(err, &code, NULL) && code == BP_E_LA_PIN_IN_USE ? -3 : -1;
+    }
     if (!la_step_args_ok(steps, delay_us, err, cap)) return -1;
-    if (s_step.active || fpga_la_step_busy()) { snprintf(err, cap, "busy"); return -2; }
+    if (s_step.active || fpga_la_step_busy()) { bp_note_step_busy(err, cap); return -2; }
 
     /* Direction first, so the first pulse already sees it. */
     int prev_level = -1;
@@ -119,7 +121,8 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
                 (void)fpga_la_set(dir_la, la_pins_drive(dir_la));
             }
         }
-        snprintf(err, cap, rc == -2 ? "busy" : "invalid args");
+        if (rc == -2) bp_note_step_busy(err, cap);
+        else          snprintf(err, cap, "invalid args");
         return rc == -2 ? -2 : -1;
     }
     uint8_t p = (uint8_t)la, d = (uint8_t)dir_la;
@@ -232,11 +235,8 @@ void handle_gpio(int conn_id, const char *json) {
     note_target_power();
 
     if (!req.has_mode && !req.has_level) {
-        uint8_t ver = signal_engine_fpga_version();
         if (!gw_caps()->gpio_get) {
-            snprintf(err, sizeof(err), "reading pin levels needs gateware v%u or newer (this pod runs v%u)",
-                     (unsigned)GPIO_GET_MIN_GW, (unsigned)ver);
-            send_error(conn_id, err);
+            bp_err_gateware_too_old(conn_id, "reading pin levels", GPIO_GET_MIN_GW);
             return;
         }
         uint16_t levels = 0;
@@ -296,9 +296,9 @@ void handle_la_dir(int conn_id, const char *json) {
     send_emitted(conn_id, &e);
 }
 
-/* ---- `la`, `la_voltage` and the emulated I2C sensor ---------------------- */
+/* ---- `la_step`, `la_pull`, `la_voltage` and the emulated I2C sensor ------- */
 
-/* {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
+/* {"cmd":"la_step","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
    A step pulse train on LA N (1..14); the FPGA runs it autonomously. */
 static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
     char la_s[8] = {0}, delay_s[12] = {0}, dir_la_s[8] = {0}, dir_s[8] = {0};
@@ -341,7 +341,7 @@ static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la"} -> the pull bitmask, bit (la-1) = LA<la>.
+/* {"cmd":"la_pull"} -> the pull bitmask, bit (la-1) = LA<la>.
    pullups_available says whether a pull CAN be engaged right now (a bank voltage is set; on v2
    boards it must be 3.3 V); la_pullup_mask is always the truth about what is on the wire.  While
    the pod holds pulls off (digital v3r4): why, and the mask the host asked for (put back by the
@@ -352,20 +352,19 @@ static void handle_la_pull_mask(int conn_id) {
     char payload[112];
     if (held)
         snprintf(payload, sizeof(payload),
-                 "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
-                 mask, la_pull_available() ? 1 : 0, held, asked);
+                 "{\"la_pullup_mask\":%u,\"pullups_available\":%s,\"held\":\"%s\",\"asked_mask\":%u}",
+                 mask, la_pull_available() ? "true" : "false", held, asked);
     else
-        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
-                 mask, la_pull_available() ? 1 : 0);
+        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%s}",
+                 mask, la_pull_available() ? "true" : "false");
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la","la":N} -> LA N's pull state (also the reply of a pull set).
+/* {"cmd":"la_pull","la":N} -> LA N's pull state (also the reply of a pull set).
    "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
    pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
-   "held" then says why, and strength/ohms/pull stay the setting the pod puts back. Elsewhere live
-   and asked are the same. The older fields stay for older hosts: "pullup" 1 when engaged, "pull"
-   the channel's default direction ("none" without a resistor), "ohms" its value. */
+   "held" then says why, and strength stays the setting the pod puts back. Elsewhere live and
+   asked are the same. (Firmware up to 3.10.13 also sent "pullup", "pull" and "ohms".) */
 static void handle_la_pull_query(int conn_id, unsigned la) {
     la_pull_caps_t caps = la_pull_caps(la);
     bool asked_on = la_pull_asked(la) != LA_PULL_NONE;
@@ -374,10 +373,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
     bp_emit_t e;
     char payload[200];
     bp_emit_init(&e, payload, sizeof(payload));
-    bp_emit(&e, "{\"la\":%u,\"pullup\":%d,\"ohms\":\"%s\",\"pull\":\"%s\",\"state\":\"%s\",\"dirs\":",
-            la, on ? 1 : 0, la_pull_ohms(la) ? la_pull_ohms(la) : "",
-            dflt == LA_PULL_NONE ? "none" : la_pull_dir_name(dflt),
-            la_pull_dir_name(on ? dflt : LA_PULL_NONE));
+    bp_emit(&e, "{\"la\":%u,\"state\":\"%s\",\"dirs\":", la, la_pull_dir_name(on ? dflt : LA_PULL_NONE));
     la_pull_emit_dirs(&e, la);
     /* v3r4: the strength engaged ("none" when off) and every strength the channel has. */
     if (caps.strengths) {
@@ -391,34 +387,27 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
         const char *held = la_pull_held();
         bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
     }
-    bp_emit(&e, ",\"pullups_available\":%d}", la_pull_available() ? 1 : 0);
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
+    bp_emit(&e, ",\"pullups_available\":%s}", la_pull_available() ? "true" : "false");
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
-   {"cmd":"la","la":N,"pullup":"on"|"off"}   (the older form: on = the channel's direction)
+/* {"cmd":"la_pull","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
    Switch LA N's pull resistor; a direction the channel's resistor can't pull is refused (BP0024),
    a channel without one too (BP0023).  false = refused (the error was sent). */
-static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
-                               const char *pull_s, const char *pullup_s) {
+static bool handle_la_pull_set(int conn_id, const char *json, unsigned la, const char *pull_s) {
     la_pull_dir_t want = LA_PULL_NONE;
-    switch (la_pull_request(la, pull_s, pullup_s, &want)) {
+    switch (la_pull_request(la, pull_s, &want)) {
     case LA_PULL_REQ_OK: break;
     case LA_PULL_REQ_BAD_VALUE:
         send_error(conn_id, "pull must be up, down or off");
         return false;
-    case LA_PULL_REQ_NO_PULL: {
-        char m[64];
-        snprintf(m, sizeof(m), "LA%u has no pull resistor on this board", la);
-        bp_err_la_no_pull(conn_id, BP_ERR_TEXT(m), (int32_t)la);
+    case LA_PULL_REQ_NO_PULL:
+        bp_err_la_no_pull(conn_id, (int32_t)la);
         return false;
-    }
     case LA_PULL_REQ_DIRECTION: {
         const char *have = la_pull_dir_name(la_pull_dir(la));
-        char m[64];
-        snprintf(m, sizeof(m), "LA%u supports pull-%s only on this board", la, have);
-        bp_err_la_pull_direction(conn_id, BP_ERR_TEXT(m), (int32_t)la, la_pull_dir_name(want), have);
+        bp_err_la_pull_direction(conn_id, (int32_t)la, la_pull_dir_name(want), have);
         return false;
     }
     }
@@ -448,16 +437,11 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
     switch (rc) {
     case 0:
         return true;
-    case LA_PULL_ERR_RAIL: {
-        char m[96];
-        snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
-                 vref_out_last_mv());
-        bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+    case LA_PULL_ERR_RAIL:
+        bp_err_pull_rail_down(conn_id, (int32_t)vref_out_last_mv());
         return false;
-    }
     case LA_PULL_ERR_VOLTAGE:
-        bp_err_la_voltage_not_set(conn_id,
-            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+        bp_err_la_voltage_not_set(conn_id);
         return false;
     case LA_PULL_ERR_BANK:
         /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and the bank
@@ -472,20 +456,20 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
     }
 }
 
-/* The `la` verb: three commands, told apart by their fields.
- *   "steps"               a step train (handle_la_step)
- *   no "la"               the pull bitmask (handle_la_pull_mask)
- *   "la" with "pull" or "pullup"   switch the pull, then report it (handle_la_pull_set)
- *   "la" alone            report the pull (handle_la_pull_query)
- *
- * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
- * drive (the former gpio_set) is gone: a pull-up (or its absence, which leaves
- * the board's pull-down) sets a line's idle level instead. */
-void handle_la(int conn_id, const char *json) {
+/* `la_step` (firmware up to 3.10.13: `la` with "steps") — a step pulse train. */
+void handle_la_step_cmd(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char steps_s[12] = {0};
-    if (json_get_value(json, "steps", steps_s, sizeof(steps_s))) { handle_la_step(conn_id, json, steps_s); return; }
+    if (!json_get_value(json, "steps", steps_s, sizeof(steps_s))) { send_error(conn_id, "missing steps"); return; }
+    handle_la_step(conn_id, json, steps_s);
+}
 
+/* `la_pull` (firmware up to 3.10.13: `la` without "steps") — the pull resistors:
+ *   no "la"               the pull bitmask (handle_la_pull_mask)
+ *   "la" with "pull"      switch the pull, then report it (handle_la_pull_set)
+ *   "la" alone            report the pull (handle_la_pull_query) */
+void handle_la_pull_cmd(int conn_id, const char *json) {
+    if (!require_la_voltage(conn_id)) return;
     char la_s[8] = {0};
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) { handle_la_pull_mask(conn_id); return; }
     unsigned la = (unsigned)atoi(la_s);
@@ -495,11 +479,8 @@ void handle_la(int conn_id, const char *json) {
         send_error(conn_id, m);
         return;
     }
-    char pull_s[8] = {0}, pullup_s[8] = {0};
-    bool has_pull = json_get_value(json, "pull", pull_s, sizeof(pull_s));
-    bool has_pullup = json_get_value(json, "pullup", pullup_s, sizeof(pullup_s));
-    if ((has_pull || has_pullup) &&
-        !handle_la_pull_set(conn_id, json, la, has_pull ? pull_s : NULL, has_pullup ? pullup_s : NULL))
+    char pull_s[8] = {0};
+    if (json_get_value(json, "pull", pull_s, sizeof(pull_s)) && !handle_la_pull_set(conn_id, json, la, pull_s))
         return;
     handle_la_pull_query(conn_id, la);
 }
@@ -521,10 +502,7 @@ void handle_la_voltage(int conn_id, const char *json) {
         }
         int rc = la_vccio_set_mv(atoi(mv_s));
         if (rc == -3) {
-            char m[96];
-            snprintf(m, sizeof(m), "5 V did not come up on pin 21 (%d mV); check the USB supply",
-                     vref_out_last_mv());
-            bp_err_vref_5v_missing(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+            bp_err_vref_5v_missing(conn_id, (int32_t)vref_out_last_mv());
             return;
         }
         if (rc == -2) {
@@ -550,6 +528,6 @@ void handle_la_voltage(int conn_id, const char *json) {
         vref_out_emit(&e);
     }
     bp_emit_raw(&e, "}");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     send_ok_str(conn_id, payload);
 }

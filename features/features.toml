@@ -25,8 +25,10 @@
 # - `gateware` is the lowest gateware version, checked against the RUNNING gateware; `gw_const`
 #   names the firmware constant it equals (CI checks it).
 # - Entries are never removed: one the firmware stopped having gets `status = "retired"`.
-# - The status `caps` list is frozen: every name in it is an entry's `legacy_caps` or a fact's,
-#   and no new name goes in (CI checks it). New features exist only here.
+# - The status `caps` list was frozen, then dropped in firmware 4.0.0: `legacy_caps` says which
+#   name an entry had in it, for clients talking to older firmware. No new entry gets one (CI
+#   checks it). Firmware 4.0.0 also stopped sending the per-feature flags of the capabilities
+#   frame; `legacy_frame` names them the same way. New features exist only here.
 # - `floor` is the oldest firmware on a shipped pod (v3r1 boards, from 2026-10-19). Entries older
 #   than that say the floor; `dated` says how the version was found: tag (the first release that
 #   announced it), floor, or code (no flag; from the code or the docs).
@@ -41,19 +43,29 @@
 #   the change, and say in that pull request what an older client gets wrong.
 # - Clients send "client_api":<the api they were built for> on every JSON command. The pod refuses
 #   a command whose client_api (a client that sends none counts as 0) is below `min_client_api`
-#   with BP0030 client_too_old; status, diag, ping and lease_release always run, so the client can
-#   still find out and report it.
+#   with BP0030 client_too_old. The commands flagged CMD_F_ANY_CLIENT (cmd_tier.c) always run:
+#   ping, status, diag and lease_release, so the client can still find out, report it and let go
+#   of the pod, and the update commands identity_public, ota_status, ota_begin, ota_data,
+#   ota_end, ota_commit, ota_abort, ota_selftest and blob_status, so an old client can still
+#   update the pod or roll it back.
 # - `min_client_api` is raised only on purpose, in a release pull request: it refuses every client
 #   below it, every client that sends nothing included. Never raise it as a side effect of a bump.
 # - `min_client_api` <= `api` (CI checks it).
+# - The levels so far:
+#   api 1 (development builds after 3.10.13, never released): the first level clients send.
+#   api 2 (firmware 4.0.0, min_client_api 2): clients classify refusals by error code only and
+#     never read refusal text. Every refusal a client acts on has a code (errors/catalog.toml), and
+#     a coded refusal carries code and args but no message: the client renders the catalog's.
+#     A client below api 2 is refused (BP0030, which alone keeps a message): it would look for
+#     texts that are gone.
 #
 # After an edit run `python3 tools/gen_features.py` (CI runs it with --check). It writes
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 8
-api = 1
-min_client_api = 0
+revision = 11
+api = 2
+min_client_api = 2
 floor = "3.9.2"
 docs_base = "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/"
 
@@ -266,7 +278,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "capture_b64"
 legacy_frame = "capture_b64"
-docs = "API.md#base64-samples-encb64"
+docs = "API.md#base64-samples-the-default"
 dated = "floor"
 
 [features.blob_slots]
@@ -280,7 +292,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "can"
 legacy_frame = "can"
-docs = "API.md#can_config--bring-can-up"
+docs = "API.md#can_start--bring-can-up"
 dated = "floor"
 note = "Flag first in 3.5.1, below the floor."
 
@@ -392,7 +404,7 @@ rev = 1
 firmware = "3.10.3"
 legacy_caps = "can_fd"
 legacy_frame = "can_fd"
-docs = "API.md#can_config--bring-can-up"
+docs = "API.md#can_start--bring-can-up"
 dated = "tag"
 note = "First in the 3.10.2 pre-release; pre-releases don't count."
 
@@ -756,14 +768,14 @@ note = "uart_proxy_start de and de_active_low: the pod drives an RS-485 transcei
 [features.la_pull_dir]
 rev = 3
 firmware = "3.10.12"
-docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
+docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "la pull: up, down or off, with each channel's supported directions in the reply and in la_pins (dirs); refusals BP0023, BP0024. Older firmware takes pullup on/off only."
 
 [features.la_pull_1v8]
 rev = 4
 firmware = "3.10.13"
-docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
+docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "Pull resistors work with the LA bank at 1.8 V on v3 boards (the pull-ups go to the bank rail) and stay on when the bank switches. Older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V."
 
@@ -802,4 +814,75 @@ rev = 8
 firmware = "next"
 docs = "API.md#client-compatibility"
 dated = "code"
-note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except status, diag, ping and lease_release. Commands may also carry \"client\":\"<name> <version>\" for that message."
+note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status. Firmware 4.0.0 is api 2 and takes client_api 2 or newer."
+
+[features.lan_tls_default]
+rev = 9
+firmware = "next"
+docs = "API.md#lan_tls--the-lan-api-over-tls"
+dated = "code"
+note = "HTTPS-only is on by default (plaintext JSON on 8080 only on the USB network adapter; lan_tls https_only false turns the LAN back on) and SCPI is off by default: lan_tls takes and replies scpi, status lan_tls has scpi, console lan-tls scpi on|off, both changed only over USB or from the cloud. A plaintext LAN JSON line under HTTPS-only gets BP0075. The mDNS TXT carries api."
+
+[features.sig_always_required]
+rev = 9
+firmware = "next"
+docs = "API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts"
+dated = "code"
+note = "The signature policy is always required on every OTA path (LAN, USB network adapter, cloud) and cannot be loosened: sig_policy set audit or permissive, and lan_unsigned true, get BP0074; the reply has no lan_unsigned; the console has no lan-ota and always allows dfu. Clients hide any loosening control."
+
+[features.generate_volts_only]
+rev = 10
+firmware = "next"
+board = "analog"
+docs = "API.md#generate--dac-waveform-output"
+dated = "code"
+note = "generate takes only the calibrated form (path with amplitude_v and offset_v, or amplitude_ua and offset_ua); the 8-bit amplitude 0-127 and offset 0-255 form is refused, and the reply is null or {\"cotrig\":...} (no bits)."
+
+[features.json_names_4]
+rev = 10
+firmware = "next"
+docs = "API.md#commands"
+dated = "code"
+note = "Units in the field names: freq_hz (generate, measure), sample_rate_hz in Hz (was sample_rate_mhz in MHz: generate, measure, capture, replay, la_capture, sensor_la), capture_dual adc_sample_rate_hz and la_sample_rate_hz in Hz (were adc_rate_mhz, la_rate_mhz) and in the capture replies (were adc_rate_hz, la_rate_hz), clock_hz (spi_start, spi_status, i2c_start, i2c_status, eth refclk; was hz), power_profile sample_rate_hz (was rate_hz; stats adc_sample_rate_hz was adc_rate_hz), dac_out v (was volts), dac_loop_probe and dac_loop_input code16 (was v), can_read frames ts_ms (was ts)."
+
+[features.can_start_stop]
+rev = 10
+firmware = "next"
+docs = "API.md#can_start--bring-can-up"
+dated = "code"
+note = "CAN is brought up with can_start and turned off with can_stop, like spi_start/spi_stop and i2c_start/i2c_stop. can_config and can_disable are gone (unknown cmd)."
+
+[features.la_step_pull_split]
+rev = 10
+firmware = "next"
+docs = "API.md#la_pull--la-pin-pull-resistors"
+dated = "code"
+note = "The la command is split: la_step runs a step pulse train (needs steps), la_pull switches, reads or (without la) lists the pull resistors with the same fields and replies. la answers unknown cmd; the old pullup field is not read."
+
+[features.json_booleans_4]
+rev = 10
+firmware = "next"
+docs = "API.md#target_power--enabledisable-a-target-power-efuse"
+dated = "code"
+note = "Booleans are true/false: target_power takes enabled (was state 1/0) and replies enabled true/false (was 1/0); target_status enabled, fault and valid are true/false; usb_network takes and replies enabled (was set/setting on/off); status usb net and enabled are true/false (were net/setting on/off); la_pull pullups_available is true/false (was 1/0); nrst assert is documented as true/false (1/0 still parse)."
+
+[features.console_recovery_json]
+rev = 10
+firmware = "next"
+docs = "usb-serial-interface.md#removed-in-firmware-400"
+dated = "code"
+note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link). The console flash-esp32 has no command: OTA target esp installs the image. wifi_status adds rssi_dbm (built-in Wi-Fi) and, on the bridge object, identity, image, boot, reboots, emc."
+
+[features.usb_host]
+rev = 10
+firmware = "next"
+docs = "API.md#usb_host--usb-host-mode"
+dated = "code"
+note = "Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
+
+[features.dac_pinout_guard]
+rev = 11
+firmware = "next"
+docs = "API.md#dac-pinout-on-the-flat-cable"
+dated = "code"
+note = "A digital board and an analog module with different flat-cable DAC pinouts (digital v3r4+ with module 3.4 or older, or the reverse): every command that drives the DAC is refused with BP0080 (dac_pinout_mismatch, args cmd, digital, module; merged from main as BP0035) and status.module / module report dac_pinout_ok false."

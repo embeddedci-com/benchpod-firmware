@@ -48,7 +48,7 @@ def main():
     targets += [lo + (hi - lo) * i / (args.steps - 1) for i in range(args.steps)]
 
     def point(volts):
-        r = pod.command({"cmd": "dac_out", "path": args.path, "volts": round(volts, 6)})
+        r = pod.command({"cmd": "dac_out", "path": args.path, "v": round(volts, 6)})
         time.sleep(args.settle)
         v = dmm.read_dc(samples=args.samples)
         print(f"{volts:9.5f} V -> code16 {r['code16']:5d}  pod {r['uv'] / 1e6:9.6f}  dmm {v:9.6f}", flush=True)

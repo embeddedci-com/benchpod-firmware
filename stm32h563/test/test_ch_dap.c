@@ -7,6 +7,7 @@
  * dap_process is a fake that echoes the request with its first byte inverted; the FPGA, the
  * send ring and the clock are fakes too.
  */
+#include "bp_errors.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -71,7 +72,14 @@ bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t
 bool require_la_voltage(int c) { (void)c; return true; }
 static char g_reply[256];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+static int g_ecode;   /* the code of the last coded refusal, 0 = a plain one */
+void send_error(int c, const char *m) { (void)c; g_ecode = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;   /* "err:" and the code's catalog message, like a plain refusal reads here */
+    g_ecode = (int)code;
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
+}
 
 /* ---- helpers --------------------------------------------------------------------------- */
 static size_t rx(int conn, const uint8_t *b, size_t n) { return dap_proxy_receive(conn, b, n); }

@@ -83,10 +83,10 @@ read back through the pod's own DAC→ADC loopback (`analog_path cal1`):
      "source":"fixed","input":0,"step":0}
 
 // retarget a RUNNING loop (omitted fields keep their value)
-{"cmd":"dac_loop_input","input":32768}      -> {"source":"fixed","input":32768,"step":0,"v":…}
+{"cmd":"dac_loop_input","input":32768}      -> {"source":"fixed","input":32768,"step":0,"code16":…}
 
 // telemetry
-{"cmd":"dac_loop_probe"}                    -> {"i":<ADC>,"in":<loop input>,"source":"fixed","v":<DAC>,"tripped":false}
+{"cmd":"dac_loop_probe"}                    -> {"i":<ADC>,"in":<loop input>,"source":"fixed","code16":<DAC>,"tripped":false}
 
 // stop
 {"cmd":"dac_stop"}

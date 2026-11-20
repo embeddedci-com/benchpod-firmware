@@ -84,7 +84,7 @@ void sleep_ms(uint32_t ms) { seq("s%u", ms); }
 static char g_reply[256];
 static int g_err_code;
 static char g_err_arg[32];
-void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_t *args, size_t n) {
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     (void)c;
     g_err_code = (int)code;
     g_err_arg[0] = 0;
@@ -92,7 +92,8 @@ void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_
         if (args[0].is_str) snprintf(g_err_arg, sizeof(g_err_arg), "%s", args[0].s);
         else                snprintf(g_err_arg, sizeof(g_err_arg), "%ld", (long)args[0].i);
     }
-    snprintf(g_reply, sizeof(g_reply), "err:%s", text ? text : "");
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
 }
 uint8_t signal_engine_fpga_version(void) { return g_gw; }
 uint8_t signal_engine_fpga_features_cached(void) { return 0; }
@@ -117,7 +118,13 @@ static int de_claimed(void) {
 }
 bool require_la_voltage(int c) { (void)c; return true; }
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void send_error(int c, const char *m) {
+    bp_errcode_t code; size_t n;   /* like command_handler.c: a noted message goes with its code */
+    const bp_err_arg_t *a = bp_err_noted(m, &code, &n);
+    if (a) { bp_error_send(c, code, a, n); return; }
+    g_err_code = 0;
+    snprintf(g_reply, sizeof(g_reply), "err:%s", m);
+}
 
 /* ---- helpers --------------------------------------------------------------------------- */
 static void start(int conn, const char *json) {
@@ -273,7 +280,7 @@ static void test_frame(void) {
     /* gateware older than v56: 8N1 still works, anything else is refused with what to do */
     g_gw = 55;
     start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
-    CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[4] == PROTO_JSON,
+    CHECK(strstr(g_reply, "err:BP0017") == g_reply && g_proto[4] == PROTO_JSON,
           "old gateware reply %s", g_reply);
     CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "parity and stop_bits") == 0,
           "old gateware code: %d %s", g_err_code, g_err_arg);
@@ -347,7 +354,7 @@ static void test_v3r4_pulls(void) {
     /* an engaged pull-down refuses RX on that pin (the line idles high), before anything moves */
     CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_10K) == 0, "LA3 down");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
-    CHECK(strncmp(g_reply, "err:pull conflict: LA3", 22) == 0 && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
+    CHECK(g_err_code == BP_E_LA_PULL_DOWN_ENGAGED && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
           "v3r4: RX over a pull-down: %s (seq '%s')", g_reply, g_seq);
     CHECK(la_pins_fn(4) == LA_FN_NONE, "v3r4: the refused start claimed TX");
     la_pull_set(3, LA_PULL_NONE, PULL_STR_NONE);
@@ -506,7 +513,7 @@ static void test_claim_order(void) {
     g_cfg_rc = -2;
     g_enabled = true;
     start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2}");
-    CHECK(strcmp(g_reply, "err:uart busy") == 0 && g_enabled, "busy: %s (enabled %d)", g_reply, g_enabled);
+    CHECK(g_err_code == BP_E_UART_SESSION_OPEN && g_enabled, "busy: %s (enabled %d)", g_reply, g_enabled);
     CHECK(la_pins_fn(9) == LA_FN_UART_RX && la_pins_fn(10) == LA_FN_UART_TX, "busy released the other user's pins");
     CHECK(la_pins_fn(1) == LA_FN_NONE && la_pins_fn(2) == LA_FN_NONE, "busy left this start's pins claimed");
     la_pins_release(9);
@@ -523,7 +530,7 @@ static void test_claim_order(void) {
     uint8_t p = 4;
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 0, &p, 1);
     start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
-    CHECK(strncmp(g_reply, "err:pin conflict: LA4 is in use by gpio", 39) == 0 && g_seq[0] == 0 &&
+    CHECK(g_err_code == BP_E_LA_PIN_IN_USE && strcmp(g_err_arg, "4") == 0 && g_seq[0] == 0 &&
           la_pins_fn(3) == LA_FN_NONE && !g_pullup_on(3), "conflict: %s seq '%s'", g_reply, g_seq);
     la_pins_release(4);
     g_gw = 56;

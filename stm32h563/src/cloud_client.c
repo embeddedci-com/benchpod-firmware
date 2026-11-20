@@ -1,4 +1,5 @@
 #include "cloud_client.h"
+#include "bp_errors.h"
 #include "cloud_config.h"
 #include "wifi_manager.h"
 #include "device_identity.h"
@@ -888,7 +889,9 @@ static void cl_handle_command_request(const char *json) {
     if (!hw_worker_submit_cloud(request_id, command)) {
         /* A previous cloud command is still in flight, or the queue is full. The
            server will retry; report busy so it doesn't wait the full timeout. */
-        cl_send_command_error(request_id, "device busy");
+        char code[8];
+        snprintf(code, sizeof(code), "BP%04u", (unsigned)BP_E_CLOUD_COMMAND_BUSY);
+        cl_send_command_error_code(request_id, "device busy", code, NULL);
     }
 }
 
@@ -908,10 +911,13 @@ void cloud_client_send_command_response(const char *request_id,
        the same text in its data (a DUT's own JSON in uart_read), so only the start counts. */
     static const char k_err[] = "{\"status\":\"error\"";
     if (strncmp(reply, k_err, sizeof(k_err) - 1) == 0) {
-        char msg[320] = {0};   /* pin-conflict / la_voltage refusals run to ~250 characters */
+        char msg[320] = {0};   /* the free-text refusals left run to ~250 characters */
         char code[8] = {0};
         cl_json_str(reply, "message", msg, sizeof(msg));
         cl_json_str(reply, "code", code, sizeof(code));
+        /* A coded refusal has no message (the client renders the code): the envelope's "error"
+           names the code, so it is never empty. */
+        if (!msg[0] && code[0]) snprintf(msg, sizeof(msg), "%s", code);
         /* The args object verbatim, on the heap: no RAM to spare in .bss, little on this stack. */
         char *args = code[0] ? pvPortMalloc(256) : NULL;
         if (args && !bp_json_object_top(reply, "args", args, 256)) args[0] = 0;
@@ -931,7 +937,12 @@ void cloud_client_send_command_response(const char *request_id,
     if (!bp_emit_ok(&e)) {
         /* An error the caller can read, not a reconnect (bp_limits.h sizes the frame for the
            largest captured reply, so this needs an unusually long request id). */
-        cl_send_command_error(request_id, "reply too large for the cloud channel");
+        char args[48];   /* cloud_reply_too_large: what the frame needed, and what it holds */
+        snprintf(args, sizeof(args), "{\"bytes\":%u,\"limit\":%u}",
+                 (unsigned)(strlen(tail) + strlen(request_id) + 96u), (unsigned)sizeof(frame));
+        char code[8];
+        snprintf(code, sizeof(code), "BP%04u", (unsigned)BP_E_CLOUD_REPLY_TOO_LARGE);
+        cl_send_command_error_code(request_id, "reply too large for the cloud channel", code, args);
         return;
     }
     cl_send_reply_frame(frame, bp_emit_len(&e));
@@ -1030,9 +1041,10 @@ static void cl_handle_tunnel_open(const char *json) {
     if (slot < 0) return;                      /* all tunnels in use (the server caps this) */
     snprintf(s_tunnels[slot], sizeof(s_tunnels[slot]), "%s", id);   /* truncates, always terminated */
     /* The highest command tier the server allows this tunnel's user (policy-commands.md section
-       3); an older server sends none, which means everything, as before. */
+       3). None means T1 (firmware 4.0.0; everything up to 3.10.13): a server that does not say
+       gets tests and reads, not settings, flashing or updates. */
     char tier_s[8] = {0};
-    int max_tier = cl_json_str(json, "max_tier", tier_s, sizeof(tier_s)) && tier_s[0] ? atoi(tier_s) : 3;
+    int max_tier = cl_json_str(json, "max_tier", tier_s, sizeof(tier_s)) && tier_s[0] ? atoi(tier_s) : 1;
     command_handler_set_tunnel_max_tier(CH_CLOUD_TUNNEL_CONN + slot, max_tier);
     conn_tx_reset(CH_CLOUD_TUNNEL_CONN + slot);                  /* drop stale ring bytes */
     hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);  /* start the virtual conn fresh */

@@ -2,7 +2,8 @@
  * test_ch_transport.c — host tests for the per-connection byte stream
  * (src/command_handler_transport.c): line assembly across segments, CRLF, JSON/SCPI detection,
  * the over-long line, the raw-mode handoff to a module's receive function and back, the SCPI
- * lease refusal, the one-shot path for the pseudo-conns, and the teardown.
+ * lease refusal, the one-shot path for the pseudo-conns, the teardown, and which protocol a TCP
+ * connection may speak (SCPI on or off, JSON on plaintext LAN under HTTPS-only).
  *
  * The modules the transport hands bytes to are fakes here: each records what it got and takes
  * as many bytes as the test says.
@@ -16,6 +17,8 @@
 #include "lease_gate.h"
 #include "cmd_gate.h"
 #include "stm32h5xx_hal.h"
+#include "pod_policy.h"
+#include "bp_errors.h"
 
 static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL %s:%d: ", __func__, __LINE__); \
@@ -42,6 +45,28 @@ policy_src_t command_handler_policy_src(int conn_id) {
     return (conn_id >= CH_CLOUD_CONN) ? POLICY_SRC_CLOUD : POLICY_SRC_LAN;
 }
 uint32_t HAL_GetTick(void) { return 0; }
+
+/* The pod policy and the connection's transport (net_server). */
+static bool g_scpi = true, g_https_only;
+static bool g_usb[CH_MAX_CONN], g_tls[CH_MAX_CONN];
+static int  g_closed = -1;
+bool pod_policy_scpi(void) { return g_scpi; }
+bool pod_policy_https_only(void) { return g_https_only; }
+bool net_conn_on_usb(int c) { return c >= 0 && c < CH_MAX_CONN && g_usb[c]; }
+bool net_conn_on_tls(int c) { return c >= 0 && c < CH_MAX_CONN && g_tls[c]; }
+int at_send_data(int conn_id, const uint8_t *buf, size_t len) {
+    char t[200];
+    snprintf(t, sizeof(t), "%.*s", (int)len, (const char *)buf);
+    logf_("tx", conn_id, t);
+    return 0;
+}
+int at_close_connection(int conn_id) { g_closed = conn_id; return 0; }
+void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)args; (void)n;
+    char t[16];
+    snprintf(t, sizeof(t), "BP%04u", (unsigned)code);
+    logf_("code", conn_id, t);
+}
 
 /* A raw-mode module: takes up to g_take[mode] bytes, then hands the connection back to JSON
    when g_done[mode] is set. */
@@ -191,6 +216,51 @@ static void test_teardown_drops_partial(void) {
           "interleaved connections mixed");
 }
 
+/* Firmware 4.0.0: SCPI only while it is on (every TCP connection; not the cloud tunnels), and
+   JSON on a plaintext connection from the external LAN only while HTTPS-only is off. A refusal is
+   sent once, the connection closes, and nothing after it is dispatched. */
+static void test_proto_gate(void) {
+    g_scpi = false;
+    reset_conn(2); g_closed = -1;
+    feed(2, "*IDN?\nMEAS?\n");
+    CHECK(g_nlog == 1 && strncmp(g_log[0], "tx2:SCPI is off", 15) == 0 && g_closed == 2,
+          "SCPI while off: %d %s", g_nlog, g_nlog ? g_log[0] : "-");
+    CHECK(conn_proto(2) == PROTO_REFUSED, "proto %d", conn_proto(2));
+    feed(2, "{\"cmd\":\"ping\"}\n");
+    CHECK(g_nlog == 1, "a refused connection dispatched more");
+    g_usb[2] = true; reset_conn(2);   /* the USB link and TLS too */
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && g_closed == 2 && strncmp(g_log[0], "tx2:SCPI is off", 15) == 0, "USB link SCPI while off");
+    g_usb[2] = false;
+    reset_conn(7);                    /* a cloud tunnel: not affected */
+    feed(7, "*IDN?\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "scpi7:*IDN?") == 0, "tunnel SCPI refused: %s", g_log[0]);
+    g_scpi = true;
+
+    /* HTTPS-only: JSON on plaintext LAN is refused (BP0075); the USB link and TLS are fine. */
+    g_https_only = true;
+    reset_conn(3); g_closed = -1;
+    feed(3, "{\"cmd\":\"status\"}\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "code3:BP0075") == 0 && g_closed == 3, "plaintext LAN JSON: %s",
+          g_nlog ? g_log[0] : "-");
+    reset_conn(3); g_usb[3] = true;
+    feed(3, "{\"cmd\":\"status\"}\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "json3:{\"cmd\":\"status\"}") == 0, "USB link JSON refused");
+    reset_conn(3); g_usb[3] = false; g_tls[3] = true;
+    feed(3, "{\"cmd\":\"status\"}\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "json3:{\"cmd\":\"status\"}") == 0, "TLS JSON refused");
+    g_tls[3] = false;
+    reset_conn(3);                    /* SCPI on plaintext LAN under HTTPS-only: served */
+    feed(3, "*IDN?\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "scpi3:*IDN?") == 0, "SCPI under HTTPS-only: %s", g_log[0]);
+    /* A setting switched off mid-session ends it on the next line. */
+    g_scpi = false;
+    feed(3, "MEAS?\n");
+    CHECK(g_nlog == 2 && strncmp(g_log[1], "tx3:SCPI is off", 15) == 0, "SCPI switched off mid-session");
+    g_scpi = true; g_https_only = false;
+    reset_conn(3);
+}
+
 int main(void) {
     test_lines();
     test_detection();
@@ -200,6 +270,7 @@ int main(void) {
     test_scpi_lease();
     test_pseudo_conn();
     test_teardown_drops_partial();
+    test_proto_gate();
     if (fails) { printf("test_ch_transport: %d FAILED\n", fails); return 1; }
     printf("test_ch_transport: all passed\n");
     return 0;

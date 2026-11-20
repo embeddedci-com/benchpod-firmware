@@ -202,7 +202,7 @@ static inline void cs_deselect(void) { HAL_GPIO_WritePin(ICE_SPI_CS_PORT, ICE_SP
 static int spi_cmd_write(uint8_t cmd, const void *args, size_t args_len) {
     /* The last line of defense for a digital board and module that disagree on the flat cable's
        DAC pins (dac_link.h): no frame reaches the DAC, whichever path asked.  The commands are
-       refused with BP0035 before they get here. */
+       refused with BP0080 before they get here. */
     if (dac_link_opcode_drives_dac(cmd) && module_dac_pinout_mismatch()) return SE_ERR_DAC_PINOUT;
     cs_select();
     int rc = spi_write_blocking(SPI_PORT, &cmd, 1);

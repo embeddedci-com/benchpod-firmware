@@ -12,10 +12,10 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
-#include "bp_err.h"
 #include "signal_engine.h"
 #include "la_rate.h"
 #include "stm32h5xx_hal.h"  /* HAL_GetTick: bulk stall timer */
@@ -70,7 +70,7 @@ static struct {
     int    conn_id;
     size_t samples;
     bool   stop_dac;   /* measure: stop the DAC sequencer once captured */
-    bool   b64;        /* reply dense samples as base64 ("enc":"b64", see bulk.b64) */
+    bool   b64;        /* reply dense samples as base64 (the default, see bulk.b64) */
 } v2cap;
 
 /* ---- v2 async deep LA→PSRAM capture ----
@@ -145,7 +145,7 @@ static struct {
     float  adc_rate_hz;   /* ACHIEVED rates (24MHz/divider), not the requested ones — */
     float  la_rate_hz;    /* the server needs these for a correct, aligned timebase.   */
     bool   stop_dac;      /* HW-cut a concurrently-running DAC during this capture; free it after */
-    bool   b64;           /* reply the ADC region as base64 ("enc":"b64", see bulk.b64) */
+    bool   b64;           /* reply the ADC region as base64 (the default, see bulk.b64) */
     uint32_t chg_k;       /* > 0: the LA is a change capture (gw >= v50, LA above 12 MS/s) */
 } dualcap;
 
@@ -217,21 +217,21 @@ static struct {
    long ends the send. */
 #define BULK_STALL_MS 30000u
 
-/* ---- compact dense read-back ("enc":"b64", advertised as caps[] "capture_b64") ----
+/* ---- compact dense read-back (base64, the default from firmware 4.0.0) ----
    Decimal JSON costs up to 6 B per 16-bit sample ("65535,") plus a snprintf per sample, and
    that text, not the capture, was the read-back bottleneck (2M ADC samples = ~12 MB).  Base64url
    (unpadded, RFC 4648 §5) of the raw little-endian words is 8/3 B per sample, a fixed cost, and
    stays inside the same newline-delimited JSON chunk, so the LAN socket, the USB console and the
-   cloud tunnel all carry it unchanged.  It is OPT-IN per request: a client that does not send
-   "enc":"b64" (older SDKs, the server) keeps getting "data":[...].  Only the dense region
+   cloud tunnel all carry it unchanged.  Every reply uses it unless the request says "enc":"dec"
+   (the decimal "data":[...] that was the default up to 3.10.13).  Only the dense region
    changes; LA run-length frames ("la_edges") are already compact and stay as they are. */
 static bool wants_b64(const char *json) {
     char enc[8] = {0};
-    return json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "b64") == 0;
+    return !(json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "dec") == 0);
 }
-/* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_rate_hz":NNNNNNNNNN,
-   "la_rate_hz":NNNNNNNNNN,"b64":" is 91 B. */
-#define BULK_B64_HEADER_MAX 96u
+/* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_sample_rate_hz":NNNNNNNNNN,
+   "la_sample_rate_hz":NNNNNNNNNN,"b64":" is 105 B. */
+#define BULK_B64_HEADER_MAX 112u
 
 /* ---- capture trigger (gateware >= CAPTURE_TRIGGER_MIN_GW) -----------------
    A triggered capture's producers load on the arm but do not sample until the fabric sees
@@ -246,7 +246,7 @@ static struct {
     absolute_time_t deadline;     /* trigger_timeout_ms after the arm */
     absolute_time_t next_check;   /* TRIGGER_STATUS is an SPI read: don't do it every pass */
     bool            fired;
-    char            msg[160];     /* a caller's own timeout message (sensor_la); "" = the generic one */
+    char            sensor[40];   /* sensor_la: the instance whose SDA it waits on (BP0039); "" = BP0038 */
 } trigwait;
 #define TRIGWAIT_POLL_US  5000
 
@@ -298,14 +298,9 @@ static bool capture_trigger_begin(int conn_id, const char *json, la_trigger_t *o
 
 /* Gate a parsed (or built) trigger on the gateware version and program SET_TRIGGER. */
 static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool allow_pre) {
-    char err[LA_PINS_ERR_MAX];
     trig_reply.present = false;
-    uint8_t ver = signal_engine_fpga_version();
     if (!gw_caps()->capture_trigger) {
-        snprintf(err, sizeof(err),
-                 "capture triggers need gateware v%u or newer (this pod runs v%u)",
-                 (unsigned)CAPTURE_TRIGGER_MIN_GW, (unsigned)ver);
-        send_error(conn_id, err);
+        bp_err_gateware_too_old(conn_id, "capture triggers", CAPTURE_TRIGGER_MIN_GW);
         return false;
     }
     if (out->pre_samples && !allow_pre) {
@@ -313,9 +308,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
         return false;
     }
     if (out->pre_samples && !gw_caps()->la_change) {
-        snprintf(err, sizeof(err), "trigger pre_samples needs gateware v%u or newer (this pod runs v%u)",
-                 (unsigned)LA_CHANGE_MIN_GW, (unsigned)ver);
-        send_error(conn_id, err);
+        bp_err_gateware_too_old(conn_id, "trigger pre_samples", LA_CHANGE_MIN_GW);
         return false;
     }
     if (fpga_set_trigger_pre(out->la, (uint8_t)out->edge, out->pre_samples != 0u) != 0) {
@@ -328,7 +321,7 @@ static bool capture_trigger_program(int conn_id, const la_trigger_t *out, bool a
 /* The capture armed: start the timeout budget on top of its own completion deadline. */
 static void capture_trigger_armed(int conn_id, const la_trigger_t *t) {
     if (!t->present) return;
-    trigwait.msg[0]     = '\0';   /* the generic `trigger timeout:` message unless the caller sets one */
+    trigwait.sensor[0]  = '\0';   /* the generic trigger timeout (BP0038) unless the caller names a sensor */
     trigwait.active     = true;
     trigwait.conn_id    = conn_id;
     trigwait.t          = *t;
@@ -385,7 +378,7 @@ static void bulk_begin(int conn_id, size_t total, bool is16) {
     bulk.adc_samples = 0;
     bulk.adc_rate_hz = 0;   /* default: omit; a rate-aware caller sets these after */
     bulk.la_rate_hz  = 0;
-    bulk.b64         = false;   /* default: decimal; an "enc":"b64" caller sets it after */
+    bulk.b64         = false;   /* the caller sets it after (wants_b64: base64 unless "enc":"dec") */
     bulk.chg         = false;
     bulk_take_trigger();
 }
@@ -465,7 +458,7 @@ static bool bulk_pump_changes(int conn, size_t avail) {
     if (!bulk.chg_hdr) {
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
         if (bulk.la_rate_hz)
-            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
         if (bulk.chg_pre)
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"pre_samples\":%lu,", (unsigned long)bulk.chg_pre);
         if (bulk.chg_trunc)
@@ -600,9 +593,9 @@ static void bulk_pump(void) {
                 /* adc_samples==0 (LA-only unified capture): first chunk still carries metadata. */
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
                 if (bulk.adc_rate_hz)
-                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"adc_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
+                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"adc_sample_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
                 if (bulk.la_rate_hz)
-                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la\":true,\"la_edges\":[");
             } else {
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[");
@@ -694,10 +687,10 @@ static void bulk_pump(void) {
                             "{\"status\":\"ok\",%s", bulk.is16 ? "\"bits\":16," : "");
             if (bulk.adc_rate_hz)
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                                "\"adc_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
+                                "\"adc_sample_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
             if (bulk.la_rate_hz)
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                                "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+                                "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
                             (bulk.b64 && bulk.is16) ? "\"b64\":\"" : "\"data\":[");
         } else {
@@ -749,12 +742,7 @@ static void bulk_pump(void) {
    samples as fast as they came) says what ran and what to change, instead of "capture failed". */
 static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
     if (!signal_engine_last_cap_overflowed()) { send_error(cid, "capture failed"); return; }
-    char msg[200];
-    snprintf(msg, sizeof(msg),
-             "capture overflowed: the PSRAM could not keep up with LA %lu kS/s + ADC %lu kS/s. "
-             "Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples",
-             (unsigned long)(la_hz / 1000u), (unsigned long)(adc_hz / 1000u));
-    send_error(cid, msg);
+    bp_err_capture_overflowed(cid, (int32_t)(la_hz / 1000u), (int32_t)(adc_hz / 1000u));   /* BP0071 */
 }
 
 #define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture on gateware
@@ -780,35 +768,29 @@ static void fmt_mhz(char *buf, size_t n, float hz) {
 static bool la_rate_fits(int conn_id, size_t samples, float req_hz, bool with_adc) {
     if (req_hz <= 0.0f) return true;
     const float ceiling = la_raw_ceiling(with_adc);
-    char req[12], top[12], msg[256];
+    char req[12], top[12];
     fmt_mhz(req, sizeof(req), req_hz);
     if (req_hz > ceiling * 1.001f) {
         /* the fastest that fits this depth under the ceiling */
         fmt_mhz(top, sizeof(top), (float)la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)samples, ceiling).rate_hz);
         char cap[12];
         fmt_mhz(cap, sizeof(cap), ceiling);
-        snprintf(msg, sizeof(msg), "LA at %s MS/s does not fit: with ADC samples in the capture the raw LA "
-                 "runs at most %s MS/s on this gateware, %s MS/s for %lu samples (above 12 MS/s it records "
-                 "changes instead)", req, cap, top, (unsigned long)samples);
-        send_error(conn_id, msg);
+        bp_err_la_rate_above_ceiling(conn_id, req, cap, top, (int32_t)samples);   /* BP0068 */
         return false;
     }
     const la_plan_t plan = la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)samples, req_hz);
     if (!plan.capped) return true;
     const uint32_t most = la_psram_max_samples_at(FPGA_HFOSC_HZ, req_hz, (uint32_t)samples);
     fmt_mhz(top, sizeof(top), (float)plan.rate_hz);
-    snprintf(msg, sizeof(msg), "LA at %s MS/s does not fit %lu samples: at most %lu samples at %s MS/s, "
-             "or at most %s MS/s for %lu samples (or leave the rate out for the fastest that fits)",
-             req, (unsigned long)samples, (unsigned long)most, req, top, (unsigned long)samples);
-    send_error(conn_id, msg);
+    bp_err_la_rate_too_deep(conn_id, req, (int32_t)samples, (int32_t)most, top);   /* BP0069 */
     return false;
 }
 
-/* "samples out of range: 1 to N" (the prefix is what older clients and docs match on). */
+/* samples outside 1..max: BP0067. `why` (a deep capture's limit at this rate) only goes to the
+   log. */
 static void send_samples_range(int conn_id, unsigned long max, const char *why) {
-    char msg[160];
-    snprintf(msg, sizeof(msg), "samples out of range: 1 to %lu%s", max, why ? why : "");
-    send_error(conn_id, msg);
+    if (why) LOG_D("[cmd] samples out of range: 1 to %lu%s\n", max, why);
+    bp_err_samples_out_of_range(conn_id, (int32_t)max);
 }
 
 static void chgscan_fail(const char *why) {
@@ -927,7 +909,7 @@ static void sensla_done(void) {
 static bool sensla_place(uint32_t cause) {
     uint64_t post = (uint64_t)signal_engine_la_change_units() * LA_CHANGE_UNIT_TICKS;
     if (cause == 1u) {
-        sensla_fail("la capture failed: the bus changed faster than the pod can store; use a lower sample_rate_mhz");
+        sensla_fail("la capture failed: the bus changed faster than the pod can store; use a lower sample_rate_hz");
         return false;
     }
     if (cause != 0u) {
@@ -1027,8 +1009,11 @@ void capture_poll(void) {
         if (!trigwait.fired && time_reached(trigwait.deadline)) {
             int  conn = trigwait.conn_id;
             char msg[LA_PINS_ERR_MAX];
-            if (trigwait.msg[0]) snprintf(msg, sizeof(msg), "%s", trigwait.msg);
-            else                 la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
+            if (trigwait.sensor[0])
+                bp_note_sensor_trigger_timeout(msg, sizeof(msg), (int32_t)trigwait.t.la, trigwait.sensor,
+                                               (int32_t)trigwait.t.timeout_ms);
+            else
+                la_trigger_timeout_msg(&trigwait.t, msg, sizeof(msg));
             fpga_capture_abort();              /* also turns SET_TRIGGER off */
             trigwait.active = false;
             if (v2cap.active   && v2cap.conn_id   == conn) v2cap.active   = false;
@@ -1293,7 +1278,7 @@ void handle_capture(int conn_id, const char *json) {
        buffer, NOT the multi-MB PSRAM region.  For deep multi-second ADC use capture_dual
        (adc_samples with la_samples:0), which streams chunked from PSRAM. */
     if (samples == 0 || samples > ADC_MONO_BUF_SAMPLES) {
-        send_error(conn_id, "samples out of range (use capture_dual for deep captures)");
+        send_samples_range(conn_id, ADC_MONO_BUF_SAMPLES, NULL);
         return;
     }
     la_trigger_t trig;
@@ -1319,19 +1304,20 @@ void handle_capture(int conn_id, const char *json) {
     return;            /* gate stays claimed until poll completes it */
 }
 
-/* Parse a named "<key>" MHz rate field into Hz (0 = auto). */
+/* Parse a named "<key>" rate field in Hz (0 = auto). */
 static float parse_named_rate_hz(const char *json, const char *key) {
     char s[16] = {0};
     if (!json_get_value(json, key, s, sizeof(s)) || !s[0]) return 0.0f;
-    return (float)atof(s) * 1.0e6f;
+    float hz = (float)atof(s);
+    return hz > 0.0f ? hz : 0.0f;
 }
 
 /* Unified simultaneous capture (v2): arm the ADC + raw 12-ch LA producers off ONE
    trigger and stream BOTH regions back as one 16-bit array — the ADC samples first,
    then the LA words — which the server splits at adc_samples.  Either count may be
    0 to capture just the other (so this one verb also serves ADC-only / LA-only).
-     {"cmd":"capture_dual","adc_samples":N,"adc_rate_mhz":R,
-                           "la_samples":M,"la_rate_mhz":S}
+     {"cmd":"capture_dual","adc_samples":N,"adc_sample_rate_hz":R,
+                           "la_samples":M,"la_sample_rate_hz":S}
    command_handler_poll() reads back + replies, so the net task keeps running. */
 void handle_capture_dual(int conn_id, const char *json) {
     char s[16] = {0};
@@ -1351,15 +1337,12 @@ void handle_capture_dual(int conn_id, const char *json) {
     /* The fabric's dual capture takes at most LA_PSRAM_MAX_SAMPLES and ADC_CAP_MAX_SAMPLES (4 MB
        each); a bigger request used to pass the planner and fail at the start as "capture failed". */
     if (la_n > LA_PSRAM_MAX_SAMPLES || adc_n > ADC_CAP_MAX_SAMPLES) {
-        char msg[120];
-        snprintf(msg, sizeof(msg), "capture_dual takes at most %lu LA and %lu ADC samples (la_capture: up to %lu LA)",
-                 (unsigned long)LA_PSRAM_MAX_SAMPLES, (unsigned long)ADC_CAP_MAX_SAMPLES,
-                 (unsigned long)signal_engine_la_max_samples(false));
-        send_error(conn_id, msg);
+        bp_err_capture_dual_too_deep(conn_id, (int32_t)LA_PSRAM_MAX_SAMPLES, (int32_t)ADC_CAP_MAX_SAMPLES,
+                                     (int32_t)signal_engine_la_max_samples(false));   /* BP0070 */
         return;
     }
-    float adc_hz = parse_named_rate_hz(json, "adc_rate_mhz");
-    float la_hz  = parse_named_rate_hz(json, "la_rate_mhz");
+    float adc_hz = parse_named_rate_hz(json, "adc_sample_rate_hz");
+    float la_hz  = parse_named_rate_hz(json, "la_sample_rate_hz");
     /* LA above 12 MS/s on gateware >= v50: the LA records its changes (48, 24 or 16 MS/s) */
     uint32_t chg_k = la_n ? signal_engine_la_change_divisor(la_hz) : 0u;
     /* Raw LA: the same plan la_capture uses (la_psram_plan). No rate means the fastest; a
@@ -1397,11 +1380,11 @@ void handle_capture_dual(int conn_id, const char *json) {
         };
         psram_layout_t lo = psram_plan(&req);
         if (lo.status == PSRAM_ALLOC_ERR_CAPACITY) {
-            send_error(conn_id, "capture too deep: LA+ADC+DAC exceed 8 MB PSRAM");
+            bp_err_psram_too_small(conn_id);   /* BP0072 */
             return;
         }
         if (lo.status == PSRAM_ALLOC_ERR_BANDWIDTH) {
-            send_error(conn_id, "combined sample rate exceeds PSRAM bus bandwidth");
+            bp_err_psram_bandwidth(conn_id);   /* BP0073 */
             return;
         }
         adc_base = lo.adc_base;   /* ADC packed right after LA (LA @ base 0) */
@@ -1507,34 +1490,6 @@ void handle_capture_read(int conn_id, const char *json) {
            (unsigned)offset, (unsigned)total);
 }
 
-void handle_stream(int conn_id, const char *json) {
-    char samples_s[16] = {0};
-    json_get_value(json, "samples", samples_s, sizeof(samples_s));
-    size_t samples = samples_s[0] ? (size_t)atoi(samples_s) : 256;
-    float  sr_hz   = parse_sample_rate_hz(json);   /* 0 = max rate */
-    /* "stream" is a one-shot PSRAM capture: the deep capture is fully async in the
-       gateware, so there is nothing to chunk (the old chunked-DMA streaming model
-       was v1-only).  Arm it and defer the read-back to command_handler_poll(). */
-    if (samples == 0 || samples > ADC_MONO_BUF_SAMPLES) {
-        send_error(conn_id, "samples out of range (use capture_dual for deep captures)");
-        return;
-    }
-    if (!heavy_begin(conn_id)) return;
-
-    if (adc_capture_psram_start(samples, sr_hz) != 0) {
-        heavy_release(conn_id);
-        send_error(conn_id, "capture failed");
-        return;
-    }
-    last_cap.valid = false;   /* this capture overwrites a PSRAM region */
-    v2cap.active   = true;
-    v2cap.conn_id  = conn_id;
-    v2cap.samples  = samples;
-    v2cap.stop_dac = false;
-    v2cap.b64      = wants_b64(json);
-    dac_trace_note_capture(samples);   /* the read-back lands in the pool */
-}
-
 /* `test` — pure Pico-side diagnostic that fills a buffer with a known
    pattern (varying or constant) and returns it via the same chunked-array
    format as capture/measure.  Useful for verifying TCP, JSON serialisation,
@@ -1615,7 +1570,7 @@ void handle_measure(int conn_id, const char *json) {
     char samples_s[16]= {0};
 
     json_get_value(json, "waveform",  waveform,   sizeof(waveform));
-    json_get_value(json, "freq",      freq_s,     sizeof(freq_s));
+    json_get_value(json, "freq_hz",   freq_s,     sizeof(freq_s));
     json_get_value(json, "amplitude", amp_s,      sizeof(amp_s));
     json_get_value(json, "offset",    off_s,      sizeof(off_s));
     json_get_value(json, "samples",   samples_s,  sizeof(samples_s));
@@ -1667,7 +1622,7 @@ void handle_measure(int conn_id, const char *json) {
     dac_trace_note_capture(samples);   /* the read-back lands in the pool */
 }
 
-/* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}: an I2C instance's
+/* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_hz":2000000}: an I2C instance's
    SDA/SCL captured, 4 samples per byte (oldest in the high bits: bit7 = scl(s0), bit6 = sda(s0) ...
    bit0 = sda(s3)). SPI and UART instances: use la_capture on their pins.
    "trigger":"start" (the default) waits up to "timeout_ms" (SENSOR_LA_TIMEOUT_DEFAULT_MS) for the
@@ -1720,9 +1675,7 @@ void handle_sensor_la(int conn_id, const char *json) {
         /* the pre-trigger needs the change capture (gateware >= v50; the emulation image is v54) */
         k = la_change_divisor_pre(sr_hz, signal_engine_fpga_version());
         if (!k) {
-            snprintf(err, sizeof(err), "sensor_la trigger \"start\" needs gateware v%u or newer (this pod runs v%u); "
-                     "send \"trigger\":\"none\"", (unsigned)LA_CHANGE_MIN_GW, (unsigned)signal_engine_fpga_version());
-            send_error(conn_id, err);
+            bp_err_gateware_too_old(conn_id, "sensor_la trigger \"start\"", LA_CHANGE_MIN_GW);
             return;
         }
         pre = (uint32_t)(total / 8u);
@@ -1748,8 +1701,7 @@ void handle_sensor_la(int conn_id, const char *json) {
     }
     capture_trigger_armed(conn_id, &trig);
     if (trig.present)
-        snprintf(trigwait.msg, sizeof(trigwait.msg), "trigger timeout: no falling edge on LA%u (SDA of %s) within %lu ms; "
-                 "the DUT did not use the I2C bus", sda, inst, (unsigned long)timeout_ms);
+        snprintf(trigwait.sensor, sizeof(trigwait.sensor), "%s", inst);
     last_cap.valid = false;   /* this capture overwrites the LA PSRAM region */
     memset(&sensla, 0, sizeof(sensla));
     sensla.active  = true;
@@ -1768,7 +1720,7 @@ void handle_sensor_la(int conn_id, const char *json) {
  * (byte 2k = LA1..LA8, byte 2k+1 = {00, LA9..LA14}).  The cloud server renders
  * the raw logic traces — the retired agent only ever decoded I2C; this is the
  * new general view.
- *   {"cmd":"la_capture","samples":1024,"sample_rate_mhz":2.0}
+ *   {"cmd":"la_capture","samples":1024,"sample_rate_hz":2000000}
  * "samples" is the LA sample count (2 bytes each); 2*samples must fit the buffer.  The first
  * reply frame carries "la_rate_hz", the ACHIEVED rate: 24 MHz over a whole divider, lowered
  * further for a capture deeper than the burst ring (la_rate.c), so it can differ from the

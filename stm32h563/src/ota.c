@@ -1,4 +1,5 @@
 #include "ota.h"
+#include "bp_errors.h"
 #include "psram.h"
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for the whole OTA session */
 #include "flash_layout.h"
@@ -195,8 +196,9 @@ static const char *signature_refusal(bool external_lan, char *e, size_t cap) {
         return e;
     }
     /* The LAN API has no client authentication: from Ethernet or Wi-Fi only a good signature,
-       whatever the policy, unless the user allowed more on the device (H3). */
-    if (external_lan && s_sig != FW_SIG_OK && !fw_sign_lan_unsigned()) {
+       whatever the policy (H3; firmware 4.0.0 runs "required" anyway, and the 3.10.x lan_unsigned
+       way around this is gone). */
+    if (external_lan && s_sig != FW_SIG_OK) {
         snprintf(e, cap, "signature: %s (LAN needs a signed image; use USB)", res);
         return e;
     }
@@ -530,7 +532,8 @@ static const char *busy_msg(void) {
     char who[32];   /* "LAN connection " + an int */
     snprintf(msg, sizeof(msg), "busy: %s update from %s is in progress",
              ota_target_name(s_target), holder_name(who, sizeof(who)));
-    return msg;
+    /* The console shows the text; JSON sends BP0051 with the target and the holder. */
+    return bp_tag_update_in_progress(msg, ota_target_name(s_target), who);
 }
 
 const char *ota_busy_for(ota_owner_t who) {

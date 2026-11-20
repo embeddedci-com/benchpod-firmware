@@ -48,17 +48,17 @@ static cloud_caps_t typical(void) {
     return c;
 }
 
-/* Every feature key the server reads, present in the frame. */
+/* Every key the frame carries (firmware 4.0.0: values and facts, no feature flags). */
 static void check_features(const char *f) {
     static const char *keys[] = {
-        "device_id", "firmware_version", "flash_kb", "sig_policy", "lan_policy", "scope", "analog",
-        "adc_bits", "adc_cal_a_uv", "adc_cal_b_nv", "dac", "dac_replay", "dac_dc",
-        "dac_deep_replay", "dac_replay_max_samples", "dac_control_loop", "dac_loop_sources",
-        "dac_loop_input_map", "dac_cotrig", "generate_bits", "gpio_read", "capture_trigger", "spi_master",
-        "nrst_pin", "pod_current", "current_out", "current_out_min_ua",
-        "current_out_max_ua", "adc_low_range", "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
-        "boot_id", "unclean_resets", "sensors", "sensors_format", "sensors_digital", "uplink", "wifi_scan", "la_max_rate_hz",
-        "features_rev", "api", "min_client_api", "gateware_version", "fpga_image",
+        "device_id", "firmware_version", "flash_kb", "sig_policy", "lan_policy", "ws_auth_v2", "analog",
+        "nrst_pin", "sensors_digital", "wifi_scan", "pod_current", "adc_low_range",
+        "adc_bits", "adc_fullscale_mv", "adc_channels", "adc_cal_a_uv", "adc_cal_b_nv",
+        "dac_bits", "dac_replay_bits", "dac_fullscale_mv", "dac_channels", "dac_replay_max_samples",
+        "generate_bits", "la_max_rate_hz", "current_out_min_ua", "current_out_max_ua",
+        "adc_range", "adc_range_fs_mv", "board", "safe_mode", "safe_reason", "reset_cause", "last_crash",
+        "boot_id", "unclean_resets", "uplink", "features_rev", "api", "min_client_api",
+        "gateware_version", "fpga_image",
     };
     char v[64];
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
@@ -78,7 +78,8 @@ static void test_typical_frame(void) {
     CHECK(strstr(f, "\"type\":\"capabilities\"") != NULL);
     CHECK(strstr(f, "\"device_id\":\"0b7d2c1e-5a4f-4c3b-9e8d-7f6a5b4c3d2e\"") != NULL);
     CHECK(strstr(f, "\"adc_cal_a_uv\":-1234567") != NULL);
-    CHECK(strstr(f, "\"adc_low_range\":true,\"adc_range\":\"low\",\"adc_range_fs_mv\":5461,") != NULL);
+    CHECK(strstr(f, "\"adc_low_range\":true,") != NULL);
+    CHECK(strstr(f, "\"adc_range\":\"low\",\"adc_range_fs_mv\":5461,") != NULL);
     CHECK(strstr(f, "\"last_crash\":\"none\"}") != NULL);
     CHECK(strstr(f, "\"boot_id\":\"0000002a\",\"unclean_resets\":0,") != NULL);
     CHECK(strstr(f, "c3_restarts") == NULL);   /* no C3 on the board: no counts */
@@ -205,51 +206,24 @@ static void test_too_small_buffer(void) {
     CHECK(cloud_caps_build(&c, f, sizeof(f)) == 0);
 }
 
-/* The status reply's caps[] from the same values, in the order status always listed them. */
-static void test_status_list(void) {
-    char buf[1024];
-    bp_emit_t e;
+/* Firmware 4.0.0: no per-feature flags in the frame, only values and the facts. */
+static void test_frame_has_no_feature_flags(void) {
+    static char f[CLOUD_CAPS_MAX + 1];
     cloud_caps_t c = typical();
     c.usb_cc = true;
-    c.sensors_digital = true;
-    bp_emit_init(&e, buf, sizeof(buf));
-    cloud_caps_emit_list(&e, &c);
-    CHECK(bp_emit_ok(&e));
-    CHECK(strcmp(buf, ",\"caps\":[\"signal\",\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
-                      "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"pod_current\",\"adc_low_range\",\"analog\",\"scope\",\"dac_limits\","
-                      "\"calibrate\",\"cal_dmm\",\"current_out\",\"dac\",\"dac_dc\",\"dac_replay\",\"dac_deep_replay\","
-                      "\"dac_control_loop\",\"dac_cotrig\",\"generate16\",\"dac_loop_sources\",\"dac_loop_input_map\","
-                      "\"gpio_read\",\"capture_trigger\",\"spi_master\",\"spi_stream\",\"nrst_pin\","
-                      "\"usb_cc\"]") == 0);
-
-    /* The digital board: cloud_caps_collect clears every analog feature, so the list names none,
-       not even "signal" (the scope's old name). */
+    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0);
+    static const char *const gone[] = { "\"ota\":", "\"blob_slots\"", "\"ota_sig\"", "\"sig_policy_cmd\"",
+        "\"lease_state\"", "\"lan_policy_cmd\"", "\"tunnel_max_tier\"", "\"lan_tls\"", "\"wiring_store\"",
+        "\"scope\"", "\"analyzer\"", "\"tunnel\"", "\"dac\":", "\"dac_control_loop\"", "\"la_pins\"",
+        "\"capture_b64\"", "\"can\"", "\"sensors\":", "\"sensors_format\"", "\"usb_cc\"", "\"serial\"" };
+    for (size_t i = 0; i < sizeof(gone) / sizeof(gone[0]); i++)
+        if (strstr(f, gone[i])) { printf("FAIL frame still has %s\n", gone[i]); failures++; }
+    CHECK(strstr(f, "\"features_rev\":") && strstr(f, "\"analog\":true") && strstr(f, "\"wifi_scan\":true"));
+    CHECK(strstr(f, "\"ws_auth_v2\":true") && strstr(f, "\"adc_cal_a_uv\":"));
+    /* Digital v3r3 has no ESP32-C3: wifi_scan false. */
     cloud_caps_t d = typical();
-    d.analog = d.dac_ac = d.dac_dc = d.dac_replay = d.deep_replay = false;
-    d.control_loop = d.cotrig = d.loop_sources = d.loop_input_map = d.generate16 = false;
-    d.pod_current = d.nrst_pin = d.usb_cc = d.adc_low_range = false;
-    bp_emit_init(&e, buf, sizeof(buf));
-    cloud_caps_emit_list(&e, &d);
-    CHECK(strcmp(buf, ",\"caps\":[\"gpio\",\"power\",\"swd\",\"uart\",\"la\","
-                      "\"analyzer\",\"command\",\"tunnel\",\"ota\",\"la_pins\",\"power_profile\","
-                      "\"capture_b64\",\"can\",\"can_fd\",\"sensors\",\"sensor_la_trigger\",\"usb_net\",\"usb_net_setting\",\"lan_tls\",\"wifi_scan\",\"gpio_read\",\"capture_trigger\","
-                      "\"spi_master\",\"spi_stream\"]") == 0);
-    if (strstr(buf, "analog") || strstr(buf, "signal")) printf("  %s\n", buf);
-
-    /* Digital v3r3 has no ESP32-C3: no wifi_scan in the list, and false in the frame. */
     d.no_wifi_scan = true;
-    bp_emit_init(&e, buf, sizeof(buf));
-    cloud_caps_emit_list(&e, &d);
-    CHECK(strstr(buf, "wifi_scan") == NULL && strstr(buf, "\"lan_tls\",\"gpio_read\"") != NULL);
-    {
-        static char g[CLOUD_CAPS_MAX + 1];
-        CHECK(cloud_caps_build(&d, g, sizeof(g)) > 0 && strstr(g, "\"wifi_scan\":false") != NULL);
-    }
-
-    /* The frame does not carry usb_cc (the server never read it): adding the field changed nothing. */
-    static char f[CLOUD_CAPS_MAX + 1];
-    CHECK(cloud_caps_build(&c, f, sizeof(f)) > 0 && strstr(f, "usb_cc") == NULL);
+    CHECK(cloud_caps_build(&d, f, sizeof(f)) > 0 && strstr(f, "\"wifi_scan\":false") != NULL);
 }
 
 /* What a status with "caps":false gets instead of the list, and the image names. */
@@ -296,7 +270,7 @@ int main(void) {
     test_uplink();
     test_status_facts();
     test_typical_frame();
-    test_status_list();
+    test_frame_has_no_feature_flags();
     test_worst_case_fits();
     test_too_small_buffer();
     if (failures) { printf("test_cloud_caps: %d FAILED\n", failures); return 1; }

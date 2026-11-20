@@ -17,7 +17,6 @@
 #include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
-#include "bp_err.h"
 #include "signal_engine.h"
 #include "la_io.h"
 #include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */
@@ -79,23 +78,24 @@ static char s_rail_profile[2][WIRING_NAME_MAX + 1];   /* [efuse - 1] */
 void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
     char profile[WIRING_NAME_MAX + 1] = {0};
-    char state_s[8]  = {0};
     char delay_s[12] = {0};
 
     if (!json_get_value(json, "efuse", efuse_s, sizeof(efuse_s))) {
         send_error(conn_id, "missing efuse");
         return;
     }
-    if (!json_get_value(json, "state", state_s, sizeof(state_s))) {
-        send_error(conn_id, "missing state");
+    char en_s[8] = {0};   /* "enabled":true|false (firmware up to 3.10.13: "state":0|1) */
+    if (!json_get_value(json, "enabled", en_s, sizeof(en_s)) ||
+        (strcmp(en_s, "true") != 0 && strcmp(en_s, "false") != 0)) {
+        send_error(conn_id, "enabled must be true or false");
         return;
     }
 
     int      efuse    = atoi(efuse_s);
-    bool     on       = (atoi(state_s) != 0);
+    bool     on       = strcmp(en_s, "true") == 0;
     int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
     if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
-        bp_err_wiring_bad_name(conn_id, BP_ERR_TEXT("bad profile name"), profile);
+        bp_err_wiring_bad_name(conn_id, profile);
         return;
     }
     uint32_t delay_ms = 0;
@@ -114,8 +114,8 @@ void handle_target_power(int conn_id, const char *json) {
        the eFuse will reach once the delay elapses. */
     char payload[56];
     snprintf(payload, sizeof(payload),
-             "{\"efuse\":%d,\"enabled\":%d,\"delay_ms\":%u}",
-             efuse, on ? 1 : 0, (unsigned)delay_ms);
+             "{\"efuse\":%d,\"enabled\":%s,\"delay_ms\":%u}",
+             efuse, on ? "true" : "false", (unsigned)delay_ms);
     send_ok_str(conn_id, payload);
 }
 
@@ -154,6 +154,8 @@ bool la_voltage_from_profile(void) {
     return true;
 }
 
+#define TF(b) ((b) ? "true" : "false")
+
 void handle_target_status(int conn_id, const char *json) {
     (void)json;
     target_power_status_t e1, e2;
@@ -170,11 +172,11 @@ void handle_target_status(int conn_id, const char *json) {
     char resp[432];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
-             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
-             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
+             "\"efuse1\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
+             "\"efuse2\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
              "\"status_supported\":%s}}\n",
-             e1.enabled, e1.fault, e1.valid, e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
-             e2.enabled, e2.fault, e2.valid, e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
+             TF(e1.enabled), TF(e1.fault), TF(e1.valid), e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
+             TF(e2.enabled), TF(e2.fault), TF(e2.valid), e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
              e1.status_supported ? "true" : "false");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
@@ -276,13 +278,7 @@ void handle_identity_pop(int conn_id, const char *json) {
     }
 }
 
-/* identity_wipe only runs on the pod's USB console (console.c, physical presence); every JSON
-   transport gets this refusal. */
-void handle_identity_wipe(int conn_id, const char *json) {
-    (void)json;
-    send_error(conn_id, "identity_wipe: only on the pod's USB console (physical presence): "
-                        "benchpod identity wipe --connection usb");
-}
+/* identity_wipe: command_handler_recovery.c (the USB link; the console had it up to 3.10.13). */
 
 /* Report the USB-C CC-line state (rev3+): which orientation the cable is in and
    how much current the upstream source advertises.
@@ -313,8 +309,8 @@ void handle_usb_cc(int conn_id, const char *json) {
 }
 
 /* Drive the dedicated target-reset line (rev3+, /NRST_CONTROL on J1 pin 22).
-     {"cmd":"nrst","assert":1}      -> hold the target in reset
-     {"cmd":"nrst","assert":0}      -> release (Hi-Z; the DUT's pull-up wins)
+     {"cmd":"nrst","assert":true}   -> hold the target in reset
+     {"cmd":"nrst","assert":false}  -> release (Hi-Z; the DUT's pull-up wins)
      {"cmd":"nrst","pulse_ms":50}   -> assert, wait, release
      {"cmd":"nrst"}                 -> report state
    Flashing does NOT need this: dap_start's CMSIS-DAP SWJ_PINS already drives the
@@ -363,14 +359,11 @@ void handle_fpga_image(int conn_id, const char *json) {
     else if (!strcmp(s, "1") || !strcmp(s, "deep")) img = 1;
     else if (!strcmp(s, "2") || !strcmp(s, "emulation")) img = 2;
     if (img < 0) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
-    if (img == 2 && !require_gw(conn_id, gw_caps()->emulation, "the emulation image needs gateware v54 or later")) return;
+    if (img == 2 && !require_gw(conn_id, gw_caps()->emulation, "the emulation image", EMULATION_MIN_GW)) return;
     if (img != 2) {
         char names[96];
         if (sensor_mgr_digital_names(names, sizeof(names))) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "image switch refused: the emulated sensors %s need the "
-                     "emulation image; stop them first ({\"cmd\":\"sensor_stop\",\"all\":true})", names);
-            send_error(conn_id, msg);
+            bp_err_image_switch_sensors_running(conn_id, names);
             return;
         }
     }

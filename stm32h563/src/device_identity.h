@@ -85,13 +85,13 @@ void device_identity_init(void);
    Returns 0 on success, -1 if identity is not initialized. */
 int device_identity_get_public(uint8_t pub[DEVICE_ID_PUBLIC_LEN]);
 
-/* ---- Wipe (USB console only: physical presence) ----------------------------
+/* ---- Wipe (the USB link only: physical presence) ---------------------------
  *
  * The way back for a pod whose identity sector holds a record this firmware will not replace
  * (DEVICE_ID_REC_FOREIGN), or whose key must be retired: erase the sector and generate a fresh
  * key. The pod is then a NEW pod to the server (it knows pods by their public key), so it has to
- * be registered again. Only the USB console runs it ("identity-wipe <confirm>"); the LAN and cloud
- * JSON verb identity_wipe always refuses.
+ * be registered again. The JSON identity_wipe runs it over the USB link only (firmware 4.0.0; up to
+ * 3.10.13 the USB console's "identity-wipe <confirm>", and the JSON verb always refused).
  *
  * The confirmation token must name what is being wiped: the current short id (the six hex digits
  * of "benchpod-a1b2c3", the first three bytes of the public key), or "unknown" when the pod has

@@ -15,7 +15,6 @@
     "power_status": "T0",
     "identity_public": "T0",
     "identity_pop": "T0",
-    "identity_wipe": "T0",
     "spi_status": "T0",
     "i2c_status": "T0",
     "sensor_status": "T0",
@@ -28,7 +27,6 @@
     "capture": "T0",
     "capture_dual": "T0",
     "capture_read": "T0",
-    "stream": "T0",
     "la_capture": "T0",
     "sensor_regs": "T0",
     "sensor_la": "T0",
@@ -62,7 +60,8 @@
     "adc_range": "T1",
     "dac_control_loop": "T1",
     "dac_loop_input": "T1",
-    "la": "T1",
+    "la_step": "T1",
+    "la_pull": "T1",
     "gpio": "T1",
     "la_voltage": "T1",
     "nrst": "T1",
@@ -97,18 +96,21 @@
     "sensor_fault": "T1",
     "sensor_fault_clear": "T1",
     "sensor_stop": "T1",
-    "can_config": "T1",
+    "can_start": "T1",
     "can_write": "T1",
     "can_term": "T1",
     "can_respond": "T1",
-    "can_disable": "T1",
+    "can_stop": "T1",
     "speedtest": "T1",
     "fpga_image": "T1",
     "psram_recover": "T1",
+    "usb_reattach": "T1",
     "cloud_set": "T2",
     "cloud_clear": "T2",
     "wifi_set": "T2",
     "wifi_clear": "T2",
+    "identity_wipe": "T2",
+    "wifi_bridge": "T2",
     "ota_begin": "T3",
     "ota_data": "T3",
     "ota_end": "T3",
@@ -167,7 +169,7 @@
     },
     {
       "line": "{\"cmd\":\"identity_wipe\"}",
-      "tier": "T0"
+      "tier": "T2"
     },
     {
       "line": "{\"cmd\":\"spi_status\"}",
@@ -227,10 +229,6 @@
     },
     {
       "line": "{\"cmd\":\"capture_read\"}",
-      "tier": "T0"
-    },
-    {
-      "line": "{\"cmd\":\"stream\"}",
       "tier": "T0"
     },
     {
@@ -375,7 +373,11 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"la\"}",
+      "line": "{\"cmd\":\"la_step\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"la_pull\"}",
       "tier": "T1"
     },
     {
@@ -467,7 +469,7 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"can_config\"}",
+      "line": "{\"cmd\":\"can_start\"}",
       "tier": "T1"
     },
     {
@@ -483,7 +485,7 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"can_disable\"}",
+      "line": "{\"cmd\":\"can_stop\"}",
       "tier": "T1"
     },
     {
@@ -596,7 +598,7 @@
       "tier": "T2"
     },
     {
-      "line": "{\"cmd\":\"usb_network\",\"set\":\"off\"}",
+      "line": "{\"cmd\":\"usb_network\",\"enabled\":false}",
       "tier": "T2"
     },
     {
@@ -652,6 +654,30 @@
       "line": "{\"cmd\":\"generate\",\"shape\":\"sine\",\"freq_hz\":1000}",
       "tier": "T1",
       "note": "extra fields do not change a plain verb's tier"
+    },
+    {
+      "line": "{\"cmd\":\"usb_reattach\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"wifi_bridge\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"sig_policy\",\"clear_floor\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"sig_policy\",\"clear_floor\":false}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"usb_host\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"usb_host\",\"enabled\":true,\"port\":\"usb_c\"}",
+      "tier": "T2"
     }
   ]
 }

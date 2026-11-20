@@ -12,7 +12,8 @@ errors/catalog.toml (the one source of truth; its header explains the rules).
                                         the release workflow: nothing "next" is left
 
 Outputs (never hand-edit them: the banner says so):
-  stm32h563/src/bp_errors.h   the code enum and one typed bp_err_<name>() per code
+  stm32h563/src/bp_errors.h   the code enum, and one typed bp_err_<name>()
+                              (send) and bp_note_<name>() (note into a buffer) per code
   errors/errors.json          everything the hosts need (SDK, CLI, MCP, server, web, docs pages)
   errors/ERRORS.md            a human-readable table
 """
@@ -110,43 +111,71 @@ def c_ident(name):
 def gen_h(cat):
     out = [f"/* {BANNER} */", "#ifndef BP_ERRORS_H", "#define BP_ERRORS_H", "",
            "/* Stable error codes (errors/catalog.toml). A handler refuses with bp_err_<name>(conn_id,",
-           "   BP_ERR_TEXT(\"...\"), args...): the reply carries the code and the args, and the text when",
-           "   the build keeps it. Built with -DBP_ERRORS_NO_TEXT, BP_ERR_TEXT() is NULL, the strings",
-           "   drop out of the binary, and the reply's message is the compact fallback",
-           "   (\"BP0002 cmd=foo\") that bp_error_format builds from the code and args. The hosts",
-           "   render the message, the fix and the docs link from errors/errors.json. */", "",
-           "#include <stddef.h>", "#include <stdint.h>", "",
-           "#ifdef BP_ERRORS_NO_TEXT", "#define BP_ERR_TEXT(s) ((const char *)0)", "#else",
-           "#define BP_ERR_TEXT(s) (s)", "#endif", "",
+           "   args...): the reply is {\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...}}, with no",
+           "   message: the hosts render the message, the fix and the docs link from errors/errors.json,",
+           "   so the firmware holds no per-error text. Code that only builds a refusal for its caller",
+           "   to send (pod_policy.c, sensor_mgr.c, ...) uses bp_note_<name>(buf, cap, args...): it",
+           "   writes the short form (\"BP0055 instance=env\") into buf and notes the code, and",
+           "   send_error() of that text sends it with its code (bp_err_noted). A text a person also",
+           "   reads (the USB console, SCPI) keeps its own words and gets the code with",
+           "   bp_tag_<name>(text, args...). */", "",
+           "#include <stdbool.h>", "#include <stddef.h>", "#include <stdint.h>", "",
            "typedef enum {", "    BP_E_NONE = 0,"]
     for code, e in cat.items():
         tag = "   /* retired */" if "retired" in e else ""
         out.append(f"    {c_ident(e['name'])} = {int(code[2:])},{tag}")
+    last = max(int(c[2:]) for c in cat)
+    max_args = max(len(e.get("args", {})) for e in cat.values())
     out += ["} bp_errcode_t;", "",
+            f"#define BP_E_LAST {last}",
+            f"#define BP_ERR_ARGS_MAX {max_args}   /* the most args one code has */", "",
             "/* One value sent with a code: key, and either a string (is_str) or an integer. */",
             "typedef struct { const char *key; const char *s; int32_t i; uint8_t is_str; } bp_err_arg_t;",
             "",
-            "/* The reply line ({\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...},\"message\":...}\\n)",
+            "/* The reply line ({\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...}}\\n)",
             "   into buf; returns its length, 0 when it does not fit (bp_errors.c). */",
-            "size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const char *text,",
-            "                       const bp_err_arg_t *args, size_t n);",
+            "size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
+            "                       size_t n);",
+            "/* The short form (\"BP0002 cmd=foo\") into out, cut to fit; returns its length. */",
+            "size_t bp_err_render(char *out, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
+            "                     size_t n);",
+            "/* bp_err_render into buf, and note the code and args for that text; returns buf. */",
+            "const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
+            "                        size_t n);",
+            "/* Note the code and args for a text the module wrote itself (a person reads it on the",
+            "   USB console or SCPI, and send_error() sends it with the code); returns text. */",
+            "const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args,",
+            "                       size_t n);",
+            "/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may",
+            "   have been copied), NULL when none did. The args stay valid until the next note. */",
+            "const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n);",
             "/* Formats and sends it on a connection (command_handler.c). */",
-            "void bp_error_send(int conn_id, bp_errcode_t code, const char *text,",
-            "                   const bp_err_arg_t *args, size_t n);", ""]
+            "void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n);", "",
+            ]
     for code, e in cat.items():
         if "retired" in e:
             continue
         args = e.get("args", {})
         params = "".join(f", {'const char *' if t == 'str' else 'int32_t '}{a}" for a, t in args.items())
+        items = ", ".join(
+            f'{{"{a}", {a}, 0, 1}}' if t == "str" else f'{{"{a}", 0, {a}, 0}}' for a, t in args.items())
+        decl = f"    const bp_err_arg_t a[] = {{ {items} }};" if args else None
+        av, n = ("a", len(args)) if args else ("0", 0)
         out.append(f"/* {code}: {e['message']} */")
-        out.append(f"static inline void bp_err_{e['name']}(int conn_id, const char *text{params}) {{")
-        if args:
-            items = ", ".join(
-                f'{{"{a}", {a}, 0, 1}}' if t == "str" else f'{{"{a}", 0, {a}, 0}}' for a, t in args.items())
-            out.append(f"    const bp_err_arg_t a[] = {{ {items} }};")
-            out.append(f"    bp_error_send(conn_id, {c_ident(e['name'])}, text, a, {len(args)});")
-        else:
-            out.append(f"    bp_error_send(conn_id, {c_ident(e['name'])}, text, 0, 0);")
+        out.append(f"static inline void bp_err_{e['name']}(int conn_id{params}) {{")
+        if decl:
+            out.append(decl)
+        out.append(f"    bp_error_send(conn_id, {c_ident(e['name'])}, {av}, {n});")
+        out.append("}")
+        out.append(f"static inline const char *bp_note_{e['name']}(char *buf, size_t cap{params}) {{")
+        if decl:
+            out.append(decl)
+        out.append(f"    return bp_err_note(buf, cap, {c_ident(e['name'])}, {av}, {n});")
+        out.append("}")
+        out.append(f"static inline const char *bp_tag_{e['name']}(const char *text{params}) {{")
+        if decl:
+            out.append(decl)
+        out.append(f"    return bp_err_tag(text, {c_ident(e['name'])}, {av}, {n});")
         out.append("}")
     out += ["", "#endif /* BP_ERRORS_H */", ""]
     return "\n".join(out)

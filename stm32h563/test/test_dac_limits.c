@@ -35,7 +35,7 @@ static void test_no_limits_changes_nothing(void) {
     dac_limits_set_active(NULL);
     CHECK(allowed("generate", "{\"cmd\":\"generate\"}"), "generate refused without limits");
     CHECK(allowed("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}"), "path off refused without limits");
-    CHECK(allowed("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":0}"), "dac_out 0 refused without limits");
+    CHECK(allowed("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"v\":0}"), "dac_out 0 refused without limits");
     CHECK(allowed("dac_control_loop", "{\"cmd\":\"dac_control_loop\",\"vmin\":0,\"vmax\":65535,\"in_trip\":5}"),
           "loop refused without limits");
     CHECK(allowed("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}"), "current_out refused without limits");
@@ -64,11 +64,11 @@ static void test_inverted_solar(void) {
     CHECK(refused("adc_read", "{\"source\":\"cal2\"}", NULL), "adc_read cal2 allowed");
 
     /* held levels */
-    CHECK(allowed("dac_out", "{\"path\":\"5v\",\"volts\":3.6}"), "park refused");
-    CHECK(allowed("dac_out", "{\"path\":\"5v\",\"volts\":2.6}"), "in-window refused");
+    CHECK(allowed("dac_out", "{\"path\":\"5v\",\"v\":3.6}"), "park refused");
+    CHECK(allowed("dac_out", "{\"path\":\"5v\",\"v\":2.6}"), "in-window refused");
     CHECK(allowed("dac_out", "{\"path\":\"5v\"}"), "route-only refused");
-    CHECK(refused("dac_out", "{\"path\":\"5v\",\"volts\":0}", "0 mV is outside"), "0 V allowed");
-    CHECK(refused("dac_out", "{\"path\":\"5v\",\"volts\":3.9}", "outside"), "3.9 V allowed");
+    CHECK(refused("dac_out", "{\"path\":\"5v\",\"v\":0}", "0 mV is outside"), "0 V allowed");
+    CHECK(refused("dac_out", "{\"path\":\"5v\",\"v\":3.9}", "outside"), "3.9 V allowed");
     CHECK(refused("dac_out", "{\"path\":\"off\"}", "near 0 V"), "dac_out off allowed");
 
     /* the 4-20 mA output shares the DAC: a current is refused, reading its range is not */
@@ -105,7 +105,7 @@ static void test_normal_stage(void) {
     n.inverted = 0; n.min_mv = 200; n.max_mv = 4000;
     dac_limits_set_active(&n);
     CHECK(allowed("analog_path", "{\"path\":\"off\"}"), "path off refused on a normal stage");
-    CHECK(refused("dac_out", "{\"path\":\"5v\",\"volts\":4.5}", "outside"), "over-limit allowed");
+    CHECK(refused("dac_out", "{\"path\":\"5v\",\"v\":4.5}", "outside"), "over-limit allowed");
     CHECK(refused("generate", "{}", "raw"), "generate allowed");
     CHECK(refused("current_out", "{\"ua\":4000}", "shares that DAC"), "current_out allowed on a normal stage");
     CHECK(allowed("analog_path", "{\"path\":\"current_out\"}"), "current_out route refused on a normal stage");

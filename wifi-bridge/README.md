@@ -227,8 +227,10 @@ commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on t
 
 13. **With a pod.** Flash the pod firmware (`./bringup.sh pod`, or
     `make -C stm32h563` with the default `WIFI_BRIDGE=1` and `benchpod flash-self`), press PAIR on the bridge (it is paired with the laptop), and cable
-    it to the pod. Pod log: `[bridge] Wi-Fi bridge found: …`; pod console `bridge` shows
-    `paired`, then `wifi-set "<ssid>" "<pass>"` and `wifi-show` (`via: wifi-bridge`). The pod
+    it to the pod. Pod log: `[bridge] Wi-Fi bridge found: …`; the pod's JSON `wifi_status`
+    shows `"paired":true`, then `wifi_set` and `wifi_status` (`"via":"wifi-bridge"`), for
+    example with `benchpod set-wifi` or the console's `wifi-set` and `wifi-show` (pod firmware
+    up to 3.10.13 also had the console's `bridge`). The pod
     gets its DHCP lease, mDNS name and cloud connection over Wi-Fi.
 
 Record results, and anything changed, in this section or in the PR that fixes it.
@@ -237,7 +239,7 @@ Record results, and anything changed, in this section or in the PR that fixes it
 
 The pod keeps the bridge's firmware in its W25Q blob slot `bridge` (installed like its other
 blobs: `blob-bridge.bin` with its signed manifest, OTA target `bridge`). When that image is newer
-than what the bridge reports in HELLO, the pod updates the bridge by itself (`bridge update` on the pod's console forces it): OTA_BEGIN with the manifest (the bridge
+than what the bridge reports in HELLO, the pod updates the bridge by itself (JSON `{"cmd":"wifi_bridge","action":"update"}` forces it; the console's `bridge update` up to pod firmware 3.10.13): OTA_BEGIN with the manifest (the bridge
 checks the Ed25519 signature, target and size, then erases the inactive slot), 1024-byte
 OTA_DATA chunks in order (a lost ack is safe to retry, a gap is answered with the expected
 offset), OTA_END (SHA-256 against the manifest, the project name and, in production, the secure
@@ -292,9 +294,9 @@ to it, and an EMC image also confirms itself, so either stays after reboots.
 
 ```sh
 benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
-# pod console: `bridge update`, then `bridge` until it shows fw 0.1.1-emc
+# pod JSON: {"cmd":"wifi_bridge","action":"update"}, then wifi_status until bridge.fw is 0.1.1-emc
 benchpod install-blobs --only bridge --force                        # afterwards: the release blob
-# pod console: `bridge update` again
+# pod JSON: {"cmd":"wifi_bridge","action":"update"} again
 ```
 
 What it does (`main/emc_test.c`):

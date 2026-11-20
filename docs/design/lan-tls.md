@@ -6,6 +6,12 @@ bridge must only ever carry encrypted traffic. The cloud link already is (TLS + 
 key); the LAN JSON/SCPI API on TCP 8080 is plaintext with no authentication. This closes the
 plaintext part. It does not add client authentication (see "Not in scope").
 
+**Firmware 4.0.0:** HTTPS-only is on by default (stored as `lan_plain`, 1 = plaintext on, so every
+older record means on; the `https_only` byte is kept in step for older firmware), SCPI is off by
+default (`scpi_on`, `lan_tls` `"scpi"`, console `lan-tls scpi on|off`, same gate as HTTPS-only),
+and the TXT record carries `api=<n>`. With SCPI on, plaintext 8080 takes LAN connections for SCPI
+only (a JSON line gets BP0075). The USB network adapter keeps plaintext 8080. See API.md `lan_tls`.
+
 ## What the pod does
 
 - A second listener, **TCP 8443**, speaks TLS 1.2 and carries exactly the same protocol as 8080

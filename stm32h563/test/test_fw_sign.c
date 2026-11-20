@@ -90,8 +90,8 @@ static void test_policy(void) {
         CHECK(fw_sign_accept(r, FW_SIG_POLICY_REQUIRED) == (r == FW_SIG_OK),
               "required on %s", fw_sign_result_name(r));
     }
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "this release reports only");
-    CHECK(strcmp(fw_sign_policy_name(fw_sign_policy()), "audit") == 0, "policy name");
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_REQUIRED, "firmware 4.0.0 starts at required");
+    CHECK(strcmp(fw_sign_policy_name(fw_sign_policy()), "required") == 0, "policy name");
 }
 
 int main(void) {

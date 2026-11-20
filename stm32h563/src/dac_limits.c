@@ -236,7 +236,7 @@ const char *dac_limits_check_command(const char *cmd, const char *json) {
         bp_json_get(json, "path", path, sizeof(path));
         const char *why = dac_limits_check_route(path);
         double v;
-        if (!why && num(json, "volts", &v)) why = dac_limits_check_volts(path, (float)v);
+        if (!why && num(json, "v", &v)) why = dac_limits_check_volts(path, (float)v);
         return why;
     }
     if (!strcmp(cmd, "current_out")) {

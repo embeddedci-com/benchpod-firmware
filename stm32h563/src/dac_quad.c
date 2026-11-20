@@ -142,7 +142,7 @@ const char *dac_quad_low_check_command(const char *cmd, const char *json, bool l
         bp_json_get(json, "path", v, sizeof(v));
         analog_path_t p;
         if (analog_path_from_name(v, &p) != 0 || p != ANALOG_PATH_DAC_12V) return NULL;
-        if (!bp_json_get(json, "volts", v, sizeof(v))) return NULL;   /* route only: C keeps its level */
+        if (!bp_json_get(json, "v", v, sizeof(v))) return NULL;   /* route only: C keeps its level */
         /* The handler converts with atof and the 16-bit code; check the code it will hold. */
         return dac_quad_low_check_hold(true, DAC_QUAD_C, dac_code16_for_volts(DAC_QUAD_C, (float)atof(v)));
     }

@@ -201,7 +201,7 @@ int main(void)
         adc_cal_hw_use_module();   /* the calibration also lives in the module's EEPROM */
     adc_cal_load();         /* per-pod ADC calibration, on top of cal_data.h (adc_cal.h) */
     pod_policy_load();      /* signature + LAN policy, before OTA or the LAN listener (pod_policy.h) */
-    can_bus_init();         /* FDCAN1 term GPIO safe (core stays down until can_config) */
+    can_bus_init();         /* FDCAN1 term GPIO safe (core stays down until can_start) */
     boot_guard_stage(BOOT_STAGE_IDENTITY);
     device_identity_init(); /* Ed25519 identity (internal flash + RNG) */
     boot_guard_stage(BOOT_STAGE_USB);

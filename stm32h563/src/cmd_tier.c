@@ -29,15 +29,20 @@ static int writes_calibrate(const char *json) {
            bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
            (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
-/* usb_host: "on" starts or stops host mode; without it, a read. */
-static int writes_on(const char *json) {
-    char v[8] = {0};
-    return bp_json_get(json, "on", v, sizeof(v));
+/* sig_policy also writes with clear_floor */
+static int writes_sig_policy(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "set", v, sizeof(v)) || (bp_json_get(json, "clear_floor", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
-/* sig_policy, lan_policy, usb_network */
+/* lan_policy */
 static int writes_set(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "set", v, sizeof(v));
+}
+/* usb_network, usb_host */
+static int writes_enabled(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "enabled", v, sizeof(v));
 }
 /* cloud_ca, cloud_proxy */
 static int writes_set_or_clear(const char *json) {
@@ -47,7 +52,7 @@ static int writes_set_or_clear(const char *json) {
 }
 static int writes_lan_tls(const char *json) {
     char v[16] = {0};
-    return bp_json_get(json, "https_only", v, sizeof(v)) ||
+    return bp_json_get(json, "https_only", v, sizeof(v)) || bp_json_get(json, "scpi", v, sizeof(v)) ||
            (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
 }
 /* an EEPROM write (ID or calibration); a read is T0 */
@@ -74,18 +79,17 @@ static const cmd_desc_t k_tiers[] = {
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },
     { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc), NULL },
-    { { "usb_host", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_host), writes_on },
+    { { "usb_host", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_host), writes_enabled },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
-    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_public), NULL },
+    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_identity_public), NULL },
     { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop), NULL },
-    { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* always refused off the USB console: it changes nothing */
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status), NULL },
     { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status), NULL },
     { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor), NULL },
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status), NULL },
-    { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status), NULL },
-    { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status), NULL },
+    { { "ota_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_status), NULL },
+    { { "blob_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_blob_status), NULL },
     { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
     { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)
@@ -97,7 +101,6 @@ static const cmd_desc_t k_tiers[] = {
     { { "capture", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture), NULL },
     { { "capture_dual", CMD_TIER_T0 }, CMD_F_ADC_SAMPLES | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_dual), NULL },
     { { "capture_read", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_read), NULL },
-    { { "stream", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_stream), NULL },
     { { "la_capture", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_la_capture), NULL },
     { { "sensor_regs", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_sensor), NULL },
     { { "sensor_la", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_sensor_la), NULL },
@@ -108,9 +111,9 @@ static const cmd_desc_t k_tiers[] = {
     { { "dac_limits", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANALOG, CMD_FN(handle_dac_limits), writes_dac_limits },
     { { "calibrate", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_calibrate), writes_calibrate },
     { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_eth), writes_eth },
-    { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_set },
+    { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_sig_policy },
     { { "lan_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_policy), writes_set },
-    { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_set },
+    { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_enabled },
     /* read and set T0: it only changes what the pod prints on its own console */
     { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level), NULL },
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_module), writes_module },
@@ -134,7 +137,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "adc_range", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_adc_range), NULL },
     { { "dac_control_loop", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_control_loop), NULL },
     { { "dac_loop_input", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_dac_loop_input), NULL },
-    { { "la", CMD_TIER_T1 }, 0, CMD_FN(handle_la), NULL },
+    { { "la_step", CMD_TIER_T1 }, 0, CMD_FN(handle_la_step_cmd), NULL },
+    { { "la_pull", CMD_TIER_T1 }, 0, CMD_FN(handle_la_pull_cmd), NULL },
     { { "gpio", CMD_TIER_T1 }, 0, CMD_FN(handle_gpio), NULL },
     { { "la_voltage", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_la_voltage), NULL },
     { { "nrst", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_nrst), NULL },
@@ -169,26 +173,30 @@ static const cmd_desc_t k_tiers[] = {
     { { "sensor_fault", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
     { { "sensor_fault_clear", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
     { { "sensor_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_sensor), NULL },
-    { { "can_config", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_config), NULL },
+    { { "can_start", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_start), NULL },
     { { "can_write", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_write), NULL },
     { { "can_term", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_term), NULL },
     { { "can_respond", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_respond), NULL },
-    { { "can_disable", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_disable), NULL },
+    { { "can_stop", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_stop), NULL },
     { { "speedtest", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_STREAM, CMD_FN(handle_speedtest), NULL },
     { { "fpga_image", CMD_TIER_T1 }, 0, CMD_FN(handle_fpga_image), NULL },
     { { "psram_recover", CMD_TIER_T1 }, 0, CMD_FN(handle_psram_recover), NULL },
+    { { "usb_reattach", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_usb_reattach), NULL },
     /* T2: persisted config */
     { { "cloud_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_set), NULL },
     { { "cloud_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_clear), NULL },
     { { "wifi_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_set), NULL },
     { { "wifi_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_clear), NULL },
+    /* the USB console's recovery commands up to 3.10.13 (command_handler_recovery.c) */
+    { { "identity_wipe", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* USB link only */
+    { { "wifi_bridge", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_bridge), NULL },     /* cert: USB link only */
     /* T3: firmware */
-    { { "ota_begin", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_begin), NULL },
-    { { "ota_data", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_data), NULL },
-    { { "ota_end", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_end), NULL },
-    { { "ota_commit", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_commit), NULL },
-    { { "ota_abort", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_abort), NULL },
-    { { "ota_selftest", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_selftest), NULL },
+    { { "ota_begin", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_begin), NULL },
+    { { "ota_data", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_data), NULL },
+    { { "ota_end", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_end), NULL },
+    { { "ota_commit", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_commit), NULL },
+    { { "ota_abort", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_abort), NULL },
+    { { "ota_selftest", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_selftest), NULL },
 };
 
 const cmd_desc_t *cmd_find(const char *cmd) {

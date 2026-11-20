@@ -11,10 +11,10 @@
  * the client announces, before anything is staged; the existing SHA-256 check at ota_end then
  * ties the received bytes to the signed hash.
  *
- * Policy: FW_SIG_POLICY_AUDIT (the default) accepts every image and records the result (ota
- * status, ota.status, upload-status); PERMISSIVE refuses a bad signature; REQUIRED refuses
- * anything not signed. pod_policy.h persists it and decides who may change it (the cloud may
- * only tighten it, the USB console anything).
+ * Policy: REQUIRED refuses anything without a good signature; PERMISSIVE refuses a bad
+ * signature; AUDIT accepts every image and records the result (ota status, ota.status,
+ * upload-status). Firmware 4.0.0 always runs REQUIRED (pod_policy.h): the other two remain for
+ * the host tests and for reading records older firmware wrote.
  */
 
 #include <stdbool.h>
@@ -74,14 +74,10 @@ bool fw_sign_accept(fw_sig_result_t r, fw_sig_policy_t policy);
 const char *fw_sign_result_name(fw_sig_result_t r);
 
 fw_sig_policy_t fw_sign_policy(void);
-/* Set by pod_policy (boot and the sig_policy command); nothing else should call it. */
+/* Set by pod_policy at boot (always REQUIRED); nothing else should call it but the host tests. */
 void fw_sign_set_policy(fw_sig_policy_t p);
 const char *fw_sign_policy_name(fw_sig_policy_t p);
 
-/* Images from the external LAN (Ethernet, Wi-Fi; not the USB network adapter) need a good
-   signature whatever the policy, unless lan_unsigned is set (firmware 3.10.7+, pod_policy.h). */
-bool fw_sign_lan_unsigned(void);
-void fw_sign_set_lan_unsigned(bool on);
 /* Rollback floor (packed release, major<<16|minor<<8|patch; 0 = none): a signed firmware image
    whose manifest release is below it is refused (firmware 3.10.7+, pod_policy.h). */
 uint32_t fw_sign_floor(void);

@@ -115,7 +115,6 @@ C_SOURCES := \
   src/usb_desc.c \
   src/usb_netif.c \
   src/usb_dhcpd.c \
-  src/console_moved.c \
   src/usb_device.c \
   src/ethernetif.c \
   src/net_server.c \
@@ -145,6 +144,7 @@ C_SOURCES := \
   src/command_handler_dac.c \
   src/command_handler_dap.c \
   src/command_handler_device.c \
+  src/command_handler_recovery.c \
   src/command_handler_usb.c \
   src/command_handler_status.c \
   src/command_handler_ota.c \

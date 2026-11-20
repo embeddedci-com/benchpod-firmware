@@ -4,14 +4,14 @@
 /*
  * cloud_caps: the pod's capabilities, gathered once (cloud_caps_collect, cloud_caps_hw.c) and
  * written two ways here: the `capabilities` frame the pod sends the server on every connect (and
- * after a gateware swap), and the caps[] list of the `status` reply, the only capability source a
- * direct LAN or USB client sees. Both come from one cloud_caps_t, so they cannot disagree about
+ * after a gateware swap), and the feature part of the `status` reply (features_rev, the image,
+ * the facts), what a direct LAN or USB client sees. Both come from one cloud_caps_t, so they cannot disagree about
  * what this pod can do. The formatting is host-tested (test_cloud_caps.c), including the worst
  * case of the frame.
  *
  * The frame must fit one WS frame (cl_ws_send's scratch). A frame that did not fit used to be
  * dropped, and a dropped capabilities frame failed the connect, so the pod reconnected in a loop.
- * The fixed feature fields are bounded by the format; only the boot-health text (safe-mode reason,
+ * The fixed fields are bounded by the format; only the boot-health text (safe-mode reason,
  * last crash) is free-form. When the whole frame would not fit, those texts are shortened (and
  * "boot_health_cut":true says so); the feature fields are never dropped.
  */
@@ -102,11 +102,8 @@ typedef struct {
    when even the shortened form does not fit `cap`. */
 size_t cloud_caps_build(const cloud_caps_t *c, char *out, size_t cap);
 
-/* The `status` reply's ,"caps":[...] list from the same values. FROZEN: no new names (clients
-   take new features from features/features.toml; tools/gen_features.py --check fails on one). */
-void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c);
-
-/* What a `status` with "caps":false gets instead of that list: ,"features_rev":N,"api":A,
+/* The `status` reply's feature part (firmware 4.0.0 sent the frozen caps[] list until then):
+   ,"features_rev":N,"api":A,
    "min_client_api":M,"fpga_image":"...","hw":[...], the hardware facts the table's `requires`
    names. */
 void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c);

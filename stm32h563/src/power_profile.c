@@ -186,7 +186,7 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     }
     if (efuse != 1 && efuse != 2) { snprintf(err, cap, "efuse must be 1 or 2"); return -1; }
     if (rate_hz < PP_RATE_MIN_HZ || rate_hz > PP_RATE_MAX_HZ) {
-        snprintf(err, cap, "rate_hz must be %u..%u", (unsigned)PP_RATE_MIN_HZ, (unsigned)PP_RATE_MAX_HZ);
+        snprintf(err, cap, "sample_rate_hz must be %u..%u", (unsigned)PP_RATE_MIN_HZ, (unsigned)PP_RATE_MAX_HZ);
         return -1;
     }
     if (max_duration_ms < 1u || max_duration_ms > PP_DURATION_MAX_MS) {
@@ -364,7 +364,7 @@ void power_profile_emit_stats(bp_emit_t *e) {
        conversion rate visible; the per-sample t_us timestamps are exact either way. */
     uint32_t rate_hz = (duration_ms && st->n)
         ? (uint32_t)(((uint64_t)st->n * 1000u + duration_ms / 2u) / duration_ms) : 0u;
-    bp_emit(e, "\"stats\":{\"efuse\":%d,\"rate_hz\":%lu,\"adc_rate_hz\":%lu,\"n\":%lu,\"duration_ms\":%lu,"
+    bp_emit(e, "\"stats\":{\"efuse\":%d,\"sample_rate_hz\":%lu,\"adc_sample_rate_hz\":%lu,\"n\":%lu,\"duration_ms\":%lu,"
                "\"avg_ua\":%ld,\"min_ua\":%ld,\"peak_ua\":%ld,"
                "\"avg_mv\":%u,\"min_mv\":%u,\"max_mv\":%u,\"energy_uj\":",
             s.efuse, (unsigned long)rate_hz, (unsigned long)s.cfg.rate_hz,

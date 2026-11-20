@@ -848,8 +848,8 @@ static int signed_stage(int image, const uint8_t *sig, size_t sig_len, ota_targe
     return ota_end();
 }
 
-/* The signed manifest (fw_sign.h): this release reports the check and refuses nothing; the
-   stricter policies exist for a later release and are exercised here by setting them directly. */
+/* The signed manifest (fw_sign.h): every policy, set directly (firmware 4.0.0 runs only
+   "required"; main() puts the other tests on audit). */
 static void test_signed_begin(void) {
     enum { FW = 0, BLOB = 1, FW_ENF = 4 };   /* vec_images order, see tools/fwsign.py vectors */
     const uint8_t *good = vec_cases[0].sig, *flipped = vec_cases[5].sig, *enf = vec_cases[10].sig;
@@ -857,7 +857,7 @@ static void test_signed_begin(void) {
     CHECK(strcmp(vec_cases[5].want, "signature") == 0 && strcmp(vec_cases[10].want, "ok") == 0,
           "vector order changed: update this test");
 
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "the default policy must be audit");
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "main() set audit");
     CHECK(signed_stage(FW, good, 128, OTA_TARGET_FIRMWARE) == 0, "good: %s", ota_error());
     CHECK(strcmp(ota_sig_result(), "ok") == 0, "good: sig %s", ota_sig_result());
     CHECK(strlen(ota_sig_key_id()) == 16, "key id '%s'", ota_sig_key_id());
@@ -919,8 +919,7 @@ static void test_lan_signed_only_and_floor(void) {
     enum { FW = 0, BLOB = 1 };
     const uint8_t *good = vec_cases[0].sig, *flipped = vec_cases[5].sig;
     mock_ota_psram_reset();
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT && !fw_sign_lan_unsigned() && fw_sign_floor() == 0,
-          "preconditions");
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT && fw_sign_floor() == 0, "preconditions");
     CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, true) != 0 &&
           strcmp(ota_error(), "signature: none (LAN needs a signed image; use USB)") == 0,
           "LAN unsigned firmware: %s", ota_error());
@@ -928,13 +927,18 @@ static void test_lan_signed_only_and_floor(void) {
     CHECK(lan_stage(BLOB, NULL, 0, OTA_TARGET_GW1, true) != 0, "LAN took unsigned gateware");
     CHECK(lan_stage(FW, good, 128, OTA_TARGET_FIRMWARE, true) == 0, "LAN signed firmware: %s", ota_error());
     CHECK(lan_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1, true) == 0, "LAN signed gateware: %s", ota_error());
-    /* the USB link, the console and the cloud keep the policy (audit) */
+    /* the USB link, the console and the cloud follow the policy: audit (the tests) takes them... */
     CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, false) == 0, "USB link unsigned: %s", ota_error());
     CHECK(lan_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE, false) == 0, "USB link audit: %s", ota_error());
-    /* opted out on the device: the behavior before 3.10.7 */
-    fw_sign_set_lan_unsigned(true);
-    CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, true) == 0, "lan_unsigned: %s", ota_error());
-    fw_sign_set_lan_unsigned(false);
+    /* ...and required (firmware 4.0.0, always) refuses unsigned and bad images there too */
+    fw_sign_set_policy(FW_SIG_POLICY_REQUIRED);
+    CHECK(lan_stage(FW, NULL, 0, OTA_TARGET_FIRMWARE, false) != 0 && strcmp(ota_error(), "signature: none") == 0,
+          "required, USB link unsigned: %s", ota_error());
+    CHECK(lan_stage(FW, flipped, 128, OTA_TARGET_FIRMWARE, false) != 0, "required, USB link bad signature");
+    CHECK(lan_stage(BLOB, NULL, 0, OTA_TARGET_GW1, false) != 0, "required, USB link unsigned gateware");
+    CHECK(lan_stage(BLOB, vec_cases[1].sig, 128, OTA_TARGET_GW1, false) == 0, "required, signed gateware: %s",
+          ota_error());
+    fw_sign_set_policy(FW_SIG_POLICY_AUDIT);
     /* the C3 image: signed, from anywhere */
     CHECK(lan_stage(BLOB, NULL, 0, OTA_TARGET_ESP, false) != 0 &&
           strstr(ota_error(), "esp images must be signed"), "unsigned esp: %s", ota_error());
@@ -992,6 +996,11 @@ static void test_begin_owned_b64(void) {
 }
 
 int main(void) {
+    /* Firmware 4.0.0 always requires signatures (pod_policy.c sets it at boot; fw_sign starts
+       there too). Most tests here stage unsigned images to exercise the transfer, so they run
+       under audit; test_signed_begin sets each policy itself. */
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_REQUIRED, "fw_sign must start at required");
+    fw_sign_set_policy(FW_SIG_POLICY_AUDIT);
     test_sha256_known_answer();
     test_stage_and_verify();
     test_commit_reverifies_the_staged_image();

@@ -64,13 +64,16 @@ static void test_mixed_verbs(void) {
     expect("eth", "{\"cmd\":\"eth\"}", CMD_TIER_T2);
     expect("sig_policy", "{\"cmd\":\"sig_policy\"}", CMD_TIER_T0);
     expect("sig_policy", "{\"cmd\":\"sig_policy\",\"set\":\"required\"}", CMD_TIER_T2);
+    expect("sig_policy", "{\"cmd\":\"sig_policy\",\"clear_floor\":true}", CMD_TIER_T2);
+    expect("identity_wipe", NULL, CMD_TIER_T2);
+    expect("usb_reattach", NULL, CMD_TIER_T1);
     expect("lan_policy", "{\"cmd\":\"lan_policy\"}", CMD_TIER_T0);
     expect("lan_policy", "{\"cmd\":\"lan_policy\",\"set\":\"off\"}", CMD_TIER_T2);
     expect("usb_network", "{\"cmd\":\"usb_network\"}", CMD_TIER_T0);
-    expect("usb_network", "{\"cmd\":\"usb_network\",\"set\":\"off\"}", CMD_TIER_T2);
+    expect("usb_network", "{\"cmd\":\"usb_network\",\"enabled\":false}", CMD_TIER_T2);
     expect("usb_host", "{\"cmd\":\"usb_host\"}", CMD_TIER_T0);
-    expect("usb_host", "{\"cmd\":\"usb_host\",\"on\":true,\"port\":\"usb_c\"}", CMD_TIER_T2);
-    expect("usb_host", "{\"cmd\":\"usb_host\",\"on\":false}", CMD_TIER_T2);
+    expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":true,\"port\":\"usb_c\"}", CMD_TIER_T2);
+    expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":false}", CMD_TIER_T2);
     /* the console log level: read and set are T0 (it only changes what the console prints) */
     expect("log_level", "{\"cmd\":\"log_level\"}", CMD_TIER_T0);
     expect("log_level", "{\"cmd\":\"log_level\",\"set\":\"debug\"}", CMD_TIER_T0);
@@ -210,16 +213,16 @@ static void test_flags_match_the_old_lists(void) {
                "wifi_set", "wifi_status", "wifi_scan", "wifi_clear", "eth", "speedtest",
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
-               "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-               "can_disable", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
-               "lease_renew", "lease_release");
-    EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "stream", "measure", "load", "load_bin",
+               "can_start", "can_write", "can_read", "can_status", "can_term", "can_respond",
+               "can_stop", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
+               "lease_renew", "lease_release", "usb_reattach", "wifi_bridge");
+    EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
                "current_out", "adc_read", "adc_range", "calibrate", "dac_control_loop", "dac_loop_probe",
                "dac_loop_input");
-    EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "stream", "la_capture",
+    EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "la_capture",
                "sensor_regs", "sensor_la", "can_read", "psram_ping", "test");
-    EXPECT_SET(CMD_F_STREAM, "capture", "stream", "capture_dual", "capture_read", "measure",
+    EXPECT_SET(CMD_F_STREAM, "capture", "capture_dual", "capture_read", "measure",
                "test", "load", "replay", "load_bin", "sensor_la", "dap_start",
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");

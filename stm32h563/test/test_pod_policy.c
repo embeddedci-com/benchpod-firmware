@@ -7,12 +7,23 @@
 #include "fw_sign.h"
 #include "config_store.h"
 #include "mocks/mock_flash.h"
+#include "bp_errors.h"
 
 #include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 
 static int failures;
+
+/* The code a refusal was noted with (what send_error sends), and its first string arg. */
+static const char *g_arg0;
+static int code_of(const char *why) {
+    bp_errcode_t c = BP_E_NONE;
+    size_t n = 0;
+    const bp_err_arg_t *a = why ? bp_err_noted(why, &c, &n) : NULL;
+    g_arg0 = a && n && a[0].is_str ? a[0].s : "";
+    return a ? (int)c : 0;
+}
 
 #define CHECK(cond, ...)                                        \
     do {                                                        \
@@ -36,11 +47,11 @@ void pod_policy_on_usb_net_change(bool on) { usb_net_changes++; last_usb_net = o
 static void boot_blank(void) {
     mock_flash_reset();
     /* force the in-RAM copy back to defaults through the USB path, then wipe the flash again */
-    pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_USB);
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
-    pod_policy_set_lan_unsigned(false, POLICY_SRC_USB, false);
-    pod_policy_clear_floor(POLICY_SRC_USB);
+    pod_policy_set_https_only(true, POLICY_SRC_USB, false);
+    pod_policy_set_scpi(false, POLICY_SRC_USB, false);
+    pod_policy_clear_floor(POLICY_SRC_USB, false);
     pod_policy_set_bridge_pin(NULL, NULL);
     pod_policy_set_log_level(BP_LOG_INFO);
     mock_flash_reset();
@@ -51,28 +62,46 @@ static void boot_blank(void) {
 
 static void test_defaults(void) {
     boot_blank();
-    CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT, "no record: signatures %d", pod_policy_sig());
+    CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED, "no record: signatures %d", pod_policy_sig());
     CHECK(pod_policy_lan() == POD_LAN_OPEN, "no record: LAN %d", pod_policy_lan());
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "fw_sign not audit");
+    CHECK(fw_sign_policy() == FW_SIG_POLICY_REQUIRED, "fw_sign not required");
 }
 
-static void test_sig_ratchet(void) {
+/* Firmware 4.0.0: "required" always. Setting it again works from every source (a server pushes
+   it); audit and permissive are refused from every source, the USB console included (BP0074). A
+   record older firmware wrote with audit still loads as required. */
+static void test_sig_always_required(void) {
     boot_blank();
-    CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_LAN) != NULL, "LAN set the signature policy");
-    CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT, "LAN refusal changed it");
-
-    CHECK(pod_policy_set_sig(FW_SIG_POLICY_PERMISSIVE, POLICY_SRC_CLOUD) == NULL, "cloud could not tighten");
-    CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_CLOUD) == NULL, "cloud could not tighten again");
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_REQUIRED, "fw_sign did not follow");
-    const char *why = pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_CLOUD);
-    CHECK(why && strstr(why, "only the USB console") && strstr(why, "now required"), "cloud loosened: %s",
-          why ? why : "(null)");
-    CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED, "cloud loosening changed it");
-    CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_CLOUD) == NULL, "same value from cloud refused");
-
-    CHECK(pod_policy_set_sig(FW_SIG_POLICY_AUDIT, POLICY_SRC_USB) == NULL, "USB could not loosen");
-    CHECK(fw_sign_policy() == FW_SIG_POLICY_AUDIT, "fw_sign did not follow USB");
+    const policy_src_t srcs[] = { POLICY_SRC_USB, POLICY_SRC_CLOUD, POLICY_SRC_LAN };
+    for (size_t i = 0; i < sizeof(srcs) / sizeof(srcs[0]); i++) {
+        CHECK(pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, srcs[i]) == NULL, "src %zu: required refused", i);
+        const char *why = pod_policy_set_sig(FW_SIG_POLICY_AUDIT, srcs[i]);
+        CHECK(code_of(why) == BP_E_SIGNATURES_ALWAYS_REQUIRED && !strcmp(g_arg0, "sig_policy"),
+              "src %zu loosened to audit: %s", i, why ? why : "(null)");
+        CHECK(code_of(pod_policy_set_sig(FW_SIG_POLICY_PERMISSIVE, srcs[i])) == BP_E_SIGNATURES_ALWAYS_REQUIRED,
+              "src %zu loosened to permissive", i);
+        CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED && fw_sign_policy() == FW_SIG_POLICY_REQUIRED,
+              "src %zu: a refusal changed it", i);
+    }
     CHECK(pod_policy_set_sig((fw_sig_policy_t)7, POLICY_SRC_USB) != NULL, "unknown value accepted");
+
+    /* A 3.10.x record: audit, and "LAN images any" (byte 6). */
+    static const ab_store_t v1 = { .tag = "old", .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+                                   .magic = POD_POLICY_RECORD_MAGIC, .version = 1 };
+    uint8_t rec[16] = {0};
+    const uint32_t magic = POD_POLICY_RECORD_MAGIC;
+    memcpy(rec, &magic, 4);
+    rec[4] = FW_SIG_POLICY_AUDIT;
+    rec[8] = 1;   /* lan_unsigned */
+    mock_flash_reset();
+    CHECK(ab_store_save(&v1, rec, sizeof(rec)) == 0, "old save");
+    pod_policy_load();
+    CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED && fw_sign_policy() == FW_SIG_POLICY_REQUIRED,
+          "an old audit record loosened it: %d", pod_policy_sig());
+    /* The next save writes required (and no lan_unsigned) for firmware rolled back to 3.10.x. */
+    CHECK(pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB) == NULL, "lan");
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[4] == FW_SIG_POLICY_REQUIRED && rec[8] == 0,
+          "saved sig %u lan_unsigned %u", rec[4], rec[8]);
 }
 
 static void test_lan(void) {
@@ -89,7 +118,6 @@ static void test_lan(void) {
 
 static void test_persists(void) {
     boot_blank();
-    pod_policy_set_sig(FW_SIG_POLICY_REQUIRED, POLICY_SRC_CLOUD);
     pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_CLOUD);
     fw_sign_set_policy(FW_SIG_POLICY_AUDIT);       /* a reboot forgets RAM */
     pod_policy_load();
@@ -112,7 +140,7 @@ static void test_power_cut(void) {
         pod_policy_load();
         pod_lan_policy_t now = pod_policy_lan();
         CHECK(now == POD_LAN_LOCKED || now == POD_LAN_OFF, "cut %d: LAN %d", cut, now);
-        CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT, "cut %d: signatures changed", cut);
+        CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED, "cut %d: signatures changed", cut);
     }
 }
 
@@ -122,7 +150,7 @@ static void test_cloud_link_gate(void) {
     boot_blank();
     CHECK(pod_policy_lan() == POD_LAN_OPEN, "precondition: LAN open");
     const char *why = pod_policy_cloud_link_gate("cloud_proxy", POLICY_SRC_LAN, false);
-    CHECK(why && !strcmp(why, "cloud_proxy: change it from the cloud or over USB"),
+    CHECK(code_of(why) == BP_E_SETTING_CLOUD_OR_USB && !strcmp(g_arg0, "cloud_proxy"),
           "LAN gate: %s", why ? why : "(null)");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_USB, false) == NULL, "USB refused");
     CHECK(pod_policy_cloud_link_gate("cloud_ca", POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
@@ -148,7 +176,8 @@ static void test_usb_net(void) {
     boot_blank();
     CHECK(pod_policy_usb_net(), "default must be on");
     const char *why = pod_policy_set_usb_net(false, POLICY_SRC_CLOUD, false);
-    CHECK(why && strstr(why, "on the device"), "cloud allowed: %s", why ? why : "(null)");
+    CHECK(code_of(why) == BP_E_SETTING_DEVICE_ONLY && !strcmp(g_arg0, "usb_network"), "cloud allowed: %s",
+          why ? why : "(null)");
     why = pod_policy_set_usb_net(false, POLICY_SRC_LAN, false);
     CHECK(why != NULL, "Ethernet/Wi-Fi allowed");
     CHECK(pod_policy_usb_net() && usb_net_changes == 0, "a refused change changed it");
@@ -171,37 +200,56 @@ static void test_lan_tls_gate(void) {
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, true) == NULL, "USB link refused");
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_USB, false) == NULL, "USB console refused");
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
-    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL, "LAN turned HTTPS-only on");
-    CHECK(!pod_policy_https_only(), "a refused change changed it");
-    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, true) == NULL && pod_policy_https_only(), "USB link");
-    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL && pod_policy_https_only(),
-          "LAN turned HTTPS-only off");
-    CHECK(pod_policy_set_https_only(false, POLICY_SRC_CLOUD, false) == NULL && !pod_policy_https_only(), "cloud");
+    /* Firmware 4.0.0: HTTPS-only on and SCPI off with no record. */
+    CHECK(pod_policy_https_only() && !pod_policy_scpi(), "no record: HTTPS-only %d SCPI %d",
+          pod_policy_https_only(), pod_policy_scpi());
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL, "LAN turned plaintext on");
+    CHECK(pod_policy_https_only(), "a refused change changed it");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, true) == NULL && !pod_policy_https_only(), "USB link");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL && !pod_policy_https_only(),
+          "LAN turned HTTPS-only on");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_CLOUD, false) == NULL && pod_policy_https_only(), "cloud");
+    /* SCPI: the same gate, persisted. */
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_LAN, false) != NULL && !pod_policy_scpi(), "LAN turned SCPI on");
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_CLOUD, false) == NULL && pod_policy_scpi(), "cloud SCPI on");
+    CHECK(pod_policy_set_scpi(false, POLICY_SRC_LAN, true) == NULL && !pod_policy_scpi(), "USB link SCPI off");
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_USB, false) == NULL, "console SCPI on");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_USB, false) == NULL, "console plaintext on");
+    pod_policy_load();
+    CHECK(pod_policy_scpi() && !pod_policy_https_only(), "lost on reboot");
+    /* Older firmware reads HTTPS-only from byte 7: kept in step (0 = plaintext on). */
+    static const ab_store_t v1 = { .tag = "old", .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+                                   .magic = POD_POLICY_RECORD_MAGIC, .version = 1 };
+    uint8_t rec[16];
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[7] == 0 && rec[10] == 1 && rec[11] == 1,
+          "record https_only %u lan_plain %u scpi %u", rec[7], rec[10], rec[11]);
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_USB, false) == NULL, "console HTTPS-only on");
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[7] == 1 && rec[10] == 0, "record after on");
+    /* A 3.10.x record with HTTPS-only off (byte 7 = 0, the old default) loads as HTTPS-only on. */
+    memset(rec, 0, sizeof(rec));
+    const uint32_t magic = POD_POLICY_RECORD_MAGIC;
+    memcpy(rec, &magic, 4);
+    mock_flash_reset();
+    CHECK(ab_store_save(&v1, rec, sizeof(rec)) == 0, "old save");
+    pod_policy_load();
+    CHECK(pod_policy_https_only() && !pod_policy_scpi(), "an old record opened plaintext or SCPI");
 }
 
-/* Security review 2026-11 H3/M7: "LAN images any" loosens, so only the device turns it on; the
-   floor only goes up from an image and is cleared on the console; both survive a reboot. */
-static void test_lan_unsigned_and_floor(void) {
+/* Security review 2026-11 M7: the floor only goes up from an image and is cleared on the console;
+   it survives a reboot. */
+static void test_floor(void) {
     boot_blank();
-    CHECK(!pod_policy_lan_unsigned() && !fw_sign_lan_unsigned(), "default must be signed only");
-    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, false) != NULL, "Ethernet/Wi-Fi turned it on");
-    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_CLOUD, false) != NULL, "the cloud turned it on");
-    CHECK(!pod_policy_lan_unsigned(), "a refused change changed it");
-    CHECK(pod_policy_set_lan_unsigned(true, POLICY_SRC_LAN, true) == NULL && fw_sign_lan_unsigned(), "USB link");
-    pod_policy_load();
-    CHECK(pod_policy_lan_unsigned() && fw_sign_lan_unsigned(), "lost on reboot");
-    CHECK(pod_policy_set_lan_unsigned(false, POLICY_SRC_CLOUD, false) == NULL && !fw_sign_lan_unsigned(),
-          "the cloud could not tighten");
-
     CHECK(pod_policy_rollback_floor() == 0 && fw_sign_floor() == 0, "default floor");
     CHECK(pod_policy_raise_floor(0x030A07) == NULL && fw_sign_floor() == 0x030A07, "raise");
     CHECK(pod_policy_raise_floor(0x030A05) == NULL && fw_sign_floor() == 0x030A07, "the floor went down");
     pod_policy_load();
     CHECK(pod_policy_rollback_floor() == 0x030A07 && fw_sign_floor() == 0x030A07, "floor lost on reboot");
-    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN) != NULL,
+    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD, false) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN, false) != NULL,
           "cleared from off the console");
-    CHECK(pod_policy_clear_floor(POLICY_SRC_USB) == NULL && fw_sign_floor() == 0, "console clear");
-    CHECK(pod_policy_sig() == FW_SIG_POLICY_AUDIT && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
+    CHECK(code_of(pod_policy_clear_floor(POLICY_SRC_LAN, false)) == BP_E_SETTING_DEVICE_ONLY, "LAN refusal is BP0043");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_LAN, true) == NULL && fw_sign_floor() == 0, "USB link clear");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_USB, false) == NULL && fw_sign_floor() == 0, "console clear");
+    CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
 }
 
 /* The stored genuine Wi-Fi bridge (H4) lives in a version 2 record; a version 1 copy stays the newest so
@@ -261,9 +309,9 @@ int main(void) {
     test_log_level();
     test_defaults();
     test_bridge_pin();
-    test_lan_unsigned_and_floor();
+    test_floor();
     test_lan_tls_gate();
-    test_sig_ratchet();
+    test_sig_always_required();
     test_lan();
     test_persists();
     test_power_cut();

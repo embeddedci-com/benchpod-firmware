@@ -18,6 +18,8 @@
 #include "bp_log.h"
 #include "cmd_gate.h"       /* cmd_gate_scpi_line_writes */
 #include "lease_gate.h"
+#include "pod_policy.h"     /* pod_policy_scpi / pod_policy_https_only */
+#include "at_driver.h"      /* at_send_data / at_close_connection */
 #include "stm32h5xx_hal.h"  /* HAL_GetTick */
 
 #include <stdio.h>
@@ -76,6 +78,33 @@ static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
     return true;
 }
 
+/* Is protocol `p` served on TCP connection conn_id (firmware 4.0.0, pod_policy.h)? SCPI only while
+   it is switched on; JSON on a plaintext connection from the external LAN only while HTTPS-only
+   is off (with it on, net_server lets such a connection in for SCPI alone). The cloud tunnels
+   are not TCP connections and are not affected. */
+bool net_conn_on_usb(int conn_id);   /* net_server.h (which pulls in lwIP for the host tests) */
+bool net_conn_on_tls(int conn_id);
+static bool proto_served(int conn_id, proto_t p) {
+    if (conn_id < 0 || conn_id >= CH_MAX_CONN) return true;
+    if (p == PROTO_SCPI) return pod_policy_scpi();
+    if (p == PROTO_JSON)
+        return net_conn_on_usb(conn_id) || net_conn_on_tls(conn_id) || !pod_policy_https_only();
+    return true;
+}
+
+/* Refuse the connection's protocol once and close it (the rest of its bytes are dropped). */
+static void proto_refuse(int conn_id, proto_t p) {
+    proto[conn_id] = PROTO_REFUSED;
+    if (p == PROTO_SCPI) {
+        static const char k_off[] = "SCPI is off on this BenchPod: switch it on over USB or from the cloud "
+                                    "(console: lan-tls scpi on)\n";
+        at_send_data(conn_id, (const uint8_t *)k_off, sizeof(k_off) - 1u);
+    } else {
+        bp_err_lan_plaintext_off(conn_id);   /* BP0075 */
+    }
+    at_close_connection(conn_id);
+}
+
 void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
     /* conn_id outside the buffered set (console/cloud-command pseudo-conns or an unexpected id) —
        best-effort one-shot parse without per-connection buffering. The cloud tunnel IS buffered so
@@ -119,6 +148,9 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
             continue;
         }
 
+        /* Refused, closing: nothing more is read. */
+        if (proto[conn_id] == PROTO_REFUSED) return;
+
         char c = (char)json_buf[i++];
         if (c == '\r') continue;          /* tolerate CRLF */
         if (c == '\n') {
@@ -127,6 +159,12 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
                 la->len = 0;
             } else if (la->len > 0) {
                 la->buf[la->len] = '\0';
+                /* Checked on every line: a setting switched off meanwhile ends the session. */
+                if (!proto_served(conn_id, proto[conn_id])) {
+                    la->len = 0;
+                    proto_refuse(conn_id, proto[conn_id]);
+                    return;
+                }
                 if (proto[conn_id] == PROTO_SCPI && scpi_line_blocked_by_lease(conn_id, la->buf)) {
                     /* SCPI setters wait while a cloud job holds the pod; queries still answer. */
                     scpi_push_execution_error();
@@ -142,6 +180,7 @@ void command_handler_process(int conn_id, const uint8_t *json_buf, size_t len) {
         if (proto[conn_id] == PROTO_UNKNOWN) {
             if (c == ' ' || c == '\t') continue;
             proto[conn_id] = (c == '{') ? PROTO_JSON : PROTO_SCPI;
+            if (!proto_served(conn_id, proto[conn_id])) { proto_refuse(conn_id, proto[conn_id]); return; }
         }
         if (la->len < LINE_ASM_SIZE - 1) {
             la->buf[la->len++] = c;

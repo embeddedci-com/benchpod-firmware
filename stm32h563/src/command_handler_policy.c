@@ -5,6 +5,7 @@
 #include "net_server.h"   /* net_conn_on_usb: the USB link may set the CA and proxy */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "pod_policy.h"
 #include "fw_sign.h"
@@ -31,32 +32,30 @@ static void sig_policy_reply(int conn_id) {
     char data[160], fl[16];
     uint32_t floor = pod_policy_rollback_floor();
     snprintf(data, sizeof(data),
-             "{\"policy\":\"%s\",\"enforces\":true,\"keys\":%u,\"lan_unsigned\":%s,\"rollback_floor\":%s%s%s}",
-             fw_sign_policy_name(pod_policy_sig()), (unsigned)fw_sign_key_count(),
-             pod_policy_lan_unsigned() ? "true" : "false", floor ? "\"" : "",
+             "{\"policy\":\"%s\",\"enforces\":true,\"keys\":%u,\"rollback_floor\":%s%s%s}",
+             fw_sign_policy_name(pod_policy_sig()), (unsigned)fw_sign_key_count(), floor ? "\"" : "",
              floor ? fw_sign_release_str(floor, fl, sizeof(fl)) : "null", floor ? "\"" : "");
     send_ok_str(conn_id, data);
 }
 
-/* {"cmd":"sig_policy"[,"set":"audit|permissive|required"][,"lan_unsigned":true|false]}
-   lan_unsigned (firmware 3.10.7+): may Ethernet/Wi-Fi install images without a good signature
-   (pod_policy.h)? On only over the USB link (or the console's lan-ota any); the cloud may turn it
-   off. */
+/* {"cmd":"sig_policy"[,"set":"required"][,"clear_floor":true]}: firmware 4.0.0 always requires
+   signatures. "set":"required" (a server pushing it) is fine from any source; audit and permissive,
+   and the 3.10.x "lan_unsigned":true, are refused with BP0074. "clear_floor":true drops the rollback
+   floor, over the USB link only (the console's rollback-floor clear up to 3.10.13). */
 void handle_sig_policy(int conn_id, const char *json) {
     char v[16] = {0};
-    const policy_src_t src = command_handler_policy_src(conn_id);
     if (bp_json_get(json, "set", v, sizeof(v))) {
         int p = pod_policy_sig_from_name(v);
-        if (p < 0) { send_error(conn_id, "sig_policy: set must be audit, permissive or required"); return; }
-        const char *why = pod_policy_set_sig((fw_sig_policy_t)p, src);
+        if (p < 0) { send_error(conn_id, "sig_policy: set must be required"); return; }
+        const char *why = pod_policy_set_sig((fw_sig_policy_t)p, command_handler_policy_src(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
-    if (bp_json_get(json, "lan_unsigned", v, sizeof(v))) {
-        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
-            send_error(conn_id, "sig_policy: lan_unsigned must be true or false");
-            return;
-        }
-        const char *why = pod_policy_set_lan_unsigned(!strcmp(v, "true"), src, net_conn_on_usb(conn_id));
+    if (bp_json_get(json, "lan_unsigned", v, sizeof(v)) && strcmp(v, "false") != 0) {
+        bp_err_signatures_always_required(conn_id, "lan_unsigned", v);
+        return;
+    }
+    if (bp_json_flag(json, "clear_floor")) {
+        const char *why = pod_policy_clear_floor(command_handler_policy_src(conn_id), net_conn_on_usb(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
     sig_policy_reply(conn_id);
@@ -98,28 +97,29 @@ void handle_log_level(int conn_id, const char *json) {
    the device may change it: over the USB link itself here (the console has usb-network). */
 void handle_usb_network(int conn_id, const char *json) {
     char v[8] = {0};
-    if (bp_json_get(json, "set", v, sizeof(v))) {
-        if (strcmp(v, "on") != 0 && strcmp(v, "off") != 0) {
-            send_error(conn_id, "usb_network: set must be on or off");
+    if (bp_json_get(json, "enabled", v, sizeof(v))) {   /* firmware up to 3.10.13: "set":"on"|"off" */
+        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
+            send_error(conn_id, "usb_network: enabled must be true or false");
             return;
         }
-        const char *why = pod_policy_set_usb_net(!strcmp(v, "on"), command_handler_policy_src(conn_id),
+        const char *why = pod_policy_set_usb_net(!strcmp(v, "true"), command_handler_policy_src(conn_id),
                                                  net_conn_on_usb(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
     char data[48];
-    snprintf(data, sizeof(data), "{\"setting\":\"%s\"}", pod_policy_usb_net() ? "on" : "off");
+    snprintf(data, sizeof(data), "{\"enabled\":%s}", pod_policy_usb_net() ? "true" : "false");
     send_ok_str(conn_id, data);
 }
 
 /* ---- LAN TLS (lan_tls.h, docs/design/lan-tls.md) ----------------------------- */
 
-/* {"cmd":"lan_tls"[,"https_only":true|false][,"regenerate":true]}
-   -> {"port":8443,"https_only":bool,"sessions":N,"origin":..,"key":..,"subject":..,"san":[..],
-       "not_after":..,"sha256":..[,"error":..]}
+/* {"cmd":"lan_tls"[,"https_only":true|false][,"scpi":true|false][,"regenerate":true]}
+   -> {"port":8443,"https_only":bool,"scpi":bool,"sessions":N,"origin":..,"key":..,"subject":..,
+       "san":[..],"not_after":..,"sha256":..[,"error":..]}
    Installing a certificate goes through the upload path (OTA target "tls"). Reading works from
-   anywhere. Changing HTTPS-only and regenerating need the USB console, the USB link or the cloud
-   (pod_policy_lan_tls_gate): not the external LAN, TLS or not. */
+   anywhere. Changing HTTPS-only (on by default from 4.0.0; false = plaintext JSON on :8080 from
+   the LAN too) and SCPI (off by default), and regenerating, need the USB console, the USB link or
+   the cloud (pod_policy_lan_tls_gate): not the external LAN, TLS or not. */
 void handle_lan_tls(int conn_id, const char *json) {
     const policy_src_t src = command_handler_policy_src(conn_id);
     const bool usb = net_conn_on_usb(conn_id);
@@ -132,6 +132,14 @@ void handle_lan_tls(int conn_id, const char *json) {
         const char *why = pod_policy_set_https_only(!strcmp(v, "true"), src, usb);
         if (why) { send_error(conn_id, why); return; }
     }
+    if (bp_json_get(json, "scpi", v, sizeof(v))) {
+        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
+            send_error(conn_id, "lan_tls: scpi must be true or false");
+            return;
+        }
+        const char *why = pod_policy_set_scpi(!strcmp(v, "true"), src, usb);
+        if (why) { send_error(conn_id, why); return; }
+    }
     if (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0) {
         const char *why = pod_policy_lan_tls_gate(src, usb);
         if (!why) why = lan_tls_regenerate();
@@ -142,8 +150,9 @@ void handle_lan_tls(int conn_id, const char *json) {
     char resp[640];   /* worker stack (12 KB) */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"port\":%d,\"https_only\":%s,\"sessions\":%d,",
-            LAN_TLS_PORT, pod_policy_https_only() ? "true" : "false", net_tls_sessions());
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"port\":%d,\"https_only\":%s,\"scpi\":%s,\"sessions\":%d,",
+            LAN_TLS_PORT, pod_policy_https_only() ? "true" : "false", pod_policy_scpi() ? "true" : "false",
+            net_tls_sessions());
     if (in.ready) {
         bp_emit_raw(&e, "\"origin\":");    bp_emit_jstr(&e, in.origin);
         bp_emit_raw(&e, ",\"key\":");      bp_emit_jstr(&e, in.key);
@@ -160,7 +169,7 @@ void handle_lan_tls(int conn_id, const char *json) {
         bp_emit_jstr(&e, in.error[0] ? in.error : "no certificate");
     }
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "lan_tls: reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 
@@ -218,7 +227,7 @@ void handle_cloud_ca(int conn_id, const char *json) {
     const char *err = cloud_extras_ca_error();
     if (err) { bp_emit_raw(&e, ",\"error\":"); bp_emit_jstr(&e, err); }
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "cloud_ca: reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
 

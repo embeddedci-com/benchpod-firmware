@@ -9,27 +9,25 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 | Property | Value |
 |---|---|
 | Protocol | TCP |
-| Default port | `8080` (plaintext) |
-| TLS port | `8443` (TLS 1.2, firmware 3.9.3+), same protocol; see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
+| Port (Ethernet, Wi-Fi) | `8443`, TLS 1.2 (firmware 3.9.3+; from 4.0.0 the only port the JSON API answers on there by default); see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
+| Port (USB network adapter) | `8080` (plaintext) and `8443` (TLS) |
+| Plaintext `8080` on Ethernet and Wi-Fi | Off by default from firmware 4.0.0 (`lan_tls` `"https_only":false` turns it on); the default port up to 3.10.13 |
 | Framing | Newline-delimited (`\n`) — one JSON object per line |
 | Encoding | UTF-8 |
-| Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `"busy"`) |
+| Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `BP0047`, `pod_busy`) |
 
 Connect with any TCP client:
 
 ```bash
-nc <device-ip> 8080
+openssl s_client -connect <device-ip>:8443 -quiet     # the LAN (firmware 4.0.0 and later)
+nc 10.237.x.y 8080                                    # the USB network adapter
 ```
 
-**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
+**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. The link stays plaintext on `8080` in firmware 4.0.0: it is a point-to-point cable that never crosses a network, and the pod drops packets for its USB subnet that arrive on another interface. `8443` answers there too. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
 
 The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS (on Ethernet and Wi-Fi unless the [LAN policy](#lan_policy--what-the-external-lan-may-do) is `off`; on the USB link always).
 
-**Over TLS.** From firmware 3.9.3 the same API also listens on port `8443` with TLS 1.2. Everything below works the same way on it (JSON, SCPI, the raw modes). The pod's certificate is its own (generated on first boot, or one you install), so clients pin its SHA-256 on first use; `benchpod`, the `embeddedci` SDK and the MCP server do this for you and use `8443` by default when the pod has it. With [HTTPS-only](#lan_tls--the-lan-api-over-tls) on, `8080` answers only on the USB network adapter. Test it by hand with:
-
-```bash
-openssl s_client -connect <device-ip>:8443 -quiet
-```
+**Over TLS.** From firmware 3.9.3 the same API also listens on port `8443` with TLS 1.2. Everything below works the same way on it (JSON, SCPI when it is on, the raw modes). The pod's certificate is its own (generated on first boot, or one you install), so clients pin its SHA-256 on first use; `benchpod`, the `embeddedci` SDK and the MCP server do this for you, with no user action, and use `8443` by default when the pod has it. From firmware 4.0.0 [HTTPS-only](#lan_tls--the-lan-api-over-tls) is on by default: `8080` answers only on the USB network adapter (and, for SCPI only, on the LAN when SCPI is on). A plaintext JSON line that reaches `8080` from the LAN anyway (SCPI on) gets `BP0075` (`lan_plaintext_off`) and the connection closes.
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
 
@@ -46,7 +44,8 @@ The pod has two command channels, and they have deliberately different trust mod
 ### The LAN API is unauthenticated
 
 The JSON-over-TCP and SCPI interfaces on port `8080` have **no authentication, no
-authorization, and no transport encryption**. Port `8443` (firmware 3.9.3+) is the same API over
+authorization, and no transport encryption** (from firmware 4.0.0 `8080` is off on Ethernet and
+Wi-Fi by default, and SCPI is off everywhere by default). Port `8443` (firmware 3.9.3+) is the same API over
 TLS: it adds **encryption and integrity** against the network path (a Wi-Fi bridge, a shared
 switch), not authentication. Any client that can open a TCP connection to either port has the
 full command set, which includes:
@@ -68,11 +67,13 @@ limits, calibration, the policies) and firmware updates then need the cloud or U
 TCP connections over Ethernet and Wi-Fi and stops the mDNS advertisement there. Only the cloud and the USB console can change it, from the web app's device
 settings or `benchpod lan-policy set`.
 
-**HTTPS-only** (`lan_tls` with `https_only`, default off) turns plaintext `8080` off on the
-external LAN, so only TLS crosses Ethernet and Wi-Fi; the USB network adapter keeps `8080`. A
-plaintext LAN connection may turn it on but never off, and may not replace or regenerate the TLS
-certificate: an active man-in-the-middle on `8080` could otherwise swap the certificate before a
-client pins it. See [`lan_tls`](#lan_tls--the-lan-api-over-tls).
+**HTTPS-only** (`lan_tls` with `https_only`, default on from firmware 4.0.0, off before) keeps
+plaintext `8080` off on the external LAN, so only TLS crosses Ethernet and Wi-Fi; the USB network
+adapter keeps `8080`. **SCPI** (`lan_tls` with `scpi`, firmware 4.0.0, default off) is switched on
+on purpose. Both are changed like the LAN policy: from the USB console, the USB network adapter
+or the cloud, never from Ethernet or Wi-Fi (over TLS or not), since an active man-in-the-middle
+could otherwise open plaintext or swap the certificate before a client pins it. See
+[`lan_tls`](#lan_tls--the-lan-api-over-tls).
 
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
 VLAN or behind a firewall rule that admits only the hosts that need it. This is the
@@ -140,38 +141,46 @@ on every command:
 ### Error
 
 ```json
+{"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio","function":"gpio","instance":""}}\n
 {"status":"error","message":"<description>"}\n
-{"status":"error","code":"BP0002","args":{"cmd":"frobnicate"},"message":"<description>"}\n
 ```
 
-From firmware 3.10.8, refusals carry a stable error code (`BP0001` and up) and the
-values that go with it in `args` (left out when the code has none). Codes never change meaning and
-are never reused; each is on `https://embeddedci.com/docs/errors#<code>` with the cause and
-the fix, and [`errors/ERRORS.md`](../errors/ERRORS.md) lists them. Read `code` and `args`, not the
-`message` text: the text may change, and a future firmware sends only a short form of it
-(`"BP0002 cmd=frobnicate"`). Errors without a code yet keep the first form. The codes, their args
-and their texts for each tool are in [`errors/errors.json`](../errors/errors.json), generated from
-[`errors/catalog.toml`](../errors/catalog.toml).
+A refusal a client acts on carries a stable error code (`BP0001` and up) and the values that go
+with it in `args` (left out when the code has none), and no `message` (firmware 4.0.0 and
+later; firmware 3.10.8 to 3.10.13 sent a message next to some codes). The client renders the
+code's message and its fix from the catalog: [`errors/errors.json`](../errors/errors.json),
+generated from [`errors/catalog.toml`](../errors/catalog.toml), with each code's message template
+(`{la}` is an arg), cause and fix for the SDK, CLI, MCP and the web app. Codes never change meaning
+and are never reused; each is on `https://embeddedci.com/docs/errors#<code>`, and
+[`errors/ERRORS.md`](../errors/ERRORS.md) lists them. One code also carries a `message`: `BP0030`
+(see [Client compatibility](#client-compatibility)), for clients too old to know it.
+
+The second form is a refusal without a code: a bad argument or a failure that only a person
+reads (`"unknown waveform"`, `"capture failed"`). Clients show its text as it
+is and do not match on it. Over the cloud command channel the envelope's `"error"` is the
+message, or the code when there is none, with `"code"` and `"args"` beside it.
 
 ### Chunked data (multi-packet responses)
 
-Commands that return sample arrays (`capture`, `stream`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
+Commands that return sample arrays (`capture`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
-{"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
-{"status":"chunk", "data":[33501,33790,34012,...], "more":true}\n
-{"status":"chunk", "data":[34190,34322,34410,...], "more":false}\n
+{"status":"ok",    "bits":16, "adc_sample_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
+{"status":"chunk", "b64":"NBL_f...", "more":true}\n
+{"status":"chunk", "b64":"QBQ0Fz...", "more":false}\n
 ```
 
 ADC samples are 16-bit counts (`"bits":16`); see [ADC sample values](#adc-sample-values). A client must read until it receives a packet with `"more":false` to know the transfer is complete. If the client stops reading for a few seconds the pod ends the transfer and closes the connection.
 
-#### Base64 samples (`"enc":"b64"`)
+#### Base64 samples (the default)
 
-Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. `status.caps` contains `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
+The 16-bit samples of `capture`, `measure`, `test`, `capture_dual` and `capture_read` come as `"b64"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6 as decimal, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). `capture_dual`'s LA region still comes as `la_edges`. Firmware 4.0.0 made it the default; up to 3.10.13 a request had to say `"enc":"b64"`, which still works.
+
+Add `"enc":"dec"` for the decimal `"data"` array instead (what firmware up to 3.10.13 sent by default):
 
 ```json
-{"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
-{"status":"chunk", "b64":"NBL_f...", "more":false}\n
+{"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
+{"status":"chunk", "data":[33501,33790,34012,...], "more":false}\n
 ```
 
 ---
@@ -185,7 +194,7 @@ and a cloud tunnel never goes above the tier the server allowed its user (T2 and
 organization owner or admin). "T0/T2" commands read at T0 and change a setting at T2.
 Commands that send several packets or switch the connection to raw bytes need a stream connection
 (a LAN socket or a cloud byte tunnel). The single-reply cloud command channel refuses `capture`,
-`stream`, `capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
+`capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
 `sensor_la`, `la_capture`, `dap_start`, `uart_proxy_start` and `speedtest` with
 `command not supported over cloud channel`. The USB console does not run JSON commands at all.
 
@@ -196,7 +205,6 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `diag` | T0 | Heap, stack, network-stack and console diagnostics (firmware 3.10.9+) | object | no |
 | `generate` | T1 | Start a DAC waveform | `null` or object | no |
 | `capture` | T0 | ADC snapshot, up to 32768 samples | array of uint16 | yes |
-| `stream` | T0 | Same as `capture`, without a trigger | array of uint16 | yes |
 | `measure` | T1 | DAC waveform + ADC capture in one command | array of uint16 | yes |
 | `capture_dual` | T0 | Deep ADC + LA capture off one trigger | array of uint16, LA as edges | yes |
 | `capture_read` | T0 | Resume the read-back of the last `capture_dual` | array of uint16 | yes |
@@ -222,7 +230,8 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay, 2 = sensor emulation) | object | no |
 | `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
 | `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
-| `la` | T1 | LA pin control: step pulse trains + pull resistors (up/down/off) | object | no |
+| `la_step` | T1 | Start a step pulse train on an LA pin (`la` with `steps` up to 3.10.13) | object | no |
+| `la_pull` | T1 | Switch or read the LA pull resistors (up/down/off) (`la` up to 3.10.13) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
 | `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
@@ -232,7 +241,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
-| `usb_host` | T0/T2 | Development builds only. USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `on`: T2) | object | no |
+| `usb_host` | T0/T2 | Development builds only. USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
 | `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
@@ -265,16 +274,16 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `sensor_status` | T0 | Instances, their values, faults and bus counters (paged) | object | no |
 | `sensor_regs` | T0 | Read an I2C/SPI instance's register image (base64) | object | no |
 | `sensor_la` | T0 | Raw I2C-bus logic capture of an I2C instance | array of uint8 | yes |
-| `can_config` | T1 | Bring up classic CAN or CAN FD (FDCAN1 / TCAN1044) | object | no |
+| `can_start` | T1 | Bring up classic CAN or CAN FD (`can_config` up to 3.10.13) | object | no |
 | `can_write` | T1 | Send one CAN frame | object | no |
 | `can_read` | T0 | Drain up to 8 received CAN frames | object | no |
 | `can_status` | T0 | CAN state and error counters | object | no |
 | `can_term` | T1 | Switch the 120 Ω CAN termination | object | no |
 | `can_respond` | T1 | Add or clear an automatic CAN reply rule | object | no |
-| `can_disable` | T1 | Turn CAN off (and its termination) | object | no |
+| `can_stop` | T1 | Turn CAN off and its termination (`can_disable` up to 3.10.13) | object | no |
 | `identity_public` | T0 | Get the device Ed25519 public key | object | no |
 | `identity_pop` | T0 | Sign a nonce (proof of possession) | object | no |
-| `identity_wipe` | T0 | Always refused here: only on the USB console | error | no |
+| `identity_wipe` | T2 | Erase the device key and make a new one, over the USB link only (the console's `identity-wipe` up to 3.10.13) | object | no |
 | `cloud_status` | T0 | The cloud link's state and stored settings | object | no |
 | `cloud_set` | T2 | Store the cloud server and device id, then connect | object | no |
 | `cloud_clear` | T2 | Forget the cloud settings and disconnect | `"cleared"` | no |
@@ -284,9 +293,11 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `wifi_scan` | T0 | Start a Wi-Fi scan, or read its networks | object | no |
 | `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
 | `wifi_clear` | T2 | Forget the Wi-Fi credentials (pod and ESP32-C3) | `"cleared"` | no |
+| `wifi_bridge` | T2 | The Wi-Fi bridge on the Ethernet port: update, reboot, factory reset, identity certificate (the console's `bridge` up to 3.10.13) | object | no |
+| `usb_reattach` | T1 | Drop off the USB bus and enumerate again (the console's `usb-reattach` up to 3.10.13) | object | no |
 | `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
 | `speedtest` | T1 | Cloud throughput probe over a tunnel | none (raw bytes) | no |
-| `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
+| `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts; clear the rollback floor over the USB link | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
 | `log_level` | T0 | Read or set the console log level | object | no |
@@ -308,28 +319,37 @@ Commands that send several packets or switch the connection to raw bytes need a 
 
 Commands not in this table answer `"unknown cmd"`.
 
+**Names and units (firmware 4.0.0).** A rate or frequency is in Hz and its name ends in `_hz`:
+`sample_rate_hz` for a sample rate (`adc_sample_rate_hz` and `la_sample_rate_hz` where a capture
+has both), `freq_hz` for a waveform, `clock_hz` for a bus clock. A voltage given in volts ends in
+`_v` (`dac_out` `v`, `generate` `amplitude_v`); integer millivolt settings and readings end in
+`mv` or `_mv` and microvolts in `uv`. A DAC code is `code16`. Durations end in their unit (`_ms`,
+`_us`, `_s`). Firmware up to 3.10.13 used `freq`, `hz`, `rate_hz` and `*_rate_mhz` (in MHz) in
+places; the [features table](#features-table) entry `json_names_4` marks the change.
+
 <a id="gates-that-apply-to-every-command"></a>
 ### Gates that apply to every command
 
 Before a command runs, the firmware checks these, in this order (`src/cmd_gate.c`). The first one
-that applies answers with its message and the command does not run.
+that applies answers with its code (or, for safe mode, its message) and the command does not run.
 
-| Gate | Applies to | Message |
+| Gate | Applies to | Refusal |
 |---|---|---|
-| [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping` and `lease_release`, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030`: `update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)` (firmware after 3.10.13) |
-| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025`: `busy: a cloud job holds this pod (<holder>, <N> s left)` (the code with firmware after 3.10.13; the text is unchanged) |
-| Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
+| [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping`, `lease_release` and the update commands, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030` (`client_too_old`, with a `message` for old clients; firmware 4.0.0) |
+| LAN policy `locked` | a T2 or T3 command on a LAN connection | `BP0040` (`lan_locked`, args `cmd`) |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025` (`lease_busy`, holder `a cloud job`, purpose the cloud holder) |
+| Cloud tunnel tier | a command above the tier the server allowed the tunnel's user (its `tunnel.open` `max_tier`; a tunnel opened without one gets T1 from firmware 4.0.0, everything up to 3.10.13) | `BP0045` (`role_required`, args `cmd`) |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
-| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
-| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
-| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026`: `lease lost: stopped by <name>` |
+| Digital-only board | the analog commands (`generate`, `capture`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
+| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026` (`lease_lost`, args `by`) |
+| [DAC pinout](#dac-pinout-on-the-flat-cable) mismatch | the commands that drive the DAC (`generate`, `measure`, `replay`, `dac_set`, `dac_out`, `dac_control_loop`, `current_out` with `ua`, `calibrate` with `dac` or `adc`, `adc_range` with `test`) on a digital board and an analog module with different flat-cable pinouts | `BP0080` (`dac_pinout_mismatch`, args `cmd`, `digital`, `module`) |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
-`capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`,
+`capture`, `capture_dual`, `capture_read`, `la_capture`, `sensor_regs`, `sensor_la`,
 `can_read`, `psram_ping` and `test`. Commands that use the capture hardware (PSRAM, ADC, LA) also
-take turns with each other: a second one gets `"busy"` until the first is done.
+take turns with each other: a second one gets `BP0047` (`pod_busy`) until the first is done.
 
 ---
 
@@ -355,74 +375,46 @@ Use this as a lightweight keepalive or to confirm the firmware is reachable befo
 
 ### `generate` — DAC waveform output
 
-Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the iCE40). There are two forms:
+Start continuous waveform generation on the DAC (16 bits, clocked by the FPGA). Give the waveform in volts on a DAC output (`path`, `amplitude_v`, `offset_v`), or in microamps on the 4-20 mA output (`amplitude_ua`, `offset_ua`). The pod routes the output, turns the values into DAC codes with the same per-path calibration as [`dac_out`](#dac_out--route-an-output-path-and-set-a-calibrated-voltage) and [`current_out`](#current_out--hold-a-current-on-the-4-20-ma-output-j9), and builds the waveform at the DAC's full 16 bits. One step is about 50 µV on the 3v3 output.
 
-- **Calibrated, 16-bit** (firmware 3.9.1+, caps `generate16`, `generate_bits` 16): give the waveform in volts on a DAC output (`path`, `amplitude_v`, `offset_v`), or in microamps on the 4-20 mA output (`amplitude_ua`, `offset_ua`). The pod routes the output, turns the values into DAC codes with the same per-path calibration as [`dac_out`](#dac_out--route-an-output-path-and-set-a-calibrated-voltage) and [`current_out`](#current_out--hold-a-current-on-the-4-20-ma-output-j9), and builds the waveform at the DAC's full 16 bits.
-- **Levels, 8-bit** (every firmware): `amplitude` and `offset` are 8-bit levels, the waveform is built from them and played in the DAC's high byte: 256 steps over the output's range, and no calibration.
+Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255, no calibration). Firmware 4.0.0 takes only this form: a request without `amplitude_v` or `amplitude_ua` is refused.
 
-#### Calibrated request (16-bit)
-
-```json
-{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
-{"cmd":"generate","waveform":"square","freq":10,"amplitude_ua":4000,"offset_ua":12000}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `path` | string | with `amplitude_v` | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
-| `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
-| `amplitude_ua`, `offset_ua` | number (µA) | together | Peak and centre on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
-
-| `route` | boolean | no | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. Default: route the output. |
-
-`waveform`, `freq`, `duration_ms`, `sample_rate_mhz` and `on_capture` work as in the 8-bit form below. The reply is `{"bits":16}`, with `"cotrig"` added for `on_capture`. One step is about 50 µV on the 3v3 output (the 8-bit form: about 13 mV).
-
-| Condition | Message |
-|---|---|
-| A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
-| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
-| `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
-| `amplitude` not above 0 | `amplitude_v must be above 0 V` |
-
-#### Level request (8-bit)
+#### Request
 
 ```json
-{"cmd":"generate","waveform":"<type>","freq":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"duration_ms":<ms>}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
+{"cmd":"generate","waveform":"square","freq_hz":10,"amplitude_ua":4000,"offset_ua":12000}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `waveform` | string | yes | — | Waveform shape: `"sine"`, `"square"`, or `"sawtooth"` |
-| `freq` | number (Hz) | no | `1000` | Output frequency in Hz |
-| `amplitude` | integer 0–127 | no | `127` | Half-scale amplitude. Peak-to-peak swing = `2 × amplitude` counts out of 255 |
-| `offset` | integer 0–255 | no | `128` | DC offset (vertical centre). `128` = mid-scale |
-| `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run indefinitely until the next command |
-| `sample_rate_mhz` | number (MHz) | no | auto | FPGA DAC sample-clock rate. Omit to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `waveform` | string | yes | — | `"sine"`, `"square"` or `"sawtooth"` |
+| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
+| `amplitude_v`, `offset_v` | number (V) | together | — | Peak and center in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
+| `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
+| `freq_hz` | number (Hz) | no | `1000` | Output frequency |
+| `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run until the next command |
+| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `route` | boolean | no | `true` | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
-
-**Amplitude and offset arithmetic**
-
-The 8-bit level at each sample point is clamped to `[0, 255]` and then scaled to the 16-bit DAC:
 
 ```
 sine:     value = offset + amplitude × sin(2π × t/T)
-square:   value = offset ± amplitude  (high for first half-period, low for second)
+square:   value = offset ± amplitude  (high for the first half-period, low for the second)
 sawtooth: value = offset - amplitude … offset + amplitude  (linear ramp per period)
 ```
 
-With `amplitude=100, offset=128` the output swings between 28 and 228 (out of 255), centred at mid-scale.
-
 **Frequency resolution**
 
-The firmware precomputes one full period in a sample buffer and the iCE40 loops it. Period length in samples is:
+The firmware precomputes one full period in a sample buffer and the FPGA loops it. Period length in samples is:
 
 ```
-period_samples = floor(sample_rate / freq)
+period_samples = floor(sample_rate / freq_hz)
 ```
 
-where `sample_rate = 48 MHz / (divider + 51)`: the DAC8551 engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s. Earlier firmware used a divider of 3 (about 889 kS/s), which left the gap 5 ns short of what the quad DAC on analog v3r2 and later boards needs.
+where `sample_rate = 48 MHz / (divider + 51)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s.
 
-The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_mhz` out and the firmware picks one that fits the period.
+The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_hz` out and the firmware picks one that fits the period.
 
 #### Response
 
@@ -430,27 +422,22 @@ The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sa
 {"status":"ok","data":null}
 ```
 
-With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
+With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmware up to 3.10.13 replied `{"bits":16}` to the calibrated form.
 
 #### Examples
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":100000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq_hz":100000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 ```
-→ 100 kHz sine, ±100 counts around mid-scale, runs until next command.
+→ 100 kHz sine, 0.45 to 2.85 V on the 3v3 output, runs until the next command.
 
 ```json
-{"cmd":"generate","waveform":"square","freq":50000,"amplitude":64,"offset":128,"duration_ms":2000}
+{"cmd":"generate","waveform":"square","freq_hz":50000,"path":"5v","amplitude_v":2.5,"offset_v":2.5,"duration_ms":2000}
 ```
-→ 50 kHz square wave for 2 seconds, then DAC stops.
+→ 50 kHz square wave, 0 to 5 V, for 2 seconds, then the DAC stops.
 
 ```json
-{"cmd":"generate","waveform":"sawtooth","freq":500000,"amplitude":127,"offset":127}
-```
-→ 500 kHz sawtooth, full-scale ramp 0 → 254.
-
-```json
-{"cmd":"generate","waveform":"sine","freq":100000,"sample_rate_mhz":1}
+{"cmd":"generate","waveform":"sine","freq_hz":100000,"path":"3v3","amplitude_v":1,"offset_v":1.65,"sample_rate_hz":1000000}
 ```
 → 100 kHz sine clocked at 1 MHz (10 samples/period). Coarser waveform but much lower clock feedthrough, useful for a cleaner scope trace on breadboard wiring.
 
@@ -459,31 +446,36 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
 | Condition | Message |
 |---|---|
 | Unknown or missing `waveform` | `"unknown waveform"` |
-| `freq` ≤ 0 or `amplitude` = 0 | `"generate failed"` |
+| Neither `amplitude_v` nor `amplitude_ua` (for example the old 8-bit form) | `amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required` |
+| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
+| `amplitude_v` not above 0 | `amplitude_v must be above 0 V` |
+| A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
+| `freq_hz` ≤ 0 | `"generate failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 ---
 
 ### `capture` — ADC snapshot
 
-Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into PSRAM) and return them. The reply arrives once the capture is done; meanwhile other connections keep working, but a second capture waits its turn (`"busy"`). A capture also fills the RAM replay buffer, so `replay` can play it straight back.
+Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into PSRAM) and return them. The reply arrives once the capture is done; meanwhile other connections keep working, but a second capture waits its turn (`BP0047`). A capture also fills the RAM replay buffer, so `replay` can play it straight back.
 
 #### Request
 
 ```json
-{"cmd":"capture","samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"capture","samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Max |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | `32768` |
-| `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
+| `sample_rate_hz` | number (Hz) | no | max (~400000) | — |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
-| `enc` | string | no | decimal | `"b64"`, see [Base64 samples](#base64-samples-encb64) |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data`, see [Base64 samples](#base64-samples-the-default) |
 
 For more than 32768 samples use `capture_dual` with `la_samples` 0 (millions of samples, read back from PSRAM).
 
-`sample_rate_mhz` sets the ADC sample clock. Omit it for the maximum ~400 kSPS rate; a **lower** rate stretches the capture window so a slow waveform fits in the 32768-sample buffer. For example, 32768 samples at ~400 kSPS spans ~82 ms, and `0.08` (80 kS/s) spans ~410 ms — enough to see a motor current waveform or other low-frequency signal. The v2 MCP33131 ADC runs in the 24 MHz domain and its divider is floored at 60, so the maximum rate is 24 MHz ÷ 60 ≈ 400 kSPS; the firmware snaps to the nearest achievable divider and logs the actual rate.
+`sample_rate_hz` sets the ADC sample clock. Omit it for the maximum ~400 kSPS rate; a **lower** rate stretches the capture window so a slow waveform fits in the 32768-sample buffer. For example, 32768 samples at ~400 kSPS spans ~82 ms, and `80000` (80 kS/s) spans ~410 ms — enough to see a motor current waveform or other low-frequency signal. The v2 MCP33131 ADC runs in the 24 MHz domain and its divider is floored at 60, so the maximum rate is 24 MHz ÷ 60 ≈ 400 kSPS; the firmware snaps to the nearest achievable divider and logs the actual rate.
 
 #### Response
 
@@ -511,8 +503,8 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 
 | Condition | Message |
 |---|---|
-| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
-| Another capture or upload is running | `"busy"` |
+| `samples` = 0 or > 32768 | `BP0067` (`samples_out_of_range`, `max` 32768; `capture_dual` takes deep captures) |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"capture failed"` |
 | The PSRAM read-back failed | `"capture read-back failed"` |
 
@@ -521,7 +513,7 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 To verify the signal path, start a waveform then capture:
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"cmd":"capture","samples":4096}
 ```
 
@@ -529,46 +521,10 @@ The captured array should show a sinusoidal pattern at the expected period.
 
 ---
 
-### `stream` — ADC capture (alias of `capture`)
+### `stream` (removed)
 
-On this firmware `stream` is the same one-shot PSRAM capture as `capture`, without the trigger option: the capture runs in the gateware and the samples are read back once it is done. It is kept for older clients.
-
-#### Request
-
-```json
-{"cmd":"stream","samples":<count>,"sample_rate_mhz":<MHz>}
-```
-
-| Field | Type | Required | Default | Max |
-|---|---|---|---|---|
-| `samples` | integer | no | `256` | `32768` |
-| `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
-| `enc` | string | no | decimal | `"b64"` |
-
-`sample_rate_mhz` has the same meaning as in `capture`.
-
-#### Response
-
-Same chunked format as `capture`:
-
-```json
-{"status":"ok",    "bits":16, "data":[...], "more":true}\n
-{"status":"chunk", "data":[...], "more":false}\n
-```
-
-#### Example
-
-```json
-{"cmd":"stream","samples":4096}
-```
-
-#### Error cases
-
-| Condition | Message |
-|---|---|
-| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
-| Another capture or upload is running | `"busy"` |
-| The capture did not arm | `"capture failed"` |
+Firmware up to 3.10.13 had `stream`, an alias of [`capture`](#capture--adc-snapshot) without the
+trigger option, kept for older clients. Firmware 4.0.0 removed it (`BP0002`): send `capture`.
 
 ---
 
@@ -581,18 +537,18 @@ When the capture finishes the firmware stops the DAC before it returns the data.
 #### Request
 
 ```json
-{"cmd":"measure","waveform":"<type>","freq":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"measure","waveform":"<type>","freq_hz":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `waveform` | string | yes | — | `"sine"`, `"square"`, or `"sawtooth"` |
-| `freq` | number (Hz) | no | `1000` | DAC output frequency |
+| `freq_hz` | number (Hz) | no | `1000` | DAC output frequency |
 | `amplitude` | integer 0–127 | no | `127` | DAC half-scale amplitude |
 | `offset` | integer 0–255 | no | `128` | DAC DC offset |
 | `samples` | integer | no | `256` | Number of ADC samples to capture, and the waveform period (max `2048`) |
-| `sample_rate_mhz` | number (MHz) | no | auto | Sample-clock rate. Omit it and the rate is `freq × samples`, so one period spans the capture. |
-| `enc` | string | no | decimal | `"b64"` |
+| `sample_rate_hz` | number (Hz) | no | auto | Sample-clock rate. Omit it and the rate is `freq_hz × samples`, so one period spans the capture. |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 #### Response
 
@@ -606,12 +562,12 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 #### Examples
 
 ```json
-{"cmd":"measure","waveform":"sine","freq":100000,"amplitude":100,"offset":128,"samples":512}
+{"cmd":"measure","waveform":"sine","freq_hz":100000,"amplitude":100,"offset":128,"samples":512}
 ```
 → Output a 100 kHz sine and return 512 ADC samples taken during the same window.
 
 ```json
-{"cmd":"measure","waveform":"square","freq":50000,"samples":1024}
+{"cmd":"measure","waveform":"square","freq_hz":50000,"samples":1024}
 ```
 → Output a 50 kHz square wave (defaults: amplitude 127, offset 128) and capture 1024 samples.
 
@@ -627,8 +583,8 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 | `waveform` field missing | `"missing waveform"` |
 | Unknown waveform | `"unknown waveform (use sine, square or sawtooth)"` |
 | `samples` = 0 or > 2048 | `"samples out of range"` |
-| Invalid params (for example `freq` ≤ 0) | `"measure start failed"` |
-| Another capture or upload is running | `"busy"` |
+| Invalid params (for example `freq_hz` ≤ 0) | `"measure start failed"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not complete | `"capture failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
@@ -653,18 +609,18 @@ The capture stays in PSRAM after the reply: if the read-back stalls, resume it w
 #### Request
 
 ```json
-{"cmd":"capture_dual","adc_samples":<N>,"adc_rate_mhz":<R>,"la_samples":<M>,"la_rate_mhz":<S>}
+{"cmd":"capture_dual","adc_samples":<N>,"adc_sample_rate_hz":<Hz>,"la_samples":<M>,"la_sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `adc_samples` | integer | no | `0` | ADC 16-bit samples. |
-| `adc_rate_mhz` | number (MHz) | no | max | ADC sample clock (24 MHz domain, divider ≥ 60 → max ~0.4 MHz). |
+| `adc_sample_rate_hz` | number (Hz) | no | max | ADC sample clock (24 MHz domain, divider ≥ 60 → max ~0.4 MHz). |
 | `la_samples` | integer | no | `0` | Raw LA words, 2 bytes each (bit `n-1` = LA`n`). |
-| `la_rate_mhz` | number (MHz) | no | max | LA sample clock. |
+| `la_sample_rate_hz` | number (Hz) | no | max | LA sample clock. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0, so the window shows it switch off. `0` leaves it running. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
-| `enc` | string | no | decimal | `"b64"` for the ADC region |
+| `enc` | string | no | `"b64"` | `"dec"` for the ADC region as decimal `data` |
 
 `adc_samples` and `la_samples` must not both be `0`. On gateware v22 and newer the firmware packs
 the LA region, the ADC region and any resident deep-replay waveform into the 8 MB and refuses up
@@ -672,11 +628,11 @@ front when they do not fit or when the combined sample rate would overrun the PS
 [tri-capture-unified-psram.md](tri-capture-unified-psram.md)).
 
 The raw LA (12 MS/s and below) follows the same rules as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
-without `la_rate_mhz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
+without `la_sample_rate_hz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
 explicit rate that does not fit is refused with both ways out. On gateware before v53, with ADC
 samples in the same capture the raw LA runs at most 8 MS/s (the PSRAM writer starved the ADC at
 12 MS/s, at any depth and ADC rate): a higher raw rate is refused there. Gateware v53 and later run
-the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_rate_hz`
+the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_sample_rate_hz`
 in the reply is the rate it ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
 samples. (Before firmware 3.10.0 a deep `capture_dual` ran at the requested or the full 12 MS/s
 and overflowed.)
@@ -686,7 +642,7 @@ and overflowed.)
 Chunked reply: the ADC region as unsigned 16-bit counts in `data`, then the LA region as **edges**. The **first** packet also carries the **achieved** rates so the client can build an aligned time-base (the gateware floors the ADC to a divider ≥ 60, so the actual rate can differ from the request):
 
 ```json
-{"status":"ok","bits":16,"adc_rate_hz":399361,"la_rate_hz":6000000,"data":[...],"more":true}
+{"status":"ok","bits":16,"adc_sample_rate_hz":399361,"la_sample_rate_hz":6000000,"data":[...],"more":true}
 {"status":"chunk","data":[...],"more":true}
 {"status":"chunk","la":true,"la_edges":[[0,5],[812,7],[1630,5]],"la_upto":2048,"more":true}
 {"status":"chunk","la":true,"la_edges":[[4100,1]],"la_upto":4096,"more":false}
@@ -699,21 +655,22 @@ packet carries `"la":true,"la_edges"` directly.
 
 | Field | Meaning |
 |---|---|
-| `adc_rate_hz` | Achieved ADC sample rate in Hz (`24 MHz ÷ divider`); omitted when `adc_samples` = 0. |
-| `la_rate_hz` | Achieved LA sample rate in Hz; omitted when `la_samples` = 0. |
+| `adc_sample_rate_hz` | Achieved ADC sample rate in Hz (`24 MHz ÷ divider`); omitted when `adc_samples` = 0. |
+| `la_sample_rate_hz` | Achieved LA sample rate in Hz; omitted when `la_samples` = 0. |
 
 #### Error cases
 
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
-| An explicit LA rate that does not fit (above 8 MS/s with the ADC on gateware before v53, or too deep for the rate) | `"LA at <r> MS/s does not fit ..."`, naming the most samples at that rate and the fastest rate for that depth |
-| More than 2 097 152 samples in a stream | `"capture_dual takes at most 2097152 LA and 2097152 ADC samples (la_capture: up to <n> LA)"` |
-| LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
-| The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
-| The PSRAM could not keep up during the capture (STATUS overflow bit) | `"capture overflowed: the PSRAM could not keep up with LA <n> kS/s + ADC <n> kS/s. Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"` |
+| An explicit LA rate above 8 MS/s with the ADC on gateware before v53 | `BP0068` (`la_rate_above_ceiling`, args `rate_mhz`, `max_mhz`, `fit_mhz` (the fastest rate for this depth), `samples`) |
+| An explicit LA rate too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples` (the most at this rate), `fit_mhz` (the fastest rate for this depth)) |
+| More than 2 097 152 samples in a stream | `BP0070` (`capture_dual_too_deep`, args `la_max`, `adc_max`, `la_capture_max`) |
+| LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `BP0072` (`psram_too_small`) |
+| The combined rate overruns the PSRAM bus (gateware v22+) | `BP0073` (`psram_bandwidth`) |
+| The PSRAM could not keep up during the capture (STATUS overflow bit) | `BP0071` (`capture_overflowed`, args `la_ksps`, `adc_ksps`) |
 | A count exceeds its fixed region (gateware before v22) | `"samples out of range (per-stream PSRAM region limit)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | ADC samples on the digital-only board | the [digital-board refusal](#gates-that-apply-to-every-command) |
 | Capture did not arm | `"capture failed"` |
 
@@ -734,7 +691,7 @@ of capturing again. The reply has the same chunked format as `capture_dual`, sta
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `offset` | integer | no | `0` | Global sample index to resume from (`0` .. `adc_samples + la_samples`). |
-| `enc` | string | no | decimal | `"b64"` |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 An `offset` equal to the total sends one empty final packet (`{"status":"ok","data":[],"more":false}`).
 
@@ -743,7 +700,7 @@ An `offset` equal to the total sends one empty final packet (`{"status":"ok","da
 | No `capture_dual` / `la_capture` since boot, or a newer capture started | `"no capture to resume (run capture_dual first)"` |
 | Something wrote over the capture's PSRAM regions since (an OTA staging, a `load_bin` with `"psram"`, a gateware reload, a SCPI or console capture) | `"capture data was overwritten by <what>; run the capture again"` |
 | `offset` past the end | `"offset out of range"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
@@ -783,11 +740,11 @@ untriggered capture is unaffected.
 
 #### Timeout
 
-If the condition never arrives the capture is aborted and the command errors with a
-machine-parseable prefix (the edge word matches the request):
+If the condition never arrives the capture is aborted and the command is refused with
+`BP0038` (`trigger_timeout`; the `edge` arg matches the request):
 
-```
-trigger timeout: no rising edge on LA9 within 10000 ms
+```json
+{"status":"error","code":"BP0038","args":{"la":9,"edge":"rising","timeout_ms":10000}}
 ```
 
 A co-triggered DAC start staged for that capture is cancelled with it — the abort is an
@@ -797,15 +754,15 @@ untriggered t0 and would otherwise fire the waveform.
 
 | Condition | Message |
 |---|---|
-| the running gateware is older than v35 | `"capture triggers need gateware v35 or newer (this pod runs vNN)"` |
+| the running gateware is older than v35 | `BP0017` (`gateware_too_old`, feature `capture triggers`, min 35) |
 | `trigger` is not an object | `"trigger must be an object like {\"la\":1,\"edge\":\"rising\"}"` |
 | `trigger.la` outside 1..14 | `"trigger la must be 1..14"` |
 | `trigger.edge` not recognised | `"trigger edge must be rising, falling, high or low"` |
 | `trigger_timeout_ms` outside 1..600000 | `"trigger_timeout_ms must be 1..600000"` |
-| the condition never arrived | `"trigger timeout: no <edge> edge on LA<n> within <N> ms"` |
+| the condition never arrived | `BP0038` (`trigger_timeout`, args `la`, `edge`, `timeout_ms`) |
 
-`status.caps` contains `"capture_trigger"` (and `"gpio_read"`) when the running gateware
-supports this; the cloud capabilities frame carries the same two flags as booleans.
+The [features table](#features-table) has `capture_trigger` (and `gpio_read`) for the running
+gateware that supports this.
 
 ---
 
@@ -814,8 +771,12 @@ supports this; the cloud capabilities frame carries the same two flags as boolea
 From firmware 3.10.11 the frame also carries `features_rev`, `gateware_version` (the
 running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
 [features table](#features-table). Firmware after 3.10.13 adds `api` and `min_client_api`, the
-[client API level](#client-compatibility). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
-`spi_stream`, `error_codes`, `cloud_ca` and `cloud_proxy`, which the server never read from it.
+[client API level](#client-compatibility). Firmware 4.0.0 sends no per-feature flags in it
+(`ota`, `scope`, `dac`, `dac_control_loop`, `capture_b64`, `sensors`, `lan_tls` and the rest): the
+server takes the features from the table. The frame keeps the values (versions, policies,
+`ws_auth_v2`, the ADC and DAC scaling and ranges, `la_max_rate_hz`, `current_out_min_ua` /
+`current_out_max_ua`, `board`, the uplink, the boot health) and the facts the table names with a
+`frame` key: `analog`, `nrst_pin`, `sensors_digital`, `wifi_scan`, `pod_current`, `adc_low_range`.
 
 When the pod connects to the cloud it advertises a `capabilities` frame. Alongside `adc_bits` / `adc_fullscale_mv` / `adc_channels` it ships the affine ADC front-end calibration as **integers** (newlib-nano's `printf` has no `%f`), which the server uses to scale raw capture counts to the true probe voltage instead of the naive count ÷ full-scale:
 
@@ -853,21 +814,21 @@ Capture all 14 LA channels into PSRAM and stream them back. The reply uses the L
 `la_edges`, `la_upto`); each word holds LA1 in bit 0 up to LA14 in bit 13. Needs `la_voltage`.
 
 ```json
-{"cmd":"la_capture","samples":65536,"sample_rate_mhz":2}
+{"cmd":"la_capture","samples":65536,"sample_rate_hz":2000000}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | LA samples. The limit is the PSRAM left above a resident deep-replay waveform (up to the whole 8 MB, 2 bytes per sample). |
-| `sample_rate_mhz` | number (MHz) | no | max (12) | LA sample clock, up to 48 on gateware v50 and later. The pod runs the closest rate at or below it that it can reach (see below); above 12 MS/s, the nearest of 48, 24 and 16. |
+| `sample_rate_hz` | number (Hz) | no | max (12000000) | LA sample clock, up to 48000000 on gateware v50 and later. The pod runs the closest rate at or below it that it can reach (see below); above 12 MS/s, the nearest of 48, 24 and 16. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
 
-The first reply packet carries `la_rate_hz`, the **achieved** sample rate in Hz. Use it, not the
+The first reply packet carries `la_sample_rate_hz`, the **achieved** sample rate in Hz. Use it, not the
 requested rate, as the time base:
 
 ```json
-{"status":"ok","bits":16,"la_rate_hz":2181818,"la":true,"la_edges":[[0,256],[11,0]],"la_upto":256,"more":true}
+{"status":"ok","bits":16,"la_sample_rate_hz":2181818,"la":true,"la_edges":[[0,256],[11,0]],"la_upto":256,"more":true}
 ```
 
 The achieved rate can be lower than the request for two reasons:
@@ -875,20 +836,20 @@ The achieved rate can be lower than the request for two reasons:
 - The sample period is a whole number of 24 MHz clocks, so the rate is 24 MHz ÷ *n* (*n* ≥ 2,
   so at most 12 MS/s), rounded down from the request: 2.304 MHz runs at 24/11 = 2.18 MHz.
   Request a rate of that form (12, 8, 6, 4.8, 4, 3, 2.4, 2, … MHz) to get it exactly.
-- Without `sample_rate_mhz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
+- Without `sample_rate_hz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
   runs at the fastest rate that fits it, so no sample is dropped: 4.8 MS/s at 100 000 samples,
   3.4 MS/s at 300 000 and 3 MS/s from about 1 000 000. An explicit rate that does not fit the
-  depth is refused (firmware 3.10.0 and later; it used to be slowed down), and the message names
-  both ways out: `"LA at 12.0 MS/s does not fit 1000000 samples: at most 65536 samples at 12.0
-  MS/s, or at most 3.0 MS/s for 1000000 samples (or leave the rate out for the fastest that
-  fits)"`.
+  depth is refused (firmware 3.10.0 and later; it used to be slowed down) with both ways out in
+  its args: `BP0069` with `"args":{"rate_mhz":"12.0","samples":1000000,"max_samples":65536,"fit_mhz":"3.0"}`
+  (firmware up to 3.10.13 sent them as text: `"LA at 12.0 MS/s does not fit 1000000 samples: at
+  most 65536 samples at 12.0 MS/s, or at most 3.0 MS/s for 1000000 samples ..."`).
 
-Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
+Older firmware omitted `la_sample_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
 
 #### Above 12 MS/s (gateware v50 and later)
 
-A request above 12 MS/s runs at 48, 24 or 16 MS/s, the one nearest the request (`la_rate_hz`
+A request above 12 MS/s runs at 48, 24 or 16 MS/s, the one nearest the request (`la_sample_rate_hz`
 says which). The pod records only the moments a channel changes, at 48 MS/s, and sends them as
 the same `la_edges` reply, so nothing changes for the host. The capabilities report the top rate
 as `la_max_rate_hz` (48000000; 12000000 on older gateware, which runs such a request at 12 MS/s).
@@ -900,7 +861,7 @@ than the buffer lasts, such as continuous SPI at 10 MHz or more for over about 1
 capture early: the reply then holds the samples up to that point, and its first packet carries
 `"truncated":"busy"` (or `"memory"` when the changes filled the free capture memory). Capture at
 12 MS/s or lower for such signals. `capture_dual` takes the same rates for its LA part
-(`la_rate_mhz` above 12); there, a capture that stops early fails with `"capture failed"`.
+(`la_sample_rate_hz` above 12000000); there, a capture that stops early fails with `"capture failed"`.
 
 #### Pre-trigger (gateware v50 and later)
 
@@ -909,7 +870,7 @@ at any rate up to 48 MS/s (the pod records the changes from the arm, so this alw
 method as above):
 
 ```json
-{"cmd":"la_capture","samples":10000,"sample_rate_mhz":24,"trigger":{"la":3,"edge":"falling","pre_samples":2000}}
+{"cmd":"la_capture","samples":10000,"sample_rate_hz":24000000,"trigger":{"la":3,"edge":"falling","pre_samples":2000}}
 ```
 
 The first reply packet carries `"pre_samples":N`, the samples actually returned before the
@@ -923,7 +884,7 @@ The trigger is at sample index N; `samples` more follow it.
 the bus line catches it (this also works over the cloud, which runs one command at a time):
 
 ```json
-{"cmd":"la_capture","samples":4096,"sample_rate_mhz":12,"trigger":{"la":1,"edge":"falling"},
+{"cmd":"la_capture","samples":4096,"sample_rate_hz":12000000,"trigger":{"la":1,"edge":"falling"},
  "send":{"bus":"i2c","addr":72,"write":"Dw","read":2}}
 ```
 
@@ -940,12 +901,13 @@ anything is armed.
 
 | Condition | Message |
 |---|---|
-| LA voltage not set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
-| `samples` = 0 or too deep | `"samples out of range: 1 to <max>"`, with `" (a DAC waveform in the PSRAM holds the rest; dac_stop frees it)"` when a resident deep-DAC waveform is what limits it |
-| Another capture or upload is running | `"busy"` |
+| LA voltage not set | `BP0001` (`la_voltage_not_set`) |
+| `samples` = 0 or too deep | `BP0067` (`samples_out_of_range`, args `max`); a resident deep-DAC waveform can be what limits it (`dac_stop` frees it) |
+| An explicit `sample_rate_hz` (12 MS/s and below) too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples`, `fit_mhz`) |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
-| `trigger.pre_samples` on gateware older than v50 | `"trigger pre_samples needs gateware v50 or newer (this pod runs v49)"` |
+| `trigger.pre_samples` on gateware older than v50 | `BP0017` (feature `trigger pre_samples`, min 50) |
 
 ---
 
@@ -982,7 +944,7 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 |---|---|
 | `data` field missing | `"missing data"` |
 | Chunk at `offset > 0` sent without a preceding `offset:0` on this connection | `"load not started"` |
-| Another connection holds the buffer | `"busy"` |
+| Another connection holds the buffer | `BP0047` (`pod_busy`) |
 | `offset` past 4096 bytes | `"offset out of range"` |
 | The chunk would take the trace past 4096 bytes (2048 samples, what a RAM `replay` plays) | `"load: the trace would be longer than 4096 bytes (2048 samples, the DAC's RAM replay limit); use load_bin with \"psram\":true for longer traces"` |
 | Malformed base64url | `"invalid data"` |
@@ -1004,7 +966,7 @@ little-endian samples), with no JSON or base64 around them. Then the connection 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `total` | integer | yes | — | Bytes that follow. RAM: at most 4096 (2048 samples). PSRAM: at most 8 MB. |
-| `psram` | boolean | no | `false` | Stage into PSRAM for a deep replay (needs the deep-replay gateware image, `status.caps` `"dac_deep_replay"`). |
+| `psram` | boolean | no | `false` | Stage into PSRAM for a deep replay (needs the deep-replay gateware image, feature `dac_deep_replay`). |
 
 Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok","data":{"total":4096}}`
 (in samples) once the bytes are in. An upload that gets no bytes for 30 s is dropped.
@@ -1014,24 +976,24 @@ Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok
 | Sent on the cloud command channel | `"load_bin needs a stream connection"` |
 | `total` missing | `"missing total"` |
 | `total` 0 or too large | `"total out of range"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
 ### `replay` — play a recorded trace out the DAC
 
-Play the trace back out the DAC. The trace is whichever was most recently put there: the last `capture`, `stream` or `measure` (so you can capture a signal and immediately play it back), a host-uploaded trace from `load` or `load_bin` (so you can replay a previously saved run), or a deep PSRAM upload from `load_bin` with `"psram":true`. The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
+Play the trace back out the DAC. The trace is whichever was most recently put there: the last `capture` or `measure` (so you can capture a signal and immediately play it back), a host-uploaded trace from `load` or `load_bin` (so you can replay a previously saved run), or a deep PSRAM upload from `load_bin` with `"psram":true`. The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
 
 #### Request
 
 ```json
-{"cmd":"replay","samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"replay","samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | full recorded length | Number of samples to play, ≤ the recorded length. |
-| `sample_rate_mhz` | number (MHz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 51 cycles of the 48 MHz DAC clock from RAM, divider + 52 from PSRAM, divider ≥ 4). The maximum, also the default, is about 873 kS/s from RAM and 857 kS/s for a deep (PSRAM) replay; a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
+| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 51 cycles of the 48 MHz DAC clock from RAM, divider + 52 from PSRAM, divider ≥ 4). The maximum, also the default, is about 873 kS/s from RAM and 857 kS/s for a deep (PSRAM) replay; a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: start at the next capture's t0 (the DAC co-trigger). |
 
 #### Response
@@ -1048,15 +1010,15 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 |---|---|
 | Nothing has been captured or uploaded yet | `"nothing to replay"` |
 | `samples` = 0 or greater than the recorded length | `"samples out of range"` |
-| Another connection holds the buffer | `"busy"` |
+| Another connection holds the buffer | `BP0047` (`pod_busy`) |
 | FPGA load/start error, or a RAM trace longer than 2048 samples | `"replay failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 #### Record → save → replay workflow
 
 ```json
-{"cmd":"capture","samples":4096,"sample_rate_mhz":0.08}   // record a run; host saves the returned array
-{"cmd":"replay","sample_rate_mhz":0.08}                   // play that same run straight back out the DAC
+{"cmd":"capture","samples":4096,"sample_rate_hz":80000}   // record a run; host saves the returned array
+{"cmd":"replay","sample_rate_hz":80000}                   // play that same run straight back out the DAC
 ```
 
 To replay a run saved earlier (e.g. a "normal" trace after a "fault" trace overwrote the live buffer), upload it first:
@@ -1065,7 +1027,7 @@ To replay a run saved earlier (e.g. a "normal" trace after a "fault" trace overw
 {"cmd":"load","offset":0,"data":"<base64url chunk 0>"}
 {"cmd":"load","offset":150,"data":"<base64url chunk 1>"}
 ...
-{"cmd":"replay","sample_rate_mhz":0.08}
+{"cmd":"replay","sample_rate_hz":80000}
 ```
 
 Note that the DAC outputs the recorded samples as a **voltage** waveform — replaying a current trace reproduces its shape (e.g. for a scope or downstream stage), not the original current.
@@ -1148,7 +1110,7 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 
 | Command | Refused when |
 |---|---|
-| `dac_out` | `volts` on the limited path is outside `min_mv`..`max_mv` |
+| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` |
 | `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
 | `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
@@ -1203,23 +1165,22 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 
 #### `dac_out` — route an output path **and** set a calibrated voltage
 
-`volts` is optional (omit to only route). The firmware converts volts to the DAC8551's full
+`v` (volts; `volts` up to firmware 3.10.13) is optional (omit to only route). The firmware converts volts to the DAC8551's full
 16-bit code using the baked-in per-path calibration, so one step is about 50 µV on `3v3`,
 76 µV on `5v` and 0.37 mV on `12v`.
 
 ```json
-{"cmd":"dac_out","path":"5v","volts":2.5}
-→ {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code":128,"code16":32723}}
+{"cmd":"dac_out","path":"5v","v":2.5}
+→ {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code16":32723}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `mv`, `uv` | The voltage the chosen code gives, in millivolts and in microvolts |
 | `code16` | The 16-bit DAC code now held |
-| `code` | The nearest 8-bit code (`code16` / 256, rounded), what older firmware reported; `-1` when only routing |
 
-When only routing, the reply is `{"path":…,"mv":0,"code":-1}` with no `uv` or `code16`.
-Waveforms (`generate`, `load`, `replay`) still use 8-bit codes.
+When only routing, the reply is `{"path":…,"mv":0}` with no `uv` or `code16`. Firmware up to
+3.10.13 also replied `code`, the nearest 8-bit code (`-1` when only routing).
 
 #### `current_out` — hold a current on the 4-20 mA output (J9)
 
@@ -1275,8 +1236,8 @@ and ±12 V outputs use the same DAC:
   to go back to 4 mA.
 - To play a waveform as a current, set a current first (that switches the voltage outputs off),
   then use `generate` or `load_bin` + `replay` with codes computed from `min_ua` / `max_ua`:
-  `ua = min_ua + code16 × (max_ua − min_ua) / 65535`. `generate` takes 8-bit levels; a level is
-  the high byte of the 16-bit code.
+  `ua = min_ua + code16 × (max_ua − min_ua) / 65535`, or `generate` with `amplitude_ua` and
+  `offset_ua`.
 - While [DAC limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set,
   `current_out` with `ua` is refused.
 
@@ -1310,8 +1271,8 @@ embeddedci-server does this.
 
 The pod cannot see the loop: with no supply or an open loop, `current_out` still replies ok.
 
-`status.caps` contains `"current_out"` when the firmware supports it. The cloud capabilities
-frame has `"current_out":true` and the range as `current_out_min_ua` / `current_out_max_ua`.
+The [features table](#features-table) has `current_out` when the firmware supports it. The cloud
+capabilities frame has the range as `current_out_min_ua` / `current_out_max_ua`.
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
@@ -1510,11 +1471,11 @@ normal range.
 
 ```json
 {"cmd":"adc_range","range":"low"}
-{"cmd":"dac_out","path":"12v","volts":6}
+{"cmd":"dac_out","path":"12v","v":6}
 → {"status":"error","message":"refused: the ADC is in the low range (+-5.46 V full scale), and 6000 mV on the 12v output is past +-5000 mV. Switch the ADC to the normal range first: {\"cmd\":\"adc_range\",\"range\":\"normal\"}"}
 ```
 
-`status.caps` contains `"adc_low_range"` on a board with the low range, and `status` (LAN and
+The `adc_low_range` fact is in `hw` on a board with the low range, and `status` (LAN and
 tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_range`.
 
 #### `calibrate` — calibrate the ADC offset on the `current_in` input (J8)
@@ -1589,15 +1550,15 @@ firmware: ±50 mV). The old calibration stays in place.
 The calibration is stored in flash. It survives a reboot and a firmware update. Only the
 offset is calibrated: the gain uses the built-in fits (within 0.3 % on measured pods), because
 calibrating it needs a reference voltage (see the DMM-guided calibration below). On `cal1` and
-`cal2` the DAC output stages add a few mV of their own on top. `status.caps` contains `"calibrate"`
-when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
+`cal2` the DAC output stages add a few mV of their own on top. The [features table](#features-table) has `calibrate`
+when the firmware supports it.
 
 ##### DMM-guided calibration (firmware 3.9.4)
 
 With a bench DMM the pod can also take out what is left after the offset: its own DAC offset and
 gain per output path, and then the ADC gain per source. Every step is optional and saved on its
-own; a path or source without one keeps the built-in fit. `status.caps` contains `"cal_dmm"` when
-the firmware takes these forms (the [features table](#features-table): `cal_dmm`).
+own; a path or source without one keeps the built-in fit. The [features table](#features-table) has `cal_dmm` when
+the firmware takes these forms.
 
 | Request | What it does |
 |---|---|
@@ -1685,7 +1646,7 @@ firmware then calibrates or clears is what a later update finds.
 
 ```json
 // Self-cal the 5 V path (no external wiring): drive 2.5 V, read it back.
-{"cmd":"dac_out","path":"5v","volts":2.5}
+{"cmd":"dac_out","path":"5v","v":2.5}
 {"cmd":"adc_read","source":"cal1"}          // → ~2500 mV
 
 // Measure an external signal on the ADC input SMA (high-Z ÷12 front end):
@@ -1714,7 +1675,7 @@ Builds a known 16-bit pattern in the STM32 (the FPGA, ADC and analog front end a
 | `pattern` | string | no | `sine` (or `const` if `value` is given) | `"sine"`, `"counter"`, `"ramp"`, or `"const"` |
 | `value` | integer 0-65535 | no | `65535` (used only for `const`) | Constant sample value |
 | `samples` | integer | no | `256` | 1 to `4096` |
-| `enc` | string | no | decimal | `"b64"` |
+| `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 #### Patterns
 
@@ -1752,38 +1713,40 @@ Same chunked format as `capture`: the first packet uses `"status":"ok"` (with `"
 |---|---|
 | `samples` = 0 or > 4096 | `"samples out of range"` |
 | Unknown `pattern` | `"unknown pattern (use sine\|counter\|ramp\|const)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
 ### `status` — firmware and connection info
 
 Returns the firmware version, network and cloud state, board and gateware details, health
-counters and the capability list.
+counters, and what a client needs to look the pod's features up in the
+[features table](#features-table): `features_rev`, `fpga_image` and the hardware facts `hw`.
 
 #### Request
 
 ```json
-{"cmd":"status","caps":false}
+{"cmd":"status"}
 ```
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `caps` | boolean | no | `true` | `false`: leave the `caps` list out and send `features_rev`, `fpga_image` and `hw` instead (firmware 3.10.11+). A client with the [features table](#features-table) sends it. Older firmware ignores it and sends the list, so a client gets one of the two from any pod. |
+No parameters. Firmware 3.10.11 to 3.10.13 took `"caps":false` to leave out the `caps` list
+older clients read; firmware 4.0.0 has no such list and ignores `caps`, so a client may keep
+sending it.
 
 #### Response (abridged)
 
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
- "usb":{"net":"on","setting":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
+ "usb":{"net":true,"enabled":true,"link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
  "board_rev":"v3","nrst_pin":true,"flash_kb":2048,
- "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
+ "sig_policy":"required","sig_keys":3,"lan_policy":"open",
  "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
  "psram":"ok","psram_ok":true,"reset":"power-on","last_crash":"","analog":true,
- "safe_mode":false,"safe_reason":"","caps":["signal","gpio","power","swd","..."]}}
+ "safe_mode":false,"safe_reason":"","features_rev":8,"api":2,"min_client_api":2,
+ "fpga_image":"loop","hw":["wifi","usb_cc"]}}
 ```
 
 #### Short form
@@ -1799,22 +1762,21 @@ elsewhere:
 | `local_lease` | the server, from the pod's `lease.local` frames (see [Pod lease](#pod-lease)) |
 | `module` | the [`module`](#module--the-analog-module-and-its-eeprom) command |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, `adc_range`, `adc_range_fs_mv` | the [capabilities frame](#capabilities-frame--adc-calibration-fields) |
-| `sensors_format`, `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state` | the capabilities frame (the server keeps them as `cap.*`) |
 | `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped`, `board_rev_mv` | [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; earlier, the full form) |
 
 It also cuts `last_crash` and `safe_reason` to 48 characters, writing any character JSON would
 escape as `?`, and adds `"boot_health_cut":true` when it cut one; the capabilities frame has both
-in full. Everything else, `caps` and `usb` included, is the same as the full form.
+in full. Everything else, the facts and `usb` included, is the same as the full form.
 
 LAN, USB and the cloud byte tunnels get the full form. A full form larger than the connection
 takes in one piece (2047 bytes, for example with a long crash report) comes as the short form
-too, so a LAN client that reads the calibration or the feature flags from `status` checks
+too, so a LAN client that reads the calibration from `status` checks
 `short_form` and reads them again (or warns) when it is set. Firmware 3.10.9 moved the
 diagnostics to [`diag`](#diag--heap-stack-and-network-diagnostics) so a running pod's full form
 stays a few hundred bytes under that limit; instead of the error `status too large for this connection` that firmware up to 3.10.4 sent.
 Firmware 3.10.4's full `status` could be larger than the cloud channel takes (with the USB network
 adapter up and a lease held), so connecting to it over the cloud failed with
-`status: reply too large for the cloud channel`.
+`BP0054` (`cloud_reply_too_large`).
 
 #### Response fields
 
@@ -1825,26 +1787,25 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `board` | string | Board name this firmware was built for. |
 | `net` | string | `"ready"` when the Ethernet or Wi-Fi interface has an address, else `"disconnected"`. |
 | `ip` | string | The pod's IP (Ethernet preferred over Wi-Fi), or `"0.0.0.0"`. |
-| `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is in the console's `wifi-show`. |
+| `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is `wifi_status` `rssi_dbm` (firmware 4.0.0). |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `short_form` | boolean | Present (`true`) only in the [short form](#short-form) (firmware 3.10.5+). |
 | `eth_mac` | string | The Ethernet port's MAC, `"aa:bb:cc:dd:ee:ff"`: fixed per pod (made from the MCU's unique ID), the same after every update. For a network that hands out addresses only to registered devices. Full form only (the server has it from the capabilities frame). Firmware 3.10.8+. |
 | `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware 3.10.8+. |
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
-| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `true`, or `false` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `enabled` is the stored `usb_network` setting (up to firmware 3.10.13 `net` and `setting` were `"on"`/`"off"`); `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v3r4 (the bank is then at 3.3 V). |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
 | `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware 3.10.13+), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
-| `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. The short form keeps only `cloud_ca` and `cloud_proxy`; the capabilities frame carries the others. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
-| `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
+| `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only` (default `true` from 4.0.0), `scpi` (4.0.0, default `false`), and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
-| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only, and only with `"caps":false` (a client with the features table, feature `lease`). |
+| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
@@ -1853,42 +1814,23 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
 | `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
-| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power`, `dac_pinout` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
+| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power`, `dac_pinout_ok` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
-| `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
-| `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
-| `api` | integer | With `"caps":false` only (firmware after 3.10.13): the [client API level](#client-compatibility) this firmware speaks. |
-| `min_client_api` | integer | With `"caps":false` only (firmware after 3.10.13): the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
-| `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
+| `features_rev` | integer | The revision of the [features table](#features-table) this firmware is built from. |
+| `api` | integer | Firmware after 3.10.13: the [client API level](#client-compatibility) this firmware speaks. |
+| `min_client_api` | integer | Firmware after 3.10.13: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
+| `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
-#### `caps` values
+#### Removed in firmware 4.0.0
 
-The list is frozen: it keeps the names below for older clients and gets no new ones. A feature
-added after 3.10.10 is only in the [features table](#features-table).
-
-| Value | Meaning |
-|---|---|
-| `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
-| `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
-| `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
-| `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. Not listed on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+); its frame carries `"wifi_scan":false`. |
-| `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
-| `gpio`, `power`, `swd`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensors`, `sensor_la_trigger` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN, [emulated sensors](#emulated-sensors) from definitions (format 1; `i2c_sensor`, `sensor_types` and `gps` are gone from firmware 3.10.3, see [Removed in firmware 3.10.3](#removed-in-firmware-3103)) and a [`sensor_la`](#sensor_la--raw-i2c-bus-capture) that waits for the bus's START (`trigger`, `timeout_ms`). |
-| `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
-| `adc_low_range` | The ADC has the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). |
-| `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
-| `cal_dmm` | `calibrate` takes the DMM-guided forms (`dac`, `adc`, a partial `clear`): firmware 3.9.4+, analog board only. |
-| `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |
-| `generate16` | [`generate`](#generate--dac-waveform-output) takes volts or microamps and plays them at 16 bits (firmware 3.9.1+, analog board only). The frame's `generate_bits` is then 16, else 8. |
-| `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
-| `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
-| `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
-| `uart_frame` | The running gateware takes `uart_proxy_start` `parity` and `stop_bits` (gateware v56+). |
-| `nrst_pin`, `usb_cc` | v3 board features. |
-
-The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
+Firmware up to 3.10.13 also sent, for clients without the features table, a `caps` list (when the
+request did not say `"caps":false`) and flags that were always `true`: `sensors_format`,
+`ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca` and
+`cloud_proxy`. Firmware 4.0.0 sends neither: every feature is in the table. A `caps` name maps to
+a table entry by its `legacy_caps` (`features/features.toml`), for clients that still talk to
+older firmware.
 
 #### Features table
 
@@ -1908,39 +1850,66 @@ know yet: update the client.
 
 #### Client compatibility
 
-Firmware after 3.10.13. `features_rev` only adds: a client older than the pod misses the new
+Firmware after 3.10.13 (4.0.0). `features_rev` only adds: a client older than the pod misses the new
 features and can warn. The client API level is for the other kind of change, one a client built
 for an older level would misread: a reply that changes shape, a field that changes meaning or
-units, or a refusal text replaced (by the catalog text, say) so clients that match on it break.
+units, or a refusal text replaced so clients that match on it break.
 
 | Field | Where | Meaning |
 |---|---|---|
 | `api` | `status` with `"caps":false`, the cloud capabilities frame | The client API level of this firmware, from [`features/features.toml`](../features/features.toml). It goes up by one only for a change an older client would misread. |
-| `min_client_api` | the same | The lowest level the firmware takes. It is raised only on purpose, in a release, and never above `api`. Today it is 0, so the pod refuses no client. |
+| `min_client_api` | the same | The lowest level the firmware takes. It is raised only on purpose, in a release, and never above `api`. |
 | `client_api` | every JSON command (request) | The level the client was built for. A command without it counts as 0. |
-| `client` | every JSON command (request), optional | The client's name and version, at most 32 printable characters (`"sdk 3.0.6"`, `"cli 0.9.5"`). The pod puts it in the refusal text; it is left out when longer or with other characters. |
+| `client` | every JSON command (request), optional | The client's name and version (`"sdk 4.0.0"`); the pod ignores it, and logs show it. |
+
+The levels:
+
+| `api` | Firmware | `min_client_api` | What changed |
+|---|---|---|---|
+| 1 | none released (development builds after 3.10.13) | 0 | The first level clients send. Firmware up to 3.10.13 announces no `api`: treat it as level 1. |
+| 2 | 4.0.0 | 2 | Clients classify refusals by [error code](#error) only, never by their text. Every refusal a client acts on has a code, and a coded refusal carries no message: the client renders the catalog's. Firmware 4.0.0 refuses every client that does not send `"client_api":2` or higher. |
 
 A command whose `client_api` is below `min_client_api` is refused before every other
 [gate](#gates-that-apply-to-every-command), on the LAN, USB and both cloud paths:
 
 ```json
-{"status":"error","code":"BP0030","args":{"client_api":0,"min_client_api":2,"api":2},"message":"update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer (this client sent 0)"}
+{"status":"error","code":"BP0030","args":{"client_api":1,"min_client_api":2,"api":2},"message":"Update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer (this client sent 1)"}
 ```
 
 `status`, `diag`, `ping` and `lease_release` always run, so a client can see the levels, report
-them and let go of the pod. SCPI and the USB console have no check: people read them.
+them and let go of the pod. So do the update commands (`ota_status`, `ota_begin`, `ota_data`,
+`ota_end`, `ota_commit`, `ota_abort`, `ota_selftest`, `blob_status` and `identity_public`), so
+an old client can still update the pod's firmware or blobs, or roll it back. These are the
+commands every older update path sends (CLI `flash-self --network` and `install-blobs`, the desktop
+app through its CLI, the server's cloud update): none takes a lease first. The CLI's
+`install-blobs` from 0.9.0 on also sends `fpga_image` after a gateware blob, to load the new
+gateware without a restart; firmware 4.0.0 refuses that (`BP0030`), and the CLI then says to
+restart the pod, which loads it. SCPI and the USB
+console have no check: people read them.
 
 A client:
 
-1. Sends `"client_api":<its level>` (and `client`) on every command. Both are stateless, so this
-   works the same on every transport, the cloud command channel included (the server passes the
-   command on as it is). Older firmware ignores them. They count toward the line limit (1279 bytes).
+1. Sends `"client_api":<its level>` on every command. It is stateless, so this works the same on
+   every transport, the cloud command channel included (the server passes the command on as it
+   is). Older firmware ignores it. It counts toward the line limit (1279 bytes).
 2. Reads `api` and `min_client_api` from `status` (`"caps":false`) or the capabilities frame.
    No `api` (firmware up to 3.10.13): treat it as level 1.
 3. Stops, and says to update the client, when `api` is above its own level (the firmware has a
    change this client would misread) or `min_client_api` is above it (the pod refuses it).
-4. Shows a `BP0030` refusal as it is: a client from before this level shows the `message` text,
+4. Shows a `BP0030` refusal from its `message`: a client from before the codes shows that text,
    which says what to do.
+
+Firmware 4.0.0 also changes defaults a client has to follow, though they do not change a reply's
+shape (so they are not an `api` level):
+
+- **The LAN is TLS only.** The JSON API answers on Ethernet and Wi-Fi on `8443` only; plaintext
+  `8080` answers on the USB network adapter. A client connects to a LAN pod on `8443` and pins its
+  certificate on first use (see [`lan_tls`](#lan_tls--the-lan-api-over-tls)); a plaintext-only
+  client fails to connect there (the connection is reset), or gets `BP0075` when SCPI is on.
+- **SCPI is off** until switched on (`lan_tls` `"scpi":true`, over USB or from the cloud).
+- **Signatures are always required** for every update ([`sig_policy`](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts)):
+  install signed releases; self-built firmware goes in over USB DFU. `BP0074` for an attempt to
+  loosen it.
 
 ---
 
@@ -2029,27 +1998,26 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 
 ---
 
-### `la` — logic-analyzer pin control
+### `la_step` — step a pulse train
 
-A single command for the LA bank. The action is inferred from the fields present:
-**step** (when `steps` is given), **pull set** (when `pull`, or the older `pullup`, is
-given), **pull query** (a bare `la`), or **pull bitmask** (no `la`). It replaces the former
-`gpio_set` / `gpio_step` / `pullup` / `pullup_status` commands. There is no active-drive
-action here (that is [`gpio`](#gpio--drive-and-read-la-pins-as-gpio)); a pull resistor
-sets a line's idle level.
+Firmware up to 3.10.13 had one `la` command for the step train and the pull resistors, told apart
+by their fields. Firmware 4.0.0 splits it: `la_step` runs a step train, and
+[`la_pull`](#la_pull--la-pin-pull-resistors) switches and reads the pull resistors. `la` is gone
+(`unknown cmd`). There is no active-drive action here (that is
+[`gpio`](#gpio--drive-and-read-la-pins-as-gpio)).
 
 #### Step a pulse train
 
 Starts a **non-blocking** train of `steps` pulses on an LA channel: each pulse is high for `delay_us` microseconds then low for `delay_us` (one full step period is `2 × delay_us`). The FPGA runs the train autonomously; the command returns immediately. Poll completion via SCPI `DIGital:STEP:BUSY?`.
 
 ```json
-{"cmd":"la","la":<1-14>,"steps":<n>,"delay_us":<us>,"dir_la":<1-14>,"direction":<0|1>}
+{"cmd":"la_step","la":<1-14>,"steps":<n>,"delay_us":<us>,"dir_la":<1-14>,"direction":<0|1>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `la` | integer | yes | — | LA channel to pulse (1..14). |
-| `steps` | integer | yes | — | Number of pulses. Range 1..65535. **Its presence selects the step action.** |
+| `steps` | integer | yes | — | Number of pulses. Range 1..65535. |
 | `delay_us` | integer | yes | — | Microseconds per half-phase. Range 4..65535. |
 | `dir_la` | integer | no | — | Optional direction channel driven (high/low) **before** stepping. |
 | `direction` | integer | no | 0 | Level for `dir_la`: `1` = high, `0` = low. |
@@ -2059,6 +2027,13 @@ Response:
 ```json
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
 ```
+
+<a id="la_pull--la-pin-pull-resistors"></a>
+### `la_pull` — LA pin pull resistors
+
+`{"cmd":"la_pull","la":N,"pull":"up"|"down"|"off"}` switches a pull, `{"cmd":"la_pull","la":N}`
+reads one, and `{"cmd":"la_pull"}` reads all of them as a bitmask. Firmware up to 3.10.13 did this
+with the `la` command.
 
 #### Switch (or query) an LA pin pull resistor
 
@@ -2093,35 +2068,32 @@ All of them default to **off** at boot.
 > Turning one *off* is always allowed.
 
 ```json
-{"cmd": "la", "la": 3, "pull": "up"}
+{"cmd": "la_pull", "la": 3, "pull": "up"}
 ```
 
 - `la` (required for a per-pin op): LA pin `1`-`14`.
 - `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
-- `pullup` (optional, the older form, still accepted): `"on"`/`"off"` (or `1`/`0`). `on`
-  engages the channel's own direction: on boards before digital v3r4 `up` on LA1-LA6 and
-  `down` on LA7/LA8; on digital v3r4 `up` on every channel. `pull` wins when both are given.
-- **Omit both** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
+- **Omit it** (a bare `{"cmd":"la_pull","la":N}`) to **query** the current state without
   changing it.
+- `pullup` (`"on"`/`"off"`, the older form of `pull`) is gone in firmware 4.0.0: the pod does not
+  read it, so such a request is a query. Firmware up to 3.10.13 took it, `on` engaging the
+  channel's own direction.
 
 Response:
 
 ```json
-{"status": "ok", "data": {"la": 3, "pullup": 1, "ohms": "2.2k", "pull": "up", "state": "up", "dirs": ["up"], "pullups_available": 1}}
+{"status": "ok", "data": {"la": 3, "state": "up", "dirs": ["up"], "pullups_available": true}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `state` | What the channel does now: `"up"`, `"down"` or `"off"`. |
 | `dirs` | Every direction the channel can pull: `["up"]`, `["down"]`, `["up","down"]`, or `[]` without a resistor. |
-| `ohms` | The resistor's value (`""` without one). |
-| `pull` | The channel's default direction, the one `pullup:"on"` engages (`"none"` without a resistor). |
-| `pullup` | `1` when the resistor is engaged (kept for older hosts; `state` says the same). |
-| `pullups_available` | `1` when a pull can be engaged now (a bank voltage is set): at `0` every `up`/`down` request is refused. |
+| `pullups_available` | `true` when a pull can be engaged now (a bank voltage is set): at `false` every `up`/`down` request is refused. Firmware up to 3.10.13 sent `1`/`0`. |
 
-Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `state`
-and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
-(SDK, MCP, CLI, web) send `pull` to new firmware and `pullup` to older firmware.
+Firmware up to 3.10.13 also replied `pullup` (`1` when engaged), `ohms` (the resistor's value)
+and `pull` (the channel's default direction); [`la_pins`](#la_pins--report-every-la-pin) has the
+resistor's value and direction. Firmware before the `la_pull_dir` feature takes `pullup` only.
 
 #### Pull resistors on digital v3r4
 
@@ -2141,19 +2113,18 @@ The pod picks the strength from the pin's function unless the host names one:
 | Everything else (UART RX hold, straps, idle levels, RS-485 DE bias) | 10k |
 
 ```json
-{"cmd": "la", "la": 9, "pull": "down", "strength": "both"}
-{"status": "ok", "data": {"la": 9, "pullup": 1, "ohms": "1.8k", "pull": "down", "state": "down",
-  "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": 1}}
+{"cmd": "la_pull", "la": 9, "pull": "down", "strength": "both"}
+{"status": "ok", "data": {"la": 9, "state": "down",
+  "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": true}}
 ```
 
 - `strength` (optional, digital v3r4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
   from the table above. Other boards ignore it, as older firmware does.
-- The reply adds `strength` (`"none"` when off) and `strengths`. `ohms` is the value engaged
-  (10k while off). `pull` is the direction engaged, `up` while off (what `pullup:"on"` engages).
+- The reply adds `strength` (`"none"` when off) and `strengths`.
 - [`la_pins`](#la_pins--report-every-la-pin) entries leave `dirs` out on this board (every
   channel pulls both ways; the reply says it once as `"pull_dirs":["up","down"]`), so the
   14-channel list fits the cloud reply.
-- `pullups_available` is `1` once an I/O voltage is set and pin 21 is up.
+- `pullups_available` is `true` once an I/O voltage is set and pin 21 is up.
 - When pin 21 goes down (shorted, overloaded, or held down) the pod holds both expanders in
   reset (every pull off) and refuses `up`/`down` with `BP0029`. When pin 21 is back it
   writes every pull back as the host left it.
@@ -2161,9 +2132,9 @@ The pod picks the strength from the pin's function unless the host names one:
   rail is switched on again or the host sets a pull, so pin 21 does not feed an unpowered DUT.
   Pull-downs stay. A DUT that the pod never powers keeps its pulls.
 - While the pod holds a pull off (the two cases above), the replies say what is on the wire
-  (firmware 3.10.13+). `pullup` and `state` are what the channel does now, and the reply
+  (firmware 3.10.13+). `state` is what the channel does now, and the reply
   adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
-  write failed; the next pull the host turns on with `la` tries again and puts them all back). `pull`, `ohms` and `strength` stay
+  write failed; the next pull the host turns on with `la_pull` tries again and puts them all back). `strength` stays
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
   `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
   replies have no `held`.
@@ -2172,21 +2143,21 @@ The pod picks the strength from the pin's function unless the host names one:
 
 #### Read all pulls as a bitmask
 
-Send `la` with no channel:
+Send `la_pull` with no channel:
 
 ```json
-{"cmd": "la"}
+{"cmd": "la_pull"}
 ```
 
 Response:
 
 ```json
-{"status": "ok", "data": {"la_pullup_mask": 5, "pullups_available": 1}}
+{"status": "ok", "data": {"la_pullup_mask": 5, "pullups_available": true}}
 ```
 
 `la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
 pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
-the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
+the current bank voltage (`true` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
 On digital v3r4 (firmware 3.10.13+), while the pod holds pulls off, the mask is what is on
 the wire and the reply adds `held` (the reason, as in [the pull resistors on digital
@@ -2194,30 +2165,30 @@ v3r4](#pull-resistors-on-digital-v3r4)) and `asked_mask`, the pulls the host set
 puts back:
 
 ```json
-{"status": "ok", "data": {"la_pullup_mask": 0, "pullups_available": 0, "held": "pin21_down", "asked_mask": 5}}
+{"status": "ok", "data": {"la_pullup_mask": 0, "pullups_available": false, "held": "pin21_down", "asked_mask": 5}}
 ```
 
 #### Error cases
 
 | Condition | Message |
 |---|---|
-| step request without `la` / `delay_us` | `"missing la"` / `"missing delay_us"` |
+| `la_step` without `steps` / `la` / `delay_us` | `"missing steps"` / `"missing la"` / `"missing delay_us"` |
 | `steps` / `delay_us` not a plain non-negative integer | `"invalid steps"` / `"invalid delay_us"` |
 | `steps` outside 1..65535 (the gateware step counter is 16-bit) | `"steps must be 1..65535 (the step counter is 16-bit): split a longer move into several trains"` |
 | `delay_us` outside 4..65535 | `"delay_us must be 4..65535 (microseconds per half-phase: a step takes 2 x delay_us)"` |
-| a step train is already running | `"busy"` |
+| a step train is already running | `BP0066` (`step_busy`) |
 | step `la` invalid or out of range | `"invalid args"` |
 | `dir_la` invalid, or equal to `la` | `"invalid dir_la"` / `"dir_la must be a different pin than la"` |
-| the step or direction pin belongs to another function | `"pin conflict: LA<n> is in use by <function>; <how to release>"` |
+| the step or direction pin belongs to another function | `BP0031` (`la_pin_in_use`, args `la`, `owner`, `function`, `instance`) |
 | `la` outside 1-14 | `"LA<n> is not a pin (use 1..14)"` |
 | `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
-| `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
+| `up`/`down` on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
-| pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
+| pull-**down** enable on a pin whose function needs the line high | `BP0033` (`la_pull_down_conflict`; see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
-| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
+| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` (`la_voltage_not_set`) |
 | the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
@@ -2243,7 +2214,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
-| `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
+| `step`, `step_dir` | the [`la_step` train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
 | `i2cm_sda`, `i2cm_scl` | [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) | `i2c_stop`, gateware reconfiguration |
 
@@ -2258,35 +2229,25 @@ the wire agree again.
 
 #### Conflict errors
 
-Claiming a pin another function owns fails with a machine-parseable prefix:
+Claiming a pin another function owns is refused with `BP0031` (`la_pin_in_use`):
 
+```json
+{"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio","function":"gpio","instance":""}}
 ```
-pin conflict: LA<n> is in use by <function>; <how to release>
-```
 
-An emulated sensor's pin names its instance: `pin conflict: LA<n> is in use by
-sensor:<instance> (<function>); stop the sensor emulation first
-({"cmd":"sensor_stop","instance":"<instance>"})`. In `la_pins` such a pin carries
-`"owner":"sensor:<instance>"`; on an I2C line several sensors share, the first one and how many
-others: `"sensor:env+1"`.
-
-| Owner | `<how to release>` |
-|---|---|
-| `gpio` | `release it with {"cmd":"gpio","la":<n>,"mode":"off"}` |
-| `uart_rx` / `uart_tx` | `stop the uart proxy first` |
-| `swd_clk` / `swd_dio` | `end the SWD session first` |
-| `i2c_sda` / `i2c_scl` / `sensor_*` | `stop the sensor emulation first ({"cmd":"sensor_stop","instance":"<instance>"})` |
-| `step` / `step_dir` | `wait for the step train to finish` |
-| `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
-| `i2cm_*` | `stop the I2C session first ({"cmd":"i2c_stop"})` |
+`owner` is what `la_pins` shows: the function (`gpio`, `uart_tx`, `swd_dio`, `step`, `spi_cs`,
+`i2cm_sda`, ...), or for an emulated sensor's pin `sensor:<instance> (<function>)` with
+`instance` set. In `la_pins` such a pin carries `"owner":"sensor:<instance>"`; on an I2C line
+several sensors share, the first one and how many others: `"sensor:env+1"`. What frees the pin
+follows from the function: `gpio` with `mode` `off` for a GPIO, `uart_proxy_stop` for the UART,
+the end of the SWD session or the step train, `sensor_stop` for a sensor, `spi_stop` or
+`i2c_stop` for the masters. The catalog's fix says it in each client's terms. SCPI and the USB
+console get the text `pin conflict: LA<n> is in use by <owner>`.
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
-Setting a level on a pin that is not a gpio output:
-
-```
-LA<n> is not a gpio output (function <function>[, gpio <mode>]); configure it with {"cmd":"gpio","la":<n>,"mode":"output"}
-```
+Setting a level on a pin that is not a gpio output is refused with `BP0036`
+(`la_not_gpio_output`, args `la` and `function`, `gpio input` for a GPIO input).
 
 #### Pull compatibility
 
@@ -2305,13 +2266,14 @@ with its pull-down engaged.
 | `i2c_sda`, `i2c_scl` | ok | **conflict** — an open-drain bus needs pull-ups |
 | `swd_dio` | ok | **conflict** — SWDIO is pulled up when released |
 
-```
-pull conflict: LA7 has its 10k pull-down engaged, which uart_rx can't work with (the line idles high); disable it with {"cmd":"la","la":7,"pull":"off"} or use another channel
-pull conflict: LA7 is used by i2c_sda, which can't work with the 10k pull-down (an open-drain bus needs pull-ups)
+```json
+{"status":"error","code":"BP0032","args":{"la":7,"ohms":"10k","function":"uart_rx","reason":"the line idles high"}}
+{"status":"error","code":"BP0033","args":{"la":7,"ohms":"10k","function":"i2c_sda","reason":"an open-drain bus needs pull-ups"}}
 ```
 
-The first form comes from a claim (`uart_proxy_start`, `dap_start`, `sensor_start`, `gpio`),
-the second from `{"cmd":"la","la":7,"pull":"down"}` on a pin that is already in use.
+`BP0032` (`la_pull_down_engaged`) comes from a claim (`uart_proxy_start`, `dap_start`,
+`sensor_start`, `gpio`), `BP0033` (`la_pull_down_conflict`) from `{"cmd":"la_pull","la":7,"pull":"down"}`
+on a pin that is already in use.
 
 ---
 
@@ -2353,7 +2315,7 @@ Response:
 The full reply is about 1.3 kB, and it is the largest single-reply command the pod has. With a
 `dir` and a `warn` on every pin it can reach about 1.8 kB, and with an emulated sensor instance
 with a long name on every pin about 2.4 kB. That is more than one cloud command reply holds
-(1791 bytes), and the pod answers `"reply too large"`. Read the list in two parts then:
+(1791 bytes), and the pod answers `BP0053` (`reply_too_large`; `BP0054` over the cloud). Read the list in two parts then:
 `"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
@@ -2371,10 +2333,9 @@ drive a DUT line.
 (the default after a reboot). Hosts send it from the wiring profile. On a pin wired to a DUT
 output the pod refuses every push-pull driver (a gpio `output`, UART TX, SPI SCK / MOSI / CS, SWD,
 the step train, an emulated sensor's TX / MISO / data-ready), because two push-pull outputs would
-drive against each other: `direction conflict: LA9 is wired to a DUT output and gpio output would
-drive against it; use gpio open_drain, or fix the wiring if LA9 is not a DUT output`. Open drain
+drive against each other: `BP0034` (`la_dut_output`, args `la` and `function`). Open drain
 (`open_drain`, I2C) and inputs are allowed. A pin that is driven can't be marked `dut_output`
-until it is released. `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
+until it is released (`BP0035`, `la_driven_pin`). `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
 the pins it changed.
 
 ### `gpio` — use LA pins as GPIO
@@ -2422,11 +2383,8 @@ The whole request is validated first: on any error **nothing changes**.
 ```
 
 `levels` bit `la-1` is the live level of LA`<la>`, sampled in the fabric through a two-flop
-synchroniser. This needs gateware **v35** or newer; older images answer:
-
-```
-reading pin levels needs gateware v35 or newer (this pod runs v34)
-```
+synchroniser. This needs gateware **v35** or newer; older images answer `BP0017`
+(`gateware_too_old`, feature `reading pin levels`, min 35).
 
 #### Response (1 and 2)
 
@@ -2440,7 +2398,7 @@ The affected pins, in the same entry shape `la_pins` uses:
 
 | Condition | Message |
 |---|---|
-| the LA voltage has not been set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
+| the LA voltage has not been set | `BP0001` (`la_voltage_not_set`) |
 | neither `mode` nor `level` given, with a `la` | `"gpio needs a mode or a level"` |
 | `mode` not recognised | `"mode must be input, output, open_drain or off"` |
 | `level` not 0/1 | `"level must be 0 or 1"` |
@@ -2448,10 +2406,10 @@ The affected pins, in the same entry shape `la_pins` uses:
 | `la` out of range | `"la must be 1..14 (or \"all\" with \"mode\":\"off\")"` |
 | `"la":"all"` with anything but `"mode":"off"` | `"\"la\":\"all\" is only allowed with \"mode\":\"off\""` |
 | `level` with `"mode":"input"` | `"level applies to output and open_drain pins, not input"` |
-| the pin belongs to another function | `"pin conflict: …"` (see [above](#la-pin-ownership)) |
-| a pull-down would fight the mode | `"pull conflict: …"` (see [above](#la-pin-ownership)) |
-| level set on a pin that is not a gpio output | `"LA<n> is not a gpio output (…)"` |
-| `{"cmd":"gpio"}` read on gateware < v35 | `"reading pin levels needs gateware v35 or newer (this pod runs vNN)"` |
+| the pin belongs to another function | `BP0031` (see [above](#la-pin-ownership)) |
+| a pull-down would fight the mode | `BP0032` (see [above](#la-pin-ownership)) |
+| level set on a pin that is not a gpio output | `BP0036` (`la_not_gpio_output`) |
+| `{"cmd":"gpio"}` read on gateware < v35 | `BP0017` (feature `reading pin levels`, min 35) |
 
 #### SCPI
 
@@ -2552,8 +2510,8 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 | `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` (digital v3r4: `"la voltage must be 1800, 3300 or 5000 (mv)"`) |
 | `mv: 5000` and pin 21 stayed below 4.3 V (digital v3r4) | `BP0028`: `"5 V did not come up on pin 21 (4120 mV); check the USB supply"` |
 | `mv: 1800` on a v2 pod | `"1.8 V needs a v3 pod; this board is v2 (its TPS2116 has no 1.8 V setting)"` |
-| any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
-| a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |
+| any LA op before a voltage is set | `BP0001` (`la_voltage_not_set`) |
+| a **change** while any LA pin has a function | `BP0037` (`la_voltage_pins_in_use`, args `pins`: `"LA3 (uart_rx), LA4 (uart_tx)"`) |
 
 > **Not while pins are in use.** Switching the bank glitches every LA line, so a change is refused while any pin is owned by a function other than
 > `none` (see [pin ownership](#la-pin-ownership)); the message names each pin and its function.
@@ -2586,8 +2544,8 @@ DUT's own reset circuit) sets the level. It never drives high, so a 1.8 V DUT is
 never pushed above its own rail.
 
 ```json
-{"cmd": "nrst", "assert": 1}      // hold the target in reset
-{"cmd": "nrst", "assert": 0}      // release
+{"cmd": "nrst", "assert": true}   // hold the target in reset
+{"cmd": "nrst", "assert": false}  // release
 {"cmd": "nrst", "pulse_ms": 50}   // assert, wait 50 ms, release
 {"cmd": "nrst"}                   // query
 {"status": "ok", "data": {"supported": true, "asserted": false}}
@@ -2621,7 +2579,7 @@ enumeration took, the configuration and its interfaces. No class drivers yet (US
 flashing over USB and class access come later).
 
 ```json
-{"cmd": "usb_host", "on": true, "port": "usb_c", "timeout_s": 120}
+{"cmd": "usb_host", "enabled": true, "port": "usb_c", "timeout_s": 120}
 {"cmd": "usb_host"}
 {"status": "ok", "data": {
   "mode": "host", "port": "usb_c", "remaining_s": 112, "host_ms": 8011,
@@ -2641,12 +2599,12 @@ flashing over USB and class access come later).
     }
   }
 }}
-{"cmd": "usb_host", "on": false}
+{"cmd": "usb_host", "enabled": false}
 ```
 
 | Argument | Description |
 |---|---|
-| `on` | `true` starts host mode (or renews its timeout when it already runs on that port), `false` stops it. Without it the command only reads the state. |
+| `enabled` | `true` starts host mode (or renews its timeout when it already runs on that port), `false` stops it. Without it the command only reads the state. |
 | `port` | `"usb_a"`: the USB-A host port, on pods that have one (the default there). `"usb_c"`: the pod's own USB-C connector, on any pod, for a bench rig whose adapter cable powers the pod and carries D+/D- to the board. Required on a pod without a USB-A host port. |
 | `timeout_s` | 1 to 3600, default 60. When it runs out the pod goes back to being a USB device by itself, so a client that disappears never leaves it off USB. |
 
@@ -2669,8 +2627,11 @@ flashing over USB and class access come later).
 
 While the pod hosts, it is **off the computer's USB**: no USB console and no USB network
 adapter. Start host mode over the network (LAN or Wi-Fi) or the cloud; a request over the
-pod's own USB link is refused (BP0031). Other refusals: BP0032 (no such port on this pod),
-BP0033 (the crystal clock is not running), BP0034 (host mode already runs on the other port).
+pod's own USB link is refused (BP0076, `usb_host_over_usb`). Other refusals: BP0077
+(`usb_host_port_unavailable`, args `port`: no such port on this pod), BP0078 (`usb_host_no_crystal`:
+the crystal clock is not running), BP0079 (`usb_host_other_port`, args `port`: host mode already
+runs on the other port), BP0006 (`missing_argument`, `port`) on a pod without a USB-A host
+port.
 
 ### `usb_cc` — USB-C CC-line state
 
@@ -2752,26 +2713,26 @@ State is **not** persisted: after a reset both eFuses return to off.
 #### Request
 
 ```json
-{"cmd":"target_power","efuse":<1|2>,"state":<0|1>,"delay_ms":<ms>}
+{"cmd":"target_power","efuse":<1|2>,"enabled":<true|false>,"delay_ms":<ms>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `efuse` | integer | yes | — | Which eFuse to switch: `1` (internal 5 V) or `2` (external). |
-| `state` | integer | yes | — | `1` (non-zero) enables the eFuse; `0` disables it. |
+| `enabled` | boolean | yes | — | `true` switches the eFuse on, `false` off. Firmware up to 3.10.13 took `"state":1\|0`. |
 | `delay_ms` | integer | no | `0` | Apply the change after this many milliseconds. `0` = immediately. The command **acks right away** and the eFuse switches later from the pod's poll loop — so the connection is free to do something else meanwhile (e.g. enter `uart_proxy_start` to capture the target's boot output as it powers up). A new `target_power` for the same eFuse replaces a still-pending delayed change. |
-| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `state` `0`. A bad name is refused with `BP0008`. |
+| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `enabled` `false`. A bad name is refused with `BP0008`. |
 
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
+{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `efuse` | integer | The eFuse that was switched (echoes the request). |
-| `enabled` | integer | The **requested** state: `1` for on, `0` for off. With `delay_ms` > 0 this is the state the eFuse will reach once the delay elapses. |
+| `enabled` | boolean | The **requested** state (firmware up to 3.10.13: `1`/`0`). With `delay_ms` > 0 this is the state the eFuse will reach once the delay elapses. |
 | `delay_ms` | integer | The delay applied (echoes the request; `0` when immediate). |
 
 #### Error cases
@@ -2779,7 +2740,7 @@ State is **not** persisted: after a reset both eFuses return to off.
 | Condition | Message |
 |---|---|
 | `efuse` field missing | `"missing efuse"` |
-| `state` field missing | `"missing state"` |
+| `enabled` missing or not `true`/`false` | `"enabled must be true or false"` |
 | `efuse` not 1 or 2 | `"invalid efuse"` |
 
 > **Scheduled power-on + UART capture.** `uart_proxy_start` turns the connection
@@ -2811,16 +2772,16 @@ No parameters.
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse1":{"enabled":1,"fault":0,"valid":1,"flt_pin":0,"reverse_blocks":0},"efuse2":{"enabled":0,"fault":0,"valid":0,"flt_pin":0,"reverse_blocks":0},"status_supported":true}}
+{"status":"ok","data":{"efuse1":{"enabled":true,"fault":false,"valid":true,"flt_pin":0,"reverse_blocks":0,"profile":null},"efuse2":{"enabled":false,"fault":false,"valid":false,"flt_pin":0,"reverse_blocks":0,"profile":null},"status_supported":true}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `efuseN.enabled` | integer | `1` if the eFuse EN output is currently driven on. |
-| `efuseN.fault` | integer | `1` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
+| `efuseN.enabled` | boolean | `true` if the eFuse EN output is currently driven on (firmware up to 3.10.13: `1`/`0`, as `fault` and `valid`). |
+| `efuseN.fault` | boolean | `true` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
 | `efuseN.flt_pin` | integer | `1` if the `FLT` pin is asserted right now (firmware 3.10.1+). |
 | `efuseN.reverse_blocks` | integer | How many times since boot a held `FLT` was reverse-current blocking, not a fault (firmware 3.10.1+). |
-| `efuseN.valid` | integer | `1` once the eFuse's input supply is valid and its inrush is done (the TPS259470A's `AUXOFF` pin). It is not output power good: no output fault takes it low. |
+| `efuseN.valid` | boolean | `true` once the eFuse's input supply is valid and its inrush is done (the TPS259470A's `AUXOFF` pin). It is not output power good: no output fault takes it low. |
 | `status_supported` | boolean | `true` — `V`/`FLT` are wired through the power expander. |
 
 The TPS259470A pulls `FLT` low for real faults and also while it blocks reverse current: when
@@ -2904,18 +2865,18 @@ happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current
 #### Start
 
 ```json
-{"cmd":"power_profile","action":"start","efuse":1,"rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
+{"cmd":"power_profile","action":"start","efuse":1,"sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `efuse` | `1` or `2` | no | `1` | Which rail to sample. |
-| `rate_hz` | integer | no | `500` | 100..500, whole numbers only. Accurate to ~200 Hz; above that the sampler (one register read per worker pass) beats against the pass interval and flattens near 365 Hz. `stats.rate_hz` reports what was delivered, `stats.adc_rate_hz` what the sensor was configured for. |
+| `sample_rate_hz` | integer | no | `500` | 100..500, whole numbers only. Accurate to ~200 Hz; above that the sampler (one register read per worker pass) beats against the pass interval and flattens near 365 Hz. `stats.sample_rate_hz` reports what was delivered, `stats.adc_sample_rate_hz` what the sensor was configured for. |
 | `max_duration_ms` | integer | no | `60000` | 1..600000. The sampler stops by itself at the limit and marks the result `truncated`. |
 | `keep_samples` | integer | no | `0` | 0..4096 samples to keep for the reply. `0` = statistics only. |
 
 ```json
-{"status":"ok","data":{"started":true,"efuse":1,"rate_hz":907}}
+{"status":"ok","data":{"started":true,"efuse":1,"sample_rate_hz":907}}
 ```
 
 The INA238 is put into continuous shunt+bus mode with a conversion time × averaging that makes
@@ -2942,7 +2903,7 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 ```json
 {"status":"ok","t_us":[0,1102,2204],"current_ua":[830,142300,141900],"bus_mv":[5008,4990,4992],"more":true}
 {"status":"chunk","t_us":[…],"current_ua":[…],"bus_mv":[…],
- "stats":{"efuse":1,"rate_hz":364,"adc_rate_hz":907,"n":3640,"duration_ms":10000,
+ "stats":{"efuse":1,"sample_rate_hz":364,"adc_sample_rate_hz":907,"n":3640,"duration_ms":10000,
           "avg_ua":141200,"min_ua":830,"peak_ua":612400,
           "avg_mv":4995,"min_mv":4870,"max_mv":5012,
           "energy_uj":7052000,"charge_uc":1412000,
@@ -2953,8 +2914,8 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 |---|---|
 | `t_us` | Start of each bin, µs since the profile started. |
 | `current_ua` / `bus_mv` | Bin-averaged current (µA, signed) and bus voltage (mV). |
-| `stats.rate_hz` | Samples per second actually **delivered** (`n` over `duration_ms`, measured). |
-| `stats.adc_rate_hz` | Conversion rate the INA238 was configured for — the ceiling `rate_hz` works towards, not what arrived. |
+| `stats.sample_rate_hz` | Samples per second actually **delivered** (`n` over `duration_ms`, measured). |
+| `stats.adc_sample_rate_hz` | Conversion rate the current monitor was configured for — the ceiling `sample_rate_hz` works towards, not what arrived. |
 | `stats.n` | Raw samples taken (not the number returned). |
 | `stats.energy_uj` / `charge_uc` | ∫I·V·dt in µJ and ∫I·dt in µC over every raw sample. |
 | `stats.fault` | An eFuse fault was seen at any point in the window. |
@@ -2976,7 +2937,7 @@ Omit `action` and give `duration_ms`: the pod starts, waits (without blocking th
 then sends the same reply `stop` would. Needs a streaming connection.
 
 ```json
-{"cmd":"power_profile","efuse":1,"duration_ms":2000,"rate_hz":500,"keep_samples":1024}
+{"cmd":"power_profile","efuse":1,"duration_ms":2000,"sample_rate_hz":500,"keep_samples":1024}
 ```
 
 #### Error cases
@@ -2985,7 +2946,7 @@ then sends the same reply `stop` would. Needs a streaming connection.
 |---|---|
 | a profile is already running | `"power profile already running on efuse 1"` |
 | `efuse` not 1 or 2 | `"efuse must be 1 or 2"` |
-| `rate_hz` out of range | `"rate_hz must be 100..500"` |
+| `sample_rate_hz` out of range | `"sample_rate_hz must be 100..500"` |
 | `max_duration_ms` / `duration_ms` out of range | `"max_duration_ms must be 1..600000"` / `"duration_ms must be 1..600000"` |
 | `keep_samples` > 4096 | `"keep_samples must be 0..4096"` |
 | the rail's INA238 does not answer | `"power profile: the INA238 for efuse 1 (I2C 0x40) is not responding"` |
@@ -2999,7 +2960,7 @@ then sends the same reply `stop` would. Needs a streaming connection.
 The chunked result needs a streaming connection (LAN, or a cloud **tunnel**); the single-reply
 cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0` profile.
 
-`status.caps` contains `"power_profile"`.
+The [features table](#features-table) has `power_profile`.
 
 ---
 
@@ -3085,10 +3046,10 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `de` is the `rx` or `tx` channel | code `BP0022` |
 | `de` on gateware older than v58 | code `BP0017` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
-| parity or two stop bits on gateware older than v56 | code `BP0017` (the text is unchanged: `"uart parity and stop bits need gateware v56+: update the pod's firmware"`) |
-| a UART proxy is already active (console or another connection) | `"uart busy"` |
-| `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"`: the UART idles high |
+| parity or two stop bits on gateware older than v56 | `BP0017` (feature `parity and stop_bits`, min 56) |
+| a UART proxy is already active (console or another connection) | `BP0049` (`uart_session_open`) |
+| `rx` or `tx` belongs to another function | `BP0031` (see [pin ownership](#la-pin-ownership)) |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `BP0032`: the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
@@ -3121,21 +3082,20 @@ command channel.
 ### `spi_start` — claim four pins for SPI
 
 ```json
-{"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}
+{"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}
 ```
 
 | Field | Meaning |
 |---|---|
 | `sck`, `mosi`, `miso`, `cs` | LA pins 1..14, all different |
-| `hz` | SCK rate, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
+| `clock_hz` | SCK rate in Hz, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
 | `mode` | 0 (default), 1, 2 or 3 (CPOL = mode / 2, CPHA = mode % 2).  Modes 1 and 2 need gateware v55 (firmware with I2C master support) |
 
-Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
+Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
-Errors: `SPI master needs gateware v45+`, `SPI modes 1 and 2 need gateware v55+: update the pod's firmware`,
-`spi busy: send spi_stop first`,
-`swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
+Errors: `BP0017` (the SPI master needs gateware v45, modes 1 and 2 v55), `BP0004` (an SPI session
+is open), `BP0005` (the engine runs an SWD or I2C session), and the pin codes `BP0031` / `BP0032`.
 
 ### `spi_stop` / `spi_status`
 
@@ -3272,8 +3232,8 @@ failure: `no answer from the ROM loader` (wiring, straps, or the target is not p
 (ESP8266)`, `aborted`.
 
 Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
-staged upload`, `busy`, `busy: an ESP32 flash is running`, `uart busy: stop the uart proxy first`,
-a pin conflict, `this pod has no reset pin: wire EN to an LA pin and pass en`.
+staged upload`, `BP0047` (`pod_busy`, also while an ESP32 flash runs), `BP0049` (a UART
+session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN to an LA pin and pass en`.
 
 ## I2C master
 
@@ -3285,22 +3245,22 @@ command and reply fits one cloud frame.
 ### `i2c_start` — claim two pins as an I2C master
 
 ```json
-{"cmd":"i2c_start","sda":1,"scl":2,"hz":400000,"pullups":"pod"}
+{"cmd":"i2c_start","sda":1,"scl":2,"clock_hz":400000,"pullups":"pod"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
-| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
-| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
+| `clock_hz` | 10000..1000000 (Hz), default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
+| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la_pull","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
-Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
+Reply: `{"sda":1,"scl":2,"clock_hz":363636,"pullups":"pod"}` with the rate actually used.
 
-Errors: `the I2C master needs gateware v55+: update the pod's firmware`, `I2C needs pull-ups: switch
-on LA1's with {"cmd":"la","la":1,"pull":"up"}, or pass "pullups":"external"`, `LA7 has no pod
-pull-up on this board...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
-session first`, and the usual `pin conflict:` / `pull conflict:`.
+Errors: `BP0017` (the I2C master needs gateware v55), `BP0061` (`i2c_needs_pullups`: switch on
+the pull-up, or pass `"pullups":"external"`), `BP0029` (pin 21 is down, so the pod's pull-ups are
+off), `LA7 has no pod pull-up on this board...`, `BP0003` (an I2C session is open), `BP0005` (the
+engine runs an SWD or SPI session), and the pin codes `BP0031` / `BP0032`.
 
 ### `i2c_stop` / `i2c_status`
 
@@ -3324,7 +3284,8 @@ With neither, the pod sends the address alone (a probe). Reply:
 says which: 0 the address, 1..N the Nth written byte, N+1 the address of the read. `rx` is empty
 when the device did not answer the read.
 
-Errors: `no I2C session: send i2c_start first`, `SCL held low: a target stretched the clock for
+Errors: `BP0062` (`i2c_session_not_open`), `BP0063` (`i2c_engine_reset`: a gateware reload
+ended the session), `SCL held low: a target stretched the clock for
 over 200 ms, or the bus is stuck; the pod released the bus`, `arbitration lost: another master
 drove SDA low; the pod released the bus`.
 
@@ -3351,11 +3312,10 @@ Each one is an **instance** with a name the host picks: 1 to 16 characters of `a
 `_` (usually the definition's `name`; the limit keeps `la_pins` and `sensor_status` inside the
 cloud reply cap). At most 8 instances are defined at once.
 
-Capability in `status` `caps`: `"sensors"`. `status` and the cloud capabilities frame also carry
-`"sensors_format":1` (the definition format version the pod takes; not in the `status`
-[short form](#short-form)) and `"sensors_digital"` (the
-emulation image is installed or running, so I2C, SPI and UART sensors work); the cloud frame also
-has `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
+Feature `sensors` in the [features table](#features-table) (definition format 1). `status` and
+the cloud capabilities frame carry `"sensors_digital"` (the emulation image is installed or
+running, so I2C, SPI and UART sensors work). Firmware up to 3.10.13 also sent `"sensors_format":1`
+and, in the frame, `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
 of firmware 3.10.1 and earlier (see [Removed in firmware 3.10.3](#removed-in-firmware-3103)).
 
 Typical flow:
@@ -3377,9 +3337,8 @@ the DAC waveform that is playing: dac_stop it first"`. Without the image install
 
 While the emulation image runs, the closed DAC loop (`dac_control_loop`, `dac_loop_input`,
 `dac_loop_probe`) and deep DAC replay (`load_bin` with `psram`, a deep `replay`) are not
-available; they fail with an error that names the way back:
-`"control loop is not in the emulation image, which the emulated sensors use:
-{"cmd":"sensor_stop","all":true} then {"cmd":"fpga_image","image":"loop"}"`. Captures, the UART
+available; they fail with `BP0059` (`fpga_image_sensors_first`, args `feature` and `image`: stop
+the sensors, then switch to that image). Captures, the UART
 proxy, SWD, GPIO, the SPI master, `generate` and shallow `replay` work in every image. The pod does
 not swap back by itself: after `sensor_stop` the emulation image stays loaded until
 [`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
@@ -3507,16 +3466,17 @@ What the gateware supports, and the limits that follow:
   is refused for now (`"excitation: adc is not supported by the pod yet"`). An analog start is
   refused while a DAC waveform plays, and while an analog sensor plays an output, the commands that
   drive it (`generate`, `replay`, `load`, `load_bin`, `measure`, `dac_set`, `dac_out`,
-  `dac_control_loop`, and `current_out`) are refused with `"the dac output is played by
-  sensor:ntc; stop it first ({"cmd":"sensor_stop","instance":"ntc"})"`. On a board where the
+  `dac_control_loop`, and `current_out`) are refused with `BP0065` (`output_used_by_sensor`, args
+  `output` `dac` or `current` and `instance`). On a board where the
   4-20 mA output shares the DAC (no quad DAC), both outputs count as the DAC. `dac_stop` stops the
   analog instances on the DAC too (they stay defined).
 
-Errors include `"unknown sensor instance 'env'"`, `"env is running: sensor_stop it first"`,
+Errors include `BP0055` (`sensor_instance_unknown`), `"env is running: sensor_stop it first"`,
 `"an I2C sensor needs pins sda and scl"`, `"address 0x76 is not one of this sensor's addresses"`,
 `"address 0x76 is used by sensor:env on this bus"`, `"all 4 I2C sensor slots are in use:
 sensor_stop one first"`, `"the sensor FIFO is used by sensor:imu (one FIFO sensor at a time)"`,
-`"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` and the pin conflicts.
+`BP0001` (`la_voltage_not_set`), `BP0017` (I2C, SPI and UART sensors need gateware v54) and the
+pin codes (`BP0031` and on).
 
 ### `sensor_set` — change readings
 
@@ -3621,7 +3581,7 @@ earlier: at most 256 bytes fit, and a single reply works over the cloud command 
 
 ### `sensor_la` — raw I2C bus capture
 
-`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":0.5}` captures the two bus
+`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_hz":500000}` captures the two bus
 pins of a running **I2C** instance. By default it **waits for the DUT's next transaction**: the
 capture starts on the first SDA fall (on an idle bus that is a START) and keeps 1/8 of the samples
 from before it, so the START itself is in the window. A DUT that reads its sensor every 200 ms is
@@ -3631,23 +3591,22 @@ then always caught, where a capture at once mostly missed it.
 |---|---|---|---|---|
 | `instance` | string | yes | | A running I2C instance. |
 | `samples` | integer | no | 256 | Packed bytes to return, 1..4096 (4 samples per byte). |
-| `sample_rate_mhz` | number | no | the highest rate | Sample rate. |
+| `sample_rate_hz` | number (Hz) | no | the highest rate | Sample rate. |
 | `trigger` | string | no | `"start"` | `"start"`: wait for the bus's next START, as above. `"none"`: capture at once (the behavior of firmware 3.10.3 and earlier). |
 | `timeout_ms` | integer | no | 2000 | How long `"start"` waits, 1..600000. |
 
 While it waits the emulation keeps running (the DUT's reads and writes are answered as usual) and
-the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `busy`. When nothing happens on
-the bus in time the reply is the error
-`"trigger timeout: no falling edge on LA2 (SDA of env) within 2000 ms; the DUT did not use the I2C bus"`
-(the `trigger timeout:` form of the other captures).
+the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `BP0047` (`pod_busy`). When nothing happens on
+the bus in time the reply is `BP0039` (`sensor_trigger_timeout`, args `la`, `instance`,
+`timeout_ms`), the sensor form of the other captures' `BP0038`.
 
 The data comes back chunked like the other sample arrays (a stream connection: not over the cloud
 command channel), one byte per four samples, oldest first in the high bits: bit7 SCL(s0), bit6
 SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3), the format of the earlier single-sensor `sensor_la`. The
-first chunk carries `"la_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
+first chunk carries `"la_sample_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
 carries `"trigger":{"la":2,"edge":"falling","fired":true}`. When the START came sooner after the
 request than the pre-trigger part covers, the samples before the capture began repeat the level
-the bus had then. `status` `caps` lists `"sensor_la_trigger"` on firmware that takes `trigger` and
+the bus had then. The features table has `sensor_la_trigger` for firmware that takes `trigger` and
 `timeout_ms`; older firmware ignores both fields and captures at once.
 
 SPI and UART instances are refused
@@ -3677,9 +3636,24 @@ have them (their documentation is `docs/API.md` at the `v3.10.1` tag).
 
 Each unit owns a stable **Ed25519 keypair** that serves as its device identity. The private key is generated on the device the first time it boots (seeded from the STM32 hardware TRNG) and persisted to a dedicated flash sector. It survives firmware updates and `wifi_clear`/`cloud_clear`. The device only ever **signs**; the private key never leaves the unit.
 
-The firmware never replaces the key on its own. The one way to erase it and make a new one is the USB console's `identity-wipe <short id>` (physical presence; `benchpod identity wipe --connection usb`), after which the pod must be registered again. Over the LAN and the cloud, `{"cmd":"identity_wipe"}` is always refused with `identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb`.
+The firmware never replaces the key on its own. The one way to erase it and make a new one is [`identity_wipe`](#identity_wipe--erase-the-device-key-usb-link-only) over the USB link (physical presence), after which the pod must be registered again. Up to firmware 3.10.13 it was the USB console's `identity-wipe <short id>`, and the JSON command was always refused.
 
 Two operations are exposed: fetch the **public key** (the identifier), and produce a **proof of possession** — a signature over a caller-supplied nonce that proves the unit holds the private key matching that public key.
+
+### `identity_wipe` — erase the device key (USB link only)
+
+```json
+{"cmd":"identity_wipe","confirm":"a1b2c3"}
+→ {"status":"ok","data":{"short_id":"d4e5f6"}}
+```
+
+`confirm` is the current short id (the six hex digits of `benchpod-a1b2c3`, from
+`identity_public`), or `unknown` when the pod has no identity, so a command meant for another pod
+fails. The pod erases the identity sector, makes a new key, replies with the new short id and logs
+in to the cloud again; the server needs the pod registered again. It runs only on a connection over
+the [USB network adapter](usb-serial-interface.md#usb-network-adapter): Ethernet, Wi-Fi and the
+cloud get `BP0043` (`setting_device_only`, setting `identity_wipe`). A wrong token gets
+`identity_wipe: <why>` with the token to use.
 
 ### Encoding of binary fields
 
@@ -3801,7 +3775,7 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 | SCPI | Equivalent JSON | Notes |
 |---|---|---|
-| `SENSe:SRATe <MHz>` / `?` | `capture` `sample_rate_mhz` | ADC capture clock; `0` = max ~400 kSPS (24 MHz ÷ divider, divider ≥ 60). Lower stretches the window (e.g. `0.08` → 80 kS/s → 32768 samples ≈ 410 ms). |
+| `SENSe:SRATe <MHz>` / `?` | `capture` `sample_rate_hz` (SCPI keeps MHz) | ADC capture clock; `0` = max ~400 kSPS (24 MHz ÷ divider, divider ≥ 60). Lower stretches the window (e.g. `0.08` → 80 kS/s → 32768 samples ≈ 410 ms). |
 | `SENSe:SWEep:POINts <n>` / `?` | `capture` `samples` | Default acquisition length for `READ?`. |
 | `READ? [<n>]` | `capture` | Capture `n` (or the `POINts` default) samples at `SENSe:SRATe` and return CSV. Also loads the replay buffer (its first 2048 samples, the DAC BRAM size). |
 | `TRACe[:DATA] <offset>,"<base64url>"` | `load` | Upload one chunk of a replay waveform: 16-bit little-endian samples (2 bytes each, as the JSON `load`), at most 4096 bytes. `offset` is in bytes. Send `offset` 0 first, then successive offsets (≤150 bytes/chunk to fit the 256-byte line). |
@@ -3811,7 +3785,7 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 `SOURce:FUNCtion` now accepts `USER` alongside `SINusoid`/`SQUare`/`RAMP`. `OUTPut ON` with `USER` selected and an empty buffer pushes `-200 "Execution error"`.
 
-The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `stream`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
+The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
 
 SCPI gets the same safe-mode and digital-board refusals as the JSON commands. In safe mode (the iCE40/PSRAM are off) `OUTPut`, `READ?`, `MEASure?`, `DIAGnostic:CAPture?`, `TRACe:DATA` and `DIGital:*` push `-240 "Hardware error"`; on the digital-only board `OUTPut ON`, `READ?`, `MEASure?`, `TRACe:DATA` and a `DIAGnostic:CAPture?` with ADC samples push `-241 "Hardware missing"`. `SYSTem:ERRor?` carries the same text as the JSON refusal. The `SOURce`/`SENSe` settings, `DIAGnostic:PATTern?`, identity, network and target power keep working. `OUTPut OFF` is refused in safe mode too (it maps to `dac_stop`), but works on the digital-only board.
 
@@ -3839,7 +3813,7 @@ OUTPut ON
 
 The closed-loop DAC is described in full in [dac-control-loop.md](dac-control-loop.md); the
 commands are summarized here. They need the analog front end and the loop gateware image
-(`status.caps` `"dac_control_loop"`).
+(feature `dac_control_loop`).
 
 ### `dac_control_loop` — arm the closed-loop DAC
 
@@ -3862,12 +3836,11 @@ toward it. `dac_stop` disarms the loop.
 
 The reply echoes the effective values: `{"armed":true,"k":..,"vmin":..,"vmax":..,"tick_div":..,"curve_pts":..,"source":"adc","input":0,"step":0}`, plus `in_zero`, `in_gain`, `idx_max` and `trip_idx` when an input map is set.
 
-Errors: `"control loop needs gateware v23+"`, `"loop input sources need gateware v29+"`,
-`"loop input map needs gateware v30+"`, `"unknown loop input source (use adc, fixed or sweep)"`,
-`"curve base64 decode failed"`, `"curve needs at least one 16-bit point"`, the parameter checks
-(inverted window, zero-step sweep), `"sweep cannot be combined with an input map on this
-gateware: ..."`, `"control loop not in the running gateware image (switch with
-{"cmd":"fpga_image","image":0})"` and `"control loop arm failed"`.
+Errors: `BP0017` (the control loop needs gateware v23, input sources v29, the input map v30),
+`"unknown loop input source (use adc, fixed or sweep)"`, `"curve base64 decode failed"`, `"curve
+needs at least one 16-bit point"`, the parameter checks (inverted window, zero-step sweep),
+`BP0064` (`loop_sweep_with_map`), `BP0058` (`fpga_image_required`: the control loop needs the
+`loop` image; `BP0059` on the emulation image) and `"control loop arm failed"`.
 
 ### `dac_loop_input` — retarget a running loop
 
@@ -3879,7 +3852,7 @@ Fields left out keep their value.
 {"cmd":"dac_loop_input","source":"sweep","step":16}
 ```
 
-Reply: `{"source":"fixed","input":32768,"step":0,"v":<DAC code at the moment of the write>}`. Poll
+Reply: `{"source":"fixed","input":32768,"step":0,"code16":<DAC code at the moment of the write>}` (`v` up to firmware 3.10.13). Poll
 `dac_loop_probe` for the settled value. Errors: `"loop input sources need gateware v29+"`,
 `"unknown loop input source (use adc, fixed or sweep)"`, the parameter checks, the image refusal
 and `"loop input update failed"`.
@@ -3890,11 +3863,10 @@ and `"loop input update failed"`.
 {"cmd":"dac_loop_probe"}
 ```
 
-Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","v":<DAC code>,"tripped":false}`.
+Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","code16":<DAC code>,"tripped":false}` (`v` up to firmware 3.10.13).
 Plot against `in`, not `i`: in a fixed or sweep run the ADC is not in the path. `tripped` is the
 latched over-range trip (the output then sits at `vmin` until the loop is disarmed). On the
-deep-replay image it answers `"closed-loop DAC not in the running gateware image (switch with
-{"cmd":"fpga_image","image":0})"`.
+deep-replay image it answers `BP0058` (`fpga_image_required`, image `loop`).
 
 <a id="fpga_image--switch-the-running-gateware-image"></a>
 ### `fpga_image` — switch the running gateware image
@@ -3915,12 +3887,12 @@ to the cloud, and puts an external output stage back on its park level when DAC 
 Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
 running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation.
 
-Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `"the emulation image needs
-gateware v54 or later"`, `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
-gateware blobs"`, `"image switch refused: the emulated sensors env, imu need the emulation image;
-stop them first ({"cmd":"sensor_stop","all":true})"`, `"image switch: reflash failed (CDONE never
-rose)"`, `"image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod
-restarts and reloads the iCE40)"`, `"image switch failed"` and `"busy"`.
+Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `BP0017` (the emulation image needs
+gateware v54), `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
+gateware blobs"`, `BP0057` (`image_switch_sensors_running`, args `sensors`: `"env, imu"`), `"image
+switch: reflash failed (CDONE never rose)"`, `"image switch: iCE40->PSRAM write inoperable after
+retries (run psram_recover: the pod restarts and reloads the iCE40)"`, `"image switch failed"` and
+`BP0047` (`pod_busy`).
 
 ### `psram_ping` — check the iCE40 to PSRAM write path
 
@@ -3956,15 +3928,17 @@ Classic CAN and CAN FD on FDCAN1 with the TCAN1044 transceiver, on J1 pins 19 (`
 (`CAN−`). Every CAN command is a single reply, so all of them work over the cloud command channel,
 and they keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
 
-**CAN FD** (firmware 3.10.2 and later, capability `can_fd`): give `can_config` a `data_bitrate`.
+**CAN FD** (firmware 3.10.2 and later, capability `can_fd`): give `can_start` a `data_bitrate`.
 Frames then carry up to 64 data bytes, and with a `data_bitrate` above `bitrate` their data phase
 runs at the faster rate (bit-rate switching). Without `data_bitrate` the bus is classic CAN, as
 before.
 
-### `can_config` — bring CAN up
+### `can_start` — bring CAN up
+
+Firmware up to 3.10.13 called it `can_config` (and `can_stop` `can_disable`), like nothing else; 4.0.0 names them as `spi_start`/`spi_stop` and `i2c_start`/`i2c_stop`.
 
 ```json
-{"cmd":"can_config","bitrate":500000,"mode":"normal","term":true}
+{"cmd":"can_start","bitrate":500000,"mode":"normal","term":true}
 ```
 
 | Field | Type | Default | Description |
@@ -3975,7 +3949,7 @@ before.
 | `term` | boolean | `false` | Switch the 120 Ω termination on |
 
 ```json
-{"cmd":"can_config","bitrate":500000,"data_bitrate":2000000,"mode":"normal","term":true}
+{"cmd":"can_start","bitrate":500000,"data_bitrate":2000000,"mode":"normal","term":true}
 ```
 
 Reply: `{"bitrate":500000,"data_bitrate":0,"fd":false,"mode":"normal","term":true}` (`data_bitrate`
@@ -4004,7 +3978,7 @@ classic, as CAN FD has none.
 
 Reply: `{"id":291,"ext":false,"dlc":3,"fd":false,"brs":false}`, where `dlc` is the number of data
 bytes sent (after padding). Errors: `"missing id"`, `"can not enabled"`, `"bus off"`, `"tx failed
-(fifo full?)"`, `"data is longer than 64 bytes"`, `"more than 8 data bytes needs CAN FD (can_config
+(fifo full?)"`, `"data is longer than 64 bytes"`, `"more than 8 data bytes needs CAN FD (can_start
 with data_bitrate)"`, `"more than 8 data bytes needs an FD frame"`, `"rtr needs a classic frame (CAN
 FD has no remote frames)"`.
 
@@ -4014,7 +3988,8 @@ FD has no remote frames)"`.
 {"cmd":"can_read","max":8}
 ```
 
-`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"fd":false,"brs":false,"dlc":3,"data":[1,2,3],"ts":12345}],"overflow":0,"pending":0}`.
+`max` is 1..8 (default 8). Reply: `{"frames":[{"id":291,"ext":false,"rtr":false,"fd":false,"brs":false,"dlc":3,"data":[1,2,3],"ts_ms":12345}],"overflow":0,"pending":0}`.
+`ts_ms` is when the frame arrived, in milliseconds since boot (`ts` up to firmware 3.10.13).
 `fd` and `brs` say whether the frame was a CAN FD frame and switched bit rate, `dlc` is the number
 of data bytes. `overflow` counts frames dropped because the receive queue was full, `pending` the
 frames still queued. A reply holds at most about five 64-byte FD frames (to fit a cloud reply), so
@@ -4047,7 +4022,7 @@ Reply: `{"rule":0,"rules":1}`, or `{"rules":0}` after a clear. Errors: `"missing
 `"missing reply_id"`, `"responder table full"`, `"invalid reply frame"`, and the `can_write` data
 errors.
 
-### `can_disable` — turn CAN off
+### `can_stop` — turn CAN off
 
 Stops CAN and switches the 120 Ω termination off, so a closed bus leaves nothing on the wire.
 Reply `{"enabled":false,"term":false}`. Before firmware 3.10.6 the termination stayed as it was
@@ -4087,9 +4062,9 @@ them, so the clock sits next to a ground pin:
 
 A digital board and a module from different sides of that change do not work together: the DAC
 would get scrambled data. Nothing is damaged (both lines come from the digital board), and from
-the next firmware release on the pod refuses every command that drives the DAC with `BP0035` and
+the next firmware release on the pod refuses every command that drives the DAC with `BP0080` and
 sends the DAC nothing at all. Everything else (ADC, LA, relays, I2C) keeps working.
-`status.module.dac_pinout` is `"mismatch"` on such a pair. The module's revision comes from its
+`status.module.dac_pinout_ok` is `false` on such a pair. The module's revision comes from its
 EEPROM header: a module that was never programmed (`eeprom` `"blank"`), or whose header does not
 read, counts as an older module.
 
@@ -4107,7 +4082,7 @@ because the firmware blocks the DAC frames themselves.
 
 ```json
 {"status":"ok","data":{"present":true,"analog":true,"power":true,"bridge_power":true,
- "dac_pinout":"ok","eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
+ "dac_pinout_ok":true,"eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
 ```
 
 | Field | Type | Meaning |
@@ -4115,7 +4090,7 @@ because the firmware blocks the DAC frames themselves.
 | `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
 | `analog` | boolean | The module was found at boot and is the pod's analog front end. |
 | `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
-| `dac_pinout` | string | `"ok"`, or `"mismatch"` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0035`). Next firmware release. |
+| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Next firmware release. |
 | `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
 | `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
 | `layout` | integer | The header's layout version (1). |
@@ -4133,7 +4108,7 @@ settings on the module):
 | `{"cmd":"module","eeprom":"id","type":"analog","rev":"1.0","serial":"AM-000123"}` | Write the ID fields (`type` defaults to `"analog"`, `serial` up to 16 characters) and keep the calibration fields. Replies with the module object. |
 | `{"cmd":"module","eeprom":"cal_commit","len":300}` | Record the first `len` bytes of the calibration area as the calibration blob: their length and CRC go into the header (0 clears it). Replies with the module object. |
 
-Errors: `module: this BenchPod has no module link (digital v3r3 only)` on any other board, and
+Errors: `BP0056` (`no_module_link`, args `cmd`) on any other board, and
 `module: no module plugged in, or module power is off` for the EEPROM forms.
 
 EEPROM layout, version 1 (little endian):
@@ -4193,8 +4168,7 @@ Reply `{"module":true,"bridge":true}`, the state after the change. Turning the m
 the DAC and the +-14 V supply first. Turning it back on sets up U58 again (relays off), parks the
 DAC outputs and switches the +-14 V supply on, as at boot; if U58 does not answer, the reply is
 `module_power: module power is on, but U58 does not answer`. While the module is off, the analog
-commands fail. Refused on other boards with `module_power: this BenchPod has no module link
-(digital v3r3 only)`.
+commands fail. Refused on other boards with `BP0056` (`no_module_link`).
 
 ---
 
@@ -4237,7 +4211,7 @@ Forgets the cloud settings and disconnects. Reply `"cleared"`.
 
 ### `wifi_status`
 
-Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none"}`.
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none","rssi_dbm":-61}`. `rssi_dbm` (firmware 4.0.0) is the signal while joined, else `null`, as in the console's `wifi-show`.
 `state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
 often it was lost (`c3_lost_*`: since this boot).
 
@@ -4264,7 +4238,7 @@ side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 
 For a Wi-Fi picker: the networks in range, to choose the SSID for `wifi_set`. The pod scans with
 its own Wi-Fi, or with a Wi-Fi bridge when one is plugged in, and answers in
-the same format either way. Pods that list `wifi_scan` in `caps` have it (firmware 3.9.4+).
+the same format either way. Pods with the `wifi_scan` feature have it (firmware 3.9.4+).
 
 A scan takes a few seconds, and the pod keeps answering other commands meanwhile, so it is two
 steps: start it, then read it with the `id` the first reply gave.
@@ -4309,8 +4283,8 @@ again in a moment"`, `"wifi_scan: the ESP32-C3 is being flashed or erased; try a
 done"`, or `"wifi_scan: no scan with that id; start one with {"cmd":"wifi_scan"}"` (an `id` the pod
 never gave out, for example after a reboot). On digital v3r3, which has no ESP32-C3, the read form
 fails at once with `"wifi_scan: no Wi-Fi module: this BenchPod has no built-in Wi-Fi"` (firmware
-3.9.5+). With a bridge: `"Wi-Fi bridge: <why>"`. The same scan
-is `wifi-scan` on the [USB console](usb-serial-interface.md).
+3.9.5+). With a bridge: `"Wi-Fi bridge: <why>"`. Up to firmware 3.10.13 the
+[USB console](usb-serial-interface.md) had the same scan as `wifi-scan`.
 
 ### `wifi_set` / `wifi_clear`
 
@@ -4330,8 +4304,9 @@ replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `
 **Digital v3r3 has no ESP32-C3** (firmware 3.9.5+). `wifi_set` answers `"no Wi-Fi module: this
 BenchPod has no built-in Wi-Fi"` and saves nothing, `wifi_clear` clears the pod's copy only
 (`c3_nvs` stays `none`), USB networking stays on, `status.wifi` is `absent`, and the pod never
-drives the C3's pins or tries to flash it. Credentials stored on an older board are ignored. The same operations are `wifi-set` / `wifi-clear` on
-the [USB console](usb-serial-interface.md).
+drives the C3's pins or tries to flash it. Credentials stored on an older board are ignored. Up to firmware 3.10.13 the
+[USB console](usb-serial-interface.md) had the same operations as `wifi-set` / `wifi-clear`; from
+4.0.0 its `net-reset` clears the Wi-Fi (and resets Ethernet) when no network reaches the pod.
 
 **Where the credentials are kept.** In one place: the STM32's config store (two flash sectors,
 A/B). The ESP32-C3 is put in RAM storage mode (`esp_wifi_set_storage(WIFI_STORAGE_RAM)`) before it
@@ -4350,7 +4325,7 @@ values. `wifi_clear` therefore wipes both copies:
    NVS partition (16 KB at `0x9000`, from the partition table of the image the pod last wrote into
    the C3, or of the copy older firmware kept in the W25Q) is
    erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
-   This takes about 3 seconds, and like `flash-esp32` it stops a running DAC waveform (the W25Q
+   This takes about 3 seconds, and like an `esp` install it stops a running DAC waveform (the W25Q
    shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
    next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
 
@@ -4375,10 +4350,17 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 ```json
 {"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
  "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"genuine":true,"problem":null,"update":"idle",
-           "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
+           "rssi_dbm":-58,"channel":6,"identity":"<64 hex>","image":"0.1.3","boot":"power-on","reboots":0,"emc":null,
+           "reason":0,"uptime_s":125,"status_age_ms":3200,
            "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
                        "eth_tx_err":0,"dropped":76}}}
 ```
+
+`identity` is the bridge's identity key (`null` before bridge firmware 0.1.3), `image` the bridge
+firmware the pod holds for it (`null` when slot `bridge` is empty), `boot` the bridge's last reset
+reason, `reboots` the bridge restarts the pod saw and `emc` the EMC test radio state (`null`
+normally); `boot`, `reboots` and `emc` come once the bridge has sent a status (firmware 4.0.0; the
+console's `bridge` showed them before).
 
 `state` is then the bridge's: `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or
 `no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
@@ -4396,14 +4378,46 @@ development builds).
 
 > **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
 > stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
-> `flash-esp32`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
+> `esp` install. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
+
+### `wifi_bridge` — the Wi-Fi bridge on the Ethernet port
+
+```json
+{"cmd":"wifi_bridge","action":"update"}         → {"update":"requested"}
+{"cmd":"wifi_bridge","action":"reboot"}         → {"rebooting":true}
+{"cmd":"wifi_bridge","action":"factory_reset"}  → {"factory_reset":true}
+{"cmd":"wifi_bridge","action":"cert","part":1,"hex":"<64 hex digits>"} → {"part":1,"parts":1}
+```
+
+`update` installs the pod's bridge image now, whatever the versions (`wifi_status`
+`bridge.update` follows it); `reboot` restarts the bridge; `factory_reset` makes it forget its
+Wi-Fi and its pairing. `cert` stores the bridge's identity certificate, 128 bytes in four parts of
+32 bytes (64 hex digits each), in any order; with the fourth the pod sends it to the bridge and
+replies `"stored":true`, then checks the bridge's identity again (`genuine` in `wifi_status`).
+`cert` runs over the USB link only (else `BP0043`). Without a bridge: `wifi_bridge: no Wi-Fi
+bridge on the Ethernet port`; the bridge's own refusals come back as `Wi-Fi bridge: <code>: <detail>`.
+The bridge's state is in [`wifi_status`](#wifi_status), its networks in
+[`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees). Up to firmware 3.10.13 this was the USB
+console's `bridge`.
+
+### `usb_reattach` — enumerate on USB again
+
+```json
+{"cmd":"usb_reattach"}
+→ {"status":"ok","data":{"reattach":true}}
+```
+
+About 0.4 s after the reply the pod drops off the USB bus for half a second and connects again, so
+the computer enumerates the console and the network adapter anew: macOS ignores a network adapter
+that appears while the screen is locked. Over the USB link itself the connection then drops;
+connect again. Up to firmware 3.10.13 this was the USB console's `usb-reattach`.
 
 ### `eth` — wired link control and diagnostics
 
 | Request | Tier | Reply |
 |---|---|---|
 | `{"cmd":"eth","action":"stats"}` | T0 | `{"phy_ok":true,"link":true,"aneg_done":true,"phy_mode":"100FD","mac_mode":"100FD","rx_good":..,"rx_crc":..,"tx_good":..,...}` |
-| `{"cmd":"eth","action":"refclk"}` | T0 | `{"hz":50000012,"ppm":0,"on_hsi":false}`: the PHY's 50 MHz RMII clock against the MCU crystal; drops the link for about 200 ms |
+| `{"cmd":"eth","action":"refclk"}` | T0 | `{"clock_hz":50000012,"ppm":0,"on_hsi":false}`: the PHY's 50 MHz RMII clock against the MCU crystal; drops the link for about 200 ms |
 | `{"cmd":"eth","action":"stop"}`, `"start"`, `"restart"` (the default) | T2 | the action name; `start` and `restart` reset the PHY and get a new DHCP lease |
 | `{"cmd":"eth","action":"speed","mbit":100,"duplex":"full"}` | T2 | `{"speed":100,"duplex":"full"}`; `mbit` `0` returns to autonegotiation, `duplex` defaults to half |
 | `{"cmd":"eth","action":"loopback","mbit":100,"n":200}` | T2 | `{"mbit":100,"sent":200,"received":200,"intact":200,"corrupt":0,"crc":0,"align":0,"tx_fail":0}`: a PHY loopback test, `n` 1..1000 |
@@ -4454,7 +4468,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 3.10.7 an update over Ethernet or Wi-Fi needs a good signature whatever the policy, and a signed firmware below the rollback floor is refused (same section). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4467,18 +4481,18 @@ Refusals:
 | Condition | Message |
 |---|---|
 | `size` or `sha256` missing | `"missing size/sha256"` |
-| Unknown `target` | `"unknown target"` |
-| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or over USB"` |
-| Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
-| A capture or upload is running | `"busy: a capture or upload is running"` |
+| Unknown `target` | `BP0060` (`ota_unknown_target`) |
+| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `BP0042` (`setting_cloud_or_usb`, setting `cloud_ca`) |
+| Another transport holds the session | `BP0051` (`update_in_progress`, args `target`, `holder`). Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over. A session with no progress for 30 s may be replaced or aborted from any transport. The ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` or `""` |
+| A capture or upload is running | `BP0047` (`pod_busy`) |
 | Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
 | Size, hash or chunk problems | `"bad size"`, `"bad sha256"`, `"chunk out of range"`, `"incomplete image"`, `"sha256 mismatch"`, `"invalid data"`, `"missing data"` |
 | The policy refuses the signature | `"signature: <result>"` |
 | The image could not enforce `required` | `"image cannot enforce signatures (policy required)"` |
 | `ota_commit` before a successful `ota_end` | `"no verified image staged"` |
-| Any `ota_*` that would change the session while an `esp` image is written into the C3 | `"busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends"` |
+| Any `ota_*` that would change the session while an `esp` image is written into the C3 | `BP0048` (`storage_bus_busy`) |
 | `esp` on a board without the ESP32-C3 | `"this BenchPod has no ESP32-C3: it takes no esp image"` |
-| `ota_selftest` while the hardware is busy | `"busy"`, or `"ota selftest failed (see console log)"` |
+| `ota_selftest` while the hardware is busy | `BP0047` (`pod_busy`); a failed test is `"ota selftest failed (see console log)"` |
 
 ### `blob_status` — what the W25Q slots hold
 
@@ -4675,7 +4689,7 @@ has seen one this run, its failures are the pod's, as `health` events and on the
 recovering, red after 60 s): a restart (`bridge restart: brownout`, the reason from the bridge's
 next STATUS), no HELLO for 10 s (`bridge silent 10 s`, then `bridge back after 14 s`), and its radio
 reporting that it is not transmitting (`bridge radio not transmitting`, then `bridge radio back`).
-The console's `bridge` shows the bridge's reset reason, the reboots the pod saw and the EMC radio. A restart because the access
+`wifi_status` `bridge` shows the bridge's last boot (`boot`), the reboots the pod saw (`reboots`) and the EMC radio (`emc`). A restart because the access
 point refused the association is left out: that is the network, not the pod. The digital v3r3
 and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.
@@ -4698,8 +4712,16 @@ connection; a request takes one of the pod's 5 LAN connection slots while it run
 <a id="scpi-reference"></a>
 ## SCPI reference
 
+**Off by default from firmware 4.0.0.** Switch it on with `{"cmd":"lan_tls","scpi":true}` (over
+USB or from the cloud) or `lan-tls scpi on` on the USB console; see
+[`lan_tls`](#lan_tls--the-lan-api-over-tls). While it is off, a connection that starts with a
+SCPI line gets one line, `SCPI is off on this BenchPod: ...`, and is closed, and mDNS has no
+`_scpi-raw._tcp`. The cloud byte tunnels are not affected. Up to 3.10.13 it was always on.
+
 Port `8080` also speaks SCPI (IEEE 488.2, on libscpi): a connection whose first byte is not `{`
-is a SCPI connection for its whole life. Lines end with `\n`, are at most 255 bytes, and several
+is a SCPI connection for its whole life. It stays on port `8080`, plaintext: with SCPI on, `8080`
+also takes connections from Ethernet and Wi-Fi under HTTPS-only, for SCPI only (a JSON line there
+gets `BP0075`). `8443` speaks it too, wrapped in TLS. Lines end with `\n`, are at most 255 bytes, and several
 commands can share a line with `;`. Queries answer one line; bulk samples come as comma-separated
 ASCII. Errors go to the error queue (16 deep): read them with `SYSTem:ERRor?`. The instrument
 state (`SOURce`, `SENSe`, the trace) is shared by every SCPI connection. Upper-case letters are
@@ -4709,7 +4731,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 `TCPIP::<address>::8080::SOCKET`: the LAN address, the pod's USB network address over USB
 (`TCPIP::10.237.x.y::8080::SOCKET`, from `status.usb.ip`), or its mDNS host name
 (`TCPIP::benchpod-a1b2c3.local::8080::SOCKET`). Set the termination character to `\n` for reads and
-writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface,
+writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface (from 4.0.0 only while SCPI is on),
 so VISA and LXI discovery tools list it. SCPI follows the same rules as the JSON API there: the
 external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 
@@ -4740,8 +4762,8 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 |---|---|---|
 | `[SOURce]:FUNCtion[:SHAPe] <shape>` / `?` | `SINusoid`, `SQUare`, `RAMP` or `USER` | Waveform; `USER` replays the trace |
 | `[SOURce]:FREQuency <Hz>` / `?` | > 0, unit suffixes allowed; `MIN` 1, `MAX` 1e6, `DEF` 1000 | Frequency |
-| `[SOURce]:VOLTage[:AMPLitude] <0-255>` / `?` | 8-bit half-scale amplitude | As `generate` `amplitude` |
-| `[SOURce]:VOLTage:OFFSet <0-255>` / `?` | 8-bit offset | As `generate` `offset` |
+| `[SOURce]:VOLTage[:AMPLitude] <0-255>` / `?` | 8-bit half-scale amplitude | A level, not volts (the JSON `generate` takes volts from firmware 4.0.0; SCPI keeps the 8-bit level) |
+| `[SOURce]:VOLTage:OFFSet <0-255>` / `?` | 8-bit offset | A level, as `AMPLitude` |
 | `[SOURce]:SRATe <MHz>` / `?` | ≥ 0; `0` = auto | DAC sample clock, also the `USER` replay rate |
 | `[SOURce]:DURation <ms>` / `?` | ≥ 0; `0` = until stopped | Output duration |
 | `OUTPut[:STATe] <ON\|OFF>` / `?` | | `ON` starts the selected waveform (as `generate`, or `replay` for `USER`); `OFF` stops the DAC |
@@ -4764,7 +4786,7 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 | Command | Parameter | Description |
 |---|---|---|
 | `DIGital:OUTPut <la>,<0\|1>` | LA 1..14 | Make the pin a gpio output at that level (the JSON `gpio` table applies) |
-| `DIGital:STEP <la>,<steps>,<delay_us>[,<dir_la>[,<dir>]]` | as the JSON [`la` step train](#step-a-pulse-train) | Start a step pulse train (non-blocking) |
+| `DIGital:STEP <la>,<steps>,<delay_us>[,<dir_la>[,<dir>]]` | as the JSON [`la_step`](#step-a-pulse-train) | Start a step pulse train (non-blocking) |
 | `DIGital:STEP:BUSY?` | | `1` while a step train runs, else `0` |
 
 ### Target power
@@ -4801,7 +4823,11 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 | `"square"` | 50% duty-cycle square wave. Useful for rise/fall time and bandwidth tests |
 | `"sawtooth"` | Linear ramp from `offset - amplitude` to `offset + amplitude` per period |
 
-### Amplitude / offset guide
+### Amplitude / offset levels (`measure` and SCPI)
+
+`measure` and the SCPI `SOURce:VOLTage` commands take 8-bit levels: `amplitude` 0-127 and `offset`
+0-255, played in the DAC's high byte with no calibration. `generate` takes volts or microamps
+instead (firmware 4.0.0).
 
 | Goal | `amplitude` | `offset` |
 |---|---|---|
@@ -4830,64 +4856,72 @@ For a single calibrated reading of any source, use [`adc_read`](#adc_read--route
 
 ## Error Reference
 
-All errors follow the format:
+Coded refusals (firmware 4.0.0) carry `code` and `args` only; the message, cause and fix of each
+are in [`errors/ERRORS.md`](../errors/ERRORS.md) and [`errors/errors.json`](../errors/errors.json).
+The ones the commands above name:
 
-```json
-{"status":"error","message":"<description>"}\n
-```
+| Code | Name | Args | Raised by |
+|---|---|---|---|
+| `BP0001` | `la_voltage_not_set` | | an LA command before the I/O voltage is set |
+| `BP0002` | `unknown_command` | `cmd` | a `cmd` the firmware does not know |
+| `BP0003`, `BP0004` | `i2c_session_open`, `spi_session_open` | | `i2c_start` / `spi_start` while a session is open |
+| `BP0005` | `bus_engine_busy` | `want` | SWD, SPI or I2C while another of them runs |
+| `BP0017` | `gateware_too_old` | `feature`, `min` | a feature the running gateware is too old for |
+| `BP0025` | `lease_busy` | `holder`, `purpose`, `left_s` | a command while someone else holds the pod's lease (a cloud job: holder `a cloud job`) |
+| `BP0030` | `client_too_old` | `client_api`, `min_client_api`, `api` | a client below `min_client_api` (it also carries a `message`) |
+| `BP0031` | `la_pin_in_use` | `la`, `owner`, `function`, `instance` | claiming an LA pin another function holds ([pin ownership](#la-pin-ownership)) |
+| `BP0032`, `BP0033` | `la_pull_down_engaged`, `la_pull_down_conflict` | `la`, `ohms`, `function`, `reason` | a function and an engaged pull-down that cannot share a line |
+| `BP0034`, `BP0035` | `la_dut_output`, `la_driven_pin` | `la`, `function` | driving a pin `la_dir` marks as a DUT output, or marking a driven pin |
+| `BP0036` | `la_not_gpio_output` | `la`, `function` | writing a level or a gpio send on a pin that is not a GPIO output |
+| `BP0037` | `la_voltage_pins_in_use` | `pins` | `la_voltage` while pins are in use |
+| `BP0038`, `BP0039` | `trigger_timeout`, `sensor_trigger_timeout` | `la`, `edge` or `instance`, `timeout_ms` | a [capture trigger](#capture-triggers) that never fired |
+| `BP0040` | `lan_locked` | `cmd` | a T2 or T3 command on a locked LAN |
+| `BP0041` to `BP0044` | `policy_not_from_lan`, `setting_cloud_or_usb`, `setting_device_only`, `policy_loosen_usb_only` | `setting` (and `now`) | a [pod policy](#pod-policies) or a trust setting changed from the wrong place |
+| `BP0045` | `role_required` | `cmd` | a cloud tunnel without the role a command needs |
+| `BP0046` | `no_analog_front_end` | `cmd` | an analog command on the digital board |
+| `BP0047` | `pod_busy` | | a capture, measurement, upload or update while another one runs |
+| `BP0048` | `storage_bus_busy` | `what` | a storage write while the shared bus is in use |
+| `BP0049`, `BP0050` | `uart_session_open`, `swd_session_open` | | `uart_proxy_start` / `dap_start` while one runs |
+| `BP0051` | `update_in_progress` | `target`, `holder` | an `ota_*` command while another transport holds the update |
+| `BP0052` | `cloud_command_busy` | | a cloud command while the previous one runs |
+| `BP0053`, `BP0054` | `reply_too_large`, `cloud_reply_too_large` | (`bytes`, `limit`) | a reply larger than the pod (or the cloud channel) can send |
+| `BP0055` | `sensor_instance_unknown` | `instance` | a `sensor_*` command naming an instance that is not there |
+| `BP0056` | `no_module_link` | `cmd` | `module` / `module_power` on a board without the module link |
+| `BP0057` to `BP0059` | `image_switch_sensors_running`, `fpga_image_required`, `fpga_image_sensors_first` | `sensors` / `feature`, `image` | the [gateware images](#closed-loop-dac-gateware-images-and-psram) |
+| `BP0060` | `ota_unknown_target` | `target` | an `ota_begin` target this firmware does not know |
+| `BP0061` to `BP0063` | `i2c_needs_pullups`, `i2c_session_not_open`, `i2c_engine_reset` | (`la`) | the [I2C master](#i2c-master) |
+| `BP0064` | `loop_sweep_with_map` | | `dac_control_loop` sweep with an input map |
+| `BP0065` | `output_used_by_sensor` | `output`, `instance` | a DAC or current command while an analog emulated sensor plays that output |
+| `BP0066` | `step_busy` | | an `la_step` train while one runs |
+| `BP0067` | `samples_out_of_range` | `max` | `capture`, `capture_read`, `la_capture` and the others with `samples` outside 1 to `max` |
+| `BP0068`, `BP0069` | `la_rate_above_ceiling`, `la_rate_too_deep` | `rate_mhz`, `fit_mhz`, `samples` (and `max_mhz` / `max_samples`) | an explicit raw LA rate the capture cannot run: the rates are strings with one decimal ("3.0"), in MS/s |
+| `BP0070` | `capture_dual_too_deep` | `la_max`, `adc_max`, `la_capture_max` | `capture_dual` asking for more than a stream's region |
+| `BP0071` | `capture_overflowed` | `la_ksps`, `adc_ksps` | a capture whose streams the PSRAM could not keep up with |
+| `BP0072`, `BP0073` | `psram_too_small`, `psram_bandwidth` | | `capture_dual` whose regions do not fit the PSRAM, or whose rates overrun its bus |
+| `BP0080` | `dac_pinout_mismatch` | `cmd`, `digital`, `module` | a command that drives the DAC on a digital board and an analog module with different [flat-cable pinouts](#dac-pinout-on-the-flat-cable) |
+
+Refusals without a code keep `{"status":"error","message":...}`; the common ones:
 
 | Message | Cause |
 |---|---|
 | `"missing cmd"` | Request JSON has no `"cmd"` field |
-| `"unknown cmd"` | `cmd` value not recognised |
 | `"command too long"` | A JSON line longer than 1279 bytes |
-| `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
-| `BP0030` `"update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)"` | A client older than the firmware's `min_client_api` (see [Client compatibility](#client-compatibility)) |
-| `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
-| `BP0035` `"<cmd> refused: the DAC is off, the digital board (v3r4+) and the analog module (3.4) use different flat-cable pinouts"` | A command that drives the DAC on a digital board and analog module that do not belong together (see [DAC pinout on the flat cable](#dac-pinout-on-the-flat-cable)) |
-| `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
+| `"safe mode: ..."` | The safe-mode [gate](#gates-that-apply-to-every-command) |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
-| `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
-| `"samples out of range"` | `samples` outside the command's range (see each command); firmware 3.10.0 and later add the range, `"samples out of range: 1 to <max>"` |
-| `"samples out of range (use capture_dual for deep captures)"` | `capture` / `stream` with more than 32768 samples |
+| `"generate failed"` | Invalid `freq_hz` (<= 0) |
 | `"capture failed"` | The capture did not arm or did not complete |
-| `"missing waveform"` | `measure` request without `waveform` field |
-| `"unknown waveform (use sine, square or sawtooth)"` | `measure` with another waveform |
-| `"measure start failed"` | `measure` invoked with invalid params |
-| `"missing la"` | `la` step request without `la` field |
-| `"missing state"` | `target_power` request without `state` field |
-| `"missing efuse"` | `target_power` request without `efuse` field |
-| `"invalid efuse"` | `target_power` `efuse` is not 1 or 2 |
-| `"invalid swd la channel"` | `dap_start` channel outside 1..14 or both channels equal |
-| `"missing rx"` / `"missing tx"` | `uart_proxy_start` request without `rx`/`tx` field |
-| `"invalid uart args"` | `uart_proxy_start` channel outside 1..14 or `rx`==`tx` |
-| `"uart busy"` | a UART proxy is already active (console or another connection) |
-| `"unknown sensor instance '<name>'"` | a `sensor_*` command naming an instance that is not defined |
+| `"invalid swd la channel"`, `"invalid uart args"` | a channel outside 1..14, or two equal channels |
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
-| `"chunk at offset N, expected M (start again at offset 0)"` | `sensor_define` / `sensor_stimulus` chunk out of order |
-| `"<key> must be <min>..<max> <unit>"` | `sensor_set` / `sensor_start` value out of range |
-| `"start/len out of range (0..255)"` | `sensor_regs` `len` = 0 or `start`+`len` > 256 |
-| `"missing nonce"` | `identity_pop` request without `nonce` field |
-| `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
-| `"identity not available"` | Device identity not initialised (should not occur after boot) |
-| `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
-| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console of firmware before 3.9.0) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
-| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, LAN or USB network `ota_begin`) in a safe mode that turned the iCE40/PSRAM off |
-| `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
-| `"cloud_ca: change it from the cloud or over USB"`, `"cloud_proxy: ..."`, `"sig_policy: change it from the cloud or the USB console"`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
-| `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
+| `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after something wrote over the capture's PSRAM regions |
+| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin in a safe mode that turned the iCE40/PSRAM off |
+| `BP0043` (`setting_device_only`) | `identity_wipe`, `sig_policy` `clear_floor` or `wifi_bridge` `cert` off the USB link |
 
-Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
-
-Three families carry a **machine-parseable prefix** — clients (the Python SDK among them) match
-on the prefix and show the rest to the user:
-
-| Prefix | Raised by | Details |
-|---|---|---|
-| `pin conflict: ` | any command claiming an LA pin (`gpio`, `uart_proxy_start`, `dap_start`, `sensor_start`, the `la` step train, SCPI `DIGital:*`) | [pin ownership](#la-pin-ownership) |
-| `pull conflict: ` | the same claims, and `{"cmd":"la",…,"pull":"down"}` | [pull compatibility](#la-pin-ownership) |
-| `trigger timeout: ` | `capture`, `capture_dual`, `la_capture` with a `trigger` | [capture triggers](#capture-triggers) |
+Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`) with their text, for a
+person: safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`;
+a pin conflict, a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution
+error`; and the DAC limits as `-221 Settings conflict` with the limits' reason. The USB console
+prints its own text too.
 
 ---
 
@@ -4902,10 +4936,10 @@ $ nc 192.168.1.220 8080
 {"cmd":"la_voltage","mv":3300}
 {"status":"ok","data":{"mv":3300,"st":1,"readback_mv":3297}}
 
-{"cmd":"target_power","efuse":1,"state":1}
-{"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
+{"cmd":"target_power","efuse":1,"enabled":true}
+{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
 
-{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"status":"ok","data":null}
 
 {"cmd":"capture","samples":512}
@@ -4915,17 +4949,17 @@ $ nc 192.168.1.220 8080
 {"cmd":"dac_stop"}
 {"status":"ok","data":null}
 
-{"cmd":"la","la":1,"pull":"up"}
-{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k","pull":"up","state":"up","dirs":["up"],"pullups_available":1}}
+{"cmd":"la_pull","la":1,"pull":"up"}
+{"status":"ok","data":{"la":1,"state":"up","dirs":["up"],"pullups_available":true}}
 
-{"cmd":"la","la":1,"steps":200,"delay_us":500}
+{"cmd":"la_step","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
 
 {"cmd":"identity_public"}
 {"status":"ok","data":{"public":"ue5UfSsOAhQYZ332ELokjOI8-uyjcbrd1ic3Nmypvzk"}}
 
 {"cmd":"cloud_set","host":"www.embeddedci.com","device_id":"<uuid>","tls":true}
-{"status":"error","message":"locked: cloud_set needs the cloud or USB"}
+{"status":"error","code":"BP0040","args":{"cmd":"cloud_set"}}
 ```
 
 The last reply is what a pod with the LAN policy `locked` answers; on an `open` LAN it stores the
@@ -4942,31 +4976,40 @@ See `docs/design/policy-commands.md` for the full rules.
 ```json
 {"cmd":"sig_policy"}
 {"cmd":"sig_policy","set":"required"}
-{"cmd":"sig_policy","lan_unsigned":false}
 ```
 
 ```json
-{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3,"lan_unsigned":false,"rollback_floor":null}}
+{"status":"ok","data":{"policy":"required","enforces":true,"keys":3,"rollback_floor":null}}
 ```
 
-`audit` (default) accepts every update and reports its signature check; `permissive` refuses a
-bad signature; `required` refuses anything not signed by a key the firmware trusts. Over the
-cloud the policy can only get stricter (`sig_policy: only the USB console can loosen the policy
-(now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
-value.
+**Firmware 4.0.0 and later install only signed images, and nothing turns that off.** The policy
+is always `required`: an update of the firmware, the gateware (`gw0`, `gw1`, `gw2`) or the
+ESP32-C3 image without a good signature from a key the firmware trusts is refused at
+`ota_begin` with `signature: <result>`, on every path: Ethernet and Wi-Fi, the USB network
+adapter and the cloud (WS `ota.begin`). Every published release and its blobs are signed, so
+`benchpod flash-self --network` and the web app's install are not affected. A development build
+(not `RELEASE=1`) also trusts the developer key, so a dev-signed image (`tools/fwsign.py`) goes in
+over the network on a bench pod running a dev build; a release build trusts the release keys
+only. `keys` counts the keys this build trusts. The `ca` and `tls` targets are configuration,
+not code, and are not signed.
 
-**Updates from Ethernet and Wi-Fi need a signature** (firmware 3.10.7+). The LAN API has no
-client authentication, so whatever the policy, an update of the firmware, the gateware or the
-ESP32-C3 image that arrives over Ethernet or Wi-Fi must carry a good signature from a key the
-firmware trusts. Every published release is signed, so `benchpod flash-self --network` and the
-web app's install are not affected. An unsigned or developer-signed image (your own build) is
-refused with `signature: none (LAN needs a signed image; use USB)`: send it over the USB network
-adapter (`benchpod flash-self --network --connection usb`), the USB console or the cloud, where
-the policy above applies as before. `lan_unsigned` (`true`) brings back the behavior of firmware
-3.10.6 and earlier, where the LAN followed the policy too. Only the device may turn it on: the
-USB console (`lan-ota any`) or a connection over the USB network adapter. Ethernet and Wi-Fi get
-`lan_ota: change it on the device (the USB console, or over the USB link)`, the cloud may only turn
-it off. Stored; survives reboots and updates.
+`"set":"required"` is accepted from every source (a server pushing it keeps working);
+`"set":"audit"` or `"permissive"` is refused from every source, the USB console included, with
+`BP0074` (`signatures_always_required`, args `setting` `sig_policy` and `want`). So is
+`"lan_unsigned":true`, the 3.10.7 to 3.10.13 opt-out for Ethernet and Wi-Fi (setting
+`lan_unsigned`); the reply has no `lan_unsigned` field any more. A pod updated from 3.10.x reads
+its stored `audit` or `permissive` as `required` and stores `required` with the next policy save,
+so a rollback to 3.10.x keeps it.
+
+**Firmware you built yourself goes in over USB DFU**: `benchpod flash-self` (without
+`--network`), which reboots the pod into the MCU's ROM bootloader with the console's `dfu`
+command, or BOOT held while tapping RESET. The ROM bootloader writes any image; it needs the pod
+on a USB cable. (3.10.7 to 3.10.13 refused `dfu` under `required`.)
+
+Up to 3.10.13: `audit` (the default) accepted every update and reported its check, `permissive`
+refused a bad signature, the cloud could only tighten the policy and the USB console set any
+value; from 3.10.7 an update over Ethernet or Wi-Fi needed a good signature unless
+`lan_unsigned` was on.
 
 **ESP32-C3 images are always signed** (firmware 3.10.7+), like the Wi-Fi bridge's firmware: the
 C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good signature gets
@@ -4977,8 +5020,9 @@ C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good 
 older than that gets `rollback: <its release> is below this pod's floor <floor>`. The floor only
 goes up, when a signed release marked as a floor release (a flag in its signed manifest) is
 installed, so an older release with a known security problem cannot be put back later. No
-published release sets it yet. The USB console shows it with `rollback-floor` and lowers it to
-none with `rollback-floor clear`.
+published release sets it yet. `{"cmd":"sig_policy","clear_floor":true}` over the USB link lowers it
+to none (Ethernet, Wi-Fi and the cloud get `BP0043`, setting `rollback_floor`); up to firmware
+3.10.13 that was the USB console's `rollback-floor clear`.
 
 ### `lan_policy` — what the external LAN may do
 
@@ -4992,12 +5036,12 @@ none with `rollback-floor clear`.
 ```
 
 The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
-command there gets `locked: <verb> needs the cloud or USB`) or `off` (connections to
+command there gets `BP0040`, `lan_locked`) or `off` (connections to
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
-means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
-loosening `sig_policy`, changing `lan_policy`) stays off it too; the one exception is the company CA
-and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
+means physical presence. It is still LAN tier, so changing `lan_policy` stays off it too; the
+exceptions are what needs someone at the pod: the company CA and the cloud proxy (see `cloud_ca` /
+`cloud_proxy`), `identity_wipe`, the rollback floor and a Wi-Fi bridge certificate. The wire
 values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
 <value>`), never from the LAN or the USB network.
 
@@ -5005,12 +5049,14 @@ values and the field name are unchanged. Set from the cloud or the USB console (
 
 ```json
 {"cmd":"usb_network"}
-{"cmd":"usb_network","set":"off"}
+{"cmd":"usb_network","enabled":false}
 ```
 
 ```json
-{"status":"ok","data":{"setting":"off"}}
+{"status":"ok","data":{"enabled":false}}
 ```
+
+Firmware up to 3.10.13 took `"set":"on"|"off"` and replied `"setting":"on"|"off"`.
 
 Whether the pod's USB port is also a [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) (default `on`). With `off` the pod
@@ -5018,7 +5064,7 @@ re-enumerates as its USB console only: the computer sees no network adapter at a
 stored, separate from `lan_policy` (which covers Ethernet and Wi-Fi), and survives a reboot and a
 firmware update. Only the device changes it: the USB console (`usb-network on|off`, the way back
 on) or a connection over the USB link itself (which can turn it off). Ethernet, Wi-Fi and the cloud
-get `usb_network: change it on the device (the USB console, or over the USB link)`; reading works
+get `BP0043` (`setting_device_only`, setting `usb_network`); reading works
 everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
 credentials also turn the adapter off (status `usb.off_reason`).
 
@@ -5049,12 +5095,13 @@ Firmware 3.9.3+. See `docs/design/lan-tls.md`.
 
 ```json
 {"cmd":"lan_tls"}
-{"cmd":"lan_tls","https_only":true}
+{"cmd":"lan_tls","https_only":false}
+{"cmd":"lan_tls","scpi":true}
 {"cmd":"lan_tls","regenerate":true}
 ```
 
 ```json
-{"status":"ok","data":{"port":8443,"https_only":false,"sessions":1,"origin":"generated",
+{"status":"ok","data":{"port":8443,"https_only":true,"scpi":false,"sessions":1,"origin":"generated",
  "key":"EC P-256","subject":"CN=benchpod-baea06","san":["benchpod-baea06","benchpod-baea06.local"],
  "not_after":"9999-12-31","sha256":"3f1c...e9"}}
 ```
@@ -5075,7 +5122,8 @@ could not run together there. When there is no certificate the reply has
 
 | Field | Effect |
 |---|---|
-| `https_only` | `true`: plaintext connections to `8080` over Ethernet and Wi-Fi are refused and open ones closed, so only `8443` answers there. `8080` keeps answering on the [USB network adapter](usb-serial-interface.md#usb-network-adapter). Default `false`. Stored; survives reboots and updates. |
+| `https_only` | `true`: plaintext connections to `8080` over Ethernet and Wi-Fi are refused and open ones closed, so only `8443` answers there. `8080` keeps answering on the [USB network adapter](usb-serial-interface.md#usb-network-adapter). Default `true` from firmware 4.0.0 (a pod updated from 3.10.x gets it too, whatever it had); `false` before. `false` turns plaintext JSON on `8080` on for the LAN again. Stored; survives reboots and updates. |
+| `scpi` | `true`: SCPI answers on the pod's TCP connections (`8080` from every interface, for SCPI only on the LAN under HTTPS-only, and `8443`), and mDNS advertises `_scpi-raw._tcp`. Default `false` (firmware 4.0.0; always on before). `false` closes the plaintext LAN connections (under HTTPS-only) and ends open SCPI sessions at their next line. Stored. |
 | `regenerate` | `true`: a new key and self-signed certificate. New connections get it; open ones keep the old one. Clients that pinned the old one must trust the new one (`benchpod lan-tls trust`). |
 
 **Your own certificate.** Upload a PEM bundle, the certificate (optionally followed by its chain)
@@ -5085,17 +5133,30 @@ and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the uplo
 `ota_commit` (stored and used for new connections; the reply's `state` is `installed`). At most
 7.6 KB. `benchpod lan-tls set-cert --cert pod.pem --key pod.key` does all of it.
 
-**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `regenerate`
-and the upload need the USB console, the USB network adapter (`--connection usb`) or the cloud.
-The external LAN (Ethernet, Wi-Fi) gets `lan_tls: change it from the cloud or over USB`, over
+**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `scpi`,
+`regenerate` and the upload need the USB console (`lan-tls https-only on|off`, `lan-tls scpi
+on|off`), the USB network adapter (`--connection usb`) or the cloud, the way the LAN policy is
+changed (the cloud needs an organization owner or admin: T2).
+The external LAN (Ethernet, Wi-Fi) gets `BP0042` (`setting_cloud_or_usb`, setting `lan_tls`), over
 plaintext and over TLS alike: port `8443` has no client authentication, so a TLS connection does
 not show who is on the other end. Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make all
 of these changes and let plaintext LAN turn `https_only` on. Reading is T0; the changes
 are T2 (so `locked` keeps them off the external LAN). mDNS: the `_benchpod._tcp` TXT record carries
-`tls=8443` and `https_only=0|1`.
+`id`, `host`, `port=8080` (the plaintext port, which answers on the USB link), `tls=8443`,
+`https_only=0|1` (`1`, the 4.0.0 default: the LAN takes only TLS) and `api=<n>` (the
+[client API level](#client-compatibility), firmware 4.0.0). The SRV record stays on `8080`, so a
+client that reads it tries `8443` first the way `benchpod` and the SDK do for `8080`.
+
+**Pinning needs no user action.** The certificate is generated once and kept across reboots and
+updates (and across a rollback to 3.10.x), so a client that pinned it on first use keeps
+connecting. Firmware 4.0.0 does not change the certificate or how it is made. Only `regenerate`,
+an uploaded certificate or a damaged stored one (the pod makes a new one at boot) replace it;
+then a pinned client
+refuses the pod until the user trusts the new one (`benchpod lan-tls trust`). Clients pin per
+address (host:8443).
 
 **Raw sockets and VISA.** `8443` speaks the same SCPI as `8080`, wrapped in TLS. VISA's raw socket
-resource (`TCPIP::<host>::8080::SOCKET`) has no TLS, so with HTTPS-only on, run a local TLS
+resource (`TCPIP::<host>::8080::SOCKET`) has no TLS: with SCPI on it answers on `8080` from the LAN too, or run a local TLS
 wrapper and point VISA at it, for example with the pod's certificate from
 `benchpod lan-tls show --pem > pod.pem`:
 
@@ -5128,8 +5189,7 @@ Setting or clearing either reconnects the cloud. Reading is T0; setting and clea
 
 **Never from the external LAN.** Installing or clearing the CA and setting or clearing the proxy are
 refused on an Ethernet or Wi-Fi TCP connection whatever the LAN policy (even `open`), with
-`cloud_ca: change it from the cloud or over USB` or
-`cloud_proxy: change it from the cloud or over USB`. Reading both (`{"cmd":"cloud_ca"}`,
+`BP0042` (`setting_cloud_or_usb`, setting `cloud_ca` or `cloud_proxy`). Reading both (`{"cmd":"cloud_ca"}`,
 `{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
 own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
 real server name and relay the host-bound (v2) login, which defeats it.
@@ -5137,7 +5197,8 @@ real server name and relay the host-bound (v2) login, which defeats it.
 **Allowed over the USB network adapter** (firmware 3.9.0+). A connection on the USB link is
 physical presence, like the USB console (anything on that computer can open the console anyway),
 so it may install or clear the CA and set or clear the proxy. This is how `benchpod cloud ca` and
-`cloud proxy` (and `usb-bridge`) change them over USB. Everything else on the USB link stays LAN
+`cloud proxy` (and `usb-bridge`) change them over USB. From firmware 4.0.0 the console has no CA or
+proxy commands: the USB link and the cloud are the ways. Everything else on the USB link stays LAN
 tier.
 
 ### While a cloud job holds the pod
@@ -5206,7 +5267,7 @@ Held with another id, or a cloud job holds the pod (the server's lease, `status`
 `purpose` is `cloud`):
 
 ```json
-{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245},"message":"busy: benchpod ci: ward holds this pod (process-node-hil, 245 s left)"}
+{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245}}
 ```
 
 A missing or malformed `id` is `BP0006` (`args.arg` `id`).
@@ -5237,7 +5298,7 @@ The server can stop the lease (frame `{"type":"lease.break","by":"<name>"}` on t
 Each connection that owned it then gets, for its next command only, instead of running it:
 
 ```json
-{"status":"error","code":"BP0026","args":{"by":"<name>"},"message":"lease lost: stopped by <name>"}
+{"status":"error","code":"BP0026","args":{"by":"<name>"}}
 ```
 
 A stopped lease stays stopped: for 30 minutes after the stop, `lease_acquire`, `lease_renew` and
@@ -5269,6 +5330,6 @@ connections, each an owner only while it is open.
 
 - **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects are not supported, except the `trigger` object of the captures; arrays only where a command documents one (`data` of `can_write`, `reply_data` of `can_respond`). Fields must be at the top level of the JSON object, and unknown fields are ignored.
 - **No authentication:** Any TCP client that can reach port 8080 (or 8443, its TLS form) has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
-- **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `"busy"` until the first one's reply is complete.
+- **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `BP0047` (`pod_busy`) until the first one's reply is complete.
 - **DAC runs until stopped:** A `generate` with `duration_ms` 0 runs the DAC until `dac_stop`, the next `generate`, `measure` or `replay`, or `OUTPut OFF` over SCPI.
-- **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.
+- **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_hz`; the firmware snaps to the nearest achievable divider and logs the actual rate.

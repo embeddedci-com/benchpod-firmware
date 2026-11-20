@@ -42,11 +42,9 @@ typedef struct {
     bool             has_analog;       /* board_has_analog() */
 } cmd_gate_ctx_t;
 
-/* The start of the one refusal for a cloud job holding the pod. dispatch_line sends that one as
-   lease_busy (BP0025) with holder "a cloud job" and the cloud holder as its purpose; hosts that
-   predate the codes read the text ("busy: ..."), so it stays as it was. */
+/* A cloud job holding the pod is refused as lease_busy (BP0025) with this holder and the cloud
+   holder as its purpose. */
 #define CMD_GATE_CLOUD_LEASE_HOLDER "a cloud job"
-#define CMD_GATE_CLOUD_LEASE_TEXT   "busy: " CMD_GATE_CLOUD_LEASE_HOLDER " holds this pod"
 
 /* NULL = `cmd` (its row `d` from cmd_find, NULL for an unknown verb, with its full JSON line
    `json`, already classified as `tier`) may run; else the refusal to send, either a constant or
@@ -57,16 +55,11 @@ const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *jso
 /* The client API check (features.toml `min_client_api`): true = `json` (row `d`, NULL = unknown
    verb) may run for a firmware that takes client_api >= min_api. *sent is the command's
    "client_api" (top level; absent, negative or not a number = 0, a value past INT32_MAX is
-   INT32_MAX). The rows with CMD_F_ANY_CLIENT (status, diag, ping, lease_release) always run. The
+   INT32_MAX). The rows with CMD_F_ANY_CLIENT (ping, status, diag, lease_release, and the update
+   commands identity_public, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort,
+   ota_selftest and blob_status) always run. The
    firmware passes BP_MIN_CLIENT_API; tests pass any minimum. */
 bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api, int32_t *sent);
-
-/* The refusal text for BP0030 (an old client shows it verbatim) into why[why_cap], with the
-   command's optional "client" ("sdk 3.0.6", at most CMD_GATE_CLIENT_MAX characters, printable
-   ASCII; anything else is left out). Returns why. */
-#define CMD_GATE_CLIENT_MAX 32
-const char *cmd_gate_client_api_text(const char *json, int32_t sent, uint32_t min_api,
-                                     char *why, size_t why_cap);
 
 /* Checks 4 and 5 alone (safe mode, the digital-only board), for the transports that have no
    tier, lease or tunnel of their own: SCPI asks with the JSON verb its command stands for

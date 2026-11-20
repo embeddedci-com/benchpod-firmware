@@ -5,6 +5,7 @@
  * their refusals, and the eth argument checks), wifi_clear's deferred ESP32-C3 NVS erase, and
  * wifi_scan's start-then-read replies and the console's deferred print.
  */
+#include "bp_errors.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -47,7 +48,14 @@ void cloud_send_json_line(int c, const char *json) {
 }
 static char g_reply[512];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+static int g_ecode;   /* the code of the last coded refusal, 0 = a plain one */
+void send_error(int c, const char *m) { (void)c; g_ecode = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;   /* "err:" and the code's catalog message, like a plain refusal reads here */
+    g_ecode = (int)code;
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
+}
 
 static int g_cloud_reloads, g_wifi_reloads, g_eth;
 void net_cloud_reload_after_reply(void) { g_cloud_reloads++; }
@@ -82,6 +90,7 @@ const char *esp_wifi_ctrl_state_str(void) { return "idle"; }
 static bool g_c3 = true;   /* the board has the ESP32-C3 (digital v3r3 does not) */
 bool esp_wifi_ctrl_module_present(void) { return g_c3; }
 void esp_wifi_ctrl_slave_lost_counts(uint32_t *a, uint32_t *b) { *a = 0; *b = 0; }
+bool esp_wifi_ctrl_rssi(int *dbm) { *dbm = -61; return true; }
 static c3_restarts_t g_c3_restarts;
 const c3_restarts_t *esp_wifi_ctrl_restarts(void) { return &g_c3_restarts; }
 /* wifi_scan: the Wi-Fi control's request/result faked. */
@@ -95,14 +104,6 @@ esp_wifi_scan_state_t esp_wifi_ctrl_scan_result(uint32_t id, const wifi_scan_lis
     if (l) *l = &g_scan_list;
     if (err) *err = g_scan_err;
     return g_scan_state;
-}
-static char g_console[2048];
-static size_t g_nconsole;
-static int g_holds;   /* console_io_hold_prompt(true) +1, (false) -1 */
-void console_io_hold_prompt(bool on) { g_holds += on ? 1 : -1; }
-void console_io_write(const uint8_t *b, size_t n) {
-    if (n > sizeof(g_console) - 1 - g_nconsole) n = sizeof(g_console) - 1 - g_nconsole;
-    memcpy(g_console + g_nconsole, b, n); g_nconsole += n; g_console[g_nconsole] = '\0';
 }
 static esp_hosted_pump_stats_t g_stats;
 const esp_hosted_pump_stats_t *esp_hosted_spi_stats(void) { return &g_stats; }
@@ -256,7 +257,7 @@ static void test_eth(void) {
     handle_eth(0, "{\"cmd\":\"eth\",\"action\":\"loopback\",\"mbit\":5}");
     CHECK(strcmp(g_reply, "err:eth loopback mbit must be 10 or 100") == 0, "%s", g_reply);
     handle_eth(0, "{\"cmd\":\"eth\",\"action\":\"refclk\"}");
-    CHECK(strcmp(g_reply, "ok:{\"hz\":50000000,\"ppm\":0,\"on_hsi\":false}") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "ok:{\"clock_hz\":50000000,\"ppm\":0,\"on_hsi\":false}") == 0, "%s", g_reply);
 }
 
 /* ---- wifi_scan ---------------------------------------------------------------------------- */
@@ -297,32 +298,6 @@ static void test_wifi_scan(void) {
     CHECK(strcmp(g_reply, "err:wifi_scan: the ESP32-C3 did not finish the scan") == 0, "%s", g_reply);
     handle_wifi_scan(0, "{\"cmd\":\"wifi_scan\",\"id\":99}");
     CHECK(strncmp(g_reply, "err:wifi_scan: no scan with that id", 35) == 0, "%s", g_reply);
-
-    /* The console's scan prints when it ends (the console layer, console_prompt.c, puts it on its
-       own line after the prompt and prints the prompt again); nothing while it runs. */
-    g_scan_err = NULL;
-    g_scan_state = ESP_WIFI_SCAN_RUNNING;
-    g_nconsole = 0; g_console[0] = '\0';
-    wifi_scan_console();
-    CHECK(strstr(g_console, "Wi-Fi scan running") != NULL, "%s", g_console);
-    g_nconsole = 0; g_console[0] = '\0';
-    wifi_scan_poll();
-    CHECK(g_nconsole == 0, "printed while running: %s", g_console);
-    wifi_scan_list_clear(&g_scan_list);
-    wifi_scan_list_add(&g_scan_list, "my lab", 6, -50, 6, 7);
-    g_scan_state = ESP_WIFI_SCAN_DONE;
-    wifi_scan_poll();
-    CHECK(strcmp(g_console, "scan -50 6 wpa2/wpa3 my lab\r\nscan done 1\r\n") == 0, "%s", g_console);
-    CHECK(g_holds == 0, "the prompt hold was not released (%d)", g_holds);
-    g_nconsole = 0; g_console[0] = '\0';
-    wifi_scan_poll();
-    CHECK(g_nconsole == 0, "printed twice: %s", g_console);
-    g_scan_state = ESP_WIFI_SCAN_FAILED;
-    g_scan_err = "Wi-Fi is still connecting; try the scan again in a moment";
-    wifi_scan_console();
-    g_nconsole = 0; g_console[0] = '\0';
-    wifi_scan_poll();
-    CHECK(strstr(g_console, "wifi-scan error Wi-Fi is still connecting") != NULL, "%s", g_console);
 }
 
 /* Digital v3r3 has no ESP32-C3: wifi_set says so and saves nothing, wifi_clear still clears the

@@ -1,7 +1,7 @@
 /*
  * command_handler_power.c — the `power_profile` command and its chunked reply.
  *
- *   {"cmd":"power_profile","action":"start","efuse":1,"rate_hz":1000,"max_duration_ms":60000,"keep_samples":0}
+ *   {"cmd":"power_profile","action":"start","efuse":1,"sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":0}
  *   {"cmd":"power_profile","action":"stop"}     -> chunked result (same framing as la_capture)
  *   {"cmd":"power_profile","action":"status"}
  *   {"cmd":"power_profile","efuse":1,"duration_ms":N,...}   one-shot: start, wait, stop reply
@@ -206,7 +206,7 @@ void handle_power_profile(int conn_id, const char *json) {
     }
     uint32_t efuse, rate, dur, keep, oneshot_ms = 0;
     if (!get_u32(conn_id, json, "efuse", 1u, 2u, &efuse)) return;
-    if (!get_u32(conn_id, json, "rate_hz", PP_RATE_DEFAULT_HZ, 1000000u, &rate)) return;
+    if (!get_u32(conn_id, json, "sample_rate_hz", PP_RATE_DEFAULT_HZ, 1000000u, &rate)) return;
     if (!get_u32(conn_id, json, "max_duration_ms", PP_DURATION_DEFAULT_MS, 0x7FFFFFFFu, &dur)) return;
     if (!get_u32(conn_id, json, "keep_samples", 0u, 0x7FFFFFFFu, &keep)) return;
     if (oneshot) {
@@ -245,7 +245,7 @@ void handle_power_profile(int conn_id, const char *json) {
     pp_status_t st;
     power_profile_status(&st);
     char payload[64];
-    snprintf(payload, sizeof(payload), "{\"started\":true,\"efuse\":%d,\"rate_hz\":%lu}",
+    snprintf(payload, sizeof(payload), "{\"started\":true,\"efuse\":%d,\"sample_rate_hz\":%lu}",
              st.efuse, (unsigned long)st.rate_hz);
     send_ok_str(conn_id, payload);
 }

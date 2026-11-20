@@ -10,7 +10,8 @@
 #include "la_pins.h"
 #include "bp_json.h"   /* bp_emit_t */
 #include "b64url.h"
-#include "gw_caps.h"   /* gw_caps_t, require_gw */
+#include "gw_caps.h"
+#include "bp_errors.h"  /* require_gw refuses with BP0017 */   /* gw_caps_t, require_gw */
 
 /*
  * command_handler_internal.h — package-private seam shared by the command-handler
@@ -42,7 +43,11 @@
    explicit JSON "dap_start" command and routes the connection's raw bytes to
    the on-pod CMSIS-DAP processor as length-framed packets until a zero-length
    frame leaves DAP mode. */
-typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST } proto_t;
+/* PROTO_REFUSED: the protocol picked is not served on this connection (command_handler_transport.c:
+   SCPI while it is off, JSON on plaintext LAN under HTTPS-only); its bytes are dropped until the
+   close. */
+typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST,
+               PROTO_REFUSED } proto_t;
 
 /* A connection's protocol (PROTO_UNKNOWN for an id outside the table) and setting it
    (command_handler_transport.c). */
@@ -77,10 +82,10 @@ static inline bool conn_has_socket(int conn_id) {
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
 
-/* A gateware gate (a gw_caps() field): true when the running gateware has it, else `text` goes
-   back as a plain error and the handler returns. */
-static inline bool require_gw(int conn_id, bool have, const char *text) {
-    if (!have) send_error(conn_id, text);
+/* A gateware gate (a gw_caps() field): true when the running gateware has it, else the handler
+   refuses with gateware_too_old (BP0017: feature needs gateware v`min`) and returns. */
+static inline bool require_gw(int conn_id, bool have, const char *feature, int min) {
+    if (!have) bp_err_gateware_too_old(conn_id, feature, (int32_t)min);
     return have;
 }
 
@@ -106,7 +111,7 @@ void heavy_release(int conn_id);
 bool heavy_begin(int conn_id);
 int  heavy_owner_conn(void);                  /* the conn holding the gate, or -1 */
 
-/* An optional "sample_rate_mhz" field in Hz; 0.0f (= auto) when absent or not positive. */
+/* An optional "sample_rate_hz" field; 0.0f (= auto) when absent or not positive. */
 float parse_sample_rate_hz(const char *json);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
@@ -135,10 +140,6 @@ void   handle_wifi_status(int conn_id, const char *json);
 const char *wifi_clear_c3_now(void);
 void   wifi_clear_poll(void);
 void   handle_wifi_scan(int conn_id, const char *json);
-/* Console wifi-scan: the networks (a Wi-Fi bridge: now; the built-in Wi-Fi: printed by
-   wifi_scan_poll when the scan ends, then a new prompt, so the worker never waits for it). */
-void   wifi_scan_console(void);
-void   wifi_scan_poll(void);
 void   handle_eth(int conn_id, const char *json);
 void   handle_speedtest(int conn_id, const char *json);
 void   speedtest_pump(void);                  /* the "up" direction's paced byte source */
@@ -159,7 +160,9 @@ void handle_emi_log(int conn_id, const char *json);   /* emi_test.c: the EMI bui
 #endif
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
-void handle_identity_wipe(int conn_id, const char *json);
+void handle_identity_wipe(int conn_id, const char *json);   /* command_handler_recovery.c */
+void handle_usb_reattach(int conn_id, const char *json);
+void handle_wifi_bridge(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 /* USB host mode (command_handler_usb.c). */
 void handle_usb_host(int conn_id, const char *json);
@@ -190,7 +193,6 @@ void handle_adc_range(int conn_id, const char *json);
 void handle_capture(int conn_id, const char *json);
 void handle_capture_dual(int conn_id, const char *json);
 void handle_capture_read(int conn_id, const char *json);
-void handle_stream(int conn_id, const char *json);
 void handle_test(int conn_id, const char *json);
 void handle_measure(int conn_id, const char *json);
 void handle_la_capture(int conn_id, const char *json);
@@ -308,7 +310,8 @@ void     la_step_poll(void);                  /* releases the train's pins once 
 void     la_pins_on_gateware_reconfigured(void);
 void     handle_la_pins(int conn_id, const char *json);
 void     handle_gpio(int conn_id, const char *json);
-void     handle_la(int conn_id, const char *json);
+void     handle_la_step_cmd(int conn_id, const char *json);
+void     handle_la_pull_cmd(int conn_id, const char *json);
 void     handle_la_voltage(int conn_id, const char *json);
 /* Emulated sensors (command_handler_sensors.c; the JSON is in sensor_cmd.c). */
 void     handle_sensor(int conn_id, const char *json);   /* every sensor_* verb but sensor_la */
@@ -353,13 +356,13 @@ void power_profile_service(void);            /* one-shot completion + paced resu
 void power_profile_conn_closed(int conn_id);
 
 /* CAN subsystem handlers (command_handler_can.c). */
-void handle_can_config(int conn_id, const char *json);
+void handle_can_start(int conn_id, const char *json);
 void handle_can_write(int conn_id, const char *json);
 void handle_can_read(int conn_id, const char *json);
 void handle_can_status(int conn_id, const char *json);
 void handle_can_respond(int conn_id, const char *json);
 void handle_can_term(int conn_id, const char *json);
-void handle_can_disable(int conn_id, const char *json);
+void handle_can_stop(int conn_id, const char *json);
 
 /* The pod's own lease (command_handler_lease.c, lease_local.h). */
 void handle_lease_acquire(int conn_id, const char *json);

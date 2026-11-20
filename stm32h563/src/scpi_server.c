@@ -689,7 +689,7 @@ static scpi_result_t scpi_dig_output(scpi_t *ctx) {
     uint32_t la, state;
     if (!SCPI_ParamUInt32(ctx, &la, TRUE))    return SCPI_RES_ERR;
     if (!SCPI_ParamUInt32(ctx, &state, TRUE)) return SCPI_RES_ERR;
-    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
+    if (scpi_refused_by_gate(ctx, "gpio", NULL)) return SCPI_RES_ERR;
     /* The pin becomes a gpio output (JSON `gpio`), so it shows up in la_pins, is released with
        gpio mode off, and is refused while another function owns it. */
     int rc = command_handler_dig_output((unsigned)la, state != 0 ? 1 : 0);
@@ -722,8 +722,8 @@ static scpi_result_t scpi_dig_step(scpi_t *ctx) {
             return SCPI_RES_ERR;
         }
     }
-    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
-    /* Same ownership rules as the JSON `la` step: free pins are claimed for the train. */
+    if (scpi_refused_by_gate(ctx, "la_step", NULL)) return SCPI_RES_ERR;
+    /* Same ownership rules as the JSON `la_step`: free pins are claimed for the train. */
     int rc = command_handler_dig_step((unsigned)la, steps, delay_us, (unsigned)dir_la, dir != 0);
     if (rc == -2) {
         SCPI_ErrorPush(ctx, SCPI_ERROR_SETTINGS_CONFLICT);
@@ -744,7 +744,7 @@ static scpi_result_t scpi_dig_step(scpi_t *ctx) {
 
 /* DIGital:STEP:BUSY? — 1 while a step train is running, 0 once it completes. */
 static scpi_result_t scpi_dig_step_busyQ(scpi_t *ctx) {
-    if (scpi_refused_by_gate(ctx, "la", NULL)) return SCPI_RES_ERR;
+    if (scpi_refused_by_gate(ctx, "la_step", NULL)) return SCPI_RES_ERR;
     SCPI_ResultBool(ctx, command_handler_step_busy());
     return SCPI_RES_OK;
 }

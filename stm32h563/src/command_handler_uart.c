@@ -260,33 +260,28 @@ void uart_cfg_refuse(int conn_id, const uart_cfg_t *cfg, const uart_cfg_err_t *e
         send_error(conn_id, "invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2");
         break;
     case UART_CFG_GW_FRAME:
-        bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart parity and stop bits need gateware v56+: update the pod's firmware"),
-                                "parity and stop_bits", UART_FRAME_MIN_GW);
+        bp_err_gateware_too_old(conn_id, "parity and stop_bits", UART_FRAME_MIN_GW);
         break;
     case UART_CFG_GW_HALF_DUPLEX:
-        bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart half_duplex needs gateware v57+: update the pod's firmware"),
-                                "half_duplex", UART_HALFDUPLEX_MIN_GW);
+        bp_err_gateware_too_old(conn_id, "half_duplex", UART_HALFDUPLEX_MIN_GW);
         break;
     case UART_CFG_HALF_DUPLEX_TWO_PINS:
-        bp_err_uart_half_duplex_two_pins(conn_id, BP_ERR_TEXT("half_duplex runs on one pin: give the same LA channel for rx and tx"),
-                                         (int32_t)cfg->rx, (int32_t)cfg->tx);
+        bp_err_uart_half_duplex_two_pins(conn_id, (int32_t)cfg->rx, (int32_t)cfg->tx);
         break;
     case UART_CFG_SAME_PIN:
-        bp_err_uart_same_pin(conn_id, BP_ERR_TEXT("uart rx and tx are the same pin; set half_duplex for a one-wire UART"),
-                             (int32_t)cfg->rx);
+        bp_err_uart_same_pin(conn_id, (int32_t)cfg->rx);
         break;
     case UART_CFG_ENTRY_INVALID:
-        bp_err_uart_entry_invalid(conn_id, BP_ERR_TEXT("uart entry option out of range"), err->bad, err->max);
+        bp_err_uart_entry_invalid(conn_id, err->bad, err->max);
         break;
     case UART_CFG_ENTRY_NO_RESET_PIN:
-        bp_err_uart_entry_no_reset_pin(conn_id, BP_ERR_TEXT("uart entry needs the pod's reset pin (v3 boards)"));
+        bp_err_uart_entry_no_reset_pin(conn_id);
         break;
     case UART_CFG_GW_DE:
-        bp_err_gateware_too_old(conn_id, BP_ERR_TEXT("uart de needs gateware v58+: update the pod's firmware"),
-                                "de", UART_DE_MIN_GW);
+        bp_err_gateware_too_old(conn_id, "de", UART_DE_MIN_GW);
         break;
     case UART_CFG_DE_PIN:
-        bp_err_uart_de_pin(conn_id, BP_ERR_TEXT("uart de needs a pin of its own, not rx or tx"), (int32_t)cfg->de);
+        bp_err_uart_de_pin(conn_id, (int32_t)cfg->de);
         break;
     default: send_error(conn_id, "invalid uart args"); break;
     }
@@ -352,7 +347,8 @@ void handle_uart_proxy_start(int conn_id, const char *json) {
     if (rc != 0) {
         /* Not armed: nothing to disarm (-2 is another user's armed UART, left alone). */
         uart_session_close();
-        send_error(conn_id, rc == -2 ? "uart busy" : "invalid uart args");
+        if (rc == -2) bp_err_uart_session_open(conn_id);
+        else          send_error(conn_id, "invalid uart args");
         return;
     }
     /* Verify the iCE40 actually answers before committing to raw UART mode: a bogus

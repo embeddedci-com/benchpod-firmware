@@ -4,6 +4,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "bp_json.h"
 #include "board_variant.h"
@@ -18,7 +19,7 @@
 
 static void send_emitted(int conn_id, bp_emit_t *e)
 {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "module: reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }
@@ -29,12 +30,12 @@ void module_emit_state(bp_emit_t *e, bool full)
     module_id_t id;
     int rc = module_id(&id);
     bp_emit(e, "{\"present\":%s,\"analog\":%s,\"power\":%s,\"bridge_power\":%s,"
-               "\"dac_pinout\":\"%s\",\"eeprom\":",
+               "\"dac_pinout_ok\":%s,\"eeprom\":",
             module_present_now() ? "true" : "false",
             board_analog_is_module() ? "true" : "false",
             module_power_on() ? "true" : "false",
             bridge_power_on() ? "true" : "false",
-            module_dac_pinout_mismatch() ? "mismatch" : "ok");   /* BP0035, dac_link.h */
+            module_dac_pinout_mismatch() ? "false" : "true");   /* BP0080, dac_link.h */
     if (rc == MOD_EE_NO_CHIP) {
         bp_emit_raw(e, "\"none\"}");
         return;
@@ -91,7 +92,7 @@ static void reply_state(int conn_id)
 void handle_module(int conn_id, const char *json)
 {
     if (!module_link_board()) {
-        send_error(conn_id, "module: this BenchPod has no module link (digital v3r3 only)");
+        bp_err_no_module_link(conn_id, "module");
         return;
     }
     char op[16] = {0};
@@ -194,7 +195,7 @@ void handle_module(int conn_id, const char *json)
 void handle_module_power(int conn_id, const char *json)
 {
     if (!module_link_board()) {
-        send_error(conn_id, "module_power: this BenchPod has no module link (digital v3r3 only)");
+        bp_err_no_module_link(conn_id, "module_power");
         return;
     }
     char v[8] = {0};

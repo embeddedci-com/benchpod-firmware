@@ -100,7 +100,7 @@ code or gateware). Every verb in `dispatch_line` (`command_handler.c:3766-3843`)
 |---|---|
 | T0 | `ping`, `status`, `cloud_status`, `wifi_status`, `la_pins`, `usb_cc`, `target_status`, `power_status`, `identity_public`, `identity_pop`, `spi_status`, `sensor_status`, `can_status`, `ota_status`, `blob_status`, `dac_loop_probe`; read forms of mixed verbs: `dac_limits` (no `path`/`enabled`), `calibrate` (no `source`/`clear`), `eth action=stats|refclk` |
 | T0 (observational, leaks DUT data) | `capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`, `can_read`, `psram_ping`, `test` |
-| T1 | `generate`, `measure`, `load`, `load_bin`, `replay`, `dac_stop`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read` (flips relays), `dac_control_loop`, `dac_loop_input`, `la`, `gpio`, `la_voltage`, `nrst`, `target_power`, `power_profile`, `dap_start`, `uart_proxy_start`, `spi_start`, `spi_stop`, `spi_xfer`, `spi_stream`, `spi_flash` (DUT flash, all ops), `sensor_start`, `sensor_set`, `sensor_stop`, `can_config`, `can_write`, `can_term`, `can_respond`, `can_disable`, `speedtest`, `fpga_image` (selects one of the two installed images), `psram_recover` (reboot only) |
+| T1 | `generate`, `measure`, `load`, `load_bin`, `replay`, `dac_stop`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read` (flips relays), `dac_control_loop`, `dac_loop_input`, `la_step`, `la_pull`, `gpio`, `la_voltage`, `nrst`, `target_power`, `power_profile`, `dap_start`, `uart_proxy_start`, `spi_start`, `spi_stop`, `spi_xfer`, `spi_stream`, `spi_flash` (DUT flash, all ops), `sensor_start`, `sensor_set`, `sensor_stop`, `can_start`, `can_write`, `can_term`, `can_respond`, `can_stop`, `speedtest`, `fpga_image` (selects one of the two installed images), `psram_recover` (reboot only) |
 | T2 | `cloud_set`, `cloud_clear`, `wifi_set`, `wifi_clear`, `eth action=stop|start|restart|speed|loopback`, `dac_limits` set/clear, `calibrate` run/clear (persists, changes everyone's readings) |
 | T3 | `ota_begin`, `ota_data`, `ota_end`, `ota_commit`, `ota_abort`, `ota_selftest` (erases a scratch flash sector) |
 
@@ -309,7 +309,7 @@ the console (CDC-ACM). The table is the state of firmware `main`; file reference
 |---|---|---|---|
 | Ethernet and Wi-Fi, TCP 8080 | JSON, SCPI and CMSIS-DAP on one listener (`net_server.c`, bound to any address) | `locked`: T2/T3 refused (`cmd_gate.c`). `off`: the connection is accepted and reset at once (`srv_accept`, keyed on the pod's local address), open connections close, mDNS leaves eth and Wi-Fi | LAN |
 | USB network adapter, TCP 8080 | The same listener, reached on the pod's USB address | Never applies | LAN, with the physical-presence exceptions below |
-| USB console (CDC-ACM) | Text commands that stay on the console (`status`, `dfu`, `identity`, `lan-policy`, `sig-policy`, `usb-network`, `set-wifi`, recovery tools). Uploads and instrument commands moved to the JSON API in 3.9.0 (`console_moved.c`) | Never applies | Physical presence |
+| USB console (CDC-ACM) | Text commands that stay on the console (firmware 4.0.0: `status`, `ping`, `selftest`, `reboot`, `dfu`, `identity`, `usb-network`, `lan-policy`, `lan-tls`, `net-reset`, `log`). Uploads and instrument commands moved to the JSON API in 3.9.0, Wi-Fi, identity wipe, CA, proxy, blobs and the bridge in 4.0.0 | Never applies | Physical presence |
 | Cloud WSS | Outbound from the pod over Ethernet, Wi-Fi or USB (through `benchpod usb-bridge`, a CONNECT proxy on the computer) | Never applies: the pod dials out | Cloud |
 
 What `lan_policy` does not touch: the outbound cloud link, ping, the Ethernet DHCP client and Wi-Fi.
@@ -348,7 +348,7 @@ What changed, and why (the review's numbers in brackets):
   `net_route.c`) now drops packets for the USB subnet that did not arrive on the USB interface.
 - **OTA from Ethernet or Wi-Fi needs a good signature** [H3], whatever `sig_policy` says; the USB
   console, the USB link and the cloud keep the policy. `lan_unsigned` (console `lan-ota any`)
-  restores the old rule. The LAN policy stays `open` by default and the signature policy
+  restores the old rule. (Firmware 4.0.0: `required` everywhere, no `lan_unsigned`, `dfu` allowed.) The LAN policy stays `open` by default and the signature policy
   `audit`: making `locked` or `required` the default would stop customers' LAN and developer
   workflows, which is a product decision.
 - **ESP32-C3 images must be signed** from every transport [M6]. **Rollback floor** for signed

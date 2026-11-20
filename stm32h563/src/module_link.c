@@ -104,7 +104,7 @@ void module_link_init(void)
         if (module_dac_pinout_mismatch()) {
             char m[20];
             log_printf("[module] DAC off: digital %s and module %s use different flat-cable pinouts "
-                       "(BP0035)\r\n", module_dac_pinout_digital(), module_dac_pinout_module(m, sizeof(m)));
+                       "(BP0080)\r\n", module_dac_pinout_digital(), module_dac_pinout_module(m, sizeof(m)));
         }
     }
 }

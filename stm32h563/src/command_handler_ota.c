@@ -10,6 +10,7 @@
 #include "net_server.h"   /* net_conn_on_usb: the USB link may set the CA and proxy */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "at_driver.h"
 #include "ota.h"
 #include "blob_store.h"
@@ -17,7 +18,6 @@
 #include "cloud_client.h"   /* frames_seen: wire-level vs staged, for stall triage */
 #include "b64url.h"
 #include "bp_json.h"
-#include "bp_err.h"
 #include "bp_limits.h"
 #include "boot_guard.h"     /* safe mode: no PSRAM to stage into */
 
@@ -53,7 +53,7 @@ const char *ota_begin_gate(ota_owner_t who) {
     if (why) return why;
     /* Staging takes the PSRAM bus, which a running capture or waveform upload owns. "busy" is not
        a permanent error: the server retries. */
-    if (capture_or_upload_busy()) return "busy: a capture or upload is running";
+    if (capture_or_upload_busy()) return bp_tag_pod_busy("busy: a capture or upload is running");
     return NULL;
 }
 
@@ -71,7 +71,7 @@ static void ota_reply(int conn_id) {
             ota_owner_tag(ota_owner(), owner, sizeof(owner)));
     bp_emit_jstr(&e, ota_error());
     bp_emit_raw(&e, "}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0)
         at_close_connection(conn_id);
 }
@@ -89,7 +89,7 @@ void handle_ota_begin(int conn_id, const char *json) {
     json_get_value(json, "version", ver_s, sizeof(ver_s));
     json_get_value(json, "sig", sig_s, sizeof(sig_s));
     int target = ota_target_from_name(target_s);
-    if (target < 0) { send_error(conn_id, "unknown target"); return; }
+    if (target < 0) { bp_err_ota_unknown_target(conn_id, target_s); return; }
     /* The company CA is cloud-link trust config: never from the LAN (pod_policy_cloud_link_gate). */
     if (target == OTA_TARGET_CA) {
         const char *why = pod_policy_cloud_link_gate("cloud_ca", command_handler_policy_src(conn_id),
@@ -166,7 +166,7 @@ void handle_ota_abort(int conn_id, const char *json) {
    against a scratch sector (never the app).  Run + confirm PASS before ota_commit. */
 void handle_ota_selftest(int conn_id, const char *json) {
     (void)json;
-    if (heavy_or_claimed()) { send_error(conn_id, bp_err_str(BP_ERR_BUSY)); return; }
+    if (heavy_or_claimed()) { bp_err_pod_busy(conn_id); return; }
     int rc = ota_commit_selftest();
     if (rc == 0) send_ok_str(conn_id, "{\"selftest\":\"pass\"}");
     else         send_error(conn_id, "ota selftest failed (see console log)");
@@ -218,7 +218,7 @@ void handle_blob_status(int conn_id, const char *json) {
         first = false;
     }
     bp_emit_raw(&e, "]}}\n");
-    if (!bp_emit_ok(&e)) { send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE)); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0)
         at_close_connection(conn_id);
 }

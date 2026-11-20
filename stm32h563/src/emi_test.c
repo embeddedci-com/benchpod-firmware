@@ -51,7 +51,7 @@
    then a deep LA-only capture at the LA's top rate. Both read back over the PSRAM bus. */
 static const char *const k_captures[] = {
     "{\"cmd\":\"capture_dual\",\"adc_samples\":200000,\"la_samples\":200000,"
-    "\"adc_rate_mhz\":0.4,\"la_rate_mhz\":2.0}",
+    "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":2000000}",
     "{\"cmd\":\"la_capture\",\"samples\":1000000}",
 };
 
@@ -197,16 +197,16 @@ static void start_dac(emi_dac_mode_t mode) {
     switch (mode) {
     case EMI_DAC_ALL:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
+        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
                         "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
         hold_dc_on_b();
         break;
     case EMI_DAC_SINE:
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
+        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
                         "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
         break;
     case EMI_DAC_DC:
-        run("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":3.0}");
+        run("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"v\":3.0}");
         break;
     case EMI_DAC_CURRENT:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
@@ -919,8 +919,8 @@ void emi_test_start(void) {
     choose_default_dac();
     printf("[emi] starting the EMI test activity\n");
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
-    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":1}");
-    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":1}");
+    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":true}");
+    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":true}");
     if (board_has_analog()) apply_dac(s.dac);
     apply_uart(s.uart_la);
     log_event(EMI_EV_STARTED, 0, 0);
@@ -936,8 +936,8 @@ void emi_test_stop(void) {
         run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
     }
     run("gps_stop", "{\"cmd\":\"gps_stop\"}");
-    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":0}");
-    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":0}");
+    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":false}");
+    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":false}");
     /* A capture still in flight finishes on its own and frees the heavy gate. */
     printf("[emi] stopped: DAC off, target power off\n");
     log_event(EMI_EV_STOPPED, 0, 0);

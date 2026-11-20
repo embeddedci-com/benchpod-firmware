@@ -21,14 +21,9 @@
 #include <string.h>
 
 static void send_busy(int conn_id, const char *holder, const char *purpose, uint32_t left_s) {
-    char text[160];
-    if (purpose && purpose[0])
-        snprintf(text, sizeof(text), "busy: %s holds this pod (%s, %lu s left)", holder, purpose,
-                 (unsigned long)left_s);
-    else
-        snprintf(text, sizeof(text), "busy: %s holds this pod (%lu s left)", holder,
-                 (unsigned long)left_s);
-    bp_err_lease_busy(conn_id, BP_ERR_TEXT(text), holder, purpose ? purpose : "", (int32_t)left_s);
+    /* The catalog message has a place for the purpose: say there was none rather than "()". */
+    bp_err_lease_busy(conn_id, holder, purpose && purpose[0] ? purpose : "no purpose given",
+                      (int32_t)left_s);
 }
 
 static void send_busy_view(int conn_id, const lease_local_view_t *v) {
@@ -44,7 +39,7 @@ static void send_lease(int conn_id, const lease_local_view_t *v) {
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"lease\":{\"id\":\"%s\",\"holder\":\"%s\","
                 "\"purpose\":\"%s\",\"left_s\":%lu,\"source\":\"local\"}}}\n",
             v->id, v->holder, v->purpose, (unsigned long)v->left_s);
-    if (!bp_emit_ok(&e)) { send_error(conn_id, "lease reply too large"); return; }
+    if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     LOG_D("[cmd] -> ok  lease %s (%s, %lu s)\n", v->holder, v->purpose, (unsigned long)v->left_s);
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) at_close_connection(conn_id);
 }
@@ -59,22 +54,18 @@ static uint32_t get_ttl(const char *json) {
 /* The id, or a refusal sent. A buffer longer than the limit so a long id is refused, not cut. */
 static bool get_id(int conn_id, const char *json, char *id, size_t cap) {
     if (!bp_json_get(json, "id", id, cap) || !id[0]) {
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("lease: id missing"), "id");
+        bp_err_missing_argument(conn_id, "id");
         return false;
     }
     return true;
 }
 
 static void send_lost(int conn_id, const char *by) {
-    char text[80];
-    snprintf(text, sizeof(text), "lease lost: stopped by %s", by);
-    bp_err_lease_lost(conn_id, BP_ERR_TEXT(text), by);
+    bp_err_lease_lost(conn_id, by);
 }
 
 static void bad_id(int conn_id) {
-    bp_err_missing_argument(conn_id,
-        BP_ERR_TEXT("lease: id must be 1-64 printable characters, no spaces, quotes or backslashes"),
-        "id");
+    bp_err_missing_argument(conn_id, "id");
 }
 
 void handle_lease_acquire(int conn_id, const char *json) {
@@ -110,7 +101,7 @@ void handle_lease_renew(int conn_id, const char *json) {
         case LEASE_LOCAL_BUSY:     send_busy_view(conn_id, &v); break;
         case LEASE_LOCAL_LOST:     send_lost(conn_id, lease_local_broken_by()); break;
         case LEASE_LOCAL_NOT_HELD:
-            bp_err_lease_not_held(conn_id, BP_ERR_TEXT("lease: no lease with this id is held (it ran out, was released, or the pod restarted)"), id);
+            bp_err_lease_not_held(conn_id, id);
             break;
         default:                   bad_id(conn_id); break;
     }

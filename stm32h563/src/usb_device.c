@@ -408,7 +408,14 @@ static volatile bool     s_reattach;
 static volatile uint32_t s_reattach_at;   /* HAL tick when a delayed reattach is due, 0: none */
 static volatile bool     s_net_setting_next = true;   /* applied at that reattach */
 
-void usb_reattach_request(void) { s_reattach = true; }
+/* Delayed like a setting change, so the reply that asked for it (the JSON usb_reattach, maybe over
+   the USB link itself) reaches the computer first; a setting change already pending keeps its value. */
+void usb_reattach_request(void)
+{
+    if (!s_reattach_at) s_net_setting_next = s_net_setting;
+    uint32_t at = HAL_GetTick() + 400u;
+    s_reattach_at = at ? at : 1u;
+}
 
 /* The USB network setting changed (pod_policy): enumerate again with or without the NCM
    function. Delayed, so the reply that confirmed it (on the console or over the USB link

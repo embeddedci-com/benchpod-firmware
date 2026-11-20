@@ -1,7 +1,7 @@
 /*
  * command_handler_spi.c — the SPI master on the LA pins (gateware >= v44), as JSON commands.
  *
- *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
+ *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
  *   {"cmd":"spi_xfer","tx":"<b64url>","cs":"release"|"hold"}   -> {"rx":"<b64url>"}
  *   {"cmd":"spi_flash","op":"id"}                              -> {"id":"ef4017",...}
  *   {"cmd":"spi_flash","op":"read","addr":N,"len":N}           -> {"data":"<b64url>"}
@@ -89,7 +89,7 @@ static const spi_flash_io_t k_io = { NULL, io_cs, io_xfer, io_sleep, io_now, SPI
 /* ---- replies ---- */
 
 static void send_built(int conn_id, bp_emit_t *e) {
-    if (!bp_emit_ok(e)) { send_error(conn_id, "reply too large"); return; }
+    if (!bp_emit_ok(e)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)e->buf, bp_emit_len(e)) != 0)
         at_close_connection(conn_id);
 }
@@ -119,7 +119,7 @@ static bool session_or_error(int conn_id) {
 
 void handle_spi_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    if (!require_gw(conn_id, gw_caps()->spi_master, "SPI master needs gateware v45+")) return;
+    if (!require_gw(conn_id, gw_caps()->spi_master, "the SPI master", SPI_MASTER_MIN_GW)) return;
     static const char *const keys[4] = { "sck", "mosi", "miso", "cs" };
     uint32_t v[4];
     for (unsigned i = 0; i < 4; i++) {
@@ -133,15 +133,15 @@ void handle_spi_start(int conn_id, const char *json) {
             if (v[j] == v[i]) { send_error(conn_id, "each SPI signal needs its own LA pin"); return; }
     }
     uint32_t hz = SPI_DEFAULT_HZ, mode = 0;
-    if (has_key(json, "hz") && !get_u32(json, "hz", &hz)) {
-        send_error(conn_id, "invalid hz"); return;
+    if (has_key(json, "clock_hz") && !get_u32(json, "clock_hz", &hz)) {
+        send_error(conn_id, "invalid clock_hz"); return;
     }
     if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || mode > 3)) {
         send_error(conn_id, "mode must be 0, 1, 2 or 3"); return;
     }
     if ((mode == 1 || mode == 2) &&
-        !require_gw(conn_id, gw_caps()->spi_modes12, "SPI modes 1 and 2 need gateware v55+: update the pod's firmware")) return;
-    if (fpga_spi_armed()) { bp_err_spi_session_open(conn_id, BP_ERR_TEXT("spi busy: send spi_stop first")); return; }
+        !require_gw(conn_id, gw_caps()->spi_modes12, "SPI modes 1 and 2", SPI_MODES12_MIN_GW)) return;
+    if (fpga_spi_armed()) { bp_err_spi_session_open(conn_id); return; }
 
     uint8_t pins[4];
     for (unsigned i = 0; i < 4; i++) pins[i] = (uint8_t)v[i];
@@ -150,7 +150,7 @@ void handle_spi_start(int conn_id, const char *json) {
 
     unsigned half = fpga_spi_half_for_hz(hz);
     int rc = fpga_spi_arm(v[0], v[1], v[2], v[3], half, mode);
-    if (rc == -2) { bp_err_bus_engine_busy(conn_id, BP_ERR_TEXT("swd or spi busy: end the SWD session first"), "spi"); return; }
+    if (rc == -2) { bp_err_bus_engine_busy(conn_id, "spi"); return; }
     if (rc != 0)  { send_error(conn_id, "invalid spi arguments"); return; }
     for (unsigned i = 0; i < 4; i++) la_pins_claim(k_fns[i], LA_GPIO_NONE, 0, &pins[i], 1);
     memcpy(s_pins, pins, sizeof(s_pins));
@@ -159,7 +159,7 @@ void handle_spi_start(int conn_id, const char *json) {
     s_cs_held = false;
 
     char p[128];
-    snprintf(p, sizeof(p), "{\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,\"hz\":%lu,\"mode\":%u}",
+    snprintf(p, sizeof(p), "{\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,\"clock_hz\":%lu,\"mode\":%u}",
              pins[0], pins[1], pins[2], pins[3], (unsigned long)s_hz, (unsigned)mode);
     send_ok_str(conn_id, p);
 }
@@ -327,7 +327,7 @@ void handle_spi_status(int conn_id, const char *json) {
     char p[160];
     if (!fpga_spi_armed()) { send_ok_str(conn_id, "{\"active\":false}"); return; }
     snprintf(p, sizeof(p), "{\"active\":true,\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,"
-             "\"hz\":%lu,\"mode\":%u,\"cs_held\":%s}",
+             "\"clock_hz\":%lu,\"mode\":%u,\"cs_held\":%s}",
              s_pins[0], s_pins[1], s_pins[2], s_pins[3], (unsigned long)s_hz, s_mode,
              s_cs_held ? "true" : "false");
     send_ok_str(conn_id, p);
@@ -368,7 +368,7 @@ void handle_spi_stream(int conn_id, const char *json) {
     }
     if (len > staged) { send_error(conn_id, "len is more than the staged upload"); return; }
     if (len == 0 && head_len == 0) { send_error(conn_id, "nothing to send"); return; }
-    if (!command_handler_acquire_adc(conn_id)) { send_error(conn_id, "busy"); return; }
+    if (!command_handler_acquire_adc(conn_id)) { bp_err_pod_busy(conn_id); return; }
 
     stream_ctx_t ctx = { base };
     spi_stream_io_t io = { &ctx, io_cs, st_xfer, st_read, st_progress, SPI_XFER_MAX };

@@ -26,7 +26,6 @@
 #include "boot_guard.h"  /* safe mode: the iCE40/PSRAM-off command gate */
 #include "cmd_gate.h"    /* the checks before a command reaches its handler (host-tested) */
 #include "bp_features.h" /* BP_API, BP_MIN_CLIENT_API: the client API check */
-#include "bp_err.h"      /* shared error vocabulary (bp_err_str) */
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
@@ -35,7 +34,7 @@
 #include "la_pins.h"     /* LA pin ownership table */
 #include "power_profile.h"  /* INA238 rail profile sampler (poll + status) */
 #include "dac_limits.h"
-#include "dac_link.h"       /* BP0035: the flat cable's DAC pinout */
+#include "dac_link.h"       /* BP0080: the flat cable's DAC pinout */
 #include "module_link.h"
 #include "dac_quad.h"      /* the ADC low range keeps the +-12 V output within +-5 V */
 #include "i2c_bus.h"       /* adc_range_get */
@@ -82,7 +81,7 @@ void send_ok_str(int conn_id, const char *payload_json) {
         /* Payload didn't fit the fixed reply buffer — send a structured error
            rather than a truncated (malformed) ok.  Handlers whose payload can be
            large build+send their reply directly instead of via send_ok_str. */
-        send_error(conn_id, bp_err_str(BP_ERR_TOO_LARGE));
+        bp_err_reply_too_large(conn_id);
         return;
     }
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
@@ -100,11 +99,10 @@ _Static_assert(CH_ERR_RESP_MAX > LA_PINS_ERR_MAX, "error reply must outgrow its 
 
 /* A stable error code (bp_errors.h): the same reply buffer and the same never-a-torn-line rule as
    send_error, with "code" and "args" next to the message. */
-void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_err_arg_t *args,
-                   size_t n) {
+void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     char resp[CH_ERR_RESP_MAX];
-    size_t len = bp_error_format(resp, sizeof(resp), code, text, args, n);
-    LOG_D("[cmd] -> error BP%04u: %s\n", (unsigned)code, text ? text : "");
+    size_t len = bp_error_format(resp, sizeof(resp), code, args, n);
+    LOG_D("[cmd] -> error %s", resp);
     if (len == 0) return;   /* cannot happen with CH_ERR_RESP_MAX; the format keeps the code */
     if (at_send_data(conn_id, (const uint8_t *)resp, len) != 0) {
         at_close_connection(conn_id);
@@ -112,6 +110,11 @@ void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_er
 }
 
 void send_error(int conn_id, const char *message) {
+    /* A message a module built from a code (bp_note_*, bp_errors.h): send it with that code. */
+    bp_errcode_t code;
+    size_t n;
+    const bp_err_arg_t *args = bp_err_noted(message, &code, &n);
+    if (args) { bp_error_send(conn_id, code, args, n); return; }
     char resp[CH_ERR_RESP_MAX];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
@@ -137,8 +140,7 @@ void send_error(int conn_id, const char *message) {
    when a voltage is set; otherwise emits an error and returns false. */
 bool require_la_voltage(int conn_id) {
     if (!la_voltage_from_profile()) {
-        bp_err_la_voltage_not_set(conn_id,
-            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+        bp_err_la_voltage_not_set(conn_id);
         return false;
     }
     return true;
@@ -185,7 +187,7 @@ int heavy_owner_conn(void) { return heavy_owner; }
    return true.  On false it has already sent the error. */
 bool heavy_begin(int conn_id) {
     if (heavy_in_flight() || !heavy_try_claim(conn_id)) {
-        send_error(conn_id, bp_err_str(BP_ERR_BUSY));
+        bp_err_pod_busy(conn_id);
         return false;
     }
     return true;
@@ -220,17 +222,23 @@ bool heavy_or_claimed(void) {
 }
 
 const char *bus_busy_reason(void) {
+    /* The console shows these to a person, so they keep their words; JSON sends BP0048 with
+       what is using the bus. */
     if (esp_rom_flash_busy())
-        return "busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
+                                       "when it ends", "the Wi-Fi chip is being flashed");
     if (esp_dut_flash_busy())
-        return "busy: an ESP32 target is being flashed (esp_flash); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
+                                       "it ends", "a target is being flashed (esp_flash)");
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_ota_busy())
-        return "busy: the Wi-Fi bridge is being updated (about a minute); try again when it ends";
+        return bp_tag_storage_bus_busy("busy: the Wi-Fi bridge is being updated (about a minute); try again "
+                                       "when it ends", "the Wi-Fi bridge is being updated");
 #endif
-    return heavy_or_claimed() ? "busy: a capture, upload or update is using the PSRAM bus; "
-                                "try again when it ends"
-                              : NULL;
+    return heavy_or_claimed()
+        ? bp_tag_storage_bus_busy("busy: a capture, upload or update is using the PSRAM bus; try again "
+                                  "when it ends", "a capture, upload or update is running")
+        : NULL;
 }
 
 /* Emit one raw newline-delimited JSON line back over the (tunnel) conn. */
@@ -270,9 +278,6 @@ void command_handler_poll(void) {
     /* ---- wifi_clear: erase the ESP32-C3's NVS once the reply is out ---- */
     wifi_clear_poll();
 
-    /* ---- the console's wifi-scan: print the networks once the scan ends ---- */
-    wifi_scan_poll();
-
     /* ---- UART proxy: stream DUT→client and apply the +++ trailing guard ---- */
     uart_proxy_poll();
 
@@ -283,16 +288,15 @@ void command_handler_poll(void) {
 
 /* ---- Command handlers ---- */
 
-/* Parse an optional "sample_rate_mhz" field into a sample rate in Hz.
-   Returns 0.0f (= "auto-pick") when the field is absent.  Accepts decimals
-   like 0.5, 1, 12.  Clamps to the achievable range; the firmware will pick
+/* Parse an optional "sample_rate_hz" field (a sample rate in Hz; firmware up to 3.10.13 took
+   "sample_rate_mhz").  Returns 0.0f (= "auto-pick") when the field is absent.  Accepts decimals
+   like 80000 or 2304000.5.  Clamps to the achievable range; the firmware will pick
    the closest divider and log what it actually used. */
 float parse_sample_rate_hz(const char *json) {
     char sr_s[16] = {0};
-    if (!json_get_value(json, "sample_rate_mhz", sr_s, sizeof(sr_s))) return 0.0f;
-    float mhz = (float)atof(sr_s);
-    if (mhz <= 0.0f) return 0.0f;   /* invalid → auto */
-    return mhz * 1.0e6f;
+    if (!json_get_value(json, "sample_rate_hz", sr_s, sizeof(sr_s))) return 0.0f;
+    float hz = (float)atof(sr_s);
+    return hz > 0.0f ? hz : 0.0f;   /* invalid → auto */
 }
 
 void handle_ping(int conn_id, const char *json) {
@@ -354,12 +358,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     if (conn_id != CH_EMI_CONN) {
         int32_t sent = 0;
         if (!cmd_gate_client_api(d, buf, BP_MIN_CLIENT_API, &sent)) {
-            char why[CMD_GATE_CLIENT_MAX + 128];
-            (void)why;   /* BP_ERRORS_NO_TEXT drops the text */
-            bp_err_client_too_old(conn_id,
-                                  BP_ERR_TEXT(cmd_gate_client_api_text(buf, sent, BP_MIN_CLIENT_API,
-                                                                       why, sizeof(why))),
-                                  sent, (int32_t)BP_MIN_CLIENT_API, (int32_t)BP_API);
+            bp_err_client_too_old(conn_id, sent, (int32_t)BP_MIN_CLIENT_API, (int32_t)BP_API);
             return;
         }
     }
@@ -382,12 +381,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
             g.tunnel_max_tier = s_tunnel_max_tier[conn_id - CH_CLOUD_TUNNEL_CONN];
         char why[112];
         const char *refused = cmd_gate_check(d, cmd, buf, tier, &g, why, sizeof(why));
-        if (refused && strncmp(refused, CMD_GATE_CLOUD_LEASE_TEXT, strlen(CMD_GATE_CLOUD_LEASE_TEXT)) == 0) {
-            bp_err_lease_busy(conn_id, BP_ERR_TEXT(refused), CMD_GATE_CLOUD_LEASE_HOLDER,
-                              g.lease_holder && g.lease_holder[0] ? g.lease_holder : "cloud",
-                              (int32_t)g.lease_left_s);
-            return;
-        }
+        /* Each refusal is noted with its code (BP0025, BP0040, ...): send_error sends it. */
         if (refused) { send_error(conn_id, refused); return; }
     }
     /* The pod's own lease (lease_local.h): on every transport, only its owners drive the pod. */
@@ -396,12 +390,9 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     /* A digital board and an analog module that disagree on the flat cable's DAC pins
        (dac_link.h): nothing drives the DAC. signal_engine blocks the frames too. */
     if (dac_link_command_drives_dac(cmd, buf) && module_dac_pinout_mismatch()) {
-        char mod[20], text[160];
-        const char *dig = module_dac_pinout_digital();
+        char mod[20];
         module_dac_pinout_module(mod, sizeof(mod));
-        snprintf(text, sizeof(text), "%s refused: the DAC is off, the digital board (%s) and the analog "
-                 "module (%s) use different flat-cable pinouts", cmd, dig, mod);
-        bp_err_dac_pinout_mismatch(conn_id, BP_ERR_TEXT(text), dig, mod);
+        bp_err_dac_pinout_mismatch(conn_id, cmd, module_dac_pinout_digital(), mod);
         return;
     }
 
@@ -427,7 +418,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     /* The status LED flashes for a command that drives the pod, not for the polled reads. */
     status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light_of(d, buf));
     if (d && d->fn) d->fn(conn_id, buf);
-    else bp_err_unknown_command(conn_id, BP_ERR_TEXT("unknown cmd"), cmd);
+    else bp_err_unknown_command(conn_id, cmd);
 }
 
 void dispatch_line(int conn_id, const char *buf) {

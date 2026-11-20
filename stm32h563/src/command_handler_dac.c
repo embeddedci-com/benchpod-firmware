@@ -11,6 +11,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "gw_caps.h"
 #include "at_driver.h"
 #include "bp_json.h"
@@ -40,16 +41,10 @@
 /* The error for a feature the running gateware image lacks: which image has it, and on the
    emulation image (sensors running) that the sensors come first. */
 static const char *image_hint(const char *what, int image) {
-    static char msg[224];
+    static char msg[160];
     const char *name = image == 1 ? "deep" : "loop";
-    if (signal_engine_image_kind() == 2)
-        snprintf(msg, sizeof(msg), "%s is not in the emulation image, which the emulated sensors use: "
-                 "{\"cmd\":\"sensor_stop\",\"all\":true} then {\"cmd\":\"fpga_image\",\"image\":\"%s\"}",
-                 what, name);
-    else
-        snprintf(msg, sizeof(msg), "%s not in the running gateware image (switch with "
-                 "{\"cmd\":\"fpga_image\",\"image\":%d})", what, image);
-    return msg;
+    if (signal_engine_image_kind() == 2) return bp_note_fpga_image_sensors_first(msg, sizeof(msg), what, name);
+    return bp_note_fpga_image_required(msg, sizeof(msg), what, name);
 }
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
@@ -251,19 +246,30 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     return true;
 }
 
-/* The calibrated `generate` form: volts on a DAC path, or microamps on the 4-20 mA output,
-   played at the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
-     {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
-     {"cmd":"generate","waveform":"sine","freq":10,"amplitude_ua":4000,"offset_ua":12000}
-   Reply: {"bits":16} (plus "cotrig" with on_capture). The peaks must stay inside what the
-   output can do; there is no silent clipping. "route":false skips the routing. */
-static void handle_generate16(int conn_id, const char *json, const char *waveform, float freq,
-                              uint32_t duration, float sr_hz) {
+/* `generate`: a waveform in volts on a DAC path, or in microamps on the 4-20 mA output, played at
+   the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
+     {"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+     {"cmd":"generate","waveform":"sine","freq_hz":10,"amplitude_ua":4000,"offset_ua":12000}
+   Reply: null, or {"cotrig":true|false} with on_capture. The peaks must stay inside what the
+   output can do; there is no silent clipping. "route":false skips the routing. Firmware up to
+   3.10.13 also took 8-bit levels (amplitude 0-127, offset 0-255); 4.0.0 takes this form only. */
+void handle_generate(int conn_id, const char *json) {
+    char waveform[16] = {0}, freq_s[16] = {0}, dur_s[16] = {0};
     char path_s[16] = {0}, amp_s[24] = {0}, off_s[24] = {0};
+    json_get_value(json, "waveform",    waveform, sizeof(waveform));
+    json_get_value(json, "freq_hz",     freq_s,   sizeof(freq_s));
+    json_get_value(json, "duration_ms", dur_s,    sizeof(dur_s));
+    float    freq     = freq_s[0] ? (float)atof(freq_s)   : 1000.0f;
+    uint32_t duration = dur_s[0]  ? (uint32_t)atoi(dur_s) : 0;
+    float    sr_hz    = parse_sample_rate_hz(json);   /* 0 = auto */
+
     wave16_shape_t shape;
     if (wave16_shape_from_name(waveform, &shape) != 0) { send_error(conn_id, "unknown waveform"); return; }
     bool ua = json_get_value(json, "amplitude_ua", amp_s, sizeof(amp_s));
-    if (!ua) json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s));
+    if (!ua && !json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s))) {
+        send_error(conn_id, "amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required");
+        return;
+    }
     if (!json_get_value(json, ua ? "offset_ua" : "offset_v", off_s, sizeof(off_s))) {
         send_error(conn_id, ua ? "offset_ua is required with amplitude_ua"
                                : "offset_v is required with amplitude_v");
@@ -298,58 +304,12 @@ static void handle_generate16(int conn_id, const char *json, const char *wavefor
     bool route_off = json_get_value(json, "route", route_s, sizeof(route_s)) && strcmp(route_s, "false") == 0;
     if (!route_off && analog_path_set(route) != 0) { send_error(conn_id, "route failed"); return; }
 
+    /* Co-trigger (v27): defer this generator's DAC start to the next capture's t0. Arm it BEFORE
+       dac_generate16 sends START_DAC (the interleaved LOAD_WAVE doesn't disturb the pending arm). */
     bool want_cotrig = json_flag(json, "on_capture");
     bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;
     if (dac_generate16(shape, freq, amp, mid, duration, sr_hz) != 0) { send_error(conn_id, "generate failed"); return; }
-    send_ok_str(conn_id, want_cotrig ? (cotrig ? "{\"bits\":16,\"cotrig\":true}" : "{\"bits\":16,\"cotrig\":false}")
-                                     : "{\"bits\":16}");
-}
-
-void handle_generate(int conn_id, const char *json) {
-    char waveform[16] = {0};
-    char freq_s[16]   = {0};
-    char amp_s[8]     = {0};
-    char off_s[8]     = {0};
-    char dur_s[16]    = {0};
-
-    json_get_value(json, "waveform",    waveform, sizeof(waveform));
-    json_get_value(json, "freq",        freq_s,   sizeof(freq_s));
-    json_get_value(json, "amplitude",   amp_s,    sizeof(amp_s));
-    json_get_value(json, "offset",      off_s,    sizeof(off_s));
-    json_get_value(json, "duration_ms", dur_s,    sizeof(dur_s));
-
-    float    freq      = freq_s[0] ? (float)atof(freq_s)    : 1000.0f;
-    uint8_t  amplitude = amp_s[0]  ? (uint8_t)atoi(amp_s)   : 127;
-    uint8_t  offset    = off_s[0]  ? (uint8_t)atoi(off_s)   : 128;
-    uint32_t duration  = dur_s[0]  ? (uint32_t)atoi(dur_s)  : 0;
-    float    sr_hz     = parse_sample_rate_hz(json);   /* 0 = auto */
-
-    char probe[8];
-    if (json_get_value(json, "amplitude_v", probe, sizeof(probe)) ||
-        json_get_value(json, "amplitude_ua", probe, sizeof(probe))) {
-        handle_generate16(conn_id, json, waveform, freq, duration, sr_hz);
-        return;
-    }
-
-    /* Co-trigger (v27): defer this generator's DAC start to the next capture's t0. Arm it BEFORE
-       dac_generate_* sends START_DAC (the interleaved LOAD_WAVE doesn't disturb the pending arm). */
-    bool want_cotrig = json_flag(json, "on_capture");
-    bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;
-
-    int rc = -1;
-    if      (strcmp(waveform, "sine")     == 0) rc = dac_generate_sine(freq, amplitude, offset, duration, sr_hz);
-    else if (strcmp(waveform, "square")   == 0) rc = dac_generate_square(freq, amplitude, offset, duration, sr_hz);
-    else if (strcmp(waveform, "sawtooth") == 0) rc = dac_generate_sawtooth(freq, amplitude, offset, duration, sr_hz);
-    else { send_error(conn_id, "unknown waveform"); return; }
-
-    if (rc != 0) { send_error(conn_id, "generate failed"); return; }
-    if (want_cotrig) {
-        char payload[24];
-        snprintf(payload, sizeof(payload), "{\"cotrig\":%s}", cotrig ? "true" : "false");
-        send_ok_str(conn_id, payload);
-    } else {
-        send_ok_str(conn_id, "null");
-    }
+    send_ok_str(conn_id, want_cotrig ? (cotrig ? "{\"cotrig\":true}" : "{\"cotrig\":false}") : "null");
 }
 
 /* `load` — upload a host-supplied waveform into adc_cmd_buf, one base64url
@@ -379,13 +339,13 @@ void handle_load(int conn_id, const char *json) {
 
     /* Don't disturb the shared sample buffer while an async capture or a paced
        send is still using it. */
-    if (heavy_in_flight()) { send_error(conn_id, "busy"); return; }
+    if (heavy_in_flight()) { bp_err_pod_busy(conn_id); return; }
 
     /* offset 0 begins a fresh upload and claims the shared buffer; later
        chunks must come from the same connection that still holds it (custom
        same-owner continuation, so this handler doesn't use heavy_begin). */
     if (offset == 0) {
-        if (!heavy_try_claim(conn_id)) { send_error(conn_id, "busy"); return; }
+        if (!heavy_try_claim(conn_id)) { bp_err_pod_busy(conn_id); return; }
         replay_len = 0;
         replay_in_psram = false;   /* this trace is in RAM: a later replay must not play an older PSRAM one */
     } else if (heavy_owner_conn() != conn_id) {
@@ -544,8 +504,8 @@ void handle_load_bin(int conn_id, const char *json) {
    `load` (so you can replay a previously saved run).  Loops continuously until
    `dac_stop` (or the next `generate`/`measure`/`replay`).
 
-     {"cmd":"replay","sample_rate_mhz":0.08,"samples":4096}
-   `sample_rate_mhz` should match the rate the trace was captured at so the
+     {"cmd":"replay","sample_rate_hz":80000,"samples":4096}
+   `sample_rate_hz` should match the rate the trace was captured at so the
    playback time-base matches; omit for the max rate (~873 kS/s from RAM, ~857 kS/s
    from PSRAM; faster requests are clamped to it).  `samples` defaults to the full
    recorded length.  The reply's `sample_rate_hz` is the rate it really plays at. */
@@ -767,7 +727,7 @@ void handle_dac_control_loop(int conn_id, const char *json) {
 }
 
 static void handle_dac_control_loop_with(int conn_id, const char *json, loop_curve_bufs_t *cb) {
-    if (!require_gw(conn_id, gw_caps()->dac_control_loop, "control loop needs gateware v23+")) return;
+    if (!require_gw(conn_id, gw_caps()->dac_control_loop, "the control loop", DAC_CONTROL_LOOP_MIN_GW)) return;
     char s[16] = {0};
     dac_loop_params_t p = { .k_q15 = 8192, .vmin = 0, .vmax = 0xFFFF, .tick_div = 64,
                             .src = DAC_LOOP_SRC_ADC, .in_fixed = 0, .sweep_step = 0 };
@@ -785,7 +745,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
            loop instead — the caller would meter a value the ADC produced and believe it came
            from the point they asked for.  Refuse rather than substitute. */
         if (p.src != DAC_LOOP_SRC_ADC &&
-            !require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
+            !require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources", DAC_LOOP_SOURCE_MIN_GW)) return;
     }
     /* Clamp what has a safe reading (k, tick_div) and REFUSE what would silently do something
        else: an inverted output window (the gateware clamps against vmin first, so vmin>vmax
@@ -815,7 +775,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
     dac_loop_inmap_t map = {0};
     bool have_map = false;
     if (!parse_loop_input_map(conn_id, json, &map, &have_map)) return;
-    if (have_map && !require_gw(conn_id, gw_caps()->dac_loop_inmap, "loop input map needs gateware v30+")) return;
+    if (have_map && !require_gw(conn_id, gw_caps()->dac_loop_inmap, "the loop input map", DAC_LOOP_INMAP_MIN_GW)) return;
     /* A mapped SWEEP would be misleading rather than wrong: the sweep accumulator walks the
        whole 16-bit count space, but a mapped window is a few percent of it, so the output
        would track the curve for ~3% of each pass and sit saturated at one end or the other
@@ -824,9 +784,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
        So refuse the combination and name the alternative, rather than emit a sawtooth that
        looks like a broken curve. */
     if (have_map && p.src == DAC_LOOP_SRC_SWEEP) {
-        send_error(conn_id, "sweep cannot be combined with an input map on this gateware: the "
-                            "sweep spans the raw count range, not the mapped window. Step the "
-                            "input with {\"cmd\":\"dac_loop_input\"} instead");
+        bp_err_loop_sweep_with_map(conn_id);
         return;
     }
 
@@ -858,7 +816,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
                       : dac_loop_set_inmap(0, 0, 0, false, false);
     if (rc == 0) rc = dac_control_loop_start(lut, lut_len, p.k_q15, p.vmin, p.vmax, p.tick_div);
     heavy_release(conn_id);
-    if (rc == -2) { send_error(conn_id, "control loop needs gateware v23+"); return; }
+    if (rc == -2) { bp_err_gateware_too_old(conn_id, "the control loop", DAC_CONTROL_LOOP_MIN_GW); return; }
     if (rc == -3) {
         /* Right image family, wrong image: the deep-replay bitstream has no loop engine, and
            both images report the same version — so this is the ONLY thing that catches it. */
@@ -894,7 +852,7 @@ static void handle_dac_control_loop_with(int conn_id, const char *json, loop_cur
 void handle_dac_loop_input(int conn_id, const char *json) {
     /* Cheap pre-check on the cached version; the authoritative image gate lives in
        dac_loop_set_source (a live SPI read, so it runs under the heavy lock). */
-    if (!require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources need gateware v29+")) return;
+    if (!require_gw(conn_id, gw_caps()->dac_loop_source, "loop input sources", DAC_LOOP_SOURCE_MIN_GW)) return;
     char s[16] = {0};
     /* Defaults come from what was last SET, so {"input":N} alone is a pure input step. */
     uint8_t  src  = s_loop_src;
@@ -918,7 +876,7 @@ void handle_dac_loop_input(int conn_id, const char *json) {
     int rc = dac_loop_set_source(src, in, step);
     uint16_t v = (rc == 0) ? fpga_dac_loop_probe() : 0;
     heavy_release(conn_id);
-    if (rc == -2) { send_error(conn_id, "loop input sources need gateware v29+"); return; }
+    if (rc == -2) { bp_err_gateware_too_old(conn_id, "loop input sources", DAC_LOOP_SOURCE_MIN_GW); return; }
     if (rc == -3) {
         send_error(conn_id, image_hint("control loop", 0));
         return;
@@ -928,7 +886,7 @@ void handle_dac_loop_input(int conn_id, const char *json) {
     /* `v` is the output at the instant of the write — the loop damps toward the new target
        over the next ticks, so poll dac_loop_probe for the settled value. */
     char payload[96];
-    snprintf(payload, sizeof(payload), "{\"source\":\"%s\",\"input\":%u,\"step\":%u,\"v\":%u}",
+    snprintf(payload, sizeof(payload), "{\"source\":\"%s\",\"input\":%u,\"step\":%u,\"code16\":%u}",
              dac_loop_src_str(src), in, step, v);
     send_ok_str(conn_id, payload);
 }
@@ -965,7 +923,7 @@ void handle_dac_loop_probe(int conn_id, const char *json) {
     bool     tripped = fpga_dac_loop_tripped();
     heavy_release(conn_id);
     char payload[112];
-    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"v\":%u,\"tripped\":%s}",
+    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"code16\":%u,\"tripped\":%s}",
              i_adc, in, dac_loop_src_str(has_src ? s_loop_src : (uint8_t)DAC_LOOP_SRC_ADC), v,
              tripped ? "true" : "false");
     send_ok_str(conn_id, payload);

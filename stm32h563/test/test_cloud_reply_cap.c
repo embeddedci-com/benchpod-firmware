@@ -57,7 +57,7 @@ static void test_too_large(void) {
     CHECK(n > 0);
     CHECK(strstr(out, "\"status\":\"error\"") != NULL);
     char want[96];
-    snprintf(want, sizeof(want), "reply too large for the cloud channel (%u bytes, limit %u)",
+    snprintf(want, sizeof(want), "\"code\":\"BP0054\",\"args\":{\"bytes\":%u,\"limit\":%u}",
              (unsigned)(CLOUD_REPLY_CAP_MAX + 200), (unsigned)(CLOUD_REPLY_CAP_MAX - 1));
     CHECK(strstr(out, want) != NULL);
     CHECK(out[n - 1] == '}');
@@ -67,7 +67,7 @@ static void test_one_byte_over(void) {
     cloud_reply_cap_begin();
     put_reply_of(CLOUD_REPLY_CAP_MAX);
     cloud_reply_cap_end(out, sizeof(out));
-    CHECK(strstr(out, "too large") != NULL);
+    CHECK(strstr(out, "\"code\":\"BP0054\"") != NULL);
 }
 
 static void test_no_reply_and_idle(void) {
@@ -87,7 +87,7 @@ static void test_small_out_buffer(void) {
     cloud_reply_cap_begin();
     put_reply_of(100);
     size_t n = cloud_reply_cap_end(small, sizeof(small));
-    CHECK(n == 0 || strstr(small, "too large") != NULL);
+    CHECK(n == 0 || strstr(small, "BP0054") != NULL);
 }
 
 int main(void) {

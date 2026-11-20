@@ -9,6 +9,7 @@
  * The capture engine, PSRAM, the heavy gate, the send ring and the clocks are fakes; replies are
  * parsed back into samples and compared with what the fake engine captured.
  */
+#include "bp_errors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,8 +36,19 @@ static void advance_ms(uint32_t ms) { g_now_us += (uint64_t)ms * 1000u; g_tick +
 
 static int g_owner = -1;
 static char g_err[256];
-void send_error(int c, const char *m) { (void)c; snprintf(g_err, sizeof(g_err), "%s", m); }
-bool heavy_begin(int c) { if (g_owner != -1 && g_owner != c) { send_error(c, "busy"); return false; } g_owner = c; return true; }
+static int g_code;   /* the code of the last refusal (bp_err_noted / bp_error_send), 0 = none */
+void send_error(int c, const char *m) {
+    (void)c;
+    bp_errcode_t code = BP_E_NONE;
+    g_code = bp_err_noted(m, &code, NULL) ? (int)code : 0;
+    snprintf(g_err, sizeof(g_err), "%s", m);
+}
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
+    (void)c;
+    g_code = (int)code;
+    bp_err_render(g_err, sizeof(g_err), code, args, n);
+}
+bool heavy_begin(int c) { if (g_owner != -1 && g_owner != c) { bp_err_pod_busy(c); return false; } g_owner = c; return true; }
 void heavy_release(int c) { if (g_owner == c) g_owner = -1; }
 static float g_rate_hz;   /* the request's sample rate (0 = the device default) */
 float parse_sample_rate_hz(const char *json) { (void)json; return g_rate_hz; }
@@ -205,7 +217,7 @@ static char first[256];
 static void test_test_pattern_decimal_paced(void) {
     clear_tx();
     g_avail = 400;   /* forces many small chunks */
-    handle_test(0, "{\"cmd\":\"test\",\"pattern\":\"counter\",\"samples\":300}");
+    handle_test(0, "{\"cmd\":\"test\",\"pattern\":\"counter\",\"samples\":300,\"enc\":\"dec\"}");
     CHECK(capture_busy() && g_owner == 0, "test did not start a bulk send");
     pump_all();
     int frames = parse(d, &nd, l, &nl, &more, first, sizeof(first));
@@ -237,14 +249,14 @@ static void test_capture_dual(void) {
     for (size_t i = 0; i < 2000; i++) g_la[i] = (uint16_t)((i / 300) & 0xFFF);   /* edges every 300 */
     clear_tx();
     g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"enc\":\"dec\"}");
     CHECK(capture_busy() && g_owner == 1, "capture_dual did not arm");
     capture_poll();
     CHECK(g_ntx == 0, "replied before the capture completed");
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strncmp(first, "{\"status\":\"ok\",\"bits\":16,\"adc_rate_hz\":400000,\"la_rate_hz\":24000000,\"data\":[", 75) == 0,
+    CHECK(strncmp(first, "{\"status\":\"ok\",\"bits\":16,\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":24000000,\"data\":[", 89) == 0,
           "first frame: %.90s", first);
     CHECK(nd == 1000 && nl == 2000 && !more, "adc %zu la %zu more %d", nd, nl, more);
     bool ok = true;
@@ -258,12 +270,12 @@ static void test_capture_dual(void) {
 
     /* resume from the middle of the LA region */
     clear_tx();
-    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":1500}");
+    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":1500,\"enc\":\"dec\"}");
     pump_all();
     CHECK(strncmp(g_tx, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[[500,", 44) == 0, "resume frame: %.60s", g_tx);
     CHECK(strstr(g_tx, "\"la_upto\":2000,\"more\":false}") != NULL, "resume did not reach the end");
     clear_tx();
-    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3000}");
+    handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3000,\"enc\":\"dec\"}");
     CHECK(strcmp(g_tx, "{\"status\":\"ok\",\"data\":[],\"more\":false}\n") == 0 && g_owner == -1, "resume at the end: %s", g_tx);
     handle_capture_read(1, "{\"cmd\":\"capture_read\",\"offset\":3001}");
     CHECK(strcmp(g_err, "offset out of range") == 0, "%s", g_err);
@@ -277,12 +289,12 @@ static void test_la_capture_reports_achieved_rate(void) {
     for (size_t i = 0; i < 2000; i++) g_la[i] = (uint16_t)((i / 100) & 1);
     clear_tx();
     g_wait_rc = 0;
-    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"sample_rate_mhz\":2.304}");
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"sample_rate_hz\":2304000}");
     CHECK(capture_busy() && g_owner == 6, "la_capture did not arm: %s", g_err);
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":2181818,") != NULL, "first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":2181818,") != NULL, "first frame: %.90s", first);
     CHECK(nl == 2000 && !more && l[100] == 1 && l[199] == 1 && l[200] == 0, "la %zu more %d", nl, more);
     CHECK(!g_bus && g_owner == -1, "bus or gate held after the read-back");
 
@@ -290,7 +302,7 @@ static void test_la_capture_reports_achieved_rate(void) {
     clear_tx();
     handle_capture_read(6, "{\"cmd\":\"capture_read\",\"offset\":0}");
     pump_all();
-    CHECK(strstr(g_tx, "\"la_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
+    CHECK(strstr(g_tx, "\"la_sample_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
     g_wait_rc = 0;
 }
 
@@ -341,7 +353,7 @@ static void test_trigger_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(600);
     capture_poll();
-    CHECK(strncmp(g_err, "trigger timeout:", 16) == 0, "error: %s", g_err);
+    CHECK(g_code == BP_E_TRIGGER_TIMEOUT, "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out capture not aborted");
 }
 
@@ -382,7 +394,7 @@ static void test_la_change_capture(void) {
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "48 MS/s first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "48 MS/s first frame: %.90s", first);
     CHECK(nl == 2000 && !more, "48 MS/s: %zu samples, more %d", nl, more);
     CHECK(l[0] == 0 && l[99] == 0 && l[100] == 1 && l[249] == 1 && l[250] == 3 && l[399] == 3 &&
           l[400] == 5 && l[401] == 3 && l[1499] == 3 && l[1500] == 0 && l[1999] == 0,
@@ -413,7 +425,7 @@ static void test_la_change_capture(void) {
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":24000000,") != NULL, "24 MS/s first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":24000000,") != NULL, "24 MS/s first frame: %.90s", first);
     CHECK(nl == 1000 && l[49] == 0 && l[50] == 1 && l[125] == 3 && l[200] == 5 && l[201] == 3 &&
           l[749] == 3 && l[750] == 0,
           "24 MS/s: %zu samples, levels %u %u %u %u %u %u", nl, l[49], l[50], l[125], l[200], l[201], l[750]);
@@ -456,7 +468,7 @@ static void test_la_change_capture(void) {
     /* pre_samples needs gateware v50 */
     g_gw = 49; clear_tx();
     handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"trigger\":{\"la\":5,\"pre_samples\":100}}");
-    CHECK(strstr(g_err, "pre_samples needs gateware") != NULL, "gw 49 pre: %s", g_err);
+    CHECK(g_code == BP_E_GATEWARE_TOO_OLD && strstr(g_err, "pre_samples") != NULL, "gw 49 pre: %s", g_err);
     g_gw = 50;
     memcpy(g_ev, save, keep); g_nev = keep;
 
@@ -474,13 +486,13 @@ static void test_la_change_capture(void) {
    12 MS/s and overflowed); a short one keeps the full 12 MS/s. An overflow says what to change. */
 static void test_capture_dual_la_rate_and_overflow(void) {
     clear_tx(); g_wait_rc = 0; g_ovf = false;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000000,\"adc_rate_mhz\":0.4,\"la_samples\":1000000}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000000,\"adc_sample_rate_hz\":400000,\"la_samples\":1000000}");
     CHECK(capture_busy(), "deep capture_dual refused: %s", g_err);
     CHECK(g_dual_lhz > 0.0f && g_dual_lhz <= 4.0e6f, "deep LA asked the fabric for %.0f Hz", (double)g_dual_lhz);
     g_wait_rc = -1; g_ovf = true;
     pump_all();
-    CHECK(strncmp(g_err, "capture overflowed: the PSRAM could not keep up", 47) == 0, "overflow reply: %s", g_err);
-    CHECK(strstr(g_err, "Lower la_rate_mhz") != NULL, "overflow reply has no advice: %s", g_err);
+    CHECK(g_code == BP_E_CAPTURE_OVERFLOWED && strstr(g_err, " la_ksps=") && strstr(g_err, " adc_ksps="),
+          "overflow reply: %s", g_err);
     g_ovf = false;
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
@@ -497,19 +509,20 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     /* An explicit rate that cannot run is refused, not slowed down: above the 8 MS/s ceiling with
        the ADC, and a depth the burst buffer cannot take at the rate asked. */
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
-    CHECK(!capture_busy() && strstr(g_err, "runs at most 8.0 MS/s on this gateware, 8.0 MS/s for 2000 samples") != NULL, "12 MS/s + ADC: %s", g_err);
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":12000000}");
+    CHECK(!capture_busy() && g_code == BP_E_LA_RATE_ABOVE_CEILING &&
+          strstr(g_err, "rate_mhz=12.0 max_mhz=8.0 fit_mhz=8.0 samples=2000") != NULL, "12 MS/s + ADC: %s", g_err);
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":8}");
-    CHECK(!capture_busy() && strstr(g_err, "does not fit 1000000 samples") != NULL &&
-          strstr(g_err, "at most 3.0 MS/s for 1000000 samples") != NULL, "deep 8 MS/s: %s", g_err);
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_sample_rate_hz\":8000000}");
+    CHECK(!capture_busy() && g_code == BP_E_LA_RATE_TOO_DEEP &&
+          strstr(g_err, "rate_mhz=8.0 samples=1000000") != NULL && strstr(g_err, "fit_mhz=3.0") != NULL, "deep 8 MS/s: %s", g_err);
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":3}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_sample_rate_hz\":3000000}");
     CHECK(capture_busy() && g_dual_lhz == 3.0e6f, "deep 3 MS/s refused: %s", g_err);
     g_wait_rc = -1; pump_all();
     /* Gateware v53 fixed the writer: 12 MS/s with the ADC runs (for a depth the burst buffer takes). */
     { uint8_t gw = g_gw; g_gw = 53; clear_tx(); g_wait_rc = 0;
-      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
+      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":12000000}");
       CHECK(capture_busy() && g_dual_lhz == 12.0e6f, "gw 53, 12 MS/s + ADC refused: %s", g_err);
       g_wait_rc = -1; pump_all();
       clear_tx(); g_wait_rc = 0;
@@ -519,7 +532,8 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     /* More than the fabric's per-stream region is refused up front, saying the limits. */
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":3000000}");
-    CHECK(!capture_busy() && strncmp(g_err, "capture_dual takes at most", 26) == 0, "oversize: %s", g_err);
+    CHECK(!capture_busy() && g_code == BP_E_CAPTURE_DUAL_TOO_DEEP &&
+          strstr(g_err, "la_max=2097152 adc_max=2097152") != NULL, "oversize: %s", g_err);
 }
 
 static void test_capture_dual_changes(void) {
@@ -527,12 +541,12 @@ static void test_capture_dual_changes(void) {
     g_nev = 0;
     ev(0, 0); ev(100, 1); ev(150, 3); ev(150, 5); ev(1, 3); ev(871, 3); ev(228, 0); ev(547, 0); ev(0, 0);
     g_gw = 50; clear_tx(); g_wait_rc = 0; g_chg_k = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":48}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":48000000}");
     CHECK(capture_busy() && g_chg_k == 1 && g_chg_samples == 2000, "dual change: k %u, %zu, %s", g_chg_k, g_chg_samples, g_err);
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "dual change first frame: %.100s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "dual change first frame: %.100s", first);
     bool ok = nd == 1000;
     for (size_t i = 0; i < 1000 && ok; i++) if (d[i] != g_adc[i]) ok = false;
     CHECK(ok && nl == 2000 && !more && l[99] == 0 && l[100] == 1 && l[400] == 5 && l[401] == 3 && l[1500] == 0,
@@ -567,7 +581,7 @@ static void test_sensor_la_waits_for_start(void) {
         if (packed(d, i) != want) { ok = false; printf("  sample %zu: %u, want %u\n", i, packed(d, i), want); }
     }
     CHECK(ok && !more, "levels: %zu bytes, more %d", nd, more);
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "first frame: %.90s", first);
     CHECK(strstr(g_tx, "\"trigger\":{\"la\":1,\"edge\":\"falling\",\"fired\":true}") != NULL, "no trigger footer: %.200s", g_tx);
     CHECK(!g_bus && g_owner == -1 && !capture_busy(), "bus or gate held after sensor_la");
 
@@ -602,7 +616,8 @@ static void test_sensor_la_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(200);
     capture_poll();
-    CHECK(strcmp(g_err, "trigger timeout: no falling edge on LA1 (SDA of env) within 500 ms; the DUT did not use the I2C bus") == 0, "error: %s", g_err);
+    CHECK(g_code == BP_E_SENSOR_TRIGGER_TIMEOUT && strstr(g_err, "la=1") && strstr(g_err, "env") &&
+          strstr(g_err, "timeout_ms=500"), "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out sensor_la not aborted");
     /* the default timeout is 2 s */
     clear_tx();
@@ -610,7 +625,7 @@ static void test_sensor_la_timeout(void) {
     advance_ms(1900); capture_poll();
     CHECK(capture_busy(), "default timeout shorter than 2 s");
     advance_ms(200); capture_poll();
-    CHECK(strstr(g_err, "within 2000 ms") != NULL && !capture_busy(), "default timeout: %s", g_err);
+    CHECK(strstr(g_err, "timeout_ms=2000") != NULL && !capture_busy(), "default timeout: %s", g_err);
 }
 
 static void test_sensor_la_immediate_and_errors(void) {
@@ -639,7 +654,7 @@ static void test_sensor_la_immediate_and_errors(void) {
     CHECK(strcmp(g_err, "timeout_ms must be 1..600000") == 0, "bad timeout text: %s", g_err);
     clear_tx(); g_gw = 49;
     handle_sensor_la(7, "{\"cmd\":\"sensor_la\",\"instance\":\"env\"}");
-    CHECK(strstr(g_err, "needs gateware v50") && strstr(g_err, "\"none\"") && !capture_busy(), "gw 49: %s", g_err);
+    CHECK(g_code == BP_E_GATEWARE_TOO_OLD && strstr(g_err, "50") && !capture_busy(), "gw 49: %s", g_err);
     g_gw = 47; g_wait_rc = 0; g_rate_hz = 0;
 }
 

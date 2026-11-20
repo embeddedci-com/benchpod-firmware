@@ -17,6 +17,7 @@
 #include "cloud_client.h"
 #include "sys_health.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "la_pull.h"                    /* la_pull_mask_now */
 #include "pico/time.h"
 
@@ -35,8 +36,7 @@ int sensor_port_image(void) { return signal_engine_image_kind(); }
 
 int sensor_port_load_emulation(char *err, size_t cap) {
     if (!gw_caps()->emulation) {
-        snprintf(err, cap, "I2C, SPI and UART sensors need gateware v54 or later (the pod runs v%u)",
-                 (unsigned)signal_engine_fpga_version());
+        bp_note_gateware_too_old(err, cap, "I2C, SPI and UART sensors", EMULATION_MIN_GW);
         return -1;
     }
     if (!blob_store_present(BLOB_GW2)) {

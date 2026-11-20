@@ -121,7 +121,7 @@ int ota_begin_owned_b64(ota_owner_t who, uint32_t size, const char *sha256_hex, 
                         uint32_t version, const char *sig_b64);
 /* The same with where the begin came from: external_lan = Ethernet or Wi-Fi (not the USB network
    adapter, the console or the cloud). From there a code image needs a good signature whatever the
-   signature policy, unless lan_unsigned is set (fw_sign.h, pod_policy.h; firmware 3.10.7+). */
+   signature policy (fw_sign.h, pod_policy.h; firmware 3.10.7+, and 4.0.0 always requires one). */
 int ota_begin_owned_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
                          ota_target_t target, uint32_t version, const uint8_t *sig, size_t sig_len);
 int ota_begin_owned_b64_from(ota_owner_t who, bool external_lan, uint32_t size, const char *sha256_hex,
