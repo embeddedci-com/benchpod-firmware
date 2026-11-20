@@ -801,8 +801,10 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
-    // GATEWARE_VERSION 60 = v59 + the 2026-11 audit's gateware items (no protocol change yet):
-    // uart_engine's PARITY parameter split into HAS_PARITY / HAS_HD / HAS_DE (it gated all three);
+    // GATEWARE_VERSION 60 = v59 + the 2026-11 audit's gateware items.  UART_CONFIG2 (0x7D): UART_CONFIG
+    // with [ext][de_ch] in front, so DE's channel has its own byte and ext is room for the next UART
+    // option (UART_CONFIG's flags byte had one bit left); UART_CONFIG stays.  tb_dispatch_args,
+    // tb_top_la_mux.  uart_engine's PARITY parameter split into HAS_PARITY / HAS_HD / HAS_DE (it gated all three);
     // i2c_emu_modes.v folded back into i2c_emu.v (one engine, the emulation image's); la_bank's pin
     // priority comment names the DE output.  All three images re-swept.
     // GATEWARE_VERSION 59 = v58 + the DAC FRAME GAP for the DAC8554 (dac8551_engine.v): the divider

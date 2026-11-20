@@ -3407,15 +3407,10 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
     if (div < 2)        div = 2;
     if (div > 0x3FFFFu) div = 0x3FFFFu;
 
-    /* [rx_ch | de_ch << 4][tx_ch][div_lo][div_mid][div_hi][flags]: flags bit 0 arms, bits 1..3 the
-       frame (v56), bit 4 half duplex (v57), bit 5 DE on de_ch and bit 6 DE active low (v58) */
-    uint8_t de_flags = de >= 0 ? (uint8_t)(UART_FRAME_DE | (de_active_low ? UART_FRAME_DE_INV : 0u)) : 0u;
-    uint8_t args[6] = {
-        (uint8_t)(rx | ((de >= 0 ? de : 0) << 4)), (uint8_t)tx,
-        (uint8_t)(div & 0xFF), (uint8_t)((div >> 8) & 0xFF), (uint8_t)((div >> 16) & 0xFF),
-        (uint8_t)((enable ? 0x01 : 0x00) | frame | de_flags),
-    };
-    spi_cmd_write(CMD_UART_CONFIG, args, sizeof(args));
+    uint8_t args[8];
+    size_t n = fpga_uart_config_args(args, gw_caps()->uart_config2, (unsigned)rx, (unsigned)tx, de,
+                                     de_active_low, div, frame, enable);
+    spi_cmd_write(gw_caps()->uart_config2 ? CMD_UART_CONFIG2 : CMD_UART_CONFIG, args, n);
     uart_armed_local = enable;
 
     float actual = (float)FPGA_HFOSC_HZ / (float)div;

@@ -256,7 +256,7 @@ module cmd_dispatch #(
     output wire              uart_cfg_enable,
     output wire [3:0]        uart_cfg_frame,      // v56: UART_CONFIG flags bits 3..1 {stop2, odd, parity}; v57 bit 4 half duplex
     output wire [1:0]        uart_cfg_de,         // v58: flags bits 6..5 {DE active low, DE enable}
-    output wire [3:0]        uart_cfg_de_ch,      // v58: the rx_ch byte's high nibble
+    output wire [3:0]        uart_cfg_de_ch,      // v58: the rx_ch byte's high nibble (UART_CONFIG); v60: its own byte (UART_CONFIG2)
     output reg               uart_disable_stb,
 
     // ---- UART proxy: TX FIFO write / RX FIFO read ----
@@ -378,13 +378,14 @@ module cmd_dispatch #(
 `define CD_DAC_CTRL            8'b?01?_1???    // 0x38
 `define CD_I2C_CONFIG          8'b??10_0??0    // 0x60 (emulation image only, like the rest of 0x6x/0x7C)
 `define CD_UART_CONFIG         8'b?111_?0??    // 0x70
-`define CD_UART2_CONFIG        8'b?111_???1    // 0x75
+`define CD_UART2_CONFIG        8'b?111_0??1    // 0x75
+`define CD_UART_CONFIG2        8'b??11_1??1    // 0x7D (v60)
 `define CD_I2C_DISABLE         8'b?11?_?0?1    // 0x61
 `define CD_I2C_TIMES           8'b???0_1?00    // 0x6C
-`define CD_I2C_DRDY            8'b??1?_1?01    // 0x6D
+`define CD_I2C_DRDY            8'b??10_1?01    // 0x6D
 `define CD_EMU_PINMAP          8'b?11?_??10    // 0x6E
 `define CD_EMU_CONFIG          8'b?1??_??11    // 0x6F
-`define CD_SPIT_CONFIG         8'b?111_1???    // 0x7C
+`define CD_SPIT_CONFIG         8'b?111_1??0    // 0x7C
 
 `define CD_LOAD_WAVE           8'b?0??_????    // 0x10
 `define CD_SWD_FEED            8'b??0?_???1    // 0x51
@@ -402,18 +403,18 @@ module cmd_dispatch #(
 `define CD_I2C_READ_LOG        8'b??1?_??0?    // 0x79
 
 `ifndef SYNTHESIS
-    localparam N_COLLECT = 28, N_STREAM = 14;
+    localparam N_COLLECT = 29, N_STREAM = 14;
     localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
         OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
         OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
         OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
-        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG,
+        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG, OP_UART_CONFIG2,
         OP_I2C_DISABLE, OP_I2C_TIMES, OP_I2C_DRDY, OP_EMU_PINMAP, OP_EMU_CONFIG, OP_SPIT_CONFIG };
     localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
         `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
         `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
         `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
-        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG,
+        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG, `CD_UART_CONFIG2,
         `CD_I2C_DISABLE, `CD_I2C_TIMES, `CD_I2C_DRDY, `CD_EMU_PINMAP, `CD_EMU_CONFIG, `CD_SPIT_CONFIG };
     localparam [N_STREAM*8-1:0] STREAM_OPS = {
         OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
@@ -441,6 +442,8 @@ module cmd_dispatch #(
         for (a = 0; a < N_STREAM; a = a + 1) for (b = 0; b < N_STREAM; b = b + 1)
             if (pat_hit(STREAM_OPS[a*8 +: 8], STREAM_PATS[b*8 +: 8]) != (a == b))
                 $display("FAIL cmd_dispatch: S_READ_LEN1 pattern of %02h vs opcode %02h", STREAM_OPS[b*8 +: 8], STREAM_OPS[a*8 +: 8]);
+        if (OP_UART_CONFIG[3] !== 1'b0 || OP_UART_CONFIG2[3] !== 1'b1)
+            $display("FAIL cmd_dispatch: uart_cfg_de_ch's select (current_cmd[3]) no longer separates UART_CONFIG/CONFIG2");
         if (OP_SWD_FEED[3] !== 1'b0 || OP_SWD_QFEED[3] !== 1'b1)
             $display("FAIL cmd_dispatch: swd_feed_q = current_cmd[3] no longer separates SWD_FEED/QFEED");
         // v54 single-bit selects (see their assigns)
@@ -527,7 +530,10 @@ module cmd_dispatch #(
     assign uart_cfg_enable   = rx_byte[0];
     assign uart_cfg_frame    = rx_byte[4:1];
     assign uart_cfg_de       = rx_byte[6:5];
-    assign uart_cfg_de_ch    = arg_buf[4][7:4];
+    // v58 UART_CONFIG: DE rides in rx_ch's high nibble; v60 UART_CONFIG2 has its own byte in front
+    // ([ext][de_ch][rx_ch][tx_ch][div(3)][flags], so every other field sits where UART_CONFIG has it).
+    // ext (arg_buf[2]) is reserved for the next UART option.
+    assign uart_cfg_de_ch    = current_cmd[3] ? arg_buf[3][3:0] : arg_buf[4][7:4];
     // Streamed write data (LOAD_WAVE / SWD_FEED / I2C_LOAD_REGS / UART_WRITE) is rx_byte itself:
     // each sink (sample_buf, swd_engine, i2c_regfile, uart FIFO) takes it only under its 1-cycle
     // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
@@ -882,6 +888,7 @@ module cmd_dispatch #(
 
                             // ---- UART proxy ----
                             OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_UART_CONFIG2: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             OP_UART_DISABLE: begin uart_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_UART_WRITE,
                             OP_UART_READ:    state <= S_READ_LEN0;
@@ -1128,12 +1135,12 @@ module cmd_dispatch #(
                                 end
                                 `CD_SPIT_CONFIG: spit_cfg_stb <= 1'b1;   // 8 bytes: spit_cfg
 `endif
-                                `CD_UART_CONFIG: begin
-                                    // [rx_ch][tx_ch][div_lo][div_mid][div_hi(=rx_byte)][flags]
-                                    // flags: bit0 enable, v56 bit1 parity, bit2 odd, bit3 two stop bits
-                                    // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
-                                    uart_cfg_stb     <= 1'b1;
-                                end
+                                // [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags(=rx_byte)]: rx_ch is arg_buf[4],
+                                // div_hi arg_buf[8].  flags: bit0 enable, v56 bit1 parity, bit2 odd, bit3 two
+                                // stop bits, v57 bit4 half duplex, v58 bit5 DE, bit6 DE active low.
+                                // v60 UART_CONFIG2: the same with [ext][de_ch] in front (uart_cfg_de_ch above).
+                                `CD_UART_CONFIG,
+                                `CD_UART_CONFIG2: uart_cfg_stb <= 1'b1;
                                 // UART_CONFIG's payload; the uart wires above carry it (rx_ch unused).
                                 `CD_UART2_CONFIG: uart2_cfg_stb <= 1'b1;
                                 default: ;
@@ -1304,6 +1311,7 @@ endmodule
 `undef CD_I2C_CONFIG
 `undef CD_UART_CONFIG
 `undef CD_UART2_CONFIG
+`undef CD_UART_CONFIG2
 `undef CD_UART2_WRITE
 `undef CD_UART2_READ
 `undef CD_I2C_DISABLE

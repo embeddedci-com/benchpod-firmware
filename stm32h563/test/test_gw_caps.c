@@ -46,12 +46,14 @@ static void test_versions(void)
         GATE(uart_frame, UART_FRAME_MIN_GW);
         GATE(uart_half_duplex, UART_HALFDUPLEX_MIN_GW);
         GATE(uart_de, UART_DE_MIN_GW);
+        GATE(uart_config2, UART_CONFIG2_MIN_GW);
 #undef GATE
         CHECK(!c.img_control_loop && !c.img_deep_replay && !c.img_emulation, "v%u no image bits", v);
     }
     /* the released gateware numbers the docs quote */
     CHECK(gw_caps_for(53, 0).dual_la_full_rate && !gw_caps_for(52, 0).dual_la_full_rate, "v53");
     CHECK(gw_caps_for(58, 0).uart_de && !gw_caps_for(57, 0).uart_de, "v58");
+    CHECK(gw_caps_for(60, 0).uart_config2 && !gw_caps_for(59, 0).uart_config2, "v60");
 }
 
 static void test_images(void)

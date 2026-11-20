@@ -65,6 +65,8 @@ module tb_dispatch_args;
     wire        uart_cfg_stb;
     wire [3:0]  uart_cfg_rx_ch, uart_cfg_tx_ch;
     wire [23:0] uart_cfg_div;
+    wire [3:0]  uart_cfg_frame, uart_cfg_de_ch;   // v56/v57 frame flags, v58 DE channel
+    wire [1:0]  uart_cfg_de;
 
     // ---- P3 hardening: previously-untested decode + response paths ----
     wire            dac_start, cap_start;          // START_DAC / START_CAPTURE arming
@@ -102,7 +104,8 @@ module tb_dispatch_args;
         .i2c_reg_rdata(i2c_reg_rdata),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch),
         .uart_cfg_tx_ch(uart_cfg_tx_ch), .uart_cfg_div(uart_cfg_div),
-        .uart_cfg_enable(uart_cfg_enable),
+        .uart_cfg_enable(uart_cfg_enable), .uart_cfg_frame(uart_cfg_frame),
+        .uart_cfg_de(uart_cfg_de), .uart_cfg_de_ch(uart_cfg_de_ch),
         .uart_tx_we(uart_tx_we), .uart_tx_wdata(uart_tx_wdata),
         .step_start(step_start), .step_channel(step_channel),
         .step_steps(step_steps), .step_delay(step_delay),
@@ -471,18 +474,44 @@ module tb_dispatch_args;
         begin
             uart_cfg_n = 0; cs_hi;
             feed(8'h70);                        // OP_UART_CONFIG
-            feed(8'h02);  // rx_ch
+            feed(8'h92);  // rx_ch 2, v58 DE channel 9 in the high nibble
             feed(8'h05);  // tx_ch
             feed(8'h10);  // div_lo
             feed(8'h20);  // div_mid
             feed(8'h03);  // div_hi
-            feed(8'h01);  // flags -> enable (final byte = rx_byte)
+            feed(8'h63);  // flags: enable, parity, DE, DE active low (final byte = rx_byte)
             cs_lo;
             if (uart_cfg_n !== 1)                  begin $display("FAIL uart_cfg: stb fired %0d times (want 1)", uart_cfg_n); errors=errors+1; end
             if (uart_cfg_rx_ch !== 4'h2)           begin $display("FAIL uart_cfg: rx_ch=%0d", uart_cfg_rx_ch); errors=errors+1; end
             if (uart_cfg_tx_ch !== 4'h5)           begin $display("FAIL uart_cfg: tx_ch=%0d", uart_cfg_tx_ch); errors=errors+1; end
             if (uart_cfg_div   !== 24'h032010)     begin $display("FAIL uart_cfg: div=%06h",  uart_cfg_div);   errors=errors+1; end
             if (uart_cfg_enable !== 1'b1)          begin $display("FAIL uart_cfg: enable=%b", uart_cfg_enable); errors=errors+1; end
+            if (uart_cfg_frame !== 4'h1 || uart_cfg_de !== 2'b11 || uart_cfg_de_ch !== 4'd9) begin
+                $display("FAIL uart_cfg: frame=%h de=%b de_ch=%0d", uart_cfg_frame, uart_cfg_de, uart_cfg_de_ch); errors=errors+1; end
+        end
+    endtask
+
+    // collect: UART_CONFIG2 (v60, 8 payload bytes): UART_CONFIG with [ext][de_ch] in front.  The
+    // shared fields decode where UART_CONFIG has them, DE's channel comes from its own byte and
+    // rx_ch's high nibble is ignored.
+    task test_uart_config2;
+        begin
+            uart_cfg_n = 0; cs_hi;
+            feed(8'h7D);                        // OP_UART_CONFIG2
+            feed(8'h00);  // ext (reserved)
+            feed(8'h0C);  // de_ch 12
+            feed(8'hF3);  // rx_ch 3 (high nibble ignored)
+            feed(8'h07);  // tx_ch
+            feed(8'hD0);  // div_lo
+            feed(8'h00);  // div_mid
+            feed(8'h00);  // div_hi
+            feed(8'h31);  // flags: enable, half duplex, DE (final byte = rx_byte)
+            cs_lo;
+            if (uart_cfg_n !== 1)                  begin $display("FAIL uart_cfg2: stb fired %0d times (want 1)", uart_cfg_n); errors=errors+1; end
+            if (uart_cfg_rx_ch !== 4'h3 || uart_cfg_tx_ch !== 4'h7 || uart_cfg_div !== 24'h0000D0 || uart_cfg_enable !== 1'b1) begin
+                $display("FAIL uart_cfg2: rx=%0d tx=%0d div=%06h en=%b", uart_cfg_rx_ch, uart_cfg_tx_ch, uart_cfg_div, uart_cfg_enable); errors=errors+1; end
+            if (uart_cfg_frame !== 4'h8 || uart_cfg_de !== 2'b01 || uart_cfg_de_ch !== 4'd12) begin
+                $display("FAIL uart_cfg2: frame=%h de=%b de_ch=%0d", uart_cfg_frame, uart_cfg_de, uart_cfg_de_ch); errors=errors+1; end
         end
     endtask
 
@@ -556,6 +585,7 @@ module tb_dispatch_args;
         test_i2c_config;
 `endif
         test_uart_config;
+        test_uart_config2;
 
         // instant responses
         expect_resp(8'h01, 8'hA5, "ping");
