@@ -48,10 +48,17 @@ typedef enum {
     BP_E_VREF_5V_MISSING = 28,
     BP_E_PULL_RAIL_DOWN = 29,
     BP_E_CLIENT_TOO_OLD = 30,
+    BP_E_LA_PIN_IN_USE = 31,
+    BP_E_LA_PULL_DOWN_ENGAGED = 32,
+    BP_E_LA_PULL_DOWN_CONFLICT = 33,
+    BP_E_LA_DUT_OUTPUT = 34,
+    BP_E_LA_DRIVEN_PIN = 35,
+    BP_E_LA_NOT_GPIO_OUTPUT = 36,
+    BP_E_LA_VOLTAGE_PINS_IN_USE = 37,
 } bp_errcode_t;
 
-#define BP_E_LAST 30
-#define BP_ERR_ARGS_MAX 3   /* the most args one code has */
+#define BP_E_LAST 37
+#define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
 typedef struct { const char *key; const char *s; int32_t i; uint8_t is_str; } bp_err_arg_t;
@@ -106,6 +113,13 @@ static const char *const bp_err_templates[BP_E_LAST + 1] = {
     [28] = "5 V did not come up on pin 21 ({mv} mV)",
     [29] = "pin 21 is down ({mv} mV): the pull resistors are off until it is back",
     [30] = "Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api})",
+    [31] = "LA{la} is in use by {owner}",
+    [32] = "LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason})",
+    [33] = "LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason})",
+    [34] = "LA{la} is wired to a DUT output, and {function} would drive against it",
+    [35] = "LA{la} is driven by {function}, so it cannot be marked as a DUT output",
+    [36] = "LA{la} is not a GPIO output (it is {function})",
+    [37] = "The I/O voltage cannot change while pins are in use: {pins}",
 };
 #endif
 
@@ -364,6 +378,69 @@ static inline void bp_err_client_too_old(int conn_id, int32_t client_api, int32_
 static inline const char *bp_note_client_too_old(char *buf, size_t cap, int32_t client_api, int32_t min_client_api, int32_t api) {
     const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
     return bp_err_note(buf, cap, BP_E_CLIENT_TOO_OLD, a, 3);
+}
+/* BP0031: LA{la} is in use by {owner} */
+static inline void bp_err_la_pin_in_use(int conn_id, int32_t la, const char *owner, const char *function, const char *instance) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"owner", owner, 0, 1}, {"function", function, 0, 1}, {"instance", instance, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PIN_IN_USE, a, 4);
+}
+static inline const char *bp_note_la_pin_in_use(char *buf, size_t cap, int32_t la, const char *owner, const char *function, const char *instance) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"owner", owner, 0, 1}, {"function", function, 0, 1}, {"instance", instance, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PIN_IN_USE, a, 4);
+}
+/* BP0032: LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) */
+static inline void bp_err_la_pull_down_engaged(int conn_id, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PULL_DOWN_ENGAGED, a, 4);
+}
+static inline const char *bp_note_la_pull_down_engaged(char *buf, size_t cap, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PULL_DOWN_ENGAGED, a, 4);
+}
+/* BP0033: LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason}) */
+static inline void bp_err_la_pull_down_conflict(int conn_id, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_PULL_DOWN_CONFLICT, a, 4);
+}
+static inline const char *bp_note_la_pull_down_conflict(char *buf, size_t cap, int32_t la, const char *ohms, const char *function, const char *reason) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"ohms", ohms, 0, 1}, {"function", function, 0, 1}, {"reason", reason, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_PULL_DOWN_CONFLICT, a, 4);
+}
+/* BP0034: LA{la} is wired to a DUT output, and {function} would drive against it */
+static inline void bp_err_la_dut_output(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_DUT_OUTPUT, a, 2);
+}
+static inline const char *bp_note_la_dut_output(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_DUT_OUTPUT, a, 2);
+}
+/* BP0035: LA{la} is driven by {function}, so it cannot be marked as a DUT output */
+static inline void bp_err_la_driven_pin(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_DRIVEN_PIN, a, 2);
+}
+static inline const char *bp_note_la_driven_pin(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_DRIVEN_PIN, a, 2);
+}
+/* BP0036: LA{la} is not a GPIO output (it is {function}) */
+static inline void bp_err_la_not_gpio_output(int conn_id, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_NOT_GPIO_OUTPUT, a, 2);
+}
+static inline const char *bp_note_la_not_gpio_output(char *buf, size_t cap, int32_t la, const char *function) {
+    const bp_err_arg_t a[] = { {"la", 0, la, 0}, {"function", function, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_NOT_GPIO_OUTPUT, a, 2);
+}
+/* BP0037: The I/O voltage cannot change while pins are in use: {pins} */
+static inline void bp_err_la_voltage_pins_in_use(int conn_id, const char *pins) {
+    const bp_err_arg_t a[] = { {"pins", pins, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_VOLTAGE_PINS_IN_USE, a, 1);
+}
+static inline const char *bp_note_la_voltage_pins_in_use(char *buf, size_t cap, const char *pins) {
+    const bp_err_arg_t a[] = { {"pins", pins, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_VOLTAGE_PINS_IN_USE, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

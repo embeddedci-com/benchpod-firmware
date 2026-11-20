@@ -14,6 +14,7 @@
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
+#include "bp_errors.h"
 #include "signal_engine.h"
 #include "la_pins.h"
 #include "bp_json.h"
@@ -54,9 +55,11 @@ bool bus_send_prepare(int conn_id, const char *json) {
             send_error(conn_id, "send: gpio needs la 1..14 and level 0 or 1"); return false;
         }
         if (la_pins_fn((unsigned)la) != LA_FN_GPIO || (m != LA_GPIO_OUTPUT && m != LA_GPIO_OPEN_DRAIN)) {
-            snprintf(err, sizeof(err), "send: LA%ld is not a gpio output or open_drain; configure it with "
-                     "{\"cmd\":\"gpio\",\"la\":%ld,\"mode\":\"output\"} first", la, la);
-            send_error(conn_id, err); return false;
+            char fn[24];   /* "gpio input", like la_pins_check_level says it */
+            if (la_pins_fn((unsigned)la) == LA_FN_GPIO) snprintf(fn, sizeof(fn), "gpio %s", la_gpio_mode_name(m));
+            else snprintf(fn, sizeof(fn), "%s", la_fn_name(la_pins_fn((unsigned)la)));
+            bp_err_la_not_gpio_output(conn_id, (int32_t)la, fn);
+            return false;
         }
         s_gpio_la = (unsigned)la; s_gpio_level = (unsigned)lv;
         s_kind = SEND_GPIO;

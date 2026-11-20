@@ -179,7 +179,7 @@ static void test_tca9554_board(int rev, const char *name) {
     uint8_t p = 8;
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &p, 1);
     la("{\"cmd\":\"la\",\"la\":8,\"pull\":\"down\"}");
-    CHECK(strncmp(g_reply, "err:pull conflict: LA8 is used by uart_rx", 41) == 0, "%s: %s", name, g_reply);
+    CHECK(strncmp(g_reply, "err:LA8 is used by uart_rx", 26) == 0, "%s: %s", name, g_reply);
     CHECK(!(la_pull_asked(8) != LA_PULL_NONE), "%s: refused before the switch", name);
     la_pins_release(8);
 

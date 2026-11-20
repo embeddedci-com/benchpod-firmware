@@ -95,8 +95,10 @@ int la_step_begin(unsigned la, uint32_t steps, uint32_t delay_us, unsigned dir_l
         step_finish();   /* a train that already ended but has not been polled yet */
 
     la_step_plan_t plan;
-    if (!la_pins_plan_step(la, dir_la, &plan, err, cap))
-        return strncmp(err, "pin conflict:", 13) == 0 ? -3 : -1;
+    if (!la_pins_plan_step(la, dir_la, &plan, err, cap)) {
+        bp_errcode_t code = BP_E_NONE;
+        return bp_err_noted(err, &code, NULL) && code == BP_E_LA_PIN_IN_USE ? -3 : -1;
+    }
     if (!la_step_args_ok(steps, delay_us, err, cap)) return -1;
     if (s_step.active || fpga_la_step_busy()) { snprintf(err, cap, "busy"); return -2; }
 

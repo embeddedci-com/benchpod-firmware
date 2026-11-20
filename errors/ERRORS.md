@@ -36,3 +36,10 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on pin 21 ({mv} mV) |
 | BP0029 | `pull_rail_down` | io | 3.10.13 | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
 | BP0030 | `client_too_old` | protocol | next | Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) |
+| BP0031 | `la_pin_in_use` | io | next | LA{la} is in use by {owner} |
+| BP0032 | `la_pull_down_engaged` | io | next | LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) |
+| BP0033 | `la_pull_down_conflict` | io | next | LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason}) |
+| BP0034 | `la_dut_output` | io | next | LA{la} is wired to a DUT output, and {function} would drive against it |
+| BP0035 | `la_driven_pin` | io | next | LA{la} is driven by {function}, so it cannot be marked as a DUT output |
+| BP0036 | `la_not_gpio_output` | io | next | LA{la} is not a GPIO output (it is {function}) |
+| BP0037 | `la_voltage_pins_in_use` | io | next | The I/O voltage cannot change while pins are in use: {pins} |
