@@ -7,7 +7,8 @@ changed, at most every 10 s, else once a minute; src/emi_log.h). This reads the
 whole ring with the JSON command emi_log, a chunk at a time, and prints it oldest first, then a
 summary per run.
 
-  python3 emi_log_dump.py 192.168.1.150            # the pod's LAN address (raw API, port 8080)
+  python3 emi_log_dump.py 192.168.1.150            # the pod's LAN address (LAN TLS, port 8443)
+  python3 emi_log_dump.py 10.237.134.169           # the USB network adapter (plain, port 8080)
   python3 emi_log_dump.py usb:benchpod-30a9f1      # any SDK connection, when embeddedci is installed
   python3 emi_log_dump.py HOST --raw log.bin       # also keep the raw slots
   python3 emi_log_dump.py --file log.bin           # decode a raw dump made earlier
@@ -20,6 +21,7 @@ import argparse
 import base64
 import json
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -181,15 +183,29 @@ def summarize(recs):
 
 
 class RawTcp:
-    """The pod's raw JSON API (port 8080): one JSON line out, one back, per connection."""
+    """The pod's JSON API: one JSON line out, one back, per connection. Firmware 4.0 serves it on
+    LAN TLS (port 8443) and keeps plain port 8080 for the USB network adapter (10.237.x.y) only.
+    The pod's certificate is self-signed: this dev tool does not check it (the CLI and the SDK pin
+    it on first use)."""
+
+    CLIENT_API = 2   # firmware 4.0 refuses commands without it (BP0030)
 
     def __init__(self, target, timeout=10.0):
         host, _, port = target.partition(":")
-        self.addr = (host, int(port or 8080))
+        usb_net = host.startswith("10.237.")
+        self.addr = (host, int(port or (8080 if usb_net else 8443)))
+        self.tls = self.addr[1] == 8443
         self.timeout = timeout
 
     def command(self, req):
-        with socket.create_connection(self.addr, self.timeout) as s:
+        req = {**req, "client_api": self.CLIENT_API, "client": "emi_log_dump"}
+        with socket.create_connection(self.addr, self.timeout) as raw:
+            s = raw
+            if self.tls:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                s = ctx.wrap_socket(raw, server_hostname=self.addr[0])
             s.sendall((json.dumps(req) + "\n").encode())
             buf = b""
             while b"\n" not in buf:
@@ -199,7 +215,9 @@ class RawTcp:
                 buf += chunk
         reply = json.loads(buf.split(b"\n", 1)[0])
         if reply.get("status") != "ok":
-            raise RuntimeError(reply.get("message", "error"))
+            # Firmware 4.0 refusals carry a code and args, and no text (errors/ERRORS.md).
+            why = reply.get("message") or json.dumps(reply.get("args", {}))
+            raise RuntimeError(f"{reply.get('code', 'error')}: {why}")
         return reply.get("data")
 
 
