@@ -126,7 +126,7 @@ bool esp_dut_flash_busy(void) { return s.st != ST_IDLE; }
 
 int esp_dut_flash_start(const esp_dut_params_t *p, char *err, uint32_t cap)
 {
-    if (s.st != ST_IDLE) { snprintf(err, cap, "busy: an ESP32 flash is running"); return -1; }
+    if (s.st != ST_IDLE) { bp_note_pod_busy(err, cap); return -1; }   /* an ESP32 flash is running */
     if (p->en == ESP_DUT_EN_NRST && !nrst_ctrl_supported()) {
         snprintf(err, cap, "this pod has no reset pin: wire EN to an LA pin and pass en");
         return -1;

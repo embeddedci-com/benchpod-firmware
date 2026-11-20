@@ -3158,7 +3158,7 @@ failure: `no answer from the ROM loader` (wiring, straps, or the target is not p
 (ESP8266)`, `aborted`.
 
 Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
-staged upload`, `BP0047` (`pod_busy`), `busy: an ESP32 flash is running`, `BP0049` (a UART
+staged upload`, `BP0047` (`pod_busy`, also while an ESP32 flash runs), `BP0049` (a UART
 session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN to an LA pin and pass en`.
 
 ## I2C master
