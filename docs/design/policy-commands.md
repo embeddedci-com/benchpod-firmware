@@ -7,7 +7,7 @@ Builds on [firmware-signing.md](firmware-signing.md) and [access-control.md](acc
 Backward compatibility rules, for all three parts:
 
 - Firmware defaults never lock anyone out: `sig_policy` defaults to `audit`, `lan_policy` to `open`,
-  and a tunnel without `max_tier` gets everything (as today).
+  and a tunnel without `max_tier` gets T1 (firmware 4.0.0; everything up to 3.10.13).
 - A pod advertises each feature with a capability flag. Servers and CLIs only use a feature on a pod
   that advertises it; older pods behave exactly as before.
 - The USB console can always change both policies. It is the way back.
@@ -86,7 +86,7 @@ the highest tier the user behind a tunnel may use:
 
     {"type":"tunnel.open","tunnel_id":"...","max_tier":1}
 
-`max_tier` 0..3; missing = 3 (today's behavior, and what old servers send). A command above it on that
+`max_tier` 0..3; missing = 1 from firmware 4.0.0 (3 up to 3.10.13, what old servers relied on). A command above it on that
 tunnel gets `forbidden: <verb> needs an organization owner or admin`. The firmware advertises
 `"tunnel_max_tier":true` in its capabilities. On a pod without it, the server must not offer
 T2/T3-capable tunnels to callers who would be denied; it can only gate the REST command and OTA

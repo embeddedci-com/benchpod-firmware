@@ -1041,9 +1041,10 @@ static void cl_handle_tunnel_open(const char *json) {
     if (slot < 0) return;                      /* all tunnels in use (the server caps this) */
     snprintf(s_tunnels[slot], sizeof(s_tunnels[slot]), "%s", id);   /* truncates, always terminated */
     /* The highest command tier the server allows this tunnel's user (policy-commands.md section
-       3); an older server sends none, which means everything, as before. */
+       3). None means T1 (firmware 4.0.0; everything up to 3.10.13): a server that does not say
+       gets tests and reads, not settings, flashing or updates. */
     char tier_s[8] = {0};
-    int max_tier = cl_json_str(json, "max_tier", tier_s, sizeof(tier_s)) && tier_s[0] ? atoi(tier_s) : 3;
+    int max_tier = cl_json_str(json, "max_tier", tier_s, sizeof(tier_s)) && tier_s[0] ? atoi(tier_s) : 1;
     command_handler_set_tunnel_max_tier(CH_CLOUD_TUNNEL_CONN + slot, max_tier);
     conn_tx_reset(CH_CLOUD_TUNNEL_CONN + slot);                  /* drop stale ring bytes */
     hw_worker_submit_tunnel_reset(CH_CLOUD_TUNNEL_CONN + slot);  /* start the virtual conn fresh */
