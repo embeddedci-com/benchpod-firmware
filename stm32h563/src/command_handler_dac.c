@@ -248,8 +248,8 @@ static bool parse_loop_input_map(int conn_id, const char *json,
 
 /* `generate`: a waveform in volts on a DAC path, or in microamps on the 4-20 mA output, played at
    the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
-     {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
-     {"cmd":"generate","waveform":"sine","freq":10,"amplitude_ua":4000,"offset_ua":12000}
+     {"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+     {"cmd":"generate","waveform":"sine","freq_hz":10,"amplitude_ua":4000,"offset_ua":12000}
    Reply: null, or {"cotrig":true|false} with on_capture. The peaks must stay inside what the
    output can do; there is no silent clipping. "route":false skips the routing. Firmware up to
    3.10.13 also took 8-bit levels (amplitude 0-127, offset 0-255); 4.0.0 takes this form only. */
@@ -257,7 +257,7 @@ void handle_generate(int conn_id, const char *json) {
     char waveform[16] = {0}, freq_s[16] = {0}, dur_s[16] = {0};
     char path_s[16] = {0}, amp_s[24] = {0}, off_s[24] = {0};
     json_get_value(json, "waveform",    waveform, sizeof(waveform));
-    json_get_value(json, "freq",        freq_s,   sizeof(freq_s));
+    json_get_value(json, "freq_hz",     freq_s,   sizeof(freq_s));
     json_get_value(json, "duration_ms", dur_s,    sizeof(dur_s));
     float    freq     = freq_s[0] ? (float)atof(freq_s)   : 1000.0f;
     uint32_t duration = dur_s[0]  ? (uint32_t)atoi(dur_s) : 0;
@@ -504,8 +504,8 @@ void handle_load_bin(int conn_id, const char *json) {
    `load` (so you can replay a previously saved run).  Loops continuously until
    `dac_stop` (or the next `generate`/`measure`/`replay`).
 
-     {"cmd":"replay","sample_rate_mhz":0.08,"samples":4096}
-   `sample_rate_mhz` should match the rate the trace was captured at so the
+     {"cmd":"replay","sample_rate_hz":80000,"samples":4096}
+   `sample_rate_hz` should match the rate the trace was captured at so the
    playback time-base matches; omit for the max rate (~873 kS/s from RAM, ~857 kS/s
    from PSRAM; faster requests are clamped to it).  `samples` defaults to the full
    recorded length.  The reply's `sample_rate_hz` is the rate it really plays at. */
@@ -886,7 +886,7 @@ void handle_dac_loop_input(int conn_id, const char *json) {
     /* `v` is the output at the instant of the write — the loop damps toward the new target
        over the next ticks, so poll dac_loop_probe for the settled value. */
     char payload[96];
-    snprintf(payload, sizeof(payload), "{\"source\":\"%s\",\"input\":%u,\"step\":%u,\"v\":%u}",
+    snprintf(payload, sizeof(payload), "{\"source\":\"%s\",\"input\":%u,\"step\":%u,\"code16\":%u}",
              dac_loop_src_str(src), in, step, v);
     send_ok_str(conn_id, payload);
 }
@@ -923,7 +923,7 @@ void handle_dac_loop_probe(int conn_id, const char *json) {
     bool     tripped = fpga_dac_loop_tripped();
     heavy_release(conn_id);
     char payload[112];
-    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"v\":%u,\"tripped\":%s}",
+    snprintf(payload, sizeof(payload), "{\"i\":%u,\"in\":%u,\"source\":\"%s\",\"code16\":%u,\"tripped\":%s}",
              i_adc, in, dac_loop_src_str(has_src ? s_loop_src : (uint8_t)DAC_LOOP_SRC_ADC), v,
              tripped ? "true" : "false");
     send_ok_str(conn_id, payload);

@@ -1,7 +1,7 @@
 /*
  * command_handler_bus_send.c — send and capture: la_capture's optional "send".
  *
- *   {"cmd":"la_capture","samples":4096,"sample_rate_mhz":12,"trigger":{"la":1,"edge":"falling"},
+ *   {"cmd":"la_capture","samples":4096,"sample_rate_hz":12000000,"trigger":{"la":1,"edge":"falling"},
  *    "send":{"bus":"i2c","addr":72,"write":"Dw","read":2}}
  *   "send":{"bus":"spi","tx":"nwAAAA"}
  *   "send":{"bus":"gpio","la":5,"level":0}

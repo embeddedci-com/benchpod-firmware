@@ -117,7 +117,7 @@ void power_profile_status(pp_status_t *out);
 
 uint32_t power_profile_kept(void);
 void     power_profile_sample(uint32_t i, uint32_t *t_us, int32_t *ua, uint16_t *mv);
-/* "stats":{"efuse":..,"rate_hz":..,...,"fault":..,"truncated":..}  (no leading comma) */
+/* "stats":{"efuse":..,"sample_rate_hz":..,...,"fault":..,"truncated":..}  (no leading comma) */
 void     power_profile_emit_stats(bp_emit_t *e);
 
 #endif /* POWER_PROFILE_H */

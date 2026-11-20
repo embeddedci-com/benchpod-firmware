@@ -51,7 +51,7 @@
    then a deep LA-only capture at the LA's top rate. Both read back over the PSRAM bus. */
 static const char *const k_captures[] = {
     "{\"cmd\":\"capture_dual\",\"adc_samples\":200000,\"la_samples\":200000,"
-    "\"adc_rate_mhz\":0.4,\"la_rate_mhz\":2.0}",
+    "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":2000000}",
     "{\"cmd\":\"la_capture\",\"samples\":1000000}",
 };
 
@@ -197,16 +197,16 @@ static void start_dac(emi_dac_mode_t mode) {
     switch (mode) {
     case EMI_DAC_ALL:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
+        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
                         "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
         hold_dc_on_b();
         break;
     case EMI_DAC_SINE:
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,"
+        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
                         "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
         break;
     case EMI_DAC_DC:
-        run("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":3.0}");
+        run("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"v\":3.0}");
         break;
     case EMI_DAC_CURRENT:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");

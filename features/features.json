@@ -4,7 +4,7 @@
   "revision": 10,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "1b4c7cd9c751718326f8c422213dbea2768ac13ad19483efad1d648a826c9967",
+  "table_sha256": "59cb27a8aefcdb3ed311940f06422bb3aa9dbe6cd05209bb4290e10c42287823",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -722,6 +722,12 @@
       "firmware": "next",
       "board": "analog",
       "docs": "API.md#generate--dac-waveform-output"
+    },
+    "json_names_4": {
+      "rev": 10,
+      "firmware": "next",
+      "board": "any",
+      "docs": "API.md#commands"
     }
   }
 }

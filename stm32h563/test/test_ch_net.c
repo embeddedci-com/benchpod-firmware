@@ -264,7 +264,7 @@ static void test_eth(void) {
     handle_eth(0, "{\"cmd\":\"eth\",\"action\":\"loopback\",\"mbit\":5}");
     CHECK(strcmp(g_reply, "err:eth loopback mbit must be 10 or 100") == 0, "%s", g_reply);
     handle_eth(0, "{\"cmd\":\"eth\",\"action\":\"refclk\"}");
-    CHECK(strcmp(g_reply, "ok:{\"hz\":50000000,\"ppm\":0,\"on_hsi\":false}") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "ok:{\"clock_hz\":50000000,\"ppm\":0,\"on_hsi\":false}") == 0, "%s", g_reply);
 }
 
 /* ---- wifi_scan ---------------------------------------------------------------------------- */

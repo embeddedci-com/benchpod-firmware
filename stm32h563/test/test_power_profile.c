@@ -304,20 +304,20 @@ static void test_sampler_run(void) {
     power_profile_emit_stats(&e);
     CHECK(bp_emit_ok(&e));
     CHECK(strstr(buf, "\"efuse\":1") != NULL);
-    /* adc_rate_hz is the configured conversion rate; rate_hz is what was actually delivered
+    /* adc_sample_rate_hz is the configured conversion rate; sample_rate_hz is what was actually delivered
        (n over duration), which on real hardware is well below it. */
-    CHECK(strstr(buf, "\"adc_rate_hz\":471") != NULL);
+    CHECK(strstr(buf, "\"adc_sample_rate_hz\":471") != NULL);
     {
-        const char *r = strstr(buf, "\"rate_hz\":");       /* not "adc_rate_hz": — the quote differs */
+        const char *r = strstr(buf, "\"sample_rate_hz\":");   /* not "adc_sample_rate_hz": — the quote differs */
         const char *n_p = strstr(buf, "\"n\":");
         const char *d_p = strstr(buf, "\"duration_ms\":");
         CHECK(r != NULL && n_p != NULL && d_p != NULL);
-        unsigned long got  = strtoul(r + 10, NULL, 10);
+        unsigned long got  = strtoul(r + 17, NULL, 10);
         unsigned long n    = strtoul(n_p + 4, NULL, 10);
         unsigned long d_ms = strtoul(d_p + 14, NULL, 10);
         CHECK(d_ms > 0);
         unsigned long want = n * 1000ul / d_ms;
-        CHECK(got + 20 >= want && want + 20 >= got);       /* rate_hz == n over duration */
+        CHECK(got + 20 >= want && want + 20 >= got);       /* sample_rate_hz == n over duration */
     }
     CHECK(strstr(buf, "\"avg_ua\":100000") != NULL);
     CHECK(strstr(buf, "\"peak_ua\":100000") != NULL);
@@ -548,7 +548,7 @@ static void test_ina226_sampler(void) {
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));
     power_profile_emit_stats(&e);
-    CHECK(strstr(buf, "\"adc_rate_hz\":530") != NULL);
+    CHECK(strstr(buf, "\"adc_sample_rate_hz\":530") != NULL);
     CHECK(strstr(buf, "\"avg_ua\":100000") != NULL);
     power_profile_discard();
 }

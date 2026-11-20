@@ -181,33 +181,33 @@ static void test_low_range_guard(void) {
     CHECK(why && strstr(why, "waveform"), "enter low after a stream on C: %s", why ? why : "(null)");
 
     /* Commands, as the dispatcher sees them. */
-    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":6}", true, DAC_QUAD_NONE),
+    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"v\":6}", true, DAC_QUAD_NONE),
           "dac_out 12v 6 V in low");
-    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"dac_12v\",\"volts\":-6.5}", true, C),
+    CHECK(dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"dac_12v\",\"v\":-6.5}", true, C),
           "dac_out dac_12v -6.5 V in low");
-    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":4.9}", true, C),
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"v\":4.9}", true, C),
           "dac_out 12v 4.9 V in low");
-    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":-5}", true, C),
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"v\":-5}", true, C),
           "dac_out 12v -5 V in low");
-    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"volts\":10}", false, C),
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\",\"v\":10}", false, C),
           "dac_out 12v 10 V in normal");
-    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"volts\":4.9}", true, C),
+    CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"v\":4.9}", true, C),
           "dac_out 5v in low");
     CHECK(!dac_quad_low_check_command("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"12v\"}", true, C),
           "dac_out 12v route only in low");
     CHECK(dac_quad_low_check_command("generate",
-          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"12v\",\"amplitude_v\":1,\"offset_v\":0}",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":10,\"path\":\"12v\",\"amplitude_v\":1,\"offset_v\":0}",
           true, DAC_QUAD_B), "generate on 12v in low");
     CHECK(!dac_quad_low_check_command("generate",
-          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"5v\",\"amplitude_v\":1,\"offset_v\":2}",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":10,\"path\":\"5v\",\"amplitude_v\":1,\"offset_v\":2}",
           true, C), "generate on 5v in low (routes away from C)");
     CHECK(dac_quad_low_check_command("generate",
-          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"path\":\"5v\",\"route\":false,\"amplitude_v\":1,\"offset_v\":2}",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":10,\"path\":\"5v\",\"route\":false,\"amplitude_v\":1,\"offset_v\":2}",
           true, C), "generate route:false plays on C");
     CHECK(!dac_quad_low_check_command("generate",
-          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10,\"amplitude_ua\":4000,\"offset_ua\":12000}",
+          "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":10,\"amplitude_ua\":4000,\"offset_ua\":12000}",
           true, C), "generate on the 4-20 mA output in low");
-    CHECK(dac_quad_low_check_command("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":10}", true, C),
+    CHECK(dac_quad_low_check_command("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":10}", true, C),
           "8-bit generate on C in low");
     static const char *const streams[] = { "dac_set", "load", "load_bin", "replay", "measure", "dac_control_loop" };
     for (size_t i = 0; i < sizeof(streams) / sizeof(streams[0]); i++) {

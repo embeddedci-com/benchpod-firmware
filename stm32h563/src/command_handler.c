@@ -289,16 +289,15 @@ void command_handler_poll(void) {
 
 /* ---- Command handlers ---- */
 
-/* Parse an optional "sample_rate_mhz" field into a sample rate in Hz.
-   Returns 0.0f (= "auto-pick") when the field is absent.  Accepts decimals
-   like 0.5, 1, 12.  Clamps to the achievable range; the firmware will pick
+/* Parse an optional "sample_rate_hz" field (a sample rate in Hz; firmware up to 3.10.13 took
+   "sample_rate_mhz").  Returns 0.0f (= "auto-pick") when the field is absent.  Accepts decimals
+   like 80000 or 2304000.5.  Clamps to the achievable range; the firmware will pick
    the closest divider and log what it actually used. */
 float parse_sample_rate_hz(const char *json) {
     char sr_s[16] = {0};
-    if (!json_get_value(json, "sample_rate_mhz", sr_s, sizeof(sr_s))) return 0.0f;
-    float mhz = (float)atof(sr_s);
-    if (mhz <= 0.0f) return 0.0f;   /* invalid → auto */
-    return mhz * 1.0e6f;
+    if (!json_get_value(json, "sample_rate_hz", sr_s, sizeof(sr_s))) return 0.0f;
+    float hz = (float)atof(sr_s);
+    return hz > 0.0f ? hz : 0.0f;   /* invalid → auto */
 }
 
 void handle_ping(int conn_id, const char *json) {

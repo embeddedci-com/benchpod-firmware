@@ -1,7 +1,7 @@
 /*
  * command_handler_i2c.c — the I2C master on the LA pins (gateware >= v55), as JSON commands.
  *
- *   {"cmd":"i2c_start","sda":1,"scl":2,"hz":400000,"pullups":"pod"|"external"}
+ *   {"cmd":"i2c_start","sda":1,"scl":2,"clock_hz":400000,"pullups":"pod"|"external"}
  *   {"cmd":"i2c_xfer","addr":72,"write":"<b64url>","read":2}  -> {"ack":true,"rx":"<b64url>"}
  *   {"cmd":"i2c_scan"}                                         -> {"found":[72,118]}
  *   {"cmd":"i2c_status"} / {"cmd":"i2c_stop"}
@@ -109,8 +109,8 @@ void handle_i2c_start(int conn_id, const char *json) {
     if (!get_u32(json, "scl", &scl) || scl < 1 || scl > LA_PINS_COUNT) { send_error(conn_id, "missing or invalid scl (LA 1..14)"); return; }
     if (sda == scl) { send_error(conn_id, "sda and scl need their own LA pins"); return; }
     uint32_t hz = I2C_DEFAULT_HZ;
-    if (has_key(json, "hz") && (!get_u32(json, "hz", &hz) || hz < 10000u || hz > 1000000u)) {
-        send_error(conn_id, "hz must be 10000..1000000"); return;
+    if (has_key(json, "clock_hz") && (!get_u32(json, "clock_hz", &hz) || hz < 10000u || hz > 1000000u)) {
+        send_error(conn_id, "clock_hz must be 10000..1000000"); return;
     }
     char pu[12];
     if (!bp_json_get(json, "pullups", pu, sizeof(pu))) strcpy(pu, "pod");
@@ -131,7 +131,7 @@ void handle_i2c_start(int conn_id, const char *json) {
     s_sda = pins[0]; s_scl = pins[1]; s_half = half; s_external = external;
 
     char p[112];
-    snprintf(p, sizeof(p), "{\"sda\":%u,\"scl\":%u,\"hz\":%lu,\"pullups\":\"%s\"}",
+    snprintf(p, sizeof(p), "{\"sda\":%u,\"scl\":%u,\"clock_hz\":%lu,\"pullups\":\"%s\"}",
              s_sda, s_scl, (unsigned long)fpga_i2c_hz_for_half(half), external ? "external" : "pod");
     send_ok_str(conn_id, p);
 }
@@ -157,7 +157,7 @@ void handle_i2c_status(int conn_id, const char *json) {
     (void)json;
     if (!fpga_i2c_armed()) { send_ok_str(conn_id, "{\"active\":false}"); return; }
     char p[112];
-    snprintf(p, sizeof(p), "{\"active\":true,\"sda\":%u,\"scl\":%u,\"hz\":%lu,\"pullups\":\"%s\"}",
+    snprintf(p, sizeof(p), "{\"active\":true,\"sda\":%u,\"scl\":%u,\"clock_hz\":%lu,\"pullups\":\"%s\"}",
              s_sda, s_scl, (unsigned long)fpga_i2c_hz_for_half(s_half), s_external ? "external" : "pod");
     send_ok_str(conn_id, p);
 }

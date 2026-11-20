@@ -111,7 +111,7 @@ void heavy_release(int conn_id);
 bool heavy_begin(int conn_id);
 int  heavy_owner_conn(void);                  /* the conn holding the gate, or -1 */
 
-/* An optional "sample_rate_mhz" field in Hz; 0.0f (= auto) when absent or not positive. */
+/* An optional "sample_rate_hz" field; 0.0f (= auto) when absent or not positive. */
 float parse_sample_rate_hz(const char *json);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */

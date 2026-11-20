@@ -141,8 +141,8 @@ void handle_analog_path(int conn_id, const char *json) {
 }
 
 /* dac_out — route a DAC output path AND set a CALIBRATED voltage (one step, no
-   manual mux flipping).  {"cmd":"dac_out","path":"5v","volts":2.5} → achieved
-   mv and uv and the 16-bit code16.  path off just parks the output; omit volts to only route. */
+   manual mux flipping).  {"cmd":"dac_out","path":"5v","v":2.5} → achieved
+   mv and uv and the 16-bit code16.  path off just parks the output; omit v to only route. */
 void handle_dac_out(int conn_id, const char *json) {
     char name[16] = {0}, volts_s[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
@@ -154,7 +154,7 @@ void handle_dac_out(int conn_id, const char *json) {
     else if (p != ANALOG_PATH_OFF) { send_error(conn_id, "path must be 3v3|5v|12v|off"); return; }
     if (analog_path_set(p) != 0) { send_error(conn_id, "route failed"); return; }
     long code16 = -1; int got_mv = 0; long got_uv = 0;
-    if (idx >= 0 && json_get_value(json, "volts", volts_s, sizeof(volts_s))) {
+    if (idx >= 0 && json_get_value(json, "v", volts_s, sizeof(volts_s))) {
         /* The full 16 bits of the DAC: about 76 uV a step on the 5v path. (Firmware up to 3.10.13
            also replied the 8-bit equivalent, `code`.) */
         uint16_t c16 = dac_code16_for_volts(idx, (float)atof(volts_s));

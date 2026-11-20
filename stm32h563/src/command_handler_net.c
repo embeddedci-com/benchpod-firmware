@@ -581,7 +581,7 @@ void handle_eth(int conn_id, const char *buf) {
             sleep_ms(100);   /* the net task runs the ~200 ms gate, then restarts the PHY */
         long ppm = hz ? (((long long)hz - 50000000LL) * 1000000LL / 50000000LL) : 0;
         char resp[96];
-        snprintf(resp, sizeof(resp), "{\"hz\":%lu,\"ppm\":%ld,\"on_hsi\":%s}",
+        snprintf(resp, sizeof(resp), "{\"clock_hz\":%lu,\"ppm\":%ld,\"on_hsi\":%s}",
                  (unsigned long)hz, ppm, clock_on_hsi() ? "true" : "false");
         send_ok_str(conn_id, resp);
         return;

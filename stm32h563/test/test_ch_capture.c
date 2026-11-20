@@ -256,7 +256,7 @@ static void test_capture_dual(void) {
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strncmp(first, "{\"status\":\"ok\",\"bits\":16,\"adc_rate_hz\":400000,\"la_rate_hz\":24000000,\"data\":[", 75) == 0,
+    CHECK(strncmp(first, "{\"status\":\"ok\",\"bits\":16,\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":24000000,\"data\":[", 89) == 0,
           "first frame: %.90s", first);
     CHECK(nd == 1000 && nl == 2000 && !more, "adc %zu la %zu more %d", nd, nl, more);
     bool ok = true;
@@ -289,12 +289,12 @@ static void test_la_capture_reports_achieved_rate(void) {
     for (size_t i = 0; i < 2000; i++) g_la[i] = (uint16_t)((i / 100) & 1);
     clear_tx();
     g_wait_rc = 0;
-    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"sample_rate_mhz\":2.304}");
+    handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"sample_rate_hz\":2304000}");
     CHECK(capture_busy() && g_owner == 6, "la_capture did not arm: %s", g_err);
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":2181818,") != NULL, "first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":2181818,") != NULL, "first frame: %.90s", first);
     CHECK(nl == 2000 && !more && l[100] == 1 && l[199] == 1 && l[200] == 0, "la %zu more %d", nl, more);
     CHECK(!g_bus && g_owner == -1, "bus or gate held after the read-back");
 
@@ -302,7 +302,7 @@ static void test_la_capture_reports_achieved_rate(void) {
     clear_tx();
     handle_capture_read(6, "{\"cmd\":\"capture_read\",\"offset\":0}");
     pump_all();
-    CHECK(strstr(g_tx, "\"la_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
+    CHECK(strstr(g_tx, "\"la_sample_rate_hz\":2181818,") != NULL, "resume frame: %.90s", g_tx);
     g_wait_rc = 0;
 }
 
@@ -394,7 +394,7 @@ static void test_la_change_capture(void) {
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "48 MS/s first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "48 MS/s first frame: %.90s", first);
     CHECK(nl == 2000 && !more, "48 MS/s: %zu samples, more %d", nl, more);
     CHECK(l[0] == 0 && l[99] == 0 && l[100] == 1 && l[249] == 1 && l[250] == 3 && l[399] == 3 &&
           l[400] == 5 && l[401] == 3 && l[1499] == 3 && l[1500] == 0 && l[1999] == 0,
@@ -425,7 +425,7 @@ static void test_la_change_capture(void) {
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":24000000,") != NULL, "24 MS/s first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":24000000,") != NULL, "24 MS/s first frame: %.90s", first);
     CHECK(nl == 1000 && l[49] == 0 && l[50] == 1 && l[125] == 3 && l[200] == 5 && l[201] == 3 &&
           l[749] == 3 && l[750] == 0,
           "24 MS/s: %zu samples, levels %u %u %u %u %u %u", nl, l[49], l[50], l[125], l[200], l[201], l[750]);
@@ -486,7 +486,7 @@ static void test_la_change_capture(void) {
    12 MS/s and overflowed); a short one keeps the full 12 MS/s. An overflow says what to change. */
 static void test_capture_dual_la_rate_and_overflow(void) {
     clear_tx(); g_wait_rc = 0; g_ovf = false;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000000,\"adc_rate_mhz\":0.4,\"la_samples\":1000000}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000000,\"adc_sample_rate_hz\":400000,\"la_samples\":1000000}");
     CHECK(capture_busy(), "deep capture_dual refused: %s", g_err);
     CHECK(g_dual_lhz > 0.0f && g_dual_lhz <= 4.0e6f, "deep LA asked the fabric for %.0f Hz", (double)g_dual_lhz);
     g_wait_rc = -1; g_ovf = true;
@@ -509,20 +509,20 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     /* An explicit rate that cannot run is refused, not slowed down: above the 8 MS/s ceiling with
        the ADC, and a depth the burst buffer cannot take at the rate asked. */
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":12000000}");
     CHECK(!capture_busy() && g_code == BP_E_LA_RATE_ABOVE_CEILING &&
           strstr(g_err, "rate_mhz=12.0 max_mhz=8.0 fit_mhz=8.0 samples=2000") != NULL, "12 MS/s + ADC: %s", g_err);
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":8}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_sample_rate_hz\":8000000}");
     CHECK(!capture_busy() && g_code == BP_E_LA_RATE_TOO_DEEP &&
           strstr(g_err, "rate_mhz=8.0 samples=1000000") != NULL && strstr(g_err, "fit_mhz=3.0") != NULL, "deep 8 MS/s: %s", g_err);
     clear_tx(); g_wait_rc = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":3}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_sample_rate_hz\":3000000}");
     CHECK(capture_busy() && g_dual_lhz == 3.0e6f, "deep 3 MS/s refused: %s", g_err);
     g_wait_rc = -1; pump_all();
     /* Gateware v53 fixed the writer: 12 MS/s with the ADC runs (for a depth the burst buffer takes). */
     { uint8_t gw = g_gw; g_gw = 53; clear_tx(); g_wait_rc = 0;
-      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
+      handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":12000000}");
       CHECK(capture_busy() && g_dual_lhz == 12.0e6f, "gw 53, 12 MS/s + ADC refused: %s", g_err);
       g_wait_rc = -1; pump_all();
       clear_tx(); g_wait_rc = 0;
@@ -541,12 +541,12 @@ static void test_capture_dual_changes(void) {
     g_nev = 0;
     ev(0, 0); ev(100, 1); ev(150, 3); ev(150, 5); ev(1, 3); ev(871, 3); ev(228, 0); ev(547, 0); ev(0, 0);
     g_gw = 50; clear_tx(); g_wait_rc = 0; g_chg_k = 0;
-    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":48}");
+    handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_sample_rate_hz\":48000000}");
     CHECK(capture_busy() && g_chg_k == 1 && g_chg_samples == 2000, "dual change: k %u, %zu, %s", g_chg_k, g_chg_samples, g_err);
     g_wait_rc = 1;
     pump_all();
     parse(d, &nd, l, &nl, &more, first, sizeof(first));
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "dual change first frame: %.100s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "dual change first frame: %.100s", first);
     bool ok = nd == 1000;
     for (size_t i = 0; i < 1000 && ok; i++) if (d[i] != g_adc[i]) ok = false;
     CHECK(ok && nl == 2000 && !more && l[99] == 0 && l[100] == 1 && l[400] == 5 && l[401] == 3 && l[1500] == 0,
@@ -581,7 +581,7 @@ static void test_sensor_la_waits_for_start(void) {
         if (packed(d, i) != want) { ok = false; printf("  sample %zu: %u, want %u\n", i, packed(d, i), want); }
     }
     CHECK(ok && !more, "levels: %zu bytes, more %d", nd, more);
-    CHECK(strstr(first, "\"la_rate_hz\":48000000,") != NULL, "first frame: %.90s", first);
+    CHECK(strstr(first, "\"la_sample_rate_hz\":48000000,") != NULL, "first frame: %.90s", first);
     CHECK(strstr(g_tx, "\"trigger\":{\"la\":1,\"edge\":\"falling\",\"fired\":true}") != NULL, "no trigger footer: %.200s", g_tx);
     CHECK(!g_bus && g_owner == -1 && !capture_busy(), "bus or gate held after sensor_la");
 

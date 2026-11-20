@@ -165,7 +165,7 @@ message, or the code when there is none, with `"code"` and `"args"` beside it.
 Commands that return sample arrays (`capture`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
-{"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
+{"status":"ok",    "bits":16, "adc_sample_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
 {"status":"chunk", "b64":"NBL_f...", "more":true}\n
 {"status":"chunk", "b64":"QBQ0Fz...", "more":false}\n
 ```
@@ -315,6 +315,14 @@ Commands that send several packets or switch the connection to raw bytes need a 
 
 Commands not in this table answer `"unknown cmd"`.
 
+**Names and units (firmware 4.0.0).** A rate or frequency is in Hz and its name ends in `_hz`:
+`sample_rate_hz` for a sample rate (`adc_sample_rate_hz` and `la_sample_rate_hz` where a capture
+has both), `freq_hz` for a waveform, `clock_hz` for a bus clock. A voltage given in volts ends in
+`_v` (`dac_out` `v`, `generate` `amplitude_v`); integer millivolt settings and readings end in
+`mv` or `_mv` and microvolts in `uv`. A DAC code is `code16`. Durations end in their unit (`_ms`,
+`_us`, `_s`). Firmware up to 3.10.13 used `freq`, `hz`, `rate_hz` and `*_rate_mhz` (in MHz) in
+places; the [features table](#features-table) entry `json_names_4` marks the change.
+
 <a id="gates-that-apply-to-every-command"></a>
 ### Gates that apply to every command
 
@@ -369,8 +377,8 @@ Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255
 #### Request
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
-{"cmd":"generate","waveform":"square","freq":10,"amplitude_ua":4000,"offset_ua":12000}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
+{"cmd":"generate","waveform":"square","freq_hz":10,"amplitude_ua":4000,"offset_ua":12000}
 ```
 
 | Field | Type | Required | Default | Description |
@@ -379,9 +387,9 @@ Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255
 | `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
 | `amplitude_v`, `offset_v` | number (V) | together | — | Peak and center in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
 | `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
-| `freq` | number (Hz) | no | `1000` | Output frequency |
+| `freq_hz` | number (Hz) | no | `1000` | Output frequency |
 | `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run until the next command |
-| `sample_rate_mhz` | number (MHz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
 | `route` | boolean | no | `true` | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
 
@@ -396,12 +404,12 @@ sawtooth: value = offset - amplitude … offset + amplitude  (linear ramp per pe
 The firmware precomputes one full period in a sample buffer and the FPGA loops it. Period length in samples is:
 
 ```
-period_samples = floor(sample_rate / freq)
+period_samples = floor(sample_rate / freq_hz)
 ```
 
 where `sample_rate = 48 MHz / (divider + 51)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s.
 
-The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_mhz` out and the firmware picks one that fits the period.
+The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_hz` out and the firmware picks one that fits the period.
 
 #### Response
 
@@ -414,17 +422,17 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmwar
 #### Examples
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":100000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+{"cmd":"generate","waveform":"sine","freq_hz":100000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 ```
 → 100 kHz sine, 0.45 to 2.85 V on the 3v3 output, runs until the next command.
 
 ```json
-{"cmd":"generate","waveform":"square","freq":50000,"path":"5v","amplitude_v":2.5,"offset_v":2.5,"duration_ms":2000}
+{"cmd":"generate","waveform":"square","freq_hz":50000,"path":"5v","amplitude_v":2.5,"offset_v":2.5,"duration_ms":2000}
 ```
 → 50 kHz square wave, 0 to 5 V, for 2 seconds, then the DAC stops.
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":100000,"path":"3v3","amplitude_v":1,"offset_v":1.65,"sample_rate_mhz":1}
+{"cmd":"generate","waveform":"sine","freq_hz":100000,"path":"3v3","amplitude_v":1,"offset_v":1.65,"sample_rate_hz":1000000}
 ```
 → 100 kHz sine clocked at 1 MHz (10 samples/period). Coarser waveform but much lower clock feedthrough, useful for a cleaner scope trace on breadboard wiring.
 
@@ -438,7 +446,7 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmwar
 | `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
 | `amplitude_v` not above 0 | `amplitude_v must be above 0 V` |
 | A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
-| `freq` ≤ 0 | `"generate failed"` |
+| `freq_hz` ≤ 0 | `"generate failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 ---
@@ -450,19 +458,19 @@ Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into P
 #### Request
 
 ```json
-{"cmd":"capture","samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"capture","samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Max |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | `32768` |
-| `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
+| `sample_rate_hz` | number (Hz) | no | max (~400000) | — |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
 | `enc` | string | no | `"b64"` | `"dec"` for decimal `data`, see [Base64 samples](#base64-samples-the-default) |
 
 For more than 32768 samples use `capture_dual` with `la_samples` 0 (millions of samples, read back from PSRAM).
 
-`sample_rate_mhz` sets the ADC sample clock. Omit it for the maximum ~400 kSPS rate; a **lower** rate stretches the capture window so a slow waveform fits in the 32768-sample buffer. For example, 32768 samples at ~400 kSPS spans ~82 ms, and `0.08` (80 kS/s) spans ~410 ms — enough to see a motor current waveform or other low-frequency signal. The v2 MCP33131 ADC runs in the 24 MHz domain and its divider is floored at 60, so the maximum rate is 24 MHz ÷ 60 ≈ 400 kSPS; the firmware snaps to the nearest achievable divider and logs the actual rate.
+`sample_rate_hz` sets the ADC sample clock. Omit it for the maximum ~400 kSPS rate; a **lower** rate stretches the capture window so a slow waveform fits in the 32768-sample buffer. For example, 32768 samples at ~400 kSPS spans ~82 ms, and `80000` (80 kS/s) spans ~410 ms — enough to see a motor current waveform or other low-frequency signal. The v2 MCP33131 ADC runs in the 24 MHz domain and its divider is floored at 60, so the maximum rate is 24 MHz ÷ 60 ≈ 400 kSPS; the firmware snaps to the nearest achievable divider and logs the actual rate.
 
 #### Response
 
@@ -500,7 +508,7 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 To verify the signal path, start a waveform then capture:
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"cmd":"capture","samples":4096}
 ```
 
@@ -524,17 +532,17 @@ When the capture finishes the firmware stops the DAC before it returns the data.
 #### Request
 
 ```json
-{"cmd":"measure","waveform":"<type>","freq":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"measure","waveform":"<type>","freq_hz":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `waveform` | string | yes | — | `"sine"`, `"square"`, or `"sawtooth"` |
-| `freq` | number (Hz) | no | `1000` | DAC output frequency |
+| `freq_hz` | number (Hz) | no | `1000` | DAC output frequency |
 | `amplitude` | integer 0–127 | no | `127` | DAC half-scale amplitude |
 | `offset` | integer 0–255 | no | `128` | DAC DC offset |
 | `samples` | integer | no | `256` | Number of ADC samples to capture, and the waveform period (max `2048`) |
-| `sample_rate_mhz` | number (MHz) | no | auto | Sample-clock rate. Omit it and the rate is `freq × samples`, so one period spans the capture. |
+| `sample_rate_hz` | number (Hz) | no | auto | Sample-clock rate. Omit it and the rate is `freq_hz × samples`, so one period spans the capture. |
 | `enc` | string | no | `"b64"` | `"dec"` for decimal `data` |
 
 #### Response
@@ -549,12 +557,12 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 #### Examples
 
 ```json
-{"cmd":"measure","waveform":"sine","freq":100000,"amplitude":100,"offset":128,"samples":512}
+{"cmd":"measure","waveform":"sine","freq_hz":100000,"amplitude":100,"offset":128,"samples":512}
 ```
 → Output a 100 kHz sine and return 512 ADC samples taken during the same window.
 
 ```json
-{"cmd":"measure","waveform":"square","freq":50000,"samples":1024}
+{"cmd":"measure","waveform":"square","freq_hz":50000,"samples":1024}
 ```
 → Output a 50 kHz square wave (defaults: amplitude 127, offset 128) and capture 1024 samples.
 
@@ -570,7 +578,7 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 | `waveform` field missing | `"missing waveform"` |
 | Unknown waveform | `"unknown waveform (use sine, square or sawtooth)"` |
 | `samples` = 0 or > 2048 | `"samples out of range"` |
-| Invalid params (for example `freq` ≤ 0) | `"measure start failed"` |
+| Invalid params (for example `freq_hz` ≤ 0) | `"measure start failed"` |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not complete | `"capture failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
@@ -596,15 +604,15 @@ The capture stays in PSRAM after the reply: if the read-back stalls, resume it w
 #### Request
 
 ```json
-{"cmd":"capture_dual","adc_samples":<N>,"adc_rate_mhz":<R>,"la_samples":<M>,"la_rate_mhz":<S>}
+{"cmd":"capture_dual","adc_samples":<N>,"adc_sample_rate_hz":<Hz>,"la_samples":<M>,"la_sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `adc_samples` | integer | no | `0` | ADC 16-bit samples. |
-| `adc_rate_mhz` | number (MHz) | no | max | ADC sample clock (24 MHz domain, divider ≥ 60 → max ~0.4 MHz). |
+| `adc_sample_rate_hz` | number (Hz) | no | max | ADC sample clock (24 MHz domain, divider ≥ 60 → max ~0.4 MHz). |
 | `la_samples` | integer | no | `0` | Raw LA words, 2 bytes each (bit `n-1` = LA`n`). |
-| `la_rate_mhz` | number (MHz) | no | max | LA sample clock. |
+| `la_sample_rate_hz` | number (Hz) | no | max | LA sample clock. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0, so the window shows it switch off. `0` leaves it running. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
 | `enc` | string | no | `"b64"` | `"dec"` for the ADC region as decimal `data` |
@@ -615,11 +623,11 @@ front when they do not fit or when the combined sample rate would overrun the PS
 [tri-capture-unified-psram.md](tri-capture-unified-psram.md)).
 
 The raw LA (12 MS/s and below) follows the same rules as [`la_capture`](#la_capture--deep-raw-logic-analyzer-capture):
-without `la_rate_mhz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
+without `la_sample_rate_hz` it runs at the fastest rate that fits (3 MS/s at 1 000 000 samples), and an
 explicit rate that does not fit is refused with both ways out. On gateware before v53, with ADC
 samples in the same capture the raw LA runs at most 8 MS/s (the PSRAM writer starved the ADC at
 12 MS/s, at any depth and ADC rate): a higher raw rate is refused there. Gateware v53 and later run
-the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_rate_hz`
+the full 12 MS/s with the ADC. Above 12 MS/s the LA records changes instead. `la_sample_rate_hz`
 in the reply is the rate it ran at. Each stream takes at most 2 097 152 samples (4 MB); `la_capture` takes up to 4 194 304 LA
 samples. (Before firmware 3.10.0 a deep `capture_dual` ran at the requested or the full 12 MS/s
 and overflowed.)
@@ -629,7 +637,7 @@ and overflowed.)
 Chunked reply: the ADC region as unsigned 16-bit counts in `data`, then the LA region as **edges**. The **first** packet also carries the **achieved** rates so the client can build an aligned time-base (the gateware floors the ADC to a divider ≥ 60, so the actual rate can differ from the request):
 
 ```json
-{"status":"ok","bits":16,"adc_rate_hz":399361,"la_rate_hz":6000000,"data":[...],"more":true}
+{"status":"ok","bits":16,"adc_sample_rate_hz":399361,"la_sample_rate_hz":6000000,"data":[...],"more":true}
 {"status":"chunk","data":[...],"more":true}
 {"status":"chunk","la":true,"la_edges":[[0,5],[812,7],[1630,5]],"la_upto":2048,"more":true}
 {"status":"chunk","la":true,"la_edges":[[4100,1]],"la_upto":4096,"more":false}
@@ -642,8 +650,8 @@ packet carries `"la":true,"la_edges"` directly.
 
 | Field | Meaning |
 |---|---|
-| `adc_rate_hz` | Achieved ADC sample rate in Hz (`24 MHz ÷ divider`); omitted when `adc_samples` = 0. |
-| `la_rate_hz` | Achieved LA sample rate in Hz; omitted when `la_samples` = 0. |
+| `adc_sample_rate_hz` | Achieved ADC sample rate in Hz (`24 MHz ÷ divider`); omitted when `adc_samples` = 0. |
+| `la_sample_rate_hz` | Achieved LA sample rate in Hz; omitted when `la_samples` = 0. |
 
 #### Error cases
 
@@ -801,21 +809,21 @@ Capture all 14 LA channels into PSRAM and stream them back. The reply uses the L
 `la_edges`, `la_upto`); each word holds LA1 in bit 0 up to LA14 in bit 13. Needs `la_voltage`.
 
 ```json
-{"cmd":"la_capture","samples":65536,"sample_rate_mhz":2}
+{"cmd":"la_capture","samples":65536,"sample_rate_hz":2000000}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | `256` | LA samples. The limit is the PSRAM left above a resident deep-replay waveform (up to the whole 8 MB, 2 bytes per sample). |
-| `sample_rate_mhz` | number (MHz) | no | max (12) | LA sample clock, up to 48 on gateware v50 and later. The pod runs the closest rate at or below it that it can reach (see below); above 12 MS/s, the nearest of 48, 24 and 16. |
+| `sample_rate_hz` | number (Hz) | no | max (12000000) | LA sample clock, up to 48000000 on gateware v50 and later. The pod runs the closest rate at or below it that it can reach (see below); above 12 MS/s, the nearest of 48, 24 and 16. |
 | `stop_dac_after_us` | integer | no | `0` | Gateware v21+: stop a running DAC output this many µs after t0. |
 | `trigger`, `trigger_timeout_ms` | object, integer | no | none | see [Capture triggers](#capture-triggers) |
 
-The first reply packet carries `la_rate_hz`, the **achieved** sample rate in Hz. Use it, not the
+The first reply packet carries `la_sample_rate_hz`, the **achieved** sample rate in Hz. Use it, not the
 requested rate, as the time base:
 
 ```json
-{"status":"ok","bits":16,"la_rate_hz":2181818,"la":true,"la_edges":[[0,256],[11,0]],"la_upto":256,"more":true}
+{"status":"ok","bits":16,"la_sample_rate_hz":2181818,"la":true,"la_edges":[[0,256],[11,0]],"la_upto":256,"more":true}
 ```
 
 The achieved rate can be lower than the request for two reasons:
@@ -823,7 +831,7 @@ The achieved rate can be lower than the request for two reasons:
 - The sample period is a whole number of 24 MHz clocks, so the rate is 24 MHz ÷ *n* (*n* ≥ 2,
   so at most 12 MS/s), rounded down from the request: 2.304 MHz runs at 24/11 = 2.18 MHz.
   Request a rate of that form (12, 8, 6, 4.8, 4, 3, 2.4, 2, … MHz) to get it exactly.
-- Without `sample_rate_mhz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
+- Without `sample_rate_hz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
   runs at the fastest rate that fits it, so no sample is dropped: 4.8 MS/s at 100 000 samples,
   3.4 MS/s at 300 000 and 3 MS/s from about 1 000 000. An explicit rate that does not fit the
   depth is refused (firmware 3.10.0 and later; it used to be slowed down) with both ways out in
@@ -831,12 +839,12 @@ The achieved rate can be lower than the request for two reasons:
   (firmware up to 3.10.13 sent them as text: `"LA at 12.0 MS/s does not fit 1000000 samples: at
   most 65536 samples at 12.0 MS/s, or at most 3.0 MS/s for 1000000 samples ..."`).
 
-Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
+Older firmware omitted `la_sample_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
 
 #### Above 12 MS/s (gateware v50 and later)
 
-A request above 12 MS/s runs at 48, 24 or 16 MS/s, the one nearest the request (`la_rate_hz`
+A request above 12 MS/s runs at 48, 24 or 16 MS/s, the one nearest the request (`la_sample_rate_hz`
 says which). The pod records only the moments a channel changes, at 48 MS/s, and sends them as
 the same `la_edges` reply, so nothing changes for the host. The capabilities report the top rate
 as `la_max_rate_hz` (48000000; 12000000 on older gateware, which runs such a request at 12 MS/s).
@@ -848,7 +856,7 @@ than the buffer lasts, such as continuous SPI at 10 MHz or more for over about 1
 capture early: the reply then holds the samples up to that point, and its first packet carries
 `"truncated":"busy"` (or `"memory"` when the changes filled the free capture memory). Capture at
 12 MS/s or lower for such signals. `capture_dual` takes the same rates for its LA part
-(`la_rate_mhz` above 12); there, a capture that stops early fails with `"capture failed"`.
+(`la_sample_rate_hz` above 12000000); there, a capture that stops early fails with `"capture failed"`.
 
 #### Pre-trigger (gateware v50 and later)
 
@@ -857,7 +865,7 @@ at any rate up to 48 MS/s (the pod records the changes from the arm, so this alw
 method as above):
 
 ```json
-{"cmd":"la_capture","samples":10000,"sample_rate_mhz":24,"trigger":{"la":3,"edge":"falling","pre_samples":2000}}
+{"cmd":"la_capture","samples":10000,"sample_rate_hz":24000000,"trigger":{"la":3,"edge":"falling","pre_samples":2000}}
 ```
 
 The first reply packet carries `"pre_samples":N`, the samples actually returned before the
@@ -871,7 +879,7 @@ The trigger is at sample index N; `samples` more follow it.
 the bus line catches it (this also works over the cloud, which runs one command at a time):
 
 ```json
-{"cmd":"la_capture","samples":4096,"sample_rate_mhz":12,"trigger":{"la":1,"edge":"falling"},
+{"cmd":"la_capture","samples":4096,"sample_rate_hz":12000000,"trigger":{"la":1,"edge":"falling"},
  "send":{"bus":"i2c","addr":72,"write":"Dw","read":2}}
 ```
 
@@ -890,7 +898,7 @@ anything is armed.
 |---|---|
 | LA voltage not set | `BP0001` (`la_voltage_not_set`) |
 | `samples` = 0 or too deep | `BP0067` (`samples_out_of_range`, args `max`); a resident deep-DAC waveform can be what limits it (`dac_stop` frees it) |
-| An explicit `sample_rate_mhz` (12 MS/s and below) too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples`, `fit_mhz`) |
+| An explicit `sample_rate_hz` (12 MS/s and below) too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples`, `fit_mhz`) |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
@@ -974,13 +982,13 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 #### Request
 
 ```json
-{"cmd":"replay","samples":<count>,"sample_rate_mhz":<MHz>}
+{"cmd":"replay","samples":<count>,"sample_rate_hz":<Hz>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | full recorded length | Number of samples to play, ≤ the recorded length. |
-| `sample_rate_mhz` | number (MHz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 51 cycles of the 48 MHz DAC clock from RAM, divider + 52 from PSRAM, divider ≥ 4). The maximum, also the default, is about 873 kS/s from RAM and 857 kS/s for a deep (PSRAM) replay; a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
+| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 51 cycles of the 48 MHz DAC clock from RAM, divider + 52 from PSRAM, divider ≥ 4). The maximum, also the default, is about 873 kS/s from RAM and 857 kS/s for a deep (PSRAM) replay; a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: start at the next capture's t0 (the DAC co-trigger). |
 
 #### Response
@@ -1004,8 +1012,8 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 #### Record → save → replay workflow
 
 ```json
-{"cmd":"capture","samples":4096,"sample_rate_mhz":0.08}   // record a run; host saves the returned array
-{"cmd":"replay","sample_rate_mhz":0.08}                   // play that same run straight back out the DAC
+{"cmd":"capture","samples":4096,"sample_rate_hz":80000}   // record a run; host saves the returned array
+{"cmd":"replay","sample_rate_hz":80000}                   // play that same run straight back out the DAC
 ```
 
 To replay a run saved earlier (e.g. a "normal" trace after a "fault" trace overwrote the live buffer), upload it first:
@@ -1014,7 +1022,7 @@ To replay a run saved earlier (e.g. a "normal" trace after a "fault" trace overw
 {"cmd":"load","offset":0,"data":"<base64url chunk 0>"}
 {"cmd":"load","offset":150,"data":"<base64url chunk 1>"}
 ...
-{"cmd":"replay","sample_rate_mhz":0.08}
+{"cmd":"replay","sample_rate_hz":80000}
 ```
 
 Note that the DAC outputs the recorded samples as a **voltage** waveform — replaying a current trace reproduces its shape (e.g. for a scope or downstream stage), not the original current.
@@ -1097,7 +1105,7 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 
 | Command | Refused when |
 |---|---|
-| `dac_out` | `volts` on the limited path is outside `min_mv`..`max_mv` |
+| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` |
 | `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
 | `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
@@ -1152,12 +1160,12 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 
 #### `dac_out` — route an output path **and** set a calibrated voltage
 
-`volts` is optional (omit to only route). The firmware converts volts to the DAC8551's full
+`v` (volts; `volts` up to firmware 3.10.13) is optional (omit to only route). The firmware converts volts to the DAC8551's full
 16-bit code using the baked-in per-path calibration, so one step is about 50 µV on `3v3`,
 76 µV on `5v` and 0.37 mV on `12v`.
 
 ```json
-{"cmd":"dac_out","path":"5v","volts":2.5}
+{"cmd":"dac_out","path":"5v","v":2.5}
 → {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code16":32723}}
 ```
 
@@ -1458,7 +1466,7 @@ normal range.
 
 ```json
 {"cmd":"adc_range","range":"low"}
-{"cmd":"dac_out","path":"12v","volts":6}
+{"cmd":"dac_out","path":"12v","v":6}
 → {"status":"error","message":"refused: the ADC is in the low range (+-5.46 V full scale), and 6000 mV on the 12v output is past +-5000 mV. Switch the ADC to the normal range first: {\"cmd\":\"adc_range\",\"range\":\"normal\"}"}
 ```
 
@@ -1633,7 +1641,7 @@ firmware then calibrates or clears is what a later update finds.
 
 ```json
 // Self-cal the 5 V path (no external wiring): drive 2.5 V, read it back.
-{"cmd":"dac_out","path":"5v","volts":2.5}
+{"cmd":"dac_out","path":"5v","v":2.5}
 {"cmd":"adc_read","source":"cal1"}          // → ~2500 mV
 
 // Measure an external signal on the ADC input SMA (high-Z ÷12 front end):
@@ -2782,18 +2790,18 @@ happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current
 #### Start
 
 ```json
-{"cmd":"power_profile","action":"start","efuse":1,"rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
+{"cmd":"power_profile","action":"start","efuse":1,"sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `efuse` | `1` or `2` | no | `1` | Which rail to sample. |
-| `rate_hz` | integer | no | `500` | 100..500, whole numbers only. Accurate to ~200 Hz; above that the sampler (one register read per worker pass) beats against the pass interval and flattens near 365 Hz. `stats.rate_hz` reports what was delivered, `stats.adc_rate_hz` what the sensor was configured for. |
+| `sample_rate_hz` | integer | no | `500` | 100..500, whole numbers only. Accurate to ~200 Hz; above that the sampler (one register read per worker pass) beats against the pass interval and flattens near 365 Hz. `stats.sample_rate_hz` reports what was delivered, `stats.adc_sample_rate_hz` what the sensor was configured for. |
 | `max_duration_ms` | integer | no | `60000` | 1..600000. The sampler stops by itself at the limit and marks the result `truncated`. |
 | `keep_samples` | integer | no | `0` | 0..4096 samples to keep for the reply. `0` = statistics only. |
 
 ```json
-{"status":"ok","data":{"started":true,"efuse":1,"rate_hz":907}}
+{"status":"ok","data":{"started":true,"efuse":1,"sample_rate_hz":907}}
 ```
 
 The INA238 is put into continuous shunt+bus mode with a conversion time × averaging that makes
@@ -2820,7 +2828,7 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 ```json
 {"status":"ok","t_us":[0,1102,2204],"current_ua":[830,142300,141900],"bus_mv":[5008,4990,4992],"more":true}
 {"status":"chunk","t_us":[…],"current_ua":[…],"bus_mv":[…],
- "stats":{"efuse":1,"rate_hz":364,"adc_rate_hz":907,"n":3640,"duration_ms":10000,
+ "stats":{"efuse":1,"sample_rate_hz":364,"adc_sample_rate_hz":907,"n":3640,"duration_ms":10000,
           "avg_ua":141200,"min_ua":830,"peak_ua":612400,
           "avg_mv":4995,"min_mv":4870,"max_mv":5012,
           "energy_uj":7052000,"charge_uc":1412000,
@@ -2831,8 +2839,8 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 |---|---|
 | `t_us` | Start of each bin, µs since the profile started. |
 | `current_ua` / `bus_mv` | Bin-averaged current (µA, signed) and bus voltage (mV). |
-| `stats.rate_hz` | Samples per second actually **delivered** (`n` over `duration_ms`, measured). |
-| `stats.adc_rate_hz` | Conversion rate the INA238 was configured for — the ceiling `rate_hz` works towards, not what arrived. |
+| `stats.sample_rate_hz` | Samples per second actually **delivered** (`n` over `duration_ms`, measured). |
+| `stats.adc_sample_rate_hz` | Conversion rate the current monitor was configured for — the ceiling `sample_rate_hz` works towards, not what arrived. |
 | `stats.n` | Raw samples taken (not the number returned). |
 | `stats.energy_uj` / `charge_uc` | ∫I·V·dt in µJ and ∫I·dt in µC over every raw sample. |
 | `stats.fault` | An eFuse fault was seen at any point in the window. |
@@ -2854,7 +2862,7 @@ Omit `action` and give `duration_ms`: the pod starts, waits (without blocking th
 then sends the same reply `stop` would. Needs a streaming connection.
 
 ```json
-{"cmd":"power_profile","efuse":1,"duration_ms":2000,"rate_hz":500,"keep_samples":1024}
+{"cmd":"power_profile","efuse":1,"duration_ms":2000,"sample_rate_hz":500,"keep_samples":1024}
 ```
 
 #### Error cases
@@ -2863,7 +2871,7 @@ then sends the same reply `stop` would. Needs a streaming connection.
 |---|---|
 | a profile is already running | `"power profile already running on efuse 1"` |
 | `efuse` not 1 or 2 | `"efuse must be 1 or 2"` |
-| `rate_hz` out of range | `"rate_hz must be 100..500"` |
+| `sample_rate_hz` out of range | `"sample_rate_hz must be 100..500"` |
 | `max_duration_ms` / `duration_ms` out of range | `"max_duration_ms must be 1..600000"` / `"duration_ms must be 1..600000"` |
 | `keep_samples` > 4096 | `"keep_samples must be 0..4096"` |
 | the rail's INA238 does not answer | `"power profile: the INA238 for efuse 1 (I2C 0x40) is not responding"` |
@@ -2999,16 +3007,16 @@ command channel.
 ### `spi_start` — claim four pins for SPI
 
 ```json
-{"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}
+{"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}
 ```
 
 | Field | Meaning |
 |---|---|
 | `sck`, `mosi`, `miso`, `cs` | LA pins 1..14, all different |
-| `hz` | SCK rate, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
+| `clock_hz` | SCK rate in Hz, default 1000000.  The pod picks the nearest rate at or below it from 24 MHz / (2 * n), n = 2..63: 6 MHz down to 190 kHz |
 | `mode` | 0 (default), 1, 2 or 3 (CPOL = mode / 2, CPHA = mode % 2).  Modes 1 and 2 need gateware v55 (firmware with I2C master support) |
 
-Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
+Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
 Errors: `BP0017` (the SPI master needs gateware v45, modes 1 and 2 v55), `BP0004` (an SPI session
@@ -3162,17 +3170,17 @@ command and reply fits one cloud frame.
 ### `i2c_start` — claim two pins as an I2C master
 
 ```json
-{"cmd":"i2c_start","sda":1,"scl":2,"hz":400000,"pullups":"pod"}
+{"cmd":"i2c_start","sda":1,"scl":2,"clock_hz":400000,"pullups":"pod"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
-| `hz` | 10000..1000000, default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
+| `clock_hz` | 10000..1000000 (Hz), default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
 | `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
-Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
+Reply: `{"sda":1,"scl":2,"clock_hz":363636,"pullups":"pod"}` with the rate actually used.
 
 Errors: `BP0017` (the I2C master needs gateware v55), `BP0061` (`i2c_needs_pullups`: switch on
 the pull-up, or pass `"pullups":"external"`), `BP0029` (pin 21 is down, so the pod's pull-ups are
@@ -3498,7 +3506,7 @@ earlier: at most 256 bytes fit, and a single reply works over the cloud command 
 
 ### `sensor_la` — raw I2C bus capture
 
-`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":0.5}` captures the two bus
+`{"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_hz":500000}` captures the two bus
 pins of a running **I2C** instance. By default it **waits for the DUT's next transaction**: the
 capture starts on the first SDA fall (on an idle bus that is a START) and keeps 1/8 of the samples
 from before it, so the START itself is in the window. A DUT that reads its sensor every 200 ms is
@@ -3508,7 +3516,7 @@ then always caught, where a capture at once mostly missed it.
 |---|---|---|---|---|
 | `instance` | string | yes | | A running I2C instance. |
 | `samples` | integer | no | 256 | Packed bytes to return, 1..4096 (4 samples per byte). |
-| `sample_rate_mhz` | number | no | the highest rate | Sample rate. |
+| `sample_rate_hz` | number (Hz) | no | the highest rate | Sample rate. |
 | `trigger` | string | no | `"start"` | `"start"`: wait for the bus's next START, as above. `"none"`: capture at once (the behavior of firmware 3.10.3 and earlier). |
 | `timeout_ms` | integer | no | 2000 | How long `"start"` waits, 1..600000. |
 
@@ -3520,7 +3528,7 @@ the bus in time the reply is `BP0039` (`sensor_trigger_timeout`, args `la`, `ins
 The data comes back chunked like the other sample arrays (a stream connection: not over the cloud
 command channel), one byte per four samples, oldest first in the high bits: bit7 SCL(s0), bit6
 SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3), the format of the earlier single-sensor `sensor_la`. The
-first chunk carries `"la_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
+first chunk carries `"la_sample_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
 carries `"trigger":{"la":2,"edge":"falling","fired":true}`. When the START came sooner after the
 request than the pre-trigger part covers, the samples before the capture began repeat the level
 the bus had then. The features table has `sensor_la_trigger` for firmware that takes `trigger` and
@@ -3677,7 +3685,7 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 | SCPI | Equivalent JSON | Notes |
 |---|---|---|
-| `SENSe:SRATe <MHz>` / `?` | `capture` `sample_rate_mhz` | ADC capture clock; `0` = max ~400 kSPS (24 MHz ÷ divider, divider ≥ 60). Lower stretches the window (e.g. `0.08` → 80 kS/s → 32768 samples ≈ 410 ms). |
+| `SENSe:SRATe <MHz>` / `?` | `capture` `sample_rate_hz` (SCPI keeps MHz) | ADC capture clock; `0` = max ~400 kSPS (24 MHz ÷ divider, divider ≥ 60). Lower stretches the window (e.g. `0.08` → 80 kS/s → 32768 samples ≈ 410 ms). |
 | `SENSe:SWEep:POINts <n>` / `?` | `capture` `samples` | Default acquisition length for `READ?`. |
 | `READ? [<n>]` | `capture` | Capture `n` (or the `POINts` default) samples at `SENSe:SRATe` and return CSV. Also loads the replay buffer (its first 2048 samples, the DAC BRAM size). |
 | `TRACe[:DATA] <offset>,"<base64url>"` | `load` | Upload one chunk of a replay waveform: 16-bit little-endian samples (2 bytes each, as the JSON `load`), at most 4096 bytes. `offset` is in bytes. Send `offset` 0 first, then successive offsets (≤150 bytes/chunk to fit the 256-byte line). |
@@ -3754,7 +3762,7 @@ Fields left out keep their value.
 {"cmd":"dac_loop_input","source":"sweep","step":16}
 ```
 
-Reply: `{"source":"fixed","input":32768,"step":0,"v":<DAC code at the moment of the write>}`. Poll
+Reply: `{"source":"fixed","input":32768,"step":0,"code16":<DAC code at the moment of the write>}` (`v` up to firmware 3.10.13). Poll
 `dac_loop_probe` for the settled value. Errors: `"loop input sources need gateware v29+"`,
 `"unknown loop input source (use adc, fixed or sweep)"`, the parameter checks, the image refusal
 and `"loop input update failed"`.
@@ -3765,7 +3773,7 @@ and `"loop input update failed"`.
 {"cmd":"dac_loop_probe"}
 ```
 
-Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","v":<DAC code>,"tripped":false}`.
+Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","code16":<DAC code>,"tripped":false}` (`v` up to firmware 3.10.13).
 Plot against `in`, not `i`: in a fixed or sweep run the ADC is not in the path. `tripped` is the
 latched over-range trip (the output then sits at `vmin` until the loop is disarmed). On the
 deep-replay image it answers `BP0058` (`fpga_image_required`, image `loop`).
@@ -4251,7 +4259,7 @@ development builds).
 | Request | Tier | Reply |
 |---|---|---|
 | `{"cmd":"eth","action":"stats"}` | T0 | `{"phy_ok":true,"link":true,"aneg_done":true,"phy_mode":"100FD","mac_mode":"100FD","rx_good":..,"rx_crc":..,"tx_good":..,...}` |
-| `{"cmd":"eth","action":"refclk"}` | T0 | `{"hz":50000012,"ppm":0,"on_hsi":false}`: the PHY's 50 MHz RMII clock against the MCU crystal; drops the link for about 200 ms |
+| `{"cmd":"eth","action":"refclk"}` | T0 | `{"clock_hz":50000012,"ppm":0,"on_hsi":false}`: the PHY's 50 MHz RMII clock against the MCU crystal; drops the link for about 200 ms |
 | `{"cmd":"eth","action":"stop"}`, `"start"`, `"restart"` (the default) | T2 | the action name; `start` and `restart` reset the PHY and get a new DHCP lease |
 | `{"cmd":"eth","action":"speed","mbit":100,"duplex":"full"}` | T2 | `{"speed":100,"duplex":"full"}`; `mbit` `0` returns to autonegotiation, `duplex` defaults to half |
 | `{"cmd":"eth","action":"loopback","mbit":100,"n":200}` | T2 | `{"mbit":100,"sent":200,"received":200,"intact":200,"corrupt":0,"crc":0,"align":0,"tx_fail":0}`: a PHY loopback test, `n` 1..1000 |
@@ -4742,7 +4750,7 @@ Refusals without a code keep `{"status":"error","message":...}`; the common ones
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
 | `"safe mode: ..."` | The safe-mode [gate](#gates-that-apply-to-every-command) |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
-| `"generate failed"` | Invalid `freq` (<= 0) |
+| `"generate failed"` | Invalid `freq_hz` (<= 0) |
 | `"capture failed"` | The capture did not arm or did not complete |
 | `"invalid swd la channel"`, `"invalid uart args"` | a channel outside 1..14, or two equal channels |
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
@@ -4772,7 +4780,7 @@ $ nc 192.168.1.220 8080
 {"cmd":"target_power","efuse":1,"state":1}
 {"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
 
-{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
+{"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"status":"ok","data":null}
 
 {"cmd":"capture","samples":512}
@@ -5161,4 +5169,4 @@ connections, each an owner only while it is open.
 - **No authentication:** Any TCP client that can reach port 8080 (or 8443, its TLS form) has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
 - **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `BP0047` (`pod_busy`) until the first one's reply is complete.
 - **DAC runs until stopped:** A `generate` with `duration_ms` 0 runs the DAC until `dac_stop`, the next `generate`, `measure` or `replay`, or `OUTPut OFF` over SCPI.
-- **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.
+- **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_hz`; the firmware snaps to the nearest achievable divider and logs the actual rate.

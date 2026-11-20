@@ -900,7 +900,7 @@ cause = "On gateware before v53 the raw LA runs at most {max_mhz} MS/s when the 
 [BP0068.fix]
 sdk = "ask for at most {max_mhz} MS/s ({fit_mhz} MS/s for {samples} samples), leave the rate out for the fastest that fits, or update the pod's gateware"
 cli = "ask for at most {max_mhz} MS/s, or leave the rate out for the fastest that fits"
-mcp = "retry with la_rate_mhz at most {fit_mhz} (or leave it out for the fastest that fits)"
+mcp = "retry with la_sample_rate_hz at most {fit_mhz} MHz in Hz (or leave it out for the fastest that fits)"
 web = "Pick {fit_mhz} MS/s or less, or leave the rate on automatic."
 
 [BP0069]
@@ -937,9 +937,9 @@ args = { la_ksps = "int", adc_ksps = "int" }
 message = "The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s"
 cause = "The capture started, but its streams wrote to the PSRAM faster than it could take them, so samples were lost and the pod returns none."
 [BP0071.fix]
-sdk = "lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"
+sdk = "lower la_sample_rate_hz or adc_sample_rate_hz, or capture fewer samples"
 cli = "lower the LA or ADC rate, or capture fewer samples"
-mcp = "retry with a lower la_rate_mhz or adc_rate_mhz, or fewer samples"
+mcp = "retry with a lower la_sample_rate_hz or adc_sample_rate_hz, or fewer samples"
 web = "Lower the LA or ADC rate, or capture fewer samples."
 
 [BP0072]
@@ -961,9 +961,9 @@ since = "next"
 message = "The combined sample rate is more than the PSRAM bus can take"
 cause = "The LA, the ADC and a running deep replay share one PSRAM bus. The pod adds up their sustained rates and refuses a capture that would overrun it, instead of losing samples."
 [BP0073.fix]
-sdk = "lower la_rate_mhz or adc_rate_mhz, or stop the DAC replay first"
+sdk = "lower la_sample_rate_hz or adc_sample_rate_hz, or stop the DAC replay first"
 cli = "lower the LA or ADC rate"
-mcp = "retry with a lower la_rate_mhz or adc_rate_mhz, or call dac_stop first"
+mcp = "retry with a lower la_sample_rate_hz or adc_sample_rate_hz, or call dac_stop first"
 web = "Lower the LA or ADC rate, or stop the DAC replay first."
 
 [BP0074]

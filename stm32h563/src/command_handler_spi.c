@@ -1,7 +1,7 @@
 /*
  * command_handler_spi.c — the SPI master on the LA pins (gateware >= v44), as JSON commands.
  *
- *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
+ *   {"cmd":"spi_start","sck":3,"mosi":4,"miso":5,"cs":6,"clock_hz":1000000,"mode":0}   (mode 0..3; 1, 2: gw v55) 
  *   {"cmd":"spi_xfer","tx":"<b64url>","cs":"release"|"hold"}   -> {"rx":"<b64url>"}
  *   {"cmd":"spi_flash","op":"id"}                              -> {"id":"ef4017",...}
  *   {"cmd":"spi_flash","op":"read","addr":N,"len":N}           -> {"data":"<b64url>"}
@@ -133,8 +133,8 @@ void handle_spi_start(int conn_id, const char *json) {
             if (v[j] == v[i]) { send_error(conn_id, "each SPI signal needs its own LA pin"); return; }
     }
     uint32_t hz = SPI_DEFAULT_HZ, mode = 0;
-    if (has_key(json, "hz") && !get_u32(json, "hz", &hz)) {
-        send_error(conn_id, "invalid hz"); return;
+    if (has_key(json, "clock_hz") && !get_u32(json, "clock_hz", &hz)) {
+        send_error(conn_id, "invalid clock_hz"); return;
     }
     if (has_key(json, "mode") && (!get_u32(json, "mode", &mode) || mode > 3)) {
         send_error(conn_id, "mode must be 0, 1, 2 or 3"); return;
@@ -159,7 +159,7 @@ void handle_spi_start(int conn_id, const char *json) {
     s_cs_held = false;
 
     char p[128];
-    snprintf(p, sizeof(p), "{\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,\"hz\":%lu,\"mode\":%u}",
+    snprintf(p, sizeof(p), "{\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,\"clock_hz\":%lu,\"mode\":%u}",
              pins[0], pins[1], pins[2], pins[3], (unsigned long)s_hz, (unsigned)mode);
     send_ok_str(conn_id, p);
 }
@@ -327,7 +327,7 @@ void handle_spi_status(int conn_id, const char *json) {
     char p[160];
     if (!fpga_spi_armed()) { send_ok_str(conn_id, "{\"active\":false}"); return; }
     snprintf(p, sizeof(p), "{\"active\":true,\"sck\":%u,\"mosi\":%u,\"miso\":%u,\"cs\":%u,"
-             "\"hz\":%lu,\"mode\":%u,\"cs_held\":%s}",
+             "\"clock_hz\":%lu,\"mode\":%u,\"cs_held\":%s}",
              s_pins[0], s_pins[1], s_pins[2], s_pins[3], (unsigned long)s_hz, s_mode,
              s_cs_held ? "true" : "false");
     send_ok_str(conn_id, p);

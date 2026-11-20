@@ -229,9 +229,9 @@ static bool wants_b64(const char *json) {
     char enc[8] = {0};
     return !(json_get_value(json, "enc", enc, sizeof(enc)) && strcmp(enc, "dec") == 0);
 }
-/* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_rate_hz":NNNNNNNNNN,
-   "la_rate_hz":NNNNNNNNNN,"b64":" is 91 B. */
-#define BULK_B64_HEADER_MAX 96u
+/* Worst-case first-chunk header: {"status":"ok","bits":16,"adc_sample_rate_hz":NNNNNNNNNN,
+   "la_sample_rate_hz":NNNNNNNNNN,"b64":" is 105 B. */
+#define BULK_B64_HEADER_MAX 112u
 
 /* ---- capture trigger (gateware >= CAPTURE_TRIGGER_MIN_GW) -----------------
    A triggered capture's producers load on the arm but do not sample until the fabric sees
@@ -458,7 +458,7 @@ static bool bulk_pump_changes(int conn, size_t avail) {
     if (!bulk.chg_hdr) {
         pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
         if (bulk.la_rate_hz)
-            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+            pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
         if (bulk.chg_pre)
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"pre_samples\":%lu,", (unsigned long)bulk.chg_pre);
         if (bulk.chg_trunc)
@@ -593,9 +593,9 @@ static void bulk_pump(void) {
                 /* adc_samples==0 (LA-only unified capture): first chunk still carries metadata. */
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"ok\",\"bits\":16,");
                 if (bulk.adc_rate_hz)
-                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"adc_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
+                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"adc_sample_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
                 if (bulk.la_rate_hz)
-                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+                    pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "\"la\":true,\"la_edges\":[");
             } else {
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, "{\"status\":\"chunk\",\"la\":true,\"la_edges\":[");
@@ -687,10 +687,10 @@ static void bulk_pump(void) {
                             "{\"status\":\"ok\",%s", bulk.is16 ? "\"bits\":16," : "");
             if (bulk.adc_rate_hz)
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                                "\"adc_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
+                                "\"adc_sample_rate_hz\":%lu,", (unsigned long)bulk.adc_rate_hz);
             if (bulk.la_rate_hz)
                 pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
-                                "\"la_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
+                                "\"la_sample_rate_hz\":%lu,", (unsigned long)bulk.la_rate_hz);
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
                             (bulk.b64 && bulk.is16) ? "\"b64\":\"" : "\"data\":[");
         } else {
@@ -909,7 +909,7 @@ static void sensla_done(void) {
 static bool sensla_place(uint32_t cause) {
     uint64_t post = (uint64_t)signal_engine_la_change_units() * LA_CHANGE_UNIT_TICKS;
     if (cause == 1u) {
-        sensla_fail("la capture failed: the bus changed faster than the pod can store; use a lower sample_rate_mhz");
+        sensla_fail("la capture failed: the bus changed faster than the pod can store; use a lower sample_rate_hz");
         return false;
     }
     if (cause != 0u) {
@@ -1304,19 +1304,20 @@ void handle_capture(int conn_id, const char *json) {
     return;            /* gate stays claimed until poll completes it */
 }
 
-/* Parse a named "<key>" MHz rate field into Hz (0 = auto). */
+/* Parse a named "<key>" rate field in Hz (0 = auto). */
 static float parse_named_rate_hz(const char *json, const char *key) {
     char s[16] = {0};
     if (!json_get_value(json, key, s, sizeof(s)) || !s[0]) return 0.0f;
-    return (float)atof(s) * 1.0e6f;
+    float hz = (float)atof(s);
+    return hz > 0.0f ? hz : 0.0f;
 }
 
 /* Unified simultaneous capture (v2): arm the ADC + raw 12-ch LA producers off ONE
    trigger and stream BOTH regions back as one 16-bit array — the ADC samples first,
    then the LA words — which the server splits at adc_samples.  Either count may be
    0 to capture just the other (so this one verb also serves ADC-only / LA-only).
-     {"cmd":"capture_dual","adc_samples":N,"adc_rate_mhz":R,
-                           "la_samples":M,"la_rate_mhz":S}
+     {"cmd":"capture_dual","adc_samples":N,"adc_sample_rate_hz":R,
+                           "la_samples":M,"la_sample_rate_hz":S}
    command_handler_poll() reads back + replies, so the net task keeps running. */
 void handle_capture_dual(int conn_id, const char *json) {
     char s[16] = {0};
@@ -1340,8 +1341,8 @@ void handle_capture_dual(int conn_id, const char *json) {
                                      (int32_t)signal_engine_la_max_samples(false));   /* BP0070 */
         return;
     }
-    float adc_hz = parse_named_rate_hz(json, "adc_rate_mhz");
-    float la_hz  = parse_named_rate_hz(json, "la_rate_mhz");
+    float adc_hz = parse_named_rate_hz(json, "adc_sample_rate_hz");
+    float la_hz  = parse_named_rate_hz(json, "la_sample_rate_hz");
     /* LA above 12 MS/s on gateware >= v50: the LA records its changes (48, 24 or 16 MS/s) */
     uint32_t chg_k = la_n ? signal_engine_la_change_divisor(la_hz) : 0u;
     /* Raw LA: the same plan la_capture uses (la_psram_plan). No rate means the fastest; a
@@ -1569,7 +1570,7 @@ void handle_measure(int conn_id, const char *json) {
     char samples_s[16]= {0};
 
     json_get_value(json, "waveform",  waveform,   sizeof(waveform));
-    json_get_value(json, "freq",      freq_s,     sizeof(freq_s));
+    json_get_value(json, "freq_hz",   freq_s,     sizeof(freq_s));
     json_get_value(json, "amplitude", amp_s,      sizeof(amp_s));
     json_get_value(json, "offset",    off_s,      sizeof(off_s));
     json_get_value(json, "samples",   samples_s,  sizeof(samples_s));
@@ -1621,7 +1622,7 @@ void handle_measure(int conn_id, const char *json) {
     dac_trace_note_capture(samples);   /* the read-back lands in the pool */
 }
 
-/* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_mhz":2.0}: an I2C instance's
+/* {"cmd":"sensor_la","instance":"env","samples":1024,"sample_rate_hz":2000000}: an I2C instance's
    SDA/SCL captured, 4 samples per byte (oldest in the high bits: bit7 = scl(s0), bit6 = sda(s0) ...
    bit0 = sda(s3)). SPI and UART instances: use la_capture on their pins.
    "trigger":"start" (the default) waits up to "timeout_ms" (SENSOR_LA_TIMEOUT_DEFAULT_MS) for the
@@ -1719,7 +1720,7 @@ void handle_sensor_la(int conn_id, const char *json) {
  * (byte 2k = LA1..LA8, byte 2k+1 = {00, LA9..LA14}).  The cloud server renders
  * the raw logic traces — the retired agent only ever decoded I2C; this is the
  * new general view.
- *   {"cmd":"la_capture","samples":1024,"sample_rate_mhz":2.0}
+ *   {"cmd":"la_capture","samples":1024,"sample_rate_hz":2000000}
  * "samples" is the LA sample count (2 bytes each); 2*samples must fit the buffer.  The first
  * reply frame carries "la_rate_hz", the ACHIEVED rate: 24 MHz over a whole divider, lowered
  * further for a capture deeper than the burst ring (la_rate.c), so it can differ from the
