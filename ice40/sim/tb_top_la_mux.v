@@ -91,6 +91,16 @@ module tb_top_la_mux;
             spi_byte({1'b0, inv, 1'b1, 5'h01}, junk); cs_hi;
         end
     endtask
+    // v60: UART_CONFIG2, the same with [ext][de_ch] in front; rx_byte_hi lands in rx_ch's high
+    // nibble, which UART_CONFIG2 ignores (UART_CONFIG would take it as DE's channel)
+    task uart_config2_de(input [3:0] rx_ch, input [3:0] tx_ch, input [3:0] de_ch, input inv, input [3:0] rx_byte_hi);
+        begin
+            cs_lo; spi_byte(8'h7D, junk); spi_byte(8'h00, junk); spi_byte({4'h0, de_ch}, junk);
+            spi_byte({rx_byte_hi, rx_ch}, junk); spi_byte({4'h0, tx_ch}, junk);
+            spi_byte(8'd24, junk); spi_byte(8'd0, junk); spi_byte(8'd0, junk);
+            spi_byte({1'b0, inv, 1'b1, 5'h01}, junk); cs_hi;
+        end
+    endtask
     // v54: I2C target 0 at 0x76 on sda/scl, enabled; then the pin map makes the SDA pad an I2C line
     task i2c_config(input [3:0] sda_ch, input [3:0] scl_ch);
         begin
@@ -238,6 +248,12 @@ module tb_top_la_mux;
         expect_pad("DE active low: idle high", 5, 1'b1, 1'b1, (14'd1 << 8));
         uart_config_de(4'd7, 4'd8, 4'd15, 1'b0);
         expect_pad("DE on channel 15: static", 5, 1'b1, 1'b1, (14'd1 << 8));
+        uart_config2_de(4'd7, 4'd8, 4'd5, 1'b1, 4'd0);
+        expect_pad("UART_CONFIG2: DE active low on its own byte", 5, 1'b1, 1'b1, (14'd1 << 8));
+        uart_config2_de(4'd7, 4'd8, 4'd5, 1'b0, 4'd9);
+        expect_pad("UART_CONFIG2: DE from its own byte, rx_ch's high nibble ignored", 5, 1'b0, 1'b1, (14'd1 << 8));
+        uart_config2_de(4'd7, 4'd8, 4'd15, 1'b0, 4'd5);
+        expect_pad("UART_CONFIG2: DE on channel 15, not rx_ch's nibble", 5, 1'b1, 1'b1, (14'd1 << 8));
         uart_config_de(4'd7, 4'd8, 4'd5, 1'b0);
         cmd0(8'h71);
         expect_pad("UART off: static under DE", 5, 1'b1, 1'b1, 14'd0);

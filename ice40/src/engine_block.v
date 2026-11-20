@@ -275,7 +275,7 @@ module engine_block #(
     // receiver's NMEA) while the proxy keeps the console; v54 RX too (a UART sensor's requests).
     // Its TX reaches a pin through the pin map (EMU_PINMAP code 7), not a la_bank column. ----
     wire [3:0] uart2_rx_ch;
-    uart_engine #(.PARITY(0)) uart2_i (
+    uart_engine #(.HAS_PARITY(0), .HAS_HD(0), .HAS_DE(0)) uart2_i (
         .clk(clk), .rst(rst),
         .cfg_stb(uart2_cfg_stb), .cfg_rx_ch(uart_cfg_rx_ch), .cfg_tx_ch(uart_cfg_tx_ch),
         .cfg_div(uart_cfg_div), .cfg_enable(uart_cfg_enable), .cfg_frame(4'd0), .cfg_de(2'd0), .cfg_de_ch(4'd0), .disable_stb(1'b0),

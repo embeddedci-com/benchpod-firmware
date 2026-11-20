@@ -59,11 +59,6 @@ SRC = src/top_v2.v            \
       src/psram_pads.v        \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
-# The emulation image reads src/i2c_emu_modes.v (the engine with the word-register and command-map
-# pointer modes) in place of src/i2c_emu.v.  The loop and deep images keep reading src/i2c_emu.v,
-# unchanged since the v54 promote, so they synthesize to their hardware-verified bitstreams:
-# yosys numbers cells across every file it reads, so any change there re-rolls their placement.
-EMU_SRC = $(filter-out src/i2c_emu.v,$(SRC)) src/i2c_emu_modes.v
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
 DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
@@ -229,7 +224,7 @@ VVP = sh sim/run_vvp.sh
 define topbench
 	@set -e; for img in $(2); do \
 	  srcs="$(SRC)"; \
-	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)"; srcs="$(EMU_SRC)";; *) defs=;; esac; \
+	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)";; *) defs=;; esac; \
 	  echo "== $(1): $$img image"; \
 	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $$srcs $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
@@ -288,25 +283,25 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 11 since v56, hardware-verified with v59 on 2026-11-19 (clk48 56.07 MHz,
-# clk 26.75 MHz, clk -> clk48 11.17 ns, clk48 -> clk 6.33 ns; 4222 LC, 80%).
-SEED_LOOP ?= 11
-# Next seeds by clk48 in the v54 local sweep, all within MAX_X48_NS then.
-SEED_LOOP_FALLBACK ?= 26 20 9 22 16 12 3
-# Deep image: seed 34 since v58, hardware-verified with v59 on 2026-11-19 (clk48 59.54 MHz,
-# clk 27.72 MHz, clk -> clk48 14.53 ns, clk48 -> clk 4.39 ns; 3932 LC, 74%).  Its clk -> clk48
+# Loop image: seed 2 since v60 (clk48 55.86 MHz, clk 28.35 MHz, clk -> clk48 10.97 ns,
+# clk48 -> clk 6.33 ns; 4217 LC, 80%).  CI: 56.02 / 29.66 / 10.73 / 6.98.
+SEED_LOOP ?= 2
+# The next v60 seeds good in both toolchains, by their worst gate margin.
+SEED_LOOP_FALLBACK ?= 50 30 46 3 11
+# Deep image: seed 24 since v60 (clk48 59.26 MHz, clk 27.45 MHz, clk -> clk48 13.92 ns,
+# clk48 -> clk 5.62 ns; 3939 LC, 75%).  CI: 57.67 / 28.72 / 13.27 / 6.85.  Its clk -> clk48
 # margin to MAX_X48_NS is the smallest of the three images: re-sweep in both toolchains (the
 # ice40-seed-sweep workflow for CI's) when it moves.
-SEED_DEEP ?= 34
-# Seeds good in both toolchains in the v51 sweeps, ordered by the lower of the two clk48 results.
-SEED_DEEP_FALLBACK ?= 5 20 23 1 8
-# Emulation image (USE_EMULATION): seed 27 since v54, hardware-verified with v59 on 2026-11-19
-# (clk48 53.26 MHz, clk 26.08 MHz, clk -> clk48 11.82 ns, clk48 -> clk 6.87 ns).  It is the
-# fullest image: 5151/5280 LC (97.6%), 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk
-# (24 MHz, MIN_CLK_MHZ), not clk48.
-SEED_EMU ?= 27
-# The next seeds with clk >= 27.5 MHz in the v54 local sweep (a lower fill than today's).
-SEED_EMU_FALLBACK ?= 5 3 42 2 22 28 1 19
+SEED_DEEP ?= 24
+# The next v60 seeds good in both toolchains, by their worst gate margin.
+SEED_DEEP_FALLBACK ?= 32 48 60 19 13
+# Emulation image (USE_EMULATION): seed 60 since v60 (clk48 61.41 MHz, clk 27.37 MHz,
+# clk -> clk48 11.17 ns, clk48 -> clk 6.66 ns; CI 56.06 / 28.36 / 11.78 / 8.17).  CI's toolchain
+# closes only 28 of 64 emu seeds.  It is the fullest image: 5155/5280 LC (97.6%),
+# 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
+SEED_EMU ?= 60
+# The next v60 seeds good in both toolchains, by their worst gate margin.
+SEED_EMU_FALLBACK ?= 12 7 41 59 40
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -317,8 +312,8 @@ $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,$(DEEP_DEFINES),$@)
-$(OUT)_emu.json: $(EMU_SRC) $(SYNTH_AUX)
-	$(call synth,$(EMU_DEFINES),$@,$(EMU_SRC))
+$(OUT)_emu.json: $(SRC) $(SYNTH_AUX)
+	$(call synth,$(EMU_DEFINES),$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -394,7 +389,7 @@ sim:
 # v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
 i2cemutest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_i2cemu.vvp -s tb_i2c_emu \
-	         sim/tb_i2c_emu.v src/i2c_emu_modes.v $(CELLS_SIM)
+	         sim/tb_i2c_emu.v src/i2c_emu.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_i2cemu.vvp
 	@rm -f /tmp/$(PROJECT)_i2cemu.vvp
 
@@ -534,8 +529,9 @@ lapsramtest:
 	@rm -f /tmp/$(PROJECT)_lapsram.vvp
 
 # Self-checking simulation of the cmd_dispatch MEASURE decode (DAC+ADC co-start).
+# The deep image's decoder: START_DAC_PSRAM is decoded only there (v60).
 measuretest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_meas.vvp \
+	iverilog -g2012 -I src $(DEEP_DEFINES) -o /tmp/$(PROJECT)_meas.vvp \
 	         sim/tb_measure.v src/cmd_dispatch.v
 	$(VVP) /tmp/$(PROJECT)_meas.vvp
 	@rm -f /tmp/$(PROJECT)_meas.vvp
@@ -544,7 +540,7 @@ measuretest:
 # down-counter that replaced the per-state arg_count+1>=arg_len add-compare).
 # v54: once as the loop image's decoder, once as the emulation image's (the I2C_* commands).
 argtest:
-	@set -e; for d in "" "$(EMU_DEFINES)"; do \
+	@set -e; for d in "" "$(DEEP_DEFINES)" "$(EMU_DEFINES)"; do \
 	  echo "== tb_dispatch_args $$d"; \
 	  iverilog -g2012 -I src $$d -o /tmp/$(PROJECT)_args.vvp sim/tb_dispatch_args.v src/cmd_dispatch.v; \
 	  $(VVP) /tmp/$(PROJECT)_args.vvp; \

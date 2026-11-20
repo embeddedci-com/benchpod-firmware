@@ -82,7 +82,7 @@ module cmd_dispatch #(
     // enough: arg_buf only changes in S_COLLECT, and rx_byte holds until the next SPI byte
     // (>= 16 clk), while the crossing latches it within 2 clk.
     output reg               dac_loop_mode,
-    output reg               loop_arm_stb,    // OP_START_DAC_LOOP payload valid
+    output wire              loop_arm_stb,    // OP_START_DAC_LOOP payload valid
     output wire [63:0]       loop_arm_cfg,    // {tick_div, vmax, vmin, k_q15}
 
     // Loop INPUT SOURCE (OP_DAC_LOOP_SRC 0x1A, v2 >= v29).  Separate from the arm opcode so
@@ -90,7 +90,7 @@ module cmd_dispatch #(
     // point, meter the DAC, move on) without re-arming or re-uploading the curve.  Persistent
     // across arms; 0 = live ADC (closed loop) is the power-on default, so a client that never
     // sends this behaves exactly as it did before v29.
-    output reg               loop_src_stb,
+    output wire              loop_src_stb,
     output wire [33:0]       loop_src_cfg,    // {step, fixed, src}: src 0 = ADC, 1 = fixed, 2 = sweep
 
     // Loop INPUT MAP + safety bounds (OP_DAC_LOOP_INMAP 0x1C, v2 >= v30).  Also persistent
@@ -98,7 +98,7 @@ module cmd_dispatch #(
     // the BENCH (what the ADC is wired to), which does not change when a curve does.  All
     // zero = the v29 behaviour (legacy `in >> SHIFT` index, no trip, no slew bound), so a
     // client that never sends this is bit-for-bit unchanged.
-    output reg               loop_inmap_stb,
+    output wire              loop_inmap_stb,
     output wire [44:0]       loop_inmap_cfg,  // {trip_en, map_en, in_trip(11), in_gain (signed Q15), in_zero}
 
     // ADC engine control
@@ -208,8 +208,8 @@ module cmd_dispatch #(
     // emu_t is the target the I2C_* commands address: 0..3 the I2C targets (i2c_emu), 4 the SPI
     // target.  Every strobe below is qualified like the config wires above: the consumer samples
     // its payload within a few clk, long before the next SPI byte changes arg_buf or rx_byte.
-    output reg  [2:0]        emu_t,
-    output reg               i2c_cfg_stb,      // I2C_CONFIG / I2C_DISABLE
+    output wire [2:0]        emu_t,
+    output wire              i2c_cfg_stb,      // I2C_CONFIG / I2C_DISABLE
     output wire              i2c_cfg_en_only,  // I2C_DISABLE: write the enable bit only (to 0)
     output wire [40:0]       i2c_cfg_data,     // i2c_emu's configuration fields
     output reg               i2c_reg_we,       // I2C_LOAD_REGS / I2C_LOAD_ATTRS byte
@@ -218,21 +218,21 @@ module cmd_dispatch #(
     output wire [7:0]        i2c_reg_addr,     // load address (with the strobe) and read-back address
     output wire [7:0]        i2c_reg_wdata,
     input  wire [7:0]        i2c_reg_rdata,    // the image byte at i2c_reg_addr, kept fresh by the target
-    output reg               i2c_tt_we,        // I2C_TIMES
+    output wire              i2c_tt_we,        // I2C_TIMES
     output wire [1:0]        i2c_tt_idx,
     output wire [15:0]       i2c_tt_val,
-    output reg               i2c_fire_stb,     // I2C_DRDY
+    output wire              i2c_fire_stb,     // I2C_DRDY
     output wire              i2c_fire_set,
     input  wire [31:0]       i2c_status,       // emu_t's {flags, wr_count, last addr, last value}
-    output reg  [7:0]        emu_dr_width = 8'd50,   // EMU_CONFIG
-    output reg               emu_fifo_flush,
-    output reg  [41:0]       emu_pinmap = 42'd0,     // EMU_PINMAP: 3 bits per LA wire
+    output wire [7:0]        emu_dr_width,     // EMU_CONFIG
+    output wire              emu_fifo_flush,
+    output wire [41:0]       emu_pinmap,       // EMU_PINMAP: 3 bits per LA wire
     output reg               emu_fifo_we,      // EMU_FIFO_WRITE byte (rx_byte)
     input  wire [11:0]       emu_fifo_level,    // {bytes in the FIFO memory, head valid}
     input  wire              emu_fifo_ovf,
     input  wire              emu_fifo_unf,
     output reg               emu_fifo_stat_clr,
-    output reg               spit_cfg_stb,     // SPIT_CONFIG (payload on the wires below)
+    output wire              spit_cfg_stb,     // SPIT_CONFIG (payload on the wires below)
     output wire [55:0]       spit_cfg,         // the 7 payload bytes, first byte lowest
 
     // (The on-FPGA I2C-bus logic-analyzer capture — OP_I2C_LA_START 0x65 / OP_I2C_LA_READ
@@ -256,7 +256,7 @@ module cmd_dispatch #(
     output wire              uart_cfg_enable,
     output wire [3:0]        uart_cfg_frame,      // v56: UART_CONFIG flags bits 3..1 {stop2, odd, parity}; v57 bit 4 half duplex
     output wire [1:0]        uart_cfg_de,         // v58: flags bits 6..5 {DE active low, DE enable}
-    output wire [3:0]        uart_cfg_de_ch,      // v58: the rx_ch byte's high nibble
+    output wire [3:0]        uart_cfg_de_ch,      // v58: the rx_ch byte's high nibble (UART_CONFIG); v60: its own byte (UART_CONFIG2)
     output reg               uart_disable_stb,
 
     // ---- UART proxy: TX FIFO write / RX FIFO read ----
@@ -378,13 +378,14 @@ module cmd_dispatch #(
 `define CD_DAC_CTRL            8'b?01?_1???    // 0x38
 `define CD_I2C_CONFIG          8'b??10_0??0    // 0x60 (emulation image only, like the rest of 0x6x/0x7C)
 `define CD_UART_CONFIG         8'b?111_?0??    // 0x70
-`define CD_UART2_CONFIG        8'b?111_???1    // 0x75
+`define CD_UART2_CONFIG        8'b?111_0??1    // 0x75
+`define CD_UART_CONFIG2        8'b??11_1??1    // 0x7D (v60)
 `define CD_I2C_DISABLE         8'b?11?_?0?1    // 0x61
 `define CD_I2C_TIMES           8'b???0_1?00    // 0x6C
-`define CD_I2C_DRDY            8'b??1?_1?01    // 0x6D
+`define CD_I2C_DRDY            8'b??10_1?01    // 0x6D
 `define CD_EMU_PINMAP          8'b?11?_??10    // 0x6E
 `define CD_EMU_CONFIG          8'b?1??_??11    // 0x6F
-`define CD_SPIT_CONFIG         8'b?111_1???    // 0x7C
+`define CD_SPIT_CONFIG         8'b?111_1??0    // 0x7C
 
 `define CD_LOAD_WAVE           8'b?0??_????    // 0x10
 `define CD_SWD_FEED            8'b??0?_???1    // 0x51
@@ -402,18 +403,18 @@ module cmd_dispatch #(
 `define CD_I2C_READ_LOG        8'b??1?_??0?    // 0x79
 
 `ifndef SYNTHESIS
-    localparam N_COLLECT = 28, N_STREAM = 14;
+    localparam N_COLLECT = 29, N_STREAM = 14;
     localparam [N_COLLECT*8-1:0] COLLECT_OPS = {
         OP_START_DAC, OP_DAC_LOOP_SRC, OP_DAC_LOOP_INMAP, OP_START_DAC_LOOP, OP_GPIO_SET, OP_SET_LED,
         OP_CAPTURE_TEST, OP_PSRAM_CS, OP_SWD_ARM, OP_SPI_ARM, OP_SPI_CS, OP_SWD_QCONFIG, OP_GPIO_STEP,
         OP_CAPTURE, OP_SET_CAPTURE_BASES, OP_START_DAC_PSRAM, OP_SET_DAC_STOP_AFTER, OP_SET_TRIGGER,
-        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG,
+        OP_DAC_CTRL, OP_I2C_CONFIG, OP_UART_CONFIG, OP_UART2_CONFIG, OP_UART_CONFIG2,
         OP_I2C_DISABLE, OP_I2C_TIMES, OP_I2C_DRDY, OP_EMU_PINMAP, OP_EMU_CONFIG, OP_SPIT_CONFIG };
     localparam [N_COLLECT*8-1:0] COLLECT_PATS = {
         `CD_START_DAC, `CD_DAC_LOOP_SRC, `CD_DAC_LOOP_INMAP, `CD_START_DAC_LOOP, `CD_GPIO_SET, `CD_SET_LED,
         `CD_CAPTURE_TEST, `CD_PSRAM_CS, `CD_SWD_ARM, `CD_SPI_ARM, `CD_SPI_CS, `CD_SWD_QCONFIG, `CD_GPIO_STEP,
         `CD_CAPTURE, `CD_SET_CAPTURE_BASES, `CD_START_DAC_PSRAM, `CD_SET_DAC_STOP_AFTER, `CD_SET_TRIGGER,
-        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG,
+        `CD_DAC_CTRL, `CD_I2C_CONFIG, `CD_UART_CONFIG, `CD_UART2_CONFIG, `CD_UART_CONFIG2,
         `CD_I2C_DISABLE, `CD_I2C_TIMES, `CD_I2C_DRDY, `CD_EMU_PINMAP, `CD_EMU_CONFIG, `CD_SPIT_CONFIG };
     localparam [N_STREAM*8-1:0] STREAM_OPS = {
         OP_LOAD_WAVE, OP_SWD_FEED, OP_SWD_QFEED, OP_SWD_READ,
@@ -441,6 +442,8 @@ module cmd_dispatch #(
         for (a = 0; a < N_STREAM; a = a + 1) for (b = 0; b < N_STREAM; b = b + 1)
             if (pat_hit(STREAM_OPS[a*8 +: 8], STREAM_PATS[b*8 +: 8]) != (a == b))
                 $display("FAIL cmd_dispatch: S_READ_LEN1 pattern of %02h vs opcode %02h", STREAM_OPS[b*8 +: 8], STREAM_OPS[a*8 +: 8]);
+        if (OP_UART_CONFIG[3] !== 1'b0 || OP_UART_CONFIG2[3] !== 1'b1)
+            $display("FAIL cmd_dispatch: uart_cfg_de_ch's select (current_cmd[3]) no longer separates UART_CONFIG/CONFIG2");
         if (OP_SWD_FEED[3] !== 1'b0 || OP_SWD_QFEED[3] !== 1'b1)
             $display("FAIL cmd_dispatch: swd_feed_q = current_cmd[3] no longer separates SWD_FEED/QFEED");
         // v54 single-bit selects (see their assigns)
@@ -527,7 +530,10 @@ module cmd_dispatch #(
     assign uart_cfg_enable   = rx_byte[0];
     assign uart_cfg_frame    = rx_byte[4:1];
     assign uart_cfg_de       = rx_byte[6:5];
-    assign uart_cfg_de_ch    = arg_buf[4][7:4];
+    // v58 UART_CONFIG: DE rides in rx_ch's high nibble; v60 UART_CONFIG2 has its own byte in front
+    // ([ext][de_ch][rx_ch][tx_ch][div(3)][flags], so every other field sits where UART_CONFIG has it).
+    // ext (arg_buf[2]) is reserved for the next UART option.
+    assign uart_cfg_de_ch    = current_cmd[3] ? arg_buf[3][3:0] : arg_buf[4][7:4];
     // Streamed write data (LOAD_WAVE / SWD_FEED / I2C_LOAD_REGS / UART_WRITE) is rx_byte itself:
     // each sink (sample_buf, swd_engine, i2c_regfile, uart FIFO) takes it only under its 1-cycle
     // write strobe, the cycle after rx_valid, and spi_slave holds rx_byte until the next byte.
@@ -558,6 +564,8 @@ module cmd_dispatch #(
     //   arg_count + 1 >= arg_len   <=>   arg_rem <= 1   (=  last_byte)
     //   arg_count + 1 <  arg_len   <=>   arg_rem >  1   (= !last_byte)
     wire last_byte = (arg_rem <= 16'd1);
+
+
 
     // Status blocks (combinational, no BRAM latency).  Byte 0 goes out from S_IDLE; each later
     // beat presents the NEXT byte, picked by the down-counter (arg_rem = LEN - index of the byte
@@ -590,6 +598,39 @@ module cmd_dispatch #(
     reg cs_active_d;
     wire cs_release = (cs_active_d && !cs_active);
 
+    // ------------------------------------------------------------------------
+    // v60: per-image command groups.  The loop image's control-loop strobes (START_DAC_LOOP,
+    // DAC_LOOP_SRC, DAC_LOOP_INMAP: their payloads are the loop_*_cfg wires above) and the
+    // emulation image's collect decodes (I2C_CONFIG,
+    // I2C_DISABLE, I2C_TIMES, I2C_DRDY, EMU_PINMAP, EMU_CONFIG, SPIT_CONFIG) and the target byte
+    // of I2C_LOAD/READ_*/STATUS are a submodule, so one `ifdef takes the whole group out of the
+    // other images.  col_last / tgt_byte are the clk edges the FSM below acts on: the last byte of
+    // an S_COLLECT payload, and the S_REG_TGT / S_STAT_TGT byte.
+    // ------------------------------------------------------------------------
+    wire fsm_step = ~rst & ~cs_release & rx_valid;
+    wire col_last = fsm_step & (state == S_COLLECT) & last_byte;
+    wire tgt_byte = fsm_step & ((state == S_REG_TGT) | (state == S_STAT_TGT));
+`ifdef HAS_DAC_LOOP
+    cmd_loop_decode loop_dec_i (
+        .clk(clk), .rst(rst), .col_last(col_last), .cmd(current_cmd),
+        .loop_arm_stb(loop_arm_stb), .loop_src_stb(loop_src_stb), .loop_inmap_stb(loop_inmap_stb));
+`else
+    assign loop_arm_stb = 1'b0;  assign loop_src_stb = 1'b0;  assign loop_inmap_stb = 1'b0;
+`endif
+`ifdef HAS_EMULATION
+    cmd_emu_decode emu_dec_i (
+        .clk(clk), .rst(rst), .col_last(col_last), .tgt_byte(tgt_byte), .cmd(current_cmd),
+        .a2(arg_buf[2]), .a3(arg_buf[3]), .a4(arg_buf[4]), .a5(arg_buf[5]), .a6(arg_buf[6]),
+        .a7(arg_buf[7]), .a8(arg_buf[8]), .rx_byte(rx_byte),
+        .emu_t(emu_t), .i2c_cfg_stb(i2c_cfg_stb), .i2c_tt_we(i2c_tt_we), .i2c_fire_stb(i2c_fire_stb),
+        .emu_dr_width(emu_dr_width), .emu_fifo_flush(emu_fifo_flush), .emu_pinmap(emu_pinmap),
+        .spit_cfg_stb(spit_cfg_stb));
+`else
+    assign emu_t = 3'd0;  assign i2c_cfg_stb = 1'b0;  assign i2c_tt_we = 1'b0;  assign i2c_fire_stb = 1'b0;
+    assign emu_dr_width = 8'd50;  assign emu_fifo_flush = 1'b0;  assign emu_pinmap = 42'd0;
+    assign spit_cfg_stb = 1'b0;
+`endif
+
     integer i;
 
     always @(posedge clk) begin
@@ -615,7 +656,6 @@ module cmd_dispatch #(
             dac_ctrl       <= 8'h00;   // DAC8551 frame until DAC_CTRL says otherwise
             dac_wr_stb     <= 1'b0;
             dac_loop_mode <= 1'b0;
-            loop_arm_stb  <= 1'b0;  loop_src_stb <= 1'b0;  loop_inmap_stb <= 1'b0;
             cap_start     <= 1'b0;
             cap_divider   <= 16'd60;   // the ADC's floor (v40: the engine no longer clamps)
             adc_cap_base  <= 24'h400000;   /* legacy fixed map until SET_CAPTURE_BASES */
@@ -636,17 +676,9 @@ module cmd_dispatch #(
             spi_cs_stb       <= 1'b0;
             q_cfg_stb        <= 1'b0;
 
-            i2c_cfg_stb       <= 1'b0;
             i2c_reg_we        <= 1'b0;
-            i2c_tt_we         <= 1'b0;
-            i2c_fire_stb      <= 1'b0;
-            emu_t             <= 3'd0;
-            emu_dr_width      <= 8'd50;
-            emu_fifo_flush    <= 1'b0;
             emu_fifo_we       <= 1'b0;
             emu_fifo_stat_clr <= 1'b0;
-            emu_pinmap        <= 42'd0;
-            spit_cfg_stb      <= 1'b0;
             uart2_rx_re       <= 1'b0;
             uart2_rx_ovf_clr  <= 1'b0;
             la_cap_start      <= 1'b0;
@@ -675,14 +707,9 @@ module cmd_dispatch #(
             spi_arm_stb    <= 1'b0;
             spi_cs_stb     <= 1'b0;
             q_cfg_stb      <= 1'b0;
-            i2c_cfg_stb     <= 1'b0;
             i2c_reg_we      <= 1'b0;
-            i2c_tt_we       <= 1'b0;
-            i2c_fire_stb    <= 1'b0;
-            emu_fifo_flush  <= 1'b0;
             emu_fifo_we     <= 1'b0;
             emu_fifo_stat_clr <= 1'b0;
-            spit_cfg_stb    <= 1'b0;
             uart2_rx_re     <= 1'b0;
             uart2_rx_ovf_clr <= 1'b0;
             la_cap_start    <= 1'b0;
@@ -693,11 +720,8 @@ module cmd_dispatch #(
             uart_tx_we       <= 1'b0;
             uart_rx_re       <= 1'b0;
             uart_rx_ovf_clr  <= 1'b0;
-            loop_arm_stb     <= 1'b0;
             stop_after_stb   <= 1'b0;
             dac_wr_stb       <= 1'b0;
-            loop_src_stb     <= 1'b0;
-            loop_inmap_stb   <= 1'b0;
 
             cs_active_d <= cs_active;
 
@@ -746,17 +770,17 @@ module cmd_dispatch #(
                             //  them left every capture/DAC config field with one source, which
                             //  removed their input muxes.)
                             OP_START_DAC: begin arg_rem <= 16'd4; state <= S_COLLECT; end
+`ifdef HAS_DAC_LOOP
+                            // The control-loop group, loop image only (v60: all three opcodes; until
+                            // v59 only INMAP, and the other images armed a loop they do not have):
+                            // the deep and emulation images ignore them like any unknown opcode.
                             // Control loop arm: 8-byte [k(2)][vmin(2)][vmax(2)][tick_div(2)].
                             OP_START_DAC_LOOP: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             // Loop INPUT SOURCE (v29): 5-byte [src][fixed(2)][step(2)].  Legal
                             // whether or not the loop is armed — a running loop picks the new
                             // source/value up on its next tick.
                             OP_DAC_LOOP_SRC: begin arg_rem <= 16'd5; state <= S_COLLECT; end
-`ifdef HAS_DAC_LOOP
-                            // Only the control-loop image has a loop to map an input for. The
-                            // registers themselves already DCE away in the deep build, but the
-                            // DECODE did not, and perturbing this netlist cost the deep image
-                            // ~5 MHz of clk48 margin on its pinned seed. Gate it out.
+                            // Loop INPUT MAP (v30): 7-byte, see cmd_loop_decode.
                             OP_DAC_LOOP_INMAP: begin arg_rem <= 16'd7; state <= S_COLLECT; end
 `endif
                             // DEEP DAC replay: 8-byte payload [base(3)][count(3)][div(2)];
@@ -882,6 +906,7 @@ module cmd_dispatch #(
 
                             // ---- UART proxy ----
                             OP_UART_CONFIG:  begin arg_rem <= 16'd6; state <= S_COLLECT; end
+                            OP_UART_CONFIG2: begin arg_rem <= 16'd8; state <= S_COLLECT; end
                             OP_UART_DISABLE: begin uart_disable_stb <= 1'b1; state <= S_DONE; end
                             OP_UART_WRITE,
                             OP_UART_READ:    state <= S_READ_LEN0;
@@ -994,24 +1019,15 @@ module cmd_dispatch #(
                                     dac_loop_mode  <= 1'b0;   // normal replay exits the loop
                                     dac_psram_mode <= 1'b0;   // ...and exits deep PSRAM streaming
                                 end
-                                // Loop input source (v29): [src][fixed(2)][step(2)].  Sets the
-                                // registers only — arming and stopping stay with 0x15/0x12.
-                                `CD_DAC_LOOP_SRC: begin
-                                    loop_src_stb  <= 1'b1;
-                                end
 `ifdef HAS_DAC_LOOP
-                                // Loop input map (v30): [in_zero(2)][in_gain(2)][in_trip(2)]
-                                // [flags(1)], flags bit0=map_en, bit1=trip_en.
-                                `CD_DAC_LOOP_INMAP: begin
-                                    loop_inmap_stb     <= 1'b1;
-                                end
-`endif
-                                // Control loop arm: [k(2)][vmin(2)][vmax(2)][tick_div(2)].
+                                // Control loop arm: [k(2)][vmin(2)][vmax(2)][tick_div(2)].  The loop's
+                                // strobes are in cmd_loop_decode; the DAC source and start stay here
+                                // with the other DAC starts.
                                 `CD_START_DAC_LOOP: begin
-                                    loop_arm_stb  <= 1'b1;
                                     dac_loop_mode <= 1'b1;
                                     dac_start     <= 1'b1;   // kick the DAC8551 into streaming
                                 end
+`endif
                                 `CD_GPIO_SET: begin
                                     gpio_set_stb  <= 1'b1;
                                 end
@@ -1068,6 +1084,10 @@ module cmd_dispatch #(
                                 // the streaming mode LEVEL and pulse the DAC engine start;
                                 // the top latches base/len into the DAC clock domain and
                                 // the reader streams the waveform out of PSRAM.
+`ifdef USE_DEEP_REPLAY
+                                // v60: decoded only in the deep image.  The others have no reader to
+                                // stream from (the firmware sends it to the deep image only), so they
+                                // collect its payload and ignore it: no mode, no DAC start.
                                 `CD_START_DAC_PSRAM: begin
                                     dac_psram_base <= {arg_buf[4], arg_buf[3], arg_buf[2]};  // 24-bit byte base
                                     dac_psram_len  <= {arg_buf[7], arg_buf[6], arg_buf[5]};  // 24-bit SAMPLE count
@@ -1075,6 +1095,7 @@ module cmd_dispatch #(
                                     dac_psram_mode <= 1'b1;
                                     dac_start      <= 1'b1;
                                 end
+`endif
                                 // Capture-tied DAC auto-stop for the NEXT capture (v40: one-shot,
                                 // loads the top's countdown).  0 disarms.
                                 //   [cyc_lo][cyc_1][cyc_2][cyc_hi(=rx_byte)]
@@ -1098,42 +1119,14 @@ module cmd_dispatch #(
                                     trig_pol  <= (arg_buf[8] == 8'd1) || (arg_buf[8] == 8'd3);
                                     trig_pre  <= rx_byte[0];   // flags: the last byte
                                 end
-`ifdef HAS_EMULATION
-                                // [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)]: i2c_cfg_data
-                                `CD_I2C_CONFIG: begin
-                                    i2c_cfg_stb <= 1'b1;
-                                    emu_t       <= arg_buf[2][2:0];
-                                end
-                                `CD_I2C_DISABLE: begin          // [target(=rx_byte)]
-                                    i2c_cfg_stb <= 1'b1;
-                                    emu_t       <= rx_byte[2:0];
-                                end
-                                `CD_I2C_TIMES: begin            // [target][index][time(2)]
-                                    i2c_tt_we   <= 1'b1;
-                                    emu_t       <= arg_buf[6][2:0];
-                                end
-                                `CD_I2C_DRDY: begin             // [target][action(=rx_byte)]
-                                    i2c_fire_stb <= 1'b1;
-                                    emu_t        <= arg_buf[8][2:0];
-                                end
-                                // 7 bytes, two LA wires each: wire 2j in the low nibble of byte j
-                                `CD_EMU_PINMAP:
-                                    emu_pinmap <= {rx_byte[6:4], rx_byte[2:0], arg_buf[8][6:4], arg_buf[8][2:0],
-                                                   arg_buf[7][6:4], arg_buf[7][2:0], arg_buf[6][6:4], arg_buf[6][2:0],
-                                                   arg_buf[5][6:4], arg_buf[5][2:0], arg_buf[4][6:4], arg_buf[4][2:0],
-                                                   arg_buf[3][6:4], arg_buf[3][2:0]};
-                                `CD_EMU_CONFIG: begin           // [dr_width][flags(=rx_byte)]
-                                    emu_dr_width   <= arg_buf[8];
-                                    emu_fifo_flush <= rx_byte[0];
-                                end
-                                `CD_SPIT_CONFIG: spit_cfg_stb <= 1'b1;   // 8 bytes: spit_cfg
-`endif
-                                `CD_UART_CONFIG: begin
-                                    // [rx_ch][tx_ch][div_lo][div_mid][div_hi(=rx_byte)][flags]
-                                    // flags: bit0 enable, v56 bit1 parity, bit2 odd, bit3 two stop bits
-                                    // NOTE: flags is the final byte (rx_byte); div_hi is arg_buf[4].
-                                    uart_cfg_stb     <= 1'b1;
-                                end
+                                // (v60: the emulation image's I2C_* / EMU_* / SPIT_CONFIG decodes are in
+                                //  cmd_emu_decode below, fed col_last.)
+                                // [rx_ch][tx_ch][div_lo][div_mid][div_hi][flags(=rx_byte)]: rx_ch is arg_buf[4],
+                                // div_hi arg_buf[8].  flags: bit0 enable, v56 bit1 parity, bit2 odd, bit3 two
+                                // stop bits, v57 bit4 half duplex, v58 bit5 DE, bit6 DE active low.
+                                // v60 UART_CONFIG2: the same with [ext][de_ch] in front (uart_cfg_de_ch above).
+                                `CD_UART_CONFIG,
+                                `CD_UART_CONFIG2: uart_cfg_stb <= 1'b1;
                                 // UART_CONFIG's payload; the uart wires above carry it (rx_ch unused).
                                 `CD_UART2_CONFIG: uart2_cfg_stb <= 1'b1;
                                 default: ;
@@ -1161,14 +1154,12 @@ module cmd_dispatch #(
                     end
 
                     // ---- emulated sensors: register image load / read (v54: target byte first) ----
-                    S_REG_TGT: begin
-                        emu_t <= rx_byte[2:0];
+                    S_REG_TGT: begin              // the target byte: cmd_emu_decode takes emu_t
                         state <= S_REG_ADDR;
                     end
                     // I2C_STATUS: the target byte; the reply starts with a pad byte while the target's
                     // status snapshot (refreshed every 5 clk) catches up.
-                    S_STAT_TGT: begin
-                        emu_t   <= rx_byte[2:0];
+                    S_STAT_TGT: begin             // the target byte: cmd_emu_decode takes emu_t
                         tx_byte <= 8'h00;
                         arg_rem <= I2C_STATUS_LEN;
                         state   <= S_I2C_STATUS;
@@ -1282,6 +1273,86 @@ module cmd_dispatch #(
 
 endmodule
 
+// ============================================================================
+// cmd_loop_decode (v60): the loop image's control-loop command group of cmd_dispatch: the one-clk
+// strobes that tell dac_loop (through engine_block's CDCs) to take the payload on the loop_*_cfg
+// wires, on the FSM's col_last edge.  START_DAC_LOOP's DAC source and start stay in the FSM.
+// ============================================================================
+module cmd_loop_decode (
+    input  wire       clk,
+    input  wire       rst,
+    input  wire       col_last,
+    input  wire [7:0] cmd,
+    output reg        loop_arm_stb,    // START_DAC_LOOP  [k(2)][vmin(2)][vmax(2)][tick_div(2)]
+    output reg        loop_src_stb,    // DAC_LOOP_SRC    [src][fixed(2)][step(2)]: the registers only
+    output reg        loop_inmap_stb   // DAC_LOOP_INMAP  [in_zero(2)][in_gain(2)][in_trip(2)][flags]
+);
+    always @(posedge clk) begin
+        loop_arm_stb <= 1'b0;  loop_src_stb <= 1'b0;  loop_inmap_stb <= 1'b0;
+        if (!rst && col_last) begin
+            casez (cmd)
+                `CD_START_DAC_LOOP: loop_arm_stb   <= 1'b1;
+                `CD_DAC_LOOP_SRC:   loop_src_stb   <= 1'b1;
+                `CD_DAC_LOOP_INMAP: loop_inmap_stb <= 1'b1;
+                default: ;
+            endcase
+        end
+    end
+endmodule
+
+// ============================================================================
+// cmd_emu_decode (v60): the emulation image's command group of cmd_dispatch.  It registers the
+// configuration strobes and fields of the I2C_* / EMU_* / SPIT_CONFIG commands from the collected
+// payload on the FSM's col_last edge (current_cmd is then an S_COLLECT opcode, so the masked
+// patterns tell it apart from the rest of that set), and the target byte on tgt_byte.  Until v59
+// these were case items inside cmd_dispatch's FSM; timing and behavior are the same.
+// ============================================================================
+module cmd_emu_decode (
+    input  wire        clk,
+    input  wire        rst,
+    input  wire        col_last,      // the last payload byte of an S_COLLECT command (rx_byte)
+    input  wire        tgt_byte,      // the target byte of I2C_LOAD/READ_REGS/ATTRS/LOG, I2C_STATUS
+    input  wire [7:0]  cmd,
+    input  wire [7:0]  a2, a3, a4, a5, a6, a7, a8,   // arg_buf[2..8]
+    input  wire [7:0]  rx_byte,
+    output reg  [2:0]  emu_t,
+    output reg         i2c_cfg_stb,
+    output reg         i2c_tt_we,
+    output reg         i2c_fire_stb,
+    output reg  [7:0]  emu_dr_width = 8'd50,
+    output reg         emu_fifo_flush,
+    output reg  [41:0] emu_pinmap = 42'd0,
+    output reg         spit_cfg_stb
+);
+    always @(posedge clk) begin
+        if (rst) begin
+            emu_t <= 3'd0;  emu_dr_width <= 8'd50;  emu_pinmap <= 42'd0;
+            i2c_cfg_stb <= 1'b0;  i2c_tt_we <= 1'b0;  i2c_fire_stb <= 1'b0;
+            emu_fifo_flush <= 1'b0;  spit_cfg_stb <= 1'b0;
+        end else begin
+            i2c_cfg_stb <= 1'b0;  i2c_tt_we <= 1'b0;  i2c_fire_stb <= 1'b0;
+            emu_fifo_flush <= 1'b0;  spit_cfg_stb <= 1'b0;
+            if (tgt_byte) emu_t <= rx_byte[2:0];
+            if (col_last) begin
+                casez (cmd)
+                    // [target][addr7][sda][scl][flags][page][mask][drdy(=rx_byte)]: i2c_cfg_data
+                    `CD_I2C_CONFIG:  begin i2c_cfg_stb  <= 1'b1; emu_t <= a2[2:0];      end
+                    `CD_I2C_DISABLE: begin i2c_cfg_stb  <= 1'b1; emu_t <= rx_byte[2:0]; end   // [target]
+                    `CD_I2C_TIMES:   begin i2c_tt_we    <= 1'b1; emu_t <= a6[2:0];      end   // [target][index][time(2)]
+                    `CD_I2C_DRDY:    begin i2c_fire_stb <= 1'b1; emu_t <= a8[2:0];      end   // [target][action]
+                    // 7 bytes, two LA wires each: wire 2j in the low nibble of byte j
+                    `CD_EMU_PINMAP:
+                        emu_pinmap <= {rx_byte[6:4], rx_byte[2:0], a8[6:4], a8[2:0], a7[6:4], a7[2:0],
+                                       a6[6:4], a6[2:0], a5[6:4], a5[2:0], a4[6:4], a4[2:0], a3[6:4], a3[2:0]};
+                    `CD_EMU_CONFIG:  begin emu_dr_width <= a8; emu_fifo_flush <= rx_byte[0]; end   // [dr_width][flags]
+                    `CD_SPIT_CONFIG: spit_cfg_stb <= 1'b1;   // 8 bytes: spit_cfg
+                    default: ;
+                endcase
+            end
+        end
+    end
+endmodule
+
 // the masked-decode patterns are local to this file
 `undef CD_START_DAC
 `undef CD_DAC_LOOP_SRC
@@ -1304,6 +1375,7 @@ endmodule
 `undef CD_I2C_CONFIG
 `undef CD_UART_CONFIG
 `undef CD_UART2_CONFIG
+`undef CD_UART_CONFIG2
 `undef CD_UART2_WRITE
 `undef CD_UART2_READ
 `undef CD_I2C_DISABLE

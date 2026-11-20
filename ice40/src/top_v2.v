@@ -26,10 +26,12 @@
 // that caused 0x5555.  The shared quad bus is tristated when the STM32 owns it
 // (bus_own / PG0).
 //
-// Two images come from this top: the loop image (dac_loop, the in-fabric control loop)
-// and the deep image (-DUSE_DEEP_REPLAY: dac_psram_reader + psram_bus_arbiter, deep DAC
-// replay from PSRAM).  Both report the same GATEWARE_VERSION; FPGA_FEATURES tells them
-// apart.  The SPI command set is in ice40/PROTOCOL.md.
+// Three images come from this top (src/image_config.vh): the loop image (dac_loop, the
+// in-fabric control loop), the deep image (-DUSE_DEEP_REPLAY: dac_psram_reader +
+// psram_bus_arbiter, deep DAC replay from PSRAM) and, since v54, the emulation image
+// (-DUSE_EMULATION: the emulated sensors, I2C/SPI targets and UART2).  All three report the
+// same GATEWARE_VERSION; FPGA_FEATURES tells them apart.  The SPI command set is in
+// ice40/PROTOCOL.md.
 // ============================================================================
 `include "sys_config.vh"   // SYS_CLK_MHZ — single source (tools/gen_protocol.py)
 `include "image_config.vh" // which of the three images this build is (HAS_DAC_LOOP / HAS_EMULATION)
@@ -798,13 +800,34 @@ module top (
         .psram_sclk(psram_sclk), .psram_cs(psram_cs),
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
-    // ---- shared signal-engine control plane (v2: 14 LA channels, version 53) ----
+    // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 60 = v59 + the 2026-11 audit's gateware items.  UART_CONFIG2 (0x7D): UART_CONFIG
+    // with [ext][de_ch] in front, so DE's channel has its own byte and ext is room for the next UART
+    // option (UART_CONFIG's flags byte had one bit left); UART_CONFIG stays.  tb_dispatch_args,
+    // tb_top_la_mux.  uart_engine's PARITY parameter split into HAS_PARITY / HAS_HD / HAS_DE (it gated all three);
+    // i2c_emu_modes.v folded back into i2c_emu.v (one engine, the emulation image's); la_bank's pin
+    // priority comment names the DE output.  START_DAC_PSRAM is decoded only in the deep image: the
+    // loop and emulation images, which have no reader, ignore it (emu -20 LUT); likewise the control
+    // loop's opcodes (START_DAC_LOOP, DAC_LOOP_SRC, DAC_LOOP_INMAP) outside the loop image.
+    // cmd_dispatch's per-image command groups are submodules under one `ifdef each (cmd_loop_decode,
+    // cmd_emu_decode).  All three images re-swept.
     // GATEWARE_VERSION 59 = v58 + the DAC FRAME GAP for the DAC8554 (dac8551_engine.v): the divider
     // floor goes from 3 to 4, so the next SYNC fall is >= 7 clk48 = 146 ns after the 24th SCLK fall
     // (t9 >= 130 ns; 3 gave 125 ns, enough only for the DAC8551).  The firmware has floored its
     // divider at 4 since 3.10.10, so stream rates do not change; static DAC_CTRL frames on an
     // engine that was never started used the reset divider 0 and still got 125 ns.  All three
     // images.  tb_dac8551, tb_dac8554.
+    // GATEWARE_VERSION 58 = v57 + an RS-485 DE OUTPUT driven by the UART proxy (uart_engine.v,
+    // la_bank.v): UART_CONFIG flags bit 5 drives DE on the LA channel in the rx_ch byte's high
+    // nibble, bit 6 active low.  DE is active from the moment a byte is queued, before its start
+    // bit, to the end of the last stop bit, with no gap between back-to-back bytes; in la_bank it
+    // sits just under the UART's TX.  The deep seed moved 16 -> 34 (16 reached clk -> clk48
+    // 15.18 ns with it).  All three images.  tb_uart_engine, tb_top_la_mux.
+    // GATEWARE_VERSION 57 = v56 + a HALF-DUPLEX (one-wire) UART proxy (uart_engine.v, la_bank.v):
+    // UART_CONFIG flags bit 4.  TX drives low for 0 and releases the line for 1 (open drain, the
+    // pod's pull-up holds it high), rx_ch may equal tx_ch, and RX ignores the line while TX shifts
+    // a frame so the host does not read back its own bytes (RL78 TOOL0 and the like).  All three
+    // images.  tb_uart_engine.
     // GATEWARE_VERSION 56 = v55 + PARITY AND STOP BITS on the UART proxy (uart_engine.v): UART_CONFIG
     // flags bit 1 parity on, bit 2 odd, bit 3 two stop bits (0 = 8N1, what older firmware sends);
     // UART_STATUS byte 1 bit 1 = sticky parity error (the byte is kept).  UART2 stays 8N1.
@@ -816,6 +839,14 @@ module top (
     // and SPI MASTER MODES 1 and 2 (SPI_ARM flags bit 1 inverts SCK).  SPI_ARM's half byte is 7 bits
     // (2..127; 100 kHz I2C needs 120) and SPI_STATUS bit 0 reads 1 for an I2C session too.  All three
     // images.
+    // GATEWARE_VERSION 54 = v53 + the EMULATION IMAGE (-DUSE_EMULATION, src/image_config.vh):
+    // what the other two have, without the control loop and without deep replay, plus the sensor
+    // blocks, which leave the loop and deep images: i2c_emu (four I2C targets in one
+    // time-multiplexed engine: per-register attributes, 16-bit addressing, busy modes, faults,
+    // data ready), spi_target, emu_fifo (the shared sensor FIFO in the free SPRAM) and UART2 with
+    // RX.  FPGA_FEATURES bit 2 marks it; the firmware loads it when a sensor starts.  The pointer
+    // modes (word registers, command map) came later in v54, emulation image only.
+    // tb_i2c_emu, tb_top_emu.
     // GATEWARE_VERSION 53 = v52 + an ADC-urgent pick in psram_dual_writer: a half-full ADC staging
     //     FIFO wins the next burst. Until v52 a raw LA at divider 2 (12 MS/s) kept its FIFO full at
     //     every pick, won every tie, and the ADC FIFO overflowed after ~15 samples: a 12 MS/s LA
@@ -1242,7 +1273,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd59), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd60), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

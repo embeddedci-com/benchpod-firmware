@@ -135,7 +135,11 @@ module la_bank #(
     wire [N-1:0] eff_out, eff_oe;
     genvar c;
     generate for (c = 0; c < N; c = c + 1) begin : g_mux
-        // priority (high→low): swd_dio > swd_clk > spi cs > step > emu > uart > static
+        // priority (high→low): swd_dio > swd_clk > spi cs > step > emu > uart TX > uart DE > static.
+        // Defense in depth only: the firmware's pin claims (la_pins) give each channel one owner,
+        // so two of these never want the same pin.  If they did, the higher one wins the pad and the
+        // lower one is silently not driven: an emulated sensor over the UART, the UART's TX over its
+        // own DE (uart_proxy_start refuses a DE on rx or tx, BP0022).
         assign eff_out[c] = m_swdd[c] ? swd_dio_val  :
                             m_swdc[c] ? swd_clk_val  :
                             m_swds[c] ? swd_cs_val   :

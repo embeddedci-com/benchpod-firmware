@@ -758,6 +758,7 @@ module tb_top_capture;
         cmd_op0(8'h12); #1000;
         $display("  [cotrig] DAC start held after START_DAC, fired at the capture arm, cleared after");
 
+`ifdef USE_DEEP_REPLAY
         // ---- DEEP (PSRAM) co-trigger control-plane: the deep replay mode is set at STAGE (so its
         //      reader can prefill — dac_autostop_lat must be CLEARED by the raw start), the engine
         //      start is deferred, and STOP_DAC cancels the staged start.  (bus_own stays 1 so the
@@ -781,6 +782,21 @@ module tb_top_capture;
         if (dut.dac_psram_mode !== 1'b0) begin
             $display("FAIL cotrig-deep: STOP_DAC did not leave deep replay mode"); errors=errors+1; end
         $display("  [cotrig] deep replay defers its start + primes the reader at stage; STOP cancels");
+`else
+        // v60: the loop image has no deep reader and ignores START_DAC_PSRAM: nothing is staged and
+        // no mode is set, so the DAC stays stopped (the firmware sends it to the deep image only).
+        cmd_op0(8'h12); #1000;
+        cmd_op0(8'h19);                        // ARM_ON_CAPTURE
+        cmd_start_dac_psram(24'h400000, 24'd8, 16'd4);
+        #2000;
+        if (dut.dac_psram_mode !== 1'b0 || dut.dac_running !== 1'b0) begin
+            $display("FAIL deep-ignored: START_DAC_PSRAM acted on the loop image (mode %b running %b)",
+                     dut.dac_psram_mode, dut.dac_running); errors=errors+1; end
+        cmd_op0(8'h12); #1000;                 // STOP_DAC clears the staged co-trigger
+        if (dut.dac_pend !== 1'b0) begin
+            $display("FAIL deep-ignored: STOP_DAC left a staged start"); errors=errors+1; end
+        $display("  [cotrig] loop image: START_DAC_PSRAM ignored (no deep reader)");
+`endif
 
         // ---- DAC RESTART ON A SHORTER WAVEFORM (v33): the first pass must loop at the NEW period.
         //      START_DAC's period/divider cross into clk48 copies latched by the synchronized start

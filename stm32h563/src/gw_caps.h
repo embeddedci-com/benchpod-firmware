@@ -51,6 +51,7 @@ typedef struct {
     bool uart_frame;           /* UART_FRAME_MIN_GW          v56 */
     bool uart_half_duplex;     /* UART_HALFDUPLEX_MIN_GW     v57 */
     bool uart_de;              /* UART_DE_MIN_GW             v58 */
+    bool uart_config2;         /* UART_CONFIG2_MIN_GW        v60 */
     /* ---- the running image (FPGA_FEATURES bits, gateware v22+) ---- */
     bool img_control_loop;     /* FPGA_FEATURE_CONTROL_LOOP */
     bool img_deep_replay;      /* FPGA_FEATURE_DEEP_REPLAY */

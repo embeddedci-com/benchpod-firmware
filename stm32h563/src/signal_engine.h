@@ -743,7 +743,30 @@ static inline bool fpga_uart_avail_ok(uint16_t raw_avail, uint16_t *out) {
 #define UART_DE_MIN_GW          58u
 #define UART_FRAME_DE           (1u << 5)
 #define UART_FRAME_DE_INV       (1u << 6)
+/* UART_CONFIG2 (gateware >= UART_CONFIG2_MIN_GW): UART_CONFIG with [ext][de_ch] in front, so DE's
+   channel has its own byte and ext is room for the next UART option (UART_CONFIG's flags byte has
+   one bit left).  fpga_uart_config_de sends it on v60+ and UART_CONFIG on older gateware. */
+#define UART_CONFIG2_MIN_GW     60u
 #define UART_FRAME_MASK         (UART_FRAME_PARITY | UART_FRAME_ODD | UART_FRAME_STOP2 | UART_FRAME_HALFDUPLEX)
+/* The UART_CONFIG / UART_CONFIG2 payload for wire indices rx, tx (0..13), de (-1 for none), the
+   bit divider and the UART_FRAME_* bits; returns its length (6, or 8 with config2).  Pure (host
+   tests).  UART_CONFIG:  [rx | de << 4][tx][div_lo][div_mid][div_hi][flags]
+                UART_CONFIG2: [ext = 0][de][rx][tx][div_lo][div_mid][div_hi][flags]
+   flags: bit 0 arms, bits 1..3 the frame (v56), bit 4 half duplex (v57), bit 5 DE and bit 6 DE
+   active low (v58). */
+static inline size_t fpga_uart_config_args(uint8_t out[8], bool config2, unsigned rx, unsigned tx, int de,
+                                           bool de_active_low, uint32_t div, uint8_t frame, bool enable) {
+    uint8_t flags = (uint8_t)((enable ? 0x01u : 0x00u) | (frame & UART_FRAME_MASK) |
+                              (de >= 0 ? (UART_FRAME_DE | (de_active_low ? UART_FRAME_DE_INV : 0u)) : 0u));
+    uint8_t dch = (uint8_t)(de >= 0 ? (unsigned)de & 0x0Fu : 0u);
+    size_t n = 0;
+    if (config2) { out[n++] = 0x00u; out[n++] = dch; out[n++] = (uint8_t)(rx & 0x0Fu); }
+    else         { out[n++] = (uint8_t)((rx & 0x0Fu) | (unsigned)(dch << 4)); }
+    out[n++] = (uint8_t)(tx & 0x0Fu);
+    out[n++] = (uint8_t)(div & 0xFFu); out[n++] = (uint8_t)((div >> 8) & 0xFFu); out[n++] = (uint8_t)((div >> 16) & 0xFFu);
+    out[n++] = flags;
+    return n;
+}
 /* CMD_UART_STATUS byte 1: bit 0 is rx_avail bit 8, bit 1 (v56) the sticky parity error. */
 #define UART_STATUS1_PARITY_ERR (1u << 1)
 

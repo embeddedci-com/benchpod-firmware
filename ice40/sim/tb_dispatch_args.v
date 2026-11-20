@@ -1,3 +1,4 @@
+`include "image_config.vh"   // HAS_DAC_LOOP (v60: argtest also runs the deep image's decoder)
 // tb_dispatch_args.v — self-checking testbench for the cmd_dispatch payload
 // byte-counting / terminal logic.
 //
@@ -65,6 +66,8 @@ module tb_dispatch_args;
     wire        uart_cfg_stb;
     wire [3:0]  uart_cfg_rx_ch, uart_cfg_tx_ch;
     wire [23:0] uart_cfg_div;
+    wire [3:0]  uart_cfg_frame, uart_cfg_de_ch;   // v56/v57 frame flags, v58 DE channel
+    wire [1:0]  uart_cfg_de;
 
     // ---- P3 hardening: previously-untested decode + response paths ----
     wire            dac_start, cap_start;          // START_DAC / START_CAPTURE arming
@@ -102,7 +105,8 @@ module tb_dispatch_args;
         .i2c_reg_rdata(i2c_reg_rdata),
         .uart_cfg_stb(uart_cfg_stb), .uart_cfg_rx_ch(uart_cfg_rx_ch),
         .uart_cfg_tx_ch(uart_cfg_tx_ch), .uart_cfg_div(uart_cfg_div),
-        .uart_cfg_enable(uart_cfg_enable),
+        .uart_cfg_enable(uart_cfg_enable), .uart_cfg_frame(uart_cfg_frame),
+        .uart_cfg_de(uart_cfg_de), .uart_cfg_de_ch(uart_cfg_de_ch),
         .uart_tx_we(uart_tx_we), .uart_tx_wdata(uart_tx_wdata),
         .step_start(step_start), .step_channel(step_channel),
         .step_steps(step_steps), .step_delay(step_delay),
@@ -351,10 +355,16 @@ module tb_dispatch_args;
             dac_n = 0;
             cs_hi; feed(8'h13); feed(8'h21); feed(8'h22); feed(8'h23); feed(8'h24); feed(8'h25); feed(8'h26);
                    feed(8'h27); feed(8'h28); cs_lo;
+`ifdef USE_DEEP_REPLAY
             if (dac_n !== 1)                   begin $display("FAIL dac_psram: start %0d (want 1)", dac_n); errors=errors+1; end
             if (dac_psram_base !== 24'h232221) begin $display("FAIL dac_psram: base=%h (want 232221)", dac_psram_base); errors=errors+1; end
             if (dac_psram_len  !== 24'h262524) begin $display("FAIL dac_psram: len=%h (want 262524)", dac_psram_len); errors=errors+1; end
             if (dac_divider    !== 16'h2827)   begin $display("FAIL dac_psram: div=%h (want 2827)", dac_divider); errors=errors+1; end
+`else
+            // v60: the images without the deep reader collect START_DAC_PSRAM and ignore it
+            if (dac_n !== 0 || dut.dac_psram_mode !== 1'b0) begin
+                $display("FAIL dac_psram: decoded on an image without deep replay (start %0d, mode %b)", dac_n, dut.dac_psram_mode); errors=errors+1; end
+`endif
         end
     endtask
     // SET_DAC_STOP_AFTER (4) + the three control-loop opcodes (8 / 5 / 7): strobe + payload wires.
@@ -363,18 +373,24 @@ module tb_dispatch_args;
             cs_hi; feed(8'h14); feed(8'h31); feed(8'h32); feed(8'h33); feed(8'h34); cs_lo;
             if (n_stop !== 1 || got_stop !== 32'h34333231) begin
                 $display("FAIL stop_after: %0d strobes, payload %h (want 1, 34333231)", n_stop, got_stop); errors=errors+1; end
+            dac_n = 0;
             cs_hi; feed(8'h15); feed(8'h41); feed(8'h42); feed(8'h43); feed(8'h44);
                    feed(8'h45); feed(8'h46); feed(8'h47); feed(8'h48); cs_lo;
-            if (n_arm !== 1 || got_arm !== 64'h4847464544434241) begin
-                $display("FAIL loop_arm: %0d strobes, payload %h", n_arm, got_arm); errors=errors+1; end
             cs_hi; feed(8'h1A); feed(8'h02); feed(8'h52); feed(8'h53); feed(8'h54); feed(8'h55); cs_lo;
-            if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
-                $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
-`ifndef USE_EMULATION   // DAC_LOOP_INMAP: the loop image only
             cs_hi; feed(8'h1C); feed(8'h61); feed(8'h62); feed(8'h63); feed(8'h64); feed(8'h65); feed(8'h06);
                    feed(8'h03); cs_lo;
+`ifdef HAS_DAC_LOOP   // the control-loop group: the loop image only (v60: all three opcodes)
+            if (n_arm !== 1 || got_arm !== 64'h4847464544434241 || dac_n !== 1 || dut.dac_loop_mode !== 1'b1) begin
+                $display("FAIL loop_arm: %0d strobes, payload %h, dac starts %0d, mode %b", n_arm, got_arm, dac_n, dut.dac_loop_mode); errors=errors+1; end
+            if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
+                $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
             if (n_inmap !== 1 || got_inmap !== {2'b11, 11'h665, 16'h6463, 16'h6261}) begin
                 $display("FAIL loop_inmap: %0d strobes, payload %h", n_inmap, got_inmap); errors=errors+1; end
+`else
+            // the deep and emulation images ignore the group: no strobe, no DAC start, no loop mode
+            if (n_arm !== 0 || n_src !== 0 || n_inmap !== 0 || dac_n !== 0 || dut.dac_loop_mode !== 1'b0) begin
+                $display("FAIL loop group: decoded on an image without the loop (arm %0d src %0d inmap %0d dac %0d mode %b)",
+                         n_arm, n_src, n_inmap, dac_n, dut.dac_loop_mode); errors=errors+1; end
 `endif
         end
     endtask
@@ -471,18 +487,44 @@ module tb_dispatch_args;
         begin
             uart_cfg_n = 0; cs_hi;
             feed(8'h70);                        // OP_UART_CONFIG
-            feed(8'h02);  // rx_ch
+            feed(8'h92);  // rx_ch 2, v58 DE channel 9 in the high nibble
             feed(8'h05);  // tx_ch
             feed(8'h10);  // div_lo
             feed(8'h20);  // div_mid
             feed(8'h03);  // div_hi
-            feed(8'h01);  // flags -> enable (final byte = rx_byte)
+            feed(8'h63);  // flags: enable, parity, DE, DE active low (final byte = rx_byte)
             cs_lo;
             if (uart_cfg_n !== 1)                  begin $display("FAIL uart_cfg: stb fired %0d times (want 1)", uart_cfg_n); errors=errors+1; end
             if (uart_cfg_rx_ch !== 4'h2)           begin $display("FAIL uart_cfg: rx_ch=%0d", uart_cfg_rx_ch); errors=errors+1; end
             if (uart_cfg_tx_ch !== 4'h5)           begin $display("FAIL uart_cfg: tx_ch=%0d", uart_cfg_tx_ch); errors=errors+1; end
             if (uart_cfg_div   !== 24'h032010)     begin $display("FAIL uart_cfg: div=%06h",  uart_cfg_div);   errors=errors+1; end
             if (uart_cfg_enable !== 1'b1)          begin $display("FAIL uart_cfg: enable=%b", uart_cfg_enable); errors=errors+1; end
+            if (uart_cfg_frame !== 4'h1 || uart_cfg_de !== 2'b11 || uart_cfg_de_ch !== 4'd9) begin
+                $display("FAIL uart_cfg: frame=%h de=%b de_ch=%0d", uart_cfg_frame, uart_cfg_de, uart_cfg_de_ch); errors=errors+1; end
+        end
+    endtask
+
+    // collect: UART_CONFIG2 (v60, 8 payload bytes): UART_CONFIG with [ext][de_ch] in front.  The
+    // shared fields decode where UART_CONFIG has them, DE's channel comes from its own byte and
+    // rx_ch's high nibble is ignored.
+    task test_uart_config2;
+        begin
+            uart_cfg_n = 0; cs_hi;
+            feed(8'h7D);                        // OP_UART_CONFIG2
+            feed(8'h00);  // ext (reserved)
+            feed(8'h0C);  // de_ch 12
+            feed(8'hF3);  // rx_ch 3 (high nibble ignored)
+            feed(8'h07);  // tx_ch
+            feed(8'hD0);  // div_lo
+            feed(8'h00);  // div_mid
+            feed(8'h00);  // div_hi
+            feed(8'h31);  // flags: enable, half duplex, DE (final byte = rx_byte)
+            cs_lo;
+            if (uart_cfg_n !== 1)                  begin $display("FAIL uart_cfg2: stb fired %0d times (want 1)", uart_cfg_n); errors=errors+1; end
+            if (uart_cfg_rx_ch !== 4'h3 || uart_cfg_tx_ch !== 4'h7 || uart_cfg_div !== 24'h0000D0 || uart_cfg_enable !== 1'b1) begin
+                $display("FAIL uart_cfg2: rx=%0d tx=%0d div=%06h en=%b", uart_cfg_rx_ch, uart_cfg_tx_ch, uart_cfg_div, uart_cfg_enable); errors=errors+1; end
+            if (uart_cfg_frame !== 4'h8 || uart_cfg_de !== 2'b01 || uart_cfg_de_ch !== 4'd12) begin
+                $display("FAIL uart_cfg2: frame=%h de=%b de_ch=%0d", uart_cfg_frame, uart_cfg_de, uart_cfg_de_ch); errors=errors+1; end
         end
     endtask
 
@@ -556,6 +598,7 @@ module tb_dispatch_args;
         test_i2c_config;
 `endif
         test_uart_config;
+        test_uart_config2;
 
         // instant responses
         expect_resp(8'h01, 8'hA5, "ping");
