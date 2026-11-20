@@ -348,7 +348,7 @@ What changed, and why (the review's numbers in brackets):
   `net_route.c`) now drops packets for the USB subnet that did not arrive on the USB interface.
 - **OTA from Ethernet or Wi-Fi needs a good signature** [H3], whatever `sig_policy` says; the USB
   console, the USB link and the cloud keep the policy. `lan_unsigned` (console `lan-ota any`)
-  restores the old rule. The LAN policy stays `open` by default and the signature policy
+  restores the old rule. (Firmware 4.0.0: `required` everywhere, no `lan_unsigned`, `dfu` allowed.) The LAN policy stays `open` by default and the signature policy
   `audit`: making `locked` or `required` the default would stop customers' LAN and developer
   workflows, which is a product decision.
 - **ESP32-C3 images must be signed** from every transport [M6]. **Rollback floor** for signed

@@ -589,6 +589,8 @@ web = "Change {setting} with the pod plugged in over USB."
 name = "policy_loosen_usb_only"
 area = "policy"
 since = "next"
+retired = "4.0.0"
+replaced_by = "BP0074"
 args = { setting = "str", now = "str" }
 message = "Only the USB console can loosen {setting} (now {now})"
 cause = "The cloud may make the pod stricter but never looser: a stolen cloud account must not be able to lower the pod's firmware signature policy."
@@ -963,3 +965,16 @@ sdk = "lower la_rate_mhz or adc_rate_mhz, or stop the DAC replay first"
 cli = "lower the LA or ADC rate"
 mcp = "retry with a lower la_rate_mhz or adc_rate_mhz, or call dac_stop first"
 web = "Lower the LA or ADC rate, or stop the DAC replay first."
+
+[BP0074]
+name = "signatures_always_required"
+area = "policy"
+since = "next"
+args = { setting = "str", want = "str" }
+message = "{setting} cannot be set to {want}: this firmware installs only signed images"
+cause = "Firmware 4.0.0 and later take an update (firmware, gateware, the Wi-Fi chip's image) only with a good signature, on every path: the LAN, the USB network adapter and the cloud. No command loosens that. Dev builds also take images signed with the developer key. Firmware you built yourself goes in over USB DFU (`benchpod flash-self`), which needs the pod on a USB cable."
+[BP0074.fix]
+sdk = "install a signed release, or install self-built firmware over USB DFU (`benchpod flash-self`)"
+cli = "install a signed release, or install self-built firmware over USB DFU with `benchpod flash-self` (without --network)"
+mcp = "tell the user the pod takes only signed images; self-built firmware goes in over USB DFU (`benchpod flash-self`)"
+web = "The pod takes only signed images. Install self-built firmware over USB with `benchpod flash-self`."

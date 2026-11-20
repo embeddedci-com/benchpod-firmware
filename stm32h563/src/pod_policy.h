@@ -4,15 +4,16 @@
 /*
  * pod_policy — the pod's persisted security policies (docs/design/policy-commands.md):
  *
- *   signature policy  audit < permissive < required   (fw_sign.h; what OTA accepts)
+ *   signature policy  required, always (firmware 4.0.0; fw_sign.h: what OTA accepts)
  *   LAN policy        open | locked | off            (what the LAN TCP API may do)
  *
  * Both live in one power-loss-safe record (config_store.h A/B slots at 0x1E4000/0x1E6000).
- * No record = audit + open, which is what a pod did before this existed.
+ * No record = required + open. Firmware 4.0.0 reads the signature policy as "required" whatever
+ * the record says (older firmware defaulted to audit) and refuses every other value.
  *
- * Who may change what is decided here, from where the request came:
+ * Who may change the LAN policy is decided here, from where the request came:
  *   USB console  anything (physical presence: the way back)
- *   cloud        the LAN policy freely; the signature policy only to a stricter value
+ *   cloud        anything
  *   LAN TCP      nothing
  * A refused change returns the reason and changes nothing.
  */
@@ -44,7 +45,8 @@ void pod_policy_load(void);
 fw_sig_policy_t  pod_policy_sig(void);
 pod_lan_policy_t pod_policy_lan(void);
 
-/* Change a policy. NULL = done (and persisted), else why not (nothing changed). */
+/* Change a policy. NULL = done (and persisted), else why not (nothing changed). The signature
+   policy takes only FW_SIG_POLICY_REQUIRED, from any source (BP0074 for the others). */
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src);
 const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src);
 
@@ -81,15 +83,6 @@ const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link);
 const char *pod_policy_lan_tls_gate(policy_src_t src, bool usb_link);
 /* Called after HTTPS-only changed (net_server closes plaintext LAN connections). Weak no-op. */
 void pod_policy_on_https_only_change(bool on);
-
-/* Firmware images from the external LAN (firmware 3.10.7+, security review 2026-11 H3): by
-   default an OTA from Ethernet or Wi-Fi needs a good signature (FW_SIG_OK) whatever the
-   signature policy, because the LAN API has no client authentication. The USB console, the USB
-   network adapter and the cloud keep the signature policy as it is (audit: anything). lan_unsigned
-   on lets the external LAN install unsigned or developer-signed images again (the behavior before
-   3.10.7). Turning it on needs the USB console or the USB link; the cloud may only turn it off. */
-bool pod_policy_lan_unsigned(void);
-const char *pod_policy_set_lan_unsigned(bool on, policy_src_t src, bool usb_link);
 
 /* Rollback floor (firmware 3.10.7+, M7): a signed firmware image whose manifest release is below
    it is refused. 0 = none, the default. It only goes up, when a signed firmware image carrying

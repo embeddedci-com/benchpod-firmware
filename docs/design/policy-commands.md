@@ -4,9 +4,15 @@ Status: built and released in firmware 3.6.0 (2026-10-07), with the server and C
 three parts below shipped. This was the spec for branch `policy-enforce`, 2026-10-06.
 Builds on [firmware-signing.md](firmware-signing.md) and [access-control.md](access-control.md).
 
+**Firmware 4.0.0** changes this: the signature policy is always `required`, on every OTA path
+(Ethernet, Wi-Fi, the USB network adapter, the cloud), and no command (JSON, console or SCPI)
+loosens it; `lan_unsigned` and the console's `lan-ota` are gone, and `dfu` is always allowed:
+USB DFU is the way to install self-built firmware. Dev builds also trust the dev key. See
+[API.md, `sig_policy`](../API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts).
+
 Backward compatibility rules, for all three parts:
 
-- Firmware defaults never lock anyone out: `sig_policy` defaults to `audit`, `lan_policy` to `open`,
+- Firmware defaults never lock anyone out: `sig_policy` defaulted to `audit` (up to 3.10.13; always `required` from 4.0.0), `lan_policy` to `open`,
   and a tunnel without `max_tier` gets T1 (firmware 4.0.0; everything up to 3.10.13).
 - A pod advertises each feature with a capability flag. Servers and CLIs only use a feature on a pod
   that advertises it; older pods behave exactly as before.

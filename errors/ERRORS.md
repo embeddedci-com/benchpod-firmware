@@ -49,7 +49,7 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0041 | `policy_not_from_lan` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or the USB console |
 | BP0042 | `setting_cloud_or_usb` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or over USB |
 | BP0043 | `setting_device_only` | policy | next | {setting} can only be changed on the device: the USB console, or over the USB link |
-| BP0044 | `policy_loosen_usb_only` | policy | next | Only the USB console can loosen {setting} (now {now}) |
+| BP0044 | `policy_loosen_usb_only` | policy | next, retired 4.0.0 | Only the USB console can loosen {setting} (now {now}) |
 | BP0045 | `role_required` | policy | next | {cmd} needs an organization owner or admin |
 | BP0046 | `no_analog_front_end` | board | next | This BenchPod has no analog front end, so it cannot run {cmd} |
 | BP0047 | `pod_busy` | busy | next | The pod is running another long command (a capture, measurement, upload or update) |
@@ -79,3 +79,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0071 | `capture_overflowed` | capture | next | The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s |
 | BP0072 | `psram_too_small` | capture | next | The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM |
 | BP0073 | `psram_bandwidth` | capture | next | The combined sample rate is more than the PSRAM bus can take |
+| BP0074 | `signatures_always_required` | policy | next | {setting} cannot be set to {want}: this firmware installs only signed images |

@@ -32,33 +32,26 @@ static void sig_policy_reply(int conn_id) {
     char data[160], fl[16];
     uint32_t floor = pod_policy_rollback_floor();
     snprintf(data, sizeof(data),
-             "{\"policy\":\"%s\",\"enforces\":true,\"keys\":%u,\"lan_unsigned\":%s,\"rollback_floor\":%s%s%s}",
-             fw_sign_policy_name(pod_policy_sig()), (unsigned)fw_sign_key_count(),
-             pod_policy_lan_unsigned() ? "true" : "false", floor ? "\"" : "",
+             "{\"policy\":\"%s\",\"enforces\":true,\"keys\":%u,\"rollback_floor\":%s%s%s}",
+             fw_sign_policy_name(pod_policy_sig()), (unsigned)fw_sign_key_count(), floor ? "\"" : "",
              floor ? fw_sign_release_str(floor, fl, sizeof(fl)) : "null", floor ? "\"" : "");
     send_ok_str(conn_id, data);
 }
 
-/* {"cmd":"sig_policy"[,"set":"audit|permissive|required"][,"lan_unsigned":true|false]}
-   lan_unsigned (firmware 3.10.7+): may Ethernet/Wi-Fi install images without a good signature
-   (pod_policy.h)? On only over the USB link (or the console's lan-ota any); the cloud may turn it
-   off. */
+/* {"cmd":"sig_policy"[,"set":"required"]}: firmware 4.0.0 always requires signatures. "set":"required"
+   (a server pushing it) is fine from any source; audit and permissive, and the 3.10.x
+   "lan_unsigned":true, are refused with BP0074. */
 void handle_sig_policy(int conn_id, const char *json) {
     char v[16] = {0};
-    const policy_src_t src = command_handler_policy_src(conn_id);
     if (bp_json_get(json, "set", v, sizeof(v))) {
         int p = pod_policy_sig_from_name(v);
-        if (p < 0) { send_error(conn_id, "sig_policy: set must be audit, permissive or required"); return; }
-        const char *why = pod_policy_set_sig((fw_sig_policy_t)p, src);
+        if (p < 0) { send_error(conn_id, "sig_policy: set must be required"); return; }
+        const char *why = pod_policy_set_sig((fw_sig_policy_t)p, command_handler_policy_src(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
-    if (bp_json_get(json, "lan_unsigned", v, sizeof(v))) {
-        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
-            send_error(conn_id, "sig_policy: lan_unsigned must be true or false");
-            return;
-        }
-        const char *why = pod_policy_set_lan_unsigned(!strcmp(v, "true"), src, net_conn_on_usb(conn_id));
-        if (why) { send_error(conn_id, why); return; }
+    if (bp_json_get(json, "lan_unsigned", v, sizeof(v)) && strcmp(v, "false") != 0) {
+        bp_err_signatures_always_required(conn_id, "lan_unsigned", v);
+        return;
     }
     sig_policy_reply(conn_id);
 }

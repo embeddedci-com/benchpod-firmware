@@ -17,7 +17,8 @@ typedef struct {
     uint8_t  https_only;  /* 1: no plaintext LAN API on Ethernet/Wi-Fi (0, older records: off) */
     /* Firmware 3.10.7+, in what were reserved bytes (zero in older records; older firmware keeps
        them as they are when it saves): */
-    uint8_t  lan_unsigned;    /* 1: the external LAN may install images without a good signature */
+    uint8_t  lan_unsigned;    /* 3.10.7 to 3.10.13: 1 = the external LAN may install images without a
+                                 good signature. Firmware 4.0.0 ignores it and writes 0. */
     /* After 3.10.12, in the next reserved byte: */
     uint8_t  log_level;       /* console log level (log_level.h stored form): 0 = default (info) */
     uint8_t  reserved[2];
@@ -64,7 +65,7 @@ static bool load_pin(pod_policy_rec2_t *r2) {
            r2->v1.magic == POD_POLICY_RECORD_MAGIC && r2->bridge_pinned == 1;
 }
 
-static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SIG_POLICY_AUDIT,
+static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SIG_POLICY_REQUIRED,
                                   .lan = POD_LAN_OPEN };
 
 /* The one buffer for a formatted refusal: callers (the hw worker, one command at a time) send it
@@ -90,18 +91,21 @@ void pod_policy_load(void) {
         if (r.lan > POD_LAN_OFF) r.lan = POD_LAN_LOCKED;
         if (r.usb_net_off > 1) r.usb_net_off = 1;
         if (r.https_only > 1) r.https_only = 1;
-        if (r.lan_unsigned > 1) r.lan_unsigned = 0;   /* unknown: the stricter meaning */
         s_rec = r;
     }
-    fw_sign_set_policy((fw_sig_policy_t)s_rec.sig);
-    fw_sign_set_lan_unsigned(s_rec.lan_unsigned != 0);
+    /* Firmware 4.0.0: signatures are always required, whatever a record from older firmware says
+       (audit was its default). The record gets "required" with the next save, so firmware rolled
+       back to 3.10.x keeps it too. */
+    s_rec.sig = FW_SIG_POLICY_REQUIRED;
+    s_rec.lan_unsigned = 0;
+    fw_sign_set_policy(FW_SIG_POLICY_REQUIRED);
     fw_sign_set_floor(s_rec.rollback_floor);
     log_set_level(log_level_from_stored(s_rec.log_level));
     char fl[16];
-    log_printf("[policy] signatures %s, LAN %s, USB network %s, HTTPS-only %s, LAN images %s, floor %s, log %s\n",
+    log_printf("[policy] signatures %s, LAN %s, USB network %s, HTTPS-only %s, floor %s, log %s\n",
            fw_sign_policy_name((fw_sig_policy_t)s_rec.sig), pod_policy_lan_name((pod_lan_policy_t)s_rec.lan),
            s_rec.usb_net_off ? "off" : "on", s_rec.https_only ? "on" : "off",
-           s_rec.lan_unsigned ? "any" : "signed", s_rec.rollback_floor ? fw_sign_release_str(s_rec.rollback_floor, fl, sizeof(fl)) : "none",
+           s_rec.rollback_floor ? fw_sign_release_str(s_rec.rollback_floor, fl, sizeof(fl)) : "none",
            log_level_name(log_level()));
 }
 
@@ -151,21 +155,12 @@ const char *pod_policy_set_bridge_pin(const uint8_t *mac, const uint8_t *pub) {
 }
 
 const char *pod_policy_set_sig(fw_sig_policy_t p, policy_src_t src) {
+    /* Firmware 4.0.0: "required" only, from every source (a server pushing it keeps working). There
+       is no way to loosen it: self-built firmware goes in over USB DFU. */
+    (void)src;
     if ((unsigned)p > FW_SIG_POLICY_REQUIRED) return "sig_policy: unknown policy";
-    if (src == POLICY_SRC_LAN) return bp_note_policy_not_from_lan(s_why, sizeof(s_why), "sig_policy");
-    if (src == POLICY_SRC_CLOUD && p < pod_policy_sig()) {
-        return bp_note_policy_loosen_usb_only(s_why, sizeof(s_why), "sig_policy",
-                                              fw_sign_policy_name(pod_policy_sig()));
-    }
-    if (p == pod_policy_sig()) return NULL;
-    pod_policy_rec_t r = s_rec;
-    r.sig = (uint8_t)p;
-    const char *why = save(&r);
-    if (why) return why;
-    fw_sign_set_policy(p);
-    log_printf("[policy] signatures now %s (from %s)\n", fw_sign_policy_name(p),
-           src == POLICY_SRC_USB ? "USB" : "cloud");
-    return NULL;
+    if (p == FW_SIG_POLICY_REQUIRED) return NULL;
+    return bp_note_signatures_always_required(s_why, sizeof(s_why), "sig_policy", fw_sign_policy_name(p));
 }
 
 const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
@@ -219,25 +214,6 @@ const char *pod_policy_set_https_only(bool on, policy_src_t src, bool usb_link) 
     log_printf("[policy] HTTPS-only now %s (from %s)\n", on ? "on" : "off",
                src == POLICY_SRC_USB ? "USB" : src == POLICY_SRC_CLOUD ? "cloud" : "the USB link");
     pod_policy_on_https_only_change(on);
-    return NULL;
-}
-
-bool pod_policy_lan_unsigned(void) { return s_rec.lan_unsigned != 0; }
-
-const char *pod_policy_set_lan_unsigned(bool on, policy_src_t src, bool usb_link) {
-    /* Loosening needs physical presence; the cloud may only tighten (like sig_policy). */
-    if (src == POLICY_SRC_LAN && !usb_link)
-        return bp_note_setting_device_only(s_why, sizeof(s_why), "lan_ota");
-    if (on && src == POLICY_SRC_CLOUD)
-        return "lan_ota: only the USB console or the USB link can allow unsigned LAN updates";
-    if (on == pod_policy_lan_unsigned()) return NULL;
-    pod_policy_rec_t r = s_rec;
-    r.lan_unsigned = on ? 1 : 0;
-    const char *why = save(&r);
-    if (why) return why;
-    fw_sign_set_lan_unsigned(on);
-    log_printf("[policy] LAN images now %s (from %s)\n", on ? "any" : "signed only",
-               src == POLICY_SRC_USB ? "the USB console" : src == POLICY_SRC_CLOUD ? "cloud" : "the USB link");
     return NULL;
 }
 

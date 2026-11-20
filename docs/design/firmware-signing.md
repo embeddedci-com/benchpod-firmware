@@ -6,6 +6,12 @@ moved to `permissive` or `required`); 3.7.0 is signed the same way. See "Built" 
 [access-control.md](access-control.md) and adds the rollout order within the access-control work.
 Written against firmware 3.5.1 (`bcad10d`).
 
+**Firmware 4.0.0** changes this: the signature policy is always `required`, on every OTA path
+(Ethernet, Wi-Fi, the USB network adapter, the cloud), and no command (JSON, console or SCPI)
+loosens it; `lan_unsigned` and the console's `lan-ota` are gone, and `dfu` is always allowed:
+USB DFU is the way to install self-built firmware. Dev builds also trust the dev key. See
+[API.md, `sig_policy`](../API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts).
+
 ## Why
 
 Every install path checks only a SHA-256 that the same client sends: cloud WS `ota.*`, LAN JSON

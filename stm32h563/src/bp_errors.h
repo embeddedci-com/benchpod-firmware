@@ -61,7 +61,7 @@ typedef enum {
     BP_E_POLICY_NOT_FROM_LAN = 41,
     BP_E_SETTING_CLOUD_OR_USB = 42,
     BP_E_SETTING_DEVICE_ONLY = 43,
-    BP_E_POLICY_LOOSEN_USB_ONLY = 44,
+    BP_E_POLICY_LOOSEN_USB_ONLY = 44,   /* retired */
     BP_E_ROLE_REQUIRED = 45,
     BP_E_NO_ANALOG_FRONT_END = 46,
     BP_E_POD_BUSY = 47,
@@ -91,9 +91,10 @@ typedef enum {
     BP_E_CAPTURE_OVERFLOWED = 71,
     BP_E_PSRAM_TOO_SMALL = 72,
     BP_E_PSRAM_BANDWIDTH = 73,
+    BP_E_SIGNATURES_ALWAYS_REQUIRED = 74,
 } bp_errcode_t;
 
-#define BP_E_LAST 73
+#define BP_E_LAST 74
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -657,19 +658,6 @@ static inline const char *bp_tag_setting_device_only(const char *text, const cha
     const bp_err_arg_t a[] = { {"setting", setting, 0, 1} };
     return bp_err_tag(text, BP_E_SETTING_DEVICE_ONLY, a, 1);
 }
-/* BP0044: Only the USB console can loosen {setting} (now {now}) */
-static inline void bp_err_policy_loosen_usb_only(int conn_id, const char *setting, const char *now) {
-    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"now", now, 0, 1} };
-    bp_error_send(conn_id, BP_E_POLICY_LOOSEN_USB_ONLY, a, 2);
-}
-static inline const char *bp_note_policy_loosen_usb_only(char *buf, size_t cap, const char *setting, const char *now) {
-    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"now", now, 0, 1} };
-    return bp_err_note(buf, cap, BP_E_POLICY_LOOSEN_USB_ONLY, a, 2);
-}
-static inline const char *bp_tag_policy_loosen_usb_only(const char *text, const char *setting, const char *now) {
-    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"now", now, 0, 1} };
-    return bp_err_tag(text, BP_E_POLICY_LOOSEN_USB_ONLY, a, 2);
-}
 /* BP0045: {cmd} needs an organization owner or admin */
 static inline void bp_err_role_required(int conn_id, const char *cmd) {
     const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
@@ -1013,6 +1001,19 @@ static inline const char *bp_note_psram_bandwidth(char *buf, size_t cap) {
 }
 static inline const char *bp_tag_psram_bandwidth(const char *text) {
     return bp_err_tag(text, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+/* BP0074: {setting} cannot be set to {want}: this firmware installs only signed images */
+static inline void bp_err_signatures_always_required(int conn_id, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    bp_error_send(conn_id, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+static inline const char *bp_note_signatures_always_required(char *buf, size_t cap, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+static inline const char *bp_tag_signatures_always_required(const char *text, const char *setting, const char *want) {
+    const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
+    return bp_err_tag(text, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
 }
 
 #endif /* BP_ERRORS_H */

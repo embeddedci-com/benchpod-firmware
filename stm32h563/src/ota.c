@@ -196,8 +196,9 @@ static const char *signature_refusal(bool external_lan, char *e, size_t cap) {
         return e;
     }
     /* The LAN API has no client authentication: from Ethernet or Wi-Fi only a good signature,
-       whatever the policy, unless the user allowed more on the device (H3). */
-    if (external_lan && s_sig != FW_SIG_OK && !fw_sign_lan_unsigned()) {
+       whatever the policy (H3; firmware 4.0.0 runs "required" anyway, and the 3.10.x lan_unsigned
+       way around this is gone). */
+    if (external_lan && s_sig != FW_SIG_OK) {
         snprintf(e, cap, "signature: %s (LAN needs a signed image; use USB)", res);
         return e;
     }

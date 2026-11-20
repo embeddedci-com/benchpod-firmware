@@ -1757,7 +1757,7 @@ sending it.
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
  "board_rev":"v3","nrst_pin":true,"flash_kb":2048,
- "sig_policy":"audit","sig_keys":3,"lan_policy":"open",
+ "sig_policy":"required","sig_keys":3,"lan_policy":"open",
  "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
  "psram":"ok","psram_ok":true,"reset":"power-on","last_crash":"","analog":true,
  "safe_mode":false,"safe_reason":"","features_rev":8,"api":2,"min_client_api":2,
@@ -4318,7 +4318,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 3.10.7 an update over Ethernet or Wi-Fi needs a good signature whatever the policy, and a signed firmware below the rollback floor is refused (same section). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4813,31 +4813,40 @@ See `docs/design/policy-commands.md` for the full rules.
 ```json
 {"cmd":"sig_policy"}
 {"cmd":"sig_policy","set":"required"}
-{"cmd":"sig_policy","lan_unsigned":false}
 ```
 
 ```json
-{"status":"ok","data":{"policy":"audit","enforces":true,"keys":3,"lan_unsigned":false,"rollback_floor":null}}
+{"status":"ok","data":{"policy":"required","enforces":true,"keys":3,"rollback_floor":null}}
 ```
 
-`audit` (default) accepts every update and reports its signature check; `permissive` refuses a
-bad signature; `required` refuses anything not signed by a key the firmware trusts. Over the
-cloud the policy can only get stricter (`BP0044`, `policy_loosen_usb_only`, args `setting`
-`sig_policy` and `now`); the LAN cannot change it (`BP0041`); the USB console (`sig-policy <value>`) can set any
-value.
+**Firmware 4.0.0 and later install only signed images, and nothing turns that off.** The policy
+is always `required`: an update of the firmware, the gateware (`gw0`, `gw1`, `gw2`) or the
+ESP32-C3 image without a good signature from a key the firmware trusts is refused at
+`ota_begin` with `signature: <result>`, on every path: Ethernet and Wi-Fi, the USB network
+adapter and the cloud (WS `ota.begin`). Every published release and its blobs are signed, so
+`benchpod flash-self --network` and the web app's install are not affected. A development build
+(not `RELEASE=1`) also trusts the developer key, so a dev-signed image (`tools/fwsign.py`) goes in
+over the network on a bench pod running a dev build; a release build trusts the release keys
+only. `keys` counts the keys this build trusts. The `ca` and `tls` targets are configuration,
+not code, and are not signed.
 
-**Updates from Ethernet and Wi-Fi need a signature** (firmware 3.10.7+). The LAN API has no
-client authentication, so whatever the policy, an update of the firmware, the gateware or the
-ESP32-C3 image that arrives over Ethernet or Wi-Fi must carry a good signature from a key the
-firmware trusts. Every published release is signed, so `benchpod flash-self --network` and the
-web app's install are not affected. An unsigned or developer-signed image (your own build) is
-refused with `signature: none (LAN needs a signed image; use USB)`: send it over the USB network
-adapter (`benchpod flash-self --network --connection usb`), the USB console or the cloud, where
-the policy above applies as before. `lan_unsigned` (`true`) brings back the behavior of firmware
-3.10.6 and earlier, where the LAN followed the policy too. Only the device may turn it on: the
-USB console (`lan-ota any`) or a connection over the USB network adapter. Ethernet and Wi-Fi get
-`BP0043` (`setting_device_only`, setting `lan_ota`), the cloud may only turn
-it off. Stored; survives reboots and updates.
+`"set":"required"` is accepted from every source (a server pushing it keeps working);
+`"set":"audit"` or `"permissive"` is refused from every source, the USB console included, with
+`BP0074` (`signatures_always_required`, args `setting` `sig_policy` and `want`). So is
+`"lan_unsigned":true`, the 3.10.7 to 3.10.13 opt-out for Ethernet and Wi-Fi (setting
+`lan_unsigned`); the reply has no `lan_unsigned` field any more. A pod updated from 3.10.x reads
+its stored `audit` or `permissive` as `required` and stores `required` with the next policy save,
+so a rollback to 3.10.x keeps it.
+
+**Firmware you built yourself goes in over USB DFU**: `benchpod flash-self` (without
+`--network`), which reboots the pod into the MCU's ROM bootloader with the console's `dfu`
+command, or BOOT held while tapping RESET. The ROM bootloader writes any image; it needs the pod
+on a USB cable. (3.10.7 to 3.10.13 refused `dfu` under `required`.)
+
+Up to 3.10.13: `audit` (the default) accepted every update and reported its check, `permissive`
+refused a bad signature, the cloud could only tighten the policy and the USB console set any
+value; from 3.10.7 an update over Ethernet or Wi-Fi needed a good signature unless
+`lan_unsigned` was on.
 
 **ESP32-C3 images are always signed** (firmware 3.10.7+), like the Wi-Fi bridge's firmware: the
 C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good signature gets
@@ -4867,7 +4876,7 @@ command there gets `BP0040`, `lan_locked`) or `off` (connections to
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
 means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
-loosening `sig_policy`, changing `lan_policy`) stays off it too; the one exception is the company CA
+changing `lan_policy`) stays off it too; the one exception is the company CA
 and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
 values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
 <value>`), never from the LAN or the USB network.

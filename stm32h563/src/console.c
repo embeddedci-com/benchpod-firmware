@@ -219,8 +219,8 @@ static void cmd_help(console_out_t out, void *ctx)
         "every command and its replies: docs/usb-serial-interface.md):\r\n"
         "  help | status | ping | uid | selftest | reboot | dfu | usb-reattach\r\n"
         "  identity | identity-wipe <id|unknown>      device key\r\n"
-        "  sig-policy [audit|permissive|required]    what OTA accepts\r\n"
-        "  lan-ota [signed|any] | rollback-floor [clear] | lan-policy [open|locked|off]\r\n"
+        "  sig-policy                                 what OTA accepts (always required)\r\n"
+        "  rollback-floor [clear] | lan-policy [open|locked|off]\r\n"
         "  usb-network [on|off]                       the USB network adapter\r\n"
         "  log [error|warn|info|debug]                console log level\r\n"
         "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate\r\n"
@@ -1228,28 +1228,16 @@ static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
 
 static void con_sig_policy(int argc, char **argv, console_out_t out, void *ctx)
 {
-    /* The USB console may set any value: it is the way back from "required" (pod_policy.h). */
+    /* Firmware 4.0.0: always "required" (pod_policy.h); setting it again is fine, anything else
+       is refused here too. */
     const char *why = NULL;
     if (argc >= 2) {
         int p = pod_policy_sig_from_name(argv[1]);
-        why = p < 0 ? "use audit, permissive or required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
+        why = p < 0 ? "use required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
     }
     if (why) op(out, ctx, "sig-policy error %s\r\n", why);
     else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
                 (unsigned)fw_sign_key_count());
-}
-
-static void con_lan_ota(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* Firmware 3.10.7+: what the external LAN may install (pod_policy.h). "any" is the
-       behavior before 3.10.7; only the device turns it on. */
-    const char *why = NULL;
-    if (argc >= 2) {
-        if (strcmp(argv[1], "signed") && strcmp(argv[1], "any")) why = "use signed or any";
-        else why = pod_policy_set_lan_unsigned(!strcmp(argv[1], "any"), POLICY_SRC_USB, false);
-    }
-    if (why) op(out, ctx, "lan-ota error %s\r\n", why);
-    else     op(out, ctx, "lan-ota %s\r\n", pod_policy_lan_unsigned() ? "any" : "signed");
 }
 
 static void con_rollback_floor(int argc, char **argv, console_out_t out, void *ctx)
@@ -1658,15 +1646,10 @@ static void con_wifi_clear(int argc, char **argv, console_out_t out, void *ctx)
 
 static void con_dfu(int argc, char **argv, console_out_t out, void *ctx)
 {
-    if (pod_policy_sig() == FW_SIG_POLICY_REQUIRED) {
-        /* The ROM bootloader writes any image, signed or not: under "required" that would be the
-           way around the signature check (security review 2026-11, M11). Loosening the policy
-           first is possible from this console, but it is a visible, persisted change. */
-        out(ctx, "dfu error sig-policy is required: the ROM bootloader would take an unsigned image. "
-                 "Update with signed firmware over the network or USB link (benchpod flash-self "
-                 "--network), or loosen it first (sig-policy permissive)\r\n");   /* > op()'s 160 B */
-        return;
-    }
+    /* Firmware 4.0.0: always allowed. The ROM bootloader writes any image, signed or not, and
+       that is on purpose: with signatures always required on every OTA path, USB DFU is the one
+       way to install firmware you built yourself, and it needs the pod on a USB cable. (3.10.7
+       to 3.10.13 refused it under "required", which the console could loosen.) */
     op(out, ctx, "  entering DFU (USB bootloader) — flash with dfu-util / `benchpod flash-self`...\r\n");
     HAL_Delay(50);          /* let the notice drain before USB re-enumerates */
     boot_guard_planned_reset(true);
@@ -1727,7 +1710,6 @@ static const console_cmd_t k_console_cmds[] = {
 #endif
     { "flash-ice40", con_flash_ice40 },
     { "sig-policy", con_sig_policy },
-    { "lan-ota", con_lan_ota },
     { "rollback-floor", con_rollback_floor },
 #if !defined(BENCHPOD_RELEASE)
     { "ca-damage", con_ca_damage },

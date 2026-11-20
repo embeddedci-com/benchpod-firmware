@@ -69,7 +69,7 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
 | mDNS | `_benchpod._tcp` and `_scpi-raw._tcp` are advertised on this link too (under every LAN policy) |
 | TLS | Port `8443` (TLS) answers here too. With [HTTPS-only](API.md#lan_tls--the-lan-api-over-tls) on, plaintext `8080` still answers on this link: it never crosses a network |
-| Security | LAN tier: what the LAN may never do (`identity_wipe`, loosening `sig_policy`, changing `lan_policy`) is refused on it too. The one exception: it may install or clear the company CA and set or clear the cloud proxy (physical presence, like the console). The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
+| Security | LAN tier: what the LAN may never do (`identity_wipe`, changing `lan_policy`) is refused on it too. The one exception: it may install or clear the company CA and set or clear the cloud proxy (physical presence, like the console). The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
 | SCPI and VISA | The same `:8080` socket: `TCPIP::10.237.x.y::8080::SOCKET` |
 | Several pods | Each pod has its own `/30`, so two pods on one computer get two adapters and two addresses. Not tested yet with two physical pods |
 | WSL2, Docker on Windows | Not tested. Windows routes the pod's `10.237.x.y` address itself, so a WSL2 distribution or a Docker container that uses the Windows host's network should reach it; mDNS from inside them may not |
@@ -186,7 +186,7 @@ command prints `usage: ...` and changes nothing.
 | `selftest` | STM32H563 silicon health check (HSE/PLL clocks, timer, SRAM, RNG). Does not touch the FPGA, PSRAM or flash. |
 | `reboot` | System reset. |
 | `usb-reattach` | Replies `usb-reattach ok`, then drops off the USB bus for half a second and connects again, so the computer enumerates the console and the network adapter anew (the serial port closes). |
-| `dfu` | Reboot into the STM32 ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). Refused under `sig-policy required` (firmware 3.10.7+): `dfu error <why>`. |
+| `dfu` | Reboot into the MCU's ROM USB DFU bootloader (see [Firmware update via `dfu`](#firmware-update-via-dfu)). Always allowed from firmware 4.0.0: it is the way to install firmware you built yourself (3.10.7 to 3.10.13 refused it under `sig-policy required`). |
 | `test-bootloop [net\|hw] yes` | Development builds only. Crash the next two boots on purpose (in the network task, or in the iCE40/PSRAM bring-up) to prove safe mode; the third boot comes up in safe mode with that part off. Without `yes` it prints what it would do. |
 | `test-hang <net\|hw> yes` | Development builds only. Hang a task on purpose; the watchdog resets the pod (about 30 s for `net`, 90 s for `hw`) and the next boot reports the stall as the last crash. |
 | `test-ice40-hold yes` | Development builds only. Hold the iCE40 in reset, as an ESD hit that unconfigured it would leave it. When the pod is idle it pings the iCE40 every 30 s and reloads one that stopped answering from its config flash (no write) after 10 s, at most 6 times an hour, then parks the outputs; the device log says so. |
@@ -199,8 +199,7 @@ command prints `usage: ...` and changes nothing.
 |---|---|
 | `identity` | `identity <short id> <public key base64url>`, or `identity unknown <why>`. |
 | `identity-wipe <short id\|unknown>` | Erase the device key and make a new one, the way back for a pod whose identity record the firmware will not replace. The argument must be the current short id (6 hex digits), or `unknown` when there is none; anything else prints `identity-wipe error confirm with the current id: identity-wipe <id>`. Replies `identity-wipe ok <new short id>`, then the pod logs in to the cloud again (the server needs a new registration). Only here: the JSON `identity_wipe` is refused on the LAN and the cloud. `benchpod identity wipe --connection usb` drives it. |
-| `sig-policy [audit\|permissive\|required]` | Show or set which updates the pod accepts ([API.md, Pod policies](API.md#pod-policies)). The console may set any value, so it is the way back from `required`. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. |
-| `lan-ota [signed\|any]` | Show or set what Ethernet and Wi-Fi may install (firmware 3.10.7+, [API.md, Pod policies](API.md#pod-policies)): `signed` (default) takes only updates with a good signature, `any` follows the signature policy like before 3.10.7. Replies `lan-ota <signed\|any>` or `lan-ota error <why>`. |
+| `sig-policy [required]` | Show the signature policy ([API.md, `sig_policy`](API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts)), always `required` from firmware 4.0.0: every update over the network, the USB network adapter or the cloud needs a good signature. `sig-policy required` is accepted; `audit` and `permissive` are refused here too. Replies `sig-policy <policy> <keys>` or `sig-policy error <why>`. (Up to 3.10.13 the console could set any value, and `lan-ota [signed\|any]` set what Ethernet and Wi-Fi could install; 4.0.0 has no `lan-ota`.) |
 | `rollback-floor [clear]` | Show the rollback floor, the oldest release whose signed firmware the pod takes (firmware 3.10.7+), or lower it to none with `clear`. Replies `rollback-floor <x.y.z\|none>` or `rollback-floor error <why>`. |
 | `usb-network [on\|off]` | Show or set the [USB network adapter](#usb-network-adapter) setting (default `on`). Replies `usb-network <on\|off>` or `usb-network error <why>`. `off` re-enumerates the pod as its console only (the computer sees no network adapter); `on` brings the adapter back. Stored, separate from `lan-policy`; only the console and the USB link itself may change it. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
@@ -449,12 +448,11 @@ adapter (`benchpod flash-self` uses DFU; the web app's one-click install uses th
 The CDC serial port disappears at this point and the STM32 ROM DFU device
 (`0483:df11`) enumerates instead.
 
-Under the `required` signature policy (`sig-policy required`), firmware 3.10.7 and later refuse
-`dfu`: the ROM bootloader writes any image, so it would get around the signature check. The
-reply is one line starting `dfu error sig-policy is required`. Update with signed firmware
-over the network or the USB network adapter instead (`benchpod flash-self --network`), or
-loosen the policy on this console first (`sig-policy permissive`), which shows in `status`.
-Holding BOOT while tapping RESET still enters the ROM bootloader: that needs the pod in hand.
+The ROM bootloader writes any image, signed or not. That is on purpose: firmware 4.0.0 and later
+take only signed images over the network, the USB network adapter and the cloud, so USB DFU is
+the way to install firmware you built yourself, and it needs the pod on a USB cable. Holding
+BOOT while tapping RESET also enters the ROM bootloader. (Firmware 3.10.7 to 3.10.13 refused
+`dfu` under `sig-policy required` with `dfu error sig-policy is required ...`.)
 
 ---
 
