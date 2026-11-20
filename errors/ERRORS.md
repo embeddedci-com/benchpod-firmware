@@ -35,4 +35,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0027 | `lease_not_held` | lease | 3.10.13 | The pod holds no lease with id {id} |
 | BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on pin 21 ({mv} mV) |
 | BP0029 | `pull_rail_down` | io | 3.10.13 | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
-| BP0030 | `client_too_old` | protocol | next | This client is too old for the pod's firmware: it needs client API {min_client_api} or newer (this client sent {client_api}) |
+| BP0030 | `client_too_old` | protocol | next | Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) |

@@ -95,7 +95,7 @@ void handle_target_power(int conn_id, const char *json) {
     bool     on       = (atoi(state_s) != 0);
     int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
     if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
-        bp_err_wiring_bad_name(conn_id, BP_ERR_TEXT("bad profile name"), profile);
+        bp_err_wiring_bad_name(conn_id, profile);
         return;
     }
     uint32_t delay_ms = 0;

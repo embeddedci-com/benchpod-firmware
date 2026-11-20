@@ -43,23 +43,6 @@ bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api
     return (uint32_t)n >= min_api;
 }
 
-const char *cmd_gate_client_api_text(const char *json, int32_t sent, uint32_t min_api,
-                                     char *why, size_t why_cap) {
-    /* One byte more than allowed, so a longer name shows as too long and is left out. */
-    char client[CMD_GATE_CLIENT_MAX + 2] = {0};
-    if (!json || !bp_json_get_top(json, "client", client, sizeof(client)) ||
-        strlen(client) > CMD_GATE_CLIENT_MAX)
-        client[0] = '\0';
-    for (const char *p = client; *p; p++)
-        if (*p < 0x20 || *p > 0x7e) { client[0] = '\0'; break; }
-    snprintf(why, why_cap,
-             "update the BenchPod SDK, MCP or CLI%s%s%s: this firmware needs client API %lu or newer "
-             "(this client sent %ld)",
-             client[0] ? " (" : "", client, client[0] ? ")" : "",
-             (unsigned long)min_api, (long)sent);
-    return why;
-}
-
 const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap) {
     /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and

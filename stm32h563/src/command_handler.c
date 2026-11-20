@@ -98,11 +98,10 @@ _Static_assert(CH_ERR_RESP_MAX > LA_PINS_ERR_MAX, "error reply must outgrow its 
 
 /* A stable error code (bp_errors.h): the same reply buffer and the same never-a-torn-line rule as
    send_error, with "code" and "args" next to the message. */
-void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_err_arg_t *args,
-                   size_t n) {
+void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     char resp[CH_ERR_RESP_MAX];
-    size_t len = bp_error_format(resp, sizeof(resp), code, text, args, n);
-    LOG_D("[cmd] -> error BP%04u: %s\n", (unsigned)code, text ? text : "");
+    size_t len = bp_error_format(resp, sizeof(resp), code, args, n);
+    LOG_D("[cmd] -> error %s", resp);
     if (len == 0) return;   /* cannot happen with CH_ERR_RESP_MAX; the format keeps the code */
     if (at_send_data(conn_id, (const uint8_t *)resp, len) != 0) {
         at_close_connection(conn_id);
@@ -110,6 +109,11 @@ void bp_error_send(int conn_id, bp_errcode_t code, const char *text, const bp_er
 }
 
 void send_error(int conn_id, const char *message) {
+    /* A message a module built from a code (bp_note_*, bp_errors.h): send it with that code. */
+    bp_errcode_t code;
+    size_t n;
+    const bp_err_arg_t *args = bp_err_noted(message, &code, &n);
+    if (args) { bp_error_send(conn_id, code, args, n); return; }
     char resp[CH_ERR_RESP_MAX];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
@@ -135,8 +139,7 @@ void send_error(int conn_id, const char *message) {
    when a voltage is set; otherwise emits an error and returns false. */
 bool require_la_voltage(int conn_id) {
     if (!la_voltage_from_profile()) {
-        bp_err_la_voltage_not_set(conn_id,
-            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+        bp_err_la_voltage_not_set(conn_id);
         return false;
     }
     return true;
@@ -352,12 +355,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     if (conn_id != CH_EMI_CONN) {
         int32_t sent = 0;
         if (!cmd_gate_client_api(d, buf, BP_MIN_CLIENT_API, &sent)) {
-            char why[CMD_GATE_CLIENT_MAX + 128];
-            (void)why;   /* BP_ERRORS_NO_TEXT drops the text */
-            bp_err_client_too_old(conn_id,
-                                  BP_ERR_TEXT(cmd_gate_client_api_text(buf, sent, BP_MIN_CLIENT_API,
-                                                                       why, sizeof(why))),
-                                  sent, (int32_t)BP_MIN_CLIENT_API, (int32_t)BP_API);
+            bp_err_client_too_old(conn_id, sent, (int32_t)BP_MIN_CLIENT_API, (int32_t)BP_API);
             return;
         }
     }
@@ -381,7 +379,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
         char why[112];
         const char *refused = cmd_gate_check(d, cmd, buf, tier, &g, why, sizeof(why));
         if (refused && strncmp(refused, CMD_GATE_CLOUD_LEASE_TEXT, strlen(CMD_GATE_CLOUD_LEASE_TEXT)) == 0) {
-            bp_err_lease_busy(conn_id, BP_ERR_TEXT(refused), CMD_GATE_CLOUD_LEASE_HOLDER,
+            bp_err_lease_busy(conn_id, CMD_GATE_CLOUD_LEASE_HOLDER,
                               g.lease_holder && g.lease_holder[0] ? g.lease_holder : "cloud",
                               (int32_t)g.lease_left_s);
             return;
@@ -413,7 +411,7 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
     /* The status LED flashes for a command that drives the pod, not for the polled reads. */
     status_led_note_command(d && !cmd_has(d, CMD_F_NOISY) && !cmd_tier_light_of(d, buf));
     if (d && d->fn) d->fn(conn_id, buf);
-    else bp_err_unknown_command(conn_id, BP_ERR_TEXT("unknown cmd"), cmd);
+    else bp_err_unknown_command(conn_id, cmd);
 }
 
 void dispatch_line(int conn_id, const char *buf) {

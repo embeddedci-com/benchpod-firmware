@@ -84,7 +84,7 @@ void sleep_ms(uint32_t ms) { seq("s%u", ms); }
 static char g_reply[256];
 static int g_err_code;
 static char g_err_arg[32];
-void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_t *args, size_t n) {
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     (void)c;
     g_err_code = (int)code;
     g_err_arg[0] = 0;
@@ -92,7 +92,8 @@ void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_
         if (args[0].is_str) snprintf(g_err_arg, sizeof(g_err_arg), "%s", args[0].s);
         else                snprintf(g_err_arg, sizeof(g_err_arg), "%ld", (long)args[0].i);
     }
-    snprintf(g_reply, sizeof(g_reply), "err:%s", text ? text : "");
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
 }
 uint8_t signal_engine_fpga_version(void) { return g_gw; }
 uint8_t signal_engine_fpga_features_cached(void) { return 0; }
@@ -117,7 +118,13 @@ static int de_claimed(void) {
 }
 bool require_la_voltage(int c) { (void)c; return true; }
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
+void send_error(int c, const char *m) {
+    bp_errcode_t code; size_t n;   /* like command_handler.c: a noted message goes with its code */
+    const bp_err_arg_t *a = bp_err_noted(m, &code, &n);
+    if (a) { bp_error_send(c, code, a, n); return; }
+    g_err_code = 0;
+    snprintf(g_reply, sizeof(g_reply), "err:%s", m);
+}
 
 /* ---- helpers --------------------------------------------------------------------------- */
 static void start(int conn, const char *json) {
@@ -273,7 +280,7 @@ static void test_frame(void) {
     /* gateware older than v56: 8N1 still works, anything else is refused with what to do */
     g_gw = 55;
     start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
-    CHECK(strstr(g_reply, "err:uart parity and stop bits need gateware v56") == g_reply && g_proto[4] == PROTO_JSON,
+    CHECK(strstr(g_reply, "err:parity and stop_bits needs gateware v56") == g_reply && g_proto[4] == PROTO_JSON,
           "old gateware reply %s", g_reply);
     CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "parity and stop_bits") == 0,
           "old gateware code: %d %s", g_err_code, g_err_arg);

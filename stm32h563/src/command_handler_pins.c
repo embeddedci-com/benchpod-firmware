@@ -408,17 +408,12 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
     case LA_PULL_REQ_BAD_VALUE:
         send_error(conn_id, "pull must be up, down or off");
         return false;
-    case LA_PULL_REQ_NO_PULL: {
-        char m[64];
-        snprintf(m, sizeof(m), "LA%u has no pull resistor on this board", la);
-        bp_err_la_no_pull(conn_id, BP_ERR_TEXT(m), (int32_t)la);
+    case LA_PULL_REQ_NO_PULL:
+        bp_err_la_no_pull(conn_id, (int32_t)la);
         return false;
-    }
     case LA_PULL_REQ_DIRECTION: {
         const char *have = la_pull_dir_name(la_pull_dir(la));
-        char m[64];
-        snprintf(m, sizeof(m), "LA%u supports pull-%s only on this board", la, have);
-        bp_err_la_pull_direction(conn_id, BP_ERR_TEXT(m), (int32_t)la, la_pull_dir_name(want), have);
+        bp_err_la_pull_direction(conn_id, (int32_t)la, la_pull_dir_name(want), have);
         return false;
     }
     }
@@ -448,16 +443,11 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
     switch (rc) {
     case 0:
         return true;
-    case LA_PULL_ERR_RAIL: {
-        char m[96];
-        snprintf(m, sizeof(m), "pin 21 is down (%d mV): the pull resistors are off until it is back",
-                 vref_out_last_mv());
-        bp_err_pull_rail_down(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+    case LA_PULL_ERR_RAIL:
+        bp_err_pull_rail_down(conn_id, (int32_t)vref_out_last_mv());
         return false;
-    }
     case LA_PULL_ERR_VOLTAGE:
-        bp_err_la_voltage_not_set(conn_id,
-            BP_ERR_TEXT("la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"));
+        bp_err_la_voltage_not_set(conn_id);
         return false;
     case LA_PULL_ERR_BANK:
         /* Not a failure to talk to the expander: a v2 board's pull-ups go to +3V3 and the bank
@@ -521,10 +511,7 @@ void handle_la_voltage(int conn_id, const char *json) {
         }
         int rc = la_vccio_set_mv(atoi(mv_s));
         if (rc == -3) {
-            char m[96];
-            snprintf(m, sizeof(m), "5 V did not come up on pin 21 (%d mV); check the USB supply",
-                     vref_out_last_mv());
-            bp_err_vref_5v_missing(conn_id, BP_ERR_TEXT(m), (int32_t)vref_out_last_mv());
+            bp_err_vref_5v_missing(conn_id, (int32_t)vref_out_last_mv());
             return;
         }
         if (rc == -2) {

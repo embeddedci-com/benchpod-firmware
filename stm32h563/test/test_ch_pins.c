@@ -34,8 +34,15 @@ static char g_reply[512];
 static int  g_code;          /* the BP error code of the last coded refusal, 0 = none */
 static char g_arg0[32];
 void send_ok_str(int c, const char *p) { (void)c; g_code = 0; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
-void send_error(int c, const char *m) { (void)c; g_code = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
-void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_t *args, size_t n) {
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n);
+void send_error(int c, const char *m) {
+    bp_errcode_t code; size_t n;   /* like command_handler.c: a noted message goes with its code */
+    const bp_err_arg_t *a = bp_err_noted(m, &code, &n);
+    if (a) { bp_error_send(c, code, a, n); return; }
+    g_code = 0;
+    snprintf(g_reply, sizeof(g_reply), "err:%s", m);
+}
+void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
     (void)c;
     g_code = (int)code;
     g_arg0[0] = 0;
@@ -43,7 +50,8 @@ void bp_error_send(int c, bp_errcode_t code, const char *text, const bp_err_arg_
         if (args[0].is_str) snprintf(g_arg0, sizeof(g_arg0), "%s", args[0].s);
         else                snprintf(g_arg0, sizeof(g_arg0), "%ld", (long)args[0].i);
     }
-    snprintf(g_reply, sizeof(g_reply), "err:%s", text ? text : "");
+    memcpy(g_reply, "err:", 4);
+    bp_err_render(g_reply + 4, sizeof(g_reply) - 4, code, args, n);
 }
 int  at_send_data(int c, const uint8_t *b, size_t n) {
     (void)c; size_t k = n < sizeof(g_reply) - 1 ? n : sizeof(g_reply) - 1;
@@ -280,7 +288,7 @@ static void test_v3r4(void) {
     CHECK(!la_pull_available(), "v3r4: no pulls without an I/O voltage");
     la("{\"cmd\":\"la\",\"la\":6,\"pull\":\"up\"}");
     CHECK(g_code == BP_E_LA_VOLTAGE_NOT_SET, "v3r4: BP0001 (%d)", g_code);
-    REPLY("err:la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first");
+    REPLY("err:The I/O voltage is not set");
     g_vccio = g_io = LA_VCCIO_3V3;
 
     /* a write that fails: held ("fault") until the next pull turned on retries */
@@ -339,7 +347,7 @@ static void test_la_voltage(void) {
     g_set_rc = -3; g_vref_mv = 4100;
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":5000}");
     CHECK(g_code == BP_E_VREF_5V_MISSING && strcmp(g_arg0, "4100") == 0, "BP0028 (%d %s)", g_code, g_arg0);
-    REPLY("err:5 V did not come up on pin 21 (4100 mV); check the USB supply");
+    REPLY("err:5 V did not come up on pin 21 (4100 mV)");
     g_set_rc = 0; g_vref_mv = 5000;
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":5000}");
     REPLY("ok:{\"mv\":5000,\"st\":1,\"readback_mv\":3290,\"vref_out\":{\"mv\":5000}}");

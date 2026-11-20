@@ -399,7 +399,7 @@ name = "client_too_old"
 area = "protocol"
 since = "next"
 args = { client_api = "int", min_client_api = "int", api = "int" }
-message = "This client is too old for the pod's firmware: it needs client API {min_client_api} or newer (this client sent {client_api})"
+message = "Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api})"
 cause = "The firmware on the pod changed a reply or a message in a way that clients built for client API {client_api} would misread, so it refuses their commands instead of giving them answers they get wrong. The firmware speaks client API {api} and takes {min_client_api} or newer. A client that sends no client_api counts as 0. status, diag, ping and lease_release still work."
 [BP0030.fix]
 sdk = "update the SDK (pip install -U embeddedci), then run again"

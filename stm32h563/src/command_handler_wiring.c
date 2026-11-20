@@ -44,10 +44,9 @@ static bool get_long(const char *json, const char *key, long *out) {
 
 static bool get_name(int conn_id, const char *json, char *name, size_t cap) {
     int r = bp_json_get_fit(json, "name", name, cap);
-    if (r == 0) { bp_err_missing_argument(conn_id, BP_ERR_TEXT("missing name"), "name"); return false; }
+    if (r == 0) { bp_err_missing_argument(conn_id, "name"); return false; }
     if (r < 0 || !wiring_name_ok(name)) {
-        bp_err_wiring_bad_name(conn_id, BP_ERR_TEXT("bad profile name: 1-40 characters, a-z 0-9 and -"),
-                               name);
+        bp_err_wiring_bad_name(conn_id, name);
         return false;
     }
     return true;
@@ -60,15 +59,12 @@ static void send_line(int conn_id, bp_emit_t *e) {
 /* A wiring_store result as a reply. */
 static void send_refusal(int conn_id, wiring_result_t why, const char *name, size_t bytes) {
     switch (why) {
-    case WIRING_E_NAME:       bp_err_wiring_bad_name(conn_id, BP_ERR_TEXT("bad profile name"), name); break;
-    case WIRING_E_NOT_FOUND:  bp_err_wiring_profile_not_found(conn_id, BP_ERR_TEXT("no such profile"), name); break;
-    case WIRING_E_FULL:       bp_err_wiring_store_full(conn_id, BP_ERR_TEXT("wiring profiles full"),
-                                                       (int32_t)WIRING_MAX_PROFILES); break;
-    case WIRING_E_TOO_LARGE:  bp_err_wiring_profile_too_large(conn_id, BP_ERR_TEXT("profile too large"),
-                                                              (int32_t)bytes, (int32_t)WIRING_PROFILE_MAX); break;
-    case WIRING_E_DEFAULT:    bp_err_wiring_delete_default(conn_id, BP_ERR_TEXT("cannot delete the default profile"),
-                                                           name); break;
-    case WIRING_E_NOT_OBJECT: bp_err_wiring_not_json_object(conn_id, BP_ERR_TEXT("profile is not a JSON object")); break;
+    case WIRING_E_NAME:       bp_err_wiring_bad_name(conn_id, name); break;
+    case WIRING_E_NOT_FOUND:  bp_err_wiring_profile_not_found(conn_id, name); break;
+    case WIRING_E_FULL:       bp_err_wiring_store_full(conn_id, (int32_t)WIRING_MAX_PROFILES); break;
+    case WIRING_E_TOO_LARGE:  bp_err_wiring_profile_too_large(conn_id, (int32_t)bytes, (int32_t)WIRING_PROFILE_MAX); break;
+    case WIRING_E_DEFAULT:    bp_err_wiring_delete_default(conn_id, name); break;
+    case WIRING_E_NOT_OBJECT: bp_err_wiring_not_json_object(conn_id); break;
     case WIRING_OK:           break;
     }
 }
@@ -76,7 +72,7 @@ static void send_refusal(int conn_id, wiring_result_t why, const char *name, siz
 /* Writes need the bus: never while the DAC runs or a capture or upload holds it. */
 static bool storage_free(int conn_id) {
     if (heavy_or_claimed() || sensor_port_dac_running()) {
-        bp_err_storage_busy(conn_id, BP_ERR_TEXT("busy: stop the DAC or wait for the capture, then save"));
+        bp_err_storage_busy(conn_id);
         return false;
     }
     return true;
@@ -87,7 +83,7 @@ static bool apply(int conn_id, const wiring_op_t *op, size_t bytes) {
     switch (wiring_store_apply(op, &why)) {
     case WIRING_STORE_OK:      return true;
     case WIRING_STORE_REFUSED: send_refusal(conn_id, why, op->name, bytes); return false;
-    case WIRING_STORE_IO:      bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("wiring storage failed")); return false;
+    case WIRING_STORE_IO:      bp_err_wiring_storage_failed(conn_id); return false;
     }
     return false;
 }
@@ -97,7 +93,7 @@ void handle_wiring_list(int conn_id, const char *json) {
     const wiring_index_t *idx = wiring_store_index();
     const size_t cap = 1600;   /* 16 x ~75 B + the frame: within BP_CLOUD_REPLY_MAX */
     char *resp = pvPortMalloc(cap);   /* heap, not static: RAM is full */
-    if (!resp) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
+    if (!resp) { bp_err_wiring_storage_failed(conn_id); return; }
     bp_emit_t e;
     bp_emit_init(&e, resp, cap);
     bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"default\":");
@@ -119,12 +115,12 @@ void handle_wiring_get(int conn_id, const char *json) {
     if (!get_name(conn_id, json, name, sizeof(name))) return;
     const wiring_index_t *idx = wiring_store_index();
     int i = wiring_index_find(idx, name);
-    if (i < 0) { bp_err_wiring_profile_not_found(conn_id, BP_ERR_TEXT("no such profile"), name); return; }
+    if (i < 0) { bp_err_wiring_profile_not_found(conn_id, name); return; }
     long offset = 0;
     char probe[16];
     if (bp_json_get(json, "offset", probe, sizeof(probe)) &&
         (!get_long(json, "offset", &offset) || offset < 0 || offset > (long)idx->e[i].len)) {
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("offset must be 0..total"), "offset");
+        bp_err_missing_argument(conn_id, "offset");
         return;
     }
     uint32_t n = idx->e[i].len - (uint32_t)offset;
@@ -132,7 +128,7 @@ void handle_wiring_get(int conn_id, const char *json) {
     const size_t b64_cap = B64URL_ENCODED_LEN(WIRING_PIECE_MAX) + 4;
     const size_t cap = b64_cap + 192;
     char *resp = pvPortMalloc(cap + b64_cap);   /* heap, not static: RAM is full */
-    if (!resp) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
+    if (!resp) { bp_err_wiring_storage_failed(conn_id); return; }
     char *b64 = resp + cap;
     size_t bl = b64url_encode(wiring_store_doc() + idx->e[i].off + offset, n, b64, b64_cap);
     bp_emit_t e;
@@ -168,19 +164,19 @@ void handle_wiring_put(int conn_id, const char *json) {
     if (!get_name(conn_id, json, name, sizeof(name))) return;
     long offset, total;
     if (!get_long(json, "offset", &offset) || offset < 0) {
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("missing offset"), "offset"); return;
+        bp_err_missing_argument(conn_id, "offset"); return;
     }
     if (!get_long(json, "total", &total) || total < 2) {
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("missing total"), "total"); return;
+        bp_err_missing_argument(conn_id, "total"); return;
     }
     if (total > (long)WIRING_PROFILE_MAX) {
-        bp_err_wiring_profile_too_large(conn_id, BP_ERR_TEXT("profile too large"), (int32_t)total,
+        bp_err_wiring_profile_too_large(conn_id, (int32_t)total,
                                         (int32_t)WIRING_PROFILE_MAX);
         return;
     }
     const size_t b64_cap = B64URL_ENCODED_LEN(WIRING_PIECE_MAX) + 8;
     char *b64 = pvPortMalloc(b64_cap);   /* heap, not static: RAM is full */
-    if (!b64) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
+    if (!b64) { bp_err_wiring_storage_failed(conn_id); return; }
     put_piece(conn_id, json, name, offset, total, b64, b64_cap);
     vPortFree(b64);
 }
@@ -188,13 +184,13 @@ void handle_wiring_put(int conn_id, const char *json) {
 static void put_piece(int conn_id, const char *json, const char *name, long offset, long total, char *b64,
                       size_t b64_cap) {
     if (bp_json_get_fit(json, "data_b64", b64, b64_cap) != 1) {
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("missing data_b64 (at most 600 bytes a piece)"), "data_b64");
+        bp_err_missing_argument(conn_id, "data_b64");
         return;
     }
     if (offset == 0) {
         upload_drop();
         s_upp = pvPortMalloc(sizeof(*s_upp) + (size_t)total);
-        if (!s_upp) { bp_err_wiring_storage_failed(conn_id, BP_ERR_TEXT("out of memory")); return; }
+        if (!s_upp) { bp_err_wiring_storage_failed(conn_id); return; }
         memset(s_upp, 0, sizeof(*s_upp));
         strcpy(s_upp->name, name);
         s_upp->total = (uint32_t)total;
@@ -204,15 +200,14 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
                s_upp->received != (uint32_t)offset) {
         long expected = (s_upp && !strcmp(s_upp->name, name)) ? (long)s_upp->received : 0;
         upload_drop();
-        bp_err_wiring_upload_out_of_order(conn_id, BP_ERR_TEXT("upload out of order: start again at offset 0"),
-                                          (int32_t)expected);
+        bp_err_wiring_upload_out_of_order(conn_id, (int32_t)expected);
         return;
     }
     size_t got = 0;
     if (b64url_decode(b64, s_upp->buf + s_upp->received, s_upp->total - s_upp->received, &got) != 0 || got == 0 ||
         got > WIRING_PIECE_MAX) {
         upload_drop();
-        bp_err_missing_argument(conn_id, BP_ERR_TEXT("data_b64 is not base64url, or runs past total"), "data_b64");
+        bp_err_missing_argument(conn_id, "data_b64");
         return;
     }
     s_upp->received += (uint32_t)got;
@@ -231,7 +226,7 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
     long cur = at < 0 ? 0 : (long)idx->e[at].rev;
     if (s_upp->if_rev >= 0 && s_upp->if_rev != cur) {
         upload_drop();
-        bp_err_wiring_revision_conflict(conn_id, BP_ERR_TEXT("profile changed since it was loaded"), name,
+        bp_err_wiring_revision_conflict(conn_id, name,
                                         (int32_t)cur);
         return;
     }
@@ -264,7 +259,7 @@ void handle_wiring_default(int conn_id, const char *json) {
         if (!get_name(conn_id, json, name, sizeof(name))) return;
         const wiring_index_t *idx = wiring_store_index();
         int at = wiring_index_find(idx, name);
-        if (at < 0) { bp_err_wiring_profile_not_found(conn_id, BP_ERR_TEXT("no such profile"), name); return; }
+        if (at < 0) { bp_err_wiring_profile_not_found(conn_id, name); return; }
         if ((uint8_t)at != idx->def) {   /* already the default: nothing to write */
             if (!storage_free(conn_id)) return;
             wiring_op_t op = { WIRING_OP_DEFAULT, name, NULL, 0 };

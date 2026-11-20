@@ -304,29 +304,6 @@ static void test_client_api(void) {
     }
     CHECK(flagged == sizeof(any) / sizeof(any[0]), "%zu rows run for any client", flagged);
     CHECK(!client_ok("{\"cmd\":\"lease_acquire\",\"ttl_s\":60}", min, &sent), "lease_acquire ran");
-
-    /* The text an old client shows as it is. */
-    char why[CMD_GATE_CLIENT_MAX + 128];
-    cmd_gate_client_api_text("{\"cmd\":\"generate\"}", 0, 2, why, sizeof(why));
-    CHECK(strcmp(why, "update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer "
-                      "(this client sent 0)") == 0, "text: %s", why);
-    cmd_gate_client_api_text("{\"cmd\":\"generate\",\"client_api\":1,\"client\":\"sdk 3.0.6\"}", 1, 2, why, sizeof(why));
-    CHECK(strcmp(why, "update the BenchPod SDK, MCP or CLI (sdk 3.0.6): this firmware needs client API 2 "
-                      "or newer (this client sent 1)") == 0, "text with client: %s", why);
-    /* A name too long, with a control character, or only nested is left out. */
-    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"123456789012345678901234567890123\"}", 1, 2, why, sizeof(why));
-    CHECK(strstr(why, "CLI: this") != NULL, "a 33-character client kept: %s", why);
-    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"12345678901234567890123456789012\"}", 1, 2, why, sizeof(why));
-    CHECK(strstr(why, "(12345678901234567890123456789012)") != NULL, "a 32-character client dropped: %s", why);
-    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"a\\nb\"}", 1, 2, why, sizeof(why));
-    CHECK(strstr(why, "CLI: this") != NULL, "a control character kept: %s", why);
-    cmd_gate_client_api_text("{\"cmd\":\"x\",\"p\":{\"client\":\"evil\"}}", 1, 2, why, sizeof(why));
-    CHECK(strstr(why, "evil") == NULL, "a nested client used: %s", why);
-    /* The longest one fits the buffer dispatch_line gives it. */
-    cmd_gate_client_api_text("{\"cmd\":\"x\",\"client\":\"12345678901234567890123456789012\"}",
-                             INT32_MAX, UINT32_MAX, why, sizeof(why));
-    CHECK(strlen(why) + 1 < sizeof(why) && strstr(why, "(this client sent 2147483647)") != NULL,
-          "longest text cut: %s", why);
 }
 
 int main(void) {

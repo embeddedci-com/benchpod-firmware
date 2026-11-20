@@ -61,13 +61,6 @@ const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *jso
    firmware passes BP_MIN_CLIENT_API; tests pass any minimum. */
 bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api, int32_t *sent);
 
-/* The refusal text for BP0030 (an old client shows it verbatim) into why[why_cap], with the
-   command's optional "client" ("sdk 3.0.6", at most CMD_GATE_CLIENT_MAX characters, printable
-   ASCII; anything else is left out). Returns why. */
-#define CMD_GATE_CLIENT_MAX 32
-const char *cmd_gate_client_api_text(const char *json, int32_t sent, uint32_t min_api,
-                                     char *why, size_t why_cap);
-
 /* Checks 4 and 5 alone (safe mode, the digital-only board), for the transports that have no
    tier, lease or tunnel of their own: SCPI asks with the JSON verb its command stands for
    (command_handler_device_gate). NULL = may run, else the refusal (a constant). */
