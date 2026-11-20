@@ -272,13 +272,13 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `sensor_status` | T0 | Instances, their values, faults and bus counters (paged) | object | no |
 | `sensor_regs` | T0 | Read an I2C/SPI instance's register image (base64) | object | no |
 | `sensor_la` | T0 | Raw I2C-bus logic capture of an I2C instance | array of uint8 | yes |
-| `can_config` | T1 | Bring up classic CAN or CAN FD (FDCAN1 / TCAN1044) | object | no |
+| `can_start` | T1 | Bring up classic CAN or CAN FD (`can_config` up to 3.10.13) | object | no |
 | `can_write` | T1 | Send one CAN frame | object | no |
 | `can_read` | T0 | Drain up to 8 received CAN frames | object | no |
 | `can_status` | T0 | CAN state and error counters | object | no |
 | `can_term` | T1 | Switch the 120 Ω CAN termination | object | no |
 | `can_respond` | T1 | Add or clear an automatic CAN reply rule | object | no |
-| `can_disable` | T1 | Turn CAN off (and its termination) | object | no |
+| `can_stop` | T1 | Turn CAN off and its termination (`can_disable` up to 3.10.13) | object | no |
 | `identity_public` | T0 | Get the device Ed25519 public key | object | no |
 | `identity_pop` | T0 | Sign a nonce (proof of possession) | object | no |
 | `identity_wipe` | T0 | Always refused here: only on the USB console | error | no |
@@ -3838,15 +3838,17 @@ Classic CAN and CAN FD on FDCAN1 with the TCAN1044 transceiver, on J1 pins 19 (`
 (`CAN−`). Every CAN command is a single reply, so all of them work over the cloud command channel,
 and they keep working in safe mode. Frame IDs and data bytes accept decimal or `0x` hex.
 
-**CAN FD** (firmware 3.10.2 and later, capability `can_fd`): give `can_config` a `data_bitrate`.
+**CAN FD** (firmware 3.10.2 and later, capability `can_fd`): give `can_start` a `data_bitrate`.
 Frames then carry up to 64 data bytes, and with a `data_bitrate` above `bitrate` their data phase
 runs at the faster rate (bit-rate switching). Without `data_bitrate` the bus is classic CAN, as
 before.
 
-### `can_config` — bring CAN up
+### `can_start` — bring CAN up
+
+Firmware up to 3.10.13 called it `can_config` (and `can_stop` `can_disable`), like nothing else; 4.0.0 names them as `spi_start`/`spi_stop` and `i2c_start`/`i2c_stop`.
 
 ```json
-{"cmd":"can_config","bitrate":500000,"mode":"normal","term":true}
+{"cmd":"can_start","bitrate":500000,"mode":"normal","term":true}
 ```
 
 | Field | Type | Default | Description |
@@ -3857,7 +3859,7 @@ before.
 | `term` | boolean | `false` | Switch the 120 Ω termination on |
 
 ```json
-{"cmd":"can_config","bitrate":500000,"data_bitrate":2000000,"mode":"normal","term":true}
+{"cmd":"can_start","bitrate":500000,"data_bitrate":2000000,"mode":"normal","term":true}
 ```
 
 Reply: `{"bitrate":500000,"data_bitrate":0,"fd":false,"mode":"normal","term":true}` (`data_bitrate`
@@ -3886,7 +3888,7 @@ classic, as CAN FD has none.
 
 Reply: `{"id":291,"ext":false,"dlc":3,"fd":false,"brs":false}`, where `dlc` is the number of data
 bytes sent (after padding). Errors: `"missing id"`, `"can not enabled"`, `"bus off"`, `"tx failed
-(fifo full?)"`, `"data is longer than 64 bytes"`, `"more than 8 data bytes needs CAN FD (can_config
+(fifo full?)"`, `"data is longer than 64 bytes"`, `"more than 8 data bytes needs CAN FD (can_start
 with data_bitrate)"`, `"more than 8 data bytes needs an FD frame"`, `"rtr needs a classic frame (CAN
 FD has no remote frames)"`.
 
@@ -3929,7 +3931,7 @@ Reply: `{"rule":0,"rules":1}`, or `{"rules":0}` after a clear. Errors: `"missing
 `"missing reply_id"`, `"responder table full"`, `"invalid reply frame"`, and the `can_write` data
 errors.
 
-### `can_disable` — turn CAN off
+### `can_stop` — turn CAN off
 
 Stops CAN and switches the 120 Ω termination off, so a closed bus leaves nothing on the wire.
 Reply `{"enabled":false,"term":false}`. Before firmware 3.10.6 the termination stayed as it was

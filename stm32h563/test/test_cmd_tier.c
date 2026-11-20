@@ -207,8 +207,8 @@ static void test_flags_match_the_old_lists(void) {
                "wifi_set", "wifi_status", "wifi_scan", "wifi_clear", "eth", "speedtest",
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
                "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
-               "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
-               "can_disable", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
+               "can_start", "can_write", "can_read", "can_status", "can_term", "can_respond",
+               "can_stop", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
                "lease_renew", "lease_release");
     EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",

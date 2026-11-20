@@ -4,7 +4,7 @@
   "revision": 10,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "59cb27a8aefcdb3ed311940f06422bb3aa9dbe6cd05209bb4290e10c42287823",
+  "table_sha256": "e46b6e3a35bff5fe5c79b256c98548d9ae9de342f3eff16966fcb4a1cf932535",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -237,7 +237,7 @@
       "board": "any",
       "legacy_caps": "can",
       "legacy_frame": "can",
-      "docs": "API.md#can_config--bring-can-up"
+      "docs": "API.md#can_start--bring-can-up"
     },
     "ota_sig": {
       "rev": 1,
@@ -347,7 +347,7 @@
       "board": "any",
       "legacy_caps": "can_fd",
       "legacy_frame": "can_fd",
-      "docs": "API.md#can_config--bring-can-up"
+      "docs": "API.md#can_start--bring-can-up"
     },
     "la_dir": {
       "rev": 1,
@@ -728,6 +728,12 @@
       "firmware": "next",
       "board": "any",
       "docs": "API.md#commands"
+    },
+    "can_start_stop": {
+      "rev": 10,
+      "firmware": "next",
+      "board": "any",
+      "docs": "API.md#can_start--bring-can-up"
     }
   }
 }

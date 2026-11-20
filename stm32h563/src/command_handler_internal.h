@@ -355,13 +355,13 @@ void power_profile_service(void);            /* one-shot completion + paced resu
 void power_profile_conn_closed(int conn_id);
 
 /* CAN subsystem handlers (command_handler_can.c). */
-void handle_can_config(int conn_id, const char *json);
+void handle_can_start(int conn_id, const char *json);
 void handle_can_write(int conn_id, const char *json);
 void handle_can_read(int conn_id, const char *json);
 void handle_can_status(int conn_id, const char *json);
 void handle_can_respond(int conn_id, const char *json);
 void handle_can_term(int conn_id, const char *json);
-void handle_can_disable(int conn_id, const char *json);
+void handle_can_stop(int conn_id, const char *json);
 
 /* The pod's own lease (command_handler_lease.c, lease_local.h). */
 void handle_lease_acquire(int conn_id, const char *json);

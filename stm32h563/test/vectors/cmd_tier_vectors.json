@@ -95,11 +95,11 @@
     "sensor_fault": "T1",
     "sensor_fault_clear": "T1",
     "sensor_stop": "T1",
-    "can_config": "T1",
+    "can_start": "T1",
     "can_write": "T1",
     "can_term": "T1",
     "can_respond": "T1",
-    "can_disable": "T1",
+    "can_stop": "T1",
     "speedtest": "T1",
     "fpga_image": "T1",
     "psram_recover": "T1",
@@ -461,7 +461,7 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"can_config\"}",
+      "line": "{\"cmd\":\"can_start\"}",
       "tier": "T1"
     },
     {
@@ -477,7 +477,7 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"can_disable\"}",
+      "line": "{\"cmd\":\"can_stop\"}",
       "tier": "T1"
     },
     {

@@ -292,7 +292,7 @@ rev = 1
 firmware = "3.9.2"
 legacy_caps = "can"
 legacy_frame = "can"
-docs = "API.md#can_config--bring-can-up"
+docs = "API.md#can_start--bring-can-up"
 dated = "floor"
 note = "Flag first in 3.5.1, below the floor."
 
@@ -404,7 +404,7 @@ rev = 1
 firmware = "3.10.3"
 legacy_caps = "can_fd"
 legacy_frame = "can_fd"
-docs = "API.md#can_config--bring-can-up"
+docs = "API.md#can_start--bring-can-up"
 dated = "tag"
 note = "First in the 3.10.2 pre-release; pre-releases don't count."
 
@@ -844,3 +844,10 @@ firmware = "next"
 docs = "API.md#commands"
 dated = "code"
 note = "Units in the field names: freq_hz (generate, measure), sample_rate_hz in Hz (was sample_rate_mhz in MHz: generate, measure, capture, replay, la_capture, sensor_la), capture_dual adc_sample_rate_hz and la_sample_rate_hz in Hz (were adc_rate_mhz, la_rate_mhz) and in the capture replies (were adc_rate_hz, la_rate_hz), clock_hz (spi_start, spi_status, i2c_start, i2c_status, eth refclk; was hz), power_profile sample_rate_hz (was rate_hz; stats adc_sample_rate_hz was adc_rate_hz), dac_out v (was volts), dac_loop_probe and dac_loop_input code16 (was v)."
+
+[features.can_start_stop]
+rev = 10
+firmware = "next"
+docs = "API.md#can_start--bring-can-up"
+dated = "code"
+note = "CAN is brought up with can_start and turned off with can_stop, like spi_start/spi_stop and i2c_start/i2c_stop. can_config and can_disable are gone (unknown cmd)."

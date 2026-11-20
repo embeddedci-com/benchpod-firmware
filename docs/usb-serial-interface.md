@@ -382,7 +382,7 @@ on the console and in the JSON API (`log_level`).
 | `dac-limits` | `dac_limits` |
 | `dacraw`, `dacmux`, `calsw` | `dac_set`, `dac_mux`, `cal_switch` |
 | `upload-begin`, `-data`, `-end`, `-commit`, `-status`, `-abort`, `upload-sig` | `ota_begin` (with `sig`), `ota_data`, `ota_end`, `ota_commit`, `ota_status`, `ota_abort` |
-| `can ...` | `can_config`, `can_write`, `can_read`, `can_status`, `can_respond`, `can_term`, `can_disable` |
+| `can ...` | `can_start`, `can_write`, `can_read`, `can_status`, `can_respond`, `can_term`, `can_stop` |
 
 ### `wifi-clear` result
 

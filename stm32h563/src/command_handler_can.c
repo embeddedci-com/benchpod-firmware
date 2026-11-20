@@ -49,7 +49,7 @@ static int can_parse_frame(const char *json, const char *data_key, const char *f
     if (len > (int)CAN_FD_MAX_LEN) { *err = "data is longer than 64 bytes"; return -1; }
     if (len > 8 && !f->fd) {
         *err = bus_fd ? "more than 8 data bytes needs an FD frame"
-                      : "more than 8 data bytes needs CAN FD (can_config with data_bitrate)";
+                      : "more than 8 data bytes needs CAN FD (can_start with data_bitrate)";
         return -1;
     }
     f->dlc = (uint8_t)len;
@@ -57,12 +57,12 @@ static int can_parse_frame(const char *json, const char *data_key, const char *f
     return 0;
 }
 
-/* can_config — bring FDCAN1 up.  {"cmd":"can_config","bitrate":500000,
+/* can_start — bring FDCAN1 up (can_config up to firmware 3.10.13).  {"cmd":"can_start","bitrate":500000,
    "data_bitrate":2000000,"mode":"internal|external|normal|listen",
    "term":true|false}.  Defaults: bitrate 500000, classic CAN (no
    data_bitrate), mode normal, term off.  A data_bitrate turns CAN FD on, with
    bit-rate switching when it is above the bitrate. */
-void handle_can_config(int conn_id, const char *json) {
+void handle_can_start(int conn_id, const char *json) {
     char br_s[12] = {0}, dbr_s[12] = {0}, mode_s[12] = {0};
     uint32_t bitrate = 500000u, data_bitrate = 0u;
     if (json_get_value(json, "bitrate", br_s, sizeof(br_s)))
@@ -259,10 +259,10 @@ void handle_can_term(int conn_id, const char *json) {
     send_ok_str(conn_id, payload);
 }
 
-/* can_disable — stop CAN and switch the 120 ohm termination off, so a closed bus
+/* can_stop — stop CAN (can_disable up to firmware 3.10.13) and switch the 120 ohm termination off, so a closed bus
    leaves nothing on the wire for the next user.  can_term turns it back on
    with CAN off when that is wanted. */
-void handle_can_disable(int conn_id, const char *json) {
+void handle_can_stop(int conn_id, const char *json) {
     (void)json;
     can_disable();
     can_set_term(false);
