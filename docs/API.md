@@ -1853,7 +1853,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
 | `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
-| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
+| `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power`, `dac_pinout` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
 | `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
@@ -4074,6 +4074,30 @@ devices sit on their own bus (the STM32's I2C2). Firmware 3.9.5 and later:
 
 The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards are not affected.
 
+<a id="dac-pinout-on-the-flat-cable"></a>
+### DAC pinout on the flat cable
+
+The DAC's clock and data lines cross the flat cable. Digital v3r4 and analog module 3.5 swapped
+them, so the clock sits next to a ground pin:
+
+| Pin | Digital v3r3, analog module 3.4 and earlier | Digital v3r4+, analog module 3.5+ |
+|---|---|---|
+| 7 | DAC data | DAC clock |
+| 8 | DAC clock | DAC data |
+
+A digital board and a module from different sides of that change do not work together: the DAC
+would get scrambled data. Nothing is damaged (both lines come from the digital board), and from
+the next firmware release on the pod refuses every command that drives the DAC with `BP0035` and
+sends the DAC nothing at all. Everything else (ADC, LA, relays, I2C) keeps working.
+`status.module.dac_pinout` is `"mismatch"` on such a pair. The module's revision comes from its
+EEPROM header: a module that was never programmed (`eeprom` `"blank"`), or whose header does not
+read, counts as an older module.
+
+The commands refused: `generate`, `measure`, `replay`, `dac_set`, `dac_out`,
+`dac_control_loop`, `current_out` with `ua`, `calibrate` with `dac` or `adc`, and `adc_range`
+with `test`. Anything else that would reach the DAC (an analog sensor, for example) fails as well,
+because the firmware blocks the DAC frames themselves.
+
 <a id="module--the-analog-module-and-its-eeprom"></a>
 ### `module`: the analog module and its EEPROM
 
@@ -4083,7 +4107,7 @@ The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards a
 
 ```json
 {"status":"ok","data":{"present":true,"analog":true,"power":true,"bridge_power":true,
- "eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
+ "dac_pinout":"ok","eeprom":"ok","type":"analog","rev":"1.0","serial":"AM-000123","layout":1,"cal_len":0,"cal_ok":false}}
 ```
 
 | Field | Type | Meaning |
@@ -4091,12 +4115,13 @@ The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards a
 | `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
 | `analog` | boolean | The module was found at boot and is the pod's analog front end. |
 | `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
+| `dac_pinout` | string | `"ok"`, or `"mismatch"` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0035`). Next firmware release. |
 | `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
 | `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
 | `layout` | integer | The header's layout version (1). |
 | `cal_len`, `cal_ok` | integer, boolean | The stored calibration blob's length in bytes (0 = none), and whether its CRC matched when it was last read. |
 
-`status.module` has the first five fields only.
+`status.module` has the first six fields only.
 
 The EEPROM forms need a module plugged in with its power on. Reads are T0, writes T2 (they persist
 settings on the module):
@@ -4820,6 +4845,7 @@ All errors follow the format:
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
 | `BP0030` `"update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)"` | A client older than the firmware's `min_client_api` (see [Client compatibility](#client-compatibility)) |
 | `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
+| `BP0035` `"<cmd> refused: the DAC is off, the digital board (v3r4+) and the analog module (3.4) use different flat-cable pinouts"` | A command that drives the DAC on a digital board and analog module that do not belong together (see [DAC pinout on the flat cable](#dac-pinout-on-the-flat-cable)) |
 | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |

@@ -54,6 +54,7 @@ typedef enum {
     BP_E_USB_HOST_PORT_UNAVAILABLE = 32,
     BP_E_USB_HOST_NO_CRYSTAL = 33,
     BP_E_USB_HOST_OTHER_PORT = 34,
+    BP_E_DAC_PINOUT_MISMATCH = 35,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -227,6 +228,11 @@ static inline void bp_err_usb_host_no_crystal(int conn_id, const char *text) {
 static inline void bp_err_usb_host_other_port(int conn_id, const char *text, const char *port) {
     const bp_err_arg_t a[] = { {"port", port, 0, 1} };
     bp_error_send(conn_id, BP_E_USB_HOST_OTHER_PORT, text, a, 1);
+}
+/* BP0035: The DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts */
+static inline void bp_err_dac_pinout_mismatch(int conn_id, const char *text, const char *digital, const char *module) {
+    const bp_err_arg_t a[] = { {"digital", digital, 0, 1}, {"module", module, 0, 1} };
+    bp_error_send(conn_id, BP_E_DAC_PINOUT_MISMATCH, text, a, 2);
 }
 
 #endif /* BP_ERRORS_H */

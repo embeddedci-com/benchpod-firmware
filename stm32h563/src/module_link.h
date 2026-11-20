@@ -72,6 +72,15 @@ bool module_adc_low_range(void);
    header read at boot).  False (249 ohm) off digital v3r3 and without a module. */
 bool module_current_in_100r(void);
 
+/* The digital board and the module put the DAC clock on different flat-cable pins (dac_link.h):
+   the DAC must not be driven.  Live: a `module id` write takes effect at once.  False off a
+   two-board pod and without a module. */
+bool module_dac_pinout_mismatch(void);
+/* For the BP0035 refusal: the digital board's side ("v3r4+" or "v3r3") and the module's
+   revision as its EEPROM gives it ("3.4", or "blank", "unreadable", ...). */
+const char *module_dac_pinout_digital(void);
+const char *module_dac_pinout_module(char *buf, size_t cap);
+
 /* Write the ID fields (type, revision, serial), keeping the calibration fields. 0 / -1. */
 int  module_id_write(uint8_t type, uint8_t rev_major, uint8_t rev_minor, const char *serial);
 /* Record `len` bytes at MOD_EE_CAL_ADDR as the calibration blob: reads them back, stores their

@@ -28,11 +28,13 @@ void module_emit_state(bp_emit_t *e, bool full)
 {
     module_id_t id;
     int rc = module_id(&id);
-    bp_emit(e, "{\"present\":%s,\"analog\":%s,\"power\":%s,\"bridge_power\":%s,\"eeprom\":",
+    bp_emit(e, "{\"present\":%s,\"analog\":%s,\"power\":%s,\"bridge_power\":%s,"
+               "\"dac_pinout\":\"%s\",\"eeprom\":",
             module_present_now() ? "true" : "false",
             board_analog_is_module() ? "true" : "false",
             module_power_on() ? "true" : "false",
-            bridge_power_on() ? "true" : "false");
+            bridge_power_on() ? "true" : "false",
+            module_dac_pinout_mismatch() ? "mismatch" : "ok");   /* BP0035, dac_link.h */
     if (rc == MOD_EE_NO_CHIP) {
         bp_emit_raw(e, "\"none\"}");
         return;
