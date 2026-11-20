@@ -73,3 +73,9 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0065 | `output_used_by_sensor` | sensors | next | The {output} output is played by the emulated sensor {instance} |
 | BP0066 | `step_busy` | io | next | A step pulse train is running |
 | BP0067 | `samples_out_of_range` | capture | next | samples must be 1 to {max} for this capture |
+| BP0068 | `la_rate_above_ceiling` | capture | next | LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples |
+| BP0069 | `la_rate_too_deep` | capture | next | LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples |
+| BP0070 | `capture_dual_too_deep` | capture | next | capture_dual takes at most {la_max} LA and {adc_max} ADC samples |
+| BP0071 | `capture_overflowed` | capture | next | The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s |
+| BP0072 | `psram_too_small` | capture | next | The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM |
+| BP0073 | `psram_bandwidth` | capture | next | The combined sample rate is more than the PSRAM bus can take |

@@ -491,8 +491,8 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     CHECK(g_dual_lhz > 0.0f && g_dual_lhz <= 4.0e6f, "deep LA asked the fabric for %.0f Hz", (double)g_dual_lhz);
     g_wait_rc = -1; g_ovf = true;
     pump_all();
-    CHECK(strncmp(g_err, "capture overflowed: the PSRAM could not keep up", 47) == 0, "overflow reply: %s", g_err);
-    CHECK(strstr(g_err, "Lower la_rate_mhz") != NULL, "overflow reply has no advice: %s", g_err);
+    CHECK(g_code == BP_E_CAPTURE_OVERFLOWED && strstr(g_err, " la_ksps=") && strstr(g_err, " adc_ksps="),
+          "overflow reply: %s", g_err);
     g_ovf = false;
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000}");
@@ -510,11 +510,12 @@ static void test_capture_dual_la_rate_and_overflow(void) {
        the ADC, and a depth the burst buffer cannot take at the rate asked. */
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":2000,\"la_rate_mhz\":12}");
-    CHECK(!capture_busy() && strstr(g_err, "runs at most 8.0 MS/s on this gateware, 8.0 MS/s for 2000 samples") != NULL, "12 MS/s + ADC: %s", g_err);
+    CHECK(!capture_busy() && g_code == BP_E_LA_RATE_ABOVE_CEILING &&
+          strstr(g_err, "rate_mhz=12.0 max_mhz=8.0 fit_mhz=8.0 samples=2000") != NULL, "12 MS/s + ADC: %s", g_err);
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":8}");
-    CHECK(!capture_busy() && strstr(g_err, "does not fit 1000000 samples") != NULL &&
-          strstr(g_err, "at most 3.0 MS/s for 1000000 samples") != NULL, "deep 8 MS/s: %s", g_err);
+    CHECK(!capture_busy() && g_code == BP_E_LA_RATE_TOO_DEEP &&
+          strstr(g_err, "rate_mhz=8.0 samples=1000000") != NULL && strstr(g_err, "fit_mhz=3.0") != NULL, "deep 8 MS/s: %s", g_err);
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":1000000,\"la_rate_mhz\":3}");
     CHECK(capture_busy() && g_dual_lhz == 3.0e6f, "deep 3 MS/s refused: %s", g_err);
@@ -531,7 +532,8 @@ static void test_capture_dual_la_rate_and_overflow(void) {
     /* More than the fabric's per-stream region is refused up front, saying the limits. */
     clear_tx(); g_wait_rc = 0;
     handle_capture_dual(1, "{\"cmd\":\"capture_dual\",\"adc_samples\":1000,\"la_samples\":3000000}");
-    CHECK(!capture_busy() && strncmp(g_err, "capture_dual takes at most", 26) == 0, "oversize: %s", g_err);
+    CHECK(!capture_busy() && g_code == BP_E_CAPTURE_DUAL_TOO_DEEP &&
+          strstr(g_err, "la_max=2097152 adc_max=2097152") != NULL, "oversize: %s", g_err);
 }
 
 static void test_capture_dual_changes(void) {

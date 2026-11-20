@@ -85,9 +85,15 @@ typedef enum {
     BP_E_OUTPUT_USED_BY_SENSOR = 65,
     BP_E_STEP_BUSY = 66,
     BP_E_SAMPLES_OUT_OF_RANGE = 67,
+    BP_E_LA_RATE_ABOVE_CEILING = 68,
+    BP_E_LA_RATE_TOO_DEEP = 69,
+    BP_E_CAPTURE_DUAL_TOO_DEEP = 70,
+    BP_E_CAPTURE_OVERFLOWED = 71,
+    BP_E_PSRAM_TOO_SMALL = 72,
+    BP_E_PSRAM_BANDWIDTH = 73,
 } bp_errcode_t;
 
-#define BP_E_LAST 67
+#define BP_E_LAST 73
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -935,6 +941,78 @@ static inline const char *bp_note_samples_out_of_range(char *buf, size_t cap, in
 static inline const char *bp_tag_samples_out_of_range(const char *text, int32_t max) {
     const bp_err_arg_t a[] = { {"max", 0, max, 0} };
     return bp_err_tag(text, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+/* BP0068: LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples */
+static inline void bp_err_la_rate_above_ceiling(int conn_id, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    bp_error_send(conn_id, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+static inline const char *bp_note_la_rate_above_ceiling(char *buf, size_t cap, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    return bp_err_note(buf, cap, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+static inline const char *bp_tag_la_rate_above_ceiling(const char *text, const char *rate_mhz, const char *max_mhz, const char *fit_mhz, int32_t samples) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"max_mhz", max_mhz, 0, 1}, {"fit_mhz", fit_mhz, 0, 1}, {"samples", 0, samples, 0} };
+    return bp_err_tag(text, BP_E_LA_RATE_ABOVE_CEILING, a, 4);
+}
+/* BP0069: LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples */
+static inline void bp_err_la_rate_too_deep(int conn_id, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    bp_error_send(conn_id, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+static inline const char *bp_note_la_rate_too_deep(char *buf, size_t cap, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+static inline const char *bp_tag_la_rate_too_deep(const char *text, const char *rate_mhz, int32_t samples, int32_t max_samples, const char *fit_mhz) {
+    const bp_err_arg_t a[] = { {"rate_mhz", rate_mhz, 0, 1}, {"samples", 0, samples, 0}, {"max_samples", 0, max_samples, 0}, {"fit_mhz", fit_mhz, 0, 1} };
+    return bp_err_tag(text, BP_E_LA_RATE_TOO_DEEP, a, 4);
+}
+/* BP0070: capture_dual takes at most {la_max} LA and {adc_max} ADC samples */
+static inline void bp_err_capture_dual_too_deep(int conn_id, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    bp_error_send(conn_id, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+static inline const char *bp_note_capture_dual_too_deep(char *buf, size_t cap, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    return bp_err_note(buf, cap, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+static inline const char *bp_tag_capture_dual_too_deep(const char *text, int32_t la_max, int32_t adc_max, int32_t la_capture_max) {
+    const bp_err_arg_t a[] = { {"la_max", 0, la_max, 0}, {"adc_max", 0, adc_max, 0}, {"la_capture_max", 0, la_capture_max, 0} };
+    return bp_err_tag(text, BP_E_CAPTURE_DUAL_TOO_DEEP, a, 3);
+}
+/* BP0071: The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s */
+static inline void bp_err_capture_overflowed(int conn_id, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    bp_error_send(conn_id, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+static inline const char *bp_note_capture_overflowed(char *buf, size_t cap, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    return bp_err_note(buf, cap, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+static inline const char *bp_tag_capture_overflowed(const char *text, int32_t la_ksps, int32_t adc_ksps) {
+    const bp_err_arg_t a[] = { {"la_ksps", 0, la_ksps, 0}, {"adc_ksps", 0, adc_ksps, 0} };
+    return bp_err_tag(text, BP_E_CAPTURE_OVERFLOWED, a, 2);
+}
+/* BP0072: The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM */
+static inline void bp_err_psram_too_small(int conn_id) {
+    bp_error_send(conn_id, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+static inline const char *bp_note_psram_too_small(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+static inline const char *bp_tag_psram_too_small(const char *text) {
+    return bp_err_tag(text, BP_E_PSRAM_TOO_SMALL, 0, 0);
+}
+/* BP0073: The combined sample rate is more than the PSRAM bus can take */
+static inline void bp_err_psram_bandwidth(int conn_id) {
+    bp_error_send(conn_id, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+static inline const char *bp_note_psram_bandwidth(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_PSRAM_BANDWIDTH, 0, 0);
+}
+static inline const char *bp_tag_psram_bandwidth(const char *text) {
+    return bp_err_tag(text, BP_E_PSRAM_BANDWIDTH, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

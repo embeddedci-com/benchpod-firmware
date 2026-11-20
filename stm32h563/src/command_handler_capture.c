@@ -742,12 +742,7 @@ static void bulk_pump(void) {
    samples as fast as they came) says what ran and what to change, instead of "capture failed". */
 static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
     if (!signal_engine_last_cap_overflowed()) { send_error(cid, "capture failed"); return; }
-    char msg[200];
-    snprintf(msg, sizeof(msg),
-             "capture overflowed: the PSRAM could not keep up with LA %lu kS/s + ADC %lu kS/s. "
-             "Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples",
-             (unsigned long)(la_hz / 1000u), (unsigned long)(adc_hz / 1000u));
-    send_error(cid, msg);
+    bp_err_capture_overflowed(cid, (int32_t)(la_hz / 1000u), (int32_t)(adc_hz / 1000u));   /* BP0071 */
 }
 
 #define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture on gateware
@@ -773,27 +768,21 @@ static void fmt_mhz(char *buf, size_t n, float hz) {
 static bool la_rate_fits(int conn_id, size_t samples, float req_hz, bool with_adc) {
     if (req_hz <= 0.0f) return true;
     const float ceiling = la_raw_ceiling(with_adc);
-    char req[12], top[12], msg[256];
+    char req[12], top[12];
     fmt_mhz(req, sizeof(req), req_hz);
     if (req_hz > ceiling * 1.001f) {
         /* the fastest that fits this depth under the ceiling */
         fmt_mhz(top, sizeof(top), (float)la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)samples, ceiling).rate_hz);
         char cap[12];
         fmt_mhz(cap, sizeof(cap), ceiling);
-        snprintf(msg, sizeof(msg), "LA at %s MS/s does not fit: with ADC samples in the capture the raw LA "
-                 "runs at most %s MS/s on this gateware, %s MS/s for %lu samples (above 12 MS/s it records "
-                 "changes instead)", req, cap, top, (unsigned long)samples);
-        send_error(conn_id, msg);
+        bp_err_la_rate_above_ceiling(conn_id, req, cap, top, (int32_t)samples);   /* BP0068 */
         return false;
     }
     const la_plan_t plan = la_psram_plan(FPGA_HFOSC_HZ, (uint32_t)samples, req_hz);
     if (!plan.capped) return true;
     const uint32_t most = la_psram_max_samples_at(FPGA_HFOSC_HZ, req_hz, (uint32_t)samples);
     fmt_mhz(top, sizeof(top), (float)plan.rate_hz);
-    snprintf(msg, sizeof(msg), "LA at %s MS/s does not fit %lu samples: at most %lu samples at %s MS/s, "
-             "or at most %s MS/s for %lu samples (or leave the rate out for the fastest that fits)",
-             req, (unsigned long)samples, (unsigned long)most, req, top, (unsigned long)samples);
-    send_error(conn_id, msg);
+    bp_err_la_rate_too_deep(conn_id, req, (int32_t)samples, (int32_t)most, top);   /* BP0069 */
     return false;
 }
 
@@ -1347,11 +1336,8 @@ void handle_capture_dual(int conn_id, const char *json) {
     /* The fabric's dual capture takes at most LA_PSRAM_MAX_SAMPLES and ADC_CAP_MAX_SAMPLES (4 MB
        each); a bigger request used to pass the planner and fail at the start as "capture failed". */
     if (la_n > LA_PSRAM_MAX_SAMPLES || adc_n > ADC_CAP_MAX_SAMPLES) {
-        char msg[120];
-        snprintf(msg, sizeof(msg), "capture_dual takes at most %lu LA and %lu ADC samples (la_capture: up to %lu LA)",
-                 (unsigned long)LA_PSRAM_MAX_SAMPLES, (unsigned long)ADC_CAP_MAX_SAMPLES,
-                 (unsigned long)signal_engine_la_max_samples(false));
-        send_error(conn_id, msg);
+        bp_err_capture_dual_too_deep(conn_id, (int32_t)LA_PSRAM_MAX_SAMPLES, (int32_t)ADC_CAP_MAX_SAMPLES,
+                                     (int32_t)signal_engine_la_max_samples(false));   /* BP0070 */
         return;
     }
     float adc_hz = parse_named_rate_hz(json, "adc_rate_mhz");
@@ -1393,11 +1379,11 @@ void handle_capture_dual(int conn_id, const char *json) {
         };
         psram_layout_t lo = psram_plan(&req);
         if (lo.status == PSRAM_ALLOC_ERR_CAPACITY) {
-            send_error(conn_id, "capture too deep: LA+ADC+DAC exceed 8 MB PSRAM");
+            bp_err_psram_too_small(conn_id);   /* BP0072 */
             return;
         }
         if (lo.status == PSRAM_ALLOC_ERR_BANDWIDTH) {
-            send_error(conn_id, "combined sample rate exceeds PSRAM bus bandwidth");
+            bp_err_psram_bandwidth(conn_id);   /* BP0073 */
             return;
         }
         adc_base = lo.adc_base;   /* ADC packed right after LA (LA @ base 0) */

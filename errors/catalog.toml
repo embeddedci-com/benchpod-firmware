@@ -887,3 +887,79 @@ sdk = "ask for at most {max} samples, or use a deep capture (capture_dual) for m
 cli = "ask for at most {max} samples"
 mcp = "ask for at most {max} samples, or use capture_correlated / a deep capture for more"
 web = "Capture at most {max} samples."
+
+[BP0068]
+name = "la_rate_above_ceiling"
+area = "capture"
+since = "next"
+args = { rate_mhz = "str", max_mhz = "str", fit_mhz = "str", samples = "int" }
+message = "LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples"
+cause = "On gateware before v53 the raw LA runs at most {max_mhz} MS/s when the same capture records ADC samples: faster, the PSRAM writer starved the ADC. The pod refuses an explicit rate it cannot run instead of slowing it down. {fit_mhz} MS/s is the fastest rate that fits {samples} samples. Above 12 MS/s the LA records its changes instead."
+[BP0068.fix]
+sdk = "ask for at most {max_mhz} MS/s ({fit_mhz} MS/s for {samples} samples), leave the rate out for the fastest that fits, or update the pod's gateware"
+cli = "ask for at most {max_mhz} MS/s, or leave the rate out for the fastest that fits"
+mcp = "retry with la_rate_mhz at most {fit_mhz} (or leave it out for the fastest that fits)"
+web = "Pick {fit_mhz} MS/s or less, or leave the rate on automatic."
+
+[BP0069]
+name = "la_rate_too_deep"
+area = "capture"
+since = "next"
+args = { rate_mhz = "str", samples = "int", max_samples = "int", fit_mhz = "str" }
+message = "LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples"
+cause = "The raw LA samples into a burst buffer that drains to the PSRAM more slowly than the fastest rates. A capture deeper than the buffer holds at {rate_mhz} MS/s would drop samples, so the pod refuses it instead of slowing it down. Either way out works: fewer samples at this rate, or a lower rate for this depth."
+[BP0069.fix]
+sdk = "capture at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples (leave the rate out for the fastest that fits)"
+cli = "capture at most {max_samples} samples at {rate_mhz} MS/s, or ask for {fit_mhz} MS/s or less (or leave the rate out)"
+mcp = "retry with at most {max_samples} samples, or with the rate at most {fit_mhz} MS/s (or leave it out for the fastest that fits)"
+web = "Capture at most {max_samples} samples at {rate_mhz} MS/s, or pick {fit_mhz} MS/s or less."
+
+[BP0070]
+name = "capture_dual_too_deep"
+area = "capture"
+since = "next"
+args = { la_max = "int", adc_max = "int", la_capture_max = "int" }
+message = "capture_dual takes at most {la_max} LA and {adc_max} ADC samples"
+cause = "Each stream of a capture_dual has its own PSRAM region of a fixed size. A deeper LA-only capture fits la_capture, which takes up to {la_capture_max} LA samples."
+[BP0070.fix]
+sdk = "ask for at most {la_max} LA and {adc_max} ADC samples, or use la_capture for up to {la_capture_max} LA samples"
+cli = "ask for at most {la_max} LA and {adc_max} ADC samples"
+mcp = "ask for at most {la_max} LA and {adc_max} ADC samples, or use capture_la for up to {la_capture_max} LA samples"
+web = "Capture at most {la_max} LA and {adc_max} ADC samples."
+
+[BP0071]
+name = "capture_overflowed"
+area = "capture"
+since = "next"
+args = { la_ksps = "int", adc_ksps = "int" }
+message = "The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s"
+cause = "The capture started, but its streams wrote to the PSRAM faster than it could take them, so samples were lost and the pod returns none."
+[BP0071.fix]
+sdk = "lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"
+cli = "lower the LA or ADC rate, or capture fewer samples"
+mcp = "retry with a lower la_rate_mhz or adc_rate_mhz, or fewer samples"
+web = "Lower the LA or ADC rate, or capture fewer samples."
+
+[BP0072]
+name = "psram_too_small"
+area = "capture"
+since = "next"
+message = "The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM"
+cause = "A capture_dual packs its LA region, its ADC region and any deep-replay waveform still loaded into the pod's 8 MB PSRAM, and refuses up front when they do not fit."
+[BP0072.fix]
+sdk = "capture fewer LA or ADC samples, or free the replay waveform (bp.dac_stop()) first"
+cli = "capture fewer samples"
+mcp = "retry with fewer la_samples or adc_samples, or call dac_stop to free a loaded replay waveform"
+web = "Capture fewer samples, or stop the DAC replay first."
+
+[BP0073]
+name = "psram_bandwidth"
+area = "capture"
+since = "next"
+message = "The combined sample rate is more than the PSRAM bus can take"
+cause = "The LA, the ADC and a running deep replay share one PSRAM bus. The pod adds up their sustained rates and refuses a capture that would overrun it, instead of losing samples."
+[BP0073.fix]
+sdk = "lower la_rate_mhz or adc_rate_mhz, or stop the DAC replay first"
+cli = "lower the LA or ADC rate"
+mcp = "retry with a lower la_rate_mhz or adc_rate_mhz, or call dac_stop first"
+web = "Lower the LA or ADC rate, or stop the DAC replay first."

@@ -677,11 +677,12 @@ packet carries `"la":true,"la_edges"` directly.
 | Condition | Message |
 |---|---|
 | `adc_samples` and `la_samples` both 0 | `"adc_samples and la_samples are both 0"` |
-| An explicit LA rate that does not fit (above 8 MS/s with the ADC on gateware before v53, or too deep for the rate) | `"LA at <r> MS/s does not fit ..."`, naming the most samples at that rate and the fastest rate for that depth |
-| More than 2 097 152 samples in a stream | `"capture_dual takes at most 2097152 LA and 2097152 ADC samples (la_capture: up to <n> LA)"` |
-| LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `"capture too deep: LA+ADC+DAC exceed 8 MB PSRAM"` |
-| The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
-| The PSRAM could not keep up during the capture (STATUS overflow bit) | `"capture overflowed: the PSRAM could not keep up with LA <n> kS/s + ADC <n> kS/s. Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"` |
+| An explicit LA rate above 8 MS/s with the ADC on gateware before v53 | `BP0068` (`la_rate_above_ceiling`, args `rate_mhz`, `max_mhz`, `fit_mhz` (the fastest rate for this depth), `samples`) |
+| An explicit LA rate too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples` (the most at this rate), `fit_mhz` (the fastest rate for this depth)) |
+| More than 2 097 152 samples in a stream | `BP0070` (`capture_dual_too_deep`, args `la_max`, `adc_max`, `la_capture_max`) |
+| LA + ADC + a resident deep-replay waveform exceed the PSRAM (gateware v22+) | `BP0072` (`psram_too_small`) |
+| The combined rate overruns the PSRAM bus (gateware v22+) | `BP0073` (`psram_bandwidth`) |
+| The PSRAM could not keep up during the capture (STATUS overflow bit) | `BP0071` (`capture_overflowed`, args `la_ksps`, `adc_ksps`) |
 | A count exceeds its fixed region (gateware before v22) | `"samples out of range (per-stream PSRAM region limit)"` |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | ADC samples on the digital-only board | the [digital-board refusal](#gates-that-apply-to-every-command) |
@@ -852,10 +853,10 @@ The achieved rate can be lower than the request for two reasons:
 - Without `sample_rate_mhz` a capture larger than the 96 KB burst buffer (about 49 000 samples)
   runs at the fastest rate that fits it, so no sample is dropped: 4.8 MS/s at 100 000 samples,
   3.4 MS/s at 300 000 and 3 MS/s from about 1 000 000. An explicit rate that does not fit the
-  depth is refused (firmware 3.10.0 and later; it used to be slowed down), and the message names
-  both ways out: `"LA at 12.0 MS/s does not fit 1000000 samples: at most 65536 samples at 12.0
-  MS/s, or at most 3.0 MS/s for 1000000 samples (or leave the rate out for the fastest that
-  fits)"`.
+  depth is refused (firmware 3.10.0 and later; it used to be slowed down) with both ways out in
+  its args: `BP0069` with `"args":{"rate_mhz":"12.0","samples":1000000,"max_samples":65536,"fit_mhz":"3.0"}`
+  (firmware up to 3.10.13 sent them as text: `"LA at 12.0 MS/s does not fit 1000000 samples: at
+  most 65536 samples at 12.0 MS/s, or at most 3.0 MS/s for 1000000 samples ..."`).
 
 Older firmware omitted `la_rate_hz` from this reply, so hosts labeled the trace with the
 requested rate.
@@ -916,6 +917,7 @@ anything is armed.
 |---|---|
 | LA voltage not set | `BP0001` (`la_voltage_not_set`) |
 | `samples` = 0 or too deep | `BP0067` (`samples_out_of_range`, args `max`); a resident deep-DAC waveform can be what limits it (`dac_stop` frees it) |
+| An explicit `sample_rate_mhz` (12 MS/s and below) too fast for the depth | `BP0069` (`la_rate_too_deep`, args `rate_mhz`, `samples`, `max_samples`, `fit_mhz`) |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
@@ -4725,6 +4727,10 @@ The ones the commands above name:
 | `BP0065` | `output_used_by_sensor` | `output`, `instance` | a DAC or current command while an analog emulated sensor plays that output |
 | `BP0066` | `step_busy` | | an `la` step train while one runs |
 | `BP0067` | `samples_out_of_range` | `max` | `capture`, `capture_read`, `la_capture` and the others with `samples` outside 1 to `max` |
+| `BP0068`, `BP0069` | `la_rate_above_ceiling`, `la_rate_too_deep` | `rate_mhz`, `fit_mhz`, `samples` (and `max_mhz` / `max_samples`) | an explicit raw LA rate the capture cannot run: the rates are strings with one decimal ("3.0"), in MS/s |
+| `BP0070` | `capture_dual_too_deep` | `la_max`, `adc_max`, `la_capture_max` | `capture_dual` asking for more than a stream's region |
+| `BP0071` | `capture_overflowed` | `la_ksps`, `adc_ksps` | a capture whose streams the PSRAM could not keep up with |
+| `BP0072`, `BP0073` | `psram_too_small`, `psram_bandwidth` | | `capture_dual` whose regions do not fit the PSRAM, or whose rates overrun its bus |
 
 Refusals without a code keep `{"status":"error","message":...}`; the common ones:
 
