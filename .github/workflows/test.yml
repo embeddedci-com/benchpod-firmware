@@ -149,7 +149,10 @@ jobs:
         # default of 0, so a missing variable (a fork, a renamed variable) turned the gate off.
         # This runner's toolchain places differently from a local one, so seeds are pinned from
         # sweeps in both (the ice40-seed-sweep workflow).
-        run: make -C ice40 test PNR_STRICT=1
+        # -j: the benches are independent (each its own /tmp/*.vvp) and the two placements run
+        # side by side; every result is the same as a serial run (fixed seeds, self-checking
+        # benches). --output-sync keeps each target's log together.
+        run: make -C ice40 -j"$(nproc)" --output-sync=target test PNR_STRICT=1
       # Releases embed ice40/release/ (hardware-verified), not the images built above.  Every
       # gateware change is unpromoted until it has been tested on a bench, so on a PR or main this
       # only warns; called by the release workflow it fails.
