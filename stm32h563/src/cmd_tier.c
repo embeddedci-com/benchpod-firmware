@@ -61,9 +61,9 @@ static int writes_eth(const char *json) {
    here is "unknown cmd" and counts as T3.  The write test is NULL except on the mixed verbs. */
 static const cmd_desc_t k_tiers[] = {
     /* T0: read-only */
-    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_ping), NULL },
-    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_status), NULL },
-    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_diag), NULL },
+    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY | CMD_F_ANY_CLIENT, CMD_FN(handle_ping), NULL },
+    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_status), NULL },
+    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_diag), NULL },
     { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status), NULL },
     { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status), NULL },
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
@@ -149,7 +149,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir), NULL },
     { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire), NULL },
     { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew), NULL },
-    { { "lease_release", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_release), NULL },
+    { { "lease_release", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE | CMD_F_ANY_CLIENT, CMD_FN(handle_lease_release), NULL },
     { { "i2c_start", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_start), NULL },
     { { "i2c_stop", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_stop), NULL },
     { { "i2c_xfer", CMD_TIER_T1 }, 0, CMD_FN(handle_i2c_xfer), NULL },

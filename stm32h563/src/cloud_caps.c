@@ -26,8 +26,10 @@ static void emit_features(bp_emit_t *e, const cloud_caps_t *c) {
        features from features/features.json with these (features.toml). The flags the server
        never read from this frame (cal_dmm, can_fd, uart_frame, spi_stream, error_codes,
        cloud_ca, cloud_proxy) left it for them; the rest go once every server reads the table. */
-    bp_emit(e, "\"features_rev\":%u,\"gateware_version\":%u,\"fpga_image\":\"%s\",",
-            c->features_rev, c->gateware_version, c->fpga_image ? c->fpga_image : "unknown");
+    bp_emit(e, "\"features_rev\":%u,\"api\":%u,\"min_client_api\":%u,"
+               "\"gateware_version\":%u,\"fpga_image\":\"%s\",",
+            c->features_rev, c->api, c->min_client_api, c->gateware_version,
+            c->fpga_image ? c->fpga_image : "unknown");
     bp_emit(e, "\"serial\":false,\"scope\":%s,\"analog\":%s,\"analyzer\":true,\"command\":true,\"tunnel\":true,"
                "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,"
                "\"adc_cal_a_uv\":%ld,\"adc_cal_b_nv\":%ld,\"adc_cal_unwrap\":true,",
@@ -106,8 +108,9 @@ void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c) {
 }
 
 void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c) {
-    bp_emit(e, ",\"features_rev\":%u,\"fpga_image\":\"%s\",\"hw\":[", c->features_rev,
-            c->fpga_image ? c->fpga_image : "unknown");
+    /* api / min_client_api: the client API level next to the table's revision (cloud_caps.h). */
+    bp_emit(e, ",\"features_rev\":%u,\"api\":%u,\"min_client_api\":%u,\"fpga_image\":\"%s\",\"hw\":[",
+            c->features_rev, c->api, c->min_client_api, c->fpga_image ? c->fpga_image : "unknown");
     /* The facts the table's `requires` names (features.toml [facts], `hw`), in a fixed order. */
     const char *sep = "";
     if (!c->no_wifi_scan) { bp_emit(e, "%s\"wifi\"", sep); sep = ","; }

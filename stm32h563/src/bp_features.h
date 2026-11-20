@@ -5,6 +5,19 @@
 /* The revision of features/features.toml this firmware is built from. The pod announces it as
    features_rev (status, cloud capabilities frame); clients take every feature with rev <= it from
    their copy of features/features.json instead of a list the pod sends. */
-#define BP_FEATURES_REV 7u
+#define BP_FEATURES_REV 8u
+
+/* The client API level (features.toml `api`), announced as "api" next to features_rev: it goes up
+   only for a change a client built for an older level would misread. */
+#define BP_API 1u
+
+/* The lowest "client_api" a JSON command may carry (absent = 0), announced as "min_client_api".
+   Below it the pod refuses with BP0030 client_too_old (cmd_gate_client_api). Raised only on
+   purpose, in a release pull request. A test build may set BP_MIN_CLIENT_API_OVERRIDE. */
+#ifdef BP_MIN_CLIENT_API_OVERRIDE
+#define BP_MIN_CLIENT_API BP_MIN_CLIENT_API_OVERRIDE
+#else
+#define BP_MIN_CLIENT_API 0u
+#endif
 
 #endif /* BP_FEATURES_H */

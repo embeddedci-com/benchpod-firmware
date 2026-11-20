@@ -49,6 +49,7 @@ typedef enum {
     BP_E_LEASE_NOT_HELD = 27,
     BP_E_VREF_5V_MISSING = 28,
     BP_E_PULL_RAIL_DOWN = 29,
+    BP_E_CLIENT_TOO_OLD = 30,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -199,6 +200,11 @@ static inline void bp_err_vref_5v_missing(int conn_id, const char *text, int32_t
 static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, text, a, 1);
+}
+/* BP0030: This client is too old for the pod's firmware: it needs client API {min_client_api} or newer (this client sent {client_api}) */
+static inline void bp_err_client_too_old(int conn_id, const char *text, int32_t client_api, int32_t min_client_api, int32_t api) {
+    const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
+    bp_error_send(conn_id, BP_E_CLIENT_TOO_OLD, text, a, 3);
 }
 
 #endif /* BP_ERRORS_H */

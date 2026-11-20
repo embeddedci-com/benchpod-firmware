@@ -11,9 +11,12 @@
 
 Outputs (never hand-edit them: the banner says so):
   features/features.json        everything the hosts need (SDK, MCP, CLI, server, web)
-  stm32h563/src/bp_features.h   BP_FEATURES_REV, the revision the pod announces as features_rev
+  stm32h563/src/bp_features.h   BP_FEATURES_REV, the revision the pod announces as features_rev,
+                                and BP_API / BP_MIN_CLIENT_API, the client API level and the
+                                lowest client_api the pod takes
 
 Checks (also with --check):
+  - api is an integer >= 1, min_client_api an integer >= 0, and min_client_api <= api
   - each entry's gateware equals the firmware constant its gw_const names (stm32h563/src/*.h)
   - the status caps list is frozen: every name cloud_caps_emit_list writes is an entry's or a
     fact's legacy_caps, and only revision-1 entries (the list as it was) have one
@@ -83,13 +86,22 @@ def status_caps_names():
 
 def validate(t):
     errs = []
-    for key in ("schema", "revision", "floor", "docs_base", "facts", "features", "releases"):
+    for key in ("schema", "revision", "api", "min_client_api", "floor", "docs_base", "facts",
+                "features", "releases"):
         if key not in t:
             errs.append(f"missing top-level {key}")
     if errs:
         return errs
     if t["schema"] != 1:
         errs.append("schema must be 1")
+    api, min_api = t["api"], t["min_client_api"]
+    if not isinstance(api, int) or isinstance(api, bool) or api < 1:
+        errs.append("api must be an integer >= 1")
+    elif not isinstance(min_api, int) or isinstance(min_api, bool) or min_api < 0:
+        errs.append("min_client_api must be an integer >= 0")
+    elif min_api > api:
+        errs.append(f"min_client_api {min_api} is above api {api}: the pod would refuse every "
+                    "client, the newest included")
     if not VERSION_RE.match(t["floor"]):
         errs.append("floor is not a version")
     facts = t["facts"]
@@ -246,6 +258,8 @@ def build_json(t, sha):
         "_generated": BANNER,
         "schema": t["schema"],
         "revision": t["revision"],
+        "api": t["api"],
+        "min_client_api": t["min_client_api"],
         "table_sha256": sha,
         "floor": t["floor"],
         "docs_base": t["docs_base"],
@@ -265,6 +279,19 @@ def build_h(t):
    features_rev (status, cloud capabilities frame); clients take every feature with rev <= it from
    their copy of features/features.json instead of a list the pod sends. */
 #define BP_FEATURES_REV {t['revision']}u
+
+/* The client API level (features.toml `api`), announced as "api" next to features_rev: it goes up
+   only for a change a client built for an older level would misread. */
+#define BP_API {t['api']}u
+
+/* The lowest "client_api" a JSON command may carry (absent = 0), announced as "min_client_api".
+   Below it the pod refuses with BP0030 client_too_old (cmd_gate_client_api). Raised only on
+   purpose, in a release pull request. A test build may set BP_MIN_CLIENT_API_OVERRIDE. */
+#ifdef BP_MIN_CLIENT_API_OVERRIDE
+#define BP_MIN_CLIENT_API BP_MIN_CLIENT_API_OVERRIDE
+#else
+#define BP_MIN_CLIENT_API {t['min_client_api']}u
+#endif
 
 #endif /* BP_FEATURES_H */
 """
@@ -332,7 +359,7 @@ def main(argv):
               file=sys.stderr)
         return 1
     print(f"gen_features: {len(t['features'])} features, {len(t['facts'])} facts, "
-          f"revision {t['revision']}" + (" (up to date)" if check else ""))
+          f"revision {t['revision']}, api {t['api']} (min client {t['min_client_api']})" + (" (up to date)" if check else ""))
     return 0
 
 

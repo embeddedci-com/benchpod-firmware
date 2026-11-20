@@ -393,3 +393,16 @@ sdk = "check what is wired to J1 pin 21 (bp.la_voltage() shows its state), remov
 cli = "check what is wired to J1 pin 21 (`benchpod la voltage` shows its state), remove the short or load, then set the pull again"
 mcp = "ask the user to check what is wired to J1 pin 21 (set_la_voltage with no voltage shows its state), then set the pull again"
 web = "Pin 21 is down, so the pull resistors are off. Check what is wired to pin 21."
+
+[BP0030]
+name = "client_too_old"
+area = "protocol"
+since = "next"
+args = { client_api = "int", min_client_api = "int", api = "int" }
+message = "This client is too old for the pod's firmware: it needs client API {min_client_api} or newer (this client sent {client_api})"
+cause = "The firmware on the pod changed a reply or a message in a way that clients built for client API {client_api} would misread, so it refuses their commands instead of giving them answers they get wrong. The firmware speaks client API {api} and takes {min_client_api} or newer. A client that sends no client_api counts as 0. status, diag, ping and lease_release still work."
+[BP0030.fix]
+sdk = "update the SDK (pip install -U embeddedci), then run again"
+cli = "update the CLI (`brew upgrade --cask benchpod`, or the latest release from GitHub), then run the command again"
+mcp = "tell the user the BenchPod MCP server is too old for this pod's firmware; they can update it (run `uvx embeddedci-mcp@latest`, or pip install -U embeddedci-mcp; with the benchpod plugin, update the plugin), then reconnect"
+web = "Reload the page to get the latest web app."

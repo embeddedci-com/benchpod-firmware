@@ -53,6 +53,10 @@ typedef struct {
        is built from (BP_FEATURES_REV), the running gateware and its image ("loop", "deep", "emu"
        or "unknown"). */
     unsigned      features_rev;
+    /* The client API level (BP_API) and the lowest client_api the pod takes (BP_MIN_CLIENT_API),
+       announced next to features_rev (features.toml, cmd_gate_client_api). */
+    unsigned      api;
+    unsigned      min_client_api;
     unsigned      gateware_version;
     const char   *fpga_image;
     bool          nrst_pin;
@@ -102,8 +106,9 @@ size_t cloud_caps_build(const cloud_caps_t *c, char *out, size_t cap);
    take new features from features/features.toml; tools/gen_features.py --check fails on one). */
 void cloud_caps_emit_list(bp_emit_t *e, const cloud_caps_t *c);
 
-/* What a `status` with "caps":false gets instead of that list: ,"features_rev":N,
-   "fpga_image":"...","hw":[...], the hardware facts the table's `requires` names. */
+/* What a `status` with "caps":false gets instead of that list: ,"features_rev":N,"api":A,
+   "min_client_api":M,"fpga_image":"...","hw":[...], the hardware facts the table's `requires`
+   names. */
 void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c);
 
 /* The running image's name from the gateware's feature bits (FPGA_FEATURE_*). */

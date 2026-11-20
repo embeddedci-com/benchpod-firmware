@@ -117,6 +117,14 @@ Every request is a flat JSON object on a single line, terminated with `\n`.
 
 The `cmd` field is required. All other fields are command-specific and documented below. Unknown fields are silently ignored.
 
+Two fields go with any command: `client_api`, the [client API level](#client-compatibility) the
+client was built for, and `client`, its name and version for the refusal text. A client sends them
+on every command:
+
+```
+{"cmd":"la_pins","client_api":1,"client":"sdk 3.0.6"}\n
+```
+
 ---
 
 ## Response Format
@@ -307,6 +315,7 @@ that applies answers with its message and the command does not run.
 
 | Gate | Applies to | Message |
 |---|---|---|
+| [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping` and `lease_release`, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030`: `update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)` (firmware after 3.10.13) |
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
 | A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025`: `busy: a cloud job holds this pod (<holder>, <N> s left)` (the code with firmware after 3.10.13; the text is unchanged) |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
@@ -803,7 +812,8 @@ supports this; the cloud capabilities frame carries the same two flags as boolea
 
 From firmware 3.10.11 the frame also carries `features_rev`, `gateware_version` (the
 running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
-[features table](#features-table). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
+[features table](#features-table). Firmware after 3.10.13 adds `api` and `min_client_api`, the
+[client API level](#client-compatibility). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
 `spi_stream`, `error_codes`, `cloud_ca` and `cloud_proxy`, which the server never read from it.
 
 When the pod connects to the cloud it advertises a `capabilities` frame. Alongside `adc_bits` / `adc_fullscale_mv` / `adc_channels` it ships the affine ADC front-end calibration as **integers** (newlib-nano's `printf` has no `%f`), which the server uses to scale raw capture counts to the true probe voltage instead of the naive count ÷ full-scale:
@@ -1847,6 +1857,8 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
 | `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
 | `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
+| `api` | integer | With `"caps":false` only (firmware after 3.10.13): the [client API level](#client-compatibility) this firmware speaks. |
+| `min_client_api` | integer | With `"caps":false` only (firmware after 3.10.13): the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
 | `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
@@ -1892,6 +1904,42 @@ feature. A client keeps a copy, so a pod works without a network connection, and
 
 A pod with a higher `features_rev` than the client's table has features the client does not
 know yet: update the client.
+
+#### Client compatibility
+
+Firmware after 3.10.13. `features_rev` only adds: a client older than the pod misses the new
+features and can warn. The client API level is for the other kind of change, one a client built
+for an older level would misread: a reply that changes shape, a field that changes meaning or
+units, or a refusal text replaced (by the catalog text, say) so clients that match on it break.
+
+| Field | Where | Meaning |
+|---|---|---|
+| `api` | `status` with `"caps":false`, the cloud capabilities frame | The client API level of this firmware, from [`features/features.toml`](../features/features.toml). It goes up by one only for a change an older client would misread. |
+| `min_client_api` | the same | The lowest level the firmware takes. It is raised only on purpose, in a release, and never above `api`. Today it is 0, so the pod refuses no client. |
+| `client_api` | every JSON command (request) | The level the client was built for. A command without it counts as 0. |
+| `client` | every JSON command (request), optional | The client's name and version, at most 32 printable characters (`"sdk 3.0.6"`, `"cli 0.9.5"`). The pod puts it in the refusal text; it is left out when longer or with other characters. |
+
+A command whose `client_api` is below `min_client_api` is refused before every other
+[gate](#gates-that-apply-to-every-command), on the LAN, USB and both cloud paths:
+
+```json
+{"status":"error","code":"BP0030","args":{"client_api":0,"min_client_api":2,"api":2},"message":"update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer (this client sent 0)"}
+```
+
+`status`, `diag`, `ping` and `lease_release` always run, so a client can see the levels, report
+them and let go of the pod. SCPI and the USB console have no check: people read them.
+
+A client:
+
+1. Sends `"client_api":<its level>` (and `client`) on every command. Both are stateless, so this
+   works the same on every transport, the cloud command channel included (the server passes the
+   command on as it is). Older firmware ignores them. They count toward the line limit (1279 bytes).
+2. Reads `api` and `min_client_api` from `status` (`"caps":false`) or the capabilities frame.
+   No `api` (firmware up to 3.10.13): treat it as level 1.
+3. Stops, and says to update the client, when `api` is above its own level (the firmware has a
+   change this client would misread) or `min_client_api` is above it (the pod refuses it).
+4. Shows a `BP0030` refusal as it is: a client from before this level shows the `message` text,
+   which says what to do.
 
 ---
 
@@ -4709,6 +4757,7 @@ All errors follow the format:
 | `"command too long"` | A JSON line longer than 1279 bytes |
 | `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
+| `BP0030` `"update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)"` | A client older than the firmware's `min_client_api` (see [Client compatibility](#client-compatibility)) |
 | `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
 | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
