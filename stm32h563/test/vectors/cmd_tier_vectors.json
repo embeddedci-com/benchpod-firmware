@@ -595,7 +595,7 @@
       "tier": "T2"
     },
     {
-      "line": "{\"cmd\":\"usb_network\",\"set\":\"off\"}",
+      "line": "{\"cmd\":\"usb_network\",\"enabled\":false}",
       "tier": "T2"
     },
     {

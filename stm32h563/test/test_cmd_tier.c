@@ -67,7 +67,7 @@ static void test_mixed_verbs(void) {
     expect("lan_policy", "{\"cmd\":\"lan_policy\"}", CMD_TIER_T0);
     expect("lan_policy", "{\"cmd\":\"lan_policy\",\"set\":\"off\"}", CMD_TIER_T2);
     expect("usb_network", "{\"cmd\":\"usb_network\"}", CMD_TIER_T0);
-    expect("usb_network", "{\"cmd\":\"usb_network\",\"set\":\"off\"}", CMD_TIER_T2);
+    expect("usb_network", "{\"cmd\":\"usb_network\",\"enabled\":false}", CMD_TIER_T2);
     /* the console log level: read and set are T0 (it only changes what the console prints) */
     expect("log_level", "{\"cmd\":\"log_level\"}", CMD_TIER_T0);
     expect("log_level", "{\"cmd\":\"log_level\",\"set\":\"debug\"}", CMD_TIER_T0);

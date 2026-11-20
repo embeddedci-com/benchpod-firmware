@@ -98,7 +98,7 @@ Removing the driver also affects other ST boards that use it; Windows 10 and 11 
 their in-box serial driver too. Without the USB network, the pod still works over Ethernet, Wi-Fi
 or the cloud.
 
-The JSON `status` reports it as `usb` (`net`, `setting`, `off_reason`, `link`, `ip`, `host_ip`) and the
+The JSON `status` reports it as `usb` (`net`, `enabled`, `off_reason`, `link`, `ip`, `host_ip`) and the
 console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP server
 connect to it with the connection `usb`.
 

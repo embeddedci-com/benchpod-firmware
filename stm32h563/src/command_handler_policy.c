@@ -92,17 +92,17 @@ void handle_log_level(int conn_id, const char *json) {
    the device may change it: over the USB link itself here (the console has usb-network). */
 void handle_usb_network(int conn_id, const char *json) {
     char v[8] = {0};
-    if (bp_json_get(json, "set", v, sizeof(v))) {
-        if (strcmp(v, "on") != 0 && strcmp(v, "off") != 0) {
-            send_error(conn_id, "usb_network: set must be on or off");
+    if (bp_json_get(json, "enabled", v, sizeof(v))) {   /* firmware up to 3.10.13: "set":"on"|"off" */
+        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
+            send_error(conn_id, "usb_network: enabled must be true or false");
             return;
         }
-        const char *why = pod_policy_set_usb_net(!strcmp(v, "on"), command_handler_policy_src(conn_id),
+        const char *why = pod_policy_set_usb_net(!strcmp(v, "true"), command_handler_policy_src(conn_id),
                                                  net_conn_on_usb(conn_id));
         if (why) { send_error(conn_id, why); return; }
     }
     char data[48];
-    snprintf(data, sizeof(data), "{\"setting\":\"%s\"}", pod_policy_usb_net() ? "on" : "off");
+    snprintf(data, sizeof(data), "{\"enabled\":%s}", pod_policy_usb_net() ? "true" : "false");
     send_ok_str(conn_id, data);
 }
 

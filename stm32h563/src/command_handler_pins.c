@@ -352,11 +352,11 @@ static void handle_la_pull_mask(int conn_id) {
     char payload[112];
     if (held)
         snprintf(payload, sizeof(payload),
-                 "{\"la_pullup_mask\":%u,\"pullups_available\":%d,\"held\":\"%s\",\"asked_mask\":%u}",
-                 mask, la_pull_available() ? 1 : 0, held, asked);
+                 "{\"la_pullup_mask\":%u,\"pullups_available\":%s,\"held\":\"%s\",\"asked_mask\":%u}",
+                 mask, la_pull_available() ? "true" : "false", held, asked);
     else
-        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%d}",
-                 mask, la_pull_available() ? 1 : 0);
+        snprintf(payload, sizeof(payload), "{\"la_pullup_mask\":%u,\"pullups_available\":%s}",
+                 mask, la_pull_available() ? "true" : "false");
     send_ok_str(conn_id, payload);
 }
 
@@ -387,7 +387,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
         const char *held = la_pull_held();
         bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
     }
-    bp_emit(&e, ",\"pullups_available\":%d}", la_pull_available() ? 1 : 0);
+    bp_emit(&e, ",\"pullups_available\":%s}", la_pull_available() ? "true" : "false");
     if (!bp_emit_ok(&e)) { bp_err_reply_too_large(conn_id); return; }
     send_ok_str(conn_id, payload);
 }

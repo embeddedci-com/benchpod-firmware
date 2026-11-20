@@ -858,3 +858,10 @@ firmware = "next"
 docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "The la command is split: la_step runs a step pulse train (needs steps), la_pull switches, reads or (without la) lists the pull resistors with the same fields and replies. la answers unknown cmd; the old pullup field is not read."
+
+[features.json_booleans_4]
+rev = 10
+firmware = "next"
+docs = "API.md#target_power--enabledisable-a-target-power-efuse"
+dated = "code"
+note = "Booleans are true/false: target_power takes enabled (was state 1/0) and replies enabled true/false (was 1/0); target_status enabled, fault and valid are true/false; usb_network takes and replies enabled (was set/setting on/off); status usb net and enabled are true/false (were net/setting on/off); la_pull pullups_available is true/false (was 1/0); nrst assert is documented as true/false (1/0 still parse)."

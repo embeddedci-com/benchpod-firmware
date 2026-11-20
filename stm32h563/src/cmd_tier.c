@@ -29,10 +29,15 @@ static int writes_calibrate(const char *json) {
            bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
            (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
-/* sig_policy, lan_policy, usb_network */
+/* sig_policy, lan_policy */
 static int writes_set(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "set", v, sizeof(v));
+}
+/* usb_network */
+static int writes_enabled(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "enabled", v, sizeof(v));
 }
 /* cloud_ca, cloud_proxy */
 static int writes_set_or_clear(const char *json) {
@@ -103,7 +108,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_eth), writes_eth },
     { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_set },
     { { "lan_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_policy), writes_set },
-    { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_set },
+    { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_enabled },
     /* read and set T0: it only changes what the pod prints on its own console */
     { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level), NULL },
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_module), writes_module },

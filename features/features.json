@@ -4,7 +4,7 @@
   "revision": 10,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "bf25391ed3cef9bfef910450860f56fb76d2b9811f3a3b87d1eb4f98bb9cb1e0",
+  "table_sha256": "b162faa69979243bf9fc594237387b25a206ceb79c962e785dad047197d03b5e",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -740,6 +740,12 @@
       "firmware": "next",
       "board": "any",
       "docs": "API.md#la_pull--la-pin-pull-resistors"
+    },
+    "json_booleans_4": {
+      "rev": 10,
+      "firmware": "next",
+      "board": "any",
+      "docs": "API.md#target_power--enabledisable-a-target-power-efuse"
     }
   }
 }

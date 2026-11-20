@@ -78,20 +78,21 @@ static char s_rail_profile[2][WIRING_NAME_MAX + 1];   /* [efuse - 1] */
 void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
     char profile[WIRING_NAME_MAX + 1] = {0};
-    char state_s[8]  = {0};
     char delay_s[12] = {0};
 
     if (!json_get_value(json, "efuse", efuse_s, sizeof(efuse_s))) {
         send_error(conn_id, "missing efuse");
         return;
     }
-    if (!json_get_value(json, "state", state_s, sizeof(state_s))) {
-        send_error(conn_id, "missing state");
+    char en_s[8] = {0};   /* "enabled":true|false (firmware up to 3.10.13: "state":0|1) */
+    if (!json_get_value(json, "enabled", en_s, sizeof(en_s)) ||
+        (strcmp(en_s, "true") != 0 && strcmp(en_s, "false") != 0)) {
+        send_error(conn_id, "enabled must be true or false");
         return;
     }
 
     int      efuse    = atoi(efuse_s);
-    bool     on       = (atoi(state_s) != 0);
+    bool     on       = strcmp(en_s, "true") == 0;
     int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
     if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
         bp_err_wiring_bad_name(conn_id, profile);
@@ -113,8 +114,8 @@ void handle_target_power(int conn_id, const char *json) {
        the eFuse will reach once the delay elapses. */
     char payload[56];
     snprintf(payload, sizeof(payload),
-             "{\"efuse\":%d,\"enabled\":%d,\"delay_ms\":%u}",
-             efuse, on ? 1 : 0, (unsigned)delay_ms);
+             "{\"efuse\":%d,\"enabled\":%s,\"delay_ms\":%u}",
+             efuse, on ? "true" : "false", (unsigned)delay_ms);
     send_ok_str(conn_id, payload);
 }
 
@@ -153,6 +154,8 @@ bool la_voltage_from_profile(void) {
     return true;
 }
 
+#define TF(b) ((b) ? "true" : "false")
+
 void handle_target_status(int conn_id, const char *json) {
     (void)json;
     target_power_status_t e1, e2;
@@ -169,11 +172,11 @@ void handle_target_status(int conn_id, const char *json) {
     char resp[432];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
-             "\"efuse1\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
-             "\"efuse2\":{\"enabled\":%d,\"fault\":%d,\"valid\":%d,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
+             "\"efuse1\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
+             "\"efuse2\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
              "\"status_supported\":%s}}\n",
-             e1.enabled, e1.fault, e1.valid, e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
-             e2.enabled, e2.fault, e2.valid, e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
+             TF(e1.enabled), TF(e1.fault), TF(e1.valid), e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
+             TF(e2.enabled), TF(e2.fault), TF(e2.valid), e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
              e1.status_supported ? "true" : "false");
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
@@ -312,8 +315,8 @@ void handle_usb_cc(int conn_id, const char *json) {
 }
 
 /* Drive the dedicated target-reset line (rev3+, /NRST_CONTROL on J1 pin 22).
-     {"cmd":"nrst","assert":1}      -> hold the target in reset
-     {"cmd":"nrst","assert":0}      -> release (Hi-Z; the DUT's pull-up wins)
+     {"cmd":"nrst","assert":true}   -> hold the target in reset
+     {"cmd":"nrst","assert":false}  -> release (Hi-Z; the DUT's pull-up wins)
      {"cmd":"nrst","pulse_ms":50}   -> assert, wait, release
      {"cmd":"nrst"}                 -> report state
    Flashing does NOT need this: dap_start's CMSIS-DAP SWJ_PINS already drives the

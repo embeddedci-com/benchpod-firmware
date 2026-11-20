@@ -155,9 +155,10 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     {
         usb_cc_t cc;
         bool have_cc = usb_cc_read(&cc) == 0 && cc.supported;
-        /* setting: the stored USB network setting; off_reason when net is off. */
-        bp_emit(e, "\"usb\":{\"net\":\"%s\",\"setting\":\"%s\",",
-                usb_net_on() ? "on" : "off", usb_net_setting_on() ? "on" : "off");
+        /* net: the adapter is up; enabled: the stored USB network setting (firmware up to 3.10.13:
+           "net" and "setting" as "on"/"off"); off_reason when net is off. */
+        bp_emit(e, "\"usb\":{\"net\":%s,\"enabled\":%s,",
+                usb_net_on() ? "true" : "false", usb_net_setting_on() ? "true" : "false");
         if (!usb_net_on())
             bp_emit(e, "\"off_reason\":\"%s\",", usb_net_setting_on() ? "wifi" : "setting");
         bp_emit(e, "\"link\":%s,\"ip\":\"%s\",\"host_ip\":\"%s\",",

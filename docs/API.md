@@ -1734,7 +1734,7 @@ sending it.
 ```json
 {"status":"ok","data":{"device":"benchpod","version":"3.7.0","board":"stm32h563","net":"ready",
  "ip":"192.168.1.220","rssi_dbm":null,"wifi":"connected","cloud":"connected",
- "usb":{"net":"on","setting":"on","link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
+ "usb":{"net":true,"enabled":true,"link":true,"ip":"10.237.8.85","host_ip":"10.237.8.86","source":"default","source_ma":500},
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
  "board_rev":"v3","nrst_pin":true,"flash_kb":2048,
@@ -1790,7 +1790,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `eth_mac` | string | The Ethernet port's MAC, `"aa:bb:cc:dd:ee:ff"`: fixed per pod (made from the MCU's unique ID), the same after every update. For a network that hands out addresses only to registered devices. Full form only (the server has it from the capabilities frame). Firmware 3.10.8+. |
 | `wifi_mac` | string or `null` | Pods with Wi-Fi only: the MAC the pod uses on Wi-Fi. With the built-in Wi-Fi, the ESP32-C3's station MAC, `null` until the C3 told it since power-on: a join or a [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) tells it, so a pod that never joined can report it. Through a [Wi-Fi bridge](#wifi_set--wifi_clear), the same as `eth_mac`: the bridge joins Wi-Fi with the pod's MAC. Full form only. Firmware 3.10.8+. |
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
-| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `"on"`, or `"off"` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `setting` is the stored `usb_network` setting; `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
+| `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `true`, or `false` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `enabled` is the stored `usb_network` setting (up to firmware 3.10.13 `net` and `setting` were `"on"`/`"off"`); `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
 | `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v3r4 (the bank is then at 3.3 V). |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
@@ -2078,14 +2078,14 @@ All of them default to **off** at boot.
 Response:
 
 ```json
-{"status": "ok", "data": {"la": 3, "state": "up", "dirs": ["up"], "pullups_available": 1}}
+{"status": "ok", "data": {"la": 3, "state": "up", "dirs": ["up"], "pullups_available": true}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `state` | What the channel does now: `"up"`, `"down"` or `"off"`. |
 | `dirs` | Every direction the channel can pull: `["up"]`, `["down"]`, `["up","down"]`, or `[]` without a resistor. |
-| `pullups_available` | `1` when a pull can be engaged now (a bank voltage is set): at `0` every `up`/`down` request is refused. |
+| `pullups_available` | `true` when a pull can be engaged now (a bank voltage is set): at `false` every `up`/`down` request is refused. Firmware up to 3.10.13 sent `1`/`0`. |
 
 Firmware up to 3.10.13 also replied `pullup` (`1` when engaged), `ohms` (the resistor's value)
 and `pull` (the channel's default direction); [`la_pins`](#la_pins--report-every-la-pin) has the
@@ -2111,7 +2111,7 @@ The pod picks the strength from the pin's function unless the host names one:
 ```json
 {"cmd": "la_pull", "la": 9, "pull": "down", "strength": "both"}
 {"status": "ok", "data": {"la": 9, "state": "down",
-  "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": 1}}
+  "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": true}}
 ```
 
 - `strength` (optional, digital v3r4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
@@ -2120,7 +2120,7 @@ The pod picks the strength from the pin's function unless the host names one:
 - [`la_pins`](#la_pins--report-every-la-pin) entries leave `dirs` out on this board (every
   channel pulls both ways; the reply says it once as `"pull_dirs":["up","down"]`), so the
   14-channel list fits the cloud reply.
-- `pullups_available` is `1` once an I/O voltage is set and pin 21 is up.
+- `pullups_available` is `true` once an I/O voltage is set and pin 21 is up.
 - When pin 21 goes down (shorted, overloaded, or held down) the pod holds both expanders in
   reset (every pull off) and refuses `up`/`down` with `BP0029`. When pin 21 is back it
   writes every pull back as the host left it.
@@ -2148,12 +2148,12 @@ Send `la_pull` with no channel:
 Response:
 
 ```json
-{"status": "ok", "data": {"la_pullup_mask": 5, "pullups_available": 1}}
+{"status": "ok", "data": {"la_pullup_mask": 5, "pullups_available": true}}
 ```
 
 `la_pullup_mask` bit `(la-1)` is set when LA`<la>`'s pull is engaged, whichever way it
 pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
-the current bank voltage (`1` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
+the current bank voltage (`true` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
 On digital v3r4 (firmware 3.10.13+), while the pod holds pulls off, the mask is what is on
 the wire and the reply adds `held` (the reason, as in [the pull resistors on digital
@@ -2161,7 +2161,7 @@ v3r4](#pull-resistors-on-digital-v3r4)) and `asked_mask`, the pulls the host set
 puts back:
 
 ```json
-{"status": "ok", "data": {"la_pullup_mask": 0, "pullups_available": 0, "held": "pin21_down", "asked_mask": 5}}
+{"status": "ok", "data": {"la_pullup_mask": 0, "pullups_available": false, "held": "pin21_down", "asked_mask": 5}}
 ```
 
 #### Error cases
@@ -2540,8 +2540,8 @@ DUT's own reset circuit) sets the level. It never drives high, so a 1.8 V DUT is
 never pushed above its own rail.
 
 ```json
-{"cmd": "nrst", "assert": 1}      // hold the target in reset
-{"cmd": "nrst", "assert": 0}      // release
+{"cmd": "nrst", "assert": true}   // hold the target in reset
+{"cmd": "nrst", "assert": false}  // release
 {"cmd": "nrst", "pulse_ms": 50}   // assert, wait 50 ms, release
 {"cmd": "nrst"}                   // query
 {"status": "ok", "data": {"supported": true, "asserted": false}}
@@ -2646,26 +2646,26 @@ State is **not** persisted: after a reset both eFuses return to off.
 #### Request
 
 ```json
-{"cmd":"target_power","efuse":<1|2>,"state":<0|1>,"delay_ms":<ms>}
+{"cmd":"target_power","efuse":<1|2>,"enabled":<true|false>,"delay_ms":<ms>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `efuse` | integer | yes | — | Which eFuse to switch: `1` (internal 5 V) or `2` (external). |
-| `state` | integer | yes | — | `1` (non-zero) enables the eFuse; `0` disables it. |
+| `enabled` | boolean | yes | — | `true` switches the eFuse on, `false` off. Firmware up to 3.10.13 took `"state":1\|0`. |
 | `delay_ms` | integer | no | `0` | Apply the change after this many milliseconds. `0` = immediately. The command **acks right away** and the eFuse switches later from the pod's poll loop — so the connection is free to do something else meanwhile (e.g. enter `uart_proxy_start` to capture the target's boot output as it powers up). A new `target_power` for the same eFuse replaces a still-pending delayed change. |
-| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `state` `0`. A bad name is refused with `BP0008`. |
+| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `enabled` `false`. A bad name is refused with `BP0008`. |
 
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
+{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
 | `efuse` | integer | The eFuse that was switched (echoes the request). |
-| `enabled` | integer | The **requested** state: `1` for on, `0` for off. With `delay_ms` > 0 this is the state the eFuse will reach once the delay elapses. |
+| `enabled` | boolean | The **requested** state (firmware up to 3.10.13: `1`/`0`). With `delay_ms` > 0 this is the state the eFuse will reach once the delay elapses. |
 | `delay_ms` | integer | The delay applied (echoes the request; `0` when immediate). |
 
 #### Error cases
@@ -2673,7 +2673,7 @@ State is **not** persisted: after a reset both eFuses return to off.
 | Condition | Message |
 |---|---|
 | `efuse` field missing | `"missing efuse"` |
-| `state` field missing | `"missing state"` |
+| `enabled` missing or not `true`/`false` | `"enabled must be true or false"` |
 | `efuse` not 1 or 2 | `"invalid efuse"` |
 
 > **Scheduled power-on + UART capture.** `uart_proxy_start` turns the connection
@@ -2705,16 +2705,16 @@ No parameters.
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse1":{"enabled":1,"fault":0,"valid":1,"flt_pin":0,"reverse_blocks":0},"efuse2":{"enabled":0,"fault":0,"valid":0,"flt_pin":0,"reverse_blocks":0},"status_supported":true}}
+{"status":"ok","data":{"efuse1":{"enabled":true,"fault":false,"valid":true,"flt_pin":0,"reverse_blocks":0,"profile":null},"efuse2":{"enabled":false,"fault":false,"valid":false,"flt_pin":0,"reverse_blocks":0,"profile":null},"status_supported":true}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `efuseN.enabled` | integer | `1` if the eFuse EN output is currently driven on. |
-| `efuseN.fault` | integer | `1` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
+| `efuseN.enabled` | boolean | `true` if the eFuse EN output is currently driven on (firmware up to 3.10.13: `1`/`0`, as `fault` and `valid`). |
+| `efuseN.fault` | boolean | `true` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
 | `efuseN.flt_pin` | integer | `1` if the `FLT` pin is asserted right now (firmware 3.10.1+). |
 | `efuseN.reverse_blocks` | integer | How many times since boot a held `FLT` was reverse-current blocking, not a fault (firmware 3.10.1+). |
-| `efuseN.valid` | integer | `1` once the eFuse's input supply is valid and its inrush is done (the TPS259470A's `AUXOFF` pin). It is not output power good: no output fault takes it low. |
+| `efuseN.valid` | boolean | `true` once the eFuse's input supply is valid and its inrush is done (the TPS259470A's `AUXOFF` pin). It is not output power good: no output fault takes it low. |
 | `status_supported` | boolean | `true` — `V`/`FLT` are wired through the power expander. |
 
 The TPS259470A pulls `FLT` low for real faults and also while it blocks reverse current: when
@@ -4787,8 +4787,8 @@ $ nc 192.168.1.220 8080
 {"cmd":"la_voltage","mv":3300}
 {"status":"ok","data":{"mv":3300,"st":1,"readback_mv":3297}}
 
-{"cmd":"target_power","efuse":1,"state":1}
-{"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
+{"cmd":"target_power","efuse":1,"enabled":true}
+{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
 
 {"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"status":"ok","data":null}
@@ -4801,7 +4801,7 @@ $ nc 192.168.1.220 8080
 {"status":"ok","data":null}
 
 {"cmd":"la_pull","la":1,"pull":"up"}
-{"status":"ok","data":{"la":1,"state":"up","dirs":["up"],"pullups_available":1}}
+{"status":"ok","data":{"la":1,"state":"up","dirs":["up"],"pullups_available":true}}
 
 {"cmd":"la_step","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
@@ -4899,12 +4899,14 @@ values and the field name are unchanged. Set from the cloud or the USB console (
 
 ```json
 {"cmd":"usb_network"}
-{"cmd":"usb_network","set":"off"}
+{"cmd":"usb_network","enabled":false}
 ```
 
 ```json
-{"status":"ok","data":{"setting":"off"}}
+{"status":"ok","data":{"enabled":false}}
 ```
+
+Firmware up to 3.10.13 took `"set":"on"|"off"` and replied `"setting":"on"|"off"`.
 
 Whether the pod's USB port is also a [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) (default `on`). With `off` the pod

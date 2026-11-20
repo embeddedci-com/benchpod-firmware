@@ -919,8 +919,8 @@ void emi_test_start(void) {
     choose_default_dac();
     printf("[emi] starting the EMI test activity\n");
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
-    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":1}");
-    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":1}");
+    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":true}");
+    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":true}");
     if (board_has_analog()) apply_dac(s.dac);
     apply_uart(s.uart_la);
     log_event(EMI_EV_STARTED, 0, 0);
@@ -936,8 +936,8 @@ void emi_test_stop(void) {
         run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
     }
     run("gps_stop", "{\"cmd\":\"gps_stop\"}");
-    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"state\":0}");
-    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"state\":0}");
+    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":false}");
+    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":false}");
     /* A capture still in flight finishes on its own and frees the heavy gate. */
     printf("[emi] stopped: DAC off, target power off\n");
     log_event(EMI_EV_STOPPED, 0, 0);
