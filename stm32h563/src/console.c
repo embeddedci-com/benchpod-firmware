@@ -215,7 +215,7 @@ static void cmd_help(console_out_t out, void *ctx)
        The console keeps what needs physical presence or works without the network; everything
        else is the JSON API (docs/API.md), on the USB network adapter too. */
     out(ctx,
-        "commands (the rest is the JSON API on :8080, also over the USB network;\r\n"
+        "commands (the rest is the JSON API on :8443 TLS, and :8080 over the USB network;\r\n"
         "every command and its replies: docs/usb-serial-interface.md):\r\n"
         "  help | status | ping | uid | selftest | reboot | dfu | usb-reattach\r\n"
         "  identity | identity-wipe <id|unknown>      device key\r\n"
@@ -223,7 +223,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  rollback-floor [clear] | lan-policy [open|locked|off]\r\n"
         "  usb-network [on|off]                       the USB network adapter\r\n"
         "  log [error|warn|info|debug]                console log level\r\n"
-        "  lan-tls [https-only on|off | regenerate]   the LAN API's TLS certificate\r\n"
+        "  lan-tls [https-only on|off | scpi on|off | regenerate]   TLS, plaintext :8080, SCPI\r\n"
         "  cloud-ca | cloud-ca-clear | cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear\r\n");
     out(ctx,
         "  eth <stop|start|restart|stats>             the wired link\r\n"
@@ -1278,21 +1278,31 @@ static void con_usb_network(int argc, char **argv, console_out_t out, void *ctx)
 
 static void con_lan_tls(int argc, char **argv, console_out_t out, void *ctx)
 {
-    /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only, regenerate. */
+    /* The LAN API over TLS (lan_tls.h): show the certificate, set HTTPS-only (on by default from
+       4.0.0) and SCPI (off by default), regenerate. */
     const char *why = NULL;
-    if (argc >= 3 && !strcmp(argv[1], "https-only") && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
+    const bool onoff = argc >= 3 && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off"));
+    if (onoff && !strcmp(argv[1], "https-only"))
         why = pod_policy_set_https_only(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
+    else if (onoff && !strcmp(argv[1], "scpi"))
+        why = pod_policy_set_scpi(!strcmp(argv[2], "on"), POLICY_SRC_USB, false);
     else if (argc >= 2 && !strcmp(argv[1], "regenerate"))
         why = lan_tls_regenerate();
     else if (argc >= 2)
-        why = "use https-only on|off or regenerate";
+        why = "use https-only on|off, scpi on|off or regenerate";
     static lan_tls_info_t in;   /* console task only */
     lan_tls_get_info(&in);
     if (why)            op(out, ctx, "lan-tls error %s\r\n", why);
-    else if (!in.ready) op(out, ctx, "lan-tls port %d https-only %s none %s\r\n", LAN_TLS_PORT,
-                           pod_policy_https_only() ? "on" : "off", in.error);
-    else                op(out, ctx, "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\"\r\n", LAN_TLS_PORT,
-                           pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key, in.subject);
+    /* "scpi on|off" (4.0.0) goes last, so a reader of the older line still finds every field. */
+    else if (!in.ready) op(out, ctx, "lan-tls port %d https-only %s none %s scpi %s\r\n", LAN_TLS_PORT,
+                           pod_policy_https_only() ? "on" : "off", in.error, pod_policy_scpi() ? "on" : "off");
+    else {
+        static char line[256];   /* console task only; longer than op()'s 160 B (sha256 + subject) */
+        snprintf(line, sizeof(line), "lan-tls port %d https-only %s sha256 %s %s \"%s\" \"%s\" scpi %s\r\n",
+                 LAN_TLS_PORT, pod_policy_https_only() ? "on" : "off", in.sha256, in.origin, in.key,
+                 in.subject, pod_policy_scpi() ? "on" : "off");
+        out(ctx, line);
+    }
 }
 
 static void con_log(int argc, char **argv, console_out_t out, void *ctx)

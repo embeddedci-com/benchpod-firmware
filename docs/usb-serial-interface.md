@@ -55,7 +55,7 @@ simultaneously and mirror each other's output.
 ## USB network adapter
 
 From firmware 3.9.0 the pod's USB device also has a CDC-NCM network adapter
-(interfaces 2-3), so a computer on the USB cable reaches the full JSON API, SCPI
+(interfaces 2-3), so a computer on the USB cable reaches the full JSON API, SCPI (while it is on)
 and the byte tunnels on port `8080` with no Ethernet or Wi-Fi. macOS, Linux and
 Windows 11 bind it with their in-box drivers (Windows through a Microsoft OS 2.0
 descriptor, compatible ID `WINNCM`); those three are tested. Windows 10 (1903 or
@@ -67,10 +67,10 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 | Pod address | `10.237.x.y`, the first host of a `/30` derived from the MCU's unique ID (stable per pod) |
 | Computer's address | The other host of that `/30`, handed out by the pod's DHCP server (lease 1 hour) |
 | Router, DNS | None: the computer keeps its own default route and DNS, and only the `/30` goes to the pod |
-| mDNS | `_benchpod._tcp` and `_scpi-raw._tcp` are advertised on this link too (under every LAN policy) |
-| TLS | Port `8443` (TLS) answers here too. With [HTTPS-only](API.md#lan_tls--the-lan-api-over-tls) on, plaintext `8080` still answers on this link: it never crosses a network |
+| mDNS | `_benchpod._tcp` (and `_scpi-raw._tcp` while SCPI is on) are advertised on this link too (under every LAN policy) |
+| TLS | Port `8443` (TLS) answers here too. Plaintext `8080` answers on this link under [HTTPS-only](API.md#lan_tls--the-lan-api-over-tls), the default from firmware 4.0.0: the link is a point-to-point cable that never crosses a network. `benchpod` and the SDK use `8080` here and TLS on the LAN |
 | Security | LAN tier: what the LAN may never do (`identity_wipe`, changing `lan_policy`) is refused on it too. The one exception: it may install or clear the company CA and set or clear the cloud proxy (physical presence, like the console). The [LAN policy](API.md#lan_policy--what-the-external-lan-may-do) is for the external LAN only: the USB adapter stays on and open under `locked` and `off` (physical presence) |
-| SCPI and VISA | The same `:8080` socket: `TCPIP::10.237.x.y::8080::SOCKET` |
+| SCPI and VISA | The same `:8080` socket: `TCPIP::10.237.x.y::8080::SOCKET`, while SCPI is on (off by default from firmware 4.0.0: `lan-tls scpi on`) |
 | Several pods | Each pod has its own `/30`, so two pods on one computer get two adapters and two addresses. Not tested yet with two physical pods |
 | WSL2, Docker on Windows | Not tested. Windows routes the pod's `10.237.x.y` address itself, so a WSL2 distribution or a Docker container that uses the Windows host's network should reach it; mDNS from inside them may not |
 | Turning it off | `usb-network off` on the console (or `benchpod usb-network off` over USB): the pod re-enumerates as its console only and the computer sees no network adapter. `usb-network on` on the console brings it back. Stored, separate from the LAN policy; Ethernet, Wi-Fi and the cloud may only read it ([`usb_network`](API.md#usb_network--the-usb-network-adapter-on-or-off)) |
@@ -204,7 +204,7 @@ command prints `usage: ...` and changes nothing.
 | `usb-network [on\|off]` | Show or set the [USB network adapter](#usb-network-adapter) setting (default `on`). Replies `usb-network <on\|off>` or `usb-network error <why>`. `off` re-enumerates the pod as its console only (the computer sees no network adapter); `on` brings the adapter back. Stored, separate from `lan-policy`; only the console and the USB link itself may change it. |
 | `lan-policy [open\|locked\|off]` | Show or set what the external LAN (Ethernet and Wi-Fi) may do. Replies `lan-policy <policy>` or `lan-policy error <why>`. `off` refuses connections over Ethernet and Wi-Fi and stops mDNS there until set back. The USB network adapter stays on and open under every policy. |
 | `log [error\|warn\|info\|debug]` | Show or set the console [log level](#log-levels) (firmware 3.10.13+; default `info`). Replies `log <level>` or `log error <why>`. Stored: it survives a reboot and a firmware update. The JSON [`log_level`](API.md#log_level--the-console-log-level) command reads and sets the same setting. |
-| `lan-tls [https-only on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>"`, `lan-tls port 8443 https-only <on\|off> none <why>` without a certificate, or `lan-tls error <why>`. `https-only on` refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it); `regenerate` makes a new key and self-signed certificate. The console may always change both. |
+| `lan-tls [https-only on\|off \| scpi on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>" scpi <on\|off>`, `lan-tls port 8443 https-only <on\|off> none <why> scpi <on\|off>` without a certificate, or `lan-tls error <why>` (`scpi` at the end from firmware 4.0.0). `https-only on` (the default from 4.0.0) refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it), `off` lets plaintext JSON in there again; `scpi on` (off by default from 4.0.0) makes SCPI answer on the TCP connections; `regenerate` makes a new key and self-signed certificate. The console may always change them. |
 | `cloud-ca`, `cloud-ca-clear` (also `ca`, `ca-clear`) | The company CA for the cloud link: one `ca <subject> <sha256>` line per certificate, or `ca none`, plus `ca error <why>` when the installed CA does not parse. Installing one needs the network: JSON `ota_begin` with target `ca` over the USB network adapter, the cloud or (firmware before 3.9.0) the console's `upload-begin ca`; `benchpod cloud ca set` does it. `ca-clear` replies `ca-clear ok` or `ca-clear error <why>`. |
 | `cloud-proxy`, `cloud-proxy-set <host:port> [user password]`, `cloud-proxy-clear` (also `proxy`, `proxy-set`, `proxy-clear`) | The HTTP proxy for the cloud link. Replies `proxy <host:port> auth\|noauth`, `proxy none` or `proxy error <why>`; never shows the password. |
 | `ca-damage` | Development builds only: damage the CA slot to try the built-in-roots fallback. |

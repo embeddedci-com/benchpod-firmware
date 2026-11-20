@@ -92,9 +92,10 @@ typedef enum {
     BP_E_PSRAM_TOO_SMALL = 72,
     BP_E_PSRAM_BANDWIDTH = 73,
     BP_E_SIGNATURES_ALWAYS_REQUIRED = 74,
+    BP_E_LAN_PLAINTEXT_OFF = 75,
 } bp_errcode_t;
 
-#define BP_E_LAST 74
+#define BP_E_LAST 75
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1014,6 +1015,16 @@ static inline const char *bp_note_signatures_always_required(char *buf, size_t c
 static inline const char *bp_tag_signatures_always_required(const char *text, const char *setting, const char *want) {
     const bp_err_arg_t a[] = { {"setting", setting, 0, 1}, {"want", want, 0, 1} };
     return bp_err_tag(text, BP_E_SIGNATURES_ALWAYS_REQUIRED, a, 2);
+}
+/* BP0075: The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off */
+static inline void bp_err_lan_plaintext_off(int conn_id) {
+    bp_error_send(conn_id, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+static inline const char *bp_note_lan_plaintext_off(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+static inline const char *bp_tag_lan_plaintext_off(const char *text) {
+    return bp_err_tag(text, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

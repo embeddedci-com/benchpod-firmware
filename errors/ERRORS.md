@@ -80,3 +80,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0072 | `psram_too_small` | capture | next | The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM |
 | BP0073 | `psram_bandwidth` | capture | next | The combined sample rate is more than the PSRAM bus can take |
 | BP0074 | `signatures_always_required` | policy | next | {setting} cannot be set to {want}: this firmware installs only signed images |
+| BP0075 | `lan_plaintext_off` | policy | next | The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off |

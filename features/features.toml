@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 8
+revision = 9
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -815,3 +815,10 @@ firmware = "next"
 docs = "API.md#client-compatibility"
 dated = "code"
 note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status. Firmware 4.0.0 is api 2 and takes client_api 2 or newer."
+
+[features.lan_tls_default]
+rev = 9
+firmware = "next"
+docs = "API.md#lan_tls--the-lan-api-over-tls"
+dated = "code"
+note = "HTTPS-only is on by default (plaintext JSON on 8080 only on the USB network adapter; lan_tls https_only false turns the LAN back on) and SCPI is off by default: lan_tls takes and replies scpi, status lan_tls has scpi, console lan-tls scpi on|off, both changed only over USB or from the cloud. A plaintext LAN JSON line under HTTPS-only gets BP0075. The mDNS TXT carries api."

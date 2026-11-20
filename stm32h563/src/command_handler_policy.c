@@ -108,12 +108,13 @@ void handle_usb_network(int conn_id, const char *json) {
 
 /* ---- LAN TLS (lan_tls.h, docs/design/lan-tls.md) ----------------------------- */
 
-/* {"cmd":"lan_tls"[,"https_only":true|false][,"regenerate":true]}
-   -> {"port":8443,"https_only":bool,"sessions":N,"origin":..,"key":..,"subject":..,"san":[..],
-       "not_after":..,"sha256":..[,"error":..]}
+/* {"cmd":"lan_tls"[,"https_only":true|false][,"scpi":true|false][,"regenerate":true]}
+   -> {"port":8443,"https_only":bool,"scpi":bool,"sessions":N,"origin":..,"key":..,"subject":..,
+       "san":[..],"not_after":..,"sha256":..[,"error":..]}
    Installing a certificate goes through the upload path (OTA target "tls"). Reading works from
-   anywhere. Changing HTTPS-only and regenerating need the USB console, the USB link or the cloud
-   (pod_policy_lan_tls_gate): not the external LAN, TLS or not. */
+   anywhere. Changing HTTPS-only (on by default from 4.0.0; false = plaintext JSON on :8080 from
+   the LAN too) and SCPI (off by default), and regenerating, need the USB console, the USB link or
+   the cloud (pod_policy_lan_tls_gate): not the external LAN, TLS or not. */
 void handle_lan_tls(int conn_id, const char *json) {
     const policy_src_t src = command_handler_policy_src(conn_id);
     const bool usb = net_conn_on_usb(conn_id);
@@ -126,6 +127,14 @@ void handle_lan_tls(int conn_id, const char *json) {
         const char *why = pod_policy_set_https_only(!strcmp(v, "true"), src, usb);
         if (why) { send_error(conn_id, why); return; }
     }
+    if (bp_json_get(json, "scpi", v, sizeof(v))) {
+        if (strcmp(v, "true") != 0 && strcmp(v, "false") != 0) {
+            send_error(conn_id, "lan_tls: scpi must be true or false");
+            return;
+        }
+        const char *why = pod_policy_set_scpi(!strcmp(v, "true"), src, usb);
+        if (why) { send_error(conn_id, why); return; }
+    }
     if (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0) {
         const char *why = pod_policy_lan_tls_gate(src, usb);
         if (!why) why = lan_tls_regenerate();
@@ -136,8 +145,9 @@ void handle_lan_tls(int conn_id, const char *json) {
     char resp[640];   /* worker stack (12 KB) */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"port\":%d,\"https_only\":%s,\"sessions\":%d,",
-            LAN_TLS_PORT, pod_policy_https_only() ? "true" : "false", net_tls_sessions());
+    bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"port\":%d,\"https_only\":%s,\"scpi\":%s,\"sessions\":%d,",
+            LAN_TLS_PORT, pod_policy_https_only() ? "true" : "false", pod_policy_scpi() ? "true" : "false",
+            net_tls_sessions());
     if (in.ready) {
         bp_emit_raw(&e, "\"origin\":");    bp_emit_jstr(&e, in.origin);
         bp_emit_raw(&e, ",\"key\":");      bp_emit_jstr(&e, in.key);

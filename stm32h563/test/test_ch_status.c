@@ -131,6 +131,7 @@ void lan_tls_get_info(lan_tls_info_t *o) {
     memset(o, 0, sizeof(*o)); o->ready = true; memset(o->sha256, 'a', 64);
 }
 bool pod_policy_https_only(void) { return true; }
+bool pod_policy_scpi(void) { return false; }
 static char g_holder[LEASE_GATE_HOLDER_MAX];
 static bool g_cloud_lease = true;
 bool lease_gate_active(uint32_t now, uint32_t *left) {

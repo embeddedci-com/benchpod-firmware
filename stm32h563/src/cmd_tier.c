@@ -42,7 +42,7 @@ static int writes_set_or_clear(const char *json) {
 }
 static int writes_lan_tls(const char *json) {
     char v[16] = {0};
-    return bp_json_get(json, "https_only", v, sizeof(v)) ||
+    return bp_json_get(json, "https_only", v, sizeof(v)) || bp_json_get(json, "scpi", v, sizeof(v)) ||
            (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
 }
 /* an EEPROM write (ID or calibration); a read is T0 */

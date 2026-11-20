@@ -206,8 +206,9 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
            the `lan_tls` command has it. */
         lan_tls_info_t tls;
         lan_tls_get_info(&tls);
-        bp_emit(e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
-                pod_policy_https_only() ? "true" : "false", tls.ready ? tls.sha256 : "");
+        bp_emit(e, "\"lan_tls\":{\"port\":%d,\"https_only\":%s,\"scpi\":%s,\"sha256\":\"%s\"},", LAN_TLS_PORT,
+                pod_policy_https_only() ? "true" : "false", pod_policy_scpi() ? "true" : "false",
+                tls.ready ? tls.sha256 : "");
     }
     /* The pod's copy of the cloud lease (lease_gate.h). The server owns the lease, so a cloud
        client has it already: full form only. */

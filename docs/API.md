@@ -9,8 +9,9 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 | Property | Value |
 |---|---|
 | Protocol | TCP |
-| Default port | `8080` (plaintext) |
-| TLS port | `8443` (TLS 1.2, firmware 3.9.3+), same protocol; see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
+| Port (Ethernet, Wi-Fi) | `8443`, TLS 1.2 (firmware 3.9.3+; from 4.0.0 the only port the JSON API answers on there by default); see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
+| Port (USB network adapter) | `8080` (plaintext) and `8443` (TLS) |
+| Plaintext `8080` on Ethernet and Wi-Fi | Off by default from firmware 4.0.0 (`lan_tls` `"https_only":false` turns it on); the default port up to 3.10.13 |
 | Framing | Newline-delimited (`\n`) — one JSON object per line |
 | Encoding | UTF-8 |
 | Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `BP0047`, `pod_busy`) |
@@ -18,18 +19,15 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 Connect with any TCP client:
 
 ```bash
-nc <device-ip> 8080
+openssl s_client -connect <device-ip>:8443 -quiet     # the LAN (firmware 4.0.0 and later)
+nc 10.237.x.y 8080                                    # the USB network adapter
 ```
 
-**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
+**Over USB.** From firmware 3.9.0 the pod's USB port is also a network adapter (CDC-NCM): a computer on the cable reaches port `8080` at the pod's fixed `10.237.x.y` address with no Ethernet or Wi-Fi, and everything below works the same way. The link stays plaintext on `8080` in firmware 4.0.0: it is a point-to-point cable that never crosses a network, and the pod drops packets for its USB subnet that arrive on another interface. `8443` answers there too. See [USB network adapter](usb-serial-interface.md#usb-network-adapter). The `status` field `usb` gives both ends of that link.
 
 The IP address is printed on the USB console (and the USART2 debug pins) at boot, and is also returned by the `status` command and the console `status` command. The pod also advertises itself over mDNS (on Ethernet and Wi-Fi unless the [LAN policy](#lan_policy--what-the-external-lan-may-do) is `off`; on the USB link always).
 
-**Over TLS.** From firmware 3.9.3 the same API also listens on port `8443` with TLS 1.2. Everything below works the same way on it (JSON, SCPI, the raw modes). The pod's certificate is its own (generated on first boot, or one you install), so clients pin its SHA-256 on first use; `benchpod`, the `embeddedci` SDK and the MCP server do this for you and use `8443` by default when the pod has it. With [HTTPS-only](#lan_tls--the-lan-api-over-tls) on, `8080` answers only on the USB network adapter. Test it by hand with:
-
-```bash
-openssl s_client -connect <device-ip>:8443 -quiet
-```
+**Over TLS.** From firmware 3.9.3 the same API also listens on port `8443` with TLS 1.2. Everything below works the same way on it (JSON, SCPI when it is on, the raw modes). The pod's certificate is its own (generated on first boot, or one you install), so clients pin its SHA-256 on first use; `benchpod`, the `embeddedci` SDK and the MCP server do this for you, with no user action, and use `8443` by default when the pod has it. From firmware 4.0.0 [HTTPS-only](#lan_tls--the-lan-api-over-tls) is on by default: `8080` answers only on the USB network adapter (and, for SCPI only, on the LAN when SCPI is on). A plaintext JSON line that reaches `8080` from the LAN anyway (SCPI on) gets `BP0075` (`lan_plaintext_off`) and the connection closes.
 
 **Latency.** Small replies (a JSON ack) go out as soon as they are ready. While a connection is a CMSIS-DAP probe (`dap_start`) the pod turns Nagle's algorithm off (`TCP_NODELAY`) on it, because flashing is a stream of small request and response packets. No client action is required.
 
@@ -46,7 +44,8 @@ The pod has two command channels, and they have deliberately different trust mod
 ### The LAN API is unauthenticated
 
 The JSON-over-TCP and SCPI interfaces on port `8080` have **no authentication, no
-authorization, and no transport encryption**. Port `8443` (firmware 3.9.3+) is the same API over
+authorization, and no transport encryption** (from firmware 4.0.0 `8080` is off on Ethernet and
+Wi-Fi by default, and SCPI is off everywhere by default). Port `8443` (firmware 3.9.3+) is the same API over
 TLS: it adds **encryption and integrity** against the network path (a Wi-Fi bridge, a shared
 switch), not authentication. Any client that can open a TCP connection to either port has the
 full command set, which includes:
@@ -68,11 +67,13 @@ limits, calibration, the policies) and firmware updates then need the cloud or U
 TCP connections over Ethernet and Wi-Fi and stops the mDNS advertisement there. Only the cloud and the USB console can change it, from the web app's device
 settings or `benchpod lan-policy set`.
 
-**HTTPS-only** (`lan_tls` with `https_only`, default off) turns plaintext `8080` off on the
-external LAN, so only TLS crosses Ethernet and Wi-Fi; the USB network adapter keeps `8080`. A
-plaintext LAN connection may turn it on but never off, and may not replace or regenerate the TLS
-certificate: an active man-in-the-middle on `8080` could otherwise swap the certificate before a
-client pins it. See [`lan_tls`](#lan_tls--the-lan-api-over-tls).
+**HTTPS-only** (`lan_tls` with `https_only`, default on from firmware 4.0.0, off before) keeps
+plaintext `8080` off on the external LAN, so only TLS crosses Ethernet and Wi-Fi; the USB network
+adapter keeps `8080`. **SCPI** (`lan_tls` with `scpi`, firmware 4.0.0, default off) is switched on
+on purpose. Both are changed like the LAN policy: from the USB console, the USB network adapter
+or the cloud, never from Ethernet or Wi-Fi (over TLS or not), since an active man-in-the-middle
+could otherwise open plaintext or swap the certificate before a client pins it. See
+[`lan_tls`](#lan_tls--the-lan-api-over-tls).
 
 **Treat the LAN interface as a trusted-network-only interface.** Put the pod on a lab
 VLAN or behind a firewall rule that admits only the hosts that need it. This is the
@@ -1818,7 +1819,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
-| `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
+| `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only` (default `true` from 4.0.0), `scpi` (4.0.0, default `false`), and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
 | `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
@@ -4562,8 +4563,16 @@ connection; a request takes one of the pod's 5 LAN connection slots while it run
 <a id="scpi-reference"></a>
 ## SCPI reference
 
+**Off by default from firmware 4.0.0.** Switch it on with `{"cmd":"lan_tls","scpi":true}` (over
+USB or from the cloud) or `lan-tls scpi on` on the USB console; see
+[`lan_tls`](#lan_tls--the-lan-api-over-tls). While it is off, a connection that starts with a
+SCPI line gets one line, `SCPI is off on this BenchPod: ...`, and is closed, and mDNS has no
+`_scpi-raw._tcp`. The cloud byte tunnels are not affected. Up to 3.10.13 it was always on.
+
 Port `8080` also speaks SCPI (IEEE 488.2, on libscpi): a connection whose first byte is not `{`
-is a SCPI connection for its whole life. Lines end with `\n`, are at most 255 bytes, and several
+is a SCPI connection for its whole life. It stays on port `8080`, plaintext: with SCPI on, `8080`
+also takes connections from Ethernet and Wi-Fi under HTTPS-only, for SCPI only (a JSON line there
+gets `BP0075`). `8443` speaks it too, wrapped in TLS. Lines end with `\n`, are at most 255 bytes, and several
 commands can share a line with `;`. Queries answer one line; bulk samples come as comma-separated
 ASCII. Errors go to the error queue (16 deep): read them with `SYSTem:ERRor?`. The instrument
 state (`SOURce`, `SENSe`, the trace) is shared by every SCPI connection. Upper-case letters are
@@ -4573,7 +4582,7 @@ the short form; `[...]` is optional; `#` is a number in the header (`OUTPut:POWe
 `TCPIP::<address>::8080::SOCKET`: the LAN address, the pod's USB network address over USB
 (`TCPIP::10.237.x.y::8080::SOCKET`, from `status.usb.ip`), or its mDNS host name
 (`TCPIP::benchpod-a1b2c3.local::8080::SOCKET`). Set the termination character to `\n` for reads and
-writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface,
+writes. From firmware 3.9.0 the pod also advertises `_scpi-raw._tcp` over mDNS on each interface (from 4.0.0 only while SCPI is on),
 so VISA and LXI discovery tools list it. SCPI follows the same rules as the JSON API there: the
 external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 
@@ -4929,12 +4938,13 @@ Firmware 3.9.3+. See `docs/design/lan-tls.md`.
 
 ```json
 {"cmd":"lan_tls"}
-{"cmd":"lan_tls","https_only":true}
+{"cmd":"lan_tls","https_only":false}
+{"cmd":"lan_tls","scpi":true}
 {"cmd":"lan_tls","regenerate":true}
 ```
 
 ```json
-{"status":"ok","data":{"port":8443,"https_only":false,"sessions":1,"origin":"generated",
+{"status":"ok","data":{"port":8443,"https_only":true,"scpi":false,"sessions":1,"origin":"generated",
  "key":"EC P-256","subject":"CN=benchpod-baea06","san":["benchpod-baea06","benchpod-baea06.local"],
  "not_after":"9999-12-31","sha256":"3f1c...e9"}}
 ```
@@ -4955,7 +4965,8 @@ could not run together there. When there is no certificate the reply has
 
 | Field | Effect |
 |---|---|
-| `https_only` | `true`: plaintext connections to `8080` over Ethernet and Wi-Fi are refused and open ones closed, so only `8443` answers there. `8080` keeps answering on the [USB network adapter](usb-serial-interface.md#usb-network-adapter). Default `false`. Stored; survives reboots and updates. |
+| `https_only` | `true`: plaintext connections to `8080` over Ethernet and Wi-Fi are refused and open ones closed, so only `8443` answers there. `8080` keeps answering on the [USB network adapter](usb-serial-interface.md#usb-network-adapter). Default `true` from firmware 4.0.0 (a pod updated from 3.10.x gets it too, whatever it had); `false` before. `false` turns plaintext JSON on `8080` on for the LAN again. Stored; survives reboots and updates. |
+| `scpi` | `true`: SCPI answers on the pod's TCP connections (`8080` from every interface, for SCPI only on the LAN under HTTPS-only, and `8443`), and mDNS advertises `_scpi-raw._tcp`. Default `false` (firmware 4.0.0; always on before). `false` closes the plaintext LAN connections (under HTTPS-only) and ends open SCPI sessions at their next line. Stored. |
 | `regenerate` | `true`: a new key and self-signed certificate. New connections get it; open ones keep the old one. Clients that pinned the old one must trust the new one (`benchpod lan-tls trust`). |
 
 **Your own certificate.** Upload a PEM bundle, the certificate (optionally followed by its chain)
@@ -4965,17 +4976,30 @@ and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the uplo
 `ota_commit` (stored and used for new connections; the reply's `state` is `installed`). At most
 7.6 KB. `benchpod lan-tls set-cert --cert pod.pem --key pod.key` does all of it.
 
-**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `regenerate`
-and the upload need the USB console, the USB network adapter (`--connection usb`) or the cloud.
+**Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `scpi`,
+`regenerate` and the upload need the USB console (`lan-tls https-only on|off`, `lan-tls scpi
+on|off`), the USB network adapter (`--connection usb`) or the cloud, the way the LAN policy is
+changed (the cloud needs an organization owner or admin: T2).
 The external LAN (Ethernet, Wi-Fi) gets `BP0042` (`setting_cloud_or_usb`, setting `lan_tls`), over
 plaintext and over TLS alike: port `8443` has no client authentication, so a TLS connection does
 not show who is on the other end. Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make all
 of these changes and let plaintext LAN turn `https_only` on. Reading is T0; the changes
 are T2 (so `locked` keeps them off the external LAN). mDNS: the `_benchpod._tcp` TXT record carries
-`tls=8443` and `https_only=0|1`.
+`id`, `host`, `port=8080` (the plaintext port, which answers on the USB link), `tls=8443`,
+`https_only=0|1` (`1`, the 4.0.0 default: the LAN takes only TLS) and `api=<n>` (the
+[client API level](#client-compatibility), firmware 4.0.0). The SRV record stays on `8080`, so a
+client that reads it tries `8443` first the way `benchpod` and the SDK do for `8080`.
+
+**Pinning needs no user action.** The certificate is generated once and kept across reboots and
+updates (and across a rollback to 3.10.x), so a client that pinned it on first use keeps
+connecting. Firmware 4.0.0 does not change the certificate or how it is made. Only `regenerate`,
+an uploaded certificate or a damaged stored one (the pod makes a new one at boot) replace it;
+then a pinned client
+refuses the pod until the user trusts the new one (`benchpod lan-tls trust`). Clients pin per
+address (host:8443).
 
 **Raw sockets and VISA.** `8443` speaks the same SCPI as `8080`, wrapped in TLS. VISA's raw socket
-resource (`TCPIP::<host>::8080::SOCKET`) has no TLS, so with HTTPS-only on, run a local TLS
+resource (`TCPIP::<host>::8080::SOCKET`) has no TLS: with SCPI on it answers on `8080` from the LAN too, or run a local TLS
 wrapper and point VISA at it, for example with the pod's certificate from
 `benchpod lan-tls show --pem > pod.pem`:
 

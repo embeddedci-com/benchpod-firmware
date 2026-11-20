@@ -43,7 +43,11 @@
    explicit JSON "dap_start" command and routes the connection's raw bytes to
    the on-pod CMSIS-DAP processor as length-framed packets until a zero-length
    frame leaves DAP mode. */
-typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST } proto_t;
+/* PROTO_REFUSED: the protocol picked is not served on this connection (command_handler_transport.c:
+   SCPI while it is off, JSON on plaintext LAN under HTTPS-only); its bytes are dropped until the
+   close. */
+typedef enum { PROTO_UNKNOWN, PROTO_JSON, PROTO_SCPI, PROTO_UART, PROTO_DAP, PROTO_LOAD, PROTO_SPEEDTEST,
+               PROTO_REFUSED } proto_t;
 
 /* A connection's protocol (PROTO_UNKNOWN for an id outside the table) and setting it
    (command_handler_transport.c). */

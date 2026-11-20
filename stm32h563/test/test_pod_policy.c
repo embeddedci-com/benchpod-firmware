@@ -49,6 +49,8 @@ static void boot_blank(void) {
     /* force the in-RAM copy back to defaults through the USB path, then wipe the flash again */
     pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB);
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
+    pod_policy_set_https_only(true, POLICY_SRC_USB, false);
+    pod_policy_set_scpi(false, POLICY_SRC_USB, false);
     pod_policy_clear_floor(POLICY_SRC_USB);
     pod_policy_set_bridge_pin(NULL, NULL);
     pod_policy_set_log_level(BP_LOG_INFO);
@@ -198,12 +200,39 @@ static void test_lan_tls_gate(void) {
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_LAN, true) == NULL, "USB link refused");
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_USB, false) == NULL, "USB console refused");
     CHECK(pod_policy_lan_tls_gate(POLICY_SRC_CLOUD, false) == NULL, "cloud refused");
-    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL, "LAN turned HTTPS-only on");
-    CHECK(!pod_policy_https_only(), "a refused change changed it");
-    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, true) == NULL && pod_policy_https_only(), "USB link");
-    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL && pod_policy_https_only(),
-          "LAN turned HTTPS-only off");
-    CHECK(pod_policy_set_https_only(false, POLICY_SRC_CLOUD, false) == NULL && !pod_policy_https_only(), "cloud");
+    /* Firmware 4.0.0: HTTPS-only on and SCPI off with no record. */
+    CHECK(pod_policy_https_only() && !pod_policy_scpi(), "no record: HTTPS-only %d SCPI %d",
+          pod_policy_https_only(), pod_policy_scpi());
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, false) != NULL, "LAN turned plaintext on");
+    CHECK(pod_policy_https_only(), "a refused change changed it");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_LAN, true) == NULL && !pod_policy_https_only(), "USB link");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_LAN, false) != NULL && !pod_policy_https_only(),
+          "LAN turned HTTPS-only on");
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_CLOUD, false) == NULL && pod_policy_https_only(), "cloud");
+    /* SCPI: the same gate, persisted. */
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_LAN, false) != NULL && !pod_policy_scpi(), "LAN turned SCPI on");
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_CLOUD, false) == NULL && pod_policy_scpi(), "cloud SCPI on");
+    CHECK(pod_policy_set_scpi(false, POLICY_SRC_LAN, true) == NULL && !pod_policy_scpi(), "USB link SCPI off");
+    CHECK(pod_policy_set_scpi(true, POLICY_SRC_USB, false) == NULL, "console SCPI on");
+    CHECK(pod_policy_set_https_only(false, POLICY_SRC_USB, false) == NULL, "console plaintext on");
+    pod_policy_load();
+    CHECK(pod_policy_scpi() && !pod_policy_https_only(), "lost on reboot");
+    /* Older firmware reads HTTPS-only from byte 7: kept in step (0 = plaintext on). */
+    static const ab_store_t v1 = { .tag = "old", .slot_off = { POD_POLICY_SLOT_A_OFFSET, POD_POLICY_SLOT_B_OFFSET },
+                                   .magic = POD_POLICY_RECORD_MAGIC, .version = 1 };
+    uint8_t rec[16];
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[7] == 0 && rec[10] == 1 && rec[11] == 1,
+          "record https_only %u lan_plain %u scpi %u", rec[7], rec[10], rec[11]);
+    CHECK(pod_policy_set_https_only(true, POLICY_SRC_USB, false) == NULL, "console HTTPS-only on");
+    CHECK(ab_store_load(&v1, rec, sizeof(rec)) == 0 && rec[7] == 1 && rec[10] == 0, "record after on");
+    /* A 3.10.x record with HTTPS-only off (byte 7 = 0, the old default) loads as HTTPS-only on. */
+    memset(rec, 0, sizeof(rec));
+    const uint32_t magic = POD_POLICY_RECORD_MAGIC;
+    memcpy(rec, &magic, 4);
+    mock_flash_reset();
+    CHECK(ab_store_save(&v1, rec, sizeof(rec)) == 0, "old save");
+    pod_policy_load();
+    CHECK(pod_policy_https_only() && !pod_policy_scpi(), "an old record opened plaintext or SCPI");
 }
 
 /* Security review 2026-11 M7: the floor only goes up from an image and is cleared on the console;
