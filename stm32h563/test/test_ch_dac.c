@@ -289,16 +289,16 @@ static void test_teardown(void) {
     heavy_release(0);
 }
 
-/* The calibrated generate: volts or uA, routed, 16-bit; the 0..255 form is left alone. */
+/* generate: volts or uA, routed, 16-bit; the old 0..255 form is refused. */
 static void test_generate16(void) {
     g_gen16_calls = 0; g_route = -1;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"path\":\"3v3\",\"amplitude_v\":1.48,\"offset_v\":1.65}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0, "volts reply %s", g_reply);
+    CHECK(strcmp(g_reply, "ok:null") == 0, "volts reply %s", g_reply);
     CHECK(g_gen16_calls == 1 && g_route == ANALOG_PATH_DAC_3V3 && g_gen_shape == WAVE16_SINE, "volts routed + played");
     CHECK(fabs(g_gen_mid - (double)dac_code16_for_volts(0, 1.65f)) <= 1.0, "mid %.1f", g_gen_mid);
 
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"square\",\"freq\":10,\"amplitude_ua\":4000,\"offset_ua\":12000,\"on_capture\":true}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16,\"cotrig\":false}") == 0, "uA reply %s", g_reply);
+    CHECK(strcmp(g_reply, "ok:{\"cotrig\":false}") == 0, "uA reply %s", g_reply);
     CHECK(g_route == ANALOG_PATH_CURRENT_OUT && g_gen_shape == WAVE16_SQUARE, "uA routes the 4-20 mA output");
 
     g_gen16_calls = 0; g_route = -1;
@@ -315,12 +315,12 @@ static void test_generate16(void) {
     /* route:false leaves the analog switching alone (a cal1 loopback). */
     g_route = -1;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"5v\",\"amplitude_v\":0.1,\"offset_v\":2.5,\"route\":false}");
-    CHECK(strcmp(g_reply, "ok:{\"bits\":16}") == 0 && g_route == -1, "route:false %s route %d", g_reply, g_route);
+    CHECK(strcmp(g_reply, "ok:null") == 0 && g_route == -1, "route:false %s route %d", g_reply, g_route);
 
-    /* The 8-bit form does not touch the 16-bit path. */
+    /* The 8-bit form (firmware up to 3.10.13) is gone. */
     g_gen16_calls = 0;
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq\":1000,\"amplitude\":100,\"offset\":128}");
-    CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 0, "8-bit form unchanged: %s", g_reply);
+    CHECK(strncmp(g_reply, "err:amplitude_v", 15) == 0 && g_gen16_calls == 0, "8-bit form refused: %s", g_reply);
 }
 
 int main(void) {

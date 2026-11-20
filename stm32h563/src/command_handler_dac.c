@@ -246,19 +246,30 @@ static bool parse_loop_input_map(int conn_id, const char *json,
     return true;
 }
 
-/* The calibrated `generate` form: volts on a DAC path, or microamps on the 4-20 mA output,
-   played at the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
+/* `generate`: a waveform in volts on a DAC path, or in microamps on the 4-20 mA output, played at
+   the DAC8551's full 16 bits (wave16.h). Routes the output first, like dac_out.
      {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
      {"cmd":"generate","waveform":"sine","freq":10,"amplitude_ua":4000,"offset_ua":12000}
-   Reply: {"bits":16} (plus "cotrig" with on_capture). The peaks must stay inside what the
-   output can do; there is no silent clipping. "route":false skips the routing. */
-static void handle_generate16(int conn_id, const char *json, const char *waveform, float freq,
-                              uint32_t duration, float sr_hz) {
+   Reply: null, or {"cotrig":true|false} with on_capture. The peaks must stay inside what the
+   output can do; there is no silent clipping. "route":false skips the routing. Firmware up to
+   3.10.13 also took 8-bit levels (amplitude 0-127, offset 0-255); 4.0.0 takes this form only. */
+void handle_generate(int conn_id, const char *json) {
+    char waveform[16] = {0}, freq_s[16] = {0}, dur_s[16] = {0};
     char path_s[16] = {0}, amp_s[24] = {0}, off_s[24] = {0};
+    json_get_value(json, "waveform",    waveform, sizeof(waveform));
+    json_get_value(json, "freq",        freq_s,   sizeof(freq_s));
+    json_get_value(json, "duration_ms", dur_s,    sizeof(dur_s));
+    float    freq     = freq_s[0] ? (float)atof(freq_s)   : 1000.0f;
+    uint32_t duration = dur_s[0]  ? (uint32_t)atoi(dur_s) : 0;
+    float    sr_hz    = parse_sample_rate_hz(json);   /* 0 = auto */
+
     wave16_shape_t shape;
     if (wave16_shape_from_name(waveform, &shape) != 0) { send_error(conn_id, "unknown waveform"); return; }
     bool ua = json_get_value(json, "amplitude_ua", amp_s, sizeof(amp_s));
-    if (!ua) json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s));
+    if (!ua && !json_get_value(json, "amplitude_v", amp_s, sizeof(amp_s))) {
+        send_error(conn_id, "amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required");
+        return;
+    }
     if (!json_get_value(json, ua ? "offset_ua" : "offset_v", off_s, sizeof(off_s))) {
         send_error(conn_id, ua ? "offset_ua is required with amplitude_ua"
                                : "offset_v is required with amplitude_v");
@@ -293,58 +304,12 @@ static void handle_generate16(int conn_id, const char *json, const char *wavefor
     bool route_off = json_get_value(json, "route", route_s, sizeof(route_s)) && strcmp(route_s, "false") == 0;
     if (!route_off && analog_path_set(route) != 0) { send_error(conn_id, "route failed"); return; }
 
+    /* Co-trigger (v27): defer this generator's DAC start to the next capture's t0. Arm it BEFORE
+       dac_generate16 sends START_DAC (the interleaved LOAD_WAVE doesn't disturb the pending arm). */
     bool want_cotrig = json_flag(json, "on_capture");
     bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;
     if (dac_generate16(shape, freq, amp, mid, duration, sr_hz) != 0) { send_error(conn_id, "generate failed"); return; }
-    send_ok_str(conn_id, want_cotrig ? (cotrig ? "{\"bits\":16,\"cotrig\":true}" : "{\"bits\":16,\"cotrig\":false}")
-                                     : "{\"bits\":16}");
-}
-
-void handle_generate(int conn_id, const char *json) {
-    char waveform[16] = {0};
-    char freq_s[16]   = {0};
-    char amp_s[8]     = {0};
-    char off_s[8]     = {0};
-    char dur_s[16]    = {0};
-
-    json_get_value(json, "waveform",    waveform, sizeof(waveform));
-    json_get_value(json, "freq",        freq_s,   sizeof(freq_s));
-    json_get_value(json, "amplitude",   amp_s,    sizeof(amp_s));
-    json_get_value(json, "offset",      off_s,    sizeof(off_s));
-    json_get_value(json, "duration_ms", dur_s,    sizeof(dur_s));
-
-    float    freq      = freq_s[0] ? (float)atof(freq_s)    : 1000.0f;
-    uint8_t  amplitude = amp_s[0]  ? (uint8_t)atoi(amp_s)   : 127;
-    uint8_t  offset    = off_s[0]  ? (uint8_t)atoi(off_s)   : 128;
-    uint32_t duration  = dur_s[0]  ? (uint32_t)atoi(dur_s)  : 0;
-    float    sr_hz     = parse_sample_rate_hz(json);   /* 0 = auto */
-
-    char probe[8];
-    if (json_get_value(json, "amplitude_v", probe, sizeof(probe)) ||
-        json_get_value(json, "amplitude_ua", probe, sizeof(probe))) {
-        handle_generate16(conn_id, json, waveform, freq, duration, sr_hz);
-        return;
-    }
-
-    /* Co-trigger (v27): defer this generator's DAC start to the next capture's t0. Arm it BEFORE
-       dac_generate_* sends START_DAC (the interleaved LOAD_WAVE doesn't disturb the pending arm). */
-    bool want_cotrig = json_flag(json, "on_capture");
-    bool cotrig = want_cotrig ? fpga_dac_arm_on_capture() : false;
-
-    int rc = -1;
-    if      (strcmp(waveform, "sine")     == 0) rc = dac_generate_sine(freq, amplitude, offset, duration, sr_hz);
-    else if (strcmp(waveform, "square")   == 0) rc = dac_generate_square(freq, amplitude, offset, duration, sr_hz);
-    else if (strcmp(waveform, "sawtooth") == 0) rc = dac_generate_sawtooth(freq, amplitude, offset, duration, sr_hz);
-    else { send_error(conn_id, "unknown waveform"); return; }
-
-    if (rc != 0) { send_error(conn_id, "generate failed"); return; }
-    if (want_cotrig) {
-        char payload[24];
-        snprintf(payload, sizeof(payload), "{\"cotrig\":%s}", cotrig ? "true" : "false");
-        send_ok_str(conn_id, payload);
-    } else {
-        send_ok_str(conn_id, "null");
-    }
+    send_ok_str(conn_id, want_cotrig ? (cotrig ? "{\"cotrig\":true}" : "{\"cotrig\":false}") : "null");
 }
 
 /* `load` — upload a host-supplied waveform into adc_cmd_buf, one base64url

@@ -362,72 +362,44 @@ Use this as a lightweight keepalive or to confirm the firmware is reachable befo
 
 ### `generate` — DAC waveform output
 
-Start continuous waveform generation on the DAC (16-bit DAC8551, clocked by the iCE40). There are two forms:
+Start continuous waveform generation on the DAC (16 bits, clocked by the FPGA). Give the waveform in volts on a DAC output (`path`, `amplitude_v`, `offset_v`), or in microamps on the 4-20 mA output (`amplitude_ua`, `offset_ua`). The pod routes the output, turns the values into DAC codes with the same per-path calibration as [`dac_out`](#dac_out--route-an-output-path-and-set-a-calibrated-voltage) and [`current_out`](#current_out--hold-a-current-on-the-4-20-ma-output-j9), and builds the waveform at the DAC's full 16 bits. One step is about 50 µV on the 3v3 output.
 
-- **Calibrated, 16-bit** (firmware 3.9.1+, caps `generate16`, `generate_bits` 16): give the waveform in volts on a DAC output (`path`, `amplitude_v`, `offset_v`), or in microamps on the 4-20 mA output (`amplitude_ua`, `offset_ua`). The pod routes the output, turns the values into DAC codes with the same per-path calibration as [`dac_out`](#dac_out--route-an-output-path-and-set-a-calibrated-voltage) and [`current_out`](#current_out--hold-a-current-on-the-4-20-ma-output-j9), and builds the waveform at the DAC's full 16 bits.
-- **Levels, 8-bit** (every firmware): `amplitude` and `offset` are 8-bit levels, the waveform is built from them and played in the DAC's high byte: 256 steps over the output's range, and no calibration.
+Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255, no calibration). Firmware 4.0.0 takes only this form: a request without `amplitude_v` or `amplitude_ua` is refused.
 
-#### Calibrated request (16-bit)
+#### Request
 
 ```json
 {"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.48,"offset_v":1.65}
 {"cmd":"generate","waveform":"square","freq":10,"amplitude_ua":4000,"offset_ua":12000}
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `path` | string | with `amplitude_v` | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
-| `amplitude_v`, `offset_v` | number (V) | together | Peak and centre in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
-| `amplitude_ua`, `offset_ua` | number (µA) | together | Peak and centre on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
-
-| `route` | boolean | no | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. Default: route the output. |
-
-`waveform`, `freq`, `duration_ms`, `sample_rate_mhz` and `on_capture` work as in the 8-bit form below. The reply is `{"bits":16}`, with `"cotrig"` added for `on_capture`. One step is about 50 µV on the 3v3 output (the 8-bit form: about 13 mV).
-
-| Condition | Message |
-|---|---|
-| A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
-| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
-| `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
-| `amplitude` not above 0 | `amplitude_v must be above 0 V` |
-
-#### Level request (8-bit)
-
-```json
-{"cmd":"generate","waveform":"<type>","freq":<Hz>,"amplitude":<0-127>,"offset":<0-255>,"duration_ms":<ms>}
-```
-
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `waveform` | string | yes | — | Waveform shape: `"sine"`, `"square"`, or `"sawtooth"` |
-| `freq` | number (Hz) | no | `1000` | Output frequency in Hz |
-| `amplitude` | integer 0–127 | no | `127` | Half-scale amplitude. Peak-to-peak swing = `2 × amplitude` counts out of 255 |
-| `offset` | integer 0–255 | no | `128` | DC offset (vertical centre). `128` = mid-scale |
-| `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run indefinitely until the next command |
-| `sample_rate_mhz` | number (MHz) | no | auto | FPGA DAC sample-clock rate. Omit to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `waveform` | string | yes | — | `"sine"`, `"square"` or `"sawtooth"` |
+| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
+| `amplitude_v`, `offset_v` | number (V) | together | — | Peak and center in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
+| `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
+| `freq` | number (Hz) | no | `1000` | Output frequency |
+| `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run until the next command |
+| `sample_rate_mhz` | number (MHz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `route` | boolean | no | `true` | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
-
-**Amplitude and offset arithmetic**
-
-The 8-bit level at each sample point is clamped to `[0, 255]` and then scaled to the 16-bit DAC:
 
 ```
 sine:     value = offset + amplitude × sin(2π × t/T)
-square:   value = offset ± amplitude  (high for first half-period, low for second)
+square:   value = offset ± amplitude  (high for the first half-period, low for the second)
 sawtooth: value = offset - amplitude … offset + amplitude  (linear ramp per period)
 ```
 
-With `amplitude=100, offset=128` the output swings between 28 and 228 (out of 255), centred at mid-scale.
-
 **Frequency resolution**
 
-The firmware precomputes one full period in a sample buffer and the iCE40 loops it. Period length in samples is:
+The firmware precomputes one full period in a sample buffer and the FPGA loops it. Period length in samples is:
 
 ```
 period_samples = floor(sample_rate / freq)
 ```
 
-where `sample_rate = 48 MHz / (divider + 51)`: the DAC8551 engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s. Earlier firmware used a divider of 3 (about 889 kS/s), which left the gap 5 ns short of what the quad DAC on analog v3r2 and later boards needs.
+where `sample_rate = 48 MHz / (divider + 51)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s.
 
 The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_mhz` out and the firmware picks one that fits the period.
 
@@ -437,27 +409,22 @@ The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sa
 {"status":"ok","data":null}
 ```
 
-With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
+With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmware up to 3.10.13 replied `{"bits":16}` to the calibrated form.
 
 #### Examples
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":100000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq":100000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 ```
-→ 100 kHz sine, ±100 counts around mid-scale, runs until next command.
+→ 100 kHz sine, 0.45 to 2.85 V on the 3v3 output, runs until the next command.
 
 ```json
-{"cmd":"generate","waveform":"square","freq":50000,"amplitude":64,"offset":128,"duration_ms":2000}
+{"cmd":"generate","waveform":"square","freq":50000,"path":"5v","amplitude_v":2.5,"offset_v":2.5,"duration_ms":2000}
 ```
-→ 50 kHz square wave for 2 seconds, then DAC stops.
+→ 50 kHz square wave, 0 to 5 V, for 2 seconds, then the DAC stops.
 
 ```json
-{"cmd":"generate","waveform":"sawtooth","freq":500000,"amplitude":127,"offset":127}
-```
-→ 500 kHz sawtooth, full-scale ramp 0 → 254.
-
-```json
-{"cmd":"generate","waveform":"sine","freq":100000,"sample_rate_mhz":1}
+{"cmd":"generate","waveform":"sine","freq":100000,"path":"3v3","amplitude_v":1,"offset_v":1.65,"sample_rate_mhz":1}
 ```
 → 100 kHz sine clocked at 1 MHz (10 samples/period). Coarser waveform but much lower clock feedthrough, useful for a cleaner scope trace on breadboard wiring.
 
@@ -466,7 +433,12 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
 | Condition | Message |
 |---|---|
 | Unknown or missing `waveform` | `"unknown waveform"` |
-| `freq` ≤ 0 or `amplitude` = 0 | `"generate failed"` |
+| Neither `amplitude_v` nor `amplitude_ua` (for example the old 8-bit form) | `amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required` |
+| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
+| `amplitude_v` not above 0 | `amplitude_v must be above 0 V` |
+| A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
+| `freq` ≤ 0 | `"generate failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
 ---
@@ -528,7 +500,7 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 To verify the signal path, start a waveform then capture:
 
 ```json
-{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"cmd":"capture","samples":4096}
 ```
 
@@ -1196,7 +1168,6 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 
 When only routing, the reply is `{"path":…,"mv":0}` with no `uv` or `code16`. Firmware up to
 3.10.13 also replied `code`, the nearest 8-bit code (`-1` when only routing).
-Waveforms (`generate`, `load`, `replay`) still use 8-bit codes.
 
 #### `current_out` — hold a current on the 4-20 mA output (J9)
 
@@ -1252,8 +1223,8 @@ and ±12 V outputs use the same DAC:
   to go back to 4 mA.
 - To play a waveform as a current, set a current first (that switches the voltage outputs off),
   then use `generate` or `load_bin` + `replay` with codes computed from `min_ua` / `max_ua`:
-  `ua = min_ua + code16 × (max_ua − min_ua) / 65535`. `generate` takes 8-bit levels; a level is
-  the high byte of the 16-bit code.
+  `ua = min_ua + code16 × (max_ua − min_ua) / 65535`, or `generate` with `amplitude_ua` and
+  `offset_ua`.
 - While [DAC limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set,
   `current_out` with `ua` is refused.
 
@@ -4625,8 +4596,8 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 |---|---|---|
 | `[SOURce]:FUNCtion[:SHAPe] <shape>` / `?` | `SINusoid`, `SQUare`, `RAMP` or `USER` | Waveform; `USER` replays the trace |
 | `[SOURce]:FREQuency <Hz>` / `?` | > 0, unit suffixes allowed; `MIN` 1, `MAX` 1e6, `DEF` 1000 | Frequency |
-| `[SOURce]:VOLTage[:AMPLitude] <0-255>` / `?` | 8-bit half-scale amplitude | As `generate` `amplitude` |
-| `[SOURce]:VOLTage:OFFSet <0-255>` / `?` | 8-bit offset | As `generate` `offset` |
+| `[SOURce]:VOLTage[:AMPLitude] <0-255>` / `?` | 8-bit half-scale amplitude | A level, not volts (the JSON `generate` takes volts from firmware 4.0.0; SCPI keeps the 8-bit level) |
+| `[SOURce]:VOLTage:OFFSet <0-255>` / `?` | 8-bit offset | A level, as `AMPLitude` |
 | `[SOURce]:SRATe <MHz>` / `?` | ≥ 0; `0` = auto | DAC sample clock, also the `USER` replay rate |
 | `[SOURce]:DURation <ms>` / `?` | ≥ 0; `0` = until stopped | Output duration |
 | `OUTPut[:STATe] <ON\|OFF>` / `?` | | `ON` starts the selected waveform (as `generate`, or `replay` for `USER`); `OFF` stops the DAC |
@@ -4686,7 +4657,11 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 | `"square"` | 50% duty-cycle square wave. Useful for rise/fall time and bandwidth tests |
 | `"sawtooth"` | Linear ramp from `offset - amplitude` to `offset + amplitude` per period |
 
-### Amplitude / offset guide
+### Amplitude / offset levels (`measure` and SCPI)
+
+`measure` and the SCPI `SOURce:VOLTage` commands take 8-bit levels: `amplitude` 0-127 and `offset`
+0-255, played in the DAC's high byte with no calibration. `generate` takes volts or microamps
+instead (firmware 4.0.0).
 
 | Goal | `amplitude` | `offset` |
 |---|---|---|
@@ -4767,7 +4742,7 @@ Refusals without a code keep `{"status":"error","message":...}`; the common ones
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
 | `"safe mode: ..."` | The safe-mode [gate](#gates-that-apply-to-every-command) |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
-| `"generate failed"` | Invalid `freq` (<= 0) or `amplitude` (= 0) |
+| `"generate failed"` | Invalid `freq` (<= 0) |
 | `"capture failed"` | The capture did not arm or did not complete |
 | `"invalid swd la channel"`, `"invalid uart args"` | a channel outside 1..14, or two equal channels |
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
@@ -4797,7 +4772,7 @@ $ nc 192.168.1.220 8080
 {"cmd":"target_power","efuse":1,"state":1}
 {"status":"ok","data":{"efuse":1,"enabled":1,"delay_ms":0}}
 
-{"cmd":"generate","waveform":"sine","freq":1000,"amplitude":100,"offset":128}
+{"cmd":"generate","waveform":"sine","freq":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"status":"ok","data":null}
 
 {"cmd":"capture","samples":512}

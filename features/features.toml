@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 9
+revision = 10
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -829,3 +829,11 @@ firmware = "next"
 docs = "API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts"
 dated = "code"
 note = "The signature policy is always required on every OTA path (LAN, USB network adapter, cloud) and cannot be loosened: sig_policy set audit or permissive, and lan_unsigned true, get BP0074; the reply has no lan_unsigned; the console has no lan-ota and always allows dfu. Clients hide any loosening control."
+
+[features.generate_volts_only]
+rev = 10
+firmware = "next"
+board = "analog"
+docs = "API.md#generate--dac-waveform-output"
+dated = "code"
+note = "generate takes only the calibrated form (path with amplitude_v and offset_v, or amplitude_ua and offset_ua); the 8-bit amplitude 0-127 and offset 0-255 form is refused, and the reply is null or {\"cotrig\":...} (no bits)."
