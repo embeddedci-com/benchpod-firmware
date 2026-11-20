@@ -1894,7 +1894,12 @@ A command whose `client_api` is below `min_client_api` is refused before every o
 `status`, `diag`, `ping` and `lease_release` always run, so a client can see the levels, report
 them and let go of the pod. So do the update commands (`ota_status`, `ota_begin`, `ota_data`,
 `ota_end`, `ota_commit`, `ota_abort`, `ota_selftest`, `blob_status` and `identity_public`), so
-an old client can still update the pod's firmware or blobs, or roll it back. SCPI and the USB
+an old client can still update the pod's firmware or blobs, or roll it back. These are the
+commands every older update path sends (CLI `flash-self --network` and `install-blobs`, the desktop
+app through its CLI, the server's cloud update): none takes a lease first. The CLI's
+`install-blobs` from 0.9.0 on also sends `fpga_image` after a gateware blob, to load the new
+gateware without a restart; firmware 4.0.0 refuses that (`BP0030`), and the CLI then says to
+restart the pod, which loads it. SCPI and the USB
 console have no check: people read them.
 
 A client:

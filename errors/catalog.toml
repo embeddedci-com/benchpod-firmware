@@ -400,7 +400,7 @@ area = "protocol"
 since = "next"
 args = { client_api = "int", min_client_api = "int", api = "int" }
 message = "Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api})"
-cause = "The firmware on the pod changed a reply or a message in a way that clients built for client API {client_api} would misread, so it refuses their commands instead of giving them answers they get wrong. The firmware speaks client API {api} and takes {min_client_api} or newer. A client that sends no client_api counts as 0. status, diag, ping, lease_release and the update commands (so a client can still update the pod or roll it back) still work."
+cause = "The firmware on the pod changed a reply or a message in a way that clients built for client API {client_api} would misread, so it refuses their commands instead of giving them answers they get wrong. The firmware speaks client API {api} and takes {min_client_api} or newer. A client that sends no client_api counts as 0. These still run for any client: ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status, so a client can see the levels, let go of the pod, and update the pod's firmware and blobs or roll them back."
 [BP0030.fix]
 sdk = "update the SDK (pip install -U embeddedci), then run again"
 cli = "update the CLI (`brew upgrade --cask benchpod`, or the latest release from GitHub), then run the command again"

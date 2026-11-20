@@ -43,9 +43,11 @@
 #   the change, and say in that pull request what an older client gets wrong.
 # - Clients send "client_api":<the api they were built for> on every JSON command. The pod refuses
 #   a command whose client_api (a client that sends none counts as 0) is below `min_client_api`
-#   with BP0030 client_too_old. status, diag, ping and lease_release always run, so the client can
-#   still find out and report it, and so do the update commands (ota_*, blob_status,
-#   identity_public), so an old client can still update the pod or roll it back.
+#   with BP0030 client_too_old. The commands flagged CMD_F_ANY_CLIENT (cmd_tier.c) always run:
+#   ping, status, diag and lease_release, so the client can still find out, report it and let go
+#   of the pod, and the update commands identity_public, ota_status, ota_begin, ota_data,
+#   ota_end, ota_commit, ota_abort, ota_selftest and blob_status, so an old client can still
+#   update the pod or roll it back.
 # - `min_client_api` is raised only on purpose, in a release pull request: it refuses every client
 #   below it, every client that sends nothing included. Never raise it as a side effect of a bump.
 # - `min_client_api` <= `api` (CI checks it).
@@ -812,4 +814,4 @@ rev = 8
 firmware = "next"
 docs = "API.md#client-compatibility"
 dated = "code"
-note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except status, diag, ping, lease_release and the update commands (ota_*, blob_status, identity_public). Firmware 4.0.0 is api 2 and takes client_api 2 or newer."
+note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status. Firmware 4.0.0 is api 2 and takes client_api 2 or newer."
