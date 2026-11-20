@@ -296,9 +296,9 @@ void handle_la_dir(int conn_id, const char *json) {
     send_emitted(conn_id, &e);
 }
 
-/* ---- `la`, `la_voltage` and the emulated I2C sensor ---------------------- */
+/* ---- `la_step`, `la_pull`, `la_voltage` and the emulated I2C sensor ------- */
 
-/* {"cmd":"la","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
+/* {"cmd":"la_step","la":N,"steps":S,"delay_us":D[,"dir_la":M,"direction":0|1]}
    A step pulse train on LA N (1..14); the FPGA runs it autonomously. */
 static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
     char la_s[8] = {0}, delay_s[12] = {0}, dir_la_s[8] = {0}, dir_s[8] = {0};
@@ -341,7 +341,7 @@ static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la"} -> the pull bitmask, bit (la-1) = LA<la>.
+/* {"cmd":"la_pull"} -> the pull bitmask, bit (la-1) = LA<la>.
    pullups_available says whether a pull CAN be engaged right now (a bank voltage is set; on v2
    boards it must be 3.3 V); la_pullup_mask is always the truth about what is on the wire.  While
    the pod holds pulls off (digital v3r4): why, and the mask the host asked for (put back by the
@@ -360,7 +360,7 @@ static void handle_la_pull_mask(int conn_id) {
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la","la":N} -> LA N's pull state (also the reply of a pull set).
+/* {"cmd":"la_pull","la":N} -> LA N's pull state (also the reply of a pull set).
    "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
    pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
    "held" then says why, and strength stays the setting the pod puts back. Elsewhere live and
@@ -392,7 +392,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
     send_ok_str(conn_id, payload);
 }
 
-/* {"cmd":"la","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
+/* {"cmd":"la_pull","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
    Switch LA N's pull resistor; a direction the channel's resistor can't pull is refused (BP0024),
    a channel without one too (BP0023).  false = refused (the error was sent). */
 static bool handle_la_pull_set(int conn_id, const char *json, unsigned la, const char *pull_s) {
@@ -456,20 +456,20 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la, const
     }
 }
 
-/* The `la` verb: three commands, told apart by their fields.
- *   "steps"               a step train (handle_la_step)
- *   no "la"               the pull bitmask (handle_la_pull_mask)
- *   "la" with "pull"   switch the pull, then report it (handle_la_pull_set)
- *   "la" alone            report the pull (handle_la_pull_query)
- *
- * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
- * drive (the former gpio_set) is gone: a pull-up (or its absence, which leaves
- * the board's pull-down) sets a line's idle level instead. */
-void handle_la(int conn_id, const char *json) {
+/* `la_step` (firmware up to 3.10.13: `la` with "steps") — a step pulse train. */
+void handle_la_step_cmd(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
     char steps_s[12] = {0};
-    if (json_get_value(json, "steps", steps_s, sizeof(steps_s))) { handle_la_step(conn_id, json, steps_s); return; }
+    if (!json_get_value(json, "steps", steps_s, sizeof(steps_s))) { send_error(conn_id, "missing steps"); return; }
+    handle_la_step(conn_id, json, steps_s);
+}
 
+/* `la_pull` (firmware up to 3.10.13: `la` without "steps") — the pull resistors:
+ *   no "la"               the pull bitmask (handle_la_pull_mask)
+ *   "la" with "pull"      switch the pull, then report it (handle_la_pull_set)
+ *   "la" alone            report the pull (handle_la_pull_query) */
+void handle_la_pull_cmd(int conn_id, const char *json) {
+    if (!require_la_voltage(conn_id)) return;
     char la_s[8] = {0};
     if (!json_get_value(json, "la", la_s, sizeof(la_s))) { handle_la_pull_mask(conn_id); return; }
     unsigned la = (unsigned)atoi(la_s);
@@ -480,13 +480,8 @@ void handle_la(int conn_id, const char *json) {
         return;
     }
     char pull_s[8] = {0};
-    if (json_get_value(json, "pull", pull_s, sizeof(pull_s))) {
-        if (!handle_la_pull_set(conn_id, json, la, pull_s)) return;
-    } else if (bp_json_get(json, "pullup", pull_s, sizeof(pull_s))) {
-        /* The "pullup":"on"|"off" alias of firmware up to 3.10.13. */
-        send_error(conn_id, "pullup is gone (firmware 4.0.0): use pull up, down or off");
+    if (json_get_value(json, "pull", pull_s, sizeof(pull_s)) && !handle_la_pull_set(conn_id, json, la, pull_s))
         return;
-    }
     handle_la_pull_query(conn_id, la);
 }
 

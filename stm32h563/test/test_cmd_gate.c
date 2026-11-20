@@ -241,7 +241,7 @@ static void test_device_gate(void) {
     CHECK(cmd_gate_device("target_power", NULL, true, true) == NULL, "power in safe mode");
     CHECK(starts(cmd_gate_device("measure", NULL, false, false), "this BenchPod has no analog front end"),
           "digital measure");
-    CHECK(cmd_gate_device("la", NULL, false, false) == NULL, "digital la");
+    CHECK(cmd_gate_device("la_pull", NULL, false, false) == NULL, "digital la_pull");
     CHECK(cmd_gate_device("capture_dual", "{\"adc_samples\":0}", false, false) == NULL, "LA-only dual");
     CHECK(cmd_gate_device("capture_dual", "{\"adc_samples\":16}", false, false) != NULL, "ADC dual");
     CHECK(cmd_gate_device("capture_dual", NULL, false, false) == NULL, "dual without json");

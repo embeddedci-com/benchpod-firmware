@@ -310,7 +310,8 @@ void     la_step_poll(void);                  /* releases the train's pins once 
 void     la_pins_on_gateware_reconfigured(void);
 void     handle_la_pins(int conn_id, const char *json);
 void     handle_gpio(int conn_id, const char *json);
-void     handle_la(int conn_id, const char *json);
+void     handle_la_step_cmd(int conn_id, const char *json);
+void     handle_la_pull_cmd(int conn_id, const char *json);
 void     handle_la_voltage(int conn_id, const char *json);
 /* Emulated sensors (command_handler_sensors.c; the JSON is in sensor_cmd.c). */
 void     handle_sensor(int conn_id, const char *json);   /* every sensor_* verb but sensor_la */

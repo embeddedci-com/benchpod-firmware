@@ -768,14 +768,14 @@ note = "uart_proxy_start de and de_active_low: the pod drives an RS-485 transcei
 [features.la_pull_dir]
 rev = 3
 firmware = "3.10.12"
-docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
+docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "la pull: up, down or off, with each channel's supported directions in the reply and in la_pins (dirs); refusals BP0023, BP0024. Older firmware takes pullup on/off only."
 
 [features.la_pull_1v8]
 rev = 4
 firmware = "3.10.13"
-docs = "API.md#switch-or-query-an-la-pin-pull-resistor"
+docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "Pull resistors work with the LA bank at 1.8 V on v3 boards (the pull-ups go to the bank rail) and stay on when the bank switches. Older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V."
 
@@ -851,3 +851,10 @@ firmware = "next"
 docs = "API.md#can_start--bring-can-up"
 dated = "code"
 note = "CAN is brought up with can_start and turned off with can_stop, like spi_start/spi_stop and i2c_start/i2c_stop. can_config and can_disable are gone (unknown cmd)."
+
+[features.la_step_pull_split]
+rev = 10
+firmware = "next"
+docs = "API.md#la_pull--la-pin-pull-resistors"
+dated = "code"
+note = "The la command is split: la_step runs a step pulse train (needs steps), la_pull switches, reads or (without la) lists the pull resistors with the same fields and replies. la answers unknown cmd; the old pullup field is not read."

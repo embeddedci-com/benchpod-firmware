@@ -230,7 +230,8 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay, 2 = sensor emulation) | object | no |
 | `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
 | `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
-| `la` | T1 | LA pin control: step pulse trains + pull resistors (up/down/off) | object | no |
+| `la_step` | T1 | Start a step pulse train on an LA pin (`la` with `steps` up to 3.10.13) | object | no |
+| `la_pull` | T1 | Switch or read the LA pull resistors (up/down/off) (`la` up to 3.10.13) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
 | `gpio` | T1 | Configure / release / drive / read LA pins as GPIO | object | no |
 | `la_dir` | T1 | Tell the pod which LA pins are DUT outputs, inputs or bidirectional | object | no |
@@ -1993,26 +1994,26 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 
 ---
 
-### `la` — logic-analyzer pin control
+### `la_step` — step a pulse train
 
-A single command for the LA bank. The action is inferred from the fields present:
-**step** (when `steps` is given), **pull set** (when `pull` is given), **pull query** (a bare `la`), or **pull bitmask** (no `la`). It replaces the former
-`gpio_set` / `gpio_step` / `pullup` / `pullup_status` commands. There is no active-drive
-action here (that is [`gpio`](#gpio--drive-and-read-la-pins-as-gpio)); a pull resistor
-sets a line's idle level.
+Firmware up to 3.10.13 had one `la` command for the step train and the pull resistors, told apart
+by their fields. Firmware 4.0.0 splits it: `la_step` runs a step train, and
+[`la_pull`](#la_pull--la-pin-pull-resistors) switches and reads the pull resistors. `la` is gone
+(`unknown cmd`). There is no active-drive action here (that is
+[`gpio`](#gpio--drive-and-read-la-pins-as-gpio)).
 
 #### Step a pulse train
 
 Starts a **non-blocking** train of `steps` pulses on an LA channel: each pulse is high for `delay_us` microseconds then low for `delay_us` (one full step period is `2 × delay_us`). The FPGA runs the train autonomously; the command returns immediately. Poll completion via SCPI `DIGital:STEP:BUSY?`.
 
 ```json
-{"cmd":"la","la":<1-14>,"steps":<n>,"delay_us":<us>,"dir_la":<1-14>,"direction":<0|1>}
+{"cmd":"la_step","la":<1-14>,"steps":<n>,"delay_us":<us>,"dir_la":<1-14>,"direction":<0|1>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `la` | integer | yes | — | LA channel to pulse (1..14). |
-| `steps` | integer | yes | — | Number of pulses. Range 1..65535. **Its presence selects the step action.** |
+| `steps` | integer | yes | — | Number of pulses. Range 1..65535. |
 | `delay_us` | integer | yes | — | Microseconds per half-phase. Range 4..65535. |
 | `dir_la` | integer | no | — | Optional direction channel driven (high/low) **before** stepping. |
 | `direction` | integer | no | 0 | Level for `dir_la`: `1` = high, `0` = low. |
@@ -2022,6 +2023,13 @@ Response:
 ```json
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
 ```
+
+<a id="la_pull--la-pin-pull-resistors"></a>
+### `la_pull` — LA pin pull resistors
+
+`{"cmd":"la_pull","la":N,"pull":"up"|"down"|"off"}` switches a pull, `{"cmd":"la_pull","la":N}`
+reads one, and `{"cmd":"la_pull"}` reads all of them as a bitmask. Firmware up to 3.10.13 did this
+with the `la` command.
 
 #### Switch (or query) an LA pin pull resistor
 
@@ -2056,16 +2064,16 @@ All of them default to **off** at boot.
 > Turning one *off* is always allowed.
 
 ```json
-{"cmd": "la", "la": 3, "pull": "up"}
+{"cmd": "la_pull", "la": 3, "pull": "up"}
 ```
 
 - `la` (required for a per-pin op): LA pin `1`-`14`.
 - `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
-- **Omit it** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
+- **Omit it** (a bare `{"cmd":"la_pull","la":N}`) to **query** the current state without
   changing it.
-- `pullup` (`"on"`/`"off"`, the older form of `pull`) is gone in firmware 4.0.0: the pod refuses
-  it and says to use `pull`. Firmware up to 3.10.13 took it, `on` engaging the channel's own
-  direction.
+- `pullup` (`"on"`/`"off"`, the older form of `pull`) is gone in firmware 4.0.0: the pod does not
+  read it, so such a request is a query. Firmware up to 3.10.13 took it, `on` engaging the
+  channel's own direction.
 
 Response:
 
@@ -2101,7 +2109,7 @@ The pod picks the strength from the pin's function unless the host names one:
 | Everything else (UART RX hold, straps, idle levels, RS-485 DE bias) | 10k |
 
 ```json
-{"cmd": "la", "la": 9, "pull": "down", "strength": "both"}
+{"cmd": "la_pull", "la": 9, "pull": "down", "strength": "both"}
 {"status": "ok", "data": {"la": 9, "state": "down",
   "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": 1}}
 ```
@@ -2122,7 +2130,7 @@ The pod picks the strength from the pin's function unless the host names one:
 - While the pod holds a pull off (the two cases above), the replies say what is on the wire
   (firmware 3.10.13+). `state` is what the channel does now, and the reply
   adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
-  write failed; the next pull the host turns on with `la` tries again and puts them all back). `strength` stays
+  write failed; the next pull the host turns on with `la_pull` tries again and puts them all back). `strength` stays
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
   `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
   replies have no `held`.
@@ -2131,10 +2139,10 @@ The pod picks the strength from the pin's function unless the host names one:
 
 #### Read all pulls as a bitmask
 
-Send `la` with no channel:
+Send `la_pull` with no channel:
 
 ```json
-{"cmd": "la"}
+{"cmd": "la_pull"}
 ```
 
 Response:
@@ -2160,7 +2168,7 @@ puts back:
 
 | Condition | Message |
 |---|---|
-| step request without `la` / `delay_us` | `"missing la"` / `"missing delay_us"` |
+| `la_step` without `steps` / `la` / `delay_us` | `"missing steps"` / `"missing la"` / `"missing delay_us"` |
 | `steps` / `delay_us` not a plain non-negative integer | `"invalid steps"` / `"invalid delay_us"` |
 | `steps` outside 1..65535 (the gateware step counter is 16-bit) | `"steps must be 1..65535 (the step counter is 16-bit): split a longer move into several trains"` |
 | `delay_us` outside 4..65535 | `"delay_us must be 4..65535 (microseconds per half-phase: a step takes 2 x delay_us)"` |
@@ -2170,7 +2178,7 @@ puts back:
 | the step or direction pin belongs to another function | `BP0031` (`la_pin_in_use`, args `la`, `owner`, `function`, `instance`) |
 | `la` outside 1-14 | `"LA<n> is not a pin (use 1..14)"` |
 | `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
-| `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
+| `up`/`down` on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `BP0033` (`la_pull_down_conflict`; see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
@@ -2202,7 +2210,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
-| `step`, `step_dir` | the [`la` step train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
+| `step`, `step_dir` | the [`la_step` train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
 | `spi_sck`, `spi_mosi`, `spi_miso`, `spi_cs` | [`spi_start`](#spi_start--claim-four-pins-for-spi) | `spi_stop`, gateware reconfiguration |
 | `i2cm_sda`, `i2cm_scl` | [`i2c_start`](#i2c_start--claim-two-pins-as-an-i2c-master) | `i2c_stop`, gateware reconfiguration |
 
@@ -2260,7 +2268,7 @@ with its pull-down engaged.
 ```
 
 `BP0032` (`la_pull_down_engaged`) comes from a claim (`uart_proxy_start`, `dap_start`,
-`sensor_start`, `gpio`), `BP0033` (`la_pull_down_conflict`) from `{"cmd":"la","la":7,"pull":"down"}`
+`sensor_start`, `gpio`), `BP0033` (`la_pull_down_conflict`) from `{"cmd":"la_pull","la":7,"pull":"down"}`
 on a pin that is already in use.
 
 ---
@@ -3177,7 +3185,7 @@ command and reply fits one cloud frame.
 |---|---|
 | `sda`, `scl` | LA pins 1..14, different |
 | `clock_hz` | 10000..1000000 (Hz), default 100000. 100 kHz runs at 100 kHz, 400 kHz at about 364 kHz, 1 MHz at about 923 kHz: each speed keeps SCL low as long as its I2C mode needs. The pod counts SCL high only once SCL reads high, which lets a target stretch the clock, so the SCL rise time adds to each period: the bus never runs faster than the reply's `hz`, and somewhat slower with slow edges (with the pod's 4.7 kOhm pull-ups on a short cable, 400 kHz measured about 333 kHz and 1 MHz about 774 kHz). Stronger pull-ups bring it closer |
-| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
+| `pullups` | `pod` (default): both pins need a pod pull-up (LA1..LA6 on today's boards) switched on (`{"cmd":"la_pull","la":1,"pull":"up"}`); they go to the LA bank rail, so they work at 1.8 V and 3.3 V (firmware before `la_pull_1v8`: 3.3 V only). `external`: the board has its own pull-ups |
 
 The pod never switches a pull-up by itself; the error says which command does.
 Reply: `{"sda":1,"scl":2,"clock_hz":363636,"pullups":"pod"}` with the rate actually used.
@@ -4630,7 +4638,7 @@ external LAN policy applies on Ethernet and Wi-Fi, not on the USB link.
 | Command | Parameter | Description |
 |---|---|---|
 | `DIGital:OUTPut <la>,<0\|1>` | LA 1..14 | Make the pin a gpio output at that level (the JSON `gpio` table applies) |
-| `DIGital:STEP <la>,<steps>,<delay_us>[,<dir_la>[,<dir>]]` | as the JSON [`la` step train](#step-a-pulse-train) | Start a step pulse train (non-blocking) |
+| `DIGital:STEP <la>,<steps>,<delay_us>[,<dir_la>[,<dir>]]` | as the JSON [`la_step`](#step-a-pulse-train) | Start a step pulse train (non-blocking) |
 | `DIGital:STEP:BUSY?` | | `1` while a step train runs, else `0` |
 
 ### Target power
@@ -4736,7 +4744,7 @@ The ones the commands above name:
 | `BP0061` to `BP0063` | `i2c_needs_pullups`, `i2c_session_not_open`, `i2c_engine_reset` | (`la`) | the [I2C master](#i2c-master) |
 | `BP0064` | `loop_sweep_with_map` | | `dac_control_loop` sweep with an input map |
 | `BP0065` | `output_used_by_sensor` | `output`, `instance` | a DAC or current command while an analog emulated sensor plays that output |
-| `BP0066` | `step_busy` | | an `la` step train while one runs |
+| `BP0066` | `step_busy` | | an `la_step` train while one runs |
 | `BP0067` | `samples_out_of_range` | `max` | `capture`, `capture_read`, `la_capture` and the others with `samples` outside 1 to `max` |
 | `BP0068`, `BP0069` | `la_rate_above_ceiling`, `la_rate_too_deep` | `rate_mhz`, `fit_mhz`, `samples` (and `max_mhz` / `max_samples`) | an explicit raw LA rate the capture cannot run: the rates are strings with one decimal ("3.0"), in MS/s |
 | `BP0070` | `capture_dual_too_deep` | `la_max`, `adc_max`, `la_capture_max` | `capture_dual` asking for more than a stream's region |
@@ -4792,10 +4800,10 @@ $ nc 192.168.1.220 8080
 {"cmd":"dac_stop"}
 {"status":"ok","data":null}
 
-{"cmd":"la","la":1,"pull":"up"}
+{"cmd":"la_pull","la":1,"pull":"up"}
 {"status":"ok","data":{"la":1,"state":"up","dirs":["up"],"pullups_available":1}}
 
-{"cmd":"la","la":1,"steps":200,"delay_us":500}
+{"cmd":"la_step","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
 
 {"cmd":"identity_public"}

@@ -4,7 +4,7 @@
   "revision": 10,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "e46b6e3a35bff5fe5c79b256c98548d9ae9de342f3eff16966fcb4a1cf932535",
+  "table_sha256": "bf25391ed3cef9bfef910450860f56fb76d2b9811f3a3b87d1eb4f98bb9cb1e0",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -661,13 +661,13 @@
       "rev": 3,
       "firmware": "3.10.12",
       "board": "any",
-      "docs": "API.md#switch-or-query-an-la-pin-pull-resistor"
+      "docs": "API.md#la_pull--la-pin-pull-resistors"
     },
     "la_pull_1v8": {
       "rev": 4,
       "firmware": "3.10.13",
       "board": "any",
-      "docs": "API.md#switch-or-query-an-la-pin-pull-resistor"
+      "docs": "API.md#la_pull--la-pin-pull-resistors"
     },
     "log_level": {
       "rev": 4,
@@ -734,6 +734,12 @@
       "firmware": "next",
       "board": "any",
       "docs": "API.md#can_start--bring-can-up"
+    },
+    "la_step_pull_split": {
+      "rev": 10,
+      "firmware": "next",
+      "board": "any",
+      "docs": "API.md#la_pull--la-pin-pull-resistors"
     }
   }
 }

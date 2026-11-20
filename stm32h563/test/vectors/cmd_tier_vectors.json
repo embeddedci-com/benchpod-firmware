@@ -60,7 +60,8 @@
     "adc_range": "T1",
     "dac_control_loop": "T1",
     "dac_loop_input": "T1",
-    "la": "T1",
+    "la_step": "T1",
+    "la_pull": "T1",
     "gpio": "T1",
     "la_voltage": "T1",
     "nrst": "T1",
@@ -369,7 +370,11 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"la\"}",
+      "line": "{\"cmd\":\"la_step\"}",
+      "tier": "T1"
+    },
+    {
+      "line": "{\"cmd\":\"la_pull\"}",
       "tier": "T1"
     },
     {
