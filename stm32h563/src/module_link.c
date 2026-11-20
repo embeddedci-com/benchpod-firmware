@@ -9,6 +9,10 @@
 #include "board_pins.h"
 #include "pico_compat.h"
 #include "bp_log.h"
+#include "board_caps.h"
+#include "dac_link.h"
+
+#include <stdio.h>
 
 #include <string.h>
 
@@ -96,6 +100,11 @@ void module_link_init(void)
         } else {
             log_printf("[module] EEPROM: %s\r\n",
                    rc == MOD_EE_NO_CHIP ? "no answer at 0x50" : module_ee_result_str(rc));
+        }
+        if (module_dac_pinout_mismatch()) {
+            char m[20];
+            log_printf("[module] DAC off: digital %s and module %s use different flat-cable pinouts "
+                       "(BP0035)\r\n", module_dac_pinout_digital(), module_dac_pinout_module(m, sizeof(m)));
         }
     }
 }
@@ -189,6 +198,23 @@ bool module_adc_low_range(void)
 bool module_current_in_100r(void)
 {
     return s_link && s_present && module_ee_has_100r_shunt(s_id_rc, &s_id);
+}
+
+bool module_dac_pinout_mismatch(void)
+{
+    return dac_link_mismatch(s_link, s_present, board_caps()->cn1_dac_swap,
+                             module_ee_has_cn1_dac_swap(s_id_rc, &s_id));
+}
+
+const char *module_dac_pinout_digital(void) { return board_caps()->cn1_dac_swap ? "v3r4+" : "v3r3"; }
+
+const char *module_dac_pinout_module(char *buf, size_t cap)
+{
+    if (s_id_rc == MOD_EE_OK) snprintf(buf, cap, "%u.%u", s_id.rev_major, s_id.rev_minor);
+    else snprintf(buf, cap, "%s", s_id_rc == MOD_EE_BLANK   ? "not programmed"
+                                 : s_id_rc == MOD_EE_NO_CHIP ? "unreadable"
+                                 : module_ee_result_str(s_id_rc));
+    return buf;
 }
 
 int module_id(module_id_t *id)

@@ -87,6 +87,7 @@ C_SOURCES := \
   src/board_variant.c \
   src/module_link.c \
   src/module_eeprom.c \
+  src/dac_link.c \
   src/command_handler_module.c \
   src/usb_cc.c \
   src/nrst_ctrl.c \

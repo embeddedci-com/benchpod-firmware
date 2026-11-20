@@ -90,6 +90,11 @@ bool module_ee_has_low_range(int rc, const module_id_t *id);
    A blank, unreadable or missing header is the older 249 ohm (what every board before it has). */
 bool module_ee_has_100r_shunt(int rc, const module_id_t *id);
 
+/* The module has the DAC clock on the flat cable's pin 7 (dac_link.h): an analog module of
+   revision 3.5 or later (DAC_LINK_SWAP_REV_*).  A blank, unreadable or missing header is an
+   older module, with the clock on pin 8. */
+bool module_ee_has_cn1_dac_swap(int rc, const module_id_t *id);
+
 /* Bytes of a write at `addr` that fit before the next page boundary (a 24C32 page write wraps
    inside its page), capped at `len`. */
 size_t module_ee_chunk(uint16_t addr, size_t len);

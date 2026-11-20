@@ -1,5 +1,6 @@
 /* module_eeprom.c — the analog module's EEPROM layout. See module_eeprom.h. */
 #include "module_eeprom.h"
+#include "dac_link.h"
 #include <string.h>
 
 static const uint8_t k_magic[4] = { 'B', 'P', 'M', 'D' };
@@ -83,6 +84,13 @@ bool module_ee_has_100r_shunt(int rc, const module_id_t *id)
     if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
     return id->rev_major > MOD_SHUNT100_REV_MAJOR ||
            (id->rev_major == MOD_SHUNT100_REV_MAJOR && id->rev_minor >= MOD_SHUNT100_REV_MINOR);
+}
+
+bool module_ee_has_cn1_dac_swap(int rc, const module_id_t *id)
+{
+    if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
+    return id->rev_major > DAC_LINK_SWAP_REV_MAJOR ||
+           (id->rev_major == DAC_LINK_SWAP_REV_MAJOR && id->rev_minor >= DAC_LINK_SWAP_REV_MINOR);
 }
 
 size_t module_ee_chunk(uint16_t addr, size_t len)
