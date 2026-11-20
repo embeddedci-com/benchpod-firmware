@@ -1,6 +1,8 @@
 /*
- * tusb_config.h — TinyUSB device configuration: USB_DRD_FS (full speed) with
- * CDC-ACM (the console) + CDC-NCM (the pod's API as a USB network adapter).
+ * tusb_config.h — TinyUSB on USB_DRD_FS (full speed). Device: CDC-ACM (the console) +
+ * CDC-NCM (the pod's API as a USB network adapter). Host (usb_host.h, on demand only): the
+ * same port hosts one DUT, enumeration only so far. One role at a time: the usb task tears
+ * one stack down before it starts the other (usb_device.c).
  *
  * Every TinyUSB call runs on the usb task (usb_device.c); the console and the
  * net task only touch rings and slots there, never TinyUSB itself.
@@ -33,5 +35,17 @@
 #define CFG_TUD_NCM_IN_NTB_MAX_SIZE  3200
 #define CFG_TUD_NCM_OUT_NTB_N        1
 #define CFG_TUD_NCM_IN_NTB_N         2
+
+
+/* Host: one device straight on the port, no hub, no class drivers yet (the pod reads the
+   descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
+   one still enumerates, only the interface list in usb_host is cut. */
+#define BOARD_TUH_RHPORT         0
+#define CFG_TUH_ENABLED          1
+#define CFG_TUH_MAX_SPEED        OPT_MODE_FULL_SPEED
+#define CFG_TUH_ENUMERATION_BUFSIZE 512
+#define CFG_TUH_DEVICE_MAX       1
+#define CFG_TUH_HUB              0
+#define CFG_TUH_ENDPOINT_MAX     4
 
 #endif /* TUSB_CONFIG_H */

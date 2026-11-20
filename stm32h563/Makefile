@@ -116,6 +116,8 @@ C_SOURCES := \
   src/usb_dhcpd.c \
   src/console_moved.c \
   src/usb_device.c \
+  src/usb_host.c \
+  src/usb_host_desc.c \
   src/ethernetif.c \
   src/net_server.c \
   src/net_dhcp.c \
@@ -255,7 +257,9 @@ C_SOURCES += \
   $(TUSB)/device/usbd.c \
   $(TUSB)/class/cdc/cdc_device.c \
   $(TUSB)/class/net/ncm_device.c \
+  $(TUSB)/host/usbh.c \
   $(TUSB)/portable/st/stm32_fsdev/dcd_stm32_fsdev.c \
+  $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
   $(TUSB)/portable/st/stm32_fsdev/fsdev_common.c
 
 # LwIP (NO_SYS=1): core + IPv4 + ethernet netif + DNS + altcp(+TLS) + mDNS.
