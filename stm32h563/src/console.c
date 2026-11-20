@@ -221,7 +221,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  identity                                   the device key's short id and public key\r\n"
         "  usb-network [on|off]                       the USB network adapter\r\n"
         "  lan-policy [open|locked|off]               what Ethernet and Wi-Fi may do\r\n"
-        "  lan-pairing [on|off] | lan-clients [remove <name|key> | clear]   paired computers\r\n"
+        "  lan-pairing [on|off] | lan-clients [add <name> <key> | remove <name|key> | clear]\r\n"
         "  lan-tls [https-only on|off | scpi on|off | regenerate]   TLS, plaintext :8080, SCPI\r\n"
         "  net-reset                                  forget Wi-Fi, Ethernet back to autonegotiation\r\n"
         "  wifi-set \"<ssid>\" \"<password>\" | wifi-show   set up Wi-Fi, its state\r\n"
@@ -1200,13 +1200,24 @@ static void con_lan_pairing(int argc, char **argv, console_out_t out, void *ctx)
     else     op(out, ctx, "lan-pairing %s\r\n", pod_policy_lan_pairing() ? "on" : "off");
 }
 
-/* lan-clients [remove <name | 8+ hex digits> | clear]: the paired computers, one line each
-   ("lan-clients <n> of <max>", then "  <name> <spki sha256>"). Pairing itself is JSON
-   (lan_clients add), over the USB link or the cloud: the clients send their own key. */
+/* lan-clients [add <name> <spki sha256> | remove <name | 8+ hex digits> | clear]: the paired
+   computers, one line each ("lan-clients <n> of <max>, pairing on", then "  <name> <spki sha256>").
+   add is how `benchpod setup` pairs a computer over the cable: the console works also while the
+   USB network adapter is off (built-in Wi-Fi turns it off). The reply after add starts with
+   "lan-clients added|renamed|same", then the list. */
 static void con_lan_clients(int argc, char **argv, console_out_t out, void *ctx)
 {
     const char *why = NULL;
-    if (argc >= 3 && !strcmp(argv[1], "remove")) {
+    const char *done = NULL;
+    if (argc >= 2 && !strcmp(argv[1], "add")) {
+        uint8_t fp[LAN_CLIENT_FP_LEN];
+        lan_clients_add_t res = LAN_CLIENTS_ADDED;
+        if (argc < 4 || !lan_clients_name_ok(argv[2])) why = "use add <name> <spki sha256>, a name of 1 to 23 characters without spaces";
+        else if (!lan_clients_fp_from_hex(argv[3], fp)) why = "the key must be 64 hex digits";
+        else why = lan_tls_clients_add(fp, argv[2], &res);
+        if (!why && res == LAN_CLIENTS_FULL) why = "full: remove a computer first";
+        if (!why) done = res == LAN_CLIENTS_ADDED ? "added" : res == LAN_CLIENTS_RENAMED ? "renamed" : "same";
+    } else if (argc >= 3 && !strcmp(argv[1], "remove")) {
         int removed = 0;
         why = lan_tls_clients_remove(argv[2], &removed);
         if (!why && removed == -2) why = "that matches more than one key: give more digits";
@@ -1214,9 +1225,10 @@ static void con_lan_clients(int argc, char **argv, console_out_t out, void *ctx)
     } else if (argc >= 2 && !strcmp(argv[1], "clear")) {
         why = lan_tls_clients_clear();
     } else if (argc >= 2) {
-        why = "use remove <name or key> or clear";
+        why = "use add <name> <key>, remove <name or key> or clear";
     }
     if (why) { op(out, ctx, "lan-clients error %s\r\n", why); return; }
+    if (done) op(out, ctx, "lan-clients %s\r\n", done);
     lan_clients_t *l = pvPortMalloc(sizeof(*l));
     if (!l) { op(out, ctx, "lan-clients error out of memory\r\n"); return; }
     lan_tls_clients_get(l);
