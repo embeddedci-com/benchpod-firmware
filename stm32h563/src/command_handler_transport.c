@@ -84,9 +84,15 @@ static bool scpi_line_blocked_by_lease(int conn_id, const char *line) {
    are not TCP connections and are not affected. */
 bool net_conn_on_usb(int conn_id);   /* net_server.h (which pulls in lwIP for the host tests) */
 bool net_conn_on_tls(int conn_id);
+bool net_conn_lan_paired(int conn_id);
+/* SCPI has no pairing step of its own: on the external LAN it needs a paired TLS connection while
+   pairing is on (docs/design/lan-pairing.md). */
+static bool scpi_unpaired(int conn_id) {
+    return pod_policy_lan_pairing() && !net_conn_on_usb(conn_id) && !net_conn_lan_paired(conn_id);
+}
 static bool proto_served(int conn_id, proto_t p) {
     if (conn_id < 0 || conn_id >= CH_MAX_CONN) return true;
-    if (p == PROTO_SCPI) return pod_policy_scpi();
+    if (p == PROTO_SCPI) return pod_policy_scpi() && !scpi_unpaired(conn_id);
     if (p == PROTO_JSON)
         return net_conn_on_usb(conn_id) || net_conn_on_tls(conn_id) || !pod_policy_https_only();
     return true;
@@ -95,7 +101,11 @@ static bool proto_served(int conn_id, proto_t p) {
 /* Refuse the connection's protocol once and close it (the rest of its bytes are dropped). */
 static void proto_refuse(int conn_id, proto_t p) {
     proto[conn_id] = PROTO_REFUSED;
-    if (p == PROTO_SCPI) {
+    if (p == PROTO_SCPI && pod_policy_scpi()) {
+        static const char k_unpaired[] = "SCPI on the LAN needs a paired computer over TLS (port 8443), or "
+                                         "pairing switched off over USB (console: lan-pairing off)\n";
+        at_send_data(conn_id, (const uint8_t *)k_unpaired, sizeof(k_unpaired) - 1u);
+    } else if (p == PROTO_SCPI) {
         static const char k_off[] = "SCPI is off on this BenchPod: switch it on over USB or from the cloud "
                                     "(console: lan-tls scpi on)\n";
         at_send_data(conn_id, (const uint8_t *)k_off, sizeof(k_off) - 1u);

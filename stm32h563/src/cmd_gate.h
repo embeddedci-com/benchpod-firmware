@@ -34,6 +34,9 @@ typedef struct {
     bool             usb_link;         /* a LAN connection on the USB network adapter: physical
                                           presence, so the LAN policy does not apply to it (it
                                           stays LAN tier: what the LAN never may, it never may) */
+    bool             lan_pairing;      /* pod_policy_lan_pairing(): LAN computers must be paired */
+    bool             lan_paired;       /* this connection is TLS with a paired client key
+                                          (net_conn_lan_paired); false on plaintext */
     bool             lease_active;     /* lease_gate_active(); only looked at for POLICY_SRC_LAN */
     uint32_t         lease_left_s;     /* seconds left on that lease */
     const char      *lease_holder;     /* lease_gate_holder() ("" or NULL = "cloud") */

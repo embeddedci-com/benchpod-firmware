@@ -46,6 +46,13 @@ bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api
 
 const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *json, cmd_tier_t tier,
                            const cmd_gate_ctx_t *ctx, char *why, size_t why_cap) {
+    /* Pairing (docs/design/lan-pairing.md): on the external LAN an unpaired computer gets only
+       the reads that say what the pod is and how to pair. USB (the console, the USB link) and the
+       cloud never need pairing. */
+    if (ctx->src == POLICY_SRC_LAN && !ctx->usb_link && ctx->lan_pairing && !ctx->lan_paired &&
+        !cmd_has(d, CMD_F_UNPAIRED)) {
+        return bp_note_lan_not_paired(why, why_cap, cmd);
+    }
     /* Tier gates (docs/design/policy-commands.md): a locked LAN keeps T2/T3 for the cloud and
        USB, and a cloud tunnel never goes above what the server allowed its user. */
     if (tier >= CMD_TIER_T2 && ctx->src == POLICY_SRC_LAN && !ctx->usb_link &&

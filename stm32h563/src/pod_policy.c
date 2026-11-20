@@ -48,7 +48,10 @@ typedef struct {
     uint8_t  bridge_pinned;   /* 1: bridge_mac/bridge_pub hold a bridge whose identity was verified */
     uint8_t  pad;
     uint8_t  bridge_pub[32];
-    uint8_t  reserved[8];
+    /* Firmware 4.0.1+, in the first reserved byte (0 in older records and after older firmware
+       saves: pairing on, the stricter meaning): */
+    uint8_t  lan_pairing_off; /* 1: LAN computers need no pairing (lan_clients.h) */
+    uint8_t  reserved[7];
 } pod_policy_rec2_t;
 _Static_assert(sizeof(pod_policy_rec2_t) == 64, "policy record v2 layout");
 
@@ -75,6 +78,9 @@ static pod_policy_rec_t s_rec = { .magic = POD_POLICY_RECORD_MAGIC, .sig = FW_SI
    before asking again. */
 static char s_why[112];   /* the longest, a catalog message with a setting name, is about 90 */
 
+/* Kept here, not in s_rec: it lives in the version 2 record only. */
+static uint8_t s_lan_pairing_off;
+
 __attribute__((weak)) void pod_policy_on_lan_change(pod_lan_policy_t now) { (void)now; }
 __attribute__((weak)) void pod_policy_on_usb_net_change(bool on) { (void)on; }
 __attribute__((weak)) void pod_policy_on_https_only_change(bool on) { (void)on; }
@@ -88,6 +94,7 @@ void pod_policy_load(void) {
     bool h2 = ab_store_load_version(&k_store2, 2, &r2, sizeof(r2), &b2) == 0 &&
               r2.v1.magic == POD_POLICY_RECORD_MAGIC;
     if (h2 && (!h1 || b2 < b1)) { r = r2.v1; h1 = true; }   /* the newer of the two */
+    s_lan_pairing_off = h2 && r2.lan_pairing_off == 1 ? 1 : 0;   /* anything else: pairing on */
     if (h1) {
         /* A value from newer firmware this one does not know: take the strictest known one
            rather than silently opening up. */
@@ -107,9 +114,9 @@ void pod_policy_load(void) {
     fw_sign_set_floor(s_rec.rollback_floor);
     log_set_level(log_level_from_stored(s_rec.log_level));
     char fl[16];
-    log_printf("[policy] signatures %s, LAN %s, USB network %s, HTTPS-only %s, SCPI %s, floor %s, log %s\n",
+    log_printf("[policy] signatures %s, LAN %s, pairing %s, USB network %s, HTTPS-only %s, SCPI %s, floor %s, log %s\n",
            fw_sign_policy_name((fw_sig_policy_t)s_rec.sig), pod_policy_lan_name((pod_lan_policy_t)s_rec.lan),
-           s_rec.usb_net_off ? "off" : "on", s_rec.lan_plain ? "off" : "on", s_rec.scpi_on ? "on" : "off",
+           s_lan_pairing_off ? "off" : "on", s_rec.usb_net_off ? "off" : "on", s_rec.lan_plain ? "off" : "on", s_rec.scpi_on ? "on" : "off",
            s_rec.rollback_floor ? fw_sign_release_str(s_rec.rollback_floor, fl, sizeof(fl)) : "none",
            log_level_name(log_level()));
 }
@@ -125,6 +132,7 @@ static const char *save_all(const pod_policy_rec_t *r, bool pinned, const uint8_
     r2.v1 = *r;
     /* Older firmware reads HTTPS-only from its own byte: keep it in step with lan_plain. */
     r2.v1.https_only = r2.v1.lan_plain ? 0 : 1;
+    r2.lan_pairing_off = s_lan_pairing_off;
     if (pinned) {
         r2.bridge_pinned = 1;
         memcpy(r2.bridge_mac, mac, 6);
@@ -181,6 +189,23 @@ const char *pod_policy_set_lan(pod_lan_policy_t p, policy_src_t src) {
     log_printf("[policy] LAN now %s (from %s)\n", pod_policy_lan_name(p),
            src == POLICY_SRC_USB ? "USB" : "cloud");
     pod_policy_on_lan_change(p);
+    return NULL;
+}
+
+bool pod_policy_lan_pairing(void) { return s_lan_pairing_off == 0; }
+
+const char *pod_policy_set_lan_pairing(bool on, policy_src_t src, bool usb_link) {
+    /* Who may drive the pod from the LAN is decided by its USB cable or its cloud account, never
+       from the LAN itself: the USB link counts as the cable. */
+    if (src == POLICY_SRC_LAN && !usb_link)
+        return bp_note_policy_not_from_lan(s_why, sizeof(s_why), "lan_pairing");
+    if (on == pod_policy_lan_pairing()) return NULL;
+    uint8_t was = s_lan_pairing_off;
+    s_lan_pairing_off = on ? 0 : 1;
+    const char *why = save(&s_rec);
+    if (why) { s_lan_pairing_off = was; return why; }
+    log_printf("[policy] LAN pairing now %s (from %s)\n", on ? "on" : "off",
+               src == POLICY_SRC_USB ? "USB" : src == POLICY_SRC_CLOUD ? "cloud" : "the USB link");
     return NULL;
 }
 

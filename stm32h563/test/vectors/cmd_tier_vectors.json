@@ -44,6 +44,7 @@
     "cloud_ca": "T0",
     "cloud_proxy": "T0",
     "lan_tls": "T0",
+    "lan_clients": "T0",
     "generate": "T1",
     "measure": "T1",
     "load": "T1",
@@ -310,6 +311,14 @@
     },
     {
       "line": "{\"cmd\":\"lan_tls\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\"}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\",\"offset\":12}",
       "tier": "T0"
     },
     {
@@ -677,6 +686,26 @@
     },
     {
       "line": "{\"cmd\":\"usb_host\",\"enabled\":true,\"port\":\"usb_c\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\",\"add\":\"ci-runner-1\",\"spki_sha256\":\"abababababababababababababababababababababababababababababababab\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\",\"remove\":\"ci-runner-1\"}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\",\"clear\":true}",
+      "tier": "T2"
+    },
+    {
+      "line": "{\"cmd\":\"lan_clients\",\"clear\":false}",
+      "tier": "T0"
+    },
+    {
+      "line": "{\"cmd\":\"lan_policy\",\"pairing\":false}",
       "tier": "T2"
     }
   ]

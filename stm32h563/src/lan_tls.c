@@ -4,6 +4,7 @@
  */
 #include "lan_tls.h"
 #include "lan_tls_pem.h"
+#include "lan_clients.h"
 #include "config_store.h"
 #include "device_identity.h"
 #include "net_server.h"
@@ -36,10 +37,24 @@ typedef struct {
     uint8_t  reserved;
     uint16_t key_len;     /* key PEM bytes, including its NUL */
     uint16_t cert_len;    /* certificate PEM bytes, including its NUL */
-    uint16_t reserved2;
-} rec_hdr_t;              /* followed by the key PEM, then the certificate PEM */
+    uint16_t clients_len; /* version 2: the paired computers' bytes (lan_clients_pack); version 1: 0 */
+} rec_hdr_t;              /* followed by the key PEM, the certificate PEM, then (version 2) the
+                             paired computers */
 
+/* Version 2 (firmware 4.0.1+) adds the paired computers (lan_clients.h). Every save writes it and
+   then a version 1 copy (the same key and certificate, no computers) as the newest record, so
+   firmware 4.0.0, which reads only the newest record and only version 1, keeps the pod's
+   certificate after a rollback; it forgets the paired computers. Whatever older firmware saves
+   goes into the older slot, which holds the version 2 record: from then on there is none, and
+   this firmware starts from the version 1 record with no paired computers. */
 static const ab_store_t k_store = {
+    .tag = "tls",
+    .slot_off = { LAN_TLS_SLOT_A_OFFSET, LAN_TLS_SLOT_B_OFFSET },
+    .magic = LAN_TLS_RECORD_MAGIC,
+    .version = 2,
+    .max_len = LAN_TLS_RECORD_MAX,
+};
+static const ab_store_t k_store_v1 = {
     .tag = "tls",
     .slot_off = { LAN_TLS_SLOT_A_OFFSET, LAN_TLS_SLOT_B_OFFSET },
     .magic = LAN_TLS_RECORD_MAGIC,
@@ -58,6 +73,10 @@ typedef struct {
 static cfg_slot_t        s_cur;                    /* new connections get this one */
 static cfg_slot_t        s_retired[RETIRED_MAX];   /* replaced, freed when refs reach 0 */
 static volatile uint32_t s_gen;
+
+/* The paired computers (heap, from lan_tls_init). Changed on the net task only (the jobs below);
+   read from any task inside a critical section. */
+static lan_clients_t    *s_clients;
 
 static lan_tls_info_t    s_info;
 static volatile uint32_t s_info_seq;               /* odd while s_info is being written */
@@ -184,16 +203,88 @@ static void rec_free(uint8_t *rec)
     vPortFree(rec);
 }
 
-static size_t rec_build(uint8_t *rec, uint8_t origin, const char *key, size_t key_len,
-                        const char *cert, size_t cert_len)
+/* How many paired computers fit next to a key and certificate of these sizes. */
+static uint8_t clients_cap(size_t key_len, size_t cert_len)
 {
-    rec_hdr_t h = { .origin = origin, .key_len = (uint16_t)key_len, .cert_len = (uint16_t)cert_len };
-    size_t n = sizeof(h) + key_len + cert_len;
+    size_t used = sizeof(rec_hdr_t) + key_len + cert_len + 1u;
+    if (used >= LAN_TLS_RECORD_MAX) return 0;
+    size_t n = (LAN_TLS_RECORD_MAX - used) / sizeof(lan_client_t);
+    return (uint8_t)(n > LAN_CLIENTS_MAX ? LAN_CLIENTS_MAX : n);
+}
+
+/* A version 2 record: key, certificate and the paired computers `cl` (NULL = none). 0 when it
+   does not fit. */
+static size_t rec_build(uint8_t *rec, uint8_t origin, const char *key, size_t key_len,
+                        const char *cert, size_t cert_len, const lan_clients_t *cl)
+{
+    size_t cn = lan_clients_packed_size(cl ? cl->n : 0);
+    rec_hdr_t h = { .origin = origin, .key_len = (uint16_t)key_len, .cert_len = (uint16_t)cert_len,
+                    .clients_len = (uint16_t)cn };
+    size_t n = sizeof(h) + key_len + cert_len + cn;
     if (n > LAN_TLS_RECORD_MAX) return 0;
     memcpy(rec, &h, sizeof(h));
     memcpy(rec + sizeof(h), key, key_len);
     memcpy(rec + sizeof(h) + key_len, cert, cert_len);
+    uint8_t *cp = rec + sizeof(h) + key_len + cert_len;
+    if (cl) lan_clients_pack(cl, cp, cn);
+    else cp[0] = 0;
     return n;
+}
+
+/* The parts of a stored record (version 1 or 2). NULL = fine. */
+typedef struct {
+    rec_hdr_t   h;
+    const char *key;
+    const char *cert;
+    const uint8_t *clients;   /* NULL in a version 1 record */
+} rec_view_t;
+
+static const char *rec_parse(const uint8_t *rec, size_t n, bool v2, rec_view_t *v)
+{
+    if (n < sizeof(v->h)) return "the stored record is damaged";
+    memcpy(&v->h, rec, sizeof(v->h));
+    size_t cn = v2 ? v->h.clients_len : 0;
+    if (!v2) v->h.clients_len = 0;
+    if (sizeof(v->h) + (size_t)v->h.key_len + v->h.cert_len + cn != n || !v->h.key_len || !v->h.cert_len ||
+        (v2 && cn < 1))
+        return "the stored record is damaged";
+    v->key = (const char *)rec + sizeof(v->h);
+    v->cert = v->key + v->h.key_len;
+    v->clients = v2 ? (const uint8_t *)v->cert + v->h.cert_len : NULL;
+    if (v->key[v->h.key_len - 1] != '\0' || v->cert[v->h.cert_len - 1] != '\0') return "the stored record is damaged";
+    return NULL;
+}
+
+/* Store rec (a version 2 record of n bytes): version 2, then the version 1 copy (net task). rec's
+   header is changed for the copy and put back. 0 = saved. */
+static int rec_save(uint8_t *rec, size_t n)
+{
+    if (ab_store_save(&k_store, rec, n) != 0) return -1;
+    rec_hdr_t h, h1;
+    memcpy(&h, rec, sizeof(h));
+    h1 = h;
+    h1.clients_len = 0;
+    memcpy(rec, &h1, sizeof(h1));
+    int rc = ab_store_save(&k_store_v1, rec, sizeof(h) + (size_t)h.key_len + h.cert_len);
+    memcpy(rec, &h, sizeof(h));
+    if (rc != 0) log_printf("[tls] could not write the copy for older firmware\n");
+    return 0;   /* the version 2 record is what this firmware needs */
+}
+
+/* Load the stored record into rec: version 2 when there is one, else version 1 (*v2 false). */
+static int rec_load(uint8_t *rec, size_t *n, bool *v2)
+{
+    if (ab_store_load_var_version(&k_store, 2, rec, LAN_TLS_RECORD_MAX, n, NULL) == 0) { *v2 = true; return 0; }
+    *v2 = false;
+    return ab_store_load_var(&k_store_v1, rec, LAN_TLS_RECORD_MAX, n);
+}
+
+/* Replace the paired computers in RAM (net task). */
+static void clients_set(const lan_clients_t *cl)
+{
+    taskENTER_CRITICAL();
+    *s_clients = *cl;
+    taskEXIT_CRITICAL();
 }
 
 /* Make cfg the listener's configuration; the old one retires. */
@@ -216,26 +307,44 @@ static void cfg_swap(struct altcp_tls_config *cfg)
 }
 
 /* Use a stored record (rec, n bytes): build a configuration and publish its info. */
-static const char *apply_record(const uint8_t *rec, size_t n)
+static const char *apply_record(const uint8_t *rec, size_t n, bool v2)
 {
-    rec_hdr_t h;
-    if (n < sizeof(h)) return "the stored record is damaged";
-    memcpy(&h, rec, sizeof(h));
-    if (sizeof(h) + (size_t)h.key_len + h.cert_len != n || !h.key_len || !h.cert_len)
+    rec_view_t v;
+    const char *bad = rec_parse(rec, n, v2, &v);
+    if (bad) return bad;
+    rec_hdr_t h = v.h;
+    const char *key = v.key, *cert = v.cert;
+    lan_clients_t *cl = pvPortMalloc(sizeof(*cl));
+    if (!cl) return "out of memory";
+    lan_clients_init(cl, clients_cap(h.key_len, h.cert_len));
+    if (v.clients && !lan_clients_unpack(cl, v.clients, h.clients_len)) {
+        vPortFree(cl);
         return "the stored record is damaged";
-    const char *key = (const char *)rec + sizeof(h);
-    const char *cert = key + h.key_len;
-    if (key[h.key_len - 1] != '\0' || cert[h.cert_len - 1] != '\0') return "the stored record is damaged";
+    }
 
     lan_tls_info_t in;
     const char *why = check_pair(key, h.key_len, cert, h.cert_len, h.origin, &in);
-    if (why) return why;
-    struct altcp_tls_config *cfg = altcp_tls_create_config_server_privkey_cert(
-        (const u8_t *)key, h.key_len, NULL, 0, (const u8_t *)cert, h.cert_len);
-    if (!cfg) return "out of memory for the TLS configuration";
-    cfg_swap(cfg);
-    info_publish(&in);
-    return NULL;
+    struct altcp_tls_config *cfg = NULL;
+    if (!why) {
+        cfg = altcp_tls_create_config_server_privkey_cert(
+            (const u8_t *)key, h.key_len, NULL, 0, (const u8_t *)cert, h.cert_len);
+        if (!cfg) why = "out of memory for the TLS configuration";
+    }
+    if (!why) {
+        cfg_swap(cfg);
+        info_publish(&in);
+        clients_set(cl);
+    }
+    vPortFree(cl);
+    return why;
+}
+
+/* A copy of the paired computers as they are now (net task: no other writer). */
+static void clients_copy(lan_clients_t *out)
+{
+    taskENTER_CRITICAL();
+    *out = *s_clients;
+    taskEXIT_CRITICAL();
 }
 
 /* Generate a P-256 key and a self-signed certificate into rec. Returns its length, 0 on error. */
@@ -289,7 +398,7 @@ static size_t generate(uint8_t *rec)
     if (mbedtls_x509write_crt_pem(&w, (unsigned char *)crt_pem, CRT_PEM_MAX, mbedtls_ctr_drbg_random, &r.drbg) != 0)
         goto out;
     if (mbedtls_pk_write_key_pem(&pk, (unsigned char *)key_pem, KEY_PEM_MAX) != 0) goto out;
-    n = rec_build(rec, ORIGIN_GENERATED, key_pem, strlen(key_pem) + 1, crt_pem, strlen(crt_pem) + 1);
+    n = rec_build(rec, ORIGIN_GENERATED, key_pem, strlen(key_pem) + 1, crt_pem, strlen(crt_pem) + 1, s_clients);
     log_printf("[tls] generated an EC P-256 key and a certificate for %s in %lu ms\n", name,
                (unsigned long)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
 out:
@@ -315,10 +424,10 @@ static const char *regenerate_here(void)
     uint8_t *rec = rec_alloc();
     if (!rec) return "out of memory";
     const char *why = NULL;
-    size_t n = generate(rec);
+    size_t n = generate(rec);   /* keeps the paired computers (s_clients) */
     if (!n) why = "could not generate a key and certificate";
-    else if (ab_store_save(&k_store, rec, n) != 0) why = "could not save the certificate";
-    else why = apply_record(rec, n);
+    else if (rec_save(rec, n) != 0) why = "could not save the certificate";
+    else why = apply_record(rec, n, true);
     rec_free(rec);
     return why;
 }
@@ -329,10 +438,18 @@ void lan_tls_init(void)
 {
     size_t n = 0;
     const char *why = "none stored";
+    if (!s_clients) {
+        s_clients = pvPortMalloc(sizeof(*s_clients));
+        if (!s_clients) { publish_error("out of memory"); return; }
+        lan_clients_init(s_clients, LAN_CLIENTS_MAX);
+    }
     uint8_t *rec = rec_alloc();
+    bool v2 = false;
     if (!rec) why = "out of memory";
-    else if (ab_store_load_var(&k_store, rec, LAN_TLS_RECORD_MAX, &n) == 0) {
-        why = apply_record(rec, n);
+    else if (rec_load(rec, &n, &v2) == 0) {
+        /* Version 1 alone: from firmware 4.0.0 or older, no paired computers yet. The next save
+           writes version 2. */
+        why = apply_record(rec, n, v2);
         if (why) log_printf("[tls] the stored certificate is not usable (%s)\n", why);
     }
     rec_free(rec);
@@ -400,10 +517,13 @@ static void install_job(void *arg)
     j->why = lan_tls_pem_split((const char *)j->pem, j->len, key, KEY_BUF_MAX, &kl, crt, LAN_TLS_UPLOAD_MAX, &cl);
     if (!j->why) j->why = check_pair(key, kl, crt, cl, ORIGIN_USER, NULL);
     if (!j->why && j->store) {
-        size_t n = rec_build(rec, ORIGIN_USER, key, kl, crt, cl);
-        if (!n) j->why = "the key and certificates are too large";
-        else if (ab_store_save(&k_store, rec, n) != 0) j->why = "could not save the certificate";
-        else j->why = apply_record(rec, n);
+        size_t n = 0;
+        if (s_clients->n > clients_cap(kl, cl))
+            j->why = "the certificate leaves too little room for the paired computers: remove some first";
+        else if (!(n = rec_build(rec, ORIGIN_USER, key, kl, crt, cl, s_clients)))
+            j->why = "the key and certificates are too large";
+        if (!j->why && rec_save(rec, n) != 0) j->why = "could not save the certificate";
+        else if (!j->why) j->why = apply_record(rec, n, true);
         if (!j->why) log_printf("[tls] installed a user certificate\n");
     }
     memset(mem, 0, KEY_BUF_MAX + LAN_TLS_UPLOAD_MAX + LAN_TLS_RECORD_MAX);
@@ -483,4 +603,106 @@ int ota_install_staged_config(ota_target_t t, uint32_t size, char *why, size_t c
     drop_staged(buf, size);
     if (bad) { snprintf(why, cap, "lan_tls: %s", bad); return -1; }
     return 0;
+}
+
+/* ---- paired computers (lan_clients.h) ------------------------------------------------------ */
+
+bool lan_tls_client_known(const uint8_t fp[LAN_CLIENT_FP_LEN])
+{
+    if (!s_clients) return false;
+    taskENTER_CRITICAL();
+    bool known = lan_clients_find(s_clients, fp) >= 0;
+    taskEXIT_CRITICAL();
+    return known;
+}
+
+void lan_tls_clients_get(lan_clients_t *out)
+{
+    if (!s_clients) { lan_clients_init(out, 0); return; }
+    taskENTER_CRITICAL();
+    *out = *s_clients;
+    taskEXIT_CRITICAL();
+}
+
+typedef enum { CJ_ADD, CJ_REMOVE, CJ_CLEAR } cj_op_t;
+typedef struct {
+    cj_op_t     op;
+    uint8_t     fp[LAN_CLIENT_FP_LEN];
+    const char *text;      /* CJ_ADD: the name; CJ_REMOVE: the name or fingerprint prefix */
+    int         result;    /* lan_clients_add_t, or how many were removed (-2: ambiguous) */
+    const char *why;
+} cjob_t;
+
+/* Change the list and store it with the certificate (net task). */
+static void clients_job(void *arg)
+{
+    cjob_t *j = arg;
+    uint8_t *rec = rec_alloc();
+    lan_clients_t *cl = pvPortMalloc(sizeof(*cl));
+    size_t n = 0;
+    bool v2 = true;
+    rec_view_t v;
+    if (!rec || !cl) { j->why = "out of memory"; goto out; }
+    if (rec_load(rec, &n, &v2) != 0) { j->why = "the pod has no TLS certificate"; goto out; }
+    if ((j->why = rec_parse(rec, n, v2, &v)) != NULL) goto out;
+    clients_copy(cl);
+    cl->cap = clients_cap(v.h.key_len, v.h.cert_len);
+    bool changed = false;
+    if (j->op == CJ_ADD) {
+        j->result = lan_clients_add(cl, j->fp, j->text);
+        changed = j->result == LAN_CLIENTS_ADDED || j->result == LAN_CLIENTS_RENAMED;
+    } else if (j->op == CJ_REMOVE) {
+        j->result = lan_clients_remove(cl, j->text);
+        changed = j->result > 0;
+    } else {
+        changed = cl->n > 0;
+        lan_clients_clear(cl);
+    }
+    if (!changed) goto out;
+    {
+        /* rec_build writes into a second buffer: the key and certificate are read from rec. */
+        uint8_t *out_rec = rec_alloc();
+        if (!out_rec) { j->why = "out of memory"; goto out; }
+        size_t m = rec_build(out_rec, v.h.origin, v.key, v.h.key_len, v.cert, v.h.cert_len, cl);
+        if (!m) j->why = "the paired computers do not fit";
+        else if (rec_save(out_rec, m) != 0) j->why = "could not save the paired computers";
+        else clients_set(cl);   /* the certificate is the same: the listener keeps its configuration */
+        rec_free(out_rec);
+        if (!j->why)
+            log_printf("[tls] paired computers: %u (%s)\n", (unsigned)cl->n,
+                       j->op == CJ_ADD ? "added" : j->op == CJ_REMOVE ? "removed" : "cleared");
+    }
+out:
+    if (cl) { memset(cl, 0, sizeof(*cl)); vPortFree(cl); }
+    rec_free(rec);
+}
+
+static const char *clients_run(cjob_t *j)
+{
+    if (!s_clients) return "the pod has no TLS certificate";
+    if (!net_call_sync(clients_job, j, 15000)) return "the network task did not answer";
+    return j->why;
+}
+
+const char *lan_tls_clients_add(const uint8_t fp[LAN_CLIENT_FP_LEN], const char *name, lan_clients_add_t *res)
+{
+    cjob_t j = { .op = CJ_ADD, .text = name };
+    memcpy(j.fp, fp, LAN_CLIENT_FP_LEN);
+    const char *why = clients_run(&j);
+    if (res) *res = (lan_clients_add_t)j.result;
+    return why;
+}
+
+const char *lan_tls_clients_remove(const char *what, int *removed)
+{
+    cjob_t j = { .op = CJ_REMOVE, .text = what };
+    const char *why = clients_run(&j);
+    if (removed) *removed = j.result;
+    return why;
+}
+
+const char *lan_tls_clients_clear(void)
+{
+    cjob_t j = { .op = CJ_CLEAR };
+    return clients_run(&j);
 }

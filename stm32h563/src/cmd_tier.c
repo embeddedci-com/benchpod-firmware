@@ -34,10 +34,10 @@ static int writes_sig_policy(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "set", v, sizeof(v)) || (bp_json_get(json, "clear_floor", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
-/* lan_policy */
+/* lan_policy (set, pairing) */
 static int writes_set(const char *json) {
     char v[16] = {0};
-    return bp_json_get(json, "set", v, sizeof(v));
+    return bp_json_get(json, "set", v, sizeof(v)) || bp_json_get(json, "pairing", v, sizeof(v));
 }
 /* usb_network, usb_host */
 static int writes_enabled(const char *json) {
@@ -55,6 +55,12 @@ static int writes_lan_tls(const char *json) {
     return bp_json_get(json, "https_only", v, sizeof(v)) || bp_json_get(json, "scpi", v, sizeof(v)) ||
            (bp_json_get(json, "regenerate", v, sizeof(v)) && strcmp(v, "true") == 0);
 }
+/* add, remove or clear; a bare one lists */
+static int writes_lan_clients(const char *json) {
+    char v[80] = {0};
+    return bp_json_get(json, "add", v, sizeof(v)) || bp_json_get(json, "remove", v, sizeof(v)) ||
+           (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
+}
 /* an EEPROM write (ID or calibration); a read is T0 */
 static int writes_module(const char *json) {
     char v[16] = {0};
@@ -71,10 +77,10 @@ static int writes_eth(const char *json) {
    here is "unknown cmd" and counts as T3.  The write test is NULL except on the mixed verbs. */
 static const cmd_desc_t k_tiers[] = {
     /* T0: read-only */
-    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY | CMD_F_ANY_CLIENT, CMD_FN(handle_ping), NULL },
-    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_status), NULL },
-    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_diag), NULL },
-    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status), NULL },
+    { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_ping), NULL },
+    { { "status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_status), NULL },
+    { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_diag), NULL },
+    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_UNPAIRED, CMD_FN(handle_cloud_status), NULL },
     { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status), NULL },
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },
@@ -82,7 +88,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "usb_host", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_host), writes_enabled },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
-    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_identity_public), NULL },
+    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_identity_public), NULL },
     { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop), NULL },
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status), NULL },
     { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status), NULL },
@@ -119,7 +125,8 @@ static const cmd_desc_t k_tiers[] = {
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_module), writes_module },
     { { "cloud_ca", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_ca), writes_set_or_clear },
     { { "cloud_proxy", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_proxy), writes_set_or_clear },
-    { { "lan_tls", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_tls), writes_lan_tls },
+    { { "lan_tls", CMD_TIER_T0 }, CMD_F_UNPAIRED, CMD_FN(handle_lan_tls), writes_lan_tls },
+    { { "lan_clients", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_lan_clients), writes_lan_clients },
     /* T1: instrument control */
     { { "generate", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_generate), NULL },
     { { "measure", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_measure), NULL },

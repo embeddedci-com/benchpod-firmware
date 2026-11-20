@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 12
+revision = 13
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -898,3 +898,10 @@ firmware = "next"
 docs = "API.md#la_pins--report-every-la-pin"
 dated = "code"
 note = "la_pins never answers reply_too_large: a reply carries the pins that fit in one cloud reply and next (the first pin left out); from:N continues the listing there, with or without la. A listing that fits is unchanged."
+
+[features.lan_pairing]
+rev = 13
+firmware = "next"
+docs = "API.md#lan_clients--paired-computers"
+dated = "code"
+note = "LAN pairing, on by default and on every pod updated from older firmware: a computer on Ethernet or Wi-Fi gets only ping, status, diag, cloud_status, identity_public and lan_tls (reads) until its TLS client certificate's public key (SHA-256 of the DER SubjectPublicKeyInfo) is on the pod's list; everything else is refused with BP0081 lan_not_paired (args cmd). lan_clients lists (12 a reply, offset), adds (add name, spki_sha256), removes (remove name or 8+ hex digits) and clears, changes over the USB link or the cloud only; BP0082 lan_clients_full (args max). lan_policy pairing true|false (USB, USB link or cloud). status has lan_pairing and lan_paired (null when the connection needs no pairing). Port 8443 asks every client for a certificate (optional). SCPI on the external LAN needs a paired TLS connection. Console: lan-pairing, lan-clients. Rolled back to 4.0.0, the pod keeps its certificate (a version 1 copy of the record is written as the newest) and forgets its paired computers."

@@ -90,6 +90,8 @@ typedef struct {
 #endif
     cloud_caps_t caps;
     lease_local_view_t local_lease;   /* the pod's own lease as the asking connection sees it */
+    int8_t       lan_paired;          /* the asking connection: 1 paired, 0 not, -1 needs none
+                                         (USB, the USB link, the cloud) */
 } status_in_t;
 
 static void status_read(status_in_t *in) {
@@ -202,6 +204,11 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     /* Signed updates (fw_sign.h): the policy, and how many keys the firmware trusts. */
     bp_emit(e, "\"sig_policy\":\"%s\",\"sig_keys\":%u,\"lan_policy\":\"%s\",",
             c->sig_policy, (unsigned)fw_sign_key_count(), c->lan_policy);
+    /* LAN pairing (docs/design/lan-pairing.md): whether Ethernet/Wi-Fi computers must be paired, and
+       whether the asking one is (null: it needs no pairing). Both forms: the CLI and the SDK read it
+       to say "pair this computer" before they try anything else. */
+    bp_emit(e, "\"lan_pairing\":%s,\"lan_paired\":%s,", pod_policy_lan_pairing() ? "true" : "false",
+            in->lan_paired < 0 ? "null" : in->lan_paired ? "true" : "false");
     if (!brief) {
         /* The LAN API over TLS (lan_tls.h): clients pin this certificate's sha256. Full form only:
            the `lan_tls` command has it. */
@@ -261,6 +268,9 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     bp_emit_raw(e, "}}\n");
 }
 
+bool net_conn_on_usb(int conn_id);      /* net_server.h (which pulls in lwIP for the host tests) */
+bool net_conn_lan_paired(int conn_id);
+
 void handle_status(int conn_id, const char *json) {
     (void)json;
     /* The full form's worst case is over 2 KB (test_ch_status.c); the hw task has ~7 KB of stack
@@ -270,6 +280,8 @@ void handle_status(int conn_id, const char *json) {
     status_in_t in;
     status_read(&in);
     lease_local_get(conn_id, HAL_GetTick(), &in.local_lease);
+    in.lan_paired = (command_handler_policy_src(conn_id) != POLICY_SRC_LAN || net_conn_on_usb(conn_id) ||
+                     !pod_policy_lan_pairing()) ? -1 : net_conn_lan_paired(conn_id) ? 1 : 0;
     bp_emit_t e;
     /* The cloud command channel always gets the short form (see the top of this file). */
     if (conn_id != CH_CLOUD_CONN) {
