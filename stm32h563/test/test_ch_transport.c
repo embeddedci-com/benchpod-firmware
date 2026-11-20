@@ -54,6 +54,9 @@ bool pod_policy_scpi(void) { return g_scpi; }
 bool pod_policy_https_only(void) { return g_https_only; }
 bool net_conn_on_usb(int c) { return c >= 0 && c < CH_MAX_CONN && g_usb[c]; }
 bool net_conn_on_tls(int c) { return c >= 0 && c < CH_MAX_CONN && g_tls[c]; }
+static bool g_pairing, g_paired[CH_MAX_CONN];
+bool pod_policy_lan_pairing(void) { return g_pairing; }
+bool net_conn_lan_paired(int c) { return c >= 0 && c < CH_MAX_CONN && g_paired[c]; }
 int at_send_data(int conn_id, const uint8_t *buf, size_t len) {
     char t[200];
     snprintf(t, sizeof(t), "%.*s", (int)len, (const char *)buf);
@@ -261,6 +264,36 @@ static void test_proto_gate(void) {
     reset_conn(3);
 }
 
+/* LAN pairing: SCPI on the external LAN needs a paired TLS connection; the USB link and the cloud
+   tunnels do not. The refusal says how, and the connection closes. */
+static void test_scpi_pairing(void) {
+    g_pairing = true;
+    reset_conn(2); g_closed = -1;
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && strncmp(g_log[0], "tx2:SCPI on the LAN needs a paired", 34) == 0 && g_closed == 2,
+          "unpaired LAN SCPI: %d %s", g_nlog, g_nlog ? g_log[0] : "-");
+    reset_conn(2); g_tls[2] = true;   /* TLS but not paired: refused too */
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && strncmp(g_log[0], "tx2:SCPI on the LAN", 19) == 0, "unpaired TLS SCPI: %s", g_log[0]);
+    reset_conn(2); g_paired[2] = true;
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "scpi2:*IDN?") == 0, "paired TLS SCPI: %s", g_log[0]);
+    g_tls[2] = false; g_paired[2] = false;
+    reset_conn(2); g_usb[2] = true;
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "scpi2:*IDN?") == 0, "USB link SCPI: %s", g_log[0]);
+    g_usb[2] = false;
+    reset_conn(7);
+    feed(7, "*IDN?\n");
+    CHECK(g_nlog == 1 && strcmp(g_log[0], "scpi7:*IDN?") == 0, "tunnel SCPI: %s", g_log[0]);
+    g_scpi = false;                   /* off wins: the old text */
+    reset_conn(2);
+    feed(2, "*IDN?\n");
+    CHECK(g_nlog == 1 && strncmp(g_log[0], "tx2:SCPI is off", 15) == 0, "off and unpaired: %s", g_log[0]);
+    g_scpi = true; g_pairing = false;
+    reset_conn(2); reset_conn(7);
+}
+
 int main(void) {
     test_lines();
     test_detection();
@@ -271,6 +304,7 @@ int main(void) {
     test_pseudo_conn();
     test_teardown_drops_partial();
     test_proto_gate();
+    test_scpi_pairing();
     if (fails) { printf("test_ch_transport: %d FAILED\n", fails); return 1; }
     printf("test_ch_transport: all passed\n");
     return 0;

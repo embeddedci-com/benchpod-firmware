@@ -110,6 +110,58 @@ static void test_locked_lan(void) {
     }
 }
 
+/* LAN pairing: an unpaired LAN computer gets only the CMD_F_UNPAIRED reads; a paired one gets
+   what the LAN policy gives; USB, the USB link and the cloud never need pairing. */
+static void test_pairing(void) {
+    cmd_gate_ctx_t c = open_ctx(POLICY_SRC_LAN);
+    c.lan_pairing = true;
+    static const char *const allowed[] = {
+        "{\"cmd\":\"ping\"}", "{\"cmd\":\"status\"}", "{\"cmd\":\"diag\"}",
+        "{\"cmd\":\"identity_public\"}", "{\"cmd\":\"lan_tls\"}",
+    };
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
+        CHECK(gate(allowed[i], &c) == NULL, "unpaired %s refused: %s", allowed[i], s_why);
+    static const char *const refused[] = {
+        "{\"cmd\":\"generate\",\"wave\":\"sine\"}", "{\"cmd\":\"la_capture\"}",
+        "{\"cmd\":\"identity_pop\",\"nonce\":\"x\"}", "{\"cmd\":\"wiring_get\",\"name\":\"x\"}",
+        "{\"cmd\":\"ota_begin\"}", "{\"cmd\":\"lan_clients\"}", "{\"cmd\":\"gpio_read\"}",
+        "{\"cmd\":\"no_such_verb\"}", "{\"cmd\":\"lease_acquire\"}",
+    };
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+        CHECK(code_is(gate(refused[i], &c), BP_E_LAN_NOT_PAIRED), "unpaired %s: %s", refused[i], s_why);
+    CHECK(coded(gate("{\"cmd\":\"generate\"}", &c), BP_E_LAN_NOT_PAIRED, "generate"), "names the verb");
+
+    /* paired: the LAN policy decides (open: everything; locked: no T2/T3) */
+    c.lan_paired = true;
+    CHECK(gate("{\"cmd\":\"generate\"}", &c) == NULL, "paired T1: %s", s_why);
+    CHECK(gate("{\"cmd\":\"cloud_set\",\"host\":\"x\"}", &c) == NULL, "paired T2 on an open LAN: %s", s_why);
+    CHECK(gate("{\"cmd\":\"ota_begin\"}", &c) == NULL, "paired T3 on an open LAN: %s", s_why);
+    c.lan_policy = POD_LAN_LOCKED;
+    CHECK(code_is(gate("{\"cmd\":\"ota_begin\"}", &c), BP_E_LAN_LOCKED), "paired, locked LAN: %s", s_why);
+
+    /* pairing off: the old behavior */
+    cmd_gate_ctx_t o = open_ctx(POLICY_SRC_LAN);
+    CHECK(gate("{\"cmd\":\"generate\"}", &o) == NULL, "pairing off refused: %s", s_why);
+
+    /* never for USB, the USB link or the cloud */
+    static const policy_src_t srcs[] = { POLICY_SRC_USB, POLICY_SRC_CLOUD };
+    for (size_t i = 0; i < 2; i++) {
+        cmd_gate_ctx_t x = open_ctx(srcs[i]);
+        x.lan_pairing = true;
+        CHECK(gate("{\"cmd\":\"ota_begin\"}", &x) == NULL, "src %d needs pairing: %s", (int)srcs[i], s_why);
+    }
+    cmd_gate_ctx_t u = open_ctx(POLICY_SRC_LAN);
+    u.lan_pairing = true;
+    u.usb_link = true;
+    CHECK(gate("{\"cmd\":\"lan_clients\",\"add\":\"x\"}", &u) == NULL, "USB link needs pairing: %s", s_why);
+
+    /* pairing comes before the lease: an unpaired computer hears how to pair, not who holds it */
+    c.lan_paired = false;
+    c.lan_policy = POD_LAN_OPEN;
+    c.lease_active = true;
+    CHECK(code_is(gate("{\"cmd\":\"generate\"}", &c), BP_E_LAN_NOT_PAIRED), "order: %s", s_why);
+}
+
 static void test_lease(void) {
     cmd_gate_ctx_t c = open_ctx(POLICY_SRC_LAN);
     c.lease_active = true;
@@ -329,6 +381,7 @@ static void test_client_api(void) {
 int main(void) {
     test_open_pod_passes();
     test_locked_lan();
+    test_pairing();
     test_lease();
     test_tunnel_max_tier();
     test_device_gate();

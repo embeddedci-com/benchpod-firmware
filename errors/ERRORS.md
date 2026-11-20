@@ -86,3 +86,5 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0078 | `usb_host_no_crystal` | usb | 4.0.0 | USB host mode needs the pod's crystal clock, which is not running |
 | BP0079 | `usb_host_other_port` | usb | 4.0.0 | USB host mode is already running on {port} |
 | BP0080 | `dac_pinout_mismatch` | analog | 4.0.0 | {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts |
+| BP0081 | `lan_not_paired` | policy | next | This computer is not paired with the pod: {cmd} needs pairing over USB or from the cloud |
+| BP0082 | `lan_clients_full` | policy | next | The pod already has {max} paired computers |

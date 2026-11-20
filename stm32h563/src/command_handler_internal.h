@@ -381,6 +381,7 @@ void handle_lan_policy(int conn_id, const char *json);
 void handle_usb_network(int conn_id, const char *json);
 void handle_log_level(int conn_id, const char *json);
 void handle_lan_tls(int conn_id, const char *json);
+void handle_lan_clients(int conn_id, const char *json);
 void handle_cloud_ca(int conn_id, const char *json);
 void handle_cloud_proxy(int conn_id, const char *json);
 

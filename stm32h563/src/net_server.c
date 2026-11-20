@@ -48,6 +48,8 @@
 #include "lwip/altcp_tls.h"
 #include "altcp_tls_bp/altcp_tls_bp.h"
 #include "lan_tls.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/sha256.h"
 #include "bp_features.h"   /* BP_API: the mDNS TXT api= */
 #include "lwip/timeouts.h"
 
@@ -98,6 +100,11 @@ _Static_assert((size_t)HW_WORK_QUEUE_DEPTH * (size_t)HW_WORK_DATA_MAX >= TCP_WND
 static struct altcp_pcb *conn_pcb[NET_MAX_CONN];
 /* The TLS configuration a connection holds (lan_tls_ref), NULL for plaintext. */
 static struct altcp_tls_config *s_conn_tls[NET_MAX_CONN];
+/* The TLS client's key hash (lan_clients.h), set by srv_recv on the first data: application data
+   only arrives after the handshake. 0 = not looked at yet, 1 = no client certificate, 2 = s_conn_fp
+   holds it. Written by the net task before any of the connection's bytes reach the worker. */
+static volatile uint8_t s_conn_fp_state[NET_MAX_CONN];
+static uint8_t s_conn_fp[NET_MAX_CONN][LAN_CLIENT_FP_LEN];
 static bool s_conn_refused[NET_MAX_CONN];   /* srv_recv refused data (TLS: kick when room) */
 static volatile int8_t s_https_req = -1;    /* -1 none, else the new HTTPS-only setting */
 static bool s_scpi;                         /* the net task's copy (pod_policy_scpi) */
@@ -380,6 +387,22 @@ static void conn_detach(int id)
     conn_pcb[id] = NULL;
     s_conn_refused[id] = false;
     if (s_conn_tls[id]) { lan_tls_unref(s_conn_tls[id]); s_conn_tls[id] = NULL; }
+    s_conn_fp_state[id] = 0;
+}
+
+/* The client certificate's public key hash for TLS connection id (net task, after the handshake). */
+static void conn_note_client_key(int id, struct altcp_pcb *pcb)
+{
+    if (s_conn_fp_state[id] || !s_conn_tls[id]) return;
+    mbedtls_ssl_context *ssl = altcp_tls_context(pcb);
+    const mbedtls_x509_crt *peer = ssl ? mbedtls_ssl_get_peer_cert(ssl) : NULL;
+    if (peer && peer->pk_raw.p && peer->pk_raw.len) {
+        mbedtls_sha256(peer->pk_raw.p, peer->pk_raw.len, s_conn_fp[id], 0);
+        __asm volatile("" ::: "memory");
+        s_conn_fp_state[id] = 2;
+    } else {
+        s_conn_fp_state[id] = 1;
+    }
 }
 
 static void conn_unhook(struct altcp_pcb *pcb)
@@ -398,6 +421,7 @@ static err_t srv_recv(void *arg, struct altcp_pcb *tpcb, struct pbuf *p, err_t e
         return ERR_OK;
     }
     if (err != ERR_OK) { pbuf_free(p); return err; }
+    if (id >= 0 && id < NET_MAX_CONN) conn_note_client_key(id, tpcb);
 #if defined(BENCHPOD_EMI_TEST)
     if (id >= 0 && id < NET_MAX_CONN && s_http[id]) { http_recv(id, tpcb, p); return ERR_OK; }
 #endif
@@ -520,6 +544,7 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     s_conn_usb[id] = usb;
     s_conn_refused[id] = false;
     s_conn_tls[id] = tls;
+    s_conn_fp_state[id] = 0;
     if (tls) lan_tls_ref(tls);
     altcp_setprio(newpcb, TCP_PRIO_MIN);
     /* a dead idle client frees its slot (~50 s) */
@@ -1088,6 +1113,20 @@ bool net_conn_on_usb(int conn_id)
 bool net_conn_on_tls(int conn_id)
 {
     return conn_id >= 0 && conn_id < NET_MAX_CONN && conn_pcb[conn_id] && s_conn_tls[conn_id];
+}
+
+bool net_conn_lan_paired(int conn_id)
+{
+    if (!net_conn_on_tls(conn_id) || s_conn_fp_state[conn_id] != 2) return false;
+    return lan_tls_client_known(s_conn_fp[conn_id]);
+}
+
+int net_conn_client_key(int conn_id, uint8_t fp[LAN_CLIENT_FP_LEN])
+{
+    if (!net_conn_on_tls(conn_id)) return -1;
+    if (s_conn_fp_state[conn_id] != 2) return 0;
+    memcpy(fp, s_conn_fp[conn_id], LAN_CLIENT_FP_LEN);
+    return 1;
 }
 
 int net_tls_sessions(void) { return tls_sessions(); }

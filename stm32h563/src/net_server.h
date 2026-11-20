@@ -19,6 +19,10 @@ const char *net_mac_str(void);
 void        net_mac_fmt(char out[18]);
 /* The :8080 connection conn_id came in on the USB network adapter (not Ethernet or Wi-Fi). */
 bool        net_conn_on_usb(int conn_id);
+/* A TLS connection whose client key is on the pod's list of paired computers (lan_clients.h). */
+bool        net_conn_lan_paired(int conn_id);
+/* The TLS client's key hash: 1 = in fp, 0 = it sent no certificate, -1 = not a TLS connection. */
+int         net_conn_client_key(int conn_id, uint8_t fp[32]);
 /* The LAN connection conn_id is a TLS session (:8443, lan_tls.h). */
 bool        net_conn_on_tls(int conn_id);
 /* LAN TLS sessions open now. */

@@ -212,7 +212,7 @@ static void test_flags_match_the_old_lists(void) {
     EXPECT_SET(CMD_F_NO_HW, "ping", "status", "diag", "cloud_set", "cloud_status", "cloud_clear",
                "wifi_set", "wifi_status", "wifi_scan", "wifi_clear", "eth", "speedtest",
                "la_voltage", "usb_cc", "nrst", "target_power", "target_status", "power_status",
-               "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits",
+               "power_profile", "identity_public", "identity_pop", "identity_wipe", "dac_limits", "lan_clients",
                "can_start", "can_write", "can_read", "can_status", "can_term", "can_respond",
                "can_stop", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
                "lease_renew", "lease_release", "usb_reattach", "wifi_bridge");
@@ -228,10 +228,11 @@ static void test_flags_match_the_old_lists(void) {
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
     EXPECT_SET(CMD_F_LEASE, "lease_acquire", "lease_renew", "lease_release");
     EXPECT_SET(CMD_F_ADC_SAMPLES, "capture_dual");
+    EXPECT_SET(CMD_F_UNPAIRED, "ping", "status", "diag", "identity_public", "lan_tls");
     /* the mixed verbs: the rows with a write test */
     static const char *const mixed[] = { "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy",
                                          "usb_network", "cloud_ca", "cloud_proxy", "lan_tls", "module",
-                                         "usb_host" };
+                                         "usb_host", "lan_clients" };
     size_t rows = 0;
     const cmd_desc_t *t = cmd_table_rows(&rows);
     for (size_t i = 0; i < rows; i++) {

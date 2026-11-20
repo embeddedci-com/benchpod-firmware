@@ -18,12 +18,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lan_clients.h"
+
 #define LAN_TLS_PORT              8443
 #define LAN_TLS_SLOT_A_OFFSET     0x1E2000u   /* bank2 sector 113 */
 #define LAN_TLS_SLOT_B_OFFSET     0x1E0000u   /* bank2 sector 112 */
 #define LAN_TLS_RECORD_MAGIC      0x534C5442u /* "BTLS" */
-#define LAN_TLS_RECORD_MAX        7680u       /* header + key PEM + certificate PEM(s) */
-#define LAN_TLS_UPLOAD_MAX        (LAN_TLS_RECORD_MAX - 16u)
+#define LAN_TLS_RECORD_MAX        8176u       /* header + key PEM + certificate PEM(s) + paired
+                                                 computers: one 8 KB sector less its header */
+#define LAN_TLS_UPLOAD_MAX        7664u       /* as in firmware 4.0.0: a bundle that large leaves
+                                                 room for 8 paired computers */
 
 /* What lan_tls reports about the certificate in use (the JSON lan_tls and status replies). */
 typedef struct {
@@ -67,5 +71,18 @@ const char *lan_tls_check(const uint8_t *pem, size_t len);
 /* The upload path (OTA target "tls", worker task): ota_end checks the staged bundle with
    lan_tls_validate_staged; ota_commit installs it through ota_install_staged_config (ota.h). */
 int lan_tls_validate_staged(uint32_t size, char *why, size_t cap);
+
+/* ---- paired computers (lan_clients.h) -----------------------------------------------------
+   Stored in the certificate's record, so they survive regenerating or replacing the certificate.
+   The key hash is the SHA-256 of the client certificate's DER SubjectPublicKeyInfo. */
+
+/* Any task: is this client key paired? */
+bool lan_tls_client_known(const uint8_t fp[LAN_CLIENT_FP_LEN]);
+/* Any task: a copy of the list (the caller's buffer: it is about 1.8 KB). */
+void lan_tls_clients_get(lan_clients_t *out);
+/* Any task. NULL = done (or nothing to change), else why not. *res / *removed say what happened. */
+const char *lan_tls_clients_add(const uint8_t fp[LAN_CLIENT_FP_LEN], const char *name, lan_clients_add_t *res);
+const char *lan_tls_clients_remove(const char *what, int *removed);
+const char *lan_tls_clients_clear(void);
 
 #endif /* LAN_TLS_H */

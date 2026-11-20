@@ -221,6 +221,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  identity                                   the device key's short id and public key\r\n"
         "  usb-network [on|off]                       the USB network adapter\r\n"
         "  lan-policy [open|locked|off]               what Ethernet and Wi-Fi may do\r\n"
+        "  lan-pairing [on|off] | lan-clients [remove <name|key> | clear]   paired computers\r\n"
         "  lan-tls [https-only on|off | scpi on|off | regenerate]   TLS, plaintext :8080, SCPI\r\n"
         "  net-reset                                  forget Wi-Fi, Ethernet back to autonegotiation\r\n"
         "  wifi-set \"<ssid>\" \"<password>\" | wifi-show   set up Wi-Fi, its state\r\n"
@@ -1185,6 +1186,50 @@ static void con_lan_policy(int argc, char **argv, console_out_t out, void *ctx)
     else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
 }
 
+/* lan-pairing [on|off]: must a computer on Ethernet/Wi-Fi be paired (docs/design/lan-pairing.md)? */
+static void con_lan_pairing(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    if (argc >= 2) {
+        if (!strcmp(argv[1], "on") || !strcmp(argv[1], "off"))
+            why = pod_policy_set_lan_pairing(!strcmp(argv[1], "on"), POLICY_SRC_USB, false);
+        else
+            why = "use on or off";
+    }
+    if (why) op(out, ctx, "lan-pairing error %s\r\n", why);
+    else     op(out, ctx, "lan-pairing %s\r\n", pod_policy_lan_pairing() ? "on" : "off");
+}
+
+/* lan-clients [remove <name | 8+ hex digits> | clear]: the paired computers, one line each
+   ("lan-clients <n> of <max>", then "  <name> <spki sha256>"). Pairing itself is JSON
+   (lan_clients add), over the USB link or the cloud: the clients send their own key. */
+static void con_lan_clients(int argc, char **argv, console_out_t out, void *ctx)
+{
+    const char *why = NULL;
+    if (argc >= 3 && !strcmp(argv[1], "remove")) {
+        int removed = 0;
+        why = lan_tls_clients_remove(argv[2], &removed);
+        if (!why && removed == -2) why = "that matches more than one key: give more digits";
+        else if (!why && removed == 0) why = "no paired computer has that name or key";
+    } else if (argc >= 2 && !strcmp(argv[1], "clear")) {
+        why = lan_tls_clients_clear();
+    } else if (argc >= 2) {
+        why = "use remove <name or key> or clear";
+    }
+    if (why) { op(out, ctx, "lan-clients error %s\r\n", why); return; }
+    lan_clients_t *l = pvPortMalloc(sizeof(*l));
+    if (!l) { op(out, ctx, "lan-clients error out of memory\r\n"); return; }
+    lan_tls_clients_get(l);
+    op(out, ctx, "lan-clients %u of %u, pairing %s\r\n", (unsigned)l->n, (unsigned)l->cap,
+       pod_policy_lan_pairing() ? "on" : "off");
+    for (int i = 0; i < l->n; i++) {
+        char fh[2 * LAN_CLIENT_FP_LEN + 1];
+        lan_clients_fp_to_hex(l->c[i].fp, fh);
+        op(out, ctx, "  %s %s\r\n", l->c[i].name, fh);
+    }
+    vPortFree(l);
+}
+
 #if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_wifi_static(int argc, char **argv, console_out_t out, void *ctx)
 {
@@ -1345,6 +1390,8 @@ static const console_cmd_t k_console_cmds[] = {
     { "identity", con_identity },
     { "usb-network", con_usb_network },
     { "lan-policy", con_lan_policy },
+    { "lan-pairing", con_lan_pairing },
+    { "lan-clients", con_lan_clients },
     { "lan-tls", con_lan_tls },
     { "net-reset", con_net_reset },
     { "wifi-set", con_wifi_set },
