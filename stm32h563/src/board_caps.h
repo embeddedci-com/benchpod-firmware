@@ -14,14 +14,18 @@
  * on board_rev_get / board_rev_is_v3 / BOARD_REV_V* anywhere else in src/
  * (test/check_board_rev_gates.py).
  *
- * Every field is false (zero) before board_caps_init() runs, which is how a v2 board ran
+ * Every revision field is false (zero) before board_caps_init() runs, which is how a v2 board ran
  * (board_rev_is_v3() was false before board_rev_init() too), so an early caller gets the most
  * conservative behavior.  board_rev.c already turns any doubt about the straps into
  * BOARD_REV_V3, and board_rev_init() latches the capabilities itself.
  *
- * Not in here: whether the analog front end is fitted, and where (board_variant.h: decided
- * later at boot, from I2C probes after the buses are up), and what the analog module is
- * (module_link.h, from its link pins and EEPROM).  They are not a function of the revision.
+ * The analog part (board_caps()->analog) is not a function of the revision: whether the analog
+ * front end is fitted, and where, is decided later at boot from I2C probes after the buses are up
+ * (board_variant.h), and the module's facts come from its EEPROM (module_link.h).
+ * board_variant_init() fills it once the module EEPROM has been read, after board_rev_init(), and
+ * board_caps_init() keeps it.  Code asks board_caps()->analog and never board_variant's decision or
+ * the module EEPROM getters itself; `make test` fails on those anywhere else
+ * (test/check_board_rev_gates.py).
  * ==========================================================================*/
 
 /* The calibration set a revision's analog section was fitted on (cal_data.h). */
@@ -30,6 +34,22 @@ typedef enum {
     BOARD_CAL_V3,       /* v3, analog-v3r1, the digital boards (v3r4 included) */
     BOARD_CAL_V3R2,     /* analog v3r2 (and the analog module, set by main.c) */
 } board_cal_set_t;
+
+/* The analog front end and the analog module (board_variant.h, module_link.h). */
+typedef struct {
+    /* The analog front end is fitted: on the board, or as the plug-in module.  True until
+       board_variant_init() decides, so nothing is hidden on an analog board by asking early. */
+    bool present;
+    /* It is the plug-in analog module of digital v3r3. */
+    bool module;
+    /* Module EEPROM facts (false without the module).  The ADC low range: K5 on U58 P5. */
+    bool adc_low_range;
+    /* The 4-20 mA input's sense resistor (R81) is 100 ohm; false is 249 ohm. */
+    bool current_in_100r;
+} board_analog_caps_t;
+
+/* What board_caps()->analog holds before board_variant_init(): analog, on the board. */
+#define BOARD_ANALOG_CAPS_UNPROBED ((board_analog_caps_t){ .present = true })
 
 typedef struct {
     /* ---- v3 and later (every revision from the PA3 strap on) ---- */
@@ -72,16 +92,24 @@ typedef struct {
     /* The DAC clock is on the module flat cable's pin 7 and its data on pin 8 (dac_link.h); older
        digital boards have them the other way round.  Only matters on a two-board pod. */
     bool cn1_dac_swap;
+
+    /* ---- the analog front end (not from the revision: board_caps_set_analog) ---- */
+    board_analog_caps_t analog;
 } board_caps_t;
 
-/* The capabilities of a revision (a BOARD_REV_* value).  Pure (host tests). */
+/* The capabilities of a revision (a BOARD_REV_* value), with analog BOARD_ANALOG_CAPS_UNPROBED.
+   Pure (host tests). */
 board_caps_t board_caps_for_rev(int rev);
 
 /* Latch the capabilities of a revision.  board_rev_init() calls it once it has the revision;
-   host tests call it directly. */
+   host tests call it directly.  The analog part is kept as it is. */
 void board_caps_init(int rev);
 
-/* The latched capabilities (all false before board_caps_init()). Never NULL. */
+/* Latch the analog part.  board_variant.c calls it at boot (board_variant_init) and again when the
+   module's power comes back on and its EEPROM was read again (module_power_set). */
+void board_caps_set_analog(board_analog_caps_t analog);
+
+/* The latched capabilities (the revision fields all false before board_caps_init()). Never NULL. */
 const board_caps_t *board_caps(void);
 
 #endif /* BOARD_CAPS_H */

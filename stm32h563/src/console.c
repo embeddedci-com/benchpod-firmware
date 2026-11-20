@@ -604,7 +604,7 @@ static void con_status(int argc, char **argv, console_out_t out, void *ctx)
         op(out, ctx, "  clock  : the 25 MHz crystal did not start; running from the internal HSI\r\n");
     /* The digital board has the gateware's ADC/DAC engines but nothing behind them
        (board_variant.h), so it names no ADC or DAC, like its status (analog:false). */
-    if (!board_has_analog()) {
+    if (!board_caps()->analog.present) {
         op(out, ctx, "  analog : none (digital board: no ADC, DAC or 4-20 mA)\r\n");
     } else {
         op(out, ctx, "  adc    : %d-bit x%d, %d mV full-scale\r\n",
@@ -697,7 +697,7 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
     else if (!strcmp(sub, "stop"))                 emi_test_stop();
     else if (!strcmp(sub, "dac") && mode >= 0) {
         if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
-            op(out, ctx, "  emi dac: %s\r\n", board_has_analog()
+            op(out, ctx, "  emi dac: %s\r\n", board_caps()->analog.present
                 ? "all needs the quad DAC (analog v3r2 or the v4 analog module)"
                 : "this board has no DAC (digital-only board)");
             return;

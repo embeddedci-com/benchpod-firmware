@@ -6,6 +6,7 @@
 #include "i2c_bus.h"
 #include "module_link.h"
 #include <stdio.h>
+#include <string.h>
 
 static int fails = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { \
@@ -49,14 +50,18 @@ static bool fake_probe_module(uint8_t addr)
 
 static void modbus(bool u58, int miss) { g_mod_u58 = u58; g_mod_miss = miss; g_mod_calls = 0; }
 
-/* Used only by board_variant_init and board_has_wifi_module. */
-static bool g_link;
-bool i2c_bus_probe(uint8_t addr) { (void)addr; return false; }
-bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr) { (void)bus; (void)addr; return false; }
-void analog_switch_set_bus(i2c_bus_id_t bus) { (void)bus; }
+/* Used only by board_variant_init, board_variant_module_reread and board_has_wifi_module. */
+static bool g_link, g_present, g_main_ana, g_mod_ana, g_ee_low, g_ee_100r;
+static i2c_bus_id_t g_ana_bus;
+bool i2c_bus_probe(uint8_t addr) { (void)addr; return g_main_ana; }
+bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr) { (void)bus; (void)addr; return g_mod_ana; }
+void analog_switch_set_bus(i2c_bus_id_t bus) { g_ana_bus = bus; }
 bool module_link_board(void) { return g_link; }
-bool module_present(void) { return false; }
+bool module_present(void) { return g_present; }
 bool module_power_on(void) { return true; }
+/* The EEPROM getters as module_link.c has them: only with the link board and a module. */
+bool module_adc_low_range(void) { return g_link && g_present && g_ee_low; }
+bool module_current_in_100r(void) { return g_link && g_present && g_ee_100r; }
 
 static void test_module(void)
 {
@@ -112,6 +117,64 @@ static void test_module(void)
     g_link = false;
 }
 
+static bool analog_is(bool present, bool module, bool low, bool r100)
+{
+    const board_analog_caps_t *a = &board_caps()->analog;
+    return a->present == present && a->module == module && a->adc_low_range == low
+        && a->current_in_100r == r100;
+}
+
+/* board_caps()->analog after board_variant_init: the decision plus the module EEPROM facts, which
+   count only with the module; module_reread picks up a header read again. */
+static void test_analog_caps(void)
+{
+    /* The pure map. */
+    for (int k = BOARD_ANALOG_NONE; k <= BOARD_ANALOG_MODULE; k++)
+        for (int e = 0; e < 4; e++) {
+            const board_analog_caps_t a = board_analog_caps_for((board_analog_t)k, e & 1, e & 2);
+            const bool mod = k == BOARD_ANALOG_MODULE;
+            CHECK(a.present == (k != BOARD_ANALOG_NONE) && a.module == mod
+                  && a.adc_low_range == (mod && (e & 1)) && a.current_in_100r == (mod && (e & 2)),
+                  "caps_for kind %d ee %d", k, e);
+        }
+
+    /* One-piece analog board: on the board, no module facts even if a stray EEPROM said so. */
+    g_link = false; g_present = false; g_main_ana = true; g_mod_ana = false; g_ee_low = g_ee_100r = true;
+    board_variant_init();
+    CHECK(analog_is(true, false, false, false), "one-piece analog board");
+    CHECK(g_ana_bus == I2C_BUS_MAIN, "one-piece: expanders on the main bus");
+    CHECK(strcmp(board_variant_str(), "analog") == 0, "one-piece: analog");
+
+    /* Digital-only board. */
+    g_main_ana = false;
+    board_variant_init();
+    CHECK(analog_is(false, false, false, false), "digital-only board");
+    CHECK(strcmp(board_variant_str(), "digital") == 0, "digital-only: digital");
+
+    /* Digital v3r3 with the module: its EEPROM facts. */
+    g_link = true; g_present = true; g_mod_ana = true; g_ee_low = true; g_ee_100r = false;
+    board_variant_init();
+    CHECK(analog_is(true, true, true, false), "module v3r4 (low range, 249 ohm)");
+    CHECK(g_ana_bus == I2C_BUS_MODULE, "module: expanders on the module bus");
+
+    /* The module's power came back with a newer header. */
+    g_ee_100r = true;
+    CHECK(analog_is(true, true, true, false), "a header change alone latches nothing");
+    board_variant_module_reread();
+    CHECK(analog_is(true, true, true, true), "module_reread latches the new header");
+
+    /* A module that is present but whose U58 does not answer: no analog, no module facts. */
+    g_mod_ana = false;
+    board_variant_init();
+    CHECK(analog_is(false, false, false, false), "module without U58");
+
+    /* No module on digital v3r3. */
+    g_present = false; g_mod_ana = true;
+    board_variant_init();
+    CHECK(analog_is(false, false, false, false), "digital v3r3 without a module");
+    g_link = false;
+}
+
 int main(void)
 {
     bool a, b;
@@ -139,11 +202,11 @@ int main(void)
     CHECK(board_variant_detect(fake_probe, NULL, NULL), "NULL out-pointers");
 
     /* Before board_variant_init the board counts as analog: nothing is hidden early. */
-    CHECK(board_has_analog(), "default is analog");
-
-    CHECK(!board_analog_is_module(), "default is not the module");
+    CHECK(board_caps()->analog.present, "default is analog");
+    CHECK(!board_caps()->analog.module, "default is not the module");
 
     test_module();
+    test_analog_caps();
 
     if (fails) { printf("test_board_variant: %d failure(s)\n", fails); return 1; }
     printf("test_board_variant: all passed\n");

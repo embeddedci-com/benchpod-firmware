@@ -14,7 +14,7 @@
 #include "pico_compat.h"
 #include "signal_engine.h"   /* dac_quad_c_level, dac_quad_route */
 #include "dac_quad.h"        /* analog v3r2: no U55, a DAC8554 channel per output */
-#include "module_link.h"     /* module_adc_low_range: K5 on analog module v3r4 */
+#include "board_caps.h"     /* board_caps()->analog: K5, the R81 shunt (module EEPROM) */
 #include "cloud_client.h"    /* cloud_client_request_caps_resend: the ADC fit follows the range */
 
 #include "FreeRTOS.h"
@@ -352,9 +352,9 @@ bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); 
 static uint8_t s_u55_out;       /* DACMUX shadow */
 static uint8_t s_u58_out;       /* ANASW  shadow */
 static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
-static bool    s_low_hw;        /* analog module v3r4: K5 on U58 P5 (latched in analog_switch_init) */
+static bool    s_low_hw;        /* analog module v3r4: K5 on U58 P5 (board_caps, latched in analog_switch_init) */
 static bool    s_low;           /* K5 energised: the ADC low range */
-static bool    s_shunt_100r;    /* analog module v3r5: R81 is 100 ohm (latched in analog_switch_init) */
+static bool    s_shunt_100r;    /* analog module v3r5: R81 is 100 ohm (board_caps, latched in analog_switch_init) */
 static bool    s_low_auto;      /* the low range was picked by a current_in route (analog_path_auto_range) */
 static analog_path_t s_path = ANALOG_PATH_OFF;   /* the last path that moved the relays */
 /* Where U55/U58 sit: the main bus on the one-piece analog boards, the module bus (I2C2) when the
@@ -406,8 +406,8 @@ void analog_switch_init(void)
     if (s_low) cloud_client_request_caps_resend();   /* module power cycled in the low range */
     s_low = false;
     s_low_auto = false;
-    s_low_hw = module_adc_low_range();
-    s_shunt_100r = module_current_in_100r();
+    s_low_hw = board_caps()->analog.adc_low_range;
+    s_shunt_100r = board_caps()->analog.current_in_100r;
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_OUTPUT, 0x00);
     ana_write(I2C_ADDR_TCA9554_ANASW, TCA_REG_CONFIG, (uint8_t)~u58_mask());
 }

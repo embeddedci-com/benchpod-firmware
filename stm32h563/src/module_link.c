@@ -127,7 +127,7 @@ int module_power_set(bool on)
 {
     if (!s_link) return -1;
     if (on == module_power_on()) return 0;
-    bool analog = board_analog_is_module();
+    bool analog = board_caps()->analog.module;
     if (!on) {
         if (analog) {
             dac_stop();               /* nothing streams into an unpowered DAC */
@@ -141,6 +141,7 @@ int module_power_set(bool on)
     sleep_ms(MOD_POWER_SETTLE_MS);
     log_printf("[module] module power on\r\n");
     (void)ee_read_hdr();
+    board_variant_module_reread();   /* the module's facts for analog_switch_init */
     if (!analog) return 0;
     /* U58 powered up with its outputs as inputs (relays off, +-14 V off): set it up as at boot,
        then park the DAC and switch the +-14 V supply on again. */

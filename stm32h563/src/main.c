@@ -191,13 +191,13 @@ int main(void)
     board_variant_init();   /* analog board, analog module or digital-only (board_variant.h) */
     /* Analog v3r2 and the analog module: a DAC8554 channel per output instead of the U55 muxes
        (dac_quad.h).  The module runs on the v3r2 calibration set until it carries its own. */
-    dac_quad_set_present(dac_quad_for_board(board_caps()->dac_quad, board_has_analog(),
-                                            board_analog_is_module()));
-    if (board_analog_is_module()) cal_data_use(BOARD_CAL_V3R2);
-    if (board_has_analog())
+    dac_quad_set_present(dac_quad_for_board(board_caps()->dac_quad, board_caps()->analog.present,
+                                            board_caps()->analog.module));
+    if (board_caps()->analog.module) cal_data_use(BOARD_CAL_V3R2);
+    if (board_caps()->analog.present)
         analog_switch_init(); /* U55 DAC mux + U58 cal switching, all off */
     dac_limits_load();      /* DAC output limits: enforced from the first command (dac_limits.h) */
-    if (board_analog_is_module())
+    if (board_caps()->analog.module)
         adc_cal_hw_use_module();   /* the calibration also lives in the module's EEPROM */
     adc_cal_load();         /* per-pod ADC calibration, on top of cal_data.h (adc_cal.h) */
     pod_policy_load();      /* signature + LAN policy, before OTA or the LAN listener (pod_policy.h) */

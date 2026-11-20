@@ -43,7 +43,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     signal_engine_caps(&caps);
     /* A digital-only board has the gateware's DAC/ADC engines but no DAC or ADC behind them
        (board_variant.h): none of the analog features there. */
-    const bool analog = board_has_analog();
+    const bool analog = board_caps()->analog.present;
     c->firmware_version = FIRMWARE_VERSION;
     c->flash_kb = (unsigned long)(flash_layout_size() / 1024u);
     c->sig_policy = fw_sign_policy_name(fw_sign_policy());

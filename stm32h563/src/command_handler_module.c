@@ -32,7 +32,7 @@ void module_emit_state(bp_emit_t *e, bool full)
     bp_emit(e, "{\"present\":%s,\"analog\":%s,\"power\":%s,\"bridge_power\":%s,"
                "\"dac_pinout_ok\":%s,\"eeprom\":",
             module_present_now() ? "true" : "false",
-            board_analog_is_module() ? "true" : "false",
+            board_caps()->analog.module ? "true" : "false",
             module_power_on() ? "true" : "false",
             bridge_power_on() ? "true" : "false",
             module_dac_pinout_mismatch() ? "false" : "true");   /* BP0080, dac_link.h */
