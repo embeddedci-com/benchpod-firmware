@@ -6,9 +6,10 @@
 #     tools/gen_protocol.py --check the target already runs.
 #   • stm32h563 host tests — `make -C stm32h563/test` (native cc, no toolchain).
 #   • wifi-bridge host tests — `make -C wifi-bridge/test` + tools/test_bridgectl.py (native cc,
-#     python3), and the ESP-IDF build of the bridge firmware (dev and production configs) in the
-#     pinned espressif/idf image from wifi-bridge/idf-image, so a change that breaks the image
-#     build fails the PR. Dev builds sign with a throwaway key made in the job; nothing is uploaded.
+#     python3), and the ESP-IDF build of the bridge firmware in the pinned espressif/idf image
+#     from wifi-bridge/idf-image, so a change that breaks the image build fails the PR (the dev
+#     config on a PR; dev, production and EMC configs on main, nightly and the release). Dev builds
+#     sign with a throwaway key made in the job; nothing is uploaded.
 #   • motor-emulator gateware (ECP5) — `make -C motor-emulator/ecp5 test-rtl all` (every RTL
 #     bench, then synthesis, place and route at 36 MHz) and `test-gl` (the same benches on the
 #     yosys gate-level netlist). The gate-level benches run as a matrix, one job per bench in
@@ -202,22 +203,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      # The ESP-IDF image is several GB; the hosted runner needs room for it (as in release-stm32.yml).
-      - name: Free disk space
+      # The ESP-IDF image plus the dev, production and EMC bridge builds take 10 GB of / (measured
+      # 2026-11-20: 89 GB free before, 80 GB after; docker reports the image as 11.7 GB). Nothing
+      # preinstalled has to be deleted for that (removing Android, .NET and Haskell took 3 min).
+      - name: Enough disk space for the ESP-IDF image
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
-            /usr/local/lib/node_modules "$AGENT_TOOLSDIRECTORY"
-          docker image prune -a -f
           df -h /
+          free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          if [ "$free" -lt 20 ]; then
+            echo "::error::only ${free} GB free on /: the ESP-IDF image and builds need about 10 GB"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the bridge firmware (dev config, ESP-IDF in Docker)
         run: cd wifi-bridge && ./build.sh
+      # Pull requests build the dev config only; main, the nightly and the release build all three.
       - name: Build the bridge firmware (production config, secure boot + flash encryption)
+        if: github.event_name != 'pull_request'
         run: cd wifi-bridge && ./build.sh production
-      - name: Build the bridge EMC test firmware (development only; RELEASE=1 must refuse it)
+      - name: Build the bridge EMC test firmware (development only)
+        if: github.event_name != 'pull_request'
+        run: cd wifi-bridge && ./build.sh emc
+      - name: RELEASE=1 refuses the EMC test build
         run: |
-          cd wifi-bridge && ./build.sh emc
+          cd wifi-bridge
           if RELEASE=1 ./build.sh emc; then echo "RELEASE=1 ./build.sh emc did not refuse" >&2; exit 1; fi
 
   motor-emulator-sim:
