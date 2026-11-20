@@ -911,10 +911,13 @@ void cloud_client_send_command_response(const char *request_id,
        the same text in its data (a DUT's own JSON in uart_read), so only the start counts. */
     static const char k_err[] = "{\"status\":\"error\"";
     if (strncmp(reply, k_err, sizeof(k_err) - 1) == 0) {
-        char msg[320] = {0};   /* pin-conflict / la_voltage refusals run to ~250 characters */
+        char msg[320] = {0};   /* the free-text refusals left run to ~250 characters */
         char code[8] = {0};
         cl_json_str(reply, "message", msg, sizeof(msg));
         cl_json_str(reply, "code", code, sizeof(code));
+        /* A coded refusal has no message (the client renders the code): the envelope's "error"
+           names the code, so it is never empty. */
+        if (!msg[0] && code[0]) snprintf(msg, sizeof(msg), "%s", code);
         /* The args object verbatim, on the heap: no RAM to spare in .bss, little on this stack. */
         char *args = code[0] ? pvPortMalloc(256) : NULL;
         if (args && !bp_json_object_top(reply, "args", args, 256)) args[0] = 0;

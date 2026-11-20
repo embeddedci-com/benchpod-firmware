@@ -280,7 +280,7 @@ static void test_frame(void) {
     /* gateware older than v56: 8N1 still works, anything else is refused with what to do */
     g_gw = 55;
     start(4, "{\"cmd\":\"uart_proxy_start\",\"rx\":1,\"tx\":2,\"parity\":\"even\"}");
-    CHECK(strstr(g_reply, "err:parity and stop_bits needs gateware v56") == g_reply && g_proto[4] == PROTO_JSON,
+    CHECK(strstr(g_reply, "err:BP0017") == g_reply && g_proto[4] == PROTO_JSON,
           "old gateware reply %s", g_reply);
     CHECK(g_err_code == BP_E_GATEWARE_TOO_OLD && strcmp(g_err_arg, "parity and stop_bits") == 0,
           "old gateware code: %d %s", g_err_code, g_err_arg);
@@ -354,7 +354,7 @@ static void test_v3r4_pulls(void) {
     /* an engaged pull-down refuses RX on that pin (the line idles high), before anything moves */
     CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_10K) == 0, "LA3 down");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
-    CHECK(strncmp(g_reply, "err:LA3 has its", 15) == 0 && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
+    CHECK(g_err_code == BP_E_LA_PULL_DOWN_ENGAGED && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
           "v3r4: RX over a pull-down: %s (seq '%s')", g_reply, g_seq);
     CHECK(la_pins_fn(4) == LA_FN_NONE, "v3r4: the refused start claimed TX");
     la_pull_set(3, LA_PULL_NONE, PULL_STR_NONE);
@@ -530,7 +530,7 @@ static void test_claim_order(void) {
     uint8_t p = 4;
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 0, &p, 1);
     start(2, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
-    CHECK(strcmp(g_reply, "err:LA4 is in use by gpio") == 0 && g_seq[0] == 0 &&
+    CHECK(g_err_code == BP_E_LA_PIN_IN_USE && strcmp(g_err_arg, "4") == 0 && g_seq[0] == 0 &&
           la_pins_fn(3) == LA_FN_NONE && !g_pullup_on(3), "conflict: %s seq '%s'", g_reply, g_seq);
     la_pins_release(4);
     g_gw = 56;

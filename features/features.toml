@@ -51,7 +51,8 @@
 #   api 1 (development builds after 3.10.13, never released): the first level clients send.
 #   api 2 (firmware 4.0.0, min_client_api 2): clients classify refusals by error code only and
 #     never read refusal text. Every refusal a client acts on has a code (errors/catalog.toml), and
-#     its message is the catalog's. A client below api 2 is refused (BP0030): it would look for
+#     a coded refusal carries code and args but no message: the client renders the catalog's.
+#     A client below api 2 is refused (BP0030, which alone keeps a message): it would look for
 #     texts that are gone.
 #
 # After an edit run `python3 tools/gen_features.py` (CI runs it with --check). It writes

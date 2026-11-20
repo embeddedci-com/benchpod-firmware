@@ -468,7 +468,7 @@ static void test_la_change_capture(void) {
     /* pre_samples needs gateware v50 */
     g_gw = 49; clear_tx();
     handle_la_capture(6, "{\"cmd\":\"la_capture\",\"samples\":2000,\"trigger\":{\"la\":5,\"pre_samples\":100}}");
-    CHECK(strstr(g_err, "pre_samples needs gateware") != NULL, "gw 49 pre: %s", g_err);
+    CHECK(g_code == BP_E_GATEWARE_TOO_OLD && strstr(g_err, "pre_samples") != NULL, "gw 49 pre: %s", g_err);
     g_gw = 50;
     memcpy(g_ev, save, keep); g_nev = keep;
 
@@ -614,8 +614,8 @@ static void test_sensor_la_timeout(void) {
     CHECK(capture_busy(), "timed out early");
     advance_ms(200);
     capture_poll();
-    CHECK(g_code == BP_E_SENSOR_TRIGGER_TIMEOUT && strstr(g_err, "LA1") && strstr(g_err, "env") &&
-          strstr(g_err, "500"), "error: %s", g_err);
+    CHECK(g_code == BP_E_SENSOR_TRIGGER_TIMEOUT && strstr(g_err, "la=1") && strstr(g_err, "env") &&
+          strstr(g_err, "timeout_ms=500"), "error: %s", g_err);
     CHECK(!capture_busy() && g_owner == -1 && g_aborts == aborts + 1, "timed-out sensor_la not aborted");
     /* the default timeout is 2 s */
     clear_tx();
@@ -623,7 +623,7 @@ static void test_sensor_la_timeout(void) {
     advance_ms(1900); capture_poll();
     CHECK(capture_busy(), "default timeout shorter than 2 s");
     advance_ms(200); capture_poll();
-    CHECK(strstr(g_err, "within 2000 ms") != NULL && !capture_busy(), "default timeout: %s", g_err);
+    CHECK(strstr(g_err, "timeout_ms=2000") != NULL && !capture_busy(), "default timeout: %s", g_err);
 }
 
 static void test_sensor_la_immediate_and_errors(void) {

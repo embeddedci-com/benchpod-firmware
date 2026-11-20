@@ -1,113 +1,23 @@
 /* bp_errors.c: the reply line for a stable error code (bp_errors.h, errors/catalog.toml).
 
-   {"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio"},"message":"LA4 is in use by gpio"}\n
+   {"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio",...}}\n
 
-   "message" is the code's catalog message with the args filled in ({la} -> 4), so what the pod
-   says is what the catalog says: the hosts render the same text, the fix and the docs link from
-   errors/errors.json, keyed on "code". A build with -DBP_ERRORS_NO_TEXT has no templates and
-   sends the compact fallback "BP0031 la=4 owner=gpio" instead. "args" is left out when a code
-   has none.
+   No message: the hosts render the code's catalog message, its fix and its docs link from
+   errors/errors.json, so the firmware holds no per-error text. "args" is left out when a code
+   has none. One exception: BP0030 (client_too_old) also carries a "message", because the client
+   it refuses may be too old to know the code and shows only that text.
 
-   bp_err_note keeps the code of a message a module built for its caller (la_pins.c and the
-   other modules that answer with a text): send_error() asks bp_err_noted whether the text it is
-   about to send came from a code, and sends it with that code when it did. The note matches the
-   text itself (a hash and the length), not the buffer, so a caller that copies the text first
-   still gets the code. Pure: no I/O, host-tested in test/test_bp_errors.c. */
-#define BP_ERRORS_DEFINE_TEMPLATES
+   bp_err_note / bp_err_tag keep the code of a refusal a module hands its caller as text
+   (pod_policy.c, sensor_mgr.c, la_pins.c and the like): send_error() asks bp_err_noted whether
+   the text it is about to send came with a code, and sends the code instead when it did. The
+   note matches the text itself (a hash and the length), not the buffer, so a caller that copies
+   the text first still gets the code. Pure: no I/O, host-tested in test/test_bp_errors.c. */
 #include "bp_errors.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include "bp_json.h"
-
-static const char *template_of(bp_errcode_t code) {
-#ifdef BP_ERRORS_NO_TEXT
-    (void)code;
-    return NULL;
-#else
-    return ((unsigned)code <= BP_E_LAST) ? bp_err_templates[code] : NULL;
-#endif
-}
-
-static const bp_err_arg_t *arg_named(const bp_err_arg_t *args, size_t n, const char *name,
-                                     size_t len) {
-    for (size_t i = 0; i < n; i++)
-        if (args[i].key && strlen(args[i].key) == len && !strncmp(args[i].key, name, len))
-            return &args[i];
-    return NULL;
-}
-
-/* One rendered piece: a run of template text, or an arg's value. */
-typedef void (*piece_fn)(void *ctx, const char *s, size_t len);
-
-/* Walk template t: literal runs and {arg} values, in order, to put(). A {name} without such an
-   arg renders as "?", like the hosts do. */
-static void render(const char *t, const bp_err_arg_t *args, size_t n, piece_fn put, void *ctx) {
-    while (*t) {
-        const char *open = strchr(t, '{');
-        const char *close = open ? strchr(open, '}') : NULL;
-        if (!open || !close) { put(ctx, t, strlen(t)); return; }
-        if (open > t) put(ctx, t, (size_t)(open - t));
-        const bp_err_arg_t *a = arg_named(args, n, open + 1, (size_t)(close - open - 1));
-        if (!a) {
-            put(ctx, "?", 1);
-        } else if (a->is_str) {
-            const char *s = a->s ? a->s : "";
-            put(ctx, s, strlen(s));
-        } else {
-            char num[16];
-            int len = snprintf(num, sizeof(num), "%ld", (long)a->i);
-            put(ctx, num, len > 0 ? (size_t)len : 0);
-        }
-        t = close + 1;
-    }
-}
-
-/* "BP0031 la=4 owner=gpio": the message without a template. */
-static void fallback(const bp_err_arg_t *args, size_t n, bp_errcode_t code, piece_fn put, void *ctx) {
-    char head[8];
-    int len = snprintf(head, sizeof(head), "BP%04u", (unsigned)code);
-    put(ctx, head, len > 0 ? (size_t)len : 0);
-    for (size_t i = 0; i < n; i++) {
-        put(ctx, " ", 1);
-        put(ctx, args[i].key, strlen(args[i].key));
-        put(ctx, "=", 1);
-        if (args[i].is_str) {
-            const char *s = args[i].s ? args[i].s : "";
-            put(ctx, s, strlen(s));
-        } else {
-            char num[16];
-            int l = snprintf(num, sizeof(num), "%ld", (long)args[i].i);
-            put(ctx, num, l > 0 ? (size_t)l : 0);
-        }
-    }
-}
-
-static void message(bp_errcode_t code, const bp_err_arg_t *args, size_t n, piece_fn put, void *ctx) {
-    const char *t = template_of(code);
-    if (t) render(t, args, n, put, ctx);
-    else   fallback(args, n, code, put, ctx);
-}
-
-/* ---- into a JSON string ---- */
-
-static void put_json(void *ctx, const char *s, size_t len) {
-    bp_emit_t *e = ctx;
-    char chunk[48];
-    while (len) {   /* bp_emit_jstr wants a C string and adds the quotes: escape by hand */
-        size_t k = 0;
-        while (len && k + 7 < sizeof(chunk)) {
-            unsigned char c = (unsigned char)*s++;
-            len--;
-            if (c == '"' || c == '\\') { chunk[k++] = '\\'; chunk[k++] = (char)c; }
-            else if (c < 0x20)         k += (size_t)snprintf(chunk + k, sizeof(chunk) - k, "\\u%04x", c);
-            else                       chunk[k++] = (char)c;
-        }
-        chunk[k] = 0;
-        bp_emit_raw(e, chunk);
-    }
-}
 
 static void emit_args(bp_emit_t *e, const bp_err_arg_t *args, size_t n) {
     bp_emit_raw(e, ",\"args\":{");
@@ -119,49 +29,48 @@ static void emit_args(bp_emit_t *e, const bp_err_arg_t *args, size_t n) {
     bp_emit_raw(e, "}");
 }
 
+static int32_t int_arg(const bp_err_arg_t *args, size_t n, const char *key) {
+    for (size_t i = 0; i < n; i++)
+        if (!args[i].is_str && !strcmp(args[i].key, key)) return args[i].i;
+    return 0;
+}
+
 size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
                        size_t n) {
     bp_emit_t e;
     bp_emit_init(&e, buf, cap);
     bp_emit(&e, "{\"status\":\"error\",\"code\":\"BP%04u\"", (unsigned)code);
     if (n) emit_args(&e, args, n);
-    bp_emit_raw(&e, ",\"message\":\"");
-    message(code, args, n, put_json, &e);
-    bp_emit_raw(&e, "\"}\n");
+    if (code == BP_E_CLIENT_TOO_OLD)   /* the one text a client without codes must still see */
+        bp_emit(&e, ",\"message\":\"Update the BenchPod SDK, MCP or CLI: this firmware needs client API "
+                    "%ld or newer (this client sent %ld)\"",
+                (long)int_arg(args, n, "min_client_api"), (long)int_arg(args, n, "client_api"));
+    bp_emit_raw(&e, "}\n");
     if (bp_emit_ok(&e)) return bp_emit_len(&e);
-    /* Too long (a huge string arg): drop the text and the args, keep the code. Never a torn line:
-       the client would block on the missing newline. */
+    /* Too long (a huge string arg): drop the args, keep the code. Never a torn line: the client
+       would block on the missing newline. */
     bp_emit_init(&e, buf, cap);
-    bp_emit(&e, "{\"status\":\"error\",\"code\":\"BP%04u\",\"message\":\"BP%04u\"}\n", (unsigned)code,
-            (unsigned)code);
+    bp_emit(&e, "{\"status\":\"error\",\"code\":\"BP%04u\"}\n", (unsigned)code);
     return bp_emit_ok(&e) ? bp_emit_len(&e) : 0;
 }
 
-/* ---- into a plain string ---- */
-
-typedef struct { char *out; size_t cap, len; } plain_t;
-
-static void put_plain(void *ctx, const char *s, size_t len) {
-    plain_t *p = ctx;
-    if (!p->cap) return;
-    size_t room = p->cap - 1u - p->len;
-    if (len > room) len = room;
-    memcpy(p->out + p->len, s, len);
-    p->len += len;
-    p->out[p->len] = 0;
-}
+/* ---- the short form: "BP0031 la=4 owner=gpio" ---- */
 
 size_t bp_err_render(char *out, size_t cap, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
-    plain_t p = { out, cap, 0 };
     if (!out || !cap) return 0;
-    out[0] = 0;
-    message(code, args, n, put_plain, &p);
-    return p.len;
+    size_t len = (size_t)snprintf(out, cap, "BP%04u", (unsigned)code);
+    for (size_t i = 0; i < n && len < cap; i++) {
+        if (args[i].is_str)
+            len += (size_t)snprintf(out + len, cap - len, " %s=%s", args[i].key, args[i].s ? args[i].s : "");
+        else
+            len += (size_t)snprintf(out + len, cap - len, " %s=%ld", args[i].key, (long)args[i].i);
+    }
+    return len < cap ? len : cap - 1u;   /* snprintf cut it to fit */
 }
 
 /* ---- notes ---- */
 
-/* Two notes: a module may build one message, then ask another (bus_busy_reason) before its
+/* Two notes: a module may build one refusal, then ask another (bus_busy_reason) before its
    caller sends the first. String args are copied into the note's pool, cut to fit. */
 #define NOTES      2u
 #define NOTE_POOL  72u

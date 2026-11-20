@@ -159,10 +159,8 @@ static void test_tca9554_board(int rev, const char *name) {
     /* refusals */
     la("{\"cmd\":\"la\",\"la\":1,\"pull\":\"down\"}");
     CHECK(g_code == BP_E_LA_PULL_DIRECTION && strcmp(g_arg0, "1") == 0, "%s: BP0024 (%d %s)", name, g_code, g_arg0);
-    REPLY("err:LA1 supports pull-up only on this board");
     la("{\"cmd\":\"la\",\"la\":9,\"pull\":\"up\"}");
     CHECK(g_code == BP_E_LA_NO_PULL && strcmp(g_arg0, "9") == 0, "%s: BP0023 (%d %s)", name, g_code, g_arg0);
-    REPLY("err:LA9 has no pull resistor on this board");
     la("{\"cmd\":\"la\",\"la\":9,\"pullup\":\"on\"}");
     CHECK(g_code == BP_E_LA_NO_PULL, "%s: alias on a channel without one: BP0023 (%d)", name, g_code);
     la("{\"cmd\":\"la\",\"la\":9,\"pull\":\"off\"}");   /* off is fine without a resistor */
@@ -179,7 +177,7 @@ static void test_tca9554_board(int rev, const char *name) {
     uint8_t p = 8;
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, &p, 1);
     la("{\"cmd\":\"la\",\"la\":8,\"pull\":\"down\"}");
-    CHECK(strncmp(g_reply, "err:LA8 is used by uart_rx", 26) == 0, "%s: %s", name, g_reply);
+    CHECK(g_code == BP_E_LA_PULL_DOWN_CONFLICT && strcmp(g_arg0, "8") == 0, "%s: %s", name, g_reply);
     CHECK(!(la_pull_asked(8) != LA_PULL_NONE), "%s: refused before the switch", name);
     la_pins_release(8);
 
@@ -276,7 +274,6 @@ static void test_v3r4(void) {
     REPLY("ok:{\"la_pullup_mask\":0,\"pullups_available\":0,\"held\":\"pin21_down\",\"asked_mask\":2052}");
     la("{\"cmd\":\"la\",\"la\":6,\"pull\":\"up\"}");
     CHECK(g_code == BP_E_PULL_RAIL_DOWN && strcmp(g_arg0, "120") == 0, "v3r4: BP0029 (%d %s)", g_code, g_arg0);
-    REPLY("err:pin 21 is down (120 mV): the pull resistors are off until it is back");
     CHECK(la_pull_set(6, LA_PULL_UP, PULL_STR_NONE) == LA_PULL_ERR_RAIL, "v3r4: rail error");
     CHECK(la_pull_set(6, LA_PULL_NONE, PULL_STR_NONE) == 0, "v3r4: off is allowed with pin 21 down");
     rail(true);
@@ -288,7 +285,6 @@ static void test_v3r4(void) {
     CHECK(!la_pull_available(), "v3r4: no pulls without an I/O voltage");
     la("{\"cmd\":\"la\",\"la\":6,\"pull\":\"up\"}");
     CHECK(g_code == BP_E_LA_VOLTAGE_NOT_SET, "v3r4: BP0001 (%d)", g_code);
-    REPLY("err:The I/O voltage is not set");
     g_vccio = g_io = LA_VCCIO_3V3;
 
     /* a write that fails: held ("fault") until the next pull turned on retries */
@@ -347,7 +343,6 @@ static void test_la_voltage(void) {
     g_set_rc = -3; g_vref_mv = 4100;
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":5000}");
     CHECK(g_code == BP_E_VREF_5V_MISSING && strcmp(g_arg0, "4100") == 0, "BP0028 (%d %s)", g_code, g_arg0);
-    REPLY("err:5 V did not come up on pin 21 (4100 mV)");
     g_set_rc = 0; g_vref_mv = 5000;
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":5000}");
     REPLY("ok:{\"mv\":5000,\"st\":1,\"readback_mv\":3290,\"vref_out\":{\"mv\":5000}}");

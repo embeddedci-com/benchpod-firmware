@@ -13,7 +13,7 @@ The firmware exposes a plain-text JSON API over a TCP socket. Commands are sent 
 | TLS port | `8443` (TLS 1.2, firmware 3.9.3+), same protocol; see [LAN TLS](#lan_tls--the-lan-api-over-tls) |
 | Framing | Newline-delimited (`\n`) — one JSON object per line |
 | Encoding | UTF-8 |
-| Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `"busy"`) |
+| Concurrency | Up to 5 LAN connections at once; the commands that use the capture hardware take turns (a second one gets `BP0047`, `pod_busy`) |
 
 Connect with any TCP client:
 
@@ -140,18 +140,24 @@ on every command:
 ### Error
 
 ```json
+{"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio","function":"gpio","instance":""}}\n
 {"status":"error","message":"<description>"}\n
-{"status":"error","code":"BP0002","args":{"cmd":"frobnicate"},"message":"<description>"}\n
 ```
 
-From firmware 3.10.8, refusals carry a stable error code (`BP0001` and up) and the
-values that go with it in `args` (left out when the code has none). Codes never change meaning and
-are never reused; each is on `https://embeddedci.com/docs/errors#<code>` with the cause and
-the fix, and [`errors/ERRORS.md`](../errors/ERRORS.md) lists them. Read `code` and `args`, not the
-`message` text: the text may change, and a future firmware sends only a short form of it
-(`"BP0002 cmd=frobnicate"`). Errors without a code yet keep the first form. The codes, their args
-and their texts for each tool are in [`errors/errors.json`](../errors/errors.json), generated from
-[`errors/catalog.toml`](../errors/catalog.toml).
+A refusal a client acts on carries a stable error code (`BP0001` and up) and the values that go
+with it in `args` (left out when the code has none), and no `message` (firmware 4.0.0 and
+later; firmware 3.10.8 to 3.10.13 sent a message next to some codes). The client renders the
+code's message and its fix from the catalog: [`errors/errors.json`](../errors/errors.json),
+generated from [`errors/catalog.toml`](../errors/catalog.toml), with each code's message template
+(`{la}` is an arg), cause and fix for the SDK, CLI, MCP and the web app. Codes never change meaning
+and are never reused; each is on `https://embeddedci.com/docs/errors#<code>`, and
+[`errors/ERRORS.md`](../errors/ERRORS.md) lists them. One code also carries a `message`: `BP0030`
+(see [Client compatibility](#client-compatibility)), for clients too old to know it.
+
+The second form is a refusal without a code: a bad argument or a failure that only a person
+reads (`"samples out of range: 1 to 32768"`, `"capture failed"`). Clients show its text as it
+is and do not match on it. Over the cloud command channel the envelope's `"error"` is the
+message, or the code when there is none, with `"code"` and `"args"` beside it.
 
 ### Chunked data (multi-packet responses)
 
@@ -311,24 +317,24 @@ Commands not in this table answer `"unknown cmd"`.
 ### Gates that apply to every command
 
 Before a command runs, the firmware checks these, in this order (`src/cmd_gate.c`). The first one
-that applies answers with its message and the command does not run.
+that applies answers with its code (or, for safe mode, its message) and the command does not run.
 
-| Gate | Applies to | Message |
+| Gate | Applies to | Refusal |
 |---|---|---|
-| [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping` and `lease_release`, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030`: `update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)` (firmware after 3.10.13) |
-| LAN policy `locked` | a T2 or T3 command on a LAN connection | `locked: <cmd> needs the cloud or USB` (firmware before 3.9.0: `... or the USB console`) |
-| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025`: `busy: a cloud job holds this pod (<holder>, <N> s left)` (the code with firmware after 3.10.13; the text is unchanged) |
-| Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `forbidden: <cmd> needs an organization owner or admin` |
+| [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping`, `lease_release` and the update commands, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030` (`client_too_old`, with a `message` for old clients; firmware 4.0.0) |
+| LAN policy `locked` | a T2 or T3 command on a LAN connection | `BP0040` (`lan_locked`, args `cmd`) |
+| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025` (`lease_busy`, holder `a cloud job`, purpose the cloud holder) |
+| Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `BP0045` (`role_required`, args `cmd`) |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
-| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `this BenchPod has no analog front end (digital board): no DAC, ADC or analog outputs. Restart the pod after fitting an analog add-on` |
-| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025`: `busy: <holder> holds this pod (<purpose>, <N> s left)` |
-| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026`: `lease lost: stopped by <name>` |
+| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
+| [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026` (`lease_lost`, args `by`) |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
 `capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`,
 `can_read`, `psram_ping` and `test`. Commands that use the capture hardware (PSRAM, ADC, LA) also
-take turns with each other: a second one gets `"busy"` until the first is done.
+take turns with each other: a second one gets `BP0047` (`pod_busy`) until the first is done.
 
 ---
 
@@ -465,7 +471,7 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`.
 
 ### `capture` — ADC snapshot
 
-Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into PSRAM) and return them. The reply arrives once the capture is done; meanwhile other connections keep working, but a second capture waits its turn (`"busy"`). A capture also fills the RAM replay buffer, so `replay` can play it straight back.
+Capture a fixed number of ADC samples (16-bit MCP33131, through the iCE40 into PSRAM) and return them. The reply arrives once the capture is done; meanwhile other connections keep working, but a second capture waits its turn (`BP0047`). A capture also fills the RAM replay buffer, so `replay` can play it straight back.
 
 #### Request
 
@@ -511,7 +517,7 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 | Condition | Message |
 |---|---|
 | `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"capture failed"` |
 | The PSRAM read-back failed | `"capture read-back failed"` |
 
@@ -566,7 +572,7 @@ Same chunked format as `capture`:
 | Condition | Message |
 |---|---|
 | `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"capture failed"` |
 
 ---
@@ -627,7 +633,7 @@ Same chunked format as `capture`. The first packet uses `"status":"ok"` and any 
 | Unknown waveform | `"unknown waveform (use sine, square or sawtooth)"` |
 | `samples` = 0 or > 2048 | `"samples out of range"` |
 | Invalid params (for example `freq` ≤ 0) | `"measure start failed"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not complete | `"capture failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
@@ -712,7 +718,7 @@ packet carries `"la":true,"la_edges"` directly.
 | The combined rate overruns the PSRAM bus (gateware v22+) | `"combined sample rate exceeds PSRAM bus bandwidth"` |
 | The PSRAM could not keep up during the capture (STATUS overflow bit) | `"capture overflowed: the PSRAM could not keep up with LA <n> kS/s + ADC <n> kS/s. Lower la_rate_mhz or adc_rate_mhz, or capture fewer samples"` |
 | A count exceeds its fixed region (gateware before v22) | `"samples out of range (per-stream PSRAM region limit)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | ADC samples on the digital-only board | the [digital-board refusal](#gates-that-apply-to-every-command) |
 | Capture did not arm | `"capture failed"` |
 
@@ -742,7 +748,7 @@ An `offset` equal to the total sends one empty final packet (`{"status":"ok","da
 | No `capture_dual` / `la_capture` since boot, or a newer capture started | `"no capture to resume (run capture_dual first)"` |
 | Something wrote over the capture's PSRAM regions since (an OTA staging, a `load_bin` with `"psram"`, a gateware reload, a SCPI or console capture) | `"capture data was overwritten by <what>; run the capture again"` |
 | `offset` past the end | `"offset out of range"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
@@ -782,11 +788,11 @@ untriggered capture is unaffected.
 
 #### Timeout
 
-If the condition never arrives the capture is aborted and the command errors with a
-machine-parseable prefix (the edge word matches the request):
+If the condition never arrives the capture is aborted and the command is refused with
+`BP0038` (`trigger_timeout`; the `edge` arg matches the request):
 
-```
-trigger timeout: no rising edge on LA9 within 10000 ms
+```json
+{"status":"error","code":"BP0038","args":{"la":9,"edge":"rising","timeout_ms":10000}}
 ```
 
 A co-triggered DAC start staged for that capture is cancelled with it — the abort is an
@@ -796,12 +802,12 @@ untriggered t0 and would otherwise fire the waveform.
 
 | Condition | Message |
 |---|---|
-| the running gateware is older than v35 | `"capture triggers need gateware v35 or newer (this pod runs vNN)"` |
+| the running gateware is older than v35 | `BP0017` (`gateware_too_old`, feature `capture triggers`, min 35) |
 | `trigger` is not an object | `"trigger must be an object like {\"la\":1,\"edge\":\"rising\"}"` |
 | `trigger.la` outside 1..14 | `"trigger la must be 1..14"` |
 | `trigger.edge` not recognised | `"trigger edge must be rising, falling, high or low"` |
 | `trigger_timeout_ms` outside 1..600000 | `"trigger_timeout_ms must be 1..600000"` |
-| the condition never arrived | `"trigger timeout: no <edge> edge on LA<n> within <N> ms"` |
+| the condition never arrived | `BP0038` (`trigger_timeout`, args `la`, `edge`, `timeout_ms`) |
 
 `status.caps` contains `"capture_trigger"` (and `"gpio_read"`) when the running gateware
 supports this; the cloud capabilities frame carries the same two flags as booleans.
@@ -939,12 +945,12 @@ anything is armed.
 
 | Condition | Message |
 |---|---|
-| LA voltage not set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
+| LA voltage not set | `BP0001` (`la_voltage_not_set`) |
 | `samples` = 0 or too deep | `"samples out of range: 1 to <max>"`, with `" (a DAC waveform in the PSRAM holds the rest; dac_stop frees it)"` when a resident deep-DAC waveform is what limits it |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
-| `trigger.pre_samples` on gateware older than v50 | `"trigger pre_samples needs gateware v50 or newer (this pod runs v49)"` |
+| `trigger.pre_samples` on gateware older than v50 | `BP0017` (feature `trigger pre_samples`, min 50) |
 
 ---
 
@@ -981,7 +987,7 @@ The buffer is held (gated, like `capture`) from the first `offset:0` chunk until
 |---|---|
 | `data` field missing | `"missing data"` |
 | Chunk at `offset > 0` sent without a preceding `offset:0` on this connection | `"load not started"` |
-| Another connection holds the buffer | `"busy"` |
+| Another connection holds the buffer | `BP0047` (`pod_busy`) |
 | `offset` past 4096 bytes | `"offset out of range"` |
 | The chunk would take the trace past 4096 bytes (2048 samples, what a RAM `replay` plays) | `"load: the trace would be longer than 4096 bytes (2048 samples, the DAC's RAM replay limit); use load_bin with \"psram\":true for longer traces"` |
 | Malformed base64url | `"invalid data"` |
@@ -1013,7 +1019,7 @@ Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok
 | Sent on the cloud command channel | `"load_bin needs a stream connection"` |
 | `total` missing | `"missing total"` |
 | `total` 0 or too large | `"total out of range"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
@@ -1047,7 +1053,7 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 |---|---|
 | Nothing has been captured or uploaded yet | `"nothing to replay"` |
 | `samples` = 0 or greater than the recorded length | `"samples out of range"` |
-| Another connection holds the buffer | `"busy"` |
+| Another connection holds the buffer | `BP0047` (`pod_busy`) |
 | FPGA load/start error, or a RAM trace longer than 2048 samples | `"replay failed"` |
 | DAC limits are set | the [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) refusal |
 
@@ -1751,7 +1757,7 @@ Same chunked format as `capture`: the first packet uses `"status":"ok"` (with `"
 |---|---|
 | `samples` = 0 or > 4096 | `"samples out of range"` |
 | Unknown `pattern` | `"unknown pattern (use sine\|counter\|ramp\|const)"` |
-| Another capture or upload is running | `"busy"` |
+| Another capture or upload is running | `BP0047` (`pod_busy`) |
 
 ---
 
@@ -1813,7 +1819,7 @@ diagnostics to [`diag`](#diag--heap-stack-and-network-diagnostics) so a running 
 stays a few hundred bytes under that limit; instead of the error `status too large for this connection` that firmware up to 3.10.4 sent.
 Firmware 3.10.4's full `status` could be larger than the cloud channel takes (with the USB network
 adapter up and a lease held), so connecting to it over the cloud failed with
-`status: reply too large for the cloud channel`.
+`BP0054` (`cloud_reply_too_large`).
 
 #### Response fields
 
@@ -1924,7 +1930,7 @@ The levels:
 | `api` | Firmware | `min_client_api` | What changed |
 |---|---|---|---|
 | 1 | none released (development builds after 3.10.13) | 0 | The first level clients send. Firmware up to 3.10.13 announces no `api`: treat it as level 1. |
-| 2 | 4.0.0 | 2 | Clients classify refusals by [error code](#error-codes) only, never by their text. Every refusal a client acts on has a code, and the text of a coded refusal is the catalog's. Firmware 4.0.0 refuses every client that does not send `"client_api":2` or higher. |
+| 2 | 4.0.0 | 2 | Clients classify refusals by [error code](#error) only, never by their text. Every refusal a client acts on has a code, and a coded refusal carries no message: the client renders the catalog's. Firmware 4.0.0 refuses every client that does not send `"client_api":2` or higher. |
 
 A command whose `client_api` is below `min_client_api` is refused before every other
 [gate](#gates-that-apply-to-every-command), on the LAN, USB and both cloud paths:
@@ -2214,19 +2220,19 @@ puts back:
 | `steps` / `delay_us` not a plain non-negative integer | `"invalid steps"` / `"invalid delay_us"` |
 | `steps` outside 1..65535 (the gateware step counter is 16-bit) | `"steps must be 1..65535 (the step counter is 16-bit): split a longer move into several trains"` |
 | `delay_us` outside 4..65535 | `"delay_us must be 4..65535 (microseconds per half-phase: a step takes 2 x delay_us)"` |
-| a step train is already running | `"busy"` |
+| a step train is already running | `BP0066` (`step_busy`) |
 | step `la` invalid or out of range | `"invalid args"` |
 | `dir_la` invalid, or equal to `la` | `"invalid dir_la"` / `"dir_la must be a different pin than la"` |
-| the step or direction pin belongs to another function | `"pin conflict: LA<n> is in use by <function>; <how to release>"` |
+| the step or direction pin belongs to another function | `BP0031` (`la_pin_in_use`, args `la`, `owner`, `function`, `instance`) |
 | `la` outside 1-14 | `"LA<n> is not a pin (use 1..14)"` |
 | `pull` not `up`, `down` or `off` | `"pull must be up, down or off"` |
 | `up`/`down` (or `pullup:"on"`) on a channel without a resistor | BP0023 `"LA9 has no pull resistor on this board"` |
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
-| pull-**down** enable on a pin whose function needs the line high | `"pull conflict: LA7 is used by …"` (see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
+| pull-**down** enable on a pin whose function needs the line high | `BP0033` (`la_pull_down_conflict`; see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
 | `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
 | `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
-| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` `"la voltage not set; set la_mv in the active wiring profile, or call la_voltage first"` |
+| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` (`la_voltage_not_set`) |
 | the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
@@ -2267,35 +2273,25 @@ the wire agree again.
 
 #### Conflict errors
 
-Claiming a pin another function owns fails with a machine-parseable prefix:
+Claiming a pin another function owns is refused with `BP0031` (`la_pin_in_use`):
 
+```json
+{"status":"error","code":"BP0031","args":{"la":4,"owner":"gpio","function":"gpio","instance":""}}
 ```
-pin conflict: LA<n> is in use by <function>; <how to release>
-```
 
-An emulated sensor's pin names its instance: `pin conflict: LA<n> is in use by
-sensor:<instance> (<function>); stop the sensor emulation first
-({"cmd":"sensor_stop","instance":"<instance>"})`. In `la_pins` such a pin carries
-`"owner":"sensor:<instance>"`; on an I2C line several sensors share, the first one and how many
-others: `"sensor:env+1"`.
-
-| Owner | `<how to release>` |
-|---|---|
-| `gpio` | `release it with {"cmd":"gpio","la":<n>,"mode":"off"}` |
-| `uart_rx` / `uart_tx` | `stop the uart proxy first` |
-| `swd_clk` / `swd_dio` | `end the SWD session first` |
-| `i2c_sda` / `i2c_scl` / `sensor_*` | `stop the sensor emulation first ({"cmd":"sensor_stop","instance":"<instance>"})` |
-| `step` / `step_dir` | `wait for the step train to finish` |
-| `spi_*` | `stop the SPI session first ({"cmd":"spi_stop"})` |
-| `i2cm_*` | `stop the I2C session first ({"cmd":"i2c_stop"})` |
+`owner` is what `la_pins` shows: the function (`gpio`, `uart_tx`, `swd_dio`, `step`, `spi_cs`,
+`i2cm_sda`, ...), or for an emulated sensor's pin `sensor:<instance> (<function>)` with
+`instance` set. In `la_pins` such a pin carries `"owner":"sensor:<instance>"`; on an I2C line
+several sensors share, the first one and how many others: `"sensor:env+1"`. What frees the pin
+follows from the function: `gpio` with `mode` `off` for a GPIO, `uart_proxy_stop` for the UART,
+the end of the SWD session or the step train, `sensor_stop` for a sensor, `spi_stop` or
+`i2c_stop` for the masters. The catalog's fix says it in each client's terms. SCPI and the USB
+console get the text `pin conflict: LA<n> is in use by <owner>`.
 
 When a request names several pins, the **first** conflict is reported and **nothing changes**.
 
-Setting a level on a pin that is not a gpio output:
-
-```
-LA<n> is not a gpio output (function <function>[, gpio <mode>]); configure it with {"cmd":"gpio","la":<n>,"mode":"output"}
-```
+Setting a level on a pin that is not a gpio output is refused with `BP0036`
+(`la_not_gpio_output`, args `la` and `function`, `gpio input` for a GPIO input).
 
 #### Pull compatibility
 
@@ -2314,13 +2310,14 @@ with its pull-down engaged.
 | `i2c_sda`, `i2c_scl` | ok | **conflict** — an open-drain bus needs pull-ups |
 | `swd_dio` | ok | **conflict** — SWDIO is pulled up when released |
 
-```
-pull conflict: LA7 has its 10k pull-down engaged, which uart_rx can't work with (the line idles high); disable it with {"cmd":"la","la":7,"pull":"off"} or use another channel
-pull conflict: LA7 is used by i2c_sda, which can't work with the 10k pull-down (an open-drain bus needs pull-ups)
+```json
+{"status":"error","code":"BP0032","args":{"la":7,"ohms":"10k","function":"uart_rx","reason":"the line idles high"}}
+{"status":"error","code":"BP0033","args":{"la":7,"ohms":"10k","function":"i2c_sda","reason":"an open-drain bus needs pull-ups"}}
 ```
 
-The first form comes from a claim (`uart_proxy_start`, `dap_start`, `sensor_start`, `gpio`),
-the second from `{"cmd":"la","la":7,"pull":"down"}` on a pin that is already in use.
+`BP0032` (`la_pull_down_engaged`) comes from a claim (`uart_proxy_start`, `dap_start`,
+`sensor_start`, `gpio`), `BP0033` (`la_pull_down_conflict`) from `{"cmd":"la","la":7,"pull":"down"}`
+on a pin that is already in use.
 
 ---
 
@@ -2362,7 +2359,7 @@ Response:
 The full reply is about 1.3 kB, and it is the largest single-reply command the pod has. With a
 `dir` and a `warn` on every pin it can reach about 1.8 kB, and with an emulated sensor instance
 with a long name on every pin about 2.4 kB. That is more than one cloud command reply holds
-(1791 bytes), and the pod answers `"reply too large"`. Read the list in two parts then:
+(1791 bytes), and the pod answers `BP0053` (`reply_too_large`; `BP0054` over the cloud). Read the list in two parts then:
 `"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
@@ -2380,10 +2377,9 @@ drive a DUT line.
 (the default after a reboot). Hosts send it from the wiring profile. On a pin wired to a DUT
 output the pod refuses every push-pull driver (a gpio `output`, UART TX, SPI SCK / MOSI / CS, SWD,
 the step train, an emulated sensor's TX / MISO / data-ready), because two push-pull outputs would
-drive against each other: `direction conflict: LA9 is wired to a DUT output and gpio output would
-drive against it; use gpio open_drain, or fix the wiring if LA9 is not a DUT output`. Open drain
+drive against each other: `BP0034` (`la_dut_output`, args `la` and `function`). Open drain
 (`open_drain`, I2C) and inputs are allowed. A pin that is driven can't be marked `dut_output`
-until it is released. `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
+until it is released (`BP0035`, `la_driven_pin`). `{"cmd":"la_dir"}` lists every pin. The reply is the `la_pins` entries of
 the pins it changed.
 
 ### `gpio` — use LA pins as GPIO
@@ -2431,11 +2427,8 @@ The whole request is validated first: on any error **nothing changes**.
 ```
 
 `levels` bit `la-1` is the live level of LA`<la>`, sampled in the fabric through a two-flop
-synchroniser. This needs gateware **v35** or newer; older images answer:
-
-```
-reading pin levels needs gateware v35 or newer (this pod runs v34)
-```
+synchroniser. This needs gateware **v35** or newer; older images answer `BP0017`
+(`gateware_too_old`, feature `reading pin levels`, min 35).
 
 #### Response (1 and 2)
 
@@ -2449,7 +2442,7 @@ The affected pins, in the same entry shape `la_pins` uses:
 
 | Condition | Message |
 |---|---|
-| the LA voltage has not been set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
+| the LA voltage has not been set | `BP0001` (`la_voltage_not_set`) |
 | neither `mode` nor `level` given, with a `la` | `"gpio needs a mode or a level"` |
 | `mode` not recognised | `"mode must be input, output, open_drain or off"` |
 | `level` not 0/1 | `"level must be 0 or 1"` |
@@ -2457,10 +2450,10 @@ The affected pins, in the same entry shape `la_pins` uses:
 | `la` out of range | `"la must be 1..14 (or \"all\" with \"mode\":\"off\")"` |
 | `"la":"all"` with anything but `"mode":"off"` | `"\"la\":\"all\" is only allowed with \"mode\":\"off\""` |
 | `level` with `"mode":"input"` | `"level applies to output and open_drain pins, not input"` |
-| the pin belongs to another function | `"pin conflict: …"` (see [above](#la-pin-ownership)) |
-| a pull-down would fight the mode | `"pull conflict: …"` (see [above](#la-pin-ownership)) |
-| level set on a pin that is not a gpio output | `"LA<n> is not a gpio output (…)"` |
-| `{"cmd":"gpio"}` read on gateware < v35 | `"reading pin levels needs gateware v35 or newer (this pod runs vNN)"` |
+| the pin belongs to another function | `BP0031` (see [above](#la-pin-ownership)) |
+| a pull-down would fight the mode | `BP0032` (see [above](#la-pin-ownership)) |
+| level set on a pin that is not a gpio output | `BP0036` (`la_not_gpio_output`) |
+| `{"cmd":"gpio"}` read on gateware < v35 | `BP0017` (feature `reading pin levels`, min 35) |
 
 #### SCPI
 
@@ -2561,8 +2554,8 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 | `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` (digital v3r4: `"la voltage must be 1800, 3300 or 5000 (mv)"`) |
 | `mv: 5000` and pin 21 stayed below 4.3 V (digital v3r4) | `BP0028`: `"5 V did not come up on pin 21 (4120 mV); check the USB supply"` |
 | `mv: 1800` on a v2 pod | `"1.8 V needs a v3 pod; this board is v2 (its TPS2116 has no 1.8 V setting)"` |
-| any LA op before a voltage is set | `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` |
-| a **change** while any LA pin has a function | `"la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx); stop them first"` |
+| any LA op before a voltage is set | `BP0001` (`la_voltage_not_set`) |
+| a **change** while any LA pin has a function | `BP0037` (`la_voltage_pins_in_use`, args `pins`: `"LA3 (uart_rx), LA4 (uart_tx)"`) |
 
 > **Not while pins are in use.** Switching the bank glitches every LA line, so a change is refused while any pin is owned by a function other than
 > `none` (see [pin ownership](#la-pin-ownership)); the message names each pin and its function.
@@ -3034,10 +3027,10 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | `de` is the `rx` or `tx` channel | code `BP0022` |
 | `de` on gateware older than v58 | code `BP0017` |
 | `parity` or `stop_bits` has another value | `"invalid uart frame: parity is none, even or odd; stop_bits is 1 or 2"` |
-| parity or two stop bits on gateware older than v56 | code `BP0017` (the text is unchanged: `"uart parity and stop bits need gateware v56+: update the pod's firmware"`) |
-| a UART proxy is already active (console or another connection) | `"uart busy"` |
-| `rx` or `tx` belongs to another function | `"pin conflict: …"` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `"pull conflict: …"`: the UART idles high |
+| parity or two stop bits on gateware older than v56 | `BP0017` (feature `parity and stop_bits`, min 56) |
+| a UART proxy is already active (console or another connection) | `BP0049` (`uart_session_open`) |
+| `rx` or `tx` belongs to another function | `BP0031` (see [pin ownership](#la-pin-ownership)) |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `BP0032`: the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
@@ -3082,9 +3075,8 @@ command channel.
 Reply: `{"sck":3,"mosi":4,"miso":5,"cs":6,"hz":1000000,"mode":0}` with the rate actually used.
 CS is driven high (released) until a transfer.  Needs the LA voltage set first.
 
-Errors: `SPI master needs gateware v45+`, `SPI modes 1 and 2 need gateware v55+: update the pod's firmware`,
-`spi busy: send spi_stop first`,
-`swd or spi busy: end the SWD session first`, and the usual `pin conflict:` / `pull conflict:`.
+Errors: `BP0017` (the SPI master needs gateware v45, modes 1 and 2 v55), `BP0004` (an SPI session
+is open), `BP0005` (the engine runs an SWD or I2C session), and the pin codes `BP0031` / `BP0032`.
 
 ### `spi_stop` / `spi_status`
 
@@ -3221,8 +3213,8 @@ failure: `no answer from the ROM loader` (wiring, straps, or the target is not p
 (ESP8266)`, `aborted`.
 
 Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
-staged upload`, `busy`, `busy: an ESP32 flash is running`, `uart busy: stop the uart proxy first`,
-a pin conflict, `this pod has no reset pin: wire EN to an LA pin and pass en`.
+staged upload`, `BP0047` (`pod_busy`), `busy: an ESP32 flash is running`, `BP0049` (a UART
+session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN to an LA pin and pass en`.
 
 ## I2C master
 
@@ -3246,10 +3238,10 @@ command and reply fits one cloud frame.
 The pod never switches a pull-up by itself; the error says which command does.
 Reply: `{"sda":1,"scl":2,"hz":363636,"pullups":"pod"}` with the rate actually used.
 
-Errors: `the I2C master needs gateware v55+: update the pod's firmware`, `I2C needs pull-ups: switch
-on LA1's with {"cmd":"la","la":1,"pull":"up"}, or pass "pullups":"external"`, `LA7 has no pod
-pull-up on this board...`, `i2c busy: send i2c_stop first`, `swd, spi or i2c busy: end that
-session first`, and the usual `pin conflict:` / `pull conflict:`.
+Errors: `BP0017` (the I2C master needs gateware v55), `BP0061` (`i2c_needs_pullups`: switch on
+the pull-up, or pass `"pullups":"external"`), `BP0029` (pin 21 is down, so the pod's pull-ups are
+off), `LA7 has no pod pull-up on this board...`, `BP0003` (an I2C session is open), `BP0005` (the
+engine runs an SWD or SPI session), and the pin codes `BP0031` / `BP0032`.
 
 ### `i2c_stop` / `i2c_status`
 
@@ -3273,7 +3265,8 @@ With neither, the pod sends the address alone (a probe). Reply:
 says which: 0 the address, 1..N the Nth written byte, N+1 the address of the read. `rx` is empty
 when the device did not answer the read.
 
-Errors: `no I2C session: send i2c_start first`, `SCL held low: a target stretched the clock for
+Errors: `BP0062` (`i2c_session_not_open`), `BP0063` (`i2c_engine_reset`: a gateware reload
+ended the session), `SCL held low: a target stretched the clock for
 over 200 ms, or the bus is stuck; the pod released the bus`, `arbitration lost: another master
 drove SDA low; the pod released the bus`.
 
@@ -3326,9 +3319,8 @@ the DAC waveform that is playing: dac_stop it first"`. Without the image install
 
 While the emulation image runs, the closed DAC loop (`dac_control_loop`, `dac_loop_input`,
 `dac_loop_probe`) and deep DAC replay (`load_bin` with `psram`, a deep `replay`) are not
-available; they fail with an error that names the way back:
-`"control loop is not in the emulation image, which the emulated sensors use:
-{"cmd":"sensor_stop","all":true} then {"cmd":"fpga_image","image":"loop"}"`. Captures, the UART
+available; they fail with `BP0059` (`fpga_image_sensors_first`, args `feature` and `image`: stop
+the sensors, then switch to that image). Captures, the UART
 proxy, SWD, GPIO, the SPI master, `generate` and shallow `replay` work in every image. The pod does
 not swap back by itself: after `sensor_stop` the emulation image stays loaded until
 [`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
@@ -3456,16 +3448,17 @@ What the gateware supports, and the limits that follow:
   is refused for now (`"excitation: adc is not supported by the pod yet"`). An analog start is
   refused while a DAC waveform plays, and while an analog sensor plays an output, the commands that
   drive it (`generate`, `replay`, `load`, `load_bin`, `measure`, `dac_set`, `dac_out`,
-  `dac_control_loop`, and `current_out`) are refused with `"the dac output is played by
-  sensor:ntc; stop it first ({"cmd":"sensor_stop","instance":"ntc"})"`. On a board where the
+  `dac_control_loop`, and `current_out`) are refused with `BP0065` (`output_used_by_sensor`, args
+  `output` `dac` or `current` and `instance`). On a board where the
   4-20 mA output shares the DAC (no quad DAC), both outputs count as the DAC. `dac_stop` stops the
   analog instances on the DAC too (they stay defined).
 
-Errors include `"unknown sensor instance 'env'"`, `"env is running: sensor_stop it first"`,
+Errors include `BP0055` (`sensor_instance_unknown`), `"env is running: sensor_stop it first"`,
 `"an I2C sensor needs pins sda and scl"`, `"address 0x76 is not one of this sensor's addresses"`,
 `"address 0x76 is used by sensor:env on this bus"`, `"all 4 I2C sensor slots are in use:
 sensor_stop one first"`, `"the sensor FIFO is used by sensor:imu (one FIFO sensor at a time)"`,
-`"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` and the pin conflicts.
+`BP0001` (`la_voltage_not_set`), `BP0017` (I2C, SPI and UART sensors need gateware v54) and the
+pin codes (`BP0031` and on).
 
 ### `sensor_set` — change readings
 
@@ -3585,10 +3578,9 @@ then always caught, where a capture at once mostly missed it.
 | `timeout_ms` | integer | no | 2000 | How long `"start"` waits, 1..600000. |
 
 While it waits the emulation keeps running (the DUT's reads and writes are answered as usual) and
-the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `busy`. When nothing happens on
-the bus in time the reply is the error
-`"trigger timeout: no falling edge on LA2 (SDA of env) within 2000 ms; the DUT did not use the I2C bus"`
-(the `trigger timeout:` form of the other captures).
+the pod answers other commands; the ones that need the capture engine or its buffer (other captures, `sensor_regs`, `load`) answer `BP0047` (`pod_busy`). When nothing happens on
+the bus in time the reply is `BP0039` (`sensor_trigger_timeout`, args `la`, `instance`,
+`timeout_ms`), the sensor form of the other captures' `BP0038`.
 
 The data comes back chunked like the other sample arrays (a stream connection: not over the cloud
 command channel), one byte per four samples, oldest first in the high bits: bit7 SCL(s0), bit6
@@ -3811,12 +3803,11 @@ toward it. `dac_stop` disarms the loop.
 
 The reply echoes the effective values: `{"armed":true,"k":..,"vmin":..,"vmax":..,"tick_div":..,"curve_pts":..,"source":"adc","input":0,"step":0}`, plus `in_zero`, `in_gain`, `idx_max` and `trip_idx` when an input map is set.
 
-Errors: `"control loop needs gateware v23+"`, `"loop input sources need gateware v29+"`,
-`"loop input map needs gateware v30+"`, `"unknown loop input source (use adc, fixed or sweep)"`,
-`"curve base64 decode failed"`, `"curve needs at least one 16-bit point"`, the parameter checks
-(inverted window, zero-step sweep), `"sweep cannot be combined with an input map on this
-gateware: ..."`, `"control loop not in the running gateware image (switch with
-{"cmd":"fpga_image","image":0})"` and `"control loop arm failed"`.
+Errors: `BP0017` (the control loop needs gateware v23, input sources v29, the input map v30),
+`"unknown loop input source (use adc, fixed or sweep)"`, `"curve base64 decode failed"`, `"curve
+needs at least one 16-bit point"`, the parameter checks (inverted window, zero-step sweep),
+`BP0064` (`loop_sweep_with_map`), `BP0058` (`fpga_image_required`: the control loop needs the
+`loop` image; `BP0059` on the emulation image) and `"control loop arm failed"`.
 
 ### `dac_loop_input` — retarget a running loop
 
@@ -3842,8 +3833,7 @@ and `"loop input update failed"`.
 Reply: `{"i":<raw ADC count>,"in":<what the loop indexed with>,"source":"adc","v":<DAC code>,"tripped":false}`.
 Plot against `in`, not `i`: in a fixed or sweep run the ADC is not in the path. `tripped` is the
 latched over-range trip (the output then sits at `vmin` until the loop is disarmed). On the
-deep-replay image it answers `"closed-loop DAC not in the running gateware image (switch with
-{"cmd":"fpga_image","image":0})"`.
+deep-replay image it answers `BP0058` (`fpga_image_required`, image `loop`).
 
 <a id="fpga_image--switch-the-running-gateware-image"></a>
 ### `fpga_image` — switch the running gateware image
@@ -3864,12 +3854,12 @@ to the cloud, and puts an external output stage back on its park level when DAC 
 Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
 running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation.
 
-Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `"the emulation image needs
-gateware v54 or later"`, `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
-gateware blobs"`, `"image switch refused: the emulated sensors env, imu need the emulation image;
-stop them first ({"cmd":"sensor_stop","all":true})"`, `"image switch: reflash failed (CDONE never
-rose)"`, `"image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod
-restarts and reloads the iCE40)"`, `"image switch failed"` and `"busy"`.
+Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `BP0017` (the emulation image needs
+gateware v54), `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
+gateware blobs"`, `BP0057` (`image_switch_sensors_running`, args `sensors`: `"env, imu"`), `"image
+switch: reflash failed (CDONE never rose)"`, `"image switch: iCE40->PSRAM write inoperable after
+retries (run psram_recover: the pod restarts and reloads the iCE40)"`, `"image switch failed"` and
+`BP0047` (`pod_busy`).
 
 ### `psram_ping` — check the iCE40 to PSRAM write path
 
@@ -4057,7 +4047,7 @@ settings on the module):
 | `{"cmd":"module","eeprom":"id","type":"analog","rev":"1.0","serial":"AM-000123"}` | Write the ID fields (`type` defaults to `"analog"`, `serial` up to 16 characters) and keep the calibration fields. Replies with the module object. |
 | `{"cmd":"module","eeprom":"cal_commit","len":300}` | Record the first `len` bytes of the calibration area as the calibration blob: their length and CRC go into the header (0 clears it). Replies with the module object. |
 
-Errors: `module: this BenchPod has no module link (digital v3r3 only)` on any other board, and
+Errors: `BP0056` (`no_module_link`, args `cmd`) on any other board, and
 `module: no module plugged in, or module power is off` for the EEPROM forms.
 
 EEPROM layout, version 1 (little endian):
@@ -4117,8 +4107,7 @@ Reply `{"module":true,"bridge":true}`, the state after the change. Turning the m
 the DAC and the +-14 V supply first. Turning it back on sets up U58 again (relays off), parks the
 DAC outputs and switches the +-14 V supply on, as at boot; if U58 does not answer, the reply is
 `module_power: module power is on, but U58 does not answer`. While the module is off, the analog
-commands fail. Refused on other boards with `module_power: this BenchPod has no module link
-(digital v3r3 only)`.
+commands fail. Refused on other boards with `BP0056` (`no_module_link`).
 
 ---
 
@@ -4391,18 +4380,18 @@ Refusals:
 | Condition | Message |
 |---|---|
 | `size` or `sha256` missing | `"missing size/sha256"` |
-| Unknown `target` | `"unknown target"` |
-| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `"cloud_ca: change it from the cloud or over USB"` |
-| Another transport holds the session | `"busy: <target> update from <holder> is in progress"` (see [Error Reference](#error-reference)) |
-| A capture or upload is running | `"busy: a capture or upload is running"` |
+| Unknown `target` | `BP0060` (`ota_unknown_target`) |
+| `ca` from Ethernet or Wi-Fi (the USB network adapter may) | `BP0042` (`setting_cloud_or_usb`, setting `cloud_ca`) |
+| Another transport holds the session | `BP0051` (`update_in_progress`, args `target`, `holder`). Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over. A session with no progress for 30 s may be replaced or aborted from any transport. The ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` or `""` |
+| A capture or upload is running | `BP0047` (`pod_busy`) |
 | Safe mode turned the PSRAM off | `"safe mode: iCE40/PSRAM are off. Unplug and replug the pod"` (the gate) |
 | Size, hash or chunk problems | `"bad size"`, `"bad sha256"`, `"chunk out of range"`, `"incomplete image"`, `"sha256 mismatch"`, `"invalid data"`, `"missing data"` |
 | The policy refuses the signature | `"signature: <result>"` |
 | The image could not enforce `required` | `"image cannot enforce signatures (policy required)"` |
 | `ota_commit` before a successful `ota_end` | `"no verified image staged"` |
-| Any `ota_*` that would change the session while an `esp` image is written into the C3 | `"busy: the ESP32-C3 is being flashed (about 2 minutes); try again when it ends"` |
+| Any `ota_*` that would change the session while an `esp` image is written into the C3 | `BP0048` (`storage_bus_busy`) |
 | `esp` on a board without the ESP32-C3 | `"this BenchPod has no ESP32-C3: it takes no esp image"` |
-| `ota_selftest` while the hardware is busy | `"busy"`, or `"ota selftest failed (see console log)"` |
+| `ota_selftest` while the hardware is busy | `BP0047` (`pod_busy`); a failed test is `"ota selftest failed (see console log)"` |
 
 ### `blob_status` — what the W25Q slots hold
 
@@ -4754,63 +4743,67 @@ For a single calibrated reading of any source, use [`adc_read`](#adc_read--route
 
 ## Error Reference
 
-All errors follow the format:
+Coded refusals (firmware 4.0.0) carry `code` and `args` only; the message, cause and fix of each
+are in [`errors/ERRORS.md`](../errors/ERRORS.md) and [`errors/errors.json`](../errors/errors.json).
+The ones the commands above name:
 
-```json
-{"status":"error","message":"<description>"}\n
-```
+| Code | Name | Args | Raised by |
+|---|---|---|---|
+| `BP0001` | `la_voltage_not_set` | | an LA command before the I/O voltage is set |
+| `BP0002` | `unknown_command` | `cmd` | a `cmd` the firmware does not know |
+| `BP0003`, `BP0004` | `i2c_session_open`, `spi_session_open` | | `i2c_start` / `spi_start` while a session is open |
+| `BP0005` | `bus_engine_busy` | `want` | SWD, SPI or I2C while another of them runs |
+| `BP0017` | `gateware_too_old` | `feature`, `min` | a feature the running gateware is too old for |
+| `BP0025` | `lease_busy` | `holder`, `purpose`, `left_s` | a command while someone else holds the pod's lease (a cloud job: holder `a cloud job`) |
+| `BP0030` | `client_too_old` | `client_api`, `min_client_api`, `api` | a client below `min_client_api` (it also carries a `message`) |
+| `BP0031` | `la_pin_in_use` | `la`, `owner`, `function`, `instance` | claiming an LA pin another function holds ([pin ownership](#la-pin-ownership)) |
+| `BP0032`, `BP0033` | `la_pull_down_engaged`, `la_pull_down_conflict` | `la`, `ohms`, `function`, `reason` | a function and an engaged pull-down that cannot share a line |
+| `BP0034`, `BP0035` | `la_dut_output`, `la_driven_pin` | `la`, `function` | driving a pin `la_dir` marks as a DUT output, or marking a driven pin |
+| `BP0036` | `la_not_gpio_output` | `la`, `function` | writing a level or a gpio send on a pin that is not a GPIO output |
+| `BP0037` | `la_voltage_pins_in_use` | `pins` | `la_voltage` while pins are in use |
+| `BP0038`, `BP0039` | `trigger_timeout`, `sensor_trigger_timeout` | `la`, `edge` or `instance`, `timeout_ms` | a [capture trigger](#capture-triggers) that never fired |
+| `BP0040` | `lan_locked` | `cmd` | a T2 or T3 command on a locked LAN |
+| `BP0041` to `BP0044` | `policy_not_from_lan`, `setting_cloud_or_usb`, `setting_device_only`, `policy_loosen_usb_only` | `setting` (and `now`) | a [pod policy](#pod-policies) or a trust setting changed from the wrong place |
+| `BP0045` | `role_required` | `cmd` | a cloud tunnel without the role a command needs |
+| `BP0046` | `no_analog_front_end` | `cmd` | an analog command on the digital board |
+| `BP0047` | `pod_busy` | | a capture, measurement, upload or update while another one runs |
+| `BP0048` | `storage_bus_busy` | `what` | a storage write while the shared bus is in use |
+| `BP0049`, `BP0050` | `uart_session_open`, `swd_session_open` | | `uart_proxy_start` / `dap_start` while one runs |
+| `BP0051` | `update_in_progress` | `target`, `holder` | an `ota_*` command while another transport holds the update |
+| `BP0052` | `cloud_command_busy` | | a cloud command while the previous one runs |
+| `BP0053`, `BP0054` | `reply_too_large`, `cloud_reply_too_large` | (`bytes`, `limit`) | a reply larger than the pod (or the cloud channel) can send |
+| `BP0055` | `sensor_instance_unknown` | `instance` | a `sensor_*` command naming an instance that is not there |
+| `BP0056` | `no_module_link` | `cmd` | `module` / `module_power` on a board without the module link |
+| `BP0057` to `BP0059` | `image_switch_sensors_running`, `fpga_image_required`, `fpga_image_sensors_first` | `sensors` / `feature`, `image` | the [gateware images](#closed-loop-dac-gateware-images-and-psram) |
+| `BP0060` | `ota_unknown_target` | `target` | an `ota_begin` target this firmware does not know |
+| `BP0061` to `BP0063` | `i2c_needs_pullups`, `i2c_session_not_open`, `i2c_engine_reset` | (`la`) | the [I2C master](#i2c-master) |
+| `BP0064` | `loop_sweep_with_map` | | `dac_control_loop` sweep with an input map |
+| `BP0065` | `output_used_by_sensor` | `output`, `instance` | a DAC or current command while an analog emulated sensor plays that output |
+| `BP0066` | `step_busy` | | an `la` step train while one runs |
+
+Refusals without a code keep `{"status":"error","message":...}`; the common ones:
 
 | Message | Cause |
 |---|---|
 | `"missing cmd"` | Request JSON has no `"cmd"` field |
-| `"unknown cmd"` | `cmd` value not recognised |
 | `"command too long"` | A JSON line longer than 1279 bytes |
-| `"busy"` | A command that uses the capture hardware while another one runs |
 | `"command not supported over cloud channel"` | A streaming command on the single-reply cloud command channel (see [Commands](#commands)) |
-| `BP0030` `"update the BenchPod SDK, MCP or CLI: this firmware needs client API <m> or newer (this client sent <n>)"` | A client older than the firmware's `min_client_api` (see [Client compatibility](#client-compatibility)) |
-| `"locked: <cmd> needs the cloud or USB"`, `"busy: a cloud job holds this pod (...)"`, `"forbidden: <cmd> needs an organization owner or admin"`, `"safe mode: ..."`, `"this BenchPod has no analog front end (digital board): ..."` | The [gates](#gates-that-apply-to-every-command) |
-| `"la voltage not set; set la_mv (1800 or 3300) in the active wiring profile, or call la_voltage (mv 1800 or 3300) first"` | An LA command before `la_voltage` |
+| `"safe mode: ..."` | The safe-mode [gate](#gates-that-apply-to-every-command) |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
-| `"generate failed"` | Invalid `freq` (≤ 0) or `amplitude` (= 0) |
-| `"samples out of range"` | `samples` outside the command's range (see each command); firmware 3.10.0 and later add the range, `"samples out of range: 1 to <max>"` |
-| `"samples out of range (use capture_dual for deep captures)"` | `capture` / `stream` with more than 32768 samples |
+| `"generate failed"` | Invalid `freq` (<= 0) or `amplitude` (= 0) |
+| `"samples out of range: 1 to <max>"` | `samples` outside the command's range (see each command) |
 | `"capture failed"` | The capture did not arm or did not complete |
-| `"missing waveform"` | `measure` request without `waveform` field |
-| `"unknown waveform (use sine, square or sawtooth)"` | `measure` with another waveform |
-| `"measure start failed"` | `measure` invoked with invalid params |
-| `"missing la"` | `la` step request without `la` field |
-| `"missing state"` | `target_power` request without `state` field |
-| `"missing efuse"` | `target_power` request without `efuse` field |
-| `"invalid efuse"` | `target_power` `efuse` is not 1 or 2 |
-| `"invalid swd la channel"` | `dap_start` channel outside 1..14 or both channels equal |
-| `"missing rx"` / `"missing tx"` | `uart_proxy_start` request without `rx`/`tx` field |
-| `"invalid uart args"` | `uart_proxy_start` channel outside 1..14 or `rx`==`tx` |
-| `"uart busy"` | a UART proxy is already active (console or another connection) |
-| `"unknown sensor instance '<name>'"` | a `sensor_*` command naming an instance that is not defined |
+| `"invalid swd la channel"`, `"invalid uart args"` | a channel outside 1..14, or two equal channels |
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
-| `"chunk at offset N, expected M (start again at offset 0)"` | `sensor_define` / `sensor_stimulus` chunk out of order |
-| `"<key> must be <min>..<max> <unit>"` | `sensor_set` / `sensor_start` value out of range |
-| `"start/len out of range (0..255)"` | `sensor_regs` `len` = 0 or `start`+`len` > 256 |
-| `"missing nonce"` | `identity_pop` request without `nonce` field |
-| `"invalid nonce"` | `identity_pop` nonce is not valid base64url, or decodes to 0 or > 128 bytes |
-| `"identity not available"` | Device identity not initialised (should not occur after boot) |
-| `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after an OTA staging, a `load_bin` with `"psram"`, a gateware reload or another (SCPI/console) capture wrote over the capture's PSRAM regions |
-| `"busy: <target> update from <holder> is in progress"` | an `ota_*` command (or `upload-*` on the USB console of firmware before 3.9.0) while another transport (`the cloud`, `the USB console`, `LAN connection N`) holds the update session. Within the LAN, a second connection is refused while the one holding the session is open; once it closes, the next LAN connection takes the session over and continues (one connection per command works). A session with no progress for 30 s may be replaced or aborted from any transport. `ota_status` and the other ota replies carry `"owner"`: `"cloud"`, `"usb"`, `"lan:N"` (the current LAN connection) or `""` |
-| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin (cloud `ota.begin`, LAN or USB network `ota_begin`) in a safe mode that turned the iCE40/PSRAM off |
-| `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` | `cloud_ca` clear and `cloud_proxy` set/clear (and the console `cloud-ca-clear`, `cloud-proxy-set`, `cloud-proxy-clear` and their short names, `flash-esp32` and PSRAM diagnostics) while the shared PSRAM/W25Q bus is in use |
-| `"cloud_ca: change it from the cloud or over USB"`, `"cloud_proxy: ..."`, `"sig_policy: change it from the cloud or the USB console"`, `"lan_policy: ..."` | Changing the company CA, the proxy or a policy from a LAN connection (see [Pod policies](#pod-policies)) |
-| `"identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb"` | `identity_wipe` from anywhere but the USB console |
+| `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after something wrote over the capture's PSRAM regions |
+| `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin in a safe mode that turned the iCE40/PSRAM off |
+| `"identity_wipe: only on the pod's USB console (physical presence): ..."` | `identity_wipe` from anywhere but the USB console |
 
-Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`): safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`, each with the JSON refusal text attached; a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution error`; and the DAC limits as `-221 Settings conflict` with the limits' reason.
-
-Three families carry a **machine-parseable prefix** — clients (the Python SDK among them) match
-on the prefix and show the rest to the user:
-
-| Prefix | Raised by | Details |
-|---|---|---|
-| `pin conflict: ` | any command claiming an LA pin (`gpio`, `uart_proxy_start`, `dap_start`, `sensor_start`, the `la` step train, SCPI `DIGital:*`) | [pin ownership](#la-pin-ownership) |
-| `pull conflict: ` | the same claims, and `{"cmd":"la",…,"pull":"down"}` | [pull compatibility](#la-pin-ownership) |
-| `trigger timeout: ` | `capture`, `capture_dual`, `la_capture` with a `trigger` | [capture triggers](#capture-triggers) |
+Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`) with their text, for a
+person: safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`;
+a pin conflict, a busy capture lock, or a trace that a JSON command replaced, as `-200 Execution
+error`; and the DAC limits as `-221 Settings conflict` with the limits' reason. The USB console
+prints its own text too.
 
 ---
 
@@ -4848,7 +4841,7 @@ $ nc 192.168.1.220 8080
 {"status":"ok","data":{"public":"ue5UfSsOAhQYZ332ELokjOI8-uyjcbrd1ic3Nmypvzk"}}
 
 {"cmd":"cloud_set","host":"www.embeddedci.com","device_id":"<uuid>","tls":true}
-{"status":"error","message":"locked: cloud_set needs the cloud or USB"}
+{"status":"error","code":"BP0040","args":{"cmd":"cloud_set"}}
 ```
 
 The last reply is what a pod with the LAN policy `locked` answers; on an `open` LAN it stores the
@@ -4874,8 +4867,8 @@ See `docs/design/policy-commands.md` for the full rules.
 
 `audit` (default) accepts every update and reports its signature check; `permissive` refuses a
 bad signature; `required` refuses anything not signed by a key the firmware trusts. Over the
-cloud the policy can only get stricter (`sig_policy: only the USB console can loosen the policy
-(now required)`); the LAN cannot change it; the USB console (`sig-policy <value>`) can set any
+cloud the policy can only get stricter (`BP0044`, `policy_loosen_usb_only`, args `setting`
+`sig_policy` and `now`); the LAN cannot change it (`BP0041`); the USB console (`sig-policy <value>`) can set any
 value.
 
 **Updates from Ethernet and Wi-Fi need a signature** (firmware 3.10.7+). The LAN API has no
@@ -4888,7 +4881,7 @@ adapter (`benchpod flash-self --network --connection usb`), the USB console or t
 the policy above applies as before. `lan_unsigned` (`true`) brings back the behavior of firmware
 3.10.6 and earlier, where the LAN followed the policy too. Only the device may turn it on: the
 USB console (`lan-ota any`) or a connection over the USB network adapter. Ethernet and Wi-Fi get
-`lan_ota: change it on the device (the USB console, or over the USB link)`, the cloud may only turn
+`BP0043` (`setting_device_only`, setting `lan_ota`), the cloud may only turn
 it off. Stored; survives reboots and updates.
 
 **ESP32-C3 images are always signed** (firmware 3.10.7+), like the Wi-Fi bridge's firmware: the
@@ -4915,7 +4908,7 @@ none with `rollback-floor clear`.
 ```
 
 The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
-command there gets `locked: <verb> needs the cloud or USB`) or `off` (connections to
+command there gets `BP0040`, `lan_locked`) or `off` (connections to
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
 means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
@@ -4941,7 +4934,7 @@ re-enumerates as its USB console only: the computer sees no network adapter at a
 stored, separate from `lan_policy` (which covers Ethernet and Wi-Fi), and survives a reboot and a
 firmware update. Only the device changes it: the USB console (`usb-network on|off`, the way back
 on) or a connection over the USB link itself (which can turn it off). Ethernet, Wi-Fi and the cloud
-get `usb_network: change it on the device (the USB console, or over the USB link)`; reading works
+get `BP0043` (`setting_device_only`, setting `usb_network`); reading works
 everywhere. The reply comes first; the pod re-enumerates about 0.4 s later. Stored Wi-Fi
 credentials also turn the adapter off (status `usb.off_reason`).
 
@@ -5010,7 +5003,7 @@ and its unencrypted private key (EC P-256/P-384 or RSA 2048-4096), with the uplo
 
 **Who may change it.** Reading works from anywhere. Changing `https_only` (on or off), `regenerate`
 and the upload need the USB console, the USB network adapter (`--connection usb`) or the cloud.
-The external LAN (Ethernet, Wi-Fi) gets `lan_tls: change it from the cloud or over USB`, over
+The external LAN (Ethernet, Wi-Fi) gets `BP0042` (`setting_cloud_or_usb`, setting `lan_tls`), over
 plaintext and over TLS alike: port `8443` has no client authentication, so a TLS connection does
 not show who is on the other end. Firmware 3.9.3 to 3.10.6 let a LAN connection over TLS make all
 of these changes and let plaintext LAN turn `https_only` on. Reading is T0; the changes
@@ -5051,8 +5044,7 @@ Setting or clearing either reconnects the cloud. Reading is T0; setting and clea
 
 **Never from the external LAN.** Installing or clearing the CA and setting or clearing the proxy are
 refused on an Ethernet or Wi-Fi TCP connection whatever the LAN policy (even `open`), with
-`cloud_ca: change it from the cloud or over USB` or
-`cloud_proxy: change it from the cloud or over USB`. Reading both (`{"cmd":"cloud_ca"}`,
+`BP0042` (`setting_cloud_or_usb`, setting `cloud_ca` or `cloud_proxy`). Reading both (`{"cmd":"cloud_ca"}`,
 `{"cmd":"cloud_proxy"}`) still works on the LAN. The reason: a LAN attacker who could install their
 own CA and point the pod at their own proxy could terminate the pod's TLS with a certificate for the
 real server name and relay the host-bound (v2) login, which defeats it.
@@ -5129,7 +5121,7 @@ Held with another id, or a cloud job holds the pod (the server's lease, `status`
 `purpose` is `cloud`):
 
 ```json
-{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245},"message":"busy: benchpod ci: ward holds this pod (process-node-hil, 245 s left)"}
+{"status":"error","code":"BP0025","args":{"holder":"benchpod ci: ward","purpose":"process-node-hil","left_s":245}}
 ```
 
 A missing or malformed `id` is `BP0006` (`args.arg` `id`).
@@ -5160,7 +5152,7 @@ The server can stop the lease (frame `{"type":"lease.break","by":"<name>"}` on t
 Each connection that owned it then gets, for its next command only, instead of running it:
 
 ```json
-{"status":"error","code":"BP0026","args":{"by":"<name>"},"message":"lease lost: stopped by <name>"}
+{"status":"error","code":"BP0026","args":{"by":"<name>"}}
 ```
 
 A stopped lease stays stopped: for 30 minutes after the stop, `lease_acquire`, `lease_renew` and
@@ -5192,6 +5184,6 @@ connections, each an owner only while it is open.
 
 - **JSON parser limitations:** The firmware uses a minimal flat-JSON parser. Nested objects are not supported, except the `trigger` object of the captures; arrays only where a command documents one (`data` of `can_write`, `reply_data` of `can_respond`). Fields must be at the top level of the JSON object, and unknown fields are ignored.
 - **No authentication:** Any TCP client that can reach port 8080 (or 8443, its TLS form) has the full command set (target power, SWD access to an attached target, and pod OTA) unless the LAN policy is `locked` or `off`. Restrict access at the firewall/VLAN level. The cloud channel is unaffected (TLS + Ed25519 device auth). See [Security model](#security-model).
-- **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `"busy"` until the first one's reply is complete.
+- **Concurrent commands:** Up to 5 LAN connections are served at once. Commands run one at a time on one worker task, and the commands that use the capture hardware take turns: a second one gets `BP0047` (`pod_busy`) until the first one's reply is complete.
 - **DAC runs until stopped:** A `generate` with `duration_ms` 0 runs the DAC until `dac_stop`, the next `generate`, `measure` or `replay`, or `OUTPut OFF` over SCPI.
 - **Separate DAC and ADC sample-clock domains:** the DAC8551 engine runs on the 48 MHz `clk48` domain (SPI-limited) while the MCP33131 ADC runs in the 24 MHz domain with its divider floored at 60 (max ~400 kSPS). Each is selected per command via `sample_rate_mhz`; the firmware snaps to the nearest achievable divider and logs the actual rate.

@@ -3,15 +3,14 @@
 #define BP_ERRORS_H
 
 /* Stable error codes (errors/catalog.toml). A handler refuses with bp_err_<name>(conn_id,
-   args...): the reply carries the code, the args and the message, which is the code's
-   catalog message with the args filled in (bp_err_templates below), so the pod and the
-   hosts always say the same thing. Code that only builds a message for its caller to
-   send (la_pins.c, pod_policy.c, ...) uses bp_note_<name>(buf, cap, args...): it writes
-   the same text into buf and notes the code, and send_error() of that text sends it with
-   its code (bp_err_noted). A text a person also reads (the USB console, SCPI) keeps its
-   own words and gets the code with bp_tag_<name>(text, args...). Built with -DBP_ERRORS_NO_TEXT the templates drop out of the
-   binary and the message is the compact fallback ("BP0002 cmd=foo"). The hosts render
-   the message, the fix and the docs link from errors/errors.json. */
+   args...): the reply is {"status":"error","code":"BP0002","args":{...}}, with no
+   message: the hosts render the message, the fix and the docs link from errors/errors.json,
+   so the firmware holds no per-error text. Code that only builds a refusal for its caller
+   to send (pod_policy.c, sensor_mgr.c, ...) uses bp_note_<name>(buf, cap, args...): it
+   writes the short form ("BP0055 instance=env") into buf and notes the code, and
+   send_error() of that text sends it with its code (bp_err_noted). A text a person also
+   reads (the USB console, SCPI) keeps its own words and gets the code with
+   bp_tag_<name>(text, args...). */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -93,12 +92,11 @@ typedef enum {
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
 typedef struct { const char *key; const char *s; int32_t i; uint8_t is_str; } bp_err_arg_t;
 
-/* The reply line ({"status":"error","code":"BP0002","args":{...},"message":...}\n)
+/* The reply line ({"status":"error","code":"BP0002","args":{...}}\n)
    into buf; returns its length, 0 when it does not fit (bp_errors.c). */
 size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
                        size_t n);
-/* The message alone (the catalog template, args filled in) into out, cut to fit; returns
-   its length. */
+/* The short form ("BP0002 cmd=foo") into out, cut to fit; returns its length. */
 size_t bp_err_render(char *out, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,
                      size_t n);
 /* bp_err_render into buf, and note the code and args for that text; returns buf. */
@@ -108,83 +106,11 @@ const char *bp_err_note(char *buf, size_t cap, bp_errcode_t code, const bp_err_a
    USB console or SCPI, and send_error() sends it with the code); returns text. */
 const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args,
                        size_t n);
-/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may have been copied),
-   NULL when none did. The args stay valid until the next bp_err_note. */
+/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may
+   have been copied), NULL when none did. The args stay valid until the next note. */
 const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n);
 /* Formats and sends it on a connection (command_handler.c). */
 void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n);
-
-#if defined(BP_ERRORS_DEFINE_TEMPLATES) && !defined(BP_ERRORS_NO_TEXT)
-/* The catalog message of every code ({name} is an arg), indexed by code; NULL = retired. */
-static const char *const bp_err_templates[BP_E_LAST + 1] = {
-    [1] = "The I/O voltage is not set",
-    [2] = "The pod does not know the command {cmd}",
-    [3] = "An I2C session is already open",
-    [4] = "An SPI session is already open",
-    [5] = "The engine that runs SWD, SPI and I2C is in use, so {want} cannot start",
-    [6] = "The request is missing {arg}",
-    [7] = "The pod has no wiring profile named {name}",
-    [8] = "{name} is not a valid wiring profile name",
-    [9] = "The wiring profile {name} changed since it was loaded (it is now at revision {rev})",
-    [10] = "The pod cannot hold another wiring profile (at most {max}, and 16 KB in all)",
-    [11] = "The wiring profile is {bytes} bytes; the pod takes at most {max}",
-    [12] = "The wiring profile is not one JSON object",
-    [13] = "{name} is the pod's default wiring profile and cannot be deleted",
-    [14] = "The wiring profile upload skipped ahead (the pod expected offset {expected})",
-    [15] = "The pod could not read or write its wiring profiles",
-    [16] = "The pod cannot save now: the DAC or a capture is using the bus the storage shares",
-    [17] = "{feature} needs gateware v{min} or later",
-    [18] = "UART rx and tx are both LA{la}; a one-wire UART needs half_duplex",
-    [19] = "half_duplex runs on one pin, but rx is LA{rx} and tx is LA{tx}",
-    [20] = "The UART entry sequence needs the pod's reset pin, which this board does not have",
-    [21] = "The UART entry option {arg} is out of range (0 to {max})",
-    [22] = "The UART's DE pin LA{la} is also its rx or tx",
-    [23] = "LA{la} has no pull resistor on this board",
-    [24] = "LA{la} supports pull-{have} only on this board",
-    [25] = "{holder} holds this pod ({purpose}, {left_s} s left)",
-    [26] = "The pod's lease was stopped by {by}",
-    [27] = "The pod holds no lease with id {id}",
-    [28] = "5 V did not come up on pin 21 ({mv} mV)",
-    [29] = "pin 21 is down ({mv} mV): the pull resistors are off until it is back",
-    [30] = "Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api})",
-    [31] = "LA{la} is in use by {owner}",
-    [32] = "LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason})",
-    [33] = "LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason})",
-    [34] = "LA{la} is wired to a DUT output, and {function} would drive against it",
-    [35] = "LA{la} is driven by {function}, so it cannot be marked as a DUT output",
-    [36] = "LA{la} is not a GPIO output (it is {function})",
-    [37] = "The I/O voltage cannot change while pins are in use: {pins}",
-    [38] = "No {edge} edge on LA{la} within {timeout_ms} ms",
-    [39] = "No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus",
-    [40] = "The pod's LAN is locked: {cmd} needs the cloud or USB",
-    [41] = "{setting} cannot be changed over the LAN: change it from the cloud or the USB console",
-    [42] = "{setting} cannot be changed over the LAN: change it from the cloud or over USB",
-    [43] = "{setting} can only be changed on the device: the USB console, or over the USB link",
-    [44] = "Only the USB console can loosen {setting} (now {now})",
-    [45] = "{cmd} needs an organization owner or admin",
-    [46] = "This BenchPod has no analog front end, so it cannot run {cmd}",
-    [47] = "The pod is running another long command (a capture, measurement, upload or update)",
-    [48] = "The pod's storage bus is in use: {what}",
-    [49] = "A UART session is already open",
-    [50] = "An SWD session is already running",
-    [51] = "A {target} update from {holder} is in progress",
-    [52] = "The pod is still running the previous cloud command",
-    [53] = "The reply did not fit the pod's reply buffer",
-    [54] = "The reply is too large for the cloud channel ({bytes} bytes, limit {limit})",
-    [55] = "The pod has no emulated sensor {instance}",
-    [56] = "This BenchPod has no module link, so it cannot run {cmd}",
-    [57] = "The emulated sensors {sensors} need the emulation image; stop them before switching",
-    [58] = "{feature} is not in the running gateware image; it needs the {image} image",
-    [59] = "{feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image",
-    [60] = "{target} is not an update target this firmware knows",
-    [61] = "I2C needs pull-ups: LA{la} has none switched on",
-    [62] = "No I2C session is open",
-    [63] = "The I2C engine was reset, which ended the session",
-    [64] = "The sweep input cannot be combined with an input map on this gateware",
-    [65] = "The {output} output is played by the emulated sensor {instance}",
-    [66] = "A step pulse train is running",
-};
-#endif
 
 /* BP0001: The I/O voltage is not set */
 static inline void bp_err_la_voltage_not_set(int conn_id) {

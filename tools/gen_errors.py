@@ -12,7 +12,7 @@ errors/catalog.toml (the one source of truth; its header explains the rules).
                                         the release workflow: nothing "next" is left
 
 Outputs (never hand-edit them: the banner says so):
-  stm32h563/src/bp_errors.h   the code enum, the message templates, and one typed bp_err_<name>()
+  stm32h563/src/bp_errors.h   the code enum, and one typed bp_err_<name>()
                               (send) and bp_note_<name>() (note into a buffer) per code
   errors/errors.json          everything the hosts need (SDK, CLI, MCP, server, web, docs pages)
   errors/ERRORS.md            a human-readable table
@@ -108,23 +108,17 @@ def c_ident(name):
     return "BP_E_" + name.upper()
 
 
-def c_str(text):
-    """A C string literal for text (the catalog is ASCII; quotes and backslashes escaped)."""
-    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
 def gen_h(cat):
     out = [f"/* {BANNER} */", "#ifndef BP_ERRORS_H", "#define BP_ERRORS_H", "",
            "/* Stable error codes (errors/catalog.toml). A handler refuses with bp_err_<name>(conn_id,",
-           "   args...): the reply carries the code, the args and the message, which is the code's",
-           "   catalog message with the args filled in (bp_err_templates below), so the pod and the",
-           "   hosts always say the same thing. Code that only builds a message for its caller to",
-           "   send (la_pins.c, pod_policy.c, ...) uses bp_note_<name>(buf, cap, args...): it writes",
-           "   the same text into buf and notes the code, and send_error() of that text sends it with",
-           "   its code (bp_err_noted). A text a person also reads (the USB console, SCPI) keeps its",
-           "   own words and gets the code with bp_tag_<name>(text, args...). Built with -DBP_ERRORS_NO_TEXT the templates drop out of the",
-           "   binary and the message is the compact fallback (\"BP0002 cmd=foo\"). The hosts render",
-           "   the message, the fix and the docs link from errors/errors.json. */", "",
+           "   args...): the reply is {\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...}}, with no",
+           "   message: the hosts render the message, the fix and the docs link from errors/errors.json,",
+           "   so the firmware holds no per-error text. Code that only builds a refusal for its caller",
+           "   to send (pod_policy.c, sensor_mgr.c, ...) uses bp_note_<name>(buf, cap, args...): it",
+           "   writes the short form (\"BP0055 instance=env\") into buf and notes the code, and",
+           "   send_error() of that text sends it with its code (bp_err_noted). A text a person also",
+           "   reads (the USB console, SCPI) keeps its own words and gets the code with",
+           "   bp_tag_<name>(text, args...). */", "",
            "#include <stdbool.h>", "#include <stddef.h>", "#include <stdint.h>", "",
            "typedef enum {", "    BP_E_NONE = 0,"]
     for code, e in cat.items():
@@ -138,12 +132,11 @@ def gen_h(cat):
             "/* One value sent with a code: key, and either a string (is_str) or an integer. */",
             "typedef struct { const char *key; const char *s; int32_t i; uint8_t is_str; } bp_err_arg_t;",
             "",
-            "/* The reply line ({\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...},\"message\":...}\\n)",
+            "/* The reply line ({\"status\":\"error\",\"code\":\"BP0002\",\"args\":{...}}\\n)",
             "   into buf; returns its length, 0 when it does not fit (bp_errors.c). */",
             "size_t bp_error_format(char *buf, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
             "                       size_t n);",
-            "/* The message alone (the catalog template, args filled in) into out, cut to fit; returns",
-            "   its length. */",
+            "/* The short form (\"BP0002 cmd=foo\") into out, cut to fit; returns its length. */",
             "size_t bp_err_render(char *out, size_t cap, bp_errcode_t code, const bp_err_arg_t *args,",
             "                     size_t n);",
             "/* bp_err_render into buf, and note the code and args for that text; returns buf. */",
@@ -153,19 +146,12 @@ def gen_h(cat):
             "   USB console or SCPI, and send_error() sends it with the code); returns text. */",
             "const char *bp_err_tag(const char *text, bp_errcode_t code, const bp_err_arg_t *args,",
             "                       size_t n);",
-            "/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may have been copied),",
-            "   NULL when none did. The args stay valid until the next bp_err_note. */",
+            "/* The code and args a recent bp_err_note or bp_err_tag gave exactly this text (it may",
+            "   have been copied), NULL when none did. The args stay valid until the next note. */",
             "const bp_err_arg_t *bp_err_noted(const char *text, bp_errcode_t *code, size_t *n);",
             "/* Formats and sends it on a connection (command_handler.c). */",
             "void bp_error_send(int conn_id, bp_errcode_t code, const bp_err_arg_t *args, size_t n);", "",
-            "#if defined(BP_ERRORS_DEFINE_TEMPLATES) && !defined(BP_ERRORS_NO_TEXT)",
-            "/* The catalog message of every code ({name} is an arg), indexed by code; NULL = retired. */",
-            "static const char *const bp_err_templates[BP_E_LAST + 1] = {"]
-    for code, e in cat.items():
-        if "retired" in e:
-            continue
-        out.append(f"    [{int(code[2:])}] = {c_str(e['message'])},")
-    out += ["};", "#endif", ""]
+            ]
     for code, e in cat.items():
         if "retired" in e:
             continue

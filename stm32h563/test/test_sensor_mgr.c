@@ -184,7 +184,7 @@ static void test_bme280_mpu(void) {
     CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"env3\",\"address\":\"0x77\",\"pins\":{\"sda\":2,\"scl\":1}}") &&
           strstr(g_err, "address 0x77 is used by sensor:env"), "%s", g_err);
     CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"env3\",\"pins\":{\"sda\":1,\"scl\":3}}") &&
-          strcmp(g_err, "LA1 is in use by sensor:env (i2c_scl)") == 0, "%s", g_err);
+          strcmp(g_err, "pin conflict: LA1 is in use by sensor:env (i2c_scl)") == 0, "%s", g_err);
     CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"nope\",\"pins\":{\"sda\":5,\"scl\":6}}") &&
           code_of(g_err) == BP_E_SENSOR_INSTANCE_UNKNOWN, "%s", g_err);
 
@@ -375,7 +375,7 @@ static void test_all_buses(void) {
           g_fpga.spi_cfg[4] == 0x87 && g_fpga.spi_cfg[6] == 63, "SPIT_CONFIG");
     CHECK(g_fpga.t[4].attrs[15] == EMU_ATTR_RO && g_fpga.t[4].attrs[58] == EMU_ATTR_FIFO, "SPI attributes: FIFO and RO only");
     CHECK(g_fpga.pinmap[6] == EMU_PIN_SPI_MISO, "MISO in the pin map");
-    CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"gps\",\"pins\":{\"tx\":6}}") && strstr(g_err, "LA6 is in use by sensor:spi"),
+    CHECK(!run("{\"cmd\":\"sensor_start\",\"instance\":\"gps\",\"pins\":{\"tx\":6}}") && strstr(g_err, "pin conflict: LA6 is in use by sensor:spi"),
           "%s", g_err);
     CHECK(run("{\"cmd\":\"sensor_start\",\"instance\":\"gps\",\"pins\":{\"tx\":9,\"rx\":10}}"), "gps: %s", g_err);
     CHECK(g_fpga.u2_armed && g_fpga.u2_tx_w == 8 && g_fpga.u2_rx_w == 9 && g_fpga.u2_baud == 9600, "UART2 armed");

@@ -125,9 +125,9 @@ static void test_lease(void) {
     CHECK(code_is(gate("{\"cmd\":\"capture\",\"samples\":10}", &c), BP_E_LEASE_BUSY), "capture: %s", s_why);
     /* no holder label: "cloud" */
     c.lease_holder = "";
-    CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "(cloud, 42 s left)") != NULL, "label: %s", s_why);
+    CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "purpose=cloud left_s=42") != NULL, "label: %s", s_why);
     c.lease_holder = NULL;
-    CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "(cloud, 42 s left)") != NULL, "NULL label: %s", s_why);
+    CHECK(strstr(gate("{\"cmd\":\"generate\"}", &c), "purpose=cloud left_s=42") != NULL, "NULL label: %s", s_why);
     /* the lease verbs reach their handler, which answers busy with the cloud holder */
     CHECK(gate("{\"cmd\":\"lease_acquire\",\"id\":\"L-1\"}", &c) == NULL, "lease_acquire: %s", s_why);
     CHECK(gate("{\"cmd\":\"lease_release\",\"id\":\"L-1\"}", &c) == NULL, "lease_release: %s", s_why);

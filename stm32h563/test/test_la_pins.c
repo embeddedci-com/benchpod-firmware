@@ -170,19 +170,19 @@ static void test_claims_and_conflicts(void) {
     /* a different function on an owned pin */
     uint8_t sda[2] = { 4, 5 };
     CHECK(!claim(LA_FN_I2C_SDA, LA_GPIO_NONE, sda, 2, 0, 0));
-    CHECK_STR(err, "LA4 is in use by uart_tx");
+    CHECK_STR(err, "pin conflict: LA4 is in use by uart_tx");
     CHECK(noted(err) == BP_E_LA_PIN_IN_USE);
     CHECK(la_pins_fn(5) == LA_FN_NONE);   /* nothing committed */
 
     /* the same function again (second proxy on the proxy's own pin) is a conflict too */
     CHECK(!claim(LA_FN_UART_RX, LA_GPIO_NONE, &uart[0], 1, 0, 0));
-    CHECK_STR(err, "LA3 is in use by uart_rx");
+    CHECK_STR(err, "pin conflict: LA3 is in use by uart_rx");
 
     /* first conflict wins */
     uint8_t swd[2] = { 11, 3 };
     la_pins_claim(LA_FN_GPIO, LA_GPIO_INPUT, 0, (uint8_t[]){ 11 }, 1);
     CHECK(!claim(LA_FN_SWD_CLK, LA_GPIO_NONE, swd, 2, 0, 0));
-    CHECK_STR(err, "LA11 is in use by gpio");
+    CHECK_STR(err, "pin conflict: LA11 is in use by gpio");
 
     /* every release hint */
     la_pins_reset();
@@ -190,17 +190,17 @@ static void test_claims_and_conflicts(void) {
     la_pins_claim(LA_FN_I2C_SCL, LA_GPIO_NONE, 0, (uint8_t[]){ 2 }, 1);
     la_pins_claim(LA_FN_STEP, LA_GPIO_NONE, 0, (uint8_t[]){ 6 }, 1);
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 12 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "LA12 is in use by swd_dio");
+    CHECK_STR(err, "pin conflict: LA12 is in use by swd_dio");
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 2 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "LA2 is in use by i2c_scl");
+    CHECK_STR(err, "pin conflict: LA2 is in use by i2c_scl");
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 6 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "LA6 is in use by step");
+    CHECK_STR(err, "pin conflict: LA6 is in use by step");
     la_pins_claim(LA_FN_SPI_CS, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
     CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
-    CHECK_STR(err, "LA9 is in use by spi_cs");
+    CHECK_STR(err, "pin conflict: LA9 is in use by spi_cs");
     la_pins_claim(LA_FN_I2CM_SDA, LA_GPIO_NONE, 0, (uint8_t[]){ 4 }, 1);
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 4 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "LA4 is in use by i2cm_sda");
+    CHECK_STR(err, "pin conflict: LA4 is in use by i2cm_sda");
 
     /* a replacing sensor_start treats the old sensor's pins as free */
     la_pins_reset();
@@ -228,7 +228,7 @@ static void test_pull_rules(void) {
 
     /* claiming onto an engaged pull-down: the conflicting functions */
     CHECK(!claim(LA_FN_UART_RX, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
-    CHECK_STR(err, "LA7 has its 10k pull-down on, which uart_rx cannot work with (the line idles high)");
+    CHECK_STR(err, "pull conflict: LA7 has its 10k pull-down on, which uart_rx cannot work with (the line idles high)");
     CHECK(noted(err) == BP_E_LA_PULL_DOWN_ENGAGED);
     CHECK(!claim(LA_FN_I2C_SCL, LA_GPIO_NONE, (uint8_t[]){ 7 }, 1, 0, down7));
     CHECK(strstr(err, "which i2c_scl cannot work with (an open-drain bus needs pull-ups)") != NULL);
@@ -251,19 +251,19 @@ static void test_pull_rules(void) {
     /* ownership is reported before pulls */
     la_pins_claim(LA_FN_STEP, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
     CHECK(!claim(LA_FN_UART_RX, LA_GPIO_NONE, (uint8_t[]){ 7, 3 }, 2, 0, down7));
-    CHECK(strncmp(err, "LA3 is in use by", 16) == 0);
+    CHECK(strncmp(err, "pin conflict: LA3 is in use by", 30) == 0);
 
     /* engaging a pull on an owned pin (the other direction) */
     la_pins_reset();
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 8 }, 1);
     CHECK(!la_pins_check_pull_enable(8, la_pull_dir(8), err, sizeof(err)));
-    CHECK_STR(err, "LA8 is used by uart_rx, which cannot work with the 10k pull-down (the line idles high)");
+    CHECK_STR(err, "pull conflict: LA8 is used by uart_rx, which cannot work with the 10k pull-down (the line idles high)");
     CHECK(la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));   /* LA7 is free */
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
     CHECK(la_pins_check_pull_enable(3, la_pull_dir(3), err, sizeof(err)));   /* pull-up: fine */
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, (uint8_t[]){ 7 }, 1);
     CHECK(!la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));
-    CHECK_STR(err, "LA7 is used by gpio open_drain, which cannot work with the 10k pull-down (a released line would read low)");
+    CHECK_STR(err, "pull conflict: LA7 is used by gpio open_drain, which cannot work with the 10k pull-down (a released line would read low)");
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, (uint8_t[]){ 7 }, 1);
     CHECK(la_pins_check_pull_enable(7, la_pull_dir(7), err, sizeof(err)));
 }
@@ -299,12 +299,12 @@ static void test_gpio_modes_and_levels(void) {
     /* whole request validated first for claims too */
     la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, (uint8_t[]){ 10 }, 1);
     CHECK(!gpio_json("{\"cmd\":\"gpio\",\"la\":[6,10],\"mode\":\"output\"}", 0, &changed, &affected));
-    CHECK(strncmp(err, "LA10 is in use by uart_tx", 40) == 0);
+    CHECK(strncmp(err, "pin conflict: LA10 is in use by uart_tx", 40) == 0);
     CHECK(la_pins_fn(6) == LA_FN_NONE);
 
     /* off on a pin another function owns is refused; on a none pin it is a no-op */
     CHECK(!gpio_json("{\"cmd\":\"gpio\",\"la\":10,\"mode\":\"off\"}", 0, &changed, &affected));
-    CHECK_STR(err, "LA10 is in use by uart_tx");
+    CHECK_STR(err, "pin conflict: LA10 is in use by uart_tx");
     CHECK(gpio_json("{\"cmd\":\"gpio\",\"la\":[4,11],\"mode\":\"off\"}", 0, &changed, &affected));
     CHECK(changed == PULL(4) && affected == (PULL(4) | PULL(11)));
     CHECK(la_pins_fn(4) == LA_FN_NONE && la_pins_drive(4) == 2);
@@ -353,17 +353,17 @@ static void test_step_plans(void) {
     /* a gpio input (or open_drain) pin is not usable: conflict */
     la_pins_claim(LA_FN_GPIO, LA_GPIO_INPUT, 0, (uint8_t[]){ 5 }, 1);
     CHECK(!la_pins_plan_step(5, 0, &plan, err, sizeof(err)));
-    CHECK_STR(err, "LA5 is in use by gpio");
+    CHECK_STR(err, "pin conflict: LA5 is in use by gpio");
     CHECK(!la_pins_plan_step(3, 5, &plan, err, sizeof(err)));
-    CHECK(strncmp(err, "LA5 is in use by", 16) == 0);
+    CHECK(strncmp(err, "pin conflict: LA5 is in use by", 30) == 0);
 
     /* a running train's pins */
     la_pins_claim(LA_FN_STEP, LA_GPIO_NONE, 0, (uint8_t[]){ 9 }, 1);
     la_pins_claim(LA_FN_STEP_DIR, LA_GPIO_NONE, 0, (uint8_t[]){ 10 }, 1);
     CHECK(!la_pins_plan_step(9, 0, &plan, err, sizeof(err)));
-    CHECK_STR(err, "LA9 is in use by step");
+    CHECK_STR(err, "pin conflict: LA9 is in use by step");
     CHECK(!la_pins_plan_step(11, 10, &plan, err, sizeof(err)));
-    CHECK_STR(err, "LA10 is in use by step_dir");
+    CHECK_STR(err, "pin conflict: LA10 is in use by step_dir");
 
     CHECK(!la_pins_plan_step(0, 0, &plan, err, sizeof(err)));
     CHECK_STR(err, "invalid args");
@@ -402,7 +402,7 @@ static void test_voltage_refusal(void) {
     la_pins_claim(LA_FN_UART_RX, LA_GPIO_NONE, 0, (uint8_t[]){ 3 }, 1);
     la_pins_claim(LA_FN_UART_TX, LA_GPIO_NONE, 0, (uint8_t[]){ 4 }, 1);
     CHECK(!la_pins_check_voltage_change(3300, 1800, err, sizeof(err)));
-    CHECK_STR(err, "The I/O voltage cannot change while pins are in use: LA3 (uart_rx), LA4 (uart_tx)");
+    CHECK_STR(err, "la voltage can't change while pins are in use: LA3 (uart_rx), LA4 (uart_tx)");
     CHECK(noted(err) == BP_E_LA_VOLTAGE_PINS_IN_USE);
     CHECK(la_pins_check_voltage_change(3300, 3300, err, sizeof(err)));   /* re-set is allowed */
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* invalid: caller's error */
@@ -490,7 +490,7 @@ static void test_sensor_owner(void) {
     la_pins_set_owner(9, 0x02);
     CHECK(la_fn_is_sensor(LA_FN_SENSOR_TX) && la_fn_is_sensor(LA_FN_I2C_SDA) && !la_fn_is_sensor(LA_FN_GPIO));
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 9 }, 1, 0, 0));
-    CHECK_STR(err, "LA9 is in use by sensor:imu (sensor_tx)");
+    CHECK_STR(err, "pin conflict: LA9 is in use by sensor:imu (sensor_tx)");
     char buf[256];
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));
@@ -664,7 +664,7 @@ static void test_direction_and_warnings(void) {
     /* a push-pull driver may not claim a DUT output; open drain and inputs may */
     la_pins_set_dir(9, LA_DIR_DUT_OUTPUT);
     CHECK(!claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 9 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
-    CHECK_STR(err, "LA9 is wired to a DUT output, and gpio output would drive against it");
+    CHECK_STR(err, "direction conflict: LA9 is wired to a DUT output and gpio output would drive against it");
     CHECK(noted(err) == BP_E_LA_DUT_OUTPUT);
     CHECK(!claim(LA_FN_SPI_MOSI, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
     CHECK(!claim(LA_FN_UART_TX, LA_GPIO_NONE, (uint8_t[]){ 9 }, 1, 0, 0));
@@ -680,7 +680,7 @@ static void test_direction_and_warnings(void) {
     la_pins_set_dir(9, LA_DIR_UNKNOWN);
     CHECK(claim(LA_FN_GPIO, LA_GPIO_OUTPUT, (uint8_t[]){ 10 }, 1, LA_FN_BIT(LA_FN_GPIO), 0));
     CHECK(!la_pins_check_dir(10, LA_DIR_DUT_OUTPUT, err, sizeof(err)));
-    CHECK_STR(err, "LA10 is driven by gpio output, so it cannot be marked as a DUT output");
+    CHECK_STR(err, "direction conflict: LA10 is driven by gpio output, so it cannot be marked as a DUT output");
     CHECK(la_pins_check_dir(10, LA_DIR_BIDIR, err, sizeof(err)));
     CHECK(la_pins_check_dir(11, LA_DIR_DUT_OUTPUT, err, sizeof(err)));
 
@@ -743,7 +743,7 @@ static void test_trigger_parse(void) {
     CHECK(la_trigger_parse("{\"trigger\":{\"la\":9,\"edge\":\"rising\"}}", &t, err, sizeof(err)));
     char msg[96];
     la_trigger_timeout_msg(&t, msg, sizeof(msg));
-    CHECK_STR(msg, "No rising edge on LA9 within 10000 ms");
+    CHECK_STR(msg, "trigger timeout: no rising edge on LA9 within 10000 ms");
     CHECK(noted(msg) == BP_E_TRIGGER_TIMEOUT);
     char buf[96];
     bp_emit_t e;

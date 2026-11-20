@@ -4,7 +4,7 @@
  */
 #include "la_pins.h"
 #include "board_caps.h"
-#include "bp_errors.h"   /* the refusals are catalog codes (bp_note_*) */
+#include "bp_errors.h"   /* the refusals are catalog codes (bp_tag_*); SCPI shows the text */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -172,7 +172,8 @@ static void conflict_msg(unsigned la, char *err, size_t cap) {
     char who[48];
     if (inst) snprintf(who, sizeof(who), "sensor:%s (%s)", inst, la_fn_name(owner));
     else      snprintf(who, sizeof(who), "%s", la_fn_name(owner));
-    bp_note_la_pin_in_use(err, cap, (int32_t)la, who, la_fn_name(owner), inst ? inst : "");
+    snprintf(err, cap, "pin conflict: LA%u is in use by %s", la, who);   /* SCPI shows it */
+    bp_tag_la_pin_in_use(err, (int32_t)la, who, la_fn_name(owner), inst ? inst : "");
 }
 
 /* Why a function can't share its line with an engaged pull-DOWN (NULL = it can). */
@@ -210,7 +211,10 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
             unsigned la = las[i];
             if (s_dir[la] != LA_DIR_DUT_OUTPUT) continue;
             char name[24];
-            bp_note_la_dut_output(err, cap, (int32_t)la, fn_display(fn, mode, name, sizeof(name)));
+            const char *what = fn_display(fn, mode, name, sizeof(name));
+            snprintf(err, cap, "direction conflict: LA%u is wired to a DUT output and %s would drive "
+                     "against it", la, what);
+            bp_tag_la_dut_output(err, (int32_t)la, what);
             return false;
         }
     }
@@ -220,8 +224,10 @@ bool la_pins_check_claim(la_fn_t fn, la_gpio_mode_t mode, const uint8_t *las, si
         unsigned la = las[i];
         if (la_pull_dir(la) != LA_PULL_DOWN || !(pull_mask & (1u << (la - 1u)))) continue;
         char name[24];
-        bp_note_la_pull_down_engaged(err, cap, (int32_t)la, la_pull_ohms(la),
-                                     fn_display(fn, mode, name, sizeof(name)), reason);
+        const char *what = fn_display(fn, mode, name, sizeof(name));
+        snprintf(err, cap, "pull conflict: LA%u has its %s pull-down on, which %s cannot work with (%s)",
+                 la, la_pull_ohms(la), what, reason);
+        bp_tag_la_pull_down_engaged(err, (int32_t)la, la_pull_ohms(la), what, reason);
         return false;
     }
     return true;
@@ -258,7 +264,10 @@ bool la_pins_check_dir(unsigned la, la_dir_t d, char *err, size_t cap) {
     la_gpio_mode_t mode = la_pins_gpio(la);
     if (d != LA_DIR_DUT_OUTPUT || !la_fn_drives(fn, mode)) return true;
     char name[24];
-    bp_note_la_driven_pin(err, cap, (int32_t)la, fn_display(fn, mode, name, sizeof(name)));
+    const char *what = fn_display(fn, mode, name, sizeof(name));
+    snprintf(err, cap, "direction conflict: LA%u is driven by %s, so it cannot be marked as a DUT output",
+             la, what);
+    bp_tag_la_driven_pin(err, (int32_t)la, what);
     return false;
 }
 
@@ -285,8 +294,10 @@ bool la_pins_check_pull_enable(unsigned la, la_pull_dir_t d, char *err, size_t c
     const char *reason = pull_down_reason(fn, mode);
     if (!reason) return true;
     char name[24];
-    bp_note_la_pull_down_conflict(err, cap, (int32_t)la, la_pull_ohms(la),
-                                  fn_display(fn, mode, name, sizeof(name)), reason);
+    const char *what = fn_display(fn, mode, name, sizeof(name));
+    snprintf(err, cap, "pull conflict: LA%u is used by %s, which cannot work with the %s pull-down (%s)",
+             la, what, la_pull_ohms(la), reason);
+    bp_tag_la_pull_down_conflict(err, (int32_t)la, la_pull_ohms(la), what, reason);
     return false;
 }
 
@@ -298,7 +309,9 @@ bool la_pins_check_level(const uint8_t *las, size_t n, char *err, size_t cap) {
         if (m == LA_GPIO_OUTPUT || m == LA_GPIO_OPEN_DRAIN) continue;
         la_fn_t fn = (la_fn_t)s_pin[la].fn;
         char name[24];
-        bp_note_la_not_gpio_output(err, cap, (int32_t)la, fn_display(fn, m, name, sizeof(name)));
+        const char *what = fn_display(fn, m, name, sizeof(name));
+        snprintf(err, cap, "LA%u is not a GPIO output (it is %s)", la, what);
+        bp_tag_la_not_gpio_output(err, (int32_t)la, what);
         return false;
     }
     return true;
@@ -320,7 +333,8 @@ bool la_pins_check_voltage_change(int cur_mv, int new_mv, char *err, size_t cap)
         pos += (size_t)snprintf(pins + pos, sizeof(pins) - pos, "%sLA%u (%s)", pos ? ", " : "",
                                 la, la_fn_name((la_fn_t)s_pin[la].fn));
     }
-    bp_note_la_voltage_pins_in_use(err, cap, pins);
+    snprintf(err, cap, "la voltage can't change while pins are in use: %s", pins);
+    bp_tag_la_voltage_pins_in_use(err, pins);
     return false;
 }
 
@@ -665,7 +679,9 @@ bool la_trigger_parse(const char *json, la_trigger_t *out, char *err, size_t cap
 }
 
 void la_trigger_timeout_msg(const la_trigger_t *t, char *buf, size_t cap) {
-    bp_note_trigger_timeout(buf, cap, (int32_t)t->la, la_edge_name(t->edge), (int32_t)t->timeout_ms);
+    snprintf(buf, cap, "trigger timeout: no %s edge on LA%u within %lu ms",
+             la_edge_name(t->edge), (unsigned)t->la, (unsigned long)t->timeout_ms);
+    bp_tag_trigger_timeout(buf, (int32_t)t->la, la_edge_name(t->edge), (int32_t)t->timeout_ms);
 }
 
 void la_trigger_emit(bp_emit_t *e, const la_trigger_t *t, bool fired) {
