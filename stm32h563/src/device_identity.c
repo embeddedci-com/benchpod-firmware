@@ -186,7 +186,7 @@ const char *device_identity_wipe_check(const char *confirm, const char *short_id
     static char why[96];
     const char *want = (short_id && short_id[0]) ? short_id : "unknown";
     if (confirm && strcmp(confirm, want) == 0) return NULL;
-    snprintf(why, sizeof(why), "confirm with the current id: identity-wipe %s", want);
+    snprintf(why, sizeof(why), "confirm with the current id: %s", want);
     return why;
 }
 

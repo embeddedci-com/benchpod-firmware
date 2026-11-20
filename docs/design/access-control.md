@@ -309,7 +309,7 @@ the console (CDC-ACM). The table is the state of firmware `main`; file reference
 |---|---|---|---|
 | Ethernet and Wi-Fi, TCP 8080 | JSON, SCPI and CMSIS-DAP on one listener (`net_server.c`, bound to any address) | `locked`: T2/T3 refused (`cmd_gate.c`). `off`: the connection is accepted and reset at once (`srv_accept`, keyed on the pod's local address), open connections close, mDNS leaves eth and Wi-Fi | LAN |
 | USB network adapter, TCP 8080 | The same listener, reached on the pod's USB address | Never applies | LAN, with the physical-presence exceptions below |
-| USB console (CDC-ACM) | Text commands that stay on the console (`status`, `dfu`, `identity`, `lan-policy`, `sig-policy`, `usb-network`, `set-wifi`, recovery tools). Uploads and instrument commands moved to the JSON API in 3.9.0 | Never applies | Physical presence |
+| USB console (CDC-ACM) | Text commands that stay on the console (firmware 4.0.0: `status`, `ping`, `selftest`, `reboot`, `dfu`, `identity`, `usb-network`, `lan-policy`, `lan-tls`, `net-reset`, `log`). Uploads and instrument commands moved to the JSON API in 3.9.0, Wi-Fi, identity wipe, CA, proxy, blobs and the bridge in 4.0.0 | Never applies | Physical presence |
 | Cloud WSS | Outbound from the pod over Ethernet, Wi-Fi or USB (through `benchpod usb-bridge`, a CONNECT proxy on the computer) | Never applies: the pod dials out | Cloud |
 
 What `lan_policy` does not touch: the outbound cloud link, ping, the Ethernet DHCP client and Wi-Fi.

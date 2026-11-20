@@ -46,7 +46,7 @@ Who may set it:
 
 Loosening from the cloud: `sig_policy: only the USB console can loosen the policy (now required)`.
 
-Console: `sig-policy` prints `sig-policy <policy> <keys>`; `sig-policy <audit|permissive|required>`
+Console (up to firmware 3.10.13; 4.0.0 has no `sig-policy`): `sig-policy` prints `sig-policy <policy> <keys>`; `sig-policy <audit|permissive|required>`
 sets it and prints the same line, or `sig-policy error <why>`.
 
 Capabilities frame and JSON `status`: `"sig_policy":"<policy>"` (exists since the report-only

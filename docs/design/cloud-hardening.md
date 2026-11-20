@@ -83,7 +83,7 @@ embedded ISRG roots, so the cloud link fails there.
 - Accepted only if it parses as one or more X.509 CA certificates; refused otherwise.
 - Used in addition to the ISRG roots (hostname and chain checks stay on).
 - JSON `{"cmd":"cloud_ca"}` -> `{"present":true,"certs":[{"subject":"...","sha256":"<hex>"}]}`;
-  `{"cmd":"cloud_ca","clear":true}` removes it. Console: `ca` (show), `ca-clear`.
+  `{"cmd":"cloud_ca","clear":true}` removes it. Console (up to firmware 3.10.13): `ca` (show), `ca-clear`.
 - Takes effect at the next cloud connect (the pod reconnects after a change).
 
 ### HTTP proxy
@@ -91,7 +91,7 @@ embedded ISRG roots, so the cloud link fails there.
 - Config: host, port, optional user/password, stored in a W25Q slot `proxy` at 0x190000 (4 KB).
 - JSON `{"cmd":"cloud_proxy"}` -> `{"host":"...","port":3128,"auth":true}` (never the password);
   `{"cmd":"cloud_proxy","set":"proxy.corp:3128","user":"u","password":"p"}`;
-  `{"cmd":"cloud_proxy","clear":true}`. Console: `proxy`, `proxy-set <host:port> [user password]`,
+  `{"cmd":"cloud_proxy","clear":true}`. Console (up to firmware 3.10.13): `proxy`, `proxy-set <host:port> [user password]`,
   `proxy-clear`. T2 (so a locked LAN refuses it).
 - When set, the cloud client opens TCP to the proxy, sends
   `CONNECT <host>:<port> HTTP/1.1` (+ `Proxy-Authorization: Basic` when set), requires a `200`

@@ -5,47 +5,54 @@ Pods from firmware 3.10.7 send the Wi-Fi password only to a bridge that shows a 
 identity key (wifi-bridge/docs/SECURITY.md, "Bridge identity"). The steps, with the bridge on the
 pod's Ethernet port and the pod on USB:
 
-    python3 bridge_cert.py identity --port /dev/cu.usbmodemXXXX
+    python3 bridge_cert.py identity --host 10.237.8.85
         prints the bridge's identity key (64 hex digits)
     sign it: Actions > "Sign bridge identity" with that key (release key, needs approval), or for a
         development pod: python3 tools/fwsign.py sign-bridge-id --key ~/.config/benchpod/fw-signing-dev.key \\
             --id <key> --release 3.10.7 -o bridge-id.sig
-    python3 bridge_cert.py install --port /dev/cu.usbmodemXXXX bridge-id.sig
-        sends it in four parts (`bridge cert <1-4> <hex>`), then shows `bridge` until the pod
+    python3 bridge_cert.py install --host 10.237.8.85 bridge-id.sig
+        sends it in four parts (JSON wifi_bridge action cert), then reads wifi_status until the pod
         reports the bridge as genuine
 
-Talks to the pod's USB console (pyserial). The pod forwards the certificate over the signed
-control channel; the bridge checks it against its own key and the trusted keys before it keeps it.
+Firmware 4.0.0 and later: talks JSON to the pod over its USB network adapter (the pod's address on
+the USB link is `status.usb.ip`, 10.237.x.y; the certificate is accepted over the USB link only).
+Firmware up to 3.10.13 did this with the console's `bridge cert`. The pod forwards the certificate
+over the signed control channel; the bridge checks it against its own key and the trusted keys
+before it keeps it.
 """
 import argparse
+import json
 import re
+import socket
 import sys
 import time
 
-try:
-    import serial
-except ImportError:  # pragma: no cover
-    sys.exit("pip install pyserial")
+CLIENT_API = 2   # features/features.toml api
 
 
-def console(port, line, wait=3.0):
-    """One console line; returns what the pod printed up to its next prompt."""
-    with serial.Serial(port, 115200, timeout=0.2) as s:
-        s.reset_input_buffer()
-        s.write((line + "\r\n").encode())
-        out, deadline = b"", time.time() + wait
-        while time.time() < deadline:
-            out += s.read(4096)
-            if out.rstrip().endswith(b">") and line.encode() in out:
+def command(host, cmd, timeout=10.0):
+    """One JSON command over plain TCP 8080 (the USB link); returns the reply's data or exits."""
+    cmd = dict(cmd, client_api=CLIENT_API)
+    with socket.create_connection((host, 8080), timeout=timeout) as s:
+        s.sendall((json.dumps(cmd) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
                 break
-        return out.decode(errors="replace")
+            buf += chunk
+    reply = json.loads(buf.split(b"\n", 1)[0])
+    if reply.get("status") != "ok":
+        sys.exit(f"{cmd['cmd']}: {reply.get('code') or ''} {reply.get('args') or reply.get('message') or reply}")
+    return reply.get("data")
 
 
-def bridge_lines(port):
-    text = console(port, "bridge")
-    ident = re.search(r"identity: ([0-9a-f]{64})", text)
-    genuine = re.search(r"genuine: (yes|no)", text)
-    return text, ident.group(1) if ident else None, genuine.group(1) if genuine else None
+def bridge(host):
+    data = command(host, {"cmd": "wifi_status"})
+    b = (data or {}).get("bridge")
+    if not b:
+        sys.exit("no Wi-Fi bridge in use on the pod's Ethernet port (or built-in Wi-Fi is configured)")
+    return b
 
 
 def read_cert(path):
@@ -62,36 +69,35 @@ def read_cert(path):
 
 
 def cmd_identity(a):
-    text, ident, genuine = bridge_lines(a.port)
-    if not ident:
-        sys.exit("no identity reported: no bridge on the pod's Ethernet port, or bridge firmware before 0.1.3\n"
-                 + text)
-    print(ident)
-    print(f"genuine: {genuine}", file=sys.stderr)
+    b = bridge(a.host)
+    if not b.get("identity"):
+        sys.exit("no identity reported: bridge firmware before 0.1.3")
+    print(b["identity"])
+    print(f"genuine: {'yes' if b.get('genuine') else 'no'}", file=sys.stderr)
 
 
 def cmd_install(a):
-    cert = read_cert(a.cert)
-    hexs = cert.hex()
+    hexs = read_cert(a.cert).hex()
     for part in range(4):
-        text = console(a.port, f"bridge cert {part + 1} {hexs[64 * part:64 * (part + 1)]}", wait=5.0)
-        if "error" in text or ("stored" not in text):
-            sys.exit(f"part {part + 1}: {text.strip()}")
-    print(text.strip().splitlines()[-2] if "\n" in text.strip() else text.strip())
+        data = command(a.host, {"cmd": "wifi_bridge", "action": "cert", "part": part + 1,
+                                "hex": hexs[64 * part:64 * (part + 1)]})
+    if not (data or {}).get("stored"):
+        sys.exit(f"the pod did not send the certificate to the bridge: {data}")
+    print("certificate stored on the bridge")
     for _ in range(15):
         time.sleep(2)
-        _, ident, genuine = bridge_lines(a.port)
-        if genuine == "yes":
-            print(f"bridge {ident} is genuine")
+        b = bridge(a.host)
+        if b.get("genuine"):
+            print(f"bridge {b.get('identity')} is genuine")
             return 0
-    sys.exit("the pod does not report the bridge as genuine yet: check `bridge` on its console")
+    sys.exit("the pod does not report the bridge as genuine yet: check wifi_status bridge.genuine")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["identity", "install"])
     ap.add_argument("cert", nargs="?", help="install: bridge-id.sig (or .hex)")
-    ap.add_argument("--port", required=True, help="the pod's USB console, e.g. /dev/cu.usbmodemXXXX")
+    ap.add_argument("--host", required=True, help="the pod's address on the USB link (status.usb.ip), e.g. 10.237.8.85")
     a = ap.parse_args()
     if a.command == "install" and not a.cert:
         ap.error("install needs the certificate file")

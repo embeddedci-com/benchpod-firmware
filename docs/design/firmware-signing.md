@@ -108,7 +108,7 @@ together on any breaking change.
   The default signature policy stays `audit`: `permissive` would add nothing against an attacker
   (who sends no signature) and would refuse developer-signed builds on release pods. Making
   `required` the factory default is a product decision (it stops developer builds everywhere
-  except through the console's `sig-policy`).
+  except through the console's `sig-policy`, up to firmware 3.10.13).
 - **M6, C3 images.** `esp` needs `FW_SIG_OK` from every transport, like `bridge`. Gateware is
   covered by the LAN rule; over USB or the cloud it follows the policy, so gateware development
   keeps working. Blobs are still only checked against their header hash when they are loaded:
@@ -119,7 +119,7 @@ together on any breaking change.
   (policy record bytes 12..15, packed release) to its release; a signed firmware below the floor is
   refused at `ota_begin`. Unsigned images carry no trustworthy version, so the floor does not
   apply to them (the policy and the LAN rule decide). The floor only goes up; the USB console
-  clears it (`rollback-floor clear`). No release sets the flag yet: which release becomes the
+  clears it (`rollback-floor clear`; from firmware 4.0.0 JSON `sig_policy` `clear_floor` over the USB link). No release sets the flag yet: which release becomes the
   first floor is a release decision (`release-stm32.yml` would pass `--floor` for that tag).
 - The policy record keeps its 16 bytes: the new fields live in what were reserved bytes, which
   older firmware keeps as they are when it saves, so a downgrade and an upgrade keep them.
