@@ -397,7 +397,7 @@ web = "Pin 21 is down, so the pull resistors are off. Check what is wired to pin
 [BP0030]
 name = "client_too_old"
 area = "protocol"
-since = "next"
+since = "4.0.0"
 args = { client_api = "int", min_client_api = "int", api = "int" }
 message = "Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api})"
 cause = "The firmware on the pod changed a reply or a message in a way that clients built for client API {client_api} would misread, so it refuses their commands instead of giving them answers they get wrong. The firmware speaks client API {api} and takes {min_client_api} or newer. A client that sends no client_api counts as 0. These still run for any client: ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status, so a client can see the levels, let go of the pod, and update the pod's firmware and blobs or roll them back."
@@ -410,7 +410,7 @@ web = "Reload the page to get the latest web app."
 [BP0031]
 name = "la_pin_in_use"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", owner = "str", function = "str", instance = "str" }
 message = "LA{la} is in use by {owner}"
 cause = """Each LA channel has one owner at a time: a GPIO, a UART, SWD, SPI or I2C session, a step \
@@ -426,7 +426,7 @@ web = "LA{la} is in use by {owner}. Free it there first (the Pins pane shows eac
 [BP0032]
 name = "la_pull_down_engaged"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", ohms = "str", function = "str", reason = "str" }
 message = "LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason})"
 cause = """A pull-down holds the line low. An open-drain bus (I2C), an idle-high UART line or SWDIO \
@@ -441,7 +441,7 @@ web = "Switch off LA{la}'s pull-down in the Pins pane, or pick another pin."
 [BP0033]
 name = "la_pull_down_conflict"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", ohms = "str", function = "str", reason = "str" }
 message = "LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason})"
 cause = """A pull-down holds the line low. {function} on LA{la} needs the line to rest high, so the \
@@ -455,7 +455,7 @@ web = "LA{la} is in use by {function}. Stop it before you switch on the pull-dow
 [BP0034]
 name = "la_dut_output"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", function = "str" }
 message = "LA{la} is wired to a DUT output, and {function} would drive against it"
 cause = """The wiring marks LA{la} as a pin the DUT drives (la_dir dut_output). Two push-pull outputs on \
@@ -470,7 +470,7 @@ web = "LA{la} is wired to a DUT output. Use open drain, or fix the pin's directi
 [BP0035]
 name = "la_driven_pin"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", function = "str" }
 message = "LA{la} is driven by {function}, so it cannot be marked as a DUT output"
 cause = """{function} drives LA{la} from the pod. Marking the pin as one the DUT drives would put two \
@@ -484,7 +484,7 @@ web = "LA{la} is driven by {function}. Stop it before you mark the pin as a DUT 
 [BP0036]
 name = "la_not_gpio_output"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { la = "int", function = "str" }
 message = "LA{la} is not a GPIO output (it is {function})"
 cause = "Writing a level or sending a gpio step needs the channel set up as a GPIO output or open drain first."
@@ -497,7 +497,7 @@ web = "Set LA{la} to output in the Pins pane first."
 [BP0037]
 name = "la_voltage_pins_in_use"
 area = "io"
-since = "next"
+since = "4.0.0"
 args = { pins = "str" }
 message = "The I/O voltage cannot change while pins are in use: {pins}"
 cause = "Changing the I/O voltage under a running GPIO, UART, flash or sensor would put the wrong level on the DUT's pins, so the pod refuses until they are free."
@@ -510,7 +510,7 @@ web = "Stop what uses those pins first, then change the I/O voltage."
 [BP0038]
 name = "trigger_timeout"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { la = "int", edge = "str", timeout_ms = "int" }
 message = "No {edge} edge on LA{la} within {timeout_ms} ms"
 cause = "A triggered capture waits for its trigger condition before it records. The DUT never made a {edge} edge on LA{la} in the time given, so the pod stopped waiting and recorded nothing."
@@ -523,7 +523,7 @@ web = "Nothing happened on LA{la} in time. Check the wiring and the edge, or wai
 [BP0039]
 name = "sensor_trigger_timeout"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { la = "int", instance = "str", timeout_ms = "int" }
 message = "No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus"
 cause = "A sensor bus capture with trigger \"start\" waits for the DUT's first I2C start condition on the emulated sensor's SDA. None came in time."
@@ -536,7 +536,7 @@ web = "The DUT did not talk to the sensor in time. Reset it during the capture, 
 [BP0040]
 name = "lan_locked"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { cmd = "str" }
 message = "The pod's LAN is locked: {cmd} needs the cloud or USB"
 cause = "The pod's LAN policy is locked, so commands that change settings, flash or update (tiers T2 and T3) only run from the cloud or over USB. Reads and tests still run on the LAN."
@@ -549,7 +549,7 @@ web = "The pod's LAN is locked. Use the pod from the cloud or over USB for this.
 [BP0041]
 name = "policy_not_from_lan"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { setting = "str" }
 message = "{setting} cannot be changed over the LAN: change it from the cloud or the USB console"
 cause = "Policies that decide who may change the pod are only changed by someone with the pod's cloud account or its USB cable, never by anyone on the network."
@@ -562,7 +562,7 @@ web = "Change {setting} from the cloud or over the pod's USB console."
 [BP0042]
 name = "setting_cloud_or_usb"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { setting = "str" }
 message = "{setting} cannot be changed over the LAN: change it from the cloud or over USB"
 cause = "Settings that decide what the pod trusts (LAN TLS, the cloud CA, the cloud proxy) are not changed from the network. TLS on port 8443 has no client authentication, so it does not count either."
@@ -575,7 +575,7 @@ web = "Change {setting} from the cloud or over USB."
 [BP0043]
 name = "setting_device_only"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { setting = "str" }
 message = "{setting} can only be changed on the device: the USB console, or over the USB link"
 cause = "This setting changes how the pod can be reached or updated, so it needs someone at the pod: its USB console or its USB network link. Neither the LAN nor the cloud may change it."
@@ -588,7 +588,7 @@ web = "Change {setting} with the pod plugged in over USB."
 [BP0044]
 name = "policy_loosen_usb_only"
 area = "policy"
-since = "next"
+since = "4.0.0"
 retired = "4.0.0"
 replaced_by = "BP0074"
 args = { setting = "str", now = "str" }
@@ -603,7 +603,7 @@ web = "Loosen {setting} on the pod's USB console."
 [BP0045]
 name = "role_required"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { cmd = "str" }
 message = "{cmd} needs an organization owner or admin"
 cause = "A cloud session runs commands up to the tier the server allows its user. {cmd} changes or updates the pod, which needs an owner or admin of the pod's organization."
@@ -616,7 +616,7 @@ web = "Ask an owner or admin of your organization to do this."
 [BP0046]
 name = "no_analog_front_end"
 area = "board"
-since = "next"
+since = "4.0.0"
 args = { cmd = "str" }
 message = "This BenchPod has no analog front end, so it cannot run {cmd}"
 cause = "The digital board has no DAC, ADC or analog outputs. The pod checks at boot; after fitting an analog add-on, restart it."
@@ -629,7 +629,7 @@ web = "This pod has no analog front end."
 [BP0047]
 name = "pod_busy"
 area = "busy"
-since = "next"
+since = "4.0.0"
 message = "The pod is running another long command (a capture, measurement, upload or update)"
 cause = "Captures, measurements, waveform uploads and firmware updates share the pod's sample memory, so one runs at a time. Light commands (status, GPIO, ...) still run."
 [BP0047.fix]
@@ -641,7 +641,7 @@ web = "The pod is busy with another capture or upload. Try again when it ends."
 [BP0048]
 name = "storage_bus_busy"
 area = "busy"
-since = "next"
+since = "4.0.0"
 args = { what = "str" }
 message = "The pod's storage bus is in use: {what}"
 cause = "The flash that holds settings, gateware and update images shares a bus with the sample memory. While {what}, the pod cannot write it."
@@ -654,7 +654,7 @@ web = "Try again when it ends."
 [BP0049]
 name = "uart_session_open"
 area = "uart"
-since = "next"
+since = "4.0.0"
 message = "A UART session is already open"
 cause = "The pod runs one UART at a time: the web app's Terminal, a test, an MCP session or a flash over the UART holds it."
 [BP0049.fix]
@@ -666,7 +666,7 @@ web = "Close the open terminal session first."
 [BP0050]
 name = "swd_session_open"
 area = "flash"
-since = "next"
+since = "4.0.0"
 message = "An SWD session is already running"
 cause = "The pod runs one SWD session (a flash or a debug run) at a time."
 [BP0050.fix]
@@ -678,7 +678,7 @@ web = "Wait for the running flash to finish."
 [BP0051]
 name = "update_in_progress"
 area = "update"
-since = "next"
+since = "4.0.0"
 args = { target = "str", holder = "str" }
 message = "A {target} update from {holder} is in progress"
 cause = "The pod takes one update at a time, from one place. Another one is running."
@@ -691,7 +691,7 @@ web = "Another update is running. Wait for it to finish."
 [BP0052]
 name = "cloud_command_busy"
 area = "busy"
-since = "next"
+since = "4.0.0"
 message = "The pod is still running the previous cloud command"
 cause = "Over the cloud command channel the pod runs one command at a time. The server retries, so this is usually brief."
 [BP0052.fix]
@@ -703,7 +703,7 @@ web = "Try again in a moment."
 [BP0053]
 name = "reply_too_large"
 area = "protocol"
-since = "next"
+since = "4.0.0"
 message = "The reply did not fit the pod's reply buffer"
 cause = "The command worked, but its answer is larger than the pod can send at once. Commands that can grow (la_pins) take a subset."
 [BP0053.fix]
@@ -715,7 +715,7 @@ web = "Reload the page; if it keeps happening, update the pod's firmware."
 [BP0054]
 name = "cloud_reply_too_large"
 area = "protocol"
-since = "next"
+since = "4.0.0"
 args = { bytes = "int", limit = "int" }
 message = "The reply is too large for the cloud channel ({bytes} bytes, limit {limit})"
 cause = "Cloud command replies travel in one frame of at most {limit} bytes. This one is {bytes}. Large data (captures) go through the cloud byte tunnel instead."
@@ -728,7 +728,7 @@ web = "Ask for less at once."
 [BP0055]
 name = "sensor_instance_unknown"
 area = "sensors"
-since = "next"
+since = "4.0.0"
 args = { instance = "str" }
 message = "The pod has no emulated sensor {instance}"
 cause = "The instance was never defined or started on this pod, was stopped, or the pod restarted."
@@ -741,7 +741,7 @@ web = "{instance} is not running. Start it first."
 [BP0056]
 name = "no_module_link"
 area = "board"
-since = "next"
+since = "4.0.0"
 args = { cmd = "str" }
 message = "This BenchPod has no module link, so it cannot run {cmd}"
 cause = "Only boards with a module header (digital v3r3) talk to an add-on module."
@@ -754,7 +754,7 @@ web = "This pod has no module link."
 [BP0057]
 name = "image_switch_sensors_running"
 area = "sensors"
-since = "next"
+since = "4.0.0"
 args = { sensors = "str" }
 message = "The emulated sensors {sensors} need the emulation image; stop them before switching"
 cause = "I2C, SPI and UART sensors run in the emulation gateware image. Switching to another image would stop them mid-run, so the pod refuses."
@@ -767,7 +767,7 @@ web = "Stop the emulated sensors first."
 [BP0058]
 name = "fpga_image_required"
 area = "firmware"
-since = "next"
+since = "4.0.0"
 args = { feature = "str", image = "str" }
 message = "{feature} is not in the running gateware image; it needs the {image} image"
 cause = "The pod's FPGA runs one of three images (loop, deep replay, emulation), and each has some features. {feature} is in the {image} image."
@@ -780,7 +780,7 @@ web = "Switch the FPGA image to {image} first."
 [BP0059]
 name = "fpga_image_sensors_first"
 area = "sensors"
-since = "next"
+since = "4.0.0"
 args = { feature = "str", image = "str" }
 message = "{feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image"
 cause = "Emulated I2C, SPI and UART sensors run in the emulation gateware image, which has no room for {feature}. It needs the {image} image, and switching stops the sensors."
@@ -793,7 +793,7 @@ web = "Stop the emulated sensors, then switch to the {image} image."
 [BP0060]
 name = "ota_unknown_target"
 area = "update"
-since = "next"
+since = "4.0.0"
 args = { target = "str" }
 message = "{target} is not an update target this firmware knows"
 cause = "The firmware on the pod is older than the tool, or the target name is wrong."
@@ -806,7 +806,7 @@ web = "Update the pod's firmware first."
 [BP0061]
 name = "i2c_needs_pullups"
 area = "i2c"
-since = "next"
+since = "4.0.0"
 args = { la = "int" }
 message = "I2C needs pull-ups: LA{la} has none switched on"
 cause = "I2C lines are open drain: something must pull them high. The pod can do it with its own pull-ups, or the board has its own."
@@ -819,7 +819,7 @@ web = "Switch on LA{la}'s pull-up, or say the board has its own."
 [BP0062]
 name = "i2c_session_not_open"
 area = "i2c"
-since = "next"
+since = "4.0.0"
 message = "No I2C session is open"
 cause = "I2C transactions run inside a session that i2c_start opens."
 [BP0062.fix]
@@ -831,7 +831,7 @@ web = "Open an I2C session first."
 [BP0063]
 name = "i2c_engine_reset"
 area = "i2c"
-since = "next"
+since = "4.0.0"
 message = "The I2C engine was reset, which ended the session"
 cause = "A gateware reload (an image switch, a recovery) resets the I2C engine, so the open session is gone."
 [BP0063.fix]
@@ -843,7 +843,7 @@ web = "Open the I2C session again."
 [BP0064]
 name = "loop_sweep_with_map"
 area = "dac"
-since = "next"
+since = "4.0.0"
 message = "The sweep input cannot be combined with an input map on this gateware"
 cause = "The sweep spans the raw count range, not the mapped window, so most of each pass would sit at one end of the curve."
 [BP0064.fix]
@@ -855,7 +855,7 @@ web = "Step the input instead of sweeping it."
 [BP0065]
 name = "output_used_by_sensor"
 area = "sensors"
-since = "next"
+since = "4.0.0"
 args = { output = "str", instance = "str" }
 message = "The {output} output is played by the emulated sensor {instance}"
 cause = "An analog emulated sensor drives the pod's {output} output, so a DAC or current command would fight it."
@@ -868,7 +868,7 @@ web = "Stop the emulated sensor {instance} first."
 [BP0066]
 name = "step_busy"
 area = "io"
-since = "next"
+since = "4.0.0"
 message = "A step pulse train is running"
 cause = "The pod runs one step train at a time."
 [BP0066.fix]
@@ -880,7 +880,7 @@ web = "Wait for the step train to finish."
 [BP0067]
 name = "samples_out_of_range"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { max = "int" }
 message = "samples must be 1 to {max} for this capture"
 cause = "Each capture holds a fixed number of samples: the shallow ADC capture what fits the RAM buffer, the deep ones what fits their PSRAM region at the rate asked for. A deep ADC capture is capture_dual with la_samples 0."
@@ -893,7 +893,7 @@ web = "Capture at most {max} samples."
 [BP0068]
 name = "la_rate_above_ceiling"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { rate_mhz = "str", max_mhz = "str", fit_mhz = "str", samples = "int" }
 message = "LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples"
 cause = "On gateware before v53 the raw LA runs at most {max_mhz} MS/s when the same capture records ADC samples: faster, the PSRAM writer starved the ADC. The pod refuses an explicit rate it cannot run instead of slowing it down. {fit_mhz} MS/s is the fastest rate that fits {samples} samples. Above 12 MS/s the LA records its changes instead."
@@ -906,7 +906,7 @@ web = "Pick {fit_mhz} MS/s or less, or leave the rate on automatic."
 [BP0069]
 name = "la_rate_too_deep"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { rate_mhz = "str", samples = "int", max_samples = "int", fit_mhz = "str" }
 message = "LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples"
 cause = "The raw LA samples into a burst buffer that drains to the PSRAM more slowly than the fastest rates. A capture deeper than the buffer holds at {rate_mhz} MS/s would drop samples, so the pod refuses it instead of slowing it down. Either way out works: fewer samples at this rate, or a lower rate for this depth."
@@ -919,7 +919,7 @@ web = "Capture at most {max_samples} samples at {rate_mhz} MS/s, or pick {fit_mh
 [BP0070]
 name = "capture_dual_too_deep"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { la_max = "int", adc_max = "int", la_capture_max = "int" }
 message = "capture_dual takes at most {la_max} LA and {adc_max} ADC samples"
 cause = "Each stream of a capture_dual has its own PSRAM region of a fixed size. A deeper LA-only capture fits la_capture, which takes up to {la_capture_max} LA samples."
@@ -932,7 +932,7 @@ web = "Capture at most {la_max} LA and {adc_max} ADC samples."
 [BP0071]
 name = "capture_overflowed"
 area = "capture"
-since = "next"
+since = "4.0.0"
 args = { la_ksps = "int", adc_ksps = "int" }
 message = "The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s"
 cause = "The capture started, but its streams wrote to the PSRAM faster than it could take them, so samples were lost and the pod returns none."
@@ -945,7 +945,7 @@ web = "Lower the LA or ADC rate, or capture fewer samples."
 [BP0072]
 name = "psram_too_small"
 area = "capture"
-since = "next"
+since = "4.0.0"
 message = "The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM"
 cause = "A capture_dual packs its LA region, its ADC region and any deep-replay waveform still loaded into the pod's 8 MB PSRAM, and refuses up front when they do not fit."
 [BP0072.fix]
@@ -957,7 +957,7 @@ web = "Capture fewer samples, or stop the DAC replay first."
 [BP0073]
 name = "psram_bandwidth"
 area = "capture"
-since = "next"
+since = "4.0.0"
 message = "The combined sample rate is more than the PSRAM bus can take"
 cause = "The LA, the ADC and a running deep replay share one PSRAM bus. The pod adds up their sustained rates and refuses a capture that would overrun it, instead of losing samples."
 [BP0073.fix]
@@ -969,7 +969,7 @@ web = "Lower the LA or ADC rate, or stop the DAC replay first."
 [BP0074]
 name = "signatures_always_required"
 area = "policy"
-since = "next"
+since = "4.0.0"
 args = { setting = "str", want = "str" }
 message = "{setting} cannot be set to {want}: this firmware installs only signed images"
 cause = "Firmware 4.0.0 and later take an update (firmware, gateware, the Wi-Fi chip's image) only with a good signature, on every path: the LAN, the USB network adapter and the cloud. No command loosens that. Dev builds also take images signed with the developer key. Firmware you built yourself goes in over USB DFU (`benchpod flash-self`), which needs the pod on a USB cable."
@@ -982,7 +982,7 @@ web = "The pod takes only signed images. Install self-built firmware over USB wi
 [BP0075]
 name = "lan_plaintext_off"
 area = "policy"
-since = "next"
+since = "4.0.0"
 message = "The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off"
 cause = "Firmware 4.0.0 and later serve the JSON API over Ethernet and Wi-Fi on TLS port 8443 only. Plaintext port 8080 still answers on the USB network adapter, and from the LAN when SCPI is switched on, but only for SCPI there. Plaintext JSON on the LAN comes back only when it is switched on over USB or from the cloud."
 [BP0075.fix]
@@ -994,7 +994,7 @@ web = "Connect to the pod over TLS (port 8443) or USB."
 [BP0076]
 name = "usb_host_over_usb"
 area = "usb"
-since = "next"
+since = "4.0.0"
 message = "USB host mode cannot start over the pod's own USB link"
 cause = "While the pod hosts a board on its USB port it is off the computer's USB, so the connection that asked would drop before the answer arrives. USB host mode starts only over the network (LAN or Wi-Fi) or the cloud."
 [BP0076.fix]
@@ -1006,7 +1006,7 @@ web = "Connect to the pod over the network or the cloud to use USB host mode."
 [BP0077]
 name = "usb_host_port_unavailable"
 area = "usb"
-since = "next"
+since = "4.0.0"
 args = { port = "str" }
 message = "This pod has no USB host port {port}"
 cause = "Only pods with a USB-A host port can host a board there. Every pod can host on its USB-C port, but only on a bench rig with an adapter cable that powers the pod and carries the data lines to the board under test."
@@ -1019,7 +1019,7 @@ web = "This pod has no USB-A host port."
 [BP0078]
 name = "usb_host_no_crystal"
 area = "usb"
-since = "next"
+since = "4.0.0"
 message = "USB host mode needs the pod's crystal clock, which is not running"
 cause = "A USB host keeps the bus timing itself and needs a precise clock. The pod runs on its internal oscillator because the crystal did not start at boot."
 [BP0078.fix]
@@ -1031,7 +1031,7 @@ web = "Power cycle the pod. If this keeps happening, contact support."
 [BP0079]
 name = "usb_host_other_port"
 area = "usb"
-since = "next"
+since = "4.0.0"
 args = { port = "str" }
 message = "USB host mode is already running on {port}"
 cause = "The pod hosts one port at a time. A start for the same port renews the timeout; another port needs a stop first."
@@ -1044,7 +1044,7 @@ web = "Stop USB host mode first."
 [BP0080]
 name = "dac_pinout_mismatch"
 area = "analog"
-since = "next"
+since = "4.0.0"
 args = { cmd = "str", digital = "str", module = "str" }
 message = "{cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts"
 cause = "The flat cable between the two boards carries the DAC's clock and data. Digital board v3r4 and analog module 3.5 swapped those two lines, so a newer board paired with an older one would send the DAC scrambled data and its outputs could jump to any voltage. The pod refuses every command that drives the DAC and sends it nothing; everything else keeps working. The module's revision comes from its EEPROM, so a module that was never programmed counts as an older one."

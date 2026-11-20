@@ -193,6 +193,11 @@ firmware = "3.10.13"
 gateware = 59
 date = "2026-11-19"
 
+[[releases]]
+firmware = "4.0.0"
+gateware = 59
+date = "2026-11-20"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -811,28 +816,28 @@ note = "Every channel pulls up or down with 10k, 2.2k or both; la pull takes str
 
 [features.client_api]
 rev = 8
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#client-compatibility"
 dated = "code"
 note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except ping, status, diag, identity_public, lease_release, ota_status, ota_begin, ota_data, ota_end, ota_commit, ota_abort, ota_selftest and blob_status. Firmware 4.0.0 is api 2 and takes client_api 2 or newer."
 
 [features.lan_tls_default]
 rev = 9
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#lan_tls--the-lan-api-over-tls"
 dated = "code"
 note = "HTTPS-only is on by default (plaintext JSON on 8080 only on the USB network adapter; lan_tls https_only false turns the LAN back on) and SCPI is off by default: lan_tls takes and replies scpi, status lan_tls has scpi, console lan-tls scpi on|off, both changed only over USB or from the cloud. A plaintext LAN JSON line under HTTPS-only gets BP0075. The mDNS TXT carries api."
 
 [features.sig_always_required]
 rev = 9
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#sig_policy--which-firmware-and-blob-updates-the-pod-accepts"
 dated = "code"
 note = "The signature policy is always required on every OTA path (LAN, USB network adapter, cloud) and cannot be loosened: sig_policy set audit or permissive, and lan_unsigned true, get BP0074; the reply has no lan_unsigned; the console has no lan-ota and always allows dfu. Clients hide any loosening control."
 
 [features.generate_volts_only]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 board = "analog"
 docs = "API.md#generate--dac-waveform-output"
 dated = "code"
@@ -840,49 +845,49 @@ note = "generate takes only the calibrated form (path with amplitude_v and offse
 
 [features.json_names_4]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#commands"
 dated = "code"
 note = "Units in the field names: freq_hz (generate, measure), sample_rate_hz in Hz (was sample_rate_mhz in MHz: generate, measure, capture, replay, la_capture, sensor_la), capture_dual adc_sample_rate_hz and la_sample_rate_hz in Hz (were adc_rate_mhz, la_rate_mhz) and in the capture replies (were adc_rate_hz, la_rate_hz), clock_hz (spi_start, spi_status, i2c_start, i2c_status, eth refclk; was hz), power_profile sample_rate_hz (was rate_hz; stats adc_sample_rate_hz was adc_rate_hz), dac_out v (was volts), dac_loop_probe and dac_loop_input code16 (was v), can_read frames ts_ms (was ts)."
 
 [features.can_start_stop]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#can_start--bring-can-up"
 dated = "code"
 note = "CAN is brought up with can_start and turned off with can_stop, like spi_start/spi_stop and i2c_start/i2c_stop. can_config and can_disable are gone (unknown cmd)."
 
 [features.la_step_pull_split]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#la_pull--la-pin-pull-resistors"
 dated = "code"
 note = "The la command is split: la_step runs a step pulse train (needs steps), la_pull switches, reads or (without la) lists the pull resistors with the same fields and replies. la answers unknown cmd; the old pullup field is not read."
 
 [features.json_booleans_4]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#target_power--enabledisable-a-target-power-efuse"
 dated = "code"
 note = "Booleans are true/false: target_power takes enabled (was state 1/0) and replies enabled true/false (was 1/0); target_status enabled, fault and valid are true/false; usb_network takes and replies enabled (was set/setting on/off); status usb net and enabled are true/false (were net/setting on/off); la_pull pullups_available is true/false (was 1/0); nrst assert is documented as true/false (1/0 still parse)."
 
 [features.console_recovery_json]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "usb-serial-interface.md#removed-in-firmware-400"
 dated = "code"
 note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link). The console flash-esp32 has no command: OTA target esp installs the image. wifi_status adds rssi_dbm (built-in Wi-Fi) and, on the bridge object, identity, image, boot, reboots, emc."
 
 [features.usb_host]
 rev = 10
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#usb_host--usb-host-mode"
 dated = "code"
 note = "Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
 
 [features.dac_pinout_guard]
 rev = 11
-firmware = "next"
+firmware = "4.0.0"
 docs = "API.md#dac-pinout-on-the-flat-cable"
 dated = "code"
 note = "A digital board and an analog module with different flat-cable DAC pinouts (digital v3r4+ with module 3.4 or older, or the reverse): every command that drives the DAC is refused with BP0080 (dac_pinout_mismatch, args cmd, digital, module; merged from main as BP0035) and status.module / module report dac_pinout_ok false."
