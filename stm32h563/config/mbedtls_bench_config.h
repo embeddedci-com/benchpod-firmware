@@ -60,17 +60,15 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_SHA256_C
 #define MBEDTLS_SHA384_C
 #define MBEDTLS_SHA512_C
-#define MBEDTLS_SHA1_C                       /* legacy cert chains / sig algs */
 #define MBEDTLS_MD5_C                        /* ESP32-C3 ROM flash verify (esp_rom_flash.c) */
 
 /* ---- symmetric ciphers + AEAD modes -------------------------------------- */
 #define MBEDTLS_CIPHER_C
 #define MBEDTLS_AES_C
 #define MBEDTLS_GCM_C
-#define MBEDTLS_CIPHER_MODE_CBC              /* AES-CBC fallback suites */
-#define MBEDTLS_CHACHA20_C
-#define MBEDTLS_POLY1305_C
-#define MBEDTLS_CHACHAPOLY_C
+/* AES-GCM only: every client we support (Python ssl, Go crypto/tls, Cloudflare in front of
+   embeddedci.com) offers ECDHE + AES-GCM. No CBC, no ChaCha20-Poly1305, no SHA-1 (trimmed in
+   4.0.1 for flash; put them back here if a client ever needs them). */
 
 /* ---- public-key crypto --------------------------------------------------- */
 #define MBEDTLS_BIGNUM_C
@@ -96,14 +94,11 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_PK_PARSE_C
 #define MBEDTLS_RSA_C
 #define MBEDTLS_PKCS1_V15
-#define MBEDTLS_PKCS1_V21
 #define MBEDTLS_ECP_C
 #define MBEDTLS_ECDH_C
 #define MBEDTLS_ECDSA_C
 #define MBEDTLS_ECP_DP_SECP256R1_ENABLED
 #define MBEDTLS_ECP_DP_SECP384R1_ENABLED
-#define MBEDTLS_ECP_DP_SECP521R1_ENABLED
-#define MBEDTLS_ECP_DP_CURVE25519_ENABLED
 
 /* ★ The dominant TLS-handshake cost lever. This custom config REPLACES mbedTLS's
    default (which defines it), so without it the NIST primes fall back to GENERIC
@@ -144,10 +139,10 @@ long bench_mbedtls_time(long *timer);
 #define MBEDTLS_SSL_SERVER_NAME_INDICATION   /* set SNI host on the ClientHello */
 #define MBEDTLS_SSL_KEEP_PEER_CERTIFICATE
 
-/* Key exchanges: ECDHE (RSA/ECDSA cert), with a plain-RSA fallback. */
+/* Key exchanges: ECDHE with an RSA or ECDSA certificate. No static-RSA key exchange (no forward
+   secrecy, and no client of ours needs it). Curves: P-256 and P-384 (the ISRG roots, our certs). */
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_RSA_ENABLED
 #define MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA_ENABLED
-#define MBEDTLS_KEY_EXCHANGE_RSA_ENABLED
 
 /* TLS record buffers (per connection, from the FreeRTOS heap).  IN is large
    enough to receive a full server certificate flight in one record; OUT is

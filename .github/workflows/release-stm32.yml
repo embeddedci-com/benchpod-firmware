@@ -15,7 +15,9 @@
 # Nothing is published until these pass (needs: below):
 #   • preflight: the tag equals FIRMWARE_VERSION in stm32h563/src/version.h, and ice40/release/
 #     still matches the gateware sources (make -C ice40 check-release), both fatal;
-#   • tests: test.yml (gateware sims, host tests) with release: true;
+#   • tests: test.yml (gateware sims, host tests) with release: true. A suite that a Tests run on
+#     main already passed on the same files (usually the push of the tagged commit) is not run
+#     again (.github/scripts/release-reuse.sh); with no such run it runs here as before;
 #   • firmware-build: stm32-build.yml (warning-free build, host tests with Cube, RELEASE=1 build).
 #
 # Option, not switched on: publish with `gh release create --prerelease` and promote it
@@ -75,6 +77,9 @@ jobs:
 
   tests:
     uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+      actions: read   # earlier green Tests runs, to reuse them
     with:
       release: true
 
@@ -92,17 +97,17 @@ jobs:
     # reviewers so a release is only signed after a person approves the run.
     environment: release
     steps:
-      # the hosted Ubuntu runner ships ~30GB of preinstalled Android/.NET/Haskell/etc that this
-      # build never touches, leaving too little free space for the ESP-IDF Docker
-      # image layers (multi-GB, submodules and all) — "no space left on device"
-      # partway through `docker run`. Reclaim it before anything else runs.
-      - name: Free disk space
+      # The ESP-IDF image plus the dev, production and EMC bridge builds take 10 GB of / (measured
+      # 2026-11-20: 89 GB free before, 80 GB after; docker reports the image as 11.7 GB). Nothing
+      # preinstalled has to be deleted for that (removing Android, .NET and Haskell took 3 min).
+      - name: Enough disk space for the ESP-IDF image
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /usr/share/dotnet /usr/local/share/powershell /usr/local/share/chromium \
-            /usr/local/lib/node_modules "$AGENT_TOOLSDIRECTORY"
-          docker image prune -a -f
           df -h /
+          free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          if [ "$free" -lt 20 ]; then
+            echo "::error::only ${free} GB free on /: the ESP-IDF image and builds need about 10 GB"
+            exit 1
+          fi
 
       - name: Checkout (with submodules)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

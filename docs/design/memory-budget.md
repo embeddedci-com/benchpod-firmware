@@ -5,11 +5,11 @@ needs more. Update the tables when a change moves a number.
 
 - **Link-time sizes** (flash, static RAM, the FreeRTOS heap size) are from the build of firmware
   3.10.13 (main `a594c0e`, 2026-11-19).
-- **Run-time peaks** (heap and pool high-water marks, task stack low-water marks) are older:
-  measured on benchpod-30a9f1 (analog v3r2) with firmware 3.9.7, after the LAN hardware tests,
-  the SDK, MCP and OpenHTF suites, the process-node suite over LAN TLS and a cloud reconnect with
-  three LAN TLS sessions open. The FreeRTOS heap was 248 KB then and is 243 KB now, so these
-  numbers need measuring again on 3.10.13 (to do on hardware).
+- **Run-time peaks** (heap and pool high-water marks, task stack low-water marks) are from
+  2026-11-20 on benchpod-c2f662 (v3 board with an analog module), firmware 4.0.0 and then 4.0.0
+  with this page's heap split: the SDK LAN e2e suite over TLS with two more LAN TLS sessions held
+  open, then the SDK cloud tier (tunnel captures, UART, waveform replay) with three LAN TLS
+  sessions open. Not covered yet: Wi-Fi traffic through the ESP32-C3.
 
 ## Read the numbers on a pod
 
@@ -54,27 +54,31 @@ captures, the EMI run log, staged OTA images, gateware blobs) lives in the 8 MB 
 
 Static RAM is 649,296 B (99.07%) in the release build and 653,424 B (99.70%) in the dev build
 (main `a594c0e`). Almost all of it is pools sized at build time. What matters is how full each
-pool gets. The "Peak used" column and the stack figures below are from firmware 3.9.7 with a
-248 KB heap (see the top of this page) and need measuring again.
+pool gets. The "Peak used" column and the stack figures below are from the 2026-11-20 run (see the
+top of this page).
 
-| Pool | Size | Peak used (3.9.7) | Notes |
+| Pool | Size | Peak used | Notes |
 |---|---|---|---|
-| FreeRTOS heap (`ucHeap`, `configTOTAL_HEAP_SIZE`) | 243 KB (248 KB on 3.9.7) | 181 KB of 248 KB (66.7 KB free at worst) | mbedTLS (cloud link, LAN TLS: 22,000 B per open LAN session), task stacks, cloud buffers. 155 KB free when idle and connected. |
-| lwIP heap (`ram_heap`, `MEM_SIZE`) | 64 KB | 20 KB | TCP send data (`PBUF_RAM`). |
+| FreeRTOS heap (`ucHeap`, `configTOTAL_HEAP_SIZE`) | 259 KB (243 KB up to 4.0.0) | 209 KB of 259 KB (49.9 KB free at worst; 33.5 KB of 243 KB on 4.0.0) | mbedTLS (cloud link, LAN TLS: 22,000 B per open LAN session), task stacks, cloud buffers. 164.8 KB free when idle and connected (148.4 KB on 4.0.0). |
+| lwIP heap (`ram_heap`, `MEM_SIZE`) | 48 KB (64 KB up to 4.0.0) | 19.4 KB | TCP send data (`PBUF_RAM`). |
 | Ethernet RX pool (`RX_POOL`) | 25 KB | | 16 x 1.5 KB zero-copy receive buffers (`ETH_RX_BUFFER_CNT`). |
 | lwIP PBUF pool (`PBUF_POOL`) | 25 KB | 2 of 16 | 16 x 1.5 KB (lwIP default). |
 | `adc_pool` | 64 KB | full by design | The one sample/trace buffer shared by JSON, SCPI and the console. |
 | Other fixed buffers | about 110 KB | | Largest: per-connection TX rings (`conn_tx.c s_rings`, 16 KB), cloud receive buffer (`cloud_client.c s_rx`, 16 KB), JSON line assembly per connection (`command_handler_transport.c line_asm`, 12.6 KB), ESP32-C3 SPI TX (`esp_hosted_spi.c`, 9.4 KB), USB NCM endpoints (9.4 KB), USB CDC RX + TX (8.9 KB), signal engine sample buffers (16 KB), OTA commit sector copy (`ota_commit.c s_sector`, 8 KB). |
 
-Task stacks (free bytes at worst, firmware 3.9.7): `IDLE` 400, `usb` 2,792, `console` 3,680,
-`hw` 7,008, `net` 12,064.
+Task stacks (free bytes at worst, 2026-11-20 run): `IDLE` 400, `usb` 2,672, `console` 2,208,
+`hw` 4,924, `net` 11,936.
 
 ## Floors that must hold
 
 - **Cloud reconnect room: 48 KB of FreeRTOS heap** (`LAN_TLS_HEAP_FLOOR`, `net_server.c`). A new LAN
-  TLS session is admitted only if the heap stays above the floor plus 24 KB for the session. Lowest
-  seen: 66.7 KB on 3.9.7 with a 248 KB heap, so about 19 KB above the floor. With today's 243 KB
-  heap the same load would leave about 5 KB less; measure it again.
+  TLS session is admitted only while the free heap is above the floor plus 2 KB for the handshake
+  (the session's own 22,000 B are already taken when the check runs). Lowest seen: 49.9 KB with the
+  259 KB heap, just above the floor. With the old 243 KB heap the same load went down to 33.5 KB,
+  under the floor, and new LAN TLS clients were refused until it recovered.
+- **LAN TLS sessions: at most 3** (`LAN_TLS_MAX_SESSIONS`). A 4th costs 22 KB the heap does not have
+  at worst, so it stays at 3. The SDK opens one connection per command and keeps one per UART
+  session or capture, so a test that holds two sessions needs both free slots.
 - **Stacks:** keep every task at 256 B free or more at worst. `IDLE` (400 B) is the closest.
 
 ## Where to find room later (not done; measure first)
@@ -83,8 +87,9 @@ In order of how cheap they are. Each needs the worst case measured before shrink
 bulk capture (the second cloud TLS session), Wi-Fi traffic through the ESP32-C3, three LAN TLS
 sessions and a deep capture at once.
 
-1. **lwIP heap, up to 32 KB.** Peak 20 KB of 64 KB in LAN and SDK use. Measure `lwip_mem_max`
-   during a cloud bulk capture and Wi-Fi traffic first; keep at least 50% headroom above that peak.
+1. **lwIP heap: done (16 KB to the FreeRTOS heap).** Peak 19.4 KB of 48 KB with LAN TLS, SDK and
+   cloud tunnel captures. Another 16 KB is possible after `lwip_mem_max` is measured with Wi-Fi
+   traffic; keep at least 50% headroom above the peak.
 2. **lwIP PBUF pool, up to about 15 KB.** Peak 2 of 16 buffers here, but the Wi-Fi (ESP32-C3) receive
    path and the USB network adapter may use it; measure `pbuf_pool_max` on a Wi-Fi pod.
 3. **LAN TLS input buffer.** 16 KB per session (`MBEDTLS_SSL_IN_CONTENT_LEN`), because Python's

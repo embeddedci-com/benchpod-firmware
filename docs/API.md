@@ -41,10 +41,21 @@ The IP address is printed on the USB console (and the USART2 debug pins) at boot
 
 The pod has two command channels, and they have deliberately different trust models.
 
-### The LAN API is unauthenticated
+### Pairing: who may use the LAN API
 
-The JSON-over-TCP and SCPI interfaces on port `8080` have **no authentication, no
-authorization, and no transport encryption** (from firmware 4.0.0 `8080` is off on Ethernet and
+**From firmware 4.0.1 the LAN API needs pairing.** A computer on Ethernet or Wi-Fi gets only
+`ping`, `status`, `diag`, `cloud_status`, `identity_public` and `lan_tls` until it is paired; every other command
+gets `BP0081` (`lan_not_paired`). Pairing puts the SHA-256 of the computer's TLS client key on the
+pod's list ([`lan_clients`](#lan_clients--paired-computers)): `benchpod setup` does it over the
+pod's USB-C cable, and embeddedci.com does it for a registered pod. The USB console, the USB
+network adapter and the cloud never need pairing. Pairing is on by default, also on a pod updated
+from older firmware; `lan_policy` `"pairing":false` (over USB or from the cloud) turns it off,
+which is the behavior below. See `docs/design/lan-pairing.md`.
+
+### Without pairing the LAN API is unauthenticated
+
+With pairing off (or on firmware before 4.0.1), the JSON-over-TCP and SCPI interfaces on port
+`8080` have **no authentication, no authorization, and no transport encryption** (from firmware 4.0.0 `8080` is off on Ethernet and
 Wi-Fi by default, and SCPI is off everywhere by default). Port `8443` (firmware 3.9.3+) is the same API over
 TLS: it adds **encryption and integrity** against the network path (a Wi-Fi bridge, a shared
 switch), not authentication. Any client that can open a TCP connection to either port has the
@@ -302,6 +313,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
 | `log_level` | T0 | Read or set the console log level | object | no |
 | `lan_tls` | T0/T2 | The LAN API's TLS certificate (port 8443) and the HTTPS-only setting | object | no |
+| `lan_clients` | T0/T2 | List, pair or remove the computers paired for the LAN API (changes over the USB link or the cloud) | object | no |
 | `ota_begin` | T3 | Start a firmware or blob update | object | no |
 | `ota_data` | T3 | Send one base64url chunk of the image | object | no |
 | `ota_end` | T3 | Verify the staged image's SHA-256 (and signature) | object | no |
@@ -1803,6 +1815,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
+| `lan_pairing`, `lan_paired` | bool, bool or null | Firmware 4.0.1+: whether computers on Ethernet/Wi-Fi must be [paired](#lan_clients--paired-computers), and whether the asking connection is (`null`: it needs no pairing, as on USB, the USB link and the cloud). Both forms. |
 | `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only` (default `true` from 4.0.0), `scpi` (4.0.0, default `false`), and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
 | `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only. |
@@ -2285,12 +2298,17 @@ levels when the gateware can read them back.
 ```json
 {"cmd":"la_pins"}
 {"cmd":"la_pins","la":[1,2,3,4,5,6,7]}
+{"cmd":"la_pins","from":10}
 ```
 
 `la` (optional, firmware 3.10.13+): a pin or a list of pins. The reply then lists only
 those pins' entries, in pin order; everything else is the same. Without `la` (or with `"all"`)
 the reply lists all 14, as before. Older firmware ignores `la` and lists all 14, so a host that
 asks for a subset keeps only the entries it asked for.
+
+`from` (optional, firmware 4.0.1+, feature `la_pins_paged`): the first pin to list, 1 to 14,
+normally the `next` of the previous reply. It combines with `la` (the pins of `la` from `from`
+on). Older firmware ignores it and starts at LA1.
 
 Response:
 
@@ -2311,12 +2329,26 @@ Response:
 | `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
 | `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
+| `pull_dirs` | digital v3r4 only: `["up","down"]`, every channel's pull directions (the entries leave `dirs` out) |
+| `next` | only when the reply could not carry every pin asked for (firmware 4.0.1+): the first pin it left out. Ask again with `"from":<next>` (and the same `la`, if any) for the rest |
 
-The full reply is about 1.3 kB, and it is the largest single-reply command the pod has. With a
-`dir` and a `warn` on every pin it can reach about 1.8 kB, and with an emulated sensor instance
-with a long name on every pin about 2.4 kB. That is more than one cloud command reply holds
-(1791 bytes), and the pod answers `BP0053` (`reply_too_large`; `BP0054` over the cloud). Read the list in two parts then:
-`"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
+The full reply is about 1.3 kB. With a `dir` and a `warn` on every pin it can reach about
+1.8 kB, and with an emulated sensor instance with a long name on every pin about 2.4 kB: more
+than one cloud command reply holds (1791 bytes). Firmware 4.0.1 and later never refuses the listing
+for its size: each reply carries the pins that fit in 1727 bytes (one cloud reply less 64 bytes)
+and says `next`. A host reads the whole list like this:
+
+```json
+{"cmd":"la_pins"}
+{"status":"ok","data":{"pins":[{"la":1,...},...,{"la":9,...}],"next":10,"levels":1234}}
+{"cmd":"la_pins","from":10}
+{"status":"ok","data":{"pins":[{"la":10,...},...,{"la":14,...}],"levels":1234}}
+```
+
+A reply without `next` is the last one. `levels` is read again for every reply. A reply that fits
+whole is the same as before (no `next`), so most listings stay one round trip. Older firmware
+answers `BP0053` (`reply_too_large`; `BP0054` over the cloud) instead; read it in two parts
+there: `"la":[1,2,3,4,5,6,7]` and `"la":[8,9,10,11,12,13,14]` each fit with room to spare.
 
 `la_pins` does **not** require the LA voltage: it reports state and reads nothing that would
 drive a DUT line.
@@ -5029,11 +5061,17 @@ to none (Ethernet, Wi-Fi and the cloud get `BP0043`, setting `rollback_floor`); 
 ```json
 {"cmd":"lan_policy"}
 {"cmd":"lan_policy","set":"locked"}
+{"cmd":"lan_policy","pairing":false}
 ```
 
 ```json
-{"status":"ok","data":{"policy":"locked"}}
+{"status":"ok","data":{"policy":"locked","pairing":true}}
 ```
+
+`pairing` (firmware 4.0.1+, default `true`): computers on the external LAN must be
+[paired](#lan_clients--paired-computers). The policy below then applies to paired computers; an
+unpaired one only reads status. Changed over USB (the console's `lan-pairing on|off`, or the USB
+link) or from the cloud, never from Ethernet or Wi-Fi: `BP0041`.
 
 The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `locked` (a T2/T3
 command there gets `BP0040`, `lan_locked`) or `off` (connections to
@@ -5088,6 +5126,43 @@ levels](usb-serial-interface.md#log-levels); `debug` adds the per-command trace 
 The setting is stored on the pod (it survives a reboot and a firmware update) and is the same one
 as the console's `log` command. It changes only console output, so every connection may read and
 set it (T0). Another value gets `log_level: set must be error, warn, info or debug`.
+
+### `lan_clients` — paired computers
+
+Firmware 4.0.1+. See `docs/design/lan-pairing.md`.
+
+```json
+{"cmd":"lan_clients"}
+{"cmd":"lan_clients","offset":12}
+{"cmd":"lan_clients","add":"ci-runner-1","spki_sha256":"3f0c…64 hex digits"}
+{"cmd":"lan_clients","remove":"ci-runner-1"}
+{"cmd":"lan_clients","remove":"3f0c9a1e"}
+{"cmd":"lan_clients","clear":true}
+```
+
+```json
+{"status":"ok","data":{"pairing":true,"count":2,"max":32,"offset":0,
+ "clients":[{"name":"laptop","spki_sha256":"3f0c…"},{"name":"ci-runner-1","spki_sha256":"9b2e…"}]}}
+```
+
+A computer is known by `spki_sha256`: the SHA-256 of the DER SubjectPublicKeyInfo of the
+certificate it presents on port `8443` (any self-signed certificate; the pod has no CA). It may
+renew its certificate with the same key. Port `8443` asks every client for a certificate; one
+without a certificate still connects, unpaired. mbedTLS checks the client's CertificateVerify, so a
+client that sends a certificate holds its key.
+
+- `add`: a name (1 to 23 printable characters, no quotes or backslashes) and the key hash. A key
+  already paired gets the new name. Full: `BP0082` (`lan_clients_full`, args `max`).
+- `remove`: every computer with that name, or the one key that starts with 8 or more hex digits
+  (two matches remove neither).
+- `clear`: forget them all.
+- The list comes back after a change, 12 at a time (`offset` for the next 12; `count` is the total).
+  `max` is 32, fewer when a large user certificate fills the record they share.
+
+Changes come over the USB link or from the cloud (the console has `lan-clients remove` and
+`lan-clients clear`), never from Ethernet or Wi-Fi, paired or not: `BP0041`. The list is stored with
+the TLS certificate, so regenerating or replacing the certificate keeps it. Rolled back to firmware
+4.0.0, the pod keeps its certificate (clients' pins stay valid) and forgets the list.
 
 ### `lan_tls` — the LAN API over TLS
 

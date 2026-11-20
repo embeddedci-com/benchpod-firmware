@@ -98,9 +98,11 @@ typedef enum {
     BP_E_USB_HOST_NO_CRYSTAL = 78,
     BP_E_USB_HOST_OTHER_PORT = 79,
     BP_E_DAC_PINOUT_MISMATCH = 80,
+    BP_E_LAN_NOT_PAIRED = 81,
+    BP_E_LAN_CLIENTS_FULL = 82,
 } bp_errcode_t;
 
-#define BP_E_LAST 80
+#define BP_E_LAST 82
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1089,6 +1091,32 @@ static inline const char *bp_note_dac_pinout_mismatch(char *buf, size_t cap, con
 static inline const char *bp_tag_dac_pinout_mismatch(const char *text, const char *cmd, const char *digital, const char *module) {
     const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1}, {"digital", digital, 0, 1}, {"module", module, 0, 1} };
     return bp_err_tag(text, BP_E_DAC_PINOUT_MISMATCH, a, 3);
+}
+/* BP0081: This computer is not paired with the pod: {cmd} needs pairing over USB or from the cloud */
+static inline void bp_err_lan_not_paired(int conn_id, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    bp_error_send(conn_id, BP_E_LAN_NOT_PAIRED, a, 1);
+}
+static inline const char *bp_note_lan_not_paired(char *buf, size_t cap, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_LAN_NOT_PAIRED, a, 1);
+}
+static inline const char *bp_tag_lan_not_paired(const char *text, const char *cmd) {
+    const bp_err_arg_t a[] = { {"cmd", cmd, 0, 1} };
+    return bp_err_tag(text, BP_E_LAN_NOT_PAIRED, a, 1);
+}
+/* BP0082: The pod already has {max} paired computers */
+static inline void bp_err_lan_clients_full(int conn_id, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_LAN_CLIENTS_FULL, a, 1);
+}
+static inline const char *bp_note_lan_clients_full(char *buf, size_t cap, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_LAN_CLIENTS_FULL, a, 1);
+}
+static inline const char *bp_tag_lan_clients_full(const char *text, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_LAN_CLIENTS_FULL, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

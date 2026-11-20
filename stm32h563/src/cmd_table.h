@@ -50,6 +50,9 @@ enum {
     /* Runs for a client below min_client_api (cmd_gate_client_api): what a client needs to find
        out that it is too old and to say so, and to let go of the pod. Keep the list short. */
     CMD_F_ANY_CLIENT = 1u << 7,
+    /* Answers a LAN computer that is not paired with the pod (lan_clients.h, cmd_gate.h): the
+       few reads that tell it what the pod is and how to pair. Everything else needs pairing. */
+    CMD_F_UNPAIRED = 1u << 8,
 };
 
 /* The {name, tier} pair is what embeddedci-server mirrors (testdata/shared/cmd_tier_vectors.json)
@@ -60,7 +63,7 @@ typedef struct {
         const char *name;
         uint8_t     tier;   /* cmd_tier_t */
     } key;
-    uint8_t  flags;         /* CMD_F_* */
+    uint16_t flags;         /* CMD_F_* */
     cmd_fn_t fn;            /* NULL under CMD_TABLE_NO_HANDLERS */
     cmd_writes_fn_t writes; /* NULL: the tier does not depend on the arguments */
 } cmd_desc_t;

@@ -19,13 +19,16 @@
  * The main bus is not probed for expanders on digital v3r3 (it has none).
  *
  * Either way detection runs once at boot: the pod has to be restarted after a module or add-on
- * is fitted. Accessors are plain RAM reads afterwards.
+ * is fitted. The result, with the module's EEPROM facts, is latched in board_caps()->analog
+ * (board_caps.h); everything else reads it there.
  */
 #ifndef BOARD_VARIANT_H
 #define BOARD_VARIANT_H
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "board_caps.h"
 
 #define BOARD_VARIANT_PROBE_TRIES 3u
 
@@ -54,16 +57,19 @@ board_analog_t board_variant_decide(bool link_board, bool present,
                                     bool (*probe_module)(uint8_t addr),
                                     board_variant_seen_t *seen);
 
-/* Probe and latch the result, and point the analog expander driver at the right bus.  Call once
-   after i2c_bus_init() and module_link_init(). */
+/* The analog part of board_caps() for a decision and the module EEPROM's low-range and
+   100 ohm shunt facts (module_ee_has_low_range / module_ee_has_100r_shunt).  The EEPROM facts
+   count only with the module.  Pure (host tests). */
+board_analog_caps_t board_analog_caps_for(board_analog_t kind, bool ee_low_range, bool ee_100r);
+
+/* Probe and latch the result in board_caps()->analog, and point the analog expander driver at the
+   right bus.  Call once after board_rev_init(), i2c_bus_init() and module_link_init() (which
+   reads the module EEPROM). */
 void board_variant_init(void);
 
-/* The board has the analog front end (on board or as a module). True until board_variant_init()
-   runs, so nothing is hidden on an analog board by calling it early. */
-bool board_has_analog(void);
-
-/* The analog front end is the plug-in module of digital v3r3. */
-bool board_analog_is_module(void);
+/* The module's power came back on and its EEPROM header was read again: latch its facts again
+   (module_power_set, before analog_switch_init). */
+void board_variant_module_reread(void);
 
 /* "analog" or "digital" (the module counts as analog). */
 const char *board_variant_str(void);

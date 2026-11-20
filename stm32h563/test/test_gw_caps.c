@@ -1,10 +1,11 @@
-/* test_gw_caps.c: gw_caps_for() (the gateware gates) and gw_caps() (refilled when the running
+/* test_gw_caps.c: gw_caps_for() (the gateware gates) and gw_caps() (published from a second slot when the running
    version or feature byte changes). */
 #include "gw_caps.h"
 #include "signal_engine.h"
 #include "la_rate.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int checks, fails;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
@@ -82,11 +83,38 @@ static void test_running(void)
     CHECK(gw_caps() == gw_caps(), "one struct");
 }
 
+/* A refresh builds the new caps in the other slot and publishes it with one pointer store: the
+   struct a reader already holds keeps every old field, and the new one is complete. */
+static void test_swap(void)
+{
+    g_ver = 45; g_feat = 0;
+    const gw_caps_t *old = gw_caps();
+    const gw_caps_t want_old = gw_caps_for(45, 0);
+    CHECK(memcmp(old, &want_old, sizeof want_old) == 0, "slot filled from v45");
+    CHECK(gw_caps() == old, "no refresh while nothing changed");
+
+    g_ver = 59; g_feat = FPGA_FEATURE_EMULATION;
+    const gw_caps_t *cur = gw_caps();
+    const gw_caps_t want_new = gw_caps_for(59, FPGA_FEATURE_EMULATION);
+    CHECK(cur != old, "a refresh publishes the other slot");
+    CHECK(memcmp(cur, &want_new, sizeof want_new) == 0, "new slot complete");
+    CHECK(memcmp(old, &want_old, sizeof want_old) == 0, "old slot untouched by the refresh");
+    CHECK(gw_caps() == cur, "the new slot stays published");
+
+    g_feat = 0;   /* an image swap alone refreshes too, back into the first slot */
+    const gw_caps_t *third = gw_caps();
+    const gw_caps_t want3 = gw_caps_for(59, 0);
+    CHECK(third != cur && third == old, "slots alternate");
+    CHECK(memcmp(third, &want3, sizeof want3) == 0, "third fill complete");
+    CHECK(memcmp(cur, &want_new, sizeof want_new) == 0, "previous slot untouched");
+}
+
 int main(void)
 {
     test_versions();
     test_images();
     test_running();
+    test_swap();
     printf("test_gw_caps: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

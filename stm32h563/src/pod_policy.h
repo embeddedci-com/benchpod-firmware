@@ -64,6 +64,11 @@ const char *pod_policy_cloud_link_gate(const char *verb, policy_src_t src, bool 
    Ethernet and Wi-Fi. Only the device may change it: the USB console, or a connection on the USB
    link itself (usb_link), which can turn it off but not back on (the link is gone then); never
    the cloud or Ethernet/Wi-Fi. */
+/* LAN pairing (docs/design/lan-pairing.md): true (the default, and on every pod updated from older
+   firmware) = a computer on Ethernet/Wi-Fi must be paired (lan_clients.h) for anything beyond
+   status. Changed from USB (the console or the USB link) or the cloud, never the external LAN. */
+bool pod_policy_lan_pairing(void);
+const char *pod_policy_set_lan_pairing(bool on, policy_src_t src, bool usb_link);
 bool pod_policy_usb_net(void);
 const char *pod_policy_set_usb_net(bool on, policy_src_t src, bool usb_link);
 /* Called after the USB network setting changed (usb_device re-enumerates). Weak no-op. */

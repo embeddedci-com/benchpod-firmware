@@ -64,12 +64,14 @@ int  module_id_reload(void);
 bool module_cal_valid(void);
 
 /* The module has the ADC low range (module_ee_has_low_range on the header read at boot).  False
-   off digital v3r3 and without a module.  Latched by analog_switch_init(): a module programmed as
+   off digital v3r3 and without a module.  Read only by board_variant.c, which latches it in
+   board_caps()->analog at boot and when the module power comes back on: a module programmed as
    3.4 at runtime gets the low range after the next restart. */
 bool module_adc_low_range(void);
 
 /* The module's 4-20 mA input has the 100 ohm sense resistor (module_ee_has_100r_shunt on the
-   header read at boot).  False (249 ohm) off digital v3r3 and without a module. */
+   header read at boot).  False (249 ohm) off digital v3r3 and without a module.  Read only by
+   board_variant.c (board_caps()->analog.current_in_100r). */
 bool module_current_in_100r(void);
 
 /* The digital board and the module put the DAC clock on different flat-cable pins (dac_link.h):

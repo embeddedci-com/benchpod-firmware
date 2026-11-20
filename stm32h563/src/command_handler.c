@@ -339,7 +339,7 @@ void command_handler_set_tunnel_max_tier(int conn_id, int max_tier) {
 }
 
 const char *command_handler_device_gate(const char *verb, const char *json) {
-    return cmd_gate_device(verb, json, boot_guard_skip_hw(), board_has_analog());
+    return cmd_gate_device(verb, json, boot_guard_skip_hw(), board_caps()->analog.present);
 }
 
 /* One command, its row `d` already looked up (cmd_table.h: tier, gate flags and handler; NULL =
@@ -369,9 +369,11 @@ static void dispatch_row(int conn_id, const char *cmd, const cmd_desc_t *d, cons
             .src = command_handler_policy_src(conn_id),
             .lan_policy = pod_policy_lan(),
             .usb_link = net_conn_on_usb(conn_id),
+            .lan_pairing = pod_policy_lan_pairing(),
+            .lan_paired = net_conn_lan_paired(conn_id),
             .tunnel_max_tier = -1,
             .skip_hw = boot_guard_skip_hw(),
-            .has_analog = board_has_analog(),
+            .has_analog = board_caps()->analog.present,
         };
         if (g.src == POLICY_SRC_LAN) {
             g.lease_active = lease_gate_active(HAL_GetTick(), &g.lease_left_s);

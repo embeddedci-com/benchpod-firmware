@@ -356,6 +356,43 @@ static void test_large_records(void)
     CHECK(ab_store_load_var(&big, got, sizeof(got), &n) == -1, "big: loads after clear");
 }
 
+/* Two versions side by side (lan_tls.c): a large version 2 record, then a version 1 copy as the
+   newest. Older firmware reads the newest (the copy); ab_store_load_var_version finds version 2 one
+   save behind. When older firmware saves, it overwrites the older slot (version 2): gone. */
+static void test_large_two_versions(void)
+{
+    static const ab_store_t v2 = {
+        .tag = "tls", .slot_off = { 0x1E2000u, 0x1E0000u }, .magic = 0x534C5442u, .version = 2, .max_len = 8176,
+    };
+    static const ab_store_t v1 = {
+        .tag = "tls", .slot_off = { 0x1E2000u, 0x1E0000u }, .magic = 0x534C5442u, .version = 1, .max_len = 8176,
+    };
+    static uint8_t big[7000], small[3000], got[8176];
+    for (size_t i = 0; i < sizeof(big); i++) big[i] = (uint8_t)(i * 3u + 2u);
+    memcpy(small, big, sizeof(small));
+    size_t n = 0;
+    uint32_t behind = 99;
+    mock_flash_reset();
+    CHECK(ab_store_load_var_version(&v2, 2, got, sizeof(got), &n, &behind) == -1, "two: blank store loaded");
+    for (int round = 0; round < 3; round++) {   /* alternation keeps the pair */
+        big[0] = (uint8_t)round;
+        small[0] = (uint8_t)round;
+        CHECK(ab_store_save(&v2, big, sizeof(big)) == 0 && ab_store_save(&v1, small, sizeof(small)) == 0, "two: save %d", round);
+        CHECK(ab_store_load_var(&v1, got, sizeof(got), &n) == 0 && n == sizeof(small) && got[0] == round,
+              "two: older firmware does not read the copy (round %d)", round);
+        CHECK(ab_store_load_var(&v2, got, sizeof(got), &n) == -1, "two: version 2 is not the newest");
+        CHECK(ab_store_load_var_version(&v2, 2, got, sizeof(got), &n, &behind) == 0 && n == sizeof(big) &&
+              got[0] == round && behind == 1, "two: version 2 not found (round %d, behind %u)", round, (unsigned)behind);
+    }
+    CHECK(ab_store_load_var_version(&v2, 2, got, 100, &n, NULL) == -1, "two: loaded into a too-small buffer");
+    /* older firmware saves a version 1 record: it lands on the version 2 slot */
+    small[0] = 0x55;
+    CHECK(ab_store_save(&v1, small, sizeof(small)) == 0, "two: older save");
+    CHECK(ab_store_load_var_version(&v2, 2, got, sizeof(got), &n, &behind) == -1, "two: version 2 survived an older save");
+    CHECK(ab_store_load_var(&v1, got, sizeof(got), &n) == 0 && got[0] == 0x55, "two: the older save is not the newest");
+    CHECK(ab_store_clear(&v1) == 0 && ab_store_load_var_version(&v1, 1, got, sizeof(got), &n, NULL) == -1, "two: after clear");
+}
+
 int main(void)
 {
     test_round_trip_and_alternation();
@@ -365,6 +402,7 @@ int main(void)
     test_clear();
     test_cloud_store();
     test_large_records();
+    test_large_two_versions();
     if (fails) { printf("test_config_store: %d FAILED\n", fails); return 1; }
     printf("test_config_store: all passed\n");
     return 0;

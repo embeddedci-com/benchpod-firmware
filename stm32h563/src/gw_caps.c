@@ -38,19 +38,34 @@ gw_caps_t gw_caps_for(uint8_t v, uint8_t f)
     return c;
 }
 
-static gw_caps_t s_caps;
-static bool      s_filled;
-static uint8_t   s_ver, s_feat;   /* what s_caps was filled from */
+/* Two slots and a published pointer.  gw_caps() is called from several FreeRTOS tasks, and the
+   running version or feature byte changes at run time (an FPGA reload or image swap).  Refilling
+   one shared struct in place would let a task preempted mid-refresh, or a task reading while
+   another refreshes, see half-old fields.  Instead the new caps are built in the slot that is not
+   published, then published with one aligned pointer store, which is a single atomic write on the
+   Cortex-M33: a reader sees either the whole old slot or the whole new one, never a mix.  The
+   version and feature byte a slot was filled from live in the slot, so the check and the caps
+   always belong together.  A reader that keeps an old pointer across two refreshes could see its
+   slot rewritten; refreshes only follow a gateware reload, so callers re-read gw_caps() per use. */
+typedef struct {
+    gw_caps_t caps;
+    uint8_t   ver, feat;   /* what caps was filled from */
+} gw_caps_slot_t;
+
+static gw_caps_slot_t        s_slot[2];
+static const gw_caps_slot_t *s_pub;   /* NULL until the first fill; written with one atomic store */
 
 const gw_caps_t *gw_caps(void)
 {
     const uint8_t v = signal_engine_fpga_version();
     const uint8_t f = signal_engine_fpga_features_cached();
-    if (!s_filled || v != s_ver || f != s_feat) {
-        s_caps   = gw_caps_for(v, f);
-        s_ver    = v;
-        s_feat   = f;
-        s_filled = true;
-    }
-    return &s_caps;
+    const gw_caps_slot_t *p = __atomic_load_n(&s_pub, __ATOMIC_ACQUIRE);
+    if (p && p->ver == v && p->feat == f)
+        return &p->caps;
+    gw_caps_slot_t *next = (p == &s_slot[0]) ? &s_slot[1] : &s_slot[0];
+    next->caps = gw_caps_for(v, f);
+    next->ver  = v;
+    next->feat = f;
+    __atomic_store_n(&s_pub, (const gw_caps_slot_t *)next, __ATOMIC_RELEASE);   /* the publish */
+    return &next->caps;
 }

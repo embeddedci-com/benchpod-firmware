@@ -98,6 +98,12 @@ void bp_emit_raw(bp_emit_t *e, const char *s);
 void bp_emit_jstr(bp_emit_t *e, const char *s);
 
 static inline bool   bp_emit_ok(const bp_emit_t *e)  { return e->ok; }
+/* Drop everything after the first `len` bytes (a length bp_emit_len gave earlier), clearing a
+   truncation that happened after it: for replies that try one more entry and take it back. */
+static inline void bp_emit_rewind(bp_emit_t *e, size_t len) {
+    if (len < e->len) { e->len = len; e->buf[len] = '\0'; }
+    e->ok = true;
+}
 static inline size_t bp_emit_len(const bp_emit_t *e) { return e->len; }
 
 #endif /* BP_JSON_H */

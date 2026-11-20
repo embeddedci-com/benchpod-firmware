@@ -10,6 +10,26 @@
 
 static board_analog_t s_analog = BOARD_ANALOG_ONBOARD;
 
+board_analog_caps_t board_analog_caps_for(board_analog_t kind, bool ee_low_range, bool ee_100r)
+{
+    const bool module = kind == BOARD_ANALOG_MODULE;
+    board_analog_caps_t a = {
+        .present         = kind != BOARD_ANALOG_NONE,
+        .module          = module,
+        .adc_low_range   = module && ee_low_range,
+        .current_in_100r = module && ee_100r,
+    };
+    return a;
+}
+
+static void latch_caps(void)
+{
+    board_caps_set_analog(board_analog_caps_for(s_analog, module_adc_low_range(),
+                                                module_current_in_100r()));
+}
+
+void board_variant_module_reread(void) { latch_caps(); }
+
 bool board_variant_detect(bool (*probe)(uint8_t addr), bool *u55, bool *u58)
 {
     bool a = false, b = false;
@@ -49,6 +69,7 @@ void board_variant_init(void)
     board_variant_seen_t seen;
     bool link = module_link_board(), present = module_present();
     s_analog = board_variant_decide(link, present, i2c_bus_probe, probe_module_bus, &seen);
+    latch_caps();
     analog_switch_set_bus(s_analog == BOARD_ANALOG_MODULE ? I2C_BUS_MODULE : I2C_BUS_MAIN);
 
     if (link) {
@@ -77,10 +98,6 @@ void board_variant_init(void)
     }
 }
 
-bool board_has_analog(void) { return s_analog != BOARD_ANALOG_NONE; }
-
-bool board_analog_is_module(void) { return s_analog == BOARD_ANALOG_MODULE; }
-
-const char *board_variant_str(void) { return board_has_analog() ? "analog" : "digital"; }
+const char *board_variant_str(void) { return board_caps()->analog.present ? "analog" : "digital"; }
 
 bool board_has_wifi_module(void) { return !module_link_board(); }

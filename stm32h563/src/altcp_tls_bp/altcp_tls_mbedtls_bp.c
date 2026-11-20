@@ -946,9 +946,13 @@ struct altcp_tls_config *altcp_tls_create_config_server(u8_t cert_count)
   }
 
   mbedtls_ssl_conf_ca_chain(&conf->conf, NULL, NULL);
-  /* BenchPod: a server here never asks for client certificates (ALTCP_MBEDTLS_AUTHMODE is the
-     client's setting); OPTIONAL would add a CertificateRequest to every handshake. */
-  mbedtls_ssl_conf_authmode(&conf->conf, MBEDTLS_SSL_VERIFY_NONE);
+  /* BenchPod (LAN pairing, docs/design/lan-pairing.md): ask every client for a certificate, but
+     let it in without one. There is no CA: a client certificate is self-signed and is trusted only
+     when the SHA-256 of its public key is on the pod's list of paired computers, which net_server
+     checks after the handshake. mbedTLS still requires the client's CertificateVerify, so a client
+     that sends a certificate proves it holds the key. OPTIONAL keeps a certificate that fails the
+     chain or usage checks (all self-signed ones do) instead of ending the handshake. */
+  mbedtls_ssl_conf_authmode(&conf->conf, MBEDTLS_SSL_VERIFY_OPTIONAL);
   return conf;
 }
 

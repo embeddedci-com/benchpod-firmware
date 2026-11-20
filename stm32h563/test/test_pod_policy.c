@@ -54,6 +54,7 @@ static void boot_blank(void) {
     pod_policy_clear_floor(POLICY_SRC_USB, false);
     pod_policy_set_bridge_pin(NULL, NULL);
     pod_policy_set_log_level(BP_LOG_INFO);
+    pod_policy_set_lan_pairing(true, POLICY_SRC_USB, false);
     mock_flash_reset();
     pod_policy_load();
     lan_changes = 0;
@@ -114,6 +115,31 @@ static void test_lan(void) {
     CHECK(lan_changes == 3 && last_lan == POD_LAN_OPEN, "hook %d last %d", lan_changes, last_lan);
     CHECK(pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_USB) == NULL && lan_changes == 3, "no-op ran the hook");
     CHECK(pod_policy_set_lan((pod_lan_policy_t)9, POLICY_SRC_USB) != NULL, "unknown LAN value accepted");
+}
+
+/* LAN pairing: on by default and on a pod whose record comes from older firmware (the byte is 0
+   there); changed from USB, the USB link or the cloud, never the external LAN; kept by a reboot
+   and by every other policy save. */
+static void test_lan_pairing(void) {
+    boot_blank();
+    CHECK(pod_policy_lan_pairing(), "pairing is not on by default");
+    pod_policy_set_lan(POD_LAN_LOCKED, POLICY_SRC_USB);   /* a record without the byte set */
+    pod_policy_load();
+    CHECK(pod_policy_lan_pairing(), "a saved record turned pairing off");
+    CHECK(pod_policy_set_lan_pairing(false, POLICY_SRC_LAN, false) != NULL, "the LAN turned pairing off");
+    CHECK(pod_policy_lan_pairing(), "a refusal changed it");
+    CHECK(pod_policy_set_lan_pairing(false, POLICY_SRC_LAN, true) == NULL, "the USB link was refused");
+    CHECK(!pod_policy_lan_pairing(), "not off");
+    pod_policy_load();
+    CHECK(!pod_policy_lan_pairing(), "off did not survive a reboot");
+    pod_policy_set_lan(POD_LAN_OPEN, POLICY_SRC_CLOUD);
+    pod_policy_set_scpi(true, POLICY_SRC_USB, false);
+    pod_policy_load();
+    CHECK(!pod_policy_lan_pairing(), "another save lost it");
+    CHECK(pod_policy_set_lan_pairing(true, POLICY_SRC_CLOUD, false) == NULL && pod_policy_lan_pairing(), "cloud on");
+    pod_policy_load();
+    CHECK(pod_policy_lan_pairing(), "on did not survive a reboot");
+    pod_policy_set_scpi(false, POLICY_SRC_USB, false);
 }
 
 static void test_persists(void) {
@@ -313,6 +339,7 @@ int main(void) {
     test_lan_tls_gate();
     test_sig_always_required();
     test_lan();
+    test_lan_pairing();
     test_persists();
     test_power_cut();
     test_cloud_link_gate();

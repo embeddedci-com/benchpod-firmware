@@ -13,15 +13,14 @@
 #include "bp_limits.h"   /* BP_CLOUD_REPLY_MAX: the la_pins reply must fit the cloud channel */
 #include "reply_budget.h"
 
-/* Sizes (with the newline) of the replies listed as over budget in budget_la_pins, when listed. */
-#define KNOWN_V3R4_GPIO_LA_PINS   1788
+/* Sizes (with the newline) of the replies listed as over budget in budget_la_pins, when listed.
+   la_pins pages itself (LA_PINS_PAGE_MAX), so only the gpio read is listed. */
 #define KNOWN_V3R4_GPIO_GPIO      1762
-#define KNOWN_V3_SENSOR_LA_PINS   2288
 #define KNOWN_V3_SENSOR_GPIO      2288
-#define KNOWN_V3R4_SENSOR_LA_PINS 2418
 #define KNOWN_V3R4_SENSOR_GPIO    2392
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* A board revision: its capabilities and its pull backend (fake_pull.c stands in for the chips). */
@@ -529,16 +528,75 @@ static void clear_worst(void) {
     la_pins_reset();
 }
 
-/* The la_pins reply (la_pins_emit_reply, what handle_la_pins sends), and the gpio read reply (handle_gpio). */
-static size_t emit_la_pins_of(char *buf, size_t cap, uint16_t only) {
+/* One la_pins reply (la_pins_emit_reply, what handle_la_pins sends) in a reply-sized buffer, and
+   the gpio read reply (handle_gpio). *next: the reply's next (0 = the rest was listed). */
+static size_t emit_la_pins_page(char *buf, size_t cap, uint16_t only, unsigned from, unsigned *next) {
     bp_emit_t e;
-    bp_emit_init(&e, buf, cap);
-    la_pins_emit_reply(&e, only, 0x3FFF, true, 0x3FFF);   /* the reply handle_la_pins sends */
+    bp_emit_init(&e, buf, cap < BP_CLOUD_REPLY_MAX ? cap : BP_CLOUD_REPLY_MAX);
+    unsigned n = la_pins_emit_reply(&e, only, from, 0x3FFF, true, 0x3FFF);
     CHECK(bp_emit_ok(&e));
+    if (next) *next = n;
     return bp_emit_len(&e);
 }
 
-static size_t emit_la_pins(char *buf, size_t cap) { return emit_la_pins_of(buf, cap, 0x3FFF); }
+static size_t emit_la_pins_of(char *buf, size_t cap, uint16_t only) {
+    return emit_la_pins_page(buf, cap, only, 1, NULL);
+}
+
+/* The pins a reply lists (each entry starts {"la":N,), its "next" (0 when it has none), and
+   whether the page ends the way every reply does. */
+static uint16_t page_pins(const char *buf, unsigned *next) {
+    uint16_t m = 0;
+    for (const char *p = buf; (p = strstr(p, "{\"la\":")) != NULL; p += 6) {
+        unsigned la = (unsigned)atoi(p + 6);
+        CHECK(la >= 1 && la <= 14);
+        CHECK(!(m & (1u << (la - 1u))));   /* once per page */
+        if (la >= 1 && la <= 14) m |= (uint16_t)(1u << (la - 1u));
+    }
+    const char *n = strstr(buf, "],\"next\":");
+    if (!n) n = strstr(buf, "\"next\":");
+    *next = n ? (unsigned)atoi(strchr(n, ':') + 1) : 0;
+    size_t len = strlen(buf);
+    CHECK(len > 3 && strcmp(buf + len - 3, "}}\n") == 0);
+    CHECK(strncmp(buf, "{\"status\":\"ok\",\"data\":{\"pins\":[", 31) == 0);
+    return m;
+}
+
+/* Read `only` page by page, as a host does: from `start`, then each reply's next.  Every page keeps
+   the cloud budget's margin, the pages list every pin of `only` from `start` on exactly once in
+   pin order, and the function's return matches the reply's "next".  Returns the number of pages. */
+static int read_paged(const char *what, uint16_t only, unsigned start) {
+    static char buf[BP_CLOUD_REPLY_MAX];
+    char label[96];
+    uint16_t seen = 0;
+    unsigned from = start, last = 0;
+    int pages = 0;
+    for (;;) {
+        unsigned next = 0, said = 0;
+        size_t n = emit_la_pins_page(buf, sizeof(buf), only, from, &next);
+        CHECK(n == strlen(buf));
+        uint16_t m = page_pins(buf, &said);
+        pages++;
+        if (only == 0x3FFF && start == 1) snprintf(label, sizeof(label), "la_pins page %d (from %u), %s", pages, from, what);
+        else snprintf(label, sizeof(label), "la_pins 0x%04x from %u page %d, %s", (unsigned)only, start, pages, what);
+        CHECK(reply_budget_ok(label, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
+        CHECK(n <= LA_PINS_PAGE_MAX);
+        CHECK(said == next);
+        CHECK(m != 0 || only == 0);          /* every page makes progress */
+        CHECK(!(seen & m));                  /* no pin twice across pages */
+        for (unsigned la = 1; la <= 14; la++)
+            if (m & (1u << (la - 1u))) { CHECK(la > last && la >= from); last = la; }
+        seen |= m;
+        if (!next) break;
+        CHECK(next > from && next <= 14 && (only & (1u << (next - 1u))));
+        CHECK(!(m & (uint16_t)~((1u << (next - 1u)) - 1u)));   /* nothing at or past next */
+        from = next;
+        if (pages > 14) { CHECK(0); break; }
+    }
+    CHECK(seen == (uint16_t)(only & ~((1u << (start - 1u)) - 1u)));
+    return pages;
+}
+
 
 static size_t emit_gpio_read(char *buf, size_t cap) {
     bp_emit_t e;
@@ -550,21 +608,20 @@ static size_t emit_gpio_read(char *buf, size_t cap) {
     return bp_emit_len(&e);
 }
 
-/* Replies known to be over budget (reply_budget.h), with the size measured when listed. 0 = must
-   keep the margin. The v3 and v3r4 tables differ only in the pull table, so v2 and v3r2 are v3.
-   Over budget: the gpio case on v3r4 (3 bytes under the limit) and the sensor case on every
-   board (over the limit: "reply too large" over LAN and cloud). For those, a host reads la_pins
-   in parts with the subset query ("la":[1,...,7] then [8,...,14]); budget_la_pins checks that
-   each half keeps the margin. The gpio read has no subset: hosts use la_pins. */
-static const struct { int rev; worst_t w; const char *what; size_t la_pins, gpio; } s_known[] = {
-    { BOARD_REV_V2,   WORST_GPIO,   "v2, every pin gpio",       0,    0    },
-    { BOARD_REV_V3,   WORST_GPIO,   "v3, every pin gpio",       0,    0    },
-    { BOARD_REV_V3R2, WORST_GPIO,   "v3r2, every pin gpio",     0,    0    },
-    { BOARD_REV_V3R4, WORST_GPIO,   "v3r4, every pin gpio",     KNOWN_V3R4_GPIO_LA_PINS, KNOWN_V3R4_GPIO_GPIO },
-    { BOARD_REV_V2,   WORST_SENSOR, "v2, every pin a sensor",   KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
-    { BOARD_REV_V3,   WORST_SENSOR, "v3, every pin a sensor",   KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
-    { BOARD_REV_V3R2, WORST_SENSOR, "v3r2, every pin a sensor", KNOWN_V3_SENSOR_LA_PINS, KNOWN_V3_SENSOR_GPIO },
-    { BOARD_REV_V3R4, WORST_SENSOR, "v3r4, every pin a sensor", KNOWN_V3R4_SENSOR_LA_PINS, KNOWN_V3R4_SENSOR_GPIO },
+/* The worst cases. la_pins pages itself: every page keeps the margin and the pages cover all 14
+   pins once (read_paged); `pages` is how many the full listing takes. The gpio read reply has no
+   paging: replies known to be over budget (reply_budget.h) with the size measured when listed,
+   0 = must keep the margin; hosts use la_pins there. The v3 and v3r4 tables differ only in the
+   pull table, so v2 and v3r2 are v3. */
+static const struct { int rev; worst_t w; const char *what; int pages; size_t gpio; } s_known[] = {
+    { BOARD_REV_V2,   WORST_GPIO,   "v2, every pin gpio",       1, 0    },
+    { BOARD_REV_V3,   WORST_GPIO,   "v3, every pin gpio",       1, 0    },
+    { BOARD_REV_V3R2, WORST_GPIO,   "v3r2, every pin gpio",     1, 0    },
+    { BOARD_REV_V3R4, WORST_GPIO,   "v3r4, every pin gpio",     2, KNOWN_V3R4_GPIO_GPIO },
+    { BOARD_REV_V2,   WORST_SENSOR, "v2, every pin a sensor",   2, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3,   WORST_SENSOR, "v3, every pin a sensor",   2, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3R2, WORST_SENSOR, "v3r2, every pin a sensor", 2, KNOWN_V3_SENSOR_GPIO },
+    { BOARD_REV_V3R4, WORST_SENSOR, "v3r4, every pin a sensor", 2, KNOWN_V3R4_SENSOR_GPIO },
 };
 
 static void budget_la_pins(void) {
@@ -573,14 +630,15 @@ static void budget_la_pins(void) {
     for (size_t i = 0; i < sizeof(s_known) / sizeof(s_known[0]); i++) {
         board(s_known[i].rev);
         set_worst(s_known[i].w);
-        size_t n = emit_la_pins(buf, sizeof(buf));
-        snprintf(what, sizeof(what), "la_pins, %s", s_known[i].what);
-        if (s_known[i].la_pins) {
-            CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].la_pins));
-            printf("  reply budget: %-44s use the subset query (\"la\":[...]), checked below\n", what);
-        }
-        else                    CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
-        n = emit_gpio_read(buf, sizeof(buf));
+        /* The full listing, page by page. */
+        int pages = read_paged(s_known[i].what, 0x3FFF, 1);
+        CHECK(pages == s_known[i].pages);
+        if (pages != s_known[i].pages) printf("  %s: %d pages, want %d\n", s_known[i].what, pages, s_known[i].pages);
+        /* A host may start anywhere ("from") and pages a subset ("la") the same way. */
+        for (unsigned from = 2; from <= 14; from++) (void)read_paged(s_known[i].what, 0x3FFF, from);
+        (void)read_paged(s_known[i].what, 0x2AAA, 1);
+        (void)read_paged(s_known[i].what, 0x3F80, 3);
+        size_t n = emit_gpio_read(buf, sizeof(buf));
         snprintf(what, sizeof(what), "gpio read, %s", s_known[i].what);
         if (s_known[i].gpio) CHECK(reply_budget_known(what, n, REPLY_LIMIT_CLOUD, s_known[i].gpio));
         else                 CHECK(reply_budget_ok(what, n, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
@@ -594,6 +652,43 @@ static void budget_la_pins(void) {
         clear_worst();
     }
     board(BOARD_REV_V3);
+}
+
+/* "from" continues a listing; a reply that fits whole is the same bytes as before paging. */
+static void test_query_from(void) {
+    unsigned f = 0;
+    char e2[LA_PINS_ERR_MAX];
+    CHECK(la_pins_query_from("{\"cmd\":\"la_pins\"}", &f, e2, sizeof(e2)) && f == 1);
+    CHECK(la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":null}", &f, e2, sizeof(e2)) && f == 1);
+    CHECK(la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":8}", &f, e2, sizeof(e2)) && f == 8);
+    CHECK(la_pins_query_from("{\"from\": 14,\"cmd\":\"la_pins\"}", &f, e2, sizeof(e2)) && f == 14);
+    CHECK(la_pins_query_from("{\"cmd\":\"la_pins\",\"la\":[1,2],\"from\":2}", &f, e2, sizeof(e2)) && f == 2);
+    CHECK(!la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":0}", &f, e2, sizeof(e2)));
+    CHECK(!la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":15}", &f, e2, sizeof(e2)));
+    CHECK(!la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":-1}", &f, e2, sizeof(e2)));
+    CHECK(!la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":\"8\"}", &f, e2, sizeof(e2)));
+    CHECK(!la_pins_query_from("{\"cmd\":\"la_pins\",\"from\":8.5}", &f, e2, sizeof(e2)));
+    CHECK(strstr(e2, "1..14") != NULL);
+
+    /* The default state fits whole: no "next", the same bytes as the reply before paging. */
+    la_pins_reset();
+    static char a[BP_CLOUD_REPLY_MAX], b[2048];
+    unsigned next = 9;
+    emit_la_pins_page(a, sizeof(a), 0x3FFF, 1, &next);
+    CHECK(next == 0 && strstr(a, "\"next\"") == NULL);
+    bp_emit_t eb;
+    bp_emit_init(&eb, b, sizeof(b));
+    bp_emit_raw(&eb, "{\"status\":\"ok\",\"data\":{\"pins\":");
+    la_pins_emit_list(&eb, 0x3FFF, 0x3FFF);
+    if (la_pull_both_ways()) bp_emit_raw(&eb, ",\"pull_dirs\":[\"up\",\"down\"]");
+    bp_emit_raw(&eb, ",\"levels\":16383}}\n");
+    CHECK_STR(a, b);
+    /* "from" past every asked pin: an empty list, no next. */
+    emit_la_pins_page(a, sizeof(a), 0x0003, 5, &next);
+    CHECK(next == 0 && strstr(a, "\"pins\":[],") != NULL);
+    /* "from" alone skips the pins before it. */
+    emit_la_pins_page(a, sizeof(a), 0x3FFF, 13, &next);
+    CHECK(next == 0 && page_pins(a, &next) == 0x3000);
 }
 
 /* {"cmd":"la_pins"} with and without the pin subset. */
@@ -756,6 +851,7 @@ int main(void) {
     test_pull_v3r4();
     test_sensor_owner();
     test_query_mask();
+    test_query_from();
     test_json_entries();
     test_trigger_parse();
     if (failures) { printf("test_la_pins: %d FAILURE(S)\n", failures); return 1; }

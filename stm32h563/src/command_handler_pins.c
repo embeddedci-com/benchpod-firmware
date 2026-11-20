@@ -202,21 +202,24 @@ static void note_target_power(void) {
 }
 
 /* {"cmd":"la_pins"} -> {"pins":[14 entries],"levels":M|null}
-   {"cmd":"la_pins","la":N|[N,...]} -> the same, with only those pins' entries (a listing too large
-   for the cloud reply is read in parts; without "la" the reply is as it always was). */
+   {"cmd":"la_pins","la":N|[N,...]} -> the same, with only those pins' entries.
+   A listing too large for one cloud reply carries the pins that fit and "next"; "from":N
+   continues there (la_pins_emit_reply).  A listing that fits is as it always was. */
 void handle_la_pins(int conn_id, const char *json) {
     uint16_t only = 0x3FFFu;
     char qerr[LA_PINS_ERR_MAX];
-    if (!la_pins_query_mask(json, &only, qerr, sizeof(qerr))) { send_error(conn_id, qerr); return; }
+    unsigned from = 1;
+    if (!la_pins_query_mask(json, &only, qerr, sizeof(qerr)) ||
+        !la_pins_query_from(json, &from, qerr, sizeof(qerr))) { send_error(conn_id, qerr); return; }
     note_target_power();
     uint16_t pulls  = la_pull_mask_live();
     uint16_t levels = 0;
     bool     have   = gw_caps()->gpio_get && fpga_gpio_get(&levels) == 0;
 
-    char resp[BP_CLOUD_REPLY_MAX];   /* worst cases: test_la_pins.c, budget_la_pins */
+    char resp[BP_CLOUD_REPLY_MAX];   /* pages of LA_PINS_PAGE_MAX: test_la_pins.c, budget_la_pins */
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
-    la_pins_emit_reply(&e, only, pulls, have, levels);
+    (void)la_pins_emit_reply(&e, only, from, pulls, have, levels);
     send_emitted(conn_id, &e);
 }
 

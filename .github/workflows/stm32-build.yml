@@ -15,9 +15,11 @@
 # the release workflow adds those. test.yml still runs the plain host tests without Cube.
 # The release workflow calls this one (workflow_call) and waits for it.
 #
-# Path gating, pull requests only: both jobs run only when the PR changes what the build reads
-# (stm32h563/, esp32-hosted-slave/, wifi-bridge/components/, tools/fwsign.py, .gitmodules or this workflow). A push to
-# main (a merge), the release and a failed `changes` job always run them. Skipped by its `if`,
+# Path gating: both jobs run only when the change touches what the build reads (stm32h563/,
+# esp32-hosted-slave/, wifi-bridge/components/, tools/fwsign.py, .gitmodules or this workflow). A
+# pull request is compared with its base, a push to main with the commit main was on before the
+# push (github.event.before). The release, a base commit that cannot be fetched and a failed
+# `changes` job always run them. Skipped by its `if`,
 # build-and-test reports success, so the required check stays green.
 name: STM32 firmware build
 
@@ -48,16 +50,23 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
         run: |
           all() {
             echo "$1: run the build"
             echo "stm32=true" >> "$GITHUB_OUTPUT"
             exit 0
           }
-          [ "$EVENT" = pull_request ] || all "event $EVENT"
-          if [ -z "$PR_BASE" ]; then all "no base commit"; fi
-          if ! git fetch -q --depth=1 --filter=blob:none origin "$PR_BASE"; then all "base $PR_BASE not fetchable"; fi
-          changed=$(git diff --name-only --no-renames "$PR_BASE" HEAD)
+          case "$EVENT" in
+            pull_request) base="$PR_BASE" ;;
+            # a push to main; a tag push (the release calls these workflows) runs everything
+            push) if [ "$REF" = refs/heads/main ]; then base="$PUSH_BEFORE"; else all "push to $REF"; fi ;;
+            *) all "event $EVENT" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then all "no base commit"; fi
+          if ! git fetch -q --depth=1 --filter=blob:none origin "$base"; then all "base $base not fetchable"; fi
+          changed=$(git diff --name-only --no-renames "$base" HEAD)
           echo "changed files:"; sed 's/^/  /' <<< "$changed"
           if grep -Eq '^(stm32h563/|esp32-hosted-slave/|wifi-bridge/components/|tools/fwsign\.py$|\.gitmodules$|\.github/workflows/stm32-build\.yml$)' <<< "$changed"; then
             stm32=true

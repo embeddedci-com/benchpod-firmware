@@ -166,11 +166,34 @@ static void test_init(void)
     CHECK(caps_none(*board_caps()), "v3r2 after init");
 }
 
+/* The analog part: analog on the board until board_variant_init() fills it (board_caps_init()
+   alone leaves it so), every revision reports it unprobed, and latching a revision keeps what
+   board_variant latched. */
+static void test_analog(void)
+{
+    const board_analog_caps_t a = board_caps()->analog;
+    CHECK(a.present && !a.module && !a.adc_low_range && !a.current_in_100r, "analog before boot");
+    static const int revs[] = { BOARD_REV_UNKNOWN, BOARD_REV_V2, BOARD_REV_V3, BOARD_REV_V3R2, BOARD_REV_V3R4, 99 };
+    for (unsigned i = 0; i < sizeof(revs) / sizeof(revs[0]); i++) {
+        const board_analog_caps_t r = board_caps_for_rev(revs[i]).analog;
+        CHECK(r.present && !r.module && !r.adc_low_range && !r.current_in_100r, "rev %d analog unprobed", revs[i]);
+    }
+    const board_analog_caps_t mod = { .present = true, .module = true, .current_in_100r = true };
+    board_caps_set_analog(mod);
+    CHECK(board_caps()->analog.module && board_caps()->analog.current_in_100r, "set_analog latches");
+    board_caps_init(BOARD_REV_V3R4);
+    CHECK(board_caps()->analog.module && board_caps()->analog.current_in_100r
+          && !board_caps()->analog.adc_low_range && board_caps()->pull_expanders, "init keeps the analog part");
+    board_caps_set_analog((board_analog_caps_t){ 0 });
+    CHECK(!board_caps()->analog.present && board_caps()->pull_expanders, "set_analog keeps the revision part");
+}
+
 int main(void)
 {
     test_rev_gates();   /* first: it checks the state before board_caps_init() */
     test_caps();
     test_init();
+    test_analog();   /* last: it latches an analog part */
     test_edges();
     test_straps();
     printf("test_board_caps: %d checks, %s\n", checks, fails ? "FAILED" : "all passed");

@@ -132,6 +132,11 @@ void lan_tls_get_info(lan_tls_info_t *o) {
 }
 bool pod_policy_https_only(void) { return true; }
 bool pod_policy_scpi(void) { return false; }
+bool pod_policy_lan_pairing(void) { return true; }
+/* the asking connection is an unpaired one on the external LAN: "lan_paired":false */
+policy_src_t command_handler_policy_src(int c) { (void)c; return POLICY_SRC_LAN; }
+bool net_conn_on_usb(int c) { (void)c; return false; }
+bool net_conn_lan_paired(int c) { (void)c; return false; }
 static char g_holder[LEASE_GATE_HOLDER_MAX];
 static bool g_cloud_lease = true;
 bool lease_gate_active(uint32_t now, uint32_t *left) {
