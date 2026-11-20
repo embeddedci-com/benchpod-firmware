@@ -118,6 +118,7 @@ C_SOURCES := \
   src/usb_device.c \
   src/usb_host.c \
   src/usb_host_desc.c \
+  src/usb_host_reply.c \
   src/ethernetif.c \
   src/net_server.c \
   src/net_dhcp.c \
@@ -146,6 +147,7 @@ C_SOURCES := \
   src/command_handler_dac.c \
   src/command_handler_dap.c \
   src/command_handler_device.c \
+  src/command_handler_usb.c \
   src/command_handler_status.c \
   src/command_handler_ota.c \
   src/command_handler_net.c \

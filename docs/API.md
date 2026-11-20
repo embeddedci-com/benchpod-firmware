@@ -232,6 +232,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
+| `usb_host` | T0/T2 | USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `on`: T2) | object | no |
 | `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
@@ -2610,6 +2611,65 @@ power-on-reset behaviour, or recovering a target that wedged itself.
 | `pulse_ms` ≤ 0 | `"pulse_ms must be > 0"` |
 
 ---
+
+### `usb_host` — USB host mode
+
+**Preview.** The pod's USB port becomes a full-speed USB host for the board under test, for a
+limited time, and reports the device that enumerates on it: IDs, strings, speed, how long
+enumeration took, the configuration and its interfaces. No class drivers yet (USB serial,
+flashing over USB and class access come later).
+
+```json
+{"cmd": "usb_host", "on": true, "port": "usb_c", "timeout_s": 120}
+{"cmd": "usb_host"}
+{"status": "ok", "data": {
+  "mode": "host", "port": "usb_c", "remaining_s": 112, "host_ms": 8011,
+  "enumerations": 1, "attached": true,
+  "device": {
+    "vid": 11914, "pid": 3, "speed": "full", "usb": "2.10", "release": "1.00",
+    "class": 239, "subclass": 2, "protocol": 1, "ep0_size": 64, "configurations": 1,
+    "manufacturer": "Raspberry Pi", "product": "Pico", "serial": "E6614C311B7A8B22",
+    "descriptor_ms": 182, "mounted_ms": 231,
+    "config": {
+      "value": 1, "max_power_ma": 100, "self_powered": false, "remote_wakeup": false,
+      "interface_count": 2, "truncated": false, "malformed": false,
+      "interfaces": [
+        {"number": 0, "alt": 0, "class": 2, "class_name": "cdc", "subclass": 2, "protocol": 0, "endpoints": 1},
+        {"number": 1, "alt": 0, "class": 10, "class_name": "cdc_data", "subclass": 0, "protocol": 0, "endpoints": 2}
+      ]
+    }
+  }
+}}
+{"cmd": "usb_host", "on": false}
+```
+
+| Argument | Description |
+|---|---|
+| `on` | `true` starts host mode (or renews its timeout when it already runs on that port), `false` stops it. Without it the command only reads the state. |
+| `port` | `"usb_a"`: the USB-A host port, on pods that have one (the default there). `"usb_c"`: the pod's own USB-C connector, on any pod, for a bench rig whose adapter cable powers the pod and carries D+/D- to the board. Required on a pod without a USB-A host port. |
+| `timeout_s` | 1 to 3600, default 60. When it runs out the pod goes back to being a USB device by itself, so a client that disappears never leaves it off USB. |
+
+| Field | Description |
+|---|---|
+| `mode` | `"device"` (normal), `"starting"`, `"host"` or `"stopping"`. The switch happens right after the reply: poll until `"host"`. |
+| `port` | The port host mode runs on, `"none"` in device mode. |
+| `remaining_s` | Seconds until the timeout. |
+| `host_ms` | Time in host mode so far. |
+| `enumerations` | Devices that enumerated since host mode started (a replug counts again). |
+| `attached` | A device is enumerated now. |
+| `device` | The device that enumerated last; kept after it detaches (`attached` false) until the next one. |
+| `device.vid`, `device.pid` | Vendor and product ID. |
+| `device.speed` | `"full"` or `"low"`. |
+| `device.usb`, `device.release` | `bcdUSB` and `bcdDevice` as `"major.minor"`. |
+| `device.class`, `subclass`, `protocol` | From the device descriptor (0 when the interfaces say it). |
+| `device.manufacturer`, `product`, `serial` | String descriptors in ASCII (other characters read `?`), up to 47 characters; `""` when the device has none. |
+| `device.descriptor_ms`, `mounted_ms` | From host start (or the previous detach) to the device descriptor and to the configured device. |
+| `device.config` | The first configuration: `max_power_ma` (what the device declares it draws), `self_powered`, `remote_wakeup`, `interface_count` (alternate settings included) and up to 8 `interfaces` with their class numbers and names. `truncated`: the descriptor was longer than the pod reads; `malformed`: a descriptor in it had a bad length, so the list stops there. |
+
+While the pod hosts, it is **off the computer's USB**: no USB console and no USB network
+adapter. Start host mode over the network (LAN or Wi-Fi) or the cloud; a request over the
+pod's own USB link is refused (BP0031). Other refusals: BP0032 (no such port on this pod),
+BP0033 (the crystal clock is not running), BP0034 (host mode already runs on the other port).
 
 ### `usb_cc` — USB-C CC-line state
 

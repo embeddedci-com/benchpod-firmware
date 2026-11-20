@@ -50,6 +50,10 @@ typedef enum {
     BP_E_VREF_5V_MISSING = 28,
     BP_E_PULL_RAIL_DOWN = 29,
     BP_E_CLIENT_TOO_OLD = 30,
+    BP_E_USB_HOST_OVER_USB = 31,
+    BP_E_USB_HOST_PORT_UNAVAILABLE = 32,
+    BP_E_USB_HOST_NO_CRYSTAL = 33,
+    BP_E_USB_HOST_OTHER_PORT = 34,
 } bp_errcode_t;
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -205,6 +209,24 @@ static inline void bp_err_pull_rail_down(int conn_id, const char *text, int32_t 
 static inline void bp_err_client_too_old(int conn_id, const char *text, int32_t client_api, int32_t min_client_api, int32_t api) {
     const bp_err_arg_t a[] = { {"client_api", 0, client_api, 0}, {"min_client_api", 0, min_client_api, 0}, {"api", 0, api, 0} };
     bp_error_send(conn_id, BP_E_CLIENT_TOO_OLD, text, a, 3);
+}
+/* BP0031: USB host mode cannot start over the pod's own USB link */
+static inline void bp_err_usb_host_over_usb(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_USB_HOST_OVER_USB, text, 0, 0);
+}
+/* BP0032: This pod has no USB host port {port} */
+static inline void bp_err_usb_host_port_unavailable(int conn_id, const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_HOST_PORT_UNAVAILABLE, text, a, 1);
+}
+/* BP0033: USB host mode needs the pod's crystal clock, which is not running */
+static inline void bp_err_usb_host_no_crystal(int conn_id, const char *text) {
+    bp_error_send(conn_id, BP_E_USB_HOST_NO_CRYSTAL, text, 0, 0);
+}
+/* BP0034: USB host mode is already running on {port} */
+static inline void bp_err_usb_host_other_port(int conn_id, const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_HOST_OTHER_PORT, text, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

@@ -10,6 +10,7 @@
     "wifi_scan": "T0",
     "la_pins": "T0",
     "usb_cc": "T0",
+    "usb_host": "T0",
     "target_status": "T0",
     "power_status": "T0",
     "identity_public": "T0",

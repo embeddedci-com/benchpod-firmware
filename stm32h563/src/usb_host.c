@@ -31,29 +31,6 @@ bool usb_host_port_available(usb_host_port_t port)
     return false;
 }
 
-const char *usb_host_port_name(usb_host_port_t port)
-{
-    return port == USB_HOST_PORT_USB_A ? "usb_a" : port == USB_HOST_PORT_USB_C ? "usb_c" : "none";
-}
-
-usb_host_port_t usb_host_port_from_name(const char *name)
-{
-    if (!name) return USB_HOST_PORT_NONE;
-    if (!strcmp(name, "usb_a")) return USB_HOST_PORT_USB_A;
-    if (!strcmp(name, "usb_c")) return USB_HOST_PORT_USB_C;
-    return USB_HOST_PORT_NONE;
-}
-
-const char *usb_host_mode_name(usb_host_mode_t mode)
-{
-    switch (mode) {
-    case USB_HOST_MODE_STARTING: return "starting";
-    case USB_HOST_MODE_HOST:     return "host";
-    case USB_HOST_MODE_STOPPING: return "stopping";
-    default:                     return "device";
-    }
-}
-
 usb_host_err_t usb_host_start(usb_host_port_t port, uint32_t timeout_s)
 {
     if (!usb_host_port_available(port)) return USB_HOST_ERR_PORT;

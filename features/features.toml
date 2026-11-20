@@ -51,7 +51,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 8
+revision = 9
 api = 1
 min_client_api = 0
 floor = "3.9.2"
@@ -803,3 +803,10 @@ firmware = "next"
 docs = "API.md#client-compatibility"
 dated = "code"
 note = "Client API level: status (with \"caps\":false) and the cloud capabilities frame announce api and min_client_api; a command with \"client_api\" (absent = 0) below min_client_api is refused with BP0030 client_too_old, except status, diag, ping and lease_release. Commands may also carry \"client\":\"<name> <version>\" for that message."
+
+[features.usb_host]
+rev = 9
+firmware = "next"
+docs = "API.md#usb_host--usb-host-mode"
+dated = "code"
+note = "Preview: usb_host starts and stops USB host mode (port usb_c on every pod for a USB-C adapter rig, usb_a on pods with the USB-A host port), with a timeout that brings the pod back as a USB device; reports the enumerated device (IDs, strings, speed, timings, configuration, interfaces). Refusals BP0031-BP0034."

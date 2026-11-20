@@ -84,6 +84,11 @@ const char *usb_host_port_name(usb_host_port_t port);
 usb_host_port_t usb_host_port_from_name(const char *name);
 const char *usb_host_mode_name(usb_host_mode_t mode);
 
+/* The usb_host command's reply ({"mode":..,"port":..,..,"device":{..}}) into `out` (pure,
+   usb_host_reply.c). Returns the length, or 0 when it does not fit `cap`. */
+#include <stddef.h>
+size_t usb_host_reply_json(const usb_host_info_t *info, char *out, size_t cap);
+
 /* ---- for the usb task (usb_device.c) ---- */
 /* The port the usb task should host on now, USB_HOST_PORT_NONE for device mode (a request
    that timed out reads as NONE). */
