@@ -15,7 +15,9 @@
 # Nothing is published until these pass (needs: below):
 #   • preflight: the tag equals FIRMWARE_VERSION in stm32h563/src/version.h, and ice40/release/
 #     still matches the gateware sources (make -C ice40 check-release), both fatal;
-#   • tests: test.yml (gateware sims, host tests) with release: true;
+#   • tests: test.yml (gateware sims, host tests) with release: true. A suite that a Tests run on
+#     main already passed on the same files (usually the push of the tagged commit) is not run
+#     again (.github/scripts/release-reuse.sh); with no such run it runs here as before;
 #   • firmware-build: stm32-build.yml (warning-free build, host tests with Cube, RELEASE=1 build).
 #
 # Option, not switched on: publish with `gh release create --prerelease` and promote it
@@ -75,6 +77,9 @@ jobs:
 
   tests:
     uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+      actions: read   # earlier green Tests runs, to reuse them
     with:
       release: true
 
