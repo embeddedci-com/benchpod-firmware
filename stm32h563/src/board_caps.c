@@ -2,11 +2,12 @@
 #include "board_caps.h"
 #include "board_rev.h"
 
-static board_caps_t s_caps;
+static board_caps_t s_caps = { .analog = { .present = true } };   /* BOARD_ANALOG_CAPS_UNPROBED */
 
 board_caps_t board_caps_for_rev(int rev)
 {
     board_caps_t c = { 0 };
+    c.analog = BOARD_ANALOG_CAPS_UNPROBED;
     /* v3 and later (rev >= BOARD_REV_V3): the old board_rev_is_v3() gate. */
     if (rev >= BOARD_REV_V3) {
         c.la_1v8   = true;
@@ -29,6 +30,13 @@ board_caps_t board_caps_for_rev(int rev)
     return c;
 }
 
-void board_caps_init(int rev) { s_caps = board_caps_for_rev(rev); }
+void board_caps_init(int rev)
+{
+    const board_analog_caps_t analog = s_caps.analog;   /* not from the revision */
+    s_caps = board_caps_for_rev(rev);
+    s_caps.analog = analog;
+}
+
+void board_caps_set_analog(board_analog_caps_t analog) { s_caps.analog = analog; }
 
 const board_caps_t *board_caps(void) { return &s_caps; }

@@ -76,7 +76,7 @@ HWWORKER_SRCS := test_hw_worker.c ../src/hw_worker.c ../src/net_reload.c
 # boot_guard.c is #included by its test (shim_hal stands in for the HAL header).
 BOOTGUARD_SRCS := test_boot_guard.c ../src/boot_guard.c ../src/boot_policy.c
 FLASHLAYOUT_SRCS := test_flash_layout.c
-BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c
+BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c ../src/board_caps.c
 BOARDCAPS_SRCS := test_board_caps.c ../src/board_caps.c
 USBHOST_SRCS  := test_usb_host_desc.c ../src/usb_host_desc.c ../src/usb_host_reply.c
 GWCAPS_SRCS := test_gw_caps.c ../src/gw_caps.c

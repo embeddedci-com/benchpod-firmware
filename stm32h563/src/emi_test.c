@@ -9,7 +9,7 @@
 #include "signal_engine.h"              /* dac_quad_write */
 #include "la_io.h"
 #include "status_led.h"                 /* status_led_emi_t */
-#include "board_variant.h"              /* board_has_analog */
+#include "board_caps.h"                /* board_caps()->analog */
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 #include "fault.h"                      /* fault_last_reset_str */
 #include "emi_log.h"
@@ -362,7 +362,7 @@ static void log_session_close(uint32_t t0) {
     const uint32_t session = time_us_32() - t0;
     lg.session_us_last = session;
     if (session > lg.session_us_max) lg.session_us_max = session;
-    if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF) {
+    if (s.running && board_caps()->analog.present && s.dac != EMI_DAC_OFF) {
         const bool sine = s.dac == EMI_DAC_SINE || s.dac == EMI_DAC_ALL;
         uint32_t us = 0;
         if (lg.dac_stopped || (sine && !signal_engine_dac_run_bit())) {
@@ -462,7 +462,7 @@ static void choose_default_dac(void) {
     if (s.booted_mode) return;
     s.booted_mode = true;
     if (dac_quad_present()) s.dac = EMI_DAC_ALL;
-    if (!board_has_analog()) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
+    if (!board_caps()->analog.present) s.dac = EMI_DAC_OFF;   /* digital-only board: no DAC, no ADC */
 }
 
 /* ---- recovery (recovery.h) -----------------------------------------------------------------
@@ -529,7 +529,7 @@ static void log_boot(void) {
         /* The mode the run will play: the boot start picks the default (choose_default_dac) only
            later, once the DAC is known, so name that default here without fixing it. */
         r.u.start.dac = (uint8_t)(s.booted_mode ? s.dac
-                                 : !board_has_analog() ? EMI_DAC_OFF
+                                 : !board_caps()->analog.present ? EMI_DAC_OFF
                                  : dac_quad_present() ? EMI_DAC_ALL : s.dac);
         r.u.start.net_mbit = (uint8_t)ns.mbit;
         r.u.start.gw_version = signal_engine_fpga_version();
@@ -569,7 +569,7 @@ static void log_flush(void) {
     }
     lg.n = 0;
     lg.t_flush = HAL_GetTick();
-    if (s.running && board_has_analog() && s.dac != EMI_DAC_OFF)
+    if (s.running && board_caps()->analog.present && s.dac != EMI_DAC_OFF)
         printf("[emi] run log: wrote %u, W25Q session %lu us%s, DAC gap %lu us\n", done,
                (unsigned long)lg.session_us_last, erased ? " (with a sector erase)" : "",
                (unsigned long)lg.glitch_us_last);
@@ -796,7 +796,7 @@ static void recovery_take(recovery_action_t a, uint32_t now) {
         log_event_text(EMI_EV_RECOVERY, text);
         s.cap_issued = false;
         s.t_next_cap = now + 1000u;
-        if (board_has_analog()) apply_dac(s.dac);   /* the reload stopped the outputs */
+        if (board_caps()->analog.present) apply_dac(s.dac);   /* the reload stopped the outputs */
         break;
     }
     case RECOVERY_MCU_RESET:
@@ -921,7 +921,7 @@ void emi_test_start(void) {
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
     run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":true}");
     run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":true}");
-    if (board_has_analog()) apply_dac(s.dac);
+    if (board_caps()->analog.present) apply_dac(s.dac);
     apply_uart(s.uart_la);
     log_event(EMI_EV_STARTED, 0, 0);
 }
@@ -930,7 +930,7 @@ void emi_test_stop(void) {
     s.booted = true;   /* a stop before the boot delay ran out also cancels the boot start */
     if (!s.running) return;
     s.running = false;
-    if (board_has_analog()) {
+    if (board_caps()->analog.present) {
         run("dac_stop", "{\"cmd\":\"dac_stop\"}");
         if (drives_current(s.dac)) run("current_out", "{\"cmd\":\"current_out\",\"ua\":4000}");
         run("analog_path", "{\"cmd\":\"analog_path\",\"path\":\"off\"}");
@@ -947,7 +947,7 @@ bool emi_test_running(void) { return s.running; }
 
 bool emi_test_set_dac(emi_dac_mode_t mode) {
     if (mode == EMI_DAC_ALL && !dac_quad_present()) return false;
-    if (mode != EMI_DAC_OFF && !board_has_analog()) return false;
+    if (mode != EMI_DAC_OFF && !board_caps()->analog.present) return false;
     s.booted_mode = true;   /* a choice before the boot start sticks */
     if (s.running) apply_dac(mode);
     s.dac = mode;
@@ -1513,7 +1513,7 @@ void emi_test_poll(void) {
     if (!s.running) return;
     if (!s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0 && (int32_t)(now - s.hold_until) >= 0) {
         s.cap_errors = s.errors;
-        if (!board_has_analog()) s.next_kind = 1;   /* LA only: capture_dual takes the ADC too */
+        if (!board_caps()->analog.present) s.next_kind = 1;   /* LA only: capture_dual takes the ADC too */
         run(s.next_kind ? "la_capture" : "capture_dual", k_captures[s.next_kind]);
         s.next_kind = (s.next_kind + 1u) % (sizeof(k_captures) / sizeof(k_captures[0]));
         if (s.errors == s.cap_errors) { s.cap_issued = true; s.cap_issued_at = now; }

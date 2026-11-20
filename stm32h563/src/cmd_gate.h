@@ -39,7 +39,7 @@ typedef struct {
     const char      *lease_holder;     /* lease_gate_holder() ("" or NULL = "cloud") */
     int              tunnel_max_tier;  /* a cloud tunnel's max tier, -1 = not a tunnel */
     bool             skip_hw;          /* boot_guard_skip_hw(): safe mode */
-    bool             has_analog;       /* board_has_analog() */
+    bool             has_analog;       /* board_caps()->analog.present */
 } cmd_gate_ctx_t;
 
 /* A cloud job holding the pod is refused as lease_busy (BP0025) with this holder and the cloud
