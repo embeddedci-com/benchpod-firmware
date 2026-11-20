@@ -71,15 +71,15 @@ static const cmd_desc_t k_tiers[] = {
     { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc), NULL },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
-    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_public), NULL },
+    { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_identity_public), NULL },
     { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop), NULL },
     { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* always refused off the USB console: it changes nothing */
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status), NULL },
     { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status), NULL },
     { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor), NULL },
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status), NULL },
-    { { "ota_status", CMD_TIER_T0 }, 0, CMD_FN(handle_ota_status), NULL },
-    { { "blob_status", CMD_TIER_T0 }, 0, CMD_FN(handle_blob_status), NULL },
+    { { "ota_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_status), NULL },
+    { { "blob_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_blob_status), NULL },
     { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
     { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)
@@ -177,12 +177,12 @@ static const cmd_desc_t k_tiers[] = {
     { { "wifi_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_set), NULL },
     { { "wifi_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_clear), NULL },
     /* T3: firmware */
-    { { "ota_begin", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_begin), NULL },
-    { { "ota_data", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_data), NULL },
-    { { "ota_end", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_end), NULL },
-    { { "ota_commit", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_commit), NULL },
-    { { "ota_abort", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_abort), NULL },
-    { { "ota_selftest", CMD_TIER_T3 }, 0, CMD_FN(handle_ota_selftest), NULL },
+    { { "ota_begin", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_begin), NULL },
+    { { "ota_data", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_data), NULL },
+    { { "ota_end", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_end), NULL },
+    { { "ota_commit", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_commit), NULL },
+    { { "ota_abort", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_abort), NULL },
+    { { "ota_selftest", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_selftest), NULL },
 };
 
 const cmd_desc_t *cmd_find(const char *cmd) {

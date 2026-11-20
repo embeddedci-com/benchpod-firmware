@@ -1907,38 +1907,48 @@ know yet: update the client.
 
 #### Client compatibility
 
-Firmware after 3.10.13. `features_rev` only adds: a client older than the pod misses the new
+Firmware after 3.10.13 (4.0.0). `features_rev` only adds: a client older than the pod misses the new
 features and can warn. The client API level is for the other kind of change, one a client built
 for an older level would misread: a reply that changes shape, a field that changes meaning or
-units, or a refusal text replaced (by the catalog text, say) so clients that match on it break.
+units, or a refusal text replaced so clients that match on it break.
 
 | Field | Where | Meaning |
 |---|---|---|
 | `api` | `status` with `"caps":false`, the cloud capabilities frame | The client API level of this firmware, from [`features/features.toml`](../features/features.toml). It goes up by one only for a change an older client would misread. |
-| `min_client_api` | the same | The lowest level the firmware takes. It is raised only on purpose, in a release, and never above `api`. Today it is 0, so the pod refuses no client. |
+| `min_client_api` | the same | The lowest level the firmware takes. It is raised only on purpose, in a release, and never above `api`. |
 | `client_api` | every JSON command (request) | The level the client was built for. A command without it counts as 0. |
-| `client` | every JSON command (request), optional | The client's name and version, at most 32 printable characters (`"sdk 3.0.6"`, `"cli 0.9.5"`). The pod puts it in the refusal text; it is left out when longer or with other characters. |
+| `client` | every JSON command (request), optional | The client's name and version (`"sdk 4.0.0"`); the pod ignores it, and logs show it. |
+
+The levels:
+
+| `api` | Firmware | `min_client_api` | What changed |
+|---|---|---|---|
+| 1 | none released (development builds after 3.10.13) | 0 | The first level clients send. Firmware up to 3.10.13 announces no `api`: treat it as level 1. |
+| 2 | 4.0.0 | 2 | Clients classify refusals by [error code](#error-codes) only, never by their text. Every refusal a client acts on has a code, and the text of a coded refusal is the catalog's. Firmware 4.0.0 refuses every client that does not send `"client_api":2` or higher. |
 
 A command whose `client_api` is below `min_client_api` is refused before every other
 [gate](#gates-that-apply-to-every-command), on the LAN, USB and both cloud paths:
 
 ```json
-{"status":"error","code":"BP0030","args":{"client_api":0,"min_client_api":2,"api":2},"message":"update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer (this client sent 0)"}
+{"status":"error","code":"BP0030","args":{"client_api":1,"min_client_api":2,"api":2},"message":"Update the BenchPod SDK, MCP or CLI: this firmware needs client API 2 or newer (this client sent 1)"}
 ```
 
 `status`, `diag`, `ping` and `lease_release` always run, so a client can see the levels, report
-them and let go of the pod. SCPI and the USB console have no check: people read them.
+them and let go of the pod. So do the update commands (`ota_status`, `ota_begin`, `ota_data`,
+`ota_end`, `ota_commit`, `ota_abort`, `ota_selftest`, `blob_status` and `identity_public`), so
+an old client can still update the pod's firmware or blobs, or roll it back. SCPI and the USB
+console have no check: people read them.
 
 A client:
 
-1. Sends `"client_api":<its level>` (and `client`) on every command. Both are stateless, so this
-   works the same on every transport, the cloud command channel included (the server passes the
-   command on as it is). Older firmware ignores them. They count toward the line limit (1279 bytes).
+1. Sends `"client_api":<its level>` on every command. It is stateless, so this works the same on
+   every transport, the cloud command channel included (the server passes the command on as it
+   is). Older firmware ignores it. It counts toward the line limit (1279 bytes).
 2. Reads `api` and `min_client_api` from `status` (`"caps":false`) or the capabilities frame.
    No `api` (firmware up to 3.10.13): treat it as level 1.
 3. Stops, and says to update the client, when `api` is above its own level (the firmware has a
    change this client would misread) or `min_client_api` is above it (the pod refuses it).
-4. Shows a `BP0030` refusal as it is: a client from before this level shows the `message` text,
+4. Shows a `BP0030` refusal from its `message`: a client from before the codes shows that text,
    which says what to do.
 
 ---

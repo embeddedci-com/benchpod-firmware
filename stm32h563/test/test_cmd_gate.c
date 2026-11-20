@@ -301,7 +301,10 @@ static void test_client_api(void) {
           "a huge client_api: sent %d", (int)sent);
 
     /* What a client needs to find out and say so, and to let go of the pod: always. */
-    static const char *const any[] = { "status", "diag", "ping", "lease_release" };
+    static const char *const any[] = { "status", "diag", "ping", "lease_release",
+                                       /* an old client can still update or roll back the pod */
+                                       "ota_status", "ota_begin", "ota_data", "ota_end", "ota_commit",
+                                       "ota_abort", "ota_selftest", "blob_status", "identity_public" };
     for (size_t i = 0; i < sizeof(any) / sizeof(any[0]); i++) {
         char line[64];
         snprintf(line, sizeof(line), "{\"cmd\":\"%s\"}", any[i]);

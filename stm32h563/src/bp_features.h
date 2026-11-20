@@ -9,7 +9,7 @@
 
 /* The client API level (features.toml `api`), announced as "api" next to features_rev: it goes up
    only for a change a client built for an older level would misread. */
-#define BP_API 1u
+#define BP_API 2u
 
 /* The lowest "client_api" a JSON command may carry (absent = 0), announced as "min_client_api".
    Below it the pod refuses with BP0030 client_too_old (cmd_gate_client_api). Raised only on
@@ -17,7 +17,7 @@
 #ifdef BP_MIN_CLIENT_API_OVERRIDE
 #define BP_MIN_CLIENT_API BP_MIN_CLIENT_API_OVERRIDE
 #else
-#define BP_MIN_CLIENT_API 0u
+#define BP_MIN_CLIENT_API 2u
 #endif
 
 #endif /* BP_FEATURES_H */

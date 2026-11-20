@@ -55,7 +55,8 @@ const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *jso
 /* The client API check (features.toml `min_client_api`): true = `json` (row `d`, NULL = unknown
    verb) may run for a firmware that takes client_api >= min_api. *sent is the command's
    "client_api" (top level; absent, negative or not a number = 0, a value past INT32_MAX is
-   INT32_MAX). The rows with CMD_F_ANY_CLIENT (status, diag, ping, lease_release) always run. The
+   INT32_MAX). The rows with CMD_F_ANY_CLIENT (status, diag, ping, lease_release, and the update
+   commands ota_*, blob_status and identity_public) always run. The
    firmware passes BP_MIN_CLIENT_API; tests pass any minimum. */
 bool cmd_gate_client_api(const cmd_desc_t *d, const char *json, uint32_t min_api, int32_t *sent);
 
