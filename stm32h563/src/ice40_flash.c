@@ -1,6 +1,6 @@
 /*
  * ice40_flash.c — reprogram the iCE40 config flash (W25Q64) from the STM32 over
- * the shared OCTOSPI bus (single-SPI, GPIO chip-select PE3).  Ported from the
+ * the shared OCTOSPI bus (single-SPI, GPIO chip-select: PE3, PB6 on digital v3r4).  Ported from the
  * RP2350 ice40_flash.c; the SPI transport is now the H5 OCTOSPI (reusing the
  * handle from psram.c) and the chip-select / iCE40 control are GPIOs.
  *
@@ -22,7 +22,7 @@
 
 #define FCS_HIGH()  HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_SET)
 
-/* PE3 (flash CS) + CRESET (PF13, drive low to hold iCE40 in reset) + CDONE
+/* The flash CS (qspi_cs.h) + CRESET (PF13, drive low to hold iCE40 in reset) + CDONE
    (PF14, input).  PG0/PSRAM-CS/OCTOSPI pins are handled by psram_bus_acquire. */
 static void flash_pins(void)
 {
@@ -95,7 +95,7 @@ static int release_and_wait_cdone(void)
     psram_cs_park_high();
     {
         GPIO_InitTypeDef gz = {0};
-        gz.Mode = GPIO_MODE_ANALOG;          /* PE3 (flash /CS) -> Hi-Z (iCE40 drives it in config) */
+        gz.Mode = GPIO_MODE_ANALOG;          /* flash /CS -> Hi-Z (iCE40 drives it in config) */
         gz.Pin  = ICE_FLASH_CS_PIN;
         HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
     }

@@ -92,6 +92,9 @@ typedef struct {
     /* The DAC clock is on the module flat cable's pin 7 and its data on pin 8 (dac_link.h); older
        digital boards have them the other way round.  Only matters on a two-board pod. */
     bool cn1_dac_swap;
+    /* The quad bus chip-selects are on PB6 (/ICE_SS, the config flash) and PC11 (/ICE_SS_PSRAM),
+       pins that can also carry OCTOSPI1_NCS; false: PE3 and PE4.  qspi_cs.h. */
+    bool qspi_cs_ncs_pins;
 
     /* ---- the analog front end (not from the revision: board_caps_set_analog) ---- */
     board_analog_caps_t analog;

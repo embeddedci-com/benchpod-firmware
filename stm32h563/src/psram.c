@@ -2,12 +2,13 @@
  * psram.c — APS6404L QSPI PSRAM driver for the STM32H5 OCTOSPI1.
  *
  * The PSRAM and the iCE40 config flash share the quad bus (PF6..PF10); each has
- * its own GPIO chip-select straight to the chip (PE4 = PSRAM, PE3 = flash).
- * PE4 is NOT an OCTOSPI hardware-NCS pin, so we cannot use memory-mapped mode
- * (which auto-toggles the controller NCS).  Instead the OCTOSPI drives only
- * SCLK + IO0..3 and the STM32 frames every transaction by toggling PE4 as a
- * GPIO, breaking long reads/writes into chunks under the APS6404 tCEM (~8 us
- * max CS-low time).  PE3 (flash CS) is held high so the flash stays off the bus.
+ * its own GPIO chip-select straight to the chip (qspi_cs.h: PE4 = PSRAM, PE3 = flash;
+ * PC11 and PB6 on digital v3r4).  PE4 is NOT an OCTOSPI hardware-NCS pin, so we cannot
+ * use memory-mapped mode (which auto-toggles the controller NCS); PC11 is, but this
+ * driver treats every board the same.  The OCTOSPI drives only SCLK + IO0..3 and the
+ * STM32 frames every transaction by toggling the PSRAM CS as a GPIO, breaking long
+ * reads/writes into chunks under the APS6404 tCEM (~8 us max CS-low time).  The flash
+ * CS is held high so the flash stays off the bus.
  *
  * Shared-bus arbitration with the iCE40 (which writes captures into the PSRAM):
  * psram_bus_acquire() drives PG0 high + restores the OCTOSPI/CS pins;
@@ -99,7 +100,7 @@ static void pins_to_stm32(void)
     GPIO_InitTypeDef g = {0};
     HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_SET);  /* PG0=1 */
     octospi_pins(1);
-    /* PSRAM CS (PE4) as a driven GPIO, idle high (deselected). */
+    /* PSRAM CS as a driven GPIO, idle high (deselected). */
     g.Mode = GPIO_MODE_OUTPUT_PP; g.Pull = GPIO_NOPULL; g.Speed = GPIO_SPEED_FREQ_HIGH;
     CS_HIGH();
     g.Pin = PSRAM_CS_PIN; HAL_GPIO_Init(PSRAM_CS_PORT, &g);
@@ -180,7 +181,7 @@ void psram_cs_park_high(void)
 
 /* ---- boot /CE-net probe (iCE40-reaches-PSRAM self-test) ------------------
    Release the STM32's drive of the shared bus and hand it to the iCE40 (PG0=0),
-   but keep PE4 (PSRAM /CS, on the shared /CE net) as an INPUT with a pull-up.
+   but keep the PSRAM /CS pin (on the shared /CE net) as an INPUT with a pull-up.
    With the iCE40 told to force its /CS low (CMD_PSRAM_CS), the STM32 can then sense
    whether that drive reaches the net: read 0 => the iCE40 pulls /CE low (pad45
    reaches the net); read 1 => the pull-up wins, the iCE40's drive never arrives
@@ -191,7 +192,7 @@ void psram_ce_probe_begin(void)
     octospi_pins(0);                                                          /* SCLK/IO -> Hi-Z */
     HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_RESET); /* PG0=0: iCE40 owns bus */
     g.Mode = GPIO_MODE_INPUT; g.Pull = GPIO_PULLUP; g.Speed = GPIO_SPEED_FREQ_LOW;
-    g.Pin = PSRAM_CS_PIN; HAL_GPIO_Init(PSRAM_CS_PORT, &g);                   /* PE4 -> input + pull-up */
+    g.Pin = PSRAM_CS_PIN; HAL_GPIO_Init(PSRAM_CS_PORT, &g);                   /* PSRAM CS -> input + pull-up */
 }
 int  psram_ce_probe_read(void)   /* 1 = net high (iCE40 does NOT reach it), 0 = net low (reaches it) */
 {
@@ -199,7 +200,7 @@ int  psram_ce_probe_read(void)   /* 1 = net high (iCE40 does NOT reach it), 0 = 
 }
 /* Read all six shared PSRAM-bus lines as GPIO inputs (call between
    psram_ce_probe_begin/_end, with the iCE40 forcing its known pattern).
-   Bit layout: b0=/CS(PE4) b1=SCLK b2=IO0 b3=IO1 b4=IO2 b5=IO3. */
+   Bit layout: b0=/CS (PSRAM CS pin) b1=SCLK b2=IO0 b3=IO1 b4=IO2 b5=IO3. */
 uint8_t psram_bus_read_lines(void)
 {
     GPIO_InitTypeDef g = {0};
@@ -221,7 +222,7 @@ uint8_t psram_bus_read_lines(void)
 
 void psram_ce_probe_end(void)
 {
-    pins_to_stm32();       /* restore: PG0=1, OCTOSPI AF, PE4 driven high */
+    pins_to_stm32();       /* restore: PG0=1, OCTOSPI AF, PSRAM CS driven high */
 }
 
 /* ---- low-level OCTOSPI indirect transfer (GPIO-CS framed) -------------
@@ -346,7 +347,7 @@ int psram_init(void)
     __HAL_RCC_GPIOF_CLK_ENABLE();
     __HAL_RCC_GPIOG_CLK_ENABLE();
 
-    /* PG0 (bus-own) + PE3 (flash CS) as GPIO outputs; take the bus, deselect flash. */
+    /* PG0 (bus-own) + the flash CS as GPIO outputs; take the bus, deselect flash. */
     g.Mode = GPIO_MODE_OUTPUT_PP; g.Pull = GPIO_NOPULL; g.Speed = GPIO_SPEED_FREQ_LOW;
     g.Pin = ICE_FLASH_OWN_PIN; HAL_GPIO_Init(ICE_FLASH_OWN_PORT, &g);
     HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_SET);
@@ -510,13 +511,13 @@ static void hold_ice40_reset(void)
 /* One-shot, all-in-one diagnostic for the '0xFF ID' failure.  In one run it
    reports: (0) arbitration pins, (1) shared-bus health via the config-flash ID
    (same OCTOSPI + SCLK/IO0/IO1 as the PSRAM — only the CS pin differs), (2) who
-   drives the data bus iCE40-running vs -in-reset, (3) PE4->CE net continuity,
+   drives the data bus iCE40-running vs -in-reset, (3) CS pin->CE net continuity,
    and (4) the PSRAM ID with the iCE40 held off the bus.
 
    How to read the result:
    - flash-id != EF..  => shared bus/OCTOSPI broken (not PSRAM-specific).
-   - flash-id OK, CE(PE4) reads 0 => PE4 pin/trace to the CE net is open.
-   - flash-id OK, CE(PE4) reads 1, ID still 0xFF => CE reaches PE4 but the PSRAM
+   - flash-id OK, CE pin reads 0 => the CS pin/trace to the CE net is open.
+   - flash-id OK, CE pin reads 1, ID still 0xFF => CE reaches the CS pin but the PSRAM
      never answers: R16/CE-to-U7 open, U7 power, or a dead/cold-joint U7. */
 int psram_diag(void)
 {
@@ -550,17 +551,17 @@ int psram_diag(void)
     /* (2) Data-bus drivers with the iCE40 now off the bus. */
     diag_sample_bus("iCE40 in reset, pull-down", GPIO_PULLDOWN);
 
-    /* (3) PE4->CE net continuity.  CE (U7.1) has R17 (10k) pull-up to 3V3 via
-       R16.  Read PE4 as input+pull-down: 1 => PE4 reaches the pulled-up CE net
+    /* (3) PSRAM CS pin -> CE net continuity.  CE (U7.1) has R17 (10k) pull-up to 3V3 via
+       R16.  Read the CS pin as input+pull-down: 1 => it reaches the pulled-up CE net
        (trace to the net is intact — meter R16->U7.1 to confirm CE reaches the
-       chip); 0 => PE4 pin/trace to the CE net is OPEN. */
+       chip); 0 => the pin/trace to the CE net is OPEN. */
     g.Mode = GPIO_MODE_INPUT; g.Pull = GPIO_PULLDOWN; g.Speed = GPIO_SPEED_FREQ_LOW;
     g.Pin = PSRAM_CS_PIN; HAL_GPIO_Init(PSRAM_CS_PORT, &g);
     for (volatile int i = 0; i < 4000; i++) { __NOP(); }
     int ce_pd = rd(PSRAM_CS_PORT, PSRAM_CS_PIN);
-    printf("[psram-diag] CE(PE4) input+pull-down = %d  => %s\n", ce_pd,
-           ce_pd ? "reaches the CE pull-up net (PE4 OK; meter R16->U7.1)"
-                 : "OPEN — PE4 pin/trace not tied to the CE net");
+    printf("[psram-diag] CE pin input+pull-down = %d  => %s\n", ce_pd,
+           ce_pd ? "reaches the CE pull-up net (CS pin OK; meter R16->U7.1)"
+                 : "OPEN — CS pin/trace not tied to the CE net");
 
     /* (4) Probe the PSRAM ID with the iCE40 guaranteed off the bus. */
     printf("[psram-diag] probing PSRAM ID (iCE40 held in reset)...\n");

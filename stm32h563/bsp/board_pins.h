@@ -55,7 +55,8 @@
  * Shared quad-SPI bus (XSPI) — iCE40 cfg-flash (W25Q64, U2) + PSRAM (APS6404L,
  * U7) + iCE40 (U1).  Two chip-selects.   [/ICE_SCLK, /ICE_SPI_SO/SI, /ICE_IO2/3]
  *   PF10 SCLK, PF8 IO0, PF9 IO1, PF7 IO2, PF6 IO3
- *   PE3 = /ICE_SS (cfg-flash CS),  PE4 = /ICE_SS_PSRAM (PSRAM CS)
+ *   /ICE_SS (cfg-flash CS) and /ICE_SS_PSRAM (PSRAM CS): PE3 and PE4, on digital v3r4 PB6 and
+ *   PC11.  Chosen per revision at boot (qspi_cs.h), so the macros below read RAM variables.
  *   PF13 = /ICE_CRESET,  PF14 = /ICE_CDONE
  * ------------------------------------------------------------------------- */
 #define XSPI_SCLK_PORT               GPIOF
@@ -68,10 +69,11 @@
 #define XSPI_IO2_PIN                 GPIO_PIN_7
 #define XSPI_IO3_PORT                GPIOF
 #define XSPI_IO3_PIN                 GPIO_PIN_6
-#define ICE_FLASH_CS_PORT            GPIOE         /* /ICE_SS  (PE3) */
-#define ICE_FLASH_CS_PIN             GPIO_PIN_3
-#define PSRAM_CS_PORT                GPIOE         /* /ICE_SS_PSRAM (PE4) */
-#define PSRAM_CS_PIN                 GPIO_PIN_4
+#include "qspi_cs.h"
+#define ICE_FLASH_CS_PORT            (qspi_cs.flash_port)   /* /ICE_SS: PE3, v3r4 PB6 */
+#define ICE_FLASH_CS_PIN             (qspi_cs.flash_pin)
+#define PSRAM_CS_PORT                (qspi_cs.psram_port)   /* /ICE_SS_PSRAM: PE4, v3r4 PC11 */
+#define PSRAM_CS_PIN                 (qspi_cs.psram_pin)
 #define ICE_CRESET_PORT              GPIOF         /* /ICE_CRESET (PF13) */
 #define ICE_CRESET_PIN               GPIO_PIN_13
 #define ICE_CDONE_PORT               GPIOF         /* /ICE_CDONE (PF14) */
