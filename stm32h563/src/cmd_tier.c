@@ -29,7 +29,12 @@ static int writes_calibrate(const char *json) {
            bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
            (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
-/* sig_policy, lan_policy */
+/* sig_policy also writes with clear_floor */
+static int writes_sig_policy(const char *json) {
+    char v[16] = {0};
+    return bp_json_get(json, "set", v, sizeof(v)) || (bp_json_get(json, "clear_floor", v, sizeof(v)) && strcmp(v, "false") != 0);
+}
+/* lan_policy */
 static int writes_set(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "set", v, sizeof(v));
@@ -78,7 +83,6 @@ static const cmd_desc_t k_tiers[] = {
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
     { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_identity_public), NULL },
     { { "identity_pop", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_pop), NULL },
-    { { "identity_wipe", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* always refused off the USB console: it changes nothing */
     { { "spi_status", CMD_TIER_T0 }, 0, CMD_FN(handle_spi_status), NULL },
     { { "i2c_status", CMD_TIER_T0 }, 0, CMD_FN(handle_i2c_status), NULL },
     { { "sensor_status", CMD_TIER_T0 }, 0, CMD_FN(handle_sensor), NULL },
@@ -106,7 +110,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "dac_limits", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANALOG, CMD_FN(handle_dac_limits), writes_dac_limits },
     { { "calibrate", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_calibrate), writes_calibrate },
     { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_eth), writes_eth },
-    { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_set },
+    { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_sig_policy },
     { { "lan_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_policy), writes_set },
     { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_enabled },
     /* read and set T0: it only changes what the pod prints on its own console */
@@ -176,11 +180,16 @@ static const cmd_desc_t k_tiers[] = {
     { { "speedtest", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_STREAM, CMD_FN(handle_speedtest), NULL },
     { { "fpga_image", CMD_TIER_T1 }, 0, CMD_FN(handle_fpga_image), NULL },
     { { "psram_recover", CMD_TIER_T1 }, 0, CMD_FN(handle_psram_recover), NULL },
+    { { "usb_reattach", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_usb_reattach), NULL },
     /* T2: persisted config */
     { { "cloud_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_set), NULL },
     { { "cloud_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_clear), NULL },
     { { "wifi_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_set), NULL },
     { { "wifi_clear", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_clear), NULL },
+    /* the USB console's recovery commands up to 3.10.13 (command_handler_recovery.c) */
+    { { "identity_wipe", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* USB link only */
+    { { "wifi_bridge", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_bridge), NULL },     /* cert: USB link only */
+    { { "wifi_reflash", CMD_TIER_T2 }, 0, CMD_FN(handle_wifi_reflash), NULL },
     /* T3: firmware */
     { { "ota_begin", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_begin), NULL },
     { { "ota_data", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_data), NULL },

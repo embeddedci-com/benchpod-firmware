@@ -77,7 +77,7 @@ static bool bridge_wifi_status(int conn_id) {
     if (!wifi_bridge_in_use()) return false;
     wb_info_t i;
     wifi_bridge_get_info(&i);
-    char resp[768];
+    char resp[960];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,\"connected\":%s,\"ssid\":",
@@ -98,6 +98,25 @@ static bool bridge_wifi_status(int conn_id) {
         bp_emit(&e, ",\"rssi_dbm\":%d,\"channel\":%u", i.rssi, i.channel);
     else
         bp_emit_raw(&e, ",\"rssi_dbm\":null,\"channel\":null");
+    /* What the console's `bridge` printed up to 3.10.13: identity key, the pod's bridge image, the
+       bridge's last boot, the reboots the pod saw and the EMC radio state. */
+    uint8_t id[BWP_ID_PUB_LEN];
+    if (wifi_bridge_identity(id)) {
+        bp_emit_raw(&e, ",\"identity\":\"");
+        for (int k = 0; k < BWP_ID_PUB_LEN; k++) bp_emit(&e, "%02x", id[k]);
+        bp_emit_raw(&e, "\"");
+    } else {
+        bp_emit_raw(&e, ",\"identity\":null");
+    }
+    uint32_t iv;
+    if (wifi_bridge_image(&iv))
+        bp_emit(&e, ",\"image\":\"%u.%u.%u\"", (unsigned)(iv >> 16) & 0xff, (unsigned)(iv >> 8) & 0xff, (unsigned)iv & 0xff);
+    else
+        bp_emit_raw(&e, ",\"image\":null");
+    if (i.have_status) {
+        bp_emit(&e, ",\"boot\":\"%s\",\"reboots\":%lu,\"emc\":", wb_reset_str(i.reset), (unsigned long)i.reboots);
+        if (i.emc) bp_emit(&e, "\"%s\"", wb_emc_str(i.emc)); else bp_emit_raw(&e, "null");
+    }
     bp_emit(&e, ",\"reason\":%u,\"uptime_s\":%lu,\"status_age_ms\":%lu,\"counters\":{\"eth_rx\":%lu,"
             "\"wifi_tx\":%lu,\"wifi_tx_err\":%lu,\"wifi_rx\":%lu,\"eth_tx\":%lu,\"eth_tx_err\":%lu,\"dropped\":%lu}}}}\n",
             i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms,

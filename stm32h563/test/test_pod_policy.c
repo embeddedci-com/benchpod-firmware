@@ -51,7 +51,7 @@ static void boot_blank(void) {
     pod_policy_set_usb_net(true, POLICY_SRC_USB, false);
     pod_policy_set_https_only(true, POLICY_SRC_USB, false);
     pod_policy_set_scpi(false, POLICY_SRC_USB, false);
-    pod_policy_clear_floor(POLICY_SRC_USB);
+    pod_policy_clear_floor(POLICY_SRC_USB, false);
     pod_policy_set_bridge_pin(NULL, NULL);
     pod_policy_set_log_level(BP_LOG_INFO);
     mock_flash_reset();
@@ -244,9 +244,11 @@ static void test_floor(void) {
     CHECK(pod_policy_raise_floor(0x030A05) == NULL && fw_sign_floor() == 0x030A07, "the floor went down");
     pod_policy_load();
     CHECK(pod_policy_rollback_floor() == 0x030A07 && fw_sign_floor() == 0x030A07, "floor lost on reboot");
-    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN) != NULL,
+    CHECK(pod_policy_clear_floor(POLICY_SRC_CLOUD, false) != NULL && pod_policy_clear_floor(POLICY_SRC_LAN, false) != NULL,
           "cleared from off the console");
-    CHECK(pod_policy_clear_floor(POLICY_SRC_USB) == NULL && fw_sign_floor() == 0, "console clear");
+    CHECK(code_of(pod_policy_clear_floor(POLICY_SRC_LAN, false)) == BP_E_SETTING_DEVICE_ONLY, "LAN refusal is BP0043");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_LAN, true) == NULL && fw_sign_floor() == 0, "USB link clear");
+    CHECK(pod_policy_clear_floor(POLICY_SRC_USB, false) == NULL && fw_sign_floor() == 0, "console clear");
     CHECK(pod_policy_sig() == FW_SIG_POLICY_REQUIRED && pod_policy_lan() == POD_LAN_OPEN, "other policies moved");
 }
 

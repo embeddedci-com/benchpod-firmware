@@ -1243,7 +1243,7 @@ static void con_sig_policy(int argc, char **argv, console_out_t out, void *ctx)
 static void con_rollback_floor(int argc, char **argv, console_out_t out, void *ctx)
 {
     const char *why = NULL;
-    if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB);
+    if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB, false);
     char fl[16];
     uint32_t f = pod_policy_rollback_floor();
     if (why) op(out, ctx, "rollback-floor error %s\r\n", why);

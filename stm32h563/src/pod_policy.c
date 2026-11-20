@@ -255,15 +255,16 @@ const char *pod_policy_raise_floor(uint32_t release) {
     return NULL;
 }
 
-const char *pod_policy_clear_floor(policy_src_t src) {
-    if (src != POLICY_SRC_USB) return "rollback_floor: clear it on the USB console";
+const char *pod_policy_clear_floor(policy_src_t src, bool usb_link) {
+    if (src != POLICY_SRC_USB && !usb_link)   /* physical presence: firmware 4.0.0 takes the USB link */
+        return bp_note_setting_device_only(s_why, sizeof(s_why), "rollback_floor");
     if (s_rec.rollback_floor == 0) return NULL;
     pod_policy_rec_t r = s_rec;
     r.rollback_floor = 0;
     const char *why = save(&r);
     if (why) return why;
     fw_sign_set_floor(0);
-    log_printf("[policy] rollback floor cleared (from the USB console)\n");
+    log_printf("[policy] rollback floor cleared (over USB)\n");
     return NULL;
 }
 

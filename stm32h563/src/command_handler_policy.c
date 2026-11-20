@@ -38,9 +38,10 @@ static void sig_policy_reply(int conn_id) {
     send_ok_str(conn_id, data);
 }
 
-/* {"cmd":"sig_policy"[,"set":"required"]}: firmware 4.0.0 always requires signatures. "set":"required"
-   (a server pushing it) is fine from any source; audit and permissive, and the 3.10.x
-   "lan_unsigned":true, are refused with BP0074. */
+/* {"cmd":"sig_policy"[,"set":"required"][,"clear_floor":true]}: firmware 4.0.0 always requires
+   signatures. "set":"required" (a server pushing it) is fine from any source; audit and permissive,
+   and the 3.10.x "lan_unsigned":true, are refused with BP0074. "clear_floor":true drops the rollback
+   floor, over the USB link only (the console's rollback-floor clear up to 3.10.13). */
 void handle_sig_policy(int conn_id, const char *json) {
     char v[16] = {0};
     if (bp_json_get(json, "set", v, sizeof(v))) {
@@ -52,6 +53,10 @@ void handle_sig_policy(int conn_id, const char *json) {
     if (bp_json_get(json, "lan_unsigned", v, sizeof(v)) && strcmp(v, "false") != 0) {
         bp_err_signatures_always_required(conn_id, "lan_unsigned", v);
         return;
+    }
+    if (bp_json_flag(json, "clear_floor")) {
+        const char *why = pod_policy_clear_floor(command_handler_policy_src(conn_id), net_conn_on_usb(conn_id));
+        if (why) { send_error(conn_id, why); return; }
     }
     sig_policy_reply(conn_id);
 }

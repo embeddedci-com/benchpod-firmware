@@ -865,3 +865,10 @@ firmware = "next"
 docs = "API.md#target_power--enabledisable-a-target-power-efuse"
 dated = "code"
 note = "Booleans are true/false: target_power takes enabled (was state 1/0) and replies enabled true/false (was 1/0); target_status enabled, fault and valid are true/false; usb_network takes and replies enabled (was set/setting on/off); status usb net and enabled are true/false (were net/setting on/off); la_pull pullups_available is true/false (was 1/0); nrst assert is documented as true/false (1/0 still parse)."
+
+[features.console_recovery_json]
+rev = 10
+firmware = "next"
+docs = "API.md#identity_wipe--erase-the-device-key-usb-link-only"
+dated = "code"
+note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link), wifi_reflash (T2, the Wi-Fi module image again from the esp slot). wifi_status bridge adds identity, image, boot, reboots, emc."

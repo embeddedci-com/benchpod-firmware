@@ -278,13 +278,7 @@ void handle_identity_pop(int conn_id, const char *json) {
     }
 }
 
-/* identity_wipe only runs on the pod's USB console (console.c, physical presence); every JSON
-   transport gets this refusal. */
-void handle_identity_wipe(int conn_id, const char *json) {
-    (void)json;
-    send_error(conn_id, "identity_wipe: only on the pod's USB console (physical presence): "
-                        "benchpod identity wipe --connection usb");
-}
+/* identity_wipe: command_handler_recovery.c (the USB link; the console had it up to 3.10.13). */
 
 /* Report the USB-C CC-line state (rev3+): which orientation the cable is in and
    how much current the upstream source advertises.

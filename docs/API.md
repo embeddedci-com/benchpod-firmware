@@ -282,7 +282,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `can_stop` | T1 | Turn CAN off and its termination (`can_disable` up to 3.10.13) | object | no |
 | `identity_public` | T0 | Get the device Ed25519 public key | object | no |
 | `identity_pop` | T0 | Sign a nonce (proof of possession) | object | no |
-| `identity_wipe` | T0 | Always refused here: only on the USB console | error | no |
+| `identity_wipe` | T2 | Erase the device key and make a new one, over the USB link only (the console's `identity-wipe` up to 3.10.13) | object | no |
 | `cloud_status` | T0 | The cloud link's state and stored settings | object | no |
 | `cloud_set` | T2 | Store the cloud server and device id, then connect | object | no |
 | `cloud_clear` | T2 | Forget the cloud settings and disconnect | `"cleared"` | no |
@@ -292,9 +292,12 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `wifi_scan` | T0 | Start a Wi-Fi scan, or read its networks | object | no |
 | `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
 | `wifi_clear` | T2 | Forget the Wi-Fi credentials (pod and ESP32-C3) | `"cleared"` | no |
+| `wifi_reflash` | T2 | Write the Wi-Fi module's firmware again from the pod's `esp` slot (the console's `flash-esp32` up to 3.10.13) | object | no |
+| `wifi_bridge` | T2 | The Wi-Fi bridge on the Ethernet port: update, reboot, factory reset, identity certificate (the console's `bridge` up to 3.10.13) | object | no |
+| `usb_reattach` | T1 | Drop off the USB bus and enumerate again (the console's `usb-reattach` up to 3.10.13) | object | no |
 | `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
 | `speedtest` | T1 | Cloud throughput probe over a tunnel | none (raw bytes) | no |
-| `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts | object | no |
+| `sig_policy` | T0/T2 | Read or set which signed updates the pod accepts; clear the rollback floor over the USB link | object | no |
 | `lan_policy` | T0/T2 | Read or set what the LAN API may do | object | no |
 | `usb_network` | T0/T2 | Read, or over the USB link set, the USB network adapter setting | object | no |
 | `log_level` | T0 | Read or set the console log level | object | no |
@@ -3569,9 +3572,24 @@ have them (their documentation is `docs/API.md` at the `v3.10.1` tag).
 
 Each unit owns a stable **Ed25519 keypair** that serves as its device identity. The private key is generated on the device the first time it boots (seeded from the STM32 hardware TRNG) and persisted to a dedicated flash sector. It survives firmware updates and `wifi_clear`/`cloud_clear`. The device only ever **signs**; the private key never leaves the unit.
 
-The firmware never replaces the key on its own. The one way to erase it and make a new one is the USB console's `identity-wipe <short id>` (physical presence; `benchpod identity wipe --connection usb`), after which the pod must be registered again. Over the LAN and the cloud, `{"cmd":"identity_wipe"}` is always refused with `identity_wipe: only on the pod's USB console (physical presence): benchpod identity wipe --connection usb`.
+The firmware never replaces the key on its own. The one way to erase it and make a new one is [`identity_wipe`](#identity_wipe--erase-the-device-key-usb-link-only) over the USB link (physical presence), after which the pod must be registered again. Up to firmware 3.10.13 it was the USB console's `identity-wipe <short id>`, and the JSON command was always refused.
 
 Two operations are exposed: fetch the **public key** (the identifier), and produce a **proof of possession** — a signature over a caller-supplied nonce that proves the unit holds the private key matching that public key.
+
+### `identity_wipe` — erase the device key (USB link only)
+
+```json
+{"cmd":"identity_wipe","confirm":"a1b2c3"}
+→ {"status":"ok","data":{"short_id":"d4e5f6"}}
+```
+
+`confirm` is the current short id (the six hex digits of `benchpod-a1b2c3`, from
+`identity_public`), or `unknown` when the pod has no identity, so a command meant for another pod
+fails. The pod erases the identity sector, makes a new key, replies with the new short id and logs
+in to the cloud again; the server needs the pod registered again. It runs only on a connection over
+the [USB network adapter](usb-serial-interface.md#usb-network-adapter): Ethernet, Wi-Fi and the
+cloud get `BP0043` (`setting_device_only`, setting `identity_wipe`). A wrong token gets
+`identity_wipe: <why>` with the token to use.
 
 ### Encoding of binary fields
 
@@ -4216,7 +4234,7 @@ values. `wifi_clear` therefore wipes both copies:
    NVS partition (16 KB at `0x9000`, from the partition table of the image the pod last wrote into
    the C3, or of the copy older firmware kept in the W25Q) is
    erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
-   This takes about 3 seconds, and like `flash-esp32` it stops a running DAC waveform (the W25Q
+   This takes about 3 seconds, and like `wifi_reflash` it stops a running DAC waveform (the W25Q
    shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
    next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
 
@@ -4241,10 +4259,17 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 ```json
 {"state":"connected","configured":true,"connected":true,"ssid":"lab","via":"wifi-bridge",
  "bridge":{"mac":"24:0a:c4:00:00:03","fw":"0.1.0","hw":"A","paired":true,"genuine":true,"problem":null,"update":"idle",
-           "rssi_dbm":-58,"channel":6,"reason":0,"uptime_s":125,"status_age_ms":3200,
+           "rssi_dbm":-58,"channel":6,"identity":"<64 hex>","image":"0.1.3","boot":"power-on","reboots":0,"emc":null,
+           "reason":0,"uptime_s":125,"status_age_ms":3200,
            "counters":{"eth_rx":812,"wifi_tx":790,"wifi_tx_err":0,"wifi_rx":1204,"eth_tx":1150,
                        "eth_tx_err":0,"dropped":76}}}
 ```
+
+`identity` is the bridge's identity key (`null` before bridge firmware 0.1.3), `image` the bridge
+firmware the pod holds for it (`null` when slot `bridge` is empty), `boot` the bridge's last reset
+reason, `reboots` the bridge restarts the pod saw and `emc` the EMC test radio state (`null`
+normally); `boot`, `reboots` and `emc` come once the bridge has sent a status (firmware 4.0.0; the
+console's `bridge` showed them before).
 
 `state` is then the bridge's: `unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed` or
 `no-ap`. The pod pairs with the bridge on first contact; `paired:false` with a `problem` such as
@@ -4262,7 +4287,55 @@ development builds).
 
 > **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
 > stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
-> `flash-esp32`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
+> `wifi_reflash`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
+
+### `wifi_reflash` — write the Wi-Fi module's firmware again
+
+```json
+{"cmd":"wifi_reflash"}
+→ {"status":"ok","data":{"started":true,"bytes":1048576}}
+```
+
+Writes the Wi-Fi module (ESP32-C3) firmware from the pod's `esp` slot and boots it, in the
+background (about 2 minutes; the API keeps answering). The pod does this by itself when the module
+runs another image; this is the manual repair. While it runs, `status.wifi` is `flashing-c3`, and
+the device log ends it with `wifi_reflash: ...`. Refusals: `wifi_reflash: no Wi-Fi module: ...`
+(digital v3r3), `BP0051` (`update_in_progress`) while a flash of the module runs, `BP0048`
+(`storage_bus_busy`) while a capture, upload or update holds the shared bus, `wifi_reflash: no
+Wi-Fi module image on the pod (install the esp blob)` and `wifi_reflash: the esp slot does not
+match its checksum`. Up to firmware 3.10.13 this was the USB console's `flash-esp32`.
+
+### `wifi_bridge` — the Wi-Fi bridge on the Ethernet port
+
+```json
+{"cmd":"wifi_bridge","action":"update"}         → {"update":"requested"}
+{"cmd":"wifi_bridge","action":"reboot"}         → {"rebooting":true}
+{"cmd":"wifi_bridge","action":"factory_reset"}  → {"factory_reset":true}
+{"cmd":"wifi_bridge","action":"cert","part":1,"hex":"<64 hex digits>"} → {"part":1,"parts":1}
+```
+
+`update` installs the pod's bridge image now, whatever the versions (`wifi_status`
+`bridge.update` follows it); `reboot` restarts the bridge; `factory_reset` makes it forget its
+Wi-Fi and its pairing. `cert` stores the bridge's identity certificate, 128 bytes in four parts of
+32 bytes (64 hex digits each), in any order; with the fourth the pod sends it to the bridge and
+replies `"stored":true`, then checks the bridge's identity again (`genuine` in `wifi_status`).
+`cert` runs over the USB link only (else `BP0043`). Without a bridge: `wifi_bridge: no Wi-Fi
+bridge on the Ethernet port`; the bridge's own refusals come back as `Wi-Fi bridge: <code>: <detail>`.
+The bridge's state is in [`wifi_status`](#wifi_status), its networks in
+[`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees). Up to firmware 3.10.13 this was the USB
+console's `bridge`.
+
+### `usb_reattach` — enumerate on USB again
+
+```json
+{"cmd":"usb_reattach"}
+→ {"status":"ok","data":{"reattach":true}}
+```
+
+About 0.4 s after the reply the pod drops off the USB bus for half a second and connects again, so
+the computer enumerates the console and the network adapter anew: macOS ignores a network adapter
+that appears while the screen is locked. Over the USB link itself the connection then drops;
+connect again. Up to firmware 3.10.13 this was the USB console's `usb-reattach`.
 
 ### `eth` — wired link control and diagnostics
 
@@ -4541,7 +4614,7 @@ has seen one this run, its failures are the pod's, as `health` events and on the
 recovering, red after 60 s): a restart (`bridge restart: brownout`, the reason from the bridge's
 next STATUS), no HELLO for 10 s (`bridge silent 10 s`, then `bridge back after 14 s`), and its radio
 reporting that it is not transmitting (`bridge radio not transmitting`, then `bridge radio back`).
-The console's `bridge` shows the bridge's reset reason, the reboots the pod saw and the EMC radio. A restart because the access
+`wifi_status` `bridge` shows the bridge's last boot (`boot`), the reboots the pod saw (`reboots`) and the EMC radio (`emc`). A restart because the access
 point refused the association is left out: that is the network, not the pod. The digital v3r3
 and the v4 boards have no C3. A hang of the STM32 itself is the watchdog's
 (about 30 s). The console's `emi fault` makes such failures on purpose to test it.
@@ -4766,7 +4839,7 @@ Refusals without a code keep `{"status":"error","message":...}`; the common ones
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |
 | `"capture data was overwritten by <what>; run the capture again"` | `capture_read` after something wrote over the capture's PSRAM regions |
 | `"safe mode: the PSRAM is off this boot, so an update cannot be staged; ..."` | an update begin in a safe mode that turned the iCE40/PSRAM off |
-| `"identity_wipe: only on the pod's USB console (physical presence): ..."` | `identity_wipe` from anywhere but the USB console |
+| `BP0043` (`setting_device_only`) | `identity_wipe`, `sig_policy` `clear_floor` or `wifi_bridge` `cert` off the USB link |
 
 Over SCPI the same refusals arrive in the error queue (`SYSTem:ERRor?`) with their text, for a
 person: safe mode as `-240 Hardware error` and the digital-only board as `-241 Hardware missing`;
@@ -4871,8 +4944,9 @@ C3 sees the Wi-Fi password and every Wi-Fi frame. An `esp` image without a good 
 older than that gets `rollback: <its release> is below this pod's floor <floor>`. The floor only
 goes up, when a signed release marked as a floor release (a flag in its signed manifest) is
 installed, so an older release with a known security problem cannot be put back later. No
-published release sets it yet. The USB console shows it with `rollback-floor` and lowers it to
-none with `rollback-floor clear`.
+published release sets it yet. `{"cmd":"sig_policy","clear_floor":true}` over the USB link lowers it
+to none (Ethernet, Wi-Fi and the cloud get `BP0043`, setting `rollback_floor`); up to firmware
+3.10.13 that was the USB console's `rollback-floor clear`.
 
 ### `lan_policy` — what the external LAN may do
 
@@ -4889,9 +4963,9 @@ The policy covers the **external LAN**: Ethernet and Wi-Fi. `open` (default), `l
 command there gets `BP0040`, `lan_locked`) or `off` (connections to
 8080 over Ethernet or Wi-Fi are refused and open ones closed, no mDNS there). The [USB network
 adapter](usb-serial-interface.md#usb-network-adapter) stays on and open under every policy: it
-means physical presence. It is still LAN tier, so what the LAN never may (`identity_wipe`,
-changing `lan_policy`) stays off it too; the one exception is the company CA
-and the cloud proxy, which it may change (see `cloud_ca` / `cloud_proxy`). The wire
+means physical presence. It is still LAN tier, so changing `lan_policy` stays off it too; the
+exceptions are what needs someone at the pod: the company CA and the cloud proxy (see `cloud_ca` /
+`cloud_proxy`), `identity_wipe`, the rollback floor and a Wi-Fi bridge certificate. The wire
 values and the field name are unchanged. Set from the cloud or the USB console (`lan-policy
 <value>`), never from the LAN or the USB network.
 

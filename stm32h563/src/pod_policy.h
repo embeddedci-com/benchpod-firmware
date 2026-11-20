@@ -101,7 +101,7 @@ void pod_policy_on_scpi_change(bool on);
    FW_SIG_FLAG_FLOOR is committed (ota.c); clearing it needs the USB console. */
 uint32_t pod_policy_rollback_floor(void);
 const char *pod_policy_raise_floor(uint32_t release);
-const char *pod_policy_clear_floor(policy_src_t src);
+const char *pod_policy_clear_floor(policy_src_t src, bool usb_link);
 
 /* The last genuine Wi-Fi bridge (firmware 3.10.7+, wifi_bridge.h): its MAC and the public key of
    the pairing whose identity proof checked out, kept in a version 2 policy record next to the

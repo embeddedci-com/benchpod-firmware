@@ -164,7 +164,10 @@ void handle_emi_log(int conn_id, const char *json);   /* emi_test.c: the EMI bui
 #endif
 void handle_identity_public(int conn_id, const char *json);
 void handle_identity_pop(int conn_id, const char *json);
-void handle_identity_wipe(int conn_id, const char *json);
+void handle_identity_wipe(int conn_id, const char *json);   /* command_handler_recovery.c */
+void handle_usb_reattach(int conn_id, const char *json);
+void handle_wifi_bridge(int conn_id, const char *json);
+void handle_wifi_reflash(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 
 /* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */
