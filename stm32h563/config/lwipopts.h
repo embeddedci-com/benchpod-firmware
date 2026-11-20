@@ -18,8 +18,11 @@
 /* The lwIP `mem` heap backs PBUF_RAM pbufs (tcp_write copies, ethernetif TX) and the TCP send
    queues. It no longer backs mbedTLS: mbedtls_bench_config.h routes mbedTLS to the FreeRTOS
    heap (ALTCP_MBEDTLS_PLATFORM_ALLOC=0), so the old reason for 64 KB (a whole TLS session had to
-   fit here) is gone. Not reduced yet: there are no lwIP memory statistics to size it from. */
-#define MEM_SIZE                (64 * 1024)
+   fit here) is gone. Peak use is 19.4 KB (firmware 4.0.0 on benchpod-c2f662, 2026-11-20: SDK
+   LAN e2e with two more LAN TLS sessions open, then the cloud tier with three), so 48 KB keeps
+   2.5x headroom and the 16 KB taken from it went to the FreeRTOS heap (configTOTAL_HEAP_SIZE),
+   which ran down to 33.5 KB free under the same load. See docs/design/memory-budget.md. */
+#define MEM_SIZE                (48 * 1024)
 
 #define MEMP_NUM_TCP_PCB        10
 #define MEMP_NUM_TCP_SEG        TCP_SND_QUEUELEN
@@ -50,7 +53,7 @@
    limited (RTT to the Cloudflare edge ~42 ms, so throughput ≈ window / RTT ≈ 160-208 KB/s),
    but raising the windows destabilizes given the tight RAM: a bigger TCP_WND overflows the
    16 KB cloud RX accumulator (BP_CLOUD_RX_ACCUM) on a server->device burst, and a bigger
-   TCP_SND_BUF scales MEMP_NUM_TCP_SEG and pressures the 64 KB MEM_SIZE (shared with the
+   TCP_SND_BUF scales MEMP_NUM_TCP_SEG and pressured the 64 KB MEM_SIZE (then shared with the
    ~25 KB TLS session), starving download-path allocations -> reconnects. Both HW-observed.
    So the windows stay at 8 segments (the proven-stable value); real throughput gains need a
    larger MEM_SIZE (no bss headroom today), a 2nd bulk WS, or device-pull HTTP. See
