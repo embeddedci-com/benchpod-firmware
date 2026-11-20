@@ -25,8 +25,10 @@
 # - `gateware` is the lowest gateware version, checked against the RUNNING gateware; `gw_const`
 #   names the firmware constant it equals (CI checks it).
 # - Entries are never removed: one the firmware stopped having gets `status = "retired"`.
-# - The status `caps` list is frozen: every name in it is an entry's `legacy_caps` or a fact's,
-#   and no new name goes in (CI checks it). New features exist only here.
+# - The status `caps` list was frozen, then dropped in firmware 4.0.0: `legacy_caps` says which
+#   name an entry had in it, for clients talking to older firmware. No new entry gets one (CI
+#   checks it). Firmware 4.0.0 also stopped sending the per-feature flags of the capabilities
+#   frame; `legacy_frame` names them the same way. New features exist only here.
 # - `floor` is the oldest firmware on a shipped pod (v3r1 boards, from 2026-10-19). Entries older
 #   than that say the floor; `dated` says how the version was found: tag (the first release that
 #   announced it), floor, or code (no flag; from the code or the docs).

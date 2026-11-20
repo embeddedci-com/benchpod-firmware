@@ -18,8 +18,8 @@ Outputs (never hand-edit them: the banner says so):
 Checks (also with --check):
   - api is an integer >= 1, min_client_api an integer >= 0, and min_client_api <= api
   - each entry's gateware equals the firmware constant its gw_const names (stm32h563/src/*.h)
-  - the status caps list is frozen: every name cloud_caps_emit_list writes is an entry's or a
-    fact's legacy_caps, and only revision-1 entries (the list as it was) have one
+  - only revision-1 entries (the status caps list as it was) have a legacy_caps; firmware 4.0.0
+    no longer sends that list, so it stays the record of what older firmware sent
   - every `docs` link that is not a full URL names a file under docs/ that exists, and its
     #anchor is a heading there (GitHub's slug rules) or an <a id="..."> in it
 """
@@ -70,18 +70,6 @@ def fw_constants():
                 for m in pat.finditer(f.read()):
                     consts.setdefault(m.group(1), int(m.group(2)))
     return consts
-
-
-def status_caps_names():
-    """The names cloud_caps_emit_list can write into the status caps list."""
-    with open(CAPS_C, encoding="utf-8") as f:
-        src = f.read()
-    start = src.find("void cloud_caps_emit_list")
-    if start < 0:
-        raise SystemExit("gen_features: no cloud_caps_emit_list in cloud_caps.c")
-    end = src.find("\n}\n", start)
-    body = re.sub(r"/\*.*?\*/", "", src[start:end], flags=re.S)
-    return set(re.findall(r'\\"([a-z0-9_]+)\\"', body)) - {"caps"}
 
 
 def validate(t):
@@ -229,12 +217,9 @@ def check_code(t):
             errs.append(f"feature {name}: gw_const {c} is not #defined in stm32h563/src")
         elif consts[c] != e["gateware"]:
             errs.append(f"feature {name}: gateware {e['gateware']} but {c} is {consts[c]}")
-    legacy = {e["legacy_caps"] for e in t["features"].values() if "legacy_caps" in e}
-    legacy |= {f["legacy_caps"] for f in t["facts"].values() if "legacy_caps" in f}
-    extra = status_caps_names() - legacy
-    if extra:
-        errs.append("the status caps list is frozen, but cloud_caps.c writes names no entry has as "
-                    f"legacy_caps: {sorted(extra)}. Put a new feature in features/features.toml only.")
+    if "void cloud_caps_emit_list" in open(CAPS_C, encoding="utf-8").read():
+        errs.append("cloud_caps.c writes a status caps list again: firmware 4.0.0 dropped it; new "
+                    "features go in features/features.toml only")
     return errs
 
 

@@ -173,7 +173,7 @@ ADC samples are 16-bit counts (`"bits":16`); see [ADC sample values](#adc-sample
 
 #### Base64 samples (`"enc":"b64"`)
 
-Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. `status.caps` contains `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
+Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. The [features table](#features-table) has `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
 
 ```json
 {"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
@@ -809,8 +809,8 @@ untriggered t0 and would otherwise fire the waveform.
 | `trigger_timeout_ms` outside 1..600000 | `"trigger_timeout_ms must be 1..600000"` |
 | the condition never arrived | `BP0038` (`trigger_timeout`, args `la`, `edge`, `timeout_ms`) |
 
-`status.caps` contains `"capture_trigger"` (and `"gpio_read"`) when the running gateware
-supports this; the cloud capabilities frame carries the same two flags as booleans.
+The [features table](#features-table) has `capture_trigger` (and `gpio_read`) for the running
+gateware that supports this.
 
 ---
 
@@ -819,8 +819,12 @@ supports this; the cloud capabilities frame carries the same two flags as boolea
 From firmware 3.10.11 the frame also carries `features_rev`, `gateware_version` (the
 running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
 [features table](#features-table). Firmware after 3.10.13 adds `api` and `min_client_api`, the
-[client API level](#client-compatibility). It no longer carries `cal_dmm`, `can_fd`, `uart_frame`,
-`spi_stream`, `error_codes`, `cloud_ca` and `cloud_proxy`, which the server never read from it.
+[client API level](#client-compatibility). Firmware 4.0.0 sends no per-feature flags in it
+(`ota`, `scope`, `dac`, `dac_control_loop`, `capture_b64`, `sensors`, `lan_tls` and the rest): the
+server takes the features from the table. The frame keeps the values (versions, policies,
+`ws_auth_v2`, the ADC and DAC scaling and ranges, `la_max_rate_hz`, `current_out_min_ua` /
+`current_out_max_ua`, `board`, the uplink, the boot health) and the facts the table names with a
+`frame` key: `analog`, `nrst_pin`, `sensors_digital`, `wifi_scan`, `pod_current`, `adc_low_range`.
 
 When the pod connects to the cloud it advertises a `capabilities` frame. Alongside `adc_bits` / `adc_fullscale_mv` / `adc_channels` it ships the affine ADC front-end calibration as **integers** (newlib-nano's `printf` has no `%f`), which the server uses to scale raw capture counts to the true probe voltage instead of the naive count ÷ full-scale:
 
@@ -1009,7 +1013,7 @@ little-endian samples), with no JSON or base64 around them. Then the connection 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `total` | integer | yes | — | Bytes that follow. RAM: at most 4096 (2048 samples). PSRAM: at most 8 MB. |
-| `psram` | boolean | no | `false` | Stage into PSRAM for a deep replay (needs the deep-replay gateware image, `status.caps` `"dac_deep_replay"`). |
+| `psram` | boolean | no | `false` | Stage into PSRAM for a deep replay (needs the deep-replay gateware image, feature `dac_deep_replay`). |
 
 Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok","data":{"total":4096}}`
 (in samples) once the bytes are in. An upload that gets no bytes for 30 s is dropped.
@@ -1315,8 +1319,8 @@ embeddedci-server does this.
 
 The pod cannot see the loop: with no supply or an open loop, `current_out` still replies ok.
 
-`status.caps` contains `"current_out"` when the firmware supports it. The cloud capabilities
-frame has `"current_out":true` and the range as `current_out_min_ua` / `current_out_max_ua`.
+The [features table](#features-table) has `current_out` when the firmware supports it. The cloud
+capabilities frame has the range as `current_out_min_ua` / `current_out_max_ua`.
 
 #### `adc_read` — route a source **and** return a calibrated reading
 
@@ -1519,7 +1523,7 @@ normal range.
 → {"status":"error","message":"refused: the ADC is in the low range (+-5.46 V full scale), and 6000 mV on the 12v output is past +-5000 mV. Switch the ADC to the normal range first: {\"cmd\":\"adc_range\",\"range\":\"normal\"}"}
 ```
 
-`status.caps` contains `"adc_low_range"` on a board with the low range, and `status` (LAN and
+The `adc_low_range` fact is in `hw` on a board with the low range, and `status` (LAN and
 tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_range`.
 
 #### `calibrate` — calibrate the ADC offset on the `current_in` input (J8)
@@ -1594,15 +1598,15 @@ firmware: ±50 mV). The old calibration stays in place.
 The calibration is stored in flash. It survives a reboot and a firmware update. Only the
 offset is calibrated: the gain uses the built-in fits (within 0.3 % on measured pods), because
 calibrating it needs a reference voltage (see the DMM-guided calibration below). On `cal1` and
-`cal2` the DAC output stages add a few mV of their own on top. `status.caps` contains `"calibrate"`
-when the firmware supports it, and the cloud capabilities frame has `"calibrate":true`.
+`cal2` the DAC output stages add a few mV of their own on top. The [features table](#features-table) has `calibrate`
+when the firmware supports it.
 
 ##### DMM-guided calibration (firmware 3.9.4)
 
 With a bench DMM the pod can also take out what is left after the offset: its own DAC offset and
 gain per output path, and then the ADC gain per source. Every step is optional and saved on its
-own; a path or source without one keeps the built-in fit. `status.caps` contains `"cal_dmm"` when
-the firmware takes these forms (the [features table](#features-table): `cal_dmm`).
+own; a path or source without one keeps the built-in fit. The [features table](#features-table) has `cal_dmm` when
+the firmware takes these forms.
 
 | Request | What it does |
 |---|---|
@@ -1764,17 +1768,18 @@ Same chunked format as `capture`: the first packet uses `"status":"ok"` (with `"
 ### `status` — firmware and connection info
 
 Returns the firmware version, network and cloud state, board and gateware details, health
-counters and the capability list.
+counters, and what a client needs to look the pod's features up in the
+[features table](#features-table): `features_rev`, `fpga_image` and the hardware facts `hw`.
 
 #### Request
 
 ```json
-{"cmd":"status","caps":false}
+{"cmd":"status"}
 ```
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `caps` | boolean | no | `true` | `false`: leave the `caps` list out and send `features_rev`, `fpga_image` and `hw` instead (firmware 3.10.11+). A client with the [features table](#features-table) sends it. Older firmware ignores it and sends the list, so a client gets one of the two from any pod. |
+No parameters. Firmware 3.10.11 to 3.10.13 took `"caps":false` to leave out the `caps` list
+older clients read; firmware 4.0.0 has no such list and ignores `caps`, so a client may keep
+sending it.
 
 #### Response (abridged)
 
@@ -1785,10 +1790,11 @@ counters and the capability list.
  "adc_bits":16,"adc_fullscale_mv":4096,"adc_channels":1,"la_vccio_mv":3300,
  "adc_cal_a_uv":65758736,"adc_cal_b_nv":-1002644,"adc_cal_unwrap":true,
  "board_rev":"v3","nrst_pin":true,"flash_kb":2048,
- "ota_sig":true,"sig_policy":"audit","sig_keys":3,"lan_policy":"open",
+ "sig_policy":"audit","sig_keys":3,"lan_policy":"open",
  "lease":{"held":false,"holder":"","left_s":0},"gateware":47,"gateware_embedded":47,
  "psram":"ok","psram_ok":true,"reset":"power-on","last_crash":"","analog":true,
- "safe_mode":false,"safe_reason":"","caps":["signal","gpio","power","swd","..."]}}
+ "safe_mode":false,"safe_reason":"","features_rev":8,"api":2,"min_client_api":2,
+ "fpga_image":"loop","hw":["wifi","usb_cc"]}}
 ```
 
 #### Short form
@@ -1804,16 +1810,15 @@ elsewhere:
 | `local_lease` | the server, from the pod's `lease.local` frames (see [Pod lease](#pod-lease)) |
 | `module` | the [`module`](#module--the-analog-module-and-its-eeprom) command |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap`, `adc_range`, `adc_range_fs_mv` | the [capabilities frame](#capabilities-frame--adc-calibration-fields) |
-| `sensors_format`, `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state` | the capabilities frame (the server keeps them as `cap.*`) |
 | `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped`, `board_rev_mv` | [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; earlier, the full form) |
 
 It also cuts `last_crash` and `safe_reason` to 48 characters, writing any character JSON would
 escape as `?`, and adds `"boot_health_cut":true` when it cut one; the capabilities frame has both
-in full. Everything else, `caps` and `usb` included, is the same as the full form.
+in full. Everything else, the facts and `usb` included, is the same as the full form.
 
 LAN, USB and the cloud byte tunnels get the full form. A full form larger than the connection
 takes in one piece (2047 bytes, for example with a long crash report) comes as the short form
-too, so a LAN client that reads the calibration or the feature flags from `status` checks
+too, so a LAN client that reads the calibration from `status` checks
 `short_form` and reads them again (or warns) when it is set. Firmware 3.10.9 moved the
 diagnostics to [`diag`](#diag--heap-stack-and-network-diagnostics) so a running pod's full form
 stays a few hundred bytes under that limit; instead of the error `status too large for this connection` that firmware up to 3.10.4 sent.
@@ -1844,12 +1849,11 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware 3.10.13+), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
-| `ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca`, `cloud_proxy` | boolean | Always `true`: this firmware has signed updates, the policy commands, per-tunnel tiers, the lease state, and the company CA and proxy commands. Clients use them to tell older firmware apart. The short form keeps only `cloud_ca` and `cloud_proxy`; the capabilities frame carries the others. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
 | `lan_policy` | string | The [LAN policy](#lan_policy--what-the-external-lan-may-do), for the external LAN (Ethernet and Wi-Fi); the USB network adapter stays on under every value. |
 | `lan_tls` | object | The [LAN API over TLS](#lan_tls--the-lan-api-over-tls) (firmware 3.9.3+): `port` (8443), `https_only`, and `sha256` of the certificate in use (`""` when there is none). Full form only. |
 | `lease` | object | Whether a cloud job holds the pod: `held`, `holder`, `left_s`. Full form only. |
-| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only, and only with `"caps":false` (a client with the features table, feature `lease`). |
+| `local_lease` | object | The [pod lease](#pod-lease): `{"held":false}`, or `held`, `holder`, `purpose`, `left_s` and `mine` (this connection owns it). Never the lease id. Full form only. |
 | `gateware`, `gateware_embedded` | integer | The gateware running in the iCE40 and the one this firmware embeds (`0` = unknown). They differ after a firmware update until the boot-time gateware update has run. `gateware` `0` with `psram_ok` `false` on a new board means a blank iCE40 config flash: from firmware 3.9.2 the pod loads image 0 from its `gw0` blob at boot or as soon as that blob is installed. |
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
@@ -1861,39 +1865,20 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `module` | object | Digital v3r3 only (firmware 3.9.5+; left out on every other board): the [analog module](#analog-module-digital-v3r3) in short form, `present`, `analog`, `power`, `bridge_power` and `eeprom`. Full form only; on the cloud send [`module`](#module--the-analog-module-and-its-eeprom). |
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
-| `caps` | array of string | The capability list, below. Not sent when the request says `"caps":false`. |
-| `features_rev` | integer | With `"caps":false` only: the revision of the [features table](#features-table) this firmware is built from. |
-| `api` | integer | With `"caps":false` only (firmware after 3.10.13): the [client API level](#client-compatibility) this firmware speaks. |
-| `min_client_api` | integer | With `"caps":false` only (firmware after 3.10.13): the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
-| `fpga_image` | string | With `"caps":false` only: the running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | With `"caps":false` only: the hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
+| `features_rev` | integer | The revision of the [features table](#features-table) this firmware is built from. |
+| `api` | integer | Firmware after 3.10.13: the [client API level](#client-compatibility) this firmware speaks. |
+| `min_client_api` | integer | Firmware after 3.10.13: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
+| `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
-#### `caps` values
+#### Removed in firmware 4.0.0
 
-The list is frozen: it keeps the names below for older clients and gets no new ones. A feature
-added after 3.10.10 is only in the [features table](#features-table).
-
-| Value | Meaning |
-|---|---|
-| `usb_net` | The pod has the [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+); `status.usb` says whether it is on. |
-| `usb_net_setting` | The pod has the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting: the adapter can be turned off on the device. |
-| `lan_tls` | The API also listens on TCP `8443` with TLS, and the pod has the [`lan_tls`](#lan_tls--the-lan-api-over-tls) command (firmware 3.9.3+). |
-| `wifi_scan` | The pod has the [`wifi_scan`](#wifi_scan--the-networks-the-pods-wi-fi-sees) command and the console `wifi-scan` with its built-in Wi-Fi (firmware 3.9.4+). The capabilities frame carries `"wifi_scan":true` too. Not listed on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+); its frame carries `"wifi_scan":false`. |
-| `signal` | The scope's old name, kept for older clients on the analog board only (firmware 3.9.2+; earlier firmware listed it on every board). Read `analog` or `scope` instead. |
-| `gpio`, `power`, `swd`, `uart`, `la`, `analyzer`, `command`, `tunnel`, `ota`, `la_pins`, `power_profile`, `capture_b64`, `can`, `sensors`, `sensor_la_trigger` | Always present on this firmware: GPIO, target power, the CMSIS-DAP probe (`dap_start`), the UART bridge, the logic analyzer, the command channel and tunnels, OTA, per-pin functions (`la_pins`, `gpio`), [`power_profile`](#power_profile--record-a-rail-current-profile), [base64 samples](#base64-samples-encb64), CAN, [emulated sensors](#emulated-sensors) from definitions (format 1; `i2c_sensor`, `sensor_types` and `gps` are gone from firmware 3.10.3, see [Removed in firmware 3.10.3](#removed-in-firmware-3103)) and a [`sensor_la`](#sensor_la--raw-i2c-bus-capture) that waits for the bus's START (`trigger`, `timeout_ms`). |
-| `pod_current` | The pod's own current monitor (INA at 0x41) is fitted. |
-| `adc_low_range` | The ADC has the [low range](#adc_range--the-adc-input-range-analog-module-v3r4) (analog module v3r4 and later, firmware 3.9.5+). |
-| `analog`, `scope`, `dac_limits`, `calibrate`, `current_out` | The analog front end is fitted. |
-| `cal_dmm` | `calibrate` takes the DMM-guided forms (`dac`, `adc`, a partial `clear`): firmware 3.9.4+, analog board only. |
-| `dac`, `dac_dc`, `dac_replay` | The board's DAC features (analog board only). |
-| `generate16` | [`generate`](#generate--dac-waveform-output) takes volts or microamps and plays them at 16 bits (firmware 3.9.1+, analog board only). The frame's `generate_bits` is then 16, else 8. |
-| `dac_deep_replay`, `dac_control_loop`, `dac_cotrig`, `dac_loop_sources`, `dac_loop_input_map` | Features of the **running** gateware image (analog board only): deep PSRAM replay, the closed-loop DAC, the co-trigger, loop input sources and the loop input map. |
-| `gpio_read`, `capture_trigger` | The running gateware reads pin levels back and supports [capture triggers](#capture-triggers) (v35+). |
-| `spi_master`, `spi_stream` | The running gateware has the SPI master (see [SPI master](#spi-master-flash-an-spi-device)). |
-| `uart_frame` | The running gateware takes `uart_proxy_start` `parity` and `stop_bits` (gateware v56+). |
-| `nrst_pin`, `usb_cc` | v3 board features. |
-
-The gateware-dependent values can appear and disappear across an [`fpga_image`](#fpga_image--switch-the-running-gateware-image) swap.
+Firmware up to 3.10.13 also sent, for clients without the features table, a `caps` list (when the
+request did not say `"caps":false`) and flags that were always `true`: `sensors_format`,
+`ota_sig`, `sig_policy_cmd`, `lan_policy_cmd`, `tunnel_max_tier`, `lease_state`, `cloud_ca` and
+`cloud_proxy`. Firmware 4.0.0 sends neither: every feature is in the table. A `caps` name maps to
+a table entry by its `legacy_caps` (`features/features.toml`), for clients that still talk to
+older firmware.
 
 #### Features table
 
@@ -2941,7 +2926,7 @@ then sends the same reply `stop` would. Needs a streaming connection.
 The chunked result needs a streaming connection (LAN, or a cloud **tunnel**); the single-reply
 cloud command channel can still `start`, `status` and `stop` a `keep_samples: 0` profile.
 
-`status.caps` contains `"power_profile"`.
+The [features table](#features-table) has `power_profile`.
 
 ---
 
@@ -3293,11 +3278,10 @@ Each one is an **instance** with a name the host picks: 1 to 16 characters of `a
 `_` (usually the definition's `name`; the limit keeps `la_pins` and `sensor_status` inside the
 cloud reply cap). At most 8 instances are defined at once.
 
-Capability in `status` `caps`: `"sensors"`. `status` and the cloud capabilities frame also carry
-`"sensors_format":1` (the definition format version the pod takes; not in the `status`
-[short form](#short-form)) and `"sensors_digital"` (the
-emulation image is installed or running, so I2C, SPI and UART sensors work); the cloud frame also
-has `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
+Feature `sensors` in the [features table](#features-table) (definition format 1). `status` and
+the cloud capabilities frame carry `"sensors_digital"` (the emulation image is installed or
+running, so I2C, SPI and UART sensors work). Firmware up to 3.10.13 also sent `"sensors_format":1`
+and, in the frame, `"sensors":true`. These commands replace the single-sensor `sensor_*`, `sensor_types` and `gps_*` commands
 of firmware 3.10.1 and earlier (see [Removed in firmware 3.10.3](#removed-in-firmware-3103)).
 
 Typical flow:
@@ -3588,7 +3572,7 @@ SDA(s0), bit5 SCL(s1) ... bit0 SDA(s3), the format of the earlier single-sensor 
 first chunk carries `"la_rate_hz"` (the rate the capture ran at) and, with `"start"`, the last chunk
 carries `"trigger":{"la":2,"edge":"falling","fired":true}`. When the START came sooner after the
 request than the pre-trigger part covers, the samples before the capture began repeat the level
-the bus had then. `status` `caps` lists `"sensor_la_trigger"` on firmware that takes `trigger` and
+the bus had then. The features table has `sensor_la_trigger` for firmware that takes `trigger` and
 `timeout_ms`; older firmware ignores both fields and captures at once.
 
 SPI and UART instances are refused
@@ -3780,7 +3764,7 @@ OUTPut ON
 
 The closed-loop DAC is described in full in [dac-control-loop.md](dac-control-loop.md); the
 commands are summarized here. They need the analog front end and the loop gateware image
-(`status.caps` `"dac_control_loop"`).
+(feature `dac_control_loop`).
 
 ### `dac_control_loop` — arm the closed-loop DAC
 
@@ -4177,7 +4161,7 @@ side (see below): `none` (no `wifi_clear` yet), `pending`, `erased` or `failed`.
 
 For a Wi-Fi picker: the networks in range, to choose the SSID for `wifi_set`. The pod scans with
 its own Wi-Fi, or with a Wi-Fi bridge when one is plugged in, and answers in
-the same format either way. Pods that list `wifi_scan` in `caps` have it (firmware 3.9.4+).
+the same format either way. Pods with the `wifi_scan` feature have it (firmware 3.9.4+).
 
 A scan takes a few seconds, and the pod keeps answering other commands meanwhile, so it is two
 steps: start it, then read it with the `id` the first reply gave.

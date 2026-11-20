@@ -218,21 +218,22 @@ static void test_cloud_worst_case_fits(void) {
     CHECK(strncmp(g_tx, "{\"status\":\"ok\",\"data\":{", 23) == 0, "start: %.40s", g_tx);
     CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
     /* What a cloud client needs is still there. */
-    const char *keep[] = { "version", "board", "caps", "usb", "analog", "gateware",
+    const char *keep[] = { "version", "board", "features_rev", "hw", "usb", "analog", "gateware",
                            "flash_kb", "sig_policy", "lan_policy", "sensors_digital", "nrst_pin",
                            "board_rev", "safe_mode", "safe_reason", "last_crash", "reset",
                            "heap_min", "stack_min", "c3_restarts", "short_form", "boot_health_cut",
-                           "sig_keys", "cloud_ca", "cloud_proxy", "psram_ok" };
+                           "sig_keys", "psram_ok" };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
         CHECK(has(keep[i]), "cloud status lacks %s", keep[i]);
     /* And what moved is not. */
     const char *drop[] = { "lan_tls", "stacks", "lwip_mem_max", "pbuf_pool_max", "malloc_failures",
                            "adc_cal_a_uv", "module", "lease", "local_lease",
                            "rx_dropped", "board_rev_mv", "sensors_format", "ota_sig",
-                           "sig_policy_cmd", "lan_policy_cmd", "tunnel_max_tier", "lease_state" };
+                           "sig_policy_cmd", "lan_policy_cmd", "tunnel_max_tier", "lease_state",
+                           "caps", "cloud_ca", "cloud_proxy" };   /* gone in 4.0.0 */
     for (size_t i = 0; i < sizeof(drop) / sizeof(drop[0]); i++)
         CHECK(!has(drop[i]), "cloud status still has %s", drop[i]);
-    CHECK(strstr(g_tx, "\"sensor_la_trigger\"") != NULL, "caps cut short");
+    CHECK(strstr(g_tx, "\"hw\":[") != NULL, "facts cut short");
     /* The cut texts carry no JSON escapes. */
     const char *lc = strstr(g_tx, "\"last_crash\":\"");
     CHECK(lc && strchr(lc + 14, '"') - (lc + 14) == (long)STATUS_SHORT_TEXT_MAX, "last_crash not cut to %u",
@@ -252,8 +253,8 @@ static void test_lan_is_complete(void) {
     printf("  LAN status, typical: %zu bytes\n", n);
     if (getenv("DUMP")) printf("%s\n", g_tx);
     CHECK(g_sends == 1, "full form not sent at once (%d sends)", g_sends);
-    const char *keep[] = { "lan_tls", "adc_cal_a_uv", "module", "caps", "usb", "lease",
-                           "sensors_format", "ota_sig", "tunnel_max_tier", "heap_min", "stack_min" };
+    const char *keep[] = { "lan_tls", "adc_cal_a_uv", "module", "features_rev", "hw", "usb", "lease",
+                           "local_lease", "heap_min", "stack_min" };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
         CHECK(has(keep[i]), "LAN status lacks %s", keep[i]);
     /* The diagnostics are in `diag` (3.10.9), in neither form. */
@@ -279,14 +280,15 @@ static void test_lan_falls_back_to_short_form(void) {
     /* The worst case does not fit the full form's buffer. */
     g_usb_on = false;
     size_t n = run(0);
-    printf("  LAN status, worst case: short form %zu bytes\n", n);
-    CHECK(has("short_form") && has("caps") && !has("lan_tls"), "worst case is not the short form");
+    printf("  LAN status, worst case: %zu bytes\n", n);
+    CHECK(has("features_rev") && (n <= 2047u || (has("short_form") && !has("lan_tls"))),
+          "worst case: neither the full form nor the short form");
     /* A full form the ring does not take whole (a ring with less room left): refused, then the
        short form. */
     g_typical = true;
     char saved_r = g_reason[0];
     g_crash[40] = '\0'; g_reason[0] = '\0';
-    g_ring = 1700;
+    g_ring = 1200;   /* less than the typical full form (about 1480 bytes) */
     run(0);
     g_ring = 2047;
     CHECK(g_sends == 2, "expected the full form refused, then the short form (%d sends)", g_sends);
@@ -316,35 +318,17 @@ static void test_cloud_short_texts_not_marked(void) {
     g_crash[10] = saved_c; g_reason[10] = saved_r;
 }
 
-/* {"cmd":"status","caps":false} (a client with the features table): no caps[] list, the
-   table's revision, the running image and the hardware facts instead; smaller in both forms.
-   A plain status, and "caps":true, keep the list for older clients. */
-static void test_status_without_caps_list(void) {
+/* Firmware 4.0.0: no caps[] list in any form; "caps" in the request is ignored. */
+static void test_status_has_no_caps_list(void) {
     g_usb_on = true;
     g_module_board = true;
-    size_t with_list = run(CH_CLOUD_CONN);
-    size_t n = run_req(CH_CLOUD_CONN, "{\"cmd\":\"status\",\"caps\":false}");
-    printf("  cloud status worst case without caps: %zu bytes (with: %zu)\n", n, with_list);
-    CHECK(!has("caps"), "caps:false still has the list");
-    CHECK(has("features_rev") && has("api") && has("min_client_api") && has("fpga_image") &&
-          has("hw") && has("gateware"),
-          "caps:false lacks the facts: %.200s", g_tx);
-    CHECK(n + 300 < with_list, "caps:false saves only %zu bytes", with_list - n);
-    CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
-    /* The LAN gets the full form on a pod as it runs (the stubs' worst-case texts fall back to
-       the short form, which has the facts too: test_lan_falls_back_to_short_form). */
-    char saved_c = g_crash[40], saved_r = g_reason[0];
-    g_crash[40] = '\0'; g_reason[0] = '\0';
-    g_typical = true;
-    run_req(0, "{\"cmd\":\"status\",\"caps\":false}");
-    CHECK(!has("caps") && has("features_rev") && has("api") && has("min_client_api") &&
-          !has("short_form"), "LAN caps:false: %.80s", g_tx);
-    g_crash[40] = saved_c; g_reason[0] = saved_r;
-    g_typical = false;
-    run_req(0, "{\"cmd\":\"status\",\"caps\":true}");
-    CHECK(has("caps") && !has("features_rev") && !has("api"), "caps:true lost the list");
-    run_req(0, NULL);
-    CHECK(has("caps"), "a status without arguments lost the list");
+    const char *reqs[] = { "{\"cmd\":\"status\",\"caps\":false}", "{\"cmd\":\"status\",\"caps\":true}", NULL };
+    for (size_t i = 0; i < 3; i++) {
+        size_t n = run_req(CH_CLOUD_CONN, reqs[i]);
+        CHECK(!has("caps") && has("features_rev") && has("api") && has("min_client_api") &&
+              has("fpga_image") && has("hw") && has("gateware"), "request %zu: %.200s", i, g_tx);
+        CHECK(n >= 2 && memcmp(g_tx + n - 2, "}}", 2) == 0, "end: %.10s", g_tx + n - 10);
+    }
 }
 
 /* The pod's own lease, longest labels, on a pod as it runs: a client with the features table
@@ -363,7 +347,7 @@ static void test_local_lease(void) {
     CHECK(strstr(g_tx, "\"local_lease\":{\"held\":true,\"holder\":\"hhhh") &&
           strstr(g_tx, "pppp\",\"left_s\":1800,\"mine\":true}"), "local_lease shape");
     run(0);
-    CHECK(!has("local_lease"), "a caps-list status has local_lease");
+    CHECK(has("local_lease"), "a status without arguments lacks local_lease");
     run_req(CH_CLOUD_CONN, "{\"cmd\":\"status\",\"caps\":false}");
     CHECK(!has("local_lease"), "the cloud's short form has local_lease");
     g_cloud_lease = true;
@@ -385,7 +369,7 @@ int main(void) {
     test_lan_falls_back_to_short_form();
     test_cloud_short_texts_not_marked();
     test_diag();
-    test_status_without_caps_list();
+    test_status_has_no_caps_list();
     test_local_lease();
     if (fails) { printf("test_ch_status: %d FAILED\n", fails); return 1; }
     printf("test_ch_status: all passed\n");
