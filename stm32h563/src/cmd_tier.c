@@ -39,7 +39,7 @@ static int writes_set(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "set", v, sizeof(v));
 }
-/* usb_network */
+/* usb_network, usb_host */
 static int writes_enabled(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "enabled", v, sizeof(v));
@@ -79,6 +79,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },
     { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc), NULL },
+    { { "usb_host", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_host), writes_enabled },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
     { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT, CMD_FN(handle_identity_public), NULL },

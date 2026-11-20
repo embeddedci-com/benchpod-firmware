@@ -81,3 +81,7 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0073 | `psram_bandwidth` | capture | next | The combined sample rate is more than the PSRAM bus can take |
 | BP0074 | `signatures_always_required` | policy | next | {setting} cannot be set to {want}: this firmware installs only signed images |
 | BP0075 | `lan_plaintext_off` | policy | next | The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off |
+| BP0076 | `usb_host_over_usb` | usb | next | USB host mode cannot start over the pod's own USB link |
+| BP0077 | `usb_host_port_unavailable` | usb | next | This pod has no USB host port {port} |
+| BP0078 | `usb_host_no_crystal` | usb | next | USB host mode needs the pod's crystal clock, which is not running |
+| BP0079 | `usb_host_other_port` | usb | next | USB host mode is already running on {port} |

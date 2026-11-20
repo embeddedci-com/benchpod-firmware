@@ -13,11 +13,21 @@
  * a barrier, except the console ring, whose producers are serialized by a critical
  * section (an ISR may log).
  *
+ * USB host mode (usb_host.h, USB_HOST=1 builds only) borrows the same port: the usb task tears the device stack
+ * down, moves the USB clock onto the crystal, and runs TinyUSB's host stack until the host
+ * request ends, then brings the device back (role_to_host / role_to_device below). While it
+ * hosts, nothing outside the usb task may touch the device stack: s_role_host gates the two
+ * calls other tasks make into it (the NCM link state and the wake-up kick).
+ *
  * The ICACHE is on for the code region only (main.c icache_init); the UID area stays
  * uncached. See the UID read note in board_uid.h.
  */
 #include "pod_policy.h"
 #include "usb_device.h"
+#if defined(BENCHPOD_USB_HOST)
+#include "usb_host.h"
+#include "board_caps.h"
+#endif
 #include "console_io.h"
 #include "board_uid.h"
 
@@ -78,9 +88,61 @@ static void usb_hw_init(void)
     HAL_NVIC_SetPriority(USB_DRD_FS_IRQn, 6, 0);
 }
 
+#if defined(BENCHPOD_USB_HOST)
+/* USB kernel clock for host mode: PLL3Q = 48 MHz from the 25 MHz crystal (25 / 5 x 96 / 10).
+   A host times the bus itself, so it needs the crystal's accuracy (full speed: 0.25 %); HSI48
+   is only good enough as a device, where the CRS trims it to the host's SOF. Nothing else
+   uses PLL3. False when the crystal is not running or the PLL does not lock. */
+static bool usb_clock_host(void)
+{
+    if (!__HAL_RCC_GET_FLAG(RCC_FLAG_HSERDY)) return false;
+    RCC_PeriphCLKInitTypeDef pclk = {0};
+    pclk.PeriphClockSelection = RCC_PERIPHCLK_USB;
+    pclk.UsbClockSelection    = RCC_USBCLKSOURCE_PLL3Q;
+    pclk.PLL3.PLL3Source      = RCC_PLL3_SOURCE_HSE;
+    pclk.PLL3.PLL3M           = 5;
+    pclk.PLL3.PLL3N           = 96;
+    pclk.PLL3.PLL3P           = 2;
+    pclk.PLL3.PLL3Q           = 10;
+    pclk.PLL3.PLL3R           = 2;
+    pclk.PLL3.PLL3RGE         = RCC_PLL3_VCIRANGE_2;      /* 4..8 MHz input */
+    pclk.PLL3.PLL3VCOSEL      = RCC_PLL3_VCORANGE_WIDE;   /* 192..836 MHz (480) */
+    pclk.PLL3.PLL3FRACN       = 0;
+    pclk.PLL3.PLL3ClockOut    = RCC_PLL3_DIVQ;
+    return HAL_RCCEx_PeriphCLKConfig(&pclk) == HAL_OK;
+}
+
+/* Back to HSI48 (the CRS kept its settings and trims again once the host's SOF arrives),
+   then PLL3 off. */
+static void usb_clock_device(void)
+{
+    RCC_PeriphCLKInitTypeDef pclk = {0};
+    pclk.PeriphClockSelection = RCC_PERIPHCLK_USB;
+    pclk.UsbClockSelection    = RCC_USBCLKSOURCE_HSI48;
+    HAL_RCCEx_PeriphCLKConfig(&pclk);
+    __HAL_RCC_PLL3_DISABLE();
+}
+
+/* PC9 USB_SEL (board_caps.usb_sel): high moves the MCU's USB to USB-A. Low, and then an input
+   so the board's pull-down holds it, for USB-C. Untouched on boards without the switch. */
+static void usb_sel_set(bool usb_a)
+{
+    if (!board_caps()->usb_sel) return;
+    GPIO_InitTypeDef gpio = {0};
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    gpio.Pin   = GPIO_PIN_9;
+    gpio.Pull  = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, usb_a ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    gpio.Mode  = usb_a ? GPIO_MODE_OUTPUT_PP : GPIO_MODE_INPUT;
+    HAL_GPIO_Init(GPIOC, &gpio);
+}
+#endif /* BENCHPOD_USB_HOST */
+
+/* Device or host: TinyUSB dispatches on the role the port was started in. */
 void USB_DRD_FS_IRQHandler(void)
 {
-    tud_int_handler(BOARD_TUD_RHPORT);
+    tusb_int_handler(BOARD_TUD_RHPORT, true);
 }
 
 /* ---- critical section usable from a task, an ISR or before the scheduler -------------- */
@@ -104,6 +166,9 @@ static inline void crit_exit(uint32_t saved)
 static uint8_t           s_con_ring[TX_RING_SIZE];
 static volatile uint16_t s_con_head, s_con_tail;
 static volatile bool     s_mounted;
+/* The usb task runs the host stack (set before the device stack goes down, cleared once it is
+   back): other tasks must not queue work for the device stack. */
+static volatile bool     s_role_host;
 
 int cdc_if_connected(void) { return s_mounted; }
 
@@ -191,7 +256,9 @@ void usb_net_set_enabled(bool on)
 {
     if (s_net_enabled == on) return;
     s_net_enabled = on;
-    if (s_net_setting)                              /* else there is no NCM function */
+    /* Else there is no NCM function, or the device stack is down for host mode: the link
+       state is read again at enumeration (tud_network_default_link_state_cb). */
+    if (s_net_setting && !s_role_host)
         tud_network_link_state(BOARD_TUD_RHPORT, on);   /* deferred onto the usb task */
 }
 
@@ -220,7 +287,7 @@ static void kick_cb(void *param) { (void)param; s_kick = false; }
    ends its wait. One wake-up in flight is enough. */
 static void usb_task_kick(void)
 {
-    if (s_kick || !s_usb_task) return;
+    if (s_kick || !s_usb_task || s_role_host) return;
     s_kick = true;
     usbd_defer_func(kick_cb, NULL, false);
 }
@@ -377,10 +444,81 @@ static void usb_reattach(void)
     tud_connect();
 }
 
+/* ---- host mode (usb_host.h) ---- */
+#if defined(BENCHPOD_USB_HOST)
+static usb_host_port_t s_host_port;   /* the role the usb task runs: NONE = device */
+
+static void device_start(void)
+{
+    tusb_rhport_init_t dev_init = { .role = TUSB_ROLE_DEVICE, .speed = TUSB_SPEED_AUTO };
+    if (!tusb_init(BOARD_TUD_RHPORT, &dev_init)) return;
+    /* A fresh attach: the computer enumerates the pod again (as after the bootloader). */
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(50));
+    tud_connect();
+}
+
+static void role_to_device(void)
+{
+    if (s_host_port != USB_HOST_PORT_NONE) tuh_deinit(BOARD_TUH_RHPORT);
+    s_host_port = USB_HOST_PORT_NONE;
+    usb_sel_set(false);
+    usb_clock_device();
+    usb_host_role_changed(USB_HOST_PORT_NONE);
+    device_start();
+    s_role_host = false;
+}
+
+static void role_to_host(usb_host_port_t port)
+{
+    /* The reply that asked for it goes out over LAN/cloud; a console line still queued for
+       the computer gets a last chance. */
+    for (int i = 0; i < 20 && s_con_head != s_con_tail; i++) {
+        tud_task_ext(1, false);
+        console_tx_pump();
+    }
+    s_role_host = true;
+    vTaskDelay(pdMS_TO_TICKS(20));   /* a task already inside a guarded call finishes it */
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    tud_deinit(BOARD_TUD_RHPORT);
+    s_mounted = false;
+
+    if (!usb_clock_host()) {
+        usb_host_stop();
+        role_to_device();
+        return;
+    }
+    if (port == USB_HOST_PORT_USB_A) {
+        usb_sel_set(true);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    tusb_rhport_init_t host_init = { .role = TUSB_ROLE_HOST, .speed = TUSB_SPEED_FULL };
+    if (!tusb_init(BOARD_TUH_RHPORT, &host_init)) {
+        usb_host_stop();
+        role_to_device();
+        return;
+    }
+    s_host_port = port;
+    usb_host_role_changed(port);
+}
+#endif /* BENCHPOD_USB_HOST */
+
 static void usb_task(void *arg)
 {
     (void)arg;
     for (;;) {
+#if defined(BENCHPOD_USB_HOST)
+        usb_host_port_t want = usb_host_wanted();
+        if (want != s_host_port) {
+            if (s_host_port != USB_HOST_PORT_NONE) role_to_device();
+            if (want != USB_HOST_PORT_NONE) role_to_host(want);
+        }
+        if (s_host_port != USB_HOST_PORT_NONE) {
+            tuh_task_ext(1, false);
+            continue;
+        }
+#endif
         if (s_reattach_at && (int32_t)(HAL_GetTick() - s_reattach_at) >= 0) {
             s_reattach_at = 0;
             s_net_setting = s_net_setting_next;

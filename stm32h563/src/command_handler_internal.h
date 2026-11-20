@@ -164,6 +164,8 @@ void handle_identity_wipe(int conn_id, const char *json);   /* command_handler_r
 void handle_usb_reattach(int conn_id, const char *json);
 void handle_wifi_bridge(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
+/* USB host mode (command_handler_usb.c). */
+void handle_usb_host(int conn_id, const char *json);
 
 /* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */
 void handle_module(int conn_id, const char *json);

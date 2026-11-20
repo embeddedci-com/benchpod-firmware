@@ -872,3 +872,10 @@ firmware = "next"
 docs = "usb-serial-interface.md#removed-in-firmware-400"
 dated = "code"
 note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link). The console flash-esp32 has no command: OTA target esp installs the image. wifi_status adds rssi_dbm (built-in Wi-Fi) and, on the bridge object, identity, image, boot, reboots, emc."
+
+[features.usb_host]
+rev = 10
+firmware = "next"
+docs = "API.md#usb_host--usb-host-mode"
+dated = "code"
+note = "Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."

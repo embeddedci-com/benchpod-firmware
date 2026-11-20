@@ -990,3 +990,53 @@ sdk = "connect to the pod by its address without a port (the SDK uses TLS on 844
 cli = "connect by the pod's address without a port (the CLI uses TLS on 8443), or with --connection usb"
 mcp = "connect to the pod's address without :8080 (TLS on 8443 is used), or to 'usb'"
 web = "Connect to the pod over TLS (port 8443) or USB."
+
+[BP0076]
+name = "usb_host_over_usb"
+area = "usb"
+since = "next"
+message = "USB host mode cannot start over the pod's own USB link"
+cause = "While the pod hosts a board on its USB port it is off the computer's USB, so the connection that asked would drop before the answer arrives. USB host mode starts only over the network (LAN or Wi-Fi) or the cloud."
+[BP0076.fix]
+sdk = "connect to the pod over the network or the cloud (Client(host) or 'embeddedci:<name>'), not 'usb', then start USB host mode again"
+cli = "connect to the pod over the network or the cloud (--connection <host> or embeddedci:<name>), not usb, then run the command again"
+mcp = "connect to the pod over the network or the cloud (connect with its host or 'embeddedci:<name>'), not 'usb', then try again"
+web = "Connect to the pod over the network or the cloud to use USB host mode."
+
+[BP0077]
+name = "usb_host_port_unavailable"
+area = "usb"
+since = "next"
+args = { port = "str" }
+message = "This pod has no USB host port {port}"
+cause = "Only pods with a USB-A host port can host a board there. Every pod can host on its USB-C port, but only on a bench rig with an adapter cable that powers the pod and carries the data lines to the board under test."
+[BP0077.fix]
+sdk = "use port='usb_c' with a USB-C adapter rig, or a pod with the USB-A host port"
+cli = "use --port usb_c with a USB-C adapter rig, or a pod with the USB-A host port"
+mcp = "tell the user this pod has no USB-A host port; port 'usb_c' works only with a USB-C adapter rig"
+web = "This pod has no USB-A host port."
+
+[BP0078]
+name = "usb_host_no_crystal"
+area = "usb"
+since = "next"
+message = "USB host mode needs the pod's crystal clock, which is not running"
+cause = "A USB host keeps the bus timing itself and needs a precise clock. The pod runs on its internal oscillator because the crystal did not start at boot."
+[BP0078.fix]
+sdk = "power cycle the pod; if bp.status() still shows the internal clock, contact support"
+cli = "power cycle the pod; if `benchpod status` still shows the internal clock, contact support"
+mcp = "ask the user to power cycle the pod; if it keeps happening, the pod needs support"
+web = "Power cycle the pod. If this keeps happening, contact support."
+
+[BP0079]
+name = "usb_host_other_port"
+area = "usb"
+since = "next"
+args = { port = "str" }
+message = "USB host mode is already running on {port}"
+cause = "The pod hosts one port at a time. A start for the same port renews the timeout; another port needs a stop first."
+[BP0079.fix]
+sdk = "stop USB host mode first (enabled=False), then start it on the other port"
+cli = "stop USB host mode first, then start it on the other port"
+mcp = "stop USB host mode first, then start it on the other port"
+web = "Stop USB host mode first."

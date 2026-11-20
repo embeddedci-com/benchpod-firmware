@@ -93,9 +93,13 @@ typedef enum {
     BP_E_PSRAM_BANDWIDTH = 73,
     BP_E_SIGNATURES_ALWAYS_REQUIRED = 74,
     BP_E_LAN_PLAINTEXT_OFF = 75,
+    BP_E_USB_HOST_OVER_USB = 76,
+    BP_E_USB_HOST_PORT_UNAVAILABLE = 77,
+    BP_E_USB_HOST_NO_CRYSTAL = 78,
+    BP_E_USB_HOST_OTHER_PORT = 79,
 } bp_errcode_t;
 
-#define BP_E_LAST 75
+#define BP_E_LAST 79
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1025,6 +1029,52 @@ static inline const char *bp_note_lan_plaintext_off(char *buf, size_t cap) {
 }
 static inline const char *bp_tag_lan_plaintext_off(const char *text) {
     return bp_err_tag(text, BP_E_LAN_PLAINTEXT_OFF, 0, 0);
+}
+/* BP0076: USB host mode cannot start over the pod's own USB link */
+static inline void bp_err_usb_host_over_usb(int conn_id) {
+    bp_error_send(conn_id, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+static inline const char *bp_note_usb_host_over_usb(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+static inline const char *bp_tag_usb_host_over_usb(const char *text) {
+    return bp_err_tag(text, BP_E_USB_HOST_OVER_USB, 0, 0);
+}
+/* BP0077: This pod has no USB host port {port} */
+static inline void bp_err_usb_host_port_unavailable(int conn_id, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
+}
+static inline const char *bp_note_usb_host_port_unavailable(char *buf, size_t cap, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
+}
+static inline const char *bp_tag_usb_host_port_unavailable(const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_HOST_PORT_UNAVAILABLE, a, 1);
+}
+/* BP0078: USB host mode needs the pod's crystal clock, which is not running */
+static inline void bp_err_usb_host_no_crystal(int conn_id) {
+    bp_error_send(conn_id, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+static inline const char *bp_note_usb_host_no_crystal(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+static inline const char *bp_tag_usb_host_no_crystal(const char *text) {
+    return bp_err_tag(text, BP_E_USB_HOST_NO_CRYSTAL, 0, 0);
+}
+/* BP0079: USB host mode is already running on {port} */
+static inline void bp_err_usb_host_other_port(int conn_id, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+static inline const char *bp_note_usb_host_other_port(char *buf, size_t cap, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_HOST_OTHER_PORT, a, 1);
+}
+static inline const char *bp_tag_usb_host_other_port(const char *text, const char *port) {
+    const bp_err_arg_t a[] = { {"port", port, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_HOST_OTHER_PORT, a, 1);
 }
 
 #endif /* BP_ERRORS_H */
