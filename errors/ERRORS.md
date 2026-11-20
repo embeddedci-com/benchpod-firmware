@@ -35,54 +35,54 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0027 | `lease_not_held` | lease | 3.10.13 | The pod holds no lease with id {id} |
 | BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on pin 21 ({mv} mV) |
 | BP0029 | `pull_rail_down` | io | 3.10.13 | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
-| BP0030 | `client_too_old` | protocol | next | Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) |
-| BP0031 | `la_pin_in_use` | io | next | LA{la} is in use by {owner} |
-| BP0032 | `la_pull_down_engaged` | io | next | LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) |
-| BP0033 | `la_pull_down_conflict` | io | next | LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason}) |
-| BP0034 | `la_dut_output` | io | next | LA{la} is wired to a DUT output, and {function} would drive against it |
-| BP0035 | `la_driven_pin` | io | next | LA{la} is driven by {function}, so it cannot be marked as a DUT output |
-| BP0036 | `la_not_gpio_output` | io | next | LA{la} is not a GPIO output (it is {function}) |
-| BP0037 | `la_voltage_pins_in_use` | io | next | The I/O voltage cannot change while pins are in use: {pins} |
-| BP0038 | `trigger_timeout` | capture | next | No {edge} edge on LA{la} within {timeout_ms} ms |
-| BP0039 | `sensor_trigger_timeout` | capture | next | No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus |
-| BP0040 | `lan_locked` | policy | next | The pod's LAN is locked: {cmd} needs the cloud or USB |
-| BP0041 | `policy_not_from_lan` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or the USB console |
-| BP0042 | `setting_cloud_or_usb` | policy | next | {setting} cannot be changed over the LAN: change it from the cloud or over USB |
-| BP0043 | `setting_device_only` | policy | next | {setting} can only be changed on the device: the USB console, or over the USB link |
-| BP0044 | `policy_loosen_usb_only` | policy | next, retired 4.0.0 | Only the USB console can loosen {setting} (now {now}) |
-| BP0045 | `role_required` | policy | next | {cmd} needs an organization owner or admin |
-| BP0046 | `no_analog_front_end` | board | next | This BenchPod has no analog front end, so it cannot run {cmd} |
-| BP0047 | `pod_busy` | busy | next | The pod is running another long command (a capture, measurement, upload or update) |
-| BP0048 | `storage_bus_busy` | busy | next | The pod's storage bus is in use: {what} |
-| BP0049 | `uart_session_open` | uart | next | A UART session is already open |
-| BP0050 | `swd_session_open` | flash | next | An SWD session is already running |
-| BP0051 | `update_in_progress` | update | next | A {target} update from {holder} is in progress |
-| BP0052 | `cloud_command_busy` | busy | next | The pod is still running the previous cloud command |
-| BP0053 | `reply_too_large` | protocol | next | The reply did not fit the pod's reply buffer |
-| BP0054 | `cloud_reply_too_large` | protocol | next | The reply is too large for the cloud channel ({bytes} bytes, limit {limit}) |
-| BP0055 | `sensor_instance_unknown` | sensors | next | The pod has no emulated sensor {instance} |
-| BP0056 | `no_module_link` | board | next | This BenchPod has no module link, so it cannot run {cmd} |
-| BP0057 | `image_switch_sensors_running` | sensors | next | The emulated sensors {sensors} need the emulation image; stop them before switching |
-| BP0058 | `fpga_image_required` | firmware | next | {feature} is not in the running gateware image; it needs the {image} image |
-| BP0059 | `fpga_image_sensors_first` | sensors | next | {feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image |
-| BP0060 | `ota_unknown_target` | update | next | {target} is not an update target this firmware knows |
-| BP0061 | `i2c_needs_pullups` | i2c | next | I2C needs pull-ups: LA{la} has none switched on |
-| BP0062 | `i2c_session_not_open` | i2c | next | No I2C session is open |
-| BP0063 | `i2c_engine_reset` | i2c | next | The I2C engine was reset, which ended the session |
-| BP0064 | `loop_sweep_with_map` | dac | next | The sweep input cannot be combined with an input map on this gateware |
-| BP0065 | `output_used_by_sensor` | sensors | next | The {output} output is played by the emulated sensor {instance} |
-| BP0066 | `step_busy` | io | next | A step pulse train is running |
-| BP0067 | `samples_out_of_range` | capture | next | samples must be 1 to {max} for this capture |
-| BP0068 | `la_rate_above_ceiling` | capture | next | LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples |
-| BP0069 | `la_rate_too_deep` | capture | next | LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples |
-| BP0070 | `capture_dual_too_deep` | capture | next | capture_dual takes at most {la_max} LA and {adc_max} ADC samples |
-| BP0071 | `capture_overflowed` | capture | next | The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s |
-| BP0072 | `psram_too_small` | capture | next | The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM |
-| BP0073 | `psram_bandwidth` | capture | next | The combined sample rate is more than the PSRAM bus can take |
-| BP0074 | `signatures_always_required` | policy | next | {setting} cannot be set to {want}: this firmware installs only signed images |
-| BP0075 | `lan_plaintext_off` | policy | next | The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off |
-| BP0076 | `usb_host_over_usb` | usb | next | USB host mode cannot start over the pod's own USB link |
-| BP0077 | `usb_host_port_unavailable` | usb | next | This pod has no USB host port {port} |
-| BP0078 | `usb_host_no_crystal` | usb | next | USB host mode needs the pod's crystal clock, which is not running |
-| BP0079 | `usb_host_other_port` | usb | next | USB host mode is already running on {port} |
-| BP0080 | `dac_pinout_mismatch` | analog | next | {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts |
+| BP0030 | `client_too_old` | protocol | 4.0.0 | Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) |
+| BP0031 | `la_pin_in_use` | io | 4.0.0 | LA{la} is in use by {owner} |
+| BP0032 | `la_pull_down_engaged` | io | 4.0.0 | LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) |
+| BP0033 | `la_pull_down_conflict` | io | 4.0.0 | LA{la} is used by {function}, which cannot work with the {ohms} pull-down ({reason}) |
+| BP0034 | `la_dut_output` | io | 4.0.0 | LA{la} is wired to a DUT output, and {function} would drive against it |
+| BP0035 | `la_driven_pin` | io | 4.0.0 | LA{la} is driven by {function}, so it cannot be marked as a DUT output |
+| BP0036 | `la_not_gpio_output` | io | 4.0.0 | LA{la} is not a GPIO output (it is {function}) |
+| BP0037 | `la_voltage_pins_in_use` | io | 4.0.0 | The I/O voltage cannot change while pins are in use: {pins} |
+| BP0038 | `trigger_timeout` | capture | 4.0.0 | No {edge} edge on LA{la} within {timeout_ms} ms |
+| BP0039 | `sensor_trigger_timeout` | capture | 4.0.0 | No I2C start on LA{la} (SDA of {instance}) within {timeout_ms} ms: the DUT did not use the I2C bus |
+| BP0040 | `lan_locked` | policy | 4.0.0 | The pod's LAN is locked: {cmd} needs the cloud or USB |
+| BP0041 | `policy_not_from_lan` | policy | 4.0.0 | {setting} cannot be changed over the LAN: change it from the cloud or the USB console |
+| BP0042 | `setting_cloud_or_usb` | policy | 4.0.0 | {setting} cannot be changed over the LAN: change it from the cloud or over USB |
+| BP0043 | `setting_device_only` | policy | 4.0.0 | {setting} can only be changed on the device: the USB console, or over the USB link |
+| BP0044 | `policy_loosen_usb_only` | policy | 4.0.0, retired 4.0.0 | Only the USB console can loosen {setting} (now {now}) |
+| BP0045 | `role_required` | policy | 4.0.0 | {cmd} needs an organization owner or admin |
+| BP0046 | `no_analog_front_end` | board | 4.0.0 | This BenchPod has no analog front end, so it cannot run {cmd} |
+| BP0047 | `pod_busy` | busy | 4.0.0 | The pod is running another long command (a capture, measurement, upload or update) |
+| BP0048 | `storage_bus_busy` | busy | 4.0.0 | The pod's storage bus is in use: {what} |
+| BP0049 | `uart_session_open` | uart | 4.0.0 | A UART session is already open |
+| BP0050 | `swd_session_open` | flash | 4.0.0 | An SWD session is already running |
+| BP0051 | `update_in_progress` | update | 4.0.0 | A {target} update from {holder} is in progress |
+| BP0052 | `cloud_command_busy` | busy | 4.0.0 | The pod is still running the previous cloud command |
+| BP0053 | `reply_too_large` | protocol | 4.0.0 | The reply did not fit the pod's reply buffer |
+| BP0054 | `cloud_reply_too_large` | protocol | 4.0.0 | The reply is too large for the cloud channel ({bytes} bytes, limit {limit}) |
+| BP0055 | `sensor_instance_unknown` | sensors | 4.0.0 | The pod has no emulated sensor {instance} |
+| BP0056 | `no_module_link` | board | 4.0.0 | This BenchPod has no module link, so it cannot run {cmd} |
+| BP0057 | `image_switch_sensors_running` | sensors | 4.0.0 | The emulated sensors {sensors} need the emulation image; stop them before switching |
+| BP0058 | `fpga_image_required` | firmware | 4.0.0 | {feature} is not in the running gateware image; it needs the {image} image |
+| BP0059 | `fpga_image_sensors_first` | sensors | 4.0.0 | {feature} is not in the emulation image the emulated sensors use; stop them, then switch to the {image} image |
+| BP0060 | `ota_unknown_target` | update | 4.0.0 | {target} is not an update target this firmware knows |
+| BP0061 | `i2c_needs_pullups` | i2c | 4.0.0 | I2C needs pull-ups: LA{la} has none switched on |
+| BP0062 | `i2c_session_not_open` | i2c | 4.0.0 | No I2C session is open |
+| BP0063 | `i2c_engine_reset` | i2c | 4.0.0 | The I2C engine was reset, which ended the session |
+| BP0064 | `loop_sweep_with_map` | dac | 4.0.0 | The sweep input cannot be combined with an input map on this gateware |
+| BP0065 | `output_used_by_sensor` | sensors | 4.0.0 | The {output} output is played by the emulated sensor {instance} |
+| BP0066 | `step_busy` | io | 4.0.0 | A step pulse train is running |
+| BP0067 | `samples_out_of_range` | capture | 4.0.0 | samples must be 1 to {max} for this capture |
+| BP0068 | `la_rate_above_ceiling` | capture | 4.0.0 | LA at {rate_mhz} MS/s does not fit: with ADC samples in the capture the raw LA runs at most {max_mhz} MS/s on this gateware, {fit_mhz} MS/s for {samples} samples |
+| BP0069 | `la_rate_too_deep` | capture | 4.0.0 | LA at {rate_mhz} MS/s does not fit {samples} samples: at most {max_samples} samples at {rate_mhz} MS/s, or at most {fit_mhz} MS/s for {samples} samples |
+| BP0070 | `capture_dual_too_deep` | capture | 4.0.0 | capture_dual takes at most {la_max} LA and {adc_max} ADC samples |
+| BP0071 | `capture_overflowed` | capture | 4.0.0 | The capture overflowed: the PSRAM could not keep up with LA {la_ksps} kS/s and ADC {adc_ksps} kS/s |
+| BP0072 | `psram_too_small` | capture | 4.0.0 | The capture is too deep: LA, ADC and a loaded DAC waveform together exceed the 8 MB PSRAM |
+| BP0073 | `psram_bandwidth` | capture | 4.0.0 | The combined sample rate is more than the PSRAM bus can take |
+| BP0074 | `signatures_always_required` | policy | 4.0.0 | {setting} cannot be set to {want}: this firmware installs only signed images |
+| BP0075 | `lan_plaintext_off` | policy | 4.0.0 | The pod serves its JSON API on the LAN over TLS only (port 8443): plaintext port 8080 is off |
+| BP0076 | `usb_host_over_usb` | usb | 4.0.0 | USB host mode cannot start over the pod's own USB link |
+| BP0077 | `usb_host_port_unavailable` | usb | 4.0.0 | This pod has no USB host port {port} |
+| BP0078 | `usb_host_no_crystal` | usb | 4.0.0 | USB host mode needs the pod's crystal clock, which is not running |
+| BP0079 | `usb_host_other_port` | usb | 4.0.0 | USB host mode is already running on {port} |
+| BP0080 | `dac_pinout_mismatch` | analog | 4.0.0 | {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts |

@@ -770,7 +770,7 @@ gateware that supports this.
 
 From firmware 3.10.11 the frame also carries `features_rev`, `gateware_version` (the
 running gateware) and `fpga_image` (as in `status`), so the server takes the features from the
-[features table](#features-table). Firmware after 3.10.13 adds `api` and `min_client_api`, the
+[features table](#features-table). Firmware 4.0.0+ adds `api` and `min_client_api`, the
 [client API level](#client-compatibility). Firmware 4.0.0 sends no per-feature flags in it
 (`ota`, `scope`, `dac`, `dac_control_loop`, `capture_b64`, `sensors`, `lan_tls` and the rest): the
 server takes the features from the table. The frame keeps the values (versions, policies,
@@ -1818,8 +1818,8 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `safe_mode`, `safe_reason` | boolean, string | Safe mode after repeated crashes at boot, and what it turned off. See [Gates](#gates-that-apply-to-every-command). The short form cuts `safe_reason` to 48 characters. |
 | `boot_health_cut` | boolean | Present (`true`) only when the short form cut `last_crash` or `safe_reason`. |
 | `features_rev` | integer | The revision of the [features table](#features-table) this firmware is built from. |
-| `api` | integer | Firmware after 3.10.13: the [client API level](#client-compatibility) this firmware speaks. |
-| `min_client_api` | integer | Firmware after 3.10.13: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
+| `api` | integer | Firmware 4.0.0+: the [client API level](#client-compatibility) this firmware speaks. |
+| `min_client_api` | integer | Firmware 4.0.0+: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
 | `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
@@ -1850,7 +1850,7 @@ know yet: update the client.
 
 #### Client compatibility
 
-Firmware after 3.10.13 (4.0.0). `features_rev` only adds: a client older than the pod misses the new
+Firmware 4.0.0+. `features_rev` only adds: a client older than the pod misses the new
 features and can warn. The client API level is for the other kind of change, one a client built
 for an older level would misread: a reply that changes shape, a field that changes meaning or
 units, or a refusal text replaced so clients that match on it break.
@@ -3210,7 +3210,7 @@ Sequence: boot pin low, EN low 100 ms, EN released, 50 ms, SYNC (retried); the b
 released once the ROM answers. Then CHANGE_BAUDRATE, SPI_ATTACH, SPI_SET_PARAMS, FLASH_BEGIN
 (the ROM erases the region, seconds for a large image), the data in 1 KB blocks, the chip's MD5
 of the region, FLASH_END. With `run` the pod pulses EN with the boot pin released. Every pin is
-released at the end, whatever the result. With firmware after 3.10.13 the pod also holds `rx`
+released at the end, whatever the result. With firmware 4.0.0+ the pod also holds `rx`
 high with its pull-up for the run, where the channel has one (as the UART proxy does, see
 [RX pull hold](#uart_proxy_start--transparent-uart-bridge)), and puts back what the channel did
 before at the end. Write each region of a multi-file image (bootloader, partition table,
