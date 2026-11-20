@@ -23,8 +23,8 @@ static const la_pull_caps_t s_caps_tca9554[LA_PULL_CHANNELS + 1] = {
     /* LA9..LA14: no resistor */
 };
 
-/* Digital v3r4: every channel up or down with 10k, 2.2k or both.  "pullup":"on" engages up, and
-   the ohms shown while off are the 10k default. */
+/* Digital v3r4: every channel up or down with 10k, 2.2k or both; the default direction is up
+   and the default strength 10k. */
 #define V3R4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, \
                     LA_PULL_STR_BIT(PULL_STR_10K) | LA_PULL_STR_BIT(PULL_STR_2K2) | LA_PULL_STR_BIT(PULL_STR_BOTH), "10k" }
 static const la_pull_caps_t s_caps_exp[LA_PULL_CHANNELS + 1] = {
@@ -184,18 +184,10 @@ void la_pull_emit_dirs(bp_emit_t *e, unsigned la)
     bp_emit(e, "[%s%s%s]", up ? "\"up\"" : "", up && down ? "," : "", down ? "\"down\"" : "");
 }
 
-la_pull_req_t la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want)
+la_pull_req_t la_pull_request(unsigned la, const char *pull, la_pull_dir_t *want)
 {
     la_pull_dir_t d = LA_PULL_NONE;
-    if (pull) {
-        if (!la_pull_dir_parse(pull, &d)) return LA_PULL_REQ_BAD_VALUE;
-    } else if (pullup) {
-        /* the alias: "on" / "1" engage the default direction */
-        bool on = (pullup[0] == 'o' || pullup[0] == 'O') ? (pullup[1] == 'n' || pullup[1] == 'N')
-                                                         : (atoi(pullup) != 0);
-        d = on ? la_pull_dir(la) : LA_PULL_NONE;
-        if (on && d == LA_PULL_NONE) { *want = LA_PULL_UP; return LA_PULL_REQ_NO_PULL; }
-    }
+    if (!pull || !la_pull_dir_parse(pull, &d)) return LA_PULL_REQ_BAD_VALUE;
     *want = d;   /* also on a refusal: the reply names what was asked for */
     if (d != LA_PULL_NONE) {
         if (!la_pull_caps(la).dirs)     return LA_PULL_REQ_NO_PULL;

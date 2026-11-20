@@ -141,37 +141,37 @@ static void test_tca9554_board(int rev, const char *name) {
     CHECK(la_pull_available(), "%s: pulls available at 3.3 V", name);
 
     la("{\"cmd\":\"la\",\"la\":1,\"pull\":\"up\"}");
-    REPLY("ok:{\"la\":1,\"pullup\":1,\"ohms\":\"4.7k\",\"pull\":\"up\",\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
+    REPLY("ok:{\"la\":1,\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
     CHECK(g_tca_out == (1u << 2) && (g_tca_dir & (1u << 2)), "%s: LA1 is CTRL1 = TCA P2 (out %02x)", name, g_tca_out);
     CHECK((la_pull_asked(1) != LA_PULL_NONE) && la_pull_live(1), "%s: LA1 engaged", name);
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":1,\"pullups_available\":1}");
 
     /* the older alias engages the channel's one direction: LA7 pulls down */
-    la("{\"cmd\":\"la\",\"la\":7,\"pullup\":\"on\"}");
-    REPLY("ok:{\"la\":7,\"pullup\":1,\"ohms\":\"10k\",\"pull\":\"down\",\"state\":\"down\",\"dirs\":[\"down\"],\"pullups_available\":1}");
+    la("{\"cmd\":\"la\",\"la\":7,\"pull\":\"down\"}");
+    REPLY("ok:{\"la\":7,\"state\":\"down\",\"dirs\":[\"down\"],\"pullups_available\":1}");
     CHECK(g_tca_out == ((1u << 2) | (1u << 5)), "%s: LA7 is TCA P5 (out %02x)", name, g_tca_out);
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":65,\"pullups_available\":1}");
-    la("{\"cmd\":\"la\",\"la\":7,\"pullup\":\"off\"}");
-    REPLY("ok:{\"la\":7,\"pullup\":0,\"ohms\":\"10k\",\"pull\":\"down\",\"state\":\"off\",\"dirs\":[\"down\"],\"pullups_available\":1}");
+    la("{\"cmd\":\"la\",\"la\":7,\"pull\":\"off\"}");
+    REPLY("ok:{\"la\":7,\"state\":\"off\",\"dirs\":[\"down\"],\"pullups_available\":1}");
 
     /* refusals */
     la("{\"cmd\":\"la\",\"la\":1,\"pull\":\"down\"}");
     CHECK(g_code == BP_E_LA_PULL_DIRECTION && strcmp(g_arg0, "1") == 0, "%s: BP0024 (%d %s)", name, g_code, g_arg0);
     la("{\"cmd\":\"la\",\"la\":9,\"pull\":\"up\"}");
     CHECK(g_code == BP_E_LA_NO_PULL && strcmp(g_arg0, "9") == 0, "%s: BP0023 (%d %s)", name, g_code, g_arg0);
-    la("{\"cmd\":\"la\",\"la\":9,\"pullup\":\"on\"}");
-    CHECK(g_code == BP_E_LA_NO_PULL, "%s: alias on a channel without one: BP0023 (%d)", name, g_code);
+    la("{\"cmd\":\"la\",\"la\":9,\"pullup\":\"on\"}");   /* the alias is gone (4.0.0) */
+    REPLY("err:pullup is gone (firmware 4.0.0): use pull up, down or off");
     la("{\"cmd\":\"la\",\"la\":9,\"pull\":\"off\"}");   /* off is fine without a resistor */
-    REPLY("ok:{\"la\":9,\"pullup\":0,\"ohms\":\"\",\"pull\":\"none\",\"state\":\"off\",\"dirs\":[],\"pullups_available\":1}");
+    REPLY("ok:{\"la\":9,\"state\":\"off\",\"dirs\":[],\"pullups_available\":1}");
     la("{\"cmd\":\"la\",\"la\":1,\"pull\":\"sideways\"}");
     REPLY("err:pull must be up, down or off");
     la("{\"cmd\":\"la\",\"la\":15}");
     REPLY("err:LA15 is not a pin (use 1..14)");
     /* "strength" is a v3r4 argument: older boards ignore it, as older firmware does */
     la("{\"cmd\":\"la\",\"la\":3,\"pull\":\"up\",\"strength\":\"5k\"}");
-    REPLY("ok:{\"la\":3,\"pullup\":1,\"ohms\":\"2.2k\",\"pull\":\"up\",\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
+    REPLY("ok:{\"la\":3,\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
 
     /* a pull-down under a line that idles high */
     uint8_t p = 8;
@@ -196,11 +196,11 @@ static void test_tca9554_board(int rev, const char *name) {
         REPLY("err:this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first");
         CHECK(!(la_pull_asked(2) != LA_PULL_NONE), "v2 at 1.8 V: LA2 stays off");
         la("{\"cmd\":\"la\",\"la\":1,\"pull\":\"off\"}");   /* turning one off is always allowed */
-        REPLY("ok:{\"la\":1,\"pullup\":0,\"ohms\":\"4.7k\",\"pull\":\"up\",\"state\":\"off\",\"dirs\":[\"up\"],\"pullups_available\":0}");
+        REPLY("ok:{\"la\":1,\"state\":\"off\",\"dirs\":[\"up\"],\"pullups_available\":0}");
     } else {
         CHECK(la_pull_available(), "%s at 1.8 V: pulls available", name);
         la("{\"cmd\":\"la\",\"la\":2,\"pull\":\"up\"}");
-        REPLY("ok:{\"la\":2,\"pullup\":1,\"ohms\":\"4.7k\",\"pull\":\"up\",\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
+        REPLY("ok:{\"la\":2,\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":1}");
     }
     g_vccio = g_io = LA_VCCIO_UNSET;
     CHECK(!la_pull_available(), "%s: no pulls before an I/O voltage is set", name);
@@ -223,14 +223,14 @@ static void test_v3r4(void) {
     CHECK(la_pull_available(), "v3r4: pulls available with pin 21 up");
 
     la("{\"cmd\":\"la\",\"la\":12,\"pull\":\"down\",\"strength\":\"2.2k\"}");
-    REPLY("ok:{\"la\":12,\"pullup\":1,\"ohms\":\"2.2k\",\"pull\":\"down\",\"state\":\"down\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":12,\"state\":\"down\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"2.2k\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":1}");
     /* no strength: from the pin's function (a free pin at 3.3 V: 10k) */
     la("{\"cmd\":\"la\",\"la\":3,\"pull\":\"up\"}");
-    REPLY("ok:{\"la\":3,\"pullup\":1,\"ohms\":\"10k\",\"pull\":\"up\",\"state\":\"up\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":3,\"state\":\"up\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"10k\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":1}");
     la("{\"cmd\":\"la\",\"la\":3,\"pull\":\"up\",\"strength\":\"both\"}");
-    REPLY("ok:{\"la\":3,\"pullup\":1,\"ohms\":\"1.8k\",\"pull\":\"up\",\"state\":\"up\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":3,\"state\":\"up\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"both\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":1}");
     la("{\"cmd\":\"la\",\"la\":3,\"pull\":\"up\",\"strength\":\"5k\"}");
     REPLY("err:strength must be 10k, 2.2k or both");
@@ -255,7 +255,7 @@ static void test_v3r4(void) {
     /* the pod switches the DUT off: pull-ups are held off, pull-downs stay */
     power(false);
     la("{\"cmd\":\"la\",\"la\":3}");
-    REPLY("ok:{\"la\":3,\"pullup\":0,\"ohms\":\"1.8k\",\"pull\":\"up\",\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":3,\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"both\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"held\":\"dut_off\",\"pullups_available\":1}");
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":2048,\"pullups_available\":1,\"held\":\"dut_off\",\"asked_mask\":2052}");
@@ -268,7 +268,7 @@ static void test_v3r4(void) {
     rail(false);
     CHECK(!la_pull_available(), "v3r4: no pulls with pin 21 down");
     la("{\"cmd\":\"la\",\"la\":12}");
-    REPLY("ok:{\"la\":12,\"pullup\":0,\"ohms\":\"2.2k\",\"pull\":\"down\",\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":12,\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"2.2k\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"held\":\"pin21_down\",\"pullups_available\":0}");
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":0,\"pullups_available\":0,\"held\":\"pin21_down\",\"asked_mask\":2052}");
@@ -295,7 +295,7 @@ static void test_v3r4(void) {
     CHECK(strstr(g_reply, "\"held\":\"fault\"") != NULL, "v3r4: held fault: %s", g_reply);
     g_i2c_fail = false;
     la("{\"cmd\":\"la\",\"la\":6,\"pull\":\"up\"}");
-    CHECK(strncmp(g_reply, "ok:{\"la\":6,\"pullup\":1,", 22) == 0, "v3r4: the retry: %s", g_reply);
+    CHECK(strstr(g_reply, "ok:{\"la\":6,\"state\":\"up\",") == g_reply, "v3r4: the retry: %s", g_reply);
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":2084,\"pullups_available\":1}");
 
@@ -303,7 +303,7 @@ static void test_v3r4(void) {
     la("{\"cmd\":\"la\"}");
     REPLY("ok:{\"la_pullup_mask\":0,\"pullups_available\":1}");
     la("{\"cmd\":\"la\",\"la\":12}");
-    REPLY("ok:{\"la\":12,\"pullup\":0,\"ohms\":\"10k\",\"pull\":\"up\",\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
+    REPLY("ok:{\"la\":12,\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"none\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":1}");
 }
 

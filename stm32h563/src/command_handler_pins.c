@@ -363,9 +363,8 @@ static void handle_la_pull_mask(int conn_id) {
 /* {"cmd":"la","la":N} -> LA N's pull state (also the reply of a pull set).
    "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
    pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
-   "held" then says why, and strength/ohms/pull stay the setting the pod puts back. Elsewhere live
-   and asked are the same. The older fields stay for older hosts: "pullup" 1 when engaged, "pull"
-   the channel's default direction ("none" without a resistor), "ohms" its value. */
+   "held" then says why, and strength stays the setting the pod puts back. Elsewhere live and
+   asked are the same. (Firmware up to 3.10.13 also sent "pullup", "pull" and "ohms".) */
 static void handle_la_pull_query(int conn_id, unsigned la) {
     la_pull_caps_t caps = la_pull_caps(la);
     bool asked_on = la_pull_asked(la) != LA_PULL_NONE;
@@ -374,10 +373,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
     bp_emit_t e;
     char payload[200];
     bp_emit_init(&e, payload, sizeof(payload));
-    bp_emit(&e, "{\"la\":%u,\"pullup\":%d,\"ohms\":\"%s\",\"pull\":\"%s\",\"state\":\"%s\",\"dirs\":",
-            la, on ? 1 : 0, la_pull_ohms(la) ? la_pull_ohms(la) : "",
-            dflt == LA_PULL_NONE ? "none" : la_pull_dir_name(dflt),
-            la_pull_dir_name(on ? dflt : LA_PULL_NONE));
+    bp_emit(&e, "{\"la\":%u,\"state\":\"%s\",\"dirs\":", la, la_pull_dir_name(on ? dflt : LA_PULL_NONE));
     la_pull_emit_dirs(&e, la);
     /* v3r4: the strength engaged ("none" when off) and every strength the channel has. */
     if (caps.strengths) {
@@ -397,13 +393,11 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
 }
 
 /* {"cmd":"la","la":N,"pull":"up"|"down"|"off"[,"strength":"10k"|"2.2k"|"both"]}
-   {"cmd":"la","la":N,"pullup":"on"|"off"}   (the older form: on = the channel's direction)
    Switch LA N's pull resistor; a direction the channel's resistor can't pull is refused (BP0024),
    a channel without one too (BP0023).  false = refused (the error was sent). */
-static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
-                               const char *pull_s, const char *pullup_s) {
+static bool handle_la_pull_set(int conn_id, const char *json, unsigned la, const char *pull_s) {
     la_pull_dir_t want = LA_PULL_NONE;
-    switch (la_pull_request(la, pull_s, pullup_s, &want)) {
+    switch (la_pull_request(la, pull_s, &want)) {
     case LA_PULL_REQ_OK: break;
     case LA_PULL_REQ_BAD_VALUE:
         send_error(conn_id, "pull must be up, down or off");
@@ -465,7 +459,7 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la,
 /* The `la` verb: three commands, told apart by their fields.
  *   "steps"               a step train (handle_la_step)
  *   no "la"               the pull bitmask (handle_la_pull_mask)
- *   "la" with "pull" or "pullup"   switch the pull, then report it (handle_la_pull_set)
+ *   "la" with "pull"   switch the pull, then report it (handle_la_pull_set)
  *   "la" alone            report the pull (handle_la_pull_query)
  *
  * This replaces the old gpio_set/gpio_step/pullup/pullup_status commands. Active
@@ -485,12 +479,14 @@ void handle_la(int conn_id, const char *json) {
         send_error(conn_id, m);
         return;
     }
-    char pull_s[8] = {0}, pullup_s[8] = {0};
-    bool has_pull = json_get_value(json, "pull", pull_s, sizeof(pull_s));
-    bool has_pullup = json_get_value(json, "pullup", pullup_s, sizeof(pullup_s));
-    if ((has_pull || has_pullup) &&
-        !handle_la_pull_set(conn_id, json, la, has_pull ? pull_s : NULL, has_pullup ? pullup_s : NULL))
+    char pull_s[8] = {0};
+    if (json_get_value(json, "pull", pull_s, sizeof(pull_s))) {
+        if (!handle_la_pull_set(conn_id, json, la, pull_s)) return;
+    } else if (bp_json_get(json, "pullup", pull_s, sizeof(pull_s))) {
+        /* The "pullup":"on"|"off" alias of firmware up to 3.10.13. */
+        send_error(conn_id, "pullup is gone (firmware 4.0.0): use pull up, down or off");
         return;
+    }
     handle_la_pull_query(conn_id, la);
 }
 

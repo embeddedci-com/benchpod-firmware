@@ -120,29 +120,20 @@ static void test_pull_table_and_requests(void) {
 
     /* "pull": the direction asked for */
     d = LA_PULL_DOWN;
-    CHECK(la_pull_request(1, "up", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
-    CHECK(la_pull_request(1, "off", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
-    CHECK(la_pull_request(7, "down", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
+    CHECK(la_pull_request(1, "up", &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
+    CHECK(la_pull_request(1, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    CHECK(la_pull_request(7, "down", &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
     d = LA_PULL_NONE;
-    CHECK(la_pull_request(7, "up", NULL, &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_UP);   /* BP0024 want */
-    CHECK(la_pull_request(3, "down", NULL, &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_DOWN);
-    CHECK(la_pull_request(9, "up", NULL, &d) == LA_PULL_REQ_NO_PULL);
-    CHECK(la_pull_request(14, "down", NULL, &d) == LA_PULL_REQ_NO_PULL);
+    CHECK(la_pull_request(7, "up", &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_UP);   /* BP0024 want */
+    CHECK(la_pull_request(3, "down", &d) == LA_PULL_REQ_DIRECTION && d == LA_PULL_DOWN);
+    CHECK(la_pull_request(9, "up", &d) == LA_PULL_REQ_NO_PULL);
+    CHECK(la_pull_request(14, "down", &d) == LA_PULL_REQ_NO_PULL);
     d = LA_PULL_UP;
-    CHECK(la_pull_request(9, "off", NULL, &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);  /* nothing to do */
-    CHECK(la_pull_request(1, "sideways", NULL, &d) == LA_PULL_REQ_BAD_VALUE);
-    CHECK(la_pull_request(1, "on", NULL, &d) == LA_PULL_REQ_BAD_VALUE);   /* on/off is the alias' */
+    CHECK(la_pull_request(9, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);  /* nothing to do */
+    CHECK(la_pull_request(1, "sideways", &d) == LA_PULL_REQ_BAD_VALUE);
+    CHECK(la_pull_request(1, "on", &d) == LA_PULL_REQ_BAD_VALUE);   /* on/off was the old alias' */
 
-    /* "pullup": the older alias, on = the channel's own direction */
-    CHECK(la_pull_request(2, NULL, "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_UP);
-    CHECK(la_pull_request(8, NULL, "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
-    CHECK(la_pull_request(8, NULL, "1", &d) == LA_PULL_REQ_OK && d == LA_PULL_DOWN);
-    CHECK(la_pull_request(8, NULL, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
-    CHECK(la_pull_request(8, NULL, "0", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
-    CHECK(la_pull_request(10, NULL, "on", &d) == LA_PULL_REQ_NO_PULL);
-    CHECK(la_pull_request(10, NULL, "off", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
-    /* both given: "pull" wins */
-    CHECK(la_pull_request(7, "off", "on", &d) == LA_PULL_REQ_OK && d == LA_PULL_NONE);
+    CHECK(la_pull_request(1, NULL, &d) == LA_PULL_REQ_BAD_VALUE);   /* the "pullup" alias is gone */
 
     /* the supported directions as JSON */
     char buf[32];
@@ -452,8 +443,8 @@ static void test_pull_v3r4(void) {
     CHECK_STR(la_pull_ohms(7), "10k");
     /* up/down/off requests: every direction is fine on every channel */
     la_pull_dir_t want;
-    CHECK(la_pull_request(12, "down", NULL, &want) == LA_PULL_REQ_OK && want == LA_PULL_DOWN);
-    CHECK(la_pull_request(3, NULL, "on", &want) == LA_PULL_REQ_OK && want == LA_PULL_UP);
+    CHECK(la_pull_request(12, "down", &want) == LA_PULL_REQ_OK && want == LA_PULL_DOWN);
+    CHECK(la_pull_request(3, "up", &want) == LA_PULL_REQ_OK && want == LA_PULL_UP);
 
     /* strength from the function */
     CHECK(la_pull_strength_for(1, 3300) == PULL_STR_10K);                 /* nothing on it */

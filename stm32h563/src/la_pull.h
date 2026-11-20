@@ -40,7 +40,7 @@ const char *pull_str_name(pull_str_t s);   /* "10k", "2.2k", "both", "none" */
 /* ---- what a channel can do ---- */
 typedef struct {
     uint8_t     dirs;        /* LA_PULL_BIT of each direction it can pull; 0 = no resistor */
-    uint8_t     dflt;        /* la_pull_dir_t "pullup":"on" engages */
+    uint8_t     dflt;        /* la_pull_dir_t: the channel's default direction */
     uint8_t     strengths;   /* LA_PULL_STR_BIT of each strength it offers; 0 = fixed resistor */
     const char *ohms;        /* the value shown while off ("4.7k"), NULL without a resistor */
 } la_pull_caps_t;
@@ -61,7 +61,7 @@ bool           la_pull_both_ways(void);
 bool           la_pull_rail_is_pin21(void);
 
 /* The direction the channel reports: the one engaged when the host asked for one, else its
-   default (the one "pullup":"on" engages); LA_PULL_NONE without a resistor. */
+   default; LA_PULL_NONE without a resistor. */
 la_pull_dir_t  la_pull_dir(unsigned la);
 /* The resistor's value as text: what is engaged ("1.8k" for both on v3r4), else the default
    ("4.7k"); NULL on a channel without one. */
@@ -133,7 +133,7 @@ typedef enum {
     LA_PULL_REQ_NO_PULL,       /* the channel has no resistor (BP0023) */
     LA_PULL_REQ_DIRECTION,     /* the resistor can't pull that way (BP0024) */
 } la_pull_req_t;
-la_pull_req_t  la_pull_request(unsigned la, const char *pull, const char *pullup, la_pull_dir_t *want);
+la_pull_req_t  la_pull_request(unsigned la, const char *pull, la_pull_dir_t *want);
 
 /* ---- backends (pull_tca9554.c, pull_exp.c; host tests bring fakes) ---- */
 typedef struct {

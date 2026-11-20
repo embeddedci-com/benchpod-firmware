@@ -2032,8 +2032,7 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 ### `la` — logic-analyzer pin control
 
 A single command for the LA bank. The action is inferred from the fields present:
-**step** (when `steps` is given), **pull set** (when `pull`, or the older `pullup`, is
-given), **pull query** (a bare `la`), or **pull bitmask** (no `la`). It replaces the former
+**step** (when `steps` is given), **pull set** (when `pull` is given), **pull query** (a bare `la`), or **pull bitmask** (no `la`). It replaces the former
 `gpio_set` / `gpio_step` / `pullup` / `pullup_status` commands. There is no active-drive
 action here (that is [`gpio`](#gpio--drive-and-read-la-pins-as-gpio)); a pull resistor
 sets a line's idle level.
@@ -2098,30 +2097,27 @@ All of them default to **off** at boot.
 
 - `la` (required for a per-pin op): LA pin `1`-`14`.
 - `pull` (optional, firmware with the `la_pull_dir` feature): `"up"`, `"down"` or `"off"`.
-- `pullup` (optional, the older form, still accepted): `"on"`/`"off"` (or `1`/`0`). `on`
-  engages the channel's own direction: on boards before digital v3r4 `up` on LA1-LA6 and
-  `down` on LA7/LA8; on digital v3r4 `up` on every channel. `pull` wins when both are given.
-- **Omit both** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
+- **Omit it** (a bare `{"cmd":"la","la":N}`) to **query** the current state without
   changing it.
+- `pullup` (`"on"`/`"off"`, the older form of `pull`) is gone in firmware 4.0.0: the pod refuses
+  it and says to use `pull`. Firmware up to 3.10.13 took it, `on` engaging the channel's own
+  direction.
 
 Response:
 
 ```json
-{"status": "ok", "data": {"la": 3, "pullup": 1, "ohms": "2.2k", "pull": "up", "state": "up", "dirs": ["up"], "pullups_available": 1}}
+{"status": "ok", "data": {"la": 3, "state": "up", "dirs": ["up"], "pullups_available": 1}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `state` | What the channel does now: `"up"`, `"down"` or `"off"`. |
 | `dirs` | Every direction the channel can pull: `["up"]`, `["down"]`, `["up","down"]`, or `[]` without a resistor. |
-| `ohms` | The resistor's value (`""` without one). |
-| `pull` | The channel's default direction, the one `pullup:"on"` engages (`"none"` without a resistor). |
-| `pullup` | `1` when the resistor is engaged (kept for older hosts; `state` says the same). |
 | `pullups_available` | `1` when a pull can be engaged now (a bank voltage is set): at `0` every `up`/`down` request is refused. |
 
-Firmware before the `la_pull_dir` feature takes `pullup` only, replies without `state`
-and `dirs`, and answers a query on LA9-LA14 with `"no pull-up on this la"`. The hosts
-(SDK, MCP, CLI, web) send `pull` to new firmware and `pullup` to older firmware.
+Firmware up to 3.10.13 also replied `pullup` (`1` when engaged), `ohms` (the resistor's value)
+and `pull` (the channel's default direction); [`la_pins`](#la_pins--report-every-la-pin) has the
+resistor's value and direction. Firmware before the `la_pull_dir` feature takes `pullup` only.
 
 #### Pull resistors on digital v3r4
 
@@ -2142,14 +2138,13 @@ The pod picks the strength from the pin's function unless the host names one:
 
 ```json
 {"cmd": "la", "la": 9, "pull": "down", "strength": "both"}
-{"status": "ok", "data": {"la": 9, "pullup": 1, "ohms": "1.8k", "pull": "down", "state": "down",
+{"status": "ok", "data": {"la": 9, "state": "down",
   "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": 1}}
 ```
 
 - `strength` (optional, digital v3r4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
   from the table above. Other boards ignore it, as older firmware does.
-- The reply adds `strength` (`"none"` when off) and `strengths`. `ohms` is the value engaged
-  (10k while off). `pull` is the direction engaged, `up` while off (what `pullup:"on"` engages).
+- The reply adds `strength` (`"none"` when off) and `strengths`.
 - [`la_pins`](#la_pins--report-every-la-pin) entries leave `dirs` out on this board (every
   channel pulls both ways; the reply says it once as `"pull_dirs":["up","down"]`), so the
   14-channel list fits the cloud reply.
@@ -2161,9 +2156,9 @@ The pod picks the strength from the pin's function unless the host names one:
   rail is switched on again or the host sets a pull, so pin 21 does not feed an unpowered DUT.
   Pull-downs stay. A DUT that the pod never powers keeps its pulls.
 - While the pod holds a pull off (the two cases above), the replies say what is on the wire
-  (firmware 3.10.13+). `pullup` and `state` are what the channel does now, and the reply
+  (firmware 3.10.13+). `state` is what the channel does now, and the reply
   adds `"held"`: `"pin21_down"`, `"dut_off"` (pull-ups suspended) or `"fault"` (an expander
-  write failed; the next pull the host turns on with `la` tries again and puts them all back). `pull`, `ohms` and `strength` stay
+  write failed; the next pull the host turns on with `la` tries again and puts them all back). `strength` stays
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
   `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
   replies have no `held`.
@@ -4816,7 +4811,7 @@ $ nc 192.168.1.220 8080
 {"status":"ok","data":null}
 
 {"cmd":"la","la":1,"pull":"up"}
-{"status":"ok","data":{"la":1,"pullup":1,"ohms":"4.7k","pull":"up","state":"up","dirs":["up"],"pullups_available":1}}
+{"status":"ok","data":{"la":1,"state":"up","dirs":["up"],"pullups_available":1}}
 
 {"cmd":"la","la":1,"steps":200,"delay_us":500}
 {"status":"ok","data":{"la":1,"steps":200,"delay_us":500,"status":"started"}}
