@@ -117,7 +117,7 @@ static void test_pairing(void) {
     c.lan_pairing = true;
     static const char *const allowed[] = {
         "{\"cmd\":\"ping\"}", "{\"cmd\":\"status\"}", "{\"cmd\":\"diag\"}",
-        "{\"cmd\":\"identity_public\"}", "{\"cmd\":\"lan_tls\"}",
+        "{\"cmd\":\"identity_public\"}", "{\"cmd\":\"lan_tls\"}", "{\"cmd\":\"cloud_status\"}",
     };
     for (size_t i = 0; i < sizeof(allowed) / sizeof(allowed[0]); i++)
         CHECK(gate(allowed[i], &c) == NULL, "unpaired %s refused: %s", allowed[i], s_why);

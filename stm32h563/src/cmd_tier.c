@@ -80,7 +80,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "ping", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_ping), NULL },
     { { "status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_status), NULL },
     { { "diag", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ANY_CLIENT | CMD_F_UNPAIRED, CMD_FN(handle_diag), NULL },
-    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_cloud_status), NULL },
+    { { "cloud_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_UNPAIRED, CMD_FN(handle_cloud_status), NULL },
     { { "wifi_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_status), NULL },
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },

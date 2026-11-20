@@ -228,7 +228,7 @@ static void test_flags_match_the_old_lists(void) {
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");
     EXPECT_SET(CMD_F_LEASE, "lease_acquire", "lease_renew", "lease_release");
     EXPECT_SET(CMD_F_ADC_SAMPLES, "capture_dual");
-    EXPECT_SET(CMD_F_UNPAIRED, "ping", "status", "diag", "identity_public", "lan_tls");
+    EXPECT_SET(CMD_F_UNPAIRED, "ping", "status", "diag", "cloud_status", "identity_public", "lan_tls");
     /* the mixed verbs: the rows with a write test */
     static const char *const mixed[] = { "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy",
                                          "usb_network", "cloud_ca", "cloud_proxy", "lan_tls", "module",

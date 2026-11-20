@@ -9,7 +9,7 @@ Status: firmware 4.0.1. Who may use the JSON API from Ethernet and Wi-Fi.
 - **The cloud is trusted.** embeddedci.com checks the account, the API key or the GitHub OIDC
   token, and the pod checks the server (TLS + its device key).
 - **A computer on Ethernet or Wi-Fi must be paired.** Until it is, it gets only `ping`, `status`,
-  `diag`, `identity_public` and `lan_tls` (reads: what the pod is, and how to reach it over TLS).
+  `diag`, `cloud_status`, `identity_public` and `lan_tls` (reads: what the pod is, and how to reach it over TLS).
   Everything else gets `BP0081` (`lan_not_paired`). `identity_pop` needs pairing too: `register`
   uses it, and an unpaired computer that could register an unregistered pod to its own account
   would unlock it through the cloud.

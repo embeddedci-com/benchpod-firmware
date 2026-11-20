@@ -1060,7 +1060,7 @@ area = "policy"
 since = "next"
 args = { cmd = "str" }
 message = "This computer is not paired with the pod: {cmd} needs pairing over USB or from the cloud"
-cause = "The pod only takes commands from the LAN (Ethernet, Wi-Fi) from computers paired with it. An unpaired computer may only read the pod's status. Pairing adds this computer's TLS client key to the pod: over the pod's USB-C cable once, or from embeddedci.com for a registered pod. USB itself never needs pairing."
+cause = "The pod only takes commands from the LAN (Ethernet, Wi-Fi) from computers paired with it. An unpaired computer may only read the pod's status and whether it is registered. Pairing adds this computer's TLS client key to the pod: over the pod's USB-C cable once, or from embeddedci.com for a registered pod. USB itself never needs pairing."
 [BP0081.fix]
 sdk = "pair this computer once: connect over USB and call bp.pair() (or run `benchpod setup`), or use the cloud (\"embeddedci:<pod>\")"
 cli = "plug the pod into this computer's USB-C port and run `benchpod setup` once, or use the cloud (--connection embeddedci:<pod>)"

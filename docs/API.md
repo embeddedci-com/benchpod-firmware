@@ -44,7 +44,7 @@ The pod has two command channels, and they have deliberately different trust mod
 ### Pairing: who may use the LAN API
 
 **From firmware 4.0.1 the LAN API needs pairing.** A computer on Ethernet or Wi-Fi gets only
-`ping`, `status`, `diag`, `identity_public` and `lan_tls` until it is paired; every other command
+`ping`, `status`, `diag`, `cloud_status`, `identity_public` and `lan_tls` until it is paired; every other command
 gets `BP0081` (`lan_not_paired`). Pairing puts the SHA-256 of the computer's TLS client key on the
 pod's list ([`lan_clients`](#lan_clients--paired-computers)): `benchpod setup` does it over the
 pod's USB-C cable, and embeddedci.com does it for a registered pod. The USB console, the USB
