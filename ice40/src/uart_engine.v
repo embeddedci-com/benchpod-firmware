@@ -87,9 +87,12 @@ endmodule
 
 
 module uart_engine #(
-    // v56: 0 drops the parity / 2-stop-bit logic (UART2, the emulation image's sensor UART,
-    // stays 8N1: its streams never need it, and the emulation image is the full one).
-    parameter PARITY = 1
+    // v60: one parameter per frame option (until v59 one PARITY parameter gated all of them).
+    // 0 drops that option's logic: UART2, the emulation image's sensor UART, sets all three to 0
+    // (8N1, push-pull, no DE: its streams never need them, and the emulation image is the full one).
+    parameter HAS_PARITY = 1,   // v56: parity (even/odd) and two stop bits, cfg_frame[2:0]
+    parameter HAS_HD     = 1,   // v57: half duplex, open-drain TX with RX masked while sending, cfg_frame[3]
+    parameter HAS_DE     = 1    // v58: an RS-485 DE output, cfg_de / cfg_de_ch
 )(
     input  wire        clk,
     input  wire        rst,
@@ -179,12 +182,12 @@ module uart_engine #(
                 // it here too.  Below 2 the bit timing would be wrong (the counters expire at 1),
                 // but nothing locks up.
                 div   <= cfg_div[DIV_W-1:0];
-                par_en  <= (PARITY != 0) & cfg_frame[0];
-                par_odd <= (PARITY != 0) & cfg_frame[1];
-                stop2   <= (PARITY != 0) & cfg_frame[2];
-                tx_od   <= (PARITY != 0) & cfg_frame[3];
-                de_en   <= (PARITY != 0) & cfg_de[0];
-                de_inv  <= (PARITY != 0) & cfg_de[1];
+                par_en  <= (HAS_PARITY != 0) & cfg_frame[0];
+                par_odd <= (HAS_PARITY != 0) & cfg_frame[1];
+                stop2   <= (HAS_PARITY != 0) & cfg_frame[2];
+                tx_od   <= (HAS_HD != 0)     & cfg_frame[3];
+                de_en   <= (HAS_DE != 0)     & cfg_de[0];
+                de_inv  <= (HAS_DE != 0)     & cfg_de[1];
                 de_ch   <= cfg_de_ch;
                 armed <= cfg_enable;
             end

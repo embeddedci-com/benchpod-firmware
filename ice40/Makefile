@@ -59,11 +59,6 @@ SRC = src/top_v2.v            \
       src/psram_pads.v        \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
-# The emulation image reads src/i2c_emu_modes.v (the engine with the word-register and command-map
-# pointer modes) in place of src/i2c_emu.v.  The loop and deep images keep reading src/i2c_emu.v,
-# unchanged since the v54 promote, so they synthesize to their hardware-verified bitstreams:
-# yosys numbers cells across every file it reads, so any change there re-rolls their placement.
-EMU_SRC = $(filter-out src/i2c_emu.v,$(SRC)) src/i2c_emu_modes.v
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
 DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
@@ -229,7 +224,7 @@ VVP = sh sim/run_vvp.sh
 define topbench
 	@set -e; for img in $(2); do \
 	  srcs="$(SRC)"; \
-	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)"; srcs="$(EMU_SRC)";; *) defs=;; esac; \
+	  case $$img in deep) defs="$(DEEP_DEFINES)";; emu) defs="$(EMU_DEFINES)";; *) defs=;; esac; \
 	  echo "== $(1): $$img image"; \
 	  iverilog -g2012 -I src $$defs -o /tmp/$(PROJECT)_$(1)_$$img.vvp -s $(1) sim/$(1).v $$srcs $(CELLS_SIM); \
 	  $(VVP) /tmp/$(PROJECT)_$(1)_$$img.vvp; \
@@ -317,8 +312,8 @@ $(OUT)_loop.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
 $(OUT)_deep.json: $(SRC) $(SYNTH_AUX)
 	$(call synth,$(DEEP_DEFINES),$@)
-$(OUT)_emu.json: $(EMU_SRC) $(SYNTH_AUX)
-	$(call synth,$(EMU_DEFINES),$@,$(EMU_SRC))
+$(OUT)_emu.json: $(SRC) $(SYNTH_AUX)
+	$(call synth,$(EMU_DEFINES),$@)
 $(OUT)_loop.bin: $(OUT)_loop.json $(PCF)
 	$(call pnr,$<,$(OUT)_loop.asc,$(SEED_LOOP),$(SEED_LOOP_FALLBACK))
 	icepack $(OUT)_loop.asc $@
@@ -394,7 +389,7 @@ sim:
 # v54: the time-multiplexed I2C target engine (4 targets) against an I2C master model.
 i2cemutest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_i2cemu.vvp -s tb_i2c_emu \
-	         sim/tb_i2c_emu.v src/i2c_emu_modes.v $(CELLS_SIM)
+	         sim/tb_i2c_emu.v src/i2c_emu.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_i2cemu.vvp
 	@rm -f /tmp/$(PROJECT)_i2cemu.vvp
 
