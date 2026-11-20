@@ -374,3 +374,32 @@ hardware-verified on that day with these results from the local toolchain:
 | emu   | 27   | 53.26     | 26.08   | 11.82           | 6.87            | 5151/5280 (97.6%) |
 
 The emu image also uses all block RAM (30/30) and all SPRAM (4/4).
+
+## v60
+
+All three seeds re-pinned on the v60 netlist (the 2026-11 audit's gateware items: UART_CONFIG2,
+START_DAC_PSRAM and the control-loop opcodes per image, cmd_dispatch's per-image command groups,
+one i2c_emu file). On the v59 pins the v60 netlist missed gates (emu seed 27: clk 24.76 MHz,
+clk -> clk48 15.60 ns). Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and
+in CI's (OSS CAD Suite 2026-05-13, yosys 0.65+7; the ice40-seed-sweep workflow, which now sweeps
+the emulation image too). Seeds passing every gate (MIN_CLK48_MHZ 50, MIN_CLK_MHZ 25.5,
+MAX_X48_NS 15, MAX_X24_NS 15):
+
+| image | local | CI |
+|-------|-------|----|
+| loop  | 54/64 | 53/64 |
+| deep  | 46/64 | 51/64 |
+| emu   | 50/64 | 28/64 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest; the fallbacks are the next ones in that order. Local results on the pins:
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns | logic cells |
+|-------|------|-----------|---------|-----------------|-----------------|-------------|
+| loop  | 2    | 55.86     | 28.35   | 10.97           | 6.33            | 4217/5280 (80%) |
+| deep  | 24   | 59.26     | 27.45   | 13.92           | 5.62            | 3939/5280 (75%) |
+| emu   | 60   | 61.41     | 27.37   | 11.17           | 6.66            | 5155/5280 (97.6%) |
+
+CI on the same seeds: loop 56.02 / 29.66 / 10.73 / 6.98, deep 57.67 / 28.72 / 13.27 / 6.85,
+emu 56.06 / 28.36 / 11.78 / 8.17. The first emu pick, seed 57 (the best local seed), fails timing
+in CI's toolchain (clk48 43.83 MHz), so emu is pinned from the seeds good in both. Hardware-verified on benchpod-30a9f1 on 2026-11-20 (`ice40/release/MANIFEST`).

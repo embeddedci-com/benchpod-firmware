@@ -295,12 +295,13 @@ SEED_LOOP_FALLBACK ?= 50 30 46 3 11
 SEED_DEEP ?= 24
 # The next v60 seeds good in both toolchains, by their worst gate margin.
 SEED_DEEP_FALLBACK ?= 32 48 60 19 13
-# Emulation image (USE_EMULATION): seed 57 since v60 (clk48 55.69 MHz, clk 28.38 MHz,
-# clk -> clk48 12.32 ns, clk48 -> clk 4.39 ns).  It is the fullest image: 5155/5280 LC (97.6%),
+# Emulation image (USE_EMULATION): seed 60 since v60 (clk48 61.41 MHz, clk 27.37 MHz,
+# clk -> clk48 11.17 ns, clk48 -> clk 6.66 ns; CI 56.06 / 28.36 / 11.78 / 8.17).  CI's toolchain
+# closes only 28 of 64 emu seeds.  It is the fullest image: 5155/5280 LC (97.6%),
 # 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
-SEED_EMU ?= 57
-# The next v60 seeds by their worst gate margin (local sweep).
-SEED_EMU_FALLBACK ?= 9 16 42 17 63
+SEED_EMU ?= 60
+# The next v60 seeds good in both toolchains, by their worst gate margin.
+SEED_EMU_FALLBACK ?= 12 7 41 59 40
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
