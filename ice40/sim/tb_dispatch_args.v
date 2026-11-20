@@ -373,18 +373,24 @@ module tb_dispatch_args;
             cs_hi; feed(8'h14); feed(8'h31); feed(8'h32); feed(8'h33); feed(8'h34); cs_lo;
             if (n_stop !== 1 || got_stop !== 32'h34333231) begin
                 $display("FAIL stop_after: %0d strobes, payload %h (want 1, 34333231)", n_stop, got_stop); errors=errors+1; end
+            dac_n = 0;
             cs_hi; feed(8'h15); feed(8'h41); feed(8'h42); feed(8'h43); feed(8'h44);
                    feed(8'h45); feed(8'h46); feed(8'h47); feed(8'h48); cs_lo;
-            if (n_arm !== 1 || got_arm !== 64'h4847464544434241) begin
-                $display("FAIL loop_arm: %0d strobes, payload %h", n_arm, got_arm); errors=errors+1; end
             cs_hi; feed(8'h1A); feed(8'h02); feed(8'h52); feed(8'h53); feed(8'h54); feed(8'h55); cs_lo;
-            if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
-                $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
-`ifdef HAS_DAC_LOOP   // DAC_LOOP_INMAP: the loop image only
             cs_hi; feed(8'h1C); feed(8'h61); feed(8'h62); feed(8'h63); feed(8'h64); feed(8'h65); feed(8'h06);
                    feed(8'h03); cs_lo;
+`ifdef HAS_DAC_LOOP   // the control-loop group: the loop image only (v60: all three opcodes)
+            if (n_arm !== 1 || got_arm !== 64'h4847464544434241 || dac_n !== 1 || dut.dac_loop_mode !== 1'b1) begin
+                $display("FAIL loop_arm: %0d strobes, payload %h, dac starts %0d, mode %b", n_arm, got_arm, dac_n, dut.dac_loop_mode); errors=errors+1; end
+            if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
+                $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
             if (n_inmap !== 1 || got_inmap !== {2'b11, 11'h665, 16'h6463, 16'h6261}) begin
                 $display("FAIL loop_inmap: %0d strobes, payload %h", n_inmap, got_inmap); errors=errors+1; end
+`else
+            // the deep and emulation images ignore the group: no strobe, no DAC start, no loop mode
+            if (n_arm !== 0 || n_src !== 0 || n_inmap !== 0 || dac_n !== 0 || dut.dac_loop_mode !== 1'b0) begin
+                $display("FAIL loop group: decoded on an image without the loop (arm %0d src %0d inmap %0d dac %0d mode %b)",
+                         n_arm, n_src, n_inmap, dac_n, dut.dac_loop_mode); errors=errors+1; end
 `endif
         end
     endtask

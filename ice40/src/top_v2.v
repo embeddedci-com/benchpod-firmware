@@ -807,8 +807,10 @@ module top (
     // tb_top_la_mux.  uart_engine's PARITY parameter split into HAS_PARITY / HAS_HD / HAS_DE (it gated all three);
     // i2c_emu_modes.v folded back into i2c_emu.v (one engine, the emulation image's); la_bank's pin
     // priority comment names the DE output.  START_DAC_PSRAM is decoded only in the deep image: the
-    // loop and emulation images, which have no reader, ignore it (emu -20 LUT).  All three images
-    // re-swept.
+    // loop and emulation images, which have no reader, ignore it (emu -20 LUT); likewise the control
+    // loop's opcodes (START_DAC_LOOP, DAC_LOOP_SRC, DAC_LOOP_INMAP) outside the loop image.
+    // cmd_dispatch's per-image command groups are submodules under one `ifdef each (cmd_loop_decode,
+    // cmd_emu_decode).  All three images re-swept.
     // GATEWARE_VERSION 59 = v58 + the DAC FRAME GAP for the DAC8554 (dac8551_engine.v): the divider
     // floor goes from 3 to 4, so the next SYNC fall is >= 7 clk48 = 146 ns after the 24th SCLK fall
     // (t9 >= 130 ns; 3 gave 125 ns, enough only for the DAC8551).  The firmware has floored its
