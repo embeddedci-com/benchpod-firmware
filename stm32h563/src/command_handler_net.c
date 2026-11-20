@@ -24,7 +24,7 @@
 #include "net_reload.h"     /* net_reload_pending: the wifi_clear reply is out */
 #include "boot_guard.h"     /* boot_guard_skip_hw: no W25Q in safe mode */
 #include "wifi_scan.h"
-#include "console_io.h"     /* the console wifi-scan's networks, printed when the scan ends */
+
 #include "bp_limits.h"      /* BP_CLOUD_REPLY_MAX: a wifi_scan reply fits the cloud channel */
 
 #include <stdio.h>
@@ -410,7 +410,7 @@ void handle_wifi_clear(int conn_id, const char *json) {
     send_ok_str(conn_id, "\"cleared\"");
 }
 
-/* ---- wifi_scan / console wifi-scan: the networks the pod's Wi-Fi sees ---------------------
+/* ---- wifi_scan: the networks the pod's Wi-Fi sees ---------------------
    Through a Wi-Fi bridge when one is in use, else the built-in ESP32-C3
    (esp_wifi_ctrl_scan_request), with one list format (wifi_scan.h) either way.
 
@@ -491,53 +491,6 @@ void handle_wifi_scan(int conn_id, const char *json) {
         send_error(conn_id, "wifi_scan: no scan with that id; start one with {\"cmd\":\"wifi_scan\"}");
         return;
     }
-}
-
-/* Console: one parseable line per network, strongest first, then "scan done <n>"; or
-   "wifi-scan error <why>". The SSID is last: it may hold spaces. */
-static void wifi_scan_print(const wifi_scan_list_t *l, const char *err) {
-    char line[96];
-    if (err) {
-        snprintf(line, sizeof(line), "wifi-scan error %s\r\n", err);
-        console_io_write((const uint8_t *)line, strlen(line));
-        return;
-    }
-    console_io_hold_prompt(true);   /* one prompt after the list, not one per network */
-    for (unsigned k = 0; k < l->n; k++) {
-        snprintf(line, sizeof(line), "scan %d %u %s %s\r\n", l->ap[k].rssi, l->ap[k].channel,
-                 wifi_scan_auth_str(l->ap[k].authmode), l->ap[k].ssid);
-        console_io_write((const uint8_t *)line, strlen(line));
-    }
-    snprintf(line, sizeof(line), "scan done %u\r\n", (unsigned)l->n);
-    console_io_write((const uint8_t *)line, strlen(line));
-    console_io_hold_prompt(false);
-}
-
-static uint32_t s_console_scan;   /* the console's built-in scan, printed when it ends */
-
-void wifi_scan_console(void) {
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_in_use()) {
-        const char *why = bridge_scan();
-        wifi_scan_print(&s_bridge_scan, why);
-        return;
-    }
-#endif
-    s_console_scan = esp_wifi_ctrl_scan_request();
-    static const char msg[] = "  Wi-Fi scan running (a few seconds); the networks follow\r\n";
-    console_io_write((const uint8_t *)msg, sizeof(msg) - 1);
-}
-
-void wifi_scan_poll(void) {
-    if (!s_console_scan) return;
-    const wifi_scan_list_t *l = NULL;
-    const char *err = NULL;
-    esp_wifi_scan_state_t st = esp_wifi_ctrl_scan_result(s_console_scan, &l, &err);
-    if (st == ESP_WIFI_SCAN_RUNNING) return;
-    s_console_scan = 0;
-    /* After the prompt: the console starts the list on its own line and ends it with the prompt
-       again (console_prompt.h). */
-    wifi_scan_print(l, st == ESP_WIFI_SCAN_DONE ? NULL : err ? err : "the scan was lost");
 }
 
 /* {"cmd":"eth","action":"stop"|"start"|"restart"} — manually control the wired
@@ -693,13 +646,17 @@ void handle_wifi_status(int conn_id, const char *json) {
     char restarts[288];   /* c3_restarts_json: every cause, the last reason (~250 B) */
     if (!c3_restarts_json(esp_wifi_ctrl_restarts(), restarts, sizeof(restarts)))
         snprintf(restarts, sizeof(restarts), "null");
-    char resp[832];
+    /* The signal while joined (the console's wifi-show had it up to 3.10.13), else null. */
+    char rssi_s[8] = "null";
+    int rssi;
+    if (esp_wifi_ctrl_rssi(&rssi)) snprintf(rssi_s, sizeof(rssi_s), "%d", rssi);
+    char resp[848];
     int rn = snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{\"state\":\"%s\",\"configured\":%s,%s"
              "\"connected\":%s,\"ssid\":%s,"
              "\"xacts\":%lu,\"pump_calls\":%lu,\"batch\":[%s],"
              "\"settle_hit\":%lu,\"settle_miss\":%lu,\"xact_err\":%lu,"
-             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_restarts\":%s,\"c3_nvs\":\"%s\"}}\n",
+             "\"c3_lost_noresp\":%lu,\"c3_lost_reboot\":%lu,\"c3_restarts\":%s,\"c3_nvs\":\"%s\",\"rssi_dbm\":%s}}\n",
              esp_wifi_ctrl_state_str(),
              have ? "true" : "false", bridge_ignored ? "\"bridge_ignored\":true," : "",
              esp_wifi_ctrl_connected() ? "true" : "false",
@@ -707,7 +664,7 @@ void handle_wifi_status(int conn_id, const char *json) {
              (unsigned long)ps->xacts, (unsigned long)ps->calls, batch,
              (unsigned long)ps->settle_hit, (unsigned long)ps->settle_miss,
              (unsigned long)ps->xact_err, (unsigned long)c3_noresp, (unsigned long)c3_reboot,
-             restarts, c3_nvs_str());
+             restarts, c3_nvs_str(), rssi_s);
     if (rn < 0 || (size_t)rn >= sizeof(resp)) { bp_err_reply_too_large(conn_id); return; }
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) at_close_connection(conn_id);
 }

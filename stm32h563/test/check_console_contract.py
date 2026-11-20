@@ -4,7 +4,9 @@
 benchpod CLI, the embeddedci SDK and the web app's setup wizard (WebSerial) read these console lines,
 and older releases of them stay in use, so a change to one of these formats breaks them. This fails
 when a pinned format string is no longer in console.c. Changing one on purpose means a new line
-next to the old one (keep the old) and updating the tools first. Run from anywhere:
+next to the old one (keep the old) and updating the tools first. Firmware 4.0.0 dropped the console
+commands the JSON API took over (wifi-*, identity-wipe, sig-policy, ca*, proxy*, blobs,
+usb-reattach) together with their pins: CLI 0.10 uses JSON over the USB network adapter for them. Run from anywhere:
 `python3 stm32h563/test/check_console_contract.py`.
 """
 import os
@@ -22,19 +24,9 @@ PINNED = [
     ("ping (SDK)", r'"  PING ok  version=0x%02x\r\n"'),
     ("identity (CLI, SDK usb:<name>, wizard)", r'"identity %s %s\r\n"'),
     ("identity unknown", r'"identity unknown %s\r\n"'),
-    ("identity-wipe", r'"identity-wipe ok %s\r\n"'),
-    ("sig-policy", r'"sig-policy %s %u\r\n"'),
     ("lan-policy", r'"lan-policy %s\r\n"'),
     ("log (console log level)", r'"log %s\r\n"'),
-    ("cloud CA list", r'"ca %s %.64s\r\n"'),
-    ("cloud CA none", r'"ca none\r\n"'),
-    ("cloud proxy", r'"proxy %s:%u %s\r\n"'),
-    ("cloud proxy none", r'"proxy none\r\n"'),
-    ("wifi-show ssid (CLI, wizard)", r'"  ssid: %s\r\n"'),
-    ("wifi-show state", r'"  state: %s\r\n"'),
-    ("wifi-show ip", r'"  ip: %s\r\n"'),
-    ("blobs (install-blobs on older CLIs)", r'"blob %s %s %lu %lu %s\r\n"'),
-    ("usb-reattach", r'"usb-reattach ok\r\n"'),
+    ("net-reset (CLI recovery)", r'"net-reset eth autonegotiation, link and DHCP again\r\n"'),
     ("dfu", r'"  entering DFU (USB bootloader)'),
 ]
 

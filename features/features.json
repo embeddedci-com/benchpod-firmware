@@ -4,7 +4,7 @@
   "revision": 10,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "5265b96df59661b49a6ff05878267320c2a792e819c8301909547c5f2ca32059",
+  "table_sha256": "7d1b7658e0474627ea0bb69a7c4da2a229730a253362451192297bafd0c8d8d5",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -751,7 +751,7 @@
       "rev": 10,
       "firmware": "next",
       "board": "any",
-      "docs": "API.md#identity_wipe--erase-the-device-key-usb-link-only"
+      "docs": "usb-serial-interface.md#removed-in-firmware-400"
     }
   }
 }

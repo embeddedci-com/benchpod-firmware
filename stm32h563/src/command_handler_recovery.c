@@ -5,22 +5,17 @@
  *   identity_wipe   erase the device key and make a new one (USB link only: physical presence)
  *   usb_reattach    drop off the USB bus and enumerate again (macOS and a locked screen)
  *   wifi_bridge     the external Wi-Fi bridge: update, reboot, factory_reset, cert (cert: USB link)
- *   wifi_reflash    write the Wi-Fi module's firmware again from the pod's esp slot
  *
- * The console had these as identity-wipe, usb-reattach, bridge and flash-esp32.
+ * The console had these as identity-wipe, usb-reattach and bridge. Its flash-esp32 has no command
+ * of its own: the pod keeps no copy of the Wi-Fi module image, so OTA target esp installs it.
  */
 #include "command_handler.h"
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "bp_json.h"
-#include "net_server.h"        /* net_conn_on_usb, net_cloud_reload_after_reply, net_wifi_hold_for_flash */
+#include "net_server.h"        /* net_conn_on_usb, net_cloud_reload_after_reply */
 #include "device_identity.h"
 #include "usb_device.h"
-#include "esp_wifi_ctrl.h"
-#include "esp_rom_flash.h"
-#include "esp_rom_job.h"       /* esp_rom_result_str */
-#include "blob_store.h"
-#include "bp_log.h"
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
 #endif
@@ -60,37 +55,6 @@ void handle_usb_reattach(int conn_id, const char *json) {
     (void)json;
     send_ok_str(conn_id, "{\"reattach\":true}");
     usb_reattach_request();
-}
-
-/* ---- wifi_reflash: the Wi-Fi module's firmware, written again from the W25Q esp slot ---- */
-
-static void wifi_reflash_done(int result) {
-    if (result >= 0) LOG_REPLY("wifi_reflash: the Wi-Fi module was flashed and booted (%s)\n", esp_rom_result_str(result));
-    else             LOG_REPLY("wifi_reflash: failed, %s (the module is left in reset)\n", esp_rom_result_str(result));
-    net_wifi_hold_for_flash(false);   /* the Wi-Fi control starts the module again */
-}
-
-/* {"cmd":"wifi_reflash"} -> {"started":true,"bytes":N}: about 2 minutes in the background, while
-   the API keeps answering; wifi_status shows the module coming back. The automatic install does
-   the same when the module runs another image; this is the manual repair. */
-void handle_wifi_reflash(int conn_id, const char *json) {
-    (void)json;
-    if (!esp_wifi_ctrl_module_present()) { send_error(conn_id, "wifi_reflash: " ESP_WIFI_NO_MODULE); return; }
-    if (esp_rom_flash_busy()) { bp_err_update_in_progress(conn_id, "esp", "the pod"); return; }
-    const char *busy = bus_busy_reason();   /* ~140 s on the shared bus */
-    if (busy) { bp_err_storage_bus_busy(conn_id, busy); return; }
-    net_wifi_hold_for_flash(true);   /* the Wi-Fi control must not drive EN/BOOT meanwhile */
-    int rc = esp_rom_flash_start(wifi_reflash_done);
-    if (rc != 0) {
-        net_wifi_hold_for_flash(false);
-        send_error(conn_id, rc == ESP_FLASH_START_NO_IMAGE ? "wifi_reflash: no Wi-Fi module image on the pod (install the esp blob)"
-                          : rc == ESP_FLASH_START_BAD_SLOT ? "wifi_reflash: the esp slot does not match its checksum"
-                          : "wifi_reflash: a flash is already running");
-        return;
-    }
-    char p[48];
-    snprintf(p, sizeof(p), "{\"started\":true,\"bytes\":%lu}", (unsigned long)blob_store_info(BLOB_ESP)->len);
-    send_ok_str(conn_id, p);
 }
 
 /* ---- wifi_bridge: the external Wi-Fi bridge box on the Ethernet port ---------------------- */

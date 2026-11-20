@@ -189,7 +189,6 @@ static const cmd_desc_t k_tiers[] = {
     /* the USB console's recovery commands up to 3.10.13 (command_handler_recovery.c) */
     { { "identity_wipe", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_identity_wipe), NULL },   /* USB link only */
     { { "wifi_bridge", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_wifi_bridge), NULL },     /* cert: USB link only */
-    { { "wifi_reflash", CMD_TIER_T2 }, 0, CMD_FN(handle_wifi_reflash), NULL },
     /* T3: firmware */
     { { "ota_begin", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_begin), NULL },
     { { "ota_data", CMD_TIER_T3 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_data), NULL },

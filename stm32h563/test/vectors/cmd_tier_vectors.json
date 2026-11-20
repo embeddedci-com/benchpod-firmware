@@ -110,7 +110,6 @@
     "wifi_clear": "T2",
     "identity_wipe": "T2",
     "wifi_bridge": "T2",
-    "wifi_reflash": "T2",
     "ota_begin": "T3",
     "ota_data": "T3",
     "ota_end": "T3",
@@ -661,10 +660,6 @@
     },
     {
       "line": "{\"cmd\":\"wifi_bridge\"}",
-      "tier": "T2"
-    },
-    {
-      "line": "{\"cmd\":\"wifi_reflash\"}",
       "tier": "T2"
     },
     {

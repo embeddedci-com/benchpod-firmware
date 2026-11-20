@@ -212,35 +212,29 @@ static void cmd_help(console_out_t out, void *ctx)
 {
     /* Emit straight through out() (not op()): the list is longer than op()'s 160-byte format
        buffer. Split into a few writes to stay well under the USB-CDC TX ring.
-       The console keeps what needs physical presence or works without the network; everything
-       else is the JSON API (docs/API.md), on the USB network adapter too. */
+       The console keeps what needs physical presence or works without the network (firmware
+       4.0.0); everything else is the JSON API (docs/API.md), on the USB network adapter too. */
     out(ctx,
-        "commands (the rest is the JSON API on :8443 TLS, and :8080 over the USB network;\r\n"
-        "every command and its replies: docs/usb-serial-interface.md):\r\n"
-        "  help | status | ping | uid | selftest | reboot | dfu | usb-reattach\r\n"
-        "  identity | identity-wipe <id|unknown>      device key\r\n"
-        "  sig-policy                                 what OTA accepts (always required)\r\n"
-        "  rollback-floor [clear] | lan-policy [open|locked|off]\r\n"
+        "recovery console (everything else is the JSON API: :8443 TLS, :8080 over the USB network;\r\n"
+        "the commands and their replies: docs/usb-serial-interface.md):\r\n"
+        "  help | status | ping | selftest | reboot | dfu\r\n"
+        "  identity                                   the device key's short id and public key\r\n"
         "  usb-network [on|off]                       the USB network adapter\r\n"
-        "  log [error|warn|info|debug]                console log level\r\n"
+        "  lan-policy [open|locked|off]               what Ethernet and Wi-Fi may do\r\n"
         "  lan-tls [https-only on|off | scpi on|off | regenerate]   TLS, plaintext :8080, SCPI\r\n"
-        "  cloud-ca | cloud-ca-clear | cloud-proxy | cloud-proxy-set <host:port> [user pass] | cloud-proxy-clear\r\n");
-    out(ctx,
-        "  eth <stop|start|restart|stats>             the wired link\r\n"
-        "  wifi-set \"<ssid>\" \"<pass>\" | wifi-show | wifi-scan | wifi-clear | wifi-static <ip> <mask> <gw>\r\n"
-        "  esp-reset-pulse | esp-mon [ms] | flash-esp32-sync | flash-esp32   the ESP32-C3\r\n"
-        "  flash-ice40 | psram-selftest | psram-test | blobs | led <color|mask>\r\n");
+        "  net-reset                                  forget Wi-Fi, Ethernet back to autonegotiation\r\n"
+        "  log [error|warn|info|debug]                console log level\r\n");
 #if !defined(BENCHPOD_RELEASE)
     out(ctx,
         "development build only:\r\n"
+        "  uid | led <color|mask> | i2c-scan | ina | expdump   MCU id, status LED, I2C bus, INA monitors, expanders\r\n"
         "  test-bootloop [net|hw] yes | test-hang net|hw yes | test-crash yes   prove safe mode / crash reports\r\n"
         "  test-ice40-hold yes  hold the iCE40 in reset: the idle check reloads it by itself\r\n"
-        "  i2c-scan | ina | expdump   I2C bus scan, INA monitors, expander dump\r\n"
-        "  eth speed|refclk|loopback  wired-link diagnostics\r\n"
-        "  psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>   PSRAM diagnostics\r\n"
+        "  psram-selftest | psram-test | psram | psram-addrtest | psram-bench [kb] | psram-clk <p> | psram-chunk <b>\r\n"
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
         "  spi-clk <64|128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
-        "  ice40-erase [gw0] yes   blank the iCE40 config flash (and slot gw0), to test a new board's boot\r\n");
+        "  flash-ice40 | ice40-erase [gw0] yes   rewrite / blank the iCE40 config flash\r\n"
+        "  wifi-static <ip> <mask> <gw> | esp-reset-pulse | esp-mon [ms] | flash-esp32-sync   Wi-Fi module\r\n");
 #endif
 #if defined(BENCHPOD_EMI_TEST)
     out(ctx,
@@ -253,15 +247,6 @@ static void cmd_help(console_out_t out, void *ctx)
         "                                        (default 20) or all of them, printed on the device log\r\n"
         "  emi fault ice40|ice40-stuck|off       test the recovery: hold the iCE40 in reset once, or after\r\n"
         "                                        every reload and across resets (until `off` or power-off)\r\n");
-#endif
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    out(ctx,
-        "Wi-Fi bridge (wifi-set/-show/-clear/-scan use it when one is plugged in, unless built-in\r\n"
-        "Wi-Fi is configured: that wins, wifi-clear it to use the bridge):\r\n"
-        "  bridge | bridge scan | bridge update | bridge reboot | bridge factory-reset yes\r\n"
-        "  bridge cert <1-4> <hex>  install the bridge's identity certificate, a quarter (64 hex\r\n"
-        "                       digits) at a time; `bridge` shows its identity key\r\n"
-        "  (the pod updates the bridge by itself when blob slot \"bridge\" holds a newer image)\r\n");
 #endif
 }
 
@@ -375,32 +360,11 @@ static void cmd_selftest(console_out_t out, void *ctx)
        pass, fail, fail == 0 ? "HEALTHY" : "PROBLEMS DETECTED");
 }
 
-/* Extract one argument, honoring "double quotes" (so an SSID/password may
-   contain spaces).  The benchpod-cli sends both args double-quoted. Returns the
-   position just past the parsed argument. */
-static bool s_parse_truncated;   /* the last parse_quoted value did not fit */
-
-static const char *parse_quoted(const char *p, char *out, size_t n)
-{
-    while (*p == ' ' || *p == '\t') p++;
-    size_t i = 0, len = 0;
-    if (*p == '"') {
-        p++;
-        while (*p && *p != '"') { if (i < n - 1) out[i++] = *p; p++; len++; }
-        if (*p == '"') p++;
-    } else {
-        while (*p && *p != ' ' && *p != '\t') { if (i < n - 1) out[i++] = *p; p++; len++; }
-    }
-    out[i] = '\0';
-    s_parse_truncated = (len > i);
-    return p;
-}
 
 #if defined(BENCHPOD_WIFI_BRIDGE)
 
-/* ---- Wi-Fi bridge: wifi-set / wifi-show / wifi-clear go to the external bridge box
-   when one says HELLO on the Ethernet port, unless built-in Wi-Fi is configured (it wins,
-   wifi_bridge_ignored); `bridge` shows it and runs scan / reboot / reset. */
+/* ---- Wi-Fi bridge: net-reset clears the Wi-Fi on the external bridge box when one says HELLO
+   on the Ethernet port, unless built-in Wi-Fi is configured (it wins, wifi_bridge_ignored). */
 
 static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc, const char *err)
 {
@@ -416,206 +380,9 @@ static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc
     return false;
 }
 
-static void bridge_show(console_out_t out, void *ctx)
-{
-    wb_info_t i;
-    wifi_bridge_get_info(&i);
-    op(out, ctx, "  ssid: %s\r\n", i.have_status ? i.ssid : "");
-    op(out, ctx, "  state: %s\r\n", i.present ? wb_state_str(i.state) : "no bridge");
-    if (wifi_bridge_ignored()) op(out, ctx, "  not in use: built-in Wi-Fi is configured\r\n");
-    op(out, ctx, "  ip: %s\r\n", wifi_get_ip());
-    if (wb_rssi_known(&i))
-        op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
-    else
-        op(out, ctx, "  rssi: \r\n");
-    op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s%s%s, %s\r\n", i.mac[0], i.mac[1],
-       i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.hw_rev[0] ? " hw " : "", i.hw_rev,
-       i.paired ? "paired" : "not paired");
-    uint8_t id[BWP_ID_PUB_LEN];
-    if (wifi_bridge_identity(id)) {
-        char hex[2 * BWP_ID_PUB_LEN + 1];
-        for (int k = 0; k < BWP_ID_PUB_LEN; k++) snprintf(hex + 2 * k, 3, "%02x", id[k]);
-        op(out, ctx, "  identity: %s\r\n", hex);
-    } else {
-        op(out, ctx, "  identity: none (bridge firmware before 0.1.3)\r\n");
-    }
-    op(out, ctx, "  genuine: %s%s\r\n", i.genuine ? "yes" : "no",
-       i.genuine ? "" : (i.flags & BWP_F_IDENTITY) ? " (certificate stored, not checked yet)" : " (no valid certificate)");
-    if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
-    uint32_t iv;
-    if (wifi_bridge_image(&iv))
-        op(out, ctx, "  pod's bridge image: %u.%u.%u  update: %s\r\n", (unsigned)(iv >> 16) & 0xff,
-           (unsigned)(iv >> 8) & 0xff, (unsigned)iv & 0xff, wifi_bridge_ota_status());
-    else
-        op(out, ctx, "  pod's bridge image: none (slot \"bridge\" empty)  update: %s\r\n", wifi_bridge_ota_status());
-    if (i.have_status) {
-        op(out, ctx, "  channel: %u  last disconnect reason: %u  bridge uptime: %lu s  (status %lu ms old)\r\n",
-           i.channel, i.reason, (unsigned long)i.uptime_s, (unsigned long)i.status_age_ms);
-        op(out, ctx, "  bridge boot: %s, reboots seen %lu%s%s\r\n", wb_reset_str(i.reset),
-           (unsigned long)i.reboots, i.emc ? "  EMC radio: " : "", i.emc ? wb_emc_str(i.emc) : "");
-        op(out, ctx, "  frames: eth_rx %lu wifi_tx %lu (err %lu) wifi_rx %lu eth_tx %lu (err %lu) dropped %lu\r\n",
-           (unsigned long)i.counters.eth_rx, (unsigned long)i.counters.wifi_tx,
-           (unsigned long)i.counters.wifi_tx_err, (unsigned long)i.counters.wifi_rx,
-           (unsigned long)i.counters.eth_tx, (unsigned long)i.counters.eth_tx_err,
-           (unsigned long)i.counters.dropped);
-    }
-}
-
-static void cmd_bridge(int argc, char **argv, console_out_t out, void *ctx)
-{
-    static const char *const auth[] = {"open", "wep", "wpa", "wpa2", "wpa/wpa2", "wpa2-ent", "wpa3", "wpa2/wpa3"};
-    const char *err = NULL;
-    int rc;
-    if (argc == 1) {
-        if (!wifi_bridge_present()) op(out, ctx, "  no Wi-Fi bridge on the Ethernet port\r\n");
-        else bridge_show(out, ctx);
-    } else if (!strcmp(argv[1], "cert") && argc == 4) {
-        /* The certificate is 128 bytes, more than a console line: four parts of 32 bytes (64 hex
-           digits), `bridge cert <1-4> <hex>`, sent to the bridge once all four are in. The buffer
-           comes from the heap on first use and stays (the request borrows it). */
-        static uint8_t *t;      /* ID_CERT TLV: 3 + 128 bytes */
-        static uint8_t parts;   /* bit per part received */
-        int part = atoi(argv[2]);
-        bool good = part >= 1 && part <= 4 && strlen(argv[3]) == 64;
-        if (good && !t) good = (t = pvPortMalloc(3 + BWP_ID_CERT_LEN)) != NULL;
-        for (unsigned k = 0; good && k < 32; k++) {
-            int hi = bp_hex_nibble(argv[3][2 * k]), lo = bp_hex_nibble(argv[3][2 * k + 1]);
-            good = hi >= 0 && lo >= 0;
-            t[3 + 32 * (part - 1) + k] = (uint8_t)(hi << 4 | lo);
-        }
-        if (!good) {
-            op(out, ctx, "  bridge cert: bridge cert <1-4> <64 hex digits>, the four quarters in any order\r\n");
-            return;
-        }
-        parts |= (uint8_t)(1u << (part - 1));
-        if (parts != 0x0F) {
-            op(out, ctx, "  bridge cert: part %d of 4 stored\r\n", part);
-            return;
-        }
-        parts = 0;
-        t[0] = BWP_T_ID_CERT, t[1] = 0, t[2] = BWP_ID_CERT_LEN;
-        rc = wifi_bridge_call(BWP_SET_ID_CERT, t, 3 + BWP_ID_CERT_LEN, 2000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "bridge cert", rc, err))
-            op(out, ctx, "  certificate stored on the bridge: the pod checks its identity again now\r\n");
-    } else if (!strcmp(argv[1], "scan")) {
-        rc = wifi_bridge_call(BWP_SCAN, NULL, 0, 10000, &g_wifi_bridge_reply, &err);
-        if (bridge_failed(out, ctx, "bridge scan", rc, err)) return;
-        for (unsigned k = 0; k < g_wifi_bridge_reply.n_aps; k++) {
-            const bwp_ap_t *a = &g_wifi_bridge_reply.aps[k];
-            op(out, ctx, "  %4d dBm  ch %2u  %-9s  %s\r\n", a->rssi, a->channel,
-               a->authmode < 8 ? auth[a->authmode] : "other", a->ssid);
-        }
-        op(out, ctx, "  %u networks\r\n", g_wifi_bridge_reply.n_aps);
-    } else if (!strcmp(argv[1], "update")) {
-        wifi_bridge_ota_force();   /* the hw worker's loop runs it, after this line returns */
-        op(out, ctx, "  bridge update requested: follow it with `bridge` (it reports the progress)\r\n");
-    } else if (!strcmp(argv[1], "reboot")) {
-        rc = wifi_bridge_call(BWP_REBOOT, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "bridge reboot", rc, err)) op(out, ctx, "  the Wi-Fi bridge restarts\r\n");
-    } else if (!strcmp(argv[1], "factory-reset") && argc == 3 && !strcmp(argv[2], "yes")) {
-        rc = wifi_bridge_call(BWP_FACTORY_RESET, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "bridge factory-reset", rc, err))
-            op(out, ctx, "  the Wi-Fi bridge forgot its Wi-Fi and its pairing, and restarts\r\n");
-    } else {
-        op(out, ctx, "  usage: bridge | bridge scan | bridge update | bridge reboot | bridge cert <1-4> <hex> | bridge factory-reset yes\r\n");
-    }
-}
 #endif
-
-/* wifi-set "<ssid>" "<password>" — save creds + kick the ESP32 (re)connect.
-   Prints the markers the benchpod-cli parses ("[cfg] credentials written to
-   flash").  Non-blocking: the association RPC runs on the net task, so the
-   result is read back with wifi-show (blocking here would stall the worker task,
-   which runs this handler, for the whole RPC). */
-static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
-{
-    config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.magic = CONFIG_MAGIC; cfg.version = CONFIG_VERSION;
-    const char *p = parse_quoted(args, cfg.ssid, sizeof(cfg.ssid));
-    bool too_long = s_parse_truncated;
-    parse_quoted(p, cfg.password, sizeof(cfg.password));   /* open AP: empty */
-    if (too_long || s_parse_truncated) {                   /* never save credentials cut short */
-        op(out, ctx, "  wifi-set: %s too long\r\n", too_long ? "ssid" : "password");
-        return;
-    }
-
-    if (cfg.ssid[0] == '\0') {
-        op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
-        return;
-    }
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_in_use()) {   /* the bridge box keeps the credentials, not the pod */
-        const char *err = NULL;   /* the passphrase goes out sealed under the pairing key */
-        int rc = wifi_bridge_set_wifi(cfg.ssid, cfg.password, &g_wifi_bridge_reply, &err);
-        memset(cfg.password, 0, sizeof(cfg.password));
-        if (bridge_failed(out, ctx, "wifi-set", rc, err)) return;
-        op(out, ctx, "[cfg] credentials written to flash\r\n");   /* the marker benchpod-cli waits for */
-        op(out, ctx, "  saved SSID \"%s\" on the Wi-Fi bridge: it joins in the background; run wifi-show for status\r\n",
-           cfg.ssid);
-        return;
-    }
-#endif
-    if (!esp_wifi_ctrl_module_present()) {
-        memset(&cfg, 0, sizeof(cfg));
-        op(out, ctx, "  wifi-set: " ESP_WIFI_NO_MODULE "\r\n");
-        return;
-    }
-    if (config_save(&cfg) != 0) {
-        op(out, ctx, "  wifi-set: config save failed\r\n");
-        return;
-    }
-    op(out, ctx, "[cfg] credentials written to flash\r\n");
-    net_wifi_reload();          /* re-read creds, (re)start the ESP32 + connect */
-    op(out, ctx, "  saved SSID \"%s\" — connecting in the background; run wifi-show for status\r\n",
-       cfg.ssid);
-}
-
-static void cmd_wifi_show(console_out_t out, void *ctx)
-{
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    if (wifi_bridge_in_use()) { bridge_show(out, ctx); return; }
-#endif
-    config_t cfg;
-    bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
-    op(out, ctx, "  ssid: %s\r\n", have ? cfg.ssid : "");
-    op(out, ctx, "  state: %s\r\n", esp_wifi_ctrl_state_str());
-    uint32_t done = 0, total = 0;
-    if (esp_rom_flash_progress(&done, &total))
-        op(out, ctx, "  c3 flash: block %lu/%lu\r\n", (unsigned long)done, (unsigned long)total);
-    op(out, ctx, "  ip: %s\r\n", wifi_sta_ip());
-    int rssi;
-    if (esp_wifi_ctrl_rssi(&rssi)) op(out, ctx, "  rssi: %d dBm\r\n", rssi);
-    else                           op(out, ctx, "  rssi: \r\n");
-    uint32_t noresp = 0, reboot = 0;
-    esp_wifi_ctrl_slave_lost_counts(&noresp, &reboot);
-    op(out, ctx, "  c3 lost this boot: %lu no response, %lu rebooted while up\r\n",
-       (unsigned long)noresp, (unsigned long)reboot);
-    static char line[200];   /* static: the console stack is tight */
-    c3_restarts_describe(esp_wifi_ctrl_restarts(), line, sizeof(line));
-    op(out, ctx, "  ");
-    out(ctx, line);          /* not op(): its 160-byte buffer would cut the line */
-    op(out, ctx, "\r\n");
-}
-
-/* The end of a console flash-esp32 (hw worker): the result line, then Wi-Fi gets the C3 back. */
-static void flash_esp32_done(int result)
-{
-    if (result >= 0)
-        LOG_REPLY("flash-esp32: ESP32-C3 flashed + booted (%s)\n", esp_rom_result_str(result));
-    else
-        LOG_REPLY("flash-esp32: failed, %s (C3 left in reset; see log)\n", esp_rom_result_str(result));
-    net_wifi_hold_for_flash(false); /* restart the Wi-Fi join (fresh image, or retry) */
-}
 
 /* `ca`: one line per company CA certificate (cloud_extras_ca_each). */
-typedef struct { console_out_t out; void *ctx; } console_line_t;
-static bool console_ca_cert(void *c, const char *subject, const char *sha256_hex)
-{
-    console_line_t *cl = c;
-    op(cl->out, cl->ctx, "ca %s %.64s\r\n", subject, sha256_hex);
-    return true;
-}
 
 /* Console commands that capture into the PSRAM or drive the shared bus.  They go through the
    same heavy gate as the JSON and SCPI captures: run on the worker between two polls of a LAN
@@ -869,6 +636,7 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
 }
 #endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_led(int argc, char **argv, console_out_t out, void *ctx)
 {
     /* Light the status LED in one colour for 5 s (checks the LED and its pinout), then it
@@ -893,7 +661,9 @@ static void con_led(int argc, char **argv, console_out_t out, void *ctx)
         op(out, ctx, "led %u for 5 s\r\n", (unsigned)mask);
     }
 }
+#endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_psram_selftest(int argc, char **argv, console_out_t out, void *ctx)
 {
     /* Layered PSRAM datapath test: STM32<->PSRAM, iCE40->PSRAM write, and (if
@@ -902,6 +672,7 @@ static void con_psram_selftest(int argc, char **argv, console_out_t out, void *c
     psram_boot_selftest();
     op(out, ctx, "  (psram-selftest printed on the device log)\r\n");
 }
+#endif
 
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
 static void con_cap_selftest(int argc, char **argv, console_out_t out, void *ctx)
@@ -928,14 +699,7 @@ static void con_ina(int argc, char **argv, console_out_t out, void *ctx)
 }
 #endif
 
-static void con_usb_reattach(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* macOS ignores a new network interface while the screen is locked; this makes
-       the host see the device again without unplugging it. */
-    op(out, ctx, "usb-reattach ok\r\n");
-    usb_reattach_request();
-}
-
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_uid(int argc, char **argv, console_out_t out, void *ctx)
 {
     /* uid: the 96-bit unique ID.  Words only: a byte read of this area is a precise bus
@@ -945,6 +709,7 @@ static void con_uid(int argc, char **argv, console_out_t out, void *ctx)
     op(out, ctx, "  uid (words): %08lx %08lx %08lx\r\n",
        (unsigned long)w[0], (unsigned long)w[1], (unsigned long)w[2]);
 }
+#endif
 
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
 static void con_test_bootloop(int argc, char **argv, console_out_t out, void *ctx)
@@ -1073,11 +838,13 @@ static void con_psram_chunk(int argc, char **argv, console_out_t out, void *ctx)
 }
 #endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_psram_test(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (psram_init() == 0 && psram_test() == 0) op(out, ctx, "  PSRAM ok\r\n");
     else                                        op(out, ctx, "  PSRAM failed (see device log)\r\n");
 }
+#endif
 
 #if !defined(BENCHPOD_RELEASE)   /* development builds only: bench diagnostics */
 static void con_psram_addrtest(int argc, char **argv, console_out_t out, void *ctx)
@@ -1199,6 +966,7 @@ static void con_flash_id(int argc, char **argv, console_out_t out, void *ctx)
 }
 #endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (!blob_store_present(BLOB_GW0)) {
@@ -1225,30 +993,7 @@ static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
         }
     }
 }
-
-static void con_sig_policy(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* Firmware 4.0.0: always "required" (pod_policy.h); setting it again is fine, anything else
-       is refused here too. */
-    const char *why = NULL;
-    if (argc >= 2) {
-        int p = pod_policy_sig_from_name(argv[1]);
-        why = p < 0 ? "use required" : pod_policy_set_sig((fw_sig_policy_t)p, POLICY_SRC_USB);
-    }
-    if (why) op(out, ctx, "sig-policy error %s\r\n", why);
-    else     op(out, ctx, "sig-policy %s %u\r\n", fw_sign_policy_name(pod_policy_sig()),
-                (unsigned)fw_sign_key_count());
-}
-
-static void con_rollback_floor(int argc, char **argv, console_out_t out, void *ctx)
-{
-    const char *why = NULL;
-    if (argc >= 2) why = strcmp(argv[1], "clear") ? "use clear" : pod_policy_clear_floor(POLICY_SRC_USB, false);
-    char fl[16];
-    uint32_t f = pod_policy_rollback_floor();
-    if (why) op(out, ctx, "rollback-floor error %s\r\n", why);
-    else     op(out, ctx, "rollback-floor %s\r\n", f ? fw_sign_release_str(f, fl, sizeof(fl)) : "none");
-}
+#endif
 
 #if !defined(BENCHPOD_RELEASE)
 static void con_ca_damage(int argc, char **argv, console_out_t out, void *ctx)
@@ -1327,131 +1072,13 @@ static void con_lan_policy(int argc, char **argv, console_out_t out, void *ctx)
     else     op(out, ctx, "lan-policy %s\r\n", pod_policy_lan_name(pod_policy_lan()));
 }
 
-static void con_blobs(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* One line per W25Q slot: name, state against this firmware, what it holds. */
-    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
-        if (!blob_listed((blob_id_t)i)) continue;
-        const blob_info_t *in = blob_report_info((blob_id_t)i);   /* esp: what the C3 runs */
-        char hex[65] = "-";
-        if (in->present)
-            for (int k = 0; k < 32; k++) snprintf(hex + k * 2, 3, "%02x", in->sha256[k]);
-        op(out, ctx, "blob %s %s %lu %lu %s\r\n", blob_name((blob_id_t)i),
-           blob_state_str(blob_report_state((blob_id_t)i)), (unsigned long)in->len,
-           (unsigned long)in->version, hex);
-    }
-    /* The firmware copy the last install left in the W25Q (for the bootloader planned next).
-       Not a "blob" line: installers parse those and must not see an internal slot. */
-    const blob_info_t *fw = blob_store_info(BLOB_FW);
-    if (fw && fw->present)
-        op(out, ctx, "fw-copy %lu bytes, sha256 %02x%02x%02x%02x...\r\n", (unsigned long)fw->len,
-           fw->sha256[0], fw->sha256[1], fw->sha256[2], fw->sha256[3]);
-    else
-        op(out, ctx, "fw-copy none\r\n");
-}
-
-static void con_wifi_set(int argc, char **argv, console_out_t out, void *ctx)
-{
-    op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
-}
-
-static void con_wifi_show(int argc, char **argv, console_out_t out, void *ctx)
-{
-    cmd_wifi_show(out, ctx);
-}
-
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_wifi_static(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (argc >= 4) net_wifi_static(argv[1], argv[2], argv[3]);
     else op(out, ctx, "  usage: wifi-static <ip> <netmask> <gateway>  (e.g. 172.20.10.9 255.255.255.240 172.20.10.1)\r\n");
 }
-
-static void con_eth(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* Manually bring the wired interface down/up (PHY reset + DHCP re-acquire)
-       for debugging a stuck link without a power cycle. */
-    if      (argc >= 2 && !strcmp(argv[1], "stop"))    { net_eth_stop();    op(out, ctx, "  eth: stop requested\r\n"); }
-    else if (argc >= 2 && !strcmp(argv[1], "start"))   { net_eth_start();   op(out, ctx, "  eth: start requested (PHY reset + DHCP)\r\n"); }
-    else if (argc >= 2 && !strcmp(argv[1], "restart")) { net_eth_restart(); op(out, ctx, "  eth: restart requested (PHY reset + DHCP)\r\n"); }
-    else if (argc >= 2 && !strcmp(argv[1], "stats")) {
-        static eth_diag_t d;      /* static: the console stack has ~1.3 KB of headroom */
-        static char line[384];
-        net_eth_diag(&d);
-        eth_diag_format(&d, line, sizeof(line));
-        op(out, ctx, "  eth: ");
-        out(ctx, line);            /* not op(): its 160-byte buffer would cut the line */
-        op(out, ctx, "\r\n");
-    }
-#if !defined(BENCHPOD_RELEASE)   /* development builds only: wired-link diagnostics (JSON eth has them) */
-    else if (argc >= 2 && !strcmp(argv[1], "refclk")) {
-        uint32_t seq = net_eth_refclk_seq(), hz = 0;
-        net_eth_refclk_measure();
-        /* The net task runs it (~200 ms of gate plus a PHY restart); wait, don't guess. */
-        for (int i = 0; i < 40 && !net_eth_refclk_result(seq, &hz); i++)
-            vTaskDelay(pdMS_TO_TICKS(100));
-        if (hz == 0) {
-            op(out, ctx, "  eth refclk: no clock on PA1 — the PHY is not driving RMII\r\n");
-        } else {
-            long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
-            op(out, ctx, "  eth refclk: %lu Hz, %+ld ppm vs 50 MHz%s\r\n",
-               (unsigned long)hz, ppm,
-               clock_on_hsi() ? " (UNRELIABLE: the MCU crystal did not start, so the"
-                                " reference this is measured against is the internal HSI)" : "");
-            op(out, ctx, "  (100BASE-TX needs +/-50 ppm, 10BASE-T tolerates far more."
-                         " This compares the PHY clock with the MCU crystal, so read it"
-                         " next to a known-good pod.)\r\n");
-        }
-    }
-    else if (argc >= 3 && !strcmp(argv[1], "loopback")) {
-        int mbit = atoi(argv[2]);
-        uint32_t n = (argc >= 4) ? (uint32_t)atoi(argv[3]) : 200u;
-        if (mbit != 10 && mbit != 100) {
-            op(out, ctx, "  usage: eth loopback <10|100> [n]\r\n");
-        } else {
-            if (n == 0) n = 1;
-            if (n > 1000) n = 1000;
-            uint32_t seq = net_eth_loopback_seq();
-            static eth_loopback_result_t r;   /* static: console stack headroom */
-            net_eth_loopback(mbit, n);
-            bool done = false;
-            for (int i = 0; i < 150 && !(done = net_eth_loopback_result(seq, &r)); i++)
-                vTaskDelay(pdMS_TO_TICKS(100));
-            if (!done) {
-                op(out, ctx, "  eth loopback: no result (timed out)\r\n");
-            } else {
-                op(out, ctx, "  eth loopback %dM: sent %lu, came back %lu, intact %lu, corrupt %lu,"
-                             " crc %lu, align %lu, tx fail %lu\r\n",
-                   r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
-                   (unsigned long)r.intact, (unsigned long)r.corrupt,
-                   (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
-                op(out, ctx, "  %s\r\n",
-                   r.intact == r.sent
-                     ? "all frames intact: the RMII lines and the PHY's digital side are fine at this speed"
-                     : "frames lost or damaged without ever reaching the jack: suspect the RMII lines"
-                       " (TXD0/TXD1/TX_EN, RXD, CRS_DV) or the PHY's digital side");
-            }
-        }
-    }
-    else if (argc >= 3 && !strcmp(argv[1], "speed")) {
-        int full = (argc >= 4 && !strcmp(argv[3], "full"));
-        if (!strcmp(argv[2], "auto")) {
-            net_eth_force_speed(0, 0);
-            op(out, ctx, "  eth: autonegotiation restored (re-acquiring link + DHCP)\r\n");
-        } else if (!strcmp(argv[2], "10") || !strcmp(argv[2], "100")) {
-            int mbit = atoi(argv[2]);
-            net_eth_force_speed(mbit, full);
-            op(out, ctx, "  eth: forcing %d M %s (re-acquiring link + DHCP)\r\n",
-               mbit, full ? "full" : "half");
-            if (full)
-                op(out, ctx, "  note: a switch port that autonegotiates parallel-detects HALF,"
-                             " so forced full is a duplex mismatch\r\n");
-        } else {
-            op(out, ctx, "  usage: eth speed <auto|10|100> [full]\r\n");
-        }
-    }
 #endif
-    else op(out, ctx, "  usage: eth <stop|start|restart|stats>\r\n");
-}
 
 static void con_identity(int argc, char **argv, console_out_t out, void *ctx)
 {
@@ -1468,38 +1095,6 @@ static void con_identity(int argc, char **argv, console_out_t out, void *ctx)
     }
 }
 
-static void con_identity_wipe(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* The way back for a pod whose identity record the firmware will not replace: erase it and
-       make a new key. USB console only (this console is physical presence); the token must be
-       the current short id, or "unknown" when there is none. */
-    const char *why = device_identity_wipe(argc >= 2 ? argv[1] : NULL);
-    if (why) {
-        op(out, ctx, "identity-wipe error %s\r\n", why);
-    } else {
-        char id[DEVICE_ID_SHORT_LEN + 1];
-        device_identity_short_id(id);
-        op(out, ctx, "identity-wipe ok %s\r\n", id);
-        net_cloud_reload();   /* log in again with the new key (the server needs a re-register) */
-    }
-}
-
-#if defined(BENCHPOD_WIFI_BRIDGE)
-static void con_bridge(int argc, char **argv, console_out_t out, void *ctx)
-{
-    cmd_bridge(argc, argv, out, ctx);
-}
-#endif
-
-static void con_wifi_scan(int argc, char **argv, console_out_t out, void *ctx)
-{
-    /* For a Wi-Fi picker (the CLI): "scan <rssi> <channel> <auth> <ssid>" per network,
-       strongest first, then "scan done <n>"; or "wifi-scan error <why>". Through a Wi-Fi
-       bridge when one is plugged in, else the built-in Wi-Fi, whose list follows the prompt
-       when the scan ends (the worker does not wait for it). */
-    wifi_scan_console();
-}
-
 static void con_selftest(int argc, char **argv, console_out_t out, void *ctx)
 {
     cmd_selftest(out, ctx);
@@ -1513,47 +1108,7 @@ static void con_reboot(int argc, char **argv, console_out_t out, void *ctx)
     NVIC_SystemReset();
 }
 
-/* ca / ca-clear (the console's cloud-ca / cloud-ca-clear) */
-static void con_ca(int argc, char **argv, console_out_t out, void *ctx)
-{
-    if (!strcmp(argv[0], "ca-clear")) {
-        const char *why = bus_busy_reason();   /* the W25Q write takes the shared bus */
-        if (!why) why = cloud_extras_ca_clear();
-        if (why) op(out, ctx, "ca-clear error %s\r\n", why);
-        else     op(out, ctx, "ca-clear ok\r\n");
-    } else {
-        /* One line per certificate: "ca <subject> <sha256>", or "ca none". */
-        console_line_t cl = { out, ctx };
-        int n = cloud_extras_ca_each(console_ca_cert, &cl);
-        if (n == 0) op(out, ctx, "ca none\r\n");
-        if (cloud_extras_ca_error()) op(out, ctx, "ca error %s\r\n", cloud_extras_ca_error());
-    }
-}
-
-/* proxy / proxy-set / proxy-clear (the console's cloud-proxy*) */
-static void con_proxy(int argc, char **argv, console_out_t out, void *ctx)
-{
-    const char *why = NULL;
-    /* proxy-set/-clear write the W25Q, which takes the shared bus; plain `proxy` only reads */
-    const char *busy = strcmp(argv[0], "proxy") ? bus_busy_reason() : NULL;
-    if (busy)
-        why = busy;
-    else if (!strcmp(argv[0], "proxy-set"))
-        why = argc < 2 ? "usage: proxy-set <host:port> [user password]"
-                       : cloud_extras_proxy_set(argv[1], argc >= 4 ? argv[2] : NULL, argc >= 4 ? argv[3] : NULL);
-    else if (!strcmp(argv[0], "proxy-clear"))
-        why = cloud_extras_proxy_set(NULL, NULL, NULL);
-    if (why) {
-        op(out, ctx, "proxy error %s\r\n", why);
-    } else {
-        cloud_proxy_t p;
-        cloud_extras_proxy_get(&p);
-        if (p.host[0]) op(out, ctx, "proxy %s:%u %s\r\n", p.host, (unsigned)p.port, p.user[0] ? "auth" : "noauth");
-        else           op(out, ctx, "proxy none\r\n");
-        memset(&p, 0, sizeof(p));
-    }
-}
-
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 /* The ESP32-C3 commands' common refusals: no C3 on this board, or a flash of it is running.
    True = refused (the reply is sent). */
 static bool esp_refused(const char *verb, console_out_t out, void *ctx)
@@ -1571,7 +1126,9 @@ static bool esp_refused(const char *verb, console_out_t out, void *ctx)
     }
     return false;
 }
+#endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_flash_esp32_sync(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (esp_refused(argv[0], out, ctx)) return;
@@ -1583,32 +1140,9 @@ static void con_flash_esp32_sync(int argc, char **argv, console_out_t out, void 
         op(out, ctx, "  flash-esp32-sync failed — no C3 ROM response (see log)\r\n");
     net_wifi_hold_for_flash(false); /* the C3 was left in its ROM loader: restart Wi-Fi */
 }
+#endif
 
-static void con_flash_esp32(int argc, char **argv, console_out_t out, void *ctx)
-{
-    if (esp_refused(argv[0], out, ctx)) return;
-    if (bus_busy_reason()) {
-        /* ~140 s on the shared bus: not under a capture, upload or update */
-        op(out, ctx, "  flash-esp32 refused: %s\r\n", bus_busy_reason());
-        return;
-    }
-    /* Runs in the background (~2 min): the console and the API keep answering, and the log
-       carries the progress and the result (flash_esp32_done). */
-    net_wifi_hold_for_flash(true);  /* Wi-Fi control must not drive EN/BOOT meanwhile */
-    int rc = esp_rom_flash_start(flash_esp32_done);
-    if (rc == 0) {
-        op(out, ctx, "  flashing the ESP32-C3 in the background (%u bytes, about 2 minutes);\r\n"
-                     "  the log shows the progress and ends with \"flash-esp32: ...\"\r\n",
-           (unsigned)blob_store_info(BLOB_ESP)->len);
-    } else {
-        op(out, ctx, "  flash-esp32 failed: %s\r\n",
-           rc == ESP_FLASH_START_NO_IMAGE ? "no ESP32-C3 image in the W25Q (install blob esp first)"
-           : rc == ESP_FLASH_START_BAD_SLOT ? "the esp slot does not match its checksum"
-           : "a flash is already running");
-        net_wifi_hold_for_flash(false);
-    }
-}
-
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_esp_reset_pulse(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (esp_refused(argv[0], out, ctx)) return;
@@ -1619,9 +1153,11 @@ static void con_esp_reset_pulse(int argc, char **argv, console_out_t out, void *
     HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_RESET);
     sleep_ms(50);
     HAL_GPIO_WritePin(ESP_EN_PORT, ESP_EN_PIN, GPIO_PIN_SET);
-    op(out, ctx, "  C3 reset pulsed (50 ms); watch wifi-show\r\n");
+    op(out, ctx, "  C3 reset pulsed (50 ms); watch wifi_status\r\n");
 }
+#endif
 
+#if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
 static void con_esp_mon(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (esp_refused(argv[0], out, ctx)) return;
@@ -1629,15 +1165,23 @@ static void con_esp_mon(int argc, char **argv, console_out_t out, void *ctx)
     if (ms > 20000) ms = 20000;
     esp_uart_monitor(ms);
 }
+#endif
 
-static void con_wifi_clear(int argc, char **argv, console_out_t out, void *ctx)
+/* net-reset: the way back to a pod that no network reaches (firmware 4.0.0; wifi-clear up to
+   3.10.13 did the Wi-Fi part). Forgets the Wi-Fi credentials (the pod's flash and the ESP32-C3's
+   NVS, or the Wi-Fi bridge's), which turns the USB network adapter back on, and puts Ethernet back
+   to autonegotiation with a PHY reset and a new DHCP lease. The policies, the cloud settings and the
+   device key stay as they are (lan-policy and usb-network have their own commands). */
+static void con_net_reset(int argc, char **argv, console_out_t out, void *ctx)
 {
+    net_eth_force_speed(0, 0);   /* autonegotiation, PHY reset, DHCP again */
+    op(out, ctx, "net-reset eth autonegotiation, link and DHCP again\r\n");
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_in_use()) {
         const char *err = NULL;
         int rc = wifi_bridge_call(BWP_CLEAR_WIFI, NULL, 0, 1000, &g_wifi_bridge_reply, &err);
-        if (!bridge_failed(out, ctx, "wifi-clear", rc, err))
-            op(out, ctx, "  Wi-Fi credentials cleared on the Wi-Fi bridge\r\n");
+        if (!bridge_failed(out, ctx, "net-reset wifi", rc, err))
+            op(out, ctx, "net-reset wifi cleared on the Wi-Fi bridge\r\n");
         return;
     }
 #endif
@@ -1646,12 +1190,12 @@ static void con_wifi_clear(int argc, char **argv, console_out_t out, void *ctx)
     net_wifi_reload();          /* drop Wi-Fi now, whatever happens to the C3 */
     const char *why = esp_wifi_ctrl_module_present() ? wifi_clear_c3_now() : NULL;
     if (!esp_wifi_ctrl_module_present())   /* digital v3r3: no C3, no second copy */
-        op(out, ctx, "  Wi-Fi credentials cleared (pod flash; this BenchPod has no ESP32-C3)\r\n");
+        op(out, ctx, "net-reset wifi cleared (pod flash; this BenchPod has no ESP32-C3)\r\n");
     else if (!why)
-        op(out, ctx, "  Wi-Fi credentials cleared (pod flash and the ESP32-C3's NVS)\r\n");
+        op(out, ctx, "net-reset wifi cleared (pod flash and the ESP32-C3's NVS)\r\n");
     else
-        op(out, ctx, "  Wi-Fi credentials cleared on the pod, but the ESP32-C3's NVS was not\r\n"
-                     "  erased (%s): an old copy may remain there; run wifi-clear again or flash-esp32\r\n", why);
+        op(out, ctx, "net-reset wifi cleared on the pod, but the ESP32-C3's NVS was not erased (%s): "
+                     "run net-reset again, or install the esp image again\r\n", why);
 }
 
 static void con_dfu(int argc, char **argv, console_out_t out, void *ctx)
@@ -1667,7 +1211,7 @@ static void con_dfu(int argc, char **argv, console_out_t out, void *ctx)
 }
 
 /* One row per console command (check_docs_coverage.py reads the names from here).  A name that is
-   not here goes to con_fallback: a command that moved to the JSON API, else "unknown command".
+   not here goes to con_fallback ("unknown command").
    Development-only commands are not in a release build's table at all.  `help` is its own text:
    it groups several commands per line, which a per-row help string would not reproduce. */
 typedef void (*console_fn_t)(int argc, char **argv, console_out_t out, void *ctx);
@@ -1677,94 +1221,64 @@ typedef struct {
 } console_cmd_t;
 
 static const console_cmd_t k_console_cmds[] = {
+    /* Release builds (firmware 4.0.0): a recovery console. What needs someone at the pod, or works
+       when no network reaches it; everything else is the JSON API, on the USB network adapter too. */
     { "help", con_help },
-    { "ping", con_ping },
     { "status", con_status },
+    { "ping", con_ping },
+    { "selftest", con_selftest },
+    { "reboot", con_reboot },
+    { "dfu", con_dfu },
+    { "identity", con_identity },
+    { "usb-network", con_usb_network },
+    { "lan-policy", con_lan_policy },
+    { "lan-tls", con_lan_tls },
+    { "net-reset", con_net_reset },
+    { "log", con_log },
 #if !defined(BENCHPOD_RELEASE)
+    /* development builds only: bench diagnostics */
+    { "uid", con_uid },
+    { "led", con_led },
     { "spi-clk", con_spi_clk },
     { "spi-diag", con_spi_diag },
     { "adc-spi", con_adc_spi },
-#endif
-#if defined(BENCHPOD_EMI_TEST)
-    { "emi", con_emi },
-#endif
-    { "led", con_led },
-    { "psram-selftest", con_psram_selftest },
-#if !defined(BENCHPOD_RELEASE)
-    { "cap-selftest", con_cap_selftest },
+    { "adcraw", con_adcraw },
     { "i2c-scan", con_i2c_scan },
     { "ina", con_ina },
-#endif
-    { "usb-reattach", con_usb_reattach },
-    { "uid", con_uid },
-#if !defined(BENCHPOD_RELEASE)
-    { "test-bootloop", con_test_bootloop },
-    { "ice40-erase", con_ice40_erase },
-    { "test-crash", con_test_crash },
-    { "test-hang", con_test_hang },
-    { "test-ice40-hold", con_test_ice40_hold },
     { "expdump", con_expdump },
-    { "adcraw", con_adcraw },
+    { "psram-selftest", con_psram_selftest },
+    { "psram-test", con_psram_test },
     { "psram", con_psram },
+    { "psram-addrtest", con_psram_addrtest },
     { "psram-bench", con_psram_bench },
     { "psram-clk", con_psram_clk },
     { "psram-chunk", con_psram_chunk },
-#endif
-    { "psram-test", con_psram_test },
-#if !defined(BENCHPOD_RELEASE)
-    { "psram-addrtest", con_psram_addrtest },
+    { "cap-selftest", con_cap_selftest },
     { "capture-psram", con_capture_psram },
     { "dualcap", con_dualcap },
     { "lastress", con_lastress },
     { "flash-id", con_flash_id },
-#endif
     { "flash-ice40", con_flash_ice40 },
-    { "sig-policy", con_sig_policy },
-    { "rollback-floor", con_rollback_floor },
-#if !defined(BENCHPOD_RELEASE)
+    { "ice40-erase", con_ice40_erase },
+    { "test-bootloop", con_test_bootloop },
+    { "test-crash", con_test_crash },
+    { "test-hang", con_test_hang },
+    { "test-ice40-hold", con_test_ice40_hold },
     { "ca-damage", con_ca_damage },
-#endif
-    { "ca", con_ca },
-    { "ca-clear", con_ca },
-    { "proxy", con_proxy },
-    { "proxy-set", con_proxy },
-    { "proxy-clear", con_proxy },
-    { "usb-network", con_usb_network },
-    { "lan-tls", con_lan_tls },
-    { "log", con_log },
-    { "lan-policy", con_lan_policy },
-    { "blobs", con_blobs },
-    { "flash-esp32-sync", con_flash_esp32_sync },
-    { "flash-esp32", con_flash_esp32 },
-    { "wifi-set", con_wifi_set },
+    { "wifi-static", con_wifi_static },
     { "esp-reset-pulse", con_esp_reset_pulse },
     { "esp-mon", con_esp_mon },
-    { "wifi-show", con_wifi_show },
-    { "wifi-static", con_wifi_static },
-    { "eth", con_eth },
-    { "identity", con_identity },
-    { "identity-wipe", con_identity_wipe },
-    { "wifi-clear", con_wifi_clear },
-#if defined(BENCHPOD_WIFI_BRIDGE)
-    { "bridge", con_bridge },
+    { "flash-esp32-sync", con_flash_esp32_sync },
 #endif
-    { "wifi-scan", con_wifi_scan },
-    { "dfu", con_dfu },
-    { "selftest", con_selftest },
-    { "reboot", con_reboot },
+#if defined(BENCHPOD_EMI_TEST)
+    { "emi", con_emi },
+#endif
 };
 
 /* Runs on the hw worker (hw_worker_submit_console), the one task that drives the instrument
    hardware, so it takes no lock of its own: the worker runs one job at a time. */
 void console_exec_hw(char *cmd, console_out_t out, void *ctx)
 {
-    /* wifi-set needs quote-aware parsing (SSID/password may contain spaces), so
-       intercept it before the whitespace tokenizer mangles the line. */
-    if (!strncmp(cmd, "wifi-set", 8) && (cmd[8] == ' ' || cmd[8] == '\t')) {
-        cmd_wifi_set(cmd + 8, out, ctx);
-        return;
-    }
-
     /* Up to 11 tokens so `can write <id> b0..b7` (2 + 1 + 8) fits; other verbs
        use far fewer. */
     char *argv[11] = {0};
@@ -1772,14 +1286,6 @@ void console_exec_hw(char *cmd, console_out_t out, void *ctx)
     char *tok = strtok(cmd, " \t");
     while (tok && argc < 11) { argv[argc++] = tok; tok = strtok(NULL, " \t"); }
     if (argc == 0) return;
-    /* The cloud-link settings carry the JSON verbs' names (cloud_ca, cloud_proxy) on the console
-       too; the short names they started with keep working, and replies keep the short form. */
-    static const char *const aliases[][2] = {
-        { "cloud-ca", "ca" }, { "cloud-ca-clear", "ca-clear" }, { "cloud-proxy", "proxy" },
-        { "cloud-proxy-set", "proxy-set" }, { "cloud-proxy-clear", "proxy-clear" },
-    };
-    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
-        if (!strcmp(argv[0], aliases[i][0])) { argv[0] = (char *)aliases[i][1]; break; }
 
     const bool gated = console_needs_heavy_gate(argv[0]);
     if (gated && !command_handler_acquire_adc(CH_CONSOLE_TEXT_OWNER)) {

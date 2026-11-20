@@ -869,6 +869,6 @@ note = "Booleans are true/false: target_power takes enabled (was state 1/0) and 
 [features.console_recovery_json]
 rev = 10
 firmware = "next"
-docs = "API.md#identity_wipe--erase-the-device-key-usb-link-only"
+docs = "usb-serial-interface.md#removed-in-firmware-400"
 dated = "code"
-note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link), wifi_reflash (T2, the Wi-Fi module image again from the esp slot). wifi_status bridge adds identity, image, boot, reboots, emc."
+note = "The USB console is a recovery tool; what it did moves to JSON: identity_wipe (T2, USB link only, confirm token; was always refused), sig_policy clear_floor:true (USB link only), usb_reattach (T1), wifi_bridge (T2: update, reboot, factory_reset, cert over the USB link). The console flash-esp32 has no command: OTA target esp installs the image. wifi_status adds rssi_dbm (built-in Wi-Fi) and, on the bridge object, identity, image, boot, reboots, emc."

@@ -140,10 +140,6 @@ void   handle_wifi_status(int conn_id, const char *json);
 const char *wifi_clear_c3_now(void);
 void   wifi_clear_poll(void);
 void   handle_wifi_scan(int conn_id, const char *json);
-/* Console wifi-scan: the networks (a Wi-Fi bridge: now; the built-in Wi-Fi: printed by
-   wifi_scan_poll when the scan ends, then a new prompt, so the worker never waits for it). */
-void   wifi_scan_console(void);
-void   wifi_scan_poll(void);
 void   handle_eth(int conn_id, const char *json);
 void   handle_speedtest(int conn_id, const char *json);
 void   speedtest_pump(void);                  /* the "up" direction's paced byte source */
@@ -167,7 +163,6 @@ void handle_identity_pop(int conn_id, const char *json);
 void handle_identity_wipe(int conn_id, const char *json);   /* command_handler_recovery.c */
 void handle_usb_reattach(int conn_id, const char *json);
 void handle_wifi_bridge(int conn_id, const char *json);
-void handle_wifi_reflash(int conn_id, const char *json);
 void handle_usb_cc(int conn_id, const char *json);
 
 /* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */

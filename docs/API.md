@@ -292,7 +292,6 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `wifi_scan` | T0 | Start a Wi-Fi scan, or read its networks | object | no |
 | `wifi_set` | T2 | Store Wi-Fi credentials and connect | object | no |
 | `wifi_clear` | T2 | Forget the Wi-Fi credentials (pod and ESP32-C3) | `"cleared"` | no |
-| `wifi_reflash` | T2 | Write the Wi-Fi module's firmware again from the pod's `esp` slot (the console's `flash-esp32` up to 3.10.13) | object | no |
 | `wifi_bridge` | T2 | The Wi-Fi bridge on the Ethernet port: update, reboot, factory reset, identity certificate (the console's `bridge` up to 3.10.13) | object | no |
 | `usb_reattach` | T1 | Drop off the USB bus and enumerate again (the console's `usb-reattach` up to 3.10.13) | object | no |
 | `eth` | T0/T2 | Wired link control and diagnostics | string or object | no |
@@ -1786,7 +1785,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `board` | string | Board name this firmware was built for. |
 | `net` | string | `"ready"` when the Ethernet or Wi-Fi interface has an address, else `"disconnected"`. |
 | `ip` | string | The pod's IP (Ethernet preferred over Wi-Fi), or `"0.0.0.0"`. |
-| `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is in the console's `wifi-show`. |
+| `rssi_dbm` | number or `null` | The Wi-Fi bridge's signal (dBm) while `wifi` is `"bridge connected"`, else `null`; the built-in Wi-Fi's signal is `wifi_status` `rssi_dbm` (firmware 4.0.0). |
 | `wifi` | string | Wi-Fi (ESP32-C3) state: `disabled`, `starting`, `waiting-slave`, `flashing-c3`, `connecting`, `connected` or `backoff`; `absent` on digital v3r3, which has no ESP32-C3 (firmware 3.9.5+). With a [Wi-Fi bridge](#wifi_set--wifi_clear) on the Ethernet port and no built-in Wi-Fi configured (`disabled` or `absent`), it reports the bridge instead: `"bridge "` and its state (`bridge connected`, `bridge joining`, `bridge unconfigured`, `bridge wait-pod`, `bridge auth-failed`, `bridge no-ap`). |
 | `cloud` | string | Cloud link state: `disabled`, `waiting-wifi`, `connecting`, `connected` or `backoff`. |
 | `short_form` | boolean | Present (`true`) only in the [short form](#short-form) (firmware 3.10.5+). |
@@ -4121,7 +4120,7 @@ Forgets the cloud settings and disconnects. Reply `"cleared"`.
 
 ### `wifi_status`
 
-Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none"}`.
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none","rssi_dbm":-61}`. `rssi_dbm` (firmware 4.0.0) is the signal while joined, else `null`; the console's `wifi-show` had it up to 3.10.13.
 `state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
 often it was lost (`c3_lost_*`: since this boot).
 
@@ -4193,8 +4192,8 @@ again in a moment"`, `"wifi_scan: the ESP32-C3 is being flashed or erased; try a
 done"`, or `"wifi_scan: no scan with that id; start one with {"cmd":"wifi_scan"}"` (an `id` the pod
 never gave out, for example after a reboot). On digital v3r3, which has no ESP32-C3, the read form
 fails at once with `"wifi_scan: no Wi-Fi module: this BenchPod has no built-in Wi-Fi"` (firmware
-3.9.5+). With a bridge: `"Wi-Fi bridge: <why>"`. The same scan
-is `wifi-scan` on the [USB console](usb-serial-interface.md).
+3.9.5+). With a bridge: `"Wi-Fi bridge: <why>"`. Up to firmware 3.10.13 the
+[USB console](usb-serial-interface.md) had the same scan as `wifi-scan`.
 
 ### `wifi_set` / `wifi_clear`
 
@@ -4214,8 +4213,9 @@ replies `"cleared"` and drops Wi-Fi after the reply. Errors: `"missing ssid"`, `
 **Digital v3r3 has no ESP32-C3** (firmware 3.9.5+). `wifi_set` answers `"no Wi-Fi module: this
 BenchPod has no built-in Wi-Fi"` and saves nothing, `wifi_clear` clears the pod's copy only
 (`c3_nvs` stays `none`), USB networking stays on, `status.wifi` is `absent`, and the pod never
-drives the C3's pins or tries to flash it. Credentials stored on an older board are ignored. The same operations are `wifi-set` / `wifi-clear` on
-the [USB console](usb-serial-interface.md).
+drives the C3's pins or tries to flash it. Credentials stored on an older board are ignored. Up to firmware 3.10.13 the
+[USB console](usb-serial-interface.md) had the same operations as `wifi-set` / `wifi-clear`; from
+4.0.0 its `net-reset` clears the Wi-Fi (and resets Ethernet) when no network reaches the pod.
 
 **Where the credentials are kept.** In one place: the STM32's config store (two flash sectors,
 A/B). The ESP32-C3 is put in RAM storage mode (`esp_wifi_set_storage(WIFI_STORAGE_RAM)`) before it
@@ -4234,7 +4234,7 @@ values. `wifi_clear` therefore wipes both copies:
    NVS partition (16 KB at `0x9000`, from the partition table of the image the pod last wrote into
    the C3, or of the copy older firmware kept in the W25Q) is
    erased through the C3's ROM loader and read back blank (MD5 of the region computed by the C3).
-   This takes about 3 seconds, and like `wifi_reflash` it stops a running DAC waveform (the W25Q
+   This takes about 3 seconds, and like an `esp` install it stops a running DAC waveform (the W25Q
    shares the PSRAM bus). The C3's application is untouched; it recreates an empty NVS on its
    next start. The C3 then stays in reset and Wi-Fi stays off until the next `wifi_set`.
 
@@ -4287,23 +4287,7 @@ development builds).
 
 > **After updating from 3.7.0 or older:** the update alone does not erase what the older firmware
 > stored on the C3. It stays in the C3's NVS (unused) until the first `wifi_clear` or
-> `wifi_reflash`. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
-
-### `wifi_reflash` — write the Wi-Fi module's firmware again
-
-```json
-{"cmd":"wifi_reflash"}
-→ {"status":"ok","data":{"started":true,"bytes":1048576}}
-```
-
-Writes the Wi-Fi module (ESP32-C3) firmware from the pod's `esp` slot and boots it, in the
-background (about 2 minutes; the API keeps answering). The pod does this by itself when the module
-runs another image; this is the manual repair. While it runs, `status.wifi` is `flashing-c3`, and
-the device log ends it with `wifi_reflash: ...`. Refusals: `wifi_reflash: no Wi-Fi module: ...`
-(digital v3r3), `BP0051` (`update_in_progress`) while a flash of the module runs, `BP0048`
-(`storage_bus_busy`) while a capture, upload or update holds the shared bus, `wifi_reflash: no
-Wi-Fi module image on the pod (install the esp blob)` and `wifi_reflash: the esp slot does not
-match its checksum`. Up to firmware 3.10.13 this was the USB console's `flash-esp32`.
+> `esp` install. To keep Wi-Fi and still remove it: `wifi_clear`, then `wifi_set` again.
 
 ### `wifi_bridge` — the Wi-Fi bridge on the Ethernet port
 
@@ -5121,7 +5105,8 @@ real server name and relay the host-bound (v2) login, which defeats it.
 **Allowed over the USB network adapter** (firmware 3.9.0+). A connection on the USB link is
 physical presence, like the USB console (anything on that computer can open the console anyway),
 so it may install or clear the CA and set or clear the proxy. This is how `benchpod cloud ca` and
-`cloud proxy` (and `usb-bridge`) change them over USB. Everything else on the USB link stays LAN
+`cloud proxy` (and `usb-bridge`) change them over USB. From firmware 4.0.0 the console has no CA or
+proxy commands: the USB link and the cloud are the ways. Everything else on the USB link stays LAN
 tier.
 
 ### While a cloud job holds the pod
