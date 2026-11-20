@@ -1915,6 +1915,18 @@ A client:
 4. Shows a `BP0030` refusal from its `message`: a client from before the codes shows that text,
    which says what to do.
 
+Firmware 4.0.0 also changes defaults a client has to follow, though they do not change a reply's
+shape (so they are not an `api` level):
+
+- **The LAN is TLS only.** The JSON API answers on Ethernet and Wi-Fi on `8443` only; plaintext
+  `8080` answers on the USB network adapter. A client connects to a LAN pod on `8443` and pins its
+  certificate on first use (see [`lan_tls`](#lan_tls--the-lan-api-over-tls)); a plaintext-only
+  client fails to connect there (the connection is reset), or gets `BP0075` when SCPI is on.
+- **SCPI is off** until switched on (`lan_tls` `"scpi":true`, over USB or from the cloud).
+- **Signatures are always required** for every update ([`sig_policy`](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts)):
+  install signed releases; self-built firmware goes in over USB DFU. `BP0074` for an attempt to
+  loosen it.
+
 ---
 
 ### `diag` — heap, stack and network diagnostics
