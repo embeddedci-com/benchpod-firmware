@@ -8,7 +8,6 @@
  */
 #include "console.h"
 #include "cloud_caps.h"     /* cloud_caps_wifi_mac: status wifimac */
-#include "console_moved.h"
 #include "bp_json.h"         /* bp_hex_nibble */
 #include "usb_device.h"
 #include "usb_netif.h"
@@ -634,18 +633,11 @@ static bool console_needs_heavy_gate(const char *verb)
     return false;
 }
 
-/* Not a console command: a moved one (console_moved.h), else unknown. */
+/* Not a console command. (Firmware 3.9.0 to 3.10.13 answered the commands it had moved to the
+   JSON API with a line saying so; 4.0.0 treats them like any other.) */
 static void con_fallback(const char *verb, console_out_t out, void *ctx)
 {
-    if (console_moved_to(verb)) {
-        /* An older benchpod CLI / embeddedci SDK: say what to update, not "unknown command". */
-        static char moved[224];
-        console_moved_line(verb, moved, sizeof(moved));
-        out(ctx, moved);
-        out(ctx, "\r\n");
-    } else {
-        op(out, ctx, "  unknown command '%s' (try 'help')\r\n", verb);
-    }
+    op(out, ctx, "  unknown command '%s' (try 'help')\r\n", verb);
 }
 
 static void con_help(int argc, char **argv, console_out_t out, void *ctx)

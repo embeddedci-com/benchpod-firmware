@@ -797,11 +797,11 @@ static bool la_rate_fits(int conn_id, size_t samples, float req_hz, bool with_ad
     return false;
 }
 
-/* "samples out of range: 1 to N" (the prefix is what older clients and docs match on). */
+/* samples outside 1..max: BP0067. `why` (a deep capture's limit at this rate) only goes to the
+   log. */
 static void send_samples_range(int conn_id, unsigned long max, const char *why) {
-    char msg[160];
-    snprintf(msg, sizeof(msg), "samples out of range: 1 to %lu%s", max, why ? why : "");
-    send_error(conn_id, msg);
+    if (why) LOG_D("[cmd] samples out of range: 1 to %lu%s\n", max, why);
+    bp_err_samples_out_of_range(conn_id, (int32_t)max);
 }
 
 static void chgscan_fail(const char *why) {
@@ -1289,7 +1289,7 @@ void handle_capture(int conn_id, const char *json) {
        buffer, NOT the multi-MB PSRAM region.  For deep multi-second ADC use capture_dual
        (adc_samples with la_samples:0), which streams chunked from PSRAM. */
     if (samples == 0 || samples > ADC_MONO_BUF_SAMPLES) {
-        send_error(conn_id, "samples out of range (use capture_dual for deep captures)");
+        send_samples_range(conn_id, ADC_MONO_BUF_SAMPLES, NULL);
         return;
     }
     la_trigger_t trig;
@@ -1501,34 +1501,6 @@ void handle_capture_read(int conn_id, const char *json) {
     bulk.b64 = wants_b64(json);
     LOG_D("[cmd] capture_read: resuming from %u/%u samples over websocket...\n",
            (unsigned)offset, (unsigned)total);
-}
-
-void handle_stream(int conn_id, const char *json) {
-    char samples_s[16] = {0};
-    json_get_value(json, "samples", samples_s, sizeof(samples_s));
-    size_t samples = samples_s[0] ? (size_t)atoi(samples_s) : 256;
-    float  sr_hz   = parse_sample_rate_hz(json);   /* 0 = max rate */
-    /* "stream" is a one-shot PSRAM capture: the deep capture is fully async in the
-       gateware, so there is nothing to chunk (the old chunked-DMA streaming model
-       was v1-only).  Arm it and defer the read-back to command_handler_poll(). */
-    if (samples == 0 || samples > ADC_MONO_BUF_SAMPLES) {
-        send_error(conn_id, "samples out of range (use capture_dual for deep captures)");
-        return;
-    }
-    if (!heavy_begin(conn_id)) return;
-
-    if (adc_capture_psram_start(samples, sr_hz) != 0) {
-        heavy_release(conn_id);
-        send_error(conn_id, "capture failed");
-        return;
-    }
-    last_cap.valid = false;   /* this capture overwrites a PSRAM region */
-    v2cap.active   = true;
-    v2cap.conn_id  = conn_id;
-    v2cap.samples  = samples;
-    v2cap.stop_dac = false;
-    v2cap.b64      = wants_b64(json);
-    dac_trace_note_capture(samples);   /* the read-back lands in the pool */
 }
 
 /* `test` — pure Pico-side diagnostic that fills a buffer with a known

@@ -155,13 +155,13 @@ and are never reused; each is on `https://embeddedci.com/docs/errors#<code>`, an
 (see [Client compatibility](#client-compatibility)), for clients too old to know it.
 
 The second form is a refusal without a code: a bad argument or a failure that only a person
-reads (`"samples out of range: 1 to 32768"`, `"capture failed"`). Clients show its text as it
+reads (`"unknown waveform"`, `"capture failed"`). Clients show its text as it
 is and do not match on it. Over the cloud command channel the envelope's `"error"` is the
 message, or the code when there is none, with `"code"` and `"args"` beside it.
 
 ### Chunked data (multi-packet responses)
 
-Commands that return sample arrays (`capture`, `stream`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
+Commands that return sample arrays (`capture`, `measure`, `test`, `capture_dual`, `capture_read`, `la_capture`, `sensor_la`) send the data in several packets. The first packet uses `"status":"ok"` and the ones after it `"status":"chunk"`. Every packet has a `"more"` boolean that says whether more packets follow. The packet size follows the connection's send buffer (at most 256 samples), so do not count on a fixed size.
 
 ```json
 {"status":"ok",    "bits":16, "data":[32768,33012,33270,...], "more":true}\n
@@ -173,7 +173,7 @@ ADC samples are 16-bit counts (`"bits":16`); see [ADC sample values](#adc-sample
 
 #### Base64 samples (`"enc":"b64"`)
 
-Add `"enc":"b64"` to `capture`, `stream`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. The [features table](#features-table) has `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
+Add `"enc":"b64"` to `capture`, `measure`, `test`, `capture_dual` or `capture_read` and the 16-bit samples come as `"b64"` instead of `"data"`: unpadded base64url (RFC 4648 §5) of the little-endian `uint16` values. That is 8/3 bytes per sample instead of up to 6, and it reads back about 6.7x faster (2M ADC samples: 4.2 s instead of 28 s over the LAN). Everything else in the packet stays the same, and `capture_dual`'s LA region still comes as `la_edges`. The [features table](#features-table) has `"capture_b64"` when the firmware supports it. Without the key the reply is the decimal `"data"` array, so older clients keep working.
 
 ```json
 {"status":"ok",    "bits":16, "adc_rate_hz":400000, "b64":"AAABAP__...", "more":true}\n
@@ -191,7 +191,7 @@ and a cloud tunnel never goes above the tier the server allowed its user (T2 and
 organization owner or admin). "T0/T2" commands read at T0 and change a setting at T2.
 Commands that send several packets or switch the connection to raw bytes need a stream connection
 (a LAN socket or a cloud byte tunnel). The single-reply cloud command channel refuses `capture`,
-`stream`, `capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
+`capture_dual`, `capture_read`, `measure`, `test`, `load`, `load_bin`, `replay`,
 `sensor_la`, `la_capture`, `dap_start`, `uart_proxy_start` and `speedtest` with
 `command not supported over cloud channel`. The USB console does not run JSON commands at all.
 
@@ -202,7 +202,6 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `diag` | T0 | Heap, stack, network-stack and console diagnostics (firmware 3.10.9+) | object | no |
 | `generate` | T1 | Start a DAC waveform | `null` or object | no |
 | `capture` | T0 | ADC snapshot, up to 32768 samples | array of uint16 | yes |
-| `stream` | T0 | Same as `capture`, without a trigger | array of uint16 | yes |
 | `measure` | T1 | DAC waveform + ADC capture in one command | array of uint16 | yes |
 | `capture_dual` | T0 | Deep ADC + LA capture off one trigger | array of uint16, LA as edges | yes |
 | `capture_read` | T0 | Resume the read-back of the last `capture_dual` | array of uint16 | yes |
@@ -326,13 +325,13 @@ that applies answers with its code (or, for safe mode, its message) and the comm
 | A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025` (`lease_busy`, holder `a cloud job`, purpose the cloud holder) |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user | `BP0045` (`role_required`, args `cmd`) |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
-| Digital-only board | the analog commands (`generate`, `capture`, `stream`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
+| Digital-only board | the analog commands (`generate`, `capture`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
 | [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
 | [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026` (`lease_lost`, args `by`) |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
 
 Light reads are the T0 commands that do not use the capture hardware: everything at T0 except
-`capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`,
+`capture`, `capture_dual`, `capture_read`, `la_capture`, `sensor_regs`, `sensor_la`,
 `can_read`, `psram_ping` and `test`. Commands that use the capture hardware (PSRAM, ADC, LA) also
 take turns with each other: a second one gets `BP0047` (`pod_busy`) until the first is done.
 
@@ -516,7 +515,7 @@ Each sample is an unsigned 16-bit ADC count (see [ADC sample values](#adc-sample
 
 | Condition | Message |
 |---|---|
-| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
+| `samples` = 0 or > 32768 | `BP0067` (`samples_out_of_range`, `max` 32768; `capture_dual` takes deep captures) |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"capture failed"` |
 | The PSRAM read-back failed | `"capture read-back failed"` |
@@ -534,46 +533,10 @@ The captured array should show a sinusoidal pattern at the expected period.
 
 ---
 
-### `stream` — ADC capture (alias of `capture`)
+### `stream` (removed)
 
-On this firmware `stream` is the same one-shot PSRAM capture as `capture`, without the trigger option: the capture runs in the gateware and the samples are read back once it is done. It is kept for older clients.
-
-#### Request
-
-```json
-{"cmd":"stream","samples":<count>,"sample_rate_mhz":<MHz>}
-```
-
-| Field | Type | Required | Default | Max |
-|---|---|---|---|---|
-| `samples` | integer | no | `256` | `32768` |
-| `sample_rate_mhz` | number (MHz) | no | max (~0.4) | — |
-| `enc` | string | no | decimal | `"b64"` |
-
-`sample_rate_mhz` has the same meaning as in `capture`.
-
-#### Response
-
-Same chunked format as `capture`:
-
-```json
-{"status":"ok",    "bits":16, "data":[...], "more":true}\n
-{"status":"chunk", "data":[...], "more":false}\n
-```
-
-#### Example
-
-```json
-{"cmd":"stream","samples":4096}
-```
-
-#### Error cases
-
-| Condition | Message |
-|---|---|
-| `samples` = 0 or > 32768 | `"samples out of range (use capture_dual for deep captures)"` |
-| Another capture or upload is running | `BP0047` (`pod_busy`) |
-| The capture did not arm | `"capture failed"` |
+Firmware up to 3.10.13 had `stream`, an alias of [`capture`](#capture--adc-snapshot) without the
+trigger option, kept for older clients. Firmware 4.0.0 removed it (`BP0002`): send `capture`.
 
 ---
 
@@ -950,7 +913,7 @@ anything is armed.
 | Condition | Message |
 |---|---|
 | LA voltage not set | `BP0001` (`la_voltage_not_set`) |
-| `samples` = 0 or too deep | `"samples out of range: 1 to <max>"`, with `" (a DAC waveform in the PSRAM holds the rest; dac_stop frees it)"` when a resident deep-DAC waveform is what limits it |
+| `samples` = 0 or too deep | `BP0067` (`samples_out_of_range`, args `max`); a resident deep-DAC waveform can be what limits it (`dac_stop` frees it) |
 | Another capture or upload is running | `BP0047` (`pod_busy`) |
 | The capture did not arm | `"la capture failed"` |
 | A pre-trigger capture changed faster than the pod can store | `"la capture failed: the signals changed faster than the pod can store at 48.0 MS/s (about 6 million changes per second, all channels together); capture at 12 MS/s or lower"` |
@@ -1029,7 +992,7 @@ Replies: `{"status":"ok","data":{"ready":8192}}` right away, then `{"status":"ok
 
 ### `replay` — play a recorded trace out the DAC
 
-Play the trace back out the DAC. The trace is whichever was most recently put there: the last `capture`, `stream` or `measure` (so you can capture a signal and immediately play it back), a host-uploaded trace from `load` or `load_bin` (so you can replay a previously saved run), or a deep PSRAM upload from `load_bin` with `"psram":true`. The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
+Play the trace back out the DAC. The trace is whichever was most recently put there: the last `capture` or `measure` (so you can capture a signal and immediately play it back), a host-uploaded trace from `load` or `load_bin` (so you can replay a previously saved run), or a deep PSRAM upload from `load_bin` with `"psram":true`. The waveform loops continuously until `dac_stop` (or the next `generate`/`measure`/`replay`).
 
 #### Request
 
@@ -1218,16 +1181,16 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 
 ```json
 {"cmd":"dac_out","path":"5v","volts":2.5}
-→ {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code":128,"code16":32723}}
+→ {"status":"ok","data":{"path":"dac_5v","mv":2500,"uv":2499985,"code16":32723}}
 ```
 
 | Field | Meaning |
 |---|---|
 | `mv`, `uv` | The voltage the chosen code gives, in millivolts and in microvolts |
 | `code16` | The 16-bit DAC code now held |
-| `code` | The nearest 8-bit code (`code16` / 256, rounded), what older firmware reported; `-1` when only routing |
 
-When only routing, the reply is `{"path":…,"mv":0,"code":-1}` with no `uv` or `code16`.
+When only routing, the reply is `{"path":…,"mv":0}` with no `uv` or `code16`. Firmware up to
+3.10.13 also replied `code`, the nearest 8-bit code (`-1` when only routing).
 Waveforms (`generate`, `load`, `replay`) still use 8-bit codes.
 
 #### `current_out` — hold a current on the 4-20 mA output (J9)
@@ -3731,7 +3694,7 @@ The capture / replay / waveform-upload features have SCPI equivalents that reuse
 
 `SOURce:FUNCtion` now accepts `USER` alongside `SINusoid`/`SQUare`/`RAMP`. `OUTPut ON` with `USER` selected and an empty buffer pushes `-200 "Execution error"`.
 
-The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `stream`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
+The replay buffer is the pod's one RAM sample buffer, shared with the JSON commands. A JSON `capture`, `test`, `load` or `load_bin` (to RAM) fills it, after which the SCPI trace is gone: `OUTPut ON` with `USER` pushes `-200` and `TRACe:POINts?` answers `0` until the next `READ?`, `MEASure?` or `TRACe:DATA`. The reverse holds too: after a SCPI capture or upload, a JSON `replay` of a RAM upload answers `nothing to replay`. `TRACe:DATA` takes the same capture lock as `READ?`, so it pushes `-200` while a capture or upload is running.
 
 SCPI gets the same safe-mode and digital-board refusals as the JSON commands. In safe mode (the iCE40/PSRAM are off) `OUTPut`, `READ?`, `MEASure?`, `DIAGnostic:CAPture?`, `TRACe:DATA` and `DIGital:*` push `-240 "Hardware error"`; on the digital-only board `OUTPut ON`, `READ?`, `MEASure?`, `TRACe:DATA` and a `DIAGnostic:CAPture?` with ADC samples push `-241 "Hardware missing"`. `SYSTem:ERRor?` carries the same text as the JSON refusal. The `SOURce`/`SENSe` settings, `DIAGnostic:PATTern?`, identity, network and target power keep working. `OUTPut OFF` is refused in safe mode too (it maps to `dac_stop`), but works on the digital-only board.
 
@@ -4759,6 +4722,7 @@ The ones the commands above name:
 | `BP0064` | `loop_sweep_with_map` | | `dac_control_loop` sweep with an input map |
 | `BP0065` | `output_used_by_sensor` | `output`, `instance` | a DAC or current command while an analog emulated sensor plays that output |
 | `BP0066` | `step_busy` | | an `la` step train while one runs |
+| `BP0067` | `samples_out_of_range` | `max` | `capture`, `capture_read`, `la_capture` and the others with `samples` outside 1 to `max` |
 
 Refusals without a code keep `{"status":"error","message":...}`; the common ones:
 
@@ -4770,7 +4734,6 @@ Refusals without a code keep `{"status":"error","message":...}`; the common ones
 | `"safe mode: ..."` | The safe-mode [gate](#gates-that-apply-to-every-command) |
 | `"unknown waveform"` | `generate` `waveform` value not `sine`, `square`, or `sawtooth` |
 | `"generate failed"` | Invalid `freq` (<= 0) or `amplitude` (= 0) |
-| `"samples out of range: 1 to <max>"` | `samples` outside the command's range (see each command) |
 | `"capture failed"` | The capture did not arm or did not complete |
 | `"invalid swd la channel"`, `"invalid uart args"` | a channel outside 1..14, or two equal channels |
 | `"invalid definition: <path>: <message>"` | `sensor_define` whose definition does not compile (see [Emulated sensors](#emulated-sensors)) |

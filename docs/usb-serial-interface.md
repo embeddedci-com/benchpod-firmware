@@ -359,18 +359,11 @@ and older has no levels and prints everything listed under `debug`.
 
 Firmware 3.9.0 removed these console commands; their JSON equivalents work over the
 USB network adapter, the LAN and the cloud (`benchpod` 0.6.0+, the `embeddedci` SDK and
-MCP server 2.12.0+ use them over `--connection usb`). The console still answers a removed
-command, with one line instead of `unknown command`, so an older CLI or SDK tells its user
-what to update:
-
-```
-la-voltage: moved to the network API (JSON la_voltage) in firmware 3.9.0; update the benchpod CLI to 0.6.0 or later (or embeddedci to 2.12.0), which uses it over USB
-```
-
-The upload commands keep the reply shape older CLIs wait for, so they print the line instead of
-timing out: `upload-begin error moved to the network API (JSON ota_begin) ...` (the same for
-`upload-data`, `-end`, `-commit`, `-status`, `-abort`), and `unknown command 'upload-sig': moved
-to the network API (JSON ota_begin sig) ...`.
+MCP server 2.12.0+ use them over `--connection usb`). Firmware 3.9.0 to 3.10.13 answered a
+removed command with one line that said what to update (`la-voltage: moved to the network API
+(JSON la_voltage) in firmware 3.9.0; ...`, and for the upload commands the `upload-begin error
+...` shape older CLIs waited for). Firmware 4.0.0 answers them like any other unknown command:
+`  unknown command 'la-voltage' (try 'help')`.
 
 The commands that stay keep their names and reply formats, so older CLIs and SDKs keep
 working with them: `status`, `dfu`, `identity`, `identity-wipe`, `sig-policy`,

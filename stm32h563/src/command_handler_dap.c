@@ -167,11 +167,6 @@ void handle_dap_start(int conn_id, const char *json) {
         return;
     }
     unsigned swdio = (unsigned)atoi(s);
-    /* "nreset" used to name an LA channel to borrow as the target reset line.
-       rev3 has a dedicated /NRST_CONTROL pin (PF4 -> J1 pin 22), so the field is
-       gone: it is accepted and ignored for old clients rather than rejected,
-       because a stale "nreset":N would otherwise fail a flash that will now work
-       fine on the real pin. */
     /* Claim both pins BEFORE touching the FPGA: la_bank.v gives SWD the highest priority, so
        arming over a running UART proxy or sensor used to silently take the line away. */
     uint8_t clk_pin = (uint8_t)swclk, dio_pin = (uint8_t)swdio;

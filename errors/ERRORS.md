@@ -72,3 +72,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0064 | `loop_sweep_with_map` | dac | next | The sweep input cannot be combined with an input map on this gateware |
 | BP0065 | `output_used_by_sensor` | sensors | next | The {output} output is played by the emulated sensor {instance} |
 | BP0066 | `step_busy` | io | next | A step pulse train is running |
+| BP0067 | `samples_out_of_range` | capture | next | samples must be 1 to {max} for this capture |

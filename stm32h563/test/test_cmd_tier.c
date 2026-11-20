@@ -210,13 +210,13 @@ static void test_flags_match_the_old_lists(void) {
                "can_config", "can_write", "can_read", "can_status", "can_term", "can_respond",
                "can_disable", "module", "wiring_list", "wiring_get", "log_level", "lease_acquire",
                "lease_renew", "lease_release");
-    EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "stream", "measure", "load", "load_bin",
+    EXPECT_SET(CMD_F_ANALOG, "generate", "capture", "measure", "load", "load_bin",
                "replay", "dac_limits", "dac_set", "dac_mux", "cal_switch", "analog_path", "dac_out",
                "current_out", "adc_read", "adc_range", "calibrate", "dac_control_loop", "dac_loop_probe",
                "dac_loop_input");
-    EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "stream", "la_capture",
+    EXPECT_SET(CMD_F_HEAVY, "capture", "capture_dual", "capture_read", "la_capture",
                "sensor_regs", "sensor_la", "can_read", "psram_ping", "test");
-    EXPECT_SET(CMD_F_STREAM, "capture", "stream", "capture_dual", "capture_read", "measure",
+    EXPECT_SET(CMD_F_STREAM, "capture", "capture_dual", "capture_read", "measure",
                "test", "load", "replay", "load_bin", "sensor_la", "dap_start",
                "uart_proxy_start", "la_capture", "speedtest");
     EXPECT_SET(CMD_F_NOISY, "ping", "power_status", "target_status");

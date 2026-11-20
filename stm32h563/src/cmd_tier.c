@@ -91,7 +91,6 @@ static const cmd_desc_t k_tiers[] = {
     { { "capture", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture), NULL },
     { { "capture_dual", CMD_TIER_T0 }, CMD_F_ADC_SAMPLES | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_dual), NULL },
     { { "capture_read", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_capture_read), NULL },
-    { { "stream", CMD_TIER_T0 }, CMD_F_ANALOG | CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_stream), NULL },
     { { "la_capture", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_la_capture), NULL },
     { { "sensor_regs", CMD_TIER_T0 }, CMD_F_HEAVY, CMD_FN(handle_sensor), NULL },
     { { "sensor_la", CMD_TIER_T0 }, CMD_F_STREAM | CMD_F_HEAVY, CMD_FN(handle_sensor_la), NULL },

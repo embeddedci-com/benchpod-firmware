@@ -27,7 +27,6 @@
     "capture": "T0",
     "capture_dual": "T0",
     "capture_read": "T0",
-    "stream": "T0",
     "la_capture": "T0",
     "sensor_regs": "T0",
     "sensor_la": "T0",
@@ -226,10 +225,6 @@
     },
     {
       "line": "{\"cmd\":\"capture_read\"}",
-      "tier": "T0"
-    },
-    {
-      "line": "{\"cmd\":\"stream\"}",
       "tier": "T0"
     },
     {

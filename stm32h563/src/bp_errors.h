@@ -84,9 +84,10 @@ typedef enum {
     BP_E_LOOP_SWEEP_WITH_MAP = 64,
     BP_E_OUTPUT_USED_BY_SENSOR = 65,
     BP_E_STEP_BUSY = 66,
+    BP_E_SAMPLES_OUT_OF_RANGE = 67,
 } bp_errcode_t;
 
-#define BP_E_LAST 66
+#define BP_E_LAST 67
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -921,6 +922,19 @@ static inline const char *bp_note_step_busy(char *buf, size_t cap) {
 }
 static inline const char *bp_tag_step_busy(const char *text) {
     return bp_err_tag(text, BP_E_STEP_BUSY, 0, 0);
+}
+/* BP0067: samples must be 1 to {max} for this capture */
+static inline void bp_err_samples_out_of_range(int conn_id, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    bp_error_send(conn_id, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+static inline const char *bp_note_samples_out_of_range(char *buf, size_t cap, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_note(buf, cap, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
+}
+static inline const char *bp_tag_samples_out_of_range(const char *text, int32_t max) {
+    const bp_err_arg_t a[] = { {"max", 0, max, 0} };
+    return bp_err_tag(text, BP_E_SAMPLES_OUT_OF_RANGE, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

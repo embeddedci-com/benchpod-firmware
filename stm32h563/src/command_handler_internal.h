@@ -189,7 +189,6 @@ void handle_adc_range(int conn_id, const char *json);
 void handle_capture(int conn_id, const char *json);
 void handle_capture_dual(int conn_id, const char *json);
 void handle_capture_read(int conn_id, const char *json);
-void handle_stream(int conn_id, const char *json);
 void handle_test(int conn_id, const char *json);
 void handle_measure(int conn_id, const char *json);
 void handle_la_capture(int conn_id, const char *json);
