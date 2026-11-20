@@ -223,6 +223,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  lan-policy [open|locked|off]               what Ethernet and Wi-Fi may do\r\n"
         "  lan-tls [https-only on|off | scpi on|off | regenerate]   TLS, plaintext :8080, SCPI\r\n"
         "  net-reset                                  forget Wi-Fi, Ethernet back to autonegotiation\r\n"
+        "  wifi-set \"<ssid>\" \"<password>\" | wifi-show   set up Wi-Fi, its state\r\n"
         "  log [error|warn|info|debug]                console log level\r\n");
 #if !defined(BENCHPOD_RELEASE)
     out(ctx,
@@ -381,6 +382,118 @@ static bool bridge_failed(console_out_t out, void *ctx, const char *what, int rc
 }
 
 #endif
+
+/* ---- wifi-set / wifi-show: Wi-Fi setup over the USB console (firmware 4.0.0 kept them for the
+   web app's setup wizard, which reaches the pod over WebSerial only: a browser cannot open the
+   JSON API on the USB network adapter). The same replies as 3.10.13, which the wizard and older
+   benchpod CLIs parse; the JSON wifi_set / wifi_status do the same over the network. */
+
+/* One argument, honoring "double quotes" (an SSID or password may hold spaces). Returns the
+   position just past it; s_parse_truncated says the value did not fit. */
+static bool s_parse_truncated;
+
+static const char *parse_quoted(const char *p, char *out, size_t n)
+{
+    while (*p == ' ' || *p == '\t') p++;
+    size_t i = 0, len = 0;
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"') { if (i < n - 1) out[i++] = *p; p++; len++; }
+        if (*p == '"') p++;
+    } else {
+        while (*p && *p != ' ' && *p != '\t') { if (i < n - 1) out[i++] = *p; p++; len++; }
+    }
+    out[i] = '\0';
+    s_parse_truncated = (len > i);
+    return p;
+}
+
+/* wifi-set "<ssid>" "<password>": store the credentials and start the join in the background
+   (wifi-show reads the result). "[cfg] credentials written to flash" is the marker the tools
+   wait for. */
+static void cmd_wifi_set(const char *args, console_out_t out, void *ctx)
+{
+    config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.magic = CONFIG_MAGIC; cfg.version = CONFIG_VERSION;
+    const char *p = parse_quoted(args, cfg.ssid, sizeof(cfg.ssid));
+    bool too_long = s_parse_truncated;
+    parse_quoted(p, cfg.password, sizeof(cfg.password));   /* open network: empty */
+    if (too_long || s_parse_truncated) {                   /* never save credentials cut short */
+        memset(&cfg, 0, sizeof(cfg));
+        op(out, ctx, "  wifi-set: %s too long\r\n", too_long ? "ssid" : "password");
+        return;
+    }
+    if (cfg.ssid[0] == '\0') {
+        op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
+        return;
+    }
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) {   /* the bridge box keeps the credentials, not the pod */
+        const char *err = NULL;
+        int rc = wifi_bridge_set_wifi(cfg.ssid, cfg.password, &g_wifi_bridge_reply, &err);
+        memset(cfg.password, 0, sizeof(cfg.password));
+        if (bridge_failed(out, ctx, "wifi-set", rc, err)) return;
+        op(out, ctx, "[cfg] credentials written to flash\r\n");
+        op(out, ctx, "  saved SSID \"%s\" on the Wi-Fi bridge: it joins in the background; run wifi-show for status\r\n",
+           cfg.ssid);
+        return;
+    }
+#endif
+    if (!esp_wifi_ctrl_module_present()) {
+        memset(&cfg, 0, sizeof(cfg));
+        op(out, ctx, "  wifi-set: " ESP_WIFI_NO_MODULE "\r\n");
+        return;
+    }
+    int rc = config_save(&cfg);
+    memset(cfg.password, 0, sizeof(cfg.password));
+    if (rc != 0) {
+        op(out, ctx, "  wifi-set: config save failed\r\n");
+        return;
+    }
+    op(out, ctx, "[cfg] credentials written to flash\r\n");
+    net_wifi_reload();          /* re-read the credentials, (re)start the ESP32-C3 and join */
+    op(out, ctx, "  saved SSID \"%s\": connecting in the background; run wifi-show for status\r\n", cfg.ssid);
+}
+
+/* wifi-show: ssid, state, ip, rssi (the last line the tools wait for), and through a Wi-Fi
+   bridge `via` and `problem`. */
+static void con_wifi_show(int argc, char **argv, console_out_t out, void *ctx)
+{
+#if defined(BENCHPOD_WIFI_BRIDGE)
+    if (wifi_bridge_in_use()) {
+        wb_info_t i;
+        wifi_bridge_get_info(&i);
+        op(out, ctx, "  ssid: %s\r\n", i.have_status ? i.ssid : "");
+        op(out, ctx, "  state: %s\r\n", i.present ? wb_state_str(i.state) : "no bridge");
+        op(out, ctx, "  ip: %s\r\n", wifi_get_ip());
+        op(out, ctx, "  via: wifi-bridge %02x:%02x:%02x:%02x:%02x:%02x fw %s, %s\r\n", i.mac[0], i.mac[1],
+           i.mac[2], i.mac[3], i.mac[4], i.mac[5], i.fw_version, i.paired ? "paired" : "not paired");
+        if (i.problem) op(out, ctx, "  problem: %s\r\n", i.problem);
+        if (wb_rssi_known(&i)) op(out, ctx, "  rssi: %d dBm\r\n", i.rssi);
+        else                   op(out, ctx, "  rssi: \r\n");
+        return;
+    }
+#endif
+    config_t cfg;
+    bool have = (config_load(&cfg) == 0 && cfg.ssid[0] != '\0');
+    op(out, ctx, "  ssid: %s\r\n", have ? cfg.ssid : "");
+    memset(&cfg, 0, sizeof(cfg));
+    op(out, ctx, "  state: %s\r\n", esp_wifi_ctrl_state_str());
+    uint32_t done = 0, total = 0;
+    if (esp_rom_flash_progress(&done, &total))
+        op(out, ctx, "  c3 flash: block %lu/%lu\r\n", (unsigned long)done, (unsigned long)total);
+    op(out, ctx, "  ip: %s\r\n", wifi_sta_ip());
+    int rssi;
+    if (esp_wifi_ctrl_rssi(&rssi)) op(out, ctx, "  rssi: %d dBm\r\n", rssi);
+    else                           op(out, ctx, "  rssi: \r\n");
+}
+
+/* A bare `wifi-set` (the quoted form goes to cmd_wifi_set before the tokenizer). */
+static void con_wifi_set(int argc, char **argv, console_out_t out, void *ctx)
+{
+    op(out, ctx, "  usage: wifi-set \"<ssid>\" \"<password>\"\r\n");
+}
 
 /* `ca`: one line per company CA certificate (cloud_extras_ca_each). */
 
@@ -1234,6 +1347,8 @@ static const console_cmd_t k_console_cmds[] = {
     { "lan-policy", con_lan_policy },
     { "lan-tls", con_lan_tls },
     { "net-reset", con_net_reset },
+    { "wifi-set", con_wifi_set },
+    { "wifi-show", con_wifi_show },
     { "log", con_log },
 #if !defined(BENCHPOD_RELEASE)
     /* development builds only: bench diagnostics */
@@ -1279,6 +1394,13 @@ static const console_cmd_t k_console_cmds[] = {
    hardware, so it takes no lock of its own: the worker runs one job at a time. */
 void console_exec_hw(char *cmd, console_out_t out, void *ctx)
 {
+    /* wifi-set needs quote-aware parsing (the SSID and password may hold spaces): it goes
+       before the whitespace tokenizer. */
+    if (!strncmp(cmd, "wifi-set", 8) && (cmd[8] == ' ' || cmd[8] == '\t')) {
+        cmd_wifi_set(cmd + 8, out, ctx);
+        return;
+    }
+
     /* Up to 11 tokens so `can write <id> b0..b7` (2 + 1 + 8) fits; other verbs
        use far fewer. */
     char *argv[11] = {0};

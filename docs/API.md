@@ -4211,7 +4211,7 @@ Forgets the cloud settings and disconnects. Reply `"cleared"`.
 
 ### `wifi_status`
 
-Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none","rssi_dbm":-61}`. `rssi_dbm` (firmware 4.0.0) is the signal while joined, else `null`; the console's `wifi-show` had it up to 3.10.13.
+Reply: `{"state":"connected","configured":true,"connected":true,"ssid":"lab","xacts":..,"pump_calls":..,"batch":[..],"settle_hit":..,"settle_miss":..,"xact_err":..,"c3_lost_noresp":0,"c3_lost_reboot":0,"c3_restarts":{"total":0,"no_response":0,"rebooted":0,"no_boot":0,"setup":0,"assoc":0,"flash":0,"boots":1},"c3_nvs":"none","rssi_dbm":-61}`. `rssi_dbm` (firmware 4.0.0) is the signal while joined, else `null`, as in the console's `wifi-show`.
 `state` is the same as `status.wifi`; the counters describe the link to the ESP32-C3 and how
 often it was lost (`c3_lost_*`: since this boot).
 

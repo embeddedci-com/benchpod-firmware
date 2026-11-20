@@ -229,8 +229,8 @@ commands on the same port (`help`, `status`). Steps 5-12 use a Linux laptop on t
     `make -C stm32h563` with the default `WIFI_BRIDGE=1` and `benchpod flash-self`), press PAIR on the bridge (it is paired with the laptop), and cable
     it to the pod. Pod log: `[bridge] Wi-Fi bridge found: …`; the pod's JSON `wifi_status`
     shows `"paired":true`, then `wifi_set` and `wifi_status` (`"via":"wifi-bridge"`), for
-    example with `benchpod set-wifi` (pod firmware up to 3.10.13: the console's `bridge`,
-    `wifi-set` and `wifi-show`). The pod
+    example with `benchpod set-wifi` or the console's `wifi-set` and `wifi-show` (pod firmware
+    up to 3.10.13 also had the console's `bridge`). The pod
     gets its DHCP lease, mDNS name and cloud connection over Wi-Fi.
 
 Record results, and anything changed, in this section or in the PR that fixes it.

@@ -5,17 +5,19 @@ port, mirrored on the USART2 debug pins. The same USB device is also a network
 adapter (CDC-NCM) that carries the [JSON API](API.md): see
 [USB network adapter](#usb-network-adapter). A host
 tool (the `benchpod` CLI, a provisioning script) can open the serial port and
-drive text commands such as `status`, `identity`, `net-reset` and `dfu`.
+drive text commands such as `status`, `identity`, `wifi-set`, `net-reset` and `dfu`.
 
 This document is the contract for talking to that interface. The console is the
 pod's **physical-presence** channel and, from firmware 4.0.0, a **recovery tool**: it
 keeps what needs someone at the pod or has to work when no network reaches it (the
 USB network adapter switch, loosening the LAN policy, the LAN TLS and SCPI switches,
-resetting the network settings, DFU, the self-test), and it is the recovery path when
+resetting the network settings, DFU, the self-test), sets up Wi-Fi (`wifi-set`, `wifi-show`:
+the web app's setup wizard talks to the pod over WebSerial, and a browser cannot reach the
+JSON API on the USB network adapter), and it is the recovery path when
 the pod is in safe mode.
 
 The console does **not** run the JSON commands of [API.md](API.md). Everything else,
-the Wi-Fi settings, the device identity wipe, the cloud CA and proxy, blobs and the
+the Wi-Fi scan and clear, the device identity wipe, the cloud CA and proxy, blobs and the
 Wi-Fi bridge included, is the JSON API, which a computer on the USB cable reaches through
 the [USB network adapter](#usb-network-adapter); see [Moved to the JSON
 API](#moved-to-the-json-api). Development builds add bench diagnostics, marked below;
@@ -104,7 +106,7 @@ console `status` as the `usb` line. `benchpod`, the Python SDK and the MCP serve
 connect to it with the connection `usb`.
 
 **USB networking or Wi-Fi.** The two are one or the other: while Wi-Fi credentials
-are stored (JSON `wifi_set`) USB networking is off, and the pod reports the adapter's
+are stored (JSON `wifi_set`, or `wifi-set` on the console) USB networking is off, and the pod reports the adapter's
 link down to the computer; JSON `wifi_clear`, or `net-reset` on the console, turns it
 back on. The console works in both cases. Ethernet is independent of both.
 
@@ -150,8 +152,8 @@ worker task, prints the output, then prints the prompt `"> "`.
   before it. A line typed earlier waits and runs then.
 - **Busy worker:** if the worker's queue is full the console prints
   `busy — try again` and drops the line.
-- **Quoting:** every command splits on whitespace (firmware 4.0.0 has no
-  `wifi-set`, the one that took double quotes).
+- **Quoting:** every command splits on whitespace, except `wifi-set`: its SSID and
+  password go in double quotes and may hold spaces (not a double quote or a line break).
 - **Machine-readable replies:** the commands an installer drives
   (`identity`, `usb-network`, `lan-policy`, `lan-tls`, `log`, `net-reset`) start their reply with the command name and then `ok`, `error <why>`
   or the value, with no leading spaces. The other commands print indented,
@@ -166,9 +168,11 @@ worker task, prints the output, then prints the prompt `"> "`.
 These console replies are read by host tools (the `benchpod` CLI, the `embeddedci` SDK and MCP
 server, the web app's setup wizard over WebSerial), including older releases still in use, so
 their formats do not change: `status` (`device : benchpod`, the `ip`, `usb` and `board` lines),
-`ping` (`PING ok`), `identity`, `lan-policy`, `log`, `net-reset` and `dfu`. Firmware 4.0.0
-removed the other commands these tools read (`identity-wipe`, `sig-policy`, `ca`, `proxy`,
-`wifi-show`, `blobs`, `usb-reattach`): CLI 0.10 does the same over JSON. A new field is added as a new line or at the end of a line; an
+`ping` (`PING ok`), `identity`, `lan-policy`, `log`, `net-reset`, `dfu`, `wifi-set` (`[cfg]
+credentials written to flash`, `wifi-set: <why>`) and `wifi-show` (`ssid:`, `state:`, `ip:`,
+`via:`, and `rssi:` as the last line). Firmware 4.0.0 removed the other commands these tools
+read (`identity-wipe`, `sig-policy`, `ca`, `proxy`, `blobs`, `usb-reattach`): CLI 0.10 does
+the same over JSON. A new field is added as a new line or at the end of a line; an
 existing one keeps its place. `stm32h563/test/check_console_contract.py` (run with the host tests)
 fails when one of these format strings changes.
 
@@ -193,6 +197,8 @@ command prints `usage: ...` and changes nothing.
 | `lan-tls [https-only on\|off \| scpi on\|off \| regenerate]` | The [LAN API over TLS](API.md#lan_tls--the-lan-api-over-tls) on port 8443 (firmware 3.9.3+). Replies `lan-tls port 8443 https-only <on\|off> sha256 <hex> <generated\|user> "<key>" "<subject>" scpi <on\|off>`, `lan-tls port 8443 https-only <on\|off> none <why> scpi <on\|off>` without a certificate, or `lan-tls error <why>` (`scpi` at the end from firmware 4.0.0). `https-only on` (the default from 4.0.0) refuses plaintext 8080 on Ethernet and Wi-Fi (USB keeps it), `off` lets plaintext JSON in there again; `scpi on` (off by default from 4.0.0) makes SCPI answer on the TCP connections; `regenerate` makes a new key and self-signed certificate. The console may always change them. |
 | `net-reset` | The way back to a pod that no network reaches (firmware 4.0.0). Forgets the Wi-Fi credentials (the pod's flash and the ESP32-C3's NVS, or the Wi-Fi bridge's), which turns [USB networking](#usb-network-adapter) back on, and puts Ethernet back to autonegotiation with a PHY reset and a new DHCP lease. The policies, the cloud settings and the device key stay. Replies `net-reset eth autonegotiation, link and DHCP again`, then a `net-reset wifi ...` line (see [`net-reset` result](#net-reset-result)). Up to firmware 3.10.13 `wifi-clear` did the Wi-Fi part. |
 | `log [error\|warn\|info\|debug]` | Show or set the console [log level](#log-levels) (firmware 3.10.13+; default `info`). Replies `log <level>` or `log error <why>`. Stored: it survives a reboot and a firmware update. The JSON [`log_level`](API.md#log_level--the-console-log-level) command reads and sets the same setting. |
+| `wifi-set "<ssid>" "<password>"` | Store the Wi-Fi credentials and join in the background (the web app's setup wizard and `benchpod set-wifi` send it; JSON [`wifi_set`](API.md#wifi_set--wifi_clear) does the same). Both values in double quotes; the password may be empty (`""`) for an open network. Replies `[cfg] credentials written to flash`, then `saved SSID "<ssid>": connecting in the background; run wifi-show for status` (`... on the Wi-Fi bridge: it joins in the background; ...` when a [Wi-Fi bridge](#wi-fi-bridge) is in use), or `wifi-set: <why>` (`ssid too long`, `password too long`, no Wi-Fi module, `config save failed`, a refusal from the bridge). Turns [USB networking](#usb-network-adapter) off, like any stored Wi-Fi. |
+| `wifi-show` | The Wi-Fi state, one `label: value` line each: `ssid`, `state` (`flashing-c3` while the pod installs the Wi-Fi module's firmware on a first setup, with a `c3 flash: block <n>/<total>` line), `ip`, and `rssi` (`<n> dBm`, empty when not joined) last. Through a Wi-Fi bridge: the bridge's `ssid` and `state` (`unconfigured`, `wait-pod`, `joining`, `connected`, `auth-failed`, `no-ap`), the pod's `ip`, `via: wifi-bridge <mac> fw <version>, paired\|not paired`, `problem: <why>` when the bridge does not take the pod's requests, then `rssi`. JSON [`wifi_status`](API.md#wifi_status) has the details. |
 
 #### Development builds only
 
@@ -254,7 +260,7 @@ BenchPod v4 has no radio: a small bridge box on the Ethernet port carries the po
 Wi-Fi ([wifi-bridge/README.md](../wifi-bridge/README.md), protocol in
 [wifi-bridge/docs/PROTOCOL.md](../wifi-bridge/docs/PROTOCOL.md)). From firmware 4.0.0 it is
 driven over JSON: `wifi_set`, `wifi_clear`, `wifi_status` and `wifi_scan` go to the bridge when one
-is in use, and [`wifi_bridge`](API.md#wifi_bridge--the-wi-fi-bridge-on-the-ethernet-port) updates,
+is in use (and the console's `wifi-set` and `wifi-show`), and [`wifi_bridge`](API.md#wifi_bridge--the-wi-fi-bridge-on-the-ethernet-port) updates,
 reboots, resets it or installs its certificate. The console's `net-reset` clears its Wi-Fi.
 
 Built-in Wi-Fi wins: while it is configured, the pod takes no address through a bridge and the
@@ -319,7 +325,8 @@ removed command with one line that said what to update (`la-voltage: moved to th
 `  unknown command 'la-voltage' (try 'help')`.
 
 The commands that stay keep their names and reply formats: `status`, `ping`, `dfu`,
-`identity`, `usb-network`, `lan-policy`, `lan-tls`, `log`, `selftest` and `reboot`.
+`identity`, `usb-network`, `lan-policy`, `lan-tls`, `log`, `selftest`, `reboot`, `wifi-set` and
+`wifi-show`.
 
 <a id="removed-in-firmware-400"></a>
 #### Removed in firmware 4.0.0
@@ -331,8 +338,6 @@ adapter (physical presence, like the console); Ethernet, Wi-Fi and the cloud get
 
 | Removed console command | JSON command |
 |---|---|
-| `wifi-set "<ssid>" "<password>"` | `wifi_set` |
-| `wifi-show` | `wifi_status` |
 | `wifi-scan` | `wifi_scan` |
 | `wifi-clear` | `wifi_clear` (and the console's `net-reset`) |
 | `identity-wipe <id\|unknown>` | `identity_wipe` with `confirm` (USB link) |
