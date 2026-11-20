@@ -114,6 +114,18 @@ jobs:
             exit 1
           fi
 
+      # USB host mode (USB_HOST=1, not in releases until it is hardware-tested): the host stack,
+      # the role switch and the usb_host command. Built here so it keeps compiling, warning-free.
+      - name: USB host build, no compiler warnings
+        run: |
+          set -o pipefail
+          make -C stm32h563 -j"$(nproc)" USB_HOST=1 2>&1 | tee build-usbhost.log
+          if grep 'warning:' build-usbhost.log | grep -v 'is not implemented and will always fail' > warnings-usbhost.txt; then
+            echo "::error title=Compiler warnings::$(wc -l < warnings-usbhost.txt) warning(s) in the USB_HOST=1 build"
+            cat warnings-usbhost.txt
+            exit 1
+          fi
+
       - name: Host tests (with mbedTLS, so the OTA and blob store suites run)
         run: |
           set -o pipefail

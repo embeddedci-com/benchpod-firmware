@@ -29,6 +29,11 @@ static int writes_calibrate(const char *json) {
            bp_json_get(json, "adc", v, sizeof(v)) || bp_json_get(json, "comp_hf_dc_e4", v, sizeof(v)) ||
            (bp_json_get(json, "clear", v, sizeof(v)) && strcmp(v, "false") != 0);
 }
+/* usb_host: "on" starts or stops host mode; without it, a read. */
+static int writes_on(const char *json) {
+    char v[8] = {0};
+    return bp_json_get(json, "on", v, sizeof(v));
+}
 /* sig_policy, lan_policy, usb_network */
 static int writes_set(const char *json) {
     char v[16] = {0};
@@ -69,6 +74,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "wifi_scan", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wifi_scan), NULL },
     { { "la_pins", CMD_TIER_T0 }, 0, CMD_FN(handle_la_pins), NULL },
     { { "usb_cc", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_usb_cc), NULL },
+    { { "usb_host", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_host), writes_on },
     { { "target_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_target_status), NULL },
     { { "power_status", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_NOISY, CMD_FN(handle_power_status), NULL },
     { { "identity_public", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_identity_public), NULL },

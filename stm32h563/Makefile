@@ -144,6 +144,7 @@ C_SOURCES := \
   src/command_handler_dac.c \
   src/command_handler_dap.c \
   src/command_handler_device.c \
+  src/command_handler_usb.c \
   src/command_handler_status.c \
   src/command_handler_ota.c \
   src/command_handler_net.c \
@@ -333,6 +334,18 @@ DEFS      += -DBENCHPOD_WIFI_BRIDGE=1
 INCLUDES  += -I$(BRIDGE_CORE)/include
 C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c $(BRIDGE_CORE)/bwp_id.c
+endif
+
+# USB host build: USB_HOST=1 adds USB host mode (usb_host.h, the usb_host command: the pod hosts
+# the DUT on its USB-C or USB-A port). Not hardware-tested yet, so development only: refused
+# together with RELEASE=1. Without it the usb_host command answers as an unknown command.
+ifeq ($(USB_HOST),1)
+ifeq ($(RELEASE),1)
+$(error USB_HOST=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_USB_HOST=1
+C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
+             $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c
 endif
 
 # EMI test build: EMI_TEST=1 adds src/emi_test.c, which runs the EMC lab's worst-case activity
