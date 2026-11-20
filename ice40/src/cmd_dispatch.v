@@ -1075,6 +1075,10 @@ module cmd_dispatch #(
                                 // the streaming mode LEVEL and pulse the DAC engine start;
                                 // the top latches base/len into the DAC clock domain and
                                 // the reader streams the waveform out of PSRAM.
+`ifdef USE_DEEP_REPLAY
+                                // v60: decoded only in the deep image.  The others have no reader to
+                                // stream from (the firmware sends it to the deep image only), so they
+                                // collect its payload and ignore it: no mode, no DAC start.
                                 `CD_START_DAC_PSRAM: begin
                                     dac_psram_base <= {arg_buf[4], arg_buf[3], arg_buf[2]};  // 24-bit byte base
                                     dac_psram_len  <= {arg_buf[7], arg_buf[6], arg_buf[5]};  // 24-bit SAMPLE count
@@ -1082,6 +1086,7 @@ module cmd_dispatch #(
                                     dac_psram_mode <= 1'b1;
                                     dac_start      <= 1'b1;
                                 end
+`endif
                                 // Capture-tied DAC auto-stop for the NEXT capture (v40: one-shot,
                                 // loads the top's countdown).  0 disarms.
                                 //   [cyc_lo][cyc_1][cyc_2][cyc_hi(=rx_byte)]

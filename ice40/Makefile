@@ -529,8 +529,9 @@ lapsramtest:
 	@rm -f /tmp/$(PROJECT)_lapsram.vvp
 
 # Self-checking simulation of the cmd_dispatch MEASURE decode (DAC+ADC co-start).
+# The deep image's decoder: START_DAC_PSRAM is decoded only there (v60).
 measuretest:
-	iverilog -g2012 -I src -o /tmp/$(PROJECT)_meas.vvp \
+	iverilog -g2012 -I src $(DEEP_DEFINES) -o /tmp/$(PROJECT)_meas.vvp \
 	         sim/tb_measure.v src/cmd_dispatch.v
 	$(VVP) /tmp/$(PROJECT)_meas.vvp
 	@rm -f /tmp/$(PROJECT)_meas.vvp
@@ -539,7 +540,7 @@ measuretest:
 # down-counter that replaced the per-state arg_count+1>=arg_len add-compare).
 # v54: once as the loop image's decoder, once as the emulation image's (the I2C_* commands).
 argtest:
-	@set -e; for d in "" "$(EMU_DEFINES)"; do \
+	@set -e; for d in "" "$(DEEP_DEFINES)" "$(EMU_DEFINES)"; do \
 	  echo "== tb_dispatch_args $$d"; \
 	  iverilog -g2012 -I src $$d -o /tmp/$(PROJECT)_args.vvp sim/tb_dispatch_args.v src/cmd_dispatch.v; \
 	  $(VVP) /tmp/$(PROJECT)_args.vvp; \

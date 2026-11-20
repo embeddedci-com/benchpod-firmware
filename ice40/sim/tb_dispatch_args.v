@@ -1,3 +1,4 @@
+`include "image_config.vh"   // HAS_DAC_LOOP (v60: argtest also runs the deep image's decoder)
 // tb_dispatch_args.v — self-checking testbench for the cmd_dispatch payload
 // byte-counting / terminal logic.
 //
@@ -354,10 +355,16 @@ module tb_dispatch_args;
             dac_n = 0;
             cs_hi; feed(8'h13); feed(8'h21); feed(8'h22); feed(8'h23); feed(8'h24); feed(8'h25); feed(8'h26);
                    feed(8'h27); feed(8'h28); cs_lo;
+`ifdef USE_DEEP_REPLAY
             if (dac_n !== 1)                   begin $display("FAIL dac_psram: start %0d (want 1)", dac_n); errors=errors+1; end
             if (dac_psram_base !== 24'h232221) begin $display("FAIL dac_psram: base=%h (want 232221)", dac_psram_base); errors=errors+1; end
             if (dac_psram_len  !== 24'h262524) begin $display("FAIL dac_psram: len=%h (want 262524)", dac_psram_len); errors=errors+1; end
             if (dac_divider    !== 16'h2827)   begin $display("FAIL dac_psram: div=%h (want 2827)", dac_divider); errors=errors+1; end
+`else
+            // v60: the images without the deep reader collect START_DAC_PSRAM and ignore it
+            if (dac_n !== 0 || dut.dac_psram_mode !== 1'b0) begin
+                $display("FAIL dac_psram: decoded on an image without deep replay (start %0d, mode %b)", dac_n, dut.dac_psram_mode); errors=errors+1; end
+`endif
         end
     endtask
     // SET_DAC_STOP_AFTER (4) + the three control-loop opcodes (8 / 5 / 7): strobe + payload wires.
@@ -373,7 +380,7 @@ module tb_dispatch_args;
             cs_hi; feed(8'h1A); feed(8'h02); feed(8'h52); feed(8'h53); feed(8'h54); feed(8'h55); cs_lo;
             if (n_src !== 1 || got_src !== {16'h5554, 16'h5352, 2'd2}) begin
                 $display("FAIL loop_src: %0d strobes, payload %h", n_src, got_src); errors=errors+1; end
-`ifndef USE_EMULATION   // DAC_LOOP_INMAP: the loop image only
+`ifdef HAS_DAC_LOOP   // DAC_LOOP_INMAP: the loop image only
             cs_hi; feed(8'h1C); feed(8'h61); feed(8'h62); feed(8'h63); feed(8'h64); feed(8'h65); feed(8'h06);
                    feed(8'h03); cs_lo;
             if (n_inmap !== 1 || got_inmap !== {2'b11, 11'h665, 16'h6463, 16'h6261}) begin
