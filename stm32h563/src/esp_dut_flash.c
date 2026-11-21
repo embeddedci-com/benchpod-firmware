@@ -103,7 +103,7 @@ static int io_set_baud(uint32_t baud)
     /* fpga_uart_config refuses to re-arm an armed UART (-2, "in use"): disarm it first. */
     (void)fpga_uart_config(s.p.rx, s.p.tx, baud, false);
     if (fpga_uart_config(s.p.rx, s.p.tx, baud, true) != 0) {
-        log_printf("[espdut] could not set the UART to %lu baud\n", (unsigned long)baud);
+        LOG_W("[espdut] could not set the UART to %lu baud\n", (unsigned long)baud);
         return -1;
     }
     s_rx_n = s_rx_i = 0;

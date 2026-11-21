@@ -26,7 +26,7 @@ int cloud_config_load(cloud_config_t *out) {
     if (ab_store_load(&s_cloud_store, &tmp, sizeof(tmp)) != 0) return -1;
     if (tmp.magic != CLOUD_CONFIG_MAGIC) return -1;
     if (tmp.version != CLOUD_CONFIG_VERSION) {
-        log_printf("[cloud-cfg] schema mismatch (version=%lu, expected %lu), ignoring\n",
+        LOG_W("[cloud-cfg] schema mismatch (version=%lu, expected %lu), ignoring\n",
                (unsigned long)tmp.version, (unsigned long)CLOUD_CONFIG_VERSION);
         return -1;
     }

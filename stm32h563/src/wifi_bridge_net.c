@@ -100,9 +100,9 @@ static void io_save_pin(const uint8_t mac[6], const uint8_t pub[BWP_PUBKEY_LEN],
     (void)ctx;
     const char *why = pod_policy_set_bridge_pin(mac, pub);
     if (why) {
-        log_printf("[bridge] could not store the verified bridge: %s\r\n", why);
+        LOG_W("[bridge] could not store the verified bridge: %s\n", why);
     } else {
-        log_printf("[bridge] genuine Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x verified and stored\r\n",
+        log_printf("[bridge] genuine Wi-Fi bridge %02x:%02x:%02x:%02x:%02x:%02x verified and stored\n",
                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }
 }
@@ -114,7 +114,7 @@ void wifi_bridge_net_init(struct netif *eth)
                                .ctx = NULL};
     s_eth = eth;
     wb_init(&s_wb, eth->hwaddr, &io);
-    log_printf("[bridge] Wi-Fi bridge control channel on\r\n");
+    log_printf("[bridge] Wi-Fi bridge control channel on\n");
 }
 
 int wifi_bridge_eth_input(struct pbuf *p, struct netif *netif)
@@ -173,7 +173,7 @@ void wifi_bridge_net_poll(void)
             char mac[18];
             snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", i.mac[0], i.mac[1], i.mac[2], i.mac[3],
                      i.mac[4], i.mac[5]);
-            log_printf("[bridge] Wi-Fi bridge %s %s (fw %s)\r\n", i.present ? "found:" : "gone:", mac,
+            log_printf("[bridge] Wi-Fi bridge %s %s (fw %s)\n", i.present ? "found:" : "gone:", mac,
                        i.fw_version[0] ? i.fw_version : "?");
         }
     }
@@ -444,7 +444,7 @@ void wifi_bridge_ota_poll(void)
     wbo_poll(&s_relay, &i, &s_img, !heavy_or_claimed() && !esp_rom_flash_busy(), HAL_GetTick());
     if (!wbo_busy(&s_relay)) s_quiesced = false;
     if (wbo_busy(&s_relay) != was || (strcmp(before, s_relay.status) != 0 && !strstr(s_relay.status, "%")))
-        log_printf("[bridge] %s\r\n", s_relay.status);
+        log_printf("[bridge] %s\n", s_relay.status);
 }
 
 bool wifi_bridge_ota_busy(void) { return wbo_busy(&s_relay); }

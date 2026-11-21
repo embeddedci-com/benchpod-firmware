@@ -86,25 +86,25 @@ void module_link_init(void)
     pin_mode(MOD_PRESENT_PIN, GPIO_MODE_INPUT, GPIO_NOPULL);   /* 10k pull-up on the board */
     busy_wait_us(10);
     s_present = !pin_high(MOD_PRESENT_PIN);
-    log_printf("[module] digital v3r3: module %s, module power %s, bridge power %s\r\n",
+    log_printf("[module] digital v3r3: module %s, module power %s, bridge power %s\n",
            s_present ? "present" : "not plugged in",
            module_power_on() ? "on" : "off", bridge_power_on() ? "on" : "off");
     (void)i2c_bus_init_on(I2C_BUS_MODULE);
     if (s_present) {
         int rc = ee_read_hdr();
         if (rc == MOD_EE_OK) {
-            log_printf("[module] EEPROM: %s rev %u.%u serial \"%s\", calibration %s (%u bytes)\r\n",
+            log_printf("[module] EEPROM: %s rev %u.%u serial \"%s\", calibration %s (%u bytes)\n",
                    module_ee_type_str(s_id.type), s_id.rev_major, s_id.rev_minor, s_id.serial,
                    s_id.cal_len == 0 ? "none" : s_cal_valid ? "ok" : "CRC mismatch",
                    (unsigned)s_id.cal_len);
         } else {
-            log_printf("[module] EEPROM: %s\r\n",
+            log_printf("[module] EEPROM: %s\n",
                    rc == MOD_EE_NO_CHIP ? "no answer at 0x50" : module_ee_result_str(rc));
         }
         if (module_dac_pinout_mismatch()) {
             char m[20];
             log_printf("[module] DAC off: digital %s and module %s use different flat-cable pinouts "
-                       "(BP0080)\r\n", module_dac_pinout_digital(), module_dac_pinout_module(m, sizeof(m)));
+                       "(BP0080)\n", module_dac_pinout_digital(), module_dac_pinout_module(m, sizeof(m)));
         }
     }
 }
@@ -119,7 +119,7 @@ int bridge_power_set(bool on)
 {
     if (!s_link) return -1;
     rail_drive(BRIDGE_PWR_EN_PIN, on);
-    log_printf("[module] bridge port power %s\r\n", on ? "on" : "off");
+    log_printf("[module] bridge port power %s\n", on ? "on" : "off");
     return 0;
 }
 
@@ -134,12 +134,12 @@ int module_power_set(bool on)
             (void)ana14_set(false);   /* +-14 V off before its input goes */
         }
         rail_drive(MOD_PWR_EN_PIN, false);
-        log_printf("[module] module power off\r\n");
+        log_printf("[module] module power off\n");
         return 0;
     }
     rail_drive(MOD_PWR_EN_PIN, true);
     sleep_ms(MOD_POWER_SETTLE_MS);
-    log_printf("[module] module power on\r\n");
+    log_printf("[module] module power on\n");
     (void)ee_read_hdr();
     board_variant_module_reread();   /* the module's facts for analog_switch_init */
     if (!analog) return 0;
@@ -149,7 +149,7 @@ int module_power_set(bool on)
     for (unsigned i = 0; i < BOARD_VARIANT_PROBE_TRIES && !u58; i++)
         u58 = i2c_bus_probe_on(I2C_BUS_MODULE, I2C_ADDR_TCA9554_ANASW);
     if (!u58) {
-        log_printf("[module] WARNING: U58 does not answer after power-on\r\n");
+        LOG_W("[module] WARNING: U58 does not answer after power-on\n");
         return -2;
     }
     analog_switch_init();

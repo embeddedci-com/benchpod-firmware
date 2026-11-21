@@ -60,7 +60,7 @@ static void detect(void)
 
     if (lvl == STRAP_NC_LEVEL_IS_LOW) {
         s_rev = BOARD_REV_V2;
-        log_printf("[board] revision v2 (PA3 strap not fitted)\r\n");
+        log_printf("[board] revision v2 (PA3 strap not fitted)\n");
         return;
     }
 
@@ -80,7 +80,7 @@ static void detect(void)
                       "(expected ~%d mV); running as v3\n", mv, s_rev2_mv, BOARD_REV2_V3R4_NOMINAL_MV);
                 return;
             }
-            log_printf("[board] revision %s (straps %d / %d mV, VREF+ %d mV)\r\n",
+            log_printf("[board] revision %s (straps %d / %d mV, VREF+ %d mV)\n",
                    board_rev_str(), mv, s_rev2_mv, vref);
             return;
         }
@@ -93,13 +93,13 @@ static void detect(void)
                   mv, BOARD_REV_V3_NOMINAL_MV, BOARD_REV_V3R2_NOMINAL_MV, BOARD_REV_V3R4_NOMINAL_MV);
             return;
         }
-        log_printf("[board] revision %s (strap %d mV, VREF+ %d mV)\r\n",
+        log_printf("[board] revision %s (strap %d mV, VREF+ %d mV)\n",
                board_rev_str(), mv, mcu_adc_vref_mv());
         return;
     }
 
     s_rev = BOARD_REV_V3;
-    log_printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\r\n");
+    log_printf("[board] revision v3 (strap fitted; ADC unavailable, no voltage check)\n");
 }
 
 void board_rev_init(void)

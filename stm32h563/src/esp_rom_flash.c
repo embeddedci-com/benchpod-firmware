@@ -250,7 +250,7 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
     int rc = run_blocking(&j);
     uart_deinit();
     if (rc != ESP_ROM_OK) {
-        log_printf("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
+        LOG_E("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
         strap_hold_reset();
         return -1;
     }
@@ -338,9 +338,9 @@ void esp_rom_flash_poll(void)
                    (unsigned long)s_rx_overruns, secs);
         strap_boot_app();
     } else {
-        log_printf("[espflash] failed: %s (%lu block(s) resent, %lu UART overruns, %u s); "
-                   "C3 left in reset\n", esp_rom_result_str(rc), (unsigned long)s_job.resends,
-                   (unsigned long)s_rx_overruns, secs);
+        LOG_E("[espflash] failed: %s (%lu block(s) resent, %lu UART overruns, %u s); "
+              "C3 left in reset\n", esp_rom_result_str(rc), (unsigned long)s_job.resends,
+              (unsigned long)s_rx_overruns, secs);
         strap_hold_reset();
     }
     if (s_from_slot) {
@@ -349,7 +349,7 @@ void esp_rom_flash_poll(void)
         w25q_session_open();
         int rec = rc >= 0 ? c3_image_save(in->len, in->version, in->sha256, 0u, 0u) : c3_image_forget();
         w25q_session_close();
-        if (rec != 0) log_printf("[espflash] could not record the C3's image\n");
+        if (rec != 0) LOG_W("[espflash] could not record the C3's image\n");
     }
     esp_flash_done_fn done = s_done;
     s_done = NULL;

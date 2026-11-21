@@ -74,27 +74,27 @@ void board_variant_init(void)
 
     if (link) {
         if (s_analog == BOARD_ANALOG_MODULE) {
-            log_printf("[board] digital v3r3 with the analog module (U58 at 0x%02x on I2C2)\r\n",
+            log_printf("[board] digital v3r3 with the analog module (U58 at 0x%02x on I2C2)\n",
                    I2C_ADDR_TCA9554_ANASW);
         } else if (present) {
-            log_printf("[board] WARNING: digital v3r3: a module is plugged in (MOD_PRESENT# low) but "
-                   "U58 does not answer at 0x%02x on I2C2; running without the analog front end%s\r\n",
+            LOG_W("[board] WARNING: digital v3r3: a module is plugged in (MOD_PRESENT# low) but "
+                   "U58 does not answer at 0x%02x on I2C2; running without the analog front end%s\n",
                    I2C_ADDR_TCA9554_ANASW, module_power_on() ? "" : " (module power is off)");
         } else {
             log_printf("[board] digital v3r3, no module: DAC, ADC and the analog outputs are off "
-                   "(restart after plugging in the analog module)\r\n");
+                   "(restart after plugging in the analog module)\n");
         }
     } else if (s_analog == BOARD_ANALOG_NONE) {
         log_printf("[board] digital-only BenchPod (no analog expanders at 0x%02x/0x%02x): "
-               "DAC, ADC and the analog outputs are off (restart after fitting an analog add-on)\r\n",
+               "DAC, ADC and the analog outputs are off (restart after fitting an analog add-on)\n",
                I2C_ADDR_TCA9554_DACMUX, I2C_ADDR_TCA9554_ANASW);
     } else if (!(seen.u55 && seen.u58)) {
-        log_printf("[board] analog board, but only the %s expander answers (0x%02x)%s\r\n",
+        log_printf("[board] analog board, but only the %s expander answers (0x%02x)%s\n",
                seen.u55 ? "DAC mux" : "analog switching",
                seen.u55 ? I2C_ADDR_TCA9554_DACMUX : I2C_ADDR_TCA9554_ANASW,
                seen.u55 ? "; WARNING: check U58" : " (no U55: expected on analog v3r2)");
     } else {
-        log_printf("[board] analog front end present\r\n");
+        log_printf("[board] analog front end present\n");
     }
 }
 

@@ -71,7 +71,7 @@ void watchdog_init(void) {
     s_refresh_ms = now;
     iwdg_ewi_enable();
     if (HAL_IWDG_Init(&s_iwdg) != HAL_OK) {
-        log_printf("[wdg] IWDG init failed — running WITHOUT a watchdog\n");
+        LOG_E("[wdg] IWDG init failed — running WITHOUT a watchdog\n");
         return;
     }
     s_started = 1;
@@ -87,7 +87,7 @@ void watchdog_arm_early(void) {
     s_iwdg.Init.EWI       = IWDG_EWI_VAL;
     iwdg_ewi_enable();
     if (HAL_IWDG_Init(&s_iwdg) != HAL_OK)
-        log_printf("[wdg] early IWDG arm failed\n");
+        LOG_E("[wdg] early IWDG arm failed\n");
 }
 
 void watchdog_early_refresh(void) {
@@ -154,6 +154,6 @@ void watchdog_test_hang(int task) { s_test_hang = task; }
 
 void watchdog_test_hang_point(int task) {
     if (s_test_hang != task) return;
-    log_printf("[wdg] test-hang: %s task spinning on purpose\r\n", s_names[task]);
+    log_printf("[wdg] test-hang: %s task spinning on purpose\n", s_names[task]);
     for (;;) { __NOP(); }
 }

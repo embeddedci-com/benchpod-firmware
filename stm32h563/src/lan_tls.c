@@ -267,7 +267,7 @@ static int rec_save(uint8_t *rec, size_t n)
     memcpy(rec, &h1, sizeof(h1));
     int rc = ab_store_save(&k_store_v1, rec, sizeof(h) + (size_t)h.key_len + h.cert_len);
     memcpy(rec, &h, sizeof(h));
-    if (rc != 0) log_printf("[tls] could not write the copy for older firmware\n");
+    if (rc != 0) LOG_W("[tls] could not write the copy for older firmware\n");
     return 0;   /* the version 2 record is what this firmware needs */
 }
 

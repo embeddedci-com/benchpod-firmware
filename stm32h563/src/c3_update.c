@@ -60,7 +60,7 @@ static void flash_done(int rc)
     w25q_session_open();
     int rec = ok ? c3_image_save(s_len, s_version, s_sha, s_nvs_off, s_nvs_size) : c3_image_forget();
     w25q_session_close();
-    if (rec != 0) log_printf("[c3] the update ran, but the pod could not record it\n");
+    if (rec != 0) LOG_W("[c3] the update ran, but the pod could not record it\n");
     net_wifi_hold_for_flash(false);   /* restart the Wi-Fi join with the new image, or retry */
     char why[64];
     snprintf(why, sizeof(why), "ESP32-C3 flash failed: %s", esp_rom_result_str(rc));

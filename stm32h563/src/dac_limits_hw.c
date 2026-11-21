@@ -21,13 +21,13 @@ int dac_limits_park_now(void) {
        no mux to connect: the route points the DAC at the path's channel, which is then set (the
        boot park, dac_quad_boot, already put it at this level). */
     if (dac_quad_present()) {
-        if (analog_path_set(p) != 0) { log_printf("[dac-limits] park: route failed\r\n"); return -1; }
-        if (dac_set_constant(code, 240) != 0) { log_printf("[dac-limits] park: DAC set failed\r\n"); return -1; }
+        if (analog_path_set(p) != 0) { LOG_E("[dac-limits] park: route failed\n"); return -1; }
+        if (dac_set_constant(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
     } else {
-        if (dac_set_constant(code, 240) != 0) { log_printf("[dac-limits] park: DAC set failed\r\n"); return -1; }
-        if (analog_path_set(p) != 0) { log_printf("[dac-limits] park: route failed\r\n"); return -1; }
+        if (dac_set_constant(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
+        if (analog_path_set(p) != 0) { LOG_E("[dac-limits] park: route failed\n"); return -1; }
     }
-    log_printf("[dac-limits] parked %s at code %u (%ld mV)\r\n", dac_limits_path_name(l->path), code,
+    log_printf("[dac-limits] parked %s at code %u (%ld mV)\n", dac_limits_path_name(l->path), code,
            (long)(l->inverted ? l->max_mv : l->min_mv));
     return 0;
 }

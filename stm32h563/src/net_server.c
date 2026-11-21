@@ -179,7 +179,7 @@ static void eth_diag_print(void)
 {
     char line[384];
     eth_diag_format(&s_eth_diag, line, sizeof(line));
-    LOG_D("[net] eth diag: %s\r\n", line);
+    LOG_D("[net] eth diag: %s\n", line);
 }
 
 static void eth_diag_poll(struct netif *netif, uint32_t now)
@@ -198,12 +198,12 @@ static void eth_diag_poll(struct netif *netif, uint32_t now)
         now - s_eth_err_log_ms >= ETH_DIAG_LOG_GAP_MS) {
         s_eth_err_log_ms = now;
         s_eth_diag_logged = s_eth_diag;
-        LOG_D("[net] eth errors: %s (phy %s, mac %s)\r\n", delta,
+        LOG_D("[net] eth errors: %s (phy %s, mac %s)\n", delta,
                eth_diag_phy_mode(s_eth_diag.physcsr), eth_diag_mac_mode(s_eth_diag.maccr));
     }
     if (was_stuck && s_eth_diag.rx_alloc_stuck && !s_eth_pool_stall_logged) {
         s_eth_pool_stall_logged = true;
-        LOG_W("[net] eth receive stalled: RX buffer pool empty for over %u ms\r\n",
+        LOG_W("[net] eth receive stalled: RX buffer pool empty for over %u ms\n",
                (unsigned)ETH_DIAG_PERIOD_MS);
     } else if (!s_eth_diag.rx_alloc_stuck) {
         s_eth_pool_stall_logged = false;
@@ -529,7 +529,7 @@ static err_t srv_accept(void *arg, struct altcp_pcb *newpcb, err_t err)
     if (tls && (tls_sessions() >= LAN_TLS_MAX_SESSIONS ||
                 xPortGetFreeHeapSize() < LAN_TLS_HEAP_FLOOR + LAN_TLS_HANDSHAKE_HEAP)) {
         LOG_W("[net] TLS client refused: %d sessions, %u B heap free\n", tls_sessions(),
-                   (unsigned)xPortGetFreeHeapSize());
+              (unsigned)xPortGetFreeHeapSize());
         altcp_abort(newpcb);
         return ERR_ABRT;
     }
@@ -696,7 +696,7 @@ static void tls_listener_sync(void)
         s_tls_listen_cfg = cfg;
         lan_tls_ref(cfg);
     } else {
-        log_printf("[net] could not listen on :%d\n", LAN_TLS_PORT);
+        LOG_W("[net] could not listen on :%d\n", LAN_TLS_PORT);
     }
 }
 
@@ -708,7 +708,7 @@ static void server_start(void)
     if (!s_http_listen) {
         s_http_listen = listen_on(altcp_tcp_new_ip_type(IPADDR_TYPE_ANY), EMI_HTTP_PORT, NULL);
         if (s_http_listen) altcp_accept(s_http_listen, http_accept);
-        else log_printf("[net] could not listen on :%d (the lab page)\n", EMI_HTTP_PORT);
+        else LOG_W("[net] could not listen on :%d (the lab page)\n", EMI_HTTP_PORT);
     }
 #endif
 }
@@ -738,7 +738,7 @@ static void dhcp_process(net_if_t *i)
         (void)wifi_bridge_take_joined();
         if (i->dhcp.state != NET_DHCP_OFF) {
             eth_reset_addr_state();
-            log_printf("[net] eth: Wi-Fi bridge ignored, built-in Wi-Fi is configured\r\n");
+            LOG_W("[net] eth: Wi-Fi bridge ignored, built-in Wi-Fi is configured\n");
         }
         return;
     }
@@ -752,7 +752,7 @@ static void dhcp_process(net_if_t *i)
         } else {
             dhcp_start(netif);
         }
-        log_printf("[net] eth DHCP: the Wi-Fi bridge joined, requesting again\r\n");
+        log_printf("[net] eth DHCP: the Wi-Fi bridge joined, requesting again\n");
     }
 #endif
     switch (net_dhcp_step(&i->dhcp, link_up, has_lease, ip_changed, DHCP_REKICK_TICKS)) {
@@ -761,7 +761,7 @@ static void dhcp_process(net_if_t *i)
         ip_addr_set_zero_ip4(&netif->netmask);
         ip_addr_set_zero_ip4(&netif->gw);
         dhcp_start(netif);
-        LOG_D("[net] %s DHCP: requesting address...\r\n", tag);
+        LOG_D("[net] %s DHCP: requesting address...\n", tag);
         break;
     case NET_DHCP_DO_REKICK:
         /* No static fallback: keep retrying forever so a slow/awkward home router
@@ -793,14 +793,14 @@ static void dhcp_process(net_if_t *i)
             i->dhcp.wait_ticks = 0;
             ethernetif_phy_restart(netif);
             log_repeat_failf(&i->dhcp_rep, BP_LOG_WARN, "[net] %s DHCP: no lease yet", tag);
-            LOG_D("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\r\n",
+            LOG_D("[net] %s DHCP: no lease after %d re-kicks — PHY reset + re-acquire\n",
                    tag, DHCP_ESCALATE_REKICKS);
             eth_diag_print();   /* the state that led to the reset */
             break;
         }
         dhcp_start(netif);
         log_repeat_failf(&i->dhcp_rep, BP_LOG_WARN, "[net] %s DHCP: no lease yet", tag);
-        LOG_D("[net] %s DHCP: still no lease, re-probing%s...\r\n", tag,
+        LOG_D("[net] %s DHCP: still no lease, re-probing%s...\n", tag,
                    rx_moved ? " (frames arrive: the link works, no PHY reset)" : "");
         if (i->is_eth && log_on(BP_LOG_DEBUG)) eth_diag_print();
         break;
@@ -809,17 +809,17 @@ static void dhcp_process(net_if_t *i)
         strncpy(i->ip, ip4addr_ntoa(netif_ip4_addr(netif)), sizeof(i->ip) - 1);
         mdns_resp_announce(netif);   /* broadcast the now-valid A record */
         (void)log_repeat_ok(&i->dhcp_rep);
-        log_printf("[net] %s DHCP: ip=%s\r\n", tag, i->ip);
+        log_printf("[net] %s DHCP: ip=%s\n", tag, i->ip);
         break;
     case NET_DHCP_DO_IPCHANGE:
         /* Bound but the router handed out a different address on renew/rebind. */
         strncpy(i->ip, ip4addr_ntoa(netif_ip4_addr(netif)), sizeof(i->ip) - 1);
         mdns_resp_announce(netif);   /* re-broadcast the new A record */
-        log_printf("[net] %s DHCP: address changed -> %s\r\n", tag, i->ip);
+        log_printf("[net] %s DHCP: address changed -> %s\n", tag, i->ip);
         break;
     case NET_DHCP_DO_LINKDOWN:
         strcpy(i->ip, "0.0.0.0");
-        log_printf("[net] %s link down\r\n", tag);
+        log_printf("[net] %s link down\n", tag);
         break;
     case NET_DHCP_DO_NOTHING:
     default:
@@ -839,7 +839,7 @@ static void update_default_route(void)
     }
     if (netif_default != want) {
         netif_set_default(want);
-        log_printf("[net] default route -> %s\r\n", (want == &s_eth.netif) ? "eth" : "wifi");
+        log_printf("[net] default route -> %s\n", (want == &s_eth.netif) ? "eth" : "wifi");
     }
 }
 
@@ -889,7 +889,7 @@ int net_ip4_input_hook(struct pbuf *p, struct netif *inp)
                                    ip4_addr_get_u32(netif_ip4_netmask(&s_usb_netif)))) {
         static uint32_t s_dropped;
         if ((s_dropped++ & 0xFFu) == 0)
-            LOG_D("[net] dropped a packet for the USB link that arrived on %c%c (%lu so far)\r\n",
+            LOG_D("[net] dropped a packet for the USB link that arrived on %c%c (%lu so far)\n",
                        inp ? inp->name[0] : '?', inp ? inp->name[1] : '?', (unsigned long)s_dropped);
         pbuf_free(p);
         return 1;
@@ -924,19 +924,19 @@ static void net_eth_apply_request(void)
         ethernetif_stop(&s_eth.netif);
         eth_reset_addr_state();
         update_default_route();          /* fail over to Wi-Fi if it's up */
-        log_printf("[net] eth: stopped (admin down)\r\n");
+        log_printf("[net] eth: stopped (admin down)\n");
         break;
     case ETH_REQ_SPEED:
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_force_speed(&s_eth.netif, s_eth_force_mbit, s_eth_force_full) != 0) {
-            LOG_W("[net] eth: forcing the link mode failed (MDIO write)\r\n");
+            LOG_W("[net] eth: forcing the link mode failed (MDIO write)\n");
             break;
         }
         if (s_eth_force_mbit == 0) {
-            log_printf("[net] eth: autonegotiation restored, re-acquiring link + DHCP\r\n");
+            log_printf("[net] eth: autonegotiation restored, re-acquiring link + DHCP\n");
         } else {
-            log_printf("[net] eth: link forced to %d M %s, re-acquiring link + DHCP%s\r\n",
+            log_printf("[net] eth: link forced to %d M %s, re-acquiring link + DHCP%s\n",
                    s_eth_force_mbit, s_eth_force_full ? "full" : "half",
                    s_eth_force_full ? " (a switch port that autonegotiates falls back to HALF:"
                                       " expect a duplex mismatch)" : "");
@@ -950,10 +950,10 @@ static void net_eth_apply_request(void)
         s_eth_refclk_hz = hz;
         s_eth_refclk_seq++;
         if (hz == 0) {
-            log_printf("[net] eth refclk: no edges on PA1 — the PHY is not driving the RMII clock\r\n");
+            log_printf("[net] eth refclk: no edges on PA1 — the PHY is not driving the RMII clock\n");
         } else {
             long ppm = ((long long)hz - 50000000LL) * 1000000LL / 50000000LL;
-            log_printf("[net] eth refclk: %lu Hz (%+ld ppm vs 50 MHz, measured against the MCU crystal)\r\n",
+            log_printf("[net] eth refclk: %lu Hz (%+ld ppm vs 50 MHz, measured against the MCU crystal)\n",
                    (unsigned long)hz, ppm);
         }
         break;
@@ -963,10 +963,10 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         if (ethernetif_loopback_test(&s_eth.netif, s_eth_lb_mbit, s_eth_lb_n, &r) != 0)
-            LOG_W("[net] eth loopback: could not put the PHY in loopback (MDIO write)\r\n");
+            LOG_W("[net] eth loopback: could not put the PHY in loopback (MDIO write)\n");
         else
             log_printf("[net] eth loopback %dM: sent %lu, back %lu, intact %lu, corrupt %lu, "
-                   "crc %lu, align %lu, tx fail %lu\r\n",
+                   "crc %lu, align %lu, tx fail %lu\n",
                    r.mbit, (unsigned long)r.sent, (unsigned long)r.received,
                    (unsigned long)r.intact, (unsigned long)r.corrupt,
                    (unsigned long)r.crc, (unsigned long)r.align, (unsigned long)r.tx_fail);
@@ -979,7 +979,7 @@ static void net_eth_apply_request(void)
         s_eth_admin_down = false;
         eth_reset_addr_state();
         ethernetif_phy_restart(&s_eth.netif);   /* link re-negotiates; check_state re-ups */
-        log_printf("[net] eth: %s — PHY reset, re-acquiring link + DHCP\r\n",
+        log_printf("[net] eth: %s — PHY reset, re-acquiring link + DHCP\n",
                req == ETH_REQ_UP ? "started" : "restarted");
         break;
     default:
@@ -1102,7 +1102,7 @@ static void lan_access(bool up)
         for (int id = 0; id < NET_MAX_CONN; id++)
             if (conn_pcb[id] && !s_conn_usb[id]) s_close_req[id] = 1;   /* net_apply_worker_requests */
     }
-    log_printf("[net] external LAN access %s\r\n", up ? "on" : "off (policy; USB stays on)");
+    log_printf("[net] external LAN access %s\n", up ? "on" : "off (policy; USB stays on)");
 }
 
 bool net_conn_on_usb(int conn_id)
@@ -1149,7 +1149,7 @@ static void https_only_apply(bool on)
         if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
         if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
     }
-    log_printf("[net] HTTPS-only %s: plaintext :%d %s\r\n", on ? "on" : "off", TCP_SERVER_PORT,
+    log_printf("[net] HTTPS-only %s: plaintext :%d %s\n", on ? "on" : "off", TCP_SERVER_PORT,
                on ? "answers on USB only" : "open again");
 }
 
@@ -1174,7 +1174,7 @@ static void scpi_apply(bool on)
         if (iface_addressed(&s_eth))  mdns_resp_announce(&s_eth.netif);
         if (iface_addressed(&s_wifi)) mdns_resp_announce(&s_wifi.netif);
     }
-    log_printf("[net] SCPI %s\r\n", on ? "on" : "off");
+    log_printf("[net] SCPI %s\n", on ? "on" : "off");
 }
 
 /* ---- public API -------------------------------------------------------- */
@@ -1239,7 +1239,7 @@ void net_init(void)
         s_usb_netif.next = NULL;
     }
     netif_set_up(&s_usb_netif);
-    log_printf("[net] usb: pod %s, host %s\r\n", usb_netif_pod_ip(), usb_netif_host_ip());
+    log_printf("[net] usb: pod %s, host %s\n", usb_netif_pod_ip(), usb_netif_host_ip());
 
     /* The :8080 and :8443 listeners and mDNS: always on the USB network adapter, on the external
        LAN unless the LAN policy is "off" (pod_policy.h). The TLS certificate first (generated on
@@ -1251,7 +1251,7 @@ void net_init(void)
     mdns_register(&s_usb_netif);
     lan_access(pod_policy_lan() != POD_LAN_OFF);
     cloud_client_init();   /* outbound WSS control channel (if provisioned) */
-    log_printf("[net] LwIP up — eth(RMII/LAN8742)%s, TCP server on :%d, TLS on :%d%s%s\r\n",
+    log_printf("[net] LwIP up — eth(RMII/LAN8742)%s, TCP server on :%d, TLS on :%d%s%s\n",
            esp_wifi_ctrl_module_present() ? " + wifi(ESP32-C3)" : "",
            TCP_SERVER_PORT, LAN_TLS_PORT, s_https_only ? " (HTTPS-only)" : "", s_scpi ? ", SCPI on" : "");
 }
@@ -1276,13 +1276,13 @@ void net_poll(void)
         bool usb_on = !esp_wifi_ctrl_configured();
         if (usb_on != usb_net_enabled()) {
             usb_net_set_enabled(usb_on);
-            log_printf("[net] usb networking %s\r\n", usb_on ? "on (no Wi-Fi configured)" : "off (Wi-Fi configured)");
+            log_printf("[net] usb networking %s\n", usb_on ? "on (no Wi-Fi configured)" : "off (Wi-Fi configured)");
         }
         bool was_up = netif_is_link_up(&s_usb_netif);
         usb_netif_poll(&s_usb_netif);    /* USB CDC-NCM frames, link, DHCP server */
         bool is_up = netif_is_link_up(&s_usb_netif);
         if (was_up != is_up) {
-            LOG_D("[net] usb link %s\r\n", is_up ? "up" : "down");
+            LOG_D("[net] usb link %s\n", is_up ? "up" : "down");
             if (is_up) mdns_resp_announce(&s_usb_netif);
         }
     }
@@ -1379,7 +1379,7 @@ bool net_call_sync(net_call_fn_t fn, void *arg, uint32_t timeout_ms)
             if (pending) s_net_call = NULL;   /* not started: withdraw it */
             taskEXIT_CRITICAL();
             if (pending) {
-                LOG_W("[net] net_call_sync: the net task did not run the call in %lu ms\r\n",
+                LOG_W("[net] net_call_sync: the net task did not run the call in %lu ms\n",
                        (unsigned long)timeout_ms);
                 return false;
             }
@@ -1428,7 +1428,7 @@ static void net_wifi_static_on_net(void *arg)
     const char *ip_s = a->ip, *mask_s = a->mask, *gw_s = a->gw;
     ip4_addr_t ip, mask, gw;
     if (!ip4addr_aton(ip_s, &ip) || !ip4addr_aton(mask_s, &mask) || !ip4addr_aton(gw_s, &gw)) {
-        log_printf("[net] wifi-static: bad address\r\n");
+        log_printf("[net] wifi-static: bad address\n");
         return;
     }
     dhcp_stop(&s_wifi.netif);
@@ -1438,7 +1438,7 @@ static void net_wifi_static_on_net(void *arg)
     strncpy(s_wifi.ip, ip4addr_ntoa(&ip), sizeof(s_wifi.ip) - 1);
     s_wifi.dhcp.state = NET_DHCP_DONE;
     s_wifi_static = true;
-    log_printf("[net] wifi static ip=%s gw=%s (DHCP off on wifi — ping to test unicast RX)\r\n",
+    log_printf("[net] wifi static ip=%s gw=%s (DHCP off on wifi — ping to test unicast RX)\n",
            s_wifi.ip, gw_s);
 }
 
