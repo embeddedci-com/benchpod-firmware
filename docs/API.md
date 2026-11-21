@@ -4739,7 +4739,7 @@ then holds its next capture back for 1.5 s, so a retry finds the bus free). Log 
 not interrupt the outputs: the sine plays from the gateware's BRAM table and the 0-5 V DC and
 4-20 mA outputs are held by the quad DAC, none of which use the bus, so the DAC keeps running
 through a W25Q session. Only a deep DAC replay (from PSRAM) would be stopped and started again;
-the EMI loop never plays one. A session delays the loop's next capture instead: `session_us_last`
+no EMI mode plays one. A session delays the loop's next capture instead: `session_us_last`
 and `session_us_max` are its time (measured on an analog v3r2 pod: 0.3 to 0.4 ms for one record,
 about 3 ms for a batch of 14, about 60 ms when a sector erase comes with it (the W25Q's worst case
 is 400 ms), which happens only once the 1,024 records erased at boot are used up). `glitch_us_last` and `glitch_us_max` are the
@@ -4774,6 +4774,15 @@ failure too (blue recovering for 5 s, then blue): the pod restarts the C3 when i
 itself or fails a setup step (see [`wifi_status`](#wifi_status)), so an ESD hit that resets it
 shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the cause, e.g.
 `C3 restart: rebooted`, and `emi_test` counts them (`c3_restarts`).
+
+**The mode.** The loop runs an operating mode (`emi mode`, see the console's `emi` command): `ci`
+(the lab's, the default), `interactive`, `sensor` or `stress`. Every start and every change is an
+`EVENT` (kind 9, `mode`) whose text is the mode, e.g. `mode ci`. `emi_test` carries it as `mode`,
+with `captures_on` (false after `emi cap off`), `busy_permille` (the share of the last minute a
+capture or its read-back was in flight, in tenths of a percent; -1 until a minute has run) and
+`overdue` (captures that went out 10 s or more after they were due, this run). A capture that
+late counts as failing for the LED while it waits, so a stalled loop never shows green. The short
+`emi_test` in `status` carries `mode` too.
 
 Things the pod counts that the LED does not show are `EVENT`s too (kind 8, `health`), checked once
 a second and logged at most once per item every 10 s (eFuse reverse blocking: every 60 s) with the

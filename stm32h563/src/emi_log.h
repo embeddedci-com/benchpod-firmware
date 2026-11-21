@@ -88,6 +88,7 @@ typedef enum {
                                 a PSRAM read retry, a CAN bus-off, eFuse reverse blocking, the iCE40
                                 losing its configuration, the LA supply switching (emi_test.c,
                                 health_poll); the text says which and how many. No LED change */
+    EMI_EV_MODE       = 9,   /* the operating mode at a start or a change (emi_sched.h): "mode ci" */
 } emi_event_t;
 
 /* A record, decoded. Fields a type does not use are 0. */

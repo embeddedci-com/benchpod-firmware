@@ -5,30 +5,38 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+#include "emi_sched.h"
+
 /*
  * emi_test — the EMC pre-compliance build (`make EMI_TEST=1`, never with RELEASE=1).
  *
- * From boot the pod runs the worst-case activity of the lab's operating mode
- * (benchpod-compliance emc/test-setup.md, "Operating mode") by itself, so a spectrum analyser can
- * watch it without a laptop driving the pod:
+ * From boot the pod runs the activity of the lab's operating mode (benchpod-compliance
+ * emc/test-plan.md, "Operating mode") by itself, so a spectrum analyser can watch it without a
+ * laptop driving the pod. What it runs is a mode (emi_sched.h, `emi mode <name>`), taken from how
+ * customers use the pod; the boot mode is `ci` (`make EMI_TEST=1 EMI_MODE=<name>` builds another):
  *
  *   - LA voltage 3.3 V, target power on at both eFuses (J5 internal 5 V, J6 from J4)
  *   - the DAC: on a quad-DAC board (DAC8554, analog v3r2 and the v4 analog module) all at once by
  *     default (`all`): the 1 kHz sine on 0-3.3 V, 3.0 V DC on 0-5 V and 12 mA on the 4-20 mA
  *     output; the +-12 V output stays at 0 V. The single-DAC boards (analog v3r1) have one DAC
  *     behind muxes, so one output at a time there, the sine by default. Either can pick one
- *     output (`emi dac sine|dc|current`) or none
- *   - back-to-back deep captures, ADC + LA and LA only in turn, each read back over the PSRAM bus
- *     and formatted like a client's, then thrown away
- *   - optionally a 115200 baud NMEA stream out of one LA pin (`emi uart <la>`), so the pod's own
- *     LA drivers toggle; off by default, since it drives a pin of the DUT
+ *     output (`emi dac sine|dc|current`) or none. The sensor mode plays the DC level
+ *   - captures, each read back over the PSRAM bus and formatted like a client's, then thrown away:
+ *     in `ci` a small one every 500 ms (4,096 samples: LA only at 12 MS/s, then ADC + LA), read
+ *     back at a LAN client's pace (4 MB/s); every 10 s in `interactive` and `sensor`; in `stress`
+ *     deep ones back to back (200k ADC + LA, then 1 M LA), as fast as the worker allows.
+ *     `emi cap off|on` turns them off and on, `emi period <ms>` changes the period (bench only)
+ *   - NMEA at 115200 baud out of LA8 (an emulated GPS, two sentences every 100 ms) in `ci` and
+ *     `sensor`; `emi uart <la>|off` picks another pin or none. It drives a pin of the I/O header.
+ *     The first start loads the emulation image (a UART sensor needs it), about 2 s, once: the
+ *     image stays in the iCE40's config flash
  *
- *   - a stream of raw Ethernet frames out of the Ethernet port (default 20 Mbit/s, full
- *     1514-byte frames, EtherType 0x88B6, to a locally administered MAC nobody owns), so the
- *     wired link carries traffic with no laptop script. Layer 2 only: it needs a link, not an IP
- *     address, DHCP or a peer. Through a Wi-Fi bridge it keeps the bridge's radio transmitting
- *     too. Each frame starts with "BPEMI", a sequence number and the pod's uptime, so a capture
- *     (`tcpdump ether proto 0x88b6`) can count losses. `emi net <mbit>|off` sets the rate
+ *   - a stream of raw Ethernet frames out of the Ethernet port (10 Mbit/s in `ci`, `interactive`
+ *     and `sensor`, 20 in `stress`; full 1514-byte frames, EtherType 0x88B6, to a link-local
+ *     address), so the wired link carries traffic with no laptop script. Layer 2 only: it needs a
+ *     link, not an IP address, DHCP or a peer. Through a Wi-Fi bridge it keeps the bridge's radio
+ *     transmitting too. Each frame starts with "BPEMI", a sequence number and the pod's uptime, so
+ *     a capture (`tcpdump ether proto 0x88b6`) can count losses. `emi net <mbit>|off` sets the rate
  *
  * The rest of the network runs as usual (cloud, LAN, USB network).
  *
@@ -57,19 +65,18 @@
 #define EMI_TEST_RECOVERY_START_MS 2000u
 /* A monitor line on the USB console this often. */
 #define EMI_TEST_REPORT_MS       5000u
-/* The Ethernet stream: default and top rate, frame size (a full 1500-byte MTU plus the 14-byte
-   header), EtherType (IEEE 802 local experimental 2; 0x88B5 is the Wi-Fi bridge's control
-   channel) and destination (locally administered unicast, 02 'B' 'P' 'E' 'M' 'I': switches flood
-   it like any unknown address, an access point keeps it off the air). The default is 20 Mbit/s,
-   twice the "at least 10 % of line rate" CISPR 32 asks of a LAN port on a 100 Mbit/s link, since
-   the lab runs the build unattended. */
-#define EMI_NET_DEFAULT_MBIT     20u
+/* The Ethernet stream: the rate before the first start (the mode's rate from then on, emi_sched.h),
+   top rate, frame size (a full 1500-byte MTU plus the 14-byte header), EtherType (IEEE 802 local
+   experimental 2; 0x88B5 is the Wi-Fi bridge's control channel) and destination (below). The lab
+   modes send 10 Mbit/s, the "at least 10 % of line rate" CISPR 32 asks of a LAN port on a
+   100 Mbit/s link; `stress` sends 20. */
+#define EMI_NET_DEFAULT_MBIT     10u
 #define EMI_NET_MAX_MBIT         50u
 #define EMI_NET_FRAME            1514u
 #define EMI_NET_ETHERTYPE        0x88B6u
 /* The stream's destination: 01-80-C2-00-00-0F, in the IEEE 802.1 range of link-local addresses
    (01-80-C2-00-00-00 to -0F) that a standard switch never forwards, and an unassigned one (the others
-   are STP, pause, LACP, 802.1X, LLDP ...). So the 20 Mbit/s loads the pod's cable as CISPR 32 wants,
+   are STP, pause, LACP, 802.1X, LLDP ...). So the stream loads the pod's cable as CISPR 32 wants,
    and stops at the first switch instead of flooding the lab's network (an address nobody owns, as
    before, is sent out of every port). A laptop cabled straight to the pod still sees it. The BPMON
    status frame stays broadcast: small, once every 5 s, it reaches a laptop anywhere on the network. */
@@ -96,6 +103,17 @@ void emi_test_reply(const uint8_t *buf, size_t len);
 /* What a bulk read-back may still send to CH_EMI_CONN in this worker pass (at_send_avail): a
    budget per pass, so a deep read-back is spread over passes like a real socket's. */
 size_t emi_test_avail(void);
+
+/* Console `emi mode <name>`: switch the mode (emi_sched.h), applied at once when running; it
+   takes the mode's DAC, NMEA pin, stream rate and period and turns captures back on, dropping
+   earlier `emi dac/uart/net/period/cap` choices. */
+void emi_test_set_mode(emi_mode_t mode);
+emi_mode_t emi_test_mode(void);
+/* Console `emi cap off|on`: no captures / captures again (bench diagnosis: the other blocks alone). */
+void emi_test_set_captures(bool on);
+/* Console `emi period <ms>|0`: the capture period instead of the mode's (100 ms to 10 min; 0 = the
+   mode's). False outside that range. */
+bool emi_test_set_period(uint32_t ms);
 
 /* Console `emi start|stop`: start the activity now / stop it and switch outputs and power off. */
 void emi_test_start(void);

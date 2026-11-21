@@ -695,6 +695,19 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
     int mode = argc >= 3 ? emi_test_dac_from_name(argv[2]) : -1;
     int la   = argc >= 3 && strcmp(argv[2], "off") ? atoi(argv[2]) : 0;
     if (!strcmp(sub, "start"))                     emi_test_start();
+    else if (!strcmp(sub, "mode") && argc >= 3) {
+        const int m = emi_mode_from_name(argv[2]);
+        if (m < 0) { op(out, ctx, "usage: emi mode ci|interactive|sensor|stress\r\n"); return; }
+        emi_test_set_mode((emi_mode_t)m);
+    }
+    else if (!strcmp(sub, "cap") && argc >= 3 && (!strcmp(argv[2], "on") || !strcmp(argv[2], "off")))
+        emi_test_set_captures(!strcmp(argv[2], "on"));
+    else if (!strcmp(sub, "period") && argc >= 3 && argv[2][0] >= '0' && argv[2][0] <= '9') {
+        if (!emi_test_set_period((uint32_t)strtoul(argv[2], NULL, 10))) {
+            op(out, ctx, "  emi period: 100 to 600000 ms, or 0 for the mode's\r\n");
+            return;
+        }
+    }
     else if (!strcmp(sub, "stop"))                 emi_test_stop();
     else if (!strcmp(sub, "dac") && mode >= 0) {
         if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
@@ -739,12 +752,14 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
         return;
     }
     else if (strcmp(sub, "status")) {
-        op(out, ctx, "usage: emi [status] | emi start | emi stop | emi dac all|sine|dc|current|off"
-                     " | emi uart <1-14>|off | emi net <mbit>|off | emi log [n|all]"
+        op(out, ctx, "usage: emi [status] | emi start | emi stop | emi mode ci|interactive|sensor|stress"
+                     " | emi dac all|sine|dc|current|off"
+                     " | emi uart <1-14>|off | emi net <mbit>|off | emi cap on|off | emi period <ms>|0"
+                     " | emi log [n|all]"
                      " | emi fault ice40|ice40-stuck|off\r\n");
         return;
     }
-    char line[256];
+    char line[320];
     emi_test_describe(line, sizeof(line));
     op(out, ctx, "  %s\r\n", line);
 }
