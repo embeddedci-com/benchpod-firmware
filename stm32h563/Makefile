@@ -121,6 +121,8 @@ C_SOURCES := \
   src/net_server.c \
   src/net_dhcp.c \
   src/net_route.c \
+  src/mdns_nsec.c \
+  src/mdns_nsec_lwip.c \
   src/eth_diag.c \
   src/esp_hosted_frame.c \
   src/esp_hosted_spi.c \

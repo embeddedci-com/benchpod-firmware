@@ -23,6 +23,7 @@
 #include "esp_hosted_spi.h"
 #include "net_dhcp.h"
 #include "net_route.h"
+#include "mdns_nsec_lwip.h"
 #include "esp_netif.h"
 #include "usb_netif.h"
 #include "usb_device.h"
@@ -1192,6 +1193,7 @@ void net_init(void)
 
     lwip_init();
     mdns_resp_init();
+    mdns_nsec_install();   /* NSEC answer to AAAA questions (IPv4-only pod), every mDNS netif */
 
     /* Ethernet netif (always present, default route). dhcp_process() polls the
        link every tick (netif_is_link_up), so no link-change callback is wired. */
