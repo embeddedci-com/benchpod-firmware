@@ -95,6 +95,8 @@ static struct {
     bool           adc_clk_pending;  /* the ADC clock still has to be set (a capture that sets it) */
     bool           adc_clk_slow_now; /* what the gateware's ADC clock is now, as far as we know */
     bool           power_off;     /* `emi power off`: target power off at both eFuses */
+    uint32_t       dac_rate_hz;   /* `emi dac rate`: the sine's sample rate, 0 = the generator's
+                                     choice. Kept across `emi mode` and `emi defaults` */
     uint32_t       period_ms;     /* `emi period`: the capture period instead of the mode's, 0 = the mode's */
     uint32_t       t_budget;      /* the read-back budget was last topped up then */
     uint32_t       overdue;       /* captures that went out EMI_SCHED_OVERDUE_MS late, this run */
@@ -199,19 +201,29 @@ static void hold_dc_on_b(void) {
     }
 }
 
+/* The 1 kHz sine on 0-3.3 V, at `emi dac rate` (or the generator's own choice, the highest rate
+   whose period fits its table: about 870 kS/s for 1 kHz). */
+static void run_sine(void) {
+    char cmd[176];
+    int n = snprintf(cmd, sizeof(cmd), "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
+                     "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65");
+    if (s.dac_rate_hz && n > 0 && (size_t)n < sizeof(cmd))
+        n += snprintf(cmd + n, sizeof(cmd) - (size_t)n, ",\"sample_rate_hz\":%lu", (unsigned long)s.dac_rate_hz);
+    if (n > 0 && (size_t)n + 2u < sizeof(cmd)) { cmd[n] = '}'; cmd[n + 1] = '\0'; }
+    run("generate", cmd);
+}
+
 /* Start `mode` on outputs that are stopped or already play it. Also what puts the DAC back after
    a W25Q session (a run log write or read), whose quiesce stopped it. */
 static void start_dac(emi_dac_mode_t mode) {
     switch (mode) {
     case EMI_DAC_ALL:
         run("current_out", "{\"cmd\":\"current_out\",\"ua\":12000}");
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
-                        "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
+        run_sine();
         hold_dc_on_b();
         break;
     case EMI_DAC_SINE:
-        run("generate", "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,"
-                        "\"path\":\"3v3\",\"amplitude_v\":1.5,\"offset_v\":1.65}");
+        run_sine();
         break;
     case EMI_DAC_DC:
         run("dac_out", "{\"cmd\":\"dac_out\",\"path\":\"5v\",\"v\":3.0}");
@@ -786,7 +798,7 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
             (unsigned long)offset,
             (unsigned long)count);
     if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
-        char st[512];
+        char st[576];
         if (emi_test_json(st, sizeof(st))) bp_emit(&e, ",\"emi_test\":%s", st);
         bp_emit_raw(&e, ",\"last_error\":");
         bp_emit_jstr(&e, s.last_err);
@@ -1052,6 +1064,7 @@ void emi_test_set_mode(emi_mode_t mode) {
     const emi_dac_mode_t from = s.dac;
     s.mode = mode;
     s.mode_applied = true;
+    s.user_dac = false;     /* a mode brings its own DAC (`emi dac` again after it to change it) */
     take_mode_settings();   /* NMEA pin and stream rate, unless chosen */
     take_mode_dac();
     s.next_kind = mode_desc()->n_caps;
@@ -1104,6 +1117,18 @@ bool emi_test_set_captures(emi_cap_sel_t sel) {
     if (sel != EMI_CAPSEL_LA && sel != EMI_CAPSEL_OFF && !board_caps()->analog.present) return false;
     s.cap_sel = sel;
     s.next_kind = mode_desc()->n_caps;
+    return true;
+}
+
+bool emi_test_set_dac_rate(uint32_t hz) {
+    if (hz && (hz < EMI_DAC_RATE_MIN_HZ || hz > EMI_DAC_RATE_MAX_HZ)) return false;
+    if (!board_caps()->analog.present) return false;
+    s.dac_rate_hz = hz;
+    if (s.running && (s.dac == EMI_DAC_SINE || s.dac == EMI_DAC_ALL)) {
+        run("dac_stop", "{\"cmd\":\"dac_stop\"}");   /* the held DC and 12 mA stay (quad DAC) */
+        run_sine();
+        if (s.dac == EMI_DAC_ALL) hold_dc_on_b();   /* routing the sine parks channel B */
+    }
     return true;
 }
 
@@ -1307,16 +1332,21 @@ size_t emi_test_describe(char *buf, size_t cap) {
     char c3[24] = "";
     if (esp_wifi_ctrl_module_present())
         snprintf(c3, sizeof(c3), ", c3 restarts %lu", (unsigned long)s.c3_restarts);
+    /* "auto 872727 S/s" / "218000 S/s": what was asked, and what the sine plays at */
+    char rate[40];
+    const uint32_t gen = dac_generated_rate_hz();
+    if (s.dac_rate_hz) snprintf(rate, sizeof(rate), "%lu (plays %lu S/s)", (unsigned long)s.dac_rate_hz, (unsigned long)gen);
+    else               snprintf(rate, sizeof(rate), "auto (plays %lu S/s)", (unsigned long)gen);
     char busy[24] = "";
     if (s.busy.have)
         snprintf(busy, sizeof(busy), ", busy %u.%u%%", (unsigned)(s.busy.last_permille / 10u),
                  (unsigned)(s.busy.last_permille % 10u));
     int len = snprintf(buf, cap,
-                       "emi: %s, mode %s, led %s, dac %s, uart %s, net %s, cap %s, readback %s, adcclk %s%s, "
+                       "emi: %s, mode %s, led %s, dac %s, dac rate %s, uart %s, net %s, cap %s, readback %s, adcclk %s%s, "
                        "power %s, core %lu MHz, %lus, captures %lu%s, errors %lu%s%s%s",
                        s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
                        emi_mode_name(s.mode),
-                       led_name(emi_test_led_state()), k_dac_names[s.dac], uart, net,
+                       led_name(emi_test_led_state()), k_dac_names[s.dac], rate, uart, net,
                        emi_cap_sel_name(s.cap_sel), s.no_readback ? "off" : "on",
                        s.adc_slow ? "slow" : "fast", s.adc_clk_pending ? " (setting)" : "",
                        s.power_off ? "off" : "on", (unsigned long)(SystemCoreClock / 1000000u),
@@ -1345,7 +1375,7 @@ size_t emi_test_json(char *buf, size_t cap) {
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
                        "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
-                       "\"c3_restarts\":%lu,\"cap\":\"%s\",\"readback\":%s,\"adc_clock\":\"%s\","
+                       "\"c3_restarts\":%lu,\"dac_rate_hz\":%lu,\"dac_rate_played_hz\":%lu,\"cap\":\"%s\",\"readback\":%s,\"adc_clock\":\"%s\","
                        "\"adc_clock_set\":%s,\"power\":%s,\"busy_permille\":%d,\"overdue\":%lu}",
                        s.running ? "true" : "false", emi_mode_name(s.mode), k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
@@ -1354,7 +1384,8 @@ size_t emi_test_json(char *buf, size_t cap) {
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
                        fault_last_reset_str() ? fault_last_reset_str() : "unknown",
-                       (unsigned long)s.c3_restarts, emi_cap_sel_name(s.cap_sel),
+                       (unsigned long)s.c3_restarts, (unsigned long)s.dac_rate_hz,
+                       (unsigned long)dac_generated_rate_hz(), emi_cap_sel_name(s.cap_sel),
                        s.no_readback ? "false" : "true", s.adc_slow ? "slow" : "fast",
                        s.adc_clk_pending ? "false" : "true", s.power_off ? "false" : "true",
                        s.busy.have ? (int)s.busy.last_permille : -1, (unsigned long)s.overdue);

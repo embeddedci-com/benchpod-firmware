@@ -4789,8 +4789,11 @@ run), `readback` (false: captures stay in the PSRAM, the STM32 does not read the
 loop's capture reply is then `{"adc_samples":N,"la_samples":M,"read_back":false}` and
 `capture_read` cannot resume it), `adc_clock` (`fast` or `slow`: the ADC's free-running
 conversions at 400 kS/s or 400 S/s; `adc_clock_set` is false while the capture that sets it is
-still to run), `power` (target power), with `dac`, `uart_la` and `net_mbit`. The switches survive
-a mode change; `emi defaults` gives the mode's back.
+still to run), `power` (target power), `dac_rate_hz` (`emi dac rate`: the 1 kHz sine's sample
+rate, 0 = the generator's own choice) with `dac_rate_played_hz` (the rate it plays at, 0 when no
+sine plays), with `dac`, `uart_la` and `net_mbit`. The switches survive a mode change, except the
+DAC choice (`emi dac`), which the mode sets; `emi defaults` gives the mode's back, except
+`emi dac rate`, which only `emi dac rate auto` resets.
 
 Things the pod counts that the LED does not show are `EVENT`s too (kind 8, `health`), checked once
 a second and logged at most once per item every 10 s (eFuse reverse blocking: every 60 s) with the

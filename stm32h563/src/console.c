@@ -724,6 +724,15 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
         }
     }
     else if (!strcmp(sub, "stop"))                 emi_test_stop();
+    else if (!strcmp(sub, "dac") && argc >= 4 && !strcmp(argv[2], "rate") &&
+             (!strcmp(argv[3], "auto") || (argv[3][0] >= '0' && argv[3][0] <= '9'))) {
+        const uint32_t hz = strcmp(argv[3], "auto") ? (uint32_t)strtoul(argv[3], NULL, 10) : 0u;
+        if (!emi_test_set_dac_rate(hz)) {
+            op(out, ctx, "  emi dac rate: %u to %u S/s, or auto (a board with a DAC)\r\n",
+               EMI_DAC_RATE_MIN_HZ, EMI_DAC_RATE_MAX_HZ);
+            return;
+        }
+    }
     else if (!strcmp(sub, "dac") && mode >= 0) {
         if (!emi_test_set_dac((emi_dac_mode_t)mode)) {
             op(out, ctx, "  emi dac: %s\r\n", board_caps()->analog.present
@@ -768,7 +777,7 @@ static void con_emi(int argc, char **argv, console_out_t out, void *ctx)
     }
     else if (strcmp(sub, "status")) {
         op(out, ctx, "usage: emi [status] | emi start | emi stop | emi mode ci|interactive|sensor|stress"
-                     " | emi dac all|sine|dc|current|off"
+                     " | emi dac all|sine|dc|current|off | emi dac rate <Hz>|auto"
                      " | emi uart <1-14>|off | emi net <mbit>|off | emi cap both|la|adc|off"
                      " | emi readback on|off | emi adcclk fast|slow | emi power on|off | emi period <ms>|0"
                      " | emi defaults"

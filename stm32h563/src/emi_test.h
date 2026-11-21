@@ -27,8 +27,9 @@
  *     deep ones back to back (200k ADC + LA, then 1 M LA), as fast as the worker allows.
  *     `emi period <ms>` changes the period. A/B switches (bench only) pick the blocks:
  *     `emi cap both|la|adc|off`, `emi readback on|off`, `emi adcclk fast|slow` (the ADC's
- *     free-running conversions), `emi power on|off`, with `emi dac/uart/net`; `emi defaults`
- *     drops them. `emi dac off` leaves the DAC's SPI idle (the engine sends no frames)
+ *     free-running conversions), `emi power on|off`, `emi dac rate <Hz>|auto` (the sine's sample
+ *     rate), with `emi uart/net` (`emi dac` lasts until the next `emi mode`); `emi defaults`
+ *     drops them (but the DAC rate). `emi dac off` leaves the DAC's SPI idle (the engine sends no frames)
  *   - NMEA at 115200 baud out of LA8 (an emulated GPS, two sentences every 100 ms) in `ci` and
  *     `sensor`; `emi uart <la>|off` picks another pin or none. It drives a pin of the I/O header.
  *     The first start loads the emulation image (a UART sensor needs it), about 2 s, once: the
@@ -108,8 +109,9 @@ void emi_test_reply(const uint8_t *buf, size_t len);
 size_t emi_test_avail(void);
 
 /* Console `emi mode <name>`: switch the mode (emi_sched.h), applied at once when running: its
-   captures, and its DAC, NMEA pin and stream rate where no switch below chose them. The switches
-   (A/B tests of which block emits) all survive a mode change; `emi defaults` drops them. */
+   captures and its DAC (an `emi dac` choice ends here), and its NMEA pin and stream rate where no
+   switch below chose them. The other switches (A/B tests of which block emits) survive a mode
+   change; `emi defaults` drops them (all but `emi dac rate`). */
 void emi_test_set_mode(emi_mode_t mode);
 emi_mode_t emi_test_mode(void);
 /* Console `emi defaults`: every switch back to the mode's (captures both, read-back on, ADC clock
@@ -122,6 +124,14 @@ bool emi_test_set_captures(emi_cap_sel_t sel);
 /* Console `emi readback on|off`: off leaves each capture in the PSRAM (the STM32's 50 MHz bus
    read-back skipped); the capture still runs. command_handler_capture asks emi_test_readback_on. */
 void emi_test_set_readback(bool on);
+/* Console `emi dac rate <Hz>|auto`: the sample rate of the 1 kHz sine (in `sine` and `all`), or 0
+   for the generator's own choice (the highest rate whose period fits its table, about 870 kS/s).
+   Each sample is a 24-bit frame at 24 MHz SCLK on the cable to the analog module, so the rate is
+   the DAC SPI's activity. Kept across `emi mode` and `emi defaults`; applied at once. False out
+   of EMI_DAC_RATE_MIN_HZ..EMI_DAC_RATE_MAX_HZ or without a DAC. */
+#define EMI_DAC_RATE_MIN_HZ  2000u
+#define EMI_DAC_RATE_MAX_HZ  1000000u
+bool emi_test_set_dac_rate(uint32_t hz);
 bool emi_test_readback_on(void);
 /* Console `emi adcclk fast|slow`: the ADC's free-running conversions (12 MHz SCLK frames on the
    analog module's cable, all the time) at 400 kS/s (fast, the gateware's reset rate) or 400 S/s
