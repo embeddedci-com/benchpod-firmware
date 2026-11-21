@@ -349,11 +349,11 @@ that applies answers with its code (or, for safe mode, its message) and the comm
 |---|---|---|
 | [Client API level](#client-compatibility) | every command except `status`, `diag`, `ping`, `lease_release` and the update commands, from a client whose `client_api` (none = 0) is below the firmware's `min_client_api` | `BP0030` (`client_too_old`, with a `message` for old clients; firmware 4.0.0) |
 | LAN policy `locked` | a T2 or T3 command on a LAN connection | `BP0040` (`lan_locked`, args `cmd`) |
-| A cloud job holds the pod (lease) | anything but a light read or a `lease_*` command on a LAN connection | `BP0025` (`lease_busy`, holder `a cloud job`, purpose the cloud holder) |
+| A cloud job holds the pod (lease) | anything but a light read, a `lease_*` command or [pod administration](#pod-administration-passes-a-lease) on a LAN connection | `BP0025` (`lease_busy`, holder `a cloud job`, purpose the cloud holder) |
 | Cloud tunnel tier | a command above the tier the server allowed the tunnel's user (its `tunnel.open` `max_tier`; a tunnel opened without one gets T1 from firmware 4.0.0, everything up to 3.10.13) | `BP0045` (`role_required`, args `cmd`) |
 | Safe mode | everything except network, status, identity, target power, `dac_limits` and CAN, while the iCE40/PSRAM are off | `safe mode: iCE40/PSRAM are off. Unplug and replug the pod` |
 | Digital-only board | the analog commands (`generate`, `capture`, `measure`, `load`, `load_bin`, `replay`, `dac_limits`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read`, `calibrate`, `dac_control_loop`, `dac_loop_probe`, `dac_loop_input`) and a `capture_dual` with ADC samples | `BP0046` (`no_analog_front_end`, args `cmd`; SCPI shows the text `this BenchPod has no analog front end (digital board): ...`) |
-| [Pod lease](#pod-lease) held by someone else | anything but a light read or a `lease_*` command, on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
+| [Pod lease](#pod-lease) held by someone else | anything but a light read, a `lease_*` command or [pod administration](#pod-administration-passes-a-lease), on any connection that does not own the lease (LAN, USB, the cloud) and without the held id in its `lease` field | `BP0025` (`lease_busy`, args `holder`, `purpose`, `left_s`) |
 | [Pod lease](#pod-lease) stopped | the next command of each connection that owned it (once), and for 30 minutes any command whose `lease` field is the stopped id | `BP0026` (`lease_lost`, args `by`) |
 | [DAC pinout](#dac-pinout-on-the-flat-cable) mismatch | the commands that drive the DAC (`generate`, `measure`, `replay`, `dac_set`, `dac_out`, `dac_control_loop`, `current_out` with `ua`, `calibrate` with `dac` or `adc`, `adc_range` with `test`) on a digital board and an analog module with different flat-cable pinouts | `BP0080` (`dac_pinout_mismatch`, args `cmd`, `digital`, `module`) |
 | DAC output limits | commands that would move the DAC outside the limits | see [`dac_limits`](#dac_limits--dac-output-limits-for-an-external-output-stage) |
@@ -5279,7 +5279,8 @@ tier.
 ### While a cloud job holds the pod
 
 When a cloud consumer (a CI run, the web app, the SDK) holds the pod's lease, LAN connections get
-only light reads (`status`, `ping`, the `*_status` reads, policy reads); everything else gets
+only light reads (`status`, `ping`, the `*_status` reads, policy reads) and
+[pod administration](#pod-administration-passes-a-lease); everything else gets
 `busy: a cloud job holds this pod (<holder>, <N> s left)`, and SCPI setters get -200. The pod ends
 the lease itself at the announced expiry or when the cloud link drops. `status` shows
 `"lease":{"held":...,"holder":"...","left_s":...}`.
@@ -5317,6 +5318,20 @@ that follow belong to that session. `status` with the held id reports `local_lea
 
 The `lease_*` commands always reach the pod's lease, whoever holds it, so a busy pod answers
 with its holder.
+
+<a id="pod-administration-passes-a-lease"></a>
+**Pod administration passes a lease** (firmware 4.0.2+). The commands that say who may reach the
+pod over the LAN do not drive the hardware, so they run while someone else holds the pod's lease
+or a cloud job holds the pod: the owner at the USB cable, or over the cloud, can unpair a computer
+that keeps a session open, pair a new one, or change the LAN policy. Every other gate still
+applies: an unpaired LAN computer gets `BP0081`, a locked LAN `BP0040`, a cloud tunnel its user's
+tier (`BP0045`), and the writes still come only from USB or the cloud (see each command). Before
+4.0.2 their write forms got `BP0025` like any other command.
+
+Commands that pass a lease: `lan_clients`, `lan_policy` and `lan_tls`.
+
+`sig_policy` is not among them: it only matters for a firmware update, which needs the lease
+anyway.
 
 ### `lease_acquire`
 

@@ -62,6 +62,9 @@ Sent on acquire, on every renew, on release, and right after a pod (re)connects 
   observational (`ping`, `status`, `*_status`, `la_pins`, `identity_public`, `blob_status`,
   `ota_status`, ...). Captures (they own the PSRAM bus), T1, T2 and T3 get
   `busy: a cloud job holds this pod (<holder>, <N> s left)`.
+- Pod administration passes the lease (firmware 4.0.2, `CMD_F_ADMIN` in `cmd_table.h`):
+  `lan_clients`, `lan_policy` and `lan_tls`, so a computer can be unpaired or paired while a job
+  runs. Pairing, the LAN policy tier gate and the handlers' USB-or-cloud check still apply.
 - SCPI on the LAN: queries pass, setters get the same busy error.
 - The cloud's own connections and the USB console are unaffected. Connections over the USB network
   adapter (firmware 3.9.0) are LAN connections here and are gated like the LAN.

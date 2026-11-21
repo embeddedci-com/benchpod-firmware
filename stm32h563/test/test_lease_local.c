@@ -1,7 +1,7 @@
 /*
  * test_lease_local.c: host tests for the pod's own lease (src/lease_local.c): acquire, refresh and
  * join with the same id, busy for another id, expiry, release, the owner flag ending with its
- * connection, light reads passing the gate, and a server break.
+ * connection, light reads and pod administration passing the gate, and a server break.
  */
 #include "lease_local.h"
 #include "cmd_tier.h"
@@ -18,7 +18,7 @@ enum { A = 0, B = 1, C = 7 /* a cloud tunnel */ };
 static lease_local_gate_t gate(int conn, const char *cmd, const char *json, uint32_t now) {
     lease_local_view_t v;
     char by[48];
-    return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_tier_light(cmd, json) != 0,
+    return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_passes_lease(cmd, json) != 0,
                              NULL, now, &v, by, sizeof(by));
 }
 
@@ -162,6 +162,43 @@ static void test_light_allowed(void) {
     }
 }
 
+/* Pod administration (CMD_F_ADMIN) passes someone else's lease: the owner at the USB cable (or
+   over the cloud) unpairs a computer that keeps an SDK session open, pairs a new one, or changes
+   the LAN policy. Driving the hardware stays refused. */
+static void test_admin_allowed(void) {
+    lease_local_reset();
+    lease_local_view_t v;
+    lease_local_acquire(A, "L-sdk", "sdk", "session", 120, 0, &v);
+    static const char *const admin[] = {
+        "{\"cmd\":\"lan_clients\",\"remove\":\"3fa2c19e\"}",
+        "{\"cmd\":\"lan_clients\",\"add\":\"laptop\",\"spki_sha256\":\"00\"}",
+        "{\"cmd\":\"lan_clients\",\"clear\":true}",
+        "{\"cmd\":\"lan_policy\",\"pairing\":true}",
+        "{\"cmd\":\"lan_policy\",\"set\":\"locked\"}",
+        "{\"cmd\":\"lan_tls\",\"https_only\":true}",
+        "{\"cmd\":\"lan_tls\",\"regenerate\":true}",
+    };
+    const char *const names[] = { "lan_clients", "lan_clients", "lan_clients", "lan_policy",
+                                  "lan_policy", "lan_tls", "lan_tls" };
+    for (size_t i = 0; i < sizeof(admin) / sizeof(admin[0]); i++) {
+        CHECK(gate(B, names[i], admin[i], 1000) == LEASE_LOCAL_PASS, "%s refused", admin[i]);
+        CHECK(gate(C, names[i], admin[i], 1000) == LEASE_LOCAL_PASS, "cloud: %s refused", admin[i]);
+    }
+    /* the hardware stays the holder's, and so do the other settings */
+    CHECK(gate(B, "dac_set", "{\"cmd\":\"dac_set\",\"x\":1}", 1000) == LEASE_LOCAL_REFUSE_BUSY,
+          "dac_set allowed");
+    CHECK(gate(B, "target_power", "{\"cmd\":\"target_power\",\"on\":true}", 1000) ==
+          LEASE_LOCAL_REFUSE_BUSY, "target_power allowed");
+    CHECK(gate(B, "sig_policy", "{\"cmd\":\"sig_policy\",\"clear_floor\":true}", 1000) ==
+          LEASE_LOCAL_REFUSE_BUSY, "sig_policy clear_floor allowed");
+    CHECK(gate(B, "wifi_set", "{\"cmd\":\"wifi_set\",\"ssid\":\"x\"}", 1000) ==
+          LEASE_LOCAL_REFUSE_BUSY, "wifi_set allowed");
+    /* a broken lease still reports "lost" to its owner first, admin command or not */
+    lease_local_break("admin");
+    CHECK(gate(A, "lan_clients", "{\"cmd\":\"lan_clients\"}", 2000) == LEASE_LOCAL_REFUSE_LOST,
+          "owner did not hear lease lost");
+}
+
 static void test_break(void) {
     lease_local_reset();
     lease_local_view_t v;
@@ -210,7 +247,7 @@ static lease_local_gate_t gate_id(int conn, const char *cmd, const char *id, uin
                                   lease_local_view_t *v) {
     char json[96], by[48];
     snprintf(json, sizeof(json), "{\"cmd\":\"%s\"}", cmd);
-    return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_tier_light(cmd, json) != 0,
+    return lease_local_check(conn, strncmp(cmd, "lease_", 6) == 0, cmd_passes_lease(cmd, json) != 0,
                              id, now, v, by, sizeof(by));
 }
 
@@ -296,6 +333,7 @@ int main(void) {
     test_release();
     test_owner_on_close();
     test_light_allowed();
+    test_admin_allowed();
     test_break();
     test_snapshot();
     test_per_command_id();

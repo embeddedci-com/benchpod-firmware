@@ -7,7 +7,7 @@
  * Each row holds a verb, its tier (cmd_tier.h), what the gates need to know about it, its
  * handler and, for a verb whose tier depends on its arguments, the test for its write form.
  * dispatch_line() looks the verb up here once and hands the row on: the tier gate
- * (cmd_tier_of), the lease gates (cmd_tier_light_of), the safe-mode and digital-board gates
+ * (cmd_tier_of), the lease gates (cmd_passes_lease_of), the safe-mode and digital-board gates
  * (cmd_gate), the cloud command channel (no streaming verbs) and the console trace (no noisy
  * polls) all read the same row, so a new command is one line here and nothing else.
  *
@@ -53,6 +53,13 @@ enum {
     /* Answers a LAN computer that is not paired with the pod (lan_clients.h, cmd_gate.h): the
        few reads that tell it what the pod is and how to pair. Everything else needs pairing. */
     CMD_F_UNPAIRED = 1u << 8,
+    /* Pod administration that does not drive the hardware: who may reach the pod over the LAN
+       (lan_clients, lan_policy, lan_tls). Passes both leases, the pod's own (lease_local.h) and a
+       cloud job's (lease_gate.h), so the owner can unpair a computer that keeps a session open, or
+       pair a new one, while someone else holds the pod. Every other gate still applies: pairing,
+       the LAN policy tier gate, the tunnel max tier, and the handlers' own source checks (USB or
+       the cloud only for the writes). docs/API.md lists these verbs; check_cmd_table.py checks it. */
+    CMD_F_ADMIN = 1u << 9,
 };
 
 /* The {name, tier} pair is what embeddedci-server mirrors (testdata/shared/cmd_tier_vectors.json)
@@ -77,6 +84,9 @@ const cmd_desc_t *cmd_table_rows(size_t *count);
 cmd_tier_t cmd_tier_of(const cmd_desc_t *d, const char *json);
 /* cmd_tier_light() for row `d` (NULL = unknown verb: not light). */
 int cmd_tier_light_of(const cmd_desc_t *d, const char *json);
+/* Passes a lease held by someone else (the pod's own and a cloud job's): a light read or a
+   CMD_F_ADMIN row. The lease verbs have their own flag (CMD_F_LEASE). NULL = unknown verb: no. */
+int cmd_passes_lease_of(const cmd_desc_t *d, const char *json);
 
 static inline int cmd_has(const cmd_desc_t *d, unsigned flag) { return d && (d->flags & flag); }
 

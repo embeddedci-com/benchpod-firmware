@@ -12,7 +12,8 @@
  *
  * Order, first refusal wins (docs/design/policy-commands.md):
  *   1. tier: a LAN connection under a locked LAN policy gets T0/T1 only
- *   2. lease: while a cloud job holds the pod, a LAN connection gets light reads only
+ *   2. lease: while a cloud job holds the pod, a LAN connection gets light reads and pod
+ *      administration (CMD_F_ADMIN) only
  *   3. tunnel: a cloud tunnel never goes above the tier the server allowed its user
  *   4. safe mode: with the iCE40/PSRAM off, only the commands that need neither
  *   5. board: the digital-only board refuses analog commands (an ADC capture_dual included)

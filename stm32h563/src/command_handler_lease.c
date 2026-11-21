@@ -125,7 +125,7 @@ bool command_handler_lease_gate(int conn_id, const cmd_desc_t *d, const char *js
     char lid[LEASE_LOCAL_ID_MAX + 1] = {0};
     if (json && bp_json_get_top(json, "lease", lid, sizeof(lid)) && strlen(lid) >= LEASE_LOCAL_ID_MAX)
         lid[0] = '\0';
-    switch (lease_local_check(conn_id, cmd_has(d, CMD_F_LEASE) != 0, cmd_tier_light_of(d, json) != 0,
+    switch (lease_local_check(conn_id, cmd_has(d, CMD_F_LEASE) != 0, cmd_passes_lease_of(d, json) != 0,
                               lid, HAL_GetTick(), &v, by, sizeof(by))) {
         case LEASE_LOCAL_REFUSE_LOST:
             send_lost(conn_id, by);
