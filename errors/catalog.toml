@@ -1083,7 +1083,7 @@ web = "This pod's list of paired computers is full. Remove one you no longer use
 [BP0083]
 name = "xip_unavailable"
 area = "firmware"
-since = "next"
+since = "4.0.2"
 args = { why = "str" }
 message = "The pod cannot run code from its W25Q: {why}"
 cause = "Some rarely used code (the USB flash protocols) runs straight from the pod's W25Q flash, from the blob that was built with the running firmware. It cannot run when the board has no way to map the W25Q, or when that blob is missing or belongs to another firmware build."
@@ -1096,7 +1096,7 @@ web = "Install the blobs that go with the pod's firmware, then try again."
 [BP0084]
 name = "usb_flash_refused"
 area = "usb"
-since = "next"
+since = "4.0.2"
 args = { why = "str" }
 message = "The pod cannot flash the board over USB: {why}"
 cause = "Flashing over USB needs the pod hosting the board (usb_host on, the board's USB drive mounted), the file staged with load_bin, and nothing else running. {why}."
