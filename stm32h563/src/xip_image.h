@@ -32,6 +32,7 @@ enum {
     XIP_FN_SELFTEST = 0,   /* uint32_t (*)(uint32_t seed): checksum over the image's own data */
     XIP_FN_MSC_FLASH_STEP, /* int (*)(void *ctx): msc_flash_step, a USB drive flash (msc_flash.h) */
     XIP_FN_CTRL_FLASH_STEP,/* int (*)(void *ctx): ctrl_flash_step, DFU/DfuSe and Teensy (ctrl_flash.h) */
+    XIP_FN_SER_FLASH_STEP, /* int (*)(void *ctx): ser_flash_step, Arduino AVR and SAMD bootloaders (ser_flash.h) */
     XIP_FN_COUNT
 };
 

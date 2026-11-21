@@ -223,6 +223,8 @@ C_SOURCES := \
   src/msc_flash_names.c \
   src/xip_mod_ctrl_flash.c \
   src/ctrl_flash_names.c \
+  src/xip_mod_ser_flash.c \
+  src/ser_flash_names.c \
   src/xip_session.c \
   src/spi_flash.c \
   src/spi_stream.c \
@@ -378,7 +380,8 @@ endif
 DEFS      += -DBENCHPOD_USB_HOST=1
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
-             $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c
+             $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
+             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
