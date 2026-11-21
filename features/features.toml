@@ -203,6 +203,11 @@ firmware = "4.0.1"
 gateware = 59
 date = "2026-11-20"
 
+[[releases]]
+firmware = "4.0.2"
+gateware = 60
+date = "2026-11-20"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
