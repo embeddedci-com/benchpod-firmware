@@ -5,6 +5,7 @@
  * branch through a linker veneer). */
 #include "xip_image.h"
 #include "msc_flash.h"
+#include "ctrl_flash.h"
 
 #include <stdint.h>
 
@@ -24,5 +25,6 @@ __attribute__((section(".xip.table"), used))
 const xip_table_t xip_table = {
     XIP_TABLE_MAGIC, XIP_ABI, XIP_FN_COUNT,
     { [XIP_FN_SELFTEST] = (const void *)selftest,
-      [XIP_FN_MSC_FLASH_STEP] = (const void *)msc_flash_step },
+      [XIP_FN_MSC_FLASH_STEP] = (const void *)msc_flash_step,
+      [XIP_FN_CTRL_FLASH_STEP] = (const void *)ctrl_flash_step },
 };

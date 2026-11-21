@@ -89,6 +89,9 @@ const char *usb_host_mode_name(usb_host_mode_t mode);
 #include <stddef.h>
 size_t usb_host_reply_json(const usb_host_info_t *info, char *out, size_t cap);
 
+/* The mounted device's address, 0 when none (for control transfers: usb_msc.h). */
+uint8_t usb_host_daddr(void);
+
 /* ---- for the usb task (usb_device.c) ---- */
 /* The port the usb task should host on now, USB_HOST_PORT_NONE for device mode (a request
    that timed out reads as NONE). */

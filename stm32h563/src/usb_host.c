@@ -190,6 +190,8 @@ void tuh_mount_cb(uint8_t daddr)
     str_fetch_next();
 }
 
+uint8_t usb_host_daddr(void) { return s_info.attached ? s_str_daddr : 0; }
+
 void tuh_umount_cb(uint8_t daddr)
 {
     (void)daddr;

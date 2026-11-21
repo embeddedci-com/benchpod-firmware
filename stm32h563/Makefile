@@ -221,6 +221,8 @@ C_SOURCES := \
   src/xip_mod_core.c \
   src/xip_mod_msc_flash.c \
   src/msc_flash_names.c \
+  src/xip_mod_ctrl_flash.c \
+  src/ctrl_flash_names.c \
   src/xip_session.c \
   src/spi_flash.c \
   src/spi_stream.c \
