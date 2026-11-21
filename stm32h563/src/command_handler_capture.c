@@ -27,6 +27,9 @@
 #include "b64url.h"
 #include "la_pins.h"        /* capture-trigger parsing/messages */
 #include "sensor_mgr.h"   /* sensor_la: an I2C instance's pins */
+#if defined(BENCHPOD_EMI_TEST)
+#include "emi_test.h"     /* emi_test_readback_on: `emi readback off` */
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -745,6 +748,30 @@ static void send_capture_failed(int cid, uint32_t adc_hz, uint32_t la_hz) {
     bp_err_capture_overflowed(cid, (int32_t)(la_hz / 1000u), (int32_t)(adc_hz / 1000u));   /* BP0071 */
 }
 
+/* The EMI test build's `emi readback off` (emi_test.h): the EMI loop's capture ends with its data
+   in the PSRAM and a short reply, without the STM32's read-back over the bus, so a scan can tell
+   the read-back's emissions from the capture's. Takes the bus and gate back like a read-back's end.
+   The data stays where it is; capture_read does not resume it (last_cap is cleared). */
+#if defined(BENCHPOD_EMI_TEST)
+static bool emi_skip_readback(int cid, size_t adc_n, size_t la_n) {
+    if (cid != CH_EMI_CONN || emi_test_readback_on()) return false;
+    last_cap.valid = false;
+    fpga_capture_psram_release();
+    trig_reply.present = false;
+    char payload[80];
+    snprintf(payload, sizeof(payload), "{\"adc_samples\":%u,\"la_samples\":%u,\"read_back\":false}",
+             (unsigned)adc_n, (unsigned)la_n);
+    send_ok_str(cid, payload);
+    heavy_release(cid);
+    return true;
+}
+#else
+static inline bool emi_skip_readback(int cid, size_t adc_n, size_t la_n) {
+    (void)cid; (void)adc_n; (void)la_n;
+    return false;
+}
+#endif
+
 #define DUAL_LA_RAW_MAX_HZ 8.0e6f   /* raw LA ceiling with the ADC in the same capture on gateware
                                        before v53 (24 MHz / 3): the PSRAM writer starved the ADC FIFO
                                        at 12 MS/s, at every depth and ADC rate (fixed in v53:
@@ -1074,6 +1101,8 @@ void capture_poll(void) {
                 chgscan.la_hz   = la_hz;
                 chgscan.region  = signal_engine_la_max_samples(false) * 2u;
                 chgscan.first   = true;
+            } else if (r > 0 && emi_skip_readback(cid, 0, samples)) {
+                /* EMI build, `emi readback off`: the trace stays in the PSRAM */
             } else if (r > 0) {
                 /* _wait() took the shared bus.  Stream the trace back through the SAME
                    16-bit read-back as capture_dual but with NO ADC region (adc_samples=0),
@@ -1171,6 +1200,8 @@ void capture_poll(void) {
                 chgscan.adc_n   = adc_n;
                 chgscan.adc_hz  = adc_hz;
                 chgscan.b64     = dualcap.b64;
+            } else if (r > 0 && emi_skip_readback(cid, adc_n, la_n)) {
+                /* EMI build, `emi readback off`: the samples stay in the PSRAM */
             } else if (r > 0) {
                 /* Data is safely in PSRAM now — the capture itself succeeded; all that's
                    left is streaming it back.  Log it so a stall during read-back is

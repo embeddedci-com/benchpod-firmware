@@ -224,11 +224,14 @@ size_t emi_log_format(const emi_rec_t *r, char *buf, size_t cap) {
         case EMI_EV_STOPPED:   snprintf(what, sizeof(what), "activity stopped"); break;
         case EMI_EV_C3_RESTART: snprintf(what, sizeof(what), "ESP32-C3 restart"); break;
         case EMI_EV_HEALTH:    snprintf(what, sizeof(what), "health"); break;
+        case EMI_EV_MODE:      snprintf(what, sizeof(what), "mode"); break;
         default:               snprintf(what, sizeof(what), "event %u", (unsigned)r->u.ev.kind); break;
         }
         if (r->u.ev.kind == EMI_EV_RECOVERY)   /* the text is the step itself (emi_log_dump.py) */
             m = snprintf(buf + n, cap - (size_t)n, "EVENT recovery: %s, captures %lu, errors %lu",
                          r->u.ev.text, (unsigned long)r->u.ev.captures, (unsigned long)r->u.ev.errors);
+        else if (r->u.ev.kind == EMI_EV_MODE)   /* the text is the mode: "mode ci" */
+            m = snprintf(buf + n, cap - (size_t)n, "EVENT %s", r->u.ev.text);
         else
             m = snprintf(buf + n, cap - (size_t)n, "EVENT %s, captures %lu, errors %lu, sent %lu%s%s",
                          what, (unsigned long)r->u.ev.captures, (unsigned long)r->u.ev.errors,
