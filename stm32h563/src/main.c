@@ -23,6 +23,7 @@
 #include "mcu_adc.h"
 #include "board_rev.h"
 #include "board_caps.h"
+#include "qspi_cs.h"
 #include "vref_out.h"
 #include "la_pull.h"
 #include "cal_data.h"
@@ -170,6 +171,7 @@ int main(void)
        few ADC conversions on the MCU's own ADC1. */
     (void)mcu_adc_init();   /* MCU ADC1: revision strap + USB-C CC sense */
     board_rev_init();       /* latches the revision and its board_caps() from the straps */
+    qspi_cs_init();         /* quad bus chip-selects: PE3/PE4, or PB6/PC11 on digital v3r4 */
     cal_data_use(board_caps()->cal_set);   /* DAC/ADC fits for this revision (cal_data.h) */
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */

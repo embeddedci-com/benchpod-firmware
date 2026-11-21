@@ -80,6 +80,7 @@ C_SOURCES := \
   src/mcu_adc.c \
   src/board_rev.c \
   src/board_caps.c \
+  src/qspi_cs.c \
   src/vref_logic.c \
   src/vref_out.c \
   src/pull_exp_logic.c \
