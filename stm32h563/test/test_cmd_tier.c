@@ -74,6 +74,8 @@ static void test_mixed_verbs(void) {
     expect("usb_host", "{\"cmd\":\"usb_host\"}", CMD_TIER_T0);
     expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":true,\"port\":\"usb_c\"}", CMD_TIER_T2);
     expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":false}", CMD_TIER_T2);
+    expect("xip", "{\"cmd\":\"xip\"}", CMD_TIER_T0);
+    expect("xip", "{\"cmd\":\"xip\",\"selftest\":true}", CMD_TIER_T2);
     /* the console log level: read and set are T0 (it only changes what the console prints) */
     expect("log_level", "{\"cmd\":\"log_level\"}", CMD_TIER_T0);
     expect("log_level", "{\"cmd\":\"log_level\",\"set\":\"debug\"}", CMD_TIER_T0);
@@ -232,7 +234,7 @@ static void test_flags_match_the_old_lists(void) {
     /* the mixed verbs: the rows with a write test */
     static const char *const mixed[] = { "dac_limits", "calibrate", "eth", "sig_policy", "lan_policy",
                                          "usb_network", "cloud_ca", "cloud_proxy", "lan_tls", "module",
-                                         "usb_host", "lan_clients" };
+                                         "usb_host", "lan_clients", "xip" };
     size_t rows = 0;
     const cmd_desc_t *t = cmd_table_rows(&rows);
     for (size_t i = 0; i < rows; i++) {

@@ -40,6 +40,7 @@
 #include "i2c_bus.h"       /* adc_range_get */
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
 #include "esp_dut_flash.h"   /* so does an ESP32 DUT flash (esp_dut_flash_busy) */
+#include "xip_session.h"   /* a W25Q code session holds the bus */
 #include "status_led.h"
 
 #include <stdio.h>
@@ -210,7 +211,7 @@ bool heavy_in_flight(void) {
     /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
        stopped, so it holds off captures, uploads and updates like they hold off each other. */
     return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
-           esp_rom_flash_busy() || esp_dut_flash_busy();
+           esp_rom_flash_busy() || esp_dut_flash_busy() || xip_session_active();
 }
 
 bool capture_or_upload_busy(void) {
@@ -227,6 +228,9 @@ const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
                                        "when it ends", "the Wi-Fi chip is being flashed");
+    if (xip_session_active())
+        return bp_tag_storage_bus_busy("busy: the pod is running code from its W25Q (a flash over USB); try "
+                                       "again when it ends", "a flash over USB is running");
     if (esp_dut_flash_busy())
         return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
                                        "it ends", "a target is being flashed (esp_flash)");

@@ -97,6 +97,7 @@ SECTIONS
     . = ALIGN(4);
     __xip_end = .;
   } >XIP
+  __xip_region_end = ORIGIN(XIP) + LENGTH(XIP);
 
   /* What the post-link step found in .xip (src/xip_image.c, patched by tools/xip_finish.py). */
   .xip_hash :

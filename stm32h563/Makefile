@@ -149,6 +149,7 @@ C_SOURCES := \
   src/command_handler_device.c \
   src/command_handler_recovery.c \
   src/command_handler_usb.c \
+  src/command_handler_xip.c \
   src/command_handler_status.c \
   src/command_handler_ota.c \
   src/command_handler_net.c \
@@ -218,6 +219,7 @@ C_SOURCES := \
   src/blob_manifest.c \
   src/xip_image.c \
   src/xip_mod_core.c \
+  src/xip_session.c \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
@@ -343,6 +345,25 @@ C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c $(BRIDGE_CORE)/bwp_id.c
 endif
 
+# W25Q code (src/xip_image.h, src/xip_session.h) test builds, development only (defines here,
+# before CFLAGS expands DEFS; the linker script switch is further down):
+#   XIP_RAM=1        link the image at a 16 KB RAM region (taken from the FreeRTOS heap) and copy it
+#                    there at session start: runs on any board, everything but memory-mapped mode.
+#   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
+#                    input): the real memory-mapped mode on a board before digital v3r4.
+ifeq ($(XIP_RAM),1)
+ifeq ($(RELEASE),1)
+$(error XIP_RAM=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_XIP_RAM=1 -DBENCHPOD_HEAP_KB=243U
+endif
+ifeq ($(XIP_BODGE_PB6),1)
+ifeq ($(RELEASE),1)
+$(error XIP_BODGE_PB6=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_XIP_BODGE_PB6=1
+endif
+
 # USB host build: USB_HOST=1 adds USB host mode (usb_host.h, the usb_host command: the pod hosts
 # the DUT on its USB-C or USB-A port). Not hardware-tested yet, so development only: refused
 # together with RELEASE=1. Without it the usb_host command answers as an unknown command.
@@ -389,6 +410,17 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
+
+# XIP_RAM=1: the image at a 16 KB RAM region (the defines are set above, with USB_HOST).
+ifeq ($(XIP_RAM),1)
+XIP_RAM_LD := $(BUILD_DIR)/xip_ram.ld
+$(XIP_RAM_LD): $(LDSCRIPT) | $(BUILD_DIR)
+	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 624K|' \
+	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009C000,   LENGTH = 16K|' $< > $@
+	@grep -q 'LENGTH = 624K' $@ && grep -q '0x2009C000' $@ || { echo "xip_ram.ld: the linker script's RAM or XIP line changed"; rm -f $@; exit 1; }
+$(BUILD_DIR)/$(TARGET).elf: $(XIP_RAM_LD)
+LDSCRIPT := $(XIP_RAM_LD)
+endif
 # --no-warn-rwx-segments: .data is RWX on purpose. It carries .RamFunc (ota_commit.c's
 # RAM-resident flash copy code), so the RAM LOAD segment must be executable.
 LDFLAGS := $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \

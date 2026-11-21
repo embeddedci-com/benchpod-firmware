@@ -17,6 +17,8 @@
 #endif
 
 /* The write forms of the mixed verbs (the handlers' own tests), one per row below. */
+/* xip: the self-test runs code and takes the bus */
+static int writes_selftest(const char *json) { return bp_json_flag(json, "selftest"); }
 static int writes_dac_limits(const char *json) {
     char v[16] = {0};
     return bp_json_get(json, "path", v, sizeof(v)) ||
@@ -96,6 +98,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "can_status", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_can_status), NULL },
     { { "ota_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_status), NULL },
     { { "blob_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_blob_status), NULL },
+    { { "xip", CMD_TIER_T0 }, 0, CMD_FN(handle_xip), writes_selftest },
     { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
     { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)

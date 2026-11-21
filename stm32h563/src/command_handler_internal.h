@@ -400,6 +400,8 @@ void handle_ota_abort(int conn_id, const char *json);
 void handle_ota_selftest(int conn_id, const char *json);
 void handle_ota_commit(int conn_id, const char *json);
 void handle_blob_status(int conn_id, const char *json);
+/* Code that runs from the W25Q (command_handler_xip.c). */
+void handle_xip(int conn_id, const char *json);
 
 /* Append base64url of n bytes to an emitter (bounds-tracked like bp_emit: too little room sets
    e->ok false and appends nothing). */

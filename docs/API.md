@@ -322,6 +322,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
 | `wiring_put` | T1 | Store a wiring profile, up to 600 bytes a call | object | no |
@@ -4548,6 +4549,33 @@ slot: it describes the image the C3 runs, as recorded when the pod last wrote on
 updated from firmware that kept a copy in the W25Q, that copy is reported until the first `esp`
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
+
+### `xip` — code that runs from the W25Q
+
+Some rarely used code (the USB flash protocols, coming) runs straight from the pod's W25Q flash
+instead of the MCU's own flash. It is the `xip` blob (`blob-xip.bin`), made by the same build as the
+firmware and installed with the other blobs; the pod runs only the one built with its firmware.
+While it runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
+are refused with BP0048 until it ends.
+
+```json
+{"cmd": "xip"}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"}}}
+{"cmd": "xip", "selftest": true}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "selftest": {"ok": true, "result": 2871906233, "expected": 2871906233, "begin_us": 412, "call_us": 38}}}
+```
+
+| Field | Description |
+|---|---|
+| `supported` | This pod can run code from its W25Q (boards whose W25Q chip-select can be memory-mapped). |
+| `mode` | `mapped` (the CPU runs it in place), `ram` (development builds that copy it to RAM first) or `none`. |
+| `image.size` | Bytes of W25Q code this firmware was built with. |
+| `image.slot` | The `xip` blob slot against that image: `ok`, `outdated`, `missing` or `unknown` (as `blob_status`). |
+| `selftest` | With `"selftest": true`: runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
+
+Refusals: BP0083 (`xip_unavailable`, arg `why`) when the board or the slot cannot run the image,
+BP0048 while something else holds the storage bus.
 
 ### Wiring profiles: `wiring_list`, `wiring_get`, `wiring_put`, `wiring_delete`, `wiring_default`
 

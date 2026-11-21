@@ -21,6 +21,7 @@
     "can_status": "T0",
     "ota_status": "T0",
     "blob_status": "T0",
+    "xip": "T0",
     "wiring_list": "T0",
     "wiring_get": "T0",
     "dac_loop_probe": "T0",

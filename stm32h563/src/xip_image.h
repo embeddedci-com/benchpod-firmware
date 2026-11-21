@@ -59,6 +59,6 @@ bool xip_supported(void);
 
 /* Where the image is linked (the table's address) and the most it may take. */
 extern const xip_table_t xip_table;
-extern const uint8_t __xip_start[], __xip_end[];
+extern const uint8_t __xip_start[], __xip_end[], __xip_region_end[];
 
 #endif /* XIP_IMAGE_H */

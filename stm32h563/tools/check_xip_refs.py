@@ -49,16 +49,18 @@ def main():
         return 1
     lo, size = secs[".xip"]
     hi = lo + size
-    syms, funcs = {}, set()
+    syms, funcs, names = {}, set(), {}
     for line in subprocess.run([NM, "-n", elf], capture_output=True, text=True, check=True).stdout.splitlines():
         p = line.split()
         if len(p) == 3:
             a = int(p[0], 16)
             if lo <= a < hi:
-                syms[a & ~1] = p[2]
+                syms.setdefault(a & ~1, p[2])
+                names.setdefault(a & ~1, set()).add(p[2])
                 if p[1] in "tTwW":
                     funcs.add(a & ~1)
-    allowed = {a for a, n in syms.items() if n == "xip_table"}
+    # The table, and the image's start (the same address): internal code reads both.
+    allowed = {a for a, n in names.items() if n & {"xip_table", "__xip_start"}}
     bad = []
 
     dis = subprocess.run([OBJDUMP, "-d", "--no-show-raw-insn"] + sum((["-j", s] for s in (".text", ".data", ".isr_vector") if s in secs), []) + [elf],
