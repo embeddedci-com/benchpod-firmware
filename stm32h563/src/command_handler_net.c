@@ -24,6 +24,7 @@
 #include "net_reload.h"     /* net_reload_pending: the wifi_clear reply is out */
 #include "boot_guard.h"     /* boot_guard_skip_hw: no W25Q in safe mode */
 #include "wifi_scan.h"
+#include "bp_log.h"
 
 #include "bp_limits.h"      /* BP_CLOUD_REPLY_MAX: a wifi_scan reply fits the cloud channel */
 
@@ -384,7 +385,7 @@ const char *wifi_clear_c3_now(void) {
     else if (!(why = bus_busy_reason()) && !net_wifi_wipe_c3())
         why = "the C3 did not answer its ROM loader or the erase did not verify (see log)";
     s_c3_nvs = why ? C3_NVS_FAILED : C3_NVS_ERASED;
-    if (why) printf("[wifi] ESP32-C3 NVS not erased: %s\n", why);
+    if (why) LOG_W("[wifi] ESP32-C3 NVS not erased: %s\n", why);
     return why;
 }
 

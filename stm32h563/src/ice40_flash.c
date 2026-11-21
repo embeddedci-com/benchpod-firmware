@@ -68,7 +68,7 @@ void ice40_hold_off_bus(void)
     FCS_HIGH();
     g.Pin = ICE_FLASH_CS_PIN; HAL_GPIO_Init(ICE_FLASH_CS_PORT, &g);
     FCS_HIGH();
-    printf("[ice40] held in reset (off the shared bus) until the next reflash\n");
+    LOG_I("[ice40] held in reset (off the shared bus) until the next reflash\n");
 }
 
 static int mem_read(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
@@ -104,7 +104,7 @@ static int release_and_wait_cdone(void)
         uint32_t t0 = HAL_GetTick();
         while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET) {
             if (HAL_GetTick() - t0 > CDONE_TIMEOUT_MS) {
-                printf("[ice40] CDONE never went high — configuration failed\n");
+                LOG_E("[ice40] CDONE never went high — configuration failed\n");
                 ice40_hold_off_bus();
                 return -1;
             }
@@ -131,11 +131,11 @@ void ice40_ident_load(void)
     }
     w25q_close();
     if (s_ident_ok)
-        printf("[ice40] config flash image: from slot %u, %lu bytes, sha256 %02x%02x%02x%02x...\n",
-               (unsigned)s_ident.slot, (unsigned long)s_ident.len, s_ident.sha256[0], s_ident.sha256[1],
-               s_ident.sha256[2], s_ident.sha256[3]);
+        LOG_I("[ice40] config flash image: from slot %u, %lu bytes, sha256 %02x%02x%02x%02x...\n",
+              (unsigned)s_ident.slot, (unsigned long)s_ident.len, s_ident.sha256[0], s_ident.sha256[1],
+              s_ident.sha256[2], s_ident.sha256[3]);
     else
-        printf("[ice40] config flash image: not recorded yet\n");
+        LOG_I("[ice40] config flash image: not recorded yet\n");
 }
 
 /* Write `ident` at GW_IDENT_OFF and read it back. Bus held, sector erased. 0 = ok. */
@@ -144,7 +144,7 @@ static int ident_write(const gw_ident_t *ident)
     gw_ident_t rb;
     if (w25q_program(GW_IDENT_OFF, (const uint8_t *)ident, sizeof(*ident)) != 0 ||
         w25q_read(GW_IDENT_OFF, (uint8_t *)&rb, sizeof(rb)) != 0 || memcmp(&rb, ident, sizeof(rb)) != 0) {
-        printf("[ice40] could not record the image identity (the next boot compares again)\n");
+        LOG_W("[ice40] could not record the image identity (the next boot compares again)\n");
         return -1;
     }
     s_ident = *ident;
@@ -179,11 +179,11 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
 
     uint8_t id[3] = {0};
     if (w25q_read_id(id) != 0 || id[0] == 0x00 || id[0] == 0xFF) {
-        printf("[ice40] flash not responding (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
+        LOG_W("[ice40] flash not responding (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
         goto fail;
     }
     LOG_BOOT("[ice40] flash ID %02x %02x %02x, programming %u bytes\n",
-           id[0], id[1], id[2], (unsigned)len);
+             id[0], id[1], id[2], (unsigned)len);
 
     /* The record names the image about to be replaced: drop it first, so a write that fails or is
        cut leaves no record (the next boot compares) rather than a wrong one. */
@@ -210,8 +210,8 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
         if (w25q_read(a, rb, n) != 0) goto fail;
         if (memcmp(rb, pg, n) != 0) {
             uint32_t k = 0; while (k < n && rb[k] == pg[k]) k++;
-            printf("[ice40] verify FAILED @0x%06lx: wrote %02x read %02x\n",
-                   (unsigned long)(a + k), pg[k], rb[k]);
+            LOG_E("[ice40] verify FAILED @0x%06lx: wrote %02x read %02x\n",
+                  (unsigned long)(a + k), pg[k], rb[k]);
             goto fail;
         }
     }
@@ -243,7 +243,7 @@ int ice40_flash_boot(void)
     sleep_ms(1);
     uint8_t id[3] = {0};
     if (w25q_read_id(id) != 0 || id[0] == 0x00 || id[0] == 0xFF) {
-        printf("[ice40] flash not responding (ID %02x %02x %02x): not reloaded\n", id[0], id[1], id[2]);
+        LOG_W("[ice40] flash not responding (ID %02x %02x %02x): not reloaded\n", id[0], id[1], id[2]);
         HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_SET);
         psram_bus_release();
         return -1;
@@ -277,8 +277,8 @@ int ice40_flash_matches_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
         if (rd(ctx, a, pg, n) != 0 || w25q_read(a, rb, n) != 0) { same = -1; break; }
         if (memcmp(pg, rb, n) != 0) {
             uint32_t k = 0; while (k < n && pg[k] == rb[k]) k++;
-            printf("[ice40] flash image differs at 0x%06lx: slot %02x, flash %02x\n",
-                   (unsigned long)(a + k), pg[k], rb[k]);
+            LOG_W("[ice40] flash image differs at 0x%06lx: slot %02x, flash %02x\n",
+                  (unsigned long)(a + k), pg[k], rb[k]);
             s_mismatch_at = a + k;
             same = 0;
             break;

@@ -17,6 +17,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include "bp_log.h"
 
 /* Staging base in PSRAM.  The 8 MB PSRAM dwarfs a <=2 MB image; OTA is exclusive
    with captures (the command handler refuses ota_begin while a heavy op is in
@@ -133,13 +134,13 @@ __attribute__((weak)) int ota_install_staged_config(ota_target_t t, uint32_t siz
 static void set_err(const char *e) {
     if (s_state == OTA_APPLYING) {   /* the C3 is being written: no call changes the session */
         s_apply_refusal = OTA_BUSY_APPLYING;
-        printf("[ota] refused while the ESP32-C3 is flashed (%s)\n", e ? e : "");
+        LOG_W("[ota] refused while the ESP32-C3 is flashed (%s)\n", e ? e : "");
         return;
     }
     strncpy(s_err, e ? e : "", sizeof(s_err) - 1);
     s_err[sizeof(s_err) - 1] = '\0';
     s_state = OTA_ERROR;
-    printf("[ota] error: %s\n", s_err);
+    LOG_E("[ota] error: %s\n", s_err);
 }
 
 int ota_begin(uint32_t size, const char *sha256_hex) {
@@ -225,9 +226,9 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
     if (s_sig != FW_SIG_NONE && s_sig != FW_SIG_FORMAT)
         for (unsigned i = 0; i < FW_SIGN_KEY_ID_LEN; i++)
             snprintf(s_sig_key + 2 * i, 3, "%02x", m.key_id[i]);
-    printf("[ota] signature: %s%s%s (policy %s%s)\n", fw_sign_result_name(s_sig),
-           s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()),
-           external_lan ? ", from the LAN" : "");
+    LOG_I("[ota] signature: %s%s%s (policy %s%s)\n", fw_sign_result_name(s_sig),
+          s_sig_key[0] ? ", key " : "", s_sig_key, fw_sign_policy_name(fw_sign_policy()),
+          external_lan ? ", from the LAN" : "");
     char e[64];
     const char *why = signature_refusal(external_lan, e, sizeof(e));
     if (!why) {
@@ -241,7 +242,7 @@ static int check_signature(const uint8_t *sig, size_t sig_len, const uint8_t exp
 void ota_floor_on_commit(void) {
     if (s_target != OTA_TARGET_FIRMWARE || s_sig != FW_SIG_OK || !(s_sig_flags & FW_SIG_FLAG_FLOOR)) return;
     const char *why = pod_policy_raise_floor(s_sig_release);
-    if (why) printf("[ota] rollback floor not raised: %s\n", why);
+    if (why) LOG_W("[ota] rollback floor not raised: %s\n", why);
 }
 
 static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t target, uint32_t version,
@@ -276,7 +277,7 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
        and wedge the PSRAM.  Firmware OTA reboots the device anyway, so stopping a running DAC
        here is the correct behaviour.  ota_commit() re-quiesces as a brick-critical backstop. */
     signal_engine_quiesce_psram_masters();
-    printf("[ota] begin: %s, %lu bytes\n", ota_target_name(target), (unsigned long)size);
+    LOG_I("[ota] begin: %s, %lu bytes\n", ota_target_name(target), (unsigned long)size);
     return 0;
 }
 
@@ -386,7 +387,7 @@ int ota_end(void) {
         if (ota_validate_staged(s_target, s_size, why, sizeof(why)) != 0) { set_err(why[0] ? why : "invalid"); return -1; }
     }
     s_state = OTA_VERIFIED;
-    printf("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
+    LOG_I("[ota] verified: sha256 OK, %lu bytes staged\n", (unsigned long)s_size);
     return 0;
 }
 
@@ -406,7 +407,7 @@ void ota_abort(void) {
     s_size     = 0;
     s_received = 0;
     s_err[0]   = '\0';
-    printf("[ota] aborted\n");
+    LOG_I("[ota] aborted\n");
 }
 
 ota_state_t ota_get_state(void) { return s_state; }
@@ -432,8 +433,8 @@ void ota_watchdog(uint32_t now_ms) {
     if (s_state == OTA_VERIFIED) {
         if (s_verified_mark_ms == 0) { s_verified_mark_ms = now_ms ? now_ms : 1; return; }
         if ((uint32_t)(now_ms - s_verified_mark_ms) < OTA_VERIFIED_HOLD_MS) return;
-        printf("[ota] dropping a verified image never committed after %u ms\n",
-               (unsigned)OTA_VERIFIED_HOLD_MS);
+        LOG_W("[ota] dropping a verified image never committed after %u ms\n",
+              (unsigned)OTA_VERIFIED_HOLD_MS);
         ota_abort();
         return;
     }
@@ -448,8 +449,8 @@ void ota_watchdog(uint32_t now_ms) {
         return;
     }
     if ((uint32_t)(now_ms - s_wd_mark_ms) < OTA_STAGE_IDLE_MS) return;
-    printf("[ota] abandoning stalled staging after %u ms with no data (%lu/%lu bytes)\n",
-           (unsigned)OTA_STAGE_IDLE_MS, (unsigned long)s_received, (unsigned long)s_size);
+    LOG_W("[ota] abandoning stalled staging after %u ms with no data (%lu/%lu bytes)\n",
+          (unsigned)OTA_STAGE_IDLE_MS, (unsigned long)s_received, (unsigned long)s_size);
     ota_abort();
 }
 
@@ -499,8 +500,8 @@ static bool abandoned(void) {
    the owner, so the owner field and later checks name it. */
 static void adopt(ota_owner_t who) {
     if (session_active() && s_owner != who && may_adopt(who)) {
-        printf("[ota] LAN connection %d takes over the update from closed connection %d\n",
-               who - OTA_OWNER_LAN(0), s_owner - OTA_OWNER_LAN(0));
+        LOG_I("[ota] LAN connection %d takes over the update from closed connection %d\n",
+              who - OTA_OWNER_LAN(0), s_owner - OTA_OWNER_LAN(0));
         s_owner = who;
     }
     if (s_owner == who) s_orphan = false;
@@ -569,7 +570,7 @@ static void refuse(ota_owner_t who, const char *why, bool fresh) {
     strncpy(s_ref_err, why, sizeof(s_ref_err) - 1);
     s_ref_err[sizeof(s_ref_err) - 1] = '\0';
     s_ref_seq++;
-    printf("[ota] refused: %s\n", s_ref_err);
+    LOG_W("[ota] refused: %s\n", s_ref_err);
 }
 
 void ota_refuse_for(ota_owner_t who, const char *why) { refuse(who, why, true); }
@@ -585,7 +586,7 @@ int ota_begin_owned_from(ota_owner_t who, bool external_lan, uint32_t size, cons
     const char *busy = ota_busy_replace_for(who);
     if (busy) { ota_refuse_for(who, busy); return -1; }
     if (session_active() && s_owner != who && s_owner != OTA_OWNER_NONE)
-        printf("[ota] replacing an abandoned session\n");
+        LOG_I("[ota] replacing an abandoned session\n");
     clear_refusal(who);
     s_owner  = who;          /* a refused begin below reports its error to this owner */
     s_orphan = false;
@@ -632,8 +633,8 @@ int ota_abort_by(ota_owner_t who) {
 void ota_owner_gone(ota_owner_t who) {
     if (session_active() && s_owner == who && is_lan(who)) {
         s_orphan = true;
-        printf("[ota] the LAN connection of the %s update closed; the next LAN connection may continue it\n",
-               ota_state_str());
+        LOG_I("[ota] the LAN connection of the %s update closed; the next LAN connection may continue it\n",
+              ota_state_str());
     }
 }
 
@@ -673,7 +674,7 @@ void ota_apply_finished(bool ok, const char *why) {
     s_activity_ms = s_clock_ms;
     if (ok) {
         s_state = OTA_INSTALLED;
-        printf("[ota] installed esp: the ESP32-C3 runs the new image (%lu bytes)\n", (unsigned long)s_size);
+        LOG_I("[ota] installed esp: the ESP32-C3 runs the new image (%lu bytes)\n", (unsigned long)s_size);
         return;
     }
     s_state = OTA_ERROR;   /* so set_err below records the reason */
@@ -699,7 +700,7 @@ int ota_install_blob(void) {
         }
         s_apply_refusal = NULL;
         s_state = OTA_APPLYING;
-        printf("[ota] esp: writing the staged image into the ESP32-C3 (%lu bytes)\n", (unsigned long)s_size);
+        LOG_I("[ota] esp: writing the staged image into the ESP32-C3 (%lu bytes)\n", (unsigned long)s_size);
         return 0;
     }
     if (s_target == OTA_TARGET_TLS) {
@@ -709,7 +710,7 @@ int ota_install_blob(void) {
             return -1;
         }
         s_state = OTA_INSTALLED;
-        printf("[ota] installed %s (%lu bytes)\n", ota_target_name(s_target), (unsigned long)s_size);
+        LOG_I("[ota] installed %s (%lu bytes)\n", ota_target_name(s_target), (unsigned long)s_size);
         return 0;
     }
     blob_id_t id = target_blob(s_target);
@@ -724,7 +725,7 @@ int ota_install_blob(void) {
     w25q_session_close();
     if (rc != 0) { set_err("blob write failed"); return -1; }
     s_state = OTA_INSTALLED;
-    printf("[ota] installed %s (%lu bytes)\n", blob_name(id), (unsigned long)s_size);
+    LOG_I("[ota] installed %s (%lu bytes)\n", blob_name(id), (unsigned long)s_size);
     blob_store_on_installed(id);
     return 0;
 }
@@ -740,7 +741,7 @@ int ota_store_fw_copy(void) {
     w25q_session_open();
     int rc = blob_store_write(BLOB_FW, s_size, 0u, s_expect, staged_src, NULL);
     w25q_session_close();
-    printf("[ota] firmware copy in the W25Q fw slot: %s\n", rc == 0 ? "stored" : "FAILED (install continues)");
+    LOG_I("[ota] firmware copy in the W25Q fw slot: %s\n", rc == 0 ? "stored" : "FAILED (install continues)");
     return rc;
 }
 

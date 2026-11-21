@@ -75,9 +75,9 @@ static void dap_stats_report(void) {
     if (s_dap_stats.packets == 0) return;
     uint64_t total_us = (uint64_t)absolute_time_diff_us(s_dap_stats.start, get_absolute_time());
     LOG_D("[dap] session: %lu packets, %lu bytes, %lu ms executing of %lu ms (%lu%%)\n",
-           (unsigned long)s_dap_stats.packets, (unsigned long)s_dap_stats.bytes,
-           (unsigned long)(s_dap_stats.busy_us / 1000u), (unsigned long)(total_us / 1000u),
-           (unsigned long)(total_us ? s_dap_stats.busy_us * 100u / total_us : 0u));
+          (unsigned long)s_dap_stats.packets, (unsigned long)s_dap_stats.bytes,
+          (unsigned long)(s_dap_stats.busy_us / 1000u), (unsigned long)(total_us / 1000u),
+          (unsigned long)(total_us ? s_dap_stats.busy_us * 100u / total_us : 0u));
     s_dap_stats.packets = 0;
 }
 
@@ -249,8 +249,8 @@ size_t dap_proxy_receive(int conn_id, const uint8_t *buf, size_t len) {
         if (!dap_wait_send_room(conn_id)) {
             /* The peer stopped reading. Do not run the packet; tear the link down
                (command_handler_conn_closed disarms SWD) and drop its bytes until then. */
-            printf("[dap] conn %d: no room for a response in %u ms; %s\n", conn_id,
-                   (unsigned)DAP_SEND_STALL_MS, is_tunnel_conn(conn_id) ? "resetting the tunnel"
+            LOG_W("[dap] conn %d: no room for a response in %u ms; %s\n", conn_id,
+                  (unsigned)DAP_SEND_STALL_MS, is_tunnel_conn(conn_id) ? "resetting the tunnel"
                                                                         : "closing");
             dap_dead_conn = conn_id;
             if (is_tunnel_conn(conn_id)) hw_worker_submit_tunnel_reset(conn_id);

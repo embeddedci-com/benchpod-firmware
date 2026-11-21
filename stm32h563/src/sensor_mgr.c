@@ -1441,7 +1441,7 @@ static void rearm_all(void) {
             char m[SM_ERR_MAX];
             rc = analog_apply(s, true, m, sizeof(m));
         } else if (img != 2) {
-            printf("[sensor] the emulation image is gone: %s stopped\n", s->name);
+            LOG_W("[sensor] the emulation image is gone: %s stopped\n", s->name);
             inst_halt(i, false);
             continue;
         } else if (is_regs(s)) {
@@ -1450,10 +1450,10 @@ static void rearm_all(void) {
             rc = uart_arm(s);
         }
         if (rc != 0) {
-            printf("[sensor] gateware reconfigured: could not re-arm %s, stopped\n", s->name);
+            LOG_W("[sensor] gateware reconfigured: could not re-arm %s, stopped\n", s->name);
             inst_halt(i, false);
         } else {
-            printf("[sensor] gateware reconfigured: %s re-armed\n", s->name);
+            LOG_I("[sensor] gateware reconfigured: %s re-armed\n", s->name);
         }
     }
     if (img == 2) pinmap_update();
@@ -1508,7 +1508,7 @@ void sm_poll(void) {
     if (!any && !s_up.active) return;   /* idle: a few loads, no SPI, no clock read */
     uint64_t now = sensor_port_now_us();
     if (s_up.active && now - s_up.last_us > (uint64_t)SM_CHUNK_IDLE_MS * 1000u) {
-        printf("[sensor] an upload was idle for %u s: dropped\n", SM_CHUNK_IDLE_MS / 1000u);
+        LOG_W("[sensor] an upload was idle for %u s: dropped\n", SM_CHUNK_IDLE_MS / 1000u);
         upload_drop();
     }
     if (!any) return;
@@ -1541,7 +1541,7 @@ void sm_poll(void) {
             uart_poll(s, now);
         } else if (s->kind == SD_KIND_ANALOG && s->dirty) {
             char m[SM_ERR_MAX];
-            if (analog_apply(s, false, m, sizeof(m)) != 0) printf("[sensor] %s: %s\n", s->name, m);
+            if (analog_apply(s, false, m, sizeof(m)) != 0) LOG_I("[sensor] %s: %s\n", s->name, m);
         }
     }
 }

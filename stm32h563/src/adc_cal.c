@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bp_log.h"
 
 _Static_assert(sizeof(adc_cal_t) <= AB_STORE_MAX_PAYLOAD, "adc_cal_t must fit in an A/B record");
 _Static_assert(sizeof(adc_cal_t) == 116, "the version-2 record is 116 bytes");
@@ -197,7 +198,7 @@ static int mirror_save(const adc_cal_t *rec) {
     if (!s_mirror || !s_mirror->save) return 0;
     bool empty = !rec || record_empty(rec);
     s_mirror_ok = s_mirror->save(empty ? NULL : rec) == 0;
-    if (!s_mirror_ok) printf("[adc-cal] ERROR: the module copy was not saved\n");
+    if (!s_mirror_ok) LOG_E("[adc-cal] ERROR: the module copy was not saved\n");
     return s_mirror_ok ? 0 : -1;
 }
 
@@ -494,9 +495,9 @@ static bool pick_record(adc_cal_t *out) {
     if (f.b == 0.0f) return false;
     out->zero_set = 1;
     out->zero_count_mc = (int32_t)lround(((double)v1.current_in_offset_uv / 1e6 - (double)f.a) / (double)f.b * 1000.0);
-    printf("[adc-cal] converted a version-1 record (offset %ld uV) to zero count %ld.%03ld; "
-           "the next save writes version 2\n", (long)v1.current_in_offset_uv,
-           (long)(out->zero_count_mc / 1000), (long)labs(out->zero_count_mc % 1000));
+    LOG_I("[adc-cal] converted a version-1 record (offset %ld uV) to zero count %ld.%03ld; "
+          "the next save writes version 2\n", (long)v1.current_in_offset_uv,
+          (long)(out->zero_count_mc / 1000), (long)labs(out->zero_count_mc % 1000));
     return true;
 }
 
@@ -509,19 +510,19 @@ int adc_cal_load(void) {
         if (derive(&mod)) {
             s_from = ADC_CAL_FROM_MODULE;
             s_mirror_ok = true;
-            printf("[adc-cal] calibration from the analog module's EEPROM\n");
+            LOG_I("[adc-cal] calibration from the analog module's EEPROM\n");
             return 0;
         }
-        printf("[adc-cal] the module's calibration is out of range, ignored\n");
+        LOG_W("[adc-cal] the module's calibration is out of range, ignored\n");
     } else if (mrc == -2 && s_mirror) {
-        printf("[adc-cal] the module's calibration is unreadable, using the pod's\n");
+        LOG_W("[adc-cal] the module's calibration is unreadable, using the pod's\n");
     }
     if (!pick_record(&rec) || record_empty(&rec)) {
         derive_nothing();
         return -1;
     }
     if (!derive(&rec)) {
-        printf("[adc-cal] stored calibration out of range, ignored\n");
+        LOG_W("[adc-cal] stored calibration out of range, ignored\n");
         derive_nothing();
         return -1;
     }
@@ -529,7 +530,7 @@ int adc_cal_load(void) {
     if (mrc == -1) {   /* a module with no record yet: give it the pod's */
         if (mirror_save(&rec) == 0) {
             s_from = ADC_CAL_FROM_MODULE;
-            printf("[adc-cal] copied the pod's calibration to the analog module's EEPROM\n");
+            LOG_I("[adc-cal] copied the pod's calibration to the analog module's EEPROM\n");
         }
     }
     return 0;

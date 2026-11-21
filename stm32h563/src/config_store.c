@@ -57,7 +57,7 @@ static bool slot_read(const ab_store_t *s, int i, ab_hdr_t *h, void *out, size_t
 {
     uint32_t off = s->slot_off[i];
     if (flash_read_checked(off, h, sizeof(*h)) != 0) {
-        printf("[%s] slot %c: ECC error in the header (torn write), ignored\n", s->tag, 'A' + i);
+        LOG_E("[%s] slot %c: ECC error in the header (torn write), ignored\n", s->tag, 'A' + i);
         return false;
     }
     if (h->magic != s->magic) return false;          /* blank or foreign */
@@ -70,7 +70,7 @@ static bool slot_read(const ab_store_t *s, int i, ab_hdr_t *h, void *out, size_t
     for (uint32_t pos = 0; pos < len; ) {
         uint32_t n = len - pos < AB_CHUNK ? len - pos : AB_CHUNK;
         if (flash_read_checked(off + AB_HDR_SIZE + pos, buf, n) != 0) {
-            printf("[%s] slot %c: ECC error in the payload, ignored\n", s->tag, 'A' + i);
+            LOG_E("[%s] slot %c: ECC error in the payload, ignored\n", s->tag, 'A' + i);
             return false;
         }
         crc = ab_crc32(crc, buf, n);
@@ -79,7 +79,7 @@ static bool slot_read(const ab_store_t *s, int i, ab_hdr_t *h, void *out, size_t
         pos += n;
     }
     if (crc != h->crc) {
-        printf("[%s] slot %c: CRC mismatch, ignored\n", s->tag, 'A' + i);
+        LOG_W("[%s] slot %c: CRC mismatch, ignored\n", s->tag, 'A' + i);
         return false;
     }
     return true;
@@ -127,7 +127,7 @@ static int write_record(const ab_store_t *s, int target, uint32_t seq, const voi
 
     uint32_t off = s->slot_off[target];
     LOG_D("[%s] writing slot %c (0x%06lx) seq %lu, %u B\n", s->tag, 'A' + target,
-           (unsigned long)off, (unsigned long)seq, (unsigned)len);
+          (unsigned long)off, (unsigned long)seq, (unsigned)len);
 
     /* Interrupts off, as before: bank-2 erase/program while bank 1 keeps running. */
     uint32_t irqs = save_and_disable_interrupts();
@@ -164,9 +164,9 @@ int ab_store_load(const ab_store_t *s, void *out, size_t len)
     if (n >= 0) {
         if (hdr_len(&h[n]) == 0) return -1;                  /* tombstone: cleared */
         if (hdr_ver(&h[n]) != s->version || hdr_len(&h[n]) != len) {
-            printf("[%s] record schema mismatch (version %lu len %lu, expected %u/%u), ignoring\n",
-                   s->tag, (unsigned long)hdr_ver(&h[n]), (unsigned long)hdr_len(&h[n]),
-                   (unsigned)s->version, (unsigned)len);
+            LOG_W("[%s] record schema mismatch (version %lu len %lu, expected %u/%u), ignoring\n",
+                  s->tag, (unsigned long)hdr_ver(&h[n]), (unsigned long)hdr_len(&h[n]),
+                  (unsigned)s->version, (unsigned)len);
             return -1;
         }
         /* Re-read into out, re-checking the CRC (the flash could differ from the scan). */
@@ -178,16 +178,16 @@ int ab_store_load(const ab_store_t *s, void *out, size_t len)
     if (s->legacy_off == 0) return -1;
     uint32_t magic;
     if (flash_read_checked(s->legacy_off, &magic, sizeof(magic)) != 0) {
-        printf("[%s] legacy sector: ECC error, ignored\n", s->tag);
+        LOG_E("[%s] legacy sector: ECC error, ignored\n", s->tag);
         return -1;
     }
     if (magic != s->legacy_magic) return -1;
     if (flash_read_checked(s->legacy_off, out, len) != 0) {
-        printf("[%s] legacy sector: ECC error, ignored\n", s->tag);
+        LOG_E("[%s] legacy sector: ECC error, ignored\n", s->tag);
         return -1;
     }
-    printf("[%s] loaded the legacy layout (0x%06lx); the next save migrates it\n",
-           s->tag, (unsigned long)s->legacy_off);
+    LOG_I("[%s] loaded the legacy layout (0x%06lx); the next save migrates it\n",
+          s->tag, (unsigned long)s->legacy_off);
     return 0;
 }
 
@@ -212,9 +212,9 @@ int ab_store_load_var(const ab_store_t *s, void *out, size_t cap, size_t *len_ou
     int n = scan(s, v, h);
     if (n < 0 || hdr_len(&h[n]) == 0) return -1;            /* none, or a tombstone */
     if (hdr_ver(&h[n]) != s->version || hdr_len(&h[n]) > cap) {
-        printf("[%s] record version %lu len %lu not loadable (want version %u, at most %u B)\n",
-               s->tag, (unsigned long)hdr_ver(&h[n]), (unsigned long)hdr_len(&h[n]),
-               (unsigned)s->version, (unsigned)cap);
+        LOG_W("[%s] record version %lu len %lu not loadable (want version %u, at most %u B)\n",
+              s->tag, (unsigned long)hdr_ver(&h[n]), (unsigned long)hdr_len(&h[n]),
+              (unsigned)s->version, (unsigned)cap);
         return -1;
     }
     if (!slot_read(s, n, &h[n], out, cap)) return -1;
@@ -277,7 +277,7 @@ int ab_store_clear(const ab_store_t *s)
     if (rc != 0) erase_sector(s->slot_off[target]);
     erase_sector(s->slot_off[1 - target]);
     if (s->legacy_off) erase_sector(s->legacy_off);
-    printf("[%s] cleared\n", s->tag);
+    LOG_I("[%s] cleared\n", s->tag);
     return rc;
 }
 
@@ -297,8 +297,8 @@ int config_load(config_t *out)
     config_t tmp;
     if (ab_store_load(&s_wifi_store, &tmp, sizeof(tmp)) != 0) return -1;
     if (tmp.magic != CONFIG_MAGIC || tmp.version != CONFIG_VERSION) {
-        printf("[cfg] config schema mismatch (version=%lu, expected %lu), ignoring\n",
-               (unsigned long)tmp.version, (unsigned long)CONFIG_VERSION);
+        LOG_W("[cfg] config schema mismatch (version=%lu, expected %lu), ignoring\n",
+              (unsigned long)tmp.version, (unsigned long)CONFIG_VERSION);
         return -1;
     }
     if (out) memcpy(out, &tmp, sizeof(tmp));

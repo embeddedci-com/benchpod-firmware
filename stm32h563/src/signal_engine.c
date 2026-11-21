@@ -300,9 +300,9 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
            here (low freq -> long period), so report it in milli-Hz; the rate is
            always large, so integer S/s. */
         LOG_W("[sig] WARN: %lu mHz needs %lu samples/period at %lu S/s — exceeds "
-               "%u-sample waveform buffer; clamping (actual freq will be higher)\n",
-               (unsigned long)lroundf(freq * 1000.0f), (unsigned long)period,
-               (unsigned long)lroundf(eff_rate), SIGNAL_MAX_SAMPLES);
+              "%u-sample waveform buffer; clamping (actual freq will be higher)\n",
+              (unsigned long)lroundf(freq * 1000.0f), (unsigned long)period,
+              (unsigned long)lroundf(eff_rate), SIGNAL_MAX_SAMPLES);
         period = SIGNAL_MAX_SAMPLES;
     }
     *out_period = period;
@@ -330,8 +330,8 @@ static uint32_t dac_replay_divider(float sample_rate_hz, bool from_psram) {
     dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram);
     if (p.clamped)
         LOG_W("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
-               (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
-               p.clamped == 1 ? "maximum" : "minimum", (unsigned long)p.rate_hz);
+              (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
+              p.clamped == 1 ? "maximum" : "minimum", (unsigned long)p.rate_hz);
     s_dac_replay_rate_hz = p.rate_hz;
     return p.divider;
 }
@@ -424,12 +424,12 @@ static void log_dac_samples(uint32_t total) {
     uint32_t n = (total < DAC_DUMP_SAMPLES) ? total : DAC_DUMP_SAMPLES;
     if (n == 0) return;
     LOG_D("[sig] first %lu of %lu DAC samples loaded to FPGA (D7..D0):\n",
-           (unsigned long)n, (unsigned long)total);
+          (unsigned long)n, (unsigned long)total);
     char bin[16];
     for (uint32_t i = 0; i < n; i++) {
         format_bin8(bin, sample_buf[i]);
         LOG_D("[sig]   [%2lu] %s  (0x%02x = %3u)\n",
-               (unsigned long)i, bin, sample_buf[i], sample_buf[i]);
+              (unsigned long)i, bin, sample_buf[i], sample_buf[i]);
     }
 }
 
@@ -617,8 +617,8 @@ static void spi_link_for_version(uint8_t version) {
     if (div != s_spi_div && !spi_link_set_div(div)) return;
     if (div != s_spi_div_reported) {
         s_spi_div_reported = div;
-        printf("[sig] SPI1 link at %lu Hz (/%lu) for gateware %u\n",
-               (unsigned long)(250000000u / div), (unsigned long)div, version);
+        LOG_BOOT("[sig] SPI1 link at %lu Hz (/%lu) for gateware %u\n",
+                 (unsigned long)(250000000u / div), (unsigned long)div, version);
     }
 }
 
@@ -632,19 +632,19 @@ int fpga_ping(int attempts, uint8_t *out_version) {
             uint8_t version = 0;
             spi_cmd_read(CMD_VERSION, NULL, 0, &version, 1);
             LOG_BOOT("[sig] FPGA OK on attempt %d/%d, gateware version %u\n",
-                   i, attempts, version);
+                     i, attempts, version);
             spi_link_for_version(version);
             if (out_version) *out_version = version;
             return 0;
         }
-        printf("[sig] PING attempt %d/%d failed (got 0x%02x, expected 0x%02x)\n",
-               i, attempts, reply, PING_REPLY_MAGIC);
+        LOG_W("[sig] PING attempt %d/%d failed (got 0x%02x, expected 0x%02x)\n",
+              i, attempts, reply, PING_REPLY_MAGIC);
         sleep_ms(50);
     }
-    printf("[sig] ERROR: FPGA unreachable after %d attempts\n", attempts);
-    printf("[sig]   - 0x00 → SCK or MOSI not reaching FPGA, or gateware not loaded\n");
-    printf("[sig]   - 0xFF → MISO disconnected (floats high with internal pull-up)\n");
-    printf("[sig]   - other → SPI mode mismatch (CPOL/CPHA) or bit-order issue\n");
+    LOG_E("[sig] ERROR: FPGA unreachable after %d attempts\n", attempts);
+    LOG_E("[sig]   - 0x00 → SCK or MOSI not reaching FPGA, or gateware not loaded\n");
+    LOG_E("[sig]   - 0xFF → MISO disconnected (floats high with internal pull-up)\n");
+    LOG_E("[sig]   - other → SPI mode mismatch (CPOL/CPHA) or bit-order issue\n");
     return -1;
 }
 
@@ -679,15 +679,15 @@ static bool cap_overflowed(uint8_t st, const char *what) {
        iCE40 now (psram_boot_selftest_with_recovery), so a reboot is that fix. */
     if ((st & 0x80) != 0) {
         LOG_E("[sig] ERROR: %s failed — iCE40 NOT RESPONDING (STATUS=0x%02x): the FPGA "
-               "is unconfigured/wedged, not overflowing.  Reboot the pod (it reloads the "
-               "iCE40 at boot); if that does not help, `flash-ice40` on the console.\n", what, st);
+              "is unconfigured/wedged, not overflowing.  Reboot the pod (it reloads the "
+              "iCE40 at boot); if that does not help, `flash-ice40` on the console.\n", what, st);
         return true;
     }
     if (st & STATUS_CAP_OVF) {
         s_cap_overflowed = true;
         LOG_E("[sig] ERROR: %s OVERFLOW (STATUS bit5): PSRAM capture dropped bytes, an "
-               "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
-               "truncated/corrupt. Lower the rate.\n", what);
+              "overlapping arm, or (gw >= 43) the STM32 took the bus mid-capture; region "
+              "truncated/corrupt. Lower the rate.\n", what);
         return true;
     }
     return false;
@@ -988,8 +988,8 @@ void signal_engine_gateware_update(void) {
         signal_engine_refresh_version();
         psram_boot_selftest();
         snprintf(s_ice40_boot_note, sizeof(s_ice40_boot_note), "not configured at boot, reload ok");
-        printf("[fpga] the iCE40 was not configured: reloaded from its flash, gateware v%u\n",
-               (unsigned)signal_engine_fpga_version());
+        LOG_W("[fpga] the iCE40 was not configured: reloaded from its flash, gateware v%u\n",
+              (unsigned)signal_engine_fpga_version());
     }
     const int configured = ice40_is_configured();
     uint8_t running = signal_engine_fpga_version();
@@ -1012,12 +1012,12 @@ void signal_engine_gateware_update(void) {
         sleep_ms(5);
         signal_engine_refresh_version();   /* the compare reconfigured the iCE40 from its flash */
         if (same == 1) {
-            printf("[fpga] gateware v%u is image %d from slot %s: recorded\n", (unsigned)running, img,
-                   blob_name(kslot));
+            LOG_I("[fpga] gateware v%u is image %d from slot %s: recorded\n", (unsigned)running, img,
+                  blob_name(kslot));
             return;
         }
         if (same < 0) {
-            printf("[fpga] could not compare the iCE40's image with slot %s: left as it is\n", blob_name(kslot));
+            LOG_W("[fpga] could not compare the iCE40's image with slot %s: left as it is\n", blob_name(kslot));
             return;
         }
         /* differs: write it below */
@@ -1025,30 +1025,30 @@ void signal_engine_gateware_update(void) {
     blob_id_t slot = (blob_id_t)ice40_image_slot(img);
     if (blob_state(slot) != BLOB_STATE_OK) {
         if (!configured)
-            printf("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
-                   "hold its gateware (%s): install the gateware blobs\n",
-                   blob_name(slot), blob_state_str(blob_state(slot)));
+            LOG_W("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
+                  "hold its gateware (%s): install the gateware blobs\n",
+                  blob_name(slot), blob_state_str(blob_state(slot)));
         else
-            printf("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
-                   "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
-                   blob_name(slot), blob_state_str(blob_state(slot)));
+            LOG_W("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
+                  "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
+                  blob_name(slot), blob_state_str(blob_state(slot)));
         return;
     }
     if (!configured)
-        printf("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
+        LOG_W("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
     else if (running == embedded)
-        printf("[fpga] gateware v%u, but slot %s holds another image of it (a new build): "
-               "reprogramming image %d...\n", (unsigned)running, blob_name(slot), img);
+        LOG_I("[fpga] gateware v%u, but slot %s holds another image of it (a new build): "
+              "reprogramming image %d...\n", (unsigned)running, blob_name(slot), img);
     else
-        printf("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
-               (unsigned)running, (unsigned)embedded, img);
+        LOG_I("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
+              (unsigned)running, (unsigned)embedded, img);
     if (ice40_reflash_image(img) == 0) {
         sleep_ms(5);
         signal_engine_refresh_version();
         psram_boot_selftest();
-        printf("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
+        LOG_I("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
     } else {
-        printf("[fpga] gateware update failed, run flash-ice40 on the console\n");
+        LOG_E("[fpga] gateware update failed, run flash-ice40 on the console\n");
     }
 }
 
@@ -1132,11 +1132,11 @@ static int quad_stream_ctrl(void) {
     if (!dac_quad_present()) return 0;
     /* The ADC low range: no stream on the +-12 V output (dac_quad.h). */
     const char *why = dac_quad_low_check_stream(adc_low(), s_quad_ch);
-    if (why) { printf("[sig] %s\n", why); return -4; }
+    if (why) { LOG_I("[sig] %s\n", why); return -4; }
     if (s_quad_ch == DAC_QUAD_C) s_quad_c_known = false;
     if (fpga_dac_ctrl(0x01u, dac_quad_ctrl(s_quad_ch), 0u) == -2)
-        printf("[sig] WARNING: gateware v%u has no DAC_CTRL (v%u+): the DAC8554 outputs will not move\n",
-               s_fpga_version, (unsigned)DAC_CTRL_MIN_GW);
+        LOG_W("[sig] WARNING: gateware v%u has no DAC_CTRL (v%u+): the DAC8554 outputs will not move\n",
+              s_fpga_version, (unsigned)DAC_CTRL_MIN_GW);
     if (s_quad_ch >= DAC_QUAD_A && s_quad_ch <= DAC_QUAD_C) s_quad_live |= (uint8_t)(1u << s_quad_ch);
     return 0;
 }
@@ -1144,7 +1144,7 @@ static int quad_stream_ctrl(void) {
 int dac_quad_write(int ch, uint16_t code) {
     if (!dac_quad_present() || ch < DAC_QUAD_A || ch > DAC_QUAD_D) return -1;
     const char *why = dac_quad_low_check_hold(adc_low(), ch, code);   /* the ADC low range */
-    if (why) { printf("[sig] %s\n", why); return -4; }
+    if (why) { LOG_I("[sig] %s\n", why); return -4; }
     uint8_t st = 0;
     bool running = fpga_status_read(&st) == 0 && (st & STATUS_DAC_RUN);
     int rc = fpga_dac_ctrl(0x02u, dac_quad_ctrl(ch), code);
@@ -1202,8 +1202,8 @@ int dac_quad_channel(void) { return s_quad_ch; }
 void dac_quad_boot(void) {
     if (!dac_quad_present()) return;
     if (!gw_caps()->dac_ctrl) {
-        printf("[sig] WARNING: analog v3r2 needs gateware v%u+ (DAC_CTRL); v%u cannot drive the DAC8554\n",
-               (unsigned)DAC_CTRL_MIN_GW, s_fpga_version);
+        LOG_W("[sig] WARNING: analog v3r2 needs gateware v%u+ (DAC_CTRL); v%u cannot drive the DAC8554\n",
+              (unsigned)DAC_CTRL_MIN_GW, s_fpga_version);
         return;
     }
     /* Power-up left every channel at code 0 (-12 V on the +-12 V output), and a reload of the
@@ -1211,18 +1211,18 @@ void dac_quad_boot(void) {
     s_quad_ch   = DAC_QUAD_NONE;
     s_quad_live = DAC_QUAD_VOLTAGE_MASK;
     if (dac_quad_route(ANALOG_PATH_OFF) != 0) {
-        printf("[sig] WARNING: DAC8554 park failed; +-14 V left %s\n", ana14_is_on() ? "on" : "off");
+        LOG_W("[sig] WARNING: DAC8554 park failed; +-14 V left %s\n", ana14_is_on() ? "on" : "off");
         return;
     }
-    printf("[sig] DAC8554: voltage outputs parked (A 0x%04x, B 0x%04x, C 0x%04x)\n",
-           dac_quad_park_code(DAC_QUAD_A), dac_quad_park_code(DAC_QUAD_B), dac_quad_park_code(DAC_QUAD_C));
+    LOG_I("[sig] DAC8554: voltage outputs parked (A 0x%04x, B 0x%04x, C 0x%04x)\n",
+          dac_quad_park_code(DAC_QUAD_A), dac_quad_park_code(DAC_QUAD_B), dac_quad_park_code(DAC_QUAD_C));
     /* The +-14 V supply of the +-12 V and cal2 stages (U58 P4) is off from power-up, which holds
        the +-12 V output near 0 V whatever channel C does.  Only now that C sits at its 0 V code
        is it switched on; the TPS65131 soft-starts in about 1 ms, so give it 5 ms.  It stays on. */
     if (!ana14_is_on()) {
-        if (ana14_set(true) != 0) { printf("[sig] WARNING: +-14 V enable (U58 P4) failed\n"); return; }
+        if (ana14_set(true) != 0) { LOG_W("[sig] WARNING: +-14 V enable (U58 P4) failed\n"); return; }
         sleep_ms(5);
-        printf("[sig] +-14 V on\n");
+        LOG_I("[sig] +-14 V on\n");
     }
 }
 
@@ -1241,7 +1241,7 @@ int dac_set_constant(uint8_t value, uint32_t divider) {
     float dac_clk_hz = (float)DAC_CLK_HZ / (float)divider;
     /* Integer Hz — newlib-nano printf has no %f (the old %.0f printed nothing). */
     LOG_D("[sig] DAC held at 0x%02x (%u), DAC_CLK=%lu Hz (divider=%lu)\n",
-           value, value, (unsigned long)lroundf(dac_clk_hz), (unsigned long)divider);
+          value, value, (unsigned long)lroundf(dac_clk_hz), (unsigned long)divider);
     return 0;
 }
 
@@ -1265,7 +1265,7 @@ int adc_probe_one(uint8_t *out_value) {
        16-bit samples. */
     uint16_t s16[16] = {0};
     if (adc_capture_psram(s16, 16, 0.0f) != 0) {
-        printf("[sig] ERROR: ADC probe (PSRAM) failed\n");
+        LOG_E("[sig] ERROR: ADC probe (PSRAM) failed\n");
         return -1;
     }
     *out_value = (uint8_t)(s16[15] >> 8);   /* high byte, for the 8-bit return */
@@ -1360,12 +1360,12 @@ void signal_engine_init(void) {
     hspi_ice.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
     hspi_ice.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
     if (HAL_SPI_Init(&hspi_ice) != HAL_OK) {
-        printf("[sig] ERROR: SPI1 init failed\n");
+        LOG_E("[sig] ERROR: SPI1 init failed\n");
         return;
     }
 
-    printf("[sig] SPI1 ~%lu Hz  SCK=PA5 MOSI=PB5 MISO=PA6 CS=PB10  BUSY=PG1\n",
-           (unsigned long)SPI_CLOCK_HZ);
+    LOG_I("[sig] SPI1 ~%lu Hz  SCK=PA5 MOSI=PB5 MISO=PA6 CS=PB10  BUSY=PG1\n",
+          (unsigned long)SPI_CLOCK_HZ);
 
 #if ICE_SPI_USE_DMA
     /* GPDMA for the big capture read-backs / waveform loads.  SPI1 DMA completes
@@ -1381,21 +1381,21 @@ void signal_engine_init(void) {
         HAL_NVIC_SetPriority(SPI1_IRQn, configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY, 0);
         HAL_NVIC_EnableIRQ(SPI1_IRQn);
         s_ice_dma_ok = true;
-        printf("[sig] SPI1 DMA enabled (GPDMA1 ch0=rx ch1=tx)\n");
+        LOG_I("[sig] SPI1 DMA enabled (GPDMA1 ch0=rx ch1=tx)\n");
     } else {
-        printf("[sig] SPI1 DMA init failed — using blocking block transfers\n");
+        LOG_W("[sig] SPI1 DMA init failed — using blocking block transfers\n");
     }
 #endif
 
     /* Probe the FPGA — does NOT halt on failure; DAC/ADC commands will fail
        later if the link is down, but the console/Ethernet paths still come up. */
     if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) {
-        printf("[sig] continuing without FPGA — DAC/ADC commands will fail.\n");
-        printf("[sig] try 'spi-ping' on the console once you fix wiring.\n");
+        LOG_W("[sig] continuing without FPGA — DAC/ADC commands will fail.\n");
+        LOG_W("[sig] try 'spi-ping' on the console once you fix wiring.\n");
     } else {
         s_fpga_features = signal_engine_fpga_features();   /* which warmboot image booted */
-        printf("[sig] FPGA gateware v%u (v2/PSRAM capture path), features 0x%02x\n",
-               s_fpga_version, s_fpga_features);
+        LOG_I("[sig] FPGA gateware v%u (v2/PSRAM capture path), features 0x%02x\n",
+              s_fpga_version, s_fpga_features);
         signal_engine_fabric_to_idle();
     }
 }
@@ -1462,12 +1462,12 @@ static void log_dac_start(const char *shape, float freq, uint8_t amplitude,
     /* Integer units — newlib-nano printf has no %f. Waveform freq can be sub-Hz,
        so milli-Hz; the sample rate is always large, so integer S/s. */
     LOG_D("[sig] DAC %s  freq=%lu mHz (actual ~%lu mHz)  amp=%u  offset=%u  %s "
-           "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
-           shape, (unsigned long)lroundf(freq * 1000.0f),
-           (unsigned long)lroundf(actual_freq * 1000.0f), amplitude, offset,
-           duration_ms > 0 ? "timed" : "continuous",
-           (unsigned long)n_samples, (unsigned long)divider,
-           (unsigned long)lroundf(eff_rate));
+          "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
+          shape, (unsigned long)lroundf(freq * 1000.0f),
+          (unsigned long)lroundf(actual_freq * 1000.0f), amplitude, offset,
+          duration_ms > 0 ? "timed" : "continuous",
+          (unsigned long)n_samples, (unsigned long)divider,
+          (unsigned long)lroundf(eff_rate));
 }
 
 static int dac_generate_common(const char *shape,
@@ -1478,7 +1478,7 @@ static int dac_generate_common(const char *shape,
         /* Integer milli-Hz — newlib-nano printf has no %f. Signed: freq is <= 0
            here (that's why it's invalid). */
         LOG_W("[sig] ERROR: %s invalid params (freq=%ld mHz amp=%u)\n",
-               shape, (long)lroundf(freq * 1000.0f), amplitude);
+              shape, (long)lroundf(freq * 1000.0f), amplitude);
         return -1;
     }
     uint32_t period  = 0;
@@ -1529,7 +1529,7 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz) {
     if (freq <= 0.0f || !(fabs(amp) >= 0.5)) {
         LOG_W("[sig] ERROR: generate16 invalid params (freq=%ld mHz amp=%ld)\n",
-               (long)lroundf(freq * 1000.0f), (long)lround(amp));
+              (long)lroundf(freq * 1000.0f), (long)lround(amp));
         return -1;
     }
     uint32_t period  = 0;
@@ -1547,11 +1547,11 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
 
     float eff_rate = dac_effective_rate_hz(divider);
     LOG_D("[sig] DAC %s 16-bit  freq=%lu mHz  amp=%ld  mid=%ld codes  %s "
-           "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
-           shape == WAVE16_SQUARE ? "square" : shape == WAVE16_SAWTOOTH ? "sawtooth" : "sine",
-           (unsigned long)lroundf(freq * 1000.0f), (long)lround(amp), (long)lround(mid),
-           duration_ms > 0 ? "timed" : "continuous",
-           (unsigned long)period, (unsigned long)divider, (unsigned long)lroundf(eff_rate));
+          "(%lu samples/period, divider=%lu, fs=%lu S/s)\n",
+          shape == WAVE16_SQUARE ? "square" : shape == WAVE16_SAWTOOTH ? "sawtooth" : "sine",
+          (unsigned long)lroundf(freq * 1000.0f), (long)lround(amp), (long)lround(mid),
+          duration_ms > 0 ? "timed" : "continuous",
+          (unsigned long)period, (unsigned long)divider, (unsigned long)lroundf(eff_rate));
 
     if (duration_ms > 0) {
         dac_stop_at = make_timeout_time_ms(duration_ms);
@@ -1576,8 +1576,8 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
     uint32_t divider = dac_replay_divider(sample_rate_hz, false);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     LOG_D("[sig] DAC arbitrary  len=%u  loop=%s  %lu S/s (divider=%lu)\n",
-           (unsigned)len, loop ? "yes" : "no",
-           (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
+          (unsigned)len, loop ? "yes" : "no",
+          (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
 
     if (fpga_load_wave(data, len)        != 0) return -1;
     /* DAC8551: `data` is 16-bit samples as byte pairs, so the sequencer period is
@@ -1849,7 +1849,7 @@ void signal_engine_quiesce_psram_masters(void) {
                     busy_read();
         if (idle) break;
         if (HAL_GetTick() - t0 > 25u) {
-            printf("[sig] image swap: masters not idle after 25 ms (st=0x%02x), reflashing anyway\n", st);
+            LOG_W("[sig] image swap: masters not idle after 25 ms (st=0x%02x), reflashing anyway\n", st);
             break;
         }
         sleep_ms(1);
@@ -1865,10 +1865,10 @@ int fpga_warmboot(uint8_t image) {
     if (ice40_reflash_image((int)image) != 0) {
         /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
            flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
-        printf("[sig] image switch: reflash failed, retrying\n");
+        LOG_E("[sig] image switch: reflash failed, retrying\n");
         if (ice40_reflash_image((int)image) != 0) {
             if (image != 0u) {
-                printf("[sig] image switch: retry failed, restoring image 0\n");
+                LOG_E("[sig] image switch: retry failed, restoring image 0\n");
                 (void)ice40_reflash_image(0);
             }
             sleep_ms(5);
@@ -1895,12 +1895,12 @@ int fpga_warmboot(uint8_t image) {
     /* debug: the swap reports the outcome itself, below */
     if (signal_engine_capture_selftest_at(BP_LOG_DEBUG, 16, &bad) == 0) {
         LOG_I("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
-               image, s_fpga_version, s_fpga_features);
+              image, s_fpga_version, s_fpga_features);
         return 0;
     }
-    printf("[sig] image %u: iCE40->PSRAM write wedged after swap\n", image);
+    LOG_W("[sig] image %u: iCE40->PSRAM write wedged after swap\n", image);
     if (image != 0) {
-        printf("[sig] recovering the bench to the loop image (image 0)\n");
+        LOG_W("[sig] recovering the bench to the loop image (image 0)\n");
         if (ice40_reflash_image(0) == 0) {
             sleep_ms(5);
             fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version);
@@ -1944,13 +1944,13 @@ uint32_t signal_engine_adc_max_samples(void) {
 int dac_replay_psram(uint32_t count, float sample_rate_hz) {
     if (count == 0 || count > FPGA_DAC_REPLAY_MAX_SAMPLES) {
         LOG_W("[sig] ERROR: psram replay count=%lu out of range (max %lu)\n",
-               (unsigned long)count, (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES);
+              (unsigned long)count, (unsigned long)FPGA_DAC_REPLAY_MAX_SAMPLES);
         return -1;
     }
     uint32_t divider = dac_replay_divider(sample_rate_hz, true);
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     LOG_D("[sig] DAC psram replay  count=%lu  %lu S/s (divider=%lu)\n",
-           (unsigned long)count, (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
+          (unsigned long)count, (unsigned long)s_dac_replay_rate_hz, (unsigned long)divider);
     /* START_DAC_PSRAM on top of a running (or co-trigger staged) replay keeps the reader's
        address and FIFO from the old one, so stop first, always: DAC_RUN alone misses a staged
        co-trigger, whose reader is already streaming.  A staged co-trigger is staged again. */
@@ -2013,7 +2013,7 @@ bool signal_engine_quiesce_psram_keep_dac(void) {
         uint8_t st = 0;
         if (fpga_status_read(&st) == 0 && !(st & STATUS_CAP_BUSY) && busy_read()) break;
         if (HAL_GetTick() - t0 > 25u) {
-            printf("[sig] W25Q session: capture writer not idle after 25 ms (st=0x%02x)\n", st);
+            LOG_W("[sig] W25Q session: capture writer not idle after 25 ms (st=0x%02x)\n", st);
             break;
         }
         sleep_ms(1);
@@ -2131,7 +2131,7 @@ int adc_capture_psram_start(size_t samples, float sample_rate_hz) {
     float actual = (float)adc_capture_hz() / (float)divider;
     /* Integer S/s — newlib-nano printf has no %f (the old %.3f MS/s printed nothing). */
     LOG_D("[sig] PSRAM capture armed (%u samples, divider=%lu, %lu S/s)\n",
-           (unsigned)samples, (unsigned long)divider, (unsigned long)lroundf(actual));
+          (unsigned)samples, (unsigned long)divider, (unsigned long)lroundf(actual));
     return 0;
 }
 
@@ -2192,11 +2192,11 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        nothing). Rate is always large (integer S/s); the played fundamental can be
        sub-Hz (milli-Hz). */
     LOG_D("[sig] measure(v2): %s period=%lu samples=%u dac_div=%lu cap_div=%lu "
-           "(fs=%lu S/s, f=%lu mHz)\n",
-           waveform, (unsigned long)period, (unsigned)samples,
-           (unsigned long)dac_div, (unsigned long)cap_div,
-           (unsigned long)lroundf(actual),
-           (unsigned long)lroundf(actual / (float)period * 1000.0f));
+          "(fs=%lu S/s, f=%lu mHz)\n",
+          waveform, (unsigned long)period, (unsigned)samples,
+          (unsigned long)dac_div, (unsigned long)cap_div,
+          (unsigned long)lroundf(actual),
+          (unsigned long)lroundf(actual / (float)period * 1000.0f));
     return 0;
 }
 
@@ -2252,20 +2252,20 @@ int adc_capture_psram_poll(uint16_t *out16, size_t samples) {
         /* Take the bus back and read the samples out of PSRAM (QPI, GPIO-CS,
            settle + retry), then hand it back so the iCE40 owns it again at idle. */
         int rc = psram_read_settled(s_adc_cap_base, (uint8_t *)out16, (uint32_t)(samples * 2u));
-        if (rc != 0) { printf("[sig] PSRAM read-back failed\n"); return -1; }
+        if (rc != 0) { LOG_E("[sig] PSRAM read-back failed\n"); return -1; }
         /* No-write detector: if the sentinel survived, the iCE40 never wrote. */
         if (samples >= 4 &&
             out16[0] == CAP_NOWRITE_SENTINEL[0] && out16[1] == CAP_NOWRITE_SENTINEL[1] &&
             out16[2] == CAP_NOWRITE_SENTINEL[2] && out16[3] == CAP_NOWRITE_SENTINEL[3]) {
             LOG_E("[sig] ERROR: iCE40 did NOT write the capture to PSRAM (sentinel "
-                   "survived) — capture datapath/timing fault in the iCE40, NOT the "
-                   "analog ADC. Run cap-selftest.\n");
+                  "survived) — capture datapath/timing fault in the iCE40, NOT the "
+                  "analog ADC. Run cap-selftest.\n");
             return -1;
         }
         return 1;
     }
     if (time_reached(psram_cap_deadline)) {
-        printf("[sig] ERROR: PSRAM capture timed out (CAP_DONE never set)\n");
+        LOG_E("[sig] ERROR: PSRAM capture timed out (CAP_DONE never set)\n");
         return -1;
     }
     return 0;
@@ -2325,8 +2325,8 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     uint32_t la_max = signal_engine_la_max_samples(false);
     if (samples == 0 || samples > la_max) {
         LOG_W("[la] ERROR: LA samples=%u out of range (max %lu with %lu DAC bytes resident)\n",
-               (unsigned)samples, (unsigned long)la_max,
-               (unsigned long)(s_dac_ps_active ? (FPGA_PSRAM_TOTAL - s_dac_ps_base) : 0u));
+              (unsigned)samples, (unsigned long)la_max,
+              (unsigned long)(s_dac_ps_active ? (FPGA_PSRAM_TOTAL - s_dac_ps_base) : 0u));
         return -1;
     }
 
@@ -2338,12 +2338,12 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     if (actual_hz) *actual_hz = (float)adc_capture_hz() / (float)divider;
     if (plan.capped)
         LOG_D("[la] PSRAM LA rate capped to %lu kS/s so %u samples fit the %u-byte "
-               "burst buffer (no dropped samples)\n",
-               (unsigned long)(plan.rate_hz / 1000u), (unsigned)samples,
-               (unsigned)LA_RING_BYTES);
+              "burst buffer (no dropped samples)\n",
+              (unsigned long)(plan.rate_hz / 1000u), (unsigned)samples,
+              (unsigned)LA_RING_BYTES);
     if (plan.floored)
         LOG_D("[la] PSRAM LA rate clamped to the 12 MS/s sampler ceiling (divider=%lu)\n",
-               (unsigned long)divider);
+              (unsigned long)divider);
 
     /* LA_CAPTURE [count_lo][count_mid][count_hi][div_lo][div_hi]; the count is 24-bit
        so a single capture can span the full 8 MB PSRAM.  The v2 gateware streams the
@@ -2370,9 +2370,9 @@ int fpga_la_capture_psram_start(size_t samples, float sample_rate_hz, float *act
     /* integer kSPS (newlib-nano printf has no %f) */
     uint32_t ksps = (uint32_t)(((uint64_t)cap_hz / divider) / 1000u);
     LOG_D("[la] PSRAM capture armed (%u samples, divider=%lu, %lu.%03lu MS/s, ~%lu ms window)\n",
-           (unsigned)samples, (unsigned long)divider,
-           (unsigned long)(ksps / 1000u), (unsigned long)(ksps % 1000u),
-           (unsigned long)window_ms);
+          (unsigned)samples, (unsigned long)divider,
+          (unsigned long)(ksps / 1000u), (unsigned long)(ksps % 1000u),
+          (unsigned long)window_ms);
     return 0;
 }
 
@@ -2408,7 +2408,7 @@ int fpga_la_change_start(size_t samples, uint32_t k, bool pre) {
     int rc = spi_cmd_write(CMD_CAPTURE, args, sizeof(args));   /* la_div goes on the wire as is */
     /* latched by the arm: restore the map, even when the arm failed */
     if (fpga_set_capture_bases(la_base, adc_base) != 0 || rc != 0) {
-        printf("[la] change capture: SPI write failed, aborting\n");
+        LOG_E("[la] change capture: SPI write failed, aborting\n");
         fpga_capture_abort();
         return -1;
     }
@@ -2416,8 +2416,8 @@ int fpga_la_change_start(size_t samples, uint32_t k, bool pre) {
     uint64_t window_ms = ticks / 48000u;
     psram_cap_deadline = make_timeout_time_ms((uint32_t)(window_ms + 3000u));
     LOG_D("[la] change capture armed (%u samples at 48/%lu MS/s, %lu x 256 ticks, ~%lu ms%s)\n",
-           (unsigned)samples, (unsigned long)k, (unsigned long)units, (unsigned long)window_ms,
-           pre ? ", pre-trigger" : "");
+          (unsigned)samples, (unsigned long)k, (unsigned long)units, (unsigned long)window_ms,
+          pre ? ", pre-trigger" : "");
     return 0;
 }
 uint32_t signal_engine_la_change_units(void) { return s_la_change_units; }
@@ -2437,7 +2437,7 @@ int fpga_la_change_wait(void) {
         return 1;
     }
     if (time_reached(psram_cap_deadline)) {
-        printf("[la] ERROR: change capture timed out (CAP_DONE never set)\n");
+        LOG_E("[la] ERROR: change capture timed out (CAP_DONE never set)\n");
         return -1;
     }
     return 0;
@@ -2458,7 +2458,7 @@ int fpga_la_capture_psram_wait(void) {
         return 1;
     }
     if (time_reached(psram_cap_deadline)) {
-        printf("[la] ERROR: PSRAM LA capture timed out (CAP_DONE never set)\n");
+        LOG_E("[la] ERROR: PSRAM LA capture timed out (CAP_DONE never set)\n");
         return -1;
     }
     return 0;
@@ -2498,7 +2498,7 @@ int fpga_capture_psram_wait(void) {
         return 1;
     }
     if (time_reached(psram_cap_deadline)) {
-        printf("[sig] ERROR: capture timed out (CAP_DONE never set)\n");
+        LOG_E("[sig] ERROR: capture timed out (CAP_DONE never set)\n");
         return -1;
     }
     return 0;
@@ -2623,10 +2623,10 @@ int fpga_dual_capture_poll(uint16_t *out_adc, uint16_t adc_count,
             rc |= psram_read_settled(s_adc_cap_base, (uint8_t *)out_adc, (uint32_t)adc_count * 2u);
         if (la_count && out_la)
             rc |= psram_read_settled(s_la_cap_base,  (uint8_t *)out_la,  (uint32_t)la_count  * 2u);
-        if (rc != 0) { printf("[sig] capture PSRAM read-back failed\n"); return -1; }
+        if (rc != 0) { LOG_E("[sig] capture PSRAM read-back failed\n"); return -1; }
         return 1;
     }
-    if (time_reached(psram_cap_deadline)) { printf("[sig] capture timed out (CAP_DONE never set)\n"); return -1; }
+    if (time_reached(psram_cap_deadline)) { LOG_E("[sig] capture timed out (CAP_DONE never set)\n"); return -1; }
     return 0;
 }
 
@@ -2774,7 +2774,7 @@ void fpga_capture_abort(void) {
     uint8_t st = 0;
     while (!((fpga_status_read(&st) == 0) && !(st & STATUS_CAP_BUSY) && busy_read())) {
         if (HAL_GetTick() - t0 > 25u) {
-            printf("[sig] capture abort: writer not idle after 25 ms (st=0x%02x)\n", st);
+            LOG_W("[sig] capture abort: writer not idle after 25 ms (st=0x%02x)\n", st);
             break;
         }
         sleep_ms(1);
@@ -2806,7 +2806,7 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
     };
     spi_cmd_write(CMD_GPIO_STEP, args, sizeof(args));
     LOG_D("[la] LA%u step x%lu started (delay %luus)\n",
-           channel, (unsigned long)steps, (unsigned long)delay_us);
+          channel, (unsigned long)steps, (unsigned long)delay_us);
     return 0;
 }
 
@@ -2828,7 +2828,7 @@ int fpga_swd_arm(unsigned swclk, unsigned swdio) {
     swd_deadline    = make_timeout_time_ms(SWD_INACTIVITY_MS);
     swd_next_check  = get_absolute_time();
     LOG_D("[swd] armed  SWCLK=LA%u SWDIO=LA%u nRESET=%s\n",
-           swclk, swdio, nrst_ctrl_supported() ? "PF4 (J1 pin 22)" : "unavailable");
+          swclk, swdio, nrst_ctrl_supported() ? "PF4 (J1 pin 22)" : "unavailable");
     return 0;
 }
 
@@ -2890,7 +2890,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
         swd_next_check = make_timeout_time_us(SWD_ARMED_CHECK_US);
         uint8_t st = 0;
         if (fpga_status_read(&st) != 0 || !(st & STATUS_SWD_ARMED)) {
-            printf("[swd] the iCE40 SWD engine is not armed (status 0x%02x): ending the session\n", st);
+            LOG_W("[swd] the iCE40 SWD engine is not armed (status 0x%02x): ending the session\n", st);
             swd_armed_local = false;
             *quit = true;
             return 0;
@@ -3025,7 +3025,7 @@ int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
     spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
     spi_armed_local = true;
     LOG_D("[spi] armed  SCK=LA%u MOSI=LA%u MISO=LA%u CS=LA%u %lu Hz mode %u\n",
-           sck, mosi, miso, cs, (unsigned long)fpga_spi_hz_for_half(half), mode);
+          sck, mosi, miso, cs, (unsigned long)fpga_spi_hz_for_half(half), mode);
     return 0;
 }
 
@@ -3418,11 +3418,11 @@ int fpga_uart_config_de(unsigned rx_ch, unsigned tx_ch, unsigned de_ch, bool de_
     if (de >= 0)
         LOG_D("[uart] RS-485 DE on LA%u, active %s\n", de_ch, de_active_low ? "low" : "high");
     LOG_D("[uart] config RX=LA%u TX=LA%u baud=%lu (div=%lu → %lu baud) 8%c%c%s %s\n",
-           rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
-           (unsigned long)lroundf(actual),
-           !(frame & UART_FRAME_PARITY) ? 'N' : (frame & UART_FRAME_ODD) ? 'O' : 'E',
-           (frame & UART_FRAME_STOP2) ? '2' : '1',
-           (frame & UART_FRAME_HALFDUPLEX) ? " half-duplex" : "", enable ? "armed" : "disabled");
+          rx_ch, tx_ch, (unsigned long)baud, (unsigned long)div,
+          (unsigned long)lroundf(actual),
+          !(frame & UART_FRAME_PARITY) ? 'N' : (frame & UART_FRAME_ODD) ? 'O' : 'E',
+          (frame & UART_FRAME_STOP2) ? '2' : '1',
+          (frame & UART_FRAME_HALFDUPLEX) ? " half-duplex" : "", enable ? "armed" : "disabled");
     return 0;
 }
 
@@ -3439,7 +3439,7 @@ static uint32_t s_utx_head, s_utx_count, s_utx_dropped;
 
 static void uart_tx_clear(void) {
     if (s_utx_dropped) LOG_W("[uart] %lu TX bytes dropped (client wrote faster than the baud rate)\n",
-                              (unsigned long)s_utx_dropped);
+                             (unsigned long)s_utx_dropped);
     s_utx_head = s_utx_count = s_utx_dropped = 0;
 }
 

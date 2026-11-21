@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "bp_log.h"
 
 static const struct {
     const char *name;
@@ -89,7 +90,7 @@ int blob_store_load(void)
     memset(s_info, 0, sizeof(s_info));
     s_capacity = 0;
     if (w25q_read_id(id) != 0 || w25q_capacity(id) < 0x600000u) {
-        printf("[blob] no usable W25Q (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
+        LOG_W("[blob] no usable W25Q (ID %02x %02x %02x)\n", id[0], id[1], id[2]);
         return -1;
     }
     s_capacity = w25q_capacity(id);
@@ -110,10 +111,10 @@ int blob_store_init(void)
     for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
         if (!slot_ok((blob_id_t)i)) continue;
         if (s_info[i].present)
-            printf("[blob] %s: %lu bytes, version %lu\n", k_slots[i].name,
-                   (unsigned long)s_info[i].len, (unsigned long)s_info[i].version);
+            LOG_I("[blob] %s: %lu bytes, version %lu\n", k_slots[i].name,
+                  (unsigned long)s_info[i].len, (unsigned long)s_info[i].version);
         else
-            printf("[blob] %s: empty\n", k_slots[i].name);
+            LOG_I("[blob] %s: empty\n", k_slots[i].name);
     }
     return n;
 }
@@ -176,19 +177,19 @@ int blob_store_write_ext(blob_id_t id, uint32_t len, uint32_t version, const uin
 
     memset(&s_info[id], 0, sizeof(s_info[id]));         /* empty from the first erase on */
     if (erase_range(base, BLOB_HDR_SIZE + len) != 0) {
-        printf("[blob] %s: erase failed\n", k_slots[id].name);
+        LOG_E("[blob] %s: erase failed\n", k_slots[id].name);
         return -1;
     }
     for (uint32_t off = 0; off < len; off += W25Q_PAGE) {
         uint32_t n = len - off < W25Q_PAGE ? len - off : W25Q_PAGE;
         if (src(ctx, off, page, n) != 0 || w25q_program(data + off, page, n) != 0) {
-            printf("[blob] %s: program failed at %lu\n", k_slots[id].name, (unsigned long)off);
+            LOG_E("[blob] %s: program failed at %lu\n", k_slots[id].name, (unsigned long)off);
             return -1;
         }
     }
     uint8_t got[32];
     if (hash_flash(data, len, got) != 0 || memcmp(got, sha256, 32) != 0) {
-        printf("[blob] %s: written data does not hash back\n", k_slots[id].name);
+        LOG_W("[blob] %s: written data does not hash back\n", k_slots[id].name);
         return -1;
     }
 
@@ -202,18 +203,18 @@ int blob_store_write_ext(blob_id_t id, uint32_t len, uint32_t version, const uin
     memcpy(h.sha256, sha256, 32);
     const uint32_t commit = BLOB_COMMIT_MAGIC;
     if (extra_len && w25q_program(base + BLOB_EXTRA_OFF, extra, (uint32_t)extra_len) != 0) {
-        printf("[blob] %s: extra write failed\n", k_slots[id].name);
+        LOG_E("[blob] %s: extra write failed\n", k_slots[id].name);
         return -1;
     }
     if (w25q_program(base, (const uint8_t *)&h, sizeof(h)) != 0 ||
         w25q_program(base + BLOB_COMMIT_OFF, (const uint8_t *)&commit, sizeof(commit)) != 0) {
-        printf("[blob] %s: header write failed\n", k_slots[id].name);
+        LOG_E("[blob] %s: header write failed\n", k_slots[id].name);
         return -1;
     }
     load_slot(id);
     if (!s_info[id].present) return -1;
-    printf("[blob] %s: stored %lu bytes, version %lu\n", k_slots[id].name,
-           (unsigned long)len, (unsigned long)version);
+    LOG_I("[blob] %s: stored %lu bytes, version %lu\n", k_slots[id].name,
+          (unsigned long)len, (unsigned long)version);
     return 0;
 }
 
@@ -222,12 +223,12 @@ int blob_store_clear(blob_id_t id)
     if (!slot_ok(id)) return -1;
     memset(&s_info[id], 0, sizeof(s_info[id]));
     if (w25q_erase_sector(k_slots[id].base) != 0) {
-        printf("[blob] %s: erase failed\n", k_slots[id].name);
+        LOG_E("[blob] %s: erase failed\n", k_slots[id].name);
         return -1;
     }
     load_slot(id);
     if (s_info[id].present) return -1;
-    printf("[blob] %s: cleared\n", k_slots[id].name);
+    LOG_I("[blob] %s: cleared\n", k_slots[id].name);
     return 0;
 }
 

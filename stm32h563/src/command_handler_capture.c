@@ -531,7 +531,7 @@ static bool bulk_pump_changes(int conn, size_t avail) {
     if (last) pos += bulk_emit_trigger(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos);
     pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos, ",\"more\":%s}\n", last ? "false" : "true");
     if (at_send_data(conn, (const uint8_t *)chunk_buf, (size_t)pos) != 0) {
-        printf("[cmd] read-back send failed at %u/%u — conn %d dropped\n", (unsigned)bulk.sent, (unsigned)bulk.total, conn);
+        LOG_E("[cmd] read-back send failed at %u/%u — conn %d dropped\n", (unsigned)bulk.sent, (unsigned)bulk.total, conn);
         bulk.active = false;
         fpga_capture_psram_release();
         heavy_release(conn);
@@ -554,8 +554,8 @@ static void bulk_pump(void) {
         if (avail < 96) {
             if (HAL_GetTick() - bulk.progress_ms > BULK_STALL_MS) {
                 LOG_W("[cmd] bulk send stalled %lu ms on conn %d at %lu/%lu: ending it\n",
-                       (unsigned long)BULK_STALL_MS, conn,
-                       (unsigned long)bulk.sent, (unsigned long)bulk.total);
+                      (unsigned long)BULK_STALL_MS, conn,
+                      (unsigned long)bulk.sent, (unsigned long)bulk.total);
                 bulk.active = false;
                 if (bulk.from_psram) fpga_capture_psram_release();
                 heavy_release(conn);
@@ -580,7 +580,7 @@ static void bulk_pump(void) {
             size_t la_remaining = bulk.total - bulk.sent;
             size_t to_read = la_remaining < CHUNK_SAMPLES ? la_remaining : CHUNK_SAMPLES;
             if (fpga_capture_psram_read16(bulk.sent, psram_chunk16, to_read, bulk.adc_samples) != 0) {
-                printf("[cmd] PSRAM read-back failed at %u/%u\n", (unsigned)bulk.sent, (unsigned)bulk.total);
+                LOG_E("[cmd] PSRAM read-back failed at %u/%u\n", (unsigned)bulk.sent, (unsigned)bulk.total);
                 bulk.active = false;
                 fpga_capture_psram_release();
                 send_error(conn, "capture read-back failed");
@@ -628,7 +628,7 @@ static void bulk_pump(void) {
             pos += snprintf(chunk_buf + pos, sizeof(chunk_buf) - (size_t)pos,
                             ",\"more\":%s}\n", last ? "false" : "true");
             if (at_send_data(conn, (const uint8_t *)chunk_buf, (size_t)pos) != 0) {
-                printf("[cmd] read-back send failed at %u/%u — conn %d dropped\n", (unsigned)bulk.sent, (unsigned)bulk.total, conn);
+                LOG_E("[cmd] read-back send failed at %u/%u — conn %d dropped\n", (unsigned)bulk.sent, (unsigned)bulk.total, conn);
                 bulk.active = false;
                 fpga_capture_psram_release();
                 heavy_release(conn);
@@ -669,8 +669,8 @@ static void bulk_pump(void) {
                 ? fpga_capture_psram_read16(bulk.sent, psram_chunk16, this_chunk, bulk.adc_samples)
                 : fpga_la_psram_read((uint32_t)bulk.sent, psram_chunk, (uint32_t)this_chunk);
             if (rc != 0) {
-                printf("[cmd] PSRAM read-back failed at %u/%u\n",
-                       (unsigned)bulk.sent, (unsigned)bulk.total);
+                LOG_E("[cmd] PSRAM read-back failed at %u/%u\n",
+                      (unsigned)bulk.sent, (unsigned)bulk.total);
                 bulk.active = false;
                 fpga_capture_psram_release();
                 send_error(conn, bulk.is16 ? "capture read-back failed" : "la read-back failed");
@@ -719,8 +719,8 @@ static void bulk_pump(void) {
                         ",\"more\":%s}\n", last ? "false" : "true");
 
         if (at_send_data(conn, (const uint8_t *)chunk_buf, (size_t)pos) != 0) {
-            printf("[cmd] read-back send failed at %u/%u — conn %d dropped\n",
-                   (unsigned)bulk.sent, (unsigned)bulk.total, conn);
+            LOG_E("[cmd] read-back send failed at %u/%u — conn %d dropped\n",
+                  (unsigned)bulk.sent, (unsigned)bulk.total, conn);
             bulk.active = false;          /* connection died — drop it */
             if (bulk.from_psram) fpga_capture_psram_release();
             heavy_release(conn);
@@ -731,7 +731,7 @@ static void bulk_pump(void) {
     }
 
     LOG_D("[cmd] read-back complete: %u %s sent over websocket\n",
-           (unsigned)bulk.total, bulk.is16 ? "samples" : "bytes");
+          (unsigned)bulk.total, bulk.is16 ? "samples" : "bytes");
     bulk.active = false;                  /* all chunks queued */
     if (bulk.from_psram) fpga_capture_psram_release();
     heavy_release(conn);
@@ -861,11 +861,11 @@ static void chgscan_step(void) {
         if (have < total) total = (size_t)have;
         trunc = chgscan.cause == 1u ? 1u : 2u;
         LOG_W("[cmd] la_capture: stopped early (%s): returning %u of %u samples\n",
-               trunc == 1u ? "too busy" : "memory full", (unsigned)total, (unsigned)chgscan.samples);
+              trunc == 1u ? "too busy" : "memory full", (unsigned)total, (unsigned)chgscan.samples);
     }
     chgscan.active = false;
     LOG_D("[cmd] la_capture: change capture ready (%u samples%s), streaming...\n",
-           (unsigned)total, pre ? " incl. pre-trigger" : "");
+          (unsigned)total, pre ? " incl. pre-trigger" : "");
     bulk_begin_la_changes(chgscan.conn_id, chgscan.adc_n, total, k, chgscan.off, base, pre, trunc);
     bulk.la_rate_hz  = chgscan.la_hz;
     bulk.adc_rate_hz = chgscan.adc_n ? chgscan.adc_hz : 0u;
@@ -898,8 +898,8 @@ static void sensla_done(void) {
     sensla.reading = false;
     fpga_la_psram_release();
     LOG_D("[sensor] LA capture %u bytes (%u samples, sda=LA%u scl=LA%u%s)\n", (unsigned)sensla.bytes,
-           (unsigned)(sensla.bytes * 4u), sensla.sda_bit + 1u, sensla.scl_bit + 1u,
-           sensla.k ? ", from the START" : "");
+          (unsigned)(sensla.bytes * 4u), sensla.sda_bit + 1u, sensla.scl_bit + 1u,
+          sensla.k ? ", from the START" : "");
     bulk_begin(cid, sensla.bytes, false);   /* paced send; frees the gate when done */
     bulk.la_rate_hz = sensla.rate_hz;
 }
@@ -1087,7 +1087,7 @@ void capture_poll(void) {
                 last_cap.la_rate_hz  = la_hz;
                 psram_regions_track(signal_engine_la_cap_base(), (uint32_t)(samples * 2u), 0, 0);
                 LOG_D("[cmd] la_capture: PSRAM data ready (%u samples), streaming back over websocket...\n",
-                       (unsigned)samples);
+                      (unsigned)samples);
                 bulk_begin_capture16(cid, 0, samples);
                 /* the ACHIEVED rate, not the request: without it the host labelled the trace
                    with the requested rate (2.304 MHz for a 2.18 MHz capture) */
@@ -1176,7 +1176,7 @@ void capture_poll(void) {
                    left is streaming it back.  Log it so a stall during read-back is
                    distinguishable from a capture failure. */
                 LOG_D("[cmd] capture_dual: PSRAM data ready (ADC=%u + LA=%u samples), streaming back over websocket...\n",
-                       (unsigned)adc_n, (unsigned)la_n);
+                      (unsigned)adc_n, (unsigned)la_n);
                 /* Remember this capture so a stalled read-back can RESUME from PSRAM
                    (capture_read) instead of re-triggering — the data stays in PSRAM until
                    the next capture overwrites it. */
@@ -1238,7 +1238,7 @@ void capture_conn_closed(int conn_id) {
         fpga_capture_abort();              /* also turns SET_TRIGGER off */
         if (trigwait.active && trigwait.conn_id == conn_id) trigwait.active = false;
         if (cap_stopdac) dac_stop();
-        printf("[cmd] PSRAM capture aborted: conn %d closed\n", conn_id);
+        LOG_W("[cmd] PSRAM capture aborted: conn %d closed\n", conn_id);
     }
     /* Abort an in-flight paced bulk send owned by this conn.  If it was reading
        back from PSRAM, hand the shared bus back to the iCE40 or it stays stuck
@@ -1248,9 +1248,9 @@ void capture_conn_closed(int conn_id) {
         /* A closed conn while a read-back is still streaming almost always means the
            other end (server/browser) gave up first — i.e. a capture timeout. Report
            how far we got so a truncated capture is diagnosable from the console. */
-        printf("[cmd] bulk send aborted — conn %d closed at %lu/%lu samples "
-               "(likely capture timeout on the server)\n",
-               conn_id, (unsigned long)bulk.sent, (unsigned long)bulk.total);
+        LOG_W("[cmd] bulk send aborted — conn %d closed at %lu/%lu samples "
+              "(likely capture timeout on the server)\n",
+              conn_id, (unsigned long)bulk.sent, (unsigned long)bulk.total);
         bulk.active = false;
     }
     /* A capture still parked on its trigger is abandoned with it: abort in the fabric so the
@@ -1258,7 +1258,7 @@ void capture_conn_closed(int conn_id) {
     if (trigwait.active && trigwait.conn_id == conn_id) {
         fpga_capture_abort();
         trigwait.active = false;
-        printf("[cmd] triggered capture aborted — conn %d closed before the trigger\n", conn_id);
+        LOG_W("[cmd] triggered capture aborted — conn %d closed before the trigger\n", conn_id);
     }
 }
 
@@ -1429,7 +1429,7 @@ void handle_capture_dual(int conn_id, const char *json) {
     }
     if (la_capped)
         LOG_D("[cmd] capture_dual: no LA rate given: %lu kS/s, the fastest that fits %u samples\n",
-               (unsigned long)lroundf(la_actual / 1000.0f), (unsigned)la_n);
+              (unsigned long)lroundf(la_actual / 1000.0f), (unsigned)la_n);
     capture_trigger_armed(conn_id, &trig);
     last_cap.valid = false;   /* the new capture is overwriting the PSRAM regions */
     dualcap.active      = true;
@@ -1445,8 +1445,8 @@ void handle_capture_dual(int conn_id, const char *json) {
        old "@%.3fMS/s" silently printed nothing (the frequency vanished from the
        console). Integer kHz via %lu prints correctly. */
     LOG_D("[cmd] capture_dual: ADC=%u @%lukHz + LA=%u @%lukHz (one trigger)\n",
-           (unsigned)adc_n, (unsigned long)lroundf(adc_actual / 1000.0f),
-           (unsigned)la_n,  (unsigned long)lroundf(la_actual  / 1000.0f));
+          (unsigned)adc_n, (unsigned long)lroundf(adc_actual / 1000.0f),
+          (unsigned)la_n,  (unsigned long)lroundf(la_actual  / 1000.0f));
 }
 
 /* {"cmd":"capture_read","offset":N}
@@ -1487,7 +1487,7 @@ void handle_capture_read(int conn_id, const char *json) {
     bulk_begin_capture16_resume(conn_id, offset);
     bulk.b64 = wants_b64(json);
     LOG_D("[cmd] capture_read: resuming from %u/%u samples over websocket...\n",
-           (unsigned)offset, (unsigned)total);
+          (unsigned)offset, (unsigned)total);
 }
 
 /* `test` — pure Pico-side diagnostic that fills a buffer with a known
@@ -1556,7 +1556,7 @@ void handle_test(int conn_id, const char *json) {
     }
 
     LOG_D("[cmd] test pattern=%s samples=%u (FPGA not touched)\n",
-           pattern, (unsigned)samples);
+          pattern, (unsigned)samples);
 
     bulk_begin(conn_id, samples, true);   /* paced send; frees the gate when done */
     bulk.b64 = wants_b64(json);
@@ -1600,7 +1600,7 @@ void handle_measure(int conn_id, const char *json) {
 
     /* Integer Hz — newlib-nano printf has no %f (the old %.1f printed nothing). */
     LOG_D("[cmd] measure waveform=%s freq=%luHz amp=%u off=%u samples=%u\n",
-           waveform, (unsigned long)lroundf(freq), amplitude, offset, (unsigned)samples);
+          waveform, (unsigned long)lroundf(freq), amplitude, offset, (unsigned)samples);
 
     if (!heavy_begin(conn_id)) return;
 

@@ -65,7 +65,7 @@ static absolute_time_t  s_recover_at;
 /* command_handler_poll's device pass: the deferred `psram_recover` reboot. */
 void device_poll(void) {
     if (s_recover_pending && time_reached(s_recover_at)) {
-        printf("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
+        LOG_W("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
         boot_guard_planned_reset(true);
         NVIC_SystemReset();   /* does not return */
     }
@@ -143,11 +143,11 @@ bool la_voltage_from_profile(void) {
     if (!mv) return false;
     char why[LA_PINS_ERR_MAX];
     if (!la_pins_check_voltage_change(LA_VCCIO_UNSET, mv, why, sizeof(why))) {
-        printf("[la] I/O voltage from profile %s refused: %s\n", e->name, why);
+        LOG_W("[la] I/O voltage from profile %s refused: %s\n", e->name, why);
         return false;
     }
     if (la_vccio_set_mv(mv) != 0) {
-        printf("[la] I/O voltage %u mV from profile %s refused by the board\n", (unsigned)mv, e->name);
+        LOG_W("[la] I/O voltage %u mV from profile %s refused by the board\n", (unsigned)mv, e->name);
         return false;
     }
     LOG_D("[la] I/O voltage %u mV from wiring profile %s\n", (unsigned)mv, e->name);

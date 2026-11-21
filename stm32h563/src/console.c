@@ -103,7 +103,7 @@ int ice40_reflash_image(int n)
 {
     blob_id_t id = (blob_id_t)ice40_image_slot(n);
     if (!blob_store_present(id)) {
-        printf("[ice40] no gateware image %d in the W25Q (slot %s is empty)\n", n, blob_name(id));
+        LOG_W("[ice40] no gateware image %d in the W25Q (slot %s is empty)\n", n, blob_name(id));
         return -1;
     }
     /* Never copy a damaged slot over the image the iCE40 boots from. */
@@ -111,7 +111,7 @@ int ice40_reflash_image(int n)
     int intact = blob_store_verify(id) == 0;
     w25q_close();
     if (!intact) {
-        printf("[ice40] gateware slot %s does not match its checksum: not flashed\n", blob_name(id));
+        LOG_W("[ice40] gateware slot %s does not match its checksum: not flashed\n", blob_name(id));
         return -1;
     }
     /* Runtime image-swap sequence.  The DEEP image's PSRAM-write wedge is fixed IN THE GATEWARE

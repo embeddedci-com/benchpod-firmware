@@ -133,8 +133,8 @@ static const void *bus_token(void)
 static void bus_note(uint32_t before, const char *what, void *caller)
 {
     if (s_bus.violations == before || s_bus.violations > BUS_LOG_MAX) return;
-    printf("[psram] bus %s broke the ownership rules (depth %u, caller %p, %lu so far)\n",
-           what, (unsigned)s_bus.depth, caller, (unsigned long)s_bus.violations);
+    LOG_W("[psram] bus %s broke the ownership rules (depth %u, caller %p, %lu so far)\n",
+          what, (unsigned)s_bus.depth, caller, (unsigned long)s_bus.violations);
 }
 
 void psram_bus_acquire(void)
@@ -157,8 +157,8 @@ void psram_bus_handover(void)
     int dropped = bus_owner_handover(&s_bus);
     pins_to_ice40();
     if (dropped && s_bus.violations != v && s_bus.violations <= BUS_LOG_MAX)
-        printf("[psram] bus handed to the iCE40 with %d hold(s) still open (caller %p)\n",
-               dropped, __builtin_return_address(0));
+        LOG_W("[psram] bus handed to the iCE40 with %d hold(s) still open (caller %p)\n",
+              dropped, __builtin_return_address(0));
 }
 
 void psram_bus_park(void) { pins_to_stm32(); }
@@ -388,13 +388,13 @@ int psram_init(void)
     hxspi.Init.DelayHoldQuarterCycle = HAL_XSPI_DHQC_DISABLE;
     hxspi.Init.ChipSelectBoundary = HAL_XSPI_BONDARYOF_NONE;
     if (HAL_XSPI_Init(&hxspi) != HAL_OK) {
-        printf("[psram] OCTOSPI init failed\n");
+        LOG_E("[psram] OCTOSPI init failed\n");
         return -1;
     }
     LOG_BOOT("[psram] SCLK %lu kHz (HCLK %lu kHz / %lu) [0x9F/0x03 max 33 MHz]\n",
-           (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000),
-           (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000),
-           (unsigned long)(hxspi.Init.ClockPrescaler + 1));
+             (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000),
+             (unsigned long)(HAL_RCC_GetHCLKFreq() / 1000),
+             (unsigned long)(hxspi.Init.ClockPrescaler + 1));
 
     /* Reset the device to SPI standby REGARDLESS of its current mode.  A DFU
        reflash resets the STM32 but NOT the PSRAM (it stays on +3V3), so if any
@@ -416,13 +416,13 @@ int psram_init(void)
     uint8_t id[8] = {0};
     if (xspi_xfer(0x9F, HAL_XSPI_INSTRUCTION_1_LINE, HAL_XSPI_ADDRESS_1_LINE,
                   0, HAL_XSPI_DATA_1_LINE, 0, id, sizeof(id), 1) != 0) {
-        printf("[psram] ID read failed\n");
+        LOG_E("[psram] ID read failed\n");
         return -1;
     }
     LOG_BOOT("[psram] ID: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-           id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
+             id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7]);
     if (id[0] != 0x0D || id[1] != 0x5D) {
-        printf("[psram] unexpected ID (want MFID 0x0D / KGD 0x5D) — check CS/bus/power\n");
+        LOG_E("[psram] unexpected ID (want MFID 0x0D / KGD 0x5D) — check CS/bus/power\n");
         return -1;
     }
     if (cmd_simple(0x35) != 0) return -1;   /* enter QPI */
@@ -443,7 +443,7 @@ int psram_init(void)
             s_psram_dma_ok = true;
             LOG_BOOT("[psram] read DMA enabled (GPDMA1 ch4)\n");
         } else {
-            printf("[psram] read DMA init failed — using blocking reads\n");
+            LOG_W("[psram] read DMA init failed — using blocking reads\n");
         }
     }
 #endif
@@ -453,14 +453,14 @@ int psram_init(void)
        (overhead-bound), but halves the DMA transfer time → shorter CS-low. */
     hxspi.Init.ClockPrescaler = PSRAM_OP_PRESCALER;
     if (HAL_XSPI_Init(&hxspi) != HAL_OK) {
-        printf("[psram] WARN: op-clock re-init failed, staying at init clock\n");
+        LOG_W("[psram] WARN: op-clock re-init failed, staying at init clock\n");
     }
 
     LOG_BOOT("[psram] APS6404L up (QPI, GPIO-CS indirect, %lu MB, SCLK %lu MHz, "
-           "read %luB DMA%s)\n",
-           (unsigned long)(PSRAM_SIZE >> 20),
-           (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000000u),
-           (unsigned long)s_tcem_chunk, s_psram_dma_ok ? "" : " (DMA off)");
+             "read %luB DMA%s)\n",
+             (unsigned long)(PSRAM_SIZE >> 20),
+             (unsigned long)(HAL_RCC_GetHCLKFreq() / (hxspi.Init.ClockPrescaler + 1) / 1000000u),
+             (unsigned long)s_tcem_chunk, s_psram_dma_ok ? "" : " (DMA off)");
     return 0;
 }
 

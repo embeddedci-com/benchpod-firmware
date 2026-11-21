@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include "bp_log.h"
 
 /* ---- Persistent identity record -------------------------------------------
  *
@@ -70,15 +71,15 @@ static int identity_persist(const identity_record_t *rec) {
     /* No flash: keep the record in the volatile RAM shadow (lost on power
        cycle).  Subsequent flash_identity() reads see it as valid this boot. */
     memcpy(&s_ram_id, rec, sizeof(s_ram_id));
-    printf("[id] (sram) identity kept in RAM shadow (volatile — new key each boot)\n");
+    LOG_W("[id] (sram) identity kept in RAM shadow (volatile — new key each boot)\n");
     return 0;
 #else
     uint8_t page[FLASH_PAGE_SIZE];
     memset(page, 0xFF, sizeof(page));
     memcpy(page, rec, sizeof(*rec));
 
-    printf("[id] persisting identity to flash offset 0x%08x...\n",
-           (unsigned)IDENTITY_FLASH_OFFSET);
+    LOG_I("[id] persisting identity to flash offset 0x%08x...\n",
+          (unsigned)IDENTITY_FLASH_OFFSET);
 
     /* Same single-core, IRQs-off discipline as config_store.c: XIP code cannot
        execute while flash is being erased/programmed. */
@@ -90,7 +91,7 @@ static int identity_persist(const identity_record_t *rec) {
     identity_record_t back;
     if (flash_read_checked(IDENTITY_FLASH_OFFSET, &back, sizeof(back)) != 0 ||
         memcmp(&back, rec, sizeof(back)) != 0) {
-        printf("[id] ERROR: identity write verification failed\n");
+        LOG_E("[id] ERROR: identity write verification failed\n");
         return -1;
     }
     return 0;
@@ -108,8 +109,8 @@ void device_identity_init(void) {
        the key this pod is registered with.  Run without an identity instead (cloud auth and
        proof-of-possession refuse) and say so. */
     if (flash_read_checked(IDENTITY_FLASH_OFFSET, &rec, sizeof(rec)) != 0) {
-        printf("[id] ERROR: the identity sector is unreadable (flash ECC error); running "
-               "without an identity, NOT generating a new key over it\n");
+        LOG_E("[id] ERROR: the identity sector is unreadable (flash ECC error); running "
+              "without an identity, NOT generating a new key over it\n");
         snprintf(s_problem, sizeof(s_problem), "identity sector unreadable (flash ECC error)");
         memset(&rec, 0, sizeof(rec));
         s_ready = false;
@@ -127,9 +128,9 @@ void device_identity_init(void) {
         /* Not ours, and not blank: an older or newer record layout, or damage. It may well hold
            the key this pod is registered with, so it is left alone. Run without an identity
            (cloud login and proof-of-possession refuse) and say why. */
-        printf("[id] ERROR: the identity sector holds an unknown record (magic 0x%08lx, version "
-               "%lu); NOT generating a new key over it\n",
-               (unsigned long)rec.magic, (unsigned long)rec.version);
+        LOG_E("[id] ERROR: the identity sector holds an unknown record (magic 0x%08lx, version "
+              "%lu); NOT generating a new key over it\n",
+              (unsigned long)rec.magic, (unsigned long)rec.version);
         snprintf(s_problem, sizeof(s_problem),
                  "unknown identity record (magic 0x%08lx v%lu), not replaced",
                  (unsigned long)rec.magic, (unsigned long)rec.version);
@@ -139,10 +140,10 @@ void device_identity_init(void) {
     }
     if (st == DEVICE_ID_REC_VALID) {
         /* Existing key — load it, never overwrite. */
-        printf("[id] loaded device identity from flash\n");
+        LOG_I("[id] loaded device identity from flash\n");
     } else {
         /* First boot (the sector is blank): generate and persist a new key. */
-        printf("[id] no identity in flash — generating new Ed25519 key\n");
+        LOG_I("[id] no identity in flash — generating new Ed25519 key\n");
         memset(&rec, 0, sizeof(rec));
         rec.magic   = IDENTITY_MAGIC;
         rec.version = IDENTITY_VERSION;
@@ -150,7 +151,7 @@ void device_identity_init(void) {
             /* No usable entropy: refuse rather than persist a guessable key.
                The pod runs without an identity (cloud auth / pop refuse) and
                tries again on the next boot. */
-            printf("[id] ERROR: hardware RNG failed; NOT generating a device key\n");
+            LOG_E("[id] ERROR: hardware RNG failed; NOT generating a device key\n");
             snprintf(s_problem, sizeof(s_problem), "hardware RNG failed: no device key yet");
             memset(&rec, 0, sizeof(rec));
             s_ready = false;
@@ -159,7 +160,7 @@ void device_identity_init(void) {
         if (identity_persist(&rec) != 0) {
             /* Persist failed: continue with the in-RAM key this boot so the
                device is still usable, but it won't survive a reboot. */
-            printf("[id] WARNING: identity not persisted — key is volatile this boot\n");
+            LOG_W("[id] WARNING: identity not persisted — key is volatile this boot\n");
         }
     }
 
@@ -172,7 +173,7 @@ void device_identity_init(void) {
 
     char pub_b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
     b64url_encode(s_public_key, sizeof(s_public_key), pub_b64, sizeof(pub_b64));
-    printf("[id] device public key (ed25519): %s\n", pub_b64);
+    LOG_I("[id] device public key (ed25519): %s\n", pub_b64);
 }
 
 void device_identity_short_id(char out[DEVICE_ID_SHORT_LEN + 1]) {
@@ -220,12 +221,12 @@ const char *device_identity_wipe(const char *confirm) {
     device_identity_short_id(new_id);
     char pub_b64[B64URL_ENCODED_LEN(DEVICE_ID_PUBLIC_LEN) + 1];
     b64url_encode(s_public_key, sizeof(s_public_key), pub_b64, sizeof(pub_b64));
-    printf("[id] identity WIPED on the USB console: old %s%s%s%s, new benchpod-%s (%s)\n",
-           old_id[0] ? "benchpod-" : "unknown", old_id,
-           old_id[0] ? "" : " - ", old_id[0] ? "" : old_problem, new_id, pub_b64);
+    LOG_W("[id] identity WIPED on the USB console: old %s%s%s%s, new benchpod-%s (%s)\n",
+          old_id[0] ? "benchpod-" : "unknown", old_id,
+          old_id[0] ? "" : " - ", old_id[0] ? "" : old_problem, new_id, pub_b64);
     if (persisted != 0) {
         snprintf(s_problem, sizeof(s_problem), "new key not persisted (flash write failed)");
-        printf("[id] WARNING: the new identity was not persisted; it is lost at the next reboot\n");
+        LOG_W("[id] WARNING: the new identity was not persisted; it is lost at the next reboot\n");
         return "the new key could not be written to flash (it works until the next reboot)";
     }
     return NULL;

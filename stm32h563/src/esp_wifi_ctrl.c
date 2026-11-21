@@ -612,7 +612,7 @@ static void slave_lost(c3_restart_cause_t cause, const char *why) {
     s_rssi_misses = 0;
     s_evt_connected = s_evt_disconnected = false;
     LOG_D("[wifi] ESP32-C3 lost: %s (no-response %lu, rebooted %lu) — link down, restarting it\n",
-           why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
+          why, (unsigned long)s_lost_rssi, (unsigned long)s_lost_reboot);
     to_backoff(cause, why);
 }
 
@@ -783,8 +783,8 @@ void esp_wifi_ctrl_poll(void) {
            mode and the credentials would land in the C3's flash, so they are not sent. */
         if (s_resp_ready) {
             if (s_resp_status != 0) {
-                printf("[wifi] ESP32-C3 refused RAM storage (0x%lx): credentials not sent\n",
-                       (unsigned long)(uint32_t)s_resp_status);
+                LOG_W("[wifi] ESP32-C3 refused RAM storage (0x%lx): credentials not sent\n",
+                      (unsigned long)(uint32_t)s_resp_status);
                 to_backoff(C3_RESTART_SETUP, "setstorage failed");
                 return;
             }
@@ -854,7 +854,7 @@ void esp_wifi_ctrl_poll(void) {
         if (s_resp_ready || time_reached(s_deadline)) {
             if (s_have_mac)
                 LOG_D("[wifi] sta MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
-                       s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
+                      s_mac[0], s_mac[1], s_mac[2], s_mac[3], s_mac[4], s_mac[5]);
             scan_send_start();          /* no MAC: the scan runs anyway */
         }
         return;
