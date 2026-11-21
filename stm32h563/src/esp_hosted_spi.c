@@ -174,7 +174,7 @@ int esp_hosted_spi_init(void) {
         s_esp_dma_ok = true;
         LOG_D("[esp] SPI4 DMA enabled (GPDMA1 ch2=rx ch3=tx)\n");
     } else {
-        log_printf("[esp] SPI4 DMA init failed — using blocking transfers\n");
+        LOG_W("[esp] SPI4 DMA init failed — using blocking transfers\n");
     }
 #endif
 

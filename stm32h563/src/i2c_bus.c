@@ -213,7 +213,7 @@ int i2c_bus_init_on(i2c_bus_id_t bus)
         pclk.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
     }
     if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
-        log_printf("[i2c] ERROR: %s kernel clock config failed\n", b->name);
+        LOG_E("[i2c] ERROR: %s kernel clock config failed\n", b->name);
         return -1;
     }
 
@@ -228,7 +228,7 @@ int i2c_bus_init_on(i2c_bus_id_t bus)
     i2c_clear_log(b);
 
     if (i2c_hw_init(b) != 0) {
-        log_printf("[i2c] ERROR: %s init failed\n", b->name);
+        LOG_E("[i2c] ERROR: %s init failed\n", b->name);
         return -1;
     }
 
@@ -254,7 +254,7 @@ int i2c_bus_clear_and_reinit(void)
     b->ready = (i2c_hw_init(b) == 0);
     i2c_leave();
     i2c_clear_log(b);
-    if (!b->ready) log_printf("[i2c] ERROR: I2C1 re-init failed\n");
+    if (!b->ready) LOG_E("[i2c] ERROR: I2C1 re-init failed\n");
     return rc;
 }
 
@@ -486,7 +486,7 @@ void analog_switch_dump(void)
                 | ana_read(chips[i].a, TCA_REG_OUTPUT, &out)
                 | ana_read(chips[i].a, TCA_REG_CONFIG, &cfg);
         uint8_t mask = (i == 1u) ? u58_mask() : chips[i].mask;   /* v3r2: P4 is ANA14_EN, v3r4: P5 K5 */
-        log_printf("[exp] %s%s: in=0x%02x out=0x%02x cfg=0x%02x %s\r\n",
+        log_printf("[exp] %s%s: in=0x%02x out=0x%02x cfg=0x%02x %s\n",
                chips[i].n, s_ana_bus == I2C_BUS_MODULE ? " (module bus)" : "", in, out, cfg,
                err ? "(I2C ERR)"
                    : (cfg == (uint8_t)~mask ? "dir OK" : "*** dir WRONG ***"));

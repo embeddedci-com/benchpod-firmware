@@ -1517,7 +1517,7 @@ void console_init(void)
 void console_boot_done(void)
 {
     if (s_console_ready) return;
-    log_reply("\r\nconsole ready — type 'help'\r\n");
+    log_reply("\r\nconsole ready — type 'help'\n");
     console_io_prompt();
     s_console_ready = true;
 }

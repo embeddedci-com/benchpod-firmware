@@ -160,7 +160,7 @@ static bool send_block(esp_rom_job_t *j)
     if (!j->io->read) {
         memset(s_pkt + 16, 0xFF, n);
     } else if (j->io->read(j->io->read_ctx, off, s_pkt + 16, n) != 0) {
-        log_printf("[espflash] reading the image at %lu failed\n", (unsigned long)off);
+        LOG_E("[espflash] reading the image at %lu failed\n", (unsigned long)off);
         return false;
     }
     mbedtls_md5_update(&s_md5, s_pkt + 16, n);
@@ -271,7 +271,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
             j->attempt++;
             send_sync(j);
         } else {
-            log_printf("[espflash] SYNC failed\n");
+            LOG_E("[espflash] SYNC failed\n");
             finish(j, ESP_ROM_ERR_SYNC);
         }
         break;
@@ -302,21 +302,21 @@ bool esp_rom_job_step(esp_rom_job_t *j)
             /* The answer came at the old rate; the ROM switches after sending it.  If our UART
                cannot follow, nothing more gets through: stop here, not 40 s later. */
             if (j->io->set_baud(j->opts.baud) != 0) {
-                log_printf("[espflash] could not switch our UART to %lu baud\n",
-                           (unsigned long)j->opts.baud);
+                LOG_W("[espflash] could not switch our UART to %lu baud\n",
+                      (unsigned long)j->opts.baud);
                 finish(j, ESP_ROM_ERR_BAUD);
                 break;
             }
             j->baud = j->opts.baud;
             log_printf("[espflash] baud rate now %lu\n", (unsigned long)j->opts.baud);
         } else {
-            log_printf("[espflash] CHANGE_BAUDRATE refused (rc %d): staying at the old rate\n", r);
+            LOG_W("[espflash] CHANGE_BAUDRATE refused (rc %d): staying at the old rate\n", r);
         }
         send_attach(j);
         break;
 
     case ESP_ROM_ATTACH:
-        if (r != 0) log_printf("[espflash] SPI_ATTACH warning (continuing)\n");
+        if (r != 0) LOG_W("[espflash] SPI_ATTACH warning (continuing)\n");
         if (j->opts.flash_size) {
             /* SPI_SET_PARAMS(id, total size, 64 KB block, 4 KB sector, 256 B page, status mask):
                esptool sends it in ROM mode too, else the ROM refuses writes past its default. */
@@ -335,13 +335,13 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         break;
 
     case ESP_ROM_PARAMS:
-        if (r != 0) log_printf("[espflash] SPI_SET_PARAMS warning (rc %d, continuing)\n", r);
+        if (r != 0) LOG_W("[espflash] SPI_SET_PARAMS warning (rc %d, continuing)\n", r);
         send_begin(j);
         break;
 
     case ESP_ROM_BEGIN:
         if (r != 0) {
-            log_printf("[espflash] FLASH_BEGIN failed (rc %d)\n", r);
+            LOG_E("[espflash] FLASH_BEGIN failed (rc %d)\n", r);
             finish(j, ESP_ROM_ERR_BEGIN);
             break;
         }
@@ -352,8 +352,8 @@ bool esp_rom_job_step(esp_rom_job_t *j)
 
     case ESP_ROM_DATA:
         if (r != 0) {
-            log_printf("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
-                       (unsigned long)(j->seq + 1), (unsigned long)j->blocks, j->attempt, r);
+            LOG_W("[espflash] FLASH_DATA block %lu/%lu attempt %d failed (rc %d)\n",
+                  (unsigned long)(j->seq + 1), (unsigned long)j->blocks, j->attempt, r);
             if (j->attempt >= ESP_ROM_DATA_ATTEMPTS) { finish(j, ESP_ROM_ERR_DATA); break; }
             if (j->attempt == 1) j->resends++;
             j->attempt++;
@@ -382,7 +382,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
             memcpy(j->got_md5, s_payload, 32);
             j->got_md5[32] = '\0';
             if (memcmp(j->got_md5, j->want_md5, 32) != 0) {
-                log_printf("[espflash] MD5 MISMATCH: the chip does not hold the image\n");
+                LOG_E("[espflash] MD5 MISMATCH: the chip does not hold the image\n");
                 log_printf("[espflash]   want %s\n", j->want_md5);
                 log_printf("[espflash]   got  %s\n", j->got_md5);
                 finish(j, ESP_ROM_ERR_MD5);
@@ -392,7 +392,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
             send_end(j, ESP_ROM_OK);
             break;
         }
-        log_printf("[espflash] MD5 read attempt %d failed (rc %d)\n", j->attempt, r == 0 ? -2 : r);
+        LOG_W("[espflash] MD5 read attempt %d failed (rc %d)\n", j->attempt, r == 0 ? -2 : r);
         if (j->attempt < ESP_ROM_MD5_ATTEMPTS) {
             j->attempt++;
             j->md5_retries++;

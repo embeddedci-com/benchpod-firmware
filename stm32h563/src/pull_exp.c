@@ -67,7 +67,7 @@ static int go_live(void)
     HAL_Delay(1);                                /* tRESET is 600 ns (datasheet) */
     s_live = true;
     int rc = apply();
-    if (rc == 0) log_printf("[pull] expanders out of reset (pin 21 %d mV)\r\n", vref_out_last_mv());
+    if (rc == 0) log_printf("[pull] expanders out of reset (pin 21 %d mV)\n", vref_out_last_mv());
     return rc;
 }
 
@@ -78,7 +78,7 @@ static void on_rail(bool up)
     if (up) (void)go_live();
     else {
         hold();
-        log_printf("[pull] pin 21 down (%d mV): pull resistors off, expanders held in reset\r\n",
+        log_printf("[pull] pin 21 down (%d mV): pull resistors off, expanders held in reset\n",
                    vref_out_last_mv());
     }
 }
@@ -98,7 +98,7 @@ void pull_exp_init(void)
     hold();
     vref_out_set_rail_hook(on_rail);
     if (vref_out_rail_up()) (void)go_live();
-    else log_printf("[pull] pin 21 not up (%d mV): expanders stay in reset\r\n", vref_out_last_mv());
+    else log_printf("[pull] pin 21 not up (%d mV): expanders stay in reset\n", vref_out_last_mv());
 }
 
 bool pull_exp_present(void) { return s_present; }
@@ -111,7 +111,7 @@ bool pull_exp_recover(void)
     /* Pin 21 down: on_rail brings them back when it returns. */
     if (!vref_out_rail_up()) return false;
     /* A write failed (apply): out of reset and rewrite every asked-for pull, once per call. */
-    log_printf("[pull] retrying the expanders after a failed write\r\n");
+    LOG_W("[pull] retrying the expanders after a failed write\n");
     return go_live() == 0;
 }
 
@@ -160,7 +160,7 @@ void pull_exp_poll(void)
     if (suspend == s_suspend_up) return;
     s_suspend_up = suspend;
     if (s_live) (void)apply();
-    log_printf("[pull] target power %s: pull-ups %s\r\n", on ? "on" : "off", suspend ? "suspended" : "back on");
+    log_printf("[pull] target power %s: pull-ups %s\n", on ? "on" : "off", suspend ? "suspended" : "back on");
 }
 
 pull_exp_dir_t pull_exp_live_dir(unsigned la, pull_str_t *str)

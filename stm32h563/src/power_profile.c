@@ -255,7 +255,7 @@ static void finish(bool truncated) {
     s.truncated = truncated;
     s.t_stop    = time_us_64();
     if (ina238_restore_adc_config(s.addr) != 0)
-        log_printf("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
+        LOG_W("[power] WARNING: could not restore the ADC config on 0x%02X\n", s.addr);
     pp_decim_finish(&s.dec);
     LOG_D("[power] profile %s: %u samples over %u ms\n", truncated ? "reached max_duration_ms" : "stopped",
            (unsigned)s.st.n, (unsigned)((s.t_stop - s.t_start) / 1000u));
@@ -292,7 +292,7 @@ void power_profile_poll(void) {
         if (s.next_shunt <= now) s.next_shunt = now + s.cfg.period_us;
         if (rc != 0) {
             if (++s.i2c_errors >= PP_MAX_I2C_ERRORS) {
-                log_printf("[power] %u consecutive current-monitor read failures on 0x%02X; stopping the profile\n",
+                LOG_W("[power] %u consecutive current-monitor read failures on 0x%02X; stopping the profile\n",
                        (unsigned)s.i2c_errors, s.addr);
                 finish(false);
             }

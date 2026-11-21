@@ -59,7 +59,7 @@ void boot_guard_begin(bool fresh_start) {
        removed (criterion C at the lab). It keeps restarting and recovering instead; the crash
        records and the run log still say what happened. */
     if (failed >= BOOT_GUARD_SAFE_AFTER)
-        log_printf("[boot] EMI build: %lu failed boots in a row, safe mode skipped\r\n", (unsigned long)failed);
+        LOG_W("[boot] EMI build: %lu failed boots in a row, safe mode skipped\n", (unsigned long)failed);
     if (0) {
 #else
     if (failed >= BOOT_GUARD_SAFE_AFTER) {
@@ -73,7 +73,7 @@ void boot_guard_begin(bool fresh_start) {
         snprintf(s_report, sizeof(s_report),
                  SAFE_PREFIX "%lu failed boots in a row, the last in \"%s\"; %s off",
                  (unsigned long)failed, where, boot_policy_off_str(s_off));
-        log_printf("[boot] SAFE MODE: %s\r\n", s_report + sizeof(SAFE_PREFIX) - 1);
+        log_printf("[boot] SAFE MODE: %s\n", s_report + sizeof(SAFE_PREFIX) - 1);
         boot_test_loop_end();   /* a test loop has done its job */
     }
 
@@ -165,6 +165,6 @@ void boot_guard_test_loop_point(uint32_t sub) {
     }
     s_test_left--;
     __DSB();
-    log_printf("[boot] test-bootloop: crashing on purpose (%lu more)\r\n", (unsigned long)s_test_left);
+    log_printf("[boot] test-bootloop: crashing on purpose (%lu more)\n", (unsigned long)s_test_left);
     __builtin_trap();   /* a real fault, recorded like any other */
 }

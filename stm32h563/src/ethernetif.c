@@ -719,7 +719,7 @@ void ethernet_link_check_state(struct netif *netif)
       netif_set_link_up(netif);
       uint32_t anlpar = 0;
       (void)HAL_ETH_ReadPHYRegister(&EthHandle, LAN8742.DevAddr, LAN8742_ANLPAR, &anlpar);
-      log_printf("[net] eth link up: %s%s%s, partner 0x%04lx\r\n",
+      log_printf("[net] eth link up: %s%s%s, partner 0x%04lx\n",
              speed == ETH_SPEED_100M ? "100M" : "10M",
              duplex == ETH_FULLDUPLEX_MODE ? " full" : " HALF",
              duplex == ETH_FULLDUPLEX_MODE ? "" : " duplex (a full-duplex switch port would mean a mismatch)",

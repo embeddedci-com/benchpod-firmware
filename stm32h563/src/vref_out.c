@@ -53,7 +53,7 @@ void vref_out_init(void)
     s_present = true;
     s_src = VREF_SRC_BANK;
     (void)vref_out_measure_mv();
-    log_printf("[vref] pin 21 on the bank, %d mV (%s)\r\n", s_mv, vref_state_name(s_state));
+    log_printf("[vref] pin 21 on the bank, %d mV (%s)\n", s_mv, vref_state_name(s_state));
 }
 
 bool vref_out_present(void) { return s_present; }
@@ -109,7 +109,7 @@ void vref_out_poll(uint32_t now_ms)
                   "the I/O voltage lifts it through the pulls; select 5 V or remove the signal\n",
                   s_mv, set);
         else
-            log_printf("[vref] pin 21 %s: %d mV (setting %d mV, %s)\r\n",
+            log_printf("[vref] pin 21 %s: %d mV (setting %d mV, %s)\n",
                        vref_state_name(s_state), s_mv, set, vref_src_name(s_src));
     }
 }
