@@ -43,6 +43,8 @@ const char *xip_err_text(xip_err_t e);
 xip_err_t xip_session_begin(void);
 /* Call table entry `fn` (xip_image.h XIP_FN_*) with one argument. Inside a session only. */
 uint32_t  xip_session_call_u32(unsigned fn, uint32_t arg);
+/* Call table entry `fn` with a context pointer (heap memory the caller owns). -1 outside a session. */
+int       xip_session_call_ctx(unsigned fn, void *ctx);
 void      xip_session_end(void);
 bool      xip_session_active(void);
 

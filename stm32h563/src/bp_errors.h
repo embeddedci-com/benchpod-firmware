@@ -101,9 +101,10 @@ typedef enum {
     BP_E_LAN_NOT_PAIRED = 81,
     BP_E_LAN_CLIENTS_FULL = 82,
     BP_E_XIP_UNAVAILABLE = 83,
+    BP_E_USB_FLASH_REFUSED = 84,
 } bp_errcode_t;
 
-#define BP_E_LAST 83
+#define BP_E_LAST 84
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1131,6 +1132,19 @@ static inline const char *bp_note_xip_unavailable(char *buf, size_t cap, const c
 static inline const char *bp_tag_xip_unavailable(const char *text, const char *why) {
     const bp_err_arg_t a[] = { {"why", why, 0, 1} };
     return bp_err_tag(text, BP_E_XIP_UNAVAILABLE, a, 1);
+}
+/* BP0084: The pod cannot flash the board over USB: {why} */
+static inline void bp_err_usb_flash_refused(int conn_id, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_FLASH_REFUSED, a, 1);
+}
+static inline const char *bp_note_usb_flash_refused(char *buf, size_t cap, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_FLASH_REFUSED, a, 1);
+}
+static inline const char *bp_tag_usb_flash_refused(const char *text, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_FLASH_REFUSED, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

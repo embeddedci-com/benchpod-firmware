@@ -184,6 +184,13 @@ uint32_t xip_session_call_u32(unsigned fn, uint32_t arg)
     return ((xip_fn_u32_t)t->fn[fn])(arg);
 }
 
+int xip_session_call_ctx(unsigned fn, void *ctx)
+{
+    const xip_table_t *t = (const xip_table_t *)(uintptr_t)&xip_table;
+    if (!s_active || fn >= t->count) return -1;
+    return ((xip_fn_ctx_t)t->fn[fn])(ctx);
+}
+
 void xip_session_end(void)
 {
     if (!s_active) return;

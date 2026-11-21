@@ -140,11 +140,13 @@ jobs:
       - name: XIP test builds, no compiler warnings
         run: |
           set -o pipefail
-          for v in XIP_RAM XIP_BODGE_PB6; do
-            make -C stm32h563 -j"$(nproc)" $v=1 2>&1 | tee build-$v.log
-            if grep 'warning:' build-$v.log | grep -v 'is not implemented and will always fail' > warnings-$v.txt; then
-              echo "::error title=Compiler warnings::$(wc -l < warnings-$v.txt) warning(s) in the $v=1 build"
-              cat warnings-$v.txt
+          # USB_HOST=1 XIP_RAM=1: the USB drive flash (usb_flash) runs its W25Q code from RAM.
+          for v in "XIP_RAM=1" "XIP_BODGE_PB6=1" "USB_HOST=1 XIP_RAM=1"; do
+            log="build-$(echo "$v" | tr ' =' '__').log"
+            make -C stm32h563 -j"$(nproc)" $v 2>&1 | tee "$log"
+            if grep 'warning:' "$log" | grep -v 'is not implemented and will always fail' > "$log.warnings"; then
+              echo "::error title=Compiler warnings::$(wc -l < "$log.warnings") warning(s) in the $v build"
+              cat "$log.warnings"
               exit 1
             fi
           done

@@ -1092,3 +1092,16 @@ sdk = "install the blobs that go with the pod's firmware (benchpod install-blobs
 cli = "run `benchpod install-blobs`, then try again"
 mcp = "ask the user to install the blobs that go with the pod's firmware (benchpod install-blobs), then try again"
 web = "Install the blobs that go with the pod's firmware, then try again."
+
+[BP0084]
+name = "usb_flash_refused"
+area = "usb"
+since = "next"
+args = { why = "str" }
+message = "The pod cannot flash the board over USB: {why}"
+cause = "Flashing over USB needs the pod hosting the board (usb_host on, the board's USB drive mounted), the file staged with load_bin, and nothing else running. {why}."
+[BP0084.fix]
+sdk = "start USB host mode and wait until the board's drive is mounted, upload the file, then flash again"
+cli = "start USB host mode and wait until the board's drive is mounted, upload the file, then flash again"
+mcp = "start USB host mode (usb_host), wait until the board's drive is mounted, upload the file, then call usb_flash again"
+web = "Start USB host mode and wait until the board's drive shows up, then try again."

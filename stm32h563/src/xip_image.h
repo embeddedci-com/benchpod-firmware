@@ -25,15 +25,17 @@
 #include <stdint.h>
 
 #define XIP_TABLE_MAGIC  0x50495842u   /* "BXIP" */
-#define XIP_ABI          1u            /* bump when the table's entries change meaning */
+#define XIP_ABI          2u            /* bump when the table's entries change meaning */
 
 /* The entries, by index. */
 enum {
     XIP_FN_SELFTEST = 0,   /* uint32_t (*)(uint32_t seed): checksum over the image's own data */
+    XIP_FN_MSC_FLASH_STEP, /* int (*)(void *ctx): msc_flash_step, a USB drive flash (msc_flash.h) */
     XIP_FN_COUNT
 };
 
 typedef uint32_t (*xip_fn_u32_t)(uint32_t);
+typedef int      (*xip_fn_ctx_t)(void *);
 
 typedef struct {
     uint32_t    magic;            /* XIP_TABLE_MAGIC */

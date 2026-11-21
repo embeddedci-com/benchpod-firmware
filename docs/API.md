@@ -322,6 +322,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `usb_flash` | T1 | Development builds only. Flash a board that shows up as a USB drive (UF2 bootloaders, drag-and-drop loaders such as DAPLink) | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -4549,6 +4550,43 @@ slot: it describes the image the C3 runs, as recorded when the pod last wrote on
 updated from firmware that kept a copy in the W25Q, that copy is reported until the first `esp`
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
+
+### `usb_flash` — flash a board that shows up as a USB drive
+
+**Development builds only** (`make USB_HOST=1`, not in releases yet). Many boards flash by copying
+a file onto the drive they show over USB: UF2 bootloaders (Raspberry Pi Pico and Pico 2, Adafruit
+and Seeed boards, tinyuf2) and drag-and-drop loaders such as DAPLink (NUCLEO, nRF DK, micro:bit).
+The pod does the same while it hosts the board (`usb_host`), from a file uploaded with `load_bin`
+and `"psram": true`. The flash runs in the background; poll `usb_flash` for its state.
+
+```json
+{"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
+{"cmd": "usb_flash", "mode": "uf2", "len": 204800}
+{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
+{"cmd": "usb_flash"}
+{"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
+  "len": 61440, "phase": "done", "done": 120, "total": 120, "result": "ok", "ok": true, "ms": 1840}}
+{"cmd": "usb_flash", "abort": true}
+```
+
+| Argument | Description |
+|---|---|
+| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. Without `mode` the command reads the state. |
+| `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
+| `len` | Bytes of the uploaded file to write. |
+| `abort` | `true` stops a running flash. |
+
+| Field | Description |
+|---|---|
+| `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
+| `phase` | `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry` or `done`. |
+| `done`, `total` | Sectors of the file written, of all. |
+| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, ...). |
+
+The pod keeps `usb_host` on while a flash runs. The flash logic runs from the pod's W25Q (`xip`),
+so it needs the `xip` blob of the running firmware. Refusals: BP0084 (`usb_flash_refused`, arg
+`why`: host mode off, no drive mounted, nothing staged, a bad name or length), BP0083 (the W25Q
+code), BP0048 (the storage bus is busy).
 
 ### `xip` — code that runs from the W25Q
 

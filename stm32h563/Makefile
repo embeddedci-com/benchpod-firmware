@@ -219,6 +219,8 @@ C_SOURCES := \
   src/blob_manifest.c \
   src/xip_image.c \
   src/xip_mod_core.c \
+  src/xip_mod_msc_flash.c \
+  src/msc_flash_names.c \
   src/xip_session.c \
   src/spi_flash.c \
   src/spi_stream.c \
@@ -355,7 +357,7 @@ ifeq ($(XIP_RAM),1)
 ifeq ($(RELEASE),1)
 $(error XIP_RAM=1 is a development build and cannot be combined with RELEASE=1)
 endif
-DEFS      += -DBENCHPOD_XIP_RAM=1 -DBENCHPOD_HEAP_KB=243U
+DEFS      += -DBENCHPOD_XIP_RAM=1
 endif
 ifeq ($(XIP_BODGE_PB6),1)
 ifeq ($(RELEASE),1)
@@ -373,7 +375,21 @@ $(error USB_HOST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_USB_HOST=1
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
-             $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c
+             $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
+             $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c
+endif
+
+# Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
+# USB_HOST=1 4 KB (the host stack and its classes), XIP_RAM=1 16 KB (the RAM copy of the image).
+HEAP_KB := 259
+ifeq ($(USB_HOST),1)
+HEAP_KB := $(shell expr $(HEAP_KB) - 4)
+endif
+ifeq ($(XIP_RAM),1)
+HEAP_KB := $(shell expr $(HEAP_KB) - 16)
+endif
+ifneq ($(HEAP_KB),259)
+DEFS      += -DBENCHPOD_HEAP_KB=$(HEAP_KB)U
 endif
 
 # EMI test build: EMI_TEST=1 adds src/emi_test.c, which runs the EMC lab's worst-case activity

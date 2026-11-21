@@ -4,6 +4,7 @@
  * runs from it, its constants are read from it, and it calls back into internal flash (a long
  * branch through a linker veneer). */
 #include "xip_image.h"
+#include "msc_flash.h"
 
 #include <stdint.h>
 
@@ -22,5 +23,6 @@ static uint32_t selftest(uint32_t seed)
 __attribute__((section(".xip.table"), used))
 const xip_table_t xip_table = {
     XIP_TABLE_MAGIC, XIP_ABI, XIP_FN_COUNT,
-    { [XIP_FN_SELFTEST] = (const void *)selftest },
+    { [XIP_FN_SELFTEST] = (const void *)selftest,
+      [XIP_FN_MSC_FLASH_STEP] = (const void *)msc_flash_step },
 };
