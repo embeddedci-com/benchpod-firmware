@@ -13,6 +13,7 @@
 #include "stm32h5xx_hal.h"              /* HAL_GetTick */
 #include "fault.h"                      /* fault_last_reset_str */
 #include "emi_log.h"
+#include "sensor_mgr.h"                /* sm_slot_name: is emi_uart defined */
 #include "w25q.h"                       /* w25q_open: the run log's flash */
 #include "version.h"                    /* FIRMWARE_VERSION */
 #include "bp_json.h"
@@ -256,8 +257,19 @@ static const char k_emi_uart_def_b64[] =
     "LDA4NC40LDIzMDM5NCwwMDMuMSxXIiwiZW5kIjoibm1lYSJ9LHsiZXZlcnlfbXMiOjEwMCwidGV4dCI6IiRHUEdHQSwxMjM1MTksNDgwNy4w"
     "MzgsTiwwMTEzMS4wMDAsRSwxLDA4LDAuOSw1NDUuNCxNLDQ2LjksTSwsIiwiZW5kIjoibm1lYSJ9XX0=";
 
+/* True when an emi_uart instance is defined: a fresh boot has none, and stopping a missing
+   instance is refused, which would count as an error and start the LED blue. */
+static bool emi_uart_defined(void) {
+    for (unsigned i = 0; i < SM_MAX_INST; i++) {
+        const char *nm = sm_slot_name(i);
+        if (nm && !strcmp(nm, "emi_uart")) return true;
+    }
+    return false;
+}
+
 static void apply_uart(int la) {
-    run("sensor_stop", "{\"cmd\":\"sensor_stop\",\"instance\":\"emi_uart\"}");
+    if (emi_uart_defined())
+        run("sensor_stop", "{\"cmd\":\"sensor_stop\",\"instance\":\"emi_uart\"}");
     if (la <= 0) return;
     static char cmd[600];
     snprintf(cmd, sizeof(cmd), "{\"cmd\":\"sensor_define\",\"instance\":\"emi_uart\",\"offset\":0,\"total\":%d,"

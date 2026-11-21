@@ -88,5 +88,5 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0080 | `dac_pinout_mismatch` | analog | 4.0.0 | {cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts |
 | BP0081 | `lan_not_paired` | policy | 4.0.1 | This computer is not paired with the pod: {cmd} needs pairing over USB or from the cloud |
 | BP0082 | `lan_clients_full` | policy | 4.0.1 | The pod already has {max} paired computers |
-| BP0083 | `xip_unavailable` | firmware | next | The pod cannot run code from its W25Q: {why} |
-| BP0084 | `usb_flash_refused` | usb | next | The pod cannot flash the board over USB: {why} |
+| BP0083 | `xip_unavailable` | firmware | 4.0.2 | The pod cannot run code from its W25Q: {why} |
+| BP0084 | `usb_flash_refused` | usb | 4.0.2 | The pod cannot flash the board over USB: {why} |
